@@ -138,12 +138,21 @@ export function validateBootstrapCoverage(ledger, coverage, files) {
     }
 }
 export function validateSemanticReview(ledger, review) {
-    const parsed = semanticReviewSchema.parse(review);
+    const raw = semanticReviewSchema.parse(review);
     const validated = validateDecisionLedger(ledger);
     const material = validated.decisions.filter(d => ['confirmed', 'ambiguous'].includes(d.status));
     const ids = new Set(material.map(d => d.id));
-    invariant(new Set(parsed.decisions.map(d => d.decisionId)).size === parsed.decisions.length, 'SEMANTIC_REVIEW', 'Duplicate decision review');
-    invariant(parsed.decisions.every(d => ids.has(d.decisionId)), 'SEMANTIC_REVIEW', 'Semantic review references an unknown/non-material decision');
+    const known = new Set(validated.decisions.map(d => d.id));
+    invariant(new Set(raw.decisions.map(d => d.decisionId)).size === raw.decisions.length, 'SEMANTIC_REVIEW', 'Duplicate decision review');
+    const unknown = raw.decisions.filter(d => !known.has(d.decisionId)).map(d => d.decisionId);
+    invariant(unknown.length === 0, 'SEMANTIC_REVIEW', `Semantic review references unknown decision(s): ${unknown.join(', ')}`);
+    // Reviews of non-material (proposed/deferred) entries are not decision checks; negative signals are kept as warnings.
+    const nonMaterial = raw.decisions.filter(d => !ids.has(d.decisionId));
+    const parsed = semanticReviewSchema.parse({
+        ...raw,
+        decisions: raw.decisions.filter(d => ids.has(d.decisionId)),
+        findings: [...raw.findings, ...nonMaterial.filter(d => d.status !== 'pass').map(d => ({ severity: 'warning', description: `Non-material decision ${d.decisionId} reviewed as ${d.status}: ${d.evidence}`.slice(0, 4000) }))],
+    });
     const byId = new Map(parsed.decisions.map(d => [d.decisionId, d]));
     for (const d of material)
         invariant(byId.has(d.id), 'SEMANTIC_REVIEW', `Semantic review omitted decision ${d.id}`);
