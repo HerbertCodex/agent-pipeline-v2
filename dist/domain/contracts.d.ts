@@ -1,0 +1,222 @@
+import { type Infer } from './schema.js';
+export declare const VERSION = "2.0.0-alpha.8";
+export declare const lanes: readonly ["fast", "standard", "high"];
+export type Lane = typeof lanes[number];
+export declare const commandSchema: import("./schema.js").Schema<{
+    readonly command: string[];
+    readonly timeoutMs: number;
+    readonly passEnv: string[];
+}>;
+export declare const gateSchema: import("./schema.js").Schema<{
+    readonly id: string;
+    readonly command: string[];
+    readonly timeoutMs: number;
+    readonly passEnv: string[];
+    readonly dependsOn: string[];
+    readonly resources: string[];
+    readonly outputs: string[];
+    readonly paths: string[];
+    readonly lanes: ("fast" | "standard" | "high")[];
+    readonly mandatory: boolean;
+    readonly cacheTtlMs: number;
+}>;
+export declare const taskSchema: import("./schema.js").Schema<{
+    readonly id: string;
+    readonly title: string;
+    readonly description: string;
+    readonly acceptance: string[];
+    readonly allowedPaths: string[];
+    readonly allowedNewPaths: string[];
+    readonly maxNewFiles: number;
+    readonly reviewRequired: boolean;
+    readonly minimumLane: "fast" | "standard" | "high";
+}>;
+export declare const agentSchema: import("./schema.js").Schema<{
+    readonly type: "command" | "codex" | "claude";
+    readonly command: string[];
+    readonly timeoutMs: number;
+    readonly passEnv: string[];
+    readonly model: string;
+    readonly maxTurns: number;
+    readonly maxBudgetUsd: number | null;
+}>;
+export type AgentConfig = Infer<typeof agentSchema>;
+export declare const configSchema: import("./schema.js").Schema<{
+    readonly schemaVersion: 1;
+    readonly executionMode: "local-trusted";
+    readonly environment: {
+        readonly id: string;
+        readonly passEnv: string[];
+    };
+    readonly agent: {
+        readonly type: "command" | "codex" | "claude";
+        readonly command: string[];
+        readonly timeoutMs: number;
+        readonly passEnv: string[];
+        readonly model: string;
+        readonly maxTurns: number;
+        readonly maxBudgetUsd: number | null;
+    };
+    readonly skills: {
+        readonly enabled: ("clean-code" | "design-patterns" | "refactoring" | "security" | "tdd" | "ui-design")[];
+        readonly projectType: "unknown" | "backend" | "frontend" | "mobile" | "fullstack" | "library";
+        readonly maxContextBytes: number;
+    };
+    readonly roles: {
+        readonly product: {
+            readonly type: "command" | "codex" | "claude";
+            readonly command: string[];
+            readonly timeoutMs: number;
+            readonly passEnv: string[];
+            readonly model: string;
+            readonly maxTurns: number;
+            readonly maxBudgetUsd: number | null;
+        } | null;
+        readonly qa: {
+            readonly type: "command" | "codex" | "claude";
+            readonly command: string[];
+            readonly timeoutMs: number;
+            readonly passEnv: string[];
+            readonly model: string;
+            readonly maxTurns: number;
+            readonly maxBudgetUsd: number | null;
+        } | null;
+    };
+    readonly workflow: {
+        qaLanes: string[];
+        maxQaRepairs: number;
+        maxActiveMs: number;
+        reviewMode: string;
+    };
+    readonly setup: {
+        readonly command: string[];
+        readonly timeoutMs: number;
+        readonly passEnv: string[];
+    }[];
+    readonly gates: {
+        readonly id: string;
+        readonly command: string[];
+        readonly timeoutMs: number;
+        readonly passEnv: string[];
+        readonly dependsOn: string[];
+        readonly resources: string[];
+        readonly outputs: string[];
+        readonly paths: string[];
+        readonly lanes: ("fast" | "standard" | "high")[];
+        readonly mandatory: boolean;
+        readonly cacheTtlMs: number;
+    }[];
+    readonly concurrency: number;
+    readonly failFast: boolean;
+    readonly maxRunMs: number;
+    readonly maxRepairAttempts: number;
+    readonly validationMaxAgeMs: number;
+    readonly risk: {
+        readonly fastPaths: string[];
+        readonly highPaths: string[];
+        readonly maxFastFiles: number;
+        readonly maxFastLines: number;
+    };
+}>;
+export type Task = Infer<typeof taskSchema>;
+export type Config = Infer<typeof configSchema>;
+export type Gate = Infer<typeof gateSchema>;
+export type CommandSpec = Infer<typeof commandSchema>;
+export declare const agentOutputSchema: import("./schema.js").Schema<{
+    readonly summary: string;
+}>;
+export interface RiskDecision {
+    lane: Lane;
+    reasons: string[];
+}
+export interface ChangeSet {
+    files: string[];
+    added: string[];
+    lines: number;
+    binary: boolean;
+}
+export declare const states: readonly ["created", "preparing", "implementing", "candidate", "validating", "awaiting_review", "ready", "failed", "interrupted", "rejected"];
+export type RunState = typeof states[number];
+export interface ProcessResult {
+    exitCode: number | null;
+    signal: string | null;
+    status: 'passed' | 'failed' | 'timed_out' | 'cancelled' | 'spawn_error';
+    durationMs: number;
+    stdoutHash: string;
+    stderrHash: string;
+    stdout: string;
+    stderr: string;
+    truncated: boolean;
+}
+export declare const receiptSchema: import("./schema.js").Schema<{
+    readonly id: string;
+    readonly runId: string;
+    readonly gateId: string;
+    readonly key: string;
+    readonly candidateSha: string;
+    readonly configHash: string;
+    readonly environmentHash: string;
+    readonly status: "failed" | "passed" | "timed_out" | "cancelled" | "spawn_error" | "blocked" | "cached";
+    readonly startedAt: number;
+    readonly durationMs: number;
+    readonly exitCode: number | null;
+    readonly stdoutHash: string;
+    readonly stderrHash: string;
+    readonly diagnostic: string;
+    readonly reusedFrom: string | null;
+}>;
+export type GateReceipt = Infer<typeof receiptSchema>;
+export declare function validateReceipt(value: unknown): GateReceipt;
+export interface Approval {
+    reviewer: string;
+    note: string;
+    candidateSha: string;
+    evidenceHash: string;
+    at: number;
+}
+export interface Run {
+    id: string;
+    version: number;
+    state: RunState;
+    resumeFrom: RunState | null;
+    task: Task;
+    config: Config;
+    configHash: string;
+    repo: string;
+    baseSha: string;
+    workspace: string;
+    validationWorkspace: string;
+    candidateSha: string | null;
+    changeSet: ChangeSet | null;
+    risk: RiskDecision | null;
+    gateIds: string[];
+    receipts: GateReceipt[];
+    approvals: Approval[];
+    createdAt: number;
+    updatedAt: number;
+    validatedAt: number | null;
+    sessionStartedAt: number | null;
+    remainingMs: number;
+    metrics: {
+        activeMs: number;
+        preparationMs: number;
+        agentMs: number;
+        validationMs: number;
+        cacheHits: number;
+        repairAttempts: number;
+    };
+    summary: string;
+    error: {
+        code: string;
+        message: string;
+    } | null;
+}
+export interface RunEvent {
+    seq: number;
+    runId: string;
+    at: number;
+    type: string;
+    data: Record<string, unknown>;
+}
+export declare function validateConfig(value: unknown): Config;
+export declare function transition(run: Run, to: RunState): void;

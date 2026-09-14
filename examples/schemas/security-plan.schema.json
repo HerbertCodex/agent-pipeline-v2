@@ -1,0 +1,446 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "profile": {
+      "type": "object",
+      "properties": {
+        "exposure": {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "local",
+            "internal",
+            "internet"
+          ],
+          "default": "unknown"
+        },
+        "authentication": {
+          "type": "boolean",
+          "default": false
+        },
+        "authorization": {
+          "type": "boolean",
+          "default": false
+        },
+        "sensitiveData": {
+          "type": "boolean",
+          "default": false
+        },
+        "sessionState": {
+          "type": "boolean",
+          "default": false
+        },
+        "fileUploads": {
+          "type": "boolean",
+          "default": false
+        },
+        "externalRequests": {
+          "type": "boolean",
+          "default": false
+        },
+        "database": {
+          "type": "boolean",
+          "default": false
+        },
+        "multiTenant": {
+          "type": "boolean",
+          "default": false
+        },
+        "secrets": {
+          "type": "boolean",
+          "default": false
+        },
+        "api": {
+          "type": "boolean",
+          "default": false
+        },
+        "webUi": {
+          "type": "boolean",
+          "default": false
+        },
+        "ciCd": {
+          "type": "boolean",
+          "default": false
+        },
+        "dependencyChange": {
+          "type": "boolean",
+          "default": false
+        },
+        "aiAgent": {
+          "type": "boolean",
+          "default": false
+        },
+        "mcp": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {
+        "exposure": "unknown",
+        "authentication": false,
+        "authorization": false,
+        "sensitiveData": false,
+        "sessionState": false,
+        "fileUploads": false,
+        "externalRequests": false,
+        "database": false,
+        "multiTenant": false,
+        "secrets": false,
+        "api": false,
+        "webUi": false,
+        "ciCd": false,
+        "dependencyChange": false,
+        "aiAgent": false,
+        "mcp": false
+      }
+    },
+    "owaspTopics": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "threat-modeling",
+          "authentication",
+          "password-storage",
+          "session-management",
+          "authorization",
+          "input-validation",
+          "injection-prevention",
+          "xss",
+          "csrf",
+          "content-security-policy",
+          "file-upload",
+          "ssrf",
+          "rest-security",
+          "data-protection",
+          "secrets-management",
+          "logging-monitoring",
+          "software-supply-chain",
+          "github-actions",
+          "ai-agent-security",
+          "llm-prompt-injection",
+          "secure-coding-with-ai",
+          "mcp-security"
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 22,
+      "default": []
+    },
+    "threatModel": {
+      "type": "object",
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 12000,
+          "allOf": [
+            {
+              "pattern": "^[^\\u0000]*$"
+            }
+          ]
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 50
+        },
+        "trustBoundaries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1500,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 50
+        },
+        "threats": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "allOf": [
+                  {
+                    "pattern": "^[^\\u0000]*$"
+                  }
+                ],
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+              },
+              "category": {
+                "type": "string",
+                "enum": [
+                  "spoofing",
+                  "tampering",
+                  "repudiation",
+                  "information-disclosure",
+                  "denial-of-service",
+                  "elevation-of-privilege",
+                  "abuse-case",
+                  "supply-chain",
+                  "prompt-injection"
+                ]
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 3000,
+                "allOf": [
+                  {
+                    "pattern": "^[^\\u0000]*$"
+                  }
+                ]
+              },
+              "mitigations": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 3000,
+                  "allOf": [
+                    {
+                      "pattern": "^[^\\u0000]*$"
+                    }
+                  ]
+                },
+                "minItems": 1,
+                "maxItems": 30
+              },
+              "acceptanceIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80,
+                  "allOf": [
+                    {
+                      "pattern": "^[^\\u0000]*$"
+                    }
+                  ],
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "minItems": 1,
+                "maxItems": 100
+              }
+            },
+            "required": [
+              "id",
+              "category",
+              "description",
+              "mitigations",
+              "acceptanceIds"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 100
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 50
+        }
+      },
+      "required": [
+        "required",
+        "summary",
+        "assets",
+        "trustBoundaries",
+        "threats",
+        "assumptions"
+      ],
+      "additionalProperties": false,
+      "default": {
+        "required": false,
+        "summary": "",
+        "assets": [],
+        "trustBoundaries": [],
+        "threats": [],
+        "assumptions": []
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ],
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "owaspTopics": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "threat-modeling",
+                "authentication",
+                "password-storage",
+                "session-management",
+                "authorization",
+                "input-validation",
+                "injection-prevention",
+                "xss",
+                "csrf",
+                "content-security-policy",
+                "file-upload",
+                "ssrf",
+                "rest-security",
+                "data-protection",
+                "secrets-management",
+                "logging-monitoring",
+                "software-supply-chain",
+                "github-actions",
+                "ai-agent-security",
+                "llm-prompt-injection",
+                "secure-coding-with-ai",
+                "mcp-security"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 22
+          },
+          "acceptanceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ],
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "verification": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "negativeTests": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 3000,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ]
+            },
+            "minItems": 0,
+            "maxItems": 30
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "owaspTopics",
+          "acceptanceIds",
+          "verification",
+          "negativeTests"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 100,
+      "default": []
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 3000,
+        "allOf": [
+          {
+            "pattern": "^[^\\u0000]*$"
+          }
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 100,
+      "default": []
+    },
+    "deferred": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 3000,
+        "allOf": [
+          {
+            "pattern": "^[^\\u0000]*$"
+          }
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 100,
+      "default": []
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

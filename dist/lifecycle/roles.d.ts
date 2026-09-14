@@ -1,0 +1,20 @@
+import type { SkillsConfig } from '../domain/knowledge.js';
+import type { AgentConfig } from '../domain/contracts.js';
+import type { Schema } from '../domain/schema.js';
+import type { Store } from '../persistence/store.js';
+export declare const roleInstructions: Record<Role, string>;
+export type Role = 'setup' | 'product' | 'qa';
+export { strictSchema } from '../adapters/structured-schema.js';
+export declare function runRole<T>(options: {
+    store: Store;
+    documentId: string;
+    repo: string;
+    sha: string;
+    role: Role;
+    agent: AgentConfig;
+    passEnv: string[];
+    schema: Schema<T>;
+    context: unknown;
+    signal?: AbortSignal;
+    skills?: SkillsConfig;
+}): Promise<T>;

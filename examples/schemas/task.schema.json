@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ],
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ]
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 30000,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ]
+    },
+    "acceptance": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 3000,
+        "allOf": [
+          {
+            "pattern": "^[^\\u0000]*$"
+          }
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 100
+    },
+    "allowedPaths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "allOf": [
+          {
+            "pattern": "^[^\\u0000]*$"
+          }
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 500
+    },
+    "allowedNewPaths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "allOf": [
+          {
+            "pattern": "^[^\\u0000]*$"
+          }
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 100,
+      "default": []
+    },
+    "maxNewFiles": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 50,
+      "default": 0
+    },
+    "reviewRequired": {
+      "type": "boolean",
+      "default": true
+    },
+    "minimumLane": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "standard",
+        "high"
+      ],
+      "default": "fast"
+    }
+  },
+  "required": [
+    "id",
+    "title",
+    "description",
+    "acceptance",
+    "allowedPaths"
+  ],
+  "additionalProperties": false
+}

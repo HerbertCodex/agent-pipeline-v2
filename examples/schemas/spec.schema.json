@@ -1,0 +1,939 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ]
+    },
+    "problem": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 20000,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ]
+    },
+    "scope": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 3000,
+        "allOf": [
+          {
+            "pattern": "^[^\\u0000]*$"
+          }
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 100
+    },
+    "outOfScope": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 3000,
+        "allOf": [
+          {
+            "pattern": "^[^\\u0000]*$"
+          }
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 100
+    },
+    "acceptance": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ],
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 3000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "verification": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 3000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "description",
+          "verification"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 100
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "answer": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          }
+        },
+        "required": [
+          "question",
+          "answer"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 100
+    },
+    "decisionCoverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "decisionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ],
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "acceptanceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ],
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          }
+        },
+        "required": [
+          "decisionId",
+          "acceptanceIds",
+          "rationale"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 200,
+      "default": []
+    },
+    "decisionResolutions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "decisionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ],
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "sourceQuote": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          }
+        },
+        "required": [
+          "decisionId",
+          "value",
+          "sourceQuote",
+          "rationale"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 100,
+      "default": []
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ],
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 3000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "question"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 100
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ],
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "acceptanceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ],
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "allowedPaths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "dependsOn": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ],
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "minItems": 0,
+            "maxItems": 20
+          },
+          "minimumLane": {
+            "type": "string",
+            "enum": [
+              "fast",
+              "standard",
+              "high"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description",
+          "acceptanceIds",
+          "allowedPaths",
+          "dependsOn",
+          "minimumLane"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 20
+    },
+    "minimumLane": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "standard",
+        "high"
+      ]
+    },
+    "experience": {
+      "type": "object",
+      "properties": {
+        "uiImpact": {
+          "type": "string",
+          "enum": [
+            "none",
+            "minor",
+            "major"
+          ]
+        },
+        "surfaces": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 30
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "allOf": [
+            {
+              "pattern": "^[^\\u0000]*$"
+            }
+          ]
+        }
+      },
+      "required": [
+        "uiImpact",
+        "surfaces",
+        "rationale"
+      ],
+      "additionalProperties": false,
+      "default": {
+        "uiImpact": "none",
+        "surfaces": [],
+        "rationale": "No user-interface change declared."
+      }
+    },
+    "security": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "type": "object",
+          "properties": {
+            "exposure": {
+              "type": "string",
+              "enum": [
+                "unknown",
+                "local",
+                "internal",
+                "internet"
+              ],
+              "default": "unknown"
+            },
+            "authentication": {
+              "type": "boolean",
+              "default": false
+            },
+            "authorization": {
+              "type": "boolean",
+              "default": false
+            },
+            "sensitiveData": {
+              "type": "boolean",
+              "default": false
+            },
+            "sessionState": {
+              "type": "boolean",
+              "default": false
+            },
+            "fileUploads": {
+              "type": "boolean",
+              "default": false
+            },
+            "externalRequests": {
+              "type": "boolean",
+              "default": false
+            },
+            "database": {
+              "type": "boolean",
+              "default": false
+            },
+            "multiTenant": {
+              "type": "boolean",
+              "default": false
+            },
+            "secrets": {
+              "type": "boolean",
+              "default": false
+            },
+            "api": {
+              "type": "boolean",
+              "default": false
+            },
+            "webUi": {
+              "type": "boolean",
+              "default": false
+            },
+            "ciCd": {
+              "type": "boolean",
+              "default": false
+            },
+            "dependencyChange": {
+              "type": "boolean",
+              "default": false
+            },
+            "aiAgent": {
+              "type": "boolean",
+              "default": false
+            },
+            "mcp": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {
+            "exposure": "unknown",
+            "authentication": false,
+            "authorization": false,
+            "sensitiveData": false,
+            "sessionState": false,
+            "fileUploads": false,
+            "externalRequests": false,
+            "database": false,
+            "multiTenant": false,
+            "secrets": false,
+            "api": false,
+            "webUi": false,
+            "ciCd": false,
+            "dependencyChange": false,
+            "aiAgent": false,
+            "mcp": false
+          }
+        },
+        "owaspTopics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "threat-modeling",
+              "authentication",
+              "password-storage",
+              "session-management",
+              "authorization",
+              "input-validation",
+              "injection-prevention",
+              "xss",
+              "csrf",
+              "content-security-policy",
+              "file-upload",
+              "ssrf",
+              "rest-security",
+              "data-protection",
+              "secrets-management",
+              "logging-monitoring",
+              "software-supply-chain",
+              "github-actions",
+              "ai-agent-security",
+              "llm-prompt-injection",
+              "secure-coding-with-ai",
+              "mcp-security"
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 22,
+          "default": []
+        },
+        "threatModel": {
+          "type": "object",
+          "properties": {
+            "required": {
+              "type": "boolean"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 12000,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ]
+            },
+            "assets": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000,
+                "allOf": [
+                  {
+                    "pattern": "^[^\\u0000]*$"
+                  }
+                ]
+              },
+              "minItems": 0,
+              "maxItems": 50
+            },
+            "trustBoundaries": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1500,
+                "allOf": [
+                  {
+                    "pattern": "^[^\\u0000]*$"
+                  }
+                ]
+              },
+              "minItems": 0,
+              "maxItems": 50
+            },
+            "threats": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80,
+                    "allOf": [
+                      {
+                        "pattern": "^[^\\u0000]*$"
+                      }
+                    ],
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                  },
+                  "category": {
+                    "type": "string",
+                    "enum": [
+                      "spoofing",
+                      "tampering",
+                      "repudiation",
+                      "information-disclosure",
+                      "denial-of-service",
+                      "elevation-of-privilege",
+                      "abuse-case",
+                      "supply-chain",
+                      "prompt-injection"
+                    ]
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 3000,
+                    "allOf": [
+                      {
+                        "pattern": "^[^\\u0000]*$"
+                      }
+                    ]
+                  },
+                  "mitigations": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 3000,
+                      "allOf": [
+                        {
+                          "pattern": "^[^\\u0000]*$"
+                        }
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 30
+                  },
+                  "acceptanceIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80,
+                      "allOf": [
+                        {
+                          "pattern": "^[^\\u0000]*$"
+                        }
+                      ],
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                    },
+                    "minItems": 1,
+                    "maxItems": 100
+                  }
+                },
+                "required": [
+                  "id",
+                  "category",
+                  "description",
+                  "mitigations",
+                  "acceptanceIds"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 0,
+              "maxItems": 100
+            },
+            "assumptions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000,
+                "allOf": [
+                  {
+                    "pattern": "^[^\\u0000]*$"
+                  }
+                ]
+              },
+              "minItems": 0,
+              "maxItems": 50
+            }
+          },
+          "required": [
+            "required",
+            "summary",
+            "assets",
+            "trustBoundaries",
+            "threats",
+            "assumptions"
+          ],
+          "additionalProperties": false,
+          "default": {
+            "required": false,
+            "summary": "",
+            "assets": [],
+            "trustBoundaries": [],
+            "threats": [],
+            "assumptions": []
+          }
+        },
+        "requirements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "allOf": [
+                  {
+                    "pattern": "^[^\\u0000]*$"
+                  }
+                ],
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "allOf": [
+                  {
+                    "pattern": "^[^\\u0000]*$"
+                  }
+                ]
+              },
+              "owaspTopics": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "threat-modeling",
+                    "authentication",
+                    "password-storage",
+                    "session-management",
+                    "authorization",
+                    "input-validation",
+                    "injection-prevention",
+                    "xss",
+                    "csrf",
+                    "content-security-policy",
+                    "file-upload",
+                    "ssrf",
+                    "rest-security",
+                    "data-protection",
+                    "secrets-management",
+                    "logging-monitoring",
+                    "software-supply-chain",
+                    "github-actions",
+                    "ai-agent-security",
+                    "llm-prompt-injection",
+                    "secure-coding-with-ai",
+                    "mcp-security"
+                  ]
+                },
+                "minItems": 1,
+                "maxItems": 22
+              },
+              "acceptanceIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80,
+                  "allOf": [
+                    {
+                      "pattern": "^[^\\u0000]*$"
+                    }
+                  ],
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "minItems": 1,
+                "maxItems": 100
+              },
+              "verification": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000,
+                "allOf": [
+                  {
+                    "pattern": "^[^\\u0000]*$"
+                  }
+                ]
+              },
+              "negativeTests": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 3000,
+                  "allOf": [
+                    {
+                      "pattern": "^[^\\u0000]*$"
+                    }
+                  ]
+                },
+                "minItems": 0,
+                "maxItems": 30
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "owaspTopics",
+              "acceptanceIds",
+              "verification",
+              "negativeTests"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 100,
+          "default": []
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 3000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 100,
+          "default": []
+        },
+        "deferred": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 3000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 100,
+          "default": []
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {
+        "profile": {
+          "exposure": "unknown",
+          "authentication": false,
+          "authorization": false,
+          "sensitiveData": false,
+          "sessionState": false,
+          "fileUploads": false,
+          "externalRequests": false,
+          "database": false,
+          "multiTenant": false,
+          "secrets": false,
+          "api": false,
+          "webUi": false,
+          "ciCd": false,
+          "dependencyChange": false,
+          "aiAgent": false,
+          "mcp": false
+        },
+        "owaspTopics": [],
+        "threatModel": {
+          "required": false,
+          "summary": "",
+          "assets": [],
+          "trustBoundaries": [],
+          "threats": [],
+          "assumptions": []
+        },
+        "requirements": [],
+        "assumptions": [],
+        "deferred": []
+      }
+    }
+  },
+  "required": [
+    "title",
+    "problem",
+    "scope",
+    "outOfScope",
+    "acceptance",
+    "decisions",
+    "questions",
+    "tasks",
+    "minimumLane"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,114 @@
+import { existsSync, lstatSync, realpathSync, mkdirSync } from 'node:fs';
+import { resolve, relative, isAbsolute, dirname, join } from 'node:path';
+import { invariant, PipelineError } from '../domain/errors.js';
+import { runProcess, environment } from './process.js';
+export function isInside(parent, child) {
+    const rel = relative(resolve(parent), resolve(child));
+    return rel === '' || (!rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && rel !== '..' && !isAbsolute(rel));
+}
+export class Git {
+    signal;
+    hooks;
+    constructor(signal, hooks = {}) {
+        this.signal = signal;
+        this.hooks = hooks;
+    }
+    async exec(cwd, args) {
+        const result = await runProcess({
+            command: ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.quotePath=false', ...args],
+            cwd, env: { ...environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']),
+                GIT_TERMINAL_PROMPT: '0', GIT_AUTHOR_NAME: 'Agent Pipeline V2', GIT_AUTHOR_EMAIL: 'pipeline@localhost',
+                GIT_COMMITTER_NAME: 'Agent Pipeline V2', GIT_COMMITTER_EMAIL: 'pipeline@localhost' },
+            timeoutMs: 120000, ...(this.signal ? { signal: this.signal } : {}), ...this.hooks, maxOutputBytes: 16 * 1024 * 1024,
+        });
+        if (result.status !== 'passed')
+            throw new PipelineError(result.status === 'cancelled' ? 'CANCELLED' : 'GIT', `git ${args[0]}: ${result.status}: ${result.stderr.slice(-3000)}`);
+        invariant(!result.truncated, 'GIT_OUTPUT', 'Git output exceeded limit; refusing an incomplete diff');
+        return result.stdout;
+    }
+    async configValue(repo, key) {
+        const result = await runProcess({ command: ['git', 'config', '--get', key], cwd: repo,
+            env: environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']), timeoutMs: 10000,
+            ...(this.signal ? { signal: this.signal } : {}), ...this.hooks, maxOutputBytes: 65536 });
+        if (result.status === 'passed')
+            return result.stdout.trim() || null;
+        if (result.exitCode === 1)
+            return null;
+        throw new PipelineError(result.status === 'cancelled' ? 'CANCELLED' : 'GIT', `git config: ${result.status}: ${result.stderr.slice(-1000)}`);
+    }
+    async root(path) { return realpathSync((await this.exec(resolve(path), ['rev-parse', '--show-toplevel'])).trim()); }
+    async sha(repo, ref = 'HEAD') {
+        const sha = (await this.exec(repo, ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`])).trim();
+        invariant(/^[a-f0-9]{40,64}$/.test(sha), 'SHA', 'Invalid commit SHA');
+        return sha;
+    }
+    async clean(repo, expectedSha) {
+        const status = await this.exec(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+        invariant(status === '', 'DIRTY', `Workspace contains uncommitted files: ${status.slice(0, 1000)}`);
+        if (expectedSha)
+            invariant(await this.sha(repo) === expectedSha, 'CANDIDATE_MOVED', 'Workspace HEAD no longer matches the candidate');
+    }
+    async compatible(repo, sha) {
+        const tree = await this.exec(repo, ['ls-tree', '-r', '-z', sha]);
+        for (const entry of tree.split('\0').filter(Boolean)) {
+            invariant(!entry.startsWith('160000 '), 'SUBMODULE', 'Submodules require an explicit materializer; unsupported in this alpha');
+            invariant(!entry.startsWith('120000 '), 'SYMLINK', 'Tracked symlinks are not accepted by this local alpha');
+        }
+    }
+    async workspace(repo, path, sha) {
+        mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+        if (existsSync(path)) {
+            await this.clean(path, sha);
+            return;
+        }
+        await this.exec(repo, ['worktree', 'add', '--detach', path, sha]);
+        await this.clean(path, sha);
+    }
+    async removeWorkspace(repo, path, ownedRoot) {
+        invariant(isInside(ownedRoot, path) && resolve(path) !== resolve(ownedRoot), 'WORKSPACE_PATH', 'Refusing to remove outside owned workspace root');
+        if (!existsSync(path))
+            return;
+        invariant(!lstatSync(path).isSymbolicLink() && isInside(realpathSync(ownedRoot), realpathSync(path)), 'WORKSPACE_PATH', 'Workspace redirects outside owned root');
+        const registered = (await this.exec(repo, ['worktree', 'list', '--porcelain'])).split('\n').includes(`worktree ${path}`);
+        invariant(registered, 'WORKSPACE_PATH', 'Refusing to remove an unregistered directory');
+        await this.exec(repo, ['worktree', 'remove', '--force', path]);
+    }
+    async changes(repo, base, candidate = 'HEAD') {
+        const files = (await this.exec(repo, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', base, candidate, '--'])).split('\0').filter(Boolean).sort();
+        const added = (await this.exec(repo, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--diff-filter=A', '--name-only', '-z', base, candidate, '--'])).split('\0').filter(Boolean).sort();
+        const stats = (await this.exec(repo, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--numstat', '-z', base, candidate, '--'])).split('\0').filter(Boolean);
+        let lines = 0;
+        let binary = false;
+        for (const stat of stats) {
+            const [add, del] = stat.split('\t');
+            if (add === '-' || del === '-')
+                binary = true;
+            else {
+                invariant(add !== undefined && del !== undefined && /^\d+$/.test(add) && /^\d+$/.test(del), 'DIFF', 'Invalid diff statistic');
+                lines += Number(add) + Number(del);
+            }
+        }
+        return { files, added, lines, binary };
+    }
+    async snapshot(repo, base, runId) {
+        await this.exec(repo, ['merge-base', '--is-ancestor', base, 'HEAD']);
+        await this.exec(repo, ['add', '--all', '--', '.']);
+        const staged = await this.exec(repo, ['diff', '--cached', '--name-only', '-z']);
+        if (staged)
+            await this.exec(repo, ['commit', '--no-verify', '-m', `Agent Pipeline V2 candidate ${runId}`]);
+        const sha = await this.sha(repo);
+        invariant(sha !== base && (await this.changes(repo, base, sha)).files.length > 0, 'NO_CHANGE', 'Agent produced no effective change');
+        await this.compatible(repo, sha);
+        await this.clean(repo, sha);
+        return sha;
+    }
+    async patch(repo, base, sha) {
+        return this.exec(repo, ['diff', '--no-ext-diff', '--no-textconv', '--binary', '--full-index', base, sha, '--']);
+    }
+    async assertNoNestedGit(path) {
+        const files = (await this.exec(path, ['ls-files', '--stage', '-z'])).split('\0');
+        invariant(!files.some(f => f.startsWith('160000 ')), 'SUBMODULE', 'Nested repository refused');
+        invariant(existsSync(join(path, '.git')), 'WORKSPACE', 'Missing Git metadata');
+    }
+}
+//# sourceMappingURL=git.js.map

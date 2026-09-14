@@ -1,0 +1,63 @@
+{
+  "title": "Multiplication et documentation",
+  "problem": "Le module arithmétique ne fournit pas de multiplication documentée et testée.",
+  "scope": [
+    "Ajouter multiply(a,b) et ses tests positifs et négatifs.",
+    "Documenter son usage."
+  ],
+  "outOfScope": [
+    "Aucune dépendance supplémentaire ni déploiement."
+  ],
+  "acceptance": [
+    {
+      "id": "AC-MATH",
+      "description": "multiply renvoie le produit pour des arguments positifs et négatifs, avec des tests dédiés.",
+      "verification": "Tests de multiply(2,3) et multiply(-2,3)."
+    },
+    {
+      "id": "AC-DOC",
+      "description": "La documentation contient un exemple de multiplication.",
+      "verification": "Inspecter docs/math.md."
+    }
+  ],
+  "decisions": [
+    {
+      "question": "Gestion des nombres négatifs ?",
+      "answer": "Les nombres négatifs sont inclus."
+    }
+  ],
+  "questions": [],
+  "tasks": [
+    {
+      "id": "MATH",
+      "title": "Ajouter la multiplication",
+      "description": "Implémenter multiply et écrire ses tests.",
+      "acceptanceIds": [
+        "AC-MATH"
+      ],
+      "allowedPaths": [
+        "src/math.mjs",
+        "test/math.test.mjs"
+      ],
+      "dependsOn": [],
+      "minimumLane": "standard"
+    },
+    {
+      "id": "DOC",
+      "title": "Documenter la multiplication",
+      "description": "Documenter multiply avec un exemple.",
+      "acceptanceIds": [
+        "AC-DOC"
+      ],
+      "allowedPaths": [
+        "docs/math.md"
+      ],
+      "dependsOn": [
+        "MATH"
+      ],
+      "minimumLane": "fast"
+    }
+  ],
+  "minimumLane": "standard",
+  "decisionCoverage": []
+}

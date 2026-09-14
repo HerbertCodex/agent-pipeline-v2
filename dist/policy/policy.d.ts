@@ -1,0 +1,10 @@
+import type { ChangeSet, Config, Gate, Lane, RiskDecision, Task } from '../domain/contracts.js';
+export declare function validRelativePath(path: string): boolean;
+export declare function matches(path: string, pattern: string): boolean;
+export declare const sensitivePaths: string[];
+export declare function classify(changes: ChangeSet, config: Config, minimum?: Lane): RiskDecision;
+export declare function assertScope(changes: ChangeSet | string[], task: Task): string[];
+export declare function validateDag(gates: Gate[]): void;
+export declare function planGates(config: Config, changes: ChangeSet, lane: Lane): Gate[];
+export type ReviewMode = 'solo' | 'team' | 'regulated';
+export declare function requiredApprovals(lane: Lane, mode?: ReviewMode): number;

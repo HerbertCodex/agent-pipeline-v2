@@ -1,0 +1,11 @@
+{
+  "type": "claude",
+  "passEnv": [
+    "HOME",
+    "CLAUDE_CONFIG_DIR",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN"
+  ],
+  "maxTurns": 32,
+  "maxBudgetUsd": 5
+}

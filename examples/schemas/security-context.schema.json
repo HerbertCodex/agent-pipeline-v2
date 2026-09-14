@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "profile": {
+      "type": "object",
+      "properties": {
+        "exposure": {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "local",
+            "internal",
+            "internet"
+          ],
+          "default": "unknown"
+        },
+        "authentication": {
+          "type": "boolean",
+          "default": false
+        },
+        "authorization": {
+          "type": "boolean",
+          "default": false
+        },
+        "sensitiveData": {
+          "type": "boolean",
+          "default": false
+        },
+        "sessionState": {
+          "type": "boolean",
+          "default": false
+        },
+        "fileUploads": {
+          "type": "boolean",
+          "default": false
+        },
+        "externalRequests": {
+          "type": "boolean",
+          "default": false
+        },
+        "database": {
+          "type": "boolean",
+          "default": false
+        },
+        "multiTenant": {
+          "type": "boolean",
+          "default": false
+        },
+        "secrets": {
+          "type": "boolean",
+          "default": false
+        },
+        "api": {
+          "type": "boolean",
+          "default": false
+        },
+        "webUi": {
+          "type": "boolean",
+          "default": false
+        },
+        "ciCd": {
+          "type": "boolean",
+          "default": false
+        },
+        "dependencyChange": {
+          "type": "boolean",
+          "default": false
+        },
+        "aiAgent": {
+          "type": "boolean",
+          "default": false
+        },
+        "mcp": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "topics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "threat-modeling",
+              "authentication",
+              "password-storage",
+              "session-management",
+              "authorization",
+              "input-validation",
+              "injection-prevention",
+              "xss",
+              "csrf",
+              "content-security-policy",
+              "file-upload",
+              "ssrf",
+              "rest-security",
+              "data-protection",
+              "secrets-management",
+              "logging-monitoring",
+              "software-supply-chain",
+              "github-actions",
+              "ai-agent-security",
+              "llm-prompt-injection",
+              "secure-coding-with-ai",
+              "mcp-security"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "sourceUrl": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "reason",
+          "sourceUrl"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 22
+    },
+    "requiresThreatModel": {
+      "type": "boolean"
+    },
+    "negativeTestsRequired": {
+      "type": "boolean"
+    },
+    "minimumLane": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "standard",
+        "high"
+      ]
+    },
+    "untrustedContext": {
+      "type": "boolean"
+    },
+    "signals": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300,
+        "allOf": [
+          {
+            "pattern": "^[^\\u0000]*$"
+          }
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 100
+    },
+    "note": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ]
+    }
+  },
+  "required": [
+    "profile",
+    "topics",
+    "requiresThreatModel",
+    "negativeTestsRequired",
+    "minimumLane",
+    "untrustedContext",
+    "signals",
+    "note"
+  ],
+  "additionalProperties": false
+}

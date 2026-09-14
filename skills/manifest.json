@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 1,
+  "skills": [
+    {
+      "id": "clean-code",
+      "roles": [
+        "implementer",
+        "qa"
+      ],
+      "projectTypes": [],
+      "keywords": [],
+      "resources": [
+        "assets/review-checklist.md",
+        "references/functions.md",
+        "references/interfaces.md",
+        "references/naming.md",
+        "references/robustness.md",
+        "references/solid-and-coupling.md"
+      ]
+    },
+    {
+      "id": "design-patterns",
+      "roles": [
+        "product",
+        "implementer",
+        "qa"
+      ],
+      "projectTypes": [],
+      "keywords": [
+        "architect",
+        "adapter",
+        "adaptateur",
+        "strategy",
+        "strategie",
+        "pattern",
+        "interface",
+        "module",
+        "coupling",
+        "couplage"
+      ],
+      "resources": [
+        "assets/patterns-checklist.md",
+        "references/behavioral.md",
+        "references/creational.md",
+        "references/structural.md",
+        "references/when-to-use.md"
+      ]
+    },
+    {
+      "id": "refactoring",
+      "roles": [
+        "implementer",
+        "qa"
+      ],
+      "projectTypes": [],
+      "keywords": [
+        "refactor",
+        "refactoring",
+        "restructur",
+        "reorganis",
+        "rename",
+        "renomm",
+        "simplif",
+        "extract",
+        "extraction"
+      ],
+      "resources": [
+        "assets/refactoring-checklist.md",
+        "references/code-smells.md",
+        "references/safe-process.md",
+        "references/techniques.md",
+        "references/when-to-refactor.md"
+      ]
+    },
+    {
+      "id": "security",
+      "roles": [
+        "product",
+        "implementer",
+        "qa"
+      ],
+      "projectTypes": [],
+      "keywords": [],
+      "resources": [
+        "assets/security-checklist.md",
+        "references/owasp-routing.md",
+        "references/ai-agent-security.md",
+        "references/authentication.md",
+        "references/authorization.md",
+        "references/data-protection.md",
+        "references/dependencies.md",
+        "references/input-validation.md"
+      ]
+    },
+    {
+      "id": "tdd",
+      "roles": [
+        "implementer",
+        "qa"
+      ],
+      "projectTypes": [],
+      "keywords": [],
+      "resources": [
+        "assets/test-checklist.md",
+        "references/cycle.md",
+        "references/language-transposition.md",
+        "references/mocking.md",
+        "references/test-types.md",
+        "references/writing-tests.md"
+      ]
+    },
+    {
+      "id": "ui-design",
+      "roles": [
+        "product",
+        "implementer",
+        "qa"
+      ],
+      "projectTypes": [
+        "frontend",
+        "mobile",
+        "fullstack"
+      ],
+      "keywords": [
+        "ui",
+        "screen",
+        "ecran",
+        "interface",
+        "design",
+        "css",
+        "layout",
+        "page",
+        "form",
+        "bouton",
+        "button",
+        "theme",
+        "accessib",
+        "responsive"
+      ],
+      "resources": [
+        "assets/design-checklist.md",
+        "references/anti-generic.md",
+        "references/components.md",
+        "references/css-architecture.md",
+        "references/design-process.md",
+        "references/layout.md",
+        "references/motion.md",
+        "references/performance.md",
+        "references/theming.md",
+        "references/ux-laws.md",
+        "references/ux-patterns.md",
+        "references/visual-identity.md"
+      ]
+    }
+  ]
+}

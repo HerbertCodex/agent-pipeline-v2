@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ],
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ],
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+    },
+    "gateId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ],
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+    },
+    "key": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ],
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "candidateSha": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 64,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ],
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+    },
+    "configHash": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ],
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "environmentHash": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ],
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "failed",
+        "timed_out",
+        "cancelled",
+        "spawn_error",
+        "blocked",
+        "cached"
+      ]
+    },
+    "startedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "durationMs": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 7200000
+    },
+    "exitCode": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "stdoutHash": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 64,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ],
+      "pattern": "^(?:[a-f0-9]{64})?$"
+    },
+    "stderrHash": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 64,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ],
+      "pattern": "^(?:[a-f0-9]{64})?$"
+    },
+    "diagnostic": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 8000,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ]
+    },
+    "reusedFrom": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "allOf": [
+            {
+              "pattern": "^[^\\u0000]*$"
+            }
+          ],
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "runId",
+    "gateId",
+    "key",
+    "candidateSha",
+    "configHash",
+    "environmentHash",
+    "status",
+    "startedAt",
+    "durationMs",
+    "exitCode",
+    "stdoutHash",
+    "stderrHash",
+    "diagnostic",
+    "reusedFrom"
+  ],
+  "additionalProperties": false
+}

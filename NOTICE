@@ -1,0 +1,8 @@
+Agent Pipeline V2, experimental implementation derived from the architecture of
+HerbertCodex/agent-pipeline. Original MIT notice retained.
+V1 reference: uploaded agent-pipeline-main.zip, archive comment commit
+4df77bfdbff2f2de417e810afa46f623da9958c3. No feature-parity claim.
+
+alpha.3 adapts the six SKILL.md entrypoints and includes 40 reference/checklist
+Markdown documents from that supplied archive under its MIT terms. References
+are engineering examples, not V2 enforcement policy or proof of tests run.

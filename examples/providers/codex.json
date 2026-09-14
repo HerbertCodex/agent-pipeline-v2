@@ -1,0 +1,8 @@
+{
+  "type": "codex",
+  "passEnv": [
+    "HOME",
+    "CODEX_HOME",
+    "CODEX_API_KEY"
+  ]
+}

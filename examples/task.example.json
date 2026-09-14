@@ -1,0 +1,13 @@
+{
+  "id": "ADD-001",
+  "title": "Corriger la fonction add",
+  "description": "La fonction add doit additionner ses deux arguments, y compris les valeurs négatives.",
+  "acceptance": [
+    "add(2, 3) retourne 5.",
+    "add(-2, 3) retourne 1."
+  ],
+  "allowedPaths": [
+    "src/math.mjs",
+    "test/math.test.mjs"
+  ]
+}
