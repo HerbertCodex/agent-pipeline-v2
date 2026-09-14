@@ -25,8 +25,10 @@ export const gateSchema = s.object({
     // Explicit opt-in. A zero TTL NEVER participates in cross-validation caching.
     cacheTtlMs: s.default(s.number(0, 86400000), 0),
 });
+// Lifecycle tasks embed approved spec, security and design context; 30k chars could not hold a threat-modelled UI spec.
+export const MAX_TASK_DESCRIPTION = 120000;
 export const taskSchema = s.object({
-    id, title: s.string(1, 500), description: s.string(1, 30000),
+    id, title: s.string(1, 500), description: s.string(1, MAX_TASK_DESCRIPTION),
     acceptance: s.array(s.string(1, 3000), 1, 100),
     allowedPaths: s.array(s.string(1, 500), 1, 500),
     // Existing files remain strict. New supporting files may be created only inside
