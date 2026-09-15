@@ -80,3 +80,14 @@ Cette intégration ne constitue pas une certification OWASP, un pentest, un scan
 ## Hygiène de release
 
 Les preuves exécutables de la livraison courante sont regroupées sous `validation/alpha.8/`. Les anciennes validations alpha.2 à alpha.7 ne doivent pas être incluses dans l'archive alpha.8 propre ; l'historique reste dans Git, `CHANGELOG.md` et les documents de migration.
+
+## Pilote réel de réparation des sorties (2026-09-15)
+
+- Commande : `node scripts/repair-pilot.mjs --provider claude --output <dossier neuf> --execute`
+- Fournisseur : Claude Code `2.1.267`, authentification locale existante, fixture jetable.
+- Résultat observé :
+  - 2 validations ;
+  - 1 événement `role.output_repair` (code `SCHEMA`) ;
+  - la seconde réponse contenait le jeton aléatoire `REPAIR-888ee267` cité uniquement dans l'erreur du contrôleur ;
+  - `successfulPilot: true` en 16,7 s.
+- Portée : prouve que la boucle de réparation transmet l'erreur au modèle réel et que ce modèle corrige sa réponse, pour ce fournisseur à cette date. Aucune spec réelle, aucun push, merge ou déploiement. Le pilote complet `provider-pilot.mjs` n'a pas été relancé pour ces changements.
