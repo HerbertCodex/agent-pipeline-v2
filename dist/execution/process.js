@@ -16,6 +16,8 @@ export function redact(text, env) {
 /** No shell expansion. POSIX process groups are terminated on cancellation AND
  * normal leader exit, so ordinary background children cannot outlive the task.
  * This is lifecycle management, not a sandbox against a hostile setsid() child. */
+/** Delay after the direct child exits before stdio pipes still held by escaped descendants are closed. */
+export const PIPE_GRACE_MS = 1000;
 export function runProcess(options) {
     invariant(process.platform !== 'win32', 'PLATFORM', 'Native Windows process-tree control is not implemented; use WSL2');
     invariant(options.command.length > 0 && options.command[0], 'COMMAND', 'Empty argv');
@@ -88,11 +90,19 @@ export function runProcess(options) {
                 stop('cancelled');
         });
         child.once('error', error => { status = 'spawn_error'; spawnError = error.message; });
-        child.once('exit', () => kill('SIGKILL'));
+        // 'close' waits for every stdio pipe. A descendant that left the process group (a detached daemon)
+        // can keep them open forever, so after the child exits the controller closes them itself.
+        let pipeGrace;
+        child.once('exit', () => {
+            kill('SIGKILL');
+            pipeGrace = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); }, PIPE_GRACE_MS);
+        });
         child.once('close', (code, signal) => {
             clearTimeout(timeout);
             if (hardKill)
                 clearTimeout(hardKill);
+            if (pipeGrace)
+                clearTimeout(pipeGrace);
             kill('SIGKILL');
             options.signal?.removeEventListener('abort', abort);
             try {

@@ -15,7 +15,8 @@ export class Git {
     }
     async exec(cwd, args) {
         const result = await runProcess({
-            command: ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.quotePath=false', ...args],
+            // No fsmonitor: the controller must not start background daemons in disposable worktrees.
+            command: ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.quotePath=false', '-c', 'core.fsmonitor=false', ...args],
             cwd, env: { ...environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']),
                 GIT_TERMINAL_PROMPT: '0', GIT_AUTHOR_NAME: 'Agent Pipeline V2', GIT_AUTHOR_EMAIL: 'pipeline@localhost',
                 GIT_COMMITTER_NAME: 'Agent Pipeline V2', GIT_COMMITTER_EMAIL: 'pipeline@localhost' },
