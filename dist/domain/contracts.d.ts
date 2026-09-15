@@ -20,6 +20,7 @@ export declare const gateSchema: import("./schema.js").Schema<{
     readonly mandatory: boolean;
     readonly cacheTtlMs: number;
 }>;
+export declare const MAX_TASK_DESCRIPTION = 120000;
 export declare const taskSchema: import("./schema.js").Schema<{
     readonly id: string;
     readonly title: string;

@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync, renameSync, existsSync, readFileSync, rmSync,
 import { join, resolve, dirname, relative, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Pipeline, summarize } from '../engine/pipeline.js';
-import { validateConfig, taskSchema } from '../domain/contracts.js';
+import { validateConfig, taskSchema, MAX_TASK_DESCRIPTION } from '../domain/contracts.js';
 import { hash, sha256 } from '../domain/hash.js';
 import { PipelineError, errorMessage, invariant } from '../domain/errors.js';
 import { Git, isInside } from '../execution/git.js';
@@ -220,7 +220,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         const security = { context: r.securityContext, profile: spec.security.profile, requirements: securityRequirements, threats: securityThreats, assumptions: spec.security.assumptions };
         const context = { problem: spec.problem, scope: spec.scope, outOfScope: spec.outOfScope, decisions: spec.decisions, projectDecisions, criteria: acceptance, experience: spec.experience, security, approvedDesign: design };
         const description = t.description + '\n\nApproved Product context (do not expand scope):\n' + JSON.stringify(context);
-        invariant(description.length <= 30000, 'TASK_CONTEXT', 'Approved context is too large for a task; split the spec before execution');
+        invariant(description.length <= MAX_TASK_DESCRIPTION, 'TASK_CONTEXT', 'Approved context is too large for a task; split the spec before execution');
         const amendments = r.scopeAmendments.filter(a => a.status === 'approved' && a.taskId === t.id).flatMap(a => a.paths);
         const allowedPaths = [...new Set([...t.allowedPaths, ...amendments])];
         const allowedNewPaths = this.companionPaths(allowedPaths);
@@ -441,7 +441,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                         return doc;
                     }
                     const description = 'Correct the following QA findings without broadening the approved scope.\n' + JSON.stringify({ approvedSpec: spec, qa: r.qa.report });
-                    invariant(description.length <= 30000, 'TASK_CONTEXT', 'QA repair context too large; prepare an explicit follow-up');
+                    invariant(description.length <= MAX_TASK_DESCRIPTION, 'TASK_CONTEXT', 'QA repair context too large; prepare an explicit follow-up');
                     const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, config: r.config, task: this.aggregateTask(r, description) });
                     r.qaRepairs++;
                     r.attempts.push({ taskId: `QA-REPAIR-${r.qaRepairs}`, runId: run.id, kind: 'qa-repair' });
