@@ -1,6 +1,8 @@
+import { inventoryForAgents, type Inventory } from './inventory.js';
+import type { LanguageProfile } from './languages.js';
 export interface RepositorySymbol {
     name: string;
-    kind: 'function' | 'class' | 'interface' | 'type' | 'const' | 'method';
+    kind: string;
     path: string;
     line: number;
     excerpt: string;
@@ -14,8 +16,14 @@ export interface RepositoryIntelligence {
     securityFiles: string[];
     relevantFiles: string[];
     reuseCandidates: RepositorySymbol[];
+    inventory: ReturnType<typeof inventoryForAgents>;
     note: string;
 }
+export interface RepositoryOptions {
+    languages?: readonly LanguageProfile[];
+    signal?: AbortSignal;
+    inventory?: Inventory;
+}
 /** Bounded, deterministic repository awareness keyed to an immutable Git SHA.
- * It is lexical rather than semantic: it surfaces reuse candidates; it does not claim equivalence. */
-export declare function inspectRepository(repo: string, sha: string, query: string, signal?: AbortSignal): Promise<RepositoryIntelligence>;
+ * The inventory lists the whole public surface; reuse candidates are only a lexical ranking of it. */
+export declare function inspectRepository(repo: string, sha: string, query: string, options?: RepositoryOptions): Promise<RepositoryIntelligence>;

@@ -1,5 +1,15 @@
 # Changelog
 
+## Non publié
+
+- Ajoute un inventaire déterministe et indépendant de la stack (`src/knowledge/inventory.ts`) : profils de langage déclaratifs (extension, préfiltre, grammaire, règle de surface publique) et repli en unités de fichier pour toute autre technologie texte, sans nom de framework dans le contrôleur (verrouillé par un test).
+- `knowledge.languages` dans `pipeline.v2.json` permet d’ajouter ou de remplacer un profil de langage.
+- Repository Intelligence transmet `inventory` (toute la surface publique bornée) à Product et Implementer ; `reuseCandidates` découpe les identifiants (camelCase, snake_case, chemins) et monte à 40.
+- QA reçoit `inventoryDelta` (ajouts, retraits, `possibleDuplicates`) et doit signaler une réimplémentation injustifiée d’un comportement existant comme constat `major`.
+- Le review workspace ajoute `INVENTORY.md` et une section « Public surface changes » dans `REVIEW.md` ; nouvelle commande `apv2 inventory`.
+- Product doit inclure le document d’architecture existant dans une tâche lorsqu’une spec change frontières, interfaces publiques, persistance, authentification/autorisation, conventions ou une décision enregistrée.
+- Régénère `examples/schemas/config.schema.json` et `task.schema.json`.
+
 ## 2.0.0-alpha.8
 
 - Ajoute un `SecurityProfile` / `SecurityContext` déterministe qui route les surfaces sensibles vers un catalogue OWASP Cheat Sheet borné sans prétendre à une conformité OWASP.

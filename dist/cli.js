@@ -56,7 +56,7 @@ async function main() {
             repository: { type: 'string' }, remote: { type: 'string' }, 'confirm-push': { type: 'boolean' }, 'confirm-pr': { type: 'boolean' },
             hash: { type: 'string' }, agent: { type: 'string' }, name: { type: 'string' }, target: { type: 'string' },
             assist: { type: 'boolean' }, execute: { type: 'boolean' }, commit: { type: 'boolean' }, confirm: { type: 'boolean' }, approve: { type: 'boolean' }, amendment: { type: 'string' },
-            'manual-qa': { type: 'boolean' }, quiet: { type: 'boolean' },
+            'manual-qa': { type: 'boolean' }, quiet: { type: 'boolean' }, format: { type: 'string' },
             'accept-current': { type: 'boolean' }, 'confirm-stopped': { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, version: { type: 'boolean' },
         } });
     const [command, id] = positionals;
@@ -69,7 +69,7 @@ async function main() {
         console.log(help);
         return;
     }
-    if (['roles', 'skills', 'providers', 'inspect'].includes(command)) {
+    if (['roles', 'skills', 'providers', 'inspect', 'inventory'].includes(command)) {
         await knowledgeCommand(command, positionals, values);
         return;
     }

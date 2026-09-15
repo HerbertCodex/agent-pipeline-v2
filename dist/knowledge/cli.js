@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { catalog, guidanceFor, installedAssets, readRole } from './catalog.js';
 import { roleNames } from '../domain/knowledge.js';
@@ -7,6 +7,7 @@ import { parseJson } from '../domain/schema.js';
 import { validateConfig } from '../domain/contracts.js';
 import { providerProfile, providerSupport, executableAvailability } from '../adapters/providers.js';
 import { Git } from '../execution/git.js';
+import { buildInventory, inventoryMarkdown } from './inventory.js';
 export const knowledgeHelp = `Discovery (no model call, no project script, no approval):
   apv2 roles [ROLE]                      List roles or read their actual runtime instructions
   apv2 skills list                       List shipped skills, routing and reference files
@@ -14,6 +15,8 @@ export const knowledgeHelp = `Discovery (no model call, no project script, no ap
   apv2 skills resolve --config FILE --role ROLE --request TEXT
   apv2 providers                        Show native/protocol support and local executable presence
   apv2 inspect --repo PATH [--config FILE] Show effective roles/providers/skills and installed-file drift
+  apv2 inventory --repo PATH [--sha REF] [--format markdown|json] [--output NEW_FILE]
+                                         Deterministic inventory of declarations and file-level units at a commit
 `;
 function configFile(path) {
     const text = readFileSync(path, 'utf8');
@@ -58,6 +61,18 @@ export async function knowledgeCommand(command, args, values) {
     }
     const repo = await new Git().root(resolve(str('repo') ?? '.'));
     const path = resolve(str('config') ?? join(repo, 'pipeline.v2.json'));
+    if (command === 'inventory') {
+        const format = str('format') ?? 'markdown';
+        invariant(['markdown', 'json'].includes(format), 'ARGUMENT', 'Use --format markdown|json');
+        const languages = existsSync(path) ? configFile(path).knowledge.languages : [];
+        const { files: _, ...inventory } = await buildInventory(repo, str('sha') ?? 'HEAD', { languages });
+        const text = format === 'json' ? JSON.stringify(inventory, null, 2) + '\n' : inventoryMarkdown({ ...inventory, files: [] });
+        if (str('output'))
+            writeFileSync(resolve(str('output')), text, { flag: 'wx', mode: 0o600 });
+        else
+            process.stdout.write(text);
+        return;
+    }
     if (!existsSync(path)) {
         console.log(JSON.stringify({ repo, installed: false, next: 'Choose a provider with apv2 providers, then onboard --repo PATH --provider codex|claude. Review and approve the exact plan.', roles: roleNames, skillCatalog: catalog().map(s => s.id) }, null, 2));
         return;

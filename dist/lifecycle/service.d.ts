@@ -51,5 +51,7 @@ export declare class Lifecycle {
     deliver(id: string, directory: string): Promise<Document<SpecRecord>>;
     branch(id: string, name: string, confirmed: boolean): Promise<Document<SpecRecord>>;
     closeLocal(id: string, ref: string, mergeSha: string, actor: string, note: string): Promise<Document<SpecRecord>>;
+    /** Deterministic public-surface change between the approved base and the integrated candidate. */
+    private inventoryDelta;
     summary(doc: Document<SpecRecord>): Record<string, unknown>;
 }

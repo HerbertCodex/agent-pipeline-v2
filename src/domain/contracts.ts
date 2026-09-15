@@ -1,4 +1,4 @@
-import { skillsSchema } from './knowledge.js';
+import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s, type Infer } from './schema.js';
 import { invariant } from './errors.js';
 export const VERSION = '2.0.0-alpha.8';
@@ -59,6 +59,7 @@ export const configSchema = s.object({
   }),
   agent: agentSchema,
   skills: s.default(skillsSchema, { enabled: [], projectType: 'unknown', maxContextBytes: 16000 }),
+  knowledge: s.default(knowledgeSchema, { languages: [] }),
   roles: s.default(s.object({
     product: s.default(s.nullable(agentSchema), null),
     qa: s.default(s.nullable(agentSchema), null),
