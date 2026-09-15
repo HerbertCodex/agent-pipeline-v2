@@ -113,6 +113,47 @@ export function inventoryForAgents(inventory: Inventory, maxSymbols = 1500, maxU
   };
 }
 
+const GENERIC_STEM = /^(index|mod|main|init|__init__|lib|default)$/i;
+
+/**
+ * Stack-agnostic reference tokens for a source path, as they commonly appear in imports: the last two
+ * meaningful path segments joined by "/" and ".". A generic file stem (index, mod, __init__…) or one
+ * that does not start with a letter or digit is replaced by its directory. Wildcards are ignored.
+ */
+export function referenceTokens(path: string): string[] {
+  const parts = path.split('/').filter(p => p && !/[*?]/.test(p));
+  if (!parts.length) return [];
+  const last = parts[parts.length - 1]!;
+  const stem = /\.[^./]+$/.test(last) ? last.slice(0, last.indexOf('.') > 0 ? last.indexOf('.') : last.length) : last;
+  const generic = GENERIC_STEM.test(stem) || !/^[A-Za-z0-9]/.test(stem);
+  const segments = [...parts.slice(0, -1), ...(generic ? [] : [stem])];
+  const tail = segments.slice(-2);
+  const tokens = tail.length === 2 ? [tail.join('/'), tail.join('.')] : [];
+  // Relative imports often name the directory and its generic entry file explicitly (db/index).
+  if (generic && /^[A-Za-z0-9]/.test(stem) && parts.length >= 2) tokens.push(`${parts[parts.length - 2]}/${stem}`);
+  return [...new Set(tokens)].filter(t => t.length >= 6);
+}
+
+/**
+ * Test files (by generic naming conventions) whose content references one of the focus paths. It is a
+ * lexical hint for "which existing tests may break if these files change", never a dependency graph.
+ */
+export async function testsReferencing(repo: string, inventory: Inventory, focusPaths: readonly string[], signal?: AbortSignal): Promise<{ path: string; tokens: string[] }[]> {
+  const tokens = [...new Set(focusPaths.flatMap(referenceTokens))].slice(0, 40);
+  const testFiles = inventory.files.filter(isTestPath);
+  if (!tokens.length || !testFiles.length) return [];
+  const out: { path: string; tokens: string[] }[] = [];
+  for (const token of tokens) {
+    const rows = await grep(repo, inventory.sha, ['-l', '-F', '-e', token], testFiles, signal);
+    for (const path of rows.map(r => stripRev(r, inventory.sha))) {
+      const entry = out.find(x => x.path === path);
+      if (entry) entry.tokens.push(token); else out.push({ path, tokens: [token] });
+    }
+    if (out.length >= 50) break;
+  }
+  return out.sort((a, b) => a.path.localeCompare(b.path)).slice(0, 50);
+}
+
 const normalized = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 export interface InventoryDelta {

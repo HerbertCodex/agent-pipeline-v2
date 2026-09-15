@@ -49,7 +49,7 @@ test('bounded repair can fix a failed candidate without new Product/QA calls',as
 });
 test('repair budget stops an unproductive agent',async t=>{
  const f=fixture(t,{config:{maxRepairAttempts:1,agent:{type:'command',command:worker("writeFileSync('src/math.mjs','export const add = (a,b) => a * b;\\n');")}}});
- const r=await f.start();assert.equal(r.state,'failed');assert.equal(r.metrics.repairAttempts,1);
+ const r=await f.start();assert.equal(r.state,'failed');assert.equal(r.metrics.repairAttempts,1);assert.equal(r.error?.code,'REPAIR_NO_CHANGE');
 });
 test('gate mutations invalidate every would-be cached proof',async t=>{
  const f=fixture(t,{config:{gates:[{id:'mutator',command:[process.execPath,'-e',"require('fs').writeFileSync('README.md','mutated')"],cacheTtlMs:10000}]}});
