@@ -63,6 +63,20 @@ export declare function inventoryForAgents(inventory: Inventory, maxSymbols?: nu
     truncated: boolean;
     note: string;
 };
+/**
+ * Stack-agnostic reference tokens for a source path, as they commonly appear in imports: the last two
+ * meaningful path segments joined by "/" and ".". A generic file stem (index, mod, __init__…) or one
+ * that does not start with a letter or digit is replaced by its directory. Wildcards are ignored.
+ */
+export declare function referenceTokens(path: string): string[];
+/**
+ * Test files (by generic naming conventions) whose content references one of the focus paths. It is a
+ * lexical hint for "which existing tests may break if these files change", never a dependency graph.
+ */
+export declare function testsReferencing(repo: string, inventory: Inventory, focusPaths: readonly string[], signal?: AbortSignal): Promise<{
+    path: string;
+    tokens: string[];
+}[]>;
 export interface InventoryDelta {
     added: {
         name: string;

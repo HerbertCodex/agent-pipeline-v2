@@ -190,3 +190,11 @@ test('task context and QA diff limits are configurable within bounded ceilings',
   assert.equal(result.data.error?.code, 'TASK_CONTEXT');
   assert.match(result.data.error.message, /limits\.maxTaskContextChars 10000/);
 });
+
+test('an invalid path pattern proposed by a role is an output-contract violation eligible for repair', async () => {
+  const { isRepairableOutputError } = await import('../dist/lifecycle/roles.js');
+  const { matches } = await import('../dist/policy/policy.js');
+  let error; try { matches('a', 'src/{a,b}.ts'); } catch (e) { error = e; }
+  assert.equal(error?.code, 'GLOB');
+  assert.equal(isRepairableOutputError(error), true);
+});

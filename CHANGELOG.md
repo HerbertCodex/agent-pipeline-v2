@@ -2,6 +2,11 @@
 
 ## Non publié
 
+- Diagnostics d’échec centrés sur les échecs : début et fin de la sortie plus les lignes portant un vocabulaire d’échec générique (fail, error, expected, ×…), jusqu’à 16 000 caractères (au lieu des 8 000 derniers caractères, qui masquaient quels tests échouaient). Sortie des gates capturée jusqu’à 1 Mio.
+- Une réparation d’Implementer qui ne change rien s’arrête avec `REPAIR_NO_CHANGE` au lieu de relancer les gates sur le même candidat.
+- L’Implementer reçoit `repositoryIntelligence.referencingTests` (tests existants qui référencent ses fichiers, marqués `outsideScope`) et doit mettre à jour un test cassé par un changement voulu plutôt que laisser échouer : le contrôleur demande alors un amendement de périmètre explicite. Product doit inclure ces tests quand un contrat partagé change.
+- `role.finished` enregistre `timingsMs` (avant lancement, processus, contrôle du workspace, validation).
+- Les crochets et parenthèses sont des caractères littéraux dans les chemins et globs (routes dynamiques `[id]`, groupes `(app)`) ; accolades et négation `!` restent refusées. Une erreur `GLOB` dans une réponse de rôle devient réparable. Constaté en pilotant un vrai projet : une spec valide était rejetée et tout le tour Product (7,5 min) perdu.
 - Garde déterministe `SPEC_CAPABILITY` : une spec ne peut pas confier un fichier généré par l’outillage (`workflow.generatedPaths`, lockfiles par défaut) à un Implementer sans shell ; appliquée aux propositions Product, importées et à l’approbation.
 - Limites configurables `limits.maxTaskContextChars` (défaut 120 000, plafond 400 000) et `limits.maxQaDiffBytes` (défaut 512 Kio, plafond 8 Mio).
 - Pilote opt-in `npm run pilot:repair` : prouve avec un vrai fournisseur que la boucle de réparation transmet l’erreur du contrôleur et obtient une réponse corrigée (au plus deux appels).

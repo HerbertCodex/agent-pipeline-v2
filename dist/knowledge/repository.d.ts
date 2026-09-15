@@ -17,12 +17,19 @@ export interface RepositoryIntelligence {
     relevantFiles: string[];
     reuseCandidates: RepositorySymbol[];
     inventory: ReturnType<typeof inventoryForAgents>;
+    /** Existing test files that reference the focus paths (a task's allowedPaths); outsideScope marks those the task may not edit. */
+    referencingTests?: {
+        path: string;
+        tokens: string[];
+        outsideScope: boolean;
+    }[];
     note: string;
 }
 export interface RepositoryOptions {
     languages?: readonly LanguageProfile[];
     signal?: AbortSignal;
     inventory?: Inventory;
+    focusPaths?: readonly string[];
 }
 /** Bounded, deterministic repository awareness keyed to an immutable Git SHA.
  * The inventory lists the whole public surface; reuse candidates are only a lexical ranking of it. */

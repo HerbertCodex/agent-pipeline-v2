@@ -6,9 +6,12 @@ export function validRelativePath(path: string): boolean {
     !path.includes('\\') && !/[\0\r\n]/.test(path) &&
     path.split('/').every(p => p !== '' && p !== '.' && p !== '..');
 }
-// Restricted portable globs: *, **, ?. No braces, regex, extglobs, or negation.
+// Restricted portable globs: *, **, ?. Brackets and parentheses are literal path characters (dynamic
+// route or group directories in several stacks); character classes are not supported. Braces and a
+// leading "!" are refused so that brace expansion or negation never silently matches nothing.
 export function matches(path: string, pattern: string): boolean {
-  invariant(validRelativePath(pattern) && !/[\[\]{}!]/.test(pattern), 'GLOB', `Unsupported glob: ${pattern}`);
+  invariant(validRelativePath(pattern) && !/[{}]/.test(pattern) && !pattern.split('/').some(segment => segment.startsWith('!')), 'GLOB',
+    `Unsupported glob: ${pattern}. Use only *, ** and ?; brackets and parentheses are literal characters, braces and leading ! are not supported.`);
   let regex = '^';
   for (let i = 0; i < pattern.length; i++) {
     const c = pattern[i]!;
