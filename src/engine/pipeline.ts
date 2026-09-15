@@ -175,7 +175,7 @@ export class Pipeline {
   private async implement(run: Run, git: Git, signal: AbortSignal, hooks: ProcessHooks, failures: GateReceipt[]): Promise<void> {
     const start = performance.now();
     try {
-      const repositoryIntelligence = await inspectRepository(run.repo, run.baseSha, `${run.task.title}\n${run.task.description}\n${run.task.acceptance.join('\n')}`, signal);
+      const repositoryIntelligence = await inspectRepository(run.repo, run.baseSha, `${run.task.title}\n${run.task.description}\n${run.task.acceptance.join('\n')}`, { signal, languages: run.config.knowledge?.languages ?? [] });
       const request = requestFor(run.task,run.baseSha,run.workspace,failures,run.config.skills,repositoryIntelligence);
       this.store.save(run, 'agent.guidance', { ...guidanceAudit(request.guidance), provider: run.config.agent.type, repositoryIntelligence: { sha: repositoryIntelligence.sha, fileCount: repositoryIntelligence.fileCount, relevantFiles: repositoryIntelligence.relevantFiles, reuseCandidates: repositoryIntelligence.reuseCandidates.map(x=>({name:x.name,kind:x.kind,path:x.path,line:x.line,score:x.score})) } });
       run.summary = agentOutputSchema.parse({ summary: await runAgent(run.config,

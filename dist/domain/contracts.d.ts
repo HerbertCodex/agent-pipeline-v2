@@ -63,6 +63,18 @@ export declare const configSchema: import("./schema.js").Schema<{
         readonly projectType: "unknown" | "backend" | "frontend" | "mobile" | "fullstack" | "library";
         readonly maxContextBytes: number;
     };
+    readonly knowledge: {
+        readonly languages: {
+            readonly id: string;
+            readonly extensions: string[];
+            readonly prefilter: string;
+            readonly declarations: {
+                readonly kind: string;
+                readonly pattern: string;
+                readonly exported: "always" | "marker" | "capitalized" | "not-underscore" | "unless-hidden";
+            }[];
+        }[];
+    };
     readonly roles: {
         readonly product: {
             readonly type: "command" | "codex" | "claude";

@@ -55,14 +55,14 @@ async function main(): Promise<void> {
     repository: { type: 'string' }, remote: { type: 'string' }, 'confirm-push': { type: 'boolean' }, 'confirm-pr': { type: 'boolean' },
     hash: { type: 'string' }, agent: { type: 'string' }, name: { type: 'string' }, target: { type: 'string' },
     assist: { type: 'boolean' }, execute: { type: 'boolean' }, commit: { type: 'boolean' }, confirm: { type: 'boolean' }, approve: { type: 'boolean' }, amendment: { type: 'string' },
-    'manual-qa': { type: 'boolean' }, quiet: { type: 'boolean' },
+    'manual-qa': { type: 'boolean' }, quiet: { type: 'boolean' }, format: { type: 'string' },
     'accept-current': { type: 'boolean' },'confirm-stopped': { type: 'boolean' },help: { type: 'boolean',short: 'h' },version: { type: 'boolean' },
   } });
   const [command,id] = positionals;
   const required = (value: string | undefined,name: string): string => { invariant(value,'ARGUMENT',`Missing ${name}`); return value; };
   if (values.version) { console.log(VERSION); return; }
   if (values.help || !command) { console.log(help); return; }
-  if (['roles','skills','providers','inspect'].includes(command)) { await knowledgeCommand(command,positionals,values); return; }
+  if (['roles','skills','providers','inspect','inventory'].includes(command)) { await knowledgeCommand(command,positionals,values); return; }
   if (command === 'init') {
     const file = resolve(values.repo ?? '.', 'pipeline.v2.json');
     writeFileSync(file,JSON.stringify(exampleConfig,null,2)+'\n',{ flag: 'wx',mode: 0o600 });

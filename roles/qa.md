@@ -14,6 +14,9 @@ For every `spec.security.requirements` entry, return exactly one `securityChecks
 
 Use routed OWASP topics as review guidance, not as proof of compliance. A scanner receipt can support a finding but cannot prove absence of vulnerabilities. `pass` is forbidden when a required security check is failed, unknown or omitted.
 
+## Reuse and duplication
+The controller supplies `inventoryDelta`: public declarations and file-level units added or removed between the base and the candidate, plus `possibleDuplicates` whose normalized names collide with something that already existed. These are deterministic prompts, not verdicts. For each added abstraction, check whether an existing one already had the same responsibility, even under another name. Report an unjustified parallel implementation of existing behaviour as a `major` finding naming both paths; report a justified or harmless similarity as an observation.
+
 ## Method
 Review every acceptance criterion exactly once. Cross-check the candidate SHA, relevant code, tests and receipts. Inspect domain relationships and authentication/authorization behavior when they are part of confirmed decisions rather than trusting names or summaries. Report concrete findings with severity and paths. Use `unknown` when evidence is insufficient.
 

@@ -39,3 +39,14 @@ Le bootstrap persiste `.agent-pipeline/ARCHITECTURE.md`. Il ne s'agit pas d'une 
 Repository Intelligence est recalculé sur le SHA Git utilisé par Product ou par la tâche Implementer. Le contrôleur transmet un résumé borné de manifests, documents architecturaux, fichiers pertinents et symboles candidats. Cette séparation garde la recherche déterministe et auditée tout en évitant de demander au modèle de redécouvrir aveuglément le dépôt à chaque appel.
 
 Pour les specs UI, la proposition design est un artefact de planification distinct, produit par Product avec `ui-design`. Elle est liée au hash d'approbation mais n'ajoute pas un cinquième rôle permanent.
+
+## Inventaire du dépôt — indépendant de la stack
+
+`ARCHITECTURE.md` documente l'intention (décisions, raisons, compromis). Il n'est écrit automatiquement qu'au bootstrap et ne sert pas d'inventaire. Ce qui existe réellement est calculé à chaque appel, sans modèle, par `src/knowledge/inventory.ts` sur le SHA exact :
+
+- **Profils de langage déclaratifs** (`src/knowledge/languages.ts`) : extension de fichier, préfiltre `git grep` et grammaire de déclaration par ligne, avec une règle de surface publique (`marker`, `capitalized`, `not-underscore`, `unless-hidden`, `always`). Les profils intégrés couvrent des *langages* (ECMAScript, Python, Go, Rust, Java, Kotlin, C#, Ruby, PHP), jamais un framework.
+- **Repli générique** : tout fichier texte d'une autre technologie (gabarits, composants, feuilles de style, DSL…) devient une *unité de fichier* nommée d'après son fichier. Aucune technologie n'est invisible et aucune n'exige de cas particulier dans le contrôleur. Documentation, données, configuration, assets et binaires sont exclus.
+- **Profils projet** : `knowledge.languages` dans `pipeline.v2.json` ajoute ou remplace un profil, par exemple pour transformer une technologie interne en déclarations nommées.
+- **Usage** : Product et Implementer reçoivent `repositoryIntelligence.inventory` (toute la surface publique bornée) en plus des `reuseCandidates` lexicaux, dont le classement découpe les identifiants (`borrowBook` → `borrow book`). QA reçoit `inventoryDelta` (ajouts, retraits et `possibleDuplicates` par nom normalisé entre base et candidat). Le review workspace contient `INVENTORY.md` et une section « Public surface changes ». `apv2 inventory --repo PATH` l'expose aux humains.
+
+Limites : l'analyse est lexicale, ligne par ligne ; elle ne résout ni les ré-exports ni les déclarations multilignes exotiques, et un nom proche n'est qu'une invite de revue. Un test verrouille l'absence de nom de framework dans le code d'indexation.

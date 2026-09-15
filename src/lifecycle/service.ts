@@ -11,6 +11,7 @@ import { specSchema, qaSchema, designProposalSchema, validateSpec, validateQa, s
 import { runRole } from './roles.js';
 import { matches } from '../policy/policy.js';
 import { inspectRepository } from '../knowledge/repository.js';
+import { buildInventory, diffInventory, inventoryMarkdown, type InventoryDelta } from '../knowledge/inventory.js';
 import { confirmedDecisions, ledgerHash, loadDecisionLedger } from './decisions.js';
 import { assessSecurity, neutralSecurityContext } from '../security/owasp.js';
 export interface WorkflowOptions {
@@ -148,7 +149,7 @@ export class Lifecycle {
     private async product(doc: Document<SpecRecord>, proposal: unknown, signal?: AbortSignal): Promise<void> {
         const r = doc.data;
         const repositoryIntelligence = await inspectRepository(r.repo, r.baseSha, `${r.request}
-${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, signal);
+${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { ...(signal ? { signal } : {}), languages: r.config.knowledge?.languages ?? [] });
         r.securityContext = assessSecurity({ text: r.request + '\n' + r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n'), projectType: r.config.skills.projectType, files: repositoryIntelligence.relevantFiles });
         r.securityContextHash = hash(r.securityContext);
         const value = proposal ?? await runRole({ store: this.store, documentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills, agent: r.config.roles.product ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: specSchema, context: { request: r.request, previous: r.content, decisionLedger: r.decisionLedger, repositoryIntelligence, securityContext: r.securityContext }, ...(signal ? { signal } : {}) });
@@ -413,7 +414,9 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, si
                     }
                     const diff = await new Git(signal).patch(r.repo, r.baseSha, final.candidateSha!);
                     invariant(Buffer.byteLength(diff) <= 524288, 'QA_CONTEXT', 'QA diff exceeds 512 KiB; use an explicit external review, never a truncated review');
-                    const raw = await runRole({ store: this.store, documentId: id, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, agent: r.config.roles.qa ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: qaSchema, context: { diff, spec: r.content, decisionLedger: r.decisionLedger, securityContext:r.securityContext, baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] }, signal });
+                    const inventoryDelta = await this.inventoryDelta(r, final.candidateSha!, signal);
+                    this.save(doc, 'qa.inventory_delta', { added: inventoryDelta.added.length, removed: inventoryDelta.removed.length, possibleDuplicates: inventoryDelta.possibleDuplicates });
+                    const raw = await runRole({ store: this.store, documentId: id, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, agent: r.config.roles.qa ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: qaSchema, context: { diff, spec: r.content, decisionLedger: r.decisionLedger, securityContext:r.securityContext, baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] }, signal });
                     r.qa = { report: validateQa(raw, spec, final.candidateSha!, r.decisionLedger), specHash: r.contentHash!, evidenceHash, at: Date.now(), source: 'agent' };
                     this.save(doc, 'qa.completed', { qa: r.qa });
                 }
@@ -485,12 +488,21 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, si
         }
         rmSync(root,{recursive:true,force:true}); mkdirSync(root,{recursive:true,mode:0o700});
         await git.workspace(r.repo,candidate,final.candidateSha);
-        const patchPath=join(root,'candidate.patch'); const qaPath=join(root,'QA.md'); const reviewPath=join(root,'REVIEW.md');
+        const patchPath=join(root,'candidate.patch'); const qaPath=join(root,'QA.md'); const reviewPath=join(root,'REVIEW.md'); const inventoryPath=join(root,'INVENTORY.md');
         const patch=await git.patch(r.repo,r.baseSha,final.candidateSha);
         writeFileSync(patchPath,patch,{mode:0o600}); writeFileSync(qaPath,this.qaMarkdown(r),{mode:0o600});
+        const languages = r.config.knowledge?.languages ?? [];
+        const candidateInventory = await buildInventory(r.repo, final.candidateSha, { languages });
+        writeFileSync(inventoryPath, inventoryMarkdown(candidateInventory), { mode: 0o600 });
+        const delta = diffInventory(await buildInventory(r.repo, r.baseSha, { languages }), candidateInventory);
+        const surfaceLines = [
+            ...(delta.added.length ? delta.added.map(x => `- added \`${x.name}\` (${x.kind}) in \`${x.path}\``) : ['- no new public declaration or file-level unit']),
+            ...delta.removed.map(x => `- removed \`${x.name}\` (${x.kind}) from \`${x.path}\``),
+            ...delta.possibleDuplicates.map(x => `- possible duplicate: \`${x.added.name}\` in \`${x.added.path}\` vs existing \`${x.existing.name}\` in \`${x.existing.path}\``),
+        ].join('\n');
         const gateLines=final.receipts.map(x=>`- ${x.gateId}: ${x.status}`).join('\n');
         const securityLines = r.content?.security.requirements.length ? r.content.security.requirements.map(x=>`- ${x.id}: ${x.title} [${x.owaspTopics.join(', ')}]`).join('\n') : '- none';
-        const text=[`# Candidate review`,``,`Candidate: ${final.candidateSha}`,`Risk: ${final.risk?.lane ?? 'unknown'}`,`Review mode: ${r.config.workflow.reviewMode}`,`Security minimum: ${r.securityContext.minimumLane}`,`OWASP topics: ${r.securityContext.topics.map(x=>x.id).join(', ') || 'none'}`,``,`Open this directory in your editor:`,``,candidate,``,`Patch: ${patchPath}`,`QA: ${qaPath}`,``,`## Gates`,gateLines || '- none',``,`## Security requirements`,securityLines,''].join('\n');
+        const text=[`# Candidate review`,``,`Candidate: ${final.candidateSha}`,`Risk: ${final.risk?.lane ?? 'unknown'}`,`Review mode: ${r.config.workflow.reviewMode}`,`Security minimum: ${r.securityContext.minimumLane}`,`OWASP topics: ${r.securityContext.topics.map(x=>x.id).join(', ') || 'none'}`,``,`Open this directory in your editor:`,``,candidate,``,`Patch: ${patchPath}`,`QA: ${qaPath}`,`Inventory: ${inventoryPath}`,``,`## Gates`,gateLines || '- none',``,`## Public surface changes`,surfaceLines,``,`## Security requirements`,securityLines,''].join('\n');
         writeFileSync(reviewPath,text,{mode:0o600});
         r.review={directory:root,candidateDirectory:candidate,patchPath,qaPath,reviewPath,candidateSha:final.candidateSha};
         this.save(doc,'workflow.review_workspace_ready',{review:r.review});
@@ -761,6 +773,11 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, si
         finally {
             this.store.releaseDocument(id, token);
         }
+    }
+    /** Deterministic public-surface change between the approved base and the integrated candidate. */
+    private async inventoryDelta(r: SpecRecord, candidateSha: string, signal?: AbortSignal): Promise<InventoryDelta> {
+        const options = { languages: r.config.knowledge?.languages ?? [], ...(signal ? { signal } : {}) };
+        return diffInventory(await buildInventory(r.repo, r.baseSha, options), await buildInventory(r.repo, candidateSha, options));
     }
     summary(doc: Document<SpecRecord>): Record<string, unknown> {
         const r = doc.data;
