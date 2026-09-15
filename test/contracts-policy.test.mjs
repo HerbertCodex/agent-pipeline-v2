@@ -40,6 +40,15 @@ for (const [path,glob,expected] of [
 ]) test(`glob ${glob} on ${path}`,()=>assert.equal(matches(path,glob),expected));
 for (const path of ['/etc/passwd','../outside','a/../b','a\\b','C:/x','a//b','./a','a\0b']) test(`reject non-relative path ${JSON.stringify(path)}`,()=>assert.equal(validRelativePath(path),false));
 test('unsupported globs fail instead of silently matching nothing',()=>assert.throws(()=>matches('a','{a,b}'),/Unsupported/));
+test('brace expansion and negation still fail loudly',()=>{ for (const g of ['{a,b}','!src/**','src/!x/*']) assert.throws(()=>matches('a',g),/Unsupported/); });
+test('brackets and parentheses are literal path characters, never character classes',()=>{
+  assert.equal(matches('src/routes/items/[id]/page.ts','src/routes/items/[id]/page.ts'),true);
+  assert.equal(matches('src/routes/items/[id]/edit.ts','src/routes/items/[id]/*'),true);
+  assert.equal(matches('pages/[...slug].tsx','pages/[...slug].tsx'),true);
+  assert.equal(matches('app/(shop)/cart/view.ts','app/(shop)/**'),true);
+  assert.equal(matches('src/routes/items/i/page.ts','src/routes/items/[id]/page.ts'),false);
+  assert.doesNotThrow(()=>assertScope(['src/routes/items/[id]/page.ts'],task({allowedPaths:['src/routes/items/[id]/page.ts']})));
+});
 test('scope includes deletions and is not substring based',()=>{assertScope(['src/a.ts'],task({allowedPaths:['src/**']}));assert.throws(()=>assertScope(['src2/a.ts'],task({allowedPaths:['src/**']})),/Out-of-scope/);});
 test('bounded new companion files can expand scope automatically but sensitive files cannot',()=>{ const t=task({allowedPaths:['src/page.ts'],allowedNewPaths:['src/*'],maxNewFiles:2}); assert.deepEqual(assertScope({files:['src/page.ts','src/page.server.ts'],added:['src/page.server.ts'],lines:4,binary:false},t),['src/page.server.ts']); assert.throws(()=>assertScope({files:['src/auth.ts'],added:['src/auth.ts'],lines:1,binary:false},t),/Out-of-scope/); });
 test('small documentation follows fast path',()=>assert.equal(classify({files:['docs/guide.md'],lines:5,binary:false},cfg()).lane,'fast'));
