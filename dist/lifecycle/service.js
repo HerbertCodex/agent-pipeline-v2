@@ -16,7 +16,22 @@ import { confirmedDecisions, ledgerHash, loadDecisionLedger } from './decisions.
 import { assessSecurity, neutralSecurityContext } from '../security/owasp.js';
 export class Lifecycle {
     pipeline;
+    /** Inventories keyed by immutable commit SHA and language profiles; bounded, never invalidated. */
+    inventories = new Map();
     constructor(stateDir) { this.pipeline = new Pipeline(stateDir); }
+    inventoryAt(repo, sha, languages = [], signal) {
+        invariant(/^[0-9a-f]{40,64}$/.test(sha), 'REPOSITORY_INDEX', 'Inventory cache requires an immutable commit SHA');
+        const key = `${repo}\0${sha}\0${hash(languages)}`;
+        let pending = this.inventories.get(key);
+        if (!pending) {
+            pending = buildInventory(repo, sha, { languages, ...(signal ? { signal } : {}) });
+            pending.catch(() => this.inventories.delete(key));
+            this.inventories.set(key, pending);
+            while (this.inventories.size > 32)
+                this.inventories.delete(this.inventories.keys().next().value);
+        }
+        return pending;
+    }
     get store() { return this.pipeline.store; }
     close() { this.pipeline.close(); }
     get(id) {
@@ -152,7 +167,7 @@ export class Lifecycle {
     async product(doc, proposal, signal) {
         const r = doc.data;
         const repositoryIntelligence = await inspectRepository(r.repo, r.baseSha, `${r.request}
-${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, { ...(signal ? { signal } : {}), languages: r.config.knowledge?.languages ?? [] });
+${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, { ...(signal ? { signal } : {}), inventory: await this.inventoryAt(r.repo, r.baseSha, r.config.knowledge?.languages ?? [], signal) });
         r.securityContext = assessSecurity({ text: r.request + '\n' + r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n'), projectType: r.config.skills.projectType, files: repositoryIntelligence.relevantFiles });
         r.securityContextHash = hash(r.securityContext);
         const securityContext = r.securityContext;
@@ -556,9 +571,9 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         writeFileSync(patchPath, patch, { mode: 0o600 });
         writeFileSync(qaPath, this.qaMarkdown(r), { mode: 0o600 });
         const languages = r.config.knowledge?.languages ?? [];
-        const candidateInventory = await buildInventory(r.repo, final.candidateSha, { languages });
+        const candidateInventory = await this.inventoryAt(r.repo, final.candidateSha, languages);
         writeFileSync(inventoryPath, inventoryMarkdown(candidateInventory), { mode: 0o600 });
-        const delta = diffInventory(await buildInventory(r.repo, r.baseSha, { languages }), candidateInventory);
+        const delta = diffInventory(await this.inventoryAt(r.repo, r.baseSha, languages), candidateInventory);
         const surfaceLines = [
             ...(delta.added.length ? delta.added.map(x => `- added \`${x.name}\` (${x.kind}) in \`${x.path}\``) : ['- no new public declaration or file-level unit']),
             ...delta.removed.map(x => `- removed \`${x.name}\` (${x.kind}) from \`${x.path}\``),
@@ -839,8 +854,8 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
     }
     /** Deterministic public-surface change between the approved base and the integrated candidate. */
     async inventoryDelta(r, candidateSha, signal) {
-        const options = { languages: r.config.knowledge?.languages ?? [], ...(signal ? { signal } : {}) };
-        return diffInventory(await buildInventory(r.repo, r.baseSha, options), await buildInventory(r.repo, candidateSha, options));
+        const languages = r.config.knowledge?.languages ?? [];
+        return diffInventory(await this.inventoryAt(r.repo, r.baseSha, languages, signal), await this.inventoryAt(r.repo, candidateSha, languages, signal));
     }
     summary(doc) {
         const r = doc.data;
