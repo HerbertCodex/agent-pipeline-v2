@@ -15,6 +15,7 @@ import type { Document, Store } from '../persistence/store.js';
 import { reviewer } from './contracts.js';
 import { planInstallation, type InstallPlan } from './onboarding.js';
 import { assessSecurity } from '../security/owasp.js';
+import { isRepairableOutputError, repairNotice, MAX_REPAIR_ERROR_CHARS } from './roles.js';
 import {
   decisionSchema, decisionCoverageSchema, semanticReviewSchema,
   validateDecisionLedger, validateBootstrapCoverage, validateSemanticReview, ambiguousApprovalFragments, ambiguousDecisions,
@@ -87,31 +88,46 @@ const bootstrapInstructions = `${readRole('setup').instructions}\n\nBootstrap-pl
 
 const semanticReviewInstructions = `Act as an independent consistency reviewer for a bootstrap proposal. Compare the literal operator request, the extracted decision ledger, architecture rationale and every proposed file. Do not trust the proposal's own decisionCoverage claims. Reject the proposal if it omits a material explicit operator decision, contradicts a confirmed decision, changes an operator-selected technology, replaces a required domain relationship with a weaker placeholder, changes an authentication choice, or claims scripts/features unsupported by the files/dependencies. Treat materially ambiguous wording as ambiguous: never let Setup convert "approve/validate ... except/sauf ..." into a confirmed inclusion or exclusion without clarification. Every ambiguous ledger entry must remain status=ambiguous in your decision review. An unresolved ambiguity with enforcement=bootstrap requires changes_requested; an enforcement=product ambiguity may coexist with pass when the scaffold is neutral and its clarification is deferred to Product. Product/deferred decisions do not need to be implemented in the scaffold, but the scaffold must not contradict them. Do not promote ordinary tool-resolvable details such as lockfile generation or production hosting into operator blockers unless the request makes them a real constraint. Use the supplied securityContext to reject scaffolds that obviously contradict required authentication, authorization, secret-handling or trust-boundary constraints, but do not claim OWASP compliance. Your decisions array must contain exactly one entry for each ledger decision whose status is confirmed or ambiguous (listed in materialDecisionIds) and no entry for proposed or deferred decisions; report concerns about those as findings instead. Return only the requested JSON review.`;
 
-async function runStructuredProvider<T>(store:Store,documentId:string,root:string,agent:AgentConfig,protocol:string,instructions:string,payload:Record<string,unknown>,schema:Schema<T>,signal?:AbortSignal):Promise<T> {
+/** Bootstrap has no project configuration yet: one bounded repair of an output-contract violation. */
+export const BOOTSTRAP_OUTPUT_REPAIRS = 1;
+
+async function runStructuredProvider<T>(store:Store,documentId:string,root:string,agent:AgentConfig,protocol:string,instructions:string,payload:Record<string,unknown>,schema:Schema<T>,signal?:AbortSignal,validate:(value:T)=>T=value=>value):Promise<T> {
   const workspace=join(root,protocol.replace(/[^A-Za-z0-9_-]/g,'_')); mkdirSync(workspace,{recursive:true,mode:0o700});
   const schemaFile=join(workspace,'schema.json'); const outputFile=join(workspace,'result.json');
   const env=environment(['PATH','SystemRoot','WINDIR','TMPDIR','TEMP','TMP','LANG',...agent.passEnv]);
-  let command=agent.command; let input=JSON.stringify({protocol,role:'setup',instructions,...payload,outputSchema:schema.json}); let outputFromFile=false;
-  if (agent.type==='codex') {
-    writeFileSync(schemaFile,JSON.stringify(strictSchema(schema.json)),{flag:'wx',mode:0o600});
-    command=[agent.command[0]??'codex','exec','--sandbox','read-only','--cd',workspace,'--output-schema',schemaFile,'--output-last-message',outputFile,...(agent.model?['--model',agent.model]:[]),'-'];
-    input=`${instructions}\n${input}`; outputFromFile=true;
-  } else if (agent.type==='claude') {
-    command=claudeCommand(agent,schema.json,true); input=`${instructions}\n${input}`;
-  }
-  invariant(command.length>0,'AGENT','Missing bootstrap provider executable');
+  if (agent.type==='codex') writeFileSync(schemaFile,JSON.stringify(strictSchema(schema.json)),{flag:'wx',mode:0o600});
   const ids=new Map<number,string>(); const hooks={onStart:(pid:number)=>{ids.set(pid,store.startDocumentChild(documentId,pid));},onFinish:(pid:number)=>{const id=ids.get(pid);if(id){store.finishDocumentChild(id);ids.delete(pid);}}};
   store.documentEvent(documentId,`${protocol}.started`,{provider:agent.type});
-  const result=await runProcess({command,cwd:workspace,env,input,timeoutMs:agent.timeoutMs,...(signal?{signal}:{}),...hooks,maxOutputBytes:3*1024*1024});
-  invariant(result.status==='passed',result.status==='cancelled'?'CANCELLED':'BOOTSTRAP_PROVIDER',`${protocol} provider ${result.status}: ${redact(result.stderr.slice(-4000),env)}`);
-  let text=result.stdout;
-  if (outputFromFile) {
-    invariant(existsSync(outputFile)&&lstatSync(outputFile).isFile()&&!lstatSync(outputFile).isSymbolicLink(),'BOOTSTRAP_OUTPUT',`Invalid ${protocol} output file`);
-    text=readFileSync(outputFile,'utf8');
-  } else invariant(!result.truncated,'BOOTSTRAP_OUTPUT',`${protocol} provider output truncated`);
-  const raw=agent.type==='claude'?claudeOutput(text):parseJson(text);
-  store.documentEvent(documentId,`${protocol}.finished`,{provider:agent.type,durationMs:result.durationMs});
-  return schema.parse(raw);
+  let repair:ReturnType<typeof repairNotice>|undefined;
+  for (let attempt=0; ; attempt++) {
+    const repairLine=repair?`\nCONTROLLER REJECTED YOUR PREVIOUS ANSWER (${repair.previousError.code}): ${repair.previousError.message}\n${repair.instruction}\n`:'';
+    let command=agent.command; let input=JSON.stringify({protocol,role:'setup',instructions,...payload,...(repair?{repair}:{}),outputSchema:schema.json}); const outputFromFile=agent.type==='codex';
+    if (agent.type==='codex') {
+      rmSync(outputFile,{force:true});
+      command=[agent.command[0]??'codex','exec','--sandbox','read-only','--cd',workspace,'--output-schema',schemaFile,'--output-last-message',outputFile,...(agent.model?['--model',agent.model]:[]),'-'];
+      input=`${instructions}${repairLine}\n${input}`;
+    } else if (agent.type==='claude') {
+      command=claudeCommand(agent,schema.json,true); input=`${instructions}${repairLine}\n${input}`;
+    }
+    invariant(command.length>0,'AGENT','Missing bootstrap provider executable');
+    const result=await runProcess({command,cwd:workspace,env,input,timeoutMs:agent.timeoutMs,...(signal?{signal}:{}),...hooks,maxOutputBytes:3*1024*1024});
+    invariant(result.status==='passed',result.status==='cancelled'?'CANCELLED':'BOOTSTRAP_PROVIDER',`${protocol} provider ${result.status}: ${redact(result.stderr.slice(-4000),env)}`);
+    try {
+      let text=result.stdout;
+      if (outputFromFile) {
+        invariant(existsSync(outputFile)&&lstatSync(outputFile).isFile()&&!lstatSync(outputFile).isSymbolicLink(),'BOOTSTRAP_OUTPUT',`Invalid ${protocol} output file`);
+        text=readFileSync(outputFile,'utf8');
+      } else invariant(!result.truncated,'BOOTSTRAP_OUTPUT',`${protocol} provider output truncated`);
+      const raw=agent.type==='claude'?claudeOutput(text):parseJson(text);
+      const value=validate(schema.parse(raw));
+      store.documentEvent(documentId,`${protocol}.finished`,{provider:agent.type,durationMs:result.durationMs,attempts:attempt+1});
+      return value;
+    } catch (error) {
+      if (!isRepairableOutputError(error) || attempt>=BOOTSTRAP_OUTPUT_REPAIRS) throw error;
+      repair=repairNotice(attempt+1,error);
+      store.documentEvent(documentId,`${protocol}.output_repair`,{attempt:attempt+1,code:error.code,message:error.message.slice(0,MAX_REPAIR_ERROR_CHARS)});
+    }
+  }
 }
 
 function validateProposal(value:unknown,operatorText:string,previous?:BootstrapProposal):BootstrapProposal {
@@ -155,14 +171,13 @@ function preserveOperatorDecisions(previous:BootstrapProposal,next:BootstrapProp
 async function createProposal(store:Store,doc:Document<BootstrapPlan>,work:string,request:string,latestRefinement:string|undefined,signal?:AbortSignal):Promise<void> {
   const previous=doc.data.revision>1?doc.data.proposal:null;
   const preliminarySecurity=assessSecurity({text:request,projectType:previous?.projectType ?? 'unknown',files:[]});
-  const raw=await runStructuredProvider(store,doc.id,work,doc.data.provider,'agent-pipeline/bootstrap-v2',bootstrapInstructions,
-    {request,previousProposal:previous,securityContext:preliminarySecurity},bootstrapProposalSchema,signal);
-  const proposal=validateProposal(raw,request,previous??undefined);
-  if (previous && latestRefinement!==undefined) preserveOperatorDecisions(previous,proposal,latestRefinement);
+  const proposal=await runStructuredProvider(store,doc.id,work,doc.data.provider,'agent-pipeline/bootstrap-v2',bootstrapInstructions,
+    {request,previousProposal:previous,securityContext:preliminarySecurity},bootstrapProposalSchema,signal,
+    raw=>{ const valid=validateProposal(raw,request,previous??undefined); if (previous && latestRefinement!==undefined) preserveOperatorDecisions(previous,valid,latestRefinement); return valid; });
   const ledger:DecisionLedger={schemaVersion:1,decisions:proposal.decisions};
-  const reviewRaw=await runStructuredProvider(store,doc.id,work,doc.data.provider,'agent-pipeline/bootstrap-review-v1',semanticReviewInstructions,
-    {request,decisionLedger:ledger,materialDecisionIds:ledger.decisions.filter(d=>['confirmed','ambiguous'].includes(d.status)).map(d=>d.id),proposal,securityContext:assessSecurity({text:request,projectType:proposal.projectType,files:proposal.files.map(f=>f.path)})},semanticReviewSchema,signal);
-  const semanticReview=validateSemanticReview(ledger,reviewRaw);
+  const semanticReview=await runStructuredProvider(store,doc.id,work,doc.data.provider,'agent-pipeline/bootstrap-review-v1',semanticReviewInstructions,
+    {request,decisionLedger:ledger,materialDecisionIds:ledger.decisions.filter(d=>['confirmed','ambiguous'].includes(d.status)).map(d=>d.id),proposal,securityContext:assessSecurity({text:request,projectType:proposal.projectType,files:proposal.files.map(f=>f.path)})},semanticReviewSchema,signal,
+    review=>validateSemanticReview(ledger,review));
   doc.data.proposal=proposal; doc.data.semanticReview=semanticReview;
   doc.data.hash=semanticReview.verdict==='pass'?bootstrapHash(doc.data):'';
 }

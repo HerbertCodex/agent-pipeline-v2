@@ -14,7 +14,9 @@ export declare class Git {
     workspace(repo: string, path: string, sha: string): Promise<void>;
     removeWorkspace(repo: string, path: string, ownedRoot: string): Promise<void>;
     changes(repo: string, base: string, candidate?: string): Promise<ChangeSet>;
-    snapshot(repo: string, base: string, runId: string): Promise<string>;
+    snapshot(repo: string, base: string, runId: string, title?: string): Promise<string>;
     patch(repo: string, base: string, sha: string): Promise<string>;
     assertNoNestedGit(path: string): Promise<void>;
 }
+/** Readable single-line candidate subject derived from the task title; the run id stays in a trailer. */
+export declare function candidateSubject(title: string | undefined, runId: string): string;

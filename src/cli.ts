@@ -55,7 +55,7 @@ async function main(): Promise<void> {
     repository: { type: 'string' }, remote: { type: 'string' }, 'confirm-push': { type: 'boolean' }, 'confirm-pr': { type: 'boolean' },
     hash: { type: 'string' }, agent: { type: 'string' }, name: { type: 'string' }, target: { type: 'string' },
     assist: { type: 'boolean' }, execute: { type: 'boolean' }, commit: { type: 'boolean' }, confirm: { type: 'boolean' }, approve: { type: 'boolean' }, amendment: { type: 'string' },
-    'manual-qa': { type: 'boolean' }, quiet: { type: 'boolean' }, format: { type: 'string' },
+    'manual-qa': { type: 'boolean' }, quiet: { type: 'boolean' }, format: { type: 'string' }, active: { type: 'boolean' },
     'accept-current': { type: 'boolean' },'confirm-stopped': { type: 'boolean' },help: { type: 'boolean',short: 'h' },version: { type: 'boolean' },
   } });
   const [command,id] = positionals;
@@ -75,7 +75,7 @@ async function main(): Promise<void> {
     }
     console.log(`Schemas written to ${dir}`); return;
   }
-  if (['bootstrap','onboard','doctor','spec','ask'].includes(command)) {
+  if (['bootstrap','onboard','doctor','spec','ask','gc','decisions'].includes(command)) {
     const root = resolve(values['state-dir'] ?? join(homedir(),'.local','state','agent-pipeline-v2'));
     const controller = new AbortController(); const stop = ():void => controller.abort();
     process.on('SIGINT',stop); process.on('SIGTERM',stop);

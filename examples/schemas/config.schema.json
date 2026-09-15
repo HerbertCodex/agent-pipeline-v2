@@ -536,6 +536,12 @@
             "regulated"
           ],
           "default": "team"
+        },
+        "maxOutputRepairs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 1
         }
       },
       "required": [],
@@ -547,7 +553,8 @@
         ],
         "maxQaRepairs": 2,
         "maxActiveMs": 3600000,
-        "reviewMode": "team"
+        "reviewMode": "team",
+        "maxOutputRepairs": 1
       }
     },
     "setup": {

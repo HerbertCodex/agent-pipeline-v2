@@ -10,6 +10,8 @@ import { parseJson } from '../domain/schema.js';
 import { Git } from '../execution/git.js';
 import { planBootstrap, refineBootstrap, applyBootstrap, type BootstrapPlan } from './bootstrap.js';
 import type { Document } from '../persistence/store.js';
+import { planGarbage, collectGarbage } from './maintenance.js';
+import { planLedgerUpdate, applyLedgerUpdate } from './ledger-update.js';
 export const lifecycleHelp = `
 Full lifecycle (local trusted projects; explicit approval boundaries):
   apv2 bootstrap --repo PATH --request TEXT --provider codex|claude [--review-mode solo|team|regulated]
@@ -25,7 +27,7 @@ Full lifecycle (local trusted projects; explicit approval boundaries):
   apv2 ask --repo PATH --request TEXT       Alias for spec draft, not implicit execution
   apv2 spec refine SPEC_ID --request TEXT [--file SPEC_JSON]
   apv2 spec show SPEC_ID [--output SPEC_MD]  Full content + next action
-  apv2 spec list | apv2 spec events SPEC_ID | apv2 spec diff SPEC_ID
+  apv2 spec list [--active] | apv2 spec events SPEC_ID | apv2 spec diff SPEC_ID
   apv2 spec approve SPEC_ID --hash HASH --approve [--reviewer NAME] [--note TEXT]
   apv2 spec run SPEC_ID [--manual-qa] [--accept-current]
   apv2 spec qa SPEC_ID --file QA_JSON       Explicit external QA report import
@@ -41,12 +43,17 @@ Full lifecycle (local trusted projects; explicit approval boundaries):
   apv2 spec sync SPEC_ID                   Observe merge; never merge automatically
   apv2 spec close SPEC_ID --target MAIN_BRANCH --sha MERGED_HEAD --reviewer NAME --note TEXT
 
+Maintenance:
+  apv2 decisions plan --repo PATH --file UPDATE_JSON   Preview a Decision Ledger change and its hash
+  apv2 decisions apply --repo PATH --file UPDATE_JSON --hash HASH --approve --note TEXT [--commit]
+  apv2 gc [--confirm]                      Dry-run by default; removes obsolete workspaces only
+
 --request-file FILE may replace --request. --quiet suppresses progress on stderr.
 Product and QA use read-only role invocations with Codex, Claude Code or a compatible command worker.
 No operator approval is inferred from a model response. No deploy command.
 `;
 export async function lifecycleCommand(command: string, positionals: string[], values: Record<string, string | boolean | undefined>, root: string, signal: AbortSignal): Promise<boolean> {
-    if (!['bootstrap','onboard', 'doctor', 'spec', 'ask'].includes(command))
+    if (!['bootstrap','onboard', 'doctor', 'spec', 'ask', 'gc', 'decisions'].includes(command))
         return false;
     const str = (key: string): string | undefined => typeof values[key] === 'string' ? values[key] as string : undefined;
     const required = (key: string): string => { const v = str(key); invariant(v, 'ARGUMENT', `Missing --${key}`); return v; };
@@ -142,6 +149,33 @@ export async function lifecycleCommand(command: string, positionals: string[], v
             process.exitCode = report.passed === false ? 1 : 0;
             return true;
         }
+        if (command === 'gc') {
+            const items = planGarbage(life);
+            const bytes = items.reduce((n, x) => n + x.bytes, 0);
+            if (values['confirm'] !== true) {
+                console.log(JSON.stringify({ dryRun: true, items, totalBytes: bytes, next: items.length ? 'Review the list, then run apv2 gc --confirm. The SQLite history, deliveries and source repositories are never removed.' : 'Nothing to collect.' }, null, 2));
+                return true;
+            }
+            const result = await collectGarbage(life, items);
+            console.log(JSON.stringify({ dryRun: false, removed: result.removed, failed: result.failed, freedBytes: result.removed.reduce((n, x) => n + x.bytes, 0) }, null, 2));
+            process.exitCode = result.failed.length ? 1 : 0;
+            return true;
+        }
+        if (command === 'decisions') {
+            const action = positionals[1];
+            invariant(action === 'plan' || action === 'apply', 'ARGUMENT', 'Use apv2 decisions plan|apply --repo PATH --file UPDATE_JSON');
+            const update = load(required('file'));
+            if (action === 'plan') {
+                const plan = await planLedgerUpdate(repo, update);
+                console.log(JSON.stringify({ ...plan, next: `Review the resulting ledger, then: apv2 decisions apply --repo ${plan.repo} --file ${str('file')} --hash ${plan.hash} --approve --note "why" --commit` }, null, 2));
+                return true;
+            }
+            const { reviewer, note } = await approval(repo);
+            invariant(str('note'), 'REVIEW', 'Provide --note explaining the ledger change');
+            const applied = await applyLedgerUpdate(repo, update, required('hash'), reviewer, note, values['commit'] === true);
+            console.log(JSON.stringify({ applied: true, added: applied.added, superseded: applied.superseded, ledgerHash: applied.ledgerHash, commitSha: applied.commitSha }, null, 2));
+            return true;
+        }
         const [sub, id] = command === 'ask' ? ['draft', undefined] : positionals.slice(1);
         const specId = (): string => { invariant(id, 'ARGUMENT', 'Missing SPEC_ID'); return id; };
         let doc: Document<SpecRecord>;
@@ -201,7 +235,7 @@ export async function lifecycleCommand(command: string, positionals: string[], v
                 doc = await life.closeLocal(specId(), required('target'), required('sha'), required('reviewer'), required('note'));
                 break;
             case 'list':
-                console.log(JSON.stringify(life.store.documents<SpecRecord>('spec').map(d => life.summary(d)), null, 2));
+                console.log(JSON.stringify(life.store.documents<SpecRecord>('spec').filter(d => values['active'] !== true || !['closed', 'rejected'].includes(d.data.status)).map(d => life.summary(d)), null, 2));
                 return true;
             case 'show': {
                 doc = life.get(specId());

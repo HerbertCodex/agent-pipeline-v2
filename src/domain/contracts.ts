@@ -69,7 +69,9 @@ export const configSchema = s.object({
     maxQaRepairs: s.default(s.number(0, 3), 2),
     maxActiveMs: s.default(s.number(100, 14400000), 3600000),
     reviewMode: s.default(s.enum(['solo', 'team', 'regulated']), 'team'),
-  }), { qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team' }),
+    // Extra role invocations after an output-contract violation (schema, spec/design/QA invariants).
+    maxOutputRepairs: s.default(s.number(0, 2), 1),
+  }), { qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team', maxOutputRepairs: 1 }),
   setup: s.default(s.array(commandSchema, 0, 20), []),
   gates: s.array(gateSchema, 1, 100),
   concurrency: s.default(s.number(1, 16), 3),

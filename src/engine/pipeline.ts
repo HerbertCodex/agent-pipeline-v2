@@ -187,7 +187,7 @@ export class Pipeline {
   private async capture(run: Run, git: Git): Promise<void> {
     const start = performance.now();
     try {
-      const candidate = await git.snapshot(run.workspace,run.baseSha,run.id);
+      const candidate = await git.snapshot(run.workspace,run.baseSha,run.id,run.task.title);
       const changes = await git.changes(run.workspace,run.baseSha,candidate);
       // Retain the immutable candidate/change-set even when scope validation fails so an explicit scope amendment can adopt it later.
       run.candidateSha = candidate; run.changeSet = changes;

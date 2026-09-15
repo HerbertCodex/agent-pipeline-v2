@@ -2,6 +2,13 @@
 
 ## Non publié
 
+- Réparation bornée des sorties de rôle (Setup, revue sémantique, Product, design, QA) : une violation du contrat du contrôleur réinvoque le rôle avec l’erreur exacte, jusqu’à `workflow.maxOutputRepairs` (défaut 1). Délais, annulations, refus de permission et échecs de processus ne sont jamais réessayés.
+- Contexte de tâche ciblé : la proposition design associe écrans et tâches (`taskScopes`) ; une tâche ne reçoit que ses écrans, et aucune tâche sans travail visuel ne reçoit le design.
+- Product reçoit `executionCapabilities` (outils réels de l’Implementer, setup, gates) et doit transformer les étapes impossibles (installation, lockfile, générateur) en prérequis opérateur.
+- `requiresDesign` ne détecte plus l’interface par extensions de frameworks : `uiImpact` déclaré et vocabulaire générique uniquement.
+- Nouvelles commandes `apv2 decisions plan|apply` (mise à jour du Decision Ledger liée à un hash, `supersedes` explicite), `apv2 gc [--confirm]` (nettoyage prudent, simulation par défaut) et `apv2 spec list --active`.
+- Les commits candidats portent le titre de la tâche, avec un trailer `Agent-Pipeline-Run`.
+- Tests de régression rejouant les échecs réels observés (vérification > 3000 caractères, markup refusé, SHA QA erroné, métadonnées de clarification sur une décision confirmée, délai dépassé).
 - Ajoute un inventaire déterministe et indépendant de la stack (`src/knowledge/inventory.ts`) : profils de langage déclaratifs (extension, préfiltre, grammaire, règle de surface publique) et repli en unités de fichier pour toute autre technologie texte, sans nom de framework dans le contrôleur (verrouillé par un test).
 - `knowledge.languages` dans `pipeline.v2.json` permet d’ajouter ou de remplacer un profil de langage.
 - Repository Intelligence transmet `inventory` (toute la surface publique bornée) à Product et Implementer ; `reuseCandidates` découpe les identifiants (camelCase, snake_case, chemins) et monte à 40.

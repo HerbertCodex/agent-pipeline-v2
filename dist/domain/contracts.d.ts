@@ -100,6 +100,7 @@ export declare const configSchema: import("./schema.js").Schema<{
         maxQaRepairs: number;
         maxActiveMs: number;
         reviewMode: string;
+        maxOutputRepairs: number;
     };
     readonly setup: {
         readonly command: string[];

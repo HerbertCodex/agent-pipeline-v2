@@ -25,11 +25,14 @@ export declare class Lifecycle {
     private requiresDesign;
     private companionPaths;
     private validateDesignMarkup;
+    private validateDesignScopes;
     private htmlEscape;
     private prepareDesignProposal;
     private product;
     refine(id: string, request: string, proposal?: unknown, signal?: AbortSignal): Promise<Document<SpecRecord>>;
     approveSpec(id: string, expectedHash: string, actor: string, note: string): Promise<Document<SpecRecord>>;
+    /** Design context scoped to one task: legacy proposals without taskScopes keep the whole design. */
+    private designContextFor;
     private makeTask;
     private aggregateTask;
     private executeActive;

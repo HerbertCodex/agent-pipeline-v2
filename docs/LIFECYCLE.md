@@ -119,3 +119,49 @@ Product reçoit ce contexte comme minimum. Les sujets OWASP routés doivent deve
 Implementer reçoit uniquement les exigences et menaces liées aux critères de sa tâche. Le niveau de risque de la tâche peut être relevé par le minimum de sécurité. Le candidat final est ensuite évalué par QA, qui doit fournir un `securityChecks` pour chaque exigence de sécurité de la spec.
 
 Un QA `pass` avec une exigence manquante, `unknown` ou `fail` est refusé par le contrôleur. Les receipts de scanners existants peuvent servir d'évidence, mais ne remplacent pas l'inspection du comportement et les tests négatifs requis.
+
+## Fiabilité des rôles et maintenance
+
+### Réparation bornée des sorties
+
+Une sortie de rôle qui viole le contrat du contrôleur n'est plus jetée avec tout le tour :
+- schéma ;
+- invariants de spec, design, QA ou décisions ;
+- sortie structurée absente.
+
+Le même rôle est réinvoqué avec le code et le message exacts de l'erreur (`repair.previousError`), jusqu'à `workflow.maxOutputRepairs` fois (1 par défaut, 0 pour désactiver ; bootstrap : 1). Chaque tentative est journalisée (`role.output_repair`, `bootstrap-*.output_repair`).
+
+Ne sont **jamais** réessayés :
+- délai dépassé ;
+- annulation ;
+- refus de permission ;
+- échec du processus fournisseur.
+
+La réparation ne relâche aucun contrôle : une seconde réponse invalide échoue comme avant.
+
+### Contexte ciblé et capacités
+
+La proposition design associe ses écrans aux tâches (`taskScopes`). Une tâche ne reçoit que la direction commune et ses écrans ; une tâche sans travail visuel ne reçoit pas le design. Une proposition sans `taskScopes` conserve l'ancien comportement.
+
+Product reçoit `executionCapabilities` :
+- outils réels de l'Implementer (édition, shell, réseau) ;
+- setup du runner ;
+- gates.
+
+Une étape que l'Implementer ne peut pas exécuter (installation de dépendance, lockfile, générateur, migration) doit devenir un prérequis opérateur, pas une tâche.
+
+### Maintenance
+
+- `apv2 decisions plan --repo PATH --file UPDATE_JSON` : prévisualise un changement du Decision Ledger et son hash. Une nouvelle décision qui remplace ou résout une entrée existante doit la citer dans `supersedes` ; l'entrée remplacée quitte le ledger actif et reste dans l'historique Git.
+- `apv2 decisions apply ... --hash HASH --approve --note TEXT [--commit]` : écrit `DECISIONS.json`/`DECISIONS.md`, si le ledger et le commit de base n'ont pas changé depuis le plan. La CLI n'authentifie pas l'auteur d'une citation.
+- `apv2 spec list --active` : masque les specs clôturées ou rejetées. `spec reject` permet d'abandonner une spec en brouillon.
+- `apv2 gc` : liste d'abord, sans rien supprimer. Avec `--confirm`, retire :
+  - les workspaces des specs clôturées ou rejetées ;
+  - les contrôles baseline remplacés par un plus récent ;
+  - les runs autonomes échoués ou rejetés ;
+  - les review workspaces de specs terminées ;
+  - les workspaces de rôle abandonnés depuis plus de 24 h.
+
+  Il ne touche ni à l'historique SQLite, ni aux livraisons, ni aux sources, ni à ce qui appartient à une spec active ou à un processus vivant.
+
+Les commits candidats portent le titre de la tâche ; l'identifiant du run est dans le trailer `Agent-Pipeline-Run`.
