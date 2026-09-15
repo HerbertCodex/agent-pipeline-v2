@@ -289,6 +289,49 @@
       },
       "minItems": 0,
       "maxItems": 30
+    },
+    "taskScopes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ],
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "screenIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ],
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "minItems": 0,
+            "maxItems": 8
+          }
+        },
+        "required": [
+          "taskId",
+          "screenIds"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 20,
+      "default": []
     }
   },
   "required": [

@@ -88,6 +88,8 @@ export interface BootstrapPlan {
     } | null;
     reviewMode: 'solo' | 'team' | 'regulated';
 }
+/** Bootstrap has no project configuration yet: one bounded repair of an output-contract violation. */
+export declare const BOOTSTRAP_OUTPUT_REPAIRS = 1;
 export declare function bootstrapHash(plan: Pick<BootstrapPlan, 'directory' | 'request' | 'revision' | 'provider' | 'reviewMode' | 'proposal' | 'semanticReview'>): string;
 export declare function planBootstrap(store: Store, path: string, request: string, provider: string | unknown, signal?: AbortSignal, reviewMode?: 'solo' | 'team' | 'regulated'): Promise<Document<BootstrapPlan>>;
 export declare function refineBootstrap(store: Store, id: string, request: string, signal?: AbortSignal): Promise<Document<BootstrapPlan>>;

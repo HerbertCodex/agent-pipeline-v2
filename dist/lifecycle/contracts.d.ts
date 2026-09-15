@@ -209,6 +209,10 @@ export declare const designProposalSchema: import("../domain/schema.js").Schema<
         readonly id: string;
         readonly question: string;
     }[];
+    readonly taskScopes: {
+        readonly taskId: string;
+        readonly screenIds: string[];
+    }[];
 }>;
 export type DesignProposal = Infer<typeof designProposalSchema>;
 export interface DesignRecord {

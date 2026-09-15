@@ -74,11 +74,11 @@ export class Git {
     }
     return { files, added, lines, binary };
   }
-  async snapshot(repo: string, base: string, runId: string): Promise<string> {
+  async snapshot(repo: string, base: string, runId: string, title?: string): Promise<string> {
     await this.exec(repo, ['merge-base','--is-ancestor',base,'HEAD']);
     await this.exec(repo, ['add','--all','--','.']);
     const staged = await this.exec(repo, ['diff','--cached','--name-only','-z']);
-    if (staged) await this.exec(repo, ['commit','--no-verify','-m',`Agent Pipeline V2 candidate ${runId}`]);
+    if (staged) await this.exec(repo, ['commit','--no-verify','-m',candidateSubject(title, runId),'-m',`Agent-Pipeline-Run: ${runId}`]);
     const sha = await this.sha(repo);
     invariant(sha !== base && (await this.changes(repo, base, sha)).files.length > 0, 'NO_CHANGE', 'Agent produced no effective change');
     await this.compatible(repo, sha); await this.clean(repo, sha); return sha;
@@ -91,4 +91,11 @@ export class Git {
     invariant(!files.some(f => f.startsWith('160000 ')), 'SUBMODULE', 'Nested repository refused');
     invariant(existsSync(join(path,'.git')), 'WORKSPACE', 'Missing Git metadata');
   }
+}
+
+/** Readable single-line candidate subject derived from the task title; the run id stays in a trailer. */
+export function candidateSubject(title: string | undefined, runId: string): string {
+  const clean = (title ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!clean) return `Agent Pipeline V2 candidate ${runId}`;
+  return clean.length > 72 ? `${clean.slice(0, 71).trimEnd()}…` : clean;
 }

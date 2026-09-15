@@ -93,6 +93,10 @@ export const designProposalSchema = s.object({
     avoid: s.array(s.string(1, 1000), 0, 30),
     references: s.array(s.object({ path: s.string(1, 500), reason: s.string(1, 2000) }), 0, 30),
     questions: s.array(s.object({ id, question: s.string(1, 3000) }), 0, 30),
+    // Which spec tasks implement visual work and which screens each needs. Empty keeps the legacy
+    // behaviour (every task receives the whole design); a listed task with no screen receives only
+    // the shared direction; an unlisted task receives no design context.
+    taskScopes: s.default(s.array(s.object({ taskId: id, screenIds: s.array(id, 0, 8) }), 0, 20), []),
 });
 export type DesignProposal = Infer<typeof designProposalSchema>;
 export interface DesignRecord {

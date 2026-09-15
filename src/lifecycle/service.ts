@@ -9,6 +9,7 @@ import { Git, isInside } from '../execution/git.js';
 import type { Document } from '../persistence/store.js';
 import { specSchema, qaSchema, designProposalSchema, validateSpec, validateQa, specHash, approvalHash, specMarkdown, stricter, reviewer, type SpecRecord, type Spec, type QaRecord, type ScopeAmendment, type DesignProposal } from './contracts.js';
 import { runRole } from './roles.js';
+import { executionCapabilities } from './capabilities.js';
 import { matches } from '../policy/policy.js';
 import { inspectRepository } from '../knowledge/repository.js';
 import { buildInventory, diffInventory, inventoryMarkdown, type InventoryDelta } from '../knowledge/inventory.js';
@@ -83,8 +84,9 @@ export class Lifecycle {
             return false;
         if (spec.experience.uiImpact !== 'none')
             return true;
-        const text = [spec.title, spec.problem, ...spec.scope, ...spec.tasks.flatMap(t => [t.title, t.description, ...t.allowedPaths])].join(' ');
-        return /(?:\.svelte\b|\.tsx\b|\.jsx\b|\.vue\b|\bui\b|interface|screen|page|dashboard|form|modal|layout|component|route|écran|ecran|tableau de bord|formulaire)/i.test(text);
+        // Product's declared uiImpact is authoritative; this fallback only reads generic interface vocabulary, never framework file types.
+        const text = [spec.title, spec.problem, ...spec.scope, ...spec.tasks.flatMap(t => [t.title, t.description])].join(' ');
+        return /(?:\bui\b|user interface|interface utilisateur|screen|dashboard|\bform\b|modal|layout|écran|ecran|tableau de bord|formulaire)/i.test(text);
     }
     private companionPaths(paths: string[]): string[] {
         const out = new Set<string>();
@@ -106,6 +108,14 @@ export class Lifecycle {
             invariant(!dangerous.test(screen.bodyHtml), 'DESIGN_MARKUP', `Unsafe markup in design screen ${screen.id}`);
         invariant(!/@import\b|url\s*\(|expression\s*\(|javascript:/i.test(p.css), 'DESIGN_MARKUP', 'Design CSS cannot load external resources or executable content');
     }
+    private validateDesignScopes(p: DesignProposal, spec: Spec): void {
+        const tasks = new Set(spec.tasks.map(t => t.id)); const screens = new Set(p.screens.map(x => x.id));
+        invariant(new Set(p.taskScopes.map(x => x.taskId)).size === p.taskScopes.length, 'DESIGN_MARKUP', 'Duplicate design taskScopes entry');
+        for (const scope of p.taskScopes) {
+            invariant(tasks.has(scope.taskId), 'DESIGN_MARKUP', `Design taskScopes references unknown task ${scope.taskId}`);
+            for (const screen of scope.screenIds) invariant(screens.has(screen), 'DESIGN_MARKUP', `Design taskScopes references unknown screen ${screen}`);
+        }
+    }
     private htmlEscape(text: string): string {
         return text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
     }
@@ -118,13 +128,14 @@ export class Lifecycle {
                 'Create a concrete visual mockup before implementation. Use the ui-design skill and existing design system/assets if present.',
                 'Avoid generic AI-dashboard aesthetics and unjustified gradients/cards. Explain visual decisions, alternatives and tradeoffs.',
                 'Cover meaningful loading, empty, error, success, focus and responsive states.',
-                'Return static HTML fragments and CSS only; no scripts, remote assets, network URLs or executable content.',
+                'Return static HTML fragments and CSS only; no scripts, remote assets, network URLs or executable content. Even as displayed text, bodyHtml must not contain src=, srcdoc=, on<event>=, javascript: or script/iframe/object/embed/link/meta/base tags, and css must not contain @import or url(.',
+                'Fill taskScopes: list every spec task that implements visual work with the screen ids it needs (an empty screenIds list for a task that only needs the shared direction, such as a shared style base). Do not list tasks without visual work; they receive no design context.',
             ],
         };
-        const raw = await runRole({ store: this.store, documentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills,
-            agent: r.config.roles.product ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: designProposalSchema, context, ...(signal ? { signal } : {}) });
-        const proposal = designProposalSchema.parse(raw);
-        this.validateDesignMarkup(proposal);
+        const spec = r.content;
+        const proposal = await runRole({ store: this.store, documentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills,
+            agent: r.config.roles.product ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: designProposalSchema, context, ...(signal ? { signal } : {}),
+            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: value => { this.validateDesignMarkup(value); this.validateDesignScopes(value, spec); return value; } });
         const root = resolve(dirname(r.repo), `${basename(r.repo)}-review`, doc.id, 'design');
         invariant(!isInside(r.repo, root) && !isInside(this.store.root, root), 'DESIGN_PATH', 'Design preview must be outside source and operational state');
         rmSync(root, { recursive: true, force: true });
@@ -152,7 +163,10 @@ export class Lifecycle {
 ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { ...(signal ? { signal } : {}), languages: r.config.knowledge?.languages ?? [] });
         r.securityContext = assessSecurity({ text: r.request + '\n' + r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n'), projectType: r.config.skills.projectType, files: repositoryIntelligence.relevantFiles });
         r.securityContextHash = hash(r.securityContext);
-        const value = proposal ?? await runRole({ store: this.store, documentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills, agent: r.config.roles.product ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: specSchema, context: { request: r.request, previous: r.content, decisionLedger: r.decisionLedger, repositoryIntelligence, securityContext: r.securityContext }, ...(signal ? { signal } : {}) });
+        const securityContext = r.securityContext;
+        const value = proposal ?? await runRole({ store: this.store, documentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills, agent: r.config.roles.product ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: specSchema,
+            context: { request: r.request, previous: r.content, decisionLedger: r.decisionLedger, repositoryIntelligence, securityContext, executionCapabilities: executionCapabilities(r.config) }, ...(signal ? { signal } : {}),
+            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: spec => validateSpec(spec, false, r.decisionLedger, r.request, securityContext) });
         this.save(doc, 'product.repository_intelligence', { sha: repositoryIntelligence.sha, fileCount: repositoryIntelligence.fileCount, relevantFiles: repositoryIntelligence.relevantFiles, securityFiles: repositoryIntelligence.securityFiles, reuseCandidates: repositoryIntelligence.reuseCandidates.map(x=>({name:x.name,kind:x.kind,path:x.path,line:x.line,score:x.score})) });
         this.save(doc, 'security.assessed', { contextHash:r.securityContextHash, minimumLane:r.securityContext.minimumLane, requiresThreatModel:r.securityContext.requiresThreatModel, negativeTestsRequired:r.securityContext.negativeTestsRequired, topics:r.securityContext.topics.map(t=>t.id), signals:r.securityContext.signals });
         r.content = validateSpec(value, false, r.decisionLedger, r.request, r.securityContext);
@@ -216,10 +230,19 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             this.store.releaseDocument(id, token);
         }
     }
+    /** Design context scoped to one task: legacy proposals without taskScopes keep the whole design. */
+    private designContextFor(proposal: DesignProposal, designHash: string, taskId: string) {
+        const scope = proposal.taskScopes?.length ? proposal.taskScopes.find(x => x.taskId === taskId) : undefined;
+        if (proposal.taskScopes?.length && !scope)
+            return { hash: designHash, summary: proposal.summary, scope: 'none', note: 'This task has no visual work in the approved design; keep the existing look and do not restyle.' };
+        const screens = proposal.screens.filter(x => !scope || scope.screenIds.includes(x.id));
+        return { hash: designHash, summary: proposal.summary, visualDirection: proposal.visualDirection, implementationBrief: proposal.implementationBrief, decisions: proposal.decisions, avoid: proposal.avoid,
+            scope: scope ? 'task' : 'all', screens: screens.map(x => ({ id: x.id, title: x.title, purpose: x.purpose, states: x.states, responsive: x.responsive })) };
+    }
     private makeTask(r: SpecRecord, t: Spec['tasks'][number]): Task {
         const spec = this.approved(r);
         const acceptance = spec.acceptance.filter(a => t.acceptanceIds.includes(a.id));
-        const design = r.design ? { hash:r.design.hash, summary:r.design.proposal.summary, visualDirection:r.design.proposal.visualDirection, implementationBrief:r.design.proposal.implementationBrief, decisions:r.design.proposal.decisions, avoid:r.design.proposal.avoid, screens:r.design.proposal.screens.map(x=>({id:x.id,title:x.title,purpose:x.purpose,states:x.states,responsive:x.responsive})) } : null;
+        const design = r.design ? this.designContextFor(r.design.proposal, r.design.hash, t.id) : null;
         const decisionIds = new Set(spec.decisionCoverage.filter(c => c.acceptanceIds.some(id => t.acceptanceIds.includes(id))).map(c => c.decisionId));
         const confirmedProjectDecisions = confirmedDecisions(r.decisionLedger).filter(d => decisionIds.has(d.id));
         const resolvedProjectDecisions = spec.decisionResolutions.filter(d=>decisionIds.has(d.decisionId)).map(d=>({id:d.decisionId,subject:r.decisionLedger.decisions.find(x=>x.id===d.decisionId)?.subject ?? d.decisionId,value:d.value,status:'confirmed-via-product',source:'operator',sourceQuote:d.sourceQuote,rationale:d.rationale}));
@@ -416,8 +439,9 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                     invariant(Buffer.byteLength(diff) <= 524288, 'QA_CONTEXT', 'QA diff exceeds 512 KiB; use an explicit external review, never a truncated review');
                     const inventoryDelta = await this.inventoryDelta(r, final.candidateSha!, signal);
                     this.save(doc, 'qa.inventory_delta', { added: inventoryDelta.added.length, removed: inventoryDelta.removed.length, possibleDuplicates: inventoryDelta.possibleDuplicates });
-                    const raw = await runRole({ store: this.store, documentId: id, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, agent: r.config.roles.qa ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: qaSchema, context: { diff, spec: r.content, decisionLedger: r.decisionLedger, securityContext:r.securityContext, baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] }, signal });
-                    r.qa = { report: validateQa(raw, spec, final.candidateSha!, r.decisionLedger), specHash: r.contentHash!, evidenceHash, at: Date.now(), source: 'agent' };
+                    const raw = await runRole({ store: this.store, documentId: id, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, agent: r.config.roles.qa ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: qaSchema, context: { diff, spec: r.content, decisionLedger: r.decisionLedger, securityContext:r.securityContext, baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] }, signal,
+                        maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: report => validateQa(report, spec, final.candidateSha!, r.decisionLedger) });
+                    r.qa = { report: raw, specHash: r.contentHash!, evidenceHash, at: Date.now(), source: 'agent' };
                     this.save(doc, 'qa.completed', { qa: r.qa });
                 }
                 if (needsQa && r.qa!.report.verdict === 'changes_requested') {
