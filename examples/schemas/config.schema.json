@@ -542,6 +542,44 @@
           "minimum": 0,
           "maximum": 2,
           "default": 1
+        },
+        "generatedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 100,
+          "default": [
+            "**/package-lock.json",
+            "**/npm-shrinkwrap.json",
+            "**/pnpm-lock.yaml",
+            "**/yarn.lock",
+            "**/bun.lock",
+            "**/bun.lockb",
+            "**/Cargo.lock",
+            "**/go.sum",
+            "**/poetry.lock",
+            "**/Pipfile.lock",
+            "**/uv.lock",
+            "**/pdm.lock",
+            "**/composer.lock",
+            "**/Gemfile.lock",
+            "**/packages.lock.json",
+            "**/gradle.lockfile",
+            "**/pubspec.lock",
+            "**/mix.lock",
+            "**/flake.lock",
+            "**/Package.resolved",
+            "**/Podfile.lock"
+          ]
         }
       },
       "required": [],
@@ -554,7 +592,53 @@
         "maxQaRepairs": 2,
         "maxActiveMs": 3600000,
         "reviewMode": "team",
-        "maxOutputRepairs": 1
+        "maxOutputRepairs": 1,
+        "generatedPaths": [
+          "**/package-lock.json",
+          "**/npm-shrinkwrap.json",
+          "**/pnpm-lock.yaml",
+          "**/yarn.lock",
+          "**/bun.lock",
+          "**/bun.lockb",
+          "**/Cargo.lock",
+          "**/go.sum",
+          "**/poetry.lock",
+          "**/Pipfile.lock",
+          "**/uv.lock",
+          "**/pdm.lock",
+          "**/composer.lock",
+          "**/Gemfile.lock",
+          "**/packages.lock.json",
+          "**/gradle.lockfile",
+          "**/pubspec.lock",
+          "**/mix.lock",
+          "**/flake.lock",
+          "**/Package.resolved",
+          "**/Podfile.lock"
+        ]
+      }
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "maxTaskContextChars": {
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 400000,
+          "default": 120000
+        },
+        "maxQaDiffBytes": {
+          "type": "integer",
+          "minimum": 65536,
+          "maximum": 8388608,
+          "default": 524288
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {
+        "maxTaskContextChars": 120000,
+        "maxQaDiffBytes": 524288
       }
     },
     "setup": {

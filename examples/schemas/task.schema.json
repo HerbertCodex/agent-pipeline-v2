@@ -26,7 +26,7 @@
     "description": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 120000,
+      "maxLength": 400000,
       "allOf": [
         {
           "pattern": "^[^\\u0000]*$"

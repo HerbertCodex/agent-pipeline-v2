@@ -2,13 +2,13 @@ import { mkdirSync, writeFileSync, renameSync, existsSync, readFileSync, rmSync,
 import { join, resolve, dirname, relative, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Pipeline, summarize } from '../engine/pipeline.js';
-import { validateConfig, taskSchema, MAX_TASK_DESCRIPTION } from '../domain/contracts.js';
+import { validateConfig, taskSchema, DEFAULT_LIMITS } from '../domain/contracts.js';
 import { hash, sha256 } from '../domain/hash.js';
 import { PipelineError, errorMessage, invariant } from '../domain/errors.js';
 import { Git, isInside } from '../execution/git.js';
 import { specSchema, qaSchema, designProposalSchema, validateSpec, validateQa, specHash, approvalHash, specMarkdown, stricter, reviewer } from './contracts.js';
 import { runRole } from './roles.js';
-import { executionCapabilities } from './capabilities.js';
+import { executionCapabilities, validateTaskCapabilities } from './capabilities.js';
 import { matches } from '../policy/policy.js';
 import { inspectRepository } from '../knowledge/repository.js';
 import { buildInventory, diffInventory, inventoryMarkdown } from '../knowledge/inventory.js';
@@ -158,10 +158,10 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         const securityContext = r.securityContext;
         const value = proposal ?? await runRole({ store: this.store, documentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills, agent: r.config.roles.product ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: specSchema,
             context: { request: r.request, previous: r.content, decisionLedger: r.decisionLedger, repositoryIntelligence, securityContext, executionCapabilities: executionCapabilities(r.config) }, ...(signal ? { signal } : {}),
-            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: spec => validateSpec(spec, false, r.decisionLedger, r.request, securityContext) });
+            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: spec => validateTaskCapabilities(validateSpec(spec, false, r.decisionLedger, r.request, securityContext), r.config) });
         this.save(doc, 'product.repository_intelligence', { sha: repositoryIntelligence.sha, fileCount: repositoryIntelligence.fileCount, relevantFiles: repositoryIntelligence.relevantFiles, securityFiles: repositoryIntelligence.securityFiles, reuseCandidates: repositoryIntelligence.reuseCandidates.map(x => ({ name: x.name, kind: x.kind, path: x.path, line: x.line, score: x.score })) });
         this.save(doc, 'security.assessed', { contextHash: r.securityContextHash, minimumLane: r.securityContext.minimumLane, requiresThreatModel: r.securityContext.requiresThreatModel, negativeTestsRequired: r.securityContext.negativeTestsRequired, topics: r.securityContext.topics.map(t => t.id), signals: r.securityContext.signals });
-        r.content = validateSpec(value, false, r.decisionLedger, r.request, r.securityContext);
+        r.content = validateTaskCapabilities(validateSpec(value, false, r.decisionLedger, r.request, r.securityContext), r.config);
         r.contentHash = specHash(r);
         r.design = null;
         if (this.requiresDesign(r.content, r.config.skills.projectType) && r.content.questions.length === 0)
@@ -210,7 +210,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             const r = doc.data;
             invariant(r.attempts.length === 0 && ['draft', 'approved'].includes(r.status), 'STATE', 'Spec no longer accepts Product approval');
             invariant(r.content && approvalHash(r) === expectedHash, 'APPROVAL_HASH', 'Approve the exact spec/design proposal hash');
-            validateSpec(r.content, true, r.decisionLedger, r.request, r.securityContext);
+            validateTaskCapabilities(validateSpec(r.content, true, r.decisionLedger, r.request, r.securityContext), r.config);
             if (this.requiresDesign(r.content, r.config.skills.projectType))
                 invariant(r.design && r.design.proposal.questions.length === 0, 'OPEN_QUESTIONS', 'Resolve design questions before approval');
             await new Git().clean(r.repo, r.baseSha);
@@ -246,7 +246,8 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         const security = { context: r.securityContext, profile: spec.security.profile, requirements: securityRequirements, threats: securityThreats, assumptions: spec.security.assumptions };
         const context = { problem: spec.problem, scope: spec.scope, outOfScope: spec.outOfScope, decisions: spec.decisions, projectDecisions, criteria: acceptance, experience: spec.experience, security, approvedDesign: design };
         const description = t.description + '\n\nApproved Product context (do not expand scope):\n' + JSON.stringify(context);
-        invariant(description.length <= MAX_TASK_DESCRIPTION, 'TASK_CONTEXT', 'Approved context is too large for a task; split the spec before execution');
+        const maxContext = r.config.limits?.maxTaskContextChars ?? DEFAULT_LIMITS.maxTaskContextChars;
+        invariant(description.length <= maxContext, 'TASK_CONTEXT', `Approved context is too large for a task (${description.length} > limits.maxTaskContextChars ${maxContext}); split the spec or raise the reviewed limit`);
         const amendments = r.scopeAmendments.filter(a => a.status === 'approved' && a.taskId === t.id).flatMap(a => a.paths);
         const allowedPaths = [...new Set([...t.allowedPaths, ...amendments])];
         const allowedNewPaths = this.companionPaths(allowedPaths);
@@ -454,7 +455,8 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                         return doc;
                     }
                     const diff = await new Git(signal).patch(r.repo, r.baseSha, final.candidateSha);
-                    invariant(Buffer.byteLength(diff) <= 524288, 'QA_CONTEXT', 'QA diff exceeds 512 KiB; use an explicit external review, never a truncated review');
+                    const maxDiff = r.config.limits?.maxQaDiffBytes ?? DEFAULT_LIMITS.maxQaDiffBytes;
+                    invariant(Buffer.byteLength(diff) <= maxDiff, 'QA_CONTEXT', `QA diff exceeds limits.maxQaDiffBytes (${maxDiff}); use an explicit external review, never a truncated review`);
                     const inventoryDelta = await this.inventoryDelta(r, final.candidateSha, signal);
                     this.save(doc, 'qa.inventory_delta', { added: inventoryDelta.added.length, removed: inventoryDelta.removed.length, possibleDuplicates: inventoryDelta.possibleDuplicates });
                     const raw = await runRole({ store: this.store, documentId: id, repo: r.repo, sha: final.candidateSha, role: 'qa', skills: r.config.skills, agent: r.config.roles.qa ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: qaSchema, context: { diff, spec: r.content, decisionLedger: r.decisionLedger, securityContext: r.securityContext, baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] }, signal,
@@ -470,7 +472,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                         return doc;
                     }
                     const description = 'Correct the following QA findings without broadening the approved scope.\n' + JSON.stringify({ approvedSpec: spec, qa: r.qa.report });
-                    invariant(description.length <= MAX_TASK_DESCRIPTION, 'TASK_CONTEXT', 'QA repair context too large; prepare an explicit follow-up');
+                    invariant(description.length <= (r.config.limits?.maxTaskContextChars ?? DEFAULT_LIMITS.maxTaskContextChars), 'TASK_CONTEXT', 'QA repair context exceeds limits.maxTaskContextChars; prepare an explicit follow-up');
                     const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, config: r.config, task: this.aggregateTask(r, description) });
                     r.qaRepairs++;
                     r.attempts.push({ taskId: `QA-REPAIR-${r.qaRepairs}`, runId: run.id, kind: 'qa-repair' });

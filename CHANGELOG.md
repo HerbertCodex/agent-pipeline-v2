@@ -2,6 +2,9 @@
 
 ## Non publié
 
+- Garde déterministe `SPEC_CAPABILITY` : une spec ne peut pas confier un fichier généré par l’outillage (`workflow.generatedPaths`, lockfiles par défaut) à un Implementer sans shell ; appliquée aux propositions Product, importées et à l’approbation.
+- Limites configurables `limits.maxTaskContextChars` (défaut 120 000, plafond 400 000) et `limits.maxQaDiffBytes` (défaut 512 Kio, plafond 8 Mio).
+- Pilote opt-in `npm run pilot:repair` : prouve avec un vrai fournisseur que la boucle de réparation transmet l’erreur du contrôleur et obtient une réponse corrigée (au plus deux appels).
 - Réparation bornée des sorties de rôle (Setup, revue sémantique, Product, design, QA) : une violation du contrat du contrôleur réinvoque le rôle avec l’erreur exacte, jusqu’à `workflow.maxOutputRepairs` (défaut 1). Délais, annulations, refus de permission et échecs de processus ne sont jamais réessayés.
 - Contexte de tâche ciblé : la proposition design associe écrans et tâches (`taskScopes`) ; une tâche ne reçoit que ses écrans, et aucune tâche sans travail visuel ne reçoit le design.
 - Product reçoit `executionCapabilities` (outils réels de l’Implementer, setup, gates) et doit transformer les étapes impossibles (installation, lockfile, générateur) en prérequis opérateur.

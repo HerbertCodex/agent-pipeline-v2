@@ -165,3 +165,28 @@ test('gc removes workspaces of rejected specs only after a dry run, never active
   assert.ok(plan.every(i => !existsSync(i.path)));
   assert.equal(git(f.repo, 'worktree', 'list').split('\n').length, 1);
 });
+
+test('an Implementer without a shell cannot be given a tool-generated file, and generatedPaths adapts per stack', async (t) => {
+  const f = fixture(t);
+  const claudeConfig = { ...f.config, agent: { type: 'claude' }, roles: { product: null, qa: null } };
+  const spec = oneTask(); spec.tasks[0].allowedPaths = [...spec.tasks[0].allowedPaths, 'package-lock.json'];
+  await assert.rejects(f.life.draft({ repo: f.repo, config: claudeConfig, request: 'Implement the approved arithmetic example.', proposal: spec }), /SPEC_CAPABILITY|no shell to regenerate/);
+  const custom = await f.life.draft({ repo: f.repo, config: { ...claudeConfig, workflow: { ...f.config.workflow, generatedPaths: ['**/*.generated.ts'] } }, request: 'Implement the approved arithmetic example.', proposal: spec });
+  assert.ok(custom.data.content.tasks[0].allowedPaths.includes('package-lock.json'), 'a project may declare its own generated paths');
+  const commandSpec = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.', proposal: spec });
+  assert.ok(commandSpec.data.content, 'wrappers with unknown capabilities are not guessed');
+});
+
+test('task context and QA diff limits are configurable within bounded ceilings', async (t) => {
+  const base = { schemaVersion: 1, executionMode: 'local-trusted', environment: { id: 'x' }, agent: { type: 'command', command: ['true'] }, gates: [{ id: 'g', command: ['true'] }] };
+  assert.deepEqual(validateConfig(base).limits, { maxTaskContextChars: 120000, maxQaDiffBytes: 524288 });
+  assert.equal(validateConfig({ ...base, limits: { maxTaskContextChars: 250000 } }).limits.maxTaskContextChars, 250000);
+  assert.throws(() => validateConfig({ ...base, limits: { maxTaskContextChars: 500000 } }));
+  const f = fixture(t, { limits: { maxTaskContextChars: 10000 }, workflow: { qaLanes: [], maxQaRepairs: 0, maxActiveMs: 120000 } });
+  const spec = oneTask(); spec.tasks[0].description = 'Implement multiply with tests. ' + 'Context detail. '.repeat(700);
+  let d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.', proposal: spec });
+  d = await f.life.approveSpec(d.id, f.life.summary(d).hash, 'Test Owner', 'Reviewed the specification before execution.');
+  const result = await f.life.run(d.id);
+  assert.equal(result.data.error?.code, 'TASK_CONTEXT');
+  assert.match(result.data.error.message, /limits\.maxTaskContextChars 10000/);
+});
