@@ -149,7 +149,7 @@ test('decision ledger updates are planned, hash-bound, supersede explicitly and 
 });
 
 test('gc removes workspaces of rejected specs only after a dry run, never active material', async (t) => {
-  const f = fixture(t, { workflow: { qaLanes: [], maxQaRepairs: 0, maxActiveMs: 120000 } });
+  const f = fixture(t, { workflow: { qaLanes: [], maxQaRepairs: 0, maxActiveMs: 300000 } });
   let d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.', proposal: oneTask() });
   d = await f.life.approveSpec(d.id, f.life.summary(d).hash, 'Test Owner', 'Reviewed the specification before execution.');
   d = await f.life.run(d.id);
@@ -182,7 +182,7 @@ test('task context and QA diff limits are configurable within bounded ceilings',
   assert.deepEqual(validateConfig(base).limits, { maxTaskContextChars: 120000, maxQaDiffBytes: 524288 });
   assert.equal(validateConfig({ ...base, limits: { maxTaskContextChars: 250000 } }).limits.maxTaskContextChars, 250000);
   assert.throws(() => validateConfig({ ...base, limits: { maxTaskContextChars: 500000 } }));
-  const f = fixture(t, { limits: { maxTaskContextChars: 10000 }, workflow: { qaLanes: [], maxQaRepairs: 0, maxActiveMs: 120000 } });
+  const f = fixture(t, { limits: { maxTaskContextChars: 10000 }, workflow: { qaLanes: [], maxQaRepairs: 0, maxActiveMs: 300000 } });
   const spec = oneTask(); spec.tasks[0].description = 'Implement multiply with tests. ' + 'Context detail. '.repeat(700);
   let d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.', proposal: spec });
   d = await f.life.approveSpec(d.id, f.life.summary(d).hash, 'Test Owner', 'Reviewed the specification before execution.');

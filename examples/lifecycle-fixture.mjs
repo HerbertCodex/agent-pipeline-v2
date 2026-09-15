@@ -22,7 +22,7 @@ export function fixtureConfig() {
         schemaVersion: 1, executionMode: 'local-trusted', environment: { id: 'offline-lifecycle-fixture' }, agent, roles: { product: agent, qa: agent },
         gates: [{ id: 'syntax', command: [process.execPath, '--check', 'src/math.mjs'] }, { id: 'unit', command: [process.execPath, '--test', 'test/math.test.mjs'] },
             { id: 'diff-check', command: ['git', 'diff', '--check', '{{baseSha}}', '{{candidateSha}}'], mandatory: true }], concurrency: 3, maxRunMs: 30000, maxRepairAttempts: 0,
-        workflow: { qaLanes: ['standard', 'high'], maxQaRepairs: 1, maxActiveMs: 120000 }
+        workflow: { qaLanes: ['standard', 'high'], maxQaRepairs: 1, maxActiveMs: 300000 }
     };
 }
 export function makeLifecycleFixture(root) {

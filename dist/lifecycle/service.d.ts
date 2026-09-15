@@ -9,7 +9,10 @@ export interface WorkflowOptions {
 }
 export declare class Lifecycle {
     readonly pipeline: Pipeline;
+    /** Inventories keyed by immutable commit SHA and language profiles; bounded, never invalidated. */
+    private readonly inventories;
     constructor(stateDir: string);
+    private inventoryAt;
     get store(): import("../persistence/store.js").Store;
     close(): void;
     get(id: string): Document<SpecRecord>;
