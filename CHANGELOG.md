@@ -2,6 +2,7 @@
 
 ## Non publié
 
+- Les crochets et parenthèses sont des caractères littéraux dans les chemins et globs (routes dynamiques `[id]`, groupes `(app)`) ; accolades et négation `!` restent refusées. Une erreur `GLOB` dans une réponse de rôle devient réparable. Constaté en pilotant un vrai projet : une spec valide était rejetée et tout le tour Product (7,5 min) perdu.
 - Garde déterministe `SPEC_CAPABILITY` : une spec ne peut pas confier un fichier généré par l’outillage (`workflow.generatedPaths`, lockfiles par défaut) à un Implementer sans shell ; appliquée aux propositions Product, importées et à l’approbation.
 - Limites configurables `limits.maxTaskContextChars` (défaut 120 000, plafond 400 000) et `limits.maxQaDiffBytes` (défaut 512 Kio, plafond 8 Mio).
 - Pilote opt-in `npm run pilot:repair` : prouve avec un vrai fournisseur que la boucle de réparation transmet l’erreur du contrôleur et obtient une réponse corrigée (au plus deux appels).
