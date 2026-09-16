@@ -1,4 +1,5 @@
-import { buildInventory, inventoryForAgents, type Inventory } from './inventory.js';
+import { buildInventory, inventoryForAgents, testsReferencing, type Inventory } from './inventory.js';
+import { matches } from '../policy/policy.js';
 import type { LanguageProfile } from './languages.js';
 
 export interface RepositorySymbol {
@@ -18,9 +19,11 @@ export interface RepositoryIntelligence {
   relevantFiles: string[];
   reuseCandidates: RepositorySymbol[];
   inventory: ReturnType<typeof inventoryForAgents>;
+  /** Existing test files that reference the focus paths (a task's allowedPaths); outsideScope marks those the task may not edit. */
+  referencingTests?: { path: string; tokens: string[]; outsideScope: boolean }[];
   note: string;
 }
-export interface RepositoryOptions { languages?: readonly LanguageProfile[]; signal?: AbortSignal; inventory?: Inventory }
+export interface RepositoryOptions { languages?: readonly LanguageProfile[]; signal?: AbortSignal; inventory?: Inventory; focusPaths?: readonly string[] }
 
 const MANIFEST = /(?:^|\/)(?:package\.json|pyproject\.toml|requirements[^/]*\.txt|go\.mod|Cargo\.toml|pom\.xml|build\.gradle(?:\.kts)?|composer\.json)$/i;
 const ARCH = /(?:^|\/)(?:ARCHITECTURE|ADR|DECISIONS)(?:\.[^/]*)?$|(?:^|\/)docs\/(?:architecture|adr|decisions)(?:\/|\.)/i;
@@ -52,8 +55,10 @@ export async function inspectRepository(repo: string, sha: string, query: string
     ...inventory.units.filter(x => !x.test).map(x => ({ name: x.name, kind: `unit:${x.extension}`, path: x.path, line: 1, excerpt: `file-level unit ${x.path}`, score: scoreText(x.path, terms) })),
   ];
   const reuseCandidates = candidates.sort((a,b)=>b.score-a.score||a.path.localeCompare(b.path)||a.line-b.line).filter((s,i)=>i<40 && (i<8 || s.score>=1));
+  const focus = options.focusPaths ?? [];
+  const referencingTests = focus.length ? (await testsReferencing(repo, inventory, focus, options.signal)).map(t => ({ ...t, outsideScope: !focus.some(p => matches(t.path, p)) })) : undefined;
   // Manifest, architecture and security paths are recognised over every tracked file, not only source files.
-  return { sha, fileCount: inventory.fileCount,
+  return { sha, fileCount: inventory.fileCount, ...(referencingTests ? { referencingTests } : {}),
     manifests: inventory.files.filter(f=>MANIFEST.test(f)).slice(0,100),
     architectureFiles: inventory.files.filter(f=>ARCH.test(f)).slice(0,100),
     securityFiles: inventory.files.filter(f=>SECURITY_PATH.test(f)).slice(0,150),

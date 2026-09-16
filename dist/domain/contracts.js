@@ -107,7 +107,7 @@ export const receiptSchema = s.object({
     startedAt: s.number(0, Number.MAX_SAFE_INTEGER), durationMs: s.finite(0, 7200000),
     exitCode: s.nullable(s.number(0, 255)),
     stdoutHash: s.string(0, 64, /^(?:[a-f0-9]{64})?$/), stderrHash: s.string(0, 64, /^(?:[a-f0-9]{64})?$/),
-    diagnostic: s.string(0, 8000), reusedFrom: s.nullable(id),
+    diagnostic: s.string(0, 16000), reusedFrom: s.nullable(id),
 });
 export function validateReceipt(value) {
     const r = receiptSchema.parse(value);

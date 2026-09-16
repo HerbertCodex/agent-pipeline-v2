@@ -1,5 +1,6 @@
 import { guidanceAudit } from '../knowledge/catalog.js';
 import { inspectRepository } from '../knowledge/repository.js';
+import { failureExcerpt, MAX_DIAGNOSTIC_CHARS } from './diagnostic.js';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -207,15 +208,20 @@ export class Pipeline {
             invariant(!signal.aborted, 'CANCELLED', 'Execution cancelled before repair');
             run.metrics.repairAttempts++;
             const failures = run.receipts;
+            const previousCandidate = run.candidateSha;
             transition(run, 'implementing');
             this.store.save(run, 'agent.repair_started', { number: run.metrics.repairAttempts });
             await this.implement(run, git, signal, hooks, failures);
+            if (run.candidateSha === previousCandidate) {
+                this.store.save(run, 'agent.repair_no_change', { number: run.metrics.repairAttempts, candidateSha: run.candidateSha });
+                throw new PipelineError('REPAIR_NO_CHANGE', 'The repair attempt changed nothing; the same failing candidate is retained without re-running checks. Inspect the gate diagnostics: the fix may need a file outside the task scope or information the agent did not have.');
+            }
         }
     }
     async implement(run, git, signal, hooks, failures) {
         const start = performance.now();
         try {
-            const repositoryIntelligence = await inspectRepository(run.repo, run.baseSha, `${run.task.title}\n${run.task.description}\n${run.task.acceptance.join('\n')}`, { signal, languages: run.config.knowledge?.languages ?? [] });
+            const repositoryIntelligence = await inspectRepository(run.repo, run.baseSha, `${run.task.title}\n${run.task.description}\n${run.task.acceptance.join('\n')}`, { signal, languages: run.config.knowledge?.languages ?? [], focusPaths: run.task.allowedPaths });
             const request = requestFor(run.task, run.baseSha, run.workspace, failures, run.config.skills, repositoryIntelligence);
             this.store.save(run, 'agent.guidance', { ...guidanceAudit(request.guidance), provider: run.config.agent.type, repositoryIntelligence: { sha: repositoryIntelligence.sha, fileCount: repositoryIntelligence.fileCount, relevantFiles: repositoryIntelligence.relevantFiles, reuseCandidates: repositoryIntelligence.reuseCandidates.map(x => ({ name: x.name, kind: x.kind, path: x.path, line: x.line, score: x.score })) } });
             run.summary = agentOutputSchema.parse({ summary: await runAgent(run.config, request, join(this.store.root, 'outputs', run.id), signal, hooks) }).summary;
@@ -315,11 +321,11 @@ export class Pipeline {
                 }
                 else {
                     this.store.event(run.id, 'gate.started', { gateId: gate.id, key });
-                    const result = await runProcess({ command, cwd: run.validationWorkspace, env, timeoutMs: gate.timeoutMs, signal: gateSignal, ...hooks });
+                    const result = await runProcess({ command, cwd: run.validationWorkspace, env, timeoutMs: gate.timeoutMs, signal: gateSignal, ...hooks, maxOutputBytes: 1024 * 1024 });
                     receipt = { id: randomUUID(), runId: run.id, gateId: gate.id, key, candidateSha: candidate, configHash: run.configHash, environmentHash,
                         status: result.status, startedAt, durationMs: performance.now() - elapsedStart, exitCode: result.exitCode,
                         stdoutHash: result.stdoutHash, stderrHash: result.stderrHash,
-                        diagnostic: result.status === 'passed' ? '' : redact(`${result.status}\n${result.stderr}\n${result.stdout}`.slice(-8000), env), reusedFrom: null };
+                        diagnostic: result.status === 'passed' ? '' : redact(failureExcerpt(result.status, result.stderr, result.stdout), env).slice(0, MAX_DIAGNOSTIC_CHARS), reusedFrom: null };
                 }
                 this.store.addReceipt(receipt);
                 receipts.set(gate.id, receipt);
