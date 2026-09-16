@@ -11,6 +11,7 @@ import {processAlive} from '../dist/persistence/store.js';
 import {schedule} from '../dist/engine/scheduler.js';
 import {runProcess,environment} from '../dist/execution/process.js';
 import {cfg,fixture,worker,receipt,git} from './helpers.mjs';
+import {lifecycleHelp} from '../dist/lifecycle/cli.js';
 const cli=fileURLToPath(new URL('../dist/cli.js',import.meta.url));
 function call(args){return spawnSync(process.execPath,[cli,...args],{encoding:'utf8',env:{PATH:process.env.PATH},timeout:20000});}
 for(const[name,patch]of[
@@ -113,4 +114,16 @@ test('export rechecks required approvals even if a bad internal caller marks the
 test('review rejects a receipt altered after the runner persisted it',async t=>{
  const f=fixture(t);const r=await f.start();r.receipts[0].stdoutHash='f'.repeat(64);f.pipeline.store.save(r,'test.altered_receipt');
  await assert.rejects(()=>f.pipeline.approve(r.id,r.candidateSha,'Alice','Changed receipt must be rejected.'),/persisted runner/);
+});
+// `prune` existed in the lifecycle router and in the help, but not in the dispatch list of cli.ts, so the
+// binary answered "Unknown command prune". Every command the help documents must reach its handler.
+test('every documented lifecycle command is routed by the binary',()=>{
+ const state=mkdtempSync(join(tmpdir(),'apv2-cli-routing-'));const cwd=mkdtempSync(join(tmpdir(),'apv2-cli-cwd-'));
+ const documented=[...new Set([...lifecycleHelp.matchAll(/^\s*apv2 ([a-z-]+)/gm)].map(m=>m[1]))];
+ assert.ok(documented.includes('prune')&&documented.includes('gc')&&documented.length>=6,`unexpected help: ${documented}`);
+ for(const command of documented){
+  const r=spawnSync(process.execPath,[cli,command,'--state-dir',state],{encoding:'utf8',cwd,env:{PATH:process.env.PATH},timeout:20000});
+  assert.doesNotMatch(`${r.stdout}${r.stderr}`,/Unknown command/,`apv2 ${command} is documented but not routed`);
+ }
+ rmSync(state,{recursive:true,force:true});rmSync(cwd,{recursive:true,force:true});
 });

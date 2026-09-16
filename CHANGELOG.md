@@ -2,6 +2,8 @@
 
 ## Non publié
 
+- `apv2 prune` était documentée et routée dans le cycle de vie, mais absente de la liste de commandes de `cli.ts` : le binaire répondait « Unknown command prune ». Un test vérifie désormais que chaque commande documentée dans l'aide atteint son gestionnaire.
+
 - Continuité visuelle entre incréments : une nouvelle proposition design reçoit la direction déjà approuvée pour le dépôt (`establishedDesign`) et doit l'étendre — ne maquetter que les écrans créés ou modifiés, ne styler que ce qui est nouveau — au lieu de redériver une direction complète. Enregistrée dans `design.reusedFrom` et visible dans `INDEX.md`. Constaté en pilotant un vrai projet : l'étape design coûtait 401 s sur 748 s en redessinant des écrans inchangés.
 - Le validateur de maquettes analyse les éléments et leurs attributs, et non le texte affiché : une maquette peut montrer du markup échappé, `src=` ou une URL comme contenu. L'analyse tient compte des guillemets, donc un `>` dans une valeur d'attribut ne masque plus un attribut suivant.
 - Une maquette peut utiliser les polices et images du dépôt : `assets` déclare des fichiers (chemin relatif au dépôt), référencés par `url(asset:ID)`, que le contrôleur insère dans l'aperçu en `data:` URI (512 Kio par fichier, 2 Mio au total, pas de SVG ; CSP `font-src data:`). Toute autre forme de `url()` et `@import` restent refusées. Les aperçus peuvent enfin montrer la typographie réelle du projet.
