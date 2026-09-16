@@ -66,7 +66,7 @@ Un contrôle `mandatory` s'exécute quel que soit le filtre. Sinon, en `fast` et
 
 Le moteur refuse un plan vide. Un contrôle absent de la configuration n'est toutefois pas inventé par le noyau : calibrer le profil avec des cas qui doivent échouer. Les filtres de chemins sont des décisions de politique, **pas une analyse sémantique de l'impact des imports**.
 
-Les globs supportés sont `*`, `**`, `?`, avec `/` comme séparateur. Les négations, accolades, classes de caractères, chemins absolus et traversées `..` sont refusés. Cette grammaire est volontairement plus petite que celle de certains outils de build.
+Les globs supportés sont `*`, `**` et `?`, avec `/` comme séparateur. Les crochets et parenthèses sont des **caractères littéraux** (répertoires de routes dynamiques ou de groupes dans plusieurs stacks, par exemple `routes/items/[id]/page.ts`) : les classes de caractères ne sont pas prises en charge. Les accolades, un segment commençant par `!`, les chemins absolus et les traversées `..` sont refusés, afin qu'une expansion ou une négation ne corresponde jamais silencieusement à rien. Cette grammaire est volontairement plus petite que celle de certains outils de build.
 
 ## Cache et fraîcheur
 
