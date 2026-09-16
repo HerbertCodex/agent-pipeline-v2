@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixture, oneTask, git, approved, withSecurity } from './lifecycle-helpers.mjs';
 import { scanTags } from '../dist/lifecycle/service.js';
+import { specHash } from '../dist/lifecycle/contracts.js';
 import { planPurge, purgeDocuments } from '../dist/lifecycle/maintenance.js';
 
 const exampleWorker = fileURLToPath(new URL('../examples/lifecycle-worker.mjs', import.meta.url));
@@ -157,6 +158,14 @@ test('a spec that asks no question must already cover every criterion with a tas
   attached.tasks[0].acceptanceIds.push('AC-AUTH-UNCHANGED');
   const doc = await f.life.draft({ repo: f.repo, config: { ...f.config, agent: w.agent, roles: w.roles }, request: 'Implement the approved arithmetic example.', proposal: attached });
   assert.equal(doc.data.status, 'draft');
+
+  // A rule added later must never make an already stored document unreadable: the first version of this
+  // fix validated readiness on load, and every spec written before it stopped opening.
+  const stored = f.life.get(doc.id);
+  stored.data.content.acceptance.push({ id: 'AC-LEGACY-ORPHAN', description: 'Criterion written before the rule existed.', verification: 'Inspect the diff.' });
+  stored.data.contentHash = specHash(stored.data);
+  f.life.store.saveDocument(stored, 'test.legacy_content', {});
+  assert.equal(f.life.get(doc.id).data.content.acceptance.at(-1).id, 'AC-LEGACY-ORPHAN', 'an older stored spec still loads');
 
   // A draft that does ask a question is still allowed to be incomplete.
   const asking = orphan(oneTask());

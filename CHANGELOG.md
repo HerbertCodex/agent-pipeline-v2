@@ -2,7 +2,7 @@
 
 ## Non publié
 
-- Les règles structurelles d'une spec (au moins une tâche, chaque critère rattaché à une tâche) s'appliquent dès qu'une spec est produite sans question, au lieu d'être vérifiées seulement à l'approbation. Constaté en pilotant un vrai projet : un critère de non-régression rattaché à aucune tâche n'était signalé qu'au moment de l'approbation, 16 minutes après le début. Le message nomme désormais les critères orphelins, et `SPEC_COVERAGE` étant réparable, la boucle de réparation corrige le cas en un appel.
+- Les règles structurelles d'une spec (au moins une tâche, chaque critère rattaché à une tâche) s'appliquent dès qu'une spec est produite sans question, au lieu d'être vérifiées seulement à l'approbation. Constaté en pilotant un vrai projet : un critère de non-régression rattaché à aucune tâche n'était signalé qu'au moment de l'approbation, 16 minutes après le début. Le message nomme désormais les critères orphelins, et `SPEC_COVERAGE` étant réparable, la boucle de réparation corrige le cas en un appel. La règle ne s'applique qu'à une sortie de rôle fraîche : un document déjà stocké reste lisible, quelle que soit la règle ajoutée après lui.
 - `git config --get` reçoit `HOME` (et les variables de configuration documentées par Git) : l'identité de l'opérateur vit presque toujours dans le `~/.gitconfig` global, donc le repli sur `user.name` ne fonctionnait jamais et `--reviewer` était obligatoire. Les commandes Git qui écrivent gardent leur environnement minimal.
 
 - `apv2 prune` était documentée et routée dans le cycle de vie, mais absente de la liste de commandes de `cli.ts` : le binaire répondait « Unknown command prune ». Un test vérifie désormais que chaque commande documentée dans l'aide atteint son gestionnaire.

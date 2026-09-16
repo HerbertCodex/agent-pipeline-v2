@@ -237,6 +237,12 @@ export interface DesignRecord {
     }[];
 }
 export declare function validateSpec(value: unknown, ready?: boolean, ledger?: DecisionLedger, operatorText?: string, securityContext?: SecurityContext): Spec;
+/**
+ * Structural rules an executable spec must satisfy. Applied at approval, and to freshly produced Product
+ * output that asks no question — a spec that asks nothing claims to be complete. It is deliberately not
+ * applied when reading a stored document: an old document must stay loadable, whatever rule came later.
+ */
+export declare function assertSpecReadiness(spec: Spec): Spec;
 export declare function taskOrder(spec: Spec): Spec['tasks'];
 export declare function validateQa(value: unknown, spec: Spec, candidateSha: string, ledger?: DecisionLedger): QaReport;
 export declare function stricter(...values: Lane[]): Lane;
