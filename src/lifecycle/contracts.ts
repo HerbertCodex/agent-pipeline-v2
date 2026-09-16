@@ -192,9 +192,15 @@ export function validateSpec(value: unknown, ready = false, ledger: DecisionLedg
         invariant(spec.questions.length === 0, 'OPEN_QUESTIONS', 'Resolve Product questions before approval');
         const unresolved=ambiguousDecisions(decisions,'product').filter(d=>!spec.decisionResolutions.some(r=>r.decisionId===d.id));
         invariant(unresolved.length===0,'OPEN_QUESTIONS',`Resolve ambiguous Product decisions before approval: ${unresolved.map(d=>d.id).join(', ')}`);
-        invariant(spec.tasks.length > 0, 'SPEC', 'An approved spec needs executable tasks');
+    }
+    // A spec that asks nothing claims to be complete, so the structural readiness rules apply as soon as it
+    // is produced. Checking them only at approval surfaced them after the whole Product and design round,
+    // when the cheap fix (a criterion attached to the task that implements it) needs one more role call.
+    if (ready || spec.questions.length === 0) {
+        invariant(spec.tasks.length > 0, 'SPEC', 'A spec without open questions needs executable tasks');
         const covered = new Set(spec.tasks.flatMap(t => t.acceptanceIds));
-        invariant([...criteria].every(c => covered.has(c)), 'SPEC_COVERAGE', 'Some criteria have no implementing task');
+        const orphans = [...criteria].filter(c => !covered.has(c));
+        invariant(orphans.length === 0, 'SPEC_COVERAGE', `Some criteria have no implementing task: ${orphans.join(', ')}. Attach each one to the task whose change demonstrates it, including no-regression criteria.`);
     }
     return spec;
 }

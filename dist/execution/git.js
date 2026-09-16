@@ -27,9 +27,15 @@ export class Git {
         invariant(!result.truncated, 'GIT_OUTPUT', 'Git output exceeded limit; refusing an incomplete diff');
         return result.stdout;
     }
+    /**
+     * Reads one Git configuration value. Unlike every mutating Git call, this one passes HOME (and the
+     * config overrides Git itself documents), because the operator identity used for an approval usually
+     * lives in the global ~/.gitconfig, not in the repository. Without it the identity fallback could never
+     * succeed and every approval had to repeat --reviewer.
+     */
     async configValue(repo, key) {
         const result = await runProcess({ command: ['git', 'config', '--get', key], cwd: repo,
-            env: environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']), timeoutMs: 10000,
+            env: environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG', 'HOME', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM']), timeoutMs: 10000,
             ...(this.signal ? { signal: this.signal } : {}), ...this.hooks, maxOutputBytes: 65536 });
         if (result.status === 'passed')
             return result.stdout.trim() || null;

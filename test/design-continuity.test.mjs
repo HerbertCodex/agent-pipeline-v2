@@ -136,3 +136,31 @@ test('abandoned lifecycle documents can be purged with their runs and workspaces
   for (const runId of plan[0].runIds) assert.throws(() => f.life.pipeline.store.get(runId), /Unknown run/);
   for (const workspace of plan[0].workspaces) assert.equal(existsSync(workspace.path), false);
 });
+
+// Observed while piloting: a spec with no questions but one no-regression criterion attached to no task
+// was accepted as a draft and refused 16 minutes later, at approval, by SPEC_COVERAGE. A draft that asks
+// nothing claims to be complete, so the structural rules must hold immediately — and then the bounded
+// output repair can fix them in one extra call.
+test('a spec that asks no question must already cover every criterion with a task', async (t) => {
+  const f = fixture(t);
+  const w = designWorker(f.root, 'coverage', '');
+  const orphan = (spec) => {
+    spec.acceptance.push({ id: 'AC-AUTH-UNCHANGED', description: 'The existing arithmetic behaviour is unchanged by this increment.', verification: 'Inspect the diff: no existing arithmetic file is touched.' });
+    return spec;
+  };
+  await assert.rejects(
+    f.life.draft({ repo: f.repo, config: { ...f.config, agent: w.agent, roles: w.roles }, request: 'Implement the approved arithmetic example.', proposal: orphan(oneTask()) }),
+    error => { assert.match(error.message, /AC-AUTH-UNCHANGED/); return true; },
+    'the uncovered criterion must be reported at draft time, not at approval');
+
+  const attached = orphan(oneTask());
+  attached.tasks[0].acceptanceIds.push('AC-AUTH-UNCHANGED');
+  const doc = await f.life.draft({ repo: f.repo, config: { ...f.config, agent: w.agent, roles: w.roles }, request: 'Implement the approved arithmetic example.', proposal: attached });
+  assert.equal(doc.data.status, 'draft');
+
+  // A draft that does ask a question is still allowed to be incomplete.
+  const asking = orphan(oneTask());
+  asking.questions.push({ id: 'Q-1', question: 'Faut-il conserver la signature actuelle ?' });
+  const open = await f.life.draft({ repo: f.repo, config: { ...f.config, agent: w.agent, roles: w.roles }, request: 'Implement the approved arithmetic example.', proposal: asking });
+  assert.equal(open.data.content.questions.length, 1);
+});
