@@ -6,7 +6,7 @@ import { validateConfig, taskSchema, DEFAULT_LIMITS } from '../domain/contracts.
 import { hash, sha256 } from '../domain/hash.js';
 import { PipelineError, errorMessage, invariant } from '../domain/errors.js';
 import { Git, isInside } from '../execution/git.js';
-import { specSchema, qaSchema, designProposalSchema, validateSpec, validateQa, specHash, approvalHash, specMarkdown, stricter, reviewer } from './contracts.js';
+import { specSchema, qaSchema, designProposalSchema, validateSpec, assertSpecReadiness, validateQa, specHash, approvalHash, specMarkdown, stricter, reviewer } from './contracts.js';
 import { runRole } from './roles.js';
 import { executionCapabilities, validateTaskCapabilities } from './capabilities.js';
 import { matches } from '../policy/policy.js';
@@ -55,6 +55,10 @@ export function scanTags(html) {
         i = end + 1;
     }
     return tags;
+}
+/** Freshly produced spec output that asks no question must already be executable; a draft with a question may not be. */
+function readySpec(spec) {
+    return spec.questions.length === 0 ? assertSpecReadiness(spec) : spec;
 }
 export class Lifecycle {
     pipeline;
@@ -300,10 +304,10 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         const securityContext = r.securityContext;
         const value = proposal ?? await runRole({ store: this.store, documentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills, agent: r.config.roles.product ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: specSchema,
             context: { request: r.request, previous: r.content, decisionLedger: r.decisionLedger, repositoryIntelligence, securityContext, executionCapabilities: executionCapabilities(r.config) }, ...(signal ? { signal } : {}),
-            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: spec => validateTaskCapabilities(validateSpec(spec, false, r.decisionLedger, r.request, securityContext), r.config) });
+            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: spec => readySpec(validateTaskCapabilities(validateSpec(spec, false, r.decisionLedger, r.request, securityContext), r.config)) });
         this.save(doc, 'product.repository_intelligence', { sha: repositoryIntelligence.sha, fileCount: repositoryIntelligence.fileCount, relevantFiles: repositoryIntelligence.relevantFiles, securityFiles: repositoryIntelligence.securityFiles, reuseCandidates: repositoryIntelligence.reuseCandidates.map(x => ({ name: x.name, kind: x.kind, path: x.path, line: x.line, score: x.score })) });
         this.save(doc, 'security.assessed', { contextHash: r.securityContextHash, minimumLane: r.securityContext.minimumLane, requiresThreatModel: r.securityContext.requiresThreatModel, negativeTestsRequired: r.securityContext.negativeTestsRequired, topics: r.securityContext.topics.map(t => t.id), signals: r.securityContext.signals });
-        r.content = validateTaskCapabilities(validateSpec(value, false, r.decisionLedger, r.request, r.securityContext), r.config);
+        r.content = readySpec(validateTaskCapabilities(validateSpec(value, false, r.decisionLedger, r.request, r.securityContext), r.config));
         r.contentHash = specHash(r);
         r.design = null;
         if (this.requiresDesign(r.content, r.config.skills.projectType) && r.content.questions.length === 0)
