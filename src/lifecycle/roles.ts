@@ -22,7 +22,7 @@ export { strictSchema } from '../adapters/structured-schema.js';
  * invariants, missing structured output. Timeouts, cancellation, permission denials and process failures
  * are deliberately excluded: retrying them silently would hide an operational problem or burn budget.
  */
-const REPAIRABLE = /^(SCHEMA|GLOB|SPEC(_[A-Z]+)?|DESIGN_MARKUP|QA(_[A-Z]+)?|DECISION(_[A-Z]+)?|SEMANTIC_REVIEW|ROLE_OUTPUT|CLAUDE_OUTPUT|BOOTSTRAP|BOOTSTRAP_SIZE|BOOTSTRAP_OUTPUT)$/;
+const REPAIRABLE = /^(SCHEMA|GLOB|SPEC(_[A-Z]+)?|DESIGN_MARKUP|DESIGN_ASSET|QA(_[A-Z]+)?|DECISION(_[A-Z]+)?|SEMANTIC_REVIEW|ROLE_OUTPUT|CLAUDE_OUTPUT|BOOTSTRAP|BOOTSTRAP_SIZE|BOOTSTRAP_OUTPUT)$/;
 export function isRepairableOutputError(error: unknown): error is PipelineError {
   return error instanceof PipelineError && REPAIRABLE.test(error.code);
 }

@@ -2,6 +2,11 @@
 
 ## Non publié
 
+- Continuité visuelle entre incréments : une nouvelle proposition design reçoit la direction déjà approuvée pour le dépôt (`establishedDesign`) et doit l'étendre — ne maquetter que les écrans créés ou modifiés, ne styler que ce qui est nouveau — au lieu de redériver une direction complète. Enregistrée dans `design.reusedFrom` et visible dans `INDEX.md`. Constaté en pilotant un vrai projet : l'étape design coûtait 401 s sur 748 s en redessinant des écrans inchangés.
+- Le validateur de maquettes analyse les éléments et leurs attributs, et non le texte affiché : une maquette peut montrer du markup échappé, `src=` ou une URL comme contenu. L'analyse tient compte des guillemets, donc un `>` dans une valeur d'attribut ne masque plus un attribut suivant.
+- Une maquette peut utiliser les polices et images du dépôt : `assets` déclare des fichiers (chemin relatif au dépôt), référencés par `url(asset:ID)`, que le contrôleur insère dans l'aperçu en `data:` URI (512 Kio par fichier, 2 Mio au total, pas de SVG ; CSP `font-src data:`). Toute autre forme de `url()` et `@import` restent refusées. Les aperçus peuvent enfin montrer la typographie réelle du projet.
+- Nouvelle commande `apv2 prune [--id ID] [--older-than DAYS] [--confirm]` : supprime du magasin les documents abandonnés (specs terminées ou brouillons jamais approuvés, plans jamais appliqués) avec leurs runs, reçus, événements et workspaces. Simulation par défaut, rien de plus récent que 30 jours, et jamais un document verrouillé, actif ou appliqué.
+
 - Diagnostics d’échec centrés sur les échecs : début et fin de la sortie plus les lignes portant un vocabulaire d’échec générique (fail, error, expected, ×…), jusqu’à 16 000 caractères (au lieu des 8 000 derniers caractères, qui masquaient quels tests échouaient). Sortie des gates capturée jusqu’à 1 Mio.
 - Une réparation d’Implementer qui ne change rien s’arrête avec `REPAIR_NO_CHANGE` au lieu de relancer les gates sur le même candidat.
 - L’Implementer reçoit `repositoryIntelligence.referencingTests` (tests existants qui référencent ses fichiers, marqués `outsideScope`) et doit mettre à jour un test cassé par un changement voulu plutôt que laisser échouer : le contrôleur demande alors un amendement de périmètre explicite. Product doit inclure ces tests quand un contrat partagé change.

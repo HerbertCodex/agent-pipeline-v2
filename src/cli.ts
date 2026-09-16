@@ -56,6 +56,7 @@ async function main(): Promise<void> {
     hash: { type: 'string' }, agent: { type: 'string' }, name: { type: 'string' }, target: { type: 'string' },
     assist: { type: 'boolean' }, execute: { type: 'boolean' }, commit: { type: 'boolean' }, confirm: { type: 'boolean' }, approve: { type: 'boolean' }, amendment: { type: 'string' },
     'manual-qa': { type: 'boolean' }, quiet: { type: 'boolean' }, format: { type: 'string' }, active: { type: 'boolean' },
+    id: { type: 'string' }, 'older-than': { type: 'string' },
     'accept-current': { type: 'boolean' },'confirm-stopped': { type: 'boolean' },help: { type: 'boolean',short: 'h' },version: { type: 'boolean' },
   } });
   const [command,id] = positionals;

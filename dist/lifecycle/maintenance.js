@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, statSync } fr
 import { basename, dirname, join, resolve } from 'node:path';
 import { environment, runProcess } from '../execution/process.js';
 import { isInside } from '../execution/git.js';
+import { invariant, PipelineError } from '../domain/errors.js';
 const TERMINAL_SPEC = new Set(['closed', 'rejected']);
 const TERMINAL_STANDALONE_RUN = new Set(['failed', 'rejected']);
 const ROLE_LEFTOVER_AGE_MS = 24 * 60 * 60 * 1000;
@@ -101,6 +102,91 @@ export function planGarbage(life, now = Date.now()) {
                 items.push({ kind: 'role-workspace', path, reason: 'role workspace left by an interrupted invocation', bytes: sizeOf(path) });
         }
     return items.sort((a, b) => a.path.localeCompare(b.path));
+}
+const DEFAULT_PURGE_AGE_DAYS = 30;
+/** Documents whose history is worth keeping are never proposed: only terminal or abandoned ones. */
+function purgeReason(doc, idle) {
+    const r = doc.data;
+    if (TERMINAL_SPEC.has(r.status))
+        return `${r.status} spec`;
+    if (!idle)
+        return null;
+    if (r.status === 'draft' && !r.approval && (r.attempts ?? []).length === 0)
+        return 'draft never approved, abandoned';
+    return null;
+}
+/**
+ * Dry-run plan of lifecycle documents that can leave the store: terminal or abandoned specs, and plan
+ * documents that were never applied. It lists the runs and workspaces that go with them, so the operator
+ * sees the whole cost before confirming. Applied plans, approved specs still in flight and anything with a
+ * live process or lease are never proposed; `ids` targets a document explicitly but keeps those guards.
+ */
+export function planPurge(life, options = {}) {
+    const store = life.store;
+    const now = options.now ?? Date.now();
+    const explicit = options.ids?.length ? new Set(options.ids) : null;
+    const age = Math.max(0, options.olderThanDays ?? DEFAULT_PURGE_AGE_DAYS) * 24 * 60 * 60 * 1000;
+    const garbage = planGarbage(life, now);
+    const items = [];
+    const lastEvent = (id) => store.documentEvents(id).reduce((n, e) => Math.max(n, e.at), 0);
+    for (const doc of store.documents('spec')) {
+        if (explicit && !explicit.has(doc.id))
+            continue;
+        const r = doc.data;
+        if (r.activeRunId || store.documentProcesses(doc.id).some(p => p.alive))
+            continue;
+        const at = lastEvent(doc.id);
+        const reason = purgeReason(doc, now - at >= age);
+        if (!reason)
+            continue;
+        if (!explicit && now - at < age)
+            continue;
+        const runIds = [...new Set([...(r.attempts ?? []).map(a => a.runId), ...(r.validationRunIds ?? []), r.finalRunId].filter((x) => Boolean(x)))];
+        const workspaces = garbage.filter(g => g.path.endsWith(`/${doc.id}`) || runIds.some(runId => g.path.endsWith(`/${runId}`)));
+        items.push({ id: doc.id, kind: 'spec', label: r.content?.title ?? '(no spec content)', status: r.status, reason, lastEventAt: at, runIds, workspaces,
+            bytes: workspaces.reduce((n, g) => n + g.bytes, 0) });
+    }
+    for (const kind of ['bootstrap', 'install']) {
+        for (const doc of store.documents(kind)) {
+            if (explicit && !explicit.has(doc.id))
+                continue;
+            if (doc.data.applied)
+                continue; // An applied plan is the record of a change made to a repository.
+            if (store.documentProcesses(doc.id).some(p => p.alive))
+                continue;
+            const at = lastEvent(doc.id);
+            if (!explicit && now - at < age)
+                continue;
+            items.push({ id: doc.id, kind, label: doc.data.directory ?? doc.data.repo ?? '', status: 'never applied', reason: `${kind} plan never applied`, lastEventAt: at, runIds: [], workspaces: [], bytes: 0 });
+        }
+    }
+    return items.sort((a, b) => a.lastEventAt - b.lastEventAt);
+}
+/** Removes planned documents: their workspaces first, then their runs, then the document itself. */
+export async function purgeDocuments(life, items) {
+    const purged = [];
+    const failed = [];
+    for (const item of items) {
+        try {
+            const workspaces = await collectGarbage(life, item.workspaces);
+            invariant(workspaces.failed.length === 0, 'PURGE', `Workspaces of ${item.id} could not be removed: ${workspaces.failed.map(f => f.path).join(', ')}`);
+            for (const runId of item.runIds) {
+                try {
+                    life.pipeline.store.deleteRun(runId);
+                }
+                catch (error) {
+                    if (!(error instanceof PipelineError && error.code === 'NOT_FOUND'))
+                        throw error;
+                }
+            }
+            life.store.deleteDocument(item.id, item.kind);
+            purged.push(item);
+        }
+        catch (error) {
+            failed.push({ id: item.id, error: error instanceof Error ? error.message : String(error) });
+        }
+    }
+    return { purged, failed };
 }
 /** Removes planned items: registered worktrees through Git first, then the owned directory. */
 export async function collectGarbage(life, items) {

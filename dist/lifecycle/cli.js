@@ -9,7 +9,7 @@ import { invariant } from '../domain/errors.js';
 import { parseJson } from '../domain/schema.js';
 import { Git } from '../execution/git.js';
 import { planBootstrap, refineBootstrap, applyBootstrap } from './bootstrap.js';
-import { planGarbage, collectGarbage } from './maintenance.js';
+import { planGarbage, collectGarbage, planPurge, purgeDocuments } from './maintenance.js';
 import { planLedgerUpdate, applyLedgerUpdate } from './ledger-update.js';
 export const lifecycleHelp = `
 Full lifecycle (local trusted projects; explicit approval boundaries):
@@ -46,13 +46,16 @@ Maintenance:
   apv2 decisions plan --repo PATH --file UPDATE_JSON   Preview a Decision Ledger change and its hash
   apv2 decisions apply --repo PATH --file UPDATE_JSON --hash HASH --approve --note TEXT [--commit]
   apv2 gc [--confirm]                      Dry-run by default; removes obsolete workspaces only
+  apv2 prune [--id DOCUMENT_ID] [--older-than DAYS] [--confirm]
+                                           Dry-run by default; removes abandoned or terminal
+                                           lifecycle documents, their runs and their workspaces
 
 --request-file FILE may replace --request. --quiet suppresses progress on stderr.
 Product and QA use read-only role invocations with Codex, Claude Code or a compatible command worker.
 No operator approval is inferred from a model response. No deploy command.
 `;
 export async function lifecycleCommand(command, positionals, values, root, signal) {
-    if (!['bootstrap', 'onboard', 'doctor', 'spec', 'ask', 'gc', 'decisions'].includes(command))
+    if (!['bootstrap', 'onboard', 'doctor', 'spec', 'ask', 'gc', 'prune', 'decisions'].includes(command))
         return false;
     const str = (key) => typeof values[key] === 'string' ? values[key] : undefined;
     const required = (key) => { const v = str(key); invariant(v, 'ARGUMENT', `Missing --${key}`); return v; };
@@ -160,6 +163,22 @@ export async function lifecycleCommand(command, positionals, values, root, signa
             }
             const result = await collectGarbage(life, items);
             console.log(JSON.stringify({ dryRun: false, removed: result.removed, failed: result.failed, freedBytes: result.removed.reduce((n, x) => n + x.bytes, 0) }, null, 2));
+            process.exitCode = result.failed.length ? 1 : 0;
+            return true;
+        }
+        if (command === 'prune') {
+            const ids = [...positionals.slice(1), ...(str('id') ? [str('id')] : [])];
+            const olderThan = str('older-than') ? Number(str('older-than')) : undefined;
+            invariant(olderThan === undefined || (Number.isFinite(olderThan) && olderThan >= 0), 'ARGUMENT', '--older-than expects a number of days');
+            const items = planPurge(life, { ...(ids.length ? { ids } : {}), ...(olderThan === undefined ? {} : { olderThanDays: olderThan }) });
+            if (values['confirm'] !== true) {
+                console.log(JSON.stringify({ dryRun: true, items, totalBytes: items.reduce((n, x) => n + x.bytes, 0),
+                    next: items.length ? 'Read the list: purging deletes these documents, their runs and their receipts from the local history, without any backup. Then run the same command with --confirm.' : 'Nothing to purge.' }, null, 2));
+                return true;
+            }
+            invariant(items.length > 0, 'ARGUMENT', 'Nothing matches; run without --confirm to see the plan');
+            const result = await purgeDocuments(life, items);
+            console.log(JSON.stringify({ dryRun: false, purged: result.purged.map(x => ({ id: x.id, kind: x.kind, status: x.status, reason: x.reason })), failed: result.failed, freedBytes: result.purged.reduce((n, x) => n + x.bytes, 0) }, null, 2));
             process.exitCode = result.failed.length ? 1 : 0;
             return true;
         }

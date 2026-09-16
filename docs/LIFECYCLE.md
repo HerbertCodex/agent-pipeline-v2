@@ -139,6 +139,15 @@ Ne sont **jamais** réessayés :
 
 La réparation ne relâche aucun contrôle : une seconde réponse invalide échoue comme avant.
 
+### Continuité visuelle et ressources du dépôt
+
+Quand une spec de ce dépôt a déjà une proposition design approuvée, le contrôleur la transmet à la nouvelle sous `establishedDesign` (direction visuelle, décisions, écrans, ressources) et demande de l'étendre : reprendre les jetons et la grammaire existants, ne maquetter que les écrans créés ou réellement modifiés, et ne mettre dans `css` que ce qui est nouveau. La continuité est visible dans `INDEX.md` et dans `design.reusedFrom`. Changer de direction reste possible, mais doit être déclaré dans `decisions`.
+
+Une maquette est un document statique, jamais un programme :
+- le validateur analyse les **éléments** et leurs attributs, pas le texte affiché : une maquette peut montrer du markup échappé, un chemin ou une URL comme contenu ;
+- sont refusés les éléments qui chargent quelque chose (`script`, `iframe`, `object`, `embed`, `link`, `meta`, `base`), les attributs de gestionnaire d'événement, `src`/`srcset`, une URL exécutable et un `href`/`action` distant ;
+- `url()` n'est accepté que sous la forme `url(asset:ID)`, où `ID` est déclaré dans `assets` avec un chemin relatif au dépôt. Le contrôleur lit ce fichier (police ou image, 512 Kio par fichier, 2 Mio au total ; pas de SVG, qui est un document scriptable) et l'insère dans l'aperçu en `data:` URI. L'aperçu reste un fichier autonome, sans accès réseau, et peut donc montrer la typographie réelle du projet. La proposition stockée conserve la référence, pas les octets.
+
 ### Contexte ciblé et capacités
 
 La proposition design associe ses écrans aux tâches (`taskScopes`). Une tâche ne reçoit que la direction commune et ses écrans ; une tâche sans travail visuel ne reçoit pas le design. Une proposition sans `taskScopes` conserve l'ancien comportement.
@@ -163,5 +172,7 @@ Une étape que l'Implementer ne peut pas exécuter (installation de dépendance,
   - les workspaces de rôle abandonnés depuis plus de 24 h.
 
   Il ne touche ni à l'historique SQLite, ni aux livraisons, ni aux sources, ni à ce qui appartient à une spec active ou à un processus vivant.
+
+- `apv2 prune [--id DOCUMENT_ID] [--older-than DAYS] [--confirm]` : liste d'abord, sans rien supprimer. Avec `--confirm`, supprime définitivement du magasin les documents abandonnés — specs clôturées ou rejetées, brouillons jamais approuvés, plans `bootstrap`/`onboard` jamais appliqués — avec leurs runs, leurs reçus, leurs événements et leurs workspaces. Par défaut, rien de plus récent que 30 jours n'est proposé ; `--id` cible un document précis sans lever les autres gardes. Un document verrouillé, avec un run actif ou un processus vivant, un plan appliqué et une spec en cours ne sont jamais proposés. Il n'y a pas de sauvegarde : c'est la seule commande qui efface de l'historique, et elle le dit avant de le faire.
 
 Les commits candidats portent le titre de la tâche ; l'identifiant du run est dans le trailer `Agent-Pipeline-Run`.

@@ -205,6 +205,11 @@ export declare const designProposalSchema: import("../domain/schema.js").Schema<
         readonly path: string;
         readonly reason: string;
     }[];
+    readonly assets: {
+        readonly id: string;
+        readonly path: string;
+        readonly reason: string;
+    }[];
     readonly questions: {
         readonly id: string;
         readonly question: string;
@@ -222,6 +227,14 @@ export interface DesignRecord {
     indexPath: string;
     screenPaths: string[];
     generatedAt: number;
+    /** Spec whose approved visual direction this design continues, when one existed. */
+    reusedFrom?: string | null;
+    /** Repository files inlined into the previews as data: URIs. */
+    inlinedAssets?: {
+        id: string;
+        path: string;
+        bytes: number;
+    }[];
 }
 export declare function validateSpec(value: unknown, ready?: boolean, ledger?: DecisionLedger, operatorText?: string, securityContext?: SecurityContext): Spec;
 export declare function taskOrder(spec: Spec): Spec['tasks'];

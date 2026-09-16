@@ -254,6 +254,54 @@
       "minItems": 0,
       "maxItems": 30
     },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ],
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 8,
+      "default": []
+    },
     "questions": {
       "type": "array",
       "items": {
