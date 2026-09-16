@@ -76,7 +76,7 @@ async function main(): Promise<void> {
     }
     console.log(`Schemas written to ${dir}`); return;
   }
-  if (['bootstrap','onboard','doctor','spec','ask','gc','decisions'].includes(command)) {
+  if (['bootstrap','onboard','doctor','spec','ask','gc','prune','decisions'].includes(command)) {
     const root = resolve(values['state-dir'] ?? join(homedir(),'.local','state','agent-pipeline-v2'));
     const controller = new AbortController(); const stop = ():void => controller.abort();
     process.on('SIGINT',stop); process.on('SIGTERM',stop);
