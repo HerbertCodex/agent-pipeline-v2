@@ -34,6 +34,10 @@ export declare class Store {
     document<T>(id: string, kind: string): Document<T>;
     documents<T>(kind: string): Document<T>[];
     saveDocument<T>(doc: Document<T>, type: string, event?: Record<string, unknown>): void;
+    /** Removes one lifecycle document and its own history. Refused while a lease or a live process exists. */
+    deleteDocument(id: string, kind: string): void;
+    /** Removes one run and everything that references it. Refused while a lease or a live process exists. */
+    deleteRun(id: string): void;
     documentEvent(id: string, type: string, data: Record<string, unknown>): void;
     documentEvents(id: string): {
         seq: number;

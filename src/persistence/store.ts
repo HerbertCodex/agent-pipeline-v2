@@ -177,6 +177,33 @@ export class Store {
     });
     doc.version++;
   }
+  /** Removes one lifecycle document and its own history. Refused while a lease or a live process exists. */
+  deleteDocument(id: string, kind: string): void {
+    this.transaction(() => {
+      invariant(this.db.prepare('SELECT 1 FROM documents WHERE id=? AND kind=?').get(id, kind), 'NOT_FOUND', `Unknown ${kind} ${id}`);
+      invariant(!this.db.prepare('SELECT 1 FROM document_leases WHERE doc_id=?').get(id), 'LOCKED', `Document ${id} is locked by a controller`);
+      for (const child of this.db.prepare('SELECT pid FROM document_children WHERE doc_id=? AND active=1').all(id))
+        invariant(!processAlive(Number(child['pid'])), 'BUSY', `Role process ${child['pid']} of ${id} is still alive`);
+      this.db.prepare('DELETE FROM document_children WHERE doc_id=?').run(id);
+      this.db.prepare('DELETE FROM document_events WHERE doc_id=?').run(id);
+      this.db.prepare('DELETE FROM documents WHERE id=? AND kind=?').run(id, kind);
+    });
+  }
+  /** Removes one run and everything that references it. Refused while a lease or a live process exists. */
+  deleteRun(id: string): void {
+    this.transaction(() => {
+      invariant(this.db.prepare('SELECT 1 FROM runs WHERE id=?').get(id), 'NOT_FOUND', `Unknown run ${id}`);
+      invariant(!this.db.prepare('SELECT 1 FROM leases WHERE run_id=?').get(id), 'LOCKED', `Run ${id} is locked`);
+      invariant(!this.db.prepare('SELECT 1 FROM execution_lease WHERE run_id=?').get(id), 'BUSY', `Run ${id} holds the execution lease`);
+      for (const child of this.db.prepare('SELECT pid FROM children WHERE run_id=? AND active=1').all(id))
+        invariant(!processAlive(Number(child['pid'])), 'BUSY', `Command process ${child['pid']} of run ${id} is still alive`);
+      this.db.prepare('DELETE FROM proof_cache WHERE receipt_id IN (SELECT id FROM receipts WHERE run_id=?)').run(id);
+      this.db.prepare('DELETE FROM receipts WHERE run_id=?').run(id);
+      this.db.prepare('DELETE FROM children WHERE run_id=?').run(id);
+      this.db.prepare('DELETE FROM events WHERE run_id=?').run(id);
+      this.db.prepare('DELETE FROM runs WHERE id=?').run(id);
+    });
+  }
   documentEvent(id: string, type: string, data: Record<string,unknown>): void {
     this.db.prepare('INSERT INTO document_events(doc_id,at,type,data) VALUES(?,?,?,?)').run(id,Date.now(),type,JSON.stringify(data));
     try { this.onProgress?.('lifecycle',id,type,data); } catch { /* Progress is non-authoritative. */ }

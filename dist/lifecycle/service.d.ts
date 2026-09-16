@@ -2,6 +2,18 @@ import { Pipeline } from '../engine/pipeline.js';
 import { type Run } from '../domain/contracts.js';
 import type { Document } from '../persistence/store.js';
 import { type SpecRecord } from './contracts.js';
+/**
+ * Elements and their attributes, quote-aware so a `>` inside an attribute value cannot end a tag early.
+ * Text between tags is displayed content: a mockup may legitimately show `src=`, a URL or escaped markup
+ * as text, and the validator must not confuse that with an element that loads something.
+ */
+export declare function scanTags(html: string): {
+    name: string;
+    attributes: {
+        name: string;
+        value: string;
+    }[];
+}[];
 export interface WorkflowOptions {
     signal?: AbortSignal;
     acceptCurrent?: boolean;
@@ -28,6 +40,20 @@ export declare class Lifecycle {
     private requiresDesign;
     private companionPaths;
     private validateDesignMarkup;
+    /** url() is allowed only as url(asset:ID) for a repository file the proposal declares; the controller inlines it. */
+    private validateDesignUrls;
+    /**
+     * Preview copy of the proposal with every url(asset:ID) replaced by an inline data: URI read from the
+     * repository. Previews stay a single self-contained file with no network access, so the mockup can show
+     * the project's real typography instead of a substitute.
+     */
+    private inlineDesignAssets;
+    /**
+     * Visual direction already approved for this repository, if any. Passing it to the design role turns a
+     * full re-derivation into an extension: the mockup keeps one direction across increments and only covers
+     * screens the new spec creates or changes.
+     */
+    private establishedDesign;
     private validateDesignScopes;
     private htmlEscape;
     private prepareDesignProposal;

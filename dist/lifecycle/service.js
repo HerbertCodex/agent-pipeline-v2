@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync, renameSync, existsSync, readFileSync, rmSync, realpathSync } from 'node:fs';
+import { mkdirSync, writeFileSync, renameSync, existsSync, lstatSync, readFileSync, rmSync, realpathSync } from 'node:fs';
 import { join, resolve, dirname, relative, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Pipeline, summarize } from '../engine/pipeline.js';
@@ -14,6 +14,48 @@ import { inspectRepository } from '../knowledge/repository.js';
 import { buildInventory, diffInventory, inventoryMarkdown } from '../knowledge/inventory.js';
 import { confirmedDecisions, ledgerHash, loadDecisionLedger } from './decisions.js';
 import { assessSecurity, neutralSecurityContext } from '../security/owasp.js';
+const FORBIDDEN_TAG = /^(?:script|iframe|object|embed|link|meta|base|frame|frameset|applet|portal)$/i;
+const FORBIDDEN_ATTRIBUTE = /^(?:src|srcdoc|srcset|data|background|lowsrc|dynsrc|xlink:href)$/i;
+const CSS_URL = /url\(\s*(['"]?)([^'")]*)\1\s*\)/gi;
+/** Types a static preview can carry inline. No SVG: it is a scriptable document, not a picture. */
+const ASSET_TYPES = {
+    '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.otf': 'font/otf',
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+};
+const MAX_ASSET_BYTES = 512 * 1024;
+const MAX_ASSET_TOTAL_BYTES = 2 * 1024 * 1024;
+/**
+ * Elements and their attributes, quote-aware so a `>` inside an attribute value cannot end a tag early.
+ * Text between tags is displayed content: a mockup may legitimately show `src=`, a URL or escaped markup
+ * as text, and the validator must not confuse that with an element that loads something.
+ */
+export function scanTags(html) {
+    const tags = [];
+    for (let i = html.indexOf('<'); i !== -1; i = html.indexOf('<', i)) {
+        const opening = /^<\/?\s*([a-zA-Z][a-zA-Z0-9:._-]*)/.exec(html.slice(i));
+        if (!opening) {
+            i++;
+            continue;
+        } // A bare "<" in prose is text, not an element.
+        let end = i + opening[0].length;
+        for (let quote = ''; end < html.length; end++) {
+            const c = html[end];
+            if (quote) {
+                if (c === quote)
+                    quote = '';
+            }
+            else if (c === '"' || c === "'")
+                quote = c;
+            else if (c === '>')
+                break;
+        }
+        const attributes = [...html.slice(i + opening[0].length, end).matchAll(/([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?/g)]
+            .map(m => ({ name: m[1], value: (m[2] ?? '').replace(/^(['"])([\s\S]*)\1$/, '$2') }));
+        tags.push({ name: opening[1].toLowerCase(), attributes });
+        i = end + 1;
+    }
+    return tags;
+}
 export class Lifecycle {
     pipeline;
     /** Inventories keyed by immutable commit SHA and language profiles; bounded, never invalidated. */
@@ -108,10 +150,83 @@ export class Lifecycle {
         return [...out].slice(0, 20);
     }
     validateDesignMarkup(p) {
-        const dangerous = /<\s*(?:script|iframe|object|embed|link|meta|base)\b|\bon[a-z]+\s*=|javascript:|\b(?:src|srcdoc)\s*=|\bhref\s*=\s*["'](?:https?:|\/\/)/i;
-        for (const screen of p.screens)
-            invariant(!dangerous.test(screen.bodyHtml), 'DESIGN_MARKUP', `Unsafe markup in design screen ${screen.id}`);
-        invariant(!/@import\b|url\s*\(|expression\s*\(|javascript:/i.test(p.css), 'DESIGN_MARKUP', 'Design CSS cannot load external resources or executable content');
+        const declared = new Set(p.assets?.map(a => a.id) ?? []);
+        for (const screen of p.screens) {
+            const where = `design screen ${screen.id}`;
+            for (const tag of scanTags(screen.bodyHtml)) {
+                invariant(!FORBIDDEN_TAG.test(tag.name), 'DESIGN_MARKUP', `Unsafe <${tag.name}> element in ${where}; a mockup is static markup`);
+                for (const attribute of tag.attributes) {
+                    invariant(!/^on/i.test(attribute.name), 'DESIGN_MARKUP', `Event handler ${attribute.name} in ${where}; a mockup carries no behaviour`);
+                    invariant(!FORBIDDEN_ATTRIBUTE.test(attribute.name), 'DESIGN_MARKUP', `Attribute ${attribute.name} in ${where} loads external content; declare a repository file in assets and use url(asset:ID) instead`);
+                    invariant(!/^\s*(?:javascript|data|vbscript):/i.test(attribute.value), 'DESIGN_MARKUP', `Executable URL in ${attribute.name} of ${where}`);
+                    if (/^(?:href|action|formaction|cite|ping)$/i.test(attribute.name))
+                        invariant(!/^\s*(?:https?:|\/\/)/i.test(attribute.value), 'DESIGN_MARKUP', `Remote ${attribute.name} in ${where}; link mockup screens to each other or to # only`);
+                    if (/^style$/i.test(attribute.name))
+                        this.validateDesignUrls(attribute.value, declared, `style attribute of ${where}`);
+                }
+            }
+        }
+        invariant(!/@import\b|expression\s*\(|javascript:/i.test(p.css), 'DESIGN_MARKUP', 'Design CSS cannot import stylesheets or carry executable content');
+        this.validateDesignUrls(p.css, declared, 'design CSS');
+    }
+    /** url() is allowed only as url(asset:ID) for a repository file the proposal declares; the controller inlines it. */
+    validateDesignUrls(css, declared, where) {
+        for (const [, , target] of css.matchAll(CSS_URL)) {
+            const asset = /^asset:(.+)$/i.exec(target.trim())?.[1];
+            invariant(asset, 'DESIGN_MARKUP', `url(${target.slice(0, 80)}) in ${where} is not allowed; reference a declared repository file as url(asset:ID)`);
+            invariant(declared.has(asset), 'DESIGN_MARKUP', `url(asset:${asset}) in ${where} is not declared in assets`);
+        }
+    }
+    /**
+     * Preview copy of the proposal with every url(asset:ID) replaced by an inline data: URI read from the
+     * repository. Previews stay a single self-contained file with no network access, so the mockup can show
+     * the project's real typography instead of a substitute.
+     */
+    inlineDesignAssets(repo, p) {
+        const used = [];
+        const uris = new Map();
+        let total = 0;
+        const load = (id) => {
+            const existing = uris.get(id);
+            if (existing)
+                return existing;
+            const asset = (p.assets ?? []).find(a => a.id === id);
+            invariant(asset, 'DESIGN_ASSET', `Design references undeclared asset ${id}`);
+            const file = resolve(repo, asset.path);
+            invariant(isInside(repo, file) && existsSync(file), 'DESIGN_ASSET', `Design asset ${id} must be an existing repository file`);
+            const stat = lstatSync(file);
+            invariant(stat.isFile(), 'DESIGN_ASSET', `Design asset ${id} must be a regular file, not a symlink or directory`);
+            const type = ASSET_TYPES[(/\.[a-z0-9]+$/i.exec(file)?.[0] ?? '').toLowerCase()];
+            invariant(type, 'DESIGN_ASSET', `Design asset ${id} has an unsupported type; use ${Object.keys(ASSET_TYPES).join(', ')}`);
+            invariant(stat.size <= MAX_ASSET_BYTES, 'DESIGN_ASSET', `Design asset ${id} exceeds ${MAX_ASSET_BYTES} bytes`);
+            total += stat.size;
+            invariant(total <= MAX_ASSET_TOTAL_BYTES, 'DESIGN_ASSET', `Design assets exceed ${MAX_ASSET_TOTAL_BYTES} bytes in total`);
+            const uri = `data:${type};base64,${readFileSync(file).toString('base64')}`;
+            uris.set(id, uri);
+            used.push({ id, path: asset.path, bytes: stat.size });
+            return uri;
+        };
+        const substitute = (text) => text.replace(CSS_URL, (whole, _quote, target) => {
+            const id = /^asset:(.+)$/i.exec(target.trim())?.[1];
+            return id ? `url("${load(id)}")` : whole;
+        });
+        return { css: substitute(p.css), bodyHtml: new Map(p.screens.map(s => [s.id, substitute(s.bodyHtml)])), used };
+    }
+    /**
+     * Visual direction already approved for this repository, if any. Passing it to the design role turns a
+     * full re-derivation into an extension: the mockup keeps one direction across increments and only covers
+     * screens the new spec creates or changes.
+     */
+    establishedDesign(currentId, repo) {
+        const previous = this.store.documents('spec')
+            .filter(d => d.id !== currentId && d.data.repo === repo && d.data.design && d.data.approval && !['rejected'].includes(d.data.status))
+            .sort((a, b) => (b.data.approval?.at ?? 0) - (a.data.approval?.at ?? 0))[0];
+        if (!previous?.data.design)
+            return null;
+        const proposal = previous.data.design.proposal;
+        return { specId: previous.id, specTitle: previous.data.content?.title ?? previous.id, approvedAt: previous.data.approval?.at ?? 0,
+            visualDirection: proposal.visualDirection, decisions: proposal.decisions, avoid: proposal.avoid, assets: proposal.assets ?? [],
+            screens: proposal.screens.map(s => ({ id: s.id, title: s.title, purpose: s.purpose })) };
     }
     validateDesignScopes(p, spec) {
         const tasks = new Set(spec.tasks.map(t => t.id));
@@ -129,40 +244,52 @@ export class Lifecycle {
     async prepareDesignProposal(doc, repositoryIntelligence, signal) {
         const r = doc.data;
         invariant(r.content, 'DESIGN', 'Spec required before design');
+        const established = this.establishedDesign(doc.id, r.repo);
         const context = {
             mode: 'design-proposal', request: r.request, spec: r.content, decisionLedger: r.decisionLedger, repositoryIntelligence, securityContext: r.securityContext,
+            establishedDesign: established,
             instructions: [
                 'Create a concrete visual mockup before implementation. Use the ui-design skill and existing design system/assets if present.',
                 'Avoid generic AI-dashboard aesthetics and unjustified gradients/cards. Explain visual decisions, alternatives and tradeoffs.',
                 'Cover meaningful loading, empty, error, success, focus and responsive states.',
-                'Return static HTML fragments and CSS only; no scripts, remote assets, network URLs or executable content. Even as displayed text, bodyHtml must not contain src=, srcdoc=, on<event>=, javascript: or script/iframe/object/embed/link/meta/base tags, and css must not contain @import or url(.',
+                'Return static HTML fragments and CSS only: no scripts, no behaviour, no network. Elements that load content (script, iframe, object, embed, link, meta, base), event-handler attributes and src/srcset attributes are refused, and so is a remote href or action. Escaped markup shown as text is fine.',
+                'To show the project\'s own typography or images, declare the repository files in assets (id, repository-relative path, reason) and reference them as url(asset:ID) in css. The controller inlines them into the preview; url() with anything else, and @import, are refused.',
                 'Fill taskScopes: list every spec task that implements visual work with the screen ids it needs (an empty screenIds list for a task that only needs the shared direction, such as a shared style base). Do not list tasks without visual work; they receive no design context.',
+                ...(established ? [
+                    `A visual direction is already approved and implemented for this repository (establishedDesign, from spec ${established.specId}). Reuse it: keep its tokens, type scale, spacing, components and grammar. State it briefly in visualDirection as a continuation instead of deriving a new one, and do not restyle existing screens.`,
+                    'Mock only the screens this spec creates or materially changes; name unchanged screens in rationale instead of reproducing them. Put in css only what is new or changed relative to the implemented stylesheet, reusing its existing class names and custom properties.',
+                    'Propose a change to the established direction only if the operator asked for one or the spec makes it unavoidable; then say so explicitly in decisions.',
+                ] : []),
             ],
         };
         const spec = r.content;
         const proposal = await runRole({ store: this.store, documentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills,
             agent: r.config.roles.product ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: designProposalSchema, context, ...(signal ? { signal } : {}),
-            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: value => { this.validateDesignMarkup(value); this.validateDesignScopes(value, spec); return value; } });
+            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: value => { this.validateDesignMarkup(value); this.validateDesignScopes(value, spec); this.inlineDesignAssets(r.repo, value); return value; } });
         const root = resolve(dirname(r.repo), `${basename(r.repo)}-review`, doc.id, 'design');
         invariant(!isInside(r.repo, root) && !isInside(this.store.root, root), 'DESIGN_PATH', 'Design preview must be outside source and operational state');
         rmSync(root, { recursive: true, force: true });
         mkdirSync(root, { recursive: true, mode: 0o700 });
         const screenPaths = [];
-        const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; script-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";
+        const inlined = this.inlineDesignAssets(r.repo, proposal);
+        const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; script-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";
         for (const screen of proposal.screens) {
             const file = join(root, `${screen.id}.html`);
-            const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${this.htmlEscape(screen.title)}</title><style>${proposal.css}</style></head><body>${screen.bodyHtml}</body></html>`;
+            const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${this.htmlEscape(screen.title)}</title><style>${inlined.css}</style></head><body>${inlined.bodyHtml.get(screen.id) ?? screen.bodyHtml}</body></html>`;
             writeFileSync(file, html, { flag: 'wx', mode: 0o600 });
             screenPaths.push(file);
         }
         const indexPath = join(root, 'INDEX.md');
-        const lines = ['# Design review', '', proposal.summary, '', `Rationale: ${proposal.rationale}`, '', `Visual direction: ${proposal.visualDirection}`, '',
+        const lines = ['# Design review', '', proposal.summary, '',
+            ...(established ? [`Continues the visual direction approved for spec ${established.specId} (${established.specTitle}); screens listed below are the ones this spec creates or changes.`, ''] : []),
+            ...(inlined.used.length ? [`Repository assets inlined in the previews: ${inlined.used.map(a => `${a.id} (${a.path})`).join(', ')}`, ''] : []),
+            `Rationale: ${proposal.rationale}`, '', `Visual direction: ${proposal.visualDirection}`, '',
             '## Screens', ...proposal.screens.flatMap((x, i) => [`- ${x.title}: ${screenPaths[i]}`, `  - Purpose: ${x.purpose}`, `  - States: ${x.states.join(', ') || 'default'}`, `  - Responsive: ${x.responsive}`]),
             '', '## Decisions', ...proposal.decisions.map(x => `- ${x.decision}: ${x.rationale}`), '', '## Avoid', ...proposal.avoid.map(x => `- ${x}`), '',
             'Open the HTML files above in a browser before approving the spec.'];
         writeFileSync(indexPath, lines.join('\n') + '\n', { flag: 'wx', mode: 0o600 });
-        r.design = { proposal, hash: hash(proposal), directory: root, indexPath, screenPaths, generatedAt: Date.now() };
-        this.save(doc, 'design.proposed', { hash: r.design.hash, directory: root, indexPath, screenPaths, questions: proposal.questions });
+        r.design = { proposal, hash: hash(proposal), directory: root, indexPath, screenPaths, generatedAt: Date.now(), reusedFrom: established?.specId ?? null, inlinedAssets: inlined.used };
+        this.save(doc, 'design.proposed', { hash: r.design.hash, directory: root, indexPath, screenPaths, questions: proposal.questions, reusedFrom: r.design.reusedFrom, inlinedAssets: inlined.used });
     }
     async product(doc, proposal, signal) {
         const r = doc.data;
