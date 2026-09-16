@@ -1,4 +1,5 @@
 import { guidanceFor, type Guidance } from '../knowledge/catalog.js';
+import { failureExcerpt } from '../engine/diagnostic.js';
 import { claudeCommand, claudeOutput } from './claude.js';
 import type { SkillsConfig } from '../domain/knowledge.js';
 import type { RepositoryIntelligence } from '../knowledge/repository.js';
@@ -55,8 +56,10 @@ export async function runAgent(config: Config, request: AgentRequest, outputRoot
   }
   const result = await runProcess({ command, cwd: request.workspace, env, input,
     timeoutMs: config.agent.timeoutMs, signal, ...hooks });
+  // A provider often reports its refusal (budget, turns, auth, model) on stdout, and may exit with an empty
+  // stderr. Reporting stderr alone turned a real explanation into the message "Agent failed: ".
   invariant(result.status === 'passed', result.status === 'cancelled' ? 'CANCELLED' : 'AGENT',
-    `Agent ${result.status}: ${redact(result.stderr.slice(-4000), env)}`);
+    `Agent ${result.status} (exit ${result.exitCode ?? 'none'}${result.signal ? `, signal ${result.signal}` : ''}) after ${Math.round(result.durationMs)} ms: ${redact(failureExcerpt(`agent ${result.status}`, result.stderr, result.stdout, 4000), env).trim() || '(the provider wrote nothing on stdout or stderr)'}`);
   let output = result.stdout;
   if (outputFile) {
     invariant(lstatSync(outputFile).isFile() && lstatSync(outputFile).size <= 131072, 'AGENT_OUTPUT', 'Agent output exceeds limit');
