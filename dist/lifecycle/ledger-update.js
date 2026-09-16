@@ -56,7 +56,8 @@ export async function applyLedgerUpdate(repoPath, input, expectedHash, reviewer,
     if (commit) {
         await git.exec(plan.repo, ['add', '--', LEDGER_JSON, LEDGER_MD]);
         const body = [`Added: ${plan.added.join(', ')}`, `Superseded: ${plan.superseded.join(', ') || 'none'}`, `Reviewer: ${reviewer}`, `Note: ${note.replace(/\s+/g, ' ').trim()}`].join('\n');
-        await git.exec(plan.repo, ['commit', '--no-verify', '-m', 'chore(decisions): update decision ledger', '-m', body]);
+        // Pathspec: the operator may have unrelated work staged, and a ledger commit must carry the ledger only.
+        await git.exec(plan.repo, ['commit', '--no-verify', '-m', 'chore(decisions): update decision ledger', '-m', body, '--', LEDGER_JSON, LEDGER_MD]);
         commitSha = await git.sha(plan.repo);
     }
     return { ...plan, commitSha };

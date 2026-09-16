@@ -283,6 +283,8 @@ export interface ReviewWorkspace {
     qaPath: string;
     reviewPath: string;
     candidateSha: string;
+    /** Identity of everything the review documents describe: candidate, spec, design, QA and gate results. */
+    bundleHash?: string;
 }
 
 export interface Publication {

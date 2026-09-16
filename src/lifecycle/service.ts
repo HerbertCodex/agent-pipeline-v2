@@ -10,7 +10,7 @@ import type { Document } from '../persistence/store.js';
 import { specSchema, qaSchema, designProposalSchema, validateSpec, assertSpecReadiness, validateQa, specHash, approvalHash, specMarkdown, stricter, reviewer, type SpecRecord, type Spec, type QaRecord, type ScopeAmendment, type DesignProposal } from './contracts.js';
 import { runRole } from './roles.js';
 import { executionCapabilities, validateTaskCapabilities } from './capabilities.js';
-import { matches } from '../policy/policy.js';
+import { matches, requiredApprovals, type ReviewMode } from '../policy/policy.js';
 import { inspectRepository } from '../knowledge/repository.js';
 import { buildInventory, diffInventory, inventoryMarkdown, type Inventory, type InventoryDelta } from '../knowledge/inventory.js';
 import type { LanguageProfile } from '../domain/knowledge.js';
@@ -26,6 +26,10 @@ const ASSET_TYPES: Record<string, string> = {
 };
 const MAX_ASSET_BYTES = 512 * 1024;
 const MAX_ASSET_TOTAL_BYTES = 2 * 1024 * 1024;
+/** Characters of approved mockup (markup plus stylesheet) a task may carry before it degrades to a reference. */
+const DESIGN_CONTEXT_BUDGET = 60000;
+/** Everything the review workspace owns. The design bundle lives beside it and must survive its rebuilds. */
+const REVIEW_ENTRIES = ['candidate', 'candidate.patch', 'QA.md', 'REVIEW.md', 'INVENTORY.md'];
 /**
  * Elements and their attributes, quote-aware so a `>` inside an attribute value cannot end a tag early.
  * Text between tags is displayed content: a mockup may legitimately show `src=`, a URL or escaped markup
@@ -187,7 +191,7 @@ export class Lifecycle {
      * repository. Previews stay a single self-contained file with no network access, so the mockup can show
      * the project's real typography instead of a substitute.
      */
-    private inlineDesignAssets(repo: string, p: DesignProposal): { css: string; bodyHtml: Map<string, string>; used: { id: string; path: string; bytes: number }[] } {
+    private inlineDesignAssets(repo: string, sha: string, tracked: ReadonlySet<string>, p: DesignProposal): { css: string; bodyHtml: Map<string, string>; used: { id: string; path: string; bytes: number }[] } {
         const used: { id: string; path: string; bytes: number }[] = [];
         const uris = new Map<string, string>();
         let total = 0;
@@ -198,6 +202,10 @@ export class Lifecycle {
             invariant(asset, 'DESIGN_ASSET', `Design references undeclared asset ${id}`);
             const file = resolve(repo, asset.path);
             invariant(isInside(repo, file) && existsSync(file), 'DESIGN_ASSET', `Design asset ${id} must be an existing repository file`);
+            // Lexical containment is not physical containment: a directory of the repository can itself be a
+            // symlink pointing outside it. Only the resolved path decides, and only tracked content is read.
+            invariant(isInside(realpathSync(repo), realpathSync(file)), 'DESIGN_ASSET', `Design asset ${id} resolves outside the repository`);
+            invariant(tracked.has(relative(realpathSync(repo), realpathSync(file))), 'DESIGN_ASSET', `Design asset ${id} is not a file tracked at the reviewed commit ${sha.slice(0, 12)}`);
             const stat = lstatSync(file);
             invariant(stat.isFile(), 'DESIGN_ASSET', `Design asset ${id} must be a regular file, not a symlink or directory`);
             const type = ASSET_TYPES[(/\.[a-z0-9]+$/i.exec(file)?.[0] ?? '').toLowerCase()];
@@ -215,6 +223,11 @@ export class Lifecycle {
             return id ? `url("${load(id)}")` : whole;
         });
         return { css: substitute(p.css), bodyHtml: new Map(p.screens.map(s => [s.id, substitute(s.bodyHtml)])), used };
+    }
+    /** Files tracked at one commit: a design asset must be repository content at the reviewed commit, not whatever the working tree happens to hold. */
+    private async trackedPaths(repo: string, sha: string, signal?: AbortSignal): Promise<ReadonlySet<string>> {
+        const listing = await new Git(signal).exec(repo, ['ls-tree', '-r', '--name-only', '-z', sha]);
+        return new Set(listing.split('\0').filter(Boolean));
     }
     /**
      * Visual direction already approved for this repository, if any. Passing it to the design role turns a
@@ -246,6 +259,7 @@ export class Lifecycle {
         const r = doc.data;
         invariant(r.content, 'DESIGN', 'Spec required before design');
         const established = this.establishedDesign(doc.id, r.repo);
+        const tracked = await this.trackedPaths(r.repo, r.baseSha, signal);
         const context = {
             mode: 'design-proposal', request: r.request, spec: r.content, decisionLedger: r.decisionLedger, repositoryIntelligence, securityContext: r.securityContext,
             establishedDesign: established,
@@ -266,13 +280,13 @@ export class Lifecycle {
         const spec = r.content;
         const proposal = await runRole({ store: this.store, documentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills,
             agent: r.config.roles.product ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: designProposalSchema, context, ...(signal ? { signal } : {}),
-            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: value => { this.validateDesignMarkup(value); this.validateDesignScopes(value, spec); this.inlineDesignAssets(r.repo, value); return value; } });
+            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: value => { this.validateDesignMarkup(value); this.validateDesignScopes(value, spec); this.inlineDesignAssets(r.repo, r.baseSha, tracked, value); return value; } });
         const root = resolve(dirname(r.repo), `${basename(r.repo)}-review`, doc.id, 'design');
         invariant(!isInside(r.repo, root) && !isInside(this.store.root, root), 'DESIGN_PATH', 'Design preview must be outside source and operational state');
         rmSync(root, { recursive: true, force: true });
         mkdirSync(root, { recursive: true, mode: 0o700 });
         const screenPaths: string[] = [];
-        const inlined = this.inlineDesignAssets(r.repo, proposal);
+        const inlined = this.inlineDesignAssets(r.repo, r.baseSha, tracked, proposal);
         const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; script-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";
         for (const screen of proposal.screens) {
             const file = join(root, `${screen.id}.html`);
@@ -366,18 +380,30 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         }
     }
     /** Design context scoped to one task: legacy proposals without taskScopes keep the whole design. */
-    private designContextFor(proposal: DesignProposal, designHash: string, taskId: string) {
+    private designContextFor(design: NonNullable<SpecRecord['design']>, taskId: string) {
+        const proposal = design.proposal; const designHash = design.hash;
         const scope = proposal.taskScopes?.length ? proposal.taskScopes.find(x => x.taskId === taskId) : undefined;
         if (proposal.taskScopes?.length && !scope)
             return { hash: designHash, summary: proposal.summary, scope: 'none', note: 'This task has no visual work in the approved design; keep the existing look and do not restyle.' };
         const screens = proposal.screens.filter(x => !scope || scope.screenIds.includes(x.id));
+        const previewOf = (id: string): string | null => design.screenPaths.find(p => basename(p) === `${id}.html`) ?? null;
+        // The markup and stylesheet the operator approved, not a paraphrase of them. Bounded: a mockup far
+        // over budget degrades to its description plus the preview path rather than breaking the task.
+        const full = screens.map(x => ({ ...x, previewPath: previewOf(x.id) }));
+        const weight = JSON.stringify(full).length + proposal.css.length;
+        const within = weight <= DESIGN_CONTEXT_BUDGET;
         return { hash: designHash, summary: proposal.summary, visualDirection: proposal.visualDirection, implementationBrief: proposal.implementationBrief, decisions: proposal.decisions, avoid: proposal.avoid,
-            scope: scope ? 'task' : 'all', screens: screens.map(x => ({ id: x.id, title: x.title, purpose: x.purpose, states: x.states, responsive: x.responsive })) };
+            scope: scope ? 'task' : 'all',
+            ...(within ? { css: proposal.css } : { cssOmitted: `The approved stylesheet is ${proposal.css.length} characters; open the preview files instead.` }),
+            screens: full.map(x => within
+                ? { id: x.id, title: x.title, purpose: x.purpose, states: x.states, responsive: x.responsive, previewPath: x.previewPath, bodyHtml: x.bodyHtml }
+                : { id: x.id, title: x.title, purpose: x.purpose, states: x.states, responsive: x.responsive, previewPath: x.previewPath }),
+            note: 'This is the mockup the operator approved. Reproduce its structure, classes and states in the real stack; it is a reference, not a file to copy verbatim.' };
     }
     private makeTask(r: SpecRecord, t: Spec['tasks'][number]): Task {
         const spec = this.approved(r);
         const acceptance = spec.acceptance.filter(a => t.acceptanceIds.includes(a.id));
-        const design = r.design ? this.designContextFor(r.design.proposal, r.design.hash, t.id) : null;
+        const design = r.design ? this.designContextFor(r.design, t.id) : null;
         const decisionIds = new Set(spec.decisionCoverage.filter(c => c.acceptanceIds.some(id => t.acceptanceIds.includes(id))).map(c => c.decisionId));
         const confirmedProjectDecisions = confirmedDecisions(r.decisionLedger).filter(d => decisionIds.has(d.id));
         const resolvedProjectDecisions = spec.decisionResolutions.filter(d=>decisionIds.has(d.decisionId)).map(d=>({id:d.decisionId,subject:r.decisionLedger.decisions.find(x=>x.id===d.decisionId)?.subject ?? d.decisionId,value:d.value,status:'confirmed-via-product',source:'operator',sourceQuote:d.sourceQuote,rationale:d.rationale}));
@@ -531,14 +557,24 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                     r.finalRunId = null;
                     r.qa = null;
                     r.delivery = null;
+                    r.review = null; // The review described the previous candidate; it is superseded, not stale forever.
                     this.save(doc, 'workflow.qa_repair_completed', { runId: repaired.id, candidateSha: r.currentSha });
                 }
                 if (!r.finalRunId) {
                     // One task already validates exactly the complete candidate: do not pay for the same gates twice.
                     const only = r.attempts.length === 1 ? this.pipeline.store.get(r.attempts[0]!.runId) : null;
-                    if (only && only.task.reviewRequired && ['ready', 'awaiting_review'].includes(only.state) && only.baseSha === r.baseSha && only.candidateSha === r.currentSha) {
+                    // Reuse is about proof, not about human review: the run must already carry every
+                    // configured gate on this exact candidate, and reusing it must not lower the number of
+                    // approvals the integration would have required.
+                    const proven = (run: Run): boolean => {
+                        const seen = new Map(run.receipts.map(x => [x.gateId, x.status]));
+                        return r.config.gates.every(g => ['passed', 'cached'].includes(seen.get(g.id) ?? ''));
+                    };
+                    const reviewPreserved = (run: Run): boolean =>
+                        run.task.reviewRequired || requiredApprovals(run.risk?.lane ?? 'high', r.config.workflow.reviewMode as ReviewMode) === 0;
+                    if (only && ['ready', 'awaiting_review'].includes(only.state) && only.baseSha === r.baseSha && only.candidateSha === r.currentSha && proven(only) && reviewPreserved(only)) {
                         r.finalRunId = only.id;
-                        this.save(doc, 'integration.reused', { runId: only.id });
+                        this.save(doc, 'integration.reused', { runId: only.id, gates: only.receipts.map(x => x.gateId), reviewRequired: only.task.reviewRequired });
                     }
                     else {
                         const finalConfig = { ...r.config, maxRepairAttempts: 0, gates: r.config.gates.map(g => ({ ...g, mandatory: true })) };
@@ -561,7 +597,10 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                 }
                 r.activeRunId = null;
                 const evidenceHash = await this.pipeline.assertValidated(final.id);
-        invariant(!r.review || r.review.candidateSha === final.candidateSha, 'REVIEW_STALE', 'Review workspace does not match the current candidate');
+                if (r.review && r.review.candidateSha !== final.candidateSha) {
+                    const superseded = r.review; r.review = null;
+                    this.save(doc, 'workflow.review_superseded', { previousCandidateSha: superseded.candidateSha, candidateSha: final.candidateSha });
+                }
                 const needsQa = r.config.workflow.qaLanes.includes(final.risk!.lane);
                 if (needsQa && (!r.qa || r.qa.evidenceHash !== evidenceHash || r.qa.report.candidateSha !== final.candidateSha || r.qa.specHash !== r.contentHash)) {
                     r.qa = null;
@@ -576,7 +615,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                     invariant(Buffer.byteLength(diff) <= maxDiff, 'QA_CONTEXT', `QA diff exceeds limits.maxQaDiffBytes (${maxDiff}); use an explicit external review, never a truncated review`);
                     const inventoryDelta = await this.inventoryDelta(r, final.candidateSha!, signal);
                     this.save(doc, 'qa.inventory_delta', { added: inventoryDelta.added.length, removed: inventoryDelta.removed.length, possibleDuplicates: inventoryDelta.possibleDuplicates });
-                    const raw = await runRole({ store: this.store, documentId: id, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, agent: r.config.roles.qa ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: qaSchema, context: { diff, spec: r.content, decisionLedger: r.decisionLedger, securityContext:r.securityContext, baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] }, signal,
+                    const raw = await runRole({ store: this.store, documentId: id, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, agent: r.config.roles.qa ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: qaSchema, context: { diff, spec: r.content, decisionLedger: r.decisionLedger, securityContext:r.securityContext, approvedDesign: this.qaDesignContext(r), baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] }, signal,
                         maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: report => validateQa(report, spec, final.candidateSha!, r.decisionLedger) });
                     r.qa = { report: raw, specHash: r.contentHash!, evidenceHash, at: Date.now(), source: 'agent' };
                     this.save(doc, 'qa.completed', { qa: r.qa });
@@ -636,19 +675,41 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         if (q.observations.length) lines.push('','## Observations',...q.observations.map(x=>`- ${x}`));
         return lines.join('\n')+'\n';
     }
+    /** The approved mockup QA compares the candidate against; bounded like the Implementer's copy. */
+    private qaDesignContext(r: SpecRecord) {
+        if (!r.design) return null;
+        const p = r.design.proposal;
+        const within = JSON.stringify(p.screens).length + p.css.length <= DESIGN_CONTEXT_BUDGET;
+        return { hash: r.design.hash, summary: p.summary, visualDirection: p.visualDirection, decisions: p.decisions, avoid: p.avoid,
+            indexPath: r.design.indexPath, screenPaths: r.design.screenPaths,
+            ...(within ? { css: p.css } : {}),
+            screens: p.screens.map(x => within
+                ? { id: x.id, title: x.title, purpose: x.purpose, states: x.states, responsive: x.responsive, bodyHtml: x.bodyHtml }
+                : { id: x.id, title: x.title, purpose: x.purpose, states: x.states, responsive: x.responsive }),
+            note: 'The operator approved this mockup with the spec. Report a visible departure from it as a finding; do not demand pixel equality.' };
+    }
     private async prepareReviewWorkspace(doc: Document<SpecRecord>, final: Run): Promise<void> {
         const r=doc.data; invariant(final.candidateSha,'CANDIDATE','Review candidate is missing');
         const root=resolve(dirname(r.repo),`${basename(r.repo)}-review`,doc.id); const candidate=join(root,'candidate');
         invariant(!isInside(r.repo,root) && !isInside(this.store.root,root),'REVIEW_PATH','Review workspace must be outside source and operational state');
         const git=new Git();
-        if (r.review?.candidateSha === final.candidateSha && existsSync(r.review.candidateDirectory)) {
+        // The documents describe a candidate, a spec, a design and a QA report: reuse them only when all of
+        // those are unchanged. Keying on the candidate alone left QA.md showing a replaced report.
+        const bundleHash = hash({ candidate: final.candidateSha, spec: r.contentHash, design: r.design?.hash ?? null,
+            qa: r.qa ? hash(r.qa) : null, receipts: final.receipts.map(x => ({ gateId: x.gateId, status: x.status })) });
+        if (r.review?.bundleHash === bundleHash && existsSync(r.review.candidateDirectory)) {
             await git.clean(r.review.candidateDirectory,final.candidateSha); return;
         }
-        if (existsSync(candidate)) {
+        const sameCandidate = r.review?.candidateSha === final.candidateSha && existsSync(candidate);
+        if (existsSync(candidate) && !sameCandidate) {
             try { await git.removeWorkspace(r.repo,candidate,root); } catch { /* stale review material is removed below; never trusted */ }
         }
-        rmSync(root,{recursive:true,force:true}); mkdirSync(root,{recursive:true,mode:0o700});
-        await git.workspace(r.repo,candidate,final.candidateSha);
+        mkdirSync(root,{recursive:true,mode:0o700});
+        // Never the whole directory: the approved design bundle is its sibling, and the operator is told to
+        // open it before approving. Only the entries this workspace owns are rebuilt.
+        for (const entry of REVIEW_ENTRIES) if (!(sameCandidate && entry === 'candidate')) rmSync(join(root,entry),{recursive:true,force:true});
+        if (sameCandidate) await git.clean(candidate,final.candidateSha);
+        else await git.workspace(r.repo,candidate,final.candidateSha);
         const patchPath=join(root,'candidate.patch'); const qaPath=join(root,'QA.md'); const reviewPath=join(root,'REVIEW.md'); const inventoryPath=join(root,'INVENTORY.md');
         const patch=await git.patch(r.repo,r.baseSha,final.candidateSha);
         writeFileSync(patchPath,patch,{mode:0o600}); writeFileSync(qaPath,this.qaMarkdown(r),{mode:0o600});
@@ -663,9 +724,9 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         ].join('\n');
         const gateLines=final.receipts.map(x=>`- ${x.gateId}: ${x.status}`).join('\n');
         const securityLines = r.content?.security.requirements.length ? r.content.security.requirements.map(x=>`- ${x.id}: ${x.title} [${x.owaspTopics.join(', ')}]`).join('\n') : '- none';
-        const text=[`# Candidate review`,``,`Candidate: ${final.candidateSha}`,`Risk: ${final.risk?.lane ?? 'unknown'}`,`Review mode: ${r.config.workflow.reviewMode}`,`Security minimum: ${r.securityContext.minimumLane}`,`OWASP topics: ${r.securityContext.topics.map(x=>x.id).join(', ') || 'none'}`,``,`Open this directory in your editor:`,``,candidate,``,`Patch: ${patchPath}`,`QA: ${qaPath}`,`Inventory: ${inventoryPath}`,``,`## Gates`,gateLines || '- none',``,`## Public surface changes`,surfaceLines,``,`## Security requirements`,securityLines,''].join('\n');
+        const text=[`# Candidate review`,``,`Candidate: ${final.candidateSha}`,`Risk: ${final.risk?.lane ?? 'unknown'}`,`Review mode: ${r.config.workflow.reviewMode}`,`Security minimum: ${r.securityContext.minimumLane}`,`OWASP topics: ${r.securityContext.topics.map(x=>x.id).join(', ') || 'none'}`,``,`Open this directory in your editor:`,``,candidate,``,`Patch: ${patchPath}`,`QA: ${qaPath}`,`Inventory: ${inventoryPath}`,...(r.design ? [`Approved design: ${r.design.indexPath}`,...r.design.screenPaths.map(p=>`  - ${p}`)] : []),``,`## Gates`,gateLines || '- none',``,`## Public surface changes`,surfaceLines,``,`## Security requirements`,securityLines,''].join('\n');
         writeFileSync(reviewPath,text,{mode:0o600});
-        r.review={directory:root,candidateDirectory:candidate,patchPath,qaPath,reviewPath,candidateSha:final.candidateSha};
+        r.review={directory:root,candidateDirectory:candidate,patchPath,qaPath,reviewPath,candidateSha:final.candidateSha,bundleHash};
         this.save(doc,'workflow.review_workspace_ready',{review:r.review});
     }
 
@@ -958,6 +1019,22 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             next = 'No automatic action; create a new spec for additional changes.';
         else if (r.error?.code === 'QA_REQUIRED')
             next = `apv2 spec qa ${doc.id} --file /path/to/qa-report.json`;
+        // A blocked spec needs the action that lifts its blocker. Recommending `run` again made the operator
+        // replay a command that reproduces the same stop, with the amendment id left for them to find.
+        else if (r.error?.code === 'SCOPE_AMENDMENT_REQUIRED') {
+            const pending = r.scopeAmendments.filter(a => a.status === 'pending').at(-1);
+            next = pending
+                ? `apv2 spec amend ${doc.id} --amendment ${pending.id} --approve   (then apv2 spec run ${doc.id}; reject the amendment instead if the paths are not in scope)`
+                : `Inspect the blocked run: the amendment it required is no longer pending.`;
+        }
+        else if (r.error?.code === 'QA_REJECTED')
+            next = `Read the QA findings above, then create a follow-up spec: the automatic repair budget is spent (apv2 spec draft --repo ${r.repo} --request "...").`;
+        else if (r.error?.code === 'CANCELLED' || r.error?.code === 'LOCKED')
+            next = `apv2 spec recover ${doc.id} --confirm-stopped   (only after checking no controller or agent process is still alive)`;
+        else if (r.error?.code === 'TASK_FAILED' || r.error?.code === 'REPAIR_NO_CHANGE')
+            next = `apv2 spec retry ${doc.id} --confirm   (authorizes exactly one new attempt of the failed task)`;
+        else if (r.status === 'blocked' && r.error)
+            next = `Resolve ${r.error.code} before running again: ${r.error.message.slice(0, 200)}`;
         else
             next = `apv2 spec run ${doc.id}`;
         return { id: doc.id, revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash:r.contentHash, security:{contextHash:r.securityContextHash ?? null,minimumLane:r.securityContext?.minimumLane ?? null,requiresThreatModel:r.securityContext?.requiresThreatModel ?? null,topics:r.securityContext?.topics.map(x=>x.id) ?? [],requirements:r.content?.security?.requirements.map(x=>x.id) ?? []}, design:r.design ? {hash:r.design.hash,directory:r.design.directory,indexPath:r.design.indexPath,summary:r.design.proposal.summary,questions:r.design.proposal.questions} : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };

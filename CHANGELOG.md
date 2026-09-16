@@ -2,6 +2,18 @@
 
 ## Non publié
 
+Corrections issues d'un audit externe qui a rejoué chaque défaut sur l'archive `de9d782`. Une suite verte ne couvrait aucun de ces parcours.
+
+- **La maquette approuvée atteint enfin l'implémentation.** L'Implementer reçoit le markup et la feuille de style que l'opérateur a approuvés (borné : au-delà du budget, il reçoit la description et le chemin de l'aperçu), plus le chemin du fichier d'aperçu de ses écrans. QA reçoit la maquette et doit signaler un écart visible comme constat. Auparavant les deux ne recevaient qu'une paraphrase, et QA rien du tout.
+- **Le dossier de revue ne détruit plus les maquettes approuvées.** Il ne reconstruit que ce qui lui appartient (worktree du candidat, patch, REVIEW.md, QA.md, INVENTORY.md) au lieu d'effacer le répertoire parent, qui contient le bundle design. `REVIEW.md` pointe désormais vers les aperçus.
+- **Un nouveau candidat remplace la revue précédente au lieu de bloquer la spec.** Après une réparation QA, `r.review` est explicitement invalidé ; `REVIEW_STALE` ne peut plus enfermer une spec dans un blocage définitif.
+- **Les documents de revue suivent ce qu'ils décrivent.** L'identité du dossier couvre candidat, spec, design, rapport QA et résultats de gates : un rapport QA remplacé sur le même candidat régénère `QA.md` sans reconstruire le worktree.
+- **Une revue sémantique qui échoue ne perd plus la proposition Setup.** Elle est persistée avant la revue, et l'échec est enregistré avec son code et son message au lieu de laisser un document « pending ».
+- **Un commit du Decision Ledger ne peut plus emporter le travail indexé de l'opérateur** : le commit porte un pathspec limité aux deux fichiers du ledger.
+- **Une ressource de maquette ne peut plus être lue hors du dépôt.** Le chemin est résolu physiquement (un répertoire du dépôt peut être un lien symbolique) et doit être un fichier suivi par Git au commit de référence.
+- **L'action suivante d'une spec bloquée lève son blocage** : amendement de périmètre avec son identifiant, `retry`, `recover`, suivi explicite après QA rejetée, au lieu de rejouer `spec run` qui reproduit le même arrêt.
+- **La réutilisation d'une validation dépend de la preuve, pas de la revue humaine** : une spec à une tâche réutilise sa validation quand tous les gates configurés sont passés sur le même candidat et qu'aucune approbation n'est perdue. Quand la voie exige des approbations, la validation d'intégration reste exécutée — c'est délibéré.
+
 - Les règles structurelles d'une spec (au moins une tâche, chaque critère rattaché à une tâche) s'appliquent dès qu'une spec est produite sans question, au lieu d'être vérifiées seulement à l'approbation. Constaté en pilotant un vrai projet : un critère de non-régression rattaché à aucune tâche n'était signalé qu'au moment de l'approbation, 16 minutes après le début. Le message nomme désormais les critères orphelins, et `SPEC_COVERAGE` étant réparable, la boucle de réparation corrige le cas en un appel. La règle ne s'applique qu'à une sortie de rôle fraîche : un document déjà stocké reste lisible, quelle que soit la règle ajoutée après lui.
 - `git config --get` reçoit `HOME` (et les variables de configuration documentées par Git) : l'identité de l'opérateur vit presque toujours dans le `~/.gitconfig` global, donc le repli sur `user.name` ne fonctionnait jamais et `--reviewer` était obligatoire. Les commandes Git qui écrivent gardent leur environnement minimal.
 

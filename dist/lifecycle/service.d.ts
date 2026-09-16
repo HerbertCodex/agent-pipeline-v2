@@ -48,6 +48,8 @@ export declare class Lifecycle {
      * the project's real typography instead of a substitute.
      */
     private inlineDesignAssets;
+    /** Files tracked at one commit: a design asset must be repository content at the reviewed commit, not whatever the working tree happens to hold. */
+    private trackedPaths;
     /**
      * Visual direction already approved for this repository, if any. Passing it to the design role turns a
      * full re-derivation into an extension: the mockup keeps one direction across increments and only covers
@@ -70,6 +72,8 @@ export declare class Lifecycle {
     approveScopeAmendment(id: string, amendmentId: string, actor: string, note: string): Promise<Document<SpecRecord>>;
     run(id: string, options?: WorkflowOptions): Promise<Document<SpecRecord>>;
     private qaMarkdown;
+    /** The approved mockup QA compares the candidate against; bounded like the Implementer's copy. */
+    private qaDesignContext;
     private prepareReviewWorkspace;
     private reviewable;
     /** Publication adapters still acquire the lifecycle lease and require explicit consent. */

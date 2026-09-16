@@ -6,7 +6,7 @@ import { readRole } from '../knowledge/catalog.js';
 import { claudeCommand, claudeOutput } from '../adapters/claude.js';
 import { strictSchema } from '../adapters/structured-schema.js';
 import { agentSchema } from '../domain/contracts.js';
-import { invariant } from '../domain/errors.js';
+import { invariant, PipelineError } from '../domain/errors.js';
 import { hash } from '../domain/hash.js';
 import { s, parseJson } from '../domain/schema.js';
 import { environment, redact, runProcess } from '../execution/process.js';
@@ -173,11 +173,28 @@ async function createProposal(store, doc, work, request, latestRefinement, signa
     const preliminarySecurity = assessSecurity({ text: request, projectType: previous?.projectType ?? 'unknown', files: [] });
     const proposal = await runStructuredProvider(store, doc.id, work, doc.data.provider, 'agent-pipeline/bootstrap-v2', bootstrapInstructions, { request, previousProposal: previous, securityContext: preliminarySecurity }, bootstrapProposalSchema, signal, raw => { const valid = validateProposal(raw, request, previous ?? undefined); if (previous && latestRefinement !== undefined)
         preserveOperatorDecisions(previous, valid, latestRefinement); return valid; });
+    // Checkpoint: the Setup proposal is expensive and already valid. Persisting it before the semantic review
+    // means a review failure costs the review, not the proposal — and leaves something to inspect.
+    doc.data.proposal = proposal;
+    doc.data.semanticReview = structuredClone(emptyReview);
+    doc.data.hash = '';
+    store.saveDocument(doc, 'bootstrap.proposal_checkpoint', { revision: doc.data.revision, files: proposal.files.map(f => f.path), questions: proposal.questions });
     const ledger = { schemaVersion: 1, decisions: proposal.decisions };
     const semanticReview = await runStructuredProvider(store, doc.id, work, doc.data.provider, 'agent-pipeline/bootstrap-review-v1', semanticReviewInstructions, { request, decisionLedger: ledger, materialDecisionIds: ledger.decisions.filter(d => ['confirmed', 'ambiguous'].includes(d.status)).map(d => d.id), proposal, securityContext: assessSecurity({ text: request, projectType: proposal.projectType, files: proposal.files.map(f => f.path) }) }, semanticReviewSchema, signal, review => validateSemanticReview(ledger, review));
-    doc.data.proposal = proposal;
     doc.data.semanticReview = semanticReview;
     doc.data.hash = semanticReview.verdict === 'pass' ? bootstrapHash(doc.data) : '';
+}
+/** Persists why a bootstrap round ended, so a failure leaves a diagnosis instead of a silent placeholder. */
+function recordProposalFailure(store, doc, error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof PipelineError ? error.code : 'BOOTSTRAP';
+    doc.data.hash = '';
+    doc.data.semanticReview = { ...structuredClone(emptyReview), summary: `Bootstrap round failed: ${code}`,
+        findings: [{ severity: 'blocker', description: message.slice(0, 4000) }] };
+    try {
+        store.saveDocument(doc, 'bootstrap.failed', { code, message: message.slice(0, 4000), revision: doc.data.revision, hasProposal: doc.data.proposal.summary !== 'pending' });
+    }
+    catch { /* A failure to record must not replace the original error. */ }
 }
 export function bootstrapHash(plan) {
     return hash({ directory: plan.directory, request: plan.request, revision: plan.revision, provider: plan.provider, reviewMode: plan.reviewMode, proposal: plan.proposal, semanticReview: plan.semanticReview });
@@ -195,7 +212,7 @@ export async function planBootstrap(store, path, request, provider, signal, revi
     const work = join(store.root, 'bootstrap', randomUUID());
     mkdirSync(work, { recursive: true, mode: 0o700 });
     try {
-        await createProposal(store, doc, work, request, undefined, signal);
+        await createProposal(store, doc, work, request, undefined, signal).catch(error => { recordProposalFailure(store, doc, error); throw error; });
         store.saveDocument(doc, 'bootstrap.proposed', { revision: doc.data.revision, hash: doc.data.hash, files: doc.data.proposal.files.map(f => f.path), questions: doc.data.proposal.questions, productQuestions: doc.data.proposal.productQuestions, deferredQuestions: doc.data.proposal.deferredQuestions, semanticVerdict: doc.data.semanticReview.verdict });
         return doc;
     }
@@ -218,7 +235,7 @@ export async function refineBootstrap(store, id, request, signal) {
         doc.data.hash = '';
         doc.data.semanticReview = structuredClone(emptyReview);
         store.saveDocument(doc, 'bootstrap.refinement_requested', { revision: doc.data.revision, request });
-        await createProposal(store, doc, work, doc.data.request, request, signal);
+        await createProposal(store, doc, work, doc.data.request, request, signal).catch(error => { recordProposalFailure(store, doc, error); throw error; });
         store.saveDocument(doc, 'bootstrap.proposed', { revision: doc.data.revision, hash: doc.data.hash, questions: doc.data.proposal.questions, productQuestions: doc.data.proposal.productQuestions, deferredQuestions: doc.data.proposal.deferredQuestions, semanticVerdict: doc.data.semanticReview.verdict });
         return doc;
     }
