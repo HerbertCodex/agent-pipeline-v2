@@ -18,7 +18,7 @@ Cette validation porte sur le moteur alpha.8. Cette version conserve le Decision
 - `npm run typecheck` : réussi ;
 - `npm run build` : réussi ;
 - `node dist/cli.js --version` : `2.0.0-alpha.8` ;
-- `npm run check` : **305/305 tests**, 0 échec, 0 ignoré.
+- `npm run check` : **350/350 tests**, 0 échec, 0 ignoré (suite exécutée sur l'arbre de travail, pas sur une archive publiée).
 
 Log complet : `validation/alpha.8/check.log`.
 
@@ -90,4 +90,5 @@ Les preuves exécutables de la livraison courante sont regroupées sous `validat
   - 1 événement `role.output_repair` (code `SCHEMA`) ;
   - la seconde réponse contenait le jeton aléatoire `REPAIR-888ee267` cité uniquement dans l'erreur du contrôleur ;
   - `successfulPilot: true` en 16,7 s.
+- Limite de preuve : les événements bruts de ce pilote ne sont pas conservés dans `validation/`. Ce paragraphe est un compte rendu, pas une preuve rejouable ; seul un nouveau `npm run pilot:repair` le reproduit.
 - Portée : prouve que la boucle de réparation transmet l'erreur au modèle réel et que ce modèle corrige sa réponse, pour ce fournisseur à cette date. Aucune spec réelle, aucun push, merge ou déploiement. Le pilote complet `provider-pilot.mjs` n'a pas été relancé pour ces changements.

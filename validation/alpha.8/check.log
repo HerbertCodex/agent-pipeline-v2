@@ -1,1886 +1,366 @@
-
-> agent-pipeline-v2@2.0.0-alpha.8 check
-> npm run typecheck && npm run test
-
-
-> agent-pipeline-v2@2.0.0-alpha.8 typecheck
-> tsc -p tsconfig.json --noEmit
-
-
-> agent-pipeline-v2@2.0.0-alpha.8 test
-> npm run build && node --test --test-concurrency=4 test/*.test.mjs
-
-
-> agent-pipeline-v2@2.0.0-alpha.8 build
-> tsc -p tsconfig.json
-
-TAP version 13
-# (node:32163) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: empty Git repository is planned without writes, then committed and handed to onboard
-ok 1 - empty Git repository is planned without writes, then committed and handed to onboard
-  ---
-  duration_ms: 110.838407
-  type: 'test'
-  ...
-# Subtest: bootstrap accepts the Git repository root through a symlinked ancestor
-ok 2 - bootstrap accepts the Git repository root through a symlinked ancestor
-  ---
-  duration_ms: 127.144199
-  type: 'test'
-  ...
-# Subtest: bootstrap apply requires explicit commit and creates immutable base + onboarding plan
-ok 3 - bootstrap apply requires explicit commit and creates immutable base + onboarding plan
-  ---
-  duration_ms: 176.869818
-  type: 'test'
-  ...
-# Subtest: bootstrap rejects .git paths and non-empty targets
-ok 4 - bootstrap rejects .git paths and non-empty targets
-  ---
-  duration_ms: 12.63189
-  type: 'test'
-  ...
-# Subtest: semantic review blocks a schema-valid proposal that contradicts an operator decision
-ok 5 - semantic review blocks a schema-valid proposal that contradicts an operator decision
-  ---
-  duration_ms: 102.971066
-  type: 'test'
-  ...
-# Subtest: bootstrap refine preserves confirmed operator decisions unless latest refinement explicitly supersedes them
-ok 6 - bootstrap refine preserves confirmed operator decisions unless latest refinement explicitly supersedes them
-  ---
-  duration_ms: 173.812564
-  type: 'test'
-  ...
-# Subtest: approval-with-exception wording cannot be silently converted into a confirmed decision
-ok 7 - approval-with-exception wording cannot be silently converted into a confirmed decision
-  ---
-  duration_ms: 56.973499
-  type: 'test'
-  ...
-# Subtest: ambiguous Product decision may cross neutral bootstrap, then requires explicit superseding clarification
-ok 8 - ambiguous Product decision may cross neutral bootstrap, then requires explicit superseding clarification
-  ---
-  duration_ms: 167.050693
-  type: 'test'
-  ...
-# (node:32164) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: Claude argv explicitly limits tools (readOnly=true)
-ok 9 - Claude argv explicitly limits tools (readOnly=true)
-  ---
-  duration_ms: 1.216909
-  type: 'test'
-  ...
-# Subtest: Claude argv explicitly limits tools (readOnly=false)
-ok 10 - Claude argv explicitly limits tools (readOnly=false)
-  ---
-  duration_ms: 0.186863
-  type: 'test'
-  ...
-# Subtest: Claude extracts structured_output, not prose or an embedded claim
-ok 11 - Claude extracts structured_output, not prose or an embedded claim
-  ---
-  duration_ms: 1.433396
-  type: 'test'
-  ...
-# Subtest: native config rejects free arguments and invalid budget/turn count
-ok 12 - native config rejects free arguments and invalid budget/turn count
-  ---
-  duration_ms: 0.742952
-  type: 'test'
-  ...
-# Subtest: Claude implementation contract modifies a real worktree and receives skills
-ok 13 - Claude implementation contract modifies a real worktree and receives skills
-  ---
-  duration_ms: 737.843333
-  type: 'test'
-  ...
-# Subtest: Claude error cannot become a successful implementation
-ok 14 - Claude error cannot become a successful implementation
-  ---
-  duration_ms: 129.048506
-  type: 'test'
-  ...
-# Subtest: Claude denial cannot become a successful implementation
-ok 15 - Claude denial cannot become a successful implementation
-  ---
-  duration_ms: 122.363
-  type: 'test'
-  ...
-# Subtest: Claude prose cannot become a successful implementation
-ok 16 - Claude prose cannot become a successful implementation
-  ---
-  duration_ms: 113.739731
-  type: 'test'
-  ...
-# Subtest: Claude claims cannot become a successful implementation
-ok 17 - Claude claims cannot become a successful implementation
-  ---
-  duration_ms: 130.416192
-  type: 'test'
-  ...
-# Subtest: full lifecycle with claude protocol double, Product and QA repair
-ok 18 - full lifecycle with claude protocol double, Product and QA repair
-  ---
-  duration_ms: 4235.289497
-  type: 'test'
-  ...
-# Subtest: full lifecycle with codex protocol double, Product and QA repair
-ok 19 - full lifecycle with codex protocol double, Product and QA repair
-  ---
-  duration_ms: 4172.125681
-  type: 'test'
-  ...
-# (node:32165) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: task parsing supplies defaults and clones arrays
-ok 20 - task parsing supplies defaults and clones arrays
-  ---
-  duration_ms: 1.125901
-  type: 'test'
-  ...
-# Subtest: task refuses empty description
-ok 21 - task refuses empty description
-  ---
-  duration_ms: 0.273694
-  type: 'test'
-  ...
-# Subtest: task refuses missing acceptance
-ok 22 - task refuses missing acceptance
-  ---
-  duration_ms: 1.152141
-  type: 'test'
-  ...
-# Subtest: task refuses empty scope
-ok 23 - task refuses empty scope
-  ---
-  duration_ms: 0.141975
-  type: 'test'
-  ...
-# Subtest: task refuses unknown key
-ok 24 - task refuses unknown key
-  ---
-  duration_ms: 0.093511
-  type: 'test'
-  ...
-# Subtest: task refuses invalid id
-ok 25 - task refuses invalid id
-  ---
-  duration_ms: 0.079089
-  type: 'test'
-  ...
-# Subtest: task refuses invalid lane
-ok 26 - task refuses invalid lane
-  ---
-  duration_ms: 0.089986
-  type: 'test'
-  ...
-# Subtest: config refuses missing local-trusted acknowledgement
-ok 27 - config refuses missing local-trusted acknowledgement
-  ---
-  duration_ms: 0.263848
-  type: 'test'
-  ...
-# Subtest: config refuses empty gates
-ok 28 - config refuses empty gates
-  ---
-  duration_ms: 0.428017
-  type: 'test'
-  ...
-# Subtest: config refuses zero concurrency
-ok 29 - config refuses zero concurrency
-  ---
-  duration_ms: 0.394866
-  type: 'test'
-  ...
-# Subtest: config refuses unbounded repairs
-ok 30 - config refuses unbounded repairs
-  ---
-  duration_ms: 0.216747
-  type: 'test'
-  ...
-# Subtest: config refuses shell string
-ok 31 - config refuses shell string
-  ---
-  duration_ms: 0.093331
-  type: 'test'
-  ...
-# Subtest: config refuses unknown permission bypass
-ok 32 - config refuses unknown permission bypass
-  ---
-  duration_ms: 0.060492
-  type: 'test'
-  ...
-# Subtest: config refuses unknown environment keys
-ok 33 - config refuses unknown environment keys
-  ---
-  duration_ms: 0.054673
-  type: 'test'
-  ...
-# Subtest: empty command agent rejected
-ok 34 - empty command agent rejected
-  ---
-  duration_ms: 0.316939
-  type: 'test'
-  ...
-# Subtest: duplicate gate ids rejected
-ok 35 - duplicate gate ids rejected
-  ---
-  duration_ms: 0.306503
-  type: 'test'
-  ...
-# Subtest: unknown dependency rejected
-ok 36 - unknown dependency rejected
-  ---
-  duration_ms: 0.29827
-  type: 'test'
-  ...
-# Subtest: cycle rejected before executing any gate
-ok 37 - cycle rejected before executing any gate
-  ---
-  duration_ms: 0.286182
-  type: 'test'
-  ...
-# Subtest: agent cannot submit an authoritative verdict
-ok 38 - agent cannot submit an authoritative verdict
-  ---
-  duration_ms: 0.093131
-  type: 'test'
-  ...
-# Subtest: agent summary cannot be empty
-ok 39 - agent summary cannot be empty
-  ---
-  duration_ms: 0.075555
-  type: 'test'
-  ...
-# Subtest: JSON schemas expose strict additionalProperties and required fields
-ok 40 - JSON schemas expose strict additionalProperties and required fields
-  ---
-  duration_ms: 0.107883
-  type: 'test'
-  ...
-# Subtest: prototype-looking input fields are rejected
-ok 41 - prototype-looking input fields are rejected
-  ---
-  duration_ms: 0.146482
-  type: 'test'
-  ...
-# Subtest: canonical hashes are independent of object key order
-ok 42 - canonical hashes are independent of object key order
-  ---
-  duration_ms: 0.174033
-  type: 'test'
-  ...
-# Subtest: hash differentiates array order and types
-ok 43 - hash differentiates array order and types
-  ---
-  duration_ms: 0.225981
-  type: 'test'
-  ...
-# Subtest: glob *.md on README.md
-ok 44 - glob *.md on README.md
-  ---
-  duration_ms: 0.231249
-  type: 'test'
-  ...
-# Subtest: glob *.md on docs/a.md
-ok 45 - glob *.md on docs/a.md
-  ---
-  duration_ms: 0.098899
-  type: 'test'
-  ...
-# Subtest: glob docs/** on docs/a/b.md
-ok 46 - glob docs/** on docs/a/b.md
-  ---
-  duration_ms: 0.085429
-  type: 'test'
-  ...
-# Subtest: glob **/AGENTS.md on AGENTS.md
-ok 47 - glob **/AGENTS.md on AGENTS.md
-  ---
-  duration_ms: 0.118019
-  type: 'test'
-  ...
-# Subtest: glob **/AGENTS.md on src/x/AGENTS.md
-ok 48 - glob **/AGENTS.md on src/x/AGENTS.md
-  ---
-  duration_ms: 0.115765
-  type: 'test'
-  ...
-# Subtest: glob src/?.ts on src/a.ts
-ok 49 - glob src/?.ts on src/a.ts
-  ---
-  duration_ms: 0.074713
-  type: 'test'
-  ...
-# Subtest: glob src/?.ts on src/aa.ts
-ok 50 - glob src/?.ts on src/aa.ts
-  ---
-  duration_ms: 0.070356
-  type: 'test'
-  ...
-# Subtest: glob src/*.ts on src/a.ts
-ok 51 - glob src/*.ts on src/a.ts
-  ---
-  duration_ms: 0.069475
-  type: 'test'
-  ...
-# Subtest: glob **/package-lock.json on package-lock.json
-ok 52 - glob **/package-lock.json on package-lock.json
-  ---
-  duration_ms: 0.127112
-  type: 'test'
-  ...
-# Subtest: glob **/package-lock.json on apps/a/package-lock.json
-ok 53 - glob **/package-lock.json on apps/a/package-lock.json
-  ---
-  duration_ms: 0.083076
-  type: 'test'
-  ...
-# Subtest: reject non-relative path "/etc/passwd"
-ok 54 - reject non-relative path "/etc/passwd"
-  ---
-  duration_ms: 0.063566
-  type: 'test'
-  ...
-# Subtest: reject non-relative path "../outside"
-ok 55 - reject non-relative path "../outside"
-  ---
-  duration_ms: 0.045729
-  type: 'test'
-  ...
-# Subtest: reject non-relative path "a/../b"
-ok 56 - reject non-relative path "a/../b"
-  ---
-  duration_ms: 0.037026
-  type: 'test'
-  ...
-# Subtest: reject non-relative path "a\\\\b"
-ok 57 - reject non-relative path "a\\\\b"
-  ---
-  duration_ms: 0.123888
-  type: 'test'
-  ...
-# Subtest: reject non-relative path "C:/x"
-ok 58 - reject non-relative path "C:/x"
-  ---
-  duration_ms: 0.035143
-  type: 'test'
-  ...
-# Subtest: reject non-relative path "a//b"
-ok 59 - reject non-relative path "a//b"
-  ---
-  duration_ms: 0.033912
-  type: 'test'
-  ...
-# Subtest: reject non-relative path "./a"
-ok 60 - reject non-relative path "./a"
-  ---
-  duration_ms: 0.03293
-  type: 'test'
-  ...
-# Subtest: reject non-relative path "a\\u0000b"
-ok 61 - reject non-relative path "a\\u0000b"
-  ---
-  duration_ms: 0.032689
-  type: 'test'
-  ...
-# Subtest: unsupported globs fail instead of silently matching nothing
-ok 62 - unsupported globs fail instead of silently matching nothing
-  ---
-  duration_ms: 0.126901
-  type: 'test'
-  ...
-# Subtest: scope includes deletions and is not substring based
-ok 63 - scope includes deletions and is not substring based
-  ---
-  duration_ms: 1.044518
-  type: 'test'
-  ...
-# Subtest: bounded new companion files can expand scope automatically but sensitive files cannot
-ok 64 - bounded new companion files can expand scope automatically but sensitive files cannot
-  ---
-  duration_ms: 2.410723
-  type: 'test'
-  ...
-# Subtest: small documentation follows fast path
-ok 65 - small documentation follows fast path
-  ---
-  duration_ms: 0.642631
-  type: 'test'
-  ...
-# Subtest: sensitive path cannot become fast: src/auth/access.ts
-ok 66 - sensitive path cannot become fast: src/auth/access.ts
-  ---
-  duration_ms: 0.294785
-  type: 'test'
-  ...
-# Subtest: sensitive path cannot become fast: package-lock.json
-ok 67 - sensitive path cannot become fast: package-lock.json
-  ---
-  duration_ms: 0.218009
-  type: 'test'
-  ...
-# Subtest: sensitive path cannot become fast: AGENTS.md
-ok 68 - sensitive path cannot become fast: AGENTS.md
-  ---
-  duration_ms: 0.245
-  type: 'test'
-  ...
-# Subtest: sensitive path cannot become fast: .github/workflows/test.yml
-ok 69 - sensitive path cannot become fast: .github/workflows/test.yml
-  ---
-  duration_ms: 0.146662
-  type: 'test'
-  ...
-# Subtest: sensitive path cannot become fast: db/migrations/001.sql
-ok 70 - sensitive path cannot become fast: db/migrations/001.sql
-  ---
-  duration_ms: 0.195816
-  type: 'test'
-  ...
-# Subtest: sensitive path cannot become fast: docs/security/guide.md
-ok 71 - sensitive path cannot become fast: docs/security/guide.md
-  ---
-  duration_ms: 0.207253
-  type: 'test'
-  ...
-# Subtest: binary changes force high assurance
-ok 72 - binary changes force high assurance
-  ---
-  duration_ms: 0.301375
-  type: 'test'
-  ...
-# Subtest: unknown code and oversized docs default to standard
-ok 73 - unknown code and oversized docs default to standard
-  ---
-  duration_ms: 0.44312
-  type: 'test'
-  ...
-# Subtest: minimum requested assurance can only raise the lane
-ok 74 - minimum requested assurance can only raise the lane
-  ---
-  duration_ms: 0.367745
-  type: 'test'
-  ...
-# Subtest: gate dependencies are included even outside their own lane/path filters
-ok 75 - gate dependencies are included even outside their own lane/path filters
-  ---
-  duration_ms: 0.816273
-  type: 'test'
-  ...
-# Subtest: mandatory checks cannot be removed by lane or path filters
-ok 76 - mandatory checks cannot be removed by lane or path filters
-  ---
-  duration_ms: 0.212171
-  type: 'test'
-  ...
-# Subtest: high lane runs all configured checks
-ok 77 - high lane runs all configured checks
-  ---
-  duration_ms: 0.164298
-  type: 'test'
-  ...
-# Subtest: empty selected validation is an error, never success
-ok 78 - empty selected validation is an error, never success
-  ---
-  duration_ms: 0.179891
-  type: 'test'
-  ...
-# Subtest: approval thresholds adapt to solo, team and regulated review modes
-ok 79 - approval thresholds adapt to solo, team and regulated review modes
-  ---
-  duration_ms: 0.168665
-  type: 'test'
-  ...
-# Subtest: state machine refuses skipped verification
-ok 80 - state machine refuses skipped verification
-  ---
-  duration_ms: 0.108214
-  type: 'test'
-  ...
-# Subtest: valid transition updates state
-ok 81 - valid transition updates state
-  ---
-  duration_ms: 0.064026
-  type: 'test'
-  ...
-# (node:32171) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: runtime role setup is the shipped Markdown source
-ok 82 - runtime role setup is the shipped Markdown source
-  ---
-  duration_ms: 8.145547
-  type: 'test'
-  ...
-# Subtest: runtime role product is the shipped Markdown source
-ok 83 - runtime role product is the shipped Markdown source
-  ---
-  duration_ms: 4.025703
-  type: 'test'
-  ...
-# Subtest: runtime role implementer is the shipped Markdown source
-ok 84 - runtime role implementer is the shipped Markdown source
-  ---
-  duration_ms: 8.422941
-  type: 'test'
-  ...
-# Subtest: runtime role qa is the shipped Markdown source
-ok 85 - runtime role qa is the shipped Markdown source
-  ---
-  duration_ms: 8.885054
-  type: 'test'
-  ...
-# Subtest: portable skill clean-code has valid metadata and real relative references
-ok 86 - portable skill clean-code has valid metadata and real relative references
-  ---
-  duration_ms: 4.652739
-  type: 'test'
-  ...
-# Subtest: portable skill design-patterns has valid metadata and real relative references
-ok 87 - portable skill design-patterns has valid metadata and real relative references
-  ---
-  duration_ms: 5.05685
-  type: 'test'
-  ...
-# Subtest: portable skill refactoring has valid metadata and real relative references
-ok 88 - portable skill refactoring has valid metadata and real relative references
-  ---
-  duration_ms: 6.832467
-  type: 'test'
-  ...
-# Subtest: portable skill security has valid metadata and real relative references
-ok 89 - portable skill security has valid metadata and real relative references
-  ---
-  duration_ms: 2.677906
-  type: 'test'
-  ...
-# Subtest: portable skill tdd has valid metadata and real relative references
-ok 90 - portable skill tdd has valid metadata and real relative references
-  ---
-  duration_ms: 2.716865
-  type: 'test'
-  ...
-# Subtest: portable skill ui-design has valid metadata and real relative references
-ok 91 - portable skill ui-design has valid metadata and real relative references
-  ---
-  duration_ms: 3.528161
-  type: 'test'
-  ...
-# Subtest: skills remain disabled for old configs; duplicate and unknown IDs refused
-ok 92 - skills remain disabled for old configs; duplicate and unknown IDs refused
-  ---
-  duration_ms: 1.717265
-  type: 'test'
-  ...
-# Subtest: routing is deterministic and skips UI on backend/unknown and all skills for Setup
-ok 93 - routing is deterministic and skips UI on backend/unknown and all skills for Setup
-  ---
-  duration_ms: 29.384667
-  type: 'test'
-  ...
-# Subtest: context budget never silently truncates a skill and records skipped reasons
-ok 94 - context budget never silently truncates a skill and records skipped reasons
-  ---
-  duration_ms: 2.544395
-  type: 'test'
-  ...
-# Subtest: asset loader rejects escapes and unknown role
-ok 95 - asset loader rejects escapes and unknown role
-  ---
-  duration_ms: 0.222026
-  type: 'test'
-  ...
-# Subtest: implementation actually receives the selected instructions and journals their hashes
-ok 96 - implementation actually receives the selected instructions and journals their hashes
-  ---
-  duration_ms: 636.542745
-  type: 'test'
-  ...
-# Subtest: onboarding copies exact roles, skills and references and preserves CLAUDE.md
-ok 97 - onboarding copies exact roles, skills and references and preserves CLAUDE.md
-  ---
-  duration_ms: 386.912025
-  type: 'test'
-  ...
-# Subtest: CLI discovery works without a provider and refuses invented names
-ok 98 - CLI discovery works without a provider and refuses invented names
-  ---
-  duration_ms: 657.771128
-  type: 'test'
-  ...
-# Subtest: CLI --provider claude selects Claude without executing it
-ok 99 - CLI --provider claude selects Claude without executing it
-  ---
-  duration_ms: 363.99801
-  type: 'test'
-  ...
-# Subtest: inspection never executes a configured provider
-ok 100 - inspection never executes a configured provider
-  ---
-  duration_ms: 157.083108
-  type: 'test'
-  ...
-# Subtest: inspect refuses to follow a symlinked generated guide
-ok 101 - inspect refuses to follow a symlinked generated guide
-  ---
-  duration_ms: 179.363546
-  type: 'test'
-  ...
-# (node:32233) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: spec rejects unknown field
-ok 102 - spec rejects unknown field
-  ---
-  duration_ms: 1.782413
-  type: 'test'
-  ...
-# Subtest: spec rejects duplicate criterion
-ok 103 - spec rejects duplicate criterion
-  ---
-  duration_ms: 0.859349
-  type: 'test'
-  ...
-# Subtest: spec rejects duplicate task
-ok 104 - spec rejects duplicate task
-  ---
-  duration_ms: 0.389369
-  type: 'test'
-  ...
-# Subtest: spec rejects missing dependency
-ok 105 - spec rejects missing dependency
-  ---
-  duration_ms: 0.751105
-  type: 'test'
-  ...
-# Subtest: spec rejects dependency cycle
-ok 106 - spec rejects dependency cycle
-  ---
-  duration_ms: 0.788071
-  type: 'test'
-  ...
-# Subtest: spec rejects duplicate dependency
-ok 107 - spec rejects duplicate dependency
-  ---
-  duration_ms: 0.578895
-  type: 'test'
-  ...
-# Subtest: spec rejects unknown criterion
-ok 108 - spec rejects unknown criterion
-  ---
-  duration_ms: 0.372803
-  type: 'test'
-  ...
-# Subtest: spec rejects unsafe glob
-ok 109 - spec rejects unsafe glob
-  ---
-  duration_ms: 0.409389
-  type: 'test'
-  ...
-# Subtest: spec rejects blank criterion
-ok 110 - spec rejects blank criterion
-  ---
-  duration_ms: 0.738235
-  type: 'test'
-  ...
-# Subtest: spec rejects empty paths
-ok 111 - spec rejects empty paths
-  ---
-  duration_ms: 0.540426
-  type: 'test'
-  ...
-# Subtest: spec rejects blank title
-ok 112 - spec rejects blank title
-  ---
-  duration_ms: 0.48282
-  type: 'test'
-  ...
-# Subtest: spec rejects duplicate criterion reference
-ok 113 - spec rejects duplicate criterion reference
-  ---
-  duration_ms: 1.196197
-  type: 'test'
-  ...
-# Subtest: open questions allowed in draft, never in approved spec
-ok 114 - open questions allowed in draft, never in approved spec
-  ---
-  duration_ms: 0.955173
-  type: 'test'
-  ...
-# Subtest: approved spec requires tasks and complete acceptance coverage
-ok 115 - approved spec requires tasks and complete acceptance coverage
-  ---
-  duration_ms: 0.632296
-  type: 'test'
-  ...
-# Subtest: task order follows dependencies, not array order
-ok 116 - task order follows dependencies, not array order
-  ---
-  duration_ms: 1.206222
-  type: 'test'
-  ...
-# Subtest: spec hash binds base, config, repository, revision, decision ledger, security context and content
-ok 117 - spec hash binds base, config, repository, revision, decision ledger, security context and content
-  ---
-  duration_ms: 0.824986
-  type: 'test'
-  ...
-# Subtest: QA rejects wrong SHA
-ok 118 - QA rejects wrong SHA
-  ---
-  duration_ms: 0.610342
-  type: 'test'
-  ...
-# Subtest: QA rejects missing criterion
-ok 119 - QA rejects missing criterion
-  ---
-  duration_ms: 0.340134
-  type: 'test'
-  ...
-# Subtest: QA rejects duplicate criterion
-ok 120 - QA rejects duplicate criterion
-  ---
-  duration_ms: 0.244048
-  type: 'test'
-  ...
-# Subtest: QA rejects unknown criterion
-ok 121 - QA rejects unknown criterion
-  ---
-  duration_ms: 0.313123
-  type: 'test'
-  ...
-# Subtest: QA rejects pass with unknown
-ok 122 - QA rejects pass with unknown
-  ---
-  duration_ms: 0.237429
-  type: 'test'
-  ...
-# Subtest: QA rejects pass with blocker
-ok 123 - QA rejects pass with blocker
-  ---
-  duration_ms: 0.214183
-  type: 'test'
-  ...
-# Subtest: QA rejects blank evidence
-ok 124 - QA rejects blank evidence
-  ---
-  duration_ms: 0.139721
-  type: 'test'
-  ...
-# Subtest: QA rejects empty SHA
-ok 125 - QA rejects empty SHA
-  ---
-  duration_ms: 0.081844
-  type: 'test'
-  ...
-# Subtest: QA may report unknown as changes requested
-ok 126 - QA may report unknown as changes requested
-  ---
-  duration_ms: 0.156026
-  type: 'test'
-  ...
-# Subtest: role schema normalizes required fields without mutating runtime defaults
-ok 127 - role schema normalizes required fields without mutating runtime defaults
-  ---
-  duration_ms: 0.590873
-  type: 'test'
-  ...
-# Subtest: pipeline assistant instructions are sensitive files
-ok 128 - pipeline assistant instructions are sensitive files
-  ---
-  duration_ms: 0.778887
-  type: 'test'
-  ...
-# Subtest: provider schemas use only portable structured-output keywords at every depth
-ok 129 - provider schemas use only portable structured-output keywords at every depth
-  ---
-  duration_ms: 1.645046
-  type: 'test'
-  ...
-# Subtest: provider literal schema has explicit type and enum instead of const
-ok 130 - provider literal schema has explicit type and enum instead of const
-  ---
-  duration_ms: 0.188515
-  type: 'test'
-  ...
-# Subtest: provider schema normalization never weakens authoritative runtime validation
-ok 131 - provider schema normalization never weakens authoritative runtime validation
-  ---
-  duration_ms: 0.784956
-  type: 'test'
-  ...
-# Subtest: confirmed product decisions must map to acceptance criteria before spec approval
-ok 132 - confirmed product decisions must map to acceptance criteria before spec approval
-  ---
-  duration_ms: 0.804165
-  type: 'test'
-  ...
-# Subtest: QA cannot pass while a confirmed product decision is unassessed or failed
-ok 133 - QA cannot pass while a confirmed product decision is unassessed or failed
-  ---
-  duration_ms: 0.636081
-  type: 'test'
-  ...
-# Subtest: ambiguous Product decisions stay questions until an operator-backed resolution is captured
-ok 134 - ambiguous Product decisions stay questions until an operator-backed resolution is captured
-  ---
-  duration_ms: 1.088174
-  type: 'test'
-  ...
-# (node:32342) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: unapproved spec cannot start an agent
-ok 135 - unapproved spec cannot start an agent
-  ---
-  duration_ms: 85.229761
-  type: 'test'
-  ...
-# Subtest: open questions and wrong hash prevent Product approval
-ok 136 - open questions and wrong hash prevent Product approval
-  ---
-  duration_ms: 56.923835
-  type: 'test'
-  ...
-# Subtest: refinement invalidates approval and changes revision hash
-ok 137 - refinement invalidates approval and changes revision hash
-  ---
-  duration_ms: 73.099133
-  type: 'test'
-  ...
-# Subtest: frontend UI work produces a reviewable mockup that is bound to spec approval before implementation
-ok 138 - frontend UI work produces a reviewable mockup that is bound to spec approval before implementation
-  ---
-  duration_ms: 161.997413
-  type: 'test'
-  ...
-# Subtest: single-task lifecycle creates one integrated human-review checkpoint and no intermediate review
-ok 139 - single-task lifecycle creates one integrated human-review checkpoint and no intermediate review
-  ---
-  duration_ms: 1267.737797
-  type: 'test'
-  ...
-# Subtest: whole spec performs QA repair, aggregate checks and local delivery
-ok 140 - whole spec performs QA repair, aggregate checks and local delivery
-  ---
-  duration_ms: 3375.851986
-  type: 'test'
-  ...
-# Subtest: high-risk assurance requires two distinct reviewers
-ok 141 - high-risk assurance requires two distinct reviewers
-  ---
-  duration_ms: 1617.657457
-  type: 'test'
-  ...
-# Subtest: solo mode needs only one human approval even for high-risk integrated work
-ok 142 - solo mode needs only one human approval even for high-risk integrated work
-  ---
-  duration_ms: 1346.769464
-  type: 'test'
-  ...
-# Subtest: new companion files inside the approved module flow without a scope approval
-ok 143 - new companion files inside the approved module flow without a scope approval
-  ---
-  duration_ms: 1404.788819
-  type: 'test'
-  ...
-# Subtest: manual QA remains mandatory even when low-level run was approved
-ok 144 - manual QA remains mandatory even when low-level run was approved
-  ---
-  duration_ms: 1312.937753
-  type: 'test'
-  ...
-# Subtest: QA repair budget stops recurring requests
-ok 145 - QA repair budget stops recurring requests
-  ---
-  duration_ms: 2346.053011
-  type: 'test'
-  ...
-# Subtest: revalidation invalidates QA and human approvals
-ok 146 - revalidation invalidates QA and human approvals
-  ---
-  duration_ms: 3797.238134
-  type: 'test'
-  ...
-# Subtest: running an already paused spec does not recall Product or Implementer
-ok 147 - running an already paused spec does not recall Product or Implementer
-  ---
-  duration_ms: 1048.522431
-  type: 'test'
-  ...
-# Subtest: spec cannot be rewritten after the first attempt
-ok 148 - spec cannot be rewritten after the first attempt
-  ---
-  duration_ms: 997.179824
-  type: 'test'
-  ...
-# Subtest: structural scope expansion retains the candidate and can be amended without returning to the old base
-ok 149 - structural scope expansion retains the candidate and can be amended without returning to the old base
-  ---
-  duration_ms: 1025.834443
-  type: 'test'
-  ...
-# Subtest: stale spec cannot start against a moved local base
-ok 150 - stale spec cannot start against a moved local base
-  ---
-  duration_ms: 84.754299
-  type: 'test'
-  ...
-# Subtest: spec survives closing and reopening the SQLite store
-ok 151 - spec survives closing and reopening the SQLite store
-  ---
-  duration_ms: 968.69681
-  type: 'test'
-  ...
-# Subtest: changed delivery files are detected on repeat export
-ok 152 - changed delivery files are detected on repeat export
-  ---
-  duration_ms: 1084.371106
-  type: 'test'
-  ...
-# Subtest: existing branch at a different commit is never overwritten
-ok 153 - existing branch at a different commit is never overwritten
-  ---
-  duration_ms: 825.496551
-  type: 'test'
-  ...
-# Subtest: local close refuses a base that does not contain the candidate
-ok 154 - local close refuses a base that does not contain the candidate
-  ---
-  duration_ms: 890.009438
-  type: 'test'
-  ...
-# Subtest: rejected spec can never export or publish a candidate
-ok 155 - rejected spec can never export or publish a candidate
-  ---
-  duration_ms: 871.21716
-  type: 'test'
-  ...
-# Subtest: active-time budget exhaustion cannot yield ready
-ok 156 - active-time budget exhaustion cannot yield ready
-  ---
-  duration_ms: 47.677095
-  type: 'test'
-  ...
-# Subtest: delivery rejects an external symlink ancestor into the source before writing
-ok 157 - delivery rejects an external symlink ancestor into the source before writing
-  ---
-  duration_ms: 872.17739
-  type: 'test'
-  ...
-# Subtest: Product loads the committed Decision Ledger and refuses to silently drop confirmed business decisions
-ok 158 - Product loads the committed Decision Ledger and refuses to silently drop confirmed business decisions
-  ---
-  duration_ms: 67.627668
-  type: 'test'
-  ...
-# Subtest: invalid committed Decision Ledger is never silently treated as empty
-ok 159 - invalid committed Decision Ledger is never silently treated as empty
-  ---
-  duration_ms: 37.954656
-  type: 'test'
-  ...
-# (node:32860) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: GitHub remote parser accepts https://github.com/example/demo.git
-ok 160 - GitHub remote parser accepts https://github.com/example/demo.git
-  ---
-  duration_ms: 1.734481
-  type: 'test'
-  ...
-# Subtest: GitHub remote parser accepts git@github.com:example/demo.git
-ok 161 - GitHub remote parser accepts git@github.com:example/demo.git
-  ---
-  duration_ms: 0.142535
-  type: 'test'
-  ...
-# Subtest: GitHub remote parser accepts ssh://git@github.com/example/demo.git
-ok 162 - GitHub remote parser accepts ssh://git@github.com/example/demo.git
-  ---
-  duration_ms: 0.155735
-  type: 'test'
-  ...
-# Subtest: GitHub remote parser accepts https://github.com/example/demo
-ok 163 - GitHub remote parser accepts https://github.com/example/demo
-  ---
-  duration_ms: 0.076987
-  type: 'test'
-  ...
-# Subtest: GitHub remote parser rejects https://user:password@github.com/example/demo.git
-ok 164 - GitHub remote parser rejects https://user:password@github.com/example/demo.git
-  ---
-  duration_ms: 0.343759
-  type: 'test'
-  ...
-# Subtest: GitHub remote parser rejects https://evil.test/example/demo
-ok 165 - GitHub remote parser rejects https://evil.test/example/demo
-  ---
-  duration_ms: 0.075474
-  type: 'test'
-  ...
-# Subtest: GitHub remote parser rejects file:///tmp/repo
-ok 166 - GitHub remote parser rejects file:///tmp/repo
-  ---
-  duration_ms: 0.061763
-  type: 'test'
-  ...
-# Subtest: GitHub remote parser rejects ext::bad
-ok 167 - GitHub remote parser rejects ext::bad
-  ---
-  duration_ms: 0.049695
-  type: 'test'
-  ...
-# Subtest: GitHub remote parser rejects https://github.com/../demo
-ok 168 - GitHub remote parser rejects https://github.com/../demo
-  ---
-  duration_ms: 0.225561
-  type: 'test'
-  ...
-# Subtest: GitHub remote parser rejects https://github.com/example/demo?other=1
-ok 169 - GitHub remote parser rejects https://github.com/example/demo?other=1
-  ---
-  duration_ms: 0.290349
-  type: 'test'
-  ...
-# Subtest: publish requires separate push and PR consent before transport
-ok 170 - publish requires separate push and PR consent before transport
-  ---
-  duration_ms: 1424.798284
-  type: 'test'
-  ...
-# Subtest: publish creates exact-head draft PR and never invokes a merge or force push
-ok 171 - publish creates exact-head draft PR and never invokes a merge or force push
-  ---
-  duration_ms: 1467.488104
-  type: 'test'
-  ...
-# Subtest: retry after unknown create outcome reconciles existing PR instead of duplicating
-ok 172 - retry after unknown create outcome reconciles existing PR instead of duplicating
-  ---
-  duration_ms: 1483.853941
-  type: 'test'
-  ...
-# Subtest: remote repository mismatch prevents push
-ok 173 - remote repository mismatch prevents push
-  ---
-  duration_ms: 1450.266409
-  type: 'test'
-  ...
-# Subtest: moving remote base prevents publishing unintegrated candidate
-ok 174 - moving remote base prevents publishing unintegrated candidate
-  ---
-  duration_ms: 1553.129243
-  type: 'test'
-  ...
-# Subtest: existing remote branch with different head is not overwritten
-ok 175 - existing remote branch with different head is not overwritten
-  ---
-  duration_ms: 1602.206186
-  type: 'test'
-  ...
-# Subtest: publication intent cannot be silently retargeted
-ok 176 - publication intent cannot be silently retargeted
-  ---
-  duration_ms: 1493.225886
-  type: 'test'
-  ...
-# Subtest: sync refuses changed PR head instead of closing a spec
-ok 177 - sync refuses changed PR head instead of closing a spec
-  ---
-  duration_ms: 1421.403682
-  type: 'test'
-  ...
-# Subtest: sync closes only on observed merged exact-head PR
-ok 178 - sync closes only on observed merged exact-head PR
-  ---
-  duration_ms: 1329.249819
-  type: 'test'
-  ...
-# Subtest: closed-unmerged PR blocks rather than marks delivered
-ok 179 - closed-unmerged PR blocks rather than marks delivered
-  ---
-  duration_ms: 1427.233801
-  type: 'test'
-  ...
-# (node:33697) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: onboarding detects real npm scripts without executing them
-ok 180 - onboarding detects real npm scripts without executing them
-  ---
-  duration_ms: 65.140063
-  type: 'test'
-  ...
-# Subtest: SvelteKit is detected as frontend and check is promoted to a real gate
-ok 181 - SvelteKit is detected as frontend and check is promoted to a real gate
-  ---
-  duration_ms: 59.126838
-  type: 'test'
-  ...
-# Subtest: review mode is chosen once in onboarding instead of editing pipeline JSON manually
-ok 182 - review mode is chosen once in onboarding instead of editing pipeline JSON manually
-  ---
-  duration_ms: 52.879284
-  type: 'test'
-  ...
-# Subtest: placeholder test is never promoted to a valid gate
-ok 183 - placeholder test is never promoted to a valid gate
-  ---
-  duration_ms: 51.977522
-  type: 'test'
-  ...
-# Subtest: unknown stack stays blocked instead of inventing checks
-ok 184 - unknown stack stays blocked instead of inventing checks
-  ---
-  duration_ms: 0.560928
-  type: 'test'
-  ...
-# Subtest: conflicting manifests produce an explicit unresolved question
-ok 185 - conflicting manifests produce an explicit unresolved question
-  ---
-  duration_ms: 54.699019
-  type: 'test'
-  ...
-# Subtest: installation requires exact hash and preserves existing AGENTS content
-ok 186 - installation requires exact hash and preserves existing AGENTS content
-  ---
-  duration_ms: 82.811988
-  type: 'test'
-  ...
-# Subtest: installation refuses preexisting operator config
-ok 187 - installation refuses preexisting operator config
-  ---
-  duration_ms: 71.503382
-  type: 'test'
-  ...
-# Subtest: installation rejects changed source between preview and approval
-ok 188 - installation rejects changed source between preview and approval
-  ---
-  duration_ms: 56.869613
-  type: 'test'
-  ...
-# Subtest: unanswered onboarding proposal cannot apply
-ok 189 - unanswered onboarding proposal cannot apply
-  ---
-  duration_ms: 78.562999
-  type: 'test'
-  ...
-# Subtest: installation rejects ignored symlink directory escape
-ok 190 - installation rejects ignored symlink directory escape
-  ---
-  duration_ms: 107.113245
-  type: 'test'
-  ...
-# Subtest: assisted onboarding invokes a read-only role and accepts a structured proposal
-ok 191 - assisted onboarding invokes a read-only role and accepts a structured proposal
-  ---
-  duration_ms: 198.664772
-  type: 'test'
-  ...
-# Subtest: doctor does not run code without explicit execute flag
-ok 192 - doctor does not run code without explicit execute flag
-  ---
-  duration_ms: 66.141061
-  type: 'test'
-  ...
-# Subtest: doctor executes real baseline checks without calling Implementer
-ok 193 - doctor executes real baseline checks without calling Implementer
-  ---
-  duration_ms: 739.368847
-  type: 'test'
-  ...
-# Subtest: doctor reports a failing baseline, never an implicit pass
-ok 194 - doctor reports a failing baseline, never an implicit pass
-  ---
-  duration_ms: 726.994957
-  type: 'test'
-  ...
-# Subtest: onboarding promotes existing project-owned security scripts without inventing scanners
-ok 195 - onboarding promotes existing project-owned security scripts without inventing scanners
-  ---
-  duration_ms: 85.275279
-  type: 'test'
-  ...
-# (node:35086) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: lifecycle store rejects optimistic write conflicts
-ok 196 - lifecycle store rejects optimistic write conflicts
-  ---
-  duration_ms: 48.221316
-  type: 'test'
-  ...
-# Subtest: lifecycle lease cannot be stolen while controller is alive
-ok 197 - lifecycle lease cannot be stolen while controller is alive
-  ---
-  duration_ms: 40.1194
-  type: 'test'
-  ...
-# Subtest: document payload corruption is detected before use
-ok 198 - document payload corruption is detected before use
-  ---
-  duration_ms: 36.163984
-  type: 'test'
-  ...
-# Subtest: schema migration accepts v1 store and retains run data
-ok 199 - schema migration accepts v1 store and retains run data
-  ---
-  duration_ms: 73.870218
-  type: 'test'
-  ...
-# Subtest: future database version is rejected
-ok 200 - future database version is rejected
-  ---
-  duration_ms: 34.294495
-  type: 'test'
-  ...
-# Subtest: Product cannot modify its workspace and still return a valid spec
-ok 201 - Product cannot modify its workspace and still return a valid spec
-  ---
-  duration_ms: 136.347434
-  type: 'test'
-  ...
-# Subtest: Codex Product transport requests read-only and parses schema-bound final file
-ok 202 - Codex Product transport requests read-only and parses schema-bound final file
-  ---
-  duration_ms: 147.865486
-  type: 'test'
-  ...
-# Subtest: actual workflow SIGKILL requires explicit recovery and candidate adoption
-ok 203 - actual workflow SIGKILL requires explicit recovery and candidate adoption
-  ---
-  duration_ms: 1715.653331
-  type: 'test'
-  ...
-# (node:36398) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: full real Git edit -> test -> review -> exact patch; host tree untouched
-ok 204 - full real Git edit -> test -> review -> exact patch; host tree untouched
-  ---
-  duration_ms: 832.252304
-  type: 'test'
-  ...
-# Subtest: fast documentation path avoids the review handoff
-ok 205 - fast documentation path avoids the review handoff
-  ---
-  duration_ms: 604.596965
-  type: 'test'
-  ...
-# Subtest: sensitive path automatically escalates and requires two distinct reviewer labels
-ok 206 - sensitive path automatically escalates and requires two distinct reviewer labels
-  ---
-  duration_ms: 690.017088
-  type: 'test'
-  ...
-# Subtest: out-of-scope modifications fail before any gate executes
-ok 207 - out-of-scope modifications fail before any gate executes
-  ---
-  duration_ms: 209.969383
-  type: 'test'
-  ...
-# Subtest: no-op agent is not a completed task
-ok 208 - no-op agent is not a completed task
-  ---
-  duration_ms: 130.213196
-  type: 'test'
-  ...
-# Subtest: malformed/authoritative agent output is rejected
-ok 209 - malformed/authoritative agent output is rejected
-  ---
-  duration_ms: 112.231898
-  type: 'test'
-  ...
-# Subtest: failed checks cannot be approved
-ok 210 - failed checks cannot be approved
-  ---
-  duration_ms: 514.957705
-  type: 'test'
-  ...
-# Subtest: bounded repair can fix a failed candidate without new Product/QA calls
-ok 211 - bounded repair can fix a failed candidate without new Product/QA calls
-  ---
-  duration_ms: 1292.163416
-  type: 'test'
-  ...
-# Subtest: repair budget stops an unproductive agent
-ok 212 - repair budget stops an unproductive agent
-  ---
-  duration_ms: 1282.883882
-  type: 'test'
-  ...
-# Subtest: gate mutations invalidate every would-be cached proof
-ok 213 - gate mutations invalidate every would-be cached proof
-  ---
-  duration_ms: 614.022416
-  type: 'test'
-  ...
-# Subtest: fresh validator does not trust ignored output planted by agent
-ok 214 - fresh validator does not trust ignored output planted by agent
-  ---
-  duration_ms: 610.407259
-  type: 'test'
-  ...
-# Subtest: revalidation reuses only sealed, opted-in exact-candidate proofs
-ok 215 - revalidation reuses only sealed, opted-in exact-candidate proofs
-  ---
-  duration_ms: 1014.375639
-  type: 'test'
-  ...
-# Subtest: cache disabled by default re-executes a gate
-ok 216 - cache disabled by default re-executes a gate
-  ---
-  duration_ms: 1031.911302
-  type: 'test'
-  ...
-# Subtest: changed allowed environment variable invalidates cache
-ok 217 - changed allowed environment variable invalidates cache
-  ---
-  duration_ms: 861.840608
-  type: 'test'
-  ...
-# Subtest: revalidation invalidates prior approvals even with cached proofs
-ok 218 - revalidation invalidates prior approvals even with cached proofs
-  ---
-  duration_ms: 878.404624
-  type: 'test'
-  ...
-# Subtest: wrong candidate SHA is never approved
-ok 219 - wrong candidate SHA is never approved
-  ---
-  duration_ms: 538.486476
-  type: 'test'
-  ...
-# Subtest: a dirty candidate after validation cannot be approved
-ok 220 - a dirty candidate after validation cannot be approved
-  ---
-  duration_ms: 452.029565
-  type: 'test'
-  ...
-# Subtest: expired evidence requires revalidation
-ok 221 - expired evidence requires revalidation
-  ---
-  duration_ms: 475.705811
-  type: 'test'
-  ...
-# Subtest: rejection is terminal and retained
-ok 222 - rejection is terminal and retained
-  ---
-  duration_ms: 512.264033
-  type: 'test'
-  ...
-# Subtest: resume of completed validation performs no work
-ok 223 - resume of completed validation performs no work
-  ---
-  duration_ms: 502.123626
-  type: 'test'
-  ...
-# Subtest: restart with a new Pipeline instance preserves the run
-ok 224 - restart with a new Pipeline instance preserves the run
-  ---
-  duration_ms: 516.146113
-  type: 'test'
-  ...
-# Subtest: cancellation during agent does not silently rerun it
-ok 225 - cancellation during agent does not silently rerun it
-  ---
-  duration_ms: 485.490766
-  type: 'test'
-  ...
-# Subtest: run time budget yields interruption, not success
-ok 226 - run time budget yields interruption, not success
-  ---
-  duration_ms: 237.299552
-  type: 'test'
-  ...
-# Subtest: setup failure is infrastructure failure, not repairable code
-ok 227 - setup failure is infrastructure failure, not repairable code
-  ---
-  duration_ms: 77.368375
-  type: 'test'
-  ...
-# Subtest: gate infrastructure timeout is never turned into success
-ok 228 - gate infrastructure timeout is never turned into success
-  ---
-  duration_ms: 437.759906
-  type: 'test'
-  ...
-# Subtest: state stored inside source repository is refused
-ok 229 - state stored inside source repository is refused
-  ---
-  duration_ms: 25.985846
-  type: 'test'
-  ...
-# Subtest: source dirty files cannot silently become task input
-ok 230 - source dirty files cannot silently become task input
-  ---
-  duration_ms: 34.408598
-  type: 'test'
-  ...
-# (node:37481) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: process captures a real exit code, not text claiming success
-ok 231 - process captures a real exit code, not text claiming success
-  ---
-  duration_ms: 30.072195
-  type: 'test'
-  ...
-# Subtest: process receives stdin
-ok 232 - process receives stdin
-  ---
-  duration_ms: 29.469625
-  type: 'test'
-  ...
-# Subtest: arguments never use shell expansion
-ok 233 - arguments never use shell expansion
-  ---
-  duration_ms: 28.227538
-  type: 'test'
-  ...
-# Subtest: per-command timeout terminates the process
-ok 234 - per-command timeout terminates the process
-  ---
-  duration_ms: 67.584386
-  type: 'test'
-  ...
-# Subtest: external cancellation is not reported as success
-ok 235 - external cancellation is not reported as success
-  ---
-  duration_ms: 66.226981
-  type: 'test'
-  ...
-# Subtest: pre-aborted command is never spawned
-ok 236 - pre-aborted command is never spawned
-  ---
-  duration_ms: 0.356399
-  type: 'test'
-  ...
-# Subtest: missing executable reports spawn_error
-ok 237 - missing executable reports spawn_error
-  ---
-  duration_ms: 2.544074
-  type: 'test'
-  ...
-# Subtest: output capture is bounded while digest covers full stream
-ok 238 - output capture is bounded while digest covers full stream
-  ---
-  duration_ms: 30.397337
-  type: 'test'
-  ...
-# Subtest: failed process bookkeeping terminates the command
-ok 239 - failed process bookkeeping terminates the command
-  ---
-  duration_ms: 3.437173
-  type: 'test'
-  ...
-# Subtest: environment is an explicit allowlist
-ok 240 - environment is an explicit allowlist
-  ---
-  duration_ms: 0.929344
-  type: 'test'
-  ...
-# Subtest: known secrets are redacted in diagnostics
-ok 241 - known secrets are redacted in diagnostics
-  ---
-  duration_ms: 0.241575
-  type: 'test'
-  ...
-# Subtest: whole argument substitutions preserve data without shell interpretation
-ok 242 - whole argument substitutions preserve data without shell interpretation
-  ---
-  duration_ms: 0.194774
-  type: 'test'
-  ...
-# Subtest: partial or unknown placeholders are refused
-ok 243 - partial or unknown placeholders are refused
-  ---
-  duration_ms: 0.262326
-  type: 'test'
-  ...
-# Subtest: independent gates actually overlap up to the configured limit
-ok 244 - independent gates actually overlap up to the configured limit
-  ---
-  duration_ms: 42.575196
-  type: 'test'
-  ...
-# Subtest: dependency gates wait for successful parents
-ok 245 - dependency gates wait for successful parents
-  ---
-  duration_ms: 23.542866
-  type: 'test'
-  ...
-# Subtest: exclusive resource locks prevent overlapping database users
-ok 246 - exclusive resource locks prevent overlapping database users
-  ---
-  duration_ms: 31.098255
-  type: 'test'
-  ...
-# Subtest: failed dependencies are blocked, not skipped-as-success
-ok 247 - failed dependencies are blocked, not skipped-as-success
-  ---
-  duration_ms: 2.907078
-  type: 'test'
-  ...
-# Subtest: fail-fast aborts running siblings and drains them before returning
-ok 248 - fail-fast aborts running siblings and drains them before returning
-  ---
-  duration_ms: 26.45466
-  type: 'test'
-  ...
-# Subtest: scheduler drains running siblings after an execution exception
-ok 249 - scheduler drains running siblings after an execution exception
-  ---
-  duration_ms: 5.783468
-  type: 'test'
-  ...
-# Subtest: pre-cancelled scheduler launches no gate
-ok 250 - pre-cancelled scheduler launches no gate
-  ---
-  duration_ms: 0.561468
-  type: 'test'
-  ...
-# (node:37837) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: receipt schema refuses invalid intermediate SHA length
-ok 251 - receipt schema refuses invalid intermediate SHA length
-  ---
-  duration_ms: 2.076137
-  type: 'test'
-  ...
-# Subtest: receipt schema refuses empty config hash
-ok 252 - receipt schema refuses empty config hash
-  ---
-  duration_ms: 0.266943
-  type: 'test'
-  ...
-# Subtest: receipt schema refuses NaN duration
-ok 253 - receipt schema refuses NaN duration
-  ---
-  duration_ms: 0.339042
-  type: 'test'
-  ...
-# Subtest: receipt schema refuses negative duration
-ok 254 - receipt schema refuses negative duration
-  ---
-  duration_ms: 0.225501
-  type: 'test'
-  ...
-# Subtest: receipt schema refuses false pass with nonzero exit
-ok 255 - receipt schema refuses false pass with nonzero exit
-  ---
-  duration_ms: 0.282116
-  type: 'test'
-  ...
-# Subtest: receipt schema refuses missing success stream digests
-ok 256 - receipt schema refuses missing success stream digests
-  ---
-  duration_ms: 0.186271
-  type: 'test'
-  ...
-# Subtest: receipt schema refuses forged cached status
-ok 257 - receipt schema refuses forged cached status
-  ---
-  duration_ms: 0.167664
-  type: 'test'
-  ...
-# Subtest: receipt schema refuses unknown field
-ok 258 - receipt schema refuses unknown field
-  ---
-  duration_ms: 0.181133
-  type: 'test'
-  ...
-# Subtest: receipt schema is generated with strict fields
-ok 259 - receipt schema is generated with strict fields
-  ---
-  duration_ms: 0.431702
-  type: 'test'
-  ...
-# Subtest: receipt-only caching refuses artifact-producing checks
-ok 260 - receipt-only caching refuses artifact-producing checks
-  ---
-  duration_ms: 0.951748
-  type: 'test'
-  ...
-# Subtest: receipt-only caching refuses dependency chains without an artifact cache
-ok 261 - receipt-only caching refuses dependency chains without an artifact cache
-  ---
-  duration_ms: 0.37024
-  type: 'test'
-  ...
-# Subtest: sealing a modified receipt does not certify a different observation
-ok 262 - sealing a modified receipt does not certify a different observation
-  ---
-  duration_ms: 70.133798
-  type: 'test'
-  ...
-# Subtest: two different runs cannot race shared resources in one local store
-ok 263 - two different runs cannot race shared resources in one local store
-  ---
-  duration_ms: 75.082314
-  type: 'test'
-  ...
-# Subtest: scheduler drains siblings even when blocked-result bookkeeping throws
-ok 264 - scheduler drains siblings even when blocked-result bookkeeping throws
-  ---
-  duration_ms: 33.791956
-  type: 'test'
-  ...
-# Subtest: POSIX normal leader exit also stops a background child
-ok 265 - POSIX normal leader exit also stops a background child
-  ---
-  duration_ms: 50.512022
-  type: 'test'
-  ...
-# Subtest: CLI help and version work without a project or API credentials
-ok 266 - CLI help and version work without a project or API credentials
-  ---
-  duration_ms: 132.861086
-  type: 'test'
-  ...
-# Subtest: CLI init never overwrites an existing operator config
-ok 267 - CLI init never overwrites an existing operator config
-  ---
-  duration_ms: 166.111087
-  type: 'test'
-  ...
-# Subtest: CLI complete workflow returns review exit code 2 then exports a patch
-ok 268 - CLI complete workflow returns review exit code 2 then exports a patch
-  ---
-  duration_ms: 1250.335675
-  type: 'test'
-  ...
-# Subtest: Codex adapter contract uses schema, workspace sandbox, stdin and final file (stub, not a model)
-ok 269 - Codex adapter contract uses schema, workspace sandbox, stdin and final file (stub, not a model)
-  ---
-  duration_ms: 675.725712
-  type: 'test'
-  ...
-# Subtest: an interrupted agent never imports an unchecked symlink candidate
-ok 270 - an interrupted agent never imports an unchecked symlink candidate
-  ---
-  duration_ms: 176.97059
-  type: 'test'
-  ...
-# Subtest: real SIGKILL of a controller leaves a durable lease; explicit recovery does not rerun the agent
-ok 271 - real SIGKILL of a controller leaves a durable lease; explicit recovery does not rerun the agent
-  ---
-  duration_ms: 683.474244
-  type: 'test'
-  ...
-# Subtest: recovery after the final validation checkpoint preserves completion and closes the session
-ok 272 - recovery after the final validation checkpoint preserves completion and closes the session
-  ---
-  duration_ms: 631.62094
-  type: 'test'
-  ...
-# Subtest: export rechecks required approvals even if a bad internal caller marks the run ready
-ok 273 - export rechecks required approvals even if a bad internal caller marks the run ready
-  ---
-  duration_ms: 607.290269
-  type: 'test'
-  ...
-# Subtest: review rejects a receipt altered after the runner persisted it
-ok 274 - review rejects a receipt altered after the runner persisted it
-  ---
-  duration_ms: 615.53803
-  type: 'test'
-  ...
-# (node:40522) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: repository intelligence surfaces reuse candidates and follows the current immutable SHA
-ok 275 - repository intelligence surfaces reuse candidates and follows the current immutable SHA
-  ---
-  duration_ms: 106.987165
-  type: 'test'
-  ...
-# (node:40703) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: authentication/password work routes OWASP auth topics, threat modeling and negative tests
-ok 276 - authentication/password work routes OWASP auth topics, threat modeling and negative tests
-  ---
-  duration_ms: 2.790517
-  type: 'test'
-  ...
-# Subtest: outbound API work routes SSRF, REST and validation guidance
-ok 277 - outbound API work routes SSRF, REST and validation guidance
-  ---
-  duration_ms: 1.024668
-  type: 'test'
-  ...
-# Subtest: AI agent and MCP work routes agent, prompt-injection, AI coding and MCP guidance
-ok 278 - AI agent and MCP work routes agent, prompt-injection, AI coding and MCP guidance
-  ---
-  duration_ms: 0.362879
-  type: 'test'
-  ...
-# Subtest: ordinary arithmetic change stays fast and does not become a supply-chain task just because a lockfile exists elsewhere
-ok 279 - ordinary arithmetic change stays fast and does not become a supply-chain task just because a lockfile exists elsewhere
-  ---
-  duration_ms: 2.897317
-  type: 'test'
-  ...
-# Subtest: Product cannot drop controller-routed OWASP topics or required threat modeling
-ok 280 - Product cannot drop controller-routed OWASP topics or required threat modeling
-  ---
-  duration_ms: 3.616444
-  type: 'test'
-  ...
-# Subtest: QA cannot pass a security-sensitive spec without evidence for every security requirement
-ok 281 - QA cannot pass a security-sensitive spec without evidence for every security requirement
-  ---
-  duration_ms: 1.215657
-  type: 'test'
-  ...
-# Subtest: shipped roles treat repository and external content as untrusted prompt-injection surfaces
-ok 282 - shipped roles treat repository and external content as untrusted prompt-injection surfaces
-  ---
-  duration_ms: 0.524943
-  type: 'test'
-  ...
-# (node:40721) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-# (Use `node --trace-warnings ...` to show where the warning was created)
-# Subtest: optimistic locking rejects a stale writer
-ok 283 - optimistic locking rejects a stale writer
-  ---
-  duration_ms: 54.425841
-  type: 'test'
-  ...
-# Subtest: run and its event are written together
-ok 284 - run and its event are written together
-  ---
-  duration_ms: 45.612314
-  type: 'test'
-  ...
-# Subtest: concurrent lease acquisition is rejected across connections
-ok 285 - concurrent lease acquisition is rejected across connections
-  ---
-  duration_ms: 37.878089
-  type: 'test'
-  ...
-# Subtest: recovery cannot steal a live controller lease
-ok 286 - recovery cannot steal a live controller lease
-  ---
-  duration_ms: 48.276539
-  type: 'test'
-  ...
-# Subtest: recovery requires explicit operator confirmation
-ok 287 - recovery requires explicit operator confirmation
-  ---
-  duration_ms: 41.385389
-  type: 'test'
-  ...
-# Subtest: recovery refuses a known live child even without a controller lease
-ok 288 - recovery refuses a known live child even without a controller lease
-  ---
-  duration_ms: 40.42044
-  type: 'test'
-  ...
-# Subtest: unsealed successful command cannot populate cache
-ok 289 - unsealed successful command cannot populate cache
-  ---
-  duration_ms: 36.114454
-  type: 'test'
-  ...
-# Subtest: sealed proof expires and a cache hit cannot extend the original TTL
-ok 290 - sealed proof expires and a cache hit cannot extend the original TTL
-  ---
-  duration_ms: 48.090069
-  type: 'test'
-  ...
-# Subtest: failed proof is never cached
-ok 291 - failed proof is never cached
-  ---
-  duration_ms: 48.450712
-  type: 'test'
-  ...
-# Subtest: empty proof identity is rejected, unlike the V1 empty strings defect
-ok 292 - empty proof identity is rejected, unlike the V1 empty strings defect
-  ---
-  duration_ms: 52.097172
-  type: 'test'
-  ...
-# Subtest: evidence key invalidates when candidateSha changes
-ok 293 - evidence key invalidates when candidateSha changes
-  ---
-  duration_ms: 0.292572
-  type: 'test'
-  ...
-# Subtest: evidence key invalidates when baseSha changes
-ok 294 - evidence key invalidates when baseSha changes
-  ---
-  duration_ms: 0.136056
-  type: 'test'
-  ...
-# Subtest: evidence key invalidates when configHash changes
-ok 295 - evidence key invalidates when configHash changes
-  ---
-  duration_ms: 0.094473
-  type: 'test'
-  ...
-# Subtest: evidence key invalidates when environmentHash changes
-ok 296 - evidence key invalidates when environmentHash changes
-  ---
-  duration_ms: 0.391452
-  type: 'test'
-  ...
-# Subtest: evidence key invalidates when taskHash changes
-ok 297 - evidence key invalidates when taskHash changes
-  ---
-  duration_ms: 0.240433
-  type: 'test'
-  ...
-# Subtest: evidence key invalidates when workspace changes
-ok 298 - evidence key invalidates when workspace changes
-  ---
-  duration_ms: 0.31779
-  type: 'test'
-  ...
-# Subtest: evidence key invalidates when repository changes
-ok 299 - evidence key invalidates when repository changes
-  ---
-  duration_ms: 0.219552
-  type: 'test'
-  ...
-# Subtest: evidence key invalidates when dependencyKeys changes
-ok 300 - evidence key invalidates when dependencyKeys changes
-  ---
-  duration_ms: 0.134242
-  type: 'test'
-  ...
-# Subtest: evidence key invalidates when executable changes
-ok 301 - evidence key invalidates when executable changes
-  ---
-  duration_ms: 0.305221
-  type: 'test'
-  ...
-# Subtest: evidence key invalidates when gate changes
-ok 302 - evidence key invalidates when gate changes
-  ---
-  duration_ms: 0.245751
-  type: 'test'
-  ...
-# Subtest: full lockfile mutation contributes a different candidate identity
-ok 303 - full lockfile mutation contributes a different candidate identity
-  ---
-  duration_ms: 0.339874
-  type: 'test'
-  ...
-# Subtest: environment id and allowed values affect identity without persisting plaintext
-ok 304 - environment id and allowed values affect identity without persisting plaintext
-  ---
-  duration_ms: 0.45022
-  type: 'test'
-  ...
-# Subtest: executable identity hashes the actual binary
-ok 305 - executable identity hashes the actual binary
-  ---
-  duration_ms: 236.112
-  type: 'test'
-  ...
-1..305
-# tests 305
-# suites 0
-# pass 305
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 26071.960637
+npm notice run agent-pipeline-v2@2.0.0-alpha.8 check
+npm notice run npm run typecheck && npm run test
+npm notice run agent-pipeline-v2@2.0.0-alpha.8 typecheck
+npm notice run tsc -p tsconfig.json --noEmit
+npm notice run agent-pipeline-v2@2.0.0-alpha.8 test
+npm notice run npm run build && node --test --test-concurrency=4 test/*.test.mjs
+npm notice run agent-pipeline-v2@2.0.0-alpha.8 build
+npm notice run tsc -p tsconfig.json
+✔ a failed semantic review keeps the Setup proposal and records why the round ended (223.955356ms)
+✔ a ledger commit carries the ledger only, never work the operator had staged (85.060244ms)
+✔ a design asset cannot be read through a symlinked directory of the repository (480.939462ms)
+✔ the next action of a blocked spec lifts its blocker instead of repeating it (370.552134ms)
+✔ a single-task spec reuses its proven validation instead of replaying every gate (1650.906365ms)
+✔ reuse is refused when it would lower the approvals the integration requires (2460.827191ms)
+✔ empty Git repository is planned without writes, then committed and handed to onboard (210.509587ms)
+✔ bootstrap accepts the Git repository root through a symlinked ancestor (213.52947ms)
+✔ bootstrap apply requires explicit commit and creates immutable base + onboarding plan (337.06772ms)
+✔ bootstrap rejects .git paths and non-empty targets (55.753648ms)
+✔ semantic review blocks a schema-valid proposal that contradicts an operator decision (206.767044ms)
+✔ bootstrap refine preserves confirmed operator decisions unless latest refinement explicitly supersedes them (309.341011ms)
+✔ approval-with-exception wording cannot be silently converted into a confirmed decision (178.432642ms)
+✔ ambiguous Product decision may cross neutral bootstrap, then requires explicit superseding clarification (309.608399ms)
+✔ Claude argv explicitly limits tools (readOnly=true) (1.795098ms)
+✔ Claude argv explicitly limits tools (readOnly=false) (0.435757ms)
+✔ Claude extracts structured_output, not prose or an embedded claim (1.591303ms)
+✔ native config rejects free arguments and invalid budget/turn count (0.834451ms)
+✔ Claude implementation contract modifies a real worktree and receives skills (1330.262903ms)
+✔ Claude error cannot become a successful implementation (316.44894ms)
+✔ Claude denial cannot become a successful implementation (314.697387ms)
+✔ Claude prose cannot become a successful implementation (312.085478ms)
+✔ Claude claims cannot become a successful implementation (325.610594ms)
+✔ full lifecycle with claude protocol double, Product and QA repair (7656.637267ms)
+✔ full lifecycle with codex protocol double, Product and QA repair (7413.015416ms)
+✔ task parsing supplies defaults and clones arrays (1.671328ms)
+✔ task refuses empty description (0.283349ms)
+✔ task refuses missing acceptance (0.17354ms)
+✔ task refuses empty scope (0.10339ms)
+✔ task refuses unknown key (0.175008ms)
+✔ task refuses invalid id (0.221477ms)
+✔ task refuses invalid lane (0.201074ms)
+✔ config refuses missing local-trusted acknowledgement (0.286553ms)
+✔ config refuses empty gates (0.31435ms)
+✔ config refuses zero concurrency (0.382285ms)
+✔ config refuses unbounded repairs (1.040265ms)
+✔ config refuses shell string (0.101549ms)
+✔ config refuses unknown permission bypass (0.078393ms)
+✔ config refuses unknown environment keys (0.039258ms)
+✔ empty command agent rejected (0.293956ms)
+✔ duplicate gate ids rejected (0.176519ms)
+✔ unknown dependency rejected (0.142396ms)
+✔ cycle rejected before executing any gate (0.187815ms)
+✔ agent cannot submit an authoritative verdict (0.057506ms)
+✔ agent summary cannot be empty (0.043419ms)
+✔ JSON schemas expose strict additionalProperties and required fields (0.069182ms)
+✔ prototype-looking input fields are rejected (0.098799ms)
+✔ canonical hashes are independent of object key order (0.161959ms)
+✔ hash differentiates array order and types (0.187708ms)
+✔ glob *.md on README.md (0.208048ms)
+✔ glob *.md on docs/a.md (0.074279ms)
+✔ glob docs/** on docs/a/b.md (0.095112ms)
+✔ glob **/AGENTS.md on AGENTS.md (0.109947ms)
+✔ glob **/AGENTS.md on src/x/AGENTS.md (0.159608ms)
+✔ glob src/?.ts on src/a.ts (0.069405ms)
+✔ glob src/?.ts on src/aa.ts (0.053958ms)
+✔ glob src/*.ts on src/a.ts (0.047732ms)
+✔ glob **/package-lock.json on package-lock.json (0.044907ms)
+✔ glob **/package-lock.json on apps/a/package-lock.json (0.038915ms)
+✔ reject non-relative path "/etc/passwd" (0.041423ms)
+✔ reject non-relative path "../outside" (0.021428ms)
+✔ reject non-relative path "a/../b" (0.016923ms)
+✔ reject non-relative path "a\\b" (0.016707ms)
+✔ reject non-relative path "C:/x" (0.016803ms)
+✔ reject non-relative path "a//b" (0.028676ms)
+✔ reject non-relative path "./a" (0.017616ms)
+✔ reject non-relative path "a\u0000b" (0.025936ms)
+✔ unsupported globs fail instead of silently matching nothing (0.071519ms)
+✔ brace expansion and negation still fail loudly (0.090718ms)
+✔ brackets and parentheses are literal path characters, never character classes (0.354134ms)
+✔ scope includes deletions and is not substring based (0.172113ms)
+✔ bounded new companion files can expand scope automatically but sensitive files cannot (1.990049ms)
+✔ small documentation follows fast path (0.484574ms)
+✔ sensitive path cannot become fast: src/auth/access.ts (0.265998ms)
+✔ sensitive path cannot become fast: package-lock.json (0.943188ms)
+✔ sensitive path cannot become fast: AGENTS.md (0.321098ms)
+✔ sensitive path cannot become fast: .github/workflows/test.yml (0.383846ms)
+✔ sensitive path cannot become fast: db/migrations/001.sql (0.594888ms)
+✔ sensitive path cannot become fast: docs/security/guide.md (0.636234ms)
+✔ binary changes force high assurance (0.391443ms)
+✔ unknown code and oversized docs default to standard (0.477067ms)
+✔ minimum requested assurance can only raise the lane (0.279205ms)
+✔ gate dependencies are included even outside their own lane/path filters (0.312827ms)
+✔ mandatory checks cannot be removed by lane or path filters (0.117278ms)
+✔ high lane runs all configured checks (0.129675ms)
+✔ empty selected validation is an error, never success (0.137217ms)
+✔ approval thresholds adapt to solo, team and regulated review modes (0.092915ms)
+✔ state machine refuses skipped verification (0.073847ms)
+✔ valid transition updates state (0.054263ms)
+✔ the approved mockup reaches the Implementer and QA, and survives the review workspace (3066.963626ms)
+✔ a replaced QA report regenerates the review documents on the same candidate (7428.118818ms)
+✔ tag scanning reads elements, not prose, and a quoted ">" cannot hide an attribute (1.452612ms)
+✔ a mockup may show markup and paths as text, and carry the project fonts inline (390.616287ms)
+✔ a mockup cannot load anything the operator did not put in the repository (2704.138434ms)
+✔ a later spec extends the visual direction already approved for the repository (662.229746ms)
+✔ abandoned lifecycle documents can be purged with their runs and workspaces, active ones cannot (424.161205ms)
+✔ a spec that asks no question must already cover every criterion with a task (230.612095ms)
+✔ failed gate diagnostics keep the failures, not only the tail of passing output (1.751757ms)
+✔ reference tokens follow import-like path fragments without naming a stack (0.745792ms)
+✔ tests referencing a task scope are listed, and those outside it are flagged (71.347819ms)
+✔ inventory recognises languages by declarative profiles and public surface rules (73.920096ms)
+✔ technologies without a declaration grammar become file-level units, never invisible (46.11288ms)
+✔ a project profile turns an unknown technology into declarations without controller changes (52.119911ms)
+✔ inventory delta surfaces new public surface and possible duplicates across naming conventions (68.517272ms)
+✔ repository intelligence exposes the whole inventory and ranks identifiers by their words (45.78914ms)
+✔ repository indexing code stays stack-agnostic: no framework is named in the controller (0.802506ms)
+✔ runtime role setup is the shipped Markdown source (5.771107ms)
+✔ runtime role product is the shipped Markdown source (5.042355ms)
+✔ runtime role implementer is the shipped Markdown source (4.454507ms)
+✔ runtime role qa is the shipped Markdown source (3.291981ms)
+✔ portable skill clean-code has valid metadata and real relative references (5.92957ms)
+✔ portable skill design-patterns has valid metadata and real relative references (2.134098ms)
+✔ portable skill refactoring has valid metadata and real relative references (2.325801ms)
+✔ portable skill security has valid metadata and real relative references (2.916497ms)
+✔ portable skill tdd has valid metadata and real relative references (2.587214ms)
+✔ portable skill ui-design has valid metadata and real relative references (2.489588ms)
+✔ skills remain disabled for old configs; duplicate and unknown IDs refused (1.56963ms)
+✔ routing is deterministic and skips UI on backend/unknown and all skills for Setup (18.421128ms)
+✔ context budget never silently truncates a skill and records skipped reasons (2.010995ms)
+✔ asset loader rejects escapes and unknown role (0.265176ms)
+✔ implementation actually receives the selected instructions and journals their hashes (1530.430899ms)
+✔ onboarding copies exact roles, skills and references and preserves CLAUDE.md (427.300109ms)
+✔ CLI discovery works without a provider and refuses invented names (542.652077ms)
+✔ CLI --provider claude selects Claude without executing it (353.95989ms)
+✔ inspection never executes a configured provider (216.015026ms)
+✔ inspect refuses to follow a symlinked generated guide (274.694653ms)
+✔ spec rejects unknown field (1.337233ms)
+✔ spec rejects duplicate criterion (0.540112ms)
+✔ spec rejects duplicate task (3.036332ms)
+✔ spec rejects missing dependency (0.681263ms)
+✔ spec rejects dependency cycle (0.396792ms)
+✔ spec rejects duplicate dependency (0.294688ms)
+✔ spec rejects unknown criterion (1.433072ms)
+✔ spec rejects unsafe glob (0.261317ms)
+✔ spec rejects blank criterion (0.190337ms)
+✔ spec rejects empty paths (0.325768ms)
+✔ spec rejects blank title (0.192102ms)
+✔ spec rejects duplicate criterion reference (0.183147ms)
+✔ open questions allowed in draft, never in approved spec (0.568842ms)
+✔ approved spec requires tasks and complete acceptance coverage (0.477797ms)
+✔ task order follows dependencies, not array order (0.83826ms)
+✔ spec hash binds base, config, repository, revision, decision ledger, security context and content (0.677677ms)
+✔ QA rejects wrong SHA (0.463998ms)
+✔ QA rejects missing criterion (0.215721ms)
+✔ QA rejects duplicate criterion (0.114217ms)
+✔ QA rejects unknown criterion (0.158562ms)
+✔ QA rejects pass with unknown (1.098679ms)
+✔ QA rejects pass with blocker (0.250585ms)
+✔ QA rejects blank evidence (0.123507ms)
+✔ QA rejects empty SHA (0.077695ms)
+✔ QA may report unknown as changes requested (2.433832ms)
+✔ role schema normalizes required fields without mutating runtime defaults (0.469662ms)
+✔ pipeline assistant instructions are sensitive files (4.287567ms)
+✔ provider schemas use only portable structured-output keywords at every depth (1.352756ms)
+✔ provider literal schema has explicit type and enum instead of const (0.174694ms)
+✔ provider schema normalization never weakens authoritative runtime validation (1.563658ms)
+✔ confirmed product decisions must map to acceptance criteria before spec approval (0.885602ms)
+✔ QA cannot pass while a confirmed product decision is unassessed or failed (0.769883ms)
+✔ ambiguous Product decisions stay questions until an operator-backed resolution is captured (1.411818ms)
+✔ unapproved spec cannot start an agent (186.369106ms)
+✔ open questions and wrong hash prevent Product approval (232.206946ms)
+✔ refinement invalidates approval and changes revision hash (191.391637ms)
+✔ frontend UI work produces a reviewable mockup that is bound to spec approval before implementation (378.442537ms)
+✔ single-task lifecycle creates one integrated human-review checkpoint and no intermediate review (2697.201441ms)
+✔ whole spec performs QA repair, aggregate checks and local delivery (6944.882525ms)
+✔ high-risk assurance requires two distinct reviewers (2829.582424ms)
+✔ solo mode needs only one human approval even for high-risk integrated work (2694.669336ms)
+✔ new companion files inside the approved module flow without a scope approval (2422.025614ms)
+✔ manual QA remains mandatory even when low-level run was approved (2561.227453ms)
+✔ QA repair budget stops recurring requests (4101.931327ms)
+✔ revalidation invalidates QA and human approvals (8117.097906ms)
+✔ running an already paused spec does not recall Product or Implementer (2588.816921ms)
+✔ spec cannot be rewritten after the first attempt (2132.284278ms)
+✔ structural scope expansion retains the candidate and can be amended without returning to the old base (2488.226585ms)
+✔ stale spec cannot start against a moved local base (138.678899ms)
+✔ spec survives closing and reopening the SQLite store (2522.581273ms)
+✔ changed delivery files are detected on repeat export (2435.720246ms)
+✔ existing branch at a different commit is never overwritten (2145.438061ms)
+✔ local close refuses a base that does not contain the candidate (2204.558272ms)
+✔ rejected spec can never export or publish a candidate (1880.046283ms)
+✔ active-time budget exhaustion cannot yield ready (125.344371ms)
+✔ delivery rejects an external symlink ancestor into the source before writing (1651.101838ms)
+✔ Product loads the committed Decision Ledger and refuses to silently drop confirmed business decisions (128.620796ms)
+✔ invalid committed Decision Ledger is never silently treated as empty (56.995143ms)
+✔ GitHub remote parser accepts https://github.com/example/demo.git (1.131621ms)
+✔ GitHub remote parser accepts git@github.com:example/demo.git (0.179265ms)
+✔ GitHub remote parser accepts ssh://git@github.com/example/demo.git (2.305955ms)
+✔ GitHub remote parser accepts https://github.com/example/demo (0.131647ms)
+✔ GitHub remote parser rejects https://user:password@github.com/example/demo.git (0.696076ms)
+✔ GitHub remote parser rejects https://evil.test/example/demo (0.296932ms)
+✔ GitHub remote parser rejects file:///tmp/repo (0.087059ms)
+✔ GitHub remote parser rejects ext::bad (0.05424ms)
+✔ GitHub remote parser rejects https://github.com/../demo (0.072423ms)
+✔ GitHub remote parser rejects https://github.com/example/demo?other=1 (0.113309ms)
+✔ publish requires separate push and PR consent before transport (2696.295414ms)
+✔ publish creates exact-head draft PR and never invokes a merge or force push (2803.013254ms)
+✔ retry after unknown create outcome reconciles existing PR instead of duplicating (2961.421733ms)
+✔ remote repository mismatch prevents push (2767.565963ms)
+✔ moving remote base prevents publishing unintegrated candidate (2839.78002ms)
+✔ existing remote branch with different head is not overwritten (2662.98532ms)
+✔ publication intent cannot be silently retargeted (2674.80861ms)
+✔ sync refuses changed PR head instead of closing a spec (2795.941121ms)
+✔ sync closes only on observed merged exact-head PR (2758.814019ms)
+✔ closed-unmerged PR blocks rather than marks delivered (2725.986931ms)
+✔ onboarding detects real npm scripts without executing them (110.50883ms)
+✔ SvelteKit is detected as frontend and check is promoted to a real gate (84.074889ms)
+✔ review mode is chosen once in onboarding instead of editing pipeline JSON manually (122.624684ms)
+✔ placeholder test is never promoted to a valid gate (99.68733ms)
+✔ unknown stack stays blocked instead of inventing checks (1.691633ms)
+✔ conflicting manifests produce an explicit unresolved question (118.821333ms)
+✔ installation requires exact hash and preserves existing AGENTS content (189.218672ms)
+✔ installation refuses preexisting operator config (94.825749ms)
+✔ installation rejects changed source between preview and approval (135.031893ms)
+✔ unanswered onboarding proposal cannot apply (118.848039ms)
+✔ installation rejects ignored symlink directory escape (137.832392ms)
+✔ assisted onboarding invokes a read-only role and accepts a structured proposal (330.651078ms)
+✔ doctor does not run code without explicit execute flag (76.179884ms)
+✔ doctor executes real baseline checks without calling Implementer (957.037804ms)
+✔ doctor reports a failing baseline, never an implicit pass (1108.629185ms)
+✔ onboarding promotes existing project-owned security scripts without inventing scanners (94.615789ms)
+✔ lifecycle store rejects optimistic write conflicts (82.851331ms)
+✔ lifecycle lease cannot be stolen while controller is alive (76.356055ms)
+✔ document payload corruption is detected before use (73.702287ms)
+✔ schema migration accepts v1 store and retains run data (153.434681ms)
+✔ future database version is rejected (82.453339ms)
+✔ Product cannot modify its workspace and still return a valid spec (258.535678ms)
+✔ Codex Product transport requests read-only and parses schema-bound final file (326.916785ms)
+✔ actual workflow SIGKILL requires explicit recovery and candidate adoption (2777.634915ms)
+✔ full real Git edit -> test -> review -> exact patch; host tree untouched (1414.922035ms)
+✔ fast documentation path avoids the review handoff (1422.211115ms)
+✔ sensitive path automatically escalates and requires two distinct reviewer labels (1350.591608ms)
+✔ out-of-scope modifications fail before any gate executes (678.586766ms)
+✔ no-op agent is not a completed task (426.52692ms)
+✔ malformed/authoritative agent output is rejected (302.042706ms)
+✔ failed checks cannot be approved (1213.997886ms)
+✔ bounded repair can fix a failed candidate without new Product/QA calls (2400.292834ms)
+✔ repair budget stops an unproductive agent (1734.744833ms)
+✔ gate mutations invalidate every would-be cached proof (1309.311831ms)
+✔ fresh validator does not trust ignored output planted by agent (1331.487905ms)
+✔ revalidation reuses only sealed, opted-in exact-candidate proofs (1915.803516ms)
+✔ cache disabled by default re-executes a gate (2116.833063ms)
+✔ changed allowed environment variable invalidates cache (2310.048065ms)
+✔ revalidation invalidates prior approvals even with cached proofs (2151.706017ms)
+✔ wrong candidate SHA is never approved (1390.507568ms)
+✔ a dirty candidate after validation cannot be approved (1227.399043ms)
+✔ expired evidence requires revalidation (1145.131052ms)
+✔ rejection is terminal and retained (1316.080385ms)
+✔ resume of completed validation performs no work (1315.598004ms)
+✔ restart with a new Pipeline instance preserves the run (1215.97758ms)
+✔ cancellation during agent does not silently rerun it (1290.881569ms)
+✔ run time budget yields interruption, not success (317.052333ms)
+✔ setup failure is infrastructure failure, not repairable code (180.513583ms)
+✔ gate infrastructure timeout is never turned into success (1229.011975ms)
+✔ state stored inside source repository is refused (102.597359ms)
+✔ source dirty files cannot silently become task input (64.267725ms)
+✔ runProcess resolves when a detached descendant keeps the stdio pipes open (1042.94812ms)
+✔ a normal command still resolves immediately without waiting for the pipe grace period (34.515158ms)
+✔ process captures a real exit code, not text claiming success (22.971215ms)
+✔ process receives stdin (26.256666ms)
+✔ arguments never use shell expansion (23.89651ms)
+✔ per-command timeout terminates the process (64.731601ms)
+✔ external cancellation is not reported as success (64.556534ms)
+✔ pre-aborted command is never spawned (0.556069ms)
+✔ missing executable reports spawn_error (3.362979ms)
+✔ output capture is bounded while digest covers full stream (28.870882ms)
+✔ failed process bookkeeping terminates the command (3.905598ms)
+✔ environment is an explicit allowlist (0.882498ms)
+✔ known secrets are redacted in diagnostics (0.267834ms)
+✔ whole argument substitutions preserve data without shell interpretation (0.146348ms)
+✔ partial or unknown placeholders are refused (0.203759ms)
+✔ independent gates actually overlap up to the configured limit (43.109992ms)
+✔ dependency gates wait for successful parents (21.314826ms)
+✔ exclusive resource locks prevent overlapping database users (31.808196ms)
+✔ failed dependencies are blocked, not skipped-as-success (0.556785ms)
+✔ fail-fast aborts running siblings and drains them before returning (25.731771ms)
+✔ scheduler drains running siblings after an execution exception (5.201299ms)
+✔ pre-cancelled scheduler launches no gate (0.493959ms)
+✔ receipt schema refuses invalid intermediate SHA length (1.205147ms)
+✔ receipt schema refuses empty config hash (0.18459ms)
+✔ receipt schema refuses NaN duration (0.148385ms)
+✔ receipt schema refuses negative duration (0.135022ms)
+✔ receipt schema refuses false pass with nonzero exit (0.243466ms)
+✔ receipt schema refuses missing success stream digests (0.101514ms)
+✔ receipt schema refuses forged cached status (0.10571ms)
+✔ receipt schema refuses unknown field (0.073213ms)
+✔ receipt schema is generated with strict fields (0.137003ms)
+✔ receipt-only caching refuses artifact-producing checks (4.055788ms)
+✔ receipt-only caching refuses dependency chains without an artifact cache (1.162396ms)
+✔ sealing a modified receipt does not certify a different observation (135.752908ms)
+✔ two different runs cannot race shared resources in one local store (143.975073ms)
+✔ scheduler drains siblings even when blocked-result bookkeeping throws (31.266772ms)
+✔ POSIX normal leader exit also stops a background child (46.302715ms)
+✔ CLI help and version work without a project or API credentials (147.09128ms)
+✔ CLI init never overwrites an existing operator config (108.660186ms)
+✔ CLI complete workflow returns review exit code 2 then exports a patch (1852.383962ms)
+✔ Codex adapter contract uses schema, workspace sandbox, stdin and final file (stub, not a model) (1282.810564ms)
+✔ an interrupted agent never imports an unchecked symlink candidate (488.929195ms)
+✔ real SIGKILL of a controller leaves a durable lease; explicit recovery does not rerun the agent (1205.327429ms)
+✔ recovery after the final validation checkpoint preserves completion and closes the session (1373.979826ms)
+✔ export rechecks required approvals even if a bad internal caller marks the run ready (1335.890973ms)
+✔ review rejects a receipt altered after the runner persisted it (1396.850121ms)
+✔ every documented lifecycle command is routed by the binary (921.9944ms)
+✔ Product, design and QA output-contract violations are repaired once with the controller error (7843.048599ms)
+✔ timeouts and process failures are never retried as output repairs (579.602905ms)
+✔ bootstrap repairs a ledger that gives clarification metadata to a confirmed decision (288.903455ms)
+✔ Product receives the real execution capabilities of the configured Implementer (0.606711ms)
+✔ candidate commit subjects come from the task title (0.259377ms)
+✔ decision ledger updates are planned, hash-bound, supersede explicitly and commit (161.326482ms)
+✔ gc removes workspaces of rejected specs only after a dry run, never active material (2475.498257ms)
+✔ an Implementer without a shell cannot be given a tool-generated file, and generatedPaths adapts per stack (243.015494ms)
+✔ task context and QA diff limits are configurable within bounded ceilings (172.362551ms)
+✔ an invalid path pattern proposed by a role is an output-contract violation eligible for repair (0.759862ms)
+✔ repository intelligence surfaces reuse candidates and follows the current immutable SHA (135.438586ms)
+✔ authentication/password work routes OWASP auth topics, threat modeling and negative tests (3.377438ms)
+✔ outbound API work routes SSRF, REST and validation guidance (0.913782ms)
+✔ AI agent and MCP work routes agent, prompt-injection, AI coding and MCP guidance (0.506636ms)
+✔ ordinary arithmetic change stays fast and does not become a supply-chain task just because a lockfile exists elsewhere (1.330351ms)
+✔ Product cannot drop controller-routed OWASP topics or required threat modeling (2.270082ms)
+✔ QA cannot pass a security-sensitive spec without evidence for every security requirement (1.417184ms)
+✔ shipped roles treat repository and external content as untrusted prompt-injection surfaces (0.879065ms)
+✔ semantic review entries for proposed decisions are dropped, negative ones kept as warnings (1.675165ms)
+✔ semantic review still rejects decision ids absent from the ledger (0.483812ms)
+✔ semantic review still requires every material decision (1.394348ms)
+✔ spec summary tolerates records created before the alpha.8 security layer (151.903145ms)
+✔ spec summary still reports the security context of current records (163.4187ms)
+✔ optimistic locking rejects a stale writer (131.444073ms)
+✔ run and its event are written together (88.700368ms)
+✔ concurrent lease acquisition is rejected across connections (125.583489ms)
+✔ recovery cannot steal a live controller lease (96.604217ms)
+✔ recovery requires explicit operator confirmation (99.093558ms)
+✔ recovery refuses a known live child even without a controller lease (99.247681ms)
+✔ unsealed successful command cannot populate cache (76.132144ms)
+✔ sealed proof expires and a cache hit cannot extend the original TTL (92.170875ms)
+✔ failed proof is never cached (78.892638ms)
+✔ empty proof identity is rejected, unlike the V1 empty strings defect (68.087298ms)
+✔ evidence key invalidates when candidateSha changes (0.338576ms)
+✔ evidence key invalidates when baseSha changes (0.088536ms)
+✔ evidence key invalidates when configHash changes (0.048027ms)
+✔ evidence key invalidates when environmentHash changes (0.14014ms)
+✔ evidence key invalidates when taskHash changes (0.071217ms)
+✔ evidence key invalidates when workspace changes (0.041804ms)
+✔ evidence key invalidates when repository changes (0.034925ms)
+✔ evidence key invalidates when dependencyKeys changes (0.041969ms)
+✔ evidence key invalidates when executable changes (0.116393ms)
+✔ evidence key invalidates when gate changes (0.072402ms)
+✔ full lockfile mutation contributes a different candidate identity (0.191037ms)
+✔ environment id and allowed values affect identity without persisting plaintext (0.210334ms)
+✔ executable identity hashes the actual binary (287.360371ms)
+✔ task description holds a threat-modelled UI spec context beyond 30k chars (0.760279ms)
+✔ task description remains bounded (1.518704ms)
+ℹ tests 350
+ℹ suites 0
+ℹ pass 350
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 60453.93766
