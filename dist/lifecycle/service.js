@@ -6,7 +6,7 @@ import { validateConfig, taskSchema, DEFAULT_LIMITS } from '../domain/contracts.
 import { hash, sha256 } from '../domain/hash.js';
 import { PipelineError, errorMessage, invariant } from '../domain/errors.js';
 import { Git, isInside } from '../execution/git.js';
-import { specSchema, qaSchema, designProposalSchema, validateSpec, assertSpecReadiness, validateQa, specHash, approvalHash, specMarkdown, stricter, reviewer } from './contracts.js';
+import { specSchema, qaSchema, designProposalSchema, validateSpec, assertSpecReadiness, criterionAmendmentHash, validateQa, specHash, approvalHash, specMarkdown, stricter, reviewer } from './contracts.js';
 import { runRole } from './roles.js';
 import { executionCapabilities, validateTaskCapabilities } from './capabilities.js';
 import { matches, requiredApprovals } from '../policy/policy.js';
@@ -106,7 +106,16 @@ export class Lifecycle {
         invariant(r.content && r.approval && r.contentHash === specHash(r) && r.approval.hash === approvalHash(r), 'SPEC_APPROVAL', 'An exact, current spec/design approval is required');
         if (this.requiresDesign(r.content, r.config.skills.projectType))
             invariant(r.design && r.design.proposal.questions.length === 0, 'DESIGN_APPROVAL', 'An approved UI design mockup is required before implementation');
-        return validateSpec(r.content, true, r.decisionLedger, r.request, r.securityContext);
+        const spec = validateSpec(r.content, true, r.decisionLedger, r.request, r.securityContext);
+        // The stored content keeps exactly what the operator approved; corrections are applied on the way
+        // out, each carrying its own approval, so the original text stays auditable.
+        const corrections = (r.criterionAmendments ?? []).filter(a => a.status === 'approved');
+        if (!corrections.length)
+            return spec;
+        return { ...spec, acceptance: spec.acceptance.map(c => {
+                const fix = [...corrections].reverse().find(a => a.criterionId === c.id);
+                return fix ? { ...c, description: fix.description, verification: fix.verification } : c;
+            }) };
     }
     async draft(options) {
         invariant(options.request.trim().length > 0 && options.request.length <= 30000, 'REQUEST', 'Provide a request up to 30000 characters');
@@ -471,6 +480,62 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         doc.data.status = 'blocked';
         doc.data.error = run.error ?? { code: run.state === 'interrupted' ? 'INTERRUPTED' : 'EXECUTION', message: `Run ${run.id} is ${run.state}` };
         this.save(doc, 'workflow.blocked', { runId: run.id, error: doc.data.error });
+    }
+    /** Records a proposed correction of one acceptance criterion and returns its hash for explicit approval. */
+    planCriterionAmendment(id, criterionId, correction) {
+        const token = this.store.acquireDocument(id);
+        try {
+            const doc = this.get(id);
+            const r = doc.data;
+            const spec = this.approved(r);
+            invariant(!['closed', 'rejected', 'delivered'].includes(r.status), 'STATE', 'This spec no longer accepts a criterion correction');
+            invariant(r.attempts.length > 0, 'CRITERION_AMENDMENT', 'Execution has not started: refine the spec instead of amending a criterion');
+            const criterion = spec.acceptance.find(c => c.id === criterionId);
+            invariant(criterion, 'CRITERION_AMENDMENT', `Unknown acceptance criterion ${criterionId}`);
+            const description = correction.description.trim();
+            const verification = correction.verification.trim();
+            invariant(description.length >= 10 && description.length <= 3000 && verification.length >= 10 && verification.length <= 3000, 'CRITERION_AMENDMENT', 'A corrected criterion needs an observable description and verification');
+            invariant(correction.reason.trim().length >= 20, 'CRITERION_AMENDMENT', 'Explain why the approved criterion cannot hold');
+            invariant(description !== criterion.description || verification !== criterion.verification, 'CRITERION_AMENDMENT', 'The correction is identical to the approved criterion');
+            const previous = { description: criterion.description, verification: criterion.verification };
+            const amendment = { id: randomUUID(), criterionId, previous, description, verification, reason: correction.reason.trim(),
+                hash: criterionAmendmentHash({ criterionId, previous, description, verification, reason: correction.reason.trim() }),
+                status: 'pending', at: Date.now(), approvedAt: null, reviewer: null, note: null };
+            r.criterionAmendments = [...(r.criterionAmendments ?? []).filter(a => !(a.status === 'pending' && a.criterionId === criterionId)), amendment];
+            this.save(doc, 'criterion.amendment_proposed', { amendmentId: amendment.id, criterionId, hash: amendment.hash, previous, description, verification, reason: amendment.reason });
+            return doc;
+        }
+        finally {
+            this.store.releaseDocument(id, token);
+        }
+    }
+    /** Applies a criterion correction the operator approved by its exact hash, and reopens assessment. */
+    approveCriterionAmendment(id, amendmentId, expectedHash, actor, note) {
+        reviewer(actor, note);
+        const token = this.store.acquireDocument(id);
+        try {
+            const doc = this.get(id);
+            const r = doc.data;
+            this.approved(r);
+            const amendment = (r.criterionAmendments ?? []).find(a => a.id === amendmentId);
+            invariant(amendment && amendment.status === 'pending', 'CRITERION_AMENDMENT', 'Pending criterion amendment not found');
+            invariant(amendment.hash === expectedHash, 'CRITERION_HASH', 'Approve the exact corrected criterion hash');
+            amendment.status = 'approved';
+            amendment.approvedAt = Date.now();
+            amendment.reviewer = actor.trim();
+            amendment.note = note.trim();
+            // The criterion changed, so no previous assessment of it still applies.
+            r.qa = null;
+            r.review = null;
+            r.delivery = null;
+            r.status = 'running';
+            r.error = null;
+            this.save(doc, 'criterion.amendment_approved', { amendmentId: amendment.id, criterionId: amendment.criterionId, hash: amendment.hash, reviewer: actor.trim(), note: note.trim(), previous: amendment.previous, description: amendment.description });
+            return doc;
+        }
+        finally {
+            this.store.releaseDocument(id, token);
+        }
     }
     async approveScopeAmendment(id, amendmentId, actor, note) {
         reviewer(actor, note);

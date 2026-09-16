@@ -69,6 +69,14 @@ export declare class Lifecycle {
     private executeActive;
     private requestScopeAmendment;
     private block;
+    /** Records a proposed correction of one acceptance criterion and returns its hash for explicit approval. */
+    planCriterionAmendment(id: string, criterionId: string, correction: {
+        description: string;
+        verification: string;
+        reason: string;
+    }): Document<SpecRecord>;
+    /** Applies a criterion correction the operator approved by its exact hash, and reopens assessment. */
+    approveCriterionAmendment(id: string, amendmentId: string, expectedHash: string, actor: string, note: string): Document<SpecRecord>;
     approveScopeAmendment(id: string, amendmentId: string, actor: string, note: string): Promise<Document<SpecRecord>>;
     run(id: string, options?: WorkflowOptions): Promise<Document<SpecRecord>>;
     private qaMarkdown;

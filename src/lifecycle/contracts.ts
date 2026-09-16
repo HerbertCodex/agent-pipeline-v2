@@ -276,6 +276,29 @@ export interface ScopeAmendment {
     reviewer: string | null;
     note: string | null;
 }
+/**
+ * Correction of one acceptance criterion of a spec whose execution has started. A spec is immutable once
+ * running, but a criterion can turn out to be unsatisfiable (it forbids what the approved change requires).
+ * Without this, the only exit was to throw away a finished, passing candidate. It corrects exactly one
+ * criterion's text, never its id, and never scope, tasks, paths or decisions.
+ */
+export interface CriterionAmendment {
+    id: string;
+    criterionId: string;
+    previous: { description: string; verification: string };
+    description: string;
+    verification: string;
+    reason: string;
+    hash: string;
+    status: 'pending' | 'approved';
+    at: number;
+    approvedAt: number | null;
+    reviewer: string | null;
+    note: string | null;
+}
+export function criterionAmendmentHash(a: Pick<CriterionAmendment, 'criterionId' | 'previous' | 'description' | 'verification' | 'reason'>): string {
+    return hash({ criterionId: a.criterionId, previous: a.previous, description: a.description, verification: a.verification, reason: a.reason });
+}
 export interface ReviewWorkspace {
     directory: string;
     candidateDirectory: string;
@@ -323,6 +346,7 @@ export interface SpecRecord {
     qaRepairs: number;
     design: DesignRecord | null;
     scopeAmendments: ScopeAmendment[];
+    criterionAmendments?: CriterionAmendment[];
     review: ReviewWorkspace | null;
     sessionStartedAt: number | null;
     activeMs: number;
