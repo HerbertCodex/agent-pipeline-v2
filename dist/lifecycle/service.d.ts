@@ -85,6 +85,12 @@ export declare class Lifecycle {
     /** Design context scoped to one task: legacy proposals without taskScopes keep the whole design. */
     private designContextFor;
     private makeTask;
+    /**
+     * The retried task, told why the previous attempt stopped: its error, the diagnostics of the checks it
+     * failed and its own summary. The new attempt starts from the approved base, so without this it would
+     * repeat a failure it cannot see. The context is trimmed to fit `limits.maxTaskContextChars`.
+     */
+    private withPreviousAttempt;
     /** The repair task for the current QA report, built from the current effective spec and amendments. */
     private qaRepairTask;
     private aggregateTask;
