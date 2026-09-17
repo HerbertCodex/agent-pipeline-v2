@@ -500,6 +500,17 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         const allowedNewPaths = this.companionPaths(allowedPaths);
         return taskSchema.parse({ id: t.id, title: t.title, description, acceptance: acceptance.map(a => a.description), allowedPaths, allowedNewPaths, maxNewFiles: allowedNewPaths.length ? 4 : 0, reviewRequired: false, minimumLane: stricter(t.minimumLane, spec.minimumLane, securityRequirements.length ? r.securityContext.minimumLane : 'fast') });
     }
+    /** The repair task for the current QA report, built from the current effective spec and amendments. */
+    qaRepairTask(r) {
+        invariant(r.qa, 'QA_REQUIRED', 'A QA report is required to build a repair');
+        const description = [
+            'Correct the following QA findings without broadening the approved scope.',
+            'When a finding can only be fixed in a file outside the approved paths (for example a comment made false by an approved change), make the smallest change there anyway: the controller then stops and asks the operator for an explicit scope amendment. Never broaden a feature to do so.',
+            'When a finding cannot be fixed by changing files (for example it is about what a report must contain), say so precisely in your summary; QA reads the task summaries.',
+        ].join('\n') + '\n' + JSON.stringify({ approvedSpec: this.approved(r), qa: r.qa.report, taskSummaries: this.taskSummaries(r) });
+        invariant(description.length <= (r.config.limits?.maxTaskContextChars ?? DEFAULT_LIMITS.maxTaskContextChars), 'TASK_CONTEXT', 'QA repair context exceeds limits.maxTaskContextChars; prepare an explicit follow-up');
+        return this.aggregateTask(r, description);
+    }
     aggregateTask(r, description) {
         const spec = this.approved(r);
         const minimum = stricter(spec.minimumLane, r.securityContext.minimumLane, ...r.attempts.map(a => this.pipeline.store.get(a.runId).risk?.lane ?? 'fast'));
@@ -798,13 +809,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                         this.save(doc, 'qa.repair_budget_exhausted');
                         return doc;
                     }
-                    const description = [
-                        'Correct the following QA findings without broadening the approved scope.',
-                        'When a finding can only be fixed in a file outside the approved paths (for example a comment made false by an approved change), make the smallest change there anyway: the controller then stops and asks the operator for an explicit scope amendment. Never broaden a feature to do so.',
-                        'When a finding cannot be fixed by changing files (for example it is about what a report must contain), say so precisely in your summary; QA reads the task summaries.',
-                    ].join('\n') + '\n' + JSON.stringify({ approvedSpec: spec, qa: r.qa.report, taskSummaries: this.taskSummaries(r) });
-                    invariant(description.length <= (r.config.limits?.maxTaskContextChars ?? DEFAULT_LIMITS.maxTaskContextChars), 'TASK_CONTEXT', 'QA repair context exceeds limits.maxTaskContextChars; prepare an explicit follow-up');
-                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, config: r.config, task: this.aggregateTask(r, description) });
+                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, config: r.config, task: this.qaRepairTask(r) });
                     r.qaRepairs++;
                     r.attempts.push({ taskId: `QA-REPAIR-${r.qaRepairs}`, runId: run.id, kind: 'qa-repair' });
                     r.activeRunId = run.id;
@@ -1077,13 +1082,17 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             else {
                 const attempt = r.attempts.find(a => a.runId === failed.id);
                 invariant(attempt, 'STATE', 'Failed attempt missing from history');
-                const replacement = await this.pipeline.create({ repo: r.repo, baseRef: failed.baseSha, config: failed.config, task: failed.task });
+                // Rebuild the task from the current state: a frozen copy would ignore amendments, criterion
+                // corrections and repair guidance approved or released since the failed attempt was created.
+                const specTask = this.approved(r).tasks.find(t => t.id === attempt.taskId);
+                const task = attempt.kind === 'qa-repair' && r.qa ? this.qaRepairTask(r) : specTask ? this.makeTask(r, specTask) : failed.task;
+                const replacement = await this.pipeline.create({ repo: r.repo, baseRef: failed.baseSha, config: failed.config, task });
                 r.attempts.push({ ...attempt, runId: replacement.id });
                 r.activeRunId = replacement.id;
             }
             r.status = 'running';
             r.error = null;
-            this.save(doc, 'workflow.retry_authorized', { previousRunId: failed.id, replacementRunId: r.activeRunId });
+            this.save(doc, 'workflow.retry_authorized', { previousRunId: failed.id, replacementRunId: r.activeRunId, taskRebuilt: r.activeRunId !== null && this.pipeline.store.get(r.activeRunId).task.description !== failed.task.description });
             return doc;
         }
         finally {

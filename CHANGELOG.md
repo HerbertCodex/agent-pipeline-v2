@@ -2,6 +2,8 @@
 
 ## Non publié
 
+- `apv2 spec retry` reconstruit la tâche à partir de l'état actuel (spec effective, amendements approuvés, consigne de réparation en vigueur) au lieu de rejouer la copie figée de la tentative échouée. Constaté sur un vrai projet : après un correctif de la consigne de réparation QA, la relance a rejoué l'ancienne consigne et le correctif ne pouvait pas s'appliquer à la spec pour laquelle il avait été fait.
+
 - La QA reçoit `taskSummaries`, ce que chaque tentative a rapporté : un critère qui demande à l'Implementer de *signaler* quelque chose devient vérifiable, au lieu de rester « inconnu ». Son rôle précise qu'un résumé est une affirmation, jamais une preuve du comportement.
 - Une réparation QA sait qu'elle peut toucher, au minimum, un fichier hors périmètre quand un constat l'exige : le contrôleur demande alors un amendement explicite. Elle reçoit aussi les résumés des tâches, et doit dire précisément quand un constat ne se corrige pas dans les fichiers.
 - `NO_CHANGE` indique ce que la dernière tentative a expliqué et propose `spec retry` ou une spec de suivi.
