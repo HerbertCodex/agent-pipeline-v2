@@ -759,11 +759,26 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                     }
                     else {
                         const finalConfig = { ...r.config, maxRepairAttempts: 0, gates: r.config.gates.map(g => ({ ...g, mandatory: true })) };
-                        const run = await this.pipeline.createValidation({ repo: r.repo, baseRef: r.baseSha, config: finalConfig, task: this.aggregateTask(r, 'Validate the complete approved specification on its aggregate candidate, including interactions across tasks.') }, r.currentSha);
-                        r.finalRunId = run.id;
-                        r.validationRunIds.push(run.id);
-                        r.activeRunId = run.id;
-                        this.save(doc, 'integration.created', { runId: run.id, candidateSha: r.currentSha });
+                        const validation = { repo: r.repo, baseRef: r.baseSha, config: finalConfig, task: this.aggregateTask(r, 'Validate the complete approved specification on its aggregate candidate, including interactions across tasks.') };
+                        // The single task already proved this exact candidate: adopt its receipts into the
+                        // reviewable integration run instead of replaying every gate. The review requirement stays.
+                        const refusal = only && only.baseSha === r.baseSha && only.candidateSha === r.currentSha && proven(only)
+                            ? await this.pipeline.adoptionRefusal(validation, only.id) : 'no single proven attempt on this candidate';
+                        if (only && refusal === null) {
+                            const run = await this.pipeline.adoptValidation(validation, only.id);
+                            r.finalRunId = run.id;
+                            r.validationRunIds.push(run.id);
+                            this.save(doc, 'integration.adopted', { runId: run.id, sourceRunId: only.id, candidateSha: r.currentSha, state: run.state });
+                        }
+                        else {
+                            if (only)
+                                this.save(doc, 'integration.adoption_refused', { sourceRunId: only.id, reason: refusal });
+                            const run = await this.pipeline.createValidation(validation, r.currentSha);
+                            r.finalRunId = run.id;
+                            r.validationRunIds.push(run.id);
+                            r.activeRunId = run.id;
+                            this.save(doc, 'integration.created', { runId: run.id, candidateSha: r.currentSha });
+                        }
                     }
                 }
                 let final = this.pipeline.store.get(r.finalRunId);

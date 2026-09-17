@@ -177,6 +177,40 @@ test('reuse is refused when it would lower the approvals the integration require
   assert.equal(f.life.pipeline.store.get(d.data.attempts[0].runId).risk.lane, 'standard');
   assert.equal(d.data.validationRunIds.length, 1, 'a standard lane keeps its reviewable integration run');
   assert.equal(d.data.status, 'awaiting_review');
+
+  // Operator decision: the integration run adopts the task's proof instead of replaying the gates.
+  const task = f.life.pipeline.store.get(d.data.attempts[0].runId);
+  const final = f.life.pipeline.store.get(d.data.finalRunId);
+  assert.ok(f.life.store.documentEvents(d.id).some(e => e.type === 'integration.adopted'));
+  assert.equal(final.state, 'awaiting_review', 'the review requirement is untouched');
+  assert.ok(final.receipts.every(x => x.status === 'cached' && task.receipts.some(t => t.id === x.reusedFrom)), 'every receipt names the one it adopts');
+  assert.equal(final.validatedAt, task.validatedAt, 'adoption never extends freshness');
+  assert.ok(!f.life.pipeline.store.events(final.id).some(e => e.type === 'gate.started'), 'no gate was replayed');
+  d = await f.life.review(d.id, d.data.currentSha, 'Test Reviewer', 'Read the adopted proof and the candidate.');
+  assert.equal(d.data.status, 'ready', 'the adopted run is approvable like any validation');
+});
+
+test('adoption is refused when the proof no longer matches exactly', async (t) => {
+  const f = lifecycleFixture(t);
+  const config = { ...f.config, workflow: { ...f.config.workflow, qaLanes: [], reviewMode: 'team' } };
+  let d = await f.life.draft({ repo: f.repo, config, request: 'Implement the approved arithmetic example.', proposal: oneTask() });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+  d = await f.life.run(d.id);
+  const task = f.life.pipeline.store.get(d.data.attempts[0].runId);
+  const validation = { repo: f.repo, baseRef: d.data.baseSha, config: { ...config, maxRepairAttempts: 0 }, task: { ...task.task, id: 'PROBE', reviewRequired: true } };
+  assert.equal(await f.life.pipeline.adoptionRefusal(validation, task.id), null, 'the untouched proof is adoptable');
+
+  const otherGates = { ...validation, config: { ...validation.config, gates: validation.config.gates.map(g => g.id === 'unit' ? { ...g, command: [...g.command, '--extra'] } : g) } };
+  assert.match(await f.life.pipeline.adoptionRefusal(otherGates, task.id), /gate plan differs/);
+  const otherSetup = { ...validation, config: { ...validation.config, setup: [{ command: ['node', '--version'] }] } };
+  assert.match(await f.life.pipeline.adoptionRefusal(otherSetup, task.id), /setup or environment differs/);
+
+  // Proof older than its maximum age is never adopted: adoption does not extend freshness.
+  const run = f.life.pipeline.store.get(task.id);
+  run.validatedAt = Date.now() - run.config.validationMaxAgeMs - 1000;
+  f.life.pipeline.store.save(run, 'test.aged', {});
+  assert.match(await f.life.pipeline.adoptionRefusal(validation, task.id), /evidence is not usable.*expired/i);
+  await assert.rejects(f.life.pipeline.adoptValidation(validation, task.id), /Proof cannot be adopted/);
 });
 
 // A running spec is immutable by design, but a criterion can turn out to forbid what the approved change

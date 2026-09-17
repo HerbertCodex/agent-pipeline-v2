@@ -76,6 +76,76 @@ export class Pipeline {
       this.store.save(run, 'candidate.import_failed'); throw error;
     }
   }
+  /**
+   * Why a validation of `options` could not adopt the proof already produced by `sourceId`, or null when it
+   * can. Adoption is deliberately narrow: same base, candidate, change set and risk lane; the same gate plan
+   * (commands, environment variables, dependencies, setup); the same environment identity measured now; and
+   * fresh, verified evidence on the source. Anything else must be validated again.
+   */
+  async adoptionRefusal(options: StartOptions, sourceId: string): Promise<string | null> {
+    const source = this.store.get(sourceId);
+    if (!['ready', 'awaiting_review'].includes(source.state) || !source.candidateSha || !source.risk || !source.changeSet) return 'source run is not validated';
+    try { await this.evidenceReady(source, source.candidateSha); }
+    catch (error) { return `source evidence is not usable: ${errorMessage(error)}`; }
+    const config = validateConfig(options.config);
+    const git = new Git();
+    const base = await git.sha(options.repo, options.baseRef ?? 'HEAD');
+    if (base !== source.baseSha) return 'base differs';
+    const changes = await git.changes(options.repo, source.baseSha, source.candidateSha);
+    if (hash(changes) !== hash(source.changeSet)) return 'change set differs';
+    const lane = classify(changes, config, taskSchema.parse(options.task).minimumLane).lane;
+    if (lane !== source.risk.lane) return `risk lane differs (${lane} vs ${source.risk.lane})`;
+    const shape = (g: Gate) => ({ id: g.id, command: g.command, passEnv: g.passEnv, dependsOn: g.dependsOn, outputs: g.outputs });
+    const plan = planGates(config, changes, lane);
+    if (hash(plan.map(shape)) !== hash(planGates(source.config, source.changeSet, source.risk.lane).map(shape))) return 'gate plan differs';
+    if (hash(config.setup) !== hash(source.config.setup) || config.executionMode !== source.config.executionMode || config.environment.id !== source.config.environment.id) return 'setup or environment differs';
+    if (!plan.every(g => source.receipts.some(r => r.gateId === g.id && success(r)))) return 'source does not prove every planned gate';
+    return null;
+  }
+  /**
+   * Validation run that adopts the receipts of `sourceId` instead of replaying its gates. Each adopted receipt
+   * is `cached` with `reusedFrom`, bound to this run's identity, and keeps the source validation time: adoption
+   * never extends freshness. The run keeps its own review requirement.
+   */
+  async adoptValidation(options: StartOptions, sourceId: string): Promise<Run> {
+    const refusal = await this.adoptionRefusal(options, sourceId);
+    invariant(refusal === null, 'ADOPTION', `Proof cannot be adopted: ${refusal}`);
+    const source = this.store.get(sourceId);
+    const run = await this.createValidation({ ...options, baseRef: source.baseSha }, source.candidateSha!);
+    const token = this.store.acquire(run.id);
+    try {
+      const candidate = run.candidateSha!;
+      const git = new Git();
+      await git.workspace(run.repo, run.workspace, candidate);
+      await git.clean(run.workspace, candidate);
+      const plan = planGates(run.config, run.changeSet!, run.risk!.lane);
+      transition(run, 'validating');
+      run.receipts = []; run.approvals = []; run.gateIds = plan.map(g => g.id);
+      const adopted = new Map<string, GateReceipt>();
+      for (const gate of plan) {
+        const original = source.receipts.find(r => r.gateId === gate.id && success(r))!;
+        const env = environment([...run.config.environment.passEnv, ...gate.passEnv]);
+        const command = expandCommand(gate.command, { baseSha: run.baseSha, candidateSha: candidate, workspace: run.validationWorkspace });
+        const executable = await executableIdentity(command[0]!, run.workspace, env);
+        const environmentHash = environmentIdentity(run.config.environment.id, env, { setup: run.config.setup, executionMode: run.config.executionMode, executable });
+        invariant(environmentHash === original.environmentHash, 'ADOPTION', `Environment of gate ${gate.id} changed since it was proven`);
+        const key = proofKey({ repository: run.repo, baseSha: run.baseSha, candidateSha: candidate, taskHash: hash(run.task), configHash: run.configHash, environmentHash,
+          workspace: run.validationWorkspace, gate: { ...gate, command }, dependencyKeys: gate.dependsOn.map(d => adopted.get(d)!.key), executable });
+        const receipt: GateReceipt = { ...original, id: randomUUID(), runId: run.id, key, configHash: run.configHash, status: 'cached', startedAt: Date.now(), durationMs: 0, diagnostic: '', reusedFrom: original.id };
+        this.store.addReceipt(receipt); adopted.set(gate.id, receipt); run.receipts.push(receipt); run.metrics.cacheHits++;
+      }
+      run.validatedAt = source.validatedAt;
+      try { await this.evidenceReady(run, candidate); }
+      catch (error) {
+        transition(run, 'failed'); run.error = { code: 'ADOPTION', message: errorMessage(error) };
+        this.store.save(run, 'validation.adoption_failed'); throw error;
+      }
+      const required = run.task.reviewRequired ? requiredApprovals(run.risk!.lane, run.config.workflow.reviewMode as ReviewMode) : 0;
+      transition(run, required > 0 ? 'awaiting_review' : 'ready');
+      this.store.save(run, 'validation.adopted', { sourceRunId: source.id, candidateSha: candidate, requiredApprovals: required, receipts: run.receipts.map(r => ({ gateId: r.gateId, reusedFrom: r.reusedFrom })) });
+      return run;
+    } finally { this.store.release(run.id, token); }
+  }
   /** Internal composition boundary: verifies evidence but does NOT approve or export a run. */
   async assertValidated(id: string): Promise<string> {
     const run = this.store.get(id);
