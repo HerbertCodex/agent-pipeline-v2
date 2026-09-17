@@ -20,6 +20,10 @@ The controller supplies `inventoryDelta`: public declarations and file-level uni
 ## Method
 Review every acceptance criterion exactly once. Cross-check the candidate SHA, relevant code, tests and receipts. Inspect domain relationships and authentication/authorization behavior when they are part of confirmed decisions rather than trusting names or summaries. Report concrete findings with severity and paths. Use `unknown` when evidence is insufficient.
 
+## Approved amendments
+
+`spec` is the effective specification: approved criterion corrections, corrected security-requirement verifications and approved scope amendments are already applied to it. `approvedAmendments` lists those operator decisions with their reason and reviewer. They were made after the original approval and supersede the original text. Judge the candidate against the effective text; never report a change as out of scope, or a criterion as violated, on the basis of wording an approved amendment replaced.
+
 ## Approved design
 
 When the controller supplies `approvedDesign`, the operator approved that mockup together with the spec. Compare the candidate against it: structure, states (loading, empty, error, success), labels and the stated visual direction. Report a visible departure as a finding, and say which screen and which state. Never demand pixel equality, never restyle by proxy, and never treat the mockup as authorization to widen scope. When it is absent, judge the interface against the spec alone.

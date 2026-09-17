@@ -36,7 +36,8 @@ Full lifecycle (local trusted projects; explicit approval boundaries):
   apv2 spec amend SPEC_ID --amendment AMENDMENT_ID --approve [--reviewer NAME] [--note TEXT]
   apv2 spec criterion SPEC_ID --criterion AC_ID --file CORRECTION_JSON
                                            Propose a correction of one acceptance criterion of a
-                                           running spec ({description, verification, reason})
+                                           running spec ({description, verification, reason, and
+                                           optional requirements: [{id, verification}] linked to it})
   apv2 spec criterion SPEC_ID --amendment AMENDMENT_ID --hash HASH --approve [--reviewer NAME] [--note TEXT]
   apv2 spec retry SPEC_ID --confirm        Authorize one new failed-task attempt
   apv2 spec recover SPEC_ID --confirm-stopped
@@ -239,7 +240,9 @@ export async function lifecycleCommand(command, positionals, values, root, signa
                 }
                 const correction = load(required('file'));
                 invariant(typeof correction.description === 'string' && typeof correction.verification === 'string' && typeof correction.reason === 'string', 'ARGUMENT', 'The correction file needs description, verification and reason');
-                doc = life.planCriterionAmendment(specId(), required('criterion'), { description: correction.description, verification: correction.verification, reason: correction.reason });
+                const requirements = correction.requirements ?? [];
+                invariant(Array.isArray(requirements) && requirements.every(x => x && typeof x.id === 'string' && typeof x.verification === 'string'), 'ARGUMENT', 'requirements must be a list of {id, verification}');
+                doc = life.planCriterionAmendment(specId(), required('criterion'), { description: correction.description, verification: correction.verification, reason: correction.reason, requirements: requirements });
                 const proposed = (doc.data.criterionAmendments ?? []).filter(x => x.status === 'pending').at(-1);
                 console.log(JSON.stringify({ ...life.summary(doc), criterionAmendment: proposed,
                     next: `apv2 spec criterion ${doc.id} --amendment ${proposed.id} --hash ${proposed.hash} --approve --note "why the approved criterion cannot hold"` }, null, 2));

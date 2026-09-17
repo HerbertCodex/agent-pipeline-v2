@@ -135,6 +135,7 @@ test('the next action of a blocked spec lifts its blocker instead of repeating i
   assert.match(blocked({ code: 'REPAIR_NO_CHANGE', message: 'The repair produced the same candidate' }, { scopeAmendments: [] }), /spec retry .* --confirm/);
   assert.match(blocked({ code: 'CANCELLED', message: 'Spec execution cancelled' }), /spec recover .* --confirm-stopped/);
   assert.match(blocked({ code: 'QA_REJECTED', message: 'QA requests changes; automatic repair budget exhausted.' }), /follow-up spec/);
+  assert.match(blocked({ code: 'STALE_EVIDENCE', message: 'Validation expired; revalidate before approval/export' }), /spec verify /);
   assert.match(blocked({ code: 'GATE', message: 'unit failed' }), /Resolve GATE before running again/);
 });
 
@@ -216,4 +217,60 @@ test('an unsatisfiable criterion can be corrected with explicit approval, withou
   assert.equal(d.data.qa.report.criteria.length, stored.content.acceptance.length);
   const events = f.life.store.documentEvents(d.id).map(e => e.type);
   assert.ok(events.includes('criterion.amendment_proposed') && events.includes('criterion.amendment_approved'));
+});
+
+// Observed on the real increment right after the criterion correction was approved: QA still judged the
+// original wording, because its context carried the stored spec text instead of the effective one. It also
+// reported an approved scope amendment as out of scope, and two security requirements linked to the
+// criterion kept the same unsatisfiable constraint. The previous test only counted criteria.
+test('QA judges the effective spec: corrected criterion, corrected requirements and amended scope', async (t) => {
+  const f = lifecycleFixture(t);
+  const log = join(f.root, 'qa-context.log');
+  const exampleWorker = new URL('../examples/lifecycle-worker.mjs', import.meta.url).pathname;
+  const worker = join(f.root, 'qa-tracing-worker.mjs');
+  writeFileSync(worker, `import { readFileSync, appendFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+const input = readFileSync(0, 'utf8'); const req = JSON.parse(input);
+if (req.role === 'qa') appendFileSync(${JSON.stringify(log)}, JSON.stringify({ spec: req.context.spec, amendments: req.context.approvedAmendments }) + '\\n');
+const r = spawnSync(process.execPath, [${JSON.stringify(exampleWorker)}], { input, encoding: 'utf8' });
+if (r.status !== 0) { process.stderr.write(r.stderr); process.exit(r.status ?? 1); }
+process.stdout.write(r.stdout);
+`);
+  const agent = { type: 'command', command: [process.execPath, worker] };
+  const config = { ...f.config, agent, roles: { product: agent, qa: agent } };
+  const request = 'Implement the approved arithmetic example.';
+  const spec = withSecurity(oneTask(), 'Ajouter une page de connexion avec mot de passe.', 'unknown');
+  let d = await f.life.draft({ repo: f.repo, config, request, proposal: spec });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+  d = await f.life.run(d.id);
+  const requirement = d.data.content.security.requirements[0];
+  assert.ok(requirement, 'the fixture has a security requirement to correct');
+  const target = d.data.content.acceptance.find(a => a.id === requirement.acceptanceIds[0]);
+  const unrelated = d.data.content.acceptance.find(a => !requirement.acceptanceIds.includes(a.id));
+  assert.ok(unrelated, 'the fixture has a criterion the requirement does not verify');
+  assert.throws(() => f.life.planCriterionAmendment(d.id, unrelated.id, { description: `${unrelated.description} Corrigé.`, verification: unrelated.verification,
+    reason: 'Le critère interdit ce que le changement approuvé impose.', requirements: [{ id: requirement.id, verification: 'Nouvelle vérification observable.' }] }),
+    /does not verify/, 'a requirement can only be corrected with the criterion it verifies');
+
+  // An approved scope amendment, as the controller records it after the operator accepts it.
+  const withScope = f.life.get(d.id);
+  withScope.data.scopeAmendments.push({ id: 'AMD-SCOPE', taskId: 'MATH', paths: ['src/extra/allowed.mjs'], reason: 'Test existant rendu faux par le changement approuvé.',
+    status: 'approved', sourceRunId: withScope.data.attempts[0].runId, candidateSha: withScope.data.currentSha, at: Date.now(), approvedAt: Date.now(), reviewer: 'Test Owner', note: 'Approuvé.' });
+  f.life.store.saveDocument(withScope, 'test.scope_amendment', {});
+  d = f.life.get(d.id);
+
+  d = f.life.planCriterionAmendment(d.id, target.id, { description: `${target.description} Les tests de forme peuvent changer.`, verification: `${target.verification} Relire le diff.`,
+    reason: 'Le critère interdit ce que le changement approuvé impose.', requirements: [{ id: requirement.id, verification: 'Les suites restent vertes ; seule la liste des tables peut changer.' }] });
+  const pending = d.data.criterionAmendments.at(-1);
+  d = f.life.approveCriterionAmendment(d.id, pending.id, pending.hash, 'Test Owner', 'Approbation du critère et de son exigence liée.');
+  d = await f.life.run(d.id);
+
+  const seen = readFileSync(log, 'utf8').trim().split('\n').map(l => JSON.parse(l)).at(-1);
+  assert.equal(seen.spec.acceptance.find(a => a.id === target.id).description, `${target.description} Les tests de forme peuvent changer.`, 'QA reads the corrected criterion, not the stored text');
+  assert.equal(seen.spec.security.requirements.find(q => q.id === requirement.id).verification, 'Les suites restent vertes ; seule la liste des tables peut changer.');
+  assert.equal(seen.amendments.criteria.at(-1).reason, 'Le critère interdit ce que le changement approuvé impose.');
+  assert.equal(seen.amendments.criteria.at(-1).reviewer, 'Test Owner');
+  assert.ok(seen.spec.tasks.find(x => x.id === 'MATH').allowedPaths.includes('src/extra/allowed.mjs'), 'QA sees the approved scope amendment in the task');
+  assert.deepEqual(seen.amendments.scope.map(a => a.paths), [['src/extra/allowed.mjs']]);
+  assert.equal(f.life.get(d.id).data.content.security.requirements[0].verification, requirement.verification, 'the stored requirement text stays auditable');
 });
