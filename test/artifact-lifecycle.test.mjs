@@ -138,6 +138,7 @@ test('the next action of a blocked spec lifts its blocker instead of repeating i
   assert.match(blocked({ code: 'REPAIR_NO_CHANGE', message: 'The repair produced the same candidate' }, { scopeAmendments: [] }), /spec retry .* --confirm/);
   assert.match(blocked({ code: 'CANCELLED', message: 'Spec execution cancelled' }), /spec recover .* --confirm-stopped/);
   assert.match(blocked({ code: 'QA_REJECTED', message: 'QA requests changes; automatic repair budget exhausted.' }), /follow-up spec/);
+  assert.match(blocked({ code: 'NO_CHANGE', message: 'Agent produced no effective change' }), /changed nothing.*spec retry .* --confirm/);
   assert.match(blocked({ code: 'STALE_EVIDENCE', message: 'Validation expired; revalidate before approval/export' }), /spec verify /);
   assert.match(blocked({ code: 'GATE', message: 'unit failed' }), /Resolve GATE before running again/);
 });
@@ -235,7 +236,8 @@ test('QA judges the effective spec: corrected criterion, corrected requirements 
 import { createRequire } from 'node:module';
 const { runWorker } = createRequire(import.meta.url)(${JSON.stringify(RUN_WORKER)});
 const input = readFileSync(0, 'utf8'); const req = JSON.parse(input);
-if (req.role === 'qa') appendFileSync(${JSON.stringify(log)}, JSON.stringify({ spec: req.context.spec, amendments: req.context.approvedAmendments }) + '\\n');
+if (req.role === 'qa') appendFileSync(${JSON.stringify(log)}, JSON.stringify({ spec: req.context.spec, amendments: req.context.approvedAmendments, summaries: req.context.taskSummaries }) + '\\n');
+if (req.protocol === 'agent-pipeline/v2' && req.task.description.startsWith('Correct the following QA findings')) appendFileSync(${JSON.stringify(log)}, JSON.stringify({ repair: req.task.description }) + '\\n');
 const r = runWorker(${JSON.stringify(exampleWorker)}, input);
 if (r.status !== 0) { process.stderr.write(r.stderr); process.exit(r.status ?? 1); }
 process.stdout.write(r.stdout);
@@ -269,7 +271,11 @@ process.stdout.write(r.stdout);
   d = f.life.approveCriterionAmendment(d.id, pending.id, pending.hash, 'Test Owner', 'Approbation du critère et de son exigence liée.');
   d = await f.life.run(d.id);
 
-  const seen = readFileSync(log, 'utf8').trim().split('\n').map(l => JSON.parse(l)).at(-1);
+  const entries = readFileSync(log, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  const seen = entries.filter(e => e.spec).at(-1);
+  // QA reads what each attempt reported; a repair knows it may reach outside scope through an amendment.
+  assert.ok(seen.summaries.some(x => x.taskId === 'MATH' && x.summary.length > 0), 'QA receives the task summaries');
+
   assert.equal(seen.spec.acceptance.find(a => a.id === target.id).description, `${target.description} Les tests de forme peuvent changer.`, 'QA reads the corrected criterion, not the stored text');
   assert.equal(seen.spec.security.requirements.find(q => q.id === requirement.id).verification, 'Les suites restent vertes ; seule la liste des tables peut changer.');
   assert.equal(seen.amendments.criteria.at(-1).reason, 'Le critère interdit ce que le changement approuvé impose.');
@@ -339,4 +345,31 @@ test('Product output is annotated with existing tests the task order leaves behi
   const together = oneTask();
   const clean = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.', proposal: together });
   assert.deepEqual(f.life.summary(clean).impactAdvice, [], 'a test in the task that changes its subject raises nothing');
+});
+
+// Observed on a real cleanup spec: QA flagged a comment made false in a file outside every task, and the repair
+// agent, confined to the approved paths, changed nothing; the spec stopped on NO_CHANGE.
+test('a QA repair is told it may reach outside scope through an amendment, and sees what tasks reported', async (t) => {
+  const f = lifecycleFixture(t);
+  const log = join(f.root, 'repair.log');
+  const exampleWorker = new URL('../examples/lifecycle-worker.mjs', import.meta.url).pathname;
+  const worker = join(f.root, 'repair-tracing-worker.mjs');
+  writeFileSync(worker, `import { readFileSync, appendFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+const { runWorker } = createRequire(import.meta.url)(${JSON.stringify(RUN_WORKER)});
+const input = readFileSync(0, 'utf8'); const req = JSON.parse(input);
+if (req.protocol === 'agent-pipeline/v2') appendFileSync(${JSON.stringify(log)}, JSON.stringify({ task: req.task.id, description: req.task.description }) + '\\n');
+const r = runWorker(${JSON.stringify(exampleWorker)}, input);
+if (r.status !== 0) { process.stderr.write(r.stderr); process.exit(r.status ?? 1); }
+process.stdout.write(r.stdout);
+`);
+  const config = { ...f.config, agent: { type: 'command', command: [process.execPath, worker] } };
+  let d = await f.life.draft({ repo: f.repo, config, request: 'Implement the approved arithmetic example.' });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+  d = await f.life.run(d.id);
+  assert.equal(d.data.qaRepairs, 1, 'the fixture QA requested one repair');
+  const repair = readFileSync(log, 'utf8').trim().split('\n').map(l => JSON.parse(l)).find(e => e.description.startsWith('Correct the following QA findings'));
+  assert.ok(repair, 'the repair request was captured');
+  assert.match(repair.description, /explicit scope amendment/);
+  assert.match(repair.description, /"taskSummaries":\[\{"taskId":"MATH"/);
 });

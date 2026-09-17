@@ -2,6 +2,12 @@
 
 ## Non publié
 
+- La QA reçoit `taskSummaries`, ce que chaque tentative a rapporté : un critère qui demande à l'Implementer de *signaler* quelque chose devient vérifiable, au lieu de rester « inconnu ». Son rôle précise qu'un résumé est une affirmation, jamais une preuve du comportement.
+- Une réparation QA sait qu'elle peut toucher, au minimum, un fichier hors périmètre quand un constat l'exige : le contrôleur demande alors un amendement explicite. Elle reçoit aussi les résumés des tâches, et doit dire précisément quand un constat ne se corrige pas dans les fichiers.
+- `NO_CHANGE` indique ce que la dernière tentative a expliqué et propose `spec retry` ou une spec de suivi.
+
+Constaté sur la spec de nettoyage d'un vrai projet : la QA a relevé un commentaire devenu faux dans un fichier hors périmètre et n'a pas pu vérifier un critère portant sur les résumés ; la réparation, cantonnée au périmètre, n'a rien changé et la spec s'est arrêtée sur `NO_CHANGE`.
+
 Défauts constatés en bouclant l'incrément 2 d'un vrai projet :
 
 - `apv2 spec publish --for-review` ouvre la PR brouillon **avant** l'approbation, pour lire le candidat sur la forge (contrôles valides et QA passée exigés). Une fusion observée avant la revue ne clôture pas la spec : `MERGED_BEFORE_REVIEW`, puis clôture au `spec sync` suivant la revue.
