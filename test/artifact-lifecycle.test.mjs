@@ -373,3 +373,44 @@ process.stdout.write(r.stdout);
   assert.match(repair.description, /explicit scope amendment/);
   assert.match(repair.description, /"taskSummaries":\[\{"taskId":"MATH"/);
 });
+
+// Observed on a real cleanup spec: after a framework fix to the repair guidance, `spec retry` replayed the
+// failed repair with its frozen description and scope, so the fix could not apply to the spec it was for.
+test('a retried attempt is rebuilt from the current state, not replayed frozen', async (t) => {
+  const f = lifecycleFixture(t);
+  const exampleWorker = new URL('../examples/lifecycle-worker.mjs', import.meta.url).pathname;
+  const worker = join(f.root, 'idle-repair-worker.mjs');
+  writeFileSync(worker, `import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+const { runWorker } = createRequire(import.meta.url)(${JSON.stringify(RUN_WORKER)});
+const input = readFileSync(0, 'utf8'); const req = JSON.parse(input);
+if (req.protocol === 'agent-pipeline/v2' && req.task.description.startsWith('Correct the following QA findings')) {
+  console.log(JSON.stringify({ summary: 'Nothing changed: the finding is outside the files I may edit.' }));
+  process.exit(0);
+}
+const r = runWorker(${JSON.stringify(exampleWorker)}, input);
+if (r.status !== 0) { process.stderr.write(r.stderr); process.exit(r.status ?? 1); }
+process.stdout.write(r.stdout);
+`);
+  const config = { ...f.config, agent: { type: 'command', command: [process.execPath, worker] } };
+  let d = await f.life.draft({ repo: f.repo, config, request: 'Implement the approved arithmetic example.' });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+  d = await f.life.run(d.id);
+  assert.equal(d.data.error?.code, 'NO_CHANGE', JSON.stringify(d.data.error));
+  const failedRun = f.life.pipeline.store.get(d.data.activeRunId);
+  assert.ok(!failedRun.task.allowedPaths.includes('docs/extra.md'));
+
+  // The operator approves a scope amendment after the failure.
+  const amended = f.life.get(d.id);
+  amended.data.scopeAmendments.push({ id: 'AMD-LATER', taskId: 'QA-REPAIR-1', paths: ['docs/extra.md'], reason: 'Commentaire rendu faux hors périmètre.',
+    status: 'approved', sourceRunId: failedRun.id, candidateSha: amended.data.currentSha, requestedAt: Date.now(), approvedAt: Date.now(), reviewer: 'Test Owner', note: 'Approuvé.' });
+  f.life.store.saveDocument(amended, 'test.scope_amendment', {});
+
+  d = await f.life.retry(d.id, true);
+  const replacement = f.life.pipeline.store.get(d.data.activeRunId);
+  assert.notEqual(replacement.id, failedRun.id);
+  assert.ok(replacement.task.allowedPaths.includes('docs/extra.md'), 'the retried repair carries the amendment approved after the failure');
+  assert.match(replacement.task.description, /explicit scope amendment/);
+  assert.match(replacement.task.description, /"taskSummaries"/);
+  assert.equal(d.data.attempts.at(-1).kind, 'qa-repair');
+});

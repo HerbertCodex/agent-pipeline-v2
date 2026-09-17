@@ -79,6 +79,8 @@ export declare class Lifecycle {
     /** Design context scoped to one task: legacy proposals without taskScopes keep the whole design. */
     private designContextFor;
     private makeTask;
+    /** The repair task for the current QA report, built from the current effective spec and amendments. */
+    private qaRepairTask;
     private aggregateTask;
     private executeActive;
     private requestScopeAmendment;
