@@ -466,8 +466,11 @@ async function boot() {
   $('#search').addEventListener('input', (e) => { state.query = e.target.value; renderList(); });
   $('#open-new').addEventListener('click', newSpecDialog);
   $('#open-maintenance').addEventListener('click', () => maintenance().catch(err => toast(err.message)));
-  $('#open-jobs').addEventListener('click', () => { const d = $('#jobs'); d.hidden = !d.hidden; if (!d.hidden) renderJobs(); });
-  document.querySelector('[data-close-drawer]').addEventListener('click', () => { $('#jobs').hidden = true; });
+  const setDrawer = (open) => { $('#jobs').hidden = !open; $('#jobs-backdrop').hidden = !open; if (open) { renderJobs(); $('[data-close-drawer]').focus(); } };
+  $('#open-jobs').addEventListener('click', () => setDrawer($('#jobs').hidden));
+  $('[data-close-drawer]').addEventListener('click', () => setDrawer(false));
+  $('#jobs-backdrop').addEventListener('click', () => setDrawer(false));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#jobs').hidden) setDrawer(false); });
   await Promise.all([loadSpecs(), loadJobs()]);
   connectStream();
   setInterval(() => { if (state.jobs.some(j => j.state === 'running') || !$('#jobs').hidden) loadJobs().catch(() => {}); }, 3000);
