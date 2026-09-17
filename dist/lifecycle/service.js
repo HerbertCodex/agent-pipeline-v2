@@ -1330,7 +1330,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             next = `The agent stopped before reporting; its work is kept in ${stopped.workspace}. Inspect it, then apv2 spec run ${doc.id} --accept-current to snapshot and validate it, or apv2 spec retry ${doc.id} --confirm to discard it and start the task again.`;
         else if (r.error?.code === 'CANCELLED' || r.error?.code === 'LOCKED')
             next = `apv2 spec recover ${doc.id} --confirm-stopped   (only after checking no controller or agent process is still alive)`;
-        else if (r.error?.code === 'TASK_FAILED' || r.error?.code === 'REPAIR_NO_CHANGE' || r.error?.code === 'GATES_FAILED')
+        else if (r.error?.code === 'TASK_FAILED' || r.error?.code === 'REPAIR_NO_CHANGE' || r.error?.code === 'GATES_FAILED' || r.error?.code === 'REPAIR_NO_PROGRESS')
             next = `apv2 spec retry ${doc.id} --confirm   (authorizes exactly one new attempt of the failed task)`;
         else if (r.error?.code === 'NO_CHANGE') {
             const last = [...r.attempts].reverse().find(a => a.kind === 'qa-repair' || a.kind === 'task');

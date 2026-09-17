@@ -44,4 +44,18 @@ export function failureExcerpt(status, stderr, stdout, limit = MAX_DIAGNOSTIC_CH
     const truncatedNote = omitted ? `\n… [${omitted} more failure-context lines omitted]` : '';
     return `${head}\n… [failure-focused excerpt of ${text.length} characters]\n${blocks.join('\n')}${truncatedNote}\n… [end of output]\n${tail}`.slice(0, limit);
 }
+/**
+ * What a failing check reproached, without what changes at every execution: durations, timestamps, process
+ * ids and commit-like hexadecimal words. Two runs of the same failing check then produce the same text, so a
+ * repair that fixed nothing can be told from one that changed the failure. This is a comparison heuristic,
+ * never displayed and never a proof.
+ */
+export function failureFingerprint(text) {
+    return text
+        .replace(/\b\d+(?:[.,]\d+)?\s*(?:ms|s|sec|secs|seconds?|minutes?)\b/gi, '<duration>')
+        .replace(/\b(?:duration|elapsed|time)(?:_ms|_s)?\s*[:=]?\s*[\d.,]+/gi, '<duration>')
+        .replace(/\b\d{4}-\d{2}-\d{2}[T ][\d:.,]+(?:Z|[+-]\d{2}:?\d{2})?/g, '<timestamp>')
+        .replace(/\b(?:pid|process)\s*[:=]?\s*\d+/gi, '<pid>')
+        .replace(/\b[0-9a-f]{7,40}\b/g, '<hex>');
+}
 //# sourceMappingURL=diagnostic.js.map

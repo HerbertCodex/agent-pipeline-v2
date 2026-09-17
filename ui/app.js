@@ -372,7 +372,7 @@ function decision(d) {
       'La tâche repart de la base approuvée, avec le diagnostic de la tentative arrêtée. Le travail conservé est abandonné.',
       () => api(`/api/specs/${s.id}/retry`, { body: { confirm: true } }), 'Nouvelle tentative autorisée')));
   }
-  else if (s.status === 'blocked' && ['NO_CHANGE', 'TASK_FAILED', 'REPAIR_NO_CHANGE', 'GATES_FAILED', 'AGENT', 'EXECUTION'].includes(code))
+  else if (s.status === 'blocked' && ['NO_CHANGE', 'TASK_FAILED', 'REPAIR_NO_CHANGE', 'REPAIR_NO_PROGRESS', 'GATES_FAILED', 'AGENT', 'EXECUTION'].includes(code))
     secondary.push(btn('Autoriser une nouvelle tentative', () => confirmDialog('Autoriser une nouvelle tentative', 'La tâche échouée est reconstruite à partir de l\'état actuel, puis relancée à la prochaine exécution.', () => api(`/api/specs/${s.id}/retry`, { body: { confirm: true } }), 'Nouvelle tentative autorisée')));
   if (d.approval && (code === 'STALE_EVIDENCE' || ['awaiting_review', 'ready'].includes(s.status))) secondary.push(btn('Revalider', () => job(`/api/specs/${s.id}/verify`, 'Revalidation lancée'), 'btn', d.busy));
   if (s.publication && s.publication.url && !TERMINAL.has(s.status)) secondary.push(btn('Synchroniser avec la PR', () => job(`/api/specs/${s.id}/sync`, 'Synchronisation lancée'), 'btn', d.busy));
@@ -488,7 +488,7 @@ function describe(e) {
     'agent.started': 'Implementer au travail', 'agent.completed': 'Implementer a terminé', 'candidate.created': 'Candidat créé',
     'validation.started': `Contrôles lancés : ${(d.gateIds || []).join(', ')}`, 'gate.finished': `Contrôle ${d.gateId || ''} : ${d.status === 'passed' ? 'réussi' : d.status === 'cached' ? 'repris' : d.status || ''}${d.durationMs ? ` (${duration(d.durationMs)})` : ''}`,
     'validation.completed': 'Contrôles réussis', 'validation.failed': 'Contrôles en échec', 'validation.adopted': 'Reçus repris', 'run.failed': `Run en échec : ${d.error ? d.error.code : ''}`,
-    'agent.repair_no_change': 'Réparation sans changement',
+    'agent.repair_no_change': 'Réparation sans changement', 'agent.repair_no_progress': 'Réparation sans effet : mêmes contrôles en échec',
   })[e.type];
 }
 function eventSignal(e) {

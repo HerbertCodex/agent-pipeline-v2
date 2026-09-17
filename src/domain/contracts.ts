@@ -90,7 +90,7 @@ export const configSchema = s.object({
   concurrency: s.default(s.number(1, 16), 3),
   failFast: s.default(s.boolean(), true),
   maxRunMs: s.default(s.number(100, 7200000), 1800000),
-  maxRepairAttempts: s.default(s.number(0, 3), 1),
+  maxRepairAttempts: s.default(s.number(0, 5), 1),
   validationMaxAgeMs: s.default(s.number(1000, 86400000), 3600000),
   risk: s.default(s.object({
     fastPaths: s.default(paths, ['docs/**', '*.md']),
