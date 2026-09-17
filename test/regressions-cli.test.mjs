@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,chmodSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,chmodSync,rmSync,existsSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {fileURLToPath} from 'node:url';
@@ -126,4 +126,12 @@ test('every documented lifecycle command is routed by the binary',()=>{
   assert.doesNotMatch(`${r.stdout}${r.stderr}`,/Unknown command/,`apv2 ${command} is documented but not routed`);
  }
  rmSync(state,{recursive:true,force:true});rmSync(cwd,{recursive:true,force:true});
+});
+// A worktree helper link to node_modules was committed once: `node_modules/` ignores directories, not a link,
+// and Git then replaced a real, ignored node_modules with that link on the next fast-forward.
+test('the repository tracks no symbolic link', { skip: !existsSync(new URL('../.git', import.meta.url)) }, () => {
+ const root = fileURLToPath(new URL('..', import.meta.url));
+ const r = spawnSync('git', ['ls-files', '-s'], { cwd: root, encoding: 'utf8' });
+ assert.equal(r.status, 0, r.stderr);
+ assert.deepEqual(r.stdout.split('\n').filter(l => l.startsWith('120000 ')), []);
 });
