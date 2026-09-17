@@ -51,6 +51,7 @@ try {
       "test/knowledge.test.mjs",
       "test/claude.test.mjs",
       "test/bootstrap.test.mjs",
+      "test/ui-server.test.mjs",
     ],
     installed,
   );
@@ -68,6 +69,7 @@ try {
         skills: 6,
         providerKnowledgeAndBootstrapTestsPassed: true,
         lifecycleClosed: true,
+        dashboardServed: true,
         realProviderCalls: false,
       },
       null,

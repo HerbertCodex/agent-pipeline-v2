@@ -68,6 +68,24 @@ Une tentative d'agent dont l'issue est inconnue n'est pas réexécutée aveuglé
 
 Product possède un timeout par appel et une requête bornée ; la préparation et l'attente humaine sont distinctes du budget actif des tâches/QA. `workflow.maxActiveMs` borne les sessions de workflow, `maxRunMs` les runs, et les processus ont leurs propres timeouts. Ces budgets ne mesurent pas les tokens ni les factures du fournisseur.
 
+## Tableau de bord
+
+`apv2 ui [--port N]` (port 4711 par défaut) ouvre un tableau de bord local sur le magasin : toutes les specs par dépôt, leur statut, le hash à approuver et l'action suivante ; le détail d'une spec (périmètre, critères avec le verdict QA et les corrections, tâches avec leurs tentatives et leurs contrôles, rapport QA, maquettes, amendements, avertissement sur les tests impactés) ; l'activité des agents en direct ; les opérations lancées et la maintenance.
+
+Le magasin est commun à tous les dépôts. La barre latérale liste les projets, avec pour chacun le nombre de specs actives et de décisions en attente ; choisir un projet restreint l'accueil, la liste et le dépôt proposé pour une nouvelle spec. Ce choix est retenu par le navigateur.
+
+Actions disponibles : nouveau brouillon, affinage ou réponse aux questions, approbation de la spec, exécution, revalidation, nouvelle tentative, approbation d'un amendement de périmètre ou d'une correction de critère, revue du candidat, synchronisation avec la PR, rejet, nettoyage des espaces de travail. La purge de l'historique reste une commande de terminal. Les opérations longues (brouillon, affinage, exécution, revalidation, synchronisation) partent en processus CLI séparés, qui continuent si la page ou le serveur s'arrêtent.
+
+Sécurité :
+- écoute sur `127.0.0.1` uniquement ; l'en-tête `Host` doit désigner ce serveur (protection contre le *DNS rebinding*) ;
+- l'adresse affichée au démarrage contient un jeton à usage d'entrée, échangé contre un cookie `HttpOnly; SameSite=Strict` puis retiré de la barre d'adresse ; ne la partagez pas ;
+- chaque action exige en plus le jeton anti-CSRF de la page et une origine identique ; le corps est borné ;
+- une approbation porte sur le hash ou le SHA exact affiché, exige une note, et enregistre comme relecteur l'identité Git du dépôt (`user.name`), préfixée « [tableau de bord] » ;
+- les maquettes sont servies en *sandbox* (origine opaque, sans script ni cookie), et seulement les fichiers d'écran de la spec, par leur nom exact ;
+- politique de sécurité stricte (`script-src 'self'`, aucun script en ligne) ; tout contenu provenant du magasin est affiché comme texte.
+
+Une spec écrite avant le format actuel, dont l'intégrité ne peut plus être revérifiée, est affichée en lecture seule et signalée comme telle.
+
 ## Livraison locale et GitHub
 
 `spec deliver` crée un nouveau répertoire hors source et store. Les hashes du manifeste sont des empreintes d'intégrité, pas des signatures par une autorité distante. Répéter une livraison identique vérifie les fichiers existants au lieu de les écraser.
