@@ -72,6 +72,8 @@ Product possède un timeout par appel et une requête bornée ; la préparation 
 
 `apv2 ui [--port N]` (port 4711 par défaut) ouvre un tableau de bord local sur le magasin : toutes les specs par dépôt, leur statut, le hash à approuver et l'action suivante ; le détail d'une spec (périmètre, critères avec le verdict QA et les corrections, tâches avec leurs tentatives et leurs contrôles, rapport QA, maquettes, amendements, avertissement sur les tests impactés) ; l'activité des agents en direct ; les opérations lancées et la maintenance.
 
+Le magasin est commun à tous les dépôts. La barre latérale liste les projets, avec pour chacun le nombre de specs actives et de décisions en attente ; choisir un projet restreint l'accueil, la liste et le dépôt proposé pour une nouvelle spec. Ce choix est retenu par le navigateur.
+
 Actions disponibles : nouveau brouillon, affinage ou réponse aux questions, approbation de la spec, exécution, revalidation, nouvelle tentative, approbation d'un amendement de périmètre ou d'une correction de critère, revue du candidat, synchronisation avec la PR, rejet, nettoyage des espaces de travail. La purge de l'historique reste une commande de terminal. Les opérations longues (brouillon, affinage, exécution, revalidation, synchronisation) partent en processus CLI séparés, qui continuent si la page ou le serveur s'arrêtent.
 
 Sécurité :

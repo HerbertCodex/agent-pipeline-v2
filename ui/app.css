@@ -136,7 +136,19 @@ button { font: inherit; color: inherit; }
 .segmented { display: grid; grid-template-columns: 1fr 1fr; padding: 2px; border-radius: var(--radius); background: var(--sunken); }
 .segmented button { border: 0; border-radius: 4px; background: transparent; color: var(--ink-2); padding: 4px 10px; cursor: pointer; font-weight: 520; }
 .segmented button[aria-pressed="true"] { background: var(--panel); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
-.spec-list { overflow: auto; padding: 4px 0 24px; }
+.spec-list { overflow: auto; padding: 4px 0 24px; flex: 1; min-height: 0; }
+.projects { max-height: 34vh; overflow: auto; padding: 0 0 10px; border-bottom: 1px solid var(--line); }
+.project { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; border: 0; background: transparent; color: var(--ink-2); cursor: pointer; padding: 6px 16px; text-align: left; font: inherit; }
+.project:hover { background: var(--sunken); color: var(--ink); }
+.project[aria-current="true"] { color: var(--ink); background: var(--sunken); box-shadow: inset 3px 0 0 var(--accent); }
+.project__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 560; }
+.project__counts { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+.project__meta { font-size: 12px; color: var(--ink-3); }
+.project__badge { min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--wait-wash, var(--sunken)); color: var(--wait); font: 600 11px/18px var(--mono); text-align: center; }
+.list-empty { display: grid; justify-items: start; gap: 8px; padding: 16px; color: var(--ink-3); }
+.list-empty p { margin: 0; }
+.home__scope { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 6px; }
+.home__scope .mono { font-size: 12px; overflow-wrap: anywhere; }
 .group { display: flex; justify-content: space-between; padding: 16px 16px 6px; }
 .spec-item { position: relative; display: grid; gap: 4px; width: 100%; text-align: left; cursor: pointer; border: 0; background: transparent; padding: 9px 16px 10px 22px; }
 .spec-item::before { content: ""; position: absolute; left: 9px; top: 12px; bottom: 12px; width: 3px; border-radius: 2px; background: var(--signal, var(--line-strong)); }

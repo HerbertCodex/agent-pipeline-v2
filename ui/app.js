@@ -13,7 +13,7 @@ const TERMINAL = new Set(['closed', 'rejected']);
 const STAGES = ['Brouillon', 'Approuvée', 'Tâches', 'Contrôles', 'QA', 'Revue', 'Clôture'];
 
 const state = {
-  csrf: '', specs: [], filter: 'active', query: '', selected: null, view: 'home', detail: null, events: [],
+  csrf: '', specs: [], project: null, filter: 'active', query: '', selected: null, view: 'home', detail: null, events: [],
   tab: 'overview', showTech: false, jobs: [], preview: null,
 };
 
@@ -36,6 +36,9 @@ function h(tag, attrs, ...children) {
 const $ = (sel) => document.querySelector(sel);
 const shortId = (id) => (id || '').slice(0, 8);
 const repoName = (repo) => (repo || '').split('/').filter(Boolean).pop() || 'sans dépôt';
+const PROJECT_KEY = 'apv2.project';
+function remember(key, value) { try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch { /* storage may be unavailable */ } }
+function recall(key) { try { return localStorage.getItem(key); } catch { return null; } }
 const rtf = new Intl.RelativeTimeFormat('fr', { numeric: 'auto' });
 function ago(ms) {
   if (!ms) return '';
@@ -105,7 +108,7 @@ function signalOf(s) {
 // ---------- data ----------
 async function loadSpecs() {
   state.specs = await api('/api/specs');
-  renderList();
+  renderProjects(); renderList();
   if (state.view === 'home') renderHome();
 }
 async function loadDetail() {
@@ -147,18 +150,65 @@ function connectStream() {
   });
 }
 
+// ---------- projects ----------
+/** Projects known to the store, most recently active first, with the counts shown in the switcher. */
+function projects() {
+  const byRepo = new Map();
+  for (const s of state.specs) {
+    const key = s.repo || '';
+    const p = byRepo.get(key) || { repo: key, name: repoName(key), active: 0, waiting: 0, busy: 0, total: 0, updatedAt: 0 };
+    p.total++; p.updatedAt = Math.max(p.updatedAt, s.updatedAt || 0);
+    if (!TERMINAL.has(s.status)) { p.active++; if (s.busy) p.busy++; else if (needs(s)) p.waiting++; }
+    byRepo.set(key, p);
+  }
+  const all = [...byRepo.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+  // Two repositories with the same folder name are told apart by their parent folder.
+  for (const p of all) if (all.some(o => o !== p && o.name === p.name)) p.name = p.repo.split('/').filter(Boolean).slice(-2).join('/');
+  return all;
+}
+const inProject = (s) => state.project === null || (s.repo || '') === state.project;
+const projectSpecs = () => state.specs.filter(inProject);
+function setProject(repo) {
+  state.project = repo; remember(PROJECT_KEY, repo);
+  if (state.view === 'detail') { const s = state.specs.find(x => x.id === state.selected); if (s && !inProject(s)) { goHome(); return; } }
+  renderProjects(); renderList();
+  if (state.view === 'home') renderHome();
+}
+function renderProjects() {
+  const all = projects();
+  if (state.project !== null && !all.some(p => p.repo === state.project)) state.project = null;
+  const row = (repo, name, detail, p) => h('button', { class: 'project', type: 'button', 'aria-current': state.project === repo ? 'true' : 'false', title: repo || undefined, onclick: () => setProject(repo) },
+    h('span', { class: 'project__name', text: name }),
+    h('span', { class: 'project__counts' },
+      p.busy ? h('span', { class: 'pulse', title: `${p.busy} en cours` }) : null,
+      p.waiting ? h('span', { class: 'project__badge', title: `${p.waiting} à décider`, text: String(p.waiting) }) : null,
+      h('span', { class: 'project__meta', text: detail })));
+  const sum = all.reduce((t, p) => ({ active: t.active + p.active, waiting: t.waiting + p.waiting, busy: t.busy + p.busy }), { active: 0, waiting: 0, busy: 0 });
+  const activeText = (n) => n ? `${n} active${n > 1 ? 's' : ''}` : 'rien d\'actif';
+  const nav = $('#projects'); nav.replaceChildren();
+  add(nav,
+    h('div', { class: 'group' }, h('span', { class: 'label', text: 'Projets' }), h('span', { class: 'label', text: String(all.length) })),
+    row(null, 'Tous les projets', activeText(sum.active), sum),
+    all.map(p => row(p.repo, p.name, activeText(p.active), p)));
+}
+
 // ---------- sidebar ----------
 function renderList() {
   const nav = $('#spec-list');
   const q = state.query.toLowerCase();
-  const specs = state.specs.filter(s => (state.filter === 'all' || !TERMINAL.has(s.status))
+  const specs = projectSpecs().filter(s => (state.filter === 'all' || !TERMINAL.has(s.status))
     && (!q || `${s.title || ''} ${s.id} ${s.repo}`.toLowerCase().includes(q)));
   nav.replaceChildren();
-  if (!specs.length) { nav.append(h('p', { class: 'group label', text: state.filter === 'active' ? 'Aucune spec active' : 'Aucune spec' })); return; }
+  if (!specs.length) {
+    const hidden = state.filter === 'active' ? projectSpecs().filter(s => TERMINAL.has(s.status)).length : 0;
+    add(nav, h('div', { class: 'list-empty' }, h('p', { text: state.filter === 'active' ? 'Aucune spec active.' : 'Aucune spec.' }),
+      hidden ? h('button', { class: 'btn btn--small', type: 'button', onclick: () => setFilter('all') }, `Voir les ${hidden} terminée${hidden > 1 ? 's' : ''}`) : null));
+    return;
+  }
   const groups = new Map();
   for (const s of specs) { const r = repoName(s.repo); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(s); }
   for (const [repo, items] of groups) {
-    nav.append(h('div', { class: 'group' }, h('span', { class: 'label', text: repo }), h('span', { class: 'label', text: String(items.length) })));
+    if (state.project === null) nav.append(h('div', { class: 'group' }, h('span', { class: 'label', text: repo }), h('span', { class: 'label', text: String(items.length) })));
     for (const s of items) {
       nav.append(h('button', { class: `spec-item sig-${signalOf(s)}`, type: 'button', 'aria-current': s.id === state.selected ? 'true' : 'false', onclick: () => select(s.id) },
         h('span', { class: 'spec-item__title', text: s.title || '(brouillon sans contenu)' }),
@@ -170,7 +220,8 @@ function renderList() {
 
 // ---------- home ----------
 function renderHome() {
-  const specs = state.specs;
+  const specs = projectSpecs();
+  const scope = state.project === null ? null : projects().find(p => p.repo === state.project);
   const active = specs.filter(s => !TERMINAL.has(s.status));
   const waiting = active.filter(s => needs(s) && !s.busy);
   const working = active.filter(s => s.busy || s.status === 'running');
@@ -180,9 +231,12 @@ function renderHome() {
   const row = (s, why) => h('button', { class: `queue__row sig-${signalOf(s)}`, type: 'button', onclick: () => select(s.id) },
     h('span', { class: 'queue__body' }, h('span', { class: 'queue__title', text: s.title || '(brouillon sans contenu)' }),
       h('span', { class: 'queue__why' }, why)),
-    h('span', { class: 'label', text: `${repoName(s.repo)} · ${ago(s.updatedAt)}` }));
+    h('span', { class: 'label', text: state.project === null ? `${repoName(s.repo)} · ${ago(s.updatedAt)}` : ago(s.updatedAt) }));
   $('#main').replaceChildren(h('div', { class: 'main__inner' },
-    h('div', { class: 'home__head' }, h('div', {}, h('h1', { text: waiting.length ? 'Ce qui attend votre décision' : 'Rien n\'attend votre décision' }),
+    h('div', { class: 'home__head' }, h('div', {},
+      h('p', { class: 'home__scope' }, h('span', { class: 'label', text: scope ? 'Projet' : 'Tous les projets' }),
+        scope ? [h('strong', { text: scope.name }), h('span', { class: 'mono muted', text: scope.repo })] : h('span', { class: 'muted', text: `${projects().length} dépôts suivis` })),
+      h('h1', { text: waiting.length ? 'Ce qui attend votre décision' : 'Rien n\'attend votre décision' }),
       h('p', { text: waiting.length ? `${waiting.length} spec${waiting.length > 1 ? 's' : ''} à traiter. Les agents s'arrêtent tant que vous n'avez pas tranché.` : 'Les agents avancent seuls, ou rien n\'est en cours. Lancez une nouvelle spec quand vous voulez.' })),
       h('button', { class: waiting.length ? 'btn' : 'btn btn--primary', type: 'button', onclick: newSpecDialog }, 'Nouvelle spec')),
     h('div', { class: 'stats' }, stat('Actives', active.length), stat('Agents au travail', working.length, working.length ? 'run' : null),
@@ -203,6 +257,8 @@ function goHome() {
 
 // ---------- detail ----------
 function select(id) {
+  const spec = state.specs.find(s => s.id === id);
+  if (spec && !inProject(spec)) { state.project = spec.repo || ''; remember(PROJECT_KEY, state.project); renderProjects(); }
   state.view = 'detail'; state.selected = id; state.detail = null; state.events = []; state.tab = 'overview'; state.preview = null;
   if (location.hash !== `#${id}`) history.pushState(null, '', `#${id}`);
   renderList();
@@ -517,7 +573,7 @@ function refineDialog(d, questions) {
 }
 function newSpecDialog() {
   const repos = [...new Set(state.specs.map(s => s.repo).filter(Boolean))];
-  const repo = h('input', { type: 'text', value: repos[0] || '', list: 'repos', spellcheck: 'false' });
+  const repo = h('input', { type: 'text', value: state.project || repos[0] || '', list: 'repos', spellcheck: 'false' });
   const request = h('textarea', { placeholder: 'Ce que vous voulez obtenir, vos décisions, et ce qui est hors périmètre' });
   openDialog('Nouvelle spec', [field('Dépôt', repo), h('datalist', { id: 'repos' }, repos.map(r => h('option', { value: r }))), field('Demande', request),
     h('p', { class: 'muted', text: 'Product rédige un brouillon ; rien n\'est exécuté avant votre approbation.' })],
@@ -550,7 +606,10 @@ async function maintenance() {
   const mb = (n) => `${(n / 1e6).toFixed(1)} Mo`;
   const total = m.garbage.reduce((n, g) => n + g.bytes, 0);
   main.replaceChildren(h('div', { class: 'main__inner' },
-    h('div', { class: 'home__head' }, h('div', {}, h('h1', { text: 'Maintenance' }), h('p', { text: 'Espaces de travail et historique. Les sources et les livraisons ne sont jamais touchées.' }))),
+    h('div', { class: 'home__head' }, h('div', {},
+      h('p', { class: 'home__scope' }, h('span', { class: 'label', text: scope ? 'Projet' : 'Tous les projets' }),
+        scope ? [h('strong', { text: scope.name }), h('span', { class: 'mono muted', text: scope.repo })] : h('span', { class: 'muted', text: `${projects().length} dépôts suivis` })),
+      h('h1', { text: 'Maintenance' }), h('p', { text: 'Espaces de travail et historique. Les sources et les livraisons ne sont jamais touchées.' }))),
     h('div', { class: 'section-title' }, h('span', { class: 'label', text: 'Espaces de travail obsolètes' }), m.garbage.length ? h('span', { class: 'label', text: mb(total) }) : null),
     m.garbage.length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, list(m.garbage, g => [g.reason, h('span', { class: 'muted mono', text: `  ${mb(g.bytes)}` })]),
       h('div', { class: 'decision__actions' }, h('button', { class: 'btn btn--primary', type: 'button', onclick: () => confirmDialog('Nettoyer les espaces de travail',
@@ -565,16 +624,19 @@ async function maintenance() {
       h('div', { class: 'decision__cli' }, h('span', { class: 'label', text: 'terminal' }), h('pre', { text: 'apv2 prune' }), copyButton('apv2 prune'))))));
 }
 
+function setFilter(filter) {
+  state.filter = filter;
+  document.querySelectorAll('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === filter)));
+  renderList();
+}
+
 // ---------- boot ----------
 async function boot() {
   const session = await api('/api/session');
   state.csrf = session.csrf;
   $('#store-path').textContent = session.stateDir;
-  document.querySelectorAll('[data-filter]').forEach(btn => btn.addEventListener('click', () => {
-    state.filter = btn.dataset.filter;
-    document.querySelectorAll('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
-    renderList();
-  }));
+  state.project = recall(PROJECT_KEY);
+  document.querySelectorAll('[data-filter]').forEach(btn => btn.addEventListener('click', () => setFilter(btn.dataset.filter)));
   $('#search').addEventListener('input', (e) => { state.query = e.target.value; renderList(); });
   $('#home-link').addEventListener('click', (e) => { e.preventDefault(); goHome(); });
   $('#open-new').addEventListener('click', newSpecDialog);
