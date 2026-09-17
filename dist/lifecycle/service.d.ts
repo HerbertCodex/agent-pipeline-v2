@@ -17,6 +17,7 @@ export declare function scanTags(html: string): {
 export interface WorkflowOptions {
     signal?: AbortSignal;
     acceptCurrent?: boolean;
+    acceptCost?: boolean;
     manualQa?: boolean;
 }
 export declare class Lifecycle {
@@ -94,6 +95,14 @@ export declare class Lifecycle {
     /** The repair task for the current QA report, built from the current effective spec and amendments. */
     private qaRepairTask;
     private aggregateTask;
+    /** What the providers declared for this spec so far. Declared values, never an invoice. */
+    declaredCostUsd(r: SpecRecord): number;
+    /**
+     * The reviewed configuration may cap what a spec is allowed to spend. Reaching it stops the workflow with
+     * what was spent; continuing is an explicit operator decision (`spec run --accept-cost`), like every other
+     * boundary of this controller.
+     */
+    private costExceeded;
     private executeActive;
     private requestScopeAmendment;
     private block;

@@ -578,6 +578,36 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         const allowedNewPaths = this.companionPaths(allowedPaths);
         return taskSchema.parse({ id: 'SPEC-INTEGRATION', title: spec.title, description, acceptance: spec.acceptance.map(a => a.description), allowedPaths, allowedNewPaths, maxNewFiles: allowedNewPaths.length ? 8 : 0, reviewRequired: true, minimumLane: minimum });
     }
+    /** What the providers declared for this spec so far. Declared values, never an invoice. */
+    declaredCostUsd(r) {
+        const runIds = new Set([...r.attempts.map(a => a.runId), ...r.validationRunIds]);
+        let total = 0;
+        for (const runId of runIds) {
+            try {
+                total += this.pipeline.store.get(runId).metrics.costUsd ?? 0;
+            }
+            catch { /* a pruned run no longer counts */ }
+        }
+        return Math.round(total * 100) / 100;
+    }
+    /**
+     * The reviewed configuration may cap what a spec is allowed to spend. Reaching it stops the workflow with
+     * what was spent; continuing is an explicit operator decision (`spec run --accept-cost`), like every other
+     * boundary of this controller.
+     */
+    costExceeded(doc, options) {
+        const r = doc.data;
+        const ceiling = r.config.workflow.maxSpecCostUsd ?? null;
+        if (ceiling === null || options.acceptCost)
+            return false;
+        const spent = this.declaredCostUsd(r);
+        if (spent < ceiling)
+            return false;
+        r.status = 'blocked';
+        r.error = { code: 'COST_BUDGET', message: `The providers declared ${spent.toFixed(2)} USD on this spec, at or above the reviewed ceiling of ${ceiling.toFixed(2)} USD (workflow.maxSpecCostUsd). Nothing was started. Read what remains to do, then authorize the overrun explicitly.` };
+        this.save(doc, 'workflow.cost_ceiling_reached', { declaredCostUsd: spent, ceilingUsd: ceiling });
+        return true;
+    }
     async executeActive(doc, options, signal) {
         const r = doc.data;
         invariant(r.activeRunId, 'STATE', 'No active run');
@@ -762,6 +792,8 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                 if (done.has(t.id))
                     continue;
                 invariant(!signal.aborted, 'CANCELLED', 'Spec execution cancelled');
+                if (!r.activeRunId && this.costExceeded(doc, options))
+                    return doc;
                 if (!r.activeRunId) {
                     const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, config: r.config, task: this.makeTask(r, t) });
                     r.attempts.push({ taskId: t.id, runId: run.id, kind: 'task' });
@@ -1333,6 +1365,8 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         }
         else if (r.error?.code === 'QA_REJECTED')
             next = `Read the QA findings above, then create a follow-up spec: the automatic repair budget is spent (apv2 spec draft --repo ${r.repo} --request "...").`;
+        else if (r.error?.code === 'COST_BUDGET')
+            next = `apv2 spec run ${doc.id} --accept-cost   (authorizes this spec to continue past its reviewed cost ceiling)`;
         else if (stopped)
             next = `The agent stopped before reporting; its work is kept in ${stopped.workspace}. Inspect it, then apv2 spec run ${doc.id} --accept-current to snapshot and validate it, or apv2 spec retry ${doc.id} --confirm to discard it and start the task again.`;
         else if (r.error?.code === 'CANCELLED' || r.error?.code === 'LOCKED')

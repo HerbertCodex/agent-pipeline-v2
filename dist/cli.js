@@ -59,7 +59,7 @@ async function main() {
             assist: { type: 'boolean' }, execute: { type: 'boolean' }, commit: { type: 'boolean' }, confirm: { type: 'boolean' }, approve: { type: 'boolean' }, amendment: { type: 'string' },
             'manual-qa': { type: 'boolean' }, quiet: { type: 'boolean' }, format: { type: 'string' }, active: { type: 'boolean' },
             id: { type: 'string' }, 'older-than': { type: 'string' }, port: { type: 'string' }, criterion: { type: 'string' }, 'for-review': { type: 'boolean' },
-            'accept-current': { type: 'boolean' }, 'confirm-stopped': { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, version: { type: 'boolean' },
+            'accept-current': { type: 'boolean' }, 'accept-cost': { type: 'boolean' }, 'confirm-stopped': { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, version: { type: 'boolean' },
         } });
     const [command, id] = positionals;
     const required = (value, name) => { invariant(value, 'ARGUMENT', `Missing ${name}`); return value; };

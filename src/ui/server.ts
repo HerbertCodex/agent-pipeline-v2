@@ -142,6 +142,7 @@ export async function startUi(options: UiOptions): Promise<UiServer> {
     const attempts = (r.attempts ?? []).map(a => {
       const run = life.pipeline.store.get(a.runId);
       return { ...a, state: run.state, lane: run.risk?.lane ?? null, summary: run.summary ?? '', error: run.error ?? null,
+        costUsd: run.metrics.costUsd ?? null, providerTurns: run.metrics.providerTurns ?? null,
         receipts: run.receipts.map(x => ({ gateId: x.gateId, status: x.status, durationMs: Math.round(x.durationMs), reusedFrom: x.reusedFrom, diagnostic: x.diagnostic.slice(0, 4000) })) };
     });
     const validations = (r.validationRunIds ?? []).map(runId => {
@@ -156,6 +157,7 @@ export async function startUi(options: UiOptions): Promise<UiServer> {
         inlinedAssets: r.design.inlinedAssets ?? [], screens: r.design.proposal.screens.map((s, i) => ({ id: s.id, title: s.title, purpose: s.purpose, states: s.states,
           file: basename(r.design!.screenPaths[i] ?? ''), available: existsSync(r.design!.screenPaths[i] ?? '') })) } : null,
       attempts, validations, busy: busy(id), activeProcesses: life.store.documentProcesses(id), implementer: r.config?.agent?.type ?? null,
+      cost: { declaredUsd: life.declaredCostUsd(r), ceilingUsd: r.config?.workflow?.maxSpecCostUsd ?? null },
     };
   };
   const specEvents = (id: string) => {
@@ -235,7 +237,9 @@ export async function startUi(options: UiOptions): Promise<UiServer> {
       const jobsByAction: Record<string, [string, string[]]> = {
         run: body['acceptCurrent'] === true
           ? ['Adoption du travail conservé', ['spec', 'run', id, '--accept-current']]
-          : ['Exécution', ['spec', 'run', id]], verify: ['Revalidation', ['spec', 'verify', id]], sync: ['Synchronisation', ['spec', 'sync', id]],
+          : body['acceptCost'] === true
+            ? ['Exécution au-delà du plafond de coût', ['spec', 'run', id, '--accept-cost']]
+            : ['Exécution', ['spec', 'run', id]], verify: ['Revalidation', ['spec', 'verify', id]], sync: ['Synchronisation', ['spec', 'sync', id]],
       };
       if (jobsByAction[action]) { const [label, args] = jobsByAction[action]!; return json(res, 202, jobView(startJob(id, label, args))); }
       if (action === 'refine') {

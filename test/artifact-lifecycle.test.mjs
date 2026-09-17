@@ -664,3 +664,42 @@ test('Product is told what one attempt can spend, and oversized tasks are flagge
   assert.deepEqual(summary.sizeAdvice, [{ taskId: 'MATH', title: big.tasks[0].title, paths: 9 }]);
   assert.ok(summary.hash, 'the advice never blocks the approval');
 });
+
+// Observed on a real spec: an attempt failed with a 2000-character provider JSON in which the only useful
+// sentence ("Reached maximum number of turns") was buried, and the cost appeared nowhere else.
+test('a provider stop is named, and what it declared spending is recorded', async () => {
+  const { providerUsage, usageSentence } = await import('../dist/adapters/usage.js');
+  const stopped = JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 33, total_cost_usd: 3.3136, duration_ms: 323170 });
+  assert.deepEqual(providerUsage('claude', stopped), { stopReason: 'provider-turn-limit', costUsd: 3.3136, turns: 33, durationMs: 323170 });
+  assert.match(usageSentence(providerUsage('claude', stopped)), /turn limit \(agent\.maxTurns\).*33 turns.*3\.31 USD/);
+  const budget = JSON.stringify({ type: 'result', subtype: 'error_max_budget_usd', is_error: true, total_cost_usd: 5 });
+  assert.equal(providerUsage('claude', budget).stopReason, 'provider-budget-limit');
+  const success = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 7, total_cost_usd: 0.42 });
+  assert.deepEqual(providerUsage('claude', success), { stopReason: null, costUsd: 0.42, turns: 7, durationMs: null });
+  assert.equal(providerUsage('command', success), null, 'a provider that reports nothing invents nothing');
+  assert.equal(providerUsage('claude', 'not json at all'), null);
+  assert.equal(usageSentence(null), '');
+});
+
+test('a spec stops at its reviewed cost ceiling until the operator authorizes the overrun', async (t) => {
+  const f = lifecycleFixture(t);
+  const config = { ...f.config, workflow: { ...f.config.workflow, maxSpecCostUsd: 1 } };
+  let d = await f.life.draft({ repo: f.repo, config, request: 'Implement the approved arithmetic example.' });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+  // The fixture provider declares no cost, so spending is simulated on the first attempt's run.
+  d = await f.life.run(d.id);
+  const first = f.life.pipeline.store.get(d.data.attempts[0].runId);
+  first.metrics.costUsd = 1.4;
+  f.life.pipeline.store.save(first, 'test.cost', {});
+  assert.equal(f.life.declaredCostUsd(f.life.get(d.id).data), 1.4);
+
+  const blocked = f.life.get(d.id);
+  blocked.data.status = 'approved'; blocked.data.completedTaskIds = []; blocked.data.activeRunId = null; blocked.data.finalRunId = null; blocked.data.qa = null;
+  f.life.store.saveDocument(blocked, 'test.reset', {});
+  d = await f.life.run(d.id);
+  assert.equal(d.data.error?.code, 'COST_BUDGET', JSON.stringify(d.data.error));
+  assert.match(f.life.summary(f.life.get(d.id)).nextAction, /--accept-cost/);
+
+  d = await f.life.run(d.id, { acceptCost: true });
+  assert.notEqual(d.data.error?.code, 'COST_BUDGET', 'the authorized overrun runs the spec to its end');
+});
