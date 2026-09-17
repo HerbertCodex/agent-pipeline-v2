@@ -15,6 +15,13 @@ import { environment, runProcess, redact, expandCommand } from '../execution/pro
 import { runAgent, requestFor } from '../adapters/agent.js';
 import { executableIdentity, environmentIdentity, proofKey } from '../evidence/key.js';
 import { schedule, success } from './scheduler.js';
+/**
+ * An agent that stops without a usable outcome — turn or budget limit of the provider, timeout, unreadable
+ * output — has usually already written files in its workspace. Those failures keep the run interrupted, so
+ * the operator can inspect that work and adopt it with an explicit `--accept-current`, or discard it with a
+ * new attempt. Throwing it away silently made the work be paid for twice.
+ */
+const SALVAGEABLE_AGENT_ERRORS = new Set(['AGENT', 'AGENT_OUTPUT']);
 export class Pipeline {
     store;
     constructor(stateDir) { this.store = new Store(stateDir); }
@@ -229,7 +236,8 @@ export class Pipeline {
             catch (error) {
                 const cancelled = signal.aborted || (error instanceof PipelineError && error.code === 'CANCELLED');
                 const previous = run.state;
-                if (cancelled) {
+                const salvageable = !cancelled && previous === 'implementing' && error instanceof PipelineError && SALVAGEABLE_AGENT_ERRORS.has(error.code);
+                if (cancelled || salvageable) {
                     run.resumeFrom = previous;
                     if (run.state !== 'interrupted')
                         transition(run, 'interrupted');
@@ -237,7 +245,7 @@ export class Pipeline {
                 else if (run.state !== 'failed')
                     transition(run, 'failed');
                 run.error = { code: controller.signal.aborted ? 'BUDGET' : cancelled ? 'CANCELLED' : error instanceof PipelineError ? error.code : 'INTERNAL', message: errorMessage(error) };
-                this.store.save(run, cancelled ? 'run.interrupted' : 'run.failed', { error: run.error });
+                this.store.save(run, cancelled || salvageable ? 'run.interrupted' : 'run.failed', { error: run.error, workspace: salvageable ? run.workspace : undefined });
             }
             finally {
                 clearTimeout(timer);
