@@ -256,6 +256,11 @@ export class Store {
     const row = this.db.prepare('SELECT doc_id,pid FROM document_children WHERE id=?').get(id);
     if (row) this.documentEvent(String(row['doc_id']), 'process.finished', { pid: Number(row['pid']), child: id });
   }
+  /** True while a controller on this host holds the document's lease: a draft, refinement or run is in progress. */
+  documentControllerAlive(id: string): boolean {
+    const lease = this.db.prepare('SELECT pid,host FROM document_leases WHERE doc_id=?').get(id);
+    return Boolean(lease) && lease!['host'] === hostname() && processAlive(Number(lease!['pid']));
+  }
   documentProcesses(id: string): {pid:number;alive:boolean}[] {
     return this.db.prepare('SELECT pid FROM document_children WHERE doc_id=? AND active=1').all(id)
       .map(row=>({pid:Number(row['pid']),alive:processAlive(Number(row['pid']))}));

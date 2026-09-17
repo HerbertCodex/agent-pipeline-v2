@@ -97,8 +97,9 @@ export async function startUi(options: UiOptions): Promise<UiServer> {
   };
   const note = (body: Record<string, unknown>): string => `[tableau de bord] ${text(body, 'note', 10, 4000)}`;
 
+  /** Busy whoever started the operation: this dashboard, another one, or the terminal. */
   const busy = (specId: string): boolean =>
-    [...jobs.values()].some(j => j.specId === specId && j.state === 'running') || life.store.documentProcesses(specId).some(p => p.alive);
+    [...jobs.values()].some(j => j.specId === specId && j.state === 'running') || life.store.documentControllerAlive(specId) || life.store.documentProcesses(specId).some(p => p.alive);
   const startJob = (specId: string | null, label: string, args: string[]): Job => {
     if (specId && busy(specId)) throw new HttpError(409, 'Une opération est déjà en cours sur cette spec');
     const id = randomUUID(); const log = join(jobsDir, `${id}.log`);
@@ -154,7 +155,7 @@ export async function startUi(options: UiOptions): Promise<UiServer> {
         questions: r.design.proposal.questions, reusedFrom: r.design.reusedFrom ?? null, loadedStylesheets: r.design.loadedStylesheets ?? [],
         inlinedAssets: r.design.inlinedAssets ?? [], screens: r.design.proposal.screens.map((s, i) => ({ id: s.id, title: s.title, purpose: s.purpose, states: s.states,
           file: basename(r.design!.screenPaths[i] ?? ''), available: existsSync(r.design!.screenPaths[i] ?? '') })) } : null,
-      attempts, validations, busy: busy(id), activeProcesses: life.store.documentProcesses(id),
+      attempts, validations, busy: busy(id), activeProcesses: life.store.documentProcesses(id), implementer: r.config?.agent?.type ?? null,
     };
   };
   const specEvents = (id: string) => {

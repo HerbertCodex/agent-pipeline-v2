@@ -99,6 +99,17 @@ test('a long operation runs as a separate CLI process that the dashboard follows
   assert.equal((await get(`/api/specs/${d.id}`)).json().summary.status, 'awaiting_review');
 });
 
+test('a spec is busy while any controller holds it, not only jobs started by this dashboard', async (t) => {
+  const { f, get } = await open(t);
+  const d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.' });
+  assert.equal((await get(`/api/specs/${d.id}`)).json().busy, false);
+  const token = f.life.store.acquireDocument(d.id);
+  assert.equal((await get(`/api/specs/${d.id}`)).json().busy, true, 'a terminal run holds the lease with a live pid');
+  assert.equal((await get('/api/specs')).json().find(s => s.id === d.id).busy, true);
+  f.life.store.releaseDocument(d.id, token);
+  assert.equal((await get(`/api/specs/${d.id}`)).json().busy, false);
+});
+
 test('the live stream pushes new lifecycle events', async (t) => {
   const { f, ui, cookie } = await open(t);
   const res = await call(ui, '/api/stream', { headers: { cookie }, raw: true });

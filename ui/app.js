@@ -147,8 +147,12 @@ function connectStream() {
     // Activity appends in place (a re-render would lose the reader's scroll); the design tab holds an iframe
     // that a re-render would reload. Both re-render only when the spec's own state may have changed.
     const stateChanged = relevant.some(e => e.source === 'lifecycle' && !e.type.startsWith('process.') && !e.type.startsWith('role.'));
-    if (state.tab === 'activity') { appendTimeline(relevant); if (stateChanged) refreshDetail(); return; }
-    if (state.tab !== 'design' || stateChanged) refreshDetail();
+    if (state.tab === 'activity') {
+      appendTimeline(relevant);
+      if (stateChanged) refreshDetail(); else $('#decision')?.replaceWith(decision(d));
+      return;
+    }
+    if (state.tab !== 'design' || stateChanged) refreshDetail(); else $('#decision')?.replaceWith(decision(d));
   });
 }
 
@@ -320,6 +324,35 @@ function renderDetail() {
   ({ overview, criteria, tasks, activity, qa, design, amendments })[state.tab](body, d);
 }
 
+const PROVIDERS = { claude: 'Claude Code', codex: 'Codex', command: 'agent externe' };
+const hhmm = (ms) => new Date(ms).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+/**
+ * What the busy spec is doing now, read backwards from its activity: the role at work (Product, Design, QA)
+ * or, inside a run, the Implementer, the checks or the workspace preparation of a task, with its start time.
+ * Returns null when the latest step has just finished and the next one has not started yet.
+ */
+function currentWork(d) {
+  const tasks = new Map(((d.content && d.content.tasks) || []).map(t => [t.id, t.title]));
+  const runTask = new Map(d.attempts.map(a => [a.runId, a.taskId]));
+  const subject = (runId) => { const t = runTask.get(runId); return t ? `${t} · ${tasks.get(t) || ''}` : 'validation d\'ensemble'; };
+  const ROLE = { product: ['Product', 'rédige la spec'], qa: ['QA', 'évalue le candidat'], setup: ['Setup', 'prépare la configuration'] };
+  const RUN = { 'agent.started': 'Implementer', 'agent.repair_started': 'Implementer (réparation)', 'validation.started': 'Contrôles', 'workspace.preparing': 'Préparation de l\'espace de travail' };
+  const DONE = new Set(['role.finished', 'agent.completed', 'validation.completed', 'validation.failed', 'session.finished', 'workflow.session_finished', 'run.failed']);
+  for (let i = state.events.length - 1; i >= 0; i--) {
+    const e = state.events[i]; const x = e.data || {};
+    if (DONE.has(e.type)) return null;
+    if (e.source === 'lifecycle' && e.type === 'role.started') {
+      const [who, what] = x.mode === 'design-proposal' ? ['Design', 'prépare les maquettes'] : ROLE[x.role] || [x.role, 'travaille'];
+      return { who, what, provider: PROVIDERS[x.provider] || x.provider, since: e.at };
+    }
+    if (e.source === 'run' && RUN[e.type]) {
+      const provider = e.type.startsWith('agent.') ? PROVIDERS[d.implementer] || d.implementer : null;
+      return { who: RUN[e.type], what: subject(e.id), provider, since: e.at };
+    }
+  }
+  return null;
+}
+
 function decision(d) {
   const s = d.summary; const code = s.error && s.error.code;
   const questions = (s.questions || []).length + ((s.design && s.design.questions) || []).length;
@@ -329,7 +362,7 @@ function decision(d) {
   if (s.status === 'draft') (questions ? primary : secondary).push(btn(questions ? 'Répondre aux questions' : 'Affiner', () => refineDialog(d, questions), questions ? 'btn btn--primary' : 'btn', d.busy));
   if (code === 'SCOPE_AMENDMENT_REQUIRED') primary.push(btn('Examiner l\'amendement', () => { state.tab = 'amendments'; renderDetail(); }, 'btn btn--primary'));
   if (s.status === 'awaiting_review' || code === 'MERGED_BEFORE_REVIEW') primary.push(btn('Enregistrer ma revue', () => reviewDialog(d), 'btn btn--primary'));
-  if (d.approval && ['approved', 'running', 'blocked'].includes(s.status) && !['SCOPE_AMENDMENT_REQUIRED', 'QA_REJECTED', 'MERGED_BEFORE_REVIEW'].includes(code))
+  if (d.approval && !d.busy && ['approved', 'running', 'blocked'].includes(s.status) && !['SCOPE_AMENDMENT_REQUIRED', 'QA_REJECTED', 'MERGED_BEFORE_REVIEW'].includes(code))
     (primary.length ? secondary : primary).push(btn(s.status === 'blocked' ? 'Reprendre l\'exécution' : 'Lancer l\'exécution', () => job(`/api/specs/${s.id}/run`, 'Exécution lancée'), primary.length ? 'btn' : 'btn btn--primary', d.busy));
   if (s.status === 'blocked' && ['NO_CHANGE', 'TASK_FAILED', 'REPAIR_NO_CHANGE', 'AGENT', 'EXECUTION'].includes(code))
     secondary.push(btn('Autoriser une nouvelle tentative', () => confirmDialog('Autoriser une nouvelle tentative', 'La tâche échouée est reconstruite à partir de l\'état actuel, puis relancée à la prochaine exécution.', () => api(`/api/specs/${s.id}/retry`, { body: { confirm: true } }), 'Nouvelle tentative autorisée')));
@@ -337,11 +370,14 @@ function decision(d) {
   if (s.publication && s.publication.url && !TERMINAL.has(s.status)) secondary.push(btn('Synchroniser avec la PR', () => job(`/api/specs/${s.id}/sync`, 'Synchronisation lancée'), 'btn', d.busy));
   if (!TERMINAL.has(s.status)) secondary.push(btn('Rejeter', () => rejectDialog(d), 'btn btn--quiet-danger'));
   const why = needs({ ...s, busy: d.busy });
-  const title = d.busy ? (s.status === 'draft' ? 'Product rédige la spec' : 'Un agent travaille') : s.status === 'blocked' ? why : why || (s.status === 'closed' ? 'Spec clôturée' : s.status === 'rejected' ? 'Spec rejetée' : 'Rien à faire pour l\'instant');
-  return h('section', { class: `decision sig-${signalOf({ ...s, busy: d.busy })}`, 'aria-label': 'Décision attendue' },
+  const work = d.busy ? currentWork(d) : null;
+  const title = d.busy ? (work ? `${work.who} au travail` : s.status === 'draft' ? 'Product rédige la spec' : 'Un agent travaille') : s.status === 'blocked' ? why : why || (s.status === 'closed' ? 'Spec clôturée' : s.status === 'rejected' ? 'Spec rejetée' : 'Rien à faire pour l\'instant');
+  return h('section', { id: 'decision', class: `decision sig-${signalOf({ ...s, busy: d.busy })}`, 'aria-label': 'Décision attendue' },
     h('div', { class: 'decision__text' },
       h('span', { class: 'label', text: d.busy ? 'En cours' : why ? 'À vous' : 'État' }),
       h('span', { class: 'decision__title', text: title }),
+      work ? h('p', { class: 'decision__work' }, h('span', { text: work.what }),
+        h('span', { class: 'muted', text: [work.provider, `depuis ${hhmm(work.since)}`].filter(Boolean).join(' · ') })) : null,
       s.status === 'blocked' && s.error ? h('p', { class: 'muted', text: s.error.message }) : null,
       s.status === 'draft' && s.hash ? h('span', { class: 'hash' }, 'hash', h('code', { text: s.hash }), copyButton(s.hash)) : null,
       s.status === 'awaiting_review' ? h('span', { class: 'hash' }, 'candidat', h('code', { text: s.candidateSha })) : null,
