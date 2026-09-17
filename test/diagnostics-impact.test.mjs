@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fixture } from './helpers.mjs';
 import { failureExcerpt, MAX_DIAGNOSTIC_CHARS } from '../dist/engine/diagnostic.js';
 import { referenceTokens, buildInventory, testsReferencing } from '../dist/knowledge/inventory.js';
 import { inspectRepository } from '../dist/knowledge/repository.js';
@@ -57,4 +58,18 @@ test('tests referencing a task scope are listed, and those outside it are flagge
   assert.deepEqual(found.map(x => x.path), ['src/routes/catalogue.test.ts', 'src/server/auth/auth.test.ts']);
   const ri = await inspectRepository(root, inventory.sha, 'db', { inventory, focusPaths: ['src/server/db/index.ts', 'src/routes/catalogue.test.ts'] });
   assert.deepEqual(ri.referencingTests.map(x => [x.path, x.outsideScope]), [['src/routes/catalogue.test.ts', false], ['src/server/auth/auth.test.ts', true]]);
+});
+
+// Observed on a real run: a provider exited non-zero with an empty stderr and its explanation on stdout.
+// The controller reported `Agent failed: ` — no exit code, no output, nothing to act on.
+test('a failing provider is reported with its exit code and its own output', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'apv2-agent-diag-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const worker = join(root, 'refusing-worker.mjs');
+  writeFileSync(worker, `process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error_max_budget', is_error: true, result: 'Budget limit of $5.00 reached before completion.' }) + '\\n');\nprocess.exit(1);\n`);
+  const f = fixture(t, { config: { agent: { type: 'command', command: [process.execPath, worker] } } });
+  const finished = await f.start();
+  assert.equal(finished.state, 'failed');
+  assert.match(finished.error.message, /exit 1/, 'the exit code is reported');
+  assert.match(finished.error.message, /error_max_budget|Budget limit/, 'the provider explanation reaches the operator');
 });

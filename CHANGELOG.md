@@ -2,6 +2,8 @@
 
 ## Non publié
 
+- Un fournisseur qui échoue est rapporté avec son code de sortie, sa durée et **sa propre sortie** (stdout compris, extrait centré sur l'échec). Constaté en pilotant un vrai projet : une tâche s'est arrêtée sur `Agent failed: ` — message vide, parce que seul stderr était lu et que le fournisseur avait écrit son refus sur stdout. Même correction pour les rôles.
+
 Corrections issues d'un audit externe qui a rejoué chaque défaut sur l'archive `de9d782`. Une suite verte ne couvrait aucun de ces parcours.
 
 - **La maquette approuvée atteint enfin l'implémentation.** L'Implementer reçoit le markup et la feuille de style que l'opérateur a approuvés (borné : au-delà du budget, il reçoit la description et le chemin de l'aperçu), plus le chemin du fichier d'aperçu de ses écrans. QA reçoit la maquette et doit signaler un écart visible comme constat. Auparavant les deux ne recevaient qu'une paraphrase, et QA rien du tout.

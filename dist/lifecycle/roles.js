@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parseJson } from '../domain/schema.js';
 import { invariant, PipelineError } from '../domain/errors.js';
+import { failureExcerpt } from '../engine/diagnostic.js';
 import { Git, isInside } from '../execution/git.js';
 import { environment, runProcess, redact } from '../execution/process.js';
 // Markdown files in roles/ are the sole source, shared with installation and CLI inspection.
@@ -73,7 +74,7 @@ export async function runRole(options) {
             const processEndAt = performance.now();
             await git.clean(workspace, sha);
             const cleanEndAt = performance.now();
-            invariant(result.status === 'passed', result.status === 'cancelled' ? 'CANCELLED' : 'ROLE', `${role} ${result.status}: ${redact(result.stderr.slice(-4000), env)}`);
+            invariant(result.status === 'passed', result.status === 'cancelled' ? 'CANCELLED' : 'ROLE', `${role} ${result.status} (exit ${result.exitCode ?? 'none'}${result.signal ? `, signal ${result.signal}` : ''}) after ${Math.round(result.durationMs)} ms: ${redact(failureExcerpt(`${role} ${result.status}`, result.stderr, result.stdout, 4000), env).trim() || '(the provider wrote nothing on stdout or stderr)'}`);
             try {
                 let text = result.stdout;
                 if (agent.type === 'codex') {
