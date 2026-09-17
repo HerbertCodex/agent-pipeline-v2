@@ -1,5 +1,6 @@
 import { guidanceFor, guidanceAudit, readRole } from '../knowledge/catalog.js';
 import { claudeCommand, claudeOutput } from '../adapters/claude.js';
+import { providerUsage, usageSentence } from '../adapters/usage.js';
 import { mkdirSync, readFileSync, writeFileSync, lstatSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -77,7 +78,10 @@ export async function runRole(options) {
             const processEndAt = performance.now();
             await git.clean(workspace, sha);
             const cleanEndAt = performance.now();
-            invariant(result.status === 'passed', result.status === 'cancelled' ? 'CANCELLED' : 'ROLE', `${role} ${result.status} (exit ${result.exitCode ?? 'none'}${result.signal ? `, signal ${result.signal}` : ''}) after ${Math.round(result.durationMs)} ms: ${redact(failureExcerpt(`${role} ${result.status}`, result.stderr, result.stdout, 4000), env).trim() || '(the provider wrote nothing on stdout or stderr)'}`);
+            // What the provider declared for this role round: named in a failure, recorded on success.
+            const usage = providerUsage(agent.type, result.stdout);
+            const named = usageSentence(usage);
+            invariant(result.status === 'passed', result.status === 'cancelled' ? 'CANCELLED' : 'ROLE', `${role} ${result.status}${named ? `: ${named}` : ''} (exit ${result.exitCode ?? 'none'}${result.signal ? `, signal ${result.signal}` : ''}) after ${Math.round(result.durationMs)} ms: ${redact(failureExcerpt(`${role} ${result.status}`, result.stderr, result.stdout, 4000), env).trim() || '(the provider wrote nothing on stdout or stderr)'}`);
             try {
                 let text = result.stdout;
                 if (agent.type === 'codex') {
@@ -90,7 +94,7 @@ export async function runRole(options) {
                 const parsed = options.schema.parse(agent.type === 'claude' ? claudeOutput(text) : parseJson(text));
                 const value = options.validate ? options.validate(parsed) : parsed;
                 const doneAt = performance.now();
-                store.documentEvent(documentId, 'role.finished', { role, mode, durationMs: result.durationMs, stdoutHash: result.stdoutHash, attempts: attempt + 1,
+                store.documentEvent(documentId, 'role.finished', { role, mode, durationMs: result.durationMs, stdoutHash: result.stdoutHash, attempts: attempt + 1, usage,
                     timingsMs: { beforeSpawn: Math.round(spawnAt - startedAt), process: Math.round(processEndAt - spawnAt), workspaceCheck: Math.round(cleanEndAt - processEndAt), parseAndValidate: Math.round(doneAt - cleanEndAt), total: Math.round(doneAt - startedAt) } });
                 return value;
             }

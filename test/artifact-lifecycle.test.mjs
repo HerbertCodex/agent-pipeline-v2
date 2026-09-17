@@ -139,6 +139,19 @@ test('the next action of a blocked spec lifts its blocker instead of repeating i
   assert.match(blocked({ code: 'CANCELLED', message: 'Spec execution cancelled' }), /spec recover .* --confirm-stopped/);
   assert.match(blocked({ code: 'QA_REJECTED', message: 'QA requests changes; automatic repair budget exhausted.' }), /follow-up spec/);
   assert.match(blocked({ code: 'NO_CHANGE', message: 'Agent produced no effective change' }), /changed nothing.*spec retry .* --confirm/);
+  // Observed on a real spec: Product was killed by its timeout, and the spec offered to approve a hash
+  // that does not exist ("--hash NO_VALID_PROPOSAL").
+  const empty = f.life.get(d.id);
+  const content = empty.data.content; const approval = empty.data.approval;
+  Object.assign(empty.data, { content: null, approval: null, error: { code: 'PRODUCT', message: 'product timed_out after 900224 ms' } });
+  f.life.store.saveDocument(empty, 'test.product_failed', {});
+  const failedRound = f.life.summary(f.life.get(d.id)).nextAction;
+  assert.match(failedRound, /spec refine .* --request/);
+  assert.match(failedRound, /did not produce a spec: PRODUCT/);
+  assert.doesNotMatch(failedRound, /NO_VALID_PROPOSAL/);
+  Object.assign(f.life.get(d.id).data, { content, approval, error: null });
+  const restored = f.life.get(d.id); Object.assign(restored.data, { content, approval, error: null }); f.life.store.saveDocument(restored, 'test.restore', {});
+
   assert.match(blocked({ code: 'GATES_FAILED', message: 'Required checks failed; diagnostics and the candidate are retained' }), /spec retry .* --confirm/);
   assert.match(blocked({ code: 'STALE_EVIDENCE', message: 'Validation expired; revalidate before approval/export' }), /spec verify /);
   assert.match(blocked({ code: 'GATE', message: 'unit failed' }), /Resolve GATE before running again/);

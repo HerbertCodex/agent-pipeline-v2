@@ -1254,7 +1254,11 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         const active = r.activeRunId ? this.pipeline.store.get(r.activeRunId) : null;
         const stopped = active && active.state === 'interrupted' && active.resumeFrom === 'implementing' && r.status === 'blocked' ? active : null;
         let next: string;
-        if (!r.approval)
+        // A round that failed leaves a spec with nothing to approve: relaunching Product is the way out,
+        // not an approval of a hash that does not exist.
+        if (!r.approval && !r.content)
+            next = `apv2 spec refine ${doc.id} --request "..."   (the last Product round did not produce a spec${r.error ? `: ${r.error.code}` : ''}; relaunch it, or apv2 spec reject ${doc.id} --note TEXT to abandon)`;
+        else if (!r.approval)
             next = (r.content?.questions.length || r.design?.proposal.questions.length) ? `apv2 spec refine ${doc.id} --request "answers to the displayed questions"` : `apv2 spec approve ${doc.id} --hash ${approvalHash(r) ?? 'NO_VALID_PROPOSAL'} --approve`;
         else if (r.status === 'awaiting_review')
             next = `apv2 spec review ${doc.id} --sha ${final?.candidateSha} --approve`;

@@ -359,6 +359,8 @@ function decision(d) {
   const primary = []; const secondary = [];
   const btn = (label, onclick, kind = 'btn', disabled = false) => h('button', { class: kind, type: 'button', disabled, onclick }, label);
   if (s.status === 'draft' && s.hash && !questions) primary.push(btn('Approuver la spec', () => approveDialog(d), 'btn btn--primary', d.busy));
+  // A round that failed leaves nothing to approve: the way out is to run Product again.
+  if (s.status === 'draft' && !s.hash && !d.busy && s.error) primary.push(btn('Relancer la rédaction', () => refineDialog(d, 0), 'btn btn--primary'));
   if (s.status === 'draft') (questions ? primary : secondary).push(btn(questions ? 'Répondre aux questions' : 'Affiner', () => refineDialog(d, questions), questions ? 'btn btn--primary' : 'btn', d.busy));
   if (code === 'SCOPE_AMENDMENT_REQUIRED') primary.push(btn('Examiner l\'amendement', () => { state.tab = 'amendments'; renderDetail(); }, 'btn btn--primary'));
   if (s.status === 'awaiting_review' || code === 'MERGED_BEFORE_REVIEW') primary.push(btn('Enregistrer ma revue', () => reviewDialog(d), 'btn btn--primary'));
@@ -384,7 +386,7 @@ function decision(d) {
   if (!TERMINAL.has(s.status)) secondary.push(btn('Rejeter', () => rejectDialog(d), 'btn btn--quiet-danger'));
   const why = needs({ ...s, busy: d.busy });
   const work = d.busy ? currentWork(d) : null;
-  const title = d.busy ? (work ? `${work.who} au travail` : s.status === 'draft' ? 'Product rédige la spec' : 'Un agent travaille') : s.status === 'blocked' ? why : why || (s.status === 'closed' ? 'Spec clôturée' : s.status === 'rejected' ? 'Spec rejetée' : 'Rien à faire pour l\'instant');
+  const title = d.busy ? (work ? `${work.who} au travail` : s.status === 'draft' ? 'Product rédige la spec' : 'Un agent travaille') : s.status === 'draft' && !s.hash && s.error ? 'La rédaction a échoué' : s.status === 'blocked' ? why : why || (s.status === 'closed' ? 'Spec clôturée' : s.status === 'rejected' ? 'Spec rejetée' : 'Rien à faire pour l\'instant');
   return h('section', { id: 'decision', class: `decision sig-${signalOf({ ...s, busy: d.busy })}`, 'aria-label': 'Décision attendue' },
     h('div', { class: 'decision__text' },
       h('span', { class: 'label', text: d.busy ? 'En cours' : why ? 'À vous' : 'État' }),
