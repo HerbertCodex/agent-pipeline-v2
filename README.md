@@ -41,7 +41,18 @@ Ce projet n’est **ni une sandbox OS**, **ni une plateforme multi-utilisateur**
 
 ## Tableau de bord
 
-`apv2 ui` ouvre un tableau de bord local pour suivre les specs et l'activité des agents en direct, et agir sans quitter le navigateur. Détails et garanties de sécurité : [docs/LIFECYCLE.md](docs/LIFECYCLE.md#tableau-de-bord).
+```bash
+node "$FRAMEWORK/dist/cli.js" ui            # port 4711 par défaut, --port N pour un autre
+```
+
+La commande affiche une adresse `http://127.0.0.1:4711/?token=…` : ouvrez-la **complète**, le jeton ne sert qu'une fois et ne doit pas être partagé. La console montre :
+
+- **les projets** du magasin, avec leurs specs actives et les décisions en attente ;
+- **ce qui attend votre décision** : spec à approuver, questions Product, amendement, candidat à relire, blocage ;
+- **le détail d'une spec** : étape du cycle, périmètre, critères et verdict QA, tâches avec tentatives et contrôles, maquettes, amendements, tests impactés ;
+- **l'activité des agents en direct** et les opérations lancées depuis la page.
+
+Les actions de la CLI y sont disponibles (brouillon, affinage, approbation, exécution, revalidation, nouvelle tentative, amendements, revue, synchronisation, rejet, nettoyage) avec les mêmes garanties : hash ou SHA exact, note obligatoire, identité Git du dépôt comme relecteur. La purge de l'historique reste au terminal. Serveur local sans dépendance, lié à `127.0.0.1`. Détails et garanties de sécurité : [docs/LIFECYCLE.md](docs/LIFECYCLE.md#tableau-de-bord).
 
 ## En un coup d’œil
 
@@ -235,6 +246,21 @@ Un verdict QA `pass` est impossible si une décision confirmée est ignorée, é
 
 ---
 
+## Depuis alpha.8
+
+Ces évolutions viennent du pilotage d'un vrai projet et sont décrites dans [`CHANGELOG.md`](CHANGELOG.md) (section « Non publié ») :
+
+- **tableau de bord local** `apv2 ui`, multi-projets ;
+- **recours en cours d'exécution** : correction d'un critère devenu intenable (`spec criterion`), réparation QA qui peut demander un amendement de périmètre, `spec retry` qui reconstruit la tâche à partir de l'état actuel ;
+- **la QA juge la spec effective** : critères corrigés et amendements approuvés compris, plus les résumés des tâches ;
+- **maquettes** : continuité visuelle entre incréments, polices et images du dépôt, feuilles de style globales du projet ; la maquette approuvée est transmise à l'Implementer et à la QA ;
+- **preuves** : adoption des reçus d'une spec à une tâche au lieu de rejouer les contrôles, sans prolonger leur fraîcheur ;
+- **fiabilité des rôles** : réparation bornée d'une sortie hors contrat, diagnostics d'échec centrés sur les échecs, avertissement sur les tests impactés (`impactAdvice`) ;
+- **livraison** : PR brouillon avant l'approbation pour lire le code (`publish --for-review`), clôture d'une spec relue sans bundle ;
+- **maintenance** : `gc`, `prune`, `decisions plan|apply`.
+
+---
+
 <details>
 <summary><strong>Voir aussi les améliorations de fluidité conservées depuis alpha.5</strong></summary>
 
@@ -371,6 +397,50 @@ Selon le projet, cela peut être Maven, Gradle, npm, pnpm, pytest, cargo, `go te
 
 ---
 
+## Cycle d’une spec
+
+Une fois le projet installé, chaque besoin suit le même parcours. Chaque étape humaine porte sur un hash ou un SHA exact.
+
+```bash
+# 1. Product rédige la spec (et la maquette si l’interface change)
+apv2 spec draft --repo "$APP" --request-file besoin.txt
+apv2 spec show SPEC_ID                       # contenu complet + action suivante
+apv2 spec refine SPEC_ID --request "Réponses aux questions"
+
+# 2. Approbation du bundle exact spec + design
+apv2 spec approve SPEC_ID --hash HASH --approve --note "Ce que j’ai vérifié"
+
+# 3. Tâches, contrôles, QA et réparations bornées
+apv2 spec run SPEC_ID
+
+# 4. Revue humaine du candidat final
+apv2 spec review SPEC_ID --sha CANDIDATE_SHA --approve --note "Relu dans le dossier de revue"
+
+# 5. Livraison explicite, puis clôture observée
+apv2 spec publish SPEC_ID --repository OWNER/REPO --remote origin --name BRANCHE \
+  --target main --confirm-push --confirm-pr
+apv2 spec sync SPEC_ID                       # la fusion reste faite par l’humain
+```
+
+`apv2 spec list --active` liste les specs en cours ; `apv2 spec reject SPEC_ID --note …` abandonne une spec. Tout ce parcours est aussi disponible dans le [tableau de bord](#tableau-de-bord).
+
+### Recours pendant l’exécution
+
+Une spec est immuable dès que l’exécution commence ; les écarts passent par des recours explicites, chacun approuvé à part.
+
+| Situation | Recours |
+|---|---|
+| un fichier hors périmètre doit changer | amendement proposé par le contrôleur : `spec amend SPEC_ID --amendment ID --approve` |
+| un critère interdit ce que le changement approuvé impose | `spec criterion SPEC_ID --criterion AC_ID --file correction.json`, puis approbation de son hash |
+| une tentative a échoué | `spec retry SPEC_ID --confirm` : nouvelle tentative reconstruite à partir de l’état actuel |
+| une réparation n’a rien changé (`REPAIR_NO_CHANGE`, `NO_CHANGE`) | lire l’explication de l’agent, puis `retry` ou une spec de suivi |
+| la preuve de validation a expiré (`STALE_EVIDENCE`) | `spec verify SPEC_ID`, puis `spec run SPEC_ID` |
+| le contrôleur a été arrêté brutalement | `spec recover SPEC_ID --confirm-stopped` après vérification des processus |
+
+`spec show` indique toujours l’action suivante qui lève le blocage en cours. Détails : [docs/LIFECYCLE.md](docs/LIFECYCLE.md).
+
+---
+
 ## Project Profile : comprendre avant de modifier
 
 La pipeline construit un profil à partir du dépôt réel :
@@ -470,6 +540,13 @@ La pipeline évite par défaut :
 
 Le hash d’approbation lie la **spec + les artefacts de design** concernés.
 
+Les maquettes sont écrites dans `../mon-application-review/<spec-id>/design/` (`INDEX.md` et un aperçu HTML par écran), et :
+
+- **prolongent la direction déjà approuvée** pour le dépôt (`establishedDesign`) : seuls les écrans créés ou modifiés sont maquettés, seul le style nouveau est écrit ;
+- **peuvent utiliser les polices et images du dépôt** (`assets`, référencées par `url(asset:ID)`) et **charger ses feuilles de style globales** (`stylesheets`), toujours depuis des fichiers suivis par Git ;
+- restent des **documents statiques** : ni script, ni ressource distante, ni gestionnaire d’événement ;
+- sont **transmises telles qu’approuvées** à l’Implementer, pour ses seuls écrans, et à la QA, qui signale tout écart visible.
+
 ---
 
 ## Scope adaptatif
@@ -514,6 +591,8 @@ Avant de demander une approbation humaine :
 ../mon-application-review/<spec-id>/
 ├── candidate/          # worktree ouvrable dans l’éditeur
 ├── candidate.patch
+├── design/             # maquettes approuvées, si l’interface change
+├── INVENTORY.md
 ├── QA.md
 └── REVIEW.md
 ```
@@ -539,6 +618,15 @@ apv2 spec review SPEC_ID \
 ```
 
 La CLI peut utiliser `git config user.name` comme label d’audit local.
+
+---
+
+## Preuves et fiabilité des rôles
+
+- **Réparation bornée** : une réponse d’agent qui viole le contrat du contrôleur (schéma, invariants) est renvoyée au même rôle avec l’erreur exacte, jusqu’à `workflow.maxOutputRepairs` fois. Délai, annulation, refus de permission et échec du fournisseur ne sont jamais réessayés.
+- **Diagnostics** : un fournisseur ou un contrôle en échec est rapporté avec son code de sortie, sa durée et un extrait centré sur les lignes d’échec.
+- **Tests impactés** : avant l’approbation, `impactAdvice` signale les tests existants qui importent un fichier modifié mais sont rangés dans une tâche ultérieure ou nulle part. C’est un avertissement, jamais un blocage.
+- **Adoption de preuve** : pour une spec à une tâche, la validation finale adopte les reçus de la tâche quand tout est identique (commit, base, changements, voie de risque, plan de contrôles, environnement remesuré) et que la preuve est encore fraîche. Sinon, les contrôles sont rejoués et la raison est journalisée. L’approbation humaine reste exigée.
 
 ---
 
@@ -623,6 +711,28 @@ Les opérations suivantes restent séparées lorsqu’elles ont un effet externe
 
 **Pas de force push. Pas de merge automatique. Pas de déploiement automatique.**
 
+### Modes de livraison
+
+| Commande | Effet |
+|---|---|
+| `spec deliver SPEC_ID --output NOUVEAU_DOSSIER` | bundle local avec manifeste d’empreintes |
+| `spec branch SPEC_ID --name BRANCHE --confirm` | branche locale sur le candidat exact |
+| `spec publish … --confirm-push --confirm-pr` | push et PR brouillon GitHub après la revue |
+| `spec publish … --for-review` | PR brouillon **avant** la revue, pour lire le code sur la forge (contrôles valides et QA passée exigés) |
+| `spec sync SPEC_ID` | observe la PR ; une fusion avant la revue donne `MERGED_BEFORE_REVIEW` |
+| `spec close SPEC_ID --target BRANCHE --sha SHA …` | clôture après une intégration locale faite par l’opérateur |
+
+---
+
+## Maintenance
+
+| Commande | Effet |
+|---|---|
+| `apv2 gc [--confirm]` | retire les workspaces obsolètes ; simulation par défaut, historique intact |
+| `apv2 prune [--id ID] [--older-than JOURS] [--confirm]` | efface définitivement les documents abandonnés de plus de 30 jours ; garde la spec qui porte la direction visuelle en vigueur |
+| `apv2 decisions plan --repo PATH --file UPDATE.json` | prévisualise un changement du Decision Ledger et son hash |
+| `apv2 decisions apply … --hash HASH --approve --note …` | l’applique si le ledger n’a pas changé |
+
 ---
 
 ## Validation locale
@@ -654,6 +764,11 @@ Une suite verte ne prouve ni la qualité d’un modèle, ni une conformité entr
 | [`docs/ROLES.md`](docs/ROLES.md) | responsabilités des rôles |
 | [`docs/SKILLS.md`](docs/SKILLS.md) | skills et sélection |
 | [`docs/SECURITY.md`](docs/SECURITY.md) | garanties et limites |
+| [`docs/ADAPTERS.md`](docs/ADAPTERS.md) | adaptateurs Codex, Claude Code et `command` |
+| [`docs/PROVIDER-PILOT.md`](docs/PROVIDER-PILOT.md) | essais bornés avec un vrai fournisseur |
+| [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | protocole de mesure et interprétation des durées |
+| [`docs/MIGRATION.md`](docs/MIGRATION.md) | migration entre versions alpha |
+| [`docs/SOURCES.md`](docs/SOURCES.md) | sources externes consultées |
 | [`CHANGELOG.md`](CHANGELOG.md) | historique des versions |
 
 ---
