@@ -1,6 +1,7 @@
 import { guidanceFor, type Guidance } from '../knowledge/catalog.js';
 import { failureExcerpt } from '../engine/diagnostic.js';
 import { claudeCommand, claudeOutput } from './claude.js';
+import { providerUsage, usageSentence, type AttemptUsage } from './usage.js';
 import type { SkillsConfig } from '../domain/knowledge.js';
 import type { RepositoryIntelligence } from '../knowledge/repository.js';
 import { readFileSync, lstatSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -34,7 +35,7 @@ export function requestFor(task: Task, baseSha: string, workspace: string, failu
       'Your output is a summary, never an authoritative proof. Return JSON {"summary":"..."}.'],
   };
 }
-export async function runAgent(config: Config, request: AgentRequest, outputRoot: string, signal: AbortSignal, hooks: ProcessHooks = {}): Promise<string> {
+export async function runAgent(config: Config, request: AgentRequest, outputRoot: string, signal: AbortSignal, hooks: ProcessHooks = {}): Promise<{ summary: string; usage: AttemptUsage | null }> {
   const env = environment([...config.environment.passEnv, ...config.agent.passEnv]);
   let command = config.agent.command;
   let input = JSON.stringify(request);
@@ -58,13 +59,17 @@ export async function runAgent(config: Config, request: AgentRequest, outputRoot
     timeoutMs: config.agent.timeoutMs, signal, ...hooks });
   // A provider often reports its refusal (budget, turns, auth, model) on stdout, and may exit with an empty
   // stderr. Reporting stderr alone turned a real explanation into the message "Agent failed: ".
+  // The provider names its own stop reason (turn limit, cost ceiling, permission) in its result envelope.
+  // Reporting that sentence first turned a 2000-character JSON dump into something an operator can act on.
+  const usage = providerUsage(config.agent.type, result.stdout);
+  const named = usageSentence(usage);
   invariant(result.status === 'passed', result.status === 'cancelled' ? 'CANCELLED' : 'AGENT',
-    `Agent ${result.status} (exit ${result.exitCode ?? 'none'}${result.signal ? `, signal ${result.signal}` : ''}) after ${Math.round(result.durationMs)} ms: ${redact(failureExcerpt(`agent ${result.status}`, result.stderr, result.stdout, 4000), env).trim() || '(the provider wrote nothing on stdout or stderr)'}`);
+    `Agent ${result.status}${named ? `: ${named}` : ''} (exit ${result.exitCode ?? 'none'}${result.signal ? `, signal ${result.signal}` : ''}) after ${Math.round(result.durationMs)} ms: ${redact(failureExcerpt(`agent ${result.status}`, result.stderr, result.stdout, 4000), env).trim() || '(the provider wrote nothing on stdout or stderr)'}`);
   let output = result.stdout;
   if (outputFile) {
     invariant(lstatSync(outputFile).isFile() && lstatSync(outputFile).size <= 131072, 'AGENT_OUTPUT', 'Agent output exceeds limit');
     output = readFileSync(outputFile,'utf8'); rmSync(outputFile, { force: true });
   } else invariant(!result.truncated, 'AGENT_OUTPUT', 'Agent JSON output truncated');
-  try { return agentOutputSchema.parse(config.agent.type === 'claude' ? claudeOutput(output) : parseJson(output)).summary; }
+  try { return { summary: agentOutputSchema.parse(config.agent.type === 'claude' ? claudeOutput(output) : parseJson(output)).summary, usage }; }
   catch (cause) { throw new PipelineError('AGENT_OUTPUT', 'Agent must return exactly {"summary":"non-empty text"}; claims and verdicts are not accepted', { cause }); }
 }

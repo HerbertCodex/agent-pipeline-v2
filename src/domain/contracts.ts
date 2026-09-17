@@ -78,7 +78,9 @@ export const configSchema = s.object({
     maxOutputRepairs: s.default(s.number(0, 2), 1),
     // Files only project tooling regenerates (lock files by default). Globs; replace the list to adapt to the stack.
     generatedPaths: s.default(s.array(s.string(1, 300), 0, 100), [...DEFAULT_GENERATED_PATHS]),
-  }), { qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team', maxOutputRepairs: 1, generatedPaths: [...DEFAULT_GENERATED_PATHS] }),
+    /** Stops a spec once the providers declare this much spending on it; continuing is an explicit decision. */
+    maxSpecCostUsd: s.default(s.nullable(s.number(0.01, 10000)), null),
+  }), { qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team', maxOutputRepairs: 1, generatedPaths: [...DEFAULT_GENERATED_PATHS], maxSpecCostUsd: null }),
   limits: s.default(s.object({
     // Characters of approved context embedded in one task or QA-repair description.
     maxTaskContextChars: s.default(s.number(10000, MAX_TASK_DESCRIPTION), DEFAULT_LIMITS.maxTaskContextChars),
@@ -141,7 +143,9 @@ export interface Run {
   gateIds: string[]; receipts: GateReceipt[]; approvals: Approval[];
   createdAt: number; updatedAt: number; validatedAt: number | null;
   sessionStartedAt: number | null; remainingMs: number;
-  metrics: { activeMs: number; preparationMs: number; agentMs: number; validationMs: number; cacheHits: number; repairAttempts: number };
+  metrics: { activeMs: number; preparationMs: number; agentMs: number; validationMs: number; cacheHits: number; repairAttempts: number;
+    /** Declared by the provider when it reports them; absent on runs created before, and never an invoice. */
+    costUsd?: number; providerTurns?: number };
   summary: string; error: { code: string; message: string } | null;
 }
 export interface RunEvent { seq: number; runId: string; at: number; type: string; data: Record<string, unknown> }

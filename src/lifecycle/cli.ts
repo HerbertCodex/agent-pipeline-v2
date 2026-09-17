@@ -29,7 +29,7 @@ Full lifecycle (local trusted projects; explicit approval boundaries):
   apv2 spec show SPEC_ID [--output SPEC_MD]  Full content + next action
   apv2 spec list [--active] | apv2 spec events SPEC_ID | apv2 spec diff SPEC_ID
   apv2 spec approve SPEC_ID --hash HASH --approve [--reviewer NAME] [--note TEXT]
-  apv2 spec run SPEC_ID [--manual-qa] [--accept-current]
+  apv2 spec run SPEC_ID [--manual-qa] [--accept-current] [--accept-cost]
   apv2 spec qa SPEC_ID --file QA_JSON       Explicit external QA report import
   apv2 spec review SPEC_ID --sha SHA --approve [--reviewer NAME] [--note TEXT]
   apv2 spec reject SPEC_ID --note TEXT
@@ -217,7 +217,7 @@ export async function lifecycleCommand(command: string, positionals: string[], v
                 break;
             }
             case 'run':
-                doc = await life.run(specId(), { signal, manualQa: values['manual-qa'] === true, acceptCurrent: values['accept-current'] === true });
+                doc = await life.run(specId(), { signal, manualQa: values['manual-qa'] === true, acceptCurrent: values['accept-current'] === true, acceptCost: values['accept-cost'] === true });
                 break;
             case 'qa':
                 doc = await life.importQa(specId(), load(required('file')));

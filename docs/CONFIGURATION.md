@@ -34,6 +34,8 @@ node dist/cli.js schemas --output examples/schemas
 }
 ```
 
+`workflow.maxSpecCostUsd` (facultatif, null par défaut) borne ce qu'une spec peut dépenser : quand les coûts déclarés par les fournisseurs atteignent ce plafond, l'exécution s'arrête sur `COST_BUDGET` avant de lancer une nouvelle tâche, et l'opérateur autorise la suite avec `spec run --accept-cost`. Ces coûts sont ceux que le fournisseur annonce ; le framework ne vérifie aucune facture.
+
 `maxRepairAttempts` (0 à 5, 1 par défaut) borne les passes de réparation d'une tentative après des contrôles rouges. La boucle s'arrête d'elle-même avant ce plafond dans deux cas : une réparation qui ne change rien (`REPAIR_NO_CHANGE`) et une réparation qui laisse les contrôles échouer exactement comme avant (`REPAIR_NO_PROGRESS`). Relever ce plafond laisse donc plus de place à une correction qui avance, sans payer des passes qui tournent en rond.
 
 Le worktree est neuf : un projet dont les tests nécessitent des dépendances doit déclarer un `setup` adapté. L'exemple minimal n'en installe pas implicitement. Ne pas remplacer un vrai contrôle par `true` pour obtenir un résultat vert.

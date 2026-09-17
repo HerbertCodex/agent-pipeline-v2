@@ -102,12 +102,13 @@ export declare const configSchema: import("./schema.js").Schema<{
         } | null;
     };
     readonly workflow: {
-        qaLanes: string[];
-        maxQaRepairs: number;
-        maxActiveMs: number;
-        reviewMode: string;
-        maxOutputRepairs: number;
-        generatedPaths: string[];
+        readonly qaLanes: string[];
+        readonly maxQaRepairs: number;
+        readonly maxActiveMs: number;
+        readonly reviewMode: "solo" | "team" | "regulated";
+        readonly maxOutputRepairs: number;
+        readonly generatedPaths: string[];
+        readonly maxSpecCostUsd: number | null;
     };
     readonly limits: {
         readonly maxTaskContextChars: number;
@@ -229,6 +230,9 @@ export interface Run {
         validationMs: number;
         cacheHits: number;
         repairAttempts: number;
+        /** Declared by the provider when it reports them; absent on runs created before, and never an invoice. */
+        costUsd?: number;
+        providerTurns?: number;
     };
     summary: string;
     error: {

@@ -333,7 +333,14 @@ export class Pipeline {
             const repositoryIntelligence = await inspectRepository(run.repo, run.baseSha, `${run.task.title}\n${run.task.description}\n${run.task.acceptance.join('\n')}`, { signal, languages: run.config.knowledge?.languages ?? [], focusPaths: run.task.allowedPaths });
             const request = requestFor(run.task, run.baseSha, run.workspace, failures, run.config.skills, repositoryIntelligence);
             this.store.save(run, 'agent.guidance', { ...guidanceAudit(request.guidance), provider: run.config.agent.type, repositoryIntelligence: { sha: repositoryIntelligence.sha, fileCount: repositoryIntelligence.fileCount, relevantFiles: repositoryIntelligence.relevantFiles, reuseCandidates: repositoryIntelligence.reuseCandidates.map(x => ({ name: x.name, kind: x.kind, path: x.path, line: x.line, score: x.score })) } });
-            run.summary = agentOutputSchema.parse({ summary: await runAgent(run.config, request, join(this.store.root, 'outputs', run.id), signal, hooks) }).summary;
+            const answer = await runAgent(run.config, request, join(this.store.root, 'outputs', run.id), signal, hooks);
+            run.summary = agentOutputSchema.parse({ summary: answer.summary }).summary;
+            // Declared by the provider, never measured here: shown to the operator, and summed per spec.
+            if (answer.usage) {
+                run.metrics.costUsd = (run.metrics.costUsd ?? 0) + (answer.usage.costUsd ?? 0);
+                run.metrics.providerTurns = (run.metrics.providerTurns ?? 0) + (answer.usage.turns ?? 0);
+                this.store.save(run, 'agent.usage', { ...answer.usage, declaredByProvider: true });
+            }
         }
         finally {
             run.metrics.agentMs += performance.now() - start;

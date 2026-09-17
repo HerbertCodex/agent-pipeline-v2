@@ -364,7 +364,12 @@ function decision(d) {
   if (s.status === 'awaiting_review' || code === 'MERGED_BEFORE_REVIEW') primary.push(btn('Enregistrer ma revue', () => reviewDialog(d), 'btn btn--primary'));
   if (d.approval && !d.busy && ['approved', 'running', 'blocked'].includes(s.status) && !['SCOPE_AMENDMENT_REQUIRED', 'QA_REJECTED', 'MERGED_BEFORE_REVIEW'].includes(code))
     (primary.length ? secondary : primary).push(btn(s.status === 'blocked' ? 'Reprendre l\'exécution' : 'Lancer l\'exécution', () => job(`/api/specs/${s.id}/run`, 'Exécution lancée'), primary.length ? 'btn' : 'btn btn--primary', d.busy));
-  if (s.stoppedWork) {
+  if (code === 'COST_BUDGET') {
+    primary.push(btn('Autoriser le dépassement', () => confirmDialog('Continuer au-delà du plafond de coût',
+      `Les fournisseurs ont déclaré ${(d.cost && d.cost.declaredUsd || 0).toFixed(2)} $ sur cette spec, pour un plafond de ${(d.cost && d.cost.ceilingUsd || 0).toFixed(2)} $. L'exécution reprendra sans ce plafond jusqu'à la fin de la spec.`,
+      () => api(`/api/specs/${s.id}/run`, { body: { acceptCost: true } }), 'Exécution relancée'), 'btn btn--primary', d.busy));
+  }
+  else if (s.stoppedWork) {
     primary.push(btn('Adopter le travail conservé', () => confirmDialog('Adopter le travail conservé',
       `L'agent s'est arrêté avant de rendre son résultat, mais ses fichiers sont dans ${s.stoppedWork.workspace}. Ils seront enregistrés tels quels, puis soumis aux contrôles, à la QA et à votre revue. Relisez-les avant d'adopter.`,
       () => api(`/api/specs/${s.id}/run`, { body: { acceptCurrent: true } }), 'Adoption lancée'), 'btn btn--primary', d.busy));
@@ -413,6 +418,7 @@ function overview(root, d) {
         h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Décisions du projet couvertes' }),
           (c.decisionCoverage || []).length ? list(c.decisionCoverage, x => [h('code', { text: x.decisionId }), h('span', { class: 'muted', text: ` → ${x.acceptanceIds.join(', ')}` })]) : h('p', { class: 'muted', text: '—' })))),
     (c.questions || []).length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Questions ouvertes' }), list(c.questions, q => q.question))) : null,
+    d.cost && d.cost.declaredUsd ? h('p', { class: 'muted', text: `Coût déclaré par le fournisseur pour cette spec : ${d.cost.declaredUsd.toFixed(2)} $${d.cost.ceilingUsd ? ` sur un plafond de ${d.cost.ceilingUsd.toFixed(2)} $` : ''}. Valeur annoncée, pas une facture.` }) : null,
     (d.sizeAdvice || []).length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Tâches plus grosses qu\'une session d\'agent' }),
       h('p', { class: 'muted', text: 'Au-delà de huit fichiers, une tâche dépasse souvent ce qu\'un agent termine en une session : il s\'arrête en cours de route et la tentative ne donne rien d\'utilisable. Avertissement, pas un blocage.' }),
       list(d.sizeAdvice, a => [h('code', { text: a.taskId }), h('span', { text: ` ${a.title} — ${a.paths} fichiers` })]))) : null,
@@ -448,7 +454,8 @@ function gates(receipts) {
 function runSignal(state) { return state === 'failed' ? 'bad' : ['ready', 'awaiting_review'].includes(state) ? 'ok' : state === 'interrupted' ? 'wait' : 'run'; }
 function attemptBlock(a, label) {
   return h('div', { class: 'attempt' },
-    h('div', { class: 'attempt__head' }, h('strong', { text: label }), pill(runSignal(a.state), RUN_STATE[a.state] || a.state), a.lane ? h('span', { class: 'mono', text: `voie ${a.lane}` }) : null, h('span', { class: 'mono muted', text: shortId(a.runId) })),
+    h('div', { class: 'attempt__head' }, h('strong', { text: label }), pill(runSignal(a.state), RUN_STATE[a.state] || a.state), a.lane ? h('span', { class: 'mono', text: `voie ${a.lane}` }) : null, h('span', { class: 'mono muted', text: shortId(a.runId) }),
+      a.costUsd ? h('span', { class: 'mono muted', title: 'Coût déclaré par le fournisseur', text: `${a.costUsd.toFixed(2)} $${a.providerTurns ? ` · ${a.providerTurns} tours` : ''}` }) : null),
     gates(a.receipts),
     a.error ? h('p', { class: 'error', text: `${a.error.code} — ${a.error.message}` }) : null,
     a.summary ? h('details', {}, h('summary', { text: 'Résumé de l\'agent' }), h('pre', { text: a.summary })) : null);
@@ -491,7 +498,8 @@ function describe(e) {
     'agent.started': 'Implementer au travail', 'agent.completed': 'Implementer a terminé', 'candidate.created': 'Candidat créé',
     'validation.started': `Contrôles lancés : ${(d.gateIds || []).join(', ')}`, 'gate.finished': `Contrôle ${d.gateId || ''} : ${d.status === 'passed' ? 'réussi' : d.status === 'cached' ? 'repris' : d.status || ''}${d.durationMs ? ` (${duration(d.durationMs)})` : ''}`,
     'validation.completed': 'Contrôles réussis', 'validation.failed': 'Contrôles en échec', 'validation.adopted': 'Reçus repris', 'run.failed': `Run en échec : ${d.error ? d.error.code : ''}`,
-    'agent.repair_no_change': 'Réparation sans changement', 'agent.repair_no_progress': 'Réparation sans effet : mêmes contrôles en échec',
+    'agent.repair_no_change': 'Réparation sans changement', 'agent.usage': `Coût déclaré : ${d.costUsd !== undefined && d.costUsd !== null ? `${Number(d.costUsd).toFixed(2)} $` : '—'}${d.turns ? `, ${d.turns} tours` : ''}${d.stopReason ? ` (${d.stopReason})` : ''}`,
+    'workflow.cost_ceiling_reached': `Plafond de coût atteint : ${d.declaredCostUsd} $ sur ${d.ceilingUsd} $`, 'agent.repair_no_progress': 'Réparation sans effet : mêmes contrôles en échec',
   })[e.type];
 }
 function eventSignal(e) {

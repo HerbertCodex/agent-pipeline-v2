@@ -1,4 +1,5 @@
 import { type Guidance } from '../knowledge/catalog.js';
+import { type AttemptUsage } from './usage.js';
 import type { SkillsConfig } from '../domain/knowledge.js';
 import type { RepositoryIntelligence } from '../knowledge/repository.js';
 import type { Config, Task, GateReceipt } from '../domain/contracts.js';
@@ -22,4 +23,7 @@ export interface AgentRequest {
     };
 }
 export declare function requestFor(task: Task, baseSha: string, workspace: string, failures: GateReceipt[] | undefined, skills: SkillsConfig | undefined, repositoryIntelligence: RepositoryIntelligence): AgentRequest;
-export declare function runAgent(config: Config, request: AgentRequest, outputRoot: string, signal: AbortSignal, hooks?: ProcessHooks): Promise<string>;
+export declare function runAgent(config: Config, request: AgentRequest, outputRoot: string, signal: AbortSignal, hooks?: ProcessHooks): Promise<{
+    summary: string;
+    usage: AttemptUsage | null;
+}>;
