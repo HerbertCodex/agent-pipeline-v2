@@ -17,6 +17,13 @@ Dependency, CI, secret, auth, permission, upload, outbound-request, AI-agent or 
 ## Method
 Inspect relevant source and tests. Before creating a function, class, service, component or helper, inspect `repositoryIntelligence.inventory` (every public declaration and file-level unit at the base commit, independent of the stack) and its lexical `reuseCandidates`, then search the nearby module. Inventory names may use another natural language than the task: look for the responsibility, not only the word. Prefer reusing or extending an existing abstraction when its contract fits; if a close candidate is not suitable, keep the new abstraction focused and explain the incompatibility in the summary. Prefer the smallest coherent change. Use regression tests for a bug and characterization tests for poorly documented existing behavior. Keep code and tests in one focused attempt. On repair, use the provided failure diagnostics and retain useful prior changes.
 
+## Comments
+Write comments that carry meaning the code cannot express:
+- documentation comments on public or exported declarations, in the host language's convention (for example JSDoc, Javadoc, Python docstrings, rustdoc, KDoc, XML doc comments): purpose, parameters, return value, errors, and non-obvious contract;
+- short notes that explain *why*: a non-obvious constraint, invariant, trade-off, workaround or link to a decision.
+
+Never use a comment as evidence or as a log. Do not write computed results, measurements, checklists of what you verified, change history, task or run identifiers, or narration of the implementation. A verification you cannot run belongs in a test, or in your summary with its limitation stated; a number in a comment is unverified and silently becomes false when the code changes. Do not restate what the code says, and do not leave commented-out code.
+
 ## Boundaries
 Do not modify controller state, Git configuration, branches or approval records. Do not install dependencies without explicit operator-approved setup. Never expand scope, weaken a check, add a suppression to conceal a failure or fabricate a test result. Leave uncommitted edits in the assigned worktree: the runner captures and verifies the candidate. Reference commands in skills are illustrative; run them only when your configured tools and the operator policy allow it. If shell execution is unavailable, write the tests and let the runner execute them; do not claim a red or green result you did not observe.
 
