@@ -9,7 +9,7 @@ import { invariant } from '../domain/errors.js';
 import { parseJson } from '../domain/schema.js';
 import { Git } from '../execution/git.js';
 import { planBootstrap, refineBootstrap, applyBootstrap } from './bootstrap.js';
-import { planGarbage, collectGarbage, planPurge, purgeDocuments } from './maintenance.js';
+import { planGarbage, collectGarbage, planPurge, purgeDocuments, purgeProtections } from './maintenance.js';
 import { planLedgerUpdate, applyLedgerUpdate } from './ledger-update.js';
 export const lifecycleHelp = `
 Full lifecycle (local trusted projects; explicit approval boundaries):
@@ -43,7 +43,8 @@ Full lifecycle (local trusted projects; explicit approval boundaries):
   apv2 spec recover SPEC_ID --confirm-stopped
   apv2 spec deliver SPEC_ID --output NEW_DIRECTORY
   apv2 spec branch SPEC_ID --name BRANCH --confirm
-  apv2 spec publish SPEC_ID --repository OWNER/REPO --remote origin --name BRANCH --target main --confirm-push --confirm-pr
+  apv2 spec publish SPEC_ID --repository OWNER/REPO --remote origin --name BRANCH --target main --confirm-push --confirm-pr [--for-review]
+                                           --for-review opens the draft PR before approval, for reading
   apv2 spec sync SPEC_ID                   Observe merge; never merge automatically
   apv2 spec close SPEC_ID --target MAIN_BRANCH --sha MERGED_HEAD --reviewer NAME --note TEXT
 
@@ -177,7 +178,7 @@ export async function lifecycleCommand(command, positionals, values, root, signa
             invariant(olderThan === undefined || (Number.isFinite(olderThan) && olderThan >= 0), 'ARGUMENT', '--older-than expects a number of days');
             const items = planPurge(life, { ...(ids.length ? { ids } : {}), ...(olderThan === undefined ? {} : { olderThanDays: olderThan }) });
             if (values['confirm'] !== true) {
-                console.log(JSON.stringify({ dryRun: true, items, totalBytes: items.reduce((n, x) => n + x.bytes, 0),
+                console.log(JSON.stringify({ dryRun: true, items, kept: purgeProtections(life), totalBytes: items.reduce((n, x) => n + x.bytes, 0),
                     next: items.length ? 'Read the list: purging deletes these documents, their runs and their receipts from the local history, without any backup. Then run the same command with --confirm.' : 'Nothing to purge.' }, null, 2));
                 return true;
             }
@@ -273,7 +274,7 @@ export async function lifecycleCommand(command, positionals, values, root, signa
                 doc = await life.branch(specId(), required('name'), values['confirm'] === true);
                 break;
             case 'publish':
-                doc = await publishSpec(life, specId(), { repository: required('repository'), remote: str('remote') ?? 'origin', branch: required('name'), base: required('target'), confirmPush: values['confirm-push'] === true, confirmPr: values['confirm-pr'] === true, signal });
+                doc = await publishSpec(life, specId(), { repository: required('repository'), remote: str('remote') ?? 'origin', branch: required('name'), base: required('target'), confirmPush: values['confirm-push'] === true, confirmPr: values['confirm-pr'] === true, forReview: values['for-review'] === true, signal });
                 break;
             case 'sync':
                 doc = await syncSpec(life, specId(), signal);

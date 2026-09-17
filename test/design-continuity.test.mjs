@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { fixture, oneTask, git, approved, withSecurity } from './lifecycle-helpers.mjs';
 import { scanTags } from '../dist/lifecycle/service.js';
 import { specHash } from '../dist/lifecycle/contracts.js';
-import { planPurge, purgeDocuments } from '../dist/lifecycle/maintenance.js';
+import { planPurge, purgeDocuments, purgeProtections } from '../dist/lifecycle/maintenance.js';
 
 const exampleWorker = fileURLToPath(new URL('../examples/lifecycle-worker.mjs', import.meta.url));
 const readLog = (path) => existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
@@ -172,4 +172,20 @@ test('a spec that asks no question must already cover every criterion with a tas
   asking.questions.push({ id: 'Q-1', question: 'Faut-il conserver la signature actuelle ?' });
   const open = await f.life.draft({ repo: f.repo, config: { ...f.config, agent: w.agent, roles: w.roles }, request: 'Implement the approved arithmetic example.', proposal: asking });
   assert.equal(open.data.content.questions.length, 1);
+});
+
+// A purge must not delete the spec whose approved visual direction the next design continues.
+test('prune keeps the spec holding the visual direction the next design continues', async (t) => {
+  const f = fixture(t, frontend);
+  const w = designWorker(f.root, 'reference', '');
+  const config = { ...f.config, agent: w.agent, roles: w.roles };
+  let reference = await f.life.draft({ repo: f.repo, config, request: REQUEST, proposal: uiSpec(REQUEST) });
+  reference = await f.life.approveSpec(reference.id, f.life.summary(reference).hash, 'Test Owner', 'Reviewed the specification and visual mockup together.');
+  const closed = f.life.get(reference.id);
+  closed.data.status = 'closed';
+  f.life.store.saveDocument(closed, 'test.closed', {});
+
+  assert.deepEqual(purgeProtections(f.life).map(x => x.id), [reference.id]);
+  assert.ok(!planPurge(f.life, { olderThanDays: 0 }).some(x => x.id === reference.id), 'the design reference is never proposed');
+  assert.ok(!planPurge(f.life, { ids: [reference.id] }).length, 'not even when named explicitly');
 });
