@@ -159,6 +159,15 @@ Product reçoit `executionCapabilities` :
 
 Une étape que l'Implementer ne peut pas exécuter (installation de dépendance, lockfile, générateur, migration) doit devenir un prérequis opérateur, pas une tâche.
 
+### Corriger un critère devenu intenable
+
+Une spec est immuable dès que l'exécution commence : c'est ce qui rend l'approbation crédible. Mais un critère peut se révéler **impossible à satisfaire**, parce qu'il interdit ce que le changement approuvé impose — par exemple « ce fichier de test ne change pas » alors que la migration approuvée modifie ce qu'il compare. Sans recours, un candidat fini et conforme sur tous les autres critères était perdu.
+
+- `apv2 spec criterion SPEC_ID --criterion AC_ID --file CORRECTION_JSON` propose une correction (`description`, `verification`, `reason`) et affiche son hash. Rien n'est appliqué.
+- `apv2 spec criterion SPEC_ID --amendment AMENDMENT_ID --hash HASH --approve --note TEXT` l'applique.
+
+Bornes : uniquement après le début de l'exécution (avant, on affine la spec) ; un seul critère existant, dont seuls le texte et la vérification changent ; jamais le périmètre, les tâches, les chemins ni les décisions ; `reason` obligatoire. Le texte approuvé à l'origine reste dans le magasin, la correction porte sa propre approbation, et l'évaluation rouvre : le rapport QA et le dossier de revue sont invalidés, puisqu'ils portaient sur l'ancien critère.
+
 ### Maintenance
 
 - `apv2 decisions plan --repo PATH --file UPDATE_JSON` : prévisualise un changement du Decision Ledger et son hash. Une nouvelle décision qui remplace ou résout une entrée existante doit la citer dans `supersedes` ; l'entrée remplacée quitte le ledger actif et reste dans l'historique Git.

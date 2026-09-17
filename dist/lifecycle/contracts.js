@@ -244,6 +244,9 @@ export function validateQa(value, spec, candidateSha, ledger = { schemaVersion: 
     return qa;
 }
 export function stricter(...values) { return lanes[Math.max(...values.map(v => lanes.indexOf(v)))]; }
+export function criterionAmendmentHash(a) {
+    return hash({ criterionId: a.criterionId, previous: a.previous, description: a.description, verification: a.verification, reason: a.reason });
+}
 export function specHash(record) {
     return hash({ repo: record.repo, baseSha: record.baseSha, configHash: record.configHash, revision: record.revision, decisionLedgerHash: record.decisionLedgerHash, securityContextHash: record.securityContextHash, content: record.content });
 }

@@ -35,6 +35,10 @@ Full lifecycle (local trusted projects; explicit approval boundaries):
   apv2 spec reject SPEC_ID --note TEXT
   apv2 spec verify SPEC_ID                 Revalidate; invalidates QA + approvals
   apv2 spec amend SPEC_ID --amendment AMENDMENT_ID --approve [--reviewer NAME] [--note TEXT]
+  apv2 spec criterion SPEC_ID --criterion AC_ID --file CORRECTION_JSON
+                                           Propose a correction of one acceptance criterion of a
+                                           running spec ({description, verification, reason})
+  apv2 spec criterion SPEC_ID --amendment AMENDMENT_ID --hash HASH --approve [--reviewer NAME] [--note TEXT]
   apv2 spec retry SPEC_ID --confirm        Authorize one new failed-task attempt
   apv2 spec recover SPEC_ID --confirm-stopped
   apv2 spec deliver SPEC_ID --output NEW_DIRECTORY
@@ -220,6 +224,23 @@ export async function lifecycleCommand(command: string, positionals: string[], v
                 const current = life.get(specId()); const a = await approval(current.data.repo);
                 doc = await life.review(specId(), required('sha'), a.reviewer, a.note);
                 break;
+            }
+            case 'criterion': {
+                const current = life.get(specId());
+                if (str('amendment')) {
+                    const a = await approval(current.data.repo);
+                    invariant(str('note'), 'REVIEW', 'Provide --note explaining why the approved criterion cannot hold');
+                    doc = life.approveCriterionAmendment(specId(), str('amendment')!, required('hash'), a.reviewer, a.note);
+                    break;
+                }
+                const correction = load(required('file')) as { description?: unknown; verification?: unknown; reason?: unknown };
+                invariant(typeof correction.description === 'string' && typeof correction.verification === 'string' && typeof correction.reason === 'string',
+                    'ARGUMENT', 'The correction file needs description, verification and reason');
+                doc = life.planCriterionAmendment(specId(), required('criterion'), { description: correction.description, verification: correction.verification, reason: correction.reason });
+                const proposed = (doc.data.criterionAmendments ?? []).filter(x => x.status === 'pending').at(-1)!;
+                console.log(JSON.stringify({ ...life.summary(doc), criterionAmendment: proposed,
+                    next: `apv2 spec criterion ${doc.id} --amendment ${proposed.id} --hash ${proposed.hash} --approve --note "why the approved criterion cannot hold"` }, null, 2));
+                return true;
             }
             case 'amend': {
                 const current = life.get(specId()); const a = await approval(current.data.repo);

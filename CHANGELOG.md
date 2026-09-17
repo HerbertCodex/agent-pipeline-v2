@@ -2,6 +2,7 @@
 
 ## Non publié
 
+- Nouveau recours `apv2 spec criterion` : corriger **un** critère d'acceptation devenu intenable sur une spec en cours d'exécution, en deux temps (proposition avec hash, puis approbation explicite avec motif). Le texte approuvé reste dans le magasin, la correction porte sa propre approbation, et l'évaluation rouvre (QA et dossier de revue invalidés). Constaté en pilotant un vrai projet : un critère promettait qu'un test ne changerait pas, alors que la migration approuvée modifiait ce que ce test compare ; 18 critères sur 19 passaient et la seule issue était de jeter un candidat fini.
 - Un fournisseur qui échoue est rapporté avec son code de sortie, sa durée et **sa propre sortie** (stdout compris, extrait centré sur l'échec). Constaté en pilotant un vrai projet : une tâche s'est arrêtée sur `Agent failed: ` — message vide, parce que seul stderr était lu et que le fournisseur avait écrit son refus sur stdout. Même correction pour les rôles.
 
 Corrections issues d'un audit externe qui a rejoué chaque défaut sur l'archive `de9d782`. Une suite verte ne couvrait aucun de ces parcours.

@@ -173,3 +173,47 @@ test('reuse is refused when it would lower the approvals the integration require
   assert.equal(d.data.validationRunIds.length, 1, 'a standard lane keeps its reviewable integration run');
   assert.equal(d.data.status, 'awaiting_review');
 });
+
+// A running spec is immutable by design, but a criterion can turn out to forbid what the approved change
+// requires. Observed on a real increment: a schema migration added a table, one existing test asserted the
+// table list, and a criterion promised that test would not change. Eighteen criteria passed and the only
+// exit was to discard a finished candidate.
+test('an unsatisfiable criterion can be corrected with explicit approval, without touching anything else', async (t) => {
+  const f = lifecycleFixture(t);
+  let d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.' });
+  const criterion = d.data.content.acceptance[0];
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+
+  const correction = { description: `${criterion.description} Les tests de forme peuvent changer.`, verification: `${criterion.verification} Relire le diff.`, reason: 'Le critère interdit ce que la migration approuvée impose.' };
+  assert.throws(() => f.life.planCriterionAmendment(d.id, criterion.id, correction), /Execution has not started/, 'before execution, the spec is refined, not amended');
+
+  d = await f.life.run(d.id);
+  assert.ok(['ready', 'awaiting_review'].includes(d.data.status), JSON.stringify(d.data.error));
+  const qaBefore = d.data.qa;
+
+  assert.throws(() => f.life.planCriterionAmendment(d.id, 'AC-DOES-NOT-EXIST', correction), /Unknown acceptance criterion/);
+  assert.throws(() => f.life.planCriterionAmendment(d.id, criterion.id, { ...correction, reason: 'trop court' }), /Explain why/);
+  assert.throws(() => f.life.planCriterionAmendment(d.id, criterion.id, { ...correction, description: criterion.description, verification: criterion.verification }), /identical/);
+
+  d = f.life.planCriterionAmendment(d.id, criterion.id, correction);
+  const pending = d.data.criterionAmendments.at(-1);
+  assert.equal(pending.status, 'pending');
+  assert.deepEqual(pending.previous, { description: criterion.description, verification: criterion.verification });
+  assert.deepEqual(f.life.get(d.id).data.content.acceptance[0], criterion, 'a pending correction changes nothing');
+
+  assert.throws(() => f.life.approveCriterionAmendment(d.id, pending.id, 'wrong-hash', 'Test Owner', 'Approbation du critère corrigé après lecture.'), /exact corrected criterion hash/);
+  d = f.life.approveCriterionAmendment(d.id, pending.id, pending.hash, 'Test Owner', 'Approbation du critère corrigé après lecture du diff.');
+  assert.equal(d.data.criterionAmendments.at(-1).status, 'approved');
+  assert.equal(d.data.status, 'running', 'the spec reopens for assessment');
+  assert.equal(d.data.qa, null, 'the previous QA no longer applies to the corrected criterion');
+  assert.equal(d.data.review, null);
+  assert.ok(qaBefore, 'there was a QA report to invalidate');
+
+  const stored = f.life.get(d.id).data;
+  assert.deepEqual(stored.content.acceptance[0], criterion, 'the approved text stays auditable in the store');
+  d = await f.life.run(d.id);
+  assert.ok(['ready', 'awaiting_review'].includes(d.data.status), JSON.stringify(d.data.error));
+  assert.equal(d.data.qa.report.criteria.length, stored.content.acceptance.length);
+  const events = f.life.store.documentEvents(d.id).map(e => e.type);
+  assert.ok(events.includes('criterion.amendment_proposed') && events.includes('criterion.amendment_approved'));
+});
