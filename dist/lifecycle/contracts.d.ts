@@ -210,6 +210,10 @@ export declare const designProposalSchema: import("../domain/schema.js").Schema<
         readonly path: string;
         readonly reason: string;
     }[];
+    readonly stylesheets: {
+        readonly path: string;
+        readonly reason: string;
+    }[];
     readonly questions: {
         readonly id: string;
         readonly question: string;
@@ -232,6 +236,11 @@ export interface DesignRecord {
     /** Repository files inlined into the previews as data: URIs. */
     inlinedAssets?: {
         id: string;
+        path: string;
+        bytes: number;
+    }[];
+    /** Repository stylesheets loaded by the previews before the proposal's own css. */
+    loadedStylesheets?: {
         path: string;
         bytes: number;
     }[];
@@ -358,7 +367,8 @@ export interface SpecRecord {
     criterionAmendments?: CriterionAmendment[];
     /**
      * Advisory computed after Product: existing tests that reference a task's files but are assigned to a
-     * later task, or to none. Gates run the whole suite after every task, so such a test usually breaks the
+     * later task (Product declared them as changing; only the order is wrong), or to none when the test
+     * imports the file through a resolved relative path. Gates run the whole suite after every task, so such a test usually breaks the
      * earlier task and forces a scope amendment. Lexical, never blocking.
      */
     impactAdvice?: {
@@ -366,6 +376,7 @@ export interface SpecRecord {
         changedBy: string;
         assignedTo: string | null;
         tokens: string[];
+        evidence: 'declared-later' | 'resolved-import';
     }[];
     review: ReviewWorkspace | null;
     sessionStartedAt: number | null;

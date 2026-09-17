@@ -302,6 +302,42 @@
       "maxItems": 8,
       "default": []
     },
+    "stylesheets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 4,
+      "default": []
+    },
     "questions": {
       "type": "array",
       "items": {

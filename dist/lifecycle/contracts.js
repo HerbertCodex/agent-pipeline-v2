@@ -92,6 +92,9 @@ export const designProposalSchema = s.object({
     // Repository files (fonts, images) the mockup needs. The controller inlines them into the preview
     // as data: URIs, so a preview can show the project's real typography without any network access.
     assets: s.default(s.array(s.object({ id, path: s.string(1, 500), reason: s.string(1, 2000) }), 0, 8), []),
+    // The project's own global stylesheets, loaded by the preview before `css`, so a mockup only writes what
+    // it adds instead of reproducing the existing stylesheet.
+    stylesheets: s.default(s.array(s.object({ path: s.string(1, 500), reason: s.string(1, 2000) }), 0, 4), []),
     questions: s.array(s.object({ id, question: s.string(1, 3000) }), 0, 30),
     // Which spec tasks implement visual work and which screens each needs. Empty keeps the legacy
     // behaviour (every task receives the whole design); a listed task with no screen receives only

@@ -26,6 +26,8 @@ const ASSET_TYPES: Record<string, string> = {
 };
 const MAX_ASSET_BYTES = 512 * 1024;
 const MAX_ASSET_TOTAL_BYTES = 2 * 1024 * 1024;
+const MAX_STYLESHEET_BYTES = 256 * 1024;
+const MAX_STYLESHEET_TOTAL_BYTES = 512 * 1024;
 /** Characters of approved mockup (markup plus stylesheet) a task may carry before it degrades to a reference. */
 const DESIGN_CONTEXT_BUDGET = 60000;
 /** Everything the review workspace owns. The design bundle lives beside it and must survive its rebuilds. */
@@ -142,7 +144,10 @@ export class Lifecycle {
                 if (covers(task, ref.path) || order.slice(0, i).some(t => covers(t, ref.path))) continue;
                 if (advice.some(a => a.test === ref.path)) continue;
                 const later = order.slice(i + 1).find(t => covers(t, ref.path));
-                advice.push({ test: ref.path, changedBy: task.id, assignedTo: later?.id ?? null, tokens: ref.tokens });
+                // A test no task declares is only reported on direct evidence: a path fragment alone matched
+                // many tests that the change never broke.
+                if (!later && !ref.resolved) continue;
+                advice.push({ test: ref.path, changedBy: task.id, assignedTo: later?.id ?? null, tokens: ref.tokens, evidence: later ? 'declared-later' : 'resolved-import' });
             }
         }
         return advice;
@@ -299,16 +304,40 @@ export class Lifecycle {
         return new Set(listing.split('\0').filter(Boolean));
     }
     /**
+     * Project stylesheets the preview loads before the proposal's css. Same containment as assets (tracked at
+     * the reviewed commit, physically inside the repository), plain CSS only, and never text that could close
+     * the style element and inject markup into the preview.
+     */
+    private loadDesignStylesheets(repo: string, sha: string, tracked: ReadonlySet<string>, p: DesignProposal): { css: string; loaded: { path: string; bytes: number }[] } {
+        const loaded: { path: string; bytes: number }[] = []; const parts: string[] = []; let total = 0;
+        for (const sheet of p.stylesheets ?? []) {
+            const file = resolve(repo, sheet.path);
+            invariant(isInside(repo, file) && existsSync(file), 'DESIGN_ASSET', `Design stylesheet ${sheet.path} must be an existing repository file`);
+            const real = relative(realpathSync(repo), realpathSync(file));
+            invariant(isInside(realpathSync(repo), realpathSync(file)) && tracked.has(real), 'DESIGN_ASSET', `Design stylesheet ${sheet.path} is not a file tracked at the reviewed commit ${sha.slice(0, 12)}`);
+            invariant(/\.css$/i.test(file) && lstatSync(file).isFile(), 'DESIGN_ASSET', `Design stylesheet ${sheet.path} must be a plain .css file`);
+            const size = lstatSync(file).size;
+            invariant(size <= MAX_STYLESHEET_BYTES, 'DESIGN_ASSET', `Design stylesheet ${sheet.path} exceeds ${MAX_STYLESHEET_BYTES} bytes`);
+            total += size;
+            invariant(total <= MAX_STYLESHEET_TOTAL_BYTES, 'DESIGN_ASSET', `Design stylesheets exceed ${MAX_STYLESHEET_TOTAL_BYTES} bytes in total`);
+            const text = readFileSync(file, 'utf8');
+            invariant(!/<\/\s*style/i.test(text), 'DESIGN_ASSET', `Design stylesheet ${sheet.path} contains text that would close the style element`);
+            parts.push(`/* ${real} */\n${text}`);
+            loaded.push({ path: real, bytes: size });
+        }
+        return { css: parts.join('\n'), loaded };
+    }
+    /**
      * Visual direction already approved for this repository, if any. Passing it to the design role turns a
      * full re-derivation into an extension: the mockup keeps one direction across increments and only covers
      * screens the new spec creates or changes.
      */
-    private establishedDesign(currentId: string, repo: string): { specId: string; specTitle: string; approvedAt: number; visualDirection: string; decisions: DesignProposal['decisions']; avoid: string[]; assets: DesignProposal['assets']; screens: { id: string; title: string; purpose: string }[] } | null {
+    private establishedDesign(currentId: string, repo: string): { specId: string; specTitle: string; approvedAt: number; visualDirection: string; decisions: DesignProposal['decisions']; avoid: string[]; assets: DesignProposal['assets']; stylesheets: DesignProposal['stylesheets']; screens: { id: string; title: string; purpose: string }[] } | null {
         const previous = this.designReference(repo, currentId);
         if (!previous?.data.design) return null;
         const proposal = previous.data.design.proposal;
         return { specId: previous.id, specTitle: previous.data.content?.title ?? previous.id, approvedAt: previous.data.approval?.at ?? 0,
-            visualDirection: proposal.visualDirection, decisions: proposal.decisions, avoid: proposal.avoid, assets: proposal.assets ?? [],
+            visualDirection: proposal.visualDirection, decisions: proposal.decisions, avoid: proposal.avoid, assets: proposal.assets ?? [], stylesheets: proposal.stylesheets ?? [],
             screens: proposal.screens.map(s => ({ id: s.id, title: s.title, purpose: s.purpose })) };
     }
     private validateDesignScopes(p: DesignProposal, spec: Spec): void {
@@ -336,6 +365,7 @@ export class Lifecycle {
                 'Cover meaningful loading, empty, error, success, focus and responsive states.',
                 'Return static HTML fragments and CSS only: no scripts, no behaviour, no network. Elements that load content (script, iframe, object, embed, link, meta, base), event-handler attributes and src/srcset attributes are refused, and so is a remote href or action. Escaped markup shown as text is fine.',
                 'To show the project\'s own typography or images, declare the repository files in assets (id, repository-relative path, reason) and reference them as url(asset:ID) in css. The controller inlines them into the preview; url() with anything else, and @import, are refused.',
+                'When the project has global stylesheets (plain .css files tracked in the repository), declare them in stylesheets: the preview loads them before your css. Then write in css only what the mockup adds or changes, reusing their classes and custom properties, instead of reproducing them. Their own url() references do not load in the preview; declare fonts through assets.',
                 'Fill taskScopes: list every spec task that implements visual work with the screen ids it needs (an empty screenIds list for a task that only needs the shared direction, such as a shared style base). Do not list tasks without visual work; they receive no design context.',
                 ...(established ? [
                     `A visual direction is already approved and implemented for this repository (establishedDesign, from spec ${established.specId}). Reuse it: keep its tokens, type scale, spacing, components and grammar. State it briefly in visualDirection as a continuation instead of deriving a new one, and do not restyle existing screens.`,
@@ -347,17 +377,18 @@ export class Lifecycle {
         const spec = r.content;
         const proposal = await runRole({ store: this.store, documentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills,
             agent: r.config.roles.product ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: designProposalSchema, context, ...(signal ? { signal } : {}),
-            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: value => { this.validateDesignMarkup(value); this.validateDesignScopes(value, spec); this.inlineDesignAssets(r.repo, r.baseSha, tracked, value); return value; } });
+            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: value => { this.validateDesignMarkup(value); this.validateDesignScopes(value, spec); this.inlineDesignAssets(r.repo, r.baseSha, tracked, value); this.loadDesignStylesheets(r.repo, r.baseSha, tracked, value); return value; } });
         const root = resolve(dirname(r.repo), `${basename(r.repo)}-review`, doc.id, 'design');
         invariant(!isInside(r.repo, root) && !isInside(this.store.root, root), 'DESIGN_PATH', 'Design preview must be outside source and operational state');
         rmSync(root, { recursive: true, force: true });
         mkdirSync(root, { recursive: true, mode: 0o700 });
         const screenPaths: string[] = [];
         const inlined = this.inlineDesignAssets(r.repo, r.baseSha, tracked, proposal);
+        const project = this.loadDesignStylesheets(r.repo, r.baseSha, tracked, proposal);
         const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; script-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";
         for (const screen of proposal.screens) {
             const file = join(root, `${screen.id}.html`);
-            const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${this.htmlEscape(screen.title)}</title><style>${inlined.css}</style></head><body>${inlined.bodyHtml.get(screen.id) ?? screen.bodyHtml}</body></html>`;
+            const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${this.htmlEscape(screen.title)}</title>${project.css ? `<style>${project.css}</style>` : ''}<style>${inlined.css}</style></head><body>${inlined.bodyHtml.get(screen.id) ?? screen.bodyHtml}</body></html>`;
             writeFileSync(file, html, { flag: 'wx', mode: 0o600 });
             screenPaths.push(file);
         }
@@ -365,12 +396,13 @@ export class Lifecycle {
         const lines = ['# Design review', '', proposal.summary, '',
             ...(established ? [`Continues the visual direction approved for spec ${established.specId} (${established.specTitle}); screens listed below are the ones this spec creates or changes.`, ''] : []),
             ...(inlined.used.length ? [`Repository assets inlined in the previews: ${inlined.used.map(a => `${a.id} (${a.path})`).join(', ')}`, ''] : []),
+            ...(project.loaded.length ? [`Project stylesheets loaded before the mockup css: ${project.loaded.map(x => x.path).join(', ')}`, ''] : []),
             `Rationale: ${proposal.rationale}`, '', `Visual direction: ${proposal.visualDirection}`, '',
             '## Screens', ...proposal.screens.flatMap((x, i) => [`- ${x.title}: ${screenPaths[i]}`, `  - Purpose: ${x.purpose}`, `  - States: ${x.states.join(', ') || 'default'}`, `  - Responsive: ${x.responsive}`]),
             '', '## Decisions', ...proposal.decisions.map(x => `- ${x.decision}: ${x.rationale}`), '', '## Avoid', ...proposal.avoid.map(x => `- ${x}`), '',
             'Open the HTML files above in a browser before approving the spec.'];
         writeFileSync(indexPath, lines.join('\n') + '\n', { flag: 'wx', mode: 0o600 });
-        r.design = { proposal, hash: hash(proposal), directory: root, indexPath, screenPaths, generatedAt: Date.now(), reusedFrom: established?.specId ?? null, inlinedAssets: inlined.used };
+        r.design = { proposal, hash: hash(proposal), directory: root, indexPath, screenPaths, generatedAt: Date.now(), reusedFrom: established?.specId ?? null, inlinedAssets: inlined.used, loadedStylesheets: project.loaded };
         this.save(doc, 'design.proposed', { hash: r.design.hash, directory: root, indexPath, screenPaths, questions: proposal.questions, reusedFrom: r.design.reusedFrom, inlinedAssets: inlined.used });
     }
     private async product(doc: Document<SpecRecord>, proposal: unknown, signal?: AbortSignal): Promise<void> {
@@ -462,6 +494,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         const within = weight <= DESIGN_CONTEXT_BUDGET;
         return { hash: designHash, summary: proposal.summary, visualDirection: proposal.visualDirection, implementationBrief: proposal.implementationBrief, decisions: proposal.decisions, avoid: proposal.avoid,
             scope: scope ? 'task' : 'all',
+            projectStylesheets: (proposal.stylesheets ?? []).map(x => x.path),
             ...(within ? { css: proposal.css } : { cssOmitted: `The approved stylesheet is ${proposal.css.length} characters; open the preview files instead.` }),
             screens: full.map(x => within
                 ? { id: x.id, title: x.title, purpose: x.purpose, states: x.states, responsive: x.responsive, previewPath: x.previewPath, bodyHtml: x.bodyHtml }
@@ -708,11 +741,25 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                     }
                     else {
                         const finalConfig = { ...r.config, maxRepairAttempts: 0, gates: r.config.gates.map(g => ({ ...g, mandatory: true })) };
-                        const run = await this.pipeline.createValidation({ repo: r.repo, baseRef: r.baseSha, config: finalConfig, task: this.aggregateTask(r, 'Validate the complete approved specification on its aggregate candidate, including interactions across tasks.') }, r.currentSha);
-                        r.finalRunId = run.id;
-                        r.validationRunIds.push(run.id);
-                        r.activeRunId = run.id;
-                        this.save(doc, 'integration.created', { runId: run.id, candidateSha: r.currentSha });
+                        const validation = { repo: r.repo, baseRef: r.baseSha, config: finalConfig, task: this.aggregateTask(r, 'Validate the complete approved specification on its aggregate candidate, including interactions across tasks.') };
+                        // The single task already proved this exact candidate: adopt its receipts into the
+                        // reviewable integration run instead of replaying every gate. The review requirement stays.
+                        const refusal = only && only.baseSha === r.baseSha && only.candidateSha === r.currentSha && proven(only)
+                            ? await this.pipeline.adoptionRefusal(validation, only.id) : 'no single proven attempt on this candidate';
+                        if (only && refusal === null) {
+                            const run = await this.pipeline.adoptValidation(validation, only.id);
+                            r.finalRunId = run.id;
+                            r.validationRunIds.push(run.id);
+                            this.save(doc, 'integration.adopted', { runId: run.id, sourceRunId: only.id, candidateSha: r.currentSha, state: run.state });
+                        }
+                        else {
+                            if (only) this.save(doc, 'integration.adoption_refused', { sourceRunId: only.id, reason: refusal });
+                            const run = await this.pipeline.createValidation(validation, r.currentSha);
+                            r.finalRunId = run.id;
+                            r.validationRunIds.push(run.id);
+                            r.activeRunId = run.id;
+                            this.save(doc, 'integration.created', { runId: run.id, candidateSha: r.currentSha });
+                        }
                     }
                 }
                 let final = this.pipeline.store.get(r.finalRunId);
