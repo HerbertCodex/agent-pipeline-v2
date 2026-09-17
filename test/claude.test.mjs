@@ -51,13 +51,18 @@ function timeline(t,life,doc){
 for(const provider of ['claude','codex']) test(`full lifecycle with ${provider} protocol double, Product and QA repair`,async t=>{
  const f=lifeFixture(t);const path=join(f.root,'fake-'+provider);const worker=fileURLToPath(new URL('../examples/lifecycle-worker.mjs',import.meta.url));
  writeFileSync(path,`#!${process.execPath}
- const fs=require('fs'),assert=require('node:assert/strict'),cp=require('node:child_process');const args=process.argv.slice(2);const raw=fs.readFileSync(0,'utf8');const req=JSON.parse(raw.slice(raw.indexOf('{')));
+ const fs=require('fs'),assert=require('node:assert/strict'),cp=require('node:child_process');const args=process.argv.slice(2);
+ // Phase markers on stderr: if this double stalls, the controller's timeout diagnostic shows the last phase reached.
+ const mark=p=>fs.writeSync(2,'[double '+process.pid+' +'+Math.round(process.uptime()*1000)+'ms] '+p+String.fromCharCode(10));mark('started');
+ const raw=fs.readFileSync(0,'utf8');mark('stdin read '+raw.length);const req=JSON.parse(raw.slice(raw.indexOf('{')));mark('role '+(req.role??'implementer'));
  if(${JSON.stringify(provider)}==='claude'){assert.equal(args[args.indexOf('--tools')+1],req.role?'Read,Glob,Grep':'Read,Glob,Grep,Edit,Write');assert.ok(args.includes('--strict-mcp-config'));}
  else assert.equal(args[args.indexOf('--sandbox')+1],req.role?'read-only':'workspace-write');
  if(req.role==='qa'){assert.ok(req.context.diff.includes('diff --git'));assert.ok(req.context.diff.includes('multiply'));assert.equal(req.guidance.role.id,'qa');}
- const output=req.role==='setup'?{config:req.context.proposal.config,questions:[],notes:['Provider protocol double only.']}:JSON.parse(cp.execFileSync(${JSON.stringify(process.execPath)},[${JSON.stringify(worker)}],{input:JSON.stringify(req),encoding:'utf8'}));
+ const output=req.role==='setup'?{config:req.context.proposal.config,questions:[],notes:['Provider protocol double only.']}:(mark('worker start'),JSON.parse(cp.execFileSync(${JSON.stringify(process.execPath)},[${JSON.stringify(worker)}],{input:JSON.stringify(req),encoding:'utf8',timeout:30000,killSignal:'SIGKILL'})));
+ mark('worker done');
  if(${JSON.stringify(provider)}==='claude')console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,structured_output:output,permission_denials:[]}));
  else fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify(output));
+ mark('output written');
  `);chmodSync(path,0o700);
  // A stuck provider must fail on its own bounded timeout with a precise diagnostic, not silently consume
  // the whole lifecycle budget: that is what made an intermittent macOS stall impossible to locate.
