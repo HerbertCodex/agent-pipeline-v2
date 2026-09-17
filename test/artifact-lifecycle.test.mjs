@@ -643,3 +643,24 @@ test('the failure fingerprint ignores what changes at every execution', async ()
   assert.equal(failureFingerprint(first), failureFingerprint(second), 'the same failure twice');
   assert.notEqual(failureFingerprint(first), failureFingerprint(third), 'a different reproach stays different');
 });
+
+// Observed on a real spec: Product wrote a task touching eight files and their tests; two attempts hit the
+// provider's turn limit and produced nothing. Product now receives what one session can spend, and the
+// operator is warned before approving.
+test('Product is told what one attempt can spend, and oversized tasks are flagged before approval', async (t) => {
+  const f = lifecycleFixture(t);
+  const { executionCapabilities } = await import('../dist/lifecycle/capabilities.js');
+  const { validateConfig } = await import('../dist/domain/contracts.js');
+  const capabilities = executionCapabilities(validateConfig({ ...f.config, agent: { ...f.config.agent, maxTurns: 64, maxBudgetUsd: 5, timeoutMs: 900000 }, maxRunMs: 1800000, maxRepairAttempts: 3 }));
+  assert.deepEqual(capabilities.attempt, { providerTurns: 64, providerBudgetUsd: 5, agentTimeoutMs: 900000, runBudgetMs: 1800000, repairAttempts: 3 });
+  assert.ok(capabilities.rules.some(r => /one agent session/.test(r)), 'the sizing rule reaches Product');
+  assert.match(readFileSync(new URL('../roles/product.md', import.meta.url).pathname, 'utf8'), /executionCapabilities\.attempt/);
+
+  const big = oneTask();
+  big.tasks[0].allowedPaths = ['src/math.mjs', 'test/math.test.mjs', 'docs/math.md', 'docs/a.md', 'docs/b.md', 'docs/c.md', 'docs/d.md', 'docs/e.md', 'docs/f.md'];
+  const request = 'Implement the approved arithmetic example.';
+  const d = await f.life.draft({ repo: f.repo, config: f.config, request, proposal: withSecurity(big, request, 'backend') });
+  const summary = f.life.summary(f.life.get(d.id));
+  assert.deepEqual(summary.sizeAdvice, [{ taskId: 'MATH', title: big.tasks[0].title, paths: 9 }]);
+  assert.ok(summary.hash, 'the advice never blocks the approval');
+});

@@ -378,6 +378,12 @@ export interface SpecRecord {
         tokens: string[];
         evidence: 'declared-later' | 'resolved-import';
     }[];
+    /** Tasks whose declared file surface is larger than one agent session usually completes. Advisory only. */
+    sizeAdvice?: {
+        taskId: string;
+        title: string;
+        paths: number;
+    }[];
     review: ReviewWorkspace | null;
     sessionStartedAt: number | null;
     activeMs: number;

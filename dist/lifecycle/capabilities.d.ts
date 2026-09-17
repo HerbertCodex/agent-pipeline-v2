@@ -28,6 +28,13 @@ export declare function executionCapabilities(config: Config): {
         note: string;
         provider: "command" | "codex" | "claude";
     };
+    attempt: {
+        providerTurns: number;
+        providerBudgetUsd: number | null;
+        agentTimeoutMs: number;
+        runBudgetMs: number;
+        repairAttempts: number;
+    };
     runnerSetup: string[];
     gates: {
         id: string;
