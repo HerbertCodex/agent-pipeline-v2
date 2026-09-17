@@ -2,6 +2,15 @@
 
 ## Non publié
 
+Défauts constatés en bouclant l'incrément 2 d'un vrai projet :
+
+- `apv2 spec publish --for-review` ouvre la PR brouillon **avant** l'approbation, pour lire le candidat sur la forge (contrôles valides et QA passée exigés). Une fusion observée avant la revue ne clôture pas la spec : `MERGED_BEFORE_REVIEW`, puis clôture au `spec sync` suivant la revue.
+- `apv2 spec close` accepte une spec **revue** sans bundle de livraison : l'opérateur peut intégrer le candidat lui-même.
+- `apv2 prune` ne propose jamais la spec qui porte la direction visuelle que la prochaine maquette prolonge (`kept` dans la simulation).
+- Rejeter une spec libère son pointeur de run, et une spec terminale dont le pointeur est resté sans processus vivant redevient collectable par `gc` et `prune`.
+- Product reçoit la consigne de ranger un test impacté dans la première tâche qui change ce qu'il compare, et l'opérateur voit `impactAdvice` avant d'approuver : tests existants qui citent un fichier d'une tâche mais sont rangés plus tard ou nulle part. Avertissement lexical, non bloquant.
+- La recherche des tests impactés résout les chemins relatifs cités (`../db`) et lit comme du texte les fichiers de test que Git classe comme binaires. Rejouée sur la spec réelle, elle signale désormais les deux tests qui avaient bloqué la première tâche, avec quatre signalements qui n'ont pas cassé.
+
 - Tests : les faux fournisseurs transmettent la requête à leur sous-processus par un fichier temporaire (`test/support/run-worker.cjs`) au lieu de `spawnSync({ input })`. Sur macOS / Node 22.16, ce sous-processus ne voyait parfois jamais la fin de son entrée et restait bloqué, ce qui faisait échouer ou annuler la CI de `main` depuis plusieurs fusions. Le blocage a été localisé grâce à l'instrumentation de la #17 : entrée du faux fournisseur lue, sous-processus lancé, puis `spawnSync … ETIMEDOUT`. Le framework lui-même n'utilise aucun lancement synchrone de processus.
 
 - Les rôles Implementer et QA encadrent les commentaires : documentation des déclarations publiques dans la convention du langage hôte (JSDoc, Javadoc, docstrings, rustdoc…) et notes qui expliquent *pourquoi* ; jamais de preuve ni de journal en commentaire (valeurs calculées, listes de vérifications, historique, identifiants de run). La QA signale ces commentaires comme constat mineur. Constaté sur un vrai projet : un en-tête CSS de trente lignes listait des ratios de contraste calculés, non vérifiés, qui deviennent faux dès qu'une couleur change.

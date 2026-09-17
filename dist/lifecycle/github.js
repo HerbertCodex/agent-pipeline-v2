@@ -45,7 +45,8 @@ export async function publishSpec(life, id, options, transport) {
     try {
         const doc = life.get(id);
         const r = doc.data;
-        const run = await life.publicationCandidate(id);
+        const purpose = options.forReview ? 'review' : 'delivery';
+        const run = await life.publicationCandidate(id, purpose);
         const git = new Git(options.signal);
         await git.exec(r.repo, ['check-ref-format', `refs/heads/${options.branch}`]);
         await git.exec(r.repo, ['check-ref-format', `refs/heads/${options.base}`]);
@@ -56,7 +57,7 @@ export async function publishSpec(life, id, options, transport) {
             const urls = (await call(['git', 'remote', 'get-url', ...flags, '--all', options.remote])).trim().split('\n');
             invariant(urls.length === 1 && githubRepository(urls[0]).toLowerCase() === options.repository.toLowerCase(), 'REMOTE', 'Remote destination differs from authorized GitHub repository');
         }
-        const pub = { remote: options.remote, repository: options.repository, branch: options.branch, base: options.base, candidateSha: run.candidateSha, url: null, state: 'intent', mergedAt: null, mergeSha: null };
+        const pub = { remote: options.remote, repository: options.repository, branch: options.branch, base: options.base, candidateSha: run.candidateSha, url: null, state: 'intent', mergedAt: null, mergeSha: null, purpose };
         if (r.publication) {
             for (const key of ['remote', 'repository', 'branch', 'base', 'candidateSha'])
                 invariant(r.publication[key] === pub[key], 'PUBLICATION_MISMATCH', 'A publication intent already exists with different parameters');
@@ -93,7 +94,8 @@ export async function publishSpec(life, id, options, transport) {
         invariant(observed[0] === run.candidateSha && observed[1] === ref, 'REMOTE_BRANCH_CONFLICT', 'Pushed head is not the validated candidate');
         current.state = 'pushed';
         life.store.saveDocument(doc, 'publication.pushed', { branch: options.branch, candidateSha: run.candidateSha });
-        const body = `Agent Pipeline V2\n\nSpec: ${id}, revision ${r.revision}\nApproved spec hash: ${r.contentHash}\nCandidate: ${run.candidateSha}\nBase: ${r.baseSha}\n\nLocal checks: ${run.receipts.map(g => g.gateId + '=' + g.status).join(', ')}\nQA: ${r.qa?.report.verdict ?? 'not required by approved policy'}\n\nLocal reviewer labels are not authenticated GitHub reviews. Required CI and branch protection remain authoritative. This draft PR does not authorize merge or deployment.\n`;
+        const reviewNote = purpose === 'review' ? `Draft opened for reading BEFORE operator approval. Approve with: apv2 spec review ${id} --sha ${run.candidateSha} --approve\n\n` : '';
+        const body = `Agent Pipeline V2\n\n${reviewNote}Spec: ${id}, revision ${r.revision}\nApproved spec hash: ${r.contentHash}\nCandidate: ${run.candidateSha}\nBase: ${r.baseSha}\n\nLocal checks: ${run.receipts.map(g => g.gateId + '=' + g.status).join(', ')}\nQA: ${r.qa?.report.verdict ?? 'not required by approved policy'}\n\nLocal reviewer labels are not authenticated GitHub reviews. Required CI and branch protection remain authoritative. This draft PR does not authorize merge or deployment.\n`;
         const url = (await call(['gh', 'pr', 'create', '--repo', options.repository, '--head', options.branch, '--base', options.base, '--draft', '--no-maintainer-edit', '--title', r.content.title, '--body-file', '-'], body)).trim();
         invariant(new RegExp('^https://github\\.com/' + options.repository.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/pull/[1-9][0-9]*$', 'i').test(url), 'FORGE', 'Unexpected created PR URL; inspect remote outcome before retry');
         const pr = parsePr(parseJson(await call(['gh', 'pr', 'view', url, '--repo', options.repository, '--json', fields])), current);
@@ -121,6 +123,14 @@ export async function syncSpec(life, id, signal, transport) {
             pub.state = 'merged';
             pub.mergeSha = pr.mergeSha;
             pub.mergedAt = pr.mergedAt;
+            // A draft opened for reading can be merged before the review is recorded: the merge is observed,
+            // but the spec closes only once the operator's review exists.
+            if (!['ready', 'delivered'].includes(r.status)) {
+                r.status = 'blocked';
+                r.error = { code: 'MERGED_BEFORE_REVIEW', message: 'The PR was merged before the candidate review was recorded; record the review, then sync again.' };
+                life.store.saveDocument(doc, 'publication.merged_before_review', { url: pub.url, candidateSha: pub.candidateSha, mergeSha: pr.mergeSha });
+                return doc;
+            }
             r.status = 'closed';
             life.store.saveDocument(doc, 'spec.closed', { source: 'github-observation', url: pub.url, candidateSha: pub.candidateSha, mergeSha: pr.mergeSha, mergedAt: pr.mergedAt, notADeployment: true });
         }

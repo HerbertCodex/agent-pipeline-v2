@@ -11,7 +11,7 @@ import { runRole } from './roles.js';
 import { executionCapabilities, validateTaskCapabilities } from './capabilities.js';
 import { matches, requiredApprovals } from '../policy/policy.js';
 import { inspectRepository } from '../knowledge/repository.js';
-import { buildInventory, diffInventory, inventoryMarkdown } from '../knowledge/inventory.js';
+import { buildInventory, diffInventory, inventoryMarkdown, testsReferencing } from '../knowledge/inventory.js';
 import { confirmedDecisions, ledgerHash, loadDecisionLedger } from './decisions.js';
 import { assessSecurity, neutralSecurityContext } from '../security/owasp.js';
 const FORBIDDEN_TAG = /^(?:script|iframe|object|embed|link|meta|base|frame|frameset|applet|portal)$/i;
@@ -130,6 +130,32 @@ export class Lifecycle {
                     return fix ? { ...q, verification: fix.verification } : q;
                 }) },
         };
+    }
+    /** See SpecRecord.impactAdvice. Tasks are walked in dependency order, like execution. */
+    async impactAdvice(r, spec, signal) {
+        const inventory = await this.inventoryAt(r.repo, r.baseSha, r.config.knowledge?.languages ?? [], signal);
+        // The spec is already validated against its ledger; order it without revalidating (taskOrder would
+        // check it against an empty ledger and reject any spec covering a project decision).
+        const order = [];
+        const done = new Set();
+        const visit = (t) => { if (done.has(t.id))
+            return; done.add(t.id); t.dependsOn.forEach(id => { const dep = spec.tasks.find(x => x.id === id); if (dep)
+            visit(dep); }); order.push(t); };
+        spec.tasks.forEach(visit);
+        const covers = (t, path) => t.allowedPaths.some(p => matches(path, p));
+        const advice = [];
+        for (const [i, task] of order.entries()) {
+            const changed = task.allowedPaths.filter(p => !/[*?]/.test(p) && !/(^|[./_-])(test|spec)s?([./_-]|$)/i.test(p));
+            for (const ref of await testsReferencing(r.repo, inventory, changed, signal)) {
+                if (covers(task, ref.path) || order.slice(0, i).some(t => covers(t, ref.path)))
+                    continue;
+                if (advice.some(a => a.test === ref.path))
+                    continue;
+                const later = order.slice(i + 1).find(t => covers(t, ref.path));
+                advice.push({ test: ref.path, changedBy: task.id, assignedTo: later?.id ?? null, tokens: ref.tokens });
+            }
+        }
+        return advice;
     }
     /** Operator decisions made after approval, shown to QA with their reasons: they postdate the spec text. */
     approvedAmendments(r) {
@@ -254,6 +280,15 @@ export class Lifecycle {
         });
         return { css: substitute(p.css), bodyHtml: new Map(p.screens.map(s => [s.id, substitute(s.bodyHtml)])), used };
     }
+    /**
+     * The spec whose approved visual direction a new design for `repo` continues: the most recently approved,
+     * non-rejected spec with a design. Maintenance uses the same rule to keep that document.
+     */
+    designReference(repo, excludeId) {
+        return this.store.documents('spec')
+            .filter(d => d.id !== excludeId && d.data.repo === repo && d.data.design && d.data.approval && d.data.status !== 'rejected')
+            .sort((a, b) => (b.data.approval?.at ?? 0) - (a.data.approval?.at ?? 0))[0];
+    }
     /** Files tracked at one commit: a design asset must be repository content at the reviewed commit, not whatever the working tree happens to hold. */
     async trackedPaths(repo, sha, signal) {
         const listing = await new Git(signal).exec(repo, ['ls-tree', '-r', '--name-only', '-z', sha]);
@@ -265,9 +300,7 @@ export class Lifecycle {
      * screens the new spec creates or changes.
      */
     establishedDesign(currentId, repo) {
-        const previous = this.store.documents('spec')
-            .filter(d => d.id !== currentId && d.data.repo === repo && d.data.design && d.data.approval && !['rejected'].includes(d.data.status))
-            .sort((a, b) => (b.data.approval?.at ?? 0) - (a.data.approval?.at ?? 0))[0];
+        const previous = this.designReference(repo, currentId);
         if (!previous?.data.design)
             return null;
         const proposal = previous.data.design.proposal;
@@ -353,12 +386,13 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         this.save(doc, 'security.assessed', { contextHash: r.securityContextHash, minimumLane: r.securityContext.minimumLane, requiresThreatModel: r.securityContext.requiresThreatModel, negativeTestsRequired: r.securityContext.negativeTestsRequired, topics: r.securityContext.topics.map(t => t.id), signals: r.securityContext.signals });
         r.content = readySpec(validateTaskCapabilities(validateSpec(value, false, r.decisionLedger, r.request, r.securityContext), r.config));
         r.contentHash = specHash(r);
+        r.impactAdvice = r.content.questions.length === 0 ? await this.impactAdvice(r, r.content, signal) : [];
         r.design = null;
         if (this.requiresDesign(r.content, r.config.skills.projectType) && r.content.questions.length === 0)
             await this.prepareDesignProposal(doc, repositoryIntelligence, signal);
         r.error = null;
         const design = r.design;
-        this.save(doc, 'product.proposed', { revision: r.revision, hash: approvalHash(r), specHash: r.contentHash, designHash: design?.hash ?? null,
+        this.save(doc, 'product.proposed', { revision: r.revision, hash: approvalHash(r), specHash: r.contentHash, designHash: design?.hash ?? null, impactAdvice: r.impactAdvice,
             questions: [...r.content.questions, ...(design?.proposal.questions ?? [])], content: r.content,
             design: design ? { hash: design.hash, directory: design.directory, indexPath: design.indexPath, summary: design.proposal.summary } : null });
     }
@@ -891,11 +925,16 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         return final;
     }
     /** Publication adapters still acquire the lifecycle lease and require explicit consent. */
-    async publicationCandidate(id) {
+    async publicationCandidate(id, purpose = 'delivery') {
         const doc = this.get(id);
         invariant(!['closed', 'rejected'].includes(doc.data.status), 'STATE', 'Spec cannot be published');
         const final = await this.reviewable(doc.data);
-        await this.pipeline.exportPatch(final.id);
+        // A draft PR for reading still requires validated gates and a passing QA on this exact candidate;
+        // only the operator's approval, which the reading is meant to inform, is not required yet.
+        if (purpose === 'review')
+            invariant(['awaiting_review', 'ready'].includes(doc.data.status) && ['awaiting_review', 'ready'].includes(final.state), 'STATE', 'Only a validated candidate awaiting review can be opened for reading');
+        else
+            await this.pipeline.exportPatch(final.id);
         return final;
     }
     async review(id, sha, actor, note) {
@@ -941,9 +980,15 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         try {
             const doc = this.get(id);
             invariant(doc.data.status !== 'closed', 'STATE', 'Already merged/closed');
+            // A rejected spec has no active run: keeping the pointer made maintenance treat it as running forever.
+            const activeRunId = doc.data.activeRunId;
+            if (activeRunId) {
+                invariant(!this.pipeline.store.activeProcesses(activeRunId).some(p => p.alive), 'BUSY', `Run ${activeRunId} still has a live process; stop it before rejecting`);
+                doc.data.activeRunId = null;
+            }
             doc.data.status = 'rejected';
             doc.data.error = { code: 'REJECTED', message: note };
-            this.save(doc, 'spec.rejected', { note });
+            this.save(doc, 'spec.rejected', { note, releasedRunId: activeRunId });
             return doc;
         }
         finally {
@@ -1132,14 +1177,18 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             const doc = this.get(id);
             const r = doc.data;
             this.approved(r);
-            invariant(r.delivery && r.finalRunId && r.status === 'delivered', 'STATE', 'Deliver the validated candidate before observing a local integration');
+            // A reviewed candidate is enough: the operator may integrate it without exporting a bundle first.
+            invariant(r.finalRunId && ['delivered', 'ready'].includes(r.status), 'STATE', 'Review the validated candidate before observing its integration');
+            const final = this.pipeline.store.get(r.finalRunId);
+            invariant(final.state === 'ready' && final.candidateSha === r.currentSha, 'STATE', 'The final run must hold the reviewed current candidate');
+            const candidateSha = r.delivery?.candidateSha ?? final.candidateSha;
             const git = new Git();
             await git.exec(r.repo, ['check-ref-format', `refs/heads/${ref}`]);
             const observed = await git.sha(r.repo, `refs/heads/${ref}`);
             invariant(observed === mergeSha, 'MERGE_SHA', 'Name the exact observed integration head');
-            await git.exec(r.repo, ['merge-base', '--is-ancestor', r.delivery.candidateSha, mergeSha]);
+            await git.exec(r.repo, ['merge-base', '--is-ancestor', candidateSha, mergeSha]);
             r.status = 'closed';
-            this.save(doc, 'spec.closed', { source: 'local-git-observation', target: ref, mergeSha, candidateSha: r.delivery.candidateSha, reviewer: actor, note, notADeployment: true });
+            this.save(doc, 'spec.closed', { source: 'local-git-observation', target: ref, mergeSha, candidateSha, delivered: Boolean(r.delivery), reviewer: actor, note, notADeployment: true });
             return doc;
         }
         finally {
@@ -1159,10 +1208,12 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             next = (r.content?.questions.length || r.design?.proposal.questions.length) ? `apv2 spec refine ${doc.id} --request "answers to the displayed questions"` : `apv2 spec approve ${doc.id} --hash ${approvalHash(r) ?? 'NO_VALID_PROPOSAL'} --approve`;
         else if (r.status === 'awaiting_review')
             next = `apv2 spec review ${doc.id} --sha ${final?.candidateSha} --approve`;
+        else if (r.error?.code === 'MERGED_BEFORE_REVIEW')
+            next = `apv2 spec review ${doc.id} --sha ${r.currentSha} --approve   (after apv2 spec verify ${doc.id} if the evidence expired; then apv2 spec sync ${doc.id})`;
         else if (r.publication?.url && r.status !== 'closed' && r.status !== 'rejected')
             next = `apv2 spec sync ${doc.id}`;
         else if (r.status === 'ready')
-            next = `apv2 spec deliver ${doc.id} --output /path/to/new-delivery`;
+            next = `apv2 spec deliver ${doc.id} --output /path/to/new-delivery   (or, once you have merged it yourself: apv2 spec close ${doc.id} --target main --sha MERGED_HEAD --reviewer NAME --note TEXT)`;
         else if (r.status === 'delivered')
             next = `apv2 spec branch ${doc.id} --name feature/my-change --confirm`;
         else if (r.status === 'closed' || r.status === 'rejected')
@@ -1189,7 +1240,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             next = `Resolve ${r.error.code} before running again: ${r.error.message.slice(0, 200)}`;
         else
             next = `apv2 spec run ${doc.id}`;
-        return { id: doc.id, revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash: r.contentHash, security: { contextHash: r.securityContextHash ?? null, minimumLane: r.securityContext?.minimumLane ?? null, requiresThreatModel: r.securityContext?.requiresThreatModel ?? null, topics: r.securityContext?.topics.map(x => x.id) ?? [], requirements: r.content?.security?.requirements.map(x => x.id) ?? [] }, design: r.design ? { hash: r.design.hash, directory: r.design.directory, indexPath: r.design.indexPath, summary: r.design.proposal.summary, questions: r.design.proposal.questions } : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
+        return { id: doc.id, revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash: r.contentHash, security: { contextHash: r.securityContextHash ?? null, minimumLane: r.securityContext?.minimumLane ?? null, requiresThreatModel: r.securityContext?.requiresThreatModel ?? null, topics: r.securityContext?.topics.map(x => x.id) ?? [], requirements: r.content?.security?.requirements.map(x => x.id) ?? [] }, design: r.design ? { hash: r.design.hash, directory: r.design.directory, indexPath: r.design.indexPath, summary: r.design.proposal.summary, questions: r.design.proposal.questions } : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
     }
 }
 //# sourceMappingURL=service.js.map

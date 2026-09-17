@@ -14,6 +14,8 @@ export interface PublishOptions {
     base: string;
     confirmPush: boolean;
     confirmPr: boolean;
+    /** Open the draft PR before approval, so the operator reads the candidate on the forge. */
+    forReview?: boolean;
     signal?: AbortSignal;
 }
 export declare function publishSpec(life: Lifecycle, id: string, options: PublishOptions, transport?: ForgeTransport): Promise<import("../persistence/store.js").Document<import("./contracts.js").SpecRecord>>;

@@ -54,3 +54,30 @@ test('publication intent cannot be silently retargeted', async (t) => { const f 
 test('sync refuses changed PR head instead of closing a spec', async (t) => { const f = await ready(t); const g = fake(f); await publishSpec(f.life, f.doc.id, f.options, g.transport); g.state.prState = 'MERGED'; g.state.sha = 'e'.repeat(40); await assert.rejects(syncSpec(f.life, f.doc.id, undefined, g.transport), /head\/base/); assert.notEqual(f.life.get(f.doc.id).data.status, 'closed'); });
 test('sync closes only on observed merged exact-head PR', async (t) => { const f = await ready(t); const g = fake(f); await publishSpec(f.life, f.doc.id, f.options, g.transport); let d = await syncSpec(f.life, f.doc.id, undefined, g.transport); assert.notEqual(d.data.status, 'closed'); g.state.prState = 'MERGED'; d = await syncSpec(f.life, f.doc.id, undefined, g.transport); assert.equal(d.data.status, 'closed'); assert.equal(d.data.publication.mergeSha, 'f'.repeat(40)); });
 test('closed-unmerged PR blocks rather than marks delivered', async (t) => { const f = await ready(t); const g = fake(f); await publishSpec(f.life, f.doc.id, f.options, g.transport); g.state.prState = 'CLOSED'; const d = await syncSpec(f.life, f.doc.id, undefined, g.transport); assert.equal(d.data.status, 'blocked'); assert.equal(d.data.error.code, 'PR_CLOSED'); });
+
+// Observed on a real project: the operator wanted to read the candidate in a PR before approving it, and
+// publish refused because it required the approval first; the branch had to be pushed by hand.
+async function awaitingReview(t) { const f = fixture(t, noQa); let doc = await approved(f, oneTask()); doc = await f.life.run(doc.id); const options = { repository: 'example/demo', remote: 'origin', branch: 'feature/read-me', base: git(f.repo, 'symbolic-ref', '--short', 'HEAD'), confirmPush: true, confirmPr: true }; return { ...f, doc, options }; }
+test('a draft PR can be opened for reading before approval, and its merge does not close an unreviewed spec', async (t) => {
+  const f = await awaitingReview(t);
+  assert.equal(f.doc.data.status, 'awaiting_review');
+  const g = fake(f);
+  await assert.rejects(publishSpec(f.life, f.doc.id, f.options, g.transport), /Only ready runs/, 'delivery publication still requires the review');
+  let d = await publishSpec(f.life, f.doc.id, { ...f.options, forReview: true }, g.transport);
+  assert.equal(d.data.publication.purpose, 'review');
+  assert.equal(d.data.publication.state, 'pr_open');
+  const create = g.calls.find(c => c.command[0] === 'gh' && c.command[2] === 'create');
+  assert.ok(create.command.includes('--draft'));
+  assert.match(create.input, /BEFORE operator approval/);
+
+  g.state.prState = 'MERGED';
+  d = await syncSpec(f.life, f.doc.id, undefined, g.transport);
+  assert.equal(d.data.status, 'blocked', 'a merge observed before the review does not close the spec');
+  assert.equal(d.data.error.code, 'MERGED_BEFORE_REVIEW');
+  assert.match(f.life.summary(d).nextAction, /spec review .* --approve/);
+
+  d = await f.life.review(d.id, d.data.currentSha, 'Test Reviewer', 'Read the candidate in the draft PR, then approved it.');
+  d = await syncSpec(f.life, f.doc.id, undefined, g.transport);
+  assert.equal(d.data.status, 'closed');
+  assert.ok(!g.calls.some(c => c.command.includes('merge') || c.command.includes('--force')), 'the controller never merges nor force-pushes');
+});

@@ -33,6 +33,14 @@ export declare function planPurge(life: Lifecycle, options?: {
     olderThanDays?: number;
     now?: number;
 }): PurgeItem[];
+/**
+ * Terminal documents a purge must keep because later work still reads them: for each repository, the spec
+ * holding the visual direction that the next design continues.
+ */
+export declare function purgeProtections(life: Lifecycle): {
+    id: string;
+    reason: string;
+}[];
 /** Removes planned documents: their workspaces first, then their runs, then the document itself. */
 export declare function purgeDocuments(life: Lifecycle, items: readonly PurgeItem[]): Promise<{
     purged: PurgeItem[];

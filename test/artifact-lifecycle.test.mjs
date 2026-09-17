@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { Store } from '../dist/persistence/store.js';
 import { planBootstrap } from '../dist/lifecycle/bootstrap.js';
 import { applyLedgerUpdate, planLedgerUpdate } from '../dist/lifecycle/ledger-update.js';
+import { planGarbage } from '../dist/lifecycle/maintenance.js';
 import { fixture as lifecycleFixture, oneTask, withSecurity, git as gitOf } from './lifecycle-helpers.mjs';
 
 const RUN_WORKER = new URL('./support/run-worker.cjs', import.meta.url).pathname;
@@ -276,4 +277,66 @@ process.stdout.write(r.stdout);
   assert.ok(seen.spec.tasks.find(x => x.id === 'MATH').allowedPaths.includes('src/extra/allowed.mjs'), 'QA sees the approved scope amendment in the task');
   assert.deepEqual(seen.amendments.scope.map(a => a.paths), [['src/extra/allowed.mjs']]);
   assert.equal(f.life.get(d.id).data.content.security.requirements[0].verification, requirement.verification, 'the stored requirement text stays auditable');
+});
+
+// Observed on a real project: a spec rejected while its run pointer was still set stayed "active" forever,
+// so gc never collected its workspaces; and closing a reviewed, operator-merged spec required a delivery bundle.
+test('a rejected spec releases its run pointer and its workspaces become collectable', async (t) => {
+  const f = lifecycleFixture(t);
+  let d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.' });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+  d = await f.life.run(d.id);
+  const runId = d.data.attempts[0].runId;
+
+  // A document written before the fix: rejected, with the pointer left behind.
+  const legacy = f.life.get(d.id);
+  Object.assign(legacy.data, { status: 'rejected', activeRunId: runId });
+  f.life.store.saveDocument(legacy, 'test.legacy_rejection', {});
+  const items = planGarbage(f.life).map(x => x.path);
+  assert.ok(items.some(p => p.endsWith(`/${runId}`)), 'a leftover pointer without a live process no longer pins the workspace');
+
+  let other = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example again.' });
+  const withPointer = f.life.get(other.id);
+  withPointer.data.activeRunId = runId;
+  f.life.store.saveDocument(withPointer, 'test.pointer', {});
+  other = f.life.reject(other.id, 'Superseded by another increment.');
+  assert.equal(other.data.activeRunId, null, 'rejecting releases the pointer');
+  assert.equal(f.life.store.documentEvents(other.id).at(-1).data.releasedRunId, runId);
+});
+
+test('a reviewed spec merged by the operator closes without a delivery bundle', async (t) => {
+  const f = lifecycleFixture(t);
+  let d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.' });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+  d = await f.life.run(d.id);
+  assert.equal(d.data.status, 'awaiting_review');
+  gitOf(f.repo, 'update-ref', 'refs/heads/integration', d.data.currentSha);
+  const merged = gitOf(f.repo, 'rev-parse', 'refs/heads/integration');
+  await assert.rejects(f.life.closeLocal(d.id, 'integration', merged, 'Test Owner', 'Merged by the operator after reading.'), /Review the validated candidate/, 'an unreviewed candidate cannot be closed');
+  d = await f.life.review(d.id, d.data.currentSha, 'Test Owner', 'Read the candidate and approved it.');
+  assert.equal(d.data.status, 'ready');
+  d = await f.life.closeLocal(d.id, 'integration', merged, 'Test Owner', 'Merged by the operator after reading.');
+  assert.equal(d.data.status, 'closed');
+  assert.equal(d.data.delivery, null, 'no bundle was needed');
+  assert.equal(f.life.store.documentEvents(d.id).at(-1).data.delivered, false);
+});
+
+// Observed on a real increment: Product put two tests broken by the first task's schema change into a later
+// task, or into none, and the first task stopped on a scope amendment. The operator is now told before approving.
+test('Product output is annotated with existing tests the task order leaves behind', async (t) => {
+  const f = lifecycleFixture(t);
+  const spec = oneTask();
+  spec.acceptance.push({ id: 'AC-DOC', description: 'The multiplication is documented for readers.', verification: 'Read docs/math.md.' });
+  spec.tasks = [
+    { ...spec.tasks[0], id: 'CODE', allowedPaths: ['src/math.mjs'], acceptanceIds: ['AC-MATH'], dependsOn: [] },
+    { id: 'LATER', title: 'Tests and documentation', description: 'Update the tests and the documentation.', acceptanceIds: ['AC-DOC'], allowedPaths: ['test/math.test.mjs', 'docs/math.md'], dependsOn: ['CODE'], minimumLane: 'fast' },
+  ];
+  const d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.', proposal: spec });
+  const advice = f.life.summary(d).impactAdvice;
+  assert.deepEqual(advice.map(a => [a.test, a.changedBy, a.assignedTo]), [['test/math.test.mjs', 'CODE', 'LATER']]);
+  assert.ok(f.life.store.documentEvents(d.id).find(e => e.type === 'product.proposed').data.impactAdvice.length === 1);
+
+  const together = oneTask();
+  const clean = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.', proposal: together });
+  assert.deepEqual(f.life.summary(clean).impactAdvice, [], 'a test in the task that changes its subject raises nothing');
 });
