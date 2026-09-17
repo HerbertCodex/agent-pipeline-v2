@@ -13,6 +13,7 @@ import { applyLedgerUpdate, planLedgerUpdate } from '../dist/lifecycle/ledger-up
 import { planGarbage } from '../dist/lifecycle/maintenance.js';
 import { fixture as lifecycleFixture, oneTask, withSecurity, git as gitOf } from './lifecycle-helpers.mjs';
 
+const RUN_WORKER = new URL('./support/run-worker.cjs', import.meta.url).pathname;
 const run = (cwd, args) => {
   const r = spawnSync(args[0], args.slice(1), { cwd, encoding: 'utf8' });
   assert.equal(r.status, 0, `${args.join(' ')}\n${r.stderr}`); return r.stdout.trim();
@@ -88,9 +89,10 @@ test('a design asset cannot be read through a symlinked directory of the reposit
 
   const worker = join(f.root, 'escaping-worker.mjs');
   writeFileSync(worker, `import { readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+const { runWorker } = createRequire(import.meta.url)(${JSON.stringify(RUN_WORKER)});
 const input = readFileSync(0, 'utf8'); const req = JSON.parse(input);
-const r = spawnSync(process.execPath, [${JSON.stringify(new URL('../examples/lifecycle-worker.mjs', import.meta.url).pathname)}], { input, encoding: 'utf8' });
+const r = runWorker(${JSON.stringify(new URL('../examples/lifecycle-worker.mjs', import.meta.url).pathname)}, input);
 if (req.protocol === 'agent-pipeline/v2') { process.stdout.write(r.stdout); process.exit(0); }
 const out = JSON.parse(r.stdout);
 if (req.role === 'product' && req.context?.mode === 'design-proposal') {
@@ -230,10 +232,11 @@ test('QA judges the effective spec: corrected criterion, corrected requirements 
   const exampleWorker = new URL('../examples/lifecycle-worker.mjs', import.meta.url).pathname;
   const worker = join(f.root, 'qa-tracing-worker.mjs');
   writeFileSync(worker, `import { readFileSync, appendFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+const { runWorker } = createRequire(import.meta.url)(${JSON.stringify(RUN_WORKER)});
 const input = readFileSync(0, 'utf8'); const req = JSON.parse(input);
 if (req.role === 'qa') appendFileSync(${JSON.stringify(log)}, JSON.stringify({ spec: req.context.spec, amendments: req.context.approvedAmendments }) + '\\n');
-const r = spawnSync(process.execPath, [${JSON.stringify(exampleWorker)}], { input, encoding: 'utf8' });
+const r = runWorker(${JSON.stringify(exampleWorker)}, input);
 if (r.status !== 0) { process.stderr.write(r.stderr); process.exit(r.status ?? 1); }
 process.stdout.write(r.stdout);
 `);

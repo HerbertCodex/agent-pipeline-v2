@@ -11,6 +11,7 @@ import { scanTags } from '../dist/lifecycle/service.js';
 import { specHash } from '../dist/lifecycle/contracts.js';
 import { planPurge, purgeDocuments, purgeProtections } from '../dist/lifecycle/maintenance.js';
 
+const RUN_WORKER = new URL('./support/run-worker.cjs', import.meta.url).pathname;
 const exampleWorker = fileURLToPath(new URL('../examples/lifecycle-worker.mjs', import.meta.url));
 const readLog = (path) => existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
 
@@ -18,13 +19,14 @@ const readLog = (path) => existsSync(path) ? readFileSync(path, 'utf8').trim().s
 function designWorker(root, name, patch) {
   const path = join(root, `${name}.mjs`); const log = join(root, `${name}.log`);
   writeFileSync(path, `import { readFileSync, appendFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+const { runWorker } = createRequire(import.meta.url)(${JSON.stringify(RUN_WORKER)});
 const input = readFileSync(0, 'utf8'); const req = JSON.parse(input);
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ role: req.role ?? req.protocol, mode: req.context?.mode ?? null,
   repair: req.repair?.previousError?.code ?? null,
   established: req.context?.establishedDesign ? req.context.establishedDesign.specId : null,
   instructions: req.context?.instructions?.length ?? 0 }) + '\\n');
-const r = spawnSync(process.execPath, [${JSON.stringify(exampleWorker)}], { input, encoding: 'utf8' });
+const r = runWorker(${JSON.stringify(exampleWorker)}, input);
 if (r.status !== 0) { process.stderr.write(r.stderr); process.exit(r.status ?? 1); }
 if (req.protocol === 'agent-pipeline/v2') { process.stdout.write(r.stdout); process.exit(0); }
 const out = JSON.parse(r.stdout);

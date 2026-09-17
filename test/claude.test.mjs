@@ -49,16 +49,17 @@ function timeline(t,life,doc){
 }
 // Transport double only. The fixture runs real Git, gates, repair and lifecycle transitions.
 for(const provider of ['claude','codex']) test(`full lifecycle with ${provider} protocol double, Product and QA repair`,async t=>{
- const f=lifeFixture(t);const path=join(f.root,'fake-'+provider);const worker=fileURLToPath(new URL('../examples/lifecycle-worker.mjs',import.meta.url));
+ const f=lifeFixture(t);const path=join(f.root,'fake-'+provider);const runWorkerPath=fileURLToPath(new URL('./support/run-worker.cjs',import.meta.url));const worker=fileURLToPath(new URL('../examples/lifecycle-worker.mjs',import.meta.url));
  writeFileSync(path,`#!${process.execPath}
  const fs=require('fs'),assert=require('node:assert/strict'),cp=require('node:child_process');const args=process.argv.slice(2);
  // Phase markers on stderr: if this double stalls, the controller's timeout diagnostic shows the last phase reached.
+ const workerOutput=r=>{if(r.error||r.status!==0){mark('worker failed '+(r.error?r.error.code:'exit '+r.status)+' '+String(r.stderr||'').slice(0,500));process.exit(1);}return r.stdout;};
  const mark=p=>fs.writeSync(2,'[double '+process.pid+' +'+Math.round(process.uptime()*1000)+'ms] '+p+String.fromCharCode(10));mark('started');
  const raw=fs.readFileSync(0,'utf8');mark('stdin read '+raw.length);const req=JSON.parse(raw.slice(raw.indexOf('{')));mark('role '+(req.role??'implementer'));
  if(${JSON.stringify(provider)}==='claude'){assert.equal(args[args.indexOf('--tools')+1],req.role?'Read,Glob,Grep':'Read,Glob,Grep,Edit,Write');assert.ok(args.includes('--strict-mcp-config'));}
  else assert.equal(args[args.indexOf('--sandbox')+1],req.role?'read-only':'workspace-write');
  if(req.role==='qa'){assert.ok(req.context.diff.includes('diff --git'));assert.ok(req.context.diff.includes('multiply'));assert.equal(req.guidance.role.id,'qa');}
- const output=req.role==='setup'?{config:req.context.proposal.config,questions:[],notes:['Provider protocol double only.']}:(mark('worker start'),JSON.parse(cp.execFileSync(${JSON.stringify(process.execPath)},[${JSON.stringify(worker)}],{input:JSON.stringify(req),encoding:'utf8',timeout:30000,killSignal:'SIGKILL'})));
+ const output=req.role==='setup'?{config:req.context.proposal.config,questions:[],notes:['Provider protocol double only.']}:(mark('worker start'),JSON.parse(workerOutput(require(${JSON.stringify(runWorkerPath)}).runWorker(${JSON.stringify(worker)},JSON.stringify(req)))));
  mark('worker done');
  if(${JSON.stringify(provider)}==='claude')console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,structured_output:output,permission_denials:[]}));
  else fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify(output));

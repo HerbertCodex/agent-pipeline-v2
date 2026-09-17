@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixture, oneTask, withSecurity } from './lifecycle-helpers.mjs';
 
+const RUN_WORKER = new URL('./support/run-worker.cjs', import.meta.url).pathname;
 const exampleWorker = fileURLToPath(new URL('../examples/lifecycle-worker.mjs', import.meta.url));
 const readLog = (path) => existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
 const MARKER = 'x-approved-mockup-marker';
@@ -16,14 +17,15 @@ const MARKER = 'x-approved-mockup-marker';
 function tracingWorker(root) {
   const path = join(root, 'tracing-worker.mjs'); const log = join(root, 'tracing.log');
   writeFileSync(path, `import { readFileSync, appendFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+const { runWorker } = createRequire(import.meta.url)(${JSON.stringify(RUN_WORKER)});
 const input = readFileSync(0, 'utf8'); const req = JSON.parse(input);
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({
   role: req.role ?? req.protocol, mode: req.context?.mode ?? null, task: req.task?.id ?? null,
   taskSeesMockup: req.task ? req.task.description.includes(${JSON.stringify(MARKER)}) : null,
   qaSeesMockup: req.role === 'qa' ? JSON.stringify(req.context?.approvedDesign ?? null).includes(${JSON.stringify(MARKER)}) : null,
 }) + '\\n');
-const r = spawnSync(process.execPath, [${JSON.stringify(exampleWorker)}], { input, encoding: 'utf8' });
+const r = runWorker(${JSON.stringify(exampleWorker)}, input);
 if (r.status !== 0) { process.stderr.write(r.stderr); process.exit(r.status ?? 1); }
 if (req.protocol === 'agent-pipeline/v2') { process.stdout.write(r.stdout); process.exit(0); }
 const out = JSON.parse(r.stdout);
