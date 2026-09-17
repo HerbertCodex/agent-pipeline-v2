@@ -69,7 +69,10 @@ export async function runRole<T>(options: {
     const schemaFile = join(root, 'schema.json');
     if (agent.type === 'codex') writeFileSync(schemaFile, JSON.stringify(strictSchema(options.schema.json)), { flag: 'wx', mode: 0o600 });
     const maxRepairs = Math.max(0, options.maxRepairs ?? 0);
-    store.documentEvent(documentId, 'role.started', { role, workspace, sha, provider: agent.type, guidance: guidanceAudit(guidance) });
+    // The same role serves several purposes (Product writes specs and designs): the mode tells them apart.
+    const ctx = options.context as { mode?: unknown } | null;
+    const mode = ctx && typeof ctx === 'object' && typeof ctx.mode === 'string' ? ctx.mode : null;
+    store.documentEvent(documentId, 'role.started', { role, mode, workspace, sha, provider: agent.type, guidance: guidanceAudit(guidance) });
     const startedAt = performance.now();
     try {
         let repair: ReturnType<typeof repairNotice> | undefined;
@@ -103,7 +106,7 @@ export async function runRole<T>(options: {
                 const parsed = options.schema.parse(agent.type === 'claude' ? claudeOutput(text) : parseJson(text));
                 const value = options.validate ? options.validate(parsed) : parsed;
                 const doneAt = performance.now();
-                store.documentEvent(documentId, 'role.finished', { role, durationMs: result.durationMs, stdoutHash: result.stdoutHash, attempts: attempt + 1,
+                store.documentEvent(documentId, 'role.finished', { role, mode, durationMs: result.durationMs, stdoutHash: result.stdoutHash, attempts: attempt + 1,
                     timingsMs: { beforeSpawn: Math.round(spawnAt - startedAt), process: Math.round(processEndAt - spawnAt), workspaceCheck: Math.round(cleanEndAt - processEndAt), parseAndValidate: Math.round(doneAt - cleanEndAt), total: Math.round(doneAt - startedAt) } });
                 return value;
             }

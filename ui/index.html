@@ -3,45 +3,42 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Agent Pipeline — tableau de bord</title>
+  <title>Agent Pipeline — console</title>
   <link rel="stylesheet" href="/app.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
   <header class="top">
-    <div class="brand">
-      <span class="brand__mark" aria-hidden="true"></span>
-      <span class="brand__name">Agent Pipeline</span>
-      <span class="brand__sub">tableau de bord</span>
-    </div>
+    <a class="brand" href="#" id="home-link" aria-label="Accueil : ce qui attend votre décision">
+      <span class="brand__mark" aria-hidden="true"><i></i><b></b><i></i><b></b><i></i></span>
+      <span class="brand__text">
+        <span class="brand__name">Agent Pipeline</span>
+        <span class="brand__sub" id="store-path">console d'opérateur</span>
+      </span>
+    </a>
     <div class="top__actions">
-      <span id="live" class="live" role="status" aria-live="polite">Connexion…</span>
+      <span id="live" class="live" role="status" aria-live="polite">connexion…</span>
       <button type="button" id="open-jobs" class="btn btn--ghost">Opérations <span id="jobs-count" class="count" hidden></span></button>
       <button type="button" id="open-maintenance" class="btn btn--ghost">Maintenance</button>
-      <button type="button" id="open-new" class="btn btn--primary">Nouvelle spec</button>
+      <button type="button" id="open-new" class="btn">Nouvelle spec</button>
     </div>
   </header>
   <div class="layout">
     <aside class="sidebar" aria-label="Specs">
       <div class="sidebar__tools">
-        <div class="segmented" role="group" aria-label="Filtre">
+        <div class="segmented" role="group" aria-label="Filtre des specs">
           <button type="button" data-filter="active" aria-pressed="true">Actives</button>
           <button type="button" data-filter="all" aria-pressed="false">Toutes</button>
         </div>
         <label class="visually-hidden" for="search">Rechercher une spec</label>
-        <input id="search" type="search" placeholder="Rechercher…" autocomplete="off">
+        <input id="search" type="search" placeholder="Rechercher un titre, un id, un dépôt" autocomplete="off">
       </div>
-      <nav id="spec-list" class="spec-list"></nav>
+      <nav id="spec-list" class="spec-list" aria-label="Liste des specs"></nav>
     </aside>
-    <main id="main" class="main" tabindex="-1">
-      <div class="empty">
-        <p class="empty__title">Choisissez une spec</p>
-        <p>Son avancement, ses tâches, la QA et l'activité des agents s'affichent ici, en direct.</p>
-      </div>
-    </main>
+    <main id="main" class="main" tabindex="-1"><div class="main__inner"><p class="muted">Chargement…</p></div></main>
   </div>
   <div id="jobs-backdrop" class="backdrop" hidden></div>
-  <aside id="jobs" class="drawer" hidden aria-label="Opérations lancées depuis le tableau de bord">
+  <aside id="jobs" class="drawer" hidden aria-label="Opérations lancées depuis la console">
     <div class="drawer__head">
       <h2>Opérations</h2>
       <button type="button" class="btn btn--ghost" data-close-drawer>Fermer</button>
@@ -52,7 +49,7 @@
     <div class="dialog__inner">
       <h2 id="dialog-title"></h2>
       <div id="dialog-body"></div>
-      <p id="dialog-error" class="notice notice--error" role="alert" hidden></p>
+      <p id="dialog-error" class="notice" role="alert" hidden></p>
       <div class="dialog__actions">
         <button type="button" class="btn btn--ghost" id="dialog-cancel">Annuler</button>
         <button type="button" class="btn btn--primary" id="dialog-confirm">Confirmer</button>
