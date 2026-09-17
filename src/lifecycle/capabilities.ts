@@ -20,6 +20,15 @@ export function executionCapabilities(config: Config) {
       : { fileEdits: 'wrapper-defined', shell: 'unknown', network: 'unknown', subagents: 'unknown', note: 'Command-protocol wrapper: capabilities are defined by the operator wrapper. Assume no command execution unless the spec is told otherwise.' };
   return {
     implementer: { provider: implementer, ...implementerTools },
+    // One task is one agent session bounded by these limits. A task larger than a session is not slower:
+    // the provider stops mid-work and the whole attempt has to be adopted or started again.
+    attempt: {
+      providerTurns: config.agent.maxTurns ?? null,
+      providerBudgetUsd: config.agent.maxBudgetUsd ?? null,
+      agentTimeoutMs: config.agent.timeoutMs,
+      runBudgetMs: config.maxRunMs,
+      repairAttempts: config.maxRepairAttempts,
+    },
     runnerSetup: config.setup.map(step => step.command.join(' ')),
     gates: config.gates.map(g => ({ id: g.id, command: g.command.join(' '), lanes: g.lanes, mandatory: g.mandatory })),
     generatedPaths: config.workflow.generatedPaths ?? [...DEFAULT_GENERATED_PATHS],
@@ -28,6 +37,8 @@ export function executionCapabilities(config: Config) {
       'A task must not require the Implementer to run commands, install or update dependencies, regenerate lockfiles, run code generators or migrations, or access the network unless its capabilities above allow it.',
       'When the change needs such a step (for example a new dependency and its lockfile), make it an operator prerequisite: ask a Product question or state it as an explicit precondition outside the tasks.',
       'An Implementer without a shell must not receive a generatedPaths file in a task allowedPaths; the controller rejects such a spec.',
+      'Size each task for one agent session: the files it may edit must be readable and writable in that single session, within attempt.agentTimeoutMs and the provider limits above. A task that reaches a provider limit produces nothing usable.',
+      'Split by surface, not by layer: one route, module or screen with its own tests per task, rather than one task that touches every route and a second that touches every test.',
     ],
   };
 }

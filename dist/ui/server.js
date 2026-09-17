@@ -146,7 +146,7 @@ export async function startUi(options) {
         });
         return {
             legacy, summary: life.summary(doc), repo: r.repo, request: r.request, content: r.content, approval: r.approval, qa: r.qa ?? null, review: r.review ?? null,
-            scopeAmendments: r.scopeAmendments ?? [], criterionAmendments: r.criterionAmendments ?? [], impactAdvice: r.impactAdvice ?? [],
+            scopeAmendments: r.scopeAmendments ?? [], criterionAmendments: r.criterionAmendments ?? [], impactAdvice: r.impactAdvice ?? [], sizeAdvice: r.sizeAdvice ?? [],
             design: r.design ? { hash: r.design.hash, directory: r.design.directory, summary: r.design.proposal.summary, visualDirection: r.design.proposal.visualDirection,
                 questions: r.design.proposal.questions, reusedFrom: r.design.reusedFrom ?? null, loadedStylesheets: r.design.loadedStylesheets ?? [],
                 inlinedAssets: r.design.inlinedAssets ?? [], screens: r.design.proposal.screens.map((s, i) => ({ id: s.id, title: s.title, purpose: s.purpose, states: s.states,

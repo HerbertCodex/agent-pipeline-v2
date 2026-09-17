@@ -28,6 +28,11 @@ const MAX_STYLESHEET_BYTES = 256 * 1024;
 const MAX_STYLESHEET_TOTAL_BYTES = 512 * 1024;
 /** Characters of approved mockup (markup plus stylesheet) a task may carry before it degrades to a reference. */
 const DESIGN_CONTEXT_BUDGET = 60000;
+/**
+ * Above this many declared files, a task usually exceeds what one agent session completes: the provider stops
+ * mid-work and the attempt yields nothing usable. Advisory only — the operator decides before approving.
+ */
+const TASK_PATHS_ADVICE = 8;
 /** Share of a failed check's diagnostic handed to the retried attempt; diagnostics are already failure-centred. */
 const PREVIOUS_DIAGNOSTIC_CHARS = 6000;
 /** Everything the review workspace owns. The design bundle lives beside it and must survive its rebuilds. */
@@ -434,12 +439,14 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         r.content = readySpec(validateTaskCapabilities(validateSpec(value, false, r.decisionLedger, r.request, r.securityContext), r.config));
         r.contentHash = specHash(r);
         r.impactAdvice = r.content.questions.length === 0 ? await this.impactAdvice(r, r.content, signal) : [];
+        r.sizeAdvice = r.content.tasks.filter(t => t.allowedPaths.length > TASK_PATHS_ADVICE)
+            .map(t => ({ taskId: t.id, title: t.title, paths: t.allowedPaths.length }));
         r.design = null;
         if (this.requiresDesign(r.content, r.config.skills.projectType) && r.content.questions.length === 0)
             await this.prepareDesignProposal(doc, repositoryIntelligence, signal);
         r.error = null;
         const design = r.design;
-        this.save(doc, 'product.proposed', { revision: r.revision, hash: approvalHash(r), specHash: r.contentHash, designHash: design?.hash ?? null, impactAdvice: r.impactAdvice,
+        this.save(doc, 'product.proposed', { revision: r.revision, hash: approvalHash(r), specHash: r.contentHash, designHash: design?.hash ?? null, impactAdvice: r.impactAdvice, sizeAdvice: r.sizeAdvice,
             questions: [...r.content.questions, ...(design?.proposal.questions ?? [])], content: r.content,
             design: design ? { hash: design.hash, directory: design.directory, indexPath: design.indexPath, summary: design.proposal.summary } : null });
     }
@@ -1343,7 +1350,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             next = `Resolve ${r.error.code} before running again: ${r.error.message.slice(0, 200)}`;
         else
             next = `apv2 spec run ${doc.id}`;
-        return { id: doc.id, revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash: r.contentHash, security: { contextHash: r.securityContextHash ?? null, minimumLane: r.securityContext?.minimumLane ?? null, requiresThreatModel: r.securityContext?.requiresThreatModel ?? null, topics: r.securityContext?.topics.map(x => x.id) ?? [], requirements: r.content?.security?.requirements.map(x => x.id) ?? [] }, design: r.design ? { hash: r.design.hash, directory: r.design.directory, indexPath: r.design.indexPath, summary: r.design.proposal.summary, questions: r.design.proposal.questions } : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], stoppedWork: stopped ? { runId: stopped.id, workspace: stopped.workspace } : null, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
+        return { id: doc.id, revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash: r.contentHash, security: { contextHash: r.securityContextHash ?? null, minimumLane: r.securityContext?.minimumLane ?? null, requiresThreatModel: r.securityContext?.requiresThreatModel ?? null, topics: r.securityContext?.topics.map(x => x.id) ?? [], requirements: r.content?.security?.requirements.map(x => x.id) ?? [] }, design: r.design ? { hash: r.design.hash, directory: r.design.directory, indexPath: r.design.indexPath, summary: r.design.proposal.summary, questions: r.design.proposal.questions } : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], sizeAdvice: r.sizeAdvice ?? [], stoppedWork: stopped ? { runId: stopped.id, workspace: stopped.workspace } : null, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
     }
 }
 //# sourceMappingURL=service.js.map
