@@ -64,6 +64,8 @@ Le rapport externe est explicitement importé et lié aux preuves présentes. So
 
 `spec show` expose `activeRunId`, les processus connus et `error`. Si le contrôleur a été arrêté brutalement, vérifier que lui-même et ses enfants sont effectivement terminés, puis utiliser `spec recover ID --confirm-stopped`. Le budget inclut conservativement l'intervalle de crash ; il ne repart pas de zéro.
 
+Un agent qui s'arrête sans rendre son résultat (limite de tours ou de budget du fournisseur, délai, sortie illisible) laisse une tentative **interrompue**, pas un échec définitif : ses fichiers restent dans l'espace de travail du run, que `spec show` indique. L'opérateur les relit, puis adopte ce travail avec `spec run ID --accept-current` — il est alors enregistré puis soumis aux contrôles, à la QA et à sa revue — ou le jette avec `spec retry ID --confirm`, qui repart de la base approuvée avec le diagnostic de l'arrêt. Rien n'est adopté sans cette décision.
+
 Une tentative d'agent dont l'issue est inconnue n'est pas réexécutée aveuglément. Après inspection du code conservé, `spec run ID --accept-current` autorise son adoption et sa validation, jamais son acceptation sans tests. Une tentative échouée ordinaire demande `spec retry ID --confirm` pour en créer une nouvelle ; l'échec reste dans l'historique. Un dépassement de périmètre ou un timeout ne devient pas une boucle automatique illimitée.
 
 Product possède un timeout par appel et une requête bornée ; la préparation et l'attente humaine sont distinctes du budget actif des tâches/QA. `workflow.maxActiveMs` borne les sessions de workflow, `maxRunMs` les runs, et les processus ont leurs propres timeouts. Ces budgets ne mesurent pas les tokens ni les factures du fournisseur.

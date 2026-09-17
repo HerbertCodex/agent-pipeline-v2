@@ -247,7 +247,9 @@ export async function startUi(options) {
             if (parts[3] === 'criterion-amendments' && parts[4] && parts[5] === 'approve')
                 return json(res, 200, life.summary(life.approveCriterionAmendment(id, parts[4], text(body, 'hash', 64, 64), await reviewerFor(repo), note(body))));
             const jobsByAction = {
-                run: ['Exécution', ['spec', 'run', id]], verify: ['Revalidation', ['spec', 'verify', id]], sync: ['Synchronisation', ['spec', 'sync', id]],
+                run: body['acceptCurrent'] === true
+                    ? ['Adoption du travail conservé', ['spec', 'run', id, '--accept-current']]
+                    : ['Exécution', ['spec', 'run', id]], verify: ['Revalidation', ['spec', 'verify', id]], sync: ['Synchronisation', ['spec', 'sync', id]],
             };
             if (jobsByAction[action]) {
                 const [label, args] = jobsByAction[action];

@@ -494,3 +494,79 @@ if (req.protocol === 'agent-pipeline/v2') {
   assert.ok(replacement.task.description.includes(JSON.stringify(failedGate.gateId)), 'the failing check is named');
   assert.match(replacement.task.description, /tests were not run here/, 'the previous summary is included');
 });
+
+// Observed on a real spec: two attempts stopped on the provider's turn limit, each after writing most of the
+// code, and the controller threw both workspaces away. The work was paid for twice and lost twice.
+test('an agent stopped before reporting keeps its work for an explicit adoption', async (t) => {
+  const f = lifecycleFixture(t);
+  const worker = join(f.root, 'stopping-worker.mjs');
+  const flag = join(f.root, 'stopped.flag');
+  writeFileSync(worker, `import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+const req = JSON.parse(readFileSync(0, 'utf8'));
+if (req.protocol === 'agent-pipeline/v2') {
+  writeFileSync('src/math.mjs', 'export const add = (a, b) => a + b;\\nexport const multiply = (a, b) => a * b;\\n');
+  writeFileSync('test/math.test.mjs', "import {test} from 'node:test';import assert from 'node:assert/strict';import {add,multiply} from '../src/math.mjs';test('addition',()=>assert.equal(add(2,3),5));test('positive multiplication',()=>assert.equal(multiply(2,3),6));\\n");
+  if (!existsSync(${JSON.stringify(flag)})) {
+    // The provider stops on its own limit: files are written, no summary is returned.
+    writeFileSync(${JSON.stringify(flag)}, 'stopped');
+    process.stderr.write('Reached maximum number of turns (32)');
+    process.exit(1);
+  }
+  console.log(JSON.stringify({ summary: 'Deterministic fixture edit completed.' }));
+} else {
+  const { runWorker } = (await import('node:module')).createRequire(import.meta.url)(${JSON.stringify(RUN_WORKER)});
+  const r = runWorker(${JSON.stringify(new URL('../examples/lifecycle-worker.mjs', import.meta.url).pathname)}, JSON.stringify(req));
+  process.stdout.write(r.stdout); process.exit(r.status ?? 1);
+}
+`);
+  const config = { ...f.config, agent: { type: 'command', command: [process.execPath, worker] } };
+  let d = await f.life.draft({ repo: f.repo, config, request: 'Implement the approved arithmetic example.' });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+  d = await f.life.run(d.id);
+
+  assert.equal(d.data.status, 'blocked');
+  const stopped = f.life.pipeline.store.get(d.data.activeRunId);
+  assert.equal(stopped.state, 'interrupted', 'the stopped agent leaves a salvageable attempt, not a terminal failure');
+  assert.equal(stopped.resumeFrom, 'implementing');
+  assert.equal(readFileSync(join(stopped.workspace, 'src/math.mjs'), 'utf8').includes('multiply'), true, 'its work is still there to inspect');
+  const summary = f.life.summary(f.life.get(d.id));
+  assert.equal(summary.stoppedWork.workspace, stopped.workspace);
+  assert.match(summary.nextAction, /--accept-current/);
+  assert.match(summary.nextAction, /spec retry .* --confirm to discard/);
+
+  // Nothing is adopted without the explicit flag.
+  d = await f.life.run(d.id);
+  assert.equal(d.data.status, 'blocked');
+  assert.equal(d.data.error?.code, 'UNKNOWN_AGENT_OUTCOME', JSON.stringify(d.data.error));
+  assert.deepEqual(d.data.completedTaskIds, []);
+  d = await f.life.run(d.id, { acceptCurrent: true });
+  assert.ok(d.data.completedTaskIds.includes('MATH'), 'the adopted work is snapshotted, validated and continues the spec');
+
+});
+
+test('a stopped agent can instead be discarded by authorizing a new attempt', async (t) => {
+  const f = lifecycleFixture(t);
+  const worker = join(f.root, 'always-stopping-worker.mjs');
+  writeFileSync(worker, `import { readFileSync, writeFileSync } from 'node:fs';
+const req = JSON.parse(readFileSync(0, 'utf8'));
+if (req.protocol === 'agent-pipeline/v2') {
+  writeFileSync('src/math.mjs', 'export const add = (a, b) => a + b;\\nexport const multiply = (a, b) => a * b;\\n');
+  process.stderr.write('Reached maximum number of turns (32)');
+  process.exit(1);
+}
+const { runWorker } = (await import('node:module')).createRequire(import.meta.url)(${JSON.stringify(RUN_WORKER)});
+const r = runWorker(${JSON.stringify(new URL('../examples/lifecycle-worker.mjs', import.meta.url).pathname)}, JSON.stringify(req));
+process.stdout.write(r.stdout); process.exit(r.status ?? 1);
+`);
+  const config = { ...f.config, agent: { type: 'command', command: [process.execPath, worker] } };
+  let d = await f.life.draft({ repo: f.repo, config, request: 'Implement the approved arithmetic example.' });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+  d = await f.life.run(d.id);
+  const stopped = f.life.pipeline.store.get(d.data.activeRunId);
+  assert.equal(stopped.state, 'interrupted');
+
+  d = await f.life.retry(d.id, true);
+  const replacement = f.life.pipeline.store.get(d.data.activeRunId);
+  assert.notEqual(replacement.id, stopped.id, 'the salvageable attempt is discarded for a fresh one');
+  assert.match(replacement.task.description, /previous attempt of this task failed/);
+});

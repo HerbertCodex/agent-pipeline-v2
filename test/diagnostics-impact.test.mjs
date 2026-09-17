@@ -92,7 +92,10 @@ test('a failing provider is reported with its exit code and its own output', asy
   writeFileSync(worker, `process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error_max_budget', is_error: true, result: 'Budget limit of $5.00 reached before completion.' }) + '\\n');\nprocess.exit(1);\n`);
   const f = fixture(t, { config: { agent: { type: 'command', command: [process.execPath, worker] } } });
   const finished = await f.start();
-  assert.equal(finished.state, 'failed');
+  // The attempt stays salvageable: the provider may have written files before its budget ran out.
+  assert.equal(finished.state, 'interrupted');
+  assert.equal(finished.resumeFrom, 'implementing');
+  assert.equal(finished.candidateSha, null, 'nothing is adopted without an explicit decision');
   assert.match(finished.error.message, /exit 1/, 'the exit code is reported');
   assert.match(finished.error.message, /error_max_budget|Budget limit/, 'the provider explanation reaches the operator');
 });

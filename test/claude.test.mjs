@@ -37,7 +37,7 @@ test('Claude implementation contract modifies a real worktree and receives skill
 for(const mode of ['error','denial','prose','claims']) test(`Claude ${mode} cannot become a successful implementation`,async t=>{
  const f=fixture(t);let result=ok({summary:'no'});if(mode==='error')result.subtype='error_max_budget_usd';if(mode==='denial')result.permission_denials=['Bash'];if(mode==='claims')result.structured_output={summary:'no',passed:true};
  const executable=stub(f,`fs.writeFileSync('src/math.mjs','export const add=(a,b)=>a+b;\\n');console.log(${JSON.stringify(mode==='prose'?'All tests passed':JSON.stringify(result))});`);
- const r=await f.pipeline.start({repo:f.repo,task:f.task,config:{...f.config,agent:{type:'claude',command:[executable]}}});assert.equal(r.state,'failed');assert.equal(r.receipts.length,0);
+ const r=await f.pipeline.start({repo:f.repo,task:f.task,config:{...f.config,agent:{type:'claude',command:[executable]}}});assert.equal(r.state,'interrupted');assert.equal(r.resumeFrom,'implementing');assert.equal(r.candidateSha,null,'nothing is snapshotted without an explicit adoption');assert.equal(r.receipts.length,0);
 });
 /** Every lifecycle and run event with its offset, printed as TAP diagnostics when the lifecycle does not finish. */
 function timeline(t,life,doc){

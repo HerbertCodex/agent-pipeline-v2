@@ -1142,7 +1142,8 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             this.approved(r);
             invariant(r.status === 'blocked' && r.activeRunId, 'STATE', 'No failed active attempt to retry');
             const failed = this.pipeline.store.get(r.activeRunId);
-            invariant(failed.state === 'failed', 'STATE', 'Only terminal failures can be retried; interrupted runs need resume/recovery');
+            // A stopped agent leaves a salvageable attempt: retrying is the operator's explicit way to discard it.
+            invariant(failed.state === 'failed' || (failed.state === 'interrupted' && failed.resumeFrom === 'implementing'), 'STATE', 'Only a terminal failure or a stopped agent can be retried; an interrupted validation needs resume/recovery');
             if (r.finalRunId === r.activeRunId) {
                 r.finalRunId = null;
                 r.activeRunId = null;
@@ -1295,6 +1296,9 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
     summary(doc) {
         const r = doc.data;
         const final = r.finalRunId ? this.pipeline.store.get(r.finalRunId) : null;
+        // A stopped agent left its work in the run workspace; the operator adopts or discards it explicitly.
+        const active = r.activeRunId ? this.pipeline.store.get(r.activeRunId) : null;
+        const stopped = active && active.state === 'interrupted' && active.resumeFrom === 'implementing' && r.status === 'blocked' ? active : null;
         let next;
         if (!r.approval)
             next = (r.content?.questions.length || r.design?.proposal.questions.length) ? `apv2 spec refine ${doc.id} --request "answers to the displayed questions"` : `apv2 spec approve ${doc.id} --hash ${approvalHash(r) ?? 'NO_VALID_PROPOSAL'} --approve`;
@@ -1322,6 +1326,8 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         }
         else if (r.error?.code === 'QA_REJECTED')
             next = `Read the QA findings above, then create a follow-up spec: the automatic repair budget is spent (apv2 spec draft --repo ${r.repo} --request "...").`;
+        else if (stopped)
+            next = `The agent stopped before reporting; its work is kept in ${stopped.workspace}. Inspect it, then apv2 spec run ${doc.id} --accept-current to snapshot and validate it, or apv2 spec retry ${doc.id} --confirm to discard it and start the task again.`;
         else if (r.error?.code === 'CANCELLED' || r.error?.code === 'LOCKED')
             next = `apv2 spec recover ${doc.id} --confirm-stopped   (only after checking no controller or agent process is still alive)`;
         else if (r.error?.code === 'TASK_FAILED' || r.error?.code === 'REPAIR_NO_CHANGE' || r.error?.code === 'GATES_FAILED')
@@ -1337,7 +1343,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             next = `Resolve ${r.error.code} before running again: ${r.error.message.slice(0, 200)}`;
         else
             next = `apv2 spec run ${doc.id}`;
-        return { id: doc.id, revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash: r.contentHash, security: { contextHash: r.securityContextHash ?? null, minimumLane: r.securityContext?.minimumLane ?? null, requiresThreatModel: r.securityContext?.requiresThreatModel ?? null, topics: r.securityContext?.topics.map(x => x.id) ?? [], requirements: r.content?.security?.requirements.map(x => x.id) ?? [] }, design: r.design ? { hash: r.design.hash, directory: r.design.directory, indexPath: r.design.indexPath, summary: r.design.proposal.summary, questions: r.design.proposal.questions } : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
+        return { id: doc.id, revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash: r.contentHash, security: { contextHash: r.securityContextHash ?? null, minimumLane: r.securityContext?.minimumLane ?? null, requiresThreatModel: r.securityContext?.requiresThreatModel ?? null, topics: r.securityContext?.topics.map(x => x.id) ?? [], requirements: r.content?.security?.requirements.map(x => x.id) ?? [] }, design: r.design ? { hash: r.design.hash, directory: r.design.directory, indexPath: r.design.indexPath, summary: r.design.proposal.summary, questions: r.design.proposal.questions } : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], stoppedWork: stopped ? { runId: stopped.id, workspace: stopped.workspace } : null, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
     }
 }
 //# sourceMappingURL=service.js.map
