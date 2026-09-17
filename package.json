@@ -32,7 +32,8 @@
     "prompts",
     "START-HERE.md",
     "roles",
-    "skills"
+    "skills",
+    "ui"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -39,6 +39,29 @@ export declare class Store {
     /** Removes one run and everything that references it. Refused while a lease or a live process exists. */
     deleteRun(id: string): void;
     documentEvent(id: string, type: string, data: Record<string, unknown>): void;
+    /** Latest sequence numbers of both event streams, so a live reader starts from "now". */
+    eventCursor(): {
+        runs: number;
+        documents: number;
+    };
+    /** Events of every run and document after a cursor, oldest first, bounded. */
+    eventsSince(cursor: {
+        runs: number;
+        documents: number;
+    }, limit?: number): {
+        cursor: {
+            runs: number;
+            documents: number;
+        };
+        events: {
+            source: 'run' | 'lifecycle';
+            id: string;
+            seq: number;
+            at: number;
+            type: string;
+            data: unknown;
+        }[];
+    };
     documentEvents(id: string): {
         seq: number;
         at: number;

@@ -39,6 +39,10 @@ Ce projet n’est **ni une sandbox OS**, **ni une plateforme multi-utilisateur**
 
 ---
 
+## Tableau de bord
+
+`apv2 ui` ouvre un tableau de bord local pour suivre les specs et l'activité des agents en direct, et agir sans quitter le navigateur. Détails et garanties de sécurité : [docs/LIFECYCLE.md](docs/LIFECYCLE.md#tableau-de-bord).
+
 ## En un coup d’œil
 
 ```text

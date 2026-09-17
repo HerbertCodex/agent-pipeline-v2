@@ -239,6 +239,23 @@ export class Store {
         }
         catch { /* Progress is non-authoritative. */ }
     }
+    /** Latest sequence numbers of both event streams, so a live reader starts from "now". */
+    eventCursor() {
+        const runs = Number(this.db.prepare('SELECT COALESCE(MAX(seq),0) AS m FROM events').get()['m']);
+        const documents = Number(this.db.prepare('SELECT COALESCE(MAX(seq),0) AS m FROM document_events').get()['m']);
+        return { runs, documents };
+    }
+    /** Events of every run and document after a cursor, oldest first, bounded. */
+    eventsSince(cursor, limit = 500) {
+        const runs = this.db.prepare('SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?').all(cursor.runs, limit)
+            .map(row => ({ source: 'run', id: String(row['run_id']), seq: Number(row['seq']), at: Number(row['at']), type: String(row['type']), data: parseJson(String(row['data'])) }));
+        const documents = this.db.prepare('SELECT * FROM document_events WHERE seq>? ORDER BY seq LIMIT ?').all(cursor.documents, limit)
+            .map(row => ({ source: 'lifecycle', id: String(row['doc_id']), seq: Number(row['seq']), at: Number(row['at']), type: String(row['type']), data: parseJson(String(row['data'])) }));
+        return {
+            cursor: { runs: runs.at(-1)?.seq ?? cursor.runs, documents: documents.at(-1)?.seq ?? cursor.documents },
+            events: [...runs, ...documents].sort((a, b) => a.at - b.at),
+        };
+    }
     documentEvents(id) {
         return this.db.prepare('SELECT * FROM document_events WHERE doc_id=? ORDER BY seq').all(id).map(row => ({
             seq: Number(row['seq']), at: Number(row['at']), type: String(row['type']), data: parseJson(String(row['data'])),

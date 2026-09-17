@@ -27,6 +27,7 @@ apv2 reject RUN_ID --note TEXT
 apv2 export RUN_ID --output FILE        Export an exact reviewed/validated patch
 apv2 recover RUN_ID --confirm-stopped   Explicit crash recovery after orphan inspection
 apv2 schemas --output DIRECTORY         Export the runtime contracts as JSON Schema
+apv2 ui [--port N]                      Local dashboard: specs, tasks, QA, designs, live activity and actions
 
 ${knowledgeHelp}
 ${lifecycleHelp}
@@ -56,7 +57,7 @@ async function main(): Promise<void> {
     hash: { type: 'string' }, agent: { type: 'string' }, name: { type: 'string' }, target: { type: 'string' },
     assist: { type: 'boolean' }, execute: { type: 'boolean' }, commit: { type: 'boolean' }, confirm: { type: 'boolean' }, approve: { type: 'boolean' }, amendment: { type: 'string' },
     'manual-qa': { type: 'boolean' }, quiet: { type: 'boolean' }, format: { type: 'string' }, active: { type: 'boolean' },
-    id: { type: 'string' }, 'older-than': { type: 'string' }, criterion: { type: 'string' }, 'for-review': { type: 'boolean' },
+    id: { type: 'string' }, 'older-than': { type: 'string' }, port: { type: 'string' }, criterion: { type: 'string' }, 'for-review': { type: 'boolean' },
     'accept-current': { type: 'boolean' },'confirm-stopped': { type: 'boolean' },help: { type: 'boolean',short: 'h' },version: { type: 'boolean' },
   } });
   const [command,id] = positionals;
@@ -68,6 +69,15 @@ async function main(): Promise<void> {
     const file = resolve(values.repo ?? '.', 'pipeline.v2.json');
     writeFileSync(file,JSON.stringify(exampleConfig,null,2)+'\n',{ flag: 'wx',mode: 0o600 });
     console.log(`Created ${file}. Adapt commands to your project, review the security model, then commit this config.`); return;
+  }
+  if (command === 'ui') {
+    const port = values.port === undefined ? 4711 : Number(values.port);
+    invariant(Number.isInteger(port) && port >= 0 && port <= 65535, 'ARGUMENT', '--port expects a TCP port');
+    const { startUi } = await import('./ui/server.js');
+    const ui = await startUi({ stateDir: resolve(values['state-dir'] ?? join(homedir(),'.local','state','agent-pipeline-v2')), port });
+    console.log(`Tableau de bord : ${ui.url}\nOuvrez cette adresse complète (elle contient le jeton d'accès, à ne pas partager). Ctrl+C pour arrêter ; les runs lancés continuent.`);
+    await new Promise<void>(done => { const stop = (): void => { void ui.close().then(done); }; process.once('SIGINT', stop); process.once('SIGTERM', stop); });
+    return;
   }
   if (command === 'schemas') {
     const dir = resolve(required(values.output,'--output')); mkdirSync(dir,{ recursive: true });
