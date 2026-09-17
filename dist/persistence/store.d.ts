@@ -72,6 +72,8 @@ export declare class Store {
     releaseDocument(id: string, token: string): void;
     startDocumentChild(id: string, pid: number): string;
     finishDocumentChild(id: string): void;
+    /** True while a controller on this host holds the document's lease: a draft, refinement or run is in progress. */
+    documentControllerAlive(id: string): boolean;
     documentProcesses(id: string): {
         pid: number;
         alive: boolean;

@@ -211,6 +211,7 @@ button { font: inherit; color: inherit; }
 .decision { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px 24px; align-items: start; padding: 16px 18px; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--signal, var(--line-strong)); border-radius: var(--radius); box-shadow: var(--shadow); }
 .decision__text { display: grid; gap: 6px; min-width: 0; }
 .decision__title { font-size: 15px; font-weight: 640; }
+.decision__work { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 0; font-size: 13.5px; }
 .decision__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .decision__cli { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
 .decision__cli { flex-wrap: wrap; }
