@@ -2,6 +2,8 @@
 
 ## Non publié
 
+- Les rôles Implementer et QA encadrent les commentaires : documentation des déclarations publiques dans la convention du langage hôte (JSDoc, Javadoc, docstrings, rustdoc…) et notes qui expliquent *pourquoi* ; jamais de preuve ni de journal en commentaire (valeurs calculées, listes de vérifications, historique, identifiants de run). La QA signale ces commentaires comme constat mineur. Constaté sur un vrai projet : un en-tête CSS de trente lignes listait des ratios de contraste calculés, non vérifiés, qui deviennent faux dès qu'une couleur change.
+
 - **La QA juge la spec effective, pas le texte stocké.** Son contexte portait `r.content`, si bien qu'une correction de critère approuvée n'atteignait jamais la QA, et qu'un amendement de périmètre approuvé était signalé comme hors périmètre. Tous les rôles reçoivent maintenant la même vue : critères corrigés, vérifications d'exigences de sécurité corrigées, chemins amendés — plus la liste des amendements approuvés avec leur motif et leur relecteur. Constaté sur le vrai projet juste après la première correction de critère : la QA citait encore l'ancien texte.
 - `apv2 spec criterion` peut corriger, dans la même approbation, les **exigences de sécurité qui vérifient ce critère** (`requirements: [{id, verification}]`) : elles portaient la même contrainte intenable. Une exigence qui ne vérifie pas le critère est refusée.
 - Une preuve de validation expirée (`STALE_EVIDENCE`) indique désormais `apv2 spec verify` comme action suivante.
