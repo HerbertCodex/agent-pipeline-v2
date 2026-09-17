@@ -2,6 +2,10 @@
 
 ## Non publié
 
+- **Adoption de preuve** (décision de l'opérateur) : pour une spec à une tâche, la validation d'intégration adopte les reçus de la tâche au lieu de rejouer les contrôles, sous conditions strictes (même commit, base, changements, voie, plan de contrôles, préparation, environnement remesuré, preuve fraîche). Les reçus adoptés sont `cached` avec `reusedFrom`, la fraîcheur n'est jamais prolongée, l'approbation humaine reste exigée. Toute différence refuse l'adoption avec sa raison et rejoue les contrôles. L'identité générale des preuves est inchangée.
+- **Aperçus de maquette** : `stylesheets` fait charger les feuilles de style globales du projet avant le CSS de la maquette, qui n'écrit plus que ses ajouts. Mêmes garanties que les ressources (suivies au commit de référence, résolues physiquement), `.css` seulement, bornées, et refus de tout texte pouvant fermer l'élément `<style>`. L'effet sur la durée de l'étape reste à mesurer sur un vrai run.
+- **`impactAdvice` moins bruyant** : un test non déclaré n'est signalé que s'il importe le fichier par un chemin relatif résolu ; chaque entrée indique sa preuve (`declared-later`, `resolved-import`). Rejoué sur deux vraies specs : 6 alertes pour 2 vraies ruptures deviennent 3 alertes gardant les 2 ; 4 fausses alertes deviennent 1.
+
 - Retire le lien symbolique `node_modules` commité par erreur (PR #22) et ignore désormais `node_modules` quel que soit son type : la règle `node_modules/` ne visait que les dossiers. Un test vérifie que le dépôt ne suit aucun lien symbolique.
 
 - `apv2 spec retry` reconstruit la tâche à partir de l'état actuel (spec effective, amendements approuvés, consigne de réparation en vigueur) au lieu de rejouer la copie figée de la tentative échouée. Constaté sur un vrai projet : après un correctif de la consigne de réparation QA, la relance a rejoué l'ancienne consigne et le correctif ne pouvait pas s'appliquer à la spec pour laquelle il avait été fait.

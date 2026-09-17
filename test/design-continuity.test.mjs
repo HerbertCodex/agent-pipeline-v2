@@ -191,3 +191,37 @@ test('prune keeps the spec holding the visual direction the next design continue
   assert.ok(!planPurge(f.life, { olderThanDays: 0 }).some(x => x.id === reference.id), 'the design reference is never proposed');
   assert.ok(!planPurge(f.life, { ids: [reference.id] }).length, 'not even when named explicitly');
 });
+
+// The design step spent most of its time re-emitting the project's existing stylesheet so each preview
+// could stand on its own. The preview now loads the project's stylesheet; the mockup writes only additions.
+test('a mockup loads the project stylesheet and writes only what it adds', async (t) => {
+  const f = fixture(t, frontend);
+  mkdirSync(join(f.repo, 'src/styles'), { recursive: true });
+  writeFileSync(join(f.repo, 'src/styles/app.css'), ':root{--ink:#14213d}.x-project-rule{color:var(--ink)}\n');
+  git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'Add the project stylesheet');
+  const w = designWorker(f.root, 'stylesheet', `
+  out.stylesheets = [{ path: 'src/styles/app.css', reason: 'Existing tokens and components.' }];
+  out.css = '.x-mockup-addition{border-color:var(--ink)}';`);
+  const doc = await f.life.draft({ repo: f.repo, config: { ...f.config, agent: w.agent, roles: w.roles }, request: REQUEST, proposal: uiSpec(REQUEST) });
+  const preview = readFileSync(doc.data.design.screenPaths[0], 'utf8');
+  const project = preview.indexOf('.x-project-rule'); const addition = preview.indexOf('.x-mockup-addition');
+  assert.ok(project > 0 && addition > project, 'the project stylesheet comes first, the mockup css after it');
+  assert.deepEqual(doc.data.design.loadedStylesheets.map(x => x.path), ['src/styles/app.css']);
+  assert.match(readFileSync(doc.data.design.indexPath, 'utf8'), /Project stylesheets loaded before the mockup css: src\/styles\/app\.css/);
+  assert.doesNotMatch(doc.data.design.proposal.css, /x-project-rule/, 'the stored proposal holds only the additions');
+});
+
+test('a project stylesheet must be tracked plain CSS that cannot break out of the style element', async (t) => {
+  for (const [name, setup, expected] of [
+    ['untracked', (repo) => { writeFileSync(join(repo, '.gitignore'), 'node_modules/\ndist/\nloose.css\n'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'ignore'); writeFileSync(join(repo, 'loose.css'), 'a{}'); }, /not a file tracked/],
+    ['not-css', (repo) => { writeFileSync(join(repo, 'theme.scss'), 'a{}'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'scss'); }, /plain \.css/],
+    ['breakout', (repo) => { writeFileSync(join(repo, 'evil.css'), 'a{}</style><script>alert(1)</script>'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'evil'); }, /close the style element/],
+  ]) {
+    const f = fixture(t, frontend);
+    setup(f.repo);
+    const path = { untracked: 'loose.css', 'not-css': 'theme.scss', breakout: 'evil.css' }[name];
+    const w = designWorker(f.root, `sheet-${name}`, `out.stylesheets = [{ path: ${JSON.stringify(path)}, reason: 'Probe.' }];`);
+    await assert.rejects(f.life.draft({ repo: f.repo, config: { ...f.config, agent: w.agent, roles: w.roles }, request: REQUEST, proposal: uiSpec(REQUEST) }),
+      error => { assert.match(error.message, expected); return true; }, `${name} must be refused`);
+  }
+});

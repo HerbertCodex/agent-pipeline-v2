@@ -65,6 +65,12 @@ export declare class Lifecycle {
     /** Files tracked at one commit: a design asset must be repository content at the reviewed commit, not whatever the working tree happens to hold. */
     private trackedPaths;
     /**
+     * Project stylesheets the preview loads before the proposal's css. Same containment as assets (tracked at
+     * the reviewed commit, physically inside the repository), plain CSS only, and never text that could close
+     * the style element and inject markup into the preview.
+     */
+    private loadDesignStylesheets;
+    /**
      * Visual direction already approved for this repository, if any. Passing it to the design role turns a
      * full re-derivation into an extension: the mockup keeps one direction across increments and only covers
      * screens the new spec creates or changes.

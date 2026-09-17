@@ -148,6 +148,7 @@ Quand une spec de ce dépôt a déjà une proposition design approuvée, le cont
 Une maquette est un document statique, jamais un programme :
 - le validateur analyse les **éléments** et leurs attributs, pas le texte affiché : une maquette peut montrer du markup échappé, un chemin ou une URL comme contenu ;
 - sont refusés les éléments qui chargent quelque chose (`script`, `iframe`, `object`, `embed`, `link`, `meta`, `base`), les attributs de gestionnaire d'événement, `src`/`srcset`, une URL exécutable et un `href`/`action` distant ;
+- `stylesheets` déclare les feuilles de style globales du projet (fichiers `.css` suivis par Git au commit de référence, 256 Kio chacune, 512 Kio au total, sans texte pouvant fermer l'élément `<style>`). L'aperçu les charge **avant** le CSS de la maquette, qui ne contient donc que ses ajouts, au lieu de reproduire la feuille existante. Leurs propres `url()` ne se chargent pas dans l'aperçu : les polices passent par `assets`. La liste est reprise par la maquette suivante et transmise à l'Implementer ;
 - `url()` n'est accepté que sous la forme `url(asset:ID)`, où `ID` est déclaré dans `assets` avec un chemin relatif au dépôt. Le contrôleur lit ce fichier (police ou image, 512 Kio par fichier, 2 Mio au total ; pas de SVG, qui est un document scriptable) et l'insère dans l'aperçu en `data:` URI. L'aperçu reste un fichier autonome, sans accès réseau, et peut donc montrer la typographie réelle du projet. La proposition stockée conserve la référence, pas les octets.
 
 ### Contexte ciblé et capacités
@@ -161,9 +162,13 @@ Product reçoit `executionCapabilities` :
 
 Une étape que l'Implementer ne peut pas exécuter (installation de dépendance, lockfile, générateur, migration) doit devenir un prérequis opérateur, pas une tâche.
 
+### Validation finale d'une spec à une tâche
+
+Quand la seule tâche a déjà passé tous les contrôles sur le commit final, la validation d'intégration **adopte** ses reçus au lieu de rejouer les contrôles (`integration.adopted`). Chaque reçu adopté est marqué `cached` avec `reusedFrom`, et le run garde la date de validation d'origine : l'adoption ne prolonge jamais la fraîcheur de la preuve. L'exigence d'approbation humaine du run d'intégration est inchangée. L'adoption exige même base, même commit, même ensemble de changements, même voie de risque, même plan de contrôles (commandes, variables, dépendances, sorties), même préparation, une identité d'environnement remesurée identique et une preuve source encore fraîche. Sinon elle est refusée avec sa raison (`integration.adoption_refused`), et les contrôles sont rejoués comme avant.
+
 ### Tests existants mal rangés
 
-Après Product, le contrôleur parcourt les tâches dans l'ordre d'exécution et liste dans `impactAdvice` les tests existants qui citent un fichier modifié par une tâche, mais qui sont rangés dans une tâche ultérieure ou dans aucune. Les contrôles rejouant toute la suite après chaque tâche, un tel test fait souvent échouer la tâche précédente et impose un amendement de périmètre. La détection est lexicale : jetons de chemin, et chemins relatifs cités (`../db`, `./index.ts`) résolus depuis le test, y compris dans un fichier que Git classe comme binaire. C'est un **avertissement pour l'opérateur, jamais un blocage** : il peut signaler des tests que le changement ne cassera pas.
+Après Product, le contrôleur parcourt les tâches dans l'ordre d'exécution et liste dans `impactAdvice` les tests existants qui citent un fichier modifié par une tâche, mais qui sont rangés dans une tâche ultérieure ou dans aucune. Les contrôles rejouant toute la suite après chaque tâche, un tel test fait souvent échouer la tâche précédente et impose un amendement de périmètre. La détection est lexicale : jetons de chemin, et chemins relatifs cités (`../db`, `./index.ts`) résolus depuis le test, y compris dans un fichier que Git classe comme binaire. Chaque entrée indique sa preuve : `declared-later` quand une tâche ultérieure déclare le test (Product a dit qu'il change, seul l'ordre est en cause), `resolved-import` quand aucune tâche ne le déclare mais qu'il importe le fichier par un chemin relatif résolu. Un simple fragment de chemin, qui peut n'être qu'un alias, ne suffit plus pour un test non déclaré. C'est un **avertissement pour l'opérateur, jamais un blocage** : il peut encore signaler des tests que le changement ne cassera pas.
 
 ### Corriger un critère devenu intenable
 

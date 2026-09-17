@@ -210,6 +210,10 @@ export declare const designProposalSchema: import("../domain/schema.js").Schema<
         readonly path: string;
         readonly reason: string;
     }[];
+    readonly stylesheets: {
+        readonly path: string;
+        readonly reason: string;
+    }[];
     readonly questions: {
         readonly id: string;
         readonly question: string;
@@ -232,6 +236,11 @@ export interface DesignRecord {
     /** Repository files inlined into the previews as data: URIs. */
     inlinedAssets?: {
         id: string;
+        path: string;
+        bytes: number;
+    }[];
+    /** Repository stylesheets loaded by the previews before the proposal's own css. */
+    loadedStylesheets?: {
         path: string;
         bytes: number;
     }[];
