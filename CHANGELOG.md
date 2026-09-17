@@ -2,6 +2,8 @@
 
 ## Non publié
 
+- Tests : les faux fournisseurs transmettent la requête à leur sous-processus par un fichier temporaire (`test/support/run-worker.cjs`) au lieu de `spawnSync({ input })`. Sur macOS / Node 22.16, ce sous-processus ne voyait parfois jamais la fin de son entrée et restait bloqué, ce qui faisait échouer ou annuler la CI de `main` depuis plusieurs fusions. Le blocage a été localisé grâce à l'instrumentation de la #17 : entrée du faux fournisseur lue, sous-processus lancé, puis `spawnSync … ETIMEDOUT`. Le framework lui-même n'utilise aucun lancement synchrone de processus.
+
 - Les rôles Implementer et QA encadrent les commentaires : documentation des déclarations publiques dans la convention du langage hôte (JSDoc, Javadoc, docstrings, rustdoc…) et notes qui expliquent *pourquoi* ; jamais de preuve ni de journal en commentaire (valeurs calculées, listes de vérifications, historique, identifiants de run). La QA signale ces commentaires comme constat mineur. Constaté sur un vrai projet : un en-tête CSS de trente lignes listait des ratios de contraste calculés, non vérifiés, qui deviennent faux dès qu'une couleur change.
 
 - **La QA juge la spec effective, pas le texte stocké.** Son contexte portait `r.content`, si bien qu'une correction de critère approuvée n'atteignait jamais la QA, et qu'un amendement de périmètre approuvé était signalé comme hors périmètre. Tous les rôles reçoivent maintenant la même vue : critères corrigés, vérifications d'exigences de sécurité corrigées, chemins amendés — plus la liste des amendements approuvés avec leur motif et leur relecteur. Constaté sur le vrai projet juste après la première correction de critère : la QA citait encore l'ancien texte.

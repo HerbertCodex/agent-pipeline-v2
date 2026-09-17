@@ -16,16 +16,18 @@ import { planLedgerUpdate, applyLedgerUpdate } from '../dist/lifecycle/ledger-up
 import { planGarbage, collectGarbage } from '../dist/lifecycle/maintenance.js';
 import { validateConfig } from '../dist/domain/contracts.js';
 
+const RUN_WORKER = new URL('./support/run-worker.cjs', import.meta.url).pathname;
 const exampleWorker = fileURLToPath(new URL('../examples/lifecycle-worker.mjs', import.meta.url));
 const readLog = (path) => existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
 
 function flakyWorker(root, { corruptProduct = true, corruptDesign = true, corruptQa = true } = {}) {
   const path = join(root, 'flaky-worker.mjs'); const log = join(root, 'flaky.log');
   writeFileSync(path, `import { readFileSync, appendFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+const { runWorker } = createRequire(import.meta.url)(${JSON.stringify(RUN_WORKER)});
 const input = readFileSync(0, 'utf8'); const req = JSON.parse(input);
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ role: req.role ?? req.protocol, mode: req.context?.mode ?? null, repair: req.repair?.previousError?.code ?? null, capabilities: Boolean(req.context?.executionCapabilities), design: req.task ? (req.task.description.match(/"scope":"(none|task|all)"/)?.[1] ?? null) : undefined, task: req.task?.id }) + '\\n');
-const r = spawnSync(process.execPath, [${JSON.stringify(exampleWorker)}], { input, encoding: 'utf8' });
+const r = runWorker(${JSON.stringify(exampleWorker)}, input);
 if (r.status !== 0) { process.stderr.write(r.stderr); process.exit(r.status ?? 1); }
 if (req.protocol === 'agent-pipeline/v2') { process.stdout.write(r.stdout); process.exit(0); }
 const out = JSON.parse(r.stdout);
