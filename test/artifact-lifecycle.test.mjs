@@ -139,6 +139,7 @@ test('the next action of a blocked spec lifts its blocker instead of repeating i
   assert.match(blocked({ code: 'CANCELLED', message: 'Spec execution cancelled' }), /spec recover .* --confirm-stopped/);
   assert.match(blocked({ code: 'QA_REJECTED', message: 'QA requests changes; automatic repair budget exhausted.' }), /follow-up spec/);
   assert.match(blocked({ code: 'NO_CHANGE', message: 'Agent produced no effective change' }), /changed nothing.*spec retry .* --confirm/);
+  assert.match(blocked({ code: 'GATES_FAILED', message: 'Required checks failed; diagnostics and the candidate are retained' }), /spec retry .* --confirm/);
   assert.match(blocked({ code: 'STALE_EVIDENCE', message: 'Validation expired; revalidate before approval/export' }), /spec verify /);
   assert.match(blocked({ code: 'GATE', message: 'unit failed' }), /Resolve GATE before running again/);
 });
@@ -456,4 +457,40 @@ process.stdout.write(r.stdout);
   assert.match(replacement.task.description, /explicit scope amendment/);
   assert.match(replacement.task.description, /"taskSummaries"/);
   assert.equal(d.data.attempts.at(-1).kind, 'qa-repair');
+});
+
+// Observed on a real spec: a task stopped on GATES_FAILED after its repair (a type error in a test it wrote),
+// and `spec retry` would have started a fresh attempt from the approved base without that diagnostic.
+test('a retried task is told which checks failed and why', async (t) => {
+  const f = lifecycleFixture(t);
+  const worker = join(f.root, 'failing-worker.mjs');
+  writeFileSync(worker, `import { readFileSync, writeFileSync } from 'node:fs';
+const req = JSON.parse(readFileSync(0, 'utf8'));
+if (req.protocol === 'agent-pipeline/v2') {
+  // A different wrong result each time, so that the repair is a real change that still fails.
+  writeFileSync('src/math.mjs', 'export const add = (a, b) => a + b;\\nexport const multiply = (a, b) => a * b + ' + (1 + Math.floor(Math.random() * 1e9)) + ';\\n');
+  writeFileSync('test/math.test.mjs', "import {test} from 'node:test';import assert from 'node:assert/strict';import {add,multiply} from '../src/math.mjs';test('addition',()=>assert.equal(add(2,3),5));test('positive multiplication',()=>assert.equal(multiply(2,3),6));\\n");
+  console.log(JSON.stringify({ summary: 'Multiplication written; the tests were not run here.' }));
+} else {
+  const { runWorker } = (await import('node:module')).createRequire(import.meta.url)(${JSON.stringify(RUN_WORKER)});
+  const r = runWorker(${JSON.stringify(new URL('../examples/lifecycle-worker.mjs', import.meta.url).pathname)}, JSON.stringify(req));
+  process.stdout.write(r.stdout); process.exit(r.status ?? 1);
+}
+`);
+  const config = { ...f.config, agent: { type: 'command', command: [process.execPath, worker] } };
+  let d = await f.life.draft({ repo: f.repo, config, request: 'Implement the approved arithmetic example.' });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+  d = await f.life.run(d.id);
+  assert.equal(d.data.error?.code, 'GATES_FAILED', JSON.stringify(d.data.error));
+  const failedRun = f.life.pipeline.store.get(d.data.activeRunId);
+  const failedGate = failedRun.receipts.find(x => x.status === 'failed');
+  assert.ok(failedGate, 'the failed attempt kept its failing receipt');
+
+  d = await f.life.retry(d.id, true);
+  const replacement = f.life.pipeline.store.get(d.data.activeRunId);
+  assert.notEqual(replacement.id, failedRun.id);
+  assert.match(replacement.task.description, /previous attempt of this task failed/);
+  assert.match(replacement.task.description, /"code":"GATES_FAILED"/);
+  assert.ok(replacement.task.description.includes(JSON.stringify(failedGate.gateId)), 'the failing check is named');
+  assert.match(replacement.task.description, /tests were not run here/, 'the previous summary is included');
 });

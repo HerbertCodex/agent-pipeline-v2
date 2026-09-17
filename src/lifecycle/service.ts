@@ -30,6 +30,8 @@ const MAX_STYLESHEET_BYTES = 256 * 1024;
 const MAX_STYLESHEET_TOTAL_BYTES = 512 * 1024;
 /** Characters of approved mockup (markup plus stylesheet) a task may carry before it degrades to a reference. */
 const DESIGN_CONTEXT_BUDGET = 60000;
+/** Share of a failed check's diagnostic handed to the retried attempt; diagnostics are already failure-centred. */
+const PREVIOUS_DIAGNOSTIC_CHARS = 6000;
 /** Everything the review workspace owns. The design bundle lives beside it and must survive its rebuilds. */
 const REVIEW_ENTRIES = ['candidate', 'candidate.patch', 'QA.md', 'REVIEW.md', 'INVENTORY.md'];
 /**
@@ -520,6 +522,20 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         const allowedPaths=[...new Set([...t.allowedPaths, ...amendments])];
         const allowedNewPaths=this.companionPaths(allowedPaths);
         return taskSchema.parse({ id: t.id, title: t.title, description, acceptance: acceptance.map(a => a.description), allowedPaths, allowedNewPaths, maxNewFiles: allowedNewPaths.length ? 4 : 0, reviewRequired:false, minimumLane: stricter(t.minimumLane, spec.minimumLane, securityRequirements.length ? r.securityContext.minimumLane : 'fast') });
+    }
+    /**
+     * The retried task, told why the previous attempt stopped: its error, the diagnostics of the checks it
+     * failed and its own summary. The new attempt starts from the approved base, so without this it would
+     * repeat a failure it cannot see. The context is trimmed to fit `limits.maxTaskContextChars`.
+     */
+    private withPreviousAttempt(r: SpecRecord, task: Task, failed: Run): Task {
+        const failing = failed.receipts.filter(x => x.status === 'failed').map(x => ({ gateId: x.gateId, diagnostic: x.diagnostic.slice(0, PREVIOUS_DIAGNOSTIC_CHARS) }));
+        const previous = { error: failed.error, failedChecks: failing, summary: (failed.summary ?? '').slice(0, 2000) };
+        const header = '\n\nThe previous attempt of this task failed and its code was not kept: this attempt starts again from the approved base. Avoid the same failure; in particular the listed checks must pass.\n';
+        const room = (r.config.limits?.maxTaskContextChars ?? DEFAULT_LIMITS.maxTaskContextChars) - task.description.length - header.length;
+        const context = JSON.stringify(previous);
+        if (room <= 0) return task;
+        return taskSchema.parse({ ...task, description: task.description + header + (context.length <= room ? context : context.slice(0, room)) });
     }
     /** The repair task for the current QA report, built from the current effective spec and amendments. */
     private qaRepairTask(r: SpecRecord): Task {
@@ -1055,7 +1071,8 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                 // Rebuild the task from the current state: a frozen copy would ignore amendments, criterion
                 // corrections and repair guidance approved or released since the failed attempt was created.
                 const specTask = this.approved(r).tasks.find(t => t.id === attempt.taskId);
-                const task = attempt.kind === 'qa-repair' && r.qa ? this.qaRepairTask(r) : specTask ? this.makeTask(r, specTask) : failed.task;
+                const rebuilt = attempt.kind === 'qa-repair' && r.qa ? this.qaRepairTask(r) : specTask ? this.makeTask(r, specTask) : null;
+                const task = rebuilt ? this.withPreviousAttempt(r, rebuilt, failed) : failed.task;
                 const replacement = await this.pipeline.create({ repo: r.repo, baseRef: failed.baseSha, config: failed.config, task });
                 r.attempts.push({ ...attempt, runId: replacement.id });
                 r.activeRunId = replacement.id;
@@ -1225,7 +1242,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             next = `Read the QA findings above, then create a follow-up spec: the automatic repair budget is spent (apv2 spec draft --repo ${r.repo} --request "...").`;
         else if (r.error?.code === 'CANCELLED' || r.error?.code === 'LOCKED')
             next = `apv2 spec recover ${doc.id} --confirm-stopped   (only after checking no controller or agent process is still alive)`;
-        else if (r.error?.code === 'TASK_FAILED' || r.error?.code === 'REPAIR_NO_CHANGE')
+        else if (r.error?.code === 'TASK_FAILED' || r.error?.code === 'REPAIR_NO_CHANGE' || r.error?.code === 'GATES_FAILED')
             next = `apv2 spec retry ${doc.id} --confirm   (authorizes exactly one new attempt of the failed task)`;
         else if (r.error?.code === 'NO_CHANGE') {
             const last = [...r.attempts].reverse().find(a => a.kind === 'qa-repair' || a.kind === 'task');

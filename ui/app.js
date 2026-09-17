@@ -331,7 +331,7 @@ function decision(d) {
   if (s.status === 'awaiting_review' || code === 'MERGED_BEFORE_REVIEW') primary.push(btn('Enregistrer ma revue', () => reviewDialog(d), 'btn btn--primary'));
   if (d.approval && ['approved', 'running', 'blocked'].includes(s.status) && !['SCOPE_AMENDMENT_REQUIRED', 'QA_REJECTED', 'MERGED_BEFORE_REVIEW'].includes(code))
     (primary.length ? secondary : primary).push(btn(s.status === 'blocked' ? 'Reprendre l\'exécution' : 'Lancer l\'exécution', () => job(`/api/specs/${s.id}/run`, 'Exécution lancée'), primary.length ? 'btn' : 'btn btn--primary', d.busy));
-  if (s.status === 'blocked' && ['NO_CHANGE', 'TASK_FAILED', 'REPAIR_NO_CHANGE', 'AGENT', 'EXECUTION'].includes(code))
+  if (s.status === 'blocked' && ['NO_CHANGE', 'TASK_FAILED', 'REPAIR_NO_CHANGE', 'GATES_FAILED', 'AGENT', 'EXECUTION'].includes(code))
     secondary.push(btn('Autoriser une nouvelle tentative', () => confirmDialog('Autoriser une nouvelle tentative', 'La tâche échouée est reconstruite à partir de l\'état actuel, puis relancée à la prochaine exécution.', () => api(`/api/specs/${s.id}/retry`, { body: { confirm: true } }), 'Nouvelle tentative autorisée')));
   if (d.approval && (code === 'STALE_EVIDENCE' || ['awaiting_review', 'ready'].includes(s.status))) secondary.push(btn('Revalider', () => job(`/api/specs/${s.id}/verify`, 'Revalidation lancée'), 'btn', d.busy));
   if (s.publication && s.publication.url && !TERMINAL.has(s.status)) secondary.push(btn('Synchroniser avec la PR', () => job(`/api/specs/${s.id}/sync`, 'Synchronisation lancée'), 'btn', d.busy));
