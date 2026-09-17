@@ -106,11 +106,32 @@ export class Lifecycle {
         // The stored content keeps exactly what the operator approved; corrections are applied on the way
         // out, each carrying its own approval, so the original text stays auditable.
         const corrections = (r.criterionAmendments ?? []).filter(a => a.status === 'approved');
-        if (!corrections.length) return spec;
-        return { ...spec, acceptance: spec.acceptance.map(c => {
-            const fix = [...corrections].reverse().find(a => a.criterionId === c.id);
-            return fix ? { ...c, description: fix.description, verification: fix.verification } : c;
-        }) };
+        const scopes = r.scopeAmendments.filter(a => a.status === 'approved');
+        if (!corrections.length && !scopes.length) return spec;
+        const latest = [...corrections].reverse();
+        return { ...spec,
+            acceptance: spec.acceptance.map(c => {
+                const fix = latest.find(a => a.criterionId === c.id);
+                return fix ? { ...c, description: fix.description, verification: fix.verification } : c;
+            }),
+            // Every role must see the paths the operator added, not only the Implementer: QA otherwise
+            // reports an approved amendment as an out-of-scope change.
+            tasks: spec.tasks.map(t => {
+                const added = scopes.filter(a => a.taskId === t.id).flatMap(a => a.paths);
+                return added.length ? { ...t, allowedPaths: [...new Set([...t.allowedPaths, ...added])] } : t;
+            }),
+            security: { ...spec.security, requirements: spec.security.requirements.map(q => {
+                const fix = latest.flatMap(a => a.requirements ?? []).find(x => x.id === q.id);
+                return fix ? { ...q, verification: fix.verification } : q;
+            }) },
+        };
+    }
+    /** Operator decisions made after approval, shown to QA with their reasons: they postdate the spec text. */
+    private approvedAmendments(r: SpecRecord) {
+        return {
+            criteria: (r.criterionAmendments ?? []).filter(a => a.status === 'approved').map(a => ({ criterionId: a.criterionId, previous: a.previous, description: a.description, verification: a.verification, requirements: a.requirements ?? [], reason: a.reason, reviewer: a.reviewer, note: a.note })),
+            scope: r.scopeAmendments.filter(a => a.status === 'approved').map(a => ({ taskId: a.taskId, paths: a.paths, reason: a.reason, reviewer: a.reviewer, note: a.note })),
+        };
     }
     async draft(options: {
         repo: string;
@@ -470,7 +491,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         this.save(doc, 'workflow.blocked', { runId: run.id, error: doc.data.error });
     }
     /** Records a proposed correction of one acceptance criterion and returns its hash for explicit approval. */
-    planCriterionAmendment(id: string, criterionId: string, correction: { description: string; verification: string; reason: string }): Document<SpecRecord> {
+    planCriterionAmendment(id: string, criterionId: string, correction: { description: string; verification: string; reason: string; requirements?: { id: string; verification: string }[] }): Document<SpecRecord> {
         const token = this.store.acquireDocument(id);
         try {
             const doc = this.get(id); const r = doc.data;
@@ -482,13 +503,24 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             const description = correction.description.trim(); const verification = correction.verification.trim();
             invariant(description.length >= 10 && description.length <= 3000 && verification.length >= 10 && verification.length <= 3000, 'CRITERION_AMENDMENT', 'A corrected criterion needs an observable description and verification');
             invariant(correction.reason.trim().length >= 20, 'CRITERION_AMENDMENT', 'Explain why the approved criterion cannot hold');
-            invariant(description !== criterion.description || verification !== criterion.verification, 'CRITERION_AMENDMENT', 'The correction is identical to the approved criterion');
+            const requirements = (correction.requirements ?? []).map(x => {
+                const requirement = spec.security.requirements.find(q => q.id === x.id);
+                invariant(requirement, 'CRITERION_AMENDMENT', `Unknown security requirement ${x.id}`);
+                // Only a requirement that verifies this criterion may be corrected with it.
+                invariant(requirement.acceptanceIds.includes(criterionId), 'CRITERION_AMENDMENT', `Security requirement ${x.id} does not verify ${criterionId}`);
+                const text = x.verification.trim();
+                invariant(text.length >= 10 && text.length <= 4000, 'CRITERION_AMENDMENT', `A corrected verification for ${x.id} must be observable`);
+                return { id: x.id, previous: requirement.verification, verification: text };
+            });
+            invariant(new Set(requirements.map(x => x.id)).size === requirements.length, 'CRITERION_AMENDMENT', 'A security requirement is corrected at most once per amendment');
+            const changed = description !== criterion.description || verification !== criterion.verification || requirements.some(x => x.verification !== x.previous);
+            invariant(changed, 'CRITERION_AMENDMENT', 'The correction is identical to the approved criterion');
             const previous = { description: criterion.description, verification: criterion.verification };
-            const amendment: CriterionAmendment = { id: randomUUID(), criterionId, previous, description, verification, reason: correction.reason.trim(),
-                hash: criterionAmendmentHash({ criterionId, previous, description, verification, reason: correction.reason.trim() }),
+            const amendment: CriterionAmendment = { id: randomUUID(), criterionId, previous, description, verification, requirements, reason: correction.reason.trim(),
+                hash: criterionAmendmentHash({ criterionId, previous, description, verification, requirements, reason: correction.reason.trim() }),
                 status: 'pending', at: Date.now(), approvedAt: null, reviewer: null, note: null };
             r.criterionAmendments = [...(r.criterionAmendments ?? []).filter(a => !(a.status === 'pending' && a.criterionId === criterionId)), amendment];
-            this.save(doc, 'criterion.amendment_proposed', { amendmentId: amendment.id, criterionId, hash: amendment.hash, previous, description, verification, reason: amendment.reason });
+            this.save(doc, 'criterion.amendment_proposed', { amendmentId: amendment.id, criterionId, hash: amendment.hash, previous, description, verification, requirements, reason: amendment.reason });
             return doc;
         } finally { this.store.releaseDocument(id, token); }
     }
@@ -663,7 +695,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                     invariant(Buffer.byteLength(diff) <= maxDiff, 'QA_CONTEXT', `QA diff exceeds limits.maxQaDiffBytes (${maxDiff}); use an explicit external review, never a truncated review`);
                     const inventoryDelta = await this.inventoryDelta(r, final.candidateSha!, signal);
                     this.save(doc, 'qa.inventory_delta', { added: inventoryDelta.added.length, removed: inventoryDelta.removed.length, possibleDuplicates: inventoryDelta.possibleDuplicates });
-                    const raw = await runRole({ store: this.store, documentId: id, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, agent: r.config.roles.qa ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: qaSchema, context: { diff, spec: r.content, decisionLedger: r.decisionLedger, securityContext:r.securityContext, approvedDesign: this.qaDesignContext(r), baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] }, signal,
+                    const raw = await runRole({ store: this.store, documentId: id, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, agent: r.config.roles.qa ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: qaSchema, context: { diff, spec, approvedAmendments: this.approvedAmendments(r), decisionLedger: r.decisionLedger, securityContext:r.securityContext, approvedDesign: this.qaDesignContext(r), baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] }, signal,
                         maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: report => validateQa(report, spec, final.candidateSha!, r.decisionLedger) });
                     r.qa = { report: raw, specHash: r.contentHash!, evidenceHash, at: Date.now(), source: 'agent' };
                     this.save(doc, 'qa.completed', { qa: r.qa });
@@ -1081,6 +1113,8 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             next = `apv2 spec recover ${doc.id} --confirm-stopped   (only after checking no controller or agent process is still alive)`;
         else if (r.error?.code === 'TASK_FAILED' || r.error?.code === 'REPAIR_NO_CHANGE')
             next = `apv2 spec retry ${doc.id} --confirm   (authorizes exactly one new attempt of the failed task)`;
+        else if (r.error?.code === 'STALE_EVIDENCE')
+            next = `apv2 spec verify ${doc.id}   (replays the gates on the same candidate; then apv2 spec run ${doc.id})`;
         else if (r.status === 'blocked' && r.error)
             next = `Resolve ${r.error.code} before running again: ${r.error.message.slice(0, 200)}`;
         else

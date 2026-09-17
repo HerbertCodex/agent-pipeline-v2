@@ -288,6 +288,8 @@ export interface CriterionAmendment {
     previous: { description: string; verification: string };
     description: string;
     verification: string;
+    /** Security requirements linked to this criterion that carried the same unsatisfiable constraint. */
+    requirements?: { id: string; previous: string; verification: string }[];
     reason: string;
     hash: string;
     status: 'pending' | 'approved';
@@ -296,8 +298,8 @@ export interface CriterionAmendment {
     reviewer: string | null;
     note: string | null;
 }
-export function criterionAmendmentHash(a: Pick<CriterionAmendment, 'criterionId' | 'previous' | 'description' | 'verification' | 'reason'>): string {
-    return hash({ criterionId: a.criterionId, previous: a.previous, description: a.description, verification: a.verification, reason: a.reason });
+export function criterionAmendmentHash(a: Pick<CriterionAmendment, 'criterionId' | 'previous' | 'description' | 'verification' | 'reason' | 'requirements'>): string {
+    return hash({ criterionId: a.criterionId, previous: a.previous, description: a.description, verification: a.verification, reason: a.reason, requirements: a.requirements ?? [] });
 }
 export interface ReviewWorkspace {
     directory: string;

@@ -30,6 +30,8 @@ export declare class Lifecycle {
     get(id: string): Document<SpecRecord>;
     private save;
     private approved;
+    /** Operator decisions made after approval, shown to QA with their reasons: they postdate the spec text. */
+    private approvedAmendments;
     draft(options: {
         repo: string;
         config: unknown;
@@ -74,6 +76,10 @@ export declare class Lifecycle {
         description: string;
         verification: string;
         reason: string;
+        requirements?: {
+            id: string;
+            verification: string;
+        }[];
     }): Document<SpecRecord>;
     /** Applies a criterion correction the operator approved by its exact hash, and reopens assessment. */
     approveCriterionAmendment(id: string, amendmentId: string, expectedHash: string, actor: string, note: string): Document<SpecRecord>;
