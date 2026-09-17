@@ -570,3 +570,76 @@ process.stdout.write(r.stdout); process.exit(r.status ?? 1);
   assert.notEqual(replacement.id, stopped.id, 'the salvageable attempt is discarded for a fresh one');
   assert.match(replacement.task.description, /previous attempt of this task failed/);
 });
+
+// Observed on a real spec: one repair fixed the tests, the next check found a type error, and the single
+// allowed repair was already spent. More attempts only help if a repair that goes in circles stops early.
+test('repairs continue while they change the diagnostics and stop as soon as they do not', async (t) => {
+  const f = lifecycleFixture(t);
+  const worker = join(f.root, 'stuck-worker.mjs');
+  const counter = join(f.root, 'attempts.txt');
+  writeFileSync(worker, `import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+const req = JSON.parse(readFileSync(0, 'utf8'));
+if (req.protocol === 'agent-pipeline/v2') {
+  const n = (existsSync(${JSON.stringify(counter)}) ? Number(readFileSync(${JSON.stringify(counter)}, 'utf8')) : 0) + 1;
+  writeFileSync(${JSON.stringify(counter)}, String(n));
+  // A real change every time, always wrong in exactly the same way: the checks reproach the same thing.
+  writeFileSync('src/math.mjs', '// attempt ' + n + '\\nexport const add = (a, b) => a + b;\\nexport const multiply = (a, b) => a * b + 1;\\n');
+  writeFileSync('test/math.test.mjs', "import {test} from 'node:test';import assert from 'node:assert/strict';import {add,multiply} from '../src/math.mjs';test('addition',()=>assert.equal(add(2,3),5));test('positive multiplication',()=>assert.equal(multiply(2,3),6));\\n");
+  console.log(JSON.stringify({ summary: 'Multiplication written; the runner executes the checks.' }));
+} else {
+  const { runWorker } = (await import('node:module')).createRequire(import.meta.url)(${JSON.stringify(RUN_WORKER)});
+  const r = runWorker(${JSON.stringify(new URL('../examples/lifecycle-worker.mjs', import.meta.url).pathname)}, JSON.stringify(req));
+  process.stdout.write(r.stdout); process.exit(r.status ?? 1);
+}
+`);
+  const config = { ...f.config, maxRepairAttempts: 4, agent: { type: 'command', command: [process.execPath, worker] } };
+  let d = await f.life.draft({ repo: f.repo, config, request: 'Implement the approved arithmetic example.' });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+  d = await f.life.run(d.id);
+
+  assert.equal(d.data.error?.code, 'REPAIR_NO_PROGRESS', JSON.stringify(d.data.error));
+  const run = f.life.pipeline.store.get(d.data.activeRunId);
+  assert.equal(run.metrics.repairAttempts, 1, 'the three remaining repairs are not spent on the same failure');
+  assert.equal(Number(readFileSync(counter, 'utf8')), 2, 'the agent was called twice: the first write and one repair');
+  assert.match(f.life.summary(f.life.get(d.id)).nextAction, /spec retry .* --confirm/);
+});
+
+test('a repair that changes the failure keeps its remaining attempts', async (t) => {
+  const f = lifecycleFixture(t);
+  const worker = join(f.root, 'improving-worker.mjs');
+  const counter = join(f.root, 'improving.txt');
+  writeFileSync(worker, `import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+const req = JSON.parse(readFileSync(0, 'utf8'));
+if (req.protocol === 'agent-pipeline/v2' && req.task.id === 'MATH') {
+  const n = (existsSync(${JSON.stringify(counter)}) ? Number(readFileSync(${JSON.stringify(counter)}, 'utf8')) : 0) + 1;
+  writeFileSync(${JSON.stringify(counter)}, String(n));
+  // Wrong, then wrong differently, then right: each repair changes what the checks reproach.
+  const body = n === 1 ? 'a * b + 1' : n === 2 ? 'a + b' : 'a * b';
+  writeFileSync('src/math.mjs', 'export const add = (a, b) => a + b;\\nexport const multiply = (a, b) => ' + body + ';\\n');
+  writeFileSync('test/math.test.mjs', "import {test} from 'node:test';import assert from 'node:assert/strict';import {add,multiply} from '../src/math.mjs';test('addition',()=>assert.equal(add(2,3),5));test('positive multiplication',()=>assert.equal(multiply(2,3),6));\\n");
+  console.log(JSON.stringify({ summary: 'Multiplication written; the runner executes the checks.' }));
+} else {
+  const { runWorker } = (await import('node:module')).createRequire(import.meta.url)(${JSON.stringify(RUN_WORKER)});
+  const r = runWorker(${JSON.stringify(new URL('../examples/lifecycle-worker.mjs', import.meta.url).pathname)}, JSON.stringify(req));
+  process.stdout.write(r.stdout); process.exit(r.status ?? 1);
+}
+`);
+  const config = { ...f.config, maxRepairAttempts: 4, agent: { type: 'command', command: [process.execPath, worker] } };
+  let d = await f.life.draft({ repo: f.repo, config, request: 'Implement the approved arithmetic example.' });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+  d = await f.life.run(d.id);
+
+  assert.equal(d.data.error, null, JSON.stringify(d.data.error));
+  assert.ok(d.data.completedTaskIds.includes('MATH'), 'two successive repairs were allowed because each changed the failure');
+  const run = f.life.pipeline.store.get(d.data.attempts[0].runId);
+  assert.equal(run.metrics.repairAttempts, 2);
+});
+
+test('the failure fingerprint ignores what changes at every execution', async () => {
+  const { failureFingerprint } = await import('../dist/engine/diagnostic.js');
+  const first = 'not ok 2 - positive multiplication\n  duration_ms 45.524371\n  at 2026-09-17T14:32:05.123Z pid 3821 sha 4829687a\nexpected 6, actual 7';
+  const second = 'not ok 2 - positive multiplication\n  duration_ms 51.543289\n  at 2026-09-17T16:02:11.900Z pid 9137 sha d85f542c\nexpected 6, actual 7';
+  const third = 'not ok 2 - positive multiplication\n  duration_ms 47.100000\n  at 2026-09-17T16:02:11.900Z pid 9137 sha d85f542c\nexpected 6, actual 8';
+  assert.equal(failureFingerprint(first), failureFingerprint(second), 'the same failure twice');
+  assert.notEqual(failureFingerprint(first), failureFingerprint(third), 'a different reproach stays different');
+});

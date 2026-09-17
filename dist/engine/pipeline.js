@@ -1,6 +1,6 @@
 import { guidanceAudit } from '../knowledge/catalog.js';
 import { inspectRepository } from '../knowledge/repository.js';
-import { failureExcerpt, MAX_DIAGNOSTIC_CHARS } from './diagnostic.js';
+import { failureExcerpt, MAX_DIAGNOSTIC_CHARS, failureFingerprint } from './diagnostic.js';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -296,6 +296,8 @@ export class Pipeline {
             await this.implement(run, git, signal, hooks, []);
         }
         invariant(run.state === 'candidate' || run.state === 'validating', 'STATE', `Unexpected executable state ${run.state}`);
+        // What the checks reproached, to tell a repair that fixed something from one that is going in circles.
+        let previousFailures = null;
         for (;;) {
             invariant(!signal.aborted, 'CANCELLED', 'Execution cancelled before validation');
             const passed = await this.validate(run, git, signal, hooks);
@@ -303,6 +305,12 @@ export class Pipeline {
                 return;
             const repairable = run.receipts.some(r => r.status === 'failed') &&
                 run.receipts.every(r => ['passed', 'cached', 'failed', 'blocked', 'cancelled'].includes(r.status));
+            const failureSignature = hash(run.receipts.filter(r => r.status === 'failed').map(r => ({ gateId: r.gateId, reproach: failureFingerprint(r.diagnostic) })));
+            if (previousFailures === failureSignature) {
+                this.store.save(run, 'agent.repair_no_progress', { number: run.metrics.repairAttempts });
+                throw new PipelineError('REPAIR_NO_PROGRESS', 'The repair changed the candidate but the checks fail exactly as before; the remaining repair attempts are not spent. Read the diagnostics: the fix may need a file outside the task scope or information the agent does not have.');
+            }
+            previousFailures = failureSignature;
             if (revalidate || !repairable || run.metrics.repairAttempts >= run.config.maxRepairAttempts) {
                 throw new PipelineError('GATES_FAILED', 'Required checks failed; diagnostics and the candidate are retained');
             }

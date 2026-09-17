@@ -6,3 +6,10 @@ export declare const MAX_DIAGNOSTIC_CHARS = 16000;
  * keep only passing-test noise and the summary, hiding which tests failed and why.
  */
 export declare function failureExcerpt(status: string, stderr: string, stdout: string, limit?: number): string;
+/**
+ * What a failing check reproached, without what changes at every execution: durations, timestamps, process
+ * ids and commit-like hexadecimal words. Two runs of the same failing check then produce the same text, so a
+ * repair that fixed nothing can be told from one that changed the failure. This is a comparison heuristic,
+ * never displayed and never a proof.
+ */
+export declare function failureFingerprint(text: string): string;

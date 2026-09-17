@@ -34,6 +34,8 @@ node dist/cli.js schemas --output examples/schemas
 }
 ```
 
+`maxRepairAttempts` (0 à 5, 1 par défaut) borne les passes de réparation d'une tentative après des contrôles rouges. La boucle s'arrête d'elle-même avant ce plafond dans deux cas : une réparation qui ne change rien (`REPAIR_NO_CHANGE`) et une réparation qui laisse les contrôles échouer exactement comme avant (`REPAIR_NO_PROGRESS`). Relever ce plafond laisse donc plus de place à une correction qui avance, sans payer des passes qui tournent en rond.
+
 Le worktree est neuf : un projet dont les tests nécessitent des dépendances doit déclarer un `setup` adapté. L'exemple minimal n'en installe pas implicitement. Ne pas remplacer un vrai contrôle par `true` pour obtenir un résultat vert.
 
 ## Commandes et environnement
