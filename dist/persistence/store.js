@@ -144,7 +144,13 @@ export class Store {
         this.event(runId, 'process.started', { processId: id, pid });
         return id;
     }
-    finishChild(id) { this.db.prepare('UPDATE children SET active=0 WHERE id=?').run(id); }
+    finishChild(id) {
+        this.db.prepare('UPDATE children SET active=0 WHERE id=?').run(id);
+        // Paired with process.started, so a stalled command is visible in the timeline instead of inferred.
+        const row = this.db.prepare('SELECT run_id,pid FROM children WHERE id=?').get(id);
+        if (row)
+            this.event(String(row['run_id']), 'process.finished', { processId: id, pid: Number(row['pid']) });
+    }
     activeProcesses(id) {
         return this.db.prepare('SELECT pid FROM children WHERE run_id=? AND active=1').all(id)
             .map(row => ({ pid: Number(row['pid']), alive: processAlive(Number(row['pid'])) }));
@@ -255,7 +261,12 @@ export class Store {
         this.documentEvent(id, 'process.started', { pid, child });
         return child;
     }
-    finishDocumentChild(id) { this.db.prepare('UPDATE document_children SET active=0 WHERE id=?').run(id); }
+    finishDocumentChild(id) {
+        this.db.prepare('UPDATE document_children SET active=0 WHERE id=?').run(id);
+        const row = this.db.prepare('SELECT doc_id,pid FROM document_children WHERE id=?').get(id);
+        if (row)
+            this.documentEvent(String(row['doc_id']), 'process.finished', { pid: Number(row['pid']), child: id });
+    }
     documentProcesses(id) {
         return this.db.prepare('SELECT pid FROM document_children WHERE doc_id=? AND active=1').all(id)
             .map(row => ({ pid: Number(row['pid']), alive: processAlive(Number(row['pid'])) }));
