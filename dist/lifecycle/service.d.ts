@@ -30,6 +30,8 @@ export declare class Lifecycle {
     get(id: string): Document<SpecRecord>;
     private save;
     private approved;
+    /** See SpecRecord.impactAdvice. Tasks are walked in dependency order, like execution. */
+    private impactAdvice;
     /** Operator decisions made after approval, shown to QA with their reasons: they postdate the spec text. */
     private approvedAmendments;
     draft(options: {
@@ -50,6 +52,11 @@ export declare class Lifecycle {
      * the project's real typography instead of a substitute.
      */
     private inlineDesignAssets;
+    /**
+     * The spec whose approved visual direction a new design for `repo` continues: the most recently approved,
+     * non-rejected spec with a design. Maintenance uses the same rule to keep that document.
+     */
+    designReference(repo: string, excludeId?: string): Document<SpecRecord> | undefined;
     /** Files tracked at one commit: a design asset must be repository content at the reviewed commit, not whatever the working tree happens to hold. */
     private trackedPaths;
     /**
@@ -91,7 +98,7 @@ export declare class Lifecycle {
     private prepareReviewWorkspace;
     private reviewable;
     /** Publication adapters still acquire the lifecycle lease and require explicit consent. */
-    publicationCandidate(id: string): Promise<Run>;
+    publicationCandidate(id: string, purpose?: 'review' | 'delivery'): Promise<Run>;
     review(id: string, sha: string, actor: string, note: string): Promise<Document<SpecRecord>>;
     importQa(id: string, value: unknown): Promise<Document<SpecRecord>>;
     reject(id: string, note: string): Document<SpecRecord>;

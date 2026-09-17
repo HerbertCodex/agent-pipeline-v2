@@ -55,9 +55,32 @@ test('tests referencing a task scope are listed, and those outside it are flagge
   run('add', '-A'); run('commit', '-qm', 'init');
   const inventory = await buildInventory(root, 'HEAD');
   const found = await testsReferencing(root, inventory, ['src/server/db/index.ts']);
-  assert.deepEqual(found.map(x => x.path), ['src/routes/catalogue.test.ts', 'src/server/auth/auth.test.ts']);
+  // db.test.ts reaches the file through the relative specifier './index'.
+  assert.deepEqual(found.map(x => x.path), ['src/routes/catalogue.test.ts', 'src/server/auth/auth.test.ts', 'src/server/db/db.test.ts']);
   const ri = await inspectRepository(root, inventory.sha, 'db', { inventory, focusPaths: ['src/server/db/index.ts', 'src/routes/catalogue.test.ts'] });
-  assert.deepEqual(ri.referencingTests.map(x => [x.path, x.outsideScope]), [['src/routes/catalogue.test.ts', false], ['src/server/auth/auth.test.ts', true]]);
+  assert.deepEqual(ri.referencingTests.map(x => [x.path, x.outsideScope]), [['src/routes/catalogue.test.ts', false], ['src/server/auth/auth.test.ts', true], ['src/server/db/db.test.ts', true]]);
+});
+
+// Observed on a real increment: a test importing the changed module as '../db' was not detected (no
+// distinctive token), and it also contained a literal control character, so Git classified it as binary.
+test('tests reaching a changed file through a relative specifier are found, even when Git calls them binary', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'apv2-impact-rel-')); t.after(() => rmSync(root, { recursive: true, force: true }));
+  const run = (...a) => { const r = spawnSync('git', a, { cwd: root, encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  run('init', '-q'); run('config', 'user.email', 't@e.x'); run('config', 'user.name', 'T');
+  const files = {
+    'src/lib/server/db/index.ts': 'export function openDatabase() {}\n',
+    'src/lib/server/auth/auth.test.ts': "import { openDatabase } from '../db';\nconst nul = '\u0000';\n",
+    'src/lib/server/auth/other.test.ts': "import { x } from '../dbx';\n",
+    'src/lib/server/store.test.py': "from . import helpers\nopen('./db/index.ts')\n",
+  };
+  for (const [p, c] of Object.entries(files)) { mkdirSync(dirname(join(root, p)), { recursive: true }); writeFileSync(join(root, p), c); }
+  run('add', '-A'); run('commit', '-qm', 'init');
+  assert.match(run('diff', '--numstat', '4b825dc642cb6eb9a060e54bf8d69288fbee4904', 'HEAD', '--', 'src/lib/server/auth/auth.test.ts'), /^-\t-\t/, 'the fixture is binary for Git');
+  const inventory = await buildInventory(root, 'HEAD');
+  const found = await testsReferencing(root, inventory, ['src/lib/server/db/index.ts']);
+  assert.deepEqual(found.map(x => x.path), ['src/lib/server/auth/auth.test.ts', 'src/lib/server/store.test.py'], "'../dbx' is a different module and is not matched");
+  assert.deepEqual(found[0].tokens, ['../db'], 'found through the relative specifier, in a file Git calls binary');
+  assert.ok(found[1].tokens.includes('./db/index.ts'), 'the same resolution works for any language quoting a relative path');
 });
 
 // Observed on a real run: a provider exited non-zero with an empty stderr and its explanation on stdout.

@@ -1,3 +1,4 @@
+import { posix } from 'node:path';
 import { environment, runProcess } from '../execution/process.js';
 import { invariant } from '../domain/errors.js';
 import { extensionOf, isExported, isTestPath, nonSourceExtensions, resolveLanguages, type LanguageProfile } from './languages.js';
@@ -26,11 +27,11 @@ const GREP_BYTES = 32 * 1024 * 1024;
 
 function stripRev(entry: string, sha: string): string { return entry.startsWith(`${sha}:`) ? entry.slice(sha.length + 1) : entry; }
 
-async function grep(repo: string, sha: string, args: string[], paths: string[], signal?: AbortSignal): Promise<string[]> {
+async function grep(repo: string, sha: string, args: string[], paths: string[], signal?: AbortSignal, includeBinary = false): Promise<string[]> {
   const env = environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']);
   const rows: string[] = [];
   for (let i = 0; i < paths.length; i += PATHSPEC_CHUNK) {
-    const result = await runProcess({ command: ['git', '-c', 'core.quotePath=false', 'grep', '-I', '--null', ...args, sha, '--', ...paths.slice(i, i + PATHSPEC_CHUNK).map(p => `:(literal)${p}`)],
+    const result = await runProcess({ command: ['git', '-c', 'core.quotePath=false', 'grep', ...(includeBinary ? ['--text'] : ['-I']), '--null', ...args, sha, '--', ...paths.slice(i, i + PATHSPEC_CHUNK).map(p => `:(literal)${p}`)],
       cwd: repo, env, timeoutMs: 120000, ...(signal ? { signal } : {}), maxOutputBytes: GREP_BYTES });
     // Exit 1 only means no match in this chunk.
     invariant(result.status === 'passed' || result.exitCode === 1, 'REPOSITORY_INDEX', 'Repository inventory scan failed');
@@ -141,15 +142,37 @@ export function referenceTokens(path: string): string[] {
 export async function testsReferencing(repo: string, inventory: Inventory, focusPaths: readonly string[], signal?: AbortSignal): Promise<{ path: string; tokens: string[] }[]> {
   const tokens = [...new Set(focusPaths.flatMap(referenceTokens))].slice(0, 40);
   const testFiles = inventory.files.filter(isTestPath);
-  if (!tokens.length || !testFiles.length) return [];
+  if (!testFiles.length) return [];
   const out: { path: string; tokens: string[] }[] = [];
+  const add = (path: string, token: string): void => {
+    const entry = out.find(x => x.path === path);
+    if (!entry) out.push({ path, tokens: [token] }); else if (!entry.tokens.includes(token)) entry.tokens.push(token);
+  };
   for (const token of tokens) {
-    const rows = await grep(repo, inventory.sha, ['-l', '-F', '-e', token], testFiles, signal);
-    for (const path of rows.map(r => stripRev(r, inventory.sha))) {
-      const entry = out.find(x => x.path === path);
-      if (entry) entry.tokens.push(token); else out.push({ path, tokens: [token] });
-    }
+    // Test files are already selected by name; one containing a literal control character is still source
+    // code, which Git classifies as binary. Skipping it would hide a test the change can break.
+    const rows = await grep(repo, inventory.sha, ['-l', '-F', '-e', token], testFiles, signal, true);
+    for (const path of rows.map(r => stripRev(r, inventory.sha))) add(path, token);
     if (out.length >= 50) break;
+  }
+  // Relative specifiers ('../db', './store.js') name no distinctive token; resolve them against the test's own
+  // directory instead. A focus file with a generic stem (index, mod, __init__…) is reached through its directory.
+  const targets = new Map<string, string>();
+  for (const path of focusPaths.filter(p => !/[*?]/.test(p))) {
+    const withoutExt = path.replace(/\.[^./]+$/, '');
+    targets.set(withoutExt, path);
+    if (GENERIC_STEM.test(posix.basename(withoutExt))) targets.set(posix.dirname(withoutExt), path);
+  }
+  if (targets.size && out.length < 50) {
+    const rows = await grep(repo, inventory.sha, ['-o', '-E', '-e', `["'](\\.\\.?/[^"'[:space:]]+)["']`], testFiles, signal, true);
+    for (const row of rows) {
+      const [file, match] = row.split('\0');
+      if (!file || !match) continue;
+      const path = stripRev(file, inventory.sha);
+      const resolved = posix.normalize(posix.join(posix.dirname(path), match.slice(1, -1))).replace(/\/$/, '');
+      const hit = targets.get(resolved) ?? targets.get(resolved.replace(/\.[^./]+$/, ''));
+      if (hit) add(path, match.slice(1, -1));
+    }
   }
   return out.sort((a, b) => a.path.localeCompare(b.path)).slice(0, 50);
 }

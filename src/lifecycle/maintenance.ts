@@ -15,6 +15,18 @@ export interface GarbageItem {
 }
 
 const TERMINAL_SPEC = new Set(['closed', 'rejected']);
+
+/**
+ * Whether a spec still has work in flight. For a terminal spec, a leftover `activeRunId` counts only while
+ * that run has a live process: specs rejected before the pointer was cleared would otherwise stay "active"
+ * forever and their workspaces would never be collected.
+ */
+function specActive(life: Lifecycle, doc: Document<SpecRecord>): boolean {
+  const r = doc.data;
+  if (life.store.documentProcesses(doc.id).some(p => p.alive)) return true;
+  if (!TERMINAL_SPEC.has(r.status)) return true;
+  return Boolean(r.activeRunId) && life.pipeline.store.activeProcesses(r.activeRunId!).some(p => p.alive);
+}
 const TERMINAL_STANDALONE_RUN = new Set(['failed', 'rejected']);
 const ROLE_LEFTOVER_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -54,7 +66,7 @@ export function planGarbage(life: Lifecycle, now = Date.now()): GarbageItem[] {
   const referenced = new Map<string, { specId: string; status: string; active: boolean }>();
   for (const doc of specs) {
     const r = doc.data;
-    const active = !TERMINAL_SPEC.has(r.status) || Boolean(r.activeRunId) || store.documentProcesses(doc.id).some(p => p.alive);
+    const active = specActive(life, doc);
     const runs = [...(r.attempts ?? []).map(a => a.runId), ...(r.validationRunIds ?? []), r.finalRunId, r.activeRunId].filter((x): x is string => Boolean(x));
     for (const runId of runs) {
       const previous = referenced.get(runId);
@@ -139,10 +151,12 @@ export function planPurge(life: Lifecycle, options: { ids?: readonly string[]; o
   const garbage = planGarbage(life, now);
   const items: PurgeItem[] = [];
   const lastEvent = (id: string): number => store.documentEvents(id).reduce((n, e) => Math.max(n, e.at), 0);
+  const kept = new Set(purgeProtections(life).map(x => x.id));
   for (const doc of store.documents<SpecRecord>('spec')) {
     if (explicit && !explicit.has(doc.id)) continue;
+    if (kept.has(doc.id)) continue;
     const r = doc.data;
-    if (r.activeRunId || store.documentProcesses(doc.id).some(p => p.alive)) continue;
+    if (TERMINAL_SPEC.has(r.status) ? specActive(life, doc) : (Boolean(r.activeRunId) || store.documentProcesses(doc.id).some(p => p.alive))) continue;
     const at = lastEvent(doc.id);
     const reason = purgeReason(doc, now - at >= age);
     if (!reason) continue;
@@ -163,6 +177,20 @@ export function planPurge(life: Lifecycle, options: { ids?: readonly string[]; o
     }
   }
   return items.sort((a, b) => a.lastEventAt - b.lastEventAt);
+}
+
+/**
+ * Terminal documents a purge must keep because later work still reads them: for each repository, the spec
+ * holding the visual direction that the next design continues.
+ */
+export function purgeProtections(life: Lifecycle): { id: string; reason: string }[] {
+  const repos = new Set(life.store.documents<SpecRecord>('spec').map(d => d.data.repo).filter(Boolean));
+  const out: { id: string; reason: string }[] = [];
+  for (const repo of repos) {
+    const reference = life.designReference(repo);
+    if (reference) out.push({ id: reference.id, reason: `approved visual direction continued by the next design of ${repo}` });
+  }
+  return out;
 }
 
 /** Removes planned documents: their workspaces first, then their runs, then the document itself. */

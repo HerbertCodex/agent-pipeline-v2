@@ -79,11 +79,13 @@ apv2 spec close ID --target integration-main --sha SHA_INTEGRE \
   --reviewer NOM --note "Fusion locale examinée"
 ```
 
-La référence doit être une branche locale existante au SHA annoncé et avoir le candidat livré dans son ascendance. Un squash ne conserve pas cette ascendance : ce mode local est conservateur et ne rapproche pas arbitrairement deux patches. La clôture n'est pas une preuve de déploiement ni une garantie que la branche n'a pas introduit un autre défaut lors de l'intégration.
+La spec doit avoir été **revue** (`spec review`) ; une livraison préalable n'est plus exigée, puisque l'opérateur peut intégrer le candidat lui-même. La référence doit être une branche locale existante au SHA annoncé et avoir le candidat revu dans son ascendance. Un squash ne conserve pas cette ascendance : ce mode local est conservateur et ne rapproche pas arbitrairement deux patches. La clôture n'est pas une preuve de déploiement ni une garantie que la branche n'a pas introduit un autre défaut lors de l'intégration.
 
 Le connecteur GitHub cible github.com, pas GitHub Enterprise Server/GitLab. `spec publish` exige destination explicite, `--confirm-push` et `--confirm-pr`. Il vérifie les URL fetch/push, la base distante et la tête attendue, ne fait pas de force push, et crée une PR brouillon. Une intention est enregistrée avant les effets externes. Après résultat réseau incertain, une nouvelle invocation recherche la PR existante avant de tenter de la recréer.
 
-`spec sync` lit l'état GitHub. Une PR fermée sans fusion n'est pas clôturée comme livrée ; une tête étrangère est refusée. Une PR fusionnée au candidat attendu permet une clôture observée, avec SHA de fusion. Les stratégies de merge/squash et la CI sont sous la responsabilité de la forge. Le pipeline n'exécute jamais `gh pr merge` et ne rend pas la PR prête à fusionner automatiquement.
+Par défaut, `spec publish` exige la revue du candidat. Avec `--for-review`, il ouvre la PR brouillon **avant** l'approbation, pour que l'opérateur lise le code sur la forge : les contrôles doivent être valides et la QA doit être passée sur ce commit exact, seule l'approbation manque encore, et le corps de la PR le signale.
+
+`spec sync` lit l'état GitHub. Une PR fermée sans fusion n'est pas clôturée comme livrée ; une tête étrangère est refusée. Une PR fusionnée au candidat attendu permet une clôture observée, avec SHA de fusion. Si elle est fusionnée avant que la revue soit enregistrée, la spec passe en `MERGED_BEFORE_REVIEW` au lieu d'être clôturée : on enregistre la revue, puis on relance `spec sync`. Les stratégies de merge/squash et la CI sont sous la responsabilité de la forge. Le pipeline n'exécute jamais `gh pr merge` et ne rend pas la PR prête à fusionner automatiquement.
 
 Les tests du connecteur utilisent un transport simulé. Aucun push, création de PR ou merge GitHub authentifié n'a été effectué pour cette livraison.
 
@@ -159,6 +161,10 @@ Product reçoit `executionCapabilities` :
 
 Une étape que l'Implementer ne peut pas exécuter (installation de dépendance, lockfile, générateur, migration) doit devenir un prérequis opérateur, pas une tâche.
 
+### Tests existants mal rangés
+
+Après Product, le contrôleur parcourt les tâches dans l'ordre d'exécution et liste dans `impactAdvice` les tests existants qui citent un fichier modifié par une tâche, mais qui sont rangés dans une tâche ultérieure ou dans aucune. Les contrôles rejouant toute la suite après chaque tâche, un tel test fait souvent échouer la tâche précédente et impose un amendement de périmètre. La détection est lexicale : jetons de chemin, et chemins relatifs cités (`../db`, `./index.ts`) résolus depuis le test, y compris dans un fichier que Git classe comme binaire. C'est un **avertissement pour l'opérateur, jamais un blocage** : il peut signaler des tests que le changement ne cassera pas.
+
 ### Corriger un critère devenu intenable
 
 Une spec est immuable dès que l'exécution commence : c'est ce qui rend l'approbation crédible. Mais un critère peut se révéler **impossible à satisfaire**, parce qu'il interdit ce que le changement approuvé impose — par exemple « ce fichier de test ne change pas » alors que la migration approuvée modifie ce qu'il compare. Sans recours, un candidat fini et conforme sur tous les autres critères était perdu.
@@ -182,6 +188,6 @@ Bornes : uniquement après le début de l'exécution (avant, on affine la spec) 
 
   Il ne touche ni à l'historique SQLite, ni aux livraisons, ni aux sources, ni à ce qui appartient à une spec active ou à un processus vivant.
 
-- `apv2 prune [--id DOCUMENT_ID] [--older-than DAYS] [--confirm]` : liste d'abord, sans rien supprimer. Avec `--confirm`, supprime définitivement du magasin les documents abandonnés — specs clôturées ou rejetées, brouillons jamais approuvés, plans `bootstrap`/`onboard` jamais appliqués — avec leurs runs, leurs reçus, leurs événements et leurs workspaces. Par défaut, rien de plus récent que 30 jours n'est proposé ; `--id` cible un document précis sans lever les autres gardes. Un document verrouillé, avec un run actif ou un processus vivant, un plan appliqué et une spec en cours ne sont jamais proposés. Il n'y a pas de sauvegarde : c'est la seule commande qui efface de l'historique, et elle le dit avant de le faire.
+- `apv2 prune [--id DOCUMENT_ID] [--older-than DAYS] [--confirm]` : liste d'abord, sans rien supprimer. Avec `--confirm`, supprime définitivement du magasin les documents abandonnés — specs clôturées ou rejetées, brouillons jamais approuvés, plans `bootstrap`/`onboard` jamais appliqués — avec leurs runs, leurs reçus, leurs événements et leurs workspaces. Par défaut, rien de plus récent que 30 jours n'est proposé ; `--id` cible un document précis sans lever les autres gardes. Un document verrouillé, avec un run actif ou un processus vivant, un plan appliqué et une spec en cours ne sont jamais proposés. Il n'y a pas de sauvegarde : c'est la seule commande qui efface de l'historique, et elle le dit avant de le faire. Elle ne propose jamais, même par `--id`, la spec qui porte la direction visuelle que la prochaine maquette du dépôt prolonge ; la simulation la liste sous `kept`. Une spec rejetée dont le pointeur de run est resté posé, sans processus vivant, redevient collectable.
 
 Les commits candidats portent le titre de la tâche ; l'identifiant du run est dans le trailer `Agent-Pipeline-Run`.

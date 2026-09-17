@@ -322,6 +322,8 @@ export interface Publication {
     state: 'intent' | 'pushed' | 'pr_open' | 'merged';
     mergedAt: string | null;
     mergeSha: string | null;
+    /** `review`: a draft PR opened so the operator can read the candidate before approving it. */
+    purpose?: 'review' | 'delivery';
 }
 export interface SpecRecord {
     repo: string;
@@ -349,6 +351,12 @@ export interface SpecRecord {
     design: DesignRecord | null;
     scopeAmendments: ScopeAmendment[];
     criterionAmendments?: CriterionAmendment[];
+    /**
+     * Advisory computed after Product: existing tests that reference a task's files but are assigned to a
+     * later task, or to none. Gates run the whole suite after every task, so such a test usually breaks the
+     * earlier task and forces a scope amendment. Lexical, never blocking.
+     */
+    impactAdvice?: { test: string; changedBy: string; assignedTo: string | null; tokens: string[] }[];
     review: ReviewWorkspace | null;
     sessionStartedAt: number | null;
     activeMs: number;
