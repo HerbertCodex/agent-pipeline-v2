@@ -76,6 +76,7 @@ export declare function referenceTokens(path: string): string[];
 export declare function testsReferencing(repo: string, inventory: Inventory, focusPaths: readonly string[], signal?: AbortSignal): Promise<{
     path: string;
     tokens: string[];
+    resolved: boolean;
 }[]>;
 export interface InventoryDelta {
     added: {

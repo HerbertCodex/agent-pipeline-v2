@@ -139,14 +139,17 @@ export function referenceTokens(path: string): string[] {
  * Test files (by generic naming conventions) whose content references one of the focus paths. It is a
  * lexical hint for "which existing tests may break if these files change", never a dependency graph.
  */
-export async function testsReferencing(repo: string, inventory: Inventory, focusPaths: readonly string[], signal?: AbortSignal): Promise<{ path: string; tokens: string[] }[]> {
+export async function testsReferencing(repo: string, inventory: Inventory, focusPaths: readonly string[], signal?: AbortSignal): Promise<{ path: string; tokens: string[]; resolved: boolean }[]> {
   const tokens = [...new Set(focusPaths.flatMap(referenceTokens))].slice(0, 40);
   const testFiles = inventory.files.filter(isTestPath);
   if (!testFiles.length) return [];
-  const out: { path: string; tokens: string[] }[] = [];
-  const add = (path: string, token: string): void => {
+  // `resolved`: the test names the file through a relative path that resolves to it, which is stronger
+  // evidence than a path fragment that may belong to an alias or to unrelated text.
+  const out: { path: string; tokens: string[]; resolved: boolean }[] = [];
+  const add = (path: string, token: string, resolved = false): void => {
     const entry = out.find(x => x.path === path);
-    if (!entry) out.push({ path, tokens: [token] }); else if (!entry.tokens.includes(token)) entry.tokens.push(token);
+    if (!entry) out.push({ path, tokens: [token], resolved });
+    else { if (!entry.tokens.includes(token)) entry.tokens.push(token); entry.resolved ||= resolved; }
   };
   for (const token of tokens) {
     // Test files are already selected by name; one containing a literal control character is still source
@@ -171,7 +174,7 @@ export async function testsReferencing(repo: string, inventory: Inventory, focus
       const path = stripRev(file, inventory.sha);
       const resolved = posix.normalize(posix.join(posix.dirname(path), match.slice(1, -1))).replace(/\/$/, '');
       const hit = targets.get(resolved) ?? targets.get(resolved.replace(/\.[^./]+$/, ''));
-      if (hit) add(path, match.slice(1, -1));
+      if (hit) add(path, match.slice(1, -1), true);
     }
   }
   return out.sort((a, b) => a.path.localeCompare(b.path)).slice(0, 50);

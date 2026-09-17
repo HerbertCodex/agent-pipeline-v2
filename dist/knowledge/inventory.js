@@ -125,13 +125,18 @@ export async function testsReferencing(repo, inventory, focusPaths, signal) {
     const testFiles = inventory.files.filter(isTestPath);
     if (!testFiles.length)
         return [];
+    // `resolved`: the test names the file through a relative path that resolves to it, which is stronger
+    // evidence than a path fragment that may belong to an alias or to unrelated text.
     const out = [];
-    const add = (path, token) => {
+    const add = (path, token, resolved = false) => {
         const entry = out.find(x => x.path === path);
         if (!entry)
-            out.push({ path, tokens: [token] });
-        else if (!entry.tokens.includes(token))
-            entry.tokens.push(token);
+            out.push({ path, tokens: [token], resolved });
+        else {
+            if (!entry.tokens.includes(token))
+                entry.tokens.push(token);
+            entry.resolved ||= resolved;
+        }
     };
     for (const token of tokens) {
         // Test files are already selected by name; one containing a literal control character is still source
@@ -161,7 +166,7 @@ export async function testsReferencing(repo, inventory, focusPaths, signal) {
             const resolved = posix.normalize(posix.join(posix.dirname(path), match.slice(1, -1))).replace(/\/$/, '');
             const hit = targets.get(resolved) ?? targets.get(resolved.replace(/\.[^./]+$/, ''));
             if (hit)
-                add(path, match.slice(1, -1));
+                add(path, match.slice(1, -1), true);
         }
     }
     return out.sort((a, b) => a.path.localeCompare(b.path)).slice(0, 50);

@@ -152,7 +152,11 @@ export class Lifecycle {
                 if (advice.some(a => a.test === ref.path))
                     continue;
                 const later = order.slice(i + 1).find(t => covers(t, ref.path));
-                advice.push({ test: ref.path, changedBy: task.id, assignedTo: later?.id ?? null, tokens: ref.tokens });
+                // A test no task declares is only reported on direct evidence: a path fragment alone matched
+                // many tests that the change never broke.
+                if (!later && !ref.resolved)
+                    continue;
+                advice.push({ test: ref.path, changedBy: task.id, assignedTo: later?.id ?? null, tokens: ref.tokens, evidence: later ? 'declared-later' : 'resolved-import' });
             }
         }
         return advice;

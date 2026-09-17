@@ -373,7 +373,16 @@ test('Product output is annotated with existing tests the task order leaves behi
   ];
   const d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.', proposal: spec });
   const advice = f.life.summary(d).impactAdvice;
-  assert.deepEqual(advice.map(a => [a.test, a.changedBy, a.assignedTo]), [['test/math.test.mjs', 'CODE', 'LATER']]);
+  assert.deepEqual(advice.map(a => [a.test, a.changedBy, a.assignedTo, a.evidence]), [['test/math.test.mjs', 'CODE', 'LATER', 'declared-later']]);
+
+  // A test no task declares is reported only when it imports the file through a resolved relative path.
+  writeFileSync(join(f.repo, 'test/alias.test.mjs'), "// mentions src/math only through an alias: '#app/src/math'\n");
+  gitOf(f.repo, 'add', '.'); gitOf(f.repo, 'commit', '-qm', 'Add a test that only mentions the path');
+  const undeclared = oneTask();
+  undeclared.tasks[0] = { ...undeclared.tasks[0], allowedPaths: ['src/math.mjs'] };
+  const u = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.', proposal: undeclared });
+  assert.deepEqual(f.life.summary(u).impactAdvice.map(a => [a.test, a.assignedTo, a.evidence]), [['test/math.test.mjs', null, 'resolved-import']],
+    'the direct import is reported, the path fragment alone is not');
   assert.ok(f.life.store.documentEvents(d.id).find(e => e.type === 'product.proposed').data.impactAdvice.length === 1);
 
   const together = oneTask();
