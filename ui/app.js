@@ -65,6 +65,8 @@ const copyButton = (value, label = 'Copier', cls = 'btn btn--small') => h('butto
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 // DOM append would print null and false as text; content helpers use this instead.
 const add = (parent, ...items) => parent.append(...items.flat(Infinity).filter(x => x !== null && x !== undefined && x !== false));
+/** A draft has no title until Product answers; say what is happening instead of showing an empty spec. */
+const specTitle = (s, busy = s.busy) => s.title || (busy ? 'Nouvelle spec — Product rédige' : '(brouillon sans contenu)');
 const list = (items, render) => h('ul', {}, items.map(x => h('li', {}, render ? render(x) : x)));
 
 async function api(path, options = {}) {
@@ -211,7 +213,7 @@ function renderList() {
     if (state.project === null) nav.append(h('div', { class: 'group' }, h('span', { class: 'label', text: repo }), h('span', { class: 'label', text: String(items.length) })));
     for (const s of items) {
       nav.append(h('button', { class: `spec-item sig-${signalOf(s)}`, type: 'button', 'aria-current': s.id === state.selected ? 'true' : 'false', onclick: () => select(s.id) },
-        h('span', { class: 'spec-item__title', text: s.title || '(brouillon sans contenu)' }),
+        h('span', { class: 'spec-item__title', text: specTitle(s) }),
         h('span', { class: 'spec-item__meta' }, s.busy ? h('span', { class: 'pulse', title: 'Un agent travaille' }) : null,
           h('span', { text: STATUS[s.status] || s.status }), h('span', { class: 'mono', text: shortId(s.id) }), h('span', { text: ago(s.updatedAt) }))));
     }
@@ -229,7 +231,7 @@ function renderHome() {
   const closed = specs.filter(s => s.status === 'closed').slice(0, 5);
   const stat = (label, value, signal) => h('div', { class: `stat${signal ? ` sig-${signal}` : ''}` }, h('span', { class: 'label', text: label }), h('span', { class: 'stat__value', text: String(value) }));
   const row = (s, why) => h('button', { class: `queue__row sig-${signalOf(s)}`, type: 'button', onclick: () => select(s.id) },
-    h('span', { class: 'queue__body' }, h('span', { class: 'queue__title', text: s.title || '(brouillon sans contenu)' }),
+    h('span', { class: 'queue__body' }, h('span', { class: 'queue__title', text: specTitle(s) }),
       h('span', { class: 'queue__why' }, why)),
     h('span', { class: 'label', text: state.project === null ? `${repoName(s.repo)} · ${ago(s.updatedAt)}` : ago(s.updatedAt) }));
   $('#main').replaceChildren(h('div', { class: 'main__inner' },
@@ -245,7 +247,7 @@ function renderHome() {
     h('div', { class: 'section-title' }, h('span', { class: 'label', text: 'À traiter' })),
     waiting.length ? h('div', { class: 'queue' }, waiting.map(s => row(s, needs(s)))) : h('p', { class: 'empty', text: 'Aucune décision en attente.' }),
     working.length ? [h('div', { class: 'section-title' }, h('span', { class: 'label', text: 'En cours' })),
-      h('div', { class: 'queue' }, working.map(s => row(s, [h('span', { class: 'pulse' }), ' ', 'Un agent travaille sur cette spec'])))] : null,
+      h('div', { class: 'queue' }, working.map(s => row(s, [h('span', { class: 'pulse' }), ' ', s.title ? 'Un agent travaille sur cette spec' : 'Le contenu apparaîtra à la fin de la rédaction'])))] : null,
     closed.length ? [h('div', { class: 'section-title' }, h('span', { class: 'label', text: 'Dernières clôturées' })),
       h('div', { class: 'queue' }, closed.map(s => row(s, 'Fusionnée et clôturée')))] : null));
 }
@@ -309,7 +311,7 @@ function renderDetail() {
       pill(signalOf({ ...s, busy: d.busy }), STATUS[s.status] || s.status, d.busy),
       h('span', { class: 'idchip' }, shortId(s.id), h('button', { type: 'button', onclick: () => copy(s.id) }, 'copier')),
       h('span', { class: 'mono', text: d.repo })),
-    h('h1', { text: s.title || '(brouillon sans contenu)' }),
+    h('h1', { text: specTitle(s, d.busy) }),
     rail(d),
     d.legacy ? h('p', { class: 'notice sig-wait', text: 'Document antérieur au format actuel : son intégrité ne peut pas être revérifiée. Affiché en lecture seule, sans action possible.' }) : decision(d),
     h('div', { class: 'tabs', role: 'tablist' }, tabs.map(([key, label, n, alert]) => h('button', { type: 'button', role: 'tab', 'aria-selected': state.tab === key ? 'true' : 'false',
@@ -323,8 +325,8 @@ function decision(d) {
   const questions = (s.questions || []).length + ((s.design && s.design.questions) || []).length;
   const primary = []; const secondary = [];
   const btn = (label, onclick, kind = 'btn', disabled = false) => h('button', { class: kind, type: 'button', disabled, onclick }, label);
-  if (s.status === 'draft' && s.hash && !questions) primary.push(btn('Approuver la spec', () => approveDialog(d), 'btn btn--primary'));
-  if (s.status === 'draft') (questions ? primary : secondary).push(btn(questions ? 'Répondre aux questions' : 'Affiner', () => refineDialog(d, questions), questions ? 'btn btn--primary' : 'btn'));
+  if (s.status === 'draft' && s.hash && !questions) primary.push(btn('Approuver la spec', () => approveDialog(d), 'btn btn--primary', d.busy));
+  if (s.status === 'draft') (questions ? primary : secondary).push(btn(questions ? 'Répondre aux questions' : 'Affiner', () => refineDialog(d, questions), questions ? 'btn btn--primary' : 'btn', d.busy));
   if (code === 'SCOPE_AMENDMENT_REQUIRED') primary.push(btn('Examiner l\'amendement', () => { state.tab = 'amendments'; renderDetail(); }, 'btn btn--primary'));
   if (s.status === 'awaiting_review' || code === 'MERGED_BEFORE_REVIEW') primary.push(btn('Enregistrer ma revue', () => reviewDialog(d), 'btn btn--primary'));
   if (d.approval && ['approved', 'running', 'blocked'].includes(s.status) && !['SCOPE_AMENDMENT_REQUIRED', 'QA_REJECTED', 'MERGED_BEFORE_REVIEW'].includes(code))
@@ -335,7 +337,7 @@ function decision(d) {
   if (s.publication && s.publication.url && !TERMINAL.has(s.status)) secondary.push(btn('Synchroniser avec la PR', () => job(`/api/specs/${s.id}/sync`, 'Synchronisation lancée'), 'btn', d.busy));
   if (!TERMINAL.has(s.status)) secondary.push(btn('Rejeter', () => rejectDialog(d), 'btn btn--quiet-danger'));
   const why = needs({ ...s, busy: d.busy });
-  const title = d.busy ? 'Un agent travaille' : s.status === 'blocked' ? why : why || (s.status === 'closed' ? 'Spec clôturée' : s.status === 'rejected' ? 'Spec rejetée' : 'Rien à faire pour l\'instant');
+  const title = d.busy ? (s.status === 'draft' ? 'Product rédige la spec' : 'Un agent travaille') : s.status === 'blocked' ? why : why || (s.status === 'closed' ? 'Spec clôturée' : s.status === 'rejected' ? 'Spec rejetée' : 'Rien à faire pour l\'instant');
   return h('section', { class: `decision sig-${signalOf({ ...s, busy: d.busy })}`, 'aria-label': 'Décision attendue' },
     h('div', { class: 'decision__text' },
       h('span', { class: 'label', text: d.busy ? 'En cours' : why ? 'À vous' : 'État' }),
@@ -345,7 +347,8 @@ function decision(d) {
       s.status === 'awaiting_review' ? h('span', { class: 'hash' }, 'candidat', h('code', { text: s.candidateSha })) : null,
       s.publication && s.publication.url ? h('a', { href: s.publication.url, target: '_blank', rel: 'noopener noreferrer', text: s.publication.url }) : null),
     h('div', { class: 'decision__actions' }, primary, secondary),
-    s.nextAction && s.nextAction.startsWith('apv2 ') ? h('div', { class: 'decision__cli' }, h('span', { class: 'label', text: 'terminal' }), h('pre', { text: s.nextAction }), copyButton(s.nextAction)) : null);
+    // While an agent works, the stored next action describes the state before it finished.
+    !d.busy && s.nextAction && s.nextAction.startsWith('apv2 ') ? h('div', { class: 'decision__cli' }, h('span', { class: 'label', text: 'terminal' }), h('pre', { text: s.nextAction }), copyButton(s.nextAction)) : null);
 }
 
 function overview(root, d) {
