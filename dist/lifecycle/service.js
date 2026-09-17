@@ -157,6 +157,16 @@ export class Lifecycle {
         }
         return advice;
     }
+    /**
+     * What each completed attempt reported. A criterion may require the Implementer to report something
+     * (an observation outside scope, a limitation); without these summaries QA can only answer "unknown".
+     */
+    taskSummaries(r) {
+        return r.attempts.map(a => {
+            const run = this.pipeline.store.get(a.runId);
+            return { taskId: a.taskId, kind: a.kind, state: run.state, summary: (run.summary ?? '').slice(0, 6000) };
+        }).filter(x => x.summary.length > 0);
+    }
     /** Operator decisions made after approval, shown to QA with their reasons: they postdate the spec text. */
     approvedAmendments(r) {
         return {
@@ -776,7 +786,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                     invariant(Buffer.byteLength(diff) <= maxDiff, 'QA_CONTEXT', `QA diff exceeds limits.maxQaDiffBytes (${maxDiff}); use an explicit external review, never a truncated review`);
                     const inventoryDelta = await this.inventoryDelta(r, final.candidateSha, signal);
                     this.save(doc, 'qa.inventory_delta', { added: inventoryDelta.added.length, removed: inventoryDelta.removed.length, possibleDuplicates: inventoryDelta.possibleDuplicates });
-                    const raw = await runRole({ store: this.store, documentId: id, repo: r.repo, sha: final.candidateSha, role: 'qa', skills: r.config.skills, agent: r.config.roles.qa ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: qaSchema, context: { diff, spec, approvedAmendments: this.approvedAmendments(r), decisionLedger: r.decisionLedger, securityContext: r.securityContext, approvedDesign: this.qaDesignContext(r), baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] }, signal,
+                    const raw = await runRole({ store: this.store, documentId: id, repo: r.repo, sha: final.candidateSha, role: 'qa', skills: r.config.skills, agent: r.config.roles.qa ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: qaSchema, context: { diff, spec, approvedAmendments: this.approvedAmendments(r), taskSummaries: this.taskSummaries(r), decisionLedger: r.decisionLedger, securityContext: r.securityContext, approvedDesign: this.qaDesignContext(r), baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] }, signal,
                         maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: report => validateQa(report, spec, final.candidateSha, r.decisionLedger) });
                     r.qa = { report: raw, specHash: r.contentHash, evidenceHash, at: Date.now(), source: 'agent' };
                     this.save(doc, 'qa.completed', { qa: r.qa });
@@ -788,7 +798,11 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                         this.save(doc, 'qa.repair_budget_exhausted');
                         return doc;
                     }
-                    const description = 'Correct the following QA findings without broadening the approved scope.\n' + JSON.stringify({ approvedSpec: spec, qa: r.qa.report });
+                    const description = [
+                        'Correct the following QA findings without broadening the approved scope.',
+                        'When a finding can only be fixed in a file outside the approved paths (for example a comment made false by an approved change), make the smallest change there anyway: the controller then stops and asks the operator for an explicit scope amendment. Never broaden a feature to do so.',
+                        'When a finding cannot be fixed by changing files (for example it is about what a report must contain), say so precisely in your summary; QA reads the task summaries.',
+                    ].join('\n') + '\n' + JSON.stringify({ approvedSpec: spec, qa: r.qa.report, taskSummaries: this.taskSummaries(r) });
                     invariant(description.length <= (r.config.limits?.maxTaskContextChars ?? DEFAULT_LIMITS.maxTaskContextChars), 'TASK_CONTEXT', 'QA repair context exceeds limits.maxTaskContextChars; prepare an explicit follow-up');
                     const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, config: r.config, task: this.aggregateTask(r, description) });
                     r.qaRepairs++;
@@ -1234,6 +1248,11 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             next = `apv2 spec recover ${doc.id} --confirm-stopped   (only after checking no controller or agent process is still alive)`;
         else if (r.error?.code === 'TASK_FAILED' || r.error?.code === 'REPAIR_NO_CHANGE')
             next = `apv2 spec retry ${doc.id} --confirm   (authorizes exactly one new attempt of the failed task)`;
+        else if (r.error?.code === 'NO_CHANGE') {
+            const last = [...r.attempts].reverse().find(a => a.kind === 'qa-repair' || a.kind === 'task');
+            const said = last ? (this.pipeline.store.get(last.runId).summary ?? '').replace(/\s+/g, ' ').slice(0, 300) : '';
+            next = `The last attempt changed nothing${said ? ` and explained: "${said}"` : ''}. Read it with apv2 spec events ${doc.id}; then apv2 spec retry ${doc.id} --confirm if a change is still expected, or create a follow-up spec.`;
+        }
         else if (r.error?.code === 'STALE_EVIDENCE')
             next = `apv2 spec verify ${doc.id}   (replays the gates on the same candidate; then apv2 spec run ${doc.id})`;
         else if (r.status === 'blocked' && r.error)

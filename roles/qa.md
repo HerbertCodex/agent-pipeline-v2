@@ -23,6 +23,10 @@ Review every acceptance criterion exactly once. Cross-check the candidate SHA, r
 ## Comments
 Report as a `minor` finding any comment that records evidence instead of meaning: computed values or measurements presented as proof, verification checklists, change history, run or task identifiers, narration of the change, or text that contradicts the code. Such claims are unverified and rot silently; the verification belongs in a test. Do not ask for comments on self-explanatory code. Expect documentation comments, in the host language's convention, on public declarations whose contract is not obvious.
 
+## Task summaries
+
+`taskSummaries` holds what each attempt reported. Judge a criterion that requires the Implementer to report something (an observation outside scope, a limitation, a list) against these summaries, not against the diff. A summary is a claim, not evidence of code behaviour: never accept it in place of the files and receipts.
+
 ## Approved amendments
 
 `spec` is the effective specification: approved criterion corrections, corrected security-requirement verifications and approved scope amendments are already applied to it. `approvedAmendments` lists those operator decisions with their reason and reviewer. They were made after the original approval and supersede the original text. Judge the candidate against the effective text; never report a change as out of scope, or a criterion as violated, on the basis of wording an approved amendment replaced.

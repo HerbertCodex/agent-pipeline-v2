@@ -32,6 +32,11 @@ export declare class Lifecycle {
     private approved;
     /** See SpecRecord.impactAdvice. Tasks are walked in dependency order, like execution. */
     private impactAdvice;
+    /**
+     * What each completed attempt reported. A criterion may require the Implementer to report something
+     * (an observation outside scope, a limitation); without these summaries QA can only answer "unknown".
+     */
+    private taskSummaries;
     /** Operator decisions made after approval, shown to QA with their reasons: they postdate the spec text. */
     private approvedAmendments;
     draft(options: {
