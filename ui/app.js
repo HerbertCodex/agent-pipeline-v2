@@ -93,7 +93,7 @@ function needs(s) {
   if (s.status === 'awaiting_review') return 'Candidat à relire';
   if (s.status === 'blocked') return ({
     SCOPE_AMENDMENT_REQUIRED: 'Amendement de périmètre à approuver', MERGED_BEFORE_REVIEW: 'PR fusionnée : revue à enregistrer',
-    QA_REJECTED: 'QA rejetée : suite à décider', STALE_EVIDENCE: 'Preuve expirée : revalider', NO_CHANGE: 'Tentative sans changement : relancer ou suivre',
+    QA_REJECTED: 'QA rejetée : suite à décider', QA_EVIDENCE: 'QA : preuves à compléter', STALE_EVIDENCE: 'Preuve expirée : revalider', NO_CHANGE: 'Tentative sans changement : relancer ou suivre',
   })[code] || `Bloquée : ${code || 'inconnu'}`;
   if (s.status === 'ready') return s.publication && s.publication.url ? 'PR à fusionner' : 'À intégrer, puis clôturer';
   if (s.status === 'delivered') return 'À intégrer, puis clôturer';
@@ -363,8 +363,9 @@ function decision(d) {
   if (!TERMINAL.has(s.status)) secondary.push(btn('Ajuster les limites', () => budgetDialog(d), 'btn', d.busy));
   if (s.status === 'draft') (questions ? primary : secondary).push(btn(questions ? 'Répondre aux questions' : 'Affiner', () => refineDialog(d, questions), questions ? 'btn btn--primary' : 'btn', d.busy));
   if (code === 'SCOPE_AMENDMENT_REQUIRED') primary.push(btn('Examiner l\'amendement', () => { state.tab = 'amendments'; renderDetail(); }, 'btn btn--primary'));
+  if (code === 'QA_EVIDENCE') primary.push(btn('Examiner les preuves', () => { state.tab = 'qa'; renderDetail(); }, 'btn btn--primary'));
   if (s.status === 'awaiting_review' || code === 'MERGED_BEFORE_REVIEW') primary.push(btn('Enregistrer ma revue', () => reviewDialog(d), 'btn btn--primary'));
-  if (d.approval && !d.busy && ['approved', 'running', 'blocked'].includes(s.status) && !['SCOPE_AMENDMENT_REQUIRED', 'QA_REJECTED', 'MERGED_BEFORE_REVIEW'].includes(code))
+  if (d.approval && !d.busy && ['approved', 'running', 'blocked'].includes(s.status) && !['SCOPE_AMENDMENT_REQUIRED', 'QA_REJECTED', 'QA_EVIDENCE', 'MERGED_BEFORE_REVIEW'].includes(code))
     (primary.length ? secondary : primary).push(btn(s.status === 'blocked' ? 'Reprendre l\'exécution' : 'Lancer l\'exécution', () => job(`/api/specs/${s.id}/run`, 'Exécution lancée'), primary.length ? 'btn' : 'btn btn--primary', d.busy));
   if (code === 'COST_BUDGET') {
     primary.push(btn('Autoriser le dépassement', () => confirmDialog('Continuer au-delà du plafond de coût',
@@ -381,7 +382,7 @@ function decision(d) {
   }
   else if (s.status === 'blocked' && ['NO_CHANGE', 'TASK_FAILED', 'REPAIR_NO_CHANGE', 'REPAIR_NO_PROGRESS', 'GATES_FAILED', 'AGENT', 'EXECUTION'].includes(code))
     secondary.push(btn('Autoriser une nouvelle tentative', () => confirmDialog('Autoriser une nouvelle tentative', 'La tâche échouée est reconstruite à partir de l\'état actuel, puis relancée à la prochaine exécution.', () => api(`/api/specs/${s.id}/retry`, { body: { confirm: true } }), 'Nouvelle tentative autorisée')));
-  if (d.approval && (code === 'STALE_EVIDENCE' || ['awaiting_review', 'ready'].includes(s.status))) secondary.push(btn('Revalider', () => job(`/api/specs/${s.id}/verify`, 'Revalidation lancée'), 'btn', d.busy));
+  if (d.approval && s.finalRun && ['ready', 'awaiting_review'].includes(s.finalRun.state) && (['STALE_EVIDENCE', 'QA_EVIDENCE'].includes(code) || ['awaiting_review', 'ready'].includes(s.status))) secondary.push(btn('Revalider', () => job(`/api/specs/${s.id}/verify`, 'Revalidation lancée'), 'btn', d.busy));
   if (s.publication && s.publication.url && !TERMINAL.has(s.status)) secondary.push(btn('Synchroniser avec la PR', () => job(`/api/specs/${s.id}/sync`, 'Synchronisation lancée'), 'btn', d.busy));
   if (!TERMINAL.has(s.status)) secondary.push(btn('Rejeter', () => rejectDialog(d), 'btn btn--quiet-danger'));
   const why = needs({ ...s, busy: d.busy });
@@ -550,6 +551,20 @@ function appendTimeline(events, initial) {
 }
 
 function qa(root, d) {
+  const axes = { architecture: 'Architecture', simplicity: 'Simplicité', reuse: 'Réutilisation', tests: 'Tests', operations: 'Exploitation', ui: 'Interface' };
+  const kinds = { unit: 'tests unitaires', integration: 'intégration', browser: 'navigateur', build: 'build', lint: 'lint', typecheck: 'typage', security: 'sécurité', architecture: 'frontières de modules' };
+  const statuses = { passed: 'réussi', cached: 'preuve réutilisée', failed: 'échec', missing: 'preuve absente', not_selected: 'non sélectionné',
+    timed_out: 'délai dépassé', cancelled: 'annulé', blocked: 'bloqué', spawn_error: 'erreur de lancement',
+    pass: 'satisfait', fail: 'défaut', unknown: 'preuve insuffisante', not_applicable: 'sans objet' };
+  const validation = d.quality?.validation;
+  if (validation) add(root, h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' },
+    h('span', { class: 'label', text: 'Contrôles du candidat' }),
+    list(validation.requirements || [], r => [pill(r.receiptIds.length && !r.missingPaths?.length ? 'ok' : 'bad', r.receiptIds.length && !r.missingPaths?.length ? 'preuve présente' : 'preuve requise absente'), ' ',
+      h('strong', { text: r.id }), h('p', { text: r.reason }), r.missingPaths?.length ? h('p', { class: 'mono muted', text: r.missingPaths.join(' · ') }) : null]),
+    list(validation.gates, g => [pill(g.receiptId ? 'ok' : 'wait', statuses[g.status] || g.status), ' ',
+      h('strong', { text: g.id }), h('span', { class: 'muted', text: ` · ${g.covers.map(x => kinds[x] || x).join(', ') || 'couverture non renseignée'}` })]),
+    validation.gaps.length ? h('p', { class: 'muted', text: `Couverture non vérifiée : ${validation.gaps.map(x => kinds[x] || x).join(', ')}. À apprécier selon le changement ; tous ces contrôles ne sont pas nécessaires à chaque tâche.` }) : null,
+    h('p', { class: 'muted', text: 'Un contrôle réussi atteste son exécution, pas la couverture de tous les comportements. Les essais en session ne remplacent pas les contrôles finaux.' }))));
   if (!d.qa) { add(root, h('p', { class: 'empty', text: 'Pas encore de rapport QA pour le candidat actuel.' })); return; }
   const r = d.qa.report; const passed = r.verdict === 'pass';
   const count = (status) => r.criteria.filter(c => c.status === status).length;
@@ -558,9 +573,17 @@ function qa(root, d) {
       h('div', { class: 'task__head' }, pill(passed ? 'ok' : 'bad', passed ? 'validé' : 'changements demandés'),
         h('span', { class: 'mono muted', text: `${count('pass')}/${r.criteria.length} critères · candidat ${shortId(r.candidateSha)}` })),
       h('p', { class: 'lead', text: r.summary }))),
+    (r.qualityChecks || []).length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' },
+      h('span', { class: 'label', text: 'Qualité du code' }), list(r.qualityChecks, x => [
+        pill(x.status === 'pass' ? 'ok' : x.status === 'fail' ? 'bad' : 'wait', statuses[x.status] || x.status), ' ',
+        h('strong', { text: axes[x.axis] || x.axis }), h('p', { text: x.evidence }),
+        h('p', { class: 'mono muted', text: [...x.paths, ...x.receiptIds, ...x.findingIds].join(' · ') })]))) : null,
     (r.findings || []).length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Constats' }),
       list(r.findings, f => [pill(f.severity === 'minor' ? 'wait' : 'bad', f.severity), ' ', f.path ? h('code', { text: f.path }) : null, h('p', { text: f.description })]))) : null,
     (r.observations || []).length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Observations' }), list(r.observations))) : null,
+    (r.negativeTestChecks || []).length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Tests négatifs' }),
+      list(r.negativeTestChecks, x => [pill(x.status === 'pass' ? 'ok' : 'wait', `${x.requirementId}[${x.testIndex}]`), h('p', { text: x.evidence }),
+        h('p', { class: 'mono muted', text: [...x.paths, ...x.receiptIds].join(' · ') })]))) : null,
     (r.securityChecks || []).length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Exigences de sécurité' }),
       list(r.securityChecks, x => [pill(x.status === 'pass' ? 'ok' : x.status === 'fail' ? 'bad' : 'wait', x.requirementId), h('span', { class: 'muted', text: ` ${x.evidence}` })]))) : null);
 }

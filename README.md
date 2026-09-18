@@ -759,6 +759,7 @@ Une suite verte ne prouve ni la qualité d’un modèle, ni une conformité entr
 |---|---|
 | [`START-HERE.md`](START-HERE.md) | prompt initial pour l’assistant |
 | [`docs/LIFECYCLE.md`](docs/LIFECYCLE.md) | spec, design, exécution, QA, revue, livraison |
+| [`docs/LOT-3-QUALITE.md`](docs/LOT-3-QUALITE.md) | grille QA, preuves de validation et activation pour les nouveaux projets |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | architecture du moteur et Repository Intelligence |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Decision Ledger et cohérence sémantique |
 | [`docs/OWASP-SECURITY.md`](docs/OWASP-SECURITY.md) | SecurityProfile, routage OWASP, threat modeling et QA sécurité |

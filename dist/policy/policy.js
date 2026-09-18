@@ -98,8 +98,21 @@ export function validateDag(gates) {
 }
 export function planGates(config, changes, lane) {
     validateDag(config.gates);
+    const requirements = validationRequirements(config, changes.files, lane);
     const chosen = new Set(config.gates.filter(g => lane === 'high' || g.mandatory ||
-        (g.lanes.includes(lane) && (g.paths.length === 0 || changes.files.some(f => g.paths.some(p => matches(f, p)))))).map(g => g.id));
+        (gateApplies(g, changes.files) && g.lanes.includes(lane))).map(g => g.id));
+    for (const requirement of requirements) {
+        const applicable = config.gates.filter(g => gateApplies(g, requirement.paths ?? changes.files));
+        if (requirement.anyOf.length === 1) {
+            applicable.filter(g => g.covers.includes(requirement.anyOf[0])).forEach(g => chosen.add(g.id));
+        }
+        else if (!applicable.some(g => chosen.has(g.id) && g.covers.some(k => requirement.anyOf.includes(k)))) {
+            // Prefer unit tests for a local edit; a behavioral obligation must not force every browser suite.
+            const gate = requirement.anyOf.flatMap(k => applicable.filter(g => g.covers.includes(k)))[0];
+            if (gate)
+                chosen.add(gate.id);
+        }
+    }
     const byId = new Map(config.gates.map(g => [g.id, g]));
     function include(id) { for (const dep of byId.get(id).dependsOn) {
         if (!chosen.has(dep)) {
@@ -110,6 +123,46 @@ export function planGates(config, changes, lane) {
     [...chosen].forEach(include);
     invariant(chosen.size > 0, 'NO_GATES', `No checks configured for ${lane}; refusing empty validation`);
     return config.gates.filter(g => chosen.has(g.id));
+}
+export function gateApplies(gate, files) {
+    return gate.paths.length === 0 || files.some(f => gate.paths.some(p => matches(f, p)));
+}
+export function isCodeChange(files) {
+    return !files.length || files.some(p => !/\.(?:md|rst|txt)$/i.test(p) || /(?:^|\/)requirements[^/]*\.txt$/i.test(p));
+}
+function isTestFile(path) {
+    return /(?:^|\/)(?:test|tests|__tests__|e2e)\/|\.(?:test|spec)\.[^/]+$|_test\.go$/i.test(path);
+}
+export function isUiChange(files) {
+    return files.some(p => !isTestFile(p) && (/\.(?:html|css|scss|sass|less|tsx|jsx|vue|svelte|mdx)$/i.test(p) ||
+        /(?:^|\/)(?:ui|components|pages|views|frontend)\/.*\.(?:[cm]?[jt]s)$/i.test(p)));
+}
+/** Conservative defaults plus reviewed project paths, not a semantic classifier. */
+export function validationRequirements(config, files, lane) {
+    if (config.workflow.qualityReview !== 'evidence')
+        return [];
+    const required = [];
+    const add = (id, anyOf, reason, paths) => required.push({ id, anyOf, reason, ...(paths ? { paths } : {}) });
+    const code = isCodeChange(files);
+    const productionFiles = files.filter(p => !isTestFile(p) && isCodeChange([p]));
+    const production = code && (!files.length || productionFiles.some(p => isCodeChange([p])));
+    if (code)
+        add('behavior', ['unit', 'integration', 'browser'], 'Executable changes need behavioral tests.');
+    if (production && (config.gates.some(g => g.covers.includes('build') && gateApplies(g, files)) ||
+        productionFiles.some(p => /\.(?:tsx?|jsx|vue|svelte|mdx|rs|go|java|kt|cs|c|cpp)$/i.test(p) || /(?:^|\/)(?:package\.json|Cargo\.toml|go\.mod|pom\.xml)$/.test(p))))
+        add('build', ['build'], 'Changed build inputs or an existing applicable production build.', productionFiles);
+    if (production && (lane === 'high' || productionFiles.some(p => /(?:^|\/)(?:api|routes|adapters|repositories|migrations|database|db|integrations)(?:\/|\.)|\.sql$/i.test(p))))
+        add('integration', ['integration'], 'Changed integration boundary or high-risk executable change.', lane === 'high' ? productionFiles : productionFiles.filter(p => /(?:^|\/)(?:api|routes|adapters|repositories|migrations|database|db|integrations)(?:\/|\.)|\.sql$/i.test(p)));
+    if (isUiChange(files))
+        add('browser', ['browser'], 'Changed UI source needs an observed browser check.', files.filter(p => isUiChange([p])));
+    for (const rule of config.validationRules ?? []) {
+        // Validate patterns even when no changed file would match (misconfiguration must be visible).
+        rule.paths.forEach(p => matches('probe', p));
+        if (files.some(f => rule.paths.some(p => matches(f, p))))
+            for (const kind of rule.requires)
+                add(`rule:${rule.id}:${kind}`, [kind], `Project validation rule: ${rule.id}`, files.filter(f => rule.paths.some(p => matches(f, p))));
+    }
+    return required;
 }
 export function requiredApprovals(lane, mode = 'team') {
     if (mode === 'solo')

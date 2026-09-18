@@ -3,6 +3,11 @@
 
 ## Unreleased — reliability and efficient feature work
 
+- Evidence mode now blocks missing applicable build/integration/browser/boundary receipts before QA and delivery, including compact tasks. Required gates override lane filtering within their path scope. Negative security cases map to reviewed test files and final behavioral receipts; structural decisions require explicit constraint, simpler alternative and risks. An offline Chromium acceptance script covers the evidence dashboard.
+
+- Lot 3: add evidence-backed QA axes (architecture, simplicity, reuse, tests, operations, UI), validate file/receipt/finding references and enforce the same checks on manual import and delivery. Unknown quality evidence pauses without automatic code repairs; minor observations alone cannot request changes.
+- Label configured gate coverage and expose observed/missing/unselected categories in CLI, dashboard and review/delivery artifacts. New init/onboarding configurations opt into evidence QA; existing configurations retain legacy behavior. No extra QA invocation or automatic tool installation is introduced.
+
 - Integrate provider stop messages with model/token accounting and Codex usage; normalize the dashboard test repository path for macOS.
 
 - Implement the three short-loop paths: explicit compact/standard/structural paths, bounded Product brief, checkpointed architecture decisions bound to approval, focused task context, retained repair context and independent targeted QA. Compact model-QA exemption is rechecked against the observed diff through final review; sensitive changes retain stronger checks.

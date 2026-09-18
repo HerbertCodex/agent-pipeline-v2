@@ -133,6 +133,7 @@ export declare class Lifecycle {
     approveCriterionAmendment(id: string, amendmentId: string, expectedHash: string, actor: string, note: string): Document<SpecRecord>;
     approveScopeAmendment(id: string, amendmentId: string, actor: string, note: string): Promise<Document<SpecRecord>>;
     run(id: string, options?: WorkflowOptions): Promise<Document<SpecRecord>>;
+    private qualityEvidence;
     private qaMarkdown;
     /** The approved mockup QA compares the candidate against; bounded like the Implementer's copy. */
     private qaDesignContext;

@@ -3,6 +3,7 @@ import { s, type Infer } from './schema.js';
 import { invariant } from './errors.js';
 export const VERSION = '2.0.0-alpha.8';
 export const lanes = ['fast', 'standard', 'high'] as const;
+export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'] as const;
 export type Lane = typeof lanes[number];
 const id = s.string(1, 80, /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
 const paths = s.array(s.string(1, 500), 0, 500);
@@ -15,6 +16,10 @@ export const commandSchema = s.object({
 });
 export const gateSchema = s.object({
   id, command: argv,
+  // Reviewed coverage labels, never inferred from a successful exit code or a gate name.
+  covers: s.default(s.array(s.enum(validationKinds), 0, validationKinds.length), []),
+  // Test files actually included by this command, reviewed together with its argv.
+  testPaths: s.default(paths, []),
   timeoutMs: s.default(s.number(10, 3600000), 120000),
   passEnv: s.default(envNames, []),
   dependsOn: s.default(s.array(id), []),
@@ -85,6 +90,7 @@ export const configSchema = s.object({
   }), 0, 8), []),
   workflow: s.default(s.object({
     planningMode: s.default(s.enum(['legacy', 'adaptive']), 'legacy'),
+    qualityReview: s.default(s.enum(['legacy', 'evidence']), 'legacy'),
     qaLanes: s.default(s.array(s.enum(lanes), 0, 3), ['standard', 'high']),
     maxQaRepairs: s.default(s.number(0, 3), 2),
     maxActiveMs: s.default(s.number(100, 14400000), 3600000),
@@ -95,7 +101,7 @@ export const configSchema = s.object({
     generatedPaths: s.default(s.array(s.string(1, 300), 0, 100), [...DEFAULT_GENERATED_PATHS]),
     /** Stops a spec once the providers declare this much spending on it; continuing is an explicit decision. */
     maxSpecCostUsd: s.default(s.nullable(s.finite(0.01, 10000)), 25),
-  }), { planningMode: 'legacy', qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team', maxOutputRepairs: 1, generatedPaths: [...DEFAULT_GENERATED_PATHS], maxSpecCostUsd: 25 }),
+  }), { planningMode: 'legacy', qualityReview: 'legacy', qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team', maxOutputRepairs: 1, generatedPaths: [...DEFAULT_GENERATED_PATHS], maxSpecCostUsd: 25 }),
   feedback: s.default(s.object({
     gateIds: s.default(s.array(id, 0, 20), []),
     maxCalls: s.default(s.number(1, 20), 4),
@@ -110,6 +116,11 @@ export const configSchema = s.object({
   }), { ...DEFAULT_LIMITS }),
   setup: s.default(s.array(commandSchema, 0, 20), []),
   gates: s.array(gateSchema, 1, 100),
+  // Additional project-specific obligations; defaults inferred from the diff cannot be removed here.
+  validationRules: s.default(s.array(s.object({
+    id, paths: s.array(s.string(1, 500), 1, 100),
+    requires: s.array(s.enum(validationKinds), 1, validationKinds.length),
+  }), 0, 100), []),
   concurrency: s.default(s.number(1, 16), 3),
   failFast: s.default(s.boolean(), true),
   // An attempt is one agent session plus its checks: leave room for both after the agent timeout.
@@ -188,8 +199,10 @@ export function validateConfig(value: unknown): Config {
   invariant(new Set(config.roleProfiles.map(r => `${r.provider}:${r.role}`)).size === config.roleProfiles.length, 'CONFIG', 'Duplicate role profile');
   const ids = config.gates.map(g => g.id);
   invariant(new Set(ids).size === ids.length, 'CONFIG', 'Duplicate gate id');
+  invariant(new Set(config.validationRules.map(r => r.id)).size === config.validationRules.length, 'CONFIG', 'Duplicate validation rule id');
   invariant(new Set(config.feedback.gateIds).size === config.feedback.gateIds.length && config.feedback.gateIds.every(id => config.gates.some(g => g.id === id && g.dependsOn.length === 0 && g.command.every(a => !a.includes('{{')))), 'CONFIG', 'Feedback must reference independent configured checks without candidate placeholders');
   for (const gate of config.gates) {
+    invariant(new Set(gate.covers).size === gate.covers.length, 'CONFIG', `Duplicate coverage label: ${gate.id}`);
     if (gate.cacheTtlMs > 0) invariant(gate.outputs.length === 0 && gate.dependsOn.length === 0 &&
       !config.gates.some(g => g.dependsOn.includes(gate.id)), 'CONFIG',
       `Receipt-only caching is limited to independent, output-free checks in this alpha: ${gate.id}`);

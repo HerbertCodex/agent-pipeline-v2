@@ -2,6 +2,7 @@ import { type Infer } from '../domain/schema.js';
 import { type Config, type Lane } from '../domain/contracts.js';
 import { type DecisionLedger } from './decisions.js';
 import { type SecurityContext } from '../security/owasp.js';
+import { type QualityContext } from '../quality/review.js';
 export declare const threatModelSchema: import("../domain/schema.js").Schema<{
     readonly required: boolean;
     readonly summary: string;
@@ -178,6 +179,22 @@ export declare const qaSchema: import("../domain/schema.js").Schema<{
         readonly status: "unknown" | "pass" | "fail";
         readonly evidence: string;
     }[];
+    readonly qualityChecks: {
+        readonly axis: "architecture" | "simplicity" | "reuse" | "tests" | "operations" | "ui";
+        readonly status: "unknown" | "pass" | "fail" | "not_applicable";
+        readonly evidence: string;
+        readonly paths: string[];
+        readonly receiptIds: string[];
+        readonly findingIds: string[];
+    }[];
+    readonly negativeTestChecks: {
+        readonly requirementId: string;
+        readonly testIndex: number;
+        readonly status: "unknown" | "pass" | "fail";
+        readonly evidence: string;
+        readonly paths: string[];
+        readonly receiptIds: string[];
+    }[];
 }>;
 export type QaReport = Infer<typeof qaSchema>;
 export declare const designProposalSchema: import("../domain/schema.js").Schema<{
@@ -253,7 +270,11 @@ export declare function validateSpec(value: unknown, ready?: boolean, ledger?: D
  */
 export declare function assertSpecReadiness(spec: Spec): Spec;
 export declare function taskOrder(spec: Spec): Spec['tasks'];
-export declare function validateQa(value: unknown, spec: Spec, candidateSha: string, ledger?: DecisionLedger): QaReport;
+export declare function validateQa(value: unknown, spec: Spec, candidateSha: string, ledger?: DecisionLedger, quality?: {
+    context: QualityContext;
+    paths: ReadonlySet<string>;
+    candidatePaths?: ReadonlySet<string>;
+}): QaReport;
 export declare function stricter(...values: Lane[]): Lane;
 export interface SpecApproval {
     hash: string;

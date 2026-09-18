@@ -37,7 +37,7 @@ export declare const decisionCoverageSchema: import("../domain/schema.js").Schem
     readonly decisionId: string;
     readonly status: "unknown" | "deferred" | "satisfied" | "conflict";
     readonly evidence: {
-        readonly kind: "acceptance" | "file" | "architecture" | "constraint";
+        readonly kind: "architecture" | "acceptance" | "file" | "constraint";
         readonly reference: string;
         readonly detail: string;
     }[];

@@ -237,6 +237,188 @@
       "minItems": 0,
       "maxItems": 200,
       "default": []
+    },
+    "qualityChecks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "axis": {
+            "type": "string",
+            "enum": [
+              "architecture",
+              "simplicity",
+              "reuse",
+              "tests",
+              "operations",
+              "ui"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "unknown",
+              "not_applicable"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1600,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ]
+            },
+            "minItems": 0,
+            "maxItems": 12
+          },
+          "receiptIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ],
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "minItems": 0,
+            "maxItems": 20
+          },
+          "findingIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ],
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "minItems": 0,
+            "maxItems": 10
+          }
+        },
+        "required": [
+          "axis",
+          "status",
+          "evidence",
+          "paths",
+          "receiptIds",
+          "findingIds"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 6,
+      "default": []
+    },
+    "negativeTestChecks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "requirementId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ],
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "testIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 29
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "unknown"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1600,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ]
+            },
+            "minItems": 0,
+            "maxItems": 12
+          },
+          "receiptIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ],
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "minItems": 0,
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "requirementId",
+          "testIndex",
+          "status",
+          "evidence",
+          "paths",
+          "receiptIds"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 3000,
+      "default": []
     }
   },
   "required": [

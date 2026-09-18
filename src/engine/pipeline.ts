@@ -1,3 +1,4 @@
+import { assertRequiredEvidence, requiredEvidence } from "../quality/review.js";
 import { roleAgent } from "../adapters/routing.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -101,7 +102,8 @@ export class Pipeline {
       ...task.allowedNewPaths,
       ...config.risk.fastPaths,
       ...config.risk.highPaths,
-      ...config.gates.flatMap((g) => g.paths),
+      ...config.gates.flatMap((g) => [...g.paths, ...g.testPaths]),
+      ...config.validationRules.flatMap(r => r.paths),
     ])
       matches("probe", path);
     const git = new Git();
@@ -1010,6 +1012,7 @@ export class Pipeline {
         this.store.save(run, "validation.failed");
         return false;
       }
+      assertRequiredEvidence(requiredEvidence(run));
       run.validatedAt = Date.now();
       const required = run.task.reviewRequired
         ? requiredApprovals(
@@ -1088,6 +1091,7 @@ export class Pipeline {
       "Required receipts are missing or mismatched",
     );
     for (const receipt of run.receipts) this.store.verifyReceipt(receipt);
+    assertRequiredEvidence(requiredEvidence(run));
     const git = new Git();
     await git.clean(run.workspace, sha);
     const observed = await git.changes(run.workspace, run.baseSha, sha);

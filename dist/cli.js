@@ -38,11 +38,11 @@ Exit: 0 ready/inspection, 2 awaiting review, 1 failed, 130 interrupted.
 export const exampleConfig = {
     schemaVersion: 1, executionMode: 'local-trusted', environment: { id: 'REPLACE-with-pinned-environment-id' },
     agent: { type: 'codex', passEnv: ['HOME', 'CODEX_HOME', 'CODEX_API_KEY'] },
-    workflow: { planningMode: 'adaptive' },
+    workflow: { planningMode: 'adaptive', qualityReview: 'evidence' },
     setup: [{ command: ['npm', 'ci', '--ignore-scripts'], timeoutMs: 300000, passEnv: ['HOME'] }],
     gates: [
-        { id: 'typecheck', command: ['npm', 'run', 'typecheck'], lanes: ['standard', 'high'], cacheTtlMs: 0 },
-        { id: 'test', command: ['npm', 'test'], lanes: ['standard', 'high'], cacheTtlMs: 0 },
+        { id: 'typecheck', covers: ['typecheck'], command: ['npm', 'run', 'typecheck'], lanes: ['standard', 'high'], cacheTtlMs: 0 },
+        { id: 'test', covers: ['unit'], command: ['npm', 'test'], lanes: ['standard', 'high'], cacheTtlMs: 0 },
         { id: 'diff-check', command: ['git', 'diff', '--check', '{{baseSha}}', '{{candidateSha}}'], mandatory: true, cacheTtlMs: 0 },
     ], concurrency: 2, maxRepairAttempts: 1,
 };

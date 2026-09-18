@@ -5,6 +5,7 @@ import { matches } from '../policy/policy.js';
 import { hash } from '../domain/hash.js';
 import { confirmedDecisions, ambiguousDecisions, validateDecisionLedger } from './decisions.js';
 import { owaspTopicIds, securityProfileSchema, neutralSecurityContext } from '../security/owasp.js';
+import { qualityCheckSchema, validateQualityChecks } from '../quality/review.js';
 const id = s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
 const sha = s.string(40, 64, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const neutralSecurityProfile = securityProfileSchema.parse({});
@@ -69,6 +70,11 @@ export const qaSchema = s.object({
     observations: s.array(s.string(1, 3000), 0, 100),
     decisionChecks: s.default(s.array(s.object({ decisionId: id, status: s.enum(['pass', 'fail', 'unknown']), evidence: s.string(1, 4000) }), 0, 200), []),
     securityChecks: s.default(s.array(s.object({ requirementId: id, status: s.enum(['pass', 'fail', 'unknown']), evidence: s.string(1, 4000) }), 0, 200), []),
+    qualityChecks: s.default(s.array(qualityCheckSchema, 0, 6), []),
+    negativeTestChecks: s.default(s.array(s.object({
+        requirementId: id, testIndex: s.number(0, 29), status: s.enum(['pass', 'fail', 'unknown']),
+        evidence: s.string(1, 1600), paths: s.array(s.string(1, 500), 0, 12), receiptIds: s.array(id, 0, 20),
+    }), 0, 3000), []),
 });
 export const designProposalSchema = s.object({
     summary: s.string(1, 8000),
@@ -219,10 +225,29 @@ export function taskOrder(spec) {
     spec.tasks.forEach(t => visit(t.id));
     return ordered;
 }
-export function validateQa(value, spec, candidateSha, ledger = { schemaVersion: 1, decisions: [] }) {
+export function validateQa(value, spec, candidateSha, ledger = { schemaVersion: 1, decisions: [] }, quality) {
     const qa = qaSchema.parse(value);
     const checkedSpec = specSchema.parse(spec);
     const decisions = validateDecisionLedger(ledger);
+    validateQualityChecks(qa, quality?.context, quality?.paths);
+    if (quality?.context.enabled) {
+        const expected = checkedSpec.security.requirements.flatMap(r => r.negativeTests.map((_, index) => `${r.id}:${index}`));
+        const keys = qa.negativeTestChecks.map(c => `${c.requirementId}:${c.testIndex}`);
+        invariant(new Set(keys).size === keys.length && keys.length === expected.length && expected.every(k => keys.includes(k)), 'QA_SECURITY', 'Assess every declared negative test exactly once using requirementId and zero-based testIndex');
+        for (const check of qa.negativeTestChecks) {
+            const gates = quality.context.validation.gates;
+            invariant(check.evidence.trim().length > 0 && check.paths.every(p => (quality.candidatePaths ?? quality.paths).has(p)) &&
+                check.receiptIds.every(id => gates.some(g => g.receiptId === id)), 'QA_SECURITY', 'Negative-test evidence references unknown files or receipts');
+            if (check.status === 'pass')
+                invariant(check.paths.length > 0 && check.paths.every(p => gates.some(g => g.receiptId && check.receiptIds.includes(g.receiptId) && g.covers.some(k => ['unit', 'integration', 'browser'].includes(k)) &&
+                    g.testPaths.some(pattern => matches(p, pattern)))), 'QA_SECURITY', 'A negative-test pass needs actual test files covered by a successful behavioral gate testPaths');
+            const requirementCheck = qa.securityChecks.find(c => c.requirementId === check.requirementId);
+            if (qa.verdict === 'pass' || requirementCheck?.status === 'pass')
+                invariant(check.status === 'pass', 'QA_SECURITY', 'Security pass contradicts negative-test evidence');
+        }
+    }
+    else
+        invariant(!qa.negativeTestChecks.length, 'QA_SECURITY', 'Negative-test receipts require evidence mode and controller context');
     invariant([qa.summary, ...qa.criteria.map(c => c.evidence), ...qa.findings.map(f => f.description), ...qa.observations].every(t => t.trim().length > 0), 'QA', 'Blank QA evidence is not accepted');
     invariant(qa.candidateSha === candidateSha, 'QA_SHA', 'QA must name the exact candidate');
     const ids = qa.criteria.map(c => c.id);
@@ -271,7 +296,7 @@ export function specMarkdown(record, id) {
     if (record.executionPath)
         lines.splice(5, 0, `Execution path: ${record.executionPath}`);
     if (record.architecture)
-        lines.push('## Architecture', record.architecture.summary, ...record.architecture.decisions.map(d => `- ${d.decision}: ${d.rationale}\n  Alternatives: ${d.alternatives.join('; ')}\n  Tradeoffs: ${d.tradeoffs.join('; ')}\n  Reconsider when: ${d.reconsiderWhen.join('; ')}`), '');
+        lines.push('## Architecture', record.architecture.summary, ...record.architecture.decisions.map(d => `- ${d.decision}: ${d.rationale}\n  Constraint: ${d.constraint ?? d.rationale}\n  Simpler alternative: ${d.simplerAlternative ?? 'not recorded'}\n  Risks: ${d.risks?.join('; ') ?? 'not recorded'}\n  Alternatives: ${d.alternatives.join('; ')}\n  Tradeoffs: ${d.tradeoffs.join('; ')}\n  Reconsider when: ${d.reconsiderWhen.join('; ')}`), '');
     for (const c of s.acceptance)
         lines.push(`### ${c.id}`, c.description, `Verification: ${c.verification}`, '');
     if (s.decisionCoverage.length)
