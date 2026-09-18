@@ -6,6 +6,8 @@ Setup propose la configuration sans exécuter les scripts du dépôt. Product cl
 
 Les rôles Product et QA héritent de `config.agent` lorsque `config.roles.product` ou `.qa` vaut null. Ils peuvent utiliser un autre exécutable ou modèle. Ils ne sont pas nécessairement indépendants du point de vue statistique, institutionnel ou de leur identité. Les sessions sont distinctes ; les biais communs à un modèle ne sont pas éliminés.
 
+Le démarrage avec `--models FILE` fixe quick/deep et une QA dédiée. `workflow.qaProfile: "deep"` conserve cette revue approfondie pour toutes les lanes où QA est requise. Les contrôles de compatibilité, la migration et les amendements par rôle sont décrits dans [Modèles](MODELS.md).
+
 ## Installation
 
 `onboard` retourne un document persistant de type install, son hash, l'inventaire, la configuration proposée et chaque fichier prévu avec son contenu précédent. Le plan est lié au chemin du dépôt et à sa base. `--assist` ajoute une passe Setup via le moteur configuré. Aucune écriture du projet n'est adoptée depuis le workspace de Setup.

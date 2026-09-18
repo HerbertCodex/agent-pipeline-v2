@@ -1,3 +1,4 @@
+import { applyModelOverrides } from './routing.js';
 import { randomUUID } from 'node:crypto';
 import { invariant } from '../domain/errors.js';
 import { providerUsage } from './usage.js';
@@ -61,13 +62,13 @@ export function specCosts(store, record, documentId) {
     return total;
 }
 /** Every spec call, including QA and repairs, is constrained by its remaining declared budget. */
-export function budgetedAgent(store, documentId, agent, acceptCost = false) {
+export function budgetedAgent(store, documentId, agent, acceptCost = false, role = 'implementer') {
     if (!documentId)
         return agent;
     const document = store.document(documentId, 'spec');
     if (document.kind !== 'spec')
         return agent;
-    agent = { ...agent, ...document.data.operational?.agent };
+    agent = applyModelOverrides(agent, document.data.config, role, document.data.operational);
     if (acceptCost)
         return agent;
     const ceiling = document.data.operational?.maxSpecCostUsd ?? document.data.config.workflow.maxSpecCostUsd;

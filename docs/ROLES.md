@@ -47,4 +47,6 @@ Les quatre rôles traitent les instructions embarquées dans le dépôt, les log
 
 ## Qualité et preuves
 
+QA peut utiliser un modèle et un fournisseur distincts de l'Implementer. La politique `workflow.qaProfile: "deep"` sélectionne sa revue approfondie quelle que soit la lane lorsque QA est requise ; un réglage global du modèle d'implémentation ne remplace pas cette QA dédiée. Le modèle reste un choix explicite à évaluer, sans classement automatique : [gestion des modèles](MODELS.md).
+
 En mode `workflow.qualityReview: "evidence"`, la QA existante examine architecture, simplicité, réutilisation, tests, exploitation et interface. Les références aux fichiers, constats et reçus finaux sont contrôlées ; les scénarios négatifs de sécurité sont reliés aux tests exécutés. Une preuve requise manquante ou un verdict `unknown` arrête la validation avec `QA_EVIDENCE`, sans réparation automatique du code. Les checks en session de l'Implementer sont des diagnostics, pas ces preuves finales. [Contrat complet](LOT-3-QUALITE.md).

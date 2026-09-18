@@ -409,6 +409,13 @@ function overview(root, d) {
     d.cost ? h('p', { class: 'muted', text: `Coût connu : ${(d.cost.knownUsd ?? d.cost.declaredUsd ?? 0).toFixed(2)} $${d.cost.ceilingUsd ? ` / ${d.cost.ceilingUsd.toFixed(2)} $` : ''} · ${d.cost.unknownInvocations ?? 0} appel(s) au coût inconnu · ${d.cost.pendingInvocations ?? 0} appel(s) sans résultat. Échecs inclus ; montant déclaré, pas une facture.` }) : null,
     h('p', { class: 'muted', text: `Temps actif : ${duration((d.summary.planningMs ?? 0) + d.summary.activeMs)} · préparation : ${duration(d.summary.planningMs ?? 0)} · exécution : ${duration(d.summary.activeMs)}.` }));
   const c = d.content;
+  if (d.summary.models?.length) add(root, h('details', { class: 'sheet' },
+    h('summary', { class: 'sheet__cell', text: 'Modèles choisis par rôle' }),
+    h('div', { class: 'sheet__cell' }, h('p', { class: 'muted', text: 'QA peut utiliser un modèle distinct. Les contrôles de compatibilité sont visibles dans l’activité ; ils ne mesurent pas la qualité du code.' }),
+      ...d.summary.models.filter(m => m.lane !== 'fast').map(m => h('p', {},
+        h('strong', { text: `${m.role} · ${m.lane} : ` }),
+        h('span', { text: `${m.provider} / ${m.model || 'défaut du fournisseur non fixé'} · effort ${m.effort}${m.role === 'qa' && m.effectiveLane === 'high' ? ' · revue approfondie' : ''}` }),
+        h('span', { class: 'muted', text: ` — ${m.source}` }))))));
   const architecture = d.summary.architecture;
   if (architecture) add(root, h('section', { class: 'sheet' }, h('div', { class: 'sheet__cell' },
     h('h2', { text: 'Décision d’architecture' }), h('p', { text: architecture.summary }),
@@ -499,6 +506,9 @@ function describe(e) {
   return ({
     'spec.created': 'Spec créée', 'product.refinement_requested': 'Affinage demandé', 'product.proposed': 'Proposition de Product prête',
     'design.proposed': 'Maquette prête', 'spec.approved': `Spec approuvée par ${d.approval ? d.approval.reviewer : '?'}`, 'spec.rejected': 'Spec rejetée',
+    'model.preflight_passed': `Modèle vérifié : ${d.provider} / ${d.model} · effort ${d.effort}`,
+    'model.preflight_reused': `Vérification récente réutilisée : ${d.provider} / ${d.model}`,
+    'model.selected': `Choix du modèle pour ${d.role || 'agent'} : ${d.model || d.source || 'configuration du rôle'}`,
     'invocation.started': `Appel ${d.role || 'agent'} lancé (${d.requestedModel || d.provider || 'modèle par défaut'})`,
     'invocation.finished': `Appel terminé : ${d.status || ''} · ${d.usage?.costUsd == null ? 'coût inconnu' : d.usage.costUsd.toFixed(2) + ' $'}`,
     'role.checkpoint_reused': 'Résultat conservé réutilisé', 'role.checkpoint_resumed': 'Correction du résultat conservé',

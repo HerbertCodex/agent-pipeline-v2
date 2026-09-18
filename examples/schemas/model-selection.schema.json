@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "quick": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "allOf": [
+            {
+              "pattern": "^[^\\u0000]*$"
+            }
+          ],
+          "pattern": "\\S"
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "effort"
+      ],
+      "additionalProperties": false
+    },
+    "deep": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "allOf": [
+            {
+              "pattern": "^[^\\u0000]*$"
+            }
+          ],
+          "pattern": "\\S"
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "effort"
+      ],
+      "additionalProperties": false
+    },
+    "qa": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "allOf": [
+            {
+              "pattern": "^[^\\u0000]*$"
+            }
+          ],
+          "pattern": "\\S"
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "effort"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "quick",
+    "deep",
+    "qa"
+  ],
+  "additionalProperties": false
+}

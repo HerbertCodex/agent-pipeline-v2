@@ -63,6 +63,8 @@ console.log(JSON.stringify({summary:'Updated the existing button label.'}));`);
   await page.route('**/*', route => new URL(route.request().url()).origin === new URL(server.url).origin ? route.continue() : route.abort());
   await page.goto(server.url);
   await page.goto(`${new URL(server.url).origin}/#${missing.id}`);
+  await page.getByText('Modèles choisis par rôle', { exact: true }).click();
+  await page.getByText('QA peut utiliser un modèle distinct.', { exact: false }).waitFor();
   await page.getByRole('button', { name: 'Examiner les preuves', exact: true }).click();
   await page.getByText('preuve requise absente', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Revalider', exact: true }).count(), 0);
@@ -83,7 +85,7 @@ console.log(JSON.stringify({summary:'Updated the existing button label.'}));`);
   const result = { passed: true, browser: await browser.version(), network: 'localhost only', realProviderCalls: false,
     checks: ['missing browser blocks compact run without repair', 'runner executes actual Chromium gate',
       'compact browser evidence without model QA', 'missing proof visible before final run', 'desktop and mobile rendering',
-      'keyboard QA navigation', 'no invalid revalidate action', 'successful proof visible', 'no browser runtime errors'] };
+      'model choices visible in overview', 'keyboard QA navigation', 'no invalid revalidate action', 'successful proof visible', 'no browser runtime errors'] };
   writeFileSync(join(output, 'browser.json'), JSON.stringify(result, null, 2) + '\n');
   console.log(JSON.stringify(result, null, 2));
 } finally {

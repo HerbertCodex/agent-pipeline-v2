@@ -20,7 +20,9 @@ export type { RepositoryIntelligence, RepositorySymbol } from './knowledge/repos
 export { owaspTopicIds, owaspCatalog, securityProfileSchema, securityContextSchema, assessSecurity, neutralSecurityContext, topicById } from './security/owasp.js';
 export type { OwaspTopicId, OwaspTopic, SecurityProfile, SecurityContext } from './security/owasp.js';
 export { compactProposal } from './lifecycle/compact.js';
-export { roleAgent } from './adapters/routing.js';
+export { roleAgent, modelChoice, modelPlan } from './adapters/routing.js';
+export { modelSelectionSchema, validateModelSelection, applyModelSelection } from './adapters/model-selection.js';
+export type { ModelSelection } from './adapters/model-selection.js';
 export { invocationTotals } from './adapters/invocations.js';
 export { evaluationReport } from './evaluation/report.js';
 export { qualityCheckSchema, qualityContext, validationEvidence, validateQualityChecks } from './quality/review.js';

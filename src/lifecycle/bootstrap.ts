@@ -1,3 +1,5 @@
+import { selectedAgent, validateModelSelection, type ModelSelection } from '../adapters/model-selection.js';
+import { ensureModelReady, assertModelResponse } from '../adapters/model-check.js';
 import { startInvocation } from '../adapters/invocations.js';
 import { providerUsage } from '../adapters/usage.js';
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync, readdirSync, lstatSync } from 'node:fs';
@@ -48,6 +50,7 @@ export const bootstrapProposalSchema = s.object({
 export type BootstrapProposal = Infer<typeof bootstrapProposalSchema>;
 export type ArchitectureProposal = Infer<typeof architectureSchema>;
 export interface BootstrapPlan {
+  modelSelection?: ModelSelection;
   directory:string; request:string; revision:number; provider:AgentConfig; proposal:BootstrapProposal;
   semanticReview:SemanticReview; hash:string; applied:boolean; commitSha:string|null;
   approval:{ reviewer:string; note:string; at:number }|null; onboarding:{id:string;hash:string}|null;
@@ -105,7 +108,13 @@ async function runStructuredProvider<T>(store:Store,documentId:string,root:strin
   for (let attempt=0; ; attempt++) {
     invariant(Date.now() < deadline, 'BOOTSTRAP_PROVIDER', 'Shared bootstrap round deadline exhausted');
     invariant(agent.maxBudgetUsd === null || spentUsd < agent.maxBudgetUsd, 'COST_BUDGET', 'Bootstrap round budget exhausted');
-    const effective = { ...agent, timeoutMs: Math.max(1, deadline - Date.now()), maxBudgetUsd: agent.maxBudgetUsd === null ? null : Math.max(0.01, agent.maxBudgetUsd - spentUsd) };
+    let effective = { ...agent, timeoutMs: Math.max(1, deadline - Date.now()), maxBudgetUsd: agent.maxBudgetUsd === null ? null : Math.max(0.01, agent.maxBudgetUsd - spentUsd) };
+    const probeStart = store.documentEvents(documentId, ['invocation.finished']).length;
+    await ensureModelReady(effective, { store, owner: { kind: 'document', id: documentId }, env, cwd: workspace, ...(signal ? { signal } : {}), hooks });
+    for (const event of store.documentEvents(documentId, ['invocation.finished']).slice(probeStart)) { const data = event.data as { usage?: { costUsd?: number } }; spentUsd += data.usage?.costUsd ?? 0; }
+    invariant(agent.maxBudgetUsd === null || spentUsd < agent.maxBudgetUsd, 'COST_BUDGET', 'Bootstrap budget exhausted during model preflight');
+    invariant(Date.now() < deadline, 'BOOTSTRAP_PROVIDER', 'Bootstrap deadline exhausted during model preflight');
+    effective = { ...effective, timeoutMs: Math.max(1, deadline - Date.now()), maxBudgetUsd: agent.maxBudgetUsd === null ? null : Math.max(0.01, agent.maxBudgetUsd - spentUsd) };
     const repairLine=repair?`\nCONTROLLER REJECTED YOUR PREVIOUS ANSWER (${repair.previousError.code}): ${repair.previousError.message}\n${repair.instruction}\n`:'';
     let command=agent.command; let input=JSON.stringify({protocol,role:'setup',instructions,...payload,...(repair?{repair}:{}),outputSchema:schema.json}); const outputFromFile=agent.type==='codex';
     if (agent.type==='codex') {
@@ -118,7 +127,7 @@ async function runStructuredProvider<T>(store:Store,documentId:string,root:strin
     invariant(command.length>0,'AGENT','Missing bootstrap provider executable');
     const invocation = startInvocation(store, { kind: 'document', id: documentId }, effective, protocol, input);
     const result=await runProcess({command,cwd:workspace,env,input,timeoutMs:effective.timeoutMs,...(signal?{signal}:{}),...hooks,maxOutputBytes:3*1024*1024});
-    invocation.finish(result); spentUsd += providerUsage(agent.type, result.stdout)?.costUsd ?? 0;
+    invocation.finish(result); assertModelResponse(agent, result); spentUsd += providerUsage(agent.type, result.stdout)?.costUsd ?? 0;
     invariant(result.status==='passed',result.status==='cancelled'?'CANCELLED':'BOOTSTRAP_PROVIDER',`${protocol} provider ${result.status}: ${redact(result.stderr.slice(-4000),env)}`);
     try {
       let text=result.stdout;
@@ -190,7 +199,7 @@ async function createProposal(store:Store,doc:Document<BootstrapPlan>,work:strin
   doc.data.proposal=proposal; doc.data.semanticReview=structuredClone(emptyReview); doc.data.hash='';
   store.saveDocument(doc,'bootstrap.proposal_checkpoint',{revision:doc.data.revision,files:proposal.files.map(f=>f.path),questions:proposal.questions});
   const ledger:DecisionLedger={schemaVersion:1,decisions:proposal.decisions};
-  const semanticReview=await runStructuredProvider(store,doc.id,work,doc.data.provider,'agent-pipeline/bootstrap-review-v1',semanticReviewInstructions,
+  const semanticReview=await runStructuredProvider(store,doc.id,work,doc.data.modelSelection ? selectedAgent(doc.data.modelSelection.qa) : doc.data.provider,'agent-pipeline/bootstrap-review-v1',semanticReviewInstructions,
     {request,decisionLedger:ledger,materialDecisionIds:ledger.decisions.filter(d=>['confirmed','ambiguous'].includes(d.status)).map(d=>d.id),proposal,securityContext:assessSecurity({text:request,projectType:proposal.projectType,files:proposal.files.map(f=>f.path)})},semanticReviewSchema,signal,
     review=>validateSemanticReview(ledger,review));
   doc.data.semanticReview=semanticReview;
@@ -207,18 +216,19 @@ function recordProposalFailure(store:Store,doc:Document<BootstrapPlan>,error:unk
   try { store.saveDocument(doc,'bootstrap.failed',{code,message:message.slice(0,4000),revision:doc.data.revision,hasProposal:doc.data.proposal.summary!=='pending'}); }
   catch { /* A failure to record must not replace the original error. */ }
 }
-export function bootstrapHash(plan:Pick<BootstrapPlan,'directory'|'request'|'revision'|'provider'|'reviewMode'|'proposal'|'semanticReview'>):string {
-  return hash({directory:plan.directory,request:plan.request,revision:plan.revision,provider:plan.provider,reviewMode:plan.reviewMode,proposal:plan.proposal,semanticReview:plan.semanticReview});
+export function bootstrapHash(plan:Pick<BootstrapPlan,'directory'|'request'|'revision'|'provider'|'reviewMode'|'proposal'|'semanticReview'|'modelSelection'>):string {
+  return hash({directory:plan.directory,request:plan.request,revision:plan.revision,provider:plan.provider,...(plan.modelSelection ? { modelSelection: plan.modelSelection } : {}),reviewMode:plan.reviewMode,proposal:plan.proposal,semanticReview:plan.semanticReview});
 }
 
 const emptyReview:SemanticReview={verdict:'changes_requested',summary:'Bootstrap proposal has not been semantically reviewed.',decisions:[],missingOperatorDecisions:[],findings:[{severity:'blocker',description:'Semantic review pending.'}]};
 const emptyProposal:BootstrapProposal={projectType:'unknown',summary:'pending',architecture:{summary:'pending architecture rationale',decisions:[{decision:'pending',rationale:'pending rationale',evidence:['pending'],alternatives:[],tradeoffs:[],reconsiderWhen:['pending']}]},decisions:[],decisionCoverage:[],files:[{path:'README.md',content:''}],questions:[],productQuestions:[],deferredQuestions:[],notes:[]};
 
-export async function planBootstrap(store:Store,path:string,request:string,provider:string|unknown,signal?:AbortSignal,reviewMode:'solo'|'team'|'regulated'='team'):Promise<Document<BootstrapPlan>> {
+export async function planBootstrap(store:Store,path:string,request:string,provider:string|unknown,signal?:AbortSignal,reviewMode:'solo'|'team'|'regulated'='team',modelSelection?:ModelSelection):Promise<Document<BootstrapPlan>> {
   invariant(request.trim().length>=10&&request.length<=30000,'BOOTSTRAP_REQUEST','Describe the new application in at least 10 characters');
   const target=await ensureBootstrapTarget(path); invariant(!isInside(target.directory,store.root)&&!isInside(store.root,target.directory),'STATE_PATH','Keep operational state outside the bootstrap target');
-  const agent=typeof provider==='string'?providerProfile(provider):agentSchema.parse(provider);
-  const draft:BootstrapPlan={directory:target.directory,request,revision:1,provider:agent,reviewMode,proposal:structuredClone(emptyProposal),semanticReview:structuredClone(emptyReview),hash:'',applied:false,commitSha:null,approval:null,onboarding:null};
+  const selection = modelSelection ? validateModelSelection(modelSelection) : undefined;
+  const agent=selection ? selectedAgent(selection.deep) : typeof provider==='string'?providerProfile(provider):agentSchema.parse(provider);
+  const draft:BootstrapPlan={...(selection ? { modelSelection: selection } : {}),directory:target.directory,request,revision:1,provider:agent,reviewMode,proposal:structuredClone(emptyProposal),semanticReview:structuredClone(emptyReview),hash:'',applied:false,commitSha:null,approval:null,onboarding:null};
   const doc=store.createDocument('bootstrap',draft); const token=store.acquireDocument(doc.id); const work=join(store.root,'bootstrap',randomUUID()); mkdirSync(work,{recursive:true,mode:0o700});
   try {
     await createProposal(store,doc,work,request,undefined,signal).catch(error=>{ recordProposalFailure(store,doc,error); throw error; });
@@ -227,12 +237,13 @@ export async function planBootstrap(store:Store,path:string,request:string,provi
   } finally { store.releaseDocument(doc.id,token); rmSync(work,{recursive:true,force:true}); }
 }
 
-export async function refineBootstrap(store:Store,id:string,request:string,signal?:AbortSignal):Promise<Document<BootstrapPlan>> {
+export async function refineBootstrap(store:Store,id:string,request:string,signal?:AbortSignal,modelSelection?:ModelSelection):Promise<Document<BootstrapPlan>> {
   invariant(request.trim().length>0&&request.length<=10000,'BOOTSTRAP_REQUEST','Provide a bounded bootstrap refinement');
   const token=store.acquireDocument(id); const work=join(store.root,'bootstrap',randomUUID()); mkdirSync(work,{recursive:true,mode:0o700});
   try {
     const doc=store.document<BootstrapPlan>(id,'bootstrap'); invariant(!doc.data.applied,'STATE','Applied bootstrap cannot be refined');
     invariant(doc.data.request.length+request.length+40<=30000,'BOOTSTRAP_REQUEST','Accumulated bootstrap request exceeds 30000 characters');
+    if (modelSelection) { doc.data.modelSelection = validateModelSelection(modelSelection); doc.data.provider = selectedAgent(doc.data.modelSelection.deep); }
     doc.data.request += `\n\nOperator refinement:\n${request}`; doc.data.revision++; doc.data.hash=''; doc.data.semanticReview=structuredClone(emptyReview);
     store.saveDocument(doc,'bootstrap.refinement_requested',{revision:doc.data.revision,request});
     await createProposal(store,doc,work,doc.data.request,request,signal).catch(error=>{ recordProposalFailure(store,doc,error); throw error; });
@@ -270,7 +281,7 @@ export async function applyBootstrap(store:Store,id:string,expectedHash:string,a
       const git=new Git();await git.exec(plan.directory,['add','--all','--','.']);await git.exec(plan.directory,['commit','--no-verify','-m','chore: bootstrap application']);
       plan.commitSha=await git.sha(plan.directory);plan.applied=true;plan.approval={reviewer:actor.trim(),note:note.trim(),at:Date.now()};
       store.saveDocument(doc,'bootstrap.applied',{hash:expectedHash,commitSha:plan.commitSha,files:plan.proposal.files.map(f=>f.path),decisionCount:ledger.decisions.length,semanticReview:plan.semanticReview.summary});
-      const onboarding=await planInstallation(store,plan.directory,{agent:plan.provider,reviewMode:plan.reviewMode});plan.onboarding={id:onboarding.id,hash:onboarding.data.hash};store.saveDocument(doc,'bootstrap.onboarding_proposed',plan.onboarding);return{bootstrap:doc,onboarding};
+      const onboarding=await planInstallation(store,plan.directory,{agent:plan.provider,reviewMode:plan.reviewMode,...(plan.modelSelection ? { modelSelection: plan.modelSelection } : {})});plan.onboarding={id:onboarding.id,hash:onboarding.data.hash};store.saveDocument(doc,'bootstrap.onboarding_proposed',plan.onboarding);return{bootstrap:doc,onboarding};
     } catch(error){if(!(await hasHead(plan.directory)))for(const full of written.reverse())rmSync(full,{force:true});throw error;}
   } finally { store.releaseDocument(id,token); }
 }

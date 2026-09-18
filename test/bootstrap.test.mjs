@@ -6,11 +6,39 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { Store } from '../dist/persistence/store.js';
 import { planBootstrap, refineBootstrap, applyBootstrap } from '../dist/lifecycle/bootstrap.js';
+import { roleAgent } from '../dist/adapters/routing.js';
 
 const run = (cwd,args) => {
   const r=spawnSync(args[0],args.slice(1),{cwd,encoding:'utf8'});
   assert.equal(r.status,0,`${args.join(' ')}\n${r.stderr}`); return r.stdout.trim();
 };
+
+test('explicit selection uses deep Codex for bootstrap, Claude for review, and survives onboarding', async t => {
+  const f=fixture(); const store=new Store(f.state); t.after(()=>store.close());
+  const bin=join(f.root,'bin'); mkdirSync(bin); const log=join(f.root,'native-calls.jsonl');
+  const wrapper=join(bin,'native.mjs');
+  writeFileSync(wrapper,`#!${process.execPath}\nimport {readFileSync,writeFileSync,appendFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+const args=process.argv.slice(2);if(args.includes('--version')){console.log('fixture 1');process.exit(0);}
+const text=readFileSync(0,'utf8');const probe=text.startsWith('Compatibility check only.');
+const request=probe?null:JSON.parse(text.slice(text.indexOf('{')));
+appendFileSync(${JSON.stringify(log)},JSON.stringify({probe,model:args[args.indexOf('--model')+1],protocol:request?.protocol})+'\\n');
+let value={ready:true};if(!probe){const r=spawnSync(process.execPath,[${JSON.stringify(f.worker)}],{input:JSON.stringify(request),encoding:'utf8'});if(r.status!==0)process.exit(4);value=JSON.parse(r.stdout);}
+if(args.includes('exec')){writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify(value));console.log(JSON.stringify({type:'turn.completed'}));}
+else console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,structured_output:value,total_cost_usd:0.01}));
+`,{mode:0o700});
+  symlinkSync(wrapper,join(bin,'codex')); symlinkSync(wrapper,join(bin,'claude'));
+  const oldPath=process.env.PATH;process.env.PATH=bin+':'+oldPath;t.after(()=>{process.env.PATH=oldPath;});
+  const selection={quick:{provider:'codex',model:'quick-test',effort:'low'},deep:{provider:'codex',model:'deep-test',effort:'high'},qa:{provider:'claude',model:'qa-test',effort:'high'}};
+  const doc=await planBootstrap(store,f.repo,'Create a minimal Node application with an addition function.',undefined,undefined,'solo',selection);
+  const calls=readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls.map(c=>[c.model,c.probe]),[['deep-test',true],['deep-test',false],['qa-test',true],['qa-test',false]]);
+  assert.equal(calls[3].protocol,'agent-pipeline/bootstrap-review-v1');
+  const result=await applyBootstrap(store,doc.id,doc.data.hash,'Test Owner','Approve the explicit profiles and bootstrap.',true);
+  assert.equal(roleAgent(result.onboarding.data.config,'qa','standard').model,'qa-test');
+  assert.equal(roleAgent(result.onboarding.data.config,'implementer','standard').model,'quick-test');
+  assert.equal(roleAgent(result.onboarding.data.config,'implementer','high').model,'deep-test');
+});
 function fixture() {
   const root=mkdtempSync(join(tmpdir(),'apv2-bootstrap-test-'));
   const repo=join(root,'app'); run(root,['git','init',repo]);

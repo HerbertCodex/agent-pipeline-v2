@@ -1,0 +1,5 @@
+{
+  "quick": { "provider": "codex", "model": "YOUR_QUICK_MODEL_ID", "effort": "low" },
+  "deep": { "provider": "codex", "model": "YOUR_DEEP_MODEL_ID", "effort": "high" },
+  "qa": { "provider": "claude", "model": "YOUR_REVIEW_MODEL_ID", "effort": "high" }
+}

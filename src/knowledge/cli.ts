@@ -1,3 +1,4 @@
+import { modelPlan } from '../adapters/routing.js';
 import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { catalog, guidanceFor, installedAssets, readRole } from './catalog.js';
@@ -81,7 +82,7 @@ export async function knowledgeCommand(command: string, args: string[], values: 
     return readFileSync(cursor, 'utf8') === file.content ? [] : [{ path: file.path, status: 'different-from-package' }];
   });
   const advice = configAdvice(config);
-  console.log(JSON.stringify({ repo, installed: true, config: path, roles, skills: config.skills, drift, configAdvice: advice,
+  console.log(JSON.stringify({ repo, installed: true, config: path, roles, models: modelPlan(config), skills: config.skills, drift, configAdvice: advice,
     note: 'No provider or gate was run. Skill/role copies in the project are reference material; the trusted package supplies runtime instructions. Drift is diagnostic, not silently overwritten.',
     next: drift.length ? 'Review docs/MIGRATION.md; preserve local edits and do not regenerate blindly.'
       : advice.length ? 'Review configAdvice: these bounds stop work in progress instead of warning before it starts.'

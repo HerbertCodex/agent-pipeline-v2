@@ -416,6 +416,7 @@ export interface SpecRecord {
         maxSpecCostUsd: number;
         maxActiveMs: number;
         agent: Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd'>> | null;
+        roles?: Partial<Record<'product' | 'design' | 'implementer' | 'qa', Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd'>>>>;
         at: number;
         reviewer: string;
         note: string;

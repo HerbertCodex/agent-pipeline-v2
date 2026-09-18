@@ -8,6 +8,7 @@ Les guides ci-dessous décrivent le code actuel, y compris les parcours courts e
 | --- | --- |
 | Démarrer | [Présentation](../README.md) · [Prompt pour l'assistant](../START-HERE.md) |
 | Configurer parcours, modèles, budgets et contrôles | [Configuration](CONFIGURATION.md) |
+| Choisir les modèles, réserver QA et migrer un identifiant | [Modèles](MODELS.md) |
 | Piloter une spec, reprendre un arrêt, livrer | [Cycle de vie](LIFECYCLE.md) |
 | Mettre à jour un projet existant | [Migration](MIGRATION.md) |
 | Comprendre les fournisseurs et les outils autorisés | [Adaptateurs](ADAPTERS.md) |
@@ -24,6 +25,7 @@ Ces documents décrivent un état daté. Leurs résultats et leurs échecs sont 
 - [Audit initial du 18 septembre](AUDIT-2026-09-18.md) : constats **avant** les corrections.
 - [Bilan des améliorations](AMELIORATIONS-2026-09-18.md) : lots 1 à 3, calibration et limites des mesures.
 - [Validation du lot 3](../validation/lot3-2026-09-18/summary.json) : 446 tests, contrôle du paquet et parcours Chromium.
+- [Validation des modèles et de QA dédiée](../validation/models-2026-09-18/summary.json) : 465 tests, installation du paquet et affichage Chromium ; fournisseurs simulés.
 - [Calibration des profils](../validation/short-loop-2026-09-18/CALIBRATION.md) : petits cas Claude, résultats et coûts déclarés.
 - [Validation initiale alpha.8](../validation/VALIDATION.md) : périmètre antérieur aux lots d'amélioration.
 - Notes de livraison : [alpha.3](RELEASE-alpha.3.md), [alpha.4](RELEASE-alpha.4.md), [alpha.5](RELEASE-alpha.5.md), [alpha.8](RELEASE-alpha.8.md).

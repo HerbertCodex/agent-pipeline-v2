@@ -1,3 +1,5 @@
+import { selectedAgent, validateModelSelection } from '../adapters/model-selection.js';
+import { modelPlan } from '../adapters/routing.js';
 import { validateConfig, agentSchema } from '../domain/contracts.js';
 import { providerProfile } from '../adapters/providers.js';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -61,7 +63,8 @@ Maintenance:
                                            Dry-run by default; removes abandoned or terminal
                                            lifecycle documents, their runs and their workspaces
 
---model MODEL and --effort low|medium|high select native bootstrap/onboard execution.
+--models FILE selects explicit quick/deep/QA profiles for bootstrap/onboard (QA may use a different provider).
+--model MODEL and --effort low|medium|high select native bootstrap/onboard execution. Explicit models enable a bounded, billed compatibility probe before project calls.
 --request-file FILE may replace --request. --quiet suppresses progress on stderr.
 Product and QA use read-only role invocations with Codex, Claude Code or a compatible command worker.
 No operator approval is inferred from a model response. No deploy command.
@@ -78,7 +81,10 @@ export async function lifecycleCommand(command: string, positionals: string[], v
         return text;
     } return required('request'); };
     const repo = resolve(str('repo') ?? '.');
-    const chosenProvider = (name: string) => agentSchema.parse({ ...providerProfile(name), ...(str('model') ? { model: str('model') } : {}), ...(str('effort') ? { effort: str('effort') } : {}) });
+    const chosenProvider = (name: string) => agentSchema.parse({ ...providerProfile(name), ...(str('model') ? { model: str('model'), preflight: 'probe' } : {}), ...(str('effort') ? { effort: str('effort') } : {}) });
+    const selection = str('models') ? validateModelSelection(load(str('models')!)) : undefined;
+    invariant(!selection || !['provider','agent','config','model','effort'].some(k => str(k)), 'ARGUMENT', 'Use --models FILE by itself; provider and model choices are in that file.');
+    invariant(!selection || (command === 'onboard' && !positionals[1]) || (command === 'bootstrap' && (!positionals[1] || positionals[1] === 'refine')), 'ARGUMENT', '--models is supported by onboard, bootstrap and bootstrap refine.');
     const config = (): unknown => load(str('config') ?? join(repo, 'pipeline.v2.json'));
     const approval = async (targetRepo: string): Promise<{ reviewer:string; note:string }> => {
         invariant(values['approve'] === true || str('reviewer') !== undefined || str('note') !== undefined, 'CONFIRM', 'Use --approve to record explicit operator approval');
@@ -96,10 +102,10 @@ export async function lifecycleCommand(command: string, positionals: string[], v
         if (command === 'bootstrap') {
             const [sub, id] = positionals.slice(1);
             if (!sub) {
-                invariant(str('provider'), 'ARGUMENT', 'Bootstrap requires --provider codex|claude');
+                invariant(str('provider') || selection, 'ARGUMENT', 'Bootstrap requires --models FILE or --provider codex|claude');
                 const reviewMode = (str('review-mode') ?? 'team') as 'solo' | 'team' | 'regulated';
                 invariant(['solo','team','regulated'].includes(reviewMode), 'ARGUMENT', 'Choose --review-mode solo|team|regulated');
-                const doc = await planBootstrap(life.store, repo, textRequest(), chosenProvider(str('provider')!), signal, reviewMode);
+                const doc = await planBootstrap(life.store, repo, textRequest(), selection ? selectedAgent(selection.deep) : chosenProvider(str('provider')!), signal, reviewMode, selection);
                 console.log(JSON.stringify({ id: doc.id, ...doc.data, nextAction: doc.data.proposal.questions.length || doc.data.semanticReview.verdict !== 'pass' ? `Refine bootstrap ${doc.id}; only bootstrap blockers and semantic conflicts prevent apply` : `apv2 bootstrap apply ${doc.id} --hash ${doc.data.hash} --approve --commit` }, null, 2));
                 process.exitCode = doc.data.proposal.questions.length || doc.data.semanticReview.verdict !== 'pass' ? 2 : 0;
                 return true;
@@ -112,7 +118,7 @@ export async function lifecycleCommand(command: string, positionals: string[], v
                 return true;
             }
             if (sub === 'refine') {
-                const doc = await refineBootstrap(life.store, id, textRequest(), signal);
+                const doc = await refineBootstrap(life.store, id, textRequest(), signal, selection);
                 console.log(JSON.stringify({ id: doc.id, ...doc.data, nextAction: doc.data.proposal.questions.length || doc.data.semanticReview.verdict !== 'pass' ? 'Resolve bootstrap consistency findings or bootstrap-only questions, then refine again' : `apv2 bootstrap apply ${doc.id} --hash ${doc.data.hash} --approve --commit` }, null, 2));
                 process.exitCode = doc.data.proposal.questions.length || doc.data.semanticReview.verdict !== 'pass' ? 2 : 0;
                 return true;
@@ -137,7 +143,7 @@ export async function lifecycleCommand(command: string, positionals: string[], v
                 const chosen = str('provider') ? chosenProvider(str('provider')!) : str('agent') ? load(str('agent')!) : undefined;
                 const reviewMode = str('review-mode');
                 invariant(!reviewMode || ['solo','team','regulated'].includes(reviewMode), 'ARGUMENT', 'Choose --review-mode solo|team|regulated');
-                doc = await planInstallation(life.store, repo, { ...(str('config') ? { config: config() } : {}), ...(chosen ? { agent: chosen } : {}), ...(reviewMode ? { reviewMode: reviewMode as 'solo'|'team'|'regulated' } : {}), assist: values['assist'] === true, signal });
+                doc = await planInstallation(life.store, repo, { ...(selection ? { modelSelection: selection } : {}), ...(str('config') ? { config: config() } : {}), ...(chosen ? { agent: chosen } : {}), ...(reviewMode ? { reviewMode: reviewMode as 'solo'|'team'|'regulated' } : {}), assist: values['assist'] === true, signal });
             }
             else {
                 invariant(id, 'ARGUMENT', 'Missing PLAN_ID');
@@ -155,7 +161,7 @@ export async function lifecycleCommand(command: string, positionals: string[], v
                 else
                     throw new Error(`Unknown onboard command ${sub}`);
             }
-            console.log(JSON.stringify({ id: doc.id, ...doc.data, nextAction: doc.data.applied ? `Commit the proposed files if not already done, then apv2 doctor --repo ${JSON.stringify(doc.data.repo)} --execute` : `apv2 onboard apply ${doc.id} --hash ${doc.data.hash} --approve --commit` }, null, 2));
+            console.log(JSON.stringify({ id: doc.id, ...doc.data, models: modelPlan(doc.data.config), nextAction: doc.data.applied ? `Commit the proposed files if not already done, then apv2 doctor --repo ${JSON.stringify(doc.data.repo)} --execute` : `apv2 onboard apply ${doc.id} --hash ${doc.data.hash} --approve --commit` }, null, 2));
             process.exitCode = doc.data.questions.length ? 2 : 0;
             return true;
         }

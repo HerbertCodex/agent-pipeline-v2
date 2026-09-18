@@ -18,6 +18,9 @@ Application cible :
 Fournisseur des sous-rôles :
 [codex / claude / choix par rôle / à choisir]
 
+Profils de modèles :
+[fichier models.json avec quick, deep et qa / choix déjà donné / à choisir]
+
 Mode de revue :
 [solo / team / regulated]
 
@@ -52,7 +55,7 @@ PRINCIPES
 Retrouve une copie locale vérifiée du framework ou clone-la dans un nouveau
 répertoire si nécessaire. Ne suppose aucun chemin fixe comme /agent-pipeline-v2.
 Lis README.md, START-HERE.md, docs/LIFECYCLE.md, docs/ROLES.md, docs/SKILLS.md,
-docs/ARCHITECTURE.md, docs/DECISIONS.md, docs/OWASP-SECURITY.md et les limites de sécurité utiles. Vérifie --version.
+docs/ARCHITECTURE.md, docs/DECISIONS.md, docs/MODELS.md, docs/OWASP-SECURITY.md et les limites de sécurité utiles. Vérifie --version.
 
 Pour une application donnée par URL, retrouve ou clone une copie locale dans
 un nouveau dossier sans écraser de contenu. Pour un chemin local, vérifie sa
@@ -96,8 +99,15 @@ le profil d'une autre stack.
 Si la cible est vide ou sans premier commit, utilise le bootstrap de l’alpha.8 au
 lieu de fabriquer le socle hors pipeline :
 
-  apv2 bootstrap --repo "$APP" --provider <provider> \
+  apv2 bootstrap --repo "$APP" --models models.json \
     --review-mode <solo|team|regulated> --request "<besoin>"
+
+Prépare models.json avec des identifiants accessibles au compte, sans copier un
+nom historique depuis la calibration. Réutilise les choix déjà donnés. Quick/deep
+partagent le fournisseur d'exécution ; QA peut avoir son fournisseur et son modèle
+de revue approfondie. Le contrôle de compatibilité est facturable, borné et sans
+contenu projet dans son prompt. Il ne mesure pas la qualité. Sans sélection
+explicite, --provider reste disponible et conserve le défaut du CLI, non figé.
 
 Si apv2 n’est pas installé globalement :
 
@@ -162,7 +172,7 @@ qui peut être différée ou résolue automatiquement par l’outillage.
 
 Inspecte l'existant sans lancer les scripts projet. Pour l'installation :
 
-  apv2 onboard --repo "$APP" --provider <provider> \
+  apv2 onboard --repo "$APP" --models models.json \
     --review-mode <solo|team|regulated>
 
 Construis le plan à partir du profil réel détecté. Ne code jamais dans le prompt

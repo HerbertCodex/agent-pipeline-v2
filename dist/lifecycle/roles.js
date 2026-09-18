@@ -1,3 +1,4 @@
+import { ensureModelReady, assertModelResponse } from '../adapters/model-check.js';
 import { budgetedAgent, startInvocation } from '../adapters/invocations.js';
 import { applyRepairPatch, repairPatchSchema, repairPatchRules, repairError } from '../adapters/repair.js';
 import { hash } from '../domain/hash.js';
@@ -32,7 +33,8 @@ export function repairNotice(attempt, error) {
 }
 export async function runRole(options) {
     const { store, documentId, repo, sha, role } = options;
-    let agent = budgetedAgent(store, options.budgetDocumentId, options.agent, true);
+    const tuningRole = role === 'setup' ? 'implementer' : role === 'product' && options.context?.mode === 'design-proposal' ? 'design' : role;
+    let agent = budgetedAgent(store, options.budgetDocumentId, options.agent, true, tuningRole);
     const deadline = Date.now() + agent.timeoutMs;
     invariant(!isInside(repo, store.root) && !isInside(store.root, repo), 'STATE_PATH', 'State and repository must be disjoint');
     const ids = new Map();
@@ -58,6 +60,7 @@ export async function runRole(options) {
     // The same role serves several purposes (Product writes specs and designs): the mode tells them apart.
     const ctx = options.context;
     const mode = ctx && typeof ctx === 'object' && typeof ctx.mode === 'string' ? ctx.mode : null;
+    store.documentEvent(documentId, 'model.selected', { role: tuningRole, provider: agent.type, model: agent.model || null, effort: agent.effort, reason: options.modelReason ?? 'Explicit role configuration; provider default when model is empty.' });
     store.documentEvent(documentId, 'role.started', { role, mode, workspace, sha, provider: agent.type, guidance: guidanceAudit(guidance) });
     const startedAt = performance.now();
     try {
@@ -88,7 +91,10 @@ export async function runRole(options) {
         }
         for (let attempt = 0;; attempt++) {
             invariant(Date.now() < deadline, 'ROLE', `${role} timed_out: shared round deadline exhausted`);
-            agent = budgetedAgent(store, options.budgetDocumentId, options.agent, options.acceptCost);
+            agent = budgetedAgent(store, options.budgetDocumentId, options.agent, options.acceptCost, tuningRole);
+            await ensureModelReady({ ...agent, timeoutMs: Math.max(1, Math.min(agent.timeoutMs, deadline - Date.now())) }, { store, owner: { kind: 'document', id: documentId }, env, cwd: workspace, ...(options.signal ? { signal: options.signal } : {}), hooks });
+            agent = budgetedAgent(store, options.budgetDocumentId, options.agent, options.acceptCost, tuningRole);
+            invariant(Date.now() < deadline, 'ROLE', `${role} timed_out during model preflight`);
             agent = { ...agent, timeoutMs: Math.max(1, Math.min(agent.timeoutMs, deadline - Date.now())) };
             const transportSchema = usePatch ? repairPatchSchema.json : options.schema.json;
             if (agent.type === 'codex')
@@ -114,6 +120,7 @@ export async function runRole(options) {
             const result = await runProcess({ command, cwd: workspace, env, input: stdin, timeoutMs: agent.timeoutMs, ...(options.signal ? { signal: options.signal } : {}), ...hooks, maxOutputBytes: 1024 * 1024 });
             const processEndAt = performance.now();
             const usage = invocation.finish(result);
+            assertModelResponse(agent, result);
             await git.clean(workspace, sha);
             const cleanEndAt = performance.now();
             // What the provider declared for this role round: named in a failure, recorded on success.

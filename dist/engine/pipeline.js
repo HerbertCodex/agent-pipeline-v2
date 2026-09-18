@@ -1,5 +1,6 @@
+import { ensureModelReady } from '../adapters/model-check.js';
 import { assertRequiredEvidence, requiredEvidence } from "../quality/review.js";
-import { roleAgent } from "../adapters/routing.js";
+import { modelChoice } from '../adapters/routing.js';
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -25,7 +26,7 @@ import { schedule, success } from "./scheduler.js";
  * the operator can inspect that work and adopt it with an explicit `--accept-current`, or discard it with a
  * new attempt. Throwing it away silently made the work be paid for twice.
  */
-const SALVAGEABLE_AGENT_ERRORS = new Set(["AGENT", "AGENT_OUTPUT", "BUDGET", "COST_BUDGET"]);
+const SALVAGEABLE_AGENT_ERRORS = new Set(["AGENT", "AGENT_OUTPUT", "BUDGET", "COST_BUDGET", "MODEL_SELECTION", "MODEL_CLI", "MODEL_CHECK", "MODEL_AUTH", "MODEL_EFFORT", "MODEL_UNAVAILABLE"]);
 export class Pipeline {
     store;
     constructor(stateDir) {
@@ -512,9 +513,15 @@ export class Pipeline {
                     })),
                 },
             });
-            const effective = budgetedAgent(this.store, run.specId, roleAgent(run.config, 'implementer', run.risk?.lane ?? run.task.minimumLane), acceptCost);
-            const available = Math.min(remainingSpecMs(this.store, run.specId), run.remainingMs - Math.max(0, Date.now() - (run.sessionStartedAt ?? Date.now())));
+            const choice = modelChoice(run.config, 'implementer', run.risk?.lane ?? run.task.minimumLane);
+            this.store.save(run, 'model.selected', { role: choice.role, lane: choice.lane, source: choice.source, reason: choice.reason });
+            let effective = budgetedAgent(this.store, run.specId, choice.agent, acceptCost, 'implementer');
             const reserve = Math.min(run.config.validationReserveMs ?? 0, run.config.maxRunMs / 5);
+            const beforeProbe = Math.min(remainingSpecMs(this.store, run.specId), run.remainingMs - Math.max(0, Date.now() - (run.sessionStartedAt ?? Date.now())));
+            invariant(beforeProbe > reserve, "BUDGET", "Insufficient time for model preflight and the reserved final checks");
+            await ensureModelReady({ ...effective, timeoutMs: Math.max(1, Math.min(effective.timeoutMs, beforeProbe - reserve)) }, { store: this.store, owner: { kind: 'run', id: run.id }, env: environment([...run.config.environment.passEnv, ...effective.passEnv]), cwd: run.workspace, signal, hooks });
+            effective = budgetedAgent(this.store, run.specId, choice.agent, acceptCost, 'implementer');
+            const available = Math.min(remainingSpecMs(this.store, run.specId), run.remainingMs - Math.max(0, Date.now() - (run.sessionStartedAt ?? Date.now())));
             invariant(available > reserve, "BUDGET", "Insufficient time for another agent session and the reserved final checks");
             const agent = { ...effective, timeoutMs: Math.max(1, Math.min(effective.timeoutMs, available - reserve)) };
             const answer = await runAgent({ ...run.config, agent }, request, join(this.store.root, "outputs", run.id), signal, hooks, { store: this.store, runId: run.id });

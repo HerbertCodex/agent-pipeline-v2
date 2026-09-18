@@ -2,6 +2,8 @@
 
 Deux adaptateurs natifs sont livrés : **codex** et **claude**. **command** est une interface d'extension, pas une compatibilité automatique avec tous les fournisseurs. Le fournisseur de l'assistant d'éditeur et ceux des rôles de la pipeline sont distincts.
 
+Pour choisir explicitement les profils au démarrage, réserver un modèle à QA, vérifier la compatibilité ou remplacer un identifiant retiré : [gestion des modèles](MODELS.md). Les contrôles réels de compatibilité consomment du quota et ne constituent pas une mesure de qualité.
+
 `agent` configure l'Implementer ; `roles.product` et `roles.qa` héritent de lui si leur valeur est `null`. Le mode Design utilise `roles.design`, sinon Product, sinon `agent`. Les profils `quick`/`deep` et les règles `modelRouting` sélectionnent modèle et effort : voir [la configuration](CONFIGURATION.md#parcours-profils-et-checks-en-session).
 
 ## Claude Code CLI
