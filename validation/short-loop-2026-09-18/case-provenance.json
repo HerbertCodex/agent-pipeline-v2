@@ -1,0 +1,10 @@
+{
+  "sourceRepo": "~/ed/project-test",
+  "sourceSha": "f1165695989b0fda5538dc1b98974679c02f21e5",
+  "sourceFiles": [
+    "src/lib/server/loans/index.ts",
+    "src/lib/server/dates.ts",
+    "src/lib/server/catalogue/index.ts"
+  ],
+  "method": "Isolated JavaScript tasks adapted from the project business rules, with deliberately faulty starting functions and immutable acceptance oracles. This is not an end-to-end Svelte/database benchmark."
+}

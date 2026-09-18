@@ -1,5 +1,20 @@
 # Changelog
 
+
+## Unreleased — reliability and efficient feature work
+
+- Implement the three short-loop paths: explicit compact/standard/structural paths, bounded Product brief, checkpointed architecture decisions bound to approval, focused task context, retained repair context and independent targeted QA. Compact model-QA exemption is rechecked against the observed diff through final review; sensitive changes retain stronger checks.
+- Native pilot follow-ups: send the original document schema and explicit patch rules during repair; support bounded array removal/append; report minimum security coverage gaps together; evaluate added regression tests as well as the fixed oracle.
+- Calibrate the sensitive path: distinguish explicit scope exclusions from negative security obligations and actual sensitive paths; avoid interpreting repository/auth path prose as new persistence/login scope; preserve high-risk checks. The corrected authorization fixture passes architecture, Product, implementation and independent QA with Sonnet 5 / medium. Ship explicit Sonnet 5 low/medium role-profile settings and retain the earlier failures and cumulative spending evidence.
+- Add explicit quick/deep profiles per provider and role, adaptive onboarding and dashboard paths, and matched-case evaluation comparisons with campaign-wide declared budgets and provider-limit stopping.
+- Account for failed and repaired provider calls, unknown costs and unfinished invocations; share remaining spec budgets across roles.
+- Retain Product/Design checkpoints and patch rejected structured outputs; resume planning and amend operational limits without rewriting functional approval.
+- Lot 2: reject full-document responses to native patch repairs and persist terminal structured-output rejection diagnostics. Test checkpoint identity across SHA, context, schema and guidance changes.
+- Lot 2: align Product/Design, Implementer, QA and UI skills on global-CSS BEM defaults with existing-stack exceptions. Add a pinned Stylelint development check, reusable naming profile and discovery of existing `lint:css` / `lint:styles` gates.
+- Add compact task planning, minor UI reuse, explicit model/effort routing and opt-in in-session checks with independent final validation.
+- Detect existing build/integration/browser scripts, refine craftsmanship skills and add a representative, opt-in evaluation harness.
+- See [implementation and usage](docs/AMELIORATIONS-2026-09-18.md). Existing project configuration is not migrated automatically.
+
 ## Non publié
 
 - **Des valeurs par défaut qui avertissent au lieu de couper.** Les bornes livrées jusqu'ici arrêtaient le travail en cours : 32 tours, 5 $ par appel dans l'exemple d'installation, 15 minutes de délai, une seule passe de réparation. Sur un vrai projet, elles ont arrêté trois tours de Product et deux tentatives d'implémentation sans rien produire. Nouvelles valeurs : `agent.maxTurns` 200 (filet anti-boucle), `agent.maxBudgetUsd` null, `agent.timeoutMs` 30 min, `maxRunMs` 45 min (une session d'agent **plus** ses contrôles), `maxRepairAttempts` 3, et surtout `workflow.maxSpecCostUsd` activé par défaut à 25 $ — la seule borne qui avertit : elle s'arrête entre deux tâches, annonce le coût déclaré et attend une autorisation explicite. `apv2 inspect` signale dans `configAdvice` les réglages d'une configuration existante qui coupent le travail, avec la raison de chacun. Les exemples de configuration fournisseur sont alignés.

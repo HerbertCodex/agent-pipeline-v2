@@ -139,3 +139,18 @@ test('only this spec\'s mockups are served, sandboxed', async (t) => {
   assert.equal((await get(`/api/specs/${d.id}/design/..%2F..%2Fcontrol.sqlite`)).status, 404, 'no path is built from the request');
   assert.equal((await get(`/api/specs/${d.id}/design/INDEX.md`)).status, 404, 'only screen files');
 });
+
+
+test('dashboard budget amendments preserve approval and expose unknown costs', async t => {
+  const { f, get, post } = await open(t);
+  let doc = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.' });
+  doc = await f.life.approveSpec(doc.id, doc.data.contentHash, 'Test Owner', 'Reviewed the fixture specification.');
+  const hash = doc.data.approval.hash;
+  const amended = await post(`/api/specs/${doc.id}/budget`, { limits: { maxSpecCostUsd: 12.5, maxActiveMs: 600000 }, note: 'Revised total allocation for this task.' });
+  assert.equal(amended.status, 200, amended.text);
+  assert.equal(f.life.get(doc.id).data.approval.hash, hash);
+  const detail = (await get(`/api/specs/${doc.id}`)).json();
+  assert.equal(detail.cost.ceilingUsd, 12.5);
+  assert.equal(detail.cost.unknownInvocations, 1);
+  assert.equal((await post(`/api/specs/${doc.id}/budget`, { limits: { gates: [] }, note: 'Invalid scope change via budget.' })).status, 422);
+});

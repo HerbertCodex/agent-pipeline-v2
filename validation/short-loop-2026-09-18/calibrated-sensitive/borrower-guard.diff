@@ -1,0 +1,13 @@
+diff --git a/src/auth/borrower.mjs b/src/auth/borrower.mjs
+index 198e187..a0eae39 100644
+--- a/src/auth/borrower.mjs
++++ b/src/auth/borrower.mjs
+@@ -1 +1,7 @@
+-export const canBorrow = user => !!user;
++export const canBorrow = user =>
++  typeof user === 'object' &&
++  user !== null &&
++  !Array.isArray(user) &&
++  user.role === 'borrower' &&
++  Number.isSafeInteger(user.id) &&
++  user.id > 0;

@@ -13,7 +13,9 @@ export declare function repairNotice(attempt: number, error: PipelineError): {
     previousError: {
         code: string;
         message: string;
+        path: string | null;
     };
+    previousOutput?: unknown;
     instruction: string;
 };
 export declare function runRole<T>(options: {
@@ -32,4 +34,7 @@ export declare function runRole<T>(options: {
     validate?: (value: T) => T;
     /** Additional invocations allowed after an output-contract violation (0 disables repair). */
     maxRepairs?: number;
+    budgetDocumentId?: string;
+    acceptCost?: boolean;
+    repairPatches?: boolean;
 }): Promise<T>;

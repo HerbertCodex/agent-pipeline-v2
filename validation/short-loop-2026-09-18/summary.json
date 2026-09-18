@@ -1,0 +1,177 @@
+{
+  "date": "2026-09-18",
+  "framework": "2.0.0-alpha.8",
+  "implementation": "Three execution paths, bounded Product, architecture approval, focused/reused context, independent QA, role profiles, BEM and controlled in-session checks",
+  "checks": {
+    "command": "npm run check",
+    "tests": 422,
+    "passed": 422,
+    "failed": 0,
+    "typecheck": true,
+    "build": true,
+    "cssLint": true,
+    "log": "check.log",
+    "package": {
+      "version": "2.0.0-alpha.8",
+      "offlineInstall": true,
+      "roles": 4,
+      "skills": 6,
+      "providerKnowledgeAndBootstrapTestsPassed": true,
+      "lifecycleClosed": true,
+      "dashboardServed": true,
+      "realProviderCalls": false
+    }
+  },
+  "realCalibration": {
+    "status": "partial",
+    "quickOrdinaryCasesPassed": 2,
+    "sensitiveCaseValidated": false,
+    "designRoleMeasured": false,
+    "report": "REPORT.md",
+    "comparison": "comparison-including-recovery.json"
+  },
+  "spending": {
+    "authorizedTotalUsd": 8,
+    "knownUsd": 5.0423702,
+    "unknownReserveUsd": 1.56,
+    "knownPlusReservedUsd": 6.602370199999999,
+    "unknownInvocations": 1,
+    "pendingInvocations": 0,
+    "calls": 29,
+    "note": "Provider-declared costs; a timeout did not return final usage. Its requested allowance is reserved, not asserted as the actual bill. Native caps may overshoot at the final turn. No further paid calls after the unknown cost.",
+    "rows": [
+      {
+        "campaign": "apv2-short-quick-20260918",
+        "caseId": "loan-overdue",
+        "status": "draft",
+        "knownUsd": 0,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2,
+        "unknownReservations": [],
+        "calls": 1
+      },
+      {
+        "campaign": "apv2-short-quick-20260918",
+        "caseId": "borrower-guard",
+        "status": "draft",
+        "knownUsd": 0,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2,
+        "unknownReservations": [],
+        "calls": 1
+      },
+      {
+        "campaign": "apv2-short-quick-resumed-20260918",
+        "caseId": "loan-record-id",
+        "status": "awaiting_review",
+        "knownUsd": 0.10166579999999999,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2,
+        "unknownReservations": [],
+        "calls": 1
+      },
+      {
+        "campaign": "apv2-short-quick-resumed-20260918",
+        "caseId": "loan-overdue",
+        "status": "awaiting_review",
+        "knownUsd": 0.44492820000000005,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2,
+        "unknownReservations": [],
+        "calls": 3
+      },
+      {
+        "campaign": "apv2-short-quick-resumed-20260918",
+        "caseId": "borrower-guard",
+        "status": "draft",
+        "knownUsd": 0.4489988,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2,
+        "unknownReservations": [],
+        "calls": 3
+      },
+      {
+        "campaign": "apv2-short-quick-final-20260918",
+        "caseId": "loan-record-id",
+        "status": "awaiting_review",
+        "knownUsd": 0.0719752,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2,
+        "unknownReservations": [],
+        "calls": 1
+      },
+      {
+        "campaign": "apv2-short-quick-final-20260918",
+        "caseId": "loan-overdue",
+        "status": "awaiting_review",
+        "knownUsd": 0.3185996,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2,
+        "unknownReservations": [],
+        "calls": 3
+      },
+      {
+        "campaign": "apv2-short-quick-final-20260918",
+        "caseId": "borrower-guard",
+        "status": "draft",
+        "knownUsd": 0.7561726,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2,
+        "unknownReservations": [],
+        "calls": 7
+      },
+      {
+        "campaign": "apv2-short-deep-final-20260918",
+        "caseId": "loan-record-id",
+        "status": "awaiting_review",
+        "knownUsd": 0.277788,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2,
+        "unknownReservations": [],
+        "calls": 1
+      },
+      {
+        "campaign": "apv2-short-deep-final-20260918",
+        "caseId": "loan-overdue",
+        "status": "blocked",
+        "knownUsd": 1.8834909999999998,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 2,
+        "unknownReservations": [],
+        "calls": 4
+      },
+      {
+        "campaign": "apv2-short-deep-final-20260918",
+        "caseId": "borrower-guard",
+        "status": "draft",
+        "knownUsd": 0.738751,
+        "unknownInvocations": 1,
+        "pendingInvocations": 0,
+        "ceilingUsd": 2.3,
+        "unknownReservations": [
+          {
+            "id": "724102f3-4b66-4f54-9131-f2fd9deecf5f",
+            "role": "product",
+            "maxBudgetUsd": 1.56
+          }
+        ],
+        "calls": 4
+      }
+    ]
+  },
+  "remaining": [
+    "Align the conservative security profile and Product scope on sensitive cases without weakening required checks.",
+    "Repeat matched trials with the revised regression gate and finalize the deep model policy."
+  ],
+  "realProjectModified": false
+}

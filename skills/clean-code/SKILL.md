@@ -26,3 +26,6 @@ Do not mechanically enforce arbitrary line limits or rewrite adjacent modules fo
 - Error and null handling: [robustness](references/robustness.md).
 - Interfaces and dependencies: [interfaces](references/interfaces.md), [coupling](references/solid-and-coupling.md).
 - Review of a completed change: [checklist](assets/review-checklist.md).
+
+## Review evidence
+Judge the diff by understandable domain names, localized responsibilities, explicit error paths, preserved invariants and tests of public behavior. Prefer existing project conventions. Avoid arbitrary line limits or abstraction counts. Include configured build/lint results when available; do not invent an unconfigured quality check.

@@ -1,3 +1,4 @@
+import type { Store } from '../persistence/store.js';
 import { type Guidance } from '../knowledge/catalog.js';
 import { type AttemptUsage } from './usage.js';
 import type { SkillsConfig } from '../domain/knowledge.js';
@@ -23,7 +24,10 @@ export interface AgentRequest {
     };
 }
 export declare function requestFor(task: Task, baseSha: string, workspace: string, failures: GateReceipt[] | undefined, skills: SkillsConfig | undefined, repositoryIntelligence: RepositoryIntelligence): AgentRequest;
-export declare function runAgent(config: Config, request: AgentRequest, outputRoot: string, signal: AbortSignal, hooks?: ProcessHooks): Promise<{
+export declare function runAgent(config: Config, request: AgentRequest, outputRoot: string, signal: AbortSignal, hooks?: ProcessHooks, journal?: {
+    store: Store;
+    runId: string;
+}): Promise<{
     summary: string;
     usage: AttemptUsage | null;
 }>;

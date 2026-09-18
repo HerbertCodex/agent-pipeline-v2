@@ -340,6 +340,8 @@ export interface Publication {
     purpose?: 'review' | 'delivery';
 }
 export interface SpecRecord {
+    executionPath?: import('./pathways.js').ExecutionPath;
+    architecture?: import('./pathways.js').Architecture | null;
     repo: string;
     baseSha: string;
     config: Config;
@@ -387,6 +389,16 @@ export interface SpecRecord {
     review: ReviewWorkspace | null;
     sessionStartedAt: number | null;
     activeMs: number;
+    planningMs?: number;
+    planningStartedAt?: number | null;
+    operational?: {
+        maxSpecCostUsd: number;
+        maxActiveMs: number;
+        agent: Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd'>> | null;
+        at: number;
+        reviewer: string;
+        note: string;
+    };
     delivery: {
         directory: string;
         candidateSha: string;
@@ -398,7 +410,7 @@ export interface SpecRecord {
         message: string;
     } | null;
 }
-export declare function specHash(record: Pick<SpecRecord, 'repo' | 'baseSha' | 'configHash' | 'revision' | 'decisionLedgerHash' | 'securityContextHash' | 'content'>): string;
+export declare function specHash(record: Pick<SpecRecord, 'repo' | 'baseSha' | 'configHash' | 'revision' | 'decisionLedgerHash' | 'securityContextHash' | 'content' | 'executionPath' | 'architecture'>): string;
 export declare function approvalHash(record: Pick<SpecRecord, 'contentHash' | 'design'>): string | null;
 export declare function reviewer(name: string, note: string): void;
 export declare function specMarkdown(record: SpecRecord, id: string): string;

@@ -337,7 +337,7 @@ function currentWork(d) {
   const subject = (runId) => { const t = runTask.get(runId); return t ? `${t} · ${tasks.get(t) || ''}` : 'validation d\'ensemble'; };
   const ROLE = { product: ['Product', 'rédige la spec'], qa: ['QA', 'évalue le candidat'], setup: ['Setup', 'prépare la configuration'] };
   const RUN = { 'agent.started': 'Implementer', 'agent.repair_started': 'Implementer (réparation)', 'validation.started': 'Contrôles', 'workspace.preparing': 'Préparation de l\'espace de travail' };
-  const DONE = new Set(['role.finished', 'agent.completed', 'validation.completed', 'validation.failed', 'session.finished', 'workflow.session_finished', 'run.failed']);
+  const DONE = new Set(['invocation.finished', 'role.checkpoint_reused', 'planning.finished', 'role.finished', 'agent.completed', 'validation.completed', 'validation.failed', 'session.finished', 'workflow.session_finished', 'run.failed']);
   for (let i = state.events.length - 1; i >= 0; i--) {
     const e = state.events[i]; const x = e.data || {};
     if (DONE.has(e.type)) return null;
@@ -358,9 +358,9 @@ function decision(d) {
   const questions = (s.questions || []).length + ((s.design && s.design.questions) || []).length;
   const primary = []; const secondary = [];
   const btn = (label, onclick, kind = 'btn', disabled = false) => h('button', { class: kind, type: 'button', disabled, onclick }, label);
-  if (s.status === 'draft' && s.hash && !questions) primary.push(btn('Approuver la spec', () => approveDialog(d), 'btn btn--primary', d.busy));
-  // A round that failed leaves nothing to approve: the way out is to run Product again.
-  if (s.status === 'draft' && !s.hash && !d.busy && s.error) primary.push(btn('Relancer la rédaction', () => refineDialog(d, 0), 'btn btn--primary'));
+  if (s.status === 'draft' && s.hash && !questions && !s.error) primary.push(btn('Approuver la spec', () => approveDialog(d), 'btn btn--primary', d.busy));
+  if (s.status === 'draft' && !d.busy && s.error) primary.push(btn('Reprendre la rédaction', () => job(`/api/specs/${s.id}/plan-resume`, 'Reprise du dernier résultat conservé'), 'btn btn--primary'));
+  if (!TERMINAL.has(s.status)) secondary.push(btn('Ajuster les limites', () => budgetDialog(d), 'btn', d.busy));
   if (s.status === 'draft') (questions ? primary : secondary).push(btn(questions ? 'Répondre aux questions' : 'Affiner', () => refineDialog(d, questions), questions ? 'btn btn--primary' : 'btn', d.busy));
   if (code === 'SCOPE_AMENDMENT_REQUIRED') primary.push(btn('Examiner l\'amendement', () => { state.tab = 'amendments'; renderDetail(); }, 'btn btn--primary'));
   if (s.status === 'awaiting_review' || code === 'MERGED_BEFORE_REVIEW') primary.push(btn('Enregistrer ma revue', () => reviewDialog(d), 'btn btn--primary'));
@@ -403,7 +403,17 @@ function decision(d) {
 }
 
 function overview(root, d) {
+  add(root,
+    h('p', { class: 'muted', text: `Parcours : ${{ compact: 'tâche compacte', standard: 'Product court et QA ciblée', structural: 'architecture et validation renforcée', legacy: 'configuration existante' }[d.summary.executionPath || 'legacy']}.` }),
+    d.cost ? h('p', { class: 'muted', text: `Coût connu : ${(d.cost.knownUsd ?? d.cost.declaredUsd ?? 0).toFixed(2)} $${d.cost.ceilingUsd ? ` / ${d.cost.ceilingUsd.toFixed(2)} $` : ''} · ${d.cost.unknownInvocations ?? 0} appel(s) au coût inconnu · ${d.cost.pendingInvocations ?? 0} appel(s) sans résultat. Échecs inclus ; montant déclaré, pas une facture.` }) : null,
+    h('p', { class: 'muted', text: `Temps actif : ${duration((d.summary.planningMs ?? 0) + d.summary.activeMs)} · préparation : ${duration(d.summary.planningMs ?? 0)} · exécution : ${duration(d.summary.activeMs)}.` }));
   const c = d.content;
+  const architecture = d.summary.architecture;
+  if (architecture) add(root, h('section', { class: 'sheet' }, h('div', { class: 'sheet__cell' },
+    h('h2', { text: 'Décision d’architecture' }), h('p', { text: architecture.summary }),
+    ...architecture.decisions.map(item => h('div', {}, h('h3', { text: item.decision }), h('p', { text: item.rationale }),
+      h('p', { text: `Alternatives : ${item.alternatives.join(' · ')}` }), h('p', { text: `Compromis : ${item.tradeoffs.join(' · ')}` }),
+      h('p', { text: `À reconsidérer si : ${item.reconsiderWhen.join(' · ')}` }))))));
   if (!c) { add(root, h('p', { class: 'lead muted', text: 'Product n\'a pas encore produit de contenu.' }), h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Demande' }), h('pre', { text: d.request })))); return; }
   const sec = c.security || {};
   add(root, 
@@ -420,7 +430,7 @@ function overview(root, d) {
         h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Décisions du projet couvertes' }),
           (c.decisionCoverage || []).length ? list(c.decisionCoverage, x => [h('code', { text: x.decisionId }), h('span', { class: 'muted', text: ` → ${x.acceptanceIds.join(', ')}` })]) : h('p', { class: 'muted', text: '—' })))),
     (c.questions || []).length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Questions ouvertes' }), list(c.questions, q => q.question))) : null,
-    d.cost && d.cost.declaredUsd ? h('p', { class: 'muted', text: `Coût déclaré par le fournisseur pour cette spec : ${d.cost.declaredUsd.toFixed(2)} $${d.cost.ceilingUsd ? ` sur un plafond de ${d.cost.ceilingUsd.toFixed(2)} $` : ''}. Valeur annoncée, pas une facture.` }) : null,
+
     (d.sizeAdvice || []).length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Tâches plus grosses qu\'une session d\'agent' }),
       h('p', { class: 'muted', text: 'Au-delà de huit fichiers, une tâche dépasse souvent ce qu\'un agent termine en une session : il s\'arrête en cours de route et la tentative ne donne rien d\'utilisable. Avertissement, pas un blocage.' }),
       list(d.sizeAdvice, a => [h('code', { text: a.taskId }), h('span', { text: ` ${a.title} — ${a.paths} fichiers` })]))) : null,
@@ -488,6 +498,11 @@ function describe(e) {
   return ({
     'spec.created': 'Spec créée', 'product.refinement_requested': 'Affinage demandé', 'product.proposed': 'Proposition de Product prête',
     'design.proposed': 'Maquette prête', 'spec.approved': `Spec approuvée par ${d.approval ? d.approval.reviewer : '?'}`, 'spec.rejected': 'Spec rejetée',
+    'invocation.started': `Appel ${d.role || 'agent'} lancé (${d.requestedModel || d.provider || 'modèle par défaut'})`,
+    'invocation.finished': `Appel terminé : ${d.status || ''} · ${d.usage?.costUsd == null ? 'coût inconnu' : d.usage.costUsd.toFixed(2) + ' $'}`,
+    'role.checkpoint_reused': 'Résultat conservé réutilisé', 'role.checkpoint_resumed': 'Correction du résultat conservé',
+    'feedback.started': `Vérification pendant la session : ${d.gateId}`, 'feedback.finished': `Vérification ${d.gateId} : ${d.status}`,
+    'workflow.budget_amended': 'Limites opérationnelles ajustées',
     'role.started': `${role} au travail${d.mode === 'design-proposal' ? ' sur la maquette' : ''}`, 'role.finished': `${role} a terminé${d.mode === 'design-proposal' ? ' la maquette' : ''}${d.timingsMs ? ` en ${duration(d.timingsMs.total)}` : ''}`,
     'role.repair_requested': `${role} : réponse à corriger`, 'workflow.session_started': 'Exécution démarrée', 'workflow.session_finished': 'Exécution arrêtée',
     'workflow.task_started': `Tâche ${d.taskId || ''} démarrée`, 'workflow.task_completed': `Tâche ${d.taskId || ''} terminée`, 'workflow.blocked': `Bloquée : ${d.error ? d.error.code : ''}`,
@@ -606,6 +621,14 @@ const noteField = (placeholder = 'Ce que vous avez vérifié (au moins 10 caract
 const noteValue = () => document.getElementById('dlg-note').value;
 function noteDialog(title, text, send, done) { openDialog(title, [h('p', { text }), field('Note', noteField())], async () => { await send(noteValue()); toast(done); }, 'Approuver'); }
 function confirmDialog(title, text, send, done) { openDialog(title, h('p', { text }), async () => { await send(); toast(done); }); }
+function budgetDialog(d) {
+  const cost = h('input', { type: 'number', min: '0.01', max: '10000', step: '0.01', value: String(d.cost?.ceilingUsd ?? 25) });
+  const minutes = h('input', { type: 'number', min: '1', max: '240', step: '1', value: String(Math.ceil((d.summary.maxActiveMs ?? 3600000) / 60000)) });
+  openDialog('Ajuster les limites de la spec', [
+    h('p', { text: 'Ces limites incluent le travail déjà consommé. Leur modification est inscrite dans l’historique ; le contenu approuvé reste identique.' }),
+    field('Plafond total en dollars', cost), field('Temps total de travail en minutes', minutes), field('Motif', noteField())],
+    async () => { await api(`/api/specs/${d.summary.id}/budget`, { body: { limits: { maxSpecCostUsd: Number(cost.value), maxActiveMs: Number(minutes.value) * 60000 }, note: noteValue() } }); toast('Limites ajustées'); }, 'Enregistrer');
+}
 function approveDialog(d) {
   openDialog('Approuver la spec', [
     h('p', { text: 'Vous approuvez exactement ce contenu, spec et maquette comprises. L\'implémentation pourra démarrer.' }),
@@ -634,11 +657,22 @@ function refineDialog(d, questions) {
 function newSpecDialog() {
   const repos = [...new Set(state.specs.map(s => s.repo).filter(Boolean))];
   const repo = h('input', { type: 'text', value: state.project || repos[0] || '', list: 'repos', spellcheck: 'false' });
-  const request = h('textarea', { placeholder: 'Ce que vous voulez obtenir, vos décisions, et ce qui est hors périmètre' });
-  openDialog('Nouvelle spec', [field('Dépôt', repo), h('datalist', { id: 'repos' }, repos.map(r => h('option', { value: r }))), field('Demande', request),
-    h('p', { class: 'muted', text: 'Product rédige un brouillon ; rien n\'est exécuté avant votre approbation.' })],
-    async () => { await api('/api/specs', { body: { repo: repo.value, request: request.value } }); toast('Brouillon en préparation'); }, 'Lancer le brouillon');
+  const request = h('textarea', { placeholder: 'Le résultat attendu, vos décisions et le périmètre' });
+  const paths = h('textarea', { placeholder: 'Un chemin précis par ligne, au plus huit fichiers' });
+  const acceptance = h('textarea', { placeholder: 'Un résultat observable par ligne' });
+  const compact = h('div', { class: 'stack', hidden: true }, field('Fichiers concernés', paths), field('Critères de réussite', acceptance));
+  const mode = h('select', { onchange: e => { compact.hidden = e.target.value !== 'compact'; } },
+    h('option', { value: 'auto', text: 'Automatique — Product court ou architecture selon le risque' }), h('option', { value: 'compact', text: 'Tâche compacte — petite modification déjà définie' }), h('option', { value: 'standard', text: 'Fonctionnalité courante — Product court et QA ciblée' }), h('option', { value: 'structural', text: 'Structurant — architecture, plan et validation renforcée' }));
+  openDialog('Nouvelle spec', [field('Dépôt', repo), h('datalist', { id: 'repos' }, repos.map(r => h('option', { value: r }))), field('Préparation', mode), field('Demande', request), compact,
+    h('p', { class: 'muted', text: 'Le mode compact évite Product et la QA modèle tant que le changement reste local et non sensible. Les changements sensibles passent par une décision d’architecture. Les contrôles restent obligatoires.' })],
+    async () => {
+      const body = { repo: repo.value, request: request.value, mode: mode.value };
+      if (mode.value === 'compact') body.task = { id: 'FEATURE', title: request.value.split('\n')[0].slice(0, 200), description: request.value,
+        allowedPaths: paths.value.split('\n').map(x => x.trim()).filter(Boolean), acceptance: acceptance.value.split('\n').map(x => x.trim()).filter(Boolean) };
+      await api('/api/specs', { body }); toast('Brouillon en préparation');
+    }, 'Préparer le brouillon');
 }
+
 async function job(path, done) {
   try { await api(path, { body: {} }); toast(done); await Promise.all([loadJobs(), loadDetail()]); }
   catch (err) { toast(err.message); }

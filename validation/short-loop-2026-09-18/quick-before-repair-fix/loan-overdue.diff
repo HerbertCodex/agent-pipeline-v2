@@ -1,0 +1,44 @@
+diff --git a/src/dates.mjs b/src/dates.mjs
+index 448ccb5..f2dd692 100644
+--- a/src/dates.mjs
++++ b/src/dates.mjs
+@@ -1 +1,38 @@
+-export function isOverdue(dueOn,today) { return today >= dueOn; }
++const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
++
++function isLeapYear(year) {
++  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
++}
++
++function daysInMonth(year, month) {
++  const days = [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
++  return days[month - 1];
++}
++
++function assertValidDate(value, label) {
++  if (typeof value !== 'string') {
++    throw new RangeError(`${label} must be a string in YYYY-MM-DD format`);
++  }
++  const match = DATE_RE.exec(value);
++  if (!match) {
++    throw new RangeError(`${label} must match YYYY-MM-DD format`);
++  }
++  const year = Number(match[1]);
++  const month = Number(match[2]);
++  const day = Number(match[3]);
++  if (year < 1000 || year > 9999) {
++    throw new RangeError(`${label} year must be between 1000 and 9999`);
++  }
++  if (month < 1 || month > 12) {
++    throw new RangeError(`${label} month must be between 01 and 12`);
++  }
++  if (day < 1 || day > daysInMonth(year, month)) {
++    throw new RangeError(`${label} day is invalid for the given month/year`);
++  }
++}
++
++export function isOverdue(dueOn, today) {
++  assertValidDate(dueOn, 'dueOn');
++  assertValidDate(today, 'today');
++  return today > dueOn;
++}

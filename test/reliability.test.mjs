@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { fixture, oneTask, git } from './lifecycle-helpers.mjs';
+import { fixture, oneTask, withSecurity, git } from './lifecycle-helpers.mjs';
 import { Store } from '../dist/persistence/store.js';
 import { planBootstrap } from '../dist/lifecycle/bootstrap.js';
 import { executionCapabilities } from '../dist/lifecycle/capabilities.js';
@@ -90,9 +90,14 @@ test('timeouts and process failures are never retried as output repairs', async 
   const f = fixture(t);
   const log = join(f.root, 'slow.log'); const slow = join(f.root, 'slow-worker.mjs');
   writeFileSync(slow, `import { appendFileSync } from 'node:fs'; appendFileSync(${JSON.stringify(log)}, 'call\\n'); setTimeout(() => {}, 5000);`);
-  const agent = { type: 'command', command: [process.execPath, slow], timeoutMs: 300 };
+  // The shared deadline includes Git workspace preparation. Leave room for the
+  // child to start under suite load; the worker still exceeds the deadline.
+  const agent = { type: 'command', command: [process.execPath, slow], timeoutMs: 2000 };
   await assert.rejects(f.life.draft({ repo: f.repo, config: { ...f.config, roles: { product: agent, qa: null }, workflow: { ...f.config.workflow, maxOutputRepairs: 2 } }, request: 'Implement the approved arithmetic example.' }), /timed_out/);
   assert.equal(readFileSync(log, 'utf8').trim().split('\n').length, 1);
+  const doc = f.life.store.documents('spec')[0];
+  assert.equal(f.life.store.documentEvents(doc.id, ['invocation.started']).length, 1);
+  assert.equal(f.life.store.documentEvents(doc.id, ['role.output_repair']).length, 0);
 });
 
 test('bootstrap repairs a ledger that gives clarification metadata to a confirmed decision', async (t) => {
@@ -171,7 +176,7 @@ test('gc removes workspaces of rejected specs only after a dry run, never active
 test('an Implementer without a shell cannot be given a tool-generated file, and generatedPaths adapts per stack', async (t) => {
   const f = fixture(t);
   const claudeConfig = { ...f.config, agent: { type: 'claude' }, roles: { product: null, qa: null } };
-  const spec = oneTask(); spec.tasks[0].allowedPaths = [...spec.tasks[0].allowedPaths, 'package-lock.json'];
+  const spec = withSecurity(oneTask(), 'Dependency change.'); spec.tasks[0].allowedPaths = [...spec.tasks[0].allowedPaths, 'package-lock.json'];
   await assert.rejects(f.life.draft({ repo: f.repo, config: claudeConfig, request: 'Implement the approved arithmetic example.', proposal: spec }), /SPEC_CAPABILITY|no shell to regenerate/);
   const custom = await f.life.draft({ repo: f.repo, config: { ...claudeConfig, workflow: { ...f.config.workflow, generatedPaths: ['**/*.generated.ts'] } }, request: 'Implement the approved arithmetic example.', proposal: spec });
   assert.ok(custom.data.content.tasks[0].allowedPaths.includes('package-lock.json'), 'a project may declare its own generated paths');

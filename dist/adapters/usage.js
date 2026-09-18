@@ -1,5 +1,5 @@
 import { parseJson } from '../domain/schema.js';
-const number = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+const number = (value) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null);
 /** Claude Code reports its own limits in the result envelope; a stop reason is named rather than buried. */
 function claudeUsage(text) {
     let envelope;
@@ -20,7 +20,10 @@ function claudeUsage(text) {
         : subtype === 'error_max_turns' ? 'provider-turn-limit'
             : subtype && /budget/.test(subtype) ? 'provider-budget-limit'
                 : subtype ?? 'provider-error';
-    return { stopReason, costUsd: number(r['total_cost_usd']), turns: number(r['num_turns']), durationMs: number(r['duration_ms']) };
+    const usage = r['usage'];
+    return { stopReason, costUsd: number(r['total_cost_usd']), turns: number(r['num_turns']), durationMs: number(r['duration_ms']),
+        ...(r['modelUsage'] && typeof r['modelUsage'] === 'object' ? { models: Object.keys(r['modelUsage']) } : {}),
+        ...(usage ? { tokens: { input: number(usage['input_tokens']), output: number(usage['output_tokens']), cacheRead: number(usage['cache_read_input_tokens']), cacheWrite: number(usage['cache_creation_input_tokens']) } } : {}) };
 }
 /**
  * Usage of the last invocation, when the configured provider reports it. A provider that reports nothing
@@ -29,7 +32,27 @@ function claudeUsage(text) {
 export function providerUsage(type, stdout) {
     if (!stdout.trim())
         return null;
-    return type === 'claude' ? claudeUsage(stdout) : null;
+    if (type === 'claude')
+        return claudeUsage(stdout);
+    if (type === 'codex') {
+        const totals = { input: 0, output: 0, cacheRead: 0 };
+        let turns = 0;
+        for (const line of stdout.split('\n')) {
+            try {
+                const event = JSON.parse(line);
+                if (event.type !== 'turn.completed' || !event.usage)
+                    continue;
+                totals.input += number(event.usage.input_tokens) ?? 0;
+                totals.output += number(event.usage.output_tokens) ?? 0;
+                totals.cacheRead += number(event.usage.cached_input_tokens) ?? 0;
+                turns++;
+            }
+            catch { /* A truncated or non-JSON diagnostic is not usage. */ }
+        }
+        if (turns)
+            return { costUsd: null, stopReason: null, durationMs: null, turns, tokens: { ...totals, cacheWrite: null } };
+    }
+    return null;
 }
 /** One line an operator can act on: what stopped the agent and what it had spent when it stopped. */
 export function usageSentence(usage) {

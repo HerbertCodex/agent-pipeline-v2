@@ -1,5 +1,7 @@
 <div align="center">
 
+Les changements issus de l’audit du 18 septembre (coûts, reprises, parcours compact/standard/structurant, checks en session, modèles et skills) sont décrits dans [le guide des améliorations](docs/AMELIORATIONS-2026-09-18.md).
+
 # Agent Pipeline V2
 
 ### Des agents de développement, sans abandonner le contrôle du workflow.

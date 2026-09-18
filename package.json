@@ -33,16 +33,19 @@
     "START-HERE.md",
     "roles",
     "skills",
-    "ui"
+    "ui",
+    "stylelint.config.mjs"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint:css": "stylelint \"ui/**/*.css\" --max-warnings 0",
     "test": "npm run build && node --test --test-concurrency=4 test/*.test.mjs",
     "test:built": "node --test --test-concurrency=4 test/*.test.mjs",
     "demo": "node scripts/demo.mjs",
     "bench": "node scripts/bench.mjs",
-    "check": "npm run typecheck && npm run test",
+    "evaluate": "node scripts/evaluate.mjs",
+    "check": "npm run typecheck && npm run lint:css && npm run test",
     "prepack": "npm run build",
     "demo:lifecycle": "node scripts/demo-lifecycle.mjs",
     "pilot:provider": "node scripts/provider-pilot.mjs",
@@ -51,6 +54,7 @@
   },
   "devDependencies": {
     "@types/node": "24.0.4",
+    "stylelint": "17.15.0",
     "typescript": "5.8.3"
   },
   "private": true

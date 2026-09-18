@@ -9,6 +9,9 @@ export declare const exampleConfig: {
         type: string;
         passEnv: string[];
     };
+    workflow: {
+        planningMode: string;
+    };
     setup: {
         command: string[];
         timeoutMs: number;

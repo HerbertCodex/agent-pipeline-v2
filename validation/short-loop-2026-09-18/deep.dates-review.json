@@ -1,0 +1,31 @@
+{
+  "independentReview": true,
+  "results": [
+    {
+      "name": "century is not a leap year",
+      "passed": true
+    },
+    {
+      "name": "400-year boundary is a leap year",
+      "passed": true
+    },
+    {
+      "name": "lower year bound",
+      "passed": true
+    },
+    {
+      "name": "reject trailing newline",
+      "passed": true
+    },
+    {
+      "name": "null-prototype non-string input",
+      "passed": false,
+      "error": "The error is expected to be an instance of \"RangeError\". Received \"TypeError\"\n\nError message:\n\nCannot convert object to primitive value"
+    },
+    {
+      "name": "invalid input must not execute user coercion",
+      "passed": false,
+      "error": "The error is expected to be an instance of \"RangeError\". Received \"Error\"\n\nError message:\n\nCoercion must not run"
+    }
+  ]
+}

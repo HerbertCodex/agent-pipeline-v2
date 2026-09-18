@@ -1,0 +1,11 @@
+{
+  "authorizedTotalUsd": 8,
+  "previousLedger": "spending.json",
+  "newCampaign": "calibrated-sensitive.report.json",
+  "knownUsd": 5.8192395999999995,
+  "unknownReserveUsd": 1.56,
+  "knownPlusReservedUsd": 7.3792396,
+  "unknownInvocations": 1,
+  "pendingInvocations": 0,
+  "note": "Previous unknown call remains reserved at its requested 1.56 USD cap. The newly authorized continuation uses 0.7768694 USD declared and adds no unknown cost. No further paid calls planned."
+}

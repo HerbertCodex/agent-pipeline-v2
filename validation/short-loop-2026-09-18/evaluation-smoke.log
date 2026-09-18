@@ -1,0 +1,9 @@
+✔ evaluation dry run is side effect free and an executed fixture produces a complete report (2908.734007ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2950.030911

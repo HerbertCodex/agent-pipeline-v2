@@ -12,7 +12,7 @@ import { planInstallation,applyInstallation } from '../dist/lifecycle/onboarding
 const ok = structured_output => ({type:'result',subtype:'success',is_error:false,structured_output,permission_denials:[]});
 for(const ro of [true,false]) test(`Claude argv explicitly limits tools (readOnly=${ro})`,()=>{
  const c=claudeCommand(providerProfile('claude'),agentOutputSchema.json,ro);const opt=k=>c[c.indexOf(k)+1];
- assert.equal(opt('--permission-mode'),'dontAsk');assert.equal(opt('--output-format'),'json');assert.equal(opt('--max-turns'),'32');
+ assert.equal(opt('--permission-mode'),'dontAsk');assert.equal(opt('--output-format'),'json');assert.equal(opt('--max-turns'),'200');
  assert.equal(opt('--tools'),ro?'Read,Glob,Grep':'Read,Glob,Grep,Edit,Write');assert.equal(opt('--tools').includes('Bash'),false);
  assert.ok(c.includes('--disable-slash-commands'));assert.ok(c.includes('--no-session-persistence'));assert.ok(c.includes('--strict-mcp-config'));
  assert.ok(!c.some(v=>v.includes('bypassPermissions')||v.includes('dangerously')));assert.equal(JSON.parse(opt('--settings')).disableAllHooks,true);

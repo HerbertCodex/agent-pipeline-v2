@@ -1,0 +1,20 @@
+✔ loan-overdue (0.8683ms)
+✔ equal dates are never overdue (0.700244ms)
+✔ a strictly later today is overdue, across month and year boundaries (0.136264ms)
+✔ a strictly earlier today is not overdue, across month and year boundaries (0.144164ms)
+✔ real leap days are accepted (0.092317ms)
+✔ non-leap February 29ths are rejected (0.397484ms)
+✔ month lengths and month bounds are enforced (0.236353ms)
+✔ malformed and non-string values are rejected (0.399119ms)
+✔ year bounds are enforced (0.231503ms)
+✔ every invalid value throws a named RangeError in both argument positions (0.578146ms)
+✔ an invalid argument throws even when the other one is valid (0.21142ms)
+✔ results are strictly boolean (0.125826ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 50.617916
