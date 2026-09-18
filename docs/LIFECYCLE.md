@@ -86,6 +86,10 @@ Une tentative d'agent dont l'issue est inconnue n'est pas réexécutée aveuglé
 
 Après `REPAIR_NO_CHANGE`, les diagnostics des contrôles restent attachés au candidat inchangé. `spec retry` les transmet à la nouvelle tentative. Pour les anciens runs dont la liste de reçus a été effacée, le contrôleur retrouve les erreurs persistées de la dernière validation du même candidat. `spec show` expose ces observations dans `failedChecks` ; cette récupération ne constitue jamais une preuve de validation réussie.
 
+Après approbation d'un amendement de périmètre, le candidat conservé est d'abord **revalidé sans réparation automatique**. Si un contrôle échoue, `spec retry ID --confirm` crée une nouvelle tentative avec les diagnostics et la configuration approuvée de la spec, y compris son `maxRepairAttempts`. Le zéro temporaire de la revalidation ne se propage pas à cette tentative. Une limite zéro dans la spec reste applicable.
+
+Une autorisation permanente limitée aux appelants et tests ne signifie pas « tous les fichiers existants ». Avant d'approuver un amendement dans ce cadre, examiner le diff du candidat et les références concernées : chaque ajout doit être nécessaire au changement approuvé. Réutiliser une autorisation déjà donnée lorsqu'elle s'applique ; si le lien n'est pas établi, ne pas l'inférer de `existsSync`, d'un nom de fichier ou du seul résumé de l'agent. Les consignes Product et les avis d'impact aident à préparer ce périmètre sans garantir l'exhaustivité des dépendances.
+
 ### Réviser les tâches restantes
 
 Si le découpage est en cause, `spec replan` permet de corriger le plan d'une spec bloquée sur une tâche en échec définitif, sans relancer Product ni refaire les tâches validées. Préparer un fichier conforme à [replan.schema.json](../examples/schemas/replan.schema.json), avec `reason` et `tasks` : copier **toutes les tâches restantes** de `spec show`, puis ajuster leurs descriptions, chemins et dépendances. Les identifiants et critères associés sont conservés ; le niveau de risque peut augmenter, jamais diminuer.

@@ -1452,7 +1452,9 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                 const specTask = this.approved(r).tasks.find(t => t.id === attempt.taskId);
                 const rebuilt = attempt.kind === 'qa-repair' && r.qa ? this.qaRepairTask(r) : specTask ? this.makeTask(r, specTask) : null;
                 const task = rebuilt ? this.withPreviousAttempt(r, rebuilt, failed) : failed.task;
-                const replacement = await this.pipeline.create({ repo: r.repo, baseRef: failed.baseSha, specId: doc.id, config: failed.config, task });
+                // A scope amendment validates retained code with maxRepairAttempts=0. That temporary
+                // validation policy must not become the policy of a fresh implementation attempt.
+                const replacement = await this.pipeline.create({ repo: r.repo, baseRef: failed.baseSha, specId: doc.id, config: r.config, task });
                 r.attempts.push({ ...attempt, runId: replacement.id });
                 r.activeRunId = replacement.id;
             }

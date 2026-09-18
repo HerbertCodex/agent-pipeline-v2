@@ -3,6 +3,9 @@
 
 ## Unreleased — reliability and efficient feature work
 
+- A retry after scope-amendment validation now uses the approved spec configuration, restoring its repair allowance instead of inheriting the validation-only zero. Regression tests exercise a real failing test repaired within the retried session, and an intentional zero allowance.
+- Clarify runtime imports across server/browser boundaries and require inspection of consumers when planning shared contract changes. Document why file existence alone does not establish standing scope authorization.
+
 - Preserve failed gate diagnostics after a no-change repair; retries and `spec show` also recover observations from legacy affected runs, without restoring successful proof.
 - Serialize gates that can write to the shared validation workspace, including legacy configurations. Explicit `readOnly: true` gates retain bounded parallel execution and named resource locks.
 - Add hash-approved `spec replan` for remaining tasks of a blocked spec. Preserve completed commits, attempt/cost history and acceptance obligations; resume from the proven frontier with fresh final validation and QA. Offline regression tests reproduce the missing-export/no-change/retry failure and shared generated-artifact collisions.
