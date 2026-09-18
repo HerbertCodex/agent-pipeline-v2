@@ -3,6 +3,8 @@
 
 ## Unreleased — reliability and efficient feature work
 
+- **Chaque tâche doit laisser les contrôles capables de passer.** Ils s'exécutent après *chaque* tâche, pas seulement à la fin : une tâche qui renomme, scinde ou change la signature d'une déclaration partagée doit mettre à jour ses appelants dans le même candidat, ou garder l'ancienne déclaration utilisable jusqu'à la tâche qui les migre. Product reçoit cette règle dans son rôle et dans `executionCapabilities.rules`. Constaté sur un vrai projet : une tâche a scindé une fonction des prêts en laissant son unique appelant dans une tâche ultérieure ; le build échouait donc forcément, deux tentatives ont échoué à l'identique et aucune réparation ne pouvait corriger dans le périmètre.
+
 - Une spec antérieure au champ `experience` ne fait plus échouer la lecture des specs : le contexte qualité lit ce champ avec la même prudence que le reste du contenu. Constaté sur un vrai magasin — une seule vieille spec renvoyait « Erreur interne » pour **toute** la liste du tableau de bord.
 
 - Evidence mode now blocks missing applicable build/integration/browser/boundary receipts before QA and delivery, including compact tasks. Required gates override lane filtering within their path scope. Negative security cases map to reviewed test files and final behavioral receipts; structural decisions require explicit constraint, simpler alternative and risks. An offline Chromium acceptance script covers the evidence dashboard.

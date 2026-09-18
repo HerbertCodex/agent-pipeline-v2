@@ -40,6 +40,7 @@ export function executionCapabilities(config) {
             'An Implementer without a shell must not receive a generatedPaths file in a task allowedPaths; the controller rejects such a spec.',
             'Size each task for one agent session: the files it may edit must be readable and writable in that single session, within attempt.agentTimeoutMs and the provider limits above. A task that reaches a provider limit produces nothing usable.',
             'Split by surface, not by layer: one route, module or screen with its own tests per task, rather than one task that touches every route and a second that touches every test.',
+            'Every task must leave the repository in a state where the configured checks can pass on their own: they run after each task, not only at the end. When a task changes a shared declaration its callers rely on (rename, split, signature or return shape), either update those callers in the same task, or keep the previous declaration working until the task that migrates them runs. A task whose checks can only pass once a later task lands is not a task; merge them or order them differently.',
         ],
     };
 }
