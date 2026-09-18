@@ -5,6 +5,8 @@ import type { Config } from '../domain/contracts.js';
  */
 export interface AttemptUsage {
     stopReason: string | null;
+    /** What the provider itself said about the stop, when it says anything: quota, plan limit, API error. */
+    providerMessage: string | null;
     costUsd: number | null;
     turns: number | null;
     durationMs: number | null;

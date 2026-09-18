@@ -683,12 +683,22 @@ test('Product is told what one attempt can spend, and oversized tasks are flagge
 test('a provider stop is named, and what it declared spending is recorded', async () => {
   const { providerUsage, usageSentence } = await import('../dist/adapters/usage.js');
   const stopped = JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 33, total_cost_usd: 3.3136, duration_ms: 323170 });
-  assert.deepEqual(providerUsage('claude', stopped), { stopReason: 'provider-turn-limit', costUsd: 3.3136, turns: 33, durationMs: 323170 });
+  assert.deepEqual(providerUsage('claude', stopped), { stopReason: 'provider-turn-limit', providerMessage: null, costUsd: 3.3136, turns: 33, durationMs: 323170 });
   assert.match(usageSentence(providerUsage('claude', stopped)), /turn limit \(agent\.maxTurns\).*33 turns.*3\.31 USD/);
   const budget = JSON.stringify({ type: 'result', subtype: 'error_max_budget_usd', is_error: true, total_cost_usd: 5 });
   assert.equal(providerUsage('claude', budget).stopReason, 'provider-budget-limit');
-  const success = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 7, total_cost_usd: 0.42 });
-  assert.deepEqual(providerUsage('claude', success), { stopReason: null, costUsd: 0.42, turns: 7, durationMs: null });
+  const success = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 7, total_cost_usd: 0.42, result: 'done' });
+  assert.deepEqual(providerUsage('claude', success), { stopReason: null, providerMessage: null, costUsd: 0.42, turns: 7, durationMs: null });
+
+  // Observed on a real run: the plan's session limit ends the session with subtype "success" and is_error
+  // true. Without the provider's own sentence, the operator only saw "spent: 10 turns, 1.31 USD".
+  const sessionLimit = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, num_turns: 10,
+    total_cost_usd: 1.308, result: "You've hit your session limit · resets 11:50am (Europe/Paris)" });
+  const sessionStop = providerUsage('claude', sessionLimit);
+  assert.equal(sessionStop.stopReason, 'provider-stopped');
+  assert.equal(sessionStop.providerMessage, "You've hit your session limit · resets 11:50am (Europe/Paris)");
+  assert.match(usageSentence(sessionStop), /the provider said: "You've hit your session limit/);
+  assert.equal(providerUsage('claude', success).providerMessage, null, 'a successful run says nothing extra');
   assert.equal(providerUsage('command', success), null, 'a provider that reports nothing invents nothing');
   assert.equal(providerUsage('claude', 'not json at all'), null);
   assert.equal(usageSentence(null), '');
