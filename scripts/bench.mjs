@@ -10,7 +10,7 @@ import {runProcess,environment} from '../dist/execution/process.js';
 const{values}=parseArgs({options:{output:{type:'string'},repetitions:{type:'string'}}});
 const repeats=Number(values.repetitions??5);if(!Number.isInteger(repeats)||repeats<1||repeats>50)throw new Error('Repetitions must be in [1,50]');
 const config=validateConfig({schemaVersion:1,executionMode:'local-trusted',environment:{id:'synthetic-benchmark'},agent:{type:'command',command:['true']},
- gates:[['a',180,[]],['b',180,[]],['c',180,[]],['d',50,['a','b']]].map(([id,ms,dependsOn])=>({id,dependsOn,command:[process.execPath,'-e',`setTimeout(()=>{},${ms})`]}))});
+ gates:[['a',180,[]],['b',180,[]],['c',180,[]],['d',50,['a','b']]].map(([id,ms,dependsOn])=>({id,dependsOn,readOnly:true,command:[process.execPath,'-e',`setTimeout(()=>{},${ms})`]}))});
 const samples={serial:[],parallel:[]};
 function receipt(g,status='passed',durationMs=0){return{id:randomUUID(),runId:'bench',gateId:g.id,key:'a'.repeat(64),candidateSha:'b'.repeat(40),configHash:'c'.repeat(64),environmentHash:'d'.repeat(64),status,startedAt:Date.now(),durationMs,exitCode:status==='passed'?0:null,stdoutHash:'',stderrHash:'',diagnostic:'',reusedFrom:null};}
 for(let i=0;i<repeats;i++){

@@ -24,6 +24,9 @@ export const gateSchema = s.object({
   passEnv: s.default(envNames, []),
   dependsOn: s.default(s.array(id), []),
   resources: s.default(s.array(id), []),
+  // Operator assertion: neither this command nor its children writes to the shared workspace.
+  // Absent on legacy configurations means exclusive access, including generated/ignored files.
+  readOnly: s.default(s.boolean(), false),
   outputs: s.default(paths, []),
   paths: s.default(paths, []),
   lanes: s.default(s.array(s.enum(lanes), 1, 3), [...lanes]),

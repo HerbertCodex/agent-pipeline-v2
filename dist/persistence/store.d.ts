@@ -80,6 +80,10 @@ export declare class Store {
     }[];
     recoverDocument(id: string, confirmed: boolean): void;
     addReceipt(receipt: GateReceipt): void;
+    /** Failed observations for diagnostics only; never restores validation proofs into a run.
+     * Older no-change repairs cleared run.receipts. Recover only the latest validation cycle,
+     * on this run's current candidate, through persisted runner events and receipt identities. */
+    failureDiagnostics(run: Run): GateReceipt[];
     seal(receipt: GateReceipt, ttlMs: number): void;
     verifyReceipt(receipt: GateReceipt): void;
     cached(key: string, now?: number): GateReceipt | null;

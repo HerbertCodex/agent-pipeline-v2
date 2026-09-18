@@ -3,7 +3,7 @@ export { taskSchema, configSchema, agentOutputSchema, receiptSchema, validateRec
 export { PipelineError } from './domain/errors.js';
 export { classify, planGates, assertScope } from './policy/policy.js';
 export { Lifecycle } from './lifecycle/service.js';
-export { specSchema, qaSchema, designProposalSchema, securityPlanSchema, threatModelSchema, validateSpec, validateQa, specHash, approvalHash, specMarkdown } from './lifecycle/contracts.js';
+export { specSchema, replanSchema, qaSchema, designProposalSchema, securityPlanSchema, threatModelSchema, validateSpec, validateQa, specHash, approvalHash, specMarkdown } from './lifecycle/contracts.js';
 export { inspectProject, planInstallation, applyInstallation, doctor } from './lifecycle/onboarding.js';
 export { publishSpec, syncSpec } from './lifecycle/github.js';
 export { readRole, catalog, guidanceFor, guidanceAudit, installedAssets } from './knowledge/catalog.js';

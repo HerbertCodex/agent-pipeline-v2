@@ -17,6 +17,7 @@ export declare const gateSchema: import("./schema.js").Schema<{
     readonly passEnv: string[];
     readonly dependsOn: string[];
     readonly resources: string[];
+    readonly readOnly: boolean;
     readonly outputs: string[];
     readonly paths: string[];
     readonly lanes: ("fast" | "standard" | "high")[];
@@ -178,6 +179,7 @@ export declare const configSchema: import("./schema.js").Schema<{
         readonly passEnv: string[];
         readonly dependsOn: string[];
         readonly resources: string[];
+        readonly readOnly: boolean;
         readonly outputs: string[];
         readonly paths: string[];
         readonly lanes: ("fast" | "standard" | "high")[];

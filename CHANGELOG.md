@@ -3,6 +3,10 @@
 
 ## Unreleased — reliability and efficient feature work
 
+- Preserve failed gate diagnostics after a no-change repair; retries and `spec show` also recover observations from legacy affected runs, without restoring successful proof.
+- Serialize gates that can write to the shared validation workspace, including legacy configurations. Explicit `readOnly: true` gates retain bounded parallel execution and named resource locks.
+- Add hash-approved `spec replan` for remaining tasks of a blocked spec. Preserve completed commits, attempt/cost history and acceptance obligations; resume from the proven frontier with fresh final validation and QA. Offline regression tests reproduce the missing-export/no-change/retry failure and shared generated-artifact collisions.
+
 - **Chaque tâche doit laisser les contrôles capables de passer.** Ils s'exécutent après *chaque* tâche, pas seulement à la fin : une tâche qui renomme, scinde ou change la signature d'une déclaration partagée doit mettre à jour ses appelants dans le même candidat, ou garder l'ancienne déclaration utilisable jusqu'à la tâche qui les migre. Product reçoit cette règle dans son rôle et dans `executionCapabilities.rules`. Constaté sur un vrai projet : une tâche a scindé une fonction des prêts en laissant son unique appelant dans une tâche ultérieure ; le build échouait donc forcément, deux tentatives ont échoué à l'identique et aucune réparation ne pouvait corriger dans le périmètre.
 
 - Une spec antérieure au champ `experience` ne fait plus échouer la lecture des specs : le contexte qualité lit ce champ avec la même prudence que le reste du contenu. Constaté sur un vrai magasin — une seule vieille spec renvoyait « Erreur interne » pour **toute** la liste du tableau de bord.
