@@ -3,6 +3,8 @@
 
 ## Unreleased — reliability and efficient feature work
 
+- **Chaque tâche doit laisser les contrôles capables de passer.** Ils s'exécutent après *chaque* tâche, pas seulement à la fin : une tâche qui renomme, scinde ou change la signature d'une déclaration partagée doit mettre à jour ses appelants dans le même candidat, ou garder l'ancienne déclaration utilisable jusqu'à la tâche qui les migre. Product reçoit cette règle dans son rôle et dans `executionCapabilities.rules`. Constaté sur un vrai projet : une tâche a scindé une fonction des prêts en laissant son unique appelant dans une tâche ultérieure ; le build échouait donc forcément, deux tentatives ont échoué à l'identique et aucune réparation ne pouvait corriger dans le périmètre.
+
 - Une spec antérieure au champ `experience` ne fait plus échouer la lecture des specs : le contexte qualité lit ce champ avec la même prudence que le reste du contenu. Constaté sur un vrai magasin — une seule vieille spec renvoyait « Erreur interne » pour **toute** la liste du tableau de bord.
 
 - Add explicit quick/deep/QA model selection for bootstrap and onboarding, including a separate QA provider and a deep QA policy independent of task risk. Preserve operator choices through Setup and approval; expose routing and operational overrides in CLI and dashboard.

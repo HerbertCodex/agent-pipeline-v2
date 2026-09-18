@@ -769,3 +769,15 @@ test('provider stop diagnostics preserve calibration metrics and bound the displ
   assert.equal(long.providerMessage.length, 300);
   assert.equal(providerUsage('claude', JSON.stringify({ ...envelope, is_error: false })).providerMessage, null);
 });
+
+// Observed on a real spec: a task split a shared function and left its only caller in a later task, so the
+// build could not pass after that task. Two attempts failed identically; no repair could fix it in scope.
+test('Product is told that each task must leave the checks able to pass', async (t) => {
+  const f = lifecycleFixture(t);
+  const { executionCapabilities } = await import('../dist/lifecycle/capabilities.js');
+  const { validateConfig } = await import('../dist/domain/contracts.js');
+  const rules = executionCapabilities(validateConfig(f.config)).rules;
+  assert.ok(rules.some(r => /after each task/.test(r) && /callers/.test(r)), 'the sequencing rule reaches Product');
+  assert.match(readFileSync(new URL('../roles/product.md', import.meta.url).pathname, 'utf8'),
+    /checks run after \*\*each\*\* task/);
+});
