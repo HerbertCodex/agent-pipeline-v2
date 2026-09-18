@@ -6,6 +6,6 @@
     "ANTHROPIC_API_KEY",
     "CLAUDE_CODE_OAUTH_TOKEN"
   ],
-  "maxTurns": 32,
-  "maxBudgetUsd": 5
+  "maxTurns": 200,
+  "maxBudgetUsd": null
 }

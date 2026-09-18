@@ -58,3 +58,27 @@ export function validateTaskCapabilities(spec: Spec, config: Config): Spec {
   }
   return spec;
 }
+
+/**
+ * Bounds that cut work in progress instead of warning before it starts. Measured on a real project: a Product
+ * round for a medium increment runs about 20 minutes, and an implementation attempt reads and writes several
+ * files. A provider that stops at its turn, cost or time limit produces nothing usable, and a role leaves
+ * nothing to salvage. This is advice on a reviewed configuration, never a refusal.
+ */
+export function configAdvice(config: Config): { setting: string; value: string; why: string }[] {
+  const advice: { setting: string; value: string; why: string }[] = [];
+  const minutes = (ms: number) => `${Math.round(ms / 60000)} min`;
+  if (config.agent.maxTurns < 100)
+    advice.push({ setting: 'agent.maxTurns', value: String(config.agent.maxTurns), why: 'A turn count measures neither work, time nor money. Below 100 it stops real attempts mid-work; keep it as a net against an endless loop (200) and bound cost and time instead.' });
+  if (config.agent.timeoutMs < 1200000)
+    advice.push({ setting: 'agent.timeoutMs', value: minutes(config.agent.timeoutMs), why: 'A Product round for a medium increment runs about 20 minutes. A shorter timeout kills rounds that would have produced a spec, and a role leaves nothing to salvage.' });
+  if (config.agent.maxBudgetUsd !== null && config.agent.maxBudgetUsd < 10)
+    advice.push({ setting: 'agent.maxBudgetUsd', value: `${config.agent.maxBudgetUsd} USD`, why: 'This ceiling is enforced by the provider, which stops mid-work: the money is spent and nothing is produced. Prefer workflow.maxSpecCostUsd, which stops between tasks and asks the operator.' });
+  if (config.maxRepairAttempts < 2)
+    advice.push({ setting: 'maxRepairAttempts', value: String(config.maxRepairAttempts), why: 'Fixing one red check often reveals the next; a single pass loses the whole attempt. The loop already stops by itself when a repair changes nothing or fails identically.' });
+  if (config.workflow.maxSpecCostUsd === null)
+    advice.push({ setting: 'workflow.maxSpecCostUsd', value: 'null', why: 'Nothing bounds what a whole spec may spend. This is the ceiling that warns instead of cutting: it stops between tasks, reports the declared cost and waits for an explicit authorization.' });
+  if (config.maxRunMs <= config.agent.timeoutMs)
+    advice.push({ setting: 'maxRunMs', value: minutes(config.maxRunMs), why: `An attempt is one agent session plus its checks. With agent.timeoutMs at ${minutes(config.agent.timeoutMs)}, an agent that uses its whole allowance leaves nothing for the checks and the run stops on BUDGET.` });
+  return advice;
+}

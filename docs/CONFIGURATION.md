@@ -34,7 +34,15 @@ node dist/cli.js schemas --output examples/schemas
 }
 ```
 
-`workflow.maxSpecCostUsd` (facultatif, null par défaut) borne ce qu'une spec peut dépenser : quand les coûts déclarés par les fournisseurs atteignent ce plafond, l'exécution s'arrête sur `COST_BUDGET` avant de lancer une nouvelle tâche, et l'opérateur autorise la suite avec `spec run --accept-cost`. Ces coûts sont ceux que le fournisseur annonce ; le framework ne vérifie aucune facture.
+### Bornes qui avertissent, bornes qui coupent
+
+Une borne appliquée par le fournisseur — nombre de tours, plafond de coût par appel — ou un délai trop court **arrête la session en cours** : l'argent est dépensé et rien n'est produit. Une tentative d'implémentation reste alors récupérable (`spec run --accept-current`), mais un rôle comme Product ne rend qu'une réponse finale : son tour est perdu.
+
+Les valeurs livrées sont donc des filets, pas des arbitres : `agent.maxTurns` à 200, `agent.maxBudgetUsd` à null, `agent.timeoutMs` à 30 minutes, `maxRunMs` à 45 minutes (une session d'agent **plus** ses contrôles), `maxRepairAttempts` à 3. Ce qui borne réellement la dépense est `workflow.maxSpecCostUsd`, activé par défaut à 25 $, parce qu'il avertit au lieu de couper.
+
+`apv2 inspect --repo PATH` signale dans `configAdvice` les réglages d'une configuration existante qui coupent le travail en cours, avec la raison de chacun.
+
+`workflow.maxSpecCostUsd` (25 $ par défaut) borne ce qu'une spec peut dépenser : quand les coûts déclarés par les fournisseurs atteignent ce plafond, l'exécution s'arrête sur `COST_BUDGET` avant de lancer une nouvelle tâche, et l'opérateur autorise la suite avec `spec run --accept-cost`. Ces coûts sont ceux que le fournisseur annonce ; le framework ne vérifie aucune facture.
 
 `maxRepairAttempts` (0 à 5, 1 par défaut) borne les passes de réparation d'une tentative après des contrôles rouges. La boucle s'arrête d'elle-même avant ce plafond dans deux cas : une réparation qui ne change rien (`REPAIR_NO_CHANGE`) et une réparation qui laisse les contrôles échouer exactement comme avant (`REPAIR_NO_PROGRESS`). Relever ce plafond laisse donc plus de place à une correction qui avance, sans payer des passes qui tournent en rond.
 

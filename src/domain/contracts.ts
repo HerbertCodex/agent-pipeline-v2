@@ -48,10 +48,14 @@ export const taskSchema = s.object({
 export const agentSchema = s.object({
   type: s.enum(['command', 'codex', 'claude']),
   command: s.default(s.array(s.string(1, 16000), 0, 200), []),
-  timeoutMs: s.default(s.number(10, 3600000), 900000),
+  // Measured on a real project: a Product round for a medium increment runs about 20 minutes. A timeout that
+  // cuts such a round pays for nothing, since a role only returns a final answer.
+  timeoutMs: s.default(s.number(10, 3600000), 1800000),
   passEnv: s.default(envNames, []),
   model: s.default(s.string(0, 200), ''),
-  maxTurns: s.default(s.number(1, 200), 32),
+  // A turn count measures neither useful work, nor time, nor money: it is a net against an endless loop,
+  // not the arbiter of daily work. Time and cost are the bounds that measure what an operator wants to limit.
+  maxTurns: s.default(s.number(1, 200), 200),
   maxBudgetUsd: s.default(s.nullable(s.finite(0.01, 1000)), null),
 });
 export type AgentConfig = Infer<typeof agentSchema>;
@@ -79,8 +83,8 @@ export const configSchema = s.object({
     // Files only project tooling regenerates (lock files by default). Globs; replace the list to adapt to the stack.
     generatedPaths: s.default(s.array(s.string(1, 300), 0, 100), [...DEFAULT_GENERATED_PATHS]),
     /** Stops a spec once the providers declare this much spending on it; continuing is an explicit decision. */
-    maxSpecCostUsd: s.default(s.nullable(s.number(0.01, 10000)), null),
-  }), { qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team', maxOutputRepairs: 1, generatedPaths: [...DEFAULT_GENERATED_PATHS], maxSpecCostUsd: null }),
+    maxSpecCostUsd: s.default(s.nullable(s.number(0.01, 10000)), 25),
+  }), { qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team', maxOutputRepairs: 1, generatedPaths: [...DEFAULT_GENERATED_PATHS], maxSpecCostUsd: 25 }),
   limits: s.default(s.object({
     // Characters of approved context embedded in one task or QA-repair description.
     maxTaskContextChars: s.default(s.number(10000, MAX_TASK_DESCRIPTION), DEFAULT_LIMITS.maxTaskContextChars),
@@ -91,8 +95,11 @@ export const configSchema = s.object({
   gates: s.array(gateSchema, 1, 100),
   concurrency: s.default(s.number(1, 16), 3),
   failFast: s.default(s.boolean(), true),
-  maxRunMs: s.default(s.number(100, 7200000), 1800000),
-  maxRepairAttempts: s.default(s.number(0, 5), 1),
+  // An attempt is one agent session plus its checks: leave room for both after the agent timeout.
+  maxRunMs: s.default(s.number(100, 7200000), 2700000),
+  // Fixing one red check often reveals the next: a single pass loses the whole attempt. The loop stops by
+  // itself as soon as a repair changes nothing or leaves the checks failing exactly as before.
+  maxRepairAttempts: s.default(s.number(0, 5), 3),
   validationMaxAgeMs: s.default(s.number(1000, 86400000), 3600000),
   risk: s.default(s.object({
     fastPaths: s.default(paths, ['docs/**', '*.md']),
