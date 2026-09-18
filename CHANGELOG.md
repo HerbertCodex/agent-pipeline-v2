@@ -3,6 +3,8 @@
 
 ## Unreleased — reliability and efficient feature work
 
+- **Amender les contrôles d'une spec sans refaire sa rédaction.** `spec budget` accepte désormais des changements d'exécution sur les gates : ajouter un contrôle, déclarer une ressource partagée qui sérialise des contrôles écrivant au même endroit, ou relever un délai. Ce qui définit ce qu'un contrôle prouve — commande, étiquettes de couverture, chemins de test, lanes, caractère obligatoire — et la suppression d'un contrôle restent hors amendement : ils affaibliraient une approbation déjà donnée. Constaté sur un vrai projet : ajouter le contrôle d'intégration manquant, puis sérialiser deux contrôles qui s'écrasaient, ont imposé deux rédactions complètes alors qu'aucune ligne de la spec ne changeait.
+
 - **Chaque tâche doit laisser les contrôles capables de passer.** Ils s'exécutent après *chaque* tâche, pas seulement à la fin : une tâche qui renomme, scinde ou change la signature d'une déclaration partagée doit mettre à jour ses appelants dans le même candidat, ou garder l'ancienne déclaration utilisable jusqu'à la tâche qui les migre. Product reçoit cette règle dans son rôle et dans `executionCapabilities.rules`. Constaté sur un vrai projet : une tâche a scindé une fonction des prêts en laissant son unique appelant dans une tâche ultérieure ; le build échouait donc forcément, deux tentatives ont échoué à l'identique et aucune réparation ne pouvait corriger dans le périmètre.
 
 - Une spec antérieure au champ `experience` ne fait plus échouer la lecture des specs : le contexte qualité lit ce champ avec la même prudence que le reste du contenu. Constaté sur un vrai magasin — une seule vieille spec renvoyait « Erreur interne » pour **toute** la liste du tableau de bord.

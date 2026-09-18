@@ -400,7 +400,9 @@ export interface SpecRecord {
     activeMs: number;
     planningMs?: number;
     planningStartedAt?: number | null;
-    operational?: { maxSpecCostUsd: number; maxActiveMs: number; agent: Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd'>> | null; roles?: Partial<Record<'product' | 'design' | 'implementer' | 'qa', Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd'>>>>; at: number; reviewer: string; note: string };
+    operational?: { maxSpecCostUsd: number; maxActiveMs: number;
+        /** Execution-only gate changes: strictly more proof, never less. See amendBudget. */
+        gates?: { add: import('../domain/contracts.js').Config['gates']; resources: Record<string, string[]>; timeoutMs: Record<string, number> }; agent: Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd'>> | null; roles?: Partial<Record<'product' | 'design' | 'implementer' | 'qa', Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd'>>>>; at: number; reviewer: string; note: string };
     delivery: {
         directory: string;
         candidateSha: string;

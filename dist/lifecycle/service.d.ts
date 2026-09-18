@@ -1,5 +1,5 @@
 import { Pipeline } from '../engine/pipeline.js';
-import { type Run } from '../domain/contracts.js';
+import { type Config, type Run } from '../domain/contracts.js';
 import type { Document } from '../persistence/store.js';
 import { type SpecRecord } from './contracts.js';
 /**
@@ -87,6 +87,15 @@ export declare class Lifecycle {
     /** Resume the exact request; an accepted Product checkpoint survives a failed Design round. */
     resumePlanning(id: string, signal?: AbortSignal): Promise<Document<SpecRecord>>;
     /** Operational limits do not rewrite the approved scope, gates or functional hash. */
+    /**
+     * Execution-only gate changes an operator may amend without rewriting an approved spec: a new check, a
+     * shared resource that serialises checks writing to the same place, or a longer timeout. What a check
+     * proves — command, coverage labels, test paths, lanes, mandatory flag — and the removal of any check stay
+     * outside an amendment: they would weaken an approval the operator already gave.
+     */
+    private amendedGates;
+    /** The configuration a run executes: the approved one, plus execution-only amendments. */
+    runConfig(r: SpecRecord): Config;
     amendBudget(id: string, input: unknown, actor: string, note: string): Document<SpecRecord>;
     refine(id: string, request: string, proposal?: unknown, signal?: AbortSignal): Promise<Document<SpecRecord>>;
     approveSpec(id: string, expectedHash: string, actor: string, note: string): Promise<Document<SpecRecord>>;

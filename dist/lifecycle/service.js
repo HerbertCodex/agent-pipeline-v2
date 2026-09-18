@@ -9,7 +9,7 @@ import { mkdirSync, writeFileSync, renameSync, existsSync, lstatSync, readFileSy
 import { join, resolve, dirname, relative, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Pipeline, summarize } from '../engine/pipeline.js';
-import { validateConfig, agentSchema, taskSchema, DEFAULT_LIMITS } from '../domain/contracts.js';
+import { validateConfig, agentSchema, gateSchema, taskSchema, DEFAULT_LIMITS } from '../domain/contracts.js';
 import { hash, sha256 } from '../domain/hash.js';
 import { PipelineError, errorMessage, invariant } from '../domain/errors.js';
 import { Git, isInside } from '../execution/git.js';
@@ -558,11 +558,59 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         }
     }
     /** Operational limits do not rewrite the approved scope, gates or functional hash. */
+    /**
+     * Execution-only gate changes an operator may amend without rewriting an approved spec: a new check, a
+     * shared resource that serialises checks writing to the same place, or a longer timeout. What a check
+     * proves — command, coverage labels, test paths, lanes, mandatory flag — and the removal of any check stay
+     * outside an amendment: they would weaken an approval the operator already gave.
+     */
+    amendedGates(r, input) {
+        const current = r.operational?.gates ?? { add: [], resources: {}, timeoutMs: {} };
+        if (input === undefined)
+            return current;
+        invariant(input !== null && typeof input === 'object' && !Array.isArray(input), 'ARGUMENT', 'gates must be an amendment object');
+        const values = input;
+        invariant(Object.keys(values).every(k => ['add', 'resources', 'timeoutMs'].includes(k)), 'ARGUMENT', 'Only add, resources and timeoutMs may be amended on gates');
+        const existing = new Map([...r.config.gates, ...current.add].map(g => [g.id, g]));
+        const add = [...current.add];
+        for (const gate of values['add'] ?? []) {
+            const parsed = gateSchema.parse(gate);
+            invariant(!existing.has(parsed.id), 'ARGUMENT', `Gate ${parsed.id} already exists; an amendment may only add a new check`);
+            existing.set(parsed.id, parsed);
+            add.push(parsed);
+        }
+        const resources = { ...current.resources };
+        for (const [gateId, labels] of Object.entries(values['resources'] ?? {})) {
+            invariant(existing.has(gateId), 'ARGUMENT', `Unknown gate ${gateId}`);
+            invariant(Array.isArray(labels) && labels.every(l => typeof l === 'string' && l.length > 0 && l.length <= 80), 'ARGUMENT', 'Resources are non-empty labels');
+            resources[gateId] = [...new Set([...(resources[gateId] ?? []), ...labels])];
+        }
+        const timeoutMs = { ...current.timeoutMs };
+        for (const [gateId, value] of Object.entries(values['timeoutMs'] ?? {})) {
+            const gate = existing.get(gateId);
+            invariant(gate, 'ARGUMENT', `Unknown gate ${gateId}`);
+            const before = timeoutMs[gateId] ?? gate.timeoutMs;
+            invariant(typeof value === 'number' && Number.isSafeInteger(value) && value <= 3600000, 'ARGUMENT', 'A gate timeout is an integer up to 3600000 ms');
+            invariant(value > before, 'ARGUMENT', `A gate timeout may only be raised: ${gateId} is already ${before} ms`);
+            timeoutMs[gateId] = value;
+        }
+        return { add, resources, timeoutMs };
+    }
+    /** The configuration a run executes: the approved one, plus execution-only amendments. */
+    runConfig(r) {
+        const amended = r.operational?.gates;
+        if (!amended || (!amended.add.length && !Object.keys(amended.resources).length && !Object.keys(amended.timeoutMs).length))
+            return r.config;
+        const gates = [...r.config.gates, ...amended.add].map(g => ({ ...g,
+            resources: [...new Set([...g.resources, ...(amended.resources[g.id] ?? [])])],
+            timeoutMs: amended.timeoutMs[g.id] ?? g.timeoutMs }));
+        return { ...r.config, gates };
+    }
     amendBudget(id, input, actor, note) {
         reviewer(actor, note);
         invariant(input !== null && typeof input === 'object' && !Array.isArray(input), 'ARGUMENT', 'Expected an operational amendment object');
         const values = input;
-        invariant(Object.keys(values).length > 0 && Object.keys(values).every(k => ['maxSpecCostUsd', 'maxActiveMs', 'agent', 'roles'].includes(k)), 'ARGUMENT', 'Only maxSpecCostUsd, maxActiveMs, agent and per-role tuning may be amended');
+        invariant(Object.keys(values).length > 0 && Object.keys(values).every(k => ['maxSpecCostUsd', 'maxActiveMs', 'agent', 'roles', 'gates'].includes(k)), 'ARGUMENT', 'Only maxSpecCostUsd, maxActiveMs, agent, per-role tuning and execution-only gate changes may be amended');
         const token = this.store.acquireDocument(id);
         try {
             const doc = this.get(id);
@@ -591,7 +639,8 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                     roles[role] = { ...roles[role], ...v };
                 }
             }
-            r.operational = { maxSpecCostUsd: cost, maxActiveMs: time, agent: tuning, roles, at: Date.now(), reviewer: actor.trim(), note: note.trim() };
+            const gates = this.amendedGates(r, values['gates']);
+            r.operational = { maxSpecCostUsd: cost, maxActiveMs: time, gates, agent: tuning, roles, at: Date.now(), reviewer: actor.trim(), note: note.trim() };
             this.save(doc, 'workflow.budget_amended', { amendment: r.operational });
             return doc;
         }
@@ -949,7 +998,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                 if (!r.activeRunId && this.costExceeded(doc, options))
                     return doc;
                 if (!r.activeRunId) {
-                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, specId: doc.id, config: r.config, task: this.makeTask(r, t) });
+                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, specId: doc.id, config: this.runConfig(r), task: this.makeTask(r, t) });
                     r.attempts.push({ taskId: t.id, runId: run.id, kind: 'task' });
                     r.activeRunId = run.id;
                     this.save(doc, 'workflow.task_started', { taskId: t.id, runId: run.id, baseSha: r.currentSha });
@@ -1085,7 +1134,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                         this.save(doc, 'qa.repair_budget_exhausted');
                         return doc;
                     }
-                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, specId: doc.id, config: r.config, task: this.qaRepairTask(r) });
+                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, specId: doc.id, config: this.runConfig(r), task: this.qaRepairTask(r) });
                     r.qaRepairs++;
                     r.attempts.push({ taskId: `QA-REPAIR-${r.qaRepairs}`, runId: run.id, kind: 'qa-repair' });
                     r.activeRunId = run.id;
