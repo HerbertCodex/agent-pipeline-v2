@@ -38,6 +38,15 @@ export const securityPlanSchema = s.object({
     deferred: s.default(s.array(s.string(1, 3000), 0, 100), []),
 });
 const neutralSecurityPlan = securityPlanSchema.parse({});
+export const specTaskSchema = s.object({
+    id, title: s.string(1, 500), description: s.string(1, 12000),
+    acceptanceIds: s.array(id, 1, 100), allowedPaths: s.array(s.string(1, 500), 1, 100),
+    dependsOn: s.array(id, 0, 20), minimumLane: s.enum(lanes),
+});
+export const replanSchema = s.object({
+    reason: s.string(20, 4000),
+    tasks: s.array(specTaskSchema, 1, 20),
+});
 export const specSchema = s.object({
     title: s.string(1, 500), problem: s.string(10, 20000),
     scope: s.array(s.string(1, 3000), 1, 100), outOfScope: s.array(s.string(1, 3000), 0, 100),
@@ -50,11 +59,7 @@ export const specSchema = s.object({
         decisionId: id, value: s.string(1, 4000), sourceQuote: s.string(1, 4000), rationale: s.string(1, 4000),
     }), 0, 100), []),
     questions: s.array(s.object({ id, question: s.string(1, 3000) }), 0, 100),
-    tasks: s.array(s.object({
-        id, title: s.string(1, 500), description: s.string(1, 12000),
-        acceptanceIds: s.array(id, 1, 100), allowedPaths: s.array(s.string(1, 500), 1, 100),
-        dependsOn: s.array(id, 0, 20), minimumLane: s.enum(lanes),
-    }), 0, 20),
+    tasks: s.array(specTaskSchema, 0, 20),
     minimumLane: s.enum(lanes),
     experience: s.default(s.object({
         uiImpact: s.enum(['none', 'minor', 'major']),

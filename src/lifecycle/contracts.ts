@@ -38,6 +38,15 @@ export const securityPlanSchema = s.object({
     deferred: s.default(s.array(s.string(1, 3000), 0, 100), []),
 });
 const neutralSecurityPlan = securityPlanSchema.parse({});
+export const specTaskSchema = s.object({
+    id, title: s.string(1, 500), description: s.string(1, 12000),
+    acceptanceIds: s.array(id, 1, 100), allowedPaths: s.array(s.string(1, 500), 1, 100),
+    dependsOn: s.array(id, 0, 20), minimumLane: s.enum(lanes),
+});
+export const replanSchema = s.object({
+    reason: s.string(20, 4000),
+    tasks: s.array(specTaskSchema, 1, 20),
+});
 export const specSchema = s.object({
     title: s.string(1, 500), problem: s.string(10, 20000),
     scope: s.array(s.string(1, 3000), 1, 100), outOfScope: s.array(s.string(1, 3000), 0, 100),
@@ -50,11 +59,7 @@ export const specSchema = s.object({
         decisionId: id, value: s.string(1, 4000), sourceQuote: s.string(1, 4000), rationale: s.string(1, 4000),
     }), 0, 100), []),
     questions: s.array(s.object({ id, question: s.string(1, 3000) }), 0, 100),
-    tasks: s.array(s.object({
-        id, title: s.string(1, 500), description: s.string(1, 12000),
-        acceptanceIds: s.array(id, 1, 100), allowedPaths: s.array(s.string(1, 500), 1, 100),
-        dependsOn: s.array(id, 0, 20), minimumLane: s.enum(lanes),
-    }), 0, 20),
+    tasks: s.array(specTaskSchema, 0, 20),
     minimumLane: s.enum(lanes),
     experience: s.default(s.object({
         uiImpact: s.enum(['none', 'minor', 'major']),
@@ -295,6 +300,18 @@ export interface TaskAttempt {
     runId: string;
     kind: 'task' | 'qa-repair';
 }
+export interface PlanRevision {
+    id: string;
+    reason: string;
+    tasks: Spec['tasks'];
+    contextHash: string;
+    hash: string;
+    previousContent: Spec;
+    previousApproval: SpecApproval;
+    status: 'pending' | 'approved' | 'superseded';
+    at: number;
+    approval: SpecApproval | null;
+}
 
 export interface ScopeAmendment {
     id: string;
@@ -386,6 +403,7 @@ export interface SpecRecord {
     design: DesignRecord | null;
     scopeAmendments: ScopeAmendment[];
     criterionAmendments?: CriterionAmendment[];
+    planRevisions?: PlanRevision[];
     /**
      * Advisory computed after Product: existing tests that reference a task's files but are assigned to a
      * later task (Product declared them as changing; only the order is wrong), or to none when the test

@@ -47,6 +47,10 @@ Full lifecycle (local trusted projects; explicit approval boundaries):
                                            optional requirements: [{id, verification}] linked to it})
   apv2 spec criterion SPEC_ID --amendment AMENDMENT_ID --hash HASH --approve [--reviewer NAME] [--note TEXT]
   apv2 spec retry SPEC_ID --confirm        Authorize one new failed-task attempt
+  apv2 spec replan SPEC_ID --file REPLAN_JSON
+                                           Propose {reason, tasks}: all remaining task IDs only
+  apv2 spec replan SPEC_ID --amendment AMENDMENT_ID --hash HASH --approve [--reviewer NAME] --note TEXT
+                                           Preserve completed work and history; resume with spec run
   apv2 spec recover SPEC_ID --confirm-stopped
   apv2 spec deliver SPEC_ID --output NEW_DIRECTORY
   apv2 spec branch SPEC_ID --name BRANCH --confirm
@@ -255,6 +259,19 @@ export async function lifecycleCommand(command: string, positionals: string[], v
                 const current = life.get(specId()); const a = await approval(current.data.repo);
                 doc = await life.review(specId(), required('sha'), a.reviewer, a.note);
                 break;
+            }
+            case 'replan': {
+                const current = life.get(specId());
+                if (str('amendment')) {
+                    const a = await approval(current.data.repo);
+                    doc = await life.approveRemainingTasks(specId(), required('amendment'), required('hash'), a.reviewer, required('note'));
+                    break;
+                }
+                doc = life.planRemainingTasks(specId(), load(required('file')));
+                const proposed = doc.data.planRevisions!.at(-1)!;
+                console.log(JSON.stringify({ ...life.summary(doc), planRevision: proposed,
+                    next: `apv2 spec replan ${doc.id} --amendment ${proposed.id} --hash ${proposed.hash} --approve --note "why the remaining tasks need revision"` }, null, 2));
+                return true;
             }
             case 'criterion': {
                 const current = life.get(specId());

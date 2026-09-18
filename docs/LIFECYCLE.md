@@ -84,6 +84,24 @@ Un agent qui s'arrête sans rendre son résultat (limite de tours ou de budget d
 
 Une tentative d'agent dont l'issue est inconnue n'est pas réexécutée aveuglément. Après inspection du code conservé, `spec run ID --accept-current` autorise son adoption et sa validation, jamais son acceptation sans tests. Une tentative échouée ordinaire demande `spec retry ID --confirm` pour en créer une nouvelle ; l'échec reste dans l'historique. Un dépassement de périmètre ou un timeout ne devient pas une boucle automatique illimitée.
 
+Après `REPAIR_NO_CHANGE`, les diagnostics des contrôles restent attachés au candidat inchangé. `spec retry` les transmet à la nouvelle tentative. Pour les anciens runs dont la liste de reçus a été effacée, le contrôleur retrouve les erreurs persistées de la dernière validation du même candidat. `spec show` expose ces observations dans `failedChecks` ; cette récupération ne constitue jamais une preuve de validation réussie.
+
+### Réviser les tâches restantes
+
+Si le découpage est en cause, `spec replan` permet de corriger le plan d'une spec bloquée sur une tâche en échec définitif, sans relancer Product ni refaire les tâches validées. Préparer un fichier conforme à [replan.schema.json](../examples/schemas/replan.schema.json), avec `reason` et `tasks` : copier **toutes les tâches restantes** de `spec show`, puis ajuster leurs descriptions, chemins et dépendances. Les identifiants et critères associés sont conservés ; le niveau de risque peut augmenter, jamais diminuer.
+
+```bash
+apv2 spec replan ID --file remaining-tasks.json
+# Relire la proposition, notamment les nouveaux chemins, puis son hash exact :
+apv2 spec replan ID --amendment AMENDMENT_ID --hash HASH --approve \
+  --note "Garder une API compatible jusqu'à la migration des appelants"
+apv2 spec run ID
+```
+
+La reprise part du dernier commit validé ; le code de la tentative échouée reste consultable dans son run. Les tâches terminées, tentatives, coûts, budgets et amendements approuvés sont conservés. Le plan et l'approbation précédents restent dans l'historique. La validation finale, QA et revue doivent porter sur le nouveau plan et son candidat. Une proposition périmée est refusée.
+
+Cette commande de terminal ne change ni les critères métier, ni l'architecture, ni la maquette, ni les commandes et gates. Elle ne fusionne pas de tâches et n'en supprime pas : pour un découpage trop étroit, élargir explicitement les chemins de la tâche concernée et adapter les consignes des tâches suivantes. Résoudre les amendements de périmètre ou de critère en attente avant de l'utiliser. Une spec publiée ou livrée ne peut pas être révisée ainsi.
+
 Un rôle et ses réparations de sortie partagent une échéance. Product et Design consomment le budget actif de la spec, comme l'exécution et QA ; l'attente humaine en est exclue. Les tokens et coûts publiés sont journalisés, et les valeurs absentes restent inconnues. `workflow.maxSpecCostUsd` est vérifié avant les appels et limite aussi le budget restant de chaque appel Claude. Voir [les limites exactes](CONFIGURATION.md#limites-de-temps-de-tours-et-de-coût).
 
 `spec plan-resume ID` reprend une planification arrêtée avec ses checkpoints compatibles. Il peut éviter de refaire Product si la spec était déjà acceptée avant l'échec de Design. Il ne récupère pas une réponse jamais reçue et ne reprend pas un thread natif du fournisseur.

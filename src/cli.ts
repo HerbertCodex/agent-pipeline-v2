@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { lifecycleCommand, lifecycleHelp } from './lifecycle/cli.js';
-import { specSchema, qaSchema, designProposalSchema, securityPlanSchema } from './lifecycle/contracts.js';
+import { specSchema, replanSchema, qaSchema, designProposalSchema, securityPlanSchema } from './lifecycle/contracts.js';
 import { briefSpecSchema, architectureSchema } from './lifecycle/pathways.js';
 import { bootstrapProposalSchema } from './lifecycle/bootstrap.js';
 import { securityContextSchema } from './security/owasp.js';
@@ -87,7 +87,7 @@ async function main(): Promise<void> {
   }
   if (command === 'schemas') {
     const dir = resolve(required(values.output,'--output')); mkdirSync(dir,{ recursive: true });
-    for (const [name,schema] of [['task',taskSchema],['config',configSchema],['agent-output',agentOutputSchema],['receipt',receiptSchema],['spec',specSchema],['product-brief',briefSpecSchema],['architecture',architectureSchema],['qa',qaSchema],['design',designProposalSchema],['bootstrap',bootstrapProposalSchema],['decision-ledger',decisionLedgerSchema],['semantic-review',semanticReviewSchema],['security-context',securityContextSchema],['security-plan',securityPlanSchema]] as const) {
+    for (const [name,schema] of [['task',taskSchema],['config',configSchema],['agent-output',agentOutputSchema],['receipt',receiptSchema],['spec',specSchema],['replan',replanSchema],['product-brief',briefSpecSchema],['architecture',architectureSchema],['qa',qaSchema],['design',designProposalSchema],['bootstrap',bootstrapProposalSchema],['decision-ledger',decisionLedgerSchema],['semantic-review',semanticReviewSchema],['security-context',securityContextSchema],['security-plan',securityPlanSchema]] as const) {
       writeFileSync(join(dir,`${name}.schema.json`),JSON.stringify({ $schema: 'https://json-schema.org/draft/2020-12/schema',...schema.json },null,2)+'\n');
     }
     writeFileSync(join(dir, 'model-selection.schema.json'), JSON.stringify({ $schema: 'https://json-schema.org/draft/2020-12/schema', ...modelSelectionSchema.json }, null, 2) + '\n');

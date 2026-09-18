@@ -99,6 +99,10 @@ export declare class Lifecycle {
      * repeat a failure it cannot see. The context is trimmed to fit `limits.maxTaskContextChars`.
      */
     private withPreviousAttempt;
+    private assertReplanFrontier;
+    /** Prepare a bounded operator amendment without another Product call or any code execution. */
+    planRemainingTasks(id: string, input: unknown): Document<SpecRecord>;
+    approveRemainingTasks(id: string, amendmentId: string, expectedHash: string, actor: string, note: string): Promise<Document<SpecRecord>>;
     /** The repair task for the current QA report, built from the current effective spec and amendments. */
     private qaRepairTask;
     private aggregateTask;

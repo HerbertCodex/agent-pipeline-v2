@@ -6,8 +6,8 @@ export { PipelineError } from './domain/errors.js';
 export { classify, planGates, assertScope } from './policy/policy.js';
 
 export { Lifecycle } from './lifecycle/service.js';
-export { specSchema, qaSchema, designProposalSchema, securityPlanSchema, threatModelSchema, validateSpec, validateQa, specHash, approvalHash, specMarkdown } from './lifecycle/contracts.js';
-export type { Spec, SpecRecord, QaReport, DesignProposal, DesignRecord, ScopeAmendment } from './lifecycle/contracts.js';
+export { specSchema, replanSchema, qaSchema, designProposalSchema, securityPlanSchema, threatModelSchema, validateSpec, validateQa, specHash, approvalHash, specMarkdown } from './lifecycle/contracts.js';
+export type { Spec, SpecRecord, QaReport, DesignProposal, DesignRecord, ScopeAmendment, PlanRevision } from './lifecycle/contracts.js';
 export { inspectProject, planInstallation, applyInstallation, doctor } from './lifecycle/onboarding.js';
 export { publishSpec,syncSpec } from './lifecycle/github.js';
 

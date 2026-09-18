@@ -2,6 +2,9 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runProcess,environment,redact,expandCommand } from '../dist/execution/process.js';
 import { schedule } from '../dist/engine/scheduler.js';
 import { cfg,receipt } from './helpers.mjs';
@@ -38,7 +41,7 @@ test('environment is an explicit allowlist',()=>{
 test('known secrets are redacted in diagnostics',()=>assert.equal(redact('failure abcdefg',{API_KEY:'abcdefg'}),'failure [REDACTED]'));
 test('whole argument substitutions preserve data without shell interpretation',()=>assert.deepEqual(expandCommand(['git','diff','{{baseSha}}'],{baseSha:'x; echo nope'}),['git','diff','x; echo nope']));
 test('partial or unknown placeholders are refused',()=>{assert.throws(()=>expandCommand(['x{{baseSha}}'],{baseSha:'a'}));assert.throws(()=>expandCommand(['{{unknown}}'],{}));});
-function gates(values){return cfg({gates:values.map(v=>({command:['true'],...v}))}).gates;}
+function gates(values){return cfg({gates:values.map(v=>({command:['true'],readOnly:true,...v}))}).gates;}
 const blocked=(g,reason)=>receipt(g.id,'blocked',{diagnostic:reason});
 test('independent gates actually overlap up to the configured limit',async()=>{
  let active=0,max=0;const r=await schedule(gates([{id:'a'},{id:'b'},{id:'c'},{id:'d'}]),{concurrency:2,failFast:true,signal:new AbortController().signal,blocked,
@@ -69,4 +72,49 @@ test('scheduler drains running siblings after an execution exception',async()=>{
 test('pre-cancelled scheduler launches no gate',async()=>{
  const c=new AbortController();c.abort();let count=0;const results=await schedule(gates([{id:'a'}]),{concurrency:1,failFast:true,signal:c.signal,blocked,execute:async()=>{count++;return receipt()}});
  assert.equal(count,0);assert.equal(results[0].status,'blocked');
+});
+
+test('legacy build, check and e2e commands cannot overwrite shared generated artifacts', async t => {
+ const root = mkdtempSync(join(tmpdir(), 'apv2-generated-'));
+ t.after(() => rmSync(root, { recursive: true, force: true }));
+ const plan = cfg({ gates: ['build', 'check', 'e2e'].map(id => ({ id,
+   // Different or missing named resources must not bypass protection of the shared workspace.
+   resources: id === 'check' ? ['project-checks'] : [],
+   command: [process.execPath, '--input-type=module', '-e', `
+     import {writeFileSync,readFileSync} from 'node:fs';
+     writeFileSync('generated-manifest', '${id}');
+     await new Promise(r=>setTimeout(r, 80));
+     if(readFileSync('generated-manifest','utf8') !== '${id}') process.exit(9);
+   `],
+ })) }).gates;
+ // Also exercise raw legacy in-memory gates without the new schema field.
+ for (const gate of plan) delete gate.readOnly;
+ let active = 0, max = 0;
+ const results = await schedule(plan, { concurrency: 3, failFast: false, signal: new AbortController().signal, blocked,
+   execute: async g => {
+     max = Math.max(max, ++active);
+     try {
+       const observed = await runProcess({ command: g.command, cwd: root, env: environment(['PATH']), timeoutMs: 3000 });
+       return receipt(g.id, observed.status, { exitCode: observed.exitCode, diagnostic: observed.stderr });
+     } finally { active--; }
+   },
+ });
+ assert.equal(max, 1);
+ assert.ok(results.every(r => r.status === 'passed'), JSON.stringify(results));
+});
+
+test('a workspace writer excludes readers as well as other writers', async () => {
+ let readers = 0, writing = false, peakReaders = 0;
+ await schedule(gates([{id:'read1'}, {id:'write',readOnly:false}, {id:'read2'}, {id:'write2',readOnly:false}]), {
+  concurrency: 3, failFast: false, signal: new AbortController().signal, blocked,
+  execute: async g => {
+   assert.equal(writing, false);
+   if (g.readOnly) peakReaders = Math.max(peakReaders, ++readers);
+   else { assert.equal(readers, 0); writing = true; }
+   await sleep(15);
+   if (g.readOnly) readers--; else writing = false;
+   return receipt(g.id);
+  },
+ });
+ assert.equal(peakReaders, 2);
 });

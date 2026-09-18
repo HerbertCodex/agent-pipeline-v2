@@ -5,6 +5,7 @@ import { compactProposal } from './compact.js';
 import { focusedIntelligence } from '../knowledge/focus.js';
 import { pathsMentioned } from '../security/change-signals.js';
 import { specCosts } from '../adapters/invocations.js';
+import { replanContext, replanHash, revisedContent } from './replan.js';
 import { mkdirSync, writeFileSync, renameSync, existsSync, lstatSync, readFileSync, rmSync, realpathSync } from 'node:fs';
 import { join, resolve, dirname, relative, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -191,6 +192,7 @@ export class Lifecycle {
     approvedAmendments(r) {
         return {
             criteria: (r.criterionAmendments ?? []).filter(a => a.status === 'approved').map(a => ({ criterionId: a.criterionId, previous: a.previous, description: a.description, verification: a.verification, requirements: a.requirements ?? [], reason: a.reason, reviewer: a.reviewer, note: a.note })),
+            plans: (r.planRevisions ?? []).filter(p => p.status === 'approved').map(p => ({ reason: p.reason, taskIds: p.tasks.map(t => t.id), hash: p.hash, approval: p.approval })),
             scope: r.scopeAmendments.filter(a => a.status === 'approved').map(a => ({ taskId: a.taskId, paths: a.paths, reason: a.reason, reviewer: a.reviewer, note: a.note })),
         };
     }
@@ -705,7 +707,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
      * repeat a failure it cannot see. The context is trimmed to fit `limits.maxTaskContextChars`.
      */
     withPreviousAttempt(r, task, failed) {
-        const failing = failed.receipts.filter(x => x.status === 'failed').map(x => ({ gateId: x.gateId, diagnostic: x.diagnostic.slice(0, PREVIOUS_DIAGNOSTIC_CHARS) }));
+        const failing = this.store.failureDiagnostics(failed).map(x => ({ gateId: x.gateId, diagnostic: x.diagnostic.slice(0, PREVIOUS_DIAGNOSTIC_CHARS) }));
         const previous = { error: failed.error, failedChecks: failing, summary: (failed.summary ?? '').slice(0, 2000) };
         const header = '\n\nThe previous attempt of this task failed and its code was not kept: this attempt starts again from the approved base. Avoid the same failure; in particular the listed checks must pass.\n';
         const room = (r.config.limits?.maxTaskContextChars ?? DEFAULT_LIMITS.maxTaskContextChars) - task.description.length - header.length;
@@ -713,6 +715,72 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         if (room <= 0)
             return task;
         return taskSchema.parse({ ...task, description: task.description + header + (context.length <= room ? context : context.slice(0, room)) });
+    }
+    assertReplanFrontier(r) {
+        this.approved(r);
+        invariant(r.status === 'blocked' && r.sessionStartedAt === null && !r.publication && !r.delivery, 'REPLAN_STATE', 'Replan requires a paused, blocked spec that has not been published or delivered');
+        invariant(r.activeRunId && r.attempts.some(a => a.runId === r.activeRunId && a.kind === 'task' && !r.completedTaskIds.includes(a.taskId)) &&
+            this.store.get(r.activeRunId).state === 'failed', 'REPLAN_STATE', 'Replan requires a terminal failed task; recover or retry interrupted work first');
+        invariant(!r.scopeAmendments.some(a => a.status === 'pending') && !(r.criterionAmendments ?? []).some(a => a.status === 'pending'), 'REPLAN_STATE', 'Resolve pending scope/criterion amendments before revising the execution plan');
+    }
+    /** Prepare a bounded operator amendment without another Product call or any code execution. */
+    planRemainingTasks(id, input) {
+        const token = this.store.acquireDocument(id);
+        try {
+            const doc = this.get(id);
+            const r = doc.data;
+            this.assertReplanFrontier(r);
+            const { reason, tasks } = revisedContent(r, input);
+            const proposal = { contextHash: replanContext(r), reason, tasks };
+            for (const old of r.planRevisions ?? [])
+                if (old.status === 'pending')
+                    old.status = 'superseded';
+            r.planRevisions = [...(r.planRevisions ?? []), { ...proposal, id: randomUUID(), hash: replanHash(proposal),
+                    previousContent: structuredClone(r.content), previousApproval: structuredClone(r.approval),
+                    status: 'pending', at: Date.now(), approval: null }];
+            this.save(doc, 'plan.revision_proposed', { revision: r.planRevisions.at(-1) });
+            return doc;
+        }
+        finally {
+            this.store.releaseDocument(id, token);
+        }
+    }
+    async approveRemainingTasks(id, amendmentId, expectedHash, actor, note) {
+        reviewer(actor, note);
+        const token = this.store.acquireDocument(id);
+        try {
+            const doc = this.get(id);
+            const r = doc.data;
+            this.assertReplanFrontier(r);
+            const proposal = r.planRevisions?.find(p => p.id === amendmentId && p.status === 'pending');
+            invariant(proposal && proposal.hash === expectedHash && replanHash(proposal) === expectedHash, 'REPLAN_HASH', 'Approve the exact pending plan hash');
+            invariant(proposal.contextHash === replanContext(r), 'REPLAN_STALE', 'The execution frontier or its approval changed; prepare a new revision');
+            const { content } = revisedContent(r, { reason: proposal.reason, tasks: proposal.tasks });
+            await new Git().clean(r.repo, r.baseSha);
+            r.content = content;
+            r.revision++;
+            r.contentHash = specHash(r);
+            r.approval = { hash: approvalHash(r), reviewer: actor.trim(), note: note.trim(), at: Date.now() };
+            proposal.status = 'approved';
+            proposal.approval = { ...r.approval, hash: expectedHash };
+            // Failed code stays inspectable in its original run. Only proven completed code is resumed.
+            r.activeRunId = null;
+            r.finalRunId = null;
+            r.qa = null;
+            r.review = null;
+            r.delivery = null;
+            r.impactAdvice = await this.impactAdvice(r, this.approved(r));
+            r.sizeAdvice = content.tasks.filter(t => !r.completedTaskIds.includes(t.id) && t.allowedPaths.length > TASK_PATHS_ADVICE)
+                .map(t => ({ taskId: t.id, title: t.title, paths: t.allowedPaths.length }));
+            r.status = 'running';
+            r.error = null;
+            this.save(doc, 'plan.revision_approved', { amendmentId, hash: expectedHash, approval: r.approval,
+                completedTaskIds: r.completedTaskIds, currentSha: r.currentSha });
+            return doc;
+        }
+        finally {
+            this.store.releaseDocument(id, token);
+        }
     }
     /** The repair task for the current QA report, built from the current effective spec and amendments. */
     qaRepairTask(r) {
@@ -949,7 +1017,14 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                 if (!r.activeRunId && this.costExceeded(doc, options))
                     return doc;
                 if (!r.activeRunId) {
-                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, specId: doc.id, config: r.config, task: this.makeTask(r, t) });
+                    let task = this.makeTask(r, t);
+                    const previous = [...r.attempts].reverse().find(a => a.kind === 'task' && a.taskId === t.id);
+                    if (previous) {
+                        const failed = this.store.get(previous.runId);
+                        if (failed.state === 'failed')
+                            task = this.withPreviousAttempt(r, task, failed);
+                    }
+                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, specId: doc.id, config: r.config, task });
                     r.attempts.push({ taskId: t.id, runId: run.id, kind: 'task' });
                     r.activeRunId = run.id;
                     this.save(doc, 'workflow.task_started', { taskId: t.id, runId: run.id, baseSha: r.currentSha });
@@ -1524,6 +1599,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         // A stopped agent left its work in the run workspace; the operator adopts or discards it explicitly.
         const active = r.activeRunId ? this.pipeline.store.get(r.activeRunId) : null;
         const stopped = active && active.state === 'interrupted' && active.resumeFrom === 'implementing' && r.status === 'blocked' ? active : null;
+        const pendingPlan = r.planRevisions?.find(p => p.status === 'pending' && p.contextHash === replanContext(r));
         let next;
         // A round that failed leaves a spec with nothing to approve: relaunching Product is the way out,
         // not an approval of a hash that does not exist.
@@ -1533,6 +1609,8 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             next = `apv2 spec plan-resume ${doc.id}   (complete the retained Product/Design proposal)`;
         else if (!r.approval)
             next = (r.content?.questions.length || r.design?.proposal.questions.length) ? `apv2 spec refine ${doc.id} --request "answers to the displayed questions"` : `apv2 spec approve ${doc.id} --hash ${approvalHash(r) ?? 'NO_VALID_PROPOSAL'} --approve`;
+        else if (pendingPlan && r.status === 'blocked')
+            next = `apv2 spec replan ${doc.id} --amendment ${pendingPlan.id} --hash ${pendingPlan.hash} --approve --note "why the remaining tasks need revision"`;
         else if (r.status === 'awaiting_review')
             next = `apv2 spec review ${doc.id} --sha ${final?.candidateSha} --approve`;
         else if (r.error?.code === 'MERGED_BEFORE_REVIEW')
@@ -1578,7 +1656,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             next = `Resolve ${r.error.code} before running again: ${r.error.message.slice(0, 200)}`;
         else
             next = `apv2 spec run ${doc.id}`;
-        return { id: doc.id, models: modelPlan(r.config, r.operational), modelOverrides: r.operational ? { agent: r.operational.agent, roles: r.operational.roles ?? {} } : null, executionPath: r.executionPath ?? 'legacy', architecture: r.architecture ?? null, maxActiveMs: r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs, cost: this.costSummary(doc.id), planningMs: Math.round(r.planningMs ?? 0), revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash: r.contentHash, security: { contextHash: r.securityContextHash ?? null, minimumLane: r.securityContext?.minimumLane ?? null, requiresThreatModel: r.securityContext?.requiresThreatModel ?? null, topics: r.securityContext?.topics.map(x => x.id) ?? [], requirements: r.content?.security?.requirements.map(x => x.id) ?? [] }, design: r.design ? { hash: r.design.hash, directory: r.design.directory, indexPath: r.design.indexPath, summary: r.design.proposal.summary, questions: r.design.proposal.questions } : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, quality: (final ?? active)?.candidateSha ? qualityContext(r, (final ?? active)) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], sizeAdvice: r.sizeAdvice ?? [], stoppedWork: stopped ? { runId: stopped.id, workspace: stopped.workspace } : null, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
+        return { id: doc.id, planRevisions: (r.planRevisions ?? []).map(p => ({ id: p.id, reason: p.reason, taskIds: p.tasks.map(t => t.id), hash: p.hash, status: p.status, at: p.at, approval: p.approval })), failedChecks: active ? this.store.failureDiagnostics(active).map(x => ({ runId: active.id, candidateSha: x.candidateSha, gateId: x.gateId, diagnostic: x.diagnostic, authoritative: false })) : [], models: modelPlan(r.config, r.operational), modelOverrides: r.operational ? { agent: r.operational.agent, roles: r.operational.roles ?? {} } : null, executionPath: r.executionPath ?? 'legacy', architecture: r.architecture ?? null, maxActiveMs: r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs, cost: this.costSummary(doc.id), planningMs: Math.round(r.planningMs ?? 0), revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash: r.contentHash, security: { contextHash: r.securityContextHash ?? null, minimumLane: r.securityContext?.minimumLane ?? null, requiresThreatModel: r.securityContext?.requiresThreatModel ?? null, topics: r.securityContext?.topics.map(x => x.id) ?? [], requirements: r.content?.security?.requirements.map(x => x.id) ?? [] }, design: r.design ? { hash: r.design.hash, directory: r.design.directory, indexPath: r.design.indexPath, summary: r.design.proposal.summary, questions: r.design.proposal.questions } : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, quality: (final ?? active)?.candidateSha ? qualityContext(r, (final ?? active)) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], sizeAdvice: r.sizeAdvice ?? [], stoppedWork: stopped ? { runId: stopped.id, workspace: stopped.workspace } : null, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
     }
 }
 //# sourceMappingURL=service.js.map

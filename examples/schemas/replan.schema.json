@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "reason": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 4000,
+      "allOf": [
+        {
+          "pattern": "^[^\\u0000]*$"
+        }
+      ]
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ],
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12000,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "acceptanceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ],
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "allowedPaths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "dependsOn": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ],
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "minItems": 0,
+            "maxItems": 20
+          },
+          "minimumLane": {
+            "type": "string",
+            "enum": [
+              "fast",
+              "standard",
+              "high"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description",
+          "acceptanceIds",
+          "allowedPaths",
+          "dependsOn",
+          "minimumLane"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 20
+    }
+  },
+  "required": [
+    "reason",
+    "tasks"
+  ],
+  "additionalProperties": false
+}
