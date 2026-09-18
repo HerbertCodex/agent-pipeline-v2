@@ -95,7 +95,7 @@ apv2 spec budget ID --file limits.json --approve --note "Allocation revue pour t
 apv2 spec plan-resume ID
 ```
 
-Les valeurs sont des plafonds totaux, travail déjà consommé compris. Après un arrêt d'exécution, utiliser l'action indiquée par `spec show` plutôt que `plan-resume`. L'amendement peut régler modèle, effort, tours et timeout, mais pas commandes, permissions, gates ou périmètre. Un run épuisé peut exiger une nouvelle tentative. L'ancien `spec run --accept-cost` autorise un dépassement du plafond global pendant cette exécution ; préférer une allocation chiffrée.
+Les valeurs sont des plafonds totaux, travail déjà consommé compris. Après un arrêt d'exécution, utiliser l'action indiquée par `spec show` plutôt que `plan-resume`. L'amendement peut régler modèle, effort, tours et timeout, et, côté contrôles, seulement ce qui relève de l'exécution : ajouter un contrôle (`gates.add`), déclarer une ressource partagée qui en sérialise plusieurs (`gates.resources`), relever un délai (`gates.timeoutMs`). Il ne peut ni changer une commande, des permissions, le périmètre, ni ce qu'un contrôle prouve (`covers`, `testPaths`, `lanes`, `mandatory`), ni supprimer un contrôle : ces cas exigent une nouvelle spec. Un run épuisé peut exiger une nouvelle tentative. L'ancien `spec run --accept-cost` autorise un dépassement du plafond global pendant cette exécution ; préférer une allocation chiffrée.
 
 ## Tableau de bord
 
