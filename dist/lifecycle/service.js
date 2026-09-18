@@ -10,14 +10,14 @@ import { mkdirSync, writeFileSync, renameSync, existsSync, lstatSync, readFileSy
 import { join, resolve, dirname, relative, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Pipeline, summarize } from '../engine/pipeline.js';
-import { validateConfig, agentSchema, taskSchema, DEFAULT_LIMITS } from '../domain/contracts.js';
+import { validateConfig, agentSchema, gateSchema, taskSchema, DEFAULT_LIMITS } from '../domain/contracts.js';
 import { hash, sha256 } from '../domain/hash.js';
 import { PipelineError, errorMessage, invariant } from '../domain/errors.js';
 import { Git, isInside } from '../execution/git.js';
 import { specSchema, qaSchema, designProposalSchema, validateSpec, assertSpecReadiness, criterionAmendmentHash, validateQa, specHash, approvalHash, specMarkdown, stricter, reviewer } from './contracts.js';
 import { runRole } from './roles.js';
 import { executionCapabilities, validateTaskCapabilities } from './capabilities.js';
-import { matches, requiredApprovals } from '../policy/policy.js';
+import { matches, validateDag, requiredApprovals } from '../policy/policy.js';
 import { inspectRepository } from '../knowledge/repository.js';
 import { buildInventory, diffInventory, inventoryMarkdown, testsReferencing } from '../knowledge/inventory.js';
 import { confirmedDecisions, ledgerHash, loadDecisionLedger } from './decisions.js';
@@ -559,12 +559,66 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             this.store.releaseDocument(id, token);
         }
     }
-    /** Operational limits do not rewrite the approved scope, gates or functional hash. */
+    /**
+     * Execution-only gate changes an operator may amend without rewriting an approved spec: a new check, a
+     * shared resource that serialises checks writing to the same place, or a longer timeout. What a check
+     * proves — command, coverage labels, test paths, lanes, mandatory flag — and the removal of any check stay
+     * outside an amendment: they would weaken an approval the operator already gave.
+     */
+    amendedGates(r, input) {
+        const current = r.operational?.gates ?? { add: [], resources: {}, timeoutMs: {} };
+        if (input === undefined)
+            return current;
+        invariant(input !== null && typeof input === 'object' && !Array.isArray(input), 'ARGUMENT', 'gates must be an amendment object');
+        const values = input;
+        invariant(Object.keys(values).every(k => ['add', 'resources', 'timeoutMs'].includes(k)), 'ARGUMENT', 'Only add, resources and timeoutMs may be amended on gates');
+        invariant(values['add'] === undefined || Array.isArray(values['add']), 'ARGUMENT', 'gates.add must be an array');
+        for (const key of ['resources', 'timeoutMs'])
+            invariant(values[key] === undefined ||
+                (values[key] !== null && typeof values[key] === 'object' && !Array.isArray(values[key])), 'ARGUMENT', `gates.${key} must be an object`);
+        const existing = new Map([...r.config.gates, ...current.add].map(g => [g.id, g]));
+        const add = [...current.add];
+        for (const gate of values['add'] ?? []) {
+            const parsed = gateSchema.parse(gate);
+            invariant(!existing.has(parsed.id), 'ARGUMENT', `Gate ${parsed.id} already exists; an amendment may only add a new check`);
+            existing.set(parsed.id, parsed);
+            add.push(parsed);
+        }
+        const resources = Object.assign(Object.create(null), current.resources);
+        for (const [gateId, labels] of Object.entries(values['resources'] ?? {})) {
+            invariant(existing.has(gateId), 'ARGUMENT', `Unknown gate ${gateId}`);
+            invariant(Array.isArray(labels) && labels.every(l => typeof l === 'string' && l.length > 0 && l.length <= 80), 'ARGUMENT', 'Resources are non-empty labels');
+            resources[gateId] = [...new Set([...(resources[gateId] ?? []), ...labels])];
+        }
+        const timeoutMs = Object.assign(Object.create(null), current.timeoutMs);
+        for (const [gateId, value] of Object.entries(values['timeoutMs'] ?? {})) {
+            const gate = existing.get(gateId);
+            invariant(gate, 'ARGUMENT', `Unknown gate ${gateId}`);
+            const before = timeoutMs[gateId] ?? gate.timeoutMs;
+            invariant(typeof value === 'number' && Number.isSafeInteger(value) && value <= 3600000, 'ARGUMENT', 'A gate timeout is an integer up to 3600000 ms');
+            invariant(value > before, 'ARGUMENT', `A gate timeout may only be raised: ${gateId} is already ${before} ms`);
+            timeoutMs[gateId] = value;
+        }
+        return { add, resources, timeoutMs };
+    }
+    /** The configuration a run executes: the approved one, plus execution-only amendments. */
+    runConfig(r) {
+        const amended = r.operational?.gates;
+        if (!amended || (!amended.add.length && !Object.keys(amended.resources).length && !Object.keys(amended.timeoutMs).length))
+            return r.config;
+        const gates = [...r.config.gates, ...amended.add].map(g => ({ ...g,
+            resources: [...new Set([...g.resources, ...(Object.hasOwn(amended.resources, g.id) ? amended.resources[g.id] : [])])],
+            timeoutMs: Object.hasOwn(amended.timeoutMs, g.id) ? amended.timeoutMs[g.id] : g.timeoutMs }));
+        const config = { ...r.config, gates };
+        validateConfig(config);
+        validateDag(gates);
+        return config;
+    }
     amendBudget(id, input, actor, note) {
         reviewer(actor, note);
         invariant(input !== null && typeof input === 'object' && !Array.isArray(input), 'ARGUMENT', 'Expected an operational amendment object');
         const values = input;
-        invariant(Object.keys(values).length > 0 && Object.keys(values).every(k => ['maxSpecCostUsd', 'maxActiveMs', 'agent', 'roles'].includes(k)), 'ARGUMENT', 'Only maxSpecCostUsd, maxActiveMs, agent and per-role tuning may be amended');
+        invariant(Object.keys(values).length > 0 && Object.keys(values).every(k => ['maxSpecCostUsd', 'maxActiveMs', 'agent', 'roles', 'gates'].includes(k)), 'ARGUMENT', 'Only maxSpecCostUsd, maxActiveMs, agent, per-role tuning and execution-only gate changes may be amended');
         const token = this.store.acquireDocument(id);
         try {
             const doc = this.get(id);
@@ -593,7 +647,24 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                     roles[role] = { ...roles[role], ...v };
                 }
             }
-            r.operational = { maxSpecCostUsd: cost, maxActiveMs: time, agent: tuning, roles, at: Date.now(), reviewer: actor.trim(), note: note.trim() };
+            const gates = this.amendedGates(r, values['gates']);
+            const previousGates = this.runConfig(r).gates;
+            r.operational = { maxSpecCostUsd: cost, maxActiveMs: time, gates, agent: tuning, roles, at: Date.now(), reviewer: actor.trim(), note: note.trim() };
+            const gatesChanged = hash(previousGates) !== hash(this.runConfig(r).gates);
+            if (gatesChanged) {
+                invariant(!r.publication && !r.delivery, 'STATE', 'Gate amendments must precede publication or delivery');
+                // A completed candidate must earn new proof under the amended checks, including fresh QA/review.
+                if (r.activeRunId === r.finalRunId)
+                    r.activeRunId = null;
+                r.finalRunId = null;
+                r.review = null;
+                if (!r.activeRunId) {
+                    r.qa = null;
+                    r.error = null;
+                    if (r.approval)
+                        r.status = 'approved';
+                }
+            }
             this.save(doc, 'workflow.budget_amended', { amendment: r.operational });
             return doc;
         }
@@ -954,7 +1025,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             const spec = this.approved(r);
             const specTask = spec.tasks.find(t => t.id === amendment.taskId);
             const task = specTask ? this.makeTask(r, specTask) : this.aggregateTask(r, `Revalidate the retained QA repair candidate after explicit execution-scope amendment ${amendment.id}.`);
-            const validationConfig = { ...r.config, maxRepairAttempts: 0 };
+            const validationConfig = { ...this.runConfig(r), maxRepairAttempts: 0 };
             const validation = await this.pipeline.createValidation({ repo: r.repo, baseRef: failed.baseSha, specId: doc.id, config: validationConfig, task }, amendment.candidateSha);
             const previousAttempt = r.attempts.find(a => a.runId === amendment.sourceRunId);
             r.attempts.push({ taskId: amendment.taskId, runId: validation.id, kind: previousAttempt.kind });
@@ -1024,7 +1095,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                         if (failed.state === 'failed')
                             task = this.withPreviousAttempt(r, task, failed);
                     }
-                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, specId: doc.id, config: r.config, task });
+                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, specId: doc.id, config: this.runConfig(r), task });
                     r.attempts.push({ taskId: t.id, runId: run.id, kind: 'task' });
                     r.activeRunId = run.id;
                     this.save(doc, 'workflow.task_started', { taskId: t.id, runId: run.id, baseSha: r.currentSha });
@@ -1071,7 +1142,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                     // approvals the integration would have required.
                     const proven = (run) => {
                         const seen = new Map(run.receipts.map(x => [x.gateId, x.status]));
-                        return r.config.gates.every(g => ['passed', 'cached'].includes(seen.get(g.id) ?? ''));
+                        return this.sameGates(r, run) && this.runConfig(r).gates.every(g => ['passed', 'cached'].includes(seen.get(g.id) ?? ''));
                     };
                     const reviewPreserved = (run) => run.task.reviewRequired || requiredApprovals(run.risk?.lane ?? 'high', r.config.workflow.reviewMode) === 0;
                     if (only && ['ready', 'awaiting_review'].includes(only.state) && only.baseSha === r.baseSha && only.candidateSha === r.currentSha && proven(only) && reviewPreserved(only)) {
@@ -1079,7 +1150,8 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                         this.save(doc, 'integration.reused', { runId: only.id, gates: only.receipts.map(x => x.gateId), reviewRequired: only.task.reviewRequired });
                     }
                     else {
-                        const finalConfig = { ...r.config, maxRepairAttempts: 0, gates: r.config.gates.map(g => ({ ...g, mandatory: true })) };
+                        const config = this.runConfig(r);
+                        const finalConfig = { ...config, maxRepairAttempts: 0, gates: config.gates.map(g => ({ ...g, mandatory: true })) };
                         const validation = { repo: r.repo, baseRef: r.baseSha, config: finalConfig, task: this.aggregateTask(r, 'Validate the complete approved specification on its aggregate candidate, including interactions across tasks.') };
                         // The single task already proved this exact candidate: adopt its receipts into the
                         // reviewable integration run instead of replaying every gate. The review requirement stays.
@@ -1160,7 +1232,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                         this.save(doc, 'qa.repair_budget_exhausted');
                         return doc;
                     }
-                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, specId: doc.id, config: r.config, task: this.qaRepairTask(r) });
+                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, specId: doc.id, config: this.runConfig(r), task: this.qaRepairTask(r) });
                     r.qaRepairs++;
                     r.attempts.push({ taskId: `QA-REPAIR-${r.qaRepairs}`, runId: run.id, kind: 'qa-repair' });
                     r.activeRunId = run.id;
@@ -1215,8 +1287,13 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                 lines.push(`- **${f.severity}** ${f.id}${f.path ? ` (${f.path})` : ''}: ${f.description}`);
         if (q.securityChecks.length)
             lines.push('', '## Security checks', ...q.securityChecks.map(x => `- **${x.requirementId}** — ${x.status}: ${x.evidence}`));
-        if (q.negativeTestChecks?.length)
+        if (q.negativeTestChecks?.length) {
             lines.push('', '## Negative tests', ...q.negativeTestChecks.map(x => `- ${x.requirementId}[${x.testIndex}]: ${x.status}; ${x.evidence}\n  Tests: ${x.paths.join(', ')}; receipts: ${x.receiptIds.join(', ')}`));
+            // A case the spec defined as a review is asserted, never proven: the human reviewer decides.
+            const reviewed = q.negativeTestChecks.filter(x => x.status === 'review');
+            if (reviewed.length)
+                lines.push('', `### Asserted by review, not proven by a test (${reviewed.length})`, 'The approved spec defines these negative cases as reviews. No test executes them; read the evidence and judge it yourself.', ...reviewed.map(x => `- ${x.requirementId}[${x.testIndex}]: ${x.evidence}`));
+        }
         if (q.decisionChecks.length)
             lines.push('', '## Decision checks', ...q.decisionChecks.map(x => `- **${x.decisionId}** — ${x.status}: ${x.evidence}`));
         if (q.qualityChecks?.length)
@@ -1294,11 +1371,16 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         r.review = { directory: root, candidateDirectory: candidate, patchPath, qaPath, reviewPath, candidateSha: final.candidateSha, bundleHash };
         this.save(doc, 'workflow.review_workspace_ready', { review: r.review });
     }
+    sameGates(r, run) {
+        const normalized = (config) => config.gates.map(g => ({ ...g, mandatory: true }));
+        return hash(normalized(this.runConfig(r))) === hash(normalized(run.config));
+    }
     async reviewable(r) {
         const spec = this.approved(r);
         invariant(r.finalRunId, 'STATE', 'No integrated candidate');
         const final = this.pipeline.store.get(r.finalRunId);
         invariant(final.candidateSha === r.currentSha, 'CANDIDATE', 'Final candidate is stale');
+        invariant(this.sameGates(r, final), 'QA_REQUIRED', 'Final validation must cover the amended gates');
         const evidenceHash = await this.pipeline.assertValidated(final.id);
         assertRequiredEvidence(qualityContext(r, final).validation);
         if (requiresQa(r, final, spec))
@@ -1454,7 +1536,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                 const task = rebuilt ? this.withPreviousAttempt(r, rebuilt, failed) : failed.task;
                 // A scope amendment validates retained code with maxRepairAttempts=0. That temporary
                 // validation policy must not become the policy of a fresh implementation attempt.
-                const replacement = await this.pipeline.create({ repo: r.repo, baseRef: failed.baseSha, specId: doc.id, config: r.config, task });
+                const replacement = await this.pipeline.create({ repo: r.repo, baseRef: failed.baseSha, specId: doc.id, config: this.runConfig(r), task });
                 r.attempts.push({ ...attempt, runId: replacement.id });
                 r.activeRunId = replacement.id;
             }

@@ -781,3 +781,32 @@ test('Product is told that each task must leave the checks able to pass', async 
   assert.match(readFileSync(new URL('../roles/product.md', import.meta.url).pathname, 'utf8'),
     /checks run after \*\*each\*\* task/);
 });
+
+// Observed on a real project: adding a missing check and serialising two checks that wrote to the same
+// directory each forced a full redraft, because a spec freezes its configuration. Neither changed a single
+// line of what the spec asked for.
+test('an operator may amend execution-only gate changes without rewriting the spec', async (t) => {
+  const f = lifecycleFixture(t);
+  let d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.' });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+
+  d = f.life.amendBudget(d.id, { gates: {
+    add: [{ id: 'browser', command: ['node', 'browser.mjs'], covers: ['browser'] }],
+    resources: { unit: ['build-output'] },
+    timeoutMs: { unit: 240000 },
+  } }, 'Test Owner', 'Le contrôle navigateur manquait et deux contrôles écrivaient au même endroit.');
+
+  const config = f.life.runConfig(f.life.get(d.id).data);
+  const unit = config.gates.find(g => g.id === 'unit');
+  assert.ok(config.gates.some(g => g.id === 'browser' && g.covers.includes('browser')), 'the new check is executed');
+  assert.deepEqual(unit.resources, ['build-output'], 'the shared resource serialises it');
+  assert.equal(unit.timeoutMs, 240000, 'the raised timeout applies');
+  assert.equal(f.life.get(d.id).data.approval.hash, d.data.approval.hash, 'the functional approval is untouched');
+
+  // What a check proves, and removing one, stay outside an amendment.
+  const refused = (gates, motif) => assert.throws(() => f.life.amendBudget(d.id, { gates }, 'Test Owner', 'Tentative de modification interdite du contrat.'), motif);
+  refused({ add: [{ id: 'unit', command: ['true'] }] }, /already exists/);
+  refused({ timeoutMs: { unit: 1000 } }, /may only be raised/);
+  refused({ resources: { inconnu: ['x'] } }, /Unknown gate/);
+  assert.throws(() => f.life.amendBudget(d.id, { gates: { covers: { unit: [] } } }, 'Test Owner', 'Tentative de modification des étiquettes.'), /Only add, resources and timeoutMs/);
+});

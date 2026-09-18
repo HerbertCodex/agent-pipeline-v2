@@ -1,7 +1,8 @@
 import test from 'node:test';
+import { neutralSecurityContext } from '../dist/security/owasp.js';
 import { planGates, validationRequirements } from '../dist/policy/policy.js';
 import { assertRequiredEvidence } from '../dist/quality/review.js';
-import { specSchema, validateQa } from '../dist/lifecycle/contracts.js';
+import { specSchema, validateQa, validateSpec } from '../dist/lifecycle/contracts.js';
 import { architectureSchema } from '../dist/lifecycle/pathways.js';
 import assert from 'node:assert/strict';
 import { validateConfig } from '../dist/domain/contracts.js';
@@ -327,4 +328,44 @@ test('a spec written before the experience field still yields a quality context'
   assert.equal(context.axes.find(a => a.axis === 'ui').required, false, 'no declared UI impact and no UI file changed');
   const uiChange = qualityContext(legacy, { ...run, changeSet: { ...run.changeSet, files: ['src/routes/+page.svelte'] } });
   assert.equal(uiChange.axes.find(a => a.axis === 'ui').required, true, 'the changed files still decide');
+});
+
+// Observed on a real spec: two approved security requirements declared their negative case as a review
+// ("confirmed by reviewing the final diff"). No test can cover them, so QA could neither prove nor pass them,
+// and the spec was stuck after all ten tasks had been implemented and every check had passed.
+test('a negative case the spec defines as a review is assessed as asserted, never as proven', async () => {
+  const { record, run, report } = sample();
+  const spec = specSchema.parse(oneTask());
+  const { owaspTopics } = specSchema.json.properties.security.properties.requirements.items.properties;
+  spec.security.requirements = [{ id: 'SEC-SUPPLY', title: 'No dependency or workflow change', owaspTopics: [owaspTopics.items.enum[0]],
+    acceptanceIds: ['AC-MATH'], verification: 'No manifest, lockfile or workflow is touched.',
+    negativeTests: ['[review] Review of the final diff confirming no manifest, lockfile or workflow change'] }];
+  run.config.gates[0].testPaths = ['test/math.test.mjs'];
+  const paths = new Set(['src/math.mjs', 'test/math.test.mjs']);
+  const context = qualityContext(record, run);
+  const qa = { ...report, candidateSha: sha, summary: 'Supply-chain surface unchanged.',
+    criteria: [{ id: 'AC-MATH', status: 'pass', evidence: 'Observed behavior tests.' }], observations: [],
+    securityChecks: [{ requirementId: 'SEC-SUPPLY', status: 'pass', evidence: 'Read the whole diff.' }],
+    negativeTestChecks: [{ requirementId: 'SEC-SUPPLY', testIndex: 0, status: 'review',
+      evidence: 'Read every hunk of the final diff: package.json, package-lock.json and .github are untouched.',
+      paths: [], receiptIds: [] }] };
+  const validate = value => validateQa(value, spec, sha, undefined, { context, paths, candidatePaths: paths });
+  assert.doesNotThrow(() => validate(qa), 'the spec itself defined this case as a review');
+  assert.throws(() => validateSpec(spec, false, undefined, undefined, { ...neutralSecurityContext(), negativeTestsRequired: true }), /explicit negative security test/, 'review does not satisfy required executable negative coverage');
+
+  // A review states what was inspected, claims no test file, and never replaces a test the spec asked for.
+  const vague = structuredClone(qa); vague.negativeTestChecks[0].evidence = 'Reviewed.';
+  assert.throws(() => validate(vague), /review-only/);
+  const claimsTests = structuredClone(qa); claimsTests.negativeTestChecks[0].paths = ['test/math.test.mjs'];
+  assert.throws(() => validate(claimsTests), /review-only/);
+  const claimsReceipt = structuredClone(qa); claimsReceipt.negativeTestChecks[0].receiptIds = ['R1'];
+  assert.throws(() => validate(claimsReceipt), /review-only/);
+  const originalCase = spec.security.requirements[0].negativeTests[0];
+  for (const required of ['Reject unauthorized access with 403.', 'Review of the final diff confirming no changes']) {
+    spec.security.requirements[0].negativeTests[0] = required;
+    assert.throws(() => validate(qa), /explicit \[review\] marker/, 'QA cannot waive an executable or unmarked case');
+  }
+  spec.security.requirements[0].negativeTests[0] = originalCase;
+  const claimsPass = structuredClone(qa); claimsPass.negativeTestChecks[0].status = 'pass';
+  assert.throws(() => validate(claimsPass), /negative-test pass needs actual test files/);
 });

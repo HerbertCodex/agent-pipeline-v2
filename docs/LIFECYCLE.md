@@ -117,7 +117,9 @@ apv2 spec budget ID --file limits.json --approve --note "Allocation revue pour t
 apv2 spec plan-resume ID
 ```
 
-Les valeurs sont des plafonds totaux, travail déjà consommé compris. Après un arrêt d'exécution, utiliser l'action indiquée par `spec show` plutôt que `plan-resume`. L'amendement peut régler modèle, effort, tours et timeout, mais pas commandes, permissions, gates ou périmètre. Un run épuisé peut exiger une nouvelle tentative. L'ancien `spec run --accept-cost` autorise un dépassement du plafond global pendant cette exécution ; préférer une allocation chiffrée.
+Les valeurs sont des plafonds totaux, travail déjà consommé compris. Après un arrêt d'exécution, utiliser l'action indiquée par `spec show` plutôt que `plan-resume`. L'amendement peut régler modèle, effort, tours et timeout, et, côté contrôles, seulement ce qui relève de l'exécution : ajouter un contrôle (`gates.add`), déclarer une ressource partagée qui en sérialise plusieurs (`gates.resources`), relever un délai (`gates.timeoutMs`). Il ne peut ni changer une commande, des permissions, le périmètre, ni ce qu'un contrôle prouve (`covers`, `testPaths`, `lanes`, `mandatory`), ni supprimer un contrôle : ces cas exigent une nouvelle spec. Un run épuisé peut exiger une nouvelle tentative. L'ancien `spec run --accept-cost` autorise un dépassement du plafond global pendant cette exécution ; préférer une allocation chiffrée.
+
+Les amendements de gates sont validés ensemble (dépendances et cycles inclus) avant sauvegarde. Ils s’appliquent aux nouvelles tentatives, aux revalidations de périmètre et à l’intégration finale. Un run déjà créé garde sa configuration : utiliser une nouvelle tentative pour lui appliquer les nouveaux réglages. Toute modification des gates invalide la validation finale et la revue ; `spec run` reconstruit les preuves et la QA avant livraison. Les gates ne sont plus amendables après publication ou livraison.
 
 ## Tableau de bord
 

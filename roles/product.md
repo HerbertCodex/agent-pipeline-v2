@@ -55,3 +55,5 @@ No code edits, dependency installation, project-script execution, Git mutation o
 
 ## Output
 Return only the structured spec matching the supplied schema. Preserve confirmed project decisions and prior recorded decisions while refining. Human approval of the exact spec/design/security bundle hash is required before implementation; you cannot provide that approval.
+
+For a security requirement verified only by inspection (for example, unchanged dependencies), prefix its negativeTests entry with `[review] `. This explicitly permits QA to report an assertion by review, not executed proof. Unmarked cases require executable test evidence; review-only cases cannot satisfy the controller requirement for negative security tests. Never use the marker for a behavior that needs a negative test.
