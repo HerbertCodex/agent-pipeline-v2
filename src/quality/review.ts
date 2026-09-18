@@ -43,8 +43,8 @@ const guidance: Record<typeof qualityAxes[number], string> = {
 export function qualityContext(record: Pick<SpecRecord, 'config' | 'content' | 'executionPath' | 'architecture'>, run: Run) {
   const files = run.changeSet?.files ?? [];
   const code = isCodeChange(files);
-  const ui = record.content?.experience.uiImpact !== undefined && record.content.experience.uiImpact !== 'none' ||
-    isUiChange(files);
+  const declaredUi = record.content?.experience?.uiImpact;
+  const ui = (declaredUi !== undefined && declaredUi !== 'none') || isUiChange(files);
   const requirements = validationRequirements(run.config, files, run.risk?.lane ?? 'standard');
   if (record.config.workflow.qualityReview === 'evidence') {
     if (ui && !requirements.some(r => r.id === 'browser')) requirements.push({ id: 'browser', anyOf: ['browser'], reason: 'Approved UI impact.' });
