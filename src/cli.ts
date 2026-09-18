@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { modelsHelp, modelsCommand } from './knowledge/models.js';
+import { modelSelectionSchema } from './adapters/model-selection.js';
 import { knowledgeHelp, knowledgeCommand } from './knowledge/cli.js';
 import { parseArgs } from 'node:util';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -31,6 +33,7 @@ apv2 schemas --output DIRECTORY         Export the runtime contracts as JSON Sch
 apv2 ui [--port N]                      Local dashboard: specs, tasks, QA, designs, live activity and actions
 
 ${knowledgeHelp}
+${modelsHelp}
 ${lifecycleHelp}
 All commands accept --state-dir DIR (default: ~/.local/state/agent-pipeline-v2).
 Execution requires Linux/macOS/WSL, Git and Node >=22.16. The legacy task commands never push or merge.
@@ -52,6 +55,7 @@ function load(path: string): unknown {
 }
 async function main(): Promise<void> {
   const { values,positionals } = parseArgs({ allowPositionals: true,strict: true,options: {
+    models: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' },
     model: { type: 'string' }, effort: { type: 'string' }, provider: { type: 'string' }, 'review-mode': { type: 'string' }, role: { type: 'string' }, repo: { type: 'string' },config: { type: 'string' },task: { type: 'string' },base: { type: 'string' },
     'state-dir': { type: 'string' },sha: { type: 'string' },reviewer: { type: 'string' },note: { type: 'string' },output: { type: 'string' },
     request: { type: 'string' }, 'request-file': { type: 'string' }, file: { type: 'string' }, pathway: { type: 'string' },
@@ -86,13 +90,14 @@ async function main(): Promise<void> {
     for (const [name,schema] of [['task',taskSchema],['config',configSchema],['agent-output',agentOutputSchema],['receipt',receiptSchema],['spec',specSchema],['product-brief',briefSpecSchema],['architecture',architectureSchema],['qa',qaSchema],['design',designProposalSchema],['bootstrap',bootstrapProposalSchema],['decision-ledger',decisionLedgerSchema],['semantic-review',semanticReviewSchema],['security-context',securityContextSchema],['security-plan',securityPlanSchema]] as const) {
       writeFileSync(join(dir,`${name}.schema.json`),JSON.stringify({ $schema: 'https://json-schema.org/draft/2020-12/schema',...schema.json },null,2)+'\n');
     }
+    writeFileSync(join(dir, 'model-selection.schema.json'), JSON.stringify({ $schema: 'https://json-schema.org/draft/2020-12/schema', ...modelSelectionSchema.json }, null, 2) + '\n');
     console.log(`Schemas written to ${dir}`); return;
   }
-  if (['bootstrap','onboard','doctor','spec','ask','gc','prune','decisions'].includes(command)) {
+  if (['models','bootstrap','onboard','doctor','spec','ask','gc','prune','decisions'].includes(command)) {
     const root = resolve(values['state-dir'] ?? join(homedir(),'.local','state','agent-pipeline-v2'));
     const controller = new AbortController(); const stop = ():void => controller.abort();
     process.on('SIGINT',stop); process.on('SIGTERM',stop);
-    try { await lifecycleCommand(command,positionals,values,root,controller.signal); }
+    try { if (command === 'models') await modelsCommand(positionals, values, root, controller.signal); else await lifecycleCommand(command,positionals,values,root,controller.signal); }
     finally { process.removeListener('SIGINT',stop); process.removeListener('SIGTERM',stop); }
     return;
   }

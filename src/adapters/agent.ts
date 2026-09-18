@@ -1,3 +1,4 @@
+import { assertModelResponse } from './model-check.js';
 import { startFeedback } from '../execution/feedback.js';
 import { startInvocation } from './invocations.js';
 import type { Store } from '../persistence/store.js';
@@ -70,6 +71,7 @@ export async function runAgent(config: Config, request: AgentRequest, outputRoot
   // The provider names its own stop reason (turn limit, cost ceiling, permission) in its result envelope.
   // Reporting that sentence first turned a 2000-character JSON dump into something an operator can act on.
   const usage = invocation ? invocation.finish(result) : providerUsage(config.agent.type, result.stdout);
+  assertModelResponse(config.agent, result);
   const named = usageSentence(usage);
   invariant(result.status === 'passed', result.status === 'cancelled' ? 'CANCELLED' : 'AGENT',
     `Agent ${result.status}${named ? `: ${named}` : ''} (exit ${result.exitCode ?? 'none'}${result.signal ? `, signal ${result.signal}` : ''}) after ${Math.round(result.durationMs)} ms: ${redact(failureExcerpt(`agent ${result.status}`, result.stderr, result.stdout, 4000), env).trim() || '(the provider wrote nothing on stdout or stderr)'}`);

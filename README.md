@@ -90,7 +90,7 @@ Le diff réel peut renforcer les contrôles et rétablir la QA du parcours compa
 | Pour… | Lire |
 | --- | --- |
 | Lancer votre premier projet | [Démarrage avec l’assistant](START-HERE.md) |
-| Configurer les commandes et les fournisseurs | [Configuration](docs/CONFIGURATION.md) · [Adaptateurs](docs/ADAPTERS.md) |
+| Configurer les commandes et les fournisseurs | [Configuration](docs/CONFIGURATION.md) · [Modèles et QA](docs/MODELS.md) · [Adaptateurs](docs/ADAPTERS.md) |
 | Comprendre les rôles et leurs consignes | [Rôles](docs/ROLES.md) · [Skills](docs/SKILLS.md) |
 | Suivre une spec, une reprise ou une livraison | [Cycle de vie](docs/LIFECYCLE.md) |
 | Exiger des preuves de qualité | [Lot 3 : qualité et validation](docs/LOT-3-QUALITE.md) |

@@ -1,0 +1,85 @@
+{
+  "validatedAt": "2026-09-18T16:09:30.417266+00:00",
+  "baseCommit": "426c94ce4fe1bd383aa046cefbc2bcf871f9e426",
+  "workingTree": "uncommitted implementation",
+  "sourceSnapshot": {
+    "sha256": "5ca152e4f3e8c541ceabb0a175c808bcb701f0a48d6bb4c471832af5bb56cd45",
+    "scope": [
+      "src",
+      "ui",
+      "test",
+      "scripts",
+      "examples",
+      "package.json",
+      "package-lock.json",
+      "tsconfig.json"
+    ],
+    "files": 131
+  },
+  "checks": {
+    "npm run check": {
+      "passed": true,
+      "tests": 465,
+      "pass": 465,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "durationMs": 240438.087147
+    },
+    "npm run check:package": {
+      "version": "2.0.0-alpha.8",
+      "offlineInstall": true,
+      "roles": 4,
+      "skills": 6,
+      "providerKnowledgeAndBootstrapTestsPassed": true,
+      "lifecycleClosed": true,
+      "dashboardServed": true,
+      "realProviderCalls": false
+    },
+    "chromium": {
+      "passed": true,
+      "browser": "151.0.7922.34",
+      "network": "localhost only",
+      "realProviderCalls": false,
+      "checks": [
+        "missing browser blocks compact run without repair",
+        "runner executes actual Chromium gate",
+        "compact browser evidence without model QA",
+        "missing proof visible before final run",
+        "desktop and mobile rendering",
+        "model choices visible in overview",
+        "keyboard QA navigation",
+        "no invalid revalidate action",
+        "successful proof visible",
+        "no browser runtime errors"
+      ]
+    },
+    "targetedModelPolicyTests": {
+      "passed": 18,
+      "failed": 0
+    }
+  },
+  "realProviderCalls": false,
+  "scope": [
+    "Explicit quick/deep/QA selection and bootstrap-to-onboarding preservation",
+    "Independent deep QA policy and role-specific operational tuning",
+    "Bounded native model compatibility probes, cost accounting, caching and cancellation",
+    "Retired model, authentication, unsupported effort and quota diagnostics",
+    "Offline model previews, non-overwriting migration and dashboard display"
+  ],
+  "limits": [
+    "Native providers exercised with local test doubles; no live account or model-quality benchmark.",
+    "Existing project configurations are not rewritten.",
+    "No automatic best-model ranking or replacement."
+  ],
+  "mainIntegration": {
+    "baseCommit": "e5f5bd8e727458ef7f520ac00c83bb6a281f7380",
+    "change": "Preserve the remote fix for specs without experience; retain both changelog entries.",
+    "buildPassed": true,
+    "command": "node --test test/quality-evidence.test.mjs test/model-policy.test.mjs test/ui-server.test.mjs",
+    "tests": 47,
+    "passed": 47,
+    "failed": 0,
+    "localChangesPreserved": true
+  }
+}

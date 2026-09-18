@@ -1,3 +1,4 @@
+import { applyModelSelection, selectedAgent, validateModelSelection, type ModelSelection } from '../adapters/model-selection.js';
 import { installedAssets } from '../knowledge/catalog.js';
 import { skillNames } from '../domain/knowledge.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, lstatSync, unlinkSync } from 'node:fs';
@@ -202,12 +203,14 @@ export async function planInstallation(store: Store, repo: string, options: {
     config?: unknown;
     agent?: unknown;
     assist?: boolean;
+    modelSelection?: ModelSelection;
     reviewMode?: 'solo' | 'team' | 'regulated';
     signal?: AbortSignal;
 } = {}): Promise<Document<InstallPlan>> {
     const inventory = await inspectProject(repo);
     invariant(!isInside(inventory.repo, store.root) && !isInside(store.root, inventory.repo), 'STATE_PATH', 'Keep operational state outside the project');
-    const agent = options.agent ? agentSchema.parse(options.agent) : options.config ? validateConfig(options.config).agent : defaultAgent();
+    const selection = options.modelSelection ? validateModelSelection(options.modelSelection) : undefined;
+    const agent = selection ? selectedAgent(selection.deep) : options.agent ? agentSchema.parse(options.agent) : options.config ? validateConfig(options.config).agent : defaultAgent();
     const proposal = options.config ? { config: validateConfig(options.config), questions: [], notes: ['Operator-supplied configuration; no command executed.'] } : proposeConfiguration(inventory, agent);
     if (options.reviewMode) proposal.config = validateConfig({ ...proposal.config, workflow: { ...proposal.config.workflow, reviewMode: options.reviewMode } });
     const plan: InstallPlan = { repo: inventory.repo, baseSha: inventory.baseSha, inventory, ...proposal, files: [], hash: '', applied: false, approval: null, commitSha: null };
@@ -220,6 +223,7 @@ export async function planInstallation(store: Store, repo: string, options: {
             plan.questions = answer.questions;
             plan.notes.push(...answer.notes);
         }
+        if (selection) plan.config = applyModelSelection(plan.config, selection);
         plan.files = planFiles(plan.repo, plan.config);
         plan.hash = installHash(plan);
         store.saveDocument(doc, 'installation.proposed', { hash: plan.hash, questions: plan.questions });

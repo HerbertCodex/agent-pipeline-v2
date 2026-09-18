@@ -1,3 +1,4 @@
+import { type ModelSelection } from '../adapters/model-selection.js';
 import { type AgentConfig, type Config, type Run } from '../domain/contracts.js';
 import { type Store, type Document } from '../persistence/store.js';
 import { Pipeline } from '../engine/pipeline.js';
@@ -45,6 +46,7 @@ export declare function planInstallation(store: Store, repo: string, options?: {
     config?: unknown;
     agent?: unknown;
     assist?: boolean;
+    modelSelection?: ModelSelection;
     reviewMode?: 'solo' | 'team' | 'regulated';
     signal?: AbortSignal;
 }): Promise<Document<InstallPlan>>;

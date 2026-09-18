@@ -20,7 +20,7 @@ export declare function invocationTotals(events: Event[]): CostSummary;
 /** Legacy metrics are included only before the first journal entry, to avoid counting an invocation twice. */
 export declare function specCosts(store: Store, record: SpecRecord, documentId: string): CostSummary;
 /** Every spec call, including QA and repairs, is constrained by its remaining declared budget. */
-export declare function budgetedAgent(store: Store, documentId: string | undefined, agent: AgentConfig, acceptCost?: boolean): AgentConfig;
+export declare function budgetedAgent(store: Store, documentId: string | undefined, agent: AgentConfig, acceptCost?: boolean, role?: 'product' | 'design' | 'implementer' | 'qa'): AgentConfig;
 export declare function remainingSpecMs(store: Store, documentId?: string): number;
 export declare function startInvocation(store: Store, owner: InvocationOwner, agent: AgentConfig, role: string, input: string): {
     finish(result: ProcessResult): AttemptUsage | null;

@@ -1,5 +1,5 @@
 import { assertRequiredEvidence, qualityContext, qualityMarkdown } from '../quality/review.js';
-import { roleAgent } from '../adapters/routing.js';
+import { roleAgent, modelPlan, modelChoice } from '../adapters/routing.js';
 import { adaptiveConfig, architectureSchema, briefSpecSchema, expandBrief, requiresQa, selectPath, targetedQaContext } from './pathways.js';
 import { compactProposal } from './compact.js';
 import { focusedIntelligence } from '../knowledge/focus.js';
@@ -398,7 +398,7 @@ export class Lifecycle {
         };
         const spec = r.content;
         const proposal = await runRole({ store: this.store, documentId: doc.id, budgetDocumentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills,
-            agent: roleAgent(r.config, 'design', r.content.minimumLane), passEnv: r.config.environment.passEnv, schema: designProposalSchema, context, ...(signal ? { signal } : {}),
+            modelReason: modelChoice(r.config, 'design', r.content.minimumLane).reason, agent: roleAgent(r.config, 'design', r.content.minimumLane), passEnv: r.config.environment.passEnv, schema: designProposalSchema, context, ...(signal ? { signal } : {}),
             maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: value => { this.validateDesignMarkup(value); this.validateDesignScopes(value, spec); this.inlineDesignAssets(r.repo, r.baseSha, tracked, value); this.loadDesignStylesheets(r.repo, r.baseSha, tracked, value); return value; } });
         const root = resolve(dirname(r.repo), `${basename(r.repo)}-review`, doc.id, 'design');
         invariant(!isInside(r.repo, root) && !isInside(this.store.root, root), 'DESIGN_PATH', 'Design preview must be outside source and operational state');
@@ -460,7 +460,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         }
         const selectedContext = r.executionPath ? focusedIntelligence(repositoryIntelligence) : repositoryIntelligence;
         const roleOptions = { store: this.store, documentId: doc.id, budgetDocumentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product' as const, skills: r.config.skills,
-            agent: roleAgent(r.config, 'product', r.executionPath === 'structural' ? 'high' : securityContext.minimumLane), passEnv: r.config.environment.passEnv,
+            modelReason: modelChoice(r.config, 'product', r.executionPath === 'structural' ? 'high' : securityContext.minimumLane).reason, agent: roleAgent(r.config, 'product', r.executionPath === 'structural' ? 'high' : securityContext.minimumLane), passEnv: r.config.environment.passEnv,
             ...(signal ? { signal } : {}), maxRepairs: r.config.workflow.maxOutputRepairs ?? 1 };
         if (r.executionPath === 'structural') {
             const tracked = new Set(await this.trackedPaths(r.repo, r.baseSha, signal));
@@ -527,7 +527,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         reviewer(actor, note);
         invariant(input !== null && typeof input === 'object' && !Array.isArray(input), 'ARGUMENT', 'Expected an operational amendment object');
         const values = input as Record<string, unknown>;
-        invariant(Object.keys(values).length > 0 && Object.keys(values).every(k => ['maxSpecCostUsd', 'maxActiveMs', 'agent'].includes(k)), 'ARGUMENT', 'Only maxSpecCostUsd, maxActiveMs and agent tuning may be amended');
+        invariant(Object.keys(values).length > 0 && Object.keys(values).every(k => ['maxSpecCostUsd', 'maxActiveMs', 'agent', 'roles'].includes(k)), 'ARGUMENT', 'Only maxSpecCostUsd, maxActiveMs, agent and per-role tuning may be amended');
         const token = this.store.acquireDocument(id);
         try {
             const doc = this.get(id); const r = doc.data;
@@ -543,7 +543,19 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                 agentSchema.parse({ ...r.config.agent, ...tuning, ...v });
                 tuning = { ...tuning, ...v };
             }
-            r.operational = { maxSpecCostUsd: cost, maxActiveMs: time, agent: tuning, at: Date.now(), reviewer: actor.trim(), note: note.trim() };
+            const roles = { ...r.operational?.roles };
+            if (values['roles'] !== undefined) {
+                const input = values['roles'];
+                invariant(input !== null && typeof input === 'object' && !Array.isArray(input), 'ARGUMENT', 'roles must be a tuning object');
+                for (const [name, v] of Object.entries(input)) {
+                    invariant(['product', 'design', 'implementer', 'qa'].includes(name), 'ARGUMENT', 'Unknown model role');
+                    invariant(v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).every(k => ['model', 'effort', 'timeoutMs', 'maxTurns', 'maxBudgetUsd'].includes(k)), 'ARGUMENT', 'Role tuning cannot change provider, command, credentials or tools');
+                    const role = name as keyof typeof roles;
+                    agentSchema.parse({ ...roleAgent(r.config, role, 'high'), ...roles[role], ...v });
+                    roles[role] = { ...roles[role], ...v };
+                }
+            }
+            r.operational = { maxSpecCostUsd: cost, maxActiveMs: time, agent: tuning, roles, at: Date.now(), reviewer: actor.trim(), note: note.trim() };
             this.save(doc, 'workflow.budget_amended', { amendment: r.operational });
             return doc;
         } finally { this.store.releaseDocument(id, token); }
@@ -963,7 +975,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                     const fullContext = { diff, spec, qualityReview: qualityContext(r, final), architecture: r.architecture ?? null, approvedAmendments: this.approvedAmendments(r), taskSummaries: this.taskSummaries(r), decisionLedger: r.decisionLedger, securityContext:r.securityContext, approvedDesign: this.qaDesignContext(r), baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] };
                     const context = r.executionPath && r.executionPath !== 'structural' && final.risk!.lane !== 'high' ? targetedQaContext(fullContext) : fullContext;
                     this.save(doc, 'qa.context_selected', { mode: context === fullContext ? 'full' : 'targeted', bytes: Buffer.byteLength(JSON.stringify(context)), fullBytes: Buffer.byteLength(JSON.stringify(fullContext)), completeDiff: true });
-                    const raw = await runRole({ store: this.store, documentId: id, budgetDocumentId: id, acceptCost: options.acceptCost ?? false, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, agent: roleAgent(r.config, 'qa', final.risk?.lane ?? spec.minimumLane), passEnv: r.config.environment.passEnv, schema: qaSchema, context, signal,
+                    const raw = await runRole({ store: this.store, documentId: id, budgetDocumentId: id, acceptCost: options.acceptCost ?? false, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, modelReason: modelChoice(r.config, 'qa', final.risk?.lane ?? spec.minimumLane).reason, agent: roleAgent(r.config, 'qa', final.risk?.lane ?? spec.minimumLane), passEnv: r.config.environment.passEnv, schema: qaSchema, context, signal,
                         maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: report => validateQa(report, spec, final.candidateSha!, r.decisionLedger, quality) });
                     r.qa = { report: raw, specHash: r.contentHash!, evidenceHash, at: Date.now(), source: 'agent' };
                     this.save(doc, 'qa.completed', { qa: r.qa });
@@ -1450,6 +1462,6 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             next = `Resolve ${r.error.code} before running again: ${r.error.message.slice(0, 200)}`;
         else
             next = `apv2 spec run ${doc.id}`;
-        return { id: doc.id, executionPath: r.executionPath ?? 'legacy', architecture: r.architecture ?? null, maxActiveMs: r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs, cost: this.costSummary(doc.id), planningMs: Math.round(r.planningMs ?? 0), revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash:r.contentHash, security:{contextHash:r.securityContextHash ?? null,minimumLane:r.securityContext?.minimumLane ?? null,requiresThreatModel:r.securityContext?.requiresThreatModel ?? null,topics:r.securityContext?.topics.map(x=>x.id) ?? [],requirements:r.content?.security?.requirements.map(x=>x.id) ?? []}, design:r.design ? {hash:r.design.hash,directory:r.design.directory,indexPath:r.design.indexPath,summary:r.design.proposal.summary,questions:r.design.proposal.questions} : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, quality: (final ?? active)?.candidateSha ? qualityContext(r, (final ?? active)!) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], sizeAdvice: r.sizeAdvice ?? [], stoppedWork: stopped ? { runId: stopped.id, workspace: stopped.workspace } : null, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
+        return { id: doc.id, models: modelPlan(r.config, r.operational), modelOverrides: r.operational ? { agent: r.operational.agent, roles: r.operational.roles ?? {} } : null, executionPath: r.executionPath ?? 'legacy', architecture: r.architecture ?? null, maxActiveMs: r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs, cost: this.costSummary(doc.id), planningMs: Math.round(r.planningMs ?? 0), revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash:r.contentHash, security:{contextHash:r.securityContextHash ?? null,minimumLane:r.securityContext?.minimumLane ?? null,requiresThreatModel:r.securityContext?.requiresThreatModel ?? null,topics:r.securityContext?.topics.map(x=>x.id) ?? [],requirements:r.content?.security?.requirements.map(x=>x.id) ?? []}, design:r.design ? {hash:r.design.hash,directory:r.design.directory,indexPath:r.design.indexPath,summary:r.design.proposal.summary,questions:r.design.proposal.questions} : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, quality: (final ?? active)?.candidateSha ? qualityContext(r, (final ?? active)!) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], sizeAdvice: r.sizeAdvice ?? [], stoppedWork: stopped ? { runId: stopped.id, workspace: stopped.workspace } : null, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
     }
 }

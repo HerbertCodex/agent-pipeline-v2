@@ -1,0 +1,4 @@
+import { type Config } from '../domain/contracts.js';
+export declare const modelsHelp = "Model policy:\n  apv2 models --config FILE              Explain effective models for each role and risk lane (offline)\n  apv2 models check --config FILE [--execute]\n                                        --execute makes bounded, billed probes without project content\n  apv2 models replace --config FILE --provider codex|claude --from OLD --to NEW --output NEW_FILE\n                                        Write a reviewed replacement candidate; never edit the source config\n";
+export declare function replaceModel(config: Config, provider: string, from: string, to: string): Config;
+export declare function modelsCommand(args: string[], values: Record<string, string | boolean | undefined>, root: string, signal: AbortSignal): Promise<void>;

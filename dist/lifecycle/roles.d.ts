@@ -37,4 +37,5 @@ export declare function runRole<T>(options: {
     budgetDocumentId?: string;
     acceptCost?: boolean;
     repairPatches?: boolean;
+    modelReason?: string;
 }): Promise<T>;

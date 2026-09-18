@@ -123,6 +123,14 @@
           ],
           "default": "default"
         },
+        "preflight": {
+          "type": "string",
+          "enum": [
+            "off",
+            "probe"
+          ],
+          "default": "off"
+        },
         "maxTurns": {
           "type": "integer",
           "minimum": 1,
@@ -383,6 +391,14 @@
                   ],
                   "default": "default"
                 },
+                "preflight": {
+                  "type": "string",
+                  "enum": [
+                    "off",
+                    "probe"
+                  ],
+                  "default": "off"
+                },
                 "maxTurns": {
                   "type": "integer",
                   "minimum": 1,
@@ -487,6 +503,14 @@
                   ],
                   "default": "default"
                 },
+                "preflight": {
+                  "type": "string",
+                  "enum": [
+                    "off",
+                    "probe"
+                  ],
+                  "default": "off"
+                },
                 "maxTurns": {
                   "type": "integer",
                   "minimum": 1,
@@ -590,6 +614,14 @@
                     "high"
                   ],
                   "default": "default"
+                },
+                "preflight": {
+                  "type": "string",
+                  "enum": [
+                    "off",
+                    "probe"
+                  ],
+                  "default": "off"
                 },
                 "maxTurns": {
                   "type": "integer",
@@ -802,6 +834,14 @@
           ],
           "default": "legacy"
         },
+        "qaProfile": {
+          "type": "string",
+          "enum": [
+            "lane",
+            "deep"
+          ],
+          "default": "lane"
+        },
         "qaLanes": {
           "type": "array",
           "items": {
@@ -903,6 +943,7 @@
       "default": {
         "planningMode": "legacy",
         "qualityReview": "legacy",
+        "qaProfile": "lane",
         "qaLanes": [
           "standard",
           "high"

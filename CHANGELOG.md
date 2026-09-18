@@ -5,6 +5,9 @@
 
 - Une spec antérieure au champ `experience` ne fait plus échouer la lecture des specs : le contexte qualité lit ce champ avec la même prudence que le reste du contenu. Constaté sur un vrai magasin — une seule vieille spec renvoyait « Erreur interne » pour **toute** la liste du tableau de bord.
 
+- Add explicit quick/deep/QA model selection for bootstrap and onboarding, including a separate QA provider and a deep QA policy independent of task risk. Preserve operator choices through Setup and approval; expose routing and operational overrides in CLI and dashboard.
+- Add opt-in bounded native compatibility probes with cost accounting, short-lived caching, explicit unavailable-model/authentication/effort diagnostics, offline model previews and non-overwriting migration candidates. Per-role operational tuning preserves dedicated QA when the implementation model changes. No automatic model ranking or fallback is introduced.
+
 - Evidence mode now blocks missing applicable build/integration/browser/boundary receipts before QA and delivery, including compact tasks. Required gates override lane filtering within their path scope. Negative security cases map to reviewed test files and final behavioral receipts; structural decisions require explicit constraint, simpler alternative and risks. An offline Chromium acceptance script covers the evidence dashboard.
 
 - Lot 3: add evidence-backed QA axes (architecture, simplicity, reuse, tests, operations, UI), validate file/receipt/finding references and enforce the same checks on manual import and delivery. Unknown quality evidence pauses without automatic code repairs; minor observations alone cannot request changes.

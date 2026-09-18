@@ -1,5 +1,11 @@
 # Mettre à jour un projet existant
 
+## Modèles et QA dédiée
+
+Les champs absents conservent `workflow.qaProfile: "lane"` et `agent.preflight: "off"`. Pour réserver une revue approfondie à QA, revoir son modèle, ses éventuels profils/règles, puis activer `qaProfile: "deep"`. Pour contrôler réellement un modèle natif avant le contexte projet, activer `preflight: "probe"` sur l'agent concerné ; ces contrôles consomment du quota. `--models FILE` est destiné au bootstrap et à la première installation, sans écraser un projet installé.
+
+`models replace` prépare un nouveau fichier pour les identifiants retirés. Les specs déjà créées gardent leur configuration ; un amendement `spec budget` peut ajuster le modèle et l'effort d'un rôle, sans changer son fournisseur ou ses permissions. Voir les [commandes et priorités exactes](MODELS.md).
+
 ## Vers les parcours courts et les preuves de qualité
 
 Les lots d'amélioration du 18 septembre suivent la livraison initiale alpha.8, **sans changement de numéro de version**. Identifier aussi le commit de la distribution utilisée. Les sections historiques ci-dessous décrivent leurs versions d'origine, pas les valeurs par défaut actuelles.

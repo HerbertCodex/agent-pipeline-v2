@@ -48,6 +48,7 @@ export declare const agentSchema: import("./schema.js").Schema<{
     readonly passEnv: string[];
     readonly model: string;
     readonly effort: "default" | "high" | "low" | "medium";
+    readonly preflight: "off" | "probe";
     readonly maxTurns: number;
     readonly maxBudgetUsd: number | null;
 }>;
@@ -66,6 +67,7 @@ export declare const configSchema: import("./schema.js").Schema<{
         readonly passEnv: string[];
         readonly model: string;
         readonly effort: "default" | "high" | "low" | "medium";
+        readonly preflight: "off" | "probe";
         readonly maxTurns: number;
         readonly maxBudgetUsd: number | null;
     };
@@ -94,6 +96,7 @@ export declare const configSchema: import("./schema.js").Schema<{
             readonly passEnv: string[];
             readonly model: string;
             readonly effort: "default" | "high" | "low" | "medium";
+            readonly preflight: "off" | "probe";
             readonly maxTurns: number;
             readonly maxBudgetUsd: number | null;
         } | null;
@@ -104,6 +107,7 @@ export declare const configSchema: import("./schema.js").Schema<{
             readonly passEnv: string[];
             readonly model: string;
             readonly effort: "default" | "high" | "low" | "medium";
+            readonly preflight: "off" | "probe";
             readonly maxTurns: number;
             readonly maxBudgetUsd: number | null;
         } | null;
@@ -114,6 +118,7 @@ export declare const configSchema: import("./schema.js").Schema<{
             readonly passEnv: string[];
             readonly model: string;
             readonly effort: "default" | "high" | "low" | "medium";
+            readonly preflight: "off" | "probe";
             readonly maxTurns: number;
             readonly maxBudgetUsd: number | null;
         } | null;
@@ -140,6 +145,7 @@ export declare const configSchema: import("./schema.js").Schema<{
     readonly workflow: {
         readonly planningMode: "legacy" | "adaptive";
         readonly qualityReview: "legacy" | "evidence";
+        readonly qaProfile: "lane" | "deep";
         readonly qaLanes: string[];
         readonly maxQaRepairs: number;
         readonly maxActiveMs: number;

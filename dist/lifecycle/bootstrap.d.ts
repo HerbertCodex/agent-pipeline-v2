@@ -1,3 +1,4 @@
+import { type ModelSelection } from '../adapters/model-selection.js';
 import { type AgentConfig } from '../domain/contracts.js';
 import { type Infer, type Schema } from '../domain/schema.js';
 import type { Document, Store } from '../persistence/store.js';
@@ -68,6 +69,7 @@ export declare const bootstrapProposalSchema: Schema<{
 export type BootstrapProposal = Infer<typeof bootstrapProposalSchema>;
 export type ArchitectureProposal = Infer<typeof architectureSchema>;
 export interface BootstrapPlan {
+    modelSelection?: ModelSelection;
     directory: string;
     request: string;
     revision: number;
@@ -90,9 +92,9 @@ export interface BootstrapPlan {
 }
 /** Bootstrap has no project configuration yet: one bounded repair of an output-contract violation. */
 export declare const BOOTSTRAP_OUTPUT_REPAIRS = 1;
-export declare function bootstrapHash(plan: Pick<BootstrapPlan, 'directory' | 'request' | 'revision' | 'provider' | 'reviewMode' | 'proposal' | 'semanticReview'>): string;
-export declare function planBootstrap(store: Store, path: string, request: string, provider: string | unknown, signal?: AbortSignal, reviewMode?: 'solo' | 'team' | 'regulated'): Promise<Document<BootstrapPlan>>;
-export declare function refineBootstrap(store: Store, id: string, request: string, signal?: AbortSignal): Promise<Document<BootstrapPlan>>;
+export declare function bootstrapHash(plan: Pick<BootstrapPlan, 'directory' | 'request' | 'revision' | 'provider' | 'reviewMode' | 'proposal' | 'semanticReview' | 'modelSelection'>): string;
+export declare function planBootstrap(store: Store, path: string, request: string, provider: string | unknown, signal?: AbortSignal, reviewMode?: 'solo' | 'team' | 'regulated', modelSelection?: ModelSelection): Promise<Document<BootstrapPlan>>;
+export declare function refineBootstrap(store: Store, id: string, request: string, signal?: AbortSignal, modelSelection?: ModelSelection): Promise<Document<BootstrapPlan>>;
 export declare function applyBootstrap(store: Store, id: string, expectedHash: string, actor: string, note: string, commit: boolean): Promise<{
     bootstrap: Document<BootstrapPlan>;
     onboarding: Document<InstallPlan>;

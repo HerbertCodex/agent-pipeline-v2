@@ -57,6 +57,8 @@ export const agentSchema = s.object({
     passEnv: s.default(envNames, []),
     model: s.default(s.string(0, 200), ''),
     effort: s.default(s.enum(['default', 'low', 'medium', 'high']), 'default'),
+    // Opt-in compatibility probe, without project content, before a native model is used.
+    preflight: s.default(s.enum(['off', 'probe']), 'off'),
     // A turn count measures neither useful work, nor time, nor money: it is a net against an endless loop,
     // not the arbiter of daily work. Time and cost are the bounds that measure what an operator wants to limit.
     maxTurns: s.default(s.number(1, 200), 200),
@@ -89,6 +91,7 @@ export const configSchema = s.object({
     workflow: s.default(s.object({
         planningMode: s.default(s.enum(['legacy', 'adaptive']), 'legacy'),
         qualityReview: s.default(s.enum(['legacy', 'evidence']), 'legacy'),
+        qaProfile: s.default(s.enum(['lane', 'deep']), 'lane'),
         qaLanes: s.default(s.array(s.enum(lanes), 0, 3), ['standard', 'high']),
         maxQaRepairs: s.default(s.number(0, 3), 2),
         maxActiveMs: s.default(s.number(100, 14400000), 3600000),
@@ -99,7 +102,7 @@ export const configSchema = s.object({
         generatedPaths: s.default(s.array(s.string(1, 300), 0, 100), [...DEFAULT_GENERATED_PATHS]),
         /** Stops a spec once the providers declare this much spending on it; continuing is an explicit decision. */
         maxSpecCostUsd: s.default(s.nullable(s.finite(0.01, 10000)), 25),
-    }), { planningMode: 'legacy', qualityReview: 'legacy', qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team', maxOutputRepairs: 1, generatedPaths: [...DEFAULT_GENERATED_PATHS], maxSpecCostUsd: 25 }),
+    }), { planningMode: 'legacy', qualityReview: 'legacy', qaProfile: 'lane', qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team', maxOutputRepairs: 1, generatedPaths: [...DEFAULT_GENERATED_PATHS], maxSpecCostUsd: 25 }),
     feedback: s.default(s.object({
         gateIds: s.default(s.array(id, 0, 20), []),
         maxCalls: s.default(s.number(1, 20), 4),
@@ -161,6 +164,7 @@ export function validateConfig(value) {
     for (const agent of [config.agent, config.roles.product, config.roles.qa, config.roles.design].filter((a) => a !== null)) {
         invariant(agent.type !== 'command' || agent.command.length > 0, 'CONFIG', 'Role command agent requires an argv array');
         invariant(agent.type === 'command' || agent.command.length <= 1, 'CONFIG', 'Native provider accepts only the executable path');
+        invariant(agent.preflight !== 'probe' || agent.type !== 'command', 'CONFIG', 'Model probes require a native provider');
     }
     invariant(new Set(config.skills.enabled).size === config.skills.enabled.length, 'CONFIG', 'Duplicate enabled skill');
     invariant(new Set(config.modelRouting.map(r => `${r.provider}:${r.role}:${r.lane}`)).size === config.modelRouting.length, 'CONFIG', 'Duplicate model route');
