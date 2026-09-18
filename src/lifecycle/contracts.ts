@@ -348,7 +348,9 @@ export interface CriterionAmendment {
     description: string;
     verification: string;
     /** Security requirements linked to this criterion that carried the same unsatisfiable constraint. */
-    requirements?: { id: string; previous: string; verification: string }[];
+    requirements?: { id: string; previous: string; verification: string;
+        /** Negative cases reclassified as reviews: same texts, some now carrying the explicit `[review] ` marker. */
+        previousNegativeTests?: string[]; negativeTests?: string[] }[];
     reason: string;
     hash: string;
     status: 'pending' | 'approved';

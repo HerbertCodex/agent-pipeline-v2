@@ -810,3 +810,35 @@ test('an operator may amend execution-only gate changes without rewriting the sp
   refused({ resources: { inconnu: ['x'] } }, /Unknown gate/);
   assert.throws(() => f.life.amendBudget(d.id, { gates: { covers: { unit: [] } } }, 'Test Owner', 'Tentative de modification des étiquettes.'), /Only add, resources and timeoutMs/);
 });
+
+// Observed on a real spec: two security requirements described their negative case as a review of the diff,
+// but the spec predates the explicit `[review] ` marker. QA could then neither prove nor assess them, and ten
+// implemented tasks with six green checks were stuck behind a marker nobody could add any more.
+test('an operator may mark an approved negative case as a review, and only that', async (t) => {
+  const f = lifecycleFixture(t);
+  const request = 'Implement the approved arithmetic example with authentication and session handling.';
+  const spec = withSecurity(oneTask(), request, 'backend');
+  const requirement = spec.security.requirements[0];
+  requirement.negativeTests = [...requirement.negativeTests, 'Review of the final diff for manifest or workflow changes'];
+  let d = await f.life.draft({ repo: f.repo, config: f.config, request, proposal: spec });
+  d = await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Fixture approval after inspecting scope and criteria.');
+  d = await f.life.run(d.id);
+
+  const criterion = f.life.get(d.id).data.content.acceptance.find(c => c.id === 'AC-SEC');
+  const approved = f.life.get(d.id).data.content.security.requirements[0].negativeTests;
+  const mark = (negativeTests) => f.life.planCriterionAmendment(d.id, 'AC-SEC', { description: criterion.description,
+    verification: criterion.verification, reason: 'La spec décrit ce cas comme une revue du diff, sans le marqueur explicite.',
+    requirements: [{ id: requirement.id, verification: requirement.verification, negativeTests }] });
+
+  assert.throws(() => mark([approved[0], 'Review of something else entirely']), /only gain the \[review\] marker/);
+  assert.throws(() => mark([approved[0]]), /never added or removed/);
+  assert.throws(() => mark([...approved]), /No negative case .* is reclassified/);
+
+  const doc = mark([approved[0], `[review] ${approved[1]}`]);
+  const amendment = doc.data.criterionAmendments.at(-1);
+  f.life.approveCriterionAmendment(d.id, amendment.id, amendment.hash, 'Test Owner', 'Ce cas est une revue du diff, il ne peut pas être un test.');
+  assert.deepEqual(f.life.get(d.id).data.content.security.requirements[0].negativeTests, approved, 'the approved text stays auditable');
+  const applied = f.life.get(d.id).data.criterionAmendments.at(-1);
+  assert.equal(applied.status, 'approved');
+  assert.deepEqual(applied.requirements[0].negativeTests, [approved[0], `[review] ${approved[1]}`], 'only the marker was added');
+});
