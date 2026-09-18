@@ -1,5 +1,7 @@
 # Agent Pipeline V2 2.0.0-alpha.8
 
+> **Note de livraison historique.** Ce texte décrit cette livraison, avant les évolutions suivantes. Pour configurer et utiliser le code actuel, consulter la [documentation](README.md) et la [migration](MIGRATION.md).
+
 Alpha.8 ajoute une couche de sécurité OWASP-aware au workflow déterministe sans transformer les modèles ou scanners en autorités.
 
 ## Nouveautés

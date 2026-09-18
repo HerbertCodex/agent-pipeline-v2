@@ -1,5 +1,7 @@
 # Améliorations de la pipeline — 18 septembre 2026
 
+> **Bilan d’implémentation et de mesures.** Les essais et leurs limites sont conservés à leur date. Pour les réglages actuels, consulter [Configuration](CONFIGURATION.md), [Cycle de vie](LIFECYCLE.md) et [Qualité](LOT-3-QUALITE.md).
+
 Ce document décrit l'implémentation qui suit [l'audit](AUDIT-2026-09-18.md). Les mesures de l'audit restent celles de l'ancienne version ; elles ne constituent pas un benchmark de ces changements.
 
 ## Ce qui change

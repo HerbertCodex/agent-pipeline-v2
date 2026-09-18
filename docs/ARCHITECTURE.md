@@ -14,7 +14,7 @@ La migration SQLite user_version 1 → 2 crée les tables documents, document_ev
 
 Le contrôleur expose une seule invocation d'exécution par spec à la fois. Plusieurs documents peuvent être inspectés ; l'exécution d'un run est limitée par le verrou global du store. Les tâches de réalisation ne sont pas exécutées en parallèle. Le graphe des contrôles dispose de dépendances et ressources exclusives ; seule cette concurrence est orchestrée.
 
-Product/QA utilisent des worktrees frais, sans les modifications non contrôlées ni la conversation privée de l'Implementer. Le code appelle la CLI fournisseur ; il ne conserve pas encore les identifiants de threads. Les réparations voient le workspace et les diagnostics, pas une garantie de reprise de mémoire du modèle.
+Product/QA utilisent des worktrees frais, sans les modifications non contrôlées ni la conversation privée de l'Implementer. L'Implementer peut demander des checks configurés pendant sa session et corriger immédiatement. Une réparation externe conserve le worktree, le contexte sélectionné et les diagnostics ; les checkpoints de rôle conservent les sorties décodées et la spec acceptée avant Design. Il n'y a pas de reprise par identifiant de thread natif du fournisseur. QA garde toujours un contexte indépendant.
 
 ## Frontières de contrat
 
@@ -32,13 +32,13 @@ La publication conserve une intention puis réconcilie Git et la forge. La branc
 
 Ajouter un moteur via le protocole command, un profil via la configuration déclarative et un connecteur de livraison derrière les vérifications existantes. Une exécution distante ou multi-utilisateur exige un autre modèle de confiance, des identités et une attestation des preuves ; ne pas simplement exposer la CLI par HTTP.
 
-## Alpha.5 — mémoire d'architecture et intelligence du dépôt
+## Mémoire d’architecture et intelligence du dépôt
 
 Le bootstrap persiste `.agent-pipeline/ARCHITECTURE.md`. Il ne s'agit pas d'une règle immuable : chaque décision contient les raisons qui la soutiennent et des déclencheurs explicites de reconsidération.
 
 Repository Intelligence est recalculé sur le SHA Git utilisé par Product ou par la tâche Implementer. Le contrôleur transmet un résumé borné de manifests, documents architecturaux, fichiers pertinents et symboles candidats. Cette séparation garde la recherche déterministe et auditée tout en évitant de demander au modèle de redécouvrir aveuglément le dépôt à chaque appel.
 
-Pour les specs UI, la proposition design est un artefact de planification distinct, produit par Product avec `ui-design`. Elle est liée au hash d'approbation mais n'ajoute pas un cinquième rôle permanent.
+Une évolution UI majeure demande une proposition design distincte, produite par Product avec `ui-design` et le profil `roles.design` s’il est configuré. Une retouche déclarée `minor` réutilise le design existant. Une décision d’architecture conditionnelle précède le plan structurant. Ces artefacts sont liés au hash d’approbation ; ils n’ajoutent pas de rôle permanent. Voir [les parcours](LIFECYCLE.md#choisir-le-parcours) et [la qualité](LOT-3-QUALITE.md).
 
 ## Inventaire du dépôt — indépendant de la stack
 
@@ -47,6 +47,6 @@ Pour les specs UI, la proposition design est un artefact de planification distin
 - **Profils de langage déclaratifs** (`src/knowledge/languages.ts`) : extension de fichier, préfiltre `git grep` et grammaire de déclaration par ligne, avec une règle de surface publique (`marker`, `capitalized`, `not-underscore`, `unless-hidden`, `always`). Les profils intégrés couvrent des *langages* (ECMAScript, Python, Go, Rust, Java, Kotlin, C#, Ruby, PHP), jamais un framework.
 - **Repli générique** : tout fichier texte d'une autre technologie (gabarits, composants, feuilles de style, DSL…) devient une *unité de fichier* nommée d'après son fichier. Aucune technologie n'est invisible et aucune n'exige de cas particulier dans le contrôleur. Documentation, données, configuration, assets et binaires sont exclus.
 - **Profils projet** : `knowledge.languages` dans `pipeline.v2.json` ajoute ou remplace un profil, par exemple pour transformer une technologie interne en déclarations nommées.
-- **Usage** : Product et Implementer reçoivent `repositoryIntelligence.inventory` (toute la surface publique bornée) en plus des `reuseCandidates` lexicaux, dont le classement découpe les identifiants (`borrowBook` → `borrow book`). QA reçoit `inventoryDelta` (ajouts, retraits et `possibleDuplicates` par nom normalisé entre base et candidat). Le review workspace contient `INVENTORY.md` et une section « Public surface changes ». `apv2 inventory --repo PATH` l'expose aux humains.
+- **Usage** : Product reçoit un inventaire borné ; le contexte Implementer sélectionne les fichiers et déclarations pertinents dans `repositoryIntelligence.inventory`, avec les comptes omis explicites, en plus des `reuseCandidates` lexicaux, dont le classement découpe les identifiants (`borrowBook` → `borrow book`). QA reçoit `inventoryDelta` (ajouts, retraits et `possibleDuplicates` par nom normalisé entre base et candidat). Le review workspace contient `INVENTORY.md` et une section « Public surface changes ». `apv2 inventory --repo PATH` l'expose aux humains.
 
 Limites : l'analyse est lexicale, ligne par ligne ; elle ne résout ni les ré-exports ni les déclarations multilignes exotiques, et un nom proche n'est qu'une invite de revue. Un test verrouille l'absence de nom de framework dans le code d'indexation.

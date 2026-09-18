@@ -16,9 +16,21 @@ S'il faut changer une proposition, préparer un JSON de configuration revu puis 
 
 `doctor --execute` fait les vrais setups et tous les gates dans un worktree neuf de la base, sans appel à l'Implementer. Une sortie rouge est un blocage à traiter, pas un motif pour supprimer le test. Sans cette option, le contrôle est structurel. Doctor ne démontre pas à lui seul la couverture fonctionnelle ni l'efficacité des tests négatifs.
 
+## Choisir le parcours
+
+Les nouvelles configurations `init`/onboarding proposent `workflow.planningMode: "adaptive"`. Une configuration antérieure sans ce champ conserve `legacy`. Sur un nouveau brouillon, `spec draft --pathway auto|standard|structural` active le parcours adaptatif ; les signaux sensibles peuvent renforcer une préférence `standard`.
+
+| Parcours | Entrée et étapes |
+| --- | --- |
+| Compact | `spec compact --repo PATH --request TEXT --file task.json` : tâche précise, approbation, implémentation, contrôles et revue configurée. |
+| Standard | `spec draft` en mode adaptatif : Product court, implémentation, contrôles, QA ciblée indépendante. |
+| Structurant | Sélection automatique sur signaux structurants/sensibles, ou `--pathway structural` : exploration et décision d'architecture, plan, implémentation, validation renforcée et QA complète. |
+
+Compact exige un contrat `Task` avec critères et chemins précis, sans appel Product. Il refuse les surfaces structurelles ou sensibles connues. L'exemption de QA modèle est revérifiée sur le diff final et n'existe pas en mode `regulated`. Les contrôles déterministes et les preuves requises par `qualityReview: "evidence"` s'appliquent dans tous les parcours.
+
 ## Spec
 
-Le schéma partagé est exporté dans `examples/schemas/spec.schema.json`. Une spec contient problème, périmètre, exclusions, critères identifiés et méthodes de vérification, décisions, questions et jusqu'à vingt tâches. Chaque tâche nomme ses critères et ses dépendances. Les critères doivent être couverts, les identifiants uniques et le graphe acyclique avant accord.
+Le schéma partagé est exporté dans `examples/schemas/spec.schema.json`. Une spec complète contient problème, périmètre, exclusions, critères identifiés et méthodes de vérification, décisions, questions et jusqu'à vingt tâches. Le contrat Product court du parcours standard borne sa réponse à trois tâches et douze critères. Chaque tâche nomme ses critères et ses dépendances. Les critères doivent être couverts, les identifiants uniques et le graphe acyclique avant accord.
 
 Le hash approuvé lie le contenu, sa révision, le dépôt, le commit initial et la configuration. Un raffinement incrémente la révision et annule l'accord, même si l'appel Product échoue ensuite. Une fois une tentative créée, l'historique n'est plus réécrit : il faut une spec suivante pour changer le besoin.
 
@@ -35,7 +47,7 @@ Une proposition externe peut être importée avec `--file` lors de draft/refine.
 
 Les tâches s'exécutent dans un ordre topologique déterministe, une à la fois. La base de la tâche suivante est le candidat contrôlé de la précédente. Une dépendance échouée bloque la suite. Les avis humains des étapes intermédiaires sont différés à la revue de l'ensemble ; leurs contrôles ne sont pas supprimés.
 
-Une tâche unique réutilise son run validé en tant que candidat final. Pour plusieurs tâches ou une réparation QA, le moteur crée un run de validation d'ensemble, sans réappeler l'agent pour reconstruire le code. Tous les gates de la configuration s'appliquent à cette intégration. Le niveau de risque ne peut pas diminuer par simple fusion des tâches.
+Le moteur crée un run de validation d'ensemble, sans rappeler l'agent pour reconstruire le code. Une tâche unique peut lui transmettre ses reçus si les identités, la fraîcheur et le plan complet correspondent ; sinon les contrôles sont rejoués. Toutes les gates de la configuration s'appliquent à cette intégration. Le niveau de risque ne peut pas diminuer par simple fusion des tâches.
 
 Le store conserve séparément les tentatives d'implémentation et l'historique des validations d'ensemble. `spec events ID` retourne ces journaux avec une indication de source ; ils ne sont pas présentés comme une horloge globale transactionnelle entre services distants.
 
@@ -43,7 +55,7 @@ Le store conserve séparément les tentatives d'implémentation et l'historique 
 
 QA reçoit la spec approuvée, le diff intégré, le SHA exact et les reçus du runner. Son rapport doit inclure une assessment par critère (`pass`, `fail`, `unknown`) avec justification. `pass` global est impossible avec un critère inconnu/échoué ou un constat majeur/bloquant. Le schéma contrôle la structure et la cohérence du verdict, pas la véracité des observations du modèle.
 
-Par défaut QA s'applique aux modes standard/high. Le contrôleur peut demander au même adaptateur une réparation à partir des constats, dans le périmètre approuvé, puis refaire les contrôles et une QA fraîche. `workflow.maxQaRepairs` borne cette boucle. Un manque produit ne doit pas être résolu par une hypothèse silencieuse. Les observations hors périmètre restent des observations.
+En planification `legacy`, QA suit `workflow.qaLanes` (standard/high par défaut). Les parcours adaptatifs standard et structural exigent QA ; compact possède uniquement l'exemption conditionnelle décrite plus haut. Le contrôleur peut demander au même adaptateur une réparation à partir des constats, dans le périmètre approuvé, puis refaire les contrôles et une QA fraîche. `workflow.maxQaRepairs` borne cette boucle. Un manque produit ne doit pas être résolu par une hypothèse silencieuse. Les observations hors périmètre restent des observations.
 
 ```bash
 # Pour confier la revue à un outil externe, sans désactiver son obligation :
@@ -52,11 +64,13 @@ apv2 spec qa ID --file /rapport-qa.json
 apv2 spec run ID --manual-qa
 ```
 
+En mode `qualityReview: "evidence"`, QA ajoute les six axes de qualité et les références de tests négatifs. Les preuves requises sont vérifiées avant son appel puis avant revue/livraison. Une preuve manquante ou un statut `unknown` bloque avec `QA_EVIDENCE` sans réparation automatique de code. Voir [la grille et les preuves](LOT-3-QUALITE.md).
+
 Le rapport externe est explicitement importé et lié aux preuves présentes. Son auteur n'est pas authentifié par la CLI. Une nouvelle QA invalide les avis humains antérieurs.
 
 ## Revue humaine et revalidation
 
-`spec review ID --sha SHA --reviewer NOM --note RAISON` approuve le candidat intégré. Standard requiert un libellé, high deux libellés distincts ; fast n'en requiert pas. Un agent n'est pas censé inventer ces accords. L'absence de SSO signifie néanmoins que le runner local ne sait pas vérifier cette identité.
+`spec review ID --sha SHA --reviewer NOM --note RAISON` approuve le candidat intégré. Les seuils dépendent de `workflow.reviewMode` : `solo` exige zéro/un/un avis pour fast/standard/high ; `team` zéro/un/deux ; `regulated` un/un/deux. Les deux avis éventuels doivent avoir des libellés distincts. Un agent n'est pas censé inventer ces accords. L'absence de SSO signifie néanmoins que le runner local ne sait pas vérifier cette identité.
 
 `spec verify ID` relance la validation ; elle annule la QA, les avis humains et la livraison précédente. `spec run ID` reprend ensuite la QA et l'attente de revue. Une preuve expirée bloque la livraison ; ne pas modifier les timestamps du store pour l'utiliser.
 
@@ -68,7 +82,18 @@ Un agent qui s'arrête sans rendre son résultat (limite de tours ou de budget d
 
 Une tentative d'agent dont l'issue est inconnue n'est pas réexécutée aveuglément. Après inspection du code conservé, `spec run ID --accept-current` autorise son adoption et sa validation, jamais son acceptation sans tests. Une tentative échouée ordinaire demande `spec retry ID --confirm` pour en créer une nouvelle ; l'échec reste dans l'historique. Un dépassement de périmètre ou un timeout ne devient pas une boucle automatique illimitée.
 
-Product possède un timeout par appel et une requête bornée ; la préparation et l'attente humaine sont distinctes du budget actif des tâches/QA. `workflow.maxActiveMs` borne les sessions de workflow, `maxRunMs` les runs, et les processus ont leurs propres timeouts. Ces budgets ne mesurent pas les tokens ni les factures du fournisseur.
+Un rôle et ses réparations de sortie partagent une échéance. Product et Design consomment le budget actif de la spec, comme l'exécution et QA ; l'attente humaine en est exclue. Les tokens et coûts publiés sont journalisés, et les valeurs absentes restent inconnues. `workflow.maxSpecCostUsd` est vérifié avant les appels et limite aussi le budget restant de chaque appel Claude. Voir [les limites exactes](CONFIGURATION.md#limites-de-temps-de-tours-et-de-coût).
+
+`spec plan-resume ID` reprend une planification arrêtée avec ses checkpoints compatibles. Il peut éviter de refaire Product si la spec était déjà acceptée avant l'échec de Design. Il ne récupère pas une réponse jamais reçue et ne reprend pas un thread natif du fournisseur.
+
+Pour ajuster une allocation sans modifier le périmètre, préparer un fichier `limits.json`, par exemple `{"maxSpecCostUsd": 30, "maxActiveMs": 5400000}`, puis :
+
+```bash
+apv2 spec budget ID --file limits.json --approve --note "Allocation revue pour terminer"
+apv2 spec plan-resume ID
+```
+
+Les valeurs sont des plafonds totaux, travail déjà consommé compris. Après un arrêt d'exécution, utiliser l'action indiquée par `spec show` plutôt que `plan-resume`. L'amendement peut régler modèle, effort, tours et timeout, mais pas commandes, permissions, gates ou périmètre. Un run épuisé peut exiger une nouvelle tentative. L'ancien `spec run --accept-cost` autorise un dépassement du plafond global pendant cette exécution ; préférer une allocation chiffrée.
 
 ## Tableau de bord
 
@@ -107,11 +132,11 @@ Par défaut, `spec publish` exige la revue du candidat. Avec `--for-review`, il 
 
 `spec sync` lit l'état GitHub. Une PR fermée sans fusion n'est pas clôturée comme livrée ; une tête étrangère est refusée. Une PR fusionnée au candidat attendu permet une clôture observée, avec SHA de fusion. Si elle est fusionnée avant que la revue soit enregistrée, la spec passe en `MERGED_BEFORE_REVIEW` au lieu d'être clôturée : on enregistre la revue, puis on relance `spec sync`. Les stratégies de merge/squash et la CI sont sous la responsabilité de la forge. Le pipeline n'exécute jamais `gh pr merge` et ne rend pas la PR prête à fusionner automatiquement.
 
-Les tests du connecteur utilisent un transport simulé. Aucun push, création de PR ou merge GitHub authentifié n'a été effectué pour cette livraison.
+Les tests du connecteur utilisent un transport simulé. Les PR de développement du framework ne constituent pas une validation de ce connecteur par `spec publish`/`spec sync` sur un compte réel.
 
-## Alpha.5 — cycle fluide et checkpoints humains
+## Checkpoints humains
 
-Le lifecycle distingue désormais validation machine et décision humaine. Les tâches intermédiaires utilisent `reviewRequired: false`; elles avancent après gates réussis. Une validation intégrée finale est ensuite créée avec `reviewRequired: true`, QA s'exécute selon `workflow.qaLanes`, puis seulement le candidat final est présenté à l'humain.
+Le lifecycle distingue désormais validation machine et décision humaine. Les tâches intermédiaires utilisent `reviewRequired: false`; elles avancent après gates réussis. Une validation intégrée finale est ensuite créée avec `reviewRequired: true`, QA s'exécute selon le parcours et, en mode legacy, `workflow.qaLanes`, puis seulement le candidat final est présenté à l'humain.
 
 Pour une spec UI, `spec draft/refine` peut produire une proposition design avant approbation. Le hash affiché est un bundle spec + design. Aucun Implementer UI ne doit démarrer avec une proposition design requise mais non approuvée.
 
@@ -120,19 +145,19 @@ Les nouveaux fichiers compagnons non sensibles peuvent être admis dans une enve
 Avant la revue finale, le contrôleur matérialise un workspace de revue frère du projet avec le candidat complet, le patch et la QA. Utiliser ce dossier pour la revue humaine plutôt que les worktrees internes du store.
 
 
-## Alpha.6 — décisions autoritatives
+## Décisions autoritatives
 
 Le bootstrap produit un Decision Ledger et une revue sémantique indépendante avant qu’un hash approuvable existe. Les questions `product` et `deferred` ne bloquent pas le scaffolding ; seules les questions `bootstrap` et les conflits sémantiques le font. Utiliser `bootstrap refine` pour poursuivre le même cadrage sans perdre les décisions confirmées.
 
 Une spec alpha.6 est liée au hash du ledger. Les décisions `product` confirmées doivent être couvertes par des critères d’acceptation, sont transmises aux tâches concernées et doivent être évaluées dans `qa.decisionChecks`. Voir `docs/DECISIONS.md`.
 
-## Alpha.7 — ambiguïté et résolution
+## Ambiguïté et résolution
 
 Le bootstrap distingue désormais `confirmed` de `ambiguous`. Une formulation approval-with-exception à haut risque ne peut pas être confirmée silencieusement. Une ambiguïté `bootstrap` reste un vrai blocker ; une ambiguïté `product` peut être reportée à Product si le scaffold reste neutre.
 
 Product doit reproduire la question de clarification enregistrée tant que l'ambiguïté n'est pas résolue. Une réponse ultérieure de l'opérateur devient une `decisionResolution` citée et couverte par des critères d'acceptation. La spec ne peut pas être approuvée avec une ambiguïté Product non résolue. Les résolutions sont propagées à Implementer et QA.
 
-## Alpha.8 — sécurité dans le lifecycle
+## Sécurité dans le lifecycle
 
 Avant Product, le contrôleur calcule un `SecurityContext` déterministe. Le contexte est persisté avec son hash et participe au hash de la spec : une évolution de la surface de sécurité invalide donc l'accord précédent.
 
@@ -151,7 +176,7 @@ Une sortie de rôle qui viole le contrat du contrôleur n'est plus jetée avec t
 - invariants de spec, design, QA ou décisions ;
 - sortie structurée absente.
 
-Le même rôle est réinvoqué avec le code et le message exacts de l'erreur (`repair.previousError`), jusqu'à `workflow.maxOutputRepairs` fois (1 par défaut, 0 pour désactiver ; bootstrap : 1). Chaque tentative est journalisée (`role.output_repair`, `bootstrap-*.output_repair`).
+Le même rôle est réinvoqué avec l'erreur structurée (`repair.previousError`), sa sortie décodée lorsqu'elle existe et le schéma à réparer, jusqu'à `workflow.maxOutputRepairs` fois (1 par défaut, 0 pour désactiver ; bootstrap : 1). Les appels natifs peuvent corriger par patches ; le résultat complet est revalidé. Les tentatives partagent l'échéance du rôle et les plafonds restants de la spec. Chaque tentative est journalisée (`role.output_repair`, `bootstrap-*.output_repair`).
 
 Ne sont **jamais** réessayés :
 - délai dépassé ;
@@ -188,7 +213,7 @@ Quand la seule tâche a déjà passé tous les contrôles sur le commit final, l
 
 ### Tâches plus grosses qu'une session d'agent
 
-Une tâche est exécutée par **une** session d'agent, bornée par les tours du fournisseur, son plafond de coût, le délai de l'agent et le budget du run. Product reçoit ces valeurs dans `executionCapabilities.attempt` et doit dimensionner ses tâches en conséquence, en découpant par surface (une route, un module ou un écran avec ses tests) plutôt que par couche. Une tâche trop grosse n'est pas seulement plus lente : le fournisseur s'arrête en cours de route, et la tentative doit être adoptée ou recommencée.
+Une passe d'implémentation utilise une session d'agent, bornée par les limites applicables du fournisseur, le timeout et les budgets du run/de la spec, en réservant du temps aux contrôles. Si `feedback.gateIds` est configuré, l'Implementer peut tester et corriger pendant cette session ; les réparations externes éventuelles sont des appels supplémentaires bornés. Product reçoit ces valeurs dans `executionCapabilities.attempt` et doit dimensionner ses tâches en conséquence, en découpant par surface (une route, un module ou un écran avec ses tests) plutôt que par couche. Une tâche trop grosse n'est pas seulement plus lente : le fournisseur s'arrête en cours de route, et la tentative doit être adoptée ou recommencée.
 
 Après Product, `sizeAdvice` liste les tâches qui déclarent plus de huit fichiers, avec leur nombre. C'est un **avertissement pour l'opérateur avant l'approbation, jamais un blocage** : certaines tâches larges sont légitimes.
 
@@ -200,10 +225,10 @@ Après Product, le contrôleur parcourt les tâches dans l'ordre d'exécution et
 
 Une spec est immuable dès que l'exécution commence : c'est ce qui rend l'approbation crédible. Mais un critère peut se révéler **impossible à satisfaire**, parce qu'il interdit ce que le changement approuvé impose — par exemple « ce fichier de test ne change pas » alors que la migration approuvée modifie ce qu'il compare. Sans recours, un candidat fini et conforme sur tous les autres critères était perdu.
 
-- `apv2 spec criterion SPEC_ID --criterion AC_ID --file CORRECTION_JSON` propose une correction (`description`, `verification`, `reason`) et affiche son hash. Rien n'est appliqué.
+- `apv2 spec criterion SPEC_ID --criterion AC_ID --file CORRECTION_JSON` propose une correction (`description`, `verification`, `reason`, et éventuellement `requirements: [{id, verification}]`) et affiche son hash. Rien n'est appliqué.
 - `apv2 spec criterion SPEC_ID --amendment AMENDMENT_ID --hash HASH --approve --note TEXT` l'applique.
 
-Bornes : uniquement après le début de l'exécution (avant, on affine la spec) ; un seul critère existant, dont seuls le texte et la vérification changent ; jamais le périmètre, les tâches, les chemins ni les décisions ; `reason` obligatoire. Le texte approuvé à l'origine reste dans le magasin, la correction porte sa propre approbation, et l'évaluation rouvre : le rapport QA et le dossier de revue sont invalidés, puisqu'ils portaient sur l'ancien critère.
+Bornes : uniquement après le début de l'exécution (avant, on affine la spec) ; un seul critère existant, dont seuls le texte et la vérification changent ; les méthodes de vérification d'exigences de sécurité déjà liées à ce critère peuvent être corrigées dans le même amendement. Ni exigences ajoutées/supprimées, ni modification du périmètre, des tâches, des chemins ou des décisions ; `reason` obligatoire. Le texte approuvé à l'origine reste dans le magasin, la correction porte sa propre approbation, et l'évaluation rouvre : le rapport QA et le dossier de revue sont invalidés, puisqu'ils portaient sur l'ancien critère.
 
 ### Maintenance
 

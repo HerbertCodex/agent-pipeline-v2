@@ -2,7 +2,7 @@
 
 ## Catalogue et origine
 
-Les six familles `clean-code`, `design-patterns`, `refactoring`, `security`, `tdd`, `ui-design` sont adaptées de l'archive V1 fournie. Les six `SKILL.md` ont été révisés pour la V2 ; 40 documents de référence/checklists sont conservés comme exemples techniques, sous MIT. Leur présence ne porte pas automatiquement les contrôles métier V1.
+Les six familles `clean-code`, `design-patterns`, `refactoring`, `security`, `tdd`, `ui-design` sont adaptées de l'archive V1 fournie. Les six `SKILL.md` ont été révisés pour la V2 ; 42 documents de référence/checklists sont fournis comme exemples techniques, sous MIT. Leur présence ne porte pas automatiquement les contrôles métier V1.
 
 Chaque SKILL.md expose les métadonnées Agent Skills `name`, `description`, `license` et `metadata`. Le manifeste `skills/manifest.json` contient le routage propre au pipeline : rôles, types de projets, mots-clés, liste bornée de références Markdown. Le loader n'est pas un interpréteur YAML général ni un installateur de scripts tiers.
 
@@ -16,7 +16,7 @@ Chaque SKILL.md expose les métadonnées Agent Skills `name`, `description`, `li
 }
 ```
 
-Ce bloc se place dans `pipeline.v2.json`, puis est revu et committé. Types acceptés : `unknown`, `backend`, `frontend`, `mobile`, `fullstack`, `library`. L'installation déterministe propose `unknown` : l'opérateur ou Setup doit identifier un projet avec UI, sans inventer sa stack. `enabled: []` désactive les conseils, **pas les gates**. Une configuration alpha.2 sans ce bloc conserve ce comportement désactivé ; aucune activation cachée.
+Ce bloc se place dans `pipeline.v2.json`, puis est revu et committé. Types acceptés : `unknown`, `backend`, `frontend`, `mobile`, `fullstack`, `library`. L'onboarding déduit certains projets frontend depuis les manifests et fichiers connus ; les autres restent `unknown`. L'opérateur ou Setup doit confirmer le type de projet, sans inventer sa stack. `enabled: []` désactive les conseils, **pas les gates**. Une configuration alpha.2 sans ce bloc conserve ce comportement désactivé ; aucune activation cachée.
 
 `clean-code`, `security` et `tdd` s'appliquent aux rôles déclarés. `design-patterns` et `refactoring` ajoutent un filtre lexical sur le texte de la tâche ou du contexte. `ui-design` nécessite un type frontend/mobile/fullstack et un mot-clé d'interface. Setup ne reçoit aucun de ces six skills de développement. Cette heuristique est expliquée et inspectable ; elle n'est pas un classificateur sémantique parfait, et ne porte aucune règle obligatoire.
 
@@ -43,12 +43,18 @@ Pour Claude, la découverte native de slash-commands est désactivée dans les i
 
 Aucun script de skill n'est exécuté automatiquement. Les instructions, références, conventions et heuristiques n'accordent ni réseau, ni shell, ni secret, ni approbation. Un skill ne peut pas alléger un gate. Les changements de skills, rôles, `.agent-pipeline`, `.agents`, `.claude`, AGENTS.md ou CLAUDE.md déclenchent l'assurance renforcée.
 
-## Alpha.5 — ui-design avant le code
+## UI design avant le code
 
-Sur une spec frontend/mobile/fullstack ayant un impact UI, `ui-design` intervient pendant la proposition design de Product. Le résultat doit être reviewable avant implémentation : direction visuelle, hiérarchie, écrans, états, responsive, décisions et anti-patterns à éviter. Le skill demande explicitement d'éviter les interfaces génériques de type tableau de bord IA lorsqu'elles ne sont pas justifiées par le produit.
+Sur une spec frontend/mobile/fullstack nécessitant une proposition design, `ui-design` intervient pendant cette phase Product. Une retouche UI déclarée `minor` réutilise les conventions existantes sans nouvelle maquette ; un impact `major` conserve la phase Design. Le résultat doit être reviewable avant implémentation : direction visuelle, hiérarchie, écrans, états, responsive, décisions et anti-patterns à éviter. Le skill demande explicitement d'éviter les interfaces génériques de type tableau de bord IA lorsqu'elles ne sont pas justifiées par le produit.
 
-## Security skill — alpha.8
+## Skill security et OWASP
 
 Le skill `security` est désormais OWASP-aware. Il inclut un routeur documentaire (`references/owasp-routing.md`) et une référence dédiée aux agents IA / prompt injection (`references/ai-agent-security.md`). Les références complètes ne sont pas injectées systématiquement dans le contexte : seules les instructions courtes du skill le sont, tandis que les fichiers de référence sont installés dans `.agent-pipeline/skills/security/` pour consultation ciblée.
 
 Le skill ne crée ni politique, ni autorisation, ni verdict de conformité. Le `SecurityContext` calculé par le moteur, la spec approuvée et les gates observés restent autoritatifs.
+
+## Conventions CSS et preuves
+
+`ui-design` demande BEM par défaut pour les nouvelles classes de composants en CSS global, sauf convention existante ou décision confirmée différente. CSS Modules, styles encapsulés et frameworks utilitaires conservent leurs conventions. Le framework contrôle son propre CSS avec `npm run lint:css` ; le [profil Stylelint réutilisable](../examples/stylelint-bem.config.mjs) ne s'installe pas automatiquement dans les projets.
+
+Les skills guident les choix ; le mode `workflow.qualityReview: "evidence"` exige séparément les preuves exécutées et la revue structurée. Une instruction de test ou de design pattern n'est pas une preuve de conformité. Voir [les critères de qualité](LOT-3-QUALITE.md).

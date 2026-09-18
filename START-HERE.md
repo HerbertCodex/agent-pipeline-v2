@@ -233,7 +233,13 @@ qu'un rescan intégral inutile.
 
 7. PRODUCT
 
-Quand je demande une fonctionnalité, lance spec draft. Montre la spec lisible,
+Choisis un parcours proportionné : spec compact avec une tâche et des chemins
+précis pour une correction locale déjà cadrée ; spec draft --pathway auto pour
+une fonctionnalité. Le moteur peut imposer structural pour les changements
+sensibles ou structurants. Le parcours standard borne Product à trois tâches et
+douze critères ; conserve toutes les contraintes et décisions confirmées.
+
+Montre la spec lisible,
 le problème, le scope, le hors-périmètre, les critères d'acceptation, les décisions,
 les tâches, les dépendances et les questions réellement structurantes.
 
@@ -300,7 +306,8 @@ un gate ou auto-approuver une action.
 9. DESIGN AVANT IMPLÉMENTATION DES INTERFACES
 
 Si une spec affecte de façon significative une interface utilisateur, ajoute une
-phase Design avant le code.
+phase Design avant le code. Une retouche UI mineure réutilise les conventions
+existantes et déclare uiImpact=minor, sans nouvelle maquette complète.
 
 La nature de l'artefact dépend du produit :
 - web/mobile/desktop : maquette ou preview consultable ;
@@ -396,7 +403,23 @@ décision requise est omise, en échec ou inconnue.
 
 Ne demande pas une revue humaine après chaque tâche. Les tâches intermédiaires
 sont des détails de réalisation ; la revue humaine porte sur le candidat intégré
-final après QA.
+final après les contrôles et la QA lorsqu'elle est requise. Le compact n'évite
+QA que si le diff reste dans son enveloppe non sensible, hors mode regulated.
+
+Les nouvelles configurations proposent planningMode=adaptive et
+qualityReview=evidence ; un projet existant conserve legacy tant que sa
+configuration n'est pas revue pour une nouvelle spec. En evidence, vérifie les
+labels covers/testPaths et les commandes de build, intégration ou navigateur
+requises par le changement. Une preuve manquante (QA_EVIDENCE) ne doit pas
+déclencher une réparation de code pour faire disparaître le blocage.
+
+L'Implementer peut demander les checks explicitement autorisés par
+feedback.gateIds pendant sa session. Ils ne remplacent pas la validation finale.
+Après un arrêt Product/Design, inspecte les checkpoints et utilise
+spec plan-resume. Pour modifier une allocation, présente un amendement chiffré
+spec budget : le budget restant est appliqué à chaque appel Claude, donc il
+peut arrêter un appel en cours. Ne promets pas de retrouver une sortie finale
+jamais reçue ni de reprendre un thread natif du fournisseur.
 
 Ne demande une intervention humaine que lorsqu'il existe réellement :
 - une décision produit ;

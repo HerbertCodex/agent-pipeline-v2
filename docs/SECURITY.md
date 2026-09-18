@@ -24,7 +24,7 @@ Le répertoire de store est créé avec des permissions restrictives et le fichi
 
 Les reçus sont validés structurellement et confrontés à l'observation persistée avant leur scellement et leur utilisation en revue. Le cache est local, non signé, désactivé par défaut et conservateur. Un administrateur du store peut modifier ses données : il n'y a pas d'attestation cryptographique d'un runner distant.
 
-Les reviewers sont des noms fournis localement. Le seuil de deux noms distincts en mode élevé est un mécanisme de workflow, **pas une preuve qu'il existe deux personnes indépendantes**. Une intégration entreprise doit remplacer cette déclaration par des identités authentifiées et des approbations de forge vérifiées.
+Les reviewers sont des noms fournis localement. Le seuil en mode élevé dépend de `workflow.reviewMode` : un nom en `solo`, deux en `team` ou `regulated`. Deux noms distincts constituent un mécanisme de workflow, **pas une preuve qu'il existe deux personnes indépendantes**. Une intégration entreprise doit remplacer cette déclaration par des identités authentifiées et des approbations de forge vérifiées.
 
 ## Secrets et diagnostics
 
@@ -46,7 +46,7 @@ Prévoir une isolation OS/conteneur/VM effectivement testée, un contrôleur sé
 
 SQLite et les exécutables dépendent des versions de Node, Git et des outils installés. Utiliser des versions maintenues et corrigées ; l'absence de dépendances npm de production n'est pas une absence de surface d'attaque. Aucun audit de sécurité externe ou test de pénétration n'a été effectué.
 
-## Product, QA et publication (alpha.2)
+## Product, QA et publication
 
 Setup/Product/QA sont invités à travailler en lecture seule. Codex reçoit `--sandbox read-only`, tandis que le protocole command ne fournit pas une isolation OS. Le contrôleur vérifie le HEAD et la propreté de leur worktree après sortie ; ce contrôle détecte certaines écritures, pas un accès réseau ou système malveillant. Un workspace altéré n'est pas adopté et reste inspectable.
 
@@ -56,17 +56,17 @@ Les accords de plan/spec/candidat sont distincts. L'appelant local peut néanmoi
 
 Les paquets de livraison contiennent critères, observations et diagnostics : les conserver dans un emplacement autorisé. Les destinations redirigeant vers le dépôt/store via un parent symbolique sont refusées. Les empreintes ne sont pas des signatures ; l'utilisateur OS qui contrôle le store reste une autorité de confiance.
 
-## Rôles, skills et Claude (alpha.3)
+## Rôles, skills et Claude
 
 Les instructions canoniques sont chargées depuis le package de confiance, non depuis un fichier qu'un Implementer peut éditer. Les copies dans le projet sont diagnostiquées par inspect mais ne remplacent pas le runtime. Les fichiers de skills ne sont pas exécutables, leurs références sont bornées à du Markdown et les chemins/symlinks de package sont vérifiés. Ce n'est pas une signature d'éditeur ni une sandbox contre un compte local malveillant.
 
-Claude reçoit une liste restreinte d'outils, sans Bash/MCP/outils web/sous-agents, avec un mode non interactif qui refuse les outils non autorisés. Aucune permission globale de contournement n'est ajoutée. Les fichiers/outils du fournisseur, son authentification et ses politiques administrées ne sont pas certifiés par des tests avec doublure. Les guides locaux, tokens de session et extensions personnelles doivent rester dans la frontière de confiance du déploiement.
+Claude reçoit une liste restreinte d'outils, sans Bash, outils web ni sous-agents, avec un mode non interactif qui refuse les outils non autorisés. MCP est désactivé par défaut ; si `feedback.gateIds` est configuré, seul l'Implementer reçoit le serveur local du runner et son outil `mcp__pipeline__run_check`. Il accepte un ID de gate autorisé, jamais une commande libre, avec jeton de session et quotas. Ces commandes de projet restent dans la frontière `local-trusted` ; elles ne sont pas isolées par une sandbox OS. Aucune permission globale de contournement n'est ajoutée. Les fichiers/outils du fournisseur, son authentification et ses politiques administrées ne sont pas certifiés par des tests avec doublure. Les guides locaux, tokens de session et extensions personnelles doivent rester dans la frontière de confiance du déploiement.
 
 Un skill ne peut pas accorder de permissions, modifier une spec ou supprimer un gate. L'audit enregistre l'injection et ses empreintes, pas la compréhension par le modèle. Une instruction de TDD ne signifie pas que la V2 atteste systématiquement un test rouge avant modification. L'Implementer Claude écrit les tests, le runner les exécute ; le rapport doit refléter cette distinction.
 
 Les hooks administrés de Claude peuvent rester actifs malgré la demande `disableAllHooks` de la session. Le moteur ne désactive pas une politique d’organisation. Le déploiement doit examiner ces hooks, les paramètres administrés et le périmètre réel des outils avant un pilote.
 
-## Alpha.5 — scope fluide et previews
+## Périmètre et previews
 
 L'auto-extension de scope ne s'applique qu'aux **nouveaux** fichiers qui correspondent à une enveloppe `allowedNewPaths`, sous un plafond `maxNewFiles`, et jamais aux chemins classés sensibles. Les fichiers existants restent soumis au scope strict. Les écarts structurels passent par un amendement explicite lié au candidat exact.
 
@@ -74,7 +74,7 @@ Les maquettes UI générées par le contrôleur sont des HTML/CSS statiques : sc
 
 Le review workspace visible est placé à côté du projet pour être ouvrable par l'éditeur. Il contient un worktree Git immuable du candidat ; les secrets et dépendances non suivis du dépôt ne sont pas copiés par ce mécanisme.
 
-## Alpha.8 — OWASP-aware security routing
+## Routage de sécurité OWASP
 
 Alpha.8 ajoute une couche de routage déterministe vers la **OWASP Cheat Sheet Series**. Cette couche ne remplace ni un scanner, ni un audit, ni un test de pénétration et ne constitue pas une déclaration de conformité OWASP.
 
