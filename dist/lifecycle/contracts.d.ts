@@ -360,6 +360,9 @@ export interface CriterionAmendment {
         id: string;
         previous: string;
         verification: string;
+        /** Negative cases reclassified as reviews: same texts, some now carrying the explicit `[review] ` marker. */
+        previousNegativeTests?: string[];
+        negativeTests?: string[];
     }[];
     reason: string;
     hash: string;

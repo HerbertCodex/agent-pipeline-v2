@@ -140,7 +140,7 @@ export class Lifecycle {
             }),
             security: { ...spec.security, requirements: spec.security.requirements.map(q => {
                 const fix = latest.flatMap(a => a.requirements ?? []).find(x => x.id === q.id);
-                return fix ? { ...q, verification: fix.verification } : q;
+                return fix ? { ...q, verification: fix.verification, ...(fix.negativeTests ? { negativeTests: fix.negativeTests } : {}) } : q;
             }) },
         };
     }
@@ -866,7 +866,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         this.save(doc, 'workflow.blocked', { runId: run.id, error: doc.data.error });
     }
     /** Records a proposed correction of one acceptance criterion and returns its hash for explicit approval. */
-    planCriterionAmendment(id: string, criterionId: string, correction: { description: string; verification: string; reason: string; requirements?: { id: string; verification: string }[] }): Document<SpecRecord> {
+    planCriterionAmendment(id: string, criterionId: string, correction: { description: string; verification: string; reason: string; requirements?: { id: string; verification: string; negativeTests?: string[] }[] }): Document<SpecRecord> {
         const token = this.store.acquireDocument(id);
         try {
             const doc = this.get(id); const r = doc.data;
@@ -885,10 +885,23 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                 invariant(requirement.acceptanceIds.includes(criterionId), 'CRITERION_AMENDMENT', `Security requirement ${x.id} does not verify ${criterionId}`);
                 const text = x.verification.trim();
                 invariant(text.length >= 10 && text.length <= 4000, 'CRITERION_AMENDMENT', `A corrected verification for ${x.id} must be observable`);
-                return { id: x.id, previous: requirement.verification, verification: text };
+                // A negative case may be reclassified as a review — the marker the spec forgot — but never
+                // rewritten, added or removed: the operator states what it always was, not something else.
+                const negativeTests = x.negativeTests?.map(t => t.trim());
+                if (negativeTests) {
+                    invariant(negativeTests.length === requirement.negativeTests.length, 'CRITERION_AMENDMENT', `The negative cases of ${x.id} may be marked as reviews, never added or removed`);
+                    negativeTests.forEach((test, i) => {
+                        const before = requirement.negativeTests[i]!;
+                        invariant(test === before || test === `[review] ${before}`, 'CRITERION_AMENDMENT', `A negative case of ${x.id} may only gain the [review] marker, not change its text`);
+                    });
+                    invariant(negativeTests.some((test, i) => test !== requirement.negativeTests[i]), 'CRITERION_AMENDMENT', `No negative case of ${x.id} is reclassified`);
+                }
+                return { id: x.id, previous: requirement.verification, verification: text,
+                    ...(negativeTests ? { previousNegativeTests: [...requirement.negativeTests], negativeTests } : {}) };
             });
             invariant(new Set(requirements.map(x => x.id)).size === requirements.length, 'CRITERION_AMENDMENT', 'A security requirement is corrected at most once per amendment');
-            const changed = description !== criterion.description || verification !== criterion.verification || requirements.some(x => x.verification !== x.previous);
+            const changed = description !== criterion.description || verification !== criterion.verification
+                || requirements.some(x => x.verification !== x.previous || x.negativeTests !== undefined);
             invariant(changed, 'CRITERION_AMENDMENT', 'The correction is identical to the approved criterion');
             const previous = { description: criterion.description, verification: criterion.verification };
             const amendment: CriterionAmendment = { id: randomUUID(), criterionId, previous, description, verification, requirements, reason: correction.reason.trim(),

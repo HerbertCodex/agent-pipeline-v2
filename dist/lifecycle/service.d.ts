@@ -139,6 +139,7 @@ export declare class Lifecycle {
         requirements?: {
             id: string;
             verification: string;
+            negativeTests?: string[];
         }[];
     }): Document<SpecRecord>;
     /** Applies a criterion correction the operator approved by its exact hash, and reopens assessment. */
