@@ -190,7 +190,7 @@ export declare const qaSchema: import("../domain/schema.js").Schema<{
     readonly negativeTestChecks: {
         readonly requirementId: string;
         readonly testIndex: number;
-        readonly status: "unknown" | "pass" | "fail";
+        readonly status: "unknown" | "pass" | "fail" | "review";
         readonly evidence: string;
         readonly paths: string[];
         readonly receiptIds: string[];

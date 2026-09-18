@@ -1189,8 +1189,13 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                 lines.push(`- **${f.severity}** ${f.id}${f.path ? ` (${f.path})` : ''}: ${f.description}`);
         if (q.securityChecks.length)
             lines.push('', '## Security checks', ...q.securityChecks.map(x => `- **${x.requirementId}** — ${x.status}: ${x.evidence}`));
-        if (q.negativeTestChecks?.length)
+        if (q.negativeTestChecks?.length) {
             lines.push('', '## Negative tests', ...q.negativeTestChecks.map(x => `- ${x.requirementId}[${x.testIndex}]: ${x.status}; ${x.evidence}\n  Tests: ${x.paths.join(', ')}; receipts: ${x.receiptIds.join(', ')}`));
+            // A case the spec defined as a review is asserted, never proven: the human reviewer decides.
+            const reviewed = q.negativeTestChecks.filter(x => x.status === 'review');
+            if (reviewed.length)
+                lines.push('', `### Asserted by review, not proven by a test (${reviewed.length})`, 'The approved spec defines these negative cases as reviews. No test executes them; read the evidence and judge it yourself.', ...reviewed.map(x => `- ${x.requirementId}[${x.testIndex}]: ${x.evidence}`));
+        }
         if (q.decisionChecks.length)
             lines.push('', '## Decision checks', ...q.decisionChecks.map(x => `- **${x.decisionId}** — ${x.status}: ${x.evidence}`));
         if (q.qualityChecks?.length)
