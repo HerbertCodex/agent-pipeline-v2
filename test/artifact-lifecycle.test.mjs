@@ -716,3 +716,28 @@ test('a spec stops at its reviewed cost ceiling until the operator authorizes th
   d = await f.life.run(d.id, { acceptCost: true });
   assert.notEqual(d.data.error?.code, 'COST_BUDGET', 'the authorized overrun runs the spec to its end');
 });
+
+// Observed on a real project: the shipped example config (32 turns, 5 USD, 15 min, one repair) stopped three
+// Product rounds and two implementation attempts without producing anything. Defaults must warn, not cut.
+test('shipped defaults are nets, and a cutting configuration is flagged', async () => {
+  const { validateConfig } = await import('../dist/domain/contracts.js');
+  const { configAdvice } = await import('../dist/lifecycle/capabilities.js');
+  const base = { schemaVersion: 1, executionMode: 'local-trusted', environment: { id: 'defaults-test' },
+    agent: { type: 'claude' }, setup: [], gates: [{ id: 'unit', command: ['node', '--test'] }] };
+  const shipped = validateConfig(base);
+  assert.equal(shipped.agent.maxTurns, 200, 'a turn count is a net against a loop, not the arbiter of work');
+  assert.equal(shipped.agent.maxBudgetUsd, null, 'the provider must not cut a session mid-work');
+  assert.equal(shipped.agent.timeoutMs, 1800000);
+  assert.equal(shipped.maxRepairAttempts, 3);
+  assert.equal(shipped.workflow.maxSpecCostUsd, 25, 'the ceiling that warns is the one enabled by default');
+  assert.ok(shipped.maxRunMs > shipped.agent.timeoutMs, 'a run leaves room for the checks after the agent');
+  assert.deepEqual(configAdvice(shipped), [], 'the shipped defaults are not flagged');
+
+  // The example configuration this framework used to ship, which stopped three Product rounds on a real project.
+  const cutting = validateConfig({ ...base, maxRepairAttempts: 1, maxRunMs: 900000,
+    agent: { type: 'claude', maxTurns: 32, maxBudgetUsd: 5, timeoutMs: 900000 },
+    workflow: { qaLanes: ['standard'], maxSpecCostUsd: null } });
+  const flagged = configAdvice(cutting).map(a => a.setting);
+  assert.deepEqual(flagged.sort(), ['agent.maxBudgetUsd', 'agent.maxTurns', 'agent.timeoutMs', 'maxRepairAttempts', 'maxRunMs', 'workflow.maxSpecCostUsd'].sort());
+  assert.ok(configAdvice(cutting).every(a => a.why.length > 40), 'each advice says why it stops real work');
+});

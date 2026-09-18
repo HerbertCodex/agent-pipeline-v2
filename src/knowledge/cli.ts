@@ -4,6 +4,7 @@ import { catalog, guidanceFor, installedAssets, readRole } from './catalog.js';
 import { roleNames, type RoleName } from '../domain/knowledge.js';
 import { invariant } from '../domain/errors.js';
 import { parseJson } from '../domain/schema.js';
+import { configAdvice } from '../lifecycle/capabilities.js';
 import { validateConfig } from '../domain/contracts.js';
 import { providerProfile, providerSupport, executableAvailability } from '../adapters/providers.js';
 import { Git } from '../execution/git.js';
@@ -79,7 +80,10 @@ export async function knowledgeCommand(command: string, args: string[], values: 
     if (!st.isFile() || st.size > 131072) return [{ path: file.path, status: 'invalid-file' }];
     return readFileSync(cursor, 'utf8') === file.content ? [] : [{ path: file.path, status: 'different-from-package' }];
   });
-  console.log(JSON.stringify({ repo, installed: true, config: path, roles, skills: config.skills, drift,
+  const advice = configAdvice(config);
+  console.log(JSON.stringify({ repo, installed: true, config: path, roles, skills: config.skills, drift, configAdvice: advice,
     note: 'No provider or gate was run. Skill/role copies in the project are reference material; the trusted package supplies runtime instructions. Drift is diagnostic, not silently overwritten.',
-    next: drift.length ? 'Review docs/MIGRATION.md; preserve local edits and do not regenerate blindly.' : 'Review configuration; doctor --execute requires separate permission for setup and tests.' }, null, 2));
+    next: drift.length ? 'Review docs/MIGRATION.md; preserve local edits and do not regenerate blindly.'
+      : advice.length ? 'Review configAdvice: these bounds stop work in progress instead of warning before it starts.'
+        : 'Review configuration; doctor --execute requires separate permission for setup and tests.' }, null, 2));
 }

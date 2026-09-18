@@ -4,7 +4,7 @@ Deux adaptateurs natifs sont livrés : **codex** et **claude**. **command** rest
 
 ## Claude Code CLI (alpha.3)
 
-Configuration minimale : `{"type":"claude","passEnv":["HOME","CLAUDE_CONFIG_DIR","ANTHROPIC_API_KEY","CLAUDE_CODE_OAUTH_TOKEN"],"maxTurns":32,"maxBudgetUsd":5}`. Les variables n'ont pas à toutes exister ; elles ne contiennent jamais de valeurs dans la configuration. L'installation et l'authentification de Claude relèvent de l'opérateur. `command` peut contenir uniquement le chemin de l'exécutable natif. `model` est facultatif ; aucun nom de modèle n'est fixé par défaut.
+Configuration minimale : `{"type":"claude","passEnv":["HOME","CLAUDE_CONFIG_DIR","ANTHROPIC_API_KEY","CLAUDE_CODE_OAUTH_TOKEN"],"maxTurns":200,"maxBudgetUsd":null}`. Les variables n'ont pas à toutes exister ; elles ne contiennent jamais de valeurs dans la configuration. L'installation et l'authentification de Claude relèvent de l'opérateur. `command` peut contenir uniquement le chemin de l'exécutable natif. `model` est facultatif ; aucun nom de modèle n'est fixé par défaut.
 
 L'adaptateur utilise le mode non interactif `--print`, l'entrée texte, `--output-format json` et `--json-schema`. Il extrait exclusivement `structured_output` d'une enveloppe `type=result`, `subtype=success`, `is_error=false`. Une erreur, un dépassement de budget, des refus de permission signalés, une sortie tronquée, du texte libre ou des champs de preuve interdits ne deviennent jamais un succès.
 
@@ -12,7 +12,7 @@ Setup/Product/QA : `Read,Glob,Grep`. Implementer : les mêmes plus `Edit,Write`.
 
 Les sources de settings utilisateur/projet sont désactivées pour ces appels ; la désactivation des hooks est demandée par configuration de session et les slash-commands natives ne sont pas chargées. Des hooks imposés par une politique administrée peuvent rester actifs : la session ne les neutralise pas. Les politiques administrées du fournisseur restent applicables. Cela ne constitue ni une sandbox OS ni une preuve d'isolation de fichiers/secrets. La compatibilité de ces options doit être vérifiée avec la version CLI réellement installée.
 
-`maxTurns` (1–200, défaut 32) et `maxBudgetUsd` (null ou 0.01–1000) concernent Claude. Le plafond de coût passe au fournisseur ; le moteur ne vérifie pas une facture ni la tarification d'un abonnement. Le timeout du moteur demeure actif. Ces deux champs n'ajoutent pas de budget fournisseur aux autres adaptateurs.
+`maxTurns` (1–200, défaut 200) et `maxBudgetUsd` (null ou 0.01–1000, défaut null) concernent Claude. Ces deux bornes sont appliquées **par le fournisseur, qui arrête la session en cours** : ce qui a été dépensé est perdu, et un rôle ne laisse rien à récupérer. Elles servent de filet, pas d'arbitre du travail quotidien ; pour borner ce qu'une spec peut dépenser, utiliser `workflow.maxSpecCostUsd`, qui s'arrête entre deux tâches et demande une autorisation explicite. Mesuré sur un vrai projet : un tour de Product pour un incrément moyen dure une vingtaine de minutes et coûte plus de 5 $. Le plafond de coût passe au fournisseur ; le moteur ne vérifie pas une facture ni la tarification d'un abonnement. Le timeout du moteur demeure actif. Ces deux champs n'ajoutent pas de budget fournisseur aux autres adaptateurs.
 
 Les skills du pipeline sont injectés par `guidance`, indépendamment de la découverte native. QA reçoit le diff complet calculé par le contrôleur, limité à 512 Kio ; dépassement = blocage explicite, pas revue partielle silencieuse.
 
