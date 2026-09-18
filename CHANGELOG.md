@@ -3,6 +3,8 @@
 
 ## Unreleased — reliability and efficient feature work
 
+- Une spec antérieure au champ `experience` ne fait plus échouer la lecture des specs : le contexte qualité lit ce champ avec la même prudence que le reste du contenu. Constaté sur un vrai magasin — une seule vieille spec renvoyait « Erreur interne » pour **toute** la liste du tableau de bord.
+
 - Evidence mode now blocks missing applicable build/integration/browser/boundary receipts before QA and delivery, including compact tasks. Required gates override lane filtering within their path scope. Negative security cases map to reviewed test files and final behavioral receipts; structural decisions require explicit constraint, simpler alternative and risks. An offline Chromium acceptance script covers the evidence dashboard.
 
 - Lot 3: add evidence-backed QA axes (architecture, simplicity, reuse, tests, operations, UI), validate file/receipt/finding references and enforce the same checks on manual import and delivery. Unknown quality evidence pauses without automatic code repairs; minor observations alone cannot request changes.
