@@ -249,7 +249,9 @@ export function validateQa(value, spec, candidateSha, ledger = { schemaVersion: 
             if (check.status === 'review') {
                 const declared = checkedSpec.security.requirements.find(r => r.id === check.requirementId).negativeTests[check.testIndex];
                 invariant(declared.startsWith('[review] '), 'QA_SECURITY', 'A review-only negative case requires an explicit [review] marker in the approved spec');
-                invariant(!check.paths.length && !check.receiptIds.length && check.evidence.trim().length >= 40, 'QA_SECURITY', 'A review-only negative case names no test file or receipt and must say what was inspected and found');
+                // A review names the files it read — that is what lets the human reviewer check it — but it
+                // cannot lean on a behavioral receipt, which would present an assertion as a test result.
+                invariant(check.evidence.trim().length >= 40 && !check.receiptIds.some(rid => gates.some(g => g.receiptId === rid && g.covers.some(k => ['unit', 'integration', 'browser'].includes(k)))), 'QA_SECURITY', 'A review-only negative case says what was inspected and found, and cannot cite a behavioral test receipt');
             }
             if (check.status === 'pass')
                 invariant(check.paths.length > 0 && check.paths.every(p => gates.some(g => g.receiptId && check.receiptIds.includes(g.receiptId) && g.covers.some(k => ['unit', 'integration', 'browser'].includes(k)) &&

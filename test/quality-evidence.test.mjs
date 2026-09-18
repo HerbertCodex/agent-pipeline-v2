@@ -353,13 +353,13 @@ test('a negative case the spec defines as a review is assessed as asserted, neve
   assert.doesNotThrow(() => validate(qa), 'the spec itself defined this case as a review');
   assert.throws(() => validateSpec(spec, false, undefined, undefined, { ...neutralSecurityContext(), negativeTestsRequired: true }), /explicit negative security test/, 'review does not satisfy required executable negative coverage');
 
-  // A review states what was inspected, claims no test file, and never replaces a test the spec asked for.
+  // A review says what it inspected, may name the files it read, and never leans on a test receipt.
   const vague = structuredClone(qa); vague.negativeTestChecks[0].evidence = 'Reviewed.';
-  assert.throws(() => validate(vague), /review-only/);
-  const claimsTests = structuredClone(qa); claimsTests.negativeTestChecks[0].paths = ['test/math.test.mjs'];
-  assert.throws(() => validate(claimsTests), /review-only/);
+  assert.throws(() => validate(vague), /inspected and found/);
+  const namesRead = structuredClone(qa); namesRead.negativeTestChecks[0].paths = ['src/math.mjs'];
+  assert.doesNotThrow(() => validate(namesRead), 'naming the files read is what makes a review checkable');
   const claimsReceipt = structuredClone(qa); claimsReceipt.negativeTestChecks[0].receiptIds = ['R1'];
-  assert.throws(() => validate(claimsReceipt), /review-only/);
+  assert.throws(() => validate(claimsReceipt), /behavioral test receipt/);
   const originalCase = spec.security.requirements[0].negativeTests[0];
   for (const required of ['Reject unauthorized access with 403.', 'Review of the final diff confirming no changes']) {
     spec.security.requirements[0].negativeTests[0] = required;
