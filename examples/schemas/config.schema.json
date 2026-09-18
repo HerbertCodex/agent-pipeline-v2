@@ -1224,6 +1224,10 @@
             "maxItems": 1000,
             "default": []
           },
+          "readOnly": {
+            "type": "boolean",
+            "default": false
+          },
           "outputs": {
             "type": "array",
             "items": {

@@ -62,6 +62,27 @@ export declare const securityPlanSchema: import("../domain/schema.js").Schema<{
     readonly assumptions: string[];
     readonly deferred: string[];
 }>;
+export declare const specTaskSchema: import("../domain/schema.js").Schema<{
+    readonly id: string;
+    readonly title: string;
+    readonly description: string;
+    readonly acceptanceIds: string[];
+    readonly allowedPaths: string[];
+    readonly dependsOn: string[];
+    readonly minimumLane: "fast" | "standard" | "high";
+}>;
+export declare const replanSchema: import("../domain/schema.js").Schema<{
+    readonly reason: string;
+    readonly tasks: {
+        readonly id: string;
+        readonly title: string;
+        readonly description: string;
+        readonly acceptanceIds: string[];
+        readonly allowedPaths: string[];
+        readonly dependsOn: string[];
+        readonly minimumLane: "fast" | "standard" | "high";
+    }[];
+}>;
 export declare const specSchema: import("../domain/schema.js").Schema<{
     readonly title: string;
     readonly problem: string;
@@ -294,6 +315,18 @@ export interface TaskAttempt {
     runId: string;
     kind: 'task' | 'qa-repair';
 }
+export interface PlanRevision {
+    id: string;
+    reason: string;
+    tasks: Spec['tasks'];
+    contextHash: string;
+    hash: string;
+    previousContent: Spec;
+    previousApproval: SpecApproval;
+    status: 'pending' | 'approved' | 'superseded';
+    at: number;
+    approval: SpecApproval | null;
+}
 export interface ScopeAmendment {
     id: string;
     taskId: string;
@@ -388,6 +421,7 @@ export interface SpecRecord {
     design: DesignRecord | null;
     scopeAmendments: ScopeAmendment[];
     criterionAmendments?: CriterionAmendment[];
+    planRevisions?: PlanRevision[];
     /**
      * Advisory computed after Product: existing tests that reference a task's files but are assigned to a
      * later task (Product declared them as changing; only the order is wrong), or to none when the test

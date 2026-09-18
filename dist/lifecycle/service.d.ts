@@ -86,7 +86,6 @@ export declare class Lifecycle {
     private buildProduct;
     /** Resume the exact request; an accepted Product checkpoint survives a failed Design round. */
     resumePlanning(id: string, signal?: AbortSignal): Promise<Document<SpecRecord>>;
-    /** Operational limits do not rewrite the approved scope, gates or functional hash. */
     /**
      * Execution-only gate changes an operator may amend without rewriting an approved spec: a new check, a
      * shared resource that serialises checks writing to the same place, or a longer timeout. What a check
@@ -108,6 +107,10 @@ export declare class Lifecycle {
      * repeat a failure it cannot see. The context is trimmed to fit `limits.maxTaskContextChars`.
      */
     private withPreviousAttempt;
+    private assertReplanFrontier;
+    /** Prepare a bounded operator amendment without another Product call or any code execution. */
+    planRemainingTasks(id: string, input: unknown): Document<SpecRecord>;
+    approveRemainingTasks(id: string, amendmentId: string, expectedHash: string, actor: string, note: string): Promise<Document<SpecRecord>>;
     /** The repair task for the current QA report, built from the current effective spec and amendments. */
     private qaRepairTask;
     private aggregateTask;
@@ -147,6 +150,7 @@ export declare class Lifecycle {
     /** The approved mockup QA compares the candidate against; bounded like the Implementer's copy. */
     private qaDesignContext;
     private prepareReviewWorkspace;
+    private sameGates;
     private reviewable;
     /** Publication adapters still acquire the lifecycle lease and require explicit consent. */
     publicationCandidate(id: string, purpose?: 'review' | 'delivery'): Promise<Run>;

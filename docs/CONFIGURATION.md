@@ -75,6 +75,10 @@ Les variables globales autorisées par défaut sont `PATH`, `SystemRoot`, `WINDI
 
 `dependsOn` impose l'achèvement réussi des parents. `resources` contient les noms de ressources exclusives, par exemple `test-db` ou `dist`. Deux contrôles partageant une ressource ne tournent pas simultanément. Les dépendances inconnues, doublons et cycles sont refusés avant l'agent.
 
+Par défaut, un contrôle a un accès exclusif au répertoire de validation, y compris ses fichiers générés ou ignorés par Git. Cela protège aussi les configurations existantes sans ressources déclarées : `build`, synchronisation du framework et E2E ne peuvent plus écraser simultanément le même `.svelte-kit`, `dist` ou cache.
+
+`readOnly: true` est une déclaration revue par l'opérateur : la commande **et ses sous-processus** ne doivent écrire aucun fichier dans ce répertoire. Seuls ces contrôles peuvent tourner ensemble, dans la limite de `concurrency` et des ressources nommées ; ils attendent aussi la fin d'un contrôle susceptible d'écrire. Ce champ n'est pas un sandbox ni une détection automatique. Ne pas l'activer pour un lint avec cache, un compilateur incrémental, des tests avec couverture ou des E2E qui lancent un build. Les anciens profils peuvent donc valider plus lentement ; déclarer uniquement les commandes réellement en lecture seule permet de retrouver du parallélisme sûr.
+
 ```json
 [
   { "id": "build", "command": ["npm", "run", "build"], "outputs": ["dist/**"], "resources": ["dist"] },
@@ -83,7 +87,7 @@ Les variables globales autorisées par défaut sont `PATH`, `SystemRoot`, `WINDI
 ]
 ```
 
-Les ressources déclarées ne détectent pas automatiquement les ports ou fichiers partagés. Elles ne limitent pas non plus les workers qu'un outil lance lui-même. Adapter la concurrence au CPU, à la mémoire et aux outils du projet.
+Les ressources nommées restent nécessaires pour les ports, bases de données ou autres services externes partagés, même entre contrôles en lecture seule. Elles ne limitent pas les workers qu'un outil lance lui-même. Adapter la concurrence au CPU, à la mémoire et aux outils du projet.
 
 `outputs` est une déclaration utilisée pour refuser le cache de reçus sur les producteurs d'artefacts ; ce n'est pas encore un manifeste d'artefacts vérifié/restauré. Les contrôles ne doivent pas modifier les sources suivies. Les sorties de build doivent être ignorées et leurs consommateurs ordonnés.
 

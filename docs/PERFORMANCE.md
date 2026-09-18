@@ -14,7 +14,7 @@ Le TypeScript n'est pas la cause directe de ces économies. Les opérations de m
 node scripts/bench.mjs --repetitions 5 --output /tmp/apv2-bench.json
 ```
 
-Le benchmark utilise les mêmes quatre commandes réelles Node dans les deux modes : trois timers indépendants de 180 ms et un timer de 50 ms dépendant de deux parents. Il compare une concurrence de 1 et de 3, alterne l'ordre des modes et conserve chaque mesure. **Ces délais sont artificiels.** Le résultat démontre l'effet de l'ordonnancement sur ce graphe, pas un gain général de la V2 sur la V1 ou sur une session IA.
+Le benchmark utilise les mêmes quatre commandes réelles Node dans les deux modes : trois timers indépendants de 180 ms déclarés `readOnly: true` et un timer de 50 ms dépendant de deux parents. Il compare une concurrence de 1 et de 3, alterne l'ordre des modes et conserve chaque mesure. **Ces délais sont artificiels.** Le résultat démontre l'effet de l'ordonnancement sur ce graphe, pas un gain général de la V2 sur la V1 ou sur une session IA.
 
 Les résultats historiques de la livraison initiale alpha.8 sont dans `validation/alpha.8/scheduler-bench.json`, `validation/alpha.8/demo.json` et `validation/VALIDATION.md`. Ce sont des observations locales, non des objectifs contractuels.
 

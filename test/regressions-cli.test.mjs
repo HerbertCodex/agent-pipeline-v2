@@ -33,7 +33,7 @@ test('two different runs cannot race shared resources in one local store',async 
  try{await assert.rejects(()=>f.pipeline.execute(b.id),/Another execution/);assert.equal(f.pipeline.store.get(b.id).state,'created');}finally{f.pipeline.store.releaseExecution(a.id,token);}
 });
 test('scheduler drains siblings even when blocked-result bookkeeping throws',async()=>{
- const gates=cfg({gates:[{id:'a',command:['true']},{id:'b',command:['true']},{id:'c',command:['true'],dependsOn:['a']}]}).gates;
+ const gates=cfg({gates:[{id:'a',command:['true'],readOnly:true},{id:'b',command:['true'],readOnly:true},{id:'c',command:['true'],readOnly:true,dependsOn:['a']}]}).gates;
  let drained=false;
  await assert.rejects(()=>schedule(gates,{concurrency:2,failFast:true,signal:new AbortController().signal,
   blocked:()=>{throw new Error('bookkeeping failed')},execute:async(g,signal)=>{

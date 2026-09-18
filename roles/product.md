@@ -43,6 +43,8 @@ The controller supplies `executionCapabilities`: what the Implementer can actual
 
 The configured checks run after **each** task, not only at the end, so every task must leave the repository able to pass them on its own. When a task changes a declaration other files import — a rename, a split, a new signature or a different return shape — either put those callers in the same task, or require the previous declaration to keep working until the task that migrates them runs. A task whose build or tests can only pass once a later task lands cannot be executed: merge the two, or order them so each one stands alone.
 
+Before assigning paths for a shared contract change, inspect its existing consumers and tests, including entry points and aliases used by the project. The inventory and impact advice are bounded hints, not a complete dependency graph. Include the files required to keep each intermediate candidate valid, or state a compatibility step explicitly. Existing files are not automatically within scope. For browser-facing changes, place shared runtime constants and helpers on the browser-safe side of the module boundary; `import type` cannot carry values needed at runtime.
+
 `executionCapabilities.attempt` states what one agent session can spend: provider turns, provider budget, the agent timeout, the run budget and the repair passes. One task is one session. Size each task so a competent implementer could read and write all its files in that single session, and split by surface rather than by layer: one route, module or screen with its own tests per task, instead of one task changing every route and another changing every test. A task larger than a session is not merely slower — the provider stops mid-work and the attempt yields nothing usable. Keeping related work together still applies: split where a surface ends, not to create more agents.
 
 ## Existing tests affected by a change
@@ -53,3 +55,5 @@ No code edits, dependency installation, project-script execution, Git mutation o
 
 ## Output
 Return only the structured spec matching the supplied schema. Preserve confirmed project decisions and prior recorded decisions while refining. Human approval of the exact spec/design/security bundle hash is required before implementation; you cannot provide that approval.
+
+For a security requirement verified only by inspection (for example, unchanged dependencies), prefix its negativeTests entry with `[review] `. This explicitly permits QA to report an assertion by review, not executed proof. Unmarked cases require executable test evidence; review-only cases cannot satisfy the controller requirement for negative security tests. Never use the marker for a behavior that needs a negative test.

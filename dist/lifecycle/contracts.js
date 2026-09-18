@@ -38,6 +38,15 @@ export const securityPlanSchema = s.object({
     deferred: s.default(s.array(s.string(1, 3000), 0, 100), []),
 });
 const neutralSecurityPlan = securityPlanSchema.parse({});
+export const specTaskSchema = s.object({
+    id, title: s.string(1, 500), description: s.string(1, 12000),
+    acceptanceIds: s.array(id, 1, 100), allowedPaths: s.array(s.string(1, 500), 1, 100),
+    dependsOn: s.array(id, 0, 20), minimumLane: s.enum(lanes),
+});
+export const replanSchema = s.object({
+    reason: s.string(20, 4000),
+    tasks: s.array(specTaskSchema, 1, 20),
+});
 export const specSchema = s.object({
     title: s.string(1, 500), problem: s.string(10, 20000),
     scope: s.array(s.string(1, 3000), 1, 100), outOfScope: s.array(s.string(1, 3000), 0, 100),
@@ -50,11 +59,7 @@ export const specSchema = s.object({
         decisionId: id, value: s.string(1, 4000), sourceQuote: s.string(1, 4000), rationale: s.string(1, 4000),
     }), 0, 100), []),
     questions: s.array(s.object({ id, question: s.string(1, 3000) }), 0, 100),
-    tasks: s.array(s.object({
-        id, title: s.string(1, 500), description: s.string(1, 12000),
-        acceptanceIds: s.array(id, 1, 100), allowedPaths: s.array(s.string(1, 500), 1, 100),
-        dependsOn: s.array(id, 0, 20), minimumLane: s.enum(lanes),
-    }), 0, 20),
+    tasks: s.array(specTaskSchema, 0, 20),
     minimumLane: s.enum(lanes),
     experience: s.default(s.object({
         uiImpact: s.enum(['none', 'minor', 'major']),
@@ -73,7 +78,7 @@ export const qaSchema = s.object({
     qualityChecks: s.default(s.array(qualityCheckSchema, 0, 6), []),
     negativeTestChecks: s.default(s.array(s.object({
         // `review` is for a negative case the approved spec itself defines as a review rather than a test
-        // (for example "confirmed by reviewing the final diff"): it can never carry a behavioral receipt, and
+        // with the explicit `[review] ` prefix: it can never carry a behavioral receipt, and
         // it is reported as asserted-by-review so the human reviewer sees exactly what no test proves.
         requirementId: id, testIndex: s.number(0, 29), status: s.enum(['pass', 'fail', 'unknown', 'review']),
         evidence: s.string(1, 1600), paths: s.array(s.string(1, 500), 0, 12), receiptIds: s.array(id, 0, 20),
@@ -152,7 +157,7 @@ export function validateSpec(value, ready = false, ledger = { schemaVersion: 1, 
         invariant(new Set(requirement.owaspTopics).size === requirement.owaspTopics.length, 'SPEC_SECURITY', `Security requirement ${requirement.id} repeats an OWASP topic`);
     }
     if (security.negativeTestsRequired)
-        invariant(spec.security.requirements.some(r => r.negativeTests.length > 0), 'SPEC_SECURITY', 'Security-sensitive behavior requires at least one explicit negative security test');
+        invariant(spec.security.requirements.some(r => r.negativeTests.some(test => !test.startsWith('[review] '))), 'SPEC_SECURITY', 'Security-sensitive behavior requires at least one explicit negative security test');
     if (security.requiresThreatModel) {
         invariant(spec.security.threatModel.required, 'SPEC_SECURITY', 'A threat model is required for the detected security surfaces');
         invariant(spec.security.threatModel.assets.length > 0 && spec.security.threatModel.trustBoundaries.length > 0 && spec.security.threatModel.threats.length > 0, 'SPEC_SECURITY', 'Threat model must name assets, trust boundaries and threats');
@@ -241,8 +246,11 @@ export function validateQa(value, spec, candidateSha, ledger = { schemaVersion: 
             const gates = quality.context.validation.gates;
             invariant(check.evidence.trim().length > 0 && check.paths.every(p => (quality.candidatePaths ?? quality.paths).has(p)) &&
                 check.receiptIds.every(id => gates.some(g => g.receiptId === id)), 'QA_SECURITY', 'Negative-test evidence references unknown files or receipts');
-            if (check.status === 'review')
-                invariant(!check.paths.length && check.evidence.trim().length >= 40, 'QA_SECURITY', 'A review-only negative case names no test file and must say what was inspected and found');
+            if (check.status === 'review') {
+                const declared = checkedSpec.security.requirements.find(r => r.id === check.requirementId).negativeTests[check.testIndex];
+                invariant(declared.startsWith('[review] '), 'QA_SECURITY', 'A review-only negative case requires an explicit [review] marker in the approved spec');
+                invariant(!check.paths.length && !check.receiptIds.length && check.evidence.trim().length >= 40, 'QA_SECURITY', 'A review-only negative case names no test file or receipt and must say what was inspected and found');
+            }
             if (check.status === 'pass')
                 invariant(check.paths.length > 0 && check.paths.every(p => gates.some(g => g.receiptId && check.receiptIds.includes(g.receiptId) && g.covers.some(k => ['unit', 'integration', 'browser'].includes(k)) &&
                     g.testPaths.some(pattern => matches(p, pattern)))), 'QA_SECURITY', 'A negative-test pass needs actual test files covered by a successful behavioral gate testPaths');

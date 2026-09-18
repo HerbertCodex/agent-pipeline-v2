@@ -73,6 +73,8 @@ Ce fragment se fusionne avec les autres gates ; il ne crée pas le script `lint:
 
 La décision courte produite par Product comprend désormais explicitement `constraint`, `simplerAlternative`, `risks`, les alternatives et compromis, et `reconsiderWhen`. Les champs manquants sont refusés. Pas d’agent Architect obligatoire, ni de document demandé pour une correction locale. La pertinence du choix reste une responsabilité de revue ; le schéma ne récompense aucun nombre de couches ou de classes.
 
+Une entrée `negativeTests` peut autoriser explicitement une inspection avec le préfixe `[review] ` dans la spec approuvée. QA renvoie alors `review`, sans fichier ni reçu, avec au moins 40 caractères décrivant son observation. Ce statut ne prouve pas une exécution et ne remplace pas les tests négatifs exigés par le contrôleur. Les anciennes entrées sans ce préfixe restent soumises aux preuves de test : aucune exemption n’est déduite automatiquement de leur formulation.
+
 Chaque scénario déclaré dans `security.requirements[].negativeTests` reçoit un `negativeTestChecks` : identifiant d’exigence, index à partir de zéro, statut, explication, fichiers de test et receipts finaux. Les scénarios omis, répétés, inconnus ou contradictoires sont refusés. Un succès nécessite un fichier encore présent dans le candidat et une gate comportementale réussie dont les `testPaths` revus incluent ce fichier. Un scanner seul ne suffit pas. Exemple de gate exécutant précisément un fichier :
 
 ```json

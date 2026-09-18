@@ -648,6 +648,9 @@ export class Pipeline {
       });
       await this.implement(run, git, signal, hooks, failures, acceptCost);
       if (run.candidateSha === previousCandidate) {
+        // implement invalidates proofs, but this exact candidate still has the same failed checks.
+        // Retain the observations before persisting the terminal no-change error.
+        run.receipts = failures;
         this.store.save(run, "agent.repair_no_change", {
           number: run.metrics.repairAttempts,
           candidateSha: run.candidateSha,

@@ -7,7 +7,8 @@ export interface ScheduleOptions {
   blocked: (gate: Gate, reason: string) => GateReceipt;
 }
 export const success = (r: GateReceipt): boolean => r.status === 'passed' || r.status === 'cached';
-/** Ready queue with dependency and exclusive-resource constraints. An error never
+/** Ready queue with dependencies, named resources and shared-workspace read/write exclusion.
+ * Only explicitly read-only gates overlap; a writer excludes readers too. An error never
  * leaves sibling processes running: all active promises are drained before throw. */
 export async function schedule(gates: Gate[], options: ScheduleOptions): Promise<GateReceipt[]> {
   validateDag(gates);
@@ -17,6 +18,7 @@ export async function schedule(gates: Gate[], options: ScheduleOptions): Promise
   const pending = new Map(gates.map(g => [g.id, g]));
   const running = new Map<string, Promise<void>>();
   const held = new Set<string>();
+  let writer = false;
   const done = new Map<string, GateReceipt>();
   let fatal: unknown;
   try {
@@ -26,13 +28,15 @@ export async function schedule(gates: Gate[], options: ScheduleOptions): Promise
       if (signal.aborted || failedDependency) {
         done.set(id, options.blocked(gate, signal.aborted ? 'Execution cancelled' : 'Dependency failed')); pending.delete(id); continue;
       }
-      if (running.size >= options.concurrency || !gate.dependsOn.every(d => done.has(d)) || gate.resources.some(r => held.has(r))) continue;
+      if (running.size >= options.concurrency || writer || (!gate.readOnly && running.size > 0) || !gate.dependsOn.every(d => done.has(d)) || gate.resources.some(r => held.has(r))) continue;
       pending.delete(id); gate.resources.forEach(r => held.add(r));
+      if (!gate.readOnly) writer = true;
       const promise = Promise.resolve().then(() => options.execute(gate, signal)).then(receipt => {
         done.set(id, receipt);
         if (!success(receipt) && options.failFast) controller.abort();
       }).catch((error: unknown) => { fatal ??= error; controller.abort(); }).finally(() => {
         running.delete(id); gate.resources.forEach(r => held.delete(r));
+        if (!gate.readOnly) writer = false;
       });
       running.set(id, promise);
     }

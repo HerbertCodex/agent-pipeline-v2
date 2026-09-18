@@ -290,6 +290,24 @@ export class Store {
       this.event(receipt.runId, 'gate.finished', { gateId: receipt.gateId, status: receipt.status, durationMs: receipt.durationMs, receiptId: receipt.id });
     });
   }
+  /** Failed observations for diagnostics only; never restores validation proofs into a run.
+   * Older no-change repairs cleared run.receipts. Recover only the latest validation cycle,
+   * on this run's current candidate, through persisted runner events and receipt identities. */
+  failureDiagnostics(run: Run): GateReceipt[] {
+    const current = run.receipts.filter(r => r.status === 'failed');
+    if (current.length || run.receipts.length || run.error?.code !== 'REPAIR_NO_CHANGE') return current;
+    const events = this.events(run.id, ['validation.started', 'gate.finished']);
+    const start = [...events].reverse().find(e => e.type === 'validation.started');
+    const boundary = start ? events.indexOf(start) : -1;
+    if (boundary < 0) return [];
+    return events.slice(boundary + 1).flatMap(event => {
+      if (event.type !== 'gate.finished' || event.data['status'] !== 'failed') return [];
+      const row = this.db.prepare('SELECT data FROM receipts WHERE id=? AND run_id=?').get(String(event.data['receiptId']), run.id);
+      if (!row) return [];
+      const receipt = validateReceipt(parseJson(String(row['data'])));
+      return receipt.status === 'failed' && receipt.candidateSha === run.candidateSha && run.gateIds.includes(receipt.gateId) ? [receipt] : [];
+    });
+  }
   // Called ONLY after the entire validation workspace has passed integrity checks.
   seal(receipt: GateReceipt, ttlMs: number): void {
     if (ttlMs <= 0 || receipt.status !== 'passed') return;
