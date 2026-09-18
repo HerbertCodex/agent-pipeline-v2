@@ -1,6 +1,6 @@
 # Références des interfaces externes
 
-Sources primaires consultées pour la compatibilité des adaptateurs, le 12 septembre 2026. Leur consultation n'est pas un test d'intégration authentifié.
+Historique des sources primaires consultées pour la compatibilité des adaptateurs, à partir du 12 septembre 2026. Les URL et descriptions ci-dessous ne constituent pas une vérification de leur état actuel ; les invocations implémentées sont décrites dans [Adaptateurs](ADAPTERS.md). Leur consultation n'est pas un test d'intégration authentifié.
 
 1. OpenAI, Codex, mode non interactif : `https://developers.openai.com/codex/noninteractive/` (redirige vers `https://learn.chatgpt.com/docs/non-interactive-mode`). Invocation exec, stdin, sandbox et sortie structurée.
 2. OpenAI, Structured model outputs : `https://developers.openai.com/api/docs/guides/structured-outputs`. Sous-ensemble JSON Schema, propriétés requises, objets fermés et constructions non supportées telles que allOf.

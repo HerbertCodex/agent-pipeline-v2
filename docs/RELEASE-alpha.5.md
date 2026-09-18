@@ -1,5 +1,7 @@
 # Agent Pipeline V2 2.0.0-alpha.5
 
+> **Note de livraison historique.** Ce texte décrit cette livraison, avant les évolutions suivantes. Pour configurer et utiliser le code actuel, consulter la [documentation](README.md) et la [migration](MIGRATION.md).
+
 Alpha.5 traite les interruptions observées sur des projets réels comme des problèmes de conception du workflow, pas comme des exceptions ponctuelles. Le but est que le pipeline conserve ses garanties tout en laissant l'utilisateur travailler sur le produit plutôt que sur les états internes du contrôleur.
 
 ## Cycle fluide

@@ -1,5 +1,7 @@
 # 2.0.0-alpha.3
 
+> **Note de livraison historique.** Ce texte décrit cette livraison, avant les évolutions suivantes. Pour configurer et utiliser le code actuel, consulter la [documentation](README.md) et la [migration](MIGRATION.md).
+
 Le démarrage est maintenant documenté pour un lecteur venant uniquement de GitHub : clone/ZIP, séparation framework/application, choix du fournisseur, prompt et vérification. Les quatre rôles sont des fichiers canoniques réellement chargés. Six skills et 40 références sont portés de la V1, avec sélection déterministe, budget de texte et empreintes dans les événements.
 
 Claude Code s’ajoute à Codex et au protocole command. Setup/Product/QA travaillent avec des outils de lecture ; Claude Implementer dispose aussi d’outils de modification. Les tests sont exécutés par le runner. Les outils shell/MCP/web/sous-agents ne sont pas demandés ; aucun contournement global de permissions n’est utilisé. Les politiques administrées, dont certains hooks, restent applicables.

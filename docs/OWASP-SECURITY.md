@@ -123,6 +123,8 @@ QA must emit one `securityChecks` result for every approved security requirement
 
 QA must inspect actual code, diff, tests and deterministic receipts. It cannot accept a requirement just because code contains words such as `secure`, `auth` or `sanitize`.
 
+In `workflow.qualityReview: "evidence"` mode, QA also provides a `negativeTestChecks` entry for every declared negative scenario. Passing entries must reference existing candidate test files and successful final behavioral receipts whose reviewed `testPaths` cover those files. A scanner receipt or an in-session check alone is insufficient. Missing required evidence blocks with `QA_EVIDENCE` without automatic code repair. See [quality and validation](LOT-3-QUALITE.md).
+
 ## Primary references
 
 Official OWASP Cheat Sheet Series:

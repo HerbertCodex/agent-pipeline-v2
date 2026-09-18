@@ -1,5 +1,7 @@
 # 2.0.0-alpha.4
 
+> **Note de livraison historique.** Ce texte décrit cette livraison, avant les évolutions suivantes. Pour configurer et utiliser le code actuel, consulter la [documentation](README.md) et la [migration](MIGRATION.md).
+
 ## Empty-repository bootstrap
 
 `apv2 bootstrap` closes the gap between cloning an empty application repository and installing Agent Pipeline.

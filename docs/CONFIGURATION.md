@@ -19,32 +19,45 @@ node dist/cli.js schemas --output examples/schemas
     "type": "codex",
     "passEnv": ["HOME", "CODEX_HOME", "CODEX_API_KEY"]
   },
+  "workflow": { "planningMode": "adaptive", "qualityReview": "evidence" },
   "gates": [
     {
       "id": "unit",
+      "covers": ["unit"],
       "command": ["npm", "test"],
       "timeoutMs": 120000,
       "mandatory": true,
       "cacheTtlMs": 0
     }
   ],
-  "concurrency": 3,
-  "maxRunMs": 1800000,
-  "maxRepairAttempts": 1
+  "concurrency": 3
 }
 ```
 
-### Bornes qui avertissent, bornes qui coupent
+Cet exemple suppose que `npm test` exécute les tests unitaires du projet. Compléter les gates de build, intégration, navigateur et les mappings `testPaths` selon les changements à réaliser ; une seule gate unitaire ne couvre pas tous les parcours. Voir [les preuves requises](LOT-3-QUALITE.md#exigences-adaptées-au-changement).
 
-Une borne appliquée par le fournisseur — nombre de tours, plafond de coût par appel — ou un délai trop court **arrête la session en cours** : l'argent est dépensé et rien n'est produit. Une tentative d'implémentation reste alors récupérable (`spec run --accept-current`), mais un rôle comme Product ne rend qu'une réponse finale : son tour est perdu.
+### Limites de temps, de tours et de coût
 
-Les valeurs livrées sont donc des filets, pas des arbitres : `agent.maxTurns` à 200, `agent.maxBudgetUsd` à null, `agent.timeoutMs` à 30 minutes, `maxRunMs` à 45 minutes (une session d'agent **plus** ses contrôles), `maxRepairAttempts` à 3. Ce qui borne réellement la dépense est `workflow.maxSpecCostUsd`, activé par défaut à 25 $, parce qu'il avertit au lieu de couper.
+Les limites fournisseur peuvent arrêter un appel avant sa réponse finale. Une implémentation interrompue conserve ses fichiers pour inspection et adoption explicite ; Product/Design conservent les sorties déjà reçues dans des checkpoints. Aucun mécanisme ne récupère une réponse finale jamais reçue.
 
-`apv2 inspect --repo PATH` signale dans `configAdvice` les réglages d'une configuration existante qui coupent le travail en cours, avec la raison de chacun.
+| Réglage | Défaut du schéma | Portée |
+| --- | --- | --- |
+| `agent.timeoutMs` | 1 800 000 ms (30 min) | Appel Implementer ; pour un rôle de lecture, échéance partagée avec ses réparations de sortie. |
+| `agent.maxTurns` | 200 | Nombre de tours d'un appel Claude. |
+| `agent.maxBudgetUsd` | `null` | Plafond explicite par appel Claude, s'il est renseigné. |
+| `workflow.maxSpecCostUsd` | 25 $ | Coûts déclarés cumulés de la spec, planification, réparations et QA comprises. |
+| `workflow.maxActiveMs` | 3 600 000 ms (1 h) | Temps cumulé de planification et d'exécution de la spec, hors attente humaine. |
+| `maxRunMs` | 2 700 000 ms (45 min) | Budget actif d'une tentative, reprises comprises. |
+| `validationReserveMs` | 60 000 ms | Temps réservé aux contrôles lors du calcul du timeout Implementer. |
+| `maxRepairAttempts` | 3 | Réparations de code après contrôles rouges, entre 0 et 5. |
+| `workflow.maxQaRepairs` | 2 | Réparations demandées par QA, entre 0 et 3. |
+| `workflow.maxOutputRepairs` | 1 | Réparations du contrat de sortie d'un rôle, entre 0 et 2. |
 
-`workflow.maxSpecCostUsd` (25 $ par défaut) borne ce qu'une spec peut dépenser : quand les coûts déclarés par les fournisseurs atteignent ce plafond, l'exécution s'arrête sur `COST_BUDGET` avant de lancer une nouvelle tâche, et l'opérateur autorise la suite avec `spec run --accept-cost`. Ces coûts sont ceux que le fournisseur annonce ; le framework ne vérifie aucune facture.
+`workflow.maxSpecCostUsd` est vérifié avant les appels. Pour Claude, le montant restant réduit aussi `maxBudgetUsd` : **le plafond global peut donc interrompre l'appel en cours**. Les coûts proviennent des déclarations du fournisseur, pas d'une facture ; un coût inconnu n'est pas zéro et le dernier tour peut dépasser le plafond. Un adaptateur sans coût monétaire publié ne fournit pas de garantie de dépense en dollars.
 
-`maxRepairAttempts` (0 à 5, 1 par défaut) borne les passes de réparation d'une tentative après des contrôles rouges. La boucle s'arrête d'elle-même avant ce plafond dans deux cas : une réparation qui ne change rien (`REPAIR_NO_CHANGE`) et une réparation qui laisse les contrôles échouer exactement comme avant (`REPAIR_NO_PROGRESS`). Relever ce plafond laisse donc plus de place à une correction qui avance, sans payer des passes qui tournent en rond.
+Pour relever une allocation, utiliser un amendement chiffré avec `spec budget`, puis reprendre l'étape arrêtée. L'ancien `spec run --accept-cost` contourne le plafond global pour cette exécution ; il ne relève pas le plafond explicite par appel. Voir [les reprises et budgets](LIFECYCLE.md#échec-interruption-et-budget). `inspect --repo PATH` signale également des réglages susceptibles de couper le travail dans `configAdvice`.
+
+Les réparations de code cessent avant leur plafond si elles ne modifient rien (`REPAIR_NO_CHANGE`) ou laissent exactement les mêmes contrôles échouer (`REPAIR_NO_PROGRESS`). Augmenter la limite ne justifie pas une boucle sans progrès.
 
 Le worktree est neuf : un projet dont les tests nécessitent des dépendances doit déclarer un `setup` adapté. L'exemple minimal n'en installe pas implicitement. Ne pas remplacer un vrai contrôle par `true` pour obtenir un résultat vert.
 
@@ -74,7 +87,7 @@ Les ressources déclarées ne détectent pas automatiquement les ports ou fichie
 
 ## Sélection
 
-Un contrôle `mandatory` s'exécute quel que soit le filtre. Sinon, en `fast` et `standard`, `lanes` et `paths` définissent son applicabilité. Une liste `paths` vide s'applique à tous les changements. Les dépendances transitives d'un contrôle choisi sont incluses, même si leurs propres filtres ne correspondent pas. En `high`, tous les contrôles configurés sont sélectionnés.
+Un contrôle `mandatory` s'exécute quel que soit le filtre. Sinon, en `fast` et `standard`, `lanes` et `paths` définissent son applicabilité. Une liste `paths` vide s'applique à tous les changements. Les dépendances transitives d'un contrôle choisi sont incluses, même si leurs propres filtres ne correspondent pas. En `high`, tous les contrôles configurés sont sélectionnés. En mode `qualityReview: "evidence"`, les preuves requises par le changement ajoutent les gates applicables nécessaires, même si leur filtre de lane les excluait ; le filtre de chemins et la couverture restent vérifiés. Voir [les exigences de validation](LOT-3-QUALITE.md#contrôles-et-couverture).
 
 Le moteur refuse un plan vide. Un contrôle absent de la configuration n'est toutefois pas inventé par le noyau : calibrer le profil avec des cas qui doivent échouer. Les filtres de chemins sont des décisions de politique, **pas une analyse sémantique de l'impact des imports**.
 
@@ -90,9 +103,9 @@ La durée de vie d'une entrée concerne sa réutilisation au moment d'une valida
 
 `maxRunMs` borne le temps actif cumulé entre exécution et reprises, hors attente humaine. Les étapes de création du run, l'inspection, la revue et l'export ne font pas partie de ce compteur. Les timeouts de chaque processus restent bornés par le signal global. Une reprise ne remet pas le budget à zéro.
 
-Une réparation est autorisée uniquement après un échec de contrôle considéré comme corrigeable. Les timeouts, l'absence d'exécutable, les erreurs de setup, la violation du scope et les mutations du validateur ne sont pas transformés en boucles infinies de corrections. Le framework ne mesure pas encore les tokens ou le prix du fournisseur.
+Une réparation est autorisée uniquement après un échec de contrôle considéré comme corrigeable. Les timeouts, l'absence d'exécutable, les erreurs de setup, la violation du scope et les mutations du validateur ne sont pas transformés en boucles infinies de corrections. Le journal `invocation.started/finished` conserve les tokens et coûts publiés par le fournisseur, y compris en cas de sortie rejetée. Les valeurs absentes et appels sans résultat restent explicitement inconnus ; voir [les mesures](PERFORMANCE.md).
 
-## Workflow de spec et profils de rôles (alpha.2)
+## Workflow de spec et profils de rôles
 
 Ajouter au niveau racine de la configuration, par exemple :
 
@@ -109,7 +122,7 @@ Ajouter au niveau racine de la configuration, par exemple :
   },
   "workflow": {
     "qaLanes": ["standard", "high"],
-    "maxQaRepairs": 1,
+    "maxQaRepairs": 2,
     "maxActiveMs": 3600000
   }
 }
@@ -117,21 +130,21 @@ Ajouter au niveau racine de la configuration, par exemple :
 
 Cet extrait complète une configuration, ce n'est pas un fichier autonome valide. Null signifie hériter de l'adaptateur de réalisation. Un rôle peut avoir son modèle et ses variables autorisées ; ne pas stocker de clés directement dans le JSON. Setup utilise l'adaptateur par défaut, celui de `--config` ou celui du fichier `--agent` explicite.
 
-La politique QA est une décision revue par l'opérateur et incluse dans le hash approuvé. La valeur par défaut appelle QA sur standard/high. Une liste vide la désactive : cela doit être une modification de politique explicitement approuvée, jamais une réparation automatique proposée pour contourner un refus. QA ne compte pas comme avis humain. Les seuils humains restent zéro/un/deux libellés pour fast/standard/high.
+En mode de planification `legacy`, `qaLanes` détermine les lanes qui appellent QA (standard/high par défaut). Avec les parcours adaptatifs, standard et structural exigent QA ; compact ne l'évite que si le diff final reste dans son enveloppe non sensible et que `reviewMode` n'est pas `regulated`. Une liste `qaLanes: []` ne désactive donc pas la QA de ces parcours. QA ne remplace jamais la revue humaine : ses seuils dépendent de `reviewMode`, voir [le cycle de vie](LIFECYCLE.md#revue-humaine-et-revalidation).
 
 Les tâches d'une spec sont séquentielles. Pour plusieurs tâches, le contrôle d'intégration force tous les gates configurés, même si leurs filtres individuels auraient réduit la sélection sur un changement isolé. Les setups restent ceux du profil ; les services externes ne sont pas automatiquement démarrés ou provisionnés.
 
 L'onboarding associe les scripts npm/pnpm détectés à une même ressource exclusive par prudence. Après calibration, retirer cette ressource des commandes réellement indépendantes pour bénéficier du parallélisme ; ne pas supposer leur indépendance à partir de leur nom.
 
-## Fournisseurs et skills (alpha.3)
+## Fournisseurs et skills
 
-`agent.type` accepte `command`, `codex`, `claude`. Choisir `--provider` lors du nouvel onboarding ou un profil `--agent`. Product et QA peuvent utiliser `roles.product`/`roles.qa`; null hérite d'agent. Le rôle Setup est choisi au lancement de l'installation.
+`agent.type` accepte `command`, `codex`, `claude`. Choisir `--provider` lors du nouvel onboarding ou un profil `--agent`. Product, Design et QA peuvent utiliser `roles.product`/`roles.design`/`roles.qa`; Product et QA héritent de `agent` si leur profil vaut `null` ; Design hérite de Product, puis de `agent`. Le rôle Setup est choisi au lancement de l'installation.
 
-Les profils natifs acceptent uniquement un chemin d'exécutable dans `command`. Ne pas ajouter de flags arbitraires. Les nouveaux champs `maxTurns` et `maxBudgetUsd` s'appliquent exclusivement à Claude ; voir ADAPTERS.md pour leurs limites.
+Les profils natifs acceptent uniquement un chemin d'exécutable dans `command`. Ne pas ajouter de flags arbitraires. Les champs `maxTurns` et `maxBudgetUsd` s'appliquent exclusivement à Claude ; voir ADAPTERS.md pour leurs limites.
 
-Le bloc `skills` est documenté dans SKILLS.md. Son absence signifie aucune compétence ajoutée ; les nouveaux plans déterministes proposent explicitement les six compétences et `projectType: unknown`. Pour recevoir ui-design, configurer un type frontend/mobile/fullstack après inspection réelle du projet. `apv2 inspect --repo PATH` affiche les choix effectifs sans lancer de modèle.
+Le bloc `skills` est documenté dans SKILLS.md. Son absence signifie aucune compétence ajoutée ; les nouveaux plans déterministes proposent explicitement les six compétences et le type de projet détecté, ou `unknown` si la détection ne suffit pas. Pour recevoir ui-design, configurer un type frontend/mobile/fullstack après inspection réelle du projet. `apv2 inspect --repo PATH` affiche les choix effectifs sans lancer de modèle.
 
-## Alpha.5 — politique de revue
+## Politique de revue
 
 ```json
 "workflow": {
@@ -146,7 +159,7 @@ Le bloc `skills` est documenté dans SKILLS.md. Son absence signifie aucune comp
 
 La tâche runtime possède aussi `allowedNewPaths`, `maxNewFiles` et `reviewRequired`. Ces champs sont normalement dérivés par le lifecycle : ils ne doivent pas devenir un moyen de contourner les chemins sensibles ou la revue intégrée finale.
 
-## Alpha.8 — découverte des gates de sécurité
+## Découverte des gates de sécurité
 
 L'onboarding Node détecte les scripts de sécurité non interactifs déjà présents dans `package.json`, notamment les familles `security:*`, `test:security*`, `lint:security*`, `audit:*`, `sast*`, `scan*`, `semgrep*`, `gitleaks*` et `trivy*`. Ils sont proposés comme gates `standard`/`high` avec une ressource exclusive `security-checks`.
 
@@ -189,6 +202,26 @@ Nombre de réinvocations autorisées après une violation du contrat de sortie (
 Relever une limite augmente le coût et le risque de dilution du contexte du fournisseur. C'est une décision de politique revue et hachée avec la configuration.
 
 Les longueurs des champs produits par les modèles (par exemple 3 000 caractères par vérification) restent fixées par les schémas exportés et transmis aux fournisseurs. Une réponse qui les dépasse est réparée par `workflow.maxOutputRepairs`, pas ignorée.
+
+## Parcours, profils et checks en session
+
+Les fichiers existants sans réglages explicites conservent `workflow.planningMode: "legacy"` et `workflow.qualityReview: "legacy"`. Les configurations neuves proposées par `init` et l'onboarding activent `adaptive` et `evidence`. Une configuration fournie explicitement conserve ses choix. Les changements s'appliquent aux nouvelles specs après revue de la configuration, pas silencieusement aux specs approuvées.
+
+- `planningMode: "adaptive"` active Product court pour le parcours standard et une décision d'architecture préalable pour le parcours structurant. `spec compact` est le raccourci explicite pour une tâche déjà cadrée. [Choix du parcours](LIFECYCLE.md#choisir-le-parcours).
+- `qualityReview: "evidence"` impose les preuves applicables et la grille QA. Les gates déclarent `covers` et, pour relier un test négatif à une commande, `testPaths`. `validationRules` ajoute les obligations propres aux chemins du projet. [Configuration détaillée](LOT-3-QUALITE.md).
+- `agent` configure l'Implementer ; Product et QA héritent de lui si leur profil vaut `null`. Design hérite de `roles.product`, puis de `agent`, si `roles.design` vaut `null`.
+- `roleProfiles` choisit `quick` pour fast/standard et `deep` pour high, par fournisseur et rôle. Une règle `modelRouting` exacte (fournisseur, rôle, lane) prime ; un amendement opérationnel autorisé prime ensuite. Les modèles et efforts sont explicites, sans modification des permissions. [Exemples de profils](AMELIORATIONS-2026-09-18.md#modèles-et-skills).
+
+Les checks en session sont désactivés par défaut (`feedback.gateIds: []`). Pour les activer, compléter une configuration qui contient déjà ces deux gates :
+
+```json
+{
+  "feedback": { "gateIds": ["typecheck", "test"], "maxCalls": 4, "maxTotalMs": 120000 },
+  "validationReserveMs": 60000
+}
+```
+
+Les IDs doivent désigner des gates indépendantes (`dependsOn: []`), sans placeholder `{{...}}`. Le runner exécute leurs commandes fixes sur le worktree de l'Implementer, avec leurs variables autorisées après exclusion des variables fournisseur et des noms de secrets, jamais un argv inventé par le modèle. `maxCalls` et `maxTotalMs` bornent cette boucle ; ses résultats ne sont pas des reçus finaux. La validation indépendante reste obligatoire. [Transport et permissions](ADAPTERS.md).
 
 ## Fichiers générés : `workflow.generatedPaths`
 
