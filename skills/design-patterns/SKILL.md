@@ -26,3 +26,6 @@ Adapter translates an external protocol without leaking provider details into th
 - Interface adaptation: [structural](references/structural.md).
 - Behavior and state: [behavioral](references/behavioral.md).
 - Review: [checklist](assets/patterns-checklist.md).
+
+## Bounded architecture decision
+For a material change, record the present constraint, simplest viable option, chosen boundary, one credible alternative, trade-off and a concrete reconsideration trigger. Reuse an existing decision until evidence calls it into question. For a local fix, a short rationale in the implementation summary is enough.

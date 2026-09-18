@@ -1,0 +1,55 @@
+{
+  "workflow": {
+    "planningMode": "adaptive"
+  },
+  "roleProfiles": [
+    {
+      "provider": "claude",
+      "role": "product",
+      "quick": {
+        "model": "claude-sonnet-5",
+        "effort": "low"
+      },
+      "deep": {
+        "model": "claude-sonnet-5",
+        "effort": "medium"
+      }
+    },
+    {
+      "provider": "claude",
+      "role": "design",
+      "quick": {
+        "model": "claude-sonnet-5",
+        "effort": "low"
+      },
+      "deep": {
+        "model": "claude-sonnet-5",
+        "effort": "medium"
+      }
+    },
+    {
+      "provider": "claude",
+      "role": "implementer",
+      "quick": {
+        "model": "claude-sonnet-5",
+        "effort": "low"
+      },
+      "deep": {
+        "model": "claude-sonnet-5",
+        "effort": "medium"
+      }
+    },
+    {
+      "provider": "claude",
+      "role": "qa",
+      "quick": {
+        "model": "claude-sonnet-5",
+        "effort": "low"
+      },
+      "deep": {
+        "model": "claude-sonnet-5",
+        "effort": "medium"
+      }
+    }
+  ]
+}

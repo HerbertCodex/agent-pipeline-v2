@@ -1,0 +1,45 @@
+[
+  {
+    "caseId": "loan-record-id",
+    "route": "compact",
+    "status": "awaiting_review",
+    "architectureDecisions": 0,
+    "qaVerdict": null,
+    "feedbackChecks": [
+      {
+        "gate": "acceptance",
+        "status": "passed"
+      }
+    ],
+    "regression": {
+      "exitCode": 0,
+      "error": null
+    }
+  },
+  {
+    "caseId": "loan-overdue",
+    "route": "standard",
+    "status": "blocked",
+    "architectureDecisions": 0,
+    "qaVerdict": "changes_requested",
+    "feedbackChecks": [
+      {
+        "gate": "acceptance",
+        "status": "passed"
+      }
+    ],
+    "regression": {
+      "exitCode": 0,
+      "error": null
+    }
+  },
+  {
+    "caseId": "borrower-guard",
+    "route": "structural",
+    "status": "draft",
+    "architectureDecisions": 4,
+    "qaVerdict": null,
+    "feedbackChecks": [],
+    "regression": null
+  }
+]

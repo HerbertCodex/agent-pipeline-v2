@@ -1,3 +1,4 @@
+import { taskSchema } from '../domain/contracts.js';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -153,7 +154,7 @@ export async function startUi(options) {
                 inlinedAssets: r.design.inlinedAssets ?? [], screens: r.design.proposal.screens.map((s, i) => ({ id: s.id, title: s.title, purpose: s.purpose, states: s.states,
                     file: basename(r.design.screenPaths[i] ?? ''), available: existsSync(r.design.screenPaths[i] ?? '') })) } : null,
             attempts, validations, busy: busy(id), activeProcesses: life.store.documentProcesses(id), implementer: r.config?.agent?.type ?? null,
-            cost: { declaredUsd: life.declaredCostUsd(r), ceilingUsd: r.config?.workflow?.maxSpecCostUsd ?? null },
+            cost: { ...life.costSummary(id), declaredUsd: life.declaredCostUsd(r, id) },
         };
     };
     const specEvents = (id) => {
@@ -224,7 +225,14 @@ export async function startUi(options) {
                 invariant(existsSync(repo), 'ARGUMENT', 'Dépôt introuvable');
                 const file = join(jobsDir, `${randomUUID()}.request.txt`);
                 writeFileSync(file, text(body, 'request', 10, 30000), { mode: 0o600 });
-                return json(res, 202, jobView(startJob(null, 'Nouveau brouillon', ['spec', 'draft', '--repo', repo, '--request-file', file])));
+                invariant(body['mode'] === undefined || ['auto', 'standard', 'structural', 'compact'].includes(String(body['mode'])), 'ARGUMENT', 'Mode de préparation inconnu');
+                if (body['mode'] === 'compact') {
+                    const taskFile = join(jobsDir, `${randomUUID()}.task.json`);
+                    const task = taskSchema.parse(body['task']);
+                    writeFileSync(taskFile, JSON.stringify(task), { mode: 0o600 });
+                    return json(res, 202, jobView(startJob(null, 'Tâche compacte', ['spec', 'compact', '--repo', repo, '--request-file', file, '--file', taskFile])));
+                }
+                return json(res, 202, jobView(startJob(null, 'Nouveau brouillon', ['spec', 'draft', '--repo', repo, '--request-file', file, '--pathway', String(body['mode'] ?? 'auto')])));
             }
             if (url.pathname === '/api/maintenance/gc') {
                 if (body['confirm'] !== true)
@@ -242,6 +250,8 @@ export async function startUi(options) {
                 return json(res, 200, life.summary(await life.review(id, text(body, 'sha', 40, 64), await reviewerFor(repo), note(body))));
             if (action === 'reject')
                 return json(res, 200, life.summary(life.reject(id, note(body))));
+            if (action === 'budget')
+                return json(res, 200, life.summary(life.amendBudget(id, body['limits'], await reviewerFor(repo), note(body))));
             if (action === 'retry')
                 return json(res, 200, life.summary(await life.retry(id, body['confirm'] === true)));
             if (parts[3] === 'scope-amendments' && parts[4] && parts[5] === 'approve')
@@ -249,6 +259,7 @@ export async function startUi(options) {
             if (parts[3] === 'criterion-amendments' && parts[4] && parts[5] === 'approve')
                 return json(res, 200, life.summary(life.approveCriterionAmendment(id, parts[4], text(body, 'hash', 64, 64), await reviewerFor(repo), note(body))));
             const jobsByAction = {
+                'plan-resume': ['Reprise de la rédaction', ['spec', 'plan-resume', id]],
                 run: body['acceptCurrent'] === true
                     ? ['Adoption du travail conservé', ['spec', 'run', id, '--accept-current']]
                     : body['acceptCost'] === true

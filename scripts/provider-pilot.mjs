@@ -13,7 +13,7 @@ if (values.help || !values.execute) {
   process.exit(values.help ? 0 : 2);
 }
 if (!values.output || !values.provider) throw new Error('Supply --provider and a new --output directory.');
-const agent = providerProfile(values.provider);
+const agent = { ...providerProfile(values.provider), timeoutMs: 600000, maxTurns: 32, maxBudgetUsd: 5 };
 const root = resolve(values.output);
 if (existsSync(root)) throw new Error('Output directory must not exist; nothing will be overwritten.');
 mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -46,6 +46,8 @@ try {
 } catch (error) { report.result = 'failed'; report.error = { message: String(error) }; report.successfulPilot = false; process.exitCode = 1; }
 finally {
   report.durationMs = performance.now() - started;
+  doc ??= life.store.documents('spec').at(-1);
+  if (doc) report.cost = life.costSummary(doc.id);
   if (doc) writeFileSync(join(root, 'events.jsonl'), life.store.documentEvents(doc.id).map(e => JSON.stringify(e)).join('\n')+'\n', {mode:0o600});
   life.close();writeFileSync(join(root, 'report.json'), JSON.stringify(report,null,2)+'\n',{mode:0o600});console.log(JSON.stringify(report,null,2));
 }

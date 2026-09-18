@@ -10,6 +10,13 @@ export interface AttemptUsage {
     costUsd: number | null;
     turns: number | null;
     durationMs: number | null;
+    models?: string[];
+    tokens?: {
+        input: number | null;
+        output: number | null;
+        cacheRead: number | null;
+        cacheWrite: number | null;
+    };
 }
 /**
  * Usage of the last invocation, when the configured provider reports it. A provider that reports nothing

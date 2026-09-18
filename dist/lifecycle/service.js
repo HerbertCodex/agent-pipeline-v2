@@ -1,8 +1,14 @@
+import { roleAgent } from '../adapters/routing.js';
+import { adaptiveConfig, architectureSchema, briefSpecSchema, expandBrief, requiresQa, selectPath, targetedQaContext } from './pathways.js';
+import { compactProposal } from './compact.js';
+import { focusedIntelligence } from '../knowledge/focus.js';
+import { pathsMentioned } from '../security/change-signals.js';
+import { specCosts } from '../adapters/invocations.js';
 import { mkdirSync, writeFileSync, renameSync, existsSync, lstatSync, readFileSync, rmSync, realpathSync } from 'node:fs';
 import { join, resolve, dirname, relative, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Pipeline, summarize } from '../engine/pipeline.js';
-import { validateConfig, taskSchema, DEFAULT_LIMITS } from '../domain/contracts.js';
+import { validateConfig, agentSchema, taskSchema, DEFAULT_LIMITS } from '../domain/contracts.js';
 import { hash, sha256 } from '../domain/hash.js';
 import { PipelineError, errorMessage, invariant } from '../domain/errors.js';
 import { Git, isInside } from '../execution/git.js';
@@ -195,13 +201,19 @@ export class Lifecycle {
         const baseSha = await git.sha(repo);
         await git.compatible(repo, baseSha);
         invariant(!isInside(repo, this.store.root) && !isInside(this.store.root, repo), 'STATE_PATH', 'State and project must be disjoint');
-        const config = validateConfig(options.config);
+        invariant(options.pathway === undefined || ['auto', 'standard', 'structural'].includes(options.pathway), 'ARGUMENT', 'Unknown execution pathway');
+        invariant(options.compactTask === undefined || options.proposal === undefined && options.pathway === undefined, 'ARGUMENT', 'Compact task cannot be combined with a proposal or pathway');
+        const parsedConfig = validateConfig(options.config);
+        const config = options.pathway || options.compactTask !== undefined ? adaptiveConfig(parsedConfig) : parsedConfig;
         const decisionLedger = await loadDecisionLedger(repo, baseSha);
         const r = { repo, baseSha, config, configHash: hash(config), revision: 1, request: options.request, decisionLedger, decisionLedgerHash: ledgerHash(decisionLedger), securityContext: neutralSecurityContext(), securityContextHash: hash(neutralSecurityContext()), content: null, contentHash: null, approval: null, status: 'draft', attempts: [], completedTaskIds: [], currentSha: baseSha, activeRunId: null, finalRunId: null, validationRunIds: [], qa: null, qaRepairs: 0, design: null, scopeAmendments: [], review: null, sessionStartedAt: null, activeMs: 0, delivery: null, publication: null, error: null };
+        if (config.workflow.planningMode === 'adaptive')
+            r.executionPath = options.compactTask !== undefined ? 'compact' : options.pathway === 'structural' ? 'structural' : 'standard';
+        const proposal = options.compactTask !== undefined ? compactProposal(options.compactTask, options.request, config) : options.proposal;
         const doc = this.store.createDocument('spec', r);
         const token = this.store.acquireDocument(doc.id);
         try {
-            await this.product(doc, options.proposal, options.signal);
+            await this.product(doc, proposal, options.signal);
             return doc;
         }
         catch (error) {
@@ -216,7 +228,9 @@ export class Lifecycle {
     requiresDesign(spec, projectType) {
         if (!['frontend', 'mobile', 'fullstack'].includes(projectType))
             return false;
-        if (spec.experience.uiImpact !== 'none')
+        if (spec.experience.uiImpact === 'minor')
+            return false;
+        if (spec.experience.uiImpact === 'major')
             return true;
         // Product's declared uiImpact is authoritative; this fallback only reads generic interface vocabulary, never framework file types.
         const text = [spec.title, spec.problem, ...spec.scope, ...spec.tasks.flatMap(t => [t.title, t.description])].join(' ');
@@ -394,8 +408,8 @@ export class Lifecycle {
             ],
         };
         const spec = r.content;
-        const proposal = await runRole({ store: this.store, documentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills,
-            agent: r.config.roles.product ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: designProposalSchema, context, ...(signal ? { signal } : {}),
+        const proposal = await runRole({ store: this.store, documentId: doc.id, budgetDocumentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills,
+            agent: roleAgent(r.config, 'design', r.content.minimumLane), passEnv: r.config.environment.passEnv, schema: designProposalSchema, context, ...(signal ? { signal } : {}),
             maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: value => { this.validateDesignMarkup(value); this.validateDesignScopes(value, spec); this.inlineDesignAssets(r.repo, r.baseSha, tracked, value); this.loadDesignStylesheets(r.repo, r.baseSha, tracked, value); return value; } });
         const root = resolve(dirname(r.repo), `${basename(r.repo)}-review`, doc.id, 'design');
         invariant(!isInside(r.repo, root) && !isInside(this.store.root, root), 'DESIGN_PATH', 'Design preview must be outside source and operational state');
@@ -426,22 +440,90 @@ export class Lifecycle {
     }
     async product(doc, proposal, signal) {
         const r = doc.data;
+        invariant(!r.planningStartedAt, 'RECOVERY', 'Recover interrupted planning before continuing');
+        const remaining = (r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs) - r.activeMs - (r.planningMs ?? 0);
+        invariant(remaining > 0, 'BUDGET', 'Spec planning and execution time budget exhausted');
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), remaining);
+        const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+        const started = performance.now();
+        r.planningStartedAt = Date.now();
+        this.save(doc, 'planning.started', { remainingMs: remaining });
+        try {
+            await this.buildProduct(doc, proposal, combined);
+        }
+        finally {
+            clearTimeout(timer);
+            r.planningMs = (r.planningMs ?? 0) + performance.now() - started;
+            r.planningStartedAt = null;
+            this.save(doc, 'planning.finished', { planningMs: r.planningMs });
+        }
+    }
+    async buildProduct(doc, proposal, signal) {
+        const r = doc.data;
         const repositoryIntelligence = await inspectRepository(r.repo, r.baseSha, `${r.request}
 ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, { ...(signal ? { signal } : {}), inventory: await this.inventoryAt(r.repo, r.baseSha, r.config.knowledge?.languages ?? [], signal) });
-        r.securityContext = assessSecurity({ text: r.request + '\n' + r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n'), projectType: r.config.skills.projectType, files: repositoryIntelligence.relevantFiles });
-        r.securityContextHash = hash(r.securityContext);
-        const securityContext = r.securityContext;
-        const value = proposal ?? await runRole({ store: this.store, documentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills, agent: r.config.roles.product ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: specSchema,
-            context: { request: r.request, previous: r.content, decisionLedger: r.decisionLedger, repositoryIntelligence, securityContext, executionCapabilities: executionCapabilities(r.config) }, ...(signal ? { signal } : {}),
-            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: spec => readySpec(validateTaskCapabilities(validateSpec(spec, false, r.decisionLedger, r.request, securityContext), r.config)) });
+        const securityContext = assessSecurity({ text: r.request, projectType: r.config.skills.projectType, files: pathsMentioned(r.request, [...repositoryIntelligence.relevantFiles, ...repositoryIntelligence.manifests, ...repositoryIntelligence.securityFiles]) });
+        const scopedSecurity = (spec) => assessSecurity({ text: r.request, projectType: r.config.skills.projectType, files: [...pathsMentioned(r.request, [...repositoryIntelligence.relevantFiles, ...repositoryIntelligence.manifests, ...repositoryIntelligence.securityFiles]), ...spec.tasks.flatMap(t => t.allowedPaths).filter(p => !/[*?]/.test(p))] });
+        if (r.executionPath) {
+            r.executionPath = selectPath(r.request, securityContext, r.executionPath);
+            if (r.decisionLedger.decisions.length > 30 && r.executionPath === 'standard')
+                r.executionPath = 'structural';
+            if (r.content)
+                r.contentHash = specHash(r);
+            this.save(doc, 'planning.path_selected', { path: r.executionPath });
+        }
+        const selectedContext = r.executionPath ? focusedIntelligence(repositoryIntelligence) : repositoryIntelligence;
+        const roleOptions = { store: this.store, documentId: doc.id, budgetDocumentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills,
+            agent: roleAgent(r.config, 'product', r.executionPath === 'structural' ? 'high' : securityContext.minimumLane), passEnv: r.config.environment.passEnv,
+            ...(signal ? { signal } : {}), maxRepairs: r.config.workflow.maxOutputRepairs ?? 1 };
+        if (r.executionPath === 'structural') {
+            const tracked = new Set(await this.trackedPaths(r.repo, r.baseSha, signal));
+            r.architecture = await runRole({ ...roleOptions, schema: architectureSchema,
+                context: { mode: 'architecture-decision', request: r.request, decisionLedger: r.decisionLedger, securityContext, repositoryIntelligence: selectedContext,
+                    instruction: 'Explore only relevant files. Explain the chosen boundaries, alternatives, tradeoffs and reconsideration triggers. Cite existing repository files inspected. Preserve confirmed decisions. This decision will be reviewed with the spec before implementation.' },
+                validate: value => { const missing = value.inspection.filter(i => !tracked.has(i.path)).map(i => i.path); invariant(!missing.length, 'SPEC_ARCHITECTURE', `Architecture evidence must reference tracked paths at the baseline. Invalid paths: ${missing.join(', ')}. Put repository-wide observations in the summary, not in inspection paths.`); return value; } });
+            if (r.content)
+                r.contentHash = specHash(r);
+            this.save(doc, 'architecture.proposed', { architecture: r.architecture });
+        }
+        const validateProposal = (spec) => readySpec(validateSpec(validateTaskCapabilities(spec, r.config), false, r.decisionLedger, r.request, scopedSecurity(spec)));
+        const context = { request: r.request, planningGuidance: { mode: r.executionPath ?? (securityContext.minimumLane === 'high' ? 'structural' : 'standard'), instruction: 'Produce the smallest complete spec. Group related code and tests in cohesive tasks. Explore relevant files and reuse candidates; avoid repository-wide rereads and speculative architecture.' },
+            architecture: r.architecture ?? null, previous: r.content, decisionLedger: r.decisionLedger,
+            projectSecurityContext: assessSecurity({ text: r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n'), projectType: r.config.skills.projectType }),
+            repositoryIntelligence: selectedContext, securityContext, executionCapabilities: executionCapabilities(r.config) };
+        let value;
+        if (proposal !== undefined)
+            value = specSchema.parse(proposal);
+        else if (r.executionPath === 'standard') {
+            const brief = await runRole({ ...roleOptions, schema: briefSpecSchema, context: { ...context, mode: 'product-brief' },
+                validate: v => { validateSpec(validateTaskCapabilities(expandBrief(v), r.config), false, r.decisionLedger, r.request, securityContext); return v; } });
+            value = expandBrief(brief);
+        }
+        else
+            value = await runRole({ ...roleOptions, schema: specSchema, context, validate: validateProposal });
+        if (r.executionPath && r.executionPath !== 'structural' && selectPath(r.request, scopedSecurity(value), r.executionPath) === 'structural') {
+            r.executionPath = 'structural';
+            if (r.content)
+                r.contentHash = specHash(r);
+            this.save(doc, 'planning.escalated', { reason: 'Proposed scope requires structural planning', fromProposal: true });
+            await this.buildProduct(doc, proposal === undefined ? undefined : value, signal);
+            return;
+        }
+        if (r.executionPath === 'structural')
+            value = { ...value, minimumLane: 'high', tasks: value.tasks.map(t => ({ ...t, minimumLane: 'high' })) };
         this.save(doc, 'product.repository_intelligence', { sha: repositoryIntelligence.sha, fileCount: repositoryIntelligence.fileCount, relevantFiles: repositoryIntelligence.relevantFiles, securityFiles: repositoryIntelligence.securityFiles, reuseCandidates: repositoryIntelligence.reuseCandidates.map(x => ({ name: x.name, kind: x.kind, path: x.path, line: x.line, score: x.score })) });
-        this.save(doc, 'security.assessed', { contextHash: r.securityContextHash, minimumLane: r.securityContext.minimumLane, requiresThreatModel: r.securityContext.requiresThreatModel, negativeTestsRequired: r.securityContext.negativeTestsRequired, topics: r.securityContext.topics.map(t => t.id), signals: r.securityContext.signals });
-        r.content = readySpec(validateTaskCapabilities(validateSpec(value, false, r.decisionLedger, r.request, r.securityContext), r.config));
+        const accepted = validateProposal(specSchema.parse(value));
+        r.securityContext = scopedSecurity(accepted);
+        r.securityContextHash = hash(r.securityContext);
+        r.content = accepted;
         r.contentHash = specHash(r);
+        this.save(doc, 'security.assessed', { contextHash: r.securityContextHash, minimumLane: r.securityContext.minimumLane, requiresThreatModel: r.securityContext.requiresThreatModel, negativeTestsRequired: r.securityContext.negativeTestsRequired, topics: r.securityContext.topics.map(t => t.id), signals: r.securityContext.signals });
         r.impactAdvice = r.content.questions.length === 0 ? await this.impactAdvice(r, r.content, signal) : [];
         r.sizeAdvice = r.content.tasks.filter(t => t.allowedPaths.length > TASK_PATHS_ADVICE)
             .map(t => ({ taskId: t.id, title: t.title, paths: t.allowedPaths.length }));
         r.design = null;
+        this.save(doc, 'product.checkpoint', { revision: r.revision, specHash: r.contentHash });
         if (this.requiresDesign(r.content, r.config.skills.projectType) && r.content.questions.length === 0)
             await this.prepareDesignProposal(doc, repositoryIntelligence, signal);
         r.error = null;
@@ -450,14 +532,72 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             questions: [...r.content.questions, ...(design?.proposal.questions ?? [])], content: r.content,
             design: design ? { hash: design.hash, directory: design.directory, indexPath: design.indexPath, summary: design.proposal.summary } : null });
     }
+    /** Resume the exact request; an accepted Product checkpoint survives a failed Design round. */
+    async resumePlanning(id, signal) {
+        const token = this.store.acquireDocument(id);
+        try {
+            const doc = this.get(id);
+            const r = doc.data;
+            invariant(r.status === 'draft' && !r.approval && r.attempts.length === 0, 'STATE', 'Only an unapproved draft can resume planning');
+            await new Git(signal).clean(r.repo, r.baseSha);
+            const checkpoint = this.store.documentEvents(id, ['product.checkpoint']).at(-1)?.data;
+            const proposal = checkpoint?.revision === r.revision && checkpoint.specHash === r.contentHash ? r.content : undefined;
+            try {
+                await this.product(doc, proposal, signal);
+            }
+            catch (error) {
+                r.error = { code: 'PRODUCT', message: errorMessage(error) };
+                this.save(doc, 'product.failed', { error: r.error });
+                throw error;
+            }
+            return doc;
+        }
+        finally {
+            this.store.releaseDocument(id, token);
+        }
+    }
+    /** Operational limits do not rewrite the approved scope, gates or functional hash. */
+    amendBudget(id, input, actor, note) {
+        reviewer(actor, note);
+        invariant(input !== null && typeof input === 'object' && !Array.isArray(input), 'ARGUMENT', 'Expected an operational amendment object');
+        const values = input;
+        invariant(Object.keys(values).length > 0 && Object.keys(values).every(k => ['maxSpecCostUsd', 'maxActiveMs', 'agent'].includes(k)), 'ARGUMENT', 'Only maxSpecCostUsd, maxActiveMs and agent tuning may be amended');
+        const token = this.store.acquireDocument(id);
+        try {
+            const doc = this.get(id);
+            const r = doc.data;
+            invariant(!['closed', 'rejected'].includes(r.status) && !r.sessionStartedAt && !r.planningStartedAt, 'STATE', 'Stop/recover the workflow before amending its limits');
+            const cost = Object.hasOwn(values, 'maxSpecCostUsd') ? values['maxSpecCostUsd'] : r.operational?.maxSpecCostUsd ?? r.config.workflow.maxSpecCostUsd ?? 25;
+            const time = Object.hasOwn(values, 'maxActiveMs') ? values['maxActiveMs'] : r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs;
+            invariant(typeof cost === 'number' && Number.isFinite(cost) && cost >= 0.01 && cost <= 10000, 'ARGUMENT', 'maxSpecCostUsd must be within 0.01..10000');
+            invariant(typeof time === 'number' && Number.isSafeInteger(time) && time >= 100 && time <= 14400000, 'ARGUMENT', 'maxActiveMs must be within 100..14400000');
+            let tuning = r.operational?.agent ?? null;
+            if (values['agent'] !== undefined) {
+                const v = values['agent'];
+                invariant(v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).every(k => ['model', 'effort', 'timeoutMs', 'maxTurns', 'maxBudgetUsd'].includes(k)), 'ARGUMENT', 'Agent tuning cannot change provider, command, credentials or tools');
+                agentSchema.parse({ ...r.config.agent, ...tuning, ...v });
+                tuning = { ...tuning, ...v };
+            }
+            r.operational = { maxSpecCostUsd: cost, maxActiveMs: time, agent: tuning, at: Date.now(), reviewer: actor.trim(), note: note.trim() };
+            this.save(doc, 'workflow.budget_amended', { amendment: r.operational });
+            return doc;
+        }
+        finally {
+            this.store.releaseDocument(id, token);
+        }
+    }
     async refine(id, request, proposal, signal) {
         const token = this.store.acquireDocument(id);
         try {
             const doc = this.get(id);
             const r = doc.data;
             invariant(r.attempts.length === 0 && !['closed', 'rejected'].includes(r.status), 'SPEC_IMMUTABLE', 'Execution has started; create a follow-up spec instead of rewriting approved history');
+            invariant(!r.planningStartedAt, 'RECOVERY', 'Recover interrupted planning before refining');
             invariant(request.trim().length > 0 && r.request.length + request.length + 30 <= 30000, 'REQUEST', 'Provide a bounded refinement');
             r.request += '\n\nOperator refinement:\n' + request;
+            if (r.executionPath === 'compact')
+                r.executionPath = 'standard';
+            r.architecture = null;
             r.revision++;
             r.approval = null;
             r.design = null;
@@ -487,6 +627,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             const doc = this.get(id);
             const r = doc.data;
             invariant(r.attempts.length === 0 && ['draft', 'approved'].includes(r.status), 'STATE', 'Spec no longer accepts Product approval');
+            invariant(!r.error, 'PRODUCT', 'Complete or resume the failed planning round before approving its proposal');
             invariant(r.content && approvalHash(r) === expectedHash, 'APPROVAL_HASH', 'Approve the exact spec/design proposal hash');
             validateTaskCapabilities(validateSpec(r.content, true, r.decisionLedger, r.request, r.securityContext), r.config);
             if (this.requiresDesign(r.content, r.config.skills.projectType))
@@ -536,7 +677,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         const securityRequirements = spec.security.requirements.filter(req => req.acceptanceIds.some(id => t.acceptanceIds.includes(id)));
         const securityThreats = spec.security.threatModel.threats.filter(threat => threat.acceptanceIds.some(id => t.acceptanceIds.includes(id)));
         const security = { context: r.securityContext, profile: spec.security.profile, requirements: securityRequirements, threats: securityThreats, assumptions: spec.security.assumptions };
-        const context = { problem: spec.problem, scope: spec.scope, outOfScope: spec.outOfScope, decisions: spec.decisions, projectDecisions, criteria: acceptance, experience: spec.experience, security, approvedDesign: design };
+        const context = { problem: spec.problem, scope: spec.scope, outOfScope: spec.outOfScope, decisions: spec.decisions, projectDecisions, criteria: acceptance, experience: spec.experience, security, approvedDesign: design, ...(r.architecture ? { architecture: r.architecture } : {}) };
         const description = t.description + '\n\nApproved Product context (do not expand scope):\n' + JSON.stringify(context);
         const maxContext = r.config.limits?.maxTaskContextChars ?? DEFAULT_LIMITS.maxTaskContextChars;
         invariant(description.length <= maxContext, 'TASK_CONTEXT', `Approved context is too large for a task (${description.length} > limits.maxTaskContextChars ${maxContext}); split the spec or raise the reviewed limit`);
@@ -579,16 +720,12 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         return taskSchema.parse({ id: 'SPEC-INTEGRATION', title: spec.title, description, acceptance: spec.acceptance.map(a => a.description), allowedPaths, allowedNewPaths, maxNewFiles: allowedNewPaths.length ? 8 : 0, reviewRequired: true, minimumLane: minimum });
     }
     /** What the providers declared for this spec so far. Declared values, never an invoice. */
-    declaredCostUsd(r) {
-        const runIds = new Set([...r.attempts.map(a => a.runId), ...r.validationRunIds]);
-        let total = 0;
-        for (const runId of runIds) {
-            try {
-                total += this.pipeline.store.get(runId).metrics.costUsd ?? 0;
-            }
-            catch { /* a pruned run no longer counts */ }
-        }
-        return Math.round(total * 100) / 100;
+    declaredCostUsd(r, documentId) {
+        return Math.round(specCosts(this.store, r, documentId).knownUsd * 100) / 100;
+    }
+    costSummary(id) {
+        const r = this.store.document(id, 'spec').data;
+        return { ...specCosts(this.store, r, id), ceilingUsd: r.operational?.maxSpecCostUsd ?? r.config.workflow.maxSpecCostUsd };
     }
     /**
      * The reviewed configuration may cap what a spec is allowed to spend. Reaching it stops the workflow with
@@ -597,10 +734,10 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
      */
     costExceeded(doc, options) {
         const r = doc.data;
-        const ceiling = r.config.workflow.maxSpecCostUsd ?? null;
+        const ceiling = r.operational?.maxSpecCostUsd ?? r.config.workflow.maxSpecCostUsd ?? null;
         if (ceiling === null || options.acceptCost)
             return false;
-        const spent = this.declaredCostUsd(r);
+        const spent = this.declaredCostUsd(r, doc.id);
         if (spent < ceiling)
             return false;
         r.status = 'blocked';
@@ -612,9 +749,13 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         const r = doc.data;
         invariant(r.activeRunId, 'STATE', 'No active run');
         const before = this.pipeline.store.get(r.activeRunId);
+        if (!before.specId) {
+            before.specId = doc.id;
+            this.store.save(before, 'run.spec_linked', { specId: doc.id });
+        }
         if (['failed', 'rejected'].includes(before.state))
             return before;
-        const run = await this.pipeline.execute(before.id, { signal, acceptCurrentCandidate: options.acceptCurrent ?? false });
+        const run = await this.pipeline.execute(before.id, { signal, acceptCurrentCandidate: options.acceptCurrent ?? false, acceptCost: options.acceptCost ?? false });
         this.save(doc, 'workflow.attempt_observed', { runId: run.id, state: run.state, candidateSha: run.candidateSha });
         return run;
     }
@@ -733,7 +874,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             const specTask = spec.tasks.find(t => t.id === amendment.taskId);
             const task = specTask ? this.makeTask(r, specTask) : this.aggregateTask(r, `Revalidate the retained QA repair candidate after explicit execution-scope amendment ${amendment.id}.`);
             const validationConfig = { ...r.config, maxRepairAttempts: 0 };
-            const validation = await this.pipeline.createValidation({ repo: r.repo, baseRef: failed.baseSha, config: validationConfig, task }, amendment.candidateSha);
+            const validation = await this.pipeline.createValidation({ repo: r.repo, baseRef: failed.baseSha, specId: doc.id, config: validationConfig, task }, amendment.candidateSha);
             const previousAttempt = r.attempts.find(a => a.runId === amendment.sourceRunId);
             r.attempts.push({ taskId: amendment.taskId, runId: validation.id, kind: previousAttempt.kind });
             r.activeRunId = validation.id;
@@ -765,7 +906,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             if (['closed', 'delivered'].includes(r.status))
                 return doc;
             invariant(r.sessionStartedAt === null, 'RECOVERY', 'Recover the interrupted workflow explicitly first');
-            const remaining = r.config.workflow.maxActiveMs - r.activeMs;
+            const remaining = (r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs) - r.activeMs - (r.planningMs ?? 0);
             invariant(remaining > 0, 'BUDGET', 'Spec active-time budget exhausted');
             await new Git().clean(r.repo, r.baseSha);
             const controller = new AbortController();
@@ -795,7 +936,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                 if (!r.activeRunId && this.costExceeded(doc, options))
                     return doc;
                 if (!r.activeRunId) {
-                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, config: r.config, task: this.makeTask(r, t) });
+                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, specId: doc.id, config: r.config, task: this.makeTask(r, t) });
                     r.attempts.push({ taskId: t.id, runId: run.id, kind: 'task' });
                     r.activeRunId = run.id;
                     this.save(doc, 'workflow.task_started', { taskId: t.id, runId: run.id, baseSha: r.currentSha });
@@ -890,7 +1031,8 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                     r.review = null;
                     this.save(doc, 'workflow.review_superseded', { previousCandidateSha: superseded.candidateSha, candidateSha: final.candidateSha });
                 }
-                const needsQa = r.config.workflow.qaLanes.includes(final.risk.lane);
+                const needsQa = requiresQa(r, final, spec);
+                this.save(doc, 'qa.routing', { path: r.executionPath ?? 'legacy', lane: final.risk.lane, required: needsQa });
                 if (needsQa && (!r.qa || r.qa.evidenceHash !== evidenceHash || r.qa.report.candidateSha !== final.candidateSha || r.qa.specHash !== r.contentHash)) {
                     r.qa = null;
                     if (options.manualQa) {
@@ -904,7 +1046,12 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                     invariant(Buffer.byteLength(diff) <= maxDiff, 'QA_CONTEXT', `QA diff exceeds limits.maxQaDiffBytes (${maxDiff}); use an explicit external review, never a truncated review`);
                     const inventoryDelta = await this.inventoryDelta(r, final.candidateSha, signal);
                     this.save(doc, 'qa.inventory_delta', { added: inventoryDelta.added.length, removed: inventoryDelta.removed.length, possibleDuplicates: inventoryDelta.possibleDuplicates });
-                    const raw = await runRole({ store: this.store, documentId: id, repo: r.repo, sha: final.candidateSha, role: 'qa', skills: r.config.skills, agent: r.config.roles.qa ?? r.config.agent, passEnv: r.config.environment.passEnv, schema: qaSchema, context: { diff, spec, approvedAmendments: this.approvedAmendments(r), taskSummaries: this.taskSummaries(r), decisionLedger: r.decisionLedger, securityContext: r.securityContext, approvedDesign: this.qaDesignContext(r), baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] }, signal,
+                    if (this.costExceeded(doc, options))
+                        return doc;
+                    const fullContext = { diff, spec, architecture: r.architecture ?? null, approvedAmendments: this.approvedAmendments(r), taskSummaries: this.taskSummaries(r), decisionLedger: r.decisionLedger, securityContext: r.securityContext, approvedDesign: this.qaDesignContext(r), baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] };
+                    const context = r.executionPath && r.executionPath !== 'structural' && final.risk.lane !== 'high' ? targetedQaContext(fullContext) : fullContext;
+                    this.save(doc, 'qa.context_selected', { mode: context === fullContext ? 'full' : 'targeted', bytes: Buffer.byteLength(JSON.stringify(context)), fullBytes: Buffer.byteLength(JSON.stringify(fullContext)), completeDiff: true });
+                    const raw = await runRole({ store: this.store, documentId: id, budgetDocumentId: id, acceptCost: options.acceptCost ?? false, repo: r.repo, sha: final.candidateSha, role: 'qa', skills: r.config.skills, agent: roleAgent(r.config, 'qa', final.risk?.lane ?? spec.minimumLane), passEnv: r.config.environment.passEnv, schema: qaSchema, context, signal,
                         maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: report => validateQa(report, spec, final.candidateSha, r.decisionLedger) });
                     r.qa = { report: raw, specHash: r.contentHash, evidenceHash, at: Date.now(), source: 'agent' };
                     this.save(doc, 'qa.completed', { qa: r.qa });
@@ -916,7 +1063,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                         this.save(doc, 'qa.repair_budget_exhausted');
                         return doc;
                     }
-                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, config: r.config, task: this.qaRepairTask(r) });
+                    const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, specId: doc.id, config: r.config, task: this.qaRepairTask(r) });
                     r.qaRepairs++;
                     r.attempts.push({ taskId: `QA-REPAIR-${r.qaRepairs}`, runId: run.id, kind: 'qa-repair' });
                     r.activeRunId = run.id;
@@ -1041,12 +1188,12 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         this.save(doc, 'workflow.review_workspace_ready', { review: r.review });
     }
     async reviewable(r) {
-        this.approved(r);
+        const spec = this.approved(r);
         invariant(r.finalRunId, 'STATE', 'No integrated candidate');
         const final = this.pipeline.store.get(r.finalRunId);
         invariant(final.candidateSha === r.currentSha, 'CANDIDATE', 'Final candidate is stale');
         const evidenceHash = await this.pipeline.assertValidated(final.id);
-        if (r.config.workflow.qaLanes.includes(final.risk.lane))
+        if (requiresQa(r, final, spec))
             invariant(r.qa && r.qa.specHash === r.contentHash && r.qa.evidenceHash === evidenceHash && r.qa.report.candidateSha === final.candidateSha && r.qa.report.verdict === 'pass', 'QA_REQUIRED', 'A passing QA assessment must cover the exact candidate and evidence');
         return final;
     }
@@ -1132,7 +1279,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             this.approved(r);
             invariant(r.finalRunId && !['closed', 'rejected'].includes(r.status), 'STATE', 'Nothing to revalidate');
             invariant(r.sessionStartedAt === null, 'RECOVERY', 'Recover the previous workflow session first');
-            const remaining = r.config.workflow.maxActiveMs - r.activeMs;
+            const remaining = (r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs) - r.activeMs - (r.planningMs ?? 0);
             invariant(remaining > 0, 'BUDGET', 'Spec active budget exhausted');
             const controller = new AbortController();
             timer = setTimeout(() => controller.abort(), remaining);
@@ -1195,7 +1342,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                 const specTask = this.approved(r).tasks.find(t => t.id === attempt.taskId);
                 const rebuilt = attempt.kind === 'qa-repair' && r.qa ? this.qaRepairTask(r) : specTask ? this.makeTask(r, specTask) : null;
                 const task = rebuilt ? this.withPreviousAttempt(r, rebuilt, failed) : failed.task;
-                const replacement = await this.pipeline.create({ repo: r.repo, baseRef: failed.baseSha, config: failed.config, task });
+                const replacement = await this.pipeline.create({ repo: r.repo, baseRef: failed.baseSha, specId: doc.id, config: failed.config, task });
                 r.attempts.push({ ...attempt, runId: replacement.id });
                 r.activeRunId = replacement.id;
             }
@@ -1216,6 +1363,10 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             const r = doc.data;
             if (r.activeRunId)
                 this.pipeline.recover(r.activeRunId, confirmed);
+            if (r.planningStartedAt) {
+                r.planningMs = (r.planningMs ?? 0) + Math.max(0, Date.now() - r.planningStartedAt);
+                r.planningStartedAt = null;
+            }
             if (r.sessionStartedAt !== null) {
                 r.activeMs += Math.max(0, Date.now() - r.sessionStartedAt);
                 r.sessionStartedAt = null;
@@ -1342,7 +1493,9 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         // A round that failed leaves a spec with nothing to approve: relaunching Product is the way out,
         // not an approval of a hash that does not exist.
         if (!r.approval && !r.content)
-            next = `apv2 spec refine ${doc.id} --request "..."   (the last Product round did not produce a spec${r.error ? `: ${r.error.code}` : ''}; relaunch it, or apv2 spec reject ${doc.id} --note TEXT to abandon)`;
+            next = `apv2 spec plan-resume ${doc.id}   (resume retained planning checkpoints; adjust limits first with spec budget if needed)`;
+        else if (!r.approval && r.error)
+            next = `apv2 spec plan-resume ${doc.id}   (complete the retained Product/Design proposal)`;
         else if (!r.approval)
             next = (r.content?.questions.length || r.design?.proposal.questions.length) ? `apv2 spec refine ${doc.id} --request "answers to the displayed questions"` : `apv2 spec approve ${doc.id} --hash ${approvalHash(r) ?? 'NO_VALID_PROPOSAL'} --approve`;
         else if (r.status === 'awaiting_review')
@@ -1370,7 +1523,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         else if (r.error?.code === 'QA_REJECTED')
             next = `Read the QA findings above, then create a follow-up spec: the automatic repair budget is spent (apv2 spec draft --repo ${r.repo} --request "...").`;
         else if (r.error?.code === 'COST_BUDGET')
-            next = `apv2 spec run ${doc.id} --accept-cost   (authorizes this spec to continue past its reviewed cost ceiling)`;
+            next = `apv2 spec budget ${doc.id} --file LIMITS_JSON --approve --note TEXT   (set an explicit remaining-work allowance, then resume; --accept-cost is an unbounded override)`;
         else if (stopped)
             next = `The agent stopped before reporting; its work is kept in ${stopped.workspace}. Inspect it, then apv2 spec run ${doc.id} --accept-current to snapshot and validate it, or apv2 spec retry ${doc.id} --confirm to discard it and start the task again.`;
         else if (r.error?.code === 'CANCELLED' || r.error?.code === 'LOCKED')
@@ -1388,7 +1541,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
             next = `Resolve ${r.error.code} before running again: ${r.error.message.slice(0, 200)}`;
         else
             next = `apv2 spec run ${doc.id}`;
-        return { id: doc.id, revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash: r.contentHash, security: { contextHash: r.securityContextHash ?? null, minimumLane: r.securityContext?.minimumLane ?? null, requiresThreatModel: r.securityContext?.requiresThreatModel ?? null, topics: r.securityContext?.topics.map(x => x.id) ?? [], requirements: r.content?.security?.requirements.map(x => x.id) ?? [] }, design: r.design ? { hash: r.design.hash, directory: r.design.directory, indexPath: r.design.indexPath, summary: r.design.proposal.summary, questions: r.design.proposal.questions } : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], sizeAdvice: r.sizeAdvice ?? [], stoppedWork: stopped ? { runId: stopped.id, workspace: stopped.workspace } : null, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
+        return { id: doc.id, executionPath: r.executionPath ?? 'legacy', architecture: r.architecture ?? null, maxActiveMs: r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs, cost: this.costSummary(doc.id), planningMs: Math.round(r.planningMs ?? 0), revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash: r.contentHash, security: { contextHash: r.securityContextHash ?? null, minimumLane: r.securityContext?.minimumLane ?? null, requiresThreatModel: r.securityContext?.requiresThreatModel ?? null, topics: r.securityContext?.topics.map(x => x.id) ?? [], requirements: r.content?.security?.requirements.map(x => x.id) ?? [] }, design: r.design ? { hash: r.design.hash, directory: r.design.directory, indexPath: r.design.indexPath, summary: r.design.proposal.summary, questions: r.design.proposal.questions } : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], sizeAdvice: r.sizeAdvice ?? [], stoppedWork: stopped ? { runId: stopped.id, workspace: stopped.workspace } : null, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
     }
 }
 //# sourceMappingURL=service.js.map

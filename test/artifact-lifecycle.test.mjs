@@ -146,8 +146,8 @@ test('the next action of a blocked spec lifts its blocker instead of repeating i
   Object.assign(empty.data, { content: null, approval: null, error: { code: 'PRODUCT', message: 'product timed_out after 900224 ms' } });
   f.life.store.saveDocument(empty, 'test.product_failed', {});
   const failedRound = f.life.summary(f.life.get(d.id)).nextAction;
-  assert.match(failedRound, /spec refine .* --request/);
-  assert.match(failedRound, /did not produce a spec: PRODUCT/);
+  assert.match(failedRound, /spec plan-resume /);
+  assert.match(failedRound, /retained planning checkpoints/);
   assert.doesNotMatch(failedRound, /NO_VALID_PROPOSAL/);
   Object.assign(f.life.get(d.id).data, { content, approval, error: null });
   const restored = f.life.get(d.id); Object.assign(restored.data, { content, approval, error: null }); f.life.store.saveDocument(restored, 'test.restore', {});
@@ -712,16 +712,15 @@ test('a spec stops at its reviewed cost ceiling until the operator authorizes th
   // The fixture provider declares no cost, so spending is simulated on the first attempt's run.
   d = await f.life.run(d.id);
   const first = f.life.pipeline.store.get(d.data.attempts[0].runId);
-  first.metrics.costUsd = 1.4;
-  f.life.pipeline.store.save(first, 'test.cost', {});
-  assert.equal(f.life.declaredCostUsd(f.life.get(d.id).data), 1.4);
+  f.life.pipeline.store.event(first.id, 'invocation.finished', { invocationId: 'fixture-cost', usage: { costUsd: 1.4 } });
+  assert.equal(f.life.declaredCostUsd(f.life.get(d.id).data, d.id), 1.4);
 
   const blocked = f.life.get(d.id);
   blocked.data.status = 'approved'; blocked.data.completedTaskIds = []; blocked.data.activeRunId = null; blocked.data.finalRunId = null; blocked.data.qa = null;
   f.life.store.saveDocument(blocked, 'test.reset', {});
   d = await f.life.run(d.id);
   assert.equal(d.data.error?.code, 'COST_BUDGET', JSON.stringify(d.data.error));
-  assert.match(f.life.summary(f.life.get(d.id)).nextAction, /--accept-cost/);
+  assert.match(f.life.summary(f.life.get(d.id)).nextAction, /spec budget/);
 
   d = await f.life.run(d.id, { acceptCost: true });
   assert.notEqual(d.data.error?.code, 'COST_BUDGET', 'the authorized overrun runs the spec to its end');
@@ -748,6 +747,25 @@ test('shipped defaults are nets, and a cutting configuration is flagged', async 
     agent: { type: 'claude', maxTurns: 32, maxBudgetUsd: 5, timeoutMs: 900000 },
     workflow: { qaLanes: ['standard'], maxSpecCostUsd: null } });
   const flagged = configAdvice(cutting).map(a => a.setting);
-  assert.deepEqual(flagged.sort(), ['agent.maxBudgetUsd', 'agent.maxTurns', 'agent.timeoutMs', 'maxRepairAttempts', 'maxRunMs', 'workflow.maxSpecCostUsd'].sort());
+  assert.deepEqual(flagged.sort(), ['maxRunMs', 'workflow.maxSpecCostUsd'].sort());
   assert.ok(configAdvice(cutting).every(a => a.why.length > 40), 'each advice says why it stops real work');
+});
+
+
+test('provider stop diagnostics preserve calibration metrics and bound the displayed message', async () => {
+  const { providerUsage, usageSentence } = await import('../dist/adapters/usage.js');
+  const envelope = { type: 'result', subtype: 'success', is_error: true,
+    result: "You've hit your session limit\nresets 11:50am", total_cost_usd: 0.78,
+    modelUsage: { 'claude-sonnet-5': {} },
+    usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 80, cache_creation_input_tokens: 10 } };
+  const stopped = providerUsage('claude', JSON.stringify(envelope));
+  assert.equal(stopped.stopReason, 'provider-stopped');
+  assert.deepEqual(stopped.models, ['claude-sonnet-5']);
+  assert.deepEqual(stopped.tokens, { input: 120, output: 30, cacheRead: 80, cacheWrite: 10 });
+  assert.equal(stopped.costUsd, 0.78);
+  assert.equal(stopped.providerMessage, "You've hit your session limit resets 11:50am");
+  assert.match(usageSentence(stopped), /session limit resets/);
+  const long = providerUsage('claude', JSON.stringify({ ...envelope, result: 'x'.repeat(400) }));
+  assert.equal(long.providerMessage.length, 300);
+  assert.equal(providerUsage('claude', JSON.stringify({ ...envelope, is_error: false })).providerMessage, null);
 });

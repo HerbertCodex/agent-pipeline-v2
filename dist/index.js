@@ -13,4 +13,8 @@ export { bootstrapProposalSchema, planBootstrap, refineBootstrap, applyBootstrap
 export { decisionSchema, decisionLedgerSchema, decisionCoverageSchema, semanticReviewSchema, validateDecisionLedger, loadDecisionLedger, ledgerHash, confirmedDecisions, ambiguousDecisions, ambiguousApprovalFragments } from './lifecycle/decisions.js';
 export { inspectRepository } from './knowledge/repository.js';
 export { owaspTopicIds, owaspCatalog, securityProfileSchema, securityContextSchema, assessSecurity, neutralSecurityContext, topicById } from './security/owasp.js';
+export { compactProposal } from './lifecycle/compact.js';
+export { roleAgent } from './adapters/routing.js';
+export { invocationTotals } from './adapters/invocations.js';
+export { evaluationReport } from './evaluation/report.js';
 //# sourceMappingURL=index.js.map

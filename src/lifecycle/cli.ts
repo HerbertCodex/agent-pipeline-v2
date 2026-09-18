@@ -1,3 +1,4 @@
+import { validateConfig, agentSchema } from '../domain/contracts.js';
 import { providerProfile } from '../adapters/providers.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -23,8 +24,11 @@ Full lifecycle (local trusted projects; explicit approval boundaries):
   apv2 onboard apply PLAN_ID --hash HASH --approve [--reviewer NAME] [--note TEXT] [--commit]
   apv2 onboard recover PLAN_ID --confirm-stopped
   apv2 doctor --repo PATH [--config FILE] [--execute]
-  apv2 spec draft --repo PATH --request TEXT [--file SPEC_JSON] [--config FILE]
+  apv2 spec compact --repo PATH --request TEXT --file TASK_JSON [--config FILE]
+  apv2 spec draft --repo PATH --request TEXT [--pathway auto|standard|structural] [--file SPEC_JSON] [--config FILE]
   apv2 ask --repo PATH --request TEXT       Alias for spec draft, not implicit execution
+  apv2 spec plan-resume SPEC_ID            Resume retained Product/Design checkpoints
+  apv2 spec budget SPEC_ID --file LIMITS_JSON --approve --note TEXT
   apv2 spec refine SPEC_ID --request TEXT [--file SPEC_JSON]
   apv2 spec show SPEC_ID [--output SPEC_MD]  Full content + next action
   apv2 spec list [--active] | apv2 spec events SPEC_ID | apv2 spec diff SPEC_ID
@@ -57,6 +61,7 @@ Maintenance:
                                            Dry-run by default; removes abandoned or terminal
                                            lifecycle documents, their runs and their workspaces
 
+--model MODEL and --effort low|medium|high select native bootstrap/onboard execution.
 --request-file FILE may replace --request. --quiet suppresses progress on stderr.
 Product and QA use read-only role invocations with Codex, Claude Code or a compatible command worker.
 No operator approval is inferred from a model response. No deploy command.
@@ -73,6 +78,7 @@ export async function lifecycleCommand(command: string, positionals: string[], v
         return text;
     } return required('request'); };
     const repo = resolve(str('repo') ?? '.');
+    const chosenProvider = (name: string) => agentSchema.parse({ ...providerProfile(name), ...(str('model') ? { model: str('model') } : {}), ...(str('effort') ? { effort: str('effort') } : {}) });
     const config = (): unknown => load(str('config') ?? join(repo, 'pipeline.v2.json'));
     const approval = async (targetRepo: string): Promise<{ reviewer:string; note:string }> => {
         invariant(values['approve'] === true || str('reviewer') !== undefined || str('note') !== undefined, 'CONFIRM', 'Use --approve to record explicit operator approval');
@@ -93,7 +99,7 @@ export async function lifecycleCommand(command: string, positionals: string[], v
                 invariant(str('provider'), 'ARGUMENT', 'Bootstrap requires --provider codex|claude');
                 const reviewMode = (str('review-mode') ?? 'team') as 'solo' | 'team' | 'regulated';
                 invariant(['solo','team','regulated'].includes(reviewMode), 'ARGUMENT', 'Choose --review-mode solo|team|regulated');
-                const doc = await planBootstrap(life.store, repo, textRequest(), str('provider')!, signal, reviewMode);
+                const doc = await planBootstrap(life.store, repo, textRequest(), chosenProvider(str('provider')!), signal, reviewMode);
                 console.log(JSON.stringify({ id: doc.id, ...doc.data, nextAction: doc.data.proposal.questions.length || doc.data.semanticReview.verdict !== 'pass' ? `Refine bootstrap ${doc.id}; only bootstrap blockers and semantic conflicts prevent apply` : `apv2 bootstrap apply ${doc.id} --hash ${doc.data.hash} --approve --commit` }, null, 2));
                 process.exitCode = doc.data.proposal.questions.length || doc.data.semanticReview.verdict !== 'pass' ? 2 : 0;
                 return true;
@@ -127,7 +133,8 @@ export async function lifecycleCommand(command: string, positionals: string[], v
             if (!sub) {
                 invariant(!(str('provider') && str('agent')), 'ARGUMENT', 'Choose --provider or --agent, not both');
                 invariant(!(str('provider') && str('config')), 'ARGUMENT', 'With --config select providers in that reviewed file');
-                const chosen = str('provider') ? providerProfile(str('provider')!) : str('agent') ? load(str('agent')!) : undefined;
+                invariant(!(str('model') || str('effort')) || str('provider'), 'ARGUMENT', '--model/--effort require --provider; with --config tune its role definitions');
+                const chosen = str('provider') ? chosenProvider(str('provider')!) : str('agent') ? load(str('agent')!) : undefined;
                 const reviewMode = str('review-mode');
                 invariant(!reviewMode || ['solo','team','regulated'].includes(reviewMode), 'ARGUMENT', 'Choose --review-mode solo|team|regulated');
                 doc = await planInstallation(life.store, repo, { ...(str('config') ? { config: config() } : {}), ...(chosen ? { agent: chosen } : {}), ...(reviewMode ? { reviewMode: reviewMode as 'solo'|'team'|'regulated' } : {}), assist: values['assist'] === true, signal });
@@ -205,9 +212,25 @@ export async function lifecycleCommand(command: string, positionals: string[], v
         const specId = (): string => { invariant(id, 'ARGUMENT', 'Missing SPEC_ID'); return id; };
         let doc: Document<SpecRecord>;
         switch (sub) {
-            case 'draft':
-                doc = await life.draft({ repo, config: config(), request: textRequest(), ...(str('file') ? { proposal: load(str('file')!) } : {}), signal });
+            case 'compact': {
+                const conf = validateConfig(config()); const request = textRequest();
+                doc = await life.draft({ repo, config: conf, request, compactTask: load(required('file')), signal });
+                life.store.documentEvent(doc.id, 'planning.compact', { productCalls: 0 });
                 break;
+            }
+            case 'draft':
+                invariant(!str('pathway') || ['auto', 'standard', 'structural'].includes(str('pathway')!), 'ARGUMENT', 'Choose --pathway auto|standard|structural');
+                doc = await life.draft({ repo, config: config(), request: textRequest(), ...(str('pathway') ? { pathway: str('pathway') as 'auto' | 'standard' | 'structural' } : {}), ...(str('file') ? { proposal: load(str('file')!) } : {}), signal });
+                break;
+            case 'plan-resume':
+                doc = await life.resumePlanning(specId(), signal);
+                break;
+            case 'budget': {
+                const current = life.get(specId()); const a = await approval(current.data.repo);
+                invariant(str('note'), 'REVIEW', 'Explain the budget amendment with --note');
+                doc = life.amendBudget(specId(), load(required('file')), a.reviewer, a.note);
+                break;
+            }
             case 'refine':
                 doc = await life.refine(specId(), textRequest(), str('file') ? load(str('file')!) : undefined, signal);
                 break;

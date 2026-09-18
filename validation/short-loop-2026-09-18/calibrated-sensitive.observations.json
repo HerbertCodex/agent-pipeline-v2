@@ -1,0 +1,16 @@
+[
+  {
+    "caseId": "borrower-guard",
+    "route": "structural",
+    "status": "awaiting_review",
+    "architectureDecisions": 1,
+    "qaVerdict": "pass",
+    "feedbackChecks": [
+      {
+        "gate": "acceptance",
+        "status": "passed"
+      }
+    ],
+    "regression": null
+  }
+]

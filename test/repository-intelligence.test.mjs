@@ -3,7 +3,21 @@ import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { inspectRepository } from '../dist/knowledge/repository.js';
+import { focusedIntelligence } from '../dist/knowledge/focus.js';
 import { fixture, git } from './lifecycle-helpers.mjs';
+
+test('selected context reports omitted declarations and retains task files and referencing tests', () => {
+  const declarations = Array.from({length:200},(_,i)=>({name:`operation${i}`,path:`src/unit${i}.mjs`,line:1,kind:'function'}));
+  const source = {sha:'a'.repeat(40),fileCount:200,manifests:[],architectureFiles:[],securityFiles:[],relevantFiles:['src/unit0.mjs'],reuseCandidates:[],
+    inventory:{sha:'a'.repeat(40),languages:[],unitExtensions:[],exported:declarations,units:declarations.map(d=>d.path),omitted:{exported:4,units:3,internalSymbols:0,testFiles:0},truncated:false,note:'full'},
+    referencingTests:[{path:'test/unit199.test.mjs',tokens:['unit199'],outsideScope:true}],note:'full'};
+  const selected = focusedIntelligence(source,['src/unit199.mjs']);
+  assert.deepEqual(selected.inventory.exported.map(d=>d.name),['operation0','operation199']);
+  assert.equal(selected.inventory.omitted.exported,202);
+  assert.deepEqual(selected.referencingTests,source.referencingTests);
+  assert.ok(JSON.stringify(selected).length < JSON.stringify(source).length);
+  assert.equal(source.inventory.exported.length,200);
+});
 
 test('repository intelligence surfaces reuse candidates and follows the current immutable SHA', async (t) => {
   const f = fixture(t);

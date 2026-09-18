@@ -1,0 +1,15 @@
+{
+  "profile": {
+    "maxTurns": 32,
+    "maxBudgetUsd": 5
+  },
+  "defaults": {
+    "maxTurns": 200,
+    "maxBudgetUsd": null
+  },
+  "negatedRequest": {
+    "dependencyChange": true,
+    "ciCd": true
+  },
+  "fractionalSpecBudgetRejected": true
+}

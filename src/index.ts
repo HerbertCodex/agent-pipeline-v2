@@ -24,3 +24,8 @@ export type { RepositoryIntelligence, RepositorySymbol } from './knowledge/repos
 
 export { owaspTopicIds, owaspCatalog, securityProfileSchema, securityContextSchema, assessSecurity, neutralSecurityContext, topicById } from './security/owasp.js';
 export type { OwaspTopicId, OwaspTopic, SecurityProfile, SecurityContext } from './security/owasp.js';
+
+export { compactProposal } from './lifecycle/compact.js';
+export { roleAgent } from './adapters/routing.js';
+export { invocationTotals } from './adapters/invocations.js';
+export { evaluationReport } from './evaluation/report.js';

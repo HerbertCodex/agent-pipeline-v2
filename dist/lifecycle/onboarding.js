@@ -88,9 +88,9 @@ export function proposeConfiguration(inventory, agent = defaultAgent()) {
             gates.push({ id: 'test', command: [runner, 'run', test], lanes: ['standard', 'high'], resources: ['project-checks'] });
         else
             questions.push('Define a real non-interactive test command; no placeholder or watch command is accepted automatically.');
-        for (const id of ['check', 'typecheck', 'lint'])
-            if (Object.hasOwn(inventory.scripts, id))
-                gates.push({ id, command: [runner, 'run', id], lanes: ['standard', 'high'], resources: ['project-checks'] });
+        for (const id of ['check', 'typecheck', 'lint', 'lint:css', 'lint:styles', 'build', 'test:integration', 'test:e2e'])
+            if (Object.hasOwn(inventory.scripts, id) && !/--watch\b|\bwatch\b|no test specified/i.test(inventory.scripts[id]))
+                gates.push({ id: id.replaceAll(':', '-'), command: [runner, 'run', id], lanes: ['standard', 'high'], resources: ['project-checks'] });
         for (const script of inventory.securityScripts ?? []) {
             const gateId = `security-${script.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')}`;
             if (!gates.some((gate) => gate.id === gateId))
@@ -100,6 +100,11 @@ export function proposeConfiguration(inventory, agent = defaultAgent()) {
             notes.push(`Discovered existing project-owned security checks: ${(inventory.securityScripts ?? []).join(', ')}. They are gates, not a certification claim.`);
         else
             notes.push('No project-owned security scanner command was discovered. Onboarding does not invent npm audit/SAST/secret-scanner commands; configure reviewed tools explicitly when required.');
+        if (!Object.hasOwn(inventory.scripts, 'lint'))
+            notes.push('No lint script found: add stack-appropriate static checks to the project when useful.');
+        notes.push('For new global component CSS, prefer BEM unless a confirmed project convention takes precedence. Preserve scoped styles, CSS Modules and utility frameworks. A lint:css or lint:styles gate checks naming only when the project configures that rule; script discovery alone is not BEM verification.');
+        if (inventory.projectType === 'frontend' && !Object.hasOwn(inventory.scripts, 'test:e2e'))
+            notes.push('No browser check found: configure a real browser smoke test for critical UI journeys; unit tests do not prove rendering or interactions.');
         notes.push('Detected scripts share conservative resource locks. Remove them only after verifying they do not mutate shared outputs.');
         notes.push('Install lifecycle scripts are disabled; explicitly review any required generated client/build step.');
     }
@@ -109,7 +114,7 @@ export function proposeConfiguration(inventory, agent = defaultAgent()) {
     }
     else
         questions.push('Unsupported automatic profile: supply --config with reviewed setup and real test commands, or use --assist.');
-    const config = validateConfig({ schemaVersion: 1, executionMode: 'local-trusted', environment: { id: `local-${process.platform}-${process.arch}-node-${process.versions.node}` }, agent, skills: { enabled: [...skillNames], projectType: inventory.projectType }, setup, gates });
+    const config = validateConfig({ schemaVersion: 1, executionMode: 'local-trusted', environment: { id: `local-${process.platform}-${process.arch}-node-${process.versions.node}` }, agent, workflow: { planningMode: 'adaptive' }, skills: { enabled: [...skillNames], projectType: inventory.projectType }, setup, gates });
     return { config, questions, notes };
 }
 const assistantGuide = `# Agent Pipeline V2 assistant

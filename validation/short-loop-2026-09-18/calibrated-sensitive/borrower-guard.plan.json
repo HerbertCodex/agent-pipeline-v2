@@ -1,0 +1,352 @@
+{
+  "spec": {
+    "title": "Fix canBorrow authorization guard",
+    "problem": "src/auth/borrower.mjs currently exports `canBorrow = user => !!user`, a truthiness check that grants borrowing rights to any truthy value, including arrays, plain objects with no role, and users with non-borrower roles (e.g. bookseller, admin) or invalid ids (zero, negative, fractional, string, NaN, Infinity, or beyond Number.MAX_SAFE_INTEGER). This is an authorization bypass: it does not enforce the intended rule that only a user object with role exactly 'borrower' and a positive safe-integer id may borrow. The fixed oracle test/acceptance.mjs fully specifies the required behavior and must remain unchanged.",
+    "scope": [
+      "Rewrite canBorrow(user) in src/auth/borrower.mjs as a pure, deny-by-default predicate: return true only when user is a non-null, non-array object with user.role === 'borrower' (exact string match) and Number.isSafeInteger(user.id) && user.id > 0.",
+      "Reject null, undefined, arrays, primitives (including strings), and plain objects missing or mismatching role/id, returning false for all of them.",
+      "Reject non-borrower roles (e.g. bookseller, admin) even when id is otherwise valid.",
+      "Reject invalid ids: 0, negative, fractional, string-typed, NaN, Infinity, and values exceeding Number.MAX_SAFE_INTEGER, even when role is 'borrower'.",
+      "Do not mutate the input object; the function must accept a frozen (Object.freeze) valid user and still return true.",
+      "Optionally add supplementary regression tests in test/regression.mjs covering additional negative/adversarial cases beyond the fixed oracle (e.g. negative ids, extra unexpected fields, role as array/object) without altering test/acceptance.mjs."
+    ],
+    "outOfScope": [
+      "Implementing login, sessions, or any authentication scheme.",
+      "Adding a database, persistence layer, or role-permission mapping abstraction.",
+      "Modifying test/acceptance.mjs (must remain unchanged as the fixed oracle).",
+      "Adding dependencies, lockfiles, or infrastructure/config changes.",
+      "Coercing or normalizing id/role values (e.g. accepting numeric strings or case-insensitive role matching).",
+      "Generalizing to support future roles beyond borrower/bookseller/admin."
+    ],
+    "acceptance": [
+      {
+        "id": "AC1",
+        "description": "canBorrow returns true for a plain object {id:1, role:'borrower'} and for an equivalent frozen (Object.freeze) object, and the input is not mutated.",
+        "verification": "node --test executes test/acceptance.mjs assertions for {id:1,role:'borrower'} and the frozen {id:2,role:'borrower'} case; both equal true."
+      },
+      {
+        "id": "AC2",
+        "description": "canBorrow returns false for null, undefined, an array, a plain empty object {}, and the string 'borrower'.",
+        "verification": "node --test executes test/acceptance.mjs loop over [null,undefined,[],{},'borrower',...]; all equal false."
+      },
+      {
+        "id": "AC3",
+        "description": "canBorrow returns false when role is any value other than exactly 'borrower' (e.g. 'bookseller', 'admin'), even with an otherwise valid positive integer id.",
+        "verification": "node --test executes test/acceptance.mjs cases {id:1,role:'bookseller'} and {id:1,role:'admin'}; both equal false."
+      },
+      {
+        "id": "AC4",
+        "description": "canBorrow returns false when id is 0, negative, fractional (1.5), a string ('1'), NaN, Infinity, or exceeds Number.MAX_SAFE_INTEGER, even when role is exactly 'borrower'.",
+        "verification": "node --test executes test/acceptance.mjs cases {id:0,...},{id:1.5,...},{id:'1',...},{id:NaN,...},{id:Infinity,...},{id:MAX_SAFE_INTEGER+1,...}; all equal false."
+      },
+      {
+        "id": "AC5",
+        "description": "canBorrow is a pure function with no side effects: it does not mutate its input argument and performs no I/O, logging, or external calls.",
+        "verification": "Code review of src/auth/borrower.mjs confirms no assignment to user or user.* properties and no I/O; the frozen-object case in AC1 would throw under strict mutation, so its passing further confirms purity."
+      },
+      {
+        "id": "AC6",
+        "description": "The full node --test suite, including the unmodified test/acceptance.mjs, passes.",
+        "verification": "Run /home/herbertcodex/.nvm/versions/node/v24.21.0/bin/node --test from the repository root; exit code 0 with all assertions passing."
+      }
+    ],
+    "decisions": [
+      {
+        "question": "Should canBorrow reject any input shape not covered by the fixed acceptance oracle (deny-by-default), or only the specific negative cases enumerated in the oracle?",
+        "answer": "Deny-by-default: canBorrow must return true only for the narrow valid shape (non-null, non-array object with role==='borrower' exactly and Number.isSafeInteger(id) && id>0) and false for every other input, not merely the cases explicitly enumerated in test/acceptance.mjs. The oracle's cases are representative, not exhaustive."
+      }
+    ],
+    "decisionCoverage": [],
+    "decisionResolutions": [],
+    "questions": [],
+    "tasks": [
+      {
+        "id": "T1",
+        "title": "Rewrite canBorrow as a pure deny-by-default guard",
+        "description": "In src/auth/borrower.mjs, replace `export const canBorrow = user => !!user;` with a pure predicate that returns true only when: user is a non-null object, Array.isArray(user) is false, user.role === 'borrower' (strict string equality, no coercion or case-folding), and Number.isSafeInteger(user.id) is true and user.id > 0. All other inputs (null, undefined, arrays, primitives including strings, plain objects with missing/wrong-typed role or id, non-borrower roles, id of 0/negative/fractional/string/NaN/Infinity/beyond MAX_SAFE_INTEGER) must return false. Do not assign to or otherwise mutate `user` or any of its properties, so that a frozen input still works and returns true when valid. Keep the function pure: no I/O, no logging, no new imports or dependencies. Reuse the existing exported symbol name `canBorrow` (src/auth/borrower.mjs:1) so test/acceptance.mjs's import continues to resolve. Optionally add test/regression.mjs with `node --test` style assertions (import from '../src/auth/borrower.mjs') covering supplementary adversarial cases (e.g. negative id, role as an array/object, extra unexpected fields on an otherwise valid user) — these are additive only and must not alter or duplicate the behavior asserted by the unmodified test/acceptance.mjs.",
+        "acceptanceIds": [
+          "AC1",
+          "AC2",
+          "AC3",
+          "AC4",
+          "AC5",
+          "AC6"
+        ],
+        "allowedPaths": [
+          "src/auth/borrower.mjs",
+          "test/regression.mjs"
+        ],
+        "dependsOn": [],
+        "minimumLane": "high"
+      }
+    ],
+    "minimumLane": "high",
+    "experience": {
+      "uiImpact": "none",
+      "surfaces": [],
+      "rationale": "canBorrow is a pure backend authorization predicate with no UI surface; no frontend, route, or visual change is involved."
+    },
+    "security": {
+      "profile": {
+        "exposure": "unknown",
+        "authentication": false,
+        "authorization": true,
+        "sensitiveData": false,
+        "sessionState": false,
+        "fileUploads": false,
+        "externalRequests": false,
+        "database": false,
+        "multiTenant": false,
+        "secrets": false,
+        "api": false,
+        "webUi": false,
+        "ciCd": false,
+        "dependencyChange": false,
+        "aiAgent": false,
+        "mcp": false
+      },
+      "owaspTopics": [
+        "authorization",
+        "input-validation",
+        "logging-monitoring",
+        "threat-modeling"
+      ],
+      "threatModel": {
+        "required": true,
+        "summary": "canBorrow(user) is a deny-by-default authorization predicate consumed by an unspecified caller to decide whether to grant a library loan. The function itself has no persistence, network, or session boundary; the trust boundary is the argument passed in by its caller, which may originate from untrusted request data upstream. The current implementation (`!!user`) collapses this boundary to a mere truthiness check, allowing elevation of privilege (any truthy value, including a bookseller or malformed object, is treated as an authorized borrower) and type confusion (arrays, strings, and objects with invalid ids pass). The fix restores deny-by-default behavior: only an exact role match and a validated positive safe-integer id authorize the action; every other shape is denied, and the function never logs, persists, or discloses the input, so no separate logging/audit mechanism is introduced or required.",
+        "assets": [
+          "Library loan authorization decision (the boolean returned by canBorrow)",
+          "User role and id fields passed into the predicate"
+        ],
+        "trustBoundaries": [
+          "Boundary between canBorrow's caller (which supplies the user object, potentially derived from untrusted request/session data) and the predicate itself — canBorrow must not trust shape, type, or presence of any field."
+        ],
+        "threats": [
+          {
+            "id": "THR1",
+            "category": "elevation-of-privilege",
+            "description": "A caller passes an object with a non-borrower role (e.g. bookseller or admin) or a malformed/truthy non-object value; the current `!!user` check incorrectly authorizes it, letting a non-borrower or malformed principal borrow.",
+            "mitigations": [
+              "Require user to be a non-null, non-array object",
+              "Require user.role === 'borrower' via strict equality, no coercion or case-insensitive matching"
+            ],
+            "acceptanceIds": [
+              "AC2",
+              "AC3"
+            ]
+          },
+          {
+            "id": "THR2",
+            "category": "tampering",
+            "description": "A caller supplies an id that is not a genuine positive integer (0, negative, fractional, numeric string, NaN, Infinity, or a value exceeding Number.MAX_SAFE_INTEGER), which could bypass downstream integer-based lookups or cause unexpected coercion/overflow behavior if authorized.",
+            "mitigations": [
+              "Require Number.isSafeInteger(user.id) && user.id > 0 with no coercion of string-typed ids"
+            ],
+            "acceptanceIds": [
+              "AC4"
+            ]
+          },
+          {
+            "id": "THR3",
+            "category": "tampering",
+            "description": "An authorization check that mutates its input could corrupt caller-held state or bypass immutability guarantees (e.g. a frozen user record), creating inconsistent authorization state across calls.",
+            "mitigations": [
+              "Implement canBorrow as side-effect-free: read-only property access, no assignment to user or its properties, verified by accepting a frozen valid object and still returning true"
+            ],
+            "acceptanceIds": [
+              "AC1",
+              "AC5"
+            ]
+          }
+        ],
+        "assumptions": [
+          "The caller of canBorrow is responsible for authenticating the principal and constructing the user object; canBorrow only validates the shape and authorization of the object it is given.",
+          "No logging or audit trail is required inside canBorrow itself; it is a pure predicate and introduces no disclosure risk since it neither logs nor persists its input."
+        ]
+      },
+      "requirements": [
+        {
+          "id": "REQ1",
+          "title": "Deny-by-default role and id authorization check",
+          "owaspTopics": [
+            "authorization",
+            "input-validation",
+            "threat-modeling"
+          ],
+          "acceptanceIds": [
+            "AC1",
+            "AC2",
+            "AC3",
+            "AC4",
+            "AC5"
+          ],
+          "verification": "node --test runs test/acceptance.mjs, which exercises the full positive and negative matrix (valid borrower, frozen valid borrower, null/undefined/array/empty-object/string, non-borrower roles, and every invalid id case); all assertions pass.",
+          "negativeTests": [
+            "null input",
+            "undefined input",
+            "array input",
+            "plain object with no role or id",
+            "string 'borrower' (not an object)",
+            "role 'bookseller' with valid id",
+            "role 'admin' with valid id",
+            "id 0 with role 'borrower'",
+            "id 1.5 (fractional) with role 'borrower'",
+            "id '1' (string-typed) with role 'borrower'",
+            "id NaN with role 'borrower'",
+            "id Infinity with role 'borrower'",
+            "id Number.MAX_SAFE_INTEGER+1 with role 'borrower'"
+          ]
+        },
+        {
+          "id": "REQ2",
+          "title": "No side effects or state disclosure from the authorization predicate",
+          "owaspTopics": [
+            "logging-monitoring",
+            "authorization"
+          ],
+          "acceptanceIds": [
+            "AC1",
+            "AC5"
+          ],
+          "verification": "Code review confirms canBorrow performs only read access to its argument and returns a boolean with no I/O, logging, or mutation; the frozen-object test case in test/acceptance.mjs would throw under strict mode if mutation were attempted, so its pass further verifies purity.",
+          "negativeTests": [
+            "Passing a frozen valid user object must not throw and must return true, proving no attempted mutation"
+          ]
+        }
+      ],
+      "assumptions": [
+        "test/acceptance.mjs is the complete and authoritative behavioral contract for canBorrow and will not be edited by the implementation task.",
+        "No authentication, session, or persistence layer is being introduced; canBorrow remains a standalone pure predicate."
+      ],
+      "deferred": [
+        "Generalizing to a role-permission map for additional roles or capabilities beyond borrow/deny is out of scope until a future request requires more than a binary borrower check."
+      ]
+    }
+  },
+  "architecture": {
+    "summary": "Architecture decision for fixing canBorrow(user): replace the current `!!user` truthiness check with a pure, deny-by-default guard-clause predicate enforcing role === 'borrower' (exact match) and Number.isSafeInteger(id) with id > 0, rejecting null/arrays/malformed objects and never mutating input. This directly satisfies every case in the fixed test/acceptance.mjs oracle, which fully specifies the contract (positive/negative cases including frozen input, id 0, fractional/string/NaN/Infinity/overflow ids, and non-borrower roles). No dependencies, login, persistence, or role-permission abstraction are introduced, matching the single-file, disposable-fixture scope.",
+    "decisions": [
+      {
+        "decision": "Rewrite canBorrow(user) as a single pure, deny-by-default predicate in src/auth/borrower.mjs: return true only when user is a non-null, non-array object with role === 'borrower' (exact string match, no coercion/case-folding) and Number.isSafeInteger(user.id) && user.id > 0; every other shape (null, undefined, arrays, primitives, missing/extra-typed fields, other roles, non-integer/zero/negative/NaN/Infinity/out-of-range ids) returns false. No mutation of the input, no new state, no I/O.",
+        "rationale": "The acceptance oracle (test/acceptance.mjs) enumerates exactly this contract: valid borrower with positive safe-integer id passes; null/undefined/array/plain object/string, bookseller/admin roles, id 0, fractional id, string id, NaN, Infinity, and MAX_SAFE_INTEGER+1 must all fail; a frozen valid object must still pass, proving no mutation is attempted and none is required. A deny-by-default guard clause chain is the smallest correct structure satisfying this oracle without speculative generality.",
+        "alternatives": [
+          "Use a schema/validation library (e.g. zod) for role+id shape checking",
+          "Coerce/normalize id (Number(user.id)) or role casing before comparing, to be 'lenient' with near-valid input",
+          "Generalize into a role-permission map (borrower/bookseller/admin -> capabilities) for future extensibility"
+        ],
+        "tradeoffs": [
+          "Hand-rolled guard clauses are slightly more verbose than a schema library call but require zero dependencies and are fully auditable for a security-sensitive predicate",
+          "Strict typeof/exact-match checks reject some 'almost valid' inputs (e.g. numeric-string ids) that a lenient coercion approach would accept; this is intentional per the deny-by-default requirement and the oracle's explicit {id:'1',role:'borrower'} negative case",
+          "A permission-map generalization would better anticipate future roles but is unrequested scope creep for a task explicitly scoped to a single boolean predicate with a fixed, frozen oracle"
+        ],
+        "reconsiderWhen": [
+          "A future request adds additional roles or capability tiers beyond simple borrow/deny, warranting a role-to-permission map",
+          "The id domain changes (e.g. UUIDs or string identifiers become valid), requiring the integer-based id check to be replaced",
+          "Authentication/session context becomes available and role/id must be derived from a verified principal rather than a raw object argument"
+        ]
+      }
+    ],
+    "inspection": [
+      {
+        "path": "src/auth/borrower.mjs",
+        "finding": "Current implementation is `export const canBorrow = user => !!user;` — a truthiness check that allows any truthy value (arrays, wrong roles, invalid ids), failing the authorization contract entirely."
+      },
+      {
+        "path": "test/acceptance.mjs",
+        "finding": "Fixed oracle requires: {id:1,role:'borrower'} and a frozen equivalent -> true; null, undefined, [], {}, 'borrower' string, bookseller/admin roles, id 0, id 1.5, id '1' (string), id NaN, id Infinity, id MAX_SAFE_INTEGER+1 -> all false. This fully specifies the exact-role-match, positive-safe-integer-id, deny-by-default contract; no other tests exist."
+      },
+      {
+        "path": "package.json",
+        "finding": "type: module, no dependencies, no test runner script configured — confirms this is a minimal disposable fixture; node:test/assert are used directly by the oracle, so no new dependency is needed or permitted."
+      }
+    ]
+  },
+  "qa": {
+    "report": {
+      "candidateSha": "37512b1e105de49a69b69c6b6ef0d405d14c08cb",
+      "verdict": "pass",
+      "summary": "canBorrow(user) was rewritten as a pure, deny-by-default guard requiring a non-null, non-array object with role === 'borrower' (exact match) and Number.isSafeInteger(id) && id > 0. This matches the fixed oracle in test/acceptance.mjs exactly, including the frozen-object purity check, and the acceptance gate passed (exit 0) against the unmodified oracle. No dependencies, I/O, or mutation introduced; test/acceptance.mjs untouched.",
+      "criteria": [
+        {
+          "id": "AC1",
+          "status": "pass",
+          "evidence": "src/auth/borrower.mjs returns true for {id:1,role:'borrower'} and for Object.freeze({id:2,role:'borrower'}); implementation only reads properties (typeof, user.role, user.id comparisons), no assignment, so frozen input is never mutated. Confirmed by acceptance.mjs line 2 assertions and passing acceptance gate receipt."
+        },
+        {
+          "id": "AC2",
+          "status": "pass",
+          "evidence": "typeof check + null check + Array.isArray check reject null, undefined, [], {} (missing role/id fails role==='borrower'), and 'borrower' (typeof !== 'object'); all covered in acceptance.mjs loop and gate passed."
+        },
+        {
+          "id": "AC3",
+          "status": "pass",
+          "evidence": "user.role === 'borrower' strict equality rejects {id:1,role:'bookseller'} and {id:1,role:'admin'} regardless of valid id; covered by acceptance.mjs and passing gate."
+        },
+        {
+          "id": "AC4",
+          "status": "pass",
+          "evidence": "Number.isSafeInteger(user.id) && user.id > 0 rejects id 0, 1.5, '1' (string, isSafeInteger false), NaN, Infinity, and MAX_SAFE_INTEGER+1; all present in acceptance.mjs matrix and gate passed."
+        },
+        {
+          "id": "AC5",
+          "status": "pass",
+          "evidence": "Function body contains only comparison/read expressions (typeof, ===, Array.isArray, Number.isSafeInteger, >), no assignment to user or user.*, no I/O; frozen-object case in AC1 passing confirms no mutation attempted."
+        },
+        {
+          "id": "AC6",
+          "status": "pass",
+          "evidence": "Acceptance gate receipt (gateId=acceptance, candidateSha=37512b1e105de49a69b69c6b6ef0d405d14c08cb) shows status=cached, exitCode=0 against unmodified test/acceptance.mjs."
+        }
+      ],
+      "findings": [],
+      "observations": [
+        "No test/regression.mjs was added; this was explicitly optional per the task and acceptance oracle already covers the required matrix, so this is not a gap.",
+        "Diff is minimal and scoped strictly to src/auth/borrower.mjs, matching allowedPaths and out-of-scope constraints (no login/persistence/role-map/dependency additions)."
+      ],
+      "decisionChecks": [
+        {
+          "decisionId": "D1",
+          "status": "pass",
+          "evidence": "Implementation is deny-by-default: it returns true only for the narrow valid shape (non-null non-array object, role==='borrower' exact, Number.isSafeInteger(id)&&id>0) and false for every other input shape, not merely the cases explicitly enumerated in test/acceptance.mjs, matching the confirmed decision text verbatim."
+        }
+      ],
+      "securityChecks": [
+        {
+          "requirementId": "REQ1",
+          "status": "pass",
+          "evidence": "Guard clause chain enforces exact role match and validated positive safe-integer id with no coercion; all negativeTests listed in REQ1 (null, undefined, array, empty object, string 'borrower', wrong roles, id 0/1.5/'1'/NaN/Infinity/overflow) are exercised by acceptance.mjs and the gate passed with exit 0."
+        },
+        {
+          "requirementId": "REQ2",
+          "status": "pass",
+          "evidence": "canBorrow performs only read access (typeof, property comparisons) with no assignment, I/O, or logging; the frozen valid-user case in acceptance.mjs (which would throw under strict-mode mutation attempts) passes, corroborating purity."
+        }
+      ]
+    },
+    "specHash": "98d28aba220c6d842fbef3e5295bcdc4e535bc779256dbf569010bc215eec215",
+    "evidenceHash": "087c805b562914a2288cf16d2acc63da87a4cc5cd3c4b7c664b5ea8bcd5b00ce",
+    "at": 1789730818921,
+    "source": "agent"
+  },
+  "receipts": [
+    [
+      {
+        "id": "afbad8cc-83c5-4b3d-bcad-5fee3afc76a7",
+        "runId": "29a73ac7-ae1b-43fc-bef2-a2df639141d3",
+        "gateId": "acceptance",
+        "key": "37bd499860ddc87436ff9204a3a0594a52e323a2cf6e9c0ed1bf153ddae6668b",
+        "candidateSha": "37512b1e105de49a69b69c6b6ef0d405d14c08cb",
+        "configHash": "cb44b281816f3d31a4093dd7b976e964a60a5588ba55f6797539709e08cc0f45",
+        "environmentHash": "cd9e3a9188a7e665d7fa05db4f0ce285ebb4a8c8bb866875ce74026aabe5c710",
+        "status": "passed",
+        "startedAt": 1789730775841,
+        "durationMs": 874.9673870000115,
+        "exitCode": 0,
+        "stdoutHash": "d887dc1281649b9c5efb1e08f0afbd04fb44992bfee2bdd85cdf360187ef555c",
+        "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "diagnostic": "",
+        "reusedFrom": null
+      }
+    ]
+  ]
+}

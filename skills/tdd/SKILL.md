@@ -24,3 +24,6 @@ For existing behavior, characterization tests may start green. Prefer behavior-l
 ## References on demand
 
 [Cycle](references/cycle.md), [language transposition](references/language-transposition.md), [test types](references/test-types.md), [writing tests](references/writing-tests.md), [mocking](references/mocking.md), [review checklist](assets/test-checklist.md).
+
+## In-session feedback
+If the controller exposes `pipeline.run_check`, use its allowlisted gate IDs for a short red/green loop inside the current Implementer session. Record the observed status; stop repeating identical failures. These results guide edits and do not replace isolated final gates. A failure due to missing infrastructure is not a behavioral red test.

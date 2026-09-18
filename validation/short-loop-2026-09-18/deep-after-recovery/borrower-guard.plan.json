@@ -1,0 +1,105 @@
+{
+  "spec": null,
+  "architecture": {
+    "summary": "The repository is a four-file fixture: `package.json` (`\"type\":\"module\"`, no deps, no scripts), `.gitignore`, the fixed oracle `test/acceptance.mjs`, and `src/auth/borrower.mjs` whose entire content is `export const canBorrow = user => !!user;` — a truthiness check that currently authorizes every non-empty object, including `{id:1,role:'bookseller'}` and `[]`. The correct boundary is not new structure: it is to keep exactly one exported pure predicate in the existing module and replace truthiness with an explicit deny-by-default validation chain (shape gate, exact role allowlist, positive-safe-integer id gate), returning a strict boolean and reading only own properties without mutation. No policy registry, no schema dependency, no separate validation layer, no logging or throwing — the guard's only contract is a boolean. Regression tests go in an additive `test/regression.mjs` covering adversarial inputs the oracle does not pin (case-variant roles, prototype-inherited `role`, `-1` and `-0` ids, `Number` wrapper objects, functions, extra properties, and a mutation/identity check), while `test/acceptance.mjs` stays byte-identical. Security note within the routed authorization/input-validation topics: the failure mode here is privilege escalation through a permissive default, so every rejection path must be explicit and the default branch must be `false`; authentication, session and persistence topics from the deterministic profile have no surface in this pure function and must not be invented here.",
+    "decisions": [
+      {
+        "decision": "Keep the guard as a single exported pure predicate `canBorrow` inside the existing `src/auth/borrower.mjs`; introduce no new module, role registry, policy table or validation abstraction.",
+        "rationale": "`repositoryIntelligence.inventory` lists exactly one exported declaration (`canBorrow`, src/auth/borrower.mjs:1) and the oracle imports the module namespace and calls only `mod.canBorrow`. The request fixes a single authorization rule with one allowed role and one id rule, and explicitly forbids login, a database or a new authentication scheme. A registry or policy layer would be a parallel abstraction with exactly one entry, adding indirection that reviewers must trace without removing any duplication, and it would widen the change beyond the two editable paths.",
+        "alternatives": [
+          "Add `src/auth/policy.mjs` mapping roles to capabilities and have `canBorrow` delegate to it.",
+          "Add a reusable `isValidUser`/`isPositiveId` validation helper module shared with future guards.",
+          "Introduce a schema validation dependency (zod, ajv) to describe the user shape declaratively."
+        ],
+        "tradeoffs": [
+          "A second role or capability later requires editing the predicate rather than adding a table row.",
+          "Validation logic lives inline in the guard, so a future second guard would need an explicit extraction step instead of importing a ready helper.",
+          "Rejects the declarative-schema readability benefit, but a dependency change is out of scope and the profile records dependencyChange=false."
+        ],
+        "reconsiderWhen": [
+          "A second capability guard (for example `canReserve` or `canPurchase`) needs the same role/id validation, making extraction a real deduplication.",
+          "Roles become data-driven (loaded from configuration or a store) rather than a single literal.",
+          "The user shape gains fields whose validation rules are non-trivial or shared across modules."
+        ]
+      },
+      {
+        "decision": "Replace truthiness with an ordered deny-by-default chain returning a strict boolean: (1) reject anything that is not a non-null, non-array `object`; (2) require an own `role` property strictly equal to the literal `'borrower'`; (3) require an own `id` satisfying `Number.isSafeInteger(id) && id > 0`. Every other path returns `false`.",
+        "rationale": "This is the minimum logic that satisfies each oracle case for the stated reason rather than by accident: `null`/`undefined`/`'borrower'` fail the shape gate, `[]` fails the explicit `Array.isArray` rejection (arrays are `typeof 'object'`), `{}` fails the role gate, `bookseller`/`admin` fail exact equality, and `0`, `1.5`, `'1'`, `NaN`, `Infinity` and `MAX_SAFE_INTEGER+1` all fail `Number.isSafeInteger(id) && id > 0` — `Number.isSafeInteger` alone covers non-numbers, non-integers, `NaN`, infinities and out-of-range magnitudes, and `> 0` covers `0`, `-0` and negatives. Ordering matters for safety, not style: the shape gate must run first so property access on `null` cannot throw, turning a denial into an exception the caller might handle as an error rather than a refusal. An allowlist on the role (strict `===` against one literal) rather than a denylist of `bookseller` and friends means any future or attacker-supplied role value is denied without further edits, which is the authorization control the routed OWASP authorization and input-validation topics ask for.",
+        "alternatives": [
+          "Denylist the known privileged roles (`bookseller`, `admin`) and allow the rest — rejected: any unknown or attacker-chosen role would be authorized.",
+          "Coerce before comparing (`String(user.role).toLowerCase() === 'borrower'`, `Number(user.id)`) — rejected: it would authorize `'1'` and `'Borrower'`, contradicting the oracle and widening the accepted input surface.",
+          "Use `typeof id === 'number' && id % 1 === 0 && id > 0` instead of `Number.isSafeInteger` — rejected: `Infinity % 1` is `NaN` so it happens to pass, but `MAX_SAFE_INTEGER+1` would be accepted as a safe id it is not.",
+          "Validate with a single combined boolean expression rather than sequential guards — equivalent behaviour, but each rejection reason becomes harder to name in a regression test."
+        ],
+        "tradeoffs": [
+          "Callers that legitimately hold a stringified id (for example from a URL parameter or JSON boundary) must coerce before calling; the guard deliberately does not do it for them.",
+          "Ids above `Number.MAX_SAFE_INTEGER` and `BigInt` ids are denied, so a future large-id scheme would need an explicit decision rather than silently working.",
+          "Exact-literal role matching means a renamed or namespaced role value (`'library:borrower'`) is denied until the predicate is updated."
+        ],
+        "reconsiderWhen": [
+          "Ids move to `BigInt`, UUIDs or another non-safe-integer representation.",
+          "A role hierarchy appears where a higher role should inherit borrowing (for example `librarian` may borrow), since `===` against one literal would then be wrong.",
+          "Callers legitimately pass values from an untyped boundary and a documented coercion point is agreed upstream of the guard."
+        ]
+      },
+      {
+        "decision": "Read only own properties (`Object.hasOwn`) and reject arrays and functions explicitly, but do not require a plain `Object.prototype` prototype; make no writes, no `delete`, no sorting and no in-place normalization of the argument, and return a `boolean` literal rather than a truthy value.",
+        "rationale": "The oracle passes `Object.freeze({id:2,role:'borrower'})` and expects `true`, so any mutation would throw in strict mode (ES modules are always strict) and fail the run — purity is load-bearing here, not merely stylistic. Restricting to own properties denies a prototype-supplied `role`, which is the shape a polluted-prototype or `Object.create({role:'borrower'})` payload takes, and matches the deny-by-default posture for the routed authorization topic. Deliberately not requiring an exact `Object.prototype` prototype keeps legitimate class instances (`new User(...)`) working, which a strict plain-object check would deny for no security gain since own-property reads already exclude the inherited case. Returning a strict boolean means callers cannot accidentally propagate a truthy non-boolean into a different comparison.",
+        "alternatives": [
+          "Require a plain object (`Object.getPrototypeOf(user) === Object.prototype || null`) — rejected: denies class instances without adding protection beyond the own-property check.",
+          "Accept inherited `role`/`id` via plain member access — rejected: a prototype-supplied role would authorize borrowing.",
+          "Defensively clone the input before inspecting it — rejected: pointless allocation for a read-only predicate and it would hide, not prevent, mutation bugs."
+        ],
+        "tradeoffs": [
+          "A caller using a class with `role` as a prototype getter rather than an own property is denied and must expose it as an own property.",
+          "`Object.hasOwn` requires Node 16.9+; acceptable for this ESM-only fixture but a constraint worth naming.",
+          "Proxy-based user objects can still observe the property reads; the guard cannot prevent that and does not try."
+        ],
+        "reconsiderWhen": [
+          "User objects start arriving as class instances or ORM models exposing `role` through a prototype accessor.",
+          "The runtime target moves below Node 16.9, requiring `Object.prototype.hasOwnProperty.call`.",
+          "A caller needs the guard to explain the denial reason, which would change the return contract from a boolean."
+        ]
+      },
+      {
+        "decision": "Treat `test/acceptance.mjs` as an immutable oracle and put all new coverage in an additive `test/regression.mjs`, run via `node --test`; the guard never throws, never logs and never records the rejected input.",
+        "rationale": "The request fixes the two editable paths and forbids touching the oracle, so regression coverage must be a new file rather than an extension of the existing test. The oracle pins thirteen negative cases but leaves the adversarial ones this decision actually turns on unpinned — case-variant `'Borrower'`, prototype-inherited `role`, `-1` and `-0`, `new Number(1)`, a function argument, extra unexpected properties alongside valid ones, and a frozen-input identity check — so `negativeTestsRequired` is satisfied by the new file, not by the oracle. The no-throw rule matters because a guard that throws on malformed input converts an authorization denial into an error path whose handling is the caller's, and callers commonly treat errors differently from `false`. The no-logging rule is the correct reading of the routed logging topic at this boundary: a pure predicate has no logger and adding one would both break purity and write caller-supplied user data to an output sink it does not control; audit logging belongs to the calling layer, which knows the request context.",
+        "alternatives": [
+          "Rely on the acceptance oracle alone and skip `test/regression.mjs` — rejected: the behaviours distinguishing this design from a weaker one would be unpinned.",
+          "Throw a typed `InvalidUserError` on malformed input and reserve `false` for a valid-but-unauthorized user — rejected: contradicts the explicit requirement that malformed input returns `false`.",
+          "Emit a diagnostic log on each denial for auditability — rejected: introduces a side effect into a pure function and risks writing untrusted input to logs."
+        ],
+        "tradeoffs": [
+          "Denials carry no reason, so an operator debugging a refused loan must reproduce it against the predicate rather than read a log line.",
+          "Two test files must be kept conceptually in sync; the regression file could drift into duplicating oracle cases.",
+          "Distinguishing 'malformed' from 'unauthorized' is impossible for callers that might legitimately want different responses (400 versus 403)."
+        ],
+        "reconsiderWhen": [
+          "A calling HTTP or service layer needs to distinguish malformed input from a legitimate denial to choose a status code.",
+          "Security audit requirements demand a record of denied borrow attempts, which would be implemented in the caller rather than here.",
+          "The acceptance oracle is ever unfrozen, allowing the two test files to be consolidated."
+        ]
+      }
+    ],
+    "inspection": [
+      {
+        "path": "src/auth/borrower.mjs",
+        "finding": "Entire file is one line: `export const canBorrow = user => !!user;`. The defect is a permissive default - every truthy value is authorized, so `[]`, `{}`, `'borrower'`, `{id:1,role:'bookseller'}` and `{id:0,role:'borrower'}` all return `true`. Only `null`/`undefined` are (accidentally) denied. This is the sole exported symbol in the repository and the single reuse candidate; the fix replaces its body in place rather than adding a symbol. Nothing in this module implements identity, session or persistence, so the change stays local to one function and must not invent such a scheme."
+      },
+      {
+        "path": "test/acceptance.mjs",
+        "finding": "Fixed oracle, must stay byte-identical. Asserts `canBorrow({id:1,role:'borrower'}) === true`, then thirteen negative cases (`null`, `undefined`, `[]`, `{}`, `'borrower'`, roles `bookseller`/`admin`, ids `0`, `1.5`, `'1'`, `NaN`, `Infinity`, `MAX_SAFE_INTEGER+1`), then `canBorrow(Object.freeze({id:2,role:'borrower'})) === true`. Two constraints drive the design: the frozen-object case makes non-mutation load-bearing (ESM is strict mode, so any write would throw), and the `MAX_SAFE_INTEGER+1` case rules out a modulo-based integer check in favour of `Number.isSafeInteger`. It also imports the module namespace (`import * as mod`), so the export must remain a named `canBorrow`."
+      },
+      {
+        "path": "package.json",
+        "finding": "Contents are `{\"type\":\"module\",\"private\":true}` - no dependencies, no devDependencies, no scripts, no lockfile. Confirms ESM semantics (strict mode everywhere) and that tests run through the Node built-in runner (`node --test`), since `node:test` and `node:assert/strict` are the only test imports. Corroborates `dependencyChange=false`: no schema/validation library may be added, and no install step may be assumed of the implementer. It is the only manifest tracked at the base commit and declares no architecture or documentation target, matching the empty `repositoryIntelligence.architectureFiles`: no documentation task is warranted."
+      },
+      {
+        "path": ".gitignore",
+        "finding": "Single entry `node_modules/`. No build output, no config directories - confirms there is no build step, bundler, linter or CSS gate to account for in this change, and that the four tracked files (`package.json`, `.gitignore`, `test/acceptance.mjs`, `src/auth/borrower.mjs`) are the whole repository at the base commit."
+      }
+    ]
+  },
+  "qa": null,
+  "receipts": []
+}

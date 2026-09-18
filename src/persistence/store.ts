@@ -92,8 +92,10 @@ export class Store {
     this.db.prepare('INSERT INTO events(run_id,at,type,data) VALUES(?,?,?,?)').run(runId, Date.now(), type, JSON.stringify(data));
     try { this.onProgress?.('run',runId,type,data); } catch { /* Observability cannot change committed decisions. */ }
   }
-  events(id: string): RunEvent[] {
-    return this.db.prepare('SELECT * FROM events WHERE run_id=? ORDER BY seq').all(id).map(row => ({
+  events(id: string, types?: readonly string[]): RunEvent[] {
+    if (types?.length === 0) return [];
+    const filter = types ? ` AND type IN (${types.map(() => '?').join(',')})` : '';
+    return this.db.prepare(`SELECT * FROM events WHERE run_id=?${filter} ORDER BY seq`).all(id, ...(types ?? [])).map(row => ({
       seq: Number(row['seq']), runId: String(row['run_id']), at: Number(row['at']), type: String(row['type']),
       data: parseJson(String(row['data'])) as Record<string, unknown>,
     }));
@@ -230,8 +232,10 @@ export class Store {
       events: [...runs, ...documents].sort((a, b) => a.at - b.at),
     };
   }
-  documentEvents(id: string): {seq:number;at:number;type:string;data:unknown}[] {
-    return this.db.prepare('SELECT * FROM document_events WHERE doc_id=? ORDER BY seq').all(id).map(row => ({
+  documentEvents(id: string, types?: readonly string[]): {seq:number;at:number;type:string;data:unknown}[] {
+    if (types?.length === 0) return [];
+    const filter = types ? ` AND type IN (${types.map(() => '?').join(',')})` : '';
+    return this.db.prepare(`SELECT * FROM document_events WHERE doc_id=?${filter} ORDER BY seq`).all(id, ...(types ?? [])).map(row => ({
       seq:Number(row['seq']),at:Number(row['at']),type:String(row['type']),data:parseJson(String(row['data'])),
     }));
   }

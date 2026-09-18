@@ -1,0 +1,226 @@
+diff --git a/src/dates.mjs b/src/dates.mjs
+index 448ccb5..fd31341 100644
+--- a/src/dates.mjs
++++ b/src/dates.mjs
+@@ -1 +1,71 @@
+-export function isOverdue(dueOn,today) { return today >= dueOn; }
++/** Anchored ISO calendar-date shape; no whitespace, sign or trailing characters tolerated. */
++const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
++
++const MIN_YEAR = 1000;
++const MAX_YEAR = 9999;
++
++/** Gregorian rule: every 4th year, except centuries that are not multiples of 400. */
++function isLeapYear(year) {
++  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
++}
++
++function daysInMonth(year, month) {
++  if (month === 2) return isLeapYear(year) ? 29 : 28;
++  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
++}
++
++function describe(value) {
++  if (typeof value === 'string') return JSON.stringify(value);
++  if (typeof value === 'symbol') return value.toString();
++  return String(value);
++}
++
++/**
++ * Reject anything that is not a real calendar date in strict YYYY-MM-DD form.
++ *
++ * @param {string} name Parameter name, reported in the error message.
++ * @param {unknown} value Candidate date.
++ * @throws {RangeError} If the value is not a string, is malformed, or denotes an impossible date.
++ */
++function assertCalendarDate(name, value) {
++  if (typeof value !== 'string') {
++    throw new RangeError(`${name} must be a YYYY-MM-DD string, received ${describe(value)}`);
++  }
++  const match = ISO_DATE.exec(value);
++  if (match === null) {
++    throw new RangeError(`${name} must match YYYY-MM-DD exactly, received ${describe(value)}`);
++  }
++  const year = Number(match[1]);
++  const month = Number(match[2]);
++  const day = Number(match[3]);
++  if (year < MIN_YEAR || year > MAX_YEAR) {
++    throw new RangeError(`${name} year must be between ${MIN_YEAR} and ${MAX_YEAR}, received ${describe(value)}`);
++  }
++  if (month < 1 || month > 12) {
++    throw new RangeError(`${name} month must be between 01 and 12, received ${describe(value)}`);
++  }
++  if (day < 1 || day > daysInMonth(year, month)) {
++    throw new RangeError(`${name} day is not a valid day of that month, received ${describe(value)}`);
++  }
++}
++
++/**
++ * Tell whether a loan is overdue, comparing two explicitly injected calendar dates.
++ *
++ * The due day itself is not overdue: only a strictly later `today` counts. The
++ * function reads no ambient clock and performs no time zone conversion, so the
++ * result depends solely on its arguments.
++ *
++ * @param {string} dueOn Due date in strict YYYY-MM-DD form, year 1000 to 9999.
++ * @param {string} today Current date in the same form, supplied by the caller.
++ * @returns {boolean} True when `today` is strictly after `dueOn`, false otherwise.
++ * @throws {RangeError} If either argument is not a real date in the accepted form;
++ *   both are validated independently.
++ */
++export function isOverdue(dueOn, today) {
++  assertCalendarDate('dueOn', dueOn);
++  assertCalendarDate('today', today);
++  // Accepted values are fixed-width and zero-padded, so lexicographic order
++  // matches chronological order.
++  return today > dueOn;
++}
+diff --git a/test/regression.mjs b/test/regression.mjs
+new file mode 100644
+index 0000000..9b5afc6
+--- /dev/null
++++ b/test/regression.mjs
+@@ -0,0 +1,143 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { isOverdue } from '../src/dates.mjs';
++
++/** Values that must be rejected in either argument position. */
++const INVALID_VALUES = [
++  // Impossible calendar dates.
++  '2026-02-29',
++  '1900-02-29',
++  '2100-02-29',
++  '2026-04-31',
++  '2026-06-31',
++  '2026-01-32',
++  '2026-09-00',
++  '2026-13-01',
++  '2026-00-10',
++  // Malformed strings.
++  '2026-9-18',
++  '2026-09-8',
++  ' 2026-09-18',
++  '2026-09-18 ',
++  '2026-09-18x',
++  '2026-09-18\n',
++  '2026/09/18',
++  '20260918',
++  '+2026-09-18',
++  '02026-09-18',
++  '0999-12-31',
++  '0000-01-01',
++  '',
++  // Non-string values.
++  null,
++  undefined,
++  20260918,
++  NaN,
++  new Date(),
++  {},
++  [],
++  true,
++];
++
++test('equal dates are never overdue', () => {
++  assert.equal(isOverdue('2026-09-18', '2026-09-18'), false);
++  assert.equal(isOverdue('2026-01-01', '2026-01-01'), false);
++  assert.equal(isOverdue('2026-12-31', '2026-12-31'), false);
++  assert.equal(isOverdue('2024-02-29', '2024-02-29'), false);
++});
++
++test('a strictly later today is overdue, across month and year boundaries', () => {
++  assert.equal(isOverdue('2026-09-18', '2026-09-19'), true);
++  assert.equal(isOverdue('2026-09-30', '2026-10-01'), true);
++  assert.equal(isOverdue('2024-02-29', '2024-03-01'), true);
++  assert.equal(isOverdue('2026-12-31', '2027-01-01'), true);
++  assert.equal(isOverdue('1000-01-01', '9999-12-31'), true);
++});
++
++test('a strictly earlier today is not overdue, across month and year boundaries', () => {
++  assert.equal(isOverdue('2026-09-18', '2026-09-17'), false);
++  assert.equal(isOverdue('2026-10-01', '2026-09-30'), false);
++  assert.equal(isOverdue('2027-01-01', '2026-12-31'), false);
++  assert.equal(isOverdue('2024-03-01', '2024-02-29'), false);
++});
++
++test('real leap days are accepted', () => {
++  assert.equal(isOverdue('2024-02-29', '2024-02-28'), false);
++  assert.equal(isOverdue('2000-02-28', '2000-02-29'), true);
++  assert.equal(isOverdue('2000-02-29', '2000-02-29'), false);
++});
++
++test('non-leap February 29ths are rejected', () => {
++  for (const value of ['2026-02-29', '1900-02-29', '2100-02-29']) {
++    assert.throws(() => isOverdue(value, '2026-09-18'), RangeError);
++    assert.throws(() => isOverdue('2026-09-18', value), RangeError);
++  }
++});
++
++test('month lengths and month bounds are enforced', () => {
++  for (const value of ['2026-04-31', '2026-06-31', '2026-01-32', '2026-09-00', '2026-13-01', '2026-00-10']) {
++    assert.throws(() => isOverdue(value, '2026-09-18'), RangeError);
++    assert.throws(() => isOverdue('2026-09-18', value), RangeError);
++  }
++  // Last valid day of each 30-day month stays accepted.
++  for (const value of ['2026-04-30', '2026-06-30', '2026-09-30', '2026-11-30', '2026-02-28']) {
++    assert.equal(typeof isOverdue(value, '2026-09-18'), 'boolean');
++  }
++});
++
++test('malformed and non-string values are rejected', () => {
++  for (const value of ['2026-9-18', '2026-09-8', ' 2026-09-18', '2026-09-18x', '2026/09/18', '']) {
++    assert.throws(() => isOverdue(value, '2026-09-18'), RangeError);
++    assert.throws(() => isOverdue('2026-09-18', value), RangeError);
++  }
++  for (const value of [null, undefined, 20260918, new Date(), {}, []]) {
++    assert.throws(() => isOverdue(value, '2026-09-18'), RangeError);
++    assert.throws(() => isOverdue('2026-09-18', value), RangeError);
++  }
++});
++
++test('year bounds are enforced', () => {
++  assert.equal(isOverdue('1000-01-01', '1000-01-01'), false);
++  assert.equal(isOverdue('9999-12-31', '9999-12-31'), false);
++  assert.equal(typeof isOverdue('1000-01-01', '9999-12-31'), 'boolean');
++  for (const value of ['0999-12-31', '0000-01-01', '999-12-31', '10000-01-01']) {
++    assert.throws(() => isOverdue(value, '2026-09-18'), RangeError);
++    assert.throws(() => isOverdue('2026-09-18', value), RangeError);
++  }
++});
++
++test('every invalid value throws a named RangeError in both argument positions', () => {
++  for (const value of INVALID_VALUES) {
++    for (const [args, parameter] of [
++      [[value, '2026-09-18'], 'dueOn'],
++      [['2026-09-18', value], 'today'],
++    ]) {
++      assert.throws(
++        () => isOverdue(...args),
++        (error) => {
++          assert.ok(error instanceof RangeError, `expected RangeError for ${parameter}`);
++          assert.ok(error.message.length > 0, `expected a non-empty message for ${parameter}`);
++          assert.ok(error.message.includes(parameter), `expected the message to name ${parameter}`);
++          return true;
++        },
++      );
++    }
++  }
++});
++
++test('an invalid argument throws even when the other one is valid', () => {
++  assert.throws(() => isOverdue('2026-02-29', '2026-02-30'), RangeError);
++  assert.throws(() => isOverdue(null, undefined), RangeError);
++});
++
++test('results are strictly boolean', () => {
++  for (const [dueOn, today] of [
++    ['2026-09-18', '2026-09-18'],
++    ['2026-09-18', '2026-09-19'],
++    ['2026-09-18', '2026-09-17'],
++  ]) {
++    const result = isOverdue(dueOn, today);
++    assert.equal(typeof result, 'boolean');
++    assert.ok(result === true || result === false);
++  }
++});

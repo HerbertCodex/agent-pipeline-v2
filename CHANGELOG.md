@@ -1,5 +1,22 @@
 # Changelog
 
+
+## Unreleased — reliability and efficient feature work
+
+- Integrate provider stop messages with model/token accounting and Codex usage; normalize the dashboard test repository path for macOS.
+
+- Implement the three short-loop paths: explicit compact/standard/structural paths, bounded Product brief, checkpointed architecture decisions bound to approval, focused task context, retained repair context and independent targeted QA. Compact model-QA exemption is rechecked against the observed diff through final review; sensitive changes retain stronger checks.
+- Native pilot follow-ups: send the original document schema and explicit patch rules during repair; support bounded array removal/append; report minimum security coverage gaps together; evaluate added regression tests as well as the fixed oracle.
+- Calibrate the sensitive path: distinguish explicit scope exclusions from negative security obligations and actual sensitive paths; avoid interpreting repository/auth path prose as new persistence/login scope; preserve high-risk checks. The corrected authorization fixture passes architecture, Product, implementation and independent QA with Sonnet 5 / medium. Ship explicit Sonnet 5 low/medium role-profile settings and retain the earlier failures and cumulative spending evidence.
+- Add explicit quick/deep profiles per provider and role, adaptive onboarding and dashboard paths, and matched-case evaluation comparisons with campaign-wide declared budgets and provider-limit stopping.
+- Account for failed and repaired provider calls, unknown costs and unfinished invocations; share remaining spec budgets across roles.
+- Retain Product/Design checkpoints and patch rejected structured outputs; resume planning and amend operational limits without rewriting functional approval.
+- Lot 2: reject full-document responses to native patch repairs and persist terminal structured-output rejection diagnostics. Test checkpoint identity across SHA, context, schema and guidance changes.
+- Lot 2: align Product/Design, Implementer, QA and UI skills on global-CSS BEM defaults with existing-stack exceptions. Add a pinned Stylelint development check, reusable naming profile and discovery of existing `lint:css` / `lint:styles` gates.
+- Add compact task planning, minor UI reuse, explicit model/effort routing and opt-in in-session checks with independent final validation.
+- Detect existing build/integration/browser scripts, refine craftsmanship skills and add a representative, opt-in evaluation harness.
+- See [implementation and usage](docs/AMELIORATIONS-2026-09-18.md). Existing project configuration is not migrated automatically.
+
 ## Non publié
 
 - **La phrase du fournisseur d'abord.** Un arrêt peut venir du compte, pas de la configuration : la limite de session d'un abonnement termine la session avec `subtype: success` et `is_error: true`, et la seule explication lisible est la phrase du fournisseur. Elle est désormais reprise telle quelle dans le message d'échec, avant les dépenses : « the provider said: "You've hit your session limit · resets 11:50am" ». Constaté sur un vrai run : l'opérateur ne voyait que « spent: 10 turns, 1.31 USD » et pouvait croire à un défaut de la pipeline.

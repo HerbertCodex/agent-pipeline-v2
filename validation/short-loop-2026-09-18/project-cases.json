@@ -1,0 +1,27 @@
+[
+  {
+    "id": "loan-record-id",
+    "category": "project-test-local-validation",
+    "pathway": "compact",
+    "path": "src/record-id.mjs",
+    "request": "Fix parseRecordId(raw) for loan record identifiers. Return a positive safe integer only for a string of 1 to 16 ASCII digits with no leading zero. Return null for every other input. Preserve the existing exported function and avoid adding dependencies.",
+    "before": "export function parseRecordId(raw) { return parseInt(raw, 10) || null; }\n",
+    "checks": "assert.equal(mod.parseRecordId('1'),1); assert.equal(mod.parseRecordId('9007199254740991'),Number.MAX_SAFE_INTEGER); for(const v of [null,undefined,1,'0','01','-1',' 1','1 ','1x','1.2','1e2','9007199254740992','12345678901234567','']) assert.equal(mod.parseRecordId(v),null,String(v));"
+  },
+  {
+    "id": "loan-overdue",
+    "category": "project-test-feature",
+    "path": "src/dates.mjs",
+    "request": "Implement isOverdue(dueOn,today) for library loans using calendar dates in YYYY-MM-DD form, years 1000 to 9999. The due day itself is not overdue; later days are. Validate both inputs as real dates, including leap years, and throw RangeError for invalid inputs. No time zone conversion or ambient clock: today is explicitly injected. Preserve the module and exported function.",
+    "before": "export function isOverdue(dueOn,today) { return today >= dueOn; }\n",
+    "checks": "assert.equal(mod.isOverdue('2026-09-18','2026-09-18'),false); assert.equal(mod.isOverdue('2026-09-18','2026-09-19'),true); assert.equal(mod.isOverdue('2026-09-18','2026-09-17'),false); assert.equal(mod.isOverdue('2024-02-29','2024-03-01'),true); for(const d of ['2026-02-29','2026-13-01','2026-04-31','2026-9-18',null,'2026-09-18x']) { assert.throws(()=>mod.isOverdue(d,'2026-09-18'),RangeError); assert.throws(()=>mod.isOverdue('2026-09-18',d),RangeError); }"
+  },
+  {
+    "id": "borrower-guard",
+    "category": "project-test-auth",
+    "path": "src/auth/borrower.mjs",
+    "request": "Correct the library loan authorization guard canBorrow(user). Only a user object with role exactly borrower and a positive safe integer id may borrow. Bookseller and all other roles must be denied. Null, arrays, malformed objects and invalid ids must return false. Do not mutate the input. Keep a pure function; do not implement login, a database, or a new authentication scheme.",
+    "before": "export const canBorrow = user => !!user;\n",
+    "checks": "assert.equal(mod.canBorrow({id:1,role:'borrower'}),true); for(const user of [null,undefined,[],{},'borrower',{id:1,role:'bookseller'},{id:1,role:'admin'},{id:0,role:'borrower'},{id:1.5,role:'borrower'},{id:'1',role:'borrower'},{id:NaN,role:'borrower'},{id:Infinity,role:'borrower'},{id:Number.MAX_SAFE_INTEGER+1,role:'borrower'}]) assert.equal(mod.canBorrow(user),false); const u=Object.freeze({id:2,role:'borrower'}); assert.equal(mod.canBorrow(u),true);"
+  }
+]

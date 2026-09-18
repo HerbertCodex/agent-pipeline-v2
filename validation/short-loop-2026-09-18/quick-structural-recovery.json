@@ -1,0 +1,148 @@
+{
+  "label": "quick-structural-recovery",
+  "caseId": "borrower-guard",
+  "specId": "81cc7f45-d6be-43be-b09c-18483d80fbb3",
+  "before": {
+    "knownUsd": 0.3334944,
+    "unknownInvocations": 0,
+    "pendingInvocations": 0,
+    "ceilingUsd": 1.2
+  },
+  "after": {
+    "knownUsd": 0.517486,
+    "unknownInvocations": 0,
+    "pendingInvocations": 0,
+    "ceilingUsd": 1.2
+  },
+  "additionalKnownUsd": 0.18399159999999998,
+  "wallMs": 18440.373163,
+  "status": "draft",
+  "error": "PipelineError: Security topic authentication detected by the controller is missing from the Product security plan",
+  "newCalls": [
+    {
+      "invocationId": "5f402dcf-1103-4379-9fae-7d8675462dd4",
+      "role": "product",
+      "provider": "claude",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "inputBytes": 42417,
+      "timeoutMs": 179926,
+      "maxBudgetUsd": 0.86
+    },
+    {
+      "invocationId": "902a0de1-52d1-49de-badb-ace22969e5d0",
+      "role": "product",
+      "provider": "claude",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "inputBytes": 42549,
+      "timeoutMs": 168685,
+      "maxBudgetUsd": 0.77
+    }
+  ],
+  "summary": {
+    "id": "81cc7f45-d6be-43be-b09c-18483d80fbb3",
+    "executionPath": "structural",
+    "architecture": {
+      "summary": "Rewrite canBorrow(user) as a strict, pure predicate: role must be exactly the string 'borrower' and id must be a positive safe integer (Number.isInteger, safe, >0), rejecting null/array/malformed objects, without mutating input. No new abstractions needed beyond the single exported const in src/auth/borrower.mjs.",
+      "decisions": [
+        {
+          "decision": "Implement validation inline in the existing exported const canBorrow using plain typeof/Number.isSafeInteger checks, with an explicit array rejection (since Array.isArray(user) but typeof user === 'object').",
+          "rationale": "The function is a single pure guard with no other collaborators; the reuse candidate is the function itself. Inline checks keep it a pure, dependency-free predicate matching the fixed acceptance oracle in test/acceptance.mjs, which exercises null, undefined, arrays, strings, wrong roles, id=0, fractional id, string id, NaN, Infinity, and id beyond MAX_SAFE_INTEGER.",
+          "alternatives": [
+            "Extract a shared isPlainObject/isPositiveSafeInteger helper module",
+            "Use a schema validation library (e.g. zod) for the shape check"
+          ],
+          "tradeoffs": [
+            "Inline checks slightly duplicate logic if similar guards are added later, but avoids introducing a new module or dependency for a 2-field check",
+            "No helper reuse across files, but scope is limited to this one file and no sibling guards exist yet"
+          ],
+          "reconsiderWhen": [
+            "A second authorization guard with similar user-shape validation is introduced elsewhere in src/auth",
+            "The user object shape gains more fields requiring a general-purpose validator"
+          ]
+        },
+        {
+          "decision": "Define 'positive safe integer id' as: typeof id === 'number' && Number.isSafeInteger(id) && id > 0, which naturally rejects 0, negative, NaN, Infinity, 1.5, and Number.MAX_SAFE_INTEGER+1 (which loses integer precision) and string ids like '1'.",
+          "rationale": "Matches every negative case enumerated in the fixed test/acceptance.mjs oracle without needing bespoke branches per case; Number.isSafeInteger already returns false for non-finite and non-integer values and for MAX_SAFE_INTEGER+1 due to floating point representation.",
+          "alternatives": [
+            "Manual range check against Number.MAX_SAFE_INTEGER combined with Number.isInteger",
+            "Coerce numeric strings to numbers before validating"
+          ],
+          "tradeoffs": [
+            "Relies on IEEE-754 double behavior for the MAX_SAFE_INTEGER+1 case (it rounds to MAX_SAFE_INTEGER+1 as a non-safe-integer float), which is correct but slightly non-obvious without a code comment",
+            "Does not accept numeric strings ('1') as ids, per spec requiring strict typing"
+          ],
+          "reconsiderWhen": [
+            "The spec later requires accepting numeric-string ids or bigint ids"
+          ]
+        },
+        {
+          "decision": "Do not mutate or clone the input user object; only read user.role and user.id and return a boolean.",
+          "rationale": "Spec explicitly requires a pure function that does not mutate input; frozen objects are exercised in the oracle (Object.freeze), so any attempted mutation would throw in strict mode or silently fail, and either way violates purity.",
+          "alternatives": [
+            "Defensively clone user before inspecting it"
+          ],
+          "tradeoffs": [
+            "No defensive copy means canBorrow trusts callers not to mutate user concurrently during the call, but the function is synchronous and single-threaded so this is not a real risk"
+          ],
+          "reconsiderWhen": [
+            "canBorrow is ever changed to accept async/mutable shared state"
+          ]
+        }
+      ],
+      "inspection": [
+        {
+          "path": "src/auth/borrower.mjs",
+          "finding": "Current implementation is `export const canBorrow = user => !!user;` — accepts any truthy value including arrays, strings, and objects with wrong role/id, so it fails essentially all negative cases in the oracle."
+        },
+        {
+          "path": "test/acceptance.mjs",
+          "finding": "Fixed oracle requires: valid {id:1,role:'borrower'} and frozen {id:2,role:'borrower'} return true; null, undefined, [], {}, 'borrower', wrong roles (bookseller, admin), id 0, id 1.5, id '1' (string), id NaN, id Infinity, and id MAX_SAFE_INTEGER+1 all return false. No other exports or files are exercised."
+        }
+      ]
+    },
+    "maxActiveMs": 480000,
+    "cost": {
+      "knownUsd": 0.517486,
+      "unknownInvocations": 0,
+      "pendingInvocations": 0,
+      "ceilingUsd": 1.2
+    },
+    "planningMs": 84952,
+    "revision": 1,
+    "status": "draft",
+    "title": null,
+    "hash": null,
+    "specHash": null,
+    "security": {
+      "contextHash": "8ed2fd47c86d25bfe623f25ad938996920d4fe0b8ae9b5a0d7c8ab6743b61d33",
+      "minimumLane": "fast",
+      "requiresThreatModel": false,
+      "topics": [],
+      "requirements": []
+    },
+    "design": null,
+    "baseSha": "8c19bbd2db4864ba387ce65dae2fa4f0937d023d",
+    "candidateSha": "8c19bbd2db4864ba387ce65dae2fa4f0937d023d",
+    "questions": [],
+    "tasks": [],
+    "attempts": [],
+    "validationRunIds": [],
+    "activeRunId": null,
+    "finalRun": null,
+    "qa": null,
+    "activeMs": 0,
+    "error": {
+      "code": "PRODUCT",
+      "message": "Security topic authentication detected by the controller is missing from the Product security plan"
+    },
+    "delivery": null,
+    "publication": null,
+    "impactAdvice": [],
+    "sizeAdvice": [],
+    "stoppedWork": null,
+    "nextAction": "apv2 spec plan-resume 81cc7f45-d6be-43be-b09c-18483d80fbb3   (resume retained planning checkpoints; adjust limits first with spec budget if needed)",
+    "approvalIdentityWarning": "Local reviewer labels are not authenticated identities."
+  }
+}

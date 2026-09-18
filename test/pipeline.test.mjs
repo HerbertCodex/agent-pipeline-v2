@@ -46,6 +46,8 @@ test('bounded repair can fix a failed candidate without new Product/QA calls',as
  const f=fixture(t,{config:{maxRepairAttempts:1,agent:{type:'command',command:worker(code)}}});
  const r=await f.start();assert.equal(r.state,'awaiting_review',JSON.stringify(r.error));assert.equal(r.metrics.repairAttempts,1);
  assert.equal(f.pipeline.store.events(r.id).filter(e=>e.type==='candidate.created').length,2);
+ assert.equal(f.pipeline.store.events(r.id).filter(e=>e.type==='agent.context').length,1);
+ assert.equal(f.pipeline.store.events(r.id).filter(e=>e.type==='agent.context_reused').length,1);
 });
 test('repair budget stops an unproductive agent',async t=>{
  const f=fixture(t,{config:{maxRepairAttempts:1,agent:{type:'command',command:worker("writeFileSync('src/math.mjs','export const add = (a,b) => a * b;\\n');")}}});
@@ -107,7 +109,7 @@ test('cancellation during agent does not silently rerun it',async t=>{
  const resumed=await f.pipeline.execute(r.id,{acceptCurrentCandidate:true});assert.equal(resumed.state,'awaiting_review',JSON.stringify(resumed.error));
 });
 test('run time budget yields interruption, not success',async t=>{
- const f=fixture(t,{config:{maxRunMs:200,agent:{type:'command',command:worker('await new Promise(r=>setTimeout(r,10000));')}}});
+ const f=fixture(t,{config:{maxRunMs:200,validationReserveMs:0,agent:{type:'command',command:worker('await new Promise(r=>setTimeout(r,10000));')}}});
  const r=await f.start();assert.equal(r.state,'interrupted');assert.equal(r.error.code,'BUDGET');assert.equal(r.remainingMs,0);
 });
 test('setup failure is infrastructure failure, not repairable code',async t=>{

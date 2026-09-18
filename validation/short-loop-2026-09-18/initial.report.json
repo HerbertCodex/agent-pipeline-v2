@@ -1,0 +1,144 @@
+{
+  "framework": "2.0.0-alpha.8",
+  "node": "v24.21.0",
+  "configuration": "quick-sonnet5-low",
+  "planning": "generated",
+  "simulatedProductApproval": true,
+  "realHumanReview": false,
+  "limitation": "Synthetic engineering fixtures; automated success does not establish architecture or craftsmanship quality. No production latency claim.",
+  "pathway": "auto",
+  "totalBudgetUsd": 4,
+  "stoppedReason": null,
+  "expectedSamples": 3,
+  "aggregate": [
+    {
+      "configuration": "quick-sonnet5-low",
+      "attempts": 3,
+      "successes": 0,
+      "successRate": 0,
+      "p50WallMs": 1955.1098299999999,
+      "p95WallMs": 2004.8325489999997,
+      "knownUsd": 0,
+      "unknownInvocations": 0,
+      "pendingInvocations": 0,
+      "costComplete": true,
+      "knownUsdPerSuccessIncludingFailures": null,
+      "medianPlanningMs": 1921.5350430000003,
+      "medianActiveMs": 0,
+      "invocations": 2,
+      "inputBytes": 42171
+    }
+  ],
+  "samples": [
+    {
+      "caseId": "loan-record-id",
+      "configuration": "quick-sonnet5-low",
+      "success": false,
+      "wallMs": 24.139775,
+      "planningMs": 0,
+      "activeMs": 0,
+      "cost": {
+        "knownUsd": 0,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0
+      },
+      "invocations": 0,
+      "inputBytes": 0
+    },
+    {
+      "caseId": "loan-overdue",
+      "configuration": "quick-sonnet5-low",
+      "success": false,
+      "wallMs": 1955.1098299999999,
+      "planningMs": 1921.5350430000003,
+      "activeMs": 0,
+      "cost": {
+        "knownUsd": 0,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2
+      },
+      "invocations": 1,
+      "inputBytes": 26063
+    },
+    {
+      "caseId": "borrower-guard",
+      "configuration": "quick-sonnet5-low",
+      "success": false,
+      "wallMs": 2004.8325489999997,
+      "planningMs": 1971.1805450000002,
+      "activeMs": 0,
+      "cost": {
+        "knownUsd": 0,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2
+      },
+      "invocations": 1,
+      "inputBytes": 16108
+    }
+  ],
+  "details": [
+    {
+      "caseId": "loan-record-id",
+      "repeat": 0,
+      "specId": null,
+      "status": "failed-before-draft",
+      "error": "PipelineError: Structural or sensitive work requires a standard Product spec",
+      "untouched": true,
+      "directory": "/tmp/apv2-short-quick-20260918/1-loan-record-id",
+      "executionPath": "legacy",
+      "observedModels": [],
+      "requestedModels": [],
+      "reviewerChecklist": [
+        "Behavior and negative cases",
+        "Existing boundaries and justified abstractions",
+        "Meaningful independent tests",
+        "Error handling and security",
+        "Readable diff without speculative machinery"
+      ]
+    },
+    {
+      "caseId": "loan-overdue",
+      "repeat": 0,
+      "specId": "4ef2073e-7c3a-4f06-9f0d-4f143df0f3d8",
+      "status": "draft",
+      "error": "PipelineError: Spec 4ef2073e-7c3a-4f06-9f0d-4f143df0f3d8: product failed: spent: 1 turns, 0.00 USD declared by the provider (exit 1) after 1781 ms: product failed\n\n{\"duration_api_ms\":0,\"stop_reason\":\"stop_sequence\",\"session_id\":\"5ebb1eef-e7bf-44b9-b932-fada2c3b0b85\",\"total_cost_usd\":0,\"usage\":{\"output_tokens_details\":{\"thinking_tokens\":0},\"input_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":0,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"modelUsage\":{},\"permission_denials\":[],\"terminal_reason\":\"api_error\",\"fast_mode_state\":\"off\",\"fast_mode_disabled_reason\":\"sdk_opt_in_required\",\"subagent_stats\":{\"spawned\":0,\"requested\":{\"background\":0,\"foreground\":0,\"unset\":0},\"started_in_background\":0,\"max_depth\":0,\"spawned_by_subagents\":0,\"completed\":0,\"failed\":0,\"killed\":{\"parent\":0,\"user\":0,\"system\":0},\"refused\":{\"depth_limit\":0,\"concurrency_limit\":0,\"budget\":0},\"by_type\":{}},\"is_error\":true,\"num_turns\":1,\"subtype\":\"success\",\"api_error_status\":429,\"result\":\"You've hit your session limit · resets 11:50am (Europe/Paris)\",\"type\":\"result\",\"duration_ms\":496,\"uuid\":\"c852f829-0f61-4d20-80f9-6c05161e51a6\",\"queued_turn_count\":0}",
+      "untouched": true,
+      "directory": "/tmp/apv2-short-quick-20260918/1-loan-overdue",
+      "executionPath": "standard",
+      "observedModels": [],
+      "requestedModels": [
+        "claude-sonnet-5"
+      ],
+      "reviewerChecklist": [
+        "Behavior and negative cases",
+        "Existing boundaries and justified abstractions",
+        "Meaningful independent tests",
+        "Error handling and security",
+        "Readable diff without speculative machinery"
+      ]
+    },
+    {
+      "caseId": "borrower-guard",
+      "repeat": 0,
+      "specId": "d6c55454-817d-4273-9b8d-081e1b25395b",
+      "status": "draft",
+      "error": "PipelineError: Spec d6c55454-817d-4273-9b8d-081e1b25395b: product failed: spent: 1 turns, 0.00 USD declared by the provider (exit 1) after 1837 ms: product failed\n\n{\"duration_api_ms\":0,\"stop_reason\":\"stop_sequence\",\"session_id\":\"99d2d90f-4752-4530-b86e-aab6c7d8a4ad\",\"total_cost_usd\":0,\"usage\":{\"output_tokens_details\":{\"thinking_tokens\":0},\"input_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":0,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":0,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"modelUsage\":{},\"permission_denials\":[],\"terminal_reason\":\"api_error\",\"fast_mode_state\":\"off\",\"fast_mode_disabled_reason\":\"sdk_opt_in_required\",\"subagent_stats\":{\"spawned\":0,\"requested\":{\"background\":0,\"foreground\":0,\"unset\":0},\"started_in_background\":0,\"max_depth\":0,\"spawned_by_subagents\":0,\"completed\":0,\"failed\":0,\"killed\":{\"parent\":0,\"user\":0,\"system\":0},\"refused\":{\"depth_limit\":0,\"concurrency_limit\":0,\"budget\":0},\"by_type\":{}},\"is_error\":true,\"num_turns\":1,\"subtype\":\"success\",\"api_error_status\":429,\"result\":\"You've hit your session limit · resets 11:50am (Europe/Paris)\",\"type\":\"result\",\"duration_ms\":438,\"uuid\":\"a23f8a41-eee3-4a2f-b042-48fd30ab0066\",\"queued_turn_count\":0}",
+      "untouched": true,
+      "directory": "/tmp/apv2-short-quick-20260918/1-borrower-guard",
+      "executionPath": "structural",
+      "observedModels": [],
+      "requestedModels": [
+        "claude-sonnet-5"
+      ],
+      "reviewerChecklist": [
+        "Behavior and negative cases",
+        "Existing boundaries and justified abstractions",
+        "Meaningful independent tests",
+        "Error handling and security",
+        "Readable diff without speculative machinery"
+      ]
+    }
+  ]
+}

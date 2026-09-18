@@ -1,7 +1,7 @@
 import { parseJson } from '../domain/schema.js';
 /** A provider sentence is shown to the operator: keep it short and on one line, never a whole transcript. */
 const PROVIDER_MESSAGE_CHARS = 300;
-const number = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+const number = (value) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null);
 /** Claude Code reports its own limits in the result envelope; a stop reason is named rather than buried. */
 function claudeUsage(text) {
     let envelope;
@@ -27,8 +27,11 @@ function claudeUsage(text) {
                 : subtype && subtype !== 'success' ? subtype
                     : failed ? 'provider-stopped' : null;
     const said = typeof r['result'] === 'string' ? r['result'].replace(/\s+/g, ' ').trim() : '';
+    const usage = r['usage'];
     return { stopReason, providerMessage: said && (failed || stopReason) ? said.slice(0, PROVIDER_MESSAGE_CHARS) : null,
-        costUsd: number(r['total_cost_usd']), turns: number(r['num_turns']), durationMs: number(r['duration_ms']) };
+        costUsd: number(r['total_cost_usd']), turns: number(r['num_turns']), durationMs: number(r['duration_ms']),
+        ...(r['modelUsage'] && typeof r['modelUsage'] === 'object' ? { models: Object.keys(r['modelUsage']) } : {}),
+        ...(usage ? { tokens: { input: number(usage['input_tokens']), output: number(usage['output_tokens']), cacheRead: number(usage['cache_read_input_tokens']), cacheWrite: number(usage['cache_creation_input_tokens']) } } : {}) };
 }
 /**
  * Usage of the last invocation, when the configured provider reports it. A provider that reports nothing
@@ -37,7 +40,27 @@ function claudeUsage(text) {
 export function providerUsage(type, stdout) {
     if (!stdout.trim())
         return null;
-    return type === 'claude' ? claudeUsage(stdout) : null;
+    if (type === 'claude')
+        return claudeUsage(stdout);
+    if (type === 'codex') {
+        const totals = { input: 0, output: 0, cacheRead: 0 };
+        let turns = 0;
+        for (const line of stdout.split('\n')) {
+            try {
+                const event = JSON.parse(line);
+                if (event.type !== 'turn.completed' || !event.usage)
+                    continue;
+                totals.input += number(event.usage.input_tokens) ?? 0;
+                totals.output += number(event.usage.output_tokens) ?? 0;
+                totals.cacheRead += number(event.usage.cached_input_tokens) ?? 0;
+                turns++;
+            }
+            catch { /* A truncated or non-JSON diagnostic is not usage. */ }
+        }
+        if (turns)
+            return { costUsd: null, stopReason: null, providerMessage: null, durationMs: null, turns, tokens: { ...totals, cacheWrite: null } };
+    }
+    return null;
 }
 /** One line an operator can act on: what stopped the agent and what it had spent when it stopped. */
 export function usageSentence(usage) {

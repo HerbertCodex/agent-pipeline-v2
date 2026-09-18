@@ -1,0 +1,17 @@
+✔ loan-record-id (0.592518ms)
+✔ accepts canonical digit strings of 1 to 16 digits (0.627164ms)
+✔ rejects values above the safe-integer range (0.108801ms)
+✔ rejects strings longer than 16 digits (0.090898ms)
+✔ rejects zero and leading zeros (0.649367ms)
+✔ rejects trailing garbage and numeric formats parseInt would accept (0.145416ms)
+✔ rejects surrounding or embedded whitespace (0.096241ms)
+✔ rejects non-ASCII digits (0.105051ms)
+✔ rejects the empty string and non-string inputs (0.096415ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 43.515205

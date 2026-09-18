@@ -44,8 +44,10 @@
 ### CSS architecture
 - [ ] All colors, spacing, easing defined as CSS custom properties in one global file
 - [ ] No hardcoded hex values or pixel values in component styles
-- [ ] Scoped styles used in Svelte/Vue/Angular — not global classes
-- [ ] BEM not used — scoping handles collision prevention
+- [ ] Styling convention follows confirmed project decisions and existing components
+- [ ] New global component classes use BEM unless the project specifies another convention; modifiers retain their base class in markup
+- [ ] Scoped styles, CSS Modules, utility frameworks and documented utilities keep their conventions; no unrelated legacy renaming
+- [ ] Configured CSS naming check passes for the applicable files; absent checks are reported as unverified
 - [ ] `@layer` used to manage specificity in global CSS
 - [ ] Logical properties used (`padding-inline`, `margin-block`, `inset`)
 - [ ] `@keyframes` in global animations file — not duplicated in components

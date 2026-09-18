@@ -112,8 +112,11 @@ export class Store {
         }
         catch { /* Observability cannot change committed decisions. */ }
     }
-    events(id) {
-        return this.db.prepare('SELECT * FROM events WHERE run_id=? ORDER BY seq').all(id).map(row => ({
+    events(id, types) {
+        if (types?.length === 0)
+            return [];
+        const filter = types ? ` AND type IN (${types.map(() => '?').join(',')})` : '';
+        return this.db.prepare(`SELECT * FROM events WHERE run_id=?${filter} ORDER BY seq`).all(id, ...(types ?? [])).map(row => ({
             seq: Number(row['seq']), runId: String(row['run_id']), at: Number(row['at']), type: String(row['type']),
             data: parseJson(String(row['data'])),
         }));
@@ -256,8 +259,11 @@ export class Store {
             events: [...runs, ...documents].sort((a, b) => a.at - b.at),
         };
     }
-    documentEvents(id) {
-        return this.db.prepare('SELECT * FROM document_events WHERE doc_id=? ORDER BY seq').all(id).map(row => ({
+    documentEvents(id, types) {
+        if (types?.length === 0)
+            return [];
+        const filter = types ? ` AND type IN (${types.map(() => '?').join(',')})` : '';
+        return this.db.prepare(`SELECT * FROM document_events WHERE doc_id=?${filter} ORDER BY seq`).all(id, ...(types ?? [])).map(row => ({
             seq: Number(row['seq']), at: Number(row['at']), type: String(row['type']), data: parseJson(String(row['data'])),
         }));
     }

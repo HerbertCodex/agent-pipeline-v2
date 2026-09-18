@@ -1,0 +1,172 @@
+{
+  "framework": "2.0.0-alpha.8",
+  "node": "v24.21.0",
+  "configuration": "deep-opus5-high-including-recovery",
+  "planning": "generated",
+  "caseSetHash": "329fae8e77c6ebce0f8416697da5452585fccba14f294347a809a372be2c09df",
+  "checksHash": "3ff548b9b27049c80b8b75a5aa87e93aff936480deec1ff3f57c6b5583502004",
+  "simulatedProductApproval": true,
+  "realHumanReview": false,
+  "limitation": "Synthetic engineering fixtures; automated success does not establish architecture or craftsmanship quality. No production latency claim. Recovery includes controller fixes and manual budget amendments; not a fresh matched run of the final code. Wall times sum active attempts and exclude the operator wait between them.",
+  "pathway": "auto",
+  "totalBudgetUsd": 3,
+  "stoppedReason": null,
+  "expectedSamples": 3,
+  "aggregate": [
+    {
+      "configuration": "deep-opus5-high-including-recovery",
+      "attempts": 3,
+      "successes": 1,
+      "successRate": 0.3333333333333333,
+      "p50WallMs": 302717.204074,
+      "p95WallMs": 384935.05523299996,
+      "knownUsd": 2.90003,
+      "unknownInvocations": 1,
+      "pendingInvocations": 0,
+      "costComplete": false,
+      "knownUsdPerSuccessIncludingFailures": 2.90003,
+      "medianPlanningMs": 150980,
+      "medianActiveMs": 44953.810658,
+      "invocations": 9,
+      "inputBytes": 266125
+    }
+  ],
+  "samples": [
+    {
+      "caseId": "loan-record-id",
+      "configuration": "deep-opus5-high-including-recovery",
+      "success": true,
+      "wallMs": 45073.92647599999,
+      "planningMs": 43.38720099999999,
+      "activeMs": 44953.810658,
+      "cost": {
+        "knownUsd": 0.277788,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2
+      },
+      "invocations": 1,
+      "inputBytes": 13852
+    },
+    {
+      "caseId": "loan-overdue",
+      "configuration": "deep-opus5-high-including-recovery",
+      "success": false,
+      "wallMs": 384935.05523299996,
+      "planningMs": 150980,
+      "activeMs": 233823,
+      "cost": {
+        "knownUsd": 1.8834909999999998,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 2
+      },
+      "invocations": 4,
+      "inputBytes": 130713
+    },
+    {
+      "caseId": "borrower-guard",
+      "configuration": "deep-opus5-high-including-recovery",
+      "success": false,
+      "wallMs": 302717.204074,
+      "planningMs": 302644,
+      "activeMs": 0,
+      "cost": {
+        "knownUsd": 0.738751,
+        "unknownInvocations": 1,
+        "pendingInvocations": 0,
+        "ceilingUsd": 2.3
+      },
+      "invocations": 4,
+      "inputBytes": 121560
+    }
+  ],
+  "details": [
+    {
+      "caseId": "loan-record-id",
+      "repeat": 0,
+      "specId": "47451947-8a8b-42ff-808d-1fa44e62c725",
+      "status": "awaiting_review",
+      "error": null,
+      "untouched": true,
+      "directory": "/tmp/apv2-short-deep-final-20260918/1-loan-record-id",
+      "executionPath": "compact",
+      "observedModels": [
+        "claude-haiku-4-5-20251001",
+        "claude-opus-5"
+      ],
+      "requestedModels": [
+        "claude-opus-5"
+      ],
+      "reviewerChecklist": [
+        "Behavior and negative cases",
+        "Existing boundaries and justified abstractions",
+        "Meaningful independent tests",
+        "Error handling and security",
+        "Readable diff without speculative machinery"
+      ]
+    },
+    {
+      "caseId": "loan-overdue",
+      "repeat": 0,
+      "specId": "f73972b2-c8ca-4cb8-b24a-a01092a81d40",
+      "status": "blocked",
+      "error": {
+        "code": "QA_REJECTED",
+        "message": "QA requests changes; automatic repair budget exhausted. Inspect findings and create an explicit follow-up."
+      },
+      "untouched": true,
+      "directory": "/tmp/apv2-short-deep-final-20260918/1-loan-overdue",
+      "executionPath": "standard",
+      "observedModels": [
+        "claude-haiku-4-5-20251001",
+        "claude-opus-5"
+      ],
+      "requestedModels": [
+        "claude-opus-5"
+      ],
+      "reviewerChecklist": [
+        "Behavior and negative cases",
+        "Existing boundaries and justified abstractions",
+        "Meaningful independent tests",
+        "Error handling and security",
+        "Readable diff without speculative machinery"
+      ]
+    },
+    {
+      "caseId": "borrower-guard",
+      "repeat": 0,
+      "specId": "dd1e9c7e-312a-4be2-8a42-9d409168431a",
+      "status": "draft",
+      "error": "PipelineError: product timed_out (exit none, signal SIGKILL) after 180104 ms: product timed_out",
+      "untouched": true,
+      "directory": "/tmp/apv2-short-deep-final-20260918/1-borrower-guard",
+      "executionPath": "structural",
+      "observedModels": [
+        "claude-haiku-4-5-20251001",
+        "claude-opus-5"
+      ],
+      "requestedModels": [
+        "claude-opus-5"
+      ],
+      "reviewerChecklist": [
+        "Behavior and negative cases",
+        "Existing boundaries and justified abstractions",
+        "Meaningful independent tests",
+        "Error handling and security",
+        "Readable diff without speculative machinery"
+      ]
+    }
+  ],
+  "manualResumes": true,
+  "controllerFixesDuringRecovery": [
+    "safe array removal and append",
+    "target schema and explicit patch semantics",
+    "complete minimum security coverage diagnostic (latest quick recovery)"
+  ],
+  "sourceReports": [
+    "deep.report.json",
+    "deep-qa-recovery.json",
+    "deep-structural-recovery.json"
+  ]
+}

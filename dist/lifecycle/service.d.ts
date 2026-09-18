@@ -45,6 +45,8 @@ export declare class Lifecycle {
         config: unknown;
         request: string;
         proposal?: unknown;
+        compactTask?: unknown;
+        pathway?: 'auto' | 'standard' | 'structural';
         signal?: AbortSignal;
     }): Promise<Document<SpecRecord>>;
     private requiresDesign;
@@ -81,6 +83,11 @@ export declare class Lifecycle {
     private htmlEscape;
     private prepareDesignProposal;
     private product;
+    private buildProduct;
+    /** Resume the exact request; an accepted Product checkpoint survives a failed Design round. */
+    resumePlanning(id: string, signal?: AbortSignal): Promise<Document<SpecRecord>>;
+    /** Operational limits do not rewrite the approved scope, gates or functional hash. */
+    amendBudget(id: string, input: unknown, actor: string, note: string): Document<SpecRecord>;
     refine(id: string, request: string, proposal?: unknown, signal?: AbortSignal): Promise<Document<SpecRecord>>;
     approveSpec(id: string, expectedHash: string, actor: string, note: string): Promise<Document<SpecRecord>>;
     /** Design context scoped to one task: legacy proposals without taskScopes keep the whole design. */
@@ -96,7 +103,13 @@ export declare class Lifecycle {
     private qaRepairTask;
     private aggregateTask;
     /** What the providers declared for this spec so far. Declared values, never an invoice. */
-    declaredCostUsd(r: SpecRecord): number;
+    declaredCostUsd(r: SpecRecord, documentId: string): number;
+    costSummary(id: string): {
+        ceilingUsd: number | null;
+        knownUsd: number;
+        unknownInvocations: number;
+        pendingInvocations: number;
+    };
     /**
      * The reviewed configuration may cap what a spec is allowed to spend. Reaching it stops the workflow with
      * what was spent; continuing is an explicit operator decision (`spec run --accept-cost`), like every other

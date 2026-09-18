@@ -1,14 +1,16 @@
-import { type Run } from '../domain/contracts.js';
-import { Store } from '../persistence/store.js';
+import { type Run } from "../domain/contracts.js";
+import { Store } from "../persistence/store.js";
 export interface StartOptions {
     repo: string;
     task: unknown;
     config: unknown;
     baseRef?: string;
+    specId?: string;
 }
 export interface ExecuteOptions {
     signal?: AbortSignal;
     acceptCurrentCandidate?: boolean;
+    acceptCost?: boolean;
 }
 export declare class Pipeline {
     readonly store: Store;

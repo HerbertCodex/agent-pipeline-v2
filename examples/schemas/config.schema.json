@@ -83,7 +83,7 @@
           "type": "integer",
           "minimum": 10,
           "maximum": 3600000,
-          "default": 900000
+          "default": 1800000
         },
         "passEnv": {
           "type": "array",
@@ -113,11 +113,21 @@
           ],
           "default": ""
         },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "default",
+            "low",
+            "medium",
+            "high"
+          ],
+          "default": "default"
+        },
         "maxTurns": {
           "type": "integer",
           "minimum": 1,
           "maximum": 200,
-          "default": 32
+          "default": 200
         },
         "maxBudgetUsd": {
           "anyOf": [
@@ -333,7 +343,7 @@
                   "type": "integer",
                   "minimum": 10,
                   "maximum": 3600000,
-                  "default": 900000
+                  "default": 1800000
                 },
                 "passEnv": {
                   "type": "array",
@@ -363,11 +373,21 @@
                   ],
                   "default": ""
                 },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "default",
+                    "low",
+                    "medium",
+                    "high"
+                  ],
+                  "default": "default"
+                },
                 "maxTurns": {
                   "type": "integer",
                   "minimum": 1,
                   "maximum": 200,
-                  "default": 32
+                  "default": 200
                 },
                 "maxBudgetUsd": {
                   "anyOf": [
@@ -427,7 +447,7 @@
                   "type": "integer",
                   "minimum": 10,
                   "maximum": 3600000,
-                  "default": 900000
+                  "default": 1800000
                 },
                 "passEnv": {
                   "type": "array",
@@ -457,11 +477,125 @@
                   ],
                   "default": ""
                 },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "default",
+                    "low",
+                    "medium",
+                    "high"
+                  ],
+                  "default": "default"
+                },
                 "maxTurns": {
                   "type": "integer",
                   "minimum": 1,
                   "maximum": 200,
-                  "default": 32
+                  "default": 200
+                },
+                "maxBudgetUsd": {
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "minimum": 0.01,
+                      "maximum": 1000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "design": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "command",
+                    "codex",
+                    "claude"
+                  ]
+                },
+                "command": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 16000,
+                    "allOf": [
+                      {
+                        "pattern": "^[^\\u0000]*$"
+                      }
+                    ]
+                  },
+                  "minItems": 0,
+                  "maxItems": 200,
+                  "default": []
+                },
+                "timeoutMs": {
+                  "type": "integer",
+                  "minimum": 10,
+                  "maximum": 3600000,
+                  "default": 1800000
+                },
+                "passEnv": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100,
+                    "allOf": [
+                      {
+                        "pattern": "^[^\\u0000]*$"
+                      }
+                    ],
+                    "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"
+                  },
+                  "minItems": 0,
+                  "maxItems": 100,
+                  "default": []
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 0,
+                  "maxLength": 200,
+                  "allOf": [
+                    {
+                      "pattern": "^[^\\u0000]*$"
+                    }
+                  ],
+                  "default": ""
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "default",
+                    "low",
+                    "medium",
+                    "high"
+                  ],
+                  "default": "default"
+                },
+                "maxTurns": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 200,
+                  "default": 200
                 },
                 "maxBudgetUsd": {
                   "anyOf": [
@@ -493,12 +627,173 @@
       "additionalProperties": false,
       "default": {
         "product": null,
-        "qa": null
+        "qa": null,
+        "design": null
       }
+    },
+    "modelRouting": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "product",
+              "design",
+              "implementer",
+              "qa"
+            ]
+          },
+          "lane": {
+            "type": "string",
+            "enum": [
+              "fast",
+              "standard",
+              "high"
+            ]
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ]
+          },
+          "effort": {
+            "type": "string",
+            "enum": [
+              "default",
+              "low",
+              "medium",
+              "high"
+            ],
+            "default": "default"
+          }
+        },
+        "required": [
+          "provider",
+          "role",
+          "lane",
+          "model"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 24,
+      "default": []
+    },
+    "roleProfiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "product",
+              "design",
+              "implementer",
+              "qa"
+            ]
+          },
+          "quick": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "allOf": [
+                  {
+                    "pattern": "^[^\\u0000]*$"
+                  }
+                ]
+              },
+              "effort": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "required": [
+              "model",
+              "effort"
+            ],
+            "additionalProperties": false
+          },
+          "deep": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "allOf": [
+                  {
+                    "pattern": "^[^\\u0000]*$"
+                  }
+                ]
+              },
+              "effort": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "required": [
+              "model",
+              "effort"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "provider",
+          "role",
+          "quick",
+          "deep"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 8,
+      "default": []
     },
     "workflow": {
       "type": "object",
       "properties": {
+        "planningMode": {
+          "type": "string",
+          "enum": [
+            "legacy",
+            "adaptive"
+          ],
+          "default": "legacy"
+        },
         "qaLanes": {
           "type": "array",
           "items": {
@@ -580,11 +875,25 @@
             "**/Package.resolved",
             "**/Podfile.lock"
           ]
+        },
+        "maxSpecCostUsd": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0.01,
+              "maximum": 10000
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 25
         }
       },
       "required": [],
       "additionalProperties": false,
       "default": {
+        "planningMode": "legacy",
         "qaLanes": [
           "standard",
           "high"
@@ -615,8 +924,56 @@
           "**/flake.lock",
           "**/Package.resolved",
           "**/Podfile.lock"
-        ]
+        ],
+        "maxSpecCostUsd": 25
       }
+    },
+    "feedback": {
+      "type": "object",
+      "properties": {
+        "gateIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ],
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "minItems": 0,
+          "maxItems": 20,
+          "default": []
+        },
+        "maxCalls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 4
+        },
+        "maxTotalMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 600000,
+          "default": 120000
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {
+        "gateIds": [],
+        "maxCalls": 4,
+        "maxTotalMs": 120000
+      }
+    },
+    "validationReserveMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 600000,
+      "default": 60000
     },
     "limits": {
       "type": "object",
@@ -866,13 +1223,13 @@
       "type": "integer",
       "minimum": 100,
       "maximum": 7200000,
-      "default": 1800000
+      "default": 2700000
     },
     "maxRepairAttempts": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 3,
-      "default": 1
+      "maximum": 5,
+      "default": 3
     },
     "validationMaxAgeMs": {
       "type": "integer",

@@ -1,0 +1,134 @@
+[
+  {
+    "seq": 13,
+    "at": 1789728463878,
+    "type": "invocation.started",
+    "data": {
+      "invocationId": "8a671679-2fb0-454f-a184-096ba9283808",
+      "role": "architecture-decision",
+      "provider": "claude",
+      "requestedModel": "claude-opus-5",
+      "requestedEffort": "high",
+      "inputBytes": 16113,
+      "timeoutMs": 179931,
+      "maxBudgetUsd": 1.2
+    }
+  },
+  {
+    "seq": 16,
+    "at": 1789728555597,
+    "type": "invocation.finished",
+    "data": {
+      "invocationId": "8a671679-2fb0-454f-a184-096ba9283808",
+      "role": "architecture-decision",
+      "provider": "claude",
+      "requestedModel": "claude-opus-5",
+      "requestedEffort": "high",
+      "status": "passed",
+      "durationMs": 87110.902,
+      "usage": {
+        "stopReason": null,
+        "costUsd": 0.3215865,
+        "turns": 7,
+        "durationMs": 86041,
+        "models": [
+          "claude-haiku-4-5-20251001",
+          "claude-opus-5"
+        ],
+        "tokens": {
+          "input": 8,
+          "output": 6320,
+          "cacheRead": 39029,
+          "cacheWrite": 13914
+        }
+      },
+      "costStatus": "known",
+      "stdoutHash": "c23098ff6345c52dc94d59daebfb624578ad8d39294f755b70371f500087bd4c",
+      "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated": false
+    }
+  },
+  {
+    "seq": 22,
+    "at": 1789728555636,
+    "type": "role.output_rejected",
+    "data": {
+      "role": "product",
+      "mode": "architecture-decision",
+      "attempt": 1,
+      "error": {
+        "code": "SPEC_ARCHITECTURE",
+        "path": null,
+        "message": "Architecture evidence must reference tracked paths at the baseline"
+      },
+      "outputHash": "f326d0887d673a4aaa4b9fa97b6dfac04acd6601abf2d90c2db9392dbc801642",
+      "retrying": true
+    }
+  },
+  {
+    "seq": 24,
+    "at": 1789728555644,
+    "type": "invocation.started",
+    "data": {
+      "invocationId": "57456168-5ca4-4cc1-b376-49f5bf21054d",
+      "role": "architecture-decision",
+      "provider": "claude",
+      "requestedModel": "claude-opus-5",
+      "requestedEffort": "high",
+      "inputBytes": 31579,
+      "timeoutMs": 88166,
+      "maxBudgetUsd": 0.87
+    }
+  },
+  {
+    "seq": 27,
+    "at": 1789728570789,
+    "type": "invocation.finished",
+    "data": {
+      "invocationId": "57456168-5ca4-4cc1-b376-49f5bf21054d",
+      "role": "architecture-decision",
+      "provider": "claude",
+      "requestedModel": "claude-opus-5",
+      "requestedEffort": "high",
+      "status": "passed",
+      "durationMs": 13603.266,
+      "usage": {
+        "stopReason": null,
+        "costUsd": 0.215546,
+        "turns": 2,
+        "durationMs": 12463,
+        "models": [
+          "claude-haiku-4-5-20251001",
+          "claude-opus-5"
+        ],
+        "tokens": {
+          "input": 2,
+          "output": 1089,
+          "cacheRead": 0,
+          "cacheWrite": 17966
+        }
+      },
+      "costStatus": "known",
+      "stdoutHash": "cbf53385ccce992bab3de94f14f67adc847d3c8a706823d762c18f3265d664ac",
+      "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated": false
+    }
+  },
+  {
+    "seq": 32,
+    "at": 1789728570828,
+    "type": "role.output_rejected",
+    "data": {
+      "role": "product",
+      "mode": "architecture-decision",
+      "attempt": 2,
+      "error": {
+        "code": "ROLE_OUTPUT",
+        "path": null,
+        "message": "Remove applies only to existing object fields; replace an array as a whole"
+      },
+      "outputHash": "f326d0887d673a4aaa4b9fa97b6dfac04acd6601abf2d90c2db9392dbc801642",
+      "retrying": false
+    }
+  }
+]

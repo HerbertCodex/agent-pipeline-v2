@@ -1,0 +1,79 @@
+diff --git a/src/record-id.mjs b/src/record-id.mjs
+index f340919..3b4b9cb 100644
+--- a/src/record-id.mjs
++++ b/src/record-id.mjs
+@@ -1 +1,16 @@
+-export function parseRecordId(raw) { return parseInt(raw, 10) || null; }
++/** Canonical loan record identifier: 1 to 16 ASCII digits, no leading zero. */
++const RECORD_ID_PATTERN = /^[1-9][0-9]{0,15}$/;
++
++/**
++ * Parses a loan record identifier.
++ *
++ * @param {unknown} raw Candidate identifier; only a canonical digit string is accepted.
++ * @returns {number|null} The positive safe integer value, or null when `raw` is not a
++ *   canonical identifier or its value exceeds `Number.MAX_SAFE_INTEGER`.
++ */
++export function parseRecordId(raw) {
++  if (typeof raw !== 'string' || !RECORD_ID_PATTERN.test(raw)) return null;
++  // 16 digits can exceed the safe-integer range, where Number() would round silently.
++  const value = Number(raw);
++  return Number.isSafeInteger(value) ? value : null;
++}
+diff --git a/test/regression.mjs b/test/regression.mjs
+new file mode 100644
+index 0000000..55a1a4d
+--- /dev/null
++++ b/test/regression.mjs
+@@ -0,0 +1,51 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { parseRecordId } from '../src/record-id.mjs';
++
++test('accepts canonical digit strings of 1 to 16 digits', () => {
++  assert.equal(parseRecordId('1'), 1);
++  assert.equal(parseRecordId('7'), 7);
++  assert.equal(parseRecordId('42'), 42);
++  assert.equal(parseRecordId('1000000000000000'), 1000000000000000);
++  assert.equal(parseRecordId('9007199254740991'), Number.MAX_SAFE_INTEGER);
++});
++
++test('rejects values above the safe-integer range', () => {
++  // parseInt would round these to a neighbouring float instead of failing.
++  assert.equal(parseRecordId('9007199254740992'), null);
++  assert.equal(parseRecordId('9999999999999999'), null);
++});
++
++test('rejects strings longer than 16 digits', () => {
++  assert.equal(parseRecordId('12345678901234567'), null);
++});
++
++test('rejects zero and leading zeros', () => {
++  for (const raw of ['0', '00', '01', '0123']) {
++    assert.equal(parseRecordId(raw), null, raw);
++  }
++});
++
++test('rejects trailing garbage and numeric formats parseInt would accept', () => {
++  for (const raw of ['1x', '1.2', '1e2', '12abc', '0x1f', '+1', '-1', 'Infinity']) {
++    assert.equal(parseRecordId(raw), null, raw);
++  }
++});
++
++test('rejects surrounding or embedded whitespace', () => {
++  for (const raw of [' 1', '1 ', '\t1', '1\n', '1 2', ' ']) {
++    assert.equal(parseRecordId(raw), null, JSON.stringify(raw));
++  }
++});
++
++test('rejects non-ASCII digits', () => {
++  for (const raw of ['١٢٣', '１２３']) {
++    assert.equal(parseRecordId(raw), null, raw);
++  }
++});
++
++test('rejects the empty string and non-string inputs', () => {
++  for (const raw of ['', null, undefined, 1, 1.5, NaN, true, ['1'], { toString: () => '1' }]) {
++    assert.equal(parseRecordId(raw), null, String(raw));
++  }
++});
