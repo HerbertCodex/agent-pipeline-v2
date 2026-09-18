@@ -6,6 +6,7 @@ import { resolve, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { lifecycleCommand, lifecycleHelp } from './lifecycle/cli.js';
 import { specSchema, qaSchema, designProposalSchema, securityPlanSchema } from './lifecycle/contracts.js';
+import { briefSpecSchema, architectureSchema } from './lifecycle/pathways.js';
 import { bootstrapProposalSchema } from './lifecycle/bootstrap.js';
 import { securityContextSchema } from './security/owasp.js';
 import { decisionLedgerSchema, semanticReviewSchema } from './lifecycle/decisions.js';
@@ -37,6 +38,7 @@ Exit: 0 ready/inspection, 2 awaiting review, 1 failed, 130 interrupted.
 export const exampleConfig = {
     schemaVersion: 1, executionMode: 'local-trusted', environment: { id: 'REPLACE-with-pinned-environment-id' },
     agent: { type: 'codex', passEnv: ['HOME', 'CODEX_HOME', 'CODEX_API_KEY'] },
+    workflow: { planningMode: 'adaptive' },
     setup: [{ command: ['npm', 'ci', '--ignore-scripts'], timeoutMs: 300000, passEnv: ['HOME'] }],
     gates: [
         { id: 'typecheck', command: ['npm', 'run', 'typecheck'], lanes: ['standard', 'high'], cacheTtlMs: 0 },
@@ -51,9 +53,9 @@ function load(path) {
 }
 async function main() {
     const { values, positionals } = parseArgs({ allowPositionals: true, strict: true, options: {
-            provider: { type: 'string' }, 'review-mode': { type: 'string' }, role: { type: 'string' }, repo: { type: 'string' }, config: { type: 'string' }, task: { type: 'string' }, base: { type: 'string' },
+            model: { type: 'string' }, effort: { type: 'string' }, provider: { type: 'string' }, 'review-mode': { type: 'string' }, role: { type: 'string' }, repo: { type: 'string' }, config: { type: 'string' }, task: { type: 'string' }, base: { type: 'string' },
             'state-dir': { type: 'string' }, sha: { type: 'string' }, reviewer: { type: 'string' }, note: { type: 'string' }, output: { type: 'string' },
-            request: { type: 'string' }, 'request-file': { type: 'string' }, file: { type: 'string' },
+            request: { type: 'string' }, 'request-file': { type: 'string' }, file: { type: 'string' }, pathway: { type: 'string' },
             repository: { type: 'string' }, remote: { type: 'string' }, 'confirm-push': { type: 'boolean' }, 'confirm-pr': { type: 'boolean' },
             hash: { type: 'string' }, agent: { type: 'string' }, name: { type: 'string' }, target: { type: 'string' },
             assist: { type: 'boolean' }, execute: { type: 'boolean' }, commit: { type: 'boolean' }, confirm: { type: 'boolean' }, approve: { type: 'boolean' }, amendment: { type: 'string' },
@@ -93,7 +95,7 @@ async function main() {
     if (command === 'schemas') {
         const dir = resolve(required(values.output, '--output'));
         mkdirSync(dir, { recursive: true });
-        for (const [name, schema] of [['task', taskSchema], ['config', configSchema], ['agent-output', agentOutputSchema], ['receipt', receiptSchema], ['spec', specSchema], ['qa', qaSchema], ['design', designProposalSchema], ['bootstrap', bootstrapProposalSchema], ['decision-ledger', decisionLedgerSchema], ['semantic-review', semanticReviewSchema], ['security-context', securityContextSchema], ['security-plan', securityPlanSchema]]) {
+        for (const [name, schema] of [['task', taskSchema], ['config', configSchema], ['agent-output', agentOutputSchema], ['receipt', receiptSchema], ['spec', specSchema], ['product-brief', briefSpecSchema], ['architecture', architectureSchema], ['qa', qaSchema], ['design', designProposalSchema], ['bootstrap', bootstrapProposalSchema], ['decision-ledger', decisionLedgerSchema], ['semantic-review', semanticReviewSchema], ['security-context', securityContextSchema], ['security-plan', securityPlanSchema]]) {
             writeFileSync(join(dir, `${name}.schema.json`), JSON.stringify({ $schema: 'https://json-schema.org/draft/2020-12/schema', ...schema.json }, null, 2) + '\n');
         }
         console.log(`Schemas written to ${dir}`);

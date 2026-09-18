@@ -132,7 +132,8 @@ export function validateSpec(value: unknown, ready = false, ledger: DecisionLedg
     const resolutionIds = spec.decisionResolutions.map(x => x.decisionId);
     invariant(new Set(resolutionIds).size === resolutionIds.length, 'SPEC_DECISIONS', 'Duplicate decision resolution');
     const knownDecisions = new Set(decisions.decisions.map(d => d.id));
-    invariant(spec.decisionCoverage.every(x => knownDecisions.has(x.decisionId)), 'SPEC_DECISIONS', 'Spec references an unknown project decision');
+    const unknownCoverage = spec.decisionCoverage.filter(x => !knownDecisions.has(x.decisionId)).map(x => x.decisionId);
+    invariant(!unknownCoverage.length, 'SPEC_DECISIONS', `Spec references an unknown project decision: ${unknownCoverage.join(', ')}. Allowed decisionCoverage IDs from decisionLedger: ${[...knownDecisions].join(', ') || 'none; return decisionCoverage: []'}. Local spec/architecture decisions do not create ledger IDs.`);
     const ambiguousProduct = new Map(ambiguousDecisions(decisions, 'product').map(d => [d.id, d]));
     for (const resolution of spec.decisionResolutions) {
         invariant(ambiguousProduct.has(resolution.decisionId), 'SPEC_DECISIONS', `Resolution references a decision that is not an ambiguous Product decision: ${resolution.decisionId}`);
@@ -143,9 +144,14 @@ export function validateSpec(value: unknown, ready = false, ledger: DecisionLedg
     const security = securityContext;
     const requiredTopics = new Set(security.topics.map(t => t.id));
     const declaredTopics = new Set(spec.security.owaspTopics);
-    for (const topic of requiredTopics) invariant(declaredTopics.has(topic), 'SPEC_SECURITY', `Security topic ${topic} detected by the controller is missing from the Product security plan`);
-    for (const key of ['authentication','authorization','sensitiveData','sessionState','fileUploads','externalRequests','database','multiTenant','secrets','api','webUi','ciCd','dependencyChange','aiAgent','mcp'] as const)
-        if (security.profile[key]) invariant(spec.security.profile[key], 'SPEC_SECURITY', `Security profile cannot downgrade detected surface ${key}`);
+    const missingTopics = [...requiredTopics].filter(topic => !declaredTopics.has(topic));
+    const missingMappings = [...requiredTopics].filter(topic => !spec.security.requirements.some(r => r.owaspTopics.includes(topic)));
+    const downgraded = (['authentication','authorization','sensitiveData','sessionState','fileUploads','externalRequests','database','multiTenant','secrets','api','webUi','ciCd','dependencyChange','aiAgent','mcp'] as const)
+        .filter(key => security.profile[key] && !spec.security.profile[key]);
+    // Return the complete minimum-coverage gap in one round instead of paying for
+    // successive repairs that each discover only the next missing topic.
+    invariant(!missingTopics.length && !missingMappings.length && !downgraded.length, 'SPEC_SECURITY',
+        `Product security plan must preserve the controller minimum. Missing security.owaspTopics: ${missingTopics.join(', ') || 'none'}. Missing security.requirements mappings (with valid acceptanceIds and verification): ${missingMappings.join(', ') || 'none'}. Security profile cannot downgrade detected surfaces: ${downgraded.join(', ') || 'none'}. Cover existing trust boundaries and exclusions without inventing out-of-scope features.`);
     if (security.profile.exposure !== 'unknown') invariant(spec.security.profile.exposure === security.profile.exposure, 'SPEC_SECURITY', `Security exposure must preserve detected value ${security.profile.exposure}`);
     const requirementIds = spec.security.requirements.map(r => r.id);
     invariant(new Set(requirementIds).size === requirementIds.length, 'SPEC_SECURITY', 'Duplicate security requirement id');
@@ -153,7 +159,6 @@ export function validateSpec(value: unknown, ready = false, ledger: DecisionLedg
         invariant(requirement.acceptanceIds.every(x => criteria.has(x)), 'SPEC_SECURITY', `Security requirement ${requirement.id} references an unknown acceptance criterion`);
         invariant(new Set(requirement.owaspTopics).size === requirement.owaspTopics.length, 'SPEC_SECURITY', `Security requirement ${requirement.id} repeats an OWASP topic`);
     }
-    for (const topic of requiredTopics) invariant(spec.security.requirements.some(r => r.owaspTopics.includes(topic)), 'SPEC_SECURITY', `OWASP topic ${topic} is not mapped to a verifiable security requirement`);
     if (security.negativeTestsRequired) invariant(spec.security.requirements.some(r => r.negativeTests.length > 0), 'SPEC_SECURITY', 'Security-sensitive behavior requires at least one explicit negative security test');
     if (security.requiresThreatModel) {
         invariant(spec.security.threatModel.required, 'SPEC_SECURITY', 'A threat model is required for the detected security surfaces');
@@ -331,6 +336,8 @@ export interface Publication {
     purpose?: 'review' | 'delivery';
 }
 export interface SpecRecord {
+    executionPath?: import('./pathways.js').ExecutionPath;
+    architecture?: import('./pathways.js').Architecture | null;
     repo: string;
     baseSha: string;
     config: Config;
@@ -368,6 +375,9 @@ export interface SpecRecord {
     review: ReviewWorkspace | null;
     sessionStartedAt: number | null;
     activeMs: number;
+    planningMs?: number;
+    planningStartedAt?: number | null;
+    operational?: { maxSpecCostUsd: number; maxActiveMs: number; agent: Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd'>> | null; at: number; reviewer: string; note: string };
     delivery: {
         directory: string;
         candidateSha: string;
@@ -379,8 +389,9 @@ export interface SpecRecord {
         message: string;
     } | null;
 }
-export function specHash(record: Pick<SpecRecord, 'repo' | 'baseSha' | 'configHash' | 'revision' | 'decisionLedgerHash' | 'securityContextHash' | 'content'>): string {
-    return hash({ repo: record.repo, baseSha: record.baseSha, configHash: record.configHash, revision: record.revision, decisionLedgerHash: record.decisionLedgerHash, securityContextHash: record.securityContextHash, content: record.content });
+export function specHash(record: Pick<SpecRecord, 'repo' | 'baseSha' | 'configHash' | 'revision' | 'decisionLedgerHash' | 'securityContextHash' | 'content' | 'executionPath' | 'architecture'>): string {
+    return hash({ repo: record.repo, baseSha: record.baseSha, configHash: record.configHash, revision: record.revision, decisionLedgerHash: record.decisionLedgerHash, securityContextHash: record.securityContextHash, content: record.content,
+        ...(record.executionPath ? { executionPath: record.executionPath, architecture: record.architecture ?? null } : {}) });
 }
 export function approvalHash(record: Pick<SpecRecord, 'contentHash' | 'design'>): string | null {
     if (!record.contentHash) return null;
@@ -394,6 +405,8 @@ export function specMarkdown(record: SpecRecord, id: string): string {
     if (!s)
         return `# Spec ${id}\n\nProduct has not produced a valid proposal.\n`;
     const lines = [`# ${s.title}`, '', `Spec: ${id} · revision ${record.revision} · ${record.status}`, `Approval hash: ${approvalHash(record)}`, `Decision ledger: ${record.decisionLedgerHash}`, '', s.problem, '', '## Scope', ...s.scope.map(x => `- ${x}`), '', '## Out of scope', ...s.outOfScope.map(x => `- ${x}`), '', '## Acceptance'];
+    if (record.executionPath) lines.splice(5, 0, `Execution path: ${record.executionPath}`);
+    if (record.architecture) lines.push('## Architecture', record.architecture.summary, ...record.architecture.decisions.map(d => `- ${d.decision}: ${d.rationale}\n  Alternatives: ${d.alternatives.join('; ')}\n  Tradeoffs: ${d.tradeoffs.join('; ')}\n  Reconsider when: ${d.reconsiderWhen.join('; ')}`), '');
     for (const c of s.acceptance)
         lines.push(`### ${c.id}`, c.description, `Verification: ${c.verification}`, '');
     if (s.decisionCoverage.length) lines.push('## Project decision coverage', ...s.decisionCoverage.map(x => `- ${x.decisionId} → ${x.acceptanceIds.join(', ')}: ${x.rationale}`), '');

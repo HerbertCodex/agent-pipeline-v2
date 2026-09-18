@@ -1,0 +1,183 @@
+[
+  {
+    "seq": 13,
+    "at": 1789727911967,
+    "type": "invocation.started",
+    "data": {
+      "invocationId": "eae206cd-674f-49c6-94a0-a18d589fa1a3",
+      "role": "architecture-decision",
+      "provider": "claude",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "inputBytes": 16116,
+      "timeoutMs": 179930,
+      "maxBudgetUsd": 1.2
+    }
+  },
+  {
+    "seq": 16,
+    "at": 1789727931794,
+    "type": "invocation.finished",
+    "data": {
+      "invocationId": "eae206cd-674f-49c6-94a0-a18d589fa1a3",
+      "role": "architecture-decision",
+      "provider": "claude",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "status": "passed",
+      "durationMs": 19824.259,
+      "usage": {
+        "stopReason": null,
+        "costUsd": 0.1099898,
+        "turns": 5,
+        "durationMs": 18844,
+        "models": [
+          "claude-haiku-4-5-20251001",
+          "claude-sonnet-5"
+        ],
+        "tokens": {
+          "input": 6,
+          "output": 1952,
+          "cacheRead": 37604,
+          "cacheWrite": 19515
+        }
+      },
+      "costStatus": "known",
+      "stdoutHash": "24b2a3f0354adc7c34a282d9e08962d5a8211a1983f26dc258e23b189c7e5bdc",
+      "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated": false
+    }
+  },
+  {
+    "seq": 33,
+    "at": 1789727931930,
+    "type": "invocation.started",
+    "data": {
+      "invocationId": "0fa63ce1-c17e-4129-9772-52fa0e4ae208",
+      "role": "product",
+      "provider": "claude",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "inputBytes": 32433,
+      "timeoutMs": 179926,
+      "maxBudgetUsd": 1.09
+    }
+  },
+  {
+    "seq": 36,
+    "at": 1789728012469,
+    "type": "invocation.finished",
+    "data": {
+      "invocationId": "0fa63ce1-c17e-4129-9772-52fa0e4ae208",
+      "role": "product",
+      "provider": "claude",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "status": "passed",
+      "durationMs": 75995.479,
+      "usage": {
+        "stopReason": null,
+        "costUsd": 0.227041,
+        "turns": 4,
+        "durationMs": 74957,
+        "models": [
+          "claude-haiku-4-5-20251001",
+          "claude-sonnet-5"
+        ],
+        "tokens": {
+          "input": 6,
+          "output": 8695,
+          "cacheRead": 56420,
+          "cacheWrite": 29740
+        }
+      },
+      "costStatus": "known",
+      "stdoutHash": "322d2de8247378151248f2da3bc168bfd966437835673cacd6e92b5c9b7146ff",
+      "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated": false
+    }
+  },
+  {
+    "seq": 42,
+    "at": 1789728012509,
+    "type": "role.output_rejected",
+    "data": {
+      "role": "product",
+      "mode": null,
+      "attempt": 1,
+      "error": {
+        "code": "SPEC_DECISIONS",
+        "path": null,
+        "message": "Spec references an unknown project decision"
+      },
+      "outputHash": "623d373950e3c41d6c11f34910ce0cd81ab17315ce42abf9a68d81864925021a",
+      "retrying": true
+    }
+  },
+  {
+    "seq": 44,
+    "at": 1789728012517,
+    "type": "invocation.started",
+    "data": {
+      "invocationId": "e4d12b6c-8b7c-472b-a39a-74a10cb0c018",
+      "role": "product",
+      "provider": "claude",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "inputBytes": 33382,
+      "timeoutMs": 99339,
+      "maxBudgetUsd": 0.86
+    }
+  },
+  {
+    "seq": 47,
+    "at": 1789728016922,
+    "type": "invocation.finished",
+    "data": {
+      "invocationId": "e4d12b6c-8b7c-472b-a39a-74a10cb0c018",
+      "role": "product",
+      "provider": "claude",
+      "requestedModel": "claude-sonnet-5",
+      "requestedEffort": "low",
+      "status": "passed",
+      "durationMs": 4400.233,
+      "usage": {
+        "stopReason": null,
+        "costUsd": 0.111968,
+        "turns": 2,
+        "durationMs": 3231,
+        "models": [
+          "claude-haiku-4-5-20251001",
+          "claude-sonnet-5"
+        ],
+        "tokens": {
+          "input": 2,
+          "output": 387,
+          "cacheRead": 0,
+          "cacheWrite": 24716
+        }
+      },
+      "costStatus": "known",
+      "stdoutHash": "e03fb4de45a6691e5a3755eeba4c03059a6a6df78b493bfb5bfc967dd6e4a805",
+      "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated": false
+    }
+  },
+  {
+    "seq": 53,
+    "at": 1789728016962,
+    "type": "role.output_rejected",
+    "data": {
+      "role": "product",
+      "mode": null,
+      "attempt": 2,
+      "error": {
+        "code": "SCHEMA",
+        "path": "$.decisions[0]",
+        "message": "$.decisions[0]: unknown property id"
+      },
+      "outputHash": "753015e7e53ac1313bed5eacff7f24d89f824e32b6e074fccdf5d1911557eff5",
+      "retrying": false
+    }
+  }
+]

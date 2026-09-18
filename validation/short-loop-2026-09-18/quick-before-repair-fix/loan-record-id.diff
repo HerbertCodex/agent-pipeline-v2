@@ -1,0 +1,17 @@
+diff --git a/src/record-id.mjs b/src/record-id.mjs
+index f340919..2124e40 100644
+--- a/src/record-id.mjs
++++ b/src/record-id.mjs
+@@ -1 +1,11 @@
+-export function parseRecordId(raw) { return parseInt(raw, 10) || null; }
++/**
++ * Parses a loan record identifier.
++ * @param {unknown} raw - Candidate identifier.
++ * @returns {number|null} A positive safe integer for a valid 1-16 digit
++ *   string with no leading zero, or null otherwise.
++ */
++export function parseRecordId(raw) {
++  if (typeof raw !== 'string' || !/^[1-9][0-9]{0,15}$/.test(raw)) return null;
++  const value = Number(raw);
++  return Number.isSafeInteger(value) ? value : null;
++}

@@ -324,33 +324,51 @@ If a style is specific to one component → keep it scoped.
 
 ---
 
-### CSS methodology — BEM's role in modern projects
+### CSS methodology — global BEM and existing project conventions
 
-BEM (`.block__element--modifier`) was the standard when CSS had no
-built-in scoping. With Svelte/Vue scoped styles and CSS Modules, BEM is
-**no longer necessary in those stacks** — the scoping handles collision
-prevention that BEM was invented to solve.
+Confirmed project decisions and existing conventions take precedence. For new
+global component CSS without a different convention, default to BEM. Use lowercase
+kebab-case words: `order-card`, `order-card__title`, `order-card--compact`,
+`order-card__title--muted`. An element belongs to its block, not to a chain of DOM
+ancestors: use `order-card__label`, not `order-card__body__label`.
 
-```css
-/* In scoped-styles stacks — BEM is unnecessary */
-.card__title--highlighted { ... }  /* verbose, redundant with scoping */
-.title.highlighted { ... }         /* scoping prevents collisions */
+Keep the base class when adding a modifier:
+
+```html
+<article class="order-card order-card--compact">
+  <h2 class="order-card__title order-card__title--muted">Order</h2>
+</article>
 ```
 
-**When BEM still makes sense:**
-- Large vanilla-CSS codebases with no framework scoping (e.g. a design
-  system shipped as plain CSS for consumption by multiple apps)
-- Teams that need explicit naming conventions for handoffs and documentation
-- Mixed CSS where some styles are global and some are scoped
+Preserve scoped Svelte/Vue styles, CSS Modules, Tailwind/UnoCSS utilities and
+documented project utilities. They do not need a BEM migration. In a mixed project,
+apply the BEM profile only to the owned global component styles. Exclude vendor,
+generated and module styles explicitly in the project's lint command or overrides.
+`@layer` manages cascade order; it does not provide name isolation.
 
-In those cases BEM is a valid, battle-tested choice — not a relic. The
-rule is: **use the collision-prevention your stack gives you; reach for
-BEM only when you don't have scoping and need a convention.**
+**Executable naming check:** use Stylelint's
+[`selector-class-pattern`](https://stylelint.io/user-guide/rules/selector-class-pattern/)
+with this pattern (a regex string, without surrounding slashes):
 
-**What modern stacks use instead of BEM:**
-- **Scoped styles** (Svelte, Vue, Angular, CSS Modules) → collision prevention built-in
-- **Tailwind** → no class names at all for utilities
-- **CSS Layers** (`@layer`) → specificity management without BEM naming
+```text
+^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:__[a-z][a-z0-9]*(?:-[a-z0-9]+)*)?(?:--[a-z][a-z0-9]*(?:-[a-z0-9]+)*)?$
+```
+
+The framework ships a reusable `examples/stylelint-bem.config.mjs` profile. Merge
+its rule into the project's existing Stylelint configuration within approved scope;
+keep existing checks. Pin Stylelint as a development dependency and expose a
+non-interactive `lint:css` or `lint:styles` script covering the relevant source files
+with `--max-warnings 0`. Onboarding proposes an existing script as a gate; existing
+pipeline configurations need that gate added explicitly. New lint tooling is a
+project setup change, not an implicit permission to install dependencies during a task.
+
+The pattern checks class-selector spelling, including nested selectors supported
+by the pinned Stylelint version. It cannot determine whether `card-title` should
+be a block or an element, or check markup base-class presence. Product/Design
+state the convention, Implementer follows it, and QA reviews these semantic
+relationships. A missing lint receipt is not proof of BEM compliance. Standalone
+kebab-case utilities are accepted as names; avoid adding broad exception patterns
+or disabling the rule to conceal a violation.
 
 ---
 

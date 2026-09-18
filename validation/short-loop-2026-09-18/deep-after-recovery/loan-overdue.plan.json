@@ -1,0 +1,422 @@
+{
+  "spec": {
+    "title": "Strict calendar-date isOverdue(dueOn, today) for library loans",
+    "problem": "src/dates.mjs currently exports isOverdue(dueOn, today) as \"return today >= dueOn\", which treats the due day itself as overdue and accepts any input, including malformed strings, impossible calendar dates such as 2026-02-29 or 2026-04-31, unpadded values such as 2026-9-18, and non-string values such as null. Library loan logic needs a pure, deterministic comparison of two explicitly injected calendar dates in strict YYYY-MM-DD form with years 1000 to 9999, where the due day is not overdue and only strictly later days are, and where any invalid input is rejected with a RangeError instead of silently returning a boolean. The fixed oracle test/acceptance.mjs encodes this contract and must keep passing unchanged.",
+    "scope": [
+      "Rewrite the body of the existing exported function isOverdue(dueOn, today) in src/dates.mjs, preserving the module path, the ESM module type and the named export.",
+      "Strict syntactic validation of both arguments: string type and the exact shape four digits, hyphen, two digits, hyphen, two digits, with no surrounding whitespace, no sign and no trailing characters.",
+      "Calendar validation of both arguments: year 1000 to 9999, month 01 to 12, day within the real length of that month, using Gregorian leap-year rules for February.",
+      "Comparison semantics: return false when today equals dueOn or is earlier, true only when today is strictly later than dueOn.",
+      "Throw RangeError for every invalid value of either argument, independently of whether the other argument is valid.",
+      "Optional regression tests in test/regression.mjs covering leap years, month lengths, year bounds and rejection cases beyond the fixed oracle."
+    ],
+    "outOfScope": [
+      "Any edit to test/acceptance.mjs; it is the fixed oracle and must remain byte-identical.",
+      "Time zone handling or UTC/local conversion, and any ambient clock such as Date.now() or new Date() with no arguments; today is always injected by the caller.",
+      "Date arithmetic beyond the comparison: no overdue-day counts, fines, durations or formatting helpers.",
+      "New dependencies, package.json changes, lockfiles, build tooling, CI or scripts.",
+      "New modules, classes or a date abstraction layer; the change stays inside the one existing function and its local helpers."
+    ],
+    "acceptance": [
+      {
+        "id": "AC1",
+        "description": "isOverdue returns false when today equals dueOn (the due day itself is not overdue), for example isOverdue('2026-09-18','2026-09-18') === false.",
+        "verification": "node --test test/acceptance.mjs passes; regression test asserts the same on additional equal-date pairs including month and year boundaries."
+      },
+      {
+        "id": "AC2",
+        "description": "isOverdue returns true when today is strictly later than dueOn, including across month and year boundaries, for example ('2026-09-18','2026-09-19'), ('2024-02-29','2024-03-01'), ('2026-12-31','2027-01-01').",
+        "verification": "node --test test/acceptance.mjs passes; regression test asserts the listed pairs return true."
+      },
+      {
+        "id": "AC3",
+        "description": "isOverdue returns false when today is strictly earlier than dueOn, for example ('2026-09-18','2026-09-17') and ('2027-01-01','2026-12-31').",
+        "verification": "node --test test/acceptance.mjs passes; regression test asserts the listed pairs return false."
+      },
+      {
+        "id": "AC4",
+        "description": "Real leap-day dates are accepted and compared correctly: '2024-02-29' and '2000-02-29' are valid inputs, while '2026-02-29', '1900-02-29' and '2100-02-29' are rejected, so leap years follow the full Gregorian rule (divisible by 4, except centuries not divisible by 400).",
+        "verification": "node --test test/acceptance.mjs passes for the 2024-02-29 case; regression test asserts acceptance of 2024-02-29 and 2000-02-29 and RangeError for 2026-02-29, 1900-02-29 and 2100-02-29."
+      },
+      {
+        "id": "AC5",
+        "description": "Impossible calendar dates throw RangeError: month out of range ('2026-13-01','2026-00-10'), day out of range for the month ('2026-04-31','2026-06-31','2026-01-32','2026-09-00').",
+        "verification": "assert.throws(..., RangeError) in test/acceptance.mjs for the covered cases and in test/regression.mjs for the rest."
+      },
+      {
+        "id": "AC6",
+        "description": "Malformed or non-string inputs throw RangeError: unpadded parts ('2026-9-18','2026-09-8'), trailing or leading characters ('2026-09-18x',' 2026-09-18','2026-09-18\\n'), wrong separators ('2026/09/18'), empty string, and non-string values (null, undefined, a number, a Date instance, an object, an array).",
+        "verification": "assert.throws(..., RangeError) in test/acceptance.mjs for the covered cases and in test/regression.mjs for the rest."
+      },
+      {
+        "id": "AC7",
+        "description": "Year bounds are enforced: '1000-01-01' and '9999-12-31' are valid, while '0999-12-31' and any year below 1000 throw RangeError; five-digit or shorter year strings also throw.",
+        "verification": "regression test asserts the valid bounds return a boolean and the out-of-range values throw RangeError."
+      },
+      {
+        "id": "AC8",
+        "description": "Both parameters are validated independently: an invalid dueOn throws RangeError even when today is valid, and an invalid today throws RangeError even when dueOn is valid. The thrown error is a RangeError instance with a non-empty message naming the offending parameter.",
+        "verification": "node --test test/acceptance.mjs, which exercises each invalid value in both argument positions; regression test asserts err instanceof RangeError and a non-empty message."
+      },
+      {
+        "id": "AC9",
+        "description": "The implementation is pure and clock-free: src/dates.mjs contains no Date.now, no new Date(), no getTimezoneOffset, no Intl usage and no other ambient time or locale source, and returns identical results under any TZ setting.",
+        "verification": "Code review of src/dates.mjs plus a repository grep for Date.now, new Date, getTimezoneOffset and Intl in src/dates.mjs returning no matches."
+      },
+      {
+        "id": "AC10",
+        "description": "Module shape is preserved: src/dates.mjs remains an ESM module at the same path with the named export isOverdue taking (dueOn, today) in that order and returning a boolean (strictly true or false, never a truthy or falsy non-boolean).",
+        "verification": "test/acceptance.mjs imports the module namespace and calls mod.isOverdue; regression test asserts typeof result === 'boolean' and assert.equal against literal true/false."
+      },
+      {
+        "id": "AC11",
+        "description": "test/acceptance.mjs is unchanged from the base commit and passes, and no files outside src/dates.mjs and test/regression.mjs are added or modified.",
+        "verification": "git diff against the base commit shows changes only in src/dates.mjs and the added test/regression.mjs; node --test test/acceptance.mjs passes."
+      },
+      {
+        "id": "AC12",
+        "description": "If test/regression.mjs is added, it uses only node:test and node:assert/strict, imports ../src/dates.mjs, adds no dependency, and passes when run.",
+        "verification": "node --test test/regression.mjs passes; file inspection confirms only node built-in imports."
+      }
+    ],
+    "decisions": [
+      {
+        "question": "Is the due day itself overdue?",
+        "answer": "No. Equality returns false; only a today strictly later than dueOn returns true. Stated in the operator request and pinned by the oracle assertion isOverdue('2026-09-18','2026-09-18') === false."
+      },
+      {
+        "question": "What input format and range is accepted?",
+        "answer": "Exactly YYYY-MM-DD with zero-padded parts and years 1000 to 9999, so all valid values are fixed-width and can be compared as strings once validated. Unpadded forms such as '2026-9-18' are invalid per the oracle."
+      },
+      {
+        "question": "How are invalid inputs signalled?",
+        "answer": "By throwing RangeError, for both syntactically malformed values (including non-strings such as null) and syntactically well-formed but impossible calendar dates such as '2026-02-29' and '2026-04-31'. No sentinel return, no TypeError, per the operator request and the oracle."
+      },
+      {
+        "question": "Where does 'today' come from?",
+        "answer": "It is always injected by the caller. The function performs no time zone conversion and reads no ambient clock, keeping it pure and deterministic."
+      },
+      {
+        "question": "Should a new date abstraction or dependency be introduced?",
+        "answer": "No. The existing exported function isOverdue in src/dates.mjs is rewritten in place with local helpers only; the module and export are preserved and no dependency or infrastructure change is made."
+      }
+    ],
+    "decisionCoverage": [],
+    "decisionResolutions": [],
+    "questions": [],
+    "tasks": [
+      {
+        "id": "T1",
+        "title": "Implement strict validated isOverdue and add regression tests",
+        "description": "Rewrite the body of the existing exported function isOverdue(dueOn, today) in src/dates.mjs (reuse this symbol; do not add a parallel function, module or default export). For each argument in turn, validate that it is a string matching exactly four digits, hyphen, two digits, hyphen, two digits with nothing before or after (anchored regex, no whitespace tolerance), then parse the numeric year, month and day and check year between 1000 and 9999, month between 1 and 12, and day between 1 and the real length of that month, where February has 29 days only when the year is divisible by 4 and either not divisible by 100 or divisible by 400. Throw a RangeError naming the offending parameter and its value for any failure; validate dueOn and today independently so either one being invalid throws. After both are valid, all accepted values are fixed-width and zero-padded, so return today > dueOn using plain string comparison, which yields a strict boolean and gives false on equality. Do not use Date, Date.now, Intl, getTimezoneOffset or any ambient clock or locale API anywhere in the file. Then add test/regression.mjs using only node:test and node:assert/strict, importing ../src/dates.mjs, covering: equality and both strict orderings across month and year boundaries; leap-day acceptance for 2024-02-29 and 2000-02-29 and rejection of 2026-02-29, 1900-02-29, 2100-02-29; month-length rejections 2026-04-31, 2026-06-31, 2026-01-32, 2026-09-00, 2026-13-01, 2026-00-10; malformed and non-string rejections including '2026-9-18', '2026-09-8', ' 2026-09-18', '2026-09-18x', '2026/09/18', '', null, undefined, 20260918, new Date(), {} and []; year bounds accepting 1000-01-01 and 9999-12-31 and rejecting 0999-12-31; that each invalid value throws in both argument positions with a RangeError instance carrying a non-empty message; and that returned values are strictly typeof 'boolean'. Do not modify test/acceptance.mjs or any other file.",
+        "acceptanceIds": [
+          "AC1",
+          "AC2",
+          "AC3",
+          "AC4",
+          "AC5",
+          "AC6",
+          "AC7",
+          "AC8",
+          "AC9",
+          "AC10",
+          "AC11",
+          "AC12"
+        ],
+        "allowedPaths": [
+          "src/dates.mjs",
+          "test/regression.mjs"
+        ],
+        "dependsOn": [],
+        "minimumLane": "standard"
+      }
+    ],
+    "minimumLane": "standard",
+    "experience": {
+      "uiImpact": "none",
+      "surfaces": [],
+      "rationale": "The change is confined to one pure function in an ESM module and its tests. There is no UI, template, style or user-facing surface in this repository."
+    },
+    "security": {
+      "profile": {
+        "exposure": "unknown",
+        "authentication": false,
+        "authorization": false,
+        "sensitiveData": false,
+        "sessionState": false,
+        "fileUploads": false,
+        "externalRequests": false,
+        "database": false,
+        "multiTenant": false,
+        "secrets": false,
+        "api": false,
+        "webUi": false,
+        "ciCd": false,
+        "dependencyChange": false,
+        "aiAgent": false,
+        "mcp": false
+      },
+      "owaspTopics": [
+        "input-validation"
+      ],
+      "threatModel": {
+        "required": false,
+        "summary": "The controller's deterministic security context detected no material security surface and did not require a threat model. The only application-specific security-relevant behaviour is input validation: isOverdue is a trust boundary for whatever caller supplies dueOn and today, and the change replaces a permissive comparison that accepts arbitrary values with fail-closed validation that throws RangeError. No network, storage, credential, tenancy or privilege surface is involved.",
+        "assets": [
+          "Correctness of loan overdue determination, which downstream callers may use for user-visible or fee-bearing decisions."
+        ],
+        "trustBoundaries": [
+          "The isOverdue function signature: caller-supplied dueOn and today strings are untrusted input until validated."
+        ],
+        "threats": [
+          {
+            "id": "TH1",
+            "category": "tampering",
+            "description": "A caller supplies a malformed, unpadded, non-string or impossible date (for example '2026-9-18', '2026-02-29', null) and the current lenient comparison silently returns a boolean, producing a wrong overdue verdict rather than surfacing the bad input.",
+            "mitigations": [
+              "Anchored strict format check plus full calendar validation of both arguments before any comparison.",
+              "Fail closed with RangeError on any invalid value, in either argument position, rather than returning a default."
+            ],
+            "acceptanceIds": [
+              "AC4",
+              "AC5",
+              "AC6",
+              "AC7",
+              "AC8"
+            ]
+          },
+          {
+            "id": "TH2",
+            "category": "abuse-case",
+            "description": "Ambient clock or time zone conversion inside the function would make the verdict depend on the host environment, letting environment differences flip an overdue decision non-deterministically.",
+            "mitigations": [
+              "today is injected by the caller; the implementation uses no Date, Date.now, Intl or timezone API.",
+              "Pure string comparison of validated fixed-width dates gives an environment-independent result."
+            ],
+            "acceptanceIds": [
+              "AC9",
+              "AC1",
+              "AC2",
+              "AC3"
+            ]
+          }
+        ],
+        "assumptions": [
+          "The function is an internal library helper; the caller is responsible for catching RangeError and for any user-facing error presentation.",
+          "Error messages include the parameter name and the offending value, which is caller-supplied date data and not sensitive."
+        ]
+      },
+      "requirements": [
+        {
+          "id": "SR1",
+          "title": "Fail-closed validation of both date arguments at the function trust boundary",
+          "owaspTopics": [
+            "input-validation"
+          ],
+          "acceptanceIds": [
+            "AC4",
+            "AC5",
+            "AC6",
+            "AC7",
+            "AC8"
+          ],
+          "verification": "node --test test/acceptance.mjs passes unchanged, and test/regression.mjs asserts RangeError for every malformed, non-string, out-of-range and impossible-calendar value in both the dueOn and today positions, with allow-list (anchored pattern plus range checks) rather than deny-list validation.",
+          "negativeTests": [
+            "Impossible calendar dates: '2026-02-29', '1900-02-29', '2100-02-29', '2026-04-31', '2026-06-31', '2026-01-32', '2026-09-00', '2026-13-01', '2026-00-10' each throw RangeError.",
+            "Malformed strings: '2026-9-18', '2026-09-8', ' 2026-09-18', '2026-09-18x', '2026-09-18\\n', '2026/09/18', '20260918', '' each throw RangeError.",
+            "Non-string values: null, undefined, 20260918, new Date(), {}, [], NaN each throw RangeError rather than TypeError or a silent boolean.",
+            "Out-of-range years: '0999-12-31', '0000-01-01' throw RangeError while '1000-01-01' and '9999-12-31' are accepted.",
+            "Each of the above is asserted in both argument positions, with the other argument valid, to prove independent validation."
+          ]
+        },
+        {
+          "id": "SR2",
+          "title": "Deterministic, clock-free and locale-free evaluation",
+          "owaspTopics": [
+            "input-validation"
+          ],
+          "acceptanceIds": [
+            "AC9",
+            "AC1",
+            "AC2",
+            "AC3"
+          ],
+          "verification": "Grep src/dates.mjs for Date.now, new Date, getTimezoneOffset and Intl and confirm no matches; regression test asserts identical results for the same inputs regardless of process TZ.",
+          "negativeTests": [
+            "A reviewer finding any ambient clock, Date parsing or locale-dependent comparison in src/dates.mjs fails this requirement.",
+            "Comparison must not rely on localeCompare or any collation that could vary by environment."
+          ]
+        }
+      ],
+      "assumptions": [
+        "The controller's securityContext reported no material security surface; input-validation is added here because validation is the substance of this change, not because a new surface was found.",
+        "No dependency, lockfile, CI or infrastructure change is part of this work, so supply-chain and pipeline topics do not apply.",
+        "The Implementer has file edits only and no shell or network; the acceptance gate is run by the runner, and the bounded run_check feedback tool may be used during the session for the acceptance gate."
+      ],
+      "deferred": [
+        "Any policy about how callers surface a RangeError to end users, including logging or monitoring of invalid loan dates, is outside this change.",
+        "Broader date utilities (overdue day counts, grace periods, fines) remain out of scope and would need their own specification."
+      ]
+    }
+  },
+  "qa": {
+    "report": {
+      "candidateSha": "f64c73f5468b1f29de8c25490159ff7a0b5bec50",
+      "verdict": "changes_requested",
+      "summary": "The implementation is correct and in scope: isOverdue(dueOn, today) in src/dates.mjs validates both arguments independently with an anchored allow-list pattern, year 1000-9999, month 1-12 and real month lengths under the full Gregorian leap rule, throws RangeError naming the offending parameter, and then compares fixed-width zero-padded strings, returning a strict boolean with equality mapping to false. The module path, ESM type and named export are preserved, there is no Date, Date.now, Intl, getTimezoneOffset or localeCompare anywhere in the file, and only src/dates.mjs and the new test/regression.mjs changed, leaving test/acceptance.mjs byte-identical. The acceptance gate receipt for this exact SHA is exit code 0, and it exercises equality, both strict orderings, a leap-day boundary and six invalid values in both argument positions.\n\nThe verdict is changes_requested for one reason only: no receipt shows test/regression.mjs being executed. AC12 and its verification require \"node --test test/regression.mjs passes\"; the sole receipt is the acceptance gate, whose recorded output is a single test (\"tests 1, pass 1\"), which cannot include the ten tests in the regression file, and package.json defines no test script that would widen the gate. The Implementer's own summary states plainly that the regression file was never run in that session. File inspection of the regression suite passes in every other respect (only node:test and node:assert/strict, imports ../src/dates.mjs, no dependency), and reading it against the implementation reveals no assertion that should fail — but that is reasoning, not evidence, so AC12 is unknown rather than pass. Running the regression file under the gate is the only step needed to clear this.\n\nTwo minor code notes accompany that: describe() stringifies the rejected value while building the error message, so an exotic object such as Object.create(null) or one with a throwing toString would surface a TypeError from the message construction instead of the specified RangeError (the enumerated spec values are all handled correctly, and the function still fails closed); and one regression comment describes a list as \"each 30-day month\" when the list also contains a February date. Neither blocks.",
+      "criteria": [
+        {
+          "id": "AC1",
+          "status": "pass",
+          "evidence": "src/dates.mjs:70 returns `today > dueOn`, so equality yields false. The acceptance receipt (exit 0, candidateSha f64c73f) covers assert.equal(isOverdue('2026-09-18','2026-09-18'), false) in test/acceptance.mjs:2. test/regression.mjs:42-47 adds equal-date pairs at a year start, a year end and a leap day; those assertions are written but unexecuted (see AC12)."
+        },
+        {
+          "id": "AC2",
+          "status": "pass",
+          "evidence": "Validated values are fixed-width and zero-padded (src/dates.mjs:2,41-49), so lexicographic comparison at line 70 equals chronological order. Acceptance receipt covers ('2026-09-18','2026-09-19') and ('2024-02-29','2024-03-01') as true. test/regression.mjs:49-55 additionally asserts the month boundary 2026-09-30 to 2026-10-01, the year boundary 2026-12-31 to 2027-01-01 and the full 1000-01-01 to 9999-12-31 span."
+        },
+        {
+          "id": "AC3",
+          "status": "pass",
+          "evidence": "Acceptance receipt covers ('2026-09-18','2026-09-17') === false. test/regression.mjs:57-62 asserts ('2026-10-01','2026-09-30'), ('2027-01-01','2026-12-31') and ('2024-03-01','2024-02-29') as false, all consistent with the strict `>` at src/dates.mjs:70."
+        },
+        {
+          "id": "AC4",
+          "status": "pass",
+          "evidence": "src/dates.mjs:8-10 implements the full Gregorian rule (year%4===0 && (year%100!==0 || year%400===0)), used by daysInMonth at line 13 to cap February at 29 or 28. 2024 and 2000 are leap (2000%400===0), so 02-29 is accepted; 2026, 1900 and 2100 are not, so day 29 exceeds 28 and line 47-49 throws RangeError. The acceptance receipt covers accepting '2024-02-29' and rejecting '2026-02-29' in both positions; test/regression.mjs:64-75 covers 2000-02-29 acceptance and the 1900/2100 rejections."
+        },
+        {
+          "id": "AC5",
+          "status": "pass",
+          "evidence": "Month range is checked at src/dates.mjs:44-46 ('2026-13-01' month 13, '2026-00-10' month 0) and day range at lines 47-49 against daysInMonth ('2026-04-31' and '2026-06-31' exceed 30, '2026-01-32' exceeds 31, '2026-09-00' is day 0). Acceptance receipt covers '2026-13-01' and '2026-04-31' in both argument positions; test/regression.mjs:77-81 covers the remaining four."
+        },
+        {
+          "id": "AC6",
+          "status": "pass",
+          "evidence": "Non-strings are rejected first at src/dates.mjs:31-33, so null, undefined, 20260918, NaN, a Date instance, {} and [] all throw RangeError before any parsing. The anchored regex at line 2 rejects '2026-9-18', '2026-09-8', ' 2026-09-18', '2026-09-18x', '2026/09/18', '20260918' and ''; JavaScript's `$` (no m flag) does not permit a trailing newline, so '2026-09-18\\n' is rejected too. Acceptance receipt covers '2026-9-18', null and '2026-09-18x' in both positions; test/regression.mjs:88-97 and the INVALID_VALUES table at lines 6-40 cover the rest."
+        },
+        {
+          "id": "AC7",
+          "status": "pass",
+          "evidence": "MIN_YEAR/MAX_YEAR (src/dates.mjs:4-5) are enforced at lines 41-43: '0999-12-31' parses to year 999 and throws, '0000-01-01' to year 0 and throws, while '1000-01-01' and '9999-12-31' pass. Shorter or longer year strings ('999-12-31', '10000-01-01', '02026-09-18') fail the \\d{4} anchor before that. test/regression.mjs:99-107 asserts exactly these; the assertions are unexecuted (see AC12), but the code path is unambiguous on review."
+        },
+        {
+          "id": "AC8",
+          "status": "pass",
+          "evidence": "src/dates.mjs:66-67 calls assertCalendarDate('dueOn', dueOn) then assertCalendarDate('today', today) before any comparison, so each argument is validated on its own; every throw site (lines 32, 36, 42, 45, 48) constructs a RangeError whose message begins with the parameter name and is non-empty. The acceptance receipt exercises six invalid values in both positions with the other argument valid. test/regression.mjs:109-131 asserts instanceof RangeError plus a non-empty message containing 'dueOn' or 'today' for all 28 invalid values in both positions."
+        },
+        {
+          "id": "AC9",
+          "status": "pass",
+          "evidence": "Read the complete 71-line src/dates.mjs: it contains no Date, Date.now, new Date, getTimezoneOffset, Intl or localeCompare, and no ambient input of any kind. The only operations are typeof, a literal regex, Number() on ASCII \\d groups, integer arithmetic and the `>` comparison of two validated strings, none of which depend on TZ or locale, so results are identical under any TZ setting."
+        },
+        {
+          "id": "AC10",
+          "status": "pass",
+          "evidence": "src/dates.mjs:65 remains `export function isOverdue(dueOn, today)` at the same path in an ESM module (package.json declares {\"type\":\"module\"}, unchanged in the diff). The return at line 70 is a relational operator, which always yields a primitive true or false, never a truthy non-boolean. test/acceptance.mjs imports the namespace and calls mod.isOverdue successfully under the passing receipt; test/regression.mjs:133-143 asserts typeof result === 'boolean' and strict identity with literals."
+        },
+        {
+          "id": "AC11",
+          "status": "pass",
+          "evidence": "The controller-supplied complete diff (git diff 8570dd1..f64c73f, qaScope.completeDiff=true) touches exactly two paths: src/dates.mjs (modified) and test/regression.mjs (added). test/acceptance.mjs does not appear in the diff and is therefore byte-identical to the base; its content on disk still matches the one-test oracle. The acceptance gate receipt for candidateSha f64c73f is exit code 0. The workspace file listing shows no other new files beyond .gitignore and package.json, which are untouched."
+        },
+        {
+          "id": "AC12",
+          "status": "unknown",
+          "evidence": "File inspection passes: test/regression.mjs:1-3 imports only node:test and node:assert/strict plus ../src/dates.mjs, and adds no dependency (package.json is unchanged and declares no dependencies). The execution half of the verification is unproven. The only receipt is gateId 'acceptance' (exit 0) whose reported output is a single test, which cannot include this file's ten tests; package.json defines no test script that would broaden the gate to test/, and the Implementer's own summary states the regression file was not executed in that session. Reading every assertion against the implementation surfaced no case that should fail, but that is analysis, not a receipt, so this is unknown rather than pass. Remedy: run node --test test/regression.mjs (or widen the gate to test/) and attach the receipt."
+        }
+      ],
+      "findings": [
+        {
+          "id": "F1",
+          "severity": "minor",
+          "path": "src/dates.mjs:17-21",
+          "description": "describe() stringifies the rejected value while building the error message. String(value) throws TypeError for objects that cannot be converted to a primitive, for example Object.create(null) or an object whose toString throws. In that case the caller sees a TypeError originating inside the validator instead of the specified RangeError. Every value enumerated in AC6, AC8 and SR1 (null, undefined, a number, NaN, a Date, {}, [], true) converts safely, and symbols are handled explicitly at line 19, so the spec'd surface is correct and the function still fails closed rather than returning a boolean. Formatting the value lazily, or guarding the conversion, would close the gap."
+        },
+        {
+          "id": "F2",
+          "severity": "minor",
+          "path": "test/regression.mjs:82",
+          "description": "The comment reads \"Last valid day of each 30-day month stays accepted\" but the list that follows also contains '2026-02-28', which is not a 30-day month. The comment mildly contradicts the data it introduces; either widen the wording to cover the February case or move that value to the leap-day test."
+        },
+        {
+          "id": "F3",
+          "severity": "minor",
+          "path": "test/regression.mjs",
+          "description": "Automated coverage gap, not a code defect: no configured gate executes this file. The acceptance receipt for f64c73f runs test/acceptance.mjs only (single test recorded), and package.json has no test script, so the ten regression tests that carry the evidence for AC4 through AC8 and AC12 have never run. This is the sole reason AC12 is unknown."
+        }
+      ],
+      "observations": [
+        "Reuse is clean and matches inventoryDelta (added and possibleDuplicates both empty): the existing isOverdue symbol was rewritten in place with four module-local helpers, and no new module, class, date abstraction or dependency was introduced, exactly as the spec's outOfScope list requires.",
+        "The correctness of the string comparison at src/dates.mjs:70 depends entirely on validation having already run, because it is only sound for fixed-width zero-padded values. Both assertions precede it at lines 66-67, and the inline comment at lines 68-69 states that dependency in terms of meaning rather than recording a measurement, which is the right place for it.",
+        "Comment quality is good throughout the diff: the JSDoc on assertCalendarDate and isOverdue documents contracts and the throw behaviour, and no comment records run identifiers, checklists, change history or claimed verification results.",
+        "One subtlety worth keeping in mind if the pattern is ever relaxed: JavaScript's `$` without the m flag does not match before a trailing newline (unlike some other regex flavours), which is what makes the '2026-09-18\\n' rejection in INVALID_VALUES hold. The anchored pattern also uses \\d, which is ASCII-only in JavaScript, so non-ASCII digit forms are rejected as well.",
+        "The Implementer's task summary was accurate against the files on every point I could check independently, including its explicit statement of the verification limitation about test/regression.mjs never being executed."
+      ],
+      "decisionChecks": [
+        {
+          "decisionId": "D1",
+          "status": "pass",
+          "evidence": "Decision \"Is the due day itself overdue?\" -> No, equality returns false. src/dates.mjs:70 uses strict `>` rather than `>=`, reversing the base implementation's `today >= dueOn`. The oracle assertion isOverdue('2026-09-18','2026-09-18') === false passes under the acceptance receipt (exit 0), and test/regression.mjs:42-47 pins three further equal-date pairs."
+        },
+        {
+          "decisionId": "D2",
+          "status": "pass",
+          "evidence": "Decision \"What input format and range is accepted?\" -> exactly YYYY-MM-DD, zero-padded, years 1000-9999. Enforced by the anchored pattern at src/dates.mjs:2 and the bounds at lines 4-5 and 41-43. Unpadded '2026-9-18' fails the \\d{2} groups, matching the oracle. Because every accepted value is therefore fixed-width, the string comparison at line 70 is chronologically correct, which is the property this decision exists to guarantee."
+        },
+        {
+          "decisionId": "D3",
+          "status": "pass",
+          "evidence": "Decision \"How are invalid inputs signalled?\" -> RangeError for both malformed values (including non-strings such as null) and well-formed but impossible dates. All five throw sites (src/dates.mjs:32,36,42,45,48) construct RangeError; there is no sentinel return, no TypeError branch and no default value anywhere in the file. The acceptance receipt asserts RangeError for null, '2026-9-18', '2026-09-18x', '2026-02-29', '2026-13-01' and '2026-04-31' in both argument positions. Single caveat recorded as finding F1: message construction can raise TypeError for objects that resist primitive conversion, outside the enumerated value set."
+        },
+        {
+          "decisionId": "D4",
+          "status": "pass",
+          "evidence": "Decision \"Where does 'today' come from?\" -> always injected by the caller, no ambient clock, no time zone conversion. Confirmed by reading the whole of src/dates.mjs: no Date, Date.now, getTimezoneOffset, Intl or locale-sensitive comparison, and `today` is used only as the second parameter at lines 67 and 70. The function is pure and deterministic."
+        },
+        {
+          "decisionId": "D5",
+          "status": "pass",
+          "evidence": "Decision \"Should a new date abstraction or dependency be introduced?\" -> No. The diff rewrites the existing exported function in place with local helpers only (isLeapYear, daysInMonth, describe, assertCalendarDate, none exported), keeps the module path and named export, and changes no package.json, lockfile, CI or build file. inventoryDelta reports no added public declarations."
+        }
+      ],
+      "securityChecks": [
+        {
+          "requirementId": "SR1",
+          "status": "pass",
+          "evidence": "Fail-closed allow-list validation at the function trust boundary is implemented and partially proven by receipt. assertCalendarDate (src/dates.mjs:30-50) runs on each argument independently before any comparison and validates positively (type is string, anchored \\d{4}-\\d{2}-\\d{2} pattern, year within 1000-9999, month within 1-12, day within the true length of that month under the Gregorian leap rule); there is no deny-list and no fallback path that returns a value for an invalid input. The acceptance gate for candidateSha f64c73f (exit 0) exercises '2026-02-29', '2026-13-01', '2026-04-31', '2026-9-18', null and '2026-09-18x' in both the dueOn and today positions with the other argument valid, which directly demonstrates independent validation. The remaining SR1 negative tests (1900/2100 February 29, 2026-06-31, 2026-01-32, 2026-09-00, 2026-00-10, ' 2026-09-18', '2026-09-18 ', '2026-09-18\\n', '2026/09/18', '20260918', '', undefined, 20260918, NaN, new Date(), {}, [], plus the 0999/0000 year bounds against accepted 1000-01-01 and 9999-12-31) are all present as assertions in test/regression.mjs:6-40, 70-107 and 109-126, and each traces to a code path I verified by review; they have not been executed, which is recorded as finding F3 and as the AC12 unknown rather than claimed as a passing run. Note finding F1: for objects outside the enumerated set that cannot be converted to a primitive, the error is a TypeError from message construction rather than a RangeError, but the call still fails closed."
+        },
+        {
+          "requirementId": "SR2",
+          "status": "pass",
+          "evidence": "Deterministic, clock-free and locale-free evaluation confirmed by reading the complete src/dates.mjs (71 lines, entirely within the diff): no Date.now, no new Date, no getTimezoneOffset, no Intl, and no localeCompare or any other collation call. Comparison is the primitive `>` on two already-validated fixed-width ASCII strings (line 70), which is defined by UTF-16 code-unit order and is therefore invariant across process TZ and locale settings; the parse path uses only Number() on ASCII \\d groups and integer arithmetic. The same inputs must produce the same output in any environment, satisfying the requirement's negative tests that no ambient clock, Date parsing or locale-dependent comparison appears in the file."
+        }
+      ]
+    },
+    "specHash": "511cdf51b3541b708e955909bf572ada5ade70e8a6a170d63a6ce9fcd6cd45be",
+    "evidenceHash": "d58e679a0d506e0ac3c3ecbef5804e03a94b550456c28b4050a9957b3e41c061",
+    "at": 1789728834537,
+    "source": "agent"
+  },
+  "receipts": [
+    [
+      {
+        "id": "068dcd6b-2c8a-49fc-a1a3-7051fd8470bf",
+        "runId": "a248a3bd-e68b-4bd4-9a05-99fef136aa3a",
+        "gateId": "acceptance",
+        "key": "e5d67607ff45257f168c4397e30be22a1a31b641d2eee90b18fbbc6d9a5467f2",
+        "candidateSha": "f64c73f5468b1f29de8c25490159ff7a0b5bec50",
+        "configHash": "53338185258e2a4f17be36b4bf4c692eb51e1a9e4c8ce9337b5d6861469269af",
+        "environmentHash": "cd9e3a9188a7e665d7fa05db4f0ce285ebb4a8c8bb866875ce74026aabe5c710",
+        "status": "passed",
+        "startedAt": 1789728458747,
+        "durationMs": 235.2998619999853,
+        "exitCode": 0,
+        "stdoutHash": "9e6ab526e37572037f51c078a34ef064e4ccd29f670c841beeb011c17556cffe",
+        "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "diagnostic": "",
+        "reusedFrom": null
+      }
+    ]
+  ]
+}

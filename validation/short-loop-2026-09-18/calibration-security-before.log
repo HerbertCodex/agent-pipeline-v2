@@ -1,0 +1,83 @@
+✔ authentication/password work routes OWASP auth topics, threat modeling and negative tests (3.055463ms)
+✔ outbound API work routes SSRF, REST and validation guidance (0.900109ms)
+✔ AI agent and MCP work routes agent, prompt-injection, AI coding and MCP guidance (0.344102ms)
+✔ ordinary arithmetic change stays fast and does not become a supply-chain task just because a lockfile exists elsewhere (0.767453ms)
+✖ authorization-only scope does not invent login, session or database work from exclusions and paths (0.778526ms)
+✖ scope exclusions preserve negative security obligations and affirmative clauses (0.774476ms)
+✖ actual security paths override prose exclusions while repository prose does not imply persistence (0.38526ms)
+✔ Product cannot drop controller-routed OWASP topics or required threat modeling (1.694765ms)
+✔ QA cannot pass a security-sensitive spec without evidence for every security requirement (1.123464ms)
+✔ shipped roles treat repository and external content as untrusted prompt-injection surfaces (0.552275ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 7
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 95.256206
+
+✖ failing tests:
+
+test at test/security-owasp.test.mjs:65:1
+✖ authorization-only scope does not invent login, session or database work from exclusions and paths (0.778526ms)
+  AssertionError [ERR_ASSERTION]: authentication
+
+  true !== false
+
+      at TestContext.<anonymous> (file:///home/herbertcodex/amelioration-agent-pipeline/agent-pipeline-v2/test/security-owasp.test.mjs:68:76)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/security-owasp.test.mjs:73:1
+✖ scope exclusions preserve negative security obligations and affirmative clauses (0.774476ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  true !== false
+
+      at TestContext.<anonymous> (file:///home/herbertcodex/amelioration-agent-pipeline/agent-pipeline-v2/test/security-owasp.test.mjs:75:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/security-owasp.test.mjs:82:1
+✖ actual security paths override prose exclusions while repository prose does not imply persistence (0.38526ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  'fast' !== 'high'
+
+      at TestContext.<anonymous> (file:///home/herbertcodex/amelioration-agent-pipeline/agent-pipeline-v2/test/security-owasp.test.mjs:86:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'fast',
+    expected: 'high',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

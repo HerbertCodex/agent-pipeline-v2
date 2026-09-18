@@ -1,3 +1,5 @@
+import { startInvocation } from '../adapters/invocations.js';
+import { providerUsage } from '../adapters/usage.js';
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync, readdirSync, lstatSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -88,23 +90,32 @@ async function runStructuredProvider(store, documentId, root, agent, protocol, i
             ids.delete(pid);
         } } };
     store.documentEvent(documentId, `${protocol}.started`, { provider: agent.type });
+    const deadline = Date.now() + agent.timeoutMs;
+    let spentUsd = 0;
+    let previousOutput;
     let repair;
     for (let attempt = 0;; attempt++) {
+        invariant(Date.now() < deadline, 'BOOTSTRAP_PROVIDER', 'Shared bootstrap round deadline exhausted');
+        invariant(agent.maxBudgetUsd === null || spentUsd < agent.maxBudgetUsd, 'COST_BUDGET', 'Bootstrap round budget exhausted');
+        const effective = { ...agent, timeoutMs: Math.max(1, deadline - Date.now()), maxBudgetUsd: agent.maxBudgetUsd === null ? null : Math.max(0.01, agent.maxBudgetUsd - spentUsd) };
         const repairLine = repair ? `\nCONTROLLER REJECTED YOUR PREVIOUS ANSWER (${repair.previousError.code}): ${repair.previousError.message}\n${repair.instruction}\n` : '';
         let command = agent.command;
         let input = JSON.stringify({ protocol, role: 'setup', instructions, ...payload, ...(repair ? { repair } : {}), outputSchema: schema.json });
         const outputFromFile = agent.type === 'codex';
         if (agent.type === 'codex') {
             rmSync(outputFile, { force: true });
-            command = [agent.command[0] ?? 'codex', 'exec', '--sandbox', 'read-only', '--cd', workspace, '--output-schema', schemaFile, '--output-last-message', outputFile, ...(agent.model ? ['--model', agent.model] : []), '-'];
-            input = `${instructions}${repairLine}\n${input}`;
+            command = [agent.command[0] ?? 'codex', 'exec', '--json', '--sandbox', 'read-only', '--cd', workspace, '--output-schema', schemaFile, '--output-last-message', outputFile, ...(agent.model ? ['--model', agent.model] : []), ...(agent.effort && agent.effort !== 'default' ? ['-c', `model_reasoning_effort="${agent.effort}"`] : []), '-'];
+            input = `Follow the controller instructions in the JSON request.${repairLine}\n${input}`;
         }
         else if (agent.type === 'claude') {
-            command = claudeCommand(agent, schema.json, true);
-            input = `${instructions}${repairLine}\n${input}`;
+            command = claudeCommand(effective, schema.json, true);
+            input = `Follow the controller instructions in the JSON request.${repairLine}\n${input}`;
         }
         invariant(command.length > 0, 'AGENT', 'Missing bootstrap provider executable');
-        const result = await runProcess({ command, cwd: workspace, env, input, timeoutMs: agent.timeoutMs, ...(signal ? { signal } : {}), ...hooks, maxOutputBytes: 3 * 1024 * 1024 });
+        const invocation = startInvocation(store, { kind: 'document', id: documentId }, effective, protocol, input);
+        const result = await runProcess({ command, cwd: workspace, env, input, timeoutMs: effective.timeoutMs, ...(signal ? { signal } : {}), ...hooks, maxOutputBytes: 3 * 1024 * 1024 });
+        invocation.finish(result);
+        spentUsd += providerUsage(agent.type, result.stdout)?.costUsd ?? 0;
         invariant(result.status === 'passed', result.status === 'cancelled' ? 'CANCELLED' : 'BOOTSTRAP_PROVIDER', `${protocol} provider ${result.status}: ${redact(result.stderr.slice(-4000), env)}`);
         try {
             let text = result.stdout;
@@ -115,6 +126,8 @@ async function runStructuredProvider(store, documentId, root, agent, protocol, i
             else
                 invariant(!result.truncated, 'BOOTSTRAP_OUTPUT', `${protocol} provider output truncated`);
             const raw = agent.type === 'claude' ? claudeOutput(text) : parseJson(text);
+            previousOutput = raw;
+            store.documentEvent(documentId, 'bootstrap.checkpoint', { protocol, output: raw, outputHash: hash(raw), attempt: attempt + 1 });
             const value = validate(schema.parse(raw));
             store.documentEvent(documentId, `${protocol}.finished`, { provider: agent.type, durationMs: result.durationMs, attempts: attempt + 1 });
             return value;
@@ -123,6 +136,10 @@ async function runStructuredProvider(store, documentId, root, agent, protocol, i
             if (!isRepairableOutputError(error) || attempt >= BOOTSTRAP_OUTPUT_REPAIRS)
                 throw error;
             repair = repairNotice(attempt + 1, error);
+            if (previousOutput !== undefined) {
+                repair.previousOutput = previousOutput;
+                repair.instruction = 'Return the complete corrected previousOutput. Preserve unrelated files and operator decisions; fix the reported error without repeating planning.';
+            }
             store.documentEvent(documentId, `${protocol}.output_repair`, { attempt: attempt + 1, code: error.code, message: error.message.slice(0, MAX_REPAIR_ERROR_CHARS) });
         }
     }

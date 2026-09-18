@@ -29,11 +29,12 @@ export function executionCapabilities(config: Config) {
       runBudgetMs: config.maxRunMs,
       repairAttempts: config.maxRepairAttempts,
     },
+    feedback: config.feedback ?? { gateIds: [], maxCalls: 0, maxTotalMs: 0 },
     runnerSetup: config.setup.map(step => step.command.join(' ')),
     gates: config.gates.map(g => ({ id: g.id, command: g.command.join(' '), lanes: g.lanes, mandatory: g.mandatory })),
     generatedPaths: config.workflow.generatedPaths ?? [...DEFAULT_GENERATED_PATHS],
     rules: [
-      'Only the runner executes setup and gates, in a fresh worktree, after the Implementer has finished editing files.',
+      'The runner performs independent final checks in a fresh worktree. If feedback.gateIds is nonempty, the Implementer can request those checks during its session through the bounded run_check tool; these observations are not final receipts.',
       'A task must not require the Implementer to run commands, install or update dependencies, regenerate lockfiles, run code generators or migrations, or access the network unless its capabilities above allow it.',
       'When the change needs such a step (for example a new dependency and its lockfile), make it an operator prerequisite: ask a Product question or state it as an explicit precondition outside the tasks.',
       'An Implementer without a shell must not receive a generatedPaths file in a task allowedPaths; the controller rejects such a spec.',
@@ -59,26 +60,14 @@ export function validateTaskCapabilities(spec: Spec, config: Config): Spec {
   return spec;
 }
 
-/**
- * Bounds that cut work in progress instead of warning before it starts. Measured on a real project: a Product
- * round for a medium increment runs about 20 minutes, and an implementation attempt reads and writes several
- * files. A provider that stops at its turn, cost or time limit produces nothing usable, and a role leaves
- * nothing to salvage. This is advice on a reviewed configuration, never a refusal.
- */
+/** Advice about conflicting limits; short budgets are valid for compact work. */
 export function configAdvice(config: Config): { setting: string; value: string; why: string }[] {
   const advice: { setting: string; value: string; why: string }[] = [];
-  const minutes = (ms: number) => `${Math.round(ms / 60000)} min`;
-  if (config.agent.maxTurns < 100)
-    advice.push({ setting: 'agent.maxTurns', value: String(config.agent.maxTurns), why: 'A turn count measures neither work, time nor money. Below 100 it stops real attempts mid-work; keep it as a net against an endless loop (200) and bound cost and time instead.' });
-  if (config.agent.timeoutMs < 1200000)
-    advice.push({ setting: 'agent.timeoutMs', value: minutes(config.agent.timeoutMs), why: 'A Product round for a medium increment runs about 20 minutes. A shorter timeout kills rounds that would have produced a spec, and a role leaves nothing to salvage.' });
-  if (config.agent.maxBudgetUsd !== null && config.agent.maxBudgetUsd < 10)
-    advice.push({ setting: 'agent.maxBudgetUsd', value: `${config.agent.maxBudgetUsd} USD`, why: 'This ceiling is enforced by the provider, which stops mid-work: the money is spent and nothing is produced. Prefer workflow.maxSpecCostUsd, which stops between tasks and asks the operator.' });
-  if (config.maxRepairAttempts < 2)
-    advice.push({ setting: 'maxRepairAttempts', value: String(config.maxRepairAttempts), why: 'Fixing one red check often reveals the next; a single pass loses the whole attempt. The loop already stops by itself when a repair changes nothing or fails identically.' });
   if (config.workflow.maxSpecCostUsd === null)
-    advice.push({ setting: 'workflow.maxSpecCostUsd', value: 'null', why: 'Nothing bounds what a whole spec may spend. This is the ceiling that warns instead of cutting: it stops between tasks, reports the declared cost and waits for an explicit authorization.' });
+    advice.push({ setting: 'workflow.maxSpecCostUsd', value: 'null', why: 'No shared spec cost ceiling is configured. Set a reviewed budget; provider costs that are unknown remain explicitly unaccounted for.' });
   if (config.maxRunMs <= config.agent.timeoutMs)
-    advice.push({ setting: 'maxRunMs', value: minutes(config.maxRunMs), why: `An attempt is one agent session plus its checks. With agent.timeoutMs at ${minutes(config.agent.timeoutMs)}, an agent that uses its whole allowance leaves nothing for the checks and the run stops on BUDGET.` });
+    advice.push({ setting: 'maxRunMs', value: String(config.maxRunMs), why: 'The agent timeout fills the run budget. The controller shortens it to reserve final checks; align these limits with measured task duration.' });
+  if (config.agent.maxBudgetUsd !== null && config.workflow.maxSpecCostUsd !== null && config.agent.maxBudgetUsd > config.workflow.maxSpecCostUsd)
+    advice.push({ setting: 'agent.maxBudgetUsd', value: String(config.agent.maxBudgetUsd), why: 'The per-call limit exceeds the entire spec budget. The controller caps each supported call at the remaining declared spec budget.' });
   return advice;
 }

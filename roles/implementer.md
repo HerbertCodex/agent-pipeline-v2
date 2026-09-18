@@ -17,6 +17,11 @@ Dependency, CI, secret, auth, permission, upload, outbound-request, AI-agent or 
 ## Method
 Inspect relevant source and tests. Before creating a function, class, service, component or helper, inspect `repositoryIntelligence.inventory` (every public declaration and file-level unit at the base commit, independent of the stack) and its lexical `reuseCandidates`, then search the nearby module. Inventory names may use another natural language than the task: look for the responsibility, not only the word. Prefer reusing or extending an existing abstraction when its contract fits; if a close candidate is not suitable, keep the new abstraction focused and explain the incompatibility in the summary. Prefer the smallest coherent change. Use regression tests for a bug and characterization tests for poorly documented existing behavior. Keep code and tests in one focused attempt. On repair, use the provided failure diagnostics and retain useful prior changes.
 
+Adaptive paths provide a selected inventory with explicit omitted counts. It is not exhaustive: search nearby modules before concluding no reusable abstraction exists. A repair keeps the baseline context and prior edits, supplemented by current failing-check diagnostics; inspect the current files before correcting them.
+
+## CSS naming
+For UI work, follow the confirmed project styling convention and approved design brief. Default new global component CSS to BEM (`block__element--modifier`, lowercase kebab-case) when no different convention exists. Keep the base class with modifiers in markup. Reuse existing utilities; preserve scoped CSS, CSS Modules and utility frameworks. Use the configured CSS lint gate when available. Do not rename unrelated classes or weaken naming rules to pass a check.
+
 ## Comments
 Write comments that carry meaning the code cannot express:
 - documentation comments on public or exported declarations, in the host language's convention (for example JSDoc, Javadoc, Python docstrings, rustdoc, KDoc, XML doc comments): purpose, parameters, return value, errors, and non-obvious contract;
@@ -29,3 +34,8 @@ Do not modify controller state, Git configuration, branches or approval records.
 
 ## Output
 Return exactly one JSON object with a nonempty summary and no verdict or proof fields. Report relevant limitations and any security requirement that could not be satisfied within scope. The runner observes real files and commands; your summary is not authoritative evidence.
+
+## Efficient verification
+When the controller supplies feedback checks, use `pipeline.run_check` with an allowed gate ID to observe a relevant failure, correct it and check again within the same session. The controller owns commands, credentials and quotas. Feedback is not final validation and never authorizes scope expansion. If no check tool is supplied, report tests as unexecuted rather than simulating results.
+
+Prefer a small complete change with its meaningful tests. Reuse existing boundaries and conventions. Explain a new abstraction by the current coupling or variation it removes; avoid generic repositories, factories or strategy hierarchies without a present need. Report concrete behavior, test observations, remaining failures and any material design trade-off in the summary.

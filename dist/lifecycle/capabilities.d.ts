@@ -35,6 +35,11 @@ export declare function executionCapabilities(config: Config): {
         runBudgetMs: number;
         repairAttempts: number;
     };
+    feedback: {
+        readonly gateIds: string[];
+        readonly maxCalls: number;
+        readonly maxTotalMs: number;
+    };
     runnerSetup: string[];
     gates: {
         id: string;
@@ -51,12 +56,7 @@ export declare function executionCapabilities(config: Config): {
  * it. Wildcard allowedPaths are not interpreted here; scope policy governs them.
  */
 export declare function validateTaskCapabilities(spec: Spec, config: Config): Spec;
-/**
- * Bounds that cut work in progress instead of warning before it starts. Measured on a real project: a Product
- * round for a medium increment runs about 20 minutes, and an implementation attempt reads and writes several
- * files. A provider that stops at its turn, cost or time limit produces nothing usable, and a role leaves
- * nothing to salvage. This is advice on a reviewed configuration, never a refusal.
- */
+/** Advice about conflicting limits; short budgets are valid for compact work. */
 export declare function configAdvice(config: Config): {
     setting: string;
     value: string;

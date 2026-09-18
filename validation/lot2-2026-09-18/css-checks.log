@@ -1,0 +1,40 @@
+TAP version 13
+# Subtest: global CSS naming accepts BEM, utilities, states and native nested selectors
+ok 1 - global CSS naming accepts BEM, utilities, states and native nested selectors
+  ---
+  duration_ms: 28.666762
+  type: 'test'
+  ...
+# Subtest: global CSS naming rejects malformed BEM, camelCase and invalid nested class selectors
+ok 2 - global CSS naming rejects malformed BEM, camelCase and invalid nested class selectors
+  ---
+  duration_ms: 9.693846
+  type: 'test'
+  ...
+# Subtest: malformed CSS is a failing check, not a naming pass
+ok 3 - malformed CSS is a failing check, not a naming pass
+  ---
+  duration_ms: 1.172082
+  type: 'test'
+  ...
+# Subtest: onboarding discovers CSS checks, skips watch commands and does not invent BEM coverage
+ok 4 - onboarding discovers CSS checks, skips watch commands and does not invent BEM coverage
+  ---
+  duration_ms: 56.838553
+  type: 'test'
+  ...
+# Subtest: discovered CSS gate blocks invalid naming and passes after the source is corrected
+ok 5 - discovered CSS gate blocks invalid naming and passes after the source is corrected
+  ---
+  duration_ms: 1408.439684
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1687.222653

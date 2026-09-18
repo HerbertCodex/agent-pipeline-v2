@@ -1,0 +1,78 @@
+{
+  "framework": "2.0.0-alpha.8",
+  "node": "v24.21.0",
+  "configuration": "calibrated-sonnet5-medium",
+  "planning": "generated",
+  "caseSetHash": "b469d4f3cfa9d391f81518ada1a6892a103f20542730b5bbdb6fe3348365d5c0",
+  "checksHash": "6d3aece6e851fb3afd6ee611de3ea32062c7f2f5223517e78220b8245926756b",
+  "simulatedProductApproval": true,
+  "realHumanReview": false,
+  "limitation": "Synthetic engineering fixtures; automated success does not establish architecture or craftsmanship quality. No production latency claim.",
+  "pathway": "auto",
+  "totalBudgetUsd": 0.9,
+  "stoppedReason": null,
+  "expectedSamples": 1,
+  "aggregate": [
+    {
+      "configuration": "calibrated-sonnet5-medium",
+      "attempts": 1,
+      "successes": 1,
+      "successRate": 1,
+      "p50WallMs": 260739.065639,
+      "p95WallMs": 260739.065639,
+      "knownUsd": 0.7768693999999999,
+      "unknownInvocations": 0,
+      "pendingInvocations": 0,
+      "costComplete": true,
+      "knownUsdPerSuccessIncludingFailures": 0.7768693999999999,
+      "medianPlanningMs": 177421.354592,
+      "medianActiveMs": 83162.50985900001,
+      "invocations": 5,
+      "inputBytes": 152510
+    }
+  ],
+  "samples": [
+    {
+      "caseId": "borrower-guard",
+      "configuration": "calibrated-sonnet5-medium",
+      "success": true,
+      "wallMs": 260739.065639,
+      "planningMs": 177421.354592,
+      "activeMs": 83162.50985900001,
+      "cost": {
+        "knownUsd": 0.7768693999999999,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 0.9
+      },
+      "invocations": 5,
+      "inputBytes": 152510
+    }
+  ],
+  "details": [
+    {
+      "caseId": "borrower-guard",
+      "repeat": 0,
+      "specId": "ed939d0a-b9a1-4848-a373-43aa1d325d33",
+      "status": "awaiting_review",
+      "error": null,
+      "untouched": true,
+      "directory": "/tmp/apv2-calibrated-sensitive-20260918/1-borrower-guard",
+      "executionPath": "structural",
+      "observedModels": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "requestedModels": [
+        "claude-sonnet-5"
+      ],
+      "reviewerChecklist": [
+        "Behavior and negative cases",
+        "Existing boundaries and justified abstractions",
+        "Meaningful independent tests",
+        "Error handling and security",
+        "Readable diff without speculative machinery"
+      ]
+    }
+  ]
+}

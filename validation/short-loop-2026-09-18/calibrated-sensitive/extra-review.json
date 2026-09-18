@@ -1,0 +1,6 @@
+{
+  "script": "import assert from 'node:assert/strict';import{canBorrow}from'./src/auth/borrower.mjs';assert.equal(canBorrow({id:Number.MAX_SAFE_INTEGER,role:'borrower'}),true);for(const id of [-1,-0,-Infinity,new Number(1)])assert.equal(canBorrow({id,role:'borrower'}),false);for(const role of ['Borrower','BORROWER','',null,new String('borrower')])assert.equal(canBorrow({id:1,role}),false);console.log('Extra role, numeric-boundary and coercion probes passed.');",
+  "exitCode": 0,
+  "stdout": "Extra role, numeric-boundary and coercion probes passed.\n",
+  "stderr": ""
+}

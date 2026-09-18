@@ -1,0 +1,234 @@
+{
+  "spec": {
+    "title": "Implement isOverdue(dueOn, today) with strict calendar-date validation",
+    "problem": "The library loan module needs an isOverdue(dueOn, today) function in src/dates.mjs that determines whether a loan is overdue, given the due date and an explicitly injected \"today\" value, both as YYYY-MM-DD strings for years 1000-9999. The current implementation does a naive string comparison and does not validate that inputs are real calendar dates (including leap years), so it accepts malformed or impossible dates and produces incorrect boundary results for equal-day comparisons.",
+    "scope": [
+      "Rewrite src/dates.mjs to export isOverdue(dueOn, today) as a named export, preserving the module shape.",
+      "Validate both dueOn and today strictly match YYYY-MM-DD format with a 4-digit year in [1000,9999], 2-digit month, 2-digit day.",
+      "Validate the parsed year/month/day form a real calendar date, correctly accounting for leap years (e.g. reject 2026-02-29, accept 2024-02-29).",
+      "Throw RangeError (not TypeError) for any invalid input: wrong format, non-string, wrong length, out-of-range month/day, non-existent date (e.g. 2026-04-31), or null/undefined.",
+      "Compare dates purely as calendar dates (string/numeric comparison of validated Y-M-D components), with no Date object time zone conversion and no reliance on an ambient clock — today is always the injected parameter.",
+      "isOverdue returns false when today equals dueOn, and true only when today is strictly later than dueOn calendar-wise."
+    ],
+    "outOfScope": [
+      "Modifying test/acceptance.mjs (must remain unchanged).",
+      "Any dependency, build, or infrastructure changes.",
+      "Time zone handling or use of the system clock."
+    ],
+    "acceptance": [
+      {
+        "id": "AC1",
+        "description": "isOverdue returns false when today equals dueOn for a valid date.",
+        "verification": "node --test test/acceptance.mjs: mod.isOverdue('2026-09-18','2026-09-18') === false"
+      },
+      {
+        "id": "AC2",
+        "description": "isOverdue returns true when today is one calendar day after dueOn.",
+        "verification": "node --test test/acceptance.mjs: mod.isOverdue('2026-09-18','2026-09-19') === true"
+      },
+      {
+        "id": "AC3",
+        "description": "isOverdue returns false when today is before dueOn.",
+        "verification": "node --test test/acceptance.mjs: mod.isOverdue('2026-09-18','2026-09-17') === false"
+      },
+      {
+        "id": "AC4",
+        "description": "Leap year due date compared correctly against following day in a non-leap month rollover.",
+        "verification": "node --test test/acceptance.mjs: mod.isOverdue('2024-02-29','2024-03-01') === true"
+      },
+      {
+        "id": "AC5",
+        "description": "Invalid dueOn values (non-existent leap date, invalid month, invalid day-of-month, wrong zero-padding, null, trailing characters) throw RangeError.",
+        "verification": "node --test test/acceptance.mjs: for each of ['2026-02-29','2026-13-01','2026-04-31','2026-9-18',null,'2026-09-18x'], mod.isOverdue(d,'2026-09-18') throws RangeError"
+      },
+      {
+        "id": "AC6",
+        "description": "Invalid today values (same invalid set) throw RangeError.",
+        "verification": "node --test test/acceptance.mjs: for each of the same invalid set, mod.isOverdue('2026-09-18',d) throws RangeError"
+      },
+      {
+        "id": "AC7",
+        "description": "The fixed acceptance gate passes unmodified.",
+        "verification": "Run: node --test test/acceptance.mjs (all assertions pass, exit code 0)"
+      }
+    ],
+    "decisions": [],
+    "decisionCoverage": [],
+    "decisionResolutions": [],
+    "questions": [],
+    "tasks": [
+      {
+        "id": "T1",
+        "title": "Implement isOverdue with strict calendar-date validation",
+        "description": "Rewrite src/dates.mjs. Export a named function isOverdue(dueOn, today). Validate each argument: must be a string exactly matching /^\\d{4}-\\d{2}-\\d{2}$/ with year between 1000 and 9999 inclusive; parse year/month/day as integers and confirm they form a real calendar date (month 1-12, day valid for that month, correctly handling leap years via the standard Gregorian rule: divisible by 4, except centuries not divisible by 400 unless divisible by 400). Throw `new RangeError(...)` for any failure (wrong type, wrong format, non-existent date). Do not use `new Date(...)` parsing for validation or comparison, since that performs implicit time zone/UTC conversion and can silently roll over invalid dates (e.g. Date accepts 2026-04-31 as May 1) instead of rejecting them. Compare the two validated date strings lexicographically (safe because both are zero-padded YYYY-MM-DD) or via validated numeric Y/M/D tuples; return true only if today is strictly greater than dueOn, false otherwise (including equality). Do not modify test/acceptance.mjs. Optionally add test/regression.mjs with extra coverage (e.g. century leap-year edge cases like 2000-02-29 valid, 1900-02-29 invalid) if useful, but it is not required for acceptance.",
+        "acceptanceIds": [
+          "AC1",
+          "AC2",
+          "AC3",
+          "AC4",
+          "AC5",
+          "AC6",
+          "AC7"
+        ],
+        "allowedPaths": [
+          "src/dates.mjs",
+          "test/regression.mjs"
+        ],
+        "dependsOn": [],
+        "minimumLane": "standard"
+      }
+    ],
+    "minimumLane": "standard",
+    "experience": {
+      "uiImpact": "none",
+      "surfaces": [],
+      "rationale": "Pure backend/library date-validation logic with no UI surface."
+    },
+    "security": {
+      "profile": {
+        "exposure": "unknown",
+        "authentication": false,
+        "authorization": false,
+        "sensitiveData": false,
+        "sessionState": false,
+        "fileUploads": false,
+        "externalRequests": false,
+        "database": false,
+        "multiTenant": false,
+        "secrets": false,
+        "api": false,
+        "webUi": false,
+        "ciCd": false,
+        "dependencyChange": false,
+        "aiAgent": false,
+        "mcp": false
+      },
+      "owaspTopics": [
+        "input-validation"
+      ],
+      "threatModel": {
+        "required": false,
+        "summary": "Low-risk pure function; only relevant concern is rejecting malformed/out-of-range input rather than silently accepting it (which could cause incorrect overdue determinations downstream).",
+        "assets": [
+          "Correctness of loan-overdue determination"
+        ],
+        "trustBoundaries": [
+          "Function boundary between caller-supplied date strings and internal date arithmetic"
+        ],
+        "threats": [],
+        "assumptions": [
+          "Callers supply today explicitly; no ambient clock or external system is trusted."
+        ]
+      },
+      "requirements": [
+        {
+          "id": "SR1",
+          "title": "Reject malformed or non-existent calendar dates with RangeError instead of silently coercing them",
+          "owaspTopics": [
+            "input-validation"
+          ],
+          "acceptanceIds": [
+            "AC5",
+            "AC6"
+          ],
+          "verification": "node --test test/acceptance.mjs covers invalid-input cases and expects RangeError",
+          "negativeTests": [
+            "Invalid leap day 2026-02-29",
+            "Invalid month 2026-13-01",
+            "Invalid day-of-month 2026-04-31",
+            "Non-zero-padded month 2026-9-18",
+            "null input",
+            "Trailing garbage 2026-09-18x"
+          ]
+        }
+      ],
+      "assumptions": [
+        "Gregorian calendar leap-year rule applies for the full 1000-9999 year range.",
+        "No external test/regression.mjs is required by the acceptance gate; it is optional supplementary coverage."
+      ],
+      "deferred": []
+    }
+  },
+  "qa": {
+    "report": {
+      "candidateSha": "e0781127228446a419a5cf212c9e58b02f332250",
+      "verdict": "pass",
+      "summary": "Rewritten src/dates.mjs implements strict YYYY-MM-DD validation (format, year range, month/day bounds, leap-year handling) and compares validated date strings lexicographically without Date/timezone reliance. All acceptance criteria and the single security requirement (SR1) are satisfied by inspection, and the cached acceptance gate receipt shows exit code 0.",
+      "criteria": [
+        {
+          "id": "AC1",
+          "status": "pass",
+          "evidence": "isOverdue returns today > dueOn; equal strings yield false."
+        },
+        {
+          "id": "AC2",
+          "status": "pass",
+          "evidence": "'2026-09-19' > '2026-09-18' lexicographically true, matching calendar order for fixed-width fields."
+        },
+        {
+          "id": "AC3",
+          "status": "pass",
+          "evidence": "'2026-09-17' > '2026-09-18' is false."
+        },
+        {
+          "id": "AC4",
+          "status": "pass",
+          "evidence": "'2024-03-01' > '2024-02-29' string-compares true; leap year 2024 validated correctly via isLeapYear."
+        },
+        {
+          "id": "AC5",
+          "status": "pass",
+          "evidence": "validate() rejects '2026-02-29' (non-leap year, day>28), '2026-13-01' (month>12), '2026-04-31' (day>30), '2026-9-18' (regex requires 2-digit month), null (typeof check), '2026-09-18x' (regex anchored with $) — all throw RangeError."
+        },
+        {
+          "id": "AC6",
+          "status": "pass",
+          "evidence": "Same validate() function applied to both dueOn and today, so the identical invalid set throws RangeError for today as well."
+        },
+        {
+          "id": "AC7",
+          "status": "pass",
+          "evidence": "Receipt d3086f13 shows acceptance gate cached run with exitCode 0."
+        }
+      ],
+      "findings": [],
+      "observations": [
+        "No decisions or architecture changes were in scope for this task.",
+        "Code contains no stray comments describing evidence/history, satisfying comment-quality guidance."
+      ],
+      "decisionChecks": [],
+      "securityChecks": [
+        {
+          "requirementId": "SR1",
+          "status": "pass",
+          "evidence": "validate() throws RangeError for all listed negative cases (invalid leap day, invalid month, invalid day-of-month, non-zero-padded month, null, trailing garbage), covered by AC5/AC6 and the acceptance gate receipt."
+        }
+      ]
+    },
+    "specHash": "a3e8b9b17ae0d3adc92067de06bd5f962075e7d9e5b0a904016017f89c4a8fe9",
+    "evidenceHash": "11265ce3b9a476120916941405d8ad9f16fbc9142c34cf5c2fb59b2867845c91",
+    "at": 1789728605452,
+    "source": "agent"
+  },
+  "receipts": [
+    [
+      {
+        "id": "fb62e4d4-4837-4387-95c1-a7736e2ea3ec",
+        "runId": "9a5547ab-44e8-4a09-864c-eb4da94ddfa0",
+        "gateId": "acceptance",
+        "key": "b710f8b399251ffb3e0315909298482a6419271cee977afc880662155debcac6",
+        "candidateSha": "e0781127228446a419a5cf212c9e58b02f332250",
+        "configHash": "d67f45575f832cd82c34605dc45472078bd0677367b68b978cda03ff0491a2d7",
+        "environmentHash": "cd9e3a9188a7e665d7fa05db4f0ce285ebb4a8c8bb866875ce74026aabe5c710",
+        "status": "passed",
+        "startedAt": 1789728588310,
+        "durationMs": 226.06517000000167,
+        "exitCode": 0,
+        "stdoutHash": "296001223ee7134684b805c62493d859205de862de52126ee99c9f1a33c21015",
+        "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "diagnostic": "",
+        "reusedFrom": null
+      }
+    ]
+  ]
+}

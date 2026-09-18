@@ -1,0 +1,185 @@
+{
+  "complete": true,
+  "aggregates": [
+    {
+      "configuration": "quick-sonnet5-low-including-recovery",
+      "attempts": 3,
+      "successes": 2,
+      "successRate": 0.6666666666666666,
+      "p50WallMs": 69281.207456,
+      "p95WallMs": 133228.96989200002,
+      "knownUsd": 1.1467474,
+      "unknownInvocations": 0,
+      "pendingInvocations": 0,
+      "costComplete": true,
+      "knownUsdPerSuccessIncludingFailures": 0.5733737,
+      "medianPlanningMs": 42965.410311,
+      "medianActiveMs": 12238.685621,
+      "invocations": 11,
+      "inputBytes": 338486
+    },
+    {
+      "configuration": "deep-opus5-high-including-recovery",
+      "attempts": 3,
+      "successes": 1,
+      "successRate": 0.3333333333333333,
+      "p50WallMs": 302717.204074,
+      "p95WallMs": 384935.05523299996,
+      "knownUsd": 2.90003,
+      "unknownInvocations": 1,
+      "pendingInvocations": 0,
+      "costComplete": false,
+      "knownUsdPerSuccessIncludingFailures": 2.90003,
+      "medianPlanningMs": 150980,
+      "medianActiveMs": 44953.810658,
+      "invocations": 9,
+      "inputBytes": 266125
+    }
+  ],
+  "fastestPassingConfiguration": null,
+  "cheapestPassingConfiguration": null,
+  "cases": [
+    {
+      "caseId": "loan-record-id",
+      "results": [
+        {
+          "configuration": "quick-sonnet5-low-including-recovery",
+          "samples": [
+            {
+              "caseId": "loan-record-id",
+              "configuration": "quick-sonnet5-low-including-recovery",
+              "success": true,
+              "wallMs": 12364.434732,
+              "planningMs": 50.665717,
+              "activeMs": 12238.685621,
+              "cost": {
+                "knownUsd": 0.0719752,
+                "unknownInvocations": 0,
+                "pendingInvocations": 0,
+                "ceilingUsd": 1.2
+              },
+              "invocations": 1,
+              "inputBytes": 13853
+            }
+          ]
+        },
+        {
+          "configuration": "deep-opus5-high-including-recovery",
+          "samples": [
+            {
+              "caseId": "loan-record-id",
+              "configuration": "deep-opus5-high-including-recovery",
+              "success": true,
+              "wallMs": 45073.92647599999,
+              "planningMs": 43.38720099999999,
+              "activeMs": 44953.810658,
+              "cost": {
+                "knownUsd": 0.277788,
+                "unknownInvocations": 0,
+                "pendingInvocations": 0,
+                "ceilingUsd": 1.2
+              },
+              "invocations": 1,
+              "inputBytes": 13852
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "caseId": "loan-overdue",
+      "results": [
+        {
+          "configuration": "quick-sonnet5-low-including-recovery",
+          "samples": [
+            {
+              "caseId": "loan-overdue",
+              "configuration": "quick-sonnet5-low-including-recovery",
+              "success": true,
+              "wallMs": 69281.207456,
+              "planningMs": 42965.410311,
+              "activeMs": 26250.206583000007,
+              "cost": {
+                "knownUsd": 0.3185996,
+                "unknownInvocations": 0,
+                "pendingInvocations": 0,
+                "ceilingUsd": 1.2
+              },
+              "invocations": 3,
+              "inputBytes": 63232
+            }
+          ]
+        },
+        {
+          "configuration": "deep-opus5-high-including-recovery",
+          "samples": [
+            {
+              "caseId": "loan-overdue",
+              "configuration": "deep-opus5-high-including-recovery",
+              "success": false,
+              "wallMs": 384935.05523299996,
+              "planningMs": 150980,
+              "activeMs": 233823,
+              "cost": {
+                "knownUsd": 1.8834909999999998,
+                "unknownInvocations": 0,
+                "pendingInvocations": 0,
+                "ceilingUsd": 2
+              },
+              "invocations": 4,
+              "inputBytes": 130713
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "caseId": "borrower-guard",
+      "results": [
+        {
+          "configuration": "quick-sonnet5-low-including-recovery",
+          "samples": [
+            {
+              "caseId": "borrower-guard",
+              "configuration": "quick-sonnet5-low-including-recovery",
+              "success": false,
+              "wallMs": 133228.96989200002,
+              "planningMs": 133106,
+              "activeMs": 0,
+              "cost": {
+                "knownUsd": 0.7561726,
+                "unknownInvocations": 0,
+                "pendingInvocations": 0,
+                "ceilingUsd": 1.2
+              },
+              "invocations": 7,
+              "inputBytes": 261401
+            }
+          ]
+        },
+        {
+          "configuration": "deep-opus5-high-including-recovery",
+          "samples": [
+            {
+              "caseId": "borrower-guard",
+              "configuration": "deep-opus5-high-including-recovery",
+              "success": false,
+              "wallMs": 302717.204074,
+              "planningMs": 302644,
+              "activeMs": 0,
+              "cost": {
+                "knownUsd": 0.738751,
+                "unknownInvocations": 1,
+                "pendingInvocations": 0,
+                "ceilingUsd": 2.3
+              },
+              "invocations": 4,
+              "inputBytes": 121560
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "limitation": "Provisional comparison of observed checks on matched cases. Human review of architecture, readability and regression tests is still required. No automatic model-policy change."
+}

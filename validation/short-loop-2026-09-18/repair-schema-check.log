@@ -1,0 +1,24 @@
+✔ cost ledger distinguishes failures, unknowns, pending calls and duplicate events (1.561002ms)
+✔ patch repairs preserve unaffected values and reject prototype traversal (0.582921ms)
+✔ dependency exclusions and architecture document paths do not invent scope (3.101663ms)
+✔ compact scope avoids Product calls while preserving approval and sensitive escalation (144.794599ms)
+✔ operational amendment preserves the approved hash and caps every remaining call (148.944811ms)
+✔ rejected native output is retained, charged and patched on resume without re-exploration (494.523173ms)
+✔ native patch repair refuses a whole-document rewrite and retains the last checkpoint (402.044584ms)
+✔ role checkpoints are reused only for the same SHA, context, schema and guidance (1053.732313ms)
+✔ failed provider process contributes declared spending even without usable output (250.884186ms)
+✔ minor UI change reuses conventions without a full design invocation (92.126262ms)
+✔ model routing is role, provider and risk specific without changing tools or budgets (33.857386ms)
+✔ a valid checkpoint can be reused at an exhausted monetary ceiling (341.853982ms)
+✔ failed implementation spending is included in the owning spec (355.105999ms)
+✔ failed refinement keeps the previous spec readable and accounts planning time (127.894335ms)
+✔ provider budget stop with exit zero is accounted but never retried as a schema error (236.988906ms)
+✔ Design failure resumes the accepted Product spec without paying for another Product call (602.092863ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4376.464482

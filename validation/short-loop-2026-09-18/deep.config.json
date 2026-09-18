@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "executionMode": "local-trusted",
+  "environment": {
+    "id": "short-loop-calibration"
+  },
+  "agent": {
+    "type": "claude",
+    "command": [],
+    "timeoutMs": 180000,
+    "passEnv": [
+      "HOME",
+      "CLAUDE_CONFIG_DIR",
+      "ANTHROPIC_API_KEY",
+      "CLAUDE_CODE_OAUTH_TOKEN"
+    ],
+    "model": "claude-opus-5",
+    "effort": "high",
+    "maxTurns": 30,
+    "maxBudgetUsd": null
+  },
+  "roles": {
+    "product": {
+      "type": "claude",
+      "command": [],
+      "timeoutMs": 180000,
+      "passEnv": [
+        "HOME",
+        "CLAUDE_CONFIG_DIR",
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
+      ],
+      "model": "claude-opus-5",
+      "effort": "high",
+      "maxTurns": 30,
+      "maxBudgetUsd": null
+    },
+    "qa": {
+      "type": "claude",
+      "command": [],
+      "timeoutMs": 180000,
+      "passEnv": [
+        "HOME",
+        "CLAUDE_CONFIG_DIR",
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
+      ],
+      "model": "claude-opus-5",
+      "effort": "high",
+      "maxTurns": 30,
+      "maxBudgetUsd": null
+    },
+    "design": {
+      "type": "claude",
+      "command": [],
+      "timeoutMs": 180000,
+      "passEnv": [
+        "HOME",
+        "CLAUDE_CONFIG_DIR",
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN"
+      ],
+      "model": "claude-opus-5",
+      "effort": "high",
+      "maxTurns": 30,
+      "maxBudgetUsd": null
+    }
+  },
+  "workflow": {
+    "planningMode": "adaptive",
+    "maxSpecCostUsd": 1.2,
+    "maxActiveMs": 480000,
+    "maxQaRepairs": 0,
+    "maxOutputRepairs": 1
+  },
+  "gates": [
+    {
+      "id": "acceptance",
+      "command": [
+        "/home/herbertcodex/.nvm/versions/node/v24.21.0/bin/node",
+        "--test",
+        "test/acceptance.mjs"
+      ],
+      "mandatory": true
+    }
+  ],
+  "feedback": {
+    "gateIds": [
+      "acceptance"
+    ],
+    "maxCalls": 3,
+    "maxTotalMs": 30000
+  },
+  "validationReserveMs": 10000,
+  "maxRunMs": 240000,
+  "maxRepairAttempts": 1
+}

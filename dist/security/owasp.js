@@ -1,3 +1,4 @@
+import { changeLanguage, securityScopeText } from './change-signals.js';
 import { s } from '../domain/schema.js';
 export const owaspTopicIds = [
     'threat-modeling', 'authentication', 'password-storage', 'session-management', 'authorization', 'input-validation', 'injection-prevention', 'xss', 'csrf', 'content-security-policy', 'file-upload', 'ssrf', 'rest-security', 'data-protection', 'secrets-management', 'logging-monitoring', 'software-supply-chain', 'github-actions', 'ai-agent-security', 'llm-prompt-injection', 'secure-coding-with-ai', 'mcp-security',
@@ -41,7 +42,8 @@ function normalized(value) { return value.normalize('NFD').replace(/[\u0300-\u03
 function hit(text, re) { return re.test(text); }
 function topic(id, reason) { const found = owaspCatalog.find(x => x.id === id); return { id, reason, sourceUrl: found.url }; }
 export function assessSecurity(input) {
-    const text = normalized(input.text);
+    const text = normalized(securityScopeText(input.text));
+    const changes = normalized(changeLanguage(input.text));
     const fileText = normalized((input.files ?? []).join(' '));
     const projectType = input.projectType ?? 'unknown';
     const profile = { ...securityProfileSchema.parse({}) };
@@ -53,36 +55,37 @@ export function assessSecurity(input) {
         profile.exposure = 'internal';
     else if (hit(text, /\b(local|localhost|developpement local|development local)\b/))
         profile.exposure = 'local';
-    const auth = hit(text, /\b(auth|authentication|authenticate|login|log in|sign[ -]?in|connexion|mot de passe|password|oauth|oidc|sso|passkey|mfa|2fa)\b/);
+    const authorization = hit(text, /\b(authori[sz]ation|permissions?|roles?|rbac|acl|access control|admin|administrator|staff|privilege|tenant|bibliothecaire|librarian)\b/) || /(?:^|[\/\s_.-])(?:authorization|permissions?|roles?|rbac|acl)(?:[\/\s_.-]|$)/.test(fileText);
+    const auth = hit(text, /\b(auth|authentication|authenticate|login|log in|sign[ -]?in|connexion|mot de passe|passwords?|oauth|oidc|sso|passkey|mfa|2fa)\b/) || /(?:^|[\/\s_.-])(?:authentication|login|passwords?|oauth|oidc|passkey|mfa)(?:[\/\s_.-]|$)/.test(fileText) || (!authorization && /(?:^|[\/\s])auth\//.test(fileText));
     if (auth)
         mark('authentication', 'authentication or credential flow');
-    const password = hit(text, /\b(password|mot de passe|passphrase|credential)\b/);
-    const session = auth || hit(text, /\b(session|cookie|jwt|refresh token|access token|remember me)\b/);
+    const password = hit(text, /\b(passwords?|mot de passe|passphrase|credentials?)\b/) || /(?:^|[\/\s_.-])passwords?(?:[\/\s_.-]|$)/.test(fileText);
+    const session = auth || hit(text, /\b(sessions?|cookies?|jwt|refresh token|access token|remember me)\b/) || /(?:^|[\/\s_.-])(?:sessions?|cookies?|jwt)(?:[\/\s_.-]|$)/.test(fileText);
     if (session)
         mark('sessionState', 'authenticated/session state');
-    if (hit(text, /\b(authori[sz]ation|permission|role|rbac|acl|access control|admin|administrator|staff|privilege|tenant|bibliothecaire|librarian)\b/))
+    if (authorization)
         mark('authorization', 'authorization, role or object-access rules');
-    if (hit(text, /\b(pii|personal data|donnees personnelles|sensitive data|medical|health|financial|payment|card|iban|email|phone|address|credential|password|secret)\b/))
+    if (password || hit(text, /\b(pii|personal data|donnees personnelles|sensitive data|medical|health|financial|payment|card|iban|email|phone|address|credentials?|passwords?|secrets?)\b/))
         mark('sensitiveData', 'sensitive or personal data');
     if (hit(text, /\b(file upload|upload file|upload|attachment|piece jointe|multipart|avatar upload|document upload|image upload|import file)\b/))
         mark('fileUploads', 'untrusted file upload/import');
     if (hit(text, /\b(ssrf|webhook|callback url|remote url|user[- ]supplied url|external api|third[- ]party api|http client|fetch url|download from|scrap(?:e|ing))\b/))
         mark('externalRequests', 'server-side outbound request or external integration');
-    if (hit(text, /\b(database|postgres(?:ql)?|mysql|mariadb|sqlite|mongo(?:db)?|dynamodb|sql|orm|prisma|hibernate|repository|persistence|persist)\b/))
+    if (hit(text, /\b(database|base de donnees|postgres(?:ql)?|mysql|mariadb|sqlite|mongo(?:db)?|dynamodb|sql|orm|prisma|hibernate|persistence|persist)\b/) || /(?:^|[\/\s])(?:db|database|migrations)\/|\.sql(?:\s|$)/.test(fileText))
         mark('database', 'persistent data store');
     if (hit(text, /\b(multi[- ]tenant|multitenant|tenant isolation|multi[- ]site|multisite|plusieurs sites)\b/))
         mark('multiTenant', 'tenant/site isolation');
-    if (hit(text, /\b(secret|api key|private key|credential|vault|kms|token storage|access key)\b/) || /(?:^|\/)(?:\.env|secrets?|credentials?)(?:[./]|$)/.test(fileText))
+    if (hit(text, /\b(secret|api key|private key|credential|vault|kms|token storage|access key)\b/) || /(?:^|[\/\s])(?:\.env|secrets?|credentials?)(?:[./]|$)/.test(fileText))
         mark('secrets', 'secret or credential handling');
     if (hit(text, /\b(api|rest|graphql|endpoint|webhook|json api|rpc)\b/))
         mark('api', 'API endpoint or service boundary');
     if (hit(text, /\b(ui|interface|screen|page|form|dashboard|browser|frontend|web app|application web|ecran|formulaire)\b/) && ['frontend', 'fullstack', 'mobile'].includes(projectType))
         mark('webUi', 'user-facing interface');
-    if (hit(text, /\b(ci|cd|ci\/cd|github actions|workflow|pipeline|deployment|deploy)\b/) || /(?:^|\/)\.github\/workflows\//.test(fileText))
+    if (hit(changes, /\b(ci|cd|ci\/cd|github actions|workflow|pipeline|deployment|deploy)\b/) || /(?:^|[\/\s])\.github\/workflows\//.test(fileText))
         mark('ciCd', 'CI/CD or workflow configuration');
-    if (hit(text, /\b(dependenc|package|library upgrade|upgrade package|install package|npm install|pnpm add|pip install|cargo add|go get|lockfile)\b/) || /(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|requirements[^ ]*\.txt|pyproject\.toml|cargo\.toml|cargo\.lock|go\.mod|go\.sum)/.test(fileText))
+    if (hit(changes, /\b(dependenc(?:y|ies)?|dependances?|package|library upgrade|upgrade package|install package|npm install|pnpm add|pip install|cargo add|go get|lockfile)\b/) || /(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|requirements[^ ]*\.txt|pyproject\.toml|cargo\.toml|cargo\.lock|go\.mod|go\.sum)/.test(fileText))
         mark('dependencyChange', 'dependency or software-supply-chain change');
-    if (hit(text, /\b(ai agent|agentic|coding agent|llm|prompt injection|codex|claude code|tool calling|memory poisoning|model context)\b/) || /(?:^|\/)(?:roles|skills|\.agent-pipeline)\//.test(fileText))
+    if (hit(text, /\b(ai agent|agentic|coding agent|llm|prompt injection|codex|claude code|tool calling|memory poisoning|model context)\b/) || /(?:^|[\/\s])(?:roles|skills|\.agent-pipeline\/(?:roles|skills))\//.test(fileText))
         mark('aiAgent', 'AI agent or LLM tool boundary');
     if (hit(text, /\b(mcp|model context protocol)\b/)) {
         mark('mcp', 'MCP server/tool boundary');
@@ -115,7 +118,7 @@ export function assessSecurity(input) {
         add('data-protection', 'Sensitive or personal data is in scope.');
     if (profile.secrets)
         add('secrets-management', 'Secrets or credentials are in scope.');
-    if (profile.database || profile.fileUploads || profile.externalRequests || profile.api || profile.webUi)
+    if (profile.authorization || profile.database || profile.fileUploads || profile.externalRequests || profile.api || profile.webUi)
         add('input-validation', 'Untrusted input crosses an application boundary.');
     if (profile.database || profile.api || profile.fileUploads)
         add('injection-prevention', 'Untrusted input may reach an interpreter, query or parser.');
@@ -134,11 +137,11 @@ export function assessSecurity(input) {
     }
     if (profile.mcp)
         add('mcp-security', 'MCP tools or servers are in scope.');
-    const critical = profile.authentication || profile.authorization || profile.sensitiveData || profile.fileUploads || profile.externalRequests || profile.multiTenant || profile.secrets || profile.aiAgent || profile.mcp;
+    const critical = profile.authentication || profile.sessionState || profile.authorization || profile.sensitiveData || profile.fileUploads || profile.externalRequests || profile.multiTenant || profile.secrets || profile.aiAgent || profile.mcp;
     const requiresThreatModel = critical;
     if (requiresThreatModel)
         add('threat-modeling', 'Material trust boundaries or security-sensitive assets are in scope.');
-    const negativeTestsRequired = profile.authentication || profile.authorization || profile.fileUploads || profile.externalRequests || profile.api || profile.database;
+    const negativeTestsRequired = profile.authentication || profile.sessionState || profile.authorization || profile.fileUploads || profile.externalRequests || profile.api || profile.database;
     const high = critical || profile.ciCd || profile.dependencyChange;
     const standard = topics.size > 0;
     return securityContextSchema.parse({ profile, topics: [...topics.values()], requiresThreatModel, negativeTestsRequired, minimumLane: high ? 'high' : standard ? 'standard' : 'fast', untrustedContext: true, signals: [...new Set(signals)].slice(0, 100), note: topics.size ? 'OWASP routing is deterministic guidance, not a compliance claim. Product must map applicable topics to verifiable criteria; configured gates remain authoritative.' : 'No material security surface was detected deterministically. Product still owns application-specific security analysis.' });

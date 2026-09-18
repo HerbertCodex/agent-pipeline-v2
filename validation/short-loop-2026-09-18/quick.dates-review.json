@@ -1,0 +1,29 @@
+{
+  "independentReview": true,
+  "results": [
+    {
+      "name": "century is not a leap year",
+      "passed": true
+    },
+    {
+      "name": "400-year boundary is a leap year",
+      "passed": true
+    },
+    {
+      "name": "lower year bound",
+      "passed": true
+    },
+    {
+      "name": "reject trailing newline",
+      "passed": true
+    },
+    {
+      "name": "null-prototype non-string input",
+      "passed": true
+    },
+    {
+      "name": "invalid input must not execute user coercion",
+      "passed": true
+    }
+  ]
+}

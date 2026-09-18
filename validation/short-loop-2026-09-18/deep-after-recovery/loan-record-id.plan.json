@@ -1,0 +1,99 @@
+{
+  "spec": {
+    "title": "loan-record-id",
+    "problem": "Fix parseRecordId(raw) for loan record identifiers. Return a positive safe integer only for a string of 1 to 16 ASCII digits with no leading zero. Return null for every other input. Preserve the existing exported function and avoid adding dependencies.",
+    "scope": [
+      "Fix parseRecordId(raw) for loan record identifiers. Return a positive safe integer only for a string of 1 to 16 ASCII digits with no leading zero. Return null for every other input. Preserve the existing exported function and avoid adding dependencies."
+    ],
+    "outOfScope": [
+      "Architecture changes, dependency changes and new security behavior."
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "description": "Fix parseRecordId(raw) for loan record identifiers. Return a positive safe integer only for a string of 1 to 16 ASCII digits with no leading zero. Return null for every other input. Preserve the existing exported function and avoid adding dependencies.",
+        "verification": "Observe this behavior in a focused test or review the resulting diff. Configured checks: acceptance."
+      }
+    ],
+    "decisions": [],
+    "decisionCoverage": [],
+    "decisionResolutions": [],
+    "questions": [],
+    "tasks": [
+      {
+        "id": "IMPLEMENT",
+        "title": "loan-record-id",
+        "description": "Fix parseRecordId(raw) for loan record identifiers. Return a positive safe integer only for a string of 1 to 16 ASCII digits with no leading zero. Return null for every other input. Preserve the existing exported function and avoid adding dependencies.",
+        "acceptanceIds": [
+          "AC-1"
+        ],
+        "allowedPaths": [
+          "src/record-id.mjs",
+          "test/regression.mjs"
+        ],
+        "dependsOn": [],
+        "minimumLane": "standard"
+      }
+    ],
+    "minimumLane": "standard",
+    "experience": {
+      "uiImpact": "none",
+      "surfaces": [],
+      "rationale": "Bounded change within existing components and established visual conventions."
+    },
+    "security": {
+      "profile": {
+        "exposure": "unknown",
+        "authentication": false,
+        "authorization": false,
+        "sensitiveData": false,
+        "sessionState": false,
+        "fileUploads": false,
+        "externalRequests": false,
+        "database": false,
+        "multiTenant": false,
+        "secrets": false,
+        "api": false,
+        "webUi": false,
+        "ciCd": false,
+        "dependencyChange": false,
+        "aiAgent": false,
+        "mcp": false
+      },
+      "owaspTopics": [],
+      "threatModel": {
+        "required": false,
+        "summary": "",
+        "assets": [],
+        "trustBoundaries": [],
+        "threats": [],
+        "assumptions": []
+      },
+      "requirements": [],
+      "assumptions": [],
+      "deferred": []
+    }
+  },
+  "qa": null,
+  "receipts": [
+    [
+      {
+        "id": "e69cb608-8476-4698-8a11-ab09eee14549",
+        "runId": "ea33f68b-0d61-4529-85c1-7e6cec24389c",
+        "gateId": "acceptance",
+        "key": "72c03983c4ef362ddc2b63341b127c0ed5324fcbdf6214cd58c50b7795e898bf",
+        "candidateSha": "1a9d65916b08cf024c0437bc7bb1ddd81b55279c",
+        "configHash": "53338185258e2a4f17be36b4bf4c692eb51e1a9e4c8ce9337b5d6861469269af",
+        "environmentHash": "cd9e3a9188a7e665d7fa05db4f0ce285ebb4a8c8bb866875ce74026aabe5c710",
+        "status": "passed",
+        "startedAt": 1789728218156,
+        "durationMs": 257.0016689999975,
+        "exitCode": 0,
+        "stdoutHash": "b5e70fcb31fbe46c0855f900a755c5cdefdd8774117a5a8e5428d231d0ed0d2e",
+        "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "diagnostic": "",
+        "reusedFrom": null
+      }
+    ]
+  ]
+}

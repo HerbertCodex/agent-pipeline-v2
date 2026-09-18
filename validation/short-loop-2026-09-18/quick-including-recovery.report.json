@@ -1,0 +1,169 @@
+{
+  "framework": "2.0.0-alpha.8",
+  "node": "v24.21.0",
+  "configuration": "quick-sonnet5-low-including-recovery",
+  "planning": "generated",
+  "caseSetHash": "329fae8e77c6ebce0f8416697da5452585fccba14f294347a809a372be2c09df",
+  "checksHash": "3ff548b9b27049c80b8b75a5aa87e93aff936480deec1ff3f57c6b5583502004",
+  "simulatedProductApproval": true,
+  "realHumanReview": false,
+  "limitation": "Synthetic engineering fixtures; automated success does not establish architecture or craftsmanship quality. No production latency claim. Recovery includes controller fixes and manual budget amendments; not a fresh matched run of the final code. Wall times sum active attempts and exclude the operator wait between them.",
+  "pathway": "auto",
+  "totalBudgetUsd": 3,
+  "stoppedReason": null,
+  "expectedSamples": 3,
+  "aggregate": [
+    {
+      "configuration": "quick-sonnet5-low-including-recovery",
+      "attempts": 3,
+      "successes": 2,
+      "successRate": 0.6666666666666666,
+      "p50WallMs": 69281.207456,
+      "p95WallMs": 133228.96989200002,
+      "knownUsd": 1.1467474,
+      "unknownInvocations": 0,
+      "pendingInvocations": 0,
+      "costComplete": true,
+      "knownUsdPerSuccessIncludingFailures": 0.5733737,
+      "medianPlanningMs": 42965.410311,
+      "medianActiveMs": 12238.685621,
+      "invocations": 11,
+      "inputBytes": 338486
+    }
+  ],
+  "samples": [
+    {
+      "caseId": "loan-record-id",
+      "configuration": "quick-sonnet5-low-including-recovery",
+      "success": true,
+      "wallMs": 12364.434732,
+      "planningMs": 50.665717,
+      "activeMs": 12238.685621,
+      "cost": {
+        "knownUsd": 0.0719752,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2
+      },
+      "invocations": 1,
+      "inputBytes": 13853
+    },
+    {
+      "caseId": "loan-overdue",
+      "configuration": "quick-sonnet5-low-including-recovery",
+      "success": true,
+      "wallMs": 69281.207456,
+      "planningMs": 42965.410311,
+      "activeMs": 26250.206583000007,
+      "cost": {
+        "knownUsd": 0.3185996,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2
+      },
+      "invocations": 3,
+      "inputBytes": 63232
+    },
+    {
+      "caseId": "borrower-guard",
+      "configuration": "quick-sonnet5-low-including-recovery",
+      "success": false,
+      "wallMs": 133228.96989200002,
+      "planningMs": 133106,
+      "activeMs": 0,
+      "cost": {
+        "knownUsd": 0.7561726,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2
+      },
+      "invocations": 7,
+      "inputBytes": 261401
+    }
+  ],
+  "details": [
+    {
+      "caseId": "loan-record-id",
+      "repeat": 0,
+      "specId": "0cd2e2d2-15e6-4eaf-b056-f501fe8bc13b",
+      "status": "awaiting_review",
+      "error": null,
+      "untouched": true,
+      "directory": "/tmp/apv2-short-quick-final-20260918/1-loan-record-id",
+      "executionPath": "compact",
+      "observedModels": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "requestedModels": [
+        "claude-sonnet-5"
+      ],
+      "reviewerChecklist": [
+        "Behavior and negative cases",
+        "Existing boundaries and justified abstractions",
+        "Meaningful independent tests",
+        "Error handling and security",
+        "Readable diff without speculative machinery"
+      ]
+    },
+    {
+      "caseId": "loan-overdue",
+      "repeat": 0,
+      "specId": "209fcbda-debf-43b9-883c-6ebd5ab6d2e1",
+      "status": "awaiting_review",
+      "error": null,
+      "untouched": true,
+      "directory": "/tmp/apv2-short-quick-final-20260918/1-loan-overdue",
+      "executionPath": "standard",
+      "observedModels": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "requestedModels": [
+        "claude-sonnet-5"
+      ],
+      "reviewerChecklist": [
+        "Behavior and negative cases",
+        "Existing boundaries and justified abstractions",
+        "Meaningful independent tests",
+        "Error handling and security",
+        "Readable diff without speculative machinery"
+      ]
+    },
+    {
+      "caseId": "borrower-guard",
+      "repeat": 0,
+      "specId": "81cc7f45-d6be-43be-b09c-18483d80fbb3",
+      "status": "draft",
+      "error": "PipelineError: Product security plan must preserve the controller minimum. Missing security.owaspTopics: authentication, session-management, injection-prevention, logging-monitoring, threat-modeling. Missing security.requirements mappings (with valid acceptanceIds and verification): authentication, session-management, injection-prevention, logging-monitoring, threat-modeling. Security profile cannot downgrade detected surfaces: authentication, sessionState, database. Cover existing trust boundaries and exclusions without inventing out-of-scope features.",
+      "untouched": true,
+      "directory": "/tmp/apv2-short-quick-final-20260918/1-borrower-guard",
+      "executionPath": "structural",
+      "observedModels": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "requestedModels": [
+        "claude-sonnet-5"
+      ],
+      "reviewerChecklist": [
+        "Behavior and negative cases",
+        "Existing boundaries and justified abstractions",
+        "Meaningful independent tests",
+        "Error handling and security",
+        "Readable diff without speculative machinery"
+      ]
+    }
+  ],
+  "manualResumes": true,
+  "controllerFixesDuringRecovery": [
+    "safe array removal and append",
+    "target schema and explicit patch semantics",
+    "complete minimum security coverage diagnostic (latest quick recovery)"
+  ],
+  "sourceReports": [
+    "quick.report.json",
+    "quick-structural-recovery.json",
+    "quick-structural-complete-diagnostic.json"
+  ]
+}

@@ -44,6 +44,7 @@ export declare const agentSchema: import("./schema.js").Schema<{
     readonly timeoutMs: number;
     readonly passEnv: string[];
     readonly model: string;
+    readonly effort: "default" | "high" | "low" | "medium";
     readonly maxTurns: number;
     readonly maxBudgetUsd: number | null;
 }>;
@@ -61,6 +62,7 @@ export declare const configSchema: import("./schema.js").Schema<{
         readonly timeoutMs: number;
         readonly passEnv: string[];
         readonly model: string;
+        readonly effort: "default" | "high" | "low" | "medium";
         readonly maxTurns: number;
         readonly maxBudgetUsd: number | null;
     };
@@ -88,6 +90,7 @@ export declare const configSchema: import("./schema.js").Schema<{
             readonly timeoutMs: number;
             readonly passEnv: string[];
             readonly model: string;
+            readonly effort: "default" | "high" | "low" | "medium";
             readonly maxTurns: number;
             readonly maxBudgetUsd: number | null;
         } | null;
@@ -97,11 +100,42 @@ export declare const configSchema: import("./schema.js").Schema<{
             readonly timeoutMs: number;
             readonly passEnv: string[];
             readonly model: string;
+            readonly effort: "default" | "high" | "low" | "medium";
+            readonly maxTurns: number;
+            readonly maxBudgetUsd: number | null;
+        } | null;
+        readonly design: {
+            readonly type: "command" | "codex" | "claude";
+            readonly command: string[];
+            readonly timeoutMs: number;
+            readonly passEnv: string[];
+            readonly model: string;
+            readonly effort: "default" | "high" | "low" | "medium";
             readonly maxTurns: number;
             readonly maxBudgetUsd: number | null;
         } | null;
     };
+    readonly modelRouting: {
+        readonly provider: "codex" | "claude";
+        readonly role: "product" | "implementer" | "qa" | "design";
+        readonly lane: "fast" | "standard" | "high";
+        readonly model: string;
+        readonly effort: "default" | "high" | "low" | "medium";
+    }[];
+    readonly roleProfiles: {
+        readonly provider: "codex" | "claude";
+        readonly role: "product" | "implementer" | "qa" | "design";
+        readonly quick: {
+            readonly model: string;
+            readonly effort: "high" | "low" | "medium";
+        };
+        readonly deep: {
+            readonly model: string;
+            readonly effort: "high" | "low" | "medium";
+        };
+    }[];
     readonly workflow: {
+        readonly planningMode: "legacy" | "adaptive";
         readonly qaLanes: string[];
         readonly maxQaRepairs: number;
         readonly maxActiveMs: number;
@@ -110,6 +144,12 @@ export declare const configSchema: import("./schema.js").Schema<{
         readonly generatedPaths: string[];
         readonly maxSpecCostUsd: number | null;
     };
+    readonly feedback: {
+        readonly gateIds: string[];
+        readonly maxCalls: number;
+        readonly maxTotalMs: number;
+    };
+    readonly validationReserveMs: number;
     readonly limits: {
         readonly maxTaskContextChars: number;
         readonly maxQaDiffBytes: number;
@@ -205,6 +245,8 @@ export interface Run {
     version: number;
     state: RunState;
     resumeFrom: RunState | null;
+    /** Owning spec for shared invocation accounting; absent on standalone/legacy runs. */
+    specId?: string;
     task: Task;
     config: Config;
     configHash: string;

@@ -23,8 +23,15 @@ Cover loading, empty, error, success, focus and disabled states as relevant. Che
 
 Prefer the existing design system over a competing token source. Do not fabricate screenshots, accessibility reports or browser results. Treat performance and layout stability as measurable requirements where the spec calls for them.
 
+## CSS convention
+
+Inspect the project's styling convention before writing CSS. For new global component CSS without a different confirmed convention, use BEM: `block`, `block__element`, `block--modifier`, `block__element--modifier`, with lowercase kebab-case words. Keep modifiers alongside their base class in markup. Preserve existing scoped styles, CSS Modules, utility frameworks and documented utilities; do not rename unrelated legacy classes. Record the chosen convention in the design implementation brief. Use the project's configured CSS naming check when available; its absence is a verification limitation. See the CSS architecture reference for the lint profile and its limits.
+
 ## References on demand
 
 [Design process](references/design-process.md), [UX laws](references/ux-laws.md), [UX patterns](references/ux-patterns.md), [CSS architecture](references/css-architecture.md), [visual identity](references/visual-identity.md), [layout](references/layout.md), [motion](references/motion.md), [components](references/components.md), [anti-generic examples](references/anti-generic.md), [theming](references/theming.md), [performance](references/performance.md), [checklist](assets/design-checklist.md).
 
 Reference examples are a design vocabulary, not a mandate to change fonts, colors, both themes, or a host stack. Their historical V1 commands are not commands available in this V2.
+
+## Small UI changes
+For a minor change, reuse the existing visual system and modify only the affected component or state. A full new mockup is unnecessary. Verify relevant states and responsive behavior with configured browser checks when available; distinguish actual browser observations from source inspection.

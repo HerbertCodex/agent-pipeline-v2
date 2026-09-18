@@ -1,0 +1,156 @@
+{
+  "framework": "2.0.0-alpha.8",
+  "node": "v24.21.0",
+  "configuration": "quick-sonnet5-low",
+  "planning": "generated",
+  "simulatedProductApproval": true,
+  "realHumanReview": false,
+  "limitation": "Synthetic engineering fixtures; automated success does not establish architecture or craftsmanship quality. No production latency claim.",
+  "pathway": "auto",
+  "totalBudgetUsd": 4,
+  "stoppedReason": null,
+  "expectedSamples": 3,
+  "aggregate": [
+    {
+      "configuration": "quick-sonnet5-low",
+      "attempts": 3,
+      "successes": 2,
+      "successRate": 0.6666666666666666,
+      "p50WallMs": 100590.15032900001,
+      "p95WallMs": 103892.339322,
+      "knownUsd": 0.9955928,
+      "unknownInvocations": 0,
+      "pendingInvocations": 0,
+      "costComplete": true,
+      "knownUsdPerSuccessIncludingFailures": 0.4977964,
+      "medianPlanningMs": 73194.018887,
+      "medianActiveMs": 10885.269841,
+      "invocations": 7,
+      "inputBytes": 160543
+    }
+  ],
+  "samples": [
+    {
+      "caseId": "loan-record-id",
+      "configuration": "quick-sonnet5-low",
+      "success": true,
+      "wallMs": 10996.171628,
+      "planningMs": 40.32063999999998,
+      "activeMs": 10885.269841,
+      "cost": {
+        "knownUsd": 0.10166579999999999,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2
+      },
+      "invocations": 1,
+      "inputBytes": 13855
+    },
+    {
+      "caseId": "loan-overdue",
+      "configuration": "quick-sonnet5-low",
+      "success": true,
+      "wallMs": 103892.339322,
+      "planningMs": 73194.018887,
+      "activeMs": 30625.037874,
+      "cost": {
+        "knownUsd": 0.44492820000000005,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2
+      },
+      "invocations": 3,
+      "inputBytes": 64757
+    },
+    {
+      "caseId": "borrower-guard",
+      "configuration": "quick-sonnet5-low",
+      "success": false,
+      "wallMs": 100590.15032900001,
+      "planningMs": 100555.719591,
+      "activeMs": 0,
+      "cost": {
+        "knownUsd": 0.4489988,
+        "unknownInvocations": 0,
+        "pendingInvocations": 0,
+        "ceilingUsd": 1.2
+      },
+      "invocations": 3,
+      "inputBytes": 81931
+    }
+  ],
+  "details": [
+    {
+      "caseId": "loan-record-id",
+      "repeat": 0,
+      "specId": "fca0014a-c044-40f1-936e-9f6af3d5794a",
+      "status": "awaiting_review",
+      "error": null,
+      "untouched": true,
+      "directory": "/tmp/apv2-short-quick-resumed-20260918/1-loan-record-id",
+      "executionPath": "compact",
+      "observedModels": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "requestedModels": [
+        "claude-sonnet-5"
+      ],
+      "reviewerChecklist": [
+        "Behavior and negative cases",
+        "Existing boundaries and justified abstractions",
+        "Meaningful independent tests",
+        "Error handling and security",
+        "Readable diff without speculative machinery"
+      ]
+    },
+    {
+      "caseId": "loan-overdue",
+      "repeat": 0,
+      "specId": "d182597f-8887-4b1d-9f9e-961bc895c6b9",
+      "status": "awaiting_review",
+      "error": null,
+      "untouched": true,
+      "directory": "/tmp/apv2-short-quick-resumed-20260918/1-loan-overdue",
+      "executionPath": "standard",
+      "observedModels": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "requestedModels": [
+        "claude-sonnet-5"
+      ],
+      "reviewerChecklist": [
+        "Behavior and negative cases",
+        "Existing boundaries and justified abstractions",
+        "Meaningful independent tests",
+        "Error handling and security",
+        "Readable diff without speculative machinery"
+      ]
+    },
+    {
+      "caseId": "borrower-guard",
+      "repeat": 0,
+      "specId": "6ad79507-d6fc-4961-9210-217cef6ad3e1",
+      "status": "draft",
+      "error": "PipelineError: Spec 6ad79507-d6fc-4961-9210-217cef6ad3e1: $.decisions[0]: unknown property id",
+      "untouched": true,
+      "directory": "/tmp/apv2-short-quick-resumed-20260918/1-borrower-guard",
+      "executionPath": "structural",
+      "observedModels": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5"
+      ],
+      "requestedModels": [
+        "claude-sonnet-5"
+      ],
+      "reviewerChecklist": [
+        "Behavior and negative cases",
+        "Existing boundaries and justified abstractions",
+        "Meaningful independent tests",
+        "Error handling and security",
+        "Readable diff without speculative machinery"
+      ]
+    }
+  ]
+}

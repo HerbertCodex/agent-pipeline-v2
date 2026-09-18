@@ -1,0 +1,32 @@
+✔ cost ledger distinguishes failures, unknowns, pending calls and duplicate events (1.404842ms)
+✔ patch repairs preserve unaffected values and reject prototype traversal (0.581466ms)
+✔ patch repair removes one invalid inspection item without replacing or mutating the retained array (0.649566ms)
+✔ dependency exclusions and architecture document paths do not invent scope (3.121344ms)
+✔ compact scope avoids Product calls while preserving approval and sensitive escalation (112.808154ms)
+✔ operational amendment preserves the approved hash and caps every remaining call (135.499221ms)
+✔ rejected native output is retained, charged and patched on resume without re-exploration (472.016155ms)
+✔ native patch repair refuses a whole-document rewrite and retains the last checkpoint (414.146293ms)
+✔ role checkpoints are reused only for the same SHA, context, schema and guidance (1104.684879ms)
+✔ failed provider process contributes declared spending even without usable output (231.344959ms)
+✔ minor UI change reuses conventions without a full design invocation (89.57759ms)
+✔ model routing is role, provider and risk specific without changing tools or budgets (32.201777ms)
+✔ a valid checkpoint can be reused at an exhausted monetary ceiling (335.74977ms)
+✔ failed implementation spending is included in the owning spec (341.709777ms)
+✔ failed refinement keeps the previous spec readable and accounts planning time (127.857164ms)
+✔ provider budget stop with exit zero is accounted but never retried as a schema error (237.997122ms)
+✔ Design failure resumes the accepted Product spec without paying for another Product call (595.006831ms)
+✔ authentication/password work routes OWASP auth topics, threat modeling and negative tests (2.588547ms)
+✔ outbound API work routes SSRF, REST and validation guidance (0.875734ms)
+✔ AI agent and MCP work routes agent, prompt-injection, AI coding and MCP guidance (0.357038ms)
+✔ ordinary arithmetic change stays fast and does not become a supply-chain task just because a lockfile exists elsewhere (0.862401ms)
+✔ Product cannot drop controller-routed OWASP topics or required threat modeling (1.823504ms)
+✔ QA cannot pass a security-sensitive spec without evidence for every security requirement (1.056794ms)
+✔ shipped roles treat repository and external content as untrusted prompt-injection surfaces (0.460152ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4316.320977

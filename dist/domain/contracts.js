@@ -47,11 +47,11 @@ export const taskSchema = s.object({
 export const agentSchema = s.object({
     type: s.enum(['command', 'codex', 'claude']),
     command: s.default(s.array(s.string(1, 16000), 0, 200), []),
-    // Measured on a real project: a Product round for a medium increment runs about 20 minutes. A timeout that
-    // cuts such a round pays for nothing, since a role only returns a final answer.
+    // Safety ceiling, not a target. A role and its output repairs share this deadline.
     timeoutMs: s.default(s.number(10, 3600000), 1800000),
     passEnv: s.default(envNames, []),
     model: s.default(s.string(0, 200), ''),
+    effort: s.default(s.enum(['default', 'low', 'medium', 'high']), 'default'),
     // A turn count measures neither useful work, nor time, nor money: it is a net against an endless loop,
     // not the arbiter of daily work. Time and cost are the bounds that measure what an operator wants to limit.
     maxTurns: s.default(s.number(1, 200), 200),
@@ -70,8 +70,19 @@ export const configSchema = s.object({
     roles: s.default(s.object({
         product: s.default(s.nullable(agentSchema), null),
         qa: s.default(s.nullable(agentSchema), null),
-    }), { product: null, qa: null }),
+        design: s.default(s.nullable(agentSchema), null),
+    }), { product: null, qa: null, design: null }),
+    modelRouting: s.default(s.array(s.object({
+        provider: s.enum(['claude', 'codex']), role: s.enum(['product', 'design', 'implementer', 'qa']), lane: s.enum(lanes),
+        model: s.string(1, 200), effort: s.default(s.enum(['default', 'low', 'medium', 'high']), 'default'),
+    }), 0, 24), []),
+    roleProfiles: s.default(s.array(s.object({
+        provider: s.enum(['claude', 'codex']), role: s.enum(['product', 'design', 'implementer', 'qa']),
+        quick: s.object({ model: s.string(1, 200), effort: s.enum(['low', 'medium', 'high']) }),
+        deep: s.object({ model: s.string(1, 200), effort: s.enum(['low', 'medium', 'high']) }),
+    }), 0, 8), []),
     workflow: s.default(s.object({
+        planningMode: s.default(s.enum(['legacy', 'adaptive']), 'legacy'),
         qaLanes: s.default(s.array(s.enum(lanes), 0, 3), ['standard', 'high']),
         maxQaRepairs: s.default(s.number(0, 3), 2),
         maxActiveMs: s.default(s.number(100, 14400000), 3600000),
@@ -81,8 +92,14 @@ export const configSchema = s.object({
         // Files only project tooling regenerates (lock files by default). Globs; replace the list to adapt to the stack.
         generatedPaths: s.default(s.array(s.string(1, 300), 0, 100), [...DEFAULT_GENERATED_PATHS]),
         /** Stops a spec once the providers declare this much spending on it; continuing is an explicit decision. */
-        maxSpecCostUsd: s.default(s.nullable(s.number(0.01, 10000)), 25),
-    }), { qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team', maxOutputRepairs: 1, generatedPaths: [...DEFAULT_GENERATED_PATHS], maxSpecCostUsd: 25 }),
+        maxSpecCostUsd: s.default(s.nullable(s.finite(0.01, 10000)), 25),
+    }), { planningMode: 'legacy', qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team', maxOutputRepairs: 1, generatedPaths: [...DEFAULT_GENERATED_PATHS], maxSpecCostUsd: 25 }),
+    feedback: s.default(s.object({
+        gateIds: s.default(s.array(id, 0, 20), []),
+        maxCalls: s.default(s.number(1, 20), 4),
+        maxTotalMs: s.default(s.number(100, 600000), 120000),
+    }), { gateIds: [], maxCalls: 4, maxTotalMs: 120000 }),
+    validationReserveMs: s.default(s.number(0, 600000), 60000),
     limits: s.default(s.object({
         // Characters of approved context embedded in one task or QA-repair description.
         maxTaskContextChars: s.default(s.number(10000, MAX_TASK_DESCRIPTION), DEFAULT_LIMITS.maxTaskContextChars),
@@ -130,13 +147,16 @@ export function validateConfig(value) {
     const config = configSchema.parse(value);
     invariant(config.agent.type !== 'command' || config.agent.command.length > 0, 'CONFIG', 'Command agent requires an argv array');
     invariant(config.agent.type !== 'codex' || config.agent.command.length <= 1, 'CONFIG', 'Codex command may contain only the executable path; use the typed model field');
-    for (const agent of [config.agent, config.roles.product, config.roles.qa].filter((a) => a !== null)) {
+    for (const agent of [config.agent, config.roles.product, config.roles.qa, config.roles.design].filter((a) => a !== null)) {
         invariant(agent.type !== 'command' || agent.command.length > 0, 'CONFIG', 'Role command agent requires an argv array');
         invariant(agent.type === 'command' || agent.command.length <= 1, 'CONFIG', 'Native provider accepts only the executable path');
     }
     invariant(new Set(config.skills.enabled).size === config.skills.enabled.length, 'CONFIG', 'Duplicate enabled skill');
+    invariant(new Set(config.modelRouting.map(r => `${r.provider}:${r.role}:${r.lane}`)).size === config.modelRouting.length, 'CONFIG', 'Duplicate model route');
+    invariant(new Set(config.roleProfiles.map(r => `${r.provider}:${r.role}`)).size === config.roleProfiles.length, 'CONFIG', 'Duplicate role profile');
     const ids = config.gates.map(g => g.id);
     invariant(new Set(ids).size === ids.length, 'CONFIG', 'Duplicate gate id');
+    invariant(new Set(config.feedback.gateIds).size === config.feedback.gateIds.length && config.feedback.gateIds.every(id => config.gates.some(g => g.id === id && g.dependsOn.length === 0 && g.command.every(a => !a.includes('{{')))), 'CONFIG', 'Feedback must reference independent configured checks without candidate placeholders');
     for (const gate of config.gates) {
         if (gate.cacheTtlMs > 0)
             invariant(gate.outputs.length === 0 && gate.dependsOn.length === 0 &&

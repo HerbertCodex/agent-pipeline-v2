@@ -62,10 +62,45 @@ test('ordinary arithmetic change stays fast and does not become a supply-chain t
   assert.equal(ctx.profile.dependencyChange, false);
 });
 
+test('authorization-only scope does not invent login, session or database work from exclusions and paths', () => {
+  const ctx = assessSecurity({ text: 'Correct the authorization guard canBorrow(user). Validate the borrower role and id. Do not implement login, a database, or a new authentication scheme. Only src/auth/borrower.mjs may change.', files: ['src/auth/borrower.mjs'] });
+  assert.equal(ctx.profile.authorization, true);
+  for (const key of ['authentication', 'sessionState', 'database']) assert.equal(ctx.profile[key], false, key);
+  assert.equal(ctx.minimumLane, 'high'); assert.equal(ctx.requiresThreatModel, true); assert.equal(ctx.negativeTestsRequired, true);
+  for (const topic of ['authorization', 'input-validation', 'logging-monitoring', 'threat-modeling']) assert.ok(topicIds(ctx).has(topic), topic);
+});
+
+test('scope exclusions preserve negative security obligations and affirmative clauses', () => {
+  const excluded = assessSecurity({ text: 'Corriger les permissions. Ne pas ajouter de connexion ni de base de données. Ne pas modifier les sessions.' });
+  assert.equal(excluded.profile.authentication, false); assert.equal(excluded.profile.sessionState, false);
+  const obligations = assessSecurity({ text: 'Never bypass authentication. Do not leak passwords. Do not disable session validation.' });
+  assert.equal(obligations.profile.authentication, true); assert.equal(obligations.profile.sessionState, true); assert.equal(obligations.profile.sensitiveData, true);
+  const mixed = assessSecurity({ text: 'Do not add a database, but implement password login. Do not modify sessions and add a new login endpoint.' });
+  assert.equal(mixed.profile.database, false); assert.equal(mixed.profile.authentication, true); assert.equal(mixed.profile.api, true);
+});
+
+test('actual security paths override prose exclusions while repository prose does not imply persistence', () => {
+  const ctx = assessSecurity({ text: 'Do not change login or the database.', files: ['src/auth/login.ts', 'db/migrations/001.sql'] });
+  assert.equal(ctx.profile.authentication, true); assert.equal(ctx.profile.database, true); assert.equal(ctx.minimumLane, 'high');
+  const genericAuth = assessSecurity({ text: 'Refactor the helper.', files: ['src/auth/helper.ts'] });
+  assert.equal(genericAuth.minimumLane, 'high');
+  const sessions = assessSecurity({ text: 'Correct authorization only. Do not modify sessions.', files: ['src/auth/session.ts'] });
+  assert.equal(sessions.profile.sessionState, true); assert.equal(sessions.minimumLane, 'high');
+  const passwords = assessSecurity({ text: 'Do not modify passwords.', files: ['src/auth/password.ts'] });
+  assert.ok(topicIds(passwords).has('password-storage')); assert.equal(passwords.profile.sensitiveData, true);
+  assert.equal(assessSecurity({ text: 'Inspect the repository and correct arithmetic.' }).profile.database, false);
+});
+
 test('Product cannot drop controller-routed OWASP topics or required threat modeling', () => {
   const ctx = assessSecurity({ text:'Add email/password login and protected admin access.', projectType:'fullstack', files:[] });
   const incomplete = demoSpec();
-  assert.throws(() => validateSpec(incomplete, false, {schemaVersion:1,decisions:[]}, undefined, ctx), /Security topic|security plan|SPEC_SECURITY/i);
+  assert.throws(() => validateSpec(incomplete, false, {schemaVersion:1,decisions:[]}, undefined, ctx), error => {
+    assert.equal(error.code, 'SPEC_SECURITY');
+    for (const topic of ctx.topics) assert.ok(error.message.includes(topic.id), `same repair must see missing topic ${topic.id}`);
+    assert.match(error.message, /security.requirements/);
+    assert.match(error.message, /sessionState/);
+    return true;
+  });
   const spec = secureSpec(ctx);
   assert.doesNotThrow(() => validateSpec(spec, false, {schemaVersion:1,decisions:[]}, undefined, ctx));
 });

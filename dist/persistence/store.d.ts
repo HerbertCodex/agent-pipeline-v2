@@ -18,7 +18,7 @@ export declare class Store {
     list(): Run[];
     save(run: Run, type: string, data?: Record<string, unknown>): void;
     event(runId: string, type: string, data: Record<string, unknown>): void;
-    events(id: string): RunEvent[];
+    events(id: string, types?: readonly string[]): RunEvent[];
     acquire(id: string): string;
     acquireExecution(id: string): string;
     releaseExecution(id: string, token: string): void;
@@ -62,7 +62,7 @@ export declare class Store {
             data: unknown;
         }[];
     };
-    documentEvents(id: string): {
+    documentEvents(id: string, types?: readonly string[]): {
         seq: number;
         at: number;
         type: string;

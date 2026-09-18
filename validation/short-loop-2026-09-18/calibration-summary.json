@@ -1,0 +1,45 @@
+{
+  "date": "2026-09-18",
+  "checks": {
+    "command": "npm run check",
+    "tests": 425,
+    "passed": 425,
+    "failed": 0,
+    "typecheck": true,
+    "build": true,
+    "cssLint": true,
+    "log": "calibration-check.log",
+    "package": "calibration-package.json"
+  },
+  "calibratedSensitiveCase": {
+    "caseId": "borrower-guard",
+    "configuration": "calibrated-sonnet5-medium",
+    "success": true,
+    "wallMs": 260739.065639,
+    "planningMs": 177421.354592,
+    "activeMs": 83162.50985900001,
+    "cost": {
+      "knownUsd": 0.7768693999999999,
+      "unknownInvocations": 0,
+      "pendingInvocations": 0,
+      "ceilingUsd": 0.9
+    },
+    "invocations": 5,
+    "inputBytes": 152510
+  },
+  "status": "Sensitive end-to-end fixture now passes; bounded pilot, not a general quality or latency guarantee.",
+  "profile": "../../examples/claude-short-loop.profiles.json",
+  "spending": {
+    "authorizedTotalUsd": 8,
+    "previousLedger": "spending.json",
+    "newCampaign": "calibrated-sensitive.report.json",
+    "knownUsd": 5.8192395999999995,
+    "unknownReserveUsd": 1.56,
+    "knownPlusReservedUsd": 7.3792396,
+    "unknownInvocations": 1,
+    "pendingInvocations": 0,
+    "note": "Previous unknown call remains reserved at its requested 1.56 USD cap. The newly authorized continuation uses 0.7768694 USD declared and adds no unknown cost. No further paid calls planned."
+  },
+  "report": "CALIBRATION.md",
+  "realProjectModified": false
+}
