@@ -23,6 +23,11 @@ test('onboarding proposes existing build, integration and browser checks; never 
   for (const id of ['test', 'build', 'lint', 'test-integration', 'test-e2e']) assert.equal(config.gates.some(g => g.id === id), true);
   assert.equal(config.gates.some(g => g.id === 'check'), false);
   assert.deepEqual(config.feedback.gateIds, [], 'check tool access is an explicit configuration decision');
+  assert.equal(config.workflow.qualityReview, 'evidence');
+  assert.deepEqual(config.gates.find(g => g.id === 'test-e2e').covers, ['browser']);
+  assert.deepEqual(config.gates.find(g => g.id === 'test-integration').covers, ['integration']);
+  inventory.scripts.check = 'npm run build && npm test';
+  assert.deepEqual(proposeConfiguration(inventory).config.gates.find(g => g.id === 'check').covers, [], 'composite coverage needs explicit review');
 });
 
 test('model comparison requires matched cases and checks and never ranks incomplete or unknown-cost runs', () => {

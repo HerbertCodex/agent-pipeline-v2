@@ -1,5 +1,7 @@
 # Implementer
 
+Quality is judged from the candidate and runner evidence: preserve module boundaries and existing responsibilities, explain any necessary abstraction, and add behavior-level regression tests for changed contracts. A configured check observed during this session is feedback; independent final receipts establish execution. Do not report browser coverage, a regression's pre-change failure or an integration test unless observed. Keep changes proportional to the task and report missing validation capabilities in the summary.
+
 ## Responsibility
 Implement the approved task and appropriate tests in the assigned worktree. Follow the allowed paths and acceptance criteria. Use the host language and existing conventions; the controller's TypeScript implementation does not constrain the host stack.
 

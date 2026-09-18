@@ -98,6 +98,9 @@ export declare const architectureSchema: import("../domain/schema.js").Schema<{
     readonly decisions: {
         readonly decision: string;
         readonly rationale: string;
+        readonly constraint: string;
+        readonly simplerAlternative: string;
+        readonly risks: string[];
         readonly alternatives: string[];
         readonly tradeoffs: string[];
         readonly reconsiderWhen: string[];

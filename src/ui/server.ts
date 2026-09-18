@@ -152,6 +152,7 @@ export async function startUi(options: UiOptions): Promise<UiServer> {
     });
     return {
       legacy, summary: life.summary(doc), repo: r.repo, request: r.request, content: r.content, approval: r.approval, qa: r.qa ?? null, review: r.review ?? null,
+      quality: life.summary(doc).quality,
       scopeAmendments: r.scopeAmendments ?? [], criterionAmendments: r.criterionAmendments ?? [], impactAdvice: r.impactAdvice ?? [], sizeAdvice: r.sizeAdvice ?? [],
       design: r.design ? { hash: r.design.hash, directory: r.design.directory, summary: r.design.proposal.summary, visualDirection: r.design.proposal.visualDirection,
         questions: r.design.proposal.questions, reusedFrom: r.design.reusedFrom ?? null, loadedStylesheets: r.design.loadedStylesheets ?? [],

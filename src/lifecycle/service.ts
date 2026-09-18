@@ -1,3 +1,4 @@
+import { assertRequiredEvidence, qualityContext, qualityMarkdown } from '../quality/review.js';
 import { roleAgent } from '../adapters/routing.js';
 import { adaptiveConfig, architectureSchema, briefSpecSchema, expandBrief, requiresQa, selectPath, targetedQaContext } from './pathways.js';
 import { compactProposal } from './compact.js';
@@ -937,6 +938,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                 }
                 r.activeRunId = null;
                 const evidenceHash = await this.pipeline.assertValidated(final.id);
+                assertRequiredEvidence(qualityContext(r, final).validation);
                 if (r.review && r.review.candidateSha !== final.candidateSha) {
                     const superseded = r.review; r.review = null;
                     this.save(doc, 'workflow.review_superseded', { previousCandidateSha: superseded.candidateSha, candidateSha: final.candidateSha });
@@ -957,15 +959,23 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                     const inventoryDelta = await this.inventoryDelta(r, final.candidateSha!, signal);
                     this.save(doc, 'qa.inventory_delta', { added: inventoryDelta.added.length, removed: inventoryDelta.removed.length, possibleDuplicates: inventoryDelta.possibleDuplicates });
                     if (this.costExceeded(doc, options)) return doc;
-                    const fullContext = { diff, spec, architecture: r.architecture ?? null, approvedAmendments: this.approvedAmendments(r), taskSummaries: this.taskSummaries(r), decisionLedger: r.decisionLedger, securityContext:r.securityContext, approvedDesign: this.qaDesignContext(r), baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] };
+                    const quality = await this.qualityEvidence(r, final, signal);
+                    const fullContext = { diff, spec, qualityReview: qualityContext(r, final), architecture: r.architecture ?? null, approvedAmendments: this.approvedAmendments(r), taskSummaries: this.taskSummaries(r), decisionLedger: r.decisionLedger, securityContext:r.securityContext, approvedDesign: this.qaDesignContext(r), baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] };
                     const context = r.executionPath && r.executionPath !== 'structural' && final.risk!.lane !== 'high' ? targetedQaContext(fullContext) : fullContext;
                     this.save(doc, 'qa.context_selected', { mode: context === fullContext ? 'full' : 'targeted', bytes: Buffer.byteLength(JSON.stringify(context)), fullBytes: Buffer.byteLength(JSON.stringify(fullContext)), completeDiff: true });
                     const raw = await runRole({ store: this.store, documentId: id, budgetDocumentId: id, acceptCost: options.acceptCost ?? false, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, agent: roleAgent(r.config, 'qa', final.risk?.lane ?? spec.minimumLane), passEnv: r.config.environment.passEnv, schema: qaSchema, context, signal,
-                        maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: report => validateQa(report, spec, final.candidateSha!, r.decisionLedger) });
+                        maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: report => validateQa(report, spec, final.candidateSha!, r.decisionLedger, quality) });
                     r.qa = { report: raw, specHash: r.contentHash!, evidenceHash, at: Date.now(), source: 'agent' };
                     this.save(doc, 'qa.completed', { qa: r.qa });
                 }
                 if (needsQa && r.qa!.report.verdict === 'changes_requested') {
+                    if (r.config.workflow.qualityReview === 'evidence' && [...r.qa!.report.qualityChecks, ...r.qa!.report.criteria,
+                        ...r.qa!.report.securityChecks, ...r.qa!.report.decisionChecks, ...(r.qa!.report.negativeTestChecks ?? [])].some(x => x.status === 'unknown')) {
+                        r.status = 'blocked';
+                        r.error = { code: 'QA_EVIDENCE', message: 'Quality review lacks evidence. Inspect the missing proof and import a substantiated QA report; no automatic code repair is started for unknown evidence.' };
+                        this.save(doc, 'qa.evidence_missing', { axes: r.qa!.report.qualityChecks.filter(x => x.status === 'unknown').map(x => x.axis) });
+                        return doc;
+                    }
                     if (r.qaRepairs >= r.config.workflow.maxQaRepairs) {
                         r.status = 'blocked';
                         r.error = { code: 'QA_REJECTED', message: 'QA requests changes; automatic repair budget exhausted. Inspect findings and create an explicit follow-up.' };
@@ -1006,6 +1016,11 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             this.store.releaseDocument(id, token);
         }
     }
+    private async qualityEvidence(r: SpecRecord, final: Run, signal?: AbortSignal) {
+        if (r.config.workflow.qualityReview !== 'evidence') return undefined;
+        const trees = await Promise.all([r.baseSha, final.candidateSha!].map(sha => this.trackedPaths(r.repo, sha, signal)));
+        return { context: qualityContext(r, final), paths: new Set(trees.flatMap(tree => [...tree])), candidatePaths: trees[1]! };
+    }
     private qaMarkdown(r: SpecRecord): string {
         if (!r.qa) return '# QA\n\nQA was not required for this candidate.\n';
         const q=r.qa.report; const lines=['# QA review','',`Verdict: **${q.verdict}**`,'',q.summary,'','## Acceptance criteria'];
@@ -1014,7 +1029,11 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         if (!q.findings.length) lines.push('- None');
         else for (const f of q.findings) lines.push(`- **${f.severity}** ${f.id}${f.path ? ` (${f.path})` : ''}: ${f.description}`);
         if (q.securityChecks.length) lines.push('','## Security checks',...q.securityChecks.map(x=>`- **${x.requirementId}** — ${x.status}: ${x.evidence}`));
+        if (q.negativeTestChecks?.length) lines.push('', '## Negative tests', ...q.negativeTestChecks.map(x =>
+            `- ${x.requirementId}[${x.testIndex}]: ${x.status}; ${x.evidence}\n  Tests: ${x.paths.join(', ')}; receipts: ${x.receiptIds.join(', ')}`));
         if (q.decisionChecks.length) lines.push('','## Decision checks',...q.decisionChecks.map(x=>`- **${x.decisionId}** — ${x.status}: ${x.evidence}`));
+        if (q.qualityChecks?.length) lines.push('', '## Code quality', ...q.qualityChecks.map(x =>
+            `- **${x.axis}** — ${x.status}: ${x.evidence}\n  Paths: ${x.paths.join(', ') || 'none'}; receipts: ${x.receiptIds.join(', ') || 'none'}; findings: ${x.findingIds.join(', ') || 'none'}`));
         if (q.observations.length) lines.push('','## Observations',...q.observations.map(x=>`- ${x}`));
         return lines.join('\n')+'\n';
     }
@@ -1067,7 +1086,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         ].join('\n');
         const gateLines=final.receipts.map(x=>`- ${x.gateId}: ${x.status}`).join('\n');
         const securityLines = r.content?.security.requirements.length ? r.content.security.requirements.map(x=>`- ${x.id}: ${x.title} [${x.owaspTopics.join(', ')}]`).join('\n') : '- none';
-        const text=[`# Candidate review`,``,`Candidate: ${final.candidateSha}`,`Risk: ${final.risk?.lane ?? 'unknown'}`,`Review mode: ${r.config.workflow.reviewMode}`,`Security minimum: ${r.securityContext.minimumLane}`,`OWASP topics: ${r.securityContext.topics.map(x=>x.id).join(', ') || 'none'}`,``,`Open this directory in your editor:`,``,candidate,``,`Patch: ${patchPath}`,`QA: ${qaPath}`,`Inventory: ${inventoryPath}`,...(r.design ? [`Approved design: ${r.design.indexPath}`,...r.design.screenPaths.map(p=>`  - ${p}`)] : []),``,`## Gates`,gateLines || '- none',``,`## Public surface changes`,surfaceLines,``,`## Security requirements`,securityLines,''].join('\n');
+        const text=[`# Candidate review`,``,`Candidate: ${final.candidateSha}`,`Risk: ${final.risk?.lane ?? 'unknown'}`,`Review mode: ${r.config.workflow.reviewMode}`,`Security minimum: ${r.securityContext.minimumLane}`,`OWASP topics: ${r.securityContext.topics.map(x=>x.id).join(', ') || 'none'}`,``,`Open this directory in your editor:`,``,candidate,``,`Patch: ${patchPath}`,`QA: ${qaPath}`,`Inventory: ${inventoryPath}`,...(r.design ? [`Approved design: ${r.design.indexPath}`,...r.design.screenPaths.map(p=>`  - ${p}`)] : []),``,`## Gates`,gateLines || '- none',``,qualityMarkdown(qualityContext(r, final)),``,`## Public surface changes`,surfaceLines,``,`## Security requirements`,securityLines,''].join('\n');
         writeFileSync(reviewPath,text,{mode:0o600});
         r.review={directory:root,candidateDirectory:candidate,patchPath,qaPath,reviewPath,candidateSha:final.candidateSha,bundleHash};
         this.save(doc,'workflow.review_workspace_ready',{review:r.review});
@@ -1079,8 +1098,11 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         const final = this.pipeline.store.get(r.finalRunId);
         invariant(final.candidateSha === r.currentSha, 'CANDIDATE', 'Final candidate is stale');
         const evidenceHash = await this.pipeline.assertValidated(final.id);
+        assertRequiredEvidence(qualityContext(r, final).validation);
         if (requiresQa(r, final, spec))
             invariant(r.qa && r.qa.specHash === r.contentHash && r.qa.evidenceHash === evidenceHash && r.qa.report.candidateSha === final.candidateSha && r.qa.report.verdict === 'pass', 'QA_REQUIRED', 'A passing QA assessment must cover the exact candidate and evidence');
+        if (requiresQa(r, final, spec) && r.config.workflow.qualityReview === 'evidence')
+            validateQa(r.qa!.report, spec, final.candidateSha!, r.decisionLedger, await this.qualityEvidence(r, final));
         return final;
     }
     /** Publication adapters still acquire the lifecycle lease and require explicit consent. */
@@ -1119,7 +1141,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             invariant(r.finalRunId && !['closed', 'rejected', 'delivered'].includes(r.status), 'STATE', 'QA requires a pending integrated candidate');
             const final = this.pipeline.store.get(r.finalRunId);
             const evidenceHash = await this.pipeline.assertValidated(final.id);
-            const qa: QaRecord = { report: validateQa(value, spec, final.candidateSha!, r.decisionLedger), evidenceHash, specHash: r.contentHash!, at: Date.now(), source: 'operator-import' };
+            const qa: QaRecord = { report: validateQa(value, spec, final.candidateSha!, r.decisionLedger, await this.qualityEvidence(r, final)), evidenceHash, specHash: r.contentHash!, at: Date.now(), source: 'operator-import' };
             this.pipeline.invalidateApprovals(final.id, 'QA assessment imported/replaced');
             r.qa = qa;
             r.status = 'running';
@@ -1294,7 +1316,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             mkdirSync(dirname(output), { recursive: true });
             const staging = join(dirname(output), `.apv2-delivery-${randomUUID()}`);
             mkdirSync(staging, { mode: 0o700 });
-            const files: Record<string, string> = { 'candidate.patch': patch, 'spec.md': specMarkdown(r, id), 'evidence.json': JSON.stringify({ specId: id, specHash: r.contentHash, productApproval: r.approval, qa: r.qa, run: summarize(final), receipts: final.receipts, approvals: final.approvals }, null, 2) + '\n', 'events.jsonl': this.store.documentEvents(id).map(e => JSON.stringify(e)).join('\n') + '\n', 'run-events.jsonl': [...new Set([...r.attempts.map(a => a.runId), ...r.validationRunIds])].flatMap(runId => this.store.events(runId)).map(e => JSON.stringify(e)).join('\n') + '\n' };
+            const files: Record<string, string> = { 'candidate.patch': patch, 'spec.md': specMarkdown(r, id), 'evidence.json': JSON.stringify({ specId: id, specHash: r.contentHash, productApproval: r.approval, qa: r.qa, quality: qualityContext(r, final), run: summarize(final), receipts: final.receipts, approvals: final.approvals }, null, 2) + '\n', 'events.jsonl': this.store.documentEvents(id).map(e => JSON.stringify(e)).join('\n') + '\n', 'run-events.jsonl': [...new Set([...r.attempts.map(a => a.runId), ...r.validationRunIds])].flatMap(runId => this.store.events(runId)).map(e => JSON.stringify(e)).join('\n') + '\n' };
             const manifest = JSON.stringify(Object.fromEntries(Object.entries(files).map(([name, text]) => [name, sha256(text)])), null, 2) + '\n';
             try {
                 for (const [name, text] of Object.entries(files))
@@ -1420,12 +1442,14 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             const said = last ? (this.pipeline.store.get(last.runId).summary ?? '').replace(/\s+/g, ' ').slice(0, 300) : '';
             next = `The last attempt changed nothing${said ? ` and explained: "${said}"` : ''}. Read it with apv2 spec events ${doc.id}; then apv2 spec retry ${doc.id} --confirm if a change is still expected, or create a follow-up spec.`;
         }
+        else if (r.error?.code === 'QA_EVIDENCE')
+            next = `Inspect required validation and unknown assessments. Missing commands or testPaths require a reviewed configuration and a new spec; keep the candidate for reuse. An imported QA report cannot replace missing runner evidence.${final && ['ready', 'awaiting_review'].includes(final.state) ? ` Replay configured gates with apv2 spec verify ${doc.id}, or complete the QA references with apv2 spec qa ${doc.id} --file qa.json.` : ''}`;
         else if (r.error?.code === 'STALE_EVIDENCE')
             next = `apv2 spec verify ${doc.id}   (replays the gates on the same candidate; then apv2 spec run ${doc.id})`;
         else if (r.status === 'blocked' && r.error)
             next = `Resolve ${r.error.code} before running again: ${r.error.message.slice(0, 200)}`;
         else
             next = `apv2 spec run ${doc.id}`;
-        return { id: doc.id, executionPath: r.executionPath ?? 'legacy', architecture: r.architecture ?? null, maxActiveMs: r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs, cost: this.costSummary(doc.id), planningMs: Math.round(r.planningMs ?? 0), revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash:r.contentHash, security:{contextHash:r.securityContextHash ?? null,minimumLane:r.securityContext?.minimumLane ?? null,requiresThreatModel:r.securityContext?.requiresThreatModel ?? null,topics:r.securityContext?.topics.map(x=>x.id) ?? [],requirements:r.content?.security?.requirements.map(x=>x.id) ?? []}, design:r.design ? {hash:r.design.hash,directory:r.design.directory,indexPath:r.design.indexPath,summary:r.design.proposal.summary,questions:r.design.proposal.questions} : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], sizeAdvice: r.sizeAdvice ?? [], stoppedWork: stopped ? { runId: stopped.id, workspace: stopped.workspace } : null, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
+        return { id: doc.id, executionPath: r.executionPath ?? 'legacy', architecture: r.architecture ?? null, maxActiveMs: r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs, cost: this.costSummary(doc.id), planningMs: Math.round(r.planningMs ?? 0), revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash:r.contentHash, security:{contextHash:r.securityContextHash ?? null,minimumLane:r.securityContext?.minimumLane ?? null,requiresThreatModel:r.securityContext?.requiresThreatModel ?? null,topics:r.securityContext?.topics.map(x=>x.id) ?? [],requirements:r.content?.security?.requirements.map(x=>x.id) ?? []}, design:r.design ? {hash:r.design.hash,directory:r.design.directory,indexPath:r.design.indexPath,summary:r.design.proposal.summary,questions:r.design.proposal.questions} : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, quality: (final ?? active)?.candidateSha ? qualityContext(r, (final ?? active)!) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], sizeAdvice: r.sizeAdvice ?? [], stoppedWork: stopped ? { runId: stopped.id, workspace: stopped.workspace } : null, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
     }
 }

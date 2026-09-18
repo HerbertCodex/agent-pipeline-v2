@@ -25,6 +25,7 @@ export function expandBrief(brief) {
 export const architectureSchema = s.object({
     summary: s.string(10, 2000),
     decisions: s.array(s.object({ decision: s.string(1, 800), rationale: s.string(1, 1200),
+        constraint: s.string(1, 800, /\S/), simplerAlternative: s.string(1, 800, /\S/), risks: s.array(s.string(1, 600, /\S/), 1, 5),
         alternatives: s.array(s.string(1, 600), 1, 5), tradeoffs: s.array(s.string(1, 600), 1, 5), reconsiderWhen: s.array(s.string(1, 600), 1, 5) }), 1, 6),
     inspection: s.array(s.object({ path: s.string(1, 500), finding: s.string(1, 1000) }), 1, 20),
 });

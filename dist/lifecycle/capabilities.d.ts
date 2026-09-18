@@ -43,10 +43,19 @@ export declare function executionCapabilities(config: Config): {
     runnerSetup: string[];
     gates: {
         id: string;
+        covers: ("security" | "unit" | "integration" | "browser" | "build" | "lint" | "typecheck" | "architecture")[];
+        testPaths: string[];
+        paths: string[];
         command: string;
         lanes: ("fast" | "standard" | "high")[];
         mandatory: boolean;
     }[];
+    validationRules: {
+        readonly id: string;
+        readonly paths: string[];
+        readonly requires: ("security" | "unit" | "integration" | "browser" | "build" | "lint" | "typecheck" | "architecture")[];
+    }[];
+    qualityReview: "legacy" | "evidence";
     generatedPaths: string[];
     rules: string[];
 };

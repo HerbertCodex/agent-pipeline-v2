@@ -93,6 +93,14 @@ et les classes uniquement présentes dans HTML/JS ne sont pas vérifiés par ce 
 La présence d'un script CSS seule ne prouve pas qu'il active BEM. Aucun outil ni
 nouvelle gate ne sont installés automatiquement dans les projets existants.
 
+## Lot 3 — Qualité du code et preuves de validation
+
+Le [guide du lot 3](LOT-3-QUALITE.md) décrit la grille QA structurée, les références aux fichiers et receipts vérifiées par le contrôleur, les labels de couverture des gates et l'affichage des lacunes. Le périmètre confirmé suit le lot 2 demandé ; il remplace ici l'ancienne numérotation « Parcours court » déjà livrée.
+
+Les nouvelles configurations `init`/onboarding activent `workflow.qualityReview: "evidence"`. Les configurations existantes gardent leur comportement jusqu'à une modification explicite pour une nouvelle spec. La grille utilise l'appel QA existant ; une preuve inconnue suspend le workflow sans réparation automatique de code. Les remarques mineures seules ne déclenchent pas de réparation. Le compact conserve son exemption conditionnelle de QA.
+
+Le lot 3 impose désormais les preuves applicables (build, intégration, navigateur, règles de frontières), même en parcours compact. Les cas négatifs de sécurité sont reliés aux fichiers exécutés et receipts ; les décisions structurantes exposent contrainte, option simple et risques. Détails et validation : [Lot 3](LOT-3-QUALITE.md).
+
 ## Utilisation
 
 Une tâche compacte utilise le contrat `Task` existant : titre, description, critères d'acceptation et chemins précis. Elle produit une spec à approuver normalement, sans appel Product. Les décisions du projet restent vérifiées ; si elles exigent une couverture que ce raccourci ne peut exprimer, utiliser une spec standard.

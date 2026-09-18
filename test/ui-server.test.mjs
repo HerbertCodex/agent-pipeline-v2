@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { request } from 'node:http';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { fixture, git } from './lifecycle-helpers.mjs';
+import { fixture, git, oneTask } from './lifecycle-helpers.mjs';
 import { startUi } from '../dist/ui/server.js';
 
 function call(ui, path, { method = 'GET', headers = {}, body, raw } = {}) {
@@ -63,6 +63,20 @@ test('specs, their detail and their events are readable', async (t) => {
   assert.ok((await get(`/api/specs/${d.id}/events`)).json().some(e => e.type === 'product.proposed'));
   assert.equal((await get('/api/specs/unknown-id')).status, 404);
   assert.ok(Array.isArray((await get('/api/maintenance')).json().garbage));
+});
+
+test('dashboard exposes final coverage gaps even before a model QA report exists', async t => {
+  const { f, get } = await open(t);
+  const config = { ...f.config, gates: f.config.gates.map(g => ({ ...g, covers: g.id === 'unit' ? ['unit'] : [] })) };
+  let d = await f.life.draft({ repo: f.repo, config, request: 'Implement arithmetic.', proposal: oneTask() });
+  await f.life.approveSpec(d.id, d.data.contentHash, 'Test Owner', 'Approve the fixture contract.');
+  d = await f.life.run(d.id, { manualQa: true });
+  assert.equal(d.data.error.code, 'QA_REQUIRED');
+  const detail = (await get(`/api/specs/${d.id}`)).json();
+  assert.equal(detail.qa, null);
+  assert.deepEqual(detail.quality.validation.observed, ['unit']);
+  assert.ok(detail.quality.validation.gaps.includes('browser'));
+  assert.equal(detail.quality.candidateSha, d.data.currentSha);
 });
 
 test('an action needs the CSRF token, the same origin, the exact hash and a note', async (t) => {

@@ -2,7 +2,7 @@ import { installedAssets } from '../knowledge/catalog.js';
 import { skillNames } from '../domain/knowledge.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, lstatSync, unlinkSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
-import { agentSchema, configSchema, validateConfig, type AgentConfig, type Config, type Run } from '../domain/contracts.js';
+import { agentSchema, configSchema, validateConfig, type AgentConfig, type Config, type Run, validationKinds } from '../domain/contracts.js';
 import { s, parseJson } from '../domain/schema.js';
 import { invariant } from '../domain/errors.js';
 import { hash } from '../domain/hash.js';
@@ -121,16 +121,17 @@ export function proposeConfiguration(inventory: Inventory, agent: AgentConfig = 
         const runner = pm ?? 'npm';
         const test = Object.hasOwn(inventory.scripts, 'test:ci') ? 'test:ci' : Object.hasOwn(inventory.scripts, 'test') ? 'test' : null;
         if (test && !/no test specified|--watch\b|\bwatch\b/.test(inventory.scripts[test]!))
-            gates.push({ id: 'test', command: [runner, 'run', test], lanes: ['standard', 'high'], resources: ['project-checks'] });
+            gates.push({ id: 'test', covers: ['unit'], command: [runner, 'run', test], lanes: ['standard', 'high'], resources: ['project-checks'] });
         else
             questions.push('Define a real non-interactive test command; no placeholder or watch command is accepted automatically.');
+        const coverage: Record<string, (typeof validationKinds[number])[]> = { typecheck: ['typecheck'], lint: ['lint'], 'lint:css': ['lint'], 'lint:styles': ['lint'], build: ['build'], 'test:integration': ['integration'], 'test:e2e': ['browser'] };
         for (const id of ['check', 'typecheck', 'lint', 'lint:css', 'lint:styles', 'build', 'test:integration', 'test:e2e'])
             if (Object.hasOwn(inventory.scripts, id) && !/--watch\b|\bwatch\b|no test specified/i.test(inventory.scripts[id]!))
-                gates.push({ id: id.replaceAll(':', '-'), command: [runner, 'run', id], lanes: ['standard', 'high'], resources: ['project-checks'] });
+                gates.push({ id: id.replaceAll(':', '-'), covers: coverage[id] ?? [], command: [runner, 'run', id], lanes: ['standard', 'high'], resources: ['project-checks'] });
         for (const script of inventory.securityScripts ?? []) {
             const gateId = `security-${script.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')}`;
             if (!gates.some((gate: any) => gate.id === gateId))
-                gates.push({ id: gateId, command: [runner, 'run', script], timeoutMs: 300000, lanes: ['standard', 'high'], resources: ['security-checks'] });
+                gates.push({ id: gateId, covers: ['security'], command: [runner, 'run', script], timeoutMs: 300000, lanes: ['standard', 'high'], resources: ['security-checks'] });
         }
         if ((inventory.securityScripts ?? []).length)
             notes.push(`Discovered existing project-owned security checks: ${(inventory.securityScripts ?? []).join(', ')}. They are gates, not a certification claim.`);
@@ -143,12 +144,15 @@ export function proposeConfiguration(inventory: Inventory, agent: AgentConfig = 
         notes.push('Install lifecycle scripts are disabled; explicitly review any required generated client/build step.');
     }
     else if (inventory.stack === 'go') {
-        gates.push({ id: 'test', command: ['go', 'test', './...'], timeoutMs: 300000, lanes: ['standard', 'high'], passEnv: ['HOME'] });
+        gates.push({ id: 'build', covers: ['build'], command: ['go', 'build', './...'], timeoutMs: 300000, lanes: ['standard', 'high'], passEnv: ['HOME'] });
+        gates.push({ id: 'test', covers: ['unit'], testPaths: ['**/*_test.go'], command: ['go', 'test', './...'], timeoutMs: 300000, lanes: ['standard', 'high'], passEnv: ['HOME'] });
         notes.push('go test may fetch dependencies. Pin the toolchain and permit only expected network access.');
     }
     else
         questions.push('Unsupported automatic profile: supply --config with reviewed setup and real test commands, or use --assist.');
-    const config = validateConfig({ schemaVersion: 1, executionMode: 'local-trusted', environment: { id: `local-${process.platform}-${process.arch}-node-${process.versions.node}` }, agent, workflow: { planningMode: 'adaptive' }, skills: { enabled: [...skillNames], projectType: inventory.projectType }, setup, gates });
+    notes.push('Review testPaths for behavioral gates against the files their command actually executes; negative security cases require this mapping. In evidence mode, missing applicable build/integration/browser commands block affected changes without automatic code repair. Use validationRules for project-specific module boundaries and unconventional paths.');
+    notes.push('Review gate covers labels against their actual commands. Script names are discovery hints, not proof of coverage; composite check scripts remain unlabelled until reviewed. Evidence QA requires final behavioral-test receipts for code changes.');
+    const config = validateConfig({ schemaVersion: 1, executionMode: 'local-trusted', environment: { id: `local-${process.platform}-${process.arch}-node-${process.versions.node}` }, agent, workflow: { planningMode: 'adaptive', qualityReview: 'evidence' }, skills: { enabled: [...skillNames], projectType: inventory.projectType }, setup, gates });
     return { config, questions, notes };
 }
 const assistantGuide = `# Agent Pipeline V2 assistant

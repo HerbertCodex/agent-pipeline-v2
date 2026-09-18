@@ -11,6 +11,7 @@ export declare const exampleConfig: {
     };
     workflow: {
         planningMode: string;
+        qualityReview: string;
     };
     setup: {
         command: string[];
@@ -19,6 +20,7 @@ export declare const exampleConfig: {
     }[];
     gates: ({
         id: string;
+        covers: string[];
         command: string[];
         lanes: string[];
         cacheTtlMs: number;
@@ -28,6 +30,7 @@ export declare const exampleConfig: {
         command: string[];
         mandatory: boolean;
         cacheTtlMs: number;
+        covers?: never;
         lanes?: never;
     })[];
     concurrency: number;

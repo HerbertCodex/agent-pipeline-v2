@@ -1,6 +1,7 @@
 import { type Infer } from './schema.js';
 export declare const VERSION = "2.0.0-alpha.8";
 export declare const lanes: readonly ["fast", "standard", "high"];
+export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];
 export declare const commandSchema: import("./schema.js").Schema<{
     readonly command: string[];
@@ -10,6 +11,8 @@ export declare const commandSchema: import("./schema.js").Schema<{
 export declare const gateSchema: import("./schema.js").Schema<{
     readonly id: string;
     readonly command: string[];
+    readonly covers: ("security" | "unit" | "integration" | "browser" | "build" | "lint" | "typecheck" | "architecture")[];
+    readonly testPaths: string[];
     readonly timeoutMs: number;
     readonly passEnv: string[];
     readonly dependsOn: string[];
@@ -136,6 +139,7 @@ export declare const configSchema: import("./schema.js").Schema<{
     }[];
     readonly workflow: {
         readonly planningMode: "legacy" | "adaptive";
+        readonly qualityReview: "legacy" | "evidence";
         readonly qaLanes: string[];
         readonly maxQaRepairs: number;
         readonly maxActiveMs: number;
@@ -162,6 +166,8 @@ export declare const configSchema: import("./schema.js").Schema<{
     readonly gates: {
         readonly id: string;
         readonly command: string[];
+        readonly covers: ("security" | "unit" | "integration" | "browser" | "build" | "lint" | "typecheck" | "architecture")[];
+        readonly testPaths: string[];
         readonly timeoutMs: number;
         readonly passEnv: string[];
         readonly dependsOn: string[];
@@ -171,6 +177,11 @@ export declare const configSchema: import("./schema.js").Schema<{
         readonly lanes: ("fast" | "standard" | "high")[];
         readonly mandatory: boolean;
         readonly cacheTtlMs: number;
+    }[];
+    readonly validationRules: {
+        readonly id: string;
+        readonly paths: string[];
+        readonly requires: ("security" | "unit" | "integration" | "browser" | "build" | "lint" | "typecheck" | "architecture")[];
     }[];
     readonly concurrency: number;
     readonly failFast: boolean;

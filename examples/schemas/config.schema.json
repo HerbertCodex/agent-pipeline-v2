@@ -794,6 +794,14 @@
           ],
           "default": "legacy"
         },
+        "qualityReview": {
+          "type": "string",
+          "enum": [
+            "legacy",
+            "evidence"
+          ],
+          "default": "legacy"
+        },
         "qaLanes": {
           "type": "array",
           "items": {
@@ -894,6 +902,7 @@
       "additionalProperties": false,
       "default": {
         "planningMode": "legacy",
+        "qualityReview": "legacy",
         "qaLanes": [
           "standard",
           "high"
@@ -1082,6 +1091,41 @@
             "minItems": 1,
             "maxItems": 200
           },
+          "covers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "unit",
+                "integration",
+                "browser",
+                "build",
+                "lint",
+                "typecheck",
+                "security",
+                "architecture"
+              ]
+            },
+            "minItems": 0,
+            "maxItems": 8,
+            "default": []
+          },
+          "testPaths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ]
+            },
+            "minItems": 0,
+            "maxItems": 500,
+            "default": []
+          },
           "timeoutMs": {
             "type": "integer",
             "minimum": 10,
@@ -1208,6 +1252,67 @@
       },
       "minItems": 1,
       "maxItems": 100
+    },
+    "validationRules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "allOf": [
+              {
+                "pattern": "^[^\\u0000]*$"
+              }
+            ],
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "requires": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "unit",
+                "integration",
+                "browser",
+                "build",
+                "lint",
+                "typecheck",
+                "security",
+                "architecture"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 8
+          }
+        },
+        "required": [
+          "id",
+          "paths",
+          "requires"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 100,
+      "default": []
     },
     "concurrency": {
       "type": "integer",

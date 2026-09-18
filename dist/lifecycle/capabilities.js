@@ -28,9 +28,12 @@ export function executionCapabilities(config) {
         },
         feedback: config.feedback ?? { gateIds: [], maxCalls: 0, maxTotalMs: 0 },
         runnerSetup: config.setup.map(step => step.command.join(' ')),
-        gates: config.gates.map(g => ({ id: g.id, command: g.command.join(' '), lanes: g.lanes, mandatory: g.mandatory })),
+        gates: config.gates.map(g => ({ id: g.id, covers: g.covers ?? [], testPaths: g.testPaths ?? [], paths: g.paths, command: g.command.join(' '), lanes: g.lanes, mandatory: g.mandatory })),
+        validationRules: config.validationRules ?? [],
+        qualityReview: config.workflow.qualityReview,
         generatedPaths: config.workflow.generatedPaths ?? [...DEFAULT_GENERATED_PATHS],
         rules: [
+            'In evidence mode, code needs behavioral tests, UI needs browser checks, compiled/build inputs need a production build, and structural/high-risk or integration-boundary changes need integration tests. Project validationRules can add obligations. Missing evidence blocks validation without code repairs; raise missing commands as prerequisites before implementation. Security negative tests need testPaths reviewed against the gate command.',
             'The runner performs independent final checks in a fresh worktree. If feedback.gateIds is nonempty, the Implementer can request those checks during its session through the bounded run_check tool; these observations are not final receipts.',
             'A task must not require the Implementer to run commands, install or update dependencies, regenerate lockfiles, run code generators or migrations, or access the network unless its capabilities above allow it.',
             'When the change needs such a step (for example a new dependency and its lockfile), make it an operator prerequisite: ask a Product question or state it as an explicit precondition outside the tasks.',

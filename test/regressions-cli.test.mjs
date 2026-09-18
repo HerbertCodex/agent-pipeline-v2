@@ -43,7 +43,11 @@ test('scheduler drains siblings even when blocked-result bookkeeping throws',asy
 });
 test('POSIX normal leader exit also stops a background child',async()=>{
  const result=await runProcess({command:[process.execPath,'-e',`const {spawn}=require('node:child_process');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});console.log(child.pid);child.unref();`],cwd:process.cwd(),env:environment(['PATH']),timeoutMs:2000});
- assert.equal(result.status,'passed');const pid=Number(result.stdout.trim());assert.ok(pid>0);await sleep(20);assert.equal(processAlive(pid),false);
+ assert.equal(result.status,'passed');const pid=Number(result.stdout.trim());assert.ok(pid>0);
+ // Group termination is asynchronous; wait for its effect without assuming a 20 ms scheduling window.
+ const deadline=Date.now()+1000;
+ while(processAlive(pid)&&Date.now()<deadline) await sleep(10);
+ assert.equal(processAlive(pid),false,'The background child must stop after its leader exits');
 });
 test('CLI help and version work without a project or API credentials',()=>{
  assert.equal(call(['--help']).status,0);const version=call(['--version']);assert.equal(version.status,0);assert.match(version.stdout,/2.0.0-alpha.8/);
