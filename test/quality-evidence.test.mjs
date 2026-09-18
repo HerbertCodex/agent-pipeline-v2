@@ -316,3 +316,15 @@ test('local behavioral proof does not force optional expensive suites; test-only
   assert.deepEqual(planGates(run.config, run.changeSet, 'standard').map(g => g.id), ['unit']);
   assert.deepEqual(validationRequirements(run.config, ['test/component.test.tsx'], 'high').map(r => r.id), ['behavior']);
 });
+
+// Observed on a real store: a spec written before `experience` existed made the whole dashboard listing fail
+// with "Erreur interne", because the quality context read that field without guarding it.
+test('a spec written before the experience field still yields a quality context', () => {
+  const { record, run } = sample();
+  const legacy = { ...record, content: { tasks: [], acceptance: [] } };
+  const context = qualityContext(legacy, run);
+  assert.equal(context.enabled, true);
+  assert.equal(context.axes.find(a => a.axis === 'ui').required, false, 'no declared UI impact and no UI file changed');
+  const uiChange = qualityContext(legacy, { ...run, changeSet: { ...run.changeSet, files: ['src/routes/+page.svelte'] } });
+  assert.equal(uiChange.axes.find(a => a.axis === 'ui').required, true, 'the changed files still decide');
+});
