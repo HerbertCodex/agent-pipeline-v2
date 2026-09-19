@@ -7,7 +7,7 @@ Les guides ci-dessous décrivent le fonctionnement actuel. Pour commencer : [pr�
 | Configurer le projet et les contrôles | [Configuration](CONFIGURATION.md) · [Migration](MIGRATION.md) |
 | Choisir les modèles et comprendre les fournisseurs | [Modèles](MODELS.md) · [Adaptateurs](ADAPTERS.md) |
 | Comprendre l’abonnement, les limites et les diagnostics | [Politique d’exécution](EXECUTION-POLICY.md) |
-| Piloter une spec, reprendre un arrêt et livrer | [Cycle de vie](LIFECYCLE.md) |
+| Piloter une spec, reprendre un arrêt et livrer | [Cycle de vie](LIFECYCLE.md) · [Blocages et recours](RECOVERY.md) |
 | Comprendre les agents et leurs consignes | [Rôles](ROLES.md) · [Skills](SKILLS.md) |
 | Exiger des preuves et corriger les défauts | [Qualité et validation](QUALITY.md) |
 | Comprendre les frontières et les décisions | [Architecture](ARCHITECTURE.md) · [Décisions produit](DECISIONS.md) |

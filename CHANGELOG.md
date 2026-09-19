@@ -3,6 +3,8 @@
 
 ## Unreleased — reliability and efficient feature work
 
+- Audit des recours : inventaire syntaxique des codes d’erreur, catalogue des actions et lacunes, et test de couverture pour les nouveaux codes ou expressions dynamiques. Ce contrôle classe les refus ; il ne modifie pas les reprises du moteur et ne garantit pas leur accessibilité.
+
 - **Fusionner une spec ne l'empêche plus de se clore.** Le dépôt source doit être propre et rester sur la base de la spec : un plan approuvé contre un état du dépôt ne doit pas s'implémenter contre un autre, et ce garde-fou ne bouge pas. Mais il s'appliquait aussi quand la branche avait avancé **à cause du travail de la spec elle-même** : une fois la pull request fusionnée, plus aucune exécution n'était possible, donc plus de preuve fraîche, donc plus de revue, donc plus de clôture — alors que `spec sync` voyait parfaitement la fusion et réclamait cette revue. Une branche qui contient déjà le candidat de la spec est désormais acceptée ; rien d'autre ne change, et les espaces de travail restent des worktrees détachés créés sur des commits explicites. Constaté sur un vrai projet : spec livrée, fusionnée, puis enfermée pour toujours par le déroulement le plus banal qui soit.
 
 - Validation : suppression des anciens audits, bilans et journaux redondants ; index recentré sur la suite finale, les vérifications navigateur et la calibration réelle des modèles. Liens et mesures documentées actualisés.

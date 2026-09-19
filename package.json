@@ -50,7 +50,8 @@
     "demo:lifecycle": "node scripts/demo-lifecycle.mjs",
     "pilot:provider": "node scripts/provider-pilot.mjs",
     "check:package": "npm pack --ignore-scripts && node scripts/check-package.mjs",
-    "pilot:repair": "node scripts/repair-pilot.mjs"
+    "pilot:repair": "node scripts/repair-pilot.mjs",
+    "audit:errors": "node scripts/audit-errors.mjs"
   },
   "devDependencies": {
     "@types/node": "24.0.4",

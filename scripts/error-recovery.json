@@ -1,0 +1,594 @@
+{
+  "schemaVersion": 1,
+  "scope": "Audit statique des codes émis dans src ; classification de recours, pas garantie de reprise exécutable.",
+  "groups": [
+    {
+      "id": "input",
+      "codes": [
+        "ARGUMENT",
+        "INPUT_SIZE",
+        "JSON",
+        "SCHEMA",
+        "REQUEST",
+        "BOOTSTRAP_REQUEST",
+        "NOT_FOUND",
+        "EVALUATION"
+      ],
+      "operator": "yes",
+      "operatorAction": "Corriger le champ, le format, la taille ou l’identifiant cité ; pour une sortie de modèle, reprendre le rôle plutôt que modifier les données persistées.",
+      "currentGuidance": "Messages locaux précis ; erreurs de sortie éligibles à la réparation selon leur code. Pas de recours uniforme pour les mêmes codes issus de la CLI et des agents.",
+      "gap": "Distinguer l’origine de l’entrée avant de proposer une commande ; SCHEMA/JSON ne désignent pas toujours une saisie opérateur."
+    },
+    {
+      "id": "configuration",
+      "codes": [
+        "CONFIG",
+        "COMMAND",
+        "DAG",
+        "GLOB",
+        "KNOWLEDGE_LANGUAGE",
+        "PACKAGE",
+        "PROVIDER",
+        "NO_GATES"
+      ],
+      "operator": "yes",
+      "operatorAction": "Corriger la configuration ou les scripts concernés. Pour une spec approuvée, utiliser uniquement un amendement autorisé ; sinon préparer une nouvelle spec sur la configuration revue.",
+      "currentGuidance": "Le message identifie la contrainte refusée, mais la marche à suivre dépend de l’état approuvé ou non.",
+      "gap": "Exposer si la correction peut être amendée sur la spec existante ; ne pas proposer une édition de sa configuration gelée."
+    },
+    {
+      "id": "confirmation",
+      "codes": [
+        "CONFIRM",
+        "BOOTSTRAP_COMMIT"
+      ],
+      "operator": "yes",
+      "operatorAction": "Relire l’opération et fournir la confirmation ou le commit explicitement exigé si elle est souhaitée.",
+      "currentGuidance": "Les messages et les options CLI précisent la confirmation manquante.",
+      "gap": "Pas de contournement automatique : le refus sans consentement est intentionnel."
+    },
+    {
+      "id": "approval",
+      "codes": [
+        "APPROVAL_HASH",
+        "APPROVAL_SHA",
+        "SPEC_APPROVAL",
+        "DESIGN_APPROVAL",
+        "CRITERION_HASH",
+        "LEDGER_HASH",
+        "REPLAN_HASH",
+        "MERGE_SHA",
+        "REVIEW"
+      ],
+      "operator": "yes",
+      "operatorAction": "Relire la proposition ou le candidat courant et approuver son hash/SHA exact avec l’identité et le motif requis ; refaire une proposition devenue obsolète.",
+      "currentGuidance": "Messages ciblés et commandes d’approbation existantes ; summary expose certaines approbations selon l’état.",
+      "gap": "L’ancien hash ne doit jamais être réécrit pour faire passer le contrôle. Vérifier les préconditions de l’approbation proposée."
+    },
+    {
+      "id": "draft",
+      "codes": [
+        "SPEC",
+        "SPEC_ARCHITECTURE",
+        "SPEC_CAPABILITY",
+        "SPEC_COVERAGE",
+        "SPEC_DAG",
+        "SPEC_DECISIONS",
+        "SPEC_SECURITY",
+        "PRODUCT",
+        "OPEN_QUESTIONS",
+        "DESIGN",
+        "DESIGN_ASSET",
+        "DESIGN_MARKUP",
+        "SEMANTIC_REVIEW",
+        "DECISION",
+        "DECISION_AMBIGUOUS",
+        "DECISION_COVERAGE",
+        "DECISION_SOURCE",
+        "DECISION_IMMUTABLE",
+        "BOOTSTRAP",
+        "BOOTSTRAP_OUTPUT",
+        "BOOTSTRAP_SIZE",
+        "PLAN"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Sur un brouillon, répondre aux questions, préciser les contraintes puis reprendre ou raffiner la proposition. Une spec exécutée doit passer par les amendements autorisés ou une nouvelle spec.",
+      "currentGuidance": "plan-resume/refine et réparations de sortie existent. Les contraintes sont détaillées dans les validateurs ; certains codes bootstrap/setup ont leurs propres commandes.",
+      "gap": "La reprise dépend du protocole et de l’état. Un code partagé ne prouve pas que plan-resume est applicable à chaque occurrence."
+    },
+    {
+      "id": "already-initialized",
+      "codes": [
+        "BOOTSTRAP_HAS_COMMIT",
+        "BOOTSTRAP_NOT_EMPTY",
+        "ALREADY_INSTALLED"
+      ],
+      "operator": "yes",
+      "operatorAction": "Utiliser onboard pour un projet existant ; pour une installation déjà présente, préparer une migration explicite sans écraser les fichiers.",
+      "currentGuidance": "Messages explicites vers onboard ou une migration.",
+      "gap": "Refus volontaire de destruction de données existantes ; pas de retry identique."
+    },
+    {
+      "id": "dirty-source",
+      "codes": [
+        "DIRTY",
+        "BOOTSTRAP_DIRTY",
+        "LEDGER_DIRTY"
+      ],
+      "operator": "yes",
+      "operatorAction": "Inspecter puis conserver, commiter ou déplacer volontairement les modifications locales. Relancer seulement après stabilisation du dépôt, sans reset automatique.",
+      "currentGuidance": "Le message identifie les fichiers ou le registre sale ; pas d’action structurée commune.",
+      "gap": "Séparer les modifications de l’opérateur du travail conservé de l’agent avant toute reprise."
+    },
+    {
+      "id": "path-boundary",
+      "codes": [
+        "ASSET_PATH",
+        "BOOTSTRAP_PATH",
+        "BOOTSTRAP_REPO",
+        "DESIGN_PATH",
+        "OUTPUT_PATH",
+        "PATH",
+        "REVIEW_PATH",
+        "STATE_PATH",
+        "WORKSPACE_PATH"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Choisir un emplacement respectant les racines autorisées. Pour un workspace incohérent, conserver les données et faire diagnostiquer sa propriété avant nettoyage.",
+      "currentGuidance": "Messages sur le chemin ou la racine refusée ; aucune autorisation de contourner ces frontières.",
+      "gap": "Refus de sécurité intentionnel. WORKSPACE_PATH peut aussi signaler une incohérence interne, pas une simple faute de saisie."
+    },
+    {
+      "id": "existing-output",
+      "codes": [
+        "BOOTSTRAP_CONFLICT",
+        "BRANCH_CONFLICT",
+        "EXISTS",
+        "REMOTE_BRANCH_CONFLICT",
+        "BRANCH"
+      ],
+      "operator": "yes",
+      "operatorAction": "Choisir une destination ou une branche distincte après inspection ; ne pas écraser un fichier existant ni forcer une branche divergente.",
+      "currentGuidance": "Messages explicites de collision, de branche protégée ou de refus de force-push.",
+      "gap": "Pas de retry identique ; toute réutilisation de destination doit vérifier l’identité du candidat."
+    },
+    {
+      "id": "unsupported",
+      "codes": [
+        "PLATFORM",
+        "SUBMODULE",
+        "SYMLINK"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Utiliser WSL2 pour Windows natif ; employer un dépôt compatible ou faire ajouter un support explicite des sous-modules/liens symboliques.",
+      "currentGuidance": "Limitations annoncées dans les messages.",
+      "gap": "Pas de reprise équivalente disponible pour une capacité non implémentée ; ne pas modifier silencieusement le projet."
+    },
+    {
+      "id": "package-assets",
+      "codes": [
+        "ASSET",
+        "ASSET_SIZE",
+        "SKILLS",
+        "SKILL_METADATA",
+        "SKILL_RESOURCE"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Vérifier la sélection des skills et l’intégrité de l’installation. Faire corriger le manifeste ou les ressources invalides et réinstaller une version cohérente.",
+      "currentGuidance": "Messages détaillés sur la ressource ou le skill ; pas de parcours de réparation opérateur général.",
+      "gap": "Les erreurs de paquet nécessitent parfois une correction du framework. Reprendre sans changer la ressource reproduira le refus."
+    },
+    {
+      "id": "tooling",
+      "codes": [
+        "EXECUTABLE",
+        "MODEL_CLI",
+        "UI"
+      ],
+      "operator": "yes",
+      "operatorAction": "Rendre l’exécutable configuré disponible ou corriger l’adresse/port du tableau de bord ; vérifier la version et la connexion du CLI avant reprise.",
+      "currentGuidance": "Messages locaux ; MODEL_CLI indique installation/authentification et stopAdvice donne un conseil générique pour les autres.",
+      "gap": "Déclarer les prérequis exacts de la reprise plutôt que proposer run avant correction de l’environnement."
+    },
+    {
+      "id": "model-policy",
+      "codes": [
+        "MODEL_AUTH",
+        "MODEL_CHECK",
+        "MODEL_EFFORT",
+        "MODEL_SELECTION",
+        "MODEL_UNAVAILABLE"
+      ],
+      "operator": "yes",
+      "operatorAction": "Vérifier le compte, le modèle et l’effort avec models check. Préparer un remplacement explicite ou un amendement des rôles de la spec si nécessaire.",
+      "currentGuidance": "Messages et stopAdvice ciblés sauf MODEL_CHECK, qui regroupe plusieurs causes de probe.",
+      "gap": "Une indisponibilité, une authentification et une réponse de probe invalide ne demandent pas la même reprise ; pas de changement de modèle implicite."
+    },
+    {
+      "id": "provider-wait",
+      "codes": [
+        "PROVIDER_QUOTA",
+        "PROVIDER_RATE_LIMIT",
+        "PROVIDER_UNAVAILABLE"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Attendre le rétablissement fournisseur ; inspecter le travail conservé avant adoption, reprise de rôle ou nouvelle tentative.",
+      "currentGuidance": "stopAdvice distingue quota, débit et indisponibilité ; aucune date de rétablissement inventée.",
+      "gap": "L’attente ne détermine pas la commande suivante : celle-ci dépend du rôle et de l’état du run."
+    },
+    {
+      "id": "allowance",
+      "codes": [
+        "AGENT_TIMEOUT",
+        "BUDGET",
+        "COST_BUDGET",
+        "QA_BUDGET",
+        "PROVIDER_BUDGET",
+        "PROVIDER_TURNS"
+      ],
+      "operator": "yes",
+      "operatorAction": "Inspecter progression et durées ; autoriser un amendement limité avec spec budget quand applicable, puis reprendre le rôle ou la tentative appropriée.",
+      "currentGuidance": "stopAdvice explique la limite ; summary cite spec budget pour COST_BUDGET et QA_BUDGET, mais pas toutes les limites.",
+      "gap": "Priorité : proposer un amendement et une reprise compatibles avec l’état. Ne pas confondre quota fournisseur, coût déclaré et plafond local."
+    },
+    {
+      "id": "agent-protocol",
+      "codes": [
+        "AGENT",
+        "AGENT_OUTPUT",
+        "ROLE",
+        "ROLE_OUTPUT",
+        "CLAUDE_OUTPUT",
+        "CLAUDE_PROVIDER",
+        "CLAUDE_PERMISSIONS",
+        "BOOTSTRAP_PROVIDER"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Inspecter la sortie, les permissions et le candidat conservé ; corriger la cause puis reprendre le rôle ou autoriser une nouvelle tentative. Ne pas contourner une permission refusée.",
+      "currentGuidance": "Diagnostics locaux, checkpoints et réparations de sortie existent ; ROLE sert aussi à un nom de rôle inconnu.",
+      "gap": "Priorité : un code de protocole ne suffit pas à choisir entre corriger une saisie, réparer une sortie et adopter du code interrompu."
+    },
+    {
+      "id": "lease",
+      "codes": [
+        "BUSY",
+        "LOCKED",
+        "RECOVERY",
+        "CANCELLED",
+        "INTERRUPTED",
+        "UNKNOWN_AGENT_OUTCOME"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Vérifier l’arrêt réel des processus ; recover libère une session abandonnée. Inspecter le travail interrompu avant adoption explicite ou retry.",
+      "currentGuidance": "Messages de baux/processus et summary pour LOCKED/CANCELLED ou stoppedWork ; INTERRUPTED utilise le repli générique.",
+      "gap": "Priorité : ne proposer recover que pour une session abandonnée, ni retry avant examen du travail conservé."
+    },
+    {
+      "id": "no-progress",
+      "codes": [
+        "NO_CHANGE",
+        "REPAIR_NO_CHANGE",
+        "REPAIR_NO_PROGRESS"
+      ],
+      "operator": "yes",
+      "operatorAction": "Lire les diagnostics et le périmètre ; corriger l’obstacle puis spec retry --confirm et spec run si la tentative est terminale et active.",
+      "currentGuidance": "summary propose retry ; les échecs et le candidat sont conservés.",
+      "gap": "Priorité : vérifier l’éligibilité de retry et exiger un changement utile avant de répéter une erreur identique."
+    },
+    {
+      "id": "checks",
+      "codes": [
+        "GATES_FAILED",
+        "SETUP"
+      ],
+      "operator": "yes",
+      "operatorAction": "Inspecter les sorties de setup/contrôles ; corriger code, dépendances ou paramètres autorisés, puis retry et run sur une tentative active en échec.",
+      "currentGuidance": "GATES_FAILED a un conseil et une commande retry ; SETUP reste au diagnostic générique.",
+      "gap": "Priorité : distinguer réparation du candidat et simple réexécution des contrôles ; run seul ne redémarre pas un run terminal."
+    },
+    {
+      "id": "freshness",
+      "codes": [
+        "STALE_EVIDENCE"
+      ],
+      "operator": "yes",
+      "operatorAction": "Utiliser spec verify si le run final est encore ready/awaiting_review, puis reprendre run ; après échec terminal, employer retry avant run.",
+      "currentGuidance": "summary donne verify puis run ; verify invalide la QA et revalide le run sur place.",
+      "gap": "Priorité : conserver des tentatives de validation distinctes. Une ancienne réussite doit rester consultable sans neutraliser un nouvel échec."
+    },
+    {
+      "id": "qa-contract",
+      "codes": [
+        "QA",
+        "QA_COVERAGE",
+        "QA_DECISIONS",
+        "QA_QUALITY",
+        "QA_SECURITY",
+        "QA_SHA",
+        "QA_VERDICT"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Corriger le rapport conservé ou le refaire sur le candidat exact avec des preuves réelles ; importer via spec qa uniquement si les préconditions sont satisfaites.",
+      "currentGuidance": "Validateurs détaillés et réparation de sortie bornée ; pas de recours opérateur commun pour tous ces codes.",
+      "gap": "Priorité : préserver les champs valides et vérifier la progression de la correction. Une déclaration sans preuve ne peut réparer un contrôle manquant."
+    },
+    {
+      "id": "qa-guidance",
+      "codes": [
+        "QA_GUIDANCE"
+      ],
+      "operator": "yes",
+      "operatorAction": "Refaire une revue indépendante avec le modèle, les instructions et le contrat courants ; le rapport conservé sert de contexte et non de preuve.",
+      "currentGuidance": "runRole distingue correction locale et nouvelle revue lors du changement des instructions/modèle.",
+      "gap": "Rendre ce choix visible dans le recours opérateur et ne pas transférer l’autorité de l’ancienne QA automatiquement."
+    },
+    {
+      "id": "qa-context",
+      "codes": [
+        "QA_CONTEXT",
+        "TASK_CONTEXT"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Pour un diff QA trop grand, préparer une revue externe complète et un rapport importable ; pour une tâche trop grande, préparer un découpage ou une spec de suivi.",
+      "currentGuidance": "Messages conseillent revue externe ou découpage ; pas de troncature de preuve.",
+      "gap": "Les limites de contexte ne sont pas toutes amendables sur une spec exécutée. La conservation du candidat doit être explicite."
+    },
+    {
+      "id": "qa-proof",
+      "codes": [
+        "QA_EVIDENCE",
+        "QA_REQUIRED",
+        "QA_REJECTED",
+        "QA_REVIEW_AUTHORIZATION"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Selon le constat : importer une QA complète, ajouter des contrôles via amendement autorisé, demander une correction de critère approuvée, autoriser qa-repair sous ses préconditions, ou créer une spec de suivi.",
+      "currentGuidance": "summary contient des recours dédiés ; qa-repair exige les reçus du candidat et une autorisation explicite.",
+      "gap": "Priorité : vérifier chaque recours contre l’état réel. Le conseil QA_EVIDENCE sur une nouvelle spec est trop général depuis l’ajout d’amendements de gates."
+    },
+    {
+      "id": "scope",
+      "codes": [
+        "SCOPE",
+        "SCOPE_AMENDMENT",
+        "SCOPE_AMENDMENT_REQUIRED",
+        "COMPACT_SCOPE"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Pour un candidat conservé hors périmètre, examiner l’amendement proposé avant approbation. Pour un besoin incompatible avec compact, préparer un parcours adapté.",
+      "currentGuidance": "Le contrôleur crée un amendement pour certains SCOPE ; summary expose son approbation.",
+      "gap": "Un dépassement du nombre de fichiers ou du parcours compact ne doit pas être traité comme une autorisation globale de périmètre."
+    },
+    {
+      "id": "replan",
+      "codes": [
+        "REPLAN",
+        "REPLAN_STALE",
+        "REPLAN_STATE",
+        "CRITERION_AMENDMENT"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Corriger ou recréer la proposition sur l’état courant. Replan concerne les tâches restantes en échec ; criterion exige une correction approuvée sans effacer les obligations.",
+      "currentGuidance": "Messages détaillés sur les conditions ; summary propose le plan en attente valide.",
+      "gap": "Refus légitime si rien ne reste à replanifier ; distinguer cette situation d’une réparation QA autorisée."
+    },
+    {
+      "id": "immutable-history",
+      "codes": [
+        "SPEC_IMMUTABLE",
+        "REJECTED"
+      ],
+      "operator": "yes",
+      "operatorAction": "Créer une spec de suivi pour un changement de besoin ou un rejet définitif ; conserver l’historique et le candidat comme contexte.",
+      "currentGuidance": "Les messages refusent la réécriture et indiquent une nouvelle spec.",
+      "gap": "Pas de réouverture implicite d’une décision terminale ; cette sortie peut être volontairement hors de la spec courante."
+    },
+    {
+      "id": "ledger",
+      "codes": [
+        "LEDGER_UPDATE"
+      ],
+      "operator": "yes",
+      "operatorAction": "Préparer une nouvelle décision avec un identifiant distinct qui remplace explicitement l’ancienne, puis relire et approuver le plan de mise à jour.",
+      "currentGuidance": "Messages de validation des identifiants et des remplacements.",
+      "gap": "Les décisions persistées ne doivent pas être modifiées directement pour satisfaire le hash."
+    },
+    {
+      "id": "moved-base",
+      "codes": [
+        "CANDIDATE_MOVED",
+        "BASE_MOVED"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Inspecter le HEAD et le candidat. Si la branche contient le candidat, la reprise locale est autorisée ; sinon une nouvelle base nécessite une validation/spec explicite.",
+      "currentGuidance": "sourceReady traite le candidat déjà intégré. BASE_MOVED à la publication exige une nouvelle validation/spec.",
+      "gap": "Priorité : la reprise locale après intégration ne résout pas toute divergence de base distante ni une fusion squash qui change les identités de commits."
+    },
+    {
+      "id": "merged-before-review",
+      "codes": [
+        "MERGED_BEFORE_REVIEW"
+      ],
+      "operator": "yes",
+      "operatorAction": "Enregistrer la revue du candidat avec preuve valide, puis spec sync ; si la preuve a expiré, revalider avant la revue.",
+      "currentGuidance": "summary expose review/verify/sync ; sourceReady accepte une branche contenant le candidat.",
+      "gap": "La reprise dépend de la fraîcheur et des identités de commits ; la fusion de PR ne constitue pas une nouvelle preuve de test."
+    },
+    {
+      "id": "forge",
+      "codes": [
+        "FORGE",
+        "REMOTE",
+        "PUBLICATION"
+      ],
+      "operator": "yes",
+      "operatorAction": "Vérifier compte, remote, dépôt autorisé et identité de PR ; synchroniser seulement une publication connue avec son SHA observé.",
+      "currentGuidance": "Messages de validation de destination/réponse ; pas de diagnostic structuré unique de forge.",
+      "gap": "FORGE mélange réponse invalide et panne externe ; ne pas republier automatiquement vers une autre destination."
+    },
+    {
+      "id": "publication-drift",
+      "codes": [
+        "FORGE_DRIFT",
+        "PUBLICATION_MISMATCH",
+        "PR_CLOSED"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Inspecter la PR distante et l’intention enregistrée ; rétablir les paramètres autorisés ou préparer explicitement une publication/spec distincte. Une PR fermée sans fusion ne vaut pas livraison.",
+      "currentGuidance": "Messages de refus ; aucun parcours général de changement d’intention ou de PR fermée dans summary.",
+      "gap": "Priorité : déclarer une décision opérateur pour une PR fermée ou divergente sans réécrire l’historique de publication."
+    },
+    {
+      "id": "integrity",
+      "codes": [
+        "CACHE_CORRUPT",
+        "DB_CORRUPT",
+        "DB_VERSION",
+        "DELIVERY",
+        "RECEIPT"
+      ],
+      "operator": "maintainer",
+      "operatorAction": "Arrêter l’utilisation de la preuve concernée, conserver les données pour diagnostic et restaurer une sauvegarde compatible ou appliquer une migration/correction vérifiée.",
+      "currentGuidance": "Le refus protège l’intégrité ; pas de réparation universelle exposée.",
+      "gap": "Pas de contournement opérateur sûr du hash ou d’une version de base inconnue. DB_CORRUPT peut aussi révéler une incompatibilité de contrat, à distinguer d’une altération réelle."
+    },
+    {
+      "id": "evidence-state",
+      "codes": [
+        "ADOPTION",
+        "CANDIDATE",
+        "CANDIDATE_IMPORT",
+        "EVIDENCE",
+        "RISK"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Comparer candidat, reçus et politique. Une adoption refusée peut nécessiter une validation neuve ; une incohérence de preuve impose un diagnostic avant reprise.",
+      "currentGuidance": "Messages locaux et événements d’adoption ; certains refus déclenchent déjà une validation complète.",
+      "gap": "Priorité : ne pas réutiliser une preuve incompatible. Ces codes regroupent absence attendue et incohérence interne ; la commande doit dépendre de la cause."
+    },
+    {
+      "id": "git-environment",
+      "codes": [
+        "GIT",
+        "GIT_OUTPUT",
+        "DIFF",
+        "SHA",
+        "REPOSITORY_INDEX",
+        "WORKSPACE"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Inspecter le diagnostic Git, les commits disponibles, l’environnement et le workspace sans supprimer le travail conservé ; corriger l’environnement ou faire diagnostiquer l’incohérence.",
+      "currentGuidance": "Messages locaux ; GIT regroupe absence de commit, commande échouée et autres causes.",
+      "gap": "Distinguer donnée manquante, sortie tronquée et corruption. Une simple relance n’est pas un recours garanti."
+    },
+    {
+      "id": "maintenance",
+      "codes": [
+        "PURGE"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Inspecter les workspaces non supprimés, leurs processus et leur propriété ; reprendre le nettoyage explicite seulement après résolution.",
+      "currentGuidance": "Le message cite les workspaces non supprimés.",
+      "gap": "Ne pas transformer une erreur de purge en suppression forcée hors des racines gérées."
+    },
+    {
+      "id": "feedback",
+      "codes": [
+        "FEEDBACK"
+      ],
+      "operator": "yes",
+      "operatorAction": "Demander seulement un gate déclaré via le protocole contrôlé ; corriger les arguments sans ajouter de commande arbitraire.",
+      "currentGuidance": "Messages du serveur de feedback et allowlist de gates.",
+      "gap": "Refus de frontière volontaire : aucun contournement de l’allowlist."
+    },
+    {
+      "id": "internal-state",
+      "codes": [
+        "STATE",
+        "TRANSITION",
+        "INTERNAL",
+        "EXECUTION",
+        "WORKFLOW"
+      ],
+      "operator": "maintainer",
+      "operatorAction": "Inspecter événements, état de la spec et tentative active. Utiliser un recours existant seulement si ses préconditions sont remplies ; sinon fournir une reproduction au mainteneur.",
+      "currentGuidance": "Messages génériques ou techniques ; summary retombe sur Resolve CODE sans garantir une action exécutable.",
+      "gap": "Priorité : séparer erreur de commande, arrêt attendu et invariant interne. Ces codes trop larges empêchent une recommandation déterministe par code seul."
+    },
+    {
+      "id": "concurrent-change",
+      "codes": [
+        "CONFLICT"
+      ],
+      "operator": "conditional",
+      "operatorAction": "Recharger l’état courant ; refaire et relire une proposition si ses fichiers ont changé. Ne pas forcer une écriture sur une version périmée.",
+      "currentGuidance": "Le message distingue mise à jour persistée périmée et fichier modifié depuis la proposition.",
+      "gap": "Exposer une action de rechargement ou de nouvelle proposition selon la source ; une concurrence répétée nécessite un diagnostic."
+    }
+  ],
+  "forwarding": [
+    {
+      "file": "src/adapters/model-check.ts",
+      "kind": "error",
+      "expression": "stop.code",
+      "count": 1,
+      "reason": "Propagation de providerStop ; ses enveloppes à code littéral sont inventoriées."
+    },
+    {
+      "file": "src/adapters/repair.ts",
+      "kind": "code-field",
+      "expression": "error.code",
+      "count": 1,
+      "reason": "Propagation du code déjà porté par une erreur ; les valeurs littérales de repli sont inventoriées séparément."
+    },
+    {
+      "file": "src/adapters/stops.ts",
+      "kind": "code-field",
+      "expression": "error.code",
+      "count": 1,
+      "reason": "Propagation du code déjà porté par une erreur ; les valeurs littérales de repli sont inventoriées séparément."
+    },
+    {
+      "file": "src/domain/errors.ts",
+      "kind": "error",
+      "expression": "code",
+      "count": 1,
+      "reason": "Constructeur central appelé par invariant ; les arguments des appels sont inventoriés."
+    },
+    {
+      "file": "src/engine/pipeline.ts",
+      "kind": "code-field",
+      "expression": "error.code",
+      "count": 1,
+      "reason": "Propagation du code déjà porté par une erreur ; les valeurs littérales de repli sont inventoriées séparément."
+    },
+    {
+      "file": "src/lifecycle/bootstrap.ts",
+      "kind": "code-field",
+      "expression": "error.code",
+      "count": 2,
+      "reason": "Propagation du code déjà porté par une erreur ; les valeurs littérales de repli sont inventoriées séparément."
+    },
+    {
+      "file": "src/lifecycle/roles.ts",
+      "kind": "code-field",
+      "expression": "error.code",
+      "count": 2,
+      "reason": "Propagation du code déjà porté par une erreur ; les valeurs littérales de repli sont inventoriées séparément."
+    },
+    {
+      "file": "src/lifecycle/service.ts",
+      "kind": "code-field",
+      "expression": "error.code",
+      "count": 3,
+      "reason": "Propagation du code déjà porté par une erreur ; les valeurs littérales de repli sont inventoriées séparément."
+    },
+    {
+      "file": "src/lifecycle/service.ts",
+      "kind": "error",
+      "expression": "r.error.code",
+      "count": 1,
+      "reason": "Propagation du code déjà porté par une erreur ; les valeurs littérales de repli sont inventoriées séparément."
+    }
+  ]
+}
