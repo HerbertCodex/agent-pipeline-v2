@@ -151,6 +151,12 @@ export declare class Lifecycle {
     /** The approved mockup QA compares the candidate against; bounded like the Implementer's copy. */
     private qaDesignContext;
     private prepareReviewWorkspace;
+    /**
+     * True when the run enforced the gates the spec requires, amendments included.
+     * Both sides go through the gate contract: a spec approved before a gate field existed stores
+     * gates without it, and comparing the stored shapes would block publication on a default value
+     * rather than on a real difference of command, coverage or scope.
+     */
     private sameGates;
     private reviewable;
     /** Publication adapters still acquire the lifecycle lease and require explicit consent. */

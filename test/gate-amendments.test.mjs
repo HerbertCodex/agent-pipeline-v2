@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, approved, oneTask } from './lifecycle-helpers.mjs';
+import { hash } from '../dist/domain/hash.js';
+import { specHash } from '../dist/lifecycle/contracts.js';
 
 const actor = 'Test Owner', note = 'Reviewed the additional validation obligation and execution settings.';
 const gate = (id, exit = 0) => ({ id, command: [process.execPath, '-e', `process.exit(${exit})`] });
@@ -75,4 +77,24 @@ test('a single proven task is not reused after an execution-only gate amendment'
   assert.notEqual(d.data.finalRunId, oldFinal);
   assert.equal(d.data.attempts.length, 1);
   assert.equal(f.life.store.get(d.data.finalRunId).config.gates.find(g => g.id === 'unit').timeoutMs, 240000);
+});
+
+test('a spec approved before a gate field existed still publishes when the run enforced the same gates', async t => {
+  const f = fixture(t);
+  f.config.workflow.qaLanes = [];
+  f.config.workflow.reviewMode = 'solo';
+  let d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.', proposal: oneTask() });
+  // A spec drafted before a gate field existed froze its gates without it, with a hash chain that
+  // is consistent for that shape; the runs it starts parse the config as the contract stands today.
+  const stored = f.life.get(d.id);
+  for (const gate of stored.data.config.gates) delete gate.readOnly;
+  stored.data.configHash = hash(stored.data.config);
+  stored.data.contentHash = specHash(stored.data);
+  f.life.store.saveDocument(stored, 'test.gate_field_absent');
+  d = await f.life.approveSpec(d.id, stored.data.contentHash, 'Test Product Owner', 'Fixture approval after inspecting scope and criteria.');
+  d = await f.life.run(d.id);
+  assert.equal(d.data.error, null, JSON.stringify(d.data.error));
+  assert.ok(d.data.config.gates.every(g => g.readOnly === undefined));
+  assert.ok(f.life.store.get(d.data.finalRunId).config.gates.every(g => g.readOnly === false));
+  await f.life.publicationCandidate(d.id, 'review');
 });
