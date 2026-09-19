@@ -3,6 +3,8 @@
 
 ## Unreleased — reliability and efficient feature work
 
+- Validation : suppression des anciens audits, bilans et journaux redondants ; index recentré sur la suite finale, les vérifications navigateur et la calibration réelle des modèles. Liens et mesures documentées actualisés.
+
 - Documentation : anciens audits, bilans, notes de version et sources datées supprimés. Le guide courant de qualité devient `docs/QUALITY.md` ; les sommaires et liens sont actualisés. Les preuves d’exécution restent dans `validation/`.
 
 - QA : distingue gravité et correction requise ; les nettoyages mineurs obligatoires bloquent la livraison et utilisent la boucle de réparation. Consignes de suppression du code rendu mort, affichage UI/QA.md et découverte des contrôles existants à l'onboarding. Les anciens rapports restent lisibles.

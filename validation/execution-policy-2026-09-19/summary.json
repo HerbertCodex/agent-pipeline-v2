@@ -19,25 +19,6 @@
     "sha256": "2dff73dd7b4a0a15a6aab3a5693ec794dfa0ee469d75f804b479246f0e1c8bf8"
   },
   "node": "v24.21.0",
-  "checks": {
-    "command": "npm run check",
-    "typecheck": true,
-    "cssLint": true,
-    "build": true,
-    "tests": 500,
-    "pass": 500,
-    "fail": 0,
-    "skipped": 0,
-    "durationMs": 278636.381714
-  },
-  "package": {
-    "command": "npm run check:package",
-    "passed": true,
-    "offlineInstall": true,
-    "providerKnowledgeBootstrapTests": true,
-    "lifecycleClosed": true,
-    "dashboardServed": true
-  },
   "browser": {
     "fixture": "ui-check.mjs",
     "results": "browser-results.json",
@@ -55,5 +36,7 @@
     "No provider-native session resume.",
     "No real-model latency or quality claim.",
     "Usage mode declares policy; it does not change CLI authentication or supplier quotas."
-  ]
+  ],
+  "laterFullValidation": "../qa-cleanup-2026-09-19/summary.json",
+  "retentionNote": "Browser evidence and its original snapshot retained. Older full-suite and package logs were superseded by the final 508-test validation; browser results were not rerun during cleanup."
 }
