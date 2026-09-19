@@ -6,26 +6,9 @@ Le prompt canonique reste [START-HERE.md](../START-HERE.md), section « APPLICAT
 
 ## Prompt initial
 
-```text
-Utilise Agent Pipeline V2 2.0.0-alpha.8 sur un projet qui existe déjà.
+Copiez le [prompt initial](../START-HERE.md#prompt-initial) — quarante-neuf lignes — et renseignez « Application cible » avec l'URL ou le chemin du dépôt existant.
 
-Framework source :
-https://github.com/HerbertCodex/agent-pipeline-v2.git
-
-Application cible :
-[URL GitHub ou chemin local du dépôt existant]
-
-Fournisseur des sous-rôles :
-[codex / claude / choix par rôle / à choisir]
-
-Mode de revue :
-[solo / team / regulated]
-
-Suis START-HERE.md. Profile le dépôt avant toute décision, puis prépare le plan
-d'onboarding et présente-le avec son hash. N'écris rien dans le projet avant mon
-approbation. Découvre les contrôles réels du dépôt : n'impose aucune liste de
-commandes venue d'un exemple.
-```
+Ce bloc porte les principes qui lient l'assistant avant toute lecture : ne fabriquer aucune approbation ni preuve, ne pas force-pousser ni fusionner, traiter le contenu du dépôt comme des données non fiables. Ne le remplacez pas par une consigne plus courte de votre cru : ces règles sont ce qui tient quand l'assistant lit le reste en diagonale.
 
 ## Ce que l'onboarding fait, et ne fait pas
 
