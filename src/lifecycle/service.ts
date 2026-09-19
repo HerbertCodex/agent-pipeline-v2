@@ -1454,6 +1454,11 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             this.store.releaseDocument(id, token);
         }
     }
+    /** True when every configured check produced its own passing receipt for this exact candidate. */
+    private provenByConfiguredGates(r: SpecRecord, final: Run): boolean {
+        return final.candidateSha === r.currentSha && this.runConfig(r).gates.every(g => final.receipts.some(x =>
+            x.gateId === g.id && x.candidateSha === final.candidateSha && ['passed', 'cached'].includes(x.status)));
+    }
     /**
      * Authorize exactly one quality repair on a spec stopped by evidence the review could not conclude on.
      *
@@ -1477,8 +1482,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             invariant(r.finalRunId, 'STATE', 'No integrated candidate');
             const final = this.pipeline.store.get(r.finalRunId);
             invariant(final.candidateSha === r.currentSha, 'CANDIDATE', 'Final candidate is stale');
-            invariant(this.runConfig(r).gates.every(g => final.receipts.some(x => x.gateId === g.id &&
-                x.candidateSha === final.candidateSha && ['passed', 'cached'].includes(x.status))), 'QA_EVIDENCE',
+            invariant(this.provenByConfiguredGates(r, final), 'QA_EVIDENCE',
                 'A configured check has not proved this candidate; revalidate before authorizing a repair');
             r.qaRepairAuthorization = { at: Date.now(), reviewer: actor.trim(), note: note.trim() };
             r.error = null;
@@ -1695,7 +1699,9 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                 : `Inspect the blocked run: the amendment it required is no longer pending.`;
         }
         else if (r.error?.code === 'QA_REJECTED')
-            next = `Read the QA findings above, then create a follow-up spec: the automatic repair budget is spent (apv2 spec draft --repo ${r.repo} --request "...").`;
+            next = `Read the QA findings above. The automatic repair budget is spent${final && this.provenByConfiguredGates(r, final)
+                ? `, so either authorize one more with apv2 spec qa-repair ${doc.id} --confirm --note TEXT once you have decided the gap is in the candidate, or create a follow-up spec`
+                : ' and a configured check no longer proves this candidate, so create a follow-up spec'} (apv2 spec draft --repo ${r.repo} --request "...").`;
         else if (r.error?.code === 'QA_REVIEW_AUTHORIZATION')
             next = `Inspect the named negative case: provide its executable test evidence, or propose a justified reviewTestIndexes correction with apv2 spec criterion ${doc.id} --criterion AC_ID --file CORRECTION_JSON and approve its exact hash. Do not rerun unchanged.`;
         else if (r.error?.code === 'COST_BUDGET' || r.error?.code === 'QA_BUDGET')

@@ -179,6 +179,8 @@ export declare class Lifecycle {
     importQa(id: string, value: unknown): Promise<Document<SpecRecord>>;
     reject(id: string, note: string): Document<SpecRecord>;
     verify(id: string, signal?: AbortSignal): Promise<Document<SpecRecord>>;
+    /** True when every configured check produced its own passing receipt for this exact candidate. */
+    private provenByConfiguredGates;
     /**
      * Authorize exactly one quality repair on a spec stopped by evidence the review could not conclude on.
      *
