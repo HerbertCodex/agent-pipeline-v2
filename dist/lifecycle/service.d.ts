@@ -200,5 +200,11 @@ export declare class Lifecycle {
     closeLocal(id: string, ref: string, mergeSha: string, actor: string, note: string): Promise<Document<SpecRecord>>;
     /** Deterministic public-surface change between the approved base and the integrated candidate. */
     private inventoryDelta;
+    /**
+     * What an operator can do about a quality review that requests changes, said once.
+     * A spec whose candidate is already merged is told to record its review; when the review itself
+     * cannot be recorded because the report demands corrections, saying so is the only useful advice.
+     */
+    private qualityRecourse;
     summary(doc: Document<SpecRecord>): Record<string, unknown>;
 }
