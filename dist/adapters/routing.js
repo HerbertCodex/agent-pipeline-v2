@@ -1,5 +1,14 @@
 import { decisionRecord } from '../policy/decision.js';
 /** Replayable model precedence, with only the inputs that influence selection. */
+/**
+ * Drops absent fields instead of carrying them as undefined.
+ * A configuration frozen before the contract gained a field stores it absent; naming it in an object
+ * literal turns that absence into an undefined value, which no identity can be computed over. One such
+ * record made the whole spec listing fail rather than the single spec it came from.
+ */
+function defined(value) {
+    return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined));
+}
 export function resolveModelDecision(inputs) {
     const effectiveLane = inputs.role === 'qa' && inputs.qaDeep ? 'high' : inputs.lane;
     const source = inputs.route ? 'modelRouting' : inputs.profile ? `roleProfiles.${effectiveLane === 'high' ? 'deep' : 'quick'}` : 'role-config';
@@ -19,10 +28,10 @@ export function modelChoice(config, role, lane) {
     const profiles = config.roleProfiles?.find(r => r.provider === agent.type && r.role === role);
     const profileName = effectiveLane === 'high' ? 'deep' : 'quick';
     const profile = profiles?.[profileName];
-    const target = (a) => ({ model: a.model, effort: a.effort });
+    const target = (a) => defined({ model: a.model, effort: a.effort });
     const decision = resolveModelDecision({ role, lane, provider: agent.type, qaDeep: config.workflow.qaProfile === 'deep',
         base: target(agent), route: route ? target(route) : null, profile: profile ? target(profile) : null, override: {} });
-    const selected = { ...agent, model: decision.result.model, effort: decision.result.effort };
+    const selected = { ...agent, ...defined({ model: decision.result.model, effort: decision.result.effort }) };
     const source = decision.result.source;
     return { agent: selected, role, lane, effectiveLane, source, decision,
         reason: `${role === 'qa' && config.workflow.qaProfile === 'deep' ? 'QA uses the dedicated deep policy independently of implementation risk. ' : ''}${source}; ${selected.model ? 'explicit model' : 'unresolved provider default'}.` };
