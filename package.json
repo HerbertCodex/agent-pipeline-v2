@@ -55,6 +55,7 @@
   },
   "devDependencies": {
     "@types/node": "24.0.4",
+    "fast-check": "^4.10.1",
     "stylelint": "17.15.0",
     "typescript": "5.8.3"
   },
