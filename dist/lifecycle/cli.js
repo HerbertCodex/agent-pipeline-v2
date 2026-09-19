@@ -46,6 +46,9 @@ Full lifecycle (local trusted projects; explicit approval boundaries):
                                            optional requirements: [{id, verification}] linked to it})
   apv2 spec criterion SPEC_ID --amendment AMENDMENT_ID --hash HASH --approve [--reviewer NAME] [--note TEXT]
   apv2 spec retry SPEC_ID --confirm        Authorize one new failed-task attempt
+  apv2 spec qa-repair SPEC_ID --confirm --note TEXT [--reviewer NAME]
+                                           Authorize one quality repair after inspecting evidence
+                                           the review could not conclude on
   apv2 spec replan SPEC_ID --file REPLAN_JSON
                                            Propose {reason, tasks}: all remaining task IDs only
   apv2 spec replan SPEC_ID --amendment AMENDMENT_ID --hash HASH --approve [--reviewer NAME] --note TEXT
@@ -312,6 +315,14 @@ export async function lifecycleCommand(command, positionals, values, root, signa
             case 'retry':
                 doc = await life.retry(specId(), values['confirm'] === true);
                 break;
+            case 'qa-repair': {
+                invariant(values['confirm'] === true, 'CONFIRM', 'Explicitly confirm one quality repair');
+                const current = life.get(specId());
+                const who = str('reviewer') ?? await new Git().configValue(current.data.repo, 'user.name');
+                invariant(Boolean(who) && who.trim().length >= 3, 'REVIEW', 'Configure git user.name or provide --reviewer NAME');
+                doc = life.authorizeQaRepair(specId(), who.trim(), required('note'));
+                break;
+            }
             case 'recover':
                 doc = life.recover(specId(), values['confirm-stopped'] === true);
                 break;

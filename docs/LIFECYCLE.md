@@ -66,7 +66,7 @@ apv2 spec qa ID --file /rapport-qa.json
 apv2 spec run ID --manual-qa
 ```
 
-En mode `qualityReview: "evidence"`, QA ajoute les six axes de qualité et les références de tests négatifs. Les preuves requises sont vérifiées avant son appel puis avant revue/livraison. Une preuve manquante ou un statut `unknown` bloque avec `QA_EVIDENCE` sans réparation automatique de code. Voir [la grille et les preuves](LOT-3-QUALITE.md).
+En mode `qualityReview: "evidence"`, QA ajoute les six axes de qualité et les références de tests négatifs. Les preuves requises sont vérifiées avant son appel puis avant revue/livraison. Une preuve manquante ou un statut `unknown` bloque avec `QA_EVIDENCE` sans réparation automatique de code. L'opérateur qui a inspecté la preuve manquante peut autoriser exactement une réparation avec `apv2 spec qa-repair SPEC_ID --confirm --note TEXT` : elle exige que chaque contrôle configuré ait déjà prouvé ce candidat, elle est consommée par la réparation qu'elle autorise, et la revue suivante doit toujours conclure sur ses propres preuves. Voir [la grille et les preuves](LOT-3-QUALITE.md).
 
 Le rapport externe est explicitement importé et lié aux preuves présentes. Son auteur n'est pas authentifié par la CLI. Une nouvelle QA invalide les avis humains antérieurs.
 

@@ -165,6 +165,16 @@ export declare class Lifecycle {
     importQa(id: string, value: unknown): Promise<Document<SpecRecord>>;
     reject(id: string, note: string): Document<SpecRecord>;
     verify(id: string, signal?: AbortSignal): Promise<Document<SpecRecord>>;
+    /**
+     * Authorize exactly one quality repair on a spec stopped by evidence the review could not conclude on.
+     *
+     * The controller never grants this by itself: an unknown assessment can mean the configured checks
+     * cannot produce that proof at all, and no code change would ever close it. The operator states,
+     * with a note, that the gap is in the candidate rather than in the configuration, and accepts the
+     * extra round. Every check must already have proved this candidate, so the repair answers a real
+     * gap and not a missing receipt; the next quality review still has to conclude on its own evidence.
+     */
+    authorizeQaRepair(id: string, actor: string, note: string): Document<SpecRecord>;
     retry(id: string, confirmed: boolean): Promise<Document<SpecRecord>>;
     recover(id: string, confirmed: boolean): Document<SpecRecord>;
     deliver(id: string, directory: string): Promise<Document<SpecRecord>>;
