@@ -369,3 +369,61 @@ test('a negative case the spec defines as a review is assessed as asserted, neve
   const claimsPass = structuredClone(qa); claimsPass.negativeTestChecks[0].status = 'pass';
   assert.throws(() => validate(claimsPass), /negative-test pass needs actual test files/);
 });
+
+test('an operator can authorize exactly one repair of evidence the review could not conclude on', async t => {
+  const f = fixture(t);
+  f.config.workflow = { ...f.config.workflow, qualityReview: 'evidence' };
+  f.config.gates = f.config.gates.map(g => ({ ...g, covers: g.id === 'unit' ? ['unit'] : [] }));
+  let d = await approved(f, oneTask());
+  d = await f.life.run(d.id, { manualQa: true });
+  const final = f.life.pipeline.store.get(d.data.finalRunId);
+  const context = qualityContext(d.data, final);
+  const report = { ...passingQa(d), qualityChecks: context.axes.map(x => ({ axis: x.axis,
+    status: x.required ? 'pass' : 'not_applicable', evidence: 'Fixture review inspected arithmetic behavior and the independent test receipt.',
+    paths: x.required ? ['src/math.mjs', 'test/math.test.mjs'] : [],
+    receiptIds: x.axis === 'tests' ? [final.receipts.find(r => r.gateId === 'unit').id] : [], findingIds: [] })) };
+  const unknown = structuredClone(report); unknown.verdict = 'changes_requested'; unknown.qualityChecks[3].status = 'unknown';
+  await f.life.importQa(d.id, unknown);
+  d = await f.life.run(d.id, { manualQa: true });
+  assert.equal(d.data.error.code, 'QA_EVIDENCE');
+  assert.equal(d.data.qaRepairs, 0);
+
+  // The note is part of the authorization: it says what the operator inspected before granting it.
+  assert.throws(() => f.life.authorizeQaRepair(d.id, 'Test Owner', 'too short'));
+  assert.equal(f.life.get(d.id).data.qaRepairAuthorization ?? null, null);
+  d = f.life.authorizeQaRepair(d.id, 'Test Owner', 'Inspected the unknown axis: every configured check proved this candidate and the gap is a missing assertion.');
+  assert.equal(d.data.error, null);
+  assert.equal(d.data.qaRepairAuthorization.reviewer, 'Test Owner');
+  assert.throws(() => f.life.authorizeQaRepair(d.id, 'Test Owner', 'A second authorization on the same stop must be refused outright.'));
+
+  d = await f.life.run(d.id, { manualQa: true });
+  assert.equal(d.data.qaRepairs, 1, 'the authorized repair ran');
+  assert.equal(d.data.qaRepairAuthorization, null, 'the authorization is consumed by the repair it authorized');
+  assert.equal(d.data.attempts.filter(a => a.kind === 'qa-repair').length, 1);
+  const authorized = f.life.store.documentEvents(d.id, ['workflow.qa_repair_authorized']);
+  assert.equal(authorized.length, 1);
+  assert.match(JSON.stringify(authorized[0].data), /missing assertion/);
+});
+
+test('a repair cannot be authorized while a configured check has not proved the candidate', async t => {
+  const f = fixture(t);
+  f.config.workflow = { ...f.config.workflow, qualityReview: 'evidence' };
+  f.config.gates = f.config.gates.map(g => ({ ...g, covers: g.id === 'unit' ? ['unit'] : [] }));
+  let d = await approved(f, oneTask());
+  d = await f.life.run(d.id, { manualQa: true });
+  const final = f.life.pipeline.store.get(d.data.finalRunId);
+  const context = qualityContext(d.data, final);
+  const unknown = { ...passingQa(d), verdict: 'changes_requested', qualityChecks: context.axes.map(x => ({ axis: x.axis,
+    status: x.axis === 'tests' ? 'unknown' : x.required ? 'pass' : 'not_applicable', evidence: 'Fixture review inspected arithmetic behavior and the independent test receipt.',
+    paths: x.required && x.axis !== 'tests' ? ['src/math.mjs', 'test/math.test.mjs'] : [], receiptIds: [], findingIds: [] })) };
+  await f.life.importQa(d.id, unknown);
+  d = await f.life.run(d.id, { manualQa: true });
+  assert.equal(d.data.error.code, 'QA_EVIDENCE');
+  // No repair can conjure the evidence a check that never proved this candidate would have written.
+  const run = f.life.store.get(d.data.finalRunId);
+  run.receipts = run.receipts.filter(r => r.gateId !== 'unit');
+  f.life.store.save(run, 'fixture.receipt_removed');
+  assert.throws(() => f.life.authorizeQaRepair(d.id, 'Test Owner', 'Attempted authorization while a configured check has no receipt for this candidate.'),
+    e => e.code === 'QA_EVIDENCE');
+  assert.equal(f.life.get(d.id).data.qaRepairAuthorization ?? null, null);
+});

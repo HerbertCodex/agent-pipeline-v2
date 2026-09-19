@@ -421,6 +421,15 @@ export interface SpecRecord {
     validationRunIds: string[];
     qa: QaRecord | null;
     qaRepairs: number;
+    /**
+     * One quality repair the operator authorized after inspecting evidence the review could not
+     * conclude on. Consumed by the repair it authorizes; the controller never grants it by itself.
+     */
+    qaRepairAuthorization?: {
+        at: number;
+        reviewer: string;
+        note: string;
+    } | null;
     design: DesignRecord | null;
     scopeAmendments: ScopeAmendment[];
     criterionAmendments?: CriterionAmendment[];

@@ -1118,14 +1118,17 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                     this.save(doc, 'qa.completed', { qa: r.qa });
                 }
                 if (needsQa && r.qa!.report.verdict === 'changes_requested') {
-                    if (r.config.workflow.qualityReview === 'evidence' && [...r.qa!.report.qualityChecks, ...r.qa!.report.criteria,
+                    // An authorization the operator granted on this exact review answers the stop it was
+                    // granted for, and nothing else: a later review starts from the automatic rules again.
+                    const authorized = r.qaRepairAuthorization ?? null;
+                    if (!authorized && r.config.workflow.qualityReview === 'evidence' && [...r.qa!.report.qualityChecks, ...r.qa!.report.criteria,
                         ...r.qa!.report.securityChecks, ...r.qa!.report.decisionChecks, ...(r.qa!.report.negativeTestChecks ?? [])].some(x => x.status === 'unknown')) {
                         r.status = 'blocked';
                         r.error = { code: 'QA_EVIDENCE', message: 'Quality review lacks evidence. Inspect the missing proof and import a substantiated QA report; no automatic code repair is started for unknown evidence.' };
                         this.save(doc, 'qa.evidence_missing', { axes: r.qa!.report.qualityChecks.filter(x => x.status === 'unknown').map(x => x.axis) });
                         return doc;
                     }
-                    if (r.qaRepairs >= r.config.workflow.maxQaRepairs) {
+                    if (!authorized && r.qaRepairs >= r.config.workflow.maxQaRepairs) {
                         r.status = 'blocked';
                         r.error = { code: 'QA_REJECTED', message: 'QA requests changes; automatic repair budget exhausted. Inspect findings and create an explicit follow-up.' };
                         this.save(doc, 'qa.repair_budget_exhausted');
@@ -1133,9 +1136,10 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                     }
                     const run = await this.pipeline.create({ repo: r.repo, baseRef: r.currentSha, specId: doc.id, config: this.runConfig(r), task: this.qaRepairTask(r) });
                     r.qaRepairs++;
+                    r.qaRepairAuthorization = null;
                     r.attempts.push({ taskId: `QA-REPAIR-${r.qaRepairs}`, runId: run.id, kind: 'qa-repair' });
                     r.activeRunId = run.id;
-                    this.save(doc, 'workflow.qa_repair_started', { runId: run.id, number: r.qaRepairs });
+                    this.save(doc, 'workflow.qa_repair_started', { runId: run.id, number: r.qaRepairs, authorization: authorized });
                     continue;
                 }
                 await this.prepareReviewWorkspace(doc, final);
@@ -1393,6 +1397,39 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             this.store.releaseDocument(id, token);
         }
     }
+    /**
+     * Authorize exactly one quality repair on a spec stopped by evidence the review could not conclude on.
+     *
+     * The controller never grants this by itself: an unknown assessment can mean the configured checks
+     * cannot produce that proof at all, and no code change would ever close it. The operator states,
+     * with a note, that the gap is in the candidate rather than in the configuration, and accepts the
+     * extra round. Every check must already have proved this candidate, so the repair answers a real
+     * gap and not a missing receipt; the next quality review still has to conclude on its own evidence.
+     */
+    authorizeQaRepair(id: string, actor: string, note: string): Document<SpecRecord> {
+        reviewer(actor, note);
+        const token = this.store.acquireDocument(id);
+        try {
+            const doc = this.get(id);
+            const r = doc.data;
+            this.approved(r);
+            invariant(r.status === 'blocked' && ['QA_EVIDENCE', 'QA_REJECTED'].includes(r.error?.code ?? ''), 'STATE',
+                'Only a spec stopped by a quality review can authorize a repair');
+            invariant(r.qa?.report.verdict === 'changes_requested', 'STATE', 'No quality review requesting changes');
+            invariant(!r.qaRepairAuthorization, 'STATE', 'A quality repair is already authorized');
+            invariant(r.finalRunId, 'STATE', 'No integrated candidate');
+            const final = this.pipeline.store.get(r.finalRunId);
+            invariant(final.candidateSha === r.currentSha, 'CANDIDATE', 'Final candidate is stale');
+            invariant(this.runConfig(r).gates.every(g => final.receipts.some(x => x.gateId === g.id &&
+                x.candidateSha === final.candidateSha && ['passed', 'cached'].includes(x.status))), 'QA_EVIDENCE',
+                'A configured check has not proved this candidate; revalidate before authorizing a repair');
+            r.qaRepairAuthorization = { at: Date.now(), reviewer: actor.trim(), note: note.trim() };
+            r.error = null;
+            this.save(doc, 'workflow.qa_repair_authorized', { authorization: r.qaRepairAuthorization, candidateSha: final.candidateSha });
+            return doc;
+        }
+        finally { this.store.releaseDocument(id, token); }
+    }
     async retry(id: string, confirmed: boolean): Promise<Document<SpecRecord>> {
         invariant(confirmed, 'CONFIRM', 'Explicitly confirm an additional attempt');
         const token = this.store.acquireDocument(id);
@@ -1616,7 +1653,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             next = `The last attempt changed nothing${said ? ` and explained: "${said}"` : ''}. Read it with apv2 spec events ${doc.id}; then apv2 spec retry ${doc.id} --confirm if a change is still expected, or create a follow-up spec.`;
         }
         else if (r.error?.code === 'QA_EVIDENCE')
-            next = `Inspect required validation and unknown assessments. Missing commands or testPaths require a reviewed configuration and a new spec; keep the candidate for reuse. An imported QA report cannot replace missing runner evidence.${final && ['ready', 'awaiting_review'].includes(final.state) ? ` Replay configured gates with apv2 spec verify ${doc.id}, or complete the QA references with apv2 spec qa ${doc.id} --file qa.json.` : ''}`;
+            next = `Inspect required validation and unknown assessments. Missing commands or testPaths require a reviewed configuration and a new spec; keep the candidate for reuse. An imported QA report cannot replace missing runner evidence.${final && ['ready', 'awaiting_review'].includes(final.state) ? ` Replay configured gates with apv2 spec verify ${doc.id}, or complete the QA references with apv2 spec qa ${doc.id} --file qa.json. If every check proved this candidate and the gap is in the candidate itself, apv2 spec qa-repair ${doc.id} --confirm --note TEXT authorizes exactly one repair.` : ''}`;
         else if (r.error?.code === 'STALE_EVIDENCE')
             next = `apv2 spec verify ${doc.id}   (replays the gates on the same candidate; then apv2 spec run ${doc.id})`;
         else if (r.status === 'blocked' && r.error)
