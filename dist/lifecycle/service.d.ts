@@ -165,6 +165,16 @@ export declare class Lifecycle {
     private reviewable;
     /** Publication adapters still acquire the lifecycle lease and require explicit consent. */
     publicationCandidate(id: string, purpose?: 'review' | 'delivery'): Promise<Run>;
+    /**
+     * The source repository must be clean and still checked out on the spec's base: a plan approved
+     * against one state of the repository must not be implemented against another.
+     *
+     * One case is exempt. When the checked-out branch already contains this spec's own candidate, the
+     * base moved precisely because this work was merged; nothing about the spec is stale, and holding
+     * it to the old HEAD would leave it unable to finish its own review and closure. Workspaces are
+     * detached worktrees created at explicit commits, so the branch position never reaches them.
+     */
+    private sourceReady;
     review(id: string, sha: string, actor: string, note: string): Promise<Document<SpecRecord>>;
     importQa(id: string, value: unknown): Promise<Document<SpecRecord>>;
     reject(id: string, note: string): Document<SpecRecord>;

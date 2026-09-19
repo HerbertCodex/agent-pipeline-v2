@@ -16,6 +16,8 @@ export declare class Git {
     root(path: string): Promise<string>;
     sha(repo: string, ref?: string): Promise<string>;
     clean(repo: string, expectedSha?: string): Promise<void>;
+    /** True when `commit` already contains `ancestor`; false when it does not, or is unknown here. */
+    contains(repo: string, commit: string, ancestor: string): Promise<boolean>;
     compatible(repo: string, sha: string): Promise<void>;
     workspace(repo: string, path: string, sha: string): Promise<void>;
     removeWorkspace(repo: string, path: string, ownedRoot: string): Promise<void>;

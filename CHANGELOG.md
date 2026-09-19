@@ -3,6 +3,8 @@
 
 ## Unreleased — reliability and efficient feature work
 
+- **Fusionner une spec ne l'empêche plus de se clore.** Le dépôt source doit être propre et rester sur la base de la spec : un plan approuvé contre un état du dépôt ne doit pas s'implémenter contre un autre, et ce garde-fou ne bouge pas. Mais il s'appliquait aussi quand la branche avait avancé **à cause du travail de la spec elle-même** : une fois la pull request fusionnée, plus aucune exécution n'était possible, donc plus de preuve fraîche, donc plus de revue, donc plus de clôture — alors que `spec sync` voyait parfaitement la fusion et réclamait cette revue. Une branche qui contient déjà le candidat de la spec est désormais acceptée ; rien d'autre ne change, et les espaces de travail restent des worktrees détachés créés sur des commits explicites. Constaté sur un vrai projet : spec livrée, fusionnée, puis enfermée pour toujours par le déroulement le plus banal qui soit.
+
 - Documentation : anciens audits, bilans, notes de version et sources datées supprimés. Le guide courant de qualité devient `docs/QUALITY.md` ; les sommaires et liens sont actualisés. Les preuves d’exécution restent dans `validation/`.
 
 - QA : distingue gravité et correction requise ; les nettoyages mineurs obligatoires bloquent la livraison et utilisent la boucle de réparation. Consignes de suppression du code rendu mort, affichage UI/QA.md et découverte des contrôles existants à l'onboarding. Les anciens rapports restent lisibles.

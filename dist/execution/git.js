@@ -55,6 +55,16 @@ export class Git {
         if (expectedSha)
             invariant(await this.sha(repo) === expectedSha, 'CANDIDATE_MOVED', 'Workspace HEAD no longer matches the candidate');
     }
+    /** True when `commit` already contains `ancestor`; false when it does not, or is unknown here. */
+    async contains(repo, commit, ancestor) {
+        try {
+            await this.exec(repo, ['merge-base', '--is-ancestor', ancestor, commit]);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    }
     async compatible(repo, sha) {
         const tree = await this.exec(repo, ['ls-tree', '-r', '-z', sha]);
         for (const entry of tree.split('\0').filter(Boolean)) {
