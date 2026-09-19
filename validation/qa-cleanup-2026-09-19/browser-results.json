@@ -1,0 +1,20 @@
+[
+  {
+    "width": 1440,
+    "height": 1000,
+    "requiredMinor": true,
+    "majorCannotBeAdvisory": true,
+    "advisoryDistinct": true,
+    "overflow": false,
+    "errors": []
+  },
+  {
+    "width": 390,
+    "height": 844,
+    "requiredMinor": true,
+    "majorCannotBeAdvisory": true,
+    "advisoryDistinct": true,
+    "overflow": false,
+    "errors": []
+  }
+]

@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Lifecycle, VERSION } from '../dist/index.js';
 import { validateConfig } from '../dist/domain/contracts.js';
+import { modelPlan } from '../dist/adapters/routing.js';
 import { providerProfile } from '../dist/adapters/providers.js';
 import { assessSecurity } from '../dist/security/owasp.js';
 import { evaluationReport } from '../dist/evaluation/report.js';
@@ -13,7 +14,7 @@ import { validRelativePath } from '../dist/policy/policy.js';
 import { hash } from '../dist/domain/hash.js';
 
 const { values } = parseArgs({ options: {
-  execute: { type: 'boolean' }, output: { type: 'string' }, config: { type: 'string' }, provider: { type: 'string' }, model: { type: 'string' },
+  'usage-mode': { type: 'string' }, execute: { type: 'boolean' }, output: { type: 'string' }, config: { type: 'string' }, provider: { type: 'string' }, model: { type: 'string' },
   effort: { type: 'string' }, case: { type: 'string', multiple: true }, repetitions: { type: 'string' }, planning: { type: 'string' },
   label: { type: 'string' }, 'budget-usd': { type: 'string' }, help: { type: 'boolean' },
   pathway: { type: 'string' }, 'cases-file': { type: 'string' }, 'total-budget-usd': { type: 'string' },
@@ -29,15 +30,21 @@ const repetitions = Number(values.repetitions ?? 1);
 if (!Number.isInteger(repetitions) || repetitions < 1 || repetitions > 10) throw new Error('Repetitions must be in 1..10');
 const planning = values.planning ?? 'generated';
 if (!['generated', 'fixture'].includes(planning)) throw new Error('Choose --planning generated|fixture');
-const budget = Number(values['budget-usd'] ?? 5);
-if (!Number.isFinite(budget) || budget < 0.01 || budget > 1000) throw new Error('Invalid per-spec --budget-usd');
-const totalBudget = Number(values['total-budget-usd'] ?? budget * repetitions * selected.length);
-if (!Number.isFinite(totalBudget) || totalBudget < 0.01 || totalBudget > 10000) throw new Error('Invalid total budget');
+const supplied = values.config ? JSON.parse(readFileSync(resolve(values.config), 'utf8')) : null;
+const usageMode = values['usage-mode'] ?? 'legacy';
+if (!['legacy', 'subscription', 'metered'].includes(usageMode)) throw new Error('Invalid --usage-mode');
+if (values.config && values['usage-mode']) throw new Error('Set usageMode per role in the supplied configuration');
+const subscription = usageMode === 'subscription' || (supplied && modelPlan(validateConfig(supplied)).every(m => m.usageMode === 'subscription'));
+if (subscription && (values['budget-usd'] || values['total-budget-usd'])) throw new Error('Subscription evaluation does not use dollar ceilings');
+const budget = subscription ? null : Number(values['budget-usd'] ?? 5);
+if (budget !== null && (!Number.isFinite(budget) || budget < 0.01 || budget > 1000)) throw new Error('Invalid per-spec --budget-usd');
+const totalBudget = subscription ? null : Number(values['total-budget-usd'] ?? budget * repetitions * selected.length);
+if (totalBudget !== null && (!Number.isFinite(totalBudget) || totalBudget < 0.01 || totalBudget > 10000)) throw new Error('Invalid total budget');
 if (!values.execute || values.help) {
   console.log(JSON.stringify({ executed: false, cases: selected.map(({ id, category, request }) => ({ id, category, request })), repetitions, planning, perSpecBudgetUsd: budget,
     pathway, totalBudgetUsd: totalBudget,
     usage: 'npm run evaluate -- --provider claude|codex --model PINNED_MODEL --effort medium --pathway auto --label candidate --output NEW_DIRECTORY --execute',
-    alternatives: '--config REVIEWED_CONFIG_JSON; --case ID (repeatable); --planning fixture to isolate execution from Product planning',
+    alternatives: '--usage-mode subscription for included usage without USD ceilings; --config REVIEWED_CONFIG_JSON; --case ID (repeatable); --planning fixture to isolate execution from Product planning',
     limitation: 'Small engineering fixtures, not proof of senior code quality. UI checks inspect generated markup, not a real browser. Costs may be unknown or overshoot a provider ceiling.' }, null, 2));
   process.exit(0);
 }
@@ -46,8 +53,8 @@ if (values.config && (values.provider || values.model || values.effort)) throw n
 if (!values.config && (!values.provider || !values.model)) throw new Error('Pin --provider and --model, or provide a reviewed --config');
 const root = resolve(values.output);
 if (existsSync(root)) throw new Error('Output already exists; nothing was overwritten');
-const selectedAgent = values.config ? null : { ...providerProfile(values.provider), model: values.model, effort: values.effort ?? 'medium', timeoutMs: 480000 };
-const supplied = values.config ? JSON.parse(readFileSync(resolve(values.config), 'utf8')) : null;
+const selectedAgent = values.config ? null : { ...providerProfile(values.provider), model: values.model, effort: values.effort ?? 'medium', usageMode, timeoutMs: 480000 };
+
 const config = validateConfig(supplied ? { ...supplied, ...(values['budget-usd'] ? { workflow: { ...supplied.workflow, maxSpecCostUsd: budget } } : {}) } : {
   schemaVersion: 1, executionMode: 'local-trusted', environment: { id: `eval-node-${process.version}` }, agent: selectedAgent,
   skills: { enabled: ['clean-code', 'design-patterns', 'refactoring', 'security', 'tdd', 'ui-design'], projectType: 'library' },
@@ -91,10 +98,10 @@ try {
   for (let repeat = 0; repeat < repetitions && !controller.signal.aborted; repeat++) for (const c of selected) {
     if (controller.signal.aborted) break;
     if (stoppedReason) break;
-    const remaining = totalBudget - samples.reduce((n, s) => n + s.cost.knownUsd, 0);
+    const remaining = totalBudget === null ? Infinity : totalBudget - samples.reduce((n, s) => n + (s.cost.budget ?? s.cost).knownUsd, 0);
     if (remaining < 0.01) { stoppedReason = 'Total declared budget exhausted'; break; }
-    if (samples.some(s => s.cost.unknownInvocations || s.cost.pendingInvocations)) { stoppedReason = 'Unknown cost prevents safe continuation within the total budget'; break; }
-    const caseConfig = validateConfig({ ...config, workflow: { ...config.workflow, maxSpecCostUsd: Math.min(config.workflow.maxSpecCostUsd ?? budget, budget, remaining) } });
+    if (totalBudget !== null && samples.some(s => (s.cost.budget ?? s.cost).unknownInvocations || (s.cost.budget ?? s.cost).pendingInvocations)) { stoppedReason = 'Unknown cost prevents safe continuation within the total budget'; break; }
+    const caseConfig = validateConfig({ ...config, workflow: { ...config.workflow, maxSpecCostUsd: subscription ? null : Math.min(config.workflow.maxSpecCostUsd ?? budget, budget, remaining) } });
     const directory = join(root, `${repeat + 1}-${c.id}`); const repo = join(directory, 'repo'); mkdirSync(repo, { recursive: true });
     const files = { '.gitignore': 'node_modules/\n', 'package.json': '{"type":"module","private":true}\n', [c.path]: c.before,
       'test/acceptance.mjs': `import test from 'node:test'; import assert from 'node:assert/strict'; import * as mod from '../${c.path}';\ntest(${JSON.stringify(c.id)},async()=>{${c.checks}});\n` };
@@ -123,9 +130,11 @@ try {
       const observedModels = [...new Set(events.filter(e => e.type === 'invocation.finished').flatMap(e => e.data.usage?.models ?? []))];
       samples.push({ caseId: c.id, configuration: label, success, wallMs: performance.now() - started, planningMs: doc?.data.planningMs ?? 0, activeMs: doc?.data.activeMs ?? 0, cost,
         invocations: calls.length, inputBytes: calls.reduce((n,e)=>n+(e.data.inputBytes ?? 0),0) });
-      if (/hit your (?:session|weekly) limit|api_error_status[^\n]{0,8}429|rate.limit|not logged in|authentication failed/i.test(error ?? doc?.data.error?.message ?? ''))
-        stoppedReason = 'Provider unavailable (quota or authentication); do not score this as model quality or retry the remaining cases';
+      if (['PROVIDER_QUOTA', 'PROVIDER_RATE_LIMIT', 'PROVIDER_UNAVAILABLE', 'MODEL_AUTH', 'MODEL_UNAVAILABLE', 'MODEL_EFFORT', 'MODEL_SELECTION'].includes(doc?.data.error?.code) ||
+        /hit your (?:session|weekly) limit|api_error_status[^\n]{0,8}429|rate.limit|not logged in|authentication failed/i.test(error ?? doc?.data.error?.message ?? ''))
+        stoppedReason = 'Provider unavailable or configuration rejected; do not score this as model quality or retry the remaining cases';
       details.push({ caseId: c.id, repeat, specId: doc?.id ?? null, status: doc?.data.status ?? 'failed-before-draft', error: error ?? doc?.data.error ?? null, untouched, directory,
+        timing: doc ? life.summary(doc).timing : null,
         executionPath: doc?.data.executionPath ?? 'legacy', observedModels, requestedModels: [...new Set(calls.map(e=>e.data.requestedModel))],
         reviewerChecklist: ['Behavior and negative cases', 'Existing boundaries and justified abstractions', 'Meaningful independent tests', 'Error handling and security', 'Readable diff without speculative machinery'] });
       life.close(); save();

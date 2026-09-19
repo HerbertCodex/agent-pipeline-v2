@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { qaRuntime } from './qa-runtime.js';
 import { modelsHelp, modelsCommand } from './knowledge/models.js';
 import { modelSelectionSchema } from './adapters/model-selection.js';
 import { knowledgeHelp, knowledgeCommand } from './knowledge/cli.js';
@@ -18,6 +19,7 @@ import { parseJson } from './domain/schema.js';
 import { PipelineError, errorMessage, invariant } from './domain/errors.js';
 const help = `Agent Pipeline V2 ${VERSION} — local trusted runner
 
+apv2 runtime                            Identify the installed QA engine, contract and instructions
 apv2 init --repo PATH                   Write an example operator config (never overwrite)
 apv2 run --repo PATH --config FILE --task FILE [--base REF]
 apv2 resume RUN_ID [--accept-current]    Never blindly replay an interrupted agent
@@ -57,7 +59,7 @@ function load(path) {
 async function main() {
     const { values, positionals } = parseArgs({ allowPositionals: true, strict: true, options: {
             models: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' },
-            model: { type: 'string' }, effort: { type: 'string' }, provider: { type: 'string' }, 'review-mode': { type: 'string' }, role: { type: 'string' }, repo: { type: 'string' }, config: { type: 'string' }, task: { type: 'string' }, base: { type: 'string' },
+            'usage-mode': { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' }, provider: { type: 'string' }, 'review-mode': { type: 'string' }, role: { type: 'string' }, repo: { type: 'string' }, config: { type: 'string' }, task: { type: 'string' }, base: { type: 'string' },
             'state-dir': { type: 'string' }, sha: { type: 'string' }, reviewer: { type: 'string' }, note: { type: 'string' }, output: { type: 'string' },
             request: { type: 'string' }, 'request-file': { type: 'string' }, file: { type: 'string' }, pathway: { type: 'string' },
             repository: { type: 'string' }, remote: { type: 'string' }, 'confirm-push': { type: 'boolean' }, 'confirm-pr': { type: 'boolean' },
@@ -69,6 +71,10 @@ async function main() {
         } });
     const [command, id] = positionals;
     const required = (value, name) => { invariant(value, 'ARGUMENT', `Missing ${name}`); return value; };
+    if (positionals[0] === 'runtime') {
+        console.log(JSON.stringify(qaRuntime(), null, 2));
+        return;
+    }
     if (values.version) {
         console.log(VERSION);
         return;

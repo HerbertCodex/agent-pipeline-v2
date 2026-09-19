@@ -93,7 +93,7 @@ test('timeouts and process failures are never retried as output repairs', async 
   // The shared deadline includes Git workspace preparation. Leave room for the
   // child to start under suite load; the worker still exceeds the deadline.
   const agent = { type: 'command', command: [process.execPath, slow], timeoutMs: 2000 };
-  await assert.rejects(f.life.draft({ repo: f.repo, config: { ...f.config, roles: { product: agent, qa: null }, workflow: { ...f.config.workflow, maxOutputRepairs: 2 } }, request: 'Implement the approved arithmetic example.' }), /timed_out/);
+  await assert.rejects(f.life.draft({ repo: f.repo, config: { ...f.config, roles: { product: agent, qa: null }, workflow: { ...f.config.workflow, maxOutputRepairs: 2 } }, request: 'Implement the approved arithmetic example.' }), e => e.code === 'AGENT_TIMEOUT');
   assert.equal(readFileSync(log, 'utf8').trim().split('\n').length, 1);
   const doc = f.life.store.documents('spec')[0];
   assert.equal(f.life.store.documentEvents(doc.id, ['invocation.started']).length, 1);

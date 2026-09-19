@@ -356,6 +356,10 @@ test('a negative case the spec defines as a review is assessed as asserted, neve
   // A review says what it inspected, may name the files it read, and never leans on a test receipt.
   const vague = structuredClone(qa); vague.negativeTestChecks[0].evidence = 'Reviewed.';
   assert.throws(() => validate(vague), /inspected and found/);
+  const inspected = structuredClone(qa); inspected.negativeTestChecks[0].inspectedPaths = ['src/math.mjs'];
+  assert.doesNotThrow(() => validate(inspected), 'explicit inspected paths are also accepted');
+  inspected.negativeTestChecks[0].inspectedPaths = ['absent.mjs'];
+  assert.throws(() => validate(inspected), /unknown files/);
   const namesRead = structuredClone(qa); namesRead.negativeTestChecks[0].paths = ['src/math.mjs'];
   assert.doesNotThrow(() => validate(namesRead), 'naming the files read is what makes a review checkable');
   const claimsReceipt = structuredClone(qa); claimsReceipt.negativeTestChecks[0].receiptIds = ['R1'];

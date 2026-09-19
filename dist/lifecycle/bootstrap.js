@@ -1,3 +1,4 @@
+import { executionAgent } from '../adapters/billing.js';
 import { selectedAgent, validateModelSelection } from '../adapters/model-selection.js';
 import { ensureModelReady, assertModelResponse } from '../adapters/model-check.js';
 import { startInvocation } from '../adapters/invocations.js';
@@ -79,6 +80,7 @@ const semanticReviewInstructions = `Act as an independent consistency reviewer f
 /** Bootstrap has no project configuration yet: one bounded repair of an output-contract violation. */
 export const BOOTSTRAP_OUTPUT_REPAIRS = 1;
 async function runStructuredProvider(store, documentId, root, agent, protocol, instructions, payload, schema, signal, validate = value => value) {
+    agent = executionAgent(agent);
     const workspace = join(root, protocol.replace(/[^A-Za-z0-9_-]/g, '_'));
     mkdirSync(workspace, { recursive: true, mode: 0o700 });
     const schemaFile = join(workspace, 'schema.json');
@@ -97,7 +99,7 @@ async function runStructuredProvider(store, documentId, root, agent, protocol, i
     let previousOutput;
     let repair;
     for (let attempt = 0;; attempt++) {
-        invariant(Date.now() < deadline, 'BOOTSTRAP_PROVIDER', 'Shared bootstrap round deadline exhausted');
+        invariant(Date.now() < deadline, 'AGENT_TIMEOUT', 'Shared bootstrap round deadline exhausted');
         invariant(agent.maxBudgetUsd === null || spentUsd < agent.maxBudgetUsd, 'COST_BUDGET', 'Bootstrap round budget exhausted');
         let effective = { ...agent, timeoutMs: Math.max(1, deadline - Date.now()), maxBudgetUsd: agent.maxBudgetUsd === null ? null : Math.max(0.01, agent.maxBudgetUsd - spentUsd) };
         const probeStart = store.documentEvents(documentId, ['invocation.finished']).length;
@@ -107,7 +109,7 @@ async function runStructuredProvider(store, documentId, root, agent, protocol, i
             spentUsd += data.usage?.costUsd ?? 0;
         }
         invariant(agent.maxBudgetUsd === null || spentUsd < agent.maxBudgetUsd, 'COST_BUDGET', 'Bootstrap budget exhausted during model preflight');
-        invariant(Date.now() < deadline, 'BOOTSTRAP_PROVIDER', 'Bootstrap deadline exhausted during model preflight');
+        invariant(Date.now() < deadline, 'AGENT_TIMEOUT', 'Bootstrap deadline exhausted during model preflight');
         effective = { ...effective, timeoutMs: Math.max(1, deadline - Date.now()), maxBudgetUsd: agent.maxBudgetUsd === null ? null : Math.max(0.01, agent.maxBudgetUsd - spentUsd) };
         const repairLine = repair ? `\nCONTROLLER REJECTED YOUR PREVIOUS ANSWER (${repair.previousError.code}): ${repair.previousError.message}\n${repair.instruction}\n` : '';
         let command = agent.command;

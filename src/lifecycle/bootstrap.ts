@@ -1,3 +1,4 @@
+import { executionAgent } from '../adapters/billing.js';
 import { selectedAgent, validateModelSelection, type ModelSelection } from '../adapters/model-selection.js';
 import { ensureModelReady, assertModelResponse } from '../adapters/model-check.js';
 import { startInvocation } from '../adapters/invocations.js';
@@ -97,6 +98,7 @@ const semanticReviewInstructions = `Act as an independent consistency reviewer f
 export const BOOTSTRAP_OUTPUT_REPAIRS = 1;
 
 async function runStructuredProvider<T>(store:Store,documentId:string,root:string,agent:AgentConfig,protocol:string,instructions:string,payload:Record<string,unknown>,schema:Schema<T>,signal?:AbortSignal,validate:(value:T)=>T=value=>value):Promise<T> {
+  agent = executionAgent(agent);
   const workspace=join(root,protocol.replace(/[^A-Za-z0-9_-]/g,'_')); mkdirSync(workspace,{recursive:true,mode:0o700});
   const schemaFile=join(workspace,'schema.json'); const outputFile=join(workspace,'result.json');
   const env=environment(['PATH','SystemRoot','WINDIR','TMPDIR','TEMP','TMP','LANG',...agent.passEnv]);
@@ -106,14 +108,14 @@ async function runStructuredProvider<T>(store:Store,documentId:string,root:strin
   const deadline = Date.now() + agent.timeoutMs; let spentUsd = 0; let previousOutput: unknown;
   let repair:ReturnType<typeof repairNotice>|undefined;
   for (let attempt=0; ; attempt++) {
-    invariant(Date.now() < deadline, 'BOOTSTRAP_PROVIDER', 'Shared bootstrap round deadline exhausted');
+    invariant(Date.now() < deadline, 'AGENT_TIMEOUT', 'Shared bootstrap round deadline exhausted');
     invariant(agent.maxBudgetUsd === null || spentUsd < agent.maxBudgetUsd, 'COST_BUDGET', 'Bootstrap round budget exhausted');
     let effective = { ...agent, timeoutMs: Math.max(1, deadline - Date.now()), maxBudgetUsd: agent.maxBudgetUsd === null ? null : Math.max(0.01, agent.maxBudgetUsd - spentUsd) };
     const probeStart = store.documentEvents(documentId, ['invocation.finished']).length;
     await ensureModelReady(effective, { store, owner: { kind: 'document', id: documentId }, env, cwd: workspace, ...(signal ? { signal } : {}), hooks });
     for (const event of store.documentEvents(documentId, ['invocation.finished']).slice(probeStart)) { const data = event.data as { usage?: { costUsd?: number } }; spentUsd += data.usage?.costUsd ?? 0; }
     invariant(agent.maxBudgetUsd === null || spentUsd < agent.maxBudgetUsd, 'COST_BUDGET', 'Bootstrap budget exhausted during model preflight');
-    invariant(Date.now() < deadline, 'BOOTSTRAP_PROVIDER', 'Bootstrap deadline exhausted during model preflight');
+    invariant(Date.now() < deadline, 'AGENT_TIMEOUT', 'Bootstrap deadline exhausted during model preflight');
     effective = { ...effective, timeoutMs: Math.max(1, deadline - Date.now()), maxBudgetUsd: agent.maxBudgetUsd === null ? null : Math.max(0.01, agent.maxBudgetUsd - spentUsd) };
     const repairLine=repair?`\nCONTROLLER REJECTED YOUR PREVIOUS ANSWER (${repair.previousError.code}): ${repair.previousError.message}\n${repair.instruction}\n`:'';
     let command=agent.command; let input=JSON.stringify({protocol,role:'setup',instructions,...payload,...(repair?{repair}:{}),outputSchema:schema.json}); const outputFromFile=agent.type==='codex';

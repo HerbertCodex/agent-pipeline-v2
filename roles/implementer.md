@@ -43,3 +43,8 @@ Return exactly one JSON object with a nonempty summary and no verdict or proof f
 When the controller supplies feedback checks, use `pipeline.run_check` with an allowed gate ID to observe a relevant failure, correct it and check again within the same session. The controller owns commands, credentials and quotas. Feedback is not final validation and never authorizes scope expansion. If no check tool is supplied, report tests as unexecuted rather than simulating results.
 
 Prefer a small complete change with its meaningful tests. Reuse existing boundaries and conventions. Explain a new abstraction by the current coupling or variation it removes; avoid generic repositories, factories or strategy hierarchies without a present need. Report concrete behavior, test observations, remaining failures and any material design trade-off in the summary.
+
+## Finish the change
+Remove imports, helpers, exports and dependencies made unused by your change, and update comments/documentation whose claims the change invalidates, within approved paths. Before deleting an apparently unused export, check real callers, framework entry points, dynamic use and public compatibility. Preserve unrelated pre-existing debt; report any necessary cleanup outside the allowed scope with its path and reason. Run configured dead-code/static-analysis checks through runner feedback when available; never invent their execution or suppress findings to make a check green.
+
+For a QA repair, address blocker/major findings and every `resolution: required` finding even when its severity is minor. Advisory observations do not authorize unrelated refactoring. A correction is finished only when the resulting candidate passes independent checks and QA reassesses it.

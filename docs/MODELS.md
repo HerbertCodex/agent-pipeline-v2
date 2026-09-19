@@ -8,13 +8,13 @@ Copier [model-selection.example.json](../examples/model-selection.example.json) 
 
 ```json
 {
-  "quick": { "provider": "codex", "model": "YOUR_QUICK_MODEL_ID", "effort": "low" },
-  "deep": { "provider": "codex", "model": "YOUR_DEEP_MODEL_ID", "effort": "high" },
-  "qa": { "provider": "claude", "model": "YOUR_REVIEW_MODEL_ID", "effort": "high" }
+  "quick": { "provider": "codex", "model": "YOUR_QUICK_MODEL_ID", "effort": "low", "usageMode": "subscription" },
+  "deep": { "provider": "codex", "model": "YOUR_DEEP_MODEL_ID", "effort": "high", "usageMode": "subscription" },
+  "qa": { "provider": "claude", "model": "YOUR_REVIEW_MODEL_ID", "effort": "high", "usageMode": "subscription" }
 }
 ```
 
-Les trois choix peuvent utiliser Claude ou Codex. `quick` et `deep` doivent partager le fournisseur d'exécution ; QA peut en utiliser un autre. Les identifiants ne sont pas interchangeables entre fournisseurs. Pour QA, choisir le modèle que vous retenez pour la revue la plus exigeante et un effort élevé, puis mesurer sa capacité à détecter de vrais défauts sur vos tâches. Un effort élevé ne garantit pas une meilleure revue.
+Les trois choix peuvent utiliser Claude ou Codex. `quick` et `deep` doivent partager le fournisseur et le mode d’usage d'exécution ; QA peut en utiliser un autre. Les identifiants ne sont pas interchangeables entre fournisseurs. Pour QA, choisir le modèle que vous retenez pour la revue la plus exigeante et un effort élevé, puis mesurer sa capacité à détecter de vrais défauts sur vos tâches. Un effort élevé ne garantit pas une meilleure revue.
 
 ```bash
 # Cible vide : proposition du socle avec deep, revue sémantique avec qa
@@ -27,7 +27,7 @@ apv2 onboard --repo /chemin/projet --models models.json --review-mode solo
 
 `onboard --assist` utilise `deep` pour Setup. Le choix de l'opérateur est réappliqué après sa réponse : Setup ne peut pas le remplacer. Le bootstrap conserve ce choix dans son hash d'approbation et dans le plan d'onboarding qui suit. Les approbations et commandes `apply` restent celles du [cycle de vie](LIFECYCLE.md).
 
-`--models` remplace les options `--provider`, `--agent`, `--config`, `--model` et `--effort` pour cette installation. Il ne migre pas une configuration déjà installée. Sans cette option, les anciens parcours restent disponibles ; un modèle vide utilise toujours le défaut du CLI.
+`--models` remplace les options `--provider`, `--agent`, `--config`, `--model`, `--effort` et `--usage-mode` pour cette installation. Il ne migre pas une configuration déjà installée. Sans cette option, les anciens parcours restent disponibles ; en mode `legacy`, un modèle vide utilise le défaut du CLI. Les modes `subscription` et `metered` exigent un modèle explicite. Voir [la politique d’exécution et la migration](EXECUTION-POLICY.md).
 
 ## Routage et QA indépendante
 
@@ -57,7 +57,7 @@ Les agents choisis avec `--models` ou `--model` activent `preflight: "probe"`. S
 
 Avant l'appel projet, le contrôleur vérifie l'exécutable et sa version, puis demande une petite réponse structurée fixe. Il utilise un répertoire temporaire distinct et **n'inclut aucun contenu du projet dans le prompt de contrôle**. Claude reçoit une liste d'outils vide ; Codex fonctionne en mode `read-only`. Cela ne constitue pas une nouvelle sandbox OS : l'installation, les hooks et la configuration du CLI restent sous la responsabilité de l'opérateur.
 
-Ce contrôle consomme du quota : au maximum 60 secondes, 3 tours et 0,25 $ par contrôle Claude, réduits par les limites restantes. Codex ne fournit pas ici de plafond monétaire par appel ; les coûts non publiés restent inconnus. Les dépenses déclarées des contrôles réussis **et échoués** entrent dans le journal et dans le budget de la spec. Le temps réservé aux validations est conservé.
+Ce contrôle consomme du quota : au maximum 60 secondes et 3 tours. En mode historique/facturé, Claude reçoit aussi un plafond de 0,25 $, réduit par le budget restant ; en mode abonnement, aucun plafond USD n’est ajouté. Codex ne fournit pas ici de plafond monétaire par appel ; les coûts non publiés restent inconnus. Les dépenses déclarées des contrôles réussis **et échoués** entrent dans le journal ; seuls les appels hors abonnement entrent dans le budget de la spec. Le temps réservé aux validations est conservé.
 
 Un succès est réutilisé pendant 15 minutes pour la même combinaison fournisseur/modèle/effort/exécutable/environnement, dans la même instance du contrôleur. Un nouveau processus refait le contrôle. Ce cache court n'atteste pas la disponibilité future ; un changement d'authentification hors environnement peut ne pas être détecté avant l'appel suivant. L'appel projet reste contrôlé pour les erreurs de modèle et d'authentification.
 
@@ -95,6 +95,6 @@ apv2 spec budget SPEC_ID --file qa-model.json --approve --note "Migration explic
 apv2 spec show SPEC_ID
 ```
 
-Reprendre ensuite l'action indiquée par la spec. Les rôles autorisés sont `product`, `design`, `implementer`, `qa` ; les champs modifiables sont modèle, effort, tours, délai et plafond d'appel. Un amendement global `agent.model`/`agent.effort` conserve le choix d'une QA dédiée. Changer de fournisseur, de permissions ou de commandes exige une revue de configuration, pas un amendement de budget.
+Reprendre ensuite l'action indiquée par la spec. Les rôles autorisés sont `product`, `design`, `implementer`, `qa` ; les champs modifiables sont modèle, effort, mode d’usage, tours, délai et plafond d'appel. Changer le modèle ou l’effort QA exige une nouvelle évaluation complète et invalide la revue humaine associée, sans effacer le candidat ni ses reçus. Un amendement global `agent.model`/`agent.effort` conserve le choix d'une QA dédiée. Changer de fournisseur, de permissions ou de commandes exige une revue de configuration, pas un amendement de budget.
 
 Les fichiers `claude-short-loop.profiles.json` et les rapports de calibration conservent les choix mesurés à leur date. Ils ne sont pas une recommandation actuelle pour QA ni les valeurs par défaut d'un nouveau projet.

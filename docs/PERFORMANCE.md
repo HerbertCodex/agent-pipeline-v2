@@ -2,6 +2,8 @@
 
 ## But
 
+Ce guide décrit les mécanismes présents et le protocole de mesure. Les objectifs de délai ne sont pas des performances déjà obtenues. Pour les modes d’usage et les mesures par étape, consulter la [politique d’exécution](EXECUTION-POLICY.md).
+
 Réduire le travail de coordination qui n'ajoute pas d'information utile, sans convertir une absence de preuve en succès. Les mécanismes présents sont les parcours adaptatifs, les contextes sélectionnés, les checks en session, les réparations bornées, le choix des contrôles, leur parallélisme et la réutilisation conservatrice des reçus et checkpoints.
 
 Le TypeScript n'est pas la cause directe de ces économies. Les opérations de modèle, de setup, de Git et de contrôle restent des opérations réelles.
@@ -19,6 +21,8 @@ Le benchmark utilise les mêmes quatre commandes réelles Node dans les deux mod
 Les résultats historiques de la livraison initiale alpha.8 sont dans `validation/alpha.8/scheduler-bench.json`, `validation/alpha.8/demo.json` et `validation/VALIDATION.md`. Ce sont des observations locales, non des objectifs contractuels.
 
 ## Durées
+
+Le résumé de spec expose aussi `timing.phases`, les probes séparés et les appels sans résultat. Le tableau de bord affiche ces observations sous « Temps par étape ». Les phases Product/architecture/Design/QA récentes incluent les réparations ; l’historique partiel est signalé. Voir [la politique d’exécution](EXECUTION-POLICY.md#mesurer-avant-doptimiser).
 
 `activeMs` compte les sessions actives de la tentative, y compris les reprises, mais pas l'attente humaine. `preparationMs`, `agentMs` et `validationMs` sont des durées murales de phases non superposées. La durée de création préalable du run, les avis et l'export sont hors de ce compteur. `controllerExclusiveMs` est le reste non négatif après soustraction des phases.
 
@@ -60,4 +64,4 @@ Repository Intelligence ajoute un scan local borné par SHA avant Product et les
 
 Le [premier pilote Claude](../validation/short-loop-2026-09-18/REPORT.md) et la [calibration suivante](../validation/short-loop-2026-09-18/CALIBRATION.md) conservent les réussites, les échecs et les limites de petits cas jetables. Des tokens, coûts déclarés, appels et délais sont donc disponibles pour ces essais ; ils ne prouvent pas un gain général sur une fonctionnalité complète. La grille de qualité du lot 3 n'a pas encore fait l'objet d'une calibration payante.
 
-`npm run evaluate` décrit les cas sans appeler de modèle. Une campagne avec `--execute` consomme le quota ; comparer les mêmes cas, checks et répétitions avec `scripts/compare-evaluations.mjs`. Un résultat incomplet ou un coût inconnu doit rester visible. Le [guide des améliorations](AMELIORATIONS-2026-09-18.md#évaluation-et-limites) détaille les commandes et les limites du banc d'essai.
+`npm run evaluate` décrit les cas sans appeler de modèle. Une campagne avec `--execute` consomme le quota ; comparer les mêmes cas, checks et répétitions avec `scripts/compare-evaluations.mjs`. Un résultat incomplet ou un coût inconnu doit rester visible. La [calibration des profils](../validation/short-loop-2026-09-18/CALIBRATION.md) conserve les résultats et leurs limites à la date des essais.

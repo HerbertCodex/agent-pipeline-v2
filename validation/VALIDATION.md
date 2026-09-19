@@ -1,8 +1,12 @@
 # Validation de la livraison 2.0.0-alpha.8
 
-> **Bilan historique.** Les résultats ci-dessous portent sur la livraison initiale alpha.8 et le pilote de réparation indiqué. Les lots du 18 septembre sont documentés séparément : [améliorations](../docs/AMELIORATIONS-2026-09-18.md), [calibration](short-loop-2026-09-18/CALIBRATION.md) et [validation du lot 3](lot3-2026-09-18/summary.json). Ils partagent le même numéro de version, mais pas le même état du code.
+> **Bilan historique.** Les résultats ci-dessous portent sur la livraison initiale alpha.8 et le pilote de réparation indiqué. Les lots du 18 septembre sont documentés séparément : [calibration](short-loop-2026-09-18/CALIBRATION.md) et [validation du lot 3](lot3-2026-09-18/summary.json). Ils partagent le même numéro de version, mais pas le même état du code.
 
 Date : 2026-09-14.
+
+La [validation de la politique d’exécution du 19 septembre](execution-policy-2026-09-19/README.md) couvre séparément abonnements, décisions rejouables, diagnostics, reprises QA et interface.
+
+La [validation des corrections QA obligatoires](qa-cleanup-2026-09-19/README.md) couvre le nettoyage lié au changement et la distinction entre gravité et obligation de correction.
 
 Cette validation porte sur le moteur alpha.8. Cette version conserve le Decision Ledger, la gestion structurée des ambiguïtés, le workflow fluide alpha.5/alpha.7 et ajoute une couche de sécurité OWASP-aware déterministe : SecurityProfile/SecurityContext, routage de sujets OWASP, threat modeling conditionnel, critères de sécurité, tests négatifs, sécurité supply-chain/CI et contrôles QA sécurité.
 

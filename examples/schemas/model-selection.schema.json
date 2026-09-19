@@ -23,6 +23,15 @@
           ],
           "pattern": "\\S"
         },
+        "usageMode": {
+          "type": "string",
+          "enum": [
+            "legacy",
+            "subscription",
+            "metered"
+          ],
+          "default": "legacy"
+        },
         "effort": {
           "type": "string",
           "enum": [
@@ -60,6 +69,15 @@
           ],
           "pattern": "\\S"
         },
+        "usageMode": {
+          "type": "string",
+          "enum": [
+            "legacy",
+            "subscription",
+            "metered"
+          ],
+          "default": "legacy"
+        },
         "effort": {
           "type": "string",
           "enum": [
@@ -96,6 +114,15 @@
             }
           ],
           "pattern": "\\S"
+        },
+        "usageMode": {
+          "type": "string",
+          "enum": [
+            "legacy",
+            "subscription",
+            "metered"
+          ],
+          "default": "legacy"
         },
         "effort": {
           "type": "string",

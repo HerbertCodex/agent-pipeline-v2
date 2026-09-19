@@ -665,7 +665,7 @@ test('Product is told what one attempt can spend, and oversized tasks are flagge
   const { executionCapabilities } = await import('../dist/lifecycle/capabilities.js');
   const { validateConfig } = await import('../dist/domain/contracts.js');
   const capabilities = executionCapabilities(validateConfig({ ...f.config, agent: { ...f.config.agent, maxTurns: 64, maxBudgetUsd: 5, timeoutMs: 900000 }, maxRunMs: 1800000, maxRepairAttempts: 3 }));
-  assert.deepEqual(capabilities.attempt, { providerTurns: 64, providerBudgetUsd: 5, agentTimeoutMs: 900000, runBudgetMs: 1800000, repairAttempts: 3 });
+  assert.deepEqual(capabilities.attempt, { providerTurns: 64, providerBudgetUsd: 5, usageMode: 'legacy', agentTimeoutMs: 900000, runBudgetMs: 1800000, repairAttempts: 3 });
   assert.ok(capabilities.rules.some(r => /one agent session/.test(r)), 'the sizing rule reaches Product');
   assert.match(readFileSync(new URL('../roles/product.md', import.meta.url).pathname, 'utf8'), /executionCapabilities\.attempt/);
 

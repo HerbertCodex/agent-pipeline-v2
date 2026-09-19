@@ -28,7 +28,7 @@ export function validationEvidence(run) {
 }
 const guidance = {
     architecture: 'Check existing boundaries, dependency direction and the approved architecture decision; a local edit needs no new ADR or pattern.',
-    simplicity: 'Name a present need for new abstractions; avoid speculative frameworks and arbitrary line-count rules.',
+    simplicity: 'Name a present need for new abstractions. Check code made unused and documentation made false by this change; require their correction with concrete paths and caller/entry-point evidence. Avoid speculative frameworks and arbitrary line-count rules.',
     reuse: 'Compare responsibilities with existing modules, not just names. Explain parallel implementations with actual paths.',
     tests: 'Inspect behavior, boundary/negative cases and regression relevance. Cite final behavioral-test receipts; do not invent a pre-change failing run.',
     operations: 'Assess partial writes, migrations, cancellation, retries, idempotence and diagnostics only where the change needs them.',
@@ -62,6 +62,10 @@ export function assertRequiredEvidence(validation) {
     const missing = validation.requirements.filter(r => !r.receiptIds.length || r.missingPaths.length);
     invariant(!missing.length, 'QA_EVIDENCE', `Required validation evidence missing: ${missing.map(r => `${r.id} (${r.anyOf.join(' or ')}): ${r.reason}${r.missingPaths.length ? ` Uncovered paths: ${r.missingPaths.join(', ')}` : ''}`).join('; ')}. Configure and approve the relevant commands; agent claims cannot replace final receipts.`);
 }
+/** Severity describes impact; a small correction can still be required for delivery. */
+export function findingRequiresFix(finding) {
+    return finding.severity !== 'minor' || finding.resolution === 'required';
+}
 /** References are checked against controller data. Their semantic adequacy remains a reviewer judgement. */
 export function validateQualityChecks(report, context, paths) {
     const checks = report.qualityChecks ?? [];
@@ -70,9 +74,8 @@ export function validateQualityChecks(report, context, paths) {
     invariant(new Set(axes).size === axes.length, 'QA_QUALITY', 'Duplicate quality axis');
     if (context?.enabled)
         invariant(qualityAxes.every(axis => axes.includes(axis)) && checks.length === qualityAxes.length, 'QA_QUALITY', 'QA quality review must assess each axis exactly once');
-    if (context?.enabled)
-        invariant(report.findings.every(f => f.severity === 'minor' ||
-            validRelativePath(f.path) && (!paths || paths.has(f.path)) && f.description.trim().length > 0), 'QA_QUALITY', 'Blocking quality findings require a real repository path and concrete evidence');
+    invariant(report.findings.every(f => !(f.resolution === 'required' || context?.enabled && findingRequiresFix(f)) ||
+        validRelativePath(f.path) && (!paths || paths.has(f.path)) && f.description.trim().length > 0), 'QA_QUALITY', 'Blocking quality findings require a real repository path and concrete evidence');
     for (const check of checks) {
         invariant(check.evidence.trim().length > 0, 'QA_QUALITY', 'Blank quality evidence');
         invariant(check.paths.every(p => validRelativePath(p) && (!paths || paths.has(p))), 'QA_QUALITY', `Unknown quality evidence path for ${check.axis}`);
@@ -92,16 +95,17 @@ export function validateQualityChecks(report, context, paths) {
         }
         if (check.status === 'fail')
             invariant(check.findingIds.some(id => report.findings.some(f => f.id === id &&
-                f.severity !== 'minor' && validRelativePath(f.path) && (!paths || paths.has(f.path)) && f.description.trim().length > 0)), 'QA_QUALITY', `Quality failure for ${check.axis} requires a concrete blocking finding with a real path`);
+                findingRequiresFix(f) && validRelativePath(f.path) && (!paths || paths.has(f.path)) && f.description.trim().length > 0)), 'QA_QUALITY', `Quality failure for ${check.axis} requires a concrete blocking finding with a real path`);
     }
     if (report.verdict === 'pass') {
+        invariant(!report.findings.some(findingRequiresFix), 'QA_VERDICT', 'QA pass contradicts findings requiring correction');
         if (context?.enabled)
             assertRequiredEvidence(context.validation);
         invariant(checks.every(c => c.status === 'pass' || c.status === 'not_applicable'), 'QA_QUALITY', 'QA pass contradicts failed or unknown quality evidence');
     }
     if (context?.enabled && report.verdict === 'changes_requested')
-        invariant(report.findings.some(f => f.severity !== 'minor') ||
-            [...checks, ...(report.criteria ?? []), ...(report.decisionChecks ?? []), ...(report.securityChecks ?? [])].some(c => c.status === 'fail' || c.status === 'unknown'), 'QA_QUALITY', 'Minor observations alone do not justify changes_requested or an implementation repair');
+        invariant(report.findings.some(findingRequiresFix) ||
+            [...checks, ...(report.criteria ?? []), ...(report.decisionChecks ?? []), ...(report.securityChecks ?? [])].some(c => c.status === 'fail' || c.status === 'unknown'), 'QA_QUALITY', 'Minor observations without required corrections alone do not justify changes_requested or an implementation repair');
 }
 export function qualityMarkdown(context) {
     return ['## Required validation', '', ...context.validation.requirements.map(r => `- ${r.id}: ${r.receiptIds.length && !r.missingPaths.length ? 'observed' : 'MISSING'}; ${r.reason} Receipts: ${r.receiptIds.join(', ') || 'none'}; uncovered paths: ${r.missingPaths.join(', ') || 'none'}`),

@@ -14,7 +14,7 @@ const STAGES = ['Brouillon', 'Approuvée', 'Tâches', 'Contrôles', 'QA', 'Revue
 
 const state = {
   csrf: '', specs: [], project: null, filter: 'active', query: '', selected: null, view: 'home', detail: null, events: [],
-  tab: 'overview', showTech: false, jobs: [], preview: null,
+  tab: 'overview', showTech: false, jobs: [], preview: null, expanded: new Set(),
 };
 
 // ---------- helpers ----------
@@ -83,6 +83,84 @@ async function api(path, options = {}) {
   return data;
 }
 
+// Keep long provider output available without making it the main reading surface.
+function excerpt(value, limit = 180) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= limit) return text;
+  const cut = text.lastIndexOf(' ', limit);
+  return text.slice(0, cut > limit / 2 ? cut : limit) + '…';
+}
+function inlineCode(value) {
+  return String(value || '').split(/(`[^`\n]+`)/g).map(part =>
+    part.startsWith('`') && part.endsWith('`') ? h('code', { text: part.slice(1, -1) }) : part);
+}
+function disclosure(key, attrs, ...children) {
+  const id = `${state.selected}:${key}`;
+  return h('details', { ...attrs, open: state.expanded.has(id), ontoggle: event => {
+    if (!event.target.isConnected) return;
+    if (event.target.open) state.expanded.add(id); else state.expanded.delete(id);
+  } }, ...children);
+}
+function failureSummary(error) {
+  const stops = {
+    PROVIDER_QUOTA: ['Quota fournisseur atteint', 'Le travail est conservé. Attendez le rétablissement de votre quota avant de reprendre.'],
+    PROVIDER_RATE_LIMIT: ['Requêtes limitées par le fournisseur', 'Attendez avant de reprendre. Le contrôleur ne connaît pas la date de rétablissement.'],
+    PROVIDER_UNAVAILABLE: ['Fournisseur indisponible', 'Vérifiez sa disponibilité avant de reprendre le travail conservé.'],
+    AGENT_TIMEOUT: ['Délai de l’agent dépassé', 'Inspectez le travail conservé et le temps de cette étape avant de reprendre.'],
+    PROVIDER_TURNS: ['Nombre de tours atteint', 'Examinez la progression avant d’ajuster les tours autorisés.'],
+    PROVIDER_BUDGET: ['Plafond monétaire configuré atteint', 'Vérifiez le mode d’usage. Ce plafond ne représente pas le quota de votre abonnement.'],
+    COST_BUDGET: ['Plafond total configuré atteint', 'Vérifiez le mode d’usage et le plafond de la spec.'],
+    MODEL_SELECTION: ['Modèle à renseigner', 'Choisissez explicitement un modèle pour chaque rôle concerné.'],
+    REPAIR_NO_PROGRESS: ['Réparation sans progrès', 'Les mêmes erreurs persistent. Examinez le diagnostic et le périmètre avant une nouvelle tentative.'],
+    REPAIR_NO_CHANGE: ['Réparation sans changement', 'Le candidat est inchangé. Examinez le diagnostic avant de relancer.'],
+  };
+  if (stops[error.code]) return { title: stops[error.code][0], message: stops[error.code][1] };
+  const raw = String(error.message || '');
+  // Only interpret the controller's headline, never text buried in a provider JSON envelope.
+  const headline = raw.split(/\s+(?:stdout|stderr):|[\r\n]|\{/i)[0];
+  const role = /^(qa|product|design|implementer) failed:/i.exec(headline)?.[1]?.toLowerCase();
+  const who = ({ qa: 'La QA', product: 'Product', design: 'Design', implementer: 'L’Implementer' })[role] || 'L’agent';
+  if (/provider stopped it at its cost ceiling/i.test(headline)) {
+    const turns = /spent: (\d+) turns/i.exec(headline)?.[1];
+    const cost = /([\d.]+) USD declared/i.exec(headline)?.[1];
+    const elapsed = /after (\d+) ms/i.exec(headline)?.[1];
+    return { title: `${who} a atteint son plafond de coût`, message: [
+      turns ? `${turns} tours` : null, elapsed ? duration(Number(elapsed)) : null,
+      cost ? `${Number(cost).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $ déclarés par le fournisseur` : null,
+    ].filter(Boolean).join(' · ') || 'Le fournisseur a interrompu cet appel.' };
+  }
+  return { title: null, message: excerpt(headline || raw, 280) || 'Consultez le diagnostic pour connaître la cause.' };
+}
+function errorDiagnostic(error, key, withTitle = true) {
+  const summary = failureSummary(error);
+  const raw = `${error.code || 'ERREUR'} — ${error.message || ''}`;
+  return h('div', { class: 'diagnostic' },
+    h('p', { class: 'diagnostic__summary', text: [withTitle ? summary.title : null, summary.message].filter(Boolean).join(' — ') }),
+    disclosure(`error:${key}`, { class: 'diagnostic__details' },
+      h('summary', { text: 'Détails techniques' }),
+      h('div', { class: 'diagnostic__tools' }, copyButton(raw, 'Copier le diagnostic')),
+      h('pre', { class: 'diagnostic__raw', text: raw })));
+}
+function architecturePanel(architecture) {
+  const field = (label, value) => value && (!Array.isArray(value) || value.length) ? h('div', { class: 'architecture__field' },
+    h('dt', { text: label }), h('dd', {}, Array.isArray(value) ? list(value, inlineCode) : inlineCode(value))) : null;
+  return h('section', { class: 'architecture', 'aria-label': 'Décisions d’architecture' },
+    h('div', { class: 'architecture__head' }, h('h2', { text: 'Décisions d’architecture' }),
+      h('span', { class: 'architecture__count', text: `${architecture.decisions.length} choix à examiner` })),
+    disclosure('architecture:context', { class: 'architecture__context' },
+      h('summary', { text: 'Lire la synthèse' }), h('p', {}, inlineCode(architecture.summary))),
+    ...architecture.decisions.map((item, index) => disclosure(`architecture:${index}`, { class: 'architecture__decision' },
+      h('summary', { class: 'architecture__summary' },
+        h('span', { class: 'architecture__number', 'aria-hidden': 'true', text: String(index + 1).padStart(2, '0') }),
+        h('span', { class: 'architecture__preview', text: excerpt(item.decision.replace(/`/g, ''), 160) })),
+      h('div', { class: 'architecture__body' },
+        h('p', { class: 'architecture__choice' }, inlineCode(item.decision)),
+        h('dl', { class: 'architecture__fields' },
+          field('Pourquoi ce choix', item.rationale), field('Contrainte', item.constraint),
+          field('Solution plus simple', item.simplerAlternative), field('Autres solutions', item.alternatives),
+          field('Compromis', item.tradeoffs), field('Risques', item.risks), field('À reconsidérer si', item.reconsiderWhen))))));
+}
+
 // ---------- what a spec needs ----------
 function needs(s) {
   const code = s.error && s.error.code;
@@ -93,8 +171,8 @@ function needs(s) {
   if (s.status === 'awaiting_review') return 'Candidat à relire';
   if (s.status === 'blocked') return ({
     SCOPE_AMENDMENT_REQUIRED: 'Amendement de périmètre à approuver', MERGED_BEFORE_REVIEW: 'PR fusionnée : revue à enregistrer',
-    QA_REJECTED: 'QA rejetée : suite à décider', QA_EVIDENCE: 'QA : preuves à compléter', STALE_EVIDENCE: 'Preuve expirée : revalider', NO_CHANGE: 'Tentative sans changement : relancer ou suivre',
-  })[code] || `Bloquée : ${code || 'inconnu'}`;
+    QA_REVIEW_AUTHORIZATION: 'QA : méthode de vérification à clarifier', QA_BUDGET: 'QA : budget de reprise à ajuster', QA_REJECTED: 'QA rejetée : suite à décider', QA_EVIDENCE: 'QA : preuves à compléter', STALE_EVIDENCE: 'Preuve expirée : revalider', NO_CHANGE: 'Tentative sans changement : relancer ou suivre',
+  })[code] || failureSummary(s.error || {}).title || `Bloquée : ${code || 'inconnu'}`;
   if (s.status === 'ready') return s.publication && s.publication.url ? 'PR à fusionner' : 'À intégrer, puis clôturer';
   if (s.status === 'delivered') return 'À intégrer, puis clôturer';
   return null;
@@ -365,7 +443,7 @@ function decision(d) {
   if (code === 'SCOPE_AMENDMENT_REQUIRED') primary.push(btn('Examiner l\'amendement', () => { state.tab = 'amendments'; renderDetail(); }, 'btn btn--primary'));
   if (code === 'QA_EVIDENCE') primary.push(btn('Examiner les preuves', () => { state.tab = 'qa'; renderDetail(); }, 'btn btn--primary'));
   if (s.status === 'awaiting_review' || code === 'MERGED_BEFORE_REVIEW') primary.push(btn('Enregistrer ma revue', () => reviewDialog(d), 'btn btn--primary'));
-  if (d.approval && !d.busy && ['approved', 'running', 'blocked'].includes(s.status) && !['SCOPE_AMENDMENT_REQUIRED', 'QA_REJECTED', 'QA_EVIDENCE', 'MERGED_BEFORE_REVIEW'].includes(code))
+  if (d.approval && !d.busy && ['approved', 'running', 'blocked'].includes(s.status) && !['SCOPE_AMENDMENT_REQUIRED', 'QA_REJECTED', 'QA_EVIDENCE', 'QA_REVIEW_AUTHORIZATION', 'QA_BUDGET', 'MERGED_BEFORE_REVIEW'].includes(code))
     (primary.length ? secondary : primary).push(btn(s.status === 'blocked' ? 'Reprendre l\'exécution' : 'Lancer l\'exécution', () => job(`/api/specs/${s.id}/run`, 'Exécution lancée'), primary.length ? 'btn' : 'btn btn--primary', d.busy));
   if (code === 'COST_BUDGET') {
     primary.push(btn('Autoriser le dépassement', () => confirmDialog('Continuer au-delà du plafond de coût',
@@ -394,11 +472,12 @@ function decision(d) {
       h('span', { class: 'decision__title', text: title }),
       work ? h('p', { class: 'decision__work' }, h('span', { text: work.what }),
         h('span', { class: 'muted', text: [work.provider, `depuis ${hhmm(work.since)}`].filter(Boolean).join(' · ') })) : null,
-      s.status === 'blocked' && s.error ? h('p', { class: 'muted', text: s.error.message }) : null,
       s.status === 'draft' && s.hash ? h('span', { class: 'hash' }, 'hash', h('code', { text: s.hash }), copyButton(s.hash)) : null,
       s.status === 'awaiting_review' ? h('span', { class: 'hash' }, 'candidat', h('code', { text: s.candidateSha })) : null,
       s.publication && s.publication.url ? h('a', { href: s.publication.url, target: '_blank', rel: 'noopener noreferrer', text: s.publication.url }) : null),
     h('div', { class: 'decision__actions' }, primary, secondary),
+    !d.busy && s.error ? h('div', { class: 'decision__diagnostic' }, errorDiagnostic(s.error, 'workflow', s.status !== 'blocked'),
+      s.stop ? h('p', { text: s.stop.action }) : null) : null,
     // While an agent works, the stored next action describes the state before it finished.
     !d.busy && s.nextAction && s.nextAction.startsWith('apv2 ') ? h('div', { class: 'decision__cli' }, h('span', { class: 'label', text: 'terminal' }), h('pre', { text: s.nextAction }), copyButton(s.nextAction)) : null);
 }
@@ -406,26 +485,33 @@ function decision(d) {
 function overview(root, d) {
   add(root,
     h('p', { class: 'muted', text: `Parcours : ${{ compact: 'tâche compacte', standard: 'Product court et QA ciblée', structural: 'architecture et validation renforcée', legacy: 'configuration existante' }[d.summary.executionPath || 'legacy']}.` }),
-    d.cost ? h('p', { class: 'muted', text: `Coût connu : ${(d.cost.knownUsd ?? d.cost.declaredUsd ?? 0).toFixed(2)} $${d.cost.ceilingUsd ? ` / ${d.cost.ceilingUsd.toFixed(2)} $` : ''} · ${d.cost.unknownInvocations ?? 0} appel(s) au coût inconnu · ${d.cost.pendingInvocations ?? 0} appel(s) sans résultat. Échecs inclus ; montant déclaré, pas une facture.` }) : null,
-    h('p', { class: 'muted', text: `Temps actif : ${duration((d.summary.planningMs ?? 0) + d.summary.activeMs)} · préparation : ${duration(d.summary.planningMs ?? 0)} · exécution : ${duration(d.summary.activeMs)}.` }));
+    d.cost ? h('p', { class: 'muted', text: `Estimation déclarée : ${(d.cost.knownUsd ?? d.cost.declaredUsd ?? 0).toFixed(2)} $ · ${d.cost.ceilingUsd == null ? 'aucun plafond total actif' : `plafond hors abonnement : ${d.cost.ceilingUsd.toFixed(2)} $ · comptabilisé : ${(d.cost.budget?.knownUsd ?? d.cost.knownUsd ?? 0).toFixed(2)} $`} · ${d.cost.unknownInvocations ?? 0} appel(s) au coût inconnu · ${d.cost.pendingInvocations ?? 0} appel(s) sans résultat. Ce montant n’est ni une facture ni votre quota.` }) : null,
+    h('p', { class: 'muted', text: `Temps actif : ${duration((d.summary.planningMs ?? 0) + d.summary.activeMs)} · planification : ${duration(d.summary.planningMs ?? 0)} · exécution : ${duration(d.summary.activeMs)}.` }));
   const c = d.content;
+  if (d.summary.timing) {
+    const timing = d.summary.timing;
+    const labels = { product: 'Product', architecture: 'Architecture', design: 'Design', preparation: 'Préparation des espaces', implementer: 'Implémentation', validation: 'Contrôles', qa: 'QA' };
+    add(root, disclosure('phase-times', { class: 'sheet' }, h('summary', { class: 'sheet__cell', text: 'Temps par étape' }),
+      h('div', { class: 'sheet__cell' }, ...timing.phases.map(p => h('p', { text: `${labels[p.phase] || p.phase} : ${duration(p.durationMs)}` })),
+        h('p', { text: `Vérification des modèles : ${duration(timing.preflightMs)}` }),
+        ...timing.active.map(p => h('p', { text: `Appel sans résultat enregistré : ${p.role} · ${duration(p.elapsedMs)} écoulées` })),
+        h('p', { class: 'muted', text: 'Réparations incluses. Les contrôles parallèles sont mesurés par durée de phase. Un appel sans résultat ne prouve pas que le processus est encore vivant.' }),
+        timing.historicalPartial ? h('p', { class: 'muted', text: 'Historique partiel : certains anciens rôles ne mesurent que le temps du processus.' }) : null)));
+  }
   if (d.summary.models?.length) add(root, h('details', { class: 'sheet' },
     h('summary', { class: 'sheet__cell', text: 'Modèles choisis par rôle' }),
     h('div', { class: 'sheet__cell' }, h('p', { class: 'muted', text: 'QA peut utiliser un modèle distinct. Les contrôles de compatibilité sont visibles dans l’activité ; ils ne mesurent pas la qualité du code.' }),
       ...d.summary.models.filter(m => m.lane !== 'fast').map(m => h('p', {},
         h('strong', { text: `${m.role} · ${m.lane} : ` }),
         h('span', { text: `${m.provider} / ${m.model || 'défaut du fournisseur non fixé'} · effort ${m.effort}${m.role === 'qa' && m.effectiveLane === 'high' ? ' · revue approfondie' : ''}` }),
-        h('span', { class: 'muted', text: ` — ${m.source}` }))))));
+        h('span', { class: 'muted', text: ` — ${m.source} · ${{ subscription: 'abonnement, sans plafond USD', metered: 'usage facturé', legacy: 'mode historique' }[m.usageMode || 'legacy']}` }),
+        h('small', { class: 'model-choice__reason', text: m.decision ? `Règles ${m.decision.policyVersion} : ${m.decision.reasons.join(' · ')}` : m.reason || '' }))))));
   const architecture = d.summary.architecture;
-  if (architecture) add(root, h('section', { class: 'sheet' }, h('div', { class: 'sheet__cell' },
-    h('h2', { text: 'Décision d’architecture' }), h('p', { text: architecture.summary }),
-    ...architecture.decisions.map(item => h('div', {}, h('h3', { text: item.decision }), h('p', { text: item.rationale }),
-      h('p', { text: `Alternatives : ${item.alternatives.join(' · ')}` }), h('p', { text: `Compromis : ${item.tradeoffs.join(' · ')}` }),
-      h('p', { text: `À reconsidérer si : ${item.reconsiderWhen.join(' · ')}` }))))));
+  if (c) add(root, h('p', { class: 'lead', text: c.problem }));
+  if (architecture) add(root, architecturePanel(architecture));
   if (!c) { add(root, h('p', { class: 'lead muted', text: 'Product n\'a pas encore produit de contenu.' }), h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Demande' }), h('pre', { text: d.request })))); return; }
   const sec = c.security || {};
   add(root, 
-    h('p', { class: 'lead', text: c.problem }),
     h('div', { class: 'sheet' },
       h('div', { class: 'sheet__row' },
         h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Périmètre' }), list(c.scope || [])),
@@ -477,7 +563,7 @@ function attemptBlock(a, label) {
     h('div', { class: 'attempt__head' }, h('strong', { text: label }), pill(runSignal(a.state), RUN_STATE[a.state] || a.state), a.lane ? h('span', { class: 'mono', text: `voie ${a.lane}` }) : null, h('span', { class: 'mono muted', text: shortId(a.runId) }),
       a.costUsd ? h('span', { class: 'mono muted', title: 'Coût déclaré par le fournisseur', text: `${a.costUsd.toFixed(2)} $${a.providerTurns ? ` · ${a.providerTurns} tours` : ''}` }) : null),
     gates(a.receipts),
-    a.error ? h('p', { class: 'error', text: `${a.error.code} — ${a.error.message}` }) : null,
+    a.error ? errorDiagnostic(a.error, a.runId) : null,
     a.summary ? h('details', {}, h('summary', { text: 'Résumé de l\'agent' }), h('pre', { text: a.summary })) : null);
 }
 function tasks(root, d) {
@@ -589,11 +675,11 @@ function qa(root, d) {
         h('strong', { text: axes[x.axis] || x.axis }), h('p', { text: x.evidence }),
         h('p', { class: 'mono muted', text: [...x.paths, ...x.receiptIds, ...x.findingIds].join(' · ') })]))) : null,
     (r.findings || []).length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Constats' }),
-      list(r.findings, f => [pill(f.severity === 'minor' ? 'wait' : 'bad', f.severity), ' ', f.path ? h('code', { text: f.path }) : null, h('p', { text: f.description })]))) : null,
+      list(r.findings, f => [pill(f.severity === 'minor' ? 'wait' : 'bad', f.severity), ' ', pill(f.severity !== 'minor' || f.resolution === 'required' ? 'bad' : 'wait', f.severity !== 'minor' || f.resolution === 'required' ? 'Correction requise' : 'Observation'), ' ', f.path ? h('code', { text: f.path }) : null, h('p', { text: f.description })]))) : null,
     (r.observations || []).length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Observations' }), list(r.observations))) : null,
     (r.negativeTestChecks || []).length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Tests négatifs' }),
       list(r.negativeTestChecks, x => [pill(x.status === 'pass' ? 'ok' : 'wait', `${x.requirementId}[${x.testIndex}]`), h('p', { text: x.evidence }),
-        h('p', { class: 'mono muted', text: [...x.paths, ...x.receiptIds].join(' · ') })]))) : null,
+        h('p', { class: 'mono muted', text: [x.status === 'review' ? 'Revue, sans preuve de test' : x.status, ...x.paths.map(p => x.status === 'review' ? `Inspecté : ${p}` : p), ...x.receiptIds, ...(x.inspectedPaths || []).map(p => `Inspecté : ${p}`)].join(' · ') })]))) : null,
     (r.securityChecks || []).length ? h('div', { class: 'sheet' }, h('div', { class: 'sheet__cell' }, h('span', { class: 'label', text: 'Exigences de sécurité' }),
       list(r.securityChecks, x => [pill(x.status === 'pass' ? 'ok' : x.status === 'fail' ? 'bad' : 'wait', x.requirementId), h('span', { class: 'muted', text: ` ${x.evidence}` })]))) : null);
 }
@@ -627,7 +713,9 @@ function amendments(root, d) {
         `La tâche ${a.taskId} pourra modifier : ${a.paths.join(', ')}.`, (note) => api(`/api/specs/${d.summary.id}/scope-amendments/${a.id}/approve`, { body: { note } }), 'Amendement approuvé') }, 'Approuver')) : h('p', { class: 'muted', text: a.note || '' }))),
     crit.map(a => h('div', { class: 'amend' }, head(a, `Critère ${a.criterionId}`),
       h('p', { class: 'strike', text: a.previous.description }), h('p', { text: a.description }), h('p', { class: 'muted', text: `Motif : ${a.reason}` }),
-      (a.requirements || []).length ? list(a.requirements, r => [h('code', { text: r.id }), ' ', h('span', { class: 'strike', text: r.previous }), ' → ', r.verification]) : null,
+      (a.requirements || []).length ? list(a.requirements, r => [h('code', { text: r.id }), ' ', h('span', { class: 'strike', text: r.previous }), ' → ', r.verification,
+        ...(r.negativeTests || []).flatMap((text, index) => text !== r.previousNegativeTests?.[index] ? [h('p', { text: `Cas négatif ${index} : ${text}` })] : []),
+        ...(r.reviewTests || []).map(test => h('p', { text: `Cas négatif ${test.index} : autoriser une revue au lieu d’une preuve de test — ${test.previous}` }))]) : null,
       a.status === 'pending' ? h('div', { class: 'decision__actions' }, h('button', { class: 'btn btn--primary', type: 'button', onclick: () => noteDialog('Approuver la correction du critère',
         `Hash : ${a.hash}`, (note) => api(`/api/specs/${d.summary.id}/criterion-amendments/${a.id}/approve`, { body: { hash: a.hash, note } }), 'Correction approuvée') }, 'Approuver')) : h('p', { class: 'muted', text: a.note || '' })))));
 }
@@ -655,12 +743,23 @@ const noteValue = () => document.getElementById('dlg-note').value;
 function noteDialog(title, text, send, done) { openDialog(title, [h('p', { text }), field('Note', noteField())], async () => { await send(noteValue()); toast(done); }, 'Approuver'); }
 function confirmDialog(title, text, send, done) { openDialog(title, h('p', { text }), async () => { await send(); toast(done); }); }
 function budgetDialog(d) {
-  const cost = h('input', { type: 'number', min: '0.01', max: '10000', step: '0.01', value: String(d.cost?.ceilingUsd ?? 25) });
+  const ceiling = d.cost?.configuredCeilingUsd ?? d.cost?.ceilingUsd;
+  const cost = h('input', { type: 'number', min: '0.01', max: '10000', step: '0.01', value: ceiling == null ? '' : String(ceiling), placeholder: 'Aucun plafond' });
   const minutes = h('input', { type: 'number', min: '1', max: '240', step: '1', value: String(Math.ceil((d.summary.maxActiveMs ?? 3600000) / 60000)) });
+  const choices = ['product', 'design', 'implementer', 'qa'].map(role => {
+    const current = d.summary.models?.find(m => m.role === role && m.lane === 'standard');
+    const mode = h('select', {}, ...[['legacy', 'Conserver les plafonds historiques'], ['subscription', 'Abonnement — sans plafond USD'], ['metered', 'Usage facturé — plafonds configurés']].map(([value, text]) => h('option', { value, text, selected: (current?.usageMode || 'legacy') === value })));
+    const model = h('input', { type: 'text', value: current?.model || '', placeholder: 'Identifiant du modèle' });
+    return { role, current, mode, model };
+  });
   openDialog('Ajuster les limites de la spec', [
-    h('p', { text: 'Ces limites incluent le travail déjà consommé. Leur modification est inscrite dans l’historique ; le contenu approuvé reste identique.' }),
-    field('Plafond total en dollars', cost), field('Temps total de travail en minutes', minutes), field('Motif', noteField())],
-    async () => { await api(`/api/specs/${d.summary.id}/budget`, { body: { limits: { maxSpecCostUsd: Number(cost.value), maxActiveMs: Number(minutes.value) * 60000 }, note: noteValue() } }); toast('Limites ajustées'); }, 'Enregistrer');
+    h('p', { text: 'Le mode abonnement retire les plafonds monétaires du rôle, sans modifier votre connexion ni les quotas du fournisseur. Les modèles renseignés ici remplacent les profils de ce rôle pour cette spec ; une nouvelle QA invalide la revue précédente.' }),
+    ...choices.flatMap(c => [field(`${c.role} — mode d’usage`, c.mode), field(`${c.role} — modèle`, c.model)]),
+    field('Plafond total hors abonnement en dollars (vide : désactivé)', cost), field('Temps total de travail en minutes', minutes), field('Motif', noteField())],
+    async () => {
+      const roles = Object.fromEntries(choices.map(c => [c.role, { usageMode: c.mode.value, ...(c.model.value.trim() !== (c.current?.model || '') ? { model: c.model.value.trim() } : {}) }]));
+      await api(`/api/specs/${d.summary.id}/budget`, { body: { limits: { roles, maxSpecCostUsd: cost.value.trim() ? Number(cost.value) : null, maxActiveMs: Number(minutes.value) * 60000 }, note: noteValue() } }); toast('Réglages enregistrés');
+    }, 'Enregistrer');
 }
 function approveDialog(d) {
   openDialog('Approuver la spec', [

@@ -33,7 +33,7 @@ export function validationEvidence(run: Run) {
 
 const guidance: Record<typeof qualityAxes[number], string> = {
   architecture: 'Check existing boundaries, dependency direction and the approved architecture decision; a local edit needs no new ADR or pattern.',
-  simplicity: 'Name a present need for new abstractions; avoid speculative frameworks and arbitrary line-count rules.',
+  simplicity: 'Name a present need for new abstractions. Check code made unused and documentation made false by this change; require their correction with concrete paths and caller/entry-point evidence. Avoid speculative frameworks and arbitrary line-count rules.',
   reuse: 'Compare responsibilities with existing modules, not just names. Explain parallel implementations with actual paths.',
   tests: 'Inspect behavior, boundary/negative cases and regression relevance. Cite final behavioral-test receipts; do not invent a pre-change failing run.',
   operations: 'Assess partial writes, migrations, cancellation, retries, idempotence and diagnostics only where the change needs them.',
@@ -70,7 +70,12 @@ export function assertRequiredEvidence(validation: { requirements: (ValidationRe
 export type QualityContext = ReturnType<typeof qualityContext>;
 type Review = { verdict: string; qualityChecks?: QualityCheck[]; criteria?: { status: string }[];
   decisionChecks?: { status: string }[]; securityChecks?: { status: string }[];
-  findings: { id: string; severity: string; path: string; description: string }[] };
+  findings: { id: string; severity: string; resolution?: 'required' | 'advisory'; path: string; description: string }[] };
+
+/** Severity describes impact; a small correction can still be required for delivery. */
+export function findingRequiresFix(finding: { severity: string; resolution?: string }): boolean {
+  return finding.severity !== 'minor' || finding.resolution === 'required';
+}
 
 /** References are checked against controller data. Their semantic adequacy remains a reviewer judgement. */
 export function validateQualityChecks(report: Review, context?: QualityContext, paths?: ReadonlySet<string>): void {
@@ -80,7 +85,7 @@ export function validateQualityChecks(report: Review, context?: QualityContext, 
   invariant(new Set(axes).size === axes.length, 'QA_QUALITY', 'Duplicate quality axis');
   if (context?.enabled) invariant(qualityAxes.every(axis => axes.includes(axis)) && checks.length === qualityAxes.length,
     'QA_QUALITY', 'QA quality review must assess each axis exactly once');
-  if (context?.enabled) invariant(report.findings.every(f => f.severity === 'minor' ||
+  invariant(report.findings.every(f => !(f.resolution === 'required' || context?.enabled && findingRequiresFix(f)) ||
     validRelativePath(f.path) && (!paths || paths.has(f.path)) && f.description.trim().length > 0),
   'QA_QUALITY', 'Blocking quality findings require a real repository path and concrete evidence');
   for (const check of checks) {
@@ -100,17 +105,18 @@ export function validateQualityChecks(report: Review, context?: QualityContext, 
       }
     }
     if (check.status === 'fail') invariant(check.findingIds.some(id => report.findings.some(f => f.id === id &&
-      f.severity !== 'minor' && validRelativePath(f.path) && (!paths || paths.has(f.path)) && f.description.trim().length > 0)),
+      findingRequiresFix(f) && validRelativePath(f.path) && (!paths || paths.has(f.path)) && f.description.trim().length > 0)),
     'QA_QUALITY', `Quality failure for ${check.axis} requires a concrete blocking finding with a real path`);
   }
   if (report.verdict === 'pass') {
+    invariant(!report.findings.some(findingRequiresFix), 'QA_VERDICT', 'QA pass contradicts findings requiring correction');
     if (context?.enabled) assertRequiredEvidence(context.validation);
     invariant(checks.every(c => c.status === 'pass' || c.status === 'not_applicable'),
       'QA_QUALITY', 'QA pass contradicts failed or unknown quality evidence');
   }
-  if (context?.enabled && report.verdict === 'changes_requested') invariant(report.findings.some(f => f.severity !== 'minor') ||
+  if (context?.enabled && report.verdict === 'changes_requested') invariant(report.findings.some(findingRequiresFix) ||
     [...checks, ...(report.criteria ?? []), ...(report.decisionChecks ?? []), ...(report.securityChecks ?? [])].some(c => c.status === 'fail' || c.status === 'unknown'),
-    'QA_QUALITY', 'Minor observations alone do not justify changes_requested or an implementation repair');
+    'QA_QUALITY', 'Minor observations without required corrections alone do not justify changes_requested or an implementation repair');
 }
 
 export function qualityMarkdown(context: QualityContext): string {

@@ -13,7 +13,7 @@ Les lots d'amélioration du 18 septembre suivent la livraison initiale alpha.8, 
 1. Terminer ou abandonner explicitement les specs actives avec leur distribution d'origine. Arrêter les processus avant de sauvegarder le dépôt et le store complet, y compris SQLite, WAL/SHM éventuels et workspaces. Ne pas migrer les documents approuvés en place.
 2. Mettre à jour le framework entre deux specs. Utiliser `apv2 inspect --repo PATH` pour examiner configuration et dérive des guides installés. Le runtime charge rôles et skills depuis le package ; les copies du projet ne les remplacent pas.
 3. Préserver `pipeline.v2.json`, les commandes, permissions et conventions du projet. Les champs absents `workflow.planningMode` et `workflow.qualityReview` restent `legacy`. Les nouvelles configurations `init`/onboarding proposent, elles, `adaptive` et `evidence`.
-4. Pour activer les nouveaux comportements, fusionner les réglages suivants dans une configuration revue. Ajouter les labels `covers`, les mappings `testPaths` et les règles locales nécessaires aux **commandes réellement présentes** : [guide de qualité](LOT-3-QUALITE.md#activation-et-compatibilité).
+4. Pour activer les nouveaux comportements, fusionner les réglages suivants dans une configuration revue. Ajouter les labels `covers`, les mappings `testPaths` et les règles locales nécessaires aux **commandes réellement présentes** : [guide de qualité](QUALITY.md#activation-et-compatibilité).
 5. Contrôler le diff de configuration, calibrer les commandes avec `doctor --execute` lorsque leur exécution est autorisée, puis créer une nouvelle spec. Une gate manquante ne doit pas être remplacée par un faux succès.
 
 ```json

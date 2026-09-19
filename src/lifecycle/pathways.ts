@@ -4,6 +4,7 @@ import { specSchema, securityPlanSchema, type Spec, type SpecRecord } from './co
 import { assessSecurity, type SecurityContext } from '../security/owasp.js';
 import { matches } from '../policy/policy.js';
 import { changeLanguage } from '../security/change-signals.js';
+import { decisionRecord } from '../policy/decision.js';
 
 export type ExecutionPath = 'compact' | 'standard' | 'structural';
 const id = s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
@@ -36,10 +37,21 @@ export type Architecture = Infer<typeof architectureSchema>;
 
 /** Conservative route selection. A more demanding route never falls back during a draft. */
 export function selectPath(request: string, security: SecurityContext, current?: ExecutionPath): ExecutionPath {
+  return pathDecision(request, security, current).result.path;
+}
+export function pathDecision(request: string, security: SecurityContext, current?: ExecutionPath, decisionCount = 0) {
   const text = changeLanguage(request).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (current === 'structural' || security.minimumLane === 'high' || security.requiresThreatModel ||
-    /\b(migrat\w*|refonte|architectur\w*|breaking change|public (?:api|interface))\b/i.test(text)) return 'structural';
-  return current ?? 'standard';
+  return resolvePathDecision({ current: current ?? 'standard', minimumLane: security.minimumLane,
+    requiresThreatModel: security.requiresThreatModel, decisionCount,
+    structuralLanguage: /\b(migrat\w*|refonte|architectur\w*|breaking change|public (?:api|interface))\b/i.test(text) });
+}
+export function resolvePathDecision(inputs: { current: ExecutionPath; minimumLane: string; requiresThreatModel: boolean; decisionCount: number; structuralLanguage: boolean }) {
+  const reasons = [inputs.current === 'structural' ? 'structural-path-retained' : '',
+    inputs.minimumLane === 'high' ? 'high-security-risk' : '', inputs.requiresThreatModel ? 'threat-model-required' : '',
+    inputs.structuralLanguage ? 'structural-change-requested' : '',
+    inputs.current === 'standard' && inputs.decisionCount > 30 ? 'decision-ledger-exceeds-short-contract' : ''].filter(Boolean);
+  const path: ExecutionPath = reasons.length ? 'structural' : inputs.current;
+  return decisionRecord('execution-path', inputs, { path }, reasons.length ? reasons : [`${path}-path-retained`]);
 }
 
 /** Compact skips model QA only while observed changes remain inside the approved compact envelope. */
