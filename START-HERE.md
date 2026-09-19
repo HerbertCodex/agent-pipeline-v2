@@ -2,6 +2,13 @@
 
 Ce prompt est destiné à l'assistant principal qui travaille avec vous. Il peut partir d'une URL GitHub, d'un dépôt local ou d'un nouveau projet. Le but est de garder le workflow fluide : **l'humain décide du produit, du design et des effets externes ; le moteur gère la plomberie.**
 
+Les deux cas n'ont ni la même première commande ni les mêmes pièges :
+
+- **Dépôt vide ou sans premier commit** → [prompts/BOOTSTRAP.md](prompts/BOOTSTRAP.md), puis la section « NOUVEAU PROJET » ci-dessous.
+- **Projet déjà commencé, avec ou sans IA** → [prompts/ONBOARDING.md](prompts/ONBOARDING.md), puis la section « APPLICATION EXISTANTE / ONBOARDING » ci-dessous. Ce fichier signale aussi ce qu'un projet existant change : mode de qualité sans tests, chemins sensibles, amendements de périmètre.
+
+Ces deux fichiers sont des portes d'entrée, pas des copies : le déroulé complet reste ici.
+
 ## Prompt initial
 
 Remplacez uniquement les champs entre crochets. Si une information a déjà été donnée dans la conversation, l'assistant doit la réutiliser au lieu de la redemander.

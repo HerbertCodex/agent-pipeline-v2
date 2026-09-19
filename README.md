@@ -42,7 +42,7 @@ node dist/cli.js ui
 
 Le JavaScript compilé est livré dans le dépôt. Ouvrez l’adresse locale complète affichée par `ui` : elle contient un jeton d’accès à usage unique.
 
-**Pour démarrer avec votre assistant, utilisez le [prompt de démarrage](START-HERE.md).** Il couvre le choix du fournisseur, la création d’un projet et la configuration d’un dépôt existant.
+**Pour démarrer avec votre assistant, utilisez le [prompt de démarrage](START-HERE.md).** Il couvre le choix du fournisseur, la création d’un projet et la configuration d’un dépôt existant. Deux portes d'entrée selon le cas : [nouveau projet](prompts/BOOTSTRAP.md) pour un dépôt vide, [projet déjà commencé](prompts/ONBOARDING.md) pour un dépôt existant, avec ou sans historique d'assistance par IA.
 
 <details>
 <summary><strong>Vous préférez le terminal ?</strong></summary>
@@ -60,7 +60,7 @@ node dist/cli.js spec draft --repo /chemin/mon-application --request "Décrire l
 node dist/cli.js spec show SPEC_ID
 ```
 
-`spec show` indique ensuite l’action attendue : clarification, approbation, exécution ou revue. Pour un nouveau projet, utilisez [`bootstrap`](START-HERE.md). Le [guide du cycle de vie](docs/LIFECYCLE.md) décrit les commandes et les reprises.
+`spec show` indique ensuite l’action attendue : clarification, approbation, exécution ou revue. Pour un nouveau projet, utilisez [`bootstrap`](prompts/BOOTSTRAP.md) ; pour un dépôt existant, [`onboard`](prompts/ONBOARDING.md). Le [guide du cycle de vie](docs/LIFECYCLE.md) décrit les commandes et les reprises.
 
 </details>
 
