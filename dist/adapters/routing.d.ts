@@ -1,6 +1,5 @@
 import type { AgentConfig, Config, Lane } from '../domain/contracts.js';
 type ModelTarget = Pick<AgentConfig, 'model' | 'effort'>;
-/** Replayable model precedence, with only the inputs that influence selection. */
 export declare function resolveModelDecision(inputs: {
     role: ExecutionRole;
     lane: Lane;

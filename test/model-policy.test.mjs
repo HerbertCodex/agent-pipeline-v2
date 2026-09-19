@@ -189,3 +189,20 @@ test('onboard CLI accepts the selection file and rejects conflicting provider fl
  const invalid=spawnSync(process.execPath,[...args,'--provider','codex'],{encoding:'utf8',timeout:10000});
  assert.notEqual(invalid.status,0);assert.match(invalid.stderr,/Use --models FILE by itself/);
 });
+
+test('a configuration frozen before the model field existed can still be planned and listed', () => {
+  const config = validateConfig({ schemaVersion: 1, executionMode: 'local-trusted', environment: { id: 'legacy-shape' },
+    agent: { type: 'command', command: [process.execPath, '-e', 'process.exit(0)'] },
+    gates: [{ id: 'unit', command: ['npm', 'test'] }] });
+  assert.equal(config.agent.model, '', 'the contract fills the field for anything approved today');
+
+  // What an approval froze before the contract gained the field: the key is simply absent. Naming it
+  // in an object literal would turn that absence into undefined, which no identity can be computed
+  // over — and one such spec made the whole listing fail instead of just itself.
+  const { model: _model, effort: _effort, ...older } = config.agent;
+  const legacy = { ...config, agent: older };
+  const plan = modelPlan(legacy);
+  assert.ok(plan.length > 0);
+  assert.ok(plan.every(entry => entry.decision.inputHash.length === 64));
+  assert.deepEqual(roleAgent(legacy, 'implementer', 'standard').command, older.command);
+});
