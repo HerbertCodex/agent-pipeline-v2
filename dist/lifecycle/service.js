@@ -1384,8 +1384,14 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         r.review = { directory: root, candidateDirectory: candidate, patchPath, qaPath, reviewPath, candidateSha: final.candidateSha, bundleHash };
         this.save(doc, 'workflow.review_workspace_ready', { review: r.review });
     }
+    /**
+     * True when the run enforced the gates the spec requires, amendments included.
+     * Both sides go through the gate contract: a spec approved before a gate field existed stores
+     * gates without it, and comparing the stored shapes would block publication on a default value
+     * rather than on a real difference of command, coverage or scope.
+     */
     sameGates(r, run) {
-        const normalized = (config) => config.gates.map(g => ({ ...g, mandatory: true }));
+        const normalized = (config) => config.gates.map(g => ({ ...gateSchema.parse(g), mandatory: true }));
         return hash(normalized(this.runConfig(r))) === hash(normalized(run.config));
     }
     async reviewable(r) {
