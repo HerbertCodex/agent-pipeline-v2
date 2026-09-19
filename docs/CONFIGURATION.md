@@ -107,7 +107,7 @@ Les globs supportés sont `*`, `**` et `?`, avec `/` comme séparateur. Les croc
 
 `cacheTtlMs` vaut zéro par défaut. Une valeur positive n'est acceptée que pour un contrôle indépendant sans sorties déclarées. L'opérateur garantit qu'il est observationnel et suffisamment déterministe. Ne pas activer ce cache pour un scan dont les bases externes, la cible ou l'état réseau ne sont pas représentés dans l'environnement.
 
-La durée de vie d'une entrée concerne sa réutilisation au moment d'une validation. `validationMaxAgeMs`, une heure par défaut, borne séparément le délai avant approbation/export. Une revalidation efface les avis précédents. Le cache ne rafraîchit pas sa propre durée de vie par des lectures successives.
+La durée de vie d'une entrée concerne sa réutilisation au moment d'une validation. `validationMaxAgeMs`, vingt-quatre heures par défaut, borne séparément le délai avant approbation/export : il protège l'approbation contre une preuve qui ne décrit plus l'environnement, et sa valeur doit survivre à l'étape qu'il protège — une revue humaine. Une valeur inférieure à une heure est signalée par `configAdvice`, parce qu'une preuve expirée coûte un rejeu complet des contrôles et une nouvelle revue qualité sur un candidat que personne n'a touché. Une revalidation efface les avis précédents. Le cache ne rafraîchit pas sa propre durée de vie par des lectures successives.
 
 ## Budgets
 
