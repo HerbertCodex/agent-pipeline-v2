@@ -442,6 +442,8 @@ export interface SpecRecord {
     planningMs?: number;
     planningStartedAt?: number | null;
     operational?: { maxSpecCostUsd: number | null; maxActiveMs: number;
+        /** Retries allowed when a role returns a malformed output; execution-only, proves nothing less. */
+        maxOutputRepairs?: number;
         /** Execution-only gate changes: strictly more proof, never less. See amendBudget. */
         gates?: { add: import('../domain/contracts.js').Config['gates']; resources: Record<string, string[]>; timeoutMs: Record<string, number> }; agent: Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd' | 'usageMode'>> | null; roles?: Partial<Record<'product' | 'design' | 'implementer' | 'qa', Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd' | 'usageMode'>>>>; at: number; reviewer: string; note: string };
     delivery: {

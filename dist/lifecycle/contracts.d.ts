@@ -466,6 +466,8 @@ export interface SpecRecord {
     operational?: {
         maxSpecCostUsd: number | null;
         maxActiveMs: number;
+        /** Retries allowed when a role returns a malformed output; execution-only, proves nothing less. */
+        maxOutputRepairs?: number;
         /** Execution-only gate changes: strictly more proof, never less. See amendBudget. */
         gates?: {
             add: import('../domain/contracts.js').Config['gates'];

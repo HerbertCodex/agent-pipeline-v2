@@ -134,3 +134,30 @@ test('a spec refuses to run when its base commit is gone or the repository is di
   f.life.store.saveDocument(broken, 'test.base_missing');
   await assert.rejects(() => f.life.run(d.id));
 });
+
+test('a revalidation that failed can be run again once its cause is fixed', async t => {
+  const f = fixture(t);
+  f.config.workflow = { ...f.config.workflow, qaLanes: [], reviewMode: 'solo' };
+  const broken = join(f.root, 'environment-broken');
+  // A check that only fails while something outside the candidate is wrong: a missing tool, a service
+  // that is down, a flaky suite. The candidate never changes; only the world around it does.
+  f.config.gates = [...f.config.gates, { id: 'environment', command: [process.execPath, '-e',
+    `process.exit(require('node:fs').existsSync(${JSON.stringify(broken)}) ? 1 : 0)`] }];
+  let d = await approved(f, oneTask());
+  d = await f.life.run(d.id);
+  assert.equal(d.data.status, 'awaiting_review');
+
+  writeFileSync(broken, '');
+  d = await f.life.verify(d.id);
+  assert.equal(d.data.status, 'blocked');
+  assert.equal(d.data.error.code, 'GATES_FAILED');
+
+  // Refusing here left the spec with no way back to a complete validation: its only fault was one
+  // check that failed on a candidate nobody had touched.
+  rmSync(broken);
+  d = await f.life.run(d.id);
+  assert.equal(d.data.error, null, JSON.stringify(d.data.error));
+  assert.equal(f.life.pipeline.store.get(d.data.finalRunId).state, 'awaiting_review');
+  d = await f.life.review(d.id, d.data.currentSha, 'Reviewer Test', 'Reviewed the candidate once its environment was fixed.');
+  assert.equal(d.data.status, 'ready');
+});

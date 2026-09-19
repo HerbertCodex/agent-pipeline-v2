@@ -95,6 +95,8 @@ export declare class Lifecycle {
     private amendedGates;
     /** The configuration a run executes: the approved one, plus execution-only amendments. */
     runConfig(r: SpecRecord): Config;
+    /** Retries allowed on a malformed role output, as amended by the operator. */
+    private outputRepairs;
     amendBudget(id: string, input: unknown, actor: string, note: string): Document<SpecRecord>;
     refine(id: string, request: string, proposal?: unknown, signal?: AbortSignal): Promise<Document<SpecRecord>>;
     approveSpec(id: string, expectedHash: string, actor: string, note: string): Promise<Document<SpecRecord>>;
