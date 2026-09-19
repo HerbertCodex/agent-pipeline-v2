@@ -22,7 +22,7 @@ Le rapport conserve la version du fournisseur, le résultat, les limites et la d
 
 Après ce test de raccordement, mesurer plusieurs tâches représentatives contre un agent seul avec la CI existante. Conserver le même commit de départ, le fournisseur, le modèle, les critères et l'environnement. Comparer le temps jusqu'au changement accepté, les défauts, les interventions humaines et le coût. Les tâches réelles exigent de vraies approbations, jamais les identités de fixture.
 
-La disponibilité de ce script ne prouve pas son exécution avec un vrai compte. Le [bilan initial](../validation/VALIDATION.md) précise son périmètre historique. Une campagne distincte a ensuite utilisé `scripts/evaluate.mjs` avec Claude : [résultats initiaux](../validation/short-loop-2026-09-18/REPORT.md), [calibration](../validation/short-loop-2026-09-18/CALIBRATION.md) et [coûts connus ou réservés](../validation/short-loop-2026-09-18/calibration-spending.json). Ces cas ne couvrent ni un pilote Codex réel ni la nouvelle grille QA du lot 3.
+La disponibilité de ce script ne prouve pas son exécution avec un vrai compte. Une campagne distincte a utilisé `scripts/evaluate.mjs` avec Claude : [résultats initiaux](../validation/short-loop-2026-09-18/REPORT.md), [calibration](../validation/short-loop-2026-09-18/CALIBRATION.md) et [coûts connus ou réservés](../validation/short-loop-2026-09-18/calibration-spending.json). Ces cas ne couvrent ni un pilote Codex réel ni la nouvelle grille QA du lot 3.
 
 ## Pilote de réparation des sorties
 

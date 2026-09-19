@@ -1,100 +1,24 @@
-# Validation de la livraison 2.0.0-alpha.8
+# Preuves de validation
 
-> **Bilan historique.** Les résultats ci-dessous portent sur la livraison initiale alpha.8 et le pilote de réparation indiqué. Les lots du 18 septembre sont documentés séparément : [calibration](short-loop-2026-09-18/CALIBRATION.md) et [validation du lot 3](lot3-2026-09-18/summary.json). Ils partagent le même numéro de version, mais pas le même état du code.
+Ce dossier conserve les preuves utiles à la version testée et aux mesures citées dans les guides. Chaque résultat est daté : il ne certifie pas automatiquement les modifications ultérieures.
 
-Date : 2026-09-14.
+| Dossier | Preuves conservées |
+| --- | --- |
+| [Corrections QA — 19 septembre 2026](qa-cleanup-2026-09-19/README.md) | Suite finale **508/508**, contrôle du paquet installé hors ligne, vérifications UI et empreintes du code testé. |
+| [Interface et politique d’exécution — 19 septembre 2026](execution-policy-2026-09-19/README.md) | Vérifications Chromium à quatre largeurs, thèmes clair/sombre, diagnostics et formulaire d’abonnement. |
+| [Calibration Claude — 18 septembre 2026](short-loop-2026-09-18/CALIBRATION.md) | Appels réels sur de petits cas, résultats bruts, réussites, échecs, coûts et limites des mesures. |
 
-La [validation de la politique d’exécution du 19 septembre](execution-policy-2026-09-19/README.md) couvre séparément abonnements, décisions rejouables, diagnostics, reprises QA et interface.
+Les tests du contrôleur utilisent des fournisseurs simulés. Seule la calibration documente ici des appels réels ; elle ne mesure pas la qualité ou la vitesse d’une fonctionnalité complète.
 
-La [validation des corrections QA obligatoires](qa-cleanup-2026-09-19/README.md) couvre le nettoyage lié au changement et la distinction entre gravité et obligation de correction.
+## Reproduire les contrôles
 
-Cette validation porte sur le moteur alpha.8. Cette version conserve le Decision Ledger, la gestion structurée des ambiguïtés, le workflow fluide alpha.5/alpha.7 et ajoute une couche de sécurité OWASP-aware déterministe : SecurityProfile/SecurityContext, routage de sujets OWASP, threat modeling conditionnel, critères de sécurité, tests négatifs, sécurité supply-chain/CI et contrôles QA sécurité.
+```bash
+npm run check
+npm run check:package
+```
 
-## Environnement
+Les scripts navigateur et leurs prérequis sont décrits dans chaque dossier. Les tests de régression maintenus restent dans `test/`, les scripts courants dans `scripts/`.
 
-- Node.js : v22.16.0
-- npm : 10.9.2
-- TypeScript : 5.8.3
-- plateforme : Linux x86_64
-- aucune revendication d'appel authentifié à Codex, Claude ou GitHub
-- aucune revendication de résultat GitHub Actions distant pour cet arbre alpha.8 tant qu'il n'a pas été poussé
+## Entretien
 
-## Compilation et suite complète
-
-- `npm run typecheck` : réussi ;
-- `npm run build` : réussi ;
-- `node dist/cli.js --version` : `2.0.0-alpha.8` ;
-- `npm run check` : **350/350 tests**, 0 échec, 0 ignoré (suite exécutée sur l'arbre de travail, pas sur une archive publiée).
-
-Log complet : `validation/alpha.8/check.log`.
-
-Les nouveaux scénarios de sécurité couvrent notamment :
-
-1. authentification/mot de passe → routage Authentication, Password Storage, Session Management, Authorization, Data Protection, Logging et Threat Modeling ;
-2. API sortante → SSRF, REST Security, Input Validation et Threat Modeling ;
-3. AI agent/MCP → AI Agent Security, LLM Prompt Injection Prevention, Secure Coding with AI, MCP Security et Threat Modeling ;
-4. une modification ordinaire n'est pas élevée artificiellement au niveau supply-chain uniquement parce qu'un lockfile existe ailleurs dans le dépôt ;
-5. Product ne peut pas supprimer un sujet OWASP routé, réduire une surface détectée ou omettre le threat model requis ;
-6. QA ne peut pas rendre `pass` sans une évaluation explicite de chaque exigence sécurité ;
-7. Product, Implementer et QA traitent le dépôt et les contenus externes comme des données non fiables vis-à-vis des prompt injections ;
-8. le correctif macOS des racines Git via `realpathSync` reste couvert par un test d'ancêtre symbolique.
-
-## Démonstrations
-
-- `npm run demo` : état final `ready` ;
-- `npm run demo:lifecycle` : version alpha.8, QA `pass`, état final `closed`.
-
-Ces démonstrations utilisent des fixtures déterministes. Elles ne représentent ni un appel réel à un modèle, ni une revue humaine réelle, ni un déploiement.
-
-Sorties : `validation/alpha.8/demo.json` et `validation/alpha.8/demo-lifecycle.json`.
-
-## Mesures locales
-
-- benchmark synthétique du scheduler : `validation/alpha.8/scheduler-bench.json` ;
-- sélection déterministe des skills, 100 résolutions : `validation/alpha.8/guidance-bench.json`.
-
-Ces mesures sont locales et ne constituent ni un benchmark de modèle, ni une promesse de latence sur un projet réel.
-
-## Package installable
-
-Le contrôle du tarball alpha.8 propre a été exécuté par installation npm hors ligne dans un préfixe temporaire. Il vérifie notamment :
-
-- version CLI `2.0.0-alpha.8` ;
-- 4 rôles ;
-- 6 skills ;
-- contrats provider/knowledge/bootstrap ;
-- lifecycle installé jusqu'à `closed` ;
-- aucun appel fournisseur réel.
-
-Le package n'a aucune dépendance npm de production.
-
-## Documentation et schémas
-
-Les schémas publics sont régénérés depuis la CLI, y compris :
-
-- `security-context.schema.json` ;
-- `security-plan.schema.json`.
-
-Le contrôle des liens Markdown relatifs est enregistré dans `validation/alpha.8/docs-links.json`.
-
-## OWASP
-
-Alpha.8 utilise la OWASP Cheat Sheet Series comme guidance d'ingénierie routée. Le catalogue inclut notamment Threat Modeling, Authentication, Password Storage, Session Management, Authorization, Input Validation, Injection Prevention, XSS, CSRF, CSP, File Upload, SSRF, REST Security, Data Protection, Secrets Management, Logging, Software Supply Chain Security, GitHub Actions Security, AI Agent Security, LLM Prompt Injection Prevention, Secure Coding with AI et MCP Security.
-
-Cette intégration ne constitue pas une certification OWASP, un pentest, un scanner universel ni une preuve d'absence de vulnérabilités. Les scanners réellement configurés dans le projet restent des gates bornés et leurs résultats sont des preuves partielles.
-
-## Hygiène de release
-
-Les preuves exécutables de cette livraison initiale sont regroupées sous `validation/alpha.8/`. Les anciennes validations alpha.2 à alpha.7 ne doivent pas être incluses dans l'archive alpha.8 propre ; l'historique reste dans Git, `CHANGELOG.md` et les documents de migration.
-
-## Pilote réel de réparation des sorties (2026-09-15)
-
-- Commande : `node scripts/repair-pilot.mjs --provider claude --output <dossier neuf> --execute`
-- Fournisseur : Claude Code `2.1.267`, authentification locale existante, fixture jetable.
-- Résultat observé :
-  - 2 validations ;
-  - 1 événement `role.output_repair` (code `SCHEMA`) ;
-  - la seconde réponse contenait le jeton aléatoire `REPAIR-888ee267` cité uniquement dans l'erreur du contrôleur ;
-  - `successfulPilot: true` en 16,7 s.
-- Limite de preuve : les événements bruts de ce pilote ne sont pas conservés dans `validation/`. Ce paragraphe est un compte rendu, pas une preuve rejouable ; seul un nouveau `npm run pilot:repair` le reproduit.
-- Portée : prouve que la boucle de réparation transmet l'erreur au modèle réel et que ce modèle corrige sa réponse, pour ce fournisseur à cette date. Aucune spec réelle, aucun push, merge ou déploiement. Le pilote complet `provider-pilot.mjs` n'a pas été relancé pour ces changements.
+Conserver une preuve lorsqu’un guide s’appuie dessus ou qu’elle complète la dernière validation. Remplacer les journaux intermédiaires par le résultat final, sans masquer les échecs d’une campagne de modèles. Les anciens audits, captures et bilans redondants ont été supprimés ; leurs versions restent dans l’historique Git.
