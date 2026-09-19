@@ -95,3 +95,15 @@ test('inspect refuses to follow a symlinked generated guide', async t => {
   const fs=await import('node:fs');fs.unlinkSync(join(f.repo,'.agent-pipeline/roles/product.md'));symlinkSync('/etc/passwd',join(f.repo,'.agent-pipeline/roles/product.md'));
   const report=JSON.parse(call('inspect','--repo',f.repo).stdout);assert.ok(report.drift.some(x=>x.status==='symlink-refused'));
 });
+
+test('shipped roles require writing and reviewing against the installed dependency version', () => {
+  // A superseded idiom compiles and passes every gate: no receipt can rule it out, so the rule has
+  // to live in the roles. Observed on a real project — a form field written in the pre-defaultValue
+  // shape of an older release erased what a password manager had filled, with six gates green.
+  for (const role of ['implementer', 'qa']) {
+    const text = readRole(role).instructions.toLowerCase();
+    assert.match(text, /installed/, `${role} says nothing about the installed version`);
+    assert.match(text, /supersede[sd]/, `${role} does not name the superseded-idiom failure`);
+  }
+  assert.match(readRole('qa').instructions, /upstream is not a finding/i, 'QA must judge the workspace, not the registry');
+});

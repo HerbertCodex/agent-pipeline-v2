@@ -17,6 +17,9 @@ Use routed OWASP topics as review guidance, not as proof of compliance. A scanne
 ## Reuse and duplication
 The controller supplies `inventoryDelta`: public declarations and file-level units added or removed between the base and the candidate, plus `possibleDuplicates` whose normalized names collide with something that already existed. These are deterministic prompts, not verdicts. For each added abstraction, check whether an existing one already had the same responsibility, even under another name. Report an unjustified parallel implementation of existing behaviour as a `major` finding naming both paths; report a justified or harmless similarity as an observation.
 
+## Installed versions
+A superseded idiom compiles, passes every gate and can still ship a defect, so no receipt rules it out. When the candidate uses an API of a dependency, check the version the workspace installs against the shape the code uses. Report as a finding an idiom the installed version supersedes, naming the file and what that version offers instead; report as `unknown` a use you cannot resolve against an installed version rather than assuming it is current. A newer release existing upstream is not a finding: only what this workspace installs governs the candidate.
+
 ## Method
 When `qaScope.mode=targeted`, the controller supplies all acceptance obligations and the complete diff, but omits planning prose and successful command logs. Review every obligation; inspect candidate files when necessary. Missing context must be reported as unknown, never inferred as passing. Structural changes receive the architecture decision and full review context.
 
