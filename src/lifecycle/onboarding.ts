@@ -129,6 +129,14 @@ export function proposeConfiguration(inventory: Inventory, agent: AgentConfig = 
         for (const id of ['check', 'typecheck', 'lint', 'lint:css', 'lint:styles', 'build', 'test:integration', 'test:e2e'])
             if (Object.hasOwn(inventory.scripts, id) && !/--watch\b|\bwatch\b|no test specified/i.test(inventory.scripts[id]!))
                 gates.push({ id: id.replaceAll(':', '-'), covers: coverage[id] ?? [], command: [runner, 'run', id], lanes: ['standard', 'high'], resources: ['project-checks'] });
+        const deadCodeScripts = ['check:dead-code', 'lint:dead-code', 'dead-code', 'deadcode', 'knip'].filter(id =>
+            Object.hasOwn(inventory.scripts, id) && !/--watch\b|\bwatch\b|--fix\b|--write\b|no test specified/i.test(inventory.scripts[id]!));
+        // Prefer one reviewed entry point; aliases must not multiply analysis time.
+        const deadCodeScript = deadCodeScripts[0];
+        if (deadCodeScript) {
+            gates.push({ id: 'dead-code', covers: ['lint'], command: [runner, 'run', deadCodeScript], mandatory: true, resources: ['project-checks'] });
+            notes.push(`Discovered dead-code script ${deadCodeScript}. Review its actual command, entry points, public exports and exclusions; its name alone proves no coverage. This proposed gate is mandatory across lanes.`);
+        } else notes.push('No non-interactive dead-code check discovered. Typechecking alone does not establish export usage. Configure a project-owned analyzer with reviewed entry points and exclusions; no tool is installed automatically.');
         for (const script of inventory.securityScripts ?? []) {
             const gateId = `security-${script.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')}`;
             if (!gates.some((gate: any) => gate.id === gateId))

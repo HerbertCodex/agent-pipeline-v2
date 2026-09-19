@@ -7,13 +7,18 @@ import { runProcess, redact } from '../execution/process.js';
 import { executableAvailability } from './providers.js';
 import { claudeCommand, claudeOutput } from './claude.js';
 import { startInvocation } from './invocations.js';
-import { usageSentence } from './usage.js';
+import { providerUsage, usageSentence } from './usage.js';
+import { executionAgent } from './billing.js';
+import { providerStop } from './stops.js';
 const schema = { type: 'object', properties: { ready: { type: 'boolean', enum: [true] } }, required: ['ready'], additionalProperties: false };
 const prompt = 'Compatibility check only. Do not use tools or inspect files. Return exactly {"ready":true} using the required output schema.';
 const cache = new WeakMap();
 const TTL = 15 * 60 * 1000;
 /** Diagnose provider failures, never infer retirement from a successful model's prose. */
 export function assertModelResponse(agent, result) {
+    const stop = providerStop(agent, result);
+    if (stop)
+        throw new PipelineError(stop.code, [stop.message, usageSentence(providerUsage(agent.type, result.stdout))].filter(Boolean).join(' '));
     if (agent.type === 'command' || result.status === 'cancelled' || result.status === 'timed_out')
         return;
     let failed = result.status !== 'passed';
@@ -48,6 +53,7 @@ export function assertModelResponse(agent, result) {
  * Success attests this model/effort/CLI/account combination now, not future availability or quality.
  */
 export async function ensureModelReady(agent, options) {
+    agent = executionAgent(agent);
     if (agent.preflight !== 'probe')
         return;
     invariant(agent.type !== 'command' && agent.model.trim(), 'MODEL_SELECTION', 'Model preflight needs an explicit native model. Select profiles with --models FILE or set agent/roles model.');
@@ -72,7 +78,7 @@ export async function ensureModelReady(agent, options) {
             timeoutMs: Math.max(1, Math.min(5000, deadline - Date.now())), ...(options.signal ? { signal: options.signal } : {}), ...options.hooks, maxOutputBytes: 4000 });
         invariant(versionResult.status === 'passed' && !versionResult.truncated, versionResult.status === 'cancelled' ? 'CANCELLED' : 'MODEL_CLI', `${agent.type}: CLI version check failed before sending project content.`);
         const version = versionResult.stdout.trim().slice(0, 200);
-        const effective = { ...agent, maxTurns: Math.min(agent.maxTurns, 3), maxBudgetUsd: agent.type === 'claude' ? Math.min(agent.maxBudgetUsd ?? 0.25, 0.25) : null };
+        const effective = { ...agent, maxTurns: Math.min(agent.maxTurns, 3), maxBudgetUsd: agent.type === 'claude' && agent.usageMode !== 'subscription' ? Math.min(agent.maxBudgetUsd ?? 0.25, 0.25) : null };
         let command;
         const output = join(root, 'result.json');
         if (agent.type === 'claude') {

@@ -19,6 +19,8 @@ Use domain names, cohesive functions and small explicit interfaces. Prefer a str
 
 Do not mechanically enforce arbitrary line limits or rewrite adjacent modules for cleanliness. Extract duplication only when the shared responsibility is stable. Measure hot paths before optimizing; prefer bounded work, batching and pagination over unbounded reads.
 
+Remove code made unused by the change and update documentation made false by it, after checking callers, entry points and public compatibility. Keep cleanup within approved scope and report necessary out-of-scope corrections. Distinguish small required corrections from advisory pre-existing debt; a minor severity is not permission to retain a confirmed change-related defect.
+
 ## References on demand
 
 - Naming: [naming](references/naming.md).

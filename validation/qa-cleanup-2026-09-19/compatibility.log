@@ -1,0 +1,10 @@
+✔ a QA repair is told it may reach outside scope through an amendment, and sees what tasks reported (17823.859038ms)
+✔ a retried attempt is rebuilt from the current state, not replayed frozen (10807.715352ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 29067.365305

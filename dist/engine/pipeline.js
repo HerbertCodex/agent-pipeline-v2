@@ -1,6 +1,7 @@
 import { ensureModelReady } from '../adapters/model-check.js';
 import { assertRequiredEvidence, requiredEvidence } from "../quality/review.js";
-import { modelChoice } from '../adapters/routing.js';
+import { modelChoice, modelPlan } from '../adapters/routing.js';
+import { decisionRecord } from '../policy/decision.js';
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -26,7 +27,7 @@ import { schedule, success } from "./scheduler.js";
  * the operator can inspect that work and adopt it with an explicit `--accept-current`, or discard it with a
  * new attempt. Throwing it away silently made the work be paid for twice.
  */
-const SALVAGEABLE_AGENT_ERRORS = new Set(["AGENT", "AGENT_OUTPUT", "BUDGET", "COST_BUDGET", "MODEL_SELECTION", "MODEL_CLI", "MODEL_CHECK", "MODEL_AUTH", "MODEL_EFFORT", "MODEL_UNAVAILABLE"]);
+const SALVAGEABLE_AGENT_ERRORS = new Set(["AGENT", "AGENT_OUTPUT", "AGENT_TIMEOUT", "PROVIDER_QUOTA", "PROVIDER_RATE_LIMIT", "PROVIDER_UNAVAILABLE", "PROVIDER_BUDGET", "PROVIDER_TURNS", "BUDGET", "COST_BUDGET", "MODEL_SELECTION", "MODEL_CLI", "MODEL_CHECK", "MODEL_AUTH", "MODEL_EFFORT", "MODEL_UNAVAILABLE"]);
 export class Pipeline {
     store;
     constructor(stateDir) {
@@ -517,8 +518,10 @@ export class Pipeline {
                 },
             });
             const choice = modelChoice(run.config, 'implementer', run.risk?.lane ?? run.task.minimumLane);
-            this.store.save(run, 'model.selected', { role: choice.role, lane: choice.lane, source: choice.source, reason: choice.reason });
             let effective = budgetedAgent(this.store, run.specId, choice.agent, acceptCost, 'implementer');
+            const spec = run.specId ? this.store.document(run.specId, 'spec').data : null;
+            const selected = modelPlan(spec?.config ?? run.config, spec?.operational).find(m => m.role === 'implementer' && m.lane === choice.lane);
+            this.store.save(run, 'model.selected', { ...selected, model: effective.model || null, effort: effective.effort });
             const reserve = Math.min(run.config.validationReserveMs ?? 0, run.config.maxRunMs / 5);
             const beforeProbe = Math.min(remainingSpecMs(this.store, run.specId), run.remainingMs - Math.max(0, Date.now() - (run.sessionStartedAt ?? Date.now())));
             invariant(beforeProbe > reserve, "BUDGET", "Insufficient time for model preflight and the reserved final checks");
@@ -638,7 +641,8 @@ export class Pipeline {
             run.approvals = [];
             run.validatedAt = null;
             run.gateIds = plan.map((g) => g.id);
-            this.store.save(run, "validation.started", { gateIds: run.gateIds });
+            this.store.save(run, "validation.started", { gateIds: run.gateIds,
+                decision: decisionRecord('validation-plan', { configHash: hash(run.config), candidateSha: candidate, changeSet: observed, lane: run.risk.lane }, { gateIds: run.gateIds }, ['reviewed-config', 'observed-diff', 'risk-and-coverage-policy', 'dependency-closure']) });
             // Clean materialization, not a copy of agent-mutated node_modules/builds.
             mkdirSync(join(this.store.root, "workspaces"), {
                 recursive: true,

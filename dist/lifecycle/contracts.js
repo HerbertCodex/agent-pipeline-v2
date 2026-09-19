@@ -5,7 +5,7 @@ import { matches } from '../policy/policy.js';
 import { hash } from '../domain/hash.js';
 import { confirmedDecisions, ambiguousDecisions, validateDecisionLedger } from './decisions.js';
 import { owaspTopicIds, securityProfileSchema, neutralSecurityContext } from '../security/owasp.js';
-import { qualityCheckSchema, validateQualityChecks } from '../quality/review.js';
+import { qualityCheckSchema, validateQualityChecks, findingRequiresFix } from '../quality/review.js';
 const id = s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
 const sha = s.string(40, 64, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const neutralSecurityProfile = securityProfileSchema.parse({});
@@ -71,7 +71,12 @@ export const specSchema = s.object({
 export const qaSchema = s.object({
     candidateSha: sha, verdict: s.enum(['pass', 'changes_requested']), summary: s.string(1, 12000),
     criteria: s.array(s.object({ id, status: s.enum(['pass', 'fail', 'unknown']), evidence: s.string(1, 4000) }), 1, 100),
-    findings: s.array(s.object({ id, severity: s.enum(['blocker', 'major', 'minor']), path: s.string(0, 500), description: s.string(1, 4000) }), 0, 100),
+    findings: s.array(s.object({
+        id, severity: s.enum(['blocker', 'major', 'minor']),
+        // Missing on historical reports; severity still makes blocker/major findings mandatory.
+        resolution: s.default(s.enum(['required', 'advisory']), 'advisory'),
+        path: s.string(0, 500), description: s.string(1, 4000),
+    }), 0, 100),
     observations: s.array(s.string(1, 3000), 0, 100),
     decisionChecks: s.default(s.array(s.object({ decisionId: id, status: s.enum(['pass', 'fail', 'unknown']), evidence: s.string(1, 4000) }), 0, 200), []),
     securityChecks: s.default(s.array(s.object({ requirementId: id, status: s.enum(['pass', 'fail', 'unknown']), evidence: s.string(1, 4000) }), 0, 200), []),
@@ -82,6 +87,7 @@ export const qaSchema = s.object({
         // it is reported as asserted-by-review so the human reviewer sees exactly what no test proves.
         requirementId: id, testIndex: s.number(0, 29), status: s.enum(['pass', 'fail', 'unknown', 'review']),
         evidence: s.string(1, 1600), paths: s.array(s.string(1, 500), 0, 12), receiptIds: s.array(id, 0, 20),
+        inspectedPaths: s.default(s.array(s.string(1, 500), 0, 12), []),
     }), 0, 3000), []),
 });
 export const designProposalSchema = s.object({
@@ -244,13 +250,12 @@ export function validateQa(value, spec, candidateSha, ledger = { schemaVersion: 
         invariant(new Set(keys).size === keys.length && keys.length === expected.length && expected.every(k => keys.includes(k)), 'QA_SECURITY', 'Assess every declared negative test exactly once using requirementId and zero-based testIndex');
         for (const check of qa.negativeTestChecks) {
             const gates = quality.context.validation.gates;
-            invariant(check.evidence.trim().length > 0 && check.paths.every(p => (quality.candidatePaths ?? quality.paths).has(p)) &&
+            invariant(check.evidence.trim().length > 0 && [...check.paths, ...check.inspectedPaths].every(p => (quality.candidatePaths ?? quality.paths).has(p)) &&
                 check.receiptIds.every(id => gates.some(g => g.receiptId === id)), 'QA_SECURITY', 'Negative-test evidence references unknown files or receipts');
             if (check.status === 'review') {
                 const declared = checkedSpec.security.requirements.find(r => r.id === check.requirementId).negativeTests[check.testIndex];
-                invariant(declared.startsWith('[review] '), 'QA_SECURITY', 'A review-only negative case requires an explicit [review] marker in the approved spec');
-                // A review names the files it read — that is what lets the human reviewer check it — but it
-                // cannot lean on a behavioral receipt, which would present an assertion as a test result.
+                invariant(declared.startsWith('[review] '), 'QA_REVIEW_AUTHORIZATION', `Negative case ${check.requirementId}[${check.testIndex}] requires test evidence. A review-only assessment needs an explicit [review] marker approved through a spec criterion amendment.`);
+                // `paths` on older review reports names inspected files, never executed tests.
                 invariant(check.evidence.trim().length >= 40 && !check.receiptIds.some(rid => gates.some(g => g.receiptId === rid && g.covers.some(k => ['unit', 'integration', 'browser'].includes(k)))), 'QA_SECURITY', 'A review-only negative case says what was inspected and found, and cannot cite a behavioral test receipt');
             }
             if (check.status === 'pass')
@@ -284,7 +289,7 @@ export function validateQa(value, spec, candidateSha, ledger = { schemaVersion: 
             invariant(check.status === 'pass', 'QA_DECISIONS', `QA pass contradicts decision ${decisionId}`);
     }
     if (qa.verdict === 'pass')
-        invariant(qa.criteria.every(c => c.status === 'pass') && qa.decisionChecks.every(d => d.status === 'pass') && qa.securityChecks.every(d => d.status === 'pass') && !qa.findings.some(f => f.severity !== 'minor'), 'QA_VERDICT', 'QA pass contradicts failed/unknown criteria, decisions or blocking findings');
+        invariant(qa.criteria.every(c => c.status === 'pass') && qa.decisionChecks.every(d => d.status === 'pass') && qa.securityChecks.every(d => d.status === 'pass') && !qa.findings.some(findingRequiresFix), 'QA_VERDICT', 'QA pass contradicts failed/unknown criteria, decisions or blocking findings');
     return qa;
 }
 export function stricter(...values) { return lanes[Math.max(...values.map(v => lanes.indexOf(v)))]; }

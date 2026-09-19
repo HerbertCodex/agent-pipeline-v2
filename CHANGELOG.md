@@ -3,13 +3,23 @@
 
 ## Unreleased — reliability and efficient feature work
 
+- Documentation : anciens audits, bilans, notes de version et sources datées supprimés. Le guide courant de qualité devient `docs/QUALITY.md` ; les sommaires et liens sont actualisés. Les preuves d’exécution restent dans `validation/`.
+
+- QA : distingue gravité et correction requise ; les nettoyages mineurs obligatoires bloquent la livraison et utilisent la boucle de réparation. Consignes de suppression du code rendu mort, affichage UI/QA.md et découverte des contrôles existants à l'onboarding. Les anciens rapports restent lisibles.
+
 - **Une preuve que la revue n'a pas pu conclure n'enferme plus la spec.** Un verdict `unknown` arrête la boucle sans réparation automatique : c'est voulu, puisqu'il peut signaler des contrôles incapables de produire cette preuve, qu'aucun changement de code ne comblerait. Mais l'opérateur qui a inspecté le constat n'avait aucun moyen de dire « le manque est dans le candidat, pas dans la configuration » : budget de réparation épuisé, plus aucune tâche restante donc pas de `spec replan`, et revue comme publication exigeant une QA conforme. `apv2 spec qa-repair SPEC_ID --confirm --note TEXT` autorise désormais exactement une réparation : elle exige que chaque contrôle configuré ait déjà prouvé ce candidat, elle est consommée par la réparation qu'elle autorise, son motif est enregistré, et la revue suivante doit toujours conclure sur ses propres preuves. La règle automatique ne bouge pas. Constaté sur un vrai projet : dix tâches, six contrôles verts, vingt critères — et trois assertions manquantes qu'aucune commande ne pouvait plus faire ajouter.
 
 - **Un champ ajouté au contrat ne bloque plus une spec déjà approuvée.** La publication vérifie que le run a bien exécuté les contrôles exigés par la spec ; elle comparait les formes enregistrées, si bien qu'une spec approuvée avant l'ajout d'un champ de gate — absente de sa copie gelée, présente dans celle du run — était refusée avec « Final validation must cover the amended gates ». Les deux côtés passent désormais par le contrat des gates : seule une vraie différence de commande, de couverture ou de périmètre bloque. Constaté sur un vrai projet : dix tâches implémentées, six contrôles verts, QA conforme, publication impossible à cause d'un `readOnly: false` par défaut.
+- Separate subscription estimates from monetary ceilings with explicit per-role usage modes, null-safe spec amendments and mixed-account accounting. Require explicit native models in subscription/metered mode; preserve dedicated QA and reassess after a model/policy change.
+- Record versioned path/model/validation decisions, distinguish provider quota/rate/time/money stops, retain interrupted work and expose phase timings and usage settings in the dashboard. No provider-thread resume or real-model latency improvement is claimed. See [execution policy](docs/EXECUTION-POLICY.md).
 
 - **Une revue nomme ce qu'elle a lu.** Un cas négatif marqué `[review]` ne pouvait citer aucun fichier : la QA, qui vient de lire le diff, décrivait naturellement ce qu'elle avait inspecté et son rapport était refusé. Elle peut désormais nommer les fichiers lus — c'est ce qui rend la revue vérifiable par le relecteur humain — mais toujours pas s'appuyer sur un reçu de test unitaire, d'intégration ou de navigateur, ce qui ferait passer une affirmation pour une preuve.
 
 - **Marquer après coup un cas négatif comme revue.** Le mode preuves demande le marqueur explicite `[review] ` dans la spec approuvée ; une spec écrite avant, dont un cas négatif décrit une revue du diff, devenait invérifiable après toute l'implémentation. `spec criterion` peut désormais reclasser un tel cas avec la correction du critère qu'il vérifie : le texte ne change pas, seul le marqueur s'ajoute, et rien ne peut être ajouté ni retiré. L'opérateur approuve par hash, avec son motif ; le texte d'origine reste dans le magasin. Constaté sur un vrai projet : dix tâches implémentées, six contrôles verts, spec bloquée par un marqueur que personne ne pouvait plus ajouter.
+
+- Separate inspected QA files from executed-test evidence, add hash-approved migration of legacy review cases, and stop paid repair loops for unapproved exemptions. Retain QA reports as drafts across contract/guidance changes, omit the diff for schema-only repairs, and refuse a comparable retry below its observed exhausted budget. `apv2 runtime` and QA events identify the actual installed engine.
+
+- Make dashboard failures readable: concise cost-stop summaries, expandable/copyable diagnostics, and bounded wrapping. Present architecture decisions as expandable rows with readable code, constraints, alternatives and risks; retain disclosure state during refreshes and improve secondary-text contrast.
 
 - **Un cas négatif que la spec définit comme une revue est évalué comme tel.** En mode preuves, chaque test négatif déclaré devait être un fichier exécuté par un contrôle comportemental. Une exigence dont la spec approuvée porte explicitement le préfixe `[review]` était donc inatteignable : la QA ne pouvait ni la prouver, ni la déclarer conforme. Le nouvel état `review` l'assume : aucun fichier ni reçu cité, une observation d'au moins quarante caractères disant ce qui a été inspecté et constaté, et un rapport au relecteur humain sous le titre « affirmé par revue, non prouvé par un test ». Il ne peut jamais excuser un test que la spec demandait vraiment. Constaté sur un vrai projet : dix tâches implémentées, six contrôles verts, spec bloquée après coup par deux exigences invérifiables par construction.
 
@@ -45,7 +55,7 @@
 - Lot 2: align Product/Design, Implementer, QA and UI skills on global-CSS BEM defaults with existing-stack exceptions. Add a pinned Stylelint development check, reusable naming profile and discovery of existing `lint:css` / `lint:styles` gates.
 - Add compact task planning, minor UI reuse, explicit model/effort routing and opt-in in-session checks with independent final validation.
 - Detect existing build/integration/browser scripts, refine craftsmanship skills and add a representative, opt-in evaluation harness.
-- See [implementation and usage](docs/AMELIORATIONS-2026-09-18.md). Existing project configuration is not migrated automatically.
+- See [current workflow and usage](docs/LIFECYCLE.md). Existing project configuration is not migrated automatically.
 
 ## Non publié
 

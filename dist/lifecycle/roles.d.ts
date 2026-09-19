@@ -38,4 +38,5 @@ export declare function runRole<T>(options: {
     acceptCost?: boolean;
     repairPatches?: boolean;
     modelReason?: string;
+    modelPolicy?: unknown;
 }): Promise<T>;

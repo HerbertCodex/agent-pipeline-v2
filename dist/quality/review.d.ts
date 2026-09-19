@@ -111,10 +111,16 @@ type Review = {
     findings: {
         id: string;
         severity: string;
+        resolution?: 'required' | 'advisory';
         path: string;
         description: string;
     }[];
 };
+/** Severity describes impact; a small correction can still be required for delivery. */
+export declare function findingRequiresFix(finding: {
+    severity: string;
+    resolution?: string;
+}): boolean;
 /** References are checked against controller data. Their semantic adequacy remains a reviewer judgement. */
 export declare function validateQualityChecks(report: Review, context?: QualityContext, paths?: ReadonlySet<string>): void;
 export declare function qualityMarkdown(context: QualityContext): string;

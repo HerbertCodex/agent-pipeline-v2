@@ -57,4 +57,4 @@ Le skill ne crée ni politique, ni autorisation, ni verdict de conformité. Le `
 
 `ui-design` demande BEM par défaut pour les nouvelles classes de composants en CSS global, sauf convention existante ou décision confirmée différente. CSS Modules, styles encapsulés et frameworks utilitaires conservent leurs conventions. Le framework contrôle son propre CSS avec `npm run lint:css` ; le [profil Stylelint réutilisable](../examples/stylelint-bem.config.mjs) ne s'installe pas automatiquement dans les projets.
 
-Les skills guident les choix ; le mode `workflow.qualityReview: "evidence"` exige séparément les preuves exécutées et la revue structurée. Une instruction de test ou de design pattern n'est pas une preuve de conformité. Voir [les critères de qualité](LOT-3-QUALITE.md).
+Les skills guident les choix ; le mode `workflow.qualityReview: "evidence"` exige séparément les preuves exécutées et la revue structurée. Une instruction de test ou de design pattern n'est pas une preuve de conformité. Voir [les critères de qualité](QUALITY.md).

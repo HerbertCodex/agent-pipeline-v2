@@ -1,6 +1,9 @@
-import { assertRequiredEvidence, qualityContext, qualityMarkdown } from '../quality/review.js';
-import { roleAgent, modelPlan, modelChoice } from '../adapters/routing.js';
-import { adaptiveConfig, architectureSchema, briefSpecSchema, expandBrief, requiresQa, selectPath, targetedQaContext } from './pathways.js';
+import { phaseTimings } from './timings.js';
+import { stopAdvice } from '../adapters/stops.js';
+import { executionAgent, specCostCeiling } from '../adapters/billing.js';
+import { assertRequiredEvidence, qualityContext, qualityMarkdown, findingRequiresFix } from '../quality/review.js';
+import { roleAgent, modelPlan, modelChoice, applyModelOverrides } from '../adapters/routing.js';
+import { adaptiveConfig, architectureSchema, briefSpecSchema, expandBrief, requiresQa, selectPath, pathDecision, targetedQaContext } from './pathways.js';
 import { compactProposal } from './compact.js';
 import { focusedIntelligence } from '../knowledge/focus.js';
 import { pathsMentioned } from '../security/change-signals.js';
@@ -47,6 +50,11 @@ const TASK_PATHS_ADVICE = 8;
 const PREVIOUS_DIAGNOSTIC_CHARS = 6000;
 /** Everything the review workspace owns. The design bundle lives beside it and must survive its rebuilds. */
 const REVIEW_ENTRIES = ['candidate', 'candidate.patch', 'QA.md', 'REVIEW.md', 'INVENTORY.md'];
+/** Keep actionable execution causes when Product wraps a failed planning round. */
+function planningError(error: unknown) {
+    const code = error instanceof PipelineError && /^(?:PROVIDER_|MODEL_|AGENT_TIMEOUT$|COST_BUDGET$|BUDGET$)/.test(error.code) ? error.code : 'PRODUCT';
+    return { code, message: errorMessage(error) };
+}
 /**
  * Elements and their attributes, quote-aware so a `>` inside an attribute value cannot end a tag early.
  * Text between tags is displayed content: a mockup may legitimately show `src=`, a URL or escaped markup
@@ -127,7 +135,7 @@ export class Lifecycle {
         const scopes = r.scopeAmendments.filter(a => a.status === 'approved');
         if (!corrections.length && !scopes.length) return spec;
         const latest = [...corrections].reverse();
-        return { ...spec,
+        const effective = { ...spec,
             acceptance: spec.acceptance.map(c => {
                 const fix = latest.find(a => a.criterionId === c.id);
                 return fix ? { ...c, description: fix.description, verification: fix.verification } : c;
@@ -140,9 +148,13 @@ export class Lifecycle {
             }),
             security: { ...spec.security, requirements: spec.security.requirements.map(q => {
                 const fix = latest.flatMap(a => a.requirements ?? []).find(x => x.id === q.id);
-                return fix ? { ...q, verification: fix.verification, ...(fix.negativeTests ? { negativeTests: fix.negativeTests } : {}) } : q;
+                const reviews = latest.flatMap(a => a.requirements ?? []).filter(x => x.id === q.id).flatMap(x => x.reviewTests ?? []);
+                const amendedTests = latest.flatMap(a => a.requirements ?? []).find(x => x.id === q.id && x.negativeTests)?.negativeTests ?? q.negativeTests;
+                return { ...q, ...(fix ? { verification: fix.verification } : {}),
+                    negativeTests: amendedTests.map((text, index) => reviews.some(x => x.index === index) && !text.startsWith('[review] ') ? `[review] ${text}` : text) };
             }) },
         };
+        return validateSpec(effective, true, r.decisionLedger, r.request, r.securityContext);
     }
     /** See SpecRecord.impactAdvice. Tasks are walked in dependency order, like execution. */
     private async impactAdvice(r: SpecRecord, spec: Spec, signal?: AbortSignal): Promise<NonNullable<SpecRecord['impactAdvice']>> {
@@ -217,9 +229,9 @@ export class Lifecycle {
             return doc;
         }
         catch (error) {
-            r.error = { code: 'PRODUCT', message: errorMessage(error) };
+            r.error = planningError(error);
             this.save(doc, 'product.failed', { error: r.error });
-            throw new PipelineError('PRODUCT', `Spec ${doc.id}: ${errorMessage(error)}`, { cause: error });
+            throw new PipelineError(r.error.code, `Spec ${doc.id}: ${errorMessage(error)}`, { cause: error });
         }
         finally {
             this.store.releaseDocument(doc.id, token);
@@ -400,7 +412,7 @@ export class Lifecycle {
         };
         const spec = r.content;
         const proposal = await runRole({ store: this.store, documentId: doc.id, budgetDocumentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills,
-            modelReason: modelChoice(r.config, 'design', r.content.minimumLane).reason, agent: roleAgent(r.config, 'design', r.content.minimumLane), passEnv: r.config.environment.passEnv, schema: designProposalSchema, context, ...(signal ? { signal } : {}),
+            modelPolicy: modelPlan(r.config, r.operational).find(m => m.role === 'design' && m.lane === (r.content!.minimumLane))?.decision, modelReason: modelChoice(r.config, 'design', r.content.minimumLane).reason, agent: roleAgent(r.config, 'design', r.content.minimumLane), passEnv: r.config.environment.passEnv, schema: designProposalSchema, context, ...(signal ? { signal } : {}),
             maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: value => { this.validateDesignMarkup(value); this.validateDesignScopes(value, spec); this.inlineDesignAssets(r.repo, r.baseSha, tracked, value); this.loadDesignStylesheets(r.repo, r.baseSha, tracked, value); return value; } });
         const root = resolve(dirname(r.repo), `${basename(r.repo)}-review`, doc.id, 'design');
         invariant(!isInside(r.repo, root) && !isInside(this.store.root, root), 'DESIGN_PATH', 'Design preview must be outside source and operational state');
@@ -455,14 +467,14 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         const securityContext = assessSecurity({ text: r.request, projectType: r.config.skills.projectType, files: pathsMentioned(r.request, [...repositoryIntelligence.relevantFiles, ...repositoryIntelligence.manifests, ...repositoryIntelligence.securityFiles]) });
         const scopedSecurity = (spec: Spec) => assessSecurity({ text: r.request, projectType: r.config.skills.projectType, files: [...pathsMentioned(r.request, [...repositoryIntelligence.relevantFiles, ...repositoryIntelligence.manifests, ...repositoryIntelligence.securityFiles]), ...spec.tasks.flatMap(t => t.allowedPaths).filter(p => !/[*?]/.test(p))] });
         if (r.executionPath) {
-            r.executionPath = selectPath(r.request, securityContext, r.executionPath);
-            if (r.decisionLedger.decisions.length > 30 && r.executionPath === 'standard') r.executionPath = 'structural';
+            const decision = pathDecision(r.request, securityContext, r.executionPath, r.decisionLedger.decisions.length);
+            r.executionPath = decision.result.path;
             if (r.content) r.contentHash = specHash(r);
-            this.save(doc, 'planning.path_selected', { path: r.executionPath });
+            this.save(doc, 'planning.path_selected', { path: r.executionPath, decision });
         }
         const selectedContext = r.executionPath ? focusedIntelligence(repositoryIntelligence) : repositoryIntelligence;
         const roleOptions = { store: this.store, documentId: doc.id, budgetDocumentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product' as const, skills: r.config.skills,
-            modelReason: modelChoice(r.config, 'product', r.executionPath === 'structural' ? 'high' : securityContext.minimumLane).reason, agent: roleAgent(r.config, 'product', r.executionPath === 'structural' ? 'high' : securityContext.minimumLane), passEnv: r.config.environment.passEnv,
+            modelPolicy: modelPlan(r.config, r.operational).find(m => m.role === 'product' && m.lane === (r.executionPath === 'structural' ? 'high' : securityContext.minimumLane))?.decision, modelReason: modelChoice(r.config, 'product', r.executionPath === 'structural' ? 'high' : securityContext.minimumLane).reason, agent: roleAgent(r.config, 'product', r.executionPath === 'structural' ? 'high' : securityContext.minimumLane), passEnv: r.config.environment.passEnv,
             ...(signal ? { signal } : {}), maxRepairs: r.config.workflow.maxOutputRepairs ?? 1 };
         if (r.executionPath === 'structural') {
             const tracked = new Set(await this.trackedPaths(r.repo, r.baseSha, signal));
@@ -477,7 +489,9 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         const context = { request: r.request, planningGuidance: { mode: r.executionPath ?? (securityContext.minimumLane === 'high' ? 'structural' : 'standard'), instruction: 'Produce the smallest complete spec. Group related code and tests in cohesive tasks. Explore relevant files and reuse candidates; avoid repository-wide rereads and speculative architecture.' },
             architecture: r.architecture ?? null, previous: r.content, decisionLedger: r.decisionLedger,
             projectSecurityContext: assessSecurity({ text: r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n'), projectType: r.config.skills.projectType }),
-            repositoryIntelligence: selectedContext, securityContext, executionCapabilities: executionCapabilities(r.config) };
+            repositoryIntelligence: selectedContext, securityContext,
+            executionCapabilities: executionCapabilities({ ...this.runConfig(r), agent: applyModelOverrides(
+                roleAgent(r.config, 'implementer', r.executionPath === 'structural' ? 'high' : securityContext.minimumLane), r.config, 'implementer', r.operational) }) };
         let value: Spec;
         if (proposal !== undefined) value = specSchema.parse(proposal);
         else if (r.executionPath === 'standard') {
@@ -520,7 +534,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             const checkpoint = this.store.documentEvents(id, ['product.checkpoint']).at(-1)?.data as { revision?: number; specHash?: string } | undefined;
             const proposal = checkpoint?.revision === r.revision && checkpoint.specHash === r.contentHash ? r.content : undefined;
             try { await this.product(doc, proposal, signal); }
-            catch (error) { r.error = { code: 'PRODUCT', message: errorMessage(error) }; this.save(doc, 'product.failed', { error: r.error }); throw error; }
+            catch (error) { r.error = planningError(error); this.save(doc, 'product.failed', { error: r.error }); throw error; }
             return doc;
         } finally { this.store.releaseDocument(id, token); }
     }
@@ -584,14 +598,14 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         try {
             const doc = this.get(id); const r = doc.data;
             invariant(!['closed', 'rejected'].includes(r.status) && !r.sessionStartedAt && !r.planningStartedAt, 'STATE', 'Stop/recover the workflow before amending its limits');
-            const cost = Object.hasOwn(values, 'maxSpecCostUsd') ? values['maxSpecCostUsd'] : r.operational?.maxSpecCostUsd ?? r.config.workflow.maxSpecCostUsd ?? 25;
+            const cost = Object.hasOwn(values, 'maxSpecCostUsd') ? values['maxSpecCostUsd'] : specCostCeiling(r);
             const time = Object.hasOwn(values, 'maxActiveMs') ? values['maxActiveMs'] : r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs;
-            invariant(typeof cost === 'number' && Number.isFinite(cost) && cost >= 0.01 && cost <= 10000, 'ARGUMENT', 'maxSpecCostUsd must be within 0.01..10000');
+            invariant(cost === null || (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0.01 && cost <= 10000), 'ARGUMENT', 'maxSpecCostUsd must be null or within 0.01..10000');
             invariant(typeof time === 'number' && Number.isSafeInteger(time) && time >= 100 && time <= 14400000, 'ARGUMENT', 'maxActiveMs must be within 100..14400000');
             let tuning = r.operational?.agent ?? null;
             if (values['agent'] !== undefined) {
                 const v = values['agent'];
-                invariant(v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).every(k => ['model', 'effort', 'timeoutMs', 'maxTurns', 'maxBudgetUsd'].includes(k)), 'ARGUMENT', 'Agent tuning cannot change provider, command, credentials or tools');
+                invariant(v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).every(k => ['model', 'effort', 'timeoutMs', 'maxTurns', 'maxBudgetUsd', 'usageMode'].includes(k)), 'ARGUMENT', 'Agent tuning cannot change provider, command, credentials or tools');
                 agentSchema.parse({ ...r.config.agent, ...tuning, ...v });
                 tuning = { ...tuning, ...v };
             }
@@ -601,15 +615,24 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                 invariant(input !== null && typeof input === 'object' && !Array.isArray(input), 'ARGUMENT', 'roles must be a tuning object');
                 for (const [name, v] of Object.entries(input)) {
                     invariant(['product', 'design', 'implementer', 'qa'].includes(name), 'ARGUMENT', 'Unknown model role');
-                    invariant(v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).every(k => ['model', 'effort', 'timeoutMs', 'maxTurns', 'maxBudgetUsd'].includes(k)), 'ARGUMENT', 'Role tuning cannot change provider, command, credentials or tools');
+                    invariant(v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).every(k => ['model', 'effort', 'timeoutMs', 'maxTurns', 'maxBudgetUsd', 'usageMode'].includes(k)), 'ARGUMENT', 'Role tuning cannot change provider, command, credentials or tools');
                     const role = name as keyof typeof roles;
                     agentSchema.parse({ ...roleAgent(r.config, role, 'high'), ...roles[role], ...v });
                     roles[role] = { ...roles[role], ...v };
                 }
             }
+            const previousQaModels = modelPlan(r.config, r.operational).filter(m => m.role === 'qa').map(m => ({ provider: m.provider, model: m.model, effort: m.effort }));
             const gates = this.amendedGates(r, values['gates']);
             const previousGates = this.runConfig(r).gates;
             r.operational = { maxSpecCostUsd: cost, maxActiveMs: time, gates, agent: tuning, roles, at: Date.now(), reviewer: actor.trim(), note: note.trim() };
+            for (const role of ['product', 'design', 'implementer', 'qa'] as const)
+                for (const lane of ['fast', 'standard', 'high'] as const) executionAgent(applyModelOverrides(roleAgent(r.config, role, lane), r.config, role, r.operational));
+            const qaChanged = hash(previousQaModels) !== hash(modelPlan(r.config, r.operational).filter(m => m.role === 'qa').map(m => ({ provider: m.provider, model: m.model, effort: m.effort })));
+            if (qaChanged) {
+                invariant(!r.publication && !r.delivery, 'STATE', 'Changing QA requires an unpublished candidate');
+                r.qa = null; r.review = null; r.error = null;
+                if (r.approval) r.status = 'approved';
+            }
             const gatesChanged = hash(previousGates) !== hash(this.runConfig(r).gates);
             if (gatesChanged) {
                 invariant(!r.publication && !r.delivery, 'STATE', 'Gate amendments must precede publication or delivery');
@@ -650,7 +673,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                 await this.product(doc, proposal, signal);
             }
             catch (error) {
-                r.error = { code: 'PRODUCT', message: errorMessage(error) };
+                r.error = planningError(error);
                 this.save(doc, 'product.failed', { error: r.error });
                 throw error;
             }
@@ -792,7 +815,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
     private qaRepairTask(r: SpecRecord): Task {
         invariant(r.qa, 'QA_REQUIRED', 'A QA report is required to build a repair');
         const description = [
-            'Correct the following QA findings without broadening the approved scope.',
+            'Correct the following QA findings that require a fix: all blocker/major findings and findings with resolution=required, including minor cleanup. Leave advisory-only findings outside this repair. Preserve the approved scope.',
             'When a finding can only be fixed in a file outside the approved paths (for example a comment made false by an approved change), make the smallest change there anyway: the controller then stops and asks the operator for an explicit scope amendment. Never broaden a feature to do so.',
             'When a finding cannot be fixed by changing files (for example it is about what a report must contain), say so precisely in your summary; QA reads the task summaries.',
         ].join('\n') + '\n' + JSON.stringify({ approvedSpec: this.approved(r), qa: r.qa.report, taskSummaries: this.taskSummaries(r) });
@@ -812,7 +835,8 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
     }
     costSummary(id: string) {
         const r = this.store.document<SpecRecord>(id, 'spec').data;
-        return { ...specCosts(this.store, r, id), ceilingUsd: r.operational?.maxSpecCostUsd ?? r.config.workflow.maxSpecCostUsd };
+        const modes = [...new Set(modelPlan(r.config, r.operational).map(m => m.usageMode))];
+        return { ...specCosts(this.store, r, id), budget: specCosts(this.store, r, id, true), usageModes: modes, configuredCeilingUsd: specCostCeiling(r), ceilingUsd: modes.every(m => m === 'subscription') ? null : specCostCeiling(r) };
     }
     /**
      * The reviewed configuration may cap what a spec is allowed to spend. Reaching it stops the workflow with
@@ -821,9 +845,9 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
      */
     private costExceeded(doc: Document<SpecRecord>, options: WorkflowOptions): boolean {
         const r = doc.data;
-        const ceiling = r.operational?.maxSpecCostUsd ?? r.config.workflow.maxSpecCostUsd ?? null;
-        if (ceiling === null || options.acceptCost) return false;
-        const spent = this.declaredCostUsd(r, doc.id);
+        const ceiling = specCostCeiling(r);
+        if (ceiling === null || options.acceptCost || applyModelOverrides(r.config.agent, r.config, 'implementer', r.operational).usageMode === 'subscription') return false;
+        const spent = specCosts(this.store, r, doc.id, true).knownUsd;
         if (spent < ceiling) return false;
         r.status = 'blocked';
         r.error = { code: 'COST_BUDGET', message: `The providers declared ${spent.toFixed(2)} USD on this spec, at or above the reviewed ceiling of ${ceiling.toFixed(2)} USD (workflow.maxSpecCostUsd). Nothing was started. Read what remains to do, then authorize the overrun explicitly.` };
@@ -866,12 +890,13 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         this.save(doc, 'workflow.blocked', { runId: run.id, error: doc.data.error });
     }
     /** Records a proposed correction of one acceptance criterion and returns its hash for explicit approval. */
-    planCriterionAmendment(id: string, criterionId: string, correction: { description: string; verification: string; reason: string; requirements?: { id: string; verification: string; negativeTests?: string[] }[] }): Document<SpecRecord> {
+    planCriterionAmendment(id: string, criterionId: string, correction: { description: string; verification: string; reason: string; requirements?: { id: string; verification: string; reviewTestIndexes?: number[]; negativeTests?: string[] }[] }): Document<SpecRecord> {
         const token = this.store.acquireDocument(id);
         try {
             const doc = this.get(id); const r = doc.data;
             const spec = this.approved(r);
             invariant(!['closed', 'rejected', 'delivered'].includes(r.status), 'STATE', 'This spec no longer accepts a criterion correction');
+            invariant(!r.sessionStartedAt && !r.planningStartedAt && !r.publication, 'STATE', 'Stop execution before amending an unpublished spec');
             invariant(r.attempts.length > 0, 'CRITERION_AMENDMENT', 'Execution has not started: refine the spec instead of amending a criterion');
             const criterion = spec.acceptance.find(c => c.id === criterionId);
             invariant(criterion, 'CRITERION_AMENDMENT', `Unknown acceptance criterion ${criterionId}`);
@@ -885,28 +910,32 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                 invariant(requirement.acceptanceIds.includes(criterionId), 'CRITERION_AMENDMENT', `Security requirement ${x.id} does not verify ${criterionId}`);
                 const text = x.verification.trim();
                 invariant(text.length >= 10 && text.length <= 4000, 'CRITERION_AMENDMENT', `A corrected verification for ${x.id} must be observable`);
-                // A negative case may be reclassified as a review — the marker the spec forgot — but never
-                // rewritten, added or removed: the operator states what it always was, not something else.
+                invariant(x.negativeTests === undefined || x.reviewTestIndexes === undefined, 'CRITERION_AMENDMENT', 'Use negativeTests or reviewTestIndexes, not both');
+                invariant(x.negativeTests === undefined || (Array.isArray(x.negativeTests) && x.negativeTests.every(t => typeof t === 'string')), 'CRITERION_AMENDMENT', 'negativeTests must be a list of strings');
                 const negativeTests = x.negativeTests?.map(t => t.trim());
                 if (negativeTests) {
                     invariant(negativeTests.length === requirement.negativeTests.length, 'CRITERION_AMENDMENT', `The negative cases of ${x.id} may be marked as reviews, never added or removed`);
                     negativeTests.forEach((test, i) => {
                         const before = requirement.negativeTests[i]!;
-                        invariant(test === before || test === `[review] ${before}`, 'CRITERION_AMENDMENT', `A negative case of ${x.id} may only gain the [review] marker, not change its text`);
+                        invariant(test === before || (!before.startsWith('[review] ') && test === `[review] ${before}`), 'CRITERION_AMENDMENT', `A negative case of ${x.id} may only gain the [review] marker, not change its text`);
                     });
                     invariant(negativeTests.some((test, i) => test !== requirement.negativeTests[i]), 'CRITERION_AMENDMENT', `No negative case of ${x.id} is reclassified`);
                 }
-                return { id: x.id, previous: requirement.verification, verification: text,
+                const indexes = x.reviewTestIndexes ?? [];
+                invariant(Array.isArray(indexes) && new Set(indexes).size === indexes.length && indexes.every(i => Number.isInteger(i) && i >= 0 && i < requirement.negativeTests.length), 'CRITERION_AMENDMENT', 'Review indexes must name distinct existing negative cases');
+                const reviewTests = indexes.map(index => ({ index, previous: requirement.negativeTests[index]! }));
+                invariant(reviewTests.every(test => !test.previous.startsWith('[review] ')), 'CRITERION_AMENDMENT', 'This negative case already permits review');
+                return { id: x.id, previous: requirement.verification, verification: text, ...(reviewTests.length ? { reviewTests } : {}),
                     ...(negativeTests ? { previousNegativeTests: [...requirement.negativeTests], negativeTests } : {}) };
             });
             invariant(new Set(requirements.map(x => x.id)).size === requirements.length, 'CRITERION_AMENDMENT', 'A security requirement is corrected at most once per amendment');
-            const changed = description !== criterion.description || verification !== criterion.verification
-                || requirements.some(x => x.verification !== x.previous || x.negativeTests !== undefined);
+            const changed = description !== criterion.description || verification !== criterion.verification || requirements.some(x => x.verification !== x.previous || x.reviewTests?.length || x.negativeTests !== undefined);
             invariant(changed, 'CRITERION_AMENDMENT', 'The correction is identical to the approved criterion');
             const previous = { description: criterion.description, verification: criterion.verification };
             const amendment: CriterionAmendment = { id: randomUUID(), criterionId, previous, description, verification, requirements, reason: correction.reason.trim(),
                 hash: criterionAmendmentHash({ criterionId, previous, description, verification, requirements, reason: correction.reason.trim() }),
                 status: 'pending', at: Date.now(), approvedAt: null, reviewer: null, note: null };
+            this.approved({ ...r, criterionAmendments: [...(r.criterionAmendments ?? []), { ...amendment, status: 'approved' }] });
             r.criterionAmendments = [...(r.criterionAmendments ?? []).filter(a => !(a.status === 'pending' && a.criterionId === criterionId)), amendment];
             this.save(doc, 'criterion.amendment_proposed', { amendmentId: amendment.id, criterionId, hash: amendment.hash, previous, description, verification, requirements, reason: amendment.reason });
             return doc;
@@ -921,6 +950,16 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             const amendment = (r.criterionAmendments ?? []).find(a => a.id === amendmentId);
             invariant(amendment && amendment.status === 'pending', 'CRITERION_AMENDMENT', 'Pending criterion amendment not found');
             invariant(amendment.hash === expectedHash, 'CRITERION_HASH', 'Approve the exact corrected criterion hash');
+            invariant(!r.sessionStartedAt && !r.planningStartedAt && !r.publication && !['closed', 'rejected', 'delivered'].includes(r.status), 'STATE', 'Stop execution before amending an unpublished spec');
+            const effective = this.approved(r);
+            const criterion = effective.acceptance.find(c => c.id === amendment.criterionId);
+            invariant(criterion && criterion.description === amendment.previous.description && criterion.verification === amendment.previous.verification &&
+                (amendment.requirements ?? []).every(change => {
+                    const requirement = effective.security.requirements.find(q => q.id === change.id);
+                    return requirement && requirement.verification === change.previous &&
+                        (!change.previousNegativeTests || hash(requirement.negativeTests) === hash(change.previousNegativeTests)) && (change.reviewTests ?? []).every(test => requirement.negativeTests[test.index] === test.previous);
+                }), 'CRITERION_HASH', 'The correction is stale; propose it again against the current spec');
+            this.approved({ ...r, criterionAmendments: [...(r.criterionAmendments ?? []).filter(a => a.id !== amendment.id), { ...amendment, status: 'approved' }] });
             amendment.status = 'approved'; amendment.approvedAt = Date.now(); amendment.reviewer = actor.trim(); amendment.note = note.trim();
             // The criterion changed, so no previous assessment of it still applies.
             r.qa = null; r.review = null; r.delivery = null;
@@ -1107,12 +1146,12 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                     invariant(Buffer.byteLength(diff) <= maxDiff, 'QA_CONTEXT', `QA diff exceeds limits.maxQaDiffBytes (${maxDiff}); use an explicit external review, never a truncated review`);
                     const inventoryDelta = await this.inventoryDelta(r, final.candidateSha!, signal);
                     this.save(doc, 'qa.inventory_delta', { added: inventoryDelta.added.length, removed: inventoryDelta.removed.length, possibleDuplicates: inventoryDelta.possibleDuplicates });
-                    if (this.costExceeded(doc, options)) return doc;
+                    // runRole checks the budget only if a model call is needed; retained proof can be free.
                     const quality = await this.qualityEvidence(r, final, signal);
                     const fullContext = { diff, spec, qualityReview: qualityContext(r, final), architecture: r.architecture ?? null, approvedAmendments: this.approvedAmendments(r), taskSummaries: this.taskSummaries(r), decisionLedger: r.decisionLedger, securityContext:r.securityContext, approvedDesign: this.qaDesignContext(r), baseSha: r.baseSha, candidateSha: final.candidateSha, receipts: final.receipts, inventoryDelta, diffCommand: ['git', 'diff', '--no-ext-diff', '--no-textconv', r.baseSha, final.candidateSha, '--'] };
                     const context = r.executionPath && r.executionPath !== 'structural' && final.risk!.lane !== 'high' ? targetedQaContext(fullContext) : fullContext;
                     this.save(doc, 'qa.context_selected', { mode: context === fullContext ? 'full' : 'targeted', bytes: Buffer.byteLength(JSON.stringify(context)), fullBytes: Buffer.byteLength(JSON.stringify(fullContext)), completeDiff: true });
-                    const raw = await runRole({ store: this.store, documentId: id, budgetDocumentId: id, acceptCost: options.acceptCost ?? false, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, modelReason: modelChoice(r.config, 'qa', final.risk?.lane ?? spec.minimumLane).reason, agent: roleAgent(r.config, 'qa', final.risk?.lane ?? spec.minimumLane), passEnv: r.config.environment.passEnv, schema: qaSchema, context, signal,
+                    const raw = await runRole({ store: this.store, documentId: id, budgetDocumentId: id, acceptCost: options.acceptCost ?? false, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, modelPolicy: modelPlan(r.config, r.operational).find(m => m.role === 'qa' && m.lane === (final.risk?.lane ?? spec.minimumLane))?.decision, modelReason: modelChoice(r.config, 'qa', final.risk?.lane ?? spec.minimumLane).reason, agent: roleAgent(r.config, 'qa', final.risk?.lane ?? spec.minimumLane), passEnv: r.config.environment.passEnv, schema: qaSchema, context, signal,
                         maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: report => validateQa(report, spec, final.candidateSha!, r.decisionLedger, quality) });
                     r.qa = { report: raw, specHash: r.contentHash!, evidenceHash, at: Date.now(), source: 'agent' };
                     this.save(doc, 'qa.completed', { qa: r.qa });
@@ -1180,11 +1219,11 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         for (const c of q.criteria) lines.push(`- **${c.id}** — ${c.status}: ${c.evidence}`);
         lines.push('','## Findings');
         if (!q.findings.length) lines.push('- None');
-        else for (const f of q.findings) lines.push(`- **${f.severity}** ${f.id}${f.path ? ` (${f.path})` : ''}: ${f.description}`);
+        else for (const f of q.findings) lines.push(`- **${f.severity} · ${findingRequiresFix(f) ? 'correction requise' : 'observation'}** ${f.id}${f.path ? ` (${f.path})` : ''}: ${f.description}`);
         if (q.securityChecks.length) lines.push('','## Security checks',...q.securityChecks.map(x=>`- **${x.requirementId}** — ${x.status}: ${x.evidence}`));
         if (q.negativeTestChecks?.length) {
             lines.push('', '## Negative tests', ...q.negativeTestChecks.map(x =>
-                `- ${x.requirementId}[${x.testIndex}]: ${x.status}; ${x.evidence}\n  Tests: ${x.paths.join(', ')}; receipts: ${x.receiptIds.join(', ')}`));
+                `- ${x.requirementId}[${x.testIndex}]: ${x.status}; ${x.evidence}\n  Tests: ${x.status === 'review' ? 'none (review)' : x.paths.join(', ')}; receipts: ${x.receiptIds.join(', ')}; inspected: ${[...(x.inspectedPaths ?? []), ...(x.status === 'review' ? x.paths : [])].join(', ')}`));
             // A case the spec defined as a review is asserted, never proven: the human reviewer decides.
             const reviewed = q.negativeTestChecks.filter(x => x.status === 'review');
             if (reviewed.length) lines.push('', `### Asserted by review, not proven by a test (${reviewed.length})`,
@@ -1639,7 +1678,9 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         }
         else if (r.error?.code === 'QA_REJECTED')
             next = `Read the QA findings above, then create a follow-up spec: the automatic repair budget is spent (apv2 spec draft --repo ${r.repo} --request "...").`;
-        else if (r.error?.code === 'COST_BUDGET')
+        else if (r.error?.code === 'QA_REVIEW_AUTHORIZATION')
+            next = `Inspect the named negative case: provide its executable test evidence, or propose a justified reviewTestIndexes correction with apv2 spec criterion ${doc.id} --criterion AC_ID --file CORRECTION_JSON and approve its exact hash. Do not rerun unchanged.`;
+        else if (r.error?.code === 'COST_BUDGET' || r.error?.code === 'QA_BUDGET')
             next = `apv2 spec budget ${doc.id} --file LIMITS_JSON --approve --note TEXT   (set an explicit remaining-work allowance, then resume; --accept-cost is an unbounded override)`;
         else if (stopped)
             next = `The agent stopped before reporting; its work is kept in ${stopped.workspace}. Inspect it, then apv2 spec run ${doc.id} --accept-current to snapshot and validate it, or apv2 spec retry ${doc.id} --confirm to discard it and start the task again.`;
@@ -1660,6 +1701,10 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             next = `Resolve ${r.error.code} before running again: ${r.error.message.slice(0, 200)}`;
         else
             next = `apv2 spec run ${doc.id}`;
-        return { id: doc.id, planRevisions: (r.planRevisions ?? []).map(p => ({ id: p.id, reason: p.reason, taskIds: p.tasks.map(t => t.id), hash: p.hash, status: p.status, at: p.at, approval: p.approval })), failedChecks: active ? this.store.failureDiagnostics(active).map(x => ({ runId: active.id, candidateSha: x.candidateSha, gateId: x.gateId, diagnostic: x.diagnostic, authoritative: false })) : [], models: modelPlan(r.config, r.operational), modelOverrides: r.operational ? { agent: r.operational.agent, roles: r.operational.roles ?? {} } : null, executionPath: r.executionPath ?? 'legacy', architecture: r.architecture ?? null, maxActiveMs: r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs, cost: this.costSummary(doc.id), planningMs: Math.round(r.planningMs ?? 0), revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash:r.contentHash, security:{contextHash:r.securityContextHash ?? null,minimumLane:r.securityContext?.minimumLane ?? null,requiresThreatModel:r.securityContext?.requiresThreatModel ?? null,topics:r.securityContext?.topics.map(x=>x.id) ?? [],requirements:r.content?.security?.requirements.map(x=>x.id) ?? []}, design:r.design ? {hash:r.design.hash,directory:r.design.directory,indexPath:r.design.indexPath,summary:r.design.proposal.summary,questions:r.design.proposal.questions} : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, quality: (final ?? active)?.candidateSha ? qualityContext(r, (final ?? active)!) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], sizeAdvice: r.sizeAdvice ?? [], stoppedWork: stopped ? { runId: stopped.id, workspace: stopped.workspace } : null, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
+        const history = this.store.documentEvents(doc.id);
+        const runIds = [...new Set([...r.attempts.map(a => a.runId), ...r.validationRunIds])];
+        const timing = phaseTimings(history, runIds.map(id => ({ run: this.store.get(id), events: this.store.events(id, ['invocation.started', 'invocation.finished']) })), Date.now());
+        const decisions = history.filter(e => e.type === 'planning.path_selected').map(e => e.data).slice(-1);
+        return { timing, stop: stopAdvice(r.error), decisions, id: doc.id, planRevisions: (r.planRevisions ?? []).map(p => ({ id: p.id, reason: p.reason, taskIds: p.tasks.map(t => t.id), hash: p.hash, status: p.status, at: p.at, approval: p.approval })), failedChecks: active ? this.store.failureDiagnostics(active).map(x => ({ runId: active.id, candidateSha: x.candidateSha, gateId: x.gateId, diagnostic: x.diagnostic, authoritative: false })) : [], models: modelPlan(r.config, r.operational), modelOverrides: r.operational ? { agent: r.operational.agent, roles: r.operational.roles ?? {} } : null, executionPath: r.executionPath ?? 'legacy', architecture: r.architecture ?? null, maxActiveMs: r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs, cost: this.costSummary(doc.id), planningMs: Math.round(r.planningMs ?? 0), revision: r.revision, status: r.status, title: r.content?.title ?? null, hash: approvalHash(r), specHash:r.contentHash, security:{contextHash:r.securityContextHash ?? null,minimumLane:r.securityContext?.minimumLane ?? null,requiresThreatModel:r.securityContext?.requiresThreatModel ?? null,topics:r.securityContext?.topics.map(x=>x.id) ?? [],requirements:r.content?.security?.requirements.map(x=>x.id) ?? []}, design:r.design ? {hash:r.design.hash,directory:r.design.directory,indexPath:r.design.indexPath,summary:r.design.proposal.summary,questions:r.design.proposal.questions} : null, baseSha: r.baseSha, candidateSha: r.currentSha, questions: r.content?.questions ?? [], tasks: r.content?.tasks.map(t => ({ id: t.id, title: t.title, done: r.completedTaskIds.includes(t.id), dependsOn: t.dependsOn })) ?? [], attempts: r.attempts, validationRunIds: r.validationRunIds, activeRunId: r.activeRunId, finalRun: final ? summarize(final) : null, quality: (final ?? active)?.candidateSha ? qualityContext(r, (final ?? active)!) : null, qa: r.qa, activeMs: Math.round(r.activeMs), error: r.error, delivery: r.delivery, publication: r.publication, impactAdvice: r.impactAdvice ?? [], sizeAdvice: r.sizeAdvice ?? [], stoppedWork: stopped ? { runId: stopped.id, workspace: stopped.workspace } : null, nextAction: next, approvalIdentityWarning: 'Local reviewer labels are not authenticated identities.' };
     }
 }

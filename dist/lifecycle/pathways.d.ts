@@ -113,6 +113,46 @@ export declare const architectureSchema: import("../domain/schema.js").Schema<{
 export type Architecture = Infer<typeof architectureSchema>;
 /** Conservative route selection. A more demanding route never falls back during a draft. */
 export declare function selectPath(request: string, security: SecurityContext, current?: ExecutionPath): ExecutionPath;
+export declare function pathDecision(request: string, security: SecurityContext, current?: ExecutionPath, decisionCount?: number): {
+    policyVersion: string;
+    kind: string;
+    inputs: {
+        current: ExecutionPath;
+        minimumLane: string;
+        requiresThreatModel: boolean;
+        decisionCount: number;
+        structuralLanguage: boolean;
+    };
+    inputHash: string;
+    result: {
+        path: ExecutionPath;
+    };
+    reasons: string[];
+    decisionHash: string;
+};
+export declare function resolvePathDecision(inputs: {
+    current: ExecutionPath;
+    minimumLane: string;
+    requiresThreatModel: boolean;
+    decisionCount: number;
+    structuralLanguage: boolean;
+}): {
+    policyVersion: string;
+    kind: string;
+    inputs: {
+        current: ExecutionPath;
+        minimumLane: string;
+        requiresThreatModel: boolean;
+        decisionCount: number;
+        structuralLanguage: boolean;
+    };
+    inputHash: string;
+    result: {
+        path: ExecutionPath;
+    };
+    reasons: string[];
+    decisionHash: string;
+};
 /** Compact skips model QA only while observed changes remain inside the approved compact envelope. */
 export declare function requiresQa(record: SpecRecord, run: Run, spec: Spec): boolean;
 /** Targeted QA keeps the complete diff and every obligation, omitting planning prose and successful tool logs. */

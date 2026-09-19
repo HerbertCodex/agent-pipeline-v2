@@ -54,6 +54,8 @@ export const taskSchema = s.object({
 });
 export const agentSchema = s.object({
     type: s.enum(['command', 'codex', 'claude']),
+    // Explicit account policy, not authentication detection. Legacy preserves existing installations.
+    usageMode: s.default(s.enum(['legacy', 'subscription', 'metered']), 'legacy'),
     command: s.default(s.array(s.string(1, 16000), 0, 200), []),
     // Safety ceiling, not a target. A role and its output repairs share this deadline.
     timeoutMs: s.default(s.number(10, 3600000), 1800000),

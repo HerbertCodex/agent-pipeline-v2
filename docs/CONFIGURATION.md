@@ -34,7 +34,11 @@ node dist/cli.js schemas --output examples/schemas
 }
 ```
 
-Cet exemple suppose que `npm test` exécute les tests unitaires du projet. Compléter les gates de build, intégration, navigateur et les mappings `testPaths` selon les changements à réaliser ; une seule gate unitaire ne couvre pas tous les parcours. Voir [les preuves requises](LOT-3-QUALITE.md#exigences-adaptées-au-changement).
+Cet exemple suppose que `npm test` exécute les tests unitaires du projet. Compléter les gates de build, intégration, navigateur et les mappings `testPaths` selon les changements à réaliser ; une seule gate unitaire ne couvre pas tous les parcours. Voir [les preuves requises](QUALITY.md#exigences-adaptées-au-changement).
+
+### Modes d’usage
+
+`agent.usageMode` et les rôles acceptent `legacy` (défaut compatible), `subscription` et `metered`. En mode `subscription`, les appels ignorent les plafonds monétaires mais conservent délais, tours et contrôles. Un modèle explicite est requis en abonnement et facturé. La connexion au CLI reste inchangée. [Configuration mixte, migration et diagnostics](EXECUTION-POLICY.md).
 
 ### Limites de temps, de tours et de coût
 
@@ -45,7 +49,7 @@ Les limites fournisseur peuvent arrêter un appel avant sa réponse finale. Une 
 | `agent.timeoutMs` | 1 800 000 ms (30 min) | Appel Implementer ; pour un rôle de lecture, échéance partagée avec ses réparations de sortie. |
 | `agent.maxTurns` | 200 | Nombre de tours d'un appel Claude. |
 | `agent.maxBudgetUsd` | `null` | Plafond explicite par appel Claude, s'il est renseigné. |
-| `workflow.maxSpecCostUsd` | 25 $ | Coûts déclarés cumulés de la spec, planification, réparations et QA comprises. |
+| `workflow.maxSpecCostUsd` | 25 $ | Coûts déclarés hors abonnement, planification, réparations et QA comprises. |
 | `workflow.maxActiveMs` | 3 600 000 ms (1 h) | Temps cumulé de planification et d'exécution de la spec, hors attente humaine. |
 | `maxRunMs` | 2 700 000 ms (45 min) | Budget actif d'une tentative, reprises comprises. |
 | `validationReserveMs` | 60 000 ms | Temps réservé aux contrôles lors du calcul du timeout Implementer. |
@@ -53,7 +57,7 @@ Les limites fournisseur peuvent arrêter un appel avant sa réponse finale. Une 
 | `workflow.maxQaRepairs` | 2 | Réparations demandées par QA, entre 0 et 3. |
 | `workflow.maxOutputRepairs` | 1 | Réparations du contrat de sortie d'un rôle, entre 0 et 2. |
 
-`workflow.maxSpecCostUsd` est vérifié avant les appels. Pour Claude, le montant restant réduit aussi `maxBudgetUsd` : **le plafond global peut donc interrompre l'appel en cours**. Les coûts proviennent des déclarations du fournisseur, pas d'une facture ; un coût inconnu n'est pas zéro et le dernier tour peut dépasser le plafond. Un adaptateur sans coût monétaire publié ne fournit pas de garantie de dépense en dollars.
+`workflow.maxSpecCostUsd` est vérifié avant les appels hors abonnement. Pour Claude, le montant restant réduit aussi `maxBudgetUsd` : **le plafond global peut donc interrompre l'appel en cours**. Les coûts proviennent des déclarations du fournisseur, pas d'une facture ; un coût inconnu n'est pas zéro et le dernier tour peut dépasser le plafond. Un adaptateur sans coût monétaire publié ne fournit pas de garantie de dépense en dollars.
 
 Le même amendement couvre aussi les contrôles, dans un bloc `gates` : `add` ajoute un contrôle, `resources` déclare une ressource partagée qui sérialise des contrôles écrivant au même endroit, `timeoutMs` relève un délai. Ce qui définit ce qu'un contrôle prouve — commande, `covers`, `testPaths`, `lanes`, `mandatory` — et la suppression d'un contrôle restent hors amendement : ils exigent une nouvelle spec, car ils affaibliraient une approbation déjà donnée.
 
@@ -93,7 +97,7 @@ Les ressources nommées restent nécessaires pour les ports, bases de données o
 
 ## Sélection
 
-Un contrôle `mandatory` s'exécute quel que soit le filtre. Sinon, en `fast` et `standard`, `lanes` et `paths` définissent son applicabilité. Une liste `paths` vide s'applique à tous les changements. Les dépendances transitives d'un contrôle choisi sont incluses, même si leurs propres filtres ne correspondent pas. En `high`, tous les contrôles configurés sont sélectionnés. En mode `qualityReview: "evidence"`, les preuves requises par le changement ajoutent les gates applicables nécessaires, même si leur filtre de lane les excluait ; le filtre de chemins et la couverture restent vérifiés. Voir [les exigences de validation](LOT-3-QUALITE.md#contrôles-et-couverture).
+Un contrôle `mandatory` s'exécute quel que soit le filtre. Sinon, en `fast` et `standard`, `lanes` et `paths` définissent son applicabilité. Une liste `paths` vide s'applique à tous les changements. Les dépendances transitives d'un contrôle choisi sont incluses, même si leurs propres filtres ne correspondent pas. En `high`, tous les contrôles configurés sont sélectionnés. En mode `qualityReview: "evidence"`, les preuves requises par le changement ajoutent les gates applicables nécessaires, même si leur filtre de lane les excluait ; le filtre de chemins et la couverture restent vérifiés. Voir [les exigences de validation](QUALITY.md#contrôles-et-couverture).
 
 Le moteur refuse un plan vide. Un contrôle absent de la configuration n'est toutefois pas inventé par le noyau : calibrer le profil avec des cas qui doivent échouer. Les filtres de chemins sont des décisions de politique, **pas une analyse sémantique de l'impact des imports**.
 
@@ -214,7 +218,7 @@ Les longueurs des champs produits par les modèles (par exemple 3 000 caractère
 Les fichiers existants sans réglages explicites conservent `workflow.planningMode: "legacy"` et `workflow.qualityReview: "legacy"`. Les configurations neuves proposées par `init` et l'onboarding activent `adaptive` et `evidence`. Une configuration fournie explicitement conserve ses choix. Les changements s'appliquent aux nouvelles specs après revue de la configuration, pas silencieusement aux specs approuvées.
 
 - `planningMode: "adaptive"` active Product court pour le parcours standard et une décision d'architecture préalable pour le parcours structurant. `spec compact` est le raccourci explicite pour une tâche déjà cadrée. [Choix du parcours](LIFECYCLE.md#choisir-le-parcours).
-- `qualityReview: "evidence"` impose les preuves applicables et la grille QA. Les gates déclarent `covers` et, pour relier un test négatif à une commande, `testPaths`. `validationRules` ajoute les obligations propres aux chemins du projet. [Configuration détaillée](LOT-3-QUALITE.md).
+- `qualityReview: "evidence"` impose les preuves applicables et la grille QA. Les gates déclarent `covers` et, pour relier un test négatif à une commande, `testPaths`. `validationRules` ajoute les obligations propres aux chemins du projet. [Configuration détaillée](QUALITY.md).
 - `agent` configure l'Implementer ; Product et QA héritent de lui si leur profil vaut `null`. Design hérite de `roles.product`, puis de `agent`, si `roles.design` vaut `null`.
 - `roleProfiles` choisit `quick` pour fast/standard et `deep` pour high, par fournisseur et rôle. Une règle `modelRouting` exacte (fournisseur, rôle, lane) prime ; un amendement opérationnel autorisé prime ensuite. Les modèles et efforts sont explicites, sans modification des permissions.
 - `workflow.qaProfile: "deep"` applique à QA la politique high indépendamment du risque de la tâche ; `"lane"` conserve le comportement historique. `--models FILE` au bootstrap/onboarding sélectionne explicitement quick/deep et une QA dédiée, éventuellement chez un autre fournisseur.

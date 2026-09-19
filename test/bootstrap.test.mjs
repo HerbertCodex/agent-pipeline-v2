@@ -22,20 +22,22 @@ import {spawnSync} from 'node:child_process';
 const args=process.argv.slice(2);if(args.includes('--version')){console.log('fixture 1');process.exit(0);}
 const text=readFileSync(0,'utf8');const probe=text.startsWith('Compatibility check only.');
 const request=probe?null:JSON.parse(text.slice(text.indexOf('{')));
-appendFileSync(${JSON.stringify(log)},JSON.stringify({probe,model:args[args.indexOf('--model')+1],protocol:request?.protocol})+'\\n');
+appendFileSync(${JSON.stringify(log)},JSON.stringify({probe,model:args[args.indexOf('--model')+1],protocol:request?.protocol,args})+'\\n');
 let value={ready:true};if(!probe){const r=spawnSync(process.execPath,[${JSON.stringify(f.worker)}],{input:JSON.stringify(request),encoding:'utf8'});if(r.status!==0)process.exit(4);value=JSON.parse(r.stdout);}
 if(args.includes('exec')){writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify(value));console.log(JSON.stringify({type:'turn.completed'}));}
 else console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,structured_output:value,total_cost_usd:0.01}));
 `,{mode:0o700});
   symlinkSync(wrapper,join(bin,'codex')); symlinkSync(wrapper,join(bin,'claude'));
   const oldPath=process.env.PATH;process.env.PATH=bin+':'+oldPath;t.after(()=>{process.env.PATH=oldPath;});
-  const selection={quick:{provider:'codex',model:'quick-test',effort:'low'},deep:{provider:'codex',model:'deep-test',effort:'high'},qa:{provider:'claude',model:'qa-test',effort:'high'}};
+  const selection={quick:{provider:'codex',model:'quick-test',effort:'low',usageMode:'subscription'},deep:{provider:'codex',model:'deep-test',effort:'high',usageMode:'subscription'},qa:{provider:'claude',model:'qa-test',effort:'high',usageMode:'subscription'}};
   const doc=await planBootstrap(store,f.repo,'Create a minimal Node application with an addition function.',undefined,undefined,'solo',selection);
   const calls=readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(calls.map(c=>[c.model,c.probe]),[['deep-test',true],['deep-test',false],['qa-test',true],['qa-test',false]]);
   assert.equal(calls[3].protocol,'agent-pipeline/bootstrap-review-v1');
+  assert.ok(calls.every(c => !c.args.includes('--max-budget-usd')));
   const result=await applyBootstrap(store,doc.id,doc.data.hash,'Test Owner','Approve the explicit profiles and bootstrap.',true);
   assert.equal(roleAgent(result.onboarding.data.config,'qa','standard').model,'qa-test');
+  assert.equal(roleAgent(result.onboarding.data.config,'qa','standard').usageMode,'subscription');
   assert.equal(roleAgent(result.onboarding.data.config,'implementer','standard').model,'quick-test');
   assert.equal(roleAgent(result.onboarding.data.config,'implementer','high').model,'deep-test');
 });

@@ -99,6 +99,14 @@
               "minor"
             ]
           },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "required",
+              "advisory"
+            ],
+            "default": "advisory"
+          },
           "path": {
             "type": "string",
             "minLength": 0,
@@ -405,6 +413,22 @@
             },
             "minItems": 0,
             "maxItems": 20
+          },
+          "inspectedPaths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "allOf": [
+                {
+                  "pattern": "^[^\\u0000]*$"
+                }
+              ]
+            },
+            "minItems": 0,
+            "maxItems": 12,
+            "default": []
           }
         },
         "required": [

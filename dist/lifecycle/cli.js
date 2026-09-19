@@ -70,7 +70,8 @@ Maintenance:
                                            lifecycle documents, their runs and their workspaces
 
 --models FILE selects explicit quick/deep/QA profiles for bootstrap/onboard (QA may use a different provider).
---model MODEL and --effort low|medium|high select native bootstrap/onboard execution. Explicit models enable a bounded, billed compatibility probe before project calls.
+--model MODEL and --effort low|medium|high select native bootstrap/onboard execution. Explicit models enable a bounded compatibility probe before project calls.
+--usage-mode legacy|subscription|metered declares usage with --provider. Subscription removes USD ceilings, not provider quotas; an explicit model is required.
 --request-file FILE may replace --request. --quiet suppresses progress on stderr.
 Product and QA use read-only role invocations with Codex, Claude Code or a compatible command worker.
 No operator approval is inferred from a model response. No deploy command.
@@ -90,9 +91,9 @@ export async function lifecycleCommand(command, positionals, values, root, signa
         return required('request');
     };
     const repo = resolve(str('repo') ?? '.');
-    const chosenProvider = (name) => agentSchema.parse({ ...providerProfile(name), ...(str('model') ? { model: str('model'), preflight: 'probe' } : {}), ...(str('effort') ? { effort: str('effort') } : {}) });
+    const chosenProvider = (name) => agentSchema.parse({ ...providerProfile(name), ...(str('usage-mode') ? { usageMode: str('usage-mode') } : {}), ...(str('model') ? { model: str('model'), preflight: 'probe' } : {}), ...(str('effort') ? { effort: str('effort') } : {}) });
     const selection = str('models') ? validateModelSelection(load(str('models'))) : undefined;
-    invariant(!selection || !['provider', 'agent', 'config', 'model', 'effort'].some(k => str(k)), 'ARGUMENT', 'Use --models FILE by itself; provider and model choices are in that file.');
+    invariant(!selection || !['provider', 'agent', 'config', 'model', 'effort', 'usage-mode'].some(k => str(k)), 'ARGUMENT', 'Use --models FILE by itself; provider and model choices are in that file.');
     invariant(!selection || (command === 'onboard' && !positionals[1]) || (command === 'bootstrap' && (!positionals[1] || positionals[1] === 'refine')), 'ARGUMENT', '--models is supported by onboard, bootstrap and bootstrap refine.');
     const config = () => load(str('config') ?? join(repo, 'pipeline.v2.json'));
     const approval = async (targetRepo) => {
@@ -148,7 +149,7 @@ export async function lifecycleCommand(command, positionals, values, root, signa
             if (!sub) {
                 invariant(!(str('provider') && str('agent')), 'ARGUMENT', 'Choose --provider or --agent, not both');
                 invariant(!(str('provider') && str('config')), 'ARGUMENT', 'With --config select providers in that reviewed file');
-                invariant(!(str('model') || str('effort')) || str('provider'), 'ARGUMENT', '--model/--effort require --provider; with --config tune its role definitions');
+                invariant(!(str('model') || str('effort') || str('usage-mode')) || str('provider'), 'ARGUMENT', '--model/--effort/--usage-mode require --provider; with --config tune its role definitions');
                 const chosen = str('provider') ? chosenProvider(str('provider')) : str('agent') ? load(str('agent')) : undefined;
                 const reviewMode = str('review-mode');
                 invariant(!reviewMode || ['solo', 'team', 'regulated'].includes(reviewMode), 'ARGUMENT', 'Choose --review-mode solo|team|regulated');
@@ -293,7 +294,7 @@ export async function lifecycleCommand(command, positionals, values, root, signa
                 const correction = load(required('file'));
                 invariant(typeof correction.description === 'string' && typeof correction.verification === 'string' && typeof correction.reason === 'string', 'ARGUMENT', 'The correction file needs description, verification and reason');
                 const requirements = correction.requirements ?? [];
-                invariant(Array.isArray(requirements) && requirements.every(x => x && typeof x.id === 'string' && typeof x.verification === 'string'), 'ARGUMENT', 'requirements must be a list of {id, verification}');
+                invariant(Array.isArray(requirements) && requirements.every(x => x && typeof x.id === 'string' && typeof x.verification === 'string' && (x.reviewTestIndexes === undefined || (Array.isArray(x.reviewTestIndexes) && x.reviewTestIndexes.every(Number.isInteger)))), 'ARGUMENT', 'requirements must be a list of {id, verification, reviewTestIndexes?: integer[]}');
                 doc = life.planCriterionAmendment(specId(), required('criterion'), { description: correction.description, verification: correction.verification, reason: correction.reason, requirements: requirements });
                 const proposed = (doc.data.criterionAmendments ?? []).filter(x => x.status === 'pending').at(-1);
                 console.log(JSON.stringify({ ...life.summary(doc), criterionAmendment: proposed,

@@ -31,6 +31,7 @@ export declare function executionCapabilities(config: Config): {
     attempt: {
         providerTurns: number;
         providerBudgetUsd: number | null;
+        usageMode: "legacy" | "subscription" | "metered";
         agentTimeoutMs: number;
         runBudgetMs: number;
         repairAttempts: number;

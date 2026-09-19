@@ -1,0 +1,59 @@
+{
+  "date": "2026-09-19",
+  "gitHead": "a5f6dc2d2f98f3c2b23c76f45e44fd2e3099a83c",
+  "scope": "Uncommitted working tree; includes the retained UI/QA changes plus execution policy improvements.",
+  "sourceSnapshot": {
+    "algorithm": "sha256(sorted relative path + NUL + raw sha256(file))",
+    "roots": [
+      "src",
+      "ui",
+      "scripts",
+      "test",
+      "roles",
+      "skills",
+      "package.json",
+      "tsconfig.json",
+      "stylelint.config.mjs"
+    ],
+    "files": 168,
+    "sha256": "2dff73dd7b4a0a15a6aab3a5693ec794dfa0ee469d75f804b479246f0e1c8bf8"
+  },
+  "node": "v24.21.0",
+  "checks": {
+    "command": "npm run check",
+    "typecheck": true,
+    "cssLint": true,
+    "build": true,
+    "tests": 500,
+    "pass": 500,
+    "fail": 0,
+    "skipped": 0,
+    "durationMs": 278636.381714
+  },
+  "package": {
+    "command": "npm run check:package",
+    "passed": true,
+    "offlineInstall": true,
+    "providerKnowledgeBootstrapTests": true,
+    "lifecycleClosed": true,
+    "dashboardServed": true
+  },
+  "browser": {
+    "fixture": "ui-check.mjs",
+    "results": "browser-results.json",
+    "widths": [
+      1440,
+      1024,
+      390,
+      320
+    ],
+    "passed": true
+  },
+  "realProviderCalls": false,
+  "liveProjectOrSpecMigration": false,
+  "limitations": [
+    "No provider-native session resume.",
+    "No real-model latency or quality claim.",
+    "Usage mode declares policy; it does not change CLI authentication or supplier quotas."
+  ]
+}

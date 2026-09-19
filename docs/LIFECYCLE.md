@@ -1,5 +1,7 @@
 # Parcours complet et exploitation
 
+Pour les modes abonnement/facturé, les amendements `null`, les diagnostics et les durées : [politique d’exécution](EXECUTION-POLICY.md).
+
 ## Responsabilités
 
 Setup propose la configuration sans exécuter les scripts du dépôt. Product clarifie et décompose une demande en spec. Implementer modifie le worktree autorisé et répond par un résumé. Le runner produit les reçus. QA examine le candidat intégré et les critères dans une invocation distincte, en lecture seule. Le moteur décide des transitions. L'opérateur approuve le plan, le périmètre et les changements selon la politique ; aucun résultat de modèle ne tient lieu de cet accord.
@@ -66,7 +68,7 @@ apv2 spec qa ID --file /rapport-qa.json
 apv2 spec run ID --manual-qa
 ```
 
-En mode `qualityReview: "evidence"`, QA ajoute les six axes de qualité et les références de tests négatifs. Les preuves requises sont vérifiées avant son appel puis avant revue/livraison. Une preuve manquante ou un statut `unknown` bloque avec `QA_EVIDENCE` sans réparation automatique de code. L'opérateur qui a inspecté la preuve manquante peut autoriser exactement une réparation avec `apv2 spec qa-repair SPEC_ID --confirm --note TEXT` : elle exige que chaque contrôle configuré ait déjà prouvé ce candidat, elle est consommée par la réparation qu'elle autorise, et la revue suivante doit toujours conclure sur ses propres preuves. Voir [la grille et les preuves](LOT-3-QUALITE.md).
+En mode `qualityReview: "evidence"`, QA ajoute les six axes de qualité et les références de tests négatifs. Les preuves requises sont vérifiées avant son appel puis avant revue/livraison. Une preuve manquante ou un statut `unknown` bloque avec `QA_EVIDENCE` sans réparation automatique de code. L'opérateur qui a inspecté la preuve manquante peut autoriser exactement une réparation avec `apv2 spec qa-repair SPEC_ID --confirm --note TEXT` : elle exige que chaque contrôle configuré ait déjà prouvé ce candidat, elle est consommée par la réparation qu'elle autorise, et la revue suivante doit toujours conclure sur ses propres preuves. Voir [la grille et les preuves](QUALITY.md).
 
 Le rapport externe est explicitement importé et lié aux preuves présentes. Son auteur n'est pas authentifié par la CLI. Une nouvelle QA invalide les avis humains antérieurs.
 
@@ -254,7 +256,7 @@ Une spec est immuable dès que l'exécution commence : c'est ce qui rend l'appro
 - `apv2 spec criterion SPEC_ID --criterion AC_ID --file CORRECTION_JSON` propose une correction (`description`, `verification`, `reason`, et éventuellement `requirements: [{id, verification}]`) et affiche son hash. Rien n'est appliqué.
 - `apv2 spec criterion SPEC_ID --amendment AMENDMENT_ID --hash HASH --approve --note TEXT` l'applique.
 
-Bornes : uniquement après le début de l'exécution (avant, on affine la spec) ; un seul critère existant, dont seuls le texte et la vérification changent ; les méthodes de vérification d'exigences de sécurité déjà liées à ce critère peuvent être corrigées dans le même amendement. Ni exigences ajoutées/supprimées, ni modification du périmètre, des tâches, des chemins ou des décisions ; `reason` obligatoire. Le texte approuvé à l'origine reste dans le magasin, la correction porte sa propre approbation, et l'évaluation rouvre : le rapport QA et le dossier de revue sont invalidés, puisqu'ils portaient sur l'ancien critère.
+Bornes : uniquement après le début de l'exécution (avant, on affine la spec) ; un seul critère existant, dont seuls le texte et la vérification changent ; les méthodes de vérification d'exigences de sécurité déjà liées à ce critère peuvent être corrigées dans le même amendement. Une entrée de `requirements` peut aussi proposer `reviewTestIndexes: [0]` pour autoriser explicitement la revue du cas négatif existant d’index 0 ; le texte original apparaît dans la proposition et le hash approuvé couvre cette autorisation. Les tests négatifs exigés par le contrôleur restent obligatoires. Ni exigences ajoutées/supprimées, ni modification du périmètre, des tâches, des chemins ou des décisions ; `reason` obligatoire. Le texte approuvé à l'origine reste dans le magasin, la correction porte sa propre approbation, et l'évaluation rouvre : le rapport QA et le dossier de revue sont invalidés, puisqu'ils portaient sur l'ancien critère.
 
 ### Maintenance
 

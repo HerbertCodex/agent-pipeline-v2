@@ -94,7 +94,48 @@ test('model diagnostics distinguish authentication and unsupported effort from r
  assert.throws(()=>assertModelResponse(a,failed('reasoning effort is not supported')),e=>e.code==='MODEL_EFFORT');
  assert.throws(()=>assertModelResponse(a,failed('Model chosen does not exist')),e=>e.code==='MODEL_UNAVAILABLE');
  assert.doesNotThrow(()=>assertModelResponse(a,{status:'passed',stderr:'',stdout:JSON.stringify({type:'result',subtype:'success',is_error:false,result:'Document says model not found'})}));
- assert.doesNotThrow(()=>assertModelResponse(a,failed('rate limit exceeded')));
+ assert.throws(()=>assertModelResponse(a,failed('rate limit exceeded')),e=>e.code==='PROVIDER_RATE_LIMIT');
+});
+
+test('subscription preflight and role calls omit USD flags even with an exhausted spec ceiling', async t=>{
+ const f=fixture(t,{workflow:{maxSpecCostUsd:0.01}}); const doc=await approved(f,oneTask()); const n=native(f);
+ f.life.store.documentEvent(doc.id,'invocation.finished',{invocationId:'historical',usage:{costUsd:50}});
+ const agent={...n.agent,usageMode:'subscription',maxBudgetUsd:0.01};
+ const options={store:f.life.store,documentId:doc.id,budgetDocumentId:doc.id,repo:f.repo,sha:doc.data.baseSha,role:'qa',agent,passEnv:['PATH'],schema:s.object({answer:s.string(1,100)}),context:{request:'project'}};
+ assert.equal((await runRole(options)).answer,'project-answer');
+ assert.equal(n.calls().length,2);
+ assert.ok(n.calls().every(c=>!c.args.includes('--max-budget-usd')));
+ const events=f.life.store.documentEvents(doc.id,['invocation.started']);
+ assert.ok(events.every(e=>e.data.usageMode==='subscription'&&e.data.decision.result.monetaryCeiling===null));
+ assert.ok(f.life.summary(f.life.get(doc.id)).timing.phases.find(p=>p.phase==='qa').durationMs>0);
+});
+
+test('Product preserves a classified quota through the planning error wrapper and summary', async t=>{
+ const f=fixture(t); const n=native(f,'claude', `console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,result:'You have hit your weekly limit'}));process.exit(0);`);
+ const config={...f.config,roles:{product:{...n.agent,usageMode:'subscription',preflight:'off'}}};
+ await assert.rejects(()=>f.life.draft({repo:f.repo,config,request:'Implement the approved arithmetic example.'}),e=>e.code==='PROVIDER_QUOTA');
+ const doc=f.life.store.documents('spec')[0];
+ assert.equal(doc.data.error.code,'PROVIDER_QUOTA');
+ assert.equal(f.life.summary(doc).stop.category,'quota');
+ assert.equal(n.calls().length,1);
+});
+
+test('changing the QA model requires a new full assessment, unchanged model reuses its checkpoint',async t=>{
+ const f=fixture(t);const doc=await approved(f,oneTask());const n=native(f);
+ const options={store:f.life.store,documentId:doc.id,budgetDocumentId:doc.id,repo:f.repo,sha:doc.data.baseSha,role:'qa',agent:n.agent,passEnv:['PATH'],schema:s.object({answer:s.string(1,100)}),context:{request:'project'}};
+ await runRole(options);await runRole(options);assert.equal(n.calls().length,2);
+ await runRole({...options,agent:{...n.agent,model:'new-review-model'}});
+ assert.equal(n.calls().length,4);
+ const request=JSON.parse(n.calls().at(-1).input.split('\n').at(-1));
+ assert.match(request.repair.instruction,/Independently reassess/);
+ assert.ok(request.outputSchema.properties.answer);
+ assert.ok(!request.outputSchema.properties.patches);
+ // A simultaneous schema change must not turn the independent review into a field patch.
+ await runRole({...options,agent:{...n.agent,model:'third-review-model'},schema:s.object({answer:s.string(1,100),inspected:s.default(s.array(s.string()),[])})});
+ const changed=JSON.parse(n.calls().at(-1).input.split('\n').at(-1));
+ assert.match(changed.repair.instruction,/Independently reassess/);
+ assert.ok(changed.outputSchema.properties.inspected);
+ assert.ok(!changed.outputSchema.properties.patches);
 });
 test('global implementation tuning cannot replace dedicated QA, but explicit QA amendment can',async t=>{
  const f=fixture(t,{roles:{qa:{type:'claude',model:'review',effort:'high'}}});const doc=await approved(f,oneTask());const a=roleAgent(doc.data.config,'qa','standard');

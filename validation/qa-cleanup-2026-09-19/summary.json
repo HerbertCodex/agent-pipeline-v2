@@ -1,0 +1,71 @@
+{
+  "date": "2026-09-19",
+  "head": "484cf529c47e32d47fb8b6c0622e979c7844991b",
+  "uncommittedChanges": true,
+  "realProviderCalls": false,
+  "initialFullSuite": {
+    "tests": 508,
+    "passed": 505,
+    "failed": 3,
+    "log": "initial-check.log",
+    "resolvedBy": "Restore the repair instruction prefix expected by existing fixtures, rebuild the added deadcode script alias, rerun relevant tests."
+  },
+  "finalValidation": {
+    "build": "passed",
+    "targeted": {
+      "tests": 61,
+      "passed": 61,
+      "failed": 0,
+      "log": "targeted.log"
+    },
+    "compatibility": {
+      "tests": 2,
+      "passed": 2,
+      "failed": 0,
+      "log": "compatibility.log"
+    },
+    "browser": "browser-results.json",
+    "schemaMatchesRuntime": true,
+    "diffCheck": "passed"
+  },
+  "limits": [
+    "No existing spec QA report reclassified or rerun.",
+    "No changes to project-test or calls to real models."
+  ],
+  "filesSha256": {
+    "src/quality/review.ts": "bd1a22c8cfc47568f8ddeee070b8f49934a222b1e85a9c839d37137eebf98b94",
+    "src/lifecycle/contracts.ts": "813a2508bb3adf7a637b1dd40e35c31d412a6a21c16bd96cfc745fee59e083bd",
+    "src/lifecycle/service.ts": "fde102dbba9239c955ef8347ef5379471bc312d1f3e875ab5b0e4b3c0e0f5e6a",
+    "src/lifecycle/onboarding.ts": "8482464539011725d270e7f6d4c02afbed770c620e8918b5b3bbbb4e4de0c9a4",
+    "roles/qa.md": "3795f9d70113d3f3574fa17afadcd9083b06e1a63da98778835409112617b6ee",
+    "roles/implementer.md": "5c379a4c2cde67c2901ab20f2e1468c584ea215682e98f375a703bf1dac542f4",
+    "roles/setup.md": "e2b851d59c5acab1795335c688374beeb3312364d4926d78a43f40c4fd8671f4",
+    "skills/clean-code/SKILL.md": "7ac7f18600dd73591a863b665a7b3c6d22954d7c66dbf0069f255f39ee77e5b1",
+    "ui/app.js": "98913727086355fbe2fe056e493834068ab3d698c9d44f53bbcb19ad5cdb13e4",
+    "test/qa-cleanup.test.mjs": "b1b36c599176813c2a75f77ef39c2e44115778130eb81ef97b71fb4124d650e8",
+    "examples/schemas/qa.schema.json": "d4836b186e576b104e6c71d46f3394bf192b36226ead701cb7d0161330e0695e"
+  },
+  "preMergeValidation": {
+    "tests": 508,
+    "passed": 508,
+    "failed": 0,
+    "command": "npm run check",
+    "log": "final-check.log",
+    "package": "package-result.json",
+    "schemasMatchCliExport": true,
+    "localDocumentationLinks": 182,
+    "filesSha256": {
+      "src/quality/review.ts": "bd1a22c8cfc47568f8ddeee070b8f49934a222b1e85a9c839d37137eebf98b94",
+      "src/lifecycle/contracts.ts": "813a2508bb3adf7a637b1dd40e35c31d412a6a21c16bd96cfc745fee59e083bd",
+      "src/lifecycle/service.ts": "fde102dbba9239c955ef8347ef5379471bc312d1f3e875ab5b0e4b3c0e0f5e6a",
+      "src/lifecycle/onboarding.ts": "8482464539011725d270e7f6d4c02afbed770c620e8918b5b3bbbb4e4de0c9a4",
+      "roles/qa.md": "3795f9d70113d3f3574fa17afadcd9083b06e1a63da98778835409112617b6ee",
+      "roles/implementer.md": "5c379a4c2cde67c2901ab20f2e1468c584ea215682e98f375a703bf1dac542f4",
+      "roles/setup.md": "e2b851d59c5acab1795335c688374beeb3312364d4926d78a43f40c4fd8671f4",
+      "skills/clean-code/SKILL.md": "7ac7f18600dd73591a863b665a7b3c6d22954d7c66dbf0069f255f39ee77e5b1",
+      "ui/app.js": "98913727086355fbe2fe056e493834068ab3d698c9d44f53bbcb19ad5cdb13e4",
+      "test/qa-cleanup.test.mjs": "b1b36c599176813c2a75f77ef39c2e44115778130eb81ef97b71fb4124d650e8",
+      "examples/schemas/qa.schema.json": "b47210ae31ab5ba1cbbc25ad6d71232bad7d941e8faf0b0b27d7983c91436b9a"
+    }
+  }
+}

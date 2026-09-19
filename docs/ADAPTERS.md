@@ -19,7 +19,7 @@ Configuration minimale de l'agent :
 }
 ```
 
-Les variables sont transmises seulement si elles existent ; la configuration contient leurs noms, jamais leurs valeurs. L'installation et l'authentification relèvent de l'opérateur. `command` peut contenir uniquement le chemin de l'exécutable natif. `model` vide utilise le défaut du CLI ; renseigner un modèle pour rendre une comparaison reproductible.
+Les variables sont transmises seulement si elles existent ; la configuration contient leurs noms, jamais leurs valeurs. L'installation et l'authentification relèvent de l'opérateur. `command` peut contenir uniquement le chemin de l'exécutable natif. En mode `legacy`, `model` vide utilise le défaut du CLI ; renseigner un modèle pour rendre une comparaison reproductible.
 
 L'adaptateur utilise `--print`, `--output-format json` et `--json-schema`. Il extrait `structured_output` d'une enveloppe `type=result`, `subtype=success`, `is_error=false`. Un refus de permission, une erreur fournisseur, du texte libre, une sortie tronquée ou des champs de verdict interdits ne deviennent pas un succès.
 
@@ -33,7 +33,7 @@ Bash, outils web et sous-agents sont exclus. MCP est désactivé sauf le serveur
 
 Les settings utilisateur/projet et les slash-commands natives sont désactivés pour ces appels. La session demande `disableAllHooks`, mais des hooks imposés par une politique administrée peuvent rester actifs. Ces options ne constituent pas une sandbox OS ni une preuve d'isolation des secrets ; vérifier leur compatibilité avec le CLI installé.
 
-`maxTurns` (1–200, défaut 200) et `maxBudgetUsd` (`null` ou 0,01–1 000 $, défaut `null`) sont des limites **par appel Claude**. Même avec `maxBudgetUsd: null`, le budget restant de la spec peut borner l'appel. Une limite fournisseur peut arrêter la session avant sa réponse finale. Les checkpoints et fichiers déjà produits restent récupérables selon l'étape, pas le raisonnement interne du modèle. Voir [les budgets](CONFIGURATION.md#limites-de-temps-de-tours-et-de-coût).
+`maxTurns` (1–200, défaut 200) et `maxBudgetUsd` (`null` ou 0,01–1 000 $, défaut `null`) sont des limites **par appel Claude**. En mode historique/facturé, même avec `maxBudgetUsd: null`, le budget restant de la spec peut borner l'appel. Avec `usageMode: "subscription"`, aucun flag `--max-budget-usd` n’est ajouté ; les quotas du compte restent ceux du fournisseur. Voir [les modes d’usage](EXECUTION-POLICY.md). Une limite fournisseur peut arrêter la session avant sa réponse finale. Les checkpoints et fichiers déjà produits restent récupérables selon l'étape, pas le raisonnement interne du modèle. Voir [les budgets](CONFIGURATION.md#limites-de-temps-de-tours-et-de-coût).
 
 Les contrats CLI sont testés avec des doublures. Des appels Claude réels ont aussi été effectués sur de petits cas jetables : [calibration conservée](../validation/short-loop-2026-09-18/CALIBRATION.md). Ils ne valident ni toute la sécurité du fournisseur ni la qualité d'une application complète.
 
@@ -82,4 +82,4 @@ Les programmes `examples/demo-agent.mjs` et `examples/lifecycle-worker.mjs` sont
 
 Les schémas de transport sont normalisés par `src/adapters/structured-schema.ts` ; les contraintes retirées pour la compatibilité fournisseur restent vérifiées par le parseur runtime complet. Le journal `invocation.started/finished` distingue coûts connus, inconnus et appels sans résultat, même lorsqu'une sortie est rejetée.
 
-Les contenus du dépôt et des commandes restent des données potentiellement hostiles. Les consignes ne remplacent pas l'isolation d'exécution et la séparation des secrets. Voir [la frontière de confiance](SECURITY.md), [les pilotes](PROVIDER-PILOT.md) et [les sources consultées](SOURCES.md).
+Les contenus du dépôt et des commandes restent des données potentiellement hostiles. Les consignes ne remplacent pas l'isolation d'exécution et la séparation des secrets. Voir [la frontière de confiance](SECURITY.md) et [les pilotes](PROVIDER-PILOT.md).

@@ -28,7 +28,19 @@ else {writeFileSync('src/range.mjs','export function clamp(value,min,max) { if(m
   assert.equal(report.samples.length, 1); assert.equal(report.samples[0].success, true);
   assert.equal(report.realHumanReview, false); assert.equal(report.aggregate[0].costComplete, false);
   assert.equal(report.details[0].untouched, true);
+  assert.ok(report.details[0].timing.phases.some(p => p.phase === 'implementer' && p.durationMs > 0));
   assert.throws(() => call(['--case', 'boundary-fix', '--config', config, '--output', output, '--execute']), /already exists/);
+  // Included usage can complete successive samples even when the wrapper publishes no USD cost.
+  const subscriptionConfig = JSON.parse(readFileSync(config, 'utf8'));
+  subscriptionConfig.agent.usageMode = 'subscription';
+  writeFileSync(config, JSON.stringify(subscriptionConfig));
+  const included = join(root, 'included');
+  call(['--case', 'boundary-fix', '--config', config, '--planning', 'fixture', '--repetitions', '2', '--output', included, '--execute']);
+  const includedReport = JSON.parse(readFileSync(join(included, 'report.json'), 'utf8'));
+  assert.equal(includedReport.totalBudgetUsd, null);
+  assert.equal(includedReport.stoppedReason, null);
+  assert.equal(includedReport.samples.length, 2);
+  assert.ok(includedReport.samples.every(s => s.success && s.cost.unknownInvocations > 0 && s.cost.budget.unknownInvocations === 0));
   // A passing fixed oracle must not hide a failing regression added by the agent.
   writeFileSync(worker, readFileSync(worker, 'utf8').replace("else {writeFileSync", "else {writeFileSync('test/regression.mjs',\"import test from 'node:test'; import assert from 'node:assert/strict'; test('regression',()=>assert.equal(1,2));\");writeFileSync"));
   const failed = join(root, 'failed-regression');
@@ -36,4 +48,15 @@ else {writeFileSync('src/range.mjs','export function clamp(value,min,max) { if(m
   const failedReport = JSON.parse(readFileSync(join(failed, 'report.json'), 'utf8'));
   assert.equal(failedReport.samples[0].success, false);
   assert.equal(failedReport.details[0].status, 'blocked');
+  // A classified quota stops the campaign instead of consuming the remaining repetitions.
+  const quotaCli = join(root, 'quota-cli.mjs');
+  writeFileSync(quotaCli, `#!${process.execPath}\nconsole.log(JSON.stringify({type:'result',subtype:'success',is_error:true,result:'You have hit your weekly limit'}));`, { mode: 0o700 });
+  subscriptionConfig.agent = { type: 'claude', command: [quotaCli], model: 'fixture-model', usageMode: 'subscription' };
+  writeFileSync(config, JSON.stringify(subscriptionConfig));
+  const quota = join(root, 'quota');
+  assert.throws(() => call(['--case', 'boundary-fix', '--config', config, '--planning', 'fixture', '--repetitions', '2', '--output', quota, '--execute']));
+  const quotaReport = JSON.parse(readFileSync(join(quota, 'report.json'), 'utf8'));
+  assert.equal(quotaReport.samples.length, 1);
+  assert.match(quotaReport.stoppedReason, /Provider unavailable/);
+  assert.equal(quotaReport.details[0].error.code, 'PROVIDER_QUOTA');
 });

@@ -18,7 +18,7 @@ export function claudeCommand(agent: AgentConfig, schema: JsonSchema, readOnly: 
     '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: feedback ? { pipeline: { type: 'http', url: feedback.url, headers: { Authorization: `Bearer ${feedback.token}` } } } : {} }), '--setting-sources', '',
     '--settings', '{"disableAllHooks":true,"disableClaudeAiConnectors":true}', '--disable-slash-commands', '--no-session-persistence',
     '--max-turns', String(agent.maxTurns),
-    ...(agent.maxBudgetUsd === null ? [] : ['--max-budget-usd', String(agent.maxBudgetUsd)]),
+    ...(agent.usageMode === 'subscription' || agent.maxBudgetUsd === null ? [] : ['--max-budget-usd', String(agent.maxBudgetUsd)]),
     ...(agent.model ? ['--model', agent.model] : []),
     ...(agent.effort && agent.effort !== 'default' ? ['--effort', agent.effort] : [])];
 }

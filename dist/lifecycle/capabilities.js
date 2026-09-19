@@ -21,7 +21,8 @@ export function executionCapabilities(config) {
         // the provider stops mid-work and the whole attempt has to be adopted or started again.
         attempt: {
             providerTurns: config.agent.maxTurns ?? null,
-            providerBudgetUsd: config.agent.maxBudgetUsd ?? null,
+            providerBudgetUsd: config.agent.usageMode === 'subscription' ? null : config.agent.maxBudgetUsd ?? null,
+            usageMode: config.agent.usageMode ?? 'legacy',
             agentTimeoutMs: config.agent.timeoutMs,
             runBudgetMs: config.maxRunMs,
             repairAttempts: config.maxRepairAttempts,
@@ -65,11 +66,13 @@ export function validateTaskCapabilities(spec, config) {
 /** Advice about conflicting limits; short budgets are valid for compact work. */
 export function configAdvice(config) {
     const advice = [];
-    if (config.workflow.maxSpecCostUsd === null)
-        advice.push({ setting: 'workflow.maxSpecCostUsd', value: 'null', why: 'No shared spec cost ceiling is configured. Set a reviewed budget; provider costs that are unknown remain explicitly unaccounted for.' });
+    if (config.agent.usageMode === 'subscription')
+        advice.push({ setting: 'agent.usageMode', value: 'subscription', why: 'Included subscription usage: monetary ceilings do not stop this role. Provider quotas, timeouts and repair limits still apply; this declaration does not change CLI authentication.' });
+    if (config.workflow.maxSpecCostUsd === null && config.agent.usageMode !== 'subscription')
+        advice.push({ setting: 'workflow.maxSpecCostUsd', value: 'null', why: 'No shared monetary ceiling is configured. Per-call ceilings remain independent; unknown provider costs are not zero.' });
     if (config.maxRunMs <= config.agent.timeoutMs)
         advice.push({ setting: 'maxRunMs', value: String(config.maxRunMs), why: 'The agent timeout fills the run budget. The controller shortens it to reserve final checks; align these limits with measured task duration.' });
-    if (config.agent.maxBudgetUsd !== null && config.workflow.maxSpecCostUsd !== null && config.agent.maxBudgetUsd > config.workflow.maxSpecCostUsd)
+    if (config.agent.usageMode !== 'subscription' && config.agent.maxBudgetUsd !== null && config.workflow.maxSpecCostUsd !== null && config.agent.maxBudgetUsd > config.workflow.maxSpecCostUsd)
         advice.push({ setting: 'agent.maxBudgetUsd', value: String(config.agent.maxBudgetUsd), why: 'The per-call limit exceeds the entire spec budget. The controller caps each supported call at the remaining declared spec budget.' });
     return advice;
 }

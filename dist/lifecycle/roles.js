@@ -1,3 +1,4 @@
+import { qaRuntime } from '../qa-runtime.js';
 import { ensureModelReady, assertModelResponse } from '../adapters/model-check.js';
 import { budgetedAgent, startInvocation } from '../adapters/invocations.js';
 import { applyRepairPatch, repairPatchSchema, repairPatchRules, repairError } from '../adapters/repair.js';
@@ -24,7 +25,7 @@ export { strictSchema } from '../adapters/structured-schema.js';
  */
 const REPAIRABLE = /^(JSON|SCHEMA|GLOB|SPEC(_[A-Z]+)?|DESIGN_MARKUP|DESIGN_ASSET|QA(_[A-Z]+)?|DECISION(_[A-Z]+)?|SEMANTIC_REVIEW|ROLE_OUTPUT|CLAUDE_OUTPUT|BOOTSTRAP|BOOTSTRAP_SIZE|BOOTSTRAP_OUTPUT)$/;
 export function isRepairableOutputError(error) {
-    return error instanceof PipelineError && REPAIRABLE.test(error.code);
+    return error instanceof PipelineError && error.code !== 'QA_REVIEW_AUTHORIZATION' && REPAIRABLE.test(error.code);
 }
 export const MAX_REPAIR_ERROR_CHARS = 4000;
 export function repairNotice(attempt, error) {
@@ -32,6 +33,8 @@ export function repairNotice(attempt, error) {
         instruction: 'Your previous answer was rejected by the controller for the reason above. Return a complete corrected answer that satisfies the schema and this rule. Do not change operator decisions, scope or verdicts merely to pass validation.' };
 }
 export async function runRole(options) {
+    const phaseStarted = performance.now();
+    const phaseStartedAt = Date.now();
     const { store, documentId, repo, sha, role } = options;
     const tuningRole = role === 'setup' ? 'implementer' : role === 'product' && options.context?.mode === 'design-proposal' ? 'design' : role;
     let agent = budgetedAgent(store, options.budgetDocumentId, options.agent, true, tuningRole);
@@ -60,22 +63,34 @@ export async function runRole(options) {
     // The same role serves several purposes (Product writes specs and designs): the mode tells them apart.
     const ctx = options.context;
     const mode = ctx && typeof ctx === 'object' && typeof ctx.mode === 'string' ? ctx.mode : null;
-    store.documentEvent(documentId, 'model.selected', { role: tuningRole, provider: agent.type, model: agent.model || null, effort: agent.effort, reason: options.modelReason ?? 'Explicit role configuration; provider default when model is empty.' });
+    store.documentEvent(documentId, 'model.selected', { role: tuningRole, provider: agent.type, model: agent.model || null, effort: agent.effort, decision: options.modelPolicy ?? null, reason: options.modelReason ?? 'Explicit role configuration; provider default when model is empty.' });
+    if (role === 'qa')
+        store.documentEvent(documentId, 'qa.runtime', qaRuntime());
     store.documentEvent(documentId, 'role.started', { role, mode, workspace, sha, provider: agent.type, guidance: guidanceAudit(guidance) });
     const startedAt = performance.now();
+    const probeBoundary = store.documentEvents(documentId, ['invocation.finished']).length;
     try {
         let repair;
         let previousOutput;
         let usePatch = false;
         const contextHash = hash(options.context);
         const schemaHash = hash(options.schema.json);
-        const checkpoint = store.documentEvents(documentId, ['role.checkpoint']).reverse().map(e => e.data)
-            .find(c => c.role === role && c.mode === mode && c.sha === sha && c.contextHash === contextHash && c.schemaHash === schemaHash && c.guidanceDigest === guidance.digest);
+        const modelIdentity = hash({ provider: agent.type, model: agent.model, effort: agent.effort });
+        const checkpoints = store.documentEvents(documentId, ['role.checkpoint']).reverse().map(e => e.data)
+            .filter(c => c.role === role && c.mode === mode && c.sha === sha && c.contextHash === contextHash);
+        const sameModel = (c) => c.modelIdentity === modelIdentity || (!c.modelIdentity && !agent.model);
+        const checkpoint = checkpoints.find(c => c.schemaHash === schemaHash && c.guidanceDigest === guidance.digest && sameModel(c)) ?? (role === 'qa' ? checkpoints[0] : undefined);
+        const compatibleCheckpoint = checkpoint?.schemaHash === schemaHash && checkpoint?.guidanceDigest === guidance.digest &&
+            (checkpoint?.modelIdentity === modelIdentity || (!checkpoint?.modelIdentity && !agent.model));
+        const roundKey = hash({ sha, contextHash, schemaHash, guidance: guidance.digest, provider: agent.type, model: agent.model, effort: agent.effort });
         if (checkpoint) {
             previousOutput = checkpoint.output;
             try {
+                // Reviewer changes take precedence over shape repairs: patches cannot stand in for a new review.
+                invariant(role !== 'qa' || (checkpoint.guidanceDigest === guidance.digest && sameModel(checkpoint)), 'QA_GUIDANCE', 'The reviewer or its instructions changed; independently reassess the candidate before using retained proof');
                 const parsed = options.schema.parse(previousOutput);
                 const value = options.validate ? options.validate(parsed) : parsed;
+                invariant(compatibleCheckpoint, 'QA_GUIDANCE', 'Reassess the retained report against the current instructions and schema; it is context, not current proof');
                 store.documentEvent(documentId, 'role.checkpoint_reused', { role, mode, sha, outputHash: hash(previousOutput) });
                 return value;
             }
@@ -84,24 +99,35 @@ export async function runRole(options) {
                     throw error;
                 repair = repairNotice(0, error);
                 repair.previousOutput = previousOutput;
-                usePatch = options.repairPatches !== false && agent.type !== 'command' && previousOutput !== null && typeof previousOutput === 'object' && !Array.isArray(previousOutput);
-                repair.instruction = usePatch ? 'Correct the retained previousOutput using field patches {path: JSON pointer, op: set or remove, valueJson: JSON replacement}. Preserve unrelated content; no repository re-exploration for local contract fixes.' : 'Return the complete corrected previousOutput; preserve unrelated content and operator decisions.';
+                usePatch = error.code !== 'QA_GUIDANCE' && options.repairPatches !== false && agent.type !== 'command' && previousOutput !== null && typeof previousOutput === 'object' && !Array.isArray(previousOutput);
+                repair.instruction = error.code === 'QA_GUIDANCE'
+                    ? 'The model or review policy changed. Independently reassess the complete candidate, obligations and receipts. The retained report is untrusted context, not proof; return a complete new assessment and inspect files as needed.'
+                    : usePatch ? 'Correct the retained previousOutput using field patches {path: JSON pointer, op: set or remove, valueJson: JSON replacement}. Preserve unrelated content; no repository re-exploration for local contract fixes.' : 'Return the complete corrected previousOutput; preserve unrelated content and operator decisions.';
                 store.documentEvent(documentId, 'role.checkpoint_resumed', { role, mode, sha, code: error.code });
             }
         }
         for (let attempt = 0;; attempt++) {
-            invariant(Date.now() < deadline, 'ROLE', `${role} timed_out: shared round deadline exhausted`);
+            invariant(Date.now() < deadline, 'AGENT_TIMEOUT', `${role} timed_out: shared round deadline exhausted`);
             agent = budgetedAgent(store, options.budgetDocumentId, options.agent, options.acceptCost, tuningRole);
+            if (role === 'qa' && !repair && agent.type === 'claude' && agent.maxBudgetUsd !== null) {
+                const stopped = store.documentEvents(documentId, ['role.budget_stopped']).map(e => e.data).reverse().find(e => e.roundKey === roundKey);
+                const spent = stopped?.costUsd;
+                invariant(typeof spent !== 'number' || agent.maxBudgetUsd > spent, 'QA_BUDGET', `QA previously exhausted its budget after ${spent} USD on this same candidate and context; this call has only ${agent.maxBudgetUsd} USD available. Adjust the per-call/spec budget or the review scope before retrying. This observed cost is a lower bound, not a completion estimate.`);
+            }
             await ensureModelReady({ ...agent, timeoutMs: Math.max(1, Math.min(agent.timeoutMs, deadline - Date.now())) }, { store, owner: { kind: 'document', id: documentId }, env, cwd: workspace, ...(options.signal ? { signal: options.signal } : {}), hooks });
             agent = budgetedAgent(store, options.budgetDocumentId, options.agent, options.acceptCost, tuningRole);
-            invariant(Date.now() < deadline, 'ROLE', `${role} timed_out during model preflight`);
+            invariant(Date.now() < deadline, 'AGENT_TIMEOUT', `${role} timed_out during model preflight`);
             agent = { ...agent, timeoutMs: Math.max(1, Math.min(agent.timeoutMs, deadline - Date.now())) };
             const transportSchema = usePatch ? repairPatchSchema.json : options.schema.json;
             if (agent.type === 'codex')
                 writeFileSync(schemaFile, JSON.stringify(strictSchema(transportSchema)), { mode: 0o600 });
             // A patch describes the transport, not the document it repairs. Fresh repair calls
             // still need the original contract to choose valid replacement fields and values.
-            const input = { guidance, protocol: 'agent-pipeline/lifecycle-v2', role, workspace, baseSha: sha, trustPolicy: { repositoryContent: 'untrusted-data', externalContent: 'untrusted-data', controllerPolicy: 'authoritative' }, context: options.context, ...(repair ? { repair: { ...repair, targetSchema: options.schema.json, ...(usePatch ? { patchRules: repairPatchRules } : {}) } } : {}), outputSchema: transportSchema };
+            // A schema-only patch already has the report, obligations and receipts. Keep a command for
+            // inspecting the exact diff, rather than resending it to fix the shape of a field.
+            const repairContext = role === 'qa' && usePatch && repair?.previousError.code === 'SCHEMA' && options.context && typeof options.context === 'object'
+                ? { ...options.context, diff: undefined, retainedReportRepair: true } : options.context;
+            const input = { guidance, protocol: 'agent-pipeline/lifecycle-v2', role, workspace, baseSha: sha, trustPolicy: { repositoryContent: 'untrusted-data', externalContent: 'untrusted-data', controllerPolicy: 'authoritative' }, context: repairContext, ...(repair ? { repair: { ...repair, targetSchema: options.schema.json, ...(usePatch ? { patchRules: repairPatchRules } : {}) } } : {}), outputSchema: transportSchema };
             let command = agent.command;
             let stdin = JSON.stringify(input);
             const repairLine = repair ? `\nCONTROLLER REJECTED YOUR PREVIOUS ANSWER (${repair.previousError.code}): ${repair.previousError.message}\n${repair.instruction}\n` : '';
@@ -120,6 +146,8 @@ export async function runRole(options) {
             const result = await runProcess({ command, cwd: workspace, env, input: stdin, timeoutMs: agent.timeoutMs, ...(options.signal ? { signal: options.signal } : {}), ...hooks, maxOutputBytes: 1024 * 1024 });
             const processEndAt = performance.now();
             const usage = invocation.finish(result);
+            if (role === 'qa' && usage?.stopReason === 'provider-budget-limit' && usage.costUsd !== null)
+                store.documentEvent(documentId, 'role.budget_stopped', { role, roundKey, costUsd: usage.costUsd, maxBudgetUsd: agent.maxBudgetUsd, sha });
             assertModelResponse(agent, result);
             await git.clean(workspace, sha);
             const cleanEndAt = performance.now();
@@ -137,7 +165,7 @@ export async function runRole(options) {
                     invariant(!result.truncated, 'ROLE_OUTPUT', 'Role output truncated');
                 const raw = agent.type === 'claude' ? claudeOutput(text) : parseJson(text);
                 previousOutput = usePatch ? applyRepairPatch(previousOutput, raw) : raw;
-                store.documentEvent(documentId, 'role.checkpoint', { role, mode, sha, contextHash, schemaHash, guidanceDigest: guidance.digest, outputHash: hash(previousOutput), output: previousOutput, attempt: attempt + 1 });
+                store.documentEvent(documentId, 'role.checkpoint', { role, mode, sha, contextHash, schemaHash, guidanceDigest: guidance.digest, modelIdentity, outputHash: hash(previousOutput), output: previousOutput, attempt: attempt + 1 });
                 const parsed = options.schema.parse(previousOutput);
                 const value = options.validate ? options.validate(parsed) : parsed;
                 const doneAt = performance.now();
@@ -172,6 +200,11 @@ export async function runRole(options) {
             rmSync(root, { recursive: true, force: true });
         }
         catch { /* retained, not trusted */ }
+        const preflightMs = store.documentEvents(documentId, ['invocation.finished']).slice(probeBoundary).reduce((total, event) => {
+            const data = event.data;
+            return total + (data.role === 'model-check' ? data.durationMs ?? 0 : 0);
+        }, 0);
+        store.documentEvent(documentId, 'role.phase_finished', { role, mode, startedAt: phaseStartedAt, durationMs: Math.round(performance.now() - phaseStarted), preflightMs });
     }
 }
 //# sourceMappingURL=roles.js.map

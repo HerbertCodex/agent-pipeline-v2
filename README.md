@@ -72,7 +72,7 @@ node dist/cli.js spec show SPEC_ID
 | **Fonctionnalité courante** | Product court → implémentation → contrôles → QA ciblée. |
 | **Migration, auth ou changement structurant** | Exploration → décision d’architecture → plan → implémentation → validation renforcée. |
 
-Le diff réel peut renforcer les contrôles et rétablir la QA du parcours compact. Une petite modification UI réutilise le design existant. [Détails des parcours →](docs/AMELIORATIONS-2026-09-18.md)
+Le diff réel peut renforcer les contrôles et rétablir la QA du parcours compact. Une petite modification UI réutilise le design existant. [Détails des parcours →](docs/LIFECYCLE.md#choisir-le-parcours)
 
 ## La qualité en pratique
 
@@ -81,7 +81,7 @@ Le diff réel peut renforcer les contrôles et rétablir la QA du parcours compa
 - **Preuves concrètes.** En mode `evidence`, les changements concernés exigent build, intégration ou navigateur ; les cas négatifs de sécurité sont reliés aux fichiers de tests et aux résultats du runner.
 - **Blocages utiles.** Une preuve obligatoire manquante suspend la validation sans déclencher automatiquement une réparation de code. Ces contrôles s’appliquent aussi au parcours compact.
 
-**Activation :** les nouvelles configurations `init`/onboarding proposent `workflow.qualityReview: "evidence"`. Un projet existant conserve `legacy` jusqu’à une modification explicite de sa configuration pour une nouvelle spec. Les commandes, labels de couverture et règles de dépendances doivent correspondre au projet. [Configurer les preuves de qualité →](docs/LOT-3-QUALITE.md)
+**Activation :** les nouvelles configurations `init`/onboarding proposent `workflow.qualityReview: "evidence"`. Un projet existant conserve `legacy` jusqu’à une modification explicite de sa configuration pour une nouvelle spec. Les commandes, labels de couverture et règles de dépendances doivent correspondre au projet. [Configurer les preuves de qualité →](docs/QUALITY.md)
 
 ## Les guides
 
@@ -93,9 +93,9 @@ Le diff réel peut renforcer les contrôles et rétablir la QA du parcours compa
 | Configurer les commandes et les fournisseurs | [Configuration](docs/CONFIGURATION.md) · [Modèles et QA](docs/MODELS.md) · [Adaptateurs](docs/ADAPTERS.md) |
 | Comprendre les rôles et leurs consignes | [Rôles](docs/ROLES.md) · [Skills](docs/SKILLS.md) |
 | Suivre une spec, une reprise ou une livraison | [Cycle de vie](docs/LIFECYCLE.md) |
-| Exiger des preuves de qualité | [Lot 3 : qualité et validation](docs/LOT-3-QUALITE.md) |
+| Exiger des preuves de qualité | [Qualité et validation](docs/QUALITY.md) |
 | Comprendre les choix et les frontières | [Architecture](docs/ARCHITECTURE.md) · [Décisions](docs/DECISIONS.md) · [Sécurité](docs/SECURITY.md) · [OWASP](docs/OWASP-SECURITY.md) |
-| Consulter les évolutions et les mesures | [Changelog](CHANGELOG.md) · [Améliorations](docs/AMELIORATIONS-2026-09-18.md) · [Performance](docs/PERFORMANCE.md) |
+| Consulter les évolutions et les mesures | [Changelog](CHANGELOG.md) · [Performance](docs/PERFORMANCE.md) |
 
 ## Développer le framework
 
@@ -106,7 +106,7 @@ npm run demo:lifecycle
 npm run check:package
 ```
 
-Le [bilan du lot 3](validation/lot3-2026-09-18/summary.json) consigne **446 tests réussis**, le contrôle du paquet et des parcours Chromium sur desktop/mobile et au clavier. Les tests de fournisseurs utilisent des doublures sauf pilote explicite ; ils ne mesurent pas à eux seuls la qualité d’un modèle.
+Les [résultats de validation](validation/VALIDATION.md) sont datés et précisent l'état du code testé. Les tests de fournisseurs utilisent des doublures sauf pilote explicite ; ils ne mesurent pas à eux seuls la qualité d’un modèle.
 
 ---
 

@@ -186,6 +186,7 @@ export declare const qaSchema: import("../domain/schema.js").Schema<{
     readonly findings: {
         readonly id: string;
         readonly severity: "blocker" | "minor" | "major";
+        readonly resolution: "required" | "advisory";
         readonly path: string;
         readonly description: string;
     }[];
@@ -215,6 +216,7 @@ export declare const qaSchema: import("../domain/schema.js").Schema<{
         readonly evidence: string;
         readonly paths: string[];
         readonly receiptIds: string[];
+        readonly inspectedPaths: string[];
     }[];
 }>;
 export type QaReport = Infer<typeof qaSchema>;
@@ -360,7 +362,10 @@ export interface CriterionAmendment {
         id: string;
         previous: string;
         verification: string;
-        /** Negative cases reclassified as reviews: same texts, some now carrying the explicit `[review] ` marker. */
+        reviewTests?: {
+            index: number;
+            previous: string;
+        }[];
         previousNegativeTests?: string[];
         negativeTests?: string[];
     }[];
@@ -459,7 +464,7 @@ export interface SpecRecord {
     planningMs?: number;
     planningStartedAt?: number | null;
     operational?: {
-        maxSpecCostUsd: number;
+        maxSpecCostUsd: number | null;
         maxActiveMs: number;
         /** Execution-only gate changes: strictly more proof, never less. See amendBudget. */
         gates?: {
@@ -467,8 +472,8 @@ export interface SpecRecord {
             resources: Record<string, string[]>;
             timeoutMs: Record<string, number>;
         };
-        agent: Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd'>> | null;
-        roles?: Partial<Record<'product' | 'design' | 'implementer' | 'qa', Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd'>>>>;
+        agent: Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd' | 'usageMode'>> | null;
+        roles?: Partial<Record<'product' | 'design' | 'implementer' | 'qa', Partial<Pick<import('../domain/contracts.js').AgentConfig, 'model' | 'effort' | 'timeoutMs' | 'maxTurns' | 'maxBudgetUsd' | 'usageMode'>>>>;
         at: number;
         reviewer: string;
         note: string;

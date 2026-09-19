@@ -35,7 +35,7 @@
   "realProviderCalls": false,
   "realProjectModified": false,
   "browserRenderingTested": true,
-  "guide": "../../docs/LOT-3-QUALITE.md",
+  "guide": "../../docs/QUALITY.md",
   "testHarnessChange": "An existing child-process cleanup test used a fixed 20 ms sleep; replaced it with a bounded 1 s wait for actual termination. The assertion remains mandatory. The full suite then passed without skipped tests.",
   "screenshots": [
     "missing-proof-desktop.png",

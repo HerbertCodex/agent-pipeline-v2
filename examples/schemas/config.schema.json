@@ -63,6 +63,15 @@
             "claude"
           ]
         },
+        "usageMode": {
+          "type": "string",
+          "enum": [
+            "legacy",
+            "subscription",
+            "metered"
+          ],
+          "default": "legacy"
+        },
         "command": {
           "type": "array",
           "items": {
@@ -331,6 +340,15 @@
                     "claude"
                   ]
                 },
+                "usageMode": {
+                  "type": "string",
+                  "enum": [
+                    "legacy",
+                    "subscription",
+                    "metered"
+                  ],
+                  "default": "legacy"
+                },
                 "command": {
                   "type": "array",
                   "items": {
@@ -443,6 +461,15 @@
                     "claude"
                   ]
                 },
+                "usageMode": {
+                  "type": "string",
+                  "enum": [
+                    "legacy",
+                    "subscription",
+                    "metered"
+                  ],
+                  "default": "legacy"
+                },
                 "command": {
                   "type": "array",
                   "items": {
@@ -554,6 +581,15 @@
                     "codex",
                     "claude"
                   ]
+                },
+                "usageMode": {
+                  "type": "string",
+                  "enum": [
+                    "legacy",
+                    "subscription",
+                    "metered"
+                  ],
+                  "default": "legacy"
                 },
                 "command": {
                   "type": "array",

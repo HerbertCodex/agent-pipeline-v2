@@ -44,6 +44,7 @@ export declare const taskSchema: import("./schema.js").Schema<{
 }>;
 export declare const agentSchema: import("./schema.js").Schema<{
     readonly type: "command" | "codex" | "claude";
+    readonly usageMode: "legacy" | "subscription" | "metered";
     readonly command: string[];
     readonly timeoutMs: number;
     readonly passEnv: string[];
@@ -63,6 +64,7 @@ export declare const configSchema: import("./schema.js").Schema<{
     };
     readonly agent: {
         readonly type: "command" | "codex" | "claude";
+        readonly usageMode: "legacy" | "subscription" | "metered";
         readonly command: string[];
         readonly timeoutMs: number;
         readonly passEnv: string[];
@@ -92,6 +94,7 @@ export declare const configSchema: import("./schema.js").Schema<{
     readonly roles: {
         readonly product: {
             readonly type: "command" | "codex" | "claude";
+            readonly usageMode: "legacy" | "subscription" | "metered";
             readonly command: string[];
             readonly timeoutMs: number;
             readonly passEnv: string[];
@@ -103,6 +106,7 @@ export declare const configSchema: import("./schema.js").Schema<{
         } | null;
         readonly qa: {
             readonly type: "command" | "codex" | "claude";
+            readonly usageMode: "legacy" | "subscription" | "metered";
             readonly command: string[];
             readonly timeoutMs: number;
             readonly passEnv: string[];
@@ -114,6 +118,7 @@ export declare const configSchema: import("./schema.js").Schema<{
         } | null;
         readonly design: {
             readonly type: "command" | "codex" | "claude";
+            readonly usageMode: "legacy" | "subscription" | "metered";
             readonly command: string[];
             readonly timeoutMs: number;
             readonly passEnv: string[];

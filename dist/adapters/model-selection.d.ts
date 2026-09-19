@@ -4,16 +4,19 @@ export declare const modelSelectionSchema: import("../domain/schema.js").Schema<
     readonly quick: {
         readonly provider: "codex" | "claude";
         readonly model: string;
+        readonly usageMode: "legacy" | "subscription" | "metered";
         readonly effort: "high" | "low" | "medium";
     };
     readonly deep: {
         readonly provider: "codex" | "claude";
         readonly model: string;
+        readonly usageMode: "legacy" | "subscription" | "metered";
         readonly effort: "high" | "low" | "medium";
     };
     readonly qa: {
         readonly provider: "codex" | "claude";
         readonly model: string;
+        readonly usageMode: "legacy" | "subscription" | "metered";
         readonly effort: "high" | "low" | "medium";
     };
 }>;

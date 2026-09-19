@@ -1,3 +1,4 @@
+import { executionAgent } from './billing.js';
 import { assertModelResponse } from './model-check.js';
 import { startFeedback } from '../execution/feedback.js';
 import { startInvocation } from './invocations.js';
@@ -40,6 +41,7 @@ export function requestFor(task: Task, baseSha: string, workspace: string, failu
   };
 }
 export async function runAgent(config: Config, request: AgentRequest, outputRoot: string, signal: AbortSignal, hooks: ProcessHooks = {}, journal?: { store: Store; runId: string }): Promise<{ summary: string; usage: AttemptUsage | null }> {
+  config = { ...config, agent: executionAgent(config.agent) };
   const env = environment([...config.environment.passEnv, ...config.agent.passEnv]);
   const feedback = config.feedback?.gateIds.length ? await startFeedback({ config, workspace: request.workspace, signal, hooks, emit: (type, data) => { if (journal) journal.store.event(journal.runId, type, data); } }) : null;
   try {

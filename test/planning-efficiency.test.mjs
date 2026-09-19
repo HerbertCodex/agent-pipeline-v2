@@ -178,7 +178,8 @@ test('failed provider process contributes declared spending even without usable 
   const f = fixture(t); const d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement multiplication.', proposal: oneTask() });
   const agent = fakeClaude(f, `console.log(JSON.stringify({type:'result',subtype:'error_max_budget_usd',is_error:true,total_cost_usd:5.2,num_turns:26})); process.exitCode=1;`);
   await assert.rejects(() => runRole({ store: f.life.store, documentId: d.id, repo: f.repo, sha: d.data.baseSha, role: 'product', agent, passEnv: [], schema: s.object({ answer: s.string() }), context: {} }), /cost ceiling/);
-  assert.deepEqual(f.life.costSummary(d.id), { knownUsd: 5.2, unknownInvocations: 0, pendingInvocations: 0, ceilingUsd: 25 });
+  assert.deepEqual(f.life.costSummary(d.id), { knownUsd: 5.2, unknownInvocations: 0, pendingInvocations: 0,
+    budget: { knownUsd: 5.2, unknownInvocations: 0, pendingInvocations: 0 }, usageModes: ['legacy'], configuredCeilingUsd: 25, ceilingUsd: 25 });
 });
 
 test('minor UI change reuses conventions without a full design invocation', async t => {
@@ -274,4 +275,55 @@ if(fail) process.exitCode=1;`;
   assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), ['product', 'design', 'design']);
   assert.equal(f.life.costSummary(saved.id).knownUsd, 0.75);
   assert.ok(resumed.data.planningMs > saved.data.planningMs);
+});
+
+
+test('QA retains a rejected report across a schema update and repairs its shape without resending the diff', async t => {
+  const f = fixture(t); const d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement multiplication.', proposal: oneTask() });
+  const agent = fakeClaude(f, `
+if (request.repair && (request.context.diff !== undefined || !request.context.spec || !request.context.retainedReportRepair)) throw new Error('Expected compact schema repair context');
+const out = request.repair ? {patches:[{path:'/answer',valueJson:'"fixed"'}]} : {answer:''};
+console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,total_cost_usd:0.1,structured_output:out}));`);
+  const options = { store:f.life.store, documentId:d.id, repo:f.repo, sha:d.data.baseSha, role:'qa', agent, passEnv:[], schema:s.object({answer:s.string(1,30)}), context:{diff:'large diff'.repeat(20000),spec:{title:'Approved obligations'}}, maxRepairs:0 };
+  await assert.rejects(() => runRole(options), /invalid string/);
+  const changed = {...options, schema:s.object({answer:s.string(1,30),inspected:s.default(s.array(s.string()),[])})};
+  assert.deepEqual(await runRole(changed), {answer:'fixed',inspected:[]});
+  const events = f.life.store.documentEvents(d.id, ['invocation.started']);
+  assert.ok(events[1].data.inputBytes < events[0].data.inputBytes / 2);
+  await runRole(changed);
+  assert.equal(f.life.store.documentEvents(d.id, ['invocation.started']).length,2);
+  await assert.rejects(() => runRole({...changed,context:{...changed.context,spec:{title:'Different obligations'}}}), /invalid string/);
+  assert.equal(f.life.store.documentEvents(d.id, ['invocation.started']).length,3, 'changed obligations cannot silently reuse the report');
+});
+
+test('QA never silently accepts retained proof from old instructions', async t => {
+  const f = fixture(t); const d = await f.life.draft({ repo:f.repo,config:f.config,request:'Implement multiplication.',proposal:oneTask() });
+  const agent = fakeClaude(f, `
+if (request.repair && (!/independently reassess/i.test(request.repair.instruction) || request.outputSchema.properties.patches)) throw new Error('Expected a full independent QA assessment');
+console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,total_cost_usd:0.1,structured_output:{answer:request.repair ? 'reassessed' : 'initial'}}));`);
+  const options={store:f.life.store,documentId:d.id,repo:f.repo,sha:d.data.baseSha,role:'qa',agent,passEnv:[],schema:s.object({answer:s.string()}),context:{}};
+  assert.deepEqual(await runRole(options),{answer:'initial'});
+  assert.deepEqual(await runRole({...options,skills:{enabled:['clean-code'],projectType:'backend',maxContextBytes:16000}}),{answer:'reassessed'});
+  assert.equal(f.life.store.documentEvents(d.id,['invocation.started']).length,2);
+});
+
+test('QA does not pay again with a budget already exhausted on the same review', async t => {
+  const f=fixture(t);const d=await f.life.draft({repo:f.repo,config:f.config,request:'Implement multiplication.',proposal:oneTask()});
+  const agent={...fakeClaude(f, `console.log(JSON.stringify({type:'result',subtype:'error_max_budget_usd',is_error:true,total_cost_usd:3.18,num_turns:22}));process.exitCode=1;`),maxBudgetUsd:3};
+  const options={store:f.life.store,documentId:d.id,repo:f.repo,sha:d.data.baseSha,role:'qa',agent,passEnv:[],schema:s.object({answer:s.string()}),context:{spec:'unchanged'}};
+  await assert.rejects(()=>runRole(options), /cost ceiling/);
+  await assert.rejects(()=>runRole(options), e=>e.code==='QA_BUDGET');
+  assert.equal(f.life.store.documentEvents(d.id,['invocation.started']).length,1);
+  await assert.rejects(()=>runRole({...options,agent:{...agent,maxBudgetUsd:4}}), /cost ceiling/);
+  assert.equal(f.life.store.documentEvents(d.id,['invocation.started']).length,2);
+  await assert.rejects(()=>runRole({...options,context:{spec:'changed'}}), /cost ceiling/);
+  assert.equal(f.life.store.documentEvents(d.id,['invocation.started']).length,3);
+});
+
+test('an unapproved review exemption is returned to the operator without paid output-repair loops', async t => {
+  const {PipelineError}=await import('../dist/domain/errors.js');
+  const f=fixture(t);const d=await f.life.draft({repo:f.repo,config:f.config,request:'Implement multiplication.',proposal:oneTask()});
+  const agent=fakeClaude(f, `console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,total_cost_usd:0.1,structured_output:{answer:'review'}}));`);
+  await assert.rejects(()=>runRole({store:f.life.store,documentId:d.id,repo:f.repo,sha:d.data.baseSha,role:'qa',agent,passEnv:[],schema:s.object({answer:s.string()}),context:{},maxRepairs:3,validate:()=>{throw new PipelineError('QA_REVIEW_AUTHORIZATION','Operator approval required');}}),e=>e.code==='QA_REVIEW_AUTHORIZATION');
+  assert.equal(f.life.store.documentEvents(d.id,['invocation.started']).length,1);
 });

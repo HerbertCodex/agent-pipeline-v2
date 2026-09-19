@@ -117,6 +117,9 @@ export declare class Lifecycle {
     /** What the providers declared for this spec so far. Declared values, never an invoice. */
     declaredCostUsd(r: SpecRecord, documentId: string): number;
     costSummary(id: string): {
+        budget: import("../adapters/invocations.js").CostSummary;
+        usageModes: ("legacy" | "subscription" | "metered")[];
+        configuredCeilingUsd: number | null;
         ceilingUsd: number | null;
         knownUsd: number;
         unknownInvocations: number;
@@ -139,6 +142,7 @@ export declare class Lifecycle {
         requirements?: {
             id: string;
             verification: string;
+            reviewTestIndexes?: number[];
             negativeTests?: string[];
         }[];
     }): Document<SpecRecord>;
