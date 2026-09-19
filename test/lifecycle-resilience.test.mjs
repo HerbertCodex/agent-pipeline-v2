@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fixture, approved, oneTask, demoSpec, git } from './lifecycle-helpers.mjs';
 import { Store } from '../dist/persistence/store.js';
 import { agentSchema } from '../dist/domain/contracts.js';
+import { specHash } from '../dist/lifecycle/contracts.js';
 const noQa = { workflow: { qaLanes: [], maxQaRepairs: 0, maxActiveMs: 60000 } };
 test('lifecycle store rejects optimistic write conflicts', t => { const f = fixture(t); const d = f.life.store.createDocument('test', { value: 1 }); const stale = f.life.store.document(d.id, 'test'); d.data.value = 2; f.life.store.saveDocument(d, 'updated'); stale.data.value = 3; assert.throws(() => f.life.store.saveDocument(stale, 'stale'), /Stale/); });
 test('lifecycle lease cannot be stolen while controller is alive', t => { const f = fixture(t); const d = f.life.store.createDocument('test', {}); const token = f.life.store.acquireDocument(d.id); assert.throws(() => f.life.store.acquireDocument(d.id), /locked/); assert.throws(() => f.life.store.recoverDocument(d.id, true), /alive/); f.life.store.releaseDocument(d.id, token); });
@@ -86,4 +87,50 @@ test('actual workflow SIGKILL requires explicit recovery and candidate adoption'
             catch { }
         }
     }
+});
+
+test('a spec still runs after its own candidate was merged and the branch moved on', async t => {
+  const f = fixture(t);
+  f.config.workflow.qaLanes = [];
+  f.config.workflow.reviewMode = 'solo';
+  let d = await approved(f, oneTask());
+  d = await f.life.run(d.id);
+  assert.equal(d.data.status, 'awaiting_review');
+  const candidate = d.data.currentSha;
+
+  // What merging this spec's own pull request does: the branch advances past the base, and past the
+  // candidate. Nothing about the spec is stale — the base moved because of its own work.
+  git(f.repo, 'merge', '--no-ff', '-q', '-m', 'Merge the reviewed candidate', candidate);
+  const head = git(f.repo, 'rev-parse', 'HEAD').trim();
+  assert.notEqual(head, d.data.baseSha);
+  assert.notEqual(head, candidate);
+
+  d = await f.life.verify(d.id);
+  assert.equal(d.data.error, null, JSON.stringify(d.data.error));
+  assert.equal(git(f.repo, 'rev-parse', 'HEAD').trim(), head, 'the operator checkout is left alone');
+  d = await f.life.review(d.id, candidate, 'Reviewer Test', 'Reviewed the candidate this branch already contains.');
+  assert.equal(d.data.status, 'ready');
+});
+
+test('a spec that produced nothing yet still refuses a moved base', async t => {
+  const f = fixture(t);
+  f.config.workflow.qaLanes = [];
+  const d = await approved(f, oneTask());
+  writeFileSync(join(f.repo, 'UNRELATED.md'), '# Someone else\u2019s pull request\n');
+  git(f.repo, 'add', 'UNRELATED.md');
+  git(f.repo, 'commit', '-qm', 'Merge an unrelated pull request');
+  await assert.rejects(() => f.life.run(d.id), /HEAD/);
+});
+
+test('a spec refuses to run when its base commit is gone or the repository is dirty', async t => {
+  const f = fixture(t);
+  const d = await approved(f, oneTask());
+  writeFileSync(join(f.repo, 'UNCOMMITTED.md'), '# Work in flight\n');
+  await assert.rejects(() => f.life.run(d.id), e => e.code === 'DIRTY');
+  rmSync(join(f.repo, 'UNCOMMITTED.md'));
+  const broken = f.life.get(d.id);
+  broken.data.baseSha = 'f'.repeat(40);
+  broken.data.contentHash = specHash(broken.data);
+  f.life.store.saveDocument(broken, 'test.base_missing');
+  await assert.rejects(() => f.life.run(d.id));
 });

@@ -530,7 +530,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         try {
             const doc = this.get(id); const r = doc.data;
             invariant(r.status === 'draft' && !r.approval && r.attempts.length === 0, 'STATE', 'Only an unapproved draft can resume planning');
-            await new Git(signal).clean(r.repo, r.baseSha);
+            await this.sourceReady(r, signal);
             const checkpoint = this.store.documentEvents(id, ['product.checkpoint']).at(-1)?.data as { revision?: number; specHash?: string } | undefined;
             const proposal = checkpoint?.revision === r.revision && checkpoint.specHash === r.contentHash ? r.content : undefined;
             try { await this.product(doc, proposal, signal); }
@@ -694,7 +694,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             invariant(r.content && approvalHash(r) === expectedHash, 'APPROVAL_HASH', 'Approve the exact spec/design proposal hash');
             validateTaskCapabilities(validateSpec(r.content, true, r.decisionLedger, r.request, r.securityContext), r.config);
             if (this.requiresDesign(r.content, r.config.skills.projectType)) invariant(r.design && r.design.proposal.questions.length === 0, 'OPEN_QUESTIONS', 'Resolve design questions before approval');
-            await new Git().clean(r.repo, r.baseSha);
+            await this.sourceReady(r);
             r.approval = { hash: expectedHash, reviewer: actor.trim(), note: note.trim(), at: Date.now() };
             r.status = 'approved';
             r.error = null;
@@ -796,7 +796,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             invariant(proposal && proposal.hash === expectedHash && replanHash(proposal) === expectedHash, 'REPLAN_HASH', 'Approve the exact pending plan hash');
             invariant(proposal.contextHash === replanContext(r), 'REPLAN_STALE', 'The execution frontier or its approval changed; prepare a new revision');
             const { content } = revisedContent(r, { reason: proposal.reason, tasks: proposal.tasks });
-            await new Git().clean(r.repo, r.baseSha);
+            await this.sourceReady(r);
             r.content = content; r.revision++; r.contentHash = specHash(r);
             r.approval = { hash: approvalHash(r)!, reviewer: actor.trim(), note: note.trim(), at: Date.now() };
             proposal.status = 'approved'; proposal.approval = { ...r.approval, hash: expectedHash };
@@ -1007,7 +1007,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             invariant(r.sessionStartedAt === null, 'RECOVERY', 'Recover the interrupted workflow explicitly first');
             const remaining = (r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs) - r.activeMs - (r.planningMs ?? 0);
             invariant(remaining > 0, 'BUDGET', 'Spec active-time budget exhausted');
-            await new Git().clean(r.repo, r.baseSha);
+            await this.sourceReady(r);
             const controller = new AbortController();
             timer = setTimeout(() => controller.abort(), remaining);
             const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
@@ -1326,6 +1326,24 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         if (purpose === 'review') invariant(['awaiting_review', 'ready'].includes(doc.data.status) && ['awaiting_review', 'ready'].includes(final.state), 'STATE', 'Only a validated candidate awaiting review can be opened for reading');
         else await this.pipeline.exportPatch(final.id);
         return final;
+    }
+    /**
+     * The source repository must be clean and still checked out on the spec's base: a plan approved
+     * against one state of the repository must not be implemented against another.
+     *
+     * One case is exempt. When the checked-out branch already contains this spec's own candidate, the
+     * base moved precisely because this work was merged; nothing about the spec is stale, and holding
+     * it to the old HEAD would leave it unable to finish its own review and closure. Workspaces are
+     * detached worktrees created at explicit commits, so the branch position never reaches them.
+     */
+    private async sourceReady(r: SpecRecord, signal?: AbortSignal): Promise<void> {
+        const git = new Git(signal);
+        if (r.currentSha !== r.baseSha && await git.contains(r.repo, await git.sha(r.repo), r.currentSha)) {
+            await git.clean(r.repo);
+            await git.sha(r.repo, r.baseSha);
+            return;
+        }
+        await git.clean(r.repo, r.baseSha);
     }
     async review(id: string, sha: string, actor: string, note: string): Promise<Document<SpecRecord>> {
         const token = this.store.acquireDocument(id);
