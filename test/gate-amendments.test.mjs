@@ -98,3 +98,23 @@ test('a spec approved before a gate field existed still publishes when the run e
   assert.ok(f.life.store.get(d.data.finalRunId).config.gates.every(g => g.readOnly === false));
   await f.life.publicationCandidate(d.id, 'review');
 });
+
+test('the allowance for a malformed role output is amendable and never weakens what it must prove', async t => {
+  const f = fixture(t);
+  // The whole demonstration spec: the scripted reviewer only passes once both of its tasks are done.
+  let d = await approved(f);
+  assert.equal(d.data.config.workflow.maxOutputRepairs, 1);
+  const before = structuredClone(d.data.approval);
+
+  for (const bad of [3, -1, 1.5, '2']) assert.throws(() => f.life.amendBudget(d.id, { maxOutputRepairs: bad }, actor, note));
+  assert.equal(f.life.get(d.id).data.operational?.maxOutputRepairs ?? null, null);
+
+  d = f.life.amendBudget(d.id, { maxOutputRepairs: 2 }, actor, note);
+  assert.equal(d.data.operational.maxOutputRepairs, 2);
+  // Retrying the shape of an answer is execution-only: the approval, the proof and the gates stand.
+  assert.deepEqual(d.data.approval, before);
+  assert.equal(d.data.config.workflow.maxOutputRepairs, 1, 'the approved configuration is never rewritten');
+  d = await f.life.run(d.id);
+  assert.equal(d.data.error, null, JSON.stringify(d.data.error));
+  assert.equal(d.data.operational.maxOutputRepairs, 2, 'the amendment survives a run');
+});

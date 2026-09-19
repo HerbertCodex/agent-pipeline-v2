@@ -413,7 +413,7 @@ export class Lifecycle {
         const spec = r.content;
         const proposal = await runRole({ store: this.store, documentId: doc.id, budgetDocumentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product', skills: r.config.skills,
             modelPolicy: modelPlan(r.config, r.operational).find(m => m.role === 'design' && m.lane === (r.content!.minimumLane))?.decision, modelReason: modelChoice(r.config, 'design', r.content.minimumLane).reason, agent: roleAgent(r.config, 'design', r.content.minimumLane), passEnv: r.config.environment.passEnv, schema: designProposalSchema, context, ...(signal ? { signal } : {}),
-            maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: value => { this.validateDesignMarkup(value); this.validateDesignScopes(value, spec); this.inlineDesignAssets(r.repo, r.baseSha, tracked, value); this.loadDesignStylesheets(r.repo, r.baseSha, tracked, value); return value; } });
+            maxRepairs: this.outputRepairs(r), validate: value => { this.validateDesignMarkup(value); this.validateDesignScopes(value, spec); this.inlineDesignAssets(r.repo, r.baseSha, tracked, value); this.loadDesignStylesheets(r.repo, r.baseSha, tracked, value); return value; } });
         const root = resolve(dirname(r.repo), `${basename(r.repo)}-review`, doc.id, 'design');
         invariant(!isInside(r.repo, root) && !isInside(this.store.root, root), 'DESIGN_PATH', 'Design preview must be outside source and operational state');
         rmSync(root, { recursive: true, force: true });
@@ -475,7 +475,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         const selectedContext = r.executionPath ? focusedIntelligence(repositoryIntelligence) : repositoryIntelligence;
         const roleOptions = { store: this.store, documentId: doc.id, budgetDocumentId: doc.id, repo: r.repo, sha: r.baseSha, role: 'product' as const, skills: r.config.skills,
             modelPolicy: modelPlan(r.config, r.operational).find(m => m.role === 'product' && m.lane === (r.executionPath === 'structural' ? 'high' : securityContext.minimumLane))?.decision, modelReason: modelChoice(r.config, 'product', r.executionPath === 'structural' ? 'high' : securityContext.minimumLane).reason, agent: roleAgent(r.config, 'product', r.executionPath === 'structural' ? 'high' : securityContext.minimumLane), passEnv: r.config.environment.passEnv,
-            ...(signal ? { signal } : {}), maxRepairs: r.config.workflow.maxOutputRepairs ?? 1 };
+            ...(signal ? { signal } : {}), maxRepairs: this.outputRepairs(r) };
         if (r.executionPath === 'structural') {
             const tracked = new Set(await this.trackedPaths(r.repo, r.baseSha, signal));
             r.architecture = await runRole({ ...roleOptions, schema: architectureSchema,
@@ -589,11 +589,15 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
         validateDag(gates);
         return config;
     }
+    /** Retries allowed on a malformed role output, as amended by the operator. */
+    private outputRepairs(r: SpecRecord): number {
+        return r.operational?.maxOutputRepairs ?? r.config.workflow.maxOutputRepairs ?? 1;
+    }
     amendBudget(id: string, input: unknown, actor: string, note: string): Document<SpecRecord> {
         reviewer(actor, note);
         invariant(input !== null && typeof input === 'object' && !Array.isArray(input), 'ARGUMENT', 'Expected an operational amendment object');
         const values = input as Record<string, unknown>;
-        invariant(Object.keys(values).length > 0 && Object.keys(values).every(k => ['maxSpecCostUsd', 'maxActiveMs', 'agent', 'roles', 'gates'].includes(k)), 'ARGUMENT', 'Only maxSpecCostUsd, maxActiveMs, agent, per-role tuning and execution-only gate changes may be amended');
+        invariant(Object.keys(values).length > 0 && Object.keys(values).every(k => ['maxSpecCostUsd', 'maxActiveMs', 'maxOutputRepairs', 'agent', 'roles', 'gates'].includes(k)), 'ARGUMENT', 'Only maxSpecCostUsd, maxActiveMs, maxOutputRepairs, agent, per-role tuning and execution-only gate changes may be amended');
         const token = this.store.acquireDocument(id);
         try {
             const doc = this.get(id); const r = doc.data;
@@ -602,6 +606,10 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             const time = Object.hasOwn(values, 'maxActiveMs') ? values['maxActiveMs'] : r.operational?.maxActiveMs ?? r.config.workflow.maxActiveMs;
             invariant(cost === null || (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0.01 && cost <= 10000), 'ARGUMENT', 'maxSpecCostUsd must be null or within 0.01..10000');
             invariant(typeof time === 'number' && Number.isSafeInteger(time) && time >= 100 && time <= 14400000, 'ARGUMENT', 'maxActiveMs must be within 100..14400000');
+            // A malformed report says nothing about the candidate: allowing another attempt at the
+            // shape of an answer never lowers what that answer has to prove.
+            const outputRepairs = Object.hasOwn(values, 'maxOutputRepairs') ? values['maxOutputRepairs'] : this.outputRepairs(r);
+            invariant(typeof outputRepairs === 'number' && Number.isSafeInteger(outputRepairs) && outputRepairs >= 0 && outputRepairs <= 2, 'ARGUMENT', 'maxOutputRepairs must be within 0..2');
             let tuning = r.operational?.agent ?? null;
             if (values['agent'] !== undefined) {
                 const v = values['agent'];
@@ -624,7 +632,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
             const previousQaModels = modelPlan(r.config, r.operational).filter(m => m.role === 'qa').map(m => ({ provider: m.provider, model: m.model, effort: m.effort }));
             const gates = this.amendedGates(r, values['gates']);
             const previousGates = this.runConfig(r).gates;
-            r.operational = { maxSpecCostUsd: cost, maxActiveMs: time, gates, agent: tuning, roles, at: Date.now(), reviewer: actor.trim(), note: note.trim() };
+            r.operational = { maxSpecCostUsd: cost, maxActiveMs: time, maxOutputRepairs: outputRepairs, gates, agent: tuning, roles, at: Date.now(), reviewer: actor.trim(), note: note.trim() };
             for (const role of ['product', 'design', 'implementer', 'qa'] as const)
                 for (const lane of ['fast', 'standard', 'high'] as const) executionAgent(applyModelOverrides(roleAgent(r.config, role, lane), r.config, role, r.operational));
             const qaChanged = hash(previousQaModels) !== hash(modelPlan(r.config, r.operational).filter(m => m.role === 'qa').map(m => ({ provider: m.provider, model: m.model, effort: m.effort })));
@@ -1074,6 +1082,17 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                     r.review = null; // The review described the previous candidate; it is superseded, not stale forever.
                     this.save(doc, 'workflow.qa_repair_completed', { runId: repaired.id, candidateSha: r.currentSha });
                 }
+                // A validation that failed is terminal: it stays in the history as the observation it is,
+                // and the next run earns its proof in a fresh attempt. Keeping it as the final run left
+                // the spec reporting the same failure forever, since a failed run can never resume.
+                if (r.finalRunId) {
+                    const previous = this.pipeline.store.get(r.finalRunId);
+                    if (previous.state === 'failed' && previous.candidateSha === r.currentSha) {
+                        r.finalRunId = null;
+                        if (r.activeRunId === previous.id) r.activeRunId = null;
+                        this.save(doc, 'integration.validation_superseded', { runId: previous.id, candidateSha: r.currentSha });
+                    }
+                }
                 if (!r.finalRunId) {
                     // One task already validates exactly the complete candidate: do not pay for the same gates twice.
                     const only = r.attempts.length === 1 ? this.pipeline.store.get(r.attempts[0]!.runId) : null;
@@ -1152,7 +1171,7 @@ ${r.decisionLedger.decisions.map(d=>`${d.subject}: ${d.value}`).join('\n')}`, { 
                     const context = r.executionPath && r.executionPath !== 'structural' && final.risk!.lane !== 'high' ? targetedQaContext(fullContext) : fullContext;
                     this.save(doc, 'qa.context_selected', { mode: context === fullContext ? 'full' : 'targeted', bytes: Buffer.byteLength(JSON.stringify(context)), fullBytes: Buffer.byteLength(JSON.stringify(fullContext)), completeDiff: true });
                     const raw = await runRole({ store: this.store, documentId: id, budgetDocumentId: id, acceptCost: options.acceptCost ?? false, repo: r.repo, sha: final.candidateSha!, role: 'qa', skills: r.config.skills, modelPolicy: modelPlan(r.config, r.operational).find(m => m.role === 'qa' && m.lane === (final.risk?.lane ?? spec.minimumLane))?.decision, modelReason: modelChoice(r.config, 'qa', final.risk?.lane ?? spec.minimumLane).reason, agent: roleAgent(r.config, 'qa', final.risk?.lane ?? spec.minimumLane), passEnv: r.config.environment.passEnv, schema: qaSchema, context, signal,
-                        maxRepairs: r.config.workflow.maxOutputRepairs ?? 1, validate: report => validateQa(report, spec, final.candidateSha!, r.decisionLedger, quality) });
+                        maxRepairs: this.outputRepairs(r), validate: report => validateQa(report, spec, final.candidateSha!, r.decisionLedger, quality) });
                     r.qa = { report: raw, specHash: r.contentHash!, evidenceHash, at: Date.now(), source: 'agent' };
                     this.save(doc, 'qa.completed', { qa: r.qa });
                 }
