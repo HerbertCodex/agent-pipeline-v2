@@ -134,7 +134,11 @@ export const configSchema = s.object({
     // Fixing one red check often reveals the next: a single pass loses the whole attempt. The loop stops by
     // itself as soon as a repair changes nothing or leaves the checks failing exactly as before.
     maxRepairAttempts: s.default(s.number(0, 5), 3),
-    validationMaxAgeMs: s.default(s.number(1000, 86400000), 3600000),
+    // The bound guards approval and export against proof that no longer describes the environment.
+    // One hour could not survive the step it protects: a human reading a diff, sleeping on it, or
+    // merging after lunch came back to expired evidence and paid a full revalidation and a fresh
+    // quality review for a candidate nobody had touched. A day is the unit a human review works in.
+    validationMaxAgeMs: s.default(s.number(1000, 86400000), 86400000),
     risk: s.default(s.object({
         fastPaths: s.default(paths, ['docs/**', '*.md']),
         highPaths: s.default(paths, []),

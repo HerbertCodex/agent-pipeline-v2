@@ -76,5 +76,7 @@ export function configAdvice(config: Config): { setting: string; value: string; 
     advice.push({ setting: 'maxRunMs', value: String(config.maxRunMs), why: 'The agent timeout fills the run budget. The controller shortens it to reserve final checks; align these limits with measured task duration.' });
   if (config.agent.usageMode !== 'subscription' && config.agent.maxBudgetUsd !== null && config.workflow.maxSpecCostUsd !== null && config.agent.maxBudgetUsd > config.workflow.maxSpecCostUsd)
     advice.push({ setting: 'agent.maxBudgetUsd', value: String(config.agent.maxBudgetUsd), why: 'The per-call limit exceeds the entire spec budget. The controller caps each supported call at the remaining declared spec budget.' });
+  if (config.validationMaxAgeMs < 3600000)
+    advice.push({ setting: 'validationMaxAgeMs', value: String(config.validationMaxAgeMs), why: 'Proof expires sooner than a human review usually takes. An expired validation costs a full replay of the checks and a fresh quality review on a candidate nobody changed.' });
   return advice;
 }

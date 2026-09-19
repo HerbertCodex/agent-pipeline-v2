@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import { taskSchema,configSchema,agentOutputSchema,transition } from '../dist/domain/contracts.js';
+import { taskSchema,configSchema,agentOutputSchema,transition,validateConfig } from '../dist/domain/contracts.js';
+import { configAdvice } from '../dist/lifecycle/capabilities.js';
 import { hash,canonical } from '../dist/domain/hash.js';
 import { matches,validRelativePath,classify,planGates,assertScope,validateDag,requiredApprovals } from '../dist/policy/policy.js';
 import { cfg,task,rawConfig,baseTask } from './helpers.mjs';
@@ -76,3 +77,18 @@ test('empty selected validation is an error, never success',()=>assert.throws(()
 test('approval thresholds adapt to solo, team and regulated review modes',()=>{ assert.deepEqual(['fast','standard','high'].map(x=>requiredApprovals(x,'team')),[0,1,2]); assert.deepEqual(['fast','standard','high'].map(x=>requiredApprovals(x,'solo')),[0,1,1]); assert.deepEqual(['fast','standard','high'].map(x=>requiredApprovals(x,'regulated')),[1,1,2]); });
 test('state machine refuses skipped verification',()=>assert.throws(()=>transition({state:'implementing'},'ready'),/Illegal transition/));
 test('valid transition updates state',()=>{const r={state:'created'};transition(r,'preparing');assert.equal(r.state,'preparing');});
+
+test('validation proof outlives the human review it protects', () => {
+  const config = validateConfig({ schemaVersion: 1, executionMode: 'local-trusted', environment: { id: 'freshness' },
+    agent: { type: 'command', command: [process.execPath, '-e', 'process.exit(0)'] },
+    gates: [{ id: 'unit', command: ['npm', 'test'] }] });
+  // The bound guards approval against proof that no longer describes the environment. It cannot be
+  // shorter than the step it protects: reading a diff and merging it takes longer than an hour.
+  assert.equal(config.validationMaxAgeMs, 86400000);
+  assert.deepEqual(configAdvice(config).filter(a => a.setting === 'validationMaxAgeMs'), []);
+
+  const cutting = validateConfig({ ...config, validationMaxAgeMs: 60000 });
+  const advice = configAdvice(cutting).find(a => a.setting === 'validationMaxAgeMs');
+  assert.ok(advice, 'a proof that expires during a review is flagged, never silently accepted');
+  assert.match(advice.why, /human review/);
+});
