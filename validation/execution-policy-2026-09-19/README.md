@@ -1,8 +1,8 @@
 # Validation de la politique d’exécution — 19 septembre 2026
 
-Résultat : **500 tests réussis**, compilation et lint CSS valides, installation hors ligne du paquet et quatre formats Chromium vérifiés. Voir [le bilan](summary.json), [le journal de tests](check.log), [le paquet](package-result.json) et [le navigateur](browser-results.json).
+Ce dossier conserve les vérifications de l’interface sur quatre formats Chromium : [observations navigateur](browser-results.json), [bilan et empreinte du code testé](summary.json). Les anciens journaux de tests et de paquet ont été remplacés par la [validation finale de 508 tests](../qa-cleanup-2026-09-19/README.md).
 
-Les tests utilisent des CLI factices, de vrais processus locaux et des dépôts temporaires. Aucun compte fournisseur ni magasin de specs réel n’est modifié. Les anciens constats de `state-of-art-2026-09-19` restent historiques.
+Les tests utilisent des CLI factices, de vrais processus locaux et des dépôts temporaires. Aucun compte fournisseur ni magasin de specs réel n’est modifié. Les observations navigateur conservent leur instantané d’origine ; elles n’ont pas été rejouées lors du nettoyage documentaire.
 
 Reproduire les vérifications :
 

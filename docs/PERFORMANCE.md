@@ -18,7 +18,7 @@ node scripts/bench.mjs --repetitions 5 --output /tmp/apv2-bench.json
 
 Le benchmark utilise les mêmes quatre commandes réelles Node dans les deux modes : trois timers indépendants de 180 ms déclarés `readOnly: true` et un timer de 50 ms dépendant de deux parents. Il compare une concurrence de 1 et de 3, alterne l'ordre des modes et conserve chaque mesure. **Ces délais sont artificiels.** Le résultat démontre l'effet de l'ordonnancement sur ce graphe, pas un gain général de la V2 sur la V1 ou sur une session IA.
 
-Les résultats historiques de la livraison initiale alpha.8 sont dans `validation/alpha.8/scheduler-bench.json`, `validation/alpha.8/demo.json` et `validation/VALIDATION.md`. Ce sont des observations locales, non des objectifs contractuels.
+Relancer ces commandes pour mesurer l’état courant sur votre machine. Les [preuves conservées](../validation/VALIDATION.md) distinguent les contrôles du moteur et les essais avec des modèles réels.
 
 ## Durées
 
@@ -54,7 +54,7 @@ La durée de `demo-lifecycle.mjs` inclut des acteurs déterministes très petits
 
 ## Sélection de skills
 
-La sélection ne crée pas de nœud de workflow ni d’appel au modèle. Un microbenchmark local alpha.8 de 100 résolutions en processus, avec le catalogue et ses empreintes, mesure une médiane de 1,94 ms et un p95 de 2,93 ms (`validation/alpha.8/guidance-bench.json`). Ce scénario exclut démarrage du processus, appels aux modèles, worktrees, setup et gates ; il ne mesure pas l’accélération d’une tâche. Les textes courts injectés ajoutent des octets au contexte : le budget `maxContextBytes` limite ces corps de skills, pas les tokens totaux ni le coût du fournisseur.
+La sélection ne crée pas de nœud de workflow ni d’appel au modèle. Mesurer sa résolution locale séparément du démarrage du processus, des appels aux modèles, des worktrees, du setup et des gates ; sa durée seule ne mesure pas l’accélération d’une tâche. Les textes courts injectés ajoutent des octets au contexte : le budget `maxContextBytes` limite ces corps de skills, pas les tokens totaux ni le coût du fournisseur.
 
 ## Coût de la conception
 
