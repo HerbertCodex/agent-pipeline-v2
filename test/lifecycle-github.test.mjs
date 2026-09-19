@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { publishSpec, syncSpec, githubRepository } from '../dist/lifecycle/github.js';
-import { fixture, approved, oneTask, git } from './lifecycle-helpers.mjs';
+import { fixture, approved, oneTask, git, passingQa } from './lifecycle-helpers.mjs';
 const noQa = { workflow: { qaLanes: [], maxQaRepairs: 0, maxActiveMs: 60000 } };
 async function ready(t) { const f = fixture(t, noQa); let doc = await approved(f, oneTask()); doc = await f.life.run(doc.id); doc = await f.life.review(doc.id, doc.data.currentSha, 'Test Reviewer', 'Inspected the complete candidate and fixtures.'); const options = { repository: 'example/demo', remote: 'origin', branch: 'feature/test-pipeline', base: git(f.repo, 'symbolic-ref', '--short', 'HEAD'), confirmPush: true, confirmPr: true }; return { ...f, doc, options }; }
 function fake(f) {
@@ -80,4 +80,33 @@ test('a draft PR can be opened for reading before approval, and its merge does n
   d = await syncSpec(f.life, f.doc.id, undefined, g.transport);
   assert.equal(d.data.status, 'closed');
   assert.ok(!g.calls.some(c => c.command.includes('merge') || c.command.includes('--force')), 'the controller never merges nor force-pushes');
+});
+
+test('a merged candidate whose review requests changes is told what actually blocks it', async (t) => {
+    const f = fixture(t, { workflow: { maxActiveMs: 180000 } });
+    // The whole demonstration spec: the scripted reviewer passes it, which is what publishing needs.
+    let doc = await approved(f);
+    doc = await f.life.run(doc.id);
+    assert.equal(doc.data.qa.report.verdict, 'pass');
+    f.doc = doc;
+    f.options = { repository: 'example/demo', remote: 'origin', branch: 'feature/test-pipeline',
+        base: git(f.repo, 'symbolic-ref', '--short', 'HEAD'), confirmPush: true, confirmPr: true };
+    const g = fake(f);
+    await publishSpec(f.life, doc.id, { ...f.options, forReview: true }, g.transport);
+    g.state.prState = 'MERGED';
+    doc = await syncSpec(f.life, doc.id, undefined, g.transport);
+    assert.equal(doc.data.error.code, 'MERGED_BEFORE_REVIEW');
+
+    // A later quality review on the same candidate requests changes: the review the spec is being
+    // asked to record can no longer be recorded, and saying "apv2 spec review" alone sends the
+    // operator around a loop. Observed on a real project after a revalidation.
+    await f.life.importQa(doc.id, { ...passingQa(doc), verdict: 'changes_requested',
+        summary: 'Fixture review requesting a correction after the merge.',
+        findings: [{ id: 'F-LATE', severity: 'major', resolution: 'required', path: 'src/math.mjs',
+            description: 'Fixture finding raised after the pull request was merged.' }] });
+    doc = await syncSpec(f.life, doc.id, undefined, g.transport);
+    assert.equal(doc.data.error.code, 'MERGED_BEFORE_REVIEW');
+    const advice = f.life.summary(doc).nextAction;
+    assert.match(advice, /quality review requests changes/);
+    assert.match(advice, /spec qa-repair|follow-up spec/);
 });

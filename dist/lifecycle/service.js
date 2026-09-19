@@ -1814,6 +1814,16 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         const languages = r.config.knowledge?.languages ?? [];
         return diffInventory(await this.inventoryAt(r.repo, r.baseSha, languages, signal), await this.inventoryAt(r.repo, candidateSha, languages, signal));
     }
+    /**
+     * What an operator can do about a quality review that requests changes, said once.
+     * A spec whose candidate is already merged is told to record its review; when the review itself
+     * cannot be recorded because the report demands corrections, saying so is the only useful advice.
+     */
+    qualityRecourse(r, id, final) {
+        return final && this.provenByConfiguredGates(r, final)
+            ? `authorize one more repair with apv2 spec qa-repair ${id} --confirm --note TEXT once you have decided the gap is in the candidate, or create a follow-up spec`
+            : `create a follow-up spec (apv2 spec draft --repo ${r.repo} --request "...")`;
+    }
     summary(doc) {
         const r = doc.data;
         const final = r.finalRunId ? this.pipeline.store.get(r.finalRunId) : null;
@@ -1835,8 +1845,15 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
         else if (r.status === 'awaiting_review')
             next = `apv2 spec review ${doc.id} --sha ${final?.candidateSha} --approve`;
         else if (r.error?.code === 'MERGED_BEFORE_REVIEW')
-            next = `apv2 spec review ${doc.id} --sha ${r.currentSha} --approve   (after apv2 spec verify ${doc.id} if the evidence expired; then apv2 spec sync ${doc.id})`;
-        else if (r.publication?.url && r.status !== 'closed' && r.status !== 'rejected')
+            next = r.qa?.report.verdict === 'changes_requested'
+                // The merge is observed, but the review it now asks for cannot be recorded while the
+                // quality report demands corrections: pointing at `spec review` alone loops forever.
+                ? `The pull request was merged, and the quality review requests changes, so the candidate review cannot be recorded yet: read the QA findings, then ${this.qualityRecourse(r, doc.id, final)}. Once the review passes, apv2 spec review ${doc.id} --sha ${r.currentSha} --approve, then apv2 spec sync ${doc.id}.`
+                : `apv2 spec review ${doc.id} --sha ${r.currentSha} --approve   (after apv2 spec verify ${doc.id} if the evidence expired; then apv2 spec sync ${doc.id})`;
+        // Observing the pull request is what a published spec does next only while nothing is wrong.
+        // A spec stopped by a quality review was being told to sync, which reported the merge and sent
+        // it back to a review its own report forbids: the advice that could unblock it was never read.
+        else if (r.publication?.url && !r.error && r.status !== 'closed' && r.status !== 'rejected')
             next = `apv2 spec sync ${doc.id}`;
         else if (r.status === 'ready')
             next = `apv2 spec deliver ${doc.id} --output /path/to/new-delivery   (or, once you have merged it yourself: apv2 spec close ${doc.id} --target main --sha MERGED_HEAD --reviewer NAME --note TEXT)`;
@@ -1855,9 +1872,7 @@ ${r.decisionLedger.decisions.map(d => `${d.subject}: ${d.value}`).join('\n')}`, 
                 : `Inspect the blocked run: the amendment it required is no longer pending.`;
         }
         else if (r.error?.code === 'QA_REJECTED')
-            next = `Read the QA findings above. The automatic repair budget is spent${final && this.provenByConfiguredGates(r, final)
-                ? `, so either authorize one more with apv2 spec qa-repair ${doc.id} --confirm --note TEXT once you have decided the gap is in the candidate, or create a follow-up spec`
-                : ' and a configured check no longer proves this candidate, so create a follow-up spec'} (apv2 spec draft --repo ${r.repo} --request "...").`;
+            next = `Read the QA findings above. The automatic repair budget is spent, so ${this.qualityRecourse(r, doc.id, final)}.`;
         else if (r.error?.code === 'QA_REVIEW_AUTHORIZATION')
             next = `Inspect the named negative case: provide its executable test evidence, or propose a justified reviewTestIndexes correction with apv2 spec criterion ${doc.id} --criterion AC_ID --file CORRECTION_JSON and approve its exact hash. Do not rerun unchanged.`;
         else if (r.error?.code === 'COST_BUDGET' || r.error?.code === 'QA_BUDGET')
