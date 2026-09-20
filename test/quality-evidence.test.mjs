@@ -269,7 +269,7 @@ test('structural decisions require the constraint, simpler option, risks and rec
   assert.doesNotThrow(() => architectureSchema.parse(proposal));
   for (const field of ['constraint', 'simplerAlternative', 'risks', 'reconsiderWhen']) {
     const missing = structuredClone(proposal); delete missing.decisions[0][field];
-    assert.throws(() => architectureSchema.parse(missing), /invalid/);
+    assert.throws(() => architectureSchema.parse(missing), new RegExp(`\\$\\.decisions\\[0\\]\\.${field}`));
   }
 });
 
