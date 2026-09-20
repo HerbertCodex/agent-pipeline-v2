@@ -13,8 +13,10 @@ export const s = {
     return make({ type: 'string', minLength: min, maxLength: max,
       allOf: [{ pattern: '^[^\\u0000]*$' }],
       ...(pattern ? { pattern: pattern.source } : {}) }, (v, p) => {
-      invariant(typeof v === 'string' && v.length >= min && v.length <= max && !v.includes('\0') &&
-        (!pattern || pattern.test(v)), 'SCHEMA', `${p}: invalid string`);
+      invariant(typeof v === 'string', 'SCHEMA', `${p}: expected string`);
+      invariant(!v.includes('\0'), 'SCHEMA', `${p}: invalid string, a NUL character is never accepted`);
+      invariant(v.length >= min && v.length <= max, 'SCHEMA', `${p}: invalid string of ${v.length} characters, expected between ${min} and ${max}`);
+      if (pattern) invariant(pattern.test(v), 'SCHEMA', `${p}: invalid string, expected to match ${pattern.source}`);
       return v;
     });
   },
