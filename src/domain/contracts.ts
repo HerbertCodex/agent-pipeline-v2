@@ -98,7 +98,8 @@ export const configSchema = s.object({
   workflow: s.default(s.object({
     planningMode: s.default(s.enum(['legacy', 'adaptive']), 'legacy'),
     qualityReview: s.default(s.enum(['legacy', 'evidence']), 'legacy'),
-    qaProfile: s.default(s.enum(['lane', 'deep']), 'lane'),
+    /** QA checks the other roles' work: it takes the deep profile whatever lane the reviewed task ran in. */
+    qaProfile: s.default(s.enum(['lane', 'deep']), 'deep'),
     qaLanes: s.default(s.array(s.enum(lanes), 0, 3), ['standard', 'high']),
     maxQaRepairs: s.default(s.number(0, 3), 2),
     maxActiveMs: s.default(s.number(100, 14400000), 3600000),
@@ -109,7 +110,7 @@ export const configSchema = s.object({
     generatedPaths: s.default(s.array(s.string(1, 300), 0, 100), [...DEFAULT_GENERATED_PATHS]),
     /** Stops a spec once the providers declare this much spending on it; continuing is an explicit decision. */
     maxSpecCostUsd: s.default(s.nullable(s.finite(0.01, 10000)), 25),
-  }), { planningMode: 'legacy', qualityReview: 'legacy', qaProfile: 'lane', qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team', maxOutputRepairs: 1, generatedPaths: [...DEFAULT_GENERATED_PATHS], maxSpecCostUsd: 25 }),
+  }), { planningMode: 'legacy', qualityReview: 'legacy', qaProfile: 'deep', qaLanes: ['standard', 'high'], maxQaRepairs: 2, maxActiveMs: 3600000, reviewMode: 'team', maxOutputRepairs: 1, generatedPaths: [...DEFAULT_GENERATED_PATHS], maxSpecCostUsd: 25 }),
   feedback: s.default(s.object({
     gateIds: s.default(s.array(id, 0, 20), []),
     maxCalls: s.default(s.number(1, 20), 4),

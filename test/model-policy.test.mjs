@@ -45,6 +45,13 @@ test('new-project selection keeps QA independent across lanes and enables probes
   assert.ok(modelPlan(p.data.config).filter(x=>x.role==='qa').every(x=>x.effectiveLane==='high'));
   assert.equal(existsSync(join(f.repo,'pipeline.v2.json')),false);
 });
+test('a configuration that says nothing still reviews with the deep profile',t=>{
+ const f=fixture(t);
+ const c=validateConfig({...f.config,agent:{type:'claude'},roles:{},
+  roleProfiles:[{provider:'claude',role:'qa',quick:{model:'small',effort:'low'},deep:{model:'review',effort:'high'}}]});
+ assert.equal(c.workflow.qaProfile,'deep','QA checks the other roles: its profile cannot follow the lane of the task it reviews');
+ for(const lane of ['fast','standard','high']) assert.equal(roleAgent(c,'qa',lane).model,'review');
+});
 test('deep QA policy uses high route even on a standard task; legacy keeps lane routing',t=>{
  const f=fixture(t); const c=validateConfig({...f.config,agent:{type:'claude'},roles:{},workflow:{qaProfile:'deep'},roleProfiles:[{provider:'claude',role:'qa',quick:{model:'small',effort:'low'},deep:{model:'review',effort:'high'}}]});
  assert.equal(roleAgent(c,'qa','standard').model,'review');
