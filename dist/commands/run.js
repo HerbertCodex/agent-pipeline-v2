@@ -87,7 +87,7 @@ async function start(repo, cwd, positionals, values, io) {
     const spec = specSchema.parse(document.spec);
     const state = await withRunLock(specId, io.env, () => {
         try {
-            readRunState(file);
+            readRunState(file, { shown: posix(relative(repo, file)), specId });
             throw new PipelineError('RUN_EXISTS', `L'exécution ${specId} existe déjà (${relative(repo, file)}) : apv run next ${specId} pour la reprendre`);
         }
         catch (error) {
@@ -163,7 +163,7 @@ async function set(repo, positionals, values, io) {
     }
     const file = runStateFile(repo, specId);
     const result = await withRunLock(specId, io.env, () => {
-        const current = readRunState(file);
+        const current = readRunState(file, { shown: posix(relative(repo, file)), specId });
         const applied = applySet(current, target, opts);
         writeRunState(file, applied.state);
         return applied;
@@ -181,7 +181,8 @@ function next(repo, positionals, asJson, io) {
     const specId = specIdArg(id);
     if (rest.length)
         throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
-    const state = readRunState(runStateFile(repo, specId));
+    const file = runStateFile(repo, specId);
+    const state = readRunState(file, { shown: posix(relative(repo, file)), specId });
     const next = computeNext(state, gitProbe(repo));
     // The spec may have been edited since the start: the plan (waves, tasks) no longer matches it.
     const specPath = resolve(repo, state.specFile);
@@ -241,7 +242,7 @@ function status(repo, positionals, asJson, io) {
     if (id !== undefined) {
         const specId = specIdArg(id);
         const file = runStateFile(repo, specId);
-        const state = readRunState(file);
+        const state = readRunState(file, { shown: posix(relative(repo, file)), specId });
         if (asJson) {
             json(io, { summary: summarize(state, posix(relative(repo, file))), state });
             return EXIT.ok;

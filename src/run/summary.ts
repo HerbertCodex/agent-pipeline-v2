@@ -47,9 +47,9 @@ const posix = (path: string): string => path.split(sep).join('/');
  * Reads at most `max` bytes of a regular file. A FIFO or a device is refused before any blocking read
  * (non-blocking open, then fstat), and a file that grows past the bound while read is refused too.
  */
-function readBounded(file: string, max: number): string {
-  const tooBig = (size: string): PipelineError => new PipelineError('RUN_STATE', `État trop volumineux ${file} : ${size} octets, limite ${max}`);
-  const notFile = (): PipelineError => new PipelineError('RUN_STATE', `État illisible ${file} : pas un fichier ordinaire`);
+function readBounded(file: string, shown: string, max: number): string {
+  const tooBig = (size: string): PipelineError => new PipelineError('RUN_STATE', `État trop volumineux ${shown} : ${size} octets, limite ${max}`);
+  const notFile = (): PipelineError => new PipelineError('RUN_STATE', `État illisible ${shown} : pas un fichier ordinaire`);
   const before = statSync(file);
   if (!before.isFile()) throw notFile();
   if (before.size > max) throw tooBig(String(before.size));
@@ -81,7 +81,7 @@ export function readRunSummaries(repo: string, options: ReadRunSummariesOptions 
   return files.map(({ specId, file }): RunSummaryEntry => {
     const shown = posix(relative(repo, file));
     try {
-      const state = parseRunStateText(readBounded(file, max), file);
+      const state = parseRunStateText(readBounded(file, shown, max), shown, specId);
       const runningTasks = Object.entries(state.tasks).filter(([, t]) => t.status === 'running').map(([id]) => id);
       return { ...summarize(state, shown), runningTasks };
     } catch (error) {

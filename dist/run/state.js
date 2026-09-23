@@ -20,7 +20,8 @@ export const STEP_LABEL = {
 };
 const status = s.enum(STATUSES);
 const text = (max) => s.nullable(s.string(0, max));
-const at = s.string(1, 40);
+// Dates as written by Date#toISOString, nothing else: a free text here would reach the summary lines.
+const at = s.string(24, 24, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 const sha = s.nullable(s.string(7, 64, /^[a-f0-9]{7,64}$/));
 const key = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 // `commit` is optional on steps and reviews: states written before it existed stay readable.
@@ -267,26 +268,44 @@ export function computeNext(state, probe) {
         actions.push('exécution terminée');
     return { specId: state.specId, step, stepStatus, wave, finished: allDone, ready, resume, relaunch, failed, blocked, reviewsToLaunch, reviewsRunning, actions };
 }
-export function readRunState(file) {
+export function readRunState(file, source = {}) {
+    const shown = source.shown ?? file;
     if (!existsSync(file))
-        throw new PipelineError('RUN_MISSING', `Aucune exécution : ${file} n'existe pas (apv run start <spec>)`);
-    return parseRunStateText(readFileSync(file, 'utf8'), file);
+        throw new PipelineError('RUN_MISSING', `Aucune exécution : ${shown} n'existe pas (apv run start <spec>)`);
+    return parseRunStateText(readFileSync(file, 'utf8'), shown, source.specId);
 }
-/** Parses and validates the text of a state file; `file` only names it in the errors. */
-export function parseRunStateText(text, file) {
+/**
+ * Reason of a schema refusal without any text of the file: the paths hold only schema keys, task ids (checked
+ * against their pattern before they enter a path) and indexes; a refused property or key name is dropped.
+ */
+function schemaReason(message) {
+    return message.replace(/(unknown property) [\s\S]*$/, '$1').replace(/(invalid key) [\s\S]*?(, expected to match )/, '$1$2');
+}
+/**
+ * Parses and validates the text of a state file. `shown` names it in the errors, which never quote its content
+ * (a JSON error keeps only its position). With `specId` (the id its file name carries), a state of another spec
+ * is refused: the summary and `apv run next` would otherwise name one execution with the data of another.
+ */
+export function parseRunStateText(text, shown, specId) {
     let raw;
     try {
         raw = JSON.parse(text);
     }
     catch (error) {
-        throw new PipelineError('RUN_STATE', `État illisible ${file} : ${errorMessage(error)}`);
+        const position = /at position (\d+)/.exec(errorMessage(error))?.[1];
+        throw new PipelineError('RUN_STATE', `État illisible ${shown} : JSON invalide${position ? ` (position ${position})` : ''}`);
     }
+    let state;
     try {
-        return parseState(raw);
+        state = parseState(raw);
     }
     catch (error) {
-        throw new PipelineError('RUN_STATE', `État invalide ${file} : ${errorMessage(error)}`);
+        throw new PipelineError('RUN_STATE', `État invalide ${shown} : ${schemaReason(errorMessage(error))}`);
     }
+    if (specId !== undefined && state.specId !== specId) {
+        throw new PipelineError('RUN_STATE', `État incohérent ${shown} : son identifiant de spec ne correspond pas au nom du fichier`);
+    }
+    return state;
 }
 /** Atomic write: a temporary file in the same directory, flushed, then renamed over the target. */
 export function writeRunState(file, state) {

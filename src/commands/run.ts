@@ -82,7 +82,7 @@ async function start(repo: string, cwd: string, positionals: string[], values: {
   if (!check.valid) return refuse(check.issues);
   const spec = specSchema.parse(document.spec);
   const state = await withRunLock(specId, io.env, () => {
-    try { readRunState(file); throw new PipelineError('RUN_EXISTS', `L'exécution ${specId} existe déjà (${relative(repo, file)}) : apv run next ${specId} pour la reprendre`); }
+    try { readRunState(file, { shown: posix(relative(repo, file)), specId }); throw new PipelineError('RUN_EXISTS', `L'exécution ${specId} existe déjà (${relative(repo, file)}) : apv run next ${specId} pour la reprendre`); }
     catch (error) { if (!(error instanceof PipelineError) || error.code !== 'RUN_MISSING') throw error; }
     const created = createRunState({ specId, specFile: posix(relative(repo, path)), specSha256: sha256(bytes), base, baseSha,
       tasks: spec.tasks.map(t => ({ id: t.id, title: t.title, dependsOn: t.dependsOn })) });
@@ -140,7 +140,7 @@ async function set(repo: string, positionals: string[], values: Record<string, s
   }
   const file = runStateFile(repo, specId);
   const result = await withRunLock(specId, io.env, () => {
-    const current = readRunState(file);
+    const current = readRunState(file, { shown: posix(relative(repo, file)), specId });
     const applied = applySet(current, target, opts);
     writeRunState(file, applied.state);
     return applied;
@@ -155,7 +155,8 @@ function next(repo: string, positionals: string[], asJson: boolean, io: CommandI
   const [id, ...rest] = positionals;
   const specId = specIdArg(id);
   if (rest.length) throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
-  const state = readRunState(runStateFile(repo, specId));
+  const file = runStateFile(repo, specId);
+  const state = readRunState(file, { shown: posix(relative(repo, file)), specId });
   const next = computeNext(state, gitProbe(repo));
   // The spec may have been edited since the start: the plan (waves, tasks) no longer matches it.
   const specPath = resolve(repo, state.specFile);
@@ -205,7 +206,7 @@ function status(repo: string, positionals: string[], asJson: boolean, io: Comman
   if (id !== undefined) {
     const specId = specIdArg(id);
     const file = runStateFile(repo, specId);
-    const state = readRunState(file);
+    const state = readRunState(file, { shown: posix(relative(repo, file)), specId });
     if (asJson) { json(io, { summary: summarize(state, posix(relative(repo, file))), state }); return EXIT.ok; }
     io.stdout(`${[...detail(state), `Résumé : ${summaryLine(summarize(state, file))}`].join('\n')}\n`);
     return EXIT.ok;

@@ -260,9 +260,18 @@ export interface NextPlan {
  * of the execution), is to relaunch if its agent no longer runs.
  */
 export declare function computeNext(state: RunState, probe: GitProbe): NextPlan;
-export declare function readRunState(file: string): RunState;
-/** Parses and validates the text of a state file; `file` only names it in the errors. */
-export declare function parseRunStateText(text: string, file: string): RunState;
+/** How a state file is named in errors (path relative to the repository), and the spec id its name carries. */
+export interface RunStateSource {
+    shown?: string;
+    specId?: string;
+}
+export declare function readRunState(file: string, source?: RunStateSource): RunState;
+/**
+ * Parses and validates the text of a state file. `shown` names it in the errors, which never quote its content
+ * (a JSON error keeps only its position). With `specId` (the id its file name carries), a state of another spec
+ * is refused: the summary and `apv run next` would otherwise name one execution with the data of another.
+ */
+export declare function parseRunStateText(text: string, shown: string, specId?: string): RunState;
 /** Atomic write: a temporary file in the same directory, flushed, then renamed over the target. */
 export declare function writeRunState(file: string, state: RunState): void;
 /** Every `run-<id>.json` of `.apv/state/`, in name order. */
