@@ -1,6 +1,6 @@
 # Plugin Claude Code « apv » (Agent Pipeline V3)
 
-Version 3.0.0-alpha.2, phases 1 (socle) et 2 (design et aperçu vivant). Spécification : [APV3-SPEC.md](APV3-SPEC.md). Retour d'expérience qui l'a motivée : [RETOUR-TOUJOURS-RIEN.md](RETOUR-TOUJOURS-RIEN.md).
+Version 3.0.0-alpha.3, phases 1 (socle), 2 (design et aperçu vivant) et 3 (exécution). Spécification : [APV3-SPEC.md](APV3-SPEC.md). Retour d'expérience qui l'a motivée : [RETOUR-TOUJOURS-RIEN.md](RETOUR-TOUJOURS-RIEN.md).
 
 Le plugin fait de la session Claude Code principale un chef de projet : il orchestre de vrais sous-agents (spec, données, design, implémentation en parallèle, intégration, revues), tient l'état du travail dans le dépôt (`.apv/`), suit le quota et bloque les effets externes dangereux.
 
@@ -85,7 +85,7 @@ Les commandes des phases suivantes répondent déjà : elles annoncent leur phas
 | Événement | Script | Effet |
 |---|---|---|
 | `SessionStart` | `hooks/scripts/session-start.mjs` | Si le projet a un dossier `.apv/`, ajoute au contexte les notes de reprise (`.apv/state/resume.md`), les fichiers d'état récents, le dernier relevé de quota (ligne JSON de `.apv/state/quota.log`, rendue lisible) et la dernière fin de tour. |
-| `PreToolUse` (Bash) | `hooks/scripts/bash-guard.mjs` | Bloque le force-push (`--force`, `-f`, `--force-with-lease`, refspec `+`), la fusion de PR (`gh pr merge`, `gh api …/merge`) sauf `APV_ALLOW_MERGE=1`, le déploiement en production (`vercel --prod`, `promote`, `rollback`) sauf `APV_ALLOW_DEPLOY=1`, et toute écriture GitHub dont la sortie est envoyée vers `/dev/null` (incident 30). |
+| `PreToolUse` (Bash) | `hooks/scripts/bash-guard.mjs` | Bloque le force-push (`--force`, `-f`, `--force-with-lease`, refspec `+`), la fusion de PR (`gh pr merge`, `gh api …/merge`, `apv stack merge`) sauf `APV_ALLOW_MERGE=1`, le déploiement en production (`vercel --prod`, `promote`, `rollback`) sauf `APV_ALLOW_DEPLOY=1`, et toute écriture GitHub dont la sortie est envoyée vers `/dev/null` (incident 30). |
 | `PostToolUse` (Write, Edit, MultiEdit, NotebookEdit) | `hooks/scripts/scope-reminder.mjs` | Dans le worktree d'un implementer (marqueur `.apv/state/task.json`), rappelle les chemins autorisés de la tâche quand un fichier écrit en sort, avec la commande `apv scope check` à lancer. Rappel seulement, jamais de blocage : la vérification stricte reste `apv scope check` en fin de tâche. Muet sans marqueur (écritures du chef de projet). |
 | `Stop` | `hooks/scripts/stop-journal.mjs` | Si `.apv/` existe, ajoute une ligne horodatée à `.apv/state/journal.log` (session, travaux encore en arrière-plan) et crée ou complète `.apv/.gitignore`. |
 
@@ -103,7 +103,7 @@ Les variables d'autorisation se posent devant la seule commande concernée (`APV
 | `.apv/data-model.md` | modèle de données | oui |
 | `.apv/rgpd/` | registre des traitements, sous-traitants | oui |
 | `.apv/journal-pipeline.md` | incidents et améliorations du pipeline | oui |
-| `.apv/state/resume.md`, `plan-*.md`, `notes-*.md`, `corrections-*.md` | état de reprise, plans, notes de vague, décisions de correction | oui |
+| `.apv/state/resume.md`, `run-*.json`, `plan-*.md`, `notes-*.md`, `corrections-*.md` | état de reprise (dont l'état d'exécution de `apv run`), plans, notes de vague, décisions de correction | oui |
 | `.apv/state/*.log` | `journal.log` (hook de fin de tour), `quota.log` (relevés de `apv quota`, un objet JSON par ligne) | non |
 | `.apv/state/task.json` | marqueur de tâche d'un worktree d'implementer | non |
 | `.apv/receipts/` | reçus de `apv gates run` | non |

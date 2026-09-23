@@ -13,7 +13,27 @@ Installation locale : `npm run build`, puis `node dist/cli.js <commande>` ou `np
 - Fichiers lus dans le projet :
   - configuration : `.apv/config.json`, sinon `pipeline.v2.json` (projet V2) ;
   - registre des décisions : `.apv/DECISIONS.json`, sinon `.agent-pipeline/DECISIONS.json` (projet V2).
-- De la configuration, seules les sections `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview` et `design` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
+- De la configuration, seules les sections `name` (nom du projet, écrit par `apv init`), `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview` et `design` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
+
+## `apv init`
+
+```
+apv init [--name <nom>] [--repo <chemin>] [--json]
+```
+
+Prépare un projet pour APV3 (`/apv:init`). Crée ce qui manque dans `.apv/`, **sans jamais écraser un fichier existant** : la commande peut être relancée, elle ne complète que ce qui manque.
+
+| Élément | Contenu initial |
+|---|---|
+| `.apv/config.json` | `{ "name": "<nom>", "gates": [] }` : aucun contrôle déclaré, pas de section `preview` ni `design` |
+| `.apv/DECISIONS.json` | registre vide, valide pour `apv ledger validate` |
+| `.apv/brief.md` | consigne commune des implementers, tirée du modèle `skills/chef-de-projet/references/brief-type.md` du plugin (le bloc de modèle, nom du projet substitué) ; les passages entre chevrons restent à adapter |
+| `.apv/specs/`, `.apv/state/` | dossiers vides |
+| `.apv/.gitignore` | fichiers machine (`state/*.log`, `state/task.json`, `state/preview.json`, `receipts/`), créé ou complété comme par `apv quota` |
+
+Le nom du projet est `--name`, sinon le nom du dossier du dépôt. La commande travaille à la racine du dépôt Git qui contient le dossier courant (ou `--repo`) et refuse hors d'un dépôt Git. Elle liste ce qui est créé, complété et ce qui existait déjà ; rien n'est commité.
+
+Sortie : `0` succès, `1` hors d'un dépôt Git ou modèle de consigne introuvable, `2` appel incorrect. En JSON : `repo`, `name`, `created`, `completed`, `existing`.
 
 ## `apv spec validate`
 
@@ -36,6 +56,87 @@ Seule une demande fournie (cas 1 ou 2) sert à vérifier les citations des réso
 Par défaut, la spec est contrôlée comme au lancement : aucune question ouverte, aucune ambiguïté non résolue, chaque critère porté par une tâche. `--draft` relâche ces trois règles pour une spec en cours de rédaction.
 
 Sortie : `0` spec valide, `1` spec invalide ou illisible, `2` appel incorrect. En JSON : `valid`, `issues` (`code`, `message`), `security` (`minimumLane`, `topics`, `requiresThreatModel`, `negativeTestsRequired`, `signals`), `requestSource`, `ledgerFile`, `configFile`, `sha`.
+
+## `apv spec new`
+
+```
+apv spec new <id> [--title <texte>] [--repo <chemin>] [--json]
+```
+
+Écrit le gabarit `.apv/specs/<id>.json` : une tâche exemple, un critère, des passages « À compléter » et une question ouverte (`Q-REDACTION`). Le gabarit passe `apv spec validate --draft` ; la question ouverte fait refuser un gabarit non rédigé par la validation de lancement et par `apv run start`. `<id>` est en kebab-case (minuscules, chiffres, tirets simples, 80 caractères au plus) ; le titre est `--title`, sinon l'identifiant. Un fichier existant n'est jamais écrasé.
+
+Sortie : `0` gabarit écrit, `1` fichier existant ou hors d'un dépôt Git, `2` appel incorrect.
+
+## `apv run`
+
+```
+apv run start <spec> [--base <branche>] [--repo <chemin>] [--json]
+apv run set <spec-id> <cible> <statut> [--branch b] [--worktree w] [--agent id] [--commit sha]
+            [--base sha] [--findings n] [--note texte] [--repo <chemin>] [--json]
+apv run next <spec-id> [--repo <chemin>] [--json]
+apv run status [<spec-id>] [--repo <chemin>] [--json]
+```
+
+État de reprise d'une exécution de spec (`/apv:run`, spécification section 8) dans `.apv/state/run-<spec-id>.json`, versionné avec le projet. Chaque écriture relit l'état, le modifie et le réécrit de façon atomique (fichier temporaire puis renommage) sous le verrou à bail `run:<spec-id>` (`apv lock`, attente de 60 s, ou `APV_RUN_LOCK_WAIT` secondes) : deux agents ne perdent jamais la mise à jour de l'autre. L'outil n'écrit rien d'autre : il ne crée ni branche ni worktree et ne lance aucun agent.
+
+**`start`** valide la spec comme `apv spec validate` en mode lancement (refus en `1` avec toutes les erreurs), puis crée l'état. `<spec>` est un identifiant (`.apv/specs/<id>.json`) ou un chemin (l'identifiant est alors le nom du fichier). La base est `--base`, sinon la branche courante ; elle est enregistrée avec son commit (`baseSha`). Refus si l'état existe déjà : `apv run next` le reprend.
+
+Vagues : couches topologiques des `dependsOn`. Le format de spec n'a pas de marqueur « fondation » (ses tâches refusent les propriétés inconnues) : les tâches de la première couche dont d'autres dépendent forment seules la vague 0, marquée `foundation` ; les autres tâches sans dépendance rejoignent la vague 1 ; une tâche de profondeur d est dans la vague d. Sans aucune dépendance, tout est en vague 0.
+
+Forme de l'état :
+
+```
+{ schemaVersion: 1, specId, specFile, specSha256, base, baseSha, branch: "apv/<spec-id>", createdAt, updatedAt,
+  steps: { "data-model" | plan | integration | reviews | fixes | delivery: { status, note, updatedAt } },
+  waves: [{ index, foundation, tasks: [id...] }],
+  tasks: { <id>: { title, dependsOn, wave, status, branch, worktree, agentId, base, commit, note, updatedAt } },
+  reviews: { securite | fidelite | donnees | rgpd: { status, findings, note, updatedAt } },
+  events: [{ at, target, from, to, note?, commit?, agentId? }] }
+```
+
+Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
+
+**`set`** change le statut d'une cible : une étape (`data-model`, `plan`, `integration`, `reviews`, `fixes`, `delivery`), `task:<id>` ou `review:<domaine>` (`securite`, `fidelite`, `donnees`, `rgpd`), et ajoute un événement horodaté. Règles :
+- passages permis : `pending` vers `running`, `done`, `skipped`, `failed` ; `running` vers `done`, `failed`, `pending`, `skipped` ; `failed` vers `pending`, `running`, `skipped` ; `skipped` vers `pending`, `running` ; `done` vers `running`, `pending`. Garder le même statut met seulement à jour les champs (nouveau commit wip, autre agent) ;
+- rouvrir un travail `done` exige `--note` (la raison est journalisée) ;
+- une tâche ne passe `running` que si toutes ses dépendances sont `done` ;
+- une tâche `done` exige `--commit` ; le commit (sha ou nom de branche) doit exister dans le dépôt et il est enregistré en entier ;
+- `--branch`, `--worktree` (chemin rendu absolu), `--agent`, `--commit` et `--base` (commit de départ de la tâche, pour la reprise) ne valent que pour une tâche ; `--findings` (nombre de constats) que pour une revue.
+
+**`next`** dit ce qu'il faut faire maintenant, de façon déterministe : c'est la base de la reprise après une coupure (`/apv:resume`).
+- Étape courante : la première étape non terminée (`done` ou `skipped`), avec `waves` entre `plan` et `integration` tant qu'une tâche reste à faire, et la vague courante (la plus basse qui a une tâche non terminée).
+- Tâches prêtes : `pending` dont les dépendances sont `done`, avec leur vague. Les actions proposent d'abord celles de la vague courante (les fondations sont intégrées avant d'ouvrir le parallèle).
+- Tâches `running` : **à relancer** si leur worktree n'existe plus, si leur branche est introuvable, si ni branche ni worktree ne sont enregistrés, ou si leur tête n'a aucun commit après leur base (`--base` donné au lancement de la tâche, sinon la base de l'exécution) ; sinon **à reprendre**, avec branche, worktree, agent, tête, nombre de commits après la base et dernier commit enregistré. Une tâche signalée à relancer ne l'est que si son agent ne tourne plus : un agent qui vient de démarrer n'a pas encore de commit.
+- Tâches en échec, tâches bloquées (dépendances attendues), revues à lancer (`pending` ou `failed`, une fois les tâches finies et l'intégration faite) et revues en cours.
+- `specChanged` : la spec a changé depuis `start` (empreinte différente) ; l'état garde le plan du lancement, l'action le signale.
+
+**`status`** résume toutes les exécutions (étape, tâches faites sur le total, en cours, en échec, date) ou détaille une exécution (étapes, vagues avec l'état de chaque tâche, revues, dernier événement). Un état illisible est signalé, jamais réécrit.
+
+Sortie : `0` succès, `1` refus (spec invalide, état déjà présent ou absent, transition refusée, commit introuvable, état illisible, verrou non obtenu), `2` appel incorrect (cible ou statut inconnu, option sans effet).
+
+## `apv stack`
+
+```
+apv stack plan <pr...> [--target <branche>] [--ready] [--json]
+APV_ALLOW_MERGE=1 apv stack merge <pr...> [--method merge|squash|rebase] [--target <branche>] [--ready] [--json]
+```
+
+Pile de PR, donnée par ses numéros dans l'ordre de fusion (de la base vers le sommet). Fin de l'incident 30 : re-ciblage vérifié, sortie jamais masquée, arrêt à la première anomalie.
+
+**`plan`** lit chaque PR par `gh pr view <n> --json number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup` et vérifie la pile : chaque PR ouverte ; la base de la première est la branche cible (`--target`, sinon sa base actuelle), celle de la PR n+1 est la tête de la PR n ; `mergeable` à `MERGEABLE` et état de fusion `CLEAN` (ou `HAS_HOOKS`) ; contrôles au vert (`SUCCESS`, `NEUTRAL`, `SKIPPED`) ou absents. Un brouillon est une anomalie, sauf avec `--ready`. Une mergeabilité encore en calcul (`UNKNOWN`) est relue quelques fois avant d'être une anomalie. Toutes les anomalies sont listées ; rien n'est modifié. Les appels `gh` en échec sont affichés en entier.
+
+**`merge`** fusionne, uniquement sur ordre explicite de l'opérateur. Il exige `APV_ALLOW_MERGE=1` dans l'environnement ; sinon il sort en `2` avec le message du hook, sans aucun appel `gh`. Déroulé :
+1. la pile est vérifiée comme par `plan` ; une anomalie arrête tout avant la première fusion ;
+2. pour chaque PR, dans l'ordre : relecture ; si la précédente vient d'être fusionnée et que la PR vise encore sa tête, re-ciblage par `gh pr edit <n> --base <cible>`, puis **relecture** : la nouvelle base est constatée, jamais déduite du code de sortie ;
+3. vérification juste avant la fusion (ouverte, bonne base, fusionnable, contrôles) ; avec `--ready`, `gh pr ready <n>` puis relecture ;
+4. `gh pr merge <n> --<méthode> --match-head-commit <tête relue>` : si la branche a bougé depuis la vérification, GitHub refuse ;
+5. relecture : état `MERGED` et base attendue, sinon arrêt.
+
+La sortie complète de chaque appel `gh` (commande, sortie standard, sortie d'erreur, code) est affichée au fil de l'eau, sur la sortie d'erreur avec `--json` (et dans le champ `calls`). À la première anomalie, rien d'autre n'est fusionné et le rapport donne les PR fusionnées, la PR d'arrêt, ses raisons et les PR restantes. La commande ne supprime aucune branche.
+
+Le hook de garde bloque `apv stack merge` (et `node …/dist/cli.js stack merge`) sans `APV_ALLOW_MERGE=1` en préfixe, comme `gh pr merge`, et refuse sa sortie envoyée vers `/dev/null`. La variable `APV_GH` remplace l'exécutable `gh` (tests avec un faux `gh`) ; `APV_STACK_POLL_MS` et `APV_STACK_POLL_ATTEMPTS` règlent la relecture d'une mergeabilité en calcul (3 s, 20 fois par défaut).
+
+Sortie : `0` pile cohérente (`plan`) ou entièrement fusionnée (`merge`), `1` anomalie, `2` appel incorrect ou `APV_ALLOW_MERGE` absent. En JSON : `plan` rend `target`, `ok`, `prs` (`number`, `pr`, `expectedBase`, `anomalies`), `calls` ; `merge` rend aussi `method`, `merged`, `stopped` (`pr`, `reasons`).
 
 ## `apv ledger`
 
@@ -188,7 +289,7 @@ Sortie : `0` succès (pour `status` : aperçu en marche), `1` échec ou aperçu 
 apv status [--repo <chemin>] [--json]
 ```
 
-Résumé de l'état du projet : fichier de configuration (et format V2 le cas échéant), contrôles déclarés, registre des décisions (nombre de décisions et empreinte, ou nombre d'erreurs), specs de `.apv/specs/` (titre ou erreur de lecture), fichiers d'état de `.apv/state/` (taille et date), dernier relevé de `.apv/state/quota.log`. La commande ne modifie rien et sort toujours avec `0`, sauf appel incorrect.
+Résumé de l'état du projet : fichier de configuration (et format V2 le cas échéant), contrôles déclarés, registre des décisions (nombre de décisions et empreinte, ou nombre d'erreurs), specs de `.apv/specs/` (titre ou erreur de lecture), fichiers d'état de `.apv/state/` (taille et date), une ligne par exécution en cours (`apv run` : étape, tâches faites, en cours, en échec ; un état illisible est signalé), dernier relevé de `.apv/state/quota.log`. En JSON, `runs` liste toutes les exécutions, terminées comprises. La commande ne modifie rien et sort toujours avec `0`, sauf appel incorrect.
 
 ## `apv help`
 
