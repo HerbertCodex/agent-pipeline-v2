@@ -60,6 +60,32 @@ function sameSet(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((x) => b.includes(x));
 }
 
+/**
+ * Columns a partial index predicate requires to be non-null, when it says nothing else
+ * (`col is not null [and col2 is not null]`); null for any other predicate.
+ */
+export function notNullGuard(predicate: string): string[] | null {
+  const terms = predicate.replace(/[()]/g, ' ').trim().split(/\s+and\s+/i);
+  const columns: string[] = [];
+  for (const term of terms) {
+    const match = /^"?([A-Za-z_][A-Za-z0-9_$]*)"?\s+is\s+not\s+null$/i.exec(term.trim());
+    if (!match) return null;
+    columns.push(match[1]!.toLowerCase());
+  }
+  return columns;
+}
+
+/**
+ * Whether an index can serve the lookups of a foreign key: a total index can; so can a partial index
+ * whose predicate only says key columns are not null, since the lookups (`col = $1`, a strict
+ * operator) imply it. Any other predicate (for example `deleted_at is null`) cannot.
+ */
+function usableForKey(ix: SchemaModel['indexes'][number], fkColumns: string[]): boolean {
+  if (!ix.partial || ix.predicate === null) return true;
+  const guard = notNullGuard(ix.predicate);
+  return guard !== null && guard.every((col) => fkColumns.includes(col));
+}
+
 function checkForeignKeyIndexes(model: SchemaModel): Finding[] {
   const findings: Finding[] = [];
   for (const fk of model.foreignKeys) {
@@ -67,10 +93,10 @@ function checkForeignKeyIndexes(model: SchemaModel): Finding[] {
     if (!table || table.temporary) continue;
     const indexes = model.indexes.filter((ix) => ix.table === fk.table);
     const n = fk.columns.length;
-    const full = indexes.find((ix) => !ix.partial && ix.columns.length >= n && sameSet(ix.columns.slice(0, n), fk.columns));
+    const full = indexes.find((ix) => usableForKey(ix, fk.columns) && ix.columns.length >= n && sameSet(ix.columns.slice(0, n), fk.columns));
     if (full) continue;
-    const partialOnly = indexes.find((ix) => ix.partial && ix.columns.length >= n && sameSet(ix.columns.slice(0, n), fk.columns));
-    const leading = indexes.find((ix) => !ix.partial && ix.columns[0] === fk.columns[0]);
+    const partialOnly = indexes.find((ix) => !usableForKey(ix, fk.columns) && ix.columns.length >= n && sameSet(ix.columns.slice(0, n), fk.columns));
+    const leading = indexes.find((ix) => usableForKey(ix, fk.columns) && ix.columns[0] === fk.columns[0]);
     const cols = fk.columns.join(', ');
     const target = `${fk.table}.${fk.name}`;
     if (leading && n > 1) {
@@ -83,7 +109,7 @@ function checkForeignKeyIndexes(model: SchemaModel): Finding[] {
     findings.push({
       rule: RULES.fkIndex, severity: 'error', file: fk.file, line: fk.line, target,
       message: `clé étrangère ${fk.name} (${cols}) vers ${fk.refTable} sans index dont les premières colonnes sont (${cols})`
-        + (partialOnly ? ` ; l'index partiel ${partialOnly.name} ne sert pas aux vérifications de la clé` : ''),
+        + (partialOnly ? ` ; l'index partiel ${partialOnly.name} (where ${partialOnly.predicate}) ne sert pas aux vérifications de la clé` : ''),
     });
   }
   return findings;

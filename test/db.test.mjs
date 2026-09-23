@@ -11,7 +11,8 @@ import { parseMigrations } from '../dist/db/parser.js';
 import { frenchWords } from '../dist/db/french.js';
 import { globToRegExp, expandGlobs } from '../dist/db/glob.js';
 import { scanSelectStar } from '../dist/db/code-scan.js';
-import { connectionEnv, parseJsonOutput, psqlRunner, runLiveChecks, seqScans } from '../dist/db/live.js';
+import { notNullGuard } from '../dist/db/checks.js';
+import { connectionEnv, FK_INDEX_SQL, parseJsonOutput, psqlRunner, READ_ONLY_PREFIX, runLiveChecks, seqScans, splitCommand } from '../dist/db/live.js';
 import { DEFAULT_DB_CONFIG, loadDbConfig } from '../dist/db/config.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -185,22 +186,49 @@ test('fk.index: missing index is an error, matching leading columns (any order) 
   assert.equal(fk[0].line, 3);
 });
 
-test('fk.index: a partial index does not count; leading first column only is a warning', (t) => {
+test('fk.index: a partial index counts only when it guards key columns against null; leading first column only is a warning', (t) => {
   const root = migrate(t, `
-    create table public.parents (id uuid primary key, user_id uuid, constraint parents_id_user_id_key unique (id, user_id));
-    create table public.a (id uuid primary key, parent_id uuid references public.parents (id));
-    create index a_parent_id_idx on public.a (parent_id) where parent_id is not null;
+    create table public.parents (id uuid primary key, user_id uuid, deleted_at timestamptz, constraint parents_id_user_id_key unique (id, user_id));
+    create table public.a (id uuid primary key, parent_id uuid references public.parents (id), deleted_at timestamptz);
+    create index a_parent_id_idx on public.a (parent_id) where deleted_at is null;
     create table public.b (id uuid primary key, parent_id uuid, user_id uuid,
       constraint b_parent_fkey foreign key (parent_id, user_id) references public.parents (id, user_id));
     create index b_parent_id_idx on public.b (parent_id);
+    create table public.c (id uuid primary key, parent_id uuid references public.parents (id));
+    create index c_parent_id_idx on public.c (parent_id) where parent_id is not null;
+    create table public.d (id uuid primary key, parent_id uuid, user_id uuid,
+      constraint d_parent_fkey foreign key (parent_id, user_id) references public.parents (id, user_id) on delete set null (parent_id));
+    create index d_parent_id_idx on public.d (parent_id) where (parent_id is not null);
+    create table public.e (id uuid primary key, parent_id uuid references public.parents (id), other uuid);
+    create index e_parent_id_idx on public.e (parent_id) where parent_id is not null and other is not null;
   `);
   const fk = byRule(check(root), 'fk.index');
   const a = fk.find((f) => f.target === 'public.a.a_parent_id_fkey');
   assert.equal(a.severity, 'error');
-  assert.match(a.message, /index partiel a_parent_id_idx/);
+  assert.match(a.message, /index partiel a_parent_id_idx \(where deleted_at is null\)/);
   const b = fk.find((f) => f.target === 'public.b.b_parent_fkey');
   assert.equal(b.severity, 'warning');
   assert.match(b.message, /ne couvre que sa première colonne/);
+  // The lookups of the key (col = $1) imply col is not null: such a partial index serves them.
+  assert.equal(fk.find((f) => f.target === 'public.c.c_parent_id_fkey'), undefined);
+  assert.equal(fk.find((f) => f.target === 'public.d.d_parent_fkey').severity, 'warning', 'real case of the pilot: scheduled_events_activity_event_fkey');
+  // A guard on a column outside the key restricts the rows: it does not count.
+  assert.equal(fk.find((f) => f.target === 'public.e.e_parent_id_fkey').severity, 'error');
+});
+
+test('notNullGuard reads only predicates made of is not null terms', () => {
+  assert.deepEqual(notNullGuard('parent_id is not null'), ['parent_id']);
+  assert.deepEqual(notNullGuard('( ( "A" IS NOT NULL ) AND ( b is not null ) )'), ['a', 'b']);
+  assert.equal(notNullGuard('deleted_at is null'), null);
+  assert.equal(notNullGuard('a is not null or b is not null'), null);
+  assert.equal(notNullGuard('lower ( a ) is not null'), null);
+});
+
+test('live SQL accepts a partial index only when its predicate guards key columns against null', () => {
+  const sql = FK_INDEX_SQL(['public']);
+  assert.equal(sql.match(/i\.indpred is null or not exists/g).length, 2, 'same rule for full and leading coverage');
+  assert.ok(sql.includes(`'^\\s*"?([^"\\s]+)"?\\s+IS NOT NULL\\s*$'`), 'backslashes reach Postgres unescaped');
+  assert.ok(sql.includes(`'\\s+AND\\s+'`));
 });
 
 // ------------------------------------------------------------------ RLS and policies
@@ -373,9 +401,10 @@ test('real project: after the English rename the later migrations pass the rules
     assert.deepEqual(byRule(report, rule), [], rule);
   }
   assert.deepEqual(byRule(report, 'fk.index').map((f) => [f.target, f.severity]), [
-    ['public.scheduled_events.scheduled_events_activity_event_fkey', 'error'],
     ['public.application_events.application_events_application_fkey', 'warning'],
     ['public.scheduled_events.scheduled_events_application_fkey', 'warning'],
+    // Partial index `where activity_event_id is not null`: it serves the key lookups, on the first column.
+    ['public.scheduled_events.scheduled_events_activity_event_fkey', 'warning'],
   ]);
   assert.deepEqual(byRule(report, 'idempotency.create_tables').map((f) => f.target), ['public.applications', 'public.application_events', 'public.scheduled_events']);
   assert.ok(!byRule(report, 'idempotency.create_tables').some((f) => f.target === 'public.email_deliveries'), 'natural key (user_id, kind, period)');
@@ -439,7 +468,7 @@ test('live: skipped explicitly when APV_DB_URL or psql is missing', async (t) =>
   const root = migrate(t, GOOD_TABLE);
   const noUrl = captureIO(root, { PATH: process.env.PATH });
   assert.equal(await run(['check', '--live'], noUrl.io), 0);
-  assert.match(noUrl.out.stdout, /Contrôles en direct : ignorés \(APV_DB_URL absent\)/);
+  assert.match(noUrl.out.stdout, /Contrôles en direct : ignorés \(ni APV_PSQL ni APV_DB_URL\)/);
   assert.match(noUrl.out.stdout, /avertissement\s+live.skipped/);
   const noPsql = captureIO(root, { APV_DB_URL: 'postgres://u:p@localhost:5432/db', PATH: '/nonexistent' });
   await run(['check', '--live'], noPsql.io);
@@ -514,4 +543,56 @@ test('formatters agree on counts', (t) => {
   const report = check(migrate(t, 'create table public.candidatures (id uuid primary key);'));
   assert.match(formatHuman(report), /Résultat : 1 erreur, 1 avertissement\./);
   assert.equal(JSON.parse(formatJson(report)).summary.warnings, 1);
+});
+
+test('live: APV_PSQL runs a whole command (docker exec style), read-only, without APV_DB_URL', async (t) => {
+  const root = migrate(t, GOOD_TABLE, { '.apv/config.json': { db: { explain: [{ name: 'liste', sql: 'select id from public.projects' }] } } });
+  const record = join(root, 'calls.jsonl');
+  const fake = join(root, 'fake docker');
+  writeFileSync(fake, `#!${process.execPath}
+const fs = require('fs');
+const sql = fs.readFileSync(0, 'utf8');
+fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({ argv: process.argv.slice(2), sql, password: process.env.PGPASSWORD ?? null }) + '\\n');
+if (sql.includes("contype = 'f'")) console.log('[]');
+else if (sql.includes('relrowsecurity')) console.log('[{"schema":"public","table":"projects","enabled":true,"forced":true,"has_user_id":true,"policies":2}]');
+else if (sql.includes('explain')) console.log('[{"Plan":{"Node Type":"Index Scan","Relation Name":"projects"}}]');
+`);
+  chmodSync(fake, 0o755);
+  const { io, out } = captureIO(root, { PATH: process.env.PATH, APV_PSQL: `'${fake}' exec -i "supabase db" psql -U postgres -d postgres` });
+  assert.equal(await run(['check', '--live', '--json'], io), 0, out.stdout);
+  const report = JSON.parse(out.stdout);
+  assert.equal(report.live.status, 'ran');
+  assert.deepEqual(report.findings.filter((f) => f.rule.startsWith('live.')), []);
+  assert.ok(report.live.details.includes('EXPLAIN liste : aucun parcours séquentiel'));
+  const calls = readFileSync(record, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(calls.length, 3);
+  for (const call of calls) {
+    assert.deepEqual(call.argv, ['exec', '-i', 'supabase db', 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-f', '-']);
+    assert.ok(call.sql.startsWith(READ_ONLY_PREFIX), 'every script runs read-only');
+    assert.equal(call.password, null);
+  }
+  assert.match(calls[2].sql, /begin transaction read only;\nexplain \(format json, verbose\) select id from public\.projects;\nrollback;/);
+});
+
+test('live: a broken or missing APV_PSQL command is reported, never silent', async (t) => {
+  const root = migrate(t, GOOD_TABLE);
+  const quote = captureIO(root, { PATH: process.env.PATH, APV_PSQL: 'docker exec "sans fin' });
+  assert.equal(await run(['check', '--live'], quote.io), 0);
+  assert.match(quote.out.stdout, /Contrôles en direct : ignorés \(APV_PSQL : guillemet " non fermé\)/);
+  const missing = captureIO(root, { PATH: process.env.PATH, APV_PSQL: join(root, 'absent') + ' psql' });
+  assert.equal(await run(['check', '--live'], missing.io), 1);
+  assert.match(missing.out.stdout, /Contrôles en direct : en échec \(.*ENOENT/);
+  // A blank APV_PSQL falls back to APV_DB_URL.
+  const blank = captureIO(root, { PATH: process.env.PATH, APV_PSQL: '   ' });
+  await run(['check', '--live'], blank.io);
+  assert.match(blank.out.stdout, /ignorés \(ni APV_PSQL ni APV_DB_URL\)/);
+  assert.throws(() => psqlRunner([], undefined, {}), /commande psql vide/);
+});
+
+test('splitCommand splits like a shell without expanding anything', () => {
+  assert.deepEqual(splitCommand('docker exec -i supabase_db_x psql -U postgres -d postgres'), ['docker', 'exec', '-i', 'supabase_db_x', 'psql', '-U', 'postgres', '-d', 'postgres']);
+  assert.deepEqual(splitCommand(`  a  'b c' "d \\"e\\" $HOME" f\\ g '' `), ['a', 'b c', 'd "e" $HOME', 'f g', '']);
+  assert.deepEqual(splitCommand("it's'x"), ['itsx']);
+  assert.deepEqual(splitCommand(''), []);
+  assert.throws(() => splitCommand("psql 'x"), /guillemet ' non fermé/);
 });

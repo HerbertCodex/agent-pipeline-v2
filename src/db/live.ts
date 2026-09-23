@@ -55,12 +55,54 @@ export function connectionEnv(url: string): { env: Record<string, string>; args:
   return { env, args: [] };
 }
 
-export function psqlRunner(psql: string, url: string, baseEnv: NodeJS.ProcessEnv): PsqlRunner {
-  const connection = connectionEnv(url);
+/**
+ * Splits a command line written in one variable (APV_PSQL) into argv, without a shell: blanks
+ * separate words, single quotes are literal, double quotes and backslashes escape. No expansion.
+ */
+export function splitCommand(text: string): string[] {
+  const words: string[] = [];
+  let current = '';
+  let started = false;
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quote === "'") { if (c === "'") quote = null; else current += c; continue; }
+    if (quote === '"') {
+      if (c === '"') quote = null;
+      else if (c === '\\' && i + 1 < text.length && /["\\$`]/.test(text[i + 1]!)) current += text[++i]!;
+      else current += c;
+      continue;
+    }
+    if (/\s/.test(c)) { if (started) { words.push(current); current = ''; started = false; } continue; }
+    started = true;
+    if (c === "'" || c === '"') quote = c;
+    else if (c === '\\' && i + 1 < text.length) current += text[++i]!;
+    else current += c;
+  }
+  if (quote) throw new Error(`APV_PSQL : guillemet ${quote} non fermé`);
+  if (started) words.push(current);
+  return words;
+}
+
+/**
+ * Every script runs in a session whose transactions are read-only: the live checks only read the
+ * catalog and EXPLAIN (never ANALYZE), and a configured query can never write, even by mistake.
+ */
+export const READ_ONLY_PREFIX = 'set default_transaction_read_only = on;\n';
+
+/**
+ * Runs psql with `-f -`. `psql` is an executable path, or a whole command (APV_PSQL, for example
+ * `docker exec -i <conteneur> psql -U postgres -d postgres`) to which the psql options are appended.
+ * With a URL, the connection goes through libpq variables; without one, the command carries it.
+ */
+export function psqlRunner(psql: string | readonly string[], url: string | undefined, baseEnv: NodeJS.ProcessEnv): PsqlRunner {
+  const connection = url ? connectionEnv(url) : { env: {}, args: [] };
   const password = connection.env.PGPASSWORD;
+  const [command, ...prefix] = typeof psql === 'string' ? [psql] : psql;
+  if (!command) throw new Error('commande psql vide');
   return (sql) => {
-    const result = spawnSync(psql, ['-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', ...connection.args, '-f', '-'], {
-      input: sql, encoding: 'utf8', timeout: 60_000, env: { ...baseEnv, ...connection.env },
+    const result = spawnSync(command, [...prefix, '-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', ...connection.args, '-f', '-'], {
+      input: READ_ONLY_PREFIX + sql, encoding: 'utf8', timeout: 60_000, env: { ...baseEnv, ...connection.env },
     });
     if (result.error) throw result.error;
     if (result.status !== 0) {
@@ -88,19 +130,29 @@ export function parseJsonOutput<T>(output: string): T | null {
   }
 }
 
+/**
+ * SQL condition: index `i` can serve the checks of foreign key `k`. A total index can; a partial index
+ * can too when its predicate only says that foreign key columns are not null (`where col is not null`),
+ * because the lookups of the key (`col = $1`, a strict operator) imply it. Any other predicate cannot.
+ */
+const USABLE_FOR_FK = `(i.indpred is null or not exists (
+      select 1 from regexp_split_to_table(regexp_replace(pg_catalog.pg_get_expr(i.indpred, i.indrelid), '[()]', '', 'g'), '\\s+AND\\s+') term
+      where coalesce(substring(term from '^\\s*"?([^"\\s]+)"?\\s+IS NOT NULL\\s*$'), '') <> all (
+        select a.attname::text from pg_catalog.pg_attribute a where a.attrelid = k.conrelid and a.attnum = any (k.conkey))))`;
+
 export const FK_INDEX_SQL = (schemas: string[]) => `
 select json_agg(row_to_json(t)) from (
   select n.nspname as schema, c.relname as table, k.conname as name,
     (select array_agg(a.attname order by x.ord) from unnest(k.conkey) with ordinality x(attnum, ord)
        join pg_catalog.pg_attribute a on a.attrelid = k.conrelid and a.attnum = x.attnum) as columns,
-    exists (select 1 from pg_catalog.pg_index i where i.indrelid = k.conrelid and i.indpred is null and i.indkey[0] = k.conkey[1]) as leading_covered
+    exists (select 1 from pg_catalog.pg_index i where i.indrelid = k.conrelid and ${USABLE_FOR_FK} and i.indkey[0] = k.conkey[1]) as leading_covered
   from pg_catalog.pg_constraint k
   join pg_catalog.pg_class c on c.oid = k.conrelid
   join pg_catalog.pg_namespace n on n.oid = c.relnamespace
   where k.contype = 'f' and n.nspname = any(${schemaArray(schemas)})
     and not exists (
       select 1 from pg_catalog.pg_index i
-      where i.indrelid = k.conrelid and i.indpred is null
+      where i.indrelid = k.conrelid and ${USABLE_FOR_FK}
         and (select array_agg(u.attnum) from unnest(i.indkey::int2[]) with ordinality u(attnum, ord)
              where u.ord <= array_length(k.conkey, 1)) @> k.conkey
         and array_length(k.conkey, 1) <= i.indnkeyatts
@@ -144,13 +196,24 @@ export function seqScans(plan: PlanNode, found: { relation: string; planRows: nu
 const where = (name: string) => ({ file: '(base en direct)', line: 0, target: name });
 
 /**
- * Live checks on the database named by APV_DB_URL: missing FK indexes, RLS state, EXPLAIN of
- * the configured queries. Skipped (and said so) when APV_DB_URL or psql is missing.
+ * Live checks, read-only: missing FK indexes, RLS state, EXPLAIN of the configured queries. The
+ * database is reached by APV_PSQL (a whole psql command, which carries its own connection, for
+ * example through `docker exec`), or by psql from the PATH with APV_DB_URL. Skipped, and said so,
+ * when neither is usable.
  */
 export function runLiveChecks(config: DbConfig, env: NodeJS.ProcessEnv, runner?: PsqlRunner): LiveReport {
   const url = env.APV_DB_URL;
+  if (!runner && env.APV_PSQL !== undefined && env.APV_PSQL.trim() !== '') {
+    let command: string[];
+    try {
+      command = splitCommand(env.APV_PSQL);
+    } catch (error) {
+      return { status: 'skipped', reason: (error as Error).message, findings: [], details: [] };
+    }
+    runner = psqlRunner(command, url || undefined, env);
+  }
   if (!runner) {
-    if (!url) return { status: 'skipped', reason: 'APV_DB_URL absent', findings: [], details: [] };
+    if (!url) return { status: 'skipped', reason: 'ni APV_PSQL ni APV_DB_URL', findings: [], details: [] };
     const psql = findExecutable('psql', env);
     if (!psql) return { status: 'skipped', reason: 'psql introuvable dans le PATH', findings: [], details: [] };
     runner = psqlRunner(psql, url, env);

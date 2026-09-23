@@ -9,8 +9,10 @@ apv db check [--json] [--live] [--config FICHIER] [--root DOSSIER]
     Règles : naming.english_snake_case, fk.index, rls.enabled_forced, policy.too_broad,
     definer.search_path, definer.execute_grant, code.select_star, redundancy.user_id_guard,
     idempotency.create_tables. Configuration : champ « db » de .apv/config.json.
-    --live : si APV_DB_URL est défini et psql présent, lit aussi la base (index des clés
-    étrangères, RLS, EXPLAIN des requêtes db.explain) ; sinon le dit explicitement.
+    --live : lit aussi la base, en lecture seule (index des clés étrangères, RLS, EXPLAIN des
+    requêtes db.explain), par la commande APV_PSQL (par exemple
+    APV_PSQL="docker exec -i <conteneur> psql -U postgres -d postgres") ou par psql du PATH
+    avec APV_DB_URL ; sinon le dit explicitement.
 Codes de sortie : 0 aucune erreur (avertissements possibles), 1 au moins une erreur, 2 usage.
 `;
 
