@@ -36,7 +36,9 @@ function state(specId) {
   return createRunState({ specId, specFile: `.apv/specs/${specId}.json`, specSha256: 'a'.repeat(64), base: 'main', baseSha: 'b'.repeat(40), tasks,
     now: new Date('2026-09-23T08:00:00.000Z') });
 }
-const set = (s, target, status, extra = {}) => applySet(s, parseTarget(target), { status, now: new Date('2026-09-23T09:00:00.000Z'), ...extra }).state;
+// Every dependency counts as integrated in the branch of the spec: these tests are about the summary, not readiness.
+const integration = { head: 'c'.repeat(40), where: 'apv/test', integrated: () => true };
+const set = (s, target, status, extra = {}) => applySet(s, parseTarget(target), { status, now: new Date('2026-09-23T09:00:00.000Z'), integration, ...extra }).state;
 function running(specId, extra) {
   let s = state(specId);
   for (const step of ['data-model', 'plan']) s = set(s, step, 'done');

@@ -6,7 +6,7 @@ import { specSchema } from '../lifecycle/contracts.js';
 import { checkSpec, readSpecDocument } from '../spec/check.js';
 import { gitProbe, gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
 import {
-  REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applySet, computeNext, createRunState, parseTarget,
+  REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applySet, computeNext, createRunState, integrationCheck, parseTarget,
   readRunState, runStateFile, splitWave, summarize, summaryLine, withRunLock, writeRunState, type RunState, type RunStatus, type SetOptions, type Wave,
 } from '../run/state.js';
 import { readRunSummaries, runSummaryLine, unreadRunsLine } from '../run/summary.js';
@@ -16,7 +16,8 @@ import type { CommandIO } from './io.js';
 export const usage = `Utilisation :
   apv run start <spec> [--base <branche>] [--repo <chemin>] [--json]
   apv run set <spec-id> <cible> <statut> [--branch b] [--worktree w] [--agent id] [--commit sha]
-              [--base sha] [--findings n] [--note texte] [--repo <chemin>] [--json]
+              [--base sha] [--findings n] [--note texte] [--force-unintegrated]
+              [--repo <chemin>] [--json]
   apv run next <spec-id> [--repo <chemin>] [--json]
   apv run status [<spec-id>] [--repo <chemin>] [--json]
 
@@ -24,23 +25,28 @@ export const usage = `Utilisation :
 le verrou run:<spec-id> (apv lock).
 start   valide la spec (comme apv spec validate, prête à lancer), calcule les vagues (couches des
         dépendances) et les fondations (tâches dont au moins deux autres dépendent directement,
-        écrites par un seul agent) et crée l'état. <spec> : un identifiant (.apv/specs/<id>.json) ou un chemin. Refuse si l'état
-        existe (apv run next). --base : branche de départ (par défaut la branche courante).
+        écrites par un seul agent) et crée l'état. <spec> : un identifiant (.apv/specs/<id>.json)
+        ou un chemin. Refuse si l'état existe (apv run next). --base : branche de départ (par défaut
+        la branche courante).
 set     <cible> : ${STEPS.join(', ')},
         task:<id> ou review:<${REVIEWS.join('|')}>.
         <statut> : ${STATUSES.join(', ')}. Une tâche ne passe « running »
-        que si ses dépendances sont « done » ; « done » exige --commit pour une tâche (facultatif
-        pour une étape ou une revue : commit qui la porte, ou commit revu). --base : commit de départ
-        de la tâche (reprise). --findings : nombre de constats d'une revue. Rouvrir un travail fait,
+        que si ses dépendances sont « done » et intégrées : leur commit est dans la branche de la
+        spec (la base de l'exécution tant qu'elle n'existe pas) ; sinon --force-unintegrated avec
+        --note, journalisés. « done » exige --commit pour une tâche (facultatif pour une étape ou
+        une revue : commit qui la porte, ou commit revu). --base : commit de départ de la tâche
+        (reprise). --findings : nombre de constats d'une revue. Rouvrir un travail fait,
         ou remplacer son commit, exige --note.
-next    ce qu'il faut faire maintenant : étape courante, tâches prêtes, tâches à reprendre ou à
-        relancer (worktree absent, aucun commit après la base), revues à lancer.
+next    ce qu'il faut faire maintenant : étape courante, tâches prêtes (dépendances faites et
+        intégrées, à lancer dès maintenant, quelle que soit leur vague), en attente d'intégration,
+        à reprendre ou à relancer (worktree absent, aucun commit après la base), revues à lancer.
 status  résumé de toutes les exécutions, ou détail d'une seule.
 Sortie : 0 succès, 1 refus (spec invalide, état existant ou absent, transition refusée), 2 appel incorrect.`;
 
 const options = {
   repo: { type: 'string' }, base: { type: 'string' }, branch: { type: 'string' }, worktree: { type: 'string' }, agent: { type: 'string' },
-  commit: { type: 'string' }, note: { type: 'string' }, findings: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+  commit: { type: 'string' }, note: { type: 'string' }, findings: { type: 'string' }, 'force-unintegrated': { type: 'boolean' },
+  json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
 } as const;
 
 const posix = (path: string): string => path.split(sep).join('/');
@@ -133,7 +139,10 @@ async function set(repo: string, positionals: string[], values: Record<string, s
   const taskOnly = ['branch', 'worktree', 'agent', 'base'].filter(o => str(o) !== undefined);
   if (target.kind !== 'task' && taskOnly.length) throw new UsageError(`--${taskOnly.join(', --')} : réservé(s) aux tâches (task:<id>)`);
   if (target.kind !== 'review' && str('findings') !== undefined) throw new UsageError('--findings : réservé aux revues (review:<domaine>)');
-  const opts: SetOptions = { status };
+  const force = values['force-unintegrated'] === true;
+  if (force && (target.kind !== 'task' || status !== 'running')) throw new UsageError('--force-unintegrated : réservé au démarrage d\'une tâche (task:<id> running)');
+  if (force && !str('note')?.trim()) throw new UsageError('--force-unintegrated exige --note (la raison est journalisée)');
+  const opts: SetOptions = { status, ...(force ? { forceUnintegrated: true } : {}) };
   const findings = str('findings');
   if (findings !== undefined) {
     if (!/^\d+$/.test(findings)) throw new UsageError(`--findings invalide : ${findings}`);
@@ -155,13 +164,14 @@ async function set(repo: string, positionals: string[], values: Record<string, s
   const file = runStateFile(repo, specId);
   const result = await withRunLock(specId, io.env, () => {
     const current = readRunState(file, { shown: posix(relative(repo, file)), specId });
-    const applied = applySet(current, target, opts);
+    const applied = applySet(current, target, { ...opts, integration: integrationCheck(current, gitProbe(repo)) });
     writeRunState(file, applied.state);
     return applied;
   });
   const name = targetText;
   if (values['json']) { json(io, { specId, target: name, from: result.from, to: status, event: result.event }); return EXIT.ok; }
-  io.stdout(`${specId} ${name} : ${STATUS_LABEL[result.from]} -> ${STATUS_LABEL[status]}${opts.commit ? ` (commit ${opts.commit.slice(0, 12)})` : ''}\n`);
+  const forced = result.event.unintegrated ? ` ; démarrée sans l'intégration de ${result.event.unintegrated.join(', ')} (--force-unintegrated, journalisé)` : '';
+  io.stdout(`${specId} ${name} : ${STATUS_LABEL[result.from]} -> ${STATUS_LABEL[status]}${opts.commit ? ` (commit ${opts.commit.slice(0, 12)})` : ''}${forced}\n`);
   return EXIT.ok;
 }
 
@@ -184,13 +194,15 @@ function next(repo: string, positionals: string[], asJson: boolean, io: CommandI
   const lines = [
     `Exécution ${state.specId} : branche ${state.branch}, base ${state.base} à ${short(state.baseSha)}`,
     `Étape courante : ${where}`,
+    `Intégration mesurée sur : ${plan.integration.where} à ${short(plan.integration.head)}`,
   ];
   if (plan.relaunch.length) lines.push('À relancer (si leur agent ne tourne plus) :', ...plan.relaunch.map(r =>
     `- ${r.id} : ${r.reason} ; branche ${r.branch ?? '?'} ; worktree ${r.worktree ?? '?'} ; agent ${r.agentId ?? '?'} ; dernier commit ${short(r.commit)}`));
   if (plan.resume.length) lines.push('À reprendre :', ...plan.resume.map(r =>
     `- ${r.id} : branche ${r.branch ?? '?'} ; worktree ${r.worktree ?? '?'} ; agent ${r.agentId ?? '?'} ; tête ${short(r.head)} ; ${r.commitsAfterBase} commit(s) après la base ; dernier commit enregistré ${short(r.commit)}`));
   if (plan.failed.length) lines.push(`En échec : ${plan.failed.map(f => f.id).join(', ')}`);
-  lines.push(`Prêtes : ${plan.ready.length ? plan.ready.map(r => `${r.id} (vague ${r.wave})`).join(', ') : 'aucune'}`);
+  lines.push(`Prêtes : ${plan.ready.length ? plan.ready.map(r => `${r.id} (vague ${r.wave}${r.foundation ? ', fondation' : ''})`).join(', ') : 'aucune'}`);
+  if (plan.awaitingIntegration.length) lines.push(`En attente d'intégration : ${plan.awaitingIntegration.map(a => `${a.id} (attend l'intégration de ${a.waitingOn.join(', ')})`).join(' ; ')}`);
   if (plan.blocked.length) lines.push(`Bloquées : ${plan.blocked.map(b => `${b.id} (attend ${b.waitingOn.join(', ')})`).join(' ; ')}`);
   if (plan.reviewsToLaunch.length) lines.push(`Revues à lancer : ${plan.reviewsToLaunch.join(', ')}`);
   if (plan.reviewsRunning.length) lines.push(`Revues en cours : ${plan.reviewsRunning.join(', ')}`);
@@ -240,7 +252,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const [action, ...rest] = positionals;
     if (!action) throw new UsageError('sous-commande manquante (start, set, next, status)');
     if (!['start', 'set', 'next', 'status'].includes(action)) throw new UsageError(`sous-commande inconnue : run ${action}`);
-    const setOnly = ['branch', 'worktree', 'agent', 'commit', 'note', 'findings'];
+    const setOnly = ['branch', 'worktree', 'agent', 'commit', 'note', 'findings', 'force-unintegrated'];
     const forbidden = action === 'set' ? [] : action === 'start' ? setOnly : ['base', ...setOnly];
     const extra = forbidden.filter(n => values[n as keyof typeof values] !== undefined);
     if (extra.length) throw new UsageError(`option(s) sans effet pour run ${action} : --${extra.join(', --')}`);

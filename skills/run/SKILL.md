@@ -45,10 +45,10 @@ Dans ce document, `apv` désigne `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` (ou 
 4. Le plan suit les vagues de l'outil. S'il conclut que le graphe de la spec doit changer (une fondation manquante, une dépendance oubliée) **et qu'aucune tâche n'a démarré** : product corrige la spec, `apv spec validate`, puis tu recrées l'état (retire `.apv/state/run-<id>.json`, seule exception à la règle de l'état et seulement tant qu'aucune tâche n'a démarré, puis `apv run start` de nouveau) et tu le notes au journal. Une fois une tâche démarrée, le graphe ne change plus : l'écart passe en note de vague.
 5. Commite plan et notes sur `apv/<id>` (les implementers les lisent dans leur worktree), puis `apv run set <id> plan done --commit <sha>`.
 
-## 4. Vagues
-Pour chaque vague, dans l'ordre (vague 0 = fondations, écrite par un seul agent) :
+## 4. Tâches et vagues
+Règle unique : une tâche se lance **dès qu'elle est prête**, pas vague par vague. Elle est prête quand ses dépendances sont `done` et que le commit de chacune est intégré dans `apv/<id>` (la base de l'exécution tant que cette branche n'existe pas). Les vagues de l'outil (couches des dépendances) servent au plan et aux notes ; elles ne rythment pas les lancements. Répète, jusqu'à ce que toutes les tâches soient faites :
 
-1. **Tâches prêtes** : `apv run next <id>`. Ne lance une tâche que si la vague précédente est **intégrée** dans `apv/<id>` : ses dépendances doivent être dans la base que tu donnes.
+1. **Tâches prêtes** : `apv run next <id>`. Lance toutes celles qu'il donne prêtes, quelle que soit leur vague : les fondations prêtes à un seul agent, les autres en parallèle. Celles « en attente d'intégration » attendent que tu intègres la dépendance nommée (section 5). `apv run set … running` refuse une tâche dont une dépendance n'est pas intégrée ; `--force-unintegrated --note "<raison>"` seulement sur une décision écrite (fichiers disjoints, point d'accroche minimal), que l'outil journalise.
 2. **Quota** : `apv quota`, puis dose (section 8). Avec moins d'agents que de tâches prêtes, lance les plus utiles d'abord (ordre du plan).
 3. **Base exacte** : `git rev-parse apv/<id>` (le commit que tu donnes aux agents).
 4. **Branche de chaque tâche** : celle que `apv run next` indique, sinon `apv/<id>-<tâche>`.
@@ -63,7 +63,7 @@ Pour chaque vague, dans l'ordre (vague 0 = fondations, écrite par un seul agent
      Il lance un `apv:implementer` par tâche, chacun dans son worktree, avec la même consigne que le message ci-dessous, et rend un rapport structuré par tâche. Il ne touche pas à l'état : c'est toi qui le tiens.
    - **Sans outil Workflow** (désactivé, version trop ancienne, refus) : plusieurs appels à l'outil Agent **dans un même message**, un par tâche, chacun `subagent_type: "apv:implementer"`, `run_in_background: true`. C'est aussi le bon choix quand tu veux pouvoir parler à chaque agent (`SendMessage`) pendant la vague.
 6. **Juste après le lancement**, pour chaque tâche : `apv run set <id> task:<tâche> running --branch <branche> --base <baseCommit> --agent <identifiant>` (`--base` : le commit de départ exact de la tâche, sans lequel `apv run next` mesurerait « aucun commit après la base » depuis la base de l'exécution) (identifiant de l'agent, ou `workflow:<runId>` pour une vague lancée par workflow). Note aussi le `runId` du workflow dans `.apv/state/resume.md`.
-7. **Pendant la vague** : relevé de quota toutes les 10 à 15 minutes, préparation de la suite (notes de la vague suivante, revue du plan de la spec suivante). Tu ne codes pas à la place des agents.
+7. **Pendant le travail des agents** : relevé de quota toutes les 10 à 15 minutes, préparation de la suite (notes de la vague suivante, revue du plan de la spec suivante). Tu ne codes pas à la place des agents.
 8. **À chaque rapport** (ou au rapport du workflow) :
    - vérifie la branche : `git log --oneline <base>..<branche>`, fichiers touchés ;
    - **`apv scope check --spec <spec> --task <tâche> --base <baseCommit> --repo <worktree>`**, relancé par toi à la fin de chaque tâche. Un fichier hors périmètre est accepté seulement s'il est minimal et justifié dans le rapport (note-le) ; sinon la tâche repart avec la consigne de le retirer ;
@@ -89,11 +89,11 @@ critères couverts, écarts et pourquoi, points ouverts.
 ```
 
 ## 5. Intégration (étape `integration`)
-Après chaque vague, avant la suivante. À la première intégration : `apv run set <id> integration running --note "vague <n>"`.
-- **Vague d'une seule tâche** : relance toi-même les contrôles dans son worktree (`apv gates run --repo <worktree>`), puis, sur `apv/<id>` : `git merge --ff-only <branche>`.
+Dès qu'une tâche, ou un lot de tâches finies, est vérifiée (section 4, étape 8), sans attendre la fin de sa vague : c'est l'intégration qui rend prêtes les tâches qui en dépendent (`apv run next` les fait passer de « en attente d'intégration » à « prêtes »). À la première intégration : `apv run set <id> integration running --note "intégration 1"`.
+- **Une seule tâche à intégrer** : relance toi-même les contrôles dans son worktree (`apv gates run --repo <worktree>`), puis, sur `apv/<id>` : `git merge --ff-only <branche>`. Si `apv/<id>` a avancé depuis la base de la tâche (une autre intégration entre-temps), l'avance rapide est refusée : passe par l'intégrateur.
 - **Plusieurs tâches** : agent `apv:integrateur` : branche de la spec, liste ordonnée des branches (ordre du plan), plan et notes. Il crée `apv/<id>-integration-<n>` depuis `apv/<id>`, fusionne, unifie les doublons, garde tous les tests, relance tous les contrôles. Tu vérifies son rapport, tu relances les contrôles au moindre doute, puis `git merge --ff-only apv/<id>-integration-<n>` sur `apv/<id>`.
 - Worktrees des tâches intégrées : `git worktree remove <chemin>` une fois leur branche intégrée et leur arbre propre ; les branches restent (jamais réécrites).
-- Après la dernière vague : `apv run set <id> integration done --commit <tête de apv/<id>>`.
+- Une fois toutes les tâches intégrées : `apv run set <id> integration done --commit <tête de apv/<id>>`.
 
 ## 6. Revues (étape `reviews`)
 `apv run set <id> reviews running`, puis `/apv:review <id>` (compétence `review`, outil Skill) sur la tête de `apv/<id>` : quatre revues en parallèle, en lecture seule, chacune sur sa copie détachée du même commit, constats consolidés et dédoublonnés, `apv run set <id> review:<domaine> …` pour chaque domaine. Puis `apv run set <id> reviews done`.

@@ -23,12 +23,12 @@ Une spec fournie et validée par l'opérateur s'exécute telle quelle.
 | `plan` | `apv:architecte` | `.apv/state/plan-<id>.md` et `notes-<id>-vague-<n>.md` sur les vagues calculées par l'outil | `done --commit` |
 | tâches de fondation | un seul `apv:implementer` pour les fondations prêtes d'une vague | les fondations (tâches dont au moins deux autres dépendent : modules partagés), marquées par l'outil | `task:<tâche> done --commit` |
 | autres tâches | un `apv:implementer` par tâche prête, en parallèle | chacun dans son worktree, sur sa branche `apv/<id>-<tâche>` | `task:<tâche> done --commit` |
-| `integration` | `apv:integrateur` (ou avance rapide pour une tâche seule) | branche `apv/<id>-integration-<n>`, doublons unifiés, tous les contrôles ; la branche de la spec avance en avance rapide | `done` après la dernière vague |
+| `integration` | `apv:integrateur` (ou avance rapide pour une tâche seule) | dès que des tâches sont finies et vérifiées : branche `apv/<id>-integration-<n>`, doublons unifiés, tous les contrôles ; la branche de la spec avance en avance rapide | `done` une fois toutes les tâches intégrées |
 | `reviews` | `/apv:review` | sécurité, fidélité, données, RGPD en parallèle, en lecture seule, sur copies détachées ; constats consolidés | `review:<domaine> done` puis `reviews done` |
 | `fixes` | `apv:implementer` par domaine | corrections décidées dans `.apv/state/corrections-<id>.md` | `done`, ou `skipped` sans constat à corriger |
 | `delivery` | chef de projet | contrôles relancés sur la tête exacte, push, PR brouillon, aperçu | `done --note "PR #<n>"` |
 
-Entre deux vagues, la vague précédente est toujours intégrée dans `apv/<id>` : les tâches suivantes partent de cette tête.
+Une tâche part **dès qu'elle est prête**, pas vague par vague : ses dépendances sont `done` et le commit enregistré de chacune est intégré dans `apv/<id>` (ancêtre de sa tête, `git merge-base --is-ancestor` ; la base de l'exécution tient lieu de tête tant que la branche n'existe pas). `apv run next` donne les tâches prêtes et, à part, celles « en attente d'intégration » ; `apv run set <id> task:<tâche> running` refuse une tâche dont une dépendance n'est pas intégrée, sauf `--force-unintegrated` avec une `--note` obligatoire, journalisée. Une tâche finie et vérifiée s'intègre donc sans attendre la fin de sa vague : c'est ce qui libère les tâches qui en dépendent, et elles partent de cette tête.
 
 ## 3. L'état d'exécution
 
@@ -40,7 +40,7 @@ Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 |---|---|
 | `apv run start <spec> [--base <branche>]` | valide la spec (même logique que `apv spec validate`), calcule les vagues, crée l'état ; refuse si l'état existe déjà |
 | `apv run set <id> <cible> <statut> [--branch] [--worktree] [--agent] [--commit] [--base] [--findings] [--note]` | une transition : cible = une étape, `task:<tâche>` ou `review:<domaine>` (`securite`, `fidelite`, `donnees`, `rgpd`). Une tâche ne passe `running` que si ses dépendances sont `done` ; `done` exige `--commit` pour une tâche |
-| `apv run next <id>` | ce qu'il faut faire maintenant, de façon déterministe : étape courante, tâches prêtes, tâches `running` à reprendre (branche, worktree, agent, dernier commit), tâches « à relancer » (worktree disparu ou aucun commit après la base), revues à lancer |
+| `apv run next <id>` | ce qu'il faut faire maintenant, de façon déterministe : étape courante, tâches prêtes (dépendances faites et intégrées), tâches en attente d'intégration, tâches `running` à reprendre (branche, worktree, agent, dernier commit), tâches « à relancer » (worktree disparu ou aucun commit après la base), revues à lancer |
 | `apv run status [<id>]` | résumé de toutes les exécutions ou d'une seule ; `apv status` affiche aussi une ligne par exécution en cours |
 
 Toutes acceptent `--json`. Codes de sortie : `0` succès, `1` refus (transition interdite, état existant, spec invalide), `2` appel incorrect.

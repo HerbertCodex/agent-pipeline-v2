@@ -72,7 +72,7 @@ Sortie : `0` gabarit écrit, `1` fichier existant ou hors d'un dépôt Git, `2` 
 ```
 apv run start <spec> [--base <branche>] [--repo <chemin>] [--json]
 apv run set <spec-id> <cible> <statut> [--branch b] [--worktree w] [--agent id] [--commit sha]
-            [--base sha] [--findings n] [--note texte] [--repo <chemin>] [--json]
+            [--base sha] [--findings n] [--note texte] [--force-unintegrated] [--repo <chemin>] [--json]
 apv run next <spec-id> [--repo <chemin>] [--json]
 apv run status [<spec-id>] [--repo <chemin>] [--json]
 ```
@@ -93,7 +93,7 @@ Forme de l'état :
   waves: [{ index, tasks: [id...] }],
   tasks: { <id>: { title, dependsOn, wave, foundation, status, branch, worktree, agentId, base, commit, note, updatedAt } },
   reviews: { securite | fidelite | donnees | rgpd: { status, findings, commit, note, updatedAt } },
-  events: [{ at, target, from, to, note?, commit?, agentId? }] }
+  events: [{ at, target, from, to, note?, commit?, agentId?, unintegrated? }] }
 ```
 
 Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
@@ -101,13 +101,14 @@ Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 **`set`** change le statut d'une cible : une étape (`data-model`, `plan`, `integration`, `reviews`, `fixes`, `delivery`), `task:<id>` ou `review:<domaine>` (`securite`, `fidelite`, `donnees`, `rgpd`), et ajoute un événement horodaté. Règles :
 - passages permis : `pending` vers `running`, `done`, `skipped`, `failed` ; `running` vers `done`, `failed`, `pending`, `skipped` ; `failed` vers `pending`, `running`, `skipped` ; `skipped` vers `pending`, `running` ; `done` vers `running`, `pending`. Garder le même statut met seulement à jour les champs (nouveau commit wip, autre agent) ;
 - rouvrir un travail `done`, ou remplacer le commit enregistré d'une cible `done`, exige `--note` (la raison est journalisée) ;
-- une tâche ne passe `running` que si toutes ses dépendances sont `done` ;
+- une tâche ne passe `running` que si toutes ses dépendances sont `done` **et intégrées** : le commit enregistré de chacune est un ancêtre de la tête de la branche de la spec (`branch` de l'état, `git merge-base --is-ancestor`), ou de la base de l'exécution (`baseSha`) tant que cette branche n'existe pas. Sinon refus en `1` qui nomme les dépendances et leur commit. `--force-unintegrated` passe outre pour les seules dépendances faites mais pas intégrées, avec `--note` obligatoire (sinon `2`) ; l'événement garde la note et la liste des dépendances (`unintegrated`). Une tâche déjà `running` qui met à jour ses champs n'est pas revérifiée ;
 - une tâche `done` exige `--commit` ; le commit (sha ou nom de branche) doit exister dans le dépôt et il est enregistré en entier ;
 - `--branch`, `--worktree` (chemin rendu absolu), `--agent` et `--base` (commit de départ de la tâche, pour la reprise) ne valent que pour une tâche ; `--findings` (nombre de constats) que pour une revue ; `--commit` vaut pour toute cible (facultatif sur une étape : commit du plan, tête intégrée ; sur une revue : commit revu), et reste vérifié dans le dépôt.
 
 **`next`** dit ce qu'il faut faire maintenant, de façon déterministe : c'est la base de la reprise après une coupure (`/apv:resume`).
 - Étape courante : la première étape non terminée (`done` ou `skipped`), avec `waves` entre `plan` et `integration` tant qu'une tâche reste à faire, et la vague courante (la plus basse qui a une tâche non terminée).
-- Tâches prêtes : `pending` dont les dépendances sont `done`, avec leur vague. Les actions proposent d'abord celles de la vague courante (les fondations sont intégrées avant d'ouvrir le parallèle).
+- Tâches prêtes : `pending` dont les dépendances sont `done` et intégrées (même règle que `set`), avec leur vague et leur marqueur de fondation. Règle unique : une tâche se lance dès qu'elle est prête, quelle que soit sa vague ; l'action les propose toutes, les fondations à un seul agent, les autres en parallèle.
+- Tâches en attente d'intégration (`awaitingIntegration`) : dépendances toutes `done`, mais au moins une pas encore intégrée ; l'action nomme chaque dépendance à intégrer et les tâches qui l'attendent. `integration` donne la tête mesurée (`head`) et ce qu'elle est (`where` : la branche de la spec, ou la base tant qu'elle n'existe pas).
 - Tâches `running` : **à relancer** si leur worktree n'existe plus, si leur branche est introuvable, si ni branche ni worktree ne sont enregistrés, ou si leur tête n'a aucun commit après leur base (`--base` donné au lancement de la tâche, sinon la base de l'exécution) ; sinon **à reprendre**, avec branche, worktree, agent, tête, nombre de commits après la base et dernier commit enregistré. Une tâche signalée à relancer ne l'est que si son agent ne tourne plus : un agent qui vient de démarrer n'a pas encore de commit.
 - Tâches en échec, tâches bloquées (dépendances attendues), revues à lancer (`pending` ou `failed`, une fois les tâches finies et l'intégration faite) et revues en cours.
 - `specChanged` : la spec a changé depuis `start` (empreinte différente) ; l'état garde le plan du lancement, l'action le signale.

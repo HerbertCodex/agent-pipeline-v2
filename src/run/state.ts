@@ -42,6 +42,8 @@ const reviewSchema = s.object({ status, findings: s.nullable(s.number(0, 100000)
 const eventSchema = s.object({
   at, target: s.string(1, 200), from: s.nullable(status), to: status,
   note: s.optional(s.string(0, 4000)), commit: s.optional(s.string(7, 64)), agentId: s.optional(s.string(0, 300)),
+  // Dependencies not integrated when the task was started anyway (`--force-unintegrated`).
+  unintegrated: s.optional(s.array(s.string(1, 80, key), 1, 20)),
 });
 
 /**
@@ -65,7 +67,9 @@ export const runStateSchema = s.object({
 });
 /** Plain mutable view of the parsed state (the schema types are read-only). */
 type Mutable<T> = T extends readonly (infer U)[] ? Mutable<U>[] : T extends object ? { -readonly [K in keyof T]: Mutable<T[K]> } : T;
-export interface RunEvent { at: string; target: string; from: RunStatus | null; to: RunStatus; note?: string; commit?: string; agentId?: string }
+export interface RunEvent {
+  at: string; target: string; from: RunStatus | null; to: RunStatus; note?: string; commit?: string; agentId?: string; unintegrated?: string[];
+}
 export type RunState = Omit<Mutable<Infer<typeof runStateSchema>>, 'events'> & { events: RunEvent[] };
 export type TaskEntry = RunState['tasks'][string];
 const parseState = (value: unknown): RunState => runStateSchema.parse(migrateRunState(value)) as unknown as RunState;
@@ -200,7 +204,45 @@ const TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
 export interface SetOptions {
   status: RunStatus;
   branch?: string; worktree?: string; agentId?: string; commit?: string; base?: string; note?: string; findings?: number;
+  /** Where the commits of the dependencies of a task that starts must already be; absent: nowhere. */
+  integration?: IntegrationCheck;
+  /** Starts the task although a dependency is not integrated; needs `note`, journaled with the dependencies. */
+  forceUnintegrated?: boolean;
   now?: Date;
+}
+
+/**
+ * The integration head of an execution: the branch of the spec (`branch` of the state), or the base commit of
+ * the execution while that branch does not exist yet. A dependency is integrated when its recorded commit is
+ * an ancestor of that head.
+ */
+export interface IntegrationCheck {
+  /** Commit of the head. */
+  head: string;
+  /** The head as shown to a human: the branch, or the base when the branch does not exist yet. */
+  where: string;
+  integrated(commit: string): boolean;
+}
+
+/** The integration head of `state` as the probe sees the repository. */
+export function integrationCheck(state: RunState, probe: GitProbe): IntegrationCheck {
+  const branchHead = probe.resolve(state.branch);
+  const head = branchHead ?? state.baseSha;
+  const where = branchHead ? state.branch : `la base ${state.base} (${state.baseSha.slice(0, 12)}), la branche ${state.branch} n'existant pas encore`;
+  return { head, where, integrated: commit => commit === head || probe.isAncestor(commit, head) };
+}
+
+/**
+ * The dependencies of a task split by readiness: `notDone` (not `done`) and `notIntegrated` (`done`, but their
+ * commit is missing or not an ancestor of the integration head). A task is ready when both are empty.
+ */
+export function dependencyGaps(state: RunState, task: TaskEntry, integration: IntegrationCheck | undefined): { notDone: string[]; notIntegrated: string[] } {
+  const notDone = task.dependsOn.filter(d => state.tasks[d]?.status !== 'done');
+  const notIntegrated = task.dependsOn.filter(d => {
+    const dep = state.tasks[d];
+    return dep?.status === 'done' && !(dep.commit && integration?.integrated(dep.commit));
+  });
+  return { notDone, notIntegrated };
 }
 
 /** Refused transition: exit 1 (a control failed), unlike a malformed call. */
@@ -210,7 +252,8 @@ export class TransitionError extends PipelineError {
 
 /**
  * Applies `apv run set` to a copy of the state and returns it with the event it added. Checks the transition,
- * the dependencies of a task that starts (all `done`), and the commit of a task that ends (`--commit`).
+ * the dependencies of a task that starts (all `done`, and integrated: their commit in the integration head,
+ * unless `forceUnintegrated` with a note), and the commit of a task that ends (`--commit`).
  * Commit existence is checked by the caller, which owns the repository.
  */
 export function applySet(state: RunState, target: Target, options: SetOptions): { state: RunState; from: RunStatus; event: RunEvent } {
@@ -221,6 +264,7 @@ export function applySet(state: RunState, target: Target, options: SetOptions): 
   if (!entry) throw new PipelineError('RUN_TARGET', `Tâche inconnue dans l'exécution ${state.specId} : ${target.kind === 'task' ? target.id : name}`);
   const from = entry.status;
   const to = options.status;
+  let unintegrated: string[] | null = null;
   if (from !== to && !TRANSITIONS[from].includes(to)) throw new TransitionError(`${name} : passage de « ${from} » à « ${to} » refusé (possibles : ${TRANSITIONS[from].join(', ')})`);
   if (from === 'done' && to !== 'done' && !options.note?.trim()) throw new TransitionError(`${name} : rouvrir un travail terminé exige --note (la raison est journalisée)`);
   // The commit of finished work is what integration and reviews rely on: changing it is a decision to journal.
@@ -231,8 +275,18 @@ export function applySet(state: RunState, target: Target, options: SetOptions): 
   if (target.kind === 'task') {
     const task = entry as TaskEntry;
     if (to === 'running') {
-      const waiting = task.dependsOn.filter(dep => next.tasks[dep]?.status !== 'done');
-      if (waiting.length) throw new TransitionError(`${name} : dépendance(s) pas encore faite(s) : ${waiting.map(d => `${d} (${next.tasks[d]?.status ?? 'inconnue'})`).join(', ')}`);
+      const { notDone, notIntegrated } = dependencyGaps(next, task, options.integration);
+      if (notDone.length) throw new TransitionError(`${name} : dépendance(s) pas encore faite(s) : ${notDone.map(d => `${d} (${next.tasks[d]?.status ?? 'inconnue'})`).join(', ')}`);
+      // Checked when the task starts, not when a running task only updates its fields.
+      if (from !== 'running' && notIntegrated.length) {
+        const list = notIntegrated.map(d => `${d} (commit ${next.tasks[d]?.commit?.slice(0, 12) ?? 'absent'})`).join(', ');
+        if (!options.forceUnintegrated) {
+          throw new TransitionError(`${name} : dépendance(s) faite(s) mais pas encore intégrée(s) dans ${options.integration?.where ?? 'la branche de la spec'} : ${list}. ` +
+            'Intègre-les d\'abord ; sinon --force-unintegrated avec --note (la raison est journalisée)');
+        }
+        if (!options.note?.trim()) throw new TransitionError(`${name} : --force-unintegrated exige --note (la raison est journalisée)`);
+        unintegrated = notIntegrated;
+      }
     }
     if (to === 'done' && !options.commit) throw new TransitionError(`${name} : une tâche faite exige --commit <sha> (le commit qui la porte)`);
     if (options.branch !== undefined) task.branch = options.branch;
@@ -248,7 +302,7 @@ export function applySet(state: RunState, target: Target, options: SetOptions): 
   next.updatedAt = now;
   const event: RunEvent = { at: now, target: name, from, to,
     ...(options.note !== undefined ? { note: options.note } : {}), ...(options.commit !== undefined ? { commit: options.commit } : {}),
-    ...(options.agentId !== undefined ? { agentId: options.agentId } : {}) };
+    ...(options.agentId !== undefined ? { agentId: options.agentId } : {}), ...(unintegrated ? { unintegrated } : {}) };
   next.events.push(event);
   return { state: parseState(next), from, event };
 }
@@ -273,6 +327,8 @@ export interface GitProbe {
   resolve(ref: string, worktree?: string): string | null;
   /** Number of commits reachable from `head` and not from `base`, or null when unknown. */
   countAfter(base: string, head: string, worktree?: string): number | null;
+  /** True when `commit` is an ancestor of `head` (`git merge-base --is-ancestor`); false when unknown. */
+  isAncestor(commit: string, head: string): boolean;
 }
 
 export interface ResumeItem {
@@ -282,7 +338,11 @@ export interface ResumeItem {
 export interface RelaunchItem extends ResumeItem { reason: string }
 export interface NextPlan {
   specId: string; step: StepName | 'waves' | null; stepStatus: RunStatus | null; wave: number | null; finished: boolean;
-  ready: { id: string; title: string; wave: number }[];
+  ready: { id: string; title: string; wave: number; foundation: boolean }[];
+  /** Dependencies all `done`, but some not integrated yet in the integration head. */
+  awaitingIntegration: { id: string; wave: number; waitingOn: string[] }[];
+  /** The integration head the readiness was measured on. */
+  integration: { head: string; where: string };
   resume: ResumeItem[];
   relaunch: RelaunchItem[];
   failed: { id: string; note: string | null }[];
@@ -293,17 +353,23 @@ export interface NextPlan {
 }
 
 /**
- * `apv run next`: what to do now, deterministic, the basis of resuming after an interruption. A running task
+ * `apv run next`: what to do now, deterministic, the basis of resuming after an interruption. A task is ready
+ * when its dependencies are `done` and their commits integrated in the branch of the spec (or in the base of
+ * the execution while that branch does not exist); tasks are launched as soon as they are ready, not wave by
+ * wave. A running task
  * whose worktree is gone, or that has no commit after its base (`--base` given when it started, else the base
  * of the execution), is to relaunch if its agent no longer runs.
  */
 export function computeNext(state: RunState, probe: GitProbe): NextPlan {
   const { step, wave } = currentStep(state);
   const tasks = Object.entries(state.tasks);
-  const ready = tasks.filter(([, t]) => t.status === 'pending' && t.dependsOn.every(d => state.tasks[d]?.status === 'done'))
-    .map(([id, t]) => ({ id, title: t.title, wave: t.wave })).sort((a, b) => a.wave - b.wave);
-  const blocked = tasks.filter(([, t]) => t.status === 'pending' && !t.dependsOn.every(d => state.tasks[d]?.status === 'done'))
-    .map(([id, t]) => ({ id, waitingOn: t.dependsOn.filter(d => state.tasks[d]?.status !== 'done') }));
+  const integration = integrationCheck(state, probe);
+  const pending = tasks.filter(([, t]) => t.status === 'pending').map(([id, t]) => ({ id, t, gaps: dependencyGaps(state, t, integration) }));
+  const ready = pending.filter(p => !p.gaps.notDone.length && !p.gaps.notIntegrated.length)
+    .map(({ id, t }) => ({ id, title: t.title, wave: t.wave, foundation: t.foundation })).sort((a, b) => a.wave - b.wave);
+  const awaitingIntegration = pending.filter(p => !p.gaps.notDone.length && p.gaps.notIntegrated.length)
+    .map(({ id, t, gaps }) => ({ id, wave: t.wave, waitingOn: gaps.notIntegrated })).sort((a, b) => a.wave - b.wave);
+  const blocked = pending.filter(p => p.gaps.notDone.length).map(({ id, gaps }) => ({ id, waitingOn: gaps.notDone }));
   const failed = tasks.filter(([, t]) => t.status === 'failed').map(([id, t]) => ({ id, note: t.note }));
   const resume: ResumeItem[] = [];
   const relaunch: RelaunchItem[] = [];
@@ -335,21 +401,24 @@ export function computeNext(state: RunState, probe: GitProbe): NextPlan {
   for (const f of failed) actions.push(`décider de ${f.id} (en échec${f.note ? ` : ${f.note}` : ''}) : relancer, corriger ou sauter`);
   if (step === 'data-model' || step === 'plan') actions.push(`étape ${STEP_LABEL[step]} (${STATUS_LABEL[state.steps[step].status]}) : la terminer avant d'ouvrir les vagues`);
   else if (step === 'waves') {
-    // The current wave first. Its foundations go to one agent (incident 24), its other tasks run in parallel.
-    const now = ready.filter(r => r.wave === wave);
-    const found = now.filter(r => state.tasks[r.id]?.foundation).map(r => r.id);
-    const parallel = now.filter(r => !state.tasks[r.id]?.foundation).map(r => r.id);
-    if (now.length) {
-      actions.push(`lancer ${now.length} tâche(s) prête(s) de la vague ${wave} : ${[found.length ? `fondations (un seul agent) : ${found.join(', ')}` : '',
+    // Every ready task now, whatever its wave: the foundations to one agent (incident 24), the others in parallel.
+    const found = ready.filter(r => r.foundation).map(r => r.id);
+    const parallel = ready.filter(r => !r.foundation).map(r => r.id);
+    if (ready.length) {
+      actions.push(`lancer ${ready.length} tâche(s) prête(s) : ${[found.length ? `fondations (un seul agent) : ${found.join(', ')}` : '',
         parallel.length ? `en parallèle : ${parallel.join(', ')}` : ''].filter(Boolean).join(' ; ')}`);
     }
-    const later = ready.filter(r => r.wave !== wave);
-    if (later.length) actions.push(`prêtes mais d'une vague suivante : ${later.map(r => `${r.id} (vague ${r.wave})`).join(', ')} ; à lancer une fois la vague ${wave} intégrée, sauf décision contraire notée`);
-    if (!ready.length && !resume.length && !relaunch.length && !failed.length) actions.push('aucune tâche prête : vérifier les dépendances bloquées');
+    const toIntegrate = [...new Set(awaitingIntegration.flatMap(a => a.waitingOn))];
+    for (const dep of toIntegrate) {
+      const waiting = awaitingIntegration.filter(a => a.waitingOn.includes(dep)).map(a => a.id);
+      actions.push(`intégrer ${dep} (commit ${state.tasks[dep]?.commit?.slice(0, 12) ?? 'absent'}) dans ${state.branch} : ${waiting.join(', ')} en attend(ent) l'intégration`);
+    }
+    if (!ready.length && !toIntegrate.length && !resume.length && !relaunch.length && !failed.length) actions.push('aucune tâche prête : vérifier les dépendances bloquées');
   } else if (step === 'reviews' && reviewsToLaunch.length) actions.push(`lancer les revues : ${reviewsToLaunch.join(', ')}`);
   else if (step) actions.push(`étape ${STEP_LABEL[step]} (${STATUS_LABEL[state.steps[step].status]})`);
   if (allDone) actions.push('exécution terminée');
-  return { specId: state.specId, step, stepStatus, wave, finished: allDone, ready, resume, relaunch, failed, blocked, reviewsToLaunch, reviewsRunning, actions };
+  return { specId: state.specId, step, stepStatus, wave, finished: allDone, ready, awaitingIntegration, integration: { head: integration.head, where: integration.where },
+    resume, relaunch, failed, blocked, reviewsToLaunch, reviewsRunning, actions };
 }
 
 /** How a state file is named in errors (path relative to the repository), and the spec id its name carries. */

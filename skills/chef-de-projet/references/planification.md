@@ -28,8 +28,9 @@ Un fichier par projet, versionné dans `.apv/brief.md`, partagé par tous les im
 ## 5. Les notes de vague
 Un fichier par vague parallèle, `.apv/state/notes-<spec>-vague-<n>.md` : base exacte (branche et commit), API disponible avec ses vrais noms, points d'extension, fichiers possédés par tâche, règle des fichiers communs, conduite quand une dépendance n'est pas encore fusionnée (ne pas attendre, point d'accroche minimal, le signaler), pièges connus de l'environnement.
 
-## 6. Lancer la vague
-1. `apv run next <id>` : tâches prêtes. La vague précédente doit être intégrée dans la branche de la spec.
+## 6. Lancer les tâches
+Une tâche se lance dès qu'elle est prête, pas vague par vague : ses dépendances sont `done` et leur commit est intégré dans la branche de la spec (la base tant qu'elle n'existe pas). Chaque tâche finie et vérifiée s'intègre sans attendre les autres tâches de sa vague : c'est ce qui libère celles qui en dépendent.
+1. `apv run next <id>` : tâches prêtes (toutes, quelle que soit leur vague ; fondations à un seul agent, les autres en parallèle) et tâches en attente d'intégration, avec la dépendance à intégrer.
 2. Relevé de quota ; nombre d'agents choisi en conséquence (repère : la consommation observée sur les vagues précédentes).
 3. Une tâche seule : outil Agent (`apv:implementer`, en arrière-plan). Plusieurs : le workflow du plugin `apv:vague` (outil Workflow, `args` : spec, base et commit exacts, consigne, notes, tâches et branches), ou plusieurs appels à l'outil Agent dans un même message. Le message de chaque tâche : spec et tâche, base, branche, chemins de la consigne et des notes, contrôles, ressources sous bail, format du rapport (modèle dans `/apv:run`).
 4. Juste après le lancement : `apv run set <id> task:<tâche> running --branch <branche> --base <commit de départ> --agent <identifiant>`.

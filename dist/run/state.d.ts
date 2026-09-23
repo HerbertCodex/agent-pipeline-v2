@@ -123,6 +123,7 @@ export declare const runStateSchema: import("../domain/schema.js").Schema<{
         readonly note: string | undefined;
         readonly commit: string | undefined;
         readonly agentId: string | undefined;
+        readonly unintegrated: string[] | undefined;
     }[];
 }>;
 /** Plain mutable view of the parsed state (the schema types are read-only). */
@@ -137,6 +138,7 @@ export interface RunEvent {
     note?: string;
     commit?: string;
     agentId?: string;
+    unintegrated?: string[];
 }
 export type RunState = Omit<Mutable<Infer<typeof runStateSchema>>, 'events'> & {
     events: RunEvent[];
@@ -210,15 +212,42 @@ export interface SetOptions {
     base?: string;
     note?: string;
     findings?: number;
+    /** Where the commits of the dependencies of a task that starts must already be; absent: nowhere. */
+    integration?: IntegrationCheck;
+    /** Starts the task although a dependency is not integrated; needs `note`, journaled with the dependencies. */
+    forceUnintegrated?: boolean;
     now?: Date;
 }
+/**
+ * The integration head of an execution: the branch of the spec (`branch` of the state), or the base commit of
+ * the execution while that branch does not exist yet. A dependency is integrated when its recorded commit is
+ * an ancestor of that head.
+ */
+export interface IntegrationCheck {
+    /** Commit of the head. */
+    head: string;
+    /** The head as shown to a human: the branch, or the base when the branch does not exist yet. */
+    where: string;
+    integrated(commit: string): boolean;
+}
+/** The integration head of `state` as the probe sees the repository. */
+export declare function integrationCheck(state: RunState, probe: GitProbe): IntegrationCheck;
+/**
+ * The dependencies of a task split by readiness: `notDone` (not `done`) and `notIntegrated` (`done`, but their
+ * commit is missing or not an ancestor of the integration head). A task is ready when both are empty.
+ */
+export declare function dependencyGaps(state: RunState, task: TaskEntry, integration: IntegrationCheck | undefined): {
+    notDone: string[];
+    notIntegrated: string[];
+};
 /** Refused transition: exit 1 (a control failed), unlike a malformed call. */
 export declare class TransitionError extends PipelineError {
     constructor(message: string);
 }
 /**
  * Applies `apv run set` to a copy of the state and returns it with the event it added. Checks the transition,
- * the dependencies of a task that starts (all `done`), and the commit of a task that ends (`--commit`).
+ * the dependencies of a task that starts (all `done`, and integrated: their commit in the integration head,
+ * unless `forceUnintegrated` with a note), and the commit of a task that ends (`--commit`).
  * Commit existence is checked by the caller, which owns the repository.
  */
 export declare function applySet(state: RunState, target: Target, options: SetOptions): {
@@ -238,6 +267,8 @@ export interface GitProbe {
     resolve(ref: string, worktree?: string): string | null;
     /** Number of commits reachable from `head` and not from `base`, or null when unknown. */
     countAfter(base: string, head: string, worktree?: string): number | null;
+    /** True when `commit` is an ancestor of `head` (`git merge-base --is-ancestor`); false when unknown. */
+    isAncestor(commit: string, head: string): boolean;
 }
 export interface ResumeItem {
     id: string;
@@ -262,7 +293,19 @@ export interface NextPlan {
         id: string;
         title: string;
         wave: number;
+        foundation: boolean;
     }[];
+    /** Dependencies all `done`, but some not integrated yet in the integration head. */
+    awaitingIntegration: {
+        id: string;
+        wave: number;
+        waitingOn: string[];
+    }[];
+    /** The integration head the readiness was measured on. */
+    integration: {
+        head: string;
+        where: string;
+    };
     resume: ResumeItem[];
     relaunch: RelaunchItem[];
     failed: {
@@ -278,7 +321,10 @@ export interface NextPlan {
     actions: string[];
 }
 /**
- * `apv run next`: what to do now, deterministic, the basis of resuming after an interruption. A running task
+ * `apv run next`: what to do now, deterministic, the basis of resuming after an interruption. A task is ready
+ * when its dependencies are `done` and their commits integrated in the branch of the spec (or in the base of
+ * the execution while that branch does not exist); tasks are launched as soon as they are ready, not wave by
+ * wave. A running task
  * whose worktree is gone, or that has no commit after its base (`--base` given when it started, else the base
  * of the execution), is to relaunch if its agent no longer runs.
  */
