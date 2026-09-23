@@ -145,6 +145,16 @@ Leçon du projet pilote : la première version de la base avait des tables et co
 - RLS activée et forcée sur chaque table utilisateur, politiques avec `(select auth.uid())` ; droits par colonne quand une colonne ne doit pas être modifiée directement ; fonctions `security definer` réservées aux cas justifiés, `search_path` vide, propriétaire vérifié dedans.
 - Migrations en avant uniquement, nommées, testées sur des données existantes (reprise sans perte) et vérifiées depuis une base vide.
 
+**Transactions (ACID) et concurrence**
+- Toute opération qui écrit à plusieurs endroits s'exécute dans une seule transaction : une fonction SQL, ou une transaction explicite côté serveur. Pas de suite d'appels séparés qui peut s'arrêter au milieu.
+- Quand une étape ne peut pas entrer dans la transaction (fichier dans un stockage objet, e-mail, API externe), le modèle documente la compensation (annulation de l'étape déjà faite) ou l'idempotence (réservation avant envoi, clé d'unicité), et un test prouve le comportement en cas d'échec à chaque étape.
+- Les invariants qui peuvent être cassés par deux requêtes simultanées (quota, doublon, « déjà fait ») sont protégés en base : contrainte d'unicité, verrou de ligne (`for update`) ou verrou consultatif ; un test lance des appels concurrents.
+
+**Normalisation**
+- Forme normale de Boyce-Codd (BCNF) par défaut, troisième forme normale au minimum.
+- Toute redondance est déclarée dans le modèle avec sa raison et son garde-fou : par exemple `user_id` répété dans une table enfant pour la RLS, verrouillé par une clé étrangère composite `(id, user_id)` ; une valeur calculée gardée pour la performance, maintenue par la base (déclencheur ou fonction) et jamais écrite librement par l'application.
+- `apv db check` signale une colonne dupliquée entre tables sans garde-fou déclaré.
+
 **Performance et minimisation**
 - Chaque requête sélectionne des colonnes nommées, jamais `*`. Chaque chargement de page ne remonte que ce que l'écran affiche ; rien de plus n'est envoyé au navigateur (contrôle du contenu des données de page).
 - Un index par clé étrangère et par motif de requête réel (filtre, tri, pagination), vérifié par `EXPLAIN` sur un volume réaliste ; index partiels quand une condition est constante (par exemple lignes non supprimées).
@@ -158,7 +168,7 @@ Leçon du projet pilote : la première version de la base avait des tables et co
 - Aucun `select('*')` ni `select *` dans le code serveur.
 - `EXPLAIN` des requêtes principales listées dans le modèle : pas de parcours séquentiel sur une table utilisateur au-delà d'un seuil de lignes.
 
-**Revue** : avant chaque livraison, l'architecte des données relit les migrations et les requêtes ajoutées (au même titre que les revues sécurité, fidélité et RGPD).
+**Revue** : avant chaque livraison, l'architecte des données relit les migrations et les requêtes ajoutées (au même titre que les revues sécurité, fidélité et RGPD), avec une grille qui couvre la modélisation, les transactions, la concurrence, la normalisation, les index et la minimisation.
 
 ## 13. RGPD (agent `dpo`)
 
