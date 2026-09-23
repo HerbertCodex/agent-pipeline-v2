@@ -99,3 +99,11 @@ test('candidate commit subjects come from the task title', () => {
   assert.equal(candidateSubject('  multi\nline\ttitle ', 'run-1'), 'multi line title');
   assert.equal(candidateSubject('x'.repeat(100), 'run-1').length, 72);
 });
+
+test('the readable ledger ends with exactly one newline (git diff --check stays clean)', async () => {
+  const { decisionLedgerMarkdown } = await import('../dist/lifecycle/decisions.js');
+  const decision = { id: 'un-choix', subject: 'Sujet', value: 'Valeur', enforcement: 'product', status: 'confirmed', source: 'operator',
+    sourceQuote: 'citation', rationale: 'Raison.', supersedes: [], clarificationQuestion: '', interpretations: [] };
+  const md = decisionLedgerMarkdown({ schemaVersion: 1, decisions: [decision] });
+  assert.ok(md.endsWith('Raison.\n'), JSON.stringify(md.slice(-20)));
+});
