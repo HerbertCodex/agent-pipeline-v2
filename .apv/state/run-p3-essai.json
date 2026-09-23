@@ -7,35 +7,41 @@
   "baseSha": "e9da7390d9362368864027ef2d3ac97479569af2",
   "branch": "apv/p3-essai",
   "createdAt": "2026-09-23T16:55:06.490Z",
-  "updatedAt": "2026-09-23T17:06:06.226Z",
+  "updatedAt": "2026-09-23T17:09:28.191Z",
   "steps": {
     "data-model": {
       "status": "skipped",
+      "commit": null,
       "note": "aucune base de données",
       "updatedAt": "2026-09-23T16:55:26.501Z"
     },
     "plan": {
       "status": "done",
+      "commit": null,
       "note": "commit 68633cd4feba876bcdb17fca2a71362a5c942805",
       "updatedAt": "2026-09-23T16:55:35.090Z"
     },
     "integration": {
-      "status": "running",
-      "note": "vague 0 et BIN",
-      "updatedAt": "2026-09-23T17:01:03.807Z"
+      "status": "done",
+      "commit": "fe3fa48bfd949a8a9b3aef41f3a670512bd98635",
+      "note": "4 tâches intégrées, gates verts",
+      "updatedAt": "2026-09-23T17:09:27.829Z"
     },
     "reviews": {
-      "status": "pending",
+      "status": "running",
+      "commit": null,
       "note": null,
-      "updatedAt": null
+      "updatedAt": "2026-09-23T17:09:27.888Z"
     },
     "fixes": {
       "status": "pending",
+      "commit": null,
       "note": null,
       "updatedAt": null
     },
     "delivery": {
       "status": "pending",
+      "commit": null,
       "note": null,
       "updatedAt": null
     }
@@ -112,40 +118,44 @@
         "HOOK"
       ],
       "wave": 2,
-      "status": "pending",
-      "branch": null,
-      "worktree": null,
-      "agentId": null,
-      "base": null,
-      "commit": null,
-      "note": null,
-      "updatedAt": null
+      "status": "done",
+      "branch": "apv/p3-essai-docs",
+      "worktree": "/home/herbertcodex/apv3-wt/essai-docs",
+      "agentId": "implementer-docs",
+      "base": "8cd7529f413a747268349043c89bc3a5c7cb55ac",
+      "commit": "55ac4ac55d4c225de8a7a3b17054ba7b95eedd7f",
+      "note": "scope check vert",
+      "updatedAt": "2026-09-23T17:08:51.725Z"
     }
   },
   "reviews": {
     "securite": {
-      "status": "pending",
+      "status": "running",
       "findings": null,
+      "commit": "fe3fa48bfd949a8a9b3aef41f3a670512bd98635",
       "note": null,
-      "updatedAt": null
+      "updatedAt": "2026-09-23T17:09:28.094Z"
     },
     "fidelite": {
-      "status": "pending",
+      "status": "running",
       "findings": null,
+      "commit": "fe3fa48bfd949a8a9b3aef41f3a670512bd98635",
       "note": null,
-      "updatedAt": null
+      "updatedAt": "2026-09-23T17:09:28.191Z"
     },
     "donnees": {
-      "status": "pending",
+      "status": "skipped",
       "findings": null,
-      "note": null,
-      "updatedAt": null
+      "commit": null,
+      "note": "aucune base de données ni requête",
+      "updatedAt": "2026-09-23T17:09:27.941Z"
     },
     "rgpd": {
-      "status": "pending",
+      "status": "skipped",
       "findings": null,
-      "note": null,
-      "updatedAt": null
+      "commit": null,
+      "note": "aucune donnée personnelle traitée : état d'exécution et fichiers du dépôt",
+      "updatedAt": "2026-09-23T17:09:27.996Z"
     }
   },
   "events": [
@@ -229,6 +239,63 @@
       "to": "done",
       "note": "scope check vert ; 409 tests",
       "commit": "46c904080a9605aba9993bf86b5ed9a0ffa72e93"
+    },
+    {
+      "at": "2026-09-23T17:06:35.310Z",
+      "target": "task:DOCS",
+      "from": "pending",
+      "to": "running",
+      "agentId": "implementer-docs"
+    },
+    {
+      "at": "2026-09-23T17:08:51.725Z",
+      "target": "task:DOCS",
+      "from": "running",
+      "to": "done",
+      "note": "scope check vert",
+      "commit": "55ac4ac55d4c225de8a7a3b17054ba7b95eedd7f"
+    },
+    {
+      "at": "2026-09-23T17:09:27.829Z",
+      "target": "integration",
+      "from": "running",
+      "to": "done",
+      "note": "4 tâches intégrées, gates verts",
+      "commit": "fe3fa48bfd949a8a9b3aef41f3a670512bd98635"
+    },
+    {
+      "at": "2026-09-23T17:09:27.888Z",
+      "target": "reviews",
+      "from": "pending",
+      "to": "running"
+    },
+    {
+      "at": "2026-09-23T17:09:27.941Z",
+      "target": "review:donnees",
+      "from": "pending",
+      "to": "skipped",
+      "note": "aucune base de données ni requête"
+    },
+    {
+      "at": "2026-09-23T17:09:27.996Z",
+      "target": "review:rgpd",
+      "from": "pending",
+      "to": "skipped",
+      "note": "aucune donnée personnelle traitée : état d'exécution et fichiers du dépôt"
+    },
+    {
+      "at": "2026-09-23T17:09:28.094Z",
+      "target": "review:securite",
+      "from": "pending",
+      "to": "running",
+      "commit": "fe3fa48bfd949a8a9b3aef41f3a670512bd98635"
+    },
+    {
+      "at": "2026-09-23T17:09:28.191Z",
+      "target": "review:fidelite",
+      "from": "pending",
+      "to": "running",
+      "commit": "fe3fa48bfd949a8a9b3aef41f3a670512bd98635"
     }
   ]
 }
