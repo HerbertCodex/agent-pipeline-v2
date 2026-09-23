@@ -13,7 +13,7 @@ Installation locale : `npm run build`, puis `node dist/cli.js <commande>` ou `np
 - Fichiers lus dans le projet :
   - configuration : `.apv/config.json`, sinon `pipeline.v2.json` (projet V2) ;
   - registre des décisions : `.apv/DECISIONS.json`, sinon `.agent-pipeline/DECISIONS.json` (projet V2).
-- De la configuration, seules les sections `gates`, `risk`, `validationRules`, `environment.passEnv` et `skills` sont lues. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
+- De la configuration, seules les sections `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills` et `preview` sont lues. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
 
 ## `apv spec validate`
 
@@ -129,9 +129,29 @@ Le niveau se calcule sur la plus haute des deux fenêtres (spécification, secti
 | 95 % | `save_now` | sauvegarder (commits « wip », push, notes de reprise) et prévenir l'opérateur |
 | illisible | `unknown` | le relevé a échoué ; la sortie de la commande est affichée |
 
-Chaque relevé est ajouté à `.apv/state/quota.log` (un objet JSON par ligne : `at`, `session`, `week`, `percent`, `level`), sauf avec `--no-log` ; le hook de démarrage de session lit la dernière ligne. `apv quota` crée ou complète aussi `.apv/.gitignore` (`state/*.log`, `state/task.json`, `receipts/`) pour que ces fichiers machine ne soient jamais commités. La variable d'environnement `APV_CLAUDE_BIN` remplace l'exécutable `claude` (tests, installation particulière).
+Chaque relevé est ajouté à `.apv/state/quota.log` (un objet JSON par ligne : `at`, `session`, `week`, `percent`, `level`), sauf avec `--no-log` ; le hook de démarrage de session lit la dernière ligne. `apv quota` crée ou complète aussi `.apv/.gitignore` (`state/*.log`, `state/task.json`, `state/preview.json`, `receipts/`) pour que ces fichiers machine ne soient jamais commités. La variable d'environnement `APV_CLAUDE_BIN` remplace l'exécutable `claude` (tests, installation particulière).
 
 Sortie : `0` relevé lu, `1` relevé illisible, `2` appel incorrect.
+
+## `apv preview`
+
+```
+apv preview update [branche] [--wait 30m] [--repo <chemin>] [--json]
+apv preview status [--repo <chemin>] [--json]
+apv preview stop [--wait 30m] [--repo <chemin>] [--json]
+apv preview logs [--lines 50] [--update] [--repo <chemin>]
+```
+
+Aperçu vivant du projet (spécification, section 12), décrit par la section `preview` de `.apv/config.json` : dossier de la copie, fichier d'environnement, étapes `install`, `migrate`, `build`, `seed`, commande et port du serveur, contrôle de santé, adresse annoncée.
+
+- `update` prend le verrou `preview`, arrête le serveur d'aperçu, copie la branche (`preview.branch`, sinon `main`) par `git archive` dans un dossier neuf, lance les étapes, démarre le serveur détaché (journal `.apv/state/preview.log`, état `.apv/state/preview.json`) et attend sa réponse. Il affiche « aperçu prêt : <adresse> (branche X, commit abc1234) » et les commits arrivés depuis l'aperçu précédent. Un échec nomme l'étape et donne le chemin du journal ; aucun serveur ne reste.
+- `status` : en marche (groupe de processus vivant et contrôle de santé réussi), adresse, branche, commit, durée, dernier échec.
+- `stop` : arrête le serveur (tout son groupe de processus).
+- `logs` : dernières lignes du journal du serveur, ou de la dernière mise à jour avec `--update`.
+
+Les valeurs du fichier d'environnement sont masquées dans les journaux et les sorties. Un port occupé par un processus qui n'est pas l'aperçu n'est jamais libéré de force : `update` refuse. Configuration, forme des commandes (chaîne pour `sh -c`, tableau sans shell), masquage, sûreté et exemple Supabase : [PREVIEW.md](PREVIEW.md).
+
+Sortie : `0` succès (pour `status` : aperçu en marche), `1` échec ou aperçu arrêté, `2` appel incorrect.
 
 ## `apv status`
 
