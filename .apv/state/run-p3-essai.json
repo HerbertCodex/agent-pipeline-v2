@@ -7,7 +7,7 @@
   "baseSha": "e9da7390d9362368864027ef2d3ac97479569af2",
   "branch": "apv/p3-essai",
   "createdAt": "2026-09-23T16:55:06.490Z",
-  "updatedAt": "2026-09-23T16:55:26.501Z",
+  "updatedAt": "2026-09-23T16:57:46.080Z",
   "steps": {
     "data-model": {
       "status": "skipped",
@@ -15,9 +15,9 @@
       "updatedAt": "2026-09-23T16:55:26.501Z"
     },
     "plan": {
-      "status": "pending",
-      "note": null,
-      "updatedAt": null
+      "status": "done",
+      "note": "commit 68633cd4feba876bcdb17fca2a71362a5c942805",
+      "updatedAt": "2026-09-23T16:55:35.090Z"
     },
     "integration": {
       "status": "pending",
@@ -69,14 +69,14 @@
       "title": "Module de résumé des exécutions",
       "dependsOn": [],
       "wave": 0,
-      "status": "pending",
-      "branch": null,
-      "worktree": null,
-      "agentId": null,
-      "base": null,
+      "status": "running",
+      "branch": "apv/p3-essai-summary",
+      "worktree": "/home/herbertcodex/apv3-wt/essai-summary",
+      "agentId": "implementer-summary",
+      "base": "68633cd4feba876bcdb17fca2a71362a5c942805",
       "commit": null,
       "note": null,
-      "updatedAt": null
+      "updatedAt": "2026-09-23T16:55:35.193Z"
     },
     "HOOK": {
       "title": "Exécutions en cours au démarrage de session",
@@ -97,14 +97,14 @@
       "title": "Exécutable bin/apv",
       "dependsOn": [],
       "wave": 1,
-      "status": "pending",
-      "branch": null,
-      "worktree": null,
-      "agentId": null,
-      "base": null,
+      "status": "running",
+      "branch": "apv/p3-essai-bin",
+      "worktree": "/home/herbertcodex/apv3-wt/essai-bin",
+      "agentId": "implementer-bin-reprise",
+      "base": "68633cd4feba876bcdb17fca2a71362a5c942805",
       "commit": null,
-      "note": null,
-      "updatedAt": null
+      "note": "reprise après interruption simulée depuis 8429f01",
+      "updatedAt": "2026-09-23T16:57:46.080Z"
     },
     "DOCS": {
       "title": "Documentation à jour",
@@ -162,6 +162,35 @@
       "from": "pending",
       "to": "skipped",
       "note": "aucune base de données"
+    },
+    {
+      "at": "2026-09-23T16:55:35.090Z",
+      "target": "plan",
+      "from": "pending",
+      "to": "done",
+      "note": "commit 68633cd4feba876bcdb17fca2a71362a5c942805"
+    },
+    {
+      "at": "2026-09-23T16:55:35.193Z",
+      "target": "task:SUMMARY",
+      "from": "pending",
+      "to": "running",
+      "agentId": "implementer-summary"
+    },
+    {
+      "at": "2026-09-23T16:55:35.298Z",
+      "target": "task:BIN",
+      "from": "pending",
+      "to": "running",
+      "agentId": "implementer-bin"
+    },
+    {
+      "at": "2026-09-23T16:57:46.080Z",
+      "target": "task:BIN",
+      "from": "running",
+      "to": "running",
+      "note": "reprise après interruption simulée depuis 8429f01",
+      "agentId": "implementer-bin-reprise"
     }
   ]
 }
