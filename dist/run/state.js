@@ -23,12 +23,13 @@ const text = (max) => s.nullable(s.string(0, max));
 const at = s.string(1, 40);
 const sha = s.nullable(s.string(7, 64, /^[a-f0-9]{7,64}$/));
 const key = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const stepSchema = s.object({ status, note: text(4000), updatedAt: s.nullable(at) });
+// `commit` is optional on steps and reviews: states written before it existed stay readable.
+const stepSchema = s.object({ status, commit: s.default(sha, null), note: text(4000), updatedAt: s.nullable(at) });
 const taskSchema = s.object({
     title: s.string(1, 500), dependsOn: s.array(s.string(1, 80, key), 0, 20), wave: s.number(0, 1000), status,
     branch: text(300), worktree: text(4096), agentId: text(300), base: sha, commit: sha, note: text(4000), updatedAt: s.nullable(at),
 });
-const reviewSchema = s.object({ status, findings: s.nullable(s.number(0, 100000)), note: text(4000), updatedAt: s.nullable(at) });
+const reviewSchema = s.object({ status, findings: s.nullable(s.number(0, 100000)), commit: s.default(sha, null), note: text(4000), updatedAt: s.nullable(at) });
 const eventSchema = s.object({
     at, target: s.string(1, 200), from: s.nullable(status), to: status,
     note: s.optional(s.string(0, 4000)), commit: s.optional(s.string(7, 64)), agentId: s.optional(s.string(0, 300)),
@@ -166,6 +167,8 @@ export function applySet(state, target, options) {
         if (options.commit !== undefined)
             task.commit = options.commit;
     }
+    else if (options.commit !== undefined)
+        entry.commit = options.commit;
     if (target.kind === 'review' && options.findings !== undefined)
         entry.findings = options.findings;
     if (options.note !== undefined)

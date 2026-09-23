@@ -101,7 +101,7 @@ Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 - rouvrir un travail `done` exige `--note` (la raison est journalisée) ;
 - une tâche ne passe `running` que si toutes ses dépendances sont `done` ;
 - une tâche `done` exige `--commit` ; le commit (sha ou nom de branche) doit exister dans le dépôt et il est enregistré en entier ;
-- `--branch`, `--worktree` (chemin rendu absolu), `--agent`, `--commit` et `--base` (commit de départ de la tâche, pour la reprise) ne valent que pour une tâche ; `--findings` (nombre de constats) que pour une revue.
+- `--branch`, `--worktree` (chemin rendu absolu), `--agent` et `--base` (commit de départ de la tâche, pour la reprise) ne valent que pour une tâche ; `--findings` (nombre de constats) que pour une revue ; `--commit` vaut pour toute cible (facultatif sur une étape : commit du plan, tête intégrée ; sur une revue : commit revu), et reste vérifié dans le dépôt.
 
 **`next`** dit ce qu'il faut faire maintenant, de façon déterministe : c'est la base de la reprise après une coupure (`/apv:resume`).
 - Étape courante : la première étape non terminée (`done` ou `skipped`), avec `waves` entre `plan` et `integration` tant qu'une tâche reste à faire, et la vague courante (la plus basse qui a une tâche non terminée).
