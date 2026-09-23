@@ -182,6 +182,14 @@ Remarques :
 - Le fichier `env.status` contient des clés : il reste hors du dépôt (`~/apercu-supabase/`) et ses valeurs sont masquées dans tout ce qu'affiche `apv preview`.
 - `vite preview` est lancé par `npx` : l'arrêt vise tout le groupe de processus, `npx` et le serveur `vite` qu'il a lancé.
 
+### Essai réel (2026-09-23)
+
+Cette configuration a remplacé le script manuel du projet pilote (`update.sh`) sur la vraie pile d'aperçu, depuis une copie du dépôt : trois mises à jour de 41 à 45 s (installation 6 s, remise à zéro de la base 31 s, build 5 s, graine 2 s), page d'accueil et `/connexion` en 200, connexion du compte de démo par le lien reçu dans Mailpit (56324) jusqu'au tableau de bord, seule la base de l'aperçu redémarrée (celle des tests intacte). Différences avec le script :
+
+- le serveur manuel n'appartenait pas à `apv` : `update` a refusé le port 5190 tant qu'il tournait, il a fallu l'arrêter une fois à la main (le script, lui, tuait tout processus dont la ligne de commande contenait `vite preview --port 5190`) ;
+- la sortie des étapes est gardée, masquée, dans `preview-update.log` : le script la jetait (`>/dev/null`, `| tail -1`), ce qui cachait par exemple un rendez-vous de démonstration refusé par une contrainte de la base (`scheduled_events_modality_check`) ;
+- l'annonce dit ce qui a changé depuis l'aperçu précédent, et `status` dit si le serveur répond vraiment.
+
 ## Limites connues
 
 - Pas de bascule sans coupure : le serveur est arrêté avant la reconstruction (comme le script manuel). Pendant une mise à jour, l'aperçu ne répond pas.
