@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { validateReceipt, type Gate, type GateReceipt } from '../domain/contracts.js';
+import { gateStage, validateReceipt, type Gate, type GateReceipt, type GateStage } from '../domain/contracts.js';
 import { invariant } from '../domain/errors.js';
 import { hash } from '../domain/hash.js';
 import { environmentIdentity, executableIdentity, proofKey } from '../evidence/key.js';
@@ -22,6 +22,8 @@ export interface GateRunOptions {
   config: ApvConfig;
   /** Selected gate ids; their dependencies are added. Empty or absent: every configured gate. */
   only?: readonly string[];
+  /** `task`: only the checks of stage task run, the others are reported as reserved. `full` (default): every check. */
+  stage?: GateStage;
   /** Commit the `{{baseSha}}` placeholder stands for. */
   base?: string;
   concurrency?: number;
@@ -37,8 +39,11 @@ export interface GateRunResult {
   baseSha: string | null;
   /** True when the working tree had uncommitted changes: receipts then describe more than the commit. */
   dirty: boolean;
+  stage: GateStage;
   selected: string[];
   added: string[];
+  /** Selected checks of stage full left out of a task run: never executed, never counted as passed. */
+  reserved: string[];
   receipts: GateReceipt[];
   directory: string;
   ok: boolean;
@@ -56,6 +61,17 @@ export function selectGates(gates: readonly Gate[], only: readonly string[] = []
   return { gates: gates.filter(g => chosen.has(g.id)), added: [...chosen].filter(id => !only.includes(id)) };
 }
 
+/** Checks a stage runs, and the selected checks it leaves to the full suite. */
+export function stageGates(gates: readonly Gate[], stage: GateStage): { run: Gate[]; reserved: Gate[] } {
+  if (stage === 'full') return { run: [...gates], reserved: [] };
+  return { run: gates.filter(g => gateStage(g) === 'task'), reserved: gates.filter(g => gateStage(g) === 'full') };
+}
+
+/** Identity of the declared checks and passed variables, recorded in every receipt and compared by `apv gates verify`. */
+export function gatesConfigHash(config: ApvConfig): string {
+  return hash({ gates: config.gates, passEnv: config.environment.passEnv });
+}
+
 /**
  * Runs configured checks in the project working tree: dependency graph, named resources and read/write
  * exclusion through the V2 scheduler, only the declared variables passed, each command bounded by its
@@ -69,8 +85,11 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const candidateSha = await git.sha(repo);
   const baseSha = options.base ? await git.sha(repo, options.base) : null;
   const dirty = (await git.exec(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])) !== '';
-  const { gates, added } = selectGates(options.config.gates, options.only);
-  invariant(gates.length > 0, 'NO_GATES', 'No checks configured; declare gates in .apv/config.json');
+  const stage = options.stage ?? 'full';
+  const selection = selectGates(options.config.gates, options.only);
+  invariant(selection.gates.length > 0, 'NO_GATES', 'No checks configured; declare gates in .apv/config.json');
+  const { added } = selection;
+  const { run: gates, reserved } = stageGates(selection.gates, stage);
   const context: Record<string, string> = { workspace: repo, candidateSha, ...(baseSha ? { baseSha } : {}) };
   // Placeholders are resolved before anything runs: a missing --base never fails halfway through a batch.
   const commands = new Map(gates.map(g => {
@@ -87,11 +106,11 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   // (a gate that checks the working tree is clean must not see the receipts of its siblings).
   const ignore = join(repo, RECEIPTS_DIR, '.gitignore');
   if (!existsSync(ignore)) writeFileSync(ignore, '*\n');
-  const configHash = hash({ gates: options.config.gates, passEnv: options.config.environment.passEnv });
+  const configHash = gatesConfigHash(options.config);
   const source = options.env ?? process.env;
   const keys = new Map<string, string>();
-  const write = (receipt: GateReceipt): GateReceipt => {
-    const valid = validateReceipt(receipt);
+  const write = (receipt: Omit<GateReceipt, 'stage' | 'dirty'>): GateReceipt => {
+    const valid = validateReceipt({ ...receipt, stage, dirty });
     writeFileSync(join(directory, `${valid.gateId}.json`), JSON.stringify(valid, null, 2) + '\n');
     return valid;
   };
@@ -122,8 +141,10 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       environmentHash: hash('not-executed'), status: 'blocked', startedAt: Date.now(), durationMs: 0, exitCode: null,
       stdoutHash: '', stderrHash: '', diagnostic: reason, reusedFrom: null }),
   });
-  const result: GateRunResult = { runId, repo, candidateSha, baseSha, dirty, selected: gates.map(g => g.id), added, receipts: list, directory, ok: list.every(success) };
-  writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, ok: result.ok, selected: result.selected, added,
+  const result: GateRunResult = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
+    reserved: reserved.map(g => g.id), receipts: list, directory, ok: list.every(success) };
+  writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
+    reserved: result.reserved,
     receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, exitCode: r.exitCode, durationMs: Math.round(r.durationMs) })) }, null, 2) + '\n');
   return result;
 }

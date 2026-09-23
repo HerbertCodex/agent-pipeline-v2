@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { s, type Infer } from '../domain/schema.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { IssueList, schemaIssues, type Issue } from '../domain/issues.js';
-import { DEFAULT_PASS_ENV, envNamesSchema, gateSchema, riskSchema, validationRulesSchema } from '../domain/contracts.js';
+import { DEFAULT_PASS_ENV, envNamesSchema, gateSchema, gateStage, riskSchema, validationRulesSchema } from '../domain/contracts.js';
 import { skillsSchema } from '../domain/knowledge.js';
 import { previewSchema } from '../preview/config.js';
 import { designDir, designSchema } from '../design/config.js';
@@ -75,6 +75,11 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
   for (const gate of value.gates) {
     list.check(new Set(gate.dependsOn).size === gate.dependsOn.length, 'CONFIG', `Duplicate dependency: ${gate.id}`);
     for (const dep of gate.dependsOn) list.check(ids.includes(dep), 'CONFIG', `Unknown dependency ${dep} of gate ${gate.id}`);
+    // A task check never waits for the full suite: `apv gates run --stage task` could neither run nor skip it.
+    if (gateStage(gate) === 'task') for (const dep of gate.dependsOn) {
+      const target = value.gates.find(g => g.id === dep);
+      list.check(!target || gateStage(target) === 'task', 'CONFIG', `Gate ${gate.id} (stage task) depends on ${dep}, reserved for the full suite (stage full)`);
+    }
   }
   const ruleIds = value.validationRules.map(r => r.id);
   list.check(new Set(ruleIds).size === ruleIds.length, 'CONFIG', 'Duplicate validation rule id');

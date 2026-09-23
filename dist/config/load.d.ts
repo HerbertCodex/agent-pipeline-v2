@@ -37,6 +37,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly lanes: ("fast" | "standard" | "high")[];
         readonly mandatory: boolean;
         readonly cacheTtlMs: number;
+        readonly stage: "task" | "full" | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;

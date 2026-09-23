@@ -1,4 +1,4 @@
-import { type Gate, type GateReceipt } from '../domain/contracts.js';
+import { type Gate, type GateReceipt, type GateStage } from '../domain/contracts.js';
 import type { ApvConfig } from '../config/load.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
 export declare const RECEIPTS_DIR = ".apv/receipts";
@@ -9,6 +9,8 @@ export interface GateRunOptions {
     config: ApvConfig;
     /** Selected gate ids; their dependencies are added. Empty or absent: every configured gate. */
     only?: readonly string[];
+    /** `task`: only the checks of stage task run, the others are reported as reserved. `full` (default): every check. */
+    stage?: GateStage;
     /** Commit the `{{baseSha}}` placeholder stands for. */
     base?: string;
     concurrency?: number;
@@ -24,8 +26,11 @@ export interface GateRunResult {
     baseSha: string | null;
     /** True when the working tree had uncommitted changes: receipts then describe more than the commit. */
     dirty: boolean;
+    stage: GateStage;
     selected: string[];
     added: string[];
+    /** Selected checks of stage full left out of a task run: never executed, never counted as passed. */
+    reserved: string[];
     receipts: GateReceipt[];
     directory: string;
     ok: boolean;
@@ -35,6 +40,13 @@ export declare function selectGates(gates: readonly Gate[], only?: readonly stri
     gates: Gate[];
     added: string[];
 };
+/** Checks a stage runs, and the selected checks it leaves to the full suite. */
+export declare function stageGates(gates: readonly Gate[], stage: GateStage): {
+    run: Gate[];
+    reserved: Gate[];
+};
+/** Identity of the declared checks and passed variables, recorded in every receipt and compared by `apv gates verify`. */
+export declare function gatesConfigHash(config: ApvConfig): string;
 /**
  * Runs configured checks in the project working tree: dependency graph, named resources and read/write
  * exclusion through the V2 scheduler, only the declared variables passed, each command bounded by its

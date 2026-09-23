@@ -18,7 +18,7 @@ export const commands: Record<string, Entry> = {
   stack: { summary: 'stack plan|merge <pr...> : vérifie puis fusionne une pile de PR dans l\'ordre (fusion : APV_ALLOW_MERGE=1)', load: () => import('./stack.js') },
   ledger: { summary: 'ledger validate|plan|apply : registre des décisions', load: () => import('./ledger.js') },
   scope: { summary: 'scope check --spec <fichier> --task <id> : fichiers modifiés contre les chemins autorisés', load: () => import('./scope.js') },
-  gates: { summary: 'gates run [--only a,b] : exécute les contrôles déclarés et écrit des reçus', load: () => import('./gates.js') },
+  gates: { summary: 'gates run [--stage task|full] | verify --commit <sha> : exécute les contrôles et écrit des reçus, vérifie une preuve', load: () => import('./gates.js') },
   lock: { summary: 'lock run|acquire|release|status <ressource> : verrous à bail (propriétaire vérifié, expiration, file d\'attente)', load: () => import('./lock.js') },
   db: { summary: 'db check [--live] : contrôle du modèle de données (migrations, code, base en lecture seule)', load: () => import('./db.js') },
   design: { summary: 'design register|list|check : maquettes validées (copie, empreinte, décision au registre, dérive)', load: () => import('./design.js') },

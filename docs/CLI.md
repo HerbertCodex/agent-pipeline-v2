@@ -209,8 +209,8 @@ Sortie : `0` dans le périmètre, `1` hors périmètre, `2` appel incorrect (spe
 ## `apv gates run`
 
 ```
-apv gates run [--only a,b] [--config <fichier>] [--base <ref>] [--concurrency N]
-              [--keep-going] [--repo <chemin>] [--json]
+apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>]
+              [--concurrency N] [--keep-going] [--repo <chemin>] [--json]
 ```
 
 Exécute les contrôles déclarés dans `gates` depuis la racine du dépôt, avec l'ordonnanceur de V2 :
@@ -223,13 +223,31 @@ Exécute les contrôles déclarés dans `gates` depuis la racine du dépôt, ave
 
 Paramètres des commandes (argument entier uniquement, jamais d'interprétation par un shell) : `{{workspace}}` (racine du dépôt), `{{candidateSha}}` (HEAD), `{{baseSha}}` (commit de `--base`, obligatoire si un contrôle l'utilise).
 
+**Stage** : chaque contrôle peut déclarer `"stage": "task"` (contrôle rapide, lancé après chaque tâche) ou `"stage": "full"` (réservé à la suite complète, par exemple les tests navigateur). Champ absent : `task`, si bien qu'une configuration sans stage garde son sens (tout tourne partout). Un contrôle `task` ne peut pas dépendre d'un contrôle `full` (configuration refusée). `--stage task` exécute seulement les contrôles de stage `task` ; les contrôles `full` sélectionnés sont listés dans le tableau comme « réservé à la suite complète », dans `reserved` en JSON et dans `summary.json`, sans reçu : ils ne sont jamais comptés comme réussis. `--stage full` (défaut, comportement antérieur) exécute tout. Voir [RUN.md](RUN.md#contrôles--par-tâche-et-suite-complète) pour l'usage pendant un run.
+
 `--only` choisit des contrôles et ajoute leurs dépendances. Par défaut, le premier échec arrête les contrôles suivants ; `--keep-going` les laisse tous s'exécuter. `--concurrency` borne le parallélisme (3 par défaut).
 
-Chaque exécution écrit dans `.apv/receipts/<exécution>/` un reçu JSON par contrôle (statut, code de sortie, durée, empreintes des sorties, empreinte de preuve liée au commit, à la configuration, à l'environnement et à l'exécutable, diagnostic en cas d'échec) et un `summary.json`. Le dossier `.apv/receipts/` contient un `.gitignore` : les reçus sont des preuves locales, jamais commitées. Si l'arbre de travail avait des modifications non commitées, le résumé le signale (`dirty`) : les reçus décrivent alors plus que le commit.
+Chaque exécution écrit dans `.apv/receipts/<exécution>/` un reçu JSON par contrôle (statut, code de sortie, durée, empreintes des sorties, empreinte de preuve liée au commit, à la configuration, à l'environnement et à l'exécutable, diagnostic en cas d'échec) et un `summary.json`. Le dossier `.apv/receipts/` contient un `.gitignore` : les reçus sont des preuves locales, jamais commitées. Chaque reçu note le commit (`candidateSha`), le stage demandé (`stage`) et l'état de l'arbre (`dirty`) ; le résumé reprend `stage`, `dirty`, `selected`, `added` et `reserved`. Si l'arbre de travail avait des modifications non commitées (`dirty: true`), les reçus décrivent plus que le commit : `apv gates verify` ne les retient pas.
 
 Différences avec V2 : pas d'espace de travail jetable (l'implémenteur exécute les contrôles dans le worktree qu'il possède), pas de cache de reçus (`cacheTtlMs` est ignoré), pas de commandes de préparation (`setup`).
 
-Sortie : `0` tous les contrôles passent, `1` au moins un échec ou une configuration invalide, `2` appel incorrect.
+En JSON : `ok`, `runId`, `candidateSha`, `baseSha`, `dirty`, `stage`, `config`, `legacyConfig`, `ignoredSections`, `added`, `reserved`, `receiptsDirectory`, `gates` (contrôles exécutés).
+
+Sortie : `0` tous les contrôles exécutés passent, `1` au moins un échec ou une configuration invalide, `2` appel incorrect (dont un `--stage` inconnu ou `--commit`, propre à `verify`).
+
+## `apv gates verify`
+
+```
+apv gates verify --commit <sha> [--stage full|task] [--config <fichier>] [--repo <chemin>] [--json]
+```
+
+Vérifie, sans rien exécuter, que les reçus de `.apv/receipts/` prouvent que chaque contrôle exigé a réussi sur ce commit exact. Contrôles exigés : tous avec `--stage full` (défaut), ceux de stage `task` avec `--stage task`. `--commit` accepte toute révision que Git résout en commit (SHA complet ou abrégé, `HEAD`) ; la comparaison se fait sur le SHA complet.
+
+Pour chaque contrôle exigé, seuls comptent les reçus de ce commit, écrits sur un arbre propre (`dirty: false` ; pour un reçu plus ancien sans ce champ, celui du `summary.json` de son exécution, sinon inconnu donc refusé) et avec la configuration actuelle des contrôles (même `configHash`). Les reçus de toute exécution comptent (une exécution `--stage task` prouve ses contrôles autant qu'une suite complète), mais seul le plus récent de chaque contrôle est retenu : un échec plus récent l'emporte toujours sur une réussite plus ancienne. États : `passed` (réussi), `failed` (échec, avec le statut du reçu), `dirty` (reçus seulement sur un arbre modifié), `missing` (aucun reçu). Les fichiers illisibles et les reçus d'une autre configuration sont ignorés et signalés.
+
+En JSON : `ok`, `commit`, `stage`, `config`, `configHash`, `required`, `gates` (`gateId`, `state`, `status`, `receipt`, `runId`, `otherConfig`), `unreadable`, `missing` (contrôles non prouvés).
+
+Sortie : `0` preuve complète, `1` preuve incomplète (ce qui manque est listé, avec la commande à relancer), commit introuvable, aucun contrôle exigé ou configuration invalide, `2` appel incorrect (`--commit` absent, option propre à `run`).
 
 ## `apv lock`
 
