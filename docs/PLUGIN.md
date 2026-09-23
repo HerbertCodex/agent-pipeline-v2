@@ -49,7 +49,7 @@ Chaque agent est un fichier de `agents/`, appelé `apv:<nom>` par l'outil Agent.
 | `product` | Rédige la spec : tâches, chemins autorisés, critères, plan de sécurité ; `apv spec validate` | lecture, Bash, écriture limitée à `.apv/specs/` | aucun |
 | `architecte` | Graphe de tâches, vague « fondations », notes de vague, ressources et verrous | lecture, Bash, écriture limitée à `.apv/state/` | aucun |
 | `architecte-donnees` | Modèle de données avant le code, puis revue des migrations et requêtes avec `apv db check` | lecture, Bash, écriture de `.apv/data-model.md` (migrations sur demande) | aucun |
-| `designer` | Maquette itérée avec l'opérateur jusqu'à validation, versée comme référence | lecture, Bash, écriture dans les maquettes | aucun |
+| `designer` | Maquette itérée avec l'opérateur jusqu'à validation, versée comme référence par `apv design register` | lecture, Bash, écriture dans les maquettes | aucun |
 | `implementer` | Code une tâche, tous les contrôles au vert, commits | lecture, écriture, Bash, correcteur Svelte (MCP) | worktree |
 | `integrateur` | Fusionne une vague, unifie les doublons, garde tous les tests, relance tout | lecture, écriture, Bash, correcteur Svelte (MCP) | worktree |
 | `qa-securite` | Attaques à deux utilisateurs, API directe, en-têtes, secrets, ZAP | lecture, Bash (pas d'écriture de fichiers) | copie isolée |
@@ -65,7 +65,8 @@ Un agent de plugin ne peut pas déclarer `hooks`, `mcpServers` ni `permissionMod
 | `/apv:status` | disponible : état des specs, branches, PR, verrous, quota, aperçu |
 | `/apv:quota` | disponible : relevé des fenêtres 5 h et semaine, seuils 70, 85 et 95 % |
 | `/apv:resume` | disponible : reprise après coupure (état, Docker, piles, verrous, agents, quota) |
-| `/apv:design`, `/apv:preview` | phase 2 |
+| `/apv:design` | disponible : boucle de maquette par artefact avec l'opérateur jusqu'à sa validation explicite, puis versement par `apv design register` ([DESIGN.md](DESIGN.md)) |
+| `/apv:preview` | disponible : mise à jour de l'aperçu vivant par `apv preview update`, vérification, annonce (adresse, branche, changements, compte de démo) |
 | `/apv:init`, `/apv:spec`, `/apv:run`, `/apv:review`, `/apv:stack` | phase 3 |
 | `/apv:onboard` | phase 4 |
 
@@ -74,7 +75,7 @@ Les commandes des phases suivantes répondent déjà : elles annoncent leur phas
 ## Compétences
 
 - `chef-de-projet` : la méthode complète (délégation, planification, worktrees, vagues, intégration, revues, livraison, pile de PR, quota, verrous, reprise, aperçu, journal, communication), avec ses références.
-- `design-artefact` : boucle de maquette avec l'opérateur et versement de la référence.
+- `design-artefact` : boucle de maquette avec l'opérateur et versement de la référence (résumé pour les rôles ; le chef de projet la mène par `/apv:design`).
 - `rgpd` : grille du DPO, registres, modèles de textes sans promesse risquée.
 - `architecture-donnees` : règles de la section 13 bis, exemples SQL et tests exigés.
 - Héritées de V2, inchangées : `clean-code`, `design-patterns`, `refactoring`, `security`, `tdd`, `ui-design`.
@@ -107,6 +108,8 @@ Les variables d'autorisation se posent devant la seule commande concernée (`APV
 | `.apv/state/task.json` | marqueur de tâche d'un worktree d'implementer | non |
 | `.apv/receipts/` | reçus de `apv gates run` | non |
 | `.apv/.gitignore` | ignore les trois lignes ci-dessus ; créé ou complété par `apv quota` et par le hook de fin de tour, sans toucher aux lignes ajoutées par le projet | oui |
+
+Hors de `.apv/`, les maquettes validées vivent dans `docs/design/<nom>-validee.html` (dossier réglable par `design.dir` de `.apv/config.json`), chacune liée à sa décision `maquette-<nom>-validee` du registre par son empreinte sha256 ; les brouillons de la boucle dans `docs/design/brouillons/`.
 
 ## Ancienne version (V2)
 
