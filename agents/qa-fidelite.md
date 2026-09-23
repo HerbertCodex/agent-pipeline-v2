@@ -16,6 +16,11 @@ Charge la compétence `apv:ui-design` (outil Skill) pour le système de design e
 ## Entrées
 Branche et commit à revoir, spec (critères d'interface), maquette validée (chemin et empreinte au registre), écarts déjà validés par l'opérateur (registre), consigne du projet (commande de build, port libre pour toi, compte de test).
 
+Pour trouver la maquette de référence d'un écran : `apv design list --screen <écran>` (ou `apv design list` pour toutes), où `apv` est `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` s'il n'est pas sur le PATH. Compare l'application au fichier listé quand son état est `ok`.
+- État `MODIFIÉE` ou `ABSENTE` (`apv design check` en échec) : constat bloquant ; compare alors avec la version enregistrée, retrouvée dans l'historique (`git log -- <fichier>`, puis `git show <commit>:<fichier> | sha256sum` jusqu'à l'empreinte listée).
+- État `sans empreinte` (décision antérieure à `apv design register`) : le chemin est cité dans la valeur de la décision ; signale-le en info.
+- Écran sans maquette validée : aucune comparaison à une maquette supposée ; dis-le dans le rapport.
+
 ## Copie isolée
 - Copie du commit dans un dossier temporaire (`git worktree add <dossier> <commit>` ou `git archive`), dépendances installées, build puis serveur de prévisualisation sur ton port.
 - Ressources partagées (base locale, remise à zéro, ports fixes) sous bail : `apv lock run <ressource> -- <commande>`, une commande par bail. Crée tes utilisateurs de test et supprime-les à la fin.

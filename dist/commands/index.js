@@ -11,6 +11,7 @@ export const commands = {
     gates: { summary: 'gates run [--only a,b] : exécute les contrôles déclarés et écrit des reçus', load: () => import('./gates.js') },
     lock: { summary: 'lock run|acquire|release|status <ressource> : verrous à bail (propriétaire vérifié, expiration, file d\'attente)', load: () => import('./lock.js') },
     db: { summary: 'db check [--live] : contrôle du modèle de données (migrations, code, base en lecture seule)', load: () => import('./db.js') },
+    design: { summary: 'design register|list|check : maquettes validées (copie, empreinte, décision au registre, dérive)', load: () => import('./design.js') },
     quota: { summary: 'quota : relève l\'usage (session, semaine) et le journalise', load: () => import('./quota.js') },
     preview: { summary: 'preview update [branche]|status|stop|logs : aperçu vivant (copie de la branche, build, serveur détaché)', load: () => import('./preview.js') },
     status: { summary: 'status : résumé de .apv/ (configuration, registre, specs, état, quota)', load: () => import('./status.js') },

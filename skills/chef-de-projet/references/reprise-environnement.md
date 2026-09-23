@@ -22,6 +22,7 @@ Dans l'ordre :
 
 ## 3. Aperçu vivant
 - Environnement permanent, séparé des tests : sa propre base (jamais remise à zéro par les tests), des données de démonstration réalistes, un compte de démo.
-- Le projet décrit comment le construire dans `.apv/config` (build, migrations, graine de données, port). `apv preview update <branche>` (phase 2) le met à jour ; d'ici là, le script du projet.
-- À chaque livraison (tâche intégrée, spec en PR) : mise à jour, puis annonce à l'opérateur de l'adresse, de la branche affichée, du compte de démo et de ce qui a changé.
-- Après un redémarrage de la machine : Docker, pile de l'aperçu, puis mise à jour.
+- Le projet décrit comment le construire dans la section `preview` de `.apv/config.json` (installation, migrations, build, graine de données, service, port). La méthode complète est dans `/apv:preview` : `apv preview update [branche] | status | logs | stop` ; à défaut de la sous-commande, le script du projet.
+- À chaque livraison (spec en PR), sur demande de l'opérateur et après une reprise : mise à jour, vérification qu'il répond, puis annonce à l'opérateur de l'adresse, de la branche affichée, du compte de démo et de ce qui a changé.
+- Après un redémarrage de la machine : Docker, pile de l'aperçu, puis `apv preview update`.
+- `apv preview stop` n'arrête que l'aperçu de ce projet ; un port pris par un autre projet se signale, il ne se libère jamais de force.
