@@ -49,7 +49,7 @@ Dans une exécution, avant le lancement : `apv run set <id> review:<domaine> run
 1. Chaque rapport reçu : vérifie qu'il porte sur le bon commit et que la copie n'a aucun fichier suivi modifié (`git -C <copie> status --porcelain`) ; un écart est lui-même un constat.
 2. Une seule liste : un constat par défaut réel. Deux constats de domaines différents qui décrivent le même défaut au même endroit (même cause, même correction) sont fusionnés en gardant tous leurs identifiants et leurs preuves ; deux défauts différents au même endroit restent séparés. Aucun constat n'est écarté à ce stade, même s'il te semble faux : un faux positif se prouve à l'étape des corrections.
 3. Écris `.apv/state/revues-<id>-<sha court>.md` : commit, domaines revus et écartés (avec la raison), tableau des constats (identifiants, domaines, gravité, requis ou conseil, emplacement, preuve, correction attendue), ce qui n'a pas été vérifié et pourquoi, nettoyage confirmé par chaque revue.
-4. Dans une exécution, pour chaque domaine : `apv run set <id> review:<domaine> done --note "<n> constats, <k> requis"`, ou `failed --note "<cause>"` si le rapport manque (la revue se relance entière).
+4. Dans une exécution, pour chaque domaine : `apv run set <id> review:<domaine> done --findings <n> --note "<n> constats, <k> requis"`, ou `failed --note "<cause>"` si le rapport manque (la revue se relance entière).
 
 ## 6. Nettoyer et rendre compte
 - Retire chaque copie : `git worktree remove <copie>`. S'il refuse à cause de fichiers générés (dépendances, build), vérifie d'abord qu'aucun fichier suivi n'a changé, puis `git worktree remove --force <copie>` ; jamais sur un autre worktree que ces copies.

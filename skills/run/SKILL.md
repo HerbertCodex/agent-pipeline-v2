@@ -14,6 +14,7 @@ Dans ce document, `apv` désigne `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` (ou 
 
 ## Règles qui ne se discutent pas
 - **Jamais de fusion** dans la branche principale ni dans une autre PR, **jamais de déploiement**, jamais de force-push, jamais de réécriture d'un commit poussé. Les seules fusions de ce document sont les avances rapides locales (`git merge --ff-only`) de la branche de la spec et les fusions de l'intégrateur dans sa branche d'intégration. La pile de PR se fusionne par `/apv:stack`, sur ordre de l'opérateur.
+- **Les commandes `apv run` se lancent depuis le checkout principal du dépôt** (ou avec `--repo <checkout principal>`) : l'outil prend la racine du worktree courant, et un état écrit depuis le worktree d'une tâche serait perdu.
 - **L'état d'exécution s'écrit par l'outil seulement** (`apv run start`, `apv run set`) ; jamais d'édition à la main de `.apv/state/run-<id>.json`. Si l'outil refuse une transition, lis son message et corrige l'ordre de tes actions ; ne force rien.
 - **Un rapport d'agent est une affirmation** ; tes contrôles relancés sont la preuve. Aucune sortie masquée d'une commande qui écrit sur un service externe (incident 30).
 - Aucune question à l'opérateur avant la fin, sauf une décision qui lui revient (produit, design, comptes, identité, fusion, déploiement) : note-la, avance sur le reste, pose-la groupée.
@@ -61,7 +62,7 @@ Pour chaque vague, dans l'ordre (vague 0 = fondations, écrite par un seul agent
      ```
      Il lance un `apv:implementer` par tâche, chacun dans son worktree, avec la même consigne que le message ci-dessous, et rend un rapport structuré par tâche. Il ne touche pas à l'état : c'est toi qui le tiens.
    - **Sans outil Workflow** (désactivé, version trop ancienne, refus) : plusieurs appels à l'outil Agent **dans un même message**, un par tâche, chacun `subagent_type: "apv:implementer"`, `run_in_background: true`. C'est aussi le bon choix quand tu veux pouvoir parler à chaque agent (`SendMessage`) pendant la vague.
-6. **Juste après le lancement**, pour chaque tâche : `apv run set <id> task:<tâche> running --branch <branche> --agent <identifiant>` (identifiant de l'agent, ou `workflow:<runId>` pour une vague lancée par workflow). Note aussi le `runId` du workflow dans `.apv/state/resume.md`.
+6. **Juste après le lancement**, pour chaque tâche : `apv run set <id> task:<tâche> running --branch <branche> --base <baseCommit> --agent <identifiant>` (`--base` : le commit de départ exact de la tâche, sans lequel `apv run next` mesurerait « aucun commit après la base » depuis la base de l'exécution) (identifiant de l'agent, ou `workflow:<runId>` pour une vague lancée par workflow). Note aussi le `runId` du workflow dans `.apv/state/resume.md`.
 7. **Pendant la vague** : relevé de quota toutes les 10 à 15 minutes, préparation de la suite (notes de la vague suivante, revue du plan de la spec suivante). Tu ne codes pas à la place des agents.
 8. **À chaque rapport** (ou au rapport du workflow) :
    - vérifie la branche : `git log --oneline <base>..<branche>`, fichiers touchés ;

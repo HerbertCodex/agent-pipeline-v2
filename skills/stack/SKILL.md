@@ -15,10 +15,11 @@ Dans ce document, `apv` désigne `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` (ou 
 ## 1. Préparer
 1. Les numéros viennent des arguments, dans l'ordre de fusion (la PR la plus basse d'abord). Sans numéros : `gh pr list --state open --json number,title,baseRefName,headRefName,isDraft,url`, reconstitue la pile par les bases et fais confirmer l'ordre par l'opérateur.
 2. Méthode : celle que l'opérateur a fixée (`--method merge|squash|rebase`) ; sinon celle de l'outil par défaut. Ne la choisis pas à sa place s'il en a exprimé une.
-3. PR en brouillon : une PR brouillon ne se fusionne pas. Si l'ordre de l'opérateur vise ces PR, retire le statut brouillon PR par PR (`gh pr ready <n>`, sortie lue), puis reprends le plan. Sinon, arrête-toi et dis-le.
+3. PR en brouillon (le cas normal : `/apv:run` ouvre des brouillons) : sans option, un brouillon est une anomalie du plan. Si l'ordre de l'opérateur vise ces PR, ajoute `--ready` au plan et à la fusion : l'outil retire le statut brouillon (`gh pr ready`) juste avant chaque fusion. Sinon, arrête-toi et dis-le.
+4. Branche cible : par défaut la base de la première PR ; `--target <branche>` si l'opérateur en a nommé une autre.
 
 ## 2. Plan, montré en entier
-`apv stack plan <pr...>` (ajoute `--json` seulement pour le traiter, et montre quand même la sortie humaine). L'outil lit chaque PR par `gh pr view` et vérifie : PR ouverte, base de la PR n+1 = tête de la PR n (la première vise la branche cible), fusionnable, contrôles au vert ou absents.
+`apv stack plan <pr...> [--ready] [--target <branche>]` (ajoute `--json` seulement pour le traiter, et montre quand même la sortie humaine). L'outil lit chaque PR par `gh pr view` et vérifie : PR ouverte, base de la PR n+1 = tête de la PR n (la première vise la branche cible), fusionnable, contrôles au vert ou absents.
 
 Montre **toute** la sortie à l'opérateur, sans la résumer ni la couper : PR, bases, têtes, état, contrôles. Sortie non nulle (code 1 : pile incohérente ; code 2 : appel incorrect) : arrêt, explique l'anomalie et ce qu'il faut corriger ; rien n'est fusionné.
 
@@ -26,7 +27,7 @@ Montre **toute** la sortie à l'opérateur, sans la résumer ni la couper : PR, 
 Si le message courant de l'opérateur contient l'ordre de fusionner ces PR (voir le début de ce document), passe à l'étape 4. Si son message demandait seulement le plan, ou si le plan révèle quelque chose qu'il n'a pas pu voir (une base inattendue, un contrôle rouge), montre-le et attends son ordre.
 
 ## 4. Fusionner
-`APV_ALLOW_MERGE=1 apv stack merge <pr...> [--method <méthode>]`
+`APV_ALLOW_MERGE=1 apv stack merge <pr...> [--method <méthode>] [--ready] [--target <branche>]` (mêmes options qu'au plan)
 
 - La variable se pose devant **cette seule commande**, jamais par `export`, jamais dans une autre commande. Le hook du plugin bloque la fusion sans elle (code 2 avec son message) : ne cherche pas à le contourner, et n'utilise jamais `gh pr merge` à la place de l'outil.
 - L'outil revérifie chaque PR **juste avant** de la fusionner, re-cible la suivante sur la base finale quand la précédente est fusionnée, vérifie le résultat par une relecture (jamais par le seul code de sortie), affiche la sortie complète de chaque appel `gh`, et s'arrête à la première anomalie avec un rapport.

@@ -39,7 +39,7 @@ Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 | Commande | Rôle |
 |---|---|
 | `apv run start <spec> [--base <branche>]` | valide la spec (même logique que `apv spec validate`), calcule les vagues, crée l'état ; refuse si l'état existe déjà |
-| `apv run set <id> <cible> <statut> [--branch] [--worktree] [--agent] [--commit] [--note]` | une transition : cible = une étape, `task:<tâche>` ou `review:<domaine>` (`securite`, `fidelite`, `donnees`, `rgpd`). Une tâche ne passe `running` que si ses dépendances sont `done` ; `done` exige `--commit` pour une tâche |
+| `apv run set <id> <cible> <statut> [--branch] [--worktree] [--agent] [--commit] [--base] [--findings] [--note]` | une transition : cible = une étape, `task:<tâche>` ou `review:<domaine>` (`securite`, `fidelite`, `donnees`, `rgpd`). Une tâche ne passe `running` que si ses dépendances sont `done` ; `done` exige `--commit` pour une tâche |
 | `apv run next <id>` | ce qu'il faut faire maintenant, de façon déterministe : étape courante, tâches prêtes, tâches `running` à reprendre (branche, worktree, agent, dernier commit), tâches « à relancer » (worktree disparu ou aucun commit après la base), revues à lancer |
 | `apv run status [<id>]` | résumé de toutes les exécutions ou d'une seule ; `apv status` affiche aussi une ligne par exécution en cours |
 
@@ -104,8 +104,9 @@ Une spec qui dépend d'une spec précédente non fusionnée part de sa branche :
 La pile se fusionne **uniquement sur ordre explicite de l'opérateur**, par `/apv:stack <pr...>` :
 
 1. `apv stack plan <pr...>` lit chaque PR (`gh pr view`) et vérifie la pile : chaque PR ouverte, la base de la PR n+1 est la tête de la PR n (la première vise la branche cible), fusionnable, contrôles au vert ou absents. Sa sortie est montrée en entier à l'opérateur.
-2. `APV_ALLOW_MERGE=1 apv stack merge <pr...> [--method merge|squash|rebase]` refait la vérification **juste avant chaque fusion**, re-cible la PR suivante sur la base finale quand la précédente est fusionnée, vérifie le résultat par une relecture (jamais par le seul code de sortie), affiche en entier la sortie de chaque appel `gh` et s'arrête à la première anomalie avec un rapport.
-3. Le hook du plugin bloque `apv stack merge` (comme `gh pr merge`) sans `APV_ALLOW_MERGE=1` posé devant la commande.
+2. `APV_ALLOW_MERGE=1 apv stack merge <pr...> [--method merge|squash|rebase] [--ready] [--target <branche>]` refait la vérification **juste avant chaque fusion**, re-cible la PR suivante sur la base finale quand la précédente est fusionnée, vérifie le résultat par une relecture (jamais par le seul code de sortie), affiche en entier la sortie de chaque appel `gh` et s'arrête à la première anomalie avec un rapport.
+3. Une PR brouillon (celles de `/apv:run`) est une anomalie sans `--ready`, qui retire le statut brouillon juste avant chaque fusion ; `--target` fixe la branche d'arrivée (par défaut la base de la première PR).
+4. Le hook du plugin bloque `apv stack merge` (comme `gh pr merge`) sans `APV_ALLOW_MERGE=1` posé devant la commande.
 
 C'est la réponse à l'incident 30 du projet pilote : des re-ciblages masqués avaient échoué en silence et chaque PR avait été fusionnée dans la branche de la précédente au lieu de la branche principale.
 
