@@ -1,7 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import { taskSchema,configSchema,agentOutputSchema,transition,validateConfig } from '../dist/domain/contracts.js';
-import { configAdvice } from '../dist/lifecycle/capabilities.js';
+import { taskSchema,configSchema,validateConfig } from '../dist/domain/contracts.js';
 import { hash,canonical } from '../dist/domain/hash.js';
 import { matches,validRelativePath,classify,planGates,assertScope,validateDag,requiredApprovals } from '../dist/policy/policy.js';
 import { cfg,task,rawConfig,baseTask } from './helpers.mjs';
@@ -24,8 +23,6 @@ test('empty command agent rejected',()=>assert.throws(()=>cfg({agent:{type:'comm
 test('duplicate gate ids rejected',()=>assert.throws(()=>cfg({gates:[{id:'a',command:['true']},{id:'a',command:['true']}]}),/Duplicate/));
 test('unknown dependency rejected',()=>assert.throws(()=>cfg({gates:[{id:'a',command:['true'],dependsOn:['missing']}]}),/Unknown/));
 test('cycle rejected before executing any gate',()=>assert.throws(()=>validateDag(cfg({gates:[{id:'a',command:['true'],dependsOn:['b']},{id:'b',command:['true'],dependsOn:['a']}]}).gates),/cycle/));
-test('agent cannot submit an authoritative verdict',()=>assert.throws(()=>agentOutputSchema.parse({summary:'done',passed:true}),/unknown/));
-test('agent summary cannot be empty',()=>assert.throws(()=>agentOutputSchema.parse({summary:''})));
 test('JSON schemas expose strict additionalProperties and required fields',()=>{
   assert.equal(configSchema.json.additionalProperties,false);assert.ok(configSchema.json.required.includes('executionMode'));
   assert.ok(!taskSchema.json.required.includes('minimumLane'));
@@ -75,20 +72,3 @@ test('high lane runs all configured checks',()=>{
 });
 test('empty selected validation is an error, never success',()=>assert.throws(()=>planGates(cfg({gates:[{id:'a',command:['true'],lanes:['high']}]}),{files:['README.md'],lines:1,binary:false},'fast'),/No checks/));
 test('approval thresholds adapt to solo, team and regulated review modes',()=>{ assert.deepEqual(['fast','standard','high'].map(x=>requiredApprovals(x,'team')),[0,1,2]); assert.deepEqual(['fast','standard','high'].map(x=>requiredApprovals(x,'solo')),[0,1,1]); assert.deepEqual(['fast','standard','high'].map(x=>requiredApprovals(x,'regulated')),[1,1,2]); });
-test('state machine refuses skipped verification',()=>assert.throws(()=>transition({state:'implementing'},'ready'),/Illegal transition/));
-test('valid transition updates state',()=>{const r={state:'created'};transition(r,'preparing');assert.equal(r.state,'preparing');});
-
-test('validation proof outlives the human review it protects', () => {
-  const config = validateConfig({ schemaVersion: 1, executionMode: 'local-trusted', environment: { id: 'freshness' },
-    agent: { type: 'command', command: [process.execPath, '-e', 'process.exit(0)'] },
-    gates: [{ id: 'unit', command: ['npm', 'test'] }] });
-  // The bound guards approval against proof that no longer describes the environment. It cannot be
-  // shorter than the step it protects: reading a diff and merging it takes longer than an hour.
-  assert.equal(config.validationMaxAgeMs, 86400000);
-  assert.deepEqual(configAdvice(config).filter(a => a.setting === 'validationMaxAgeMs'), []);
-
-  const cutting = validateConfig({ ...config, validationMaxAgeMs: 60000 });
-  const advice = configAdvice(cutting).find(a => a.setting === 'validationMaxAgeMs');
-  assert.ok(advice, 'a proof that expires during a review is flagged, never silently accepted');
-  assert.match(advice.why, /human review/);
-});

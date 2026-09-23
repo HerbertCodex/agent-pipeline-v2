@@ -1,0 +1,22 @@
+{
+  "name": "herbertcodex-apv",
+  "owner": {
+    "name": "Herbert Codex",
+    "url": "https://github.com/HerbertCodex"
+  },
+  "description": "Catalogue du plugin Agent Pipeline V3 (apv).",
+  "plugins": [
+    {
+      "name": "apv",
+      "source": "./",
+      "description": "Agent Pipeline V3 : chef de projet, sous-agents spécialisés, vagues parallèles, revues indépendantes et garde-fous.",
+      "author": {
+        "name": "Herbert Codex",
+        "url": "https://github.com/HerbertCodex"
+      },
+      "repository": "https://github.com/HerbertCodex/agent-pipeline-v2",
+      "license": "MIT",
+      "category": "development"
+    }
+  ]
+}

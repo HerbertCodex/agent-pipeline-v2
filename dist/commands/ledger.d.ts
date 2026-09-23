@@ -1,0 +1,3 @@
+import type { CommandIO } from './io.js';
+export declare const usage = "Utilisation :\n  apv ledger validate [--repo <chemin>] [--json]\n  apv ledger plan --file <mise-a-jour.json> [--repo <chemin>]\n  apv ledger apply --file <mise-a-jour.json> --hash <empreinte> --note <texte>\n                   [--reviewer <nom>] [--commit] [--repo <chemin>]\n\nRegistre des d\u00E9cisions : .apv/DECISIONS.json, ou .agent-pipeline/DECISIONS.json pour un projet V2.\nvalidate liste toutes les erreurs ; plan affiche le registre obtenu et son empreinte ;\napply \u00E9crit exactement le plan relu (m\u00EAme empreinte), et le commite avec --commit.";
+export declare function run(args: string[], io: CommandIO): Promise<number>;

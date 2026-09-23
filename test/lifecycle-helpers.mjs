@@ -1,17 +1,52 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { Lifecycle } from '../dist/index.js';
 import { assessSecurity } from '../dist/security/owasp.js';
-import { makeLifecycleFixture, demoSpec, git } from '../examples/lifecycle-fixture.mjs';
-export { git, demoSpec };
-export function fixture(t, config = {}) { const root = mkdtempSync(join(tmpdir(), 'apv2-life-test-')); const f = makeLifecycleFixture(root); const life = new Lifecycle(f.state); t.after(() => { try {
-    life.close();
+import { git } from './helpers.mjs';
+export { git };
+export function demoSpec(questions = false) {
+    return {
+        title: 'Multiplication et documentation', problem: 'Le module arithmétique ne fournit pas de multiplication documentée et testée.',
+        scope: ['Ajouter multiply(a,b) et ses tests positifs et négatifs.', 'Documenter son usage.'], outOfScope: ['Aucune dépendance supplémentaire ni déploiement.'],
+        acceptance: [{ id: 'AC-MATH', description: 'multiply renvoie le produit pour des arguments positifs et négatifs, avec des tests dédiés.', verification: 'Tests de multiply(2,3) et multiply(-2,3).' },
+            { id: 'AC-DOC', description: 'La documentation contient un exemple de multiplication.', verification: 'Inspecter docs/math.md.' }],
+        decisions: questions ? [] : [{ question: 'Gestion des nombres négatifs ?', answer: 'Les nombres négatifs sont inclus.' }],
+        decisionCoverage: [],
+        questions: questions ? [{ id: 'Q-NEG', question: 'Faut-il prendre en charge et tester les nombres négatifs ?' }] : [],
+        tasks: [{ id: 'MATH', title: 'Ajouter la multiplication', description: 'Implémenter multiply et écrire ses tests.', acceptanceIds: ['AC-MATH'], allowedPaths: ['src/math.mjs', 'test/math.test.mjs'], dependsOn: [], minimumLane: 'standard' },
+            { id: 'DOC', title: 'Documenter la multiplication', description: 'Documenter multiply avec un exemple.', acceptanceIds: ['AC-DOC'], allowedPaths: ['docs/math.md'], dependsOn: ['MATH'], minimumLane: 'fast' }], minimumLane: 'standard'
+    };
 }
-catch { } rmSync(root, { recursive: true, force: true }); }); return { ...f, root, life, config: { ...f.config, ...config } }; }
+/** Gates of the arithmetic fixture, in the V2 configuration format (read as is by V3). */
+export function fixtureConfig() {
+    return {
+        schemaVersion: 1, executionMode: 'local-trusted', environment: { id: 'offline-lifecycle-fixture' },
+        agent: { type: 'command', command: [process.execPath, '-e', 'process.exit(0)'] },
+        gates: [{ id: 'syntax', command: [process.execPath, '--check', 'src/math.mjs'] }, { id: 'unit', command: [process.execPath, '--test', 'test/math.test.mjs'] },
+            { id: 'diff-check', command: ['git', 'diff', '--check', '{{baseSha}}', '{{candidateSha}}'], mandatory: true }], concurrency: 3,
+    };
+}
+export function makeLifecycleFixture(root) {
+    const repo = join(root, 'repo');
+    mkdirSync(repo, { recursive: true });
+    const files = { '.gitignore': 'node_modules/\ndist/\n', 'AGENTS.md': '# Existing operator instructions\nDo not erase this text.\n',
+        'README.md': '# Lifecycle fixture\n', 'docs/math.md': '# Math\n\nAddition only.\n', 'src/math.mjs': 'export const add = (a, b) => a + b;\n',
+        'test/math.test.mjs': "import {test} from 'node:test';import assert from 'node:assert/strict';import {add} from '../src/math.mjs';test('addition',()=>assert.equal(add(2,3),5));\n",
+        'package.json': JSON.stringify({ name: 'apv2-lifecycle-fixture', version: '1.0.0', private: true, type: 'module', scripts: { test: 'node --test test/math.test.mjs' } }, null, 2) + '\n',
+        'package-lock.json': JSON.stringify({ name: 'apv2-lifecycle-fixture', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'apv2-lifecycle-fixture', version: '1.0.0' } } }, null, 2) + '\n' };
+    for (const [path, text] of Object.entries(files)) {
+        mkdirSync(dirname(join(repo, path)), { recursive: true });
+        writeFileSync(join(repo, path), text, { flag: 'wx' });
+    }
+    git(repo, 'init', '-q');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-qm', 'Green baseline before feature work');
+    return { repo, config: fixtureConfig() };
+}
+
+/** Arithmetic fixture repository, removed after the test. */
+export function fixture(t) { const root = mkdtempSync(join(tmpdir(), 'apv3-life-test-')); t.after(() => rmSync(root, { recursive: true, force: true })); return { ...makeLifecycleFixture(root), root }; }
 export function oneTask() { const spec = demoSpec(); spec.scope = [spec.scope[0]]; spec.acceptance = [spec.acceptance[0]]; spec.tasks = [spec.tasks[0]]; return spec; }
-export async function approved(f, proposal = demoSpec()) { let doc = await f.life.draft({ repo: f.repo, config: f.config, request: 'Implement the approved arithmetic example.', proposal }); return f.life.approveSpec(doc.id, doc.data.contentHash, 'Test Product Owner', 'Fixture approval after inspecting scope and criteria.'); }
-export function passingQa(doc, sha = doc.data.currentSha) { return { candidateSha: sha, verdict: 'pass', summary: 'Fixture QA assessment.', criteria: doc.data.content.acceptance.map(c => ({ id: c.id, status: 'pass', evidence: 'Fixture inspected source and test evidence.' })), findings: [], observations: [] }; }
 /** Fills a fixture spec with the security plan the controller routes for a request, when it routes any. */
 export function withSecurity(spec, request, projectType = 'unknown') {
   const ctx = assessSecurity({ text: request, projectType, files: [] });

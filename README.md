@@ -1,113 +1,48 @@
 <div align="center">
 
-<img src="docs/assets/readme-banner.svg" alt="Agent Pipeline V2 — Du besoin au code vérifié : cadrer, construire, vérifier." width="1120">
+# Agent Pipeline V3
 
-# Agent Pipeline V2
+**Un chef de projet Claude Code, de vrais sous-agents, des garde-fous qui ont fait leurs preuves.**
 
-**Des agents pour développer. Un moteur pour garder le contrôle.**
-
-Pipeline locale de développement avec **Codex CLI**, **Claude Code CLI** ou un adaptateur `command`.
-
-[![Version](https://img.shields.io/badge/alpha-2.0.0--alpha.8-a8461a?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/alpha-3.0.0--alpha.1-a8461a?style=flat-square)](docs/PLUGIN.md)
 [![CI](https://github.com/HerbertCodex/agent-pipeline-v2/actions/workflows/ci.yml/badge.svg)](https://github.com/HerbertCodex/agent-pipeline-v2/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A5%2022.16-2d6e45?style=flat-square)](package.json)
 [![License](https://img.shields.io/badge/licence-MIT-55514a?style=flat-square)](LICENSE)
-
-[Démarrer](#démarrer) · [Les parcours](#les-parcours) · [La qualité](#la-qualité-en-pratique) · [Les guides](#les-guides)
 
 </div>
 
 ---
 
-## Le principe
+APV3 est un plugin Claude Code. L'opérateur délègue ; la session principale devient chef de projet : elle fait rédiger la spec, concevoir les données, coder les tâches en parallèle dans des worktrees, intégrer, faire relire par des revues indépendantes (sécurité, fidélité à la maquette, données, RGPD), puis ouvre des PR brouillon. Elle ne rappelle l'opérateur que pour ce qui lui revient, ou à la fin.
 
-Vous définissez le besoin et approuvez les décisions. Les agents cadrent, implémentent et relisent le code. Le moteur gère les worktrees Git, les contrôles, les preuves et les reprises.
+## Ce que contient le plugin
 
-| Cadrer | Construire | Vérifier |
-| --- | --- | --- |
-| Une spec courte, des critères observables et les décisions du projet. | Des tâches cohérentes, la réutilisation de l’existant et des réparations bornées. | Des tests exécutés, une QA adaptée au risque et un candidat prêt à relire. |
-
-Le **tableau de bord local** rassemble les projets, l’activité des agents, les décisions attendues et les preuves manquantes. Vous gardez la main sur la revue finale et la publication.
+- **9 sous-agents** : `product`, `architecte`, `architecte-donnees`, `designer`, `implementer`, `integrateur`, `qa-securite`, `qa-fidelite`, `dpo`.
+- **La méthode du chef de projet** (compétence `chef-de-projet`) : vagues parallèles précédées des fondations, verrous à bail, suivi du quota et sauvegarde, reprise après coupure, pile de PR, journal du pipeline.
+- **Des commandes** `/apv:status`, `/apv:quota`, `/apv:resume` (les autres arrivent par phases).
+- **Des hooks** : contexte de reprise au démarrage ; blocage du force-push, de la fusion et du déploiement hors commande dédiée, et des écritures GitHub à sortie masquée.
+- **L'outil `apv`** (TypeScript, sans dépendance) : validation des specs, registre des décisions, contrôles, périmètre, verrous, contrôle du modèle de données, quota.
 
 ## Démarrer
 
-**Prérequis :** Git, Node.js ≥ 22.16 et Linux ou macOS. Installez et authentifiez le CLI du fournisseur choisi. Gardez le framework dans un dossier distinct de l’application.
-
-```bash
-git clone https://github.com/HerbertCodex/agent-pipeline-v2.git
-cd agent-pipeline-v2
-node dist/cli.js --version
-node dist/cli.js ui
+```
+/plugin marketplace add HerbertCodex/agent-pipeline-v2@apv3
+/plugin install apv@herbertcodex-apv
 ```
 
-Le JavaScript compilé est livré dans le dépôt. Ouvrez l’adresse locale complète affichée par `ui` : elle contient un jeton d’accès à usage unique.
+Puis suivez [START-HERE.md](START-HERE.md). Détails : [docs/PLUGIN.md](docs/PLUGIN.md). Outil `apv` : [docs/CLI.md](docs/CLI.md). Spécification : [docs/APV3-SPEC.md](docs/APV3-SPEC.md).
 
-**Pour démarrer avec votre assistant, utilisez le [prompt de démarrage](START-HERE.md).** Il couvre le choix du fournisseur, la création d’un projet et la configuration d’un dépôt existant. Deux portes d'entrée selon le cas : [nouveau projet](prompts/BOOTSTRAP.md) pour un dépôt vide, [projet déjà commencé](prompts/ONBOARDING.md) pour un dépôt existant, avec ou sans historique d'assistance par IA.
-
-<details>
-<summary><strong>Vous préférez le terminal ?</strong></summary>
-
-Depuis le dossier du framework, préparez la configuration d’un projet existant :
-
-```bash
-node dist/cli.js onboard --repo /chemin/mon-application --provider codex --review-mode solo
-```
-
-Relisez le plan et suivez son `nextAction` pour l’appliquer. Une fois le projet configuré :
-
-```bash
-node dist/cli.js spec draft --repo /chemin/mon-application --request "Décrire la fonctionnalité"
-node dist/cli.js spec show SPEC_ID
-```
-
-`spec show` indique ensuite l’action attendue : clarification, approbation, exécution ou revue. Pour un nouveau projet, utilisez [`bootstrap`](prompts/BOOTSTRAP.md) ; pour un dépôt existant, [`onboard`](prompts/ONBOARDING.md). Le [guide du cycle de vie](docs/LIFECYCLE.md) décrit les commandes et les reprises.
-
-</details>
-
-## Les parcours
-
-| Votre besoin | Le parcours |
-| --- | --- |
-| **Correction locale** au besoin précis | Tâche compacte → implémentation → contrôles. |
-| **Fonctionnalité courante** | Product court → implémentation → contrôles → QA ciblée. |
-| **Migration, auth ou changement structurant** | Exploration → décision d’architecture → plan → implémentation → validation renforcée. |
-
-Le diff réel peut renforcer les contrôles et rétablir la QA du parcours compact. Une petite modification UI réutilise le design existant. [Détails des parcours →](docs/LIFECYCLE.md#choisir-le-parcours)
-
-## La qualité en pratique
-
-- **Architecture justifiée.** Un choix structurant expose sa contrainte, l’option plus simple, les compromis, les risques et les conditions de réexamen.
-- **Code simple.** Six skills guident la lisibilité, les patterns utiles, le refactoring, la sécurité, les tests et le design UI.
-- **Preuves concrètes.** En mode `evidence`, les changements concernés exigent build, intégration ou navigateur ; les cas négatifs de sécurité sont reliés aux fichiers de tests et aux résultats du runner.
-- **Blocages utiles.** Une preuve obligatoire manquante suspend la validation sans déclencher automatiquement une réparation de code. Ces contrôles s’appliquent aussi au parcours compact.
-
-**Activation :** les nouvelles configurations `init`/onboarding proposent `workflow.qualityReview: "evidence"`. Un projet existant conserve `legacy` jusqu’à une modification explicite de sa configuration pour une nouvelle spec. Les commandes, labels de couverture et règles de dépendances doivent correspondre au projet. [Configurer les preuves de qualité →](docs/QUALITY.md)
-
-## Les guides
-
-[Consulter toute la documentation →](docs/README.md)
-
-| Pour… | Lire |
-| --- | --- |
-| Lancer votre premier projet | [Démarrage avec l’assistant](START-HERE.md) |
-| Configurer les commandes et les fournisseurs | [Configuration](docs/CONFIGURATION.md) · [Modèles et QA](docs/MODELS.md) · [Adaptateurs](docs/ADAPTERS.md) |
-| Comprendre les rôles et leurs consignes | [Rôles](docs/ROLES.md) · [Skills](docs/SKILLS.md) |
-| Suivre une spec, une reprise ou une livraison | [Cycle de vie](docs/LIFECYCLE.md) |
-| Exiger des preuves de qualité | [Qualité et validation](docs/QUALITY.md) |
-| Comprendre les choix et les frontières | [Architecture](docs/ARCHITECTURE.md) · [Décisions](docs/DECISIONS.md) · [Sécurité](docs/SECURITY.md) · [OWASP](docs/OWASP-SECURITY.md) |
-| Consulter les évolutions et les mesures | [Changelog](CHANGELOG.md) · [Performance](docs/PERFORMANCE.md) |
-
-## Développer le framework
+## Développer
 
 ```bash
 npm ci --ignore-scripts
-npm run check
-npm run demo:lifecycle
-npm run check:package
+npm test
 ```
 
-Les [résultats de validation](validation/VALIDATION.md) sont datés et précisent l'état du code testé. Les tests de fournisseurs utilisent des doublures sauf pilote explicite ; ils ne mesurent pas à eux seuls la qualité d’un modèle.
+## Ancienne version (V2)
+
+Le CLI `apv2` (dernière version 2.0.0-alpha.8, contrôleur qui enchaîne les rôles) reste disponible sur la branche `main` jusqu'à la fusion d'APV3. Son guide de démarrage est archivé dans [docs/v2/START-HERE.md](docs/v2/START-HERE.md) et son historique dans le [CHANGELOG](CHANGELOG.md).
 
 ---
 
-**Statut : alpha · Usage local sur des dépôts de confiance.** La pipeline n’est pas une sandbox OS. Les effets externes et la livraison restent explicites. [Limites de sécurité](docs/SECURITY.md) · [Licence MIT](LICENSE)
+**Statut : alpha, phase 1 (socle).** Usage local sur des dépôts de confiance ; les hooks sont des garde-fous, pas une sandbox. [Licence MIT](LICENSE)

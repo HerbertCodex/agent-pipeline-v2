@@ -1,5 +1,7 @@
 # Skills
 
+> **Écrit pour V2.** Les six compétences sont reprises telles quelles dans `skills/` du plugin APV3, à côté des nouvelles ([plugin](PLUGIN.md)) ; le chargement par rôle du contrôleur décrit V2.
+
 ## Catalogue et origine
 
 Les six familles `clean-code`, `design-patterns`, `refactoring`, `security`, `tdd`, `ui-design` sont adaptées de l'archive V1 fournie. Les six `SKILL.md` ont été révisés pour la V2 ; 42 documents de référence/checklists sont fournis comme exemples techniques, sous MIT. Leur présence ne porte pas automatiquement les contrôles métier V1.
@@ -29,7 +31,7 @@ apv2 inspect --repo /chemin/projet
 
 ## Chargement, budget et audit
 
-Le contrôleur injecte les SKILL.md sélectionnés dans `guidance.skills`. Il charge les instructions du rôle depuis `roles/*.md`. Les fichiers complets de référence ne sont pas injectés dans le prompt ; ils sont copiés lors de l'installation approuvée et les chemins relatifs sont indiqués. Un rôle ne doit lire que les ressources utiles.
+Le contrôleur injecte les SKILL.md sélectionnés dans `guidance.skills`. Il charge les instructions du rôle depuis `roles/*.md` (archivés dans [v2/roles/](v2/roles/)). Les fichiers complets de référence ne sont pas injectés dans le prompt ; ils sont copiés lors de l'installation approuvée et les chemins relatifs sont indiqués. Un rôle ne doit lire que les ressources utiles.
 
 La limite `maxContextBytes` couvre les corps SKILL.md en UTF-8, pas le prompt entier ni un nombre de tokens. Si un skill ne tient pas, il est omis entièrement avec la raison `context-budget`, jamais tronqué. L'ordre est celui du manifeste. Les autres raisons sont `disabled`, `role`, `project-type`, `task`.
 
@@ -55,6 +57,6 @@ Le skill ne crée ni politique, ni autorisation, ni verdict de conformité. Le `
 
 ## Conventions CSS et preuves
 
-`ui-design` demande BEM par défaut pour les nouvelles classes de composants en CSS global, sauf convention existante ou décision confirmée différente. CSS Modules, styles encapsulés et frameworks utilitaires conservent leurs conventions. Le framework contrôle son propre CSS avec `npm run lint:css` ; le [profil Stylelint réutilisable](../examples/stylelint-bem.config.mjs) ne s'installe pas automatiquement dans les projets.
+`ui-design` demande BEM par défaut pour les nouvelles classes de composants en CSS global, sauf convention existante ou décision confirmée différente. CSS Modules, styles encapsulés et frameworks utilitaires conservent leurs conventions. Le [profil Stylelint réutilisable](../skills/ui-design/references/stylelint-bem.config.mjs), livré avec la compétence, ne s'installe pas automatiquement dans les projets.
 
 Les skills guident les choix ; le mode `workflow.qualityReview: "evidence"` exige séparément les preuves exécutées et la revue structurée. Une instruction de test ou de design pattern n'est pas une preuve de conformité. Voir [les critères de qualité](QUALITY.md).

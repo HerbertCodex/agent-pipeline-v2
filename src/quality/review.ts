@@ -1,8 +1,8 @@
 import { s, type Infer } from '../domain/schema.js';
 import { invariant } from '../domain/errors.js';
-import { validationKinds, type Run } from '../domain/contracts.js';
+import { validationKinds, type ChangeSet, type GateReceipt, type RiskDecision } from '../domain/contracts.js';
 import type { SpecRecord } from '../lifecycle/contracts.js';
-import { validRelativePath, gateApplies, isCodeChange, isUiChange, validationRequirements, type ValidationRequirement } from '../policy/policy.js';
+import { validRelativePath, gateApplies, isCodeChange, isUiChange, validationRequirements, type PolicyConfig, type ValidationRequirement } from '../policy/policy.js';
 
 export const qualityAxes = ['architecture', 'simplicity', 'reuse', 'tests', 'operations', 'ui'] as const;
 const ref = s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
@@ -13,8 +13,23 @@ export const qualityCheckSchema = s.object({
 });
 export type QualityCheck = Infer<typeof qualityCheckSchema>;
 
+/**
+ * What a validation produced for one candidate: the reviewed configuration, the checks selected for it and
+ * their receipts. V2 read it from a controller run; V3 builds it from receipts written by `apv gates run`.
+ */
+export interface ValidationSubject {
+  id: string;
+  config: PolicyConfig;
+  configHash: string;
+  candidateSha: string | null;
+  changeSet: ChangeSet | null;
+  risk: RiskDecision | null;
+  gateIds: string[];
+  receipts: GateReceipt[];
+}
+
 /** Describes receipts already verified by the pipeline, not test quality or semantic coverage. */
-export function validationEvidence(run: Run) {
+export function validationEvidence(run: ValidationSubject) {
   const gates = run.config.gates.map(g => {
     const selected = run.gateIds.includes(g.id);
     const receipts = selected ? run.receipts.filter(r => r.gateId === g.id && r.runId === run.id &&
@@ -40,7 +55,7 @@ const guidance: Record<typeof qualityAxes[number], string> = {
   ui: 'Review real states, keyboard behavior, responsive layout and existing CSS conventions. Distinguish source inspection from observed browser checks.',
 };
 
-export function qualityContext(record: Pick<SpecRecord, 'config' | 'content' | 'executionPath' | 'architecture'>, run: Run) {
+export function qualityContext(record: Pick<SpecRecord, 'content' | 'executionPath' | 'architecture'> & { config: PolicyConfig }, run: ValidationSubject) {
   const files = run.changeSet?.files ?? [];
   const code = isCodeChange(files);
   const declaredUi = record.content?.experience?.uiImpact;
@@ -56,7 +71,7 @@ export function qualityContext(record: Pick<SpecRecord, 'config' | 'content' | '
     axes: qualityAxes.map(axis => ({ axis, required: axis === 'ui' ? ui : axis === 'operations' ? run.risk?.lane === 'high' : code,
       guidance: guidance[axis] })), validation };
 }
-export function requiredEvidence(run: Run, requirements = validationRequirements(run.config, run.changeSet?.files ?? [], run.risk?.lane ?? 'standard')) {
+export function requiredEvidence(run: ValidationSubject, requirements = validationRequirements(run.config, run.changeSet?.files ?? [], run.risk?.lane ?? 'standard')) {
   const validation = validationEvidence(run);
   return { ...validation, requirements: requirements.map(r => {
     const gates = validation.gates.filter(g => g.receiptId && g.covers.some(k => r.anyOf.includes(k)) && (!r.paths?.length || gateApplies(g, r.paths)));

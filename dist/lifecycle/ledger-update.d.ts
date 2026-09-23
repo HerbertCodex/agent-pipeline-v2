@@ -24,6 +24,8 @@ export declare const ledgerUpdateSchema: import("../domain/schema.js").Schema<{
 export type LedgerUpdate = Infer<typeof ledgerUpdateSchema>;
 export interface LedgerUpdatePlan {
     repo: string;
+    /** Repository-relative ledger file: `.apv/DECISIONS.json`, or the V2 location for a V2 project. */
+    file: string;
     baseSha: string;
     currentLedgerHash: string;
     added: string[];

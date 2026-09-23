@@ -1,0 +1,77 @@
+import { type Infer } from '../domain/schema.js';
+import { type Issue } from '../domain/issues.js';
+import type { PolicyConfig } from '../policy/policy.js';
+/** V3 project configuration, versioned with the project. */
+export declare const CONFIG_FILE = ".apv/config.json";
+/** V2 configuration, read as is for projects not yet migrated. */
+export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
+/**
+ * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
+ * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
+ */
+export declare const READ_SECTIONS: readonly ["gates", "risk", "validationRules", "environment", "skills"];
+export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
+    readonly environment: {
+        readonly passEnv: string[];
+    };
+    readonly skills: {
+        readonly enabled: ("clean-code" | "design-patterns" | "refactoring" | "security" | "tdd" | "ui-design")[];
+        readonly projectType: "unknown" | "backend" | "frontend" | "mobile" | "fullstack" | "library";
+        readonly maxContextBytes: number;
+    };
+    readonly gates: {
+        readonly id: string;
+        readonly command: string[];
+        readonly covers: ("security" | "unit" | "integration" | "browser" | "build" | "lint" | "typecheck" | "architecture")[];
+        readonly testPaths: string[];
+        readonly timeoutMs: number;
+        readonly passEnv: string[];
+        readonly dependsOn: string[];
+        readonly resources: string[];
+        readonly readOnly: boolean;
+        readonly outputs: string[];
+        readonly paths: string[];
+        readonly lanes: ("fast" | "standard" | "high")[];
+        readonly mandatory: boolean;
+        readonly cacheTtlMs: number;
+    }[];
+    readonly validationRules: {
+        readonly id: string;
+        readonly paths: string[];
+        readonly requires: ("security" | "unit" | "integration" | "browser" | "build" | "lint" | "typecheck" | "architecture")[];
+    }[];
+    readonly risk: {
+        readonly fastPaths: string[];
+        readonly highPaths: string[];
+        readonly maxFastFiles: number;
+        readonly maxFastLines: number;
+    };
+}>;
+export type ApvConfig = Infer<typeof apvConfigSchema>;
+export interface LoadedConfig {
+    /** Absolute path of the file read, or null when the project has none (defaults apply). */
+    file: string | null;
+    legacy: boolean;
+    config: ApvConfig;
+    /** Top-level sections present in the file and deliberately ignored. */
+    ignored: string[];
+}
+/** Picks the read sections: `environment.passEnv` only, whatever else a V2 environment declared. */
+export declare function readSections(raw: unknown): {
+    picked: Record<string, unknown>;
+    ignored: string[];
+};
+/** Every problem of a configuration document: schema, duplicate ids, unknown dependencies, cycles. */
+export declare function configIssues(raw: unknown): {
+    config: ApvConfig | undefined;
+    ignored: string[];
+    issues: Issue[];
+};
+/** Configuration file of a project: `--config` when given, then `.apv/config.json`, then `pipeline.v2.json`. */
+export declare function configFile(repo: string, explicit?: string): {
+    file: string | null;
+    legacy: boolean;
+};
+export declare function loadConfig(repo: string, explicit?: string): LoadedConfig;
+/** The policy view of a V3 configuration: evidence-mode review is the only mode V3 knows. */
+export declare function policyConfig(config: ApvConfig): PolicyConfig;

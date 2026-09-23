@@ -34,7 +34,9 @@ export const sensitivePaths = [
   '**/payment*/**','**/*permission*.*','**/*policy*.*','**/*secret*.*',
   '**/Dockerfile*','**/*.tf','**/.env*','**/pipeline*.json',
 ];
-export function classify(changes: ChangeSet, config: Config, minimum: Lane = 'fast'): RiskDecision {
+/** The part of a configuration the policy reads: V2 configurations and V3 `.apv/config.json` both provide it. */
+export type PolicyConfig = Pick<Config, 'gates' | 'risk' | 'validationRules'> & { workflow: Pick<Config['workflow'], 'qualityReview'> };
+export function classify(changes: ChangeSet, config: Pick<Config, 'risk'>, minimum: Lane = 'fast'): RiskDecision {
   const sensitive = changes.files.filter(f => [...sensitivePaths, ...config.risk.highPaths].some(p => matches(f, p)));
   if (minimum === 'high' || sensitive.length || changes.binary) return { lane: 'high', reasons: [
     ...(minimum === 'high' ? ['Requested minimum: high'] : []),
@@ -46,8 +48,20 @@ export function classify(changes: ChangeSet, config: Config, minimum: Lane = 'fa
   }
   return { lane: 'standard', reasons: ['Default assurance for code, unknown impact, or size threshold'] };
 }
-export function assertScope(changes: ChangeSet | string[], task: Task): string[] {
-  for (const p of [...task.allowedPaths, ...task.allowedNewPaths]) matches('probe', p);
+/** The part of a task that scope policy reads; a spec task provides `allowedPaths` only. */
+export type ScopeTask = Pick<Task, 'allowedPaths'> & Partial<Pick<Task, 'allowedNewPaths' | 'maxNewFiles'>>;
+export interface ScopeReport {
+  /** Files created inside a declared `allowedNewPaths` envelope. */
+  autoNew: string[];
+  /** Files outside the task scope, or invalid paths. */
+  rejected: string[];
+  /** More automatically accepted new files than `maxNewFiles` allows. */
+  tooManyNew: boolean;
+}
+/** Every scope violation of a change, for a report; `assertScope` turns it into the V2 error. */
+export function scopeReport(changes: ChangeSet | string[], task: ScopeTask): ScopeReport {
+  const allowedNewPaths = task.allowedNewPaths ?? [];
+  for (const p of [...task.allowedPaths, ...allowedNewPaths]) matches('probe', p);
   const files = Array.isArray(changes) ? changes : changes.files;
   const added = new Set(Array.isArray(changes) ? [] : changes.added);
   const autoNew: string[] = [];
@@ -55,12 +69,16 @@ export function assertScope(changes: ChangeSet | string[], task: Task): string[]
   for (const file of files) {
     if (!validRelativePath(file)) { rejected.push(file); continue; }
     if (task.allowedPaths.some(p => matches(file, p))) continue;
-    const safeNew = added.has(file) && task.allowedNewPaths.some(p => matches(file, p)) &&
+    const safeNew = added.has(file) && allowedNewPaths.some(p => matches(file, p)) &&
       !sensitivePaths.some(p => matches(file, p));
     if (safeNew) { autoNew.push(file); continue; }
     rejected.push(file);
   }
-  invariant(autoNew.length <= task.maxNewFiles, 'SCOPE', `Too many automatically-created supporting files: ${autoNew.join(', ')}`);
+  return { autoNew, rejected, tooManyNew: autoNew.length > (task.maxNewFiles ?? 0) };
+}
+export function assertScope(changes: ChangeSet | string[], task: ScopeTask): string[] {
+  const { autoNew, rejected, tooManyNew } = scopeReport(changes, task);
+  invariant(!tooManyNew, 'SCOPE', `Too many automatically-created supporting files: ${autoNew.join(', ')}`);
   invariant(rejected.length === 0, 'SCOPE', `Out-of-scope files: ${rejected.join(', ')}`);
   return autoNew;
 }
@@ -76,7 +94,7 @@ export function validateDag(gates: Gate[]): void {
   }
   gates.forEach(g => visit(g.id));
 }
-export function planGates(config: Config, changes: ChangeSet, lane: Lane): Gate[] {
+export function planGates(config: PolicyConfig, changes: ChangeSet, lane: Lane): Gate[] {
   validateDag(config.gates);
   const requirements = validationRequirements(config, changes.files, lane);
   const chosen = new Set(config.gates.filter(g => lane === 'high' || g.mandatory ||
@@ -112,7 +130,7 @@ export function isUiChange(files: string[]): boolean {
     /(?:^|\/)(?:ui|components|pages|views|frontend)\/.*\.(?:[cm]?[jt]s)$/i.test(p)));
 }
 /** Conservative defaults plus reviewed project paths, not a semantic classifier. */
-export function validationRequirements(config: Config, files: string[], lane: Lane): ValidationRequirement[] {
+export function validationRequirements(config: PolicyConfig, files: string[], lane: Lane): ValidationRequirement[] {
   if (config.workflow.qualityReview !== 'evidence') return [];
   const required: ValidationRequirement[] = [];
   const add = (id: string, anyOf: Gate['covers'], reason: string, paths?: string[]) => required.push({ id, anyOf, reason, ...(paths ? { paths } : {}) });

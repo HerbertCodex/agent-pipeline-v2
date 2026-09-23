@@ -1,4 +1,4 @@
-name: V2 checks
+name: APV3 checks
 on: [push, pull_request]
 permissions:
   contents: read
@@ -22,7 +22,6 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run check
-      - run: npm run demo
-      - run: npm run demo:lifecycle
-      - run: npm run check:package
+      # The plugin is installed from GitHub without a build step: the committed dist/ must match src/.
+      - run: git diff --exit-code -- dist
 # Results must be checked on the exact published commit; local success is not a remote CI claim.

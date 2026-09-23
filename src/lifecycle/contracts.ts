@@ -3,7 +3,8 @@ import { invariant } from '../domain/errors.js';
 import { lanes, type Config, type Lane } from '../domain/contracts.js';
 import { matches } from '../policy/policy.js';
 import { hash } from '../domain/hash.js';
-import { confirmedDecisions, ambiguousDecisions, validateDecisionLedger, type DecisionLedger } from './decisions.js';
+import { confirmedDecisions, ambiguousDecisions, decisionLedgerIssues, validateDecisionLedger, type DecisionLedger } from './decisions.js';
+import { IssueList, schemaIssues, type Issue } from '../domain/issues.js';
 import { owaspTopicIds, securityProfileSchema, neutralSecurityContext, type SecurityContext } from '../security/owasp.js';
 import { qualityCheckSchema, validateQualityChecks, findingRequiresFix, type QualityContext } from '../quality/review.js';
 const id = s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
@@ -140,28 +141,45 @@ export interface DesignRecord {
     loadedStylesheets?: { path: string; bytes: number }[];
 }
 
-export function validateSpec(value: unknown, ready = false, ledger: DecisionLedger = { schemaVersion: 1, decisions: [] }, operatorText?: string, securityContext: SecurityContext = neutralSecurityContext()): Spec {
-    const spec = specSchema.parse(value);
-    const decisions = validateDecisionLedger(ledger);
+export interface SpecCheckOptions {
+    /** Approval-time rules: no open question, no unresolved ambiguity, every criterion implemented. */
+    ready?: boolean;
+    ledger?: DecisionLedger;
+    /** Accumulated operator request; decision resolutions must quote it. */
+    operatorText?: string;
+    /** Security minimum the spec must preserve, recomputed from the request and the repository. */
+    securityContext?: SecurityContext;
+}
+
+/** Every semantic problem of a parsed spec, in the order V2 checked them (V2 stopped at the first). */
+export function specRuleIssues(spec: Spec, options: SpecCheckOptions = {}): Issue[] {
+    const list = new IssueList();
+    const ledgerIssues = decisionLedgerIssues(options.ledger ?? { schemaVersion: 1, decisions: [] });
+    list.items.push(...ledgerIssues);
+    // An invalid ledger cannot drive decision checks; the other rules are still reported.
+    const decisions: DecisionLedger = ledgerIssues.length ? { schemaVersion: 1, decisions: [] } : validateDecisionLedger(options.ledger ?? { schemaVersion: 1, decisions: [] });
     const texts = [spec.title, spec.problem, ...spec.scope, ...spec.outOfScope, ...spec.acceptance.flatMap(a => [a.description, a.verification]), ...spec.decisions.flatMap(d => [d.question, d.answer]), ...spec.questions.map(q => q.question), ...spec.tasks.flatMap(t => [t.title, t.description]), spec.experience.rationale, ...spec.experience.surfaces];
-    invariant(texts.every(t => t.trim().length > 0), 'SPEC', 'Blank semantic text is not accepted');
-    for (const group of [spec.acceptance, spec.questions, spec.tasks])
-        invariant(new Set(group.map(x => x.id)).size === group.length, 'SPEC', 'Duplicate item id');
+    list.check(texts.every(t => t.trim().length > 0), 'SPEC', 'Blank semantic text is not accepted');
+    for (const [name, group] of [['acceptance', spec.acceptance], ['questions', spec.questions], ['tasks', spec.tasks]] as const) {
+        const ids = group.map(x => x.id);
+        const duplicates = [...new Set(ids.filter((x, i) => ids.indexOf(x) !== i))];
+        list.check(!duplicates.length, 'SPEC', `Duplicate item id in ${name}: ${duplicates.join(', ')}`);
+    }
     const coverageIds = spec.decisionCoverage.map(x => x.decisionId);
-    invariant(new Set(coverageIds).size === coverageIds.length, 'SPEC_DECISIONS', 'Duplicate decision coverage');
+    list.check(new Set(coverageIds).size === coverageIds.length, 'SPEC_DECISIONS', 'Duplicate decision coverage');
     const resolutionIds = spec.decisionResolutions.map(x => x.decisionId);
-    invariant(new Set(resolutionIds).size === resolutionIds.length, 'SPEC_DECISIONS', 'Duplicate decision resolution');
+    list.check(new Set(resolutionIds).size === resolutionIds.length, 'SPEC_DECISIONS', 'Duplicate decision resolution');
     const knownDecisions = new Set(decisions.decisions.map(d => d.id));
     const unknownCoverage = spec.decisionCoverage.filter(x => !knownDecisions.has(x.decisionId)).map(x => x.decisionId);
-    invariant(!unknownCoverage.length, 'SPEC_DECISIONS', `Spec references an unknown project decision: ${unknownCoverage.join(', ')}. Allowed decisionCoverage IDs from decisionLedger: ${[...knownDecisions].join(', ') || 'none; return decisionCoverage: []'}. Local spec/architecture decisions do not create ledger IDs.`);
+    list.check(!unknownCoverage.length, 'SPEC_DECISIONS', `Spec references an unknown project decision: ${unknownCoverage.join(', ')}. Allowed decisionCoverage IDs from decisionLedger: ${[...knownDecisions].join(', ') || 'none; return decisionCoverage: []'}. Local spec/architecture decisions do not create ledger IDs.`);
     const ambiguousProduct = new Map(ambiguousDecisions(decisions, 'product').map(d => [d.id, d]));
     for (const resolution of spec.decisionResolutions) {
-        invariant(ambiguousProduct.has(resolution.decisionId), 'SPEC_DECISIONS', `Resolution references a decision that is not an ambiguous Product decision: ${resolution.decisionId}`);
-        if (operatorText !== undefined) invariant(operatorText.toLocaleLowerCase('en-US').includes(resolution.sourceQuote.trim().toLocaleLowerCase('en-US')), 'SPEC_DECISIONS', `Resolution ${resolution.decisionId} source quote is not present in the accumulated operator request`);
+        list.check(ambiguousProduct.has(resolution.decisionId), 'SPEC_DECISIONS', `Resolution references a decision that is not an ambiguous Product decision: ${resolution.decisionId}`);
+        if (options.operatorText !== undefined) list.check(options.operatorText.toLocaleLowerCase('en-US').includes(resolution.sourceQuote.trim().toLocaleLowerCase('en-US')), 'SPEC_DECISIONS', `Resolution ${resolution.decisionId} source quote is not present in the accumulated operator request`);
     }
     const criteria = new Set(spec.acceptance.map(x => x.id));
-    for (const item of spec.decisionCoverage) invariant(item.acceptanceIds.every(id => criteria.has(id)), 'SPEC_DECISIONS', `Decision ${item.decisionId} references an unknown acceptance criterion`);
-    const security = securityContext;
+    for (const item of spec.decisionCoverage) list.check(item.acceptanceIds.every(id => criteria.has(id)), 'SPEC_DECISIONS', `Decision ${item.decisionId} references an unknown acceptance criterion`);
+    const security = options.securityContext ?? neutralSecurityContext();
     const requiredTopics = new Set(security.topics.map(t => t.id));
     const declaredTopics = new Set(spec.security.owaspTopics);
     const missingTopics = [...requiredTopics].filter(topic => !declaredTopics.has(topic));
@@ -170,72 +188,93 @@ export function validateSpec(value: unknown, ready = false, ledger: DecisionLedg
         .filter(key => security.profile[key] && !spec.security.profile[key]);
     // Return the complete minimum-coverage gap in one round instead of paying for
     // successive repairs that each discover only the next missing topic.
-    invariant(!missingTopics.length && !missingMappings.length && !downgraded.length, 'SPEC_SECURITY',
+    list.check(!missingTopics.length && !missingMappings.length && !downgraded.length, 'SPEC_SECURITY',
         `Product security plan must preserve the controller minimum. Missing security.owaspTopics: ${missingTopics.join(', ') || 'none'}. Missing security.requirements mappings (with valid acceptanceIds and verification): ${missingMappings.join(', ') || 'none'}. Security profile cannot downgrade detected surfaces: ${downgraded.join(', ') || 'none'}. Cover existing trust boundaries and exclusions without inventing out-of-scope features.`);
-    if (security.profile.exposure !== 'unknown') invariant(spec.security.profile.exposure === security.profile.exposure, 'SPEC_SECURITY', `Security exposure must preserve detected value ${security.profile.exposure}`);
+    if (security.profile.exposure !== 'unknown') list.check(spec.security.profile.exposure === security.profile.exposure, 'SPEC_SECURITY', `Security exposure must preserve detected value ${security.profile.exposure}`);
     const requirementIds = spec.security.requirements.map(r => r.id);
-    invariant(new Set(requirementIds).size === requirementIds.length, 'SPEC_SECURITY', 'Duplicate security requirement id');
+    list.check(new Set(requirementIds).size === requirementIds.length, 'SPEC_SECURITY', 'Duplicate security requirement id');
     for (const requirement of spec.security.requirements) {
-        invariant(requirement.acceptanceIds.every(x => criteria.has(x)), 'SPEC_SECURITY', `Security requirement ${requirement.id} references an unknown acceptance criterion`);
-        invariant(new Set(requirement.owaspTopics).size === requirement.owaspTopics.length, 'SPEC_SECURITY', `Security requirement ${requirement.id} repeats an OWASP topic`);
+        list.check(requirement.acceptanceIds.every(x => criteria.has(x)), 'SPEC_SECURITY', `Security requirement ${requirement.id} references an unknown acceptance criterion`);
+        list.check(new Set(requirement.owaspTopics).size === requirement.owaspTopics.length, 'SPEC_SECURITY', `Security requirement ${requirement.id} repeats an OWASP topic`);
     }
-    if (security.negativeTestsRequired) invariant(spec.security.requirements.some(r => r.negativeTests.some(test => !test.startsWith('[review] '))), 'SPEC_SECURITY', 'Security-sensitive behavior requires at least one explicit negative security test');
+    if (security.negativeTestsRequired) list.check(spec.security.requirements.some(r => r.negativeTests.some(test => !test.startsWith('[review] '))), 'SPEC_SECURITY', 'Security-sensitive behavior requires at least one explicit negative security test');
     if (security.requiresThreatModel) {
-        invariant(spec.security.threatModel.required, 'SPEC_SECURITY', 'A threat model is required for the detected security surfaces');
-        invariant(spec.security.threatModel.assets.length > 0 && spec.security.threatModel.trustBoundaries.length > 0 && spec.security.threatModel.threats.length > 0, 'SPEC_SECURITY', 'Threat model must name assets, trust boundaries and threats');
+        list.check(spec.security.threatModel.required, 'SPEC_SECURITY', 'A threat model is required for the detected security surfaces');
+        list.check(spec.security.threatModel.assets.length > 0 && spec.security.threatModel.trustBoundaries.length > 0 && spec.security.threatModel.threats.length > 0, 'SPEC_SECURITY', 'Threat model must name assets, trust boundaries and threats');
     }
     const threatIds = spec.security.threatModel.threats.map(t => t.id);
-    invariant(new Set(threatIds).size === threatIds.length, 'SPEC_SECURITY', 'Duplicate threat id');
-    for (const threat of spec.security.threatModel.threats) invariant(threat.acceptanceIds.every(x => criteria.has(x)), 'SPEC_SECURITY', `Threat ${threat.id} references an unknown acceptance criterion`);
+    list.check(new Set(threatIds).size === threatIds.length, 'SPEC_SECURITY', 'Duplicate threat id');
+    for (const threat of spec.security.threatModel.threats) list.check(threat.acceptanceIds.every(x => criteria.has(x)), 'SPEC_SECURITY', `Threat ${threat.id} references an unknown acceptance criterion`);
     const requiredDecisionIds = new Set([...confirmedDecisions(decisions, 'product').map(d=>d.id), ...resolutionIds]);
     for (const decisionId of requiredDecisionIds) {
         const item = spec.decisionCoverage.find(x => x.decisionId === decisionId);
-        invariant(item && item.acceptanceIds.length > 0, 'SPEC_DECISIONS', `Product decision ${decisionId} is not covered by acceptance criteria`);
+        list.check(item && item.acceptanceIds.length > 0, 'SPEC_DECISIONS', `Product decision ${decisionId} is not covered by acceptance criteria`);
     }
     for(const decision of ambiguousProduct.values()) {
         if(spec.decisionResolutions.some(r=>r.decisionId===decision.id)) continue;
-        invariant(spec.questions.some(q=>q.question.trim().toLocaleLowerCase('en-US')===decision.clarificationQuestion.trim().toLocaleLowerCase('en-US')), 'SPEC_DECISIONS', `Unresolved ambiguous decision ${decision.id} must be asked using its recorded clarification question`);
+        list.check(spec.questions.some(q=>q.question.trim().toLocaleLowerCase('en-US')===decision.clarificationQuestion.trim().toLocaleLowerCase('en-US')), 'SPEC_DECISIONS', `Unresolved ambiguous decision ${decision.id} must be asked using its recorded clarification question`);
     }
     const tasks = new Map(spec.tasks.map(t => [t.id, t]));
     const visiting = new Set<string>();
     const done = new Set<string>();
-    function visit(taskId: string): void {
-        if (done.has(taskId))
-            return;
-        invariant(!visiting.has(taskId), 'SPEC_DAG', 'Task dependency cycle');
+    const reported = new Set<string>();
+    const once = (key: string, code: string, message: string): void => { if (!reported.has(key)) { reported.add(key); list.check(false, code, message); } };
+    function visit(taskId: string, from: string): void {
+        if (done.has(taskId)) return;
+        if (visiting.has(taskId)) { once(`cycle:${taskId}`, 'SPEC_DAG', `Task dependency cycle at ${taskId}`); return; }
         const task = tasks.get(taskId);
-        invariant(task, 'SPEC_DAG', `Missing dependency ${taskId}`);
+        if (!task) { once(`missing:${taskId}`, 'SPEC_DAG', `Missing dependency ${taskId} (required by ${from})`); return; }
         visiting.add(taskId);
-        task.dependsOn.forEach(visit);
+        task.dependsOn.forEach(dep => visit(dep, taskId));
         visiting.delete(taskId);
         done.add(taskId);
     }
     for (const task of spec.tasks) {
-        invariant(new Set(task.dependsOn).size === task.dependsOn.length, 'SPEC_DAG', 'Duplicate dependency');
-        invariant(new Set(task.acceptanceIds).size === task.acceptanceIds.length, 'SPEC', 'Duplicate task criterion');
-        invariant(task.acceptanceIds.every(c => criteria.has(c)), 'SPEC', 'Task references an unknown acceptance criterion');
+        list.check(new Set(task.dependsOn).size === task.dependsOn.length, 'SPEC_DAG', `Duplicate dependency in task ${task.id}`);
+        list.check(new Set(task.acceptanceIds).size === task.acceptanceIds.length, 'SPEC', `Duplicate task criterion in task ${task.id}`);
+        const unknown = task.acceptanceIds.filter(c => !criteria.has(c));
+        list.check(!unknown.length, 'SPEC', `Task ${task.id} references an unknown acceptance criterion: ${unknown.join(', ')}`);
         for (const pattern of task.allowedPaths)
-            matches('probe', pattern);
-        visit(task.id);
+            list.attempt('GLOB', () => matches('probe', pattern));
+        visit(task.id, task.id);
     }
-    if (ready) {
-        invariant(spec.questions.length === 0, 'OPEN_QUESTIONS', 'Resolve Product questions before approval');
+    if (options.ready) {
+        list.check(spec.questions.length === 0, 'OPEN_QUESTIONS', 'Resolve Product questions before approval');
         const unresolved=ambiguousDecisions(decisions,'product').filter(d=>!spec.decisionResolutions.some(r=>r.decisionId===d.id));
-        invariant(unresolved.length===0,'OPEN_QUESTIONS',`Resolve ambiguous Product decisions before approval: ${unresolved.map(d=>d.id).join(', ')}`);
-        assertSpecReadiness(spec);
+        list.check(unresolved.length===0,'OPEN_QUESTIONS',`Resolve ambiguous Product decisions before approval: ${unresolved.map(d=>d.id).join(', ')}`);
+        list.items.push(...specReadinessIssues(spec));
     }
+    return list.items;
+}
+
+/** Every problem of an unparsed spec document: schema first (all of it), then the spec rules. */
+export function specIssues(value: unknown, options: SpecCheckOptions = {}): Issue[] {
+    const { value: spec, issues } = schemaIssues(specSchema, value);
+    return spec ? specRuleIssues(spec, options) : issues;
+}
+
+export function validateSpec(value: unknown, ready = false, ledger: DecisionLedger = { schemaVersion: 1, decisions: [] }, operatorText?: string, securityContext: SecurityContext = neutralSecurityContext()): Spec {
+    const spec = specSchema.parse(value);
+    const list = new IssueList();
+    list.items.push(...specRuleIssues(spec, { ready, ledger, securityContext, ...(operatorText !== undefined ? { operatorText } : {}) }));
+    list.throwFirst();
     return spec;
+}
+function specReadinessIssues(spec: Spec): Issue[] {
+    const list = new IssueList();
+    list.check(spec.tasks.length > 0, 'SPEC', 'A spec without open questions needs executable tasks');
+    const covered = new Set(spec.tasks.flatMap(t => t.acceptanceIds));
+    const orphans = spec.acceptance.map(a => a.id).filter(c => !covered.has(c));
+    list.check(orphans.length === 0, 'SPEC_COVERAGE', `Some criteria have no implementing task: ${orphans.join(', ')}. Attach each one to the task whose change demonstrates it, including no-regression criteria.`);
+    return list.items;
 }
 /**
  * Structural rules an executable spec must satisfy. Applied at approval, and to freshly produced Product
- * output that asks no question — a spec that asks nothing claims to be complete. It is deliberately not
+ * output that asks no question: a spec that asks nothing claims to be complete. It is deliberately not
  * applied when reading a stored document: an old document must stay loadable, whatever rule came later.
  */
 export function assertSpecReadiness(spec: Spec): Spec {
-    invariant(spec.tasks.length > 0, 'SPEC', 'A spec without open questions needs executable tasks');
-    const covered = new Set(spec.tasks.flatMap(t => t.acceptanceIds));
-    const orphans = spec.acceptance.map(a => a.id).filter(c => !covered.has(c));
-    invariant(orphans.length === 0, 'SPEC_COVERAGE', `Some criteria have no implementing task: ${orphans.join(', ')}. Attach each one to the task whose change demonstrates it, including no-regression criteria.`);
+    const list = new IssueList(); list.items.push(...specReadinessIssues(spec)); list.throwFirst();
     return spec;
 }
 export function taskOrder(spec: Spec): Spec['tasks'] {

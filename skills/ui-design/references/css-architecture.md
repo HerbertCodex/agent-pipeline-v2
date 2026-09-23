@@ -354,7 +354,7 @@ with this pattern (a regex string, without surrounding slashes):
 ^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:__[a-z][a-z0-9]*(?:-[a-z0-9]+)*)?(?:--[a-z][a-z0-9]*(?:-[a-z0-9]+)*)?$
 ```
 
-The framework ships a reusable `examples/stylelint-bem.config.mjs` profile. Merge
+This skill ships a reusable `references/stylelint-bem.config.mjs` profile. Merge
 its rule into the project's existing Stylelint configuration within approved scope;
 keep existing checks. Pin Stylelint as a development dependency and expose a
 non-interactive `lint:css` or `lint:styles` script covering the relevant source files

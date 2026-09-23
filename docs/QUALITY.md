@@ -1,5 +1,7 @@
 # Qualité du code et preuves de validation
 
+> **Écrit pour V2.** APV3 reprend la planification des contrôles et les reçus (`apv gates run`, [outil apv](CLI.md)) ; les passages sur l'appel QA du contrôleur décrivent V2. En V3, les revues sont des sous-agents ([plugin](PLUGIN.md)).
+
 La pipeline examine la qualité dans **l'appel QA existant**, avec des critères concrets et des preuves liées au candidat. Un résultat de lint ou une affirmation d'agent ne constitue pas un certificat de qualité.
 
 ## Revue proportionnée

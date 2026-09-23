@@ -1,5 +1,7 @@
 # Decision Ledger, ambiguïtés et cohérence sémantique
 
+> **Écrit pour V2.** APV3 reprend le registre des décisions et sa validation (`apv ledger`, [outil apv](CLI.md)) ; les passages sur Product et le contrôleur décrivent V2.
+
 ## Pourquoi
 
 Un JSON conforme au schéma ne garantit pas qu'une proposition respecte les décisions produit. Agent Pipeline V2 alpha.7 rend donc les décisions explicites de l'opérateur autoritatives et distingue une décision réellement confirmée d'une formulation encore ambiguë.

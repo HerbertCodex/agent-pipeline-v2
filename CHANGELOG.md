@@ -47,7 +47,7 @@
 
 - **Un champ ajouté au contrat ne bloque plus une spec déjà approuvée.** La publication vérifie que le run a bien exécuté les contrôles exigés par la spec ; elle comparait les formes enregistrées, si bien qu'une spec approuvée avant l'ajout d'un champ de gate — absente de sa copie gelée, présente dans celle du run — était refusée avec « Final validation must cover the amended gates ». Les deux côtés passent désormais par le contrat des gates : seule une vraie différence de commande, de couverture ou de périmètre bloque. Constaté sur un vrai projet : dix tâches implémentées, six contrôles verts, QA conforme, publication impossible à cause d'un `readOnly: false` par défaut.
 - Separate subscription estimates from monetary ceilings with explicit per-role usage modes, null-safe spec amendments and mixed-account accounting. Require explicit native models in subscription/metered mode; preserve dedicated QA and reassess after a model/policy change.
-- Record versioned path/model/validation decisions, distinguish provider quota/rate/time/money stops, retain interrupted work and expose phase timings and usage settings in the dashboard. No provider-thread resume or real-model latency improvement is claimed. See [execution policy](docs/EXECUTION-POLICY.md).
+- Record versioned path/model/validation decisions, distinguish provider quota/rate/time/money stops, retain interrupted work and expose phase timings and usage settings in the dashboard. No provider-thread resume or real-model latency improvement is claimed. See [execution policy](docs/v2/EXECUTION-POLICY.md).
 
 - **Une revue nomme ce qu'elle a lu.** Un cas négatif marqué `[review]` ne pouvait citer aucun fichier : la QA, qui vient de lire le diff, décrivait naturellement ce qu'elle avait inspecté et son rapport était refusé. Elle peut désormais nommer les fichiers lus — c'est ce qui rend la revue vérifiable par le relecteur humain — mais toujours pas s'appuyer sur un reçu de test unitaire, d'intégration ou de navigateur, ce qui ferait passer une affirmation pour une preuve.
 
@@ -91,7 +91,7 @@
 - Lot 2: align Product/Design, Implementer, QA and UI skills on global-CSS BEM defaults with existing-stack exceptions. Add a pinned Stylelint development check, reusable naming profile and discovery of existing `lint:css` / `lint:styles` gates.
 - Add compact task planning, minor UI reuse, explicit model/effort routing and opt-in in-session checks with independent final validation.
 - Detect existing build/integration/browser scripts, refine craftsmanship skills and add a representative, opt-in evaluation harness.
-- See [current workflow and usage](docs/LIFECYCLE.md). Existing project configuration is not migrated automatically.
+- See [current workflow and usage](docs/v2/LIFECYCLE.md). Existing project configuration is not migrated automatically.
 
 ## Non publié
 

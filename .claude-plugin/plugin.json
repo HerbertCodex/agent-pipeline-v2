@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "apv",
+  "displayName": "Agent Pipeline V3",
+  "version": "3.0.0-alpha.1",
+  "description": "Agent Pipeline V3 : le chef de projet (session principale) orchestre de vrais sous-agents (spec, données, design, implémentation en parallèle, revues sécurité, fidélité, données et RGPD) avec des verrous à bail, un suivi du quota et des garde-fous sur les effets externes.",
+  "author": {
+    "name": "Herbert Codex",
+    "url": "https://github.com/HerbertCodex"
+  },
+  "homepage": "https://github.com/HerbertCodex/agent-pipeline-v2/blob/apv3/docs/PLUGIN.md",
+  "repository": "https://github.com/HerbertCodex/agent-pipeline-v2",
+  "license": "MIT",
+  "keywords": ["pipeline", "agents", "sous-agents", "worktree", "revue", "securite", "rgpd", "chef-de-projet"]
+}
