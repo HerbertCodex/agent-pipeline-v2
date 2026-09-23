@@ -53,7 +53,7 @@ test('apv status reports an invalid configuration or ledger without failing', as
   assert.equal((await apv(f.repo, ['status', 'extra'])).code, 2);
 });
 
-test('the dispatcher lists every command, and lock and db stay loadable either way', async t => {
+test('the dispatcher lists every command, lock and db included', async t => {
   const f = fixture(t);
   assert.deepEqual(Object.keys(commands), ['spec', 'ledger', 'scope', 'gates', 'lock', 'db', 'quota', 'status']);
   const help = await apv(f.repo, ['help']);
@@ -67,11 +67,13 @@ test('the dispatcher lists every command, and lock and db stay loadable either w
   assert.equal((await apv(f.repo, ['help', 'deploy'])).code, 2);
   const topic = await apv(f.repo, ['help', 'gates']);
   assert.equal(topic.code, 0); assert.match(topic.stdout, /apv gates run/);
-  for (const name of ['lock', 'db']) {
-    const r = await apv(f.repo, [name, 'status']);
-    // Stub on this branch (exit 2); the real module after integration answers on its own.
-    if (r.code === 2) assert.match(r.stderr, /non disponible/);
-  }
+  // lock and db are the real modules since integration: they answer, and `apv help` shows their usage.
+  const locks = await apv(f.repo, ['lock', 'status', '--dir', `${f.repo}/.locks`]);
+  assert.equal(locks.code, 0, locks.stderr);
+  const lockHelp = await apv(f.repo, ['help', 'lock']);
+  assert.equal(lockHelp.code, 0); assert.match(lockHelp.stdout, /apv lock run <ressource>/);
+  const dbHelp = await apv(f.repo, ['help', 'db']);
+  assert.equal(dbHelp.code, 0); assert.match(dbHelp.stdout, /apv db check/);
 });
 
 test('the apv binary runs as a separate process', () => {
