@@ -1,12 +1,14 @@
-/** Default folder of validated mockups, relative to the repository root (`design.dir` overrides it). */
-export declare const DEFAULT_DESIGN_DIR = "docs/design";
+export { DEFAULT_DESIGN_DIR } from './config.js';
 /** Lowercase words joined by single dashes; short enough for the decision id (80 characters at most). */
 export declare const SLUG_PATTERN: RegExp;
 export interface DesignConfig {
     dir: string;
     configFile: string | null;
 }
-/** Reads `design.dir` from `.apv/config.json`; the folder must stay inside the repository. */
+/**
+ * `design.dir` of the project configuration, read by the main loader (`.apv/config.json`, else
+ * `pipeline.v2.json`): the folder must stay inside the repository.
+ */
 export declare function loadDesignConfig(repo: string): DesignConfig;
 export declare function sha256File(path: string): string;
 export type MockupState = 'ok' | 'drift' | 'missing' | 'legacy';

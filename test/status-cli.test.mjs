@@ -19,7 +19,7 @@ test('apv status on a project without .apv says so', async t => {
 
 test('apv status summarises configuration, ledger, specs, state and last quota', async t => {
   const f = fixture(t);
-  write(f.repo, '.apv/config.json', { gates: [{ id: 'unit', command: ['npm', 'test'] }], agent: { type: 'claude' } });
+  write(f.repo, '.apv/config.json', { gates: [{ id: 'unit', command: ['npm', 'test'] }], design: { dir: 'maquettes' }, db: { migrations: ['supabase/migrations'] }, agent: { type: 'claude' } });
   write(f.repo, '.apv/DECISIONS.json', { schemaVersion: 1, decisions: [decision('D-1'), decision('D-2')] });
   write(f.repo, '.apv/specs/001-math.json', demoSpec());
   write(f.repo, '.apv/specs/002-wrapped.json', { request: 'Add it.', spec: { ...demoSpec(), title: 'Wrapped' } });
@@ -51,6 +51,19 @@ test('apv status reports an invalid configuration or ledger without failing', as
   assert.match(r.stdout, /Configuration : pipeline\.v2\.json ; invalide/);
   assert.match(r.stdout, /Registre : \.agent-pipeline\/DECISIONS\.json ; invalide \(1 erreur\(s\)/);
   assert.equal((await apv(f.repo, ['status', 'extra'])).code, 2);
+});
+
+test('the main loader reads the design section and checks its folder', async t => {
+  const f = fixture(t);
+  write(f.repo, '.apv/config.json', { design: { dir: '../dehors' } });
+  const r = await apv(f.repo, ['status']);
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /Configuration : \.apv\/config\.json ; invalide/);
+  assert.match((await apv(f.repo, ['status', '--json'])).json().config.error, /design\.dir doit être un dossier relatif/);
+  write(f.repo, '.apv/config.json', { design: { dir: 'docs/maquettes/' } });
+  const ok = (await apv(f.repo, ['status', '--json'])).json();
+  assert.deepEqual(ok.config.ignored, []);
+  assert.equal(ok.config.error, null);
 });
 
 test('the dispatcher lists every command, lock, db, design and preview included', async t => {

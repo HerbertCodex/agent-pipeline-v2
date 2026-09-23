@@ -13,7 +13,7 @@ Installation locale : `npm run build`, puis `node dist/cli.js <commande>` ou `np
 - Fichiers lus dans le projet :
   - configuration : `.apv/config.json`, sinon `pipeline.v2.json` (projet V2) ;
   - registre des décisions : `.apv/DECISIONS.json`, sinon `.agent-pipeline/DECISIONS.json` (projet V2).
-- De la configuration, seules les sections `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills` et `preview` sont lues. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
+- De la configuration, seules les sections `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview` et `design` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
 
 ## `apv spec validate`
 

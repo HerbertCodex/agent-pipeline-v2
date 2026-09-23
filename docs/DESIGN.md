@@ -87,10 +87,18 @@ Section facultative de `.apv/config.json` :
 
 ## 7. Projet existant
 
-Une décision de maquette écrite avant l'outil (par exemple `maquette-appli-validee` du projet pilote, sans empreinte) apparaît dans `apv design list` avec l'état `sans empreinte` et n'est pas vérifiable par `apv design check`. Pour la rattacher, versez le fichier validé avec la citation d'origine de l'opérateur :
+Une décision de maquette écrite avant l'outil (par exemple `maquette-appli-validee` du projet pilote, sans empreinte) apparaît dans `apv design list` avec l'état `sans empreinte` et n'est pas vérifiable par `apv design check`. Pour la rattacher, versez le fichier validé avec la **citation d'origine** de l'opérateur, recopiée telle quelle depuis le champ `sourceQuote` de la décision V2 (jamais une citation reformulée ou inventée) :
 
 ```bash
 apv design register docs/design/appli-maquette-validee.html --name appli --quote "je valide les maquettes"
 ```
 
 La nouvelle décision `maquette-appli-validee-v2` remplace l'ancienne et porte désormais le chemin (`docs/design/appli-validee.html`) et l'empreinte.
+
+**Noms des fichiers du projet pilote.** « Toujours rien » a versé ses maquettes sous la forme `docs/design/<nom>-maquette-validee.html` (`appli-maquette-validee.html`, `accueil-maquette-validee.html`) ; l'outil les nomme `<nom>-validee.html`. La migration, une fois par maquette, dans une branche dédiée :
+
+1. `apv design register docs/design/<nom>-maquette-validee.html --name <nom> --quote "<sourceQuote de maquette-<nom>-validee>"` : le contenu est copié à l'identique vers `docs/design/<nom>-validee.html`, l'empreinte est celle du fichier d'origine.
+2. Remplacer les renvois à l'ancien nom (specs, `AGENTS.md`, `docs/design/README.md`, tests de fidélité) par le nouveau, puis `git rm docs/design/<nom>-maquette-validee.html` : un seul fichier de référence par maquette.
+3. Un seul commit avec le nouveau fichier, le registre (JSON et Markdown), les renvois mis à jour et la suppression ; `apv design check` doit sortir en `0`.
+
+Une maquette dont la décision V2 ne cite aucun fichier versé (par exemple une copie « à verser par une spec ») se verse de la même façon, depuis la copie figée que l'opérateur a validée, avec sa citation d'origine.

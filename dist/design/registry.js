@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, extname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
-import { PipelineError, errorMessage, invariant } from '../domain/errors.js';
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { invariant } from '../domain/errors.js';
+import { loadConfig } from '../config/load.js';
+import { designDir } from './config.js';
 import { Git } from '../execution/git.js';
 import { ambiguousApprovalFragments, readWorkingDecisionLedger } from '../lifecycle/decisions.js';
 import { applyLedgerUpdate, planLedgerUpdate } from '../lifecycle/ledger-update.js';
-/** Default folder of validated mockups, relative to the repository root (`design.dir` overrides it). */
-export const DEFAULT_DESIGN_DIR = 'docs/design';
+export { DEFAULT_DESIGN_DIR } from './config.js';
 /** Lowercase words joined by single dashes; short enough for the decision id (80 characters at most). */
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SLUG_MAX = 50;
@@ -16,32 +17,13 @@ const DECISION_ID = /^maquette-([a-z0-9]+(?:-[a-z0-9]+)*?)-validee(?:-v([0-9]+))
 const VALUE_FILE = /fichier (\S+?),? sha256 ([0-9a-f]{64})/;
 const VALUE_SCREENS = /Écrans : ([^.]+)\./;
 const VALUE_ARTIFACT = /Artefact : (\S+?)\.?(?:\s|$)/;
-/** Reads `design.dir` from `.apv/config.json`; the folder must stay inside the repository. */
+/**
+ * `design.dir` of the project configuration, read by the main loader (`.apv/config.json`, else
+ * `pipeline.v2.json`): the folder must stay inside the repository.
+ */
 export function loadDesignConfig(repo) {
-    const file = join(repo, '.apv', 'config.json');
-    if (!existsSync(file))
-        return { dir: DEFAULT_DESIGN_DIR, configFile: null };
-    let raw;
-    try {
-        raw = JSON.parse(readFileSync(file, 'utf8'));
-    }
-    catch (error) {
-        throw new PipelineError('CONFIG', `.apv/config.json : JSON invalide (${errorMessage(error)})`);
-    }
-    const design = raw?.design;
-    if (design === undefined)
-        return { dir: DEFAULT_DESIGN_DIR, configFile: file };
-    invariant(design !== null && typeof design === 'object' && !Array.isArray(design), 'CONFIG', '.apv/config.json : le champ « design » doit être un objet');
-    const unknown = Object.keys(design).filter(k => k !== 'dir');
-    invariant(unknown.length === 0, 'CONFIG', `.apv/config.json : champ inconnu dans « design » : ${unknown.join(', ')}`);
-    const dir = design.dir;
-    if (dir === undefined)
-        return { dir: DEFAULT_DESIGN_DIR, configFile: file };
-    invariant(typeof dir === 'string' && dir.trim() !== '', 'CONFIG', '.apv/config.json : design.dir doit être un chemin non vide');
-    const clean = normalize(dir.trim()).replace(/\\/g, '/').replace(/\/+$/, '');
-    invariant(!isAbsolute(clean) && clean !== '..' && !clean.startsWith('../') && clean !== '.', 'CONFIG', `.apv/config.json : design.dir doit être un dossier relatif, dans le dépôt (${dir})`);
-    invariant(!/\s/.test(clean), 'CONFIG', `.apv/config.json : design.dir ne contient pas d'espace (${dir})`);
-    return { dir: clean, configFile: file };
+    const { file, config } = loadConfig(repo);
+    return { dir: designDir(config.design), configFile: file };
 }
 export function sha256File(path) {
     return createHash('sha256').update(readFileSync(path)).digest('hex');

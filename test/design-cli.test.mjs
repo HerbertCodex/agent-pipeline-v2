@@ -137,9 +137,9 @@ test('design.dir, a V2 ledger and a legacy decision without hash', async t => {
     assert.throws(() => loadDesignConfig(f.repo), pattern, dir);
   }
   write(f.repo, '.apv/config.json', { design: { dossier: 'x' } });
-  assert.throws(() => loadDesignConfig(f.repo), /champ inconnu/);
+  assert.throws(() => loadDesignConfig(f.repo), /unknown property dossier/);
   write(f.repo, '.apv/config.json', '{');
-  assert.throws(() => loadDesignConfig(f.repo), /JSON invalide/);
+  assert.throws(() => loadDesignConfig(f.repo), /Invalid JSON/);
 });
 
 test('screen matching ignores case, accents and separators', () => {
