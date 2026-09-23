@@ -1,7 +1,8 @@
 // Shared helpers for the APV plugin hooks. Node built-ins only: hooks run
 // before any dependency install and must never fail because of a package.
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** Reads the whole hook payload from stdin; resolves to null when it is not a JSON object. */
 export async function readHookInput(stream = process.stdin) {
@@ -58,4 +59,16 @@ export function ensureApvGitignore(apvDir) {
   if (current === null) writeFileSync(file, `${IGNORE_HEADER}\n${missing.join('\n')}\n`);
   else writeFileSync(file, `${current}${current.endsWith('\n') || current === '' ? '' : '\n'}${missing.join('\n')}\n`);
   return true;
+}
+
+/**
+ * True when the module at `moduleUrl` is the script Node was asked to run. Both sides are compared with
+ * their symlinks resolved: Node resolves the main module's path, argv[1] keeps the path as launched, so a
+ * plugin reached through a symlink (macOS /var, a linked plugin folder) would otherwise run no hook at all,
+ * silently, including the Bash guard.
+ */
+export function isMainModule(moduleUrl, argv1 = process.argv[1]) {
+  if (!argv1) return false;
+  try { return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(argv1); }
+  catch { return false; }
 }

@@ -24,7 +24,9 @@ Quand une spec dépend de la précédente non fusionnée :
 - l'opérateur fusionne tout à la fin, dans l'ordre, ou te l'ordonne explicitement.
 
 ## 4. Fusion de la pile (seulement sur ordre explicite de l'opérateur)
-La commande `/apv:stack` (phase 3) automatise cette procédure ; d'ici là, suis-la à la main, une PR à la fois, et arrête-toi à la première anomalie. Le hook du plugin bloque `gh pr merge` sans `APV_ALLOW_MERGE=1` : pose cette variable devant la seule commande de fusion, uniquement après l'ordre de l'opérateur.
+La commande `/apv:stack` automatise cette procédure : `apv stack plan <pr...>` vérifie la pile et se montre en entier, puis `APV_ALLOW_MERGE=1 apv stack merge <pr...>` revérifie chaque PR juste avant de la fusionner, re-cible la suivante, contrôle le résultat par une relecture et s'arrête à la première anomalie. Le hook du plugin bloque `gh pr merge` et `apv stack merge` sans `APV_ALLOW_MERGE=1` : cette variable se pose devant la seule commande de fusion, uniquement sur l'ordre explicite de l'opérateur dans son message courant.
+
+Procédure manuelle, si l'outil n'est pas disponible : une PR à la fois, arrêt à la première anomalie.
 
 Pour chaque PR, de la base vers le sommet :
 1. `gh pr view <n> --json number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus` : état attendu (ouverte, contrôles verts, fusionnable).

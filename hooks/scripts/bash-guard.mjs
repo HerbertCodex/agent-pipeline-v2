@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // PreToolUse guard for the Bash tool (APV3 spec, section 11).
-// Blocks force-pushes, merges and production deploys outside the dedicated commands, and
+// Blocks force-pushes, merges (gh pr merge, gh api …/merge, apv stack merge) and production deploys
+// without their explicit authorisation, and
 // commands that write to GitHub while hiding their output (incident 30).
 // This is a guard rail against mistakes, not a security boundary: a determined command can
 // always be written in a shape this parser does not recognise.
 import { basename } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { readHookInput } from './lib.mjs';
+import { isMainModule, readHookInput } from './lib.mjs';
 
 const OPERATORS = ['&&', '||', ';;', '$(', ';', '|', '&', '(', ')', '`', '\n'];
 
@@ -215,6 +215,25 @@ export function githubWrite(words) {
   return null;
 }
 
+/**
+ * True when the words of one simple command run `apv stack merge`: the `apv` binary (also through npx), or
+ * the bundled tool `node …/dist/cli.js`. Options may sit between `stack` and `merge`; the command merges
+ * pull requests on GitHub, so it needs the same explicit authorisation as `gh pr merge`.
+ */
+const LAUNCHERS = new Set(['node', 'npx', 'bunx', 'npm', 'pnpm', 'yarn']);
+export function isStackMerge(words) {
+  const start = words.findIndex(w => !isAssignment(w) && w !== 'env');
+  if (start === -1) return false;
+  const lead = basename(words[start]);
+  return words.some((word, k) => {
+    const name = basename(word);
+    if (name !== 'apv' && name !== 'cli.js') return false;
+    if (!(k === start && name === 'apv') && !(k > start && LAUNCHERS.has(lead))) return false;
+    const [command, ...rest] = positional(words.slice(k + 1));
+    return command === 'stack' && rest.includes('merge');
+  });
+}
+
 /** True when the words of one simple command deploy to production with the Vercel CLI. */
 export function isProductionDeploy(words) {
   const at = commandIndex(words, 'vercel');
@@ -240,9 +259,10 @@ export const REASONS = {
   forcePush: 'APV : force-push interdit (git push --force, -f, --force-with-lease ou refspec +). ' +
     "Un commit déjà poussé ne se réécrit jamais : empile un commit correctif par-dessus. " +
     "Réécrire l'historique distant est une décision de l'opérateur, qu'il exécute lui-même.",
+  // Same text as MERGE_REFUSED of the tool (src/stack/github.ts), which refuses `apv stack merge` without it; a test keeps both equal.
   merge: "APV : fusion de PR bloquée hors de la commande dédiée. Une fusion se fait seulement sur ordre explicite " +
-    "de l'opérateur, par /apv:stack, qui re-cible, vérifie la base de chaque PR juste avant de fusionner et " +
-    "s'arrête à la première anomalie (cette commande pose APV_ALLOW_MERGE=1).",
+    "de l'opérateur, par /apv:stack (outil : APV_ALLOW_MERGE=1 apv stack merge <pr...>), qui re-cible, vérifie la base de chaque PR " +
+    "juste avant de fusionner et s'arrête à la première anomalie. APV_ALLOW_MERGE=1 se pose devant cette seule commande.",
   deploy: "APV : déploiement en production bloqué hors de la commande dédiée. Il se fait seulement sur ordre " +
     "explicite de l'opérateur, par la commande de déploiement du projet (qui pose APV_ALLOW_DEPLOY=1). " +
     'Un aperçu (preview) reste autorisé.',
@@ -258,7 +278,7 @@ export function evaluateCommand(command, env = {}) {
   let writesGithub = false;
   for (const words of segments) {
     if (isForcePush(words)) return { decision: 'deny', reason: REASONS.forcePush };
-    const write = githubWrite(words);
+    const write = githubWrite(words) ?? (isStackMerge(words) ? { merge: true } : null);
     if (write) {
       writesGithub = true;
       if (write.merge && !authorised(words, 'APV_ALLOW_MERGE', env)) return { decision: 'deny', reason: REASONS.merge };
@@ -288,7 +308,7 @@ async function main() {
   return 2;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
   main().then(code => { process.exitCode = code; }, error => {
     process.stderr.write(`APV bash-guard : ${error?.message ?? error}\n`);
     process.exitCode = 0;

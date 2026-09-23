@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, chmodSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -60,7 +60,7 @@ test('apv quota prints, classifies and appends to .apv/state/quota.log', async t
   const json = capture(dir);
   assert.equal(await runQuota(['--json'], json.io, runner), 0);
   const value = JSON.parse(json.out());
-  assert.equal(value.level, 'save_now'); assert.equal(value.logged, join(dir, '.apv/state/quota.log'));
+  assert.equal(value.level, 'save_now'); assert.equal(value.logged, join(realpathSync(dir), '.apv/state/quota.log'));
   const lines = readFileSync(join(dir, '.apv/state/quota.log'), 'utf8').trim().split('\n');
   assert.equal(lines.length, 2);
   assert.equal(JSON.parse(lines[1]).session.percent, 96);

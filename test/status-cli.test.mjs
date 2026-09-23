@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { fixture } from './helpers.mjs';
 import { demoSpec } from './lifecycle-helpers.mjs';
@@ -66,9 +67,9 @@ test('the main loader reads the design section and checks its folder', async t =
   assert.equal(ok.config.error, null);
 });
 
-test('the dispatcher lists every command, lock, db, design and preview included', async t => {
+test('the dispatcher lists every command, init, run and stack included', async t => {
   const f = fixture(t);
-  assert.deepEqual(Object.keys(commands), ['spec', 'ledger', 'scope', 'gates', 'lock', 'db', 'design', 'quota', 'preview', 'status']);
+  assert.deepEqual(Object.keys(commands), ['init', 'spec', 'run', 'stack', 'ledger', 'scope', 'gates', 'lock', 'db', 'design', 'quota', 'preview', 'status']);
   const help = await apv(f.repo, ['help']);
   assert.equal(help.code, 0);
   for (const name of Object.keys(commands)) assert.match(help.stdout, new RegExp(`apv ${name}`));
@@ -93,7 +94,10 @@ test('the apv binary runs as a separate process', () => {
   const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
   const r = spawnSync(process.execPath, [cli, '--version'], { encoding: 'utf8' });
   assert.equal(r.status, 0); assert.equal(r.stdout, `${VERSION}\n`);
-  assert.equal(VERSION, '3.0.0-alpha.2');
+  assert.equal(VERSION, '3.0.0-alpha.3');
+  // One version everywhere: tool, package and plugin manifest.
+  const read = path => JSON.parse(readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8'));
+  assert.deepEqual([read('../package.json').version, read('../.claude-plugin/plugin.json').version], [VERSION, VERSION]);
   const bad = spawnSync(process.execPath, [cli, 'nope'], { encoding: 'utf8' });
   assert.equal(bad.status, 2);
 });

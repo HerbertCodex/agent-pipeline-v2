@@ -36,27 +36,43 @@ Références à lire au moment voulu (chemins relatifs à ce fichier) :
 - **Jamais sans ordre explicite de l'opérateur** : fusionner une PR, force-push, déployer en production, écrire sur une base hébergée ou de production, supprimer une branche distante, dépenser.
 - **Jamais** : réécrire un commit déjà poussé (empile des commits propres), masquer la sortie d'une commande qui écrit sur un service externe (incident 30 : des `gh pr edit --base` ont échoué en silence et les PR ont été fusionnées dans la mauvaise base). Le hook du plugin bloque ces cas ; ne cherche pas à le contourner.
 
-## 4. Cycle d'une spec (`/apv:run` en phase 3 ; à la main d'ici là)
-0. **Préparer** : `/apv:status`, relevé de quota (`apv quota`), environnement vérifié (Docker, piles locales, verrous orphelins).
-1. **Données** : si la spec touche la base, `architecte-donnees` (mode conception) produit `.apv/data-model.md` ; tu le présentes à l'opérateur avant tout code.
-2. **Spec** : si elle n'existe pas, `product` la rédige ; `apv spec validate` jusqu'à `VALID`. Une spec fournie et validée par l'opérateur s'exécute telle quelle, sans re-planification (incident 23).
-3. **Design** : l'interface part de la maquette validée (`apv design list --screen <écran>`, et `apv design check` vert). Un écran absent ouvre une boucle avec l'opérateur par `/apv:design` (artefact publié, retours un par un, validation par ses mots, versement par `apv design register`), jamais une invention.
-4. **Plan** : `architecte` produit le graphe, la vague 0 « fondations » et les notes de vague (`references/planification.md`).
-5. **Fondations** : un seul `implementer` écrit les modules partagés ; intégrés et verts avant d'ouvrir le parallèle.
-6. **Vagues** : un `implementer` par tâche prête, chacun dans son worktree, en arrière-plan, avec la consigne commune et les notes de vague. Nombre d'agents dosé par le quota.
-7. **Intégration** : `integrateur` fusionne la vague, unifie les doublons, garde tous les tests, relance tout.
-8. **Revues** en parallèle, en lecture seule, sur copie isolée : `qa-securite`, `qa-fidelite`, `architecte-donnees` (revue), `dpo` (`references/integration-revues.md`).
-9. **Corrections** : tu décides chaque constat dans `.apv/state/corrections-<spec>.md`, puis une passe par domaine (serveur, interface), en parallèle si les fichiers ne se recouvrent pas.
-10. **Livraison** : tu relances toi-même tous les contrôles, tu pousses, tu ouvres la PR brouillon (empilée si besoin), tu mets l'aperçu à jour avec `/apv:preview` (`apv preview update <branche>`) et tu l'annonces (`references/livraison-pile.md`).
+## 4. Cycle d'une spec (commandes du plugin)
+| Étape | Commande | Ce qu'elle fait |
+|---|---|---|
+| Projet neuf | `/apv:init` | `apv init` (`.apv/` sans rien écraser), contrôles détectés du dépôt, consigne commune, premières décisions, commit proposé |
+| État, reprise | `/apv:status`, `/apv:resume` | où en est chaque spec ; environnement et agents à relancer après une coupure |
+| Maquette | `/apv:design` | boucle par artefact jusqu'à la validation de l'opérateur, versement par `apv design register` |
+| Spec | `/apv:spec` | `apv spec new`, rédaction par `product` (avec `dpo` et `architecte-donnees` consultés si la demande touche aux données), `apv spec validate` jusqu'à `VALID` |
+| Exécution | `/apv:run` | données, plan, fondations, vagues parallèles, intégration, revues, corrections, livraison en PR brouillon |
+| Revues | `/apv:review` | quatre revues en lecture seule sur copies détachées, constats consolidés |
+| Aperçu | `/apv:preview` | `apv preview update <branche>`, vérification, annonce |
+| Fusion de la pile | `/apv:stack` | uniquement sur ordre explicite de l'opérateur dans son message courant |
 
-Chaque étape écrit son état dans `.apv/state/` (plan, notes, corrections, `resume.md`) : une coupure se reprend sans rien perdre.
+Déroulé de `/apv:run` (procédure complète dans sa compétence, `skills/run/SKILL.md` du plugin) :
+0. **Préparer** : `/apv:status`, relevé de quota (`apv quota`), environnement vérifié (Docker, piles locales, verrous orphelins). Si l'exécution existe déjà : `apv run next <id>` et reprise, jamais un second `apv run start`.
+1. **Démarrer** : `apv run start <spec> --base <base>` crée l'état `.apv/state/run-<id>.json` (étapes, vagues calculées par l'outil, tâches, revues) et fixe la branche de la spec `apv/<id>`. Chaque transition passe ensuite par `apv run set <id> <étape | task:<id> | review:<domaine>> <statut>` ; jamais d'édition à la main.
+2. **Données** : si la spec touche la base, `architecte-donnees` (mode conception) produit `.apv/data-model.md` ; tu le présentes à l'opérateur avant tout code.
+3. **Spec** : si elle n'existe pas, `/apv:spec` d'abord. Une spec fournie et validée par l'opérateur s'exécute telle quelle, sans re-planification (incident 23).
+4. **Design** : l'interface part de la maquette validée (`apv design list --screen <écran>`, et `apv design check` vert). Un écran absent ouvre une boucle avec l'opérateur par `/apv:design` (artefact publié, retours un par un, validation par ses mots, versement par `apv design register`), jamais une invention.
+5. **Plan** : `architecte` produit le plan sur les vagues de l'outil, la vague 0 « fondations » et les notes de vague (`references/planification.md`).
+6. **Fondations** : un seul `implementer` écrit les modules partagés ; intégrés et verts avant d'ouvrir le parallèle.
+7. **Vagues** : un `implementer` par tâche prête, chacun dans son worktree, par le workflow du plugin `apv:vague` ou par l'outil Agent (plusieurs appels dans un même message, en arrière-plan). Nombre d'agents dosé par le quota. `apv scope check` relancé par toi à la fin de chaque tâche.
+8. **Intégration** : `integrateur` fusionne la vague dans sa branche d'intégration, unifie les doublons, garde tous les tests, relance tout ; tu avances `apv/<id>` en avance rapide.
+9. **Revues** : `/apv:review` (workflow `apv:revues`) : `qa-securite`, `qa-fidelite`, `architecte-donnees` (revue), `dpo` en parallèle, en lecture seule, sur copies détachées (`references/integration-revues.md`).
+10. **Corrections** : tu décides chaque constat dans `.apv/state/corrections-<id>.md`, puis une passe par domaine (serveur, interface), en parallèle si les fichiers ne se recouvrent pas.
+11. **Livraison** : tu relances toi-même tous les contrôles, tu pousses, tu ouvres la PR brouillon (empilée si besoin), tu mets l'aperçu à jour avec `/apv:preview` et tu l'annonces (`references/livraison-pile.md`).
+
+L'état d'exécution (`apv run status`, `apv run next`) et les fichiers de `.apv/state/` (plan, notes, corrections, `resume.md`) font qu'une coupure se reprend sans rien perdre : `apv run next <id>` dit toujours quoi faire ensuite. Guide complet : `${CLAUDE_PLUGIN_ROOT}/docs/RUN.md`.
+
+**Plusieurs specs déléguées d'un coup.** `/apv:init`, `/apv:run` et `/apv:stack` ne se déclenchent pas d'eux-mêmes (réservés à l'opérateur). Quand l'opérateur t'a délégué la livraison de plusieurs specs, suis pour chacune, dans l'ordre de la pile, la procédure de `/apv:run` en lisant `skills/run/SKILL.md` du plugin, comme s'il l'avait tapée ; la spec suivante part de la branche de la précédente. La délégation ne couvre jamais `/apv:stack` : la fusion attend son ordre.
 
 ## 5. Lancer un sous-agent
 - Outil Agent avec le type du plugin (`apv:implementer`, `apv:integrateur`, `apv:qa-securite`…), en arrière-plan pour tout travail long ; tu restes disponible et tu surveilles.
-- Le message de lancement contient tout ce dont l'agent a besoin, car il ne voit pas ta conversation : chemin de la spec et identifiant de la tâche, branche de base (et commit), nom de la branche à créer, chemin de la consigne commune et des notes de vague, contrôles à lancer, ressources à prendre sous bail, format du rapport.
+- Plusieurs agents à la fois : les workflows du plugin, `apv:vague` (implementers d'une vague) et `apv:revues` (revues), par l'outil Workflow ; ou plusieurs appels à l'outil Agent dans un même message, chacun en arrière-plan, quand l'outil Workflow n'est pas disponible ou que tu veux parler à chaque agent (`SendMessage`) pendant son travail.
+- Le message de lancement contient tout ce dont l'agent a besoin, car il ne voit pas ta conversation : chemin de la spec et identifiant de la tâche, branche de base (et commit), nom de la branche à créer, chemin de la consigne commune et des notes de vague, contrôles à lancer, ressources à prendre sous bail, format du rapport. Modèle : section 4 de `/apv:run`.
 - Worktree : un agent `isolation: worktree` part de la branche par défaut du dépôt. Soit la consigne lui fait créer sa branche depuis la base (`git switch -c <branche> <base>`), soit le projet règle `worktree.baseRef` à `"head"` dans `.claude/settings.json` et tu lances depuis la bonne tête.
 - Modèle : les agents sont en Opus, effort élevé. Tu peux passer un autre modèle à l'appel pour une tâche simple quand le quota est serré ; jamais pour les fondations, l'intégration ou les revues.
-- Un agent interrompu se reprend par `SendMessage` à son identifiant quand la session vit encore ; sinon on relance un agent sur sa branche avec « termine <tâche> depuis le wip <hash> ».
+- Un agent interrompu se reprend par `SendMessage` à son identifiant quand la session vit encore, un workflow par `resumeFromRunId` dans la même session ; sinon on relance un agent sur sa branche avec « termine <tâche> depuis le wip <hash> » (`apv run next` dit lesquels).
 
 ## 6. Verrous
 Toute ressource partagée (base locale, remise à zéro, ports fixes, navigateur de test, aperçu) s'utilise sous bail : `apv lock run <ressource> -- <commande>`, une commande par bail. Le bail expire, le propriétaire est vérifié, la file d'attente est visible (`apv lock status`). Jamais de verrou tenu en attendant autre chose (incident 25), jamais de verrou sans fin (incident 28). Préfère isoler (base ou schéma par worktree, ports par agent) quand c'est possible.

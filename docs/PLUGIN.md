@@ -1,6 +1,6 @@
 # Plugin Claude Code « apv » (Agent Pipeline V3)
 
-Version 3.0.0-alpha.2, phases 1 (socle) et 2 (design et aperçu vivant). Spécification : [APV3-SPEC.md](APV3-SPEC.md). Retour d'expérience qui l'a motivée : [RETOUR-TOUJOURS-RIEN.md](RETOUR-TOUJOURS-RIEN.md).
+Version 3.0.0-alpha.3, phases 1 (socle), 2 (design et aperçu vivant) et 3 (exécution). Spécification : [APV3-SPEC.md](APV3-SPEC.md). Retour d'expérience qui l'a motivée : [RETOUR-TOUJOURS-RIEN.md](RETOUR-TOUJOURS-RIEN.md).
 
 Le plugin fait de la session Claude Code principale un chef de projet : il orchestre de vrais sous-agents (spec, données, design, implémentation en parallèle, intégration, revues), tient l'état du travail dans le dépôt (`.apv/`), suit le quota et bloque les effets externes dangereux.
 
@@ -67,14 +67,29 @@ Un agent de plugin ne peut pas déclarer `hooks`, `mcpServers` ni `permissionMod
 | `/apv:resume` | disponible : reprise après coupure (état, Docker, piles, verrous, agents, quota) |
 | `/apv:design` | disponible : boucle de maquette par artefact avec l'opérateur jusqu'à sa validation explicite, puis versement par `apv design register` ([DESIGN.md](DESIGN.md)) |
 | `/apv:preview` | disponible : mise à jour de l'aperçu vivant par `apv preview update`, vérification, annonce (adresse, branche, changements, compte de démo) |
-| `/apv:init`, `/apv:spec`, `/apv:run`, `/apv:review`, `/apv:stack` | phase 3 |
+| `/apv:init` | disponible : `apv init` crée `.apv/` sans rien écraser, puis contrôles détectés du dépôt, consigne commune et premières décisions avec l'opérateur, commit proposé ; réservée à l'opérateur |
+| `/apv:spec` | disponible : `apv spec new`, rédaction par `product` (avec `dpo` et `architecte-donnees` consultés si la demande touche aux données), `apv spec validate` jusqu'à `VALID`, présentation à l'opérateur |
+| `/apv:run` | disponible : exécution d'une spec pilotée par l'état `apv run` (données, plan, fondations, vagues parallèles, `apv scope check`, intégration, revues, corrections, PR brouillon, aperçu), reprise par `apv run next` ; jamais de fusion ni de déploiement ; réservée à l'opérateur ([RUN.md](RUN.md)) |
+| `/apv:review` | disponible : revues sécurité, fidélité, données et RGPD en parallèle, en lecture seule, sur copies détachées du même commit, constats consolidés et dédoublonnés |
+| `/apv:stack` | disponible : `apv stack plan` montré en entier, puis `APV_ALLOW_MERGE=1 apv stack merge` qui re-cible, revérifie et s'arrête à la première anomalie ; uniquement sur ordre explicite de l'opérateur dans son message courant ([RUN.md](RUN.md), section 7) |
 | `/apv:onboard` | phase 4 |
 
-Les commandes des phases suivantes répondent déjà : elles annoncent leur phase et renvoient à la marche à suivre manuelle.
+`/apv:onboard` répond déjà : il annonce sa phase et renvoie à la marche à suivre manuelle. Les commandes « réservées à l'opérateur » ont des effets (fichiers du projet, branches, PR, fusion) : Claude ne les charge pas de lui-même, il faut les taper. Quand l'opérateur délègue plusieurs specs, le chef de projet suit la procédure de `/apv:run` pour chacune (compétence `chef-de-projet`, section 4).
+
+## Workflows
+
+Le dossier `workflows/` contient deux workflows au format de Claude Code (script JavaScript, `export const meta` puis `agent()`, `pipeline()`, `parallel()`, `phase()`, `log()` et `args`), lancés par les commandes et jamais seuls :
+
+| Workflow | Lancé par | Effet |
+|---|---|---|
+| `apv:vague` | `/apv:run` | un `apv:implementer` par tâche prête, chacun dans son worktree, rapport structuré par tâche |
+| `apv:revues` | `/apv:review` | un agent de revue par domaine sur sa copie détachée, puis dédoublonnage sans perte |
+
+Sans outil Workflow (désactivé ou version trop ancienne), les commandes lancent les mêmes agents par l'outil Agent, plusieurs appels dans un même message, en arrière-plan. Détails : [RUN.md](RUN.md), section 4.
 
 ## Compétences
 
-- `chef-de-projet` : la méthode complète (délégation, planification, worktrees, vagues, intégration, revues, livraison, pile de PR, quota, verrous, reprise, aperçu, journal, communication), avec ses références.
+- `chef-de-projet` : la méthode complète (délégation, planification, worktrees, vagues, intégration, revues, livraison, pile de PR, quota, verrous, reprise, aperçu, journal, communication), avec ses références ; elle renvoie aux commandes pour chaque étape.
 - `design-artefact` : boucle de maquette avec l'opérateur et versement de la référence (résumé pour les rôles ; le chef de projet la mène par `/apv:design`).
 - `rgpd` : grille du DPO, registres, modèles de textes sans promesse risquée.
 - `architecture-donnees` : règles de la section 13 bis, exemples SQL et tests exigés.
@@ -85,13 +100,13 @@ Les commandes des phases suivantes répondent déjà : elles annoncent leur phas
 | Événement | Script | Effet |
 |---|---|---|
 | `SessionStart` | `hooks/scripts/session-start.mjs` | Si le projet a un dossier `.apv/`, ajoute au contexte les notes de reprise (`.apv/state/resume.md`), les fichiers d'état récents, le dernier relevé de quota (ligne JSON de `.apv/state/quota.log`, rendue lisible) et la dernière fin de tour. |
-| `PreToolUse` (Bash) | `hooks/scripts/bash-guard.mjs` | Bloque le force-push (`--force`, `-f`, `--force-with-lease`, refspec `+`), la fusion de PR (`gh pr merge`, `gh api …/merge`) sauf `APV_ALLOW_MERGE=1`, le déploiement en production (`vercel --prod`, `promote`, `rollback`) sauf `APV_ALLOW_DEPLOY=1`, et toute écriture GitHub dont la sortie est envoyée vers `/dev/null` (incident 30). |
+| `PreToolUse` (Bash) | `hooks/scripts/bash-guard.mjs` | Bloque le force-push (`--force`, `-f`, `--force-with-lease`, refspec `+`), la fusion de PR (`gh pr merge`, `gh api …/merge`, `apv stack merge`) sauf `APV_ALLOW_MERGE=1`, le déploiement en production (`vercel --prod`, `promote`, `rollback`) sauf `APV_ALLOW_DEPLOY=1`, et toute écriture GitHub dont la sortie est envoyée vers `/dev/null` (incident 30). |
 | `PostToolUse` (Write, Edit, MultiEdit, NotebookEdit) | `hooks/scripts/scope-reminder.mjs` | Dans le worktree d'un implementer (marqueur `.apv/state/task.json`), rappelle les chemins autorisés de la tâche quand un fichier écrit en sort, avec la commande `apv scope check` à lancer. Rappel seulement, jamais de blocage : la vérification stricte reste `apv scope check` en fin de tâche. Muet sans marqueur (écritures du chef de projet). |
 | `Stop` | `hooks/scripts/stop-journal.mjs` | Si `.apv/` existe, ajoute une ligne horodatée à `.apv/state/journal.log` (session, travaux encore en arrière-plan) et crée ou complète `.apv/.gitignore`. |
 
 Marqueur de tâche : au démarrage, l'implementer écrit dans son worktree `.apv/state/task.json`, soit `{"spec": ".apv/specs/<id>.json", "task": "<id de tâche>"}` (chemins lus dans la spec), soit `{"task": "<id>", "allowedPaths": [...], "allowedNewPaths": [...]}`. Le fichier est ignoré par Git.
 
-Les variables d'autorisation se posent devant la seule commande concernée (`APV_ALLOW_MERGE=1 gh pr merge …`), uniquement sur ordre explicite de l'opérateur ; les commandes `/apv:stack` et de déploiement les poseront elles-mêmes. Ces hooks sont des garde-fous contre l'erreur, pas une frontière de sécurité : pour une interdiction absolue, ajoutez aussi des règles `deny` dans les permissions du projet.
+Les variables d'autorisation se posent devant la seule commande concernée (`APV_ALLOW_MERGE=1 gh pr merge …`), uniquement sur ordre explicite de l'opérateur ; `/apv:stack` la pose devant la seule commande `apv stack merge` (bloquée elle aussi sans elle). Ces hooks sont des garde-fous contre l'erreur, pas une frontière de sécurité : pour une interdiction absolue, ajoutez aussi des règles `deny` dans les permissions du projet.
 
 ## Dossier `.apv/` du projet
 
@@ -103,7 +118,8 @@ Les variables d'autorisation se posent devant la seule commande concernée (`APV
 | `.apv/data-model.md` | modèle de données | oui |
 | `.apv/rgpd/` | registre des traitements, sous-traitants | oui |
 | `.apv/journal-pipeline.md` | incidents et améliorations du pipeline | oui |
-| `.apv/state/resume.md`, `plan-*.md`, `notes-*.md`, `corrections-*.md` | état de reprise, plans, notes de vague, décisions de correction | oui |
+| `.apv/state/resume.md`, `plan-*.md`, `notes-*.md`, `corrections-*.md`, `revues-*.md`, `demande-*.md` | état de reprise, plans, notes de vague, décisions de correction, constats consolidés des revues, demande de l'opérateur mot pour mot | oui |
+| `.apv/state/run-<id>.json` | état d'exécution d'une spec, écrit par `apv run start` et `apv run set` seulement ([RUN.md](RUN.md)) | oui, aux points de sauvegarde |
 | `.apv/state/*.log` | `journal.log` (hook de fin de tour), `quota.log` (relevés de `apv quota`, un objet JSON par ligne) | non |
 | `.apv/state/task.json` | marqueur de tâche d'un worktree d'implementer | non |
 | `.apv/receipts/` | reçus de `apv gates run` | non |

@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { evaluateCommand, REASONS, tokenize } from '../hooks/scripts/bash-guard.mjs';
+import { evaluateCommand, isStackMerge, REASONS, tokenize } from '../hooks/scripts/bash-guard.mjs';
+import { isMainModule } from '../hooks/scripts/lib.mjs';
 
 const script = fileURLToPath(new URL('../hooks/scripts/bash-guard.mjs', import.meta.url));
 const hooksFile = fileURLToPath(new URL('../hooks/hooks.json', import.meta.url));
@@ -59,6 +62,37 @@ test('pull request merges are blocked unless explicitly authorised', () => {
   assert.equal(decision('APV_ALLOW_DEPLOY=1 gh pr merge 5', {}), 'deny');
   // The authorisation applies to its own command only.
   assert.equal(decision('APV_ALLOW_MERGE=1 true; gh pr merge 5', {}), 'deny');
+});
+
+test('apv stack merge needs the same explicit authorisation as gh pr merge', () => {
+  for (const command of [
+    'apv stack merge 11 12 13',
+    'apv stack merge 11 --method squash --ready',
+    'apv stack --method squash merge 11',
+    '/usr/local/bin/apv stack merge 3',
+    'npx apv stack merge 4',
+    'node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" stack merge 5',
+    'node dist/cli.js stack merge 6 --json',
+    'cd projet && apv stack merge 7',
+    'APV_ALLOW_MERGE=0 apv stack merge 8',
+    'APV_ALLOW_MERGE=1 true; apv stack merge 9',
+  ]) assert.deepEqual(evaluateCommand(command, {}), { decision: 'deny', reason: REASONS.merge }, command);
+  for (const command of [
+    'APV_ALLOW_MERGE=1 apv stack merge 11 12 13',
+    'env APV_ALLOW_MERGE=1 node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" stack merge 11 12',
+    'apv stack plan 11 12 13',
+    'node dist/cli.js stack plan 11 --json',
+    'apv stack --help',
+    'echo apv stack merge 11',
+    'git commit -m "apv stack merge 11"',
+    'apv run next merge',
+  ]) assert.equal(decision(command, {}), 'allow', command);
+  assert.equal(decision('apv stack merge 11', { APV_ALLOW_MERGE: '1' }), 'allow');
+  // It writes to GitHub: its output must stay visible, even when authorised.
+  assert.deepEqual(evaluateCommand('APV_ALLOW_MERGE=1 apv stack merge 11 > /dev/null', {}), { decision: 'deny', reason: REASONS.hiddenOutput });
+  assert.equal(isStackMerge(['apv', 'stack', 'merge']), true);
+  assert.equal(isStackMerge(['apv', 'merge', 'stack']), false);
+  assert.equal(isStackMerge([]), false);
 });
 
 test('production deploys are blocked unless explicitly authorised', () => {
@@ -146,4 +180,25 @@ test('hooks.json registers the four hooks in exec form with the plugin root plac
       }
     }
   }
+});
+
+test('the guard still blocks when the plugin is reached through a symlink (macOS /var, linked plugin folder)', t => {
+  // Node resolves the main module's path while argv[1] keeps the launched one: comparing them unresolved made
+  // every hook a silent no-op behind a symlink, the force-push and merge guard included.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'apv-guard-link-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const link = join(root, 'plugin');
+  symlinkSync(fileURLToPath(new URL('..', import.meta.url)), link);
+  const input = JSON.stringify(bash('git push --force origin main'));
+  const result = spawnSync(process.execPath, [join(link, 'hooks', 'scripts', 'bash-guard.mjs')], { input, encoding: 'utf8' });
+  assert.equal(result.status, 2, result.stderr);
+  assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('isMainModule compares resolved paths and never throws', () => {
+  const guard = new URL('../hooks/scripts/bash-guard.mjs', import.meta.url);
+  assert.equal(isMainModule(guard, script), true);
+  assert.equal(isMainModule(guard, undefined), false);
+  assert.equal(isMainModule(guard, '/nonexistent/bash-guard.mjs'), false);
+  assert.equal(isMainModule(guard, hooksFile), false);
 });

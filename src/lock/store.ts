@@ -31,6 +31,9 @@ export interface LockSnapshot {
   mtimeMs: number;
 }
 
+let lastEnqueueMs = 0;
+let enqueueSeq = 0;
+
 export interface Waiter { file: string; owner: LockOwner; enqueuedAt: string }
 
 export type AcquireResult =
@@ -288,7 +291,12 @@ export class LockStore {
   enqueue(resource: string, owner: LockOwner): string {
     const dir = this.queueDir(resource);
     mkdirSync(dir, { recursive: true });
-    const micros = Math.round((performance.timeOrigin + performance.now()) * 1000);
+    // Wall clock, shared by every process: performance.timeOrigin is estimated per process and may be off by a
+    // few milliseconds, which let a later waiter sort before an earlier one (FIFO test failing intermittently).
+    // Within one process, the monotonic clock breaks ties so that successive tickets keep their order.
+    const now = Date.now();
+    const micros = now * 1000 + (now === lastEnqueueMs ? ++enqueueSeq : (enqueueSeq = 0));
+    lastEnqueueMs = now;
     const file = `${String(micros).padStart(17, '0')}-${process.pid}-${randomBytes(3).toString('hex')}.json`;
     writeFileSync(join(dir, file), `${JSON.stringify({ owner, enqueuedAt: new Date().toISOString() })}\n`, { flag: 'wx' });
     return join(dir, file);
@@ -322,6 +330,9 @@ export class LockStore {
     }
     const live: Waiter[] = [];
     const now = Date.now();
+    // The holder's own ticket survives its acquisition for an instant (the lock is written, then the ticket
+    // removed): it is not a waiter, and counting it put a new holder at the head of its own queue.
+    const holder = this.read(resource).record?.owner ?? null;
     for (const file of files) {
       const path = join(dir, file);
       let owner: LockOwner | null = null;
@@ -342,6 +353,7 @@ export class LockStore {
         this.log({ event: 'stale_waiter_removed', resource, owner, reason: dead ? 'owner_dead' : owner ? 'no_heartbeat' : 'corrupt' });
         continue;
       }
+      if (holder && owner.pid === holder.pid && owner.host === holder.host && owner.label === holder.label) continue;
       live.push({ file, owner, enqueuedAt });
     }
     return live;

@@ -11,10 +11,10 @@ Tu codes UNE tâche d'une spec de <nom du projet> (<description en une ligne : p
 1. La tâche et ses critères dans `<chemin de la spec>` (`tasks[].description`, `allowedPaths`, `acceptanceIds`, `acceptance[]`) et la section `security`.
 2. Les maquettes validées, référence ABSOLUE : `<chemins>` (liste et empreintes : `apv design list`). Reproduire fidèlement : structure, espacements, couleurs, typographies, états, thèmes clair et sombre, mobile et bureau, textes MOT POUR MOT.
 3. Le modèle de données `.apv/data-model.md` et le registre des décisions.
-4. Les notes de ta vague : `<chemin>`.
+4. Les notes de ta vague : `.apv/state/notes-<id de la spec>-vague-<n>.md` (données par le chef de projet).
 
 ## Démarrage
-`git switch -c <branche de tâche> <base>`, puis le marqueur `.apv/state/task.json` (`{"spec": "<chemin de la spec>", "task": "<id>"}`, ignoré par Git, lu par le hook de rappel des chemins autorisés), puis `<installation des dépendances>`.
+`git switch -c <branche de tâche> <base>` (reprise : si la branche existe déjà, `git switch <branche de tâche>`), puis le marqueur `.apv/state/task.json` (`{"spec": "<chemin de la spec>", "task": "<id>"}`, ignoré par Git, lu par le hook de rappel des chemins autorisés), puis `<installation des dépendances>`.
 
 ## Règles de code
 - <règles du framework, par exemple Svelte 5 en runes, SvelteKit, form actions avec amélioration progressive, validation serveur>

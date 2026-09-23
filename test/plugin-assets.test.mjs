@@ -39,13 +39,16 @@ const AGENTS = ['architecte', 'architecte-donnees', 'designer', 'dpo', 'implemen
 const V2_SKILLS = ['clean-code', 'design-patterns', 'refactoring', 'security', 'tdd', 'ui-design'];
 const PHASE_ONE_COMMANDS = ['quota', 'resume', 'status'];
 const PHASE_TWO_COMMANDS = ['design', 'preview'];
-const LATER_COMMANDS = { init: 3, spec: 3, run: 3, review: 3, stack: 3, onboard: 4 };
+const PHASE_THREE_COMMANDS = ['init', 'review', 'run', 'spec', 'stack'];
+// Commands with effects the operator must trigger himself: never loaded by the model on its own.
+const OPERATOR_ONLY_COMMANDS = ['init', 'run', 'stack'];
+const LATER_COMMANDS = { onboard: 4 };
 const METHOD_SKILLS = ['architecture-donnees', 'chef-de-projet', 'design-artefact', 'rgpd'];
 
 test('manifests parse and describe the apv plugin', () => {
   const plugin = JSON.parse(read('.claude-plugin/plugin.json'));
   assert.equal(plugin.name, 'apv');
-  assert.equal(plugin.version, '3.0.0-alpha.2');
+  assert.equal(plugin.version, '3.0.0-alpha.3');
   assert.equal(plugin.license, 'MIT');
   assert.match(read('LICENSE'), /^MIT License/);
   assert.equal(plugin.repository, 'https://github.com/HerbertCodex/agent-pipeline-v2');
@@ -100,7 +103,7 @@ test('agent bodies carry the rules that the pilot project paid for', () => {
 
 test('every skill has a frontmatter named after its directory', () => {
   const dirs = readdirSync(join(root, 'skills')).filter(d => statSync(join(root, 'skills', d)).isDirectory()).sort();
-  const expected = [...V2_SKILLS, ...METHOD_SKILLS, ...PHASE_ONE_COMMANDS, ...PHASE_TWO_COMMANDS, ...Object.keys(LATER_COMMANDS)].sort();
+  const expected = [...V2_SKILLS, ...METHOD_SKILLS, ...PHASE_ONE_COMMANDS, ...PHASE_TWO_COMMANDS, ...PHASE_THREE_COMMANDS, ...Object.keys(LATER_COMMANDS)].sort();
   assert.deepEqual(dirs, expected);
   for (const dir of dirs) {
     const { fields } = frontmatter(`skills/${dir}/SKILL.md`);
@@ -146,6 +149,59 @@ test('phase two commands: the design loop and the live preview run the apv tool'
   for (const rule of [/\/apv:design/, /\/apv:preview/, /apv design check/]) assert.match(lead, rule);
 });
 
+test('phase three commands run the apv tool; those with effects are left to the operator', () => {
+  const tool = 'Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js';
+  const subcommand = { init: 'init', spec: 'spec', run: 'run', review: 'run', stack: 'stack plan' };
+  for (const name of PHASE_THREE_COMMANDS) {
+    const { fields, body } = frontmatter(`skills/${name}/SKILL.md`);
+    assert.ok(!body.includes('Disponible en phase'), `${name}: no longer a stub`);
+    assert.ok(fields['argument-hint'], `${name}: argument hint`);
+    assert.ok(fields.description.length >= 150, `${name}: description says what and when`);
+    assert.ok(fields['allowed-tools'].includes(`${tool} ${subcommand[name]}*)`), `${name}: allowed to run apv ${subcommand[name]}`);
+    assert.ok(body.includes('node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"'), `${name}: names the bundled tool`);
+    assert.match(body, /tiret cadratin/, `${name}: text rule`);
+    if (OPERATOR_ONLY_COMMANDS.includes(name)) assert.equal(fields['disable-model-invocation'], 'true', `${name}: operator only`);
+    else assert.ok(!('disable-model-invocation' in fields), `${name}: /apv:run chains it`);
+  }
+
+  const init = frontmatter('skills/init/SKILL.md').body;
+  for (const rule of [/apv init --name/, /sans jamais écraser/, /package\.json/, /gates/, /\.apv\/brief\.md/, /apv ledger plan/, /mots exacts/, /\*\*propose\*\* le commit/, /worktree\.baseRef/]) assert.match(init, rule);
+
+  const spec = frontmatter('skills/spec/SKILL.md');
+  assert.ok(spec.fields['allowed-tools'].split(' ').includes('Agent'));
+  for (const rule of [/apv spec new <id>/, /`apv:product`/, /`apv:dpo`/, /`apv:architecte-donnees`/, /apv spec validate .*--request-file/, /jusqu'à `VALID`/, /SendMessage/, /Présenter à l'opérateur/, /minimum de sécurité/]) assert.match(spec.body, rule);
+
+  const run = frontmatter('skills/run/SKILL.md');
+  const runTools = run.fields['allowed-tools'].split(' ');
+  for (const t of ['Agent', 'Workflow', 'SendMessage', 'TaskStop', 'Skill']) assert.ok(runTools.includes(t), `run may use ${t}`);
+  assert.ok(!/merge(?! --ff-only)/.test(run.fields['allowed-tools']), 'run is never allowed to merge a PR');
+  assert.ok(!run.body.includes('gh pr merge') && !run.body.includes('APV_ALLOW'), 'run never merges');
+  const next = run.body.indexOf('apv run next <id>');
+  assert.ok(next > 0 && next < run.body.indexOf('apv run start <spec>'), 'resume through apv run next before any start');
+  for (const rule of [/git switch -c <branche> <sha>/, /\.apv\/state\/task\.json/, /apv scope check --spec <spec> --task <tâche> --base <baseCommit>/,
+    /apv run set <id> task:<tâche> running --branch/, /apv run set <id> task:<tâche> done --commit/, /data-model/, /apv:architecte`/, /fondations/,
+    /`apv:vague`/, /workflows\/vague\.js/, /dans un même message/, /run_in_background: true/, /apv:integrateur/, /git merge --ff-only/, /\/apv:review <id>/,
+    /corrections-<id>\.md/, /apv gates run --repo/, /gh pr create --draft/, /sans masquer la sortie/, /apv preview update/, /70 %/, /85 %/, /95 %/, /apv quota/,
+    /resumeFromRunId/, /Jamais de fusion/, /jamais de déploiement/, /jamais d'édition à la main/]) assert.match(run.body, rule);
+
+  const review = frontmatter('skills/review/SKILL.md');
+  assert.ok(review.fields['allowed-tools'].split(' ').includes('Workflow'));
+  for (const rule of [/apv:qa-securite/, /apv:qa-fidelite/, /apv:architecte-donnees/, /apv:dpo/, /git worktree add --detach/, /`apv:revues`/, /workflows\/revues\.js/,
+    /tous dans le même message/, /apv run set <id> review:<domaine> running/, /apv run set <id> review:<domaine> done/, /Aucun constat n'est écarté/, /lecture seule/]) assert.match(review.body, rule);
+
+  const stack = frontmatter('skills/stack/SKILL.md');
+  assert.ok(!stack.fields['allowed-tools'].includes('merge'), 'the merge itself always goes through a permission prompt');
+  for (const rule of [/message courant/, /apv stack plan <pr\.\.\.>/, /\*\*toute\*\* la sortie/, /APV_ALLOW_MERGE=1 apv stack merge <pr\.\.\.>/, /devant \*\*cette seule commande\*\*/,
+    /n'utilise jamais `gh pr merge`/, /Lis toute la sortie/, /incident 30/, /Première anomalie/]) assert.match(stack.body, rule);
+
+  const lead = frontmatter('skills/chef-de-projet/SKILL.md').body;
+  for (const rule of [/\/apv:init/, /\/apv:spec/, /\/apv:run/, /\/apv:review/, /\/apv:stack/, /apv run next/, /apv:vague/]) assert.match(lead, rule);
+  const plugin = read('docs/PLUGIN.md');
+  for (const name of PHASE_THREE_COMMANDS) assert.match(plugin, new RegExp(`\\| \`/apv:${name}\` \\| disponible`), `PLUGIN.md lists /apv:${name}`);
+  assert.match(plugin, /RUN\.md/);
+  for (const topic of [/apv run next/, /apv run set/, /reprise/i, /apv stack plan/, /APV_ALLOW_MERGE=1/]) assert.match(read('docs/RUN.md'), topic);
+});
+
 test('the project lead skill links references that exist', () => {
   const { body } = frontmatter('skills/chef-de-projet/SKILL.md');
   const references = [...body.matchAll(/`(references\/[a-z-]+\.md)`/g)].map(m => m[1]);
@@ -159,13 +215,14 @@ test('the project lead skill links references that exist', () => {
 test('texts written for APV3 contain no em or en dash', () => {
   const files = [
     ...AGENTS.map(a => `agents/${a}.md`),
-    ...[...METHOD_SKILLS, ...PHASE_ONE_COMMANDS, ...PHASE_TWO_COMMANDS, ...Object.keys(LATER_COMMANDS)].flatMap(s => {
+    ...[...METHOD_SKILLS, ...PHASE_ONE_COMMANDS, ...PHASE_TWO_COMMANDS, ...PHASE_THREE_COMMANDS, ...Object.keys(LATER_COMMANDS)].flatMap(s => {
       const dir = join(root, 'skills', s);
       const refs = readdirSync(dir).includes('references') ? readdirSync(join(dir, 'references')).map(r => `skills/${s}/references/${r}`) : [];
       return [`skills/${s}/SKILL.md`, ...refs];
     }),
     'hooks/hooks.json', 'hooks/scripts/bash-guard.mjs', 'hooks/scripts/session-start.mjs', 'hooks/scripts/stop-journal.mjs', 'hooks/scripts/scope-reminder.mjs',
-    '.claude-plugin/plugin.json', '.claude-plugin/marketplace.json', 'docs/PLUGIN.md', 'docs/DESIGN.md', 'README.md', 'START-HERE.md',
+    '.claude-plugin/plugin.json', '.claude-plugin/marketplace.json', 'docs/PLUGIN.md', 'docs/DESIGN.md', 'docs/RUN.md', 'README.md', 'START-HERE.md',
+    'skills/README.md', 'workflows/vague.js', 'workflows/revues.js',
   ];
   for (const file of files) assert.ok(!/[–—]/.test(read(file)), `${file} contains an em or en dash`);
 });

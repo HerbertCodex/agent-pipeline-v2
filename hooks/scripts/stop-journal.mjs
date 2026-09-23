@@ -4,8 +4,7 @@
 // (APV3 spec, section 11). Never blocks the stop and never prints to stdout.
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { ensureApvGitignore, findApvDir, oneLine, readHookInput } from './lib.mjs';
+import { ensureApvGitignore, findApvDir, isMainModule, oneLine, readHookInput } from './lib.mjs';
 
 /** Formats the journal line for a Stop payload. */
 export function journalLine(input, now = new Date()) {
@@ -36,7 +35,7 @@ async function main() {
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
   main().then(code => { process.exitCode = code; }, error => {
     process.stderr.write(`APV stop-journal : ${error?.message ?? error}\n`);
     process.exitCode = 0;

@@ -1,6 +1,6 @@
 {
   "name": "agent-pipeline-v2",
-  "version": "3.0.0-alpha.2",
+  "version": "3.0.0-alpha.3",
   "description": "Agent Pipeline V3: Claude Code plugin tooling (specs, decision ledger, gates, scope, quota) without the V2 controller",
   "type": "module",
   "license": "MIT",
@@ -21,6 +21,7 @@
     "agents",
     "skills",
     "hooks",
+    "workflows",
     "dist",
     "src",
     "test",
