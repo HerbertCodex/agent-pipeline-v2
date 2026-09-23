@@ -5,7 +5,7 @@ import { configFile, loadConfig } from '../config/load.js';
 import { decisionLedgerIssues, decisionLedgerSchema, ledgerHash, LEDGER_FILE, LEGACY_LEDGER_FILE } from '../lifecycle/decisions.js';
 import { lastQuotaReading, QUOTA_LOG } from '../quota/usage.js';
 import { parseSpecDocument } from '../spec/check.js';
-import { isActiveRun, readRunSummaries, runSummaryLine } from '../run/summary.js';
+import { cleanLine, isActiveRun, readRunSummaries, runSummaryLine } from '../run/summary.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 export const usage = `Utilisation :
   apv status [--repo <chemin>] [--json]
@@ -90,9 +90,10 @@ export async function run(args, io) {
             `Configuration : ${c.file ? `${c.file}${c.legacy ? ' (format V2)' : ''}` : 'aucune'}${c.error ? ` ; invalide : ${c.error.split('\n')[0]}` : c.file ? ` ; contrôles : ${c.gates.join(', ') || 'aucun'}` : ''}`,
             `Registre : ${status.ledger.file ? `${status.ledger.file} ; ${status.ledger.issues ? `invalide (${status.ledger.issues} erreur(s), voir apv ledger validate)` : `${status.ledger.decisions} décision(s), empreinte ${status.ledger.hash}`}` : 'aucun'}`,
             `Specs (.apv/specs) : ${status.specs.length ? '' : 'aucune'}`,
-            ...status.specs.map(s => `- ${s.file}${s.title ? ` : ${s.title}` : ''}${s.error ? ` (illisible : ${s.error})` : ''}`),
+            // File names, titles and parse errors come from files any agent or commit can write: one cleaned line each.
+            ...status.specs.map(s => cleanLine(`- ${s.file}${s.title ? ` : ${s.title}` : ''}${s.error ? ` (illisible : ${s.error.split(/\r?\n/)[0]})` : ''}`)),
             `État (.apv/state) : ${status.state.length ? '' : 'aucun'}`,
-            ...status.state.map(s => `- ${s.file} (${s.bytes} octets, ${s.modifiedAt})`),
+            ...status.state.map(s => cleanLine(`- ${s.file} (${s.bytes} octets, ${s.modifiedAt})`)),
             `Exécutions en cours : ${active.length ? '' : 'aucune'}`,
             ...active.map(r => `- ${runSummaryLine(r)}`),
             `Quota : ${q ? `${q.at} ; session ${q.session ? `${q.session.percent} %` : '?'} ; semaine ${q.week ? `${q.week.percent} %` : '?'} ; niveau ${q.level}` : 'aucun relevé'}`,
