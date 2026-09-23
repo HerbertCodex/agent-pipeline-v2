@@ -297,6 +297,9 @@ export class LockStore {
         }
         const live = [];
         const now = Date.now();
+        // The holder's own ticket survives its acquisition for an instant (the lock is written, then the ticket
+        // removed): it is not a waiter, and counting it put a new holder at the head of its own queue.
+        const holder = this.read(resource).record?.owner ?? null;
         for (const file of files) {
             const path = join(dir, file);
             let owner = null;
@@ -321,6 +324,8 @@ export class LockStore {
                 this.log({ event: 'stale_waiter_removed', resource, owner, reason: dead ? 'owner_dead' : owner ? 'no_heartbeat' : 'corrupt' });
                 continue;
             }
+            if (holder && owner.pid === holder.pid && owner.host === holder.host && owner.label === holder.label)
+                continue;
             live.push({ file, owner, enqueuedAt });
         }
         return live;

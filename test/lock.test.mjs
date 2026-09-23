@@ -268,10 +268,14 @@ test('waiters are served in FIFO order and see their queue position', async (t) 
   const holder = cli(dir, ['run', 'db', ...append('holder', 700)]);
   await waitFor(() => existsSync(join(dir, 'db.lock')));
   const queue = join(dir, 'db.queue');
+  // Waiters are awaited by label: the holder's own ticket may still be in the queue directory for an instant.
+  const queued = label => existsSync(queue) && readdirSync(queue).some(f => {
+    try { return JSON.parse(readFileSync(join(queue, f), 'utf8')).owner.label === label; } catch { return false; }
+  });
   const first = cli(dir, ['run', 'db', '--label', 'premier', ...append('first')]);
-  await waitFor(() => existsSync(queue) && readdirSync(queue).length === 1);
+  await waitFor(() => queued('premier'));
   const second = cli(dir, ['run', 'db', '--label', 'second', ...append('second')]);
-  await waitFor(() => readdirSync(queue).length === 2);
+  await waitFor(() => queued('second'));
   const status = captureIO({ APV_LOCK_DIR: dir });
   assert.equal(await run(['status', 'db'], status.io), 0);
   assert.match(status.out.stdout, /db : tenu/);
@@ -351,4 +355,17 @@ test('usage errors exit 2 with help; --dir overrides the environment', async (t)
   assert.equal(await run(['acquire', 'db', '--dir', other], io), 0);
   assert.ok(existsSync(join(other, 'db.lock')));
   assert.equal(existsSync(join(dir, 'db.lock')), false);
+});
+
+test("the holder's own ticket, left for an instant after acquisition, is not listed as a waiter", async (t) => {
+  const dir = tempDir(t);
+  const store = new LockStore(dir, { pollMs: 30 });
+  const holder = { pid: process.pid, host: store.host, label: 'détenteur' };
+  const ticket = store.enqueue('db', holder);
+  assert.equal((await store.tryAcquire('db', holder, 60)).ok, true);
+  // Window between the lock being written and the ticket being removed.
+  const other = store.enqueue('db', { pid: process.pid, host: store.host, label: 'suivant' });
+  assert.deepEqual(store.waiters('db').map(w => w.owner.label), ['suivant']);
+  assert.ok(existsSync(ticket), 'the ticket is skipped, never removed by a reader');
+  store.dequeue(ticket); store.dequeue(other);
 });
