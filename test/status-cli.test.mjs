@@ -66,9 +66,9 @@ test('the main loader reads the design section and checks its folder', async t =
   assert.equal(ok.config.error, null);
 });
 
-test('the dispatcher lists every command, lock, db, design and preview included', async t => {
+test('the dispatcher lists every command, init, run and stack included', async t => {
   const f = fixture(t);
-  assert.deepEqual(Object.keys(commands), ['init', 'spec', 'run', 'ledger', 'scope', 'gates', 'lock', 'db', 'design', 'quota', 'preview', 'status']);
+  assert.deepEqual(Object.keys(commands), ['init', 'spec', 'run', 'stack', 'ledger', 'scope', 'gates', 'lock', 'db', 'design', 'quota', 'preview', 'status']);
   const help = await apv(f.repo, ['help']);
   assert.equal(help.code, 0);
   for (const name of Object.keys(commands)) assert.match(help.stdout, new RegExp(`apv ${name}`));
