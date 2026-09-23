@@ -25,7 +25,7 @@ Livrer une application de bout en bout, vite et proprement, avec les garde-fous 
 | Chaîne séquentielle de tâches | Graphe de dépendances, vagues parallèles (workflows) |
 | Budgets et délais qui arrêtent un rôle en plein travail | Suivi du quota, dosage des vagues, sauvegarde avant la limite |
 | Base SQLite des runs, tableau de bord local | État lisible dans le dépôt (`.apv/`) et aperçu vivant de l'application |
-| Revue QA unique | Revues indépendantes : sécurité, fidélité, RGPD |
+| Revue QA unique, base de données conçue au fil des tâches | Modèle de données conçu avant le code ; revues indépendantes : sécurité, fidélité, données, RGPD |
 
 Conservé tel quel ou presque : schéma et validation des specs, registre des décisions, calcul du minimum de sécurité OWASP, vérification des chemins autorisés, planification des contrôles, preuves (reçus), analyse du dépôt, les 6 compétences existantes.
 
@@ -56,6 +56,7 @@ Chaque agent est un fichier `agents/<nom>.md` : description, outils autorisés, 
 | `designer` | Produit et itère la maquette en artefact avec l'opérateur ; ne code pas l'application | aucun | non |
 | `implementer` | Code UNE tâche dans son worktree, lance tous les contrôles, commite | worktree | oui |
 | `integrateur` | Fusionne des branches parallèles, unifie les doublons, relance tous les contrôles | worktree | oui |
+| `architecte-donnees` | Modélise la base AVANT le code (entités, relations, contraintes, index, RLS), puis revoit chaque migration et chaque requête ajoutée | aucun | migrations et doc du modèle, sur demande |
 | `qa-securite` | Revue en lecture seule : attaques réelles avec deux utilisateurs, ZAP, secrets, OWASP | aucun | non |
 | `qa-fidelite` | Revue en lecture seule : captures comparées à la maquette, textes, accessibilité, bonnes pratiques | aucun | non |
 | `dpo` | RGPD : données, base légale, durées, sous-traitants et transferts vérifiés sur les DPA officiels, cohérence des pages légales avec le code | aucun | pages légales seulement, sur demande |
@@ -71,7 +72,7 @@ Les rôles de V2 (`roles/*.md`) deviennent le corps de ces agents, sans les cons
 | `/apv:design` | Boucle de maquette par artefact jusqu'à validation ; versionne la maquette validée |
 | `/apv:spec` | Rédige et valide une spec (outil `apv spec validate`, minimum de sécurité recalculé) |
 | `/apv:run` | Exécute une spec : vagues parallèles, intégration, revues, corrections, PR brouillon |
-| `/apv:review` | Lance les revues indépendantes (sécurité, fidélité, RGPD) sur une branche |
+| `/apv:review` | Lance les revues indépendantes (sécurité, fidélité, données, RGPD) sur une branche |
 | `/apv:stack` | Fusionne une pile de PR dans l'ordre : re-cible, vérifie, fusionne, s'arrête à la première anomalie ; uniquement sur ordre explicite de l'opérateur |
 | `/apv:preview` | Met à jour l'aperçu vivant sur une branche et l'annonce |
 | `/apv:quota` | Relève les fenêtres d'usage (5 h, semaine) et recalibre les vagues |
@@ -88,12 +89,13 @@ Les rôles de V2 (`roles/*.md`) deviennent le corps de ces agents, sans les cons
 
 ## 8. Exécution d'une spec (`/apv:run`)
 
-1. **Plan** : l'architecte transforme les tâches de la spec en graphe ; les modules partagés (types, messages, primitives, dépôts) forment une vague « fondations » écrite par un seul agent.
-2. **Vagues** : un workflow lance un `implementer` par tâche prête, chacun dans son worktree, avec la consigne commune du projet (brief) et les notes de vague (points d'extension, fichiers possédés).
-3. **Intégration** : l'`integrateur` fusionne les branches de la vague, unifie les doublons, relance tous les contrôles.
-4. **Revues** : `qa-securite`, `qa-fidelite`, `dpo` en parallèle, en lecture seule, sur une copie isolée.
-5. **Corrections** : une passe par domaine (serveur, interface), en parallèle quand les fichiers ne se recouvrent pas.
-6. **Livraison** : le chef de projet relance lui-même tous les contrôles, pousse, ouvre la PR brouillon (empilée si besoin), met à jour l'aperçu.
+1. **Modèle de données** : si la spec touche aux données, l'architecte des données produit ou met à jour `.apv/data-model.md`, présenté à l'opérateur avant tout code.
+2. **Plan** : l'architecte transforme les tâches de la spec en graphe ; les modules partagés (types, messages, primitives, dépôts) forment une vague « fondations » écrite par un seul agent.
+3. **Vagues** : un workflow lance un `implementer` par tâche prête, chacun dans son worktree, avec la consigne commune du projet (brief) et les notes de vague (points d'extension, fichiers possédés).
+4. **Intégration** : l'`integrateur` fusionne les branches de la vague, unifie les doublons, relance tous les contrôles.
+5. **Revues** : `qa-securite`, `qa-fidelite`, `architecte-donnees`, `dpo` en parallèle, en lecture seule, sur une copie isolée.
+6. **Corrections** : une passe par domaine (serveur, interface), en parallèle quand les fichiers ne se recouvrent pas.
+7. **Livraison** : le chef de projet relance lui-même tous les contrôles, pousse, ouvre la PR brouillon (empilée si besoin), met à jour l'aperçu.
 
 Chaque étape écrit son état dans `.apv/state/` : une coupure (session, machine, quota) se reprend sans rien perdre.
 
@@ -112,6 +114,7 @@ Extrait de V2, sans le contrôleur :
 - `apv gates run [--only …]` : exécute les contrôles déclarés (graphe, ressources, environnement transmis) et écrit des reçus.
 - `apv scope check <tâche>` : fichiers modifiés contre les chemins autorisés.
 - `apv lock acquire|release|status <ressource>` : verrous avec bail, propriétaire (pid) vérifié, expiration, file d'attente visible ; remplace le verrou `flock` sans bail (incidents 25 et 28).
+- `apv db check` : contrôle du modèle de données (section 13 bis).
 - `apv quota` : relevé et journal.
 - `apv preview update <branche>` : aperçu vivant (section 12), pilotable par projet.
 
@@ -128,6 +131,35 @@ Tests : les suites V2 des parties conservées (contrats, politique, OWASP, preuv
 
 Environnement permanent, séparé des tests (sa propre base, jamais remise à zéro par les tests), données de démonstration réalistes, compte de démo. Mis à jour à chaque livraison, avec l'adresse, la branche affichée et ce qui a changé. Le projet décrit comment le construire (commande de build, migrations, graine de données) dans `.apv/config`.
 
+## 13 bis. Modèle de données et performance (agent `architecte-donnees`)
+
+Leçon du projet pilote : la première version de la base avait des tables et colonnes en français (`candidatures`), des relations ajoutées au fil des tâches et un index qui ne correspondait pas au tri réel de la liste. En V3, la base est conçue avant d'être codée, et vérifiée à chaque livraison.
+
+**Modélisation d'abord**
+- Pour chaque spec qui touche aux données, l'architecte des données produit `.apv/data-model.md` : diagramme entités-relations (mermaid), une fiche par table (rôle, colonnes, types, nullabilité, valeurs par défaut, contraintes), cardinalités et règles de suppression (`on delete cascade / restrict / set null`) justifiées, stratégie d'isolation par utilisateur (RLS), index prévus avec la requête qu'ils servent. L'opérateur voit le modèle ; les tâches de code partent de ce modèle validé.
+- **Tout en anglais dans le code et la base** : tables, colonnes, types énumérés, fonctions, en `snake_case`, au pluriel pour les tables. Le français reste réservé aux textes affichés. Aucune exception.
+
+**Robustesse**
+- Clé primaire UUID, clés étrangères partout où une relation existe, avec une règle de suppression explicite ; clé étrangère composite `(id, user_id)` quand une ligne enfant doit appartenir au même utilisateur que son parent.
+- Contraintes en base plutôt que dans l'application seule : `not null`, `check` (valeurs, bornes, plages de dates), `unique`, types énumérés ; la validation côté serveur (zod) reprend les mêmes bornes, testées ensemble.
+- RLS activée et forcée sur chaque table utilisateur, politiques avec `(select auth.uid())` ; droits par colonne quand une colonne ne doit pas être modifiée directement ; fonctions `security definer` réservées aux cas justifiés, `search_path` vide, propriétaire vérifié dedans.
+- Migrations en avant uniquement, nommées, testées sur des données existantes (reprise sans perte) et vérifiées depuis une base vide.
+
+**Performance et minimisation**
+- Chaque requête sélectionne des colonnes nommées, jamais `*`. Chaque chargement de page ne remonte que ce que l'écran affiche ; rien de plus n'est envoyé au navigateur (contrôle du contenu des données de page).
+- Un index par clé étrangère et par motif de requête réel (filtre, tri, pagination), vérifié par `EXPLAIN` sur un volume réaliste ; index partiels quand une condition est constante (par exemple lignes non supprimées).
+- Pas de requête N+1 : nombre de requêtes par chargement de page mesuré dans les tests et borné ; pagination et limites côté serveur.
+- Types adaptés (dates en `date`, horodatages en `timestamptz`, montants en entiers ou `numeric`), pas de JSON fourre-tout pour des données structurées.
+
+**Contrôle automatique : `apv db check`** (contrôle déclaré, bloquant)
+- Noms : aucun identifiant de table, colonne, type ou fonction hors anglais `snake_case` (liste de mots français courants refusée).
+- Chaque clé étrangère a un index ; chaque table utilisateur a RLS activée et forcée ; aucune politique trop large ; aucune fonction `security definer` sans `search_path` fixé.
+- Conseillers de la base quand ils existent (par exemple les « advisors » de sécurité et de performance de Supabase).
+- Aucun `select('*')` ni `select *` dans le code serveur.
+- `EXPLAIN` des requêtes principales listées dans le modèle : pas de parcours séquentiel sur une table utilisateur au-delà d'un seuil de lignes.
+
+**Revue** : avant chaque livraison, l'architecte des données relit les migrations et les requêtes ajoutées (au même titre que les revues sécurité, fidélité et RGPD).
+
 ## 13. RGPD (agent `dpo`)
 
 Consulté à trois moments : à la spec (données, base légale, durées, minimisation), à chaque nouveau prestataire ou traceur (registre des sous-traitants, transferts et garanties vérifiés sur les DPA officiels), avant chaque livraison (pages de confidentialité, cookies et mentions légales cohérentes avec le code réel). Il signale ce qui relève de l'éditeur (identité, relecture juridique) sans l'inventer.
@@ -143,7 +175,7 @@ Consulté à trois moments : à la spec (données, base légale, durées, minimi
 
 | Phase | Contenu | Accepté quand |
 |---|---|---|
-| 1. Socle | `plugin.json`, agents, compétence chef-de-projet, `/apv:status`, `/apv:quota`, `/apv:resume`, outil `apv` (spec, ledger, gates, scope, lock), hooks de garde | Le plugin s'installe ; les tests conservés passent ; les verrous expirent ; le hook bloque un force-push |
+| 1. Socle | `plugin.json`, agents (dont `architecte-donnees`), compétence chef-de-projet, `/apv:status`, `/apv:quota`, `/apv:resume`, outil `apv` (spec, ledger, gates, scope, lock, db check), hooks de garde | Le plugin s'installe ; les tests conservés passent ; les verrous expirent ; le hook bloque un force-push ; `apv db check` refuse une table en français, une clé étrangère sans index et une table sans RLS |
 | 2. Design et aperçu | `/apv:design`, `/apv:preview`, compétence design-artefact | Une maquette itérée et validée est versionnée ; l'aperçu se met à jour sur une branche |
 | 3. Exécution | `/apv:spec`, `/apv:run` avec workflows, intégrateur, revues, `/apv:stack` | Une spec réelle est livrée en PR avec vagues parallèles, revues et reprise après interruption simulée |
 | 4. RGPD et migration | agent `dpo`, compétence `rgpd`, `/apv:onboard` depuis V2 | « Toujours rien » tourne sous APV3 ; ses pages légales passent la revue du DPO |
