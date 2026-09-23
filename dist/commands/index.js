@@ -2,16 +2,15 @@ import { VERSION } from '../domain/contracts.js';
 import { errorMessage } from '../domain/errors.js';
 /**
  * Every `apv` command lives in `src/commands/<name>.ts` and exports `run(args, io)`. Modules load lazily:
- * a command that is absent from a build (`lock` and `db` come from other phase 1 branches) is reported
- * as unavailable instead of breaking the others.
+ * a module that fails to load is reported as unavailable instead of breaking the others.
  */
 export const commands = {
     spec: { summary: 'spec validate <fichier> : valide une spec avec le minimum de sécurité recalculé', load: () => import('./spec.js') },
     ledger: { summary: 'ledger validate|plan|apply : registre des décisions', load: () => import('./ledger.js') },
     scope: { summary: 'scope check --spec <fichier> --task <id> : fichiers modifiés contre les chemins autorisés', load: () => import('./scope.js') },
     gates: { summary: 'gates run [--only a,b] : exécute les contrôles déclarés et écrit des reçus', load: () => import('./gates.js') },
-    lock: { summary: 'lock acquire|release|status <ressource> : verrous avec bail', load: () => import('./lock.js') },
-    db: { summary: 'db check : contrôle du modèle de données', load: () => import('./db.js') },
+    lock: { summary: 'lock run|acquire|release|status <ressource> : verrous à bail (propriétaire vérifié, expiration, file d\'attente)', load: () => import('./lock.js') },
+    db: { summary: 'db check [--live] : contrôle du modèle de données (migrations, code, base en lecture seule)', load: () => import('./db.js') },
     quota: { summary: 'quota : relève l\'usage (session, semaine) et le journalise', load: () => import('./quota.js') },
     status: { summary: 'status : résumé de .apv/ (configuration, registre, specs, état, quota)', load: () => import('./status.js') },
 };

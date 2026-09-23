@@ -1,5 +1,8 @@
-/** Journal of readings, one JSON object per line, read back by `apv status` and the session hooks. */
-export declare const QUOTA_LOG = ".apv/quota.log";
+/**
+ * Journal of readings, one JSON object per line, read back by `apv status` and the SessionStart hook.
+ * It lives with the other machine journals in `.apv/state/`, ignored by Git (`.apv/.gitignore`).
+ */
+export declare const QUOTA_LOG = ".apv/state/quota.log";
 /** `claude -p "/usage"` starts a whole session: it can take more than a minute on a busy machine. */
 export declare const QUOTA_TIMEOUT_MS = 150000;
 export declare const QUOTA_COMMAND: readonly ["-p", "/usage", "--setting-sources", ""];
