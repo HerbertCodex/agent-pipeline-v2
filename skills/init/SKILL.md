@@ -29,7 +29,7 @@ Tu les détectes toi-même, en lecture, puis tu les écris dans `gates` de `.apv
   ```json
   { "id": "unit", "command": ["npm", "run", "test"], "covers": ["unit"], "resources": ["test-db"], "dependsOn": ["build"] }
   ```
-  `covers` parmi `unit`, `integration`, `browser`, `build`, `lint`, `typecheck`, `security`, `architecture` ; `resources` pour tout ce qui est partagé (base locale, ports fixes, dossier de build) ; `passEnv` pour les seules variables dont un contrôle a besoin ; `readOnly: true` seulement si la commande n'écrit vraiment rien.
+  `covers` parmi `unit`, `integration`, `browser`, `build`, `lint`, `typecheck`, `security`, `architecture` ; `resources` pour tout ce qui est partagé (base locale, ports fixes, dossier de build) ; `passEnv` pour les seules variables dont un contrôle a besoin ; `readOnly: true` seulement si la commande n'écrit vraiment rien ; `"stage": "full"` pour un contrôle long (suite navigateur complète), passé seulement par la suite complète du chef de projet à chaque intégration et à la livraison, les autres restant `task` (valeur par défaut, lancés après chaque tâche).
 - Un contrôle qui dépend d'un service (Docker, base locale) le dit dans son identifiant ou sa ressource ; les tests « live » échouent quand le service manque, ils ne sont jamais sautés.
 - Si le projet a des maquettes validées : ajoute `apv design check` ; si le projet a une base : `apv db check` (section `db`, voir `${CLAUDE_PLUGIN_ROOT}/docs/DB-CHECK.md`).
 - Vérifie la configuration avec `apv status` (fichier lu, contrôles déclarés, erreurs). Ne lance pas tous les contrôles ici : `apv gates run` viendra avec la première spec, ou tout de suite si l'opérateur le demande.

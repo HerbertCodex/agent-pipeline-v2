@@ -79,6 +79,8 @@ Les variables globales autorisées par défaut sont `PATH`, `SystemRoot`, `WINDI
 
 Par défaut, un contrôle a un accès exclusif au répertoire de validation, y compris ses fichiers générés ou ignorés par Git. Cela protège aussi les configurations existantes sans ressources déclarées : `build`, synchronisation du framework et E2E ne peuvent plus écraser simultanément le même `.svelte-kit`, `dist` ou cache.
 
+`stage` (facultatif) : `task` (valeur par défaut) pour un contrôle rapide, lancé après chaque tâche par `apv gates run --stage task` ; `full` pour un contrôle long (la suite navigateur complète, par exemple), réservé à la suite complète que le chef de projet passe à chaque intégration et à la livraison (`apv gates run --stage full`, puis `apv gates verify --commit <sha>`). Un contrôle `task` ne peut pas dépendre d'un contrôle `full`. Sans ce champ, tout tourne partout, comme avant ([RUN.md](RUN.md#contrôles--par-tâche-et-suite-complète)).
+
 `readOnly: true` est une déclaration revue par l'opérateur : la commande **et ses sous-processus** ne doivent écrire aucun fichier dans ce répertoire. Seuls ces contrôles peuvent tourner ensemble, dans la limite de `concurrency` et des ressources nommées ; ils attendent aussi la fin d'un contrôle susceptible d'écrire. Ce champ n'est pas un sandbox ni une détection automatique. Ne pas l'activer pour un lint avec cache, un compilateur incrémental, des tests avec couverture ou des E2E qui lancent un build. Les anciens profils peuvent donc valider plus lentement ; déclarer uniquement les commandes réellement en lecture seule permet de retrouver du parallélisme sûr.
 
 ```json

@@ -182,7 +182,7 @@ test('phase three commands run the apv tool; those with effects are left to the 
   for (const rule of [/git switch -c <branche> <sha>/, /\.apv\/state\/task\.json/, /apv scope check --spec <spec> --task <tâche> --base <baseCommit>/,
     /apv run set <id> task:<tâche> running --branch/, /apv run set <id> task:<tâche> done --commit/, /data-model/, /apv:architecte`/, /fondations/,
     /`apv:vague`/, /workflows\/vague\.js/, /dans un même message/, /run_in_background: false/, /Session non interactive/, /jamais l.outil Workflow/, /apv:integrateur/, /git merge --ff-only/, /\/apv:review <id>/,
-    /corrections-<id>\.md/, /apv gates run --repo/, /gh pr create --draft/, /sans masquer la sortie/, /apv preview update/, /70 %/, /85 %/, /95 %/, /apv quota/,
+    /corrections-<id>\.md/, /apv gates run --stage full --repo/, /gh pr create --draft/, /sans masquer la sortie/, /apv preview update/, /70 %/, /85 %/, /95 %/, /apv quota/,
     /resumeFromRunId/, /Jamais de fusion/, /jamais de déploiement/, /jamais d'édition à la main/]) assert.match(run.body, rule);
 
   const review = frontmatter('skills/review/SKILL.md');
@@ -222,6 +222,40 @@ test('phase four command: /apv:onboard shows the plan, runs apv onboard and leav
     /apv ledger validate/, /apv gates run/, /--base/, /\*\*propose\*\* le commit/, /ni modifiés ni supprimés/]) assert.match(onboard, rule);
   assert.match(read('docs/PLUGIN.md'), /\| `\/apv:onboard` \| disponible/);
   assert.match(read('docs/CLI.md'), /## `apv onboard`/);
+});
+
+test('checks per task, full suite at integration and delivery: nothing lets a red suite through', () => {
+  // First real /apv:run: every implementer ran the whole browser suite, twenty runs under the shared e2e lock.
+  const tool = 'Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js';
+  const run = frontmatter('skills/run/SKILL.md');
+  for (const t of [`${tool} gates run*)`, `${tool} gates verify*)`, 'Bash(apv gates verify*)']) assert.ok(run.fields['allowed-tools'].includes(t), t);
+  const taskStage = /apv gates run --stage task --base <(?:base|sha)>/;
+  const ownE2e = /apv lock run e2e/;
+  for (const file of ['agents/implementer.md', 'skills/chef-de-projet/references/brief-type.md', 'skills/run/SKILL.md', 'skills/chef-de-projet/references/planification.md']) {
+    const text = read(file);
+    assert.match(text.replace(/\n/g, ' '), taskStage, `${file}: task stage`);
+    assert.match(text, ownE2e, `${file}: own e2e files under the e2e lease`);
+  }
+  const implementer = read('agents/implementer.md');
+  assert.match(implementer, /seulement les fichiers de tests e2e que tu as créés ou modifiés/);
+  assert.match(implementer, /npx playwright test <fichiers>/);
+  assert.match(implementer, /sans contrôle marqué `full`[^\n]*comme avant/);
+  assert.doesNotMatch(implementer, /Lance tous les contrôles déclarés/);
+  for (const file of ['skills/run/SKILL.md', 'skills/chef-de-projet/references/integration-revues.md', 'skills/chef-de-projet/references/livraison-pile.md', 'skills/chef-de-projet/SKILL.md']) {
+    const text = read(file);
+    assert.match(text, /apv gates run --stage full/, `${file}: full suite`);
+    assert.match(text, /apv gates verify --commit <tête/, `${file}: verified at the exact commit`);
+  }
+  assert.match(run.body, /Suite complète rouge[^\n]*Passe de corrections/);
+  assert.match(read('skills/chef-de-projet/references/integration-revues.md'), /Suite complète rouge[^\n]*passe de corrections[^\n]*jamais ignoré/);
+  assert.match(read('agents/integrateur.md'), /apv gates run --stage task/);
+  const review = frontmatter('skills/review/SKILL.md').body;
+  assert.match(review, /ne relancent ni la suite complète ni Playwright, sauf besoin précis de leur domaine/);
+  assert.match(review, /apv gates verify --commit <commit>/);
+  const guide = read('docs/RUN.md');
+  assert.match(guide, /### Contrôles : par tâche et suite complète/);
+  assert.match(guide, /\*\*Rien ne passe pour autant\.\*\*[^\n]*au commit exact[^\n]*Seul le moment de la détection change/);
+  assert.match(read('docs/CLI.md'), /## `apv gates verify`/);
 });
 
 test('the project lead skill links references that exist', () => {

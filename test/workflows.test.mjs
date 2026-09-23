@@ -76,6 +76,10 @@ test('vague: one isolated apv:implementer per task, with the start and scope ins
     assert.ok(call.prompt.includes('.apv/brief.md') && call.prompt.includes('notes-relances-vague-1.md'));
     assert.match(call.prompt, /Ne pousse pas, ne fusionne pas/);
     assert.ok(call.prompt.includes('node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"'), 'the bundled tool, not an interpolated value');
+    assert.ok(call.prompt.includes(`gates run --stage task --base ${WAVE_ARGS.baseCommit}\``), 'task checks only, from the exact base');
+    assert.match(call.prompt, /seulement les fichiers e2e que tu as créés ou modifiés, sous `node "\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\.js" lock run e2e -- /);
+    assert.match(call.prompt, /réservés à la suite complète » ne sont ni lancés ni annoncés verts/);
+    assert.doesNotMatch(call.prompt, /Tous les contrôles de la consigne commune/);
   }
   assert.ok(rt.calls[1].prompt.includes('termine depuis le wip abc1234'));
   assert.equal(result.reports.length, 2);
@@ -129,6 +133,8 @@ test('revues: read-only reviewers in parallel on their own copy, then one dedupl
     assert.ok(call.prompt.includes(REVIEW_ARGS.reviews[i].copy));
     assert.ok(call.prompt.includes(REVIEW_ARGS.commit));
     assert.match(call.prompt, /Lecture seule/);
+    assert.match(call.prompt, /Ne relance ni la suite complète ni Playwright, sauf besoin précis de ton domaine/);
+    assert.match(call.prompt, /« non vérifié »/);
   }
   assert.ok(reviewers[0].prompt.includes('port 5301'));
   assert.equal(rt.calls.length, 5);

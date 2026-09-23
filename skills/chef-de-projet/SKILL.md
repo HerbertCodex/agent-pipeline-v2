@@ -57,10 +57,10 @@ Déroulé de `/apv:run` (procédure complète dans sa compétence, `skills/run/S
 5. **Plan** : `architecte` produit le plan sur les vagues de l'outil, leurs fondations (tâches dont au moins deux autres dépendent) et les notes de vague (`references/planification.md`).
 6. **Fondations** : un seul `implementer` écrit les modules partagés ; intégrés et verts avant d'ouvrir le parallèle.
 7. **Vagues** : un `implementer` par tâche prête, chacun dans son worktree, par le workflow du plugin `apv:vague` ou par l'outil Agent (plusieurs appels dans un même message, en arrière-plan). Nombre d'agents dosé par le quota. `apv scope check` relancé par toi à la fin de chaque tâche.
-8. **Intégration** : `integrateur` fusionne la vague dans sa branche d'intégration, unifie les doublons, garde tous les tests, relance tout ; tu avances `apv/<id>` en avance rapide.
+8. **Intégration** : `integrateur` fusionne la vague dans sa branche d'intégration, unifie les doublons, garde tous les tests, relance les contrôles de tâche ; toi, la suite complète sur la tête intégrée (`apv gates run --stage full`, puis `apv gates verify --commit <tête>` à `0`) ; alors seulement tu avances `apv/<id>` en avance rapide. Une suite complète rouge ouvre une passe de corrections.
 9. **Revues** : `/apv:review` (workflow `apv:revues`) : `qa-securite`, `qa-fidelite`, `architecte-donnees` (revue), `dpo` en parallèle, en lecture seule, sur copies détachées (`references/integration-revues.md`).
 10. **Corrections** : tu décides chaque constat dans `.apv/state/corrections-<id>.md`, puis une passe par domaine (serveur, interface), en parallèle si les fichiers ne se recouvrent pas.
-11. **Livraison** : tu relances toi-même tous les contrôles, tu pousses, tu ouvres la PR brouillon (empilée si besoin), tu mets l'aperçu à jour avec `/apv:preview` et tu l'annonces (`references/livraison-pile.md`).
+11. **Livraison** : tu relances toi-même la suite complète sur la tête finale et `apv gates verify --commit <tête>`, tu pousses, tu ouvres la PR brouillon (empilée si besoin), tu mets l'aperçu à jour avec `/apv:preview` et tu l'annonces (`references/livraison-pile.md`).
 
 L'état d'exécution (`apv run status`, `apv run next`) et les fichiers de `.apv/state/` (plan, notes, corrections, `resume.md`) font qu'une coupure se reprend sans rien perdre : `apv run next <id>` dit toujours quoi faire ensuite. Guide complet : `${CLAUDE_PLUGIN_ROOT}/docs/RUN.md`.
 
@@ -81,7 +81,7 @@ Toute ressource partagée (base locale, remise à zéro, ports fixes, navigateur
 Relevé par `apv quota` avant chaque vague et toutes les 10 à 15 minutes pendant l'exécution. La consommation observée par vague est un repère pour doser le parallélisme, jamais un plafond. Seuils : **70 %** ralentir ; **85 %** finir les tâches en cours sans en lancer de nouvelles ; **95 %** sauvegarder (arrêt propre, commits « wip », push, notes de reprise) et prévenir l'opérateur. Détails : `references/quota-sauvegarde.md`.
 
 ## 8. Contrôles avant PR
-Avant chaque push destiné à une PR, **tu** relances tous les contrôles déclarés sur la tête exacte de la branche (`apv gates run`), `apv db check` si la base a changé et `apv design check` si le projet a des maquettes validées (une référence modifiée sans nouvelle validation bloque la PR). Un vert annoncé par un agent ne suffit pas.
+Pendant les vagues, chaque implementer ne lance que les contrôles de tâche (`apv gates run --stage task`) et ses fichiers e2e ; la suite complète est la tienne, une fois par intégration et une fois à la livraison. Avant chaque push destiné à une PR, **tu** relances la suite complète sur la tête exacte de la branche (`apv gates run --stage full`), puis `apv gates verify --commit <tête>` qui doit sortir en `0`, `apv db check` si la base a changé et `apv design check` si le projet a des maquettes validées (une référence modifiée sans nouvelle validation bloque la PR). Un vert annoncé par un agent ne suffit pas.
 
 ## 9. Communication avec l'opérateur
 - Dans sa langue (celle de ses messages ; le français pour un opérateur francophone), phrases courtes, sans jargon inutile, sans tiret cadratin ni demi-cadratin.
