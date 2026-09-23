@@ -4,7 +4,7 @@
 
 **Un chef de projet Claude Code, de vrais sous-agents, des garde-fous qui ont fait leurs preuves.**
 
-[![Version](https://img.shields.io/badge/alpha-3.0.0--alpha.2-a8461a?style=flat-square)](docs/PLUGIN.md)
+[![Version](https://img.shields.io/badge/alpha-3.0.0--alpha.3-a8461a?style=flat-square)](docs/PLUGIN.md)
 [![CI](https://github.com/HerbertCodex/agent-pipeline-v2/actions/workflows/ci.yml/badge.svg)](https://github.com/HerbertCodex/agent-pipeline-v2/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A5%2022.16-2d6e45?style=flat-square)](package.json)
 [![License](https://img.shields.io/badge/licence-MIT-55514a?style=flat-square)](LICENSE)

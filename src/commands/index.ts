@@ -10,7 +10,10 @@ interface Entry { summary: string; load: () => Promise<CommandModule> }
  * a module that fails to load is reported as unavailable instead of breaking the others.
  */
 export const commands: Record<string, Entry> = {
-  spec: { summary: 'spec validate <fichier> : valide une spec avec le minimum de sécurité recalculé', load: () => import('./spec.js') },
+  init: { summary: 'init [--name <nom>] : crée ce qui manque dans .apv/ (configuration, registre, consigne, specs, état) sans rien écraser', load: () => import('./init.js') },
+  spec: { summary: 'spec validate <fichier> | new <id> : valide une spec (minimum de sécurité recalculé) ou en écrit le gabarit', load: () => import('./spec.js') },
+  run: { summary: 'run start|set|next|status : état de reprise d\'une exécution de spec (vagues, tâches, revues)', load: () => import('./run.js') },
+  stack: { summary: 'stack plan|merge <pr...> : vérifie puis fusionne une pile de PR dans l\'ordre (fusion : APV_ALLOW_MERGE=1)', load: () => import('./stack.js') },
   ledger: { summary: 'ledger validate|plan|apply : registre des décisions', load: () => import('./ledger.js') },
   scope: { summary: 'scope check --spec <fichier> --task <id> : fichiers modifiés contre les chemins autorisés', load: () => import('./scope.js') },
   gates: { summary: 'gates run [--only a,b] : exécute les contrôles déclarés et écrit des reçus', load: () => import('./gates.js') },

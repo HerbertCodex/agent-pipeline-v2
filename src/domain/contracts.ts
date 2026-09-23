@@ -1,7 +1,7 @@
 import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s, type Infer } from './schema.js';
 import { invariant } from './errors.js';
-export const VERSION = '3.0.0-alpha.2';
+export const VERSION = '3.0.0-alpha.3';
 export const lanes = ['fast', 'standard', 'high'] as const;
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'] as const;
 export type Lane = typeof lanes[number];
