@@ -55,7 +55,7 @@ test('apv status reports an invalid configuration or ledger without failing', as
 
 test('the dispatcher lists every command, lock and db included', async t => {
   const f = fixture(t);
-  assert.deepEqual(Object.keys(commands), ['spec', 'ledger', 'scope', 'gates', 'lock', 'db', 'quota', 'status']);
+  assert.deepEqual(Object.keys(commands), ['spec', 'ledger', 'scope', 'gates', 'lock', 'db', 'design', 'quota', 'status']);
   const help = await apv(f.repo, ['help']);
   assert.equal(help.code, 0);
   for (const name of Object.keys(commands)) assert.match(help.stdout, new RegExp(`apv ${name}`));
