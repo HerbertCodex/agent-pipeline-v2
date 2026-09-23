@@ -1,7 +1,7 @@
 import { type Infer } from '../domain/schema.js';
-import { type Run } from '../domain/contracts.js';
+import { type ChangeSet, type GateReceipt, type RiskDecision } from '../domain/contracts.js';
 import type { SpecRecord } from '../lifecycle/contracts.js';
-import { type ValidationRequirement } from '../policy/policy.js';
+import { type PolicyConfig, type ValidationRequirement } from '../policy/policy.js';
 export declare const qualityAxes: readonly ["architecture", "simplicity", "reuse", "tests", "operations", "ui"];
 export declare const qualityCheckSchema: import("../domain/schema.js").Schema<{
     readonly axis: "architecture" | "simplicity" | "reuse" | "tests" | "operations" | "ui";
@@ -12,8 +12,22 @@ export declare const qualityCheckSchema: import("../domain/schema.js").Schema<{
     readonly findingIds: string[];
 }>;
 export type QualityCheck = Infer<typeof qualityCheckSchema>;
+/**
+ * What a validation produced for one candidate: the reviewed configuration, the checks selected for it and
+ * their receipts. V2 read it from a controller run; V3 builds it from receipts written by `apv gates run`.
+ */
+export interface ValidationSubject {
+    id: string;
+    config: PolicyConfig;
+    configHash: string;
+    candidateSha: string | null;
+    changeSet: ChangeSet | null;
+    risk: RiskDecision | null;
+    gateIds: string[];
+    receipts: GateReceipt[];
+}
 /** Describes receipts already verified by the pipeline, not test quality or semantic coverage. */
-export declare function validationEvidence(run: Run): {
+export declare function validationEvidence(run: ValidationSubject): {
     gates: {
         id: string;
         covers: ("security" | "unit" | "integration" | "browser" | "build" | "lint" | "typecheck" | "architecture")[];
@@ -30,7 +44,9 @@ export declare function validationEvidence(run: Run): {
     gaps: ("security" | "unit" | "integration" | "browser" | "build" | "lint" | "typecheck" | "architecture")[];
     note: string;
 };
-export declare function qualityContext(record: Pick<SpecRecord, 'config' | 'content' | 'executionPath' | 'architecture'>, run: Run): {
+export declare function qualityContext(record: Pick<SpecRecord, 'content' | 'executionPath' | 'architecture'> & {
+    config: PolicyConfig;
+}, run: ValidationSubject): {
     enabled: boolean;
     candidateSha: string | null;
     axes: {
@@ -64,7 +80,7 @@ export declare function qualityContext(record: Pick<SpecRecord, 'config' | 'cont
         note: string;
     };
 };
-export declare function requiredEvidence(run: Run, requirements?: ValidationRequirement[]): {
+export declare function requiredEvidence(run: ValidationSubject, requirements?: ValidationRequirement[]): {
     requirements: {
         receiptIds: string[];
         missingPaths: string[];

@@ -1,5 +1,5 @@
 import { s, type Infer } from '../domain/schema.js';
-import type { Config, Run } from '../domain/contracts.js';
+import type { ChangeSet, Config, GateReceipt, RiskDecision } from '../domain/contracts.js';
 import { specSchema, securityPlanSchema, type Spec, type SpecRecord } from './contracts.js';
 import { assessSecurity, type SecurityContext } from '../security/owasp.js';
 import { matches } from '../policy/policy.js';
@@ -55,7 +55,7 @@ export function resolvePathDecision(inputs: { current: ExecutionPath; minimumLan
 }
 
 /** Compact skips model QA only while observed changes remain inside the approved compact envelope. */
-export function requiresQa(record: SpecRecord, run: Run, spec: Spec): boolean {
+export function requiresQa(record: SpecRecord, run: { risk: RiskDecision | null; changeSet: ChangeSet | null }, spec: Spec): boolean {
   if (!record.executionPath) return record.config.workflow.qaLanes.includes(run.risk!.lane);
   if (record.executionPath !== 'compact' || run.risk?.lane === 'high' || record.config.workflow.reviewMode === 'regulated') return true;
   const files = run.changeSet?.files ?? [];
@@ -66,7 +66,7 @@ export function requiresQa(record: SpecRecord, run: Run, spec: Spec): boolean {
 }
 
 /** Targeted QA keeps the complete diff and every obligation, omitting planning prose and successful tool logs. */
-export function targetedQaContext(context: { spec: Spec; receipts: Run['receipts']; [key: string]: unknown }) {
+export function targetedQaContext(context: { spec: Spec; receipts: GateReceipt[]; [key: string]: unknown }) {
   const { problem: _problem, questions: _questions, tasks, ...obligations } = context.spec;
   return { ...context, spec: { ...obligations, tasks: tasks.map(({ description: _description, ...task }) => task) },
     receipts: context.receipts.map(({ diagnostic, ...receipt }) => ({ ...receipt, diagnostic: ['passed', 'cached'].includes(receipt.status) ? '' : diagnostic })),

@@ -1,4 +1,5 @@
 import { type Infer } from '../domain/schema.js';
+import { type Issue } from '../domain/issues.js';
 export declare const decisionEnforcements: readonly ["bootstrap", "product", "deferred"];
 export declare const decisionStatuses: readonly ["confirmed", "proposed", "ambiguous", "deferred"];
 export declare const decisionSources: readonly ["operator", "derived"];
@@ -68,6 +69,10 @@ export type SemanticReview = Infer<typeof semanticReviewSchema>;
  * independent semantic reviewer remains responsible for broader ambiguity.
  */
 export declare function ambiguousApprovalFragments(text: string): string[];
+/** Semantic rules of a parsed ledger, every violation listed (V2 stopped at the first). */
+export declare function decisionLedgerRuleIssues(parsed: DecisionLedger, operatorText?: string): Issue[];
+/** Every problem of an unparsed ledger document: schema first, then the ledger rules. */
+export declare function decisionLedgerIssues(value: unknown, operatorText?: string): Issue[];
 export declare function validateDecisionLedger(ledger: DecisionLedger, operatorText?: string): DecisionLedger;
 export declare function ledgerHash(ledger: DecisionLedger): string;
 export declare function confirmedDecisions(ledger: DecisionLedger, enforcement?: 'bootstrap' | 'product'): Decision[];
@@ -75,5 +80,16 @@ export declare function ambiguousDecisions(ledger: DecisionLedger, enforcement?:
 export declare function validateBootstrapCoverage(ledger: DecisionLedger, coverage: DecisionCoverage[], files: string[]): void;
 export declare function validateSemanticReview(ledger: DecisionLedger, review: SemanticReview): SemanticReview;
 export declare function decisionLedgerMarkdown(ledger: DecisionLedger): string;
-export declare function loadDecisionLedger(repo: string, sha?: string): Promise<DecisionLedger>;
+/** V3 location of the ledger, versioned with the project. */
+export declare const LEDGER_FILE = ".apv/DECISIONS.json";
+/** V2 location, still read (and updated in place) for projects not yet migrated. */
+export declare const LEGACY_LEDGER_FILE = ".agent-pipeline/DECISIONS.json";
+/**
+ * Where this project keeps its ledger: `.apv/DECISIONS.json` when it exists (in the working tree or at
+ * `sha`), otherwise the V2 `.agent-pipeline/DECISIONS.json` when that one exists, otherwise the V3 location.
+ */
+export declare function resolveLedgerFile(repo: string, sha?: string | null): Promise<string>;
+/** Committed ledger at `sha`; an absent file is an empty ledger. */
+export declare function loadDecisionLedger(repo: string, sha?: string, file?: string): Promise<DecisionLedger>;
+/** Working-tree ledger (V3 location first, then V2); an absent file is an empty ledger. */
 export declare function readWorkingDecisionLedger(repo: string): DecisionLedger;

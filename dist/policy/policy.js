@@ -52,8 +52,10 @@ export function classify(changes, config, minimum = 'fast') {
     }
     return { lane: 'standard', reasons: ['Default assurance for code, unknown impact, or size threshold'] };
 }
-export function assertScope(changes, task) {
-    for (const p of [...task.allowedPaths, ...task.allowedNewPaths])
+/** Every scope violation of a change, for a report; `assertScope` turns it into the V2 error. */
+export function scopeReport(changes, task) {
+    const allowedNewPaths = task.allowedNewPaths ?? [];
+    for (const p of [...task.allowedPaths, ...allowedNewPaths])
         matches('probe', p);
     const files = Array.isArray(changes) ? changes : changes.files;
     const added = new Set(Array.isArray(changes) ? [] : changes.added);
@@ -66,7 +68,7 @@ export function assertScope(changes, task) {
         }
         if (task.allowedPaths.some(p => matches(file, p)))
             continue;
-        const safeNew = added.has(file) && task.allowedNewPaths.some(p => matches(file, p)) &&
+        const safeNew = added.has(file) && allowedNewPaths.some(p => matches(file, p)) &&
             !sensitivePaths.some(p => matches(file, p));
         if (safeNew) {
             autoNew.push(file);
@@ -74,7 +76,11 @@ export function assertScope(changes, task) {
         }
         rejected.push(file);
     }
-    invariant(autoNew.length <= task.maxNewFiles, 'SCOPE', `Too many automatically-created supporting files: ${autoNew.join(', ')}`);
+    return { autoNew, rejected, tooManyNew: autoNew.length > (task.maxNewFiles ?? 0) };
+}
+export function assertScope(changes, task) {
+    const { autoNew, rejected, tooManyNew } = scopeReport(changes, task);
+    invariant(!tooManyNew, 'SCOPE', `Too many automatically-created supporting files: ${autoNew.join(', ')}`);
     invariant(rejected.length === 0, 'SCOPE', `Out-of-scope files: ${rejected.join(', ')}`);
     return autoNew;
 }

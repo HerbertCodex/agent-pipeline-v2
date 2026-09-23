@@ -7,7 +7,7 @@ import { architectureSchema } from '../dist/lifecycle/pathways.js';
 import assert from 'node:assert/strict';
 import { validateConfig } from '../dist/domain/contracts.js';
 import { qualityContext, validateQualityChecks } from '../dist/quality/review.js';
-import { fixture, approved, oneTask, passingQa } from './lifecycle-helpers.mjs';
+import { oneTask } from './lifecycle-helpers.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -98,69 +98,6 @@ test('documentation needs no invented behavioral tests; UI changes expose browse
   assert.equal(ui.axes.find(x => x.axis === 'ui').required, true);
   assert.ok(ui.validation.gaps.includes('browser'));
 });
-
-test('quality evidence is enforced on import and delivery; unknown evidence does not start code repairs', async t => {
-  const f = fixture(t);
-  f.config.workflow = { ...f.config.workflow, qualityReview: 'evidence' };
-  f.config.gates = f.config.gates.map(g => ({ ...g, covers: g.id === 'unit' ? ['unit'] : [] }));
-  let d = await approved(f, oneTask());
-  d = await f.life.run(d.id, { manualQa: true });
-  assert.equal(d.data.error.code, 'QA_REQUIRED');
-  const final = f.life.pipeline.store.get(d.data.finalRunId);
-  await assert.rejects(f.life.importQa(d.id, passingQa(d)), /quality/i);
-  const context = qualityContext(d.data, final);
-  const report = { ...passingQa(d), qualityChecks: context.axes.map(x => ({ axis: x.axis,
-    status: x.required ? 'pass' : 'not_applicable', evidence: 'Fixture review inspected arithmetic behavior and the independent test receipt.',
-    paths: x.required ? ['src/math.mjs', 'test/math.test.mjs'] : [],
-    receiptIds: x.axis === 'tests' ? [final.receipts.find(r => r.gateId === 'unit').id] : [], findingIds: [] })) };
-  const invented = structuredClone(report); invented.qualityChecks[0].paths = ['src/invented.mjs'];
-  await assert.rejects(f.life.importQa(d.id, invented), /quality/i);
-  const unknown = structuredClone(report); unknown.verdict = 'changes_requested'; unknown.qualityChecks[3].status = 'unknown';
-  await f.life.importQa(d.id, unknown);
-  d = await f.life.run(d.id, { manualQa: true });
-  assert.equal(d.data.error.code, 'QA_EVIDENCE');
-  assert.equal(d.data.qaRepairs, 0);
-  assert.equal(d.data.attempts.length, 1);
-  await assert.rejects(f.life.publicationCandidate(d.id, 'review'), /QA/);
-  await f.life.importQa(d.id, report);
-  d = await f.life.run(d.id, { manualQa: true });
-  assert.equal(d.data.status, 'awaiting_review');
-  assert.match(readFileSync(d.data.review.qaPath, 'utf8'), /Code quality/);
-  assert.match(readFileSync(d.data.review.reviewPath, 'utf8'), /Unverified coverage categories/);
-  assert.equal(f.life.summary(d).quality.validation.observed.includes('unit'), true);
-  // A stored report cannot bypass quality enforcement at the publication boundary.
-  d.data.qa.report.qualityChecks = [];
-  f.life.store.saveDocument(d, 'fixture.corrupt_quality');
-  await assert.rejects(f.life.publicationCandidate(d.id, 'review'), /quality/i);
-});
-
-test('targeted agent QA receives the quality matrix and completes it in the existing QA call', async t => {
-  const f = fixture(t);
-  const worker = join(f.root, 'quality-qa.mjs');
-  writeFileSync(worker, `import { readFileSync } from 'node:fs';
-    import assert from 'node:assert/strict';
-    const req = JSON.parse(readFileSync(0, 'utf8'));
-    assert.equal(req.context.qaScope.mode, 'targeted');
-    const q = req.context.qualityReview;
-    assert.equal(q.enabled, true);
-    const receipt = q.validation.gates.find(g => g.covers.includes('unit')).receiptId;
-    assert.ok(receipt);
-    console.log(JSON.stringify({ candidateSha: req.context.candidateSha, verdict: 'pass', summary: 'Protocol fixture review.',
-      criteria: req.context.spec.acceptance.map(x => ({ id:x.id, status:'pass', evidence:'Fixture inspected arithmetic behavior.' })),
-      findings: [], observations: [], qualityChecks: q.axes.map(x => ({ axis:x.axis, status:x.required?'pass':'not_applicable',
-        evidence:'Fixture code review and observed final test receipt.', paths:x.required?['src/math.mjs']:[],
-        receiptIds:x.axis==='tests'?[receipt]:[], findingIds:[] })) }));`);
-  f.config.workflow = { ...f.config.workflow, planningMode: 'adaptive', qualityReview: 'evidence' };
-  f.config.gates = f.config.gates.map(g => ({ ...g, covers: g.id === 'unit' ? ['unit'] : [] }));
-  f.config.roles.qa = { type: 'command', command: [process.execPath, worker] };
-  let d = await approved(f, oneTask());
-  d = await f.life.run(d.id);
-  assert.equal(d.data.status, 'awaiting_review', JSON.stringify(d.data.error));
-  assert.equal(d.data.qa.report.qualityChecks.length, 6);
-  assert.equal(f.life.store.documentEvents(d.id).filter(e => e.type === 'invocation.started' && e.data.role === 'qa').length, 1);
-  assert.equal(d.data.qaRepairs, 0);
-});
-
 
 test('validation obligations follow executable risk, UI and project boundaries, not documentation size', () => {
   const { run } = sample();
@@ -273,31 +210,6 @@ test('structural decisions require the constraint, simpler option, risks and rec
   }
 });
 
-test('compact execution stops on missing required evidence without QA calls or code repair', async t => {
-  const f = fixture(t);
-  f.config.workflow = { ...f.config.workflow, qualityReview: 'evidence' };
-  f.config.gates = f.config.gates.map(g => ({ ...g, covers: g.id === 'unit' ? ['unit'] : [] }));
-  f.config.validationRules = [{ id: 'arithmetic-integration', paths: ['src/math.mjs'], requires: ['integration'] }];
-  const compactTask = { id: 'MATH', title: 'Multiply', description: 'Add multiplication and its tests.',
-    acceptance: ['Multiply positive and negative values correctly.'], allowedPaths: ['src/math.mjs', 'test/math.test.mjs'] };
-  let d = await f.life.draft({ repo: f.repo, config: f.config, request: 'Add multiplication.', compactTask });
-  d = await f.life.approveSpec(d.id, f.life.summary(d).hash, 'Test Owner', 'Approve the bounded fixture change.');
-  d = await f.life.run(d.id);
-  assert.equal(d.data.status, 'blocked');
-  assert.equal(d.data.error.code, 'QA_EVIDENCE');
-  assert.equal(d.data.qa, null);
-  assert.equal(d.data.qaRepairs, 0);
-  assert.equal(d.data.attempts.length, 1);
-  const run = f.life.pipeline.store.get(d.data.attempts[0].runId);
-  assert.equal(run.receipts.find(r => r.gateId === 'unit').status, 'passed');
-  assert.equal(f.life.store.documentEvents(d.id).filter(e => e.type === 'invocation.started').length, 0);
-  await assert.rejects(() => f.life.pipeline.assertValidated(run.id));
-  // Resuming does not launch an implementation repair to manufacture missing infrastructure.
-  d = await f.life.run(d.id);
-  assert.equal(d.data.attempts.length, 1);
-  assert.equal(d.data.qaRepairs, 0);
-});
-
 test('a browser receipt for one package cannot hide missing coverage for another changed UI', () => {
   const { record, run } = sample();
   run.changeSet.files = ['ui/card.css', 'admin/panel.css']; run.gateIds.push('browser');
@@ -374,60 +286,3 @@ test('a negative case the spec defines as a review is assessed as asserted, neve
   assert.throws(() => validate(claimsPass), /negative-test pass needs actual test files/);
 });
 
-test('an operator can authorize exactly one repair of evidence the review could not conclude on', async t => {
-  const f = fixture(t);
-  f.config.workflow = { ...f.config.workflow, qualityReview: 'evidence' };
-  f.config.gates = f.config.gates.map(g => ({ ...g, covers: g.id === 'unit' ? ['unit'] : [] }));
-  let d = await approved(f, oneTask());
-  d = await f.life.run(d.id, { manualQa: true });
-  const final = f.life.pipeline.store.get(d.data.finalRunId);
-  const context = qualityContext(d.data, final);
-  const report = { ...passingQa(d), qualityChecks: context.axes.map(x => ({ axis: x.axis,
-    status: x.required ? 'pass' : 'not_applicable', evidence: 'Fixture review inspected arithmetic behavior and the independent test receipt.',
-    paths: x.required ? ['src/math.mjs', 'test/math.test.mjs'] : [],
-    receiptIds: x.axis === 'tests' ? [final.receipts.find(r => r.gateId === 'unit').id] : [], findingIds: [] })) };
-  const unknown = structuredClone(report); unknown.verdict = 'changes_requested'; unknown.qualityChecks[3].status = 'unknown';
-  await f.life.importQa(d.id, unknown);
-  d = await f.life.run(d.id, { manualQa: true });
-  assert.equal(d.data.error.code, 'QA_EVIDENCE');
-  assert.equal(d.data.qaRepairs, 0);
-
-  // The note is part of the authorization: it says what the operator inspected before granting it.
-  assert.throws(() => f.life.authorizeQaRepair(d.id, 'Test Owner', 'too short'));
-  assert.equal(f.life.get(d.id).data.qaRepairAuthorization ?? null, null);
-  d = f.life.authorizeQaRepair(d.id, 'Test Owner', 'Inspected the unknown axis: every configured check proved this candidate and the gap is a missing assertion.');
-  assert.equal(d.data.error, null);
-  assert.equal(d.data.qaRepairAuthorization.reviewer, 'Test Owner');
-  assert.throws(() => f.life.authorizeQaRepair(d.id, 'Test Owner', 'A second authorization on the same stop must be refused outright.'));
-
-  d = await f.life.run(d.id, { manualQa: true });
-  assert.equal(d.data.qaRepairs, 1, 'the authorized repair ran');
-  assert.equal(d.data.qaRepairAuthorization, null, 'the authorization is consumed by the repair it authorized');
-  assert.equal(d.data.attempts.filter(a => a.kind === 'qa-repair').length, 1);
-  const authorized = f.life.store.documentEvents(d.id, ['workflow.qa_repair_authorized']);
-  assert.equal(authorized.length, 1);
-  assert.match(JSON.stringify(authorized[0].data), /missing assertion/);
-});
-
-test('a repair cannot be authorized while a configured check has not proved the candidate', async t => {
-  const f = fixture(t);
-  f.config.workflow = { ...f.config.workflow, qualityReview: 'evidence' };
-  f.config.gates = f.config.gates.map(g => ({ ...g, covers: g.id === 'unit' ? ['unit'] : [] }));
-  let d = await approved(f, oneTask());
-  d = await f.life.run(d.id, { manualQa: true });
-  const final = f.life.pipeline.store.get(d.data.finalRunId);
-  const context = qualityContext(d.data, final);
-  const unknown = { ...passingQa(d), verdict: 'changes_requested', qualityChecks: context.axes.map(x => ({ axis: x.axis,
-    status: x.axis === 'tests' ? 'unknown' : x.required ? 'pass' : 'not_applicable', evidence: 'Fixture review inspected arithmetic behavior and the independent test receipt.',
-    paths: x.required && x.axis !== 'tests' ? ['src/math.mjs', 'test/math.test.mjs'] : [], receiptIds: [], findingIds: [] })) };
-  await f.life.importQa(d.id, unknown);
-  d = await f.life.run(d.id, { manualQa: true });
-  assert.equal(d.data.error.code, 'QA_EVIDENCE');
-  // No repair can conjure the evidence a check that never proved this candidate would have written.
-  const run = f.life.store.get(d.data.finalRunId);
-  run.receipts = run.receipts.filter(r => r.gateId !== 'unit');
-  f.life.store.save(run, 'fixture.receipt_removed');
-  assert.throws(() => f.life.authorizeQaRepair(d.id, 'Test Owner', 'Attempted authorization while a configured check has no receipt for this candidate.'),
-    e => e.code === 'QA_EVIDENCE');
-  assert.equal(f.life.get(d.id).data.qaRepairAuthorization ?? null, null);
-});

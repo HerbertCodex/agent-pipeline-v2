@@ -1,22 +1,15 @@
-export { Pipeline, summarize } from './engine/pipeline.js';
-export { taskSchema, configSchema, agentOutputSchema, receiptSchema, validateReceipt, validateConfig, VERSION } from './domain/contracts.js';
+// Library surface of the V3 tool: the V2 contracts and policies kept without the controller, plus the
+// modules behind the `apv` commands.
+export { taskSchema, configSchema, gateSchema, receiptSchema, validateReceipt, validateConfig, VERSION } from './domain/contracts.js';
 export { PipelineError } from './domain/errors.js';
-export { classify, planGates, assertScope } from './policy/policy.js';
-export { Lifecycle } from './lifecycle/service.js';
-export { specSchema, replanSchema, qaSchema, designProposalSchema, securityPlanSchema, threatModelSchema, validateSpec, validateQa, specHash, approvalHash, specMarkdown } from './lifecycle/contracts.js';
-export { inspectProject, planInstallation, applyInstallation, doctor } from './lifecycle/onboarding.js';
-export { publishSpec, syncSpec } from './lifecycle/github.js';
-export { readRole, catalog, guidanceFor, guidanceAudit, installedAssets } from './knowledge/catalog.js';
+export { IssueList, jsonSchemaIssues, schemaIssues } from './domain/issues.js';
+export { classify, planGates, assertScope, scopeReport, validateDag, matches } from './policy/policy.js';
+export { specSchema, qaSchema, designProposalSchema, securityPlanSchema, threatModelSchema, validateSpec, specIssues, specRuleIssues, validateQa, specHash, approvalHash, specMarkdown } from './lifecycle/contracts.js';
+export { decisionSchema, decisionLedgerSchema, decisionCoverageSchema, semanticReviewSchema, validateDecisionLedger, decisionLedgerIssues, loadDecisionLedger, resolveLedgerFile, ledgerHash, confirmedDecisions, ambiguousDecisions, ambiguousApprovalFragments, LEDGER_FILE, LEGACY_LEDGER_FILE } from './lifecycle/decisions.js';
+export { ledgerUpdateSchema, planLedgerUpdate, applyLedgerUpdate } from './lifecycle/ledger-update.js';
 export { roleNames, skillNames, skillsSchema } from './domain/knowledge.js';
-export { providerProfile, providerSupport } from './adapters/providers.js';
-export { bootstrapProposalSchema, planBootstrap, refineBootstrap, applyBootstrap } from './lifecycle/bootstrap.js';
-export { decisionSchema, decisionLedgerSchema, decisionCoverageSchema, semanticReviewSchema, validateDecisionLedger, loadDecisionLedger, ledgerHash, confirmedDecisions, ambiguousDecisions, ambiguousApprovalFragments } from './lifecycle/decisions.js';
 export { inspectRepository } from './knowledge/repository.js';
 export { owaspTopicIds, owaspCatalog, securityProfileSchema, securityContextSchema, assessSecurity, neutralSecurityContext, topicById } from './security/owasp.js';
-export { compactProposal } from './lifecycle/compact.js';
-export { roleAgent, modelChoice, modelPlan } from './adapters/routing.js';
-export { modelSelectionSchema, validateModelSelection, applyModelSelection } from './adapters/model-selection.js';
-export { invocationTotals } from './adapters/invocations.js';
-export { evaluationReport } from './evaluation/report.js';
 export { qualityCheckSchema, qualityContext, validationEvidence, validateQualityChecks } from './quality/review.js';
+export { apvConfigSchema, loadConfig, configIssues, policyConfig, CONFIG_FILE, LEGACY_CONFIG_FILE } from './config/load.js';
 //# sourceMappingURL=index.js.map
