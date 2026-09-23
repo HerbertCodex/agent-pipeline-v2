@@ -21,10 +21,13 @@ start   valide la spec (comme apv spec validate, prête à lancer), calcule les 
         dépendances ; vague 0 = fondations, les tâches de la première couche dont d'autres dépendent)
         et crée l'état. <spec> : un identifiant (.apv/specs/<id>.json) ou un chemin. Refuse si l'état
         existe (apv run next). --base : branche de départ (par défaut la branche courante).
-set     <cible> : ${STEPS.join(', ')}, task:<id> ou review:<${REVIEWS.join('|')}>.
-        <statut> : ${STATUSES.join(', ')}. Une tâche ne passe « running » que si ses dépendances sont
-        « done » ; « done » exige --commit pour une tâche (facultatif pour une étape ou une revue : commit qui la porte, ou commit revu). --base : commit de départ de la tâche (reprise).
-        --findings : nombre de constats d'une revue. Rouvrir un travail fait exige --note.
+set     <cible> : ${STEPS.join(', ')},
+        task:<id> ou review:<${REVIEWS.join('|')}>.
+        <statut> : ${STATUSES.join(', ')}. Une tâche ne passe « running »
+        que si ses dépendances sont « done » ; « done » exige --commit pour une tâche (facultatif
+        pour une étape ou une revue : commit qui la porte, ou commit revu). --base : commit de départ
+        de la tâche (reprise). --findings : nombre de constats d'une revue. Rouvrir un travail fait,
+        ou remplacer son commit, exige --note.
 next    ce qu'il faut faire maintenant : étape courante, tâches prêtes, tâches à reprendre ou à
         relancer (worktree absent, aucun commit après la base), revues à lancer.
 status  résumé de toutes les exécutions, ou détail d'une seule.

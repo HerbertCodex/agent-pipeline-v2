@@ -276,6 +276,18 @@ test('apv run status shares the bounded summary: a FIFO never blocks it, lines a
   assert.deepEqual([listed.runs.map(r => r.specId), listed.unread], [['casse', 'fifo', 'vagues'], 0]);
 });
 
+test('the help of run set wraps like its neighbours (FID-5)', async t => {
+  // Review FID-5: the paragraph of set had a line of more than 180 characters among lines of about 100.
+  const p = project(t);
+  const help = await p.run('--help');
+  assert.equal(help.code, 0);
+  const lines = help.stdout.split('\n');
+  const set = lines.slice(lines.findIndex(l => l.startsWith('set ')), lines.findIndex(l => l.startsWith('next ')));
+  assert.ok(set.length >= 5, help.stdout);
+  for (const line of set) assert.ok(Array.from(line).length <= 101, line);
+  assert.match(set.join(' '), /Rouvrir un travail fait,\s+ou remplacer son commit, exige --note\./);
+});
+
 test('replacing the commit of finished work needs a note (SEC-6)', async t => {
   // Review SEC-6: « apv run set <spec> task:F done --commit <autre> » silently replaced the delivered commit of
   // a done task (or step, or review): integration and reviews then relied on a commit nobody had decided.
