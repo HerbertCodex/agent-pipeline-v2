@@ -1,5 +1,7 @@
 # Exécution : abonnement, décisions et reprises
 
+> **Archive V2.** Ce guide décrit le CLI `apv2` d'Agent Pipeline V2 (dernière version 2.0.0-alpha.8, branche `main`) et son contrôleur, retirés d'APV3. Pour APV3 : [plugin](../PLUGIN.md), [outil apv](../CLI.md), [spécification](../APV3-SPEC.md).
+
 La politique distingue le mode d’usage, le choix du modèle et les preuves de qualité. Un montant déclaré par le CLI n’est ni une facture ni une mesure du quota de votre compte.
 
 ## Choisir le mode d’usage

@@ -1,5 +1,7 @@
 # Frontière de confiance et limites de sécurité
 
+> **Écrit pour V2.** Les passages sur le contrôleur, les adaptateurs et le store décrivent V2. En V3, les garde-fous sont les hooks du plugin et les outils autorisés de chaque agent ([plugin](PLUGIN.md)).
+
 ## Usage autorisé par la conception actuelle
 
 Cette alpha est un runner **local de confiance**, mono-opérateur. Elle n'est pas un service capable d'exécuter du code hostile de façon sûre. `executionMode: "local-trusted"` est un prérequis explicite, pas une option de sandbox.

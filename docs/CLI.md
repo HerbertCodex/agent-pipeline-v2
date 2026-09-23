@@ -92,18 +92,19 @@ Sortie : `0` tous les contrôles passent, `1` au moins un échec ou une configur
 ## `apv lock`
 
 ```
+apv lock run <ressource> [--ttl 900] [--wait 1800] -- <commande...>
 apv lock acquire|release|status <ressource>
 ```
 
-Verrous avec bail sur les ressources partagées (base de test, ports) : propriétaire vérifié, expiration, file d'attente visible (spécification, section 10). Fourni par une autre partie de la phase 1 ; dans une installation où ce module manque, la commande répond « non disponible » et sort avec le code `2`.
+Verrous à bail sur les ressources partagées (base de test, ports, navigateur) : propriétaire vérifié, expiration, renouvellement pendant `run`, file d'attente visible (spécification, section 10). `run` est la forme à préférer : une commande par bail, libéré à la sortie quoi qu'il arrive. Détails, options et codes de sortie : [LOCKS.md](LOCKS.md).
 
 ## `apv db check`
 
 ```
-apv db check
+apv db check [--json] [--live] [--config <fichier>] [--root <dossier>]
 ```
 
-Contrôle du modèle de données (spécification, section 13 bis). Fourni par une autre partie de la phase 1 ; même comportement que `apv lock` s'il manque.
+Contrôle du modèle de données (spécification, section 13 bis) : nommage anglais, index des clés étrangères, RLS, politiques, fonctions `security definer`, `select *` dans le code, redondances, clés d'idempotence. `--live` lit aussi la base, en lecture seule, par `APV_PSQL` (commande psql complète, par exemple `docker exec -i <conteneur> psql -U postgres -d postgres`) ou par `APV_DB_URL` et `psql`. Règles, configuration et limites : [DB-CHECK.md](DB-CHECK.md).
 
 ## `apv quota`
 

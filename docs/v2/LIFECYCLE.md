@@ -1,5 +1,7 @@
 # Parcours complet et exploitation
 
+> **Archive V2.** Ce guide décrit le CLI `apv2` d'Agent Pipeline V2 (dernière version 2.0.0-alpha.8, branche `main`) et son contrôleur, retirés d'APV3. Pour APV3 : [plugin](../PLUGIN.md), [outil apv](../CLI.md), [spécification](../APV3-SPEC.md).
+
 Pour les modes abonnement/facturé, les amendements `null`, les diagnostics et les durées : [politique d’exécution](EXECUTION-POLICY.md).
 
 ## Responsabilités
@@ -68,7 +70,7 @@ apv2 spec qa ID --file /rapport-qa.json
 apv2 spec run ID --manual-qa
 ```
 
-En mode `qualityReview: "evidence"`, QA ajoute les six axes de qualité et les références de tests négatifs. Les preuves requises sont vérifiées avant son appel puis avant revue/livraison. Une preuve manquante ou un statut `unknown` bloque avec `QA_EVIDENCE` sans réparation automatique de code. L'opérateur qui a inspecté la preuve manquante peut autoriser exactement une réparation avec `apv2 spec qa-repair SPEC_ID --confirm --note TEXT` : elle exige que chaque contrôle configuré ait déjà prouvé ce candidat, elle est consommée par la réparation qu'elle autorise, et la revue suivante doit toujours conclure sur ses propres preuves. Voir [la grille et les preuves](QUALITY.md).
+En mode `qualityReview: "evidence"`, QA ajoute les six axes de qualité et les références de tests négatifs. Les preuves requises sont vérifiées avant son appel puis avant revue/livraison. Une preuve manquante ou un statut `unknown` bloque avec `QA_EVIDENCE` sans réparation automatique de code. L'opérateur qui a inspecté la preuve manquante peut autoriser exactement une réparation avec `apv2 spec qa-repair SPEC_ID --confirm --note TEXT` : elle exige que chaque contrôle configuré ait déjà prouvé ce candidat, elle est consommée par la réparation qu'elle autorise, et la revue suivante doit toujours conclure sur ses propres preuves. Voir [la grille et les preuves](../QUALITY.md).
 
 Le rapport externe est explicitement importé et lié aux preuves présentes. Son auteur n'est pas authentifié par la CLI. Une nouvelle QA invalide les avis humains antérieurs.
 
@@ -94,7 +96,7 @@ Une autorisation permanente limitée aux appelants et tests ne signifie pas « t
 
 ### Réviser les tâches restantes
 
-Si le découpage est en cause, `spec replan` permet de corriger le plan d'une spec bloquée sur une tâche en échec définitif, sans relancer Product ni refaire les tâches validées. Préparer un fichier conforme à [replan.schema.json](../examples/schemas/replan.schema.json), avec `reason` et `tasks` : copier **toutes les tâches restantes** de `spec show`, puis ajuster leurs descriptions, chemins et dépendances. Les identifiants et critères associés sont conservés ; le niveau de risque peut augmenter, jamais diminuer.
+Si le découpage est en cause, `spec replan` permet de corriger le plan d'une spec bloquée sur une tâche en échec définitif, sans relancer Product ni refaire les tâches validées. Préparer un fichier conforme à [replan.schema.json](schemas/replan.schema.json), avec `reason` et `tasks` : copier **toutes les tâches restantes** de `spec show`, puis ajuster leurs descriptions, chemins et dépendances. Les identifiants et critères associés sont conservés ; le niveau de risque peut augmenter, jamais diminuer.
 
 ```bash
 apv2 spec replan ID --file remaining-tasks.json
@@ -108,7 +110,7 @@ La reprise part du dernier commit validé ; le code de la tentative échouée re
 
 Cette commande de terminal ne change ni les critères métier, ni l'architecture, ni la maquette, ni les commandes et gates. Elle ne fusionne pas de tâches et n'en supprime pas : pour un découpage trop étroit, élargir explicitement les chemins de la tâche concernée et adapter les consignes des tâches suivantes. Résoudre les amendements de périmètre ou de critère en attente avant de l'utiliser. Une spec publiée ou livrée ne peut pas être révisée ainsi.
 
-Un rôle et ses réparations de sortie partagent une échéance. Product et Design consomment le budget actif de la spec, comme l'exécution et QA ; l'attente humaine en est exclue. Les tokens et coûts publiés sont journalisés, et les valeurs absentes restent inconnues. `workflow.maxSpecCostUsd` est vérifié avant les appels et limite aussi le budget restant de chaque appel Claude. Voir [les limites exactes](CONFIGURATION.md#limites-de-temps-de-tours-et-de-coût).
+Un rôle et ses réparations de sortie partagent une échéance. Product et Design consomment le budget actif de la spec, comme l'exécution et QA ; l'attente humaine en est exclue. Les tokens et coûts publiés sont journalisés, et les valeurs absentes restent inconnues. `workflow.maxSpecCostUsd` est vérifié avant les appels et limite aussi le budget restant de chaque appel Claude. Voir [les limites exactes](../CONFIGURATION.md#limites-de-temps-de-tours-et-de-coût).
 
 `spec plan-resume ID` reprend une planification arrêtée avec ses checkpoints compatibles. Il peut éviter de refaire Product si la spec était déjà acceptée avant l'échec de Design. Il ne récupère pas une réponse jamais reçue et ne reprend pas un thread natif du fournisseur.
 

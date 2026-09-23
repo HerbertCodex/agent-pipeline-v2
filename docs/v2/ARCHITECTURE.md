@@ -1,5 +1,7 @@
 # Architecture
 
+> **Archive V2.** Ce guide décrit le CLI `apv2` d'Agent Pipeline V2 (dernière version 2.0.0-alpha.8, branche `main`) et son contrôleur, retirés d'APV3. Pour APV3 : [plugin](../PLUGIN.md), [outil apv](../CLI.md), [spécification](../APV3-SPEC.md).
+
 ## Un monolithe modulaire
 
 `domain` définit les contrats et erreurs. `policy` calcule les obligations sur le diff réel. `execution` gère Git, argv, environnement, limites et groupes de processus. `engine` exécute les tentatives, les contrôles et leurs réparations bornées. `evidence` produit et réutilise les reçus. `persistence` conserve l'état SQLite et les événements. `adapters` isole les moteurs d'agents. `lifecycle` ajoute installation, Product, specs, QA, livraison et GitHub. La CLI les compose ; aucun agent Orchestrator ne décide des transitions mécaniques.
@@ -38,7 +40,7 @@ Le bootstrap persiste `.agent-pipeline/ARCHITECTURE.md`. Il ne s'agit pas d'une 
 
 Repository Intelligence est recalculé sur le SHA Git utilisé par Product ou par la tâche Implementer. Le contrôleur transmet un résumé borné de manifests, documents architecturaux, fichiers pertinents et symboles candidats. Cette séparation garde la recherche déterministe et auditée tout en évitant de demander au modèle de redécouvrir aveuglément le dépôt à chaque appel.
 
-Une évolution UI majeure demande une proposition design distincte, produite par Product avec `ui-design` et le profil `roles.design` s’il est configuré. Une retouche déclarée `minor` réutilise le design existant. Une décision d’architecture conditionnelle précède le plan structurant. Ces artefacts sont liés au hash d’approbation ; ils n’ajoutent pas de rôle permanent. Voir [les parcours](LIFECYCLE.md#choisir-le-parcours) et [la qualité](QUALITY.md).
+Une évolution UI majeure demande une proposition design distincte, produite par Product avec `ui-design` et le profil `roles.design` s’il est configuré. Une retouche déclarée `minor` réutilise le design existant. Une décision d’architecture conditionnelle précède le plan structurant. Ces artefacts sont liés au hash d’approbation ; ils n’ajoutent pas de rôle permanent. Voir [les parcours](LIFECYCLE.md#choisir-le-parcours) et [la qualité](../QUALITY.md).
 
 ## Inventaire du dépôt — indépendant de la stack
 

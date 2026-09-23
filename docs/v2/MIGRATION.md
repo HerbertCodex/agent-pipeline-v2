@@ -1,5 +1,7 @@
 # Mettre à jour un projet existant
 
+> **Archive V2.** Ce guide décrit le CLI `apv2` d'Agent Pipeline V2 (dernière version 2.0.0-alpha.8, branche `main`) et son contrôleur, retirés d'APV3. Pour APV3 : [plugin](../PLUGIN.md), [outil apv](../CLI.md), [spécification](../APV3-SPEC.md).
+
 ## Modèles et QA dédiée
 
 Les champs absents conservent `workflow.qaProfile: "lane"` et `agent.preflight: "off"`. Pour réserver une revue approfondie à QA, revoir son modèle, ses éventuels profils/règles, puis activer `qaProfile: "deep"`. Pour contrôler réellement un modèle natif avant le contexte projet, activer `preflight: "probe"` sur l'agent concerné ; ces contrôles consomment du quota. `--models FILE` est destiné au bootstrap et à la première installation, sans écraser un projet installé.
@@ -13,7 +15,7 @@ Les lots d'amélioration du 18 septembre suivent la livraison initiale alpha.8, 
 1. Terminer ou abandonner explicitement les specs actives avec leur distribution d'origine. Arrêter les processus avant de sauvegarder le dépôt et le store complet, y compris SQLite, WAL/SHM éventuels et workspaces. Ne pas migrer les documents approuvés en place.
 2. Mettre à jour le framework entre deux specs. Utiliser `apv2 inspect --repo PATH` pour examiner configuration et dérive des guides installés. Le runtime charge rôles et skills depuis le package ; les copies du projet ne les remplacent pas.
 3. Préserver `pipeline.v2.json`, les commandes, permissions et conventions du projet. Les champs absents `workflow.planningMode` et `workflow.qualityReview` restent `legacy`. Les nouvelles configurations `init`/onboarding proposent, elles, `adaptive` et `evidence`.
-4. Pour activer les nouveaux comportements, fusionner les réglages suivants dans une configuration revue. Ajouter les labels `covers`, les mappings `testPaths` et les règles locales nécessaires aux **commandes réellement présentes** : [guide de qualité](QUALITY.md#activation-et-compatibilité).
+4. Pour activer les nouveaux comportements, fusionner les réglages suivants dans une configuration revue. Ajouter les labels `covers`, les mappings `testPaths` et les règles locales nécessaires aux **commandes réellement présentes** : [guide de qualité](../QUALITY.md#activation-et-compatibilité).
 5. Contrôler le diff de configuration, calibrer les commandes avec `doctor --execute` lorsque leur exécution est autorisée, puis créer une nouvelle spec. Une gate manquante ne doit pas être remplacée par un faux succès.
 
 ```json
@@ -25,7 +27,7 @@ Les lots d'amélioration du 18 septembre suivent la livraison initiale alpha.8, 
 }
 ```
 
-Ce fragment complète le fichier existant ; ce n'est pas une configuration autonome. `feedback.gateIds` reste vide par défaut : autoriser séparément les checks indépendants que l'Implementer peut demander en session. Les modèles peuvent être fixés par `roleProfiles` et `modelRouting`. Voir [la configuration actuelle](CONFIGURATION.md).
+Ce fragment complète le fichier existant ; ce n'est pas une configuration autonome. `feedback.gateIds` reste vide par défaut : autoriser séparément les checks indépendants que l'Implementer peut demander en session. Les modèles peuvent être fixés par `roleProfiles` et `modelRouting`. Voir [la configuration actuelle](../CONFIGURATION.md).
 
 Les limites par défaut ont évolué : trois réparations de code, deux réparations QA, 30 minutes pour l'agent et 45 minutes pour un run. Une valeur explicitement configurée est conservée. Le plafond global de spec (25 $ par défaut) contraint aussi le budget restant de chaque appel Claude ; il peut interrompre un appel. Examiner les limites avant un nouveau run, sans confondre allocation et objectif de durée.
 

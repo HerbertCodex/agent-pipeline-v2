@@ -1,5 +1,7 @@
 # OWASP-aware security layer — alpha.8
 
+> **Written for V2.** APV3 keeps the OWASP routing and the security minimum recomputed by `apv spec validate` ([outil apv](CLI.md)); passages about the controller describe V2.
+
 Agent Pipeline V2 alpha.8 uses the OWASP Cheat Sheet Series as **routed engineering guidance**. It does not claim OWASP certification, complete coverage, penetration testing or absence of vulnerabilities.
 
 ## Why routing instead of injecting every cheat sheet

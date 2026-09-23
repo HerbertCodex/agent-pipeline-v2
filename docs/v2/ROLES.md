@@ -1,5 +1,7 @@
 # Rôles et moteur
 
+> **Archive V2.** Ce guide décrit le CLI `apv2` d'Agent Pipeline V2 (dernière version 2.0.0-alpha.8, branche `main`) et son contrôleur, retirés d'APV3. Pour APV3 : [plugin](../PLUGIN.md), [outil apv](../CLI.md), [spécification](../APV3-SPEC.md).
+
 Le rôle représente une responsabilité ; le fournisseur exécute le modèle ; un skill conseille une méthode ; un gate produit une mesure. Les quatre rôles ne sont pas quatre services permanents.
 
 | Rôle | Instructions canoniques | Sélection du fournisseur | Déclenchement |
@@ -9,7 +11,7 @@ Le rôle représente une responsabilité ; le fournisseur exécute le modèle ; 
 | Implementer | `roles/implementer.md` | `agent` | tâche approuvée et corrections bornées |
 | QA | `roles/qa.md` | `roles.qa`, sinon `agent` | parcours adaptatifs standard/structural ; compact selon le diff ; `qaLanes` en legacy |
 
-Orchestrator est la machine à états TypeScript. Il n'a pas de fournisseur ni de prompt à charger. Design est un mode de Product, configurable via `roles.design` (héritage de Product, puis `agent`). `roleProfiles` et `modelRouting` choisissent ensuite modèle et effort selon le rôle et la lane ; voir [la configuration](CONFIGURATION.md#parcours-profils-et-checks-en-session).
+Orchestrator est la machine à états TypeScript. Il n'a pas de fournisseur ni de prompt à charger. Design est un mode de Product, configurable via `roles.design` (héritage de Product, puis `agent`). `roleProfiles` et `modelRouting` choisissent ensuite modèle et effort selon le rôle et la lane ; voir [la configuration](../CONFIGURATION.md#parcours-profils-et-checks-en-session).
 
 `apv2 roles` liste les chemins et empreintes. `apv2 roles product` imprime exactement le fichier source utilisé. Le moteur charge les fichiers **du package de confiance**, pas les copies modifiables dans le worktree. Les copies installées aident l'assistant principal et les humains. `apv2 inspect --repo PATH` signale les différences sans écraser de fichier.
 
@@ -49,4 +51,4 @@ Les quatre rôles traitent les instructions embarquées dans le dépôt, les log
 
 QA peut utiliser un modèle et un fournisseur distincts de l'Implementer. La politique `workflow.qaProfile: "deep"` sélectionne sa revue approfondie quelle que soit la lane lorsque QA est requise ; un réglage global du modèle d'implémentation ne remplace pas cette QA dédiée. Le modèle reste un choix explicite à évaluer, sans classement automatique : [gestion des modèles](MODELS.md).
 
-En mode `workflow.qualityReview: "evidence"`, la QA existante examine architecture, simplicité, réutilisation, tests, exploitation et interface. Les références aux fichiers, constats et reçus finaux sont contrôlées ; les scénarios négatifs de sécurité sont reliés aux tests exécutés. Une preuve requise manquante ou un verdict `unknown` arrête la validation avec `QA_EVIDENCE`, sans réparation automatique du code. L'opérateur qui a inspecté la preuve manquante peut autoriser exactement une réparation avec `apv2 spec qa-repair SPEC_ID --confirm --note TEXT` : elle exige que chaque contrôle configuré ait déjà prouvé ce candidat, elle est consommée par la réparation qu'elle autorise, et la revue suivante doit toujours conclure sur ses propres preuves. Les checks en session de l'Implementer sont des diagnostics, pas ces preuves finales. [Contrat complet](QUALITY.md).
+En mode `workflow.qualityReview: "evidence"`, la QA existante examine architecture, simplicité, réutilisation, tests, exploitation et interface. Les références aux fichiers, constats et reçus finaux sont contrôlées ; les scénarios négatifs de sécurité sont reliés aux tests exécutés. Une preuve requise manquante ou un verdict `unknown` arrête la validation avec `QA_EVIDENCE`, sans réparation automatique du code. L'opérateur qui a inspecté la preuve manquante peut autoriser exactement une réparation avec `apv2 spec qa-repair SPEC_ID --confirm --note TEXT` : elle exige que chaque contrôle configuré ait déjà prouvé ce candidat, elle est consommée par la réparation qu'elle autorise, et la revue suivante doit toujours conclure sur ses propres preuves. Les checks en session de l'Implementer sont des diagnostics, pas ces preuves finales. [Contrat complet](../QUALITY.md).

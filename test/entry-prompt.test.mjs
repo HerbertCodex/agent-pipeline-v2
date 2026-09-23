@@ -43,8 +43,8 @@ test('the procedure keeps its fifteen sections, in one place only', () => {
     // An entry door points at the block; it never carries one of its own. A copy drifts from the
     // original, and a door that shortens the prompt on its own drops the rules that bind first —
     // which is what happened here, unnoticed, because the guard only looked for copied rules.
-    for (const file of readdirSync(root + 'prompts')) {
-        const text = readFileSync(`${root}prompts/${file}`, 'utf8');
+    for (const file of readdirSync(root + 'docs/v2/prompts')) {
+        const text = readFileSync(`${root}docs/v2/prompts/${file}`, 'utf8');
         assert.ok(!/^```text$/m.test(text), `${file} carries its own prompt block instead of pointing at the entry one`);
         assert.ok(!BINDING.some(rule => text.includes(rule)), `${file} copied the binding rules instead of pointing at them`);
         assert.match(text, /START-HERE\.md#prompt-initial/, `${file} does not point at the block to paste`);

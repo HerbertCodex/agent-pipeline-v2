@@ -1,5 +1,7 @@
 # Blocages et recours
 
+> **Archive V2.** Ce guide décrit le CLI `apv2` d'Agent Pipeline V2 (dernière version 2.0.0-alpha.8, branche `main`) et son contrôleur, retirés d'APV3. Pour APV3 : [plugin](../PLUGIN.md), [outil apv](../CLI.md), [spécification](../APV3-SPEC.md).
+
 Un refus doit préciser la cause, le travail conservé, l’action possible et ses préconditions. Un refus de sécurité ou une incohérence interne peut imposer un arrêt et un diagnostic : une « porte de sortie » ne signifie pas autoriser une opération invalide.
 
 ## Audit reproductible

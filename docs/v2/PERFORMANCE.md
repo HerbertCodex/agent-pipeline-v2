@@ -1,5 +1,7 @@
 # Performance : protocole et interprétation
 
+> **Archive V2.** Ce guide décrit le CLI `apv2` d'Agent Pipeline V2 (dernière version 2.0.0-alpha.8, branche `main`) et son contrôleur, retirés d'APV3. Pour APV3 : [plugin](../PLUGIN.md), [outil apv](../CLI.md), [spécification](../APV3-SPEC.md).
+
 ## But
 
 Ce guide décrit les mécanismes présents et le protocole de mesure. Les objectifs de délai ne sont pas des performances déjà obtenues. Pour les modes d’usage et les mesures par étape, consulter la [politique d’exécution](EXECUTION-POLICY.md).
@@ -18,7 +20,7 @@ node scripts/bench.mjs --repetitions 5 --output /tmp/apv2-bench.json
 
 Le benchmark utilise les mêmes quatre commandes réelles Node dans les deux modes : trois timers indépendants de 180 ms déclarés `readOnly: true` et un timer de 50 ms dépendant de deux parents. Il compare une concurrence de 1 et de 3, alterne l'ordre des modes et conserve chaque mesure. **Ces délais sont artificiels.** Le résultat démontre l'effet de l'ordonnancement sur ce graphe, pas un gain général de la V2 sur la V1 ou sur une session IA.
 
-Relancer ces commandes pour mesurer l’état courant sur votre machine. Les [preuves conservées](../validation/VALIDATION.md) distinguent les contrôles du moteur et les essais avec des modèles réels.
+Relancer ces commandes pour mesurer l’état courant sur votre machine. Les [preuves conservées](../../validation/VALIDATION.md) distinguent les contrôles du moteur et les essais avec des modèles réels.
 
 ## Durées
 
@@ -62,6 +64,6 @@ Repository Intelligence ajoute un scan local borné par SHA avant Product et les
 
 ## Mesures des parcours courts
 
-Le [premier pilote Claude](../validation/short-loop-2026-09-18/REPORT.md) et la [calibration suivante](../validation/short-loop-2026-09-18/CALIBRATION.md) conservent les réussites, les échecs et les limites de petits cas jetables. Des tokens, coûts déclarés, appels et délais sont donc disponibles pour ces essais ; ils ne prouvent pas un gain général sur une fonctionnalité complète. La grille de qualité du lot 3 n'a pas encore fait l'objet d'une calibration payante.
+Le [premier pilote Claude](../../validation/short-loop-2026-09-18/REPORT.md) et la [calibration suivante](../../validation/short-loop-2026-09-18/CALIBRATION.md) conservent les réussites, les échecs et les limites de petits cas jetables. Des tokens, coûts déclarés, appels et délais sont donc disponibles pour ces essais ; ils ne prouvent pas un gain général sur une fonctionnalité complète. La grille de qualité du lot 3 n'a pas encore fait l'objet d'une calibration payante.
 
-`npm run evaluate` décrit les cas sans appeler de modèle. Une campagne avec `--execute` consomme le quota ; comparer les mêmes cas, checks et répétitions avec `scripts/compare-evaluations.mjs`. Un résultat incomplet ou un coût inconnu doit rester visible. La [calibration des profils](../validation/short-loop-2026-09-18/CALIBRATION.md) conserve les résultats et leurs limites à la date des essais.
+`npm run evaluate` décrit les cas sans appeler de modèle. Une campagne avec `--execute` consomme le quota ; comparer les mêmes cas, checks et répétitions avec `scripts/compare-evaluations.mjs`. Un résultat incomplet ou un coût inconnu doit rester visible. La [calibration des profils](../../validation/short-loop-2026-09-18/CALIBRATION.md) conserve les résultats et leurs limites à la date des essais.

@@ -1,10 +1,12 @@
 # Adaptateurs et compatibilité
 
+> **Archive V2.** Ce guide décrit le CLI `apv2` d'Agent Pipeline V2 (dernière version 2.0.0-alpha.8, branche `main`) et son contrôleur, retirés d'APV3. Pour APV3 : [plugin](../PLUGIN.md), [outil apv](../CLI.md), [spécification](../APV3-SPEC.md).
+
 Deux adaptateurs natifs sont livrés : **codex** et **claude**. **command** est une interface d'extension, pas une compatibilité automatique avec tous les fournisseurs. Le fournisseur de l'assistant d'éditeur et ceux des rôles de la pipeline sont distincts.
 
 Pour choisir explicitement les profils au démarrage, réserver un modèle à QA, vérifier la compatibilité ou remplacer un identifiant retiré : [gestion des modèles](MODELS.md). Les contrôles réels de compatibilité consomment du quota et ne constituent pas une mesure de qualité.
 
-`agent` configure l'Implementer ; `roles.product` et `roles.qa` héritent de lui si leur valeur est `null`. Le mode Design utilise `roles.design`, sinon Product, sinon `agent`. Les profils `quick`/`deep` et les règles `modelRouting` sélectionnent modèle et effort : voir [la configuration](CONFIGURATION.md#parcours-profils-et-checks-en-session).
+`agent` configure l'Implementer ; `roles.product` et `roles.qa` héritent de lui si leur valeur est `null`. Le mode Design utilise `roles.design`, sinon Product, sinon `agent`. Les profils `quick`/`deep` et les règles `modelRouting` sélectionnent modèle et effort : voir [la configuration](../CONFIGURATION.md#parcours-profils-et-checks-en-session).
 
 ## Claude Code CLI
 
@@ -33,9 +35,9 @@ Bash, outils web et sous-agents sont exclus. MCP est désactivé sauf le serveur
 
 Les settings utilisateur/projet et les slash-commands natives sont désactivés pour ces appels. La session demande `disableAllHooks`, mais des hooks imposés par une politique administrée peuvent rester actifs. Ces options ne constituent pas une sandbox OS ni une preuve d'isolation des secrets ; vérifier leur compatibilité avec le CLI installé.
 
-`maxTurns` (1–200, défaut 200) et `maxBudgetUsd` (`null` ou 0,01–1 000 $, défaut `null`) sont des limites **par appel Claude**. En mode historique/facturé, même avec `maxBudgetUsd: null`, le budget restant de la spec peut borner l'appel. Avec `usageMode: "subscription"`, aucun flag `--max-budget-usd` n’est ajouté ; les quotas du compte restent ceux du fournisseur. Voir [les modes d’usage](EXECUTION-POLICY.md). Une limite fournisseur peut arrêter la session avant sa réponse finale. Les checkpoints et fichiers déjà produits restent récupérables selon l'étape, pas le raisonnement interne du modèle. Voir [les budgets](CONFIGURATION.md#limites-de-temps-de-tours-et-de-coût).
+`maxTurns` (1–200, défaut 200) et `maxBudgetUsd` (`null` ou 0,01–1 000 $, défaut `null`) sont des limites **par appel Claude**. En mode historique/facturé, même avec `maxBudgetUsd: null`, le budget restant de la spec peut borner l'appel. Avec `usageMode: "subscription"`, aucun flag `--max-budget-usd` n’est ajouté ; les quotas du compte restent ceux du fournisseur. Voir [les modes d’usage](EXECUTION-POLICY.md). Une limite fournisseur peut arrêter la session avant sa réponse finale. Les checkpoints et fichiers déjà produits restent récupérables selon l'étape, pas le raisonnement interne du modèle. Voir [les budgets](../CONFIGURATION.md#limites-de-temps-de-tours-et-de-coût).
 
-Les contrats CLI sont testés avec des doublures. Des appels Claude réels ont aussi été effectués sur de petits cas jetables : [calibration conservée](../validation/short-loop-2026-09-18/CALIBRATION.md). Ils ne valident ni toute la sécurité du fournisseur ni la qualité d'une application complète.
+Les contrats CLI sont testés avec des doublures. Des appels Claude réels ont aussi été effectués sur de petits cas jetables : [calibration conservée](../../validation/short-loop-2026-09-18/CALIBRATION.md). Ils ne valident ni toute la sécurité du fournisseur ni la qualité d'une application complète.
 
 ## Codex CLI
 
@@ -82,4 +84,4 @@ Les programmes `examples/demo-agent.mjs` et `examples/lifecycle-worker.mjs` sont
 
 Les schémas de transport sont normalisés par `src/adapters/structured-schema.ts` ; les contraintes retirées pour la compatibilité fournisseur restent vérifiées par le parseur runtime complet. Le journal `invocation.started/finished` distingue coûts connus, inconnus et appels sans résultat, même lorsqu'une sortie est rejetée.
 
-Les contenus du dépôt et des commandes restent des données potentiellement hostiles. Les consignes ne remplacent pas l'isolation d'exécution et la séparation des secrets. Voir [la frontière de confiance](SECURITY.md) et [les pilotes](PROVIDER-PILOT.md).
+Les contenus du dépôt et des commandes restent des données potentiellement hostiles. Les consignes ne remplacent pas l'isolation d'exécution et la séparation des secrets. Voir [la frontière de confiance](../SECURITY.md) et [les pilotes](PROVIDER-PILOT.md).

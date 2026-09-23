@@ -1,5 +1,7 @@
 # Choisir les modèles et réserver une revue approfondie à QA
 
+> **Archive V2.** Ce guide décrit le CLI `apv2` d'Agent Pipeline V2 (dernière version 2.0.0-alpha.8, branche `main`) et son contrôleur, retirés d'APV3. Pour APV3 : [plugin](../PLUGIN.md), [outil apv](../CLI.md), [spécification](../APV3-SPEC.md).
+
 Le choix est explicite par rôle. La pipeline route les tâches courantes vers `quick`, les tâches à risque élevé vers `deep`, et peut réserver à QA un modèle distinct, y compris chez un autre fournisseur. Elle ne déduit pas la qualité d'un modèle de son nom et ne remplace pas automatiquement un identifiant retiré.
 
 ## Nouveau projet ou première installation
