@@ -93,7 +93,7 @@ Les rôles de V2 (`roles/*.md`, archivés dans `docs/v2/roles/`) deviennent le c
 ## 8. Exécution d'une spec (`/apv:run`)
 
 1. **Modèle de données** : si la spec touche aux données, l'architecte des données produit ou met à jour `.apv/data-model.md`, présenté à l'opérateur avant tout code.
-2. **Plan** : l'architecte transforme les tâches de la spec en graphe ; les modules partagés (types, messages, primitives, dépôts) forment une vague « fondations » écrite par un seul agent.
+2. **Plan** : l'architecte transforme les tâches de la spec en graphe ; les vagues sont les couches de dépendances ; une tâche dont au moins deux autres dépendent (types, messages, primitives, dépôts partagés) est une fondation, écrite par un seul agent ; une tâche part dès que ses dépendances sont faites et intégrées dans la branche de la spec, sans attendre la fin de sa vague.
 3. **Vagues** : un workflow lance un `implementer` par tâche prête, chacun dans son worktree, avec la consigne commune du projet (brief) et les notes de vague (points d'extension, fichiers possédés).
 4. **Intégration** : l'`integrateur` fusionne les branches de la vague, unifie les doublons, relance tous les contrôles.
 5. **Revues** : `qa-securite`, `qa-fidelite`, `architecte-donnees`, `dpo` en parallèle, en lecture seule, sur une copie isolée.

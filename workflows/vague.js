@@ -16,7 +16,7 @@ const missing = ['specId', 'specFile', 'base', 'baseCommit', 'brief'].filter(key
 if (missing.length || !Array.isArray(input.tasks) || !input.tasks.length) {
   throw new Error(
     'Workflow apv:vague lancé sans ses paramètres (' + (missing.join(', ') || 'tasks') + '). ' +
-    'Il est lancé par /apv:run avec { specId, specFile, base, baseCommit, brief, notes, wave, context, tasks: [{ id, branch, resume }] }.',
+    'Il est lancé par /apv:run avec { specId, specFile, base, baseCommit, brief, notes, wave, context, tasks: [{ id, branch, wave, resume }] } (wave facultatif : un lancement peut réunir des tâches prêtes de plusieurs vagues).',
   )
 }
 for (const task of input.tasks) {
@@ -72,7 +72,7 @@ function startLines(task) {
 
 function prompt(task) {
   return [
-    'Tu codes la tâche `' + task.id + '` de la spec `' + input.specFile + '` (identifiant `' + input.specId + '`), vague ' + WAVE + '.',
+    'Tu codes la tâche `' + task.id + '` de la spec `' + input.specFile + '` (identifiant `' + input.specId + '`), vague ' + (task.wave === undefined ? WAVE : String(task.wave)) + '.',
     'Base : branche `' + input.base + '`, commit `' + input.baseCommit + '`. Ta branche : `' + task.branch + '`.',
     '',
     '## Démarrage',
@@ -101,7 +101,7 @@ function prompt(task) {
 }
 
 phase('Implémentation')
-log('Vague ' + WAVE + ' de ' + input.specId + ' : ' + input.tasks.length + ' tâche(s) depuis ' + input.baseCommit)
+log('Lancement (vague ' + WAVE + ') de ' + input.specId + ' : ' + input.tasks.length + ' tâche(s) depuis ' + input.baseCommit)
 
 const reports = await pipeline(input.tasks, task =>
   agent(prompt(task), {
