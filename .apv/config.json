@@ -1,0 +1,8 @@
+{
+  "name": "agent-pipeline-v3",
+  "gates": [
+    { "id": "typecheck", "command": ["npm", "run", "typecheck"], "timeoutMs": 300000, "mandatory": true, "covers": ["typecheck"] },
+    { "id": "build", "command": ["npm", "run", "build"], "timeoutMs": 300000, "mandatory": true, "outputs": ["dist/**"] },
+    { "id": "test", "command": ["npm", "test"], "dependsOn": ["build"], "timeoutMs": 900000, "mandatory": true, "covers": ["unit"], "testPaths": ["test/**"] }
+  ]
+}

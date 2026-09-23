@@ -1,0 +1,5 @@
+# Généré par apv : fichiers machine de .apv/, jamais versionnés. Vous pouvez ajouter vos lignes.
+state/*.log
+state/task.json
+state/preview.json
+receipts/
