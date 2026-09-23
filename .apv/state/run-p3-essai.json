@@ -7,7 +7,7 @@
   "baseSha": "e9da7390d9362368864027ef2d3ac97479569af2",
   "branch": "apv/p3-essai",
   "createdAt": "2026-09-23T16:55:06.490Z",
-  "updatedAt": "2026-09-23T17:09:28.191Z",
+  "updatedAt": "2026-09-23T17:14:15.013Z",
   "steps": {
     "data-model": {
       "status": "skipped",
@@ -28,10 +28,10 @@
       "updatedAt": "2026-09-23T17:09:27.829Z"
     },
     "reviews": {
-      "status": "running",
+      "status": "done",
       "commit": null,
-      "note": null,
-      "updatedAt": "2026-09-23T17:09:27.888Z"
+      "note": "revues-p3-essai-fe3fa48.md",
+      "updatedAt": "2026-09-23T17:14:15.013Z"
     },
     "fixes": {
       "status": "pending",
@@ -130,18 +130,18 @@
   },
   "reviews": {
     "securite": {
-      "status": "running",
-      "findings": null,
+      "status": "done",
+      "findings": 6,
       "commit": "fe3fa48bfd949a8a9b3aef41f3a670512bd98635",
-      "note": null,
-      "updatedAt": "2026-09-23T17:09:28.094Z"
+      "note": "2 requis (SEC-1, SEC-2), 1 requis fusionné avec FID-1 (SEC-3), 3 conseils",
+      "updatedAt": "2026-09-23T17:14:14.962Z"
     },
     "fidelite": {
-      "status": "running",
-      "findings": null,
+      "status": "done",
+      "findings": 6,
       "commit": "fe3fa48bfd949a8a9b3aef41f3a670512bd98635",
-      "note": null,
-      "updatedAt": "2026-09-23T17:09:28.191Z"
+      "note": "2 requis (FID-1, FID-3), 3 conseils, 1 info",
+      "updatedAt": "2026-09-23T17:12:06.947Z"
     },
     "donnees": {
       "status": "skipped",
@@ -296,6 +296,27 @@
       "from": "pending",
       "to": "running",
       "commit": "fe3fa48bfd949a8a9b3aef41f3a670512bd98635"
+    },
+    {
+      "at": "2026-09-23T17:12:06.947Z",
+      "target": "review:fidelite",
+      "from": "running",
+      "to": "done",
+      "note": "2 requis (FID-1, FID-3), 3 conseils, 1 info"
+    },
+    {
+      "at": "2026-09-23T17:14:14.962Z",
+      "target": "review:securite",
+      "from": "running",
+      "to": "done",
+      "note": "2 requis (SEC-1, SEC-2), 1 requis fusionné avec FID-1 (SEC-3), 3 conseils"
+    },
+    {
+      "at": "2026-09-23T17:14:15.013Z",
+      "target": "reviews",
+      "from": "running",
+      "to": "done",
+      "note": "revues-p3-essai-fe3fa48.md"
     }
   ]
 }
