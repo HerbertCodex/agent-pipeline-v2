@@ -1,5 +1,12 @@
 # Changelog
 
+## Non publié
+
+- **`bin/apv`** : le plugin fournit un exécutable `apv`. Claude Code ajoute le dossier `bin/` d'un plugin activé au `PATH` de l'outil Bash : `apv` s'y appelle directement, sans alias. Le script lance, dans le même processus, le `dist/cli.js` de son propre plugin, dont le chemin est calculé depuis son emplacement réel (liens symboliques résolus), jamais depuis le `PATH`, le dossier courant ou une variable d'environnement ; arguments, sortie et code de sortie sont ceux de l'outil. `bin` entre dans le champ `files` du paquet.
+- **Résumé des exécutions partagé** (`src/run/summary.ts`) : une entrée par `.apv/state/run-*.json`, avec les tâches en cours nommées, ou la raison d'un état illisible, invalide, trop volumineux (plus de 4 Mio) ou qui n'est pas un fichier ordinaire, sans jamais faire échouer l'appelant. Chaque ligne est nettoyée (séquences d'échappement, caractères de contrôle et de format retirés) et bornée. `apv status` s'en sert pour sa liste des exécutions en cours.
+- **Exécutions non livrées au démarrage de session** : le hook `SessionStart` les liste juste après l'en-tête, comme un état lu sur disque à vérifier, avec `apv run next <id>` pour un état lisible dont l'identifiant de fichier est valide ; huit au plus, puis un renvoi à `apv status`. Sans `dist/`, une ligne le signale et la session démarre quand même.
+- **Lignes du hook nettoyées** : `oneLine`, commun aux hooks, retire désormais séquences d'échappement, caractères de contrôle et de format, comme le module de résumé ; les noms des fichiers d'état récents et les lignes des notes de reprise passent par elle.
+
 ## 3.0.0-alpha.3 : phase 3, exécution (outil)
 
 - **`apv init`** prépare un projet : `.apv/config.json` (nom du projet, aucun contrôle), registre des décisions vide et valide, `.apv/brief.md` tiré du modèle de consigne de la compétence `chef-de-projet`, `specs/`, `state/` et `.apv/.gitignore`. Jamais un fichier existant n'est écrasé : la commande se relance sans risque et dit ce qu'elle a créé, complété ou trouvé. Refus hors d'un dépôt Git. La configuration gagne la section `name`, lue par le chargeur commun.
