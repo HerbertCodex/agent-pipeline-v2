@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Fake `gh` for the `apv stack` tests (APV_GH). State in the JSON file named by FAKE_GH_STATE:
-// { prs: { "<n>": { ...gh pr view fields } }, behavior: { editIgnored: [n], editFail: [n], mergeFail: [n],
+// { prs: { "<n>": { ...gh pr view fields } }, behavior: { retargetIgnored: [n], retargetFail: [n], mergeFail: [n],
 //   headMovesAtMerge: [n], unknownViews: { "<n>": count }, afterMerge: { "<n>": { "<m>": { ...fields } } } }, calls: [[...args]] }.
+// The repository is o/r on github.com. The retarget goes through `gh api -X PATCH repos/o/r/pulls/<n> -f base=<b>`;
+// `gh pr edit` fails as it did on the real merge of PR #70 and #71 (deprecated classic projects).
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const file = process.env.FAKE_GH_STATE;
@@ -15,7 +17,20 @@ const option = name => { const i = args.indexOf(name); return i === -1 ? undefin
 const [group, action, number] = args;
 const pr = state.prs[number];
 let code = 0;
-if (group !== 'pr' || !pr) {
+if (group === 'api') {
+  const path = args.find(a => a.startsWith('repos/'));
+  const m = /^repos\/o\/r\/pulls\/(\d+)$/.exec(path ?? '');
+  const target = state.prs[m?.[1]];
+  const base = args.find((a, k) => args[k - 1] === '-f' && a.startsWith('base='))?.slice(5);
+  if (option('-X') !== 'PATCH' || !target || !base) { process.stderr.write(`gh: Not Found (HTTP 404)\n`); code = 1; }
+  else if (state.behavior.retargetFail?.includes(target.number)) {
+    process.stdout.write('{"message":"Validation Failed","errors":[{"resource":"PullRequest","code":"invalid","field":"base"}],"status":"422"}');
+    process.stderr.write('gh: Validation Failed (HTTP 422)\n'); code = 1;
+  } else {
+    if (!state.behavior.retargetIgnored?.includes(target.number)) target.baseRefName = base;
+    process.stdout.write(`${JSON.stringify({ number: target.number, state: 'open', base: { ref: target.baseRefName }, head: { ref: target.headRefName } })}\n`);
+  }
+} else if (group !== 'pr' || !pr) {
   process.stderr.write(`no pull requests found for ${number}\n`);
   code = 1;
 } else if (action === 'view') {
@@ -23,12 +38,12 @@ if (group !== 'pr' || !pr) {
   if (left > 0) state.behavior.unknownViews[number] = left - 1;
   const fields = option('--json').split(',');
   const view = Object.fromEntries(fields.filter(f => f in pr).map(f => [f, pr[f]]));
+  if (fields.includes('url') && !('url' in pr)) view.url = `https://github.com/o/r/pull/${number}`;
   if (left > 0) Object.assign(view, { mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' });
   process.stdout.write(`${JSON.stringify(view)}\n`);
 } else if (action === 'edit') {
-  if (state.behavior.editFail?.includes(Number(number))) { process.stderr.write('GraphQL: Base branch was modified (updatePullRequest)\n'); code = 1; }
-  else if (!state.behavior.editIgnored?.includes(Number(number))) pr.baseRefName = option('--base');
-  if (code === 0) process.stdout.write(`https://github.com/o/r/pull/${number}\n`);
+  process.stderr.write('GraphQL: Projects (classic) is being deprecated in favor of the new Projects experience, see: https://github.blog/changelog/2024-05-23-sunset-notice-projects-classic/. (repository.pullRequest.projectCards)\n');
+  code = 1;
 } else if (action === 'ready') {
   pr.isDraft = false;
   if (pr.mergeStateStatus === 'DRAFT') pr.mergeStateStatus = 'CLEAN';

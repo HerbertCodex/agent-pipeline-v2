@@ -34,12 +34,14 @@ export function processGh(bin: string, env: NodeJS.ProcessEnv, cwd: string): GhR
   });
 }
 
-export const VIEW_FIELDS = 'number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup';
+export const VIEW_FIELDS = 'number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,url';
 
 export interface CheckItem { name: string; state: 'success' | 'pending' | 'failure' }
 export interface PullRequest {
   number: number; state: string; isDraft: boolean; baseRefName: string; headRefName: string; headRefOid: string;
   mergeable: string; mergeStateStatus: string; checks: CheckItem[];
+  /** Web address of the pull request: its host, owner and repository name the REST calls. */
+  url: string;
 }
 
 const str = (v: unknown): string => typeof v === 'string' ? v : '';
@@ -67,8 +69,33 @@ export function parsePullRequest(text: string): PullRequest {
   return {
     number: raw['number'], state: str(raw['state']), isDraft: raw['isDraft'] === true, baseRefName: str(raw['baseRefName']),
     headRefName: str(raw['headRefName']), headRefOid: str(raw['headRefOid']), mergeable: str(raw['mergeable']),
-    mergeStateStatus: str(raw['mergeStateStatus']), checks: readChecks(raw['statusCheckRollup']),
+    mergeStateStatus: str(raw['mergeStateStatus']), checks: readChecks(raw['statusCheckRollup']), url: str(raw['url']),
   };
+}
+
+/** Where the REST API reaches a pull request: `repos/<owner>/<repo>/pulls/<n>` on its host. */
+export interface PullRequestPath { host: string; path: string }
+
+const NAME = /^[A-Za-z0-9._-]{1,100}$/;
+
+/**
+ * The REST path of a pull request, read from the web address `gh pr view` gives for it: the same repository
+ * that answered the read, host included (GitHub Enterprise). Null when the address is not the one of pull
+ * request `n` (another number, unexpected form, owner or name with other characters than GitHub allows).
+ */
+export function pullRequestPath(pr: PullRequest): PullRequestPath | null {
+  const m = /^https:\/\/([A-Za-z0-9.-]{1,253}(?::\d{1,5})?)\/([^/]+)\/([^/]+)\/pull\/(\d{1,9})$/.exec(pr.url);
+  if (!m || Number(m[4]) !== pr.number || [m[2]!, m[3]!].some(name => !NAME.test(name) || name === '.' || name === '..')) return null;
+  return { host: m[1]!.toLowerCase(), path: `repos/${m[2]}/${m[3]}/pulls/${pr.number}` };
+}
+
+/**
+ * Arguments of the retarget: `gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -f base=<target>`. The REST API
+ * and not `gh pr edit --base`, whose GraphQL query also reads the classic projects of the pull request and
+ * fails since their deprecation (seen on the real merge of PR #70 and #71).
+ */
+export function retargetArgs(where: PullRequestPath, target: string): string[] {
+  return ['api', ...(where.host === 'github.com' ? [] : ['--hostname', where.host]), '-X', 'PATCH', where.path, '-f', `base=${target}`];
 }
 
 /** Merge states that allow a merge now; `DRAFT` is handled apart (`--ready`). */
@@ -150,6 +177,8 @@ export async function planStack(numbers: number[], options: StackOptions): Promi
     if (item.expectedBase === null) item.anomalies.push(`PR #${item.number} : base attendue inconnue (la PR précédente n'a pas été lue)`);
     else item.anomalies.push(...anomalies(item.pr, item.expectedBase, options.ready));
     if (target && item.pr.headRefName === target) item.anomalies.push(`PR #${item.number} part de la branche cible ${target}`);
+    // Every PR after the first is retargeted by the REST API: an address it cannot use stops the stack before any merge.
+    if (i > 0 && !pullRequestPath(item.pr)) item.anomalies.push(`PR #${item.number} : adresse illisible (${item.pr.url || 'absente'}), re-ciblage impossible`);
   });
   return { target, prs, ok: prs.every(p => p.anomalies.length === 0) };
 }
@@ -163,7 +192,7 @@ export interface MergeReport {
 /**
  * `apv stack merge`: merges the stack in order and stops at the first anomaly. Before each merge the pull
  * request is read again and checked; once the previous one is merged, the next one is retargeted onto the
- * target and the new base is verified by a new read, never trusted from an exit code (incident 30). The
+ * target by the REST API and the new base is verified by a new read, never trusted from an exit code (incident 30). The
  * merge passes `--match-head-commit`, so a head that moved since the check is refused by GitHub itself.
  */
 export async function mergeStack(numbers: number[], method: 'merge' | 'squash' | 'rebase', options: StackOptions): Promise<MergeReport> {
@@ -181,11 +210,18 @@ export async function mergeStack(numbers: number[], method: 'merge' | 'squash' |
     if (i > 0 && pr.baseRefName !== target) {
       const previousHead = plan.prs[i - 1]!.pr!.headRefName;
       if (pr.baseRefName !== previousHead) return stop(n, [`PR #${n} vise ${pr.baseRefName}, ni la cible ${target} ni la tête de la PR précédente ${previousHead}`]);
-      const edit = await call(options, ['pr', 'edit', String(n), '--base', target]);
+      const where = pullRequestPath(pr);
+      if (!where) return stop(n, [`PR #${n} : adresse illisible (${pr.url || 'absente'}), re-ciblage impossible`]);
+      const retarget = await call(options, retargetArgs(where, target));
+      const outcome = retarget.error ?? `code ${retarget.status}`;
+      // The result is read again whatever the exit code: the base read is the only proof (incident 30).
       ({ pr, error } = await view(options, n));
-      if (!pr) return stop(n, [error!]);
+      if (!pr) return stop(n, [`re-ciblage de la PR #${n} (gh api : ${outcome}) non vérifié : ${error!}`]);
+      if (retarget.status !== 0 || retarget.error) {
+        return stop(n, [`re-ciblage de la PR #${n} en échec (gh api : ${outcome}) ; relue, elle vise ${pr.baseRefName || '?'}`]);
+      }
       if (pr.baseRefName !== target) {
-        return stop(n, [`re-ciblage de la PR #${n} non effectif : elle vise ${pr.baseRefName} au lieu de ${target} (gh pr edit : ${edit.error ?? `code ${edit.status}`})`]);
+        return stop(n, [`re-ciblage de la PR #${n} non effectif : elle vise ${pr.baseRefName || '?'} au lieu de ${target} (gh api : ${outcome})`]);
       }
     }
     ({ pr, error } = await settled(options, n));

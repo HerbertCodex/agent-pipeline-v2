@@ -12,7 +12,8 @@ plan   lit chaque PR (gh pr view) et vérifie la pile : chaque PR ouverte, la ba
        Toutes les anomalies sont listées. Ne modifie rien.
 merge  uniquement sur ordre explicite de l'opérateur, avec APV_ALLOW_MERGE=1 devant la commande.
        Refait la vérification juste avant chaque fusion ; une fois la PR précédente fusionnée, re-cible
-       la suivante sur la branche cible et vérifie la nouvelle base par une relecture ; fusionne avec
+       la suivante sur la branche cible par l'API REST (gh api -X PATCH repos/<propriétaire>/<dépôt>/pulls/<n>)
+       et vérifie la nouvelle base par une relecture, quel que soit le code de sortie ; fusionne avec
        --match-head-commit ; constate la fusion par une relecture ; s'arrête à la première anomalie.
        La sortie complète de chaque appel gh est affichée (sur la sortie d'erreur avec --json).
 --target  branche d'arrivée de la pile (par défaut la base de la première PR).
