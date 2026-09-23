@@ -9,8 +9,7 @@
 //   { "task": "<task id>", "allowedPaths": [...], "allowedNewPaths": [...] }.
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { oneLine, readHookInput } from './lib.mjs';
+import { isMainModule, oneLine, readHookInput } from './lib.mjs';
 
 export const TASK_MARKER = join('.apv', 'state', 'task.json');
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
@@ -113,7 +112,7 @@ async function main() {
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
   main().then(code => { process.exitCode = code; }, error => {
     process.stderr.write(`APV scope-reminder : ${error?.message ?? error}\n`);
     process.exitCode = 0;

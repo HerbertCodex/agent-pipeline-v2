@@ -4,7 +4,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findApvDir, oneLine, readHookInput } from './lib.mjs';
+import { findApvDir, isMainModule, oneLine, readHookInput } from './lib.mjs';
 
 const MAX_CONTEXT = 4000;
 const MAX_NOTES_LINES = 40;
@@ -161,7 +161,7 @@ async function main() {
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
   main().then(code => { process.exitCode = code; }, error => {
     process.stderr.write(`APV session-start : ${error?.message ?? error}\n`);
     process.exitCode = 0;

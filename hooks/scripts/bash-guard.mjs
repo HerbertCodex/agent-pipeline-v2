@@ -6,8 +6,7 @@
 // This is a guard rail against mistakes, not a security boundary: a determined command can
 // always be written in a shape this parser does not recognise.
 import { basename } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { readHookInput } from './lib.mjs';
+import { isMainModule, readHookInput } from './lib.mjs';
 
 const OPERATORS = ['&&', '||', ';;', '$(', ';', '|', '&', '(', ')', '`', '\n'];
 
@@ -309,7 +308,7 @@ async function main() {
   return 2;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
   main().then(code => { process.exitCode = code; }, error => {
     process.stderr.write(`APV bash-guard : ${error?.message ?? error}\n`);
     process.exitCode = 0;
