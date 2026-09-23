@@ -128,7 +128,7 @@ Le niveau se calcule sur la plus haute des deux fenêtres (spécification, secti
 | 95 % | `save_now` | sauvegarder (commits « wip », push, notes de reprise) et prévenir l'opérateur |
 | illisible | `unknown` | le relevé a échoué ; la sortie de la commande est affichée |
 
-Chaque relevé est ajouté à `.apv/quota.log` (un objet JSON par ligne : `at`, `session`, `week`, `percent`, `level`), sauf avec `--no-log`. La variable d'environnement `APV_CLAUDE_BIN` remplace l'exécutable `claude` (tests, installation particulière).
+Chaque relevé est ajouté à `.apv/state/quota.log` (un objet JSON par ligne : `at`, `session`, `week`, `percent`, `level`), sauf avec `--no-log` ; le hook de démarrage de session lit la dernière ligne. `apv quota` crée ou complète aussi `.apv/.gitignore` (`state/*.log`, `state/task.json`, `receipts/`) pour que ces fichiers machine ne soient jamais commités. La variable d'environnement `APV_CLAUDE_BIN` remplace l'exécutable `claude` (tests, installation particulière).
 
 Sortie : `0` relevé lu, `1` relevé illisible, `2` appel incorrect.
 
@@ -138,7 +138,7 @@ Sortie : `0` relevé lu, `1` relevé illisible, `2` appel incorrect.
 apv status [--repo <chemin>] [--json]
 ```
 
-Résumé de l'état du projet : fichier de configuration (et format V2 le cas échéant), contrôles déclarés, registre des décisions (nombre de décisions et empreinte, ou nombre d'erreurs), specs de `.apv/specs/` (titre ou erreur de lecture), fichiers d'état de `.apv/state/` (taille et date), dernier relevé de `.apv/quota.log`. La commande ne modifie rien et sort toujours avec `0`, sauf appel incorrect.
+Résumé de l'état du projet : fichier de configuration (et format V2 le cas échéant), contrôles déclarés, registre des décisions (nombre de décisions et empreinte, ou nombre d'erreurs), specs de `.apv/specs/` (titre ou erreur de lecture), fichiers d'état de `.apv/state/` (taille et date), dernier relevé de `.apv/state/quota.log`. La commande ne modifie rien et sort toujours avec `0`, sauf appel incorrect.
 
 ## `apv help`
 

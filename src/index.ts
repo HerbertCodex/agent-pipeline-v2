@@ -24,6 +24,7 @@ export type { OwaspTopicId, OwaspTopic, SecurityProfile, SecurityContext } from 
 export { qualityCheckSchema, qualityContext, validationEvidence, validateQualityChecks } from './quality/review.js';
 export type { ValidationSubject } from './quality/review.js';
 
+export { APV_DIR, APV_IGNORED, ensureApvGitignore } from './config/apv-files.js';
 export { apvConfigSchema, loadConfig, configIssues, policyConfig, CONFIG_FILE, LEGACY_CONFIG_FILE } from './config/load.js';
 export type { ApvConfig, LoadedConfig } from './config/load.js';
 export { checkSpec, readSpecDocument, parseSpecDocument } from './spec/check.js';

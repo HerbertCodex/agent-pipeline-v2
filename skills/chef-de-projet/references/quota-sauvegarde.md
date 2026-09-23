@@ -3,12 +3,12 @@
 Dans ce document, `apv` désigne l'outil du plugin (voir `SKILL.md`).
 
 ## 1. Relever
-- `apv quota` relève les fenêtres d'usage (session de 5 h et semaine, pourcentage utilisé, heure de remise à zéro) et les journalise dans `.apv/state/quota.log` (fichier lu par le hook de démarrage de session). Il s'appuie sur `claude -p "/usage"`, qui répond sans appel de modèle (incident 27 : la ligne d'état ne s'exécute pas dans l'extension VS Code).
+- `apv quota` relève les fenêtres d'usage (session de 5 h et semaine, pourcentage utilisé, heure de remise à zéro) et les journalise dans `.apv/state/quota.log`, un objet JSON par ligne (fichier lu par le hook de démarrage de session, ignoré par Git grâce à `.apv/.gitignore` que l'outil génère). Il s'appuie sur `claude -p "/usage"`, qui répond sans appel de modèle (incident 27 : la ligne d'état ne s'exécute pas dans l'extension VS Code).
 - Quand : avant chaque vague, toutes les 10 à 15 minutes pendant l'exécution, avant une revue coûteuse, et à la reprise.
 - Le relevé est un repère, jamais un plafond : aucun budget en dollars, aucun arrêt « budget épuisé » (ce sont ces blocages qui ont arrêté la première spec du projet pilote).
 
 ## 2. Doser
-- Mesure la consommation de chaque vague (points de pourcentage par agent et par type de tâche) et note-la dans `.apv/state/quota.log` ou le journal : c'est le repère des vagues suivantes.
+- Mesure la consommation de chaque vague (points de pourcentage par agent et par type de tâche) et note-la au journal du pipeline (`.apv/journal-pipeline.md`), pas dans `.apv/state/quota.log` qui ne contient que les relevés de l'outil (une ligne JSON chacun) : c'est le repère des vagues suivantes.
 - Nombre d'agents simultanés = ce que le quota restant permet jusqu'à la prochaine remise à zéro, avec une marge. Regarde les deux fenêtres ; la plus contraignante décide. Une fenêtre de 5 h presque pleine qui se remet à zéro dans quelques minutes justifie d'attendre plutôt que de sauvegarder.
 - Mode économe : une revue combinée au lieu de deux, captures limitées aux écrans modifiés, moins d'agents en parallèle, pas de relecture redondante (incident 26 : 98 % du quota hebdomadaire atteint avec 6 à 9 agents et des revues doubles).
 

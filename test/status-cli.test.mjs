@@ -25,7 +25,7 @@ test('apv status summarises configuration, ledger, specs, state and last quota',
   write(f.repo, '.apv/specs/002-wrapped.json', { request: 'Add it.', spec: { ...demoSpec(), title: 'Wrapped' } });
   write(f.repo, '.apv/specs/003-broken.json', '{');
   write(f.repo, '.apv/state/run.json', { wave: 1 });
-  write(f.repo, '.apv/quota.log', '{"at":"2026-09-23T08:00:00.000Z","session":{"percent":21,"resets":null},"week":{"percent":7,"resets":null},"percent":21,"level":"ok"}\n');
+  write(f.repo, '.apv/state/quota.log', '{"at":"2026-09-23T08:00:00.000Z","session":{"percent":21,"resets":null},"week":{"percent":7,"resets":null},"percent":21,"level":"ok"}\n');
   const r = await apv(f.repo, ['status', '--json']);
   assert.equal(r.code, 0);
   const s = r.json();
@@ -33,7 +33,7 @@ test('apv status summarises configuration, ledger, specs, state and last quota',
   assert.equal(s.ledger.file, '.apv/DECISIONS.json'); assert.equal(s.ledger.decisions, 2); assert.match(s.ledger.hash, /^[a-f0-9]{64}$/);
   assert.deepEqual(s.specs.map(x => [x.file, x.title]), [['.apv/specs/001-math.json', 'Multiplication et documentation'], ['.apv/specs/002-wrapped.json', 'Wrapped'], ['.apv/specs/003-broken.json', null]]);
   assert.ok(s.specs[2].error);
-  assert.deepEqual(s.state.map(x => x.file), ['.apv/state/run.json']);
+  assert.deepEqual(s.state.map(x => x.file), ['.apv/state/quota.log', '.apv/state/run.json']);
   assert.equal(s.quota.level, 'ok');
   const human = await apv(f.repo, ['status']);
   assert.match(human.stdout, /Configuration : \.apv\/config\.json ; contrôles : unit/);

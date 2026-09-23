@@ -49,7 +49,7 @@ test('readQuota calls claude -p "/usage" with no setting sources and a 150 s tim
   assert.equal(r.level, 'ok'); assert.equal(r.percent, 21);
 });
 
-test('apv quota prints, classifies and appends to .apv/quota.log', async t => {
+test('apv quota prints, classifies and appends to .apv/state/quota.log', async t => {
   const dir = temp(t);
   const runner = async () => ({ status: 'passed', stdout: `Current session: 96% used · resets Sep 23, 2:30am (Europe/Paris)\n${WEEK}`, stderr: '' });
   const human = capture(dir);
@@ -60,14 +60,23 @@ test('apv quota prints, classifies and appends to .apv/quota.log', async t => {
   const json = capture(dir);
   assert.equal(await runQuota(['--json'], json.io, runner), 0);
   const value = JSON.parse(json.out());
-  assert.equal(value.level, 'save_now'); assert.equal(value.logged, join(dir, '.apv/quota.log'));
-  const lines = readFileSync(join(dir, '.apv/quota.log'), 'utf8').trim().split('\n');
+  assert.equal(value.level, 'save_now'); assert.equal(value.logged, join(dir, '.apv/state/quota.log'));
+  const lines = readFileSync(join(dir, '.apv/state/quota.log'), 'utf8').trim().split('\n');
   assert.equal(lines.length, 2);
   assert.equal(JSON.parse(lines[1]).session.percent, 96);
   const quiet = capture(dir);
   assert.equal(await runQuota(['--no-log', '--json'], quiet.io, runner), 0);
   assert.equal(JSON.parse(quiet.out()).logged, null);
-  assert.equal(readFileSync(join(dir, '.apv/quota.log'), 'utf8').trim().split('\n').length, 2);
+  assert.equal(readFileSync(join(dir, '.apv/state/quota.log'), 'utf8').trim().split('\n').length, 2);
+  // The writer of the journal keeps it out of commits.
+  assert.match(readFileSync(join(dir, '.apv/.gitignore'), 'utf8'), /^state\/\*\.log$/m);
+});
+
+test('apv quota --no-log writes nothing under .apv', async t => {
+  const dir = temp(t);
+  const c = capture(dir);
+  assert.equal(await runQuota(['--no-log'], c.io, async () => ({ status: 'passed', stdout: `${SESSION}\n${WEEK}`, stderr: '' })), 0);
+  assert.throws(() => readFileSync(join(dir, '.apv/.gitignore'), 'utf8'), /ENOENT/);
 });
 
 test('an unreadable reading exits 1 and shows what the command said', async t => {
@@ -76,7 +85,7 @@ test('an unreadable reading exits 1 and shows what the command said', async t =>
   assert.equal(await runQuota(['--json'], c.io, async () => ({ status: 'failed', stdout: '', stderr: 'Invalid API key' })), 1);
   const value = JSON.parse(c.out());
   assert.equal(value.level, 'unknown'); assert.match(value.command.output, /Invalid API key/);
-  assert.equal(lastQuotaReading(join(dir, '.apv/quota.log')).level, 'unknown');
+  assert.equal(lastQuotaReading(join(dir, '.apv/state/quota.log')).level, 'unknown');
   const bad = capture(dir);
   assert.equal(await runQuota(['extra'], bad.io, async () => ({ status: 'passed', stdout: '', stderr: '' })), 2);
 });

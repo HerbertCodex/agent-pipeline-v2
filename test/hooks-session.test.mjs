@@ -5,9 +5,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildResumeContext, lastLine } from '../hooks/scripts/session-start.mjs';
+import { buildResumeContext, describeQuota, lastLine } from '../hooks/scripts/session-start.mjs';
 import { journalLine } from '../hooks/scripts/stop-journal.mjs';
-import { findApvDir, oneLine } from '../hooks/scripts/lib.mjs';
+import { APV_IGNORED as HOOK_IGNORED, ensureApvGitignore as hookEnsure, findApvDir, oneLine } from '../hooks/scripts/lib.mjs';
+import { APV_IGNORED, ensureApvGitignore } from '../dist/config/apv-files.js';
 
 const scriptPath = name => fileURLToPath(new URL(`../hooks/scripts/${name}`, import.meta.url));
 
@@ -51,7 +52,10 @@ test('session start reports resume notes, recent state, last quota and last jour
   const root = project(t);
   const state = join(root, '.apv', 'state');
   writeFileSync(join(state, 'resume.md'), '# Reprise\nspec/6-t2 : wip 6f5f93d à terminer\n');
-  writeFileSync(join(state, 'quota.log'), '2026-09-23 10:00 session 40 %\n2026-09-23 11:00 session 52 %, semaine 30 %\n\n');
+  writeFileSync(join(state, 'quota.log'), [
+    '{"at":"2026-09-23T10:00:00.000Z","session":{"percent":40,"resets":null},"week":null,"percent":40,"level":"ok"}',
+    '{"at":"2026-09-23T11:00:00.000Z","session":{"percent":52,"resets":"2:30am (Europe/Paris)"},"week":{"percent":30,"resets":null},"percent":52,"level":"ok"}',
+    '', ''].join('\n'));
   writeFileSync(join(state, 'journal.log'), '2026-09-23T09:00:00.000Z fin-de-tour session=a taches_en_fond=0\n');
   const result = run('session-start.mjs', { hook_event_name: 'SessionStart', source: 'resume', cwd: '/nulle-part' }, { CLAUDE_PROJECT_DIR: root });
   assert.equal(result.status, 0, result.stderr);
@@ -59,7 +63,7 @@ test('session start reports resume notes, recent state, last quota and last jour
   assert.equal(output.hookSpecificOutput.hookEventName, 'SessionStart');
   const context = output.hookSpecificOutput.additionalContext;
   assert.match(context, /spec\/6-t2 : wip 6f5f93d à terminer/);
-  assert.match(context, /Dernier relevé de quota : 2026-09-23 11:00 session 52 %, semaine 30 %/);
+  assert.match(context, /Dernier relevé de quota \(\.apv\/state\/quota\.log\) : 2026-09-23T11:00:00\.000Z : session 52 % \(remise à zéro 2:30am \(Europe\/Paris\)\), semaine 30 %, niveau ok/);
   assert.match(context, /Dernière fin de tour : 2026-09-23T09:00:00.000Z/);
   assert.match(context, /resume\.md \(/);
   assert.match(context, /\/apv:resume/);
@@ -116,6 +120,8 @@ test('stop hook appends to .apv/state/journal.log only when .apv exists, and nev
   assert.equal(lines.length, 2);
   assert.match(lines[0], /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z fin-de-tour session=s1 taches_en_fond=0$/);
   assert.match(lines[1], /session=s2/);
+  // The journal it writes stays out of commits.
+  assert.deepEqual(readFileSync(join(root, '.apv', '.gitignore'), 'utf8').split('\n').filter(l => l && !l.startsWith('#')), APV_IGNORED);
 });
 
 test('stop hook survives malformed input', t => {
@@ -125,4 +131,50 @@ test('stop hook survives malformed input', t => {
   });
   assert.equal(result.status, 0);
   assert.match(readFileSync(join(root, '.apv', 'state', 'journal.log'), 'utf8'), /session=\? taches_en_fond=0/);
+});
+
+test('describeQuota reads the JSON lines of apv quota and shows any other line as it is', () => {
+  assert.equal(describeQuota('{"at":"2026-09-23T08:00:00.000Z","session":{"percent":21,"resets":null},"week":null,"percent":21,"level":"ok"}'),
+    '2026-09-23T08:00:00.000Z : session 21 %, semaine non lue, niveau ok');
+  assert.equal(describeQuota('{"at":"2026-09-23T08:00:00.000Z","session":{"percent":"x"},"week":{"percent":96,"resets":"7pm"},"level":"save_now"}'),
+    '2026-09-23T08:00:00.000Z : session non lue, semaine 96 % (remise à zéro 7pm), niveau save_now');
+  assert.equal(describeQuota('2026-09-23 10:00 session 40 %'), '2026-09-23 10:00 session 40 %');
+  assert.equal(describeQuota('{"sans":"date"}'), '{"sans":"date"}');
+  assert.equal(describeQuota('null'), 'null');
+});
+
+test('the hooks and the tool generate the same .apv/.gitignore and keep the project\'s own lines', t => {
+  assert.deepEqual(HOOK_IGNORED, [...APV_IGNORED]);
+  for (const ensure of [ensureApvGitignore, root => hookEnsure(join(root, '.apv'))]) {
+    const root = project(t, { apv: false });
+    assert.equal(ensure(root), true);
+    const created = readFileSync(join(root, '.apv', '.gitignore'), 'utf8');
+    assert.match(created, /^# Généré par apv/);
+    assert.equal(ensure(root), false, 'already complete: no write');
+    writeFileSync(join(root, '.apv', '.gitignore'), 'mes-notes/\nstate/*.log');
+    assert.equal(ensure(root), true);
+    assert.equal(readFileSync(join(root, '.apv', '.gitignore'), 'utf8'), 'mes-notes/\nstate/*.log\nstate/task.json\nreceipts/\n');
+    writeFileSync(join(root, '.apv', '.gitignore'), '');
+    assert.equal(ensure(root), true);
+    assert.equal(readFileSync(join(root, '.apv', '.gitignore'), 'utf8'), `${APV_IGNORED.join('\n')}\n`);
+  }
+  // Both write the same file from nothing.
+  const [a, b] = [project(t, { apv: false }), project(t, { apv: false })];
+  ensureApvGitignore(a); hookEnsure(join(b, '.apv'));
+  assert.equal(readFileSync(join(a, '.apv', '.gitignore'), 'utf8'), readFileSync(join(b, '.apv', '.gitignore'), 'utf8'));
+});
+
+test('git really ignores the state journals and the task marker, and keeps resume notes', t => {
+  const root = project(t, { apv: false });
+  assert.equal(spawnSync('git', ['init', '-q', root]).status, 0);
+  ensureApvGitignore(root);
+  mkdirSync(join(root, '.apv', 'state'), { recursive: true });
+  for (const f of ['state/quota.log', 'state/journal.log', 'state/task.json', 'state/resume.md', 'receipts/x/unit.json']) {
+    mkdirSync(join(root, '.apv', f, '..'), { recursive: true });
+    writeFileSync(join(root, '.apv', f), '{}\n');
+  }
+  const status = spawnSync('git', ['-C', root, 'status', '--porcelain', '-uall'], { encoding: 'utf8' }).stdout;
+  assert.match(status, /\.apv\/state\/resume\.md/);
+  assert.match(status, /\.apv\/\.gitignore/);
+  assert.doesNotMatch(status, /quota\.log|journal\.log|task\.json|receipts/);
 });

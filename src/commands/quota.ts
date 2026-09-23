@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { appendQuotaLog, processRunner, readQuota, QUOTA_LOG, QUOTA_THRESHOLDS, type QuotaLevel, type UsageRunner } from '../quota/usage.js';
+import { ensureApvGitignore } from '../config/apv-files.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
 
@@ -30,7 +31,7 @@ export async function runQuota(args: string[], io: CommandIO, runner?: UsageRunn
     const executable = io.env['APV_CLAUDE_BIN'] || 'claude';
     const { reading, command } = await readQuota(runner ?? processRunner(io.env, repo), executable);
     const log = join(repo, QUOTA_LOG);
-    if (!values['no-log']) appendQuotaLog(log, reading);
+    if (!values['no-log']) { appendQuotaLog(log, reading); ensureApvGitignore(repo); }
     const ok = reading.level !== 'unknown';
     if (values.json) {
       json(io, { ...reading, logged: values['no-log'] ? null : log, ...(ok ? {} : { command: { status: command.status, output: `${command.stdout}\n${command.stderr}`.trim().slice(-2000) } }) });

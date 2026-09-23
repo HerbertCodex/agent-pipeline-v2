@@ -1,6 +1,6 @@
 // Shared helpers for the APV plugin hooks. Node built-ins only: hooks run
 // before any dependency install and must never fail because of a package.
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** Reads the whole hook payload from stdin; resolves to null when it is not a JSON object. */
@@ -38,4 +38,24 @@ export function findApvDir(input, env = process.env) {
 export function oneLine(value, max = 200) {
   const text = String(value ?? '').replace(/\s+/g, ' ').trim();
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/**
+ * Machine files of `.apv/` that are never versioned. Same list and same rule as
+ * `ensureApvGitignore` of the tool (src/config/apv-files.ts); a test keeps them equal.
+ */
+export const APV_IGNORED = ['state/*.log', 'state/task.json', 'receipts/'];
+const IGNORE_HEADER = '# Généré par apv : fichiers machine de .apv/, jamais versionnés. Vous pouvez ajouter vos lignes.';
+
+/** Creates `<apvDir>/.gitignore`, or appends the lines it lacks; keeps the project's own lines. */
+export function ensureApvGitignore(apvDir) {
+  const file = join(apvDir, '.gitignore');
+  const current = existsSync(file) ? readFileSync(file, 'utf8') : null;
+  const present = new Set((current ?? '').split(/\r?\n/).map(l => l.trim()));
+  const missing = APV_IGNORED.filter(line => !present.has(line));
+  if (current !== null && !missing.length) return false;
+  mkdirSync(apvDir, { recursive: true });
+  if (current === null) writeFileSync(file, `${IGNORE_HEADER}\n${missing.join('\n')}\n`);
+  else writeFileSync(file, `${current}${current.endsWith('\n') || current === '' ? '' : '\n'}${missing.join('\n')}\n`);
+  return true;
 }

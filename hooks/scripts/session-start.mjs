@@ -26,6 +26,21 @@ export function lastLine(path) {
   return lines.length ? lines[lines.length - 1] : null;
 }
 
+/**
+ * One readable line for the last quota reading. `apv quota` writes one JSON object per line
+ * (`at`, `session`, `week`, `percent`, `level`); a line in another format is shown as it is.
+ */
+export function describeQuota(line) {
+  let value;
+  try { value = JSON.parse(line); } catch { return oneLine(line, 300); }
+  if (!value || typeof value !== 'object' || typeof value.at !== 'string') return oneLine(line, 300);
+  const window = (w, label) => {
+    if (!w || typeof w.percent !== 'number') return `${label} non lue`;
+    return `${label} ${w.percent} %${typeof w.resets === 'string' && w.resets ? ` (remise à zéro ${oneLine(w.resets, 60)})` : ''}`;
+  };
+  return oneLine(`${value.at} : ${window(value.session, 'session')}, ${window(value.week, 'semaine')}, niveau ${value.level ?? '?'}`, 300);
+}
+
 /** Most recently modified entries of `.apv/state`, newest first. */
 function stateEntries(stateDir) {
   try {
@@ -60,7 +75,7 @@ export function buildResumeContext(apvDir) {
       entries.map(e => `${e.name} (${e.mtime.toISOString()})`).join(', '));
   }
   const quota = lastLine(join(stateDir, 'quota.log'));
-  lines.push(quota ? `Dernier relevé de quota : ${oneLine(quota, 300)}` : 'Aucun relevé de quota : lancer /apv:quota avant toute vague.');
+  lines.push(quota ? `Dernier relevé de quota (.apv/state/quota.log) : ${describeQuota(quota)}` : 'Aucun relevé de quota : lancer /apv:quota avant toute vague.');
   const journal = lastLine(join(stateDir, 'journal.log'));
   if (journal) lines.push(`Dernière fin de tour : ${oneLine(journal, 300)}`);
   lines.push('Pour reprendre après une coupure : /apv:resume. Pour l\'état complet : /apv:status.');

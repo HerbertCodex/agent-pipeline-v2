@@ -5,7 +5,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findApvDir, oneLine, readHookInput } from './lib.mjs';
+import { ensureApvGitignore, findApvDir, oneLine, readHookInput } from './lib.mjs';
 
 /** Formats the journal line for a Stop payload. */
 export function journalLine(input, now = new Date()) {
@@ -32,6 +32,7 @@ async function main() {
   const stateDir = join(apvDir, 'state');
   mkdirSync(stateDir, { recursive: true });
   appendFileSync(join(stateDir, 'journal.log'), journalLine(input ?? {}), 'utf8');
+  ensureApvGitignore(apvDir);
   return 0;
 }
 
