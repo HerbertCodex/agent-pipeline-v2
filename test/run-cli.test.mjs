@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
-import { applySet, computeNext, computeWaves, createRunState, parseTarget } from '../dist/run/state.js';
+import { applySet, computeFoundations, computeNext, computeWaves, createRunState, migrateRunState, parseTarget, readRunState } from '../dist/run/state.js';
 
 const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 
@@ -39,17 +39,52 @@ function taskBranch(p, name, file) {
   return { dir, sha: git(dir, 'rev-parse', 'HEAD') };
 }
 
-test('waves: foundations alone in wave 0, then topological layers, in spec order', () => {
+test('waves: topological layers in spec order; foundations: tasks at least two others depend on', () => {
   const t = (id, dependsOn = []) => ({ id, title: id, dependsOn });
-  assert.deepEqual(computeWaves([t('F'), t('A', ['F']), t('B', ['F']), t('C'), t('D', ['A', 'B'])]),
-    [{ index: 0, foundation: true, tasks: ['F'] }, { index: 1, foundation: false, tasks: ['A', 'B', 'C'] }, { index: 2, foundation: false, tasks: ['D'] }]);
-  assert.deepEqual(computeWaves([t('A'), t('B'), t('C')]), [{ index: 0, foundation: false, tasks: ['A', 'B', 'C'] }]);
-  assert.deepEqual(computeWaves([t('C', ['B']), t('B', ['A']), t('A')]),
-    [{ index: 0, foundation: true, tasks: ['A'] }, { index: 1, foundation: false, tasks: ['B'] }, { index: 2, foundation: false, tasks: ['C'] }]);
+  const spec = [t('F'), t('A', ['F']), t('B', ['F']), t('C'), t('D', ['A', 'B'])];
+  assert.deepEqual(computeWaves(spec), [{ index: 0, tasks: ['F', 'C'] }, { index: 1, tasks: ['A', 'B'] }, { index: 2, tasks: ['D'] }]);
+  assert.deepEqual(computeFoundations(spec), ['F']);
+  assert.deepEqual(computeWaves([t('A'), t('B'), t('C')]), [{ index: 0, tasks: ['A', 'B', 'C'] }]);
+  assert.deepEqual(computeFoundations([t('A'), t('B'), t('C')]), []);
+  // A chain: each task has one dependent only, so none is a foundation.
+  const chain = [t('C', ['B']), t('B', ['A']), t('A')];
+  assert.deepEqual(computeWaves(chain), [{ index: 0, tasks: ['A'] }, { index: 1, tasks: ['B'] }, { index: 2, tasks: ['C'] }]);
+  assert.deepEqual(computeFoundations(chain), []);
+  // The phase 3 trial: BIN, needed by DOCS alone, is no foundation and stays in wave 0 beside SUMMARY.
+  const trial = [t('SUMMARY'), t('HOOK', ['SUMMARY']), t('BIN'), t('DOCS', ['HOOK', 'BIN'])];
+  assert.deepEqual(computeWaves(trial), [{ index: 0, tasks: ['SUMMARY', 'BIN'] }, { index: 1, tasks: ['HOOK'] }, { index: 2, tasks: ['DOCS'] }]);
+  assert.deepEqual(computeFoundations(trial), []);
+  // A foundation may sit in any layer; a dependency listed twice counts once.
+  const deep = [t('A'), t('B', ['A']), t('C', ['B', 'B']), t('D', ['B']), t('E', ['A'])];
+  assert.deepEqual(computeFoundations(deep), ['A', 'B']);
+  assert.deepEqual(computeFoundations([t('A'), t('B', ['A', 'A'])]), []);
   assert.deepEqual(computeWaves([t('A'), t('B', ['A']), t('C', ['A', 'B'])]).map(w => w.tasks), [['A'], ['B'], ['C']]);
   assert.deepEqual(computeWaves([]), []);
   assert.throws(() => computeWaves([t('A', ['B']), t('B', ['A'])]), /Cycle/);
   assert.throws(() => computeWaves([t('A', ['Z'])]), /Dépendance inconnue/);
+});
+
+test('a state of version 1 stays readable: its foundation wave becomes foundation tasks', t => {
+  const v2 = createRunState({ specId: 's', specFile: 's.json', specSha256: 'a'.repeat(64), base: 'main', baseSha: 'b'.repeat(40),
+    tasks: [{ id: 'S', title: 'S', dependsOn: [] }, { id: 'H', title: 'H', dependsOn: ['S'] }, { id: 'B', title: 'B', dependsOn: [] }] });
+  assert.equal(v2.schemaVersion, 2);
+  const v1 = structuredClone(v2);
+  v1.schemaVersion = 1;
+  v1.waves = [{ index: 0, foundation: true, tasks: ['S'] }, { index: 1, foundation: false, tasks: ['H', 'B'] }];
+  for (const task of Object.values(v1.tasks)) delete task.foundation;
+  const migrated = migrateRunState(v1);
+  assert.equal(v1.schemaVersion, 1, 'the input is not modified');
+  assert.deepEqual(migrated.waves, [{ index: 0, tasks: ['S'] }, { index: 1, tasks: ['H', 'B'] }]);
+  assert.deepEqual(Object.entries(migrated.tasks).map(([id, x]) => [id, x.foundation]), [['S', true], ['H', false], ['B', false]]);
+  assert.equal(migrated.schemaVersion, 2);
+  // Unknown shapes are left to the schema.
+  assert.equal(migrateRunState('x'), 'x');
+  assert.deepEqual(migrateRunState({ schemaVersion: 3 }), { schemaVersion: 3 });
+  // The state of the phase 3 trial, written by the version 1 tool, still reads.
+  const repoState = fileURLToPath(new URL('../.apv/state/run-p3-essai.json', import.meta.url));
+  if (!existsSync(repoState)) return t.skip('state of the trial absent (package without .apv)');
+  const trial = readRunState(repoState, { specId: 'p3-essai' });
+  assert.deepEqual(Object.entries(trial.tasks).map(([id, x]) => [id, x.foundation, x.wave]), [['SUMMARY', true, 0], ['HOOK', false, 1], ['BIN', false, 1], ['DOCS', false, 2]]);
 });
 
 test('targets: steps, task:<id>, review:<domain>', () => {
@@ -70,8 +105,10 @@ test('apv run start validates the spec, computes the waves and writes the state'
   assert.deepEqual([s.base, s.baseSha, s.branch], ['main', git(p.repo, 'rev-parse', 'main'), 'apv/vagues']);
   assert.deepEqual(Object.keys(s.steps), ['data-model', 'plan', 'integration', 'reviews', 'fixes', 'delivery']);
   assert.ok(Object.values(s.steps).every(x => x.status === 'pending'));
-  assert.deepEqual(s.waves.map(w => [w.index, w.foundation, w.tasks]), [[0, true, ['F']], [1, false, ['A', 'B', 'C']], [2, false, ['D']]]);
-  assert.deepEqual(s.tasks.D, { title: 'Tâche D', dependsOn: ['A', 'B'], wave: 2, status: 'pending', branch: null, worktree: null, agentId: null,
+  assert.equal(s.schemaVersion, 2);
+  assert.deepEqual(s.waves.map(w => [w.index, w.tasks]), [[0, ['F', 'C']], [1, ['A', 'B']], [2, ['D']]]);
+  assert.deepEqual(Object.entries(s.tasks).map(([id, x]) => [id, x.foundation]), [['F', true], ['A', false], ['B', false], ['C', false], ['D', false]]);
+  assert.deepEqual(s.tasks.D, { title: 'Tâche D', dependsOn: ['A', 'B'], wave: 2, foundation: false, status: 'pending', branch: null, worktree: null, agentId: null,
     base: null, commit: null, note: null, updatedAt: null });
   assert.deepEqual(Object.keys(s.reviews), ['securite', 'fidelite', 'donnees', 'rgpd']);
   assert.deepEqual(s.reviews.rgpd, { status: 'pending', findings: null, commit: null, note: null, updatedAt: null });
@@ -81,7 +118,11 @@ test('apv run start validates the spec, computes the waves and writes the state'
   assert.equal(again.code, 1);
   assert.match(again.stderr, /RUN_EXISTS.*apv run next vagues/);
   const human = await p.run('status', 'vagues');
-  assert.match(human.stdout, /Vague 0 \(fondations\) : F à faire/);
+  assert.match(human.stdout, /\nVague 0 : fondations \(un seul agent\) : F à faire ; en parallèle : C à faire\nVague 1 : A à faire, B à faire\nVague 2 : D à faire\n/);
+  write(p.repo, 'specs/autre.json', waveSpec());
+  const shown = await p.run('start', 'specs/autre.json');
+  assert.equal(shown.code, 0, shown.stderr);
+  assert.match(shown.stdout, /\nVagues :\n- vague 0 : fondations \(un seul agent\) : F ; en parallèle : C\n- vague 1 : A, B\n- vague 2 : D\n/);
 });
 
 test('apv run start refuses an invalid spec, an unknown base and wrong calls', async t => {
@@ -169,8 +210,8 @@ test('apv run next says what to do now and which running tasks to resume or rela
   await p.run('set', 'vagues', 'plan', 'done');
   next = (await p.run('next', 'vagues', '--json')).json();
   assert.equal(next.step, 'waves');
-  assert.match(next.actions.join('\n'), /lancer 1 tâche\(s\) prête\(s\) de la vague 0, fondations, un seul agent : F/);
-  assert.match(next.actions.join('\n'), /prêtes mais d'une vague suivante : C \(vague 1\)/);
+  assert.match(next.actions.join('\n'), /lancer 2 tâche\(s\) prête\(s\) de la vague 0 : fondations \(un seul agent\) : F ; en parallèle : C/);
+  assert.doesNotMatch(next.actions.join('\n'), /vague suivante/);
   // F runs in a worktree without commit yet, C in a worktree that is gone, B... not started.
   const dir = join(p.root, 'wt-f');
   git(p.repo, 'worktree', 'add', '-q', '-b', 'spec/vagues-f', dir, 'main');

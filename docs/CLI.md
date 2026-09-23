@@ -81,16 +81,18 @@ apv run status [<spec-id>] [--repo <chemin>] [--json]
 
 **`start`** valide la spec comme `apv spec validate` en mode lancement (refus en `1` avec toutes les erreurs), puis crée l'état. `<spec>` est un identifiant (`.apv/specs/<id>.json`) ou un chemin (l'identifiant est alors le nom du fichier). La base est `--base`, sinon la branche courante ; elle est enregistrée avec son commit (`baseSha`). Refus si l'état existe déjà : `apv run next` le reprend.
 
-Vagues : couches topologiques des `dependsOn`. Le format de spec n'a pas de marqueur « fondation » (ses tâches refusent les propriétés inconnues) : les tâches de la première couche dont d'autres dépendent forment seules la vague 0, marquée `foundation` ; les autres tâches sans dépendance rejoignent la vague 1 ; une tâche de profondeur d est dans la vague d. Sans aucune dépendance, tout est en vague 0.
+Vagues : les couches topologiques des `dependsOn` ; une tâche de profondeur d (0 sans dépendance, sinon un de plus que sa dépendance la plus profonde) est dans la vague d, dans l'ordre de la spec. Fondations : dans chaque couche, une tâche dont au moins **deux** autres tâches dépendent directement est marquée `foundation: true` dans l'état (le format de spec n'a pas de marqueur : ses tâches refusent les propriétés inconnues). Les fondations d'une vague sont écrites par un seul agent, ses autres tâches partent en parallèle ; une tâche dont une seule autre dépend reste une dépendance ordinaire (dans l'essai de la phase 3, BIN était devenue une fondation parce que DOCS en dépendait). `start` et `status` affichent, pour chaque vague qui en a, « fondations (un seul agent) : … » puis « en parallèle : … ».
+
+Version de l'état : `schemaVersion` 2 depuis ce marqueur. Un état de version 1 (marqueur `foundation` porté par la vague 0) reste lisible : il est converti à la lecture, chaque tâche d'une vague marquée devenant une fondation (c'était la règle de la version 1) et les autres non, puis réécrit en version 2 à sa prochaine écriture. Les vagues et la vague de chaque tâche ne sont jamais recalculées : l'état garde le plan du lancement.
 
 Forme de l'état :
 
 ```
-{ schemaVersion: 1, specId, specFile, specSha256, base, baseSha, branch: "apv/<spec-id>", createdAt, updatedAt,
-  steps: { "data-model" | plan | integration | reviews | fixes | delivery: { status, note, updatedAt } },
-  waves: [{ index, foundation, tasks: [id...] }],
-  tasks: { <id>: { title, dependsOn, wave, status, branch, worktree, agentId, base, commit, note, updatedAt } },
-  reviews: { securite | fidelite | donnees | rgpd: { status, findings, note, updatedAt } },
+{ schemaVersion: 2, specId, specFile, specSha256, base, baseSha, branch: "apv/<spec-id>", createdAt, updatedAt,
+  steps: { "data-model" | plan | integration | reviews | fixes | delivery: { status, commit, note, updatedAt } },
+  waves: [{ index, tasks: [id...] }],
+  tasks: { <id>: { title, dependsOn, wave, foundation, status, branch, worktree, agentId, base, commit, note, updatedAt } },
+  reviews: { securite | fidelite | donnees | rgpd: { status, findings, commit, note, updatedAt } },
   events: [{ at, target, from, to, note?, commit?, agentId? }] }
 ```
 

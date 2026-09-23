@@ -7,7 +7,7 @@ import { checkSpec, readSpecDocument } from '../spec/check.js';
 import { gitProbe, gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
 import {
   REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applySet, computeNext, createRunState, parseTarget,
-  readRunState, runStateFile, summarize, summaryLine, withRunLock, writeRunState, type RunState, type RunStatus, type SetOptions,
+  readRunState, runStateFile, splitWave, summarize, summaryLine, withRunLock, writeRunState, type RunState, type RunStatus, type SetOptions, type Wave,
 } from '../run/state.js';
 import { readRunSummaries, runSummaryLine, unreadRunsLine } from '../run/summary.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
@@ -23,8 +23,8 @@ export const usage = `Utilisation :
 État de reprise d'une exécution de spec : .apv/state/run-<spec-id>.json, écrit de façon atomique sous
 le verrou run:<spec-id> (apv lock).
 start   valide la spec (comme apv spec validate, prête à lancer), calcule les vagues (couches des
-        dépendances ; vague 0 = fondations, les tâches de la première couche dont d'autres dépendent)
-        et crée l'état. <spec> : un identifiant (.apv/specs/<id>.json) ou un chemin. Refuse si l'état
+        dépendances) et les fondations (tâches dont au moins deux autres dépendent directement,
+        écrites par un seul agent) et crée l'état. <spec> : un identifiant (.apv/specs/<id>.json) ou un chemin. Refuse si l'état
         existe (apv run next). --base : branche de départ (par défaut la branche courante).
 set     <cible> : ${STEPS.join(', ')},
         task:<id> ou review:<${REVIEWS.join('|')}>.
@@ -99,10 +99,20 @@ async function start(repo: string, cwd: string, positionals: string[], values: {
     `Spec : ${state.specFile} (${check.title ?? specId}), sha256 ${state.specSha256.slice(0, 12)}`,
     `Base : ${state.base} à ${state.baseSha.slice(0, 12)} ; branche de la spec : ${state.branch}`,
     'Vagues :',
-    ...state.waves.map(w => `- vague ${w.index}${w.foundation ? ' (fondations, un seul agent)' : ''} : ${w.tasks.join(', ')}`),
+    ...state.waves.map(w => `- vague ${w.index} : ${waveParts(state, w, id => id)}`),
     `Suite : apv run next ${specId}`,
   ].join('\n') + '\n');
   return EXIT.ok;
+}
+
+/**
+ * The tasks of a wave as shown by `start` and `status`: « fondations (un seul agent) : … ; en parallèle : … »
+ * when the wave has foundations, the plain list otherwise.
+ */
+function waveParts(state: RunState, wave: Wave, show: (id: string) => string): string {
+  const { foundations, parallel } = splitWave(state, wave);
+  if (!foundations.length) return wave.tasks.map(show).join(', ');
+  return [`fondations (un seul agent) : ${foundations.map(show).join(', ')}`, ...(parallel.length ? [`en parallèle : ${parallel.map(show).join(', ')}`] : [])].join(' ; ');
 }
 
 function parseStatus(value: string | undefined): RunStatus {
@@ -195,10 +205,10 @@ function detail(state: RunState): string[] {
     `Exécution ${state.specId} (${state.specFile}) : branche ${state.branch}, base ${state.base} à ${state.baseSha.slice(0, 12)}`,
     `Créée ${state.createdAt} ; mise à jour ${state.updatedAt}`,
     `Étapes : ${STEPS.map(step).join(' ; ')}`,
-    ...state.waves.map(w => `Vague ${w.index}${w.foundation ? ' (fondations)' : ''} : ${w.tasks.map(id => {
+    ...state.waves.map(w => `Vague ${w.index} : ${waveParts(state, w, id => {
       const t = state.tasks[id]!;
       return `${id} ${STATUS_LABEL[t.status]}${t.commit ? ` @${t.commit.slice(0, 7)}` : ''}`;
-    }).join(', ')}`),
+    })}`),
     `Revues : ${REVIEWS.map(r => `${r} ${STATUS_LABEL[state.reviews[r].status]}${state.reviews[r].findings !== null ? ` (${state.reviews[r].findings} constat(s))` : ''}`).join(' ; ')}`,
     `Événements : ${state.events.length} ; dernier : ${(() => { const e = state.events.at(-1)!; return `${e.at} ${e.target} ${e.from ?? '-'} -> ${e.to}`; })()}`,
   ];

@@ -27,7 +27,7 @@ const key = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 // `commit` is optional on steps and reviews: states written before it existed stay readable.
 const stepSchema = s.object({ status, commit: s.default(sha, null), note: text(4000), updatedAt: s.nullable(at) });
 const taskSchema = s.object({
-    title: s.string(1, 500), dependsOn: s.array(s.string(1, 80, key), 0, 20), wave: s.number(0, 1000), status,
+    title: s.string(1, 500), dependsOn: s.array(s.string(1, 80, key), 0, 20), wave: s.number(0, 1000), foundation: s.boolean(), status,
     branch: text(300), worktree: text(4096), agentId: text(300), base: sha, commit: sha, note: text(4000), updatedAt: s.nullable(at),
 });
 const reviewSchema = s.object({ status, findings: s.nullable(s.number(0, 100000)), commit: s.default(sha, null), note: text(4000), updatedAt: s.nullable(at) });
@@ -35,26 +35,60 @@ const eventSchema = s.object({
     at, target: s.string(1, 200), from: s.nullable(status), to: status,
     note: s.optional(s.string(0, 4000)), commit: s.optional(s.string(7, 64)), agentId: s.optional(s.string(0, 300)),
 });
+/**
+ * Version 2: the foundation marker moved from the wave (v1, « the whole wave 0 ») to the task. A v1 state is
+ * migrated when read (`migrateRunState`) and written back as v2 on its next write.
+ */
+export const RUN_STATE_VERSION = 2;
 export const runStateSchema = s.object({
-    schemaVersion: s.literal(1),
+    schemaVersion: s.literal(RUN_STATE_VERSION),
     specId: s.string(1, 80, RUN_ID), specFile: s.string(1, 4096), specSha256: s.string(64, 64, /^[a-f0-9]{64}$/),
     base: s.string(1, 300), baseSha: s.string(40, 64, /^[a-f0-9]{40,64}$/), branch: s.string(1, 300),
     createdAt: at, updatedAt: at,
     steps: s.object({
         'data-model': stepSchema, plan: stepSchema, integration: stepSchema, reviews: stepSchema, fixes: stepSchema, delivery: stepSchema,
     }),
-    waves: s.array(s.object({ index: s.number(0, 1000), foundation: s.boolean(), tasks: s.array(s.string(1, 80, key), 1, 100) }), 0, 1000),
+    waves: s.array(s.object({ index: s.number(0, 1000), tasks: s.array(s.string(1, 80, key), 1, 100) }), 0, 1000),
     tasks: s.record(key, taskSchema, 100),
     reviews: s.object({ securite: reviewSchema, fidelite: reviewSchema, donnees: reviewSchema, rgpd: reviewSchema }),
     events: s.array(eventSchema, 0, 100000),
 });
-const parseState = (value) => runStateSchema.parse(value);
+const parseState = (value) => runStateSchema.parse(migrateRunState(value));
+const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 /**
- * Waves by topological layers of `dependsOn`. The spec format has no « foundation » marker (its task schema
- * refuses unknown properties), so the foundations are the first-layer tasks other tasks depend on: they form
- * wave 0, alone, written before the parallel waves open (incident 24). The other first-layer tasks join
- * wave 1 with the tasks of depth 1; a task of depth d is in wave d. Without any dependency, every task is in
- * wave 0. Tasks keep the order of the spec inside a wave. The graph must be acyclic (validated spec).
+ * A state of version 1 in the shape of version 2, the plan it recorded kept: under the v1 rule a wave marked
+ * `foundation` held only foundations, so each of its tasks becomes a foundation task, every other task is not
+ * one, and the wave loses its marker. Anything else is returned as is, for the schema to judge. Pure: the
+ * input is never modified.
+ */
+export function migrateRunState(value) {
+    if (!isRecord(value) || value['schemaVersion'] !== 1 || !Array.isArray(value['waves']) || !isRecord(value['tasks']))
+        return value;
+    const tasks = value['tasks'];
+    const marked = new Set();
+    const waves = value['waves'].map(w => {
+        if (!isRecord(w) || typeof w['foundation'] !== 'boolean')
+            return w;
+        const { foundation, ...rest } = w;
+        if (foundation && Array.isArray(w['tasks']))
+            for (const id of w['tasks'])
+                if (typeof id === 'string')
+                    marked.add(id);
+        return rest;
+    });
+    const migrated = {};
+    for (const [id, task] of Object.entries(tasks)) {
+        const value = isRecord(task) && !Object.hasOwn(task, 'foundation') ? { ...task, foundation: marked.has(id) } : task;
+        Object.defineProperty(migrated, id, { value, enumerable: true, writable: true, configurable: true });
+    }
+    return { ...value, schemaVersion: RUN_STATE_VERSION, waves, tasks: migrated };
+}
+/** Least number of tasks that depend directly on a task for it to be a foundation. */
+export const FOUNDATION_MIN_DEPENDENTS = 2;
+/**
+ * Waves: the topological layers of `dependsOn`. A task of depth d (0 without dependency, else one more than
+ * its deepest dependency) is in wave d. Tasks keep the order of the spec inside a wave. The graph must be
+ * acyclic (validated spec).
  */
 export function computeWaves(tasks) {
     const byId = new Map(tasks.map(t => [t.id, t]));
@@ -74,30 +108,43 @@ export function computeWaves(tasks) {
         return d;
     };
     tasks.forEach(t => visit(t.id));
-    const dependedOn = new Set(tasks.flatMap(t => t.dependsOn));
-    const foundations = tasks.filter(t => depth.get(t.id) === 0 && dependedOn.has(t.id)).map(t => t.id);
-    const waveOf = (id) => {
-        const d = depth.get(id);
-        return foundations.length && d === 0 && !dependedOn.has(id) ? 1 : d;
-    };
-    const indexes = [...new Set(tasks.map(t => waveOf(t.id)))].sort((a, b) => a - b);
-    return indexes.map(index => ({ index, foundation: index === 0 && foundations.length > 0, tasks: tasks.filter(t => waveOf(t.id) === index).map(t => t.id) }));
+    const indexes = [...new Set(depth.values())].sort((a, b) => a - b);
+    return indexes.map(index => ({ index, tasks: tasks.filter(t => depth.get(t.id) === index).map(t => t.id) }));
+}
+/**
+ * The foundations: the tasks at least FOUNDATION_MIN_DEPENDENTS other tasks depend on directly, in spec order.
+ * They write what several tasks share (incident 24); in their wave, one agent writes them while the other tasks
+ * of the wave run in parallel. One dependent is not enough: a task that only one other task needs is an
+ * ordinary dependency (the phase 3 trial had BIN wait alone because DOCS depended on it).
+ */
+export function computeFoundations(tasks) {
+    const dependents = new Map();
+    for (const t of tasks)
+        for (const dep of new Set(t.dependsOn))
+            dependents.set(dep, (dependents.get(dep) ?? 0) + 1);
+    return tasks.filter(t => (dependents.get(t.id) ?? 0) >= FOUNDATION_MIN_DEPENDENTS).map(t => t.id);
+}
+/** The foundations and the other tasks of one wave, each in wave order. */
+export function splitWave(state, wave) {
+    const foundations = wave.tasks.filter(id => state.tasks[id]?.foundation === true);
+    return { foundations, parallel: wave.tasks.filter(id => !foundations.includes(id)) };
 }
 export function createRunState(input) {
     const now = (input.now ?? new Date()).toISOString();
     const waves = computeWaves(input.tasks);
+    const foundations = new Set(computeFoundations(input.tasks));
     const waveOf = new Map(waves.flatMap(w => w.tasks.map(id => [id, w.index])));
     const step = () => ({ status: 'pending', note: null, updatedAt: null });
     const review = () => ({ status: 'pending', findings: null, note: null, updatedAt: null });
     const tasks = {};
     for (const t of input.tasks) {
         Object.defineProperty(tasks, t.id, { enumerable: true, writable: true, configurable: true, value: {
-                title: t.title, dependsOn: [...t.dependsOn], wave: waveOf.get(t.id), status: 'pending', branch: null, worktree: null, agentId: null,
+                title: t.title, dependsOn: [...t.dependsOn], wave: waveOf.get(t.id), foundation: foundations.has(t.id), status: 'pending', branch: null, worktree: null, agentId: null,
                 base: null, commit: null, note: null, updatedAt: null,
             } });
     }
     return parseState({
-        schemaVersion: 1, specId: input.specId, specFile: input.specFile, specSha256: input.specSha256, base: input.base, baseSha: input.baseSha,
+        schemaVersion: RUN_STATE_VERSION, specId: input.specId, specFile: input.specFile, specSha256: input.specSha256, base: input.base, baseSha: input.baseSha,
         branch: `apv/${input.specId}`, createdAt: now, updatedAt: now,
         steps: Object.fromEntries(STEPS.map(n => [n, step()])),
         waves, tasks, reviews: Object.fromEntries(REVIEWS.map(n => [n, review()])),
@@ -255,11 +302,14 @@ export function computeNext(state, probe) {
     if (step === 'data-model' || step === 'plan')
         actions.push(`étape ${STEP_LABEL[step]} (${STATUS_LABEL[state.steps[step].status]}) : la terminer avant d'ouvrir les vagues`);
     else if (step === 'waves') {
-        // The current wave first: the foundations are integrated before the parallel waves open (incident 24).
+        // The current wave first. Its foundations go to one agent (incident 24), its other tasks run in parallel.
         const now = ready.filter(r => r.wave === wave);
-        const foundation = state.waves.find(w => w.index === wave)?.foundation ? ', fondations, un seul agent' : '';
-        if (now.length)
-            actions.push(`lancer ${now.length} tâche(s) prête(s) de la vague ${wave}${foundation} : ${now.map(r => r.id).join(', ')}`);
+        const found = now.filter(r => state.tasks[r.id]?.foundation).map(r => r.id);
+        const parallel = now.filter(r => !state.tasks[r.id]?.foundation).map(r => r.id);
+        if (now.length) {
+            actions.push(`lancer ${now.length} tâche(s) prête(s) de la vague ${wave} : ${[found.length ? `fondations (un seul agent) : ${found.join(', ')}` : '',
+                parallel.length ? `en parallèle : ${parallel.join(', ')}` : ''].filter(Boolean).join(' ; ')}`);
+        }
         const later = ready.filter(r => r.wave !== wave);
         if (later.length)
             actions.push(`prêtes mais d'une vague suivante : ${later.map(r => `${r.id} (vague ${r.wave})`).join(', ')} ; à lancer une fois la vague ${wave} intégrée, sauf décision contraire notée`);

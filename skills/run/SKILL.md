@@ -29,7 +29,7 @@ Dans ce document, `apv` désigne `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` (ou 
 2. Environnement : `apv status`, `docker info` si les contrôles en dépendent, `apv lock status` (baux orphelins), arbre de travail propre (`git status`).
 3. Quota : `apv quota` (section 8).
 4. Base : la branche principale, ou la branche de la spec précédente non fusionnée pour une pile (`apv/<id-précédent>`).
-5. `apv run start <spec> --base <base>` : l'outil revalide la spec, calcule les vagues (la vague 0 porte les fondations) et crée l'état, avec la branche de la spec `apv/<id>`. `apv run status <id>` : montre les vagues.
+5. `apv run start <spec> --base <base>` : l'outil revalide la spec, calcule les vagues (couches des dépendances) et marque les fondations (tâches dont au moins deux autres dépendent directement) et crée l'état, avec la branche de la spec `apv/<id>`. `apv run status <id>` : montre les vagues, avec « fondations (un seul agent) : … » et « en parallèle : … » dans chaque vague qui a des fondations.
 6. Branche de la spec : `git switch -c apv/<id> <base>` (ou `git switch apv/<id>` si elle existe). Commite dessus ce que la spec apporte et que la base n'a pas (`<spec>`, `.apv/state/demande-<id>.md`) : les worktrees des agents partent de cette branche et doivent y lire la spec.
 
 ## 2. Modèle de données (étape `data-model`)
@@ -53,7 +53,7 @@ Pour chaque vague, dans l'ordre (vague 0 = fondations, écrite par un seul agent
 3. **Base exacte** : `git rev-parse apv/<id>` (le commit que tu donnes aux agents).
 4. **Branche de chaque tâche** : celle que `apv run next` indique, sinon `apv/<id>-<tâche>`.
 5. **Lancement** :
-   - **Une seule tâche** (fondations, correction isolée) : outil Agent, `subagent_type: "apv:implementer"`, `run_in_background: true`, avec le message de lancement ci-dessous.
+   - **Une seule tâche** (les fondations prêtes, confiées à un seul agent ; une correction isolée) : outil Agent, `subagent_type: "apv:implementer"`, `run_in_background: true`, avec le message de lancement ci-dessous.
    - **Plusieurs tâches** : le workflow du plugin `apv:vague` (outil Workflow, `name: "apv:vague"`, ou `scriptPath` = chemin absolu de `workflows/vague.js` du plugin si le nom n'est pas trouvé) avec `args` en objet JSON :
      ```json
      { "specId": "<id>", "specFile": ".apv/specs/<id>.json", "base": "apv/<id>", "baseCommit": "<sha>", "wave": 1,

@@ -14,8 +14,13 @@ export declare const REVIEWS: readonly ["securite", "fidelite", "donnees", "rgpd
 export type ReviewDomain = typeof REVIEWS[number];
 export declare const STATUS_LABEL: Record<RunStatus, string>;
 export declare const STEP_LABEL: Record<StepName | 'waves', string>;
+/**
+ * Version 2: the foundation marker moved from the wave (v1, « the whole wave 0 ») to the task. A v1 state is
+ * migrated when read (`migrateRunState`) and written back as v2 on its next write.
+ */
+export declare const RUN_STATE_VERSION = 2;
 export declare const runStateSchema: import("../domain/schema.js").Schema<{
-    readonly schemaVersion: 1;
+    readonly schemaVersion: 2;
     readonly specId: string;
     readonly specFile: string;
     readonly specSha256: string;
@@ -64,13 +69,13 @@ export declare const runStateSchema: import("../domain/schema.js").Schema<{
     };
     readonly waves: {
         readonly index: number;
-        readonly foundation: boolean;
         readonly tasks: string[];
     }[];
     readonly tasks: Record<string, {
         readonly title: string;
         readonly dependsOn: string[];
         readonly wave: number;
+        readonly foundation: boolean;
         readonly status: "failed" | "pending" | "running" | "done" | "skipped";
         readonly branch: string | null;
         readonly worktree: string | null;
@@ -137,6 +142,13 @@ export type RunState = Omit<Mutable<Infer<typeof runStateSchema>>, 'events'> & {
     events: RunEvent[];
 };
 export type TaskEntry = RunState['tasks'][string];
+/**
+ * A state of version 1 in the shape of version 2, the plan it recorded kept: under the v1 rule a wave marked
+ * `foundation` held only foundations, so each of its tasks becomes a foundation task, every other task is not
+ * one, and the wave loses its marker. Anything else is returned as is, for the schema to judge. Pure: the
+ * input is never modified.
+ */
+export declare function migrateRunState(value: unknown): unknown;
 export interface SpecTaskInput {
     id: string;
     title: string;
@@ -144,17 +156,28 @@ export interface SpecTaskInput {
 }
 export interface Wave {
     index: number;
-    foundation: boolean;
     tasks: string[];
 }
+/** Least number of tasks that depend directly on a task for it to be a foundation. */
+export declare const FOUNDATION_MIN_DEPENDENTS = 2;
 /**
- * Waves by topological layers of `dependsOn`. The spec format has no « foundation » marker (its task schema
- * refuses unknown properties), so the foundations are the first-layer tasks other tasks depend on: they form
- * wave 0, alone, written before the parallel waves open (incident 24). The other first-layer tasks join
- * wave 1 with the tasks of depth 1; a task of depth d is in wave d. Without any dependency, every task is in
- * wave 0. Tasks keep the order of the spec inside a wave. The graph must be acyclic (validated spec).
+ * Waves: the topological layers of `dependsOn`. A task of depth d (0 without dependency, else one more than
+ * its deepest dependency) is in wave d. Tasks keep the order of the spec inside a wave. The graph must be
+ * acyclic (validated spec).
  */
 export declare function computeWaves(tasks: SpecTaskInput[]): Wave[];
+/**
+ * The foundations: the tasks at least FOUNDATION_MIN_DEPENDENTS other tasks depend on directly, in spec order.
+ * They write what several tasks share (incident 24); in their wave, one agent writes them while the other tasks
+ * of the wave run in parallel. One dependent is not enough: a task that only one other task needs is an
+ * ordinary dependency (the phase 3 trial had BIN wait alone because DOCS depended on it).
+ */
+export declare function computeFoundations(tasks: SpecTaskInput[]): string[];
+/** The foundations and the other tasks of one wave, each in wave order. */
+export declare function splitWave(state: Pick<RunState, 'tasks'>, wave: Wave): {
+    foundations: string[];
+    parallel: string[];
+};
 export interface NewRunInput {
     specId: string;
     specFile: string;
