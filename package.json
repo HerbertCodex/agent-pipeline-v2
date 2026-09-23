@@ -17,21 +17,22 @@
     }
   },
   "files": [
+    ".claude-plugin",
+    "agents",
+    "skills",
+    "hooks",
     "dist",
+    "src",
+    "test",
     "examples",
     "docs",
     "README.md",
+    "START-HERE.md",
     "LICENSE",
     "NOTICE",
-    "src",
-    "test",
-    "validation",
     "CHANGELOG.md",
     "tsconfig.json",
-    "prompts",
-    "START-HERE.md",
-    "roles",
-    "skills"
+    "validation"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -44,7 +45,6 @@
   "devDependencies": {
     "@types/node": "24.0.4",
     "fast-check": "^4.10.1",
-    "stylelint": "17.15.0",
     "typescript": "5.8.3"
   },
   "private": true
