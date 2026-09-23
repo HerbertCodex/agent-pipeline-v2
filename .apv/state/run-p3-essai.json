@@ -7,7 +7,7 @@
   "baseSha": "e9da7390d9362368864027ef2d3ac97479569af2",
   "branch": "apv/p3-essai",
   "createdAt": "2026-09-23T16:55:06.490Z",
-  "updatedAt": "2026-09-23T17:31:29.084Z",
+  "updatedAt": "2026-09-23T17:32:15.909Z",
   "steps": {
     "data-model": {
       "status": "skipped",
@@ -40,10 +40,10 @@
       "updatedAt": "2026-09-23T17:31:29.031Z"
     },
     "delivery": {
-      "status": "running",
+      "status": "done",
       "commit": null,
-      "note": null,
-      "updatedAt": "2026-09-23T17:31:29.084Z"
+      "note": "PR #71 https://github.com/HerbertCodex/agent-pipeline-v2/pull/71",
+      "updatedAt": "2026-09-23T17:32:15.909Z"
     }
   },
   "waves": [
@@ -338,6 +338,13 @@
       "target": "delivery",
       "from": "pending",
       "to": "running"
+    },
+    {
+      "at": "2026-09-23T17:32:15.909Z",
+      "target": "delivery",
+      "from": "running",
+      "to": "done",
+      "note": "PR #71 https://github.com/HerbertCodex/agent-pipeline-v2/pull/71"
     }
   ]
 }
