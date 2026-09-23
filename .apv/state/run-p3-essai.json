@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "specId": "p3-essai",
+  "specFile": ".apv/specs/p3-essai.json",
+  "specSha256": "dc69f4b3cf0eb95040771299f549b1a299b69ed0774427a68ce060ad1a7b2b5b",
+  "base": "essai-p3",
+  "baseSha": "e9da7390d9362368864027ef2d3ac97479569af2",
+  "branch": "apv/p3-essai",
+  "createdAt": "2026-09-23T16:55:06.490Z",
+  "updatedAt": "2026-09-23T16:55:26.501Z",
+  "steps": {
+    "data-model": {
+      "status": "skipped",
+      "note": "aucune base de données",
+      "updatedAt": "2026-09-23T16:55:26.501Z"
+    },
+    "plan": {
+      "status": "pending",
+      "note": null,
+      "updatedAt": null
+    },
+    "integration": {
+      "status": "pending",
+      "note": null,
+      "updatedAt": null
+    },
+    "reviews": {
+      "status": "pending",
+      "note": null,
+      "updatedAt": null
+    },
+    "fixes": {
+      "status": "pending",
+      "note": null,
+      "updatedAt": null
+    },
+    "delivery": {
+      "status": "pending",
+      "note": null,
+      "updatedAt": null
+    }
+  },
+  "waves": [
+    {
+      "index": 0,
+      "foundation": true,
+      "tasks": [
+        "SUMMARY"
+      ]
+    },
+    {
+      "index": 1,
+      "foundation": false,
+      "tasks": [
+        "HOOK",
+        "BIN"
+      ]
+    },
+    {
+      "index": 2,
+      "foundation": false,
+      "tasks": [
+        "DOCS"
+      ]
+    }
+  ],
+  "tasks": {
+    "SUMMARY": {
+      "title": "Module de résumé des exécutions",
+      "dependsOn": [],
+      "wave": 0,
+      "status": "pending",
+      "branch": null,
+      "worktree": null,
+      "agentId": null,
+      "base": null,
+      "commit": null,
+      "note": null,
+      "updatedAt": null
+    },
+    "HOOK": {
+      "title": "Exécutions en cours au démarrage de session",
+      "dependsOn": [
+        "SUMMARY"
+      ],
+      "wave": 1,
+      "status": "pending",
+      "branch": null,
+      "worktree": null,
+      "agentId": null,
+      "base": null,
+      "commit": null,
+      "note": null,
+      "updatedAt": null
+    },
+    "BIN": {
+      "title": "Exécutable bin/apv",
+      "dependsOn": [],
+      "wave": 1,
+      "status": "pending",
+      "branch": null,
+      "worktree": null,
+      "agentId": null,
+      "base": null,
+      "commit": null,
+      "note": null,
+      "updatedAt": null
+    },
+    "DOCS": {
+      "title": "Documentation à jour",
+      "dependsOn": [
+        "HOOK"
+      ],
+      "wave": 2,
+      "status": "pending",
+      "branch": null,
+      "worktree": null,
+      "agentId": null,
+      "base": null,
+      "commit": null,
+      "note": null,
+      "updatedAt": null
+    }
+  },
+  "reviews": {
+    "securite": {
+      "status": "pending",
+      "findings": null,
+      "note": null,
+      "updatedAt": null
+    },
+    "fidelite": {
+      "status": "pending",
+      "findings": null,
+      "note": null,
+      "updatedAt": null
+    },
+    "donnees": {
+      "status": "pending",
+      "findings": null,
+      "note": null,
+      "updatedAt": null
+    },
+    "rgpd": {
+      "status": "pending",
+      "findings": null,
+      "note": null,
+      "updatedAt": null
+    }
+  },
+  "events": [
+    {
+      "at": "2026-09-23T16:55:06.490Z",
+      "target": "run",
+      "from": null,
+      "to": "running",
+      "note": "exécution créée depuis .apv/specs/p3-essai.json (base essai-p3 à e9da7390d936)"
+    },
+    {
+      "at": "2026-09-23T16:55:26.501Z",
+      "target": "data-model",
+      "from": "pending",
+      "to": "skipped",
+      "note": "aucune base de données"
+    }
+  ]
+}
