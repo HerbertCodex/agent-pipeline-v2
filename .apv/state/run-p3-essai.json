@@ -7,7 +7,7 @@
   "baseSha": "e9da7390d9362368864027ef2d3ac97479569af2",
   "branch": "apv/p3-essai",
   "createdAt": "2026-09-23T16:55:06.490Z",
-  "updatedAt": "2026-09-23T17:14:15.013Z",
+  "updatedAt": "2026-09-23T17:31:29.084Z",
   "steps": {
     "data-model": {
       "status": "skipped",
@@ -34,16 +34,16 @@
       "updatedAt": "2026-09-23T17:14:15.013Z"
     },
     "fixes": {
-      "status": "pending",
-      "commit": null,
-      "note": null,
-      "updatedAt": null
+      "status": "done",
+      "commit": "8bb455aa9faf98e60c40124e1238e0413ea5f3d0",
+      "note": "11 constats corrigés (10 commits), correctif FIFO des verrous",
+      "updatedAt": "2026-09-23T17:31:29.031Z"
     },
     "delivery": {
-      "status": "pending",
+      "status": "running",
       "commit": null,
       "note": null,
-      "updatedAt": null
+      "updatedAt": "2026-09-23T17:31:29.084Z"
     }
   },
   "waves": [
@@ -317,6 +317,27 @@
       "from": "running",
       "to": "done",
       "note": "revues-p3-essai-fe3fa48.md"
+    },
+    {
+      "at": "2026-09-23T17:14:15.134Z",
+      "target": "fixes",
+      "from": "pending",
+      "to": "running",
+      "note": "une passe : apv/p3-essai-fix-securite depuis e060a55"
+    },
+    {
+      "at": "2026-09-23T17:31:29.031Z",
+      "target": "fixes",
+      "from": "running",
+      "to": "done",
+      "note": "11 constats corrigés (10 commits), correctif FIFO des verrous",
+      "commit": "8bb455aa9faf98e60c40124e1238e0413ea5f3d0"
+    },
+    {
+      "at": "2026-09-23T17:31:29.084Z",
+      "target": "delivery",
+      "from": "pending",
+      "to": "running"
     }
   ]
 }
