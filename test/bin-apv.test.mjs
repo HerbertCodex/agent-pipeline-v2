@@ -55,7 +55,7 @@ test('bin/apv gives the same output and exit code as node dist/cli.js from anoth
   assert.equal(run(bin, ['commande-inconnue'], { cwd: elsewhere }).status, 2);
 });
 
-test('bin/apv runs the plugin dist despite a fake node and a fake dist/cli.js in the current directory and at the head of PATH', t => {
+test('run by node, bin/apv runs the plugin dist despite fake executables and a fake dist/cli.js in the current directory and on PATH', t => {
   const hostile = hostileDir(t);
   const expected = run(process.execPath, [cli, '--version'], { cwd: tmpdir() });
   const env = {
@@ -69,14 +69,25 @@ test('bin/apv runs the plugin dist despite a fake node and a fake dist/cli.js in
   assert.ok(!actual.stdout.includes(FAKE));
 });
 
-test('bin/apv run by its shebang ignores the current directory and the rest of PATH', t => {
+test('bin/apv takes nothing from PATH or the current directory; its interpreter comes from PATH through the shebang', t => {
   const hostile = hostileDir(t);
-  // The interpreter itself is found by the system through the shebang; everything after that is the script's.
+  // The real node first on PATH: the shebang finds it, and the script then ignores the fakes after it.
   const env = { PATH: [nodeDir, hostile, '.'].join(delimiter), CLAUDE_PLUGIN_ROOT: hostile, APV_ROOT: hostile };
   const expected = run(process.execPath, [cli, 'help'], { cwd: tmpdir() });
   const actual = run(bin, ['help'], { cwd: hostile, env });
   assert.deepEqual(actual, expected);
   assert.ok(!actual.stdout.includes(FAKE));
+});
+
+test('residual risk, accepted and declared: a fake node first on PATH is the interpreter the shebang runs', t => {
+  // Review SEC-3 and FID-1: the comment of bin/apv and a test name claimed that nothing came from PATH. The
+  // shebang (#!/usr/bin/env node) takes the interpreter from PATH: whoever puts a node first on PATH runs it.
+  // Accepted in the spec (security assumptions): that person already controls git and every other command,
+  // and an absolute interpreter path would break nvm. This test pins the behaviour the documentation declares.
+  const hostile = hostileDir(t);
+  const actual = run(bin, ['--version'], { cwd: tmpdir(), env: { PATH: [hostile, nodeDir, process.env.PATH].join(delimiter) } });
+  assert.equal(actual.status, 97);
+  assert.equal(actual.stdout.trim(), FAKE);
 });
 
 test('bin/apv reached through a symlink still runs the dist next to its real location', t => {
