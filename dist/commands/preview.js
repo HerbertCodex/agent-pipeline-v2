@@ -56,10 +56,17 @@ function updateText(result) {
         lines.push(`Changements depuis ${short(result.previousCommit)} : historique indisponible (commit précédent inconnu du dépôt).`);
     else {
         const from = result.previousBranch && result.previousBranch !== result.branch ? `${short(result.previousCommit)}, branche ${result.previousBranch}` : short(result.previousCommit);
-        lines.push(`Changements depuis ${from} : ${result.changes.total} commit${result.changes.total > 1 ? 's' : ''}`);
-        lines.push(...result.changes.lines.map(l => `  ${l}`));
-        if (result.changes.total > result.changes.lines.length)
-            lines.push(`  ... et ${result.changes.total - result.changes.lines.length} de plus`);
+        const { total, removed } = result.changes;
+        if (total) {
+            lines.push(`Changements depuis ${from} : ${total} commit${total > 1 ? 's' : ''}`);
+            lines.push(...result.changes.lines.map(l => `  ${l}`));
+            if (total > result.changes.lines.length)
+                lines.push(`  ... et ${total - result.changes.lines.length} de plus`);
+        }
+        else
+            lines.push(`Aucun nouveau commit depuis ${from}.`);
+        if (removed)
+            lines.push(`Retour en arrière : ${removed} commit${removed > 1 ? 's' : ''} de l'aperçu précédent (${short(result.previousCommit)}) retiré${removed > 1 ? 's' : ''} de l'aperçu.`);
     }
     lines.push(`Journal du serveur : ${result.logFile}`);
     return { out: `${lines.join('\n')}\n`, err: '' };

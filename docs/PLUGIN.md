@@ -1,6 +1,6 @@
 # Plugin Claude Code « apv » (Agent Pipeline V3)
 
-Version 3.0.0-alpha.1, phase 1 (socle). Spécification : [APV3-SPEC.md](APV3-SPEC.md). Retour d'expérience qui l'a motivée : [RETOUR-TOUJOURS-RIEN.md](RETOUR-TOUJOURS-RIEN.md).
+Version 3.0.0-alpha.2, phases 1 (socle) et 2 (design et aperçu vivant). Spécification : [APV3-SPEC.md](APV3-SPEC.md). Retour d'expérience qui l'a motivée : [RETOUR-TOUJOURS-RIEN.md](RETOUR-TOUJOURS-RIEN.md).
 
 Le plugin fait de la session Claude Code principale un chef de projet : il orchestre de vrais sous-agents (spec, données, design, implémentation en parallèle, intégration, revues), tient l'état du travail dans le dépôt (`.apv/`), suit le quota et bloque les effets externes dangereux.
 

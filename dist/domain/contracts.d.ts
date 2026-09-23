@@ -1,5 +1,5 @@
 import { type Infer } from './schema.js';
-export declare const VERSION = "3.0.0-alpha.1";
+export declare const VERSION = "3.0.0-alpha.2";
 export declare const lanes: readonly ["fast", "standard", "high"];
 export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];

@@ -160,6 +160,13 @@ test('update, status, second update with the new commit, stop', async (t) => {
   assert.equal(alive(s1.pid), false, 'l\'ancien serveur est arrêté');
   assert.equal(s2.commit, second);
 
+  const back = await apv(p, ['preview', 'update', first]);
+  assert.equal(back.code, 0, back.stderr);
+  assert.match(back.stdout, new RegExp(`Aucun nouveau commit depuis ${second.slice(0, 7)}, branche main\\.`));
+  assert.match(back.stdout, new RegExp(`Retour en arrière : 1 commit de l'aperçu précédent \\(${second.slice(0, 7)}\\) retiré de l'aperçu\\.`));
+  assert.equal((await get(p.port))?.body, 'v1');
+  assert.equal((await apv(p, ['preview', 'update', 'main'])).code, 0);
+
   const same = await apv(p, ['preview', 'update', '--json']);
   assert.equal(same.code, 0, same.stderr);
   const sameJson = JSON.parse(same.stdout);

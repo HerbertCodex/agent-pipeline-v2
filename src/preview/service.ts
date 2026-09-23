@@ -78,12 +78,17 @@ export function resolveCommit(repo: string, ref: string): string {
   catch { throw new PipelineError('PREVIEW_BRANCH', `Branche ou commit introuvable dans ${repo} : ${ref}`); }
 }
 
-/** `git log --oneline previous..commit`, capped; null when the previous commit is unknown to the repository. */
-export function changesSince(repo: string, previous: string, commit: string): { lines: string[]; total: number } | null {
+/**
+ * `git log --oneline previous..commit`, capped, and the number of commits of the previous preview no longer
+ * shown (`commit..previous`: a return to an older commit or another branch). Null when the previous
+ * commit is unknown to the repository.
+ */
+export function changesSince(repo: string, previous: string, commit: string): { lines: string[]; total: number; removed: number } | null {
   try {
     const total = Number(git(repo, ['rev-list', '--count', `${previous}..${commit}`]));
+    const removed = Number(git(repo, ['rev-list', '--count', `${commit}..${previous}`]));
     const log = git(repo, ['log', '--oneline', '--no-decorate', `--max-count=${MAX_CHANGES}`, `${previous}..${commit}`]);
-    return { lines: log ? log.split('\n') : [], total };
+    return { lines: log ? log.split('\n') : [], total, removed };
   } catch { return null; }
 }
 
@@ -132,7 +137,7 @@ function tail(text: string, lines: number): string {
 
 export type UpdateResult =
   | { ok: true; url: string; branch: string; commit: string; pid: number; previousCommit: string | null;
-      previousBranch: string | null; changes: { lines: string[]; total: number } | null; logFile: string; updateLog: string }
+      previousBranch: string | null; changes: { lines: string[]; total: number; removed: number } | null; logFile: string; updateLog: string }
   | { ok: false; step: string; message: string; excerpt: string; updateLog: string; logFile: string; branch: string; commit: string | null };
 
 /** Refusal that happens before anything changed (foreign process on the port, directory not ours). */

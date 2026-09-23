@@ -63,12 +63,17 @@ export function resolveCommit(repo, ref) {
         throw new PipelineError('PREVIEW_BRANCH', `Branche ou commit introuvable dans ${repo} : ${ref}`);
     }
 }
-/** `git log --oneline previous..commit`, capped; null when the previous commit is unknown to the repository. */
+/**
+ * `git log --oneline previous..commit`, capped, and the number of commits of the previous preview no longer
+ * shown (`commit..previous`: a return to an older commit or another branch). Null when the previous
+ * commit is unknown to the repository.
+ */
 export function changesSince(repo, previous, commit) {
     try {
         const total = Number(git(repo, ['rev-list', '--count', `${previous}..${commit}`]));
+        const removed = Number(git(repo, ['rev-list', '--count', `${commit}..${previous}`]));
         const log = git(repo, ['log', '--oneline', '--no-decorate', `--max-count=${MAX_CHANGES}`, `${previous}..${commit}`]);
-        return { lines: log ? log.split('\n') : [], total };
+        return { lines: log ? log.split('\n') : [], total, removed };
     }
     catch {
         return null;

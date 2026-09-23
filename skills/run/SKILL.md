@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # /apv:run
 
-**Disponible en phase 3.** Cette commande n'est pas encore livrée dans la version 3.0.0-alpha.1 du plugin.
+**Disponible en phase 3.** Cette commande n'est pas encore livrée dans la version 3.0.0-alpha.2 du plugin.
 
 Ce qu'elle fera : déroule le cycle complet de la compétence `chef-de-projet` avec des workflows de vagues parallèles.
 

@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # /apv:onboard
 
-**Disponible en phase 4.** Cette commande n'est pas encore livrée dans la version 3.0.0-alpha.1 du plugin.
+**Disponible en phase 4.** Cette commande n'est pas encore livrée dans la version 3.0.0-alpha.2 du plugin.
 
 Ce qu'elle fera : analyse le dépôt, détecte les contrôles, reprend `pipeline.v2.json` et `.agent-pipeline/DECISIONS.json` d'un projet V2, crée `.apv/` et propose un commit (spec, section 14).
 

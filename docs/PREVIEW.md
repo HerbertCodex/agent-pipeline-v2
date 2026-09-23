@@ -31,7 +31,7 @@ Changements depuis 8e41d07 : 3 commits
 Journal du serveur : /chemin/du/projet/.apv/state/preview.log
 ```
 
-Les changements viennent de `git log --oneline <commit précédent>..<nouveau>`, limités à 20 lignes (le total est donné). Le commit précédent est celui du dernier aperçu qui a démarré, même s'il a été arrêté depuis.
+Les changements viennent de `git log --oneline <commit précédent>..<nouveau>`, limités à 20 lignes (le total est donné). Le commit précédent est celui du dernier aperçu qui a démarré, même s'il a été arrêté depuis. Un retour vers un commit plus ancien ou une autre branche l'annonce aussi : « Retour en arrière : N commits de l'aperçu précédent (abc1234) retirés de l'aperçu. » (`changes.removed` en JSON).
 
 En cas d'échec, la sortie est `1` et le message nomme l'étape (`branche`, `arrêt`, `port`, `copie`, `install`, `migrate`, `build`, `seed`, `serve`, `health`), le code de sortie, les 20 dernières lignes de la commande (valeurs masquées) et le chemin du journal. Après l'échec d'une étape, aucun serveur ne reste : l'ancien a été arrêté à l'étape 2 et le nouveau n'a pas démarré. L'échec est aussi noté dans `preview.json` (`lastFailure`) et affiché par `status`.
 
@@ -141,9 +141,12 @@ cp /chemin/vers/seed-apercu.mts .                      # graine de démonstratio
     "branch": "main",
     "envFile": "~/apercu-supabase/env.status",
     "steps": {
-      "install": ["npm", "ci", "--silent"],
-      "migrate": "rm -rf \"$HOME/apercu-supabase/supabase/migrations\" && cp -r supabase/migrations \"$HOME/apercu-supabase/supabase/\" && cd \"$HOME/apercu-supabase\" && timeout 600 npx -y supabase@2.117.0 db reset --local --no-seed",
-      "build": "PUBLIC_SUPABASE_URL=\"$API_URL\" PUBLIC_SUPABASE_PUBLISHABLE_KEY=\"$PUBLISHABLE_KEY\" npm run -s build",
+      "install": "npm ci --silent",
+      "migrate": {
+        "command": "A=\"$HOME/apercu-supabase\" && rm -rf \"$A/supabase/migrations\" && cp -r supabase/migrations \"$A/supabase/\" && cd \"$A\" && npx -y supabase@2.117.0 db reset --local --no-seed",
+        "timeoutSec": 600
+      },
+      "build": "PUBLIC_SUPABASE_URL=http://localhost:56321 PUBLIC_SUPABASE_PUBLISHABLE_KEY=\"$PUBLISHABLE_KEY\" npm run -s build",
       "seed": "cp \"$HOME/apercu-supabase/seed-apercu.mts\" . && SUPABASE_TEST_URL=\"$API_URL\" SUPABASE_TEST_PUBLISHABLE_KEY=\"$PUBLISHABLE_KEY\" SUPABASE_TEST_SECRET_KEY=\"$SECRET_KEY\" SUPABASE_TEST_MAILPIT_URL=\"$MAILPIT_URL\" npx tsx seed-apercu.mts"
     },
     "serve": {
@@ -151,7 +154,7 @@ cp /chemin/vers/seed-apercu.mts .                      # graine de démonstratio
       "port": 5190,
       "host": "0.0.0.0",
       "env": {
-        "PUBLIC_SUPABASE_URL": "${API_URL}",
+        "PUBLIC_SUPABASE_URL": "http://localhost:56321",
         "PUBLIC_SUPABASE_PUBLISHABLE_KEY": "${PUBLISHABLE_KEY}",
         "SUPABASE_SECRET_KEY": "${SECRET_KEY}",
         "CONTACT_IP_SALT": "apercu-local-sel",
@@ -174,7 +177,8 @@ apv preview status
 Remarques :
 
 - `migrate` copie les migrations **du commit affiché** (dans la copie) vers la pile d'aperçu, puis la remet à zéro : la base de l'aperçu suit toujours le schéma de la branche, et la graine recrée les données de démonstration juste après.
-- `API_URL` vaut `http://127.0.0.1:56321` : l'aperçu parle à la pile d'aperçu, jamais à celle des tests (543xx) ni à la production.
+- L'aperçu parle à la pile d'aperçu (`http://localhost:56321`, et `API_URL` du fichier d'environnement pour la graine), jamais à celle des tests (553xx dans le projet pilote) ni à la production. L'adresse publique est `localhost`, comme `site_url` et les adresses de retour de la configuration d'authentification de la pile d'aperçu.
+- `migrate` a son propre délai (600 s, comme le `timeout 600` du script manuel) ; les autres étapes gardent 900 s.
 - Le fichier `env.status` contient des clés : il reste hors du dépôt (`~/apercu-supabase/`) et ses valeurs sont masquées dans tout ce qu'affiche `apv preview`.
 - `vite preview` est lancé par `npx` : l'arrêt vise tout le groupe de processus, `npx` et le serveur `vite` qu'il a lancé.
 

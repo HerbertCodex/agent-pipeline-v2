@@ -31,10 +31,15 @@ export interface LoadedPreview {
 export declare function loadPreview(repo: string, env: NodeJS.ProcessEnv, strict?: boolean): LoadedPreview;
 /** Full commit of a branch (or any commit-ish). An option-like name is refused before reaching git. */
 export declare function resolveCommit(repo: string, ref: string): string;
-/** `git log --oneline previous..commit`, capped; null when the previous commit is unknown to the repository. */
+/**
+ * `git log --oneline previous..commit`, capped, and the number of commits of the previous preview no longer
+ * shown (`commit..previous`: a return to an older commit or another branch). Null when the previous
+ * commit is unknown to the repository.
+ */
 export declare function changesSince(repo: string, previous: string, commit: string): {
     lines: string[];
     total: number;
+    removed: number;
 } | null;
 export type UpdateResult = {
     ok: true;
@@ -47,6 +52,7 @@ export type UpdateResult = {
     changes: {
         lines: string[];
         total: number;
+        removed: number;
     } | null;
     logFile: string;
     updateLog: string;

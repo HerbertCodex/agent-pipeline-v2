@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # /apv:init
 
-**Disponible en phase 3.** Cette commande n'est pas encore livrée dans la version 3.0.0-alpha.1 du plugin.
+**Disponible en phase 3.** Cette commande n'est pas encore livrée dans la version 3.0.0-alpha.2 du plugin.
 
 Ce qu'elle fera : crée le dossier `.apv/` (configuration, registre des décisions, `brief.md`, `state/`), propose un commit.
 

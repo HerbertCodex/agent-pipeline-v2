@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # /apv:review
 
-**Disponible en phase 3.** Cette commande n'est pas encore livrée dans la version 3.0.0-alpha.1 du plugin.
+**Disponible en phase 3.** Cette commande n'est pas encore livrée dans la version 3.0.0-alpha.2 du plugin.
 
 Ce qu'elle fera : lance en parallèle `qa-securite`, `qa-fidelite`, `architecte-donnees` (revue) et `dpo` sur une copie isolée du commit, puis rassemble les constats.
 

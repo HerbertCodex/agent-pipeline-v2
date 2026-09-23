@@ -45,7 +45,7 @@ const METHOD_SKILLS = ['architecture-donnees', 'chef-de-projet', 'design-artefac
 test('manifests parse and describe the apv plugin', () => {
   const plugin = JSON.parse(read('.claude-plugin/plugin.json'));
   assert.equal(plugin.name, 'apv');
-  assert.equal(plugin.version, '3.0.0-alpha.1');
+  assert.equal(plugin.version, '3.0.0-alpha.2');
   assert.equal(plugin.license, 'MIT');
   assert.match(read('LICENSE'), /^MIT License/);
   assert.equal(plugin.repository, 'https://github.com/HerbertCodex/agent-pipeline-v2');
