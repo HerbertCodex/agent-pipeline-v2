@@ -7,7 +7,7 @@
   "baseSha": "e9da7390d9362368864027ef2d3ac97479569af2",
   "branch": "apv/p3-essai",
   "createdAt": "2026-09-23T16:55:06.490Z",
-  "updatedAt": "2026-09-23T17:01:32.015Z",
+  "updatedAt": "2026-09-23T17:06:06.226Z",
   "steps": {
     "data-model": {
       "status": "skipped",
@@ -84,14 +84,14 @@
         "SUMMARY"
       ],
       "wave": 1,
-      "status": "running",
+      "status": "done",
       "branch": "apv/p3-essai-hook",
       "worktree": "/home/herbertcodex/apv3-wt/essai-hook",
       "agentId": "implementer-hook",
       "base": "999947476f82b9ebb3975d9f1585f6088eb9029d",
-      "commit": null,
-      "note": null,
-      "updatedAt": "2026-09-23T17:01:32.015Z"
+      "commit": "46c904080a9605aba9993bf86b5ed9a0ffa72e93",
+      "note": "scope check vert ; 409 tests",
+      "updatedAt": "2026-09-23T17:06:06.226Z"
     },
     "BIN": {
       "title": "Exécutable bin/apv",
@@ -221,6 +221,14 @@
       "from": "pending",
       "to": "running",
       "agentId": "implementer-hook"
+    },
+    {
+      "at": "2026-09-23T17:06:06.226Z",
+      "target": "task:HOOK",
+      "from": "running",
+      "to": "done",
+      "note": "scope check vert ; 409 tests",
+      "commit": "46c904080a9605aba9993bf86b5ed9a0ffa72e93"
     }
   ]
 }
