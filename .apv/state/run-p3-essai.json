@@ -7,7 +7,7 @@
   "baseSha": "e9da7390d9362368864027ef2d3ac97479569af2",
   "branch": "apv/p3-essai",
   "createdAt": "2026-09-23T16:55:06.490Z",
-  "updatedAt": "2026-09-23T16:57:46.080Z",
+  "updatedAt": "2026-09-23T17:01:32.015Z",
   "steps": {
     "data-model": {
       "status": "skipped",
@@ -20,9 +20,9 @@
       "updatedAt": "2026-09-23T16:55:35.090Z"
     },
     "integration": {
-      "status": "pending",
-      "note": null,
-      "updatedAt": null
+      "status": "running",
+      "note": "vague 0 et BIN",
+      "updatedAt": "2026-09-23T17:01:03.807Z"
     },
     "reviews": {
       "status": "pending",
@@ -69,14 +69,14 @@
       "title": "Module de résumé des exécutions",
       "dependsOn": [],
       "wave": 0,
-      "status": "running",
+      "status": "done",
       "branch": "apv/p3-essai-summary",
       "worktree": "/home/herbertcodex/apv3-wt/essai-summary",
       "agentId": "implementer-summary",
       "base": "68633cd4feba876bcdb17fca2a71362a5c942805",
-      "commit": null,
-      "note": null,
-      "updatedAt": "2026-09-23T16:55:35.193Z"
+      "commit": "d424c4e5ca833686e071c0b24a8d6a362ed9b0a3",
+      "note": "scope check vert ; 396 tests",
+      "updatedAt": "2026-09-23T17:01:03.754Z"
     },
     "HOOK": {
       "title": "Exécutions en cours au démarrage de session",
@@ -84,27 +84,27 @@
         "SUMMARY"
       ],
       "wave": 1,
-      "status": "pending",
-      "branch": null,
-      "worktree": null,
-      "agentId": null,
-      "base": null,
+      "status": "running",
+      "branch": "apv/p3-essai-hook",
+      "worktree": "/home/herbertcodex/apv3-wt/essai-hook",
+      "agentId": "implementer-hook",
+      "base": "999947476f82b9ebb3975d9f1585f6088eb9029d",
       "commit": null,
       "note": null,
-      "updatedAt": null
+      "updatedAt": "2026-09-23T17:01:32.015Z"
     },
     "BIN": {
       "title": "Exécutable bin/apv",
       "dependsOn": [],
       "wave": 1,
-      "status": "running",
+      "status": "done",
       "branch": "apv/p3-essai-bin",
       "worktree": "/home/herbertcodex/apv3-wt/essai-bin",
       "agentId": "implementer-bin-reprise",
       "base": "68633cd4feba876bcdb17fca2a71362a5c942805",
-      "commit": null,
-      "note": "reprise après interruption simulée depuis 8429f01",
-      "updatedAt": "2026-09-23T16:57:46.080Z"
+      "commit": "f632cb11123da3516b966282765d54f1b6e38b5e",
+      "note": "repris depuis 8429f01 ; scope check vert ; 392 tests",
+      "updatedAt": "2026-09-23T17:00:51.822Z"
     },
     "DOCS": {
       "title": "Documentation à jour",
@@ -191,6 +191,36 @@
       "to": "running",
       "note": "reprise après interruption simulée depuis 8429f01",
       "agentId": "implementer-bin-reprise"
+    },
+    {
+      "at": "2026-09-23T17:00:51.822Z",
+      "target": "task:BIN",
+      "from": "running",
+      "to": "done",
+      "note": "repris depuis 8429f01 ; scope check vert ; 392 tests",
+      "commit": "f632cb11123da3516b966282765d54f1b6e38b5e"
+    },
+    {
+      "at": "2026-09-23T17:01:03.754Z",
+      "target": "task:SUMMARY",
+      "from": "running",
+      "to": "done",
+      "note": "scope check vert ; 396 tests",
+      "commit": "d424c4e5ca833686e071c0b24a8d6a362ed9b0a3"
+    },
+    {
+      "at": "2026-09-23T17:01:03.807Z",
+      "target": "integration",
+      "from": "pending",
+      "to": "running",
+      "note": "vague 0 et BIN"
+    },
+    {
+      "at": "2026-09-23T17:01:32.015Z",
+      "target": "task:HOOK",
+      "from": "pending",
+      "to": "running",
+      "agentId": "implementer-hook"
     }
   ]
 }
