@@ -114,8 +114,7 @@
         "CHANGELOG.md"
       ],
       "dependsOn": [
-        "HOOK",
-        "BIN"
+        "HOOK"
       ],
       "minimumLane": "high"
     }
