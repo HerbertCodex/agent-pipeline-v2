@@ -6,9 +6,10 @@ import { specSchema } from '../lifecycle/contracts.js';
 import { checkSpec, readSpecDocument } from '../spec/check.js';
 import { gitProbe, gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
 import {
-  REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applySet, computeNext, createRunState, listRunFiles, parseTarget,
+  REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applySet, computeNext, createRunState, parseTarget,
   readRunState, runStateFile, summarize, summaryLine, withRunLock, writeRunState, type RunState, type RunStatus, type SetOptions,
 } from '../run/state.js';
+import { readRunSummaries, runSummaryLine, unreadRunsLine } from '../run/summary.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
 
@@ -25,10 +26,13 @@ start   valide la spec (comme apv spec validate, prête à lancer), calcule les 
         dépendances ; vague 0 = fondations, les tâches de la première couche dont d'autres dépendent)
         et crée l'état. <spec> : un identifiant (.apv/specs/<id>.json) ou un chemin. Refuse si l'état
         existe (apv run next). --base : branche de départ (par défaut la branche courante).
-set     <cible> : ${STEPS.join(', ')}, task:<id> ou review:<${REVIEWS.join('|')}>.
-        <statut> : ${STATUSES.join(', ')}. Une tâche ne passe « running » que si ses dépendances sont
-        « done » ; « done » exige --commit pour une tâche (facultatif pour une étape ou une revue : commit qui la porte, ou commit revu). --base : commit de départ de la tâche (reprise).
-        --findings : nombre de constats d'une revue. Rouvrir un travail fait exige --note.
+set     <cible> : ${STEPS.join(', ')},
+        task:<id> ou review:<${REVIEWS.join('|')}>.
+        <statut> : ${STATUSES.join(', ')}. Une tâche ne passe « running »
+        que si ses dépendances sont « done » ; « done » exige --commit pour une tâche (facultatif
+        pour une étape ou une revue : commit qui la porte, ou commit revu). --base : commit de départ
+        de la tâche (reprise). --findings : nombre de constats d'une revue. Rouvrir un travail fait,
+        ou remplacer son commit, exige --note.
 next    ce qu'il faut faire maintenant : étape courante, tâches prêtes, tâches à reprendre ou à
         relancer (worktree absent, aucun commit après la base), revues à lancer.
 status  résumé de toutes les exécutions, ou détail d'une seule.
@@ -82,7 +86,7 @@ async function start(repo: string, cwd: string, positionals: string[], values: {
   if (!check.valid) return refuse(check.issues);
   const spec = specSchema.parse(document.spec);
   const state = await withRunLock(specId, io.env, () => {
-    try { readRunState(file); throw new PipelineError('RUN_EXISTS', `L'exécution ${specId} existe déjà (${relative(repo, file)}) : apv run next ${specId} pour la reprendre`); }
+    try { readRunState(file, { shown: posix(relative(repo, file)), specId }); throw new PipelineError('RUN_EXISTS', `L'exécution ${specId} existe déjà (${relative(repo, file)}) : apv run next ${specId} pour la reprendre`); }
     catch (error) { if (!(error instanceof PipelineError) || error.code !== 'RUN_MISSING') throw error; }
     const created = createRunState({ specId, specFile: posix(relative(repo, path)), specSha256: sha256(bytes), base, baseSha,
       tasks: spec.tasks.map(t => ({ id: t.id, title: t.title, dependsOn: t.dependsOn })) });
@@ -140,7 +144,7 @@ async function set(repo: string, positionals: string[], values: Record<string, s
   }
   const file = runStateFile(repo, specId);
   const result = await withRunLock(specId, io.env, () => {
-    const current = readRunState(file);
+    const current = readRunState(file, { shown: posix(relative(repo, file)), specId });
     const applied = applySet(current, target, opts);
     writeRunState(file, applied.state);
     return applied;
@@ -155,7 +159,8 @@ function next(repo: string, positionals: string[], asJson: boolean, io: CommandI
   const [id, ...rest] = positionals;
   const specId = specIdArg(id);
   if (rest.length) throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
-  const state = readRunState(runStateFile(repo, specId));
+  const file = runStateFile(repo, specId);
+  const state = readRunState(file, { shown: posix(relative(repo, file)), specId });
   const next = computeNext(state, gitProbe(repo));
   // The spec may have been edited since the start: the plan (waves, tasks) no longer matches it.
   const specPath = resolve(repo, state.specFile);
@@ -205,24 +210,17 @@ function status(repo: string, positionals: string[], asJson: boolean, io: Comman
   if (id !== undefined) {
     const specId = specIdArg(id);
     const file = runStateFile(repo, specId);
-    const state = readRunState(file);
+    const state = readRunState(file, { shown: posix(relative(repo, file)), specId });
     if (asJson) { json(io, { summary: summarize(state, posix(relative(repo, file))), state }); return EXIT.ok; }
     io.stdout(`${[...detail(state), `Résumé : ${summaryLine(summarize(state, file))}`].join('\n')}\n`);
     return EXIT.ok;
   }
-  const runs = listRuns(repo);
-  if (asJson) { json(io, { runs }); return EXIT.ok; }
-  io.stdout(runs.length ? `${runs.map(r => `- ${r.error !== null ? `${r.specId} : état illisible (${r.error})` : summaryLine(r)}`).join('\n')}\n` : 'Aucune exécution (.apv/state/run-*.json).\n');
+  // The shared summary: bounded reads (no FIFO, no huge file, a file and byte budget) and cleaned lines.
+  const { entries, unread } = readRunSummaries(repo);
+  if (asJson) { json(io, { runs: entries, unread }); return EXIT.ok; }
+  const lines = [...entries.map(r => `- ${runSummaryLine(r)}`), ...(unread ? [`- ${unreadRunsLine(unread)}`] : [])];
+  io.stdout(lines.length ? `${lines.join('\n')}\n` : 'Aucune exécution (.apv/state/run-*.json).\n');
   return EXIT.ok;
-}
-
-export type RunListing = ReturnType<typeof summarize> | { specId: string; file: string; error: string };
-/** Summaries of every execution of the project; an unreadable state is listed with its error. */
-export function listRuns(repo: string): RunListing[] {
-  return listRunFiles(repo).map(({ specId, file }) => {
-    try { return summarize(readRunState(file), posix(relative(repo, file))); }
-    catch (error) { return { specId, file: posix(relative(repo, file)), error: errorMessage(error) }; }
-  });
 }
 
 export async function run(args: string[], io: CommandIO): Promise<number> {

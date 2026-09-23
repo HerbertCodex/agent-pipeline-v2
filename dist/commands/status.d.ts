@@ -27,8 +27,10 @@ export interface ApvStatus {
         bytes: number;
         modifiedAt: string;
     }[];
-    /** Spec executions (`.apv/state/run-<id>.json`, apv run). */
+    /** Spec executions (`.apv/state/run-<id>.json`, apv run), the most recent ones up to the read bounds. */
     runs: RunSummaryEntry[];
+    /** State files of executions left unread (read bounds reached). */
+    runsUnread: number;
     quota: ReturnType<typeof lastQuotaReading>;
 }
 export declare function apvStatus(repo: string): ApvStatus;

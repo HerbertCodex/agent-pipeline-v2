@@ -243,7 +243,9 @@
         ],
         "verification": "Test de bin/apv avec PATH et dossier courant hostiles.",
         "negativeTests": [
-          "Avec un faux node et un faux dist/cli.js dans le dossier courant et en tête du PATH, bin/apv lance quand même le dist du plugin"
+          "Lancé par node, avec un faux node, un faux apv et un faux dist/cli.js dans le dossier courant et dans le PATH, et CLAUDE_PLUGIN_ROOT, APV_ROOT et NODE_PATH vers eux, bin/apv lance quand même le dist du plugin",
+          "Lancé par son shebang, bin/apv ne tire du PATH que l'interpréteur : avec le vrai node en tête du PATH, de faux exécutables ensuite et un faux dist/cli.js dans le dossier courant, il lance le dist du plugin",
+          "Atteint par un lien symbolique placé à côté d'un faux dist/cli.js, bin/apv lance le dist voisin de son emplacement réel"
         ]
       },
       {
@@ -261,7 +263,9 @@
         ]
       }
     ],
-    "assumptions": [],
+    "assumptions": [
+      "Risque résiduel accepté pour bin/apv : son shebang (#!/usr/bin/env node) prend l'interpréteur dans le PATH, et Node honore NODE_OPTIONS. Un faux node placé en tête du PATH est donc lancé à la place du vrai ; seul le chemin de l'outil (dist/cli.js) ne doit rien au PATH, au dossier courant ni à l'environnement. Qui contrôle le PATH ou l'environnement de la session contrôle déjà git et toute autre commande lancée par Bash ; un chemin absolu d'interpréteur casserait les gestionnaires de versions de Node (nvm et autres)."
+    ],
     "deferred": []
   }
 }
