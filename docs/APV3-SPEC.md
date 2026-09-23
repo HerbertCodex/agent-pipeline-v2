@@ -39,7 +39,8 @@ agent-pipeline-v2/              (branche apv3, version 3.0.0-alpha)
   commands/                     ou skills invocables : /apv:* (section 6)
   workflows/                    scripts de vagues parallèles (section 8)
   hooks/hooks.json              garde-fous et reprise (section 11)
-  tool/                         outil `apv` en TypeScript (section 10)
+  src/                          outil `apv` en TypeScript (section 10)
+  dist/                         outil compilé, versionné (le plugin s'installe sans étape de build)
   docs/                         guides, migration, retour d'expérience
 ```
 
@@ -47,7 +48,9 @@ Installation : `/plugin install` depuis le dépôt GitHub (ou `--plugin-dir` en 
 
 ## 5. Sous-agents
 
-Chaque agent est un fichier `agents/<nom>.md` : description, outils autorisés, modèle, isolement. Effort « high » au minimum (à vérifier : si le champ d'effort n'existe pas dans le format d'agent, la consigne est portée par le corps de l'agent et le modèle choisi).
+Chaque agent est un fichier `agents/<nom>.md` : description, outils autorisés, modèle, isolement, effort. Effort « high » au minimum, porté par le champ `effort` du frontmatter (accepté par le format d'agent de Claude Code, vérifié en phase 1).
+
+Un agent `isolation: worktree` part de la branche par défaut du dépôt, pas de la base de sa tâche : sa consigne lui fait d'abord créer sa branche depuis la base exacte, `git switch -c <branche> <base>`, dans le worktree encore propre. Alternative par projet : `worktree.baseRef: "head"` dans `.claude/settings.json`, le chef de projet lançant alors l'agent depuis la bonne tête.
 
 | Agent | Rôle | Isolement | Écrit du code |
 |---|---|---|---|
@@ -67,7 +70,7 @@ Les rôles de V2 (`roles/*.md`) deviennent le corps de ces agents, sans les cons
 
 | Commande | Effet |
 |---|---|
-| `/apv:init` | Nouveau projet : registre des décisions, `.apv/config`, installation des agents et compétences dans le projet |
+| `/apv:init` | Nouveau projet : registre des décisions, `.apv/config`, installation des agents et compétences dans le projet (phase 3) |
 | `/apv:onboard` | Projet existant : analyse du dépôt, contrôles détectés, registre initial |
 | `/apv:design` | Boucle de maquette par artefact jusqu'à validation ; versionne la maquette validée |
 | `/apv:spec` | Rédige et valide une spec (outil `apv spec validate`, minimum de sécurité recalculé) |
@@ -113,9 +116,9 @@ Extrait de V2, sans le contrôleur :
 - `apv ledger validate|plan|apply` : registre des décisions (toutes les erreurs d'un coup).
 - `apv gates run [--only …]` : exécute les contrôles déclarés (graphe, ressources, environnement transmis) et écrit des reçus.
 - `apv scope check <tâche>` : fichiers modifiés contre les chemins autorisés.
-- `apv lock acquire|release|status <ressource>` : verrous avec bail, propriétaire (pid) vérifié, expiration, file d'attente visible ; remplace le verrou `flock` sans bail (incidents 25 et 28).
-- `apv db check` : contrôle du modèle de données (section 13 bis).
-- `apv quota` : relevé et journal.
+- `apv lock run|acquire|release|status <ressource>` : verrous avec bail, propriétaire (pid) vérifié, expiration, file d'attente visible ; remplace le verrou `flock` sans bail (incidents 25 et 28).
+- `apv db check [--live]` : contrôle du modèle de données (section 13 bis) ; `--live` lit la base en lecture seule par `psql` (`APV_DB_URL`, ou la commande `APV_PSQL`).
+- `apv quota` : relevé et journal (`.apv/state/quota.log`, un objet JSON par ligne, ignoré par Git via `.apv/.gitignore` généré par l'outil).
 - `apv preview update <branche>` : aperçu vivant (section 12), pilotable par projet.
 
 Tests : les suites V2 des parties conservées (contrats, politique, OWASP, preuves, ordonnanceur, inventaire) sont gardées ; les suites du contrôleur sont retirées.
@@ -124,7 +127,7 @@ Tests : les suites V2 des parties conservées (contrats, politique, OWASP, preuv
 
 - `SessionStart` : affiche l'état de reprise (`.apv/state`) et le dernier relevé de quota.
 - `PreToolUse` sur Bash : bloque `git push --force`, la fusion et le déploiement hors commande dédiée, et les commandes qui masquent la sortie d'une écriture externe (incident 30).
-- `PostToolUse` sur les écritures d'un implementer : rappel des chemins autorisés (vérification stricte par `apv scope check` à la fin de la tâche).
+- `PostToolUse` sur les écritures d'un implementer : rappel des chemins autorisés quand une écriture en sort, d'après le marqueur de tâche `.apv/state/task.json` du worktree (vérification stricte par `apv scope check` à la fin de la tâche).
 - `Stop` : enregistre l'état de reprise.
 
 ## 12. Aperçu vivant
@@ -210,13 +213,13 @@ Consulté à trois moments : à la spec (données, base légale, durées, minimi
 |---|---|---|
 | 1. Socle | `plugin.json`, agents (dont `architecte-donnees`), compétence chef-de-projet, `/apv:status`, `/apv:quota`, `/apv:resume`, outil `apv` (spec, ledger, gates, scope, lock, db check), hooks de garde | Le plugin s'installe ; les tests conservés passent ; les verrous expirent ; le hook bloque un force-push ; `apv db check` refuse une table en français, une clé étrangère sans index et une table sans RLS |
 | 2. Design et aperçu | `/apv:design`, `/apv:preview`, compétence design-artefact | Une maquette itérée et validée est versionnée ; l'aperçu se met à jour sur une branche |
-| 3. Exécution | `/apv:spec`, `/apv:run` avec workflows, intégrateur, revues, `/apv:stack` | Une spec réelle est livrée en PR avec vagues parallèles, revues et reprise après interruption simulée |
+| 3. Exécution | `/apv:init`, `/apv:spec`, `/apv:run` avec workflows, intégrateur, revues, `/apv:stack` | Une spec réelle est livrée en PR avec vagues parallèles, revues et reprise après interruption simulée |
 | 4. RGPD et migration | agent `dpo`, compétence `rgpd`, `/apv:onboard` depuis V2 | « Toujours rien » tourne sous APV3 ; ses pages légales passent la revue du DPO |
 
 Chaque phase est livrée en PR à fusionner par l'opérateur.
 
 ## 16. Points ouverts
 
-- Champ d'effort dans le format d'agent (à vérifier sur la documentation officielle au moment de la phase 1).
+- ~~Champ d'effort dans le format d'agent~~ : fermé en phase 1, le champ `effort` est accepté dans le frontmatter des agents ; les 9 agents le fixent à `high` au minimum.
 - Base de test par agent : schémas dédiés ou piles séparées selon la stack (Supabase : une pile par agent coûte cher en mémoire ; alternative : schéma par worktree).
 - Hors de Claude Code (Codex, autres fournisseurs) : non couvert par V3 ; V2 reste disponible par ses tags.
