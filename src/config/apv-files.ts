@@ -20,12 +20,18 @@ const HEADER = '# Généré par apv : fichiers machine de .apv/, jamais versionn
  * `apv gates run` does not call it: a gate may check that the tree is clean, and its receipts ignore
  * themselves (`receipts/.gitignore`). Lines the project added are kept. Returns true when it wrote.
  */
+/** Ignored lines `.apv/.gitignore` lacks (all of them when the file is absent); reads only. */
+export function apvGitignoreMissing(repo: string): string[] {
+  const file = join(repo, APV_DIR, '.gitignore');
+  const present = new Set((existsSync(file) ? readFileSync(file, 'utf8') : '').split(/\r?\n/).map(l => l.trim()));
+  return APV_IGNORED.filter(line => !present.has(line));
+}
+
 export function ensureApvGitignore(repo: string): boolean {
   const dir = join(repo, APV_DIR);
   const file = join(dir, '.gitignore');
   const current = existsSync(file) ? readFileSync(file, 'utf8') : null;
-  const present = new Set((current ?? '').split(/\r?\n/).map(l => l.trim()));
-  const missing = APV_IGNORED.filter(line => !present.has(line));
+  const missing = apvGitignoreMissing(repo);
   if (current !== null && !missing.length) return false;
   mkdirSync(dir, { recursive: true });
   if (current === null) writeFileSync(file, `${HEADER}\n${missing.join('\n')}\n`);

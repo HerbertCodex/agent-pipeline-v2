@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { APV_DIR, ensureApvGitignore } from '../config/apv-files.js';
+import { APV_DIR, apvGitignoreMissing, ensureApvGitignore } from '../config/apv-files.js';
 import { CONFIG_FILE } from '../config/load.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { LEDGER_FILE } from '../lifecycle/decisions.js';
@@ -26,46 +26,80 @@ export function briefFromTemplate(template, name) {
     const body = open >= 0 && close > open ? template.slice(open + '```markdown\n'.length, close) : template;
     return `${body.replaceAll('<nom du projet>', name).trimEnd()}\n`;
 }
-export function initProject(repo, name, pluginRoot = PLUGIN_ROOT) {
+/** Reads the brief model shipped with the plugin; refused before anything is written. */
+export function readBriefTemplate(pluginRoot = PLUGIN_ROOT) {
     const templateFile = join(pluginRoot, BRIEF_TEMPLATE);
-    let template;
     try {
-        template = readFileSync(templateFile, 'utf8');
+        return readFileSync(templateFile, 'utf8');
     }
     catch (error) {
         throw new PipelineError('INIT_TEMPLATE', `Modèle de consigne introuvable (${templateFile}) : ${errorMessage(error)}`);
     }
-    const result = { repo, name, created: [], existing: [], completed: [] };
-    const dir = (path) => {
-        const full = join(repo, path);
-        if (existsSync(full))
-            result.existing.push(`${path}/`);
-        else {
-            mkdirSync(full, { recursive: true });
-            result.created.push(`${path}/`);
-        }
-    };
-    const file = (path, content) => {
-        const full = join(repo, path);
+}
+/**
+ * Creates what `.apv/` lacks, never replacing an existing file, and records what it did. With `dryRun`, the
+ * same decisions are taken and recorded, but nothing is written. Shared by `apv init` and `apv onboard`.
+ */
+export class ApvWriter {
+    repo;
+    dryRun;
+    created = [];
+    existing = [];
+    completed = [];
+    constructor(repo, dryRun = false) {
+        this.repo = repo;
+        this.dryRun = dryRun;
+    }
+    dir(path) {
+        const full = join(this.repo, path);
         if (existsSync(full)) {
-            result.existing.push(path);
+            this.existing.push(`${path}/`);
             return;
         }
-        // 'wx': never replaces a file that appeared meanwhile.
-        writeFileSync(full, content(), { flag: 'wx' });
-        result.created.push(path);
-    };
-    dir(APV_DIR);
-    file(CONFIG_FILE, () => `${JSON.stringify({ name, gates: [] }, null, 2)}\n`);
-    file(LEDGER_FILE, () => `${JSON.stringify({ schemaVersion: 1, decisions: [] }, null, 2)}\n`);
-    file(`${APV_DIR}/brief.md`, () => briefFromTemplate(template, name));
-    dir(`${APV_DIR}/specs`);
-    dir(`${APV_DIR}/state`);
-    const ignore = `${APV_DIR}/.gitignore`;
-    const had = existsSync(join(repo, ignore));
-    const wrote = ensureApvGitignore(repo);
-    (had ? (wrote ? result.completed : result.existing) : result.created).push(ignore);
-    return result;
+        if (!this.dryRun)
+            mkdirSync(full, { recursive: true });
+        this.created.push(`${path}/`);
+    }
+    /** Writes `content()` unless the file exists; returns true when the file is (or would be) created. */
+    file(path, content) {
+        const full = join(this.repo, path);
+        if (existsSync(full)) {
+            this.existing.push(path);
+            return false;
+        }
+        const text = content();
+        if (!this.dryRun) {
+            mkdirSync(dirname(full), { recursive: true });
+            // 'wx': never replaces a file that appeared meanwhile.
+            writeFileSync(full, text, { flag: 'wx' });
+        }
+        this.created.push(path);
+        return true;
+    }
+    gitignore() {
+        const ignore = `${APV_DIR}/.gitignore`;
+        const had = existsSync(join(this.repo, ignore));
+        const writes = this.dryRun ? apvGitignoreMissing(this.repo).length > 0 : ensureApvGitignore(this.repo);
+        (had ? (writes ? this.completed : this.existing) : this.created).push(ignore);
+    }
+}
+/** Writes the `.apv/` skeleton in a fixed order: directory, configuration, ledger, brief, specs, state, .gitignore. */
+export function writeApvSkeleton(writer, name, template, content = {}) {
+    writer.dir(APV_DIR);
+    writer.file(CONFIG_FILE, content.config ?? (() => `${JSON.stringify({ name, gates: [] }, null, 2)}\n`));
+    for (const entry of content.ledger ?? [{ path: LEDGER_FILE, content: () => `${JSON.stringify({ schemaVersion: 1, decisions: [] }, null, 2)}\n` }]) {
+        writer.file(entry.path, entry.content);
+    }
+    writer.file(`${APV_DIR}/brief.md`, () => briefFromTemplate(template, name));
+    writer.dir(`${APV_DIR}/specs`);
+    writer.dir(`${APV_DIR}/state`);
+    writer.gitignore();
+}
+export function initProject(repo, name, pluginRoot = PLUGIN_ROOT) {
+    const template = readBriefTemplate(pluginRoot);
+    const writer = new ApvWriter(repo);
+    writeApvSkeleton(writer, name, template);
+    return { repo, name, created: writer.created, existing: writer.existing, completed: writer.completed };
 }
 export async function run(args, io) {
     return guard(io, usage, async () => {
