@@ -98,7 +98,7 @@ Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 
 **`set`** change le statut d'une cible : une étape (`data-model`, `plan`, `integration`, `reviews`, `fixes`, `delivery`), `task:<id>` ou `review:<domaine>` (`securite`, `fidelite`, `donnees`, `rgpd`), et ajoute un événement horodaté. Règles :
 - passages permis : `pending` vers `running`, `done`, `skipped`, `failed` ; `running` vers `done`, `failed`, `pending`, `skipped` ; `failed` vers `pending`, `running`, `skipped` ; `skipped` vers `pending`, `running` ; `done` vers `running`, `pending`. Garder le même statut met seulement à jour les champs (nouveau commit wip, autre agent) ;
-- rouvrir un travail `done` exige `--note` (la raison est journalisée) ;
+- rouvrir un travail `done`, ou remplacer le commit enregistré d'une cible `done`, exige `--note` (la raison est journalisée) ;
 - une tâche ne passe `running` que si toutes ses dépendances sont `done` ;
 - une tâche `done` exige `--commit` ; le commit (sha ou nom de branche) doit exister dans le dépôt et il est enregistré en entier ;
 - `--branch`, `--worktree` (chemin rendu absolu), `--agent` et `--base` (commit de départ de la tâche, pour la reprise) ne valent que pour une tâche ; `--findings` (nombre de constats) que pour une revue ; `--commit` vaut pour toute cible (facultatif sur une étape : commit du plan, tête intégrée ; sur une revue : commit revu), et reste vérifié dans le dépôt.
@@ -110,7 +110,7 @@ Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 - Tâches en échec, tâches bloquées (dépendances attendues), revues à lancer (`pending` ou `failed`, une fois les tâches finies et l'intégration faite) et revues en cours.
 - `specChanged` : la spec a changé depuis `start` (empreinte différente) ; l'état garde le plan du lancement, l'action le signale.
 
-**`status`** résume toutes les exécutions (étape, tâches faites sur le total, en cours, en échec, date) ou détaille une exécution (étapes, vagues avec l'état de chaque tâche, revues, dernier événement). Un état illisible est signalé, jamais réécrit.
+**`status`** résume toutes les exécutions (étape, tâches faites sur le total, en cours, en échec, date) ou détaille une exécution (étapes, vagues avec l'état de chaque tâche, revues, dernier événement). Un état illisible est signalé, jamais réécrit ; un état dont l'identifiant de spec diffère du nom de son fichier est refusé. Le résumé est celui de `apv status` : 50 fichiers au plus, les plus récents, et 16 Mio au total, les autres comptés (`unread` en JSON).
 
 Sortie : `0` succès, `1` refus (spec invalide, état déjà présent ou absent, transition refusée, commit introuvable, état illisible, verrou non obtenu), `2` appel incorrect (cible ou statut inconnu, option sans effet).
 
@@ -289,7 +289,7 @@ Sortie : `0` succès (pour `status` : aperçu en marche), `1` échec ou aperçu 
 apv status [--repo <chemin>] [--json]
 ```
 
-Résumé de l'état du projet : fichier de configuration (et format V2 le cas échéant), contrôles déclarés, registre des décisions (nombre de décisions et empreinte, ou nombre d'erreurs), specs de `.apv/specs/` (titre ou erreur de lecture), fichiers d'état de `.apv/state/` (taille et date), une ligne par exécution en cours (`apv run` : étape, tâches faites, en cours, en échec ; un état illisible est signalé), dernier relevé de `.apv/state/quota.log`. En JSON, `runs` liste toutes les exécutions, terminées comprises. La commande ne modifie rien et sort toujours avec `0`, sauf appel incorrect.
+Résumé de l'état du projet : fichier de configuration (et format V2 le cas échéant), contrôles déclarés, registre des décisions (nombre de décisions et empreinte, ou nombre d'erreurs), specs de `.apv/specs/` (titre ou erreur de lecture), fichiers d'état de `.apv/state/` (taille et date), une ligne par exécution en cours (`apv run` : étape, tâches faites, en cours, en échec ; un état illisible est signalé), dernier relevé de `.apv/state/quota.log`. En JSON, `runs` liste les exécutions lues, terminées comprises, et `runsUnread` le nombre de fichiers d'état laissés de côté (50 fichiers et 16 Mio au plus, les plus récents d'abord). Les noms de fichiers, titres et erreurs affichés sont nettoyés (une ligne, sans séquence d'échappement ni caractère de contrôle). La commande ne modifie rien et sort toujours avec `0`, sauf appel incorrect.
 
 ## `apv help`
 
