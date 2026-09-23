@@ -34,10 +34,20 @@ export function findApvDir(input, env = process.env) {
   return null;
 }
 
-/** Collapses whitespace and bounds a value so it fits on one journal or context line. */
+// Same patterns as cleanLine of the tool (src/run/summary.ts): the hooks must run without the compiled dist.
+// Escape sequences (CSI, OSC, then any other two-character escape) are removed whole.
+const ANSI = /\u001b\[[0-?]*[ -\/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b[@-_]?/g;
+// Control (C0, DEL, C1), format (bidirectional overrides, zero width, BOM) and line or paragraph separators.
+const UNSAFE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+
+/**
+ * Text read on disk or received as one journal or context line: escape sequences removed, control and
+ * format characters replaced by spaces, whitespace collapsed, at most `max` characters (code points).
+ */
 export function oneLine(value, max = 200) {
-  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  const text = String(value ?? '').replace(ANSI, ' ').replace(UNSAFE, ' ').replace(/\s+/g, ' ').trim();
+  const chars = Array.from(text);
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : text;
 }
 
 /**
