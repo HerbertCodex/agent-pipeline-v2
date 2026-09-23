@@ -5,6 +5,19 @@ import { type Infer } from '../domain/schema.js';
  */
 export declare const previewCommandSchema: import("../domain/schema.js").Schema<string | string[]>;
 export type PreviewCommand = Infer<typeof previewCommandSchema>;
+/** Default longest run of one step, in seconds (`timeoutSec` of the step overrides it). */
+export declare const DEFAULT_STEP_TIMEOUT_SEC = 900;
+/** A step: a command, or `{ command, timeoutSec }` to change its longest run (default 900 s). */
+export declare const previewStepSchema: import("../domain/schema.js").Schema<string | string[] | {
+    readonly command: string | string[];
+    readonly timeoutSec: number;
+}>;
+export type PreviewStep = Infer<typeof previewStepSchema>;
+/** Command and longest run of a step, whatever its form. */
+export declare function stepSpec(step: PreviewStep): {
+    command: PreviewCommand;
+    timeoutSec: number;
+};
 /** The build steps, run in this order in the fresh copy of the branch. */
 export declare const STEP_NAMES: readonly ["install", "migrate", "build", "seed"];
 export type StepName = typeof STEP_NAMES[number];
@@ -13,10 +26,10 @@ export declare const previewSchema: import("../domain/schema.js").Schema<{
     readonly dir: string | undefined;
     readonly envFile: string | undefined;
     readonly steps: {
-        install: PreviewCommand | undefined;
-        migrate: PreviewCommand | undefined;
-        build: PreviewCommand | undefined;
-        seed: PreviewCommand | undefined;
+        install: PreviewStep | undefined;
+        migrate: PreviewStep | undefined;
+        build: PreviewStep | undefined;
+        seed: PreviewStep | undefined;
     };
     readonly serve: {
         readonly command: string | string[];
@@ -34,7 +47,7 @@ export declare const previewSchema: import("../domain/schema.js").Schema<{
 }>;
 export type PreviewConfig = Infer<typeof previewSchema>;
 export declare const DEFAULT_BRANCH = "main";
-/** Project name used in the default directory: the repository folder name, made file-safe. */
+/** Project name used in the default directory and the lock name: the repository folder name, made file-safe. */
 export declare function projectName(repo: string): string;
 export declare function defaultPreviewDir(repo: string, env: NodeJS.ProcessEnv): string;
 /**

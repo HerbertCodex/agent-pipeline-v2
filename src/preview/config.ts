@@ -12,6 +12,21 @@ import { ENV_NAME } from './env.js';
 export const previewCommandSchema = s.union(s.string(1, 10000), s.array(s.string(1, 10000), 1, 200));
 export type PreviewCommand = Infer<typeof previewCommandSchema>;
 
+/** Default longest run of one step, in seconds (`timeoutSec` of the step overrides it). */
+export const DEFAULT_STEP_TIMEOUT_SEC = 900;
+
+/** A step: a command, or `{ command, timeoutSec }` to change its longest run (default 900 s). */
+export const previewStepSchema = s.union(previewCommandSchema, s.object({
+  command: previewCommandSchema,
+  timeoutSec: s.default(s.number(1, 86_400), DEFAULT_STEP_TIMEOUT_SEC),
+}));
+export type PreviewStep = Infer<typeof previewStepSchema>;
+
+/** Command and longest run of a step, whatever its form. */
+export function stepSpec(step: PreviewStep): { command: PreviewCommand; timeoutSec: number } {
+  return typeof step === 'string' || Array.isArray(step) ? { command: step, timeoutSec: DEFAULT_STEP_TIMEOUT_SEC } : step;
+}
+
 /** The build steps, run in this order in the fresh copy of the branch. */
 export const STEP_NAMES = ['install', 'migrate', 'build', 'seed'] as const;
 export type StepName = typeof STEP_NAMES[number];
@@ -24,11 +39,11 @@ export const previewSchema = s.object({
   /** Env file loaded for every step and for the server; its values are never printed. */
   envFile: s.optional(s.string(1, 4096)),
   steps: s.default(s.object({
-    install: s.optional(previewCommandSchema),
-    migrate: s.optional(previewCommandSchema),
-    build: s.optional(previewCommandSchema),
-    seed: s.optional(previewCommandSchema),
-  }), {} as { install: PreviewCommand | undefined; migrate: PreviewCommand | undefined; build: PreviewCommand | undefined; seed: PreviewCommand | undefined }),
+    install: s.optional(previewStepSchema),
+    migrate: s.optional(previewStepSchema),
+    build: s.optional(previewStepSchema),
+    seed: s.optional(previewStepSchema),
+  }), {} as { install: PreviewStep | undefined; migrate: PreviewStep | undefined; build: PreviewStep | undefined; seed: PreviewStep | undefined }),
   serve: s.object({
     command: previewCommandSchema,
     port: s.number(1, 65535),
@@ -45,7 +60,7 @@ export type PreviewConfig = Infer<typeof previewSchema>;
 
 export const DEFAULT_BRANCH = 'main';
 
-/** Project name used in the default directory: the repository folder name, made file-safe. */
+/** Project name used in the default directory and the lock name: the repository folder name, made file-safe. */
 export function projectName(repo: string): string {
   return basename(repo).replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '_') || 'projet';
 }

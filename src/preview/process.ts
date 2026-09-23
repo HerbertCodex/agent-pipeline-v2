@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { closeSync, openSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, fchmodSync, openSync, readdirSync, readFileSync } from 'node:fs';
 import { connect, createServer } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { PipelineError } from '../domain/errors.js';
@@ -20,25 +20,51 @@ export function describeCommand(command: PreviewCommand): string {
   return typeof command === 'string' ? command : command.map(a => (/^[\w./:=@%+,-]+$/.test(a) ? a : JSON.stringify(a))).join(' ');
 }
 
+/** Grace between SIGTERM and SIGKILL when a step runs out of time. */
+const STEP_KILL_GRACE_MS = 5000;
+/** Signals forwarded to a running step: it has its own process group and no longer gets them from the terminal. */
+const FORWARDED: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+
+export interface StepResult { status: number | null; signal: NodeJS.Signals | null; error?: string; timedOut?: boolean }
+
 /**
  * Runs one step to completion, output streamed to `onOutput` (stdout and stderr interleaved).
+ * The step runs in its own process group: past `timeoutMs` (0: no limit) the whole group gets SIGTERM,
+ * then SIGKILL, so no grandchild (npm, npx, docker client) keeps working in the copy. A signal that
+ * reaches apv (Ctrl+C) is passed on to the group before apv stops.
  * Resolves with the exit status (null when killed by a signal, -1 when the command cannot start).
  */
-export function runStep(args: string[], cwd: string, env: NodeJS.ProcessEnv, onOutput: (s: string) => void):
-  Promise<{ status: number | null; signal: NodeJS.Signals | null; error?: string }> {
+export function runStep(args: string[], cwd: string, env: NodeJS.ProcessEnv, onOutput: (s: string) => void, timeoutMs = 0): Promise<StepResult> {
   return new Promise((resolve) => {
     const [file, ...rest] = args;
     if (!file) { resolve({ status: -1, signal: null, error: 'commande vide' }); return; }
-    const child = spawn(file, rest, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(file, rest, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let done = false;
+    let timedOut = false;
     let exit: { status: number | null; signal: NodeJS.Signals | null } | null = null;
     let grace: NodeJS.Timeout | null = null;
-    const finish = (value: { status: number | null; signal: NodeJS.Signals | null; error?: string }) => {
+    let kill: NodeJS.Timeout | null = null;
+    const timer = timeoutMs > 0 ? setTimeout(() => {
+      timedOut = true;
+      if (child.pid) signalGroup(child.pid, 'SIGTERM');
+      kill = setTimeout(() => { if (child.pid) signalGroup(child.pid, 'SIGKILL'); }, STEP_KILL_GRACE_MS);
+    }, timeoutMs) : null;
+    const forward = (signal: NodeJS.Signals) => {
+      if (child.pid) signalGroup(child.pid, signal);
+      detach();
+      process.kill(process.pid, signal);
+    };
+    const detach = () => { for (const signal of FORWARDED) process.removeListener(signal, forward); };
+    for (const signal of FORWARDED) process.once(signal, forward);
+    const finish = (value: StepResult) => {
       if (done) return;
       done = true;
-      if (grace) clearTimeout(grace);
+      for (const t of [grace, timer, kill]) if (t) clearTimeout(t);
+      detach();
+      // Out of time: nothing of the group survives, even a grandchild that ignored SIGTERM.
+      if (timedOut && child.pid && groupAlive(child.pid)) signalGroup(child.pid, 'SIGKILL');
       child.stdout?.destroy(); child.stderr?.destroy();
-      resolve(value);
+      resolve(timedOut ? { ...value, timedOut: true } : value);
     };
     child.stdout.setEncoding('utf8').on('data', onOutput);
     child.stderr.setEncoding('utf8').on('data', onOutput);
@@ -51,13 +77,17 @@ export function runStep(args: string[], cwd: string, env: NodeJS.ProcessEnv, onO
   });
 }
 
-/** Starts the server detached, in its own process group, stdout and stderr appended to `logFile`. */
+/**
+ * Starts the server detached, in its own process group, stdout and stderr appended to `logFile`.
+ * The server writes the log itself, unmasked: the file is created, or narrowed, to mode 600.
+ */
 export function startDetached(args: string[], cwd: string, env: NodeJS.ProcessEnv, logFile: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const [file, ...rest] = args;
     if (!file) { reject(new PipelineError('PREVIEW_SERVE', 'commande du serveur vide')); return; }
-    const fd = openSync(logFile, 'a');
+    const fd = openSync(logFile, 'a', 0o600);
     try {
+      fchmodSync(fd, 0o600);
       const child = spawn(file, rest, { cwd, env, detached: true, stdio: ['ignore', fd, fd] });
       child.once('error', (error) => reject(new PipelineError('PREVIEW_SERVE', `Impossible de lancer le serveur : ${error.message}`)));
       child.once('spawn', () => { child.unref(); resolve(child.pid!); });

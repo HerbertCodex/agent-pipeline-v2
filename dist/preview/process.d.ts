@@ -3,16 +3,24 @@ import type { PreviewCommand } from './config.js';
 export declare function argv(command: PreviewCommand, env: NodeJS.ProcessEnv, where: string): string[];
 /** Human form of a command, for logs (redacted by the caller). */
 export declare function describeCommand(command: PreviewCommand): string;
-/**
- * Runs one step to completion, output streamed to `onOutput` (stdout and stderr interleaved).
- * Resolves with the exit status (null when killed by a signal, -1 when the command cannot start).
- */
-export declare function runStep(args: string[], cwd: string, env: NodeJS.ProcessEnv, onOutput: (s: string) => void): Promise<{
+export interface StepResult {
     status: number | null;
     signal: NodeJS.Signals | null;
     error?: string;
-}>;
-/** Starts the server detached, in its own process group, stdout and stderr appended to `logFile`. */
+    timedOut?: boolean;
+}
+/**
+ * Runs one step to completion, output streamed to `onOutput` (stdout and stderr interleaved).
+ * The step runs in its own process group: past `timeoutMs` (0: no limit) the whole group gets SIGTERM,
+ * then SIGKILL, so no grandchild (npm, npx, docker client) keeps working in the copy. A signal that
+ * reaches apv (Ctrl+C) is passed on to the group before apv stops.
+ * Resolves with the exit status (null when killed by a signal, -1 when the command cannot start).
+ */
+export declare function runStep(args: string[], cwd: string, env: NodeJS.ProcessEnv, onOutput: (s: string) => void, timeoutMs?: number): Promise<StepResult>;
+/**
+ * Starts the server detached, in its own process group, stdout and stderr appended to `logFile`.
+ * The server writes the log itself, unmasked: the file is created, or narrowed, to mode 600.
+ */
 export declare function startDetached(args: string[], cwd: string, env: NodeJS.ProcessEnv, logFile: string): Promise<number>;
 /** Linux `/proc/<pid>/stat`: start time (to detect a reused pid) and state (Z for a zombie). */
 export declare function procStat(pid: number): {

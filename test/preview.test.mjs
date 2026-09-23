@@ -11,6 +11,8 @@ import { s } from '../dist/domain/schema.js';
 import { Redactor, RedactingWriter, expandVars, parseEnvFile } from '../dist/preview/env.js';
 import { previewSchema, resolvePreviewDir } from '../dist/preview/config.js';
 import { configIssues } from '../dist/config/load.js';
+import { previewLock } from '../dist/preview/service.js';
+import { statSync } from 'node:fs';
 import { LockStore } from '../dist/lock/store.js';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
@@ -99,7 +101,7 @@ async function project(t, overrides = {}) {
   const env = {
     ...process.env, APV_LOCK_DIR: join(root, 'locks'), APV_LOCK_POLL_MS: '20', APV_LOCK_HELD: '', XDG_STATE_HOME: join(root, 'state'),
   };
-  const p = { root, repo, port, envFile, env, dir: preview.dir, lockFile: join(root, 'locks', 'preview.lock') };
+  const p = { root, repo, port, envFile, env, dir: preview.dir, lockFile: join(root, 'locks', 'preview_repo.lock') };
   t.after(async () => {
     await apv(p, ['preview', 'stop']);
     rmSync(root, { recursive: true, force: true });
@@ -229,8 +231,9 @@ test('env file values are masked in logs and output, and reach steps and server'
   assert.ok(!updateLog.includes(SECRET));
   assert.match(updateLog, /seed avec la clé \[masqué:API_SECRET_KEY\]/);
   assert.match(updateLog, /build-shell-ok/);
-  assert.match(updateLog, /étape install : \[masqué:NODE_BIN\] scripts\/install\.mjs/, 'le chemin long de l\'env est masqué aussi');
+  assert.match(updateLog, /étape install \(délai 900 s\) : \[masqué:NODE_BIN\] scripts\/install\.mjs/, 'le chemin long de l\'env est masqué aussi');
   assert.ok(!updateLog.includes(process.execPath));
+  assert.equal(statSync(join(p.repo, '.apv', 'state', 'preview.log')).mode & 0o777, 0o600, 'journal du serveur non masqué : lisible par son seul propriétaire');
   const logs = await apv(p, ['preview', 'logs']);
   assert.equal(logs.code, 0, logs.stderr);
   assert.match(logs.stdout, /démarrage, clé \[masqué:API_SECRET_KEY\]/);
@@ -315,6 +318,12 @@ test('preview configuration schema', () => {
   assert.throws(() => previewSchema.parse({ serve: { command: 'x', port: 70000 } }), /port/);
   assert.throws(() => previewSchema.parse({ serve: { command: 'x', port: 1, env: { 'MAUVAIS-NOM': 'x' } } }), /invalid key/);
   assert.throws(() => previewSchema.parse({ serve: { command: 'x', port: 1 }, steps: { deploy: 'x' } }), /unknown property deploy/);
+  const timed = previewSchema.parse({ serve: { command: 'x', port: 1 }, steps: { install: 'npm ci', migrate: { command: ['sh', '-c', 'x'], timeoutSec: 1800 }, seed: { command: 'y' } } });
+  assert.equal(timed.steps.install, 'npm ci');
+  assert.deepEqual(timed.steps.migrate, { command: ['sh', '-c', 'x'], timeoutSec: 1800 });
+  assert.deepEqual(timed.steps.seed, { command: 'y', timeoutSec: 900 });
+  assert.throws(() => previewSchema.parse({ serve: { command: 'x', port: 1 }, steps: { build: { command: 'x', timeoutSec: 0 } } }), /timeoutSec/);
+  assert.throws(() => previewSchema.parse({ serve: { command: 'x', port: 1 }, steps: { build: { timeoutSec: 10 } } }), /command/);
   assert.throws(() => previewSchema.parse({ serve: { command: 'x', port: 1 }, health: { path: 'sans-barre' } }), /health\.path/);
   const { issues } = configIssues({ preview: { serve: { port: 1 } } });
   assert.match(issues.map(i => i.message).join('\n'), /preview\.serve\.command/);
@@ -361,15 +370,52 @@ test('a server that dies before answering is reported with its log; a held lock 
 
   rmSync(p.dir, { recursive: true, force: true });
   const store = new LockStore(join(p.root, 'locks'), { pollMs: 20 });
-  const held = await store.acquire('preview', { owner: { pid: process.pid, host: store.host, label: 'autre-agent' }, ttlSeconds: 60, waitSeconds: 1 });
+  const held = await store.acquire('preview:repo', { owner: { pid: process.pid, host: store.host, label: 'autre-agent' }, ttlSeconds: 60, waitSeconds: 1 });
   assert.ok(held.ok);
   try {
     const waited = await apv(p, ['preview', 'update', '--wait', '1']);
     assert.equal(waited.code, 1);
-    assert.match(waited.stderr, /Verrou « preview » non obtenu après 1 s : tenu par autre-agent/);
+    assert.match(waited.stderr, /Verrou « preview:repo » non obtenu après 1 s : tenu par autre-agent/);
     assert.equal(existsSync(p.dir), false, 'rien n\'est lancé sans le verrou');
   } finally {
     // Released here: the project cleanup (apv preview stop) takes the same lock.
-    await store.release('preview', { token: held.record.token });
+    await store.release('preview:repo', { token: held.record.token });
   }
+});
+
+test('a step that runs out of time is stopped with its whole process group', async (t) => {
+  const p = await project(t, { steps: {
+    // The step starts a grandchild that ignores nothing and would outlive a plain kill of the shell.
+    build: { command: ['${NODE_BIN}', '-e', "const { spawn } = require('node:child_process'); const c = spawn(process.execPath, ['-e', 'require(\\'node:fs\\').writeFileSync(\\'grandchild.pid\\', String(process.pid)); setInterval(() => {}, 1000)'], { stdio: 'ignore' }); console.log('en cours'); setInterval(() => {}, 1000)"], timeoutSec: 2 },
+  } });
+  const started = Date.now();
+  const failed = await apv(p, ['preview', 'update']);
+  assert.equal(failed.code, 1);
+  assert.match(failed.stderr, /Échec de l'étape « build ».*délai de 2 s dépassé, étape arrêtée/);
+  assert.match(failed.stderr, /en cours/);
+  assert.ok(Date.now() - started < 30_000, 'l\'étape ne bloque pas au-delà de son délai');
+  const pid = Number(readFileSync(join(p.dir, 'grandchild.pid'), 'utf8'));
+  assert.equal(alive(pid), false, 'le petit-enfant est arrêté avec le groupe');
+  assert.equal(existsSync(p.lockFile), false, 'verrou libéré');
+  assert.match(readFileSync(join(p.repo, '.apv', 'state', 'preview-update.log'), 'utf8'), /étape build \(délai 2 s\)/);
+});
+
+test('the preview lock is per project, shared by the worktrees of a project', async (t) => {
+  const p = await project(t);
+  assert.equal(previewLock(p.repo), 'preview:repo');
+  const wt = join(p.root, 'autre-arbre');
+  git(p.repo, 'worktree', 'add', '-q', wt);
+  assert.equal(previewLock(wt), 'preview:repo');
+  const plain = mkdtempSync(join(tmpdir(), 'apv-preview-plain-'));
+  t.after(() => rmSync(plain, { recursive: true, force: true }));
+  assert.match(previewLock(plain), /^preview:apv-preview-plain-/);
+
+  // Another project updates while this one holds its lock.
+  const store = new LockStore(join(p.root, 'locks'), { pollMs: 20 });
+  const held = await store.acquire('preview:ailleurs', { owner: { pid: process.pid, host: store.host, label: 'autre-projet' }, ttlSeconds: 60, waitSeconds: 1 });
+  assert.ok(held.ok);
+  try {
+    const up = await apv(p, ['preview', 'update', '--wait', '1']);
+    assert.equal(up.code, 0, up.stderr);
+  } finally { await store.release('preview:ailleurs', { token: held.record.token }); }
 });

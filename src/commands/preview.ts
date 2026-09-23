@@ -15,9 +15,9 @@ export const usage = `Utilisation :
 Aperçu vivant du projet (section « preview » de .apv/config.json, voir docs/PREVIEW.md).
   update  arrête le serveur d'aperçu, copie la branche (git archive, jamais l'arbre de travail) dans
           un dossier neuf, lance install, migrate, build et seed, démarre le serveur détaché et attend
-          sa réponse. Branche par défaut : « preview.branch », sinon ${DEFAULT_BRANCH}. Sous le verrou « preview ».
+          sa réponse. Branche par défaut : « preview.branch », sinon ${DEFAULT_BRANCH}. Sous le verrou « preview:<projet> ».
   status  en marche ou non (processus vivant et réponse du contrôle de santé), adresse, branche, commit, durée.
-  stop    arrête le serveur d'aperçu (tout son groupe de processus). Sous le verrou « preview ».
+  stop    arrête le serveur d'aperçu (tout son groupe de processus). Sous le verrou « preview:<projet> ».
   logs    dernières lignes du journal du serveur (--update : journal de la dernière mise à jour),
           valeurs du fichier d'environnement masquées.
 Un port occupé par un processus qui n'est pas l'aperçu n'est jamais libéré de force : update refuse.

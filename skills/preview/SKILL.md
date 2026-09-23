@@ -24,7 +24,7 @@ Configuration : section `preview` de `.apv/config.json` (dossier de la copie, é
 |---|---|
 | `apv preview update [branche]` | reconstruit l'aperçu sur la branche (par défaut celle de la configuration), puis attend qu'il réponde |
 | `apv preview status` | branche et commit servis, adresse, état du serveur |
-| `apv preview logs` | journal du serveur et de la dernière mise à jour |
+| `apv preview logs` | journal du serveur et de la dernière mise à jour, valeurs du fichier d'environnement masquées ; ne recopie jamais `.apv/state/preview.log` lui-même, qui n'est pas masqué |
 | `apv preview stop` | arrête l'aperçu **de ce projet** |
 
 Déroulé :

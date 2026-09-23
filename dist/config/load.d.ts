@@ -53,10 +53,10 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly dir: string | undefined;
         readonly envFile: string | undefined;
         readonly steps: {
-            install: import("../preview/config.js").PreviewCommand | undefined;
-            migrate: import("../preview/config.js").PreviewCommand | undefined;
-            build: import("../preview/config.js").PreviewCommand | undefined;
-            seed: import("../preview/config.js").PreviewCommand | undefined;
+            install: import("../preview/config.js").PreviewStep | undefined;
+            migrate: import("../preview/config.js").PreviewStep | undefined;
+            build: import("../preview/config.js").PreviewStep | undefined;
+            seed: import("../preview/config.js").PreviewStep | undefined;
         };
         readonly serve: {
             readonly command: string | string[];

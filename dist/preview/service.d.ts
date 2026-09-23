@@ -1,8 +1,12 @@
 import { DEFAULT_BRANCH, type PreviewConfig } from './config.js';
 import { Redactor } from './env.js';
 import { type PreviewState } from './state.js';
-/** Name of the lease lock taken by `update` and `stop` (docs/LOCKS.md). */
-export declare const PREVIEW_LOCK = "preview";
+/**
+ * Name of the lease lock taken by `update` and `stop` (docs/LOCKS.md): one per project, so that the
+ * previews of two projects update side by side while two agents of one project take turns. The project
+ * is the main working tree (git common directory), so that every worktree of a project shares its lock.
+ */
+export declare function previewLock(repo: string): string;
 /** Marker file that lets `update` empty the preview directory: never a directory it did not create. */
 export declare const DIR_MARKER = ".apv-preview";
 /** Most commits listed under « what changed ». */
@@ -57,14 +61,14 @@ export type UpdateResult = {
     commit: string | null;
 };
 /**
- * Holds the `preview` lease lock around `body` (renewed while it runs, released whatever happens).
+ * Holds the preview lease lock of the project (`preview:<project>`) around `body` (renewed while it runs, released whatever happens).
  * Re-entrant through APV_LOCK_HELD, like `apv lock run`.
  */
 export declare function withPreviewLock<T>(ctx: PreviewContext, waitSeconds: number, purpose: string, body: (env: NodeJS.ProcessEnv) => Promise<T>): Promise<T>;
 /**
  * `apv preview update`: stops our server, copies the branch with git archive into a fresh directory,
  * runs install, migrate, build and seed, starts the server detached and waits for its health check.
- * Must run under the `preview` lock (see withPreviewLock).
+ * Must run under the preview lock of the project (see withPreviewLock).
  */
 export declare function updatePreview(ctx: PreviewContext, loaded: LoadedPreview, branch: string, lockEnv: NodeJS.ProcessEnv): Promise<UpdateResult>;
 export interface StopResult {

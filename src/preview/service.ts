@@ -1,13 +1,13 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { loadConfig, CONFIG_FILE } from '../config/load.js';
 import { ensureApvGitignore } from '../config/apv-files.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { LockStore, defaultLockDir } from '../lock/store.js';
 import { describeHolder, waitReporter } from '../lock/run.js';
 import {
-  DEFAULT_BRANCH, STEP_NAMES, previewUrl, probeHost, resolveEnvFile, resolvePreviewDir,
+  DEFAULT_BRANCH, STEP_NAMES, previewUrl, probeHost, projectName, resolveEnvFile, resolvePreviewDir, stepSpec,
   type PreviewConfig, type StepName,
 } from './config.js';
 import { RedactingWriter, Redactor, expandVars, parseEnvFile } from './env.js';
@@ -16,8 +16,19 @@ import {
   PREVIEW_LOG, PREVIEW_PREVIOUS_LOG, PREVIEW_UPDATE_LOG, readPreviewState, writePreviewState, type PreviewState,
 } from './state.js';
 
-/** Name of the lease lock taken by `update` and `stop` (docs/LOCKS.md). */
-export const PREVIEW_LOCK = 'preview';
+/**
+ * Name of the lease lock taken by `update` and `stop` (docs/LOCKS.md): one per project, so that the
+ * previews of two projects update side by side while two agents of one project take turns. The project
+ * is the main working tree (git common directory), so that every worktree of a project shares its lock.
+ */
+export function previewLock(repo: string): string {
+  let main = repo;
+  try {
+    const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (common) main = basename(common) === '.git' ? dirname(common) : common.replace(/\.git$/, '');
+  } catch { /* not a git repository: the folder name */ }
+  return `preview:${projectName(main)}`;
+}
 /** Marker file that lets `update` empty the preview directory: never a directory it did not create. */
 export const DIR_MARKER = '.apv-preview';
 /** Most commits listed under « what changed ». */
@@ -130,37 +141,38 @@ class Refusal extends Error {
 }
 
 /**
- * Holds the `preview` lease lock around `body` (renewed while it runs, released whatever happens).
+ * Holds the preview lease lock of the project (`preview:<project>`) around `body` (renewed while it runs, released whatever happens).
  * Re-entrant through APV_LOCK_HELD, like `apv lock run`.
  */
 export async function withPreviewLock<T>(ctx: PreviewContext, waitSeconds: number, purpose: string, body: (env: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
+  const lock = previewLock(ctx.repo);
   const held = (ctx.env['APV_LOCK_HELD'] ?? '').split(',').map(x => x.trim()).filter(Boolean);
-  const env = { ...ctx.env, APV_LOCK_HELD: [...new Set([...held, PREVIEW_LOCK])].join(',') };
-  if (held.includes(PREVIEW_LOCK)) return body(env);
+  const env = { ...ctx.env, APV_LOCK_HELD: [...new Set([...held, lock])].join(',') };
+  if (held.includes(lock)) return body(env);
   const poll = ctx.env['APV_LOCK_POLL_MS'] ? Number(ctx.env['APV_LOCK_POLL_MS']) : undefined;
   const store = new LockStore(defaultLockDir(ctx.env), poll && Number.isFinite(poll) ? { pollMs: poll } : {});
   const ttlSeconds = 600;
-  const result = await store.acquire(PREVIEW_LOCK, {
+  const result = await store.acquire(lock, {
     owner: { pid: process.pid, host: store.host, label: ctx.env['APV_LOCK_LABEL'] || ctx.env['USER'] || 'apv preview' },
-    ttlSeconds, waitSeconds, purpose, onWait: waitReporter(PREVIEW_LOCK, ctx.progress),
+    ttlSeconds, waitSeconds, purpose, onWait: waitReporter(lock, ctx.progress),
   });
-  if (!result.ok) throw new PipelineError('PREVIEW_LOCK', `Verrou « ${PREVIEW_LOCK} » non obtenu après ${waitSeconds} s : tenu par ${describeHolder(result.holder)}.`);
-  if (result.takeover) ctx.progress(`Verrou « ${PREVIEW_LOCK} » repris (${result.takeover.reason}) à ${describeHolder(result.takeover.previous)}.\n`);
+  if (!result.ok) throw new PipelineError('PREVIEW_LOCK', `Verrou « ${lock} » non obtenu après ${waitSeconds} s : tenu par ${describeHolder(result.holder)}.`);
+  if (result.takeover) ctx.progress(`Verrou « ${lock} » repris (${result.takeover.reason}) à ${describeHolder(result.takeover.previous)}.\n`);
   const token = result.record.token;
-  const heartbeat = setInterval(() => { store.renew(PREVIEW_LOCK, token, ttlSeconds).catch(() => undefined); }, 60_000);
+  const heartbeat = setInterval(() => { store.renew(lock, token, ttlSeconds).catch(() => undefined); }, 60_000);
   heartbeat.unref();
   try { return await body(env); }
   finally {
     clearInterval(heartbeat);
-    try { await store.release(PREVIEW_LOCK, { token }); }
-    catch (error) { ctx.progress(`Libération du verrou « ${PREVIEW_LOCK} » en échec : ${errorMessage(error)}\n`); }
+    try { await store.release(lock, { token }); }
+    catch (error) { ctx.progress(`Libération du verrou « ${lock} » en échec : ${errorMessage(error)}\n`); }
   }
 }
 
 /**
  * `apv preview update`: stops our server, copies the branch with git archive into a fresh directory,
  * runs install, migrate, build and seed, starts the server detached and waits for its health check.
- * Must run under the `preview` lock (see withPreviewLock).
+ * Must run under the preview lock of the project (see withPreviewLock).
  */
 export async function updatePreview(ctx: PreviewContext, loaded: LoadedPreview, branch: string, lockEnv: NodeJS.ProcessEnv): Promise<UpdateResult> {
   const { repo } = ctx;
@@ -218,21 +230,23 @@ export async function updatePreview(ctx: PreviewContext, loaded: LoadedPreview, 
       ...(host ? { APV_PREVIEW_HOST: host } : {}),
     };
     for (const step of STEP_NAMES) {
-      const command = config.steps[step as StepName];
-      if (command === undefined) continue;
+      const declared = config.steps[step as StepName];
+      if (declared === undefined) continue;
+      const { command, timeoutSec } = stepSpec(declared);
       ctx.progress(`étape ${step}...\n`);
-      note(`== étape ${step} : ${describeCommand(command)}`);
+      note(`== étape ${step} (délai ${timeoutSec} s) : ${describeCommand(command)}`);
       let args: string[];
       try { args = argv(command, baseEnv, `preview.steps.${step}`); }
       catch (error) { return fail(step, errorMessage(error)); }
       let excerpt = '';
       const writer = new RedactingWriter(redactor, (s) => { appendFileSync(updateLog, s); excerpt = (excerpt + s).slice(-20_000); });
       const started = Date.now();
-      const result = await runStep(args, dir, baseEnv, (s) => writer.push(s));
+      const result = await runStep(args, dir, baseEnv, (s) => writer.push(s), timeoutSec * 1000);
       writer.flush();
       const seconds = ((Date.now() - started) / 1000).toFixed(1);
       if (result.status !== 0) {
-        const why = result.error ? `impossible de lancer la commande (${result.error})`
+        const why = result.timedOut ? `délai de ${timeoutSec} s dépassé, étape arrêtée (tout son groupe de processus)`
+          : result.error ? `impossible de lancer la commande (${result.error})`
           : result.status === null ? `interrompue par le signal ${result.signal}` : `code de sortie ${result.status}`;
         return fail(step, `${why} après ${seconds} s`, tail(excerpt, 20));
       }

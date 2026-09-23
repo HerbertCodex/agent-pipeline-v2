@@ -13,12 +13,12 @@ apv preview logs [--lines 50] [--update] [--repo <chemin>]
 
 ## Ce que fait `update`
 
-1. Prend le verrou à bail `preview` ([verrous](LOCKS.md)), renouvelé pendant la mise à jour et libéré à la fin, en cas de succès comme d'échec. `--wait` borne l'attente (30 min par défaut) ; au-delà, la commande échoue sans rien toucher.
+1. Prend le verrou à bail du projet, `preview:<projet>` ([verrous](LOCKS.md)), où `<projet>` est le nom du dossier de l'arbre de travail principal (tous les worktrees d'un projet partagent le même verrou, deux projets ne s'attendent pas),, renouvelé pendant la mise à jour et libéré à la fin, en cas de succès comme d'échec. `--wait` borne l'attente (30 min par défaut) ; au-delà, la commande échoue sans rien toucher.
 2. Arrête le serveur d'aperçu en cours, s'il est bien le nôtre (groupe de processus enregistré dans `.apv/state/preview.json`, heure de démarrage vérifiée dans `/proc` sous Linux pour ne jamais tuer un pid réutilisé) : SIGTERM au groupe, puis SIGKILL après 10 s.
 3. Vérifie que le port est libre. Un port encore occupé est tenu par un processus qui n'est pas l'aperçu : la commande refuse avec un message clair, **sans jamais l'arrêter**.
 4. Copie le commit de la branche par `git archive` dans un dossier neuf. L'arbre de travail n'est jamais utilisé : une modification non commitée n'arrive pas dans l'aperçu.
-5. Lance, dans cet ordre et dans ce dossier, les étapes déclarées : `install`, `migrate`, `build`, `seed`. La première qui échoue arrête tout.
-6. Démarre le serveur détaché, dans son propre groupe de processus, sorties vers `.apv/state/preview.log` (le journal précédent devient `preview.prev.log`), et enregistre `.apv/state/preview.json` (`pid`, `port`, `branch`, `commit`, `startedAt`, `url`...).
+5. Lance, dans cet ordre et dans ce dossier, les étapes déclarées : `install`, `migrate`, `build`, `seed`. La première qui échoue arrête tout. Chaque étape a un délai maximal (`timeoutSec`, 900 s par défaut) : au-delà, tout son groupe de processus reçoit SIGTERM puis SIGKILL après 5 s, et la mise à jour échoue sur cette étape.
+6. Démarre le serveur détaché, dans son propre groupe de processus, sorties vers `.apv/state/preview.log` (droits 600 ; le journal précédent devient `preview.prev.log`), et enregistre `.apv/state/preview.json` (`pid`, `port`, `branch`, `commit`, `startedAt`, `url`...).
 7. Interroge le contrôle de santé jusqu'à une réponse 2xx ou 3xx (les redirections ne sont pas suivies), dans le délai `health.timeoutSec`. Un serveur qui meurt ou ne répond pas est arrêté.
 
 En cas de succès :
@@ -74,7 +74,7 @@ Section `preview` de `.apv/config.json` :
 | `branch` | Branche affichée quand `update` n'en reçoit pas (sinon `main`). |
 | `dir` | Dossier de la copie. Par défaut `${XDG_STATE_HOME:-~/.local/state}/apv/preview/<nom du dossier du projet>`. `~/` désigne le dossier personnel, un chemin relatif part du dépôt. |
 | `envFile` | Fichier d'environnement chargé pour toutes les étapes et pour le serveur. Même règle de chemin. Ses valeurs ne sont jamais affichées. |
-| `steps.install`, `migrate`, `build`, `seed` | Étapes facultatives, lancées dans cet ordre dans la copie. |
+| `steps.install`, `migrate`, `build`, `seed` | Étapes facultatives, lancées dans cet ordre dans la copie. Une commande, ou `{ "command": ..., "timeoutSec": 1800 }` pour changer son délai maximal (900 s par défaut). |
 | `serve.command` | Commande du serveur, lancée dans la copie. |
 | `serve.port` | Port fixe de l'aperçu (obligatoire). |
 | `serve.host` | Adresse d'écoute annoncée ; le contrôle de santé interroge `127.0.0.1` quand elle vaut `0.0.0.0` ou `::`. |
@@ -96,7 +96,7 @@ Le tableau est à préférer pour une commande simple ; la chaîne sert quand il
 Étapes et serveur reçoivent l'environnement de `apv`, puis les variables du fichier d'environnement, puis :
 
 - `APV_REPO` (dépôt), `APV_PREVIEW_DIR` (copie), `APV_PREVIEW_BRANCH`, `APV_PREVIEW_COMMIT`, `APV_PREVIEW_PORT`, `APV_PREVIEW_HOST` (si `serve.host`) ;
-- `APV_LOCK_HELD` contenant `preview` : un `apv lock run preview -- ...` lancé par une étape ne s'attend pas lui-même ;
+- `APV_LOCK_HELD` contenant `preview:<projet>` : un `apv lock run preview:<projet> -- ...` lancé par une étape ne s'attend pas lui-même ;
 - pour le serveur seulement : `PORT` (le port de l'aperçu), puis `serve.env`.
 
 ### Fichier d'environnement
@@ -107,14 +107,14 @@ Format `NOM=valeur` (celui de `supabase status -o env`) : lignes `export NOM=val
 
 Dans le journal de mise à jour, les messages d'erreur et la sortie de `logs`, chaque valeur du fichier d'environnement est remplacée par `[masqué:NOM]` quand elle compte 8 caractères ou plus, ou 4 ou plus si son nom ressemble à un secret (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `SALT`, `DB_URL`...). Les valeurs plus courtes (un port, `true`) ne sont pas masquées : elles masqueraient des mots ordinaires. Le masquage se fait ligne par ligne, une valeur n'est jamais coupée entre deux écritures.
 
-Limite : le journal du serveur est écrit directement par le serveur détaché. Le fichier sur le disque n'est donc pas masqué ; seul l'affichage par `apv preview logs` l'est. Il est ignoré par Git (`.apv/.gitignore`).
+Le journal du serveur (`.apv/state/preview.log`) est écrit directement par le serveur détaché : le fichier sur le disque **n'est pas masqué**, seul l'affichage par `apv preview logs` l'est. Masquer à l'écriture demanderait un processus relais vivant aussi longtemps que le serveur, entre lui et le fichier : s'il s'arrêtait, le serveur perdrait sa sortie ou s'arrêterait à son tour (SIGPIPE). Le fichier est donc créé en droits `600` (lisible par son seul propriétaire, droits resserrés à chaque démarrage s'il existait), ignoré par Git (`.apv/.gitignore`), et ne doit pas être copié tel quel dans un ticket ou une PR : passer par `apv preview logs`.
 
 ## Sûreté
 
 - **Dossier** : il est vidé à chaque mise à jour, donc refusé s'il est dans le dépôt, s'il contient le dépôt, le dossier personnel ou la racine. `update` y dépose un fichier `.apv-preview` et refuse de vider un dossier non vide qui n'en a pas (dossier choisi par erreur).
 - **Port** : jamais de `kill` sur un processus qui n'est pas le nôtre. Le serveur de l'aperçu est reconnu par son groupe de processus et son heure de démarrage, pas par son port ni par un motif de ligne de commande (le script manuel utilisait `pgrep -f`, qui pouvait viser un autre processus).
 - **Branche** : un nom qui commence par `-` est refusé avant d'atteindre Git.
-- **Verrou** : `update` et `stop` passent par le verrou `preview` : deux agents qui livrent en même temps se suivent au lieu de se couper l'herbe sous le pied. Le verrou n'impose aucun plafond de durée.
+- **Verrou** : `update` et `stop` passent par le verrou du projet, `preview:<projet>` : deux agents du même projet qui livrent en même temps se suivent au lieu de se couper l'herbe sous le pied ; les aperçus de deux projets se mettent à jour en parallèle. La durée est bornée étape par étape (`timeoutSec`), pas par le verrou.
 
 Fichiers d'état, tous ignorés par Git : `.apv/state/preview.json`, `preview.log`, `preview.prev.log`, `preview-update.log`.
 
@@ -181,6 +181,6 @@ Remarques :
 ## Limites connues
 
 - Pas de bascule sans coupure : le serveur est arrêté avant la reconstruction (comme le script manuel). Pendant une mise à jour, l'aperçu ne répond pas.
-- Aucune durée maximale par étape : une étape bloquée garde le verrou tant qu'`apv` tourne (le verrou n'est jamais coupé pour une commande vivante, [verrous](LOCKS.md)). Interrompre `apv` (Ctrl+C) libère le verrou par la vérification du pid.
+- Une étape bloquée garde le verrou jusqu'à son délai (`timeoutSec`, 900 s par défaut). Interrompre `apv` (Ctrl+C) transmet le signal au groupe de l'étape en cours, puis libère le verrou par la vérification du pid.
 - `git archive` respecte `export-ignore` de `.gitattributes` et n'inclut pas les sous-modules.
 - Linux, macOS ou WSL2 : `sh`, `tar` et les groupes de processus POSIX sont nécessaires. Sans `/proc` (macOS), un pid réutilisé par le système n'est pas détecté.

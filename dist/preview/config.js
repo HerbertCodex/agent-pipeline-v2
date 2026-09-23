@@ -9,6 +9,17 @@ import { ENV_NAME } from './env.js';
  * an array is an argv run without any shell, where `${NAME}` is replaced from the environment.
  */
 export const previewCommandSchema = s.union(s.string(1, 10000), s.array(s.string(1, 10000), 1, 200));
+/** Default longest run of one step, in seconds (`timeoutSec` of the step overrides it). */
+export const DEFAULT_STEP_TIMEOUT_SEC = 900;
+/** A step: a command, or `{ command, timeoutSec }` to change its longest run (default 900 s). */
+export const previewStepSchema = s.union(previewCommandSchema, s.object({
+    command: previewCommandSchema,
+    timeoutSec: s.default(s.number(1, 86_400), DEFAULT_STEP_TIMEOUT_SEC),
+}));
+/** Command and longest run of a step, whatever its form. */
+export function stepSpec(step) {
+    return typeof step === 'string' || Array.isArray(step) ? { command: step, timeoutSec: DEFAULT_STEP_TIMEOUT_SEC } : step;
+}
 /** The build steps, run in this order in the fresh copy of the branch. */
 export const STEP_NAMES = ['install', 'migrate', 'build', 'seed'];
 export const previewSchema = s.object({
@@ -19,10 +30,10 @@ export const previewSchema = s.object({
     /** Env file loaded for every step and for the server; its values are never printed. */
     envFile: s.optional(s.string(1, 4096)),
     steps: s.default(s.object({
-        install: s.optional(previewCommandSchema),
-        migrate: s.optional(previewCommandSchema),
-        build: s.optional(previewCommandSchema),
-        seed: s.optional(previewCommandSchema),
+        install: s.optional(previewStepSchema),
+        migrate: s.optional(previewStepSchema),
+        build: s.optional(previewStepSchema),
+        seed: s.optional(previewStepSchema),
     }), {}),
     serve: s.object({
         command: previewCommandSchema,
@@ -37,7 +48,7 @@ export const previewSchema = s.object({
     announce: s.optional(s.object({ url: s.optional(s.string(1, 2000, /^https?:\/\/\S+$/)) })),
 });
 export const DEFAULT_BRANCH = 'main';
-/** Project name used in the default directory: the repository folder name, made file-safe. */
+/** Project name used in the default directory and the lock name: the repository folder name, made file-safe. */
 export function projectName(repo) {
     return basename(repo).replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '_') || 'projet';
 }
