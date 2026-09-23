@@ -6,9 +6,10 @@ import { specSchema } from '../lifecycle/contracts.js';
 import { checkSpec, readSpecDocument } from '../spec/check.js';
 import { gitProbe, gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
 import {
-  REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applySet, computeNext, createRunState, listRunFiles, parseTarget,
+  REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applySet, computeNext, createRunState, parseTarget,
   readRunState, runStateFile, summarize, summaryLine, withRunLock, writeRunState, type RunState, type RunStatus, type SetOptions,
 } from '../run/state.js';
+import { readRunSummaries, runSummaryLine, unreadRunsLine } from '../run/summary.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
 
@@ -211,19 +212,12 @@ function status(repo: string, positionals: string[], asJson: boolean, io: Comman
     io.stdout(`${[...detail(state), `Résumé : ${summaryLine(summarize(state, file))}`].join('\n')}\n`);
     return EXIT.ok;
   }
-  const runs = listRuns(repo);
-  if (asJson) { json(io, { runs }); return EXIT.ok; }
-  io.stdout(runs.length ? `${runs.map(r => `- ${r.error !== null ? `${r.specId} : état illisible (${r.error})` : summaryLine(r)}`).join('\n')}\n` : 'Aucune exécution (.apv/state/run-*.json).\n');
+  // The shared summary: bounded reads (no FIFO, no huge file, a file and byte budget) and cleaned lines.
+  const { entries, unread } = readRunSummaries(repo);
+  if (asJson) { json(io, { runs: entries, unread }); return EXIT.ok; }
+  const lines = [...entries.map(r => `- ${runSummaryLine(r)}`), ...(unread ? [`- ${unreadRunsLine(unread)}`] : [])];
+  io.stdout(lines.length ? `${lines.join('\n')}\n` : 'Aucune exécution (.apv/state/run-*.json).\n');
   return EXIT.ok;
-}
-
-export type RunListing = ReturnType<typeof summarize> | { specId: string; file: string; error: string };
-/** Summaries of every execution of the project; an unreadable state is listed with its error. */
-export function listRuns(repo: string): RunListing[] {
-  return listRunFiles(repo).map(({ specId, file }) => {
-    try { return summarize(readRunState(file), posix(relative(repo, file))); }
-    catch (error) { return { specId, file: posix(relative(repo, file)), error: errorMessage(error) }; }
-  });
 }
 
 export async function run(args: string[], io: CommandIO): Promise<number> {

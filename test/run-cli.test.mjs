@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -250,6 +250,30 @@ test('apv run status and apv status list the executions', async t => {
   rmSync(join(p.repo, '.apv/state/run-broken.json'));
   for (const step of ['data-model', 'plan']) await p.run('set', 'vagues', step, 'skipped');
   assert.match((await apv(p.repo, ['status'], p.env)).stdout, /- vagues : étape vagues \(vague 0\) ; tâches 0\/5 faites/);
+});
+
+test('apv run status shares the bounded summary: a FIFO never blocks it, lines are cleaned (FID-2)', { skip: process.platform === 'win32' }, async t => {
+  // Review FID-2: apv run status listed the executions with its own readFileSync, so a FIFO named
+  // .apv/state/run-fifo.json blocked it forever, and an unreadable state printed its error raw.
+  const p = project(t);
+  await p.run('start', 'vagues');
+  execFileSync('mkfifo', [join(p.repo, '.apv/state/run-fifo.json')]);
+  write(p.repo, '.apv/state/run-casse.json', '{"a":\n\u001b[2J');
+  // A separate process with a deadline: before the fix it never returned.
+  const child = spawn(process.execPath, [cli, 'run', 'status'], { cwd: p.repo, env: { ...process.env, ...p.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = ''; child.stdout.on('data', c => { out += c; });
+  const code = await new Promise(done => {
+    const timer = setTimeout(() => { child.kill('SIGKILL'); done('bloqué'); }, 5000);
+    child.on('close', c => { clearTimeout(timer); done(c); });
+  });
+  assert.equal(code, 0, out);
+  assert.equal(out, [
+    '- casse : état illisible (État illisible .apv/state/run-casse.json : JSON invalide)',
+    '- fifo : état illisible (État illisible .apv/state/run-fifo.json : pas un fichier ordinaire)',
+    '- vagues : étape modèle de données ; tâches 0/5 faites ; mise à jour ' + p.state().updatedAt,
+  ].join('\n') + '\n');
+  const listed = (await p.run('status', '--json')).json();
+  assert.deepEqual([listed.runs.map(r => r.specId), listed.unread], [['casse', 'fifo', 'vagues'], 0]);
 });
 
 test('writes are serialised by the run lock: concurrent processes lose no update', async t => {

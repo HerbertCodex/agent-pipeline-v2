@@ -5,7 +5,8 @@ import { sha256 } from '../domain/hash.js';
 import { specSchema } from '../lifecycle/contracts.js';
 import { checkSpec, readSpecDocument } from '../spec/check.js';
 import { gitProbe, gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
-import { REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applySet, computeNext, createRunState, listRunFiles, parseTarget, readRunState, runStateFile, summarize, summaryLine, withRunLock, writeRunState, } from '../run/state.js';
+import { REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applySet, computeNext, createRunState, parseTarget, readRunState, runStateFile, summarize, summaryLine, withRunLock, writeRunState, } from '../run/state.js';
+import { readRunSummaries, runSummaryLine, unreadRunsLine } from '../run/summary.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 export const usage = `Utilisation :
   apv run start <spec> [--base <branche>] [--repo <chemin>] [--json]
@@ -250,24 +251,15 @@ function status(repo, positionals, asJson, io) {
         io.stdout(`${[...detail(state), `Résumé : ${summaryLine(summarize(state, file))}`].join('\n')}\n`);
         return EXIT.ok;
     }
-    const runs = listRuns(repo);
+    // The shared summary: bounded reads (no FIFO, no huge file, a file and byte budget) and cleaned lines.
+    const { entries, unread } = readRunSummaries(repo);
     if (asJson) {
-        json(io, { runs });
+        json(io, { runs: entries, unread });
         return EXIT.ok;
     }
-    io.stdout(runs.length ? `${runs.map(r => `- ${r.error !== null ? `${r.specId} : état illisible (${r.error})` : summaryLine(r)}`).join('\n')}\n` : 'Aucune exécution (.apv/state/run-*.json).\n');
+    const lines = [...entries.map(r => `- ${runSummaryLine(r)}`), ...(unread ? [`- ${unreadRunsLine(unread)}`] : [])];
+    io.stdout(lines.length ? `${lines.join('\n')}\n` : 'Aucune exécution (.apv/state/run-*.json).\n');
     return EXIT.ok;
-}
-/** Summaries of every execution of the project; an unreadable state is listed with its error. */
-export function listRuns(repo) {
-    return listRunFiles(repo).map(({ specId, file }) => {
-        try {
-            return summarize(readRunState(file), posix(relative(repo, file)));
-        }
-        catch (error) {
-            return { specId, file: posix(relative(repo, file)), error: errorMessage(error) };
-        }
-    });
 }
 export async function run(args, io) {
     return guard(io, usage, async () => {
