@@ -276,6 +276,33 @@ test('apv run status shares the bounded summary: a FIFO never blocks it, lines a
   assert.deepEqual([listed.runs.map(r => r.specId), listed.unread], [['casse', 'fifo', 'vagues'], 0]);
 });
 
+test('replacing the commit of finished work needs a note (SEC-6)', async t => {
+  // Review SEC-6: « apv run set <spec> task:F done --commit <autre> » silently replaced the delivered commit of
+  // a done task (or step, or review): integration and reviews then relied on a commit nobody had decided.
+  const p = project(t);
+  await p.run('start', 'vagues');
+  const first = taskBranch(p, 'spec/vagues-f', 'docs/f.md');
+  const second = taskBranch(p, 'spec/vagues-f2', 'docs/f2.md');
+  assert.equal((await p.run('set', 'vagues', 'task:F', 'running')).code, 0);
+  assert.equal((await p.run('set', 'vagues', 'task:F', 'done', '--commit', first.sha)).code, 0);
+  const silent = await p.run('set', 'vagues', 'task:F', 'done', '--commit', second.sha);
+  assert.equal(silent.code, 1);
+  assert.match(silent.stderr, /task:F : remplacer le commit d'un travail terminé \([a-f0-9]{12}\) exige --note/);
+  assert.equal(p.state().tasks.F.commit, first.sha);
+  // The same commit again changes nothing: no note needed.
+  assert.equal((await p.run('set', 'vagues', 'task:F', 'done', '--commit', first.sha)).code, 0);
+  const noted = await p.run('set', 'vagues', 'task:F', 'done', '--commit', second.sha, '--note', 'rebasée sur main', '--json');
+  assert.equal(noted.code, 0, noted.stderr);
+  assert.deepEqual([p.state().tasks.F.commit, noted.json().event.note], [second.sha, 'rebasée sur main']);
+  // Steps and reviews: the same rule; recording a first commit on a done step needs none.
+  assert.equal((await p.run('set', 'vagues', 'plan', 'done')).code, 0);
+  assert.equal((await p.run('set', 'vagues', 'plan', 'done', '--commit', first.sha)).code, 0);
+  assert.equal((await p.run('set', 'vagues', 'plan', 'done', '--commit', second.sha)).code, 1);
+  assert.equal((await p.run('set', 'vagues', 'review:securite', 'done', '--commit', first.sha)).code, 0);
+  assert.equal((await p.run('set', 'vagues', 'review:securite', 'done', '--commit', second.sha)).code, 1);
+  assert.equal((await p.run('set', 'vagues', 'review:securite', 'done', '--commit', second.sha, '--note', 'revue refaite')).code, 0);
+});
+
 test('writes are serialised by the run lock: concurrent processes lose no update', async t => {
   const p = project(t);
   await p.run('start', 'vagues');

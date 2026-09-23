@@ -140,7 +140,8 @@ export const targetName = (t: Target): string => t.kind === 'step' ? t.name : t.
 
 /**
  * Allowed moves. Staying on the same status only updates the fields (a new wip commit, another agent).
- * Leaving `done` reopens finished work: it needs a note that says why.
+ * Leaving `done` reopens finished work, and replacing the commit of finished work changes what was delivered:
+ * both need a note that says why.
  */
 const TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
   pending: ['running', 'done', 'skipped', 'failed'],
@@ -176,6 +177,11 @@ export function applySet(state: RunState, target: Target, options: SetOptions): 
   const to = options.status;
   if (from !== to && !TRANSITIONS[from].includes(to)) throw new TransitionError(`${name} : passage de « ${from} » à « ${to} » refusé (possibles : ${TRANSITIONS[from].join(', ')})`);
   if (from === 'done' && to !== 'done' && !options.note?.trim()) throw new TransitionError(`${name} : rouvrir un travail terminé exige --note (la raison est journalisée)`);
+  // The commit of finished work is what integration and reviews rely on: changing it is a decision to journal.
+  const recorded = (entry as { commit: string | null }).commit;
+  if (from === 'done' && to === 'done' && options.commit !== undefined && recorded !== null && options.commit !== recorded && !options.note?.trim()) {
+    throw new TransitionError(`${name} : remplacer le commit d'un travail terminé (${recorded.slice(0, 12)}) exige --note (la raison est journalisée)`);
+  }
   if (target.kind === 'task') {
     const task = entry as TaskEntry;
     if (to === 'running') {
