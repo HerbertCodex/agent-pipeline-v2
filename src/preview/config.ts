@@ -1,6 +1,6 @@
+import { canonicalPath } from '../domain/paths.js';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { realpathSync } from 'node:fs';
 import { s, type Infer } from '../domain/schema.js';
 import { PipelineError } from '../domain/errors.js';
 import { ENV_NAME } from './env.js';
@@ -71,7 +71,7 @@ export function defaultPreviewDir(repo: string, env: NodeJS.ProcessEnv): string 
 }
 
 function real(path: string): string {
-  try { return realpathSync(path); } catch { return resolve(path); }
+  return canonicalPath(path);
 }
 
 function inside(child: string, parent: string): boolean {

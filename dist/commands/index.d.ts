@@ -12,5 +12,5 @@ interface Entry {
  */
 export declare const commands: Record<string, Entry>;
 export declare function helpText(): string;
-export declare function dispatch(argv: string[], io: CommandIO): Promise<number>;
+export declare function dispatch(argv: string[], input: CommandIO): Promise<number>;
 export {};
