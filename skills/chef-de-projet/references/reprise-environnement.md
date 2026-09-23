@@ -11,12 +11,13 @@ Dans ce document, `apv` désigne l'outil du plugin (voir `SKILL.md`).
 
 ## 2. Reprise après coupure (`/apv:resume`)
 Dans l'ordre :
+0. **Exécutions** : `apv run status`, puis pour chaque exécution en cours `apv run next <id>` : étape courante, tâches prêtes, tâches à reprendre (branche, worktree, agent, dernier commit), tâches à relancer, revues à lancer. C'est la base de la reprise ; `/apv:run <id>` la mène.
 1. **État** : lis `.apv/state/resume.md`, le plan et les notes de vague en cours, la fin de `.apv/state/journal.log` et de `.apv/journal-pipeline.md`.
 2. **Docker** : `docker info`. S'il ne répond pas, relance-le (sous WSL avec Docker Desktop, en lançant l'exécutable Windows de Docker Desktop depuis WSL ; ailleurs, le service du système) et attends qu'il réponde.
 3. **Piles locales** : pour chaque pile déclarée par le projet (tests, aperçu), vérifie son état (par exemple `npx supabase status` dans son dossier) et relance-la avec la commande et la version épinglées du projet. Ne touche jamais une pile qui n'appartient pas au projet.
 4. **Orphelins** : `apv lock status` (baux expirés ou propriétaires morts), processus qui occupent les ports des tests ou de l'aperçu (`ss -ltnp`). Arrête seulement ce que le projet a lancé.
 5. **Git** : `git worktree list`, branches locales et distantes, commits non poussés, travail non commité dans les worktrees.
-6. **Agents** : pour chaque tâche non terminée, reprends l'agent par `SendMessage` s'il vit encore, sinon relance un `implementer` sur sa branche avec « termine <tâche> à partir du wip <hash>, vérifie tout, tous les contrôles ». Relance les revues interrompues.
+6. **Agents** : pour chaque tâche non terminée, reprends l'agent par `SendMessage` s'il vit encore (un workflow interrompu dans la même session : `resumeFromRunId`) ; sinon commite le wip de son worktree s'il en reste, retire le worktree pour libérer la branche, et relance un `implementer` sur sa branche avec « termine <tâche> à partir du wip <hash>, vérifie tout, tous les contrôles » (détail : section 9 de `/apv:run`). Relance les revues interrompues.
 7. **Quota** : `apv quota`, puis choisis le nombre d'agents.
 8. Mets `.apv/state/resume.md` à jour avec ce qui a été relancé, et note l'incident au journal.
 

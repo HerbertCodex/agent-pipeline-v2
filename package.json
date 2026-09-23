@@ -21,6 +21,7 @@
     "agents",
     "skills",
     "hooks",
+    "workflows",
     "dist",
     "src",
     "test",

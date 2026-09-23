@@ -20,13 +20,13 @@ Dans ce document, `apv` désigne l'outil du plugin (voir `SKILL.md`).
 | 95 % | Sauvegarder (section 4), mettre en pause, prévenir l'opérateur avec l'heure de reprise. |
 
 ## 4. Procédure de sauvegarde
-1. **Arrêt propre des agents** : demande à chaque agent actif (`SendMessage`) de commiter son état en `wip: <tâche> <ce qui reste>` et de rendre la main ; à défaut de réponse, arrête-le (`TaskStop`) puis commite toi-même l'état de son worktree en `wip`.
+1. **Arrêt propre des agents** : demande à chaque agent actif (`SendMessage`) de commiter son état en `wip: <tâche> <ce qui reste>` et de rendre la main ; à défaut de réponse, arrête-le (`TaskStop`) puis commite toi-même l'état de son worktree en `wip`. Les agents d'un workflow (`apv:vague`) ne reçoivent pas de message : arrête le workflow, puis commite toi-même le wip de chaque worktree. Un workflow qui atteint la limite d'usage se met aussi en pause de lui-même jusqu'à la remise à zéro (Claude Code 2.1.271 ou plus récent, session interactive).
 2. **Commits** : aucun travail non commité ne reste dans un worktree. Jamais de secret dans un wip.
 3. **Push** : pousse toutes les branches concernées (sans force).
 4. **Notes de reprise** : `.apv/state/resume.md`, commité et poussé :
    - date, quota relevé et heure de remise à zéro ;
    - pile des branches et PR (base vers sommet, commits) ;
-   - pour chaque tâche : branche, dernier commit, état (fait, vert, wip non vérifié), identifiant de l'agent, consigne de reprise en une phrase ;
+   - pour chaque tâche : branche, dernier commit, état (fait, vert, wip non vérifié), identifiant de l'agent ou `runId` du workflow, consigne de reprise en une phrase (l'état `apv run` garde le reste ; `apv run next` le relit) ;
    - revues interrompues à relancer ;
    - ordre de reprise ;
    - environnement à relancer (Docker, piles, aperçu, commandes exactes).

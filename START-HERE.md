@@ -26,15 +26,24 @@ jamais de fusion, de force-push ni de déploiement sans mon ordre.
 Relève le quota avant chaque vague (/apv:quota) et sauvegarde avant la limite.
 ```
 
+Ou pas à pas, avec les commandes :
+
+1. `/apv:init` : prépare `.apv/` (contrôles du dépôt, consigne commune, registre), une fois par projet.
+2. `/apv:design` : maquette validée pour chaque écran nouveau.
+3. `/apv:spec <demande>` : spec rédigée et validée.
+4. `/apv:run <spec>` : exécution jusqu'à la PR brouillon (vagues parallèles, revues, corrections, aperçu). Déroulé : [docs/RUN.md](docs/RUN.md).
+5. `/apv:stack <pr...>` : fusion de la pile de PR, seulement quand vous l'ordonnez.
+
 ## 3. Suivre et reprendre
 
-- `/apv:status` : où en est-on (specs, branches, PR, verrous, quota, aperçu).
+- `/apv:status` : où en est-on (specs, exécutions, branches, PR, verrous, quota, aperçu).
 - `/apv:quota` : fenêtres d'usage et dosage des agents.
-- `/apv:resume` : après une coupure (session fermée, machine redémarrée, pause de quota).
+- `/apv:resume` : après une coupure (session fermée, machine redémarrée, pause de quota), puis `/apv:run <spec>` reprend l'exécution où elle s'était arrêtée.
+- `/apv:review` : revues indépendantes d'une branche.
 
 ## 4. Ce qui arrive par phases
 
-Phase 2 : `/apv:design`, `/apv:preview`. Phase 3 : `/apv:init`, `/apv:spec`, `/apv:run`, `/apv:review`, `/apv:stack`. Phase 4 : `/apv:onboard` (migration d'un projet V2). En attendant, la compétence `chef-de-projet` décrit chaque étape à la main.
+Phase 4 : `/apv:onboard` (migration d'un projet V2). En attendant, `.apv/` se crée par `/apv:init`.
 
 ## Ancienne version (V2)
 
