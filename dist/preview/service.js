@@ -79,13 +79,19 @@ export function changesSince(repo, previous, commit) {
         return null;
     }
 }
+/** Refuses a preview directory that exists, is not empty and was not created by apv (marker file). Touches nothing. */
+function assertOwnedDir(dir) {
+    if (!existsSync(dir))
+        return;
+    const entries = readdirSync(dir);
+    if (entries.length && !entries.includes(DIR_MARKER)) {
+        throw new PipelineError('PREVIEW_DIR', `Le dossier d'aperçu ${dir} existe, n'est pas vide et n'a pas été créé par apv (pas de fichier ${DIR_MARKER}) : rien n'est effacé. Choisissez un autre « preview.dir » ou videz-le vous-même.`);
+    }
+}
 /** Empties the preview directory, only if it is empty or was created by apv (marker file). */
 function freshDir(dir) {
     if (existsSync(dir)) {
-        const entries = readdirSync(dir);
-        if (entries.length && !entries.includes(DIR_MARKER)) {
-            throw new PipelineError('PREVIEW_DIR', `Le dossier d'aperçu ${dir} existe, n'est pas vide et n'a pas été créé par apv (pas de fichier ${DIR_MARKER}) : rien n'est effacé. Choisissez un autre « preview.dir » ou videz-le vous-même.`);
-        }
+        assertOwnedDir(dir);
         rmSync(dir, { recursive: true, force: true });
     }
     mkdirSync(dir, { recursive: true });
@@ -208,6 +214,13 @@ export async function updatePreview(ctx, loaded, branch, lockEnv) {
         commit = resolveCommit(repo, branch);
         note(`== commit ${commit}`);
         const { port, host } = config.serve;
+        // 0. A foreign preview directory is refused before anything is stopped or checked.
+        try {
+            assertOwnedDir(dir);
+        }
+        catch (error) {
+            throw new Refusal('copie', errorMessage(error));
+        }
         // 1. Our server goes first; anything left on the port afterwards is not ours.
         if (ourServer(previous)) {
             note(`== arrêt du serveur en cours (pid ${previous.pid})`);

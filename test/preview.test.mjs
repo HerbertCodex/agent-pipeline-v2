@@ -265,6 +265,11 @@ test('a failing step prints its output masked; a foreign preview dir is never em
   mkdirSync(config.preview.dir);
   writeFileSync(join(config.preview.dir, 'important.txt'), 'à garder');
   writeFileSync(join(other.repo, '.apv', 'config.json'), JSON.stringify(config));
+  // The directory is checked before anything else: even with its port taken, the refusal is about the directory
+  // (before, a busy port answered first, and a running preview was stopped before the directory was refused).
+  const squatter = createServer();
+  await new Promise(resolve => squatter.listen(config.preview.serve.port, config.preview.serve.host ?? '127.0.0.1', resolve));
+  t.after(() => squatter.close());
   const refused = await apv(other, ['preview', 'update']);
   assert.equal(refused.code, 1);
   assert.match(refused.stderr, /« copie ».*n'a pas été créé par apv/);
