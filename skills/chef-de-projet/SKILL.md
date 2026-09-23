@@ -32,7 +32,7 @@ Références à lire au moment voulu (chemins relatifs à ce fichier) :
 - Les consignes de l'opérateur (fichier de mémoire, `CLAUDE.md`, registre) priment sur ce document.
 
 ## 3. Effets externes
-- **Autorisé par délégation** : créer des branches, commiter, pousser des branches, ouvrir des PR **brouillon**, mettre à jour l'aperçu vivant.
+- **Autorisé par délégation** : créer des branches, commiter, pousser des branches, ouvrir des PR **brouillon**, mettre à jour l'aperçu vivant de ce projet (`/apv:preview`), publier une maquette en artefact privé pour l'opérateur (`/apv:design`).
 - **Jamais sans ordre explicite de l'opérateur** : fusionner une PR, force-push, déployer en production, écrire sur une base hébergée ou de production, supprimer une branche distante, dépenser.
 - **Jamais** : réécrire un commit déjà poussé (empile des commits propres), masquer la sortie d'une commande qui écrit sur un service externe (incident 30 : des `gh pr edit --base` ont échoué en silence et les PR ont été fusionnées dans la mauvaise base). Le hook du plugin bloque ces cas ; ne cherche pas à le contourner.
 
@@ -40,14 +40,14 @@ Références à lire au moment voulu (chemins relatifs à ce fichier) :
 0. **Préparer** : `/apv:status`, relevé de quota (`apv quota`), environnement vérifié (Docker, piles locales, verrous orphelins).
 1. **Données** : si la spec touche la base, `architecte-donnees` (mode conception) produit `.apv/data-model.md` ; tu le présentes à l'opérateur avant tout code.
 2. **Spec** : si elle n'existe pas, `product` la rédige ; `apv spec validate` jusqu'à `VALID`. Une spec fournie et validée par l'opérateur s'exécute telle quelle, sans re-planification (incident 23).
-3. **Design** : l'interface part de la maquette validée. Un écran absent ouvre une boucle `designer` avec l'opérateur (compétence `design-artefact`), jamais une invention.
+3. **Design** : l'interface part de la maquette validée (`apv design list --screen <écran>`, et `apv design check` vert). Un écran absent ouvre une boucle avec l'opérateur par `/apv:design` (artefact publié, retours un par un, validation par ses mots, versement par `apv design register`), jamais une invention.
 4. **Plan** : `architecte` produit le graphe, la vague 0 « fondations » et les notes de vague (`references/planification.md`).
 5. **Fondations** : un seul `implementer` écrit les modules partagés ; intégrés et verts avant d'ouvrir le parallèle.
 6. **Vagues** : un `implementer` par tâche prête, chacun dans son worktree, en arrière-plan, avec la consigne commune et les notes de vague. Nombre d'agents dosé par le quota.
 7. **Intégration** : `integrateur` fusionne la vague, unifie les doublons, garde tous les tests, relance tout.
 8. **Revues** en parallèle, en lecture seule, sur copie isolée : `qa-securite`, `qa-fidelite`, `architecte-donnees` (revue), `dpo` (`references/integration-revues.md`).
 9. **Corrections** : tu décides chaque constat dans `.apv/state/corrections-<spec>.md`, puis une passe par domaine (serveur, interface), en parallèle si les fichiers ne se recouvrent pas.
-10. **Livraison** : tu relances toi-même tous les contrôles, tu pousses, tu ouvres la PR brouillon (empilée si besoin), tu mets l'aperçu à jour et tu l'annonces (`references/livraison-pile.md`).
+10. **Livraison** : tu relances toi-même tous les contrôles, tu pousses, tu ouvres la PR brouillon (empilée si besoin), tu mets l'aperçu à jour avec `/apv:preview` (`apv preview update <branche>`) et tu l'annonces (`references/livraison-pile.md`).
 
 Chaque étape écrit son état dans `.apv/state/` (plan, notes, corrections, `resume.md`) : une coupure se reprend sans rien perdre.
 
@@ -65,7 +65,7 @@ Toute ressource partagée (base locale, remise à zéro, ports fixes, navigateur
 Relevé par `apv quota` avant chaque vague et toutes les 10 à 15 minutes pendant l'exécution. La consommation observée par vague est un repère pour doser le parallélisme, jamais un plafond. Seuils : **70 %** ralentir ; **85 %** finir les tâches en cours sans en lancer de nouvelles ; **95 %** sauvegarder (arrêt propre, commits « wip », push, notes de reprise) et prévenir l'opérateur. Détails : `references/quota-sauvegarde.md`.
 
 ## 8. Contrôles avant PR
-Avant chaque push destiné à une PR, **tu** relances tous les contrôles déclarés sur la tête exacte de la branche (`apv gates run`), et `apv db check` si la base a changé. Un vert annoncé par un agent ne suffit pas.
+Avant chaque push destiné à une PR, **tu** relances tous les contrôles déclarés sur la tête exacte de la branche (`apv gates run`), `apv db check` si la base a changé et `apv design check` si le projet a des maquettes validées (une référence modifiée sans nouvelle validation bloque la PR). Un vert annoncé par un agent ne suffit pas.
 
 ## 9. Communication avec l'opérateur
 - Dans sa langue (celle de ses messages ; le français pour un opérateur francophone), phrases courtes, sans jargon inutile, sans tiret cadratin ni demi-cadratin.

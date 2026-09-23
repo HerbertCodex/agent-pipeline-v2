@@ -7,13 +7,14 @@ Sur la tête exacte de la branche, dans un worktree propre :
 1. `apv gates run` : tous les contrôles déclarés (ou la liste de la consigne commune), ressources partagées sous bail.
 2. `apv db check` si des migrations ou des requêtes ont changé.
 3. `apv scope check` sur les tâches de la spec.
-4. Relecture du diff complet contre la spec : critères couverts, écarts assumés listés.
+4. `apv design check` si le projet a des maquettes validées : une référence modifiée sans nouvelle validation de l'opérateur bloque la PR.
+5. Relecture du diff complet contre la spec : critères couverts, écarts assumés listés.
 Tu notes les nombres de tests : ils vont dans la PR. Un contrôle rouge bloque la PR.
 
 ## 2. PR brouillon
 - `git push -u origin <branche>` puis `gh pr create --draft --base <base> --head <branche> --title … --body …`, **sans masquer la sortie**. Lis-la, puis vérifie : `gh pr view <n> --json number,baseRefName,headRefName,isDraft,url`.
 - Corps de la PR : résumé, critères couverts, preuves (contrôles et nombres de tests, revues, ZAP), écarts assumés à valider, points qui demandent l'opérateur, base de la pile.
-- Mets à jour l'aperçu vivant sur la branche livrée et annonce-le (adresse, branche, ce qui a changé).
+- Mets à jour l'aperçu vivant sur la branche livrée avec `/apv:preview` et annonce-le (adresse, branche, ce qui a changé, compte de démo).
 
 ## 3. Pile de PR
 Quand une spec dépend de la précédente non fusionnée :
