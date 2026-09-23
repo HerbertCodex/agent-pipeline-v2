@@ -43,7 +43,7 @@ Dans une exécution, avant le lancement : `apv run set <id> review:<domaine> run
                  { "domain": "fidelite", "copy": "<copie>", "context": "<port, écrans touchés>" } ] }
   ```
   Il lance un agent par domaine sur sa copie, avec un rapport structuré (gravité critique, eleve, moyen, faible, info ; requis ou conseil ; emplacement ; preuve ; correction attendue ; ce qui n'a pas été vérifié ; nettoyage), puis un passage de dédoublonnage qui ne supprime aucun constat : il rend `findings` (consolidés, avec les identifiants d'origine S, F, D, R) et `raw`.
-- **Sans outil Workflow** : un appel à l'outil Agent par domaine, **tous dans le même message**, `run_in_background: true`, avec le type d'agent du tableau et un message qui donne le commit, la copie, la spec, la consigne commune et celle du domaine, le format du rapport ci-dessus et la règle « lecture seule : aucun commit, aucune poussée, aucune écriture sur un service externe ». Le dédoublonnage est alors le tien (section 5).
+- **Sans outil Workflow** : un appel à l'outil Agent par domaine, **tous dans le même message**, en arrière-plan en session interactive et `run_in_background: false` en session non interactive (la session s'arrêterait avec eux ; pas d'outil Workflow non plus), avec le type d'agent du tableau et un message qui donne le commit, la copie, la spec, la consigne commune et celle du domaine, le format du rapport ci-dessus et la règle « lecture seule : aucun commit, aucune poussée, aucune écriture sur un service externe ». Le dédoublonnage est alors le tien (section 5).
 
 ## 5. Consolider
 1. Chaque rapport reçu : vérifie qu'il porte sur le bon commit et que la copie n'a aucun fichier suivi modifié (`git -C <copie> status --porcelain`) ; un écart est lui-même un constat.

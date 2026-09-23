@@ -181,7 +181,7 @@ test('phase three commands run the apv tool; those with effects are left to the 
   assert.ok(next > 0 && next < run.body.indexOf('apv run start <spec>'), 'resume through apv run next before any start');
   for (const rule of [/git switch -c <branche> <sha>/, /\.apv\/state\/task\.json/, /apv scope check --spec <spec> --task <tâche> --base <baseCommit>/,
     /apv run set <id> task:<tâche> running --branch/, /apv run set <id> task:<tâche> done --commit/, /data-model/, /apv:architecte`/, /fondations/,
-    /`apv:vague`/, /workflows\/vague\.js/, /dans un même message/, /run_in_background: true/, /apv:integrateur/, /git merge --ff-only/, /\/apv:review <id>/,
+    /`apv:vague`/, /workflows\/vague\.js/, /dans un même message/, /run_in_background: false/, /Session non interactive/, /jamais l.outil Workflow/, /apv:integrateur/, /git merge --ff-only/, /\/apv:review <id>/,
     /corrections-<id>\.md/, /apv gates run --repo/, /gh pr create --draft/, /sans masquer la sortie/, /apv preview update/, /70 %/, /85 %/, /95 %/, /apv quota/,
     /resumeFromRunId/, /Jamais de fusion/, /jamais de déploiement/, /jamais d'édition à la main/]) assert.match(run.body, rule);
 

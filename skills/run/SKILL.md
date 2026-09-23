@@ -14,6 +14,8 @@ Dans ce document, `apv` désigne `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` (ou 
 
 ## Règles qui ne se discutent pas
 - **Jamais de fusion** dans la branche principale ni dans une autre PR, **jamais de déploiement**, jamais de force-push, jamais de réécriture d'un commit poussé. Les seules fusions de ce document sont les avances rapides locales (`git merge --ff-only`) de la branche de la spec et les fusions de l'intégrateur dans sa branche d'intégration. La pile de PR se fusionne par `/apv:stack`, sur ordre de l'opérateur.
+- **Session non interactive** (lancée par `claude -p`, ou consigne qui dit qu'aucun opérateur n'est là pour te relancer) : la session s'arrête dès que tu termines ton tour, et avec elle les agents et workflows encore en cours (constaté sur « Toujours rien » : vague 0 coupée après 11 minutes). Tout se lance alors **au premier plan** : outil Agent avec `run_in_background: false` (plusieurs appels dans un même message tournent en parallèle et le tour attend tous les rapports), jamais l'outil Workflow (il rend la main tout de suite). Tu ne termines ton tour qu'à la fin de l'exécution ou sur un arrêt voulu (quota à 95 %, décision de l'opérateur), après avoir écrit l'état et `.apv/state/resume.md`.
+- **Session interactive** : l'arrière-plan reste possible, la notification de fin d'un agent te relance.
 - **Les commandes `apv run` se lancent depuis le checkout principal du dépôt** (ou avec `--repo <checkout principal>`) : l'outil prend la racine du worktree courant, et un état écrit depuis le worktree d'une tâche serait perdu.
 - **L'état d'exécution s'écrit par l'outil seulement** (`apv run start`, `apv run set`) ; jamais d'édition à la main de `.apv/state/run-<id>.json`. Si l'outil refuse une transition, lis son message et corrige l'ordre de tes actions ; ne force rien.
 - **Un rapport d'agent est une affirmation** ; tes contrôles relancés sont la preuve. Aucune sortie masquée d'une commande qui écrit sur un service externe (incident 30).
@@ -53,15 +55,15 @@ Règle unique : une tâche se lance **dès qu'elle est prête**, pas vague par v
 3. **Base exacte** : `git rev-parse apv/<id>` (le commit que tu donnes aux agents).
 4. **Branche de chaque tâche** : celle que `apv run next` indique, sinon `apv/<id>-<tâche>`.
 5. **Lancement** :
-   - **Une seule tâche** (les fondations prêtes, confiées à un seul agent ; une correction isolée) : outil Agent, `subagent_type: "apv:implementer"`, `run_in_background: true`, avec le message de lancement ci-dessous.
-   - **Plusieurs tâches** : le workflow du plugin `apv:vague` (outil Workflow, `name: "apv:vague"`, ou `scriptPath` = chemin absolu de `workflows/vague.js` du plugin si le nom n'est pas trouvé) avec `args` en objet JSON :
+   - **Une seule tâche** (les fondations prêtes, confiées à un seul agent ; une correction isolée) : outil Agent, `subagent_type: "apv:implementer"`, en arrière-plan en session interactive, au premier plan sinon (voir les règles en tête), avec le message de lancement ci-dessous.
+   - **Plusieurs tâches, session interactive** : le workflow du plugin `apv:vague` (outil Workflow, `name: "apv:vague"`, ou `scriptPath` = chemin absolu de `workflows/vague.js` du plugin si le nom n'est pas trouvé) avec `args` en objet JSON :
      ```json
      { "specId": "<id>", "specFile": ".apv/specs/<id>.json", "base": "apv/<id>", "baseCommit": "<sha>", "wave": 1,
        "brief": ".apv/brief.md", "notes": ".apv/state/notes-<id>-vague-1.md", "context": "<consigne commune de la vague, facultative>",
        "tasks": [ { "id": "T2", "branch": "apv/<id>-T2" }, { "id": "T3", "branch": "apv/<id>-T3", "resume": "<consigne de reprise, facultative>" } ] }
      ```
      Il lance un `apv:implementer` par tâche, chacun dans son worktree, avec la même consigne que le message ci-dessous, et rend un rapport structuré par tâche. Il ne touche pas à l'état : c'est toi qui le tiens.
-   - **Sans outil Workflow** (désactivé, version trop ancienne, refus) : plusieurs appels à l'outil Agent **dans un même message**, un par tâche, chacun `subagent_type: "apv:implementer"`, `run_in_background: true`. C'est aussi le bon choix quand tu veux pouvoir parler à chaque agent (`SendMessage`) pendant la vague.
+   - **Sans outil Workflow** (désactivé, version trop ancienne, refus) : plusieurs appels à l'outil Agent **dans un même message**, un par tâche, chacun `subagent_type: "apv:implementer"`, en arrière-plan en session interactive, `run_in_background: false` en session non interactive (c'est alors la seule façon de lancer plusieurs tâches). C'est aussi le bon choix quand tu veux pouvoir parler à chaque agent (`SendMessage`) pendant la vague.
 6. **Juste après le lancement**, pour chaque tâche : `apv run set <id> task:<tâche> running --branch <branche> --base <baseCommit> --agent <identifiant>` (`--base` : le commit de départ exact de la tâche, sans lequel `apv run next` mesurerait « aucun commit après la base » depuis la base de l'exécution) (identifiant de l'agent, ou `workflow:<runId>` pour une vague lancée par workflow). Note aussi le `runId` du workflow dans `.apv/state/resume.md`.
 7. **Pendant le travail des agents** : relevé de quota toutes les 10 à 15 minutes, préparation de la suite (notes de la vague suivante, revue du plan de la spec suivante). Tu ne codes pas à la place des agents.
 8. **À chaque rapport** (ou au rapport du workflow) :
