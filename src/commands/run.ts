@@ -88,7 +88,7 @@ async function start(repo: string, cwd: string, positionals: string[], values: {
     if (error instanceof PipelineError) return refuse([{ code: error.code, message: error.message }]);
     return refuse([{ code: 'SPEC_FILE', message: `Spec illisible ${path} : ${errorMessage(error)}` }]);
   }
-  const check = await checkSpec({ repo, document, ready: true });
+  const check = await checkSpec({ repo, document, ready: true, specFile: path });
   if (!check.valid) return refuse(check.issues);
   const spec = specSchema.parse(document.spec);
   const state = await withRunLock(specId, io.env, () => {

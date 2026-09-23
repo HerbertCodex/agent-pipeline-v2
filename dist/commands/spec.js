@@ -11,6 +11,8 @@ export const usage = `Utilisation :
 
 validate : valide une spec (schéma, dépendances, chemins autorisés, registre des décisions) contre le
 minimum de sécurité recalculé depuis le dépôt, comme au lancement. Toutes les erreurs sont listées.
+Sans --request ni --request-file, la demande est celle du document de spec, sinon celle que /apv:spec
+range dans .apv/state/demande-<id>.md (lue aussi par apv run start : même minimum qu'au lancement).
 Sortie : 0 si la spec est valide, 1 sinon, 2 si l'appel est incorrect.
 new : écrit le gabarit .apv/specs/<id>.json (une tâche exemple, passages « À compléter »), au format
 accepté par apv spec validate --draft ; <id> en kebab-case ; refuse d'écraser (sortie 1).`;
@@ -120,16 +122,16 @@ export async function run(args, io) {
                 io.stdout(`Spec invalide : ${path}\n- [${error.code}] ${error.message}\n`);
             return EXIT.failed;
         }
-        const result = await checkSpec({ repo: repoPath(io, values.repo), document, ready: !values.draft,
+        const result = await checkSpec({ repo: repoPath(io, values.repo), document, ready: !values.draft, specFile: path,
             ...(request !== undefined ? { request } : {}), ...(values.config ? { configFile: values.config } : {}) });
         const security = { minimumLane: result.security.minimumLane, topics: result.security.topics.map(t => t.id),
             requiresThreatModel: result.security.requiresThreatModel, negativeTestsRequired: result.security.negativeTestsRequired, signals: result.security.signals };
         if (values.json) {
             json(io, { valid: result.valid, file: path, title: result.title, sha: result.sha, mode: values.draft ? 'draft' : 'ready',
-                requestSource: result.requestSource, ledgerFile: result.ledgerFile, configFile: result.configFile, security, issues: result.issues });
+                requestSource: result.requestSource, requestFile: result.requestFile, ledgerFile: result.ledgerFile, configFile: result.configFile, security, issues: result.issues });
         }
         else {
-            const source = { option: 'ligne de commande', document: 'document de spec', spec: 'texte de la spec (aucune demande fournie)' }[result.requestSource];
+            const source = { option: 'ligne de commande', document: 'document de spec', stored: `demande rangée (${result.requestFile})`, spec: 'texte de la spec (aucune demande fournie)' }[result.requestSource];
             const lines = [
                 `${result.valid ? 'Spec valide' : 'Spec invalide'} : ${result.title ?? path}`,
                 `Dépôt à ${result.sha.slice(0, 12)} ; demande lue depuis : ${source} ; mode : ${values.draft ? 'brouillon' : 'prête à lancer'}`,

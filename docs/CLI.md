@@ -87,7 +87,8 @@ Le minimum de sécurité est recalculé depuis le dépôt exactement comme au la
 La demande de l'opérateur vient, dans l'ordre :
 1. de `--request` ou `--request-file` ;
 2. du document de spec, s'il a la forme `{ "request": "...", "spec": { ... } }` ;
-3. à défaut, du texte de la spec elle-même (titre, problème, périmètre, critères, tâches ; les exclusions ne comptent pas).
+3. à défaut, de la demande rangée par `/apv:spec` dans `.apv/state/demande-<id>.md` (pour la spec `.apv/specs/<id>.json`), que `apv run start` lit de la même façon : même minimum de sécurité à la validation et au lancement ;
+4. à défaut, du texte de la spec elle-même (titre, problème, périmètre, critères, tâches ; les exclusions ne comptent pas).
 
 Seule une demande fournie (cas 1 ou 2) sert à vérifier les citations des résolutions de décisions ambiguës.
 

@@ -144,3 +144,23 @@ test('spec documents: wrapper keys are strict and the fallback text ignores excl
   assert.doesNotMatch(specText(spec), /password/);
   assert.equal(specText({ invalid: true }), '');
 });
+
+test('the request stored by /apv:spec is read by validate and by run start alike (same minimum)', async t => {
+  const f = fixture(t);
+  const request = 'Expose a REST API endpoint with login and session cookies.';
+  // Covered for the stored request, which is stricter than the spec text alone.
+  write(f.repo, '.apv/specs/api.json', withSecurity(oneTask(), request));
+  write(f.repo, '.apv/state/demande-api.md', `${request}\n`);
+  git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'spec');
+  const validated = await apv(f.repo, ['spec', 'validate', '.apv/specs/api.json', '--json']);
+  assert.equal(validated.code, 0, JSON.stringify(validated.json().issues));
+  assert.deepEqual([validated.json().requestSource, validated.json().requestFile], ['stored', '.apv/state/demande-api.md']);
+  const started = await apv(f.repo, ['run', 'start', 'api', '--json'], { APV_LOCK_DIR: join(f.root, 'locks') });
+  assert.equal(started.code, 0, started.stdout + started.stderr);
+  // Without the stored request, a stricter spec written for a weaker request is refused at both steps.
+  write(f.repo, '.apv/specs/plain.json', oneTask());
+  write(f.repo, '.apv/state/demande-plain.md', `${request}\n`);
+  git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'plain');
+  assert.equal((await apv(f.repo, ['spec', 'validate', '.apv/specs/plain.json'])).code, 1);
+  assert.equal((await apv(f.repo, ['run', 'start', 'plain'], { APV_LOCK_DIR: join(f.root, 'locks') })).code, 1);
+});

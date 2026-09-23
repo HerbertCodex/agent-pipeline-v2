@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { basename, join, sep } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import type { Issue } from '../domain/issues.js';
 import { Git } from '../execution/git.js';
@@ -58,6 +58,8 @@ export interface SpecCheckOptions {
   document: SpecDocument;
   /** Operator request given on the command line; it wins over the one stored in the document. */
   request?: string;
+  /** Spec file: its stored request `.apv/state/demande-<id>.md`, written by /apv:spec, is read when no request is given. */
+  specFile?: string;
   /** Launch-time rules (default): no open question, every criterion implemented by a task. */
   ready?: boolean;
   configFile?: string;
@@ -68,7 +70,9 @@ export interface SpecCheckResult {
   issues: Issue[];
   title: string | null;
   sha: string;
-  requestSource: 'option' | 'document' | 'spec';
+  requestSource: 'option' | 'document' | 'stored' | 'spec';
+  /** Path of the stored request, relative to the repository, when it was used. */
+  requestFile: string | null;
   ledgerFile: string | null;
   configFile: string | null;
   security: SecurityContext;
@@ -93,8 +97,11 @@ export async function checkSpec(options: SpecCheckOptions): Promise<SpecCheckRes
   } catch (error) { issues.push({ code: error instanceof PipelineError ? error.code : 'CONFIG', message: errorMessage(error) }); }
   const ledger = workingLedger(repo);
   issues.push(...ledger.issues);
-  const explicit = options.request ?? options.document.request ?? undefined;
-  const requestSource = options.request !== undefined ? 'option' : options.document.request !== null ? 'document' : 'spec';
+  // Same request at validation and at launch (incident 14): the operator's words stored next to the spec by
+  // /apv:spec count as the request whenever none is given, for `apv spec validate` and `apv run start` alike.
+  const stored = options.request === undefined && options.document.request === null && options.specFile ? storedRequest(repo, options.specFile) : null;
+  const explicit = options.request ?? options.document.request ?? stored?.text ?? undefined;
+  const requestSource = options.request !== undefined ? 'option' : options.document.request !== null ? 'document' : stored ? 'stored' : 'spec';
   const request = explicit ?? specText(options.document.spec);
   const decisionsText = (ledger.ledger?.decisions ?? []).map(d => `${d.subject}: ${d.value}`).join('\n');
   const intelligence = await inspectRepository(repo, sha, `${request}\n${decisionsText}`, options.signal ? { signal: options.signal } : {});
@@ -105,5 +112,17 @@ export async function checkSpec(options: SpecCheckOptions): Promise<SpecCheckRes
     files: [...pathsMentioned(request, tracked), ...(declared?.tasks.flatMap(t => t.allowedPaths).filter(p => !/[*?]/.test(p)) ?? [])] });
   issues.push(...specIssues(options.document.spec, { ready: options.ready ?? true, securityContext: security,
     ...(ledger.ledger ? { ledger: ledger.ledger } : {}), ...(explicit !== undefined ? { operatorText: explicit } : {}) }));
-  return { valid: issues.length === 0, issues, title: declared?.title ?? null, sha, requestSource, ledgerFile: ledger.file, configFile, security };
+  return { valid: issues.length === 0, issues, title: declared?.title ?? null, sha, requestSource, requestFile: stored?.file ?? null, ledgerFile: ledger.file, configFile, security };
+}
+
+/** `.apv/state/demande-<id>.md` for a spec file `<id>.json`, when it exists and is a readable regular file. */
+function storedRequest(repo: string, specFile: string): { file: string; text: string } | null {
+  const id = basename(specFile).replace(/\.json$/, '');
+  const file = join('.apv', 'state', `demande-${id}.md`);
+  try {
+    const full = join(repo, file);
+    if (!statSync(full).isFile()) return null;
+    const text = readFileSync(full, 'utf8').trim();
+    return text ? { file: file.split(sep).join('/'), text } : null;
+  } catch { return null; }
 }
