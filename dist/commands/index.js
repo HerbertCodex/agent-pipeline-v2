@@ -6,6 +6,7 @@ import { errorMessage } from '../domain/errors.js';
  */
 export const commands = {
     spec: { summary: 'spec validate <fichier> : valide une spec avec le minimum de sécurité recalculé', load: () => import('./spec.js') },
+    run: { summary: 'run start|set|next|status : état de reprise d\'une exécution de spec (vagues, tâches, revues)', load: () => import('./run.js') },
     ledger: { summary: 'ledger validate|plan|apply : registre des décisions', load: () => import('./ledger.js') },
     scope: { summary: 'scope check --spec <fichier> --task <id> : fichiers modifiés contre les chemins autorisés', load: () => import('./scope.js') },
     gates: { summary: 'gates run [--only a,b] : exécute les contrôles déclarés et écrit des reçus', load: () => import('./gates.js') },
