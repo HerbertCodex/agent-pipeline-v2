@@ -251,6 +251,8 @@ export interface NextPlan {
  */
 export declare function computeNext(state: RunState, probe: GitProbe): NextPlan;
 export declare function readRunState(file: string): RunState;
+/** Parses and validates the text of a state file; `file` only names it in the errors. */
+export declare function parseRunStateText(text: string, file: string): RunState;
 /** Atomic write: a temporary file in the same directory, flushed, then renamed over the target. */
 export declare function writeRunState(file: string, state: RunState): void;
 /** Every `run-<id>.json` of `.apv/state/`, in name order. */
@@ -272,8 +274,11 @@ export interface RunSummary {
     error: null;
 }
 export declare function summarize(state: RunState, file: string): RunSummary;
-/** One line for `apv status` and `apv run status`. */
-export declare function summaryLine(sum: RunSummary): string;
+/**
+ * One line for `apv status` and `apv run status`. `running` names the running tasks after their count
+ * (ids of the state, already restricted to the task id pattern by the schema); the first ones only.
+ */
+export declare function summaryLine(sum: RunSummary, running?: readonly string[]): string;
 /**
  * Runs `fn` under the lease lock `run:<spec-id>` (apv lock), so that two agents never interleave a
  * read-modify-write of the same state. The lock lives in the lock directory of the machine (APV_LOCK_DIR);

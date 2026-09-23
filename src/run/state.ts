@@ -296,8 +296,13 @@ export function computeNext(state: RunState, probe: GitProbe): NextPlan {
 
 export function readRunState(file: string): RunState {
   if (!existsSync(file)) throw new PipelineError('RUN_MISSING', `Aucune exécution : ${file} n'existe pas (apv run start <spec>)`);
+  return parseRunStateText(readFileSync(file, 'utf8'), file);
+}
+
+/** Parses and validates the text of a state file; `file` only names it in the errors. */
+export function parseRunStateText(text: string, file: string): RunState {
   let raw: unknown;
-  try { raw = JSON.parse(readFileSync(file, 'utf8')) as unknown; }
+  try { raw = JSON.parse(text) as unknown; }
   catch (error) { throw new PipelineError('RUN_STATE', `État illisible ${file} : ${errorMessage(error)}`); }
   try { return parseState(raw); }
   catch (error) { throw new PipelineError('RUN_STATE', `État invalide ${file} : ${errorMessage(error)}`); }
@@ -336,11 +341,15 @@ export function summarize(state: RunState, file: string): RunSummary {
     reviews: Object.fromEntries(REVIEWS.map(r => [r, state.reviews[r].status])) as Record<ReviewDomain, RunStatus>, updatedAt: state.updatedAt, error: null };
 }
 
-/** One line for `apv status` and `apv run status`. */
-export function summaryLine(sum: RunSummary): string {
+/**
+ * One line for `apv status` and `apv run status`. `running` names the running tasks after their count
+ * (ids of the state, already restricted to the task id pattern by the schema); the first ones only.
+ */
+export function summaryLine(sum: RunSummary, running: readonly string[] = []): string {
   const t = sum.tasks;
   const where = sum.finished ? 'terminée' : `étape ${STEP_LABEL[sum.step!]}${sum.step === 'waves' && sum.wave !== null ? ` (vague ${sum.wave})` : ''}`;
-  const extra = [t.running ? `${t.running} en cours` : '', t.failed ? `${t.failed} en échec` : '', t.skipped ? `${t.skipped} sautée(s)` : ''].filter(Boolean).join(', ');
+  const names = running.length ? ` (${running.slice(0, 5).join(', ')}${running.length > 5 ? ', …' : ''})` : '';
+  const extra = [t.running ? `${t.running} en cours${names}` : '', t.failed ? `${t.failed} en échec` : '', t.skipped ? `${t.skipped} sautée(s)` : ''].filter(Boolean).join(', ');
   return `${sum.specId} : ${where} ; tâches ${t.done}/${t.total} faites${extra ? `, ${extra}` : ''} ; mise à jour ${sum.updatedAt}`;
 }
 

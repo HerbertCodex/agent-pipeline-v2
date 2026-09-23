@@ -1,5 +1,5 @@
 import { lastQuotaReading } from '../quota/usage.js';
-import { type RunListing } from './run.js';
+import { type RunSummaryEntry } from '../run/summary.js';
 import type { CommandIO } from './io.js';
 export declare const usage = "Utilisation :\n  apv status [--repo <chemin>] [--json]\n\nR\u00E9sume l'\u00E9tat de .apv/ : configuration, registre des d\u00E9cisions (empreinte), specs de .apv/specs/,\n\u00E9tat de reprise de .apv/state/, une ligne par ex\u00E9cution en cours (apv run) et dernier relev\u00E9 de quota.";
 export interface ApvStatus {
@@ -28,7 +28,7 @@ export interface ApvStatus {
         modifiedAt: string;
     }[];
     /** Spec executions (`.apv/state/run-<id>.json`, apv run). */
-    runs: RunListing[];
+    runs: RunSummaryEntry[];
     quota: ReturnType<typeof lastQuotaReading>;
 }
 export declare function apvStatus(repo: string): ApvStatus;
