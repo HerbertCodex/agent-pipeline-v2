@@ -64,7 +64,7 @@ Un agent `isolation: worktree` part de la branche par défaut du dépôt, pas de
 | `qa-fidelite` | Revue en lecture seule : captures comparées à la maquette, textes, accessibilité, bonnes pratiques | aucun | non |
 | `dpo` | RGPD : données, base légale, durées, sous-traitants et transferts vérifiés sur les DPA officiels, cohérence des pages légales avec le code | aucun | pages légales seulement, sur demande |
 
-Les rôles de V2 (`roles/*.md`) deviennent le corps de ces agents, sans les consignes « le contrôleur attend du JSON ».
+Les rôles de V2 (`roles/*.md`, archivés dans `docs/v2/roles/`) deviennent le corps de ces agents, sans les consignes « le contrôleur attend du JSON ».
 
 ## 6. Commandes
 

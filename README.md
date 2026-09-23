@@ -30,7 +30,7 @@ APV3 est un plugin Claude Code. L'opérateur délègue ; la session principale d
 /plugin install apv@herbertcodex-apv
 ```
 
-Puis suivez [START-HERE.md](START-HERE.md). Détails : [docs/PLUGIN.md](docs/PLUGIN.md). Spécification : [docs/APV3-SPEC.md](docs/APV3-SPEC.md).
+Puis suivez [START-HERE.md](START-HERE.md). Détails : [docs/PLUGIN.md](docs/PLUGIN.md). Outil `apv` : [docs/CLI.md](docs/CLI.md). Spécification : [docs/APV3-SPEC.md](docs/APV3-SPEC.md).
 
 ## Développer
 

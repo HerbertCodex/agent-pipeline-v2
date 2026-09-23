@@ -4,11 +4,7 @@
 
 La configuration est un JSON déclaratif lu avant l'agent et conservé avec la tentative. La tâche ne peut pas fournir une commande à la place d'un contrôle, changer un verdict ni s'accorder une exemption. Les champs inconnus sont refusés.
 
-Les schémas sont dans `examples/schemas/`. Pour les régénérer :
-
-```bash
-node dist/cli.js schemas --output examples/schemas
-```
+Les schémas JSON exportés par V2 sont archivés dans [v2/schemas/](v2/schemas/) ; la commande `apv2 schemas` qui les produisait n'existe plus en V3, où les contrats font foi dans `src/`.
 
 ## Exemple minimal pour un projet déjà préparé
 

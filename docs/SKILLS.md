@@ -31,7 +31,7 @@ apv2 inspect --repo /chemin/projet
 
 ## Chargement, budget et audit
 
-Le contrôleur injecte les SKILL.md sélectionnés dans `guidance.skills`. Il charge les instructions du rôle depuis `roles/*.md`. Les fichiers complets de référence ne sont pas injectés dans le prompt ; ils sont copiés lors de l'installation approuvée et les chemins relatifs sont indiqués. Un rôle ne doit lire que les ressources utiles.
+Le contrôleur injecte les SKILL.md sélectionnés dans `guidance.skills`. Il charge les instructions du rôle depuis `roles/*.md` (archivés dans [v2/roles/](v2/roles/)). Les fichiers complets de référence ne sont pas injectés dans le prompt ; ils sont copiés lors de l'installation approuvée et les chemins relatifs sont indiqués. Un rôle ne doit lire que les ressources utiles.
 
 La limite `maxContextBytes` couvre les corps SKILL.md en UTF-8, pas le prompt entier ni un nombre de tokens. Si un skill ne tient pas, il est omis entièrement avec la raison `context-budget`, jamais tronqué. L'ordre est celui du manifeste. Les autres raisons sont `disabled`, `role`, `project-type`, `task`.
 
