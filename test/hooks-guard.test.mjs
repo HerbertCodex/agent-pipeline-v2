@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { evaluateCommand, isStackMerge, REASONS, tokenize } from '../hooks/scripts/bash-guard.mjs';
+import { isMainModule } from '../hooks/scripts/lib.mjs';
 
 const script = fileURLToPath(new URL('../hooks/scripts/bash-guard.mjs', import.meta.url));
 const hooksFile = fileURLToPath(new URL('../hooks/hooks.json', import.meta.url));
@@ -177,4 +180,25 @@ test('hooks.json registers the four hooks in exec form with the plugin root plac
       }
     }
   }
+});
+
+test('the guard still blocks when the plugin is reached through a symlink (macOS /var, linked plugin folder)', t => {
+  // Node resolves the main module's path while argv[1] keeps the launched one: comparing them unresolved made
+  // every hook a silent no-op behind a symlink, the force-push and merge guard included.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'apv-guard-link-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const link = join(root, 'plugin');
+  symlinkSync(fileURLToPath(new URL('..', import.meta.url)), link);
+  const input = JSON.stringify(bash('git push --force origin main'));
+  const result = spawnSync(process.execPath, [join(link, 'hooks', 'scripts', 'bash-guard.mjs')], { input, encoding: 'utf8' });
+  assert.equal(result.status, 2, result.stderr);
+  assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('isMainModule compares resolved paths and never throws', () => {
+  const guard = new URL('../hooks/scripts/bash-guard.mjs', import.meta.url);
+  assert.equal(isMainModule(guard, script), true);
+  assert.equal(isMainModule(guard, undefined), false);
+  assert.equal(isMainModule(guard, '/nonexistent/bash-guard.mjs'), false);
+  assert.equal(isMainModule(guard, hooksFile), false);
 });
