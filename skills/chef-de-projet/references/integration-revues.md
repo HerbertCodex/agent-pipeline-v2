@@ -3,6 +3,8 @@
 Dans ce document, `apv` désigne l'outil du plugin (voir `SKILL.md`).
 
 ## 1. Intégration d'une vague
+Sous `/apv:run`, l'étape `integration` de l'état se tient par `apv run set <id> integration …` ; la branche d'intégration est `apv/<id>-integration-<n>`. Une vague d'une seule tâche s'intègre par avance rapide directe après tes contrôles.
+
 1. Toutes les tâches de la vague sont rentrées (ou tu décides d'intégrer celles qui sont prêtes et de relancer les autres).
 2. Lance `integrateur` avec : branche de la spec, liste ordonnée des branches de tâches, plan et notes de vague.
 3. Il crée `<spec>-integration-<n>` depuis la branche de la spec, fusionne dans l'ordre, unifie les doublons, garde tous les tests, relance tous les contrôles.
@@ -10,7 +12,7 @@ Dans ce document, `apv` désigne l'outil du plugin (voir `SKILL.md`).
 5. Les branches de tâches restent telles quelles (jamais réécrites).
 
 ## 2. Revues indépendantes
-Après intégration et avant la PR, quatre revues en parallèle, en lecture seule, chacune sur sa copie isolée du même commit :
+Commande : `/apv:review <id>` (workflow du plugin `apv:revues`, ou l'outil Agent avec un appel par domaine dans un même message). Après intégration et avant la PR, quatre revues en parallèle, en lecture seule, chacune sur sa copie détachée du même commit (`git worktree add --detach`), avec `apv run set <id> review:<domaine> …` (`securite`, `fidelite`, `donnees`, `rgpd`) quand une exécution existe :
 
 | Agent | Quand | Ce qu'il rend |
 |---|---|---|
@@ -19,7 +21,7 @@ Après intégration et avant la PR, quatre revues en parallèle, en lecture seul
 | `architecte-donnees` (revue) | dès qu'une migration ou une requête change | grille 13 bis, sortie de `apv db check`, `EXPLAIN` |
 | `dpo` | données personnelles, prestataire, traceur, pages légales | écarts entre pages légales et code, sous-traitants vérifiés |
 
-Donne à chacun : commit exact, port libre, ressources à prendre sous bail, écarts déjà validés par l'opérateur. Mode économe si le quota est serré : revue combinée ou captures limitées aux écrans modifiés, et dis-le dans la PR.
+Les constats sont consolidés et dédoublonnés dans `.apv/state/revues-<id>-<sha court>.md`, sans en écarter aucun. Donne à chacun : commit exact, copie détachée, port libre, ressources à prendre sous bail, écarts déjà validés par l'opérateur. Mode économe si le quota est serré : revue combinée ou captures limitées aux écrans modifiés, et dis-le dans la PR.
 
 ## 3. Décider les constats
 Tu décides chaque constat, par écrit, dans `.apv/state/corrections-<spec>.md`, sur le modèle qui a servi au projet pilote :
