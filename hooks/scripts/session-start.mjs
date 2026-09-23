@@ -3,7 +3,6 @@
 // (APV3 spec, section 11). Read-only, bounded output, silent when there is no `.apv/`.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { findApvDir, isMainModule, oneLine, readHookInput } from './lib.mjs';
 
 const MAX_CONTEXT = 4000;
