@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { PipelineError, errorMessage, invariant } from '../domain/errors.js';
 import { s } from '../domain/schema.js';
 import { LockStore, defaultLockDir } from '../lock/store.js';
 import { describeHolder } from '../lock/run.js';
+import { MAX_RUN_STATE_BYTES, readBounded } from './bounded-read.js';
 /** Resume state of a spec execution: `.apv/state/run-<spec-id>.json`, versioned with the project (spec section 8). */
 export const RUN_STATE_DIR = '.apv/state';
 export const runStateFile = (repo, specId) => join(repo, RUN_STATE_DIR, `run-${specId}.json`);
@@ -366,11 +367,25 @@ export function computeNext(state, probe) {
     return { specId: state.specId, step, stepStatus, wave, finished: allDone, ready, awaitingIntegration, integration: { head: integration.head, where: integration.where },
         resume, relaunch, failed, blocked, reviewsToLaunch, reviewsRunning, actions };
 }
+/**
+ * Reads one state file (`apv run start|set|next|status <id>`) with the bounded read of the summary: a regular
+ * file only (a FIFO named like the state never blocks), MAX_RUN_STATE_BYTES at most; errors name the file by
+ * `shown` and never quote its content.
+ */
 export function readRunState(file, source = {}) {
     const shown = source.shown ?? file;
-    if (!existsSync(file))
+    // lstat: a dangling link is not « no execution », and nothing is followed or opened here.
+    let present = true;
+    try {
+        lstatSync(file);
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            present = false;
+    }
+    if (!present)
         throw new PipelineError('RUN_MISSING', `Aucune exécution : ${shown} n'existe pas (apv run start <spec>)`);
-    return parseRunStateText(readFileSync(file, 'utf8'), shown, source.specId);
+    return parseRunStateText(readBounded(file, shown, MAX_RUN_STATE_BYTES).toString('utf8'), shown, source.specId);
 }
 /**
  * Reason of a schema refusal without any text of the file: the paths hold only schema keys, task ids (checked

@@ -1,8 +1,10 @@
-import { closeSync, constants, fstatSync, openSync, readSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { relative, sep } from 'node:path';
-import { PipelineError, errorMessage } from '../domain/errors.js';
+import { errorMessage } from '../domain/errors.js';
+import { BudgetSpent, MAX_RUN_STATE_BYTES, readBounded } from './bounded-read.js';
 import { listRunFiles, parseRunStateText, summarize, summaryLine } from './state.js';
 export { RUN_ID } from './state.js';
+export { MAX_RUN_STATE_BYTES } from './bounded-read.js';
 /**
  * Summaries of the spec executions of a project (`.apv/state/run-*.json`), shared by `apv status` and the
  * SessionStart hook of the plugin. The state files are written by agents and commits: their content is data.
@@ -11,8 +13,6 @@ export { RUN_ID } from './state.js';
  * failing the caller, and a read never goes past a number of files and a total of bytes, so that a directory
  * filled with state files (links to one big file cost no disk) cannot stall the caller.
  */
-/** Largest state file read; a bigger one is reported as unreadable. */
-export const MAX_RUN_STATE_BYTES = 4 * 1024 * 1024;
 /** Default number of state files one summary reads; the others are counted as unread. */
 export const MAX_RUN_FILES = 50;
 /** Default total of bytes one summary reads over all its files. */
@@ -35,46 +35,6 @@ export function cleanLine(value, max = MAX_SUMMARY_LINE) {
     return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : text;
 }
 const posix = (path) => path.split(sep).join('/');
-/** The total bound of a summary is reached: this file and the next ones stay unread. */
-class BudgetSpent extends Error {
-}
-/**
- * Reads at most `max` bytes of a regular file, and at most `budget` bytes (else BudgetSpent). A FIFO or a device
- * is refused before any blocking read (non-blocking open, then fstat), and a file that grows past a bound while
- * read is refused too.
- */
-function readBounded(file, shown, max, budget) {
-    const tooBig = (size) => new PipelineError('RUN_STATE', `État trop volumineux ${shown} : ${size} octets, limite ${max}`);
-    const notFile = () => new PipelineError('RUN_STATE', `État illisible ${shown} : pas un fichier ordinaire`);
-    const before = statSync(file);
-    if (!before.isFile())
-        throw notFile();
-    if (before.size > max)
-        throw tooBig(String(before.size));
-    if (before.size > budget)
-        throw new BudgetSpent();
-    const fd = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
-    try {
-        if (!fstatSync(fd).isFile())
-            throw notFile();
-        const buffer = Buffer.allocUnsafe(Math.min(max, budget) + 1);
-        let length = 0;
-        while (length < buffer.length) {
-            const read = readSync(fd, buffer, length, buffer.length - length, null);
-            if (read === 0)
-                break;
-            length += read;
-        }
-        if (length > max)
-            throw tooBig(`plus de ${max}`);
-        if (length > budget)
-            throw new BudgetSpent();
-        return buffer.subarray(0, length);
-    }
-    finally {
-        closeSync(fd);
-    }
-}
 /** Modification time of a file in milliseconds, 0 when it cannot be read (the file then comes last). */
 function mtimeOf(file) {
     try {

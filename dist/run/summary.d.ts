@@ -1,5 +1,6 @@
 import { type RunSummary } from './state.js';
 export { RUN_ID } from './state.js';
+export { MAX_RUN_STATE_BYTES } from './bounded-read.js';
 /**
  * Summaries of the spec executions of a project (`.apv/state/run-*.json`), shared by `apv status` and the
  * SessionStart hook of the plugin. The state files are written by agents and commits: their content is data.
@@ -8,8 +9,6 @@ export { RUN_ID } from './state.js';
  * failing the caller, and a read never goes past a number of files and a total of bytes, so that a directory
  * filled with state files (links to one big file cost no disk) cannot stall the caller.
  */
-/** Largest state file read; a bigger one is reported as unreadable. */
-export declare const MAX_RUN_STATE_BYTES: number;
 /** Default number of state files one summary reads; the others are counted as unread. */
 export declare const MAX_RUN_FILES = 50;
 /** Default total of bytes one summary reads over all its files. */

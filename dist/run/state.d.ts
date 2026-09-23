@@ -334,6 +334,11 @@ export interface RunStateSource {
     shown?: string;
     specId?: string;
 }
+/**
+ * Reads one state file (`apv run start|set|next|status <id>`) with the bounded read of the summary: a regular
+ * file only (a FIFO named like the state never blocks), MAX_RUN_STATE_BYTES at most; errors name the file by
+ * `shown` and never quote its content.
+ */
 export declare function readRunState(file: string, source?: RunStateSource): RunState;
 /**
  * Parses and validates the text of a state file. `shown` names it in the errors, which never quote its content

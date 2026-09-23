@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixture, git } from './helpers.mjs';
@@ -492,4 +492,46 @@ test('apv run refuses a state of another spec and names state files relative to 
   assert.match(r.stderr, /État illisible \.apv\/state\/run-vagues\.json : JSON invalide/);
   assert.doesNotMatch(r.stderr, /consignes/);
   assert.match((await p.run('next', 'absent')).stderr, /Aucune exécution : \.apv\/state\/run-absent\.json n'existe pas/);
+});
+
+/** `apv <args>` in its own process, killed after `ms`: a blocked read shows as « bloqué » instead of hanging the suite. */
+function bounded(p, args, ms = 5000) {
+  return new Promise(done => {
+    const child = spawn(process.execPath, [cli, ...args], { cwd: p.repo, env: { ...process.env, ...p.env, APV_RUN_LOCK_WAIT: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', c => { stdout += c; }); child.stderr.on('data', c => { stderr += c; });
+    const timer = setTimeout(() => { child.kill('SIGKILL'); done({ code: 'bloqué', stdout, stderr }); }, ms);
+    child.on('close', code => { clearTimeout(timer); done({ code, stdout, stderr }); });
+  });
+}
+
+test('apv run next|set|status <id> read the state with a bound: a FIFO never blocks, a 5 MB file is refused', { skip: process.platform === 'win32' }, async t => {
+  // Point 5 of the phase 3 trial: readRunState read without any bound, so a FIFO named like the state blocked
+  // `apv run next|set|status <id>` forever. Each command runs in its own process with a deadline.
+  const p = project(t);
+  mkdirSync(join(p.repo, '.apv/state'), { recursive: true });
+  execFileSync('mkfifo', [join(p.repo, '.apv/state/run-fifo.json')]);
+  for (const args of [['next', 'fifo'], ['status', 'fifo'], ['set', 'fifo', 'plan', 'done'], ['start', '.apv/specs/fifo.json']]) {
+    if (args[0] === 'start') write(p.repo, '.apv/specs/fifo.json', waveSpec());
+    const r = await bounded(p, ['run', ...args]);
+    assert.equal(r.code, 1, `${args.join(' ')} : ${r.code} ${r.stderr}`);
+    assert.match(r.stderr, /État illisible \.apv\/state\/run-fifo\.json : pas un fichier ordinaire/, args.join(' '));
+    assert.ok(!r.stderr.includes(p.repo), r.stderr);
+  }
+  // 5 MB: refused before parsing, nothing of its content quoted, never rewritten.
+  const big = join(p.repo, '.apv/state/run-gros.json');
+  writeFileSync(big, `{"secret":"${'x'.repeat(5 * 1024 * 1024)}"}`);
+  for (const args of [['next', 'gros'], ['status', 'gros'], ['set', 'gros', 'plan', 'done']]) {
+    const r = await bounded(p, ['run', ...args]);
+    assert.equal(r.code, 1, `${args.join(' ')} : ${r.code} ${r.stderr}`);
+    assert.match(r.stderr, /État trop volumineux \.apv\/state\/run-gros\.json : \d+ octets, limite 4194304/, args.join(' '));
+    assert.doesNotMatch(r.stderr, /secret|xxxx/);
+  }
+  assert.equal(readFileSync(big, 'utf8').length, 5 * 1024 * 1024 + 13, 'never rewritten');
+  // A state at the bound or below still reads; a directory is no state.
+  await p.run('start', 'vagues');
+  assert.equal((await bounded(p, ['run', 'next', 'vagues'])).code, 0);
+  mkdirSync(join(p.repo, '.apv/state/run-dossier.json'));
+  const dir = await p.run('status', 'dossier');
+  assert.match(dir.stderr, /État illisible \.apv\/state\/run-dossier\.json : pas un fichier ordinaire/);
 });
