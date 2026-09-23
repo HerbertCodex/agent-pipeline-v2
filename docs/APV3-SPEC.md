@@ -150,6 +150,29 @@ Leçon du projet pilote : la première version de la base avait des tables et co
 - Quand une étape ne peut pas entrer dans la transaction (fichier dans un stockage objet, e-mail, API externe), le modèle documente la compensation (annulation de l'étape déjà faite) ou l'idempotence (réservation avant envoi, clé d'unicité), et un test prouve le comportement en cas d'échec à chaque étape.
 - Les invariants qui peuvent être cassés par deux requêtes simultanées (quota, doublon, « déjà fait ») sont protégés en base : contrainte d'unicité, verrou de ligne (`for update`) ou verrou consultatif ; un test lance des appels concurrents.
 
+**Écritures uniques (anti double clic) et cohérence**
+
+Un clic répété, une connexion lente qui renvoie, un retour arrière du navigateur ne doivent jamais créer deux écritures. Trois niveaux, tous obligatoires pour toute action qui écrit :
+1. **Interface** : pendant l'envoi, le bouton passe en état « en cours » (`aria-busy`, `aria-disabled`, libellé de chargement) et ignore les clics suivants ; le formulaire n'est soumis qu'une fois.
+2. **Serveur (idempotence)** : chaque formulaire de création porte une clé d'idempotence générée à l'affichage (champ caché, UUID) ; la table la stocke avec une contrainte d'unicité `(user_id, idempotency_key)` ; une seconde requête avec la même clé renvoie le résultat de la première au lieu d'écrire. Les actions de mise à jour sont idempotentes par nature (poser une valeur, pas l'incrémenter) ; les actions « faire une fois » (marquer fait, relancer, envoyer) vérifient l'état en base dans la même transaction.
+3. **Base** : contraintes d'unicité sur les clés naturelles quand elles existent (un seul envoi par utilisateur, type et période ; un seul brouillon ouvert, etc.), en dernier rempart.
+
+**Mises à jour concurrentes (pas de mise à jour perdue)**
+- Deux onglets ou deux appareils qui modifient la même ligne : verrou optimiste par défaut, avec une colonne de version (`version integer` ou `updated_at`) envoyée avec le formulaire et vérifiée dans le `update … where id = … and version = …` ; en cas de conflit, l'utilisateur voit un message clair et la valeur actuelle, rien n'est écrasé en silence.
+- Verrou pessimiste (`select … for update`) seulement dans une transaction courte qui lit puis écrit une valeur dont dépend l'invariant (compteur, quota, état).
+
+**Verrous : règles**
+- Transactions courtes : aucun appel réseau (e-mail, API, stockage) pendant qu'un verrou de base est tenu.
+- Ordre de verrouillage fixe (par exemple toujours la candidature avant ses événements) pour éviter les interblocages ; `lock_timeout` et `statement_timeout` réglés pour qu'une attente anormale échoue proprement au lieu de bloquer.
+- Verrous consultatifs (`pg_advisory_xact_lock`) libérés automatiquement en fin de transaction, jamais en mode session.
+- Côté pipeline, les ressources partagées (base de test, ports) utilisent les verrous à bail de `apv lock` (expiration, propriétaire vérifié), jamais un verrou sans fin.
+
+**Tests exigés**
+- Double clic simulé sur chaque action qui écrit : une seule ligne créée, un seul envoi.
+- Deux requêtes identiques envoyées en même temps au serveur (même clé d'idempotence, puis clés différentes sur une ressource unique) : le résultat attendu, sans doublon.
+- Deux mises à jour concurrentes de la même ligne : la seconde reçoit un conflit, aucune donnée perdue.
+- `apv db check` signale une table de création sans clé d'idempotence ni clé naturelle unique.
+
 **Normalisation**
 - Forme normale de Boyce-Codd (BCNF) par défaut, troisième forme normale au minimum.
 - Toute redondance est déclarée dans le modèle avec sa raison et son garde-fou : par exemple `user_id` répété dans une table enfant pour la RLS, verrouillé par une clé étrangère composite `(id, user_id)` ; une valeur calculée gardée pour la performance, maintenue par la base (déclencheur ou fonction) et jamais écrite librement par l'application.
