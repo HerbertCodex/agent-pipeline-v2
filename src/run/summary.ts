@@ -9,12 +9,17 @@ export { RUN_ID } from './state.js';
  * Summaries of the spec executions of a project (`.apv/state/run-*.json`), shared by `apv status` and the
  * SessionStart hook of the plugin. The state files are written by agents and commits: their content is data.
  * Every line that leaves this module is cleaned (one line, no control or format character, bounded length),
- * and every file is read with a size bound, so that a corrupt or huge state gives an error entry instead of
- * failing the caller.
+ * every file is read with a size bound, so that a corrupt or huge state gives an error entry instead of
+ * failing the caller, and a read never goes past a number of files and a total of bytes, so that a directory
+ * filled with state files (links to one big file cost no disk) cannot stall the caller.
  */
 
 /** Largest state file read; a bigger one is reported as unreadable. */
 export const MAX_RUN_STATE_BYTES = 4 * 1024 * 1024;
+/** Default number of state files one summary reads; the others are counted as unread. */
+export const MAX_RUN_FILES = 50;
+/** Default total of bytes one summary reads over all its files. */
+export const MAX_RUN_TOTAL_BYTES = 16 * 1024 * 1024;
 /** Default length bound of a summary line, in characters. */
 export const MAX_SUMMARY_LINE = 300;
 
@@ -23,7 +28,16 @@ export interface RunSummaryError { specId: string; file: string; error: string }
 /** One execution: its summary, or the reason its state could not be read (`error` not null). */
 export type RunSummaryEntry = RunSummaryOk | RunSummaryError;
 
-export interface ReadRunSummariesOptions { maxBytes?: number }
+export interface ReadRunSummariesOptions {
+  /** Bound of one file (MAX_RUN_STATE_BYTES). */
+  maxBytes?: number;
+  /** Files read at most (MAX_RUN_FILES), unreadable ones included. */
+  maxFiles?: number;
+  /** Bytes read at most over all the files (MAX_RUN_TOTAL_BYTES). */
+  maxTotalBytes?: number;
+}
+/** The executions read, and how many state files were left unread because a bound was reached. */
+export interface RunSummaries { entries: RunSummaryEntry[]; unread: number }
 
 // Escape sequences (CSI, OSC, then any other two-character escape), removed whole so that no parameter survives.
 const ANSI = /\u001b\[[0-?]*[ -\/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b[@-_]?/g;
@@ -43,20 +57,25 @@ export function cleanLine(value: unknown, max = MAX_SUMMARY_LINE): string {
 
 const posix = (path: string): string => path.split(sep).join('/');
 
+/** The total bound of a summary is reached: this file and the next ones stay unread. */
+class BudgetSpent extends Error {}
+
 /**
- * Reads at most `max` bytes of a regular file. A FIFO or a device is refused before any blocking read
- * (non-blocking open, then fstat), and a file that grows past the bound while read is refused too.
+ * Reads at most `max` bytes of a regular file, and at most `budget` bytes (else BudgetSpent). A FIFO or a device
+ * is refused before any blocking read (non-blocking open, then fstat), and a file that grows past a bound while
+ * read is refused too.
  */
-function readBounded(file: string, shown: string, max: number): string {
+function readBounded(file: string, shown: string, max: number, budget: number): Buffer {
   const tooBig = (size: string): PipelineError => new PipelineError('RUN_STATE', `État trop volumineux ${shown} : ${size} octets, limite ${max}`);
   const notFile = (): PipelineError => new PipelineError('RUN_STATE', `État illisible ${shown} : pas un fichier ordinaire`);
   const before = statSync(file);
   if (!before.isFile()) throw notFile();
   if (before.size > max) throw tooBig(String(before.size));
+  if (before.size > budget) throw new BudgetSpent();
   const fd = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   try {
     if (!fstatSync(fd).isFile()) throw notFile();
-    const buffer = Buffer.allocUnsafe(max + 1);
+    const buffer = Buffer.allocUnsafe(Math.min(max, budget) + 1);
     let length = 0;
     while (length < buffer.length) {
       const read = readSync(fd, buffer, length, buffer.length - length, null);
@@ -64,33 +83,54 @@ function readBounded(file: string, shown: string, max: number): string {
       length += read;
     }
     if (length > max) throw tooBig(`plus de ${max}`);
-    return buffer.subarray(0, length).toString('utf8');
+    if (length > budget) throw new BudgetSpent();
+    return buffer.subarray(0, length);
   } finally {
     closeSync(fd);
   }
 }
 
+/** Modification time of a file in milliseconds, 0 when it cannot be read (the file then comes last). */
+function mtimeOf(file: string): number {
+  try { return statSync(file).mtimeMs; } catch { return 0; }
+}
+
 /**
- * Every execution of the repository `repo`, in file name order; never throws for a bad state file or a
- * missing `.apv/state`. The `file` of an entry is relative to `repo`, with `/` separators.
+ * The executions of the repository `repo`, in file name order; never throws for a bad state file or a missing
+ * `.apv/state`. The most recently modified files are read first, up to `maxFiles` files and `maxTotalBytes`
+ * bytes; the files left are counted in `unread`. The `file` of an entry is relative to `repo`, with `/`
+ * separators.
  */
-export function readRunSummaries(repo: string, options: ReadRunSummariesOptions = {}): RunSummaryEntry[] {
+export function readRunSummaries(repo: string, options: ReadRunSummariesOptions = {}): RunSummaries {
   const max = options.maxBytes ?? MAX_RUN_STATE_BYTES;
+  const maxFiles = options.maxFiles ?? MAX_RUN_FILES;
+  let budget = options.maxTotalBytes ?? MAX_RUN_TOTAL_BYTES;
   let files: { specId: string; file: string }[];
-  try { files = listRunFiles(repo); } catch { return []; }
-  return files.map(({ specId, file }): RunSummaryEntry => {
+  try { files = listRunFiles(repo); } catch { return { entries: [], unread: 0 }; }
+  const recent = files.map(f => ({ ...f, mtime: mtimeOf(f.file) })).sort((a, b) => b.mtime - a.mtime);
+  const entries: RunSummaryEntry[] = [];
+  for (const { specId, file } of recent) {
+    if (entries.length >= maxFiles) break;
     const shown = posix(relative(repo, file));
     try {
-      const state = parseRunStateText(readBounded(file, shown, max), shown, specId);
+      const bytes = readBounded(file, shown, max, budget);
+      budget -= bytes.length;
+      const state = parseRunStateText(bytes.toString('utf8'), shown, specId);
       const runningTasks = Object.entries(state.tasks).filter(([, t]) => t.status === 'running').map(([id]) => id);
-      return { ...summarize(state, shown), runningTasks };
+      entries.push({ ...summarize(state, shown), runningTasks });
     } catch (error) {
+      if (error instanceof BudgetSpent) break;
       // The id comes from the file name: unsafe characters become visible `?` rather than vanish, so that a
       // hostile name never cleans up into the id of another execution.
-      return { specId: cleanLine(specId.replace(UNSAFE, '?'), 80), file: shown, error: errorMessage(error) };
+      entries.push({ specId: cleanLine(specId.replace(UNSAFE, '?'), 80), file: shown, error: errorMessage(error) });
     }
-  });
+  }
+  entries.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+  return { entries, unread: files.length - entries.length };
 }
+
+/** The line that counts the state files a summary left unread. */
+export const unreadRunsLine = (unread: number): string => `${unread} autre(s) non lue(s) (plafond de lecture atteint)`;
 
 /** Not delivered: unreadable, or with a step or a task still open. */
 export const isActiveRun = (entry: RunSummaryEntry): boolean => entry.error !== null || !entry.finished;

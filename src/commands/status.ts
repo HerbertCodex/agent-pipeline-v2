@@ -5,7 +5,7 @@ import { configFile, loadConfig } from '../config/load.js';
 import { decisionLedgerIssues, decisionLedgerSchema, ledgerHash, LEDGER_FILE, LEGACY_LEDGER_FILE } from '../lifecycle/decisions.js';
 import { lastQuotaReading, QUOTA_LOG } from '../quota/usage.js';
 import { parseSpecDocument } from '../spec/check.js';
-import { cleanLine, isActiveRun, readRunSummaries, runSummaryLine, type RunSummaryEntry } from '../run/summary.js';
+import { cleanLine, isActiveRun, readRunSummaries, runSummaryLine, unreadRunsLine, type RunSummaryEntry } from '../run/summary.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
 
@@ -34,8 +34,10 @@ export interface ApvStatus {
   ledger: { file: string | null; decisions: number | null; hash: string | null; issues: number };
   specs: { file: string; title: string | null; error: string | null }[];
   state: { file: string; bytes: number; modifiedAt: string }[];
-  /** Spec executions (`.apv/state/run-<id>.json`, apv run). */
+  /** Spec executions (`.apv/state/run-<id>.json`, apv run), the most recent ones up to the read bounds. */
   runs: RunSummaryEntry[];
+  /** State files of executions left unread (read bounds reached). */
+  runsUnread: number;
   quota: ReturnType<typeof lastQuotaReading>;
 }
 
@@ -66,7 +68,8 @@ export function apvStatus(repo: string): ApvStatus {
     } catch (error) { return { file: relative(repo, f), title: null, error: errorMessage(error) }; }
   });
   const state = files(join(repo, '.apv', 'state')).map(f => { const st = statSync(f); return { file: relative(repo, f), bytes: st.size, modifiedAt: st.mtime.toISOString() }; });
-  return { repo, config: cfg, ledger, specs, state, runs: readRunSummaries(repo), quota: lastQuotaReading(join(repo, QUOTA_LOG)) };
+  const runs = readRunSummaries(repo);
+  return { repo, config: cfg, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)) };
 }
 
 export async function run(args: string[], io: CommandIO): Promise<number> {
@@ -88,8 +91,9 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       ...status.specs.map(s => cleanLine(`- ${s.file}${s.title ? ` : ${s.title}` : ''}${s.error ? ` (illisible : ${s.error.split(/\r?\n/)[0]})` : ''}`)),
       `État (.apv/state) : ${status.state.length ? '' : 'aucun'}`,
       ...status.state.map(s => cleanLine(`- ${s.file} (${s.bytes} octets, ${s.modifiedAt})`)),
-      `Exécutions en cours : ${active.length ? '' : 'aucune'}`,
+      `Exécutions en cours : ${active.length || status.runsUnread ? '' : 'aucune'}`,
       ...active.map(r => `- ${runSummaryLine(r)}`),
+      ...(status.runsUnread ? [`- ${unreadRunsLine(status.runsUnread)}`] : []),
       `Quota : ${q ? `${q.at} ; session ${q.session ? `${q.session.percent} %` : '?'} ; semaine ${q.week ? `${q.week.percent} %` : '?'} ; niveau ${q.level}` : 'aucun relevé'}`,
     ];
     io.stdout(`${lines.map(l => l.trimEnd()).join('\n')}\n`);

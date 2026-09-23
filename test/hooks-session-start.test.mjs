@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, linkSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -134,7 +134,33 @@ test('many executions and long resume notes: executions bounded, the whole conte
   assert.ok(context.length <= 4000);
   const lines = runSection(context);
   assert.equal(lines.filter(l => l.includes('apv run next')).length, 8);
-  assert.ok(lines.includes('- et 4 autre(s) : apv status'), context);
+  assert.ok(lines.includes('- 4 autre(s) non lue(s) : apv status'), context);
+});
+
+test('the hook reads no more state files than it shows, even from a directory of links (SEC-2)', { skip: process.platform === 'win32' }, t => {
+  // Review SEC-2: the hook read every run-*.json (4 Mio each) to show eight of them. 1 000 hard links to one
+  // state of 3.9 Mio cost no disk and made each session start read about 3.9 Go.
+  const root = project(t);
+  raw(root, 'source.bin', `{"x":"${'y'.repeat(3.9 * 1024 * 1024)}"}`);
+  for (let i = 0; i < 1000; i++) linkSync(join(root, '.apv/state/source.bin'), join(root, `.apv/state/run-l${String(i).padStart(4, '0')}.json`));
+  const started = performance.now();
+  const context = hook(root);
+  assert.ok(performance.now() - started < 2000, `${performance.now() - started} ms`);
+  const lines = runSection(context);
+  // At most eight files read (four fit the byte budget here), every other one only counted.
+  assert.equal(lines.filter(l => /État invalide/.test(l)).length, 4, context);
+  assert.ok(lines.includes('- 996 autre(s) non lue(s) : apv status'), context);
+});
+
+test('a recent execution is shown even when older ones fill the hook bound (SEC-2)', t => {
+  const root = project(t);
+  for (let i = 0; i < 10; i++) writeRunState(runStateFile(root, `ancienne-${i}`), delivered(`ancienne-${i}`));
+  const old = new Date('2026-01-01T00:00:00Z');
+  for (let i = 0; i < 10; i++) utimesSync(runStateFile(root, `ancienne-${i}`), old, old);
+  writeRunState(runStateFile(root, 'nouvelle'), running('nouvelle'));
+  const lines = runSection(hook(root));
+  assert.ok(lines.some(l => /^- nouvelle : .* ; reprise : apv run next nouvelle$/.test(l)), lines.join('\n'));
+  assert.ok(lines.includes('- 3 autre(s) non lue(s) : apv status'), lines.join('\n'));
 });
 
 test('without the compiled summary the session still starts, with a line saying so', async t => {
