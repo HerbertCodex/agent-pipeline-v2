@@ -110,18 +110,18 @@ export async function runLocked(store: LockStore, resource: string, options: Run
     const env = { ...options.env, APV_LOCK_HELD: [...held, resource].join(',') };
     const [file, ...args] = options.command;
     if (!file) throw new Error('commande vide');
-    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>((resolve) => {
+    const exit = await new Promise<{ status: number | null; signal: NodeJS.Signals | null; error?: Error }>((resolve) => {
       const spawned = spawn(file, args, { cwd: options.cwd, env, stdio: 'inherit' });
       child = spawned;
-      spawned.once('error', (error) => resolve({ code: null, signal: null, error }));
-      spawned.once('exit', (code, signal) => resolve({ code, signal }));
+      spawned.once('error', (error) => resolve({ status: null, signal: null, error }));
+      spawned.once('exit', (status, signal) => resolve({ status, signal }));
     });
     if (exit.error) {
       options.stderr(`Impossible de lancer « ${file} » : ${exit.error.message}\n`);
       return 127;
     }
     if (received) return signalExitCode(received);
-    if (exit.code !== null) return exit.code;
+    if (exit.status !== null) return exit.status;
     return signalExitCode(exit.signal ?? 'SIGTERM');
   } finally {
     if (heartbeat) clearInterval(heartbeat);
