@@ -267,9 +267,13 @@ export function computeNext(state, probe) {
 export function readRunState(file) {
     if (!existsSync(file))
         throw new PipelineError('RUN_MISSING', `Aucune exécution : ${file} n'existe pas (apv run start <spec>)`);
+    return parseRunStateText(readFileSync(file, 'utf8'), file);
+}
+/** Parses and validates the text of a state file; `file` only names it in the errors. */
+export function parseRunStateText(text, file) {
     let raw;
     try {
-        raw = JSON.parse(readFileSync(file, 'utf8'));
+        raw = JSON.parse(text);
     }
     catch (error) {
         throw new PipelineError('RUN_STATE', `État illisible ${file} : ${errorMessage(error)}`);
@@ -317,11 +321,15 @@ export function summarize(state, file) {
     return { specId: state.specId, file, step, wave, finished: step === null, tasks: { ...counts, total: Object.keys(state.tasks).length },
         reviews: Object.fromEntries(REVIEWS.map(r => [r, state.reviews[r].status])), updatedAt: state.updatedAt, error: null };
 }
-/** One line for `apv status` and `apv run status`. */
-export function summaryLine(sum) {
+/**
+ * One line for `apv status` and `apv run status`. `running` names the running tasks after their count
+ * (ids of the state, already restricted to the task id pattern by the schema); the first ones only.
+ */
+export function summaryLine(sum, running = []) {
     const t = sum.tasks;
     const where = sum.finished ? 'terminée' : `étape ${STEP_LABEL[sum.step]}${sum.step === 'waves' && sum.wave !== null ? ` (vague ${sum.wave})` : ''}`;
-    const extra = [t.running ? `${t.running} en cours` : '', t.failed ? `${t.failed} en échec` : '', t.skipped ? `${t.skipped} sautée(s)` : ''].filter(Boolean).join(', ');
+    const names = running.length ? ` (${running.slice(0, 5).join(', ')}${running.length > 5 ? ', …' : ''})` : '';
+    const extra = [t.running ? `${t.running} en cours${names}` : '', t.failed ? `${t.failed} en échec` : '', t.skipped ? `${t.skipped} sautée(s)` : ''].filter(Boolean).join(', ');
     return `${sum.specId} : ${where} ; tâches ${t.done}/${t.total} faites${extra ? `, ${extra}` : ''} ; mise à jour ${sum.updatedAt}`;
 }
 /**
