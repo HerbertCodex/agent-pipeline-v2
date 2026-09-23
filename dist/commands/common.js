@@ -1,3 +1,4 @@
+import { canonicalPath } from '../domain/paths.js';
 import { parseArgs } from 'node:util';
 import { resolve } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
@@ -15,8 +16,9 @@ export function parse(args, options) {
         throw new UsageError(errorMessage(error));
     }
 }
+/** Repository path from --repo or the working directory, symlinks resolved like the roots Git reports. */
 export function repoPath(io, value) {
-    return resolve(io.cwd, typeof value === 'string' ? value : '.');
+    return canonicalPath(resolve(io.cwd, typeof value === 'string' ? value : '.'));
 }
 export function list(value) {
     return typeof value === 'string' ? value.split(',').map(x => x.trim()).filter(Boolean) : [];

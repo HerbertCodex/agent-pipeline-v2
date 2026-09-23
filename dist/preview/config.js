@@ -1,6 +1,6 @@
+import { canonicalPath } from '../domain/paths.js';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { realpathSync } from 'node:fs';
 import { s } from '../domain/schema.js';
 import { PipelineError } from '../domain/errors.js';
 import { ENV_NAME } from './env.js';
@@ -57,12 +57,7 @@ export function defaultPreviewDir(repo, env) {
     return join(state, 'apv', 'preview', projectName(repo));
 }
 function real(path) {
-    try {
-        return realpathSync(path);
-    }
-    catch {
-        return resolve(path);
-    }
+    return canonicalPath(path);
 }
 function inside(child, parent) {
     const rel = relative(parent, child);

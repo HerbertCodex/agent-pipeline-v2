@@ -1,3 +1,4 @@
+import { canonicalPath } from '../domain/paths.js';
 import { VERSION } from '../domain/contracts.js';
 import { errorMessage } from '../domain/errors.js';
 /**
@@ -34,7 +35,9 @@ async function load(name, io) {
         return null;
     }
 }
-export async function dispatch(argv, io) {
+export async function dispatch(argv, input) {
+    // Files given relative to the working directory are compared with Git's resolved roots.
+    const io = { ...input, cwd: canonicalPath(input.cwd) };
     const [name, ...args] = argv;
     if (!name || name === '--help' || name === '-h') {
         io.stdout(`${helpText()}\n`);

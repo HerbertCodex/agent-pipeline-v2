@@ -1,3 +1,4 @@
+import { canonicalPath } from '../domain/paths.js';
 import { VERSION } from '../domain/contracts.js';
 import { errorMessage } from '../domain/errors.js';
 import type { CommandIO } from './io.js';
@@ -37,7 +38,9 @@ async function load(name: string, io: CommandIO): Promise<CommandModule | null> 
   catch (error) { io.stderr(`apv ${name} : non disponible dans cette installation (${errorMessage(error)})\n`); return null; }
 }
 
-export async function dispatch(argv: string[], io: CommandIO): Promise<number> {
+export async function dispatch(argv: string[], input: CommandIO): Promise<number> {
+  // Files given relative to the working directory are compared with Git's resolved roots.
+  const io: CommandIO = { ...input, cwd: canonicalPath(input.cwd) };
   const [name, ...args] = argv;
   if (!name || name === '--help' || name === '-h') { io.stdout(`${helpText()}\n`); return name ? 0 : 2; }
   if (name === '--version' || name === '-v' || name === 'version') { io.stdout(`${VERSION}\n`); return 0; }
