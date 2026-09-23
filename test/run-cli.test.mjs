@@ -74,7 +74,7 @@ test('apv run start validates the spec, computes the waves and writes the state'
   assert.deepEqual(s.tasks.D, { title: 'Tâche D', dependsOn: ['A', 'B'], wave: 2, status: 'pending', branch: null, worktree: null, agentId: null,
     base: null, commit: null, note: null, updatedAt: null });
   assert.deepEqual(Object.keys(s.reviews), ['securite', 'fidelite', 'donnees', 'rgpd']);
-  assert.deepEqual(s.reviews.rgpd, { status: 'pending', findings: null, note: null, updatedAt: null });
+  assert.deepEqual(s.reviews.rgpd, { status: 'pending', findings: null, commit: null, note: null, updatedAt: null });
   assert.equal(s.events.length, 1);
   assert.deepEqual(readdirSync(join(p.repo, '.apv/state')), ['run-vagues.json'], 'no temporary file left');
   const again = await p.run('start', 'vagues');
@@ -141,10 +141,19 @@ test('apv run set checks transitions, dependencies and commits, and journals eac
   assert.equal(events.length, 1 + 7);
   assert.deepEqual(events.at(-1), { at: events.at(-1).at, target: 'review:securite', from: 'pending', to: 'done', note: 'corrections-vagues.md' });
   // Wrong calls: exit 2.
-  for (const args of [['task:Z', 'done'], ['review:qa', 'done'], ['plan', 'finished'], ['plan', 'done', '--commit', 'main'], ['task:A', 'done', '--findings', '1'],
+  for (const args of [['task:Z', 'done'], ['review:qa', 'done'], ['plan', 'finished'], ['plan', 'done', '--branch', 'x'], ['task:A', 'done', '--findings', '1'],
     ['review:rgpd', 'done', '--findings', 'x'], ['plan'], ['plan', 'done', 'extra']]) {
     assert.equal((await p.run('set', 'vagues', ...args)).code, args[0] === 'task:Z' ? 1 : 2, args.join(' '));
   }
+  // A step or a review may record its commit (the plan commit, the reviewed commit); an unknown one is refused.
+  const plan = await p.run('set', 'vagues', 'plan', 'done', '--commit', 'main', '--json');
+  assert.equal(plan.code, 0, plan.stderr);
+  assert.equal(p.state().steps.plan.commit, git(p.repo, 'rev-parse', 'main'));
+  assert.equal(plan.json().event.commit, git(p.repo, 'rev-parse', 'main'));
+  assert.equal((await p.run('set', 'vagues', 'review:rgpd', 'done', '--commit', 'main')).code, 0);
+  assert.equal(p.state().reviews.rgpd.commit, git(p.repo, 'rev-parse', 'main'));
+  assert.equal((await p.run('set', 'vagues', 'integration', 'running', '--commit', 'deadbeef')).code, 1, 'unknown commit');
+  assert.equal(p.state().steps.integration.commit, null);
   assert.equal((await p.run('set', 'absent', 'plan', 'done')).code, 1, 'no execution for this spec');
   assert.equal((await p.run('set', '../x', 'plan', 'done')).code, 2);
 });

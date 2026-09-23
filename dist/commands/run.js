@@ -22,7 +22,7 @@ start   valide la spec (comme apv spec validate, prête à lancer), calcule les 
         existe (apv run next). --base : branche de départ (par défaut la branche courante).
 set     <cible> : ${STEPS.join(', ')}, task:<id> ou review:<${REVIEWS.join('|')}>.
         <statut> : ${STATUSES.join(', ')}. Une tâche ne passe « running » que si ses dépendances sont
-        « done » ; « done » exige --commit. --base : commit de départ de la tâche (reprise).
+        « done » ; « done » exige --commit pour une tâche (facultatif pour une étape ou une revue : commit qui la porte, ou commit revu). --base : commit de départ de la tâche (reprise).
         --findings : nombre de constats d'une revue. Rouvrir un travail fait exige --note.
 next    ce qu'il faut faire maintenant : étape courante, tâches prêtes, tâches à reprendre ou à
         relancer (worktree absent, aucun commit après la base), revues à lancer.
@@ -132,7 +132,7 @@ async function set(repo, positionals, values, io) {
         throw new UsageError(`cible inconnue : ${targetText} (${STEPS.join(', ')}, task:<id>, review:<${REVIEWS.join('|')}>)`);
     const status = parseStatus(statusText);
     const str = (name) => typeof values[name] === 'string' ? values[name] : undefined;
-    const taskOnly = ['branch', 'worktree', 'agent', 'commit', 'base'].filter(o => str(o) !== undefined);
+    const taskOnly = ['branch', 'worktree', 'agent', 'base'].filter(o => str(o) !== undefined);
     if (target.kind !== 'task' && taskOnly.length)
         throw new UsageError(`--${taskOnly.join(', --')} : réservé(s) aux tâches (task:<id>)`);
     if (target.kind !== 'review' && str('findings') !== undefined)

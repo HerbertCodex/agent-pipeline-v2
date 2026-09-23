@@ -27,31 +27,37 @@ export declare const runStateSchema: import("../domain/schema.js").Schema<{
     readonly steps: {
         readonly 'data-model': {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
+            readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
         };
         readonly plan: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
+            readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
         };
         readonly integration: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
+            readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
         };
         readonly reviews: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
+            readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
         };
         readonly fixes: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
+            readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
         };
         readonly delivery: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
+            readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
         };
@@ -78,24 +84,28 @@ export declare const runStateSchema: import("../domain/schema.js").Schema<{
         readonly securite: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
             readonly findings: number | null;
+            readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
         };
         readonly fidelite: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
             readonly findings: number | null;
+            readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
         };
         readonly donnees: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
             readonly findings: number | null;
+            readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
         };
         readonly rgpd: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
             readonly findings: number | null;
+            readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
         };
