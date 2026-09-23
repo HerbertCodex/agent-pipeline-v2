@@ -212,6 +212,18 @@ test('the project lead skill links references that exist', () => {
   }
 });
 
+test('the plugin ships bin/apv and installs no dependency', () => {
+  const pkg = JSON.parse(read('package.json'));
+  assert.ok(pkg.files.includes('bin'), 'bin/ is published with the plugin');
+  assert.ok(statSync(join(root, 'bin', 'apv')).mode & 0o111, 'bin/apv is executable');
+  assert.match(read('bin/apv'), /^#!\/usr\/bin\/env node\n/);
+  // The plugin runs on Node's standard library only: any runtime dependency widens what installing it pulls in.
+  for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies', 'bundleDependencies', 'bundledDependencies']) {
+    const value = pkg[field] ?? {};
+    assert.equal(Array.isArray(value) ? value.length : Object.keys(value).length, 0, `package.json: ${field} must stay empty`);
+  }
+});
+
 test('texts written for APV3 contain no em or en dash', () => {
   const files = [
     ...AGENTS.map(a => `agents/${a}.md`),
@@ -222,7 +234,7 @@ test('texts written for APV3 contain no em or en dash', () => {
     }),
     'hooks/hooks.json', 'hooks/scripts/bash-guard.mjs', 'hooks/scripts/session-start.mjs', 'hooks/scripts/stop-journal.mjs', 'hooks/scripts/scope-reminder.mjs',
     '.claude-plugin/plugin.json', '.claude-plugin/marketplace.json', 'docs/PLUGIN.md', 'docs/DESIGN.md', 'docs/RUN.md', 'README.md', 'START-HERE.md',
-    'skills/README.md', 'workflows/vague.js', 'workflows/revues.js',
+    'skills/README.md', 'workflows/vague.js', 'workflows/revues.js', 'bin/apv',
   ];
   for (const file of files) assert.ok(!/[–—]/.test(read(file)), `${file} contains an em or en dash`);
 });
