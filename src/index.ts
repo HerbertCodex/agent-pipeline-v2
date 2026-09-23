@@ -26,3 +26,10 @@ export type { ValidationSubject } from './quality/review.js';
 
 export { apvConfigSchema, loadConfig, configIssues, policyConfig, CONFIG_FILE, LEGACY_CONFIG_FILE } from './config/load.js';
 export type { ApvConfig, LoadedConfig } from './config/load.js';
+export { checkSpec, readSpecDocument, parseSpecDocument } from './spec/check.js';
+export { runGates, selectGates, RECEIPTS_DIR } from './gates/run.js';
+export type { GateRunOptions, GateRunResult } from './gates/run.js';
+export { parseUsage, classifyQuota, reading as quotaReading, readQuota, QUOTA_THRESHOLDS, QUOTA_LOG } from './quota/usage.js';
+export type { QuotaReading, QuotaLevel, UsageRunner } from './quota/usage.js';
+export { dispatch, commands } from './commands/index.js';
+export type { CommandIO } from './commands/io.js';

@@ -12,4 +12,8 @@ export { inspectRepository } from './knowledge/repository.js';
 export { owaspTopicIds, owaspCatalog, securityProfileSchema, securityContextSchema, assessSecurity, neutralSecurityContext, topicById } from './security/owasp.js';
 export { qualityCheckSchema, qualityContext, validationEvidence, validateQualityChecks } from './quality/review.js';
 export { apvConfigSchema, loadConfig, configIssues, policyConfig, CONFIG_FILE, LEGACY_CONFIG_FILE } from './config/load.js';
+export { checkSpec, readSpecDocument, parseSpecDocument } from './spec/check.js';
+export { runGates, selectGates, RECEIPTS_DIR } from './gates/run.js';
+export { parseUsage, classifyQuota, reading as quotaReading, readQuota, QUOTA_THRESHOLDS, QUOTA_LOG } from './quota/usage.js';
+export { dispatch, commands } from './commands/index.js';
 //# sourceMappingURL=index.js.map
