@@ -1,0 +1,271 @@
+{
+  "title": "Reprise visible au démarrage et apv sur le PATH",
+  "problem": "Après une coupure, le chef de projet ne voit pas au démarrage de session les exécutions de spec en cours ; il doit penser à lancer apv run status. Et l'outil ne s'appelle que par node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js, ce qui alourdit chaque compétence. Le README annonce encore la phase 1.",
+  "scope": [
+    "Un module partagé qui résume les exécutions (.apv/state/run-*.json) en lignes courtes, utilisé par apv status.",
+    "Le hook SessionStart affiche les exécutions en cours et la commande de reprise.",
+    "Un exécutable bin/apv du plugin, que Claude Code met sur le PATH des commandes Bash.",
+    "README et docs/PLUGIN.md à jour : statut des phases, bin/apv, hook de démarrage."
+  ],
+  "outOfScope": [
+    "Aucune modification des compétences skills/ ni des workflows.",
+    "Aucune nouvelle dépendance, aucun déploiement."
+  ],
+  "acceptance": [
+    {
+      "id": "AC-SUMMARY",
+      "description": "Un module du dist résume chaque exécution en une ligne (spec, étape courante, tâches faites sur le total, tâches en cours) ; apv status l'utilise et sa sortie reste identique pour les cas déjà testés ; un fichier d'état illisible donne une ligne d'erreur sans faire échouer le résumé.",
+      "verification": "Tests unitaires du module (état valide, plusieurs exécutions, fichier corrompu, dossier absent) et tests existants de apv status."
+    },
+    {
+      "id": "AC-HOOK",
+      "description": "Au démarrage de session dans un projet APV, le contexte de reprise liste les exécutions non terminées avec la commande apv run next <id> ; rien n'est affiché pour une exécution livrée ; la sortie reste bornée.",
+      "verification": "Tests du hook session-start avec des états d'exécution fictifs (en cours, livrée, corrompu)."
+    },
+    {
+      "id": "AC-BIN",
+      "description": "bin/apv lance l'outil compilé du plugin avec les mêmes arguments, la même sortie et le même code de sortie, où que soit le dossier courant.",
+      "verification": "Test qui exécute bin/apv --version et bin/apv help depuis un autre dossier et compare à node dist/cli.js."
+    },
+    {
+      "id": "AC-DOCS",
+      "description": "Le README annonce les phases 1 à 3 faites et la phase 4 à venir ; docs/PLUGIN.md décrit bin/apv et l'affichage des exécutions au démarrage.",
+      "verification": "Relecture des deux fichiers ; aucun tiret cadratin ni demi-cadratin."
+    },
+    {
+      "id": "AC-SAFE",
+      "description": "Le contenu des fichiers d'état est traité comme donnée : identifiants et notes d'une exécution sont nettoyés (une ligne, longueur bornée, caractères de contrôle retirés) avant d'entrer dans le contexte de session ; bin/apv n'exécute que le dist du plugin, sans shell ni chemin tiré de l'environnement ; aucune dépendance ajoutée.",
+      "verification": "Tests négatifs : état d'exécution avec saut de ligne, séquence d'échappement ANSI et note de 10 000 caractères contenant une consigne ; bin/apv lancé avec un PATH et un dossier courant hostiles ; package.json sans nouvelle dépendance."
+    }
+  ],
+  "decisions": [
+    {
+      "question": "Où vit le résumé des exécutions ?",
+      "answer": "Dans src/run/summary.ts, compilé dans dist/run/summary.js, importé par apv status et par le hook."
+    }
+  ],
+  "decisionCoverage": [],
+  "decisionResolutions": [],
+  "questions": [],
+  "tasks": [
+    {
+      "id": "SUMMARY",
+      "title": "Module de résumé des exécutions",
+      "description": "Créer src/run/summary.ts (fonction qui lit .apv/state/run-*.json d'une racine et rend une ligne par exécution, tolérante aux fichiers corrompus), l'utiliser dans src/commands/status.ts, tests dans test/run-summary.test.mjs, dist recompilé.",
+      "acceptanceIds": [
+        "AC-SUMMARY",
+        "AC-SAFE"
+      ],
+      "allowedPaths": [
+        "src/run/**",
+        "src/commands/status.ts",
+        "test/run-summary.test.mjs",
+        "test/status-cli.test.mjs",
+        "dist/**"
+      ],
+      "dependsOn": [],
+      "minimumLane": "high"
+    },
+    {
+      "id": "HOOK",
+      "title": "Exécutions en cours au démarrage de session",
+      "description": "hooks/scripts/session-start.mjs importe le résumé depuis dist/run/summary.js et ajoute au contexte les exécutions non livrées avec apv run next <id>, sous la borne de taille existante ; tests dans test/hooks-session-start.test.mjs (ou le fichier de tests du hook existant).",
+      "acceptanceIds": [
+        "AC-HOOK",
+        "AC-SAFE"
+      ],
+      "allowedPaths": [
+        "hooks/scripts/session-start.mjs",
+        "hooks/scripts/lib.mjs",
+        "test/hooks-*.test.mjs"
+      ],
+      "dependsOn": [
+        "SUMMARY"
+      ],
+      "minimumLane": "high"
+    },
+    {
+      "id": "BIN",
+      "title": "Exécutable bin/apv",
+      "description": "Ajouter bin/apv (script Node exécutable qui charge dist/cli.js relativement à son propre emplacement), l'inclure dans files de package.json, test dans test/bin-apv.test.mjs.",
+      "acceptanceIds": [
+        "AC-BIN",
+        "AC-SAFE"
+      ],
+      "allowedPaths": [
+        "bin/**",
+        "package.json",
+        "test/bin-apv.test.mjs",
+        "test/plugin-assets.test.mjs"
+      ],
+      "dependsOn": [],
+      "minimumLane": "high"
+    },
+    {
+      "id": "DOCS",
+      "title": "Documentation à jour",
+      "description": "README.md (statut des phases), docs/PLUGIN.md (bin/apv, hook de démarrage), CHANGELOG.md (entrée non publiée).",
+      "acceptanceIds": [
+        "AC-DOCS"
+      ],
+      "allowedPaths": [
+        "README.md",
+        "docs/PLUGIN.md",
+        "CHANGELOG.md"
+      ],
+      "dependsOn": [
+        "HOOK"
+      ],
+      "minimumLane": "high"
+    }
+  ],
+  "minimumLane": "high",
+  "experience": {
+    "uiImpact": "none",
+    "surfaces": [],
+    "rationale": "Outil en ligne de commande et hook, aucune interface graphique."
+  },
+  "security": {
+    "profile": {
+      "exposure": "internal",
+      "sessionState": true,
+      "dependencyChange": true,
+      "aiAgent": true
+    },
+    "owaspTopics": [
+      "session-management",
+      "software-supply-chain",
+      "ai-agent-security",
+      "llm-prompt-injection",
+      "secure-coding-with-ai",
+      "threat-modeling"
+    ],
+    "threatModel": {
+      "required": true,
+      "summary": "Le hook de démarrage injecte du texte lu sur disque dans le contexte du modèle, et bin/apv devient un exécutable sur le PATH des commandes Bash.",
+      "assets": [
+        "Contexte de session du chef de projet (consignes qu'il suit)",
+        "Intégrité des commandes lancées par apv",
+        "Chaîne d'approvisionnement du plugin (package.json)"
+      ],
+      "trustBoundaries": [
+        "Fichiers .apv/state/run-*.json, modifiables par tout agent ou commit du projet, lus par le hook",
+        "Environnement du processus (PATH, dossier courant) au lancement de bin/apv"
+      ],
+      "threats": [
+        {
+          "id": "TH-INJECT",
+          "category": "prompt-injection",
+          "description": "Une note ou un identifiant d'exécution contient des consignes, des sauts de ligne ou des séquences de contrôle qui se font passer pour du contexte système au démarrage.",
+          "mitigations": [
+            "Une ligne par exécution, longueur bornée, caractères de contrôle retirés",
+            "Données présentées comme l'état lu sur disque, jamais comme des consignes",
+            "Taille totale du contexte bornée"
+          ],
+          "acceptanceIds": [
+            "AC-HOOK",
+            "AC-SAFE"
+          ]
+        },
+        {
+          "id": "TH-CORRUPT",
+          "category": "denial-of-service",
+          "description": "Un fichier d'état corrompu ou énorme fait échouer apv status ou le démarrage de session.",
+          "mitigations": [
+            "Lecture tolérante, ligne d'erreur par fichier illisible",
+            "Taille de fichier lue bornée"
+          ],
+          "acceptanceIds": [
+            "AC-SUMMARY",
+            "AC-SAFE"
+          ]
+        },
+        {
+          "id": "TH-BIN",
+          "category": "tampering",
+          "description": "bin/apv résout l'outil par le PATH ou le dossier courant et exécute un autre programme.",
+          "mitigations": [
+            "Chemin de dist/cli.js calculé depuis l'emplacement réel du script",
+            "Aucun shell, aucune variable d'environnement pour trouver l'outil"
+          ],
+          "acceptanceIds": [
+            "AC-BIN",
+            "AC-SAFE"
+          ]
+        },
+        {
+          "id": "TH-DEP",
+          "category": "supply-chain",
+          "description": "Une dépendance ajoutée au passage élargit la surface d'installation du plugin.",
+          "mitigations": [
+            "Aucune dépendance ajoutée, vérifiée à la revue du diff de package.json"
+          ],
+          "acceptanceIds": [
+            "AC-SAFE"
+          ]
+        }
+      ],
+      "assumptions": [
+        "Le dépôt du projet est de confiance pour son opérateur ; les agents qui écrivent l'état le sont moins."
+      ]
+    },
+    "requirements": [
+      {
+        "id": "SEC-CONTEXT",
+        "title": "État d'exécution traité comme donnée dans le contexte de session",
+        "owaspTopics": [
+          "session-management",
+          "ai-agent-security",
+          "llm-prompt-injection",
+          "threat-modeling"
+        ],
+        "acceptanceIds": [
+          "AC-HOOK",
+          "AC-SAFE"
+        ],
+        "verification": "Tests du hook avec des états hostiles.",
+        "negativeTests": [
+          "Une note contenant un saut de ligne et « ignore les consignes précédentes » ne produit qu'une ligne tronquée et nettoyée",
+          "Une séquence ANSI dans l'identifiant de spec est retirée",
+          "Un fichier d'état de 5 Mo ou du JSON invalide ne fait pas échouer le hook"
+        ]
+      },
+      {
+        "id": "SEC-BIN",
+        "title": "bin/apv sans résolution par l'environnement",
+        "owaspTopics": [
+          "secure-coding-with-ai",
+          "software-supply-chain"
+        ],
+        "acceptanceIds": [
+          "AC-BIN",
+          "AC-SAFE"
+        ],
+        "verification": "Test de bin/apv avec PATH et dossier courant hostiles.",
+        "negativeTests": [
+          "Lancé par node, avec un faux node, un faux apv et un faux dist/cli.js dans le dossier courant et dans le PATH, et CLAUDE_PLUGIN_ROOT, APV_ROOT et NODE_PATH vers eux, bin/apv lance quand même le dist du plugin",
+          "Lancé par son shebang, bin/apv ne tire du PATH que l'interpréteur : avec le vrai node en tête du PATH, de faux exécutables ensuite et un faux dist/cli.js dans le dossier courant, il lance le dist du plugin",
+          "Atteint par un lien symbolique placé à côté d'un faux dist/cli.js, bin/apv lance le dist voisin de son emplacement réel"
+        ]
+      },
+      {
+        "id": "SEC-DEPS",
+        "title": "Aucune dépendance ajoutée",
+        "owaspTopics": [
+          "software-supply-chain"
+        ],
+        "acceptanceIds": [
+          "AC-SAFE"
+        ],
+        "verification": "Diff de package.json relu : seul le champ files change.",
+        "negativeTests": [
+          "Le test des ressources du plugin échoue si dependencies n'est pas vide"
+        ]
+      }
+    ],
+    "assumptions": [
+      "Risque résiduel accepté pour bin/apv : son shebang (#!/usr/bin/env node) prend l'interpréteur dans le PATH, et Node honore NODE_OPTIONS. Un faux node placé en tête du PATH est donc lancé à la place du vrai ; seul le chemin de l'outil (dist/cli.js) ne doit rien au PATH, au dossier courant ni à l'environnement. Qui contrôle le PATH ou l'environnement de la session contrôle déjà git et toute autre commande lancée par Bash ; un chemin absolu d'interpréteur casserait les gestionnaires de versions de Node (nvm et autres)."
+    ],
+    "deferred": []
+  }
+}

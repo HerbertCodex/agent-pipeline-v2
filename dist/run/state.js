@@ -20,7 +20,8 @@ export const STEP_LABEL = {
 };
 const status = s.enum(STATUSES);
 const text = (max) => s.nullable(s.string(0, max));
-const at = s.string(1, 40);
+// Dates as written by Date#toISOString, nothing else: a free text here would reach the summary lines.
+const at = s.string(24, 24, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 const sha = s.nullable(s.string(7, 64, /^[a-f0-9]{7,64}$/));
 const key = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 // `commit` is optional on steps and reviews: states written before it existed stay readable.
@@ -116,7 +117,8 @@ export function parseTarget(value) {
 export const targetName = (t) => t.kind === 'step' ? t.name : t.kind === 'task' ? `task:${t.id}` : `review:${t.domain}`;
 /**
  * Allowed moves. Staying on the same status only updates the fields (a new wip commit, another agent).
- * Leaving `done` reopens finished work: it needs a note that says why.
+ * Leaving `done` reopens finished work, and replacing the commit of finished work changes what was delivered:
+ * both need a note that says why.
  */
 const TRANSITIONS = {
     pending: ['running', 'done', 'skipped', 'failed'],
@@ -147,6 +149,11 @@ export function applySet(state, target, options) {
         throw new TransitionError(`${name} : passage de « ${from} » à « ${to} » refusé (possibles : ${TRANSITIONS[from].join(', ')})`);
     if (from === 'done' && to !== 'done' && !options.note?.trim())
         throw new TransitionError(`${name} : rouvrir un travail terminé exige --note (la raison est journalisée)`);
+    // The commit of finished work is what integration and reviews rely on: changing it is a decision to journal.
+    const recorded = entry.commit;
+    if (from === 'done' && to === 'done' && options.commit !== undefined && recorded !== null && options.commit !== recorded && !options.note?.trim()) {
+        throw new TransitionError(`${name} : remplacer le commit d'un travail terminé (${recorded.slice(0, 12)}) exige --note (la raison est journalisée)`);
+    }
     if (target.kind === 'task') {
         const task = entry;
         if (to === 'running') {
@@ -267,22 +274,44 @@ export function computeNext(state, probe) {
         actions.push('exécution terminée');
     return { specId: state.specId, step, stepStatus, wave, finished: allDone, ready, resume, relaunch, failed, blocked, reviewsToLaunch, reviewsRunning, actions };
 }
-export function readRunState(file) {
+export function readRunState(file, source = {}) {
+    const shown = source.shown ?? file;
     if (!existsSync(file))
-        throw new PipelineError('RUN_MISSING', `Aucune exécution : ${file} n'existe pas (apv run start <spec>)`);
+        throw new PipelineError('RUN_MISSING', `Aucune exécution : ${shown} n'existe pas (apv run start <spec>)`);
+    return parseRunStateText(readFileSync(file, 'utf8'), shown, source.specId);
+}
+/**
+ * Reason of a schema refusal without any text of the file: the paths hold only schema keys, task ids (checked
+ * against their pattern before they enter a path) and indexes; a refused property or key name is dropped.
+ */
+function schemaReason(message) {
+    return message.replace(/(unknown property) [\s\S]*$/, '$1').replace(/(invalid key) [\s\S]*?(, expected to match )/, '$1$2');
+}
+/**
+ * Parses and validates the text of a state file. `shown` names it in the errors, which never quote its content
+ * (a JSON error keeps only its position). With `specId` (the id its file name carries), a state of another spec
+ * is refused: the summary and `apv run next` would otherwise name one execution with the data of another.
+ */
+export function parseRunStateText(text, shown, specId) {
     let raw;
     try {
-        raw = JSON.parse(readFileSync(file, 'utf8'));
+        raw = JSON.parse(text);
     }
     catch (error) {
-        throw new PipelineError('RUN_STATE', `État illisible ${file} : ${errorMessage(error)}`);
+        const position = /at position (\d+)/.exec(errorMessage(error))?.[1];
+        throw new PipelineError('RUN_STATE', `État illisible ${shown} : JSON invalide${position ? ` (position ${position})` : ''}`);
     }
+    let state;
     try {
-        return parseState(raw);
+        state = parseState(raw);
     }
     catch (error) {
-        throw new PipelineError('RUN_STATE', `État invalide ${file} : ${errorMessage(error)}`);
+        throw new PipelineError('RUN_STATE', `État invalide ${shown} : ${schemaReason(errorMessage(error))}`);
     }
+    if (specId !== undefined && state.specId !== specId) {
+        throw new PipelineError('RUN_STATE', `État incohérent ${shown} : son identifiant de spec ne correspond pas au nom du fichier`);
+    }
+    return state;
 }
 /** Atomic write: a temporary file in the same directory, flushed, then renamed over the target. */
 export function writeRunState(file, state) {
@@ -320,11 +349,15 @@ export function summarize(state, file) {
     return { specId: state.specId, file, step, wave, finished: step === null, tasks: { ...counts, total: Object.keys(state.tasks).length },
         reviews: Object.fromEntries(REVIEWS.map(r => [r, state.reviews[r].status])), updatedAt: state.updatedAt, error: null };
 }
-/** One line for `apv status` and `apv run status`. */
-export function summaryLine(sum) {
+/**
+ * One line for `apv status` and `apv run status`. `running` names the running tasks after their count
+ * (ids of the state, already restricted to the task id pattern by the schema); the first ones only.
+ */
+export function summaryLine(sum, running = []) {
     const t = sum.tasks;
     const where = sum.finished ? 'terminée' : `étape ${STEP_LABEL[sum.step]}${sum.step === 'waves' && sum.wave !== null ? ` (vague ${sum.wave})` : ''}`;
-    const extra = [t.running ? `${t.running} en cours` : '', t.failed ? `${t.failed} en échec` : '', t.skipped ? `${t.skipped} sautée(s)` : ''].filter(Boolean).join(', ');
+    const names = running.length ? ` (${running.slice(0, 5).join(', ')}${running.length > 5 ? ', …' : ''})` : '';
+    const extra = [t.running ? `${t.running} en cours${names}` : '', t.failed ? `${t.failed} en échec` : '', t.skipped ? `${t.skipped} sautée(s)` : ''].filter(Boolean).join(', ');
     return `${sum.specId} : ${where} ; tâches ${t.done}/${t.total} faites${extra ? `, ${extra}` : ''} ; mise à jour ${sum.updatedAt}`;
 }
 /**

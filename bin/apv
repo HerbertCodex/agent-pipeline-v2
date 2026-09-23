@@ -1,0 +1,14 @@
+#!/usr/bin/env node
+// Executable of the apv plugin: Claude Code puts the plugin's bin/ directory on the PATH of Bash commands.
+// It runs, in this same process, the compiled tool shipped with the plugin. The tool's path is computed from
+// the real location of this script (symlinks resolved), never from PATH, the current directory or an
+// environment variable, and no shell or child process is involved: arguments, output and exit code are the tool's own.
+// The interpreter is not chosen here: the shebang takes `node` from PATH, and Node honours NODE_OPTIONS. This
+// residual risk is accepted (spec p3-essai, security assumptions): whoever controls PATH or the environment of
+// the session already controls git and every other command, and an absolute interpreter path would break
+// Node version managers such as nvm.
+import { realpathSync } from 'node:fs';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+
+const pluginRoot = new URL('..', pathToFileURL(realpathSync(fileURLToPath(import.meta.url))));
+await import(new URL('dist/cli.js', pluginRoot).href);
