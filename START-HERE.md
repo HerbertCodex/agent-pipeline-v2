@@ -43,7 +43,7 @@ Ou pas à pas, avec les commandes :
 
 ## 4. Ce qui arrive par phases
 
-Phase 4 : `/apv:onboard` (migration d'un projet V2). En attendant, `.apv/` se crée par `/apv:init`.
+Phase 4 : `/apv:onboard` est disponible (reprise d'un projet V2 ou existant : `apv onboard --dry-run`, puis `apv onboard`) ; le reste de la phase (projet pilote sous APV3, revue du DPO) est en cours.
 
 ## Ancienne version (V2)
 

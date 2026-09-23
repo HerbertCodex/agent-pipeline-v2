@@ -1,6 +1,6 @@
 # Plugin Claude Code « apv » (Agent Pipeline V3)
 
-Version 3.0.0-alpha.3, phases 1 (socle), 2 (design et aperçu vivant) et 3 (exécution) ; phase 4 (`/apv:onboard`, migration d'un projet V2) à venir. Spécification : [APV3-SPEC.md](APV3-SPEC.md). Retour d'expérience qui l'a motivée : [RETOUR-TOUJOURS-RIEN.md](RETOUR-TOUJOURS-RIEN.md).
+Version 3.0.0-alpha.3, phases 1 (socle), 2 (design et aperçu vivant) et 3 (exécution) ; phase 4 en cours (`/apv:onboard` disponible : reprise d'un projet V2 ou existant). Spécification : [APV3-SPEC.md](APV3-SPEC.md). Retour d'expérience qui l'a motivée : [RETOUR-TOUJOURS-RIEN.md](RETOUR-TOUJOURS-RIEN.md).
 
 Le plugin fait de la session Claude Code principale un chef de projet : il orchestre de vrais sous-agents (spec, données, design, implémentation en parallèle, intégration, revues), tient l'état du travail dans le dépôt (`.apv/`), suit le quota et bloque les effets externes dangereux.
 
@@ -76,9 +76,9 @@ Un agent de plugin ne peut pas déclarer `hooks`, `mcpServers` ni `permissionMod
 | `/apv:run` | disponible : exécution d'une spec pilotée par l'état `apv run` (données, plan, fondations, vagues parallèles, `apv scope check`, intégration, revues, corrections, PR brouillon, aperçu), reprise par `apv run next` ; jamais de fusion ni de déploiement ; réservée à l'opérateur ([RUN.md](RUN.md)) |
 | `/apv:review` | disponible : revues sécurité, fidélité, données et RGPD en parallèle, en lecture seule, sur copies détachées du même commit, constats consolidés et dédoublonnés |
 | `/apv:stack` | disponible : `apv stack plan` montré en entier, puis `APV_ALLOW_MERGE=1 apv stack merge` qui re-cible, revérifie et s'arrête à la première anomalie ; uniquement sur ordre explicite de l'opérateur dans son message courant ([RUN.md](RUN.md), section 7) |
-| `/apv:onboard` | phase 4 |
+| `/apv:onboard` | disponible : `apv onboard --dry-run` montré à l'opérateur, puis `apv onboard` crée `.apv/` sans rien écraser (configuration reprise de `pipeline.v2.json`, champs du contrôleur ignorés et listés, registre V2 repris tel quel, specs V2 valides ; sans V2 : contrôles détectés, non obligatoires), puis contrôles, consigne commune et aperçu complétés avec lui, `apv ledger validate`, `apv gates run`, commit proposé ; réservée à l'opérateur ([CLI.md](CLI.md)) |
 
-`/apv:onboard` répond déjà : il annonce sa phase et renvoie à la marche à suivre manuelle. Les commandes « réservées à l'opérateur » ont des effets (fichiers du projet, branches, PR, fusion) : Claude ne les charge pas de lui-même, il faut les taper. Quand l'opérateur délègue plusieurs specs, le chef de projet suit la procédure de `/apv:run` pour chacune (compétence `chef-de-projet`, section 4).
+Les commandes « réservées à l'opérateur » ont des effets (fichiers du projet, branches, PR, fusion) : Claude ne les charge pas de lui-même, il faut les taper. Quand l'opérateur délègue plusieurs specs, le chef de projet suit la procédure de `/apv:run` pour chacune (compétence `chef-de-projet`, section 4).
 
 ## Workflows
 

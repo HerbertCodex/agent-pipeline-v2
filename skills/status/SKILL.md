@@ -18,7 +18,7 @@ allowed-tools: Read Glob Grep Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js status
    - `node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js lock status` ;
    - dernière ligne de `.apv/state/quota.log` (pour un relevé frais : `/apv:quota`) ;
    - aperçu vivant : adresse et branche déclarées dans `.apv/config`.
-   Si `.apv/` n'existe pas : dis que le projet n'est pas encore sous APV (initialisation : `/apv:init` ; projet V2 : `/apv:onboard`, en phase 4).
+   Si `.apv/` n'existe pas : dis que le projet n'est pas encore sous APV (initialisation : `/apv:init` ; projet existant ou V2 : `/apv:onboard`).
 3. Explique le résultat à l'opérateur, dans sa langue, en quelques lignes :
    - par spec : étape (données, spec, plan, vague n, intégration, revues, corrections, PR), branches, PR et leur base, contrôles connus ;
    - ce qui bloque et pourquoi ; décisions qui l'attendent ;

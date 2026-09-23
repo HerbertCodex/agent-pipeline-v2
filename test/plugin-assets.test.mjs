@@ -41,8 +41,9 @@ const PHASE_ONE_COMMANDS = ['quota', 'resume', 'status'];
 const PHASE_TWO_COMMANDS = ['design', 'preview'];
 const PHASE_THREE_COMMANDS = ['init', 'review', 'run', 'spec', 'stack'];
 // Commands with effects the operator must trigger himself: never loaded by the model on its own.
-const OPERATOR_ONLY_COMMANDS = ['init', 'run', 'stack'];
-const LATER_COMMANDS = { onboard: 4 };
+const OPERATOR_ONLY_COMMANDS = ['init', 'onboard', 'run', 'stack'];
+const PHASE_FOUR_COMMANDS = ['onboard'];
+const LATER_COMMANDS = {};
 const METHOD_SKILLS = ['architecture-donnees', 'chef-de-projet', 'design-artefact', 'rgpd'];
 
 test('manifests parse and describe the apv plugin', () => {
@@ -103,7 +104,7 @@ test('agent bodies carry the rules that the pilot project paid for', () => {
 
 test('every skill has a frontmatter named after its directory', () => {
   const dirs = readdirSync(join(root, 'skills')).filter(d => statSync(join(root, 'skills', d)).isDirectory()).sort();
-  const expected = [...V2_SKILLS, ...METHOD_SKILLS, ...PHASE_ONE_COMMANDS, ...PHASE_TWO_COMMANDS, ...PHASE_THREE_COMMANDS, ...Object.keys(LATER_COMMANDS)].sort();
+  const expected = [...V2_SKILLS, ...METHOD_SKILLS, ...PHASE_ONE_COMMANDS, ...PHASE_TWO_COMMANDS, ...PHASE_THREE_COMMANDS, ...PHASE_FOUR_COMMANDS, ...Object.keys(LATER_COMMANDS)].sort();
   assert.deepEqual(dirs, expected);
   for (const dir of dirs) {
     const { fields } = frontmatter(`skills/${dir}/SKILL.md`);
@@ -202,6 +203,27 @@ test('phase three commands run the apv tool; those with effects are left to the 
   for (const topic of [/apv run next/, /apv run set/, /reprise/i, /apv stack plan/, /APV_ALLOW_MERGE=1/]) assert.match(read('docs/RUN.md'), topic);
 });
 
+test('phase four command: /apv:onboard shows the plan, runs apv onboard and leaves the commit to the operator', () => {
+  const tool = 'Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js';
+  for (const name of PHASE_FOUR_COMMANDS) {
+    const { fields, body } = frontmatter(`skills/${name}/SKILL.md`);
+    assert.ok(!body.includes('Disponible en phase'), `${name}: no longer a stub`);
+    assert.ok(fields['argument-hint'], `${name}: argument hint`);
+    assert.ok(fields.description.length >= 150, `${name}: description says what and when`);
+    assert.ok(fields['allowed-tools'].includes(`${tool} ${name}*)`), `${name}: allowed to run apv ${name}`);
+    assert.ok(body.includes('node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"'), `${name}: names the bundled tool`);
+    assert.match(body, /tiret cadratin/, `${name}: text rule`);
+    assert.equal(fields['disable-model-invocation'], 'true', `${name}: operator only`);
+  }
+  const onboard = frontmatter('skills/onboard/SKILL.md').body;
+  const dry = onboard.indexOf('apv onboard --dry-run');
+  assert.ok(dry > 0 && dry < onboard.indexOf('lance `apv onboard`'), 'the plan is shown before anything is written');
+  for (const rule of [/sans jamais écraser/, /ignoré/, /--specs <dossier>/, /mandatory/, /section `preview`/, /docs\/PREVIEW\.md/, /\.apv\/brief\.md/,
+    /apv ledger validate/, /apv gates run/, /--base/, /\*\*propose\*\* le commit/, /ni modifiés ni supprimés/]) assert.match(onboard, rule);
+  assert.match(read('docs/PLUGIN.md'), /\| `\/apv:onboard` \| disponible/);
+  assert.match(read('docs/CLI.md'), /## `apv onboard`/);
+});
+
 test('the project lead skill links references that exist', () => {
   const { body } = frontmatter('skills/chef-de-projet/SKILL.md');
   const references = [...body.matchAll(/`(references\/[a-z-]+\.md)`/g)].map(m => m[1]);
@@ -241,14 +263,14 @@ test('the changelog and the plugin guide state what the tool really does (FID-3,
 test('texts written for APV3 contain no em or en dash', () => {
   const files = [
     ...AGENTS.map(a => `agents/${a}.md`),
-    ...[...METHOD_SKILLS, ...PHASE_ONE_COMMANDS, ...PHASE_TWO_COMMANDS, ...PHASE_THREE_COMMANDS, ...Object.keys(LATER_COMMANDS)].flatMap(s => {
+    ...[...METHOD_SKILLS, ...PHASE_ONE_COMMANDS, ...PHASE_TWO_COMMANDS, ...PHASE_THREE_COMMANDS, ...PHASE_FOUR_COMMANDS, ...Object.keys(LATER_COMMANDS)].flatMap(s => {
       const dir = join(root, 'skills', s);
       const refs = readdirSync(dir).includes('references') ? readdirSync(join(dir, 'references')).map(r => `skills/${s}/references/${r}`) : [];
       return [`skills/${s}/SKILL.md`, ...refs];
     }),
     'hooks/hooks.json', 'hooks/scripts/bash-guard.mjs', 'hooks/scripts/session-start.mjs', 'hooks/scripts/stop-journal.mjs', 'hooks/scripts/scope-reminder.mjs',
     '.claude-plugin/plugin.json', '.claude-plugin/marketplace.json', 'docs/PLUGIN.md', 'docs/DESIGN.md', 'docs/RUN.md', 'README.md', 'START-HERE.md',
-    'skills/README.md', 'workflows/vague.js', 'workflows/revues.js', 'bin/apv',
+    'skills/README.md', 'workflows/vague.js', 'workflows/revues.js', 'bin/apv', 'docs/CLI.md',
   ];
   for (const file of files) assert.ok(!/[–—]/.test(read(file)), `${file} contains an em or en dash`);
 });

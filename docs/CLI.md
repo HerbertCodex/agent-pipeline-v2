@@ -11,7 +11,7 @@ Installation locale : `npm run build`, puis `node dist/cli.js <commande>` ou `np
 - `--repo <chemin>` désigne le projet (par défaut : le dossier courant).
 - Codes de sortie : `0` succès, `1` échec du contrôle (spec invalide, contrôle rouge, fichier hors périmètre...), `2` appel incorrect ou commande indisponible.
 - Fichiers lus dans le projet :
-  - configuration : `.apv/config.json`, sinon `pipeline.v2.json` (projet V2) ;
+  - configuration : `.apv/config.json`, sinon `pipeline.v2.json` (projet V2, tant que `apv onboard` n'a pas créé `.apv/config.json`) ;
   - registre des décisions : `.apv/DECISIONS.json`, sinon `.agent-pipeline/DECISIONS.json` (projet V2).
 - De la configuration, seules les sections `name` (nom du projet, écrit par `apv init`), `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview` et `design` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
 
@@ -34,6 +34,44 @@ Prépare un projet pour APV3 (`/apv:init`). Crée ce qui manque dans `.apv/`, **
 Le nom du projet est `--name`, sinon le nom du dossier du dépôt. La commande travaille à la racine du dépôt Git qui contient le dossier courant (ou `--repo`) et refuse hors d'un dépôt Git. Elle liste ce qui est créé, complété et ce qui existait déjà ; rien n'est commité.
 
 Sortie : `0` succès, `1` hors d'un dépôt Git ou modèle de consigne introuvable, `2` appel incorrect. En JSON : `repo`, `name`, `created`, `completed`, `existing`.
+
+## `apv onboard`
+
+```
+apv onboard [--repo <chemin>] [--specs <dossier>] [--dry-run] [--json]
+```
+
+Fait passer sous APV3 un projet déjà commencé (`/apv:onboard`, spécification section 14). Comme `apv init`, la commande crée seulement ce qui manque dans `.apv/`, **sans jamais écraser un fichier existant**, et se relance sans effet ; elle travaille à la racine du dépôt Git et refuse hors d'un dépôt. Le nom du projet est celui du dossier du dépôt. Tout est lu et vérifié avant la première écriture : un refus laisse le dépôt intact.
+
+**Projet V2** (`pipeline.v2.json` et/ou `.agent-pipeline/DECISIONS.json`) :
+
+| Source V2 | Dans `.apv/` |
+|---|---|
+| `pipeline.v2.json` | `config.json` : `name`, puis `gates`, `risk`, `validationRules`, `skills` et `environment.passEnv` recopiés tels quels et validés par le schéma d'APV3. Tout le reste (`agent`, `roles`, `roleProfiles`, `modelRouting`, `workflow`, `feedback`, `limits`, `setup`, `concurrency`, `maxRunMs`, `environment.id`...) est **ignoré** et listé : ces champs pilotaient le contrôleur retiré. |
+| `.agent-pipeline/DECISIONS.json` | `DECISIONS.json` : copie à l'identique. Le format du registre n'a pas changé entre V2 et V3 (même schéma, même `apv ledger validate`) : aucune conversion. `DECISIONS.md` est régénéré depuis le registre, comme par `apv ledger apply`. |
+| specs V2 | `specs/<id>.json`, voir ci-dessous |
+
+Un `pipeline.v2.json` ou un registre V2 illisible, ou refusé par le schéma (le registre : par les mêmes règles que `apv ledger validate`), fait sortir en `1` avec toutes les erreurs, **sans rien écrire** : un registre vide créé dans `.apv/` masquerait les décisions V2, puisque `.apv/DECISIONS.json` est lu en priorité. Un fichier V2 dont la cible existe déjà dans `.apv/` n'est pas relu. Les fichiers V2 restent en place, jamais modifiés.
+
+**Specs V2.** V2 garde ses specs dans sa base d'état (`~/.local/state/agent-pipeline-v2`), hors du dépôt : l'outil ne la lit pas. Il cherche les fichiers de spec gardés par le projet (les propositions passées à `apv2 spec draft --file`) dans `.agent-pipeline/specs/`, `specs/`, `docs/specs/` et dans le dossier `--specs` (qui peut être hors du dépôt). Chaque fichier `.json` qui a la forme d'une spec (`title` et `tasks`, ou `{ "request", "spec" }`) est validé comme par `apv spec validate --draft` sur le dépôt ; accepté, il est copié tel quel dans `.apv/specs/<id>.json`, où `<id>` est son nom en kebab-case sans le suffixe `-import`. Une demande de l'opérateur rangée à côté (`<id>-request.txt`, comme dans le projet pilote) est jointe : le fichier écrit a alors la forme `{ "request": "...", "spec": { ... } }`. Les fichiers refusés sont listés avec leurs erreurs, jamais copiés.
+
+**Projet sans V2** : `config.json` propose les contrôles que le dépôt déclare déjà, avec `mandatory: false` et, dans la sortie, leur source et une note (à relire, `covers`, `resources` et `passEnv` à compléter) :
+
+| Contrôle | `package.json` (scripts) | `Makefile` (cibles) | `pyproject.toml` |
+|---|---|---|---|
+| `check` | `check`, `typecheck`, `type-check` | `check`, `typecheck` | `[tool.mypy]` : `mypy .` |
+| `lint` | `lint` | `lint` | `[tool.ruff]` : `ruff check .` |
+| `test` | `test` | `test` | `[tool.pytest]` : `python -m pytest` |
+| `build` | `build` | `build` | |
+| `e2e` | `e2e`, `test:e2e` | `e2e`, `test-e2e` | |
+
+Le gestionnaire de paquets vient de `packageManager`, sinon du fichier de verrouillage (`pnpm`, `yarn`, `bun`, sinon `npm run <script>`) ; les outils Python passent par `uv run` ou `poetry run` si le projet a leur fichier de verrouillage. La première source trouvée gagne ; aucune commande n'est inventée. Le registre créé est vide.
+
+Dans les deux cas, le reste est celui d'`apv init` : `brief.md`, `specs/`, `state/`, `.gitignore`. La sortie liste aussi les fichiers de `.agent-pipeline/` non repris (rôles, compétences : le plugin les fournit) et les indices d'aperçu (script `preview` ou `apercu`, fichier de `scripts/`), à décrire dans la section `preview` avec l'opérateur ; puis la suite : relire `config.json` et `brief.md`, `apv ledger validate`, `apv gates run` (avec `--base` si un contrôle utilise `{{baseSha}}`), commit de `.apv/`. Rien n'est commité.
+
+`--dry-run` prend les mêmes décisions et affiche le même plan (« Serait créé »), sans rien écrire.
+
+Sortie : `0` succès, `1` hors d'un dépôt Git, fichier V2 illisible ou invalide, modèle de consigne introuvable, `2` appel incorrect (dont un dossier `--specs` introuvable). En JSON : `repo`, `name`, `dryRun`, `v2` (`config`, `ledger`, `notImported`), `config` (`status`, `source`, `kept`, `ignored`, `gates`, `detected`), `ledger` (`status`, `source`, `decisions`, `hash`), `specs` (`searched`, `imported`, `existing`, `rejected`), `previewHints`, `created`, `completed`, `existing`, `next`.
 
 ## `apv spec validate`
 
