@@ -9,7 +9,7 @@
 - **Hook de garde** : `apv stack merge` (y compris `node …/dist/cli.js stack merge` et `npx apv`) est bloqué sans `APV_ALLOW_MERGE=1` en préfixe, comme `gh pr merge`, et sa sortie ne peut pas être masquée. Le message du hook et celui de l'outil sont le même texte.
 - **Corrigé : hooks inactifs derrière un lien symbolique.** Chaque hook comparait son chemin résolu au chemin de lancement non résolu : un plugin atteint par un lien symbolique (dossier de plugin lié, `/var` sous macOS) n'exécutait aucun hook, sans message, garde de force-push et de fusion comprise. Les chemins sont maintenant comparés résolus (`isMainModule`).
 - **Corrigé : chemins résolus comme les racines de Git.** Les commandes affichaient des chemins relatifs en `../../..` quand le dossier courant passait par un lien symbolique (CI macOS en échec depuis la phase 1), et un dossier d'aperçu pas encore créé, dans un dépôt atteint par un lien, échappait au refus « dans le dépôt ».
-- **Corrigé : ordre de la file des verrous.** Les tickets sont datés par l'horloge murale, commune aux processus, et non plus par `performance.timeOrigin`, estimé par processus : un second demandeur pouvait passer devant le premier.
+- **Corrigé : ordre de la file des verrous.** Les tickets sont datés par l'horloge murale, commune aux processus, et non plus par `performance.timeOrigin`, estimé par processus : un second demandeur pouvait passer devant le premier. Le ticket du détenteur, encore présent un instant après l'acquisition, n'est plus compté comme un demandeur (affichage de la file et positions).
 - **`apv run set --commit`** vaut aussi pour une étape ou une revue (commit du plan, tête intégrée, commit revu).
 
 ## 3.0.0-alpha.2 : phase 2, design et aperçu vivant
