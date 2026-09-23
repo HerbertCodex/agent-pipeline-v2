@@ -90,7 +90,21 @@ export function jsonSchemaIssues(json: JsonSchema, value: unknown, path = '$'): 
     for (const key of Object.keys(input)) if (!Object.hasOwn(properties, key)) add(`unknown property ${key}`);
     for (const [key, schema] of Object.entries(properties)) {
       if (input[key] === undefined && required.has(key)) { issues.push({ code: 'SCHEMA', message: `${path}.${key}: missing required property` }); continue; }
+      // An optional property (neither required nor defaulted) may be absent.
+      if (input[key] === undefined && !Object.hasOwn(schema, 'default')) continue;
       issues.push(...jsonSchemaIssues(schema, input[key], `${path}.${key}`));
+    }
+  }
+  const values = json['additionalProperties'];
+  if (typeMatches('object', value) && values && typeof values === 'object') {
+    // A map (`s.record`): every key follows `propertyNames`, every value the item schema.
+    const entries = Object.entries(value as Record<string, unknown>);
+    const names = (json['propertyNames'] as JsonSchema | undefined)?.['pattern'];
+    const max = json['maxProperties'] as number | undefined;
+    if (max !== undefined && entries.length > max) add(`too many properties, expected at most ${max}`);
+    for (const [key, item] of entries) {
+      if (typeof names === 'string' && !new RegExp(names).test(key)) add(`invalid key ${key}, expected to match ${names}`);
+      issues.push(...jsonSchemaIssues(values as JsonSchema, item, `${path}.${key}`));
     }
   }
   return issues;
