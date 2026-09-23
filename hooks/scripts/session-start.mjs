@@ -46,20 +46,27 @@ export function describeQuota(line) {
   return oneLine(`${value.at} : ${window(value.session, 'session')}, ${window(value.week, 'semaine')}, niveau ${value.level ?? '?'}`, 300);
 }
 
-/** Most recently modified entries of `.apv/state`, newest first. */
-function stateEntries(stateDir) {
+/**
+ * Most recently modified entries of `.apv/state`, newest first. An entry that cannot be read (a dangling
+ * link, a file removed meanwhile) is left out on its own: it never hides the others.
+ */
+export function stateEntries(stateDir) {
+  let dirents;
   try {
-    return readdirSync(stateDir, { withFileTypes: true })
-      .filter(e => !e.name.startsWith('.'))
-      .map(e => {
-        const full = join(stateDir, e.name);
-        return { name: oneLine(e.isDirectory() ? `${e.name}/` : e.name, 120), mtime: statSync(full).mtime };
-      })
-      .sort((a, b) => b.mtime - a.mtime)
-      .slice(0, MAX_STATE_FILES);
+    dirents = readdirSync(stateDir, { withFileTypes: true });
   } catch {
     return [];
   }
+  const entries = [];
+  for (const e of dirents) {
+    if (e.name.startsWith('.')) continue;
+    try {
+      entries.push({ name: oneLine(e.isDirectory() ? `${e.name}/` : e.name, 120), mtime: statSync(join(stateDir, e.name)).mtime });
+    } catch {
+      // Unreadable entry: skipped.
+    }
+  }
+  return entries.sort((a, b) => b.mtime - a.mtime).slice(0, MAX_STATE_FILES);
 }
 
 /**

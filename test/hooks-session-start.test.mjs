@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, linkSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { copyFileSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { buildResumeContext, loadRunSummary, runLines } from '../hooks/scripts/session-start.mjs';
+import { buildResumeContext, loadRunSummary, runLines, stateEntries } from '../hooks/scripts/session-start.mjs';
 import { oneLine } from '../hooks/scripts/lib.mjs';
 import { applySet, createRunState, parseTarget, runStateFile, writeRunState } from '../dist/run/state.js';
 
@@ -191,6 +191,17 @@ test('runLines survives a summary module that throws', async t => {
   assert.deepEqual(runLines(root, throwing), ['Exécutions (apv run) : résumé indisponible (dist/run/summary.js non chargé) ; voir apv status.']);
   assert.match(buildResumeContext(join(root, '.apv'), null), /résumé indisponible/);
   assert.deepEqual(runLines(root, summary), []);
+});
+
+test('a dangling link in .apv/state hides no other recent state file (SEC-4)', { skip: process.platform === 'win32' }, t => {
+  // Review SEC-4: one entry whose stat failed (a dangling link) emptied the whole list of recent state files.
+  const root = project(t);
+  raw(root, 'resume.md', 'reprendre HOOK\n');
+  raw(root, 'notes.md', 'x');
+  symlinkSync(join(root, 'absent'), join(root, '.apv', 'state', 'lien-casse'));
+  assert.deepEqual(stateEntries(join(root, '.apv', 'state')).map(e => e.name).sort(), ['notes.md', 'resume.md']);
+  assert.match(hook(root), /^Fichiers d'état récents \(\.apv\/state\) : .*notes\.md \(/m);
+  assert.deepEqual(stateEntries(join(root, 'absent')), []);
 });
 
 test('oneLine of the hooks removes escape sequences, control and format characters, and counts code points', () => {
