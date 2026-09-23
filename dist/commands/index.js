@@ -7,6 +7,7 @@ import { errorMessage } from '../domain/errors.js';
  */
 export const commands = {
     init: { summary: 'init [--name <nom>] : crée ce qui manque dans .apv/ (configuration, registre, consigne, specs, état) sans rien écraser', load: () => import('./init.js') },
+    onboard: { summary: 'onboard [--dry-run] : crée .apv/ pour un projet existant (reprise de V2 ou contrôles détectés) sans rien écraser', load: () => import('./onboard.js') },
     spec: { summary: 'spec validate <fichier> | new <id> : valide une spec (minimum de sécurité recalculé) ou en écrit le gabarit', load: () => import('./spec.js') },
     run: { summary: 'run start|set|next|status : état de reprise d\'une exécution de spec (vagues, tâches, revues)', load: () => import('./run.js') },
     stack: { summary: 'stack plan|merge <pr...> : vérifie puis fusionne une pile de PR dans l\'ordre (fusion : APV_ALLOW_MERGE=1)', load: () => import('./stack.js') },
