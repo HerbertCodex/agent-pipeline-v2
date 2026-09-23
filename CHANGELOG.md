@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.0.0-alpha.2 : phase 2, design et aperçu vivant
+
+- **Les maquettes validées deviennent vérifiables.** `apv design register` verse la maquette que l'opérateur vient de valider : copie vers `docs/design/<nom>-validee.html`, empreinte sha256, décision `maquette-<nom>-validee` au registre avec la citation exacte de l'opérateur (obligatoire ; une validation avec réserve est refusée), fichiers à commiter affichés, rien commité à sa place. Une nouvelle version devient `-v2`, `-v3`, qui remplace la précédente. `apv design list` retrouve la référence d'un écran ; `apv design check` sort en `1` si un fichier validé a changé ou disparu sans nouvel enregistrement. Méthode et migration des maquettes du projet pilote : [docs/DESIGN.md](docs/DESIGN.md).
+- **`/apv:design`** : la boucle de maquette par artefact (même adresse du début à la fin, un changement à la fois, validation uniquement par les mots de l'opérateur), puis le versement. L'agent `designer` et la revue `qa-fidelite` s'appuient sur `apv design`.
+- **L'aperçu vivant se pilote par l'outil.** `apv preview update [branche] | status | stop | logs` remplace le script manuel du projet pilote : copie du commit par `git archive` (jamais l'arbre de travail), étapes `install`, `migrate`, `build`, `seed`, serveur détaché dans son propre groupe de processus, contrôle de santé, annonce de ce qui a changé depuis l'aperçu précédent. Le serveur est reconnu par son groupe et son heure de démarrage, jamais par un motif de ligne de commande ; un port pris par un autre processus est refusé, jamais libéré de force. Guide : [docs/PREVIEW.md](docs/PREVIEW.md).
+- **Aperçu : garde-fous.** Verrou à bail par projet (`preview:<projet>`, partagé par les worktrees du projet) ; délai maximal par étape (`timeoutSec`, 900 s par défaut, réglable par étape), au-delà duquel tout le groupe de processus de l'étape est arrêté ; valeurs du fichier d'environnement masquées dans le journal de mise à jour et les sorties ; journal du serveur (non masqué sur le disque, écrit par le serveur lui-même) en droits 600.
+- **`/apv:preview`** : mise à jour, vérification par une vraie requête, puis annonce (adresse, branche, changements, compte de démo).
+- **Configuration.** Les sections `preview` et `design` de `.apv/config.json` sont lues par le chargeur commun : `apv status` ne les annonce plus ignorées et signale une valeur invalide. La section `db` (lue par `apv db check`) n'est plus annoncée ignorée non plus.
+- **Schéma.** Propriétés facultatives (`s.optional`), tables clé-valeur (`s.record`) et alternatives (`s.union`).
+
+## 3.0.0-alpha.1 : phase 1, socle du plugin
+
+- **Agent Pipeline devient un plugin Claude Code** (`apv`). Le contrôleur V2 qui enchaînait des `claude --print` est retiré : le chef de projet (la session principale) orchestre de vrais sous-agents. Spécification : [docs/APV3-SPEC.md](docs/APV3-SPEC.md).
+- **9 sous-agents** : `product`, `architecte`, `architecte-donnees`, `designer`, `implementer`, `integrateur`, `qa-securite`, `qa-fidelite`, `dpo`, effort `high` au minimum.
+- **Compétences** : `chef-de-projet` (méthode complète), `design-artefact`, `rgpd`, `architecture-donnees`, et les 6 compétences héritées de V2.
+- **Commandes** : `/apv:status`, `/apv:quota`, `/apv:resume` ; les commandes des phases suivantes annoncent leur phase.
+- **Outil `apv` sans dépendance** : `spec validate` (minimum de sécurité recalculé), `ledger validate|plan|apply`, `gates run`, `scope check`, `quota` (journal `.apv/state/quota.log`), `status`.
+- **Verrous à bail** (`apv lock run|acquire|release|status`) : propriétaire vérifié par son pid, expiration, file d'attente visible ; remplacent le verrou `flock` sans bail.
+- **`apv db check [--live]`** : nommage anglais, index des clés étrangères, RLS activée et forcée, politiques, fonctions `security definer`, `select *`, redondances, clés d'idempotence ; lecture de la base en lecture seule par `APV_PSQL` ou `APV_DB_URL`.
+- **Hooks** : garde Bash (force-push, fusion et déploiement hors commande dédiée, sortie masquée d'une écriture externe), contexte de reprise au démarrage, rappel des chemins autorisés après une écriture d'implementer, état de reprise en fin de tour.
+- Guides, rôles et schémas propres au contrôleur V2 archivés dans `docs/v2/`. V2 reste disponible par ses tags.
 
 ## Unreleased — reliability and efficient feature work
 

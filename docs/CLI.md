@@ -13,7 +13,7 @@ Installation locale : `npm run build`, puis `node dist/cli.js <commande>` ou `np
 - Fichiers lus dans le projet :
   - configuration : `.apv/config.json`, sinon `pipeline.v2.json` (projet V2) ;
   - registre des décisions : `.apv/DECISIONS.json`, sinon `.agent-pipeline/DECISIONS.json` (projet V2).
-- De la configuration, seules les sections `gates`, `risk`, `validationRules`, `environment.passEnv` et `skills` sont lues. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
+- De la configuration, seules les sections `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview` et `design` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
 
 ## `apv spec validate`
 
@@ -106,6 +106,35 @@ apv db check [--json] [--live] [--config <fichier>] [--root <dossier>]
 
 Contrôle du modèle de données (spécification, section 13 bis) : nommage anglais, index des clés étrangères, RLS, politiques, fonctions `security definer`, `select *` dans le code, redondances, clés d'idempotence. `--live` lit aussi la base, en lecture seule, par `APV_PSQL` (commande psql complète, par exemple `docker exec -i <conteneur> psql -U postgres -d postgres`) ou par `APV_DB_URL` et `psql`. Règles, configuration et limites : [DB-CHECK.md](DB-CHECK.md).
 
+## `apv design`
+
+```
+apv design register <fichier.html> --name <nom> --quote "<mots de l'opérateur>"
+                    [--title "<titre>"] [--screens a,b] [--artifact <url>] [--repo <chemin>] [--json]
+apv design list [--screen <écran>] [--repo <chemin>] [--json]
+apv design check [--repo <chemin>] [--json]
+```
+
+Maquettes validées par l'opérateur, référence absolue des implementers et de la revue de fidélité. Méthode complète : [DESIGN.md](DESIGN.md).
+
+- `register` verse une maquette que l'opérateur vient de valider :
+  1. copie le fichier vers `docs/design/<nom>-validee.html` (dossier : `design.dir` de `.apv/config.json`) ;
+  2. calcule son sha256 ;
+  3. inscrit au registre, par l'API de mise à jour du registre (comme `apv ledger apply`), la décision `maquette-<nom>-validee` : `confirmed`, source `operator`, `sourceQuote` = la citation, `enforcement` `product`, valeur avec le chemin et l'empreinte (et les écrans, l'adresse de l'artefact) ;
+  4. affiche les fichiers à commiter (maquette, registre JSON et Markdown). Rien n'est commité.
+
+  La citation est obligatoire : sans les mots de l'opérateur, rien n'est versé (le pipeline n'invente jamais une approbation). Une validation avec réserve (« je valide sauf … ») est refusée. Le registre doit être commité avant (`LEDGER_DIRTY` sinon) ; en cas d'échec, le fichier copié est retiré. Le nom : minuscules, chiffres et tirets, 50 caractères au plus, sans le mot `validee`. Verser de nouveau une maquette déjà versée ajoute `maquette-<nom>-validee-v2` (puis `-v3`…), qui remplace l'ancienne décision (`supersedes`) ; un contenu identique à la version enregistrée ne change rien.
+- `list` affiche les maquettes validées du registre de l'arbre de travail : nom, décision, fichier, empreinte, écrans et état du fichier : `ok`, `MODIFIÉE` (empreinte différente), `ABSENTE`, ou `sans empreinte` pour une décision écrite avant l'outil (projet pilote). `--screen` filtre sur un écran (nom ou écran déclaré, sans tenir compte de la casse ni des accents).
+- `check` sort en `1` si un fichier de maquette validée a changé ou disparu sans nouvel enregistrement ; les décisions sans empreinte sont listées comme non vérifiables. À déclarer comme contrôle (`gates`) dans les projets qui ont des maquettes.
+
+Configuration (facultative) :
+
+```json
+{ "design": { "dir": "docs/design" } }
+```
+
+Sortie : `0` succès (maquettes intactes pour `check`), `1` refus ou dérive, `2` appel incorrect (citation ou nom manquant). En JSON, `register` rend `decisionId`, `supersedes`, `target`, `sha256`, `ledgerFile`, `toCommit`, `unchanged` ; `list` rend `mockups` ; `check` rend `ok`, `checked`, `broken`, `legacy`.
+
 ## `apv quota`
 
 ```
@@ -129,9 +158,29 @@ Le niveau se calcule sur la plus haute des deux fenêtres (spécification, secti
 | 95 % | `save_now` | sauvegarder (commits « wip », push, notes de reprise) et prévenir l'opérateur |
 | illisible | `unknown` | le relevé a échoué ; la sortie de la commande est affichée |
 
-Chaque relevé est ajouté à `.apv/state/quota.log` (un objet JSON par ligne : `at`, `session`, `week`, `percent`, `level`), sauf avec `--no-log` ; le hook de démarrage de session lit la dernière ligne. `apv quota` crée ou complète aussi `.apv/.gitignore` (`state/*.log`, `state/task.json`, `receipts/`) pour que ces fichiers machine ne soient jamais commités. La variable d'environnement `APV_CLAUDE_BIN` remplace l'exécutable `claude` (tests, installation particulière).
+Chaque relevé est ajouté à `.apv/state/quota.log` (un objet JSON par ligne : `at`, `session`, `week`, `percent`, `level`), sauf avec `--no-log` ; le hook de démarrage de session lit la dernière ligne. `apv quota` crée ou complète aussi `.apv/.gitignore` (`state/*.log`, `state/task.json`, `state/preview.json`, `receipts/`) pour que ces fichiers machine ne soient jamais commités. La variable d'environnement `APV_CLAUDE_BIN` remplace l'exécutable `claude` (tests, installation particulière).
 
 Sortie : `0` relevé lu, `1` relevé illisible, `2` appel incorrect.
+
+## `apv preview`
+
+```
+apv preview update [branche] [--wait 30m] [--repo <chemin>] [--json]
+apv preview status [--repo <chemin>] [--json]
+apv preview stop [--wait 30m] [--repo <chemin>] [--json]
+apv preview logs [--lines 50] [--update] [--repo <chemin>]
+```
+
+Aperçu vivant du projet (spécification, section 12), décrit par la section `preview` de `.apv/config.json` : dossier de la copie, fichier d'environnement, étapes `install`, `migrate`, `build`, `seed`, commande et port du serveur, contrôle de santé, adresse annoncée.
+
+- `update` prend le verrou du projet (`preview:<projet>`), arrête le serveur d'aperçu, copie la branche (`preview.branch`, sinon `main`) par `git archive` dans un dossier neuf, lance les étapes, démarre le serveur détaché (journal `.apv/state/preview.log`, état `.apv/state/preview.json`) et attend sa réponse. Il affiche « aperçu prêt : <adresse> (branche X, commit abc1234) » et les commits arrivés depuis l'aperçu précédent. Un échec nomme l'étape et donne le chemin du journal ; aucun serveur ne reste.
+- `status` : en marche (groupe de processus vivant et contrôle de santé réussi), adresse, branche, commit, durée, dernier échec.
+- `stop` : arrête le serveur (tout son groupe de processus).
+- `logs` : dernières lignes du journal du serveur, ou de la dernière mise à jour avec `--update`.
+
+Chaque étape a un délai maximal (`timeoutSec`, 900 s par défaut, réglable par étape) ; au-delà, tout son groupe de processus est arrêté. Les valeurs du fichier d'environnement sont masquées dans le journal de mise à jour et les sorties ; le journal du serveur, écrit par le serveur lui-même, n'est masqué qu'à l'affichage (`logs`) et reste en droits 600. Un port occupé par un processus qui n'est pas l'aperçu n'est jamais libéré de force : `update` refuse. Configuration, forme des commandes (chaîne pour `sh -c`, tableau sans shell), masquage, sûreté et exemple Supabase : [PREVIEW.md](PREVIEW.md).
+
+Sortie : `0` succès (pour `status` : aperçu en marche), `1` échec ou aperçu arrêté, `2` appel incorrect.
 
 ## `apv status`
 

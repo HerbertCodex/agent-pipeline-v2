@@ -38,13 +38,14 @@ const list = value => (value ?? '').split(',').map(v => v.trim()).filter(Boolean
 const AGENTS = ['architecte', 'architecte-donnees', 'designer', 'dpo', 'implementer', 'integrateur', 'product', 'qa-fidelite', 'qa-securite'];
 const V2_SKILLS = ['clean-code', 'design-patterns', 'refactoring', 'security', 'tdd', 'ui-design'];
 const PHASE_ONE_COMMANDS = ['quota', 'resume', 'status'];
-const LATER_COMMANDS = { design: 2, preview: 2, init: 3, spec: 3, run: 3, review: 3, stack: 3, onboard: 4 };
+const PHASE_TWO_COMMANDS = ['design', 'preview'];
+const LATER_COMMANDS = { init: 3, spec: 3, run: 3, review: 3, stack: 3, onboard: 4 };
 const METHOD_SKILLS = ['architecture-donnees', 'chef-de-projet', 'design-artefact', 'rgpd'];
 
 test('manifests parse and describe the apv plugin', () => {
   const plugin = JSON.parse(read('.claude-plugin/plugin.json'));
   assert.equal(plugin.name, 'apv');
-  assert.equal(plugin.version, '3.0.0-alpha.1');
+  assert.equal(plugin.version, '3.0.0-alpha.2');
   assert.equal(plugin.license, 'MIT');
   assert.match(read('LICENSE'), /^MIT License/);
   assert.equal(plugin.repository, 'https://github.com/HerbertCodex/agent-pipeline-v2');
@@ -99,7 +100,7 @@ test('agent bodies carry the rules that the pilot project paid for', () => {
 
 test('every skill has a frontmatter named after its directory', () => {
   const dirs = readdirSync(join(root, 'skills')).filter(d => statSync(join(root, 'skills', d)).isDirectory()).sort();
-  const expected = [...V2_SKILLS, ...METHOD_SKILLS, ...PHASE_ONE_COMMANDS, ...Object.keys(LATER_COMMANDS)].sort();
+  const expected = [...V2_SKILLS, ...METHOD_SKILLS, ...PHASE_ONE_COMMANDS, ...PHASE_TWO_COMMANDS, ...Object.keys(LATER_COMMANDS)].sort();
   assert.deepEqual(dirs, expected);
   for (const dir of dirs) {
     const { fields } = frontmatter(`skills/${dir}/SKILL.md`);
@@ -122,6 +123,29 @@ test('phase one commands run the apv tool; later commands announce their phase',
   }
 });
 
+test('phase two commands: the design loop and the live preview run the apv tool', () => {
+  for (const name of PHASE_TWO_COMMANDS) {
+    const { fields, body } = frontmatter(`skills/${name}/SKILL.md`);
+    assert.ok(!('disable-model-invocation' in fields), `${name}: invocable`);
+    assert.ok(!body.includes('Disponible en phase'), `${name}: no longer a stub`);
+    assert.ok(fields['allowed-tools'].includes(`Bash(node \${CLAUDE_PLUGIN_ROOT}/dist/cli.js ${name}*)`), `${name}: allowed to run apv ${name}`);
+    assert.ok(fields['argument-hint'], `${name}: argument hint`);
+  }
+  const design = frontmatter('skills/design/SKILL.md');
+  assert.ok(design.fields['allowed-tools'].split(' ').includes('Artifact'), 'design publishes with the Artifact tool');
+  for (const rule of [/Charge la compétence `artifact-design`/, /clair et sombre/, /390 px et 1280 px/, /un changement à la fois/, /republie à la même adresse/,
+    /Tu ne déclares jamais une maquette validée/, /apv design register .*--quote/s, /référence absolue/, /mot pour mot/, /seul survol/, /Densité/, /Codes couleur cohérents/,
+    /tiret cadratin/, /promesse risquée/, /Noms fictifs/, /Mode sombre conçu, pas inversé/, /apv design check/]) assert.match(design.body, rule);
+  const preview = frontmatter('skills/preview/SKILL.md').body;
+  for (const rule of [/apv preview update/, /apv preview status/, /apv preview logs/, /apv preview stop/, /Après chaque livraison/, /Sur demande de l'opérateur/, /Après une reprise/,
+    /adresse/, /compte de démo/i, /ce qui a changé/i, /N'arrête jamais un processus, un conteneur ou une pile que ce projet n'a pas lancé/, /docs\/PREVIEW\.md/]) assert.match(preview, rule);
+  assert.match(frontmatter('agents/qa-fidelite.md').body, /apv design list --screen/);
+  assert.match(frontmatter('agents/designer.md').body, /apv design register/);
+  assert.match(frontmatter('skills/design-artefact/SKILL.md').body, /apv design register/);
+  const lead = frontmatter('skills/chef-de-projet/SKILL.md').body;
+  for (const rule of [/\/apv:design/, /\/apv:preview/, /apv design check/]) assert.match(lead, rule);
+});
+
 test('the project lead skill links references that exist', () => {
   const { body } = frontmatter('skills/chef-de-projet/SKILL.md');
   const references = [...body.matchAll(/`(references\/[a-z-]+\.md)`/g)].map(m => m[1]);
@@ -135,13 +159,13 @@ test('the project lead skill links references that exist', () => {
 test('texts written for APV3 contain no em or en dash', () => {
   const files = [
     ...AGENTS.map(a => `agents/${a}.md`),
-    ...[...METHOD_SKILLS, ...PHASE_ONE_COMMANDS, ...Object.keys(LATER_COMMANDS)].flatMap(s => {
+    ...[...METHOD_SKILLS, ...PHASE_ONE_COMMANDS, ...PHASE_TWO_COMMANDS, ...Object.keys(LATER_COMMANDS)].flatMap(s => {
       const dir = join(root, 'skills', s);
       const refs = readdirSync(dir).includes('references') ? readdirSync(join(dir, 'references')).map(r => `skills/${s}/references/${r}`) : [];
       return [`skills/${s}/SKILL.md`, ...refs];
     }),
     'hooks/hooks.json', 'hooks/scripts/bash-guard.mjs', 'hooks/scripts/session-start.mjs', 'hooks/scripts/stop-journal.mjs', 'hooks/scripts/scope-reminder.mjs',
-    '.claude-plugin/plugin.json', '.claude-plugin/marketplace.json', 'docs/PLUGIN.md', 'README.md', 'START-HERE.md',
+    '.claude-plugin/plugin.json', '.claude-plugin/marketplace.json', 'docs/PLUGIN.md', 'docs/DESIGN.md', 'README.md', 'START-HERE.md',
   ];
   for (const file of files) assert.ok(!/[–—]/.test(read(file)), `${file} contains an em or en dash`);
 });

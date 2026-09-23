@@ -5,6 +5,8 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { IssueList, schemaIssues } from '../domain/issues.js';
 import { DEFAULT_PASS_ENV, envNamesSchema, gateSchema, riskSchema, validationRulesSchema } from '../domain/contracts.js';
 import { skillsSchema } from '../domain/knowledge.js';
+import { previewSchema } from '../preview/config.js';
+import { designDir, designSchema } from '../design/config.js';
 import { validateDag } from '../policy/policy.js';
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
@@ -14,13 +16,19 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['gates', 'risk', 'validationRules', 'environment', 'skills'];
+export const READ_SECTIONS = ['gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design'];
+/** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
+export const OWN_SECTIONS = ['db'];
 export const apvConfigSchema = s.object({
     environment: s.default(s.object({ passEnv: s.default(envNamesSchema, [...DEFAULT_PASS_ENV]) }), { passEnv: [...DEFAULT_PASS_ENV] }),
     skills: s.default(skillsSchema, { enabled: [], projectType: 'unknown', maxContextBytes: 16000 }),
     gates: s.default(s.array(gateSchema, 0, 100), []),
     validationRules: validationRulesSchema,
     risk: riskSchema,
+    /** Live preview environment (`apv preview`, spec section 12); absent when the project has none. */
+    preview: s.optional(previewSchema),
+    /** Folder of validated mockups (`apv design`, docs/DESIGN.md); absent means `docs/design`. */
+    design: s.optional(designSchema),
 });
 /** Picks the read sections: `environment.passEnv` only, whatever else a V2 environment declared. */
 export function readSections(raw) {
@@ -36,7 +44,8 @@ export function readSections(raw) {
         const passEnv = env['passEnv'];
         picked['environment'] = passEnv === undefined ? {} : { passEnv };
     }
-    return { picked, ignored: Object.keys(input).filter(k => !READ_SECTIONS.includes(k)).sort() };
+    const known = [...READ_SECTIONS, ...OWN_SECTIONS];
+    return { picked, ignored: Object.keys(input).filter(k => !known.includes(k)).sort() };
 }
 /** Every problem of a configuration document: schema, duplicate ids, unknown dependencies, cycles. */
 export function configIssues(raw) {
@@ -61,6 +70,8 @@ export function configIssues(raw) {
     }
     const ruleIds = value.validationRules.map(r => r.id);
     list.check(new Set(ruleIds).size === ruleIds.length, 'CONFIG', 'Duplicate validation rule id');
+    if (value.design)
+        list.attempt('CONFIG', () => designDir(value.design));
     if (list.empty)
         list.attempt('DAG', () => validateDag(value.gates));
     return { config: list.empty ? value : undefined, ignored: sections.ignored, issues: list.items };

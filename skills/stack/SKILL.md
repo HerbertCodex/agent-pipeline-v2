@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # /apv:stack
 
-**Disponible en phase 3.** Cette commande n'est pas encore livrée dans la version 3.0.0-alpha.1 du plugin.
+**Disponible en phase 3.** Cette commande n'est pas encore livrée dans la version 3.0.0-alpha.2 du plugin.
 
 Ce qu'elle fera : re-cible, vérifie la base de chaque PR juste avant de la fusionner, fusionne dans l'ordre et s'arrête à la première anomalie, sans jamais masquer une sortie (incident 30).
 

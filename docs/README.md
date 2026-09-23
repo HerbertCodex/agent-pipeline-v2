@@ -6,7 +6,8 @@ Agent Pipeline V3 est un plugin Claude Code. Pour commencer : [présentation](..
 | --- | --- |
 | Installer le plugin, ses agents, compétences, commandes et hooks | [Plugin](PLUGIN.md) |
 | Comprendre ce que fait APV3 et pourquoi | [Spécification](APV3-SPEC.md) · [Retour d'expérience « Toujours rien »](RETOUR-TOUJOURS-RIEN.md) |
-| Utiliser l'outil `apv` | [Outil apv](CLI.md) · [Verrous à bail](LOCKS.md) · [Contrôle du modèle de données](DB-CHECK.md) |
+| Utiliser l'outil `apv` | [Outil apv](CLI.md) · [Verrous à bail](LOCKS.md) · [Contrôle du modèle de données](DB-CHECK.md) · [Aperçu vivant](PREVIEW.md) |
+| Maquettes : boucle par artefact et référence validée | [Design](DESIGN.md) |
 | Registre des décisions | [Décisions](DECISIONS.md) |
 | Sécurité | [Sécurité](SECURITY.md) · [Routage OWASP](OWASP-SECURITY.md) |
 | Configuration reprise de V2, contrôles et preuves | [Configuration](CONFIGURATION.md) · [Qualité et validation](QUALITY.md) · [Compétences](SKILLS.md) |

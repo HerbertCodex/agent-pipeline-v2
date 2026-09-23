@@ -216,6 +216,11 @@ Consulté à trois moments : à la spec (données, base légale, durées, minimi
 | 3. Exécution | `/apv:init`, `/apv:spec`, `/apv:run` avec workflows, intégrateur, revues, `/apv:stack` | Une spec réelle est livrée en PR avec vagues parallèles, revues et reprise après interruption simulée |
 | 4. RGPD et migration | agent `dpo`, compétence `rgpd`, `/apv:onboard` depuis V2 | « Toujours rien » tourne sous APV3 ; ses pages légales passent la revue du DPO |
 
+État des phases :
+- **Phase 1 : faite** (3.0.0-alpha.1, PR #68).
+- **Phase 2 : faite** (3.0.0-alpha.2). `apv design register|list|check` verse une maquette validée par l'opérateur (citation exacte au registre, empreinte sha256) et détecte sa dérive ; `/apv:design` mène la boucle par artefact. `apv preview update|status|stop|logs` et `/apv:preview` mettent l'aperçu à jour sur une branche : essai réel sur « Toujours rien » (pile d'aperçu en 563xx, port 5190), qui remplace le script manuel du projet pilote.
+- Phases 3 et 4 : à faire.
+
 Chaque phase est livrée en PR à fusionner par l'opérateur.
 
 ## 16. Points ouverts

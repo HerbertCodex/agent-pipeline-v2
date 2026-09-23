@@ -2,6 +2,8 @@ import { invariant, PipelineError } from './errors.js';
 function make(json, parse) {
     return { json, parse: (v, p = '$') => parse(v, p) };
 }
+/** Schemas made by `s.optional`: an object leaves them out of `required` and omits an absent value. */
+const OPTIONAL = new WeakSet();
 export const s = {
     string(min = 1, max = 10000, pattern) {
         return make({ type: 'string', minLength: min, maxLength: max,
@@ -57,9 +59,46 @@ export const s = {
     default(schema, value) {
         return make({ ...schema.json, default: value }, (v, p) => schema.parse(v === undefined ? structuredClone(value) : v, p));
     },
+    /** An object property that may be absent (no default): absent stays absent, never `undefined` in the output. */
+    optional(schema) {
+        const out = make({ ...schema.json }, (v, p) => v === undefined ? undefined : schema.parse(v, p));
+        OPTIONAL.add(out);
+        return out;
+    },
+    /** A string-keyed map whose keys match `key` and whose values all follow `value`. */
+    record(key, value, max = 1000) {
+        return make({ type: 'object', propertyNames: { pattern: key.source }, additionalProperties: value.json, maxProperties: max }, (v, p) => {
+            invariant(v !== null && typeof v === 'object' && !Array.isArray(v), 'SCHEMA', `${p}: expected object`);
+            const entries = Object.entries(v);
+            invariant(entries.length <= max, 'SCHEMA', `${p}: too many properties, expected at most ${max}`);
+            const out = {};
+            for (const [k, x] of entries) {
+                invariant(key.test(k), 'SCHEMA', `${p}: invalid key ${k}, expected to match ${key.source}`);
+                // defineProperty: a `__proto__` key stays a plain property instead of changing the prototype.
+                Object.defineProperty(out, k, { value: value.parse(x, `${p}.${k}`), enumerable: true, writable: true, configurable: true });
+            }
+            return out;
+        });
+    },
+    /** The first alternative that parses; the error lists why each one failed. */
+    union(a, b) {
+        return make({ anyOf: [a.json, b.json] }, (v, p) => {
+            try {
+                return a.parse(v, p);
+            }
+            catch (first) {
+                try {
+                    return b.parse(v, p);
+                }
+                catch (second) {
+                    throw new PipelineError('SCHEMA', `${p}: no alternative matches (${first.message}; ${second.message})`);
+                }
+            }
+        });
+    },
     object(shape) {
         const properties = Object.fromEntries(Object.entries(shape).map(([k, v]) => [k, v.json]));
-        const required = Object.keys(shape).filter(k => !Object.hasOwn(shape[k].json, 'default'));
+        const required = Object.keys(shape).filter(k => !Object.hasOwn(shape[k].json, 'default') && !OPTIONAL.has(shape[k]));
         return make({ type: 'object', properties, required, additionalProperties: false }, (v, p) => {
             invariant(v !== null && typeof v === 'object' && !Array.isArray(v), 'SCHEMA', `${p}: expected object`);
             const input = v;
@@ -67,8 +106,11 @@ export const s = {
                 invariant(Object.hasOwn(shape, key), 'SCHEMA', `${p}: unknown property ${key}`);
             }
             const out = {};
-            for (const [key, schema] of Object.entries(shape))
-                out[key] = schema.parse(input[key], `${p}.${key}`);
+            for (const [key, schema] of Object.entries(shape)) {
+                const parsed = schema.parse(input[key], `${p}.${key}`);
+                if (parsed !== undefined || !OPTIONAL.has(schema))
+                    out[key] = parsed;
+            }
             return out;
         });
     },

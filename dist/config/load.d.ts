@@ -9,7 +9,9 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["gates", "risk", "validationRules", "environment", "skills"];
+export declare const READ_SECTIONS: readonly ["gates", "risk", "validationRules", "environment", "skills", "preview", "design"];
+/** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
+export declare const OWN_SECTIONS: readonly ["db"];
 export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
     readonly environment: {
         readonly passEnv: string[];
@@ -46,6 +48,33 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly maxFastFiles: number;
         readonly maxFastLines: number;
     };
+    readonly preview: {
+        readonly branch: string | undefined;
+        readonly dir: string | undefined;
+        readonly envFile: string | undefined;
+        readonly steps: {
+            install: import("../preview/config.js").PreviewStep | undefined;
+            migrate: import("../preview/config.js").PreviewStep | undefined;
+            build: import("../preview/config.js").PreviewStep | undefined;
+            seed: import("../preview/config.js").PreviewStep | undefined;
+        };
+        readonly serve: {
+            readonly command: string | string[];
+            readonly port: number;
+            readonly host: string | undefined;
+            readonly env: Record<string, string>;
+        };
+        readonly health: {
+            path: string;
+            timeoutSec: number;
+        };
+        readonly announce: {
+            readonly url: string | undefined;
+        } | undefined;
+    } | undefined;
+    readonly design: {
+        readonly dir: string | undefined;
+    } | undefined;
 }>;
 export type ApvConfig = Infer<typeof apvConfigSchema>;
 export interface LoadedConfig {

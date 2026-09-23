@@ -1,7 +1,7 @@
 import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s } from './schema.js';
 import { invariant } from './errors.js';
-export const VERSION = '3.0.0-alpha.1';
+export const VERSION = '3.0.0-alpha.2';
 export const lanes = ['fast', 'standard', 'high'];
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'];
 const id = s.string(1, 80, /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
