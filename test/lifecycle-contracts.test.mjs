@@ -1,11 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { validateSpec, validateQa, specHash, taskOrder } from '../dist/lifecycle/contracts.js';
-import { strictSchema } from '../dist/lifecycle/roles.js';
-import { specSchema, configSchema, validateConfig } from '../dist/index.js';
-import { demoSpec } from './lifecycle-helpers.mjs';
+import { validateConfig } from '../dist/index.js';
+import { demoSpec, fixtureConfig } from './lifecycle-helpers.mjs';
 import { classify } from '../dist/policy/policy.js';
-import { fixtureConfig } from '../examples/lifecycle-fixture.mjs';
 const clone = () => demoSpec();
 const rejects = {
     'unknown field': s => { s.autorun = true; }, 'duplicate criterion': s => s.acceptance.push(s.acceptance[0]),
@@ -26,33 +24,13 @@ function qa() { return { candidateSha: 'a'.repeat(40), verdict: 'pass', summary:
 for (const [name, change] of Object.entries({ 'wrong SHA': q => q.candidateSha = 'b'.repeat(40), 'missing criterion': q => q.criteria.pop(), 'duplicate criterion': q => q.criteria[1] = q.criteria[0], 'unknown criterion': q => q.criteria[0].id = 'NO', 'pass with unknown': q => q.criteria[0].status = 'unknown', 'pass with blocker': q => q.findings = [{ id: 'F1', severity: 'blocker', path: 'src/math.mjs', description: 'Bug found.' }], 'blank evidence': q => q.criteria[0].evidence = '  ', 'empty SHA': q => q.candidateSha = '' }))
     test('QA rejects ' + name, () => { const q = qa(); change(q); assert.throws(() => validateQa(q, clone(), 'a'.repeat(40))); });
 test('QA may report unknown as changes requested', () => { const q = qa(); q.verdict = 'changes_requested'; q.criteria[0].status = 'unknown'; assert.equal(validateQa(q, clone(), q.candidateSha).verdict, 'changes_requested'); });
-test('role schema normalizes required fields without mutating runtime defaults', () => { const strict = strictSchema(configSchema.json); assert.equal(strict.required.length, Object.keys(strict.properties).length); assert.ok(!('default' in strict.properties.concurrency)); assert.ok('default' in configSchema.json.properties.concurrency); assert.equal(specSchema.json.additionalProperties, false); });
 test('pipeline assistant instructions are sensitive files', () => { assert.equal(classify({ files: ['.agent-pipeline/roles/product.md'], lines: 1, binary: false }, validateConfig(fixtureConfig())).lane, 'high'); });
-test('provider schemas use only portable structured-output keywords at every depth', () => {
-    const allowed = new Set(['type', 'enum', 'description', 'title', 'properties', 'required', 'additionalProperties', 'items', 'anyOf']);
-    const walk = (schema) => { for (const key of Object.keys(schema))
-        assert.ok(allowed.has(key), `Unsupported provider keyword ${key}`); if (schema.properties) {
-        assert.deepEqual(schema.required, Object.keys(schema.properties));
-        assert.equal(schema.additionalProperties, false);
-        Object.values(schema.properties).forEach(walk);
-    } if (schema.items)
-        walk(schema.items); if (schema.anyOf)
-        schema.anyOf.forEach(walk); };
-    walk(strictSchema(configSchema.json));
-    walk(strictSchema(specSchema.json));
-});
-test('provider literal schema has explicit type and enum instead of const', () => {
-    assert.deepEqual(strictSchema({ const: 1 }), { type: 'integer', enum: [1] });
-    assert.deepEqual(strictSchema({ const: 'fixed' }), { type: 'string', enum: ['fixed'] });
-});
-test('provider schema normalization never weakens authoritative runtime validation', () => {
+test('runtime validation refuses NUL characters and out-of-range configuration', () => {
     const proposal = demoSpec();
     proposal.title = 'bad\0title';
-    strictSchema(specSchema.json);
     assert.throws(() => validateSpec(proposal));
     const config = fixtureConfig();
     config.concurrency = 999;
-    strictSchema(configSchema.json);
     assert.throws(() => validateConfig(config));
 });
 

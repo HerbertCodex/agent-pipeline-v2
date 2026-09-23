@@ -1,0 +1,3 @@
+import type { CommandIO } from './io.js';
+export declare const usage = "Utilisation :\n  apv gates run [--only a,b] [--config <fichier>] [--base <ref>] [--concurrency N]\n                [--keep-going] [--repo <chemin>] [--json]\n\nEx\u00E9cute les contr\u00F4les d\u00E9clar\u00E9s (.apv/config.json, sinon pipeline.v2.json) dans le d\u00E9p\u00F4t :\nd\u00E9pendances, ressources, variables transmises, d\u00E9lais et masquage des secrets respect\u00E9s.\n\u00C9crit un re\u00E7u JSON par contr\u00F4le dans .apv/receipts/<ex\u00E9cution>/ et affiche un tableau.\nSortie : 0 si tous les contr\u00F4les passent, 1 sinon, 2 appel incorrect.";
+export declare function run(args: string[], io: CommandIO): Promise<number>;

@@ -1,14 +1,14 @@
 {
   "name": "agent-pipeline-v2",
-  "version": "2.0.0-alpha.8",
-  "description": "End-to-end, risk-adaptive coding-agent pipeline: onboarding, Product specs, QA and explicit delivery",
+  "version": "3.0.0-alpha.1",
+  "description": "Agent Pipeline V3: Claude Code plugin tooling (specs, decision ledger, gates, scope, quota) without the V2 controller",
   "type": "module",
   "license": "MIT",
   "engines": {
     "node": ">=22.16.0"
   },
   "bin": {
-    "apv2": "dist/cli.js"
+    "apv": "dist/cli.js"
   },
   "exports": {
     ".": {
@@ -23,7 +23,6 @@
     "README.md",
     "LICENSE",
     "NOTICE",
-    "scripts",
     "src",
     "test",
     "validation",
@@ -32,26 +31,15 @@
     "prompts",
     "START-HERE.md",
     "roles",
-    "skills",
-    "ui",
-    "stylelint.config.mjs"
+    "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint:css": "stylelint \"ui/**/*.css\" --max-warnings 0",
     "test": "npm run build && node --test --test-concurrency=4 test/*.test.mjs",
     "test:built": "node --test --test-concurrency=4 test/*.test.mjs",
-    "demo": "node scripts/demo.mjs",
-    "bench": "node scripts/bench.mjs",
-    "evaluate": "node scripts/evaluate.mjs",
-    "check": "npm run typecheck && npm run lint:css && npm run test",
-    "prepack": "npm run build",
-    "demo:lifecycle": "node scripts/demo-lifecycle.mjs",
-    "pilot:provider": "node scripts/provider-pilot.mjs",
-    "check:package": "npm pack --ignore-scripts && node scripts/check-package.mjs",
-    "pilot:repair": "node scripts/repair-pilot.mjs",
-    "audit:errors": "node scripts/audit-errors.mjs"
+    "check": "npm run typecheck && npm run test",
+    "prepack": "npm run build"
   },
   "devDependencies": {
     "@types/node": "24.0.4",

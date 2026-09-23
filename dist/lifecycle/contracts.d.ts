@@ -1,6 +1,7 @@
 import { type Infer } from '../domain/schema.js';
 import { type Config, type Lane } from '../domain/contracts.js';
 import { type DecisionLedger } from './decisions.js';
+import { type Issue } from '../domain/issues.js';
 import { type SecurityContext } from '../security/owasp.js';
 import { type QualityContext } from '../quality/review.js';
 export declare const threatModelSchema: import("../domain/schema.js").Schema<{
@@ -285,10 +286,23 @@ export interface DesignRecord {
         bytes: number;
     }[];
 }
+export interface SpecCheckOptions {
+    /** Approval-time rules: no open question, no unresolved ambiguity, every criterion implemented. */
+    ready?: boolean;
+    ledger?: DecisionLedger;
+    /** Accumulated operator request; decision resolutions must quote it. */
+    operatorText?: string;
+    /** Security minimum the spec must preserve, recomputed from the request and the repository. */
+    securityContext?: SecurityContext;
+}
+/** Every semantic problem of a parsed spec, in the order V2 checked them (V2 stopped at the first). */
+export declare function specRuleIssues(spec: Spec, options?: SpecCheckOptions): Issue[];
+/** Every problem of an unparsed spec document: schema first (all of it), then the spec rules. */
+export declare function specIssues(value: unknown, options?: SpecCheckOptions): Issue[];
 export declare function validateSpec(value: unknown, ready?: boolean, ledger?: DecisionLedger, operatorText?: string, securityContext?: SecurityContext): Spec;
 /**
  * Structural rules an executable spec must satisfy. Applied at approval, and to freshly produced Product
- * output that asks no question — a spec that asks nothing claims to be complete. It is deliberately not
+ * output that asks no question: a spec that asks nothing claims to be complete. It is deliberately not
  * applied when reading a stored document: an old document must stay loadable, whatever rule came later.
  */
 export declare function assertSpecReadiness(spec: Spec): Spec;

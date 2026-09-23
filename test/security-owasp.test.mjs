@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assessSecurity, validateSpec, validateQa, readRole } from '../dist/index.js';
-import { demoSpec } from '../examples/lifecycle-fixture.mjs';
+import { assessSecurity, validateSpec, validateQa } from '../dist/index.js';
+import { demoSpec } from './lifecycle-helpers.mjs';
 
 function topicIds(ctx) { return new Set(ctx.topics.map(t => t.id)); }
 
@@ -115,10 +115,3 @@ test('QA cannot pass a security-sensitive spec without evidence for every securi
   assert.equal(validateQa(qa, spec, sha).verdict, 'pass');
 });
 
-test('shipped roles treat repository and external content as untrusted prompt-injection surfaces', () => {
-  for (const role of ['product','implementer','qa']) {
-    const text = readRole(role).instructions.toLowerCase();
-    assert.match(text, /untrusted/);
-    assert.match(text, /prompt[- ]injection|embedded instructions/);
-  }
-});

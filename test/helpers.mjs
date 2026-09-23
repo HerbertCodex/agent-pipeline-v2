@@ -2,7 +2,6 @@ import { mkdtempSync,mkdirSync,writeFileSync,rmSync } from 'node:fs';
 import { join,dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { Pipeline } from '../dist/index.js';
 import { validateConfig,taskSchema } from '../dist/domain/contracts.js';
 export function git(repo,...args) {
   return execFileSync('git',['-c','core.hooksPath=/dev/null','-c','commit.gpgsign=false',...args],{
@@ -23,8 +22,9 @@ export function rawConfig(overrides={}) {
 }
 export const cfg = (overrides={}) => validateConfig(rawConfig(overrides));
 export const task = (overrides={}) => taskSchema.parse({...baseTask,...overrides});
+/** Temporary Git repository with a failing addition and its test, removed after the test. */
 export function fixture(t,options={}) {
-  const root=mkdtempSync(join(tmpdir(),'apv2-test-'));const repo=join(root,'repo');mkdirSync(repo);
+  const root=mkdtempSync(join(tmpdir(),'apv3-test-'));const repo=join(root,'repo');mkdirSync(repo);
   const files={
     '.gitignore':'node_modules/\ndist/\n',
     'README.md':'# Fixture\n',
@@ -34,11 +34,9 @@ export function fixture(t,options={}) {
     ...options.files,
   };
   for (const [p,text] of Object.entries(files)) {mkdirSync(dirname(join(repo,p)),{recursive:true});writeFileSync(join(repo,p),text);}
-  git(repo,'init','-q');git(repo,'add','.');git(repo,'commit','-qm','fixture');
-  const state=join(root,'state');const pipeline=new Pipeline(state);
-  t.after(()=>{try{pipeline.close();}catch{}rmSync(root,{recursive:true,force:true});});
-  const config=rawConfig(options.config);const taskValue={...baseTask,...options.task};
-  return {root,repo,state,pipeline,config,task:taskValue,start:()=>pipeline.start({repo,task:taskValue,config})};
+  git(repo,'init','-q','-b','main');git(repo,'add','.');git(repo,'commit','-qm','fixture');
+  t.after(()=>rmSync(root,{recursive:true,force:true}));
+  return {root,repo};
 }
 export function receipt(gateId='gate',status='passed',extra={}) {
   return {id:crypto.randomUUID(),runId:'run',gateId,key:'a'.repeat(64),candidateSha:'b'.repeat(40),configHash:'c'.repeat(64),environmentHash:'d'.repeat(64),

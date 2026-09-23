@@ -1,8 +1,9 @@
 import { type Infer } from './schema.js';
-export declare const VERSION = "2.0.0-alpha.8";
+export declare const VERSION = "3.0.0-alpha.1";
 export declare const lanes: readonly ["fast", "standard", "high"];
 export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];
+export declare const envNamesSchema: import("./schema.js").Schema<string[]>;
 export declare const commandSchema: import("./schema.js").Schema<{
     readonly command: string[];
     readonly timeoutMs: number;
@@ -23,6 +24,19 @@ export declare const gateSchema: import("./schema.js").Schema<{
     readonly lanes: ("fast" | "standard" | "high")[];
     readonly mandatory: boolean;
     readonly cacheTtlMs: number;
+}>;
+/** Variables a command receives by default; every other variable must be named in `passEnv`. */
+export declare const DEFAULT_PASS_ENV: readonly ["PATH", "SystemRoot", "WINDIR", "TMPDIR", "TEMP", "TMP", "LANG"];
+export declare const validationRulesSchema: import("./schema.js").Schema<{
+    readonly id: string;
+    readonly paths: string[];
+    readonly requires: ("security" | "unit" | "integration" | "browser" | "build" | "lint" | "typecheck" | "architecture")[];
+}[]>;
+export declare const riskSchema: import("./schema.js").Schema<{
+    readonly fastPaths: string[];
+    readonly highPaths: string[];
+    readonly maxFastFiles: number;
+    readonly maxFastLines: number;
 }>;
 export declare const MAX_TASK_DESCRIPTION = 400000;
 export declare const DEFAULT_LIMITS: {
@@ -212,9 +226,6 @@ export type Task = Infer<typeof taskSchema>;
 export type Config = Infer<typeof configSchema>;
 export type Gate = Infer<typeof gateSchema>;
 export type CommandSpec = Infer<typeof commandSchema>;
-export declare const agentOutputSchema: import("./schema.js").Schema<{
-    readonly summary: string;
-}>;
 export interface RiskDecision {
     lane: Lane;
     reasons: string[];
@@ -225,8 +236,6 @@ export interface ChangeSet {
     lines: number;
     binary: boolean;
 }
-export declare const states: readonly ["created", "preparing", "implementing", "candidate", "validating", "awaiting_review", "ready", "failed", "interrupted", "rejected"];
-export type RunState = typeof states[number];
 export interface ProcessResult {
     exitCode: number | null;
     signal: string | null;
@@ -246,7 +255,7 @@ export declare const receiptSchema: import("./schema.js").Schema<{
     readonly candidateSha: string;
     readonly configHash: string;
     readonly environmentHash: string;
-    readonly status: "failed" | "passed" | "timed_out" | "cancelled" | "spawn_error" | "blocked" | "cached";
+    readonly status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "blocked" | "cached";
     readonly startedAt: number;
     readonly durationMs: number;
     readonly exitCode: number | null;
@@ -257,61 +266,4 @@ export declare const receiptSchema: import("./schema.js").Schema<{
 }>;
 export type GateReceipt = Infer<typeof receiptSchema>;
 export declare function validateReceipt(value: unknown): GateReceipt;
-export interface Approval {
-    reviewer: string;
-    note: string;
-    candidateSha: string;
-    evidenceHash: string;
-    at: number;
-}
-export interface Run {
-    id: string;
-    version: number;
-    state: RunState;
-    resumeFrom: RunState | null;
-    /** Owning spec for shared invocation accounting; absent on standalone/legacy runs. */
-    specId?: string;
-    task: Task;
-    config: Config;
-    configHash: string;
-    repo: string;
-    baseSha: string;
-    workspace: string;
-    validationWorkspace: string;
-    candidateSha: string | null;
-    changeSet: ChangeSet | null;
-    risk: RiskDecision | null;
-    gateIds: string[];
-    receipts: GateReceipt[];
-    approvals: Approval[];
-    createdAt: number;
-    updatedAt: number;
-    validatedAt: number | null;
-    sessionStartedAt: number | null;
-    remainingMs: number;
-    metrics: {
-        activeMs: number;
-        preparationMs: number;
-        agentMs: number;
-        validationMs: number;
-        cacheHits: number;
-        repairAttempts: number;
-        /** Declared by the provider when it reports them; absent on runs created before, and never an invoice. */
-        costUsd?: number;
-        providerTurns?: number;
-    };
-    summary: string;
-    error: {
-        code: string;
-        message: string;
-    } | null;
-}
-export interface RunEvent {
-    seq: number;
-    runId: string;
-    at: number;
-    type: string;
-    data: Record<string, unknown>;
-}
 export declare function validateConfig(value: unknown): Config;
-export declare function transition(run: Run, to: RunState): void;

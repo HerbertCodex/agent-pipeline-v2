@@ -1,0 +1,102 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { s } from '../domain/schema.js';
+import { PipelineError, errorMessage } from '../domain/errors.js';
+import { IssueList, schemaIssues } from '../domain/issues.js';
+import { DEFAULT_PASS_ENV, envNamesSchema, gateSchema, riskSchema, validationRulesSchema } from '../domain/contracts.js';
+import { skillsSchema } from '../domain/knowledge.js';
+import { validateDag } from '../policy/policy.js';
+/** V3 project configuration, versioned with the project. */
+export const CONFIG_FILE = '.apv/config.json';
+/** V2 configuration, read as is for projects not yet migrated. */
+export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
+/**
+ * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
+ * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
+ */
+export const READ_SECTIONS = ['gates', 'risk', 'validationRules', 'environment', 'skills'];
+export const apvConfigSchema = s.object({
+    environment: s.default(s.object({ passEnv: s.default(envNamesSchema, [...DEFAULT_PASS_ENV]) }), { passEnv: [...DEFAULT_PASS_ENV] }),
+    skills: s.default(skillsSchema, { enabled: [], projectType: 'unknown', maxContextBytes: 16000 }),
+    gates: s.default(s.array(gateSchema, 0, 100), []),
+    validationRules: validationRulesSchema,
+    risk: riskSchema,
+});
+/** Picks the read sections: `environment.passEnv` only, whatever else a V2 environment declared. */
+export function readSections(raw) {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
+        throw new PipelineError('CONFIG', 'Configuration must be a JSON object');
+    const input = raw;
+    const picked = {};
+    for (const key of READ_SECTIONS)
+        if (input[key] !== undefined)
+            picked[key] = input[key];
+    const env = input['environment'];
+    if (env !== null && typeof env === 'object' && !Array.isArray(env)) {
+        const passEnv = env['passEnv'];
+        picked['environment'] = passEnv === undefined ? {} : { passEnv };
+    }
+    return { picked, ignored: Object.keys(input).filter(k => !READ_SECTIONS.includes(k)).sort() };
+}
+/** Every problem of a configuration document: schema, duplicate ids, unknown dependencies, cycles. */
+export function configIssues(raw) {
+    let sections;
+    try {
+        sections = readSections(raw);
+    }
+    catch (error) {
+        return { config: undefined, ignored: [], issues: [{ code: 'CONFIG', message: errorMessage(error) }] };
+    }
+    const { value, issues } = schemaIssues(apvConfigSchema, sections.picked);
+    if (!value)
+        return { config: undefined, ignored: sections.ignored, issues };
+    const list = new IssueList();
+    const ids = value.gates.map(g => g.id);
+    const duplicates = [...new Set(ids.filter((x, i) => ids.indexOf(x) !== i))];
+    list.check(!duplicates.length, 'CONFIG', `Duplicate gate id: ${duplicates.join(', ')}`);
+    for (const gate of value.gates) {
+        list.check(new Set(gate.dependsOn).size === gate.dependsOn.length, 'CONFIG', `Duplicate dependency: ${gate.id}`);
+        for (const dep of gate.dependsOn)
+            list.check(ids.includes(dep), 'CONFIG', `Unknown dependency ${dep} of gate ${gate.id}`);
+    }
+    const ruleIds = value.validationRules.map(r => r.id);
+    list.check(new Set(ruleIds).size === ruleIds.length, 'CONFIG', 'Duplicate validation rule id');
+    if (list.empty)
+        list.attempt('DAG', () => validateDag(value.gates));
+    return { config: list.empty ? value : undefined, ignored: sections.ignored, issues: list.items };
+}
+/** Configuration file of a project: `--config` when given, then `.apv/config.json`, then `pipeline.v2.json`. */
+export function configFile(repo, explicit) {
+    if (explicit)
+        return { file: resolve(repo, explicit), legacy: false };
+    const current = join(repo, CONFIG_FILE);
+    if (existsSync(current))
+        return { file: current, legacy: false };
+    const legacy = join(repo, LEGACY_CONFIG_FILE);
+    if (existsSync(legacy))
+        return { file: legacy, legacy: true };
+    return { file: null, legacy: false };
+}
+export function loadConfig(repo, explicit) {
+    const { file, legacy } = configFile(repo, explicit);
+    if (!file)
+        return { file: null, legacy: false, config: apvConfigSchema.parse({}), ignored: [] };
+    if (!existsSync(file))
+        throw new PipelineError('CONFIG', `Configuration file not found: ${file}`);
+    let raw;
+    try {
+        raw = JSON.parse(readFileSync(file, 'utf8'));
+    }
+    catch (error) {
+        throw new PipelineError('CONFIG', `Invalid JSON in ${file}: ${errorMessage(error)}`);
+    }
+    const { config, ignored, issues } = configIssues(raw);
+    if (!config)
+        throw new PipelineError(issues[0]?.code ?? 'CONFIG', `Invalid configuration ${file}:\n${issues.map(i => `- ${i.message}`).join('\n')}`);
+    return { file, legacy, config, ignored };
+}
+/** The policy view of a V3 configuration: evidence-mode review is the only mode V3 knows. */
+export function policyConfig(config) {
+    return { gates: config.gates, risk: config.risk, validationRules: config.validationRules, workflow: { qualityReview: 'evidence' } };
+}
+//# sourceMappingURL=load.js.map

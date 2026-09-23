@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { s, parseJson } from '../domain/schema.js';
 import { invariant } from '../domain/errors.js';
+import { IssueList, schemaIssues } from '../domain/issues.js';
 import { hash } from '../domain/hash.js';
 import { Git } from '../execution/git.js';
 export const decisionEnforcements = ['bootstrap', 'product', 'deferred'];
@@ -74,32 +75,44 @@ export function ambiguousApprovalFragments(text) {
         }
     return [...new Set(matches)];
 }
-export function validateDecisionLedger(ledger, operatorText) {
-    const parsed = decisionLedgerSchema.parse(ledger);
-    invariant(new Set(parsed.decisions.map(d => d.id)).size === parsed.decisions.length, 'DECISION', 'Duplicate decision id');
+/** Semantic rules of a parsed ledger, every violation listed (V2 stopped at the first). */
+export function decisionLedgerRuleIssues(parsed, operatorText) {
+    const list = new IssueList();
+    list.check(new Set(parsed.decisions.map(d => d.id)).size === parsed.decisions.length, 'DECISION', 'Duplicate decision id');
     const ids = new Set(parsed.decisions.map(d => d.id));
     for (const decision of parsed.decisions) {
-        invariant(new Set(decision.supersedes).size === decision.supersedes.length, 'DECISION', `Duplicate superseded decision in ${decision.id}`);
-        invariant(decision.supersedes.every(id => id !== decision.id), 'DECISION', `Decision ${decision.id} cannot supersede itself`);
+        list.check(new Set(decision.supersedes).size === decision.supersedes.length, 'DECISION', `Duplicate superseded decision in ${decision.id}`);
+        list.check(decision.supersedes.every(id => id !== decision.id), 'DECISION', `Decision ${decision.id} cannot supersede itself`);
         if (decision.source === 'operator' && ['confirmed', 'ambiguous'].includes(decision.status)) {
-            invariant(decision.sourceQuote.trim().length > 0, 'DECISION_SOURCE', `${decision.status} operator decision ${decision.id} requires an exact source quote`);
-            if (operatorText !== undefined)
-                invariant(includesQuote(operatorText, decision.sourceQuote), 'DECISION_SOURCE', `Decision ${decision.id} source quote is not present in the operator request`);
+            if (list.check(decision.sourceQuote.trim().length > 0, 'DECISION_SOURCE', `${decision.status} operator decision ${decision.id} requires an exact source quote`) && operatorText !== undefined)
+                list.check(includesQuote(operatorText, decision.sourceQuote), 'DECISION_SOURCE', `Decision ${decision.id} source quote is not present in the operator request`);
         }
         if (decision.status === 'ambiguous') {
-            invariant(decision.enforcement !== 'deferred', 'DECISION', `Ambiguous decision ${decision.id} cannot use deferred enforcement`);
-            invariant(decision.clarificationQuestion.trim().length > 0, 'DECISION_AMBIGUOUS', `Ambiguous decision ${decision.id} requires a clarification question`);
-            invariant(decision.interpretations.length >= 2, 'DECISION_AMBIGUOUS', `Ambiguous decision ${decision.id} requires at least two plausible interpretations`);
-            invariant(new Set(decision.interpretations.map(x => x.trim().toLocaleLowerCase('en-US'))).size === decision.interpretations.length, 'DECISION_AMBIGUOUS', `Ambiguous decision ${decision.id} has duplicate interpretations`);
+            list.check(decision.enforcement !== 'deferred', 'DECISION', `Ambiguous decision ${decision.id} cannot use deferred enforcement`);
+            list.check(decision.clarificationQuestion.trim().length > 0, 'DECISION_AMBIGUOUS', `Ambiguous decision ${decision.id} requires a clarification question`);
+            list.check(decision.interpretations.length >= 2, 'DECISION_AMBIGUOUS', `Ambiguous decision ${decision.id} requires at least two plausible interpretations`);
+            list.check(new Set(decision.interpretations.map(x => x.trim().toLocaleLowerCase('en-US'))).size === decision.interpretations.length, 'DECISION_AMBIGUOUS', `Ambiguous decision ${decision.id} has duplicate interpretations`);
         }
         else {
-            invariant(decision.clarificationQuestion === '' && decision.interpretations.length === 0, 'DECISION_AMBIGUOUS', `Only ambiguous decisions may carry clarification metadata (${decision.id})`);
+            list.check(decision.clarificationQuestion === '' && decision.interpretations.length === 0, 'DECISION_AMBIGUOUS', `Only ambiguous decisions may carry clarification metadata (${decision.id})`);
         }
         if (decision.status === 'deferred')
-            invariant(decision.enforcement === 'deferred', 'DECISION', `Deferred decision ${decision.id} must use deferred enforcement`);
+            list.check(decision.enforcement === 'deferred', 'DECISION', `Deferred decision ${decision.id} must use deferred enforcement`);
         for (const old of decision.supersedes)
-            invariant(!ids.has(old) || old !== decision.id, 'DECISION', `Invalid supersedes relationship for ${decision.id}`);
+            list.check(!ids.has(old) || old !== decision.id, 'DECISION', `Invalid supersedes relationship for ${decision.id}`);
     }
+    return list.items;
+}
+/** Every problem of an unparsed ledger document: schema first, then the ledger rules. */
+export function decisionLedgerIssues(value, operatorText) {
+    const { value: parsed, issues } = schemaIssues(decisionLedgerSchema, value);
+    return parsed ? decisionLedgerRuleIssues(parsed, operatorText) : issues;
+}
+export function validateDecisionLedger(ledger, operatorText) {
+    const parsed = decisionLedgerSchema.parse(ledger);
+    const list = new IssueList();
+    list.items.push(...decisionLedgerRuleIssues(parsed, operatorText));
+    list.throwFirst();
     return parsed;
 }
 export function ledgerHash(ledger) { return hash(validateDecisionLedger(ledger)); }
@@ -181,17 +194,38 @@ export function decisionLedgerMarkdown(ledger) {
     }
     return lines.join('\n') + '\n';
 }
-export async function loadDecisionLedger(repo, sha = 'HEAD') {
-    const git = new Git();
-    const listed = (await git.exec(repo, ['ls-tree', '-r', '--name-only', sha, '--', '.agent-pipeline/DECISIONS.json'])).trim();
-    if (listed !== '.agent-pipeline/DECISIONS.json')
+/** V3 location of the ledger, versioned with the project. */
+export const LEDGER_FILE = '.apv/DECISIONS.json';
+/** V2 location, still read (and updated in place) for projects not yet migrated. */
+export const LEGACY_LEDGER_FILE = '.agent-pipeline/DECISIONS.json';
+async function trackedAt(repo, sha, file) {
+    return (await new Git().exec(repo, ['ls-tree', '-r', '--name-only', sha, '--', file])).trim() === file;
+}
+/**
+ * Where this project keeps its ledger: `.apv/DECISIONS.json` when it exists (in the working tree or at
+ * `sha`), otherwise the V2 `.agent-pipeline/DECISIONS.json` when that one exists, otherwise the V3 location.
+ */
+export async function resolveLedgerFile(repo, sha = 'HEAD') {
+    for (const file of [LEDGER_FILE, LEGACY_LEDGER_FILE]) {
+        if (existsSync(join(repo, file)))
+            return file;
+        if (sha && await trackedAt(repo, sha, file))
+            return file;
+    }
+    return LEDGER_FILE;
+}
+/** Committed ledger at `sha`; an absent file is an empty ledger. */
+export async function loadDecisionLedger(repo, sha = 'HEAD', file) {
+    const path = file ?? await resolveLedgerFile(repo, sha);
+    if (!await trackedAt(repo, sha, path))
         return { schemaVersion: 1, decisions: [] };
-    const raw = await git.exec(repo, ['show', `${sha}:.agent-pipeline/DECISIONS.json`]);
+    const raw = await new Git().exec(repo, ['show', `${sha}:${path}`]);
     return validateDecisionLedger(decisionLedgerSchema.parse(parseJson(raw)));
 }
+/** Working-tree ledger (V3 location first, then V2); an absent file is an empty ledger. */
 export function readWorkingDecisionLedger(repo) {
-    const file = join(repo, '.agent-pipeline', 'DECISIONS.json');
-    if (!existsSync(file))
+    const file = [LEDGER_FILE, LEGACY_LEDGER_FILE].map(f => join(repo, f)).find(f => existsSync(f));
+    if (!file)
         return { schemaVersion: 1, decisions: [] };
     return validateDecisionLedger(decisionLedgerSchema.parse(parseJson(readFileSync(file, 'utf8'))));
 }

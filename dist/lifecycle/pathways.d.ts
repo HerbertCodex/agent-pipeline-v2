@@ -1,5 +1,5 @@
 import { type Infer } from '../domain/schema.js';
-import type { Config, Run } from '../domain/contracts.js';
+import type { ChangeSet, Config, GateReceipt, RiskDecision } from '../domain/contracts.js';
 import { type Spec, type SpecRecord } from './contracts.js';
 import { type SecurityContext } from '../security/owasp.js';
 export type ExecutionPath = 'compact' | 'standard' | 'structural';
@@ -154,11 +154,14 @@ export declare function resolvePathDecision(inputs: {
     decisionHash: string;
 };
 /** Compact skips model QA only while observed changes remain inside the approved compact envelope. */
-export declare function requiresQa(record: SpecRecord, run: Run, spec: Spec): boolean;
+export declare function requiresQa(record: SpecRecord, run: {
+    risk: RiskDecision | null;
+    changeSet: ChangeSet | null;
+}, spec: Spec): boolean;
 /** Targeted QA keeps the complete diff and every obligation, omitting planning prose and successful tool logs. */
 export declare function targetedQaContext(context: {
     spec: Spec;
-    receipts: Run['receipts'];
+    receipts: GateReceipt[];
     [key: string]: unknown;
 }): {
     spec: {
@@ -254,7 +257,7 @@ export declare function targetedQaContext(context: {
         candidateSha: string;
         configHash: string;
         environmentHash: string;
-        status: "failed" | "passed" | "timed_out" | "cancelled" | "spawn_error" | "blocked" | "cached";
+        status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "blocked" | "cached";
         startedAt: number;
         durationMs: number;
         exitCode: number | null;

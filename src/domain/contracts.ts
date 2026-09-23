@@ -1,18 +1,18 @@
 import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s, type Infer } from './schema.js';
 import { invariant } from './errors.js';
-export const VERSION = '2.0.0-alpha.8';
+export const VERSION = '3.0.0-alpha.1';
 export const lanes = ['fast', 'standard', 'high'] as const;
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'] as const;
 export type Lane = typeof lanes[number];
 const id = s.string(1, 80, /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
 const paths = s.array(s.string(1, 500), 0, 500);
 const argv = s.array(s.string(1, 16000), 1, 200);
-const envNames = s.array(s.string(1, 100, /^[a-zA-Z_][a-zA-Z0-9_]*$/), 0, 100);
+export const envNamesSchema = s.array(s.string(1, 100, /^[a-zA-Z_][a-zA-Z0-9_]*$/), 0, 100);
 export const commandSchema = s.object({
   command: argv,
   timeoutMs: s.default(s.number(10, 3600000), 120000),
-  passEnv: s.default(envNames, []),
+  passEnv: s.default(envNamesSchema, []),
 });
 export const gateSchema = s.object({
   id, command: argv,
@@ -21,7 +21,7 @@ export const gateSchema = s.object({
   // Test files actually included by this command, reviewed together with its argv.
   testPaths: s.default(paths, []),
   timeoutMs: s.default(s.number(10, 3600000), 120000),
-  passEnv: s.default(envNames, []),
+  passEnv: s.default(envNamesSchema, []),
   dependsOn: s.default(s.array(id), []),
   resources: s.default(s.array(id), []),
   // Operator assertion: neither this command nor its children writes to the shared workspace.
@@ -34,6 +34,19 @@ export const gateSchema = s.object({
   // Explicit opt-in. A zero TTL NEVER participates in cross-validation caching.
   cacheTtlMs: s.default(s.number(0, 86400000), 0),
 });
+/** Variables a command receives by default; every other variable must be named in `passEnv`. */
+export const DEFAULT_PASS_ENV = ['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'TMP', 'LANG'] as const;
+// Additional project-specific obligations; defaults inferred from the diff cannot be removed here.
+export const validationRulesSchema = s.default(s.array(s.object({
+  id, paths: s.array(s.string(1, 500), 1, 100),
+  requires: s.array(s.enum(validationKinds), 1, validationKinds.length),
+}), 0, 100), []);
+export const riskSchema = s.default(s.object({
+  fastPaths: s.default(paths, ['docs/**', '*.md']),
+  highPaths: s.default(paths, []),
+  maxFastFiles: s.default(s.number(1, 100), 5),
+  maxFastLines: s.default(s.number(1, 1000), 100),
+}), { fastPaths: ['docs/**', '*.md'], highPaths: [], maxFastFiles: 5, maxFastLines: 100 });
 // Hard ceiling of the task contract. The effective lifecycle budget is `limits.maxTaskContextChars`.
 export const MAX_TASK_DESCRIPTION = 400000;
 export const DEFAULT_LIMITS = { maxTaskContextChars: 120000, maxQaDiffBytes: 524288 } as const;
@@ -60,7 +73,7 @@ export const agentSchema = s.object({
   command: s.default(s.array(s.string(1, 16000), 0, 200), []),
   // Safety ceiling, not a target. A role and its output repairs share this deadline.
   timeoutMs: s.default(s.number(10, 3600000), 1800000),
-  passEnv: s.default(envNames, []),
+  passEnv: s.default(envNamesSchema, []),
   model: s.default(s.string(0, 200), ''),
   effort: s.default(s.enum(['default', 'low', 'medium', 'high']), 'default'),
   // Opt-in compatibility probe, without project content, before a native model is used.
@@ -76,7 +89,7 @@ export const configSchema = s.object({
   executionMode: s.literal('local-trusted'),
   environment: s.object({
     id: s.string(1, 500),
-    passEnv: s.default(envNames, ['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'TMP', 'LANG']),
+    passEnv: s.default(envNamesSchema, [...DEFAULT_PASS_ENV]),
   }),
   agent: agentSchema,
   skills: s.default(skillsSchema, { enabled: [], projectType: 'unknown', maxContextBytes: 16000 }),
@@ -125,11 +138,7 @@ export const configSchema = s.object({
   }), { ...DEFAULT_LIMITS }),
   setup: s.default(s.array(commandSchema, 0, 20), []),
   gates: s.array(gateSchema, 1, 100),
-  // Additional project-specific obligations; defaults inferred from the diff cannot be removed here.
-  validationRules: s.default(s.array(s.object({
-    id, paths: s.array(s.string(1, 500), 1, 100),
-    requires: s.array(s.enum(validationKinds), 1, validationKinds.length),
-  }), 0, 100), []),
+  validationRules: validationRulesSchema,
   concurrency: s.default(s.number(1, 16), 3),
   failFast: s.default(s.boolean(), true),
   // An attempt is one agent session plus its checks: leave room for both after the agent timeout.
@@ -142,22 +151,14 @@ export const configSchema = s.object({
   // merging after lunch came back to expired evidence and paid a full revalidation and a fresh
   // quality review for a candidate nobody had touched. A day is the unit a human review works in.
   validationMaxAgeMs: s.default(s.number(1000, 86400000), 86400000),
-  risk: s.default(s.object({
-    fastPaths: s.default(paths, ['docs/**', '*.md']),
-    highPaths: s.default(paths, []),
-    maxFastFiles: s.default(s.number(1, 100), 5),
-    maxFastLines: s.default(s.number(1, 1000), 100),
-  }), { fastPaths: ['docs/**', '*.md'], highPaths: [], maxFastFiles: 5, maxFastLines: 100 }),
+  risk: riskSchema,
 });
 export type Task = Infer<typeof taskSchema>;
 export type Config = Infer<typeof configSchema>;
 export type Gate = Infer<typeof gateSchema>;
 export type CommandSpec = Infer<typeof commandSchema>;
-export const agentOutputSchema = s.object({ summary: s.string(1, 12000) });
 export interface RiskDecision { lane: Lane; reasons: string[] }
 export interface ChangeSet { files: string[]; added: string[]; lines: number; binary: boolean }
-export const states = ['created','preparing','implementing','candidate','validating','awaiting_review','ready','failed','interrupted','rejected'] as const;
-export type RunState = typeof states[number];
 export interface ProcessResult {
   exitCode: number | null; signal: string | null;
   status: 'passed' | 'failed' | 'timed_out' | 'cancelled' | 'spawn_error';
@@ -182,23 +183,6 @@ export function validateReceipt(value: unknown): GateReceipt {
   invariant((r.status === 'cached') === (r.reusedFrom !== null),'RECEIPT','Only cache hits may reference an earlier receipt');
   return r;
 }
-export interface Approval { reviewer: string; note: string; candidateSha: string; evidenceHash: string; at: number }
-export interface Run {
-  id: string; version: number; state: RunState; resumeFrom: RunState | null;
-  /** Owning spec for shared invocation accounting; absent on standalone/legacy runs. */
-  specId?: string;
-  task: Task; config: Config; configHash: string; repo: string;
-  baseSha: string; workspace: string; validationWorkspace: string;
-  candidateSha: string | null; changeSet: ChangeSet | null; risk: RiskDecision | null;
-  gateIds: string[]; receipts: GateReceipt[]; approvals: Approval[];
-  createdAt: number; updatedAt: number; validatedAt: number | null;
-  sessionStartedAt: number | null; remainingMs: number;
-  metrics: { activeMs: number; preparationMs: number; agentMs: number; validationMs: number; cacheHits: number; repairAttempts: number;
-    /** Declared by the provider when it reports them; absent on runs created before, and never an invoice. */
-    costUsd?: number; providerTurns?: number };
-  summary: string; error: { code: string; message: string } | null;
-}
-export interface RunEvent { seq: number; runId: string; at: number; type: string; data: Record<string, unknown> }
 export function validateConfig(value: unknown): Config {
   const config = configSchema.parse(value);
   invariant(config.agent.type !== 'command' || config.agent.command.length > 0, 'CONFIG', 'Command agent requires an argv array');
@@ -224,19 +208,4 @@ export function validateConfig(value: unknown): Config {
     for (const dep of gate.dependsOn) invariant(ids.includes(dep), 'CONFIG', `Unknown dependency ${dep}`);
   }
   return config;
-}
-const transitions: Record<RunState, readonly RunState[]> = {
-  created: ['preparing','failed','interrupted'],
-  preparing: ['implementing','failed','interrupted'],
-  implementing: ['candidate','failed','interrupted'],
-  candidate: ['validating','failed','interrupted'],
-  validating: ['implementing','awaiting_review','ready','failed','interrupted'],
-  awaiting_review: ['ready','rejected','validating','failed'],
-  ready: ['validating','failed'],
-  failed: [], rejected: [],
-  interrupted: ['preparing','candidate','validating','failed'],
-};
-export function transition(run: Run, to: RunState): void {
-  invariant(transitions[run.state].includes(to), 'TRANSITION', `Illegal transition ${run.state} -> ${to}`);
-  run.state = to;
 }
