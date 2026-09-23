@@ -14,7 +14,7 @@ Tu codes UNE tâche d'une spec de <nom du projet> (<description en une ligne : p
 4. Les notes de ta vague : `<chemin>`.
 
 ## Démarrage
-`git switch -c <branche de tâche> <base>` puis `<installation des dépendances>`.
+`git switch -c <branche de tâche> <base>`, puis le marqueur `.apv/state/task.json` (`{"spec": "<chemin de la spec>", "task": "<id>"}`, ignoré par Git, lu par le hook de rappel des chemins autorisés), puis `<installation des dépendances>`.
 
 ## Règles de code
 - <règles du framework, par exemple Svelte 5 en runes, SvelteKit, form actions avec amélioration progressive, validation serveur>

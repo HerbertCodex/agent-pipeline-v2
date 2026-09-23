@@ -1,5 +1,5 @@
 {
-  "description": "Garde-fous et reprise d'Agent Pipeline V3 : contexte de reprise au démarrage, blocage du force-push, de la fusion, du déploiement en production et des écritures GitHub à sortie masquée, journal de fin de tour.",
+  "description": "Garde-fous et reprise d'Agent Pipeline V3 : contexte de reprise au démarrage, blocage du force-push, de la fusion, du déploiement en production et des écritures GitHub à sortie masquée, rappel des chemins autorisés après chaque écriture d'un implementer, journal de fin de tour.",
   "hooks": {
     "SessionStart": [
       {
@@ -21,6 +21,19 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/scripts/bash-guard.mjs"],
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scope-reminder.mjs"],
             "timeout": 15
           }
         ]
