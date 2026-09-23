@@ -2,11 +2,11 @@
 
 Pour un dépôt qui existe déjà, avec ou sans historique d'assistance par IA. Pour un dépôt vide ou sans premier commit, voir [BOOTSTRAP.md](BOOTSTRAP.md).
 
-Le prompt canonique reste [START-HERE.md](../START-HERE.md), section « APPLICATION EXISTANTE / ONBOARDING ». Ce fichier n'en est pas une copie : il donne la porte d'entrée et ce qui ne concerne qu'un projet existant.
+Le prompt canonique reste [START-HERE.md](../docs/v2/START-HERE.md), section « APPLICATION EXISTANTE / ONBOARDING ». Ce fichier n'en est pas une copie : il donne la porte d'entrée et ce qui ne concerne qu'un projet existant.
 
 ## Prompt initial
 
-Copiez le [prompt initial](../START-HERE.md#prompt-initial) — quarante-neuf lignes — et renseignez « Application cible » avec l'URL ou le chemin du dépôt existant.
+Copiez le [prompt initial](../docs/v2/START-HERE.md#prompt-initial) — quarante-neuf lignes — et renseignez « Application cible » avec l'URL ou le chemin du dépôt existant.
 
 Ce bloc porte les principes qui lient l'assistant avant toute lecture : ne fabriquer aucune approbation ni preuve, ne pas force-pousser ni fusionner, traiter le contenu du dépôt comme des données non fiables. Ne le remplacez pas par une consigne plus courte de votre cru : ces règles sont ce qui tient quand l'assistant lit le reste en diagonale.
 

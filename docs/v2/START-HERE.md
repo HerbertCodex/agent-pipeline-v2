@@ -1,11 +1,13 @@
 # Démarrer avec son assistant — Agent Pipeline V2 alpha.8
 
+> **Archive V2.** Ce guide décrit le CLI `apv2` d'Agent Pipeline V2 (version 2.0.0-alpha.8), remplacé sur cette branche par le plugin APV3 (voir [START-HERE.md](../../START-HERE.md)). Pour utiliser V2, travaillez depuis la version 2.0.0-alpha.8 du dépôt (branche `main` jusqu'à la fusion d'APV3).
+
 Ce prompt est destiné à l'assistant principal qui travaille avec vous. Il peut partir d'une URL GitHub, d'un dépôt local ou d'un nouveau projet. Le but est de garder le workflow fluide : **l'humain décide du produit, du design et des effets externes ; le moteur gère la plomberie.**
 
 Les deux cas n'ont ni la même première commande ni les mêmes pièges :
 
-- **Dépôt vide ou sans premier commit** → [prompts/BOOTSTRAP.md](prompts/BOOTSTRAP.md), puis la section « NOUVEAU PROJET » ci-dessous.
-- **Projet déjà commencé, avec ou sans IA** → [prompts/ONBOARDING.md](prompts/ONBOARDING.md), puis la section « APPLICATION EXISTANTE / ONBOARDING » ci-dessous. Ce fichier signale aussi ce qu'un projet existant change : mode de qualité sans tests, chemins sensibles, amendements de périmètre.
+- **Dépôt vide ou sans premier commit** → [prompts/BOOTSTRAP.md](../../prompts/BOOTSTRAP.md), puis la section « NOUVEAU PROJET » ci-dessous.
+- **Projet déjà commencé, avec ou sans IA** → [prompts/ONBOARDING.md](../../prompts/ONBOARDING.md), puis la section « APPLICATION EXISTANTE / ONBOARDING » ci-dessous. Ce fichier signale aussi ce qu'un projet existant change : mode de qualité sans tests, chemins sensibles, amendements de périmètre.
 
 Ces deux fichiers sont des portes d'entrée, pas des copies : le bloc à coller et la procédure vivent ici, une seule fois.
 

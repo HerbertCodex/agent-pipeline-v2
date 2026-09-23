@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
  * tells the assistant to go and read it: nine tenths of the paste were a copy of what it ordered.
  */
 const root = fileURLToPath(new URL('..', import.meta.url));
-const entry = readFileSync(root + 'START-HERE.md', 'utf8');
+const entry = readFileSync(root + 'docs/v2/START-HERE.md', 'utf8');
 const blocks = [...entry.matchAll(/^```text\n([\s\S]*?)^```$/gm)].map(m => m[1]);
 
 /** The rules that must bind before anything is read, so a skimmed procedure still cannot harm. */
