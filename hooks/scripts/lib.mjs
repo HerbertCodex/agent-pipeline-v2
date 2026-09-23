@@ -44,7 +44,7 @@ export function oneLine(value, max = 200) {
  * Machine files of `.apv/` that are never versioned. Same list and same rule as
  * `ensureApvGitignore` of the tool (src/config/apv-files.ts); a test keeps them equal.
  */
-export const APV_IGNORED = ['state/*.log', 'state/task.json', 'receipts/'];
+export const APV_IGNORED = ['state/*.log', 'state/task.json', 'state/preview.json', 'receipts/'];
 const IGNORE_HEADER = '# Généré par apv : fichiers machine de .apv/, jamais versionnés. Vous pouvez ajouter vos lignes.';
 
 /** Creates `<apvDir>/.gitignore`, or appends the lines it lacks; keeps the project's own lines. */

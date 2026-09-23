@@ -153,7 +153,7 @@ test('the hooks and the tool generate the same .apv/.gitignore and keep the proj
     assert.equal(ensure(root), false, 'already complete: no write');
     writeFileSync(join(root, '.apv', '.gitignore'), 'mes-notes/\nstate/*.log');
     assert.equal(ensure(root), true);
-    assert.equal(readFileSync(join(root, '.apv', '.gitignore'), 'utf8'), 'mes-notes/\nstate/*.log\nstate/task.json\nreceipts/\n');
+    assert.equal(readFileSync(join(root, '.apv', '.gitignore'), 'utf8'), 'mes-notes/\nstate/*.log\nstate/task.json\nstate/preview.json\nreceipts/\n');
     writeFileSync(join(root, '.apv', '.gitignore'), '');
     assert.equal(ensure(root), true);
     assert.equal(readFileSync(join(root, '.apv', '.gitignore'), 'utf8'), `${APV_IGNORED.join('\n')}\n`);
