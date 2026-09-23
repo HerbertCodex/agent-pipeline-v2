@@ -184,12 +184,15 @@ test('without the compiled summary the session still starts, with a line saying 
   assert.ok(await loadRunSummary());
 });
 
-test('runLines survives a summary module that throws', async t => {
+test('runLines survives a summary module that throws, and tells it apart from a missing module (FID-4)', async t => {
+  // Review FID-4: a read error was announced as « dist/run/summary.js non chargé », which sent the operator
+  // looking for a build problem.
   const root = project(t);
   const summary = await loadRunSummary();
   const throwing = { ...summary, readRunSummaries: () => { throw new Error('boom'); } };
-  assert.deepEqual(runLines(root, throwing), ['Exécutions (apv run) : résumé indisponible (dist/run/summary.js non chargé) ; voir apv status.']);
-  assert.match(buildResumeContext(join(root, '.apv'), null), /résumé indisponible/);
+  assert.deepEqual(runLines(root, throwing), ['Exécutions (apv run) : résumé indisponible (erreur de lecture de .apv/state) ; voir apv status.']);
+  assert.deepEqual(runLines(root, null), ['Exécutions (apv run) : résumé indisponible (dist/run/summary.js non chargé) ; voir apv status.']);
+  assert.match(buildResumeContext(join(root, '.apv'), null), /résumé indisponible \(dist\/run\/summary\.js non chargé\)/);
   assert.deepEqual(runLines(root, summary), []);
 });
 
