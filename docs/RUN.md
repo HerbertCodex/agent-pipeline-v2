@@ -58,7 +58,7 @@ Claude Code accepte des workflows dans un plugin (dossier `workflows/` à la rac
 | Workflow | Lancé par | Ce qu'il fait |
 |---|---|---|
 | `apv:vague` (`workflows/vague.js`) | `/apv:run` | un `apv:implementer` par tâche, chacun en `isolation: worktree`, avec la consigne de démarrage (`git switch -c <branche> <commit de base>` ou reprise de la branche existante, marqueur `.apv/state/task.json`), la fin de tâche (contrôles de tâche et fichiers e2e touchés, commits, `apv scope check`) et un rapport structuré (statut, branche, worktree, commit, contrôles, périmètre) |
-| `apv:revues` (`workflows/revues.js`) | `/apv:review` | un agent de revue par domaine (`apv:qa-securite`, `apv:qa-fidelite`, `apv:architecte-donnees`, `apv:dpo`) sur sa copie détachée, rapport structuré, puis un passage de dédoublonnage qui ne supprime aucun constat |
+| `apv:revues` (`workflows/revues.js`) | `/apv:review` | un agent de revue par domaine (`apv:qa-securite`, `apv:qa-fidelite`, `apv:architecte-donnees`, `apv:dpo` ; `apv:architecte-donnees` en audit de concurrence pour le domaine facultatif `concurrence`, avec l'inventaire `paths`) sur sa copie détachée, rapport structuré, puis un passage de dédoublonnage qui ne supprime aucun constat |
 
 Le chef de projet les lance par l'outil Workflow avec `name: "apv:vague"` ou `name: "apv:revues"` et `args` (nom vérifié avec Claude Code 2.1.280 : le runtime trouve le workflow du plugin et exécute le script). Les deux refusent de démarrer sans leurs paramètres : ce ne sont pas des commandes à lancer seules. Paramètres attendus : section 4 de `skills/run/SKILL.md` et section 4 de `skills/review/SKILL.md`.
 

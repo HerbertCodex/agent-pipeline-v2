@@ -328,3 +328,50 @@ test('the tree analysis is part of the cycle: onboarding, plan, review and docum
   assert.match(read('docs/CLI.md'), /## `apv structure check`/);
   assert.match(read('CHANGELOG.md').split('\n## ')[1], /apv structure check/);
 });
+
+test('race conditions: a generic review grid, linked from the data architect, security QA and /apv:review', () => {
+  const grid = read('skills/architecture-donnees/references/concurrence.md');
+  const families = ['4.1 Lecture-modification-écriture', '4.2 Double soumission et rejeu', '4.3 Mises à jour concurrentes', '4.4 Vérifier puis agir (TOCTOU)',
+    '4.5 Tâches planifiées', '4.6 Effets externes', '4.7 Caches et états « prêts »', '4.8 Ordre des opérations asynchrones', '4.9 Ressources partagées des tests',
+    '4.10 Horloges et ordonnancement'];
+  for (const family of families) assert.ok(grid.includes(`### ${family}`), `family ${family}`);
+  const sections = grid.split('\n### ').slice(1);
+  assert.equal(sections.length, families.length);
+  for (const section of sections) {
+    for (const part of ['**Motif à chercher**', '**Question à trancher**', '**Corrections acceptables**', '**Preuve attendue**']) {
+      assert.ok(section.includes(part), `${section.split('\n')[0]}: ${part}`);
+    }
+  }
+  for (const term of [/Section critique/, /Exclusion mutuelle \(mutex\)/, /Sémaphore/, /Opération atomique/, /Ordonnancement/, /Isolation/, /select … for update/, /niveau/,
+    /Clé-valeur/, /Fichiers/, /renommage atomique/, /échoue sur la version non protégée/, /forcé/]) assert.match(grid, term);
+  // Generic: stacks are examples, never the rule. The four pilot cases are anonymised.
+  assert.match(grid, /sont des \*\*exemples\*\* marqués comme tels/);
+  for (const stack of [/PostgreSQL/, /MySQL/, /SQLite/, /Redis/, /DynamoDB/, /Django/, /Rails/, /Go/, /Java/]) assert.match(grid, stack);
+  assert.doesNotMatch(grid, /Toujours rien/i);
+  assert.equal((grid.match(/\*\*Exemple observé \(anonymisé\)\*\*/g) ?? []).length, 4);
+  assert.match(grid, /deux suites de tests[^\n]*verrou différent/);
+  assert.match(grid, /cache de schéma[^\n]*« prêt »/);
+  assert.match(grid, /focus[^\n]*mauvais champ/);
+  assert.match(grid, /file d'attente de verrous[^\n]*horloge estimée par processus/);
+  assert.match(grid, /\| Emplacement \| Famille \| Invariant \| Protection \| Statut \| Preuve \|/);
+
+  assert.match(frontmatter('skills/architecture-donnees/SKILL.md').body, /`references\/concurrence\.md`/);
+  const architect = frontmatter('agents/architecte-donnees.md').body;
+  assert.match(architect, /references\/concurrence\.md/);
+  assert.match(architect, /\*\*Audit de concurrence\*\*/);
+  assert.match(architect, /pour \*\*chaque écriture\*\*, tu décides et écris[^\n]*protection contre la concurrence/);
+  assert.match(architect, /- \*\*Concurrence\*\* \(grille `references\/concurrence\.md`\)[^\n]*conforme, non conforme ou inconnu[^\n]*preuve/);
+  const security = frontmatter('agents/qa-securite.md').body;
+  assert.match(security, /references\/concurrence\.md/);
+  for (const rule of [/TOCTOU[^\n]*sur les droits/, /TOCTOU sur les quotas/, /\*\*rejeu\*\*/]) assert.match(security, rule);
+
+  const review = frontmatter('skills/review/SKILL.md');
+  assert.match(review.fields['argument-hint'], /concurrence/);
+  assert.match(review.body, /\| `concurrence` \| `apv:architecte-donnees` \(audit de concurrence\) \| \*\*sur demande seulement\*\*/);
+  assert.match(review.body, /parmi les quatre premiers, qui restent les domaines par défaut/);
+  assert.match(review.body, /`\/apv:review \[branche\] concurrence`[^\n]*il se lance seul/);
+  assert.match(review.body, /\.apv\/state\/audit-concurrence-<sha court>\.md/);
+  assert.match(review.body, /pas de `apv run set … review:concurrence`/);
+  assert.match(read('docs/PLUGIN.md'), /`\/apv:review \[branche\] concurrence`/);
+  assert.match(read('CHANGELOG.md').split('\n## ')[1], /references\/concurrence\.md/);
+});
