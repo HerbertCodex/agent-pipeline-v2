@@ -103,7 +103,10 @@ test('stage values and dependencies are checked; options are tied to their subco
     [['gates', 'run', '--commit', 'HEAD'], /--commit est une option de gates verify/],
     [['gates', 'verify'], /gates verify attend --commit/],
     [['gates', 'verify', '--commit', 'HEAD', '--only', 'lint'], /option de gates run seulement : --only/],
-    [['gates', 'verify', '--commit', 'HEAD', '--keep-going', '--base', 'HEAD'], /--base, --keep-going/],
+    [['gates', 'verify', '--commit', 'HEAD', '--keep-going', '--skip-proven'], /option de gates run seulement : --keep-going, --skip-proven/],
+    [['gates', 'verify', '--commit', 'HEAD', '--base', 'HEAD'], /--base va avec --stage task/],
+    [['gates', 'run', '--stage', 'task', '--skip-proven'], /--skip-proven va avec la suite complète entière/],
+    [['gates', 'run', '--only', 'lint', '--skip-proven'], /--skip-proven va avec la suite complète entière/],
   ];
   for (const [args, message] of cases) {
     const r = await apv(f.repo, args);

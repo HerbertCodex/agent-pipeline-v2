@@ -7,6 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 import { applySet, computeFoundations, computeNext, computeWaves, createRunState, migrateRunState, parseTarget, readRunState } from '../dist/run/state.js';
+import { localTime } from '../dist/domain/time.js';
+
+// Times are shown in local time: a fixed zone keeps the expected lines stable (UTC+2 in September).
+process.env.TZ = 'Europe/Paris';
 
 const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 
@@ -386,7 +390,7 @@ test('apv run status shares the bounded summary: a FIFO never blocks it, lines a
   assert.equal(out, [
     '- casse : état illisible (État illisible .apv/state/run-casse.json : JSON invalide)',
     '- fifo : état illisible (État illisible .apv/state/run-fifo.json : pas un fichier ordinaire)',
-    '- vagues : étape modèle de données ; tâches 0/5 faites ; mise à jour ' + p.state().updatedAt,
+    '- vagues : étape modèle de données ; tâches 0/5 faites ; mise à jour ' + localTime(p.state().updatedAt),
   ].join('\n') + '\n');
   const listed = (await p.run('status', '--json')).json();
   assert.deepEqual([listed.runs.map(r => r.specId), listed.unread], [['casse', 'fifo', 'vagues'], 0]);

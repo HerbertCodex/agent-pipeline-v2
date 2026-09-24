@@ -101,9 +101,11 @@ test('verify never counts a targeted receipt: the full suite stays required at i
   assert.equal(e2e.state, 'missing'); assert.equal(e2e.targeted, 1);
   const human = await apv(f.repo, ['gates', 'verify', '--commit', head]);
   assert.match(human.stdout, /Reçus ciblés ignorés \(seule la suite complète prouve ces contrôles\) : e2e/);
-  // The task stage of verify is unchanged: it requires the task checks only.
-  const task = await apv(f.repo, ['gates', 'verify', '--commit', head, '--stage', 'task', '--json']);
-  assert.equal(task.code, 0); assert.deepEqual(task.json().required, ['unit']);
+  // The task stage of verify requires the targeted checks too, proven by their targeted receipt from a base.
+  const task = await apv(f.repo, ['gates', 'verify', '--commit', head, '--stage', 'task', '--base', 'HEAD~1', '--json']);
+  assert.equal(task.code, 0, JSON.stringify(task.json())); assert.deepEqual(task.json().required, ['unit', 'e2e']);
+  assert.deepEqual(task.json().targeted, ['e2e']); assert.deepEqual(task.json().reserved, ['visual']);
+  assert.equal(task.json().gates.find(g => g.gateId === 'e2e').proof, 'targeted');
 
   assert.equal((await apv(f.repo, ['gates', 'run', '--stage', 'full'])).code, 0);
   assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', head])).code, 0);
@@ -136,4 +138,88 @@ test('affected belongs to a full check whose dependencies run at the task stage;
   const gates = withIt.gates;
   assert.deepEqual(stageGates(gates, 'task'), { run: [], targeted: gates, reserved: [] });
   assert.deepEqual(stageGates(gates, 'full'), { run: gates, targeted: [], reserved: [] });
+});
+
+test('verify --stage task: targeted receipts count from a base that covers --base, the latest decides, --base is required', async t => {
+  const p = probe(t); writeFileSync(p.green, '');
+  const f = project(t, gatesOf(p));
+  const root = git(f.repo, 'rev-parse', 'HEAD~1');
+  // Two more commits: the last full suite is proven at `mid`, the head is to verify.
+  write(f.repo, 'src/a.txt', 'a\n'); git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'a');
+  const mid = git(f.repo, 'rev-parse', 'HEAD');
+  write(f.repo, 'src/b.txt', 'b\n'); git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'b');
+  const head = git(f.repo, 'rev-parse', 'HEAD');
+  const verify = (base, ...extra) => apv(f.repo, ['gates', 'verify', '--commit', head, '--stage', 'task', ...(base ? ['--base', base] : []), ...extra]);
+
+  // Targeted checks are verified against a base: without one, refused rather than vacuously proven.
+  const noBase = await verify(null);
+  assert.equal(noBase.code, 1); assert.match(noBase.stderr, /GATE_BASE.*e2e.*--base/);
+
+  // Targeted run from the head itself (a descendant of `mid`): it did not cover the changes since `mid`.
+  assert.equal((await apv(f.repo, ['gates', 'run', '--stage', 'task', '--base', 'HEAD'])).code, 0);
+  let v = await verify(mid, '--json');
+  assert.equal(v.code, 1);
+  let e2e = v.json().gates.find(g => g.gateId === 'e2e');
+  assert.equal(e2e.state, 'missing'); assert.equal(e2e.otherBase, 1); assert.equal(e2e.viaTargeted, true);
+  assert.deepEqual(v.json().missing, ['e2e']);
+  const human = await verify(mid);
+  assert.match(human.stdout, /^Vérification \(contrôles de tâche et ciblés\) au commit .* ; tests ciblés depuis /);
+  assert.match(human.stdout, /Reçus ciblés ignorés \(leur base ne couvre pas les changements depuis/);
+  assert.match(human.stdout, /Relancer : apv gates run --stage task --base [a-f0-9]{12} sur ce commit/);
+
+  // Targeted run from an ancestor of `mid` (it covered more): proven, at the task level only.
+  assert.equal((await apv(f.repo, ['gates', 'run', '--stage', 'task', '--base', root])).code, 0);
+  v = await verify(mid, '--json');
+  assert.equal(v.code, 0, JSON.stringify(v.json()));
+  e2e = v.json().gates.find(g => g.gateId === 'e2e');
+  assert.equal(e2e.proof, 'targeted'); assert.equal(e2e.otherBase, 1);
+  const ok = await verify(mid);
+  assert.match(ok.stdout, /e2e \(ciblé\)\s+réussi \(ciblé\)/);
+  assert.match(ok.stdout, /Preuve complète : 2 contrôle\(s\) réussi\(s\) sur ce commit, arbre propre \(niveau tâche : la suite complète reste à passer\)\./);
+  // The full suite is still required at stage full: the task level never stands for it.
+  assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', head])).code, 1);
+
+  // A later targeted failure from a covering base overrides the earlier success at the task level.
+  rmSync(p.green);
+  assert.equal((await apv(f.repo, ['gates', 'run', '--stage', 'task', '--base', mid])).code, 1);
+  v = await verify(mid, '--json');
+  assert.equal(v.code, 1); assert.equal(v.json().gates.find(g => g.gateId === 'e2e').state, 'failed');
+
+  // A complete receipt proves the check at the task level too, whatever the base.
+  assert.equal((await apv(f.repo, ['gates', 'run', '--stage', 'full'])).code, 0);
+  v = await verify(mid, '--json');
+  assert.equal(v.code, 0, JSON.stringify(v.json()));
+  assert.equal(v.json().gates.find(g => g.gateId === 'e2e').proof, 'full');
+});
+
+test('gates run --stage full says when the full suite is already proven; --skip-proven then runs nothing', async t => {
+  const p = probe(t); writeFileSync(p.green, '');
+  const f = project(t, gatesOf(p));
+  const head = git(f.repo, 'rev-parse', 'HEAD');
+  // Not proven yet: --skip-proven runs the suite.
+  let r = await apv(f.repo, ['gates', 'run', '--skip-proven', '--json']);
+  assert.equal(r.code, 0); assert.equal(r.json().alreadyProven, false); assert.ok(r.json().runId);
+  assert.deepEqual(p.log(), ['full']);
+  // Proven on this exact commit, clean tree: said before any run, and nothing runs with --skip-proven.
+  r = await apv(f.repo, ['gates', 'run', '--stage', 'full']);
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /^Note : la suite complète est déjà prouvée au commit [a-f0-9]{12} \(apv gates verify à 0, arbre propre\) ; --skip-proven évite de la relancer\./);
+  assert.deepEqual(p.log(), ['full', 'full']);
+  r = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--skip-proven']);
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /Suite complète déjà prouvée au commit [a-f0-9]{12} \(apv gates verify à 0, arbre propre\) : 3 contrôle\(s\), rien n'est relancé/);
+  const skipped = (await apv(f.repo, ['gates', 'run', '--skip-proven', '--json'])).json();
+  assert.equal(skipped.skipped, true); assert.equal(skipped.candidateSha, head);
+  assert.deepEqual(p.log(), ['full', 'full']);
+  // A dirty tree, or a later failure on the commit: not proven, so the suite runs again.
+  write(f.repo, 'scratch.txt', 'x\n');
+  r = await apv(f.repo, ['gates', 'run', '--skip-proven', '--json']);
+  assert.equal(r.json().alreadyProven, false); assert.equal(r.json().dirty, true);
+  assert.deepEqual(p.log(), ['full', 'full', 'full']);
+  rmSync(join(f.repo, 'scratch.txt'));
+  write(f.repo, '.apv/config.json', { gates: gatesOf(p).map(g => g.id === 'visual' ? { ...g, command: node('process.exit(3)') } : g) });
+  git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'visual red');
+  assert.equal((await apv(f.repo, ['gates', 'run', '--keep-going'])).code, 1);
+  r = await apv(f.repo, ['gates', 'run', '--skip-proven', '--keep-going', '--json']);
+  assert.equal(r.code, 1); assert.equal(r.json().alreadyProven, false);
 });

@@ -523,7 +523,32 @@ test('calibrated confidence: common levels in every report, escalation threshold
   assert.match(read('docs/PLUGIN.md'), /CONFIANCE\.md/);
   const unreleased = read('CHANGELOG.md').split('\n## ')[1];
   assert.equal((read('CHANGELOG.md').match(/^## Non publié$/gm) ?? []).length, 1, 'a single unreleased section');
-  assert.match(unreleased.split('\n')[2], /^- \*\*Confiance calibrée et escalade\.\*\*/, 'first entry of the unreleased section');
+  assert.ok(unreleased.split('\n').some(l => /^- \*\*Confiance calibrée et escalade\.\*\*/.test(l)), 'an entry of the unreleased section');
   for (const topic of [/`prouve`/, /`probable`/, /`suppose`/, /`refused`/, /escalation\.verify/, /references\/confiance\.md/]) assert.match(unreleased, topic);
   assert.ok(!/[–—]/.test(reference + guide), 'no em or en dash');
+});
+
+test('full suite rhythm: final by default, task level in between, no double suite, guards unchanged, pauses noted', () => {
+  const run = frontmatter('skills/run/SKILL.md').body;
+  for (const rule of [/`run\.fullSuite`/, /"each-integration"/, /\*\*deux fois par spec\*\*/, /à la dernière intégration/,
+    /apv gates verify --commit <tête> --stage task --base <base ciblée>/, /apv gates run --stage task --base <base ciblée> --repo <worktree>/,
+    /\*\*Garde-fous que le rythme ne change pas\*\*/, /audit de sécurité/, /tests négatifs/, /revue sécurité aux attaques réelles/,
+    /Aucune PR sans suite complète et `apv gates verify --commit <tête>` à `0` au commit exact/, /un test instable est un constat/,
+    /Compromis assumé : une régression entre vagues/, /\*\*Pas de double suite\*\*/, /--skip-proven/, /le test qui prouve chaque correction/,
+    /apv run pause <id> --until <HH:MM>/, /apv run resume <id>/]) assert.match(run, rule);
+  const lead = frontmatter('skills/chef-de-projet/SKILL.md').body;
+  for (const rule of [/`run\.fullSuite`/, /--stage task --base <base ciblée>/, /apv run pause <id>/, /Le rythme ne retire aucune preuve/]) assert.match(lead, rule);
+  assert.match(read('skills/chef-de-projet/references/integration-revues.md'), /\*\*dernière intégration\*\*/);
+  assert.match(read('skills/chef-de-projet/references/livraison-pile.md'), /Une vérification du niveau tâche \(`--stage task`\) ne suffit jamais pour une PR/);
+  assert.match(read('skills/chef-de-projet/references/quota-sauvegarde.md'), /apv run pause <id> --until/);
+  assert.match(read('skills/init/SKILL.md'), /\{ "run": \{ "fullSuite": "final" \} \}/);
+  assert.match(read('docs/CONFIGURATION.md'), /## Exécution : `run`/);
+  assert.match(read('docs/CLI.md'), /apv run pause <spec-id> --until/);
+  assert.match(read('docs/CLI.md'), /--skip-proven/);
+  for (const file of ['skills/run/SKILL.md', 'skills/chef-de-projet/SKILL.md', 'docs/RUN.md', 'docs/CLI.md',
+    'agents/implementer.md', 'agents/integrateur.md', 'skills/review/SKILL.md', 'workflows/vague.js', 'workflows/revues.js']) {
+    assert.ok(!/[–—]/.test(read(file)), `${file}: no em or en dash`);
+  }
+  assert.ok(!/[–—]/.test(read('docs/CONFIGURATION.md').split('## Exécution : `run`')[1]), 'run section: no em or en dash');
+  assert.ok(!/[–—]/.test(read('CHANGELOG.md').split('\n## ')[1]), 'unreleased entries: no em or en dash');
 });

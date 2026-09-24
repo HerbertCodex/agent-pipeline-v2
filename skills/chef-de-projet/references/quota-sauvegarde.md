@@ -30,8 +30,9 @@ Dans ce document, `apv` désigne l'outil du plugin (voir `SKILL.md`).
    - revues interrompues à relancer ;
    - ordre de reprise ;
    - environnement à relancer (Docker, piles, aperçu, commandes exactes).
-5. **Journal** : une entrée dans `.apv/journal-pipeline.md`.
-6. **Opérateur** : message court, dans sa langue : ce qui est sauvegardé, ce qui reste, quand reprendre, commande `/apv:resume`.
+5. **Pause dans l'état** : `apv run pause <id> --until <HH:MM> --note "<fenêtre, pourcentage>"` (heure locale de la remise à zéro, ou date ISO avec fuseau) pour chaque exécution en cours : la pause est journalisée et visible dans `apv run status`, `apv run next` et `apv status`. À la reprise, `apv run resume <id>` (toute transition `apv run set` la termine aussi). Même chose pour une simple attente de remise à zéro, sans sauvegarde.
+6. **Journal** : une entrée dans `.apv/journal-pipeline.md`.
+7. **Opérateur** : message court, dans sa langue : ce qui est sauvegardé, ce qui reste, quand reprendre, commande `/apv:resume`.
 
 ## 5. Règle absolue
 Un commit « wip » déjà poussé n'est jamais réécrit (ni `amend`, ni `reset`, ni `rebase`) : on empile des commits propres par-dessus. Incident 29 : deux agents ont réécrit leur wip poussé, leurs branches distantes ne pouvaient plus être mises à jour sans force-push.

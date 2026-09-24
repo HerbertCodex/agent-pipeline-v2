@@ -135,7 +135,7 @@ function reviewPrompt(review) {
     'Lecture seule : aucun commit, aucune poussée, aucune écriture sur un service externe ; tes scripts, captures et rapports vont dans un dossier temporaire hors de la copie.',
     input.specFile ? 'Spec : `' + input.specFile + '` (critères, exigences de sécurité, menaces, tests négatifs).' : '',
     '`apv` désigne `' + APV + '` s\'il n\'est pas sur le PATH.',
-    'Contrôles : la suite complète du projet passe sur ce commit à l\'intégration, et la consigne commune cite ses reçus. Ne relance ni la suite complète ni Playwright, sauf besoin précis de ton domaine, et alors seulement les fichiers utiles, sous `apv lock run e2e`. Sans reçus cités, le résultat des contrôles est « non vérifié » dans ton rapport, jamais « vert ».',
+    'Contrôles : sous /apv:run, la suite complète du projet passe sur ce commit à la dernière intégration, et la consigne commune cite ses reçus ; une revue ciblée après corrections n\'a que les reçus des contrôles de tâche et des tests ciblés, que la consigne dit comme tels (dis-le dans ton rapport). Ne relance ni la suite complète ni Playwright, sauf besoin précis de ton domaine, et alors seulement les fichiers utiles, sous `apv lock run e2e`. Sans reçus cités, le résultat des contrôles est « non vérifié » dans ton rapport, jamais « vert ».',
     typeof input.common === 'string' && input.common ? 'Consigne commune : ' + input.common : '',
     typeof review.context === 'string' && review.context ? 'Consigne de ta revue : ' + review.context : '',
     '',

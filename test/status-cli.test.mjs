@@ -11,6 +11,9 @@ import { specSchema } from '../dist/lifecycle/contracts.js';
 import { VERSION } from '../dist/domain/contracts.js';
 import { commands } from '../dist/commands/index.js';
 
+// Times are shown in local time: a fixed zone keeps the expected lines stable (UTC+2 in September).
+process.env.TZ = 'Europe/Paris';
+
 test('apv status on a project without .apv says so', async t => {
   const f = fixture(t);
   const r = await apv(f.repo, ['status']);
@@ -40,7 +43,7 @@ test('apv status summarises configuration, ledger, specs, state and last quota',
   assert.match(human.stdout, /Configuration : \.apv\/config\.json ; contrôles : unit/);
   assert.match(human.stdout, /Registre : \.apv\/DECISIONS\.json ; 2 décision\(s\), empreinte [a-f0-9]{64}/);
   assert.match(human.stdout, /- \.apv\/specs\/001-math\.json : Multiplication et documentation/);
-  assert.match(human.stdout, /Quota : 2026-09-23T08:00:00\.000Z ; session 21 % ; semaine 7 % ; niveau ok/);
+  assert.match(human.stdout, /Quota : 2026-09-23 10:00 UTC\+2 ; session 21 % ; semaine 7 % ; niveau ok/);
 });
 
 test('apv status reports an invalid configuration or ledger without failing', async t => {

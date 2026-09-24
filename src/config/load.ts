@@ -19,9 +19,24 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure'] as const;
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run'] as const;
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'] as const;
+
+/**
+ * When `/apv:run` passes the full suite (the checks of stage `full` included):
+ * - `final` (default): at the last integration of a spec (every task integrated, before the reviews) and at the
+ *   delivery on the final head; the intermediate integrations and the fix passes advance on the task checks and
+ *   the targeted tests, verified at the exact commit (`apv gates verify --stage task --base <ref>`);
+ * - `each-integration`: at every integration, fix passes included, and at the delivery (the rhythm of 3.0.0-alpha.3 and before).
+ */
+export const FULL_SUITE_MODES = ['final', 'each-integration'] as const;
+export type FullSuiteMode = typeof FULL_SUITE_MODES[number];
+export const DEFAULT_FULL_SUITE: FullSuiteMode = 'final';
+/** Settings of `/apv:run` read by the tool (`apv run next`); absent: defaults. */
+export const runSettingsSchema = s.object({
+  fullSuite: s.default(s.enum(FULL_SUITE_MODES), DEFAULT_FULL_SUITE),
+});
 
 export const apvConfigSchema = s.object({
   /** Project name, written by `apv init` (display only). */
@@ -37,7 +52,11 @@ export const apvConfigSchema = s.object({
   design: s.optional(designSchema),
   /** Tree analysis of `apv structure check` (docs/CONFIGURATION.md, « Arborescence »); absent: defaults. */
   structure: s.optional(structureSchema),
+  /** Rhythm of `/apv:run` (docs/CONFIGURATION.md, « Exécution »); absent: `fullSuite` is `final`. */
+  run: s.optional(runSettingsSchema),
 });
+/** The full suite rhythm of a configuration: `run.fullSuite`, `final` when absent. */
+export const fullSuiteMode = (config: { run?: { fullSuite: FullSuiteMode } | undefined }): FullSuiteMode => config.run?.fullSuite ?? DEFAULT_FULL_SUITE;
 export type ApvConfig = Infer<typeof apvConfigSchema>;
 
 export interface LoadedConfig {

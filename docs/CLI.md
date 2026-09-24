@@ -114,6 +114,8 @@ apv run set <spec-id> <cible> <statut> [--branch b] [--worktree w] [--agent id] 
             [--base sha] [--findings n] [--note texte] [--force-unintegrated] [--repo <chemin>] [--json]
 apv run next <spec-id> [--repo <chemin>] [--json]
 apv run status [<spec-id>] [--repo <chemin>] [--json]
+apv run pause <spec-id> --until <HH:MM | date ISO> [--note texte] [--repo <chemin>] [--json]
+apv run resume <spec-id> [--note texte] [--repo <chemin>] [--json]
 ```
 
 État de reprise d'une exécution de spec (`/apv:run`, spécification section 8) dans `.apv/state/run-<spec-id>.json`, versionné avec le projet. Chaque écriture relit l'état, le modifie et le réécrit de façon atomique (fichier temporaire puis renommage) sous le verrou à bail `run:<spec-id>` (`apv lock`, attente de 60 s, ou `APV_RUN_LOCK_WAIT` secondes) : deux agents ne perdent jamais la mise à jour de l'autre. L'outil n'écrit rien d'autre : il ne crée ni branche ni worktree et ne lance aucun agent.
@@ -132,8 +134,11 @@ Forme de l'état :
   waves: [{ index, tasks: [id...] }],
   tasks: { <id>: { title, dependsOn, wave, foundation, status, branch, worktree, agentId, base, commit, note, updatedAt } },
   reviews: { securite | fidelite | donnees | rgpd: { status, findings, commit, note, updatedAt } },
-  events: [{ at, target, from, to, note?, commit?, agentId?, unintegrated? }] }
+  events: [{ at, target, from, to, note?, commit?, agentId?, unintegrated?, until? }],
+  pause?: { since, until, note } }
 ```
+
+Les dates de l'état sont des dates ISO en UTC (`Date#toISOString`) ; l'outil les affiche en heure locale (fuseau du système, ou `TZ`), avec leur décalage : `2026-09-24 20:22 UTC+2`. `pause` n'existe que pendant une pause (`apv run pause`) : un état jamais mis en pause garde la forme antérieure.
 
 Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 
@@ -151,8 +156,12 @@ Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 - Tâches `running` : **à relancer** si leur worktree n'existe plus, si leur branche est introuvable, si ni branche ni worktree ne sont enregistrés, ou si leur tête n'a aucun commit après leur base (`--base` donné au lancement de la tâche, sinon la base de l'exécution) ; sinon **à reprendre**, avec branche, worktree, agent, tête, nombre de commits après la base et dernier commit enregistré. Une tâche signalée à relancer ne l'est que si son agent ne tourne plus : un agent qui vient de démarrer n'a pas encore de commit.
 - Tâches en échec, tâches bloquées (dépendances attendues), revues à lancer (`pending` ou `failed`, une fois les tâches finies et l'intégration faite) et revues en cours.
 - `specChanged` : la spec a changé depuis `start` (empreinte différente) ; l'état garde le plan du lancement, l'action le signale.
+- `suite` : rythme de la suite complète lu dans `run.fullSuite` de `.apv/config.json` (`mode`, `final` par défaut ou `each-integration`, [CONFIGURATION.md](CONFIGURATION.md#exécution--run)), niveau de vérification attendu à l'étape courante (`level` : `task`, contrôles de tâche et tests ciblés vérifiés par `apv gates verify --stage task --base <base ciblée>` ; `full`, suite complète et `apv gates verify` ; `null` à une étape sans intégration) et base ciblée (`targetBase`, `targetBaseWhere`) : le dernier commit prouvé par la suite complète, soit la base de l'exécution tant qu'aucune n'est passée, puis la tête de la dernière intégration (`integration done --commit`) avec `final`, la tête d'intégration avec `each-integration`. Les actions disent la commande attendue : intégration intermédiaire au niveau tâche, dernière intégration en suite complète avant les revues, corrections au niveau tâche avec le test de chaque correction, livraison sans double suite. Une configuration illisible laisse `final`, signalé en première action.
+- `pause` : la pause de quota en cours (`since`, `until`, `note`), ou `null` ; signalée en première action tant qu'elle dure.
 
-**`status`** résume toutes les exécutions (étape, tâches faites sur le total, en cours, en échec, date) ou détaille une exécution (étapes, vagues avec l'état de chaque tâche, revues, dernier événement). Un état illisible est signalé, jamais réécrit ; un état dont l'identifiant de spec diffère du nom de son fichier est refusé. `start`, `set`, `next` et `status <id>` lisent l'état visé comme le résumé : fichier ordinaire seulement (une FIFO ou un dossier nommé comme l'état est refusé sans bloquer), 4 Mio au plus ; l'erreur nomme le fichier par son chemin dans le dépôt et ne cite rien de son contenu. Le résumé est celui de `apv status` : 50 fichiers au plus, les plus récents, et 16 Mio au total, les autres comptés (`unread` en JSON).
+**`status`** résume toutes les exécutions (étape, tâches faites sur le total, en cours, en échec, pause de quota en cours, date) ou détaille une exécution (dates, pause en cours, étapes, vagues avec l'état de chaque tâche, revues, les cinq derniers événements avec leur note), heures en heure locale.
+
+**`pause`** note que l'exécution attend la remise à zéro du quota, jusqu'à `--until` : `HH:MM` en heure locale (sa prochaine occurrence, demain si elle est passée) ou une date ISO avec fuseau (`2026-09-24T18:30:00Z`, `2026-09-24T20:30+02:00`) ; `--note` dit pourquoi (fenêtre, pourcentage). Elle écrit `pause` dans l'état et un événement `pause` (`running` vers `pending`, avec `until`) ; une nouvelle pause la prolonge en gardant son début et sa note. Refus en `1` sur une exécution terminée ou une fin déjà passée. **`resume`** la termine (événement `pause`, `pending` vers `running`) ; refus en `1` sans pause. Toute transition `apv run set` termine aussi une pause restée ouverte, journalisée avant elle. Un état illisible est signalé, jamais réécrit ; un état dont l'identifiant de spec diffère du nom de son fichier est refusé. `start`, `set`, `next` et `status <id>` lisent l'état visé comme le résumé : fichier ordinaire seulement (une FIFO ou un dossier nommé comme l'état est refusé sans bloquer), 4 Mio au plus ; l'erreur nomme le fichier par son chemin dans le dépôt et ne cite rien de son contenu. Le résumé est celui de `apv status` : 50 fichiers au plus, les plus récents, et 16 Mio au total, les autres comptés (`unread` en JSON).
 
 Sortie : `0` succès, `1` refus (spec invalide, état déjà présent ou absent, transition refusée, commit introuvable, état illisible, verrou non obtenu), `2` appel incorrect (cible ou statut inconnu, option sans effet).
 
@@ -211,7 +220,7 @@ Sortie : `0` dans le périmètre, `1` hors périmètre, `2` appel incorrect (spe
 
 ```
 apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>]
-              [--concurrency N] [--keep-going] [--repo <chemin>] [--json]
+              [--concurrency N] [--keep-going] [--skip-proven] [--repo <chemin>] [--json]
 ```
 
 Exécute les contrôles déclarés dans `gates` depuis la racine du dépôt, avec l'ordonnanceur de V2 :
@@ -226,7 +235,9 @@ Paramètres des commandes (argument entier uniquement, jamais d'interprétation 
 
 **Stage** : chaque contrôle peut déclarer `"stage": "task"` (contrôle rapide, lancé après chaque tâche) ou `"stage": "full"` (réservé à la suite complète, par exemple les tests navigateur). Champ absent : `task`, si bien qu'une configuration sans stage garde son sens (tout tourne partout). Un contrôle `task` ne peut pas dépendre d'un contrôle `full` (configuration refusée). `--stage task` exécute seulement les contrôles de stage `task` ; les contrôles `full` sélectionnés sont listés dans le tableau comme « réservé à la suite complète », dans `reserved` en JSON et dans `summary.json`, sans reçu : ils ne sont jamais comptés comme réussis. `--stage full` (défaut, comportement antérieur) exécute tout. Voir [RUN.md](RUN.md#contrôles--par-tâche-et-suite-complète) pour l'usage pendant un run.
 
-**Contrôle ciblé** (`affected`) : un contrôle de stage `full` peut déclarer, en plus de `command`, une commande `affected` qui lance seulement les tests concernés par les changements depuis la base, par exemple `["apv", "lock", "run", "e2e", "--", "npx", "playwright", "test", "--only-changed={{baseSha}}", "--pass-with-no-tests"]` (exemple complet dans [CONFIGURATION.md](CONFIGURATION.md#graphe-de-contrôles)). `--stage task` exécute alors cette commande à la place du contrôle complet, avec le même identifiant, les mêmes dépendances, ressources, variables et délai. Le contrôle est signalé « ciblé » : `e2e (ciblé)` dans le tableau et les diagnostics, une phrase dans le verdict, `targeted: true` dans son reçu et sa ligne JSON, sa liste dans `targeted` en JSON et dans `summary.json`. Un reçu ciblé ne prouve jamais le contrôle complet : `apv gates verify` l'ignore. `--stage full` exécute toujours la commande complète. Si `affected` utilise `{{baseSha}}`, `--base` est obligatoire.
+**Contrôle ciblé** (`affected`) : un contrôle de stage `full` peut déclarer, en plus de `command`, une commande `affected` qui lance seulement les tests concernés par les changements depuis la base, par exemple `["apv", "lock", "run", "e2e", "--", "npx", "playwright", "test", "--only-changed={{baseSha}}", "--pass-with-no-tests"]` (exemple complet dans [CONFIGURATION.md](CONFIGURATION.md#graphe-de-contrôles)). `--stage task` exécute alors cette commande à la place du contrôle complet, avec le même identifiant, les mêmes dépendances, ressources, variables et délai. Le contrôle est signalé « ciblé » : `e2e (ciblé)` dans le tableau et les diagnostics, une phrase dans le verdict, `targeted: true` dans son reçu et sa ligne JSON, sa liste dans `targeted` en JSON et dans `summary.json`. Un reçu ciblé ne prouve jamais le contrôle complet : `apv gates verify` au niveau complet l'ignore ; au niveau tâche (`--stage task --base <ref>`), il prouve le contrôle quand la base de son exécution couvre `<ref>`. `--stage full` exécute toujours la commande complète. Si `affected` utilise `{{baseSha}}`, `--base` est obligatoire.
+
+**Suite déjà prouvée** : avant d'exécuter la suite complète entière (`--stage full`, sans `--only`), l'outil regarde si elle est déjà prouvée sur ce commit exact, arbre propre (la vérification de `apv gates verify --commit HEAD` à `0`). Si oui, il le signale en tête de sortie (`alreadyProven: true` en JSON) avant de la relancer ; avec `--skip-proven`, il ne relance rien et sort en `0` (`skipped: true` en JSON, avec les reçus qui font la preuve). Arbre modifié, reçu manquant, échec plus récent ou autre configuration : pas de preuve, la suite tourne. `--skip-proven` avec `--stage task` ou `--only` : appel incorrect.
 
 `--only` choisit des contrôles et ajoute leurs dépendances. Par défaut, le premier échec arrête les contrôles suivants ; `--keep-going` les laisse tous s'exécuter. `--concurrency` borne le parallélisme (3 par défaut).
 
@@ -234,23 +245,25 @@ Chaque exécution écrit dans `.apv/receipts/<exécution>/` un reçu JSON par co
 
 Différences avec V2 : pas d'espace de travail jetable (l'implémenteur exécute les contrôles dans le worktree qu'il possède), pas de cache de reçus (`cacheTtlMs` est ignoré), pas de commandes de préparation (`setup`).
 
-En JSON : `ok`, `runId`, `candidateSha`, `baseSha`, `dirty`, `stage`, `config`, `legacyConfig`, `ignoredSections`, `added`, `reserved`, `targeted`, `receiptsDirectory`, `gates` (contrôles exécutés, chacun avec `targeted`).
+En JSON : `ok`, `runId`, `candidateSha`, `baseSha`, `dirty`, `alreadyProven`, `stage`, `config`, `legacyConfig`, `ignoredSections`, `added`, `reserved`, `targeted`, `receiptsDirectory`, `gates` (contrôles exécutés, chacun avec `targeted`).
 
 Sortie : `0` tous les contrôles exécutés passent, `1` au moins un échec ou une configuration invalide, `2` appel incorrect (dont un `--stage` inconnu ou `--commit`, propre à `verify`).
 
 ## `apv gates verify`
 
 ```
-apv gates verify --commit <sha> [--stage full|task] [--config <fichier>] [--repo <chemin>] [--json]
+apv gates verify --commit <sha> [--stage full|task] [--base <ref>] [--config <fichier>] [--repo <chemin>] [--json]
 ```
 
-Vérifie, sans rien exécuter, que les reçus de `.apv/receipts/` prouvent que chaque contrôle exigé a réussi sur ce commit exact. Contrôles exigés : tous avec `--stage full` (défaut), ceux de stage `task` avec `--stage task`. `--commit` accepte toute révision que Git résout en commit (SHA complet ou abrégé, `HEAD`) ; la comparaison se fait sur le SHA complet.
+Vérifie, sans rien exécuter, que les reçus de `.apv/receipts/` prouvent que chaque contrôle exigé a réussi sur ce commit exact. Contrôles exigés : tous avec `--stage full` (défaut) ; avec `--stage task` (niveau tâche, celui des intégrations intermédiaires et des corrections sous `run.fullSuite` à `final`), ceux de stage `task` et les contrôles `full` qui déclarent `affected`, les autres contrôles `full` étant listés dans `reserved`, jamais prouvés. `--commit` accepte toute révision que Git résout en commit (SHA complet ou abrégé, `HEAD`) ; la comparaison se fait sur le SHA complet.
 
-Pour chaque contrôle exigé, seuls comptent les reçus de ce commit, écrits sur un arbre propre (`dirty: false` ; pour un reçu plus ancien sans ce champ, celui du `summary.json` de son exécution, sinon inconnu donc refusé) et avec la configuration actuelle des contrôles (même `configHash`). Les reçus de toute exécution comptent (une exécution `--stage task` prouve ses contrôles autant qu'une suite complète), mais seul le plus récent de chaque contrôle est retenu : un échec plus récent l'emporte toujours sur une réussite plus ancienne. États : `passed` (réussi), `failed` (échec, avec le statut du reçu), `dirty` (reçus seulement sur un arbre modifié), `missing` (aucun reçu). Les fichiers illisibles et les reçus d'une autre configuration sont ignorés et signalés. Les reçus ciblés (`targeted: true`, commande `affected` lancée par `--stage task`) ne comptent jamais, ni comme réussite ni comme échec : seule la suite complète prouve un contrôle `full` ; ils sont comptés dans `targeted` et signalés si le contrôle n'est pas prouvé.
+Pour chaque contrôle exigé, seuls comptent les reçus de ce commit, écrits sur un arbre propre (`dirty: false` ; pour un reçu plus ancien sans ce champ, celui du `summary.json` de son exécution, sinon inconnu donc refusé) et avec la configuration actuelle des contrôles (même `configHash`). Les reçus de toute exécution comptent (une exécution `--stage task` prouve ses contrôles autant qu'une suite complète), mais seul le plus récent de chaque contrôle est retenu : un échec plus récent l'emporte toujours sur une réussite plus ancienne. États : `passed` (réussi), `failed` (échec, avec le statut du reçu), `dirty` (reçus seulement sur un arbre modifié), `missing` (aucun reçu). Les fichiers illisibles et les reçus d'une autre configuration sont ignorés et signalés. Au niveau complet, les reçus ciblés (`targeted: true`, commande `affected` lancée par `--stage task`) ne comptent jamais, ni comme réussite ni comme échec : seule la suite complète prouve un contrôle `full` ; ils sont comptés dans `targeted` et signalés si le contrôle n'est pas prouvé.
 
-En JSON : `ok`, `commit`, `stage`, `config`, `configHash`, `required`, `gates` (`gateId`, `state`, `status`, `receipt`, `runId`, `otherConfig`, `targeted`), `unreadable`, `missing` (contrôles non prouvés).
+Au niveau tâche, un contrôle `full` qui déclare `affected` est prouvé par son reçu ciblé ou par un reçu complet, le plus récent des deux décidant. `--base <ref>` est alors obligatoire (sinon refus `GATE_BASE`, sortie `1`) : le dernier commit prouvé par la suite complète, que donne `apv run next`. Un reçu ciblé ne compte que si la base de son exécution (le `baseSha` du `summary.json` de son exécution) est `<ref>` ou l'un de ses ancêtres, c'est-à-dire s'il a couvert au moins tous les changements depuis `<ref>` ; les autres sont comptés dans `otherBase` et signalés. Un reçu complet compte quelle que soit la base. `--base` sans `--stage task` : appel incorrect. Une vérification du niveau tâche ne remplace jamais la suite complète avant une PR.
 
-Sortie : `0` preuve complète, `1` preuve incomplète (ce qui manque est listé, avec la commande à relancer), commit introuvable, aucun contrôle exigé ou configuration invalide, `2` appel incorrect (`--commit` absent, option propre à `run`).
+En JSON : `ok`, `commit`, `stage`, `base`, `config`, `configHash`, `required`, `targeted` (contrôles exigés par leur variante ciblée), `reserved`, `gates` (`gateId`, `state`, `status`, `receipt`, `runId`, `otherConfig`, `targeted`, `viaTargeted`, `proof` : `full`, `targeted` ou `null`, `otherBase`), `unreadable`, `missing` (contrôles non prouvés).
+
+Sortie : `0` preuve complète, `1` preuve incomplète (ce qui manque est listé, avec la commande à relancer), commit introuvable, aucun contrôle exigé, `--base` manquant pour des contrôles ciblés ou configuration invalide, `2` appel incorrect (`--commit` absent, `--base` sans `--stage task`, option propre à `run`).
 
 ## `apv lock`
 

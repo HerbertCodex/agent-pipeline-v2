@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { LockStore, defaultLockDir, parseDuration, sanitizeResource } from '../lock/store.js';
 import { LOCK_WAIT_TIMEOUT_EXIT, describeHolder, runLocked, signalExitCode, waitReporter } from '../lock/run.js';
 import { spawn } from 'node:child_process';
+import { localTime } from '../domain/time.js';
 export const lockHelp = `apv lock : verrous à bail pour les ressources partagées (base de test, ports, navigateur)
 
 apv lock run <ressource> [--ttl 900] [--wait 1800] [--label L] [--purpose P] -- <commande...>
@@ -131,7 +132,7 @@ async function acquireCommand(rest, io) {
         io.stdout(`${JSON.stringify(result.record, null, 2)}\n`);
     }
     else {
-        io.stdout(`Verrou « ${resource} » acquis jusqu'à ${result.record.expiresAt}${pid === null ? ' (bail seul, sans renouvellement)' : ''}.\n`);
+        io.stdout(`Verrou « ${resource} » acquis jusqu'à ${localTime(result.record.expiresAt)}${pid === null ? ' (bail seul, sans renouvellement)' : ''}.\n`);
         io.stdout(`Jeton : ${result.record.token}\n`);
         io.stdout(`Libération : apv lock release ${resource} --token ${result.record.token}\n`);
     }
@@ -208,7 +209,7 @@ function statusCommand(rest, io) {
             io.stdout('  fichier de verrou illisible (écriture en cours ou corrompu)\n');
         }
         row.waiters.forEach((waiter, index) => {
-            io.stdout(`  file ${index + 1} : ${waiter.owner.label} (${waiter.owner.pid === null ? 'sans pid' : `pid ${waiter.owner.pid}`} sur ${waiter.owner.host}) depuis ${waiter.enqueuedAt}\n`);
+            io.stdout(`  file ${index + 1} : ${waiter.owner.label} (${waiter.owner.pid === null ? 'sans pid' : `pid ${waiter.owner.pid}`} sur ${waiter.owner.host}) depuis ${localTime(waiter.enqueuedAt)}\n`);
         });
     }
     return 0;

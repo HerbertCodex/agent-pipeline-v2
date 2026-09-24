@@ -1,5 +1,6 @@
 import { PipelineError } from '../domain/errors.js';
 import { type Infer } from '../domain/schema.js';
+import type { FullSuiteMode } from '../config/load.js';
 /** Resume state of a spec execution: `.apv/state/run-<spec-id>.json`, versioned with the project (spec section 8). */
 export declare const RUN_STATE_DIR = ".apv/state";
 export declare const runStateFile: (repo: string, specId: string) => string;
@@ -124,7 +125,13 @@ export declare const runStateSchema: import("../domain/schema.js").Schema<{
         readonly commit: string | undefined;
         readonly agentId: string | undefined;
         readonly unintegrated: string[] | undefined;
+        readonly until: string | undefined;
     }[];
+    readonly pause: {
+        readonly since: string;
+        readonly until: string;
+        readonly note: string | null;
+    } | undefined;
 }>;
 /** Plain mutable view of the parsed state (the schema types are read-only). */
 type Mutable<T> = T extends readonly (infer U)[] ? Mutable<U>[] : T extends object ? {
@@ -139,6 +146,7 @@ export interface RunEvent {
     commit?: string;
     agentId?: string;
     unintegrated?: string[];
+    until?: string;
 }
 export type RunState = Omit<Mutable<Infer<typeof runStateSchema>>, 'events'> & {
     events: RunEvent[];
@@ -255,6 +263,36 @@ export declare function applySet(state: RunState, target: Target, options: SetOp
     from: RunStatus;
     event: RunEvent;
 };
+/** Target of the pause and resume events of the journal (`apv run pause`, `apv run resume`). */
+export declare const PAUSE_TARGET = "pause";
+export interface PauseOptions {
+    until: Date;
+    note?: string;
+    now?: Date;
+}
+/**
+ * `apv run pause`: the execution waits for the quota to reset, until `until`. Written in the state (`pause`) and
+ * journaled (event `pause`, `running` to `pending`, with `until`); a second pause extends the first. Refused
+ * on a finished execution or with an end that is not in the future.
+ */
+export declare function applyPause(state: RunState, options: PauseOptions): {
+    state: RunState;
+    event: RunEvent;
+};
+/** `apv run resume`: ends the pause, journaled (event `pause`, `pending` to `running`). Refused without a pause. */
+export declare function applyResume(state: RunState, options?: {
+    note?: string;
+    now?: Date;
+}): {
+    state: RunState;
+    event: RunEvent;
+};
+/**
+ * One journal event for a human, times in local time: `2026-09-24 18:02 UTC+2 task:A en cours -> fait (commit …)`,
+ * and for the pauses `… pause quota jusqu'à 20:30 : <note>` or `… reprise : <note>`. The note is data: the
+ * caller cleans the line.
+ */
+export declare function describeEvent(event: RunEvent): string;
 /** Where the execution stands: the first unfinished step, with the waves between `plan` and `integration`. */
 export declare function currentStep(state: RunState): {
     step: StepName | 'waves' | null;
@@ -318,7 +356,29 @@ export interface NextPlan {
     }[];
     reviewsToLaunch: ReviewDomain[];
     reviewsRunning: ReviewDomain[];
+    /**
+     * Rhythm of the full suite (`run.fullSuite` of the configuration) and what the next verification needs: `level`
+     * `task` (task checks and targeted tests since `targetBase`, `apv gates verify --stage task --base`) or `full`
+     * (the full suite and `apv gates verify` at the exact head); null when nothing is to verify at this step.
+     * `targetBase`: the last commit the full suite proved, or the base of the execution before any.
+     */
+    suite: {
+        mode: FullSuiteMode;
+        level: 'task' | 'full' | null;
+        targetBase: string;
+        targetBaseWhere: string;
+    };
+    /** The quota pause in progress (`apv run pause`), or null. */
+    pause: {
+        since: string;
+        until: string;
+        note: string | null;
+    } | null;
     actions: string[];
+}
+export interface NextOptions {
+    /** `run.fullSuite` of the configuration; absent: `final`. */
+    fullSuite?: FullSuiteMode;
 }
 /**
  * `apv run next`: what to do now, deterministic, the basis of resuming after an interruption. A task is ready
@@ -328,7 +388,7 @@ export interface NextPlan {
  * whose worktree is gone, or that has no commit after its base (`--base` given when it started, else the base
  * of the execution), is to relaunch if its agent no longer runs.
  */
-export declare function computeNext(state: RunState, probe: GitProbe): NextPlan;
+export declare function computeNext(state: RunState, probe: GitProbe, options?: NextOptions): NextPlan;
 /** How a state file is named in errors (path relative to the repository), and the spec id its name carries. */
 export interface RunStateSource {
     shown?: string;
@@ -365,11 +425,18 @@ export interface RunSummary {
     reviews: Record<ReviewDomain, RunStatus>;
     updatedAt: string;
     error: null;
+    /** The quota pause in progress (`apv run pause`), or null. */
+    pause: {
+        since: string;
+        until: string;
+        note: string | null;
+    } | null;
 }
 export declare function summarize(state: RunState, file: string): RunSummary;
 /**
  * One line for `apv status` and `apv run status`. `running` names the running tasks after their count
  * (ids of the state, already restricted to the task id pattern by the schema); the first ones only.
+ * Times in local time (`localTime`); the state keeps them in UTC.
  */
 export declare function summaryLine(sum: RunSummary, running?: readonly string[]): string;
 /**
