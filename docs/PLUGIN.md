@@ -74,7 +74,7 @@ Un agent de plugin ne peut pas déclarer `hooks`, `mcpServers` ni `permissionMod
 | `/apv:init` | disponible : `apv init` crée `.apv/` sans rien écraser, puis contrôles détectés du dépôt, consigne commune et premières décisions avec l'opérateur, commit proposé ; réservée à l'opérateur |
 | `/apv:spec` | disponible : `apv spec new`, rédaction par `product` (avec `dpo` et `architecte-donnees` consultés si la demande touche aux données), `apv spec validate` jusqu'à `VALID`, présentation à l'opérateur |
 | `/apv:run` | disponible : exécution d'une spec pilotée par l'état `apv run` (données, plan, fondations, vagues parallèles, `apv scope check`, intégration, revues, corrections, PR brouillon, aperçu), reprise par `apv run next` ; jamais de fusion ni de déploiement ; réservée à l'opérateur ([RUN.md](RUN.md)) |
-| `/apv:review` | disponible : revues sécurité, fidélité, données et RGPD en parallèle, en lecture seule, sur copies détachées du même commit, constats consolidés et dédoublonnés |
+| `/apv:review` | disponible : revues sécurité, fidélité, données et RGPD en parallèle, en lecture seule, sur copies détachées du même commit, constats consolidés et dédoublonnés ; domaine facultatif `concurrence` (jamais par défaut), lançable seul pour un audit ciblé des conditions de course d'un projet existant : `/apv:review [branche] concurrence` |
 | `/apv:stack` | disponible : `apv stack plan` montré en entier, puis `APV_ALLOW_MERGE=1 apv stack merge` qui re-cible, revérifie et s'arrête à la première anomalie ; uniquement sur ordre explicite de l'opérateur dans son message courant ([RUN.md](RUN.md), section 7) |
 | `/apv:onboard` | disponible : `apv onboard --dry-run` montré à l'opérateur, puis `apv onboard` crée `.apv/` sans rien écraser (configuration reprise de `pipeline.v2.json`, champs du contrôleur ignorés et listés, registre V2 repris tel quel, specs V2 valides ; sans V2 : contrôles détectés, non obligatoires), puis contrôles, consigne commune et aperçu complétés avec lui, analyse de l'arborescence (`apv structure check`) et plan de rangement présentés, jamais appliqués, `apv ledger validate`, `apv gates run`, commit proposé ; réservée à l'opérateur ([CLI.md](CLI.md)) |
 
@@ -96,7 +96,7 @@ Sans outil Workflow (désactivé ou version trop ancienne), les commandes lancen
 - `chef-de-projet` : la méthode complète (délégation, planification, worktrees, vagues, intégration, revues, livraison, pile de PR, quota, verrous, reprise, aperçu, journal, communication), avec ses références ; elle renvoie aux commandes pour chaque étape.
 - `design-artefact` : boucle de maquette avec l'opérateur et versement de la référence (résumé pour les rôles ; le chef de projet la mène par `/apv:design`).
 - `rgpd` : grille du DPO, registres, modèles de textes sans promesse risquée.
-- `architecture-donnees` : règles de la section 13 bis, exemples SQL et tests exigés.
+- `architecture-donnees` : règles de la section 13 bis, exemples SQL, tests exigés et grille générique des conditions de course (`references/concurrence.md` : dix familles, toute stack et tout stockage, motif à chercher, question, corrections, preuve).
 - Héritées de V2, inchangées : `clean-code`, `design-patterns`, `refactoring`, `security`, `tdd`, `ui-design`.
 
 ## Hooks

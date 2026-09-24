@@ -1,6 +1,6 @@
 export const meta = {
   name: 'revues',
-  description: "Revues indépendantes APV en parallèle et en lecture seule (sécurité, fidélité, données, RGPD), chacune sur sa copie isolée du même commit, puis constats consolidés et dédoublonnés. Lancé par /apv:review, jamais seul.",
+  description: "Revues indépendantes APV en parallèle et en lecture seule (sécurité, fidélité, données, RGPD ; audit de concurrence sur demande), chacune sur sa copie isolée du même commit, puis constats consolidés et dédoublonnés. Lancé par /apv:review, jamais seul.",
   phases: [
     { title: 'Revues', detail: 'un agent de revue par domaine, en parallèle, sur sa copie détachée' },
     { title: 'Consolidation', detail: 'constats fusionnés quand ils décrivent le même défaut au même endroit' },
@@ -16,6 +16,8 @@ const DOMAINS = {
   fidelite: { agentType: 'apv:qa-fidelite', prefix: 'F', role: 'revue de fidélité' },
   donnees: { agentType: 'apv:architecte-donnees', prefix: 'D', role: 'revue des données (mode revue, lecture seule)' },
   rgpd: { agentType: 'apv:dpo', prefix: 'R', role: 'revue RGPD (lecture seule hormis .apv/rgpd/ si le chef de projet le demande)' },
+  // On demand only, never a default domain: a targeted race-condition audit of the whole code, with an inventory.
+  concurrence: { agentType: 'apv:architecte-donnees', prefix: 'C', role: 'audit des conditions de course (mode audit de concurrence, lecture seule)', inventory: true },
 }
 const SEVERITIES = ['critique', 'eleve', 'moyen', 'faible', 'info']
 
@@ -28,7 +30,7 @@ if (typeof input.commit !== 'string' || !input.commit || !Array.isArray(input.re
 }
 const seen = new Set()
 for (const review of input.reviews) {
-  if (!review || !DOMAINS[review.domain]) throw new Error('Domaine de revue inconnu : ' + (review && review.domain) + ' (securite, fidelite, donnees, rgpd).')
+  if (!review || !DOMAINS[review.domain]) throw new Error('Domaine de revue inconnu : ' + (review && review.domain) + ' (securite, fidelite, donnees, rgpd, concurrence).')
   if (typeof review.copy !== 'string' || !review.copy) throw new Error('La revue ' + review.domain + ' a besoin de sa copie isolée (copy).')
   if (seen.has(review.domain)) throw new Error('Domaine en double : ' + review.domain)
   seen.add(review.domain)
@@ -62,6 +64,29 @@ const FINDINGS = {
     summary: { type: 'string' },
   },
 }
+
+const STATUSES = ['conforme', 'non_conforme', 'inconnu']
+// One entry per read-modify-write path or race pattern found (references/concurrence.md, section 6).
+const INVENTORY = Object.assign({}, FINDINGS, {
+  required: FINDINGS.required.concat(['paths']),
+  properties: Object.assign({}, FINDINGS.properties, {
+    paths: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['location', 'family', 'invariant', 'protection', 'status', 'proof'],
+        properties: {
+          location: { type: 'string' },
+          family: { type: 'string' },
+          invariant: { type: 'string' },
+          protection: { type: 'string' },
+          status: { type: 'string', enum: STATUSES },
+          proof: { type: 'string' },
+        },
+      },
+    },
+  }),
+})
 
 const GROUPS = {
   type: 'object',
@@ -97,6 +122,8 @@ function reviewPrompt(review) {
     'required = true pour « requis », false pour « conseil » ; title ; location = chemin et ligne, ou écran, état, largeur et thème ; evidence = la preuve observée ; fix = la correction attendue) ;',
     'notVerified = ce qui n\'a pas pu être vérifié, avec la raison ; cleanup = confirmation du nettoyage (utilisateurs de test, serveurs, dossiers temporaires) ; summary = moins de 300 mots.',
     'Un écart déjà validé par l\'opérateur au registre n\'est pas un constat. Aucune attaque, capture ou mesure annoncée sans l\'avoir faite.',
+    domain.inventory ? 'Audit de concurrence : charge la compétence `apv:architecture-donnees` et suis la section 6 de sa référence `references/concurrence.md` sur TOUT le code du commit (serveur, tâches planifiées, interface, tests, outillage), pas seulement le diff.' : '',
+    domain.inventory ? 'paths = l\'inventaire complet, chemins conformes compris : un élément par chemin lecture-modification-écriture ou motif trouvé, avec location (chemin et ligne), family (4.1 à 4.10), invariant, protection (mécanisme, ou « aucune »), status (conforme, non_conforme, inconnu) et proof (test qui échoue sans la protection, ou ce qui manque). Chaque chemin non_conforme est aussi un constat dans findings.' : '',
   ].filter(line => line !== '').join('\n')
 }
 
@@ -108,7 +135,7 @@ const results = await parallel(input.reviews.map(review => () =>
     label: review.domain,
     phase: 'Revues',
     agentType: DOMAINS[review.domain].agentType,
-    schema: FINDINGS,
+    schema: DOMAINS[review.domain].inventory ? INVENTORY : FINDINGS,
   }),
 ))
 
@@ -123,7 +150,9 @@ input.reviews.forEach((review, index) => {
   }
   const prefix = DOMAINS[review.domain].prefix
   result.findings.forEach((finding, n) => findings.push(Object.assign({ id: prefix + (n + 1), domain: review.domain }, finding)))
-  reports.push({ domain: review.domain, findings: result.findings.length, notVerified: result.notVerified, cleanup: result.cleanup, summary: result.summary })
+  const report = { domain: review.domain, findings: result.findings.length, notVerified: result.notVerified, cleanup: result.cleanup, summary: result.summary }
+  if (DOMAINS[review.domain].inventory) report.paths = Array.isArray(result.paths) ? result.paths : []
+  reports.push(report)
 })
 if (incomplete.length) log('Revues sans rapport (agent arrêté ou erreur) : ' + incomplete.join(', ') + '. À relancer.')
 

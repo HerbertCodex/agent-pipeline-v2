@@ -168,3 +168,31 @@ test('revues: refuses unknown domains, duplicates and missing copies', async () 
   await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, reviews: [{ domain: 'rgpd' }] }), /copie isolée/);
   await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, reviews: [{ domain: 'rgpd', copy: '/a' }, { domain: 'rgpd', copy: '/b' }] }), /double/);
 });
+
+test('revues: the concurrence audit runs alone, never by default, and returns its inventory', async () => {
+  const { run, meta } = load('revues.js');
+  assert.match(meta.description, /concurrence sur demande/);
+  const path = { location: 'src/orders.ts:12', family: '4.1', invariant: 'stock >= 0', protection: 'aucune', status: 'non_conforme', proof: 'aucun test' };
+  const rt = runtime((prompt, opts) => ({ domain: opts.label, commit: 'x', findings: [finding('eleve', 'Stock décrémenté dans l\'application', path.location)],
+    notVerified: [], cleanup: 'fait', summary: 'ok', paths: [path] }));
+  const result = await run(...rt.hooks, { commit: 'c'.repeat(40), reviews: [{ domain: 'concurrence', copy: '/tmp/revues/concurrence' }] });
+  assert.equal(rt.calls.length, 1);
+  const [call] = rt.calls;
+  assert.equal(call.opts.agentType, 'apv:architecte-donnees');
+  assert.ok(call.opts.schema.required.includes('paths'), 'the inventory is required');
+  assert.deepEqual(call.opts.schema.properties.paths.items.properties.status.enum, ['conforme', 'non_conforme', 'inconnu']);
+  assert.match(call.prompt, /references\/concurrence\.md/);
+  assert.match(call.prompt, /TOUT le code du commit/);
+  assert.match(call.prompt, /Lecture seule/);
+  assert.deepEqual(result.findings.map(f => f.id), ['C1']);
+  assert.deepEqual(result.reports[0].paths, [path]);
+
+  // The four default domains keep their schema and prompt: no inventory asked, none reported.
+  const plain = runtime((prompt, opts) => ({ domain: opts.label, commit: 'x', findings: [], notVerified: [], cleanup: 'fait', summary: 'ok' }));
+  const other = await run(...plain.hooks, REVIEW_ARGS);
+  for (const c of plain.calls) {
+    assert.ok(!c.opts.schema.required.includes('paths'), c.opts.label);
+    assert.doesNotMatch(c.prompt, /concurrence\.md/);
+  }
+  assert.ok(other.reports.every(r => !('paths' in r)));
+});

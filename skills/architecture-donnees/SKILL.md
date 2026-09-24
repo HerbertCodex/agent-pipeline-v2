@@ -5,7 +5,7 @@ description: "Référence d'architecture des données d'APV (spec, section 13 bi
 
 # Architecture des données
 
-Base PostgreSQL (exemples écrits pour Supabase, transposables). Exemples SQL : `references/sql.md`. Tests exigés : `references/tests.md`.
+Base PostgreSQL (exemples écrits pour Supabase, transposables). Exemples SQL : `references/sql.md`. Tests exigés : `references/tests.md`. Conditions de course (grille générique, toutes stacks et tous stockages, dix familles avec motif, question, corrections et preuve) : `references/concurrence.md`.
 
 ## 1. Modéliser avant de coder
 Pour chaque spec qui touche aux données, `.apv/data-model.md` existe et est validé avant la première migration :
@@ -29,7 +29,7 @@ Rôle : <…>
 Règles de suppression : <justification>
 RLS : <politiques>
 ## Écritures
-<action> : transaction <fonction ou serveur>, clé d'idempotence <…>, invariant protégé par <…>, compensation <…>
+<action> : transaction <fonction ou serveur>, clé d'idempotence <…>, invariant protégé par <…>, compensation <…>, concurrence <famille de references/concurrence.md, mécanisme, test qui échoue sans lui>
 ## Verrous
 Ordre : <parent avant enfants>. Délais : lock_timeout <…>, statement_timeout <…>.
 ## Redondances déclarées
@@ -48,7 +48,7 @@ Ordre : <parent avant enfants>. Délais : lock_timeout <…>, statement_timeout 
 5. **RLS** : `enable` et `force` sur chaque table utilisateur ; politiques par opération avec `(select auth.uid())` ; droits par colonne (`grant insert (…)`, `grant update (…)`) quand une colonne est réservée à une fonction.
 6. **`security definer`** : seulement si justifié ; `set search_path = ''` ; noms qualifiés ; propriétaire et droits vérifiés dans la fonction ; `revoke execute … from public` puis `grant` au seul rôle utile.
 7. **Transactions** : toute écriture en plusieurs endroits dans une seule transaction (fonction SQL, ou transaction serveur explicite). Étape externe (stockage objet, e-mail, API) : compensation (annuler l'étape faite si la suite échoue) ou idempotence (réserver avant d'envoyer, clé d'unicité), avec un test d'échec à chaque étape.
-8. **Concurrence** : invariants cassables par deux requêtes simultanées protégés en base (unicité, `select … for update`, `pg_advisory_xact_lock`) ; test d'appels concurrents.
+8. **Concurrence** : chaque écriture a sa protection décidée et écrite (famille, mécanisme, preuve) selon `references/concurrence.md` : opération atomique du stockage d'abord, sinon section critique sérialisée là où vit la ressource (jamais un mutex en mémoire pour plusieurs processus), sinon idempotence. Invariants cassables par deux requêtes simultanées protégés en base (unicité, `select … for update`, `pg_advisory_xact_lock`) ; test qui force l'entrelacement et échoue sans la protection.
 9. **Écritures uniques** (trois niveaux, tous obligatoires) : interface (bouton en cours, `aria-busy`, clics suivants ignorés, soumission unique) ; serveur (clé d'idempotence UUID générée à l'affichage, champ caché, `unique (user_id, idempotency_key)`, la seconde requête renvoie le résultat de la première ; mises à jour qui posent une valeur au lieu de l'incrémenter ; actions « une fois » qui vérifient l'état dans la même transaction) ; base (unicité des clés naturelles).
 10. **Verrou optimiste** : `version integer not null default 1` (ou `updated_at`) envoyée avec le formulaire, `update … set …, version = version + 1 where id = $1 and version = $2` ; zéro ligne touchée = conflit : message clair et valeur actuelle affichée, rien d'écrasé.
 11. **Verrou pessimiste** : seulement dans une transaction courte qui lit puis écrit une valeur dont dépend un invariant.
