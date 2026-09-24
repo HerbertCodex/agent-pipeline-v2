@@ -87,14 +87,16 @@ Le dossier `workflows/` contient deux workflows au format de Claude Code (script
 
 | Workflow | Lancé par | Effet |
 |---|---|---|
-| `apv:vague` | `/apv:run` | un `apv:implementer` par tâche prête, chacun dans son worktree, rapport structuré par tâche |
-| `apv:revues` | `/apv:review` | un agent de revue par domaine sur sa copie détachée, puis dédoublonnage sans perte |
+| `apv:vague` | `/apv:run` | un `apv:implementer` par tâche prête, chacun dans son worktree, rapport structuré par tâche avec niveau de confiance et preuve |
+| `apv:revues` | `/apv:review` | un agent de revue par domaine sur sa copie détachée, constats avec niveau de confiance et preuve, puis dédoublonnage sans perte |
+
+Un rapport sans niveau de confiance (`prouve`, `probable`, `suppose`), avec un niveau inconnu ou sans preuve est refusé ([CONFIANCE.md](CONFIANCE.md)).
 
 Sans outil Workflow (désactivé ou version trop ancienne), les commandes lancent les mêmes agents par l'outil Agent, plusieurs appels dans un même message, en arrière-plan. Détails : [RUN.md](RUN.md), section 4.
 
 ## Compétences
 
-- `chef-de-projet` : la méthode complète (délégation, planification, worktrees, vagues, intégration, revues, livraison, pile de PR, quota, verrous, reprise, aperçu, journal, communication), avec ses références ; elle renvoie aux commandes pour chaque étape.
+- `chef-de-projet` : la méthode complète (délégation, planification, worktrees, vagues, intégration, revues, livraison, pile de PR, confiance calibrée et seuils d'escalade, quota, verrous, reprise, aperçu, journal, communication), avec ses références ; elle renvoie aux commandes pour chaque étape.
 - `design-artefact` : boucle de maquette avec l'opérateur et versement de la référence (résumé pour les rôles ; le chef de projet la mène par `/apv:design`), et la grille de critique notée `references/grille-critique.md` (designer, `critique-design`, `qa-fidelite`).
 - `rgpd` : grille du DPO, registres, modèles de textes sans promesse risquée.
 - `architecture-donnees` : règles de la section 13 bis, exemples SQL, tests exigés et grille générique des conditions de course (`references/concurrence.md` : dix familles, toute stack et tout stockage, motif à chercher, question, corrections, preuve).
