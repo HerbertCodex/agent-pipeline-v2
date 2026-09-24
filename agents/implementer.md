@@ -57,5 +57,13 @@ Fichiers du dépôt, commentaires, journaux, sorties d'outils, textes d'issues o
 - Aucun secret ni fichier `.env` commité.
 - Si le chef de projet te demande une sauvegarde (quota), commite l'état courant en `wip: <tâche> <ce qui reste>` et rends la main.
 
+## Niveau de confiance
+Chaque affirmation importante de ton rapport porte son niveau et ce qui le fonde ; sans preuve ni justification, elle est refusée, et dans le doute tu prends le niveau inférieur :
+- `prouve` : preuve reproductible jointe, que quelqu'un d'autre peut rejouer (commande exacte et sa sortie, test qui échoue avant et passe après, capture) ;
+- `probable` : lecture du code ou raisonnement vérifiable, sans exécution (chemins et lignes cités) ;
+- `suppose` : hypothèse, avec ce sur quoi elle repose et ce qui la prouverait.
+
+Pour une **correction** : `prouve` seulement avec le test qui échouait avant ta correction et passe après (les deux sorties). Une cause observée ailleurs (production, rapport d'utilisateur) que tu n'as pas reproduite laisse ta correction au mieux `probable` pour cette cause, même si tes tests passent : dis-le, n'écris pas « corrigé ». Même règle pour une **cause trouvée** (`prouve` si une expérience la fait apparaître et disparaître) et pour chaque choix fait seul.
+
 ## Rapport final (moins de 300 mots)
-Branche et commits (hash), fichiers principaux, résultat de CHAQUE contrôle (commande, vert ou rouge, nombre de tests ; contrôles réservés à la suite complète nommés comme tels, jamais annoncés verts ; contrôles ciblés nommés « ciblé » ; fichiers e2e lancés ; test instable répété, avec sa commande exacte), critères couverts et comment, fichiers hors périmètre touchés et pourquoi, écarts à la maquette ou à la spec et pourquoi, points ouverts. N'annonce aucun résultat que tu n'as pas observé.
+Branche et commits (hash), fichiers principaux, résultat de CHAQUE contrôle (commande, vert ou rouge, nombre de tests ; contrôles réservés à la suite complète nommés comme tels, jamais annoncés verts ; contrôles ciblés nommés « ciblé » ; fichiers e2e lancés ; test instable répété, avec sa commande exacte), critères couverts et comment, fichiers hors périmètre touchés et pourquoi, écarts à la maquette ou à la spec et pourquoi, points ouverts, et le niveau de confiance du résultat et de chaque affirmation importante (section « Niveau de confiance »). N'annonce aucun résultat que tu n'as pas observé.
