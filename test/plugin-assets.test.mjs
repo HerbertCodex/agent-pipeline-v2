@@ -328,3 +328,29 @@ test('the tree analysis is part of the cycle: onboarding, plan, review and docum
   assert.match(read('docs/CLI.md'), /## `apv structure check`/);
   assert.match(read('CHANGELOG.md').split('\n## ')[1], /apv structure check/);
 });
+
+test('targeted tests at the task stage, one unstable test repeated with a bound, detached runs followed by a monitor', () => {
+  // « Toujours rien » : a 5-minute file repeated 20 times under the single e2e lock; a run cut at night with its session.
+  for (const file of ['agents/implementer.md', 'skills/chef-de-projet/references/brief-type.md', 'skills/run/SKILL.md', 'workflows/vague.js']) {
+    const text = read(file).replace(/\n/g, ' ');
+    assert.match(text, /ciblé/, `${file}: targeted checks`);
+    assert.match(text, /<fichier>:<ligne>/, `${file}: the single unstable test`);
+    assert.match(text, /--repeat-each[^.]*20 au plus/, `${file}: bounded repetition`);
+    assert.match(text, /jamais un fichier entier[^.]*sous le verrou/i, `${file}: never a whole file under the lock`);
+  }
+  for (const file of ['agents/implementer.md', 'skills/chef-de-projet/references/brief-type.md', 'workflows/vague.js', 'skills/chef-de-projet/SKILL.md']) {
+    assert.match(read(file), /reducedMotion/, `${file}: reduced motion by default`);
+  }
+  for (const file of ['skills/run/SKILL.md', 'skills/chef-de-projet/SKILL.md']) {
+    const text = read(file);
+    assert.match(text, /setsid nohup/, `${file}: detached launch`);
+    assert.match(text, /\.apv\/state\/run-<id>\.json/, `${file}: watches the run state`);
+    assert.match(text, /Monitor/, `${file}: Monitor tool`);
+    assert.match(text, /jamais par des relevés espacés de 30 minutes/, `${file}: no spaced polling`);
+  }
+  const guide = read('docs/RUN.md');
+  assert.match(guide, /### Exécution détachée et suivi/);
+  assert.match(guide, /setsid nohup sh -c 'echo "pid \$\$"; exec claude -p/);
+  assert.match(guide, /cksum < "\$f"/);
+  assert.match(read('docs/CONFIGURATION.md'), /"affected": \["apv", "lock", "run", "e2e", "--", "npx", "playwright", "test", "--only-changed=\{\{baseSha\}\}"/);
+});
