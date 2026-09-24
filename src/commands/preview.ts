@@ -5,6 +5,7 @@ import {
 } from '../preview/service.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
+import { localTime } from '../domain/time.js';
 
 export const usage = `Utilisation :
   apv preview update [branche] [--wait 30m] [--repo <chemin>] [--json]
@@ -113,8 +114,8 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       if (!st) lines.push('Aucun aperçu enregistré pour ce projet (apv preview update pour en créer un).');
       else if (status.running) lines.push(`Aperçu en marche : ${st.url} (branche ${st.branch}, commit ${short(st.commit)}), depuis ${duration(status.uptimeSeconds ?? 0)}, pid ${st.pid}.`);
       else if (status.alive) lines.push(`Aperçu lancé mais sans réponse sur ${st.healthUrl} : ${st.url} (branche ${st.branch}, commit ${short(st.commit)}), pid ${st.pid}.`);
-      else lines.push(`Aperçu arrêté. Dernier aperçu : branche ${st.branch}, commit ${short(st.commit)}, démarré le ${st.startedAt}${st.stoppedAt ? `, arrêté le ${st.stoppedAt}` : ''}.`);
-      if (st?.lastFailure) lines.push(`Dernier échec : étape « ${st.lastFailure.step} » le ${st.lastFailure.at} (branche ${st.lastFailure.branch}) : ${st.lastFailure.message}`);
+      else lines.push(`Aperçu arrêté. Dernier aperçu : branche ${st.branch}, commit ${short(st.commit)}, démarré le ${localTime(st.startedAt)}${st.stoppedAt ? `, arrêté le ${localTime(st.stoppedAt)}` : ''}.`);
+      if (st?.lastFailure) lines.push(`Dernier échec : étape « ${st.lastFailure.step} » le ${localTime(st.lastFailure.at)} (branche ${st.lastFailure.branch}) : ${st.lastFailure.message}`);
       io.stdout(`${lines.join('\n')}\n`);
       return status.running ? EXIT.ok : EXIT.failed;
     }

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:os';
 import type { LockOwner, LockRecord, LockStore, WaitInfo } from './store.js';
+import { localTime } from '../domain/time.js';
 
 export const LOCK_WAIT_TIMEOUT_EXIT = 75;
 
@@ -30,7 +31,7 @@ export function describeHolder(record: LockRecord | null): string {
   if (!record) return 'détenteur inconnu (fichier en cours d\'écriture ou illisible)';
   const pid = record.owner.pid === null ? 'bail seul' : `pid ${record.owner.pid}`;
   const purpose = record.purpose ? `, pour « ${record.purpose} »` : '';
-  return `${record.owner.label} (${pid} sur ${record.owner.host}${purpose}), expire à ${record.expiresAt}`;
+  return `${record.owner.label} (${pid} sur ${record.owner.host}${purpose}), expire à ${localTime(record.expiresAt)}`;
 }
 
 /** Prints the holder and queue position when they change, and at most every 30 s otherwise. */

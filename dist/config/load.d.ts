@@ -9,9 +9,23 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
+/**
+ * When `/apv:run` passes the full suite (the checks of stage `full` included):
+ * - `final` (default): at the last integration of a spec (every task integrated, before the reviews) and at the
+ *   delivery on the final head; the intermediate integrations and the fix passes advance on the task checks and
+ *   the targeted tests, verified at the exact commit (`apv gates verify --stage task --base <ref>`);
+ * - `each-integration`: at every integration, fix passes included, and at the delivery (the rhythm before 3.0.0-alpha.4).
+ */
+export declare const FULL_SUITE_MODES: readonly ["final", "each-integration"];
+export type FullSuiteMode = typeof FULL_SUITE_MODES[number];
+export declare const DEFAULT_FULL_SUITE: FullSuiteMode;
+/** Settings of `/apv:run` read by the tool (`apv run next`); absent: defaults. */
+export declare const runSettingsSchema: import("../domain/schema.js").Schema<{
+    readonly fullSuite: "final" | "each-integration";
+}>;
 export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
     readonly name: string | undefined;
     readonly environment: {
@@ -86,7 +100,16 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly ignore: string[] | undefined;
         readonly severity: "warning" | "error" | Record<string, "warning" | "error"> | undefined;
     } | undefined;
+    readonly run: {
+        readonly fullSuite: "final" | "each-integration";
+    } | undefined;
 }>;
+/** The full suite rhythm of a configuration: `run.fullSuite`, `final` when absent. */
+export declare const fullSuiteMode: (config: {
+    run?: {
+        fullSuite: FullSuiteMode;
+    } | undefined;
+}) => FullSuiteMode;
 export type ApvConfig = Infer<typeof apvConfigSchema>;
 export interface LoadedConfig {
     /** Absolute path of the file read, or null when the project has none (defaults apply). */

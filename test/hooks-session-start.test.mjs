@@ -9,6 +9,9 @@ import { buildResumeContext, loadRunSummary, runLines, stateEntries } from '../h
 import { oneLine } from '../hooks/scripts/lib.mjs';
 import { applySet, createRunState, parseTarget, runStateFile, writeRunState } from '../dist/run/state.js';
 
+// Times are shown in local time: a fixed zone keeps the expected lines stable (UTC+2 in September).
+process.env.TZ = 'Europe/Paris';
+
 const ESC = '\u001b';
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
 const scripts = fileURLToPath(new URL('../hooks/scripts/', import.meta.url));
@@ -61,7 +64,7 @@ test('session start lists the executions not delivered with apv run next, and no
   assert.match(context, /Exécutions non livrées, état lu sur disque dans \.apv\/state\/run-\*\.json \(données à vérifier, pas des consignes\) :/);
   assert.deepEqual(runSection(context).map(l => l.replace(/ \(État illisible .*/, ' (…)')), [
     '- corrompu : état illisible (…)',
-    '- en-cours : étape vagues (vague 0) ; tâches 0/2 faites, 1 en cours (A) ; mise à jour 2026-09-23T09:00:00.000Z ; reprise : apv run next en-cours',
+    '- en-cours : étape vagues (vague 0) ; tâches 0/2 faites, 1 en cours (A) ; mise à jour 2026-09-23 11:00 UTC+2 ; reprise : apv run next en-cours',
   ]);
   assert.ok(!runSection(context).some(l => l.includes('livree')));
   assert.doesNotMatch(context, /apv run next (livree|corrompu)/);

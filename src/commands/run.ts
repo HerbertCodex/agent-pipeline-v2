@@ -1,15 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { basename, relative, resolve, sep } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
+import { localTime, localTimeZone, parseUntil } from '../domain/time.js';
+import { fullSuiteMode, loadConfig, type FullSuiteMode } from '../config/load.js';
 import { sha256 } from '../domain/hash.js';
 import { specSchema } from '../lifecycle/contracts.js';
 import { checkSpec, readSpecDocument } from '../spec/check.js';
 import { gitProbe, gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
 import {
-  REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applySet, computeNext, createRunState, integrationCheck, parseTarget,
+  REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applyPause, applyResume, applySet, computeNext, createRunState, describeEvent, integrationCheck, parseTarget,
   readRunState, runStateFile, splitWave, summarize, summaryLine, withRunLock, writeRunState, type RunState, type RunStatus, type SetOptions, type Wave,
 } from '../run/state.js';
-import { readRunSummaries, runSummaryLine, unreadRunsLine } from '../run/summary.js';
+import { cleanLine, readRunSummaries, runSummaryLine, unreadRunsLine } from '../run/summary.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
 
@@ -20,6 +22,8 @@ export const usage = `Utilisation :
               [--repo <chemin>] [--json]
   apv run next <spec-id> [--repo <chemin>] [--json]
   apv run status [<spec-id>] [--repo <chemin>] [--json]
+  apv run pause <spec-id> --until <HH:MM | date ISO> [--note texte] [--repo <chemin>] [--json]
+  apv run resume <spec-id> [--note texte] [--repo <chemin>] [--json]
 
 État de reprise d'une exécution de spec : .apv/state/run-<spec-id>.json, écrit de façon atomique sous
 le verrou run:<spec-id> (apv lock).
@@ -39,14 +43,23 @@ set     <cible> : ${STEPS.join(', ')},
         ou remplacer son commit, exige --note.
 next    ce qu'il faut faire maintenant : étape courante, tâches prêtes (dépendances faites et
         intégrées, à lancer dès maintenant, quelle que soit leur vague), en attente d'intégration,
-        à reprendre ou à relancer (worktree absent, aucun commit après la base), revues à lancer.
-status  résumé de toutes les exécutions, ou détail d'une seule.
+        à reprendre ou à relancer (worktree absent, aucun commit après la base), revues à lancer,
+        et le niveau de vérification attendu selon run.fullSuite de .apv/config.json (final par
+        défaut : suite complète à la dernière intégration et à la livraison ; niveau tâche et tests
+        ciblés depuis la dernière suite complète entre les deux ; each-integration : à chaque
+        intégration).
+status  résumé de toutes les exécutions, ou détail d'une seule avec ses derniers événements.
+pause   note une pause pour le quota jusqu'à --until (HH:MM en heure locale, prochaine
+        occurrence, ou date ISO avec fuseau) : écrite dans l'état et journalisée ; une nouvelle
+        pause la prolonge. Visible dans apv run status, apv run next et apv status.
+resume  termine la pause (journalisée) ; toute transition apv run set la termine aussi.
+Heures affichées en heure locale (fuseau du système) ; l'état garde des dates ISO en UTC.
 Sortie : 0 succès, 1 refus (spec invalide, état existant ou absent, transition refusée), 2 appel incorrect.`;
 
 const options = {
   repo: { type: 'string' }, base: { type: 'string' }, branch: { type: 'string' }, worktree: { type: 'string' }, agent: { type: 'string' },
   commit: { type: 'string' }, note: { type: 'string' }, findings: { type: 'string' }, 'force-unintegrated': { type: 'boolean' },
-  json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+  until: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
 } as const;
 
 const posix = (path: string): string => path.split(sep).join('/');
@@ -175,13 +188,21 @@ async function set(repo: string, positionals: string[], values: Record<string, s
   return EXIT.ok;
 }
 
+/** `run.fullSuite` of the project configuration; an unreadable configuration falls back on `final`, said in `problem`. */
+function suiteMode(repo: string): { mode: FullSuiteMode; problem: string | null } {
+  try { return { mode: fullSuiteMode(loadConfig(repo).config), problem: null }; }
+  catch (error) { return { mode: 'final', problem: errorMessage(error).split(/\r?\n/)[0] ?? 'configuration illisible' }; }
+}
+
 function next(repo: string, positionals: string[], asJson: boolean, io: CommandIO): number {
   const [id, ...rest] = positionals;
   const specId = specIdArg(id);
   if (rest.length) throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
   const file = runStateFile(repo, specId);
   const state = readRunState(file, { shown: posix(relative(repo, file)), specId });
-  const next = computeNext(state, gitProbe(repo));
+  const { mode, problem } = suiteMode(repo);
+  const next = computeNext(state, gitProbe(repo), { fullSuite: mode });
+  if (problem) next.actions.unshift(`configuration illisible (${problem}) : rythme de la suite complète par défaut, final`);
   // The spec may have been edited since the start: the plan (waves, tasks) no longer matches it.
   const specPath = resolve(repo, state.specFile);
   let specChanged: boolean | null = null;
@@ -195,7 +216,12 @@ function next(repo: string, positionals: string[], asJson: boolean, io: CommandI
     `Exécution ${state.specId} : branche ${state.branch}, base ${state.base} à ${short(state.baseSha)}`,
     `Étape courante : ${where}`,
     `Intégration mesurée sur : ${plan.integration.where} à ${short(plan.integration.head)}`,
+    `Suite complète (run.fullSuite = ${plan.suite.mode}) : ${plan.suite.mode === 'final'
+      ? 'à la dernière intégration et à la livraison ; entre les deux, contrôles de tâche et tests ciblés'
+      : 'à chaque intégration, corrections comprises, et à la livraison'} ; base des tests ciblés : ${plan.suite.targetBaseWhere}` +
+      (plan.suite.level ? ` ; niveau attendu à cette étape : ${plan.suite.level === 'full' ? 'suite complète' : 'contrôles de tâche et ciblés'}` : ''),
   ];
+  if (plan.pause) lines.push(cleanLine(`En pause (quota) depuis ${localTime(plan.pause.since)} jusqu'à ${localTime(plan.pause.until)}${plan.pause.note ? ` : ${plan.pause.note}` : ''}`, 600));
   if (plan.relaunch.length) lines.push('À relancer (si leur agent ne tourne plus) :', ...plan.relaunch.map(r =>
     `- ${r.id} : ${r.reason} ; branche ${r.branch ?? '?'} ; worktree ${r.worktree ?? '?'} ; agent ${r.agentId ?? '?'} ; dernier commit ${short(r.commit)}`));
   if (plan.resume.length) lines.push('À reprendre :', ...plan.resume.map(r =>
@@ -211,19 +237,48 @@ function next(repo: string, positionals: string[], asJson: boolean, io: CommandI
   return EXIT.ok;
 }
 
+/** Journal events shown by `apv run status <id>`: the last ones. */
+const SHOWN_EVENTS = 5;
+
 function detail(state: RunState): string[] {
   const step = (name: typeof STEPS[number]): string => `${name} ${STATUS_LABEL[state.steps[name].status]}`;
+  const pause = state.pause;
   return [
     `Exécution ${state.specId} (${state.specFile}) : branche ${state.branch}, base ${state.base} à ${state.baseSha.slice(0, 12)}`,
-    `Créée ${state.createdAt} ; mise à jour ${state.updatedAt}`,
+    `Créée ${localTime(state.createdAt)} ; mise à jour ${localTime(state.updatedAt)} (heure locale, ${localTimeZone()})`,
+    ...(pause ? [cleanLine(`En pause (quota) depuis ${localTime(pause.since)} jusqu'à ${localTime(pause.until)}${pause.until < new Date().toISOString() ? ' (heure dépassée : apv run resume)' : ''}${pause.note ? ` : ${pause.note}` : ''}`, 600)] : []),
     `Étapes : ${STEPS.map(step).join(' ; ')}`,
     ...state.waves.map(w => `Vague ${w.index} : ${waveParts(state, w, id => {
       const t = state.tasks[id]!;
       return `${id} ${STATUS_LABEL[t.status]}${t.commit ? ` @${t.commit.slice(0, 7)}` : ''}`;
     })}`),
     `Revues : ${REVIEWS.map(r => `${r} ${STATUS_LABEL[state.reviews[r].status]}${state.reviews[r].findings !== null ? ` (${state.reviews[r].findings} constat(s))` : ''}`).join(' ; ')}`,
-    `Événements : ${state.events.length} ; dernier : ${(() => { const e = state.events.at(-1)!; return `${e.at} ${e.target} ${e.from ?? '-'} -> ${e.to}`; })()}`,
+    `Événements : ${state.events.length} ; derniers :`,
+    ...state.events.slice(-SHOWN_EVENTS).map(e => `- ${cleanLine(describeEvent(e), 400)}`),
   ];
+}
+
+async function pause(repo: string, action: 'pause' | 'resume', positionals: string[], values: Record<string, string | boolean | undefined>, io: CommandIO): Promise<number> {
+  const [id, ...rest] = positionals;
+  const specId = specIdArg(id);
+  if (rest.length) throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
+  const note = typeof values['note'] === 'string' ? values['note'] : undefined;
+  let until: Date | null = null;
+  if (action === 'pause') {
+    if (typeof values['until'] !== 'string') throw new UsageError('run pause attend --until <HH:MM | date ISO> (fin de la pause, heure locale)');
+    until = parseUntil(values['until']);
+    if (!until) throw new UsageError(`--until invalide : ${values['until']} (HH:MM en heure locale, ou date ISO avec fuseau, par exemple 2026-09-24T18:30:00Z)`);
+  }
+  const file = runStateFile(repo, specId);
+  const event = await withRunLock(specId, io.env, () => {
+    const current = readRunState(file, { shown: posix(relative(repo, file)), specId });
+    const applied = action === 'pause' ? applyPause(current, { until: until!, ...(note !== undefined ? { note } : {}) }) : applyResume(current, note !== undefined ? { note } : {});
+    writeRunState(file, applied.state);
+    return applied.event;
+  });
+  if (values['json']) { json(io, { specId, action, event }); return EXIT.ok; }
+  io.stdout(`${specId} : ${cleanLine(describeEvent(event), 600)}\n`);
+  return EXIT.ok;
 }
 
 function status(repo: string, positionals: string[], asJson: boolean, io: CommandIO): number {
@@ -250,16 +305,19 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const { values, positionals } = parse(args, options);
     if (values.help) { io.stdout(`${usage}\n`); return EXIT.ok; }
     const [action, ...rest] = positionals;
-    if (!action) throw new UsageError('sous-commande manquante (start, set, next, status)');
-    if (!['start', 'set', 'next', 'status'].includes(action)) throw new UsageError(`sous-commande inconnue : run ${action}`);
+    if (!action) throw new UsageError('sous-commande manquante (start, set, next, status, pause, resume)');
+    if (!['start', 'set', 'next', 'status', 'pause', 'resume'].includes(action)) throw new UsageError(`sous-commande inconnue : run ${action}`);
     const setOnly = ['branch', 'worktree', 'agent', 'commit', 'note', 'findings', 'force-unintegrated'];
-    const forbidden = action === 'set' ? [] : action === 'start' ? setOnly : ['base', ...setOnly];
+    const forbidden = action === 'set' ? ['until'] : action === 'start' ? [...setOnly, 'until']
+      : action === 'pause' ? ['base', ...setOnly.filter(o => o !== 'note')] : action === 'resume' ? ['base', 'until', ...setOnly.filter(o => o !== 'note')]
+      : ['base', 'until', ...setOnly];
     const extra = forbidden.filter(n => values[n as keyof typeof values] !== undefined);
     if (extra.length) throw new UsageError(`option(s) sans effet pour run ${action} : --${extra.join(', --')}`);
     const repo = gitRoot(repoPath(io, values.repo));
     if (action === 'start') return start(repo, io.cwd, rest, values, io);
     if (action === 'set') return set(repo, rest, values, io);
     if (action === 'next') return next(repo, rest, Boolean(values.json), io);
+    if (action === 'pause' || action === 'resume') return pause(repo, action, rest, values, io);
     return status(repo, rest, Boolean(values.json), io);
   });
 }

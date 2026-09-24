@@ -6,6 +6,7 @@ import { s } from '../domain/schema.js';
 import { LockStore, defaultLockDir } from '../lock/store.js';
 import { describeHolder } from '../lock/run.js';
 import { MAX_RUN_STATE_BYTES, readBounded } from './bounded-read.js';
+import { localTime } from '../domain/time.js';
 /** Resume state of a spec execution: `.apv/state/run-<spec-id>.json`, versioned with the project (spec section 8). */
 export const RUN_STATE_DIR = '.apv/state';
 export const runStateFile = (repo, specId) => join(repo, RUN_STATE_DIR, `run-${specId}.json`);
@@ -37,7 +38,11 @@ const eventSchema = s.object({
     note: s.optional(s.string(0, 4000)), commit: s.optional(s.string(7, 64)), agentId: s.optional(s.string(0, 300)),
     // Dependencies not integrated when the task was started anyway (`--force-unintegrated`).
     unintegrated: s.optional(s.array(s.string(1, 80, key), 1, 20)),
+    // End of a quota pause (`apv run pause --until`), on the event that starts or extends it.
+    until: s.optional(at),
 });
+/** A quota pause of the execution (`apv run pause`): since when, until when, why. Absent when not paused. */
+const pauseSchema = s.object({ since: at, until: at, note: text(4000) });
 /**
  * Version 2: the foundation marker moved from the wave (v1, « the whole wave 0 ») to the task. A v1 state is
  * migrated when read (`migrateRunState`) and written back as v2 on its next write.
@@ -55,6 +60,8 @@ export const runStateSchema = s.object({
     tasks: s.record(key, taskSchema, 100),
     reviews: s.object({ securite: reviewSchema, fidelite: reviewSchema, donnees: reviewSchema, rgpd: reviewSchema }),
     events: s.array(eventSchema, 0, 100000),
+    // Optional: absent when the execution is not paused, so that a state never paused reads as before.
+    pause: s.optional(pauseSchema),
 });
 const parseState = (value) => runStateSchema.parse(migrateRunState(value));
 const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -210,6 +217,11 @@ export function applySet(state, target, options) {
     const next = structuredClone(state);
     const now = (options.now ?? new Date()).toISOString();
     const name = targetName(target);
+    // Any transition means the work goes on: a pause left open ends here, journaled before the transition.
+    if (next.pause) {
+        Reflect.deleteProperty(next, 'pause');
+        next.events.push({ at: now, target: PAUSE_TARGET, from: 'pending', to: 'running', note: `reprise (première transition après la pause : ${name})` });
+    }
     const entry = target.kind === 'step' ? next.steps[target.name] : target.kind === 'review' ? next.reviews[target.domain] : Object.hasOwn(next.tasks, target.id) ? next.tasks[target.id] : undefined;
     if (!entry)
         throw new PipelineError('RUN_TARGET', `Tâche inconnue dans l'exécution ${state.specId} : ${target.kind === 'task' ? target.id : name}`);
@@ -272,6 +284,55 @@ export function applySet(state, target, options) {
     return { state: parseState(next), from, event };
 }
 const finished = (st) => st === 'done' || st === 'skipped';
+/** Target of the pause and resume events of the journal (`apv run pause`, `apv run resume`). */
+export const PAUSE_TARGET = 'pause';
+/**
+ * `apv run pause`: the execution waits for the quota to reset, until `until`. Written in the state (`pause`) and
+ * journaled (event `pause`, `running` to `pending`, with `until`); a second pause extends the first. Refused
+ * on a finished execution or with an end that is not in the future.
+ */
+export function applyPause(state, options) {
+    const now = options.now ?? new Date();
+    if (currentStep(state).step === null)
+        throw new TransitionError(`L'exécution ${state.specId} est terminée : rien à mettre en pause`);
+    if (options.until.getTime() <= now.getTime())
+        throw new TransitionError(`Fin de pause dans le passé (${localTime(options.until)}) : donner une heure à venir`);
+    const next = structuredClone(state);
+    const at = now.toISOString();
+    const until = options.until.toISOString();
+    const note = options.note?.trim() ? options.note : (state.pause?.note ?? null);
+    next.pause = { since: state.pause?.since ?? at, until, note };
+    next.updatedAt = at;
+    const event = { at, target: PAUSE_TARGET, from: 'running', to: 'pending', until, ...(note !== null ? { note } : {}) };
+    next.events.push(event);
+    return { state: parseState(next), event };
+}
+/** `apv run resume`: ends the pause, journaled (event `pause`, `pending` to `running`). Refused without a pause. */
+export function applyResume(state, options = {}) {
+    if (!state.pause)
+        throw new TransitionError(`L'exécution ${state.specId} n'est pas en pause`);
+    const next = structuredClone(state);
+    const at = (options.now ?? new Date()).toISOString();
+    Reflect.deleteProperty(next, 'pause');
+    next.updatedAt = at;
+    const event = { at, target: PAUSE_TARGET, from: 'pending', to: 'running', note: options.note?.trim() ? options.note : 'reprise' };
+    next.events.push(event);
+    return { state: parseState(next), event };
+}
+/**
+ * One journal event for a human, times in local time: `2026-09-24 18:02 UTC+2 task:A en cours -> fait (commit …)`,
+ * and for the pauses `… pause quota jusqu'à 20:30 : <note>` or `… reprise : <note>`. The note is data: the
+ * caller cleans the line.
+ */
+export function describeEvent(event) {
+    const when = localTime(event.at);
+    const note = event.note ? ` : ${event.note}` : '';
+    if (event.target === PAUSE_TARGET) {
+        return event.to === 'pending' ? `${when} pause quota jusqu'à ${event.until ? localTime(event.until) : '?'}${note}` : `${when} reprise${note}`;
+    }
+    const commit = event.commit ? ` (commit ${event.commit.slice(0, 12)})` : '';
+    return `${when} ${event.target} ${event.from ? STATUS_LABEL[event.from] : '-'} -> ${STATUS_LABEL[event.to]}${commit}${note}`;
+}
 /** Where the execution stands: the first unfinished step, with the waves between `plan` and `integration`. */
 export function currentStep(state) {
     const unfinishedTasks = Object.values(state.tasks).filter(t => !finished(t.status));
@@ -292,8 +353,9 @@ export function currentStep(state) {
  * whose worktree is gone, or that has no commit after its base (`--base` given when it started, else the base
  * of the execution), is to relaunch if its agent no longer runs.
  */
-export function computeNext(state, probe) {
+export function computeNext(state, probe, options = {}) {
     const { step, wave } = currentStep(state);
+    const mode = options.fullSuite ?? 'final';
     const tasks = Object.entries(state.tasks);
     const integration = integrationCheck(state, probe);
     const pending = tasks.filter(([, t]) => t.status === 'pending').map(([id, t]) => ({ id, t, gaps: dependencyGaps(state, t, integration) }));
@@ -334,6 +396,21 @@ export function computeNext(state, probe) {
     const allDone = step === null;
     const stepStatus = step && step !== 'waves' ? state.steps[step].status : null;
     const actions = [];
+    // The last commit the full suite proved: in `final`, the head of the last integration once it is done; in
+    // `each-integration`, the integration head (every integration passed it). Before any, the base of the run.
+    const integrationCommit = state.steps.integration.status === 'done' ? state.steps.integration.commit : null;
+    const targetBase = mode === 'final' ? integrationCommit ?? state.baseSha : integration.head;
+    const targetBaseWhere = mode === 'final'
+        ? integrationCommit ? `tête de la dernière intégration (${integrationCommit.slice(0, 12)}), prouvée par la suite complète` : `base de l'exécution (${state.baseSha.slice(0, 12)}) : aucune suite complète depuis`
+        : `tête d'intégration (${integration.head.slice(0, 12)}), prouvée par la suite complète à chaque intégration`;
+    const level = step === 'waves' ? (mode === 'final' ? 'task' : 'full')
+        : step === 'integration' || step === 'delivery' ? 'full' : step === 'fixes' ? (mode === 'final' ? 'task' : 'full') : null;
+    const tb = targetBase.slice(0, 12);
+    const taskLevel = `apv gates run --stage task --base ${tb} sur la tête intégrée, arbre propre, puis apv gates verify --commit <tête> --stage task --base ${tb} à 0`;
+    const fullLevel = 'apv gates run --stage full sur la tête intégrée, arbre propre, puis apv gates verify --commit <tête> à 0';
+    if (state.pause) {
+        actions.push(`exécution en pause (quota) depuis ${localTime(state.pause.since)} jusqu'à ${localTime(state.pause.until)}${state.pause.note ? ` (${state.pause.note})` : ''} : à la reprise, apv run resume ${state.specId}`);
+    }
     for (const r of relaunch)
         actions.push(`relancer ${r.id} si son agent ne tourne plus (${r.reason})${r.branch ? `, depuis la branche ${r.branch}` : ''}`);
     for (const r of resume)
@@ -355,17 +432,34 @@ export function computeNext(state, probe) {
             const waiting = awaitingIntegration.filter(a => a.waitingOn.includes(dep)).map(a => a.id);
             actions.push(`intégrer ${dep} (commit ${state.tasks[dep]?.commit?.slice(0, 12) ?? 'absent'}) dans ${state.branch} : ${waiting.join(', ')} en attend(ent) l'intégration`);
         }
+        if (toIntegrate.length) {
+            actions.push(mode === 'final'
+                ? `intégration intermédiaire (il reste des tâches), niveau tâche : ${taskLevel} ; la suite complète vient à la dernière intégration`
+                : `intégration (run.fullSuite = each-integration), suite complète : ${fullLevel}`);
+        }
         if (!ready.length && !toIntegrate.length && !resume.length && !relaunch.length && !failed.length)
             actions.push('aucune tâche prête : vérifier les dépendances bloquées');
     }
     else if (step === 'reviews' && reviewsToLaunch.length)
         actions.push(`lancer les revues : ${reviewsToLaunch.join(', ')}`);
-    else if (step)
+    else if (step) {
         actions.push(`étape ${STEP_LABEL[step]} (${STATUS_LABEL[state.steps[step].status]})`);
+        if (step === 'integration')
+            actions.push(`dernière intégration (toutes les tâches), suite complète : ${fullLevel}, avant les revues ; garder ce worktree et ses reçus jusqu'à la livraison`);
+        if (step === 'fixes') {
+            actions.push(mode === 'final'
+                ? `corrections, niveau tâche : ${taskLevel}, et le test qui prouve chaque correction ; la suite complète vient une fois, à la livraison`
+                : `corrections (run.fullSuite = each-integration), suite complète : ${fullLevel}`);
+        }
+        if (step === 'delivery') {
+            actions.push(`livraison : apv gates verify --commit <tête exacte de ${state.branch}> ; à 0 (reçus de la suite complète sur cette tête, arbre propre), pas de nouvelle suite ; sinon apv gates run --stage full puis apv gates verify à 0 avant de pousser`);
+        }
+    }
     if (allDone)
         actions.push('exécution terminée');
     return { specId: state.specId, step, stepStatus, wave, finished: allDone, ready, awaitingIntegration, integration: { head: integration.head, where: integration.where },
-        resume, relaunch, failed, blocked, reviewsToLaunch, reviewsRunning, actions };
+        resume, relaunch, failed, blocked, reviewsToLaunch, reviewsRunning, suite: { mode, level, targetBase, targetBaseWhere },
+        pause: state.pause ? { ...state.pause } : null, actions };
 }
 /**
  * Reads one state file (`apv run start|set|next|status <id>`) with the bounded read of the summary: a regular
@@ -454,18 +548,21 @@ export function summarize(state, file) {
         counts[t.status] += 1;
     const { step, wave } = currentStep(state);
     return { specId: state.specId, file, step, wave, finished: step === null, tasks: { ...counts, total: Object.keys(state.tasks).length },
-        reviews: Object.fromEntries(REVIEWS.map(r => [r, state.reviews[r].status])), updatedAt: state.updatedAt, error: null };
+        reviews: Object.fromEntries(REVIEWS.map(r => [r, state.reviews[r].status])), updatedAt: state.updatedAt, error: null,
+        pause: state.pause ? { ...state.pause } : null };
 }
 /**
  * One line for `apv status` and `apv run status`. `running` names the running tasks after their count
  * (ids of the state, already restricted to the task id pattern by the schema); the first ones only.
+ * Times in local time (`localTime`); the state keeps them in UTC.
  */
 export function summaryLine(sum, running = []) {
     const t = sum.tasks;
     const where = sum.finished ? 'terminée' : `étape ${STEP_LABEL[sum.step]}${sum.step === 'waves' && sum.wave !== null ? ` (vague ${sum.wave})` : ''}`;
     const names = running.length ? ` (${running.slice(0, 5).join(', ')}${running.length > 5 ? ', …' : ''})` : '';
     const extra = [t.running ? `${t.running} en cours${names}` : '', t.failed ? `${t.failed} en échec` : '', t.skipped ? `${t.skipped} sautée(s)` : ''].filter(Boolean).join(', ');
-    return `${sum.specId} : ${where} ; tâches ${t.done}/${t.total} faites${extra ? `, ${extra}` : ''} ; mise à jour ${sum.updatedAt}`;
+    const pause = sum.pause ? ` ; en pause (quota) jusqu'à ${localTime(sum.pause.until)}` : '';
+    return `${sum.specId} : ${where} ; tâches ${t.done}/${t.total} faites${extra ? `, ${extra}` : ''}${pause} ; mise à jour ${localTime(sum.updatedAt)}`;
 }
 /**
  * Runs `fn` under the lease lock `run:<spec-id>` (apv lock), so that two agents never interleave a

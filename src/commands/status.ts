@@ -8,6 +8,7 @@ import { parseSpecDocument } from '../spec/check.js';
 import { cleanLine, isActiveRun, readRunSummaries, runSummaryLine, unreadRunsLine, type RunSummaryEntry } from '../run/summary.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
+import { localTime } from '../domain/time.js';
 
 export const usage = `Utilisation :
   apv status [--repo <chemin>] [--json]
@@ -90,11 +91,11 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       // File names, titles and parse errors come from files any agent or commit can write: one cleaned line each.
       ...status.specs.map(s => cleanLine(`- ${s.file}${s.title ? ` : ${s.title}` : ''}${s.error ? ` (illisible : ${s.error.split(/\r?\n/)[0]})` : ''}`)),
       `État (.apv/state) : ${status.state.length ? '' : 'aucun'}`,
-      ...status.state.map(s => cleanLine(`- ${s.file} (${s.bytes} octets, ${s.modifiedAt})`)),
+      ...status.state.map(s => cleanLine(`- ${s.file} (${s.bytes} octets, ${localTime(s.modifiedAt)})`)),
       `Exécutions en cours : ${active.length || status.runsUnread ? '' : 'aucune'}`,
       ...active.map(r => `- ${runSummaryLine(r)}`),
       ...(status.runsUnread ? [`- ${unreadRunsLine(status.runsUnread)}`] : []),
-      `Quota : ${q ? `${q.at} ; session ${q.session ? `${q.session.percent} %` : '?'} ; semaine ${q.week ? `${q.week.percent} %` : '?'} ; niveau ${q.level}` : 'aucun relevé'}`,
+      `Quota : ${q ? `${localTime(q.at)} ; session ${q.session ? `${q.session.percent} %` : '?'} ; semaine ${q.week ? `${q.week.percent} %` : '?'} ; niveau ${q.level}` : 'aucun relevé'}`,
     ];
     io.stdout(`${lines.map(l => l.trimEnd()).join('\n')}\n`);
     return EXIT.ok;

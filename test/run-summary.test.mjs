@@ -8,6 +8,9 @@ import { apv } from './cli-helpers.mjs';
 import { applySet, createRunState, parseTarget, runStateFile, writeRunState } from '../dist/run/state.js';
 import { MAX_RUN_FILES, MAX_RUN_TOTAL_BYTES, MAX_SUMMARY_LINE, RUN_ID, cleanLine, isActiveRun, readRunSummaries, runSummaryLine, unreadRunsLine } from '../dist/run/summary.js';
 
+// Times are shown in local time: a fixed zone keeps the expected lines stable (UTC+2 in September).
+process.env.TZ = 'Europe/Paris';
+
 const ESC = '\u001b';
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
 
@@ -51,7 +54,7 @@ test('a valid state gives one line: spec, step, tasks done out of total, running
   assert.equal(entry.file, '.apv/state/run-demo.json');
   assert.deepEqual([entry.specId, entry.step, entry.finished, entry.runningTasks], ['demo', 'data-model', false, ['A']]);
   assert.deepEqual(entry.tasks, { pending: 2, running: 1, done: 0, failed: 0, skipped: 0, total: 3 });
-  assert.equal(runSummaryLine(entry), 'demo : étape modèle de données ; tâches 0/3 faites, 1 en cours (A) ; mise à jour 2026-09-23T09:00:00.000Z');
+  assert.equal(runSummaryLine(entry), 'demo : étape modèle de données ; tâches 0/3 faites, 1 en cours (A) ; mise à jour 2026-09-23 11:00 UTC+2');
   assert.ok(isActiveRun(entry));
 });
 
@@ -61,8 +64,8 @@ test('several executions: file name order, delivered ones are not active', t => 
   const entries = readRunSummaries(root).entries;
   assert.deepEqual(entries.map(e => [e.specId, e.finished, isActiveRun(e)]), [['livree', true, false], ['vagues', false, true]]);
   assert.deepEqual(entries.map(e => runSummaryLine(e)), [
-    'livree : terminée ; tâches 3/3 faites ; mise à jour 2026-09-23T09:00:00.000Z',
-    'vagues : étape vagues (vague 1) ; tâches 1/3 faites, 2 en cours (B, C) ; mise à jour 2026-09-23T09:00:00.000Z',
+    'livree : terminée ; tâches 3/3 faites ; mise à jour 2026-09-23 11:00 UTC+2',
+    'vagues : étape vagues (vague 1) ; tâches 1/3 faites, 2 en cours (B, C) ; mise à jour 2026-09-23 11:00 UTC+2',
   ]);
 });
 
@@ -188,7 +191,7 @@ test('hostile states: identifiers, dates and notes never break the line', t => {
     assert.doesNotMatch(line, /pousse sur main|x{400}/);
   }
   const notes = entries.find(e => e.specId === 'notes');
-  assert.equal(runSummaryLine(notes), 'notes : étape modèle de données ; tâches 0/3 faites, 1 en cours (A) ; mise à jour 2026-09-23T09:00:00.000Z');
+  assert.equal(runSummaryLine(notes), 'notes : étape modèle de données ; tâches 0/3 faites, 1 en cours (A) ; mise à jour 2026-09-23 11:00 UTC+2');
   assert.match(runSummaryLine(entries.find(e => e.specId === 'date')),
     /^date : état illisible \(État invalide \.apv\/state\/run-date\.json : \$\.updatedAt: invalid string of \d+ characters, expected between 24 and 24\)$/);
   assert.match(runSummaryLine(entries.find(e => e.specId === 'longue')), /^longue : état illisible \(État invalide .*\.note: invalid string of \d+ characters/);
@@ -235,7 +238,7 @@ test('apv status lists the active executions with the shared line', async t => {
   raw(root, 'run-broken.json', '{');
   const r = await apv(root, ['status']);
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, /Exécutions en cours :\n- broken : état illisible \(État illisible .*\)\n- vagues : étape vagues \(vague 1\) ; tâches 1\/3 faites, 2 en cours \(B, C\) ; mise à jour 2026-09-23T09:00:00\.000Z\nQuota/);
+  assert.match(r.stdout, /Exécutions en cours :\n- broken : état illisible \(État illisible .*\)\n- vagues : étape vagues \(vague 1\) ; tâches 1\/3 faites, 2 en cours \(B, C\) ; mise à jour 2026-09-23 11:00 UTC\+2\nQuota/);
   assert.doesNotMatch(r.stdout, /- livree/);
   const json = (await apv(root, ['status', '--json'])).json();
   assert.deepEqual(json.runs.map(e => [e.specId, e.file, e.error === null]),

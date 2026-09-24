@@ -5,8 +5,18 @@ export interface VerifyOptions {
     config: ApvConfig;
     /** Commit to verify: any revision Git resolves to a commit, compared by its full SHA. */
     commit: string;
-    /** `full` (default): every declared check is required. `task`: the checks of stage task only. */
+    /**
+     * `full` (default): every declared check is required, each proven by a complete (never targeted) receipt.
+     * `task`: the checks of stage task, and the full checks that declare `affected`, each proven by its targeted
+     * receipt (tests concerned by the changes since `base`) or by a complete one.
+     */
     stage?: GateStage;
+    /**
+     * Stage task with targeted checks (required then): the commit the targeted tests must cover the changes from,
+     * usually the last commit the full suite proved. A targeted receipt counts only when the base of its run is
+     * this commit or one of its ancestors (it then covered at least these changes).
+     */
+    base?: string;
 }
 /**
  * State of one required check at the commit:
@@ -25,15 +35,27 @@ export interface GateEvidence {
     runId: string | null;
     /** Receipts at this commit written for another configuration of the checks (ignored). */
     otherConfig: number;
-    /** Receipts at this commit of the targeted variant (`affected`) of the check: never proof of it (ignored). */
+    /** Receipts at this commit of the targeted variant (`affected`) of the check: never proof of it at stage full. */
     targeted: number;
+    /** Stage task: whether the check is required through its targeted variant (a full check that declares `affected`). */
+    viaTargeted: boolean;
+    /** The kind of the receipt retained: `full` (the whole check) or `targeted` (its `affected` command); null without one. */
+    proof: 'full' | 'targeted' | null;
+    /** Stage task: targeted receipts ignored because the base of their run does not cover `base` (another base, or none). */
+    otherBase: number;
 }
 export interface VerifyResult {
     repo: string;
     commit: string;
     stage: GateStage;
+    /** Base the targeted receipts had to cover (stage task with targeted checks), or null. */
+    base: string | null;
     configHash: string;
     required: string[];
+    /** Required checks proven through their targeted variant (stage task). */
+    targeted: string[];
+    /** Stage task: full checks without a targeted variant, left to the full suite (not required, never proven here). */
+    reserved: string[];
     gates: GateEvidence[];
     /** Receipt files that could not be read or validated (ignored, reported). */
     unreadable: string[];
@@ -43,6 +65,8 @@ export interface VerifyResult {
  * Whether the receipts prove that every required check passed on this exact commit, on a clean tree and with
  * the current configuration of the checks. Receipts of any run count (a task run proves its checks as well as a
  * full one), but for each check only the latest such receipt does: a failure is never hidden by an older success.
- * Receipts of a targeted run (`targeted`, the `affected` command of a full check) never count.
+ * At stage full, receipts of a targeted run (`targeted`, the `affected` command of a full check) never count.
+ * At stage task, a full check that declares `affected` is required too: its targeted receipts count when their
+ * run's base covers `base` (mandatory then), and so do its complete receipts; the latest of them decides.
  */
 export declare function verifyGates(options: VerifyOptions): Promise<VerifyResult>;
