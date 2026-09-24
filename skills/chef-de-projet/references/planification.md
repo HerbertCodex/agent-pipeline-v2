@@ -13,6 +13,7 @@ Dans ce document, `apv` désigne l'outil du plugin (voir `SKILL.md`).
 - **Propriété** : aucun fichier possédé par deux tâches parallèles ; les fichiers communs sont modifiés en ajout, au minimum, et listés dans les rapports.
 - **Autonomie** : chaque tâche passe ses contrôles de tâche seule.
 - **Contrôles par tâche et suite complète** : dans `.apv/config.json`, marque `"stage": "full"` les contrôles longs (suite navigateur complète) ; les autres (`task`, par défaut) tournent après chaque tâche. L'implementer lance `apv gates run --stage task --base <base>` et, sous `apv lock run e2e`, ses seuls fichiers de tests e2e créés ou modifiés ; toi, la suite complète une fois par intégration (`apv gates run --stage full`, puis `apv gates verify --commit <tête>`) et une fois à la livraison. Intègre par lots (les tâches finies ensemble) : chaque intégration coûte une suite complète.
+- **Placement** : chaque fichier créé a son chemin exact, dans le dossier de son domaine et selon les conventions de la consigne (noms courts, tests à côté du module) ; l'architecte a lancé `apv structure check --path <dossier>` sur les dossiers que le plan touche et reporté les constats. Aucun plan ne crée ni n'aggrave un constat ; un constat déjà présent reste une question pour l'opérateur (un rangement est une spec à part), pas un travail glissé dans une tâche.
 - **Ressources** : ports, base, remise à zéro, navigateur de test : isolés par agent quand c'est possible, sinon sous bail `apv lock run`.
 - **Migrations** : une seule tâche par vague en crée, ou des horodatages réservés.
 
