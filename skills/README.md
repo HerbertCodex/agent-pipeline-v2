@@ -21,7 +21,7 @@ Une commande « réservée à l'opérateur » porte `disable-model-invocation: t
 ## Méthode
 
 - `chef-de-projet` : la méthode complète du chef de projet et ses références (planification, consigne commune, intégration et revues, livraison et pile de PR, quota et sauvegarde, reprise et environnement, journal).
-- `design-artefact` : la boucle de maquette, résumée pour les rôles.
+- `design-artefact` : la boucle de maquette, résumée pour les rôles, et la grille de critique notée (`references/grille-critique.md`).
 - `rgpd` : grille du DPO, registres, modèles de textes sans promesse risquée.
 - `architecture-donnees` : règles du modèle de données (spécification, section 13 bis), exemples SQL, tests et grille générique des conditions de course (`references/concurrence.md`).
 

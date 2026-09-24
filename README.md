@@ -17,7 +17,7 @@ APV3 est un plugin Claude Code. L'opérateur délègue ; la session principale d
 
 ## Ce que contient le plugin
 
-- **9 sous-agents** : `product`, `architecte`, `architecte-donnees`, `designer`, `implementer`, `integrateur`, `qa-securite`, `qa-fidelite`, `dpo`.
+- **10 sous-agents** : `product`, `architecte`, `architecte-donnees`, `designer`, `critique-design`, `implementer`, `integrateur`, `qa-securite`, `qa-fidelite`, `dpo`.
 - **La méthode du chef de projet** (compétence `chef-de-projet`) : vagues parallèles précédées des fondations, verrous à bail, suivi du quota et sauvegarde, reprise après coupure, pile de PR, journal du pipeline.
 - **Des commandes** `/apv:init`, `/apv:spec`, `/apv:run`, `/apv:review`, `/apv:stack`, `/apv:design`, `/apv:preview`, `/apv:status`, `/apv:quota`, `/apv:resume` et `/apv:onboard` (reprise d'un projet V2 ou existant), et deux **workflows** de vagues parallèles (`apv:vague`, `apv:revues`).
 - **Des hooks** : contexte de reprise au démarrage, exécutions non livrées comprises ; blocage du force-push, de la fusion et du déploiement hors commande dédiée, et des écritures GitHub à sortie masquée.

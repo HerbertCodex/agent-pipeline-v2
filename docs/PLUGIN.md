@@ -53,11 +53,12 @@ Chaque agent est un fichier de `agents/`, appelé `apv:<nom>` par l'outil Agent.
 | `product` | Rédige la spec : tâches, chemins autorisés, critères, plan de sécurité ; `apv spec validate` | lecture, Bash, écriture limitée à `.apv/specs/` | aucun |
 | `architecte` | Graphe de tâches, vague « fondations », notes de vague, placement des fichiers créés (`apv structure check --path`), ressources et verrous | lecture, Bash, écriture limitée à `.apv/state/` | aucun |
 | `architecte-donnees` | Modèle de données avant le code, puis revue des migrations et requêtes avec `apv db check` | lecture, Bash, écriture de `.apv/data-model.md` (migrations sur demande) | aucun |
-| `designer` | Maquette itérée avec l'opérateur jusqu'à validation, versée comme référence par `apv design register` | lecture, Bash, écriture dans les maquettes | aucun |
+| `designer` | Directions avant détails (2 ou 3 pour un nouveau produit ou un écran majeur), maquette itérée avec l'opérateur jusqu'à validation, grille de critique remplie, versée comme référence par `apv design register` | lecture, Bash, écriture dans les maquettes | aucun |
+| `critique-design` | Critique notée d'une maquette avant présentation : captures 390 et 1280, clair et sombre, empreintes génériques, signature, états, fiche d'animation, test des 5 secondes avec la personne cible, corrections priorisées (deux tours au plus) | lecture, Bash (pas d'écriture de fichiers) | aucun |
 | `implementer` | Code une tâche, tous les contrôles au vert, commits | lecture, écriture, Bash, correcteur Svelte (MCP) | worktree |
 | `integrateur` | Fusionne une vague, unifie les doublons, garde tous les tests, relance tout | lecture, écriture, Bash, correcteur Svelte (MCP) | worktree |
 | `qa-securite` | Attaques à deux utilisateurs, API directe, en-têtes, secrets, ZAP | lecture, Bash (pas d'écriture de fichiers) | copie isolée |
-| `qa-fidelite` | Captures 390 et 1280, clair et sombre, comparaison des textes, accessibilité, fichiers mal placés | lecture, Bash (pas d'écriture de fichiers) | copie isolée |
+| `qa-fidelite` | Captures 390 et 1280, clair et sombre, comparaison des textes, accessibilité, états, animations et mouvement réduit, test des 5 secondes, fichiers mal placés | lecture, Bash (pas d'écriture de fichiers) | copie isolée |
 | `dpo` | Registre RGPD, sous-traitants vérifiés sur les DPA officiels, pages légales contre le code | lecture, Bash, web, écriture de `.apv/rgpd/` (pages légales sur demande) | aucun |
 
 Un agent de plugin ne peut pas déclarer `hooks`, `mcpServers` ni `permissionMode`. Pour les ajuster dans un projet, copiez le fichier dans `.claude/agents/` du projet et modifiez la copie.
@@ -69,7 +70,7 @@ Un agent de plugin ne peut pas déclarer `hooks`, `mcpServers` ni `permissionMod
 | `/apv:status` | disponible : état des specs, branches, PR, verrous, quota, aperçu |
 | `/apv:quota` | disponible : relevé des fenêtres 5 h et semaine, seuils 70, 85 et 95 % |
 | `/apv:resume` | disponible : reprise après coupure (état, Docker, piles, verrous, agents, quota) |
-| `/apv:design` | disponible : boucle de maquette par artefact avec l'opérateur jusqu'à sa validation explicite, puis versement par `apv design register` ([DESIGN.md](DESIGN.md)) |
+| `/apv:design` | disponible : directions avant détails, critique par `apv:critique-design` avant chaque présentation, boucle de maquette par artefact avec l'opérateur jusqu'à sa validation explicite, puis versement par `apv design register` ; `/apv:design critique <chemin>` critique seule une maquette existante ([DESIGN.md](DESIGN.md)) |
 | `/apv:preview` | disponible : mise à jour de l'aperçu vivant par `apv preview update`, vérification, annonce (adresse, branche, changements, compte de démo) |
 | `/apv:init` | disponible : `apv init` crée `.apv/` sans rien écraser, puis contrôles détectés du dépôt, consigne commune et premières décisions avec l'opérateur, commit proposé ; réservée à l'opérateur |
 | `/apv:spec` | disponible : `apv spec new`, rédaction par `product` (avec `dpo` et `architecte-donnees` consultés si la demande touche aux données), `apv spec validate` jusqu'à `VALID`, présentation à l'opérateur |
@@ -94,7 +95,7 @@ Sans outil Workflow (désactivé ou version trop ancienne), les commandes lancen
 ## Compétences
 
 - `chef-de-projet` : la méthode complète (délégation, planification, worktrees, vagues, intégration, revues, livraison, pile de PR, quota, verrous, reprise, aperçu, journal, communication), avec ses références ; elle renvoie aux commandes pour chaque étape.
-- `design-artefact` : boucle de maquette avec l'opérateur et versement de la référence (résumé pour les rôles ; le chef de projet la mène par `/apv:design`).
+- `design-artefact` : boucle de maquette avec l'opérateur et versement de la référence (résumé pour les rôles ; le chef de projet la mène par `/apv:design`), et la grille de critique notée `references/grille-critique.md` (designer, `critique-design`, `qa-fidelite`).
 - `rgpd` : grille du DPO, registres, modèles de textes sans promesse risquée.
 - `architecture-donnees` : règles de la section 13 bis, exemples SQL, tests exigés et grille générique des conditions de course (`references/concurrence.md` : dix familles, toute stack et tout stockage, motif à chercher, question, corrections, preuve).
 - Héritées de V2, inchangées : `clean-code`, `design-patterns`, `refactoring`, `security`, `tdd`, `ui-design`.

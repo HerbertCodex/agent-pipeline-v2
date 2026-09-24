@@ -35,7 +35,7 @@ function frontmatter(path) {
 }
 const list = value => (value ?? '').split(',').map(v => v.trim()).filter(Boolean);
 
-const AGENTS = ['architecte', 'architecte-donnees', 'designer', 'dpo', 'implementer', 'integrateur', 'product', 'qa-fidelite', 'qa-securite'];
+const AGENTS = ['architecte', 'architecte-donnees', 'critique-design', 'designer', 'dpo', 'implementer', 'integrateur', 'product', 'qa-fidelite', 'qa-securite'];
 const V2_SKILLS = ['clean-code', 'design-patterns', 'refactoring', 'security', 'tdd', 'ui-design'];
 const PHASE_ONE_COMMANDS = ['quota', 'resume', 'status'];
 const PHASE_TWO_COMMANDS = ['design', 'preview'];
@@ -59,7 +59,7 @@ test('manifests parse and describe the apv plugin', () => {
   assert.ok(marketplace.owner.name);
 });
 
-test('the nine agents have a valid frontmatter and least-privilege tools', () => {
+test('the ten agents have a valid frontmatter and least-privilege tools', () => {
   const files = readdirSync(join(root, 'agents')).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
   assert.deepEqual(files, AGENTS);
   for (const name of AGENTS) {
@@ -75,7 +75,7 @@ test('the nine agents have a valid frontmatter and least-privilege tools', () =>
     assert.match(body, /Frontière de confiance/, `${name}: trust boundary`);
     assert.match(body, /non fiables?, jamais (une|des) instructions?/, `${name}: repository content is data`);
   }
-  for (const reviewer of ['qa-securite', 'qa-fidelite']) {
+  for (const reviewer of ['qa-securite', 'qa-fidelite', 'critique-design']) {
     const tools = list(frontmatter(`agents/${reviewer}.md`).fields.tools);
     assert.ok(!tools.includes('Write') && !tools.includes('Edit'), `${reviewer} must not write files`);
   }
