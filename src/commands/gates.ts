@@ -14,19 +14,23 @@ export const usage = `Utilisation :
 run : exécute les contrôles déclarés (.apv/config.json, sinon pipeline.v2.json) dans le dépôt :
 dépendances, ressources, variables transmises, délais et masquage des secrets respectés.
 Écrit un reçu JSON par contrôle dans .apv/receipts/<exécution>/ et affiche un tableau.
---stage task n'exécute que les contrôles de stage task (champ absent : task) ; les contrôles
-de stage full sont listés comme réservés à la suite complète, jamais comptés comme réussis.
---stage full (défaut) exécute tout.
+--stage task n'exécute que les contrôles de stage task (champ absent : task) ; un contrôle
+de stage full qui déclare affected y lance cette commande ciblée à sa place (tests concernés
+par les changements, marqués « ciblé », jamais une preuve du contrôle complet) ; les autres
+contrôles de stage full sont listés comme réservés à la suite complète, jamais comptés comme
+réussis. --stage full (défaut) exécute tout, jamais en ciblé.
 Sortie : 0 si tous les contrôles exécutés passent, 1 sinon, 2 appel incorrect.
 
 verify : vérifie dans les reçus que chaque contrôle exigé (tous avec --stage full, le défaut ;
 ceux de stage task avec --stage task) a réussi sur ce commit exact, arbre propre, avec la
-configuration actuelle ; pour chaque contrôle, seul son reçu le plus récent compte.
+configuration actuelle ; pour chaque contrôle, seul son reçu le plus récent compte ; les reçus
+ciblés ne comptent jamais.
 Sortie : 0 preuve complète, 1 sinon (ce qui manque est listé), 2 appel incorrect.`;
 
 const STATUS: Record<string, string> = { passed: 'réussi', failed: 'échec', timed_out: 'délai dépassé', cancelled: 'annulé',
   spawn_error: 'non lancé', blocked: 'bloqué', cached: 'réutilisé' };
 const RESERVED = 'réservé à la suite complète';
+const TARGETED = 'ciblé';
 const EVIDENCE: Record<EvidenceState, string> = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu' };
 
 function stageOf(value: string | boolean | undefined): GateStage | undefined {
@@ -66,6 +70,8 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
             g.receipt ? `${g.runId}/${g.gateId}.json` : '-']))];
         const other = result.gates.filter(g => g.otherConfig > 0 && g.state !== 'passed');
         if (other.length) lines.push('', `Reçus ignorés (configuration des contrôles différente) : ${other.map(g => g.gateId).join(', ')}`);
+        const targeted = result.gates.filter(g => g.targeted > 0 && g.state !== 'passed');
+        if (targeted.length) lines.push('', `Reçus ciblés ignorés (seule la suite complète prouve ces contrôles) : ${targeted.map(g => g.gateId).join(', ')}`);
         if (result.unreadable.length) lines.push('', `Reçus illisibles ignorés : ${result.unreadable.join(', ')}`);
         const missing = result.gates.filter(g => g.state !== 'passed');
         lines.push('', result.ok
@@ -83,26 +89,29 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const loaded = loadConfig(repo, values.config);
     const result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env,
       ...(values.base ? { base: values.base } : {}), ...(stage ? { stage } : {}) });
-    const rows = result.receipts.map(r => ({ gate: r.gateId, status: r.status, exitCode: r.exitCode, durationMs: Math.round(r.durationMs), receipt: r.id,
-      diagnostic: r.diagnostic }));
+    const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, status: r.status, exitCode: r.exitCode,
+      durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic }));
+    const name = (r: { gate: string; targeted: boolean }): string => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
     if (values.json) {
       json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty,
         stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
-        reserved: result.reserved, receiptsDirectory: result.directory, gates: rows });
+        reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory, gates: rows });
     } else {
       const lines = [`${result.stage === 'task' ? 'Contrôles de tâche (--stage task)' : 'Contrôles'} à ${result.candidateSha.slice(0, 12)} (configuration : ${loaded.file ? relative(result.repo, loaded.file) || loaded.file : 'aucune'}${loaded.legacy ? ', format V2' : ''})`];
       if (result.added.length) lines.push(`Dépendances ajoutées : ${result.added.join(', ')}`);
       if (result.dirty) lines.push('Attention : modifications non commitées présentes ; les reçus décrivent plus que le commit.');
       lines.push('', table(['contrôle', 'statut', 'code', 'durée'], [
-        ...rows.map(r => [r.gate, STATUS[r.status] ?? r.status, r.exitCode === null ? '-' : String(r.exitCode), `${(r.durationMs / 1000).toFixed(1)} s`]),
+        ...rows.map(r => [name(r), STATUS[r.status] ?? r.status, r.exitCode === null ? '-' : String(r.exitCode), `${(r.durationMs / 1000).toFixed(1)} s`]),
         ...result.reserved.map(id => [id, RESERVED, '-', '-'])]));
-      for (const r of rows.filter(r => r.diagnostic && r.status !== 'blocked')) lines.push('', `--- ${r.gate} (${STATUS[r.status] ?? r.status}) ---`, r.diagnostic.trimEnd());
+      for (const r of rows.filter(r => r.diagnostic && r.status !== 'blocked')) lines.push('', `--- ${name(r)} (${STATUS[r.status] ?? r.status}) ---`, r.diagnostic.trimEnd());
       const verdict = !result.ok ? 'Des contrôles échouent.'
         : result.stage === 'task' && !rows.length ? 'Aucun contrôle de tâche à exécuter.'
         : result.stage === 'task' ? 'Tous les contrôles de tâche passent.' : 'Tous les contrôles passent.';
       const reserved = result.reserved.length
         ? ` ${result.reserved.length} contrôle(s) ${RESERVED}, non exécuté(s) : la suite complète (apv gates run --stage full) les vérifie.` : '';
-      lines.push('', `${verdict}${reserved} Reçus : ${relative(io.cwd, result.directory) || result.directory}`);
+      const targeted = result.targeted.length
+        ? ` ${result.targeted.length} contrôle(s) ${TARGETED}(s) (${result.targeted.join(', ')}) : seuls les tests concernés par les changements ont tourné ; la suite complète (apv gates run --stage full) les exécute en entier.` : '';
+      lines.push('', `${verdict}${targeted}${reserved} Reçus : ${relative(io.cwd, result.directory) || result.directory}`);
       io.stdout(`${lines.join('\n')}\n`);
     }
     return result.ok ? EXIT.ok : EXIT.failed;

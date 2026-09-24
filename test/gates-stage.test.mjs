@@ -69,8 +69,8 @@ test('--stage task with --only a full check runs its task dependencies only; not
   const none = await apv(f.repo, ['gates', 'run', '--stage', 'task']);
   assert.equal(none.code, 0); assert.match(none.stdout, /Aucun contrôle de tâche à exécuter\./);
   const gates = loadConfig(f.repo).config.gates;
-  assert.deepEqual(stageGates(gates, 'task'), { run: [], reserved: gates });
-  assert.deepEqual(stageGates(gates, 'full'), { run: gates, reserved: [] });
+  assert.deepEqual(stageGates(gates, 'task'), { run: [], targeted: [], reserved: gates });
+  assert.deepEqual(stageGates(gates, 'full'), { run: gates, targeted: [], reserved: [] });
   assert.equal(gateStage({}), 'task'); assert.equal(gateStage({ stage: 'full' }), 'full');
 });
 
