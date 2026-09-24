@@ -9,7 +9,7 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
 export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
@@ -76,6 +76,14 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
     } | undefined;
     readonly design: {
         readonly dir: string | undefined;
+    } | undefined;
+    readonly structure: {
+        readonly roots: string[] | undefined;
+        readonly maxFlatFiles: number | undefined;
+        readonly roles: Record<string, string | null> | undefined;
+        readonly domains: string[] | undefined;
+        readonly ignore: string[] | undefined;
+        readonly severity: "warning" | "error" | Record<string, "warning" | "error"> | undefined;
     } | undefined;
 }>;
 export type ApvConfig = Infer<typeof apvConfigSchema>;

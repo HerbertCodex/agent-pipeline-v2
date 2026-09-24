@@ -44,7 +44,7 @@ Dans ce document, `apv` désigne `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` (ou 
 ## 3. Plan (étape `plan`)
 1. `apv run set <id> plan running`.
 2. Agent `apv:architecte` : spec, vagues calculées par l'outil (`apv run status <id> --json`), modèle de données, maquettes, contrôles, nombre d'agents simultanés que le quota permet. Il écrit `.apv/state/plan-<id>.md` et une note par vague parallèle, `.apv/state/notes-<id>-vague-<n>.md`.
-3. Relis le plan (références `planification.md` de la compétence `chef-de-projet`) : fondations complètes, un propriétaire par fichier, tâches autonomes, ressources sous bail, une seule tâche de migrations par vague.
+3. Relis le plan (références `planification.md` de la compétence `chef-de-projet`) : fondations complètes, un propriétaire par fichier, fichiers créés placés selon les conventions (`apv structure check --path` sur les dossiers touchés, résultat dans le plan), tâches autonomes, ressources sous bail, une seule tâche de migrations par vague.
 4. Le plan suit les vagues de l'outil. S'il conclut que le graphe de la spec doit changer (une fondation manquante, une dépendance oubliée) **et qu'aucune tâche n'a démarré** : product corrige la spec, `apv spec validate`, puis tu recrées l'état (retire `.apv/state/run-<id>.json`, seule exception à la règle de l'état et seulement tant qu'aucune tâche n'a démarré, puis `apv run start` de nouveau) et tu le notes au journal. Une fois une tâche démarrée, le graphe ne change plus : l'écart passe en note de vague.
 5. Commite plan et notes sur `apv/<id>` (les implementers les lisent dans leur worktree), puis `apv run set <id> plan done --commit <sha>`.
 

@@ -13,7 +13,7 @@ Installation locale : `npm run build`, puis `node dist/cli.js <commande>` ou `np
 - Fichiers lus dans le projet :
   - configuration : `.apv/config.json`, sinon `pipeline.v2.json` (projet V2, tant que `apv onboard` n'a pas créé `.apv/config.json`) ;
   - registre des décisions : `.apv/DECISIONS.json`, sinon `.agent-pipeline/DECISIONS.json` (projet V2).
-- De la configuration, seules les sections `name` (nom du projet, écrit par `apv init`), `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview` et `design` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
+- De la configuration, seules les sections `name` (nom du projet, écrit par `apv init`), `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design` et `structure` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
 
 ## `apv init`
 
@@ -295,6 +295,30 @@ Configuration (facultative) :
 ```
 
 Sortie : `0` succès (maquettes intactes pour `check`), `1` refus ou dérive, `2` appel incorrect (citation ou nom manquant). En JSON, `register` rend `decisionId`, `supersedes`, `target`, `sha256`, `ledgerFile`, `toCommit`, `unchanged` ; `list` rend `mockups` ; `check` rend `ok`, `checked`, `broken`, `legacy`.
+
+## `apv structure check`
+
+```
+apv structure check [--path <dossier>]... [--repo <chemin>] [--json]
+```
+
+Analyse déterministe de l'arborescence : les fichiers suivis par Git (`git ls-files`), jamais les fichiers ignorés ni non suivis, et seulement les fichiers de code (TypeScript, JavaScript, Svelte, Vue, Python, Go, Rust...). `node_modules/`, `dist/`, `build/`, `coverage/`, `vendor/` et les dossiers qui commencent par un point (`.github`, `.claude`...) sont toujours laissés de côté. Chaque dossier est examiné pour ses fichiers directs ; un fichier et ses compagnons (`x.ts`, `x.svelte.ts`, `x.d.ts`) comptent pour un, ses tests (`x.test.ts`, `x.spec.ts`, `x.fixture.ts`, dossiers `tests/`, `__tests__/`, `e2e/`) sont comptés à part et le suivent quand il est déplacé.
+
+| Constat | Quand | Proposition |
+|---|---|---|
+| `flat-folder` | plus de `maxFlatFiles` fichiers de code directement dans le dossier (12 par défaut) | ranger par domaine selon le plan, ou découpage à décider avec l'opérateur si aucun préfixe ni rôle n'aide |
+| `repeated-prefix` | plusieurs fichiers commencent par le même mot de domaine, singulier et pluriel rapprochés (`application-actions.ts`, `applications-repository.ts`) : deux fichiers qui ont un rôle, trois fichiers, ou un mot qui est déjà le nom d'un dossier du projet ou un domaine déclaré | `<domaine>/` avec des noms sans préfixe (`applications/actions.ts`) ; des composants (`QuickAddDialog.svelte`) gardent leur nom et ne sont regroupés, par trois au moins, que dans un dossier trop plein |
+| `mixed-roles` | au moins trois fichiers à rôle, deux rôles et deux domaines côte à côte (`*-actions`, `*-repository`, `*-client`, utilitaires HTTP ou d'authentification) | un dossier par domaine (`settings/repository.ts`), les utilitaires transverses regroupés par rôle (`http/`, `auth/`) sans changer leur nom |
+| `stray-file` | un fichier dont le nom commence par celui d'un dossier voisin (`email-templates.ts` à côté de `email/`) | le ranger dans ce dossier (`email/templates.ts`) |
+
+Les rôles se reconnaissent par suffixe (`-actions`, `-action`, `-repository`, `-repo`, `-client`, `-service`, `-controller`, `-handler`, `-middleware`, `-utils`, `-helpers`) ou par un mot du nom (`http`, `headers`, `cookie`, `cors`, `csrf`, `request`, `response`, `body`, `ip` pour le rôle `http` ; `auth`, `oauth`, `login`, `logout`, `sign-in`, `sign-out`, `sign-up`, `session`, `password` pour `auth`). Dans un dossier à rôles mêlés, des noms composés qui s'enchaînent sont un même sujet : `account-deletion.ts`, `deletion-purge.ts` et `purge-schedule.ts` vont ensemble dans `account/`. Un déplacement n'écrase jamais un fichier suivi : le nom est gardé, sinon le fichier reste en place. Les fichiers qu'aucune règle ne place sont listés « restent en place, à décider avec l'opérateur ».
+
+Le plan (`ancien -> nouveau`) n'est **jamais appliqué** par l'outil : il se valide avec l'opérateur, puis se fait par `git mv`, imports, configuration des outils et documentation mis à jour, sans changement de comportement.
+
+- `--path` limite les constats à un dossier et à ses sous-dossiers (chemin relatif à la racine du dépôt, répétable) : l'architecte l'utilise sur les dossiers que touche son plan.
+- Configuration facultative, section `structure` de `.apv/config.json` : [CONFIGURATION.md](CONFIGURATION.md#arborescence--structure).
+
+Sortie : `0` aucun constat de gravité `error` (par défaut tout est `warning` : l'analyse ne fait pas échouer un projet qui n'a rien déclaré), `1` au moins un constat `error` ou configuration invalide, `2` appel incorrect (sous-commande, option, `--path` hors du dépôt). En JSON : `ok`, `analyzedFiles`, `maxFlatFiles`, `folders` (dossier, fichiers de code, tests, compagnons, fichiers non placés), `findings` (`code`, `severity`, `folder`, `files`, `proposal`, `moves`), `plan` (tous les déplacements, tests et compagnons compris), `repo`, `paths`.
 
 ## `apv quota`
 

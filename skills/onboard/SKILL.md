@@ -1,9 +1,9 @@
 ---
 name: onboard
-description: "Projet existant, V2 ou non : montre le plan de apv onboard --dry-run à l'opérateur, crée .apv/ avec apv onboard (config reprise de pipeline.v2.json ou contrôles détectés, registre V2 repris tel quel, specs V2 valides), puis complète avec lui contrôles, consigne commune et aperçu, vérifie le registre et les contrôles et propose un commit. À utiliser une fois par projet déjà commencé."
+description: "Projet existant, V2 ou non : montre le plan de apv onboard --dry-run à l'opérateur, crée .apv/ avec apv onboard (config reprise de pipeline.v2.json ou contrôles détectés, registre V2 repris tel quel, specs V2 valides), puis complète avec lui contrôles, consigne commune et aperçu, lui présente l'analyse de l'arborescence (apv structure check) et son plan de rangement, vérifie le registre et les contrôles et propose un commit. À utiliser une fois par projet déjà commencé."
 argument-hint: "[dossier de specs V2 exportées]"
 disable-model-invocation: true
-allowed-tools: Read Glob Grep Write Edit Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js onboard*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js status*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js ledger validate*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js gates run*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js spec validate*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js design list*) Bash(apv onboard*) Bash(apv status*) Bash(apv ledger validate*) Bash(apv gates run*) Bash(apv spec validate*) Bash(apv design list*) Bash(git status*) Bash(git log*) Bash(git diff*) Bash(git rev-parse*)
+allowed-tools: Read Glob Grep Write Edit Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js onboard*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js status*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js ledger validate*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js gates run*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js spec validate*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js design list*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js structure check*) Bash(apv onboard*) Bash(apv status*) Bash(apv ledger validate*) Bash(apv gates run*) Bash(apv spec validate*) Bash(apv design list*) Bash(apv structure check*) Bash(git status*) Bash(git log*) Bash(git diff*) Bash(git rev-parse*)
 ---
 
 # /apv:onboard
@@ -32,15 +32,20 @@ Sauf objection de l'opérateur, lance `apv onboard` (mêmes options, sans `--dry
 - **Maquettes et base** : `apv design list` montre les maquettes validées du registre ; une décision sans empreinte se rattache par `/apv:design` avec la citation d'origine recopiée telle quelle (`${CLAUDE_PLUGIN_ROOT}/docs/DESIGN.md`, section 7). Ajoute `apv design check` aux contrôles si le projet a des maquettes, et `apv db check` s'il a une base (section `db`, `${CLAUDE_PLUGIN_ROOT}/docs/DB-CHECK.md`).
 - `apv status` : configuration lue, aucune section ignorée, aucune erreur.
 
-## 4. Consigne commune (`.apv/brief.md`)
-Remplace chaque passage entre chevrons avec ce que le dépôt dit déjà : `CLAUDE.md`, `AGENTS.md`, consigne des implementers du projet s'il en avait une, règles du framework, langue des textes, liste exacte des contrôles (celle de `gates`), services locaux et ports, ressources sous bail, ligne de co-auteur. Demande à l'opérateur seulement ce qui lui revient ; le reste, tu le décides et tu le dis.
+## 4. Arborescence
+1. `apv structure check` (lecture seule, fichiers suivis par Git). Présente à l'opérateur chaque constat (`flat-folder`, `repeated-prefix`, `mixed-roles`, `stray-file`) avec sa proposition, puis le plan de rangement dossier par dossier (`ancien -> nouveau`) et les fichiers qui « restent en place ». Dis-lui ce que le plan ne décide pas : noms de dossiers à confirmer, fichiers non placés.
+2. Rien n'est déplacé pendant la reprise. Si l'opérateur valide un rangement, avec ses mots exacts, c'est une spec à part (`/apv:spec`), placée après les specs en cours qui touchent ces fichiers : `git mv` (historique conservé), imports, configuration des outils et documentation mis à jour, aucun changement de comportement, tests déplacés à côté de leur module, chemins cités par les tests de sécurité mis à jour à l'identique, jamais élargis. Sa décision va au registre avec la citation.
+3. Constats sans objet pour ce projet (un dossier volontairement plat, un rôle ou un domaine propre au projet) : section `structure` de `.apv/config.json` (`maxFlatFiles`, `roles`, `domains`, `ignore` ; `${CLAUDE_PLUGIN_ROOT}/docs/CONFIGURATION.md`, section « Arborescence »), jamais un constat caché sans l'accord de l'opérateur. Une fois l'arborescence rangée, propose le contrôle `apv structure check` (stage `task`, gravité `error` sur les constats à ne plus laisser revenir).
 
-## 5. Vérifier
+## 5. Consigne commune (`.apv/brief.md`)
+Remplace chaque passage entre chevrons avec ce que le dépôt dit déjà : `CLAUDE.md`, `AGENTS.md`, consigne des implementers du projet s'il en avait une, règles du framework, langue des textes, liste exacte des contrôles (celle de `gates`), services locaux et ports, ressources sous bail, ligne de co-auteur, conventions de placement des fichiers retenues à l'étape 4 (par domaine, noms courts, tests à côté du module). Demande à l'opérateur seulement ce qui lui revient ; le reste, tu le décides et tu le dis.
+
+## 6. Vérifier
 1. `apv ledger validate` : le registre de `.apv/` est valide, avec le nombre de décisions et l'empreinte annoncés à l'étape 1. Aucune décision réécrite ni ajoutée sans les mots exacts de l'opérateur.
 2. `apv gates run` (avec `--base <branche de base>` si un contrôle l'utilise). Un contrôle rouge : montre la sortie à l'opérateur ; on ne modifie jamais un contrôle pour qu'il passe. Un contrôle qui dépend d'un service (Docker, base locale) échoue quand le service manque : dis-le, ne le retire pas.
 3. Specs copiées : `apv spec validate .apv/specs/<id>.json --draft`. Une spec déjà livrée en V2 peut rester comme trace ou être retirée avec l'accord de l'opérateur.
 
-## 6. Proposer le commit
+## 7. Proposer le commit
 1. `git status` puis `git diff` sur `.apv/` : montre la liste des fichiers et **propose** le commit `chore(apv): reprise du projet`. Tu commites (`git add .apv` puis `git commit`) seulement sur son accord. Aucun `.env` ni secret dans le commit.
 2. Les fichiers V2 (`pipeline.v2.json`, `.agent-pipeline/`) ne sont ni modifiés ni supprimés ; leur retrait éventuel est une décision de l'opérateur, dans un commit à part.
 3. La suite : `/apv:status`, puis `/apv:spec` pour la prochaine spec et `/apv:run`.

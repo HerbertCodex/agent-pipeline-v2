@@ -51,13 +51,13 @@ Chaque agent est un fichier de `agents/`, appelé `apv:<nom>` par l'outil Agent.
 | Agent | Rôle | Outils | Isolement |
 |---|---|---|---|
 | `product` | Rédige la spec : tâches, chemins autorisés, critères, plan de sécurité ; `apv spec validate` | lecture, Bash, écriture limitée à `.apv/specs/` | aucun |
-| `architecte` | Graphe de tâches, vague « fondations », notes de vague, ressources et verrous | lecture, Bash, écriture limitée à `.apv/state/` | aucun |
+| `architecte` | Graphe de tâches, vague « fondations », notes de vague, placement des fichiers créés (`apv structure check --path`), ressources et verrous | lecture, Bash, écriture limitée à `.apv/state/` | aucun |
 | `architecte-donnees` | Modèle de données avant le code, puis revue des migrations et requêtes avec `apv db check` | lecture, Bash, écriture de `.apv/data-model.md` (migrations sur demande) | aucun |
 | `designer` | Maquette itérée avec l'opérateur jusqu'à validation, versée comme référence par `apv design register` | lecture, Bash, écriture dans les maquettes | aucun |
 | `implementer` | Code une tâche, tous les contrôles au vert, commits | lecture, écriture, Bash, correcteur Svelte (MCP) | worktree |
 | `integrateur` | Fusionne une vague, unifie les doublons, garde tous les tests, relance tout | lecture, écriture, Bash, correcteur Svelte (MCP) | worktree |
 | `qa-securite` | Attaques à deux utilisateurs, API directe, en-têtes, secrets, ZAP | lecture, Bash (pas d'écriture de fichiers) | copie isolée |
-| `qa-fidelite` | Captures 390 et 1280, clair et sombre, comparaison des textes, accessibilité | lecture, Bash (pas d'écriture de fichiers) | copie isolée |
+| `qa-fidelite` | Captures 390 et 1280, clair et sombre, comparaison des textes, accessibilité, fichiers mal placés | lecture, Bash (pas d'écriture de fichiers) | copie isolée |
 | `dpo` | Registre RGPD, sous-traitants vérifiés sur les DPA officiels, pages légales contre le code | lecture, Bash, web, écriture de `.apv/rgpd/` (pages légales sur demande) | aucun |
 
 Un agent de plugin ne peut pas déclarer `hooks`, `mcpServers` ni `permissionMode`. Pour les ajuster dans un projet, copiez le fichier dans `.claude/agents/` du projet et modifiez la copie.
@@ -76,7 +76,7 @@ Un agent de plugin ne peut pas déclarer `hooks`, `mcpServers` ni `permissionMod
 | `/apv:run` | disponible : exécution d'une spec pilotée par l'état `apv run` (données, plan, fondations, vagues parallèles, `apv scope check`, intégration, revues, corrections, PR brouillon, aperçu), reprise par `apv run next` ; jamais de fusion ni de déploiement ; réservée à l'opérateur ([RUN.md](RUN.md)) |
 | `/apv:review` | disponible : revues sécurité, fidélité, données et RGPD en parallèle, en lecture seule, sur copies détachées du même commit, constats consolidés et dédoublonnés |
 | `/apv:stack` | disponible : `apv stack plan` montré en entier, puis `APV_ALLOW_MERGE=1 apv stack merge` qui re-cible, revérifie et s'arrête à la première anomalie ; uniquement sur ordre explicite de l'opérateur dans son message courant ([RUN.md](RUN.md), section 7) |
-| `/apv:onboard` | disponible : `apv onboard --dry-run` montré à l'opérateur, puis `apv onboard` crée `.apv/` sans rien écraser (configuration reprise de `pipeline.v2.json`, champs du contrôleur ignorés et listés, registre V2 repris tel quel, specs V2 valides ; sans V2 : contrôles détectés, non obligatoires), puis contrôles, consigne commune et aperçu complétés avec lui, `apv ledger validate`, `apv gates run`, commit proposé ; réservée à l'opérateur ([CLI.md](CLI.md)) |
+| `/apv:onboard` | disponible : `apv onboard --dry-run` montré à l'opérateur, puis `apv onboard` crée `.apv/` sans rien écraser (configuration reprise de `pipeline.v2.json`, champs du contrôleur ignorés et listés, registre V2 repris tel quel, specs V2 valides ; sans V2 : contrôles détectés, non obligatoires), puis contrôles, consigne commune et aperçu complétés avec lui, analyse de l'arborescence (`apv structure check`) et plan de rangement présentés, jamais appliqués, `apv ledger validate`, `apv gates run`, commit proposé ; réservée à l'opérateur ([CLI.md](CLI.md)) |
 
 Les commandes « réservées à l'opérateur » ont des effets (fichiers du projet, branches, PR, fusion) : Claude ne les charge pas de lui-même, il faut les taper. Quand l'opérateur délègue plusieurs specs, le chef de projet suit la procédure de `/apv:run` pour chacune (compétence `chef-de-projet`, section 4).
 

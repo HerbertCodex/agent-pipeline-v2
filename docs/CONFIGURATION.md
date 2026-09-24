@@ -1,6 +1,6 @@
 # Configuration et politique
 
-> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `gates`, `risk`, `validationRules`, `environment.passEnv` et `skills` ([outil apv](CLI.md)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
+> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design` et `structure` ([outil apv](CLI.md) ; la section `structure` est décrite [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
 
 La configuration est un JSON déclaratif lu avant l'agent et conservé avec la tentative. La tâche ne peut pas fournir une commande à la place d'un contrôle, changer un verdict ni s'accorder une exemption. Les champs inconnus sont refusés.
 
@@ -240,3 +240,40 @@ Les IDs doivent désigner des gates indépendantes (`dependsOn: []`), sans place
 Globs des fichiers que seul l'outillage du projet régénère. Par défaut, les lockfiles des gestionnaires de paquets courants. Remplacez la liste pour l'adapter à votre stack (par exemple `**/*.generated.ts`).
 
 Si l'Implementer configuré n'a pas de shell (adaptateur Claude natif), une spec dont une tâche nomme explicitement un de ces fichiers dans `allowedPaths` est refusée avec `SPEC_CAPABILITY`. L'étape d'outillage doit alors devenir un prérequis opérateur. Les wrappers `command`, aux capacités inconnues, ne sont pas présumés sans shell.
+
+## Arborescence : `structure`
+
+Section APV3, facultative, lue par `apv structure check` ([CLI.md](CLI.md#apv-structure-check)) et validée par le chargeur commun (`apv status` signale une valeur invalide, jamais la section comme ignorée). Absente, l'analyse tourne avec ses valeurs par défaut et ne signale que des avertissements.
+
+```json
+{
+  "structure": {
+    "roots": ["src"],
+    "maxFlatFiles": 12,
+    "roles": { "-gateway": "client", "-store": "store", "session": null },
+    "domains": ["offer-prefill"],
+    "ignore": ["src/lib/generated/**"],
+    "severity": { "flat-folder": "error", "mixed-roles": "error" }
+  }
+}
+```
+
+- `roots` : dossiers analysés, relatifs à la racine du dépôt (par défaut tout le dépôt, fichiers de code seulement).
+- `maxFlatFiles` : fichiers de code qu'un dossier peut contenir directement, tests et fichiers compagnons à part (12 par défaut, de 2 à 1000).
+- `roles` : rôles ajoutés à ceux par défaut. Une clé qui commence par `-` est un suffixe de nom (`-gateway` : `payment-gateway.ts` a le rôle `client`, domaine `payment`) ; une autre clé est un mot du nom, pour un utilitaire transverse sans domaine (`session` : rôle `auth`). `null` retire un rôle par défaut. Clés et rôles en kebab-case.
+- `domains` : noms de domaines connus, en kebab-case. Un domaine de plusieurs mots (`offer-prefill`) regroupe les fichiers qui commencent par lui ; un domaine déclaré suffit à regrouper deux fichiers. Les noms des dossiers du projet sont déjà des domaines connus.
+- `ignore` : globs (`*`, `**`, `?`, `{a,b}`) des chemins laissés de côté, en plus de `node_modules/`, `dist/`, `build/`, `coverage/`, `vendor/` et des dossiers qui commencent par un point.
+- `severity` : `warning` (défaut) ou `error`, pour tous les constats ou par code (`flat-folder`, `repeated-prefix`, `mixed-roles`, `stray-file`). `apv structure check` sort en `1` dès qu'un constat a la gravité `error`.
+
+**En faire un contrôle.** Une fois l'arborescence rangée avec l'opérateur (plan validé, `git mv`, imports mis à jour), passez en `error` les constats à ne plus laisser revenir et déclarez la commande comme contrôle de tâche, en lecture seule :
+
+```json
+{
+  "gates": [
+    { "id": "structure", "command": ["apv", "structure", "check"], "covers": ["architecture"], "stage": "task", "readOnly": true }
+  ],
+  "structure": { "severity": { "flat-folder": "error", "mixed-roles": "error", "stray-file": "error" } }
+}
+```
+
+`apv` doit être sur le `PATH` de la machine (plugin activé ou `npm link`), sinon utilisez `["node", "<chemin du plugin>/dist/cli.js", "structure", "check"]`. Sans gravité `error`, le contrôle réussit toujours : il ne fait que rapporter. Un projet pas encore rangé garde `warning` (ou relève `maxFlatFiles`) plutôt qu'un contrôle rouge dès le départ ; le rangement est une spec à part, décidée par l'opérateur.

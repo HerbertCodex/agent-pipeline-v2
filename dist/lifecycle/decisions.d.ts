@@ -57,7 +57,7 @@ export declare const semanticReviewSchema: import("../domain/schema.js").Schema<
         readonly description: string;
     }[];
     readonly findings: {
-        readonly severity: "blocker" | "warning";
+        readonly severity: "warning" | "blocker";
         readonly description: string;
     }[];
 }>;

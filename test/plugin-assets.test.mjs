@@ -308,3 +308,23 @@ test('texts written for APV3 contain no em or en dash', () => {
   ];
   for (const file of files) assert.ok(!/[–—]/.test(read(file)), `${file} contains an em or en dash`);
 });
+
+test('the tree analysis is part of the cycle: onboarding, plan, review and documentation', () => {
+  const tool = 'Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js';
+  const onboard = frontmatter('skills/onboard/SKILL.md');
+  for (const t of [`${tool} structure check*)`, 'Bash(apv structure check*)']) assert.ok(onboard.fields['allowed-tools'].includes(t), t);
+  assert.match(onboard.body, /## 4\. Arborescence\n1\. `apv structure check`/);
+  assert.match(onboard.body, /Rien n'est déplacé pendant la reprise/);
+  assert.match(onboard.body, /spec à part/);
+  const architect = frontmatter('agents/architecte.md').body;
+  assert.match(architect, /\*\*Placement des fichiers\.\*\*/);
+  assert.match(architect, /apv structure check --path <dossier>/);
+  assert.match(read('skills/chef-de-projet/references/planification.md'), /\*\*Placement\*\*[^\n]*apv structure check --path <dossier>/);
+  assert.match(read('skills/run/SKILL.md'), /apv structure check --path/);
+  assert.match(frontmatter('agents/qa-fidelite.md').body, /\*\*Placement des fichiers\*\*[^\n]*apv structure check --path <dossier> --repo <copie>[^\n]*mal placé/);
+  const config = read('docs/CONFIGURATION.md');
+  assert.match(config, /## Arborescence : `structure`/);
+  assert.match(config, /"command": \["apv", "structure", "check"\][^\n]*"stage": "task"/);
+  assert.match(read('docs/CLI.md'), /## `apv structure check`/);
+  assert.match(read('CHANGELOG.md').split('\n## ')[1], /apv structure check/);
+});
