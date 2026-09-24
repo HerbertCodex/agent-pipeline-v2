@@ -56,7 +56,8 @@ Un agent `isolation: worktree` part de la branche par défaut du dépôt, pas de
 |---|---|---|---|
 | `product` | Rédige la spec depuis la demande et le registre : tâches, chemins autorisés, critères d'acceptation, plan de sécurité | aucun | non |
 | `architecte` | Découpe en graphe de tâches, identifie les modules partagés à écrire d'abord, alloue les ressources | aucun | non |
-| `designer` | Produit et itère la maquette en artefact avec l'opérateur ; ne code pas l'application | aucun | non |
+| `designer` | Propose 2 ou 3 directions avant les détails (nouveau produit ou écran majeur), produit et itère la maquette en artefact avec l'opérateur ; ne code pas l'application | aucun | non |
+| `critique-design` | Critique en lecture seule de chaque version de maquette avant présentation : grille notée (empreintes génériques, signature, états, animations, test des 5 secondes), corrections priorisées, deux tours au plus | aucun | non |
 | `implementer` | Code UNE tâche dans son worktree, lance tous les contrôles, commite | worktree | oui |
 | `integrateur` | Fusionne des branches parallèles, unifie les doublons, relance tous les contrôles | worktree | oui |
 | `architecte-donnees` | Modélise la base AVANT le code (entités, relations, contraintes, index, RLS), puis revoit chaque migration et chaque requête ajoutée | aucun | migrations et doc du modèle, sur demande |

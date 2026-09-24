@@ -2,12 +2,13 @@
 
 La maquette se fait **avec l'opérateur**, jusqu'à ce qu'il la valide ; ensuite elle devient la **référence absolue** du projet (spécification, principe 3). C'est la méthode qui a fonctionné sur le projet pilote « Toujours rien » : une page publiée en artefact, des retours, des corrections republiées au même lien, puis « je valide » et la maquette versée dans `docs/design/`. APV2 refaisait au contraire une maquette à chaque spec (incident 22 : 30 à 60 minutes perdues par spec, et un risque d'écart avec la maquette validée).
 
-Trois pièces :
+Quatre pièces :
 
 | Pièce | Rôle |
 |---|---|
 | `/apv:design` | la boucle suivie par le chef de projet (compétence `skills/design/SKILL.md`) |
-| agent `apv:designer` | écrit les versions de la maquette ; ne code pas l'application, ne valide rien |
+| agent `apv:designer` | propose les directions, écrit les versions de la maquette et remplit la grille de critique ; ne code pas l'application, ne valide rien |
+| agent `apv:critique-design` | critique notée de chaque version avant présentation (grille `skills/design-artefact/references/grille-critique.md`) ; lecture seule |
 | `apv design register \| list \| check` | verse la maquette validée, la retrouve, détecte une dérive ([CLI.md](CLI.md#apv-design)) |
 
 ## 1. Quand ouvrir une boucle
@@ -21,13 +22,17 @@ apv design check                  # les références sont-elles intactes ?
 
 Un écran couvert se code depuis la référence, sans nouvelle maquette.
 
+Pour seulement juger une maquette existante (brouillon, maquette validée), sans boucle ni modification : `/apv:design critique <chemin>`, qui lance `apv:critique-design` et rend la décision du barème, la synthèse notée et les corrections priorisées.
+
 ## 2. La boucle
 
-1. **Point de départ** : la marque (logo, palette, typographies, ton), les jetons et composants des maquettes validées, le registre des décisions, la spec de l'écran.
-2. **Page** : le designer écrit `docs/design/brouillons/<nom>.html`, toujours au même chemin, et garde une copie par version (`<nom>-v<n>.html`). HTML autonome, tous les états, thèmes clair et sombre, 390 et 1280 px, textes réels et définitifs.
-3. **Publication** : le chef de projet charge la compétence `artifact-design` (exigée par l'outil Artifact), publie la page avec l'outil `Artifact` et note l'adresse dans `.apv/state/design-<nom>.md`.
-4. **Retours** : un changement à la fois, captures vérifiées, puis republication **à la même adresse**. L'opérateur garde un seul lien du début à la fin.
-5. **Validation** : uniquement par les mots explicites de l'opérateur (« je valide », « c'est bon, on garde »). Le chef de projet ne déclare jamais une maquette validée ; « je valide sauf … » relance la boucle sur les réserves.
+1. **Point de départ** : la marque (logo, palette, typographies, ton), les jetons et composants des maquettes validées, le registre des décisions, la spec de l'écran et la personne cible (une phrase : qui, situation, ce qu'elle sait, ce qu'elle veut).
+2. **Direction avant détails** (nouveau produit, nouvel écran majeur, nouvelle direction visuelle) : 2 ou 3 directions distinctes sur `docs/design/brouillons/<nom>-directions.html`, chacune avec un nom, une phrase d'intention, une planche de jetons et un écran clé ; l'opérateur choisit avant tout détail. Pour l'évolution d'un écran existant, la continuité prime : pas de nouvelle direction.
+3. **Page** : le designer écrit `docs/design/brouillons/<nom>.html`, toujours au même chemin, et garde une copie par version (`<nom>-v<n>.html`). HTML autonome, tous les états, thèmes clair et sombre, 390 et 1280 px, textes réels et définitifs, animations réelles. Son rapport contient la grille de critique remplie et la fiche d'animation.
+4. **Critique** : `apv:critique-design` prend les captures, applique la grille (empreintes génériques, signature, typographie, couleur, rythme, états, animations, test des 5 secondes, textes, accessibilité) et rend un rapport noté. Un critère `bloquant` ou 3 empreintes génériques ou plus : retour au designer. Deux tours de critique au plus, puis la version est montrée avec les points ouverts.
+5. **Publication** : le chef de projet charge la compétence `artifact-design` (exigée par l'outil Artifact), publie la page avec l'outil `Artifact` et note l'adresse dans `.apv/state/design-<nom>.md` ; il montre la page avec le rapport du critique joint.
+6. **Retours** : un changement à la fois, captures vérifiées, puis republication **à la même adresse**. L'opérateur garde un seul lien du début à la fin.
+7. **Validation** : uniquement par les mots explicites de l'opérateur (« je valide », « c'est bon, on garde »). Le chef de projet ne déclare jamais une maquette validée ; « je valide sauf … » relance la boucle sur les réserves.
 
 ## 3. Verser la maquette validée
 
@@ -57,7 +62,7 @@ La version versée est exactement celle que l'opérateur a vue en dernier : aucu
 ## 4. Après le versement
 
 - **Implementers** : reproduisent la référence (structure, espacements, couleurs, typographies, états, thèmes, largeurs) et en reprennent les textes mot pour mot.
-- **Revue de fidélité** (`apv:qa-fidelite`) : trouve la référence d'un écran par `apv design list --screen <écran>`, puis compare captures (390 et 1280 px, clair et sombre) et textes (comparaison programmatique).
+- **Revue de fidélité** (`apv:qa-fidelite`) : trouve la référence d'un écran par `apv design list --screen <écran>`, puis compare captures (390 et 1280 px, clair et sombre) et textes (comparaison programmatique), et applique sur l'application réelle les sections D (états), E (animations, mouvement réduit) et F (test des 5 secondes) de la grille de critique.
 - **Contrôle** : `apv design check` sort en `1` si un fichier validé a été modifié ou supprimé sans nouvel enregistrement. Le chef de projet le lance avant chaque PR ; un projet dont la machine a `apv` sur le PATH peut aussi le déclarer comme contrôle :
   ```json
   { "gates": [{ "id": "design", "command": ["apv", "design", "check"], "readOnly": true }] }
