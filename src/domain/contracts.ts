@@ -5,6 +5,12 @@ export const VERSION = '3.0.0-alpha.3';
 export const lanes = ['fast', 'standard', 'high'] as const;
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'] as const;
 export type Lane = typeof lanes[number];
+/**
+ * When a check runs: `task` after every task (fast feedback), `full` only in the complete suite that accepts a
+ * wave or a delivery. Absent means `task`: a configuration without stages keeps running every check everywhere.
+ */
+export const gateStages = ['task', 'full'] as const;
+export type GateStage = typeof gateStages[number];
 const id = s.string(1, 80, /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
 const paths = s.array(s.string(1, 500), 0, 500);
 const argv = s.array(s.string(1, 16000), 1, 200);
@@ -33,7 +39,11 @@ export const gateSchema = s.object({
   mandatory: s.default(s.boolean(), false),
   // Explicit opt-in. A zero TTL NEVER participates in cross-validation caching.
   cacheTtlMs: s.default(s.number(0, 86400000), 0),
+  // Optional, never defaulted: a configuration without stages parses and hashes exactly as before.
+  stage: s.optional(s.enum(gateStages)),
 });
+/** Stage of a check; absent means `task`. */
+export const gateStage = (gate: { stage?: GateStage | undefined }): GateStage => gate.stage ?? 'task';
 /** Variables a command receives by default; every other variable must be named in `passEnv`. */
 export const DEFAULT_PASS_ENV = ['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'TMP', 'LANG'] as const;
 // Additional project-specific obligations; defaults inferred from the diff cannot be removed here.
@@ -174,6 +184,10 @@ export const receiptSchema = s.object({
   exitCode: s.nullable(s.number(0,255)),
   stdoutHash: s.string(0,64,/^(?:[a-f0-9]{64})?$/),stderrHash: s.string(0,64,/^(?:[a-f0-9]{64})?$/),
   diagnostic: s.string(0,16000),reusedFrom: s.nullable(id),
+  // Written by `apv gates run`: the stage it was asked for, and whether the working tree had uncommitted
+  // changes (the receipt then describes more than `candidateSha`). Absent on older receipts.
+  stage: s.optional(s.enum(gateStages)),
+  dirty: s.optional(s.boolean()),
 });
 export type GateReceipt = Infer<typeof receiptSchema>;
 export function validateReceipt(value: unknown): GateReceipt {

@@ -196,7 +196,8 @@ export function decisionLedgerMarkdown(ledger: DecisionLedger): string {
     }
     lines.push('',d.rationale,'');
   }
-  return lines.join('\n')+'\n';
+  // One final newline: a blank last line fails `git diff --check` in the projects that version this file.
+  return lines.join('\n').replace(/\n+$/, '')+'\n';
 }
 
 /** V3 location of the ledger, versioned with the project. */

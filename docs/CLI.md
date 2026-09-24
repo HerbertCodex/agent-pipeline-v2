@@ -11,7 +11,7 @@ Installation locale : `npm run build`, puis `node dist/cli.js <commande>` ou `np
 - `--repo <chemin>` désigne le projet (par défaut : le dossier courant).
 - Codes de sortie : `0` succès, `1` échec du contrôle (spec invalide, contrôle rouge, fichier hors périmètre...), `2` appel incorrect ou commande indisponible.
 - Fichiers lus dans le projet :
-  - configuration : `.apv/config.json`, sinon `pipeline.v2.json` (projet V2) ;
+  - configuration : `.apv/config.json`, sinon `pipeline.v2.json` (projet V2, tant que `apv onboard` n'a pas créé `.apv/config.json`) ;
   - registre des décisions : `.apv/DECISIONS.json`, sinon `.agent-pipeline/DECISIONS.json` (projet V2).
 - De la configuration, seules les sections `name` (nom du projet, écrit par `apv init`), `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview` et `design` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
 
@@ -35,6 +35,44 @@ Le nom du projet est `--name`, sinon le nom du dossier du dépôt. La commande t
 
 Sortie : `0` succès, `1` hors d'un dépôt Git ou modèle de consigne introuvable, `2` appel incorrect. En JSON : `repo`, `name`, `created`, `completed`, `existing`.
 
+## `apv onboard`
+
+```
+apv onboard [--repo <chemin>] [--specs <dossier>] [--dry-run] [--json]
+```
+
+Fait passer sous APV3 un projet déjà commencé (`/apv:onboard`, spécification section 14). Comme `apv init`, la commande crée seulement ce qui manque dans `.apv/`, **sans jamais écraser un fichier existant**, et se relance sans effet ; elle travaille à la racine du dépôt Git et refuse hors d'un dépôt. Le nom du projet est celui du dossier du dépôt. Tout est lu et vérifié avant la première écriture : un refus laisse le dépôt intact.
+
+**Projet V2** (`pipeline.v2.json` et/ou `.agent-pipeline/DECISIONS.json`) :
+
+| Source V2 | Dans `.apv/` |
+|---|---|
+| `pipeline.v2.json` | `config.json` : `name`, puis `gates`, `risk`, `validationRules`, `skills` et `environment.passEnv` recopiés tels quels et validés par le schéma d'APV3. Tout le reste (`agent`, `roles`, `roleProfiles`, `modelRouting`, `workflow`, `feedback`, `limits`, `setup`, `concurrency`, `maxRunMs`, `environment.id`...) est **ignoré** et listé : ces champs pilotaient le contrôleur retiré. |
+| `.agent-pipeline/DECISIONS.json` | `DECISIONS.json` : copie à l'identique. Le format du registre n'a pas changé entre V2 et V3 (même schéma, même `apv ledger validate`) : aucune conversion. `DECISIONS.md` est régénéré depuis le registre, comme par `apv ledger apply`. |
+| specs V2 | `specs/<id>.json`, voir ci-dessous |
+
+Un `pipeline.v2.json` ou un registre V2 illisible, ou refusé par le schéma (le registre : par les mêmes règles que `apv ledger validate`), fait sortir en `1` avec toutes les erreurs, **sans rien écrire** : un registre vide créé dans `.apv/` masquerait les décisions V2, puisque `.apv/DECISIONS.json` est lu en priorité. Un fichier V2 dont la cible existe déjà dans `.apv/` n'est pas relu. Les fichiers V2 restent en place, jamais modifiés.
+
+**Specs V2.** V2 garde ses specs dans sa base d'état (`~/.local/state/agent-pipeline-v2`), hors du dépôt : l'outil ne la lit pas. Il cherche les fichiers de spec gardés par le projet (les propositions passées à `apv2 spec draft --file`) dans `.agent-pipeline/specs/`, `specs/`, `docs/specs/` et dans le dossier `--specs` (qui peut être hors du dépôt). Chaque fichier `.json` qui a la forme d'une spec (`title` et `tasks`, ou `{ "request", "spec" }`) est validé comme par `apv spec validate --draft` sur le dépôt ; accepté, il est copié tel quel dans `.apv/specs/<id>.json`, où `<id>` est son nom en kebab-case sans le suffixe `-import`. Une demande de l'opérateur rangée à côté (`<id>-request.txt`, comme dans le projet pilote) est jointe : le fichier écrit a alors la forme `{ "request": "...", "spec": { ... } }`. Les fichiers refusés sont listés avec leurs erreurs, jamais copiés.
+
+**Projet sans V2** : `config.json` propose les contrôles que le dépôt déclare déjà, avec `mandatory: false` et, dans la sortie, leur source et une note (à relire, `covers`, `resources` et `passEnv` à compléter) :
+
+| Contrôle | `package.json` (scripts) | `Makefile` (cibles) | `pyproject.toml` |
+|---|---|---|---|
+| `check` | `check`, `typecheck`, `type-check` | `check`, `typecheck` | `[tool.mypy]` : `mypy .` |
+| `lint` | `lint` | `lint` | `[tool.ruff]` : `ruff check .` |
+| `test` | `test` | `test` | `[tool.pytest]` : `python -m pytest` |
+| `build` | `build` | `build` | |
+| `e2e` | `e2e`, `test:e2e` | `e2e`, `test-e2e` | |
+
+Le gestionnaire de paquets vient de `packageManager`, sinon du fichier de verrouillage (`pnpm`, `yarn`, `bun`, sinon `npm run <script>`) ; les outils Python passent par `uv run` ou `poetry run` si le projet a leur fichier de verrouillage. La première source trouvée gagne ; aucune commande n'est inventée. Le registre créé est vide.
+
+Dans les deux cas, le reste est celui d'`apv init` : `brief.md`, `specs/`, `state/`, `.gitignore`. La sortie liste aussi les fichiers de `.agent-pipeline/` non repris (rôles, compétences : le plugin les fournit) et les indices d'aperçu (script `preview` ou `apercu`, fichier de `scripts/`), à décrire dans la section `preview` avec l'opérateur ; puis la suite : relire `config.json` et `brief.md`, `apv ledger validate`, `apv gates run` (avec `--base` si un contrôle utilise `{{baseSha}}`), commit de `.apv/`. Rien n'est commité.
+
+`--dry-run` prend les mêmes décisions et affiche le même plan (« Serait créé »), sans rien écrire.
+
+Sortie : `0` succès, `1` hors d'un dépôt Git, fichier V2 illisible ou invalide, modèle de consigne introuvable, `2` appel incorrect (dont un dossier `--specs` introuvable). En JSON : `repo`, `name`, `dryRun`, `v2` (`config`, `ledger`, `notImported`), `config` (`status`, `source`, `kept`, `ignored`, `gates`, `detected`), `ledger` (`status`, `source`, `decisions`, `hash`), `specs` (`searched`, `imported`, `existing`, `rejected`), `previewHints`, `created`, `completed`, `existing`, `next`.
+
 ## `apv spec validate`
 
 ```
@@ -49,7 +87,8 @@ Le minimum de sécurité est recalculé depuis le dépôt exactement comme au la
 La demande de l'opérateur vient, dans l'ordre :
 1. de `--request` ou `--request-file` ;
 2. du document de spec, s'il a la forme `{ "request": "...", "spec": { ... } }` ;
-3. à défaut, du texte de la spec elle-même (titre, problème, périmètre, critères, tâches ; les exclusions ne comptent pas).
+3. à défaut, de la demande rangée par `/apv:spec` dans `.apv/state/demande-<id>.md` (pour la spec `.apv/specs/<id>.json`), que `apv run start` lit de la même façon : même minimum de sécurité à la validation et au lancement ;
+4. à défaut, du texte de la spec elle-même (titre, problème, périmètre, critères, tâches ; les exclusions ne comptent pas).
 
 Seule une demande fournie (cas 1 ou 2) sert à vérifier les citations des résolutions de décisions ambiguës.
 
@@ -171,8 +210,8 @@ Sortie : `0` dans le périmètre, `1` hors périmètre, `2` appel incorrect (spe
 ## `apv gates run`
 
 ```
-apv gates run [--only a,b] [--config <fichier>] [--base <ref>] [--concurrency N]
-              [--keep-going] [--repo <chemin>] [--json]
+apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>]
+              [--concurrency N] [--keep-going] [--repo <chemin>] [--json]
 ```
 
 Exécute les contrôles déclarés dans `gates` depuis la racine du dépôt, avec l'ordonnanceur de V2 :
@@ -185,13 +224,31 @@ Exécute les contrôles déclarés dans `gates` depuis la racine du dépôt, ave
 
 Paramètres des commandes (argument entier uniquement, jamais d'interprétation par un shell) : `{{workspace}}` (racine du dépôt), `{{candidateSha}}` (HEAD), `{{baseSha}}` (commit de `--base`, obligatoire si un contrôle l'utilise).
 
+**Stage** : chaque contrôle peut déclarer `"stage": "task"` (contrôle rapide, lancé après chaque tâche) ou `"stage": "full"` (réservé à la suite complète, par exemple les tests navigateur). Champ absent : `task`, si bien qu'une configuration sans stage garde son sens (tout tourne partout). Un contrôle `task` ne peut pas dépendre d'un contrôle `full` (configuration refusée). `--stage task` exécute seulement les contrôles de stage `task` ; les contrôles `full` sélectionnés sont listés dans le tableau comme « réservé à la suite complète », dans `reserved` en JSON et dans `summary.json`, sans reçu : ils ne sont jamais comptés comme réussis. `--stage full` (défaut, comportement antérieur) exécute tout. Voir [RUN.md](RUN.md#contrôles--par-tâche-et-suite-complète) pour l'usage pendant un run.
+
 `--only` choisit des contrôles et ajoute leurs dépendances. Par défaut, le premier échec arrête les contrôles suivants ; `--keep-going` les laisse tous s'exécuter. `--concurrency` borne le parallélisme (3 par défaut).
 
-Chaque exécution écrit dans `.apv/receipts/<exécution>/` un reçu JSON par contrôle (statut, code de sortie, durée, empreintes des sorties, empreinte de preuve liée au commit, à la configuration, à l'environnement et à l'exécutable, diagnostic en cas d'échec) et un `summary.json`. Le dossier `.apv/receipts/` contient un `.gitignore` : les reçus sont des preuves locales, jamais commitées. Si l'arbre de travail avait des modifications non commitées, le résumé le signale (`dirty`) : les reçus décrivent alors plus que le commit.
+Chaque exécution écrit dans `.apv/receipts/<exécution>/` un reçu JSON par contrôle (statut, code de sortie, durée, empreintes des sorties, empreinte de preuve liée au commit, à la configuration, à l'environnement et à l'exécutable, diagnostic en cas d'échec) et un `summary.json`. Le dossier `.apv/receipts/` contient un `.gitignore` : les reçus sont des preuves locales, jamais commitées. Chaque reçu note le commit (`candidateSha`), le stage demandé (`stage`) et l'état de l'arbre (`dirty`) ; le résumé reprend `stage`, `dirty`, `selected`, `added` et `reserved`. Si l'arbre de travail avait des modifications non commitées (`dirty: true`), les reçus décrivent plus que le commit : `apv gates verify` ne les retient pas.
 
 Différences avec V2 : pas d'espace de travail jetable (l'implémenteur exécute les contrôles dans le worktree qu'il possède), pas de cache de reçus (`cacheTtlMs` est ignoré), pas de commandes de préparation (`setup`).
 
-Sortie : `0` tous les contrôles passent, `1` au moins un échec ou une configuration invalide, `2` appel incorrect.
+En JSON : `ok`, `runId`, `candidateSha`, `baseSha`, `dirty`, `stage`, `config`, `legacyConfig`, `ignoredSections`, `added`, `reserved`, `receiptsDirectory`, `gates` (contrôles exécutés).
+
+Sortie : `0` tous les contrôles exécutés passent, `1` au moins un échec ou une configuration invalide, `2` appel incorrect (dont un `--stage` inconnu ou `--commit`, propre à `verify`).
+
+## `apv gates verify`
+
+```
+apv gates verify --commit <sha> [--stage full|task] [--config <fichier>] [--repo <chemin>] [--json]
+```
+
+Vérifie, sans rien exécuter, que les reçus de `.apv/receipts/` prouvent que chaque contrôle exigé a réussi sur ce commit exact. Contrôles exigés : tous avec `--stage full` (défaut), ceux de stage `task` avec `--stage task`. `--commit` accepte toute révision que Git résout en commit (SHA complet ou abrégé, `HEAD`) ; la comparaison se fait sur le SHA complet.
+
+Pour chaque contrôle exigé, seuls comptent les reçus de ce commit, écrits sur un arbre propre (`dirty: false` ; pour un reçu plus ancien sans ce champ, celui du `summary.json` de son exécution, sinon inconnu donc refusé) et avec la configuration actuelle des contrôles (même `configHash`). Les reçus de toute exécution comptent (une exécution `--stage task` prouve ses contrôles autant qu'une suite complète), mais seul le plus récent de chaque contrôle est retenu : un échec plus récent l'emporte toujours sur une réussite plus ancienne. États : `passed` (réussi), `failed` (échec, avec le statut du reçu), `dirty` (reçus seulement sur un arbre modifié), `missing` (aucun reçu). Les fichiers illisibles et les reçus d'une autre configuration sont ignorés et signalés.
+
+En JSON : `ok`, `commit`, `stage`, `config`, `configHash`, `required`, `gates` (`gateId`, `state`, `status`, `receipt`, `runId`, `otherConfig`), `unreadable`, `missing` (contrôles non prouvés).
+
+Sortie : `0` preuve complète, `1` preuve incomplète (ce qui manque est listé, avec la commande à relancer), commit introuvable, aucun contrôle exigé ou configuration invalide, `2` appel incorrect (`--commit` absent, option propre à `run`).
 
 ## `apv lock`
 

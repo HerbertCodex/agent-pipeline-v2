@@ -26,7 +26,9 @@ Tu codes UNE tâche d'une spec de <nom du projet> (<description en une ligne : p
 - Accessibilité : focus visible, rôles et libellés, `prefers-reduced-motion`, contrastes.
 
 ## Contrôles obligatoires avant de rendre la main (tous verts)
-<liste exacte des commandes, par exemple : typage, lint, analyseur du framework, code mort, tests unitaires, build, intégration, navigateur>
+1. `apv gates run --stage task --base <base>` : les contrôles rapides déclarés dans `.apv/config.json` (<par exemple : typage, lint, analyseur du framework, code mort, tests unitaires, build>). Les contrôles `"stage": "full"` (<par exemple : suite navigateur complète>) sont « réservés à la suite complète » : tu ne les lances pas ; le chef de projet les passe sur la tête intégrée de chaque vague.
+2. Tes tests navigateur seulement : `apv lock run e2e -- <commande du projet, par exemple npx playwright test> <fichiers e2e que tu as créés ou modifiés>`. Aucun fichier e2e touché : rien à lancer.
+<projet sans contrôle marqué full : `apv gates run --stage task` exécute tout, suite navigateur comprise ; projet sans contrôle déclaré : liste exacte des commandes>
 Services : <pile locale, ports, variables à charger>. Ne jamais arrêter un service partagé.
 Ressources partagées : toujours sous bail, une commande à la fois : `apv lock run <ressource> -- <commande>`.
 Les tests « live » font leur propre remise à zéro et créent leurs propres utilisateurs.
@@ -38,5 +40,5 @@ Un contrôle rouge hors de ta tâche : corrige si trivial, sinon signale-le pré
 - Ne pousse pas, ne fusionne pas, ne force jamais, ne modifie pas la branche principale. Aucun secret, aucun `.env`.
 
 ## Rapport final (moins de 300 mots)
-Fichiers principaux, commits (hash), résultat de CHAQUE contrôle (commande, vert ou rouge, nombre de tests), critères couverts et comment, écarts à la maquette ou à la spec et pourquoi, points ouverts.
+Fichiers principaux, commits (hash), résultat de CHAQUE contrôle (commande, vert ou rouge, nombre de tests ; contrôles réservés à la suite complète nommés comme tels ; fichiers e2e lancés), critères couverts et comment, écarts à la maquette ou à la spec et pourquoi, points ouverts.
 ```

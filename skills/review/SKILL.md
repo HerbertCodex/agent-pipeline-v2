@@ -33,17 +33,19 @@ Une copie détachée par domaine, hors du dépôt, jamais le worktree d'un autre
 `git worktree add --detach <parent du dépôt>/<nom du dépôt>-revues/<id>-<domaine>-<sha court> <commit>`
 Donne à chaque revue ses propres ports libres (`ss -ltnp` pour choisir), les ressources partagées à prendre sous bail (`apv lock run <ressource> -- <commande>`), le compte ou la méthode pour créer ses utilisateurs de test, et les écarts déjà validés par l'opérateur (registre).
 
+**Contrôles déjà passés** : sous `/apv:run`, la suite complète vient de passer sur ce commit à l'intégration. Cite ses reçus à chaque revue (dossier `.apv/receipts/<exécution>/` et sortie de `apv gates verify --commit <commit>`) : les revues ne relancent ni la suite complète ni Playwright, sauf besoin précis de leur domaine (une attaque ou une capture à produire, un test à écrire pour prouver un constat), et alors seulement les fichiers utiles, sous `apv lock run e2e`. Hors exécution, sans reçus sur ce commit, dis-le à chaque revue : le résultat des contrôles est alors « non vérifié », pas « vert ».
+
 ## 4. Lancer en parallèle
 Dans une exécution, avant le lancement : `apv run set <id> review:<domaine> running` pour chaque domaine retenu.
 - **Workflow du plugin `apv:revues`** (outil Workflow, `name: "apv:revues"`, ou `scriptPath` = chemin absolu de `workflows/revues.js` du plugin si le nom n'est pas trouvé), `args` en objet JSON :
   ```json
   { "commit": "<sha>", "branch": "apv/<id>", "specFile": ".apv/specs/<id>.json",
-    "common": "<écarts assumés du registre, maquettes, compte de test, dossier des rapports ZAP>",
+    "common": "<écarts assumés du registre, maquettes, compte de test, dossier des rapports ZAP, reçus de la suite complète sur ce commit>",
     "reviews": [ { "domain": "securite", "copy": "<copie>", "context": "<ports, ressources sous bail>" },
                  { "domain": "fidelite", "copy": "<copie>", "context": "<port, écrans touchés>" } ] }
   ```
   Il lance un agent par domaine sur sa copie, avec un rapport structuré (gravité critique, eleve, moyen, faible, info ; requis ou conseil ; emplacement ; preuve ; correction attendue ; ce qui n'a pas été vérifié ; nettoyage), puis un passage de dédoublonnage qui ne supprime aucun constat : il rend `findings` (consolidés, avec les identifiants d'origine S, F, D, R) et `raw`.
-- **Sans outil Workflow** : un appel à l'outil Agent par domaine, **tous dans le même message**, `run_in_background: true`, avec le type d'agent du tableau et un message qui donne le commit, la copie, la spec, la consigne commune et celle du domaine, le format du rapport ci-dessus et la règle « lecture seule : aucun commit, aucune poussée, aucune écriture sur un service externe ». Le dédoublonnage est alors le tien (section 5).
+- **Sans outil Workflow** : un appel à l'outil Agent par domaine, **tous dans le même message**, en arrière-plan en session interactive et `run_in_background: false` en session non interactive (la session s'arrêterait avec eux ; pas d'outil Workflow non plus), avec le type d'agent du tableau et un message qui donne le commit, la copie, la spec, la consigne commune et celle du domaine, le format du rapport ci-dessus et la règle « lecture seule : aucun commit, aucune poussée, aucune écriture sur un service externe ». Le dédoublonnage est alors le tien (section 5).
 
 ## 5. Consolider
 1. Chaque rapport reçu : vérifie qu'il porte sur le bon commit et que la copie n'a aucun fichier suivi modifié (`git -C <copie> status --porcelain`) ; un écart est lui-même un constat.

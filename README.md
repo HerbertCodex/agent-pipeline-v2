@@ -19,7 +19,7 @@ APV3 est un plugin Claude Code. L'opérateur délègue ; la session principale d
 
 - **9 sous-agents** : `product`, `architecte`, `architecte-donnees`, `designer`, `implementer`, `integrateur`, `qa-securite`, `qa-fidelite`, `dpo`.
 - **La méthode du chef de projet** (compétence `chef-de-projet`) : vagues parallèles précédées des fondations, verrous à bail, suivi du quota et sauvegarde, reprise après coupure, pile de PR, journal du pipeline.
-- **Des commandes** `/apv:init`, `/apv:spec`, `/apv:run`, `/apv:review`, `/apv:stack`, `/apv:design`, `/apv:preview`, `/apv:status`, `/apv:quota`, `/apv:resume` (`/apv:onboard` en phase 4), et deux **workflows** de vagues parallèles (`apv:vague`, `apv:revues`).
+- **Des commandes** `/apv:init`, `/apv:spec`, `/apv:run`, `/apv:review`, `/apv:stack`, `/apv:design`, `/apv:preview`, `/apv:status`, `/apv:quota`, `/apv:resume` et `/apv:onboard` (reprise d'un projet V2 ou existant), et deux **workflows** de vagues parallèles (`apv:vague`, `apv:revues`).
 - **Des hooks** : contexte de reprise au démarrage, exécutions non livrées comprises ; blocage du force-push, de la fusion et du déploiement hors commande dédiée, et des écritures GitHub à sortie masquée.
 - **L'outil `apv`** (TypeScript, sans dépendance) : validation des specs, registre des décisions, contrôles, périmètre, verrous, contrôle du modèle de données, quota. L'exécutable `bin/apv` le rend appelable par `apv` dans les commandes Bash de Claude Code.
 
@@ -45,4 +45,4 @@ Le CLI `apv2` (dernière version 2.0.0-alpha.8, contrôleur qui enchaîne les r�
 
 ---
 
-**Statut : alpha, phases 1 à 3 faites (socle, design et aperçu, exécution) ; phase 4 (`/apv:onboard`, migration d'un projet V2) à venir.** Usage local sur des dépôts de confiance ; les hooks sont des garde-fous, pas une sandbox. [Licence MIT](LICENSE)
+**Statut : alpha, phases 1 à 3 faites (socle, design et aperçu, exécution) ; phase 4 en cours (`/apv:onboard` disponible, projet pilote sous APV3 à venir).** Usage local sur des dépôts de confiance ; les hooks sont des garde-fous, pas une sandbox. [Licence MIT](LICENSE)

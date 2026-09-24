@@ -264,6 +264,8 @@ export declare function targetedQaContext(context: {
         stdoutHash: string;
         stderrHash: string;
         reusedFrom: string | null;
+        stage: "task" | "full" | undefined;
+        dirty: boolean | undefined;
     }[];
     qaScope: {
         mode: string;

@@ -13,4 +13,6 @@ export declare const APV_IGNORED: readonly ["state/*.log", "state/task.json", "s
  * `apv gates run` does not call it: a gate may check that the tree is clean, and its receipts ignore
  * themselves (`receipts/.gitignore`). Lines the project added are kept. Returns true when it wrote.
  */
+/** Ignored lines `.apv/.gitignore` lacks (all of them when the file is absent); reads only. */
+export declare function apvGitignoreMissing(repo: string): string[];
 export declare function ensureApvGitignore(repo: string): boolean;

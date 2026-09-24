@@ -24,6 +24,8 @@ export interface SpecCheckOptions {
     document: SpecDocument;
     /** Operator request given on the command line; it wins over the one stored in the document. */
     request?: string;
+    /** Spec file: its stored request `.apv/state/demande-<id>.md`, written by /apv:spec, is read when no request is given. */
+    specFile?: string;
     /** Launch-time rules (default): no open question, every criterion implemented by a task. */
     ready?: boolean;
     configFile?: string;
@@ -34,7 +36,9 @@ export interface SpecCheckResult {
     issues: Issue[];
     title: string | null;
     sha: string;
-    requestSource: 'option' | 'document' | 'spec';
+    requestSource: 'option' | 'document' | 'stored' | 'spec';
+    /** Path of the stored request, relative to the repository, when it was used. */
+    requestFile: string | null;
     ledgerFile: string | null;
     configFile: string | null;
     security: SecurityContext;

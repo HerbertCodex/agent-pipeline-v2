@@ -3,6 +3,12 @@ export declare const VERSION = "3.0.0-alpha.3";
 export declare const lanes: readonly ["fast", "standard", "high"];
 export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];
+/**
+ * When a check runs: `task` after every task (fast feedback), `full` only in the complete suite that accepts a
+ * wave or a delivery. Absent means `task`: a configuration without stages keeps running every check everywhere.
+ */
+export declare const gateStages: readonly ["task", "full"];
+export type GateStage = typeof gateStages[number];
 export declare const envNamesSchema: import("./schema.js").Schema<string[]>;
 export declare const commandSchema: import("./schema.js").Schema<{
     readonly command: string[];
@@ -24,7 +30,12 @@ export declare const gateSchema: import("./schema.js").Schema<{
     readonly lanes: ("fast" | "standard" | "high")[];
     readonly mandatory: boolean;
     readonly cacheTtlMs: number;
+    readonly stage: "task" | "full" | undefined;
 }>;
+/** Stage of a check; absent means `task`. */
+export declare const gateStage: (gate: {
+    stage?: GateStage | undefined;
+}) => GateStage;
 /** Variables a command receives by default; every other variable must be named in `passEnv`. */
 export declare const DEFAULT_PASS_ENV: readonly ["PATH", "SystemRoot", "WINDIR", "TMPDIR", "TEMP", "TMP", "LANG"];
 export declare const validationRulesSchema: import("./schema.js").Schema<{
@@ -204,6 +215,7 @@ export declare const configSchema: import("./schema.js").Schema<{
         readonly lanes: ("fast" | "standard" | "high")[];
         readonly mandatory: boolean;
         readonly cacheTtlMs: number;
+        readonly stage: "task" | "full" | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;
@@ -263,6 +275,8 @@ export declare const receiptSchema: import("./schema.js").Schema<{
     readonly stderrHash: string;
     readonly diagnostic: string;
     readonly reusedFrom: string | null;
+    readonly stage: "task" | "full" | undefined;
+    readonly dirty: boolean | undefined;
 }>;
 export type GateReceipt = Infer<typeof receiptSchema>;
 export declare function validateReceipt(value: unknown): GateReceipt;

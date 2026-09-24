@@ -14,7 +14,7 @@ Chaque dossier contient un `SKILL.md` (frontmatter `name`, `description`, et pou
 | `design` | boucle de maquette par artefact jusqu'à la validation de l'opérateur | non |
 | `preview` | met à jour et annonce l'aperçu vivant | non |
 | `status`, `quota`, `resume` | état du projet, relevé de quota, reprise après coupure | non |
-| `onboard` | migration d'un projet V2 (phase 4) | oui |
+| `onboard` | fait passer sous APV un projet existant ou V2 (`apv onboard`, configuration et registre repris, contrôles détectés) | oui |
 
 Une commande « réservée à l'opérateur » porte `disable-model-invocation: true` : Claude ne la charge pas de lui-même.
 

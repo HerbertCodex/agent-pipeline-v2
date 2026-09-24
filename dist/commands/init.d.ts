@@ -12,5 +12,34 @@ export interface InitResult {
     existing: string[];
     completed: string[];
 }
+/** Reads the brief model shipped with the plugin; refused before anything is written. */
+export declare function readBriefTemplate(pluginRoot?: string): string;
+/**
+ * Creates what `.apv/` lacks, never replacing an existing file, and records what it did. With `dryRun`, the
+ * same decisions are taken and recorded, but nothing is written. Shared by `apv init` and `apv onboard`.
+ */
+export declare class ApvWriter {
+    readonly repo: string;
+    readonly dryRun: boolean;
+    readonly created: string[];
+    readonly existing: string[];
+    readonly completed: string[];
+    constructor(repo: string, dryRun?: boolean);
+    dir(path: string): void;
+    /** Writes `content()` unless the file exists; returns true when the file is (or would be) created. */
+    file(path: string, content: () => string): boolean;
+    gitignore(): void;
+}
+export interface InitContent {
+    /** Content of `.apv/config.json` when it is created; by default the name and no gate. */
+    config?: () => string;
+    /** Files written right after the configuration (the ledger and its readable version); by default an empty ledger. */
+    ledger?: {
+        path: string;
+        content: () => string;
+    }[];
+}
+/** Writes the `.apv/` skeleton in a fixed order: directory, configuration, ledger, brief, specs, state, .gitignore. */
+export declare function writeApvSkeleton(writer: ApvWriter, name: string, template: string, content?: InitContent): void;
 export declare function initProject(repo: string, name: string, pluginRoot?: string): InitResult;
 export declare function run(args: string[], io: CommandIO): Promise<number>;

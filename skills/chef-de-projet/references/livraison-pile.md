@@ -4,12 +4,12 @@ Dans ce document, `apv` désigne l'outil du plugin (voir `SKILL.md`).
 
 ## 1. Contrôles du chef de projet (avant chaque PR)
 Sur la tête exacte de la branche, dans un worktree propre :
-1. `apv gates run` : tous les contrôles déclarés (ou la liste de la consigne commune), ressources partagées sous bail.
+1. `apv gates run --stage full` : la suite complète, tous les contrôles déclarés (ou la liste de la consigne commune), ressources partagées sous bail ; puis `apv gates verify --commit <tête>`, qui doit sortir en `0` (chaque contrôle réussi sur ce commit exact, arbre propre) avant de pousser.
 2. `apv db check` si des migrations ou des requêtes ont changé.
 3. `apv scope check` sur les tâches de la spec.
 4. `apv design check` si le projet a des maquettes validées : une référence modifiée sans nouvelle validation de l'opérateur bloque la PR.
 5. Relecture du diff complet contre la spec : critères couverts, écarts assumés listés.
-Tu notes les nombres de tests : ils vont dans la PR. Un contrôle rouge bloque la PR.
+Tu notes les nombres de tests : ils vont dans la PR. Un contrôle rouge bloque la PR et ouvre une passe de corrections, jamais ignorée.
 
 ## 2. PR brouillon
 - `git push -u origin <branche>` puis `gh pr create --draft --base <base> --head <branche> --title … --body …`, **sans masquer la sortie**. Lis-la, puis vérifie : `gh pr view <n> --json number,baseRefName,headRefName,isDraft,url`.
