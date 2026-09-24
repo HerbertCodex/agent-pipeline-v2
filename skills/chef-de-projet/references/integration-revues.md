@@ -3,13 +3,16 @@
 Dans ce document, `apv` désigne l'outil du plugin (voir `SKILL.md`).
 
 ## 1. Intégration d'une vague
-Sous `/apv:run`, l'étape `integration` de l'état se tient par `apv run set <id> integration …` ; la branche d'intégration est `apv/<id>-integration-<n>`. Une vague d'une seule tâche s'intègre par avance rapide directe après ta suite complète.
+Sous `/apv:run`, l'étape `integration` de l'état se tient par `apv run set <id> integration …` ; la branche d'intégration est `apv/<id>-integration-<n>`. Une vague d'une seule tâche s'intègre par avance rapide directe après ta vérification.
 
 1. Toutes les tâches de la vague sont rentrées (ou tu décides d'intégrer celles qui sont prêtes et de relancer les autres).
 2. Lance `integrateur` avec : branche de la spec, liste ordonnée des branches de tâches, plan et notes de vague.
 3. Il crée `<spec>-integration-<n>` depuis la branche de la spec, fusionne dans l'ordre, unifie les doublons, garde tous les tests, relance les contrôles de tâche (`apv gates run --stage task`) et les fichiers e2e que ses résolutions touchent.
-4. Tu vérifies son rapport, puis **la suite complète, une fois, sur la tête intégrée** (arbre propre, dans le worktree de l'intégrateur ou une copie détachée) : `apv gates run --stage full --repo <worktree>`, puis `apv gates verify --commit <tête> --repo <worktree>`, qui doit sortir en `0`. Alors seulement tu avances la branche de la spec en avance rapide (`git merge --ff-only <spec>-integration-<n>` depuis la branche de la spec) et tu ouvres la vague suivante.
-5. **Suite complète rouge** : rien n'avance, la vague n'est pas acceptée. Tu ouvres une passe de corrections (section 4) sur la branche d'intégration, avec les diagnostics des reçus comme cahier des charges, puis la suite complète et `apv gates verify` de nouveau sur la nouvelle tête. Un échec n'est jamais ignoré ni relancé jusqu'à ce qu'il passe par chance : un test instable est un constat (section 5).
+4. Tu vérifies son rapport, puis tu relances toi-même, sur la tête intégrée (arbre propre, dans le worktree de l'intégrateur ou une copie détachée), la vérification que l'étape demande (`apv run next` la donne ; réglage `run.fullSuite` de `.apv/config.json`) :
+   - **intégration intermédiaire**, avec `"final"` (défaut) : `apv gates run --stage task --base <base ciblée> --repo <worktree>`, puis `apv gates verify --commit <tête> --stage task --base <base ciblée> --repo <worktree>` à `0` ; la base ciblée est le dernier commit prouvé par la suite complète (la base de l'exécution tant qu'aucune n'est passée), si bien que les tests ciblés couvrent tous les changements depuis ;
+   - **dernière intégration** (toutes les tâches intégrées), ou chaque intégration avec `"each-integration"` : **la suite complète, une fois, sur la tête intégrée** : `apv gates run --stage full --repo <worktree>`, puis `apv gates verify --commit <tête> --repo <worktree>`, qui doit sortir en `0` ; garde ce worktree et ses reçus pour les revues et la livraison.
+   Alors seulement tu avances la branche de la spec en avance rapide (`git merge --ff-only <spec>-integration-<n>` depuis la branche de la spec) et tu ouvres la vague suivante.
+5. **Suite complète rouge**, ou contrôle de tâche ou ciblé rouge : rien n'avance, la vague n'est pas acceptée ; tu ouvres une passe de corrections, jamais ignorée (section 4), sur la branche d'intégration, avec les diagnostics des reçus comme cahier des charges, puis la même vérification de nouveau sur la nouvelle tête. Un échec n'est jamais ignoré ni relancé jusqu'à ce qu'il passe par chance : un test instable est un constat (section 5).
 6. Les branches de tâches restent telles quelles (jamais réécrites).
 
 ## 2. Revues indépendantes
@@ -37,7 +40,7 @@ Les critiques et élevés sont toujours corrigés. Un faux positif se prouve (te
 - Une passe par domaine (serveur et données, interface), confiée à un `implementer` avec le fichier de corrections comme cahier des charges.
 - Chaque correction revient avec son niveau : `prouve` exige le test qui échouait avant la correction et passe après. Une correction `probable` ou `suppose` n'est pas annoncée « corrigée » (seuils de `references/confiance.md`).
 - En parallèle quand les fichiers ne se recouvrent pas ; sinon en séquence.
-- Puis intégration si besoin, et nouvelle revue ciblée du domaine corrigé quand la correction est lourde (sécurité surtout).
+- Puis intégration si besoin : avec `"final"`, au niveau tâche (contrôles de tâche et tests ciblés depuis la tête revue, `apv gates verify --commit <tête> --stage task --base <tête revue>` à `0`, et le test qui prouve chaque correction vu vert) ; la suite complète vient une fois, à la livraison. Avec `"each-integration"`, suite complète à chaque passe. Nouvelle revue ciblée du domaine corrigé quand la correction est lourde (sécurité surtout) ; ses reçus sont alors ceux du niveau tâche, dits comme tels.
 - Un gel de périmètre de la spec (fichier interdit) peut être levé par toi pour une correction de sécurité : écris-le dans le fichier de corrections.
 
 ## 5. Banc de test partagé

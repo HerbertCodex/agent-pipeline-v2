@@ -3,8 +3,8 @@
 Dans ce document, `apv` désigne l'outil du plugin (voir `SKILL.md`).
 
 ## 1. Contrôles du chef de projet (avant chaque PR)
-Sur la tête exacte de la branche, dans un worktree propre :
-1. `apv gates run --stage full` : la suite complète, tous les contrôles déclarés (ou la liste de la consigne commune), ressources partagées sous bail ; puis `apv gates verify --commit <tête>`, qui doit sortir en `0` (chaque contrôle réussi sur ce commit exact, arbre propre) avant de pousser.
+Sur la tête exacte de la branche :
+1. La suite complète prouvée sur ce commit exact. D'abord `apv gates verify --commit <tête>` dans le worktree de la dernière intégration (celui qui a ses reçus) : à `0`, elle est déjà prouvée (spec sans corrections, la tête n'a pas bougé), ne la relance pas. Sinon, dans un worktree propre : `apv gates run --stage full` (tous les contrôles déclarés, ou la liste de la consigne commune, ressources partagées sous bail ; `--skip-proven` ne relance rien si la preuve existe déjà), puis `apv gates verify --commit <tête>`, qui doit sortir en `0` (chaque contrôle réussi sur ce commit exact, arbre propre) avant de pousser. Une vérification du niveau tâche (`--stage task`) ne suffit jamais pour une PR.
 2. `apv db check` si des migrations ou des requêtes ont changé.
 3. `apv scope check` sur les tâches de la spec.
 4. `apv design check` si le projet a des maquettes validées : une référence modifiée sans nouvelle validation de l'opérateur bloque la PR.

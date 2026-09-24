@@ -17,7 +17,7 @@ export declare const OWN_SECTIONS: readonly ["db"];
  * - `final` (default): at the last integration of a spec (every task integrated, before the reviews) and at the
  *   delivery on the final head; the intermediate integrations and the fix passes advance on the task checks and
  *   the targeted tests, verified at the exact commit (`apv gates verify --stage task --base <ref>`);
- * - `each-integration`: at every integration, fix passes included, and at the delivery (the rhythm before 3.0.0-alpha.4).
+ * - `each-integration`: at every integration, fix passes included, and at the delivery (the rhythm of 3.0.0-alpha.3 and before).
  */
 export declare const FULL_SUITE_MODES: readonly ["final", "each-integration"];
 export type FullSuiteMode = typeof FULL_SUITE_MODES[number];
