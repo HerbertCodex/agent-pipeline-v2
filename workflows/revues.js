@@ -21,6 +21,24 @@ const DOMAINS = {
 }
 const SEVERITIES = ['critique', 'eleve', 'moyen', 'faible', 'info']
 
+// Calibrated confidence (docs/CONFIANCE.md): each finding carries its level and its proof or justification.
+// Same list and same check in workflows/vague.js (a workflow loads no module). Ordered from the strongest.
+const CONFIDENCE = ['prouve', 'probable', 'suppose']
+
+function claimProblems(claim, where, evidenceKey) {
+  const key = evidenceKey || 'evidence'
+  if (!claim || typeof claim !== 'object') return [where + ' : absent']
+  const problems = []
+  const level = claim.confidence
+  if (level === undefined || level === null || level === '') problems.push(where + ' : niveau de confiance absent (confidence)')
+  else if (!CONFIDENCE.includes(level)) problems.push(where + ' : niveau de confiance inconnu « ' + String(level) + ' » (prouve, probable, suppose)')
+  const evidence = claim[key]
+  if (typeof evidence !== 'string' || !evidence.trim()) {
+    problems.push(where + ' : ' + (level === 'prouve' ? 'niveau prouve sans preuve' : 'preuve ou justification absente') + ' (' + key + ')')
+  }
+  return problems
+}
+
 const input = args || {}
 if (typeof input.commit !== 'string' || !input.commit || !Array.isArray(input.reviews) || !input.reviews.length) {
   throw new Error(
@@ -48,13 +66,14 @@ const FINDINGS = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['severity', 'required', 'title', 'location', 'evidence', 'fix'],
+        required: ['severity', 'required', 'title', 'location', 'confidence', 'evidence', 'fix'],
         properties: {
           severity: { type: 'string', enum: SEVERITIES },
           required: { type: 'boolean' },
           title: { type: 'string' },
           location: { type: 'string' },
-          evidence: { type: 'string' },
+          confidence: { type: 'string', enum: CONFIDENCE },
+          evidence: { type: 'string', minLength: 1 },
           fix: { type: 'string' },
         },
       },
@@ -74,14 +93,16 @@ const INVENTORY = Object.assign({}, FINDINGS, {
       type: 'array',
       items: {
         type: 'object',
-        required: ['location', 'family', 'invariant', 'protection', 'status', 'proof'],
+        required: ['location', 'family', 'invariant', 'protection', 'status', 'confidence', 'proof'],
         properties: {
           location: { type: 'string' },
           family: { type: 'string' },
           invariant: { type: 'string' },
           protection: { type: 'string' },
           status: { type: 'string', enum: STATUSES },
-          proof: { type: 'string' },
+          // `proof` is the evidence of the status: its level is `confidence`, like a finding.
+          confidence: { type: 'string', enum: CONFIDENCE },
+          proof: { type: 'string', minLength: 1 },
         },
       },
     },
@@ -119,11 +140,13 @@ function reviewPrompt(review) {
     typeof review.context === 'string' && review.context ? 'Consigne de ta revue : ' + review.context : '',
     '',
     'Rapport (sortie structurée) : domain = `' + review.domain + '` ; commit ; findings (gravité sur l\'échelle commune critique, eleve, moyen, faible, info, où « bloquant » vaut critique ou eleve selon l\'impact ;',
-    'required = true pour « requis », false pour « conseil » ; title ; location = chemin et ligne, ou écran, état, largeur et thème ; evidence = la preuve observée ; fix = la correction attendue) ;',
+    'required = true pour « requis », false pour « conseil » ; title ; location = chemin et ligne, ou écran, état, largeur et thème ;',
+    'confidence = ton niveau de confiance : `prouve` si la preuve est reproductible et jointe (requête et réponse, commande et sortie, test qui échoue, capture), `probable` si tu as lu le code ou raisonné sans exécuter (chemins et lignes cités), `suppose` pour une hypothèse (sur quoi elle repose, ce qui la prouverait) ; dans le doute, le niveau inférieur ;',
+    'evidence = la preuve observée pour `prouve`, la justification sinon, jamais vide (un constat sans evidence fait refuser tout le rapport) ; fix = la correction attendue) ;',
     'notVerified = ce qui n\'a pas pu être vérifié, avec la raison ; cleanup = confirmation du nettoyage (utilisateurs de test, serveurs, dossiers temporaires) ; summary = moins de 300 mots.',
     'Un écart déjà validé par l\'opérateur au registre n\'est pas un constat. Aucune attaque, capture ou mesure annoncée sans l\'avoir faite.',
     domain.inventory ? 'Audit de concurrence : charge la compétence `apv:architecture-donnees` et suis la section 6 de sa référence `references/concurrence.md` sur TOUT le code du commit (serveur, tâches planifiées, interface, tests, outillage), pas seulement le diff.' : '',
-    domain.inventory ? 'paths = l\'inventaire complet, chemins conformes compris : un élément par chemin lecture-modification-écriture ou motif trouvé, avec location (chemin et ligne), family (4.1 à 4.10), invariant, protection (mécanisme, ou « aucune »), status (conforme, non_conforme, inconnu) et proof (test qui échoue sans la protection, ou ce qui manque). Chaque chemin non_conforme est aussi un constat dans findings.' : '',
+    domain.inventory ? 'paths = l\'inventaire complet, chemins conformes compris : un élément par chemin lecture-modification-écriture ou motif trouvé, avec location (chemin et ligne), family (4.1 à 4.10), invariant, protection (mécanisme, ou « aucune »), status (conforme, non_conforme, inconnu), confidence (prouve, probable, suppose, comme un constat) et proof (test qui échoue sans la protection pour `prouve`, sinon ce qui a été lu et ce qui manque ; jamais vide). Chaque chemin non_conforme est aussi un constat dans findings.' : '',
   ].filter(line => line !== '').join('\n')
 }
 
@@ -142,10 +165,20 @@ const results = await parallel(input.reviews.map(review => () =>
 const reports = []
 const findings = []
 const incomplete = []
+const refused = []
 input.reviews.forEach((review, index) => {
   const result = results[index]
   if (!result) {
     incomplete.push(review.domain)
+    return
+  }
+  const problems = (Array.isArray(result.findings) ? result.findings : []).flatMap((finding, n) => claimProblems(finding, review.domain + ' constat ' + (n + 1)))
+  if (DOMAINS[review.domain].inventory) {
+    (Array.isArray(result.paths) ? result.paths : []).forEach((path, n) => problems.push(...claimProblems(path, review.domain + ' chemin ' + (n + 1), 'proof')))
+  }
+  if (!Array.isArray(result.findings)) problems.push(review.domain + ' : findings absent')
+  if (problems.length) {
+    refused.push({ domain: review.domain, problems, report: result })
     return
   }
   const prefix = DOMAINS[review.domain].prefix
@@ -155,6 +188,7 @@ input.reviews.forEach((review, index) => {
   reports.push(report)
 })
 if (incomplete.length) log('Revues sans rapport (agent arrêté ou erreur) : ' + incomplete.join(', ') + '. À relancer.')
+if (refused.length) log('Rapports refusés (confiance) : ' + refused.map(r => r.problems.join(' ; ')).join(' | ') + '. À redemander à la revue.')
 
 // Cross-domain deduplication needs every finding at once: this is the only barrier of the workflow.
 let groups = findings.map(f => ({ ids: [f.id], reason: '' }))
@@ -198,10 +232,18 @@ const consolidated = groups.map(group => {
     required: members.some(m => m.required),
     title: lead.title,
     location: members.map(m => m.location).filter((l, i, all) => all.indexOf(l) === i).join(' ; '),
-    evidence: members.map(m => m.id + ' : ' + m.evidence).join('\n'),
+    // One proof is enough: the same defect proven by one reviewer is proven.
+    confidence: CONFIDENCE[Math.min(...members.map(m => CONFIDENCE.indexOf(m.confidence)))],
+    evidence: members.map(m => m.id + ' (' + m.confidence + ') : ' + m.evidence).join('\n'),
     fix: lead.fix,
     reason: group.reason,
   }
 }).sort((a, b) => rank(a.severity) - rank(b.severity))
 
-return { commit: input.commit, branch: input.branch || null, reports, incomplete, findings: consolidated, raw: findings }
+// Escalation thresholds of the project lead: probable needs a check first, suppose goes to the operator.
+const escalation = {
+  verify: consolidated.filter(f => f.confidence === 'probable').map(f => f.id),
+  operator: consolidated.filter(f => f.confidence === 'suppose').map(f => f.id),
+}
+
+return { commit: input.commit, branch: input.branch || null, reports, incomplete, refused, findings: consolidated, raw: findings, escalation }

@@ -59,8 +59,8 @@ test('the plugin ships exactly the two documented workflows, with literal meta b
 
 test('vague: one isolated apv:implementer per task, with the start and scope instructions', async () => {
   const { run } = load('vague.js');
-  const rt = runtime((prompt, opts) => ({ taskId: opts.label, status: 'done', branch: `apv/relances-${opts.label}`, worktree: '/tmp/w', commit: 'b'.repeat(40),
-    checks: [], scopeCheck: 'in', outOfScopeFiles: [], summary: 'ok', openPoints: [] }));
+  const rt = runtime((prompt, opts) => ({ taskId: opts.label, status: 'done', confidence: 'prouve', evidence: 'apv gates run --stage task : 12 verts', branch: `apv/relances-${opts.label}`,
+    worktree: '/tmp/w', commit: 'b'.repeat(40), checks: [], scopeCheck: 'in', outOfScopeFiles: [], summary: 'ok', openPoints: [] }));
   const result = await run(...rt.hooks, WAVE_ARGS);
   assert.equal(rt.calls.length, 2);
   for (const [i, call] of rt.calls.entries()) {
@@ -86,12 +86,14 @@ test('vague: one isolated apv:implementer per task, with the start and scope ins
   assert.ok(rt.calls[1].prompt.includes('termine depuis le wip abc1234'));
   assert.equal(result.reports.length, 2);
   assert.deepEqual(result.withoutReport, []);
+  assert.deepEqual(result.refused, []);
+  assert.deepEqual(result.escalation, { verify: [], operator: [] });
   assert.equal(result.baseCommit, WAVE_ARGS.baseCommit);
 });
 
 test('vague: a stopped agent is reported, never hidden', async () => {
   const { run } = load('vague.js');
-  const rt = runtime((prompt, opts) => opts.label === 'T3' ? null : { taskId: 'T2', status: 'done' });
+  const rt = runtime((prompt, opts) => opts.label === 'T3' ? null : { taskId: 'T2', status: 'done', confidence: 'prouve', evidence: 'sortie' });
   const result = await run(...rt.hooks, WAVE_ARGS);
   assert.deepEqual(result.withoutReport, ['T3']);
   assert.ok(rt.logs.some(l => l.includes('T3')));
@@ -113,7 +115,7 @@ const REVIEW_ARGS = {
     { domain: 'rgpd', copy: '/tmp/revues/rgpd' },
   ],
 };
-const finding = (severity, title, location) => ({ severity, required: severity !== 'info', title, location, evidence: 'preuve', fix: 'corriger' });
+const finding = (severity, title, location, confidence = 'prouve') => ({ severity, required: severity !== 'info', title, location, confidence, evidence: 'preuve', fix: 'corriger' });
 
 test('revues: read-only reviewers in parallel on their own copy, then one deduplication pass', async () => {
   const { run } = load('revues.js');
@@ -172,7 +174,7 @@ test('revues: refuses unknown domains, duplicates and missing copies', async () 
 test('revues: the concurrence audit runs alone, never by default, and returns its inventory', async () => {
   const { run, meta } = load('revues.js');
   assert.match(meta.description, /concurrence sur demande/);
-  const path = { location: 'src/orders.ts:12', family: '4.1', invariant: 'stock >= 0', protection: 'aucune', status: 'non_conforme', proof: 'aucun test' };
+  const path = { location: 'src/orders.ts:12', family: '4.1', invariant: 'stock >= 0', protection: 'aucune', status: 'non_conforme', confidence: 'probable', proof: 'lu : update sans condition, aucun test' };
   const rt = runtime((prompt, opts) => ({ domain: opts.label, commit: 'x', findings: [finding('eleve', 'Stock décrémenté dans l\'application', path.location)],
     notVerified: [], cleanup: 'fait', summary: 'ok', paths: [path] }));
   const result = await run(...rt.hooks, { commit: 'c'.repeat(40), reviews: [{ domain: 'concurrence', copy: '/tmp/revues/concurrence' }] });
@@ -195,4 +197,125 @@ test('revues: the concurrence audit runs alone, never by default, and returns it
     assert.doesNotMatch(c.prompt, /concurrence\.md/);
   }
   assert.ok(other.reports.every(r => !('paths' in r)));
+});
+
+// Calibrated confidence: a report says how sure it is, and why (docs/CONFIANCE.md).
+const LEVELS = ['prouve', 'probable', 'suppose'];
+const task = (id, extra = {}) => ({ taskId: id, status: 'done', confidence: 'prouve', evidence: 'test rouge puis vert : npm test -- relances (1 échec, puis 14 réussis)',
+  branch: `apv/relances-${id}`, worktree: '/tmp/w', commit: 'b'.repeat(40), checks: [], scopeCheck: 'in', outOfScopeFiles: [], summary: 'ok', openPoints: [], ...extra });
+
+test('vague: the report schema requires a confidence level and its evidence, and the prompt defines the levels', async () => {
+  const { run } = load('vague.js');
+  const rt = runtime((prompt, opts) => task(opts.label));
+  await run(...rt.hooks, WAVE_ARGS);
+  const { schema } = rt.calls[0].opts;
+  for (const field of ['confidence', 'evidence']) assert.ok(schema.required.includes(field), field);
+  assert.deepEqual(schema.properties.confidence.enum, LEVELS);
+  assert.equal(schema.properties.evidence.minLength, 1);
+  const prompt = rt.calls[0].prompt;
+  assert.match(prompt, /`prouve` = preuve reproductible jointe/);
+  assert.match(prompt, /test qui échoue avant et passe après/);
+  assert.match(prompt, /`probable` = lecture du code ou raisonnement vérifiable sans exécution/);
+  assert.match(prompt, /`suppose` = hypothèse/);
+  assert.match(prompt, /cause observée[^\n]*n'a pas été reproduite reste au mieux `probable`/);
+});
+
+test('vague: a report without a level, with an unknown level or a proof-less `prouve` is refused, never counted', async () => {
+  const { run } = load('vague.js');
+  const tasks = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6'].map(id => ({ id, branch: `apv/relances-${id}` }));
+  const answers = {
+    T1: task('T1'),
+    T2: task('T2', { confidence: undefined }),
+    T3: task('T3', { confidence: 'certain' }),
+    T4: task('T4', { evidence: '   ' }),
+    T5: task('T5', { confidence: 'probable', evidence: 'lu : src/relances.ts:40 filtre par user_id' }),
+    T6: task('T6', { confidence: 'suppose', evidence: '' }),
+  };
+  delete answers.T2.confidence;
+  const rt = runtime((prompt, opts) => answers[opts.label]);
+  const result = await run(...rt.hooks, { ...WAVE_ARGS, tasks });
+  assert.deepEqual(result.reports.map(r => r.taskId), ['T1', 'T5']);
+  assert.deepEqual(result.refused.map(r => r.taskId), ['T2', 'T3', 'T4', 'T6']);
+  const why = Object.fromEntries(result.refused.map(r => [r.taskId, r.problems.join(' ; ')]));
+  assert.match(why.T2, /niveau de confiance absent/);
+  assert.match(why.T3, /niveau de confiance inconnu « certain »/);
+  assert.match(why.T4, /niveau prouve sans preuve/);
+  assert.match(why.T6, /preuve ou justification absente/);
+  assert.equal(result.refused[0].report.taskId, 'T2', 'the refused report is kept for the lead, not lost');
+  assert.deepEqual(result.withoutReport, []);
+  assert.ok(rt.logs.some(l => l.includes('Rapports refusés')));
+  assert.deepEqual(result.escalation, { verify: ['T5'], operator: [] });
+});
+
+test('vague: escalation lists the probable results to verify and the supposed ones for the operator', async () => {
+  const { run } = load('vague.js');
+  const rt = runtime((prompt, opts) => opts.label === 'T2'
+    ? task('T2', { confidence: 'probable', evidence: 'lu : la requête filtre déjà par user_id (src/a.ts:12)' })
+    : task('T3', { status: 'failed', confidence: 'suppose', evidence: 'échec du build, peut-être la version de Node ; à confirmer par node -v sur la CI' }));
+  const result = await run(...rt.hooks, WAVE_ARGS);
+  assert.deepEqual(result.escalation, { verify: ['T2'], operator: ['T3'] });
+  assert.deepEqual(result.refused, []);
+});
+
+test('revues: every finding and every inventory path carries its level; a report with one bad claim is refused whole', async () => {
+  const { run } = load('revues.js');
+  const good = finding('eleve', 'IDOR', 'src/a.ts:1');
+  const byDomain = {
+    securite: [good],
+    fidelite: [{ ...finding('moyen', 'Texte', 'accueil 390 clair'), confidence: undefined }],
+    donnees: [finding('faible', 'Index', 'm.sql', 'plausible')],
+    rgpd: [{ ...finding('moyen', 'Durée', 'confidentialite.md'), evidence: ' ' }],
+  };
+  delete byDomain.fidelite[0].confidence;
+  const rt = runtime((prompt, opts) => ({ domain: opts.label, commit: 'x', findings: byDomain[opts.label], notVerified: [], cleanup: 'fait', summary: 'ok' }));
+  const result = await run(...rt.hooks, REVIEW_ARGS);
+  for (const call of rt.calls.filter(c => c.opts.phase === 'Revues')) {
+    const item = call.opts.schema.properties.findings.items;
+    assert.ok(item.required.includes('confidence') && item.required.includes('evidence'), call.opts.label);
+    assert.deepEqual(item.properties.confidence.enum, LEVELS);
+    assert.equal(item.properties.evidence.minLength, 1);
+    assert.match(call.prompt, /`prouve` si la preuve est reproductible et jointe/);
+    assert.match(call.prompt, /`probable` si tu as lu le code ou raisonné sans exécuter/);
+    assert.match(call.prompt, /`suppose` pour une hypothèse/);
+  }
+  assert.deepEqual(result.refused.map(r => r.domain), ['fidelite', 'donnees', 'rgpd']);
+  const why = Object.fromEntries(result.refused.map(r => [r.domain, r.problems.join(' ; ')]));
+  assert.match(why.fidelite, /niveau de confiance absent/);
+  assert.match(why.donnees, /niveau de confiance inconnu « plausible »/);
+  assert.match(why.rgpd, /niveau prouve sans preuve/);
+  assert.deepEqual(result.reports.map(r => r.domain), ['securite']);
+  assert.deepEqual(result.findings.map(f => f.id), ['S1']);
+  assert.deepEqual(result.incomplete, []);
+  assert.ok(rt.logs.some(l => l.includes('Rapports refusés')));
+
+  // The concurrence inventory: a path without a level, or with an empty proof, refuses the audit.
+  const path = { location: 'a.ts:1', family: '4.1', invariant: 'x', protection: 'aucune', status: 'inconnu', proof: 'rien de lu' };
+  const audit = runtime((prompt, opts) => ({ domain: opts.label, commit: 'x', findings: [], notVerified: [], cleanup: 'fait', summary: 'ok',
+    paths: [path, { ...path, confidence: 'prouve', proof: '' }] }));
+  const refused = await run(...audit.hooks, { commit: 'c'.repeat(40), reviews: [{ domain: 'concurrence', copy: '/tmp/c' }] });
+  const pathItem = audit.calls[0].opts.schema.properties.paths.items;
+  assert.ok(pathItem.required.includes('confidence') && pathItem.required.includes('proof'));
+  assert.deepEqual(pathItem.properties.confidence.enum, LEVELS);
+  assert.deepEqual(refused.refused.map(r => r.domain), ['concurrence']);
+  assert.match(refused.refused[0].problems.join(' ; '), /chemin 1 : niveau de confiance absent/);
+  assert.match(refused.refused[0].problems.join(' ; '), /chemin 2 : niveau prouve sans preuve \(proof\)/);
+});
+
+test('revues: a merged finding keeps the strongest proof; escalation sorts what to verify and what goes to the operator', async () => {
+  const { run } = load('revues.js');
+  const byDomain = {
+    securite: [finding('eleve', 'IDOR', 'src/r.ts:40', 'prouve')],
+    fidelite: [finding('moyen', 'Texte modifié', 'accueil 390 clair', 'probable')],
+    donnees: [finding('moyen', 'Pas de filtre user_id', 'src/r.ts:40', 'suppose'), finding('faible', 'Index', 'm.sql', 'suppose')],
+    rgpd: [],
+  };
+  const rt = runtime((prompt, opts) => opts.label === 'dédoublonnage'
+    ? { groups: [{ ids: ['S1', 'D1'], reason: 'même requête' }, { ids: ['F1'], reason: '' }, { ids: ['D2'], reason: '' }] }
+    : { domain: opts.label, commit: 'x', findings: byDomain[opts.label], notVerified: [], cleanup: 'fait', summary: 'ok' });
+  const result = await run(...rt.hooks, REVIEW_ARGS);
+  const merged = result.findings.find(f => f.id === 'S1');
+  assert.equal(merged.confidence, 'prouve', 'proven by one reviewer, proven');
+  assert.match(merged.evidence, /S1 \(prouve\) : /);
+  assert.match(merged.evidence, /D1 \(suppose\) : /);
+  assert.deepEqual(result.escalation, { verify: ['F1'], operator: ['D2'] });
 });
