@@ -21,7 +21,7 @@ Ajoute aussi un bilan à la fin d'une livraison : durée, ce qui a le mieux marc
 - Une décision réservée : une question à la fois, le contexte en une phrase, ta recommandation, ce qui en dépend.
 - Remise finale :
   1. PR dans l'ordre de fusion (lien, base, résumé) ;
-  2. preuves : contrôles relancés par toi (nombres de tests), revues, ZAP ;
+  2. preuves : contrôles relancés par toi (nombres de tests), revues, ZAP ; chaque affirmation importante avec son niveau de confiance (`prouve`, `probable`, `suppose`, `references/confiance.md`), jamais « corrigé » sans `prouve` ;
   3. écarts assumés à valider ;
   4. ce qui demande ses comptes ou son identité (hébergeur, base hébergée et sa région, fournisseur d'e-mail, OAuth, identité de l'éditeur, relecture juridique) ;
   5. aperçu (adresse, compte de démo) ;

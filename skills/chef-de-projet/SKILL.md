@@ -1,6 +1,6 @@
 ---
 name: chef-de-projet
-description: "Méthode complète du chef de projet Agent Pipeline V3 : délégation et autonomie, planification depuis la spec, un worktree par tâche avec une consigne commune, vagues parallèles précédées des fondations, intégration, revues indépendantes et corrections, contrôles relancés avant chaque PR, PR brouillon empilées, fusion seulement sur ordre, quota et sauvegarde, verrous à bail, reprise après coupure, aperçu vivant, journal du pipeline. À charger dès que la session pilote un projet qui a un dossier .apv/ ou que l'opérateur délègue la livraison d'une spec ou d'une application."
+description: "Méthode complète du chef de projet Agent Pipeline V3 : délégation et autonomie, planification depuis la spec, un worktree par tâche avec une consigne commune, vagues parallèles précédées des fondations, intégration, revues indépendantes et corrections, contrôles relancés avant chaque PR, PR brouillon empilées, fusion seulement sur ordre, confiance calibrée des rapports et seuils d'escalade, quota et sauvegarde, verrous à bail, reprise après coupure, aperçu vivant, journal du pipeline. À charger dès que la session pilote un projet qui a un dossier .apv/ ou que l'opérateur délègue la livraison d'une spec ou d'une application."
 ---
 
 # Chef de projet APV3
@@ -13,6 +13,7 @@ Références à lire au moment voulu (chemins relatifs à ce fichier) :
 - `references/planification.md` : de la spec au plan, worktrees, consigne commune, notes de vague ;
 - `references/brief-type.md` : modèle de consigne commune des implementers ;
 - `references/integration-revues.md` : intégration, revues indépendantes, passes de correction ;
+- `references/confiance.md` : niveaux de confiance des rapports (`prouve`, `probable`, `suppose`), seuils d'escalade, niveau dit à l'opérateur ;
 - `references/livraison-pile.md` : contrôles du chef de projet, PR brouillon empilées, fusion de la pile ;
 - `references/quota-sauvegarde.md` : relevés, seuils, dosage, procédure de sauvegarde ;
 - `references/reprise-environnement.md` : verrous à bail, reprise après coupure, Docker, piles locales, agents, aperçu vivant ;
@@ -23,7 +24,7 @@ Références à lire au moment voulu (chemins relatifs à ce fichier) :
 2. Aucune limite bloquante arbitraire : pas de budget en dollars, pas de délai qui coupe un agent en plein travail. La seule limite est le quota de l'opérateur, suivi et anticipé.
 3. La maquette validée est la référence absolue. Jamais de re-maquettage automatique.
 4. Parallèle par défaut : un worktree par tâche, les modules partagés d'abord, les ressources partagées sous bail.
-5. Rien de faux : aucune approbation, aucun résultat de test, aucune source inventés. Un rapport d'agent est une affirmation ; les contrôles que tu relances sont la preuve.
+5. Rien de faux : aucune approbation, aucun résultat de test, aucune source inventés. Un rapport d'agent est une affirmation ; les contrôles que tu relances sont la preuve. Chaque affirmation importante porte son niveau de confiance (section 9 bis).
 6. Effets externes sous contrôle de l'opérateur (section 3).
 
 ## 2. Délégation et autonomie
@@ -87,8 +88,18 @@ Pendant les vagues, chaque implementer ne lance que les contrôles de tâche (`a
 ## 9. Communication avec l'opérateur
 - Dans sa langue (celle de ses messages ; le français pour un opérateur francophone), phrases courtes, sans jargon inutile, sans tiret cadratin ni demi-cadratin.
 - Pendant la délégation : pas de questions, un court point d'étape seulement quand c'est utile (PR ouverte, aperçu mis à jour, pause de quota).
-- À la fin : liens des PR dans l'ordre de fusion, résumé par spec, preuves (contrôles avec nombres de tests, revues, ZAP), écarts assumés à valider, ce qui demande ses comptes ou son identité, adresse de l'aperçu.
+- À la fin : liens des PR dans l'ordre de fusion, résumé par spec, preuves (contrôles avec nombres de tests, revues, ZAP), écarts assumés à valider, ce qui demande ses comptes ou son identité, adresse de l'aperçu. Chaque affirmation importante avec son niveau de confiance (section 9 bis) ; rien d'annoncé « corrigé » sans `prouve`.
 - Aucune promesse absolue ou risquée. Ce que tu n'as pas vérifié, tu le dis.
+
+## 9 bis. Confiance calibrée et escalade
+Tous les rapports d'agents (constats de revue, causes trouvées, corrections, décisions prises seul, notes de grille) donnent pour chaque affirmation importante un niveau et ce qui le fonde : `prouve` (preuve reproductible jointe : test qui échoue puis passe, commande et sortie, capture), `probable` (lecture du code, raisonnement vérifiable, sans exécution), `suppose` (hypothèse). Sans preuve ou justification, l'affirmation est refusée. Détail et exemples : `references/confiance.md`.
+
+Seuils :
+- **`prouve`** : tu agis seul (intégrer, livrer, fusionner sur ordre de l'opérateur, lui déclarer « corrigé ») après avoir vérifié que la preuve porte sur l'affirmation.
+- **`probable`** : une vérification d'abord (un test ou une exécution, par toi ou par l'agent) qui la fait passer à `prouve` ; impossible à vérifier, elle est traitée comme `suppose`.
+- **`suppose`** : remontée à l'opérateur **avant** toute action sur la production, toute fusion et toute annonce « corrigé » ; le travail local et réversible continue.
+
+Une correction dont la cause observée n'a pas été reproduite n'est jamais annoncée « corrigée ». Les comptes rendus à l'opérateur (points d'étape, PR, remise finale) disent le niveau de chaque affirmation importante.
 
 ## 10. Journal du pipeline
 Chaque incident (outil, agent, environnement, méthode) va dans `.apv/journal-pipeline.md` : date, étape, symptôme, cause, contournement, coût, amélioration proposée (`references/journal.md`). C'est la matière des améliorations d'APV.

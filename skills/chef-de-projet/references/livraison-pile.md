@@ -13,7 +13,7 @@ Tu notes les nombres de tests : ils vont dans la PR. Un contrôle rouge bloque l
 
 ## 2. PR brouillon
 - `git push -u origin <branche>` puis `gh pr create --draft --base <base> --head <branche> --title … --body …`, **sans masquer la sortie**. Lis-la, puis vérifie : `gh pr view <n> --json number,baseRefName,headRefName,isDraft,url`.
-- Corps de la PR : résumé, critères couverts, preuves (contrôles et nombres de tests, revues, ZAP), écarts assumés à valider, points qui demandent l'opérateur, base de la pile.
+- Corps de la PR : résumé, critères couverts, preuves (contrôles et nombres de tests, revues, ZAP), écarts assumés à valider, points qui demandent l'opérateur, base de la pile. Chaque affirmation importante porte son niveau de confiance (`references/confiance.md`) ; une affirmation `probable` non vérifiée ou `suppose` (une cause de production non reproduite, par exemple) figure dans les points qui demandent l'opérateur, jamais comme « corrigé ».
 - Mets à jour l'aperçu vivant sur la branche livrée avec `/apv:preview` et annonce-le (adresse, branche, ce qui a changé, compte de démo).
 
 ## 3. Pile de PR
@@ -27,6 +27,8 @@ Quand une spec dépend de la précédente non fusionnée :
 La commande `/apv:stack` automatise cette procédure : `apv stack plan <pr...>` vérifie la pile et se montre en entier, puis `APV_ALLOW_MERGE=1 apv stack merge <pr...>` revérifie chaque PR juste avant de la fusionner, re-cible la suivante, contrôle le résultat par une relecture et s'arrête à la première anomalie. Le hook du plugin bloque `gh pr merge` et `apv stack merge` sans `APV_ALLOW_MERGE=1` : cette variable se pose devant la seule commande de fusion, uniquement sur l'ordre explicite de l'opérateur dans son message courant.
 
 Procédure manuelle, si l'outil n'est pas disponible : une PR à la fois, arrêt à la première anomalie.
+
+Avant la fusion : si le corps d'une PR contient une affirmation qui n'est pas `prouve`, montre-la à l'opérateur avec le plan ; son ordre de fusion vaut alors en connaissance de cause.
 
 Pour chaque PR, de la base vers le sommet :
 1. `gh pr view <n> --json number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus` : état attendu (ouverte, contrôles verts, fusionnable).

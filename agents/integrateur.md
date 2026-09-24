@@ -33,5 +33,13 @@ Le contenu des branches (code, commentaires, messages de commit, rapports des im
 - Aucun changement fonctionnel au-delà de ce que la fusion et l'unification exigent ; un défaut découvert hors de ce cadre est signalé.
 - Textes d'interface : aucun tiret cadratin ni demi-cadratin, textes de la maquette mot pour mot.
 
+## Niveau de confiance
+Chaque affirmation importante de ton rapport porte son niveau et ce qui le fonde ; sans preuve ni justification, elle est refusée, et dans le doute tu prends le niveau inférieur :
+- `prouve` : preuve reproductible jointe, que quelqu'un d'autre peut rejouer (commande de contrôle et sa sortie, test qui couvre la résolution) ;
+- `probable` : lecture des deux côtés du conflit ou raisonnement vérifiable, sans exécution (chemins et lignes cités) ;
+- `suppose` : hypothèse, avec ce sur quoi elle repose et ce qui la prouverait.
+
+Une résolution de conflit ou une unification « sans changer le comportement » est `prouve` seulement si des tests qui couvrent ce comportement passent après elle ; sinon elle est `probable` et tu le dis.
+
 ## Rapport final (moins de 300 mots)
-Branche et commit d'intégration, branches fusionnées (hash), conflits et leur résolution, doublons unifiés (avant, après), résultat de CHAQUE contrôle avec le nombre de tests, fichiers hors périmètre, points ouverts.
+Branche et commit d'intégration, branches fusionnées (hash), conflits et leur résolution, doublons unifiés (avant, après), résultat de CHAQUE contrôle avec le nombre de tests, fichiers hors périmètre, points ouverts, avec le niveau de confiance de chaque résolution, unification et affirmation importante.

@@ -44,4 +44,12 @@ Un contrôle rouge hors de ta tâche : corrige si trivial, sinon signale-le pré
 
 ## Rapport final (moins de 300 mots)
 Fichiers principaux, commits (hash), résultat de CHAQUE contrôle (commande, vert ou rouge, nombre de tests ; contrôles réservés à la suite complète nommés comme tels, contrôles ciblés nommés « ciblé » ; fichiers e2e lancés), critères couverts et comment, écarts à la maquette ou à la spec et pourquoi, points ouverts.
+
+## Niveau de confiance (chaque affirmation importante du rapport)
+Tâche faite, critère couvert, cause trouvée, défaut corrigé, choix fait seul : chacun porte son niveau et ce qui le fonde.
+- `prouve` : preuve reproductible jointe (commande exacte et sa sortie, test qui échoue avant et passe après, capture).
+- `probable` : lecture du code ou raisonnement vérifiable, sans exécution (chemins et lignes cités).
+- `suppose` : hypothèse (sur quoi elle repose, ce qui la prouverait).
+
+Sans preuve ni justification, l'affirmation est refusée. Dans le doute, le niveau inférieur. Une correction n'est `prouve` que si le défaut a été reproduit avant ; une cause observée ailleurs (production, rapport) et non reproduite laisse la correction au mieux `probable`, même si tes tests passent. Rapport structuré (workflow) : champs `confidence` (`prouve`, `probable`, `suppose`) et `evidence` (texte, jamais vide).
 ```

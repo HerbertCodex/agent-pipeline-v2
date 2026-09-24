@@ -93,7 +93,8 @@ Quand l'outil Workflow n'est pas disponible (désactivé par `disableWorkflows`,
 ### Vérifications du chef de projet, tâche par tâche
 1. Branche : `git log --oneline <base>..<branche>`, fichiers touchés.
 2. `apv scope check --spec <spec> --task <tâche> --base <commit de base> --repo <worktree>`.
-3. `apv run set <id> task:<tâche> done --commit <sha> --worktree <chemin>`, ou `failed --note "<cause>"`.
+3. Niveau de confiance du rapport (`confidence` et `evidence`) : `prouve`, la preuve porte-t-elle sur la tâche ; `probable` (`escalation.verify`), une vérification d'abord ; `suppose` (`escalation.operator`), pas de `done`. Un rapport refusé (`refused`) n'est jamais compté. Voir [CONFIANCE.md](CONFIANCE.md).
+4. `apv run set <id> task:<tâche> done --commit <sha> --worktree <chemin>`, ou `failed --note "<cause>"`.
 
 ### Contrôles : par tâche et suite complète
 

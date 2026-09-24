@@ -29,12 +29,32 @@ for (const task of input.tasks) {
 const APV = typeof input.apv === 'string' && input.apv ? input.apv : 'node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"'
 const WAVE = input.wave === undefined ? '?' : String(input.wave)
 
+// Calibrated confidence (docs/CONFIANCE.md): each result carries its level and its proof or justification.
+// Same list and same check in workflows/revues.js (a workflow loads no module).
+const CONFIDENCE = ['prouve', 'probable', 'suppose']
+
+function claimProblems(claim, where, evidenceKey) {
+  const key = evidenceKey || 'evidence'
+  if (!claim || typeof claim !== 'object') return [where + ' : absent']
+  const problems = []
+  const level = claim.confidence
+  if (level === undefined || level === null || level === '') problems.push(where + ' : niveau de confiance absent (confidence)')
+  else if (!CONFIDENCE.includes(level)) problems.push(where + ' : niveau de confiance inconnu « ' + String(level) + ' » (prouve, probable, suppose)')
+  const evidence = claim[key]
+  if (typeof evidence !== 'string' || !evidence.trim()) {
+    problems.push(where + ' : ' + (level === 'prouve' ? 'niveau prouve sans preuve' : 'preuve ou justification absente') + ' (' + key + ')')
+  }
+  return problems
+}
+
 const REPORT = {
   type: 'object',
-  required: ['taskId', 'status', 'branch', 'worktree', 'commit', 'checks', 'scopeCheck', 'outOfScopeFiles', 'summary', 'openPoints'],
+  required: ['taskId', 'status', 'confidence', 'evidence', 'branch', 'worktree', 'commit', 'checks', 'scopeCheck', 'outOfScopeFiles', 'summary', 'openPoints'],
   properties: {
     taskId: { type: 'string' },
     status: { type: 'string', enum: ['done', 'failed', 'wip'] },
+    confidence: { type: 'string', enum: CONFIDENCE },
+    evidence: { type: 'string', minLength: 1 },
     branch: { type: 'string' },
     worktree: { type: 'string' },
     commit: { type: 'string' },
@@ -97,7 +117,12 @@ function prompt(task) {
     '4. Ne pousse pas, ne fusionne pas, ne réécris aucun commit.',
     '',
     '## Rapport (sortie structurée)',
-    'taskId ; status (`done` si tout est vert et commité, `wip` si le travail est commité mais inachevé, `failed` sinon) ; branch ; worktree (chemin absolu, sortie de `pwd`) ;',
+    'taskId ; status (`done` si tout est vert et commité, `wip` si le travail est commité mais inachevé, `failed` sinon) ;',
+    'confidence et evidence : ton niveau de confiance sur le résultat annoncé (tâche faite, critères couverts, défaut corrigé, cause d\'un échec) et ce qui le fonde :',
+    '`prouve` = preuve reproductible jointe dans evidence (commande exacte et sa sortie, test qui échoue avant et passe après pour une correction, capture) ;',
+    '`probable` = lecture du code ou raisonnement vérifiable sans exécution (chemins et lignes cités) ; `suppose` = hypothèse (sur quoi elle repose, ce qui la prouverait).',
+    'Une correction dont la cause observée (production, rapport) n\'a pas été reproduite reste au mieux `probable`, même si tes tests passent. Dans le doute, le niveau inférieur. Sans evidence, le rapport est refusé.',
+    'branch ; worktree (chemin absolu, sortie de `pwd`) ;',
     'commit (sha complet de `git rev-parse HEAD`) ; checks (chaque commande lancée, pass, fail ou not-run, nombre de tests) ; scopeCheck (in, out ou not-run) ; outOfScopeFiles ;',
     'summary (moins de 300 mots : fichiers principaux, critères couverts et comment, écarts à la maquette ou à la spec et pourquoi) ; openPoints.',
     'N\'annonce aucun résultat que tu n\'as pas observé.',
@@ -117,9 +142,22 @@ const reports = await pipeline(input.tasks, task =>
   }),
 )
 
-const returned = reports.filter(Boolean)
+// Escalation thresholds of the project lead: probable needs a check first, suppose goes to the operator.
+const returned = []
+const refused = []
+const escalation = { verify: [], operator: [] }
+input.tasks.forEach((task, index) => {
+  const report = reports[index]
+  if (!report) return
+  const problems = claimProblems(report, 'tâche ' + task.id)
+  if (problems.length) return refused.push({ taskId: task.id, problems, report })
+  returned.push(report)
+  if (report.confidence === 'probable') escalation.verify.push(task.id)
+  if (report.confidence === 'suppose') escalation.operator.push(task.id)
+})
 const lost = input.tasks.filter((task, index) => !reports[index]).map(task => task.id)
 if (lost.length) log('Sans rapport (agent arrêté ou erreur) : ' + lost.join(', ') + '. À vérifier par apv run next.')
+if (refused.length) log('Rapports refusés (confiance) : ' + refused.map(r => r.problems.join(' ; ')).join(' | ') + '. À redemander à l\'agent.')
 
 return {
   specId: input.specId,
@@ -128,4 +166,6 @@ return {
   baseCommit: input.baseCommit,
   reports: returned,
   withoutReport: lost,
+  refused,
+  escalation,
 }

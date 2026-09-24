@@ -28,12 +28,14 @@ Les constats sont consolidés et dédoublonnés dans `.apv/state/revues-<id>-<sh
 Tu décides chaque constat, par écrit, dans `.apv/state/corrections-<spec>.md`, sur le modèle qui a servi au projet pilote :
 - un identifiant par constat (S1 pour la sécurité, F1 pour la fidélité, D1 pour les données, R1 pour le RGPD, T1 pour le banc de test) ;
 - la gravité ;
+- le niveau de confiance du constat (`prouve`, `probable`, `suppose`, `references/confiance.md`) : un constat `probable` se prouve d'abord (la passe de correction commence par le test qui le reproduit) ; un constat `suppose` critique ou élevé se prouve ou remonte à l'opérateur avant toute fusion ;
 - la décision précise (quoi faire, où, avec quelle migration, quel test prouve la correction) ;
 - ou l'acceptation justifiée (« écart assumé »), à inscrire dans la PR et à soumettre à l'opérateur s'il touche au produit ou au design.
-Les critiques et élevés sont toujours corrigés. Un faux positif se prouve (test ou démonstration), il ne s'écarte pas d'une phrase.
+Les critiques et élevés sont toujours corrigés. Un faux positif se prouve (test ou démonstration), il ne s'écarte pas d'une phrase : l'écarter est une décision prise seul, qui exige `prouve`.
 
 ## 4. Passes de correction
 - Une passe par domaine (serveur et données, interface), confiée à un `implementer` avec le fichier de corrections comme cahier des charges.
+- Chaque correction revient avec son niveau : `prouve` exige le test qui échouait avant la correction et passe après. Une correction `probable` ou `suppose` n'est pas annoncée « corrigée » (seuils de `references/confiance.md`).
 - En parallèle quand les fichiers ne se recouvrent pas ; sinon en séquence.
 - Puis intégration si besoin, et nouvelle revue ciblée du domaine corrigé quand la correction est lourde (sécurité surtout).
 - Un gel de périmètre de la spec (fichier interdit) peut être levé par toi pour une correction de sécurité : écris-le dans le fichier de corrections.

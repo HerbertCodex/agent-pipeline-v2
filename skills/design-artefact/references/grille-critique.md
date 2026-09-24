@@ -24,6 +24,9 @@ Chaque note, `conforme` compris, cite sa preuve :
 - une **capture** : fichier et zone (`accueil-390-sombre.png`, bandeau du haut) ;
 - ou un **élément cité** : texte exact entre guillemets, sélecteur CSS, jeton (`--accent`), valeur mesurée (contraste 3,1:1, durée 450 ms).
 
+### Niveau de confiance
+Chaque note porte aussi son niveau, commun à tous les rapports d'agents APV : `prouve` (capture et zone, ou valeur mesurée sur le rendu : quelqu'un d'autre la rejoue et voit la même chose), `probable` (lu dans le code HTML et CSS, sans capture ni mesure), `suppose` (hypothèse, avec ce qui la prouverait). Le test des 5 secondes mené par un agent est au mieux `probable` : c'est une simulation de la personne cible ; seul un vrai test avec elle est `prouve`. Dans le doute, le niveau inférieur.
+
 ### Captures de référence
 Chaque écran et chaque état du sélecteur de la maquette, à **390 × 844** et **1280 × 800**, en thème **clair** et **sombre** ; plus une capture du **premier écran seul** (sans défilement) pour le test des 5 secondes, et une passe en mouvement réduit pour la section E.
 
@@ -189,6 +192,6 @@ Un défaut qui exclut une partie de la cible (contraste insuffisant du texte pri
 ## Rapport
 
 1. En-tête : maquette (chemin, version, sha256 court), tour de critique (`1/2` ou `2/2`), personne cible, dossier des captures, outil de capture (ou « aucun navigateur : critique sur le code »).
-2. Synthèse : un tableau `Section | Note | Preuve principale`, de A à H, puis la **décision** selon le barème (retour au designer ou présentable) et le nombre d'empreintes cochées.
+2. Synthèse : un tableau `Section | Note | Niveau | Preuve principale`, de A à H, puis la **décision** selon le barème (retour au designer ou présentable) et le nombre d'empreintes cochées.
 3. Détail par section, avec les tableaux demandés en A, E et F.
 4. **Corrections priorisées**, sept au plus : d'abord les `bloquant`, puis la compréhension (F, G), puis les empreintes (A) et la signature (B), puis le reste. Chacune : quoi, où, critère, et comment vérifier que c'est corrigé.

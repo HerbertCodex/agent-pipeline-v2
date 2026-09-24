@@ -304,7 +304,7 @@ test('texts written for APV3 contain no em or en dash', () => {
     }),
     'hooks/hooks.json', 'hooks/scripts/bash-guard.mjs', 'hooks/scripts/session-start.mjs', 'hooks/scripts/stop-journal.mjs', 'hooks/scripts/scope-reminder.mjs',
     '.claude-plugin/plugin.json', '.claude-plugin/marketplace.json', 'docs/PLUGIN.md', 'docs/DESIGN.md', 'docs/RUN.md', 'README.md', 'START-HERE.md',
-    'skills/README.md', 'workflows/vague.js', 'workflows/revues.js', 'bin/apv', 'docs/CLI.md',
+    'skills/README.md', 'workflows/vague.js', 'workflows/revues.js', 'bin/apv', 'docs/CLI.md', 'docs/CONFIANCE.md',
   ];
   for (const file of files) assert.ok(!/[–—]/.test(read(file)), `${file} contains an em or en dash`);
 });
@@ -467,4 +467,63 @@ test('design critique: a scored generic grid, directions before details, a read-
   assert.match(read('README.md'), /\*\*10 sous-agents\*\*[^\n]*`critique-design`/);
   const unreleased = read('CHANGELOG.md').split('\n## ')[1];
   for (const topic of [/critique-design/, /grille-critique\.md/, /test des 5 secondes/, /2 ou 3 directions/]) assert.match(unreleased, topic);
+});
+
+test('calibrated confidence: common levels in every report, escalation thresholds for the project lead', () => {
+  // Agents said « corrigé » or « cause trouvée » without saying how sure they were; a fix shipped for an unreproduced production cause.
+  const levels = [/`prouve`/, /`probable`/, /`suppose`/];
+  const reference = read('skills/chef-de-projet/references/confiance.md');
+  for (const rule of [...levels, /test qui échoue avant et passe après/, /\*\*Correction\*\* : `prouve` seulement si le défaut a été reproduit avant/,
+    /au mieux `probable` pour cette cause/, /\*\*avant\*\* toute action sur la production, toute fusion et toute annonce « corrigé »/,
+    /`escalation\.verify`/, /`escalation\.operator`/, /Jamais « corrigé » sans `prouve`/, /Exemple observé \(anonymisé\)/]) assert.match(reference, rule);
+  assert.doesNotMatch(reference, /Toujours rien/i);
+
+  const lead = frontmatter('skills/chef-de-projet/SKILL.md');
+  assert.match(lead.fields.description, /confiance calibrée/);
+  assert.match(lead.body, /`references\/confiance\.md`/);
+  assert.match(lead.body, /## 9 bis\. Confiance calibrée et escalade/);
+  assert.match(lead.body, /\*\*`prouve`\*\* : tu agis seul \(intégrer, livrer, fusionner sur ordre de l'opérateur, lui déclarer « corrigé »\)/);
+  assert.match(lead.body, /\*\*`probable`\*\* : une vérification d'abord \(un test ou une exécution/);
+  assert.match(lead.body, /\*\*`suppose`\*\* : remontée à l'opérateur \*\*avant\*\* toute action sur la production, toute fusion et toute annonce « corrigé »/);
+  assert.match(lead.body, /Les comptes rendus à l'opérateur[^\n]*disent le niveau de chaque affirmation importante/);
+
+  const run = frontmatter('skills/run/SKILL.md').body;
+  for (const rule of [/\*\*Confiance calibrée\*\*/, /`escalation\.verify`/, /`escalation\.operator`/, /`refused`[^\n]*n'est jamais compté/, /jamais « corrigé » sans `prouve`/,
+    /la passe de correction commence par le test qui le reproduit/, /Niveau de confiance sur le résultat/]) assert.match(run, rule);
+  const review = frontmatter('skills/review/SKILL.md').body;
+  for (const rule of [/`confidence` et preuve `evidence`/, /`refused`/, /`escalation`/, /niveau de confiance, preuve, correction attendue/, /par gravité et par niveau de confiance/]) assert.match(review, rule);
+  const stack = frontmatter('skills/stack/SKILL.md').body;
+  assert.match(stack, /\*\*Niveaux de confiance\*\*[^\n]*gh pr view <n> --json body[^\n]*n'est pas `prouve`/);
+  assert.ok(stack.indexOf('**Niveaux de confiance**') < stack.indexOf('## 4. Fusionner'), 'levels are shown before the merge');
+
+  const brief = read('skills/chef-de-projet/references/brief-type.md');
+  const template = brief.slice(brief.indexOf('```markdown'), brief.lastIndexOf('```'));
+  for (const rule of [...levels, /## Niveau de confiance/, /`confidence`/, /`evidence`/, /au mieux `probable`/]) assert.match(template, rule, 'the common brief template');
+  for (const file of ['integration-revues.md', 'livraison-pile.md', 'journal.md']) assert.match(read(`skills/chef-de-projet/references/${file}`), /niveau de confiance/, file);
+
+  for (const name of ['implementer', 'integrateur', 'qa-securite', 'qa-fidelite', 'architecte-donnees', 'dpo', 'critique-design', 'designer']) {
+    const { body } = frontmatter(`agents/${name}.md`);
+    const section = body.slice(body.indexOf('## Niveau de confiance'));
+    assert.ok(body.includes('## Niveau de confiance'), `${name}: confidence section`);
+    for (const level of levels) assert.match(section, level, `${name}: ${level}`);
+    assert.match(section, /preuve reproductible jointe/, `${name}: proof for prouve`);
+    assert.match(section, /refusée/, `${name}: refused without proof`);
+    assert.equal((body.match(/niveau de confiance/gi) ?? []).length >= 2, true, `${name}: the report format carries the level`);
+  }
+  assert.match(frontmatter('agents/implementer.md').body, /au mieux `probable` pour cette cause[^\n]*n'écris pas « corrigé »/);
+  for (const name of ['critique-design', 'qa-fidelite', 'designer']) assert.match(frontmatter(`agents/${name}.md`).body, /5 secondes[^\n]*au mieux `probable`/, name);
+  const grid = read('skills/design-artefact/references/grille-critique.md');
+  assert.match(grid, /### Niveau de confiance/);
+  assert.match(grid, /`Section \| Note \| Niveau \| Preuve principale`/);
+
+  const guide = read('docs/CONFIANCE.md');
+  for (const rule of [...levels, /typesafe\.ai/, /sans utiliser leur modèle/, /`refused`/, /`escalation`/, /`proof`/, /references\/confiance\.md/]) assert.match(guide, rule);
+  assert.match(read('docs/README.md'), /\(CONFIANCE\.md\)/);
+  assert.match(read('docs/RUN.md'), /CONFIANCE\.md/);
+  assert.match(read('docs/PLUGIN.md'), /CONFIANCE\.md/);
+  const unreleased = read('CHANGELOG.md').split('\n## ')[1];
+  assert.equal((read('CHANGELOG.md').match(/^## Non publié$/gm) ?? []).length, 1, 'a single unreleased section');
+  assert.match(unreleased.split('\n')[2], /^- \*\*Confiance calibrée et escalade\.\*\*/, 'first entry of the unreleased section');
+  for (const topic of [/`prouve`/, /`probable`/, /`suppose`/, /`refused`/, /escalation\.verify/, /references\/confiance\.md/]) assert.match(unreleased, topic);
+  assert.ok(!/[–—]/.test(reference + guide), 'no em or en dash');
 });
