@@ -25,6 +25,8 @@ export interface GateEvidence {
     runId: string | null;
     /** Receipts at this commit written for another configuration of the checks (ignored). */
     otherConfig: number;
+    /** Receipts at this commit of the targeted variant (`affected`) of the check: never proof of it (ignored). */
+    targeted: number;
 }
 export interface VerifyResult {
     repo: string;
@@ -41,5 +43,6 @@ export interface VerifyResult {
  * Whether the receipts prove that every required check passed on this exact commit, on a clean tree and with
  * the current configuration of the checks. Receipts of any run count (a task run proves its checks as well as a
  * full one), but for each check only the latest such receipt does: a failure is never hidden by an older success.
+ * Receipts of a targeted run (`targeted`, the `affected` command of a full check) never count.
  */
 export declare function verifyGates(options: VerifyOptions): Promise<VerifyResult>;

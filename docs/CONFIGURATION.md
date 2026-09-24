@@ -81,6 +81,20 @@ Par défaut, un contrôle a un accès exclusif au répertoire de validation, y c
 
 `stage` (facultatif) : `task` (valeur par défaut) pour un contrôle rapide, lancé après chaque tâche par `apv gates run --stage task` ; `full` pour un contrôle long (la suite navigateur complète, par exemple), réservé à la suite complète que le chef de projet passe à chaque intégration et à la livraison (`apv gates run --stage full`, puis `apv gates verify --commit <sha>`). Un contrôle `task` ne peut pas dépendre d'un contrôle `full`. Sans ce champ, tout tourne partout, comme avant ([RUN.md](RUN.md#contrôles--par-tâche-et-suite-complète)).
 
+`affected` (facultatif, contrôle de stage `full` seulement) : commande ciblée, tableau d'arguments avec les mêmes substitutions que `command`, qui lance seulement les tests concernés par les changements depuis la base. `apv gates run --stage task` l'exécute à la place du contrôle complet et la signale « ciblé » (sortie, reçus, `summary.json`) ; la suite complète (`--stage full`) et `apv gates verify` n'en tiennent aucun compte et restent obligatoires à l'intégration et à la livraison. Ses dépendances doivent être des contrôles `task` ou d'autres contrôles ciblés (sinon configuration refusée). Un contrôle `full` sans `affected` reste « réservé à la suite complète » à l'étape de tâche. Exemple pour Playwright (`--only-changed` compare au commit de base les fichiers de tests et leurs imports ; `--pass-with-no-tests` fait réussir une tâche qui ne touche aucun test) :
+
+```json
+{
+  "id": "e2e",
+  "stage": "full",
+  "command": ["apv", "lock", "run", "e2e", "--", "npx", "playwright", "test"],
+  "affected": ["apv", "lock", "run", "e2e", "--", "npx", "playwright", "test", "--only-changed={{baseSha}}", "--pass-with-no-tests"],
+  "timeoutMs": 900000
+}
+```
+
+`apv lock run e2e` sérialise le navigateur de test entre agents (voir [LOCKS.md](LOCKS.md)) ; le verrou ne dure que le temps des tests ciblés. `--base <ref>` est obligatoire à l'étape de tâche (`apv gates run --stage task --base <base>`). Limite : `--only-changed` suit les imports des fichiers de tests, pas le navigateur ; une modification de l'application seule ne sélectionne pas les tests e2e qui la parcourent. L'implementer ajoute ou modifie donc le test du comportement qu'il change, et la suite complète reste le filet à l'intégration. Pour une interface, faites tourner les tests navigateur en mouvement réduit par défaut (Playwright : `use: { reducedMotion: 'reduce' }` dans la configuration, et des animations CSS qui respectent `prefers-reduced-motion`) : un clic pendant une animation est la première cause d'instabilité ; seuls les tests qui vérifient une animation remettent `reducedMotion: 'no-preference'`.
+
 `readOnly: true` est une déclaration revue par l'opérateur : la commande **et ses sous-processus** ne doivent écrire aucun fichier dans ce répertoire. Seuls ces contrôles peuvent tourner ensemble, dans la limite de `concurrency` et des ressources nommées ; ils attendent aussi la fin d'un contrôle susceptible d'écrire. Ce champ n'est pas un sandbox ni une détection automatique. Ne pas l'activer pour un lint avec cache, un compilateur incrémental, des tests avec couverture ou des E2E qui lancent un build. Les anciens profils peuvent donc valider plus lentement ; déclarer uniquement les commandes réellement en lecture seule permet de retrouver du parallélisme sûr.
 
 ```json

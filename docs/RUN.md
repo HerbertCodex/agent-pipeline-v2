@@ -50,6 +50,31 @@ Règles :
 - le chef de projet est le seul à écrire l'état : les agents et les workflows rendent leurs rapports, lui les vérifie puis les enregistre ;
 - l'état est commité avec les notes de reprise (`resume.md`) aux points de sauvegarde.
 
+### Exécution détachée et suivi
+
+Une exécution lancée dans une autre session (`claude -p "/apv:run <id>"`, depuis la session du chef de projet ou un terminal) doit être **détachée** : un processus lancé en tâche de fond du shell (`&` seul) appartient à la session qui l'a lancé et s'arrête avec elle. Nuit du 23 au 24 septembre 2026 sur « Toujours rien » : l'exécution `statut-a-envoyer`, lancée ainsi, a été coupée en vague 2 à la fin de la session du chef de projet ; relancée détachée, elle a survécu. `setsid` la place dans une nouvelle session sans terminal, `nohup` la protège de SIGHUP, et ses entrées et sorties ne dépendent plus du shell :
+
+```sh
+setsid nohup sh -c 'echo "pid $$"; exec claude -p "/apv:run <id>" --plugin-dir <plugin> --output-format stream-json --verbose' \
+  > .apv/state/session-<id>.log 2>&1 < /dev/null &
+```
+
+La première ligne du journal donne le pid (`exec` garde le même processus) ; `.apv/state/*.log` n'est jamais commité. La session détachée suit les règles des sessions non interactives de `/apv:run` (agents au premier plan, pas d'outil Workflow).
+
+**Suivi par moniteur, pas par relevés espacés.** Le chef de projet qui surveille cette exécution réagit à chaque changement de `.apv/state/run-<id>.json` (toute transition passe par `apv run set`) et à la fin du processus, au lieu de relever l'état toutes les 30 minutes : une tâche finie, une intégration rouge ou une session arrêtée se voient dans la minute. Avec l'outil Monitor de Claude Code (délai maximal 30 minutes, réarmé à chaque expiration) :
+
+```sh
+f=.apv/state/run-<id>.json; read -r _ pid < .apv/state/session-<id>.log; last=""
+while true; do
+  cur=$(cksum < "$f" 2>/dev/null)
+  if [ "$cur" != "$last" ]; then last=$cur; apv run status <id> 2>&1 | sed -n '1,6p'; fi
+  kill -0 "$pid" 2>/dev/null || { echo "session <id> terminée (pid $pid)"; apv run next <id> 2>&1 | sed -n '1,6p'; exit 0; }
+  sleep 5
+done
+```
+
+Sans l'outil Monitor : une boucle bornée, lancée par l'outil Bash en arrière-plan, qui sort au premier changement de l'état, à la fin du processus ou après 25 minutes au plus (sa fin relance le chef de projet), puis relancée. À chaque événement : `apv run next <id>`, et la fin du journal de session si le processus s'est arrêté avant la livraison (reprise : section 6).
+
 ## 4. Vagues parallèles
 
 ### Workflows du plugin
@@ -76,12 +101,14 @@ Premier `/apv:run` réel (« Toujours rien », spec `conformite-rgpd`, 95 minute
 
 | Qui | Quand | Commande |
 |---|---|---|
-| implementer (et intégrateur) | fin de chaque tâche | `apv gates run --stage task --base <base>`, puis, sous `apv lock run e2e -- <commande du projet>`, les seuls fichiers de tests e2e créés ou modifiés (par exemple `npx playwright test <fichiers>`) |
+| implementer (et intégrateur) | fin de chaque tâche | `apv gates run --stage task --base <base>` ; si le contrôle navigateur déclare `affected`, il y lance déjà les tests concernés par les changements (« ciblé ») ; sinon, sous `apv lock run e2e -- <commande du projet>`, les seuls fichiers de tests e2e créés ou modifiés (par exemple `npx playwright test <fichiers>`) |
 | chef de projet | chaque intégration, avant d'avancer `apv/<id>` et d'ouvrir les tâches suivantes | `apv gates run --stage full --repo <worktree>` sur la tête intégrée, arbre propre, puis `apv gates verify --commit <tête> --repo <worktree>` |
 | chef de projet | livraison, avant de pousser | la même chose sur la tête finale, dans un worktree propre |
 | revues | après l'intégration | aucune relance de la suite complète ni de Playwright, sauf besoin précis de leur domaine : elles citent les reçus de la suite complète de ce commit |
 
 Configuration : dans `.apv/config.json`, un contrôle long déclare `"stage": "full"` (la suite navigateur complète, par exemple) ; les autres restent `task`, la valeur par défaut. Un projet sans contrôle marqué garde le comportement antérieur : `--stage task` exécute tout. Détails des options et des reçus : [CLI.md](CLI.md#apv-gates-run).
+
+**Tests ciblés.** Un contrôle `full` peut déclarer une commande `affected` (Playwright : `--only-changed={{baseSha}}`), que `--stage task` exécute à sa place, signalée « ciblé » ; un reçu ciblé ne compte jamais pour `apv gates verify` ([CONFIGURATION.md](CONFIGURATION.md#graphe-de-contrôles)). **Test instable** : on répète le seul test en cause (`<fichier>:<ligne>` ou `-g "<titre>"`), `--repeat-each` borné à 20 au plus, jamais un fichier entier sous le verrou `e2e` (sur « Toujours rien », un agent a répété 20 fois un fichier de 5 minutes et bloqué tous les autres). Ces instabilités venaient surtout de clics pendant des animations : un projet à interface fait tourner ses tests navigateur en mouvement réduit par défaut (Playwright : `use: { reducedMotion: 'reduce' }`), les tests d'animation gardant leur réglage.
 
 **Rien ne passe pour autant.** Une vague n'est acceptée (avance rapide de `apv/<id>`) et une PR n'est ouverte que sur une suite complète verte **au commit exact** : `apv gates verify` sort en `0` seulement si le reçu le plus récent de chaque contrôle déclaré a réussi sur ce commit, arbre propre, avec la configuration actuelle ; un contrôle réservé n'est jamais compté comme réussi, et un échec plus récent l'emporte sur une réussite plus ancienne. Une suite complète rouge ouvre une passe de corrections, jamais ignorée. Seul le moment de la détection change : un test navigateur cassé par une tâche sans toucher à ses fichiers e2e est détecté à l'intégration de la vague au lieu de la fin de la tâche, et corrigé avant que quoi que ce soit n'avance.
 

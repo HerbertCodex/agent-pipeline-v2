@@ -79,6 +79,8 @@ test('vague: one isolated apv:implementer per task, with the start and scope ins
     assert.ok(call.prompt.includes(`gates run --stage task --base ${WAVE_ARGS.baseCommit}\``), 'task checks only, from the exact base');
     assert.match(call.prompt, /seulement les fichiers e2e que tu as créés ou modifiés, sous `node "\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\.js" lock run e2e -- /);
     assert.match(call.prompt, /réservés à la suite complète » ne sont ni lancés ni annoncés verts/);
+    assert.match(call.prompt, /contrôle « ciblé »/);
+    assert.match(call.prompt, /`<fichier>:<ligne>` ou `-g "<titre>"`\), `--repeat-each` 20 au plus/);
     assert.doesNotMatch(call.prompt, /Tous les contrôles de la consigne commune/);
   }
   assert.ok(rt.calls[1].prompt.includes('termine depuis le wip abc1234'));

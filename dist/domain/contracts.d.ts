@@ -31,6 +31,7 @@ export declare const gateSchema: import("./schema.js").Schema<{
     readonly mandatory: boolean;
     readonly cacheTtlMs: number;
     readonly stage: "task" | "full" | undefined;
+    readonly affected: string[] | undefined;
 }>;
 /** Stage of a check; absent means `task`. */
 export declare const gateStage: (gate: {
@@ -216,6 +217,7 @@ export declare const configSchema: import("./schema.js").Schema<{
         readonly mandatory: boolean;
         readonly cacheTtlMs: number;
         readonly stage: "task" | "full" | undefined;
+        readonly affected: string[] | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;
@@ -277,6 +279,7 @@ export declare const receiptSchema: import("./schema.js").Schema<{
     readonly reusedFrom: string | null;
     readonly stage: "task" | "full" | undefined;
     readonly dirty: boolean | undefined;
+    readonly targeted: boolean | undefined;
 }>;
 export type GateReceipt = Infer<typeof receiptSchema>;
 export declare function validateReceipt(value: unknown): GateReceipt;

@@ -39,6 +39,10 @@ export const gateSchema = s.object({
     cacheTtlMs: s.default(s.number(0, 86400000), 0),
     // Optional, never defaulted: a configuration without stages parses and hashes exactly as before.
     stage: s.optional(s.enum(gateStages)),
+    // Targeted variant of a `full` check (argv, same placeholders): only the tests concerned by the changes since the
+    // base, for example `playwright test --only-changed={{baseSha}}`. Run by the task stage in place of the check,
+    // never counted as proof of it. Optional, never defaulted: absent, parsing and hashing are unchanged.
+    affected: s.optional(argv),
 });
 /** Stage of a check; absent means `task`. */
 export const gateStage = (gate) => gate.stage ?? 'task';
@@ -173,6 +177,8 @@ export const receiptSchema = s.object({
     // changes (the receipt then describes more than `candidateSha`). Absent on older receipts.
     stage: s.optional(s.enum(gateStages)),
     dirty: s.optional(s.boolean()),
+    // True when the task stage ran the targeted variant (`affected`) of a full check: never proof of the full check.
+    targeted: s.optional(s.boolean()),
 });
 export function validateReceipt(value) {
     const r = receiptSchema.parse(value);

@@ -266,6 +266,7 @@ export declare function targetedQaContext(context: {
         reusedFrom: string | null;
         stage: "task" | "full" | undefined;
         dirty: boolean | undefined;
+        targeted: boolean | undefined;
     }[];
     qaScope: {
         mode: string;
