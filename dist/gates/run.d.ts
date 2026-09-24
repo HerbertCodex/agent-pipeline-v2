@@ -9,7 +9,10 @@ export interface GateRunOptions {
     config: ApvConfig;
     /** Selected gate ids; their dependencies are added. Empty or absent: every configured gate. */
     only?: readonly string[];
-    /** `task`: only the checks of stage task run, the others are reported as reserved. `full` (default): every check. */
+    /**
+     * `task`: the checks of stage task run, a full check with an `affected` command runs that targeted command instead,
+     * the other full checks are reported as reserved. `full` (default): every check, never targeted.
+     */
     stage?: GateStage;
     /** Commit the `{{baseSha}}` placeholder stands for. */
     base?: string;
@@ -31,6 +34,8 @@ export interface GateRunResult {
     added: string[];
     /** Selected checks of stage full left out of a task run: never executed, never counted as passed. */
     reserved: string[];
+    /** Full checks a task run executed through their `affected` command (receipts marked `targeted`). */
+    targeted: string[];
     receipts: GateReceipt[];
     directory: string;
     ok: boolean;
@@ -40,9 +45,13 @@ export declare function selectGates(gates: readonly Gate[], only?: readonly stri
     gates: Gate[];
     added: string[];
 };
-/** Checks a stage runs, and the selected checks it leaves to the full suite. */
+/**
+ * Checks a stage requires (`run`), the full checks a task stage runs through their targeted `affected` command
+ * (`targeted`, never proof of the full check) and the selected checks it leaves to the full suite (`reserved`).
+ */
 export declare function stageGates(gates: readonly Gate[], stage: GateStage): {
     run: Gate[];
+    targeted: Gate[];
     reserved: Gate[];
 };
 /** Identity of the declared checks and passed variables, recorded in every receipt and compared by `apv gates verify`. */

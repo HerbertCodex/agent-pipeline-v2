@@ -78,6 +78,14 @@ export function configIssues(raw) {
                 const target = value.gates.find(g => g.id === dep);
                 list.check(!target || gateStage(target) === 'task', 'CONFIG', `Gate ${gate.id} (stage task) depends on ${dep}, reserved for the full suite (stage full)`);
             }
+        // A targeted variant replaces a full check at the task stage only, where every dependency must run too.
+        if (gate.affected) {
+            list.check(gateStage(gate) === 'full', 'CONFIG', `Gate ${gate.id}: affected is the targeted variant of a full check; declare "stage": "full"`);
+            for (const dep of gate.dependsOn) {
+                const target = value.gates.find(g => g.id === dep);
+                list.check(!target || gateStage(target) === 'task' || !!target.affected, 'CONFIG', `Gate ${gate.id} (targeted at stage task) depends on ${dep}, reserved for the full suite without a targeted variant`);
+            }
+        }
     }
     const ruleIds = value.validationRules.map(r => r.id);
     list.check(new Set(ruleIds).size === ruleIds.length, 'CONFIG', 'Duplicate validation rule id');

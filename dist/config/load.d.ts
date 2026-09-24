@@ -38,6 +38,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly mandatory: boolean;
         readonly cacheTtlMs: number;
         readonly stage: "task" | "full" | undefined;
+        readonly affected: string[] | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;

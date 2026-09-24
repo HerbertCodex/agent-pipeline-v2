@@ -22,7 +22,10 @@ export interface GateRunOptions {
   config: ApvConfig;
   /** Selected gate ids; their dependencies are added. Empty or absent: every configured gate. */
   only?: readonly string[];
-  /** `task`: only the checks of stage task run, the others are reported as reserved. `full` (default): every check. */
+  /**
+   * `task`: the checks of stage task run, a full check with an `affected` command runs that targeted command instead,
+   * the other full checks are reported as reserved. `full` (default): every check, never targeted.
+   */
   stage?: GateStage;
   /** Commit the `{{baseSha}}` placeholder stands for. */
   base?: string;
@@ -44,6 +47,8 @@ export interface GateRunResult {
   added: string[];
   /** Selected checks of stage full left out of a task run: never executed, never counted as passed. */
   reserved: string[];
+  /** Full checks a task run executed through their `affected` command (receipts marked `targeted`). */
+  targeted: string[];
   receipts: GateReceipt[];
   directory: string;
   ok: boolean;
@@ -61,10 +66,14 @@ export function selectGates(gates: readonly Gate[], only: readonly string[] = []
   return { gates: gates.filter(g => chosen.has(g.id)), added: [...chosen].filter(id => !only.includes(id)) };
 }
 
-/** Checks a stage runs, and the selected checks it leaves to the full suite. */
-export function stageGates(gates: readonly Gate[], stage: GateStage): { run: Gate[]; reserved: Gate[] } {
-  if (stage === 'full') return { run: [...gates], reserved: [] };
-  return { run: gates.filter(g => gateStage(g) === 'task'), reserved: gates.filter(g => gateStage(g) === 'full') };
+/**
+ * Checks a stage requires (`run`), the full checks a task stage runs through their targeted `affected` command
+ * (`targeted`, never proof of the full check) and the selected checks it leaves to the full suite (`reserved`).
+ */
+export function stageGates(gates: readonly Gate[], stage: GateStage): { run: Gate[]; targeted: Gate[]; reserved: Gate[] } {
+  if (stage === 'full') return { run: [...gates], targeted: [], reserved: [] };
+  const full = gates.filter(g => gateStage(g) === 'full');
+  return { run: gates.filter(g => gateStage(g) === 'task'), targeted: full.filter(g => g.affected), reserved: full.filter(g => !g.affected) };
 }
 
 /** Identity of the declared checks and passed variables, recorded in every receipt and compared by `apv gates verify`. */
@@ -89,7 +98,12 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const selection = selectGates(options.config.gates, options.only);
   invariant(selection.gates.length > 0, 'NO_GATES', 'No checks configured; declare gates in .apv/config.json');
   const { added } = selection;
-  const { run: gates, reserved } = stageGates(selection.gates, stage);
+  const staged = stageGates(selection.gates, stage);
+  const { reserved } = staged;
+  const targeted = new Set(staged.targeted.map(g => g.id));
+  // Configuration order; a targeted check keeps its id, dependencies and resources, with its targeted command.
+  const gates = selection.gates.filter(g => staged.run.includes(g) || targeted.has(g.id))
+    .map(g => targeted.has(g.id) ? { ...g, command: g.affected! } : g);
   const context: Record<string, string> = { workspace: repo, candidateSha, ...(baseSha ? { baseSha } : {}) };
   // Placeholders are resolved before anything runs: a missing --base never fails halfway through a batch.
   const commands = new Map(gates.map(g => {
@@ -109,8 +123,8 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const configHash = gatesConfigHash(options.config);
   const source = options.env ?? process.env;
   const keys = new Map<string, string>();
-  const write = (receipt: Omit<GateReceipt, 'stage' | 'dirty'>): GateReceipt => {
-    const valid = validateReceipt({ ...receipt, stage, dirty });
+  const write = (receipt: Omit<GateReceipt, 'stage' | 'dirty' | 'targeted'>): GateReceipt => {
+    const valid = validateReceipt({ ...receipt, stage, dirty, ...(targeted.has(receipt.gateId) ? { targeted: true } : {}) });
     writeFileSync(join(directory, `${valid.gateId}.json`), JSON.stringify(valid, null, 2) + '\n');
     return valid;
   };
@@ -142,9 +156,9 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       stdoutHash: '', stderrHash: '', diagnostic: reason, reusedFrom: null }),
   });
   const result: GateRunResult = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
-    reserved: reserved.map(g => g.id), receipts: list, directory, ok: list.every(success) };
+    reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, ok: list.every(success) };
   writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
-    reserved: result.reserved,
-    receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, exitCode: r.exitCode, durationMs: Math.round(r.durationMs) })) }, null, 2) + '\n');
+    reserved: result.reserved, targeted: result.targeted,
+    receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs) })) }, null, 2) + '\n');
   return result;
 }

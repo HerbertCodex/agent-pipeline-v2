@@ -27,7 +27,10 @@ Tu codes UNE tâche d'une spec de <nom du projet> (<description en une ligne : p
 
 ## Contrôles obligatoires avant de rendre la main (tous verts)
 1. `apv gates run --stage task --base <base>` : les contrôles rapides déclarés dans `.apv/config.json` (<par exemple : typage, lint, analyseur du framework, code mort, tests unitaires, build>). Les contrôles `"stage": "full"` (<par exemple : suite navigateur complète>) sont « réservés à la suite complète » : tu ne les lances pas ; le chef de projet les passe sur la tête intégrée de chaque vague.
-2. Tes tests navigateur seulement : `apv lock run e2e -- <commande du projet, par exemple npx playwright test> <fichiers e2e que tu as créés ou modifiés>`. Aucun fichier e2e touché : rien à lancer.
+   <si le contrôle navigateur déclare `affected` : l'étape 1 lance déjà les tests concernés par tes changements (ligne « ciblé ») ; un reçu ciblé ne prouve jamais la suite complète>
+2. Tes tests navigateur seulement (si le contrôle navigateur n'a pas de commande `affected`) : `apv lock run e2e -- <commande du projet, par exemple npx playwright test> <fichiers e2e que tu as créés ou modifiés>`. Aucun fichier e2e touché : rien à lancer. Jamais la suite navigateur entière.
+3. Test instable : répéter seulement le test en cause (`<fichier>:<ligne>` ou `-g "<titre>"`), `--repeat-each` borné à 20 au plus, sous `apv lock run e2e` ; jamais un fichier entier répété sous le verrou. Cause la plus fréquente : un clic pendant une animation ; attendre l'état stable, pas un délai fixe.
+<projet à interface : tests navigateur en mouvement réduit par défaut (Playwright : `use: { reducedMotion: 'reduce' }`) ; seuls les tests d'animation gardent leur réglage>
 <projet sans contrôle marqué full : `apv gates run --stage task` exécute tout, suite navigateur comprise ; projet sans contrôle déclaré : liste exacte des commandes>
 Services : <pile locale, ports, variables à charger>. Ne jamais arrêter un service partagé.
 Ressources partagées : toujours sous bail, une commande à la fois : `apv lock run <ressource> -- <commande>`.
@@ -40,5 +43,5 @@ Un contrôle rouge hors de ta tâche : corrige si trivial, sinon signale-le pré
 - Ne pousse pas, ne fusionne pas, ne force jamais, ne modifie pas la branche principale. Aucun secret, aucun `.env`.
 
 ## Rapport final (moins de 300 mots)
-Fichiers principaux, commits (hash), résultat de CHAQUE contrôle (commande, vert ou rouge, nombre de tests ; contrôles réservés à la suite complète nommés comme tels ; fichiers e2e lancés), critères couverts et comment, écarts à la maquette ou à la spec et pourquoi, points ouverts.
+Fichiers principaux, commits (hash), résultat de CHAQUE contrôle (commande, vert ou rouge, nombre de tests ; contrôles réservés à la suite complète nommés comme tels, contrôles ciblés nommés « ciblé » ; fichiers e2e lancés), critères couverts et comment, écarts à la maquette ou à la spec et pourquoi, points ouverts.
 ```

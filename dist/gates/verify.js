@@ -42,6 +42,7 @@ const latest = (a, b) => b.receipt.startedAt > a.receipt.startedAt || (b.receipt
  * Whether the receipts prove that every required check passed on this exact commit, on a clean tree and with
  * the current configuration of the checks. Receipts of any run count (a task run proves its checks as well as a
  * full one), but for each check only the latest such receipt does: a failure is never hidden by an older success.
+ * Receipts of a targeted run (`targeted`, the `affected` command of a full check) never count.
  */
 export async function verifyGates(options) {
     const git = new Git();
@@ -55,17 +56,20 @@ export async function verifyGates(options) {
     const { found, unreadable } = readReceipts(repo);
     const atCommit = found.filter(f => f.receipt.candidateSha === commit);
     const gates = required.map((gateId) => {
-        const mine = atCommit.filter(f => f.receipt.gateId === gateId);
+        const all = atCommit.filter(f => f.receipt.gateId === gateId);
+        // A targeted run only covered the tests concerned by some changes: it proves nothing about the whole check.
+        const mine = all.filter(f => f.receipt.targeted !== true);
+        const targeted = all.length - mine.length;
         const current = mine.filter(f => f.receipt.configHash === configHash);
         const otherConfig = mine.length - current.length;
         const clean = current.filter(f => f.dirty === false);
         if (!clean.length) {
             const state = current.length ? 'dirty' : 'missing';
-            return { gateId, state, status: null, receipt: null, runId: null, otherConfig };
+            return { gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted };
         }
         const last = clean.reduce(latest);
         return { gateId, state: success(last.receipt) ? 'passed' : 'failed', status: last.receipt.status, receipt: last.receipt.id,
-            runId: last.receipt.runId, otherConfig };
+            runId: last.receipt.runId, otherConfig, targeted };
     });
     return { repo, commit, stage, configHash, required, gates, unreadable, ok: gates.every(g => g.state === 'passed') };
 }
