@@ -1,0 +1,8 @@
+import { Git } from '../execution/git.js';
+import { type StructureReport } from '../structure/analyze.js';
+import type { CommandIO } from './io.js';
+export declare const usage = "Utilisation :\n  apv structure check [--path <dossier>]... [--repo <chemin>] [--json]\n\nAnalyse l'arborescence des fichiers de code suivis par Git (jamais les fichiers ignor\u00E9s) et signale :\n  flat-folder      un dossier qui a plus de N fichiers de code directement (d\u00E9faut 12 ; tests et\n                   fichiers compagnons compt\u00E9s \u00E0 part) ;\n  repeated-prefix  plusieurs fichiers qui partagent un pr\u00E9fixe de domaine (singulier et pluriel rapproch\u00E9s) ;\n  mixed-roles      un dossier qui m\u00EAle des r\u00F4les (actions, d\u00E9p\u00F4ts de donn\u00E9es, clients, utilitaires HTTP...)\n                   pour plusieurs domaines ;\n  stray-file       un fichier dont le pr\u00E9fixe est le nom d'un dossier voisin.\nChaque constat a sa proposition ; le plan de rangement (ancien -> nouveau) n'est jamais appliqu\u00E9.\n--path limite l'analyse \u00E0 un dossier (relatif \u00E0 la racine du d\u00E9p\u00F4t) et \u00E0 ses sous-dossiers ; r\u00E9p\u00E9table.\nConfiguration facultative :\nsection \u00AB structure \u00BB de .apv/config.json (roots, maxFlatFiles, roles, domains, ignore, severity).\nSortie : 0 aucun constat de gravit\u00E9 error (par d\u00E9faut tout est warning), 1 au moins un, 2 appel incorrect.";
+/** Tracked files of the repository, as Git lists them (never ignored or untracked files). */
+export declare function trackedFiles(git: Git, repo: string): Promise<string[]>;
+export declare function formatReport(report: StructureReport, scope: string[]): string;
+export declare function run(args: string[], io: CommandIO): Promise<number>;

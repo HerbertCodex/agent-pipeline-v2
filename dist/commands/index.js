@@ -17,6 +17,7 @@ export const commands = {
     lock: { summary: 'lock run|acquire|release|status <ressource> : verrous à bail (propriétaire vérifié, expiration, file d\'attente)', load: () => import('./lock.js') },
     db: { summary: 'db check [--live] : contrôle du modèle de données (migrations, code, base en lecture seule)', load: () => import('./db.js') },
     design: { summary: 'design register|list|check : maquettes validées (copie, empreinte, décision au registre, dérive)', load: () => import('./design.js') },
+    structure: { summary: 'structure check [--path <dossier>]... : analyse de l\'arborescence (dossiers trop pleins, préfixes répétés, rôles mêlés, fichiers égarés) et plan de rangement proposé', load: () => import('./structure.js') },
     quota: { summary: 'quota : relève l\'usage (session, semaine) et le journalise', load: () => import('./quota.js') },
     preview: { summary: 'preview update [branche]|status|stop|logs : aperçu vivant (copie de la branche, build, serveur détaché)', load: () => import('./preview.js') },
     status: { summary: 'status : résumé de .apv/ (configuration, registre, specs, état, quota)', load: () => import('./status.js') },

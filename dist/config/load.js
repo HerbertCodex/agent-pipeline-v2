@@ -7,6 +7,7 @@ import { DEFAULT_PASS_ENV, envNamesSchema, gateSchema, gateStage, riskSchema, va
 import { skillsSchema } from '../domain/knowledge.js';
 import { previewSchema } from '../preview/config.js';
 import { designDir, designSchema } from '../design/config.js';
+import { structureSchema, structureSettings } from '../structure/config.js';
 import { validateDag } from '../policy/policy.js';
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
@@ -16,7 +17,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design'];
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure'];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'];
 export const apvConfigSchema = s.object({
@@ -31,6 +32,8 @@ export const apvConfigSchema = s.object({
     preview: s.optional(previewSchema),
     /** Folder of validated mockups (`apv design`, docs/DESIGN.md); absent means `docs/design`. */
     design: s.optional(designSchema),
+    /** Tree analysis of `apv structure check` (docs/CONFIGURATION.md, « Arborescence »); absent: defaults. */
+    structure: s.optional(structureSchema),
 });
 /** Picks the read sections: `environment.passEnv` only, whatever else a V2 environment declared. */
 export function readSections(raw) {
@@ -80,6 +83,8 @@ export function configIssues(raw) {
     list.check(new Set(ruleIds).size === ruleIds.length, 'CONFIG', 'Duplicate validation rule id');
     if (value.design)
         list.attempt('CONFIG', () => designDir(value.design));
+    if (value.structure)
+        list.attempt('CONFIG', () => structureSettings(value.structure));
     if (list.empty)
         list.attempt('DAG', () => validateDag(value.gates));
     return { config: list.empty ? value : undefined, ignored: sections.ignored, issues: list.items };

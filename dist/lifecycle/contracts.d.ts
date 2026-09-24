@@ -37,7 +37,7 @@ export declare const securityPlanSchema: import("../domain/schema.js").Schema<{
         readonly aiAgent: boolean;
         readonly mcp: boolean;
     };
-    readonly owaspTopics: ("threat-modeling" | "authentication" | "password-storage" | "session-management" | "authorization" | "input-validation" | "injection-prevention" | "xss" | "csrf" | "content-security-policy" | "file-upload" | "ssrf" | "rest-security" | "data-protection" | "secrets-management" | "logging-monitoring" | "software-supply-chain" | "github-actions" | "ai-agent-security" | "llm-prompt-injection" | "secure-coding-with-ai" | "mcp-security")[];
+    readonly owaspTopics: ("csrf" | "threat-modeling" | "authentication" | "password-storage" | "session-management" | "authorization" | "input-validation" | "injection-prevention" | "xss" | "content-security-policy" | "file-upload" | "ssrf" | "rest-security" | "data-protection" | "secrets-management" | "logging-monitoring" | "software-supply-chain" | "github-actions" | "ai-agent-security" | "llm-prompt-injection" | "secure-coding-with-ai" | "mcp-security")[];
     readonly threatModel: {
         readonly required: boolean;
         readonly summary: string;
@@ -55,7 +55,7 @@ export declare const securityPlanSchema: import("../domain/schema.js").Schema<{
     readonly requirements: {
         readonly id: string;
         readonly title: string;
-        readonly owaspTopics: ("threat-modeling" | "authentication" | "password-storage" | "session-management" | "authorization" | "input-validation" | "injection-prevention" | "xss" | "csrf" | "content-security-policy" | "file-upload" | "ssrf" | "rest-security" | "data-protection" | "secrets-management" | "logging-monitoring" | "software-supply-chain" | "github-actions" | "ai-agent-security" | "llm-prompt-injection" | "secure-coding-with-ai" | "mcp-security")[];
+        readonly owaspTopics: ("csrf" | "threat-modeling" | "authentication" | "password-storage" | "session-management" | "authorization" | "input-validation" | "injection-prevention" | "xss" | "content-security-policy" | "file-upload" | "ssrf" | "rest-security" | "data-protection" | "secrets-management" | "logging-monitoring" | "software-supply-chain" | "github-actions" | "ai-agent-security" | "llm-prompt-injection" | "secure-coding-with-ai" | "mcp-security")[];
         readonly acceptanceIds: string[];
         readonly verification: string;
         readonly negativeTests: string[];
@@ -147,7 +147,7 @@ export declare const specSchema: import("../domain/schema.js").Schema<{
             readonly aiAgent: boolean;
             readonly mcp: boolean;
         };
-        readonly owaspTopics: ("threat-modeling" | "authentication" | "password-storage" | "session-management" | "authorization" | "input-validation" | "injection-prevention" | "xss" | "csrf" | "content-security-policy" | "file-upload" | "ssrf" | "rest-security" | "data-protection" | "secrets-management" | "logging-monitoring" | "software-supply-chain" | "github-actions" | "ai-agent-security" | "llm-prompt-injection" | "secure-coding-with-ai" | "mcp-security")[];
+        readonly owaspTopics: ("csrf" | "threat-modeling" | "authentication" | "password-storage" | "session-management" | "authorization" | "input-validation" | "injection-prevention" | "xss" | "content-security-policy" | "file-upload" | "ssrf" | "rest-security" | "data-protection" | "secrets-management" | "logging-monitoring" | "software-supply-chain" | "github-actions" | "ai-agent-security" | "llm-prompt-injection" | "secure-coding-with-ai" | "mcp-security")[];
         readonly threatModel: {
             readonly required: boolean;
             readonly summary: string;
@@ -165,7 +165,7 @@ export declare const specSchema: import("../domain/schema.js").Schema<{
         readonly requirements: {
             readonly id: string;
             readonly title: string;
-            readonly owaspTopics: ("threat-modeling" | "authentication" | "password-storage" | "session-management" | "authorization" | "input-validation" | "injection-prevention" | "xss" | "csrf" | "content-security-policy" | "file-upload" | "ssrf" | "rest-security" | "data-protection" | "secrets-management" | "logging-monitoring" | "software-supply-chain" | "github-actions" | "ai-agent-security" | "llm-prompt-injection" | "secure-coding-with-ai" | "mcp-security")[];
+            readonly owaspTopics: ("csrf" | "threat-modeling" | "authentication" | "password-storage" | "session-management" | "authorization" | "input-validation" | "injection-prevention" | "xss" | "content-security-policy" | "file-upload" | "ssrf" | "rest-security" | "data-protection" | "secrets-management" | "logging-monitoring" | "software-supply-chain" | "github-actions" | "ai-agent-security" | "llm-prompt-injection" | "secure-coding-with-ai" | "mcp-security")[];
             readonly acceptanceIds: string[];
             readonly verification: string;
             readonly negativeTests: string[];
