@@ -24,7 +24,9 @@ Dans ce document, `apv` désigne `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` (ou 
 Montre **toute** la sortie à l'opérateur, sans la résumer ni la couper : PR, bases, têtes, état, contrôles. Sortie non nulle (code 1 : pile incohérente ; code 2 : appel incorrect) : arrêt, explique l'anomalie et ce qu'il faut corriger ; rien n'est fusionné.
 
 ## 3. Ordre de l'opérateur
-Si le message courant de l'opérateur contient l'ordre de fusionner ces PR (voir le début de ce document), passe à l'étape 4. Si son message demandait seulement le plan, ou si le plan révèle quelque chose qu'il n'a pas pu voir (une base inattendue, un contrôle rouge), montre-le et attends son ordre.
+**Niveaux de confiance** (compétence `chef-de-projet`, section 9 bis) : relis le corps de chaque PR (`gh pr view <n> --json body`). Une affirmation qui n'est pas `prouve` (une correction `probable` non vérifiée, une cause `suppose`, « corrigé » sans test qui échouait avant) se montre à l'opérateur avec le plan, dans ses mots : une fusion sur du `suppose` attend son ordre donné en connaissance de cause.
+
+Si le message courant de l'opérateur contient l'ordre de fusionner ces PR (voir le début de ce document), passe à l'étape 4. Si son message demandait seulement le plan, ou si le plan révèle quelque chose qu'il n'a pas pu voir (une base inattendue, un contrôle rouge, une affirmation `suppose` qu'il ne connaissait pas), montre-le et attends son ordre.
 
 ## 4. Fusionner
 `APV_ALLOW_MERGE=1 apv stack merge <pr...> [--method <méthode>] [--ready] [--target <branche>]` (mêmes options qu'au plan)

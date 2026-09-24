@@ -21,6 +21,7 @@ Dans ce document, `apv` désigne `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` (ou 
 - **L'état d'exécution s'écrit par l'outil seulement** (`apv run start`, `apv run set`) ; jamais d'édition à la main de `.apv/state/run-<id>.json`. Si l'outil refuse une transition, lis son message et corrige l'ordre de tes actions ; ne force rien.
 - **Contrôles par tâche, suite complète à l'intégration** : chaque implementer lance les contrôles rapides (`apv gates run --stage task`, qui exécute aussi la commande ciblée `affected` d'un contrôle `full`, signalée « ciblé », jamais une preuve de la suite complète) et, sans commande ciblée, ses seuls fichiers e2e ; un test instable se répète seul (`<fichier>:<ligne>` ou `-g`, `--repeat-each` 20 au plus), jamais un fichier entier sous le verrou `e2e` ; toi, la suite complète (`apv gates run --stage full`) une fois à chaque intégration et une fois à la livraison, suivie de `apv gates verify --commit <tête>`. Une intégration n'avance `apv/<id>` et une PR ne s'ouvre que sur une vérification à `0` au commit exact ; une suite complète rouge ouvre une passe de corrections, jamais ignorée.
 - **Un rapport d'agent est une affirmation** ; tes contrôles relancés sont la preuve. Aucune sortie masquée d'une commande qui écrit sur un service externe (incident 30).
+- **Confiance calibrée** (compétence `chef-de-projet`, section 9 bis, et `references/confiance.md`) : chaque rapport donne son niveau, `prouve`, `probable` ou `suppose`, avec sa preuve ou sa justification. Tu n'intègres, ne livres et n'annonces « corrigé » que sur du `prouve` ; `probable` demande d'abord un test ou une exécution ; `suppose` remonte à l'opérateur avant toute action sur la production, toute fusion et toute annonce « corrigé ».
 - Aucune question à l'opérateur avant la fin, sauf une décision qui lui revient (produit, design, comptes, identité, fusion, déploiement) : note-la, avance sur le reste, pose-la groupée.
 
 ## 0. Reprise d'abord
@@ -71,6 +72,7 @@ Règle unique : une tâche se lance **dès qu'elle est prête**, pas vague par v
 8. **À chaque rapport** (ou au rapport du workflow) :
    - vérifie la branche : `git log --oneline <base>..<branche>`, fichiers touchés ;
    - **`apv scope check --spec <spec> --task <tâche> --base <baseCommit> --repo <worktree>`**, relancé par toi à la fin de chaque tâche. Un fichier hors périmètre est accepté seulement s'il est minimal et justifié dans le rapport (note-le) ; sinon la tâche repart avec la consigne de le retirer ;
+   - **niveau de confiance** du rapport (`confidence` et `evidence` du workflow, ou la ligne « Niveau » d'un rapport libre) : `prouve`, tu vérifies que la preuve porte sur la tâche ; `probable` (listé dans `escalation.verify` du workflow), tu fais d'abord la vérification qui manque (test ou exécution, par toi ou par l'agent) ; `suppose` (`escalation.operator`), pas de `done` : l'agent reprend pour prouver, ou la question remonte à l'opérateur si elle lui revient. Un rapport refusé par le workflow (`refused` : niveau absent ou inconnu, preuve vide) n'est jamais compté : redemande-le à l'agent ou relance la tâche ;
    - tâche finie et vérifiée : `apv run set <id> task:<tâche> done --commit <sha> --worktree <chemin>` ;
    - tâche en échec ou rapport absent : `apv run set <id> task:<tâche> failed --note "<cause>"`, puis relance (section 9) ou décision écrite au journal.
 
@@ -93,6 +95,9 @@ Ne pousse pas, ne fusionne pas, ne réécris aucun commit.
 Rapport (moins de 300 mots) : branche, sha complet de HEAD, chemin du worktree (pwd), chaque contrôle
 (commande, vert ou rouge, nombre de tests ; réservés à la suite complète nommés comme tels, ciblés nommés « ciblé »), résultat du scope check et fichiers hors périmètre,
 critères couverts, écarts et pourquoi, points ouverts.
+Niveau de confiance sur le résultat et sur chaque affirmation importante : prouve (preuve reproductible jointe :
+commande et sortie, test rouge avant puis vert après pour une correction), probable (code lu, sans exécution,
+chemins cités) ou suppose (hypothèse, ce qui la prouverait) ; jamais sans preuve ni justification.
 ```
 
 ## 5. Intégration (étape `integration`)
@@ -108,7 +113,8 @@ Dès qu'une tâche, ou un lot de tâches finies, est vérifiée (section 4, éta
 
 ## 7. Corrections (étape `fixes`), puis livraison (étape `delivery`)
 **Corrections**
-1. Décide chaque constat par écrit dans `.apv/state/corrections-<id>.md` (identifiants S, F, D, R, T ; gravité ; décision précise ou écart assumé justifié). Critiques et élevés toujours corrigés ; un faux positif se prouve.
+1. Décide chaque constat par écrit dans `.apv/state/corrections-<id>.md` (identifiants S, F, D, R, T ; gravité ; niveau de confiance ; décision précise ou écart assumé justifié). Critiques et élevés toujours corrigés ; un faux positif se prouve. Un constat `probable` : la passe de correction commence par le test qui le reproduit ; un constat `suppose` critique ou élevé : prouvé d'abord, ou remonté à l'opérateur.
+   Chaque correction revient `prouve` (le test échouait avant, passe après) avant d'être intégrée et annoncée ; sinon elle n'est pas « corrigée ».
 2. Aucun constat à corriger : `apv run set <id> fixes skipped --note "<raison>"`.
 3. Sinon `apv run set <id> fixes running` : une passe par domaine (serveur et données, interface), chacune confiée à un `apv:implementer` sur `apv/<id>-fix-<domaine>` depuis la tête de `apv/<id>`, avec le fichier de corrections comme cahier des charges ; en parallèle quand les fichiers ne se recouvrent pas. Intégration comme en section 5. Nouvelle revue ciblée (`/apv:review <id> <domaine>`) quand la correction est lourde. Puis `apv run set <id> fixes done --commit <sha>`.
 
@@ -116,10 +122,10 @@ Dès qu'une tâche, ou un lot de tâches finies, est vérifiée (section 4, éta
 1. `apv run set <id> delivery running`.
 2. Tes contrôles, sur la tête exacte de `apv/<id>`, dans un worktree propre (`git worktree add --detach <dossier> apv/<id>`, dépendances installées) : la suite complète `apv gates run --stage full --repo <dossier>`, puis `apv gates verify --commit <tête> --repo <dossier>` qui doit sortir en `0` avant de pousser ; `apv db check` si la base a changé, `apv design check` si le projet a des maquettes validées. Un rouge bloque la PR et ouvre une passe de corrections (étape `fixes`). Note les nombres de tests et le dossier des reçus.
 3. `git push -u origin apv/<id>`, sortie lue.
-4. `gh pr create --draft --base <base> --head apv/<id> --title "<titre>" --body "<corps>"`, **sans masquer la sortie**, puis `gh pr view <n> --json number,baseRefName,headRefName,isDraft,url` : base et statut brouillon vérifiés. Corps : résumé, critères couverts, preuves (contrôles et nombres de tests, revues, ZAP), écarts assumés à valider, points qui demandent l'opérateur, base de la pile.
+4. `gh pr create --draft --base <base> --head apv/<id> --title "<titre>" --body "<corps>"`, **sans masquer la sortie**, puis `gh pr view <n> --json number,baseRefName,headRefName,isDraft,url` : base et statut brouillon vérifiés. Corps : résumé, critères couverts, preuves (contrôles et nombres de tests, revues, ZAP), écarts assumés à valider, points qui demandent l'opérateur, base de la pile ; chaque affirmation importante avec son niveau de confiance, les `probable` non vérifiées et les `suppose` dans les points qui demandent l'opérateur.
 5. Aperçu : si `.apv/config.json` a une section `preview`, `/apv:preview apv/<id>` (`apv preview update apv/<id>`, vérification, annonce).
 6. `apv run set <id> delivery done --note "PR #<n> <url>"`, `.apv/state/resume.md` à jour, journal du pipeline complété (bilan de la spec, consommation de quota par vague).
-7. Remise à l'opérateur : lien de la PR et sa base, preuves, écarts assumés, décisions qui l'attendent, aperçu. Pas de fusion : la pile se fusionne par `/apv:stack`, sur son ordre.
+7. Remise à l'opérateur : lien de la PR et sa base, preuves, écarts assumés, décisions qui l'attendent, aperçu, avec le niveau de confiance de chaque affirmation importante (jamais « corrigé » sans `prouve`). Pas de fusion : la pile se fusionne par `/apv:stack`, sur son ordre.
 
 ## 8. Quota
 `apv quota` avant chaque vague, avant les revues et toutes les 10 à 15 minutes pendant l'exécution. La consommation observée par vague est un repère, jamais un plafond ; note-la au journal.
