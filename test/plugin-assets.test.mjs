@@ -401,3 +401,70 @@ test('targeted tests at the task stage, one unstable test repeated with a bound,
   assert.match(guide, /cksum < "\$f"/);
   assert.match(read('docs/CONFIGURATION.md'), /"affected": \["apv", "lock", "run", "e2e", "--", "npx", "playwright", "test", "--only-changed=\{\{baseSha\}\}"/);
 });
+
+test('design critique: a scored generic grid, directions before details, a read-only critic before the operator sees a mockup', () => {
+  // The operator wanted attractive, living interfaces that do not look AI-made; on the pilot a tester read a job seekers' tool as a recruiting tool.
+  const grid = read('skills/design-artefact/references/grille-critique.md');
+  for (const section of ['## A. Empreintes génériques', '## B. Signature', '## C. Typographie, couleur, espace et rythme', '## D. États', '## E. Animations',
+    '## F. Test des 5 secondes', '## G. Textes', '## H. Accessibilité minimale', '## Rapport']) assert.ok(grid.includes(section), section);
+  for (const note of ['`conforme`', '`à revoir`', '`bloquant`', '`non vérifié`']) assert.ok(grid.includes(note), note);
+  assert.match(grid, /\*\*Retour au designer\*\* si au moins un critère est `bloquant`, \*\*ou\*\* si 3 empreintes génériques ou plus/);
+  const fingerprints = grid.match(/^- \[ \] A\d+\. /gm) ?? [];
+  assert.ok(fingerprints.length >= 15, `fingerprints: ${fingerprints.length}`);
+  assert.match(grid, /Au moins \*\*3 éléments que seul ce produit possède\*\*[^\n]*monde du sujet/);
+  assert.match(grid, /Test de substitution/);
+  assert.match(grid, /\| Mouvement \| Déclencheur \| Rôle \| Durée \| Courbe \| Mouvement réduit \|/);
+  for (const role of ['**retour d\'action**', '**orientation**', '**continuité**', '**plaisir**']) assert.ok(grid.includes(role), role);
+  assert.match(grid, /\*\*Animation sans rôle : refusée\*\*/);
+  assert.match(grid, /\*\*Chaque action importante a un retour visible\*\*/);
+  for (const state of ['Vide', 'Chargement', 'Erreur', 'Succès', 'Désactivé', 'Focus']) assert.match(grid, new RegExp(`^\\| ${state} \\|`, 'm'), state);
+  assert.match(grid, /\*\*à quoi sert cet écran\*\*[^\n]*\*\*pour qui\*\*[^\n]*\*\*que ferais-je en premier\*\*/);
+  assert.match(grid, /\*\*lectures erronées plausibles\*\*/);
+  assert.match(grid, /\*\*F d'abord\*\*/);
+  // Generic: tools are examples, the pilot case is anonymised.
+  assert.match(grid, /sont des \*\*exemples\*\* marqués comme tels/);
+  assert.ok((grid.match(/Exemple, /g) ?? []).length >= 4, 'varied signature examples');
+  assert.equal((grid.match(/\*\*Exemple observé \(anonymisé\)\*\*/g) ?? []).length, 1);
+  assert.match(grid, /suivi de candidatures[^\n]*chercheurs d'emploi[^\n]*recrutement/);
+  for (const pilot of [/Toujours rien/i, /Svelte/, /Supabase/]) assert.doesNotMatch(grid, pilot);
+  for (const source of ['anti-generic.md', 'motion.md', 'visual-identity.md', 'design-process.md', 'ux-laws.md']) {
+    assert.ok(grid.includes(source), source);
+    assert.ok(read(`skills/ui-design/references/${source}`).length > 0, source);
+  }
+
+  const critic = frontmatter('agents/critique-design.md');
+  assert.deepEqual(list(critic.fields.tools), ['Read', 'Grep', 'Glob', 'Bash', 'Skill']);
+  for (const rule of [/references\/grille-critique\.md/, /390 × 844/, /1280 × 800/, /\*\*clair\*\* et \*\*sombre\*\*/, /chaque écran et chaque état/, /npx/, /\*\*Sans navigateur\*\*/,
+    /\*\*Test des 5 secondes d'abord\*\*/, /reducedMotion/, /\*\*sept corrections au plus\*\*/, /tu n'inventes jamais une cible/, /Lecture seule : tu n'écris ni la maquette/, /mktemp -d/]) assert.match(critic.body, rule);
+
+  const designer = frontmatter('agents/designer.md').body;
+  for (const rule of [/## Direction avant détails/, /\*\*2 ou 3 directions distinctes\*\*/, /phrase d'intention/, /planche de jetons/, /un écran clé/, /la continuité prime/,
+    /\*\*la grille remplie par toi\*\*/, /\*\*fiche d'animation\*\*/, /`apv:critique-design`/, /après deux tours de critique/, /references\/grille-critique\.md/]) assert.match(designer, rule);
+
+  const loop = frontmatter('skills/design-artefact/SKILL.md').body;
+  const links = [...loop.matchAll(/\((references\/[a-z-]+\.md)\)/g)].map(m => m[1]);
+  assert.ok(links.includes('references/grille-critique.md'));
+  for (const ref of links) assert.ok(read(`skills/design-artefact/${ref}`).length > 0, ref);
+  for (const rule of [/## 2\. Direction avant détails/, /\*\*2 ou 3 directions distinctes\*\*/, /la continuité prime/, /\*\*Critique\*\* : le chef de projet lance `apv:critique-design`/,
+    /\*\*Deux tours de critique au plus\*\*/, /\*\*le rapport du critique joint\*\*/, /\*\*la grille remplie\*\*/, /## 7\. Critique seule/]) assert.match(loop, rule);
+  const critique = loop.indexOf('3. **Critique**');
+  assert.ok(critique > 0 && critique < loop.indexOf('4. **Publication**'), 'critique before publication');
+
+  const command = frontmatter('skills/design/SKILL.md');
+  assert.match(command.fields['argument-hint'], /critique <chemin/);
+  for (const rule of [/## 1 bis\. Direction avant détails/, /\*\*Obligatoire\*\*/, /\*\*il choisit\*\*/, /la continuité prime/, /\*\*Critique avant de montrer\*\*/, /`apv:critique-design`/,
+    /\*\*Deux tours de critique au plus\*\*/, /Tu ne montres jamais une version sans son rapport de critique/, /\*\*le rapport du critique joint\*\*/, /## 7\. Critique d'une maquette existante/,
+    /`\/apv:design critique <chemin>`/, /grille-critique\.md/]) assert.match(command.body, rule);
+  assert.ok(command.body.indexOf('**Critique avant de montrer**') < command.body.indexOf('**Publication**'), 'critique before publication');
+
+  const fidelity = frontmatter('agents/qa-fidelite.md').body;
+  for (const rule of [/references\/grille-critique\.md/, /\*\*D, états\*\*/, /\*\*E, animations\*\*/, /\*\*F, test des 5 secondes\*\*/, /reducedMotion: 'reduce'/, /document\.getAnimations\(\)/,
+    /retour visible/]) assert.match(fidelity, rule);
+
+  assert.match(read('docs/PLUGIN.md'), /^\| `critique-design` \| [^\n]*\| lecture, Bash \(pas d'écriture de fichiers\) \| aucun \|$/m);
+  assert.match(read('docs/PLUGIN.md'), /`\/apv:design critique <chemin>`/);
+  assert.match(read('docs/DESIGN.md'), /apv:critique-design/);
+  assert.match(read('README.md'), /\*\*10 sous-agents\*\*[^\n]*`critique-design`/);
+  const unreleased = read('CHANGELOG.md').split('\n## ')[1];
+  for (const topic of [/critique-design/, /grille-critique\.md/, /test des 5 secondes/, /2 ou 3 directions/]) assert.match(unreleased, topic);
+});
