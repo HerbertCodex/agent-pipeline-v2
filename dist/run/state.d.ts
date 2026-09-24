@@ -14,8 +14,13 @@ export declare const REVIEWS: readonly ["securite", "fidelite", "donnees", "rgpd
 export type ReviewDomain = typeof REVIEWS[number];
 export declare const STATUS_LABEL: Record<RunStatus, string>;
 export declare const STEP_LABEL: Record<StepName | 'waves', string>;
+/**
+ * Version 2: the foundation marker moved from the wave (v1, « the whole wave 0 ») to the task. A v1 state is
+ * migrated when read (`migrateRunState`) and written back as v2 on its next write.
+ */
+export declare const RUN_STATE_VERSION = 2;
 export declare const runStateSchema: import("../domain/schema.js").Schema<{
-    readonly schemaVersion: 1;
+    readonly schemaVersion: 2;
     readonly specId: string;
     readonly specFile: string;
     readonly specSha256: string;
@@ -64,13 +69,13 @@ export declare const runStateSchema: import("../domain/schema.js").Schema<{
     };
     readonly waves: {
         readonly index: number;
-        readonly foundation: boolean;
         readonly tasks: string[];
     }[];
     readonly tasks: Record<string, {
         readonly title: string;
         readonly dependsOn: string[];
         readonly wave: number;
+        readonly foundation: boolean;
         readonly status: "failed" | "pending" | "running" | "done" | "skipped";
         readonly branch: string | null;
         readonly worktree: string | null;
@@ -118,6 +123,7 @@ export declare const runStateSchema: import("../domain/schema.js").Schema<{
         readonly note: string | undefined;
         readonly commit: string | undefined;
         readonly agentId: string | undefined;
+        readonly unintegrated: string[] | undefined;
     }[];
 }>;
 /** Plain mutable view of the parsed state (the schema types are read-only). */
@@ -132,11 +138,19 @@ export interface RunEvent {
     note?: string;
     commit?: string;
     agentId?: string;
+    unintegrated?: string[];
 }
 export type RunState = Omit<Mutable<Infer<typeof runStateSchema>>, 'events'> & {
     events: RunEvent[];
 };
 export type TaskEntry = RunState['tasks'][string];
+/**
+ * A state of version 1 in the shape of version 2, the plan it recorded kept: under the v1 rule a wave marked
+ * `foundation` held only foundations, so each of its tasks becomes a foundation task, every other task is not
+ * one, and the wave loses its marker. Anything else is returned as is, for the schema to judge. Pure: the
+ * input is never modified.
+ */
+export declare function migrateRunState(value: unknown): unknown;
 export interface SpecTaskInput {
     id: string;
     title: string;
@@ -144,17 +158,28 @@ export interface SpecTaskInput {
 }
 export interface Wave {
     index: number;
-    foundation: boolean;
     tasks: string[];
 }
+/** Least number of tasks that depend directly on a task for it to be a foundation. */
+export declare const FOUNDATION_MIN_DEPENDENTS = 2;
 /**
- * Waves by topological layers of `dependsOn`. The spec format has no « foundation » marker (its task schema
- * refuses unknown properties), so the foundations are the first-layer tasks other tasks depend on: they form
- * wave 0, alone, written before the parallel waves open (incident 24). The other first-layer tasks join
- * wave 1 with the tasks of depth 1; a task of depth d is in wave d. Without any dependency, every task is in
- * wave 0. Tasks keep the order of the spec inside a wave. The graph must be acyclic (validated spec).
+ * Waves: the topological layers of `dependsOn`. A task of depth d (0 without dependency, else one more than
+ * its deepest dependency) is in wave d. Tasks keep the order of the spec inside a wave. The graph must be
+ * acyclic (validated spec).
  */
 export declare function computeWaves(tasks: SpecTaskInput[]): Wave[];
+/**
+ * The foundations: the tasks at least FOUNDATION_MIN_DEPENDENTS other tasks depend on directly, in spec order.
+ * They write what several tasks share (incident 24); in their wave, one agent writes them while the other tasks
+ * of the wave run in parallel. One dependent is not enough: a task that only one other task needs is an
+ * ordinary dependency (the phase 3 trial had BIN wait alone because DOCS depended on it).
+ */
+export declare function computeFoundations(tasks: SpecTaskInput[]): string[];
+/** The foundations and the other tasks of one wave, each in wave order. */
+export declare function splitWave(state: Pick<RunState, 'tasks'>, wave: Wave): {
+    foundations: string[];
+    parallel: string[];
+};
 export interface NewRunInput {
     specId: string;
     specFile: string;
@@ -187,15 +212,42 @@ export interface SetOptions {
     base?: string;
     note?: string;
     findings?: number;
+    /** Where the commits of the dependencies of a task that starts must already be; absent: nowhere. */
+    integration?: IntegrationCheck;
+    /** Starts the task although a dependency is not integrated; needs `note`, journaled with the dependencies. */
+    forceUnintegrated?: boolean;
     now?: Date;
 }
+/**
+ * The integration head of an execution: the branch of the spec (`branch` of the state), or the base commit of
+ * the execution while that branch does not exist yet. A dependency is integrated when its recorded commit is
+ * an ancestor of that head.
+ */
+export interface IntegrationCheck {
+    /** Commit of the head. */
+    head: string;
+    /** The head as shown to a human: the branch, or the base when the branch does not exist yet. */
+    where: string;
+    integrated(commit: string): boolean;
+}
+/** The integration head of `state` as the probe sees the repository. */
+export declare function integrationCheck(state: RunState, probe: GitProbe): IntegrationCheck;
+/**
+ * The dependencies of a task split by readiness: `notDone` (not `done`) and `notIntegrated` (`done`, but their
+ * commit is missing or not an ancestor of the integration head). A task is ready when both are empty.
+ */
+export declare function dependencyGaps(state: RunState, task: TaskEntry, integration: IntegrationCheck | undefined): {
+    notDone: string[];
+    notIntegrated: string[];
+};
 /** Refused transition: exit 1 (a control failed), unlike a malformed call. */
 export declare class TransitionError extends PipelineError {
     constructor(message: string);
 }
 /**
  * Applies `apv run set` to a copy of the state and returns it with the event it added. Checks the transition,
- * the dependencies of a task that starts (all `done`), and the commit of a task that ends (`--commit`).
+ * the dependencies of a task that starts (all `done`, and integrated: their commit in the integration head,
+ * unless `forceUnintegrated` with a note), and the commit of a task that ends (`--commit`).
  * Commit existence is checked by the caller, which owns the repository.
  */
 export declare function applySet(state: RunState, target: Target, options: SetOptions): {
@@ -215,6 +267,8 @@ export interface GitProbe {
     resolve(ref: string, worktree?: string): string | null;
     /** Number of commits reachable from `head` and not from `base`, or null when unknown. */
     countAfter(base: string, head: string, worktree?: string): number | null;
+    /** True when `commit` is an ancestor of `head` (`git merge-base --is-ancestor`); false when unknown. */
+    isAncestor(commit: string, head: string): boolean;
 }
 export interface ResumeItem {
     id: string;
@@ -239,7 +293,19 @@ export interface NextPlan {
         id: string;
         title: string;
         wave: number;
+        foundation: boolean;
     }[];
+    /** Dependencies all `done`, but some not integrated yet in the integration head. */
+    awaitingIntegration: {
+        id: string;
+        wave: number;
+        waitingOn: string[];
+    }[];
+    /** The integration head the readiness was measured on. */
+    integration: {
+        head: string;
+        where: string;
+    };
     resume: ResumeItem[];
     relaunch: RelaunchItem[];
     failed: {
@@ -255,7 +321,10 @@ export interface NextPlan {
     actions: string[];
 }
 /**
- * `apv run next`: what to do now, deterministic, the basis of resuming after an interruption. A running task
+ * `apv run next`: what to do now, deterministic, the basis of resuming after an interruption. A task is ready
+ * when its dependencies are `done` and their commits integrated in the branch of the spec (or in the base of
+ * the execution while that branch does not exist); tasks are launched as soon as they are ready, not wave by
+ * wave. A running task
  * whose worktree is gone, or that has no commit after its base (`--base` given when it started, else the base
  * of the execution), is to relaunch if its agent no longer runs.
  */
@@ -265,6 +334,11 @@ export interface RunStateSource {
     shown?: string;
     specId?: string;
 }
+/**
+ * Reads one state file (`apv run start|set|next|status <id>`) with the bounded read of the summary: a regular
+ * file only (a FIFO named like the state never blocks), MAX_RUN_STATE_BYTES at most; errors name the file by
+ * `shown` and never quote its content.
+ */
 export declare function readRunState(file: string, source?: RunStateSource): RunState;
 /**
  * Parses and validates the text of a state file. `shown` names it in the errors, which never quote its content

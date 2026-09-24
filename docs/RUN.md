@@ -21,18 +21,18 @@ Une spec fournie et validée par l'opérateur s'exécute telle quelle.
 | (démarrage) | chef de projet | `apv spec validate`, `apv quota`, `apv run start <spec> --base <base>`, branche `apv/<id>` créée depuis la base, spec commitée dessus | état créé |
 | `data-model` | `apv:architecte-donnees` (conception) | `.apv/data-model.md`, présenté à l'opérateur avant tout code | `done --commit`, ou `skipped` si la spec ne touche pas la base |
 | `plan` | `apv:architecte` | `.apv/state/plan-<id>.md` et `notes-<id>-vague-<n>.md` sur les vagues calculées par l'outil | `done --commit` |
-| tâches, vague 0 | un `apv:implementer` | les fondations (modules partagés), écrites par un seul agent | `task:<tâche> done --commit` |
-| tâches, vagues suivantes | un `apv:implementer` par tâche prête, en parallèle | chacun dans son worktree, sur sa branche `apv/<id>-<tâche>` | `task:<tâche> done --commit` |
-| `integration` | `apv:integrateur` (ou avance rapide pour une tâche seule) | branche `apv/<id>-integration-<n>`, doublons unifiés, tous les contrôles ; la branche de la spec avance en avance rapide | `done` après la dernière vague |
+| tâches de fondation | un seul `apv:implementer` pour les fondations prêtes d'une vague | les fondations (tâches dont au moins deux autres dépendent : modules partagés), marquées par l'outil | `task:<tâche> done --commit` |
+| autres tâches | un `apv:implementer` par tâche prête, en parallèle | chacun dans son worktree, sur sa branche `apv/<id>-<tâche>` | `task:<tâche> done --commit` |
+| `integration` | `apv:integrateur` (ou avance rapide pour une tâche seule) | dès que des tâches sont finies et vérifiées : branche `apv/<id>-integration-<n>`, doublons unifiés, tous les contrôles ; la branche de la spec avance en avance rapide | `done` une fois toutes les tâches intégrées |
 | `reviews` | `/apv:review` | sécurité, fidélité, données, RGPD en parallèle, en lecture seule, sur copies détachées ; constats consolidés | `review:<domaine> done` puis `reviews done` |
 | `fixes` | `apv:implementer` par domaine | corrections décidées dans `.apv/state/corrections-<id>.md` | `done`, ou `skipped` sans constat à corriger |
 | `delivery` | chef de projet | contrôles relancés sur la tête exacte, push, PR brouillon, aperçu | `done --note "PR #<n>"` |
 
-Entre deux vagues, la vague précédente est toujours intégrée dans `apv/<id>` : les tâches suivantes partent de cette tête.
+Une tâche part **dès qu'elle est prête**, pas vague par vague : ses dépendances sont `done` et le commit enregistré de chacune est intégré dans `apv/<id>` (ancêtre de sa tête, `git merge-base --is-ancestor` ; la base de l'exécution tient lieu de tête tant que la branche n'existe pas). `apv run next` donne les tâches prêtes et, à part, celles « en attente d'intégration » ; `apv run set <id> task:<tâche> running` refuse une tâche dont une dépendance n'est pas intégrée, sauf `--force-unintegrated` avec une `--note` obligatoire, journalisée. Une tâche finie et vérifiée s'intègre donc sans attendre la fin de sa vague : c'est ce qui libère les tâches qui en dépendent, et elles partent de cette tête.
 
 ## 3. L'état d'exécution
 
-`apv run start` crée `.apv/state/run-<id>.json`, écrit de façon atomique sous le verrou `run:<id>` de `apv lock`. Il contient : la spec (identifiant, fichier, empreinte sha256), la base, la branche `apv/<id>`, les dates, les étapes (`data-model`, `plan`, `integration`, `reviews`, `fixes`, `delivery`), les vagues, les tâches (statut, vague, branche, worktree, agent, commit, note), les revues par domaine et un journal d'événements horodatés.
+`apv run start` crée `.apv/state/run-<id>.json`, écrit de façon atomique sous le verrou `run:<id>` de `apv lock`. Il contient : la spec (identifiant, fichier, empreinte sha256), la base, la branche `apv/<id>`, les dates, les étapes (`data-model`, `plan`, `integration`, `reviews`, `fixes`, `delivery`), les vagues (couches des dépendances), les tâches (statut, vague, marqueur de fondation, branche, worktree, agent, commit, note), les revues par domaine et un journal d'événements horodatés.
 
 Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 
@@ -40,7 +40,7 @@ Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 |---|---|
 | `apv run start <spec> [--base <branche>]` | valide la spec (même logique que `apv spec validate`), calcule les vagues, crée l'état ; refuse si l'état existe déjà |
 | `apv run set <id> <cible> <statut> [--branch] [--worktree] [--agent] [--commit] [--base] [--findings] [--note]` | une transition : cible = une étape, `task:<tâche>` ou `review:<domaine>` (`securite`, `fidelite`, `donnees`, `rgpd`). Une tâche ne passe `running` que si ses dépendances sont `done` ; `done` exige `--commit` pour une tâche |
-| `apv run next <id>` | ce qu'il faut faire maintenant, de façon déterministe : étape courante, tâches prêtes, tâches `running` à reprendre (branche, worktree, agent, dernier commit), tâches « à relancer » (worktree disparu ou aucun commit après la base), revues à lancer |
+| `apv run next <id>` | ce qu'il faut faire maintenant, de façon déterministe : étape courante, tâches prêtes (dépendances faites et intégrées), tâches en attente d'intégration, tâches `running` à reprendre (branche, worktree, agent, dernier commit), tâches « à relancer » (worktree disparu ou aucun commit après la base), revues à lancer |
 | `apv run status [<id>]` | résumé de toutes les exécutions ou d'une seule ; `apv status` affiche aussi une ligne par exécution en cours |
 
 Toutes acceptent `--json`. Codes de sortie : `0` succès, `1` refus (transition interdite, état existant, spec invalide), `2` appel incorrect.
@@ -63,7 +63,7 @@ Claude Code accepte des workflows dans un plugin (dossier `workflows/` à la rac
 Le chef de projet les lance par l'outil Workflow avec `name: "apv:vague"` ou `name: "apv:revues"` et `args` (nom vérifié avec Claude Code 2.1.280 : le runtime trouve le workflow du plugin et exécute le script). Les deux refusent de démarrer sans leurs paramètres : ce ne sont pas des commandes à lancer seules. Paramètres attendus : section 4 de `skills/run/SKILL.md` et section 4 de `skills/review/SKILL.md`.
 
 ### Sans workflow
-Quand l'outil Workflow n'est pas disponible (désactivé par `disableWorkflows`, version trop ancienne) ou quand le chef de projet veut parler à chaque agent pendant son travail, il lance plusieurs agents par l'outil Agent, **plusieurs appels dans un même message**, chacun en arrière-plan (`run_in_background: true`), avec le même message que le workflow. Une vague d'une seule tâche (les fondations) passe toujours par l'outil Agent.
+Quand l'outil Workflow n'est pas disponible (désactivé par `disableWorkflows`, version trop ancienne) ou quand le chef de projet veut parler à chaque agent pendant son travail, il lance plusieurs agents par l'outil Agent, **plusieurs appels dans un même message**, chacun en arrière-plan (`run_in_background: true`), avec le même message que le workflow. Les fondations d'une vague, confiées à un seul agent, et une tâche lancée seule passent toujours par l'outil Agent.
 
 ### Vérifications du chef de projet, tâche par tâche
 1. Branche : `git log --oneline <base>..<branche>`, fichiers touchés.

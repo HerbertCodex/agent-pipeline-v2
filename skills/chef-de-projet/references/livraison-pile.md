@@ -30,7 +30,7 @@ Procédure manuelle, si l'outil n'est pas disponible : une PR à la fois, arrêt
 
 Pour chaque PR, de la base vers le sommet :
 1. `gh pr view <n> --json number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus` : état attendu (ouverte, contrôles verts, fusionnable).
-2. Si la PR précédente vient d'être fusionnée, re-cible : `gh pr edit <n> --base <cible>` **sans masquer la sortie**.
+2. Si la PR précédente vient d'être fusionnée, re-cible par l'API REST : `gh api -X PATCH repos/<propriétaire>/<dépôt>/pulls/<n> -f base=<cible>` **sans masquer la sortie** (propriétaire et dépôt : `gh pr view <n> --json url`). N'emploie pas `gh pr edit --base` : sa requête GraphQL lit aussi les projets classiques de la PR et échoue depuis leur abandon (« Projects (classic) is being deprecated »).
 3. **Vérifie la base juste avant de fusionner** : `gh pr view <n> --json baseRefName` doit renvoyer la cible attendue. Sinon, arrêt.
 4. Retire le statut brouillon si l'opérateur l'a demandé (`gh pr ready <n>`).
 5. `APV_ALLOW_MERGE=1 gh pr merge <n> --merge` (ou la méthode que l'opérateur a fixée), sortie lue.

@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
-import { applySet, computeNext, computeWaves, createRunState, parseTarget } from '../dist/run/state.js';
+import { applySet, computeFoundations, computeNext, computeWaves, createRunState, migrateRunState, parseTarget, readRunState } from '../dist/run/state.js';
 
 const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 
@@ -39,17 +39,52 @@ function taskBranch(p, name, file) {
   return { dir, sha: git(dir, 'rev-parse', 'HEAD') };
 }
 
-test('waves: foundations alone in wave 0, then topological layers, in spec order', () => {
+test('waves: topological layers in spec order; foundations: tasks at least two others depend on', () => {
   const t = (id, dependsOn = []) => ({ id, title: id, dependsOn });
-  assert.deepEqual(computeWaves([t('F'), t('A', ['F']), t('B', ['F']), t('C'), t('D', ['A', 'B'])]),
-    [{ index: 0, foundation: true, tasks: ['F'] }, { index: 1, foundation: false, tasks: ['A', 'B', 'C'] }, { index: 2, foundation: false, tasks: ['D'] }]);
-  assert.deepEqual(computeWaves([t('A'), t('B'), t('C')]), [{ index: 0, foundation: false, tasks: ['A', 'B', 'C'] }]);
-  assert.deepEqual(computeWaves([t('C', ['B']), t('B', ['A']), t('A')]),
-    [{ index: 0, foundation: true, tasks: ['A'] }, { index: 1, foundation: false, tasks: ['B'] }, { index: 2, foundation: false, tasks: ['C'] }]);
+  const spec = [t('F'), t('A', ['F']), t('B', ['F']), t('C'), t('D', ['A', 'B'])];
+  assert.deepEqual(computeWaves(spec), [{ index: 0, tasks: ['F', 'C'] }, { index: 1, tasks: ['A', 'B'] }, { index: 2, tasks: ['D'] }]);
+  assert.deepEqual(computeFoundations(spec), ['F']);
+  assert.deepEqual(computeWaves([t('A'), t('B'), t('C')]), [{ index: 0, tasks: ['A', 'B', 'C'] }]);
+  assert.deepEqual(computeFoundations([t('A'), t('B'), t('C')]), []);
+  // A chain: each task has one dependent only, so none is a foundation.
+  const chain = [t('C', ['B']), t('B', ['A']), t('A')];
+  assert.deepEqual(computeWaves(chain), [{ index: 0, tasks: ['A'] }, { index: 1, tasks: ['B'] }, { index: 2, tasks: ['C'] }]);
+  assert.deepEqual(computeFoundations(chain), []);
+  // The phase 3 trial: BIN, needed by DOCS alone, is no foundation and stays in wave 0 beside SUMMARY.
+  const trial = [t('SUMMARY'), t('HOOK', ['SUMMARY']), t('BIN'), t('DOCS', ['HOOK', 'BIN'])];
+  assert.deepEqual(computeWaves(trial), [{ index: 0, tasks: ['SUMMARY', 'BIN'] }, { index: 1, tasks: ['HOOK'] }, { index: 2, tasks: ['DOCS'] }]);
+  assert.deepEqual(computeFoundations(trial), []);
+  // A foundation may sit in any layer; a dependency listed twice counts once.
+  const deep = [t('A'), t('B', ['A']), t('C', ['B', 'B']), t('D', ['B']), t('E', ['A'])];
+  assert.deepEqual(computeFoundations(deep), ['A', 'B']);
+  assert.deepEqual(computeFoundations([t('A'), t('B', ['A', 'A'])]), []);
   assert.deepEqual(computeWaves([t('A'), t('B', ['A']), t('C', ['A', 'B'])]).map(w => w.tasks), [['A'], ['B'], ['C']]);
   assert.deepEqual(computeWaves([]), []);
   assert.throws(() => computeWaves([t('A', ['B']), t('B', ['A'])]), /Cycle/);
   assert.throws(() => computeWaves([t('A', ['Z'])]), /Dépendance inconnue/);
+});
+
+test('a state of version 1 stays readable: its foundation wave becomes foundation tasks', t => {
+  const v2 = createRunState({ specId: 's', specFile: 's.json', specSha256: 'a'.repeat(64), base: 'main', baseSha: 'b'.repeat(40),
+    tasks: [{ id: 'S', title: 'S', dependsOn: [] }, { id: 'H', title: 'H', dependsOn: ['S'] }, { id: 'B', title: 'B', dependsOn: [] }] });
+  assert.equal(v2.schemaVersion, 2);
+  const v1 = structuredClone(v2);
+  v1.schemaVersion = 1;
+  v1.waves = [{ index: 0, foundation: true, tasks: ['S'] }, { index: 1, foundation: false, tasks: ['H', 'B'] }];
+  for (const task of Object.values(v1.tasks)) delete task.foundation;
+  const migrated = migrateRunState(v1);
+  assert.equal(v1.schemaVersion, 1, 'the input is not modified');
+  assert.deepEqual(migrated.waves, [{ index: 0, tasks: ['S'] }, { index: 1, tasks: ['H', 'B'] }]);
+  assert.deepEqual(Object.entries(migrated.tasks).map(([id, x]) => [id, x.foundation]), [['S', true], ['H', false], ['B', false]]);
+  assert.equal(migrated.schemaVersion, 2);
+  // Unknown shapes are left to the schema.
+  assert.equal(migrateRunState('x'), 'x');
+  assert.deepEqual(migrateRunState({ schemaVersion: 3 }), { schemaVersion: 3 });
+  // The state of the phase 3 trial, written by the version 1 tool, still reads.
+  const repoState = fileURLToPath(new URL('../.apv/state/run-p3-essai.json', import.meta.url));
+  if (!existsSync(repoState)) return t.skip('state of the trial absent (package without .apv)');
+  const trial = readRunState(repoState, { specId: 'p3-essai' });
+  assert.deepEqual(Object.entries(trial.tasks).map(([id, x]) => [id, x.foundation, x.wave]), [['SUMMARY', true, 0], ['HOOK', false, 1], ['BIN', false, 1], ['DOCS', false, 2]]);
 });
 
 test('targets: steps, task:<id>, review:<domain>', () => {
@@ -70,8 +105,10 @@ test('apv run start validates the spec, computes the waves and writes the state'
   assert.deepEqual([s.base, s.baseSha, s.branch], ['main', git(p.repo, 'rev-parse', 'main'), 'apv/vagues']);
   assert.deepEqual(Object.keys(s.steps), ['data-model', 'plan', 'integration', 'reviews', 'fixes', 'delivery']);
   assert.ok(Object.values(s.steps).every(x => x.status === 'pending'));
-  assert.deepEqual(s.waves.map(w => [w.index, w.foundation, w.tasks]), [[0, true, ['F']], [1, false, ['A', 'B', 'C']], [2, false, ['D']]]);
-  assert.deepEqual(s.tasks.D, { title: 'Tâche D', dependsOn: ['A', 'B'], wave: 2, status: 'pending', branch: null, worktree: null, agentId: null,
+  assert.equal(s.schemaVersion, 2);
+  assert.deepEqual(s.waves.map(w => [w.index, w.tasks]), [[0, ['F', 'C']], [1, ['A', 'B']], [2, ['D']]]);
+  assert.deepEqual(Object.entries(s.tasks).map(([id, x]) => [id, x.foundation]), [['F', true], ['A', false], ['B', false], ['C', false], ['D', false]]);
+  assert.deepEqual(s.tasks.D, { title: 'Tâche D', dependsOn: ['A', 'B'], wave: 2, foundation: false, status: 'pending', branch: null, worktree: null, agentId: null,
     base: null, commit: null, note: null, updatedAt: null });
   assert.deepEqual(Object.keys(s.reviews), ['securite', 'fidelite', 'donnees', 'rgpd']);
   assert.deepEqual(s.reviews.rgpd, { status: 'pending', findings: null, commit: null, note: null, updatedAt: null });
@@ -81,7 +118,11 @@ test('apv run start validates the spec, computes the waves and writes the state'
   assert.equal(again.code, 1);
   assert.match(again.stderr, /RUN_EXISTS.*apv run next vagues/);
   const human = await p.run('status', 'vagues');
-  assert.match(human.stdout, /Vague 0 \(fondations\) : F à faire/);
+  assert.match(human.stdout, /\nVague 0 : fondations \(un seul agent\) : F à faire ; en parallèle : C à faire\nVague 1 : A à faire, B à faire\nVague 2 : D à faire\n/);
+  write(p.repo, 'specs/autre.json', waveSpec());
+  const shown = await p.run('start', 'specs/autre.json');
+  assert.equal(shown.code, 0, shown.stderr);
+  assert.match(shown.stdout, /\nVagues :\n- vague 0 : fondations \(un seul agent\) : F ; en parallèle : C\n- vague 1 : A, B\n- vague 2 : D\n/);
 });
 
 test('apv run start refuses an invalid spec, an unknown base and wrong calls', async t => {
@@ -126,7 +167,12 @@ test('apv run set checks transitions, dependencies and commits, and journals eac
   const task = p.state().tasks.F;
   assert.deepEqual([task.status, task.branch, task.worktree, task.agentId, task.commit, task.base, task.note],
     ['done', 'spec/vagues-f', f.dir, 'agent-f', f.sha, git(p.repo, 'rev-parse', 'main'), 'intégrée']);
-  assert.equal((await p.run('set', 'vagues', 'task:A', 'running')).code, 0, 'F done: A may start');
+  // F done but not integrated: A waits (point 4 of the phase 3 trial), until apv/vagues holds F.
+  const early = await p.run('set', 'vagues', 'task:A', 'running');
+  assert.equal(early.code, 1);
+  assert.match(early.stderr, /task:A : dépendance\(s\) faite\(s\) mais pas encore intégrée\(s\) dans la base main \([a-f0-9]{12}\), la branche apv\/vagues n'existant pas encore : F \(commit [a-f0-9]{12}\)/);
+  git(p.repo, 'branch', 'apv/vagues', 'spec/vagues-f');
+  assert.equal((await p.run('set', 'vagues', 'task:A', 'running')).code, 0, 'F done and integrated: A may start');
   // Reopening finished work needs a reason; forbidden moves are refused.
   assert.equal((await p.run('set', 'vagues', 'task:F', 'running')).code, 1);
   assert.equal((await p.run('set', 'vagues', 'task:F', 'running', '--note', 'correction après revue')).code, 0);
@@ -139,6 +185,7 @@ test('apv run set checks transitions, dependencies and commits, and journals eac
   assert.deepEqual([p.state().reviews.securite.findings, p.state().reviews.securite.note], [3, 'corrections-vagues.md']);
   const events = p.state().events;
   assert.equal(events.length, 1 + 7);
+  assert.ok(events.every(e => !('unintegrated' in e)));
   assert.deepEqual(events.at(-1), { at: events.at(-1).at, target: 'review:securite', from: 'pending', to: 'done', note: 'corrections-vagues.md' });
   // Wrong calls: exit 2.
   for (const args of [['task:Z', 'done'], ['review:qa', 'done'], ['plan', 'finished'], ['plan', 'done', '--branch', 'x'], ['task:A', 'done', '--findings', '1'],
@@ -169,8 +216,9 @@ test('apv run next says what to do now and which running tasks to resume or rela
   await p.run('set', 'vagues', 'plan', 'done');
   next = (await p.run('next', 'vagues', '--json')).json();
   assert.equal(next.step, 'waves');
-  assert.match(next.actions.join('\n'), /lancer 1 tâche\(s\) prête\(s\) de la vague 0, fondations, un seul agent : F/);
-  assert.match(next.actions.join('\n'), /prêtes mais d'une vague suivante : C \(vague 1\)/);
+  assert.match(next.actions.join('\n'), /lancer 2 tâche\(s\) prête\(s\) : fondations \(un seul agent\) : F ; en parallèle : C/);
+  assert.deepEqual(next.ready.map(r => [r.id, r.foundation]), [['F', true], ['C', false]]);
+  assert.deepEqual(next.integration, { head: git(p.repo, 'rev-parse', 'main'), where: `la base main (${git(p.repo, 'rev-parse', 'main').slice(0, 12)}), la branche apv/vagues n'existant pas encore` });
   // F runs in a worktree without commit yet, C in a worktree that is gone, B... not started.
   const dir = join(p.root, 'wt-f');
   git(p.repo, 'worktree', 'add', '-q', '-b', 'spec/vagues-f', dir, 'main');
@@ -197,11 +245,79 @@ test('apv run next says what to do now and which running tasks to resume or rela
   assert.equal((await p.run('next', 'vagues', '--base', 'main')).code, 2);
 });
 
+test('a task is ready when its dependencies are done AND integrated in the branch of the spec', () => {
+  // Point 4 of the phase 3 trial: next said « prête » for a task whose dependencies were done but not integrated.
+  const base = 'b'.repeat(40); const f = 'f'.repeat(40); const head = 'e'.repeat(40);
+  let s = createRunState({ specId: 's', specFile: 's.json', specSha256: 'a'.repeat(64), base: 'main', baseSha: base,
+    tasks: [{ id: 'F', title: 'F', dependsOn: [] }, { id: 'A', title: 'A', dependsOn: ['F'] }, { id: 'B', title: 'B', dependsOn: ['F'] }, { id: 'C', title: 'C', dependsOn: [] }] });
+  for (const step of ['data-model', 'plan']) s = applySet(s, parseTarget(step), { status: 'skipped' }).state;
+  s = applySet(s, parseTarget('task:F'), { status: 'done', commit: f }).state;
+  const probe = (branch, ancestors) => ({ exists: () => true, countAfter: () => 1,
+    resolve: ref => ref === 'apv/s' ? branch : null, isAncestor: (c, h) => ancestors.includes(`${c}@${h}`) });
+  // No branch of the spec yet: the base of the execution is the head, and F is not in it.
+  let next = computeNext(s, probe(null, []));
+  assert.deepEqual(next.ready.map(r => r.id), ['C']);
+  assert.deepEqual(next.awaitingIntegration, [{ id: 'A', wave: 1, waitingOn: ['F'] }, { id: 'B', wave: 1, waitingOn: ['F'] }]);
+  assert.deepEqual(next.blocked, []);
+  assert.equal(next.integration.head, base);
+  assert.match(next.actions.join('\n'), /intégrer F \(commit f{12}\) dans apv\/s : A, B en attend\(ent\) l'intégration/);
+  // The branch exists but does not hold F yet.
+  next = computeNext(s, probe(head, []));
+  assert.deepEqual([next.ready.map(r => r.id), next.awaitingIntegration.map(a => a.id), next.integration], [['C'], ['A', 'B'], { head, where: 'apv/s' }]);
+  // Integrated: A and B are ready now, launched at once with C (wave 0), not wave by wave.
+  next = computeNext(s, probe(head, [`${f}@${head}`]));
+  assert.deepEqual([next.ready.map(r => r.id), next.awaitingIntegration], [['C', 'A', 'B'], []]);
+  assert.match(next.actions.join('\n'), /lancer 3 tâche\(s\) prête\(s\) : en parallèle : C, A, B/);
+  // The head itself counts as integrated.
+  assert.deepEqual(computeNext(s, probe(f, [])).ready.map(r => r.id), ['C', 'A', 'B']);
+  // set refuses the same start, unless forced with a note, journaled with the dependencies.
+  const check = { head, where: 'apv/s', integrated: () => false };
+  assert.throws(() => applySet(s, parseTarget('task:A'), { status: 'running', integration: check }), /pas encore intégrée\(s\) dans apv\/s : F/);
+  assert.throws(() => applySet(s, parseTarget('task:A'), { status: 'running' }), /pas encore intégrée\(s\) dans la branche de la spec/);
+  assert.throws(() => applySet(s, parseTarget('task:A'), { status: 'running', integration: check, forceUnintegrated: true }), /exige --note/);
+  const forced = applySet(s, parseTarget('task:A'), { status: 'running', integration: check, forceUnintegrated: true, note: 'fichiers disjoints' });
+  assert.deepEqual([forced.event.unintegrated, forced.event.note], [['F'], 'fichiers disjoints']);
+  // A running task that only updates its fields is not checked again.
+  assert.equal(applySet(forced.state, parseTarget('task:A'), { status: 'running', agentId: 'x', integration: check }).event.unintegrated, undefined);
+  // Forcing never skips a dependency that is not done.
+  const reopened = applySet(s, parseTarget('task:F'), { status: 'running', note: 'rouverte' }).state;
+  assert.throws(() => applySet(reopened, parseTarget('task:A'), { status: 'running', integration: check, forceUnintegrated: true, note: 'x' }), /pas encore faite/);
+});
+
+test('apv run set --force-unintegrated starts a task before the integration, with a journaled note', async t => {
+  const p = project(t);
+  await p.run('start', 'vagues');
+  const f = taskBranch(p, 'spec/vagues-f', 'docs/f.md');
+  await p.run('set', 'vagues', 'task:F', 'done', '--commit', f.sha);
+  // The branch of the spec exists, without F.
+  git(p.repo, 'branch', 'apv/vagues', 'main');
+  const refused = await p.run('set', 'vagues', 'task:B', 'running');
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /pas encore intégrée\(s\) dans apv\/vagues : F/);
+  const human = await p.run('next', 'vagues');
+  assert.match(human.stdout, /Intégration mesurée sur : apv\/vagues à [a-f0-9]{12}\n/);
+  assert.match(human.stdout, /Prêtes : C \(vague 0\)\nEn attente d'intégration : A \(attend l'intégration de F\) ; B \(attend l'intégration de F\)\n/);
+  assert.equal((await p.run('set', 'vagues', 'task:B', 'running', '--force-unintegrated')).code, 2, 'a note is required');
+  assert.equal((await p.run('set', 'vagues', 'task:B', 'running', '--force-unintegrated', '--note', ' ')).code, 2);
+  assert.equal((await p.run('set', 'vagues', 'task:B', 'done', '--commit', 'main', '--force-unintegrated', '--note', 'x')).code, 2);
+  assert.equal((await p.run('set', 'vagues', 'plan', 'running', '--force-unintegrated', '--note', 'x')).code, 2);
+  assert.equal((await p.run('next', 'vagues', '--force-unintegrated')).code, 2);
+  const forced = await p.run('set', 'vagues', 'task:B', 'running', '--force-unintegrated', '--note', 'fichiers disjoints, décision notée');
+  assert.equal(forced.code, 0, forced.stderr);
+  assert.match(forced.stdout, /démarrée sans l'intégration de F \(--force-unintegrated, journalisé\)/);
+  assert.deepEqual(p.state().events.at(-1), { at: p.state().events.at(-1).at, target: 'task:B', from: 'pending', to: 'running',
+    note: 'fichiers disjoints, décision notée', unintegrated: ['F'] });
+  // Once F is integrated (fast-forward of the spec branch), A starts without force.
+  git(p.repo, 'branch', '-f', 'apv/vagues', f.sha);
+  assert.equal((await p.run('set', 'vagues', 'task:A', 'running')).code, 0);
+  assert.equal(p.state().events.at(-1).unintegrated, undefined);
+});
+
 test('next: a running task whose branch has no commit of its own after its start is to relaunch', () => {
   const state = createRunState({ specId: 's', specFile: 's.json', specSha256: 'a'.repeat(64), base: 'main', baseSha: 'b'.repeat(40),
     tasks: [{ id: 'T', title: 'T', dependsOn: [] }] });
   const running = applySet(state, { kind: 'task', id: 'T' }, { status: 'running', branch: 'spec/t', base: 'c'.repeat(40) }).state;
-  const probe = (count, head = 'd'.repeat(40)) => ({ exists: () => true, resolve: () => head, countAfter: (base) => { assert.equal(base, 'c'.repeat(40)); return count; } });
+  const probe = (count, head = 'd'.repeat(40)) => ({ exists: () => true, resolve: () => head, isAncestor: () => false, countAfter: (base) => { assert.equal(base, 'c'.repeat(40)); return count; } });
   assert.equal(computeNext(running, probe(0)).relaunch[0].reason, `aucun commit après la base ${'c'.repeat(12)}`);
   assert.equal(computeNext(running, probe(2)).resume[0].commitsAfterBase, 2);
   assert.equal(computeNext(running, probe(2, null)).relaunch[0].reason, 'branche introuvable : spec/t');
@@ -212,7 +328,7 @@ test('next: a running task whose branch has no commit of its own after its start
 test('next walks the steps: integration, reviews to launch, then the end', () => {
   let s = createRunState({ specId: 's', specFile: 's.json', specSha256: 'a'.repeat(64), base: 'main', baseSha: 'b'.repeat(40), tasks: [{ id: 'T', title: 'T', dependsOn: [] }] });
   const set = (target, status, extra = {}) => { s = applySet(s, parseTarget(target), { status, ...extra }).state; };
-  const probe = { exists: () => true, resolve: () => null, countAfter: () => null };
+  const probe = { exists: () => true, resolve: () => null, countAfter: () => null, isAncestor: () => false };
   set('data-model', 'skipped'); set('plan', 'done'); set('task:T', 'done', { commit: 'e'.repeat(40) });
   assert.equal(computeNext(s, probe).step, 'integration');
   assert.deepEqual(computeNext(s, probe).reviewsToLaunch, []);
@@ -376,4 +492,46 @@ test('apv run refuses a state of another spec and names state files relative to 
   assert.match(r.stderr, /État illisible \.apv\/state\/run-vagues\.json : JSON invalide/);
   assert.doesNotMatch(r.stderr, /consignes/);
   assert.match((await p.run('next', 'absent')).stderr, /Aucune exécution : \.apv\/state\/run-absent\.json n'existe pas/);
+});
+
+/** `apv <args>` in its own process, killed after `ms`: a blocked read shows as « bloqué » instead of hanging the suite. */
+function bounded(p, args, ms = 5000) {
+  return new Promise(done => {
+    const child = spawn(process.execPath, [cli, ...args], { cwd: p.repo, env: { ...process.env, ...p.env, APV_RUN_LOCK_WAIT: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', c => { stdout += c; }); child.stderr.on('data', c => { stderr += c; });
+    const timer = setTimeout(() => { child.kill('SIGKILL'); done({ code: 'bloqué', stdout, stderr }); }, ms);
+    child.on('close', code => { clearTimeout(timer); done({ code, stdout, stderr }); });
+  });
+}
+
+test('apv run next|set|status <id> read the state with a bound: a FIFO never blocks, a 5 MB file is refused', { skip: process.platform === 'win32' }, async t => {
+  // Point 5 of the phase 3 trial: readRunState read without any bound, so a FIFO named like the state blocked
+  // `apv run next|set|status <id>` forever. Each command runs in its own process with a deadline.
+  const p = project(t);
+  mkdirSync(join(p.repo, '.apv/state'), { recursive: true });
+  execFileSync('mkfifo', [join(p.repo, '.apv/state/run-fifo.json')]);
+  for (const args of [['next', 'fifo'], ['status', 'fifo'], ['set', 'fifo', 'plan', 'done'], ['start', '.apv/specs/fifo.json']]) {
+    if (args[0] === 'start') write(p.repo, '.apv/specs/fifo.json', waveSpec());
+    const r = await bounded(p, ['run', ...args]);
+    assert.equal(r.code, 1, `${args.join(' ')} : ${r.code} ${r.stderr}`);
+    assert.match(r.stderr, /État illisible \.apv\/state\/run-fifo\.json : pas un fichier ordinaire/, args.join(' '));
+    assert.ok(!r.stderr.includes(p.repo), r.stderr);
+  }
+  // 5 MB: refused before parsing, nothing of its content quoted, never rewritten.
+  const big = join(p.repo, '.apv/state/run-gros.json');
+  writeFileSync(big, `{"secret":"${'x'.repeat(5 * 1024 * 1024)}"}`);
+  for (const args of [['next', 'gros'], ['status', 'gros'], ['set', 'gros', 'plan', 'done']]) {
+    const r = await bounded(p, ['run', ...args]);
+    assert.equal(r.code, 1, `${args.join(' ')} : ${r.code} ${r.stderr}`);
+    assert.match(r.stderr, /État trop volumineux \.apv\/state\/run-gros\.json : \d+ octets, limite 4194304/, args.join(' '));
+    assert.doesNotMatch(r.stderr, /secret|xxxx/);
+  }
+  assert.equal(readFileSync(big, 'utf8').length, 5 * 1024 * 1024 + 13, 'never rewritten');
+  // A state at the bound or below still reads; a directory is no state.
+  await p.run('start', 'vagues');
+  assert.equal((await bounded(p, ['run', 'next', 'vagues'])).code, 0);
+  mkdirSync(join(p.repo, '.apv/state/run-dossier.json'));
+  const dir = await p.run('status', 'dossier');
+  assert.match(dir.stderr, /État illisible \.apv\/state\/run-dossier\.json : pas un fichier ordinaire/);
 });

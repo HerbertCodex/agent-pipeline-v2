@@ -54,7 +54,7 @@ Déroulé de `/apv:run` (procédure complète dans sa compétence, `skills/run/S
 2. **Données** : si la spec touche la base, `architecte-donnees` (mode conception) produit `.apv/data-model.md` ; tu le présentes à l'opérateur avant tout code.
 3. **Spec** : si elle n'existe pas, `/apv:spec` d'abord. Une spec fournie et validée par l'opérateur s'exécute telle quelle, sans re-planification (incident 23).
 4. **Design** : l'interface part de la maquette validée (`apv design list --screen <écran>`, et `apv design check` vert). Un écran absent ouvre une boucle avec l'opérateur par `/apv:design` (artefact publié, retours un par un, validation par ses mots, versement par `apv design register`), jamais une invention.
-5. **Plan** : `architecte` produit le plan sur les vagues de l'outil, la vague 0 « fondations » et les notes de vague (`references/planification.md`).
+5. **Plan** : `architecte` produit le plan sur les vagues de l'outil, leurs fondations (tâches dont au moins deux autres dépendent) et les notes de vague (`references/planification.md`).
 6. **Fondations** : un seul `implementer` écrit les modules partagés ; intégrés et verts avant d'ouvrir le parallèle.
 7. **Vagues** : un `implementer` par tâche prête, chacun dans son worktree, par le workflow du plugin `apv:vague` ou par l'outil Agent (plusieurs appels dans un même message, en arrière-plan). Nombre d'agents dosé par le quota. `apv scope check` relancé par toi à la fin de chaque tâche.
 8. **Intégration** : `integrateur` fusionne la vague dans sa branche d'intégration, unifie les doublons, garde tous les tests, relance tout ; tu avances `apv/<id>` en avance rapide.

@@ -72,7 +72,7 @@ Sortie : `0` gabarit écrit, `1` fichier existant ou hors d'un dépôt Git, `2` 
 ```
 apv run start <spec> [--base <branche>] [--repo <chemin>] [--json]
 apv run set <spec-id> <cible> <statut> [--branch b] [--worktree w] [--agent id] [--commit sha]
-            [--base sha] [--findings n] [--note texte] [--repo <chemin>] [--json]
+            [--base sha] [--findings n] [--note texte] [--force-unintegrated] [--repo <chemin>] [--json]
 apv run next <spec-id> [--repo <chemin>] [--json]
 apv run status [<spec-id>] [--repo <chemin>] [--json]
 ```
@@ -81,17 +81,19 @@ apv run status [<spec-id>] [--repo <chemin>] [--json]
 
 **`start`** valide la spec comme `apv spec validate` en mode lancement (refus en `1` avec toutes les erreurs), puis crée l'état. `<spec>` est un identifiant (`.apv/specs/<id>.json`) ou un chemin (l'identifiant est alors le nom du fichier). La base est `--base`, sinon la branche courante ; elle est enregistrée avec son commit (`baseSha`). Refus si l'état existe déjà : `apv run next` le reprend.
 
-Vagues : couches topologiques des `dependsOn`. Le format de spec n'a pas de marqueur « fondation » (ses tâches refusent les propriétés inconnues) : les tâches de la première couche dont d'autres dépendent forment seules la vague 0, marquée `foundation` ; les autres tâches sans dépendance rejoignent la vague 1 ; une tâche de profondeur d est dans la vague d. Sans aucune dépendance, tout est en vague 0.
+Vagues : les couches topologiques des `dependsOn` ; une tâche de profondeur d (0 sans dépendance, sinon un de plus que sa dépendance la plus profonde) est dans la vague d, dans l'ordre de la spec. Fondations : dans chaque couche, une tâche dont au moins **deux** autres tâches dépendent directement est marquée `foundation: true` dans l'état (le format de spec n'a pas de marqueur : ses tâches refusent les propriétés inconnues). Les fondations d'une vague sont écrites par un seul agent, ses autres tâches partent en parallèle ; une tâche dont une seule autre dépend reste une dépendance ordinaire (dans l'essai de la phase 3, BIN était devenue une fondation parce que DOCS en dépendait). `start` et `status` affichent, pour chaque vague qui en a, « fondations (un seul agent) : … » puis « en parallèle : … ».
+
+Version de l'état : `schemaVersion` 2 depuis ce marqueur. Un état de version 1 (marqueur `foundation` porté par la vague 0) reste lisible : il est converti à la lecture, chaque tâche d'une vague marquée devenant une fondation (c'était la règle de la version 1) et les autres non, puis réécrit en version 2 à sa prochaine écriture. Les vagues et la vague de chaque tâche ne sont jamais recalculées : l'état garde le plan du lancement.
 
 Forme de l'état :
 
 ```
-{ schemaVersion: 1, specId, specFile, specSha256, base, baseSha, branch: "apv/<spec-id>", createdAt, updatedAt,
-  steps: { "data-model" | plan | integration | reviews | fixes | delivery: { status, note, updatedAt } },
-  waves: [{ index, foundation, tasks: [id...] }],
-  tasks: { <id>: { title, dependsOn, wave, status, branch, worktree, agentId, base, commit, note, updatedAt } },
-  reviews: { securite | fidelite | donnees | rgpd: { status, findings, note, updatedAt } },
-  events: [{ at, target, from, to, note?, commit?, agentId? }] }
+{ schemaVersion: 2, specId, specFile, specSha256, base, baseSha, branch: "apv/<spec-id>", createdAt, updatedAt,
+  steps: { "data-model" | plan | integration | reviews | fixes | delivery: { status, commit, note, updatedAt } },
+  waves: [{ index, tasks: [id...] }],
+  tasks: { <id>: { title, dependsOn, wave, foundation, status, branch, worktree, agentId, base, commit, note, updatedAt } },
+  reviews: { securite | fidelite | donnees | rgpd: { status, findings, commit, note, updatedAt } },
+  events: [{ at, target, from, to, note?, commit?, agentId?, unintegrated? }] }
 ```
 
 Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
@@ -99,18 +101,19 @@ Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 **`set`** change le statut d'une cible : une étape (`data-model`, `plan`, `integration`, `reviews`, `fixes`, `delivery`), `task:<id>` ou `review:<domaine>` (`securite`, `fidelite`, `donnees`, `rgpd`), et ajoute un événement horodaté. Règles :
 - passages permis : `pending` vers `running`, `done`, `skipped`, `failed` ; `running` vers `done`, `failed`, `pending`, `skipped` ; `failed` vers `pending`, `running`, `skipped` ; `skipped` vers `pending`, `running` ; `done` vers `running`, `pending`. Garder le même statut met seulement à jour les champs (nouveau commit wip, autre agent) ;
 - rouvrir un travail `done`, ou remplacer le commit enregistré d'une cible `done`, exige `--note` (la raison est journalisée) ;
-- une tâche ne passe `running` que si toutes ses dépendances sont `done` ;
+- une tâche ne passe `running` que si toutes ses dépendances sont `done` **et intégrées** : le commit enregistré de chacune est un ancêtre de la tête de la branche de la spec (`branch` de l'état, `git merge-base --is-ancestor`), ou de la base de l'exécution (`baseSha`) tant que cette branche n'existe pas. Sinon refus en `1` qui nomme les dépendances et leur commit. `--force-unintegrated` passe outre pour les seules dépendances faites mais pas intégrées, avec `--note` obligatoire (sinon `2`) ; l'événement garde la note et la liste des dépendances (`unintegrated`). Une tâche déjà `running` qui met à jour ses champs n'est pas revérifiée ;
 - une tâche `done` exige `--commit` ; le commit (sha ou nom de branche) doit exister dans le dépôt et il est enregistré en entier ;
 - `--branch`, `--worktree` (chemin rendu absolu), `--agent` et `--base` (commit de départ de la tâche, pour la reprise) ne valent que pour une tâche ; `--findings` (nombre de constats) que pour une revue ; `--commit` vaut pour toute cible (facultatif sur une étape : commit du plan, tête intégrée ; sur une revue : commit revu), et reste vérifié dans le dépôt.
 
 **`next`** dit ce qu'il faut faire maintenant, de façon déterministe : c'est la base de la reprise après une coupure (`/apv:resume`).
 - Étape courante : la première étape non terminée (`done` ou `skipped`), avec `waves` entre `plan` et `integration` tant qu'une tâche reste à faire, et la vague courante (la plus basse qui a une tâche non terminée).
-- Tâches prêtes : `pending` dont les dépendances sont `done`, avec leur vague. Les actions proposent d'abord celles de la vague courante (les fondations sont intégrées avant d'ouvrir le parallèle).
+- Tâches prêtes : `pending` dont les dépendances sont `done` et intégrées (même règle que `set`), avec leur vague et leur marqueur de fondation. Règle unique : une tâche se lance dès qu'elle est prête, quelle que soit sa vague ; l'action les propose toutes, les fondations à un seul agent, les autres en parallèle.
+- Tâches en attente d'intégration (`awaitingIntegration`) : dépendances toutes `done`, mais au moins une pas encore intégrée ; l'action nomme chaque dépendance à intégrer et les tâches qui l'attendent. `integration` donne la tête mesurée (`head`) et ce qu'elle est (`where` : la branche de la spec, ou la base tant qu'elle n'existe pas).
 - Tâches `running` : **à relancer** si leur worktree n'existe plus, si leur branche est introuvable, si ni branche ni worktree ne sont enregistrés, ou si leur tête n'a aucun commit après leur base (`--base` donné au lancement de la tâche, sinon la base de l'exécution) ; sinon **à reprendre**, avec branche, worktree, agent, tête, nombre de commits après la base et dernier commit enregistré. Une tâche signalée à relancer ne l'est que si son agent ne tourne plus : un agent qui vient de démarrer n'a pas encore de commit.
 - Tâches en échec, tâches bloquées (dépendances attendues), revues à lancer (`pending` ou `failed`, une fois les tâches finies et l'intégration faite) et revues en cours.
 - `specChanged` : la spec a changé depuis `start` (empreinte différente) ; l'état garde le plan du lancement, l'action le signale.
 
-**`status`** résume toutes les exécutions (étape, tâches faites sur le total, en cours, en échec, date) ou détaille une exécution (étapes, vagues avec l'état de chaque tâche, revues, dernier événement). Un état illisible est signalé, jamais réécrit ; un état dont l'identifiant de spec diffère du nom de son fichier est refusé. Le résumé est celui de `apv status` : 50 fichiers au plus, les plus récents, et 16 Mio au total, les autres comptés (`unread` en JSON).
+**`status`** résume toutes les exécutions (étape, tâches faites sur le total, en cours, en échec, date) ou détaille une exécution (étapes, vagues avec l'état de chaque tâche, revues, dernier événement). Un état illisible est signalé, jamais réécrit ; un état dont l'identifiant de spec diffère du nom de son fichier est refusé. `start`, `set`, `next` et `status <id>` lisent l'état visé comme le résumé : fichier ordinaire seulement (une FIFO ou un dossier nommé comme l'état est refusé sans bloquer), 4 Mio au plus ; l'erreur nomme le fichier par son chemin dans le dépôt et ne cite rien de son contenu. Le résumé est celui de `apv status` : 50 fichiers au plus, les plus récents, et 16 Mio au total, les autres comptés (`unread` en JSON).
 
 Sortie : `0` succès, `1` refus (spec invalide, état déjà présent ou absent, transition refusée, commit introuvable, état illisible, verrou non obtenu), `2` appel incorrect (cible ou statut inconnu, option sans effet).
 
@@ -123,11 +126,11 @@ APV_ALLOW_MERGE=1 apv stack merge <pr...> [--method merge|squash|rebase] [--targ
 
 Pile de PR, donnée par ses numéros dans l'ordre de fusion (de la base vers le sommet). Fin de l'incident 30 : re-ciblage vérifié, sortie jamais masquée, arrêt à la première anomalie.
 
-**`plan`** lit chaque PR par `gh pr view <n> --json number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup` et vérifie la pile : chaque PR ouverte ; la base de la première est la branche cible (`--target`, sinon sa base actuelle), celle de la PR n+1 est la tête de la PR n ; `mergeable` à `MERGEABLE` et état de fusion `CLEAN` (ou `HAS_HOOKS`) ; contrôles au vert (`SUCCESS`, `NEUTRAL`, `SKIPPED`) ou absents. Un brouillon est une anomalie, sauf avec `--ready`. Une mergeabilité encore en calcul (`UNKNOWN`) est relue quelques fois avant d'être une anomalie. Toutes les anomalies sont listées ; rien n'est modifié. Les appels `gh` en échec sont affichés en entier.
+**`plan`** lit chaque PR par `gh pr view <n> --json number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,url` et vérifie la pile : chaque PR ouverte ; la base de la première est la branche cible (`--target`, sinon sa base actuelle), celle de la PR n+1 est la tête de la PR n ; `mergeable` à `MERGEABLE` et état de fusion `CLEAN` (ou `HAS_HOOKS`) ; contrôles au vert (`SUCCESS`, `NEUTRAL`, `SKIPPED`) ou absents. Un brouillon est une anomalie, sauf avec `--ready`. Une PR après la première doit avoir une adresse (`url`) de la forme `https://<hôte>/<propriétaire>/<dépôt>/pull/<n>`, avec son propre numéro : c'est elle qui donne le chemin du re-ciblage. Une mergeabilité encore en calcul (`UNKNOWN`) est relue quelques fois avant d'être une anomalie. Toutes les anomalies sont listées ; rien n'est modifié. Les appels `gh` en échec sont affichés en entier.
 
 **`merge`** fusionne, uniquement sur ordre explicite de l'opérateur. Il exige `APV_ALLOW_MERGE=1` dans l'environnement ; sinon il sort en `2` avec le message du hook, sans aucun appel `gh`. Déroulé :
 1. la pile est vérifiée comme par `plan` ; une anomalie arrête tout avant la première fusion ;
-2. pour chaque PR, dans l'ordre : relecture ; si la précédente vient d'être fusionnée et que la PR vise encore sa tête, re-ciblage par `gh pr edit <n> --base <cible>`, puis **relecture** : la nouvelle base est constatée, jamais déduite du code de sortie ;
+2. pour chaque PR, dans l'ordre : relecture ; si la précédente vient d'être fusionnée et que la PR vise encore sa tête, re-ciblage par l'API REST, `gh api -X PATCH repos/<propriétaire>/<dépôt>/pulls/<n> -f base=<cible>` (avec `--hostname <hôte>` hors de github.com), puis **relecture** quel que soit le code de sortie : un appel en échec arrête la pile, et la nouvelle base est constatée par la relecture, jamais déduite du code de sortie. Propriétaire, dépôt et hôte viennent de l'adresse que `gh pr view` a rendue pour cette PR : le même dépôt que la lecture, sans appel de plus. `gh pr edit --base` n'est plus employé : sa requête GraphQL lit aussi les projets classiques de la PR et échoue depuis leur abandon par GitHub (« Projects (classic) is being deprecated », constaté à la fusion des PR #70 et #71) ;
 3. vérification juste avant la fusion (ouverte, bonne base, fusionnable, contrôles) ; avec `--ready`, `gh pr ready <n>` puis relecture ;
 4. `gh pr merge <n> --<méthode> --match-head-commit <tête relue>` : si la branche a bougé depuis la vérification, GitHub refuse ;
 5. relecture : état `MERGED` et base attendue, sinon arrêt.

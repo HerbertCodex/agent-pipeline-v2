@@ -64,7 +64,7 @@ test('apv stack plan accepts a coherent stack and changes nothing', async t => {
   assert.equal(j.json().ok, true);
   assert.deepEqual(j.json().prs.map(p => p.expectedBase), ['main', 'spec/1', 'spec/2']);
   assert.equal(j.json().calls.length, 3);
-  assert.equal(j.json().calls[0].args.join(' '), 'pr view 11 --json number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup');
+  assert.equal(j.json().calls[0].args.join(' '), 'pr view 11 --json number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,url');
 });
 
 test('apv stack plan lists every anomaly of the stack', async t => {
@@ -99,36 +99,69 @@ test('apv stack merge merges in order, retargets and verifies each base, and pri
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.deepEqual(s.writes(), [
     `pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`,
-    'pr edit 12 --base main', `pr merge 12 --merge --match-head-commit ${'12'.repeat(20)}`,
-    'pr edit 13 --base main', `pr merge 13 --merge --match-head-commit ${'13'.repeat(20)}`,
+    'api -X PATCH repos/o/r/pulls/12 -f base=main', `pr merge 12 --merge --match-head-commit ${'12'.repeat(20)}`,
+    'api -X PATCH repos/o/r/pulls/13 -f base=main', `pr merge 13 --merge --match-head-commit ${'13'.repeat(20)}`,
   ]);
   const prs = s.state().prs;
   assert.deepEqual(Object.values(prs).map(p => [p.state, p.baseRefName]), [['MERGED', 'main'], ['MERGED', 'main'], ['MERGED', 'main']]);
-  assert.match(r.stdout, /\$ .*fake-gh\.mjs pr edit 12 --base main\nhttps:\/\/github\.com\/o\/r\/pull\/12\n\(code de sortie 0\)/);
+  assert.match(r.stdout, /\$ .*fake-gh\.mjs api -X PATCH repos\/o\/r\/pulls\/12 -f base=main\n\{"number":12,"state":"open","base":\{"ref":"main"\}.*\n\(code de sortie 0\)/);
   assert.match(r.stdout, /✓ Merged pull request o\/r#13 \(spec\/3\)/);
   assert.match(r.stdout, /"baseRefName":"main"/, 'the whole view output is shown');
   assert.match(r.stdout, /fusionnées : #11, #12, #13\nPile fusionnée dans main\./);
   // The base of each pull request is read again after the retarget, before its merge.
   const calls = s.state().calls.map(c => c.slice(0, 3).join(' '));
-  const edit = calls.indexOf('pr edit 12');
+  const edit = calls.indexOf('api -X PATCH');
+  assert.equal(s.state().calls[edit][3], 'repos/o/r/pulls/12');
   assert.equal(calls[edit + 1], 'pr view 12');
   assert.ok(calls.indexOf('pr merge 12') > edit + 1);
 });
 
 test('a retarget that does not take effect stops the stack, whatever its exit code (incident 30)', async t => {
-  const s = stack(t, {}, { editIgnored: [12] });
+  // The REST call succeeds but the base read again is still the old one: stop, nothing else merged.
+  const s = stack(t, {}, { retargetIgnored: [12] });
   const r = await s.run(['merge', '11', '12', '13'], allow);
   assert.equal(r.code, 1);
-  assert.match(r.stdout, /ARRÊT à la PR #12 :\n- re-ciblage de la PR #12 non effectif : elle vise spec\/1 au lieu de main \(gh pr edit : code 0\)/);
+  assert.match(r.stdout, /ARRÊT à la PR #12 :\n- re-ciblage de la PR #12 non effectif : elle vise spec\/1 au lieu de main \(gh api : code 0\)/);
   assert.match(r.stdout, /Non fusionnées : #12, #13\. Rien d'autre n'a été fusionné/);
-  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`, 'pr edit 12 --base main']);
+  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main']);
   assert.deepEqual(Object.values(s.state().prs).map(p => p.state), ['MERGED', 'OPEN', 'OPEN']);
-  const failed = stack(t, {}, { editFail: [12] });
-  const f = await failed.run(['merge', '11', '12', '--json'], allow);
+});
+
+test('a failed retarget call stops the stack, its whole output shown, the base read again', async t => {
+  const failed = stack(t, {}, { retargetFail: [12] });
+  const f = await failed.run(['merge', '11', '12', '13'], allow);
   assert.equal(f.code, 1);
-  assert.deepEqual([f.json().merged, f.json().stopped.pr], [[11], 12]);
-  assert.match(f.stderr, /GraphQL: Base branch was modified[\s\S]*\(code de sortie 1\)/, 'json mode: transcript on stderr');
-  assert.ok(f.json().calls.some(c => c.args[1] === 'edit' && c.status === 1 && c.stderr.includes('Base branch was modified')));
+  assert.match(f.stdout, /\$ .*api -X PATCH repos\/o\/r\/pulls\/12 -f base=main\n\{"message":"Validation Failed".*\ngh: Validation Failed \(HTTP 422\)\n\(code de sortie 1\)/);
+  assert.match(f.stdout, /ARRÊT à la PR #12 :\n- re-ciblage de la PR #12 en échec \(gh api : code 1\) ; relue, elle vise spec\/1/);
+  assert.deepEqual(failed.writes(), [`pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main']);
+  assert.deepEqual(Object.values(failed.state().prs).map(p => p.state), ['MERGED', 'OPEN', 'OPEN']);
+  const calls = failed.state().calls.map(c => c.slice(0, 3).join(' '));
+  assert.equal(calls[calls.indexOf('api -X PATCH') + 1], 'pr view 12', 'the result is read again even after a failed call');
+  const j = await stack(t, {}, { retargetFail: [12] }).run(['merge', '11', '12', '--json'], allow);
+  assert.deepEqual([j.json().merged, j.json().stopped.pr], [[11], 12]);
+  assert.match(j.stderr, /Validation Failed \(HTTP 422\)\n\(code de sortie 1\)/, 'json mode: transcript on stderr');
+  assert.ok(j.json().calls.some(c => c.args[0] === 'api' && c.status === 1));
+});
+
+test('retarget: never gh pr edit, which fails on deprecated classic projects', async t => {
+  // Real merge of PR #70 and #71: `gh pr edit 71 --base apv3` exited 1 with « GraphQL: Projects (classic) is being
+  // deprecated … (repository.pullRequest.projectCards) ». The fake gh fails the same way: the stack must not use it.
+  const s = stack(t);
+  const r = await s.run(['merge', '11', '12'], allow);
+  assert.equal(r.code, 0, r.stdout);
+  assert.ok(!s.state().calls.some(c => c[0] === 'pr' && c[1] === 'edit'));
+  // Owner, name and host come from the address of the pull request read by gh pr view.
+  const enterprise = stack(t, { 12: { url: 'https://ghe.example.com/o/r/pull/12' } });
+  await enterprise.run(['merge', '11', '12'], allow);
+  assert.deepEqual(enterprise.writes()[1], 'api --hostname ghe.example.com -X PATCH repos/o/r/pulls/12 -f base=main');
+  // An address that is not the one of this pull request stops the stack before any merge.
+  for (const url of ['https://github.com/o/r/pull/99', 'https://github.com/o/r/issues/12', '', 'https://github.com/o/../pull/12']) {
+    const bad = stack(t, { 12: { url } });
+    const b = await bad.run(['merge', '11', '12'], allow);
+    assert.equal(b.code, 1, url);
+    assert.match(b.stdout, /PR #12 : adresse illisible .*re-ciblage impossible/, url);
+    assert.deepEqual(bad.writes(), [], url);
+  }
 });
 
 test('merge re-checks each pull request just before merging it and stops at the first anomaly', async t => {
@@ -137,7 +170,7 @@ test('merge re-checks each pull request just before merging it and stops at the 
   const r = await s.run(['merge', '11', '12', '13'], allow);
   assert.equal(r.code, 1);
   assert.match(r.stdout, /ARRÊT à la PR #12 :\n- PR #12 : contrôle\(s\) en échec : ci/);
-  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`, 'pr edit 12 --base main']);
+  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main']);
   // An incoherent stack is refused before any merge.
   const bad = stack(t, { 13: { baseRefName: 'main' } });
   const b = await bad.run(['merge', '11', '12', '13'], allow);

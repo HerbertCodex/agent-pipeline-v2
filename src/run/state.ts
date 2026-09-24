@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { PipelineError, errorMessage, invariant } from '../domain/errors.js';
 import { s, type Infer } from '../domain/schema.js';
 import { LockStore, defaultLockDir, type LockOwner } from '../lock/store.js';
 import { describeHolder } from '../lock/run.js';
+import { MAX_RUN_STATE_BYTES, readBounded } from './bounded-read.js';
 
 /** Resume state of a spec execution: `.apv/state/run-<spec-id>.json`, versioned with the project (spec section 8). */
 export const RUN_STATE_DIR = '.apv/state';
@@ -35,44 +36,81 @@ const key = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 // `commit` is optional on steps and reviews: states written before it existed stay readable.
 const stepSchema = s.object({ status, commit: s.default(sha, null), note: text(4000), updatedAt: s.nullable(at) });
 const taskSchema = s.object({
-  title: s.string(1, 500), dependsOn: s.array(s.string(1, 80, key), 0, 20), wave: s.number(0, 1000), status,
+  title: s.string(1, 500), dependsOn: s.array(s.string(1, 80, key), 0, 20), wave: s.number(0, 1000), foundation: s.boolean(), status,
   branch: text(300), worktree: text(4096), agentId: text(300), base: sha, commit: sha, note: text(4000), updatedAt: s.nullable(at),
 });
 const reviewSchema = s.object({ status, findings: s.nullable(s.number(0, 100000)), commit: s.default(sha, null), note: text(4000), updatedAt: s.nullable(at) });
 const eventSchema = s.object({
   at, target: s.string(1, 200), from: s.nullable(status), to: status,
   note: s.optional(s.string(0, 4000)), commit: s.optional(s.string(7, 64)), agentId: s.optional(s.string(0, 300)),
+  // Dependencies not integrated when the task was started anyway (`--force-unintegrated`).
+  unintegrated: s.optional(s.array(s.string(1, 80, key), 1, 20)),
 });
 
+/**
+ * Version 2: the foundation marker moved from the wave (v1, « the whole wave 0 ») to the task. A v1 state is
+ * migrated when read (`migrateRunState`) and written back as v2 on its next write.
+ */
+export const RUN_STATE_VERSION = 2;
+
 export const runStateSchema = s.object({
-  schemaVersion: s.literal(1),
+  schemaVersion: s.literal(RUN_STATE_VERSION),
   specId: s.string(1, 80, RUN_ID), specFile: s.string(1, 4096), specSha256: s.string(64, 64, /^[a-f0-9]{64}$/),
   base: s.string(1, 300), baseSha: s.string(40, 64, /^[a-f0-9]{40,64}$/), branch: s.string(1, 300),
   createdAt: at, updatedAt: at,
   steps: s.object({
     'data-model': stepSchema, plan: stepSchema, integration: stepSchema, reviews: stepSchema, fixes: stepSchema, delivery: stepSchema,
   }),
-  waves: s.array(s.object({ index: s.number(0, 1000), foundation: s.boolean(), tasks: s.array(s.string(1, 80, key), 1, 100) }), 0, 1000),
+  waves: s.array(s.object({ index: s.number(0, 1000), tasks: s.array(s.string(1, 80, key), 1, 100) }), 0, 1000),
   tasks: s.record(key, taskSchema, 100),
   reviews: s.object({ securite: reviewSchema, fidelite: reviewSchema, donnees: reviewSchema, rgpd: reviewSchema }),
   events: s.array(eventSchema, 0, 100000),
 });
 /** Plain mutable view of the parsed state (the schema types are read-only). */
 type Mutable<T> = T extends readonly (infer U)[] ? Mutable<U>[] : T extends object ? { -readonly [K in keyof T]: Mutable<T[K]> } : T;
-export interface RunEvent { at: string; target: string; from: RunStatus | null; to: RunStatus; note?: string; commit?: string; agentId?: string }
+export interface RunEvent {
+  at: string; target: string; from: RunStatus | null; to: RunStatus; note?: string; commit?: string; agentId?: string; unintegrated?: string[];
+}
 export type RunState = Omit<Mutable<Infer<typeof runStateSchema>>, 'events'> & { events: RunEvent[] };
 export type TaskEntry = RunState['tasks'][string];
-const parseState = (value: unknown): RunState => runStateSchema.parse(value) as unknown as RunState;
+const parseState = (value: unknown): RunState => runStateSchema.parse(migrateRunState(value)) as unknown as RunState;
 
-export interface SpecTaskInput { id: string; title: string; dependsOn: string[] }
-export interface Wave { index: number; foundation: boolean; tasks: string[] }
+const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /**
- * Waves by topological layers of `dependsOn`. The spec format has no « foundation » marker (its task schema
- * refuses unknown properties), so the foundations are the first-layer tasks other tasks depend on: they form
- * wave 0, alone, written before the parallel waves open (incident 24). The other first-layer tasks join
- * wave 1 with the tasks of depth 1; a task of depth d is in wave d. Without any dependency, every task is in
- * wave 0. Tasks keep the order of the spec inside a wave. The graph must be acyclic (validated spec).
+ * A state of version 1 in the shape of version 2, the plan it recorded kept: under the v1 rule a wave marked
+ * `foundation` held only foundations, so each of its tasks becomes a foundation task, every other task is not
+ * one, and the wave loses its marker. Anything else is returned as is, for the schema to judge. Pure: the
+ * input is never modified.
+ */
+export function migrateRunState(value: unknown): unknown {
+  if (!isRecord(value) || value['schemaVersion'] !== 1 || !Array.isArray(value['waves']) || !isRecord(value['tasks'])) return value;
+  const tasks = value['tasks'];
+  const marked = new Set<string>();
+  const waves = value['waves'].map(w => {
+    if (!isRecord(w) || typeof w['foundation'] !== 'boolean') return w;
+    const { foundation, ...rest } = w;
+    if (foundation && Array.isArray(w['tasks'])) for (const id of w['tasks']) if (typeof id === 'string') marked.add(id);
+    return rest;
+  });
+  const migrated: Record<string, unknown> = {};
+  for (const [id, task] of Object.entries(tasks)) {
+    const value = isRecord(task) && !Object.hasOwn(task, 'foundation') ? { ...task, foundation: marked.has(id) } : task;
+    Object.defineProperty(migrated, id, { value, enumerable: true, writable: true, configurable: true });
+  }
+  return { ...value, schemaVersion: RUN_STATE_VERSION, waves, tasks: migrated };
+}
+
+export interface SpecTaskInput { id: string; title: string; dependsOn: string[] }
+export interface Wave { index: number; tasks: string[] }
+
+/** Least number of tasks that depend directly on a task for it to be a foundation. */
+export const FOUNDATION_MIN_DEPENDENTS = 2;
+
+/**
+ * Waves: the topological layers of `dependsOn`. A task of depth d (0 without dependency, else one more than
+ * its deepest dependency) is in wave d. Tasks keep the order of the spec inside a wave. The graph must be
+ * acyclic (validated spec).
  */
 export function computeWaves(tasks: SpecTaskInput[]): Wave[] {
   const byId = new Map(tasks.map(t => [t.id, t]));
@@ -91,14 +129,26 @@ export function computeWaves(tasks: SpecTaskInput[]): Wave[] {
     return d;
   };
   tasks.forEach(t => visit(t.id));
-  const dependedOn = new Set(tasks.flatMap(t => t.dependsOn));
-  const foundations = tasks.filter(t => depth.get(t.id) === 0 && dependedOn.has(t.id)).map(t => t.id);
-  const waveOf = (id: string): number => {
-    const d = depth.get(id)!;
-    return foundations.length && d === 0 && !dependedOn.has(id) ? 1 : d;
-  };
-  const indexes = [...new Set(tasks.map(t => waveOf(t.id)))].sort((a, b) => a - b);
-  return indexes.map(index => ({ index, foundation: index === 0 && foundations.length > 0, tasks: tasks.filter(t => waveOf(t.id) === index).map(t => t.id) }));
+  const indexes = [...new Set(depth.values())].sort((a, b) => a - b);
+  return indexes.map(index => ({ index, tasks: tasks.filter(t => depth.get(t.id) === index).map(t => t.id) }));
+}
+
+/**
+ * The foundations: the tasks at least FOUNDATION_MIN_DEPENDENTS other tasks depend on directly, in spec order.
+ * They write what several tasks share (incident 24); in their wave, one agent writes them while the other tasks
+ * of the wave run in parallel. One dependent is not enough: a task that only one other task needs is an
+ * ordinary dependency (the phase 3 trial had BIN wait alone because DOCS depended on it).
+ */
+export function computeFoundations(tasks: SpecTaskInput[]): string[] {
+  const dependents = new Map<string, number>();
+  for (const t of tasks) for (const dep of new Set(t.dependsOn)) dependents.set(dep, (dependents.get(dep) ?? 0) + 1);
+  return tasks.filter(t => (dependents.get(t.id) ?? 0) >= FOUNDATION_MIN_DEPENDENTS).map(t => t.id);
+}
+
+/** The foundations and the other tasks of one wave, each in wave order. */
+export function splitWave(state: Pick<RunState, 'tasks'>, wave: Wave): { foundations: string[]; parallel: string[] } {
+  const foundations = wave.tasks.filter(id => state.tasks[id]?.foundation === true);
+  return { foundations, parallel: wave.tasks.filter(id => !foundations.includes(id)) };
 }
 
 export interface NewRunInput {
@@ -108,18 +158,19 @@ export interface NewRunInput {
 export function createRunState(input: NewRunInput): RunState {
   const now = (input.now ?? new Date()).toISOString();
   const waves = computeWaves(input.tasks);
+  const foundations = new Set(computeFoundations(input.tasks));
   const waveOf = new Map(waves.flatMap(w => w.tasks.map(id => [id, w.index] as const)));
   const step = () => ({ status: 'pending' as const, note: null, updatedAt: null });
   const review = () => ({ status: 'pending' as const, findings: null, note: null, updatedAt: null });
   const tasks: RunState['tasks'] = {};
   for (const t of input.tasks) {
     Object.defineProperty(tasks, t.id, { enumerable: true, writable: true, configurable: true, value: {
-      title: t.title, dependsOn: [...t.dependsOn], wave: waveOf.get(t.id)!, status: 'pending', branch: null, worktree: null, agentId: null,
+      title: t.title, dependsOn: [...t.dependsOn], wave: waveOf.get(t.id)!, foundation: foundations.has(t.id), status: 'pending', branch: null, worktree: null, agentId: null,
       base: null, commit: null, note: null, updatedAt: null,
     } satisfies TaskEntry });
   }
   return parseState({
-    schemaVersion: 1, specId: input.specId, specFile: input.specFile, specSha256: input.specSha256, base: input.base, baseSha: input.baseSha,
+    schemaVersion: RUN_STATE_VERSION, specId: input.specId, specFile: input.specFile, specSha256: input.specSha256, base: input.base, baseSha: input.baseSha,
     branch: `apv/${input.specId}`, createdAt: now, updatedAt: now,
     steps: Object.fromEntries(STEPS.map(n => [n, step()])),
     waves, tasks, reviews: Object.fromEntries(REVIEWS.map(n => [n, review()])),
@@ -154,7 +205,45 @@ const TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
 export interface SetOptions {
   status: RunStatus;
   branch?: string; worktree?: string; agentId?: string; commit?: string; base?: string; note?: string; findings?: number;
+  /** Where the commits of the dependencies of a task that starts must already be; absent: nowhere. */
+  integration?: IntegrationCheck;
+  /** Starts the task although a dependency is not integrated; needs `note`, journaled with the dependencies. */
+  forceUnintegrated?: boolean;
   now?: Date;
+}
+
+/**
+ * The integration head of an execution: the branch of the spec (`branch` of the state), or the base commit of
+ * the execution while that branch does not exist yet. A dependency is integrated when its recorded commit is
+ * an ancestor of that head.
+ */
+export interface IntegrationCheck {
+  /** Commit of the head. */
+  head: string;
+  /** The head as shown to a human: the branch, or the base when the branch does not exist yet. */
+  where: string;
+  integrated(commit: string): boolean;
+}
+
+/** The integration head of `state` as the probe sees the repository. */
+export function integrationCheck(state: RunState, probe: GitProbe): IntegrationCheck {
+  const branchHead = probe.resolve(state.branch);
+  const head = branchHead ?? state.baseSha;
+  const where = branchHead ? state.branch : `la base ${state.base} (${state.baseSha.slice(0, 12)}), la branche ${state.branch} n'existant pas encore`;
+  return { head, where, integrated: commit => commit === head || probe.isAncestor(commit, head) };
+}
+
+/**
+ * The dependencies of a task split by readiness: `notDone` (not `done`) and `notIntegrated` (`done`, but their
+ * commit is missing or not an ancestor of the integration head). A task is ready when both are empty.
+ */
+export function dependencyGaps(state: RunState, task: TaskEntry, integration: IntegrationCheck | undefined): { notDone: string[]; notIntegrated: string[] } {
+  const notDone = task.dependsOn.filter(d => state.tasks[d]?.status !== 'done');
+  const notIntegrated = task.dependsOn.filter(d => {
+    const dep = state.tasks[d];
+    return dep?.status === 'done' && !(dep.commit && integration?.integrated(dep.commit));
+  });
+  return { notDone, notIntegrated };
 }
 
 /** Refused transition: exit 1 (a control failed), unlike a malformed call. */
@@ -164,7 +253,8 @@ export class TransitionError extends PipelineError {
 
 /**
  * Applies `apv run set` to a copy of the state and returns it with the event it added. Checks the transition,
- * the dependencies of a task that starts (all `done`), and the commit of a task that ends (`--commit`).
+ * the dependencies of a task that starts (all `done`, and integrated: their commit in the integration head,
+ * unless `forceUnintegrated` with a note), and the commit of a task that ends (`--commit`).
  * Commit existence is checked by the caller, which owns the repository.
  */
 export function applySet(state: RunState, target: Target, options: SetOptions): { state: RunState; from: RunStatus; event: RunEvent } {
@@ -175,6 +265,7 @@ export function applySet(state: RunState, target: Target, options: SetOptions): 
   if (!entry) throw new PipelineError('RUN_TARGET', `Tâche inconnue dans l'exécution ${state.specId} : ${target.kind === 'task' ? target.id : name}`);
   const from = entry.status;
   const to = options.status;
+  let unintegrated: string[] | null = null;
   if (from !== to && !TRANSITIONS[from].includes(to)) throw new TransitionError(`${name} : passage de « ${from} » à « ${to} » refusé (possibles : ${TRANSITIONS[from].join(', ')})`);
   if (from === 'done' && to !== 'done' && !options.note?.trim()) throw new TransitionError(`${name} : rouvrir un travail terminé exige --note (la raison est journalisée)`);
   // The commit of finished work is what integration and reviews rely on: changing it is a decision to journal.
@@ -185,8 +276,18 @@ export function applySet(state: RunState, target: Target, options: SetOptions): 
   if (target.kind === 'task') {
     const task = entry as TaskEntry;
     if (to === 'running') {
-      const waiting = task.dependsOn.filter(dep => next.tasks[dep]?.status !== 'done');
-      if (waiting.length) throw new TransitionError(`${name} : dépendance(s) pas encore faite(s) : ${waiting.map(d => `${d} (${next.tasks[d]?.status ?? 'inconnue'})`).join(', ')}`);
+      const { notDone, notIntegrated } = dependencyGaps(next, task, options.integration);
+      if (notDone.length) throw new TransitionError(`${name} : dépendance(s) pas encore faite(s) : ${notDone.map(d => `${d} (${next.tasks[d]?.status ?? 'inconnue'})`).join(', ')}`);
+      // Checked when the task starts, not when a running task only updates its fields.
+      if (from !== 'running' && notIntegrated.length) {
+        const list = notIntegrated.map(d => `${d} (commit ${next.tasks[d]?.commit?.slice(0, 12) ?? 'absent'})`).join(', ');
+        if (!options.forceUnintegrated) {
+          throw new TransitionError(`${name} : dépendance(s) faite(s) mais pas encore intégrée(s) dans ${options.integration?.where ?? 'la branche de la spec'} : ${list}. ` +
+            'Intègre-les d\'abord ; sinon --force-unintegrated avec --note (la raison est journalisée)');
+        }
+        if (!options.note?.trim()) throw new TransitionError(`${name} : --force-unintegrated exige --note (la raison est journalisée)`);
+        unintegrated = notIntegrated;
+      }
     }
     if (to === 'done' && !options.commit) throw new TransitionError(`${name} : une tâche faite exige --commit <sha> (le commit qui la porte)`);
     if (options.branch !== undefined) task.branch = options.branch;
@@ -202,7 +303,7 @@ export function applySet(state: RunState, target: Target, options: SetOptions): 
   next.updatedAt = now;
   const event: RunEvent = { at: now, target: name, from, to,
     ...(options.note !== undefined ? { note: options.note } : {}), ...(options.commit !== undefined ? { commit: options.commit } : {}),
-    ...(options.agentId !== undefined ? { agentId: options.agentId } : {}) };
+    ...(options.agentId !== undefined ? { agentId: options.agentId } : {}), ...(unintegrated ? { unintegrated } : {}) };
   next.events.push(event);
   return { state: parseState(next), from, event };
 }
@@ -227,6 +328,8 @@ export interface GitProbe {
   resolve(ref: string, worktree?: string): string | null;
   /** Number of commits reachable from `head` and not from `base`, or null when unknown. */
   countAfter(base: string, head: string, worktree?: string): number | null;
+  /** True when `commit` is an ancestor of `head` (`git merge-base --is-ancestor`); false when unknown. */
+  isAncestor(commit: string, head: string): boolean;
 }
 
 export interface ResumeItem {
@@ -236,7 +339,11 @@ export interface ResumeItem {
 export interface RelaunchItem extends ResumeItem { reason: string }
 export interface NextPlan {
   specId: string; step: StepName | 'waves' | null; stepStatus: RunStatus | null; wave: number | null; finished: boolean;
-  ready: { id: string; title: string; wave: number }[];
+  ready: { id: string; title: string; wave: number; foundation: boolean }[];
+  /** Dependencies all `done`, but some not integrated yet in the integration head. */
+  awaitingIntegration: { id: string; wave: number; waitingOn: string[] }[];
+  /** The integration head the readiness was measured on. */
+  integration: { head: string; where: string };
   resume: ResumeItem[];
   relaunch: RelaunchItem[];
   failed: { id: string; note: string | null }[];
@@ -247,17 +354,23 @@ export interface NextPlan {
 }
 
 /**
- * `apv run next`: what to do now, deterministic, the basis of resuming after an interruption. A running task
+ * `apv run next`: what to do now, deterministic, the basis of resuming after an interruption. A task is ready
+ * when its dependencies are `done` and their commits integrated in the branch of the spec (or in the base of
+ * the execution while that branch does not exist); tasks are launched as soon as they are ready, not wave by
+ * wave. A running task
  * whose worktree is gone, or that has no commit after its base (`--base` given when it started, else the base
  * of the execution), is to relaunch if its agent no longer runs.
  */
 export function computeNext(state: RunState, probe: GitProbe): NextPlan {
   const { step, wave } = currentStep(state);
   const tasks = Object.entries(state.tasks);
-  const ready = tasks.filter(([, t]) => t.status === 'pending' && t.dependsOn.every(d => state.tasks[d]?.status === 'done'))
-    .map(([id, t]) => ({ id, title: t.title, wave: t.wave })).sort((a, b) => a.wave - b.wave);
-  const blocked = tasks.filter(([, t]) => t.status === 'pending' && !t.dependsOn.every(d => state.tasks[d]?.status === 'done'))
-    .map(([id, t]) => ({ id, waitingOn: t.dependsOn.filter(d => state.tasks[d]?.status !== 'done') }));
+  const integration = integrationCheck(state, probe);
+  const pending = tasks.filter(([, t]) => t.status === 'pending').map(([id, t]) => ({ id, t, gaps: dependencyGaps(state, t, integration) }));
+  const ready = pending.filter(p => !p.gaps.notDone.length && !p.gaps.notIntegrated.length)
+    .map(({ id, t }) => ({ id, title: t.title, wave: t.wave, foundation: t.foundation })).sort((a, b) => a.wave - b.wave);
+  const awaitingIntegration = pending.filter(p => !p.gaps.notDone.length && p.gaps.notIntegrated.length)
+    .map(({ id, t, gaps }) => ({ id, wave: t.wave, waitingOn: gaps.notIntegrated })).sort((a, b) => a.wave - b.wave);
+  const blocked = pending.filter(p => p.gaps.notDone.length).map(({ id, gaps }) => ({ id, waitingOn: gaps.notDone }));
   const failed = tasks.filter(([, t]) => t.status === 'failed').map(([id, t]) => ({ id, note: t.note }));
   const resume: ResumeItem[] = [];
   const relaunch: RelaunchItem[] = [];
@@ -289,26 +402,41 @@ export function computeNext(state: RunState, probe: GitProbe): NextPlan {
   for (const f of failed) actions.push(`décider de ${f.id} (en échec${f.note ? ` : ${f.note}` : ''}) : relancer, corriger ou sauter`);
   if (step === 'data-model' || step === 'plan') actions.push(`étape ${STEP_LABEL[step]} (${STATUS_LABEL[state.steps[step].status]}) : la terminer avant d'ouvrir les vagues`);
   else if (step === 'waves') {
-    // The current wave first: the foundations are integrated before the parallel waves open (incident 24).
-    const now = ready.filter(r => r.wave === wave);
-    const foundation = state.waves.find(w => w.index === wave)?.foundation ? ', fondations, un seul agent' : '';
-    if (now.length) actions.push(`lancer ${now.length} tâche(s) prête(s) de la vague ${wave}${foundation} : ${now.map(r => r.id).join(', ')}`);
-    const later = ready.filter(r => r.wave !== wave);
-    if (later.length) actions.push(`prêtes mais d'une vague suivante : ${later.map(r => `${r.id} (vague ${r.wave})`).join(', ')} ; à lancer une fois la vague ${wave} intégrée, sauf décision contraire notée`);
-    if (!ready.length && !resume.length && !relaunch.length && !failed.length) actions.push('aucune tâche prête : vérifier les dépendances bloquées');
+    // Every ready task now, whatever its wave: the foundations to one agent (incident 24), the others in parallel.
+    const found = ready.filter(r => r.foundation).map(r => r.id);
+    const parallel = ready.filter(r => !r.foundation).map(r => r.id);
+    if (ready.length) {
+      actions.push(`lancer ${ready.length} tâche(s) prête(s) : ${[found.length ? `fondations (un seul agent) : ${found.join(', ')}` : '',
+        parallel.length ? `en parallèle : ${parallel.join(', ')}` : ''].filter(Boolean).join(' ; ')}`);
+    }
+    const toIntegrate = [...new Set(awaitingIntegration.flatMap(a => a.waitingOn))];
+    for (const dep of toIntegrate) {
+      const waiting = awaitingIntegration.filter(a => a.waitingOn.includes(dep)).map(a => a.id);
+      actions.push(`intégrer ${dep} (commit ${state.tasks[dep]?.commit?.slice(0, 12) ?? 'absent'}) dans ${state.branch} : ${waiting.join(', ')} en attend(ent) l'intégration`);
+    }
+    if (!ready.length && !toIntegrate.length && !resume.length && !relaunch.length && !failed.length) actions.push('aucune tâche prête : vérifier les dépendances bloquées');
   } else if (step === 'reviews' && reviewsToLaunch.length) actions.push(`lancer les revues : ${reviewsToLaunch.join(', ')}`);
   else if (step) actions.push(`étape ${STEP_LABEL[step]} (${STATUS_LABEL[state.steps[step].status]})`);
   if (allDone) actions.push('exécution terminée');
-  return { specId: state.specId, step, stepStatus, wave, finished: allDone, ready, resume, relaunch, failed, blocked, reviewsToLaunch, reviewsRunning, actions };
+  return { specId: state.specId, step, stepStatus, wave, finished: allDone, ready, awaitingIntegration, integration: { head: integration.head, where: integration.where },
+    resume, relaunch, failed, blocked, reviewsToLaunch, reviewsRunning, actions };
 }
 
 /** How a state file is named in errors (path relative to the repository), and the spec id its name carries. */
 export interface RunStateSource { shown?: string; specId?: string }
 
+/**
+ * Reads one state file (`apv run start|set|next|status <id>`) with the bounded read of the summary: a regular
+ * file only (a FIFO named like the state never blocks), MAX_RUN_STATE_BYTES at most; errors name the file by
+ * `shown` and never quote its content.
+ */
 export function readRunState(file: string, source: RunStateSource = {}): RunState {
   const shown = source.shown ?? file;
-  if (!existsSync(file)) throw new PipelineError('RUN_MISSING', `Aucune exécution : ${shown} n'existe pas (apv run start <spec>)`);
-  return parseRunStateText(readFileSync(file, 'utf8'), shown, source.specId);
+  // lstat: a dangling link is not « no execution », and nothing is followed or opened here.
+  let present = true;
+  try { lstatSync(file); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') present = false; }
+  if (!present) throw new PipelineError('RUN_MISSING', `Aucune exécution : ${shown} n'existe pas (apv run start <spec>)`);
+  return parseRunStateText(readBounded(file, shown, MAX_RUN_STATE_BYTES).toString('utf8'), shown, source.specId);
 }
 
 /**

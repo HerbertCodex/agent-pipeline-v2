@@ -30,6 +30,8 @@ export function gitProbe(repo) {
     return {
         exists: path => existsSync(path),
         resolve: (ref, worktree) => worktree ? (existsSync(worktree) ? resolveCommit(worktree, ref) : null) : resolveCommit(repo, ref),
+        isAncestor: (commit, head) => /^[a-f0-9]{7,64}$/.test(commit) && /^[a-f0-9]{7,64}$/.test(head) &&
+            gitRead(repo, ['merge-base', '--is-ancestor', commit, head]) !== null,
         countAfter: (base, head, worktree) => {
             const out = gitRead(worktree && existsSync(worktree) ? worktree : repo, ['rev-list', '--count', `${base}..${head}`]);
             return out !== null && /^\d+$/.test(out) ? Number(out) : null;

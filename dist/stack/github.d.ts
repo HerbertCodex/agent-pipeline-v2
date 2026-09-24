@@ -14,7 +14,7 @@ export interface GhCall {
 export type GhRunner = (args: string[]) => Promise<GhCall>;
 /** Runs `gh` (or `APV_GH`) without a shell, with the caller's environment. */
 export declare function processGh(bin: string, env: NodeJS.ProcessEnv, cwd: string): GhRunner;
-export declare const VIEW_FIELDS = "number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup";
+export declare const VIEW_FIELDS = "number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,url";
 export interface CheckItem {
     name: string;
     state: 'success' | 'pending' | 'failure';
@@ -29,10 +29,29 @@ export interface PullRequest {
     mergeable: string;
     mergeStateStatus: string;
     checks: CheckItem[];
+    /** Web address of the pull request: its host, owner and repository name the REST calls. */
+    url: string;
 }
 /** Check runs and commit statuses of `statusCheckRollup`, reduced to success, pending or failure. */
 export declare function readChecks(rollup: unknown): CheckItem[];
 export declare function parsePullRequest(text: string): PullRequest;
+/** Where the REST API reaches a pull request: `repos/<owner>/<repo>/pulls/<n>` on its host. */
+export interface PullRequestPath {
+    host: string;
+    path: string;
+}
+/**
+ * The REST path of a pull request, read from the web address `gh pr view` gives for it: the same repository
+ * that answered the read, host included (GitHub Enterprise). Null when the address is not the one of pull
+ * request `n` (another number, unexpected form, owner or name with other characters than GitHub allows).
+ */
+export declare function pullRequestPath(pr: PullRequest): PullRequestPath | null;
+/**
+ * Arguments of the retarget: `gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -f base=<target>`. The REST API
+ * and not `gh pr edit --base`, whose GraphQL query also reads the classic projects of the pull request and
+ * fails since their deprecation (seen on the real merge of PR #70 and #71).
+ */
+export declare function retargetArgs(where: PullRequestPath, target: string): string[];
 /**
  * Every reason not to merge this pull request onto `expectedBase` now. Waiting states (`UNKNOWN`) count as
  * anomalies here: the caller polls them first.
@@ -78,7 +97,7 @@ export interface MergeReport {
 /**
  * `apv stack merge`: merges the stack in order and stops at the first anomaly. Before each merge the pull
  * request is read again and checked; once the previous one is merged, the next one is retargeted onto the
- * target and the new base is verified by a new read, never trusted from an exit code (incident 30). The
+ * target by the REST API and the new base is verified by a new read, never trusted from an exit code (incident 30). The
  * merge passes `--match-head-commit`, so a head that moved since the check is refused by GitHub itself.
  */
 export declare function mergeStack(numbers: number[], method: 'merge' | 'squash' | 'rebase', options: StackOptions): Promise<MergeReport>;

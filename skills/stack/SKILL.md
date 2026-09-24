@@ -30,7 +30,7 @@ Si le message courant de l'opérateur contient l'ordre de fusionner ces PR (voir
 `APV_ALLOW_MERGE=1 apv stack merge <pr...> [--method <méthode>] [--ready] [--target <branche>]` (mêmes options qu'au plan)
 
 - La variable se pose devant **cette seule commande**, jamais par `export`, jamais dans une autre commande. Le hook du plugin bloque la fusion sans elle (code 2 avec son message) : ne cherche pas à le contourner, et n'utilise jamais `gh pr merge` à la place de l'outil.
-- L'outil revérifie chaque PR **juste avant** de la fusionner, re-cible la suivante sur la base finale quand la précédente est fusionnée, vérifie le résultat par une relecture (jamais par le seul code de sortie), affiche la sortie complète de chaque appel `gh`, et s'arrête à la première anomalie avec un rapport.
+- L'outil revérifie chaque PR **juste avant** de la fusionner, re-cible la suivante sur la base finale quand la précédente est fusionnée (par l'API REST, `gh api -X PATCH repos/<propriétaire>/<dépôt>/pulls/<n> -f base=<cible>`, et non `gh pr edit`, qui échoue sur les projets classiques abandonnés), vérifie le résultat par une relecture (jamais par le seul code de sortie), affiche la sortie complète de chaque appel `gh`, et s'arrête à la première anomalie avec un rapport.
 - **Lis toute la sortie**, ligne par ligne, jamais filtrée, jamais redirigée vers `/dev/null` ni tronquée (incident 30 : des re-ciblages ont échoué en silence et les PR ont été fusionnées dans la mauvaise base).
 
 ## 5. Vérifier et rendre compte
