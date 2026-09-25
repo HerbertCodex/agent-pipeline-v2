@@ -17,7 +17,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run'];
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec'];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'];
 /**
@@ -32,6 +32,17 @@ export const DEFAULT_FULL_SUITE = 'final';
 /** Settings of `/apv:run` read by the tool (`apv run next`); absent: defaults. */
 export const runSettingsSchema = s.object({
     fullSuite: s.default(s.enum(FULL_SUITE_MODES), DEFAULT_FULL_SUITE),
+});
+/**
+ * Size thresholds of a spec (`apv spec validate` warns above them, never refuses): a spec with more tasks or
+ * criteria is better split into independent specs delivered in parallel, and a longer chain of dependency layers
+ * makes every layer wait for the integration of the previous one.
+ */
+export const DEFAULT_SPEC_LIMITS = { maxTasks: 6, maxAcceptance: 30, maxDepth: 3 };
+export const specSettingsSchema = s.object({
+    maxTasks: s.default(s.number(1, 100), DEFAULT_SPEC_LIMITS.maxTasks),
+    maxAcceptance: s.default(s.number(1, 1000), DEFAULT_SPEC_LIMITS.maxAcceptance),
+    maxDepth: s.default(s.number(1, 100), DEFAULT_SPEC_LIMITS.maxDepth),
 });
 export const apvConfigSchema = s.object({
     /** Project name, written by `apv init` (display only). */
@@ -49,7 +60,11 @@ export const apvConfigSchema = s.object({
     structure: s.optional(structureSchema),
     /** Rhythm of `/apv:run` (docs/CONFIGURATION.md, « Exécution »); absent: `fullSuite` is `final`. */
     run: s.optional(runSettingsSchema),
+    /** Size thresholds of `apv spec validate` (docs/CONFIGURATION.md, « Taille des specs »); absent: defaults. */
+    spec: s.optional(specSettingsSchema),
 });
+/** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
+export const specLimits = (config) => ({ ...DEFAULT_SPEC_LIMITS, ...config.spec });
 /** The full suite rhythm of a configuration: `run.fullSuite`, `final` when absent. */
 export const fullSuiteMode = (config) => config.run?.fullSuite ?? DEFAULT_FULL_SUITE;
 /** Picks the read sections: `environment.passEnv` only, whatever else a V2 environment declared. */

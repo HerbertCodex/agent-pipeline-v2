@@ -267,6 +267,10 @@ export declare function targetedQaContext(context: {
         stage: "task" | "full" | undefined;
         dirty: boolean | undefined;
         targeted: boolean | undefined;
+        override: {
+            readonly run: string;
+            readonly reason: string;
+        } | undefined;
     }[];
     qaScope: {
         mode: string;

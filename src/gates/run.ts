@@ -34,6 +34,8 @@ export interface GateRunOptions {
   signal?: AbortSignal;
   /** Source of passed variables (tests inject it); defaults to the process environment. */
   env?: NodeJS.ProcessEnv;
+  /** A full suite run out of the rhythm of an execution (`--reason`): written in every receipt and in the summary. */
+  override?: { run: string; reason: string };
 }
 export interface GateRunResult {
   runId: string;
@@ -123,8 +125,9 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const configHash = gatesConfigHash(options.config);
   const source = options.env ?? process.env;
   const keys = new Map<string, string>();
-  const write = (receipt: Omit<GateReceipt, 'stage' | 'dirty' | 'targeted'>): GateReceipt => {
-    const valid = validateReceipt({ ...receipt, stage, dirty, ...(targeted.has(receipt.gateId) ? { targeted: true } : {}) });
+  const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
+  const write = (receipt: Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override'>): GateReceipt => {
+    const valid = validateReceipt({ ...receipt, stage, dirty, ...(targeted.has(receipt.gateId) ? { targeted: true } : {}), ...(override ? { override } : {}) });
     writeFileSync(join(directory, `${valid.gateId}.json`), JSON.stringify(valid, null, 2) + '\n');
     return valid;
   };
@@ -158,7 +161,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const result: GateRunResult = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
     reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, ok: list.every(success) };
   writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
-    reserved: result.reserved, targeted: result.targeted,
+    reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}),
     receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs) })) }, null, 2) + '\n');
   return result;
 }

@@ -13,7 +13,7 @@ Installation locale : `npm run build`, puis `node dist/cli.js <commande>` ou `np
 - Fichiers lus dans le projet :
   - configuration : `.apv/config.json`, sinon `pipeline.v2.json` (projet V2, tant que `apv onboard` n'a pas créé `.apv/config.json`) ;
   - registre des décisions : `.apv/DECISIONS.json`, sinon `.agent-pipeline/DECISIONS.json` (projet V2).
-- De la configuration, seules les sections `name` (nom du projet, écrit par `apv init`), `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design` et `structure` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
+- De la configuration, seules les sections `name` (nom du projet, écrit par `apv init`), `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run` et `spec` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
 
 ## `apv init`
 
@@ -94,7 +94,9 @@ Seule une demande fournie (cas 1 ou 2) sert à vérifier les citations des réso
 
 Par défaut, la spec est contrôlée comme au lancement : aucune question ouverte, aucune ambiguïté non résolue, chaque critère porté par une tâche. `--draft` relâche ces trois règles pour une spec en cours de rédaction.
 
-Sortie : `0` spec valide, `1` spec invalide ou illisible, `2` appel incorrect. En JSON : `valid`, `issues` (`code`, `message`), `security` (`minimumLane`, `topics`, `requiresThreatModel`, `negativeTestsRequired`, `signals`), `requestSource`, `ledgerFile`, `configFile`, `sha`.
+**Avertissements de taille et de profondeur** (jamais une erreur, sans effet sur le code de sortie) : au-delà des seuils de la section `spec` de `.apv/config.json` ([CONFIGURATION.md](CONFIGURATION.md#taille-des-specs--spec)), plus de `maxTasks` tâches (6 par défaut) ou de `maxAcceptance` critères (30), la validation propose de découper la demande en specs indépendantes de 4 à 6 tâches, livrées en parallèle, chacune avec sa PR (`SPEC_SIZE`) ; au-delà de `maxDepth` couches de dépendances (3, les vagues de `apv run start`), elle nomme le chemin le plus long et propose le motif « contrats d'abord » (`SPEC_DEPTH`). En sortie lisible, une section « N avertissement(s) » après le résultat.
+
+Sortie : `0` spec valide, `1` spec invalide ou illisible, `2` appel incorrect. En JSON : `valid`, `issues` (`code`, `message`), `warnings` (`code`, `message`), `limits` (`maxTasks`, `maxAcceptance`, `maxDepth` appliqués), `security` (`minimumLane`, `topics`, `requiresThreatModel`, `negativeTestsRequired`, `signals`), `requestSource`, `ledgerFile`, `configFile`, `sha`.
 
 ## `apv spec new`
 
@@ -156,7 +158,7 @@ Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 - Tâches `running` : **à relancer** si leur worktree n'existe plus, si leur branche est introuvable, si ni branche ni worktree ne sont enregistrés, ou si leur tête n'a aucun commit après leur base (`--base` donné au lancement de la tâche, sinon la base de l'exécution) ; sinon **à reprendre**, avec branche, worktree, agent, tête, nombre de commits après la base et dernier commit enregistré. Une tâche signalée à relancer ne l'est que si son agent ne tourne plus : un agent qui vient de démarrer n'a pas encore de commit.
 - Tâches en échec, tâches bloquées (dépendances attendues), revues à lancer (`pending` ou `failed`, une fois les tâches finies et l'intégration faite) et revues en cours.
 - `specChanged` : la spec a changé depuis `start` (empreinte différente) ; l'état garde le plan du lancement, l'action le signale.
-- `suite` : rythme de la suite complète lu dans `run.fullSuite` de `.apv/config.json` (`mode`, `final` par défaut ou `each-integration`, [CONFIGURATION.md](CONFIGURATION.md#exécution--run)), niveau de vérification attendu à l'étape courante (`level` : `task`, contrôles de tâche et tests ciblés vérifiés par `apv gates verify --stage task --base <base ciblée>` ; `full`, suite complète et `apv gates verify` ; `null` à une étape sans intégration) et base ciblée (`targetBase`, `targetBaseWhere`) : le dernier commit prouvé par la suite complète, soit la base de l'exécution tant qu'aucune n'est passée, puis la tête de la dernière intégration (`integration done --commit`) avec `final`, la tête d'intégration avec `each-integration`. Les actions disent la commande attendue : intégration intermédiaire au niveau tâche, dernière intégration en suite complète avant les revues, corrections au niveau tâche avec le test de chaque correction, livraison sans double suite. Une configuration illisible laisse `final`, signalé en première action.
+- `suite` : rythme de la suite complète lu dans `run.fullSuite` de `.apv/config.json` (`mode`, `final` par défaut ou `each-integration`, [CONFIGURATION.md](CONFIGURATION.md#exécution--run)), niveau de vérification attendu à l'étape courante (`level` : `task`, contrôles de tâche et tests ciblés vérifiés par `apv gates verify --stage task --base <base ciblée>` ; `full`, suite complète et `apv gates verify` ; `null` à une étape sans intégration) et base ciblée (`targetBase`, `targetBaseWhere`) : le dernier commit prouvé par la suite complète, soit la base de l'exécution tant qu'aucune n'est passée, puis la tête de la dernière intégration (`integration done --commit`) avec `final`, la tête d'intégration avec `each-integration`. Les actions disent la commande attendue : intégration intermédiaire au niveau tâche, dernière intégration en suite complète avant les revues, corrections au niveau tâche avec le test de chaque correction, livraison sans double suite. Une configuration illisible laisse `final`, signalé en première action. `apv gates run --stage full` applique ce même niveau : refus au niveau `task`, sauf `--reason` (section `apv gates run`).
 - `pause` : la pause de quota en cours (`since`, `until`, `note`), ou `null` ; signalée en première action tant qu'elle dure.
 
 **`status`** résume toutes les exécutions (étape, tâches faites sur le total, en cours, en échec, pause de quota en cours, date) ou détaille une exécution (dates, pause en cours, étapes, vagues avec l'état de chaque tâche, revues, les cinq derniers événements avec leur note), heures en heure locale.
@@ -220,7 +222,8 @@ Sortie : `0` dans le périmètre, `1` hors périmètre, `2` appel incorrect (spe
 
 ```
 apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>]
-              [--concurrency N] [--keep-going] [--skip-proven] [--repo <chemin>] [--json]
+              [--concurrency N] [--keep-going] [--skip-proven] [--run <spec-id>]
+              [--reason <texte>] [--repo <chemin>] [--json]
 ```
 
 Exécute les contrôles déclarés dans `gates` depuis la racine du dépôt, avec l'ordonnanceur de V2 :
@@ -239,15 +242,22 @@ Paramètres des commandes (argument entier uniquement, jamais d'interprétation 
 
 **Suite déjà prouvée** : avant d'exécuter la suite complète entière (`--stage full`, sans `--only`), l'outil regarde si elle est déjà prouvée sur ce commit exact, arbre propre (la vérification de `apv gates verify --commit HEAD` à `0`). Si oui, il le signale en tête de sortie (`alreadyProven: true` en JSON) avant de la relancer ; avec `--skip-proven`, il ne relance rien et sort en `0` (`skipped: true` en JSON, avec les reçus qui font la preuve). Arbre modifié, reçu manquant, échec plus récent ou autre configuration : pas de preuve, la suite tourne. `--skip-proven` avec `--stage task` ou `--only` : appel incorrect.
 
+**Rythme d'une exécution** (`/apv:run`, [CONFIGURATION.md](CONFIGURATION.md#exécution--run)) : quand la commande exécuterait au moins un contrôle de stage `full` en entier (`--stage full` ou sans `--stage`), elle cherche l'exécution dont elle fait partie : `--run <spec-id>` (l'état doit exister, sinon `RUN_MISSING`, sortie `1`), sinon la branche courante du dépôt, `apv/<id>` ou `apv/<id>-<suffixe>` (branches de tâche, d'intégration, de correction ; l'identifiant le plus long d'abord), quand le checkout principal (premier worktree de `git worktree list`, où `apv run` écrit les états) a `.apv/state/run-<id>.json`. Elle calcule le niveau attendu comme `apv run next` (`suite.level`, avec `run.fullSuite` du checkout principal) :
+- niveau `task` (intégration intermédiaire ou passe de corrections avec `"final"`) : refus, sortie `1`, `Erreur [GATE_RHYTHM]`, avec l'étape, le niveau attendu, la commande à lancer à la place (`apv gates run --stage task --base <base ciblée>`, puis `apv gates verify --commit <tête> --stage task --base <base ciblée>` à `0`) ; rien n'est exécuté ni écrit ;
+- `--reason "<texte>"` (1 à 500 caractères, jamais avec `--stage task`) : dérogation motivée, la suite tourne ; un événement `gates:full` (raison et commit) est journalisé dans l'état de l'exécution par l'API d'état, sous le verrou `run:<id>`, et la raison est écrite dans chaque reçu et dans `summary.json` (`override` : `run`, `reason`) ; ces reçus prouvent la suite complète comme les autres ;
+- niveau `full` (dernière intégration, livraison, `"each-integration"`) ou aucun niveau à cette étape : rien ne change ;
+- hors exécution (autre branche, tête détachée, aucun état ; un état trouvé par la branche mais illisible est signalé par une note) : rien ne change.
+Un `--reason` sans effet est signalé par une note. `--stage task` et une sélection `--only` sans contrôle `full` ne sont jamais concernés.
+
 `--only` choisit des contrôles et ajoute leurs dépendances. Par défaut, le premier échec arrête les contrôles suivants ; `--keep-going` les laisse tous s'exécuter. `--concurrency` borne le parallélisme (3 par défaut).
 
-Chaque exécution écrit dans `.apv/receipts/<exécution>/` un reçu JSON par contrôle (statut, code de sortie, durée, empreintes des sorties, empreinte de preuve liée au commit, à la configuration, à l'environnement et à l'exécutable, diagnostic en cas d'échec) et un `summary.json`. Le dossier `.apv/receipts/` contient un `.gitignore` : les reçus sont des preuves locales, jamais commitées. Chaque reçu note le commit (`candidateSha`), le stage demandé (`stage`) et l'état de l'arbre (`dirty`) ; le résumé reprend `stage`, `dirty`, `selected`, `added`, `reserved` et `targeted`. Le reçu d'un contrôle exécuté par sa commande ciblée porte `targeted: true`. Si l'arbre de travail avait des modifications non commitées (`dirty: true`), les reçus décrivent plus que le commit : `apv gates verify` ne les retient pas.
+Chaque exécution écrit dans `.apv/receipts/<exécution>/` un reçu JSON par contrôle (statut, code de sortie, durée, empreintes des sorties, empreinte de preuve liée au commit, à la configuration, à l'environnement et à l'exécutable, diagnostic en cas d'échec) et un `summary.json`. Le dossier `.apv/receipts/` contient un `.gitignore` : les reçus sont des preuves locales, jamais commitées. Chaque reçu note le commit (`candidateSha`), le stage demandé (`stage`) et l'état de l'arbre (`dirty`), et `override` pour une suite complète lancée avec `--reason` ; le résumé reprend `stage`, `dirty`, `selected`, `added`, `reserved`, `targeted` et `override`. Le reçu d'un contrôle exécuté par sa commande ciblée porte `targeted: true`. Si l'arbre de travail avait des modifications non commitées (`dirty: true`), les reçus décrivent plus que le commit : `apv gates verify` ne les retient pas.
 
 Différences avec V2 : pas d'espace de travail jetable (l'implémenteur exécute les contrôles dans le worktree qu'il possède), pas de cache de reçus (`cacheTtlMs` est ignoré), pas de commandes de préparation (`setup`).
 
-En JSON : `ok`, `runId`, `candidateSha`, `baseSha`, `dirty`, `alreadyProven`, `stage`, `config`, `legacyConfig`, `ignoredSections`, `added`, `reserved`, `targeted`, `receiptsDirectory`, `gates` (contrôles exécutés, chacun avec `targeted`).
+En JSON : `ok`, `runId`, `candidateSha`, `baseSha`, `dirty`, `alreadyProven`, `stage`, `config`, `legacyConfig`, `ignoredSections`, `added`, `reserved`, `targeted`, `receiptsDirectory`, `gates` (contrôles exécutés, chacun avec `targeted`), `rhythm` (`run`, `source` : `option` ou `branch`, `step`, `level`, `override`, ou `null` hors exécution), `notes`.
 
-Sortie : `0` tous les contrôles exécutés passent, `1` au moins un échec ou une configuration invalide, `2` appel incorrect (dont un `--stage` inconnu ou `--commit`, propre à `verify`).
+Sortie : `0` tous les contrôles exécutés passent, `1` au moins un échec, une configuration invalide ou une suite complète refusée par le rythme de l'exécution, `2` appel incorrect (dont un `--stage` inconnu, `--commit`, propre à `verify`, un `--run` invalide ou un `--reason` vide, trop long ou avec `--stage task`).
 
 ## `apv gates verify`
 
@@ -348,7 +358,7 @@ Current session: 21% used · resets Sep 23, 2:30am (Europe/Paris)
 Current week (all models): 7% used · resets Sep 25, 7pm (Europe/Paris)
 ```
 
-Le niveau se calcule sur la plus haute des deux fenêtres (spécification, section 9) :
+Le niveau se calcule sur la plus haute des deux fenêtres, la fenêtre la plus contraignante (`binding` : `session` ou `week`, la semaine en cas d'égalité), nommée dans la sortie (spécification, section 9) :
 
 | Pourcentage | Niveau | Consigne |
 |---|---|---|
@@ -358,7 +368,9 @@ Le niveau se calcule sur la plus haute des deux fenêtres (spécification, secti
 | 95 % | `save_now` | sauvegarder (commits « wip », push, notes de reprise) et prévenir l'opérateur |
 | illisible | `unknown` | le relevé a échoué ; la sortie de la commande est affichée |
 
-Chaque relevé est ajouté à `.apv/state/quota.log` (un objet JSON par ligne : `at`, `session`, `week`, `percent`, `level`), sauf avec `--no-log` ; le hook de démarrage de session lit la dernière ligne. `apv quota` crée ou complète aussi `.apv/.gitignore` (`state/*.log`, `state/task.json`, `state/preview.json`, `receipts/`) pour que ces fichiers machine ne soient jamais commités. La variable d'environnement `APV_CLAUDE_BIN` remplace l'exécutable `claude` (tests, installation particulière).
+La sortie dit aussi combien d'exécutions `/apv:run` peuvent tourner en même temps : au niveau `ok`, autant que de piles de test libres ; à `slow_down`, une de plus au maximum ; au-delà, aucune nouvelle, celles en cours se terminent.
+
+Chaque relevé est ajouté à `.apv/state/quota.log` (un objet JSON par ligne : `at`, `session`, `week`, `percent`, `level`, `binding`), sauf avec `--no-log` ; le hook de démarrage de session lit la dernière ligne. `apv quota` crée ou complète aussi `.apv/.gitignore` (`state/*.log`, `state/task.json`, `state/preview.json`, `receipts/`) pour que ces fichiers machine ne soient jamais commités. La variable d'environnement `APV_CLAUDE_BIN` remplace l'exécutable `claude` (tests, installation particulière).
 
 Sortie : `0` relevé lu, `1` relevé illisible, `2` appel incorrect.
 

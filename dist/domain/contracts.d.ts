@@ -280,6 +280,10 @@ export declare const receiptSchema: import("./schema.js").Schema<{
     readonly stage: "task" | "full" | undefined;
     readonly dirty: boolean | undefined;
     readonly targeted: boolean | undefined;
+    readonly override: {
+        readonly run: string;
+        readonly reason: string;
+    } | undefined;
 }>;
 export type GateReceipt = Infer<typeof receiptSchema>;
 export declare function validateReceipt(value: unknown): GateReceipt;

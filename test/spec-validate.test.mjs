@@ -164,3 +164,70 @@ test('the request stored by /apv:spec is read by validate and by run start alike
   assert.equal((await apv(f.repo, ['spec', 'validate', '.apv/specs/plain.json'])).code, 1);
   assert.equal((await apv(f.repo, ['run', 'start', 'plain'], { APV_LOCK_DIR: join(f.root, 'locks') })).code, 1);
 });
+
+/** A spec of `count` tasks; `deps(i)` lists the dependencies of task i (1-based). */
+function sizedSpec(count, deps = () => []) {
+  const spec = demoSpec();
+  spec.acceptance = []; spec.tasks = [];
+  for (let i = 1; i <= count; i++) {
+    spec.acceptance.push({ id: `AC-${i}`, description: `La page ${i} de la documentation existe.`, verification: `Lire docs/p${i}.md.` });
+    spec.tasks.push({ id: `T${i}`, title: `Page ${i}`, description: `Écrire docs/p${i}.md.`, acceptanceIds: [`AC-${i}`], allowedPaths: [`docs/p${i}.md`],
+      dependsOn: deps(i), minimumLane: 'standard' });
+  }
+  return spec;
+}
+
+test('longestChain names the deepest path of the dependency layers, as many tasks as computeWaves has waves', async () => {
+  const { longestChain, computeWaves } = await import('../dist/run/state.js');
+  const t = (id, dependsOn = []) => ({ id, title: id, dependsOn });
+  assert.deepEqual(longestChain([]), []);
+  assert.deepEqual(longestChain([t('A'), t('B')]), ['A']);
+  const graph = [t('BASE'), t('DATA', ['BASE']), t('DOCS', ['DATA']), t('SIDE', ['BASE']), t('LIST', ['SIDE', 'DOCS']), t('FORM', ['DATA'])];
+  assert.deepEqual(longestChain(graph), ['BASE', 'DATA', 'DOCS', 'LIST']);
+  assert.equal(longestChain(graph).length, computeWaves(graph).length);
+});
+
+test('spec validate warns, without refusing, above the size and depth thresholds of the configuration', async t => {
+  const f = fixture(t);
+  // The pilot shape: a chain of five layers, and more tasks than the default threshold.
+  const spec = sizedSpec(8, i => i >= 2 && i <= 5 ? [`T${i - 1}`] : []);
+  const file = write(f.root, 'spec.json', spec);
+  const human = await apv(f.repo, ['spec', 'validate', file]);
+  assert.equal(human.code, 0, human.stdout + human.stderr);
+  assert.match(human.stdout, /^Spec valide/);
+  assert.match(human.stdout, /2 avertissement\(s\) :/);
+  assert.match(human.stdout, /- \[SPEC_SIZE\] La spec compte 8 tâches \(seuil spec\.maxTasks : 6\) : découpe-la en specs indépendantes de 4 à 6 tâches, livrées en parallèle .*chacune avec sa PR\./);
+  assert.match(human.stdout, /- \[SPEC_DEPTH\] Le graphe des tâches a 5 couches de dépendances \(seuil spec\.maxDepth : 3\), chemin le plus long : T1 -> T2 -> T3 -> T4 -> T5\. .*contrats partagés .*besoin du code de l'autre\./);
+  const json = (await apv(f.repo, ['spec', 'validate', file, '--json'])).json();
+  assert.equal(json.valid, true);
+  assert.deepEqual(json.warnings.map(w => w.code), ['SPEC_SIZE', 'SPEC_DEPTH']);
+  assert.deepEqual(json.limits, { maxTasks: 6, maxAcceptance: 30, maxDepth: 3 });
+
+  // Thresholds from .apv/config.json: the criteria now exceed theirs, tasks and depth no longer do.
+  write(f.repo, '.apv/config.json', { spec: { maxTasks: 10, maxAcceptance: 5, maxDepth: 5 } });
+  const tuned = (await apv(f.repo, ['spec', 'validate', file, '--json'])).json();
+  assert.equal(tuned.valid, true);
+  assert.deepEqual(tuned.limits, { maxTasks: 10, maxAcceptance: 5, maxDepth: 5 });
+  assert.equal(tuned.warnings.length, 1);
+  assert.match(tuned.warnings[0].message, /La spec compte 8 critères d'acceptation \(seuil spec\.maxAcceptance : 5\)/);
+
+  // A small, shallow spec: no warning, no warning section.
+  const small = await apv(f.repo, ['spec', 'validate', write(f.root, 'small.json', sizedSpec(3, i => i === 3 ? ['T1', 'T2'] : []))]);
+  assert.equal(small.code, 0);
+  assert.doesNotMatch(small.stdout, /avertissement/);
+  // An invalid spec keeps its errors and exit 1; warnings never turn it valid or invalid.
+  const cyclic = sizedSpec(8, i => i === 1 ? ['T2'] : i === 2 ? ['T1'] : []);
+  const refused = (await apv(f.repo, ['spec', 'validate', write(f.root, 'cyclic.json', cyclic), '--json']));
+  assert.equal(refused.code, 1);
+  assert.deepEqual(refused.json().warnings.map(w => w.code), ['SPEC_SIZE']);
+});
+
+test('the spec section of the configuration is validated by the schema', async () => {
+  const { configIssues, specLimits } = await import('../dist/config/load.js');
+  assert.deepEqual(specLimits(configIssues({}).config), { maxTasks: 6, maxAcceptance: 30, maxDepth: 3 });
+  assert.deepEqual(specLimits(configIssues({ spec: { maxDepth: 4 } }).config), { maxTasks: 6, maxAcceptance: 30, maxDepth: 4 });
+  assert.equal(configIssues({ spec: {} }).ignored.length, 0, 'spec is a read section');
+  assert.match(configIssues({ spec: { maxTasks: 0 } }).issues[0].message, /maxTasks: expected a value in \[1, 100\]/);
+  assert.match(configIssues({ spec: { maxAcceptance: 'many' } }).issues[0].message, /maxAcceptance: expected/);
+  assert.match(configIssues({ spec: { maxDepth: 3, depth: 2 } }).issues[0].message, /unknown property depth/);
+});

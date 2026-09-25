@@ -122,6 +122,27 @@ export function computeWaves(tasks) {
     return indexes.map(index => ({ index, tasks: tasks.filter(t => depth.get(t.id) === index).map(t => t.id) }));
 }
 /**
+ * The longest chain of dependencies, from a task without dependency to the deepest task: as many tasks as
+ * `computeWaves` has layers. Ties go to the first task in spec order, then to the first dependency listed.
+ * Empty for no task; the graph must be acyclic (validated spec).
+ */
+export function longestChain(tasks) {
+    const waves = computeWaves(tasks);
+    const last = waves.at(-1);
+    if (!last)
+        return [];
+    const depth = new Map(waves.flatMap(w => w.tasks.map(id => [id, w.index])));
+    const byId = new Map(tasks.map(t => [t.id, t]));
+    const chain = [last.tasks[0]];
+    for (let task = byId.get(chain[0]); task?.dependsOn.length;) {
+        const deepest = Math.max(...task.dependsOn.map(d => depth.get(d)));
+        const previous = task.dependsOn.find(d => depth.get(d) === deepest);
+        chain.unshift(previous);
+        task = byId.get(previous);
+    }
+    return chain;
+}
+/**
  * The foundations: the tasks at least FOUNDATION_MIN_DEPENDENTS other tasks depend on directly, in spec order.
  * They write what several tasks share (incident 24); in their wave, one agent writes them while the other tasks
  * of the wave run in parallel. One dependent is not enough: a task that only one other task needs is an
@@ -319,6 +340,26 @@ export function applyResume(state, options = {}) {
     next.events.push(event);
     return { state: parseState(next), event };
 }
+/** Target of the journal event of a full suite run at a step that expected the task level (`apv gates run --reason`). */
+export const FULL_SUITE_OVERRIDE_TARGET = 'gates:full';
+/** Longest reason of such an override: one or two sentences, written in the state and in every receipt. */
+export const MAX_OVERRIDE_REASON = 500;
+/**
+ * `apv gates run --stage full --reason`: journals a full suite launched while the current step expects the task
+ * level (event `gates:full`, with the reason and the commit it runs on). Changes nothing else: no step, task or
+ * pause moves.
+ */
+export function applyFullSuiteOverride(state, options) {
+    const reason = options.reason.trim();
+    if (!reason || reason.length > MAX_OVERRIDE_REASON)
+        throw new TransitionError(`Raison de la dérogation : de 1 à ${MAX_OVERRIDE_REASON} caractères`);
+    const next = structuredClone(state);
+    const at = (options.now ?? new Date()).toISOString();
+    next.updatedAt = at;
+    const event = { at, target: FULL_SUITE_OVERRIDE_TARGET, from: null, to: 'running', note: reason, ...(options.commit ? { commit: options.commit } : {}) };
+    next.events.push(event);
+    return { state: parseState(next), event };
+}
 /**
  * One journal event for a human, times in local time: `2026-09-24 18:02 UTC+2 task:A en cours -> fait (commit …)`,
  * and for the pauses `… pause quota jusqu'à 20:30 : <note>` or `… reprise : <note>`. The note is data: the
@@ -331,6 +372,8 @@ export function describeEvent(event) {
         return event.to === 'pending' ? `${when} pause quota jusqu'à ${event.until ? localTime(event.until) : '?'}${note}` : `${when} reprise${note}`;
     }
     const commit = event.commit ? ` (commit ${event.commit.slice(0, 12)})` : '';
+    if (event.target === FULL_SUITE_OVERRIDE_TARGET)
+        return `${when} suite complète lancée hors rythme (niveau attendu : contrôles de tâche et ciblés)${commit}${note}`;
     return `${when} ${event.target} ${event.from ? STATUS_LABEL[event.from] : '-'} -> ${STATUS_LABEL[event.to]}${commit}${note}`;
 }
 /** Where the execution stands: the first unfinished step, with the waves between `plan` and `integration`. */

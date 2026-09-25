@@ -21,6 +21,11 @@ export interface GateRunOptions {
     signal?: AbortSignal;
     /** Source of passed variables (tests inject it); defaults to the process environment. */
     env?: NodeJS.ProcessEnv;
+    /** A full suite run out of the rhythm of an execution (`--reason`): written in every receipt and in the summary. */
+    override?: {
+        run: string;
+        reason: string;
+    };
 }
 export interface GateRunResult {
     runId: string;

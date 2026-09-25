@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { basename, relative, resolve, sep } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { localTime, localTimeZone, parseUntil } from '../domain/time.js';
-import { fullSuiteMode, loadConfig } from '../config/load.js';
+import { suiteMode } from '../run/rhythm.js';
 import { sha256 } from '../domain/hash.js';
 import { specSchema } from '../lifecycle/contracts.js';
 import { checkSpec, readSpecDocument } from '../spec/check.js';
@@ -214,15 +214,6 @@ async function set(repo, positionals, values, io) {
     const forced = result.event.unintegrated ? ` ; démarrée sans l'intégration de ${result.event.unintegrated.join(', ')} (--force-unintegrated, journalisé)` : '';
     io.stdout(`${specId} ${name} : ${STATUS_LABEL[result.from]} -> ${STATUS_LABEL[status]}${opts.commit ? ` (commit ${opts.commit.slice(0, 12)})` : ''}${forced}\n`);
     return EXIT.ok;
-}
-/** `run.fullSuite` of the project configuration; an unreadable configuration falls back on `final`, said in `problem`. */
-function suiteMode(repo) {
-    try {
-        return { mode: fullSuiteMode(loadConfig(repo).config), problem: null };
-    }
-    catch (error) {
-        return { mode: 'final', problem: errorMessage(error).split(/\r?\n/)[0] ?? 'configuration illisible' };
-    }
 }
 function next(repo, positionals, asJson, io) {
     const [id, ...rest] = positionals;

@@ -177,6 +177,12 @@ export declare const FOUNDATION_MIN_DEPENDENTS = 2;
  */
 export declare function computeWaves(tasks: SpecTaskInput[]): Wave[];
 /**
+ * The longest chain of dependencies, from a task without dependency to the deepest task: as many tasks as
+ * `computeWaves` has layers. Ties go to the first task in spec order, then to the first dependency listed.
+ * Empty for no task; the graph must be acyclic (validated spec).
+ */
+export declare function longestChain(tasks: SpecTaskInput[]): string[];
+/**
  * The foundations: the tasks at least FOUNDATION_MIN_DEPENDENTS other tasks depend on directly, in spec order.
  * They write what several tasks share (incident 24); in their wave, one agent writes them while the other tasks
  * of the wave run in parallel. One dependent is not enough: a task that only one other task needs is an
@@ -282,6 +288,23 @@ export declare function applyPause(state: RunState, options: PauseOptions): {
 /** `apv run resume`: ends the pause, journaled (event `pause`, `pending` to `running`). Refused without a pause. */
 export declare function applyResume(state: RunState, options?: {
     note?: string;
+    now?: Date;
+}): {
+    state: RunState;
+    event: RunEvent;
+};
+/** Target of the journal event of a full suite run at a step that expected the task level (`apv gates run --reason`). */
+export declare const FULL_SUITE_OVERRIDE_TARGET = "gates:full";
+/** Longest reason of such an override: one or two sentences, written in the state and in every receipt. */
+export declare const MAX_OVERRIDE_REASON = 500;
+/**
+ * `apv gates run --stage full --reason`: journals a full suite launched while the current step expects the task
+ * level (event `gates:full`, with the reason and the commit it runs on). Changes nothing else: no step, task or
+ * pause moves.
+ */
+export declare function applyFullSuiteOverride(state: RunState, options: {
+    reason: string;
+    commit?: string;
     now?: Date;
 }): {
     state: RunState;

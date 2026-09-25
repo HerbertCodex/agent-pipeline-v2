@@ -6,7 +6,9 @@ export const usage = `Utilisation :
   apv quota [--repo <chemin>] [--no-log] [--json]
 
 Relève les fenêtres d'usage (session de 5 h, semaine tous modèles) avec claude -p "/usage",
-classe le relevé (${QUOTA_THRESHOLDS.slow_down} % ralentir, ${QUOTA_THRESHOLDS.finish_only} % finir sans lancer, ${QUOTA_THRESHOLDS.save_now} % sauvegarder) et l'ajoute à ${QUOTA_LOG}.
+nomme la plus contraignante (binding), classe le relevé (${QUOTA_THRESHOLDS.slow_down} % ralentir, ${QUOTA_THRESHOLDS.finish_only} % finir sans lancer, ${QUOTA_THRESHOLDS.save_now} % sauvegarder) et l'ajoute à ${QUOTA_LOG}.
+Exécutions /apv:run simultanées : autant que de piles de test libres au niveau ok, une de plus au
+maximum à ${QUOTA_THRESHOLDS.slow_down} %, aucune nouvelle au-delà (celles en cours se terminent).
 La variable APV_CLAUDE_BIN remplace l'exécutable claude. Sortie : 0 relevé lu, 1 relevé illisible.`;
 export const levelText = {
     ok: 'normal : continuer',
@@ -14,6 +16,17 @@ export const levelText = {
     finish_only: 'finir les tâches en cours sans en lancer de nouvelles',
     save_now: 'sauvegarder maintenant (commits wip, push, notes de reprise) et prévenir l\'opérateur',
     unknown: 'inconnu : relevé illisible',
+};
+/**
+ * How many executions (`/apv:run`) may run side by side at each level: as many as free test stacks below the
+ * first threshold, one more at most from it, none beyond (the running ones finish).
+ */
+export const runsText = {
+    ok: 'autant que de piles de test libres',
+    slow_down: 'une de plus au maximum',
+    finish_only: 'aucune nouvelle, finir celles en cours',
+    save_now: 'aucune nouvelle, sauvegarder celles en cours',
+    unknown: 'aucune nouvelle sans relevé lisible',
 };
 /** Entry point with an injectable runner, so tests never call `claude`. */
 export async function runQuota(args, io, runner) {
@@ -41,7 +54,10 @@ export async function runQuota(args, io, runner) {
         }
         else {
             const describe = (w) => w ? `${w.percent} % utilisés${w.resets ? `, remise à zéro ${w.resets}` : ''}` : 'non lu';
-            const lines = [`Session (5 h) : ${describe(reading.session)}`, `Semaine (tous modèles) : ${describe(reading.week)}`, `Niveau : ${reading.level} (${levelText[reading.level]})`];
+            const binding = reading.binding === 'week' ? 'semaine' : reading.binding === 'session' ? 'session' : null;
+            const lines = [`Session (5 h) : ${describe(reading.session)}`, `Semaine (tous modèles) : ${describe(reading.week)}`,
+                ...(binding ? [`Fenêtre la plus contraignante : ${binding} (${reading.percent} %)`] : []),
+                `Niveau : ${reading.level} (${levelText[reading.level]})`, `Exécutions /apv:run simultanées : ${runsText[reading.level]}`];
             if (!ok)
                 lines.push(`Commande ${executable} : ${command.status}. ${`${command.stdout}\n${command.stderr}`.trim().slice(-500)}`);
             io.stdout(`${lines.join('\n')}\n`);

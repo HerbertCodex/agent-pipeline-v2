@@ -37,8 +37,31 @@ test('the level follows the 70 / 85 / 95 thresholds on the highest window', () =
   assert.deepEqual([0, 69.9, 70, 84, 85, 94, 95, 100].map(classifyQuota), ['ok', 'ok', 'slow_down', 'slow_down', 'finish_only', 'finish_only', 'save_now', 'save_now']);
   assert.equal(classifyQuota(null), 'unknown');
   const r = reading(`Current session: 30% used\nCurrent week (all models): 88% used`, new Date('2026-09-23T10:00:00Z'));
-  assert.deepEqual(r, { at: '2026-09-23T10:00:00.000Z', session: { percent: 30, resets: null }, week: { percent: 88, resets: null }, percent: 88, level: 'finish_only' });
+  assert.deepEqual(r, { at: '2026-09-23T10:00:00.000Z', session: { percent: 30, resets: null }, week: { percent: 88, resets: null }, percent: 88, level: 'finish_only', binding: 'week' });
   assert.equal(reading('').level, 'unknown');
+  assert.equal(reading('').binding, null);
+  // The binding window is the one that sets the percentage; the week on a tie (it resets later).
+  assert.equal(reading('Current session: 72% used\nCurrent week (all models): 40% used').binding, 'session');
+  assert.equal(reading('Current session: 50% used\nCurrent week (all models): 50% used').binding, 'week');
+  assert.equal(reading('Current week (all models): 12% used').binding, 'week');
+});
+
+test('apv quota names the binding window and how many executions may run side by side', async t => {
+  const dir = temp(t);
+  const cases = [
+    ['Current session: 20% used\nCurrent week (all models): 10% used', /Fenêtre la plus contraignante : session \(20 %\)\nNiveau : ok .*\nExécutions \/apv:run simultanées : autant que de piles de test libres/],
+    ['Current session: 20% used\nCurrent week (all models): 74% used', /Fenêtre la plus contraignante : semaine \(74 %\)\nNiveau : slow_down .*\nExécutions \/apv:run simultanées : une de plus au maximum/],
+    ['Current session: 86% used\nCurrent week (all models): 10% used', /Niveau : finish_only .*\nExécutions \/apv:run simultanées : aucune nouvelle, finir celles en cours/],
+    ['Current session: 20% used\nCurrent week (all models): 97% used', /Fenêtre la plus contraignante : semaine \(97 %\)\nNiveau : save_now .*\nExécutions \/apv:run simultanées : aucune nouvelle, sauvegarder celles en cours/],
+  ];
+  for (const [stdout, expected] of cases) {
+    const c = capture(dir);
+    assert.equal(await runQuota(['--no-log'], c.io, async () => ({ status: 'passed', stdout, stderr: '' })), 0);
+    assert.match(c.out(), expected);
+  }
+  const c = capture(dir);
+  assert.equal(await runQuota(['--no-log', '--json'], c.io, async () => ({ status: 'passed', stdout: cases[1][0], stderr: '' })), 0);
+  assert.equal(JSON.parse(c.out()).binding, 'week');
 });
 
 test('readQuota calls claude -p "/usage" with no setting sources and a 150 s timeout', async () => {

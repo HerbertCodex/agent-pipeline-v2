@@ -26,6 +26,8 @@ export interface QuotaReading {
   /** Highest of the two percentages; the level is classified on it. */
   percent: number | null;
   level: QuotaLevel;
+  /** The window that sets `percent` (the week on a tie: it resets later); null when none was read. Absent from older journal lines. */
+  binding?: 'session' | 'week' | null;
 }
 
 // ANSI colour and cursor sequences a terminal UI may leave in captured output.
@@ -60,7 +62,8 @@ export function reading(output: string, at: Date = new Date()): QuotaReading {
   const { session, week } = parseUsage(output);
   const values = [session?.percent, week?.percent].filter((x): x is number => x !== undefined);
   const percent = values.length ? Math.max(...values) : null;
-  return { at: at.toISOString(), session, week, percent, level: classifyQuota(percent) };
+  const binding = percent === null ? null : week?.percent === percent ? 'week' : 'session';
+  return { at: at.toISOString(), session, week, percent, level: classifyQuota(percent), binding };
 }
 
 export interface CommandOutcome { status: string; stdout: string; stderr: string }

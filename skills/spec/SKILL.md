@@ -16,6 +16,7 @@ Dans ce document, `apv` désigne `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` (ou 
 2. Une spec fournie par l'opérateur et déjà validée par lui s'exécute telle quelle : `apv spec validate <fichier>` puis `/apv:run`, sans nouvelle rédaction.
 3. Rassemble les entrées : la demande **mot pour mot** (écris-la dans `.apv/state/demande-<id>.md`, elle sert à vérifier les citations des résolutions), le registre des décisions, les maquettes validées (`apv design list`), `.apv/data-model.md` s'il existe.
 4. Un écran absent des maquettes validées n'est pas inventé : c'est une question pour l'opérateur ou une boucle `/apv:design`, avant ou pendant la rédaction.
+5. **Taille** : une demande large se découpe **avant** la rédaction en plusieurs specs de 4 à 6 tâches, indépendantes quand c'est possible (surfaces ou domaines distincts), chacune avec sa PR, livrées en parallèle ; si le projet déclare plusieurs piles de test (ressources de contrôle distinctes), une exécution par pile. Une spec qui a besoin du code d'une autre s'empile sur elle. Repère : sur le projet pilote (nuit du 24 au 25 septembre 2026), une spec de 12 tâches et 65 critères en chaîne de 5 couches a tourné environ 9 h. Une spec par identifiant ; chacune suit les sections 2 à 6.
 
 ## 2. Gabarit
 Choisis un identifiant court en kebab-case (par exemple `relances-auto`), puis :
@@ -33,17 +34,18 @@ Outil Agent, `subagent_type: "apv:product"`. Le message contient tout, car l'age
 - chemin de la spec (`.apv/specs/<id>.json`) et de la demande (`.apv/state/demande-<id>.md`) ;
 - registre, maquettes validées (fichiers et écrans), modèle de données, rapports du DPO et de l'architecte des données ;
 - contrôles déclarés du projet (`apv status`) ;
-- consignes : écrire par sections et valider à chaque étape avec `apv spec validate <fichier> --draft --request-file .apv/state/demande-<id>.md`, puis sans `--draft` ; tâche « fondations » pour les modules partagés, dont dépendent les autres ; `dependsOn` réel ; `allowedPaths` précis ; critères observables ; minimum de sécurité jamais abaissé ; aucune décision de l'opérateur inventée ;
+- consignes : écrire par sections et valider à chaque étape avec `apv spec validate <fichier> --draft --request-file .apv/state/demande-<id>.md`, puis sans `--draft` ; tâche « fondations » pour les modules partagés, dont dépendent les autres ; **contrats d'abord** : la première tâche pose les contrats partagés (types, schémas, signatures de fonctions, interfaces de composants, migrations) avec des implémentations minimales testées, pour que les tâches suivantes (écrans, actions) se construisent en parallèle contre eux au lieu de s'enchaîner ; `dependsOn` réel, déclaré seulement quand la tâche a besoin du code de l'autre, pas de sa simple existence future ; 4 à 6 tâches et trois couches de dépendances au plus (seuils de `apv spec validate`) ; `allowedPaths` précis ; critères observables ; minimum de sécurité jamais abaissé ; aucune décision de l'opérateur inventée ;
 - format du rapport (moins de 300 mots).
 
 ## 5. Boucle de validation
 1. Relance toi-même `apv spec validate .apv/specs/<id>.json --request-file .apv/state/demande-<id>.md`, sortie lue en entier : le vert annoncé par l'agent ne suffit pas.
 2. `INVALID` : renvoie la liste complète des erreurs à product par `SendMessage` (même agent, il garde son contexte), puis revalide. Recommence jusqu'à `VALID`.
 3. Des `questions` restent ouvertes (la validation sans `--draft` les refuse) : ce sont des décisions de l'opérateur. Pose-les groupées, une par ligne, avec ta recommandation ; ses réponses entrent au registre avec ses mots exacts (`apv ledger plan` puis `apv ledger apply`), puis product met la spec à jour.
-4. Le minimum de sécurité recalculé par l'outil (sujets OWASP, modèle de menace, tests négatifs) est une exigence : on complète la spec, jamais on ne le contourne.
+4. **Avertissements** (`SPEC_SIZE`, `SPEC_DEPTH`) : ils ne bloquent pas, mais une spec qui les porte se découpe (plusieurs specs) ou se raccourcit (contrats d'abord, dépendances réelles seulement) avant de la présenter ; si tu la gardes telle quelle, dis pourquoi à l'opérateur. Les seuils viennent de la section `spec` de `.apv/config.json` (6 tâches, 30 critères, 3 couches par défaut).
+5. Le minimum de sécurité recalculé par l'outil (sujets OWASP, modèle de menace, tests négatifs) est une exigence : on complète la spec, jamais on ne le contourne.
 
 ## 6. Présenter à l'opérateur
-En quelques lignes : titre, périmètre et exclusions, nombre de critères, tâches et dépendances (qui peut tourner en parallèle, quelle tâche forme les fondations), minimum de sécurité, écrans et maquettes utilisés, hypothèses prises, questions tranchées. Le fichier reste la référence.
+En quelques lignes : titre, périmètre et exclusions, nombre de critères, tâches et dépendances (qui peut tourner en parallèle, quelle tâche forme les fondations ou les contrats, nombre de couches), avertissements de l'outil et ce que tu en as fait, pour plusieurs specs leur ordre et ce qui peut tourner en même temps, minimum de sécurité, écrans et maquettes utilisés, hypothèses prises, questions tranchées. Le fichier reste la référence.
 - L'opérateur relit : attends son accord avant `/apv:run`.
 - L'opérateur a délégué la livraison sans relecture : enchaîne sur l'exécution (procédure de `/apv:run`, section 4 de la compétence `chef-de-projet`) et mentionne la spec dans la remise finale.
 Ne commite pas la spec sur la branche principale : `/apv:run` la commite sur la branche de la spec.

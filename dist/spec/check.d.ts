@@ -1,6 +1,8 @@
 import type { Issue } from '../domain/issues.js';
+import { type Spec } from '../lifecycle/contracts.js';
 import { type DecisionLedger } from '../lifecycle/decisions.js';
 import { type SecurityContext } from '../security/owasp.js';
+import { type SpecLimits } from '../config/load.js';
 /**
  * A spec file is either the spec itself, or `{ "request": "...", "spec": { ... } }` when the author keeps the
  * operator request next to it. The request drives the security minimum and must contain resolution quotes.
@@ -42,7 +44,17 @@ export interface SpecCheckResult {
     ledgerFile: string | null;
     configFile: string | null;
     security: SecurityContext;
+    /** Size and depth warnings (`spec` section of the configuration): never make the spec invalid. */
+    warnings: Issue[];
+    /** Thresholds the warnings were measured against. */
+    limits: SpecLimits;
 }
+/**
+ * Warnings of a well-formed spec: more tasks or criteria than the thresholds (split it into independent specs
+ * delivered in parallel), or a chain of dependency layers deeper than `maxDepth` (each layer waits for the
+ * integration of the previous one). A malformed spec gets none: its errors come first.
+ */
+export declare function specWarnings(spec: Spec, limits: SpecLimits): Issue[];
 /**
  * Validates a spec against the same security minimum V2 computed when it launched a spec (journal incident
  * 14: a spec declared valid against a draft context was refused at launch). The minimum comes from the
