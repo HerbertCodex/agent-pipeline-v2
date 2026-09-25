@@ -8,8 +8,8 @@ import { specSchema } from '../lifecycle/contracts.js';
 import { checkSpec, readSpecDocument } from '../spec/check.js';
 import { gitProbe, gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
 import {
-  REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applyPause, applyResume, applySet, computeNext, createRunState, describeEvent, integrationCheck, parseTarget,
-  readRunState, runStateFile, splitWave, summarize, summaryLine, withRunLock, writeRunState, type RunState, type RunStatus, type SetOptions, type Wave,
+  CONFIDENCE_LEVELS, CONFIDENCE_STEPS, REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applyPause, applyResume, applySet, computeNext, createRunState, describeEvent, integrationCheck, parseTarget,
+  readRunState, runStateFile, splitWave, summarize, summaryLine, withRunLock, writeRunState, type Confidence, type RunState, type RunStatus, type SetOptions, type Wave,
 } from '../run/state.js';
 import { cleanLine, readRunSummaries, runSummaryLine, unreadRunsLine } from '../run/summary.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
@@ -17,9 +17,9 @@ import type { CommandIO } from './io.js';
 
 export const usage = `Utilisation :
   apv run start <spec> [--base <branche>] [--repo <chemin>] [--json]
-  apv run set <spec-id> <cible> <statut> [--branch b] [--worktree w] [--agent id] [--commit sha]
-              [--base sha] [--findings n] [--note texte] [--force-unintegrated]
-              [--repo <chemin>] [--json]
+  apv run set <spec-id> <cible> <statut> [--branch b] [--worktree w] [--agent id] [--commit ref]
+              [--base ref] [--findings n] [--confidence prouve|probable|suppose] [--note texte]
+              [--force-unintegrated] [--repo <chemin>] [--json]
   apv run next <spec-id> [--repo <chemin>] [--json]
   apv run status [<spec-id>] [--repo <chemin>] [--json]
   apv run pause <spec-id> --until <HH:MM | date ISO> [--note texte] [--repo <chemin>] [--json]
@@ -38,9 +38,13 @@ set     <cible> : ${STEPS.join(', ')},
         que si ses dépendances sont « done » et intégrées : leur commit est dans la branche de la
         spec (la base de l'exécution tant qu'elle n'existe pas) ; sinon --force-unintegrated avec
         --note, journalisés. « done » exige --commit pour une tâche (facultatif pour une étape ou
-        une revue : commit qui la porte, ou commit revu). --base : commit de départ de la tâche
-        (reprise). --findings : nombre de constats d'une revue. Rouvrir un travail fait,
-        ou remplacer son commit, exige --note.
+        une revue : commit qui la porte, ou commit revu). --commit et --base acceptent un sha
+        complet ou abrégé, ou un nom de branche : l'outil le résout par git et affiche le sha
+        complet enregistré ; un sha introuvable est refusé, avec le commit de la branche de la
+        tâche quand elle est connue. --base : commit de départ de la tâche (reprise).
+        --findings : nombre de constats d'une revue. --confidence : niveau de confiance du
+        travail terminé (avec done, une tâche ou fixes), gardé dans l'état, retiré s'il est
+        rouvert. Rouvrir un travail fait, ou remplacer son commit, exige --note.
 next    ce qu'il faut faire maintenant : étape courante, tâches prêtes (dépendances faites et
         intégrées, à lancer dès maintenant, quelle que soit leur vague), en attente d'intégration,
         à reprendre ou à relancer (worktree absent, aucun commit après la base), revues à lancer,
@@ -58,7 +62,7 @@ Sortie : 0 succès, 1 refus (spec invalide, état existant ou absent, transition
 
 const options = {
   repo: { type: 'string' }, base: { type: 'string' }, branch: { type: 'string' }, worktree: { type: 'string' }, agent: { type: 'string' },
-  commit: { type: 'string' }, note: { type: 'string' }, findings: { type: 'string' }, 'force-unintegrated': { type: 'boolean' },
+  commit: { type: 'string' }, note: { type: 'string' }, findings: { type: 'string' }, confidence: { type: 'string' }, 'force-unintegrated': { type: 'boolean' },
   until: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
 } as const;
 
@@ -167,14 +171,25 @@ async function set(repo: string, positionals: string[], values: Record<string, s
   }
   const worktree = str('worktree');
   if (worktree !== undefined) opts.worktree = resolve(io.cwd, worktree);
+  const confidence = str('confidence');
+  if (confidence !== undefined) {
+    if (!(CONFIDENCE_LEVELS as readonly string[]).includes(confidence)) throw new UsageError(`--confidence inconnu : ${confidence} (${CONFIDENCE_LEVELS.join(', ')})`);
+    if (target.kind === 'review' || (target.kind === 'step' && !CONFIDENCE_STEPS.includes(target.name))) {
+      throw new UsageError(`--confidence : réservé aux tâches (task:<id>) et aux corrections (${CONFIDENCE_STEPS.join(', ')})`);
+    }
+    if (status !== 'done') throw new UsageError('--confidence accompagne le statut done (niveau de confiance du travail terminé)');
+    opts.confidence = confidence as Confidence;
+  }
+  const file = runStateFile(repo, specId);
+  const resolved: Record<string, { input: string; sha: string }> = {};
   for (const option of ['commit', 'base'] as const) {
     const v = str(option);
     if (v === undefined) continue;
     const sha = resolveCommit(repo, v);
-    if (!sha) throw new PipelineError('RUN_COMMIT', `--${option} : commit introuvable dans ${repo} : ${v}`);
+    if (!sha) throw new PipelineError('RUN_COMMIT', commitNotFound(repo, option, v, target.kind === 'task' ? taskBranch(file, specId, target.id, opts.branch) : undefined));
     opts[option] = sha;
+    resolved[option] = { input: v, sha };
   }
-  const file = runStateFile(repo, specId);
   const result = await withRunLock(specId, io.env, () => {
     const current = readRunState(file, { shown: posix(relative(repo, file)), specId });
     const applied = applySet(current, target, { ...opts, integration: integrationCheck(current, gitProbe(repo)) });
@@ -182,10 +197,46 @@ async function set(repo: string, positionals: string[], values: Record<string, s
     return applied;
   });
   const name = targetText;
-  if (values['json']) { json(io, { specId, target: name, from: result.from, to: status, event: result.event }); return EXIT.ok; }
+  if (values['json']) { json(io, { specId, target: name, from: result.from, to: status, event: result.event, resolved }); return EXIT.ok; }
   const forced = result.event.unintegrated ? ` ; démarrée sans l'intégration de ${result.event.unintegrated.join(', ')} (--force-unintegrated, journalisé)` : '';
-  io.stdout(`${specId} ${name} : ${STATUS_LABEL[result.from]} -> ${STATUS_LABEL[status]}${opts.commit ? ` (commit ${opts.commit.slice(0, 12)})` : ''}${forced}\n`);
+  const level = opts.confidence ? ` ; confiance ${opts.confidence}` : '';
+  // The full id, and what it was resolved from: the lead compares it with `git rev-parse <branche>`, never with a report.
+  const shown = (option: 'commit' | 'base'): string[] => {
+    const r = resolved[option];
+    return r ? [`${option} ${r.sha}${r.input !== r.sha ? ` (résolu depuis « ${cleanLine(r.input, 200)} »)` : ''}`] : [];
+  };
+  const commits = [...shown('commit'), ...shown('base')];
+  io.stdout(`${specId} ${name} : ${STATUS_LABEL[result.from]} -> ${STATUS_LABEL[status]}${commits.length ? ` ; ${commits.join(' ; ')}` : ''}${level}${forced}\n`);
   return EXIT.ok;
+}
+
+/**
+ * The branch of a task to suggest when its commit is not found: `--branch` of the call, else the one the state
+ * recorded. Read without the run lock (a hint only); undefined when unknown or unreadable.
+ */
+function taskBranch(file: string, specId: string, taskId: string, given: string | undefined): string | undefined {
+  if (given !== undefined) return given;
+  try {
+    const state = readRunState(file, { specId });
+    return Object.hasOwn(state.tasks, taskId) ? state.tasks[taskId]!.branch ?? undefined : undefined;
+  } catch { return undefined; }
+}
+
+/**
+ * Refusal of a `--commit` or `--base` that names no commit here, with what helps the lead find the right one: the
+ * commit its 7 first characters name (an id copied from a report may be invented past them, pilot project,
+ * 24 September 2026), and the head of the branch of the task.
+ */
+function commitNotFound(repo: string, option: 'commit' | 'base', value: string, branch: string | undefined): string {
+  const parts = [`--${option} : commit introuvable dans ${repo} : ${cleanLine(value, 100)}`];
+  if (/^[a-f0-9]{8,64}$/i.test(value)) {
+    const prefix = resolveCommit(repo, value.slice(0, 7).toLowerCase());
+    if (prefix) parts.push(`ses 7 premiers caractères désignent ${prefix} : identifiant probablement recopié de travers ou inventé, à relire par git rev-parse`);
+  }
+  const head = branch ? resolveCommit(repo, branch) : null;
+  if (branch && head) parts.push(`la branche ${branch} de la tâche pointe sur ${head} (--${option} ${branch} l'enregistre, résolu par l'outil)`);
+  parts.push(`--${option} accepte un sha complet ou abrégé, ou un nom de branche, résolu par git ; ne recopie jamais un sha d'un rapport sans le relire par git rev-parse <branche>`);
+  return parts.join(' ; ');
 }
 
 function next(repo: string, positionals: string[], asJson: boolean, io: CommandIO): number {
@@ -235,7 +286,7 @@ function next(repo: string, positionals: string[], asJson: boolean, io: CommandI
 const SHOWN_EVENTS = 5;
 
 function detail(state: RunState): string[] {
-  const step = (name: typeof STEPS[number]): string => `${name} ${STATUS_LABEL[state.steps[name].status]}`;
+  const step = (name: typeof STEPS[number]): string => `${name} ${STATUS_LABEL[state.steps[name].status]}${state.steps[name].confidence ? ` (confiance ${state.steps[name].confidence})` : ''}`;
   const pause = state.pause;
   return [
     `Exécution ${state.specId} (${state.specFile}) : branche ${state.branch}, base ${state.base} à ${state.baseSha.slice(0, 12)}`,
@@ -244,7 +295,7 @@ function detail(state: RunState): string[] {
     `Étapes : ${STEPS.map(step).join(' ; ')}`,
     ...state.waves.map(w => `Vague ${w.index} : ${waveParts(state, w, id => {
       const t = state.tasks[id]!;
-      return `${id} ${STATUS_LABEL[t.status]}${t.commit ? ` @${t.commit.slice(0, 7)}` : ''}`;
+      return `${id} ${STATUS_LABEL[t.status]}${t.commit ? ` @${t.commit.slice(0, 7)}` : ''}${t.confidence ? ` (confiance ${t.confidence})` : ''}`;
     })}`),
     `Revues : ${REVIEWS.map(r => `${r} ${STATUS_LABEL[state.reviews[r].status]}${state.reviews[r].findings !== null ? ` (${state.reviews[r].findings} constat(s))` : ''}`).join(' ; ')}`,
     `Événements : ${state.events.length} ; derniers :`,
@@ -301,7 +352,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const [action, ...rest] = positionals;
     if (!action) throw new UsageError('sous-commande manquante (start, set, next, status, pause, resume)');
     if (!['start', 'set', 'next', 'status', 'pause', 'resume'].includes(action)) throw new UsageError(`sous-commande inconnue : run ${action}`);
-    const setOnly = ['branch', 'worktree', 'agent', 'commit', 'note', 'findings', 'force-unintegrated'];
+    const setOnly = ['branch', 'worktree', 'agent', 'commit', 'note', 'findings', 'confidence', 'force-unintegrated'];
     const forbidden = action === 'set' ? ['until'] : action === 'start' ? [...setOnly, 'until']
       : action === 'pause' ? ['base', ...setOnly.filter(o => o !== 'note')] : action === 'resume' ? ['base', 'until', ...setOnly.filter(o => o !== 'note')]
       : ['base', 'until', ...setOnly];

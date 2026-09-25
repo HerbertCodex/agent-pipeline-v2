@@ -49,7 +49,7 @@ function claimProblems(claim, where, evidenceKey) {
 
 const REPORT = {
   type: 'object',
-  required: ['taskId', 'status', 'confidence', 'evidence', 'branch', 'worktree', 'commit', 'checks', 'scopeCheck', 'outOfScopeFiles', 'summary', 'openPoints'],
+  required: ['taskId', 'status', 'confidence', 'evidence', 'branch', 'worktree', 'commit', 'headRevParse', 'headLog', 'checks', 'scopeCheck', 'outOfScopeFiles', 'summary', 'openPoints'],
   properties: {
     taskId: { type: 'string' },
     status: { type: 'string', enum: ['done', 'failed', 'wip'] },
@@ -58,6 +58,9 @@ const REPORT = {
     branch: { type: 'string' },
     worktree: { type: 'string' },
     commit: { type: 'string' },
+    // Raw outputs, pasted as printed: an id typed from memory was invented past its 7 first characters (pilot project, 24 September 2026).
+    headRevParse: { type: 'string', minLength: 1 },
+    headLog: { type: 'string', minLength: 1 },
     checks: {
       type: 'array',
       items: {
@@ -123,7 +126,9 @@ function prompt(task) {
     '`probable` = lecture du code ou raisonnement vérifiable sans exécution (chemins et lignes cités) ; `suppose` = hypothèse (sur quoi elle repose, ce qui la prouverait).',
     'Une correction dont la cause observée (production, rapport) n\'a pas été reproduite reste au mieux `probable`, même si tes tests passent. Dans le doute, le niveau inférieur. Sans evidence, le rapport est refusé.',
     'branch ; worktree (chemin absolu, sortie de `pwd`) ;',
-    'commit (sha complet de `git rev-parse HEAD`) ; checks (chaque commande lancée, pass, fail ou not-run, nombre de tests) ; scopeCheck (in, out ou not-run) ; outOfScopeFiles ;',
+    'commit : le sha complet copié de la sortie de `git rev-parse HEAD` lancée juste avant le rapport, jamais retapé, complété ni reconstitué de mémoire ;',
+    'headRevParse : la sortie brute de `git rev-parse HEAD`, collée telle quelle ; headLog : la sortie brute de `git log --oneline -1`, collée telle quelle ;',
+    'checks (chaque commande lancée, pass, fail ou not-run, nombre de tests) ; scopeCheck (in, out ou not-run) ; outOfScopeFiles ;',
     'summary (moins de 300 mots : fichiers principaux, critères couverts et comment, écarts à la maquette ou à la spec et pourquoi) ; openPoints.',
     'N\'annonce aucun résultat que tu n\'as pas observé.',
   ].filter(line => line !== '').join('\n')
@@ -142,6 +147,21 @@ const reports = await pipeline(input.tasks, task =>
   }),
 )
 
+// The commit of a report is a claim: the three copies of it must agree. The project lead never records it as is:
+// it reads the head of the branch with `git rev-parse <branche>` before `apv run set --commit`.
+function commitProblems(report) {
+  const problems = []
+  const commit = typeof report.commit === 'string' ? report.commit.trim() : ''
+  const revParse = typeof report.headRevParse === 'string' ? report.headRevParse.trim() : ''
+  const oneline = typeof report.headLog === 'string' ? report.headLog.trim() : ''
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) problems.push('commit : pas un sha complet')
+  if (!revParse) problems.push('headRevParse : sortie brute de git rev-parse HEAD absente')
+  else if (revParse !== commit) problems.push('commit différent de la sortie de git rev-parse HEAD')
+  if (!oneline) problems.push('headLog : sortie brute de git log --oneline -1 absente')
+  else if (!/^[0-9a-f]{7,}/.test(oneline) || !commit.startsWith(oneline.split(/\s/)[0])) problems.push('commit différent du début de git log --oneline -1')
+  return problems
+}
+
 // Escalation thresholds of the project lead: probable needs a check first, suppose goes to the operator.
 const returned = []
 const refused = []
@@ -155,6 +175,9 @@ input.tasks.forEach((task, index) => {
   if (report.confidence === 'probable') escalation.verify.push(task.id)
   if (report.confidence === 'suppose') escalation.operator.push(task.id)
 })
+const commitChecks = input.tasks.map((task, index) => reports[index] ? { taskId: task.id, problems: commitProblems(reports[index]) } : null)
+  .filter(check => check && check.problems.length)
+if (commitChecks.length) log('Commits incohérents dans les rapports (relire par git rev-parse <branche>) : ' + commitChecks.map(c => c.taskId + ' (' + c.problems.join(' ; ') + ')').join(' | '))
 const lost = input.tasks.filter((task, index) => !reports[index]).map(task => task.id)
 if (lost.length) log('Sans rapport (agent arrêté ou erreur) : ' + lost.join(', ') + '. À vérifier par apv run next.')
 if (refused.length) log('Rapports refusés (confiance) : ' + refused.map(r => r.problems.join(' ; ')).join(' | ') + '. À redemander à l\'agent.')
@@ -168,4 +191,6 @@ return {
   withoutReport: lost,
   refused,
   escalation,
+  // Reports whose commit, `git rev-parse HEAD` and `git log --oneline -1` disagree: never recorded as they are.
+  commitChecks,
 }

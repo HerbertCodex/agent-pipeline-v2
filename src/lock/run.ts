@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type StdioOptions } from 'node:child_process';
 import { constants } from 'node:os';
 import type { LockOwner, LockRecord, LockStore, WaitInfo } from './store.js';
 import { localTime } from '../domain/time.js';
@@ -18,7 +18,16 @@ export interface RunLockedOptions {
   killGraceMs?: number;
   /** Heartbeat interval; defaults to a third of the lease, between 200 ms and 60 s. */
   heartbeatMs?: number;
+  /** Where the output of the command goes; default: inherited from apv (`apv dast run` writes it to a log file). */
+  stdio?: StdioOptions;
+  /** Longest run of the command: then SIGTERM, SIGKILL after the grace, and TIMEOUT_EXIT. Absent: no bound. */
+  timeoutMs?: number;
+  /** Called once the lease is held, just before the command starts (tells a refusal from the command's own code). */
+  onAcquired?: () => void;
 }
+
+/** Exit code of a command stopped by `timeoutMs` (the convention of GNU timeout). */
+export const TIMEOUT_EXIT = 124;
 
 const HANDLED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
 type HandledSignal = typeof HANDLED_SIGNALS[number];
@@ -107,21 +116,33 @@ export async function runLocked(store: LockStore, resource: string, options: Run
       }, (error: unknown) => options.stderr(`Renouvellement du verrou « ${resource} » en échec : ${String(error)}\n`));
     }, heartbeatMs);
 
+    options.onAcquired?.();
     const held = (options.env.APV_LOCK_HELD ?? '').split(',').map((s) => s.trim()).filter(Boolean);
     const env = { ...options.env, APV_LOCK_HELD: [...held, resource].join(',') };
     const [file, ...args] = options.command;
     if (!file) throw new Error('commande vide');
+    let timedOut = false;
+    let timeout: NodeJS.Timeout | null = null;
     const exit = await new Promise<{ status: number | null; signal: NodeJS.Signals | null; error?: Error }>((resolve) => {
-      const spawned = spawn(file, args, { cwd: options.cwd, env, stdio: 'inherit' });
+      const spawned = spawn(file, args, { cwd: options.cwd, env, stdio: options.stdio ?? 'inherit' });
       child = spawned;
       spawned.once('error', (error) => resolve({ status: null, signal: null, error }));
       spawned.once('exit', (status, signal) => resolve({ status, signal }));
+      if (options.timeoutMs !== undefined) {
+        timeout = setTimeout(() => {
+          timedOut = true;
+          spawned.kill('SIGTERM');
+          killTimer ??= setTimeout(() => { spawned.kill('SIGKILL'); }, options.killGraceMs ?? 10_000);
+        }, options.timeoutMs);
+      }
     });
+    if (timeout) clearTimeout(timeout);
     if (exit.error) {
       options.stderr(`Impossible de lancer « ${file} » : ${exit.error.message}\n`);
       return 127;
     }
     if (received) return signalExitCode(received);
+    if (timedOut) return TIMEOUT_EXIT;
     if (exit.status !== null) return exit.status;
     return signalExitCode(exit.signal ?? 'SIGTERM');
   } finally {
