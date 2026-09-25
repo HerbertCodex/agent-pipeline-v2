@@ -73,8 +73,8 @@ export function parsePullRequest(text: string): PullRequest {
   };
 }
 
-/** Where the REST API reaches a pull request: `repos/<owner>/<repo>/pulls/<n>` on its host. */
-export interface PullRequestPath { host: string; path: string }
+/** Where the REST API reaches a pull request: `repos/<owner>/<repo>/pulls/<n>` on its host, and its repository `repos/<owner>/<repo>`. */
+export interface PullRequestPath { host: string; path: string; repo: string }
 
 const NAME = /^[A-Za-z0-9._-]{1,100}$/;
 
@@ -86,8 +86,11 @@ const NAME = /^[A-Za-z0-9._-]{1,100}$/;
 export function pullRequestPath(pr: PullRequest): PullRequestPath | null {
   const m = /^https:\/\/([A-Za-z0-9.-]{1,253}(?::\d{1,5})?)\/([^/]+)\/([^/]+)\/pull\/(\d{1,9})$/.exec(pr.url);
   if (!m || Number(m[4]) !== pr.number || [m[2]!, m[3]!].some(name => !NAME.test(name) || name === '.' || name === '..')) return null;
-  return { host: m[1]!.toLowerCase(), path: `repos/${m[2]}/${m[3]}/pulls/${pr.number}` };
+  const repo = `repos/${m[2]}/${m[3]}`;
+  return { host: m[1]!.toLowerCase(), path: `${repo}/pulls/${pr.number}`, repo };
 }
+
+const hostname = (where: PullRequestPath): string[] => where.host === 'github.com' ? [] : ['--hostname', where.host];
 
 /**
  * Arguments of the retarget: `gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -f base=<target>`. The REST API
@@ -95,7 +98,91 @@ export function pullRequestPath(pr: PullRequest): PullRequestPath | null {
  * fails since their deprecation (seen on the real merge of PR #70 and #71).
  */
 export function retargetArgs(where: PullRequestPath, target: string): string[] {
-  return ['api', ...(where.host === 'github.com' ? [] : ['--hostname', where.host]), '-X', 'PATCH', where.path, '-f', `base=${target}`];
+  return ['api', ...hostname(where), '-X', 'PATCH', where.path, '-f', `base=${target}`];
+}
+
+/**
+ * What the compare call keeps of the answer: the number of commits of the base the head lacks, how many of them
+ * GitHub listed and how many are merge commits, the files they change since the merge base (null when GitHub did
+ * not list them) and the merge base itself.
+ */
+export const FRESHNESS_JQ = '{ahead_by, merge_base: .merge_base_commit.sha, listed: ((.commits // []) | length), ' +
+  'merges: ([(.commits // [])[] | select((.parents // []) | length > 1)] | length), files: (if .files == null then null else [.files[].filename] end)}';
+
+/** A ref in a REST path: every character escaped but the slashes of a branch name. */
+const refSegment = (ref: string): string => encodeURIComponent(ref).replaceAll('%2F', '/');
+
+/**
+ * Arguments of the freshness read: `gh api repos/<owner>/<repo>/compare/<head sha>...<base>`. In this order,
+ * GitHub's `ahead_by` counts the commits of the base the head of the pull request does not contain, and `files`
+ * lists what these commits change since the merge base: exactly what merging the base into the head would bring.
+ */
+export function compareArgs(where: PullRequestPath, head: string, base: string): string[] {
+  return ['api', ...hostname(where), `${where.repo}/compare/${refSegment(head)}...${refSegment(base)}`, '--jq', FRESHNESS_JQ];
+}
+
+/**
+ * Whether the head of a pull request contains the current head of its base, read from GitHub:
+ * - `up_to_date`: every commit of the base is in the head (`ahead_by` 0);
+ * - `same_content`: the base has commits the head lacks, but they are all merge commits, all listed, and change no
+ *   file since the merge base (the merge commit of the previous pull request of the stack, merged with
+ *   `--merge`): merging the base into the head changes nothing, so the checks of the head bear on the result;
+ * - `behind`: the base brings changes the head never saw (or GitHub did not list them): refused;
+ * - `unknown`: the compare call failed or its answer is unreadable: refused, never taken as up to date.
+ */
+export type FreshnessState = 'up_to_date' | 'same_content' | 'behind' | 'unknown';
+export interface Freshness {
+  base: string; head: string; state: FreshnessState;
+  /** Commits of the base the head does not contain; null when unknown. */
+  missing: number | null;
+  /** Files these commits change since the merge base (at most the first page GitHub lists); null when unknown. */
+  files: string[] | null;
+  mergeBase: string | null;
+  error: string | null;
+}
+
+/** Reads the answer of the compare call (the object `FRESHNESS_JQ` builds). */
+export function parseFreshness(text: string, base: string, head: string): Freshness {
+  const unknown = (error: string): Freshness => ({ base, head, state: 'unknown', missing: null, files: null, mergeBase: null, error });
+  let raw: Record<string, unknown>;
+  try { raw = JSON.parse(text) as Record<string, unknown>; }
+  catch (error) { return unknown(`réponse illisible : ${errorMessage(error)}`); }
+  if (!raw || typeof raw !== 'object') return unknown('réponse illisible');
+  const missing = raw['ahead_by'];
+  if (typeof missing !== 'number' || !Number.isInteger(missing) || missing < 0) return unknown('réponse sans ahead_by');
+  const list = raw['files'];
+  const files = Array.isArray(list) && list.every(f => typeof f === 'string') ? list as string[] : null;
+  const mergeBase = typeof raw['merge_base'] === 'string' ? raw['merge_base'] : null;
+  // Same content only on the full evidence: every missing commit listed, each one a merge, and no file changed.
+  const onlyMerges = raw['listed'] === missing && raw['merges'] === missing;
+  const state: FreshnessState = missing === 0 ? 'up_to_date' : files && files.length === 0 && onlyMerges ? 'same_content' : 'behind';
+  return { base, head, state, missing, files, mergeBase, error: null };
+}
+
+const short = (sha: string): string => sha.slice(0, 12);
+
+/** Refusal of a pull request whose head lacks changes of its base, with the way to update it. */
+export function behindReason(n: number, pr: PullRequest, f: Freshness): string {
+  const files = f.files === null ? 'fichiers non listés par GitHub'
+    : `${f.files.length} fichier(s) changé(s) : ${f.files.slice(0, 5).join(', ')}${f.files.length > 5 ? `, et ${f.files.length - 5} autre(s)` : ''}`;
+  return `PR #${n} n'est pas à jour de sa base ${f.base} : ${f.missing} commit(s) de ${f.base} absent(s) de la tête ${short(f.head)} (${files}) ; ` +
+    'ses contrôles n\'ont donc pas porté sur le résultat de la fusion. Marche à suivre : dans la branche ' +
+    `${pr.headRefName || '?'}, git fetch origin puis git merge origin/${f.base} (une fusion, jamais de rebase ni de force-push) ; ` +
+    `repasser au moins les contrôles de tâche sur la nouvelle tête (apv gates run --stage task --base origin/${f.base}, puis ` +
+    `apv gates verify --commit <nouvelle tête> --stage task --base origin/${f.base} à 0) ; git push (sans force) ; attendre les ` +
+    'contrôles GitHub au vert ; relancer apv stack plan puis apv stack merge. Dérogation exceptionnelle et journalisée : ' +
+    '--allow-behind --reason "<raison>".';
+}
+
+/** Refusal of a pull request whose base could not be compared with its head. */
+export function unknownReason(n: number, f: Freshness): string {
+  return `PR #${n} : impossible de vérifier que la tête ${short(f.head)} contient sa base ${f.base} (${f.error ?? 'raison inconnue'}) ; ` +
+    'la fusion attend cette preuve (compare de l\'API GitHub).';
+}
+
+/** A pull request merged although its head lacks changes of its base (`--allow-behind`), journaled. */
+export interface Derogation {
+  pr: number; head: string; base: string; missing: number | null; files: string[] | null; reason: string;
 }
 
 /** Merge states that allow a merge now; `DRAFT` is handled apart (`--ready`). */
@@ -130,9 +217,20 @@ export interface StackOptions {
   ready: boolean;
   pollMs: number;
   pollAttempts: number;
+  /**
+   * `--allow-behind --reason`: exceptional waiver of the freshness rule. A pull request whose head lacks changes of
+   * its base is then merged, never silently: `onDerogation` journals it first, and a failure to journal stops the stack.
+   */
+  allowBehind?: { reason: string };
+  /** Journals a waiver before the merge it allows; returns an error message when it could not. */
+  onDerogation?: (derogation: Derogation) => string | null;
 }
 
-export interface PlannedPr { number: number; pr: PullRequest | null; expectedBase: string | null; anomalies: string[] }
+export interface PlannedPr {
+  number: number; pr: PullRequest | null; expectedBase: string | null; anomalies: string[];
+  /** Whether the head contains its expected base (null when not compared: PR unread, base unknown, address unreadable). */
+  freshness: Freshness | null;
+}
 export interface StackPlan { target: string | null; prs: PlannedPr[]; ok: boolean }
 
 async function call(options: StackOptions, args: string[]): Promise<GhCall> {
@@ -148,6 +246,15 @@ async function view(options: StackOptions, n: number): Promise<{ pr: PullRequest
   catch (error) { return { pr: null, error: `réponse illisible de gh pr view ${n} : ${errorMessage(error)}` }; }
 }
 
+/** Compares the head of a pull request with the current head of `base` (`compareArgs`). */
+async function freshness(options: StackOptions, pr: PullRequest, base: string, where: PullRequestPath): Promise<Freshness> {
+  const result = await call(options, compareArgs(where, pr.headRefOid, base));
+  if (result.status !== 0 || result.error) {
+    return { base, head: pr.headRefOid, state: 'unknown', missing: null, files: null, mergeBase: null, error: `gh api compare a échoué (${result.error ?? `code ${result.status}`})` };
+  }
+  return parseFreshness(result.stdout, base, pr.headRefOid);
+}
+
 /** Re-reads a pull request while GitHub still computes its mergeability. */
 async function settled(options: StackOptions, n: number): Promise<{ pr: PullRequest | null; error: string | null }> {
   let result = await view(options, n);
@@ -159,27 +266,48 @@ async function settled(options: StackOptions, n: number): Promise<{ pr: PullRequ
 }
 
 /**
+ * Whether a pull request may be merged onto `base` as far as freshness goes: null when its head contains the base
+ * (or the base brings no change), the reason to stop otherwise. A behind head passes only with `allowBehind`.
+ */
+function freshnessProblem(n: number, pr: PullRequest, f: Freshness, options: StackOptions): string | null {
+  if (f.state === 'unknown') return unknownReason(n, f);
+  if (f.state === 'behind' && !options.allowBehind) return behindReason(n, pr, f);
+  return null;
+}
+
+/**
  * `apv stack plan`: reads every pull request and checks the stack. Each one open, the base of PR n+1 is the
- * head of PR n (the target for the first), mergeable, checks green or absent. All anomalies are listed.
+ * head of PR n (the target for the first), mergeable, checks green or absent, and its head contains the current
+ * head of that base (compare of the REST API; see `Freshness`). All anomalies are listed.
  */
 export async function planStack(numbers: number[], options: StackOptions): Promise<StackPlan> {
   const prs: PlannedPr[] = [];
   for (const n of numbers) {
     const { pr, error } = await settled(options, n);
-    prs.push({ number: n, pr, expectedBase: null, anomalies: error ? [error] : [] });
+    prs.push({ number: n, pr, expectedBase: null, anomalies: error ? [error] : [], freshness: null });
   }
   const first = prs[0]?.pr;
   const target = options.target ?? first?.baseRefName ?? null;
-  prs.forEach((item, i) => {
-    if (!item.pr) return;
+  for (const [i, item] of prs.entries()) {
+    if (!item.pr) continue;
     const previous = i === 0 ? null : prs[i - 1]!;
     item.expectedBase = i === 0 ? target : previous?.pr?.headRefName ?? null;
     if (item.expectedBase === null) item.anomalies.push(`PR #${item.number} : base attendue inconnue (la PR précédente n'a pas été lue)`);
     else item.anomalies.push(...anomalies(item.pr, item.expectedBase, options.ready));
     if (target && item.pr.headRefName === target) item.anomalies.push(`PR #${item.number} part de la branche cible ${target}`);
-    // Every PR after the first is retargeted by the REST API: an address it cannot use stops the stack before any merge.
-    if (i > 0 && !pullRequestPath(item.pr)) item.anomalies.push(`PR #${item.number} : adresse illisible (${item.pr.url || 'absente'}), re-ciblage impossible`);
-  });
+    // The address gives the path of the compare call, and of the retarget for every PR after the first: an address
+    // the tool cannot use stops the stack before any merge.
+    const where = pullRequestPath(item.pr);
+    if (!where) {
+      item.anomalies.push(`PR #${item.number} : adresse illisible (${item.pr.url || 'absente'}), base non vérifiable${i > 0 ? ', re-ciblage impossible' : ''}`);
+      continue;
+    }
+    // Each PR against its own base: the previous PR of the stack, or the target for the first one.
+    if (item.expectedBase === null || item.pr.state !== 'OPEN' || !item.pr.headRefOid) continue;
+    item.freshness = await freshness(options, item.pr, item.expectedBase, where);
+    const problem = freshnessProblem(item.number, item.pr, item.freshness, options);
+    if (problem) item.anomalies.push(problem);
+  }
   return { target, prs, ok: prs.every(p => p.anomalies.length === 0) };
 }
 
@@ -187,6 +315,10 @@ export interface MergeReport {
   target: string | null; method: string; merged: number[];
   stopped: { pr: number; reasons: string[] } | null;
   plan: StackPlan;
+  /** Freshness of each pull request against the target, read just before its merge. */
+  freshness: Array<{ pr: number } & Freshness>;
+  /** Pull requests merged behind their base by waiver (`--allow-behind`), each journaled before its merge. */
+  derogations: Derogation[];
 }
 
 /**
@@ -197,7 +329,7 @@ export interface MergeReport {
  */
 export async function mergeStack(numbers: number[], method: 'merge' | 'squash' | 'rebase', options: StackOptions): Promise<MergeReport> {
   const plan = await planStack(numbers, options);
-  const report: MergeReport = { target: plan.target, method, merged: [], stopped: null, plan };
+  const report: MergeReport = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [] };
   const stop = (pr: number, reasons: string[]): MergeReport => { report.stopped = { pr, reasons }; return report; };
   if (!plan.ok) {
     const bad = plan.prs.find(p => p.anomalies.length)!;
@@ -235,6 +367,20 @@ export async function mergeStack(numbers: number[], method: 'merge' | 'squash' |
       if (pr.isDraft) return stop(n, [`la PR #${n} est encore un brouillon après gh pr ready (${ready.error ?? `code ${ready.status}`})`]);
       problems = anomalies(pr, target, false);
       if (problems.length) return stop(n, problems);
+    }
+    // Freshness last, right before the merge: the head must contain the target as it is now, after the merge of the
+    // previous PR of the stack (incident of 25 September 2026: two PR green alone, main red once both were merged).
+    const where = pullRequestPath(pr);
+    if (!where) return stop(n, [`PR #${n} : adresse illisible (${pr.url || 'absente'}), base non vérifiable`]);
+    const fresh = await freshness(options, pr, target, where);
+    report.freshness.push({ pr: n, ...fresh });
+    const problem = freshnessProblem(n, pr, fresh, options);
+    if (problem) return stop(n, [problem]);
+    if (fresh.state === 'behind' && options.allowBehind) {
+      const derogation: Derogation = { pr: n, head: pr.headRefOid, base: target, missing: fresh.missing, files: fresh.files, reason: options.allowBehind.reason };
+      const failed = options.onDerogation ? options.onDerogation(derogation) : 'aucun journal';
+      if (failed) return stop(n, [`dérogation --allow-behind non journalisée (${failed}) : fusion de la PR #${n} refusée`, behindReason(n, pr, fresh)]);
+      report.derogations.push(derogation);
     }
     const merge = await call(options, ['pr', 'merge', String(n), `--${method}`, '--match-head-commit', pr.headRefOid]);
     let after = await view(options, n);
