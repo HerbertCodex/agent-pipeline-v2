@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { gateStage, validateReceipt, type Gate, type GateReceipt, type GateStage } from '../domain/contracts.js';
-import { invariant } from '../domain/errors.js';
+import { errorMessage, invariant } from '../domain/errors.js';
 import { hash } from '../domain/hash.js';
 import { environmentIdentity, executableIdentity, proofKey } from '../evidence/key.js';
 import { Git } from '../execution/git.js';
@@ -11,6 +11,7 @@ import { environment, expandCommand, redact, runProcess } from '../execution/pro
 import { failureExcerpt, MAX_DIAGNOSTIC_CHARS } from '../engine/diagnostic.js';
 import { schedule, success } from '../engine/scheduler.js';
 import type { ApvConfig } from '../config/load.js';
+import { publishRun, pruneStore, receiptRetention, sharedStore, type PruneResult } from './store.js';
 
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
 export const RECEIPTS_DIR = '.apv/receipts';
@@ -36,7 +37,11 @@ export interface GateRunOptions {
   env?: NodeJS.ProcessEnv;
   /** A full suite run out of the rhythm of an execution (`--reason`): written in every receipt and in the summary. */
   override?: { run: string; reason: string };
+  /** Copy the run into the shared store of the repository (default true), then apply its retention. */
+  share?: boolean;
 }
+/** The copy of a run in the shared store: its directory, or why it could not be made (the run itself stands). */
+export interface SharedCopy { directory: string | null; error: string | null; pruned: PruneResult | null }
 export interface GateRunResult {
   runId: string;
   repo: string;
@@ -53,6 +58,8 @@ export interface GateRunResult {
   targeted: string[];
   receipts: GateReceipt[];
   directory: string;
+  /** Copy in the shared store (`<git common dir>/apv/receipts/<run>/`), null when not asked. */
+  shared: SharedCopy | null;
   ok: boolean;
 }
 
@@ -159,9 +166,26 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       stdoutHash: '', stderrHash: '', diagnostic: reason, reusedFrom: null }),
   });
   const result: GateRunResult = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
-    reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, ok: list.every(success) };
+    reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, shared: null, ok: list.every(success) };
   writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
     reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}),
     receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs) })) }, null, 2) + '\n');
+  if (options.share !== false) result.shared = await shareRun(git, repo, directory, runId, candidateSha, options.config);
   return result;
+}
+
+/**
+ * Copies a finished run into the shared store of the repository, so that it survives its worktree, then applies
+ * the retention of the store. A failure is reported, never fatal: the run and its local receipts stand.
+ */
+async function shareRun(git: Git, repo: string, directory: string, runId: string, candidateSha: string, config: ApvConfig): Promise<SharedCopy> {
+  let target: string;
+  let store: string;
+  try {
+    store = await sharedStore(git, repo);
+    target = publishRun(store, directory, runId, candidateSha, repo);
+  } catch (error) { return { directory: null, error: errorMessage(error), pruned: null }; }
+  let pruned: PruneResult | null = null;
+  try { pruned = pruneStore(store, receiptRetention(config)); } catch { /* Retention is retried by the next run. */ }
+  return { directory: target, error: null, pruned };
 }

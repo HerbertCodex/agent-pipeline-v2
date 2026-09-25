@@ -6,6 +6,7 @@ import { Git } from '../execution/git.js';
 import { success } from '../engine/scheduler.js';
 import type { ApvConfig } from '../config/load.js';
 import { RECEIPTS_DIR, gatesConfigHash, stageGates } from './run.js';
+import { manifestCommit, readSharedRun, sharedRunIds, sharedStore } from './store.js';
 
 export interface VerifyOptions {
   repo: string;
@@ -50,6 +51,8 @@ export interface GateEvidence {
   proof: 'full' | 'targeted' | null;
   /** Stage task: targeted receipts ignored because the base of their run does not cover `base` (another base, or none). */
   otherBase: number;
+  /** Where the receipt retained was read (the worktree, or the shared store of the repository); null without one. */
+  source: ReceiptSource | null;
 }
 export interface VerifyResult {
   repo: string;
@@ -66,36 +69,93 @@ export interface VerifyResult {
   gates: GateEvidence[];
   /** Receipt files that could not be read or validated (ignored, reported). */
   unreadable: string[];
+  /** Shared store of the repository, read after the worktree (`<git common dir>/apv/receipts`). */
+  store: string;
+  /** Runs of the shared store refused as a whole (files altered or contradicting their manifest). */
+  altered: AlteredRun[];
   ok: boolean;
 }
 
-interface Found { receipt: GateReceipt; dirty: boolean | null; baseSha: string | null }
+/** Where a receipt was read: the `.apv/receipts/` of the worktree, or the shared store of the repository. */
+export type ReceiptSource = 'local' | 'shared';
+interface Found { receipt: GateReceipt; dirty: boolean | null; baseSha: string | null; source: ReceiptSource }
+/** A run of the shared store refused as a whole: its files no longer match its manifest, or contradict it. */
+export interface AlteredRun { runId: string; reason: string }
+
+/** Tree state and base of a run, from its summary (null when unknown). */
+function summaryOf(text: string | null): { dirty: boolean | null; baseSha: string | null } {
+  let dirty: boolean | null = null;
+  let baseSha: string | null = null;
+  if (text === null) return { dirty, baseSha };
+  try {
+    const summary = JSON.parse(text) as { dirty?: unknown; baseSha?: unknown };
+    if (typeof summary.dirty === 'boolean') dirty = summary.dirty;
+    if (typeof summary.baseSha === 'string' && /^[a-f0-9]{40,64}$/.test(summary.baseSha)) baseSha = summary.baseSha;
+  } catch { /* No summary: the tree state comes from the receipts or stays unknown, the base stays unknown. */ }
+  return { dirty, baseSha };
+}
 
 /** Every readable receipt of `.apv/receipts/`, with the tree state from the receipt or, for older ones, its run summary. */
-function readReceipts(repo: string): { found: Found[]; unreadable: string[] } {
+function readLocal(repo: string): { found: Found[]; unreadable: string[]; runs: Set<string> } {
   const root = join(repo, RECEIPTS_DIR);
   const found: Found[] = [];
   const unreadable: string[] = [];
-  if (!existsSync(root)) return { found, unreadable };
+  const runs = new Set<string>();
+  if (!existsSync(root)) return { found, unreadable, runs };
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
+    runs.add(entry.name);
     const dir = join(root, entry.name);
-    let summaryDirty: boolean | null = null;
-    let baseSha: string | null = null;
-    try {
-      const summary = JSON.parse(readFileSync(join(dir, 'summary.json'), 'utf8')) as { dirty?: unknown; baseSha?: unknown };
-      if (typeof summary.dirty === 'boolean') summaryDirty = summary.dirty;
-      if (typeof summary.baseSha === 'string' && /^[a-f0-9]{40,64}$/.test(summary.baseSha)) baseSha = summary.baseSha;
-    } catch { /* No summary: the tree state comes from the receipts or stays unknown, the base stays unknown. */ }
+    let text: string | null = null;
+    try { text = readFileSync(join(dir, 'summary.json'), 'utf8'); } catch { /* Older run without summary. */ }
+    const summary = summaryOf(text);
     for (const file of readdirSync(dir)) {
       if (!file.endsWith('.json') || file === 'summary.json') continue;
       try {
         const receipt = validateReceipt(JSON.parse(readFileSync(join(dir, file), 'utf8')));
-        found.push({ receipt, dirty: receipt.dirty ?? summaryDirty, baseSha });
+        found.push({ receipt, dirty: receipt.dirty ?? summary.dirty, baseSha: summary.baseSha, source: 'local' });
       } catch { unreadable.push(join(RECEIPTS_DIR, entry.name, file)); }
     }
   }
-  return { found, unreadable };
+  return { found, unreadable, runs };
+}
+
+/**
+ * Receipts of the shared store for the runs absent from the worktree (a run present in both is read from the
+ * worktree, as before the store existed). A run counts only when intact: its manifest names it and lists exactly
+ * its files with their digests, its summary is there, and each receipt belongs to it (same run, same commit as
+ * the manifest, file named after its check). Otherwise none of its receipts count, and the run is reported.
+ */
+function readShared(store: string, local: Set<string>, commit: string): { found: Found[]; altered: AlteredRun[] } {
+  const found: Found[] = [];
+  const altered: AlteredRun[] = [];
+  for (const runId of sharedRunIds(store)) {
+    if (local.has(runId)) continue;
+    // Runs of another commit cannot prove this one: their files are not read (a thousand runs stay cheap). A
+    // manifest that names another commit while its receipts claim this one would be refused below anyway.
+    const named = manifestCommit(join(store, runId));
+    if (named !== null && named !== commit) continue;
+    const run = readSharedRun(join(store, runId));
+    if (!run.intact) { altered.push({ runId, reason: run.reason }); continue; }
+    const summaryBytes = run.files.get('summary.json');
+    if (!summaryBytes) { altered.push({ runId, reason: 'summary.json absent' }); continue; }
+    const summary = summaryOf(summaryBytes.toString('utf8'));
+    const receipts: Found[] = [];
+    let reason: string | null = null;
+    for (const [name, bytes] of run.files) {
+      if (name === 'summary.json') continue;
+      let receipt: GateReceipt;
+      try { receipt = validateReceipt(JSON.parse(bytes.toString('utf8'))); }
+      catch { reason = `${name} n'est pas un reçu valide`; break; }
+      if (receipt.runId !== runId || `${receipt.gateId}.json` !== name || receipt.candidateSha !== run.manifest.candidateSha) {
+        reason = `${name} contredit son exécution (exécution, contrôle ou commit)`; break;
+      }
+      receipts.push({ receipt, dirty: receipt.dirty ?? summary.dirty, baseSha: summary.baseSha, source: 'shared' });
+    }
+    if (reason) altered.push({ runId, reason });
+    else found.push(...receipts);
+  }
+  return { found, altered };
 }
 
 const latest = (a: Found, b: Found): Found =>
@@ -108,6 +168,9 @@ const latest = (a: Found, b: Found): Found =>
  * At stage full, receipts of a targeted run (`targeted`, the `affected` command of a full check) never count.
  * At stage task, a full check that declares `affected` is required too: its targeted receipts count when their
  * run's base covers `base` (mandatory then), and so do its complete receipts; the latest of them decides.
+ * Receipts are read from the worktree (`.apv/receipts/`), then from the shared store of the repository for the
+ * runs the worktree does not have (a run proven in a worktree since removed): same requirements, and a shared
+ * run counts only when intact (src/gates/store.ts).
  */
 export async function verifyGates(options: VerifyOptions): Promise<VerifyResult> {
   const git = new Git();
@@ -124,7 +187,11 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     `Targeted checks (${[...viaTargeted].join(', ')}) are verified against a base: pass --base <ref> (the last commit the full suite proved)`);
   const base = viaTargeted.size && options.base ? await git.sha(repo, options.base) : null;
   const configHash = gatesConfigHash(options.config);
-  const { found, unreadable } = readReceipts(repo);
+  const local = readLocal(repo);
+  const store = await sharedStore(git, repo);
+  const shared = readShared(store, local.runs, commit);
+  const found = [...local.found, ...shared.found];
+  const { unreadable } = local;
   const atCommit = found.filter(f => f.receipt.candidateSha === commit);
   // Whether a targeted run from `runBase` covered the changes since `base`: same commit, or an ancestor of it.
   const covered = new Map<string, boolean>();
@@ -149,12 +216,12 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     const clean = current.filter(f => f.dirty === false);
     if (!clean.length) {
       const state: EvidenceState = current.length ? 'dirty' : 'missing';
-      gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase });
+      gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null });
       continue;
     }
     const last = clean.reduce(latest);
     gates.push({ gateId, state: success(last.receipt) ? 'passed' : 'failed', status: last.receipt.status, receipt: last.receipt.id,
-      runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof: last.receipt.targeted === true ? 'targeted' : 'full', otherBase });
+      runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof: last.receipt.targeted === true ? 'targeted' : 'full', otherBase, source: last.source });
   }
-  return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, ok: gates.every(g => g.state === 'passed') };
+  return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered, ok: gates.every(g => g.state === 'passed') };
 }

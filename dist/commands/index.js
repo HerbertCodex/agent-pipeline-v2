@@ -13,7 +13,7 @@ export const commands = {
     stack: { summary: 'stack plan|merge <pr...> : vérifie puis fusionne une pile de PR dans l\'ordre (fusion : APV_ALLOW_MERGE=1)', load: () => import('./stack.js') },
     ledger: { summary: 'ledger validate|plan|apply : registre des décisions', load: () => import('./ledger.js') },
     scope: { summary: 'scope check --spec <fichier> --task <id> : fichiers modifiés contre les chemins autorisés', load: () => import('./scope.js') },
-    gates: { summary: 'gates run [--stage task|full] | verify --commit <sha> : exécute les contrôles et écrit des reçus, vérifie une preuve', load: () => import('./gates.js') },
+    gates: { summary: 'gates run [--stage task|full] | verify --commit <sha> | receipts list|export|prune : exécute les contrôles et écrit des reçus, vérifie une preuve', load: () => import('./gates.js') },
     lock: { summary: 'lock run|acquire|release|status <ressource> : verrous à bail (propriétaire vérifié, expiration, file d\'attente)', load: () => import('./lock.js') },
     wait: { summary: 'wait --pid <pid> | --file <chemin> [--contains <texte>] [--timeout <s>] : attente bornée (580 s au plus) d\'un processus ou d\'un fichier', load: () => import('./wait.js') },
     review: { summary: 'review plan --base <ref> [--head <ref>] [--force <domaine>] : domaines de revue proposés d\'après le diff (securite toujours, un domaine sauté seulement sur preuve)', load: () => import('./review.js') },

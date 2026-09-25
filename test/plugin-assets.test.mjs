@@ -647,3 +647,29 @@ test('pilot journal: commits read by git, waits through apv wait, copies outside
   assert.ok(!/[–—]/.test(read('docs/CONFIGURATION.md').split('## Revues : `review`')[1]), 'review section: no em or en dash');
   assert.ok(!/[–—]/.test(unreleased), 'unreleased entries: no em or en dash');
 });
+
+test('shared receipts: the PR cites the run of the full suite, verifiable from any checkout of the repository', () => {
+  const run = frontmatter('skills/run/SKILL.md').body;
+  const delivery = read('skills/chef-de-projet/references/livraison-pile.md');
+  const guide = read('docs/RUN.md');
+  for (const [file, text] of [['run', run], ['livraison', delivery], ['guide', guide], ['lead', frontmatter('skills/chef-de-projet/SKILL.md').body]]) {
+    assert.match(text, /identifiant d'exécution de la suite complète/, file);
+    assert.match(text, /depuis n'importe quel checkout du dépôt/, file);
+    assert.match(text, /apv gates verify --commit <tête>/, file);
+  }
+  assert.doesNotMatch(run, /worktree de la dernière intégration>/);
+  assert.doesNotMatch(run, /garde ce worktree jusqu'à la livraison/);
+  assert.doesNotMatch(delivery, /celui qui a ses reçus/);
+  assert.match(guide, /\*\*Reçus partagés entre worktrees\.\*\*/);
+  const cli = read('docs/CLI.md');
+  for (const rule of [/## `apv gates receipts`/, /<répertoire git commun>\/apv\/receipts\/<exécution>\//, /--commit-config/, /`altered`/, /Limite assumée/]) assert.match(cli, rule);
+  const config = read('docs/CONFIGURATION.md');
+  assert.match(config, /## Reçus : `receipts`/);
+  assert.match(config, /\{ "receipts": \{ "keepDays": 30, "keepRuns": 1000 \} \}/);
+  assert.ok(!/[–—]/.test(config.split('## Reçus : `receipts`')[1].split('\n## ')[0]), 'receipts section: no em or en dash');
+  const unreleased = read('CHANGELOG.md').split('\n## ')[1];
+  assert.ok(unreleased.includes('- **Reçus partagés entre worktrees : ils survivent à la copie de livraison.**'));
+  for (const file of ['skills/run/SKILL.md', 'skills/chef-de-projet/SKILL.md', 'skills/chef-de-projet/references/livraison-pile.md',
+    'skills/chef-de-projet/references/integration-revues.md', 'docs/RUN.md', 'docs/CLI.md']) assert.ok(!/[–—]/.test(read(file)), `${file}: no em or en dash`);
+  assert.ok(!/[–—]/.test(unreleased), 'unreleased entries: no em or en dash');
+});

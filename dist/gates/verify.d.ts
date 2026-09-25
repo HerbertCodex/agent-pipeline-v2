@@ -43,6 +43,8 @@ export interface GateEvidence {
     proof: 'full' | 'targeted' | null;
     /** Stage task: targeted receipts ignored because the base of their run does not cover `base` (another base, or none). */
     otherBase: number;
+    /** Where the receipt retained was read (the worktree, or the shared store of the repository); null without one. */
+    source: ReceiptSource | null;
 }
 export interface VerifyResult {
     repo: string;
@@ -59,7 +61,18 @@ export interface VerifyResult {
     gates: GateEvidence[];
     /** Receipt files that could not be read or validated (ignored, reported). */
     unreadable: string[];
+    /** Shared store of the repository, read after the worktree (`<git common dir>/apv/receipts`). */
+    store: string;
+    /** Runs of the shared store refused as a whole (files altered or contradicting their manifest). */
+    altered: AlteredRun[];
     ok: boolean;
+}
+/** Where a receipt was read: the `.apv/receipts/` of the worktree, or the shared store of the repository. */
+export type ReceiptSource = 'local' | 'shared';
+/** A run of the shared store refused as a whole: its files no longer match its manifest, or contradict it. */
+export interface AlteredRun {
+    runId: string;
+    reason: string;
 }
 /**
  * Whether the receipts prove that every required check passed on this exact commit, on a clean tree and with
@@ -68,5 +81,8 @@ export interface VerifyResult {
  * At stage full, receipts of a targeted run (`targeted`, the `affected` command of a full check) never count.
  * At stage task, a full check that declares `affected` is required too: its targeted receipts count when their
  * run's base covers `base` (mandatory then), and so do its complete receipts; the latest of them decides.
+ * Receipts are read from the worktree (`.apv/receipts/`), then from the shared store of the repository for the
+ * runs the worktree does not have (a run proven in a worktree since removed): same requirements, and a shared
+ * run counts only when intact (src/gates/store.ts).
  */
 export declare function verifyGates(options: VerifyOptions): Promise<VerifyResult>;

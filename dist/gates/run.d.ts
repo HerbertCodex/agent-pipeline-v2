@@ -1,5 +1,6 @@
 import { type Gate, type GateReceipt, type GateStage } from '../domain/contracts.js';
 import type { ApvConfig } from '../config/load.js';
+import { type PruneResult } from './store.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
 export declare const RECEIPTS_DIR = ".apv/receipts";
 /** Environment identity of a V3 local run; V2 read it from `environment.id`, a field V3 no longer reads. */
@@ -26,6 +27,14 @@ export interface GateRunOptions {
         run: string;
         reason: string;
     };
+    /** Copy the run into the shared store of the repository (default true), then apply its retention. */
+    share?: boolean;
+}
+/** The copy of a run in the shared store: its directory, or why it could not be made (the run itself stands). */
+export interface SharedCopy {
+    directory: string | null;
+    error: string | null;
+    pruned: PruneResult | null;
 }
 export interface GateRunResult {
     runId: string;
@@ -43,6 +52,8 @@ export interface GateRunResult {
     targeted: string[];
     receipts: GateReceipt[];
     directory: string;
+    /** Copy in the shared store (`<git common dir>/apv/receipts/<run>/`), null when not asked. */
+    shared: SharedCopy | null;
     ok: boolean;
 }
 /** Selected gates in configuration order, with their transitive dependencies. */

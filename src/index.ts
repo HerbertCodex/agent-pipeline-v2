@@ -29,7 +29,9 @@ export { apvConfigSchema, loadConfig, configIssues, policyConfig, CONFIG_FILE, L
 export type { ApvConfig, LoadedConfig } from './config/load.js';
 export { checkSpec, readSpecDocument, parseSpecDocument } from './spec/check.js';
 export { runGates, selectGates, RECEIPTS_DIR } from './gates/run.js';
-export type { GateRunOptions, GateRunResult } from './gates/run.js';
+export type { GateRunOptions, GateRunResult, SharedCopy } from './gates/run.js';
+export { SHARED_RECEIPTS_DIR, DEFAULT_RECEIPT_RETENTION, sharedStore, publishRun, readSharedRun, pruneStore, listRuns, exportRun } from './gates/store.js';
+export type { Manifest, ReceiptRetention, SharedRun, PruneResult, RunEntry, ExportResult } from './gates/store.js';
 export { parseUsage, classifyQuota, reading as quotaReading, readQuota, QUOTA_THRESHOLDS, QUOTA_LOG } from './quota/usage.js';
 export type { QuotaReading, QuotaLevel, UsageRunner } from './quota/usage.js';
 export { dispatch, commands } from './commands/index.js';
