@@ -13,6 +13,14 @@ export type StepName = typeof STEPS[number];
 /** Independent reviews (spec section 8, step 5): security, fidelity, data, GDPR. */
 export declare const REVIEWS: readonly ["securite", "fidelite", "donnees", "rgpd"];
 export type ReviewDomain = typeof REVIEWS[number];
+/**
+ * Confidence of a finished task or fix pass (docs/CONFIANCE.md), noted by the project lead with `apv run set --confidence`:
+ * `prouve` (reproducible proof), `probable` (read or reasoned, not run), `suppose` (hypothesis). Ordered from the strongest.
+ */
+export declare const CONFIDENCE_LEVELS: readonly ["prouve", "probable", "suppose"];
+export type Confidence = typeof CONFIDENCE_LEVELS[number];
+/** Steps that may carry a confidence: the fix pass (its tasks carry their own). */
+export declare const CONFIDENCE_STEPS: readonly StepName[];
 export declare const STATUS_LABEL: Record<RunStatus, string>;
 export declare const STEP_LABEL: Record<StepName | 'waves', string>;
 /**
@@ -36,36 +44,42 @@ export declare const runStateSchema: import("../domain/schema.js").Schema<{
             readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
+            readonly confidence: "prouve" | "probable" | "suppose" | undefined;
         };
         readonly plan: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
             readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
+            readonly confidence: "prouve" | "probable" | "suppose" | undefined;
         };
         readonly integration: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
             readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
+            readonly confidence: "prouve" | "probable" | "suppose" | undefined;
         };
         readonly reviews: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
             readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
+            readonly confidence: "prouve" | "probable" | "suppose" | undefined;
         };
         readonly fixes: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
             readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
+            readonly confidence: "prouve" | "probable" | "suppose" | undefined;
         };
         readonly delivery: {
             readonly status: "failed" | "pending" | "running" | "done" | "skipped";
             readonly commit: string | null;
             readonly note: string | null;
             readonly updatedAt: string | null;
+            readonly confidence: "prouve" | "probable" | "suppose" | undefined;
         };
     };
     readonly waves: {
@@ -85,6 +99,7 @@ export declare const runStateSchema: import("../domain/schema.js").Schema<{
         readonly commit: string | null;
         readonly note: string | null;
         readonly updatedAt: string | null;
+        readonly confidence: "prouve" | "probable" | "suppose" | undefined;
     }>;
     readonly reviews: {
         readonly securite: {
@@ -126,6 +141,7 @@ export declare const runStateSchema: import("../domain/schema.js").Schema<{
         readonly agentId: string | undefined;
         readonly unintegrated: string[] | undefined;
         readonly until: string | undefined;
+        readonly confidence: "prouve" | "probable" | "suppose" | undefined;
     }[];
     readonly pause: {
         readonly since: string;
@@ -147,6 +163,7 @@ export interface RunEvent {
     agentId?: string;
     unintegrated?: string[];
     until?: string;
+    confidence?: Confidence;
 }
 export type RunState = Omit<Mutable<Infer<typeof runStateSchema>>, 'events'> & {
     events: RunEvent[];
@@ -226,6 +243,8 @@ export interface SetOptions {
     base?: string;
     note?: string;
     findings?: number;
+    /** Confidence of the finished work (`done` only, a task or the `fixes` step); cleared when the work is reopened. */
+    confidence?: Confidence;
     /** Where the commits of the dependencies of a task that starts must already be; absent: nowhere. */
     integration?: IntegrationCheck;
     /** Starts the task although a dependency is not integrated; needs `note`, journaled with the dependencies. */
@@ -397,6 +416,14 @@ export interface NextPlan {
         until: string;
         note: string | null;
     } | null;
+    /**
+     * Finished work noted below `prouve` (`apv run set --confidence`): the tasks, and `fixes` when the fix pass is.
+     * `probable` needs a check first, `suppose` goes to the operator; work noted without a level is not listed.
+     */
+    unproven: {
+        target: string;
+        confidence: Exclude<Confidence, 'prouve'>;
+    }[];
     actions: string[];
 }
 export interface NextOptions {

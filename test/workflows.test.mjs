@@ -319,3 +319,40 @@ test('revues: a merged finding keeps the strongest proof; escalation sorts what 
   assert.match(merged.evidence, /D1 \(suppose\) : /);
   assert.deepEqual(result.escalation, { verify: ['F1'], operator: ['D2'] });
 });
+
+test('vague: the report pastes the raw git outputs; a commit that disagrees with them is listed, never trusted', async () => {
+  const { run } = load('vague.js');
+  const sha = 'b'.repeat(40);
+  const answers = {
+    T2: task('T2', { commit: sha, headRevParse: `${sha}\n`, headLog: 'bbbbbbb feat: relances' }),
+    // Pilot project, 24 September 2026: the 7 first characters right, the rest invented.
+    T3: task('T3', { commit: 'bbbbbbb' + 'f'.repeat(33), headRevParse: sha, headLog: 'bbbbbbb feat: relances' }),
+  };
+  const rt = runtime((prompt, opts) => answers[opts.label]);
+  const result = await run(...rt.hooks, WAVE_ARGS);
+  const { schema } = rt.calls[0].opts;
+  for (const field of ['headRevParse', 'headLog']) assert.ok(schema.required.includes(field), field);
+  assert.match(rt.calls[0].prompt, /sha complet copié de la sortie de `git rev-parse HEAD`[^\n]*jamais retapé/);
+  assert.match(rt.calls[0].prompt, /headRevParse : la sortie brute de `git rev-parse HEAD`, collée telle quelle ; headLog : la sortie brute de `git log --oneline -1`/);
+  assert.deepEqual(result.commitChecks.map(c => c.taskId), ['T3']);
+  assert.match(result.commitChecks[0].problems.join(' ; '), /commit différent de la sortie de git rev-parse HEAD/);
+  assert.ok(rt.logs.some(l => l.includes('relire par git rev-parse <branche>')));
+  assert.deepEqual(result.reports.map(r => r.taskId), ['T2', 'T3'], 'the work is still reported: only its commit is not trusted');
+});
+
+test('revues: copies are absolute paths; the security review reads the scan report of the lead, or notes it not verified', async () => {
+  const { run } = load('revues.js');
+  const answer = (prompt, opts) => ({ domain: opts.label, commit: REVIEW_ARGS.commit, findings: [], notVerified: [], cleanup: 'fait', summary: 'ok' });
+  await assert.rejects(run(...runtime(answer).hooks, { ...REVIEW_ARGS, reviews: [{ domain: 'securite', copy: '../depot-revues/securite' }] }), /chemin absolu/);
+  const withScan = runtime(answer);
+  const result = await run(...withScan.hooks, { ...REVIEW_ARGS, dast: '/tmp/session/dast-ccccccc' });
+  const security = withScan.calls.find(c => c.opts.label === 'securite').prompt;
+  assert.match(security, /Scan dynamique : lancé par le chef de projet avant les revues \(`node "\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/cli\.js" dast run`\) ; rapports dans `\/tmp\/session\/dast-ccccccc`/);
+  assert.match(security, /Ne relance pas le scan et ne lance pas Docker/);
+  assert.ok(withScan.calls.filter(c => c.opts.label !== 'securite').every(c => !c.prompt.includes('Scan dynamique')), 'only the security review');
+  assert.equal(result.dast, '/tmp/session/dast-ccccccc');
+  const without = runtime(answer);
+  await run(...without.hooks, { ...REVIEW_ARGS, dastMissing: 'scan non déclaré par le projet (review.dast)' });
+  const noScan = without.calls.find(c => c.opts.label === 'securite').prompt;
+  assert.match(noScan, /Scan dynamique : scan non déclaré par le projet \(review\.dast\)\. Ne lance pas Docker et ne cherche aucun détour : note le scan dynamique « non vérifié »/);
+});

@@ -9,7 +9,7 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
 /**
@@ -46,6 +46,33 @@ export type SpecLimits = {
     maxAcceptance: number;
     maxDepth: number;
 };
+/** Placeholders of the dynamic scan command (`review.dast.command`), replaced as whole arguments. */
+export declare const DAST_PLACEHOLDERS: readonly ["reportDir", "commit", "repo"];
+export declare const DEFAULT_DAST_RESOURCE = "dast";
+export declare const DEFAULT_DAST_TIMEOUT_MS = 3600000;
+/**
+ * The dynamic security scan of the project (ZAP or another), run by the project lead before the reviews with
+ * `apv dast run`, under the lease `resource`, in a detached copy of the reviewed commit. The command prepares what
+ * it needs (dependencies, build, server), writes its reports into `{{reportDir}}` and stops what it started.
+ */
+export declare const dastSchema: import("../domain/schema.js").Schema<{
+    readonly command: string[];
+    readonly timeoutMs: number;
+    readonly passEnv: string[];
+    readonly resource: string;
+    readonly description: string | undefined;
+}>;
+export type DastSettings = Infer<typeof dastSchema>;
+/** Settings of the reviews (`/apv:review`); absent: no dynamic scan declared. */
+export declare const reviewSettingsSchema: import("../domain/schema.js").Schema<{
+    readonly dast: {
+        readonly command: string[];
+        readonly timeoutMs: number;
+        readonly passEnv: string[];
+        readonly resource: string;
+        readonly description: string | undefined;
+    } | undefined;
+}>;
 export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
     readonly name: string | undefined;
     readonly environment: {
@@ -127,6 +154,15 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly maxTasks: number;
         readonly maxAcceptance: number;
         readonly maxDepth: number;
+    } | undefined;
+    readonly review: {
+        readonly dast: {
+            readonly command: string[];
+            readonly timeoutMs: number;
+            readonly passEnv: string[];
+            readonly resource: string;
+            readonly description: string | undefined;
+        } | undefined;
     } | undefined;
 }>;
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */

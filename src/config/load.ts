@@ -19,7 +19,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec'] as const;
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review'] as const;
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'] as const;
 
@@ -51,6 +51,26 @@ export const specSettingsSchema = s.object({
 });
 export type SpecLimits = { maxTasks: number; maxAcceptance: number; maxDepth: number };
 
+/** Placeholders of the dynamic scan command (`review.dast.command`), replaced as whole arguments. */
+export const DAST_PLACEHOLDERS = ['reportDir', 'commit', 'repo'] as const;
+export const DEFAULT_DAST_RESOURCE = 'dast';
+export const DEFAULT_DAST_TIMEOUT_MS = 3_600_000;
+/**
+ * The dynamic security scan of the project (ZAP or another), run by the project lead before the reviews with
+ * `apv dast run`, under the lease `resource`, in a detached copy of the reviewed commit. The command prepares what
+ * it needs (dependencies, build, server), writes its reports into `{{reportDir}}` and stops what it started.
+ */
+export const dastSchema = s.object({
+  command: s.array(s.string(1, 16000), 1, 200),
+  timeoutMs: s.default(s.number(1000, 14_400_000), DEFAULT_DAST_TIMEOUT_MS),
+  passEnv: s.default(envNamesSchema, []),
+  resource: s.default(s.string(1, 80, /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/), DEFAULT_DAST_RESOURCE),
+  description: s.optional(s.string(1, 500)),
+});
+export type DastSettings = Infer<typeof dastSchema>;
+/** Settings of the reviews (`/apv:review`); absent: no dynamic scan declared. */
+export const reviewSettingsSchema = s.object({ dast: s.optional(dastSchema) });
+
 export const apvConfigSchema = s.object({
   /** Project name, written by `apv init` (display only). */
   name: s.optional(s.string(1, 100)),
@@ -69,6 +89,8 @@ export const apvConfigSchema = s.object({
   run: s.optional(runSettingsSchema),
   /** Size thresholds of `apv spec validate` (docs/CONFIGURATION.md, « Taille des specs »); absent: defaults. */
   spec: s.optional(specSettingsSchema),
+  /** Reviews: the dynamic scan run before them (docs/CONFIGURATION.md, « Revues »); absent: none declared. */
+  review: s.optional(reviewSettingsSchema),
 });
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export const specLimits = (config: { spec?: Partial<SpecLimits> | undefined }): SpecLimits => ({ ...DEFAULT_SPEC_LIMITS, ...config.spec });
@@ -133,6 +155,12 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
   list.check(new Set(ruleIds).size === ruleIds.length, 'CONFIG', 'Duplicate validation rule id');
   if (value.design) list.attempt('CONFIG', () => designDir(value.design));
   if (value.structure) list.attempt('CONFIG', () => structureSettings(value.structure));
+  for (const arg of value.review?.dast?.command ?? []) {
+    if (!arg.includes('{{')) continue;
+    const key = /^\{\{([A-Za-z]+)\}\}$/.exec(arg)?.[1];
+    list.check(!!key && (DAST_PLACEHOLDERS as readonly string[]).includes(key), 'CONFIG',
+      `review.dast.command: unknown or partial placeholder ${arg} (whole arguments only: ${DAST_PLACEHOLDERS.map(k => `{{${k}}}`).join(', ')})`);
+  }
   if (list.empty) list.attempt('DAG', () => validateDag(value.gates));
   return { config: list.empty ? value : undefined, ignored: sections.ignored, issues: list.items };
 }

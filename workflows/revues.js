@@ -43,18 +43,23 @@ const input = args || {}
 if (typeof input.commit !== 'string' || !input.commit || !Array.isArray(input.reviews) || !input.reviews.length) {
   throw new Error(
     'Workflow apv:revues lancé sans ses paramètres. Il est lancé par /apv:review avec ' +
-    '{ commit, branch, specFile, common, reviews: [{ domain, copy, context }] }.',
+    '{ commit, branch, specFile, common, dast, dastMissing, reviews: [{ domain, copy, context }] }.',
   )
 }
 const seen = new Set()
 for (const review of input.reviews) {
   if (!review || !DOMAINS[review.domain]) throw new Error('Domaine de revue inconnu : ' + (review && review.domain) + ' (securite, fidelite, donnees, rgpd, concurrence).')
   if (typeof review.copy !== 'string' || !review.copy) throw new Error('La revue ' + review.domain + ' a besoin de sa copie isolée (copy).')
+  // An absolute path, in the session folder of the lead or under a path the tool gave: never beside the repository.
+  if (!/^(\/|[A-Za-z]:[\\/])/.test(review.copy)) throw new Error('La copie de la revue ' + review.domain + ' doit être un chemin absolu (dossier de session du chef de projet) : ' + review.copy)
   if (seen.has(review.domain)) throw new Error('Domaine en double : ' + review.domain)
   seen.add(review.domain)
 }
 
 const APV = typeof input.apv === 'string' && input.apv ? input.apv : 'node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"'
+// The dynamic scan (`apv dast run`), run by the lead before the reviews: its report folder, or the reason there is none.
+const DAST = typeof input.dast === 'string' && input.dast ? input.dast : null
+const DAST_MISSING = typeof input.dastMissing === 'string' && input.dastMissing ? input.dastMissing : 'aucun rapport fourni par le chef de projet'
 
 const FINDINGS = {
   type: 'object',
@@ -127,16 +132,23 @@ const GROUPS = {
   },
 }
 
+function dastLine() {
+  return DAST
+    ? 'Scan dynamique : lancé par le chef de projet avant les revues (`' + APV + ' dast run`) ; rapports dans `' + DAST + '`. Lis `summary.json` (statut, commit, fichiers) et vérifie qu\'il porte sur ce commit, puis chaque rapport : chaque alerte devient un constat ou se justifie par une preuve. Ne relance pas le scan et ne lance pas Docker.'
+    : 'Scan dynamique : ' + DAST_MISSING + '. Ne lance pas Docker et ne cherche aucun détour : note le scan dynamique « non vérifié » dans notVerified, avec cette raison.'
+}
+
 function reviewPrompt(review) {
   const domain = DOMAINS[review.domain]
   return [
     'Tu fais la ' + domain.role + ' du commit `' + input.commit + '`' + (input.branch ? ' (branche `' + input.branch + '`)' : '') + '.',
     'Ta copie isolée, détachée sur ce commit, est `' + review.copy + '` : travaille uniquement dedans (`cd` au début de chaque commande), jamais dans le dépôt principal ni dans le worktree d\'un autre agent.',
-    'Lecture seule : aucun commit, aucune poussée, aucune écriture sur un service externe ; tes scripts, captures et rapports vont dans un dossier temporaire hors de la copie.',
+    'Lecture seule : aucun commit, aucune poussée, aucune écriture sur un service externe ; tes scripts, captures et rapports vont dans un dossier temporaire hors de la copie, jamais à côté du dépôt.',
     input.specFile ? 'Spec : `' + input.specFile + '` (critères, exigences de sécurité, menaces, tests négatifs).' : '',
     '`apv` désigne `' + APV + '` s\'il n\'est pas sur le PATH.',
     'Contrôles : sous /apv:run, la suite complète du projet passe sur ce commit à la dernière intégration, et la consigne commune cite ses reçus ; une revue ciblée après corrections n\'a que les reçus des contrôles de tâche et des tests ciblés, que la consigne dit comme tels (dis-le dans ton rapport). Ne relance ni la suite complète ni Playwright, sauf besoin précis de ton domaine, et alors seulement les fichiers utiles, sous `apv lock run e2e`. Sans reçus cités, le résultat des contrôles est « non vérifié » dans ton rapport, jamais « vert ».',
     typeof input.common === 'string' && input.common ? 'Consigne commune : ' + input.common : '',
+    review.domain === 'securite' ? dastLine() : '',
     typeof review.context === 'string' && review.context ? 'Consigne de ta revue : ' + review.context : '',
     '',
     'Rapport (sortie structurée) : domain = `' + review.domain + '` ; commit ; findings (gravité sur l\'échelle commune critique, eleve, moyen, faible, info, où « bloquant » vaut critique ou eleve selon l\'impact ;',
@@ -246,4 +258,4 @@ const escalation = {
   operator: consolidated.filter(f => f.confidence === 'suppose').map(f => f.id),
 }
 
-return { commit: input.commit, branch: input.branch || null, reports, incomplete, refused, findings: consolidated, raw: findings, escalation }
+return { commit: input.commit, branch: input.branch || null, dast: DAST, reports, incomplete, refused, findings: consolidated, raw: findings, escalation }

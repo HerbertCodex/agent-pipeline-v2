@@ -13,7 +13,7 @@ Installation locale : `npm run build`, puis `node dist/cli.js <commande>` ou `np
 - Fichiers lus dans le projet :
   - configuration : `.apv/config.json`, sinon `pipeline.v2.json` (projet V2, tant que `apv onboard` n'a pas créé `.apv/config.json`) ;
   - registre des décisions : `.apv/DECISIONS.json`, sinon `.agent-pipeline/DECISIONS.json` (projet V2).
-- De la configuration, seules les sections `name` (nom du projet, écrit par `apv init`), `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run` et `spec` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
+- De la configuration, seules les sections `name` (nom du projet, écrit par `apv init`), `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec` et `review` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
 
 ## `apv init`
 
@@ -112,8 +112,9 @@ Sortie : `0` gabarit écrit, `1` fichier existant ou hors d'un dépôt Git, `2` 
 
 ```
 apv run start <spec> [--base <branche>] [--repo <chemin>] [--json]
-apv run set <spec-id> <cible> <statut> [--branch b] [--worktree w] [--agent id] [--commit sha]
-            [--base sha] [--findings n] [--note texte] [--force-unintegrated] [--repo <chemin>] [--json]
+apv run set <spec-id> <cible> <statut> [--branch b] [--worktree w] [--agent id] [--commit ref]
+            [--base ref] [--findings n] [--confidence prouve|probable|suppose] [--note texte]
+            [--force-unintegrated] [--repo <chemin>] [--json]
 apv run next <spec-id> [--repo <chemin>] [--json]
 apv run status [<spec-id>] [--repo <chemin>] [--json]
 apv run pause <spec-id> --until <HH:MM | date ISO> [--note texte] [--repo <chemin>] [--json]
@@ -132,15 +133,15 @@ Forme de l'état :
 
 ```
 { schemaVersion: 2, specId, specFile, specSha256, base, baseSha, branch: "apv/<spec-id>", createdAt, updatedAt,
-  steps: { "data-model" | plan | integration | reviews | fixes | delivery: { status, commit, note, updatedAt } },
+  steps: { "data-model" | plan | integration | reviews | fixes | delivery: { status, commit, note, updatedAt, confidence? } },
   waves: [{ index, tasks: [id...] }],
-  tasks: { <id>: { title, dependsOn, wave, foundation, status, branch, worktree, agentId, base, commit, note, updatedAt } },
+  tasks: { <id>: { title, dependsOn, wave, foundation, status, branch, worktree, agentId, base, commit, note, updatedAt, confidence? } },
   reviews: { securite | fidelite | donnees | rgpd: { status, findings, commit, note, updatedAt } },
-  events: [{ at, target, from, to, note?, commit?, agentId?, unintegrated?, until? }],
+  events: [{ at, target, from, to, note?, commit?, agentId?, unintegrated?, until?, confidence? }],
   pause?: { since, until, note } }
 ```
 
-Les dates de l'état sont des dates ISO en UTC (`Date#toISOString`) ; l'outil les affiche en heure locale (fuseau du système, ou `TZ`), avec leur décalage : `2026-09-24 20:22 UTC+2`. `pause` n'existe que pendant une pause (`apv run pause`) : un état jamais mis en pause garde la forme antérieure.
+Les dates de l'état sont des dates ISO en UTC (`Date#toISOString`) ; l'outil les affiche en heure locale (fuseau du système, ou `TZ`), avec leur décalage : `2026-09-24 20:22 UTC+2`. `pause` n'existe que pendant une pause (`apv run pause`) : un état jamais mis en pause garde la forme antérieure. De même, `confidence` n'existe que sur une tâche ou l'étape `fixes` dont le niveau a été noté (`--confidence`) : un état écrit avant ce champ reste lisible et garde sa forme ; un état qui en porte un n'est pas lisible par une version antérieure de l'outil (propriété inconnue).
 
 Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 
@@ -148,7 +149,8 @@ Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 - passages permis : `pending` vers `running`, `done`, `skipped`, `failed` ; `running` vers `done`, `failed`, `pending`, `skipped` ; `failed` vers `pending`, `running`, `skipped` ; `skipped` vers `pending`, `running` ; `done` vers `running`, `pending`. Garder le même statut met seulement à jour les champs (nouveau commit wip, autre agent) ;
 - rouvrir un travail `done`, ou remplacer le commit enregistré d'une cible `done`, exige `--note` (la raison est journalisée) ;
 - une tâche ne passe `running` que si toutes ses dépendances sont `done` **et intégrées** : le commit enregistré de chacune est un ancêtre de la tête de la branche de la spec (`branch` de l'état, `git merge-base --is-ancestor`), ou de la base de l'exécution (`baseSha`) tant que cette branche n'existe pas. Sinon refus en `1` qui nomme les dépendances et leur commit. `--force-unintegrated` passe outre pour les seules dépendances faites mais pas intégrées, avec `--note` obligatoire (sinon `2`) ; l'événement garde la note et la liste des dépendances (`unintegrated`). Une tâche déjà `running` qui met à jour ses champs n'est pas revérifiée ;
-- une tâche `done` exige `--commit` ; le commit (sha ou nom de branche) doit exister dans le dépôt et il est enregistré en entier ;
+- une tâche `done` exige `--commit` ; `--commit` et `--base` acceptent un sha complet ou abrégé, ou un nom de branche, que l'outil résout par git (`git rev-parse --verify <ref>^{commit}`) : le sha complet est enregistré et affiché, suivi de « résolu depuis « <ref> » » quand il diffère de ce qui a été donné (JSON : `resolved.commit` et `resolved.base`, `{ input, sha }`). Un commit introuvable est refusé en `1` (`RUN_COMMIT`), et le message aide à trouver le bon : le commit que désignent ses 7 premiers caractères quand ils en désignent un (un sha recopié d'un rapport peut être inventé au-delà : projet pilote, 24 septembre 2026), et la tête de la branche de la tâche (`--branch`, sinon celle de l'état) ;
+- `--confidence prouve|probable|suppose` note le niveau de confiance du travail terminé : seulement avec `done`, pour une tâche ou l'étape `fixes` (sinon `2`). Il est gardé dans l'état (`confidence`) et dans l'événement, affiché par `status`, et retiré quand le travail quitte `done` ; `done` sans `--confidence` garde le niveau déjà noté ;
 - `--branch`, `--worktree` (chemin rendu absolu), `--agent` et `--base` (commit de départ de la tâche, pour la reprise) ne valent que pour une tâche ; `--findings` (nombre de constats) que pour une revue ; `--commit` vaut pour toute cible (facultatif sur une étape : commit du plan, tête intégrée ; sur une revue : commit revu), et reste vérifié dans le dépôt.
 
 **`next`** dit ce qu'il faut faire maintenant, de façon déterministe : c'est la base de la reprise après une coupure (`/apv:resume`).
@@ -160,8 +162,9 @@ Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 - `specChanged` : la spec a changé depuis `start` (empreinte différente) ; l'état garde le plan du lancement, l'action le signale.
 - `suite` : rythme de la suite complète lu dans `run.fullSuite` de `.apv/config.json` (`mode`, `final` par défaut ou `each-integration`, [CONFIGURATION.md](CONFIGURATION.md#exécution--run)), niveau de vérification attendu à l'étape courante (`level` : `task`, contrôles de tâche et tests ciblés vérifiés par `apv gates verify --stage task --base <base ciblée>` ; `full`, suite complète et `apv gates verify` ; `null` à une étape sans intégration) et base ciblée (`targetBase`, `targetBaseWhere`) : le dernier commit prouvé par la suite complète, soit la base de l'exécution tant qu'aucune n'est passée, puis la tête de la dernière intégration (`integration done --commit`) avec `final`, la tête d'intégration avec `each-integration`. Les actions disent la commande attendue : intégration intermédiaire au niveau tâche, dernière intégration en suite complète avant les revues, corrections au niveau tâche avec le test de chaque correction, livraison sans double suite. Une configuration illisible laisse `final`, signalé en première action. `apv gates run --stage full` applique ce même niveau : refus au niveau `task`, sauf `--reason` (section `apv gates run`).
 - `pause` : la pause de quota en cours (`since`, `until`, `note`), ou `null` ; signalée en première action tant qu'elle dure.
+- `unproven` : le travail fait noté en dessous de `prouve` (`{ target, confidence }`, les tâches puis `fixes`) ; une action par entrée : `probable`, une vérification d'abord ; `suppose`, prouver ou remonter à l'opérateur avant toute fusion, action sur la production ou annonce « corrigé ». Le travail fait sans niveau noté n'y figure pas.
 
-**`status`** résume toutes les exécutions (étape, tâches faites sur le total, en cours, en échec, pause de quota en cours, date) ou détaille une exécution (dates, pause en cours, étapes, vagues avec l'état de chaque tâche, revues, les cinq derniers événements avec leur note), heures en heure locale.
+**`status`** résume toutes les exécutions (étape, tâches faites sur le total, en cours, en échec, pause de quota en cours, date) ou détaille une exécution (dates, pause en cours, étapes, vagues avec l'état de chaque tâche et son niveau de confiance noté, revues, les cinq derniers événements avec leur note), heures en heure locale.
 
 **`pause`** note que l'exécution attend la remise à zéro du quota, jusqu'à `--until` : `HH:MM` en heure locale (sa prochaine occurrence, demain si elle est passée) ou une date ISO avec fuseau (`2026-09-24T18:30:00Z`, `2026-09-24T20:30+02:00`) ; `--note` dit pourquoi (fenêtre, pourcentage). Elle écrit `pause` dans l'état et un événement `pause` (`running` vers `pending`, avec `until`) ; une nouvelle pause la prolonge en gardant son début et sa note. Refus en `1` sur une exécution terminée ou une fin déjà passée. **`resume`** la termine (événement `pause`, `pending` vers `running`) ; refus en `1` sans pause. Toute transition `apv run set` termine aussi une pause restée ouverte, journalisée avant elle. Un état illisible est signalé, jamais réécrit ; un état dont l'identifiant de spec diffère du nom de son fichier est refusé. `start`, `set`, `next` et `status <id>` lisent l'état visé comme le résumé : fichier ordinaire seulement (une FIFO ou un dossier nommé comme l'état est refusé sans bloquer), 4 Mio au plus ; l'erreur nomme le fichier par son chemin dans le dépôt et ne cite rien de son contenu. Le résumé est celui de `apv status` : 50 fichiers au plus, les plus récents, et 16 Mio au total, les autres comptés (`unread` en JSON).
 
@@ -283,6 +286,35 @@ apv lock acquire|release|status <ressource>
 ```
 
 Verrous à bail sur les ressources partagées (base de test, ports, navigateur) : propriétaire vérifié, expiration, renouvellement pendant `run`, file d'attente visible (spécification, section 10). `run` est la forme à préférer : une commande par bail, libéré à la sortie quoi qu'il arrive. Détails, options et codes de sortie : [LOCKS.md](LOCKS.md).
+
+## `apv wait`
+
+```
+apv wait --pid <pid> [--timeout <secondes>] [--json]
+apv wait --file <chemin> [--contains <texte>] [--timeout <secondes>] [--json]
+```
+
+Attente bornée, pour une session qui n'a pas le droit d'attendre par le shell : en session non interactive, `sleep`, `tail --pid` et les boucles sur `kill -0` sont refusés par les permissions (projet pilote, 24 septembre 2026 : la session a bricolé des scripts node pour attendre la suite complète). Une seule condition par appel :
+- `--pid` : la fin du processus. Un processus absent, ou zombie (il n'attend plus que son parent), compte comme terminé ; un processus d'un autre utilisateur (`EPERM`) comme vivant. Le code de sortie du processus n'est pas connu de l'outil : on lit son journal ou ses reçus. `0`, `1` et le pid de `apv wait` lui-même sont refusés (`2`).
+- `--file` : l'existence du fichier ; avec `--contains <texte>` (non vide), la présence du texte dans le fichier. Chaque relevé ne relit que les octets ajoutés depuis le précédent (plus la longueur du texte, pour un texte à cheval sur deux lectures) ; un fichier raccourci est relu depuis le début ; seul un fichier ordinaire est ouvert (une FIFO ne bloque pas l'attente). Chemin relatif au dossier courant.
+
+`--timeout` : de 1 à 580 secondes (défaut 580), sous la limite de dix minutes d'un appel Bash de Claude Code ; au-delà, refus en `2`, et on relance simplement `apv wait`. Relevé toutes les secondes (`APV_WAIT_POLL_MS` pour les tests). Sortie texte : « Terminé : … » ou « Délai dépassé : … Relancer apv wait pour attendre encore. » ; JSON : `condition`, `pid` ou `file` et `contains`, `met`, `immediate` (condition remplie au premier relevé), `waitedSeconds`, `timeoutSeconds`.
+
+Sortie : `0` condition remplie, `1` délai dépassé, `2` appel incorrect (aucune condition ou les deux, `--contains` sans `--file`, délai hors bornes).
+
+## `apv dast run`
+
+```
+apv dast run [--repo <copie>] [--out <dossier>] [--commit <ref>] [--wait <durée>] [--json]
+```
+
+Scan dynamique de sécurité (ZAP ou l'outil du projet) déclaré dans `review.dast` de `.apv/config.json` ([CONFIGURATION.md](CONFIGURATION.md#revues--review)), lancé par le chef de projet avant les revues : les agents de revue n'ont pas le droit de lancer Docker, et sur le projet pilote le scan prévu n'a jamais tourné (quatre livraisons de suite, septembre 2026). La revue sécurité lit ensuite ses rapports.
+- `--repo` : la copie détachée du commit revu (défaut : le dossier courant) ; la configuration y est lue. `--commit` vérifie qu'elle est bien sur ce commit (sha, abrégé ou branche ; sinon `1`, `DAST_COMMIT`).
+- `--out` : le dossier des rapports, hors de la copie (refus en `1`, `DAST_OUT`, s'il est dedans : la copie est retirée après les revues) et neuf (refus s'il contient déjà un `summary.json`). Défaut : `<dossier temporaire>/apv-dast/<nom de la copie>-<sha court>-<horodatage>`, jamais à côté du dépôt. Sous `/apv:run`, le dossier de session du chef de projet.
+- La commande (`review.dast.command`, argv sans shell) tourne dans la copie, sous le verrou `review.dast.resource` (défaut `dast`, attente `--wait`, défaut 30 min, comme `apv lock run`), bornée par `review.dast.timeoutMs` (défaut 1 h ; puis SIGTERM, SIGKILL 10 s plus tard). Jokers, arguments entiers seulement : `{{reportDir}}`, `{{commit}}`, `{{repo}}`. Variables : celles de `DEFAULT_PASS_ENV` et de `review.dast.passEnv` seulement, plus `APV_DAST_REPORT_DIR`, `APV_DAST_COMMIT`, `APV_DAST_REPO` et `APV_LOCK_HELD`. La commande prépare ce qu'il lui faut (dépendances, build, serveur), écrit ses rapports dans le dossier et arrête ce qu'elle a lancé.
+- Sortie de la commande dans `<dossier>/dast.log` ; en dernier, écrit de façon atomique, `<dossier>/summary.json` : `tool`, `version`, `commit`, `repo`, `clean` (aucun fichier suivi modifié), `resource`, `command` (jokers remplacés), `description`, `startedAt`, `finishedAt`, `durationMs`, `status` (`passed`, `failed`, `timed_out`, `lock_timeout`), `exitCode`, `timeoutMs`, `log`, `files` (fichiers du dossier, 200 au plus). Un scan lancé en arrière-plan s'attend par `apv wait --file <dossier>/summary.json`.
+
+Sortie : `0` scan terminé à `0`, `1` scan en échec, arrêté au délai, verrou non obtenu, rien de déclaré (`DAST_NONE`) ou refus, `2` appel incorrect.
 
 ## `apv db check`
 

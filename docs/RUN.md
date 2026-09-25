@@ -26,23 +26,23 @@ Une spec fournie et validée par l'opérateur s'exécute telle quelle.
 | tâches de fondation | un seul `apv:implementer` pour les fondations prêtes d'une vague | les fondations (tâches dont au moins deux autres dépendent : modules partagés), marquées par l'outil | `task:<tâche> done --commit` |
 | autres tâches | un `apv:implementer` par tâche prête, en parallèle | chacun dans son worktree, sur sa branche `apv/<id>-<tâche>`, avec les contrôles de tâche (`apv gates run --stage task`) et ses seuls fichiers e2e | `task:<tâche> done --commit` |
 | `integration` | `apv:integrateur` (ou avance rapide pour une tâche seule) | dès que des tâches sont finies et vérifiées : branche `apv/<id>-integration-<n>`, doublons unifiés, contrôles de tâche ; le chef de projet vérifie la tête intégrée au commit exact : contrôles de tâche et tests ciblés à une intégration intermédiaire, suite complète à la dernière (réglage `run.fullSuite`, section 4) ; la branche de la spec avance en avance rapide seulement sur une vérification à `0` | `done` une fois toutes les tâches intégrées |
-| `reviews` | `/apv:review` | sécurité, fidélité, données, RGPD en parallèle, en lecture seule, sur copies détachées ; constats consolidés | `review:<domaine> done` puis `reviews done` |
-| `fixes` | `apv:implementer` par domaine | corrections décidées dans `.apv/state/corrections-<id>.md`, intégrées au niveau tâche avec le test qui prouve chaque correction | `done`, ou `skipped` sans constat à corriger |
+| `reviews` | chef de projet, puis `/apv:review` | scan dynamique déclaré (`apv dast run`) lancé par le chef de projet ; puis sécurité, fidélité, données, RGPD en parallèle, en lecture seule, sur copies détachées dans le dossier de session ; constats consolidés | `review:<domaine> done` puis `reviews done` |
+| `fixes` | `apv:implementer` par domaine | corrections décidées dans `.apv/state/corrections-<id>.md`, intégrées au niveau tâche avec le test qui prouve chaque correction | `done --confidence <niveau>`, ou `skipped` sans constat à corriger |
 | `delivery` | chef de projet | suite complète prouvée sur la tête exacte (`apv gates verify` à `0`, relancée seulement si elle n'y est pas déjà), push, PR brouillon, aperçu | `done --note "PR #<n>"` |
 
 Une tâche part **dès qu'elle est prête**, pas vague par vague : ses dépendances sont `done` et le commit enregistré de chacune est intégré dans `apv/<id>` (ancêtre de sa tête, `git merge-base --is-ancestor` ; la base de l'exécution tient lieu de tête tant que la branche n'existe pas). `apv run next` donne les tâches prêtes et, à part, celles « en attente d'intégration » ; `apv run set <id> task:<tâche> running` refuse une tâche dont une dépendance n'est pas intégrée, sauf `--force-unintegrated` avec une `--note` obligatoire, journalisée. Une tâche finie et vérifiée s'intègre donc sans attendre la fin de sa vague : c'est ce qui libère les tâches qui en dépendent, et elles partent de cette tête.
 
 ## 3. L'état d'exécution
 
-`apv run start` crée `.apv/state/run-<id>.json`, écrit de façon atomique sous le verrou `run:<id>` de `apv lock`. Il contient : la spec (identifiant, fichier, empreinte sha256), la base, la branche `apv/<id>`, les dates, les étapes (`data-model`, `plan`, `integration`, `reviews`, `fixes`, `delivery`), les vagues (couches des dépendances), les tâches (statut, vague, marqueur de fondation, branche, worktree, agent, commit, note), les revues par domaine et un journal d'événements horodatés.
+`apv run start` crée `.apv/state/run-<id>.json`, écrit de façon atomique sous le verrou `run:<id>` de `apv lock`. Il contient : la spec (identifiant, fichier, empreinte sha256), la base, la branche `apv/<id>`, les dates, les étapes (`data-model`, `plan`, `integration`, `reviews`, `fixes`, `delivery`), les vagues (couches des dépendances), les tâches (statut, vague, marqueur de fondation, branche, worktree, agent, commit, note, niveau de confiance quand il est noté), les revues par domaine et un journal d'événements horodatés.
 
 Statuts : `pending`, `running`, `done`, `failed`, `skipped`.
 
 | Commande | Rôle |
 |---|---|
 | `apv run start <spec> [--base <branche>]` | valide la spec (même logique que `apv spec validate`), calcule les vagues, crée l'état ; refuse si l'état existe déjà |
-| `apv run set <id> <cible> <statut> [--branch] [--worktree] [--agent] [--commit] [--base] [--findings] [--note]` | une transition : cible = une étape, `task:<tâche>` ou `review:<domaine>` (`securite`, `fidelite`, `donnees`, `rgpd`). Une tâche ne passe `running` que si ses dépendances sont `done` ; `done` exige `--commit` pour une tâche |
-| `apv run next <id>` | ce qu'il faut faire maintenant, de façon déterministe : étape courante, tâches prêtes (dépendances faites et intégrées), tâches en attente d'intégration, tâches `running` à reprendre (branche, worktree, agent, dernier commit), tâches « à relancer » (worktree disparu ou aucun commit après la base), revues à lancer |
+| `apv run set <id> <cible> <statut> [--branch] [--worktree] [--agent] [--commit] [--base] [--findings] [--confidence] [--note]` | une transition : cible = une étape, `task:<tâche>` ou `review:<domaine>` (`securite`, `fidelite`, `donnees`, `rgpd`). Une tâche ne passe `running` que si ses dépendances sont `done` ; `done` exige `--commit` pour une tâche. `--commit` et `--base` acceptent un sha complet ou abrégé, ou une branche : l'outil les résout par git et affiche le sha complet. `--confidence prouve\|probable\|suppose` avec `done`, pour une tâche ou `fixes` |
+| `apv run next <id>` | ce qu'il faut faire maintenant, de façon déterministe : étape courante, tâches prêtes (dépendances faites et intégrées), tâches en attente d'intégration, tâches `running` à reprendre (branche, worktree, agent, dernier commit), tâches « à relancer » (worktree disparu ou aucun commit après la base), revues à lancer, travail fait noté en dessous de `prouve` (`unproven`) |
 | `apv run status [<id>]` | résumé de toutes les exécutions ou d'une seule ; `apv status` affiche aussi une ligne par exécution en cours |
 
 Toutes acceptent `--json`. Codes de sortie : `0` succès, `1` refus (transition interdite, état existant, spec invalide), `2` appel incorrect.
@@ -77,6 +77,17 @@ done
 
 Sans l'outil Monitor : une boucle bornée, lancée par l'outil Bash en arrière-plan, qui sort au premier changement de l'état, à la fin du processus ou après 25 minutes au plus (sa fin relance le chef de projet), puis relancée. À chaque événement : `apv run next <id>`, et la fin du journal de session si le processus s'est arrêté avant la livraison (reprise : section 6).
 
+### Attendre sans dormir : `apv wait`
+
+Une session non interactive n'a pas le droit d'attendre par le shell : `sleep`, `tail --pid`, une boucle sur `kill -0` et un préfixe de variable devant une commande sont refusés par les permissions (projet pilote, 24 septembre 2026 : la session a bricolé des scripts node pour attendre la suite complète). L'outil attend à sa place, borné pour tenir dans un appel Bash (dix minutes au plus) :
+
+```sh
+apv wait --pid <pid> [--timeout <s>]                       # fin d'un processus (absent, ou zombie)
+apv wait --file <chemin> [--contains <texte>] [--timeout <s>]  # un fichier, ou un texte dans ce fichier
+```
+
+580 s au plus par appel (`--timeout` pour moins) ; code `0` « Terminé », code `1` « Délai dépassé » : on relance l'appel. `--contains` ne relit que les octets ajoutés depuis le relevé précédent, un journal qui grossit ne coûte rien. `apv wait` ne connaît pas le code de sortie du processus attendu : on lit son journal ou ses reçus. Exemples : la suite complète lancée en arrière-plan (`apv wait --pid <pid>`, puis `apv gates verify`), le scan dynamique (`apv wait --file <dossier>/summary.json`), une exécution détachée (`apv wait --pid <pid de la première ligne du journal>`).
+
 ## 4. Vagues parallèles
 
 ### Workflows du plugin
@@ -96,7 +107,8 @@ Quand l'outil Workflow n'est pas disponible (désactivé par `disableWorkflows`,
 1. Branche : `git log --oneline <base>..<branche>`, fichiers touchés.
 2. `apv scope check --spec <spec> --task <tâche> --base <commit de base> --repo <worktree>`.
 3. Niveau de confiance du rapport (`confidence` et `evidence`) : `prouve`, la preuve porte-t-elle sur la tâche ; `probable` (`escalation.verify`), une vérification d'abord ; `suppose` (`escalation.operator`), pas de `done`. Un rapport refusé (`refused`) n'est jamais compté. Voir [CONFIANCE.md](CONFIANCE.md).
-4. `apv run set <id> task:<tâche> done --commit <sha> --worktree <chemin>`, ou `failed --note "<cause>"`.
+4. Commit relu, jamais recopié du rapport : `git rev-parse <branche>` (projet pilote, 24 septembre 2026 : un rapport a donné un sha complet dont seuls les 7 premiers caractères étaient justes). Le rapport colle les sorties brutes de `git rev-parse HEAD` et `git log --oneline -1` (`headRevParse`, `headLog` du workflow `apv:vague`, qui liste dans `commitChecks` les rapports où elles ne s'accordent pas avec `commit`).
+5. `apv run set <id> task:<tâche> done --commit <sha relu ou branche> --confidence <niveau> --worktree <chemin>`, ou `failed --note "<cause>"`. `--commit <branche>` est résolu par l'outil, qui affiche le sha complet enregistré ; un sha introuvable est refusé avec le commit que désignent ses 7 premiers caractères et la tête de la branche de la tâche. `--confidence` garde dans l'état le niveau retenu après vérification (affiché par `apv run status`, retiré si la tâche est rouverte) ; `apv run next` liste les tâches faites en dessous de `prouve`.
 
 ### Contrôles : par tâche et suite complète
 
@@ -120,6 +132,18 @@ Configuration : dans `.apv/config.json`, un contrôle long déclare `"stage": "f
 **Tests ciblés.** Un contrôle `full` peut déclarer une commande `affected` (Playwright : `--only-changed={{baseSha}}`), que `--stage task` exécute à sa place, signalée « ciblé » ; un reçu ciblé ne prouve jamais la suite complète (`apv gates verify`, niveau complet) ; il prouve le contrôle au niveau tâche (`apv gates verify --stage task --base <base ciblée>`) quand la base de son exécution couvre tous les changements depuis la base ciblée ([CONFIGURATION.md](CONFIGURATION.md#graphe-de-contrôles)). **Test instable** : on répète le seul test en cause (`<fichier>:<ligne>` ou `-g "<titre>"`), `--repeat-each` borné à 20 au plus, jamais un fichier entier sous le verrou `e2e` (sur « Toujours rien », un agent a répété 20 fois un fichier de 5 minutes et bloqué tous les autres). Ces instabilités venaient surtout de clics pendant des animations : un projet à interface fait tourner ses tests navigateur en mouvement réduit par défaut (Playwright : `use: { reducedMotion: 'reduce' }`), les tests d'animation gardant leur réglage.
 
 **Rien ne passe pour autant.** Une vague n'est acceptée (avance rapide de `apv/<id>`) que sur une vérification à `0` **au commit exact**, au niveau que l'étape demande, et une PR n'est ouverte que sur une suite complète verte au commit exact : `apv gates verify` sort en `0` seulement si le reçu le plus récent de chaque contrôle exigé a réussi sur ce commit, arbre propre, avec la configuration actuelle ; un contrôle réservé n'est jamais compté comme réussi, et un échec plus récent l'emporte sur une réussite plus ancienne. Un contrôle rouge ouvre une passe de corrections, jamais ignorée ; un test instable est un constat. Restent entiers les contrôles de tâche complets de chaque implementer (typage, lint, unitaires, build, audit de sécurité), les tests négatifs et toutes les revues, dont la revue sécurité aux attaques réelles. Seul le moment de la détection change : un test navigateur cassé par une tâche sans toucher à ses fichiers e2e ni à ce qu'ils importent est détecté à la dernière intégration (ou à l'intégration de la vague avec `"each-integration"`) au lieu de la fin de la tâche, et corrigé avant les revues et avant toute PR ; les tests ciblés sur l'ensemble des changements depuis la dernière suite complète réduisent ce cas.
+
+### Revues : scan dynamique et copies détachées
+
+**Copies hors du dépôt.** Les copies détachées des revues, du scan et de la livraison (`git worktree add --detach <copie> <commit>`) vont dans le dossier de session du chef de projet (le dossier de travail temporaire de la session Claude Code) ou sous un chemin que l'outil donne, jamais à côté du dépôt : sur le projet pilote, une copie de livraison est apparue dans un dossier frère du dépôt, où les permissions de la session refusent au chef de projet ses commandes. Chacune est retirée par `git worktree remove` à la fin. Le workflow `apv:revues` refuse une copie donnée par un chemin relatif.
+
+**Scan dynamique par le chef de projet.** Les agents de revue n'ont pas le droit de lancer Docker : le scan ZAP prévu par la revue sécurité n'a jamais tourné sur quatre livraisons de suite du projet pilote (septembre 2026). Un projet déclare son scan dans `review.dast` de `.apv/config.json` ([CONFIGURATION.md](CONFIGURATION.md#revues--review)) ; le chef de projet le lance avant les revues, dans une copie détachée du commit revu :
+
+```sh
+apv dast run --repo <copie> --out <dossier de session>/dast-<sha court> --commit <commit revu>
+```
+
+L'outil prend le verrou `review.dast.resource` (par défaut `dast`), lance la commande du projet dans la copie (bornée par `review.dast.timeoutMs`), écrit sa sortie dans `dast.log` et, en dernier, `summary.json` (statut, commit, fichiers). Un scan plus long qu'un appel Bash se lance en arrière-plan et s'attend par `apv wait --file <dossier>/summary.json`. Le dossier va à la revue sécurité (paramètre `dast` du workflow `apv:revues`), qui lit les rapports sans relancer le scan ; sans scan déclaré, ou avec un scan en échec, la raison lui est donnée (`dastMissing`) et le scan dynamique est « non vérifié » dans son rapport et dans la PR.
 
 ## 5. Quota
 

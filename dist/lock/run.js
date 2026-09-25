@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import { constants } from 'node:os';
 import { localTime } from '../domain/time.js';
 export const LOCK_WAIT_TIMEOUT_EXIT = 75;
+/** Exit code of a command stopped by `timeoutMs` (the convention of GNU timeout). */
+export const TIMEOUT_EXIT = 124;
 const HANDLED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 export function signalExitCode(signal) {
     return 128 + (constants.signals[signal] ?? 0);
@@ -86,23 +88,37 @@ export async function runLocked(store, resource, options) {
                 }
             }, (error) => options.stderr(`Renouvellement du verrou « ${resource} » en échec : ${String(error)}\n`));
         }, heartbeatMs);
+        options.onAcquired?.();
         const held = (options.env.APV_LOCK_HELD ?? '').split(',').map((s) => s.trim()).filter(Boolean);
         const env = { ...options.env, APV_LOCK_HELD: [...held, resource].join(',') };
         const [file, ...args] = options.command;
         if (!file)
             throw new Error('commande vide');
+        let timedOut = false;
+        let timeout = null;
         const exit = await new Promise((resolve) => {
-            const spawned = spawn(file, args, { cwd: options.cwd, env, stdio: 'inherit' });
+            const spawned = spawn(file, args, { cwd: options.cwd, env, stdio: options.stdio ?? 'inherit' });
             child = spawned;
             spawned.once('error', (error) => resolve({ status: null, signal: null, error }));
             spawned.once('exit', (status, signal) => resolve({ status, signal }));
+            if (options.timeoutMs !== undefined) {
+                timeout = setTimeout(() => {
+                    timedOut = true;
+                    spawned.kill('SIGTERM');
+                    killTimer ??= setTimeout(() => { spawned.kill('SIGKILL'); }, options.killGraceMs ?? 10_000);
+                }, options.timeoutMs);
+            }
         });
+        if (timeout)
+            clearTimeout(timeout);
         if (exit.error) {
             options.stderr(`Impossible de lancer « ${file} » : ${exit.error.message}\n`);
             return 127;
         }
         if (received)
             return signalExitCode(received);
+        if (timedOut)
+            return TIMEOUT_EXIT;
         if (exit.status !== null)
             return exit.status;
         return signalExitCode(exit.signal ?? 'SIGTERM');
