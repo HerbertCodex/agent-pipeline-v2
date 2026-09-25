@@ -43,7 +43,7 @@ const input = args || {}
 if (typeof input.commit !== 'string' || !input.commit || !Array.isArray(input.reviews) || !input.reviews.length) {
   throw new Error(
     'Workflow apv:revues lancé sans ses paramètres. Il est lancé par /apv:review avec ' +
-    '{ commit, branch, specFile, common, dast, dastMissing, reviews: [{ domain, copy, context }] }.',
+    '{ commit, branch, specFile, common, dast, dastMissing, skipped: [{ domain, reason }], reviews: [{ domain, copy, context }] }.',
   )
 }
 const seen = new Set()
@@ -55,6 +55,19 @@ for (const review of input.reviews) {
   if (seen.has(review.domain)) throw new Error('Domaine en double : ' + review.domain)
   seen.add(review.domain)
 }
+
+// Domains the lead skipped on the plan of `apv review plan` (securite never): kept with their reason in the result.
+const SKIPPED = Array.isArray(input.skipped) ? input.skipped : []
+const DEFAULTS = ['securite', 'fidelite', 'donnees', 'rgpd']
+for (const skip of SKIPPED) {
+  if (!skip || !DEFAULTS.includes(skip.domain)) throw new Error('Domaine sauté inconnu : ' + (skip && skip.domain) + ' (fidelite, donnees, rgpd).')
+  if (skip.domain === 'securite') throw new Error('La revue securite n\'est jamais sautée : retire-la de skipped.')
+  if (typeof skip.reason !== 'string' || !skip.reason.trim()) throw new Error('Le domaine sauté ' + skip.domain + ' a besoin de sa raison (reason, celle de apv review plan).')
+  if (seen.has(skip.domain)) throw new Error('Domaine à la fois revu et sauté : ' + skip.domain)
+  seen.add(skip.domain)
+}
+// A plan that skips domains never skips the security review: it runs in the same launch.
+if (SKIPPED.length && !input.reviews.some(r => r.domain === 'securite')) throw new Error('Des domaines sont sautés mais la revue securite manque : elle est toujours lancée.')
 
 const APV = typeof input.apv === 'string' && input.apv ? input.apv : 'node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"'
 // The dynamic scan (`apv dast run`), run by the lead before the reviews: its report folder, or the reason there is none.
@@ -164,6 +177,7 @@ function reviewPrompt(review) {
 
 phase('Revues')
 log('Revues du commit ' + input.commit + ' : ' + input.reviews.map(r => r.domain).join(', '))
+if (SKIPPED.length) log('Domaines sautés (apv review plan) : ' + SKIPPED.map(s => s.domain + ' (' + s.reason + ')').join(' ; '))
 
 const results = await parallel(input.reviews.map(review => () =>
   agent(reviewPrompt(review), {
@@ -258,4 +272,5 @@ const escalation = {
   operator: consolidated.filter(f => f.confidence === 'suppose').map(f => f.id),
 }
 
-return { commit: input.commit, branch: input.branch || null, dast: DAST, reports, incomplete, refused, findings: consolidated, raw: findings, escalation }
+const skipped = SKIPPED.map(s => ({ domain: s.domain, reason: s.reason }))
+return { commit: input.commit, branch: input.branch || null, dast: DAST, skipped, reports, incomplete, refused, findings: consolidated, raw: findings, escalation }

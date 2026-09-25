@@ -262,6 +262,12 @@ export function applySet(state, target, options) {
     let unintegrated = null;
     if (from !== to && !TRANSITIONS[from].includes(to))
         throw new TransitionError(`${name} : passage de « ${from} » à « ${to} » refusé (possibles : ${TRANSITIONS[from].join(', ')})`);
+    // The security review is never skipped (apv review plan keeps it whatever the diff): no state records it skipped.
+    if (target.kind === 'review' && target.domain === 'securite' && to === 'skipped')
+        throw new TransitionError(`${name} : la revue sécurité n'est jamais sautée (apv review plan la garde toujours)`);
+    // A skipped review says why: the reason of apv review plan, journaled.
+    if (target.kind === 'review' && to === 'skipped' && from !== 'skipped' && !options.note?.trim())
+        throw new TransitionError(`${name} : sauter une revue exige --note (la raison de apv review plan, journalisée)`);
     if (from === 'done' && to !== 'done' && !options.note?.trim())
         throw new TransitionError(`${name} : rouvrir un travail terminé exige --note (la raison est journalisée)`);
     // The commit of finished work is what integration and reviews rely on: changing it is a decision to journal.

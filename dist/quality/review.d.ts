@@ -4,7 +4,7 @@ import type { SpecRecord } from '../lifecycle/contracts.js';
 import { type PolicyConfig, type ValidationRequirement } from '../policy/policy.js';
 export declare const qualityAxes: readonly ["architecture", "simplicity", "reuse", "tests", "operations", "ui"];
 export declare const qualityCheckSchema: import("../domain/schema.js").Schema<{
-    readonly axis: "architecture" | "simplicity" | "reuse" | "tests" | "operations" | "ui";
+    readonly axis: "architecture" | "ui" | "simplicity" | "reuse" | "tests" | "operations";
     readonly status: "unknown" | "pass" | "fail" | "not_applicable";
     readonly evidence: string;
     readonly paths: string[];
@@ -50,7 +50,7 @@ export declare function qualityContext(record: Pick<SpecRecord, 'content' | 'exe
     enabled: boolean;
     candidateSha: string | null;
     axes: {
-        axis: "architecture" | "simplicity" | "reuse" | "tests" | "operations" | "ui";
+        axis: "architecture" | "ui" | "simplicity" | "reuse" | "tests" | "operations";
         required: boolean;
         guidance: string;
     }[];

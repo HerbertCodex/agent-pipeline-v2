@@ -1,6 +1,6 @@
 # Configuration et politique
 
-> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run` et `spec` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
+> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec` et `review` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
 
 La configuration est un JSON déclaratif lu avant l'agent et conservé avec la tentative. La tâche ne peut pas fournir une commande à la place d'un contrôle, changer un verdict ni s'accorder une exemption. Les champs inconnus sont refusés.
 
@@ -330,7 +330,7 @@ Repère (projet pilote, nuit du 24 au 25 septembre 2026) : une spec de 12 tâche
 
 ## Revues : `review`
 
-Section APV3, facultative, validée par le chargeur commun (propriété inconnue, joker inconnu ou partiel refusés). Elle déclare le scan dynamique de sécurité du projet (ZAP ou un autre outil), que le chef de projet lance avant les revues par `apv dast run` ([CLI.md](CLI.md#apv-dast-run)) : les agents de revue n'ont pas le droit de lancer Docker, la revue sécurité lit les rapports. Absente : aucun scan déclaré, et la revue sécurité note le scan dynamique « non vérifié : non déclaré par le projet ».
+Section APV3, facultative, validée par le chargeur commun (propriété inconnue, joker inconnu ou partiel, motif de chemin hors syntaxe portable refusés). Elle déclare ce que `apv review plan` lit pour proposer les domaines de revue d'après le diff (`paths`, `terms`, `always`, plus bas), et le scan dynamique de sécurité du projet (ZAP ou un autre outil), que le chef de projet lance avant les revues par `apv dast run` ([CLI.md](CLI.md#apv-dast-run)) : les agents de revue n'ont pas le droit de lancer Docker, la revue sécurité lit les rapports. Absente : aucun scan déclaré, et la revue sécurité note le scan dynamique « non vérifié : non déclaré par le projet ».
 
 ```json
 { "review": { "dast": {
@@ -349,3 +349,29 @@ Section APV3, facultative, validée par le chargeur commun (propriété inconnue
 - `description` (facultatif, 500 caractères au plus) : ce que fait le scan, recopié dans `summary.json`.
 
 Repère (projet pilote, septembre 2026) : la revue sécurité prévoyait un scan ZAP par Docker ; les permissions des agents de revue refusaient `docker run` et `docker pull`, et le scan n'a tourné sur aucune des livraisons suivies.
+
+### Domaines de revue selon le diff : `paths`, `terms`, `always`
+
+`apv review plan` ([CLI.md](CLI.md#apv-review-plan)) classe chaque fichier du diff et propose les domaines : `securite` toujours, sans exception ; `fidelite`, `donnees` et `rgpd` seulement quand un fichier de leur domaine change de contenu, ou qu'un fichier non classé change de contenu (prudence). Absentes, ces clés prennent des valeurs génériques (toute stack) ; une clé donnée **remplace** la liste par défaut de sa classe (une liste plus courte laisse plus de fichiers non classés, donc plus de revues gardées).
+
+```json
+{ "review": {
+  "paths": {
+    "ui": ["src/lib/components/**", "src/routes/**/*.svelte", "**/*.css"],
+    "data": ["src/lib/server/**/repository.ts", "src/lib/server/database/**"],
+    "migrations": ["supabase/migrations/**"],
+    "personal": ["src/lib/export/**", "src/routes/**/export/**"],
+    "legal": ["src/routes/(legal)/**"],
+    "neutral": ["tests/**", "**/*.test.ts", "docs/**"]
+  },
+  "terms": { "data": [".from('", ".rpc("], "personal": ["cookie", "localstorage", "email"] },
+  "always": ["fidelite"]
+} }
+```
+
+- `paths` : motifs par classe, syntaxe portable des chemins autorisés (`*`, `**`, `?` ; accolades et `!` refusés), 500 au plus par classe. `ui` (composants, styles, gabarits : garde `fidelite`), `data` (requêtes, dépôts, modèles : `donnees`), `migrations` (migrations et schémas : `donnees` et `rgpd`, renommage compris ; `db.migrations` s'y ajoute), `personal` (export, cookies, consentement, traceurs, registre `.apv/rgpd/` : `rgpd`), `legal` (mentions, confidentialité, CGU : `rgpd`), `neutral` (tests, documentation, outillage : aucun domaine, seulement pour un fichier qu'aucune autre classe ne décrit). Défauts : `src/review/config.ts` (`DEFAULT_REVIEW_PATHS`), par exemple `**/*.svelte`, `**/*.css`, `**/components/**` pour `ui`, `**/repositories/**`, `**/db/**`, `**/*schema*.*` pour `data`, `**/migrations/**`, `**/*.sql` pour `migrations`, `**/legal/**`, `**/*cgu*.*` pour `legal`, `**/*.test.*`, `docs/**`, `.apv/**` pour `neutral`. Une maquette validée touchée (dossier `design.dir`) garde `fidelite`.
+- `terms` : mots (sous-chaînes, sans casse, de 2 à 200 caractères) qui, dans les lignes changées d'un fichier `ui` ou `data`, gardent `donnees` (`data` : une requête écrite dans une page) ou `rgpd` (`personal` : un traceur, un cookie, un nouveau champ personnel). Défauts : `DEFAULT_REVIEW_TERMS`. Une fausse alerte garde une revue, jamais l'inverse.
+- `always` : domaines toujours gardés, quel que soit le diff (`fidelite`, `donnees`, `rgpd` ; `securite` l'est de toute façon). L'opérateur en force un autre au lancement par `apv review plan --force <domaine>`.
+- Aucune clé ne saute la revue sécurité : une clé inconnue (`skip`, `never`) est refusée par le schéma, et `apv run set <id> review:securite skipped` est refusé par l'état.
+
+Repère (projet pilote, 25 septembre 2026) : une spec de pur rangement (77 renommages, imports, aucun changement de comportement, aucune migration, aucun écran) est passée par les quatre revues, 40 à 70 minutes ; fidélité, données et RGPD n'avaient rien à relire. Sur la branche de ce rangement (tête `676cefd`, 203 fichiers : 42 renommages purs, 142 fichiers aux seuls chemins réécrits, 19 tests, documentation ou outillage), `apv review plan` avec les défauts retient `securite` seule.
