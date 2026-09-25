@@ -581,3 +581,69 @@ test('acceleration: the rhythm held by the tool, small specs with short chains, 
     assert.ok(!/[–—]/.test(read('docs/CONFIGURATION.md').split(section)[1].split('\n## ')[0]), `${section}: no em or en dash`);
   }
 });
+
+test('pilot journal: commits read by git, waits through apv wait, copies outside the repository, scan by the lead, confidence in the state', () => {
+  const tool = 'Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js';
+  const run = frontmatter('skills/run/SKILL.md');
+  const review = frontmatter('skills/review/SKILL.md');
+  // The new commands pass through the bundled tool, like every apv command of the skills.
+  for (const skill of [run, review]) {
+    for (const t of [`${tool} wait*)`, `${tool} dast run*)`, 'Bash(apv wait*)', 'Bash(apv dast run*)']) assert.ok(skill.fields['allowed-tools'].includes(t), t);
+    assert.ok(!/Bash\(docker (run|pull)/.test(skill.fields['allowed-tools']), 'Docker runs only inside apv dast run');
+  }
+  // 1. The commit of a report is a claim: raw git outputs, and the lead reads the branch head itself.
+  for (const file of ['agents/implementer.md', 'agents/integrateur.md']) {
+    const text = read(file);
+    assert.match(text, /\*\*Commit : copie, ne retape jamais\.\*\*/, file);
+    assert.match(text, /`git rev-parse HEAD` et `git log --oneline -1` et colle leurs sorties brutes telles quelles/, file);
+  }
+  assert.match(run.body, /Relis la tête de la branche, `git rev-parse <branche>`/);
+  assert.match(run.body, /sorties brutes de git rev-parse HEAD et de git log --oneline -1 collées/);
+  assert.match(frontmatter('skills/chef-de-projet/SKILL.md').body, /tu relis toujours la tête par `git rev-parse <branche>` avant `apv run set --commit`/);
+  assert.match(read('skills/chef-de-projet/references/integration-revues.md'), /sa tête relue par `git rev-parse <spec>-integration-<n>`/);
+  // 2. Waiting without sleeping.
+  assert.match(run.body, /\*\*Attendre sans dormir\*\*[^\n]*`apv wait --pid <pid>`[^\n]*`apv wait --file <chemin> \[--contains <texte>\]`[^\n]*580 s au plus/);
+  for (const file of ['agents/implementer.md', 'agents/integrateur.md', 'skills/chef-de-projet/SKILL.md']) assert.match(read(file), /apv wait --pid <pid>[^\n]*jamais `sleep`, `tail --pid` ni une boucle sur `kill -0`/, file);
+  // 3. Detached copies in the session folder, never beside the repository, removed at the end.
+  assert.doesNotMatch(review.body, /<parent du dépôt>/);
+  assert.match(review.body, /git worktree add --detach <dossier de session>\/<id>-<domaine>-<sha court> <commit>/);
+  for (const [file, text] of [['run', run.body], ['review', review.body], ['lead', frontmatter('skills/chef-de-projet/SKILL.md').body],
+    ['livraison', read('skills/chef-de-projet/references/livraison-pile.md')], ['guide', read('docs/RUN.md')]]) {
+    assert.match(text, /jamais à côté du dépôt/, file);
+    assert.match(text, /git worktree remove/, file);
+  }
+  assert.match(run.body, /git worktree add --detach <dossier de session>\/<id>-livraison-<sha court> apv\/<id>/);
+  // 4. The dynamic scan is the lead's, before the reviews; the security review reads it and never starts Docker.
+  assert.match(review.body, /## 3 bis\. Scan dynamique, lancé par toi avant les revues/);
+  assert.match(review.body, /apv dast run --repo <copie du scan> --out <dossier de session>\/dast-<sha court> --commit <commit>/);
+  assert.match(review.body, /apv wait --file <dossier>\/summary\.json/);
+  assert.match(review.body, /"dast": "<dossier des rapports de apv dast run, facultatif>", "dastMissing"/);
+  assert.match(run.body, /\*\*Scan dynamique d'abord, par toi\.\*\*/);
+  const security = frontmatter('agents/qa-securite.md').body;
+  assert.match(security, /\*\*Scan dynamique \(ZAP ou l'outil du projet\)\*\* : tu ne le lances pas/);
+  assert.match(security, /« non vérifié » dans ton rapport, avec la raison ; jamais de détour/);
+  assert.doesNotMatch(security, /image `ghcr\.io\/zaproxy\/zaproxy:stable` par Docker\) contre ta copie/);
+  assert.match(read('skills/chef-de-projet/references/integration-revues.md'), /tu lances toi-même `apv dast run/);
+  // 5. The confidence noted in the state when the lead marks work done.
+  assert.match(run.body, /task:<tâche> done --commit <sha relu ou branche> --confidence <prouve\|probable\|suppose>/);
+  assert.match(run.body, /fixes done --commit <sha relu par git rev-parse> --confidence <niveau>/);
+  assert.match(read('skills/chef-de-projet/references/confiance.md'), /\*\*Dans l'état d'exécution\.\*\*[^\n]*--confidence/);
+  // Documentation and changelog.
+  const cli = read('docs/CLI.md');
+  for (const rule of [/## `apv wait`/, /## `apv dast run`/, /--confidence prouve\|probable\|suppose/, /résolu depuis/, /`unproven`/]) assert.match(cli, rule);
+  assert.match(read('docs/CONFIGURATION.md'), /## Revues : `review`/);
+  assert.match(read('docs/RUN.md'), /### Attendre sans dormir : `apv wait`/);
+  assert.match(read('docs/RUN.md'), /### Revues : scan dynamique et copies détachées/);
+  const unreleased = read('CHANGELOG.md').split('\n## ')[1];
+  for (const title of ['Identifiant de commit relu, jamais recopié.', '`apv wait` : attendre sans dormir.', 'Copies détachées hors du dépôt.',
+    'Scan dynamique lancé par le chef de projet : `apv dast run` et `review.dast`.', 'Niveau de confiance dans l\'état d\'exécution.']) {
+    assert.ok(unreleased.includes(`- **${title}**`), title);
+  }
+  for (const file of ['skills/run/SKILL.md', 'skills/review/SKILL.md', 'skills/chef-de-projet/SKILL.md', 'skills/chef-de-projet/references/integration-revues.md',
+    'skills/chef-de-projet/references/livraison-pile.md', 'skills/chef-de-projet/references/confiance.md', 'agents/implementer.md', 'agents/integrateur.md',
+    'agents/qa-securite.md', 'docs/RUN.md', 'docs/CLI.md', 'docs/PLUGIN.md', 'workflows/vague.js', 'workflows/revues.js']) {
+    assert.ok(!/[–—]/.test(read(file)), `${file}: no em or en dash`);
+  }
+  assert.ok(!/[–—]/.test(read('docs/CONFIGURATION.md').split('## Revues : `review`')[1]), 'review section: no em or en dash');
+  assert.ok(!/[–—]/.test(unreleased), 'unreleased entries: no em or en dash');
+});

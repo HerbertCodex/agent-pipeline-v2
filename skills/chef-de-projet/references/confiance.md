@@ -29,6 +29,8 @@ Règles :
 
 Les workflows le préparent : `escalation.verify` liste les résultats `probable` à vérifier, `escalation.operator` les résultats `suppose`. Un constat fusionné par `apv:revues` garde la preuve la plus forte de ses membres.
 
+**Dans l'état d'exécution.** Quand tu marques une tâche faite, ou la passe de corrections, note le niveau que tu retiens après ta vérification : `apv run set <id> task:<tâche> done --commit <sha relu> --confidence <prouve|probable|suppose>` (et `apv run set <id> fixes done --confidence <niveau>`). Il est gardé dans l'état, affiché par `apv run status <id>`, retiré si le travail est rouvert ; `apv run next <id>` liste le travail fait en dessous de `prouve` (`unproven`) avec ce qu'il reste à faire. Une reprise, ou l'opérateur, voit ainsi ce qui n'est pas prouvé sans relire les rapports.
+
 Tes propres décisions prises seul (écart assumé, faux positif écarté, choix d'architecture noté au journal) portent aussi leur niveau. Un faux positif ne s'écarte qu'en `prouve` (un test ou une démonstration), jamais d'une phrase.
 
 ## 3. Dire le niveau à l'opérateur

@@ -539,3 +539,84 @@ test('apv run next|set|status <id> read the state with a bound: a FIFO never blo
   const dir = await p.run('status', 'dossier');
   assert.match(dir.stderr, /État illisible \.apv\/state\/run-dossier\.json : pas un fichier ordinaire/);
 });
+
+test('apv run set --commit: a short sha or a branch is resolved and the full id shown; an invented id names the right commit', async t => {
+  const p = project(t);
+  await p.run('start', 'vagues');
+  const f = taskBranch(p, 'apv/vagues-F', 'docs/f.md');
+  assert.equal((await p.run('set', 'vagues', 'task:F', 'running', '--branch', 'apv/vagues-F', '--base', 'main')).code, 0);
+  // Pilot project, 24 September 2026: a report gave a full id with its 7 first characters right and the rest invented.
+  const invented = f.sha.slice(0, 7) + (f.sha[7] === '0' ? '1' : '0').repeat(33);
+  const refused = await p.run('set', 'vagues', 'task:F', 'done', '--commit', invented);
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /RUN_COMMIT/);
+  assert.ok(refused.stderr.includes(`ses 7 premiers caractères désignent ${f.sha}`), refused.stderr);
+  assert.ok(refused.stderr.includes(`la branche apv/vagues-F de la tâche pointe sur ${f.sha}`), 'the branch recorded in the state is suggested');
+  assert.match(refused.stderr, /ne recopie jamais un sha d'un rapport sans le relire par git rev-parse <branche>/);
+  assert.equal(p.state().tasks.F.status, 'running', 'nothing written');
+  // An abbreviated id: resolved by git, the full id recorded and shown with what it came from.
+  const short = await p.run('set', 'vagues', 'task:F', 'done', '--commit', f.sha.slice(0, 9));
+  assert.equal(short.code, 0, short.stderr);
+  assert.ok(short.stdout.includes(`commit ${f.sha} (résolu depuis « ${f.sha.slice(0, 9)} »)`), short.stdout);
+  assert.equal(p.state().tasks.F.commit, f.sha);
+  // A branch name: resolved the same way; the JSON output says it too.
+  const byBranch = await p.run('set', 'vagues', 'task:F', 'done', '--commit', 'apv/vagues-F', '--json');
+  assert.equal(byBranch.code, 0, byBranch.stderr);
+  assert.deepEqual(byBranch.json().resolved.commit, { input: 'apv/vagues-F', sha: f.sha });
+  // A full id stays as it is, without « résolu depuis ».
+  const full = await p.run('set', 'vagues', 'task:F', 'done', '--commit', f.sha);
+  assert.ok(full.stdout.includes(`commit ${f.sha}`) && !full.stdout.includes('résolu depuis'), full.stdout);
+  // Without a known branch, the refusal still says what --commit accepts.
+  const noBranch = await p.run('set', 'vagues', 'task:C', 'done', '--commit', 'feedfacecafe');
+  assert.equal(noBranch.code, 1);
+  assert.doesNotMatch(noBranch.stderr, /pointe sur/);
+  assert.match(noBranch.stderr, /accepte un sha complet ou abrégé, ou un nom de branche/);
+});
+
+test('apv run set --confidence: kept in the state with done, shown by status, listed by next when below prouve, dropped on reopening', async t => {
+  const p = project(t);
+  await p.run('start', 'vagues');
+  const f = taskBranch(p, 'apv/vagues-F', 'docs/f.md');
+  const c = taskBranch(p, 'apv/vagues-C', 'docs/c.md');
+  for (const step of ['data-model', 'plan']) await p.run('set', 'vagues', step, 'skipped');
+  const done = await p.run('set', 'vagues', 'task:F', 'done', '--commit', 'apv/vagues-F', '--confidence', 'prouve', '--json');
+  assert.equal(done.code, 0, done.stderr);
+  assert.equal(p.state().tasks.F.confidence, 'prouve');
+  assert.equal(done.json().event.confidence, 'prouve');
+  assert.equal((await p.run('set', 'vagues', 'task:C', 'done', '--commit', c.sha, '--confidence', 'probable')).code, 0);
+  const status = await p.run('status', 'vagues');
+  assert.match(status.stdout, /F fait @[a-f0-9]{7} \(confiance prouve\)/);
+  assert.match(status.stdout, /C fait @[a-f0-9]{7} \(confiance probable\)/);
+  assert.match(status.stdout, /task:C à faire -> fait \(commit [a-f0-9]{12}, confiance probable\)/);
+  const next = (await p.run('next', 'vagues', '--json')).json();
+  assert.deepEqual(next.unproven, [{ target: 'task:C', confidence: 'probable' }]);
+  assert.ok(next.actions.some(a => /task:C noté « probable » : une vérification \(test ou exécution\) d'abord/.test(a)), next.actions.join('\n'));
+  // Wrong calls: an unknown level, a level without done, a target that is neither a task nor the fix pass.
+  for (const args of [['task:F', 'done', '--commit', f.sha, '--confidence', 'certain'], ['task:A', 'running', '--confidence', 'prouve'],
+    ['review:securite', 'done', '--confidence', 'prouve'], ['plan', 'done', '--confidence', 'prouve']]) {
+    const r = await p.run('set', 'vagues', ...args);
+    assert.equal(r.code, 2, args.join(' '));
+  }
+  // Reopening finished work drops its level: it spoke of the work as it was.
+  assert.equal((await p.run('set', 'vagues', 'task:C', 'running', '--note', 'preuve manquante')).code, 0);
+  assert.equal('confidence' in p.state().tasks.C, false);
+  // The fix pass carries its own level.
+  assert.equal((await p.run('set', 'vagues', 'fixes', 'done', '--confidence', 'suppose', '--note', 'cause non reproduite')).code, 0);
+  assert.equal(p.state().steps.fixes.confidence, 'suppose');
+  assert.match((await p.run('status', 'vagues')).stdout, /fixes fait \(confiance suppose\)/);
+  assert.ok((await p.run('next', 'vagues', '--json')).json().unproven.some(u => u.target === 'fixes' && u.confidence === 'suppose'));
+});
+
+test('a state written before the confidence field stays readable and is written back without it', () => {
+  const s = createRunState({ specId: 's', specFile: 's.json', specSha256: 'a'.repeat(64), base: 'main', baseSha: 'b'.repeat(40), tasks: [{ id: 'T', title: 'T', dependsOn: [] }] });
+  assert.equal('confidence' in s.tasks.T, false);
+  assert.equal('confidence' in s.steps.fixes, false);
+  const old = JSON.parse(JSON.stringify(s));
+  const next = applySet(old, parseTarget('task:T'), { status: 'done', commit: 'e'.repeat(40) }).state;
+  assert.equal('confidence' in next.tasks.T, false, 'done without --confidence adds nothing');
+  assert.equal('confidence' in next.events.at(-1), false);
+  const noted = applySet(next, parseTarget('task:T'), { status: 'done', commit: 'e'.repeat(40), confidence: 'prouve' }).state;
+  assert.equal(noted.tasks.T.confidence, 'prouve');
+  assert.throws(() => applySet(noted, parseTarget('review:rgpd'), { status: 'done', confidence: 'prouve' }), /réservé aux tâches/);
+  assert.throws(() => applySet(noted, parseTarget('task:T'), { status: 'running', note: 'x', confidence: 'prouve' }), /accompagne « done »/);
+});

@@ -57,7 +57,7 @@ Chaque agent est un fichier de `agents/`, appelé `apv:<nom>` par l'outil Agent.
 | `critique-design` | Critique notée d'une maquette avant présentation : captures 390 et 1280, clair et sombre, empreintes génériques, signature, états, fiche d'animation, test des 5 secondes avec la personne cible, corrections priorisées (deux tours au plus) | lecture, Bash (pas d'écriture de fichiers) | aucun |
 | `implementer` | Code une tâche, tous les contrôles au vert, commits | lecture, écriture, Bash, correcteur Svelte (MCP) | worktree |
 | `integrateur` | Fusionne une vague, unifie les doublons, garde tous les tests, relance tout | lecture, écriture, Bash, correcteur Svelte (MCP) | worktree |
-| `qa-securite` | Attaques à deux utilisateurs, API directe, en-têtes, secrets, ZAP | lecture, Bash (pas d'écriture de fichiers) | copie isolée |
+| `qa-securite` | Attaques à deux utilisateurs, API directe, en-têtes, secrets, lecture du rapport du scan dynamique (ZAP) lancé par le chef de projet (`apv dast run`) | lecture, Bash (pas d'écriture de fichiers) | copie isolée |
 | `qa-fidelite` | Captures 390 et 1280, clair et sombre, comparaison des textes, accessibilité, états, animations et mouvement réduit, test des 5 secondes, fichiers mal placés | lecture, Bash (pas d'écriture de fichiers) | copie isolée |
 | `dpo` | Registre RGPD, sous-traitants vérifiés sur les DPA officiels, pages légales contre le code | lecture, Bash, web, écriture de `.apv/rgpd/` (pages légales sur demande) | aucun |
 

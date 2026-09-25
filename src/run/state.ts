@@ -23,6 +23,15 @@ export type StepName = typeof STEPS[number];
 export const REVIEWS = ['securite', 'fidelite', 'donnees', 'rgpd'] as const;
 export type ReviewDomain = typeof REVIEWS[number];
 
+/**
+ * Confidence of a finished task or fix pass (docs/CONFIANCE.md), noted by the project lead with `apv run set --confidence`:
+ * `prouve` (reproducible proof), `probable` (read or reasoned, not run), `suppose` (hypothesis). Ordered from the strongest.
+ */
+export const CONFIDENCE_LEVELS = ['prouve', 'probable', 'suppose'] as const;
+export type Confidence = typeof CONFIDENCE_LEVELS[number];
+/** Steps that may carry a confidence: the fix pass (its tasks carry their own). */
+export const CONFIDENCE_STEPS: readonly StepName[] = ['fixes'];
+
 export const STATUS_LABEL: Record<RunStatus, string> = { pending: 'à faire', running: 'en cours', done: 'fait', failed: 'en échec', skipped: 'sauté' };
 export const STEP_LABEL: Record<StepName | 'waves', string> = {
   'data-model': 'modèle de données', plan: 'plan', waves: 'vagues', integration: 'intégration', reviews: 'revues', fixes: 'corrections', delivery: 'livraison',
@@ -34,12 +43,14 @@ const text = (max: number) => s.nullable(s.string(0, max));
 const at = s.string(24, 24, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 const sha = s.nullable(s.string(7, 64, /^[a-f0-9]{7,64}$/));
 const key = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// Optional, absent until the project lead notes one: a state written before it existed reads and writes as before.
+const confidence = s.optional(s.enum(CONFIDENCE_LEVELS));
 
 // `commit` is optional on steps and reviews: states written before it existed stay readable.
-const stepSchema = s.object({ status, commit: s.default(sha, null), note: text(4000), updatedAt: s.nullable(at) });
+const stepSchema = s.object({ status, commit: s.default(sha, null), note: text(4000), updatedAt: s.nullable(at), confidence });
 const taskSchema = s.object({
   title: s.string(1, 500), dependsOn: s.array(s.string(1, 80, key), 0, 20), wave: s.number(0, 1000), foundation: s.boolean(), status,
-  branch: text(300), worktree: text(4096), agentId: text(300), base: sha, commit: sha, note: text(4000), updatedAt: s.nullable(at),
+  branch: text(300), worktree: text(4096), agentId: text(300), base: sha, commit: sha, note: text(4000), updatedAt: s.nullable(at), confidence,
 });
 const reviewSchema = s.object({ status, findings: s.nullable(s.number(0, 100000)), commit: s.default(sha, null), note: text(4000), updatedAt: s.nullable(at) });
 const eventSchema = s.object({
@@ -49,6 +60,8 @@ const eventSchema = s.object({
   unintegrated: s.optional(s.array(s.string(1, 80, key), 1, 20)),
   // End of a quota pause (`apv run pause --until`), on the event that starts or extends it.
   until: s.optional(at),
+  // Confidence noted with the transition (`apv run set --confidence`).
+  confidence,
 });
 /** A quota pause of the execution (`apv run pause`): since when, until when, why. Absent when not paused. */
 const pauseSchema = s.object({ since: at, until: at, note: text(4000) });
@@ -78,7 +91,7 @@ export const runStateSchema = s.object({
 type Mutable<T> = T extends readonly (infer U)[] ? Mutable<U>[] : T extends object ? { -readonly [K in keyof T]: Mutable<T[K]> } : T;
 export interface RunEvent {
   at: string; target: string; from: RunStatus | null; to: RunStatus; note?: string; commit?: string; agentId?: string; unintegrated?: string[];
-  until?: string;
+  until?: string; confidence?: Confidence;
 }
 export type RunState = Omit<Mutable<Infer<typeof runStateSchema>>, 'events'> & { events: RunEvent[] };
 export type TaskEntry = RunState['tasks'][string];
@@ -197,7 +210,7 @@ export function createRunState(input: NewRunInput): RunState {
     Object.defineProperty(tasks, t.id, { enumerable: true, writable: true, configurable: true, value: {
       title: t.title, dependsOn: [...t.dependsOn], wave: waveOf.get(t.id)!, foundation: foundations.has(t.id), status: 'pending', branch: null, worktree: null, agentId: null,
       base: null, commit: null, note: null, updatedAt: null,
-    } satisfies TaskEntry });
+    } satisfies Omit<TaskEntry, 'confidence'> });
   }
   return parseState({
     schemaVersion: RUN_STATE_VERSION, specId: input.specId, specFile: input.specFile, specSha256: input.specSha256, base: input.base, baseSha: input.baseSha,
@@ -235,6 +248,8 @@ const TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
 export interface SetOptions {
   status: RunStatus;
   branch?: string; worktree?: string; agentId?: string; commit?: string; base?: string; note?: string; findings?: number;
+  /** Confidence of the finished work (`done` only, a task or the `fixes` step); cleared when the work is reopened. */
+  confidence?: Confidence;
   /** Where the commits of the dependencies of a task that starts must already be; absent: nowhere. */
   integration?: IntegrationCheck;
   /** Starts the task although a dependency is not integrated; needs `note`, journaled with the dependencies. */
@@ -333,12 +348,20 @@ export function applySet(state: RunState, target: Target, options: SetOptions): 
   } else if (options.commit !== undefined) (entry as { commit: string | null }).commit = options.commit;
   if (target.kind === 'review' && options.findings !== undefined) (entry as RunState['reviews'][ReviewDomain]).findings = options.findings;
   if (options.note !== undefined) entry.note = options.note;
+  // The confidence speaks of finished work: it is noted with `done`, and reopening the work drops it.
+  if (options.confidence !== undefined) {
+    const allowed = target.kind === 'task' || (target.kind === 'step' && CONFIDENCE_STEPS.includes(target.name));
+    if (!allowed) throw new TransitionError(`${name} : --confidence est réservé aux tâches (task:<id>) et aux corrections (${CONFIDENCE_STEPS.join(', ')})`);
+    if (to !== 'done') throw new TransitionError(`${name} : --confidence accompagne « done » (le niveau de confiance du travail terminé)`);
+    (entry as { confidence?: Confidence }).confidence = options.confidence;
+  } else if (to !== 'done') Reflect.deleteProperty(entry, 'confidence');
   entry.status = to;
   entry.updatedAt = now;
   next.updatedAt = now;
   const event: RunEvent = { at: now, target: name, from, to,
     ...(options.note !== undefined ? { note: options.note } : {}), ...(options.commit !== undefined ? { commit: options.commit } : {}),
-    ...(options.agentId !== undefined ? { agentId: options.agentId } : {}), ...(unintegrated ? { unintegrated } : {}) };
+    ...(options.agentId !== undefined ? { agentId: options.agentId } : {}), ...(unintegrated ? { unintegrated } : {}),
+    ...(options.confidence !== undefined ? { confidence: options.confidence } : {}) };
   next.events.push(event);
   return { state: parseState(next), from, event };
 }
@@ -414,7 +437,8 @@ export function describeEvent(event: RunEvent): string {
   if (event.target === PAUSE_TARGET) {
     return event.to === 'pending' ? `${when} pause quota jusqu'à ${event.until ? localTime(event.until) : '?'}${note}` : `${when} reprise${note}`;
   }
-  const commit = event.commit ? ` (commit ${event.commit.slice(0, 12)})` : '';
+  const commit = event.commit ? ` (commit ${event.commit.slice(0, 12)}${event.confidence ? `, confiance ${event.confidence}` : ''})`
+    : event.confidence ? ` (confiance ${event.confidence})` : '';
   if (event.target === FULL_SUITE_OVERRIDE_TARGET) return `${when} suite complète lancée hors rythme (niveau attendu : contrôles de tâche et ciblés)${commit}${note}`;
   return `${when} ${event.target} ${event.from ? STATUS_LABEL[event.from] : '-'} -> ${STATUS_LABEL[event.to]}${commit}${note}`;
 }
@@ -468,6 +492,11 @@ export interface NextPlan {
   suite: { mode: FullSuiteMode; level: 'task' | 'full' | null; targetBase: string; targetBaseWhere: string };
   /** The quota pause in progress (`apv run pause`), or null. */
   pause: { since: string; until: string; note: string | null } | null;
+  /**
+   * Finished work noted below `prouve` (`apv run set --confidence`): the tasks, and `fixes` when the fix pass is.
+   * `probable` needs a check first, `suppose` goes to the operator; work noted without a level is not listed.
+   */
+  unproven: { target: string; confidence: Exclude<Confidence, 'prouve'> }[];
   actions: string[];
 }
 
@@ -539,6 +568,15 @@ export function computeNext(state: RunState, probe: GitProbe, options: NextOptio
   for (const r of relaunch) actions.push(`relancer ${r.id} si son agent ne tourne plus (${r.reason})${r.branch ? `, depuis la branche ${r.branch}` : ''}`);
   for (const r of resume) actions.push(`reprendre ${r.id} : agent ${r.agentId ?? 'inconnu'} (SendMessage s'il vit encore), sinon relancer « termine ${r.id} depuis ${r.head?.slice(0, 12)} » sur ${r.branch ?? r.worktree}`);
   for (const f of failed) actions.push(`décider de ${f.id} (en échec${f.note ? ` : ${f.note}` : ''}) : relancer, corriger ou sauter`);
+  const unproven: NextPlan['unproven'] = [
+    ...tasks.filter(([, t]) => t.status === 'done').map(([id, t]) => ({ target: `task:${id}`, confidence: t.confidence })),
+    ...(state.steps.fixes.status === 'done' ? [{ target: 'fixes', confidence: state.steps.fixes.confidence }] : []),
+  ].filter((u): u is NextPlan['unproven'][number] => u.confidence === 'probable' || u.confidence === 'suppose');
+  for (const u of unproven) {
+    actions.push(u.confidence === 'probable'
+      ? `${u.target} noté « probable » : une vérification (test ou exécution) d'abord, avant de l'intégrer, de le livrer ou de l'annoncer corrigé`
+      : `${u.target} noté « suppose » : à prouver, ou à remonter à l'opérateur avant toute fusion, toute action sur la production et toute annonce « corrigé »`);
+  }
   if (step === 'data-model' || step === 'plan') actions.push(`étape ${STEP_LABEL[step]} (${STATUS_LABEL[state.steps[step].status]}) : la terminer avant d'ouvrir les vagues`);
   else if (step === 'waves') {
     // Every ready task now, whatever its wave: the foundations to one agent (incident 24), the others in parallel.
@@ -575,7 +613,7 @@ export function computeNext(state: RunState, probe: GitProbe, options: NextOptio
   if (allDone) actions.push('exécution terminée');
   return { specId: state.specId, step, stepStatus, wave, finished: allDone, ready, awaitingIntegration, integration: { head: integration.head, where: integration.where },
     resume, relaunch, failed, blocked, reviewsToLaunch, reviewsRunning, suite: { mode, level, targetBase, targetBaseWhere },
-    pause: state.pause ? { ...state.pause } : null, actions };
+    pause: state.pause ? { ...state.pause } : null, unproven, actions };
 }
 
 /** How a state file is named in errors (path relative to the repository), and the spec id its name carries. */

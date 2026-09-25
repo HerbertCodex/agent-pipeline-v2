@@ -4,7 +4,7 @@ Dans ce document, `apv` désigne l'outil du plugin (voir `SKILL.md`).
 
 ## 1. Contrôles du chef de projet (avant chaque PR)
 Sur la tête exacte de la branche :
-1. La suite complète prouvée sur ce commit exact. D'abord `apv gates verify --commit <tête>` dans le worktree de la dernière intégration (celui qui a ses reçus) : à `0`, elle est déjà prouvée (spec sans corrections, la tête n'a pas bougé), ne la relance pas. Sinon, dans un worktree propre : `apv gates run --stage full` (tous les contrôles déclarés, ou la liste de la consigne commune, ressources partagées sous bail ; `--skip-proven` ne relance rien si la preuve existe déjà), puis `apv gates verify --commit <tête>`, qui doit sortir en `0` (chaque contrôle réussi sur ce commit exact, arbre propre) avant de pousser. Une vérification du niveau tâche (`--stage task`) ne suffit jamais pour une PR.
+1. La suite complète prouvée sur ce commit exact. D'abord `apv gates verify --commit <tête>` dans le worktree de la dernière intégration (celui qui a ses reçus) : à `0`, elle est déjà prouvée (spec sans corrections, la tête n'a pas bougé), ne la relance pas. Sinon, dans un worktree propre, créé dans ton dossier de session (`git worktree add --detach <dossier de session>/<id>-livraison-<sha court> <branche>`, jamais à côté du dépôt, retiré par `git worktree remove` après la PR) : `apv gates run --stage full` (tous les contrôles déclarés, ou la liste de la consigne commune, ressources partagées sous bail ; `--skip-proven` ne relance rien si la preuve existe déjà), puis `apv gates verify --commit <tête>`, qui doit sortir en `0` (chaque contrôle réussi sur ce commit exact, arbre propre) avant de pousser. Une vérification du niveau tâche (`--stage task`) ne suffit jamais pour une PR.
 2. `apv db check` si des migrations ou des requêtes ont changé.
 3. `apv scope check` sur les tâches de la spec.
 4. `apv design check` si le projet a des maquettes validées : une référence modifiée sans nouvelle validation de l'opérateur bloque la PR.
@@ -13,7 +13,7 @@ Tu notes les nombres de tests : ils vont dans la PR. Un contrôle rouge bloque l
 
 ## 2. PR brouillon
 - `git push -u origin <branche>` puis `gh pr create --draft --base <base> --head <branche> --title … --body …`, **sans masquer la sortie**. Lis-la, puis vérifie : `gh pr view <n> --json number,baseRefName,headRefName,isDraft,url`.
-- Corps de la PR : résumé, critères couverts, preuves (contrôles et nombres de tests, revues, ZAP), écarts assumés à valider, points qui demandent l'opérateur, base de la pile. Chaque affirmation importante porte son niveau de confiance (`references/confiance.md`) ; une affirmation `probable` non vérifiée ou `suppose` (une cause de production non reproduite, par exemple) figure dans les points qui demandent l'opérateur, jamais comme « corrigé ».
+- Corps de la PR : résumé, critères couverts, preuves (contrôles et nombres de tests, revues, scan dynamique : statut de `apv dast run` ou « non vérifié » et pourquoi), écarts assumés à valider, points qui demandent l'opérateur, base de la pile. Chaque affirmation importante porte son niveau de confiance (`references/confiance.md`) ; une affirmation `probable` non vérifiée ou `suppose` (une cause de production non reproduite, par exemple) figure dans les points qui demandent l'opérateur, jamais comme « corrigé ».
 - Mets à jour l'aperçu vivant sur la branche livrée avec `/apv:preview` et annonce-le (adresse, branche, ce qui a changé, compte de démo).
 
 ## 3. Pile de PR
