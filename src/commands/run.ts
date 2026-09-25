@@ -1,8 +1,8 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, relative, resolve, sep } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { localTime, localTimeZone, parseUntil } from '../domain/time.js';
-import { suiteMode } from '../run/rhythm.js';
+import { locateRunState, suiteMode } from '../run/rhythm.js';
 import { sha256 } from '../domain/hash.js';
 import { specSchema } from '../lifecycle/contracts.js';
 import { checkSpec, readSpecDocument } from '../spec/check.js';
@@ -345,6 +345,20 @@ function status(repo: string, positionals: string[], asJson: boolean, io: Comman
   return EXIT.ok;
 }
 
+/**
+ * Where an `apv run` command on an existing execution reads and writes its state: the current checkout (or
+ * `--repo`) when it has `.apv/state/run-<id>.json`, as before; otherwise the worktree of the repository that has
+ * it (`locateRunState`: executions run side by side, each from its own checkout), said on stderr. `start` and
+ * `status` without id stay in the current checkout.
+ */
+function stateCheckout(repo: string, action: string, id: string | undefined, io: CommandIO): string {
+  if (action === 'start' || id === undefined || !RUN_ID.test(id) || existsSync(runStateFile(repo, id))) return repo;
+  const holder = locateRunState(repo, id);
+  if (!holder || holder.path === repo) return repo;
+  io.stderr(`Note : état de l'exécution ${id} lu dans le worktree ${holder.path} (${holder.branch ?? 'tête détachée'}), le checkout courant ne l'a pas.\n`);
+  return holder.path;
+}
+
 export async function run(args: string[], io: CommandIO): Promise<number> {
   return guard(io, usage, async () => {
     const { values, positionals } = parse(args, options);
@@ -358,7 +372,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       : ['base', 'until', ...setOnly];
     const extra = forbidden.filter(n => values[n as keyof typeof values] !== undefined);
     if (extra.length) throw new UsageError(`option(s) sans effet pour run ${action} : --${extra.join(', --')}`);
-    const repo = gitRoot(repoPath(io, values.repo));
+    const repo = stateCheckout(gitRoot(repoPath(io, values.repo)), action, rest[0], io);
     if (action === 'start') return start(repo, io.cwd, rest, values, io);
     if (action === 'set') return set(repo, rest, values, io);
     if (action === 'next') return next(repo, rest, Boolean(values.json), io);

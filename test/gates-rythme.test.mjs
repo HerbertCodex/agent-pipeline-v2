@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
-import { branchSpecIds, mainCheckout } from '../dist/run/rhythm.js';
+import { branchSpecIds, listWorktrees, locateRunState, mainCheckout } from '../dist/run/rhythm.js';
 import { describeEvent } from '../dist/run/state.js';
 import { validateReceipt } from '../dist/domain/contracts.js';
 
@@ -20,9 +20,11 @@ test('branchSpecIds: apv/<id> and apv/<id>-<suffixe>, the longest id first; noth
 
 /**
  * A project with a task check and a full check whose command records each run outside the repository, a spec of
- * two tasks (B depends on A) started with `apv run start`, and a worktree for the integration branch.
+ * two tasks (B depends on A) started with `apv run start`, and a worktree for the integration branch. With
+ * `lead`, the execution runs from its own worktree on `apv/rythme` (executions side by side), not from the main
+ * checkout, which stays on main without the state.
  */
-async function project(t) {
+async function project(t, { lead = false } = {}) {
   const f = fixture(t);
   const log = join(f.root, 'full.log');
   const record = what => [process.execPath, '-e', `require("fs").appendFileSync(${JSON.stringify(log)}, ${JSON.stringify(what)} + "\\n")`];
@@ -34,16 +36,18 @@ async function project(t) {
     decisions: [], questions: [], tasks: [task('A', []), task('B', ['A'])], minimumLane: 'standard' });
   git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'spec et contrôles');
   const env = { APV_LOCK_DIR: join(f.root, 'locks'), APV_LOCK_POLL_MS: '20' };
-  const run = async (...args) => { const r = await apv(f.repo, ['run', ...args], env); assert.equal(r.code, 0, r.stderr); return r; };
-  await run('start', 'rythme');
+  const checkout = lead ? join(f.root, 'lead') : f.repo;
+  if (lead) git(f.repo, 'worktree', 'add', '-q', '-b', 'apv/rythme', checkout, 'HEAD');
+  const run = async (...args) => { const r = await apv(checkout, ['run', ...args], env); assert.equal(r.code, 0, r.stderr); return r; };
+  await run('start', 'rythme', ...(lead ? ['--base', 'main'] : []));
   await run('set', 'rythme', 'data-model', 'skipped', '--note', 'pas de base');
   await run('set', 'rythme', 'plan', 'done');
   const worktree = join(f.root, 'integration');
   git(f.repo, 'worktree', 'add', '-q', '-b', 'apv/rythme-integration-1', worktree, 'HEAD');
-  const state = () => JSON.parse(readFileSync(join(f.repo, '.apv/state/run-rythme.json'), 'utf8'));
+  const state = () => JSON.parse(readFileSync(join(checkout, '.apv/state/run-rythme.json'), 'utf8'));
   const ran = () => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [];
   const gates = (cwd, ...args) => apv(cwd, ['gates', 'run', ...args], env);
-  return { ...f, env, run, worktree, state, ran, gates };
+  return { ...f, env, run, checkout, worktree, state, ran, gates };
 }
 
 test('an intermediate integration refuses the full suite: exit 1, the expected level and the command to run instead', async t => {
@@ -80,7 +84,7 @@ test('--reason lets the full suite run: event in the state of the execution, rea
   const r = await p.gates(p.worktree, '--stage', 'full', '--reason', 'reproduire un test instable vu en revue', '--json');
   assert.equal(r.code, 0, r.stderr);
   const out = r.json();
-  assert.deepEqual(out.rhythm, { run: 'rythme', source: 'branch', step: 'waves', level: 'task', override: { run: 'rythme', reason: 'reproduire un test instable vu en revue' } });
+  assert.deepEqual(out.rhythm, { run: 'rythme', source: 'branch', checkout: realpathSync(p.repo), step: 'waves', level: 'task', override: { run: 'rythme', reason: 'reproduire un test instable vu en revue' } });
   assert.deepEqual(p.ran(), ['unit', 'e2e']);
   const events = p.state().events;
   assert.equal(events.length, before + 1);
@@ -111,7 +115,7 @@ test('--reason lets the full suite run: event in the state of the execution, rea
   // --run on an execution that does not exist: refused, never taken for « outside any execution ».
   const missing = await p.gates(p.worktree, '--run', 'absente');
   assert.equal(missing.code, 1);
-  assert.match(missing.stderr, /\[RUN_MISSING\] : Aucune exécution absente : .apv\/state\/run-absente.json n.existe pas dans le checkout principal/);
+  assert.match(missing.stderr, /\[RUN_MISSING\] : Aucune exécution absente : .apv\/state\/run-absente.json n.existe dans aucun worktree du dépôt/);
 });
 
 test('outside an execution nothing changes: other branch, unknown spec, detached head; a pointless --reason is said', async t => {
@@ -165,4 +169,87 @@ test('the last integration, the delivery and each-integration expect the full su
   const delivery = await p.gates(p.worktree, '--stage', 'full', '--json');
   assert.equal(delivery.code, 0, delivery.stderr);
   assert.deepEqual([delivery.json().rhythm.step, delivery.json().rhythm.level], ['delivery', 'full']);
+});
+
+test('an execution run from its own worktree: its state is found there, with and without --run; apv run finds it from another checkout', async t => {
+  const p = await project(t, { lead: true });
+  const lead = realpathSync(p.checkout);
+  assert.ok(!existsSync(join(p.repo, '.apv/state/run-rythme.json')), 'the main checkout has no state');
+  const listed = listWorktrees(p.worktree);
+  assert.deepEqual(listed[0], { path: realpathSync(p.repo), branch: 'main', main: true });
+  assert.deepEqual(listed.slice(1).map(w => [w.branch, w.main]).sort(), [['apv/rythme', false], ['apv/rythme-integration-1', false]]);
+  assert.equal(locateRunState(p.worktree, 'rythme').path, lead);
+  // Without --run: found by the branch of the integration worktree, state read in the worktree of the execution.
+  const byBranch = await p.gates(p.worktree, '--stage', 'full');
+  assert.equal(byBranch.code, 1);
+  assert.match(byBranch.stderr, /\[GATE_RHYTHM\] : Suite complète refusée : l'exécution rythme \(exécution trouvée par la branche apv\/rythme-integration-1/);
+  // With --run, from the main checkout on main: the same refusal, never RUN_MISSING.
+  const named = await p.gates(p.repo, '--stage', 'full', '--run', 'rythme');
+  assert.equal(named.code, 1, named.stderr);
+  assert.match(named.stderr, /\[GATE_RHYTHM\] : Suite complète refusée : l'exécution rythme en est à l'étape vagues/);
+  assert.deepEqual(p.ran(), [], 'nothing ran');
+  // --reason writes in the state of the worktree of the execution.
+  const before = p.state().events.length;
+  const forced = await p.gates(p.worktree, '--stage', 'full', '--reason', 'raison', '--json');
+  assert.equal(forced.code, 0, forced.stderr);
+  assert.deepEqual([forced.json().rhythm.checkout, forced.json().rhythm.level], [lead, 'task']);
+  assert.equal(p.state().events.length, before + 1);
+  assert.ok(!existsSync(join(p.repo, '.apv/state/run-rythme.json')) && !existsSync(join(p.worktree, '.apv/state/run-rythme.json')), 'no state written elsewhere');
+  // apv run from a checkout without the state: the state of the execution, said on stderr.
+  const next = await apv(p.repo, ['run', 'next', 'rythme', '--json'], p.env);
+  assert.equal(next.code, 0, next.stderr);
+  assert.equal(next.json().suite.level, 'task');
+  assert.match(next.stderr, new RegExp(`^Note : état de l'exécution rythme lu dans le worktree ${lead.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(apv/rythme\\)`));
+  const set = await apv(p.worktree, ['run', 'set', 'rythme', 'task:A', 'running'], p.env);
+  assert.equal(set.code, 0, set.stderr);
+  assert.equal(p.state().tasks.A.status, 'running', 'written in the state of the execution');
+  // A checkout that has the state keeps it (unchanged usage): no note.
+  const own = await apv(p.checkout, ['run', 'status', 'rythme'], p.env);
+  assert.equal(own.code, 0);
+  assert.equal(own.stderr, '');
+});
+
+test('several copies of a state: the worktree on apv/<id>, else the main checkout, else refused with every location', async t => {
+  const p = await project(t, { lead: true });
+  const lead = realpathSync(p.checkout);
+  const saved = join(p.root, 'run-rythme.json');
+  copyFileSync(join(lead, '.apv/state/run-rythme.json'), saved);
+  const copy = dir => { mkdirSync(join(dir, '.apv/state'), { recursive: true }); copyFileSync(saved, join(dir, '.apv/state/run-rythme.json')); };
+  // Stale copies in the main checkout and in the integration worktree: the worktree on apv/rythme wins.
+  copy(p.repo); copy(p.worktree);
+  assert.equal(locateRunState(p.worktree, 'rythme').path, lead);
+  const r = await p.gates(p.worktree, '--stage', 'full', '--reason', 'raison', '--json');
+  assert.equal(r.json().rhythm.checkout, lead);
+  // No copy on apv/rythme: the main checkout.
+  rmSync(join(lead, '.apv/state/run-rythme.json'));
+  assert.equal(locateRunState(p.worktree, 'rythme').path, realpathSync(p.repo));
+  assert.equal((await p.gates(p.worktree, '--stage', 'full', '--reason', 'raison', '--json')).json().rhythm.checkout, realpathSync(p.repo));
+  // Neither: refused, the locations listed, with and without --run.
+  rmSync(join(p.repo, '.apv/state/run-rythme.json'));
+  const other = join(p.root, 'other');
+  git(p.repo, 'worktree', 'add', '-q', '-b', 'apv/rythme-T1', other, 'HEAD');
+  copy(other);
+  assert.throws(() => locateRunState(p.repo, 'rythme'), /RUN_AMBIGUOUS|plusieurs états/);
+  for (const args of [['--stage', 'full'], ['--stage', 'full', '--run', 'rythme']]) {
+    const ambiguous = await p.gates(p.worktree, ...args);
+    assert.equal(ambiguous.code, 1, args.join(' '));
+    assert.match(ambiguous.stderr, /\[RUN_AMBIGUOUS\] : Exécution rythme : plusieurs états .apv\/state\/run-rythme.json/);
+    assert.ok(ambiguous.stderr.includes(`${realpathSync(p.worktree)} (apv/rythme-integration-1)`) && ambiguous.stderr.includes(`${realpathSync(other)} (apv/rythme-T1)`), ambiguous.stderr);
+  }
+  assert.deepEqual(p.ran(), ['unit', 'e2e', 'unit', 'e2e']);
+  // apv run from a checkout that has a copy uses its own (unchanged usage).
+  assert.equal((await apv(other, ['run', 'status', 'rythme'], p.env)).code, 0);
+});
+
+test('no state anywhere: outside any execution, unchanged', async t => {
+  const p = await project(t);
+  assert.equal(locateRunState(p.worktree, 'absente'), null);
+  const other = join(p.root, 'other');
+  git(p.repo, 'worktree', 'add', '-q', '-b', 'apv/absente-integration-1', other, 'HEAD');
+  const r = await p.gates(other, '--stage', 'full', '--json');
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.json().rhythm, null);
+  const next = await apv(other, ['run', 'next', 'absente'], p.env);
+  assert.equal(next.code, 1);
+  assert.match(next.stderr, /RUN_MISSING/);
 });
