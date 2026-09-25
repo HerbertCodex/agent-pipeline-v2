@@ -1,6 +1,6 @@
 # Configuration et politique
 
-> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design` et `structure` ([outil apv](CLI.md) ; la section `structure` est décrite [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
+> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run` et `spec` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
 
 La configuration est un JSON déclaratif lu avant l'agent et conservé avec la tentative. La tâche ne peut pas fournir une commande à la place d'un contrôle, changer un verdict ni s'accorder une exemption. Les champs inconnus sont refusés.
 
@@ -307,3 +307,23 @@ Section APV3, facultative, lue par `apv run next` et validée par le chargeur co
 Ce réglage ne touche à aucune autre preuve : contrôles de tâche complets pour chaque implementer, tests négatifs, revues (sécurité aux attaques réelles comprise), suite complète et `apv gates verify` à `0` au commit exact avant toute PR, contrôle rouge jamais ignoré, test instable traité comme un constat. Compromis de `"final"` : une régression entre vagues, hors des fichiers changés et de ce qui en dépend, peut n'être vue qu'à la dernière intégration ; les tests ciblés la limitent, et elle est corrigée avant les revues. Préférez `"each-integration"` quand une découverte tardive coûte trop (spec longue, vagues très dépendantes, contrôle `full` sans commande `affected`).
 
 Repère (projet pilote « Toujours rien », septembre 2026, suite complète d'environ 9 minutes) : une spec à trois vagues avec une passe de corrections lançait 5 suites complètes (3 intégrations, 1 intégration de corrections, 1 livraison) ; avec `"final"`, 2 (dernière intégration, livraison) ; sans corrections, 4 contre 1.
+
+**Le rythme est tenu par l'outil.** Dans le cadre d'une exécution, `apv gates run --stage full` (ou sans `--stage`) refuse, code `1` (`GATE_RHYTHM`), une suite complète qui exécuterait au moins un contrôle de stage `full` quand l'étape courante n'attend que les contrôles de tâche et ciblés : même calcul que `apv run next` (`suite.level` à `task` : intégration intermédiaire ou passe de corrections avec `"final"`). Le message donne le niveau attendu et la commande à lancer à la place (`apv gates run --stage task --base <base ciblée>`, puis `apv gates verify --commit <tête> --stage task --base <base ciblée>`). L'exécution est celle de `--run <spec-id>`, sinon celle de la branche courante (`apv/<id>` ou `apv/<id>-<suffixe>`, l'identifiant le plus long d'abord) quand le checkout principal du dépôt (premier worktree de `git worktree list`, où s'écrivent les états) a `.apv/state/run-<id>.json`. Hors exécution (autre branche, tête détachée, aucun état), à la dernière intégration, à la livraison et avec `"each-integration"`, rien ne change. Dérogation motivée : `--reason "<texte>"` (1 à 500 caractères) laisse passer la suite ; la raison est journalisée dans l'état de l'exécution (événement `gates:full`, avec le commit) et écrite dans chaque reçu et dans `summary.json` (`override`). Ces reçus prouvent la suite complète comme les autres.
+
+Repère (nuit du 24 au 25 septembre 2026, même projet pilote) : une session a lancé la suite complète à une intégration intermédiaire alors que `apv run next` annonçait le niveau tâche ; la suite a trouvé des tests qui se gênaient, deux passes de corrections ont suivi, suite relancée chaque fois : 3 h pour une seule intégration intermédiaire.
+
+## Taille des specs : `spec`
+
+Section APV3, facultative, lue par `apv spec validate` et validée par le chargeur commun (entier hors bornes ou propriété inconnue refusés). Elle fixe les seuils au-delà desquels la validation **avertit**, sans jamais rendre la spec invalide ni changer le code de sortie.
+
+```json
+{ "spec": { "maxTasks": 6, "maxAcceptance": 30, "maxDepth": 3 } }
+```
+
+- `maxTasks` (défaut `6`, de 1 à 100) : nombre de tâches au-delà duquel la validation propose de découper la demande en specs indépendantes de 4 à 6 tâches, livrées en parallèle (sur des piles de test distinctes quand le projet en déclare plusieurs, par exemple des ressources de contrôle distinctes), chacune avec sa PR.
+- `maxAcceptance` (défaut `30`, de 1 à 1000) : même avertissement au-delà de ce nombre de critères d'acceptation.
+- `maxDepth` (défaut `3`, de 1 à 100) : nombre de couches du graphe des tâches (les vagues de `apv run start`) au-delà duquel la validation nomme le chemin le plus long. Chaque couche attend l'intégration de la précédente : le motif « contrats d'abord » (une première tâche pose les types, schémas, signatures de fonctions, interfaces de composants et migrations, avec des implémentations minimales testées) laisse les tâches suivantes se construire en parallèle contre ces contrats. Une dépendance ne se déclare que si la tâche a besoin du code de l'autre, pas seulement de son existence future.
+
+Les avertissements sortent aussi en JSON (`warnings`, codes `SPEC_SIZE` et `SPEC_DEPTH`, et `limits`, les seuils appliqués). Une spec déjà validée par l'opérateur s'exécute telle quelle.
+
+Repère (projet pilote, nuit du 24 au 25 septembre 2026) : une spec de 12 tâches et 65 critères, en chaîne de 5 couches (base, données, relances et documents, ajout et actions et fiche, liste et colonnes), a demandé environ 9 h d'exécution, chaque couche attendant l'intégration de la précédente.

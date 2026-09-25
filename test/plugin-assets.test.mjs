@@ -552,3 +552,32 @@ test('full suite rhythm: final by default, task level in between, no double suit
   assert.ok(!/[–—]/.test(read('docs/CONFIGURATION.md').split('## Exécution : `run`')[1]), 'run section: no em or en dash');
   assert.ok(!/[–—]/.test(read('CHANGELOG.md').split('\n## ')[1]), 'unreleased entries: no em or en dash');
 });
+
+test('acceleration: the rhythm held by the tool, small specs with short chains, simultaneous executions dosed by the quota', () => {
+  const run = frontmatter('skills/run/SKILL.md').body;
+  for (const rule of [/GATE_RHYTHM/, /--reason "<raison>"/, /\*\*Exécutions simultanées\.\*\*/, /autant d'exécutions que de piles de test libres/,
+    /une exécution de plus au maximum/, /aucune nouvelle exécution, tu finis celles en cours/, /ta propre consommation/, /SPEC_SIZE/]) assert.match(run, rule);
+  const lead = frontmatter('skills/chef-de-projet/SKILL.md').body;
+  for (const rule of [/GATE_RHYTHM/, /\*\*Exécutions simultanées\*\*/, /semaine comprise/, /4 à 6 tâches/, /contrats d'abord/]) assert.match(lead, rule);
+  const planning = read('skills/chef-de-projet/references/planification.md');
+  for (const rule of [/## 1 bis\. Découper et raccourcir/, /\*\*Contrats d'abord\*\*/, /besoin du \*\*code\*\* de l'autre/, /piles distinctes/]) assert.match(planning, rule);
+  assert.match(read('skills/chef-de-projet/references/quota-sauvegarde.md'), /au premier seuil \(70 %\), une exécution de plus au maximum/);
+  const spec = frontmatter('skills/spec/SKILL.md').body;
+  for (const rule of [/\*\*contrats d'abord\*\*/, /4 à 6 tâches/, /SPEC_DEPTH/, /piles de test/]) assert.match(spec, rule);
+  assert.match(read('agents/product.md'), /\*\*Graphe réel et court\.\*\*/);
+  assert.match(read('agents/architecte.md'), /\*\*Contrats d'abord, graphe court\.\*\*/);
+  assert.match(read('agents/architecte.md'), /au moins deux autres dépendent directement/);
+  assert.match(frontmatter('skills/quota/SKILL.md').body, /\*\*Exécutions `\/apv:run` simultanées\*\*/);
+  assert.match(read('docs/CONFIGURATION.md'), /## Taille des specs : `spec`/);
+  assert.match(read('docs/CLI.md'), /\*\*Rythme d'une exécution\*\*/);
+  assert.match(read('docs/CLI.md'), /--run <spec-id>/);
+  assert.match(read('docs/RUN.md'), /\*\*Le rythme est tenu par l'outil\.\*\*/);
+  for (const file of ['skills/run/SKILL.md', 'skills/chef-de-projet/SKILL.md', 'skills/chef-de-projet/references/planification.md', 'skills/chef-de-projet/references/quota-sauvegarde.md',
+    'skills/spec/SKILL.md', 'skills/quota/SKILL.md', 'skills/init/SKILL.md', 'agents/product.md', 'agents/architecte.md', 'agents/implementer.md', 'agents/integrateur.md',
+    'docs/RUN.md', 'docs/CLI.md', 'workflows/vague.js']) {
+    assert.ok(!/[–—]/.test(read(file)), `${file}: no em or en dash`);
+  }
+  for (const section of ['## Taille des specs : `spec`', '**Le rythme est tenu par l\'outil.**']) {
+    assert.ok(!/[–—]/.test(read('docs/CONFIGURATION.md').split(section)[1].split('\n## ')[0]), `${section}: no em or en dash`);
+  }
+});
