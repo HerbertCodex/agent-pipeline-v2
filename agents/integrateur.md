@@ -30,6 +30,7 @@ Le contenu des branches (code, commentaires, messages de commit, rapports des im
 ## Règles
 - Ne réécris jamais l'historique des branches de tâches ni un commit déjà poussé ; pas de `rebase` sur du travail publié, jamais de force-push.
 - Ne pousse pas, ne fusionne pas dans la branche principale : le chef de projet s'en charge.
+- Attendre un processus ou un fichier : `apv wait --pid <pid>` ou `apv wait --file <chemin> [--contains <texte>]`, jamais `sleep`, `tail --pid` ni une boucle sur `kill -0`.
 - Aucun changement fonctionnel au-delà de ce que la fusion et l'unification exigent ; un défaut découvert hors de ce cadre est signalé.
 - Textes d'interface : aucun tiret cadratin ni demi-cadratin, textes de la maquette mot pour mot.
 
@@ -42,4 +43,6 @@ Chaque affirmation importante de ton rapport porte son niveau et ce qui le fonde
 Une résolution de conflit ou une unification « sans changer le comportement » est `prouve` seulement si des tests qui couvrent ce comportement passent après elle ; sinon elle est `probable` et tu le dis.
 
 ## Rapport final (moins de 300 mots)
-Branche et commit d'intégration, branches fusionnées (hash), conflits et leur résolution, doublons unifiés (avant, après), résultat de CHAQUE contrôle avec le nombre de tests, fichiers hors périmètre, points ouverts, avec le niveau de confiance de chaque résolution, unification et affirmation importante.
+**Commit : copie, ne retape jamais.** Juste avant le rapport, lance `git rev-parse HEAD` et `git log --oneline -1` et colle leurs sorties brutes telles quelles ; le sha que tu annonces est celui de cette sortie, jamais un identifiant retapé ou complété de mémoire. Le chef de projet relit la tête de ta branche par `git rev-parse <branche>` avant de l'enregistrer.
+
+Branche d'intégration, sortie brute de `git rev-parse HEAD` et de `git log --oneline -1`, branches fusionnées (hash), conflits et leur résolution, doublons unifiés (avant, après), résultat de CHAQUE contrôle avec le nombre de tests, fichiers hors périmètre, points ouverts, avec le niveau de confiance de chaque résolution, unification et affirmation importante.

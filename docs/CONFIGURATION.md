@@ -327,3 +327,25 @@ Section APV3, facultative, lue par `apv spec validate` et validée par le charge
 Les avertissements sortent aussi en JSON (`warnings`, codes `SPEC_SIZE` et `SPEC_DEPTH`, et `limits`, les seuils appliqués). Une spec déjà validée par l'opérateur s'exécute telle quelle.
 
 Repère (projet pilote, nuit du 24 au 25 septembre 2026) : une spec de 12 tâches et 65 critères, en chaîne de 5 couches (base, données, relances et documents, ajout et actions et fiche, liste et colonnes), a demandé environ 9 h d'exécution, chaque couche attendant l'intégration de la précédente.
+
+## Revues : `review`
+
+Section APV3, facultative, validée par le chargeur commun (propriété inconnue, joker inconnu ou partiel refusés). Elle déclare le scan dynamique de sécurité du projet (ZAP ou un autre outil), que le chef de projet lance avant les revues par `apv dast run` ([CLI.md](CLI.md#apv-dast-run)) : les agents de revue n'ont pas le droit de lancer Docker, la revue sécurité lit les rapports. Absente : aucun scan déclaré, et la revue sécurité note le scan dynamique « non vérifié : non déclaré par le projet ».
+
+```json
+{ "review": { "dast": {
+  "command": ["sh", "scripts/dast.sh", "{{reportDir}}", "{{commit}}"],
+  "resource": "dast",
+  "timeoutMs": 3600000,
+  "passEnv": ["HOME", "DOCKER_HOST"],
+  "description": "ZAP : balayage de base puis balayage authentifié"
+} } }
+```
+
+- `command` (obligatoire) : argv sans shell, lancé dans la copie détachée du commit revu. Jokers remplacés comme arguments entiers : `{{reportDir}}` (dossier des rapports, hors de la copie), `{{commit}}` (sha complet de la copie), `{{repo}}` (chemin de la copie) ; mêmes valeurs dans `APV_DAST_REPORT_DIR`, `APV_DAST_COMMIT`, `APV_DAST_REPO`. La commande prépare ce qu'il lui faut (dépendances, build, serveur sur un port à elle), lance le scan, écrit ses rapports (HTML, JSON) dans le dossier, puis arrête ce qu'elle a lancé ; son code de sortie devient le statut du scan (`0` : `passed`).
+- `resource` (défaut `"dast"`) : le verrou à bail pris pendant le scan, comme `apv lock run <ressource>` ; un scan qui se sert d'une pile partagée (base locale de test, ports fixes) y nomme la ressource de cette pile (par exemple `"e2e"`).
+- `timeoutMs` (défaut `3600000`, de 1000 à 14400000) : durée maximale ; au-delà, la commande est arrêtée (SIGTERM, puis SIGKILL) et le scan est `timed_out`.
+- `passEnv` (défaut `[]`) : variables transmises en plus de `environment.passEnv` par défaut (`PATH`, `LANG`, dossiers temporaires) ; un client Docker a souvent besoin de `HOME`.
+- `description` (facultatif, 500 caractères au plus) : ce que fait le scan, recopié dans `summary.json`.
+
+Repère (projet pilote, septembre 2026) : la revue sécurité prévoyait un scan ZAP par Docker ; les permissions des agents de revue refusaient `docker run` et `docker pull`, et le scan n'a tourné sur aucune des livraisons suivies.
