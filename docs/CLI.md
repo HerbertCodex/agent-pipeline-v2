@@ -220,6 +220,8 @@ apv ledger apply --file <mise-a-jour.json> --hash <empreinte> --note <texte>
 - `plan` calcule le registre obtenu par une mise à jour `{ "decisions": [ ... ] }` : les nouvelles entrées s'ajoutent, une entrée qui en remplace une autre la nomme dans `supersedes` et l'ancienne quitte le registre actif (elle reste dans l'historique Git). Le plan affiche une empreinte.
 - `apply` écrit exactement le plan relu : l'empreinte doit correspondre, sinon rien n'est écrit. Il met à jour le JSON et sa version lisible (`DECISIONS.md` à côté), et commite ces deux fichiers seulement avec `--commit`. Le relecteur est `--reviewer`, sinon le `user.name` de Git.
 
+Le commit de `--commit` est fait sous l'identité Git du dépôt (`user.name` et `user.email`, du dépôt ou de la configuration globale), comme auteur et comme commiteur : l'outil n'invente jamais d'auteur. Sans identité configurée, `apply --commit` refuse avant d'écrire quoi que ce soit (sortie `1`, erreur `GIT_IDENTITY`, avec la commande à lancer : `git config user.name "Votre Nom" && git config user.email "vous@exemple.fr"`, `--global` pour tous les dépôts). Sans `--commit`, aucune identité n'est demandée. L'origine du commit reste lisible dans son message, par le trailer final `Generated-by: apv ledger apply` (`git log --format='%(trailers:key=Generated-by)'`). Tout commit créé par l'outil suit cette règle.
+
 Le registre reste à son emplacement : un projet V2 est mis à jour dans `.agent-pipeline/`, un projet V3 (ou sans registre) dans `.apv/`.
 
 ## `apv scope check`

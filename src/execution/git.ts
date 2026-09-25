@@ -4,6 +4,15 @@ import type { ChangeSet } from '../domain/contracts.js';
 import { invariant, PipelineError } from '../domain/errors.js';
 import { runProcess, environment, type ProcessHooks } from './process.js';
 
+export interface GitIdentity { name: string; email: string }
+export interface CommitMessage {
+  subject: string;
+  body?: string;
+  /** The tool command that created the commit, written as the `Generated-by` trailer. */
+  generatedBy: string;
+  trailers?: Record<string, string>;
+}
+
 export function isInside(parent: string, child: string): boolean {
   const rel = relative(resolve(parent), resolve(child));
   return rel === '' || (!rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && rel !== '..' && !isAbsolute(rel));
@@ -13,10 +22,10 @@ export class Git {
   async exec(cwd: string, args: string[]): Promise<string> {
     const result = await runProcess({
       // No fsmonitor: the controller must not start background daemons in disposable worktrees.
-      command: ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.quotePath=false', '-c', 'core.fsmonitor=false', ...args],
-      cwd, env: { ...environment(['PATH','SystemRoot','WINDIR','TMPDIR','TEMP','LANG']),
-        GIT_TERMINAL_PROMPT: '0', GIT_AUTHOR_NAME: 'Agent Pipeline V2', GIT_AUTHOR_EMAIL: 'pipeline@localhost',
-        GIT_COMMITTER_NAME: 'Agent Pipeline V2', GIT_COMMITTER_EMAIL: 'pipeline@localhost' },
+      // No author is forced: a commit goes through `commit()`, which passes the repository's own identity.
+      // useConfigOnly makes any other commit fail instead of letting Git guess an identity from the host.
+      command: ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.quotePath=false', '-c', 'core.fsmonitor=false', '-c', 'user.useConfigOnly=true', ...args],
+      cwd, env: { ...environment(['PATH','SystemRoot','WINDIR','TMPDIR','TEMP','LANG']), GIT_TERMINAL_PROMPT: '0' },
       timeoutMs: 120000, ...(this.signal ? { signal: this.signal } : {}), ...this.hooks, maxOutputBytes: 16 * 1024 * 1024,
     });
     if (result.status !== 'passed') throw new PipelineError(result.status === 'cancelled' ? 'CANCELLED' : 'GIT', `git ${args[0]}: ${result.status}: ${result.stderr.slice(-3000)}`);
@@ -32,11 +41,35 @@ export class Git {
    */
   async configValue(repo: string, key: string): Promise<string | null> {
     const result = await runProcess({ command: ['git','config','--get',key], cwd: repo,
-      env: environment(['PATH','SystemRoot','WINDIR','TMPDIR','TEMP','LANG','HOME','XDG_CONFIG_HOME','GIT_CONFIG_GLOBAL','GIT_CONFIG_SYSTEM']), timeoutMs: 10000,
+      env: environment(['PATH','SystemRoot','WINDIR','TMPDIR','TEMP','LANG','HOME','XDG_CONFIG_HOME','GIT_CONFIG_GLOBAL','GIT_CONFIG_SYSTEM','GIT_CONFIG_NOSYSTEM']), timeoutMs: 10000,
       ...(this.signal ? { signal: this.signal } : {}), ...this.hooks, maxOutputBytes: 65536 });
     if (result.status === 'passed') return result.stdout.trim() || null;
     if (result.exitCode === 1) return null;
     throw new PipelineError(result.status === 'cancelled' ? 'CANCELLED' : 'GIT', `git config: ${result.status}: ${result.stderr.slice(-1000)}`);
+  }
+  /**
+   * The identity Git itself would use for a commit in this repository (`user.name` and `user.email`, from
+   * the repository, global or system configuration). There is no invented fallback: a commit authored by an
+   * address that belongs to nobody is refused by hosts that check authors (a Vercel preview deployment is
+   * blocked when the commit author is not a team member).
+   */
+  async identity(repo: string): Promise<GitIdentity> {
+    const name = await this.configValue(repo, 'user.name');
+    const email = await this.configValue(repo, 'user.email');
+    if (name && email) return { name, email };
+    const missing = [name ? null : 'user.name', email ? null : 'user.email'].filter(Boolean).join(' et ');
+    throw new PipelineError('GIT_IDENTITY', `Aucune identité Git configurée (${missing} absent) : l'outil commite sous l'identité du dépôt et n'en invente pas. `
+      + `Configurez-la puis relancez : git config user.name "Votre Nom" && git config user.email "vous@exemple.fr" (ajoutez --global pour tous vos dépôts).`);
+  }
+  /**
+   * Commits as `identity` (author and committer), never as an invented author. The tool that made the
+   * commit is recorded as a `Generated-by` trailer (last paragraph), so `git log` still tells it apart.
+   */
+  async commit(repo: string, identity: GitIdentity, message: CommitMessage, paths?: readonly string[]): Promise<string> {
+    const trailers = [`Generated-by: ${message.generatedBy}`, ...Object.entries(message.trailers ?? {}).map(([k, v]) => `${k}: ${v}`)].join('\n');
+    await this.exec(repo, ['-c', `user.name=${identity.name}`, '-c', `user.email=${identity.email}`, 'commit', '--no-verify', '-m', message.subject,
+      ...(message.body ? ['-m', message.body] : []), '-m', trailers, ...(paths ? ['--', ...paths] : [])]);
+    return this.sha(repo);
   }
   async root(path: string): Promise<string> { return realpathSync((await this.exec(resolve(path), ['rev-parse','--show-toplevel'])).trim()); }
   async sha(repo: string, ref = 'HEAD'): Promise<string> {
@@ -90,7 +123,7 @@ export class Git {
     await this.exec(repo, ['merge-base','--is-ancestor',base,'HEAD']);
     await this.exec(repo, ['add','--all','--','.']);
     const staged = await this.exec(repo, ['diff','--cached','--name-only','-z']);
-    if (staged) await this.exec(repo, ['commit','--no-verify','-m',candidateSubject(title, runId),'-m',`Agent-Pipeline-Run: ${runId}`]);
+    if (staged) await this.commit(repo, await this.identity(repo), { subject: candidateSubject(title, runId), generatedBy: 'apv (candidat)', trailers: { 'Agent-Pipeline-Run': runId } });
     const sha = await this.sha(repo);
     invariant(sha !== base && (await this.changes(repo, base, sha)).files.length > 0, 'NO_CHANGE', 'Agent produced no effective change');
     await this.compatible(repo, sha); await this.clean(repo, sha); return sha;
@@ -108,6 +141,6 @@ export class Git {
 /** Readable single-line candidate subject derived from the task title; the run id stays in a trailer. */
 export function candidateSubject(title: string | undefined, runId: string): string {
   const clean = (title ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!clean) return `Agent Pipeline V2 candidate ${runId}`;
+  if (!clean) return `Agent Pipeline V3 candidate ${runId}`;
   return clean.length > 72 ? `${clean.slice(0, 71).trimEnd()}…` : clean;
 }
