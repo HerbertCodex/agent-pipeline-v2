@@ -9,7 +9,8 @@ import { previewSchema } from '../preview/config.js';
 import { designDir, designSchema } from '../design/config.js';
 import { structureSchema, structureSettings } from '../structure/config.js';
 import type { PolicyConfig } from '../policy/policy.js';
-import { validateDag } from '../policy/policy.js';
+import { matches, validateDag } from '../policy/policy.js';
+import { reviewAlwaysSchema, reviewPathsSchema, reviewTermsSchema } from '../review/config.js';
 
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
@@ -68,8 +69,16 @@ export const dastSchema = s.object({
   description: s.optional(s.string(1, 500)),
 });
 export type DastSettings = Infer<typeof dastSchema>;
-/** Settings of the reviews (`/apv:review`); absent: no dynamic scan declared. */
-export const reviewSettingsSchema = s.object({ dast: s.optional(dastSchema) });
+/**
+ * Settings of the reviews (`/apv:review`): the dynamic scan (absent: none declared), and what `apv review plan`
+ * reads to propose the domains from the diff (`paths`, `terms`, `always`; absent: generic defaults, src/review/config.ts).
+ */
+export const reviewSettingsSchema = s.object({
+  dast: s.optional(dastSchema),
+  paths: s.optional(reviewPathsSchema),
+  terms: s.optional(reviewTermsSchema),
+  always: s.optional(reviewAlwaysSchema),
+});
 
 export const apvConfigSchema = s.object({
   /** Project name, written by `apv init` (display only). */
@@ -160,6 +169,10 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
     const key = /^\{\{([A-Za-z]+)\}\}$/.exec(arg)?.[1];
     list.check(!!key && (DAST_PLACEHOLDERS as readonly string[]).includes(key), 'CONFIG',
       `review.dast.command: unknown or partial placeholder ${arg} (whole arguments only: ${DAST_PLACEHOLDERS.map(k => `{{${k}}}`).join(', ')})`);
+  }
+  // Portable globs only (the syntax of allowedPaths): a brace or a negation would silently match nothing.
+  for (const [key, globs] of Object.entries(value.review?.paths ?? {})) {
+    for (const glob of globs ?? []) list.attempt('CONFIG', () => { try { matches('probe', glob); } catch (error) { throw new PipelineError('CONFIG', `review.paths.${key}: ${errorMessage(error)}`); } });
   }
   if (list.empty) list.attempt('DAG', () => validateDag(value.gates));
   return { config: list.empty ? value : undefined, ignored: sections.ignored, issues: list.items };

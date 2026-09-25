@@ -63,7 +63,10 @@ export declare const dastSchema: import("../domain/schema.js").Schema<{
     readonly description: string | undefined;
 }>;
 export type DastSettings = Infer<typeof dastSchema>;
-/** Settings of the reviews (`/apv:review`); absent: no dynamic scan declared. */
+/**
+ * Settings of the reviews (`/apv:review`): the dynamic scan (absent: none declared), and what `apv review plan`
+ * reads to propose the domains from the diff (`paths`, `terms`, `always`; absent: generic defaults, src/review/config.ts).
+ */
 export declare const reviewSettingsSchema: import("../domain/schema.js").Schema<{
     readonly dast: {
         readonly command: string[];
@@ -72,6 +75,19 @@ export declare const reviewSettingsSchema: import("../domain/schema.js").Schema<
         readonly resource: string;
         readonly description: string | undefined;
     } | undefined;
+    readonly paths: {
+        readonly ui: string[] | undefined;
+        readonly data: string[] | undefined;
+        readonly migrations: string[] | undefined;
+        readonly personal: string[] | undefined;
+        readonly legal: string[] | undefined;
+        readonly neutral: string[] | undefined;
+    } | undefined;
+    readonly terms: {
+        readonly data: string[] | undefined;
+        readonly personal: string[] | undefined;
+    } | undefined;
+    readonly always: ("securite" | "fidelite" | "donnees" | "rgpd")[] | undefined;
 }>;
 export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
     readonly name: string | undefined;
@@ -163,6 +179,19 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly resource: string;
             readonly description: string | undefined;
         } | undefined;
+        readonly paths: {
+            readonly ui: string[] | undefined;
+            readonly data: string[] | undefined;
+            readonly migrations: string[] | undefined;
+            readonly personal: string[] | undefined;
+            readonly legal: string[] | undefined;
+            readonly neutral: string[] | undefined;
+        } | undefined;
+        readonly terms: {
+            readonly data: string[] | undefined;
+            readonly personal: string[] | undefined;
+        } | undefined;
+        readonly always: ("securite" | "fidelite" | "donnees" | "rgpd")[] | undefined;
     } | undefined;
 }>;
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */

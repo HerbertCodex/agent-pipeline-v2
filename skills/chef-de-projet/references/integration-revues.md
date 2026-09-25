@@ -16,14 +16,14 @@ Sous `/apv:run`, l'étape `integration` de l'état se tient par `apv run set <id
 6. Les branches de tâches restent telles quelles (jamais réécrites).
 
 ## 2. Revues indépendantes
-Commande : `/apv:review <id>` (workflow du plugin `apv:revues`, ou l'outil Agent avec un appel par domaine dans un même message). Après intégration et avant la PR, quatre revues en parallèle, en lecture seule, chacune sur sa copie détachée du même commit (`git worktree add --detach`), avec `apv run set <id> review:<domaine> …` (`securite`, `fidelite`, `donnees`, `rgpd`) quand une exécution existe :
+Commande : `/apv:review <id>` (workflow du plugin `apv:revues`, ou l'outil Agent avec un appel par domaine dans un même message). Après intégration et avant la PR, les revues que le diff demande (`apv review plan --base <base> --head <commit>` : `securite` toujours, les autres seulement sur preuve qu'elles ont quelque chose à relire ; `--force <domaine>` en garde un), en parallèle, en lecture seule, chacune sur sa copie détachée du même commit (`git worktree add --detach`), avec `apv run set <id> review:<domaine> …` (`securite`, `fidelite`, `donnees`, `rgpd` ; un domaine sauté avec `skipped --note "<raison de l'outil>"`) quand une exécution existe :
 
 | Agent | Quand | Ce qu'il rend |
 |---|---|---|
-| `qa-securite` | toujours pour un point d'entrée serveur, des données ou une authentification | attaques à deux utilisateurs, API directe, en-têtes, secrets, lecture du rapport du scan dynamique (ZAP) lancé par toi, constats prouvés |
-| `qa-fidelite` | dès que l'interface change | captures 390 et 1280, clair et sombre, écarts de textes, grille d'accessibilité |
-| `architecte-donnees` (revue) | dès qu'une migration ou une requête change | grille 13 bis, sortie de `apv db check`, `EXPLAIN` |
-| `dpo` | données personnelles, prestataire, traceur, pages légales | écarts entre pages légales et code, sous-traitants vérifiés |
+| `qa-securite` | toujours, sans exception | attaques à deux utilisateurs, API directe, en-têtes, secrets, lecture du rapport du scan dynamique (ZAP) lancé par toi, constats prouvés |
+| `qa-fidelite` | l'interface ou une maquette validée change de contenu | captures 390 et 1280, clair et sombre, écarts de textes, grille d'accessibilité |
+| `architecte-donnees` (revue) | une migration, un schéma, une requête ou un dépôt change | grille 13 bis, sortie de `apv db check`, `EXPLAIN` |
+| `dpo` | migration, données personnelles, export, prestataire, traceur, pages légales | écarts entre pages légales et code, sous-traitants vérifiés |
 
 Copies détachées dans ton dossier de session (ou sous un chemin que l'outil donne), jamais à côté du dépôt, retirées par `git worktree remove` à la fin. **Scan dynamique** : les agents de revue n'ont pas le droit de lancer Docker ; si le projet déclare `review.dast`, tu lances toi-même `apv dast run --repo <copie> --out <dossier de session>/dast-<sha court> --commit <commit>` avant les revues (verrou `review.dast.resource` pris par l'outil ; attente d'un long scan par `apv wait --file <dossier>/summary.json`), et le dossier des rapports va à `qa-securite`, qui les lit ; sans scan déclaré ou abouti, la raison lui est donnée et le scan est « non vérifié » dans la PR (compétence `review`, section 3 bis).
 
