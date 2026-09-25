@@ -33,7 +33,8 @@ avec au moins un contrôle de stage full) est refusée quand l'étape courante n
 contrôles de tâche et ciblés (même calcul que apv run next : intégration intermédiaire ou
 corrections avec run.fullSuite = final) ; le message donne la commande à lancer à la place.
 L'exécution : --run <spec-id>, sinon celle de la branche courante (apv/<id> ou apv/<id>-<suffixe>)
-quand le checkout principal a son état .apv/state/run-<id>.json ; aucune : rien ne change.
+quand un worktree du dépôt a son état .apv/state/run-<id>.json (plusieurs : celui sur apv/<id>,
+sinon le checkout principal, sinon refus qui liste les emplacements) ; aucune : rien ne change.
 --reason <texte> (1 à ${MAX_OVERRIDE_REASON} caractères) laisse passer la suite complète : la raison est journalisée
 dans l'état de l'exécution et écrite dans les reçus (override).
 Sortie : 0 si tous les contrôles exécutés passent, 1 sinon (ou suite complète refusée par le
@@ -233,7 +234,7 @@ export async function run(args, io) {
             json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null,
                 stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
                 reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory, gates: rows,
-                rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, step: rhythm.expected?.plan.step ?? null,
+                rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
                     level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
         }
         else {
