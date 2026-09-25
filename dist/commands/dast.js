@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { loadConfig } from '../config/load.js';
 import { PipelineError } from '../domain/errors.js';
+import { canonicalPath } from '../domain/paths.js';
 import { LockStore, defaultLockDir, parseDuration } from '../lock/store.js';
 import { DAST_LOG, DAST_SUMMARY, defaultReportDir, runDast } from '../review/dast.js';
 import { gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
@@ -73,7 +74,7 @@ export async function run(args, io) {
                 throw new PipelineError('DAST_COMMIT', `La copie ${repo} est sur ${head}, pas sur ${wanted} (--commit ${values.commit}) : le scan porte sur le commit revu`);
         }
         const clean = gitRead(repo, ['status', '--porcelain', '--untracked-files=no']) === '';
-        const reportDir = values.out !== undefined ? resolve(io.cwd, values.out) : defaultReportDir(repo, head, new Date());
+        const reportDir = canonicalPath(values.out !== undefined ? resolve(io.cwd, values.out) : defaultReportDir(repo, head, new Date()));
         const poll = io.env['APV_LOCK_POLL_MS'] ? Number(io.env['APV_LOCK_POLL_MS']) : undefined;
         const store = new LockStore(defaultLockDir(io.env), poll && Number.isFinite(poll) ? { pollMs: poll } : {});
         const owner = { pid: process.pid, host: store.host, label: io.env['APV_LOCK_LABEL'] || io.env['USER'] || 'apv dast' };

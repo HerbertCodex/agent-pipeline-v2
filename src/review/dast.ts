@@ -6,6 +6,7 @@ import { DEFAULT_PASS_ENV, VERSION } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
 import { environment, expandCommand } from '../execution/process.js';
 import { isInside } from '../execution/git.js';
+import { canonicalPath } from '../domain/paths.js';
 import { LOCK_WAIT_TIMEOUT_EXIT, TIMEOUT_EXIT, runLocked } from '../lock/run.js';
 import type { LockOwner, LockStore } from '../lock/store.js';
 import type { DastSettings } from '../config/load.js';
@@ -38,12 +39,14 @@ export interface DastSummary {
  */
 export function defaultReportDir(repo: string, commit: string, now: Date): string {
   const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-  return join(tmpdir(), 'apv-dast', `${basename(repo)}-${commit.slice(0, 12)}-${stamp}`);
+  return join(canonicalPath(tmpdir()), 'apv-dast', `${basename(repo)}-${commit.slice(0, 12)}-${stamp}`);
 }
 
 /** Refuses a report folder inside the scanned copy (it would go with the copy) or already used by a scan. */
 export function checkReportDir(repo: string, reportDir: string): void {
-  if (isInside(repo, reportDir)) {
+  // Canonical paths on both sides: Git gives the resolved root (macOS: /var is /private/var), a symbolic link
+  // may lead into the copy; comparing the written paths let a folder inside the copy through.
+  if (isInside(canonicalPath(repo), canonicalPath(reportDir))) {
     throw new PipelineError('DAST_OUT', `Dossier des rapports dans la copie scannée (${reportDir}) : la copie est retirée après les revues ; choisir un dossier hors du dépôt (le dossier de session, par exemple)`);
   }
   if (existsSync(join(reportDir, DAST_SUMMARY))) {
@@ -92,7 +95,8 @@ export interface DastRunOptions {
  */
 export async function runDast(options: DastRunOptions): Promise<DastSummary> {
   const now = options.now ?? (() => new Date());
-  const { settings, reportDir } = options;
+  const { settings } = options;
+  const reportDir = canonicalPath(options.reportDir);
   checkReportDir(options.repo, reportDir);
   mkdirSync(reportDir, { recursive: true });
   const command = expandCommand(settings.command, { reportDir, commit: options.commit, repo: options.repo });

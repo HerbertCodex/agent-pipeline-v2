@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fixture, git } from './helpers.mjs';
@@ -40,9 +40,9 @@ test('apv dast run: the declared scan runs in the copy under its lease, reports 
   assert.deepEqual([summary.status, summary.exitCode, summary.commit, summary.resource, summary.clean, summary.description],
     ['passed', 0, p.head(), 'dast', true, 'ZAP de base']);
   assert.deepEqual(summary.files, ['dast.log', 'zap-report.html']);
-  assert.equal(summary.command[3], out, '{{reportDir}} replaced as a whole argument');
+  assert.equal(summary.command[3], realpathSync(out), '{{reportDir}} replaced as a whole argument, canonical');
   const log = readFileSync(join(out, 'dast.log'), 'utf8');
-  assert.ok(log.includes(`commit ${p.head()} repo ${p.repo} env ${p.head()}`), log);
+  assert.ok(log.includes(`commit ${p.head()} repo ${realpathSync(p.repo)} env ${p.head()}`), log);
   assert.ok(log.includes('secret absent'), 'only DEFAULT_PASS_ENV and passEnv reach the command');
   assert.ok(log.includes('verrou dast'), 'the command runs under the lease');
   // One folder per scan: a second run into it would make apv wait return at once.
@@ -56,7 +56,7 @@ test('apv dast run: a failed scan, a scan past its delay and a lease not obtaine
   const out = join(failed.root, 'échec');
   const r = await failed.run(['--out', out, '--json'], { SCAN_EXIT: '3' });
   assert.equal(r.code, 1);
-  assert.deepEqual([r.json().status, r.json().exitCode, r.json().summary], ['failed', 3, `${out}/summary.json`]);
+  assert.deepEqual([r.json().status, r.json().exitCode, r.json().summary], ['failed', 3, `${realpathSync(out)}/summary.json`]);
 
   const slow = project(t, { command: [process.execPath, '-e', 'setTimeout(() => {}, 20000)'], timeoutMs: 1000 });
   const s = await slow.run(['--out', join(slow.root, 'lent'), '--json']);
@@ -89,7 +89,7 @@ test('apv dast run refuses: no scan declared, reports inside the copy, another c
   assert.equal(byDefault.code, 0, byDefault.stderr);
   const dir = byDefault.json().reportDir;
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  assert.ok(dir.startsWith(join(tmpdir(), 'apv-dast', `repo-${p.head().slice(0, 12)}-`)), dir);
+  assert.ok(dir.startsWith(join(realpathSync(tmpdir()), 'apv-dast', `repo-${p.head().slice(0, 12)}-`)), dir);
   assert.ok(existsSync(join(dir, 'summary.json')));
   assert.equal((await apv(p.repo, ['dast', 'scan'], p.env)).code, 2);
   assert.equal((await apv(p.repo, ['dast'], p.env)).code, 2);
@@ -106,4 +106,18 @@ test('review.dast is validated with the configuration: placeholders are whole an
   assert.ok(configIssues({ review: { dast: { command: [] } } }).issues.length, 'a command is required');
   assert.ok(configIssues({ review: { dast: { command: ['zap'], extra: 1 } } }).issues.length, 'unknown property');
   assert.deepEqual(configIssues({}).issues, [], 'the section stays optional');
+});
+
+test('apv dast run compares canonical paths: a report folder inside the copy reached through a symbolic link is refused', { skip: process.platform === 'win32' }, async t => {
+  // macOS: the temporary directory /var/folders is /private/var/folders, and Git reports the resolved root.
+  const p = project(t, scan());
+  const link = join(p.root, 'lien');
+  symlinkSync(p.root, link);
+  const inside = await apv(join(link, 'repo'), ['dast', 'run', '--out', join(link, 'repo', 'rapports')], p.env);
+  assert.equal(inside.code, 1, inside.stdout);
+  assert.match(inside.stderr, /DAST_OUT.*dans la copie scannée/);
+  const out = join(link, 'rapports');
+  const outside = await apv(join(link, 'repo'), ['dast', 'run', '--out', out, '--json'], p.env);
+  assert.equal(outside.code, 0, outside.stderr);
+  assert.equal(outside.json().reportDir, join(realpathSync(p.root), 'rapports'), 'the folder is shown canonical, like the repository');
 });
