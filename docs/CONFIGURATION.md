@@ -328,6 +328,19 @@ Les avertissements sortent aussi en JSON (`warnings`, codes `SPEC_SIZE` et `SPEC
 
 Repère (projet pilote, nuit du 24 au 25 septembre 2026) : une spec de 12 tâches et 65 critères, en chaîne de 5 couches (base, données, relances et documents, ajout et actions et fiche, liste et colonnes), a demandé environ 9 h d'exécution, chaque couche attendant l'intégration de la précédente.
 
+## Reçus : `receipts`
+
+Section APV3, facultative, validée par le chargeur commun (entier hors bornes ou propriété inconnue refusés). Elle borne le magasin partagé des reçus, `<répertoire git commun>/apv/receipts/` : `apv gates run` y copie chaque exécution (reçus, `summary.json` et `manifest.json` avec l'empreinte sha256 de chaque fichier) pour qu'elle survive au retrait de son worktree et que `apv gates verify --commit <sha>` prouve le commit depuis n'importe quel checkout du dépôt ([CLI.md](CLI.md#apv-gates-run)). Le magasin est dans le répertoire Git : jamais versionné, commun à tous les worktrees.
+
+```json
+{ "receipts": { "keepDays": 30, "keepRuns": 1000 } }
+```
+
+- `keepDays` (défaut `30`, de 1 à 3650) : une exécution plus ancienne (heure de début inscrite dans son identifiant) est retirée du magasin.
+- `keepRuns` (défaut `1000`, de 1 à 100000) : au-delà, les exécutions les plus anciennes sont retirées.
+
+La rétention s'applique après chaque copie, et à la demande par `apv gates receipts prune` (dont `--keep-days` et `--keep-runs` remplacent la section). Elle ne touche jamais les reçus des worktrees (`.apv/receipts/`) ni les autres entrées du dossier. Repère de taille : une exécution pèse quelques kilo-octets par contrôle. Garder au moins la durée qui sépare une livraison de la fusion de sa PR : la preuve citée dans la PR doit rester vérifiable jusque-là.
+
 ## Revues : `review`
 
 Section APV3, facultative, validée par le chargeur commun (propriété inconnue, joker inconnu ou partiel, motif de chemin hors syntaxe portable refusés). Elle déclare ce que `apv review plan` lit pour proposer les domaines de revue d'après le diff (`paths`, `terms`, `always`, plus bas), et le scan dynamique de sécurité du projet (ZAP ou un autre outil), que le chef de projet lance avant les revues par `apv dast run` ([CLI.md](CLI.md#apv-dast-run)) : les agents de revue n'ont pas le droit de lancer Docker, la revue sécurité lit les rapports. Absente : aucun scan déclaré, et la revue sécurité note le scan dynamique « non vérifié : non déclaré par le projet ».

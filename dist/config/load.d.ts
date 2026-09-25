@@ -9,7 +9,7 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
 /**
@@ -67,6 +67,14 @@ export type DastSettings = Infer<typeof dastSchema>;
  * Settings of the reviews (`/apv:review`): the dynamic scan (absent: none declared), and what `apv review plan`
  * reads to propose the domains from the diff (`paths`, `terms`, `always`; absent: generic defaults, src/review/config.ts).
  */
+/**
+ * Retention of the shared receipt store (`<git common dir>/apv/receipts/`, src/gates/store.ts): `apv gates run`
+ * keeps the `keepRuns` most recent runs younger than `keepDays` days. Local receipts (`.apv/receipts/`) are not concerned.
+ */
+export declare const receiptsSettingsSchema: import("../domain/schema.js").Schema<{
+    readonly keepDays: number;
+    readonly keepRuns: number;
+}>;
 export declare const reviewSettingsSchema: import("../domain/schema.js").Schema<{
     readonly dast: {
         readonly command: string[];
@@ -193,6 +201,10 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         } | undefined;
         readonly always: ("securite" | "fidelite" | "donnees" | "rgpd")[] | undefined;
     } | undefined;
+    readonly receipts: {
+        readonly keepDays: number;
+        readonly keepRuns: number;
+    } | undefined;
 }>;
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export declare const specLimits: (config: {
@@ -229,6 +241,13 @@ export declare function configFile(repo: string, explicit?: string): {
     file: string | null;
     legacy: boolean;
 };
+/**
+ * Configuration of a project as committed at `commit` (a full SHA): `.apv/config.json`, then `pipeline.v2.json`,
+ * read from the commit rather than the working tree, so that the proof of a commit is checked against the checks
+ * that commit declared from any checkout of the repository. Neither file at the commit: defaults (no checks).
+ * `file` is then `<sha>:<path>`.
+ */
+export declare function loadConfigAtCommit(repo: string, commit: string): LoadedConfig;
 export declare function loadConfig(repo: string, explicit?: string): LoadedConfig;
 /** The policy view of a V3 configuration: evidence-mode review is the only mode V3 knows. */
 export declare function policyConfig(config: ApvConfig): PolicyConfig;

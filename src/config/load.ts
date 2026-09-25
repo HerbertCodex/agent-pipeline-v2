@@ -10,6 +10,8 @@ import { designDir, designSchema } from '../design/config.js';
 import { structureSchema, structureSettings } from '../structure/config.js';
 import type { PolicyConfig } from '../policy/policy.js';
 import { matches, validateDag } from '../policy/policy.js';
+import { DEFAULT_RECEIPT_RETENTION } from '../gates/store.js';
+import { gitRead } from '../run/git-probe.js';
 import { reviewAlwaysSchema, reviewPathsSchema, reviewTermsSchema } from '../review/config.js';
 
 /** V3 project configuration, versioned with the project. */
@@ -20,7 +22,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review'] as const;
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts'] as const;
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'] as const;
 
@@ -73,6 +75,14 @@ export type DastSettings = Infer<typeof dastSchema>;
  * Settings of the reviews (`/apv:review`): the dynamic scan (absent: none declared), and what `apv review plan`
  * reads to propose the domains from the diff (`paths`, `terms`, `always`; absent: generic defaults, src/review/config.ts).
  */
+/**
+ * Retention of the shared receipt store (`<git common dir>/apv/receipts/`, src/gates/store.ts): `apv gates run`
+ * keeps the `keepRuns` most recent runs younger than `keepDays` days. Local receipts (`.apv/receipts/`) are not concerned.
+ */
+export const receiptsSettingsSchema = s.object({
+  keepDays: s.default(s.number(1, 3650), DEFAULT_RECEIPT_RETENTION.keepDays),
+  keepRuns: s.default(s.number(1, 100000), DEFAULT_RECEIPT_RETENTION.keepRuns),
+});
 export const reviewSettingsSchema = s.object({
   dast: s.optional(dastSchema),
   paths: s.optional(reviewPathsSchema),
@@ -100,6 +110,8 @@ export const apvConfigSchema = s.object({
   spec: s.optional(specSettingsSchema),
   /** Reviews: the dynamic scan run before them (docs/CONFIGURATION.md, « Revues »); absent: none declared. */
   review: s.optional(reviewSettingsSchema),
+  /** Retention of the shared receipt store (docs/CONFIGURATION.md, « Reçus »); absent: 30 days, 1000 runs. */
+  receipts: s.optional(receiptsSettingsSchema),
 });
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export const specLimits = (config: { spec?: Partial<SpecLimits> | undefined }): SpecLimits => ({ ...DEFAULT_SPEC_LIMITS, ...config.spec });
@@ -186,6 +198,28 @@ export function configFile(repo: string, explicit?: string): { file: string | nu
   const legacy = join(repo, LEGACY_CONFIG_FILE);
   if (existsSync(legacy)) return { file: legacy, legacy: true };
   return { file: null, legacy: false };
+}
+
+/**
+ * Configuration of a project as committed at `commit` (a full SHA): `.apv/config.json`, then `pipeline.v2.json`,
+ * read from the commit rather than the working tree, so that the proof of a commit is checked against the checks
+ * that commit declared from any checkout of the repository. Neither file at the commit: defaults (no checks).
+ * `file` is then `<sha>:<path>`.
+ */
+export function loadConfigAtCommit(repo: string, commit: string): LoadedConfig {
+  for (const [path, legacy] of [[CONFIG_FILE, false], [LEGACY_CONFIG_FILE, true]] as const) {
+    if (gitRead(repo, ['cat-file', '-e', `${commit}:${path}`]) === null) continue;
+    const text = gitRead(repo, ['show', `${commit}:${path}`]);
+    const file = `${commit}:${path}`;
+    if (text === null) throw new PipelineError('CONFIG', `Configuration unreadable at ${file}`);
+    let raw: unknown;
+    try { raw = JSON.parse(text) as unknown; }
+    catch (error) { throw new PipelineError('CONFIG', `Invalid JSON in ${file}: ${errorMessage(error)}`); }
+    const { config, ignored, issues } = configIssues(raw);
+    if (!config) throw new PipelineError(issues[0]?.code ?? 'CONFIG', `Invalid configuration ${file}:\n${issues.map(i => `- ${i.message}`).join('\n')}`);
+    return { file, legacy, config, ignored };
+  }
+  return { file: null, legacy: false, config: apvConfigSchema.parse({}), ignored: [] };
 }
 
 export function loadConfig(repo: string, explicit?: string): LoadedConfig {

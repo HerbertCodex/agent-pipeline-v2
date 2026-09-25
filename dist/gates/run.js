@@ -3,13 +3,14 @@ import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { gateStage, validateReceipt } from '../domain/contracts.js';
-import { invariant } from '../domain/errors.js';
+import { errorMessage, invariant } from '../domain/errors.js';
 import { hash } from '../domain/hash.js';
 import { environmentIdentity, executableIdentity, proofKey } from '../evidence/key.js';
 import { Git } from '../execution/git.js';
 import { environment, expandCommand, redact, runProcess } from '../execution/process.js';
 import { failureExcerpt, MAX_DIAGNOSTIC_CHARS } from '../engine/diagnostic.js';
 import { schedule, success } from '../engine/scheduler.js';
+import { publishRun, pruneStore, receiptRetention, sharedStore } from './store.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
 export const RECEIPTS_DIR = '.apv/receipts';
 /** Environment identity of a V3 local run; V2 read it from `environment.id`, a field V3 no longer reads. */
@@ -124,10 +125,33 @@ export async function runGates(options) {
             stdoutHash: '', stderrHash: '', diagnostic: reason, reusedFrom: null }),
     });
     const result = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
-        reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, ok: list.every(success) };
+        reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, shared: null, ok: list.every(success) };
     writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
         reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}),
         receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs) })) }, null, 2) + '\n');
+    if (options.share !== false)
+        result.shared = await shareRun(git, repo, directory, runId, candidateSha, options.config);
     return result;
+}
+/**
+ * Copies a finished run into the shared store of the repository, so that it survives its worktree, then applies
+ * the retention of the store. A failure is reported, never fatal: the run and its local receipts stand.
+ */
+async function shareRun(git, repo, directory, runId, candidateSha, config) {
+    let target;
+    let store;
+    try {
+        store = await sharedStore(git, repo);
+        target = publishRun(store, directory, runId, candidateSha, repo);
+    }
+    catch (error) {
+        return { directory: null, error: errorMessage(error), pruned: null };
+    }
+    let pruned = null;
+    try {
+        pruned = pruneStore(store, receiptRetention(config));
+    }
+    catch { /* Retention is retried by the next run. */ }
+    return { directory: target, error: null, pruned };
 }
 //# sourceMappingURL=run.js.map

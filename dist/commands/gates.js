@@ -1,8 +1,9 @@
-import { relative } from 'node:path';
-import { loadConfig } from '../config/load.js';
+import { join, relative, resolve } from 'node:path';
+import { loadConfig, loadConfigAtCommit } from '../config/load.js';
 import { gateStage, gateStages } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
-import { runGates, selectGates } from '../gates/run.js';
+import { RECEIPTS_DIR, runGates, selectGates } from '../gates/run.js';
+import { exportRun, listRuns, pruneStore, receiptRetention, sharedStore } from '../gates/store.js';
 import { expectedLevel, findRun } from '../run/rhythm.js';
 import { resolveCommit, gitRoot } from '../run/git-probe.js';
 import { MAX_OVERRIDE_REASON, RUN_ID, applyFullSuiteOverride, readRunState, withRunLock, writeRunState } from '../run/state.js';
@@ -14,12 +15,20 @@ export const usage = `Utilisation :
   apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>]
                 [--concurrency N] [--keep-going] [--skip-proven] [--run <spec-id>]
                 [--reason <texte>] [--repo <chemin>] [--json]
-  apv gates verify --commit <sha> [--stage full|task] [--base <ref>] [--config <fichier>]
-                   [--repo <chemin>] [--json]
+  apv gates verify --commit <sha> [--stage full|task] [--base <ref>]
+                   [--config <fichier> | --commit-config] [--repo <chemin>] [--json]
+  apv gates receipts list [--commit <ref>] [--limit N] [--repo <chemin>] [--json]
+  apv gates receipts export <exécution> --out <dossier> [--repo <chemin>] [--json]
+  apv gates receipts prune [--keep-days N] [--keep-runs N] [--config <fichier>]
+                         [--repo <chemin>] [--json]
 
 run : exécute les contrôles déclarés (.apv/config.json, sinon pipeline.v2.json) dans le dépôt :
 dépendances, ressources, variables transmises, délais et masquage des secrets respectés.
-Écrit un reçu JSON par contrôle dans .apv/receipts/<exécution>/ et affiche un tableau.
+Écrit un reçu JSON par contrôle dans .apv/receipts/<exécution>/ et affiche un tableau ; copie
+l'exécution dans le magasin partagé du dépôt (<répertoire git commun>/apv/receipts/<exécution>/,
+commun à tous les worktrees, jamais versionné, avec les empreintes de ses fichiers), où elle
+survit au retrait du worktree, puis y applique la rétention (section receipts de la configuration :
+30 jours et 1000 exécutions par défaut).
 --stage task n'exécute que les contrôles de stage task (champ absent : task) ; un contrôle
 de stage full qui déclare affected y lance cette commande ciblée à sa place (tests concernés
 par les changements, marqués « ciblé », jamais une preuve du contrôle complet) ; les autres
@@ -47,11 +56,26 @@ compte. --stage full (défaut) : tous les contrôles, les reçus ciblés ne comp
 leur reçu ciblé (ou complet) ; --base <ref> est alors obligatoire (le dernier commit prouvé par
 la suite complète) : un reçu ciblé ne compte que si la base de son exécution est ce commit ou
 l'un de ses ancêtres.
-Sortie : 0 preuve complète, 1 sinon (ce qui manque est listé), 2 appel incorrect.`;
+Les reçus sont lus dans .apv/receipts/ du worktree, puis dans le magasin partagé pour les
+exécutions que le worktree n'a pas : la preuve d'un commit se vérifie depuis n'importe quel
+checkout du dépôt, avec les mêmes exigences. Une exécution du magasin partagé dont un fichier ne
+correspond plus à son manifeste (empreintes) est refusée en entier et signalée.
+--commit-config lit la configuration des contrôles au commit vérifié (git show <commit>:.apv/config.json)
+plutôt que dans le checkout : utile depuis un checkout dont la configuration diffère de celle du commit.
+Sortie : 0 preuve complète, 1 sinon (ce qui manque est listé), 2 appel incorrect.
+
+receipts list : exécutions du worktree et du magasin partagé, les plus récentes d'abord (20 par
+défaut, --limit N), avec commit, stage, verdict, arbre et emplacement ; --commit <ref> filtre.
+receipts export <exécution> --out <dossier> : copie l'exécution (du worktree, sinon du magasin
+partagé, intacte) dans <dossier>/<exécution>/ avec manifest.json (empreinte sha256 de chaque fichier).
+receipts prune : applique la rétention au magasin partagé (--keep-days, --keep-runs remplacent
+la configuration). Les reçus du worktree ne sont jamais touchés.
+Sortie : 0, 1 exécution introuvable, altérée ou destination existante, 2 appel incorrect.`;
 const STATUS = { passed: 'réussi', failed: 'échec', timed_out: 'délai dépassé', cancelled: 'annulé',
     spawn_error: 'non lancé', blocked: 'bloqué', cached: 'réutilisé' };
 const RESERVED = 'réservé à la suite complète';
 const TARGETED = 'ciblé';
+const SHARED = 'magasin partagé';
 const EVIDENCE = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu' };
 /** Human lines of `apv gates verify`. */
 function verifyLines(result) {
@@ -62,7 +86,9 @@ function verifyLines(result) {
     };
     const lines = [`Vérification (${what}) au commit ${result.commit.slice(0, 12)}${result.base ? ` ; tests ciblés depuis ${result.base.slice(0, 12)}` : ''}`, '',
         table(['contrôle', 'état', 'reçu'], result.gates.map(g => [g.viaTargeted ? `${g.gateId} (${TARGETED})` : g.gateId, state(g),
-            g.receipt ? `${g.runId}/${g.gateId}.json` : '-']))];
+            g.receipt ? `${g.runId}/${g.gateId}.json${g.source === 'shared' ? ` (${SHARED})` : ''}` : '-']))];
+    if (result.gates.some(g => g.source === 'shared'))
+        lines.push('', `Magasin partagé des reçus : ${result.store}`);
     const other = result.gates.filter(g => g.otherConfig > 0 && g.state !== 'passed');
     if (other.length)
         lines.push('', `Reçus ignorés (configuration des contrôles différente) : ${other.map(g => g.gateId).join(', ')}`);
@@ -74,6 +100,8 @@ function verifyLines(result) {
         lines.push('', `Reçus ciblés ignorés (leur base ne couvre pas les changements depuis ${result.base?.slice(0, 12)}) : ${otherBase.map(g => g.gateId).join(', ')}`);
     if (result.unreadable.length)
         lines.push('', `Reçus illisibles ignorés : ${result.unreadable.join(', ')}`);
+    if (result.altered.length)
+        lines.push('', `Exécutions du magasin partagé refusées (altérées) : ${result.altered.map(a => `${a.runId} (${a.reason})`).join(', ')}`);
     const missing = result.gates.filter(g => g.state !== 'passed');
     const rerun = result.stage === 'task' && result.base ? `apv gates run --stage task --base ${result.base.slice(0, 12)}` : `apv gates run --stage ${result.stage}`;
     lines.push('', result.ok
@@ -156,14 +184,20 @@ export async function run(args, io) {
             only: { type: 'string' }, config: { type: 'string' }, base: { type: 'string' }, concurrency: { type: 'string' },
             stage: { type: 'string' }, commit: { type: 'string' }, 'skip-proven': { type: 'boolean' }, run: { type: 'string' }, reason: { type: 'string' },
             'keep-going': { type: 'boolean' }, repo: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+            'commit-config': { type: 'boolean' }, limit: { type: 'string' }, out: { type: 'string' }, 'keep-days': { type: 'string' }, 'keep-runs': { type: 'string' },
         });
         if (values.help) {
             io.stdout(`${usage}\n`);
             return EXIT.ok;
         }
         const [action, ...rest] = positionals;
-        if (action !== 'run' && action !== 'verify')
+        if (action !== 'run' && action !== 'verify' && action !== 'receipts')
             throw new UsageError(action ? `sous-commande inconnue : gates ${action}` : 'sous-commande manquante');
+        if (action === 'receipts')
+            return receipts(rest, values, io);
+        const own = ['limit', 'out', 'keep-days', 'keep-runs'].filter(k => values[k] !== undefined);
+        if (own.length)
+            throw new UsageError(`option de gates receipts seulement : --${own.join(', --')}`);
         if (rest.length)
             throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
         const stage = stageOf(values.stage);
@@ -175,13 +209,24 @@ export async function run(args, io) {
                 throw new UsageError('gates verify attend --commit <sha>');
             if (values.base !== undefined && stage !== 'task')
                 throw new UsageError('gates verify : --base va avec --stage task (base des tests ciblés)');
+            if (values['commit-config'] && values.config !== undefined)
+                throw new UsageError('gates verify : --commit-config ou --config, pas les deux');
             const repo = repoPath(io, values.repo);
-            const loaded = loadConfig(repo, values.config);
+            let loaded;
+            if (values['commit-config']) {
+                const root = gitRoot(repo);
+                const sha = resolveCommit(root, values.commit);
+                if (!sha)
+                    throw new PipelineError('SHA', `Commit introuvable : ${values.commit}`);
+                loaded = loadConfigAtCommit(root, sha);
+            }
+            else
+                loaded = loadConfig(repo, values.config);
             const result = await verifyGates({ repo, config: loaded.config, commit: values.commit, ...(stage ? { stage } : {}), ...(values.base ? { base: values.base } : {}) });
             if (values.json) {
                 json(io, { ok: result.ok, commit: result.commit, stage: result.stage, base: result.base, config: loaded.file, configHash: result.configHash,
                     required: result.required, targeted: result.targeted, reserved: result.reserved, gates: result.gates, unreadable: result.unreadable,
-                    missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
+                    store: result.store, altered: result.altered, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
             }
             else {
                 io.stdout(`${verifyLines(result).join('\n')}\n`);
@@ -190,6 +235,8 @@ export async function run(args, io) {
         }
         if (values.commit !== undefined)
             throw new UsageError('--commit est une option de gates verify');
+        if (values['commit-config'])
+            throw new UsageError('--commit-config est une option de gates verify');
         const skipProven = values['skip-proven'] === true;
         if (skipProven && (stage === 'task' || values.only !== undefined))
             throw new UsageError('--skip-proven va avec la suite complète entière (--stage full, sans --only)');
@@ -233,7 +280,8 @@ export async function run(args, io) {
         if (values.json) {
             json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null,
                 stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
-                reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory, gates: rows,
+                reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
+                sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
                 rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
                     level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
         }
@@ -256,10 +304,78 @@ export async function run(args, io) {
                 ? ` ${result.reserved.length} contrôle(s) ${RESERVED}, non exécuté(s) : la suite complète (apv gates run --stage full) les vérifie.` : '';
             const targeted = result.targeted.length
                 ? ` ${result.targeted.length} contrôle(s) ${TARGETED}(s) (${result.targeted.join(', ')}) : seuls les tests concernés par les changements ont tourné ; la suite complète (apv gates run --stage full) les exécute en entier.` : '';
-            lines.push('', `${verdict}${targeted}${reserved} Reçus : ${relative(io.cwd, result.directory) || result.directory}`);
+            lines.push('', `${verdict}${targeted}${reserved} Reçus : ${relative(io.cwd, result.directory) || result.directory}` +
+                (result.shared?.directory ? ` ; copie partagée : ${result.shared.directory} (exécution ${result.runId})` : ''));
+            if (result.shared?.error)
+                lines.push(`Attention : copie dans le magasin partagé impossible (${cleanLine(result.shared.error, 300)}) ; ces reçus disparaîtront avec ce worktree.`);
             io.stdout(`${lines.join('\n')}\n`);
         }
         return result.ok ? EXIT.ok : EXIT.failed;
     });
+}
+function count(value, name, min, max) {
+    if (value === undefined)
+        return undefined;
+    const n = Number(value);
+    if (typeof value !== 'string' || !Number.isInteger(n) || n < min || n > max)
+        throw new UsageError(`--${name} attend un entier entre ${min} et ${max}`);
+    return n;
+}
+/** `apv gates receipts list|export|prune`: the runs of the worktree and of the shared store of the repository. */
+async function receipts(args, values, io) {
+    const [sub, ...rest] = args;
+    if (sub !== 'list' && sub !== 'export' && sub !== 'prune')
+        throw new UsageError(sub ? `sous-commande inconnue : gates receipts ${sub}` : 'sous-commande manquante (list, export, prune)');
+    const allowed = { list: ['commit', 'limit'], export: ['out'], prune: ['keep-days', 'keep-runs', 'config'] };
+    const foreign = ['only', 'config', 'base', 'concurrency', 'stage', 'commit', 'skip-proven', 'run', 'reason', 'keep-going', 'commit-config', 'limit', 'out', 'keep-days', 'keep-runs']
+        .filter(k => values[k] !== undefined && !allowed[sub].includes(k));
+    if (foreign.length)
+        throw new UsageError(`option inattendue pour gates receipts ${sub} : --${foreign.join(', --')}`);
+    const repo = gitRoot(repoPath(io, values['repo']));
+    const store = await sharedStore(new Git(), repo);
+    const localRoot = join(repo, RECEIPTS_DIR);
+    if (sub === 'export') {
+        if (rest.length !== 1)
+            throw new UsageError('gates receipts export attend un identifiant d\'exécution');
+        if (typeof values['out'] !== 'string' || !values['out'])
+            throw new UsageError('gates receipts export attend --out <dossier>');
+        const result = exportRun(repo, localRoot, store, rest[0], resolve(io.cwd, values['out']));
+        if (values['json'])
+            json(io, { ok: true, ...result });
+        else
+            io.stdout(`Exécution ${result.runId} exportée (${result.source === 'shared' ? SHARED : 'worktree'}) : ${result.directory}, ${result.files.length} fichier(s) et manifest.json (empreintes sha256).\n`);
+        return EXIT.ok;
+    }
+    if (rest.length)
+        throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
+    if (sub === 'prune') {
+        const configured = receiptRetention(loadConfig(repo, typeof values['config'] === 'string' ? values['config'] : undefined).config);
+        const retention = { keepDays: count(values['keep-days'], 'keep-days', 1, 3650) ?? configured.keepDays, keepRuns: count(values['keep-runs'], 'keep-runs', 1, 100000) ?? configured.keepRuns };
+        const result = pruneStore(store, retention);
+        if (values['json'])
+            json(io, { ok: true, store, ...retention, ...result });
+        else
+            io.stdout(`Magasin partagé ${store} : ${result.removed.length} exécution(s) retirée(s), ${result.kept} gardée(s) (${retention.keepDays} jours, ${retention.keepRuns} exécutions au plus)${result.temporary ? `, ${result.temporary} copie(s) interrompue(s) retirée(s)` : ''}.\n`);
+        return EXIT.ok;
+    }
+    const limit = count(values['limit'], 'limit', 1, 100000) ?? 20;
+    let commit = null;
+    if (typeof values['commit'] === 'string') {
+        commit = resolveCommit(repo, values['commit']);
+        if (!commit)
+            throw new PipelineError('SHA', `Commit introuvable : ${values['commit']}`);
+    }
+    const runs = listRuns(localRoot, store).filter(r => !commit || r.candidateSha === commit);
+    const shown = runs.slice(0, limit);
+    if (values['json']) {
+        json(io, { ok: true, store, total: runs.length, runs: shown });
+        return EXIT.ok;
+    }
+    const where = (r) => [r.local ? 'worktree' : '', r.shared ? (r.intact ? SHARED : `${SHARED}, altérée : ${r.reason}`) : ''].filter(Boolean).join(' + ');
+    const verdict = (r) => r.ok === null ? '-' : r.ok ? 'réussi' : 'échec';
+    io.stdout(`${[`Exécutions (${shown.length} sur ${runs.length}${commit ? `, commit ${commit.slice(0, 12)}` : ''}) ; magasin partagé : ${store}`, '',
+        runs.length ? table(['exécution', 'commit', 'stage', 'verdict', 'arbre', 'emplacement'], shown.map(r => [r.runId, r.candidateSha?.slice(0, 12) ?? '-', r.stage ?? '-', verdict(r),
+            r.dirty === null ? '-' : r.dirty ? 'modifié' : 'propre', where(r)])) : 'Aucune exécution.'].join('\n')}\n`);
+    return EXIT.ok;
 }
 //# sourceMappingURL=gates.js.map
