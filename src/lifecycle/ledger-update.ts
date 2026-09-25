@@ -67,16 +67,17 @@ export async function applyLedgerUpdate(repoPath: string, input: unknown, expect
   const [json, md] = [plan.file, markdownFile(plan.file)];
   const dirty = await git.exec(plan.repo, ['status', '--porcelain=v1', '--', json, md]);
   invariant(dirty.trim() === '', 'LEDGER_DIRTY', 'Decision ledger files have uncommitted changes');
+  // Checked before writing: without an identity the ledger is left untouched rather than half applied.
+  const identity = commit ? await git.identity(plan.repo) : null;
   mkdirSync(join(plan.repo, dirname(json)), { recursive: true });
   writeFileSync(join(plan.repo, json), JSON.stringify(plan.ledger, null, 2) + '\n');
   writeFileSync(join(plan.repo, md), decisionLedgerMarkdown(plan.ledger));
   let commitSha: string | null = null;
-  if (commit) {
+  if (identity) {
     await git.exec(plan.repo, ['add', '--', json, md]);
     const body = [`Added: ${plan.added.join(', ')}`, `Superseded: ${plan.superseded.join(', ') || 'none'}`, `Reviewer: ${reviewer}`, `Note: ${note.replace(/\s+/g, ' ').trim()}`].join('\n');
     // Pathspec: the operator may have unrelated work staged, and a ledger commit must carry the ledger only.
-    await git.exec(plan.repo, ['commit', '--no-verify', '-m', 'chore(decisions): update decision ledger', '-m', body, '--', json, md]);
-    commitSha = await git.sha(plan.repo);
+    commitSha = await git.commit(plan.repo, identity, { subject: 'chore(decisions): update decision ledger', body, generatedBy: 'apv ledger apply' }, [json, md]);
   }
   return { ...plan, commitSha };
 }
