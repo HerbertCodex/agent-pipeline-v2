@@ -7,7 +7,8 @@ import { specIssues, specSchema } from '../lifecycle/contracts.js';
 import { decisionLedgerIssues, decisionLedgerSchema, LEDGER_FILE, LEGACY_LEDGER_FILE } from '../lifecycle/decisions.js';
 import { assessSecurity } from '../security/owasp.js';
 import { pathsMentioned } from '../security/change-signals.js';
-import { loadConfig } from '../config/load.js';
+import { DEFAULT_SPEC_LIMITS, loadConfig, specLimits } from '../config/load.js';
+import { longestChain } from '../run/state.js';
 export function parseSpecDocument(raw) {
     if (raw !== null && typeof raw === 'object' && !Array.isArray(raw) && Object.hasOwn(raw, 'spec') && !Object.hasOwn(raw, 'title')) {
         const doc = raw;
@@ -60,6 +61,33 @@ export function specText(spec) {
     return [parsed.title, parsed.problem, ...parsed.scope, ...parsed.acceptance.map(a => a.description), ...parsed.tasks.flatMap(t => [t.title, t.description])].join('\n');
 }
 /**
+ * Warnings of a well-formed spec: more tasks or criteria than the thresholds (split it into independent specs
+ * delivered in parallel), or a chain of dependency layers deeper than `maxDepth` (each layer waits for the
+ * integration of the previous one). A malformed spec gets none: its errors come first.
+ */
+export function specWarnings(spec, limits) {
+    const warnings = [];
+    const split = 'découpe-la en specs indépendantes de 4 à 6 tâches, livrées en parallèle (sur des piles de test distinctes si le projet en déclare plusieurs), chacune avec sa PR';
+    if (spec.tasks.length > limits.maxTasks) {
+        warnings.push({ code: 'SPEC_SIZE', message: `La spec compte ${spec.tasks.length} tâches (seuil spec.maxTasks : ${limits.maxTasks}) : ${split}.` });
+    }
+    if (spec.acceptance.length > limits.maxAcceptance) {
+        warnings.push({ code: 'SPEC_SIZE', message: `La spec compte ${spec.acceptance.length} critères d'acceptation (seuil spec.maxAcceptance : ${limits.maxAcceptance}) : ${split}.` });
+    }
+    let chain = [];
+    try {
+        chain = longestChain(spec.tasks.map(t => ({ id: t.id, title: t.title, dependsOn: [...t.dependsOn] })));
+    }
+    catch { /* cycle or unknown dependency: already an error of the spec */ }
+    if (chain.length > limits.maxDepth) {
+        warnings.push({ code: 'SPEC_DEPTH', message: `Le graphe des tâches a ${chain.length} couches de dépendances (seuil spec.maxDepth : ${limits.maxDepth}), ` +
+                `chemin le plus long : ${chain.join(' -> ')}. Chaque couche attend l'intégration de la précédente : pose d'abord les contrats partagés ` +
+                '(types, schémas, signatures, interfaces de composants, migrations) avec des implémentations minimales testées, pour que les tâches suivantes ' +
+                'se construisent en parallèle contre eux ; une dépendance ne se déclare que si la tâche a besoin du code de l\'autre.' });
+    }
+    return warnings;
+}
+/**
  * Validates a spec against the same security minimum V2 computed when it launched a spec (journal incident
  * 14: a spec declared valid against a draft context was refused at launch). The minimum comes from the
  * request, the project type and the paths the request names or the tasks declare, recognised on the
@@ -72,10 +100,12 @@ export async function checkSpec(options) {
     const issues = [];
     let projectType = 'unknown';
     let configFile = null;
+    let limits = { ...DEFAULT_SPEC_LIMITS };
     try {
         const loaded = loadConfig(repo, options.configFile);
         projectType = loaded.config.skills.projectType;
         configFile = loaded.file;
+        limits = specLimits(loaded.config);
     }
     catch (error) {
         issues.push({ code: error instanceof PipelineError ? error.code : 'CONFIG', message: errorMessage(error) });
@@ -102,7 +132,9 @@ export async function checkSpec(options) {
         files: [...pathsMentioned(request, tracked), ...(declared?.tasks.flatMap(t => t.allowedPaths).filter(p => !/[*?]/.test(p)) ?? [])] });
     issues.push(...specIssues(options.document.spec, { ready: options.ready ?? true, securityContext: security,
         ...(ledger.ledger ? { ledger: ledger.ledger } : {}), ...(explicit !== undefined ? { operatorText: explicit } : {}) }));
-    return { valid: issues.length === 0, issues, title: declared?.title ?? null, sha, requestSource, requestFile: stored?.file ?? null, ledgerFile: ledger.file, configFile, security };
+    const warnings = declared ? specWarnings(declared, limits) : [];
+    return { valid: issues.length === 0, issues, title: declared?.title ?? null, sha, requestSource, requestFile: stored?.file ?? null, ledgerFile: ledger.file, configFile, security,
+        warnings, limits };
 }
 /** `.apv/state/demande-<id>.md` for a spec file `<id>.json`, when it exists and is a readable regular file. */
 function storedRequest(repo, specFile) {

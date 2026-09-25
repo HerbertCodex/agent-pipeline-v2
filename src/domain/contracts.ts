@@ -194,6 +194,9 @@ export const receiptSchema = s.object({
   dirty: s.optional(s.boolean()),
   // True when the task stage ran the targeted variant (`affected`) of a full check: never proof of the full check.
   targeted: s.optional(s.boolean()),
+  // A full suite run while the execution `run` expected the task level at its current step (`apv gates run
+  // --reason`): the reason, also journaled in the state of the execution. Absent otherwise.
+  override: s.optional(s.object({ run: s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/), reason: s.string(1, 500) })),
 });
 export type GateReceipt = Infer<typeof receiptSchema>;
 export function validateReceipt(value: unknown): GateReceipt {

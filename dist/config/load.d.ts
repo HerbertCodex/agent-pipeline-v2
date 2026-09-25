@@ -9,7 +9,7 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
 /**
@@ -26,6 +26,26 @@ export declare const DEFAULT_FULL_SUITE: FullSuiteMode;
 export declare const runSettingsSchema: import("../domain/schema.js").Schema<{
     readonly fullSuite: "final" | "each-integration";
 }>;
+/**
+ * Size thresholds of a spec (`apv spec validate` warns above them, never refuses): a spec with more tasks or
+ * criteria is better split into independent specs delivered in parallel, and a longer chain of dependency layers
+ * makes every layer wait for the integration of the previous one.
+ */
+export declare const DEFAULT_SPEC_LIMITS: {
+    readonly maxTasks: 6;
+    readonly maxAcceptance: 30;
+    readonly maxDepth: 3;
+};
+export declare const specSettingsSchema: import("../domain/schema.js").Schema<{
+    readonly maxTasks: number;
+    readonly maxAcceptance: number;
+    readonly maxDepth: number;
+}>;
+export type SpecLimits = {
+    maxTasks: number;
+    maxAcceptance: number;
+    maxDepth: number;
+};
 export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
     readonly name: string | undefined;
     readonly environment: {
@@ -103,7 +123,16 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
     readonly run: {
         readonly fullSuite: "final" | "each-integration";
     } | undefined;
+    readonly spec: {
+        readonly maxTasks: number;
+        readonly maxAcceptance: number;
+        readonly maxDepth: number;
+    } | undefined;
 }>;
+/** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
+export declare const specLimits: (config: {
+    spec?: Partial<SpecLimits> | undefined;
+}) => SpecLimits;
 /** The full suite rhythm of a configuration: `run.fullSuite`, `final` when absent. */
 export declare const fullSuiteMode: (config: {
     run?: {

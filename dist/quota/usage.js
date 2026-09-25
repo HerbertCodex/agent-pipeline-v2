@@ -47,7 +47,8 @@ export function reading(output, at = new Date()) {
     const { session, week } = parseUsage(output);
     const values = [session?.percent, week?.percent].filter((x) => x !== undefined);
     const percent = values.length ? Math.max(...values) : null;
-    return { at: at.toISOString(), session, week, percent, level: classifyQuota(percent) };
+    const binding = percent === null ? null : week?.percent === percent ? 'week' : 'session';
+    return { at: at.toISOString(), session, week, percent, level: classifyQuota(percent), binding };
 }
 /** Runs the real CLI with the caller's environment: `claude` needs HOME and its own credentials. */
 export function processRunner(env, cwd) {

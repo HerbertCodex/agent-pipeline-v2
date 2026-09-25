@@ -27,6 +27,8 @@ export interface QuotaReading {
     /** Highest of the two percentages; the level is classified on it. */
     percent: number | null;
     level: QuotaLevel;
+    /** The window that sets `percent` (the week on a tie: it resets later); null when none was read. Absent from older journal lines. */
+    binding?: 'session' | 'week' | null;
 }
 /** Reads the session and weekly lines of `/usage`; other lines (per-model weeks, headers) are ignored. */
 export declare function parseUsage(output: string): {

@@ -1,13 +1,19 @@
 import { relative } from 'node:path';
 import { loadConfig } from '../config/load.js';
-import { gateStages } from '../domain/contracts.js';
-import { runGates } from '../gates/run.js';
+import { gateStage, gateStages } from '../domain/contracts.js';
+import { PipelineError } from '../domain/errors.js';
+import { runGates, selectGates } from '../gates/run.js';
+import { expectedLevel, findRun } from '../run/rhythm.js';
+import { resolveCommit, gitRoot } from '../run/git-probe.js';
+import { MAX_OVERRIDE_REASON, RUN_ID, applyFullSuiteOverride, readRunState, withRunLock, writeRunState } from '../run/state.js';
+import { cleanLine } from '../run/summary.js';
 import { verifyGates } from '../gates/verify.js';
 import { Git } from '../execution/git.js';
 import { EXIT, UsageError, guard, json, list, parse, repoPath, table } from './common.js';
 export const usage = `Utilisation :
   apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>]
-                [--concurrency N] [--keep-going] [--skip-proven] [--repo <chemin>] [--json]
+                [--concurrency N] [--keep-going] [--skip-proven] [--run <spec-id>]
+                [--reason <texte>] [--repo <chemin>] [--json]
   apv gates verify --commit <sha> [--stage full|task] [--base <ref>] [--config <fichier>]
                    [--repo <chemin>] [--json]
 
@@ -22,7 +28,16 @@ réussis. --stage full (défaut) exécute tout, jamais en ciblé ; si la suite c
 prouvée sur ce commit exact (apv gates verify à 0, arbre propre), elle le signale avant de la
 relancer ; avec --skip-proven, elle ne relance rien dans ce cas et sort en 0 (la preuve reste
 celle que vérifie apv gates verify).
-Sortie : 0 si tous les contrôles exécutés passent, 1 sinon, 2 appel incorrect.
+Rythme d'une exécution (/apv:run) : dans le cadre d'une exécution, la suite complète (--stage full,
+avec au moins un contrôle de stage full) est refusée quand l'étape courante n'attend que les
+contrôles de tâche et ciblés (même calcul que apv run next : intégration intermédiaire ou
+corrections avec run.fullSuite = final) ; le message donne la commande à lancer à la place.
+L'exécution : --run <spec-id>, sinon celle de la branche courante (apv/<id> ou apv/<id>-<suffixe>)
+quand le checkout principal a son état .apv/state/run-<id>.json ; aucune : rien ne change.
+--reason <texte> (1 à ${MAX_OVERRIDE_REASON} caractères) laisse passer la suite complète : la raison est journalisée
+dans l'état de l'exécution et écrite dans les reçus (override).
+Sortie : 0 si tous les contrôles exécutés passent, 1 sinon (ou suite complète refusée par le
+rythme), 2 appel incorrect.
 
 verify : vérifie dans les reçus que chaque contrôle exigé a réussi sur ce commit exact, arbre
 propre, avec la configuration actuelle ; pour chaque contrôle, seul son reçu le plus récent
@@ -80,6 +95,53 @@ async function provenFull(repo, config) {
         return null;
     }
 }
+/**
+ * The rhythm of an execution (/apv:run) applied to a full run: refused when the current step expects the task
+ * level only (the level of `apv run next`), unless `reason` is given, journaled in the state of the execution.
+ * Outside any execution, or when the level is full or unknown, nothing changes.
+ */
+async function rhythmCheck(repo, explicit, reason, io) {
+    const notes = [];
+    const context = findRun(repo, explicit);
+    if (!context) {
+        if (reason !== undefined)
+            notes.push('Note : --reason sans effet, aucune exécution trouvée pour cette branche (--run <spec-id> pour en nommer une).');
+        return { context, expected: null, override: null, notes };
+    }
+    let expected;
+    try {
+        expected = expectedLevel(context);
+    }
+    catch (error) {
+        // A state found by the branch but unreadable: said, and the run goes on as outside an execution.
+        if (context.source === 'option' || !(error instanceof PipelineError))
+            throw error;
+        notes.push(`Note : rythme de l'exécution ${context.specId} non vérifié, état illisible (${cleanLine(error.message, 300)}).`);
+        return { context, expected: null, override: null, notes };
+    }
+    const { plan, mode, where } = expected;
+    if (plan.suite.level !== 'task') {
+        if (reason !== undefined)
+            notes.push(`Note : --reason sans effet, l'exécution ${context.specId} (${where}) n'attend pas le seul niveau tâche à cette étape.`);
+        return { context, expected, override: null, notes };
+    }
+    const tb = plan.suite.targetBase.slice(0, 12);
+    if (reason === undefined) {
+        const found = context.source === 'branch' ? ` (exécution trouvée par la branche ${context.branch} ; --run <spec-id> pour en nommer une autre)` : '';
+        throw new PipelineError('GATE_RHYTHM', `Suite complète refusée : l'exécution ${context.specId}${found} en est à l'étape ${where}, run.fullSuite = ${mode}, ` +
+            `et le niveau attendu à cette étape est « contrôles de tâche et ciblés » (apv run next ${context.specId}). ` +
+            `À lancer à la place : apv gates run --stage task --base ${tb}, puis apv gates verify --commit <tête> --stage task --base ${tb} à 0. ` +
+            'La suite complète vient à la dernière intégration et à la livraison. ' +
+            'Dérogation motivée seulement : --reason "<raison>" (journalisée dans l\'état de l\'exécution et écrite dans les reçus).');
+    }
+    const commit = resolveCommit(gitRoot(repo), 'HEAD') ?? undefined;
+    await withRunLock(context.specId, io.env, () => {
+        const current = readRunState(context.file, { shown: `.apv/state/run-${context.specId}.json`, specId: context.specId });
+        writeRunState(context.file, applyFullSuiteOverride(current, { reason, ...(commit ? { commit } : {}) }).state);
+    });
+    notes.push(cleanLine(`Dérogation au rythme de l'exécution ${context.specId} (${where}, niveau attendu : contrôles de tâche et ciblés), journalisée dans son état : ${reason}`, 700));
+    return { context, expected, override: { run: context.specId, reason }, notes };
+}
 function stageOf(value) {
     if (value === undefined)
         return undefined;
@@ -91,7 +153,7 @@ export async function run(args, io) {
     return guard(io, usage, async () => {
         const { values, positionals } = parse(args, {
             only: { type: 'string' }, config: { type: 'string' }, base: { type: 'string' }, concurrency: { type: 'string' },
-            stage: { type: 'string' }, commit: { type: 'string' }, 'skip-proven': { type: 'boolean' },
+            stage: { type: 'string' }, commit: { type: 'string' }, 'skip-proven': { type: 'boolean' }, run: { type: 'string' }, reason: { type: 'string' },
             'keep-going': { type: 'boolean' }, repo: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
         });
         if (values.help) {
@@ -105,7 +167,7 @@ export async function run(args, io) {
             throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
         const stage = stageOf(values.stage);
         if (action === 'verify') {
-            const extra = ['only', 'concurrency', 'keep-going', 'skip-proven'].filter(k => values[k] !== undefined);
+            const extra = ['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason'].filter(k => values[k] !== undefined);
             if (extra.length)
                 throw new UsageError(`option de gates run seulement : --${extra.join(', --')}`);
             if (!values.commit)
@@ -130,6 +192,13 @@ export async function run(args, io) {
         const skipProven = values['skip-proven'] === true;
         if (skipProven && (stage === 'task' || values.only !== undefined))
             throw new UsageError('--skip-proven va avec la suite complète entière (--stage full, sans --only)');
+        if (values.run !== undefined && (!RUN_ID.test(values.run) || values.run.length > 80))
+            throw new UsageError(`--run : identifiant de spec invalide : ${values.run}`);
+        const reason = values.reason?.trim();
+        if (values.reason !== undefined && (!reason || reason.length > MAX_OVERRIDE_REASON))
+            throw new UsageError(`--reason attend un texte de 1 à ${MAX_OVERRIDE_REASON} caractères`);
+        if (reason !== undefined && stage === 'task')
+            throw new UsageError('--reason va avec la suite complète (--stage full) : il motive une dérogation au rythme de l\'exécution');
         const concurrency = values.concurrency === undefined ? 3 : Number(values.concurrency);
         if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16)
             throw new UsageError('--concurrency attend un entier entre 1 et 16');
@@ -149,15 +218,23 @@ export async function run(args, io) {
         if (proven && !values.json) {
             io.stdout(`Note : la suite complète est déjà prouvée au commit ${proven.commit.slice(0, 12)} (apv gates verify à 0, arbre propre) ; --skip-proven évite de la relancer.\n`);
         }
+        // The rhythm of an execution: only a run that executes a check of stage full in full is concerned.
+        const full = stage !== 'task' && selectGates(loaded.config.gates, list(values.only)).gates.some(g => gateStage(g) === 'full');
+        const rhythm = full ? await rhythmCheck(repo, values.run, reason, io)
+            : { context: null, expected: null, override: null, notes: reason !== undefined ? ['Note : --reason sans effet, aucun contrôle de stage full à exécuter.'] : [] };
+        if (!values.json && rhythm.notes.length)
+            io.stdout(`${rhythm.notes.join('\n')}\n`);
         const result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env,
-            ...(values.base ? { base: values.base } : {}), ...(stage ? { stage } : {}) });
+            ...(values.base ? { base: values.base } : {}), ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}) });
         const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, status: r.status, exitCode: r.exitCode,
             durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic }));
         const name = (r) => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
         if (values.json) {
             json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null,
                 stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
-                reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory, gates: rows });
+                reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory, gates: rows,
+                rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, step: rhythm.expected?.plan.step ?? null,
+                    level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
         }
         else {
             const lines = [`${result.stage === 'task' ? 'Contrôles de tâche (--stage task)' : 'Contrôles'} à ${result.candidateSha.slice(0, 12)} (configuration : ${loaded.file ? relative(result.repo, loaded.file) || loaded.file : 'aucune'}${loaded.legacy ? ', format V2' : ''})`];
