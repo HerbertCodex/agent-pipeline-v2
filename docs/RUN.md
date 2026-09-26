@@ -97,13 +97,13 @@ Un appel Bash est coupé à 600 s. Une suite navigateur coupée ainsi laisse ses
 2. **Des ports occupés par des orphelins du dépôt se libèrent par l'outil**, pas en attendant :
 
 ```sh
-apv procs list                              # qui tient les ports de test déclarés, et les processus des worktrees
+apv procs list                              # qui tient les ports de test déclarés, et ce qui est arrêtable (--all : tout)
 apv procs stop                              # arrête ce qui écoute sur les ports déclarés (resources.<ressource>.ports)
 apv procs stop --port 4173 --port 4174      # ports nommés
 apv procs stop --repo <copie de la tâche>   # tout ce qui a été lancé dans cette copie (avant git worktree remove)
 ```
 
-`apv procs stop` envoie `SIGTERM`, puis `SIGKILL` après `--grace` secondes (5 par défaut), et n'arrête qu'un processus dont le répertoire courant est dans un worktree du dépôt : jamais un processus d'un autre projet ou d'un autre utilisateur, jamais la session ni ses parents, jamais l'aperçu de `apv preview` (copie hors du dépôt). Un port tenu par un processus hors du dépôt sort en `1` (« hors du dépôt : non arrêté ») : c'est à l'opérateur de le libérer. Déclarer les ports des piles de test dans `.apv/config.json` ([CONFIGURATION.md](CONFIGURATION.md#ressources-de-test--resources)) pour que `apv procs stop` sans option les connaisse. Linux seulement (lecture de `/proc`) ; ailleurs, refus clair. `/apv:run` a le droit de le lancer (`node .../dist/cli.js procs`).
+`apv procs stop` envoie `SIGTERM`, puis `SIGKILL` après `--grace` secondes (5 par défaut), et n'arrête qu'un processus dont le répertoire courant est dans un worktree du dépôt : jamais un processus d'un autre projet ou d'un autre utilisateur, jamais la session ni ses parents, jamais l'aperçu de `apv preview` (copie hors du dépôt), jamais un outil de l'éditeur ou de la session (serveur `.vscode-server`, serveur de langage, serveur MCP), et jamais un processus du checkout principal (`protégé : checkout principal`), sauf `--include-main` pour un serveur de test qui y tient un port déclaré. Un port tenu par un processus hors du dépôt sort en `1` (« hors du dépôt : non arrêté ») : c'est à l'opérateur de le libérer. Déclarer les ports des piles de test dans `.apv/config.json` ([CONFIGURATION.md](CONFIGURATION.md#ressources-de-test--resources)) pour que `apv procs stop` sans option les connaisse. Linux seulement (lecture de `/proc`) ; ailleurs, refus clair. `/apv:run` a le droit de le lancer (`node .../dist/cli.js procs`).
 
 ## 4. Vagues parallèles
 

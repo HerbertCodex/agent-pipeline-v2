@@ -405,7 +405,7 @@ Section APV3, facultative, validée par le chargeur commun (port hors de 1 à 65
 - `ports` (obligatoire, de 1 à 100 ports) : ports d'écoute des serveurs de la ressource.
 - `description` (facultatif, 500 caractères au plus) : texte libre.
 
-`apv procs` lit ces ports ([CLI.md](CLI.md#apv-procs)) : `apv procs stop` sans option arrête les processus qui y écoutent encore, s'ils ont été lancés dans un worktree du dépôt (serveurs laissés par une suite coupée au délai d'un appel Bash), jamais un processus hors du dépôt. Absente : aucun port déclaré, et `apv procs stop` demande `--port` ou `--repo <copie>`. Déclarer ici les ports de toutes les piles de test, pas celui de l'aperçu (`preview.serve.port`), qui tourne dans sa propre copie hors du dépôt et que `apv procs` n'arrête jamais.
+`apv procs` lit ces ports ([CLI.md](CLI.md#apv-procs)) : `apv procs stop` sans option arrête les processus qui y écoutent encore, s'ils ont été lancés dans un worktree lié du dépôt (serveurs laissés par une suite coupée au délai d'un appel Bash), jamais un processus hors du dépôt ; un processus du checkout principal seulement avec `--include-main`, et seulement sur un port déclaré ici. Absente : aucun port déclaré, et `apv procs stop` demande `--port` ou `--repo <copie>`. Déclarer ici les ports de toutes les piles de test, pas celui de l'aperçu (`preview.serve.port`), qui tourne dans sa propre copie hors du dépôt et que `apv procs` n'arrête jamais.
 
 ## Maquettes validées : `design`
 

@@ -1,23 +1,28 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, realpathSync } from 'node:fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
-import { assertProcSupported, listProcesses, sameProcessAlive } from '../dist/execution/procs.js';
+import { assertProcSupported, listProcesses, protectedTool, sameProcessAlive } from '../dist/execution/procs.js';
 import { globsOverlap } from '../dist/policy/overlap.js';
 
 const linux = process.platform === 'linux';
 const skip = linux ? false : 'apv procs lit /proc (Linux seulement)';
 
-/** A fake test server: a node process in `cwd` listening on a free loopback port; `stubborn` ignores SIGTERM. */
-function server(t, cwd, { stubborn = false, listen = true } = {}) {
+/**
+ * A fake test server: a node process in `cwd` listening on a free loopback port; `stubborn` ignores SIGTERM. With
+ * `script`, the code is written to that file and run from it (its path is then on the command line).
+ */
+function server(t, cwd, { stubborn = false, listen = true, script } = {}) {
   const code = [stubborn ? "process.on('SIGTERM', () => {});" : '',
     listen ? "require('node:net').createServer().listen(0, '127.0.0.1', function () { console.log(this.address().port); });"
       : "console.log(0); setInterval(() => {}, 1000);"].join('\n');
-  const child = spawn(process.execPath, ['-e', code], { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
+  if (script) { mkdirSync(dirname(script), { recursive: true }); writeFileSync(script, code); }
+  const child = spawn(process.execPath, script ? [script] : ['-e', code], { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
   t.after(() => { try { process.kill(child.pid, 'SIGKILL'); } catch { /* already stopped */ } });
   const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })));
   return new Promise((resolve, reject) => {
@@ -149,6 +154,96 @@ test('procs never stops apv itself nor its parents, even on a targeted port', { 
   assert.equal(r.code, 1);
   assert.equal(byPid(r.json(), process.pid).refusal, 'protected');
   assert.ok(own.listening);
+});
+
+test('procs: a process of the main checkout is protected, stopped only with --include-main on a declared test port', { skip }, async t => {
+  const p = project(t);
+  const main = await server(t, p.repo);
+  const linked = await server(t, p.worktree);
+  const listed = await apv(p.repo, ['procs', 'list', '--port', `${main.port},${linked.port}`, '--json']);
+  assert.equal(listed.code, 0, listed.stderr);
+  assert.deepEqual([byPid(listed.json(), main.pid).worktree, byPid(listed.json(), main.pid).stoppable, byPid(listed.json(), main.pid).refusal], [p.repo, false, 'main-checkout']);
+  assert.equal(byPid(listed.json(), linked.pid).stoppable, true);
+  const human = await apv(p.repo, ['procs', 'list', '--port', String(main.port)]);
+  assert.match(human.stdout, new RegExp(`${main.pid}\\s+${main.port}\\s+.*protégé : checkout principal`));
+  assert.doesNotMatch(human.stdout, /arrêtable/);
+
+  const refused = await apv(p.repo, ['procs', 'stop', '--port', String(main.port)]);
+  assert.equal(refused.code, 1, refused.stdout);
+  assert.match(refused.stdout, /protégé : checkout principal[\s\S]*jamais arrêtés par défaut[\s\S]*--include-main/);
+  assert.ok(alive(main.pid), 'the main checkout is never stopped by default');
+  const undeclared = await apv(p.repo, ['procs', 'stop', '--port', String(main.port), '--include-main']);
+  assert.equal(undeclared.code, 2);
+  assert.match(undeclared.stderr, new RegExp(`--include-main ne sert qu'à un port de test déclaré.*non déclaré : ${main.port}`));
+  assert.equal((await apv(p.repo, ['procs', 'stop', '--repo', p.worktree, '--include-main'])).code, 2, '--include-main needs ports');
+  assert.ok(alive(main.pid));
+
+  write(p.repo, '.apv/config.json', { name: 'demo', gates: [], resources: { e2e: { ports: [main.port] } } });
+  const stillRefused = await apv(p.repo, ['procs', 'stop', '--json']);
+  assert.equal(stillRefused.code, 1);
+  assert.equal(byPid(stillRefused.json(), main.pid).refusal, 'main-checkout');
+  const stopped = await apv(p.repo, ['procs', 'stop', '--include-main', '--json']);
+  assert.equal(stopped.code, 0, stopped.stdout + stopped.stderr);
+  assert.equal(byPid(stopped.json(), main.pid).outcome, 'terminated');
+  await main.exited;
+  assert.ok(alive(linked.pid), 'a port not targeted is left alone');
+});
+
+test('procs never stops an editor server, a language server or an MCP server, even with --include-main', { skip }, async t => {
+  const p = project(t);
+  const vscode = await server(t, p.repo, { script: join(p.root, 'home', '.vscode-server', 'bin', 'abc123', 'out', 'server-main.js') });
+  const linkedMcp = await server(t, p.worktree, { script: join(p.root, 'npx', 'node_modules', '@sveltejs', 'mcp', 'index.js') });
+  write(p.repo, '.apv/config.json', { name: 'demo', gates: [], resources: { e2e: { ports: [vscode.port, linkedMcp.port] } } });
+  const listed = (await apv(p.repo, ['procs', 'list', '--include-main', '--json'])).json();
+  assert.deepEqual([byPid(listed, vscode.pid).refusal, byPid(listed, vscode.pid).tool], ['tool', "serveur d'éditeur distant (VS Code, Cursor, Windsurf)"]);
+  assert.deepEqual([byPid(listed, linkedMcp.pid).refusal, byPid(listed, linkedMcp.pid).tool], ['tool', 'serveur MCP']);
+  const r = await apv(p.repo, ['procs', 'stop', '--include-main', '--grace', '0']);
+  assert.equal(r.code, 1, r.stdout);
+  assert.match(r.stdout, /protégé : outil \(serveur d'éditeur distant/);
+  assert.ok(alive(vscode.pid) && alive(linkedMcp.pid), 'protected tools are never stopped');
+  for (const [info, label] of [
+    [{ exe: '/home/u/.vscode-server/bin/2242eb/node', command: 'node --dns-result-order=ipv4first out/bootstrap-fork' }, "serveur d'éditeur distant (VS Code, Cursor, Windsurf)"],
+    [{ exe: '/usr/bin/node', command: 'node /home/u/.vscode-server/extensions/svelte.svelte-vscode-109/node_modules/svelte-language-server/bin/server.js --stdio' }, "serveur d'éditeur distant (VS Code, Cursor, Windsurf)"],
+    [{ exe: '/usr/bin/node', command: 'node /opt/lib/node_modules/typescript/lib/tsserver.js' }, 'serveur de langage'],
+    [{ exe: '/usr/bin/node', command: 'npm exec @sveltejs/mcp' }, 'serveur MCP'],
+    [{ exe: '/home/u/.local/share/claude/versions/2.1/claude', command: 'claude --print' }, 'session Claude Code'],
+    [{ exe: '/usr/bin/node', command: 'node /repo/node_modules/.bin/vite preview --port 4173' }, null],
+    [{ exe: '/usr/bin/node', command: 'node /repo/node_modules/@playwright/test/cli.js test' }, null]]) {
+    assert.equal(protectedTool(info), label, info.command);
+  }
+});
+
+test('procs list shows by default what stop would stop and what holds a targeted port; --all shows the rest', { skip }, async t => {
+  const p = project(t);
+  const quietMain = await server(t, p.repo, { listen: false });
+  const quietLinked = await server(t, p.worktree, { listen: false });
+  const listed = (await apv(p.repo, ['procs', 'list', '--json'])).json();
+  assert.equal(listed.mode, 'all');
+  assert.equal(byPid(listed, quietMain.pid), undefined, 'a process of the main checkout on no targeted port is hidden');
+  assert.equal(byPid(listed, quietLinked.pid).stoppable, true);
+  assert.ok(listed.hidden >= 1);
+  assert.ok(listed.processes.every(x => x.stoppable || x.ports.length), 'only stoppable processes or holders of a targeted port');
+  const human = await apv(p.repo, ['procs', 'list']);
+  assert.match(human.stdout, /autre\(s\) processus des worktrees masqué\(s\)[\s\S]*--all pour tout voir/);
+  const everything = (await apv(p.repo, ['procs', 'list', '--all', '--json'])).json();
+  assert.equal(byPid(everything, quietMain.pid).refusal, 'main-checkout');
+  assert.equal(everything.hidden, 0);
+  assert.equal((await apv(p.repo, ['procs', 'stop', '--all'])).code, 2, '--all is for list only');
+});
+
+test('procs list never shows the other commands of the pipeline that runs it', { skip }, async t => {
+  const p = project(t);
+  const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+  const quote = s => `'${s.replaceAll("'", "'\\''")}'`;
+  const line = `sleep 2.71828 | ${quote(process.execPath)} ${quote(cli)} procs list --all --json | cat`;
+  const child = spawn('sh', ['-c', line], { cwd: p.repo, stdio: ['ignore', 'pipe', 'pipe'] });
+  const out = []; child.stdout.on('data', c => out.push(c));
+  const code = await new Promise(resolve => child.once('exit', resolve));
+  assert.equal(code, 0);
+  const json = JSON.parse(Buffer.concat(out).toString());
+  const inRepo = json.processes.filter(x => x.cwd === p.repo);
+  assert.deepEqual(inRepo.filter(x => /^(sleep 2\.71828|cat|sh -c .*)$/.test(x.command)).map(x => x.command), [], 'no command of the running pipeline, nor its shell');
+  assert.ok(!json.processes.some(x => x.command.includes('procs list --all --json')), 'apv itself is not listed');
 });
 
 test('procs refuses wrong calls, and a system without /proc clearly', async t => {
