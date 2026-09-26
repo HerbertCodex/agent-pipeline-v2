@@ -673,3 +673,27 @@ test('shared receipts: the PR cites the run of the full suite, verifiable from a
     'skills/chef-de-projet/references/integration-revues.md', 'docs/RUN.md', 'docs/CLI.md']) assert.ok(!/[–—]/.test(read(file)), `${file}: no em or en dash`);
   assert.ok(!/[–—]/.test(unreleased), 'unreleased entries: no em or en dash');
 });
+
+test('pilot journal 26 September: orphan servers stopped by apv procs, mockups out of diff --check, decisions scoped', () => {
+  const tool = 'Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js';
+  const run = frontmatter('skills/run/SKILL.md');
+  for (const t of [`${tool} procs*)`, 'Bash(apv procs*)']) assert.ok(run.fields['allowed-tools'].includes(t), t);
+  assert.ok(!/Bash\((kill|pkill|killall)/.test(run.fields['allowed-tools']), 'processes are stopped through apv procs only');
+  assert.match(run.body, /\*\*Suites longues en arrière-plan, ports libérés par l'outil\*\*[^\n]*`run_in_background: true`[^\n]*`apv wait --file <journal> --contains "Reçus : "`[^\n]*`apv procs stop`/);
+  assert.match(read('docs/RUN.md'), /### Serveurs de test orphelins : `apv procs`/);
+  assert.match(read('docs/CLI.md'), /## `apv procs`/);
+  assert.match(read('docs/CONFIGURATION.md'), /## Ressources de test : `resources`/);
+  assert.match(read('docs/CONFIGURATION.md'), /<dir>\/\*\.html -whitespace/);
+  assert.match(read('docs/DECISIONS.md'), /## Périmètre d'une décision : `scope`/);
+  for (const file of ['skills/spec/SKILL.md', 'agents/product.md', 'agents/architecte.md']) assert.match(read(file), /`scope`/, file);
+  const unreleased = read('CHANGELOG.md').split('\n## ')[1];
+  for (const title of ['Serveurs de test orphelins : `apv procs list|stop` et la section `resources`.', 'Maquettes validées hors de `git diff --check`.',
+    'Périmètre des décisions : une décision sans rapport ne casse plus une spec.']) assert.ok(unreleased.includes(`- **${title}**`), title);
+  for (const file of ['skills/run/SKILL.md', 'skills/spec/SKILL.md', 'skills/chef-de-projet/SKILL.md', 'agents/product.md', 'agents/architecte.md', 'docs/RUN.md', 'docs/CLI.md', 'docs/DECISIONS.md']) {
+    assert.ok(!/[–—]/.test(read(file)), `${file}: no em or en dash`);
+  }
+  for (const section of ['## Ressources de test : `resources`', '## Maquettes validées : `design`']) {
+    assert.ok(!/[–—]/.test(read('docs/CONFIGURATION.md').split(section)[1].split('\n## ')[0]), `${section}: no em or en dash`);
+  }
+  assert.ok(!/[–—]/.test(unreleased.split('\n- **').slice(1, 4).join('')), 'changelog entries: no em or en dash');
+});

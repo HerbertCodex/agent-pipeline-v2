@@ -1,14 +1,30 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { s, parseJson, type Infer } from '../domain/schema.js';
-import { invariant } from '../domain/errors.js';
+import { errorMessage, invariant } from '../domain/errors.js';
 import { IssueList, schemaIssues, type Issue } from '../domain/issues.js';
 import { hash } from '../domain/hash.js';
 import { Git } from '../execution/git.js';
+import { matches } from '../policy/policy.js';
+import { globsOverlap } from '../policy/overlap.js';
 
 export const decisionEnforcements = ['bootstrap','product','deferred'] as const;
 export const decisionStatuses = ['confirmed','proposed','ambiguous','deferred'] as const;
 export const decisionSources = ['operator','derived'] as const;
+
+/** Kebab-case spec id, as in `.apv/specs/<id>.json`. */
+const specIdPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/**
+ * Optional perimeter of a decision: the paths it concerns (portable globs, the syntax of `allowedPaths`) and/or
+ * the specs it concerns (ids). A confirmed Product decision with a scope is required by a spec only when one of
+ * its paths can match a path a task of the spec may change, or when it names the spec; without a scope it is
+ * required by every spec (the historical rule).
+ */
+export const decisionScopeSchema = s.object({
+  paths: s.optional(s.array(s.string(1,500),1,100)),
+  specs: s.optional(s.array(s.string(1,80,specIdPattern),1,100)),
+});
+export type DecisionScope = Infer<typeof decisionScopeSchema>;
 
 export const decisionSchema = s.object({
   id: s.string(1,80,/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
@@ -22,6 +38,8 @@ export const decisionSchema = s.object({
   supersedes: s.default(s.array(s.string(1,80,/^[A-Za-z0-9][A-Za-z0-9._-]*$/),0,20),[]),
   clarificationQuestion: s.default(s.string(0,3000),''),
   interpretations: s.default(s.array(s.string(1,2000),0,10),[]),
+  // Optional, never defaulted: a ledger without scopes parses and hashes exactly as before.
+  scope: s.optional(decisionScopeSchema),
 });
 export type Decision = Infer<typeof decisionSchema>;
 
@@ -106,6 +124,12 @@ export function decisionLedgerRuleIssues(parsed: DecisionLedger, operatorText?: 
     }
     if (decision.status === 'deferred') list.check(decision.enforcement === 'deferred','DECISION',`Deferred decision ${decision.id} must use deferred enforcement`);
     for (const old of decision.supersedes) list.check(!ids.has(old) || old !== decision.id,'DECISION',`Invalid supersedes relationship for ${decision.id}`);
+    if (decision.scope) {
+      list.check((decision.scope.paths?.length ?? 0) + (decision.scope.specs?.length ?? 0) > 0,'DECISION_SCOPE',`Decision ${decision.id}: scope must name paths or specs (remove it for a decision that concerns every spec)`);
+      for (const pattern of decision.scope.paths ?? []) {
+        try { matches('probe',pattern); } catch (error) { list.check(false,'DECISION_SCOPE',`Decision ${decision.id}: scope.paths: ${errorMessage(error)}`); }
+      }
+    }
   }
   return list.items;
 }
@@ -133,6 +157,26 @@ export function ambiguousDecisions(ledger: DecisionLedger, enforcement?: 'bootst
   const parsed=validateDecisionLedger(ledger);
   return parsed.decisions.filter(d=>d.status === 'ambiguous' && (enforcement === undefined || d.enforcement === enforcement));
 }
+
+/** What a spec may touch, for the scope of the decisions: its id (file name) and the allowed paths of its tasks. */
+export interface DecisionTarget { specId?: string | undefined; paths: readonly string[] }
+
+/**
+ * Why a decision concerns a spec, or null when it does not: no scope (every spec), the spec named in
+ * `scope.specs`, or a `scope.paths` glob that can match a path allowed to one of the tasks.
+ */
+export function decisionReason(decision: Decision, target: DecisionTarget): string | null {
+  const scope = decision.scope;
+  if (!scope) return 'sans périmètre (champ scope absent), elle vaut pour toute spec';
+  if (target.specId && scope.specs?.includes(target.specId)) return `son périmètre nomme la spec ${target.specId}`;
+  for (const pattern of scope.paths ?? []) {
+    const allowed = target.paths.find(path => globsOverlap(pattern, path));
+    if (allowed !== undefined) return `son périmètre ${pattern} recoupe le chemin autorisé ${allowed}`;
+  }
+  return null;
+}
+
+export const decisionApplies = (decision: Decision, target: DecisionTarget): boolean => decisionReason(decision, target) !== null;
 
 export function validateBootstrapCoverage(ledger: DecisionLedger, coverage: DecisionCoverage[], files: string[]): void {
   const parsed = validateDecisionLedger(ledger);
@@ -191,6 +235,7 @@ export function decisionLedgerMarkdown(ledger: DecisionLedger): string {
   for (const d of parsed.decisions) {
     lines.push(`## ${d.id} — ${d.subject}`,'',`Value: ${d.value}`,`Status: ${d.status}`,`Enforcement: ${d.enforcement}`,`Source: ${d.source}`);
     if (d.sourceQuote) lines.push(`Source quote: ${d.sourceQuote}`);
+    if (d.scope) lines.push(`Scope: ${[...(d.scope.paths ?? []).map(p=>`paths ${p}`), ...(d.scope.specs ?? []).map(x=>`spec ${x}`)].join(', ')}`);
     if(d.status==='ambiguous') {
       lines.push(`Clarification: ${d.clarificationQuestion}`,'','Plausible interpretations:',...d.interpretations.map(x=>`- ${x}`));
     }

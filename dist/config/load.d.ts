@@ -9,7 +9,7 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
 /**
@@ -97,6 +97,26 @@ export declare const reviewSettingsSchema: import("../domain/schema.js").Schema<
     } | undefined;
     readonly always: ("securite" | "fidelite" | "donnees" | "rgpd")[] | undefined;
 }>;
+/**
+ * Test resources of the project (a test database, a browser stack, a scanner), named like the `resources` of the
+ * checks and of `apv lock`, with the TCP ports their servers listen on. `apv procs` reads the ports: a process
+ * left listening there by an interrupted suite, started in a worktree of the repository, can be stopped.
+ */
+export declare const RESOURCE_ID: RegExp;
+export declare const testResourceSchema: import("../domain/schema.js").Schema<{
+    readonly ports: number[];
+    readonly description: string | undefined;
+}>;
+export declare const resourcesSchema: import("../domain/schema.js").Schema<Record<string, {
+    readonly ports: number[];
+    readonly description: string | undefined;
+}>>;
+/** Declared test ports, sorted and without duplicates, with the resources that declare them. */
+export declare function declaredTestPorts(config: {
+    resources?: Record<string, {
+        ports: number[];
+    }> | undefined;
+}): Map<number, string[]>;
 export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
     readonly name: string | undefined;
     readonly environment: {
@@ -205,6 +225,10 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly keepDays: number;
         readonly keepRuns: number;
     } | undefined;
+    readonly resources: Record<string, {
+        readonly ports: number[];
+        readonly description: string | undefined;
+    }> | undefined;
 }>;
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export declare const specLimits: (config: {

@@ -118,3 +118,27 @@ test('apv spec new refuses to overwrite, and rejects ids that are not kebab-case
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   assert.equal((await apv(dir, ['spec', 'new', 'a'])).code, 1);
 });
+
+test('apv init and apv onboard add the validated-mockup line to .gitattributes when design.dir is declared or the folder exists', async t => {
+  const declared = fixture(t, { files: { '.apv/config.json': '{ "name": "demo", "design": { "dir": "maquettes" } }\n' } });
+  const r = await apv(declared.repo, ['init', '--json']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.ok(r.json().created.includes('.gitattributes'));
+  assert.match(read(declared.repo, '.gitattributes'), /^# Maquettes validées[^\n]*\nmaquettes\/\*\.html -whitespace\n$/);
+  assert.match((await apv(declared.repo, ['init'])).stdout, /Existait déjà \(inchangé\) : [^\n]*\.gitattributes/);
+  // Onboarding a project whose default folder exists and whose .gitattributes lacks the line: completed.
+  const pilot = fixture(t, { files: { 'docs/design/accueil-validee.html': HTML_SPACED, '.gitattributes': '* text=auto\n' } });
+  const dry = await apv(pilot.repo, ['onboard', '--dry-run', '--json']);
+  assert.ok(dry.json().completed.includes('.gitattributes'));
+  assert.equal(read(pilot.repo, '.gitattributes'), '* text=auto\n', 'dry run writes nothing');
+  const onboard = await apv(pilot.repo, ['onboard', '--json']);
+  assert.equal(onboard.code, 0, onboard.stderr);
+  assert.match(read(pilot.repo, '.gitattributes'), /^\* text=auto\n# Maquettes validées[^\n]*\ndocs\/design\/\*\.html -whitespace\n$/);
+  assert.match(onboard.json().next.at(-1), /git add \.apv \.gitattributes/);
+  // Neither declared nor present: untouched.
+  const bare = fixture(t);
+  assert.ok(!(await apv(bare.repo, ['init', '--json'])).json().created.includes('.gitattributes'));
+  assert.ok(!existsSync(join(bare.repo, '.gitattributes')));
+});
+
+const HTML_SPACED = '<p>Accueil</p> \n';

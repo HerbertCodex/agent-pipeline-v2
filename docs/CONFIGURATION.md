@@ -1,6 +1,6 @@
 # Configuration et politique
 
-> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec` et `review` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
+> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts` et `resources` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
 
 La configuration est un JSON déclaratif lu avant l'agent et conservé avec la tentative. La tâche ne peut pas fournir une commande à la place d'un contrôle, changer un verdict ni s'accorder une exemption. Les champs inconnus sont refusés.
 
@@ -388,3 +388,25 @@ Repère (projet pilote, septembre 2026) : la revue sécurité prévoyait un scan
 - Aucune clé ne saute la revue sécurité : une clé inconnue (`skip`, `never`) est refusée par le schéma, et `apv run set <id> review:securite skipped` est refusé par l'état.
 
 Repère (projet pilote, 25 septembre 2026) : une spec de pur rangement (77 renommages, imports, aucun changement de comportement, aucune migration, aucun écran) est passée par les quatre revues, 40 à 70 minutes ; fidélité, données et RGPD n'avaient rien à relire. Sur la branche de ce rangement (tête `676cefd`, 203 fichiers : 42 renommages purs, 142 fichiers aux seuls chemins réécrits, 19 tests, documentation ou outillage), `apv review plan` avec les défauts retient `securite` seule.
+
+## Ressources de test : `resources`
+
+Section APV3, facultative, validée par le chargeur commun (port hors de 1 à 65535, port en double dans une ressource, liste vide ou propriété inconnue refusés). Elle nomme les ressources de test du projet (pile de test navigateur, base locale, scanner), avec les mêmes noms que les `resources` des contrôles et que `apv lock`, et déclare les ports TCP où leurs serveurs écoutent :
+
+```json
+{
+  "resources": {
+    "e2e": { "ports": [4173, 4174], "description": "pile de test 1 : build servi par vite preview" },
+    "e2e-2": { "ports": [4273, 4274], "description": "pile de test 2 (E2E_STACK=2)" }
+  }
+}
+```
+
+- `ports` (obligatoire, de 1 à 100 ports) : ports d'écoute des serveurs de la ressource.
+- `description` (facultatif, 500 caractères au plus) : texte libre.
+
+`apv procs` lit ces ports ([CLI.md](CLI.md#apv-procs)) : `apv procs stop` sans option arrête les processus qui y écoutent encore, s'ils ont été lancés dans un worktree du dépôt (serveurs laissés par une suite coupée au délai d'un appel Bash), jamais un processus hors du dépôt. Absente : aucun port déclaré, et `apv procs stop` demande `--port` ou `--repo <copie>`. Déclarer ici les ports de toutes les piles de test, pas celui de l'aperçu (`preview.serve.port`), qui tourne dans sa propre copie hors du dépôt et que `apv procs` n'arrête jamais.
+
+## Maquettes validées : `design`
+
+Section facultative : `{ "design": { "dir": "docs/design" } }`, le dossier des maquettes validées ([DESIGN.md](DESIGN.md), [CLI.md](CLI.md#apv-design)), relatif, dans le dépôt, sans espace ; absente : `docs/design`. Une maquette validée est figée par son empreinte sha256 : ses espaces de fin de ligne ne peuvent pas être nettoyés sans changer l'empreinte, et `git diff --check` (contrôle `diff-check`, CI des projets) échouerait sur elle. `apv design register`, et `apv init` ou `apv onboard` quand le dossier est déclaré ou existe, ajoutent donc à `.gitattributes` la ligne `<dir>/*.html -whitespace` si Git ne l'applique pas déjà ; `apv design check` signale son absence (sortie `1` si une maquette validée porte des espaces de fin de ligne). Un dossier changé après coup (nouveau `design.dir`) : relancer `apv design register` ou `apv init`, puis commiter `.gitattributes`.

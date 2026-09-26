@@ -16,6 +16,7 @@ export const commands = {
     gates: { summary: 'gates run [--stage task|full] | verify --commit <sha> | receipts list|export|prune : exécute les contrôles et écrit des reçus, vérifie une preuve', load: () => import('./gates.js') },
     lock: { summary: 'lock run|acquire|release|status <ressource> : verrous à bail (propriétaire vérifié, expiration, file d\'attente)', load: () => import('./lock.js') },
     wait: { summary: 'wait --pid <pid> | --file <chemin> [--contains <texte>] [--timeout <s>] : attente bornée (580 s au plus) d\'un processus ou d\'un fichier', load: () => import('./wait.js') },
+    procs: { summary: 'procs list|stop [--repo <copie>] [--port <p>]... : processus du dépôt (worktrees, ports de test déclarés) ; stop arrête ceux des worktrees du dépôt (SIGTERM puis SIGKILL), jamais un autre', load: () => import('./procs.js') },
     review: { summary: 'review plan --base <ref> [--head <ref>] [--force <domaine>] : domaines de revue proposés d\'après le diff (securite toujours, un domaine sauté seulement sur preuve)', load: () => import('./review.js') },
     dast: { summary: 'dast run [--repo <copie>] [--out <dossier>] : scan dynamique de sécurité déclaré (review.dast), sous son verrou, avant les revues', load: () => import('./dast.js') },
     db: { summary: 'db check [--live] : contrôle du modèle de données (migrations, code, base en lecture seule)', load: () => import('./db.js') },

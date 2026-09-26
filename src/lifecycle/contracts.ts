@@ -3,7 +3,7 @@ import { invariant } from '../domain/errors.js';
 import { lanes, type Config, type Lane } from '../domain/contracts.js';
 import { matches } from '../policy/policy.js';
 import { hash } from '../domain/hash.js';
-import { confirmedDecisions, ambiguousDecisions, decisionLedgerIssues, validateDecisionLedger, type DecisionLedger } from './decisions.js';
+import { confirmedDecisions, ambiguousDecisions, decisionApplies, decisionLedgerIssues, decisionReason, validateDecisionLedger, type DecisionLedger, type DecisionTarget } from './decisions.js';
 import { IssueList, schemaIssues, type Issue } from '../domain/issues.js';
 import { owaspTopicIds, securityProfileSchema, neutralSecurityContext, type SecurityContext } from '../security/owasp.js';
 import { qualityCheckSchema, validateQualityChecks, findingRequiresFix, type QualityContext } from '../quality/review.js';
@@ -149,6 +149,8 @@ export interface SpecCheckOptions {
     operatorText?: string;
     /** Security minimum the spec must preserve, recomputed from the request and the repository. */
     securityContext?: SecurityContext;
+    /** Id of the spec (its file name without `.json`): a decision whose `scope.specs` names it concerns it. */
+    specId?: string;
 }
 
 /** Every semantic problem of a parsed spec, in the order V2 checked them (V2 stopped at the first). */
@@ -205,13 +207,20 @@ export function specRuleIssues(spec: Spec, options: SpecCheckOptions = {}): Issu
     const threatIds = spec.security.threatModel.threats.map(t => t.id);
     list.check(new Set(threatIds).size === threatIds.length, 'SPEC_SECURITY', 'Duplicate threat id');
     for (const threat of spec.security.threatModel.threats) list.check(threat.acceptanceIds.every(x => criteria.has(x)), 'SPEC_SECURITY', `Threat ${threat.id} references an unknown acceptance criterion`);
-    const requiredDecisionIds = new Set([...confirmedDecisions(decisions, 'product').map(d=>d.id), ...resolutionIds]);
+    // A scoped decision (field `scope` of the ledger) is required only by the specs it concerns; an unscoped one by every spec.
+    const target: DecisionTarget = { specId: options.specId, paths: spec.tasks.flatMap(t => t.allowedPaths) };
+    const reasons = new Map(decisions.decisions.map(d => [d.id, decisionReason(d, target)]));
+    const requiredDecisionIds = new Set([...confirmedDecisions(decisions, 'product').filter(d => reasons.get(d.id) !== null).map(d=>d.id), ...resolutionIds]);
     for (const decisionId of requiredDecisionIds) {
         const item = spec.decisionCoverage.find(x => x.decisionId === decisionId);
-        list.check(item && item.acceptanceIds.length > 0, 'SPEC_DECISIONS', `Product decision ${decisionId} is not covered by acceptance criteria`);
+        const why = reasons.get(decisionId);
+        list.check(item && item.acceptanceIds.length > 0, 'SPEC_DECISIONS', `Product decision ${decisionId} is not covered by acceptance criteria. ` +
+            `Elle est exigée ici${why ? ` : ${why}` : ' (résolue par la spec)'}. Solution : rattache-la à un critère (decisionCoverage : decisionId, acceptanceIds, rationale)` +
+            (decisions.decisions.find(d => d.id === decisionId)?.scope ? '.' : ` ; si elle ne concerne pas cette spec, donne-lui un périmètre au registre (champ scope : paths, motifs des fichiers qu'elle concerne, ou specs, identifiants) par une décision qui la remplace (supersedes, apv ledger plan puis apply) : elle ne sera plus exigée que des specs dont les tâches touchent ce périmètre.`));
     }
     for(const decision of ambiguousProduct.values()) {
         if(spec.decisionResolutions.some(r=>r.decisionId===decision.id)) continue;
+        if(reasons.get(decision.id) === null) continue;
         list.check(spec.questions.some(q=>q.question.trim().toLocaleLowerCase('en-US')===decision.clarificationQuestion.trim().toLocaleLowerCase('en-US')), 'SPEC_DECISIONS', `Unresolved ambiguous decision ${decision.id} must be asked using its recorded clarification question`);
     }
     const tasks = new Map(spec.tasks.map(t => [t.id, t]));
@@ -240,7 +249,7 @@ export function specRuleIssues(spec: Spec, options: SpecCheckOptions = {}): Issu
     }
     if (options.ready) {
         list.check(spec.questions.length === 0, 'OPEN_QUESTIONS', 'Resolve Product questions before approval');
-        const unresolved=ambiguousDecisions(decisions,'product').filter(d=>!spec.decisionResolutions.some(r=>r.decisionId===d.id));
+        const unresolved=ambiguousDecisions(decisions,'product').filter(d=>!spec.decisionResolutions.some(r=>r.decisionId===d.id) && reasons.get(d.id) !== null);
         list.check(unresolved.length===0,'OPEN_QUESTIONS',`Resolve ambiguous Product decisions before approval: ${unresolved.map(d=>d.id).join(', ')}`);
         list.items.push(...specReadinessIssues(spec));
     }
@@ -327,7 +336,8 @@ export function validateQa(value: unknown, spec: Spec, candidateSha: string, led
         invariant(check, 'QA_SECURITY', `QA did not assess security requirement ${requirement.id}`);
         if (qa.verdict === 'pass') invariant(check.status === 'pass', 'QA_SECURITY', `QA pass contradicts security requirement ${requirement.id}`);
     }
-    const requiredDecisionIds = new Set([...confirmedDecisions(decisions, 'product').map(d=>d.id), ...checkedSpec.decisionResolutions.map(r=>r.decisionId)]);
+    const scopeTarget: DecisionTarget = { paths: checkedSpec.tasks.flatMap(t => t.allowedPaths) };
+    const requiredDecisionIds = new Set([...confirmedDecisions(decisions, 'product').filter(d => decisionApplies(d, scopeTarget)).map(d=>d.id), ...checkedSpec.decisionResolutions.map(r=>r.decisionId)]);
     for (const decisionId of requiredDecisionIds) {
         const check = qa.decisionChecks.find(d => d.decisionId === decisionId);
         invariant(check, 'QA_DECISIONS', `QA did not assess required decision ${decisionId}`);

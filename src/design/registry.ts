@@ -7,6 +7,7 @@ import { designDir } from './config.js';
 import { Git } from '../execution/git.js';
 import { ambiguousApprovalFragments, readWorkingDecisionLedger, type Decision } from '../lifecycle/decisions.js';
 import { applyLedgerUpdate, planLedgerUpdate } from '../lifecycle/ledger-update.js';
+import { ensureDesignAttribute, type DesignAttributeResult } from './attributes.js';
 
 export { DEFAULT_DESIGN_DIR } from './config.js';
 
@@ -83,6 +84,11 @@ export interface RegisterInput {
   screens?: string[];
   artifact?: string;
   reviewer?: string;
+  /**
+   * Paths the mockup concerns (portable globs): scope of the decision, so that only the specs whose tasks may
+   * change these paths must cover it. Absent: the scope of the active registration, if any, is kept.
+   */
+  scopePaths?: string[];
   /** Injected clock, for tests. */
   now?: Date;
 }
@@ -96,8 +102,10 @@ export interface RegisterResult {
   sha256: string;
   ledgerFile: string;
   ledgerMarkdown: string;
-  /** True when the same content was already registered: nothing was written. */
+  /** True when the same content was already registered: nothing was written to the mockup or the ledger. */
   unchanged: boolean;
+  /** Line of `.gitattributes` that keeps the validated mockups out of `git diff --check`, added when missing. */
+  attributes: DesignAttributeResult;
 }
 
 export function validateSlug(slug: string): void {
@@ -131,8 +139,13 @@ export async function registerMockup(repoPath: string, input: RegisterInput): Pr
 
   const current = listMockups(repo).filter(m => m.slug === input.slug);
   const active = current.sort((a, b) => b.version - a.version)[0];
-  if (active && active.sha256 === sha && active.file === target && active.actualSha256 === sha) {
-    return { repo, slug: input.slug, decisionId: active.decisionId, supersedes: [], target, sha256: sha, ledgerFile: '', ledgerMarkdown: '', unchanged: true };
+  const activeDecision = active ? readWorkingDecisionLedger(repo).decisions.find(d => d.id === active.decisionId) : undefined;
+  // Absent: the scope of the active registration is kept; given (even empty): it replaces it.
+  const scopePaths = input.scopePaths === undefined ? [...(activeDecision?.scope?.paths ?? [])] : [...new Set(input.scopePaths.map(x => x.trim()).filter(Boolean))];
+  const sameScope = JSON.stringify(activeDecision?.scope?.paths ?? []) === JSON.stringify(scopePaths);
+  if (active && active.sha256 === sha && active.file === target && active.actualSha256 === sha && sameScope) {
+    return { repo, slug: input.slug, decisionId: active.decisionId, supersedes: [], target, sha256: sha, ledgerFile: '', ledgerMarkdown: '', unchanged: true,
+      attributes: ensureDesignAttribute(repo, dir) };
   }
   const version = active ? Math.max(...current.map(m => m.version)) + 1 : 1;
   const decisionId = version === 1 ? `maquette-${input.slug}-validee` : `maquette-${input.slug}-validee-v${version}`;
@@ -151,6 +164,7 @@ export async function registerMockup(repoPath: string, input: RegisterInput): Pr
     id: decisionId, subject: `Maquette validée : ${title}`, value, enforcement: 'product', status: 'confirmed', source: 'operator', sourceQuote: quote,
     rationale: 'Validation explicite de l\'opérateur après itérations sur l\'artefact ; les implementers la reproduisent et la revue de fidélité compare à ce fichier. Enregistrée par apv design register.',
     supersedes: active ? [active.decisionId] : [], clarificationQuestion: '', interpretations: [],
+    ...(scopePaths.length || activeDecision?.scope?.specs ? { scope: { ...(scopePaths.length ? { paths: scopePaths } : {}), ...(activeDecision?.scope?.specs ? { specs: activeDecision.scope.specs } : {}) } } : {}),
   };
   const update = { decisions: [decision] };
   const plan = await planLedgerUpdate(repo, update);
@@ -164,7 +178,8 @@ export async function registerMockup(repoPath: string, input: RegisterInput): Pr
     if (resolve(source) !== resolve(targetPath)) { if (previous) writeFileSync(targetPath, previous); else rmSync(targetPath, { force: true }); }
     throw error;
   }
-  return { repo, slug: input.slug, decisionId, supersedes: decision.supersedes, target, sha256: sha, ledgerFile: plan.file, ledgerMarkdown: plan.file.replace(/\.json$/, '.md'), unchanged: false };
+  return { repo, slug: input.slug, decisionId, supersedes: decision.supersedes, target, sha256: sha, ledgerFile: plan.file, ledgerMarkdown: plan.file.replace(/\.json$/, '.md'), unchanged: false,
+    attributes: ensureDesignAttribute(repo, dir) };
 }
 
 /** Normalized screen name, for `list --screen`: case, accents and separators ignored. */

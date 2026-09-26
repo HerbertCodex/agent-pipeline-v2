@@ -231,3 +231,78 @@ test('the spec section of the configuration is validated by the schema', async (
   assert.match(configIssues({ spec: { maxAcceptance: 'many' } }).issues[0].message, /maxAcceptance: expected/);
   assert.match(configIssues({ spec: { maxDepth: 3, depth: 2 } }).issues[0].message, /unknown property depth/);
 });
+
+test('decision scope: a product decision of another perimeter is not required; one that overlaps, names the spec or has no scope is', async t => {
+  const f = fixture(t);
+  // demoSpec: tasks allowed on src/math.mjs, test/math.test.mjs and docs/math.md.
+  const decisions = [
+    decision('D-ACCUEIL', { scope: { paths: ['src/routes/accueil/**', 'static/accueil/**'] } }),
+    decision('D-MATH', { scope: { paths: ['src/**'] } }),
+    decision('D-SPEC', { scope: { specs: ['multiplication'] } }),
+    decision('D-PARTOUT'),
+  ];
+  write(f.repo, '.apv/DECISIONS.json', { schemaVersion: 1, decisions });
+  assert.equal((await apv(f.repo, ['ledger', 'validate'])).code, 0);
+  const file = write(f.root, 'multiplication.json', demoSpec());
+  const r = await apv(f.repo, ['spec', 'validate', file, '--json']);
+  assert.equal(r.code, 1);
+  const uncovered = r.json().issues.filter(i => i.code === 'SPEC_DECISIONS').map(i => /Product decision (\S+) is not covered/.exec(i.message)?.[1]);
+  assert.deepEqual(uncovered.sort(), ['D-MATH', 'D-PARTOUT', 'D-SPEC'], 'disjoint scope: not required; overlapping, named or unscoped: required');
+  const messages = Object.fromEntries(r.json().issues.map(i => [/Product decision (\S+)/.exec(i.message)?.[1], i.message]));
+  assert.match(messages['D-MATH'], /son périmètre src\/\*\* recoupe le chemin autorisé src\/math\.mjs/);
+  assert.match(messages['D-SPEC'], /son périmètre nomme la spec multiplication/);
+  // The message proposes the fix: cover it, or scope it by a superseding decision.
+  assert.match(messages['D-PARTOUT'], /sans périmètre \(champ scope absent\)[\s\S]*Solution : rattache-la à un critère \(decisionCoverage[\s\S]*champ scope : paths[\s\S]*supersedes, apv ledger plan puis apply/);
+  assert.doesNotMatch(messages['D-MATH'], /donne-lui un périmètre/, 'an already scoped decision is not told to get a scope');
+  // Under another file name, the spec is not named by D-SPEC any more.
+  const other = await apv(f.repo, ['spec', 'validate', write(f.root, 'autre.json', demoSpec()), '--json']);
+  assert.ok(!other.json().issues.some(i => /D-SPEC/.test(i.message)));
+  // Covering the required decisions is enough; the out-of-scope one may still be covered.
+  const covered = demoSpec();
+  covered.decisionCoverage = ['D-MATH', 'D-PARTOUT', 'D-SPEC'].map(decisionId => ({ decisionId, acceptanceIds: ['AC-MATH'], rationale: 'Covered by the product criterion.' }));
+  assert.equal((await apv(f.repo, ['spec', 'validate', write(f.root, 'multiplication.json', covered)])).code, 0);
+  // A task that now reaches the scoped paths makes the decision required.
+  const reaching = structuredClone(covered); reaching.tasks[1].allowedPaths.push('src/routes/**');
+  const now = await apv(f.repo, ['spec', 'validate', write(f.root, 'multiplication.json', reaching), '--json']);
+  assert.equal(now.code, 1);
+  assert.match(now.json().issues.map(i => i.message).join('\n'), /D-ACCUEIL is not covered[\s\S]*son périmètre src\/routes\/accueil\/\*\* recoupe le chemin autorisé src\/routes\/\*\*/);
+});
+
+test('decision scope: an ambiguous decision of another perimeter does not block the spec; the scope is checked by the ledger', async t => {
+  const f = fixture(t);
+  const ambiguous = { status: 'ambiguous', value: 'unresolved', clarificationQuestion: 'Carrousel sur l\'accueil ?', interpretations: ['oui', 'non'] };
+  write(f.repo, '.apv/DECISIONS.json', { schemaVersion: 1, decisions: [decision('D-CARROUSEL', { ...ambiguous, scope: { paths: ['src/routes/accueil/**'] } })] });
+  assert.equal((await apv(f.repo, ['spec', 'validate', write(f.root, 'spec.json', demoSpec())])).code, 0);
+  write(f.repo, '.apv/DECISIONS.json', { schemaVersion: 1, decisions: [decision('D-CARROUSEL', ambiguous)] });
+  assert.equal((await apv(f.repo, ['spec', 'validate', write(f.root, 'spec.json', demoSpec())])).code, 1, 'unscoped: still asked by every spec');
+
+  write(f.repo, '.apv/DECISIONS.json', { schemaVersion: 1, decisions: [decision('D-1', { scope: {} }), decision('D-2', { scope: { paths: ['{a,b}/**'] } }),
+    decision('D-3', { scope: { specs: ['Pas_Kebab'] } })] });
+  const r = await apv(f.repo, ['ledger', 'validate', '--json']);
+  assert.equal(r.code, 1);
+  const text = r.json().issues.map(i => i.message).join('\n');
+  assert.match(text, /specs\[0\]: invalid string/);
+  write(f.repo, '.apv/DECISIONS.json', { schemaVersion: 1, decisions: [decision('D-1', { scope: {} }), decision('D-2', { scope: { paths: ['{a,b}/**'] } })] });
+  const rules = (await apv(f.repo, ['ledger', 'validate', '--json'])).json().issues;
+  assert.deepEqual(rules.map(i => i.code), ['DECISION_SCOPE', 'DECISION_SCOPE']);
+  assert.match(rules[0].message, /D-1: scope must name paths or specs/);
+  assert.match(rules[1].message, /D-2: scope\.paths: Unsupported glob/);
+});
+
+test('decision scope: apv ledger plan and apply accept the field; a ledger without scopes keeps its hash', async t => {
+  const f = fixture(t);
+  write(f.repo, '.apv/DECISIONS.json', { schemaVersion: 1, decisions: [decision('D-OLD')] });
+  git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'ledger');
+  const before = (await apv(f.repo, ['ledger', 'validate', '--json'])).json().hash;
+  const { ledgerHash } = await import('../dist/lifecycle/decisions.js');
+  assert.equal(before, ledgerHash({ schemaVersion: 1, decisions: [decision('D-OLD')] }));
+  const update = write(f.root, 'update.json', { decisions: [decision('D-OLD-2', { supersedes: ['D-OLD'], scope: { paths: ['src/routes/accueil/**'], specs: ['accueil'] } })] });
+  const plan = await apv(f.repo, ['ledger', 'plan', '--file', update]);
+  assert.equal(plan.code, 0, plan.stderr);
+  assert.deepEqual(plan.json().ledger.decisions[0].scope, { paths: ['src/routes/accueil/**'], specs: ['accueil'] });
+  const applied = await apv(f.repo, ['ledger', 'apply', '--file', update, '--hash', plan.json().hash, '--note', 'Périmètre de la décision.', '--reviewer', 'Opérateur']);
+  assert.equal(applied.code, 0, applied.stderr);
+  const { readFileSync } = await import('node:fs');
+  assert.match(readFileSync(join(f.repo, '.apv/DECISIONS.md'), 'utf8'), /Scope: paths src\/routes\/accueil\/\*\*, spec accueil/);
+  assert.equal((await apv(f.repo, ['spec', 'validate', write(f.root, 'spec.json', demoSpec())])).code, 0, 'the superseding scoped decision no longer blocks an unrelated spec');
+});
