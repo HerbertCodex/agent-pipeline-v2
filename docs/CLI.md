@@ -348,8 +348,8 @@ Sortie : `0` condition remplie, `1` délai dépassé, `2` appel incorrect (aucun
 ## `apv procs`
 
 ```
-apv procs list [--repo <copie>] [--port <p>]... [--json]
-apv procs stop [--repo <copie>] [--port <p>]... [--grace <secondes>] [--json]
+apv procs list [--repo <copie>] [--port <p>]... [--include-main] [--all] [--json]
+apv procs stop [--repo <copie>] [--port <p>]... [--include-main] [--grace <secondes>] [--json]
 ```
 
 Serveurs de test orphelins. Une suite navigateur qui dépasse le délai d'un appel Bash (600 s) est coupée, mais les serveurs qu'elle a lancés (`vite preview`, serveur web de Playwright) restent à l'écoute sur les ports de la pile de test ; une session non interactive n'a pas le droit de `kill` et attendait (projet pilote, 25 et 26 septembre 2026). `apv procs` les trouve et les arrête, sans jamais toucher un processus étranger au dépôt.
@@ -361,9 +361,17 @@ Cibles :
 - sans `--port`, `--repo <copie>` : tous les processus lancés dans cette copie, qu'ils écoutent ou non ; la copie doit être un worktree lié du dépôt, jamais la copie principale, qui porte la session et ses outils (refus `2`) ;
 - sans l'un ni l'autre : les processus qui écoutent sur les **ports de test déclarés**, section `resources` de `.apv/config.json` ([CONFIGURATION.md](CONFIGURATION.md#ressources-de-test--resources)) ; `stop` sans port déclaré est refusé (`2`) ; `list` montre alors aussi tous les processus des worktrees.
 
-`list` affiche pour chaque cible son pid, ses ports, son worktree (ou son répertoire hors du dépôt), sa commande et s'il serait arrêté ; les ports visés libres sont nommés. `stop` n'arrête que les cibles du dépôt : `SIGTERM` à toutes, puis `SIGKILL` à celles qui tournent encore après `--grace` secondes (défaut 5, de 0 à 60), puis vérification. Jamais arrêtés, et signalés : un processus hors du dépôt (autre projet, autre utilisateur, aperçu de `apv preview` qui tourne dans sa propre copie), un processus dont le répertoire est illisible, `apv` lui-même et ses parents (la session, son shell). Un pid réutilisé entre le relevé et le signal n'est pas visé (heure de démarrage comparée).
+`list` affiche pour chaque cible son pid, ses ports, son worktree (ou son répertoire hors du dépôt), sa commande et son état (`arrêtable (apv procs stop)` ou la raison du refus) ; les ports visés libres sont nommés. Par défaut, `list` ne montre que ce que `stop` arrêterait et ce qui écoute sur un port visé (ports déclarés, ou `--port`) ; le nombre des autres processus des worktrees est indiqué, et `--all` les montre aussi (checkout principal, outils protégés). Les autres commandes du pipeline qui lance `apv` (`apv procs list | tail | cut`) n'apparaissent jamais : les enfants d'un shell parent de `apv` qui sont dans le même groupe de processus que lui, comme `apv` et ses parents.
 
-Sortie : `0` toutes les cibles arrêtées, ou aucune ; `1` une cible refusée (hors du dépôt, protégée, signal refusé) ou encore vivante après `SIGKILL`, ou système sans `/proc` ; `2` appel incorrect. JSON : `action`, `mode` (`ports`, `copy`, `all`), `repository`, `worktrees`, `copy`, `ports`, `declaredPorts`, `freePorts`, `processes` (`pid`, `ppid`, `ports`, `cwd`, `worktree`, `command`, `stoppable`, `refusal` : `outside`, `protected` ou `unknown-cwd`, et pour `stop` `outcome` : `terminated`, `killed`, `survived`, `gone` ou `denied`), `ok`.
+`stop` n'arrête que les cibles du dépôt : `SIGTERM` à toutes, puis `SIGKILL` à celles qui tournent encore après `--grace` secondes (défaut 5, de 0 à 60), puis vérification. Jamais arrêtés, et signalés :
+- un processus hors du dépôt (autre projet, autre utilisateur, aperçu de `apv preview` qui tourne dans sa propre copie) ou dont le répertoire est illisible ;
+- `apv` lui-même et ses parents (la session, son shell) ;
+- un **outil protégé**, où qu'il tourne et quel que soit son port (`protégé : outil (...)`) : serveur d'éditeur distant (exécutable ou commande sous `.vscode-server/`, `.cursor-server/`, `.windsurf-server/`...), extension d'éditeur, serveur de langage (`language-server`, `tsserver`, `svelteserver`, `gopls`, `rust-analyzer`...), serveur MCP (`mcp`, `mcp-server`, `modelcontextprotocol`, comme `npx @sveltejs/mcp`), session Claude Code ; motifs relevés sur l'exécutable (`/proc/<pid>/exe`) et la ligne de commande ;
+- un processus du **checkout principal** (premier worktree de `git worktree list`, où tournent l'éditeur et les serveurs de l'opérateur) : `protégé : checkout principal`, sortie `1`, même s'il écoute sur un port visé. `--include-main` l'autorise pour un processus qui écoute sur un **port de test déclaré** (`resources`) et visé, jamais pour un outil protégé ; tous les ports visés doivent alors être déclarés (sinon refus `2`), et `--include-main` avec `--repo <copie>` seul est refusé (`2`).
+
+Un pid réutilisé entre le relevé et le signal n'est pas visé (heure de démarrage comparée).
+
+Sortie : `0` toutes les cibles arrêtées, ou aucune ; `1` une cible refusée (hors du dépôt, protégée, checkout principal, signal refusé) ou encore vivante après `SIGKILL`, ou système sans `/proc` ; `2` appel incorrect (dont `--all` avec `stop`). JSON : `action`, `mode` (`ports`, `copy`, `all`), `repository`, `worktrees`, `copy`, `ports`, `declaredPorts`, `freePorts`, `includeMain`, `hidden` (processus masqués par `list` sans `--all`), `processes` (`pid`, `ppid`, `ports`, `cwd`, `worktree`, `command`, `exe`, `stoppable`, `refusal` : `outside`, `protected`, `unknown-cwd`, `tool` (avec `tool`, le nom de l'outil) ou `main-checkout`, et pour `stop` `outcome` : `terminated`, `killed`, `survived`, `gone` ou `denied`), `ok`.
 
 ## `apv review plan`
 

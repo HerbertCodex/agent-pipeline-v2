@@ -12,6 +12,8 @@ import { gitRead } from '../run/git-probe.js';
 export interface ProcessInfo {
   pid: number;
   ppid: number;
+  /** Process group: the members of one shell pipeline share it when the shell has job control. */
+  pgid: number;
   /** Start time in clock ticks since boot: with the pid, identifies the process (a reused pid has another). */
   start: number;
   /** Working directory, or null when unreadable (another user's process, a process gone meanwhile). */
@@ -19,6 +21,10 @@ export interface ProcessInfo {
   /** True when the working directory was removed (`/proc/<pid>/cwd` ends with ` (deleted)`). */
   cwdDeleted: boolean;
   command: string;
+  /** Executable (`/proc/<pid>/exe`), or null when unreadable. */
+  exe: string | null;
+  /** Short name of the executable (`/proc/<pid>/comm`), as `ps` shows it. */
+  comm: string;
   /** TCP ports (IPv4 and IPv6) the process listens on. */
   ports: number[];
   zombie: boolean;
@@ -34,12 +40,12 @@ export function assertProcSupported(root = PROC_ROOT): void {
 }
 
 /** Fields of `/proc/<pid>/stat` after the command name, which may contain spaces and parentheses. */
-function readStat(root: string, pid: number): { ppid: number; start: number; zombie: boolean } | null {
+function readStat(root: string, pid: number): { ppid: number; pgid: number; start: number; zombie: boolean } | null {
   try {
     const text = readFileSync(join(root, String(pid), 'stat'), 'utf8');
     const fields = text.slice(text.lastIndexOf(')') + 2).split(' ');
-    // fields[0] is the state (3rd field), fields[1] the parent (4th), fields[19] the start time (22nd).
-    return { ppid: Number(fields[1]), start: Number(fields[19]), zombie: fields[0] === 'Z' || fields[0] === 'X' };
+    // fields[0] is the state (3rd field), fields[1] the parent (4th), fields[2] the process group (5th), fields[19] the start time (22nd).
+    return { ppid: Number(fields[1]), pgid: Number(fields[2]), start: Number(fields[19]), zombie: fields[0] === 'Z' || fields[0] === 'X' };
   } catch { return null; }
 }
 
@@ -85,8 +91,12 @@ export function readProcess(pid: number, root = PROC_ROOT, inodes?: Map<string, 
   } catch { /* another user's process, or gone */ }
   let command = '';
   try { command = readFileSync(join(root, String(pid), 'cmdline'), 'utf8').split('\0').filter(Boolean).join(' '); } catch { /* gone */ }
-  if (!command) { try { command = `[${readFileSync(join(root, String(pid), 'comm'), 'utf8').trim()}]`; } catch { /* gone */ } }
-  return { pid, ppid: stat.ppid, start: stat.start, cwd, cwdDeleted, command, ports: inodes ? socketPorts(root, pid, inodes) : [], zombie: stat.zombie };
+  let comm = '';
+  try { comm = readFileSync(join(root, String(pid), 'comm'), 'utf8').trim(); } catch { /* gone */ }
+  if (!command && comm) command = `[${comm}]`;
+  let exe: string | null = null;
+  try { exe = readlinkSync(join(root, String(pid), 'exe')); } catch { /* another user's process, a kernel thread, or gone */ }
+  return { pid, ppid: stat.ppid, pgid: stat.pgid, start: stat.start, cwd, cwdDeleted, command, exe, comm, ports: inodes ? socketPorts(root, pid, inodes) : [], zombie: stat.zombie };
 }
 
 /** Every process visible in `/proc`, with its listening ports. */
@@ -114,6 +124,43 @@ export function protectedPids(root = PROC_ROOT, self = process.pid): Set<number>
   }
   pids.add(1);
   return pids;
+}
+
+/** Short names of the shells whose children may be the other commands of the pipeline that runs apv. */
+const SHELL_COMM = /^-?(sh|bash|dash|zsh|ksh|mksh|ash|fish|busybox)$/;
+
+/**
+ * Ephemeral processes of the command line that runs apv: the other commands of its pipeline (`apv procs list | tail
+ * | cut`), children of a shell among the ancestors of apv and in the same process group as apv. Never listed. Only
+ * the children of a shell count: a program that spawns apv (a test runner, an editor) may have other children in
+ * the same process group, which are not part of the command line.
+ */
+export function pipelineSiblings(processes: readonly ProcessInfo[], session: ReadonlySet<number>, root = PROC_ROOT, self = process.pid): Set<number> {
+  const own = readStat(root, self);
+  const out = new Set<number>();
+  if (!own) return out;
+  const shells = new Set(processes.filter(p => p.pid !== 1 && session.has(p.pid) && SHELL_COMM.test(p.comm)).map(p => p.pid));
+  for (const p of processes) if (p.pgid === own.pgid && shells.has(p.ppid) && !session.has(p.pid)) out.add(p.pid);
+  return out;
+}
+
+/**
+ * Tools of the operator's editor and session, never stopped wherever they run and whatever port they hold: they are
+ * often started in the main checkout (the folder open in the editor) and an interrupted test suite never leaves them
+ * behind. Matched against the executable and the command line.
+ */
+export const PROTECTED_TOOLS: readonly { label: string; pattern: RegExp }[] = [
+  { label: 'serveur d\'éditeur distant (VS Code, Cursor, Windsurf)', pattern: /\/\.(vscode|vscode-insiders|vscodium|cursor|windsurf)-server(-insiders)?\// },
+  { label: 'extension d\'éditeur', pattern: /\/\.(vscode|vscode-insiders|vscodium|cursor|windsurf)\/extensions\// },
+  { label: 'serveur de langage', pattern: /language-?server|langserver|\blsp\b|\btsserver\b|\bsvelteserver\b|eslintServer|\b(gopls|rust-analyzer|clangd|pylsp|jdtls)\b/i },
+  { label: 'serveur MCP', pattern: /\bmcp\b|mcp[-_]?server|modelcontextprotocol/i },
+  { label: 'session Claude Code', pattern: /(^|\/)claude(\s|$)|claude-code/ },
+];
+
+/** The protected tool the process is (label), or null. */
+export function protectedTool(info: Pick<ProcessInfo, 'exe' | 'command'>): string | null {
+  const text = `${info.exe ?? ''}\n${info.command}`;
+  return PROTECTED_TOOLS.find(t => t.pattern.test(text))?.label ?? null;
 }
 
 /** Worktrees of the repository that contains `path` (`git worktree list`), main checkout first, canonical paths. */
