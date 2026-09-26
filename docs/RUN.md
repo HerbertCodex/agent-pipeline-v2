@@ -89,6 +89,22 @@ apv wait --file <chemin> [--contains <texte>] [--timeout <s>]  # un fichier, ou 
 
 580 s au plus par appel (`--timeout` pour moins) ; code `0` « Terminé », code `1` « Délai dépassé » : on relance l'appel. `--contains` ne relit que les octets ajoutés depuis le relevé précédent, un journal qui grossit ne coûte rien. `apv wait` ne connaît pas le code de sortie du processus attendu : on lit son journal ou ses reçus. Exemples : la suite complète lancée en arrière-plan (`apv wait --pid <pid>`, puis `apv gates verify`), le scan dynamique (`apv wait --file <dossier>/summary.json`), une exécution détachée (`apv wait --pid <pid de la première ligne du journal>`).
 
+### Serveurs de test orphelins : `apv procs`
+
+Un appel Bash est coupé à 600 s. Une suite navigateur coupée ainsi laisse ses serveurs (`vite preview`, serveur web de Playwright) à l'écoute sur les ports de la pile de test, et une session non interactive n'a pas le droit de `kill` : sur le projet pilote (25 et 26 septembre 2026), la session `/apv:run` s'est arrêtée à attendre que les ports se libèrent. Deux règles :
+
+1. **Les suites longues tournent en arrière-plan** : outil Bash avec `run_in_background: true`, sortie redirigée dans un journal du dossier de session, puis `apv wait --file <journal> --contains "Reçus : "` (dernière ligne de `apv gates run`) ou `apv wait --pid <pid>`, appel après appel. La suite n'est plus coupée par la limite de l'appel.
+2. **Des ports occupés par des orphelins du dépôt se libèrent par l'outil**, pas en attendant :
+
+```sh
+apv procs list                              # qui tient les ports de test déclarés, et les processus des worktrees
+apv procs stop                              # arrête ce qui écoute sur les ports déclarés (resources.<ressource>.ports)
+apv procs stop --port 4173 --port 4174      # ports nommés
+apv procs stop --repo <copie de la tâche>   # tout ce qui a été lancé dans cette copie (avant git worktree remove)
+```
+
+`apv procs stop` envoie `SIGTERM`, puis `SIGKILL` après `--grace` secondes (5 par défaut), et n'arrête qu'un processus dont le répertoire courant est dans un worktree du dépôt : jamais un processus d'un autre projet ou d'un autre utilisateur, jamais la session ni ses parents, jamais l'aperçu de `apv preview` (copie hors du dépôt). Un port tenu par un processus hors du dépôt sort en `1` (« hors du dépôt : non arrêté ») : c'est à l'opérateur de le libérer. Déclarer les ports des piles de test dans `.apv/config.json` ([CONFIGURATION.md](CONFIGURATION.md#ressources-de-test--resources)) pour que `apv procs stop` sans option les connaisse. Linux seulement (lecture de `/proc`) ; ailleurs, refus clair. `/apv:run` a le droit de le lancer (`node .../dist/cli.js procs`).
+
 ## 4. Vagues parallèles
 
 ### Workflows du plugin

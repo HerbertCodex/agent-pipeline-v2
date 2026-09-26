@@ -142,7 +142,8 @@ export async function checkSpec(options: SpecCheckOptions): Promise<SpecCheckRes
   // Same inputs as V2 `scopedSecurity`: paths named by the request, plus literal task paths.
   const security = assessSecurity({ text: request, projectType,
     files: [...pathsMentioned(request, tracked), ...(declared?.tasks.flatMap(t => t.allowedPaths).filter(p => !/[*?]/.test(p)) ?? [])] });
-  issues.push(...specIssues(options.document.spec, { ready: options.ready ?? true, securityContext: security,
+  const specId = options.specFile ? basename(options.specFile).replace(/\.json$/, '') : undefined;
+  issues.push(...specIssues(options.document.spec, { ready: options.ready ?? true, securityContext: security, ...(specId ? { specId } : {}),
     ...(ledger.ledger ? { ledger: ledger.ledger } : {}), ...(explicit !== undefined ? { operatorText: explicit } : {}) }));
   const warnings = declared ? specWarnings(declared, limits) : [];
   return { valid: issues.length === 0, issues, title: declared?.title ?? null, sha, requestSource, requestFile: stored?.file ?? null, ledgerFile: ledger.file, configFile, security,

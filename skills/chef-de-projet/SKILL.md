@@ -79,6 +79,7 @@ L'état d'exécution (`apv run status`, `apv run next`) et les fichiers de `.apv
 ## 5 bis. Copies détachées et attentes
 - Les copies détachées (revues, scan dynamique, livraison) vont dans ton dossier de session (le dossier de travail temporaire de la session Claude Code, où les permissions te laissent lancer tes commandes) ou sous un chemin que l'outil donne, jamais à côté du dépôt ; chacune est retirée par `git worktree remove` à la fin de son usage.
 - Pour attendre un processus ou un fichier (suite complète en arrière-plan, scan, exécution détachée) : `apv wait --pid <pid>` ou `apv wait --file <chemin> [--contains <texte>]`, 580 s au plus par appel, relancé au besoin ; jamais `sleep`, `tail --pid` ni une boucle sur `kill -0`, refusés en session non interactive.
+- Ports de la pile de test tenus par les serveurs d'une suite coupée : `apv procs list`, puis `apv procs stop` (ports déclarés dans `resources`), `--port <p>` ou `--repo <copie>` ; il n'arrête que des processus lancés dans un worktree du dépôt, jamais `kill` à la main.
 
 ## 6. Verrous
 Toute ressource partagée (base locale, remise à zéro, ports fixes, navigateur de test, aperçu) s'utilise sous bail : `apv lock run <ressource> -- <commande>`, une commande par bail. Le bail expire, le propriétaire est vérifié, la file d'attente est visible (`apv lock status`). Jamais de verrou tenu en attendant autre chose (incident 25), jamais de verrou sans fin (incident 28). Préfère isoler (base ou schéma par worktree, ports par agent) quand c'est possible.

@@ -8,6 +8,7 @@ import { detectGates, previewHints } from '../onboard/detect.js';
 import { findSpecCandidates, importV2Config, importV2Ledger, specFileName, V2_SPEC_DIRS, v2FilesNotImported } from '../onboard/v2.js';
 import { gitRoot } from '../run/git-probe.js';
 import { checkSpec, parseSpecDocument } from '../spec/check.js';
+import { GITATTRIBUTES } from '../design/attributes.js';
 import { ApvWriter, PLUGIN_ROOT, readBriefTemplate, writeApvSkeleton } from './init.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 export const usage = `Utilisation :
@@ -20,7 +21,8 @@ environment.passEnv, et ignore le reste (agents, budgets, délais, modèles, ré
 les specs V2 de .agent-pipeline/specs, specs, docs/specs (et --specs) sont copiées dans .apv/specs/ si
 apv spec validate --draft les accepte, sinon listées avec la raison.
 Projet sans V2 : contrôles détectés (package.json, Makefile, pyproject.toml) proposés avec mandatory: false.
-Le reste comme apv init : brief.md, specs/, state/, .gitignore. --dry-run montre le plan sans rien écrire.
+Le reste comme apv init : brief.md, specs/, state/, .gitignore, et la ligne des maquettes validées dans
+.gitattributes (dossier design.dir déclaré ou présent). --dry-run montre le plan sans rien écrire.
 Sortie : 0 succès, 1 hors d'un dépôt Git ou fichier V2 illisible ou invalide (rien n'est écrit), 2 appel incorrect.`;
 async function validateSpecs(repo, candidates, report) {
     const accepted = [];
@@ -107,7 +109,7 @@ export async function onboardProject(repo, options) {
         'relire .apv/config.json (contrôles, mandatory) et adapter .apv/brief.md (passages entre chevrons)',
         'apv ledger validate',
         baseGates.length ? `apv gates run --base <branche de base, par exemple main> (${baseGates.join(', ')} utilise {{baseSha}})` : 'apv gates run',
-        `git add ${APV_DIR} && git commit -m "chore(apv): reprise du projet" (sur accord de l'opérateur)`,
+        `git add ${[APV_DIR, ...([...writer.created, ...writer.completed].includes(GITATTRIBUTES) ? [GITATTRIBUTES] : [])].join(' ')} && git commit -m "chore(apv): reprise du projet" (sur accord de l'opérateur)`,
     ];
     return {
         repo, name, dryRun: options.dryRun,

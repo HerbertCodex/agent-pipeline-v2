@@ -2,7 +2,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APV_DIR, apvGitignoreMissing, ensureApvGitignore } from '../config/apv-files.js';
-import { CONFIG_FILE } from '../config/load.js';
+import { CONFIG_FILE, loadConfig } from '../config/load.js';
+import { designDir } from '../design/config.js';
+import { GITATTRIBUTES, ensureDesignAttribute } from '../design/attributes.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { LEDGER_FILE } from '../lifecycle/decisions.js';
 import { gitRoot } from '../run/git-probe.js';
@@ -13,7 +15,8 @@ export const usage = `Utilisation :
 Crée ce qui manque dans .apv/ sans jamais écraser un fichier existant (la commande peut être relancée) :
 config.json (nom du projet, contrôles vides), DECISIONS.json (registre vide), brief.md (consigne commune
 des implementers, depuis le modèle de la compétence chef-de-projet), specs/, state/ et .gitignore
-(fichiers machine). Liste ce qui est créé et ce qui existait déjà. Refuse hors d'un dépôt Git.
+(fichiers machine). Si la configuration déclare le dossier des maquettes validées (design.dir) ou si ce
+dossier existe, ajoute à .gitattributes « <dossier>/*.html -whitespace » quand Git ne l'applique pas déjà. Liste ce qui est créé et ce qui existait déjà. Refuse hors d'un dépôt Git.
 Le nom du projet est --name, sinon le nom du dossier du dépôt.
 Sortie : 0 succès, 1 hors d'un dépôt Git ou modèle de consigne introuvable, 2 appel incorrect.`;
 /** Root of the plugin, resolved from the compiled tool (`dist/commands/init.js`). */
@@ -76,6 +79,28 @@ export class ApvWriter {
         this.created.push(path);
         return true;
     }
+    /**
+     * The `.gitattributes` line of the validated mockups, when the configuration declares their folder (`design.dir`)
+     * or the folder exists: registered under their sha256, they must stay out of `git diff --check`. An unreadable
+     * configuration is left to `apv status` and the other commands: nothing is written then.
+     */
+    designAttributes() {
+        let dir;
+        let declared;
+        try {
+            const { config } = loadConfig(this.repo);
+            declared = config.design?.dir !== undefined;
+            dir = designDir(config.design);
+        }
+        catch {
+            return;
+        }
+        if (!declared && !existsSync(join(this.repo, dir)))
+            return;
+        const had = existsSync(join(this.repo, GITATTRIBUTES));
+        const result = ensureDesignAttribute(this.repo, dir, this.dryRun);
+        (result.status === 'present' ? this.existing : had ? this.completed : this.created).push(GITATTRIBUTES);
+    }
     gitignore() {
         const ignore = `${APV_DIR}/.gitignore`;
         const had = existsSync(join(this.repo, ignore));
@@ -94,6 +119,7 @@ export function writeApvSkeleton(writer, name, template, content = {}) {
     writer.dir(`${APV_DIR}/specs`);
     writer.dir(`${APV_DIR}/state`);
     writer.gitignore();
+    writer.designAttributes();
 }
 export function initProject(repo, name, pluginRoot = PLUGIN_ROOT) {
     const template = readBriefTemplate(pluginRoot);
@@ -126,7 +152,8 @@ export async function run(args, io) {
         if (result.existing.length)
             lines.push(`Existait déjà (inchangé) : ${result.existing.join(', ')}`);
         if (result.created.length || result.completed.length) {
-            lines.push('Suite : adapter .apv/brief.md (passages entre chevrons) et déclarer les contrôles dans .apv/config.json, puis commiter .apv/.');
+            const attributes = [...result.created, ...result.completed].includes(GITATTRIBUTES) ? ` et ${GITATTRIBUTES}` : '';
+            lines.push(`Suite : adapter .apv/brief.md (passages entre chevrons) et déclarer les contrôles dans .apv/config.json, puis commiter .apv/${attributes}.`);
         }
         io.stdout(`${lines.join('\n')}\n`);
         return EXIT.ok;

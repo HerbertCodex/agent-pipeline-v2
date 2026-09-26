@@ -19,6 +19,10 @@ export declare const ledgerUpdateSchema: import("../domain/schema.js").Schema<{
         readonly supersedes: string[];
         readonly clarificationQuestion: string;
         readonly interpretations: string[];
+        readonly scope: {
+            readonly paths: string[] | undefined;
+            readonly specs: string[] | undefined;
+        } | undefined;
     }[];
 }>;
 export type LedgerUpdate = Infer<typeof ledgerUpdateSchema>;

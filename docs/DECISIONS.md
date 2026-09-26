@@ -135,6 +135,37 @@ pendant le bootstrap, puis après une réponse explicite :
 
 la spec enregistre une résolution opérateur et la vérifie comme une exigence réelle.
 
+## Périmètre d'une décision : `scope`
+
+Sans périmètre, une décision `product` confirmée est exigée de **toute** spec : chacune doit la rattacher à un critère. Quand une spec ajoute des décisions qui ne concernent qu'elle (projet pilote, 25 septembre 2026 : sept décisions de la page d'accueil), toutes les specs en attente deviennent invalides, et il fallait les rattacher à la main à un critère sans rapport.
+
+Le champ facultatif `scope` d'une décision déclare ce qu'elle concerne :
+
+```json
+{
+  "id": "D-ACCUEIL-CARROUSEL",
+  "subject": "Carrousel de la page d'accueil",
+  "value": "Trois visuels, défilement manuel seulement.",
+  "enforcement": "product", "status": "confirmed", "source": "operator", "sourceQuote": "trois visuels, pas de défilement automatique",
+  "rationale": "Réponse de l'opérateur à la spec accueil.",
+  "scope": { "paths": ["src/routes/(public)/+page.svelte", "src/lib/accueil/**"], "specs": ["accueil"] }
+}
+```
+
+- `paths` : motifs de chemins, syntaxe des chemins autorisés (`*`, `**`, `?` ; accolades et `!` refusés), de 1 à 100 ;
+- `specs` : identifiants de specs (nom du fichier `.apv/specs/<id>.json` sans `.json`, kebab-case), de 1 à 100 ;
+- au moins un des deux, sinon `DECISION_SCOPE` (`apv ledger validate`).
+
+`apv spec validate` exige une décision avec `scope` d'une spec seulement quand un motif de `paths` **recoupe** un chemin autorisé (`allowedPaths`) d'une de ses tâches (les deux motifs peuvent désigner un même fichier : `src/**` recoupe `src/lib/x.ts`, `src/routes/accueil/**` ne recoupe pas `src/routes/compte/**`), ou quand `specs` nomme la spec. La règle reste entière pour les décisions concernées : couverture par un critère, question posée pour une ambiguïté. Une décision sans `scope` reste exigée partout (compatibilité : un registre existant ne change ni de sens ni d'empreinte). Une spec peut toujours couvrir une décision hors de son périmètre.
+
+Qui le renseigne :
+
+- **product** propose, pour chaque décision qu'il fait entrer au registre (réponse de l'opérateur à une question de sa spec), le périmètre qu'elle concerne : les chemins des tâches de la spec qu'elle contraint et l'identifiant de la spec ; il ne met aucun `scope` sur une décision transverse (identité visuelle, ton des textes, langue, sécurité, données personnelles, conventions de code) ;
+- **l'architecte** précise ces chemins dans son plan quand il fixe les fichiers (route, module, composant), et signale une décision dont le périmètre ne couvre pas un fichier que le plan crée ;
+- **le chef de projet** l'écrit au registre avec la décision (`apv ledger plan` puis `apply`). Pour une décision déjà au registre, donner un périmètre, c'est la remplacer : nouvelle entrée, même valeur et même citation, `supersedes` vers l'ancienne, `scope` ajouté. Une maquette validée reçoit le sien par `apv design register --scope <motifs>`.
+
+Dans le doute, pas de périmètre : une décision exigée à tort coûte un rattachement, une décision oubliée par une spec qu'elle concernait coûte une non-conformité.
+
 ## Implementer
 
 Pour chaque tâche, le contrôleur transmet :

@@ -294,6 +294,8 @@ export interface SpecCheckOptions {
     operatorText?: string;
     /** Security minimum the spec must preserve, recomputed from the request and the repository. */
     securityContext?: SecurityContext;
+    /** Id of the spec (its file name without `.json`): a decision whose `scope.specs` names it concerns it. */
+    specId?: string;
 }
 /** Every semantic problem of a parsed spec, in the order V2 checked them (V2 stopped at the first). */
 export declare function specRuleIssues(spec: Spec, options?: SpecCheckOptions): Issue[];

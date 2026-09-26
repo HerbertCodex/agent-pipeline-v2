@@ -3,6 +3,17 @@ import { type Issue } from '../domain/issues.js';
 export declare const decisionEnforcements: readonly ["bootstrap", "product", "deferred"];
 export declare const decisionStatuses: readonly ["confirmed", "proposed", "ambiguous", "deferred"];
 export declare const decisionSources: readonly ["operator", "derived"];
+/**
+ * Optional perimeter of a decision: the paths it concerns (portable globs, the syntax of `allowedPaths`) and/or
+ * the specs it concerns (ids). A confirmed Product decision with a scope is required by a spec only when one of
+ * its paths can match a path a task of the spec may change, or when it names the spec; without a scope it is
+ * required by every spec (the historical rule).
+ */
+export declare const decisionScopeSchema: import("../domain/schema.js").Schema<{
+    readonly paths: string[] | undefined;
+    readonly specs: string[] | undefined;
+}>;
+export type DecisionScope = Infer<typeof decisionScopeSchema>;
 export declare const decisionSchema: import("../domain/schema.js").Schema<{
     readonly id: string;
     readonly subject: string;
@@ -15,6 +26,10 @@ export declare const decisionSchema: import("../domain/schema.js").Schema<{
     readonly supersedes: string[];
     readonly clarificationQuestion: string;
     readonly interpretations: string[];
+    readonly scope: {
+        readonly paths: string[] | undefined;
+        readonly specs: string[] | undefined;
+    } | undefined;
 }>;
 export type Decision = Infer<typeof decisionSchema>;
 export declare const decisionLedgerSchema: import("../domain/schema.js").Schema<{
@@ -31,6 +46,10 @@ export declare const decisionLedgerSchema: import("../domain/schema.js").Schema<
         readonly supersedes: string[];
         readonly clarificationQuestion: string;
         readonly interpretations: string[];
+        readonly scope: {
+            readonly paths: string[] | undefined;
+            readonly specs: string[] | undefined;
+        } | undefined;
     }[];
 }>;
 export type DecisionLedger = Infer<typeof decisionLedgerSchema>;
@@ -77,6 +96,17 @@ export declare function validateDecisionLedger(ledger: DecisionLedger, operatorT
 export declare function ledgerHash(ledger: DecisionLedger): string;
 export declare function confirmedDecisions(ledger: DecisionLedger, enforcement?: 'bootstrap' | 'product'): Decision[];
 export declare function ambiguousDecisions(ledger: DecisionLedger, enforcement?: 'bootstrap' | 'product'): Decision[];
+/** What a spec may touch, for the scope of the decisions: its id (file name) and the allowed paths of its tasks. */
+export interface DecisionTarget {
+    specId?: string | undefined;
+    paths: readonly string[];
+}
+/**
+ * Why a decision concerns a spec, or null when it does not: no scope (every spec), the spec named in
+ * `scope.specs`, or a `scope.paths` glob that can match a path allowed to one of the tasks.
+ */
+export declare function decisionReason(decision: Decision, target: DecisionTarget): string | null;
+export declare const decisionApplies: (decision: Decision, target: DecisionTarget) => boolean;
 export declare function validateBootstrapCoverage(ledger: DecisionLedger, coverage: DecisionCoverage[], files: string[]): void;
 export declare function validateSemanticReview(ledger: DecisionLedger, review: SemanticReview): SemanticReview;
 export declare function decisionLedgerMarkdown(ledger: DecisionLedger): string;

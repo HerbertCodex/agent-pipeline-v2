@@ -1,3 +1,4 @@
+import { type DesignAttributeResult } from './attributes.js';
 export { DEFAULT_DESIGN_DIR } from './config.js';
 /** Lowercase words joined by single dashes; short enough for the decision id (80 characters at most). */
 export declare const SLUG_PATTERN: RegExp;
@@ -37,6 +38,11 @@ export interface RegisterInput {
     screens?: string[];
     artifact?: string;
     reviewer?: string;
+    /**
+     * Paths the mockup concerns (portable globs): scope of the decision, so that only the specs whose tasks may
+     * change these paths must cover it. Absent: the scope of the active registration, if any, is kept.
+     */
+    scopePaths?: string[];
     /** Injected clock, for tests. */
     now?: Date;
 }
@@ -49,8 +55,10 @@ export interface RegisterResult {
     sha256: string;
     ledgerFile: string;
     ledgerMarkdown: string;
-    /** True when the same content was already registered: nothing was written. */
+    /** True when the same content was already registered: nothing was written to the mockup or the ledger. */
     unchanged: boolean;
+    /** Line of `.gitattributes` that keeps the validated mockups out of `git diff --check`, added when missing. */
+    attributes: DesignAttributeResult;
 }
 export declare function validateSlug(slug: string): void;
 /**

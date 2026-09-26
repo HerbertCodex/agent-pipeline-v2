@@ -157,3 +157,75 @@ test('apv help lists the design command', async () => {
   assert.equal(own.code, 0);
   assert.match(own.stdout, /--quote/);
 });
+
+test('register keeps validated mockups out of git diff --check: .gitattributes line added once, to commit', async t => {
+  const SPACED = '<!doctype html>\n<html lang="fr">  \n<body>Accueil\t\n</body></html>\n';
+  const f = project(t, [decision('D-1')], { 'brouillons/accueil.html': SPACED, '.gitattributes': '*.png binary' });
+  const out = await apv(f.repo, ['design', 'register', 'brouillons/accueil.html', '--name', 'accueil', '--quote', 'je valide l\'accueil', '--json']);
+  assert.equal(out.code, 0, out.stderr);
+  assert.deepEqual(out.json().attributes, { file: '.gitattributes', line: 'docs/design/*.html -whitespace', status: 'added' });
+  assert.deepEqual(out.json().toCommit, ['docs/design/accueil-validee.html', '.apv/DECISIONS.json', '.apv/DECISIONS.md', '.gitattributes']);
+  const attributes = readFileSync(join(f.repo, '.gitattributes'), 'utf8');
+  assert.match(attributes, /^\*\.png binary\n# Maquettes validées[^\n]*\ndocs\/design\/\*\.html -whitespace\n$/);
+  assert.ok(!/[–—]/.test(attributes));
+  assert.equal(git(f.repo, 'check-attr', 'whitespace', '--', 'docs/design/accueil-validee.html'), 'docs/design/accueil-validee.html: whitespace: unset');
+  // What the projects' diff-check gate runs: the mockup with its trailing spaces passes.
+  git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'maquette');
+  git(f.repo, 'diff', '--check', 'HEAD~1', 'HEAD');
+  assert.equal((await apv(f.repo, ['design', 'check'])).code, 0);
+  // Present: never added twice, nothing more to commit.
+  const again = await apv(f.repo, ['design', 'register', 'brouillons/accueil.html', '--name', 'accueil', '--quote', 'je valide l\'accueil', '--json']);
+  assert.deepEqual([again.json().unchanged, again.json().attributes.status, again.json().toCommit], [true, 'present', []]);
+  assert.equal(readFileSync(join(f.repo, '.gitattributes'), 'utf8'), attributes);
+});
+
+test('register adds the line for a project registered before it, with a custom design.dir; human output names it', async t => {
+  const f = project(t, [decision('D-1')], { '.apv/config.json': '{ "name": "demo", "design": { "dir": "maquettes/validees" } }\n' });
+  const out = await apv(f.repo, ['design', 'register', 'brouillons/tableau-v3.html', '--name', 'tableau', '--quote', 'je valide']);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /\.gitattributes : ligne « maquettes\/validees\/\*\.html -whitespace » ajoutée/);
+  assert.match(out.stdout, /git add -- maquettes\/validees\/tableau-validee\.html \.apv\/DECISIONS\.json \.apv\/DECISIONS\.md \.gitattributes/);
+  // Removed afterwards (the pilot's situation before its manual fix): the same registration puts it back.
+  writeFileSync(join(f.repo, '.gitattributes'), '');
+  const unchanged = await apv(f.repo, ['design', 'register', 'brouillons/tableau-v3.html', '--name', 'tableau', '--quote', 'je valide']);
+  assert.match(unchanged.stdout, /Déjà enregistrée[\s\S]*ligne « maquettes\/validees\/\*\.html -whitespace » ajoutée[\s\S]*À commiter : git add -- \.gitattributes/);
+});
+
+test('design check reports a missing .gitattributes line, and fails when a validated mockup has trailing whitespace', async t => {
+  const f = project(t, [decision('D-1')], { 'brouillons/propre.html': HTML, 'brouillons/espaces.html': '<p>fin</p>  \n' });
+  assert.equal((await apv(f.repo, ['design', 'register', 'brouillons/propre.html', '--name', 'propre', '--quote', 'je valide'])).code, 0);
+  writeFileSync(join(f.repo, '.gitattributes'), '');
+  const clean = await apv(f.repo, ['design', 'check']);
+  assert.equal(clean.code, 0, 'no trailing whitespace: reported only');
+  assert.match(clean.stdout, /Attention : \.gitattributes ne contient pas « docs\/design\/\*\.html -whitespace »/);
+  assert.equal((await apv(f.repo, ['design', 'check', '--json'])).json().attributes.status, 'missing');
+  git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'propre');
+  assert.equal((await apv(f.repo, ['design', 'register', 'brouillons/espaces.html', '--name', 'espaces', '--quote', 'je valide'])).code, 0);
+  writeFileSync(join(f.repo, '.gitattributes'), '');
+  const broken = await apv(f.repo, ['design', 'check', '--json']);
+  assert.equal(broken.code, 1);
+  assert.deepEqual([broken.json().attributes.whitespace, broken.json().attributes.blocking], [['docs/design/espaces-validee.html'], true]);
+  assert.match((await apv(f.repo, ['design', 'check'])).stdout, /Erreur : [^\n]*espaces-validee\.html porte\(nt\) des espaces de fin de ligne : git diff --check échoue/);
+  // A project without mockups nor folder: nothing to say.
+  const bare = project(t);
+  const none = await apv(bare.repo, ['design', 'check', '--json']);
+  assert.deepEqual([none.code, none.json().attributes.status], [0, 'not-applicable']);
+});
+
+test('register --scope gives the mockup decision a perimeter, kept by a re-registration without --scope', async t => {
+  const f = project(t);
+  const out = await apv(f.repo, ['design', 'register', 'brouillons/tableau-v3.html', '--name', 'accueil', '--quote', 'je valide', '--scope', 'src/routes/(accueil)/**, src/lib/accueil/**']);
+  assert.equal(out.code, 0, out.stderr);
+  const scopeOf = id => JSON.parse(readFileSync(join(f.repo, '.apv/DECISIONS.json'), 'utf8')).decisions.find(d => d.id === id)?.scope;
+  assert.deepEqual(scopeOf('maquette-accueil-validee'), { paths: ['src/routes/(accueil)/**', 'src/lib/accueil/**'] });
+  git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'maquette');
+  writeFileSync(join(f.repo, 'brouillons/tableau-v3.html'), HTML.replace('Tableau de bord', 'Accueil'));
+  assert.equal((await apv(f.repo, ['design', 'register', 'brouillons/tableau-v3.html', '--name', 'accueil', '--quote', 'je valide'])).code, 0);
+  assert.deepEqual(scopeOf('maquette-accueil-validee-v2'), { paths: ['src/routes/(accueil)/**', 'src/lib/accueil/**'] });
+  git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'v2');
+  // Same file, new scope: a new registration (the scope is part of the decision).
+  const rescoped = await apv(f.repo, ['design', 'register', 'brouillons/tableau-v3.html', '--name', 'accueil', '--quote', 'je valide', '--scope', 'src/routes/**', '--json']);
+  assert.deepEqual([rescoped.json().unchanged, rescoped.json().decisionId], [false, 'maquette-accueil-validee-v3']);
+  assert.deepEqual(scopeOf('maquette-accueil-validee-v3'), { paths: ['src/routes/**'] });
+  assert.equal((await apv(f.repo, ['design', 'list', '--scope', 'x'])).code, 2);
+});

@@ -22,7 +22,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts'] as const;
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources'] as const;
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'] as const;
 
@@ -90,6 +90,26 @@ export const reviewSettingsSchema = s.object({
   always: s.optional(reviewAlwaysSchema),
 });
 
+/**
+ * Test resources of the project (a test database, a browser stack, a scanner), named like the `resources` of the
+ * checks and of `apv lock`, with the TCP ports their servers listen on. `apv procs` reads the ports: a process
+ * left listening there by an interrupted suite, started in a worktree of the repository, can be stopped.
+ */
+export const RESOURCE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+export const testResourceSchema = s.object({
+  ports: s.array(s.number(1, 65535), 1, 100),
+  description: s.optional(s.string(1, 500)),
+});
+export const resourcesSchema = s.record(RESOURCE_ID, testResourceSchema, 100);
+/** Declared test ports, sorted and without duplicates, with the resources that declare them. */
+export function declaredTestPorts(config: { resources?: Record<string, { ports: number[] }> | undefined }): Map<number, string[]> {
+  const ports = new Map<number, string[]>();
+  for (const [resource, { ports: list }] of Object.entries(config.resources ?? {})) {
+    for (const port of list) ports.set(port, [...(ports.get(port) ?? []), resource]);
+  }
+  return new Map([...ports].sort((a, b) => a[0] - b[0]));
+}
+
 export const apvConfigSchema = s.object({
   /** Project name, written by `apv init` (display only). */
   name: s.optional(s.string(1, 100)),
@@ -112,6 +132,8 @@ export const apvConfigSchema = s.object({
   review: s.optional(reviewSettingsSchema),
   /** Retention of the shared receipt store (docs/CONFIGURATION.md, « Reçus »); absent: 30 days, 1000 runs. */
   receipts: s.optional(receiptsSettingsSchema),
+  /** Test resources and their ports (docs/CONFIGURATION.md, « Ressources de test »); absent: none declared. */
+  resources: s.optional(resourcesSchema),
 });
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export const specLimits = (config: { spec?: Partial<SpecLimits> | undefined }): SpecLimits => ({ ...DEFAULT_SPEC_LIMITS, ...config.spec });
@@ -171,6 +193,9 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
           `Gate ${gate.id} (targeted at stage task) depends on ${dep}, reserved for the full suite without a targeted variant`);
       }
     }
+  }
+  for (const [resource, { ports }] of Object.entries(value.resources ?? {})) {
+    list.check(new Set(ports).size === ports.length, 'CONFIG', `resources.${resource}.ports: duplicate port`);
   }
   const ruleIds = value.validationRules.map(r => r.id);
   list.check(new Set(ruleIds).size === ruleIds.length, 'CONFIG', 'Duplicate validation rule id');

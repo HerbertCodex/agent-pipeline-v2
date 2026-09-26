@@ -33,6 +33,8 @@ Prépare un projet pour APV3 (`/apv:init`). Crée ce qui manque dans `.apv/`, **
 
 Le nom du projet est `--name`, sinon le nom du dossier du dépôt. La commande travaille à la racine du dépôt Git qui contient le dossier courant (ou `--repo`) et refuse hors d'un dépôt Git. Elle liste ce qui est créé, complété et ce qui existait déjà ; rien n'est commité.
 
+Maquettes validées : si la configuration existante déclare leur dossier (`design.dir`) ou si ce dossier existe (`docs/design` par défaut), `apv init` ajoute aussi à `.gitattributes` (créé ou complété) la ligne `<dossier>/*.html -whitespace`, quand Git ne l'applique pas déjà (`git check-attr whitespace`) : voir [`apv design`](#apv-design). `apv onboard` fait de même.
+
 Sortie : `0` succès, `1` hors d'un dépôt Git ou modèle de consigne introuvable, `2` appel incorrect. En JSON : `repo`, `name`, `created`, `completed`, `existing`.
 
 ## `apv onboard`
@@ -93,6 +95,8 @@ La demande de l'opérateur vient, dans l'ordre :
 Seule une demande fournie (cas 1 ou 2) sert à vérifier les citations des résolutions de décisions ambiguës.
 
 Par défaut, la spec est contrôlée comme au lancement : aucune question ouverte, aucune ambiguïté non résolue, chaque critère porté par une tâche. `--draft` relâche ces trois règles pour une spec en cours de rédaction.
+
+**Décisions exigées.** Chaque décision `product` confirmée du registre doit être couverte par un critère (`decisionCoverage`), et chaque décision `product` ambiguë posée en question, **sauf si elle déclare un périmètre qui ne concerne pas la spec** : champ facultatif `scope` de la décision ([DECISIONS.md](DECISIONS.md#périmètre-dune-décision--scope)), avec `paths` (motifs de chemins, syntaxe des chemins autorisés) et/ou `specs` (identifiants de specs). Une décision avec `scope` est exigée quand un de ses motifs peut désigner un chemin que les `allowedPaths` d'une tâche autorisent (recoupement exact des deux motifs), ou quand `specs` nomme la spec (nom du fichier sans `.json`) ; une décision sans `scope` reste exigée de toute spec. Le message d'une décision non couverte dit pourquoi elle est exigée (« sans périmètre », « son périmètre src/** recoupe le chemin autorisé src/lib/x.ts », « son périmètre nomme la spec ») et propose la solution : la rattacher à un critère, ou, si elle ne concerne pas la spec, lui donner un périmètre par une décision qui la remplace (`supersedes`, `apv ledger plan` puis `apply`).
 
 **Avertissements de taille et de profondeur** (jamais une erreur, sans effet sur le code de sortie) : au-delà des seuils de la section `spec` de `.apv/config.json` ([CONFIGURATION.md](CONFIGURATION.md#taille-des-specs--spec)), plus de `maxTasks` tâches (6 par défaut) ou de `maxAcceptance` critères (30), la validation propose de découper la demande en specs indépendantes de 4 à 6 tâches, livrées en parallèle, chacune avec sa PR (`SPEC_SIZE`) ; au-delà de `maxDepth` couches de dépendances (3, les vagues de `apv run start`), elle nomme le chemin le plus long et propose le motif « contrats d'abord » (`SPEC_DEPTH`). En sortie lisible, une section « N avertissement(s) » après le résultat.
 
@@ -216,8 +220,8 @@ apv ledger apply --file <mise-a-jour.json> --hash <empreinte> --note <texte>
                  [--reviewer <nom>] [--commit] [--repo <chemin>]
 ```
 
-- `validate` lit le registre de l'arbre de travail et liste toutes ses erreurs (schéma, identifiants en double, citation manquante d'une décision de l'opérateur, décision ambiguë sans question ni deux interprétations...). Un projet sans registre a un registre vide (sortie `0`).
-- `plan` calcule le registre obtenu par une mise à jour `{ "decisions": [ ... ] }` : les nouvelles entrées s'ajoutent, une entrée qui en remplace une autre la nomme dans `supersedes` et l'ancienne quitte le registre actif (elle reste dans l'historique Git). Le plan affiche une empreinte.
+- `validate` lit le registre de l'arbre de travail et liste toutes ses erreurs (schéma, identifiants en double, citation manquante d'une décision de l'opérateur, décision ambiguë sans question ni deux interprétations, `scope` vide ou motif non pris en charge (`DECISION_SCOPE`)...). Un projet sans registre a un registre vide (sortie `0`).
+- `plan` calcule le registre obtenu par une mise à jour `{ "decisions": [ ... ] }` : les nouvelles entrées s'ajoutent, une entrée qui en remplace une autre la nomme dans `supersedes` et l'ancienne quitte le registre actif (elle reste dans l'historique Git). Le plan affiche une empreinte. Une entrée peut porter le champ facultatif `scope` (`{ "paths": ["src/routes/accueil/**"], "specs": ["accueil"] }`) : `apv spec validate` n'exige alors sa couverture que des specs qu'il concerne ; donner un périmètre à une décision existante, c'est la remplacer (`supersedes`) par la même décision avec `scope`. Un registre sans `scope` garde son empreinte.
 - `apply` écrit exactement le plan relu : l'empreinte doit correspondre, sinon rien n'est écrit. Il met à jour le JSON et sa version lisible (`DECISIONS.md` à côté), et commite ces deux fichiers seulement avec `--commit`. Le relecteur est `--reviewer`, sinon le `user.name` de Git.
 
 Le commit de `--commit` est fait sous l'identité Git du dépôt (`user.name` et `user.email`, du dépôt ou de la configuration globale), comme auteur et comme commiteur : l'outil n'invente jamais d'auteur. Sans identité configurée, `apply --commit` refuse avant d'écrire quoi que ce soit (sortie `1`, erreur `GIT_IDENTITY`, avec la commande à lancer : `git config user.name "Votre Nom" && git config user.email "vous@exemple.fr"`, `--global` pour tous les dépôts). Sans `--commit`, aucune identité n'est demandée. L'origine du commit reste lisible dans son message, par le trailer final `Generated-by: apv ledger apply` (`git log --format='%(trailers:key=Generated-by)'`). Tout commit créé par l'outil suit cette règle.
@@ -341,6 +345,26 @@ Attente bornée, pour une session qui n'a pas le droit d'attendre par le shell :
 
 Sortie : `0` condition remplie, `1` délai dépassé, `2` appel incorrect (aucune condition ou les deux, `--contains` sans `--file`, délai hors bornes).
 
+## `apv procs`
+
+```
+apv procs list [--repo <copie>] [--port <p>]... [--json]
+apv procs stop [--repo <copie>] [--port <p>]... [--grace <secondes>] [--json]
+```
+
+Serveurs de test orphelins. Une suite navigateur qui dépasse le délai d'un appel Bash (600 s) est coupée, mais les serveurs qu'elle a lancés (`vite preview`, serveur web de Playwright) restent à l'écoute sur les ports de la pile de test ; une session non interactive n'a pas le droit de `kill` et attendait (projet pilote, 25 et 26 septembre 2026). `apv procs` les trouve et les arrête, sans jamais toucher un processus étranger au dépôt.
+
+Les processus sont lus dans `/proc` (Linux) : répertoire courant (`/proc/<pid>/cwd`), ports TCP en écoute (IPv4 et IPv6), parent, heure de démarrage. Sur un système sans `/proc` (macOS, Windows), refus clair (`PROCS_UNSUPPORTED`, sortie `1`). Un processus **appartient au dépôt** quand son répertoire courant est dans un de ses worktrees (`git worktree list` : copie principale, copies liées, copies détachées d'un dossier de session).
+
+Cibles :
+- `--port <p>` (répétable, ou `--port 4173,4174`) : les processus qui écoutent sur ces ports ; `--repo` ne sert alors qu'à trouver le dépôt (défaut : dossier courant) ;
+- sans `--port`, `--repo <copie>` : tous les processus lancés dans cette copie, qu'ils écoutent ou non ; la copie doit être un worktree lié du dépôt, jamais la copie principale, qui porte la session et ses outils (refus `2`) ;
+- sans l'un ni l'autre : les processus qui écoutent sur les **ports de test déclarés**, section `resources` de `.apv/config.json` ([CONFIGURATION.md](CONFIGURATION.md#ressources-de-test--resources)) ; `stop` sans port déclaré est refusé (`2`) ; `list` montre alors aussi tous les processus des worktrees.
+
+`list` affiche pour chaque cible son pid, ses ports, son worktree (ou son répertoire hors du dépôt), sa commande et s'il serait arrêté ; les ports visés libres sont nommés. `stop` n'arrête que les cibles du dépôt : `SIGTERM` à toutes, puis `SIGKILL` à celles qui tournent encore après `--grace` secondes (défaut 5, de 0 à 60), puis vérification. Jamais arrêtés, et signalés : un processus hors du dépôt (autre projet, autre utilisateur, aperçu de `apv preview` qui tourne dans sa propre copie), un processus dont le répertoire est illisible, `apv` lui-même et ses parents (la session, son shell). Un pid réutilisé entre le relevé et le signal n'est pas visé (heure de démarrage comparée).
+
+Sortie : `0` toutes les cibles arrêtées, ou aucune ; `1` une cible refusée (hors du dépôt, protégée, signal refusé) ou encore vivante après `SIGKILL`, ou système sans `/proc` ; `2` appel incorrect. JSON : `action`, `mode` (`ports`, `copy`, `all`), `repository`, `worktrees`, `copy`, `ports`, `declaredPorts`, `freePorts`, `processes` (`pid`, `ppid`, `ports`, `cwd`, `worktree`, `command`, `stoppable`, `refusal` : `outside`, `protected` ou `unknown-cwd`, et pour `stop` `outcome` : `terminated`, `killed`, `survived`, `gone` ou `denied`), `ok`.
+
 ## `apv review plan`
 
 ```
@@ -390,7 +414,8 @@ Contrôle du modèle de données (spécification, section 13 bis) : nommage angl
 
 ```
 apv design register <fichier.html> --name <nom> --quote "<mots de l'opérateur>"
-                    [--title "<titre>"] [--screens a,b] [--artifact <url>] [--repo <chemin>] [--json]
+                    [--title "<titre>"] [--screens a,b] [--artifact <url>] [--scope <motif,motif>]
+                    [--repo <chemin>] [--json]
 apv design list [--screen <écran>] [--repo <chemin>] [--json]
 apv design check [--repo <chemin>] [--json]
 ```
@@ -401,11 +426,14 @@ Maquettes validées par l'opérateur, référence absolue des implementers et de
   1. copie le fichier vers `docs/design/<nom>-validee.html` (dossier : `design.dir` de `.apv/config.json`) ;
   2. calcule son sha256 ;
   3. inscrit au registre, par l'API de mise à jour du registre (comme `apv ledger apply`), la décision `maquette-<nom>-validee` : `confirmed`, source `operator`, `sourceQuote` = la citation, `enforcement` `product`, valeur avec le chemin et l'empreinte (et les écrans, l'adresse de l'artefact) ;
-  4. affiche les fichiers à commiter (maquette, registre JSON et Markdown). Rien n'est commité.
+  4. ajoute à `.gitattributes` (créé ou complété) la ligne `<dossier>/*.html -whitespace` quand Git ne l'applique pas déjà (`git check-attr whitespace`) : une maquette est figée par son empreinte, ses espaces de fin de ligne ne peuvent pas être nettoyés, et sans cette ligne `git diff --check` (contrôle `diff-check`, CI des projets) échoue (projet pilote, 25 septembre 2026 : ligne ajoutée à la main) ;
+  5. affiche les fichiers à commiter (maquette, registre JSON et Markdown, `.gitattributes` s'il a changé). Rien n'est commité.
+
+  `--scope <motif,motif>` donne un périmètre à la décision (`scope.paths`, syntaxe des chemins autorisés) : seules les specs dont les tâches peuvent toucher ces chemins doivent la couvrir ([`apv spec validate`](#apv-spec-validate)). Sans `--scope`, le périmètre de l'enregistrement actif est gardé ; un nouveau périmètre sur le même fichier fait un nouvel enregistrement.
 
   La citation est obligatoire : sans les mots de l'opérateur, rien n'est versé (le pipeline n'invente jamais une approbation). Une validation avec réserve (« je valide sauf … ») est refusée. Le registre doit être commité avant (`LEDGER_DIRTY` sinon) ; en cas d'échec, le fichier copié est retiré. Le nom : minuscules, chiffres et tirets, 50 caractères au plus, sans le mot `validee`. Verser de nouveau une maquette déjà versée ajoute `maquette-<nom>-validee-v2` (puis `-v3`…), qui remplace l'ancienne décision (`supersedes`) ; un contenu identique à la version enregistrée ne change rien.
 - `list` affiche les maquettes validées du registre de l'arbre de travail : nom, décision, fichier, empreinte, écrans et état du fichier : `ok`, `MODIFIÉE` (empreinte différente), `ABSENTE`, ou `sans empreinte` pour une décision écrite avant l'outil (projet pilote). `--screen` filtre sur un écran (nom ou écran déclaré, sans tenir compte de la casse ni des accents).
-- `check` sort en `1` si un fichier de maquette validée a changé ou disparu sans nouvel enregistrement ; les décisions sans empreinte sont listées comme non vérifiables. À déclarer comme contrôle (`gates`) dans les projets qui ont des maquettes.
+- `check` sort en `1` si un fichier de maquette validée a changé ou disparu sans nouvel enregistrement ; les décisions sans empreinte sont listées comme non vérifiables. Il signale aussi l'absence de la ligne de `.gitattributes` (projet avec des maquettes validées ou un dossier de maquettes) : « Attention » si aucune maquette ne porte d'espace de fin de ligne, « Erreur » et sortie `1` sinon, puisque `git diff --check` échoue alors. À déclarer comme contrôle (`gates`) dans les projets qui ont des maquettes.
 
 Configuration (facultative) :
 
@@ -413,7 +441,7 @@ Configuration (facultative) :
 { "design": { "dir": "docs/design" } }
 ```
 
-Sortie : `0` succès (maquettes intactes pour `check`), `1` refus ou dérive, `2` appel incorrect (citation ou nom manquant). En JSON, `register` rend `decisionId`, `supersedes`, `target`, `sha256`, `ledgerFile`, `toCommit`, `unchanged` ; `list` rend `mockups` ; `check` rend `ok`, `checked`, `broken`, `legacy`.
+Sortie : `0` succès (maquettes intactes pour `check`), `1` refus ou dérive, `2` appel incorrect (citation ou nom manquant). En JSON, `register` rend `decisionId`, `supersedes`, `target`, `sha256`, `ledgerFile`, `toCommit`, `unchanged`, `attributes` (`file`, `line`, `status` : `present`, `added` ou `ineffective` quand un autre fichier d'attributs la contredit) ; `list` rend `mockups` ; `check` rend `ok`, `checked`, `broken`, `legacy`, `attributes` (`status` : `present`, `missing` ou `not-applicable` ; `whitespace`, maquettes aux espaces de fin de ligne ; `blocking`).
 
 ## `apv structure check`
 
