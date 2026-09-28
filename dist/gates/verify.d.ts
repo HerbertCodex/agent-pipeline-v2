@@ -28,9 +28,12 @@ export interface VerifyOptions {
  * - `dirty`: receipts exist at this commit, but only with uncommitted changes (or an unknown tree state);
  * - `missing`: no receipt at this commit with the current configuration;
  * - `unrepeated`: that latest receipt succeeded, but the check declares `repeatChanged` and the receipt does not show
- *   the repetition of every test file the commit adds or modifies (run without a base, a base too close, files missing).
+ *   the repetition of every test file the commit adds or modifies (run without a base, a base too close, files missing);
+ * - `unaudited`: that latest receipt succeeded, but its record of `apv web audit` says « audit not required » (whatever
+ *   the command that ran it) and the recomputation from the commit says required; or the command shows such an audit
+ *   and the receipt records nothing.
  */
-export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated';
+export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'unaudited';
 export interface GateEvidence {
     gateId: string;
     state: EvidenceState;
@@ -53,6 +56,11 @@ export interface GateEvidence {
     /** A check that declares `repeatChanged`: the test files its receipt should have repeated and did not, and why; null otherwise. */
     repeat: {
         missing: string[];
+        reason: string;
+    } | null;
+    /** A check that runs `apv web audit --preview --base`: why its successful receipt does not prove the audit (files with a web effect, reason); null otherwise. */
+    web: {
+        files: string[];
         reason: string;
     } | null;
 }
@@ -79,6 +87,8 @@ export interface VerifyResult {
     flaky: string[];
     /** Required checks that declare `repeatChanged`: their proof needs a run with `--base`. */
     repeating: string[];
+    /** Required checks that run `apv web audit --preview --base`: « not required » is recomputed from the commit. */
+    auditing: string[];
     ok: boolean;
 }
 /** Where a receipt was read: the `.apv/receipts/` of the worktree, or the shared store of the repository. */

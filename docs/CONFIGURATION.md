@@ -1,6 +1,6 @@
 # Configuration et politique
 
-> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts` et `resources` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
+> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts`, `resources`, `suite`, `stacks`, `batch` et `web` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
 
 La configuration est un JSON déclaratif lu avant l'agent et conservé avec la tentative. La tâche ne peut pas fournir une commande à la place d'un contrôle, changer un verdict ni s'accorder une exemption. Les champs inconnus sont refusés.
 
@@ -525,3 +525,44 @@ Section APV3, facultative (3.0.0-alpha.5, spécification sections 18.5 et 18.6) 
 ## Maquettes validées : `design`
 
 Section facultative : `{ "design": { "dir": "docs/design" } }`, le dossier des maquettes validées ([DESIGN.md](DESIGN.md), [CLI.md](CLI.md#apv-design)), relatif, dans le dépôt, sans espace ; absente : `docs/design`. Une maquette validée est figée par son empreinte sha256 : ses espaces de fin de ligne ne peuvent pas être nettoyés sans changer l'empreinte, et `git diff --check` (contrôle `diff-check`, CI des projets) échouerait sur elle. `apv design register`, et `apv init` ou `apv onboard` quand le dossier est déclaré ou existe, ajoutent donc à `.gitattributes` la ligne `<dir>/*.html -whitespace` si Git ne l'applique pas déjà ; `apv design check` signale son absence (sortie `1` si une maquette validée porte des espaces de fin de ligne). Un dossier changé après coup (nouveau `design.dir`) : relancer `apv design register` ou `apv init`, puis commiter `.gitattributes`.
+
+## Qualité web : `web`
+
+Section APV3, facultative, validée par le chargeur commun (3.0.0-alpha.7, spécification section 20) : les pages publiques d'un projet web et la façon de les mesurer avec `apv web audit` ([CLI.md](CLI.md#apv-web-audit)). Absente : `apv web audit` refuse (`WEB_NONE`), rien d'autre ne change. Générique : chaque valeur est celle du projet, les défauts sont ambitieux et sans stack.
+
+```json
+{
+  "web": {
+    "pages": ["/", "/faq", "/connexion", "/confidentialite"],
+    "productionUrl": "https://www.exemple.fr",
+    "lighthouse": "13.5.0",
+    "runs": 3,
+    "formFactors": ["mobile", "desktop"],
+    "thresholds": {
+      "categories": { "performance": 90, "accessibility": 100, "best-practices": 100, "seo": 100, "agentic-browsing": 100 },
+      "metrics": { "lcp": 2500, "cls": 0.1, "tbt": 200, "fcp": null, "si": null }
+    },
+    "checks": { "llmsTxt": "warn" },
+    "neutralPaths": ["tests/**", "e2e/**", ".github/**", "*.md", "docs/**"]
+  }
+}
+```
+
+- `pages` (obligatoire, 1 à 100, sans doublon) : chemins absolus du site, requête permise, jamais d'origine ni de fragment (`/`, `/faq`, `/tarifs?plan=pro`). Chaque page est auditée sur l'origine choisie (`--url`, `--production`, `--preview`). Une page publique seulement : une page qui exige une connexion redirige, et la mesure est refusée.
+- `productionUrl` (facultatif) : origine de production (`https://hôte`, sans chemin), pour `apv web audit --production` après un déploiement.
+- `lighthouse` (défaut `13.5.0`) : version exacte de Lighthouse ; la dépendance du projet si elle a exactement cette version, sinon `npx -y lighthouse@<version>`. Un rapport d'une autre version est une mesure invalide. Changer de version change les scores : c'est une décision, notée au registre.
+- `chrome` (facultatif) : binaire Chrome ou Chromium (relatif au dépôt, `~/`, ou absolu) ; absent : `CHROME_PATH`, le Chromium de Playwright, puis le système. `chromeFlags` (défaut `["--headless=new"]`, options `--nom[=valeur]` sans espace ; refusées : celles qui lancent un autre programme, ouvrent le navigateur au réseau, chargent du code ou détournent le trafic : `--renderer-cmd-prefix`, `--utility-cmd-prefix`, `--gpu-launcher`, `--browser-subprocess-path`, `--remote-debugging-address`, `--remote-debugging-port`, `--remote-allow-origins`, `--load-extension`, `--user-data-dir`, `--proxy-server`, `--host-resolver-rules`...) ; `locale` (défaut `fr`) : langue des textes Lighthouse.
+- `runs` (défaut 3, de 1 à 15) : passages valides par page et appareil, dont la médiane est gardée ; 3 est le minimum qui écarte un passage atypique, 5 resserre la médiane d'une page instable.
+- `formFactors` (défaut `["mobile", "desktop"]`) et `categories` (défaut les cinq : `performance`, `accessibility`, `best-practices`, `seo`, `agentic-browsing`) : catégories jugées ; la performance est toujours mesurée (statut du document, métriques).
+- `thresholds.categories` : score minimum sur 100 par catégorie (défauts 90, 100, 100, 100, 100 ; une catégorie omise garde son défaut). `thresholds.metrics` : maximum par métrique, en millisecondes (`cls` sans unité) : `lcp` 2500, `tbt` 200, `cls` 0,1 par défaut, `fcp` et `si` sans seuil (`null`) ; `null` retire un seuil (la métrique reste mesurée et affichée). Mêmes seuils en mobile et en bureau. Un seuil ne se baisse que sur décision de l'opérateur, notée au registre.
+- `timeoutMs` (défaut 180000) : durée maximale d'un passage Lighthouse.
+- `load.max` (facultatif, de 0,1 à 10000) : charge moyenne sur 1 minute au-dessus de laquelle aucun passage ne démarre ; absent : `suite.queue.maxLoad`, sinon la moitié des processeurs. `load.waitMs` (défaut 30 min) : temps total passé à attendre la charge (la mesure elle-même ne le consomme pas) ; au-delà, refus `WEB_LOAD`, les mesures déjà faites gardées (jamais une mesure « quand même »).
+- `queue` (défaut `true`) : la mesure prend la file des suites complètes (`suite.queue`), avant le verrou et la construction de l'aperçu, pour qu'aucune suite ne tourne pendant qu'elle mesure ; déjà tenue quand l'audit tourne dans une suite complète (`APV_SUITE_RUN`).
+- `reportsDir` (défaut `.apv/web`) : dossier des rapports, relatif, dans le dépôt, sans segment `.` ni `..`, et sans aucun fichier suivi par Git (sinon refus `WEB_REPORTS`) : il porte son propre `.gitignore` ; `keepAudits` (défaut 10) : audits gardés, la rétention ne retirant que des dossiers au nom d'un audit.
+- `checks` : un mode par contrôle de préparation à la recherche et aux IA, `refuse` (sortie `1`), `warn` ou `off` : `status`, `robots`, `sitemap`, `canonical`, `title`, `description`, `lang`, `jsonLd`, `hreflang` (`refuse` par défaut), `llmsTxt` (`off` par défaut : `llms.txt` est une proposition, pas un standard ; `warn` ou `refuse` quand le projet en publie un). Détail de chaque contrôle : [CLI.md](CLI.md#apv-web-audit).
+- `robotsAgents` (défaut `*`, `Googlebot`, `Bingbot`, `OAI-SearchBot`, `Claude-SearchBot`, `PerplexityBot`) : robots de moteurs et de recherche des IA auxquels robots.txt doit laisser chaque page ouverte. Les robots d'entraînement (`GPTBot`, `ClaudeBot`, `Google-Extended`...) sont le choix de l'éditeur : ajoutez-les ici seulement si le projet veut les accueillir.
+- `neutralPaths` (défaut `["tests/**", "e2e/**", ".github/**", "*.md", "docs/**"]`, motifs portables `*`, `**`, `?`) : fichiers **sans effet web** ; avec `apv web audit --preview --base <ref>`, l'audit est requis dès qu'un fichier changé est hors de cette liste, et « non requis » seulement quand tous le sont. Prudence d'abord : une liste courte oublie un test, jamais un serveur (`hooks.server.ts`, `+page.ts`, `+layout.ts`, `+server.ts`, `src/lib/**`, `svelte.config.js`, `vite.config.ts` comptent tous par défaut). Le Markdown n'est neutre qu'à la racine (`README.md`, `CHANGELOG.md`) : un site en Markdown (mdsvex, Astro, VitePress) a ses pages sous `src/` ou `content/`.
+- Toujours web, même dans `neutralPaths`, sans rien déclarer : `.apv/config.json`, tout `package.json`, les fichiers de verrouillage, les contenus `.md`, `.mdx`, `.svx` et `.html` sous un dossier `src/`, `content/`, `static/` ou `public/` (à toute profondeur, monorepo compris), et `docs/**/*.html` (site publié depuis `docs/`, GitHub Pages). Un site dont les pages Markdown sont servies depuis `docs/` (VitePress, Jekyll) retire `docs/**` de `neutralPaths` ou l'ajoute à `paths`.
+- `paths` (défaut aucun) : fichiers qui comptent **toujours** comme web, même dans `neutralPaths` (par exemple `docs/**` pour une documentation publiée) ; un ajout, jamais une restriction.
+
+Contrôle d'une PR, dans `gates` (« non requis » quand elle ne change que des fichiers de `neutralPaths`, recalculé par `apv gates verify`) : `{ "id": "web", "stage": "full", "command": ["apv", "web", "audit", "--preview", "--base", "origin/main"], "timeoutMs": 2400000, "passEnv": ["HOME", "CHROME_PATH"] }` (compter environ 15 s par passage : 7 pages, 2 appareils et 3 passages font 42 passages, une dizaine de minutes, plus la construction de l'aperçu). Il exige une section `preview` ([PREVIEW.md](PREVIEW.md)) dont le port est libre dans la copie de la suite. Après un déploiement : `apv web audit --production`. Sur la branche principale elle-même, `--preview --base origin/main` n'a rien à comparer (sortie `2`) : y utiliser `apv web audit --production` ou `--url <origine>`.

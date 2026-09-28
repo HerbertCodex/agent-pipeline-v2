@@ -1,0 +1,71 @@
+import { DEFAULT_GENERATED_PATHS } from '../domain/contracts.js';
+import { matches } from '../policy/policy.js';
+import { gitRead, resolveCommit } from '../run/git-probe.js';
+import { DEFAULT_NEUTRAL_PATHS } from './config.js';
+
+/**
+ * Whether a change calls for a web audit (`apv web audit --preview --base <ref>`, and its recomputation by
+ * `apv gates verify`). Prudence first: the audit is required as soon as one changed file may affect the served site,
+ * that is any file outside the explicit list of files without web effect (`web.neutralPaths`). The configuration,
+ * the manifests and the lock files always count, and so do the files of `web.paths`, even inside that list: a
+ * narrow list of « interface » globs would have left out server hooks, load functions, libraries and build settings.
+ */
+
+/** Variable naming the file where `apv web audit` writes its record for the receipt of the check that runs it (`apv gates run`). */
+export const WEB_RECORD = 'APV_WEB_RECORD';
+
+/** Content formats a site may render (mdsvex, Astro, VitePress, Jekyll...). */
+const CONTENT_EXTENSIONS = ['md', 'mdx', 'svx', 'html'] as const;
+/** Folders whose content may be served: sources, content collections, static and public assets. */
+const SERVED_FOLDERS = ['src', 'content', 'static', 'public'] as const;
+/**
+ * Always with a web effect, even inside `neutralPaths`: the audit configuration, the dependencies and their resolution,
+ * the pages written as content under a source or served folder (`src/routes/blog/+page.md`, `src/content/post.md`), and
+ * the HTML of `docs/` (a site published from it, GitHub Pages).
+ */
+export const ALWAYS_WEB_PATHS = ['.apv/config.json', '**/package.json', ...DEFAULT_GENERATED_PATHS,
+  ...SERVED_FOLDERS.flatMap(dir => CONTENT_EXTENSIONS.map(ext => `**/${dir}/**/*.${ext}`)), 'docs/**/*.html'] as const;
+
+export interface ImpactSettings { neutralPaths?: readonly string[] | undefined; paths?: readonly string[] | undefined }
+export interface Impact { required: boolean; files: string[] }
+
+export function webImpact(changed: readonly string[], settings: ImpactSettings | undefined): Impact {
+  const neutral = settings?.neutralPaths ?? DEFAULT_NEUTRAL_PATHS;
+  const always = [...ALWAYS_WEB_PATHS, ...(settings?.paths ?? [])];
+  const files = changed.filter(f => always.some(g => matches(f, g)) || !neutral.some(g => matches(f, g)));
+  return { required: files.length > 0, files };
+}
+
+/** Files changed between two commits, renames counted at both paths. */
+export function changedBetween(repo: string, from: string, to: string): string[] | null {
+  const out = gitRead(repo, ['diff', '--name-only', '--no-renames', '-z', from, to]);
+  return out === null ? null : out.split('\0').filter(Boolean);
+}
+
+export type BaseOutcome =
+  | { ok: true; base: string; reference: string }
+  | { ok: false; reason: 'missing' | 'no-merge-base' | 'not-behind'; message: string };
+
+/**
+ * The merge base of `ref` and `head`, refused when `ref` does not resolve, when there is none, or when it is `head`
+ * itself (`head` equal to or upstream of `ref`: nothing to compare, every change would be missed).
+ */
+export function auditBase(repo: string, ref: string, head: string): BaseOutcome {
+  const reference = resolveCommit(repo, ref);
+  if (!reference) return { ok: false, reason: 'missing', message: `référence introuvable : ${ref}` };
+  const base = gitRead(repo, ['merge-base', reference, head]);
+  if (!base) return { ok: false, reason: 'no-merge-base', message: `aucune base commune entre ${ref} et ${head.slice(0, 12)}` };
+  if (base === head) return { ok: false, reason: 'not-behind', message: `la base commune de ${ref} et de ${head.slice(0, 12)} est ${head.slice(0, 12)} lui-même (commit égal à ${ref} ou en amont) : aucun changement à comparer, la base ne prouverait rien` };
+  return { ok: true, base, reference };
+}
+
+/** `--base <ref>` of an `apv web audit --preview` command (argv of a check), or undefined when the command is not one. */
+export function webAuditGate(argv: readonly string[]): { base: string | null } | undefined {
+  const at = argv.findIndex((a, i) => a === 'web' && argv[i + 1] === 'audit');
+  if (at < 0) return undefined;
+  const rest = argv.slice(at + 2);
+  if (!rest.includes('--preview')) return undefined;
+  const i = rest.indexOf('--base');
+  const inline = rest.find(a => a.startsWith('--base='));
+  return { base: i >= 0 ? rest[i + 1] ?? null : inline ? inline.slice('--base='.length) : null };
+}

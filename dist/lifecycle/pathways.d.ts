@@ -306,6 +306,15 @@ export declare function targetedQaContext(context: {
                 readonly text: string;
             }[];
         } | undefined;
+        web: {
+            readonly required: boolean;
+            readonly base: string | null;
+            readonly reference: string | null;
+            readonly files: string[];
+            readonly changed: number;
+            readonly auditId: string | null;
+            readonly ok: boolean;
+        } | undefined;
     }[];
     qaScope: {
         mode: string;

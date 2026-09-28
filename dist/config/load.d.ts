@@ -9,7 +9,7 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite", "stacks", "batch"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite", "stacks", "batch", "web"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
 /**
@@ -334,6 +334,56 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly setup: string[] | undefined;
         readonly setupTimeoutMs: number;
         readonly passEnv: string[];
+    } | undefined;
+    readonly web: {
+        readonly pages: string[];
+        readonly productionUrl: string | undefined;
+        readonly lighthouse: string;
+        readonly chrome: string | undefined;
+        readonly chromeFlags: string[];
+        readonly locale: string;
+        readonly runs: number;
+        readonly formFactors: ("mobile" | "desktop")[];
+        readonly categories: ("performance" | "accessibility" | "best-practices" | "seo" | "agentic-browsing")[];
+        readonly thresholds: {
+            readonly categories: {
+                performance: number;
+                accessibility: number;
+                "best-practices": number;
+                seo: number;
+                "agentic-browsing": number;
+            };
+            readonly metrics: {
+                readonly lcp: number | null;
+                readonly tbt: number | null;
+                readonly cls: number | null;
+                readonly fcp: number | null;
+                readonly si: number | null;
+            };
+        };
+        readonly timeoutMs: number;
+        readonly reportsDir: string;
+        readonly keepAudits: number;
+        readonly load: {
+            max: number | undefined;
+            waitMs: number;
+        };
+        readonly queue: boolean;
+        readonly checks: {
+            status: "off" | "warn" | "refuse";
+            robots: "off" | "warn" | "refuse";
+            sitemap: "off" | "warn" | "refuse";
+            canonical: "off" | "warn" | "refuse";
+            title: "off" | "warn" | "refuse";
+            description: "off" | "warn" | "refuse";
+            lang: "off" | "warn" | "refuse";
+            jsonLd: "off" | "warn" | "refuse";
+            hreflang: "off" | "warn" | "refuse";
+            llmsTxt: "off" | "warn" | "refuse";
+        };
+        readonly robotsAgents: string[];
+        readonly neutralPaths: string[];
+        readonly paths: string[];
     } | undefined;
 }>;
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */

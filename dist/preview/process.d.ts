@@ -16,7 +16,7 @@ export interface StepResult {
  * reaches apv (Ctrl+C) is passed on to the group before apv stops.
  * Resolves with the exit status (null when killed by a signal, -1 when the command cannot start).
  */
-export declare function runStep(args: string[], cwd: string, env: NodeJS.ProcessEnv, onOutput: (s: string) => void, timeoutMs?: number): Promise<StepResult>;
+export declare function runStep(args: string[], cwd: string, env: NodeJS.ProcessEnv, onOutput: (s: string) => void, timeoutMs?: number, signal?: AbortSignal): Promise<StepResult>;
 /**
  * Starts the server detached, in its own process group, stdout and stderr appended to `logFile`.
  * The server writes the log itself, unmasked: the file is created, or narrowed, to mode 600.

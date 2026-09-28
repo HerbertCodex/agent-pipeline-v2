@@ -70,7 +70,7 @@ export async function enterQueue(options) {
     const dir = dirname(options.lockFile);
     const resource = basename(options.lockFile).replace(/\.lock$/, '');
     const store = new LockStore(dir, options.hooks?.lockPollMs !== undefined ? { pollMs: options.hooks.lockPollMs } : {});
-    const lease = await holdLease(store, resource, { label: `apv gates run (${options.repo})`, waitMs: settings.waitMs, purpose: 'suite complète', signal: options.signal, log });
+    const lease = await holdLease(store, resource, { label: options.label ?? `apv gates run (${options.repo})`, waitMs: settings.waitMs, purpose: options.purpose ?? 'suite complète', signal: options.signal, log });
     if (!lease.ok) {
         if (lease.aborted)
             throw new PipelineError('CANCELLED', `File des suites complètes : ${lease.reason}`);
@@ -91,7 +91,9 @@ export async function enterQueue(options) {
     return { record, release: lease.release };
 }
 /** Waits for the 1-minute load average to drop under `max`, at most `limitMs`; journaled at most every minute. */
-export async function waitForLoad(max, limitMs, log, signal, hooks) {
+export async function waitForLoad(max, limitMs, log, signal, hooks, 
+/** What waits: `suite` starts anyway past the limit (never blocked forever); `measure` (a Lighthouse audit) is refused by its caller. */
+subject = 'suite') {
     const read = hooks?.loadAverage ?? (() => loadavg()[0] ?? 0);
     const poll = hooks?.loadPollMs ?? 15_000;
     const started = Date.now();
@@ -100,7 +102,7 @@ export async function waitForLoad(max, limitMs, log, signal, hooks) {
     while (load >= max) {
         const waited = Date.now() - started;
         if (waited >= limitMs) {
-            log(`Charge moyenne sur 1 min encore à ${load.toFixed(2)} (seuil ${max}) après ${seconds(waited)} : la suite démarre quand même.`);
+            log(`Charge moyenne sur 1 min encore à ${load.toFixed(2)} (seuil ${max}) après ${seconds(waited)} : ${subject === 'suite' ? 'la suite démarre quand même' : 'mesure refusée (une mesure sous charge fausse la performance)'}.`);
             return { max, atStart: load, waitedMs: waited, exceeded: true };
         }
         if (lastLog === 0 || Date.now() - lastLog >= 60_000) {
@@ -117,7 +119,7 @@ export async function waitForLoad(max, limitMs, log, signal, hooks) {
     }
     const waitedMs = Date.now() - started;
     if (waitedMs > 1000)
-        log(`Charge moyenne sur 1 min à ${load.toFixed(2)}, sous le seuil ${max} : la suite démarre (attente ${seconds(waitedMs)}).`);
+        log(`Charge moyenne sur 1 min à ${load.toFixed(2)}, sous le seuil ${max} : ${subject === 'suite' ? 'la suite démarre' : 'la mesure démarre'} (attente ${seconds(waitedMs)}).`);
     return { max, atStart: load, waitedMs, exceeded: false };
 }
 /**
@@ -207,9 +209,9 @@ export function flockCommand(file, waitMs, command) {
 }
 /** Variable that marks every command of a full suite: its processes, and those they start, are found by it at the end. */
 export const SUITE_MARKER = 'APV_SUITE_RUN';
-/** Processes of this user whose environment carries `<SUITE_MARKER>=<runId>` (read in `/proc/<pid>/environ`). */
-export function markedProcesses(runId, processes, root = '/proc') {
-    const needle = `${SUITE_MARKER}=${runId}`;
+/** Processes of this user whose environment carries `<marker>=<runId>` (read in `/proc/<pid>/environ`), `APV_SUITE_RUN` by default. */
+export function markedProcesses(runId, processes, root = '/proc', marker = SUITE_MARKER) {
+    const needle = `${marker}=${runId}`;
     return processes.filter(p => {
         if (p.zombie)
             return false;

@@ -158,8 +158,10 @@ export async function withPreviewLock(ctx, waitSeconds, purpose, body) {
     const ttlSeconds = 600;
     const result = await store.acquire(lock, {
         owner: { pid: process.pid, host: store.host, label: ctx.env['APV_LOCK_LABEL'] || ctx.env['USER'] || 'apv preview' },
-        ttlSeconds, waitSeconds, purpose, onWait: waitReporter(lock, ctx.progress),
+        ttlSeconds, waitSeconds, purpose, onWait: waitReporter(lock, ctx.progress), ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
+    if (!result.ok && result.aborted)
+        throw new PipelineError('CANCELLED', `Attente du verrou « ${lock} » annulée`);
     if (!result.ok)
         throw new PipelineError('PREVIEW_LOCK', `Verrou « ${lock} » non obtenu après ${waitSeconds} s : tenu par ${describeHolder(result.holder)}.`);
     if (result.takeover)
@@ -258,6 +260,8 @@ export async function updatePreview(ctx, loaded, branch, lockEnv) {
             if (declared === undefined)
                 continue;
             const { command, timeoutSec } = stepSpec(declared);
+            if (ctx.signal?.aborted)
+                return fail(step, 'annulée avant de démarrer (signal reçu)');
             ctx.progress(`étape ${step}...\n`);
             note(`== étape ${step} (délai ${timeoutSec} s) : ${describeCommand(command)}`);
             let args;
@@ -270,7 +274,7 @@ export async function updatePreview(ctx, loaded, branch, lockEnv) {
             let excerpt = '';
             const writer = new RedactingWriter(redactor, (s) => { appendFileSync(updateLog, s); excerpt = (excerpt + s).slice(-20_000); });
             const started = Date.now();
-            const result = await runStep(args, dir, baseEnv, (s) => writer.push(s), timeoutSec * 1000);
+            const result = await runStep(args, dir, baseEnv, (s) => writer.push(s), timeoutSec * 1000, ctx.signal);
             writer.flush();
             const seconds = ((Date.now() - started) / 1000).toFixed(1);
             if (result.status !== 0) {
@@ -316,7 +320,7 @@ export async function updatePreview(ctx, loaded, branch, lockEnv) {
         // Recorded before the health check: a server that never answers is still ours to stop.
         writePreviewState(repo, state);
         // 5. Health.
-        const health = await waitHealthy(healthUrl, config.health.timeoutSec, () => isOurs(pid, procStart));
+        const health = await waitHealthy(healthUrl, config.health.timeoutSec, () => isOurs(pid, procStart) && !ctx.signal?.aborted);
         if (health !== 'ok') {
             await stopGroup(pid, procStart);
             const logTail = existsSync(logFile) ? tail(readFileSync(logFile, 'utf8'), 20) : '';
