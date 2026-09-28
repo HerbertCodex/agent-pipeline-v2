@@ -16,25 +16,54 @@ export interface FixedWait {
 }
 /** What a check repeats in this run: computed once, before any wait. */
 export interface RepeatPlan {
-    /** The merge base of `--base` and HEAD the files are compared to; null without `--base`. */
-    base: string | null;
+    /** The merge base of `--base` and HEAD the files are compared to. */
+    base: string;
+    /** The merge base of the reference (the branch the change goes to, `repeatChanged.reference`) and HEAD, when used. */
+    reference: string | null;
     files: string[];
     fixedWaits: FixedWait[];
 }
 /** Placeholder of the number of repetitions, replaced anywhere in an argument (`--repeat-each={{repeat}}`). */
 export declare const REPEAT_PLACEHOLDER = "{{repeat}}";
+/** Reference a full suite and `apv gates verify` compare the changes to when `repeatChanged.reference` is absent. */
+export declare const DEFAULT_REPEAT_REFERENCE = "origin/HEAD";
 export declare function fixedWaitIn(line: string): boolean;
-/** Lines added by a unified diff with no context (`-U0`), with their number in the new file. */
-export declare function addedLines(diff: string): {
+/**
+ * The fixed waits of consecutive lines: each line alone, and a `new Promise(` joined with the (at most three)
+ * following consecutive lines, so that `new Promise(resolve =>` / `setTimeout(resolve, 100))` is found on its first line.
+ */
+export declare function fixedWaitLines(lines: readonly {
+    line: number;
+    text: string;
+}[]): {
     line: number;
     text: string;
 }[];
 /**
- * The test files to repeat: added or modified since the merge base of `base` and HEAD, working tree included (a task
- * run may have uncommitted tests), untracked files not ignored included, deleted files never; those matching one of
- * the globs `paths`, sorted. Also the fixed waits in the lines they add (a new file: every line).
+ * Lines added by a unified diff with no context (`-U0`), with their number in the new file. Only the lines inside
+ * a hunk count, so an added line `++i;` (`+++i;` in the diff) is a line, never the `+++ b/<file>` header.
  */
-export declare function planRepeat(git: Git, repo: string, baseSha: string, settings: RepeatSettings): Promise<RepeatPlan>;
+export declare function addedLines(diff: string): {
+    line: number;
+    text: string;
+}[];
+/** The commit `ref` names, or null when it does not resolve (no remote, reference absent). */
+export declare function resolveRef(git: Git, repo: string, ref: string): Promise<string | null>;
+/** The merge base of `a` and `b`; `a` itself without a common ancestor (unrelated histories: everything counts). */
+export declare function mergeBase(git: Git, repo: string, a: string, b: string): Promise<string>;
+/**
+ * The test files to repeat: added or modified since the merge base of `base` (and of `reference`, when given) with
+ * `head`, those matching one of the globs `paths`, sorted; deleted files never. Without `head`, against the working
+ * tree (a task run may have uncommitted tests), untracked files not ignored included; with `head` (a commit), its
+ * committed content only (`apv gates verify`, `apv stack batch`). Also the fixed waits in the lines they add (a new
+ * file: every line), unless `fixedWaits` is off.
+ */
+export declare function planRepeat(git: Git, repo: string, bases: {
+    base: string;
+    reference?: string | null;
+}, settings: RepeatSettings, head?: string): Promise<RepeatPlan>;
+/** The refusal of a repeated file whose path starts with `-`: appended to the command, it would read as an option. */
+export declare function optionLikeFile(gateId: string, file: string): PipelineError;
 /** The refusal of a run whose changed test files exceed `maxFiles`: never a silent skip. */
 export declare function tooManyFiles(gateId: string, plan: RepeatPlan, settings: RepeatSettings): PipelineError;
 /** The refusal of a run whose changed test files wait on durations (`fixedWaits: "refuse"`). */

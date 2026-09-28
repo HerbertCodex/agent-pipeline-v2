@@ -27,7 +27,7 @@ export const DEFAULT_REPEAT = { times: 5, maxFiles: 10 };
 /**
  * `repeatChanged` of a check: `paths` (globs of the test files concerned), `command` (the repetition, the files
  * appended), `times` (repetitions of each test, `{{repeat}}`), `maxFiles` (above: the run is refused), `timeoutMs`
- * (duration ceiling of the repetition), `testPattern` (lines naming a failed test), `stressArgs`, `fixedWaits`.
+ * (duration ceiling of the repetition), `testPattern` (lines naming a failed test), `stressArgs`, `fixedWaits`, `reference`.
  */
 export const repeatChangedSchema = s.object({
     paths: s.array(s.string(1, 500), 1, 50),
@@ -40,6 +40,9 @@ export const repeatChangedSchema = s.object({
     // Extra arguments that load the repetition (more parallel workers), before the files.
     stressArgs: s.optional(s.array(s.string(1, 1000), 1, 20)),
     fixedWaits: s.default(s.enum(fixedWaitModes), 'warn'),
+    // The branch the change goes to (a Git ref, `origin/main` for example): a full run also repeats the test files changed
+    // since its merge base, and `apv gates verify` requires them. Absent: `origin/HEAD`, when it resolves.
+    reference: s.optional(s.string(1, 200, /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/)),
 });
 export const gateSchema = s.object({
     id, command: argv,
@@ -242,7 +245,9 @@ export const receiptSchema = s.object({
     // command itself did not pass), else the status of the repetition.
     repeat: s.optional(s.object({
         base: s.nullable(sha),
-        files: s.array(s.string(1, 500), 0, 100),
+        // The merge base with the reference (`repeatChanged.reference`) the files were also compared to; absent or null: none.
+        reference: s.optional(s.nullable(sha)),
+        files: s.array(s.string(1, 500), 0, 2000),
         times: s.number(2, 100),
         status: s.enum(repeatStatuses),
         command: s.optional(argv),

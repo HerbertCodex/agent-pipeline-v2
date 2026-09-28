@@ -32,7 +32,11 @@ export function processGit(env: NodeJS.ProcessEnv): LotGit {
 }
 
 /** The proof of a batch head: its full suite and `apv gates verify` at 0. */
-export interface Proof { ok: boolean; runId: string | null; summary: string }
+/**
+ * The proof of a batch head. `refused`: the suite was refused before it ran (a ceiling of the repetition of the changed
+ * test files, `GATE_REPEAT`), which says nothing about the pull requests being faulty: never bisected.
+ */
+export interface Proof { ok: boolean; runId: string | null; summary: string; refused?: string }
 
 export interface BatchOptions {
   /** Checkout of the repository (the batches are worktrees of it). */
@@ -64,6 +68,12 @@ export interface BatchOptions {
    * `suite`, `environment` of `.apv/config.json`, or an unreadable configuration), or null when it does not.
    */
   configDrift: (base: string, head: string) => string | null;
+  /**
+   * Why the changed test files of a pull request (its head against its merge base with the target at `base`) exceed a
+   * ceiling of `repeatChanged` in the checks of the target (`maxFiles`, a refused fixed wait), or null: applied pull
+   * request by pull request, before anything is built. Absent: no such check.
+   */
+  repeatRefusal?: (base: string, head: string) => Promise<string | null>;
   /** Aborted by SIGINT, SIGTERM or SIGHUP: the batch stops at the next step, never between a check and a merge. */
   signal?: AbortSignal;
   /** Journals one merge or stop of the batch; returns an error message when it could not. */
@@ -234,6 +244,16 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     return stop(drifting[0]!.m.number, drifting.map(({ m, why }) => `PR #${m.number} change la configuration des contrôles par rapport à ${target} (${why}) : ` +
       'un lot se prouve avec les contrôles de la cible ; prouver cette PR seule (sa suite complète, puis apv stack plan et apv stack merge) et la retirer du lot'));
   }
+  // The ceilings of the repetition of the changed tests apply to each pull request, never to the sum of a batch.
+  if (options.repeatRefusal) {
+    const refused: string[] = [];
+    let first: number | null = null;
+    for (const m of members) {
+      const why = await options.repeatRefusal(base.sha, m.head);
+      if (why) { refused.push(`PR #${m.number} : ${why}`); first ??= m.number; }
+    }
+    if (refused.length) return stop(first, refused.map(r => `lot refusé avant toute construction (répétition des tests modifiés, repeatChanged) : ${r} ; ce n'est pas un échec de suite, la bissection ne s'applique pas`));
+  }
   // A batch commits its merges: without an identity, a clear refusal before anything is built.
   const ident = await options.git.run(options.repo, ['-c', 'user.useConfigOnly=true', 'var', 'GIT_COMMITTER_IDENT']);
   const author = await options.git.run(options.repo, ['-c', 'user.useConfigOnly=true', 'var', 'GIT_AUTHOR_IDENT']);
@@ -256,6 +276,8 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     options.log(`Lot ${lotName} : ${lot.proof.ok ? 'prouvé' : 'NON prouvé'} (${lot.proof.summary}).`);
     return lot;
   };
+  /** A suite refused before it ran during the bisection: the bisection stops, nothing is concluded. */
+  let refusedDuring: string | null = null;
   /** The pull requests of `list` (whose batch failed) that fail the suite, by halves. */
   const culprits = async (list: typeof members): Promise<number[]> => {
     if (list.length === 1) return [list[0]!.number];
@@ -263,8 +285,10 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     const found: number[] = [];
     let failedHalves = 0;
     for (const part of [list.slice(0, half), list.slice(half)]) {
+      if (refusedDuring) return found;
       counter += 1;
       const lot = await prove(part, `b${counter}`);
+      if (lot.proof?.refused) { refusedDuring ??= lot.proof.refused; await removeLot(options, lot); return found; }
       if (!lot.proof?.ok) { failedHalves += 1; found.push(...(lot.members.length ? await culprits(part.filter(m => lot.members.some(x => x.number === m.number))) : [])); }
       await removeLot(options, lot);
     }
@@ -273,11 +297,20 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
   };
   const whole = await prove(members, '');
   if (aborted()) return interrupted(null, 'pendant la preuve du lot, avant toute fusion');
+  // A suite refused before it ran proves nothing about the pull requests: stopped, never bisected.
+  if (whole.proof?.refused) {
+    await removeLot(options, whole);
+    return stop(null, [`suite du lot refusée avant de tourner (${whole.proof.refused}) : ce n'est pas un échec de suite, la bissection ne s'applique pas ; rien n'est fusionné`]);
+  }
   let proven: Lot | null = whole.proof?.ok ? whole : null;
   if (!proven && options.bisect && whole.members.length > 1) {
     await removeLot(options, whole);
     const inLot = members.filter(m => whole.members.some(x => x.number === m.number));
     report.culprits = await culprits(inLot);
+    if (refusedDuring) {
+      report.culprits = []; report.interaction = false;
+      return stop(null, [`bissection arrêtée : la suite d'une moitié a été refusée avant de tourner (${refusedDuring}) ; ce n'est pas un échec de suite, aucune PR n'est isolée ni fusionnée`]);
+    }
     if (aborted()) return interrupted(null, 'pendant la bissection, avant toute fusion');
     const rest = inLot.filter(m => !report.culprits.includes(m.number));
     if (!report.interaction && rest.length) {

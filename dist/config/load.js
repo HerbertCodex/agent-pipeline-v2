@@ -261,6 +261,8 @@ export function configIssues(raw) {
                 } });
             // The number recorded in the receipt is the number the command runs: never a literal that could differ from `times`.
             list.check(repeat.command.some(a => a.includes('{{repeat}}')), 'CONFIG', `Gate ${gate.id}: repeatChanged.command must repeat the tests through {{repeat}} (for example "--repeat-each={{repeat}}"), replaced by repeatChanged.times`);
+            // {{repeat}} is replaced in `command` only: in `stressArgs` it would reach the command as is.
+            list.check(!(repeat.stressArgs ?? []).some(a => a.includes('{{repeat}}')), 'CONFIG', `Gate ${gate.id}: repeatChanged.stressArgs cannot use {{repeat}} (only repeatChanged.command does)`);
         }
     }
     const ruleIds = value.validationRules.map(r => r.id);

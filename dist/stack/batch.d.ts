@@ -17,10 +17,15 @@ export interface LotGit {
 }
 export declare function processGit(env: NodeJS.ProcessEnv): LotGit;
 /** The proof of a batch head: its full suite and `apv gates verify` at 0. */
+/**
+ * The proof of a batch head. `refused`: the suite was refused before it ran (a ceiling of the repetition of the changed
+ * test files, `GATE_REPEAT`), which says nothing about the pull requests being faulty: never bisected.
+ */
 export interface Proof {
     ok: boolean;
     runId: string | null;
     summary: string;
+    refused?: string;
 }
 export interface BatchOptions {
     /** Checkout of the repository (the batches are worktrees of it). */
@@ -52,6 +57,12 @@ export interface BatchOptions {
      * `suite`, `environment` of `.apv/config.json`, or an unreadable configuration), or null when it does not.
      */
     configDrift: (base: string, head: string) => string | null;
+    /**
+     * Why the changed test files of a pull request (its head against its merge base with the target at `base`) exceed a
+     * ceiling of `repeatChanged` in the checks of the target (`maxFiles`, a refused fixed wait), or null: applied pull
+     * request by pull request, before anything is built. Absent: no such check.
+     */
+    repeatRefusal?: (base: string, head: string) => Promise<string | null>;
     /** Aborted by SIGINT, SIGTERM or SIGHUP: the batch stops at the next step, never between a check and a merge. */
     signal?: AbortSignal;
     /** Journals one merge or stop of the batch; returns an error message when it could not. */

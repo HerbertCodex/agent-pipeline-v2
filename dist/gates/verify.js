@@ -5,6 +5,7 @@ import { invariant } from '../domain/errors.js';
 import { Git } from '../execution/git.js';
 import { success } from '../engine/scheduler.js';
 import { RECEIPTS_DIR, gatesConfigHash, stageGates } from './run.js';
+import { DEFAULT_REPEAT_REFERENCE, planRepeat, resolveRef } from './repeat.js';
 import { manifestCommit, readSharedRun, sharedRunIds, sharedStore } from './store.js';
 /** Tree state and base of a run, from its summary (null when unknown). */
 function summaryOf(text) {
@@ -150,6 +151,38 @@ export async function verifyGates(options) {
             covered.set(runBase, runBase === base || await git.contains(repo, base, runBase));
         return covered.get(runBase);
     };
+    /**
+     * Why a successful receipt of a check that declares `repeatChanged` does not prove the repetition of the changed test
+     * files at this commit, or null when it does. The files are recomputed here, from the commit, against the base the
+     * run recorded and, for a complete receipt at stage full, against the reference: a run without a base, with a base
+     * equal to the commit, or with a base too close to leave out some changed tests never proves the check.
+     */
+    const references = new Map();
+    const repeatGap = async (settings, receipt, full) => {
+        const r = receipt.repeat;
+        if (!r || r.status === 'no_base' || !r.base)
+            return { missing: [], reason: 'exécution sans --base : aucun test modifié répété' };
+        if (r.status !== 'passed' && r.status !== 'none')
+            return { missing: [], reason: `répétition ${r.status}` };
+        if (r.base === commit)
+            return { missing: [], reason: 'base égale au commit : aucun test modifié ne pouvait être répété' };
+        let reference = null;
+        if (full) {
+            const name = options.repeatReference ?? settings.reference ?? DEFAULT_REPEAT_REFERENCE;
+            if (!references.has(name))
+                references.set(name, await resolveRef(git, repo, name));
+            reference = references.get(name);
+        }
+        const expected = await planRepeat(git, repo, { base: r.base, reference }, { ...settings, fixedWaits: settings.fixedWaits === 'refuse' ? 'refuse' : 'off' }, commit);
+        const done = new Set(r.files);
+        const missing = expected.files.filter(f => !done.has(f));
+        if (missing.length)
+            return { missing, reason: `${missing.length} fichier(s) de test ajouté(s) ou modifié(s) non répété(s) (depuis ${(reference ? expected.reference : expected.base).slice(0, 12)})` };
+        if (settings.fixedWaits === 'refuse' && expected.fixedWaits.length) {
+            return { missing: [], reason: `attente(s) à durée fixe refusée(s) : ${expected.fixedWaits.slice(0, 5).map(w => `${w.file}:${w.line}`).join(', ')}` };
+        }
+        return null;
+    };
     const gates = [];
     for (const gateId of required) {
         const all = atCommit.filter(f => f.receipt.gateId === gateId);
@@ -172,14 +205,18 @@ export async function verifyGates(options) {
         const clean = current.filter(f => f.dirty === false);
         if (!clean.length) {
             const state = current.length ? 'dirty' : 'missing';
-            gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null });
+            gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null, repeat: null });
             continue;
         }
         const last = clean.reduce(latest);
-        gates.push({ gateId, state: success(last.receipt) ? 'passed' : 'failed', status: last.receipt.status, receipt: last.receipt.id,
-            runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof: last.receipt.targeted === true ? 'targeted' : 'full', otherBase, source: last.source });
+        const proof = last.receipt.targeted === true ? 'targeted' : 'full';
+        const gate = options.config.gates.find(g => g.id === gateId);
+        const repeat = success(last.receipt) && gate.repeatChanged ? await repeatGap(gate.repeatChanged, last.receipt, stage === 'full' && proof === 'full') : null;
+        gates.push({ gateId, state: !success(last.receipt) ? 'failed' : repeat ? 'unrepeated' : 'passed', status: last.receipt.status, receipt: last.receipt.id,
+            runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof, otherBase, source: last.source, repeat });
     }
     return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered,
-        flaky: gates.filter(g => g.state === 'passed' && g.status === 'passed_after_retry').map(g => g.gateId), ok: gates.every(g => g.state === 'passed') };
+        flaky: gates.filter(g => g.state === 'passed' && g.status === 'passed_after_retry').map(g => g.gateId),
+        repeating: required.filter(id => options.config.gates.some(g => g.id === id && g.repeatChanged)), ok: gates.every(g => g.state === 'passed') };
 }
 //# sourceMappingURL=verify.js.map

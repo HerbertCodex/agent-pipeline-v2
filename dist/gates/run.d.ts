@@ -45,6 +45,16 @@ export interface GateRunOptions {
      * full suite only, two stacks at least.
      */
     stacks?: readonly string[];
+    /**
+     * The reference the full checks that declare `repeatChanged` also compare their changed test files to, in place of
+     * `repeatChanged.reference` (`apv stack batch`: its target). Absent: the configuration, then `origin/HEAD`.
+     */
+    repeatReference?: string;
+    /**
+     * False when `repeatChanged.maxFiles` was already applied change by change (`apv stack batch`, pull request by pull
+     * request): the run then repeats the union of their files. Default true.
+     */
+    repeatCeiling?: boolean;
 }
 /** The copy of a run in the shared store: its directory, or why it could not be made (the run itself stands). */
 export interface SharedCopy {

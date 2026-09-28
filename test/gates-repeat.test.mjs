@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 import { gatesConfigHash } from '../dist/gates/run.js';
-import { addedLines, fixedWaitIn, repeatArgv, repeatFailures } from '../dist/gates/repeat.js';
+import { addedLines, fixedWaitIn, fixedWaitLines, repeatArgv, repeatFailures } from '../dist/gates/repeat.js';
 import { configIssues } from '../dist/config/load.js';
 import { validateReceipt } from '../dist/domain/contracts.js';
 
@@ -160,22 +160,95 @@ test('ceilings: more changed files than maxFiles is refused before anything runs
   assert.match(row.diagnostic, /^Refus : la répétition des tests modifiés .* a dépassé son plafond de durée \(300 ms, repeatChanged\.timeoutMs/);
 });
 
-test('without --base: nothing repeated, said on the output and in the receipt; a check that fails is not repeated', async t => {
-  const f = project(t, [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf() },
-    { id: 'red', command: script('run-fail.mjs'), repeatChanged: repeatOf() }]);
+test('without --base, or with a base HEAD does not strictly descend from, a run of a repeating check is refused; a check that fails is not repeated', async t => {
+  const f = project(t, [{ id: 'browser', stage: 'full', command: script('run-pass.mjs'), repeatChanged: repeatOf() },
+    { id: 'red', command: script('run-fail.mjs'), repeatChanged: repeatOf() }, { id: 'lint', command: script('run-pass.mjs') }]);
   write(f.repo, 'tests/e2e/a.e2e.ts', 'changed\n');
   commit(f.repo, 'change');
-  const r = await apv(f.repo, ['gates', 'run', '--keep-going', '--json']);
-  assert.match(r.stderr, /browser : repeatChanged déclaré mais --base absent : ses tests modifiés ne sont pas répétés/);
-  assert.equal(r.json().gates[0].repeat.status, 'no_base');
-  assert.equal(r.json().gates[0].status, 'passed');
-  const human = await apv(f.repo, ['gates', 'run', '--only', 'browser']);
-  assert.match(human.stdout, /- browser : non répétés : --base absent/);
+  const r = await apv(f.repo, ['gates', 'run', '--stage', 'full']);
+  assert.equal(r.code, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /browser, red déclare\(nt\) repeatChanged : --base <base de la branche> est obligatoire/);
+  // --skip-proven never short-cuts the refusal.
+  assert.equal((await apv(f.repo, ['gates', 'run', '--stage', 'full', '--skip-proven'])).code, 2);
+  assert.deepEqual(f.calls(), [], 'nothing ran');
+  // A selection without a repeating check does not need a base.
+  assert.equal((await apv(f.repo, ['gates', 'run', '--only', 'lint'])).code, 0);
+  // A base equal to HEAD, or ahead of it, would repeat nothing: refused.
+  const same = await apv(f.repo, ['gates', 'run', '--only', 'browser', '--base', 'HEAD']);
+  assert.equal(same.code, 1);
+  assert.match(same.stderr, /GATE_BASE[^]*HEAD n'en descend pas strictement/);
+  git(f.repo, 'switch', '-q', '-c', 'ahead'); write(f.repo, 'x.txt', 'x\n'); commit(f.repo, 'ahead'); git(f.repo, 'switch', '-q', 'main');
+  assert.match((await apv(f.repo, ['gates', 'run', '--only', 'browser', '--base', 'ahead'])).stderr, /HEAD n'en descend pas strictement/);
   f.reset();
   const failed = await apv(f.repo, ['gates', 'run', '--only', 'red', '--base', f.base, '--json']);
   assert.equal(failed.json().gates[0].status, 'failed');
   assert.equal(failed.json().gates[0].repeat.status, 'not_run');
   assert.equal(f.calls().length, 1, 'the red check only, no repetition');
+});
+
+test('a red repetition is never erased: verify refuses a receipt that repeated nothing, a base equal to the commit, or files left out; --skip-proven reruns', async t => {
+  const f = project(t, [{ id: 'browser', stage: 'full', command: script('run-pass.mjs'), repeatChanged: repeatOf({ reference: 'main' }) }]);
+  git(f.repo, 'switch', '-q', '-c', 'feature');
+  write(f.repo, 'tests/e2e/a.e2e.ts', 'changed\n');
+  commit(f.repo, 'test change');
+  write(f.repo, 'src/other.mjs', 'export {}\n');
+  commit(f.repo, 'unrelated');
+  // A base too close (HEAD~1): the full run also compares to the reference, the changed test is repeated anyway.
+  const r = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', 'HEAD~1', '--json']);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  const rec = receipt(r.json().receiptsDirectory, 'browser');
+  assert.deepEqual(rec.repeat.files, ['tests/e2e/a.e2e.ts']);
+  assert.equal(rec.repeat.reference, f.base);
+  assert.equal(rec.repeat.base, git(f.repo, 'rev-parse', 'HEAD~1'));
+  assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD'])).code, 0);
+  // Receipts that do not prove the repetition: rewritten by hand (local receipts carry no manifest), each refused.
+  const file = join(r.json().receiptsDirectory, 'browser.json');
+  const original = readFileSync(file, 'utf8');
+  const head = git(f.repo, 'rev-parse', 'HEAD');
+  const cases = [
+    [{ ...rec.repeat, status: 'no_base', base: null }, /exécution sans --base : aucun test modifié répété/],
+    [{ ...rec.repeat, status: 'none', base: head, reference: null, files: [] }, /base égale au commit/],
+    [{ ...rec.repeat, status: 'none', files: [] }, /1 fichier\(s\) de test ajouté\(s\) ou modifié\(s\) non répété\(s\) \(depuis [0-9a-f]{12}\) : tests\/e2e\/a\.e2e\.ts/],
+  ];
+  for (const [repeat, reason] of cases) {
+    writeFileSync(file, JSON.stringify({ ...rec, repeat }, null, 2));
+    const v = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD']);
+    assert.equal(v.code, 1, v.stdout);
+    assert.match(v.stdout, /browser\s+tests modifiés non répétés/);
+    assert.match(v.stdout, reason);
+    assert.match(v.stdout, /Relancer : apv gates run --stage full --base <base de la branche>/);
+    assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--json'])).json().gates[0].state, 'unrepeated');
+  }
+  // --skip-proven does not take such a receipt for a proof: the suite runs again.
+  const again = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', 'HEAD~1', '--skip-proven', '--json']);
+  assert.equal(again.json().skipped, undefined);
+  assert.equal(again.json().alreadyProven, false);
+  writeFileSync(file, original);
+});
+
+test('the repetition finds the tree as it was just before the command: a command that writes a tracked-visible file is refused, with the entries', async t => {
+  const f = project(t, [{ id: 'browser', command: [process.execPath, 'writer.mjs'], repeatChanged: repeatOf() }], {
+    'writer.mjs': 'import { writeFileSync } from "node:fs";\nwriteFileSync("leftover.txt", "x");\n' });
+  write(f.repo, 'tests/e2e/a.e2e.ts', 'changed\n');
+  commit(f.repo, 'change');
+  write(f.repo, 'notes.txt', 'uncommitted before the run\n');
+  f.reset();
+  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json']);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  const row = r.json().gates[0];
+  assert.equal(row.status, 'failed');
+  assert.match(row.diagnostic, /^Répétition des tests modifiés refusée : l'arbre de travail a changé pendant la commande du contrôle \(1 entrée\(s\) de git status : \+ \?\? leftover\.txt\)/);
+  assert.deepEqual(f.calls(), [], 'the repetition did not run');
+});
+
+test('a changed test file whose path starts with - is refused: it would read as an option', async t => {
+  const f = project(t, [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ paths: ['**/*.e2e.ts'] }) }]);
+  write(f.repo, '-x.e2e.ts', 'test\n');
+  commit(f.repo, 'dash');
+  const r = await apv(f.repo, ['gates', 'run', '--base', f.base]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /GATE_REPEAT[^]*le fichier -x\.e2e\.ts commence par « - »/);
+  assert.deepEqual(f.calls(), []);
 });
 
 test('fixed waits in the lines a change adds: warned by default, refused with fixedWaits = refuse; comments and untouched lines ignored', async t => {
@@ -224,6 +297,8 @@ test('configuration: repeatChanged validated, and it changes the gates hash like
   bad(gate({ times: 1 }), /times/);
   bad(gate({ fixedWaits: 'maybe' }), /fixedWaits/);
   bad(gate({ unknown: true }), /unknown property unknown/);
+  bad(gate({ stressArgs: ['--workers={{repeat}}'] }), /repeatChanged\.stressArgs cannot use \{\{repeat\}\}/);
+  bad(gate({ reference: 'origin main' }), /reference/);
   const plain = configIssues({ gates: [{ id: 'e2e', command: ['x'] }] }).config;
   assert.equal(Object.hasOwn(plain.gates[0], 'repeatChanged'), false);
   const one = configIssues(gate({})).config;
@@ -242,4 +317,12 @@ test('helpers: repetition argv, failures counted by test, added lines, fixed wai
     [{ line: 2, text: 'one' }, { line: 3, text: 'two' }, { line: 11, text: 'new' }]);
   for (const yes of ['await page.waitForTimeout(100);', 'await sleep(5)', 'await new Promise(resolve => setTimeout(resolve, 10));', 'await new Promise((r) => { setTimeout(r, 1) })']) assert.ok(fixedWaitIn(yes), yes);
   for (const no of ['// page.waitForTimeout(1)', ' * sleep(1)', 'await expect(x).toBeVisible({ timeout: 10000 })', 'await page.clock.runFor(1000)', 'const asleep = true']) assert.ok(!fixedWaitIn(no), no);
+  for (const yes of ['await new Promise<void>(r => setTimeout(r, 10));', 'await new Promise<void>((resolve: () => void) => setTimeout(resolve, 1));', 'await setTimeout(100);',
+    'await timers.setTimeout(5)', 'await delay(300);']) assert.ok(fixedWaitIn(yes), yes);
+  for (const no of ['await page.click("a", { delay: 50 })', 'const x = obj.delay(1)', 'setTimeout(() => done(), 0) // in a mock', 'await page.clock.setTimeout']) assert.ok(!fixedWaitIn(no), no);
+  // A new Promise over a few lines, found on its first line; lines that are not consecutive are not joined.
+  assert.deepEqual(fixedWaitLines([{ line: 4, text: '  await new Promise(resolve =>' }, { line: 5, text: '    setTimeout(resolve, 100));' }]), [{ line: 4, text: '  await new Promise(resolve =>' }]);
+  assert.deepEqual(fixedWaitLines([{ line: 4, text: 'await new Promise(resolve =>' }, { line: 9, text: 'setTimeout(resolve, 100));' }]), []);
+  // An added line "++i;" is "+++i;" in the diff: a line, not a header.
+  assert.deepEqual(addedLines('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n+++i;\n+ok\n'), [{ line: 1, text: '++i;' }, { line: 2, text: 'ok' }]);
 });

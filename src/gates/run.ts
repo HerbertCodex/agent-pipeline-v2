@@ -17,7 +17,8 @@ import { publishRun, pruneStore, receiptRetention, sharedStore, type PruneResult
 import { markStacksUsed, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables, type SpreadPlan } from './spread.js';
-import { fixedWaitRefusal, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, tooManyFiles, type RepeatPlan } from './repeat.js';
+import { DEFAULT_REPEAT_REFERENCE, fixedWaitRefusal, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, resolveRef, tooManyFiles,
+  type RepeatPlan } from './repeat.js';
 import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, flockCommand, freePorts, resolveGateLock, withGateLease,
   type CleanupRecord, type PortsRecord, type QueueHandle, type QueueRecord, type SuiteHooks } from './suite.js';
 
@@ -61,6 +62,16 @@ export interface GateRunOptions {
    * full suite only, two stacks at least.
    */
   stacks?: readonly string[];
+  /**
+   * The reference the full checks that declare `repeatChanged` also compare their changed test files to, in place of
+   * `repeatChanged.reference` (`apv stack batch`: its target). Absent: the configuration, then `origin/HEAD`.
+   */
+  repeatReference?: string;
+  /**
+   * False when `repeatChanged.maxFiles` was already applied change by change (`apv stack batch`, pull request by pull
+   * request): the run then repeats the union of their files. Default true.
+   */
+  repeatCeiling?: boolean;
 }
 /** The copy of a run in the shared store: its directory, or why it could not be made (the run itself stands). */
 export interface SharedCopy { directory: string | null; error: string | null; pruned: PruneResult | null }
@@ -180,6 +191,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const candidateSha = await git.sha(repo);
   const baseSha = options.base ? await git.sha(repo, options.base) : null;
   const treeStatus = (): Promise<string> => git.exec(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const treeOf = (dir: string): Promise<string> => dir === repo ? treeStatus() : git.exec(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
   let status = await treeStatus();
   let dirty = status !== '';
   const stage = options.stage ?? 'full';
@@ -215,17 +227,28 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const repeats = new Map(gates.filter(g => g.repeatChanged).map(g => [g.id, expand(g, repeatArgv(g.repeatChanged!))]));
   // The changed test files each check repeats, decided before any wait: a ceiling exceeded or a refused fixed wait
   // stops the run here, explicitly, rather than after a full suite or by a silent skip. Null: no --base to compare to.
-  const repeatPlans = new Map<string, RepeatPlan | null>();
-  for (const g of gates) {
-    if (!g.repeatChanged) continue;
-    if (!baseSha) {
-      repeatPlans.set(g.id, null);
-      log(`${g.id} : repeatChanged déclaré mais --base absent : ses tests modifiés ne sont pas répétés (reçu : repeat.status = no_base).`);
-      continue;
+  const repeatPlans = new Map<string, RepeatPlan>();
+  const repeating = gates.filter(g => g.repeatChanged);
+  if (repeating.length) {
+    // Without a base, or with one HEAD does not strictly descend from, nothing would be repeated: refused, never a silent pass.
+    invariant(baseSha, 'GATE_BASE', `${repeating.map(g => g.id).join(', ')} déclare(nt) repeatChanged : --base <base de la branche> est obligatoire (les tests ajoutés ou modifiés depuis elle sont répétés).`);
+    invariant(await mergeBase(git, repo, baseSha!, candidateSha) !== candidateSha, 'GATE_BASE',
+      `--base ${options.base} : HEAD n'en descend pas strictement (base égale à HEAD, ou en aval) ; aucun test modifié ne serait répété pour ${repeating.map(g => g.id).join(', ')}. Donner la base de la branche (le commit d'où elle part).`);
+  }
+  for (const g of repeating) {
+    const settings = g.repeatChanged!;
+    // A check run in full also compares to the reference (the branch the change goes to): a --base too close cannot narrow it.
+    let reference: string | null = null;
+    if (stage === 'full' && !targeted.has(g.id)) {
+      const name = options.repeatReference ?? settings.reference ?? DEFAULT_REPEAT_REFERENCE;
+      reference = await resolveRef(git, repo, name);
+      if (!reference) log(`${g.id} : référence ${name} introuvable (repeatChanged.reference) : seuls les tests modifiés depuis --base sont répétés.`);
     }
-    const plan = await planRepeat(git, repo, baseSha, g.repeatChanged);
-    if (plan.files.length > g.repeatChanged.maxFiles) throw tooManyFiles(g.id, plan, g.repeatChanged);
-    if (plan.fixedWaits.length && g.repeatChanged.fixedWaits === 'refuse') throw fixedWaitRefusal(g.id, plan.fixedWaits);
+    const plan = await planRepeat(git, repo, { base: baseSha!, reference }, settings);
+    const optionLike = plan.files.find(f => f.startsWith('-'));
+    if (optionLike) throw optionLikeFile(g.id, optionLike);
+    if (options.repeatCeiling !== false && plan.files.length > settings.maxFiles) throw tooManyFiles(g.id, plan, settings);
+    if (plan.fixedWaits.length && settings.fixedWaits === 'refuse') throw fixedWaitRefusal(g.id, plan.fixedWaits);
     for (const w of plan.fixedWaits) log(`${g.id} : attente à durée fixe dans un test modifié, ${w.file}:${w.line} : ${w.text} (attendre un fait observable ; page.clock pour le temps).`);
     repeatPlans.set(g.id, plan);
   }
@@ -404,24 +427,28 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
        * included), under the same lock: never relaunched, and any failure turns the check red whatever `retryFailed`
        * said. Without a plan (no --base), no changed file or a command that did not pass, only recorded.
        */
-      const repeated = async (fields: Fields, passEnv: NodeJS.ProcessEnv): Promise<Fields> => {
+      const repeated = async (fields: Fields, passEnv: NodeJS.ProcessEnv, before: { head: string; tree: string } | null): Promise<Fields> => {
         const settings = gate.repeatChanged;
-        if (!settings) return fields;
-        const plan = repeatPlans.get(gate.id) ?? null;
+        const plan = repeatPlans.get(gate.id);
+        if (!settings || !plan) return fields;
         const times = settings.times;
-        if (!plan) return { ...fields, repeat: { base: null, files: [], times, status: 'no_base', failures: [], fixedWaits: [] } };
-        const record = { base: plan.base, files: plan.files, times, fixedWaits: plan.fixedWaits };
+        const record = { base: plan.base, reference: plan.reference, files: plan.files, times, fixedWaits: plan.fixedWaits };
         if (!plan.files.length) return { ...fields, repeat: { ...record, status: 'none', failures: [] } };
         const afterRetry = fields.status === 'passed_after_retry';
         if (fields.status !== 'passed' && !afterRetry) return { ...fields, repeat: { ...record, status: 'not_run', failures: [] } };
         const prefix = workspace === repo ? repeats.get(gate.id)! : expandCommand(repeatArgv(settings), { ...context, workspace });
         const withWait = (ms: number): { lockWaitMs?: number } => lock ? { lockWaitMs: Math.round((fields.lockWaitMs ?? 0) + ms) } : {};
-        // Same commit, same tree: otherwise the repetition would prove other code.
+        // Same commit, same tree as just before the command of the check: otherwise the repetition would prove other code.
         const head = await git.sha(workspace);
-        const now = workspace === repo ? await treeStatus() : await git.exec(workspace, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
-        if (head !== candidateSha || now !== (workspace === repo ? status : '')) {
+        const tree = await treeOf(workspace);
+        if (!before || head !== before.head || tree !== before.tree) {
+          const was = new Set(statusLines(before?.tree ?? '')); const now = new Set(statusLines(tree));
+          const changes = [...[...now].filter(l => !was.has(l)).map(l => `+ ${l}`), ...[...was].filter(l => !now.has(l)).map(l => `- ${l}`)];
+          const why = !before ? 'état de l\'arbre avant la commande inconnu'
+            : head !== before.head ? `HEAD est passé de ${before.head.slice(0, 12)} à ${head.slice(0, 12)} pendant la commande du contrôle`
+            : `l'arbre de travail a changé pendant la commande du contrôle (${changes.length} entrée(s) de git status : ${changes.slice(0, 10).join(' ; ')}${changes.length > 10 ? ' ...' : ''})`;
           return { ...fields, status: 'failed', exitCode: null, repeat: { ...record, status: 'failed', command: prefix, failures: [] },
-            diagnostic: `Répétition des tests modifiés refusée : ${head !== candidateSha ? 'HEAD a changé' : 'l\'arbre de travail a changé'} pendant la commande du contrôle (elle ne prouverait pas le même code).` };
+            diagnostic: `Répétition des tests modifiés refusée : ${why} ; elle ne prouverait pas le même code. Une commande de contrôle ne doit écrire que des fichiers ignorés par Git.` };
         }
         log(`${gate.id} : répétition des tests modifiés (repeatChanged), ${times} fois chacun : ${plan.files.join(', ')}${settings.stressArgs ? ` ; charge : ${settings.stressArgs.join(' ')}` : ''}.`);
         const timeoutMs = settings.timeoutMs ?? gate.timeoutMs;
@@ -444,7 +471,12 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         return { ...fields, status: failed, durationMs, exitCode: repeat.exitCode, stdoutHash: run.lockError === null ? r.stdoutHash : '', stderrHash: run.lockError === null ? r.stderrHash : '',
           diagnostic: diagnostic.slice(0, MAX_DIAGNOSTIC_CHARS), repeat: { ...repeat, status: failed }, ...withWait(run.lockWaitMs) };
       };
-      const body = async (passEnv: NodeJS.ProcessEnv, leaseWaitMs: number): Promise<GateReceipt> => write(await repeated(await main(passEnv, leaseWaitMs), passEnv));
+      const body = async (passEnv: NodeJS.ProcessEnv, leaseWaitMs: number): Promise<GateReceipt> => {
+        // The state the repetition must find again: taken just before the command, under the lock.
+        const plan = repeatPlans.get(gate.id);
+        const before = plan?.files.length ? { head: await git.sha(workspace), tree: await treeOf(workspace) } : null;
+        return write(await repeated(await main(passEnv, leaseWaitMs), passEnv, before));
+      };
       const used = lock && common ? stacksOfLock(stacks, lock) : [];
       let outcome: GateReceipt | null = null;
       try {

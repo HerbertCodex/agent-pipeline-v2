@@ -3,7 +3,7 @@ import { join, relative, resolve } from 'node:path';
 import { loadConfig, loadConfigAtCommit } from '../config/load.js';
 import { gateStages } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
-import { RECEIPTS_DIR, dirtyRefusal, isFullSuite, runGates, selectGates } from '../gates/run.js';
+import { RECEIPTS_DIR, dirtyRefusal, isFullSuite, runGates, selectGates, stageGates } from '../gates/run.js';
 import { exportRun, listRuns, pruneStore, receiptRetention, sharedStore } from '../gates/store.js';
 import { expectedLevel, findRun } from '../run/rhythm.js';
 import { resolveCommit, gitRoot } from '../run/git-probe.js';
@@ -60,7 +60,8 @@ signalé à part. Un contrôle avec repeatChanged relance ensuite, avec --base, 
 ajoutés ou modifiés depuis la base (motifs repeatChanged.paths) repeatChanged.times fois, sous le même
 verrou : tout échec le rend rouge (« échoue X fois sur N »), jamais masqué par retryFailed ; plus de
 fichiers que repeatChanged.maxFiles, ou une attente à durée fixe avec fixedWaits = refuse : refus avant
-toute attente. À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
+toute attente. Sans --base, un tel contrôle ne se lance pas (appel incorrect) ; une suite complète compare
+aussi à repeatChanged.reference (défaut origin/HEAD). À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
 annulés, sortie 128 + signal), les processus qu'elle a lancés encore vivants et les orphelins de cette
 copie sur suite.ports sont arrêtés (jamais la session, une autre copie ni le checkout principal).
 --stacks 1,2 (suite complète, deux piles déclarées au moins, section stacks) : les contrôles d'une pile
@@ -77,7 +78,9 @@ compte. --stage full (défaut) : tous les contrôles, les reçus ciblés ne comp
 --stage task : ceux de stage task, plus les contrôles full qui déclarent affected, prouvés par
 leur reçu ciblé (ou complet) ; --base <ref> est alors obligatoire (le dernier commit prouvé par
 la suite complète) : un reçu ciblé ne compte que si la base de son exécution est ce commit ou
-l'un de ses ancêtres.
+l'un de ses ancêtres. Un contrôle qui déclare repeatChanged n'est prouvé que si son reçu montre la
+répétition de chaque fichier de test que le commit ajoute ou modifie (recalculé depuis la base enregistrée
+et la référence) : sinon « tests modifiés non répétés ».
 Les reçus sont lus dans .apv/receipts/ du worktree, puis dans le magasin partagé pour les
 exécutions que le worktree n'a pas : la preuve d'un commit se vérifie depuis n'importe quel
 checkout du dépôt, avec les mêmes exigences. Une exécution du magasin partagé dont un fichier ne
@@ -99,7 +102,7 @@ const FLAKY = 'instable';
 const RESERVED = 'réservé à la suite complète';
 const TARGETED = 'ciblé';
 const SHARED = 'magasin partagé';
-const EVIDENCE = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu' };
+const EVIDENCE = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu', unrepeated: 'tests modifiés non répétés' };
 /** One line of the repetition of the changed test files of a check. */
 function repeatLine(r) {
     const files = r.files.length > 5 ? `${r.files.slice(0, 5).join(', ')} ... (${r.files.length})` : r.files.join(', ');
@@ -140,8 +143,12 @@ function verifyLines(result) {
         lines.push('', `Reçus illisibles ignorés : ${result.unreadable.join(', ')}`);
     if (result.altered.length)
         lines.push('', `Exécutions du magasin partagé refusées (altérées) : ${result.altered.map(a => `${a.runId} (${a.reason})`).join(', ')}`);
+    const unrepeated = result.gates.filter(g => g.state === 'unrepeated');
+    if (unrepeated.length)
+        lines.push('', 'Tests modifiés non répétés (repeatChanged) : le reçu réussi ne prouve pas la répétition des tests que ce commit ajoute ou modifie :', ...unrepeated.map(g => `- ${g.gateId} : ${g.repeat.reason}${g.repeat.missing.length ? ` : ${g.repeat.missing.slice(0, 10).join(', ')}${g.repeat.missing.length > 10 ? ' ...' : ''}` : ''}`));
     const missing = result.gates.filter(g => g.state !== 'passed');
-    const rerun = result.stage === 'task' && result.base ? `apv gates run --stage task --base ${result.base.slice(0, 12)}` : `apv gates run --stage ${result.stage}`;
+    const rerun = result.stage === 'task' && result.base ? `apv gates run --stage task --base ${result.base.slice(0, 12)}`
+        : `apv gates run --stage ${result.stage}${result.repeating.length ? ' --base <base de la branche>' : ''}`;
     if (result.flaky.length)
         lines.push('', `Instables (réussis seulement après la relance de leurs tests en échec, même commit) : ${result.flaky.join(', ')} : à traiter comme un constat.`);
     lines.push('', result.ok
@@ -299,6 +306,14 @@ export async function run(args, io) {
             throw new UsageError('--concurrency attend un entier entre 1 et 16');
         const repo = repoPath(io, values.repo);
         const loaded = loadConfig(repo, values.config);
+        // A check that repeats its changed test files needs the base they changed from: refused as an incorrect call, before
+        // the proof lookup (--skip-proven) and any wait, so that a red repetition is never replaced by a run that repeats nothing.
+        const selected = selectGates(loaded.config.gates, list(values.only)).gates;
+        const staged = stageGates(selected, stage ?? 'full');
+        const repeating = [...staged.run, ...staged.targeted].filter(g => g.repeatChanged).map(g => g.id);
+        if (repeating.length && values.base === undefined) {
+            throw new UsageError(`${repeating.join(', ')} déclare(nt) repeatChanged : --base <base de la branche> est obligatoire (ses tests ajoutés ou modifiés depuis elle sont répétés ; sans base, rien ne le serait)`);
+        }
         const allowDirty = values['allow-dirty'] === true;
         // A full suite: a check of stage full run in full. On a dirty tree it proves nothing: refused first, before the
         // proof lookup, the rhythm (which may journal an override in the state) and any wait.

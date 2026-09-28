@@ -27,7 +27,7 @@ export declare const DEFAULT_REPEAT: {
 /**
  * `repeatChanged` of a check: `paths` (globs of the test files concerned), `command` (the repetition, the files
  * appended), `times` (repetitions of each test, `{{repeat}}`), `maxFiles` (above: the run is refused), `timeoutMs`
- * (duration ceiling of the repetition), `testPattern` (lines naming a failed test), `stressArgs`, `fixedWaits`.
+ * (duration ceiling of the repetition), `testPattern` (lines naming a failed test), `stressArgs`, `fixedWaits`, `reference`.
  */
 export declare const repeatChangedSchema: import("./schema.js").Schema<{
     readonly paths: string[];
@@ -38,6 +38,7 @@ export declare const repeatChangedSchema: import("./schema.js").Schema<{
     readonly testPattern: string | undefined;
     readonly stressArgs: string[] | undefined;
     readonly fixedWaits: "off" | "warn" | "refuse";
+    readonly reference: string | undefined;
 }>;
 export declare const gateSchema: import("./schema.js").Schema<{
     readonly id: string;
@@ -77,6 +78,7 @@ export declare const gateSchema: import("./schema.js").Schema<{
         readonly testPattern: string | undefined;
         readonly stressArgs: string[] | undefined;
         readonly fixedWaits: "off" | "warn" | "refuse";
+        readonly reference: string | undefined;
     } | undefined;
 }>;
 /** Stage of a check; absent means `task`. */
@@ -285,6 +287,7 @@ export declare const configSchema: import("./schema.js").Schema<{
             readonly testPattern: string | undefined;
             readonly stressArgs: string[] | undefined;
             readonly fixedWaits: "off" | "warn" | "refuse";
+            readonly reference: string | undefined;
         } | undefined;
     }[];
     readonly validationRules: {
@@ -378,6 +381,7 @@ export declare const receiptSchema: import("./schema.js").Schema<{
     } | undefined;
     readonly repeat: {
         readonly base: string | null;
+        readonly reference: string | null | undefined;
         readonly files: string[];
         readonly times: number;
         readonly status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "none" | "no_base" | "not_run";

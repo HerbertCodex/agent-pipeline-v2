@@ -121,7 +121,8 @@ Par défaut, un contrôle a un accès exclusif au répertoire de validation, y c
 - `timeoutMs` : plafond de durée de la répétition, sinon le `timeoutMs` du contrôle ; au-delà, reçu `timed_out` et refus explicite ;
 - `testPattern` : expression régulière qui nomme un test en échec dans la sortie (groupe 1 s'il existe), pour « échoue X fois sur N » ; sinon celle de `retryFailed` ;
 - `stressArgs` : arguments ajoutés avant les fichiers pour charger la répétition, par exemple `["--workers=4", "--fully-parallel"]` pour Playwright : les répétitions d'un même test tournent alors en même temps, ce qui révèle les données partagées entre tests et les attentes trop courtes sous charge ; plus lent sur une petite machine, et la charge compte dans `timeoutMs` ;
-- `fixedWaits` : lignes ajoutées par le changement aux fichiers répétés qui attendent une durée (`waitForTimeout(`, `sleep(`, `new Promise(r => setTimeout(r, …))`) : `"warn"` (défaut, listées), `"refuse"` (exécution refusée avant toute attente), `"off"`.
+- `fixedWaits` : lignes ajoutées par le changement aux fichiers répétés qui attendent une durée (`waitForTimeout(`, `sleep(`, `delay(`, `await setTimeout(` de `node:timers/promises`, `new Promise(r => setTimeout(r, …))` avec argument de type et sur deux à quatre lignes) : `"warn"` (défaut, listées), `"refuse"` (exécution refusée avant toute attente), `"off"` ;
+- `reference` : la branche où va le changement (une référence Git, par exemple `"origin/main"`), défaut `origin/HEAD` quand elle existe : une suite complète répète aussi les tests modifiés depuis sa base commune avec HEAD, et `apv gates verify` les exige, si bien qu'une `--base` trop proche n'en laisse aucun de côté. À régler quand la branche d'intégration n'est pas la branche par défaut du dépôt distant.
 
 Le reçu note les fichiers répétés, `times` et l'issue (`repeat`) ; ajouter ou changer `repeatChanged` change l'empreinte des contrôles, comme tout champ d'un contrôle. Exemple pour Playwright (reporter `list` ou `line`) :
 
@@ -137,12 +138,13 @@ Le reçu note les fichiers répétés, `times` et l'issue (`repeat`) ; ajouter o
     "command": ["npm", "run", "e2e:browser", "--", "--repeat-each={{repeat}}", "--retries=0"],
     "times": 5,
     "maxFiles": 10,
-    "timeoutMs": 1200000
+    "timeoutMs": 1200000,
+    "reference": "origin/main"
   }
 }
 ```
 
-La répétition ne se fait qu'avec `--base` : l'étape de tâche l'exige déjà ; la suite complète avant une PR se lance avec `--base <base de la PR>`, et `apv stack batch` passe la cible. Sans `--base`, la sortie le dit et le reçu porte `repeat.status` = `no_base`.
+Une exécution qui lance un tel contrôle exige `--base` (sinon appel incorrect, sortie `2`), et une base dont HEAD descend strictement (sinon `GATE_BASE`) : la suite complète avant une PR se lance avec `--base <base de la PR>`, et `apv stack batch` passe la cible (où `maxFiles` s'applique PR par PR). `apv gates verify` ne compte comme réussi un tel contrôle que si son reçu prouve la répétition de chaque fichier de test que le commit ajoute ou modifie depuis la base enregistrée et depuis la référence ([CLI.md](CLI.md#apv-gates-verify)). `stressArgs` n'accepte pas `{{repeat}}` (seule `command` le remplace).
 
 `readOnly: true` est une déclaration revue par l'opérateur : la commande **et ses sous-processus** ne doivent écrire aucun fichier dans ce répertoire. Seuls ces contrôles peuvent tourner ensemble, dans la limite de `concurrency` et des ressources nommées ; ils attendent aussi la fin d'un contrôle susceptible d'écrire. Ce champ n'est pas un sandbox ni une détection automatique. Ne pas l'activer pour un lint avec cache, un compilateur incrémental, des tests avec couverture ou des E2E qui lancent un build. Les anciens profils peuvent donc valider plus lentement ; déclarer uniquement les commandes réellement en lecture seule permet de retrouver du parallélisme sûr.
 

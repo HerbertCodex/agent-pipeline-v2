@@ -288,6 +288,7 @@ export declare function targetedQaContext(context: {
         } | undefined;
         repeat: {
             readonly base: string | null;
+            readonly reference: string | null | undefined;
             readonly files: string[];
             readonly times: number;
             readonly status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "none" | "no_base" | "not_run";
