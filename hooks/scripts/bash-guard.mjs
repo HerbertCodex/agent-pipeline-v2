@@ -8,7 +8,7 @@
 // always be written in a shape this parser does not recognise.
 import { basename } from 'node:path';
 import { isMainModule, readHookInput } from './lib.mjs';
-import { EMPTY_CONTEXT, HARNESS_REASONS, commandWords, hookContext, installProblem, killProblem, lockWrapper, mergeHeld, stackProblem } from './harness-guard.mjs';
+import { EMPTY_CONTEXT, HARNESS_REASONS, commandWords, hookContext, installProblem, killProblem, lockWrapper, mergeHeld, remoteWriteProblem, stackProblem } from './harness-guard.mjs';
 
 export { HARNESS_REASONS };
 
@@ -321,6 +321,9 @@ function evaluate(command, env, context, depth, inherited) {
   // The declared stacks are read (git, config) only for a command that may reach one.
   const stacks = /\b(docker|podman|supabase)\b/.test(command) ? context.stacks() : [];
   for (const words of segments) {
+    // A write to a remote database (production): refused whatever the locks, no variable lifts it.
+    const remote = remoteWriteProblem(words) ?? remoteWriteProblem(lockWrapper(words, stacks, context.cwd).words);
+    if (remote) return { decision: 'deny', reason: remote };
     const wrapped = lockWrapper(words, stacks, context.cwd);
     const held = mergeHeld(inherited, wrapped.held);
     const stack = stacks.length ? stackProblem(wrapped.words, held, context, context.cwd) : null;

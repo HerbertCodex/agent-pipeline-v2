@@ -18,6 +18,9 @@ export const HARNESS_REASONS = {
   killPgrep: 'APV : kill alimenté par pgrep -f refusé : pgrep -f trouve aussi le shell qui le lance (son motif est dans sa ligne ' +
     'de commande) et peut désigner la session. À la place : apv procs list, puis apv procs stop --port <p> ou --repo <copie>, ' +
     'ou kill <pid> d\'un pid lu dans apv procs list.',
+  remote: (what) => `APV : ${what} écrit sur une base distante (--linked, --project-ref, --db-url hors de cette machine, ou projet lié par défaut) : ` +
+    'les écritures sur une base distante (production) sont réservées à l\'opérateur, dans son terminal. Aucune variable ne lève ce refus. ' +
+    'Pour voir ce que ferait la commande : la même avec --dry-run ; pour une base locale de test : --local, ou la pile de test du projet.',
   install: (dir, target, tool) => `APV : ${tool} refusé dans ${dir} : son node_modules est un lien symbolique vers ${target}. ` +
     "L'installation viderait puis remplirait la cible, partagée avec d'autres copies (projet pilote, 27 septembre 2026 : " +
     'node_modules du dépôt principal vidé par un npm ci lancé dans un worktree). Pour installer dans cette copie : ' +
@@ -307,14 +310,17 @@ export function dockerTargets(words, stacks) {
 const SUPABASE_LAUNCHERS = new Set(['npx', 'bunx', 'pnpx']);
 const SUPABASE_GLOBAL_VALUE = new Set(['--workdir', '--profile', '--network-id', '-o', '--output', '--dns-resolver']);
 
-/** The local stack change a supabase command makes: `{ what, workdir, projectEnv }`, or null (read only, remote). */
-export function supabaseCommand(words) {
+/**
+ * A supabase CLI call in these words (direct, `./node_modules/.bin/supabase`, `npx [-y] supabase@x`, `pnpm dlx|exec`,
+ * `yarn dlx`, `npm exec`, `bunx`): its assignments, arguments, positionals and `--workdir`; null otherwise.
+ */
+export function supabaseInvocation(words) {
   const cw = commandWords(words);
   if (!cw) return null;
   let rest = cw.words;
   const first = name(rest[0]);
-  if (SUPABASE_LAUNCHERS.has(first) || ((first === 'pnpm' || first === 'yarn') && rest[1] === 'dlx') || (first === 'npm' && rest[1] === 'exec')) {
-    let j = first === 'pnpm' || first === 'yarn' || first === 'npm' ? 2 : 1;
+  if (SUPABASE_LAUNCHERS.has(first) || ((first === 'pnpm' || first === 'yarn') && (rest[1] === 'dlx' || rest[1] === 'exec')) || (first === 'npm' && rest[1] === 'exec')) {
+    let j = SUPABASE_LAUNCHERS.has(first) ? 1 : 2;
     while (j < rest.length && rest[j].startsWith('-') && rest[j] !== '--') j += ['-p', '--package'].includes(rest[j]) ? 2 : 1;
     if (rest[j] === '--') j += 1;
     rest = rest.slice(j);
@@ -330,15 +336,52 @@ export function supabaseCommand(words) {
     if (args[k].startsWith('-')) continue;
     positionals.push(args[k]);
   }
-  const [a, b] = positionals;
-  const local = args.includes('--local') || !args.some(x => x === '--linked' || x.startsWith('--db-url') || x.startsWith('--project-ref'));
-  // `db reset --linked` (or --db-url) resets a remote database, never a local stack.
-  const mutating = a === 'start' || a === 'stop' || (a === 'seed' && local) ||
-    (a === 'db' && (b === 'start' || (['reset', 'diff', 'push'].includes(b) && local))) ||
-    (a === 'migration' && ['up', 'down'].includes(b) && local) || (a === 'test' && b === 'db');
+  return { assignments: [...cw.assignments, ...words.filter(isAssignment)], args, positionals, workdir };
+}
+
+/** The database URL of `--db-url <url>` or `--db-url=<url>`, or null. */
+function dbUrl(args) {
+  const at = args.findIndex(a => a === '--db-url');
+  if (at !== -1) return args[at + 1] ?? '';
+  return args.find(a => a.startsWith('--db-url='))?.slice('--db-url='.length) ?? null;
+}
+/** True when a database URL points to this machine (a local stack), never a remote database. */
+const loopback = url => /@(localhost|127\.\d+\.\d+\.\d+|\[::1\])(:\d+)?(\/|$|\?)/i.test(url);
+
+/**
+ * Where a supabase call writes: `remote` (a hosted database: `--linked`, `--project-ref`, a `--db-url` that is not
+ * on this machine, or `db push` / `migration repair` without `--local`, which target the linked project by default),
+ * `local`, or null when it writes no database.
+ */
+export function supabaseWriteTarget(call) {
+  const [a, b] = call.positionals;
+  const writes = (a === 'db' && ['reset', 'push', 'execute', 'query'].includes(b)) || (a === 'migration' && ['up', 'down', 'repair'].includes(b)) || a === 'seed';
+  if (!writes) return null;
+  const url = dbUrl(call.args);
+  if (call.args.some(x => x === '--linked' || x.startsWith('--project-ref'))) return 'remote';
+  if (url !== null) return loopback(url) ? 'local' : 'remote';
+  if (call.args.includes('--local')) return 'local';
+  return (a === 'db' && b === 'push') || (a === 'migration' && b === 'repair') ? 'remote' : 'local';
+}
+
+/** Why a supabase call writes to a remote database (production), or null. `--dry-run` only shows what it would do. */
+export function remoteWriteProblem(words) {
+  const call = supabaseInvocation(words);
+  if (!call || call.args.includes('--dry-run') || supabaseWriteTarget(call) !== 'remote') return null;
+  return HARNESS_REASONS.remote(`supabase ${call.positionals.slice(0, 2).join(' ')}`);
+}
+
+/** The local stack change a supabase command makes: `{ what, workdir, projectEnv }`, or null (read only, remote). */
+export function supabaseCommand(words) {
+  const call = supabaseInvocation(words);
+  if (!call) return null;
+  const [a, b] = call.positionals;
+  const target = supabaseWriteTarget(call);
+  const mutating = a === 'start' || a === 'stop' || (a === 'db' && (b === 'start' || b === 'diff' && !call.args.some(x => x === '--linked' || x.startsWith('--db-url') || x.startsWith('--project-ref')))) ||
+    (a === 'test' && b === 'db') || target === 'local';
   if (!mutating) return null;
-  const projectEnv = [...cw.assignments, ...words.filter(isAssignment)].find(w => w.startsWith('SUPABASE_PROJECT_ID='))?.slice('SUPABASE_PROJECT_ID='.length) ?? null;
-  return { what: `supabase ${[a, b].filter(Boolean).join(' ')}`, workdir, projectEnv };
+  const projectEnv = call.assignments.find(w => w.startsWith('SUPABASE_PROJECT_ID='))?.slice('SUPABASE_PROJECT_ID='.length) ?? null;
+  return { what: `supabase ${[a, b].filter(Boolean).join(' ')}`, workdir: call.workdir, projectEnv };
 }
 
 /** `project_id` of `<dir>/supabase/config.toml`, looking up from `dir` (the way the CLI finds its project); null when none. */

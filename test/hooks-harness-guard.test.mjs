@@ -150,7 +150,7 @@ test('docker or supabase on a declared stack without its lock is refused, with t
     assert.match(r.reason, /flock -w 1800 /, command);
   }
   for (const command of ['docker ps', 'docker ps -a --filter label=com.supabase.cli.project=proj', 'docker logs -f supabase_auth_proj', 'docker inspect supabase_db_proj',
-    'docker compose -p proj ps', 'docker restart unrelated_container', 'npx supabase status', 'npx supabase migration new x', 'supabase db push --linked',
+    'docker compose -p proj ps', 'docker restart unrelated_container', 'npx supabase status', 'npx supabase migration new x',
     `flock ${lock1} docker restart supabase_auth_proj`, `flock -w 1800 ${lock1} docker restart supabase_auth_proj supabase_db_proj`, `flock ../pilot/.e2e.lock docker restart supabase_db_proj`,
     `flock ${lock1} bash -c "docker restart supabase_db_proj"`, `flock ${lock1} -c "npx supabase db reset"`, 'E2E_STACK=1 node scripts/e2e/lock.mjs docker restart supabase_auth_proj',
     `apv lock run e2e-2 -- docker restart supabase_db_proj-2`, `flock ${lock2} npx supabase db reset --workdir ${join(root, 'stack2')}`,
@@ -184,8 +184,46 @@ test('data that mentions a ppid, a liveness check (kill -0) and a remote reset a
     assert.equal(evaluateCommand(command, {}, withAncestors).decision, 'deny', command);
   }
   const { repo } = stackRepo(t);
+  // A remote reset is not a stack command: never refused for a missing stack lock (the remote rule refuses it apart).
   for (const command of ['npx supabase db reset --linked', 'supabase db reset --db-url postgresql://u@db.example/x', 'supabase seed --linked']) {
-    assert.equal(runHook(command, repo).decision, 'allow', command);
+    const r = runHook(command, repo);
+    assert.doesNotMatch(r.reason, /sans tenir son verrou/, command);
+    assert.match(r.reason, /base distante/, command);
   }
-  assert.equal(runHook('npx supabase db reset --local', repo).decision, 'deny');
+  assert.match(runHook('npx supabase db reset --local', repo).reason, /sans tenir son verrou/);
+});
+
+test('a supabase write to a remote database (production) is refused in every form, with no variable to lift it; --dry-run passes', t => {
+  for (const command of [
+    'supabase db reset --linked', 'supabase db push', 'supabase db push --linked', 'supabase db push --project-ref abcdef',
+    'supabase db push --db-url postgresql://postgres:secret@db.abcdef.supabase.co:5432/postgres',
+    'supabase db reset --db-url=postgres://u:p@aws-0-eu-west-3.pooler.supabase.com:6543/postgres',
+    'supabase migration up --linked', 'supabase migration down --linked', 'supabase migration repair --status applied 20260101',
+    'supabase migration repair --linked --status reverted 1', 'supabase seed --linked', 'supabase seed buckets --linked',
+    'supabase db execute --linked -f x.sql', 'supabase db query --linked "delete from t"',
+    'npx supabase db push', 'npx -y supabase@2.117.0 db push --linked', 'npx --yes supabase@latest migration up --linked',
+    './node_modules/.bin/supabase db push', 'node_modules/.bin/supabase db reset --linked', 'pnpm dlx supabase db push', 'pnpm exec supabase db push',
+    'yarn dlx supabase db push', 'npm exec -- supabase db push', 'bunx supabase db push',
+    'APV_ALLOW_MERGE=1 APV_ALLOW_DEPLOY=1 supabase db push', 'SUPABASE_ACCESS_TOKEN=x npx supabase db push --linked',
+    'cd supabase && supabase db push', 'bash -c "npx supabase db push"', 'sh -lc "supabase db reset --linked"', 'flock /tmp/x.lock supabase db push',
+  ]) {
+    const r = evaluateCommand(command, { APV_ALLOW_MERGE: '1', APV_ALLOW_DEPLOY: '1' }, EMPTY_CONTEXT);
+    assert.equal(r.decision, 'deny', command);
+    assert.match(r.reason, /les écritures sur une base distante \(production\) sont réservées à l'opérateur, dans son terminal/, command);
+    assert.match(r.reason, /Aucune variable ne lève ce refus\. Pour voir ce que ferait la commande : la même avec --dry-run/, command);
+  }
+  for (const command of [
+    'supabase db push --dry-run', 'supabase db push --linked --dry-run', 'npx supabase migration up --linked --dry-run',
+    'supabase db push --local', 'supabase migration repair --local --status applied 1', 'supabase db reset', 'supabase db reset --local',
+    'supabase db reset --db-url postgresql://postgres:postgres@127.0.0.1:54322/postgres', 'supabase migration up',
+    'supabase migration list --linked', 'supabase db diff --linked', 'supabase link --project-ref abcdef', 'supabase status', 'supabase gen types --linked',
+    'echo "supabase db push"', 'git commit -m "supabase db push --linked"',
+  ]) {
+    assert.equal(evaluateCommand(command, {}, EMPTY_CONTEXT).decision, 'allow', command);
+  }
+  // The real hook, with every authorisation variable set: still refused.
+  const dir = tmp(t, 'apv3-harness-remote-');
+  const r = runHook('npx supabase db push --linked', dir, { APV_ALLOW_MERGE: '1', APV_ALLOW_DEPLOY: '1' });
+  assert.equal(r.status, 2);
+  assert.equal(r.decision, 'deny');
 });
