@@ -81,9 +81,10 @@ leur reçu ciblé (ou complet) ; --base <ref> est alors obligatoire (le dernier 
 la suite complète) : un reçu ciblé ne compte que si la base de son exécution est ce commit ou
 l'un de ses ancêtres. Un contrôle qui déclare repeatChanged n'est prouvé que si son reçu montre la
 répétition de chaque fichier de test que le commit ajoute ou modifie (recalculé depuis la base enregistrée
-et la référence) : sinon « tests modifiés non répétés ». Un contrôle qui lance apv web audit --preview
---base <ref> et dont le reçu dit « audit non requis » n'est prouvé que si le recalcul depuis le commit
-(fichiers à effet web depuis la base commune de <ref> et depuis la base enregistrée) le confirme :
+et la référence) : sinon « tests modifiés non répétés ». Un reçu dont le relevé de apv web audit dit
+« audit non requis » (quelle que soit la commande) n'est prouvé que si le recalcul depuis le commit
+(fichiers à effet web depuis la base commune de la référence enregistrée et depuis la base enregistrée)
+le confirme ; sans relevé, un contrôle dont la commande montre web audit --preview --base ne l'est pas :
 sinon « audit web non prouvé ».
 Les reçus sont lus dans .apv/receipts/ du worktree, puis dans le magasin partagé pour les
 exécutions que le worktree n'a pas : la preuve d'un commit se vérifie depuis n'importe quel

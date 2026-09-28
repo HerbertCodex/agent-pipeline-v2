@@ -7,8 +7,12 @@
  */
 /** Variable naming the file where `apv web audit` writes its record for the receipt of the check that runs it (`apv gates run`). */
 export declare const WEB_RECORD = "APV_WEB_RECORD";
-/** Always with a web effect: the audit configuration itself, the dependencies and their resolution. */
-export declare const ALWAYS_WEB_PATHS: readonly [".apv/config.json", "**/package.json", ...string[]];
+/**
+ * Always with a web effect, even inside `neutralPaths`: the audit configuration, the dependencies and their resolution,
+ * the pages written as content under a source or served folder (`src/routes/blog/+page.md`, `src/content/post.md`), and
+ * the HTML of `docs/` (a site published from it, GitHub Pages).
+ */
+export declare const ALWAYS_WEB_PATHS: readonly [".apv/config.json", "**/package.json", ...string[], "docs/**/*.html"];
 export interface ImpactSettings {
     neutralPaths?: readonly string[] | undefined;
     paths?: readonly string[] | undefined;

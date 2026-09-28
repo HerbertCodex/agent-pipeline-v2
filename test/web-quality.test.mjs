@@ -111,7 +111,7 @@ test('thresholds: ambitious defaults, a category under its minimum, a metric ove
 test('the web section: defaults, validation and refusals of the common loader', () => {
   const web = webSchema.parse({ pages: ['/', '/faq'] });
   assert.deepEqual([web.lighthouse, web.runs, web.formFactors, web.categories.length, web.reportsDir, web.queue, web.locale, web.neutralPaths, web.paths],
-    ['13.5.0', 3, ['mobile', 'desktop'], 5, '.apv/web', true, 'fr', ['tests/**', 'docs/**', '**/*.md', '.github/**'], []]);
+    ['13.5.0', 3, ['mobile', 'desktop'], 5, '.apv/web', true, 'fr', ['tests/**', 'e2e/**', '.github/**', '*.md', 'docs/**'], []]);
   assert.deepEqual(web.checks, { status: 'refuse', robots: 'refuse', sitemap: 'refuse', canonical: 'refuse', title: 'refuse', description: 'refuse', lang: 'refuse', jsonLd: 'refuse', hreflang: 'refuse', llmsTxt: 'off' });
   assert.equal(web.load.max, undefined);
   for (const bad of [{ pages: [] }, { pages: ['faq'] }, { pages: ['//evil.test/'] }, { pages: ['/#x'] }, { pages: ['/'], lighthouse: 'latest' },
@@ -270,7 +270,12 @@ test('robots.txt as Google reads it: BOM, product tokens, merged groups, percent
 
 test('audit required by default: any change outside the files without web effect; manifests, lock files, config and web.paths always count', () => {
   const settings = webSchema.parse({ pages: ['/'] });
-  assert.deepEqual(webImpact(['tests/e2e/a.spec.ts', 'docs/guide.md', 'README.md', 'src/lib/README.md', '.github/workflows/ci.yml'], settings), { required: false, files: [] });
+  assert.deepEqual(webImpact(['tests/e2e/a.spec.ts', 'e2e/b.spec.ts', 'docs/guide.md', 'docs/adr/001.md', 'README.md', 'CHANGELOG.md', '.github/workflows/ci.yml'], settings), { required: false, files: [] });
+  // Markdown is content for many sites (mdsvex, Astro, VitePress): only at the root is it neutral; docs/ HTML may be a published site.
+  for (const file of ['src/routes/blog/+page.md', 'src/content/post.md', 'content/blog/a.mdx', 'src/lib/Card.svx', 'static/legal.md', 'public/page.html',
+    'apps/web/src/routes/+page.md', 'docs/index.html', 'docs/guide/page.html', 'guide/intro.md']) {
+    assert.equal(webImpact([file], settings).required, true, file);
+  }
   for (const file of ['src/hooks.server.ts', 'src/routes/+page.ts', 'src/routes/+layout.ts', 'src/routes/api/+server.ts', 'src/lib/db.ts', 'svelte.config.js', 'vite.config.ts',
     'static/robots.txt', 'src/app.html', 'Makefile']) {
     assert.deepEqual(webImpact(['docs/x.md', file], settings), { required: true, files: [file] }, file);

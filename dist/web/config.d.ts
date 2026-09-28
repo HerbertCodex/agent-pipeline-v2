@@ -76,8 +76,11 @@ export declare const webThresholdsSchema: import("../domain/schema.js").Schema<{
 export type WebThresholds = Infer<typeof webThresholdsSchema>;
 /** A page: an absolute path of the site, query allowed, never a fragment, a backslash nor an origin (the resolved URL is checked too). */
 export declare const PAGE_PATH: RegExp;
-/** Default files without any effect on the served site: a change limited to them needs no audit. */
-export declare const DEFAULT_NEUTRAL_PATHS: readonly ["tests/**", "docs/**", "**/*.md", ".github/**"];
+/**
+ * Default files without any effect on the served site: a change limited to them needs no audit. Narrow on purpose:
+ * Markdown at the root only (README, CHANGELOG), never under a source or served folder (see ALWAYS_WEB_PATHS).
+ */
+export declare const DEFAULT_NEUTRAL_PATHS: readonly ["tests/**", "e2e/**", ".github/**", "*.md", "docs/**"];
 /**
  * Chrome options refused in `web.chromeFlags`: they run another program, open the browser to the network, load code
  * or reroute the traffic; the measure would no longer be the one of a plain headless Chrome.

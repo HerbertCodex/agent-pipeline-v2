@@ -29,8 +29,9 @@ export interface VerifyOptions {
  * - `missing`: no receipt at this commit with the current configuration;
  * - `unrepeated`: that latest receipt succeeded, but the check declares `repeatChanged` and the receipt does not show
  *   the repetition of every test file the commit adds or modifies (run without a base, a base too close, files missing);
- * - `unaudited`: that latest receipt succeeded, but the check runs `apv web audit --preview --base <ref>`, the receipt
- *   says « audit not required » (or records nothing) and the recomputation from the commit says required.
+ * - `unaudited`: that latest receipt succeeded, but its record of `apv web audit` says « audit not required » (whatever
+ *   the command that ran it) and the recomputation from the commit says required; or the command shows such an audit
+ *   and the receipt records nothing.
  */
 export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'unaudited';
 export interface GateEvidence {

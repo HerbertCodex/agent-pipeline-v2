@@ -365,7 +365,15 @@ test('apv gates verify recomputes « not required » from the commit: a skip pro
   const text = await apv(p.repo, ['gates', 'verify', '--commit', 'HEAD'], p.env);
   assert.match(text.stdout, /web\s+audit web non prouvé/);
   assert.match(text.stdout, /Audit web non prouvé \(apv web audit --preview --base\)/);
-  // A receipt without record (an older apv, another command) proves no skip either.
+  // The record decides, not the argv: a wrapped command (a script, apv lock run...) that records « not required » is recomputed too.
+  const wrapped = `require('node:fs').writeFileSync(process.env.APV_WEB_RECORD, JSON.stringify({ required: false, base: null, reference: 'base', files: [], changed: 0, auditId: null, ok: true }))`;
+  write(p.repo, '.apv/config.json', await config([process.execPath, '-e', wrapped]));
+  git(p.repo, 'commit', '-qam', 'commande enveloppée');
+  await apv(p.repo, ['gates', 'run', '--stage', 'full'], p.env);
+  const hidden = await apv(p.repo, ['gates', 'verify', '--commit', 'HEAD', '--json'], p.env);
+  assert.equal(hidden.json().gates[0].state, 'unaudited', JSON.stringify(hidden.json().gates[0]));
+  assert.deepEqual(hidden.json().auditing, ['web']);
+  // A receipt without record (an older apv) of a command that shows the audit proves no skip either.
   write(p.repo, '.apv/config.json', await config([process.execPath, '-e', '0', 'web', 'audit', '--preview', '--base', 'base']));
   git(p.repo, 'commit', '-qam', 'sans relevé');
   await apv(p.repo, ['gates', 'run', '--stage', 'full'], p.env);

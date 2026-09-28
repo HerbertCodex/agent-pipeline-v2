@@ -32,9 +32,11 @@ warn ou off). On mesure ce que le projet contrôle : aucun classement n'est prom
                     marche), sous le verrou preview:<projet> ; --wait borne l'attente du verrou (30m).
   --base <ref>      avec --preview (contrôle d'une PR) : audit sauf si TOUS les fichiers changés depuis
                     la base commune de <ref> et de HEAD sont sans effet web (web.neutralPaths : tests/**,
-                    docs/**, **/*.md, .github/** par défaut ; .apv/config.json, package.json, fichiers de
-                    verrouillage et web.paths comptent toujours) ; alors « non requis », sortie 0. Base
-                    commune égale à HEAD (HEAD égal à <ref> ou en amont) ou <ref> introuvable : sortie 2.
+                    e2e/**, .github/**, *.md à la racine, docs/** par défaut ; .apv/config.json, package.json,
+                    verrous, .md/.mdx/.svx/.html sous src/, content/, static/, public/, docs/**/*.html et
+                    web.paths comptent toujours) ; alors « non requis », sortie 0. Base commune égale à
+                    HEAD (HEAD égal à <ref> ou en amont) ou <ref> introuvable : sortie 2 ; sur la branche
+                    principale, utiliser --production ou --url.
                     Obligatoire avec --preview dans une suite complète (APV_SUITE_RUN) ; apv gates verify
                     recalcule « non requis » depuis le commit.
   --page <chemin>   limite aux pages données (répétable), déclarées ou non dans web.pages.

@@ -14,8 +14,17 @@ import { DEFAULT_NEUTRAL_PATHS } from './config.js';
 /** Variable naming the file where `apv web audit` writes its record for the receipt of the check that runs it (`apv gates run`). */
 export const WEB_RECORD = 'APV_WEB_RECORD';
 
-/** Always with a web effect: the audit configuration itself, the dependencies and their resolution. */
-export const ALWAYS_WEB_PATHS = ['.apv/config.json', '**/package.json', ...DEFAULT_GENERATED_PATHS] as const;
+/** Content formats a site may render (mdsvex, Astro, VitePress, Jekyll...). */
+const CONTENT_EXTENSIONS = ['md', 'mdx', 'svx', 'html'] as const;
+/** Folders whose content may be served: sources, content collections, static and public assets. */
+const SERVED_FOLDERS = ['src', 'content', 'static', 'public'] as const;
+/**
+ * Always with a web effect, even inside `neutralPaths`: the audit configuration, the dependencies and their resolution,
+ * the pages written as content under a source or served folder (`src/routes/blog/+page.md`, `src/content/post.md`), and
+ * the HTML of `docs/` (a site published from it, GitHub Pages).
+ */
+export const ALWAYS_WEB_PATHS = ['.apv/config.json', '**/package.json', ...DEFAULT_GENERATED_PATHS,
+  ...SERVED_FOLDERS.flatMap(dir => CONTENT_EXTENSIONS.map(ext => `**/${dir}/**/*.${ext}`)), 'docs/**/*.html'] as const;
 
 export interface ImpactSettings { neutralPaths?: readonly string[] | undefined; paths?: readonly string[] | undefined }
 export interface Impact { required: boolean; files: string[] }
