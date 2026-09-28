@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { IDENTITY_HINT } from '../run/commit-state.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { errorMessage } from '../domain/errors.js';
 import { anomalies, parsePullRequest, VIEW_FIELDS, type GhCall, type GhRunner, type PullRequest } from './github.js';
@@ -201,7 +203,15 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     if (!head) return stop(item.number, [`tête ${item.pr!.headRefOid} de la PR #${item.number} introuvable sur ${options.remote} (refs/pull/${item.number}/head)`]);
     members.push({ number: item.number, headRefName: item.pr!.headRefName, head });
   }
-  const name = `apv/lot-${stamp((options.now ?? (() => new Date()))())}`;
+  // A batch commits its merges: without an identity, a clear refusal before anything is built.
+  const ident = await options.git.run(options.repo, ['-c', 'user.useConfigOnly=true', 'var', 'GIT_COMMITTER_IDENT']);
+  const author = await options.git.run(options.repo, ['-c', 'user.useConfigOnly=true', 'var', 'GIT_AUTHOR_IDENT']);
+  if (!ident.ok || !author.ok) return stop(null, [`lot impossible à construire : ${IDENTITY_HINT}`]);
+  // Unique name: two batches started in the same second (a batch, then its bisection) never share a branch.
+  const base0 = `apv/lot-${stamp((options.now ?? (() => new Date()))())}`;
+  let name = base0;
+  for (let k = 2; (await options.git.run(options.repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])).ok ||
+    (options.dir === undefined && existsSync(join(options.common, 'apv', 'lots', name.replace(/\//g, '-')))); k += 1) name = `${base0}-${k}`;
   const dir = options.dir ?? join(options.common, 'apv', 'lots', name.replace(/\//g, '-'));
   let counter = 0;
   const prove = async (list: typeof members, suffix: string): Promise<Lot> => {

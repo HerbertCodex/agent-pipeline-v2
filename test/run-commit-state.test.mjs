@@ -80,3 +80,15 @@ test('the state is not committed with --no-commit-state, nor on another branch, 
   assert.equal(suffixed.code, 0, suffixed.stdout);
   assert.match(suffixed.stdout, /état commité sur apv\/livraison-livraison/);
 });
+
+test('without a Git identity the state is not committed, with a clear message', async t => {
+  const p = project(t);
+  git(p.repo, 'switch', '-q', '-c', 'apv/livraison');
+  await p.run('start', 'livraison');
+  const head = git(p.repo, 'rev-parse', 'HEAD');
+  const none = { HOME: p.root, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: '', GIT_AUTHOR_EMAIL: '', GIT_COMMITTER_NAME: '', GIT_COMMITTER_EMAIL: '', EMAIL: '' };
+  const r = await apv(p.repo, ['run', 'save', 'livraison'], { APV_LOCK_DIR: join(p.root, 'locks'), ...none });
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /état non commité : identité Git absente : git config user\.name/);
+  assert.equal(git(p.repo, 'rev-parse', 'HEAD'), head);
+});

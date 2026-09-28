@@ -16,4 +16,8 @@ export interface StateCommit {
 }
 /** The files of the state of an execution, relative to the root of its checkout. */
 export declare const stateFiles: (specId: string) => string[];
-export declare function commitRunState(checkout: string, specId: string, branch: string, label: string): StateCommit;
+/** The refusal when Git has no identity for a commit here (user.name and user.email, or GIT_AUTHOR_* and GIT_COMMITTER_*). */
+export declare const IDENTITY_HINT = "identit\u00E9 Git absente : git config user.name \"Votre Nom\" && git config user.email \"vous@exemple.fr\" (--global pour tous les d\u00E9p\u00F4ts), ou GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME et GIT_COMMITTER_EMAIL dans l'environnement";
+/** Whether Git has an identity for a commit in `cwd`, never guessed from the host (`user.useConfigOnly`). */
+export declare function hasGitIdentity(cwd: string, env: NodeJS.ProcessEnv): boolean;
+export declare function commitRunState(checkout: string, specId: string, branch: string, label: string, env?: NodeJS.ProcessEnv): StateCommit;

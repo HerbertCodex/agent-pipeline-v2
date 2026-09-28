@@ -182,3 +182,20 @@ test('an unforeseen Git failure stops the batch with a report, never a crash', a
   assert.match(r.json().stopped.reasons[0], /erreur inattendue : git worktree add/);
   assert.equal(p.log().at(-1).event, 'batch-stop');
 });
+
+test('without a Git identity the batch is refused before anything is built', async t => {
+  const p = batchProject(t);
+  const none = { HOME: p.root, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: '', GIT_AUTHOR_EMAIL: '', GIT_COMMITTER_NAME: '', GIT_COMMITTER_EMAIL: '', EMAIL: '' };
+  const r = await p.run(['11', '12', '--json'], none);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.json().stopped.reasons[0], /lot impossible à construire : identité Git absente/);
+  assert.deepEqual(r.json().lots, []);
+});
+
+test('two batches started in the same second get two branches', async t => {
+  const p = batchProject(t);
+  const [a, b] = [await p.run(['12', '--json']), await p.run(['12', '--json'])];
+  assert.equal(a.code, 0, a.stdout + a.stderr);
+  assert.equal(b.code, 0, b.stdout + b.stderr);
+  assert.notEqual(a.json().proven.name, b.json().proven.name);
+});

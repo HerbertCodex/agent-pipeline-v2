@@ -206,7 +206,7 @@ async function set(repo: string, positionals: string[], values: Record<string, s
   // At the delivery, the state is committed: the full suite of the delivery then starts from a clean tree.
   let saved: StateCommit | null = null;
   if (target.kind === 'step' && target.name === 'delivery' && status === 'running' && values['no-commit-state'] !== true) {
-    saved = commitRunState(repo, specId, readRunState(file, { specId }).branch, 'livraison');
+    saved = commitRunState(repo, specId, readRunState(file, { specId }).branch, 'livraison', io.env);
   }
   // The transition is recorded whatever happens to the commit: a refused commit is said, never an error of the transition.
   if (values['json']) { json(io, { specId, target: name, from: result.from, to: status, event: result.event, resolved, ...(saved ? { stateCommit: saved } : {}) }); return EXIT.ok; }
@@ -236,7 +236,7 @@ function save(repo: string, positionals: string[], asJson: boolean, io: CommandI
   if (rest.length) throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
   const file = runStateFile(repo, specId);
   const state = readRunState(file, { shown: posix(relative(repo, file)), specId });
-  const saved = commitRunState(repo, specId, state.branch, 'sauvegarde');
+  const saved = commitRunState(repo, specId, state.branch, 'sauvegarde', io.env);
   if (asJson) json(io, { specId, stateCommit: saved });
   else io.stdout(`${saveLine(saved)}\n`);
   return saved.refused ? EXIT.failed : EXIT.ok;
