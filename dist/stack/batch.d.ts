@@ -42,8 +42,18 @@ export interface BatchOptions {
     log: (line: string) => void;
     pollMs: number;
     pollAttempts: number;
-    /** Proves a batch head in its worktree (setup, full suite, verify). */
-    prove: (worktree: string, head: string) => Promise<Proof>;
+    /**
+     * Proves a batch head in its worktree (setup, full suite, verify), with the configuration of the target at `base`:
+     * a batch is never proven by the checks it brings.
+     */
+    prove: (worktree: string, head: string, base: string) => Promise<Proof>;
+    /**
+     * Why the head of a pull request changes the checks against the target at `base` (`gates`, `batch`, `stacks`,
+     * `suite`, `environment` of `.apv/config.json`, or an unreadable configuration), or null when it does not.
+     */
+    configDrift: (base: string, head: string) => string | null;
+    /** Aborted by SIGINT, SIGTERM or SIGHUP: the batch stops at the next step, never between a check and a merge. */
+    signal?: AbortSignal;
     /** Journals one merge or stop of the batch; returns an error message when it could not. */
     journal: (entry: Record<string, unknown>) => string | null;
     now?: () => Date;
@@ -96,6 +106,16 @@ export interface BatchReport {
         lot: string;
         identical: boolean;
     } | null;
+    /** True when a signal stopped the batch (exit 128 + signal). */
+    interrupted: boolean;
+    /**
+     * The pull requests asked for that the proven batch leaves out (in conflict, or isolated as faulty): the batch is
+     * then partial, never a success (exit 1), even when the rest is proven and merged.
+     */
+    left: {
+        pr: number;
+        reason: string;
+    }[];
 }
 /**
  * `apv stack batch`: reads the pull requests, builds the batch, proves it once, bisects on failure when asked, and,

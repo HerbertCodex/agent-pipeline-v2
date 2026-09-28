@@ -77,12 +77,11 @@ export function killProblem(segments, ancestors) {
   let feedsKill = false;
   let pgrepFull = false;
   let readsPpid = false;
-  for (const words of segments) {
+  for (const [index, words] of segments.entries()) {
     const cw = commandWords(words);
     if (!cw) continue;
     const [cmd, ...args] = cw.words;
     const tool = name(cmd);
-    if (words.some(w => /ppid/i.test(w))) readsPpid = true;
     if (tool === 'killall') return HARNESS_REASONS.killall;
     if (tool === 'pgrep' && args.some(a => a === '-f' || a === '--full' || hasShortFlag(a, 'f'))) pgrepFull = true;
     if (tool === 'pkill') {
@@ -104,7 +103,13 @@ export function killProblem(segments, ancestors) {
       continue;
     }
     if (tool !== 'kill') continue;
+    // `kill -0 <pid>` (and -s 0, -n 0) only tests that a process exists: never a kill.
+    if (args.some((a, k) => a === '-0' || ((a === '-s' || a === '-n' || a === '--signal') && args[k + 1] === '0'))) continue;
     feedsKill = true;
+    // A ppid read by the kill itself: in its arguments (a quoted substitution), or by the substitution that
+    // follows it (`kill $(ps -o ppid= -p $$)`, split by the tokenizer). A ppid elsewhere (`ps -o pid,ppid`) is data.
+    const next = segments[index + 1] ?? [];
+    if (args.some(a => /ppid/i.test(a) && a !== '$PPID') || (args.every(a => a.startsWith('-')) && next.some(w => /ppid/i.test(w)))) readsPpid = true;
     const targets = [];
     let endOfOptions = false;
     let signalSeen = false;
@@ -327,8 +332,9 @@ export function supabaseCommand(words) {
   }
   const [a, b] = positionals;
   const local = args.includes('--local') || !args.some(x => x === '--linked' || x.startsWith('--db-url') || x.startsWith('--project-ref'));
-  const mutating = a === 'start' || a === 'stop' || a === 'seed' ||
-    (a === 'db' && (['reset', 'start'].includes(b) || (['diff', 'push'].includes(b) && local))) ||
+  // `db reset --linked` (or --db-url) resets a remote database, never a local stack.
+  const mutating = a === 'start' || a === 'stop' || (a === 'seed' && local) ||
+    (a === 'db' && (b === 'start' || (['reset', 'diff', 'push'].includes(b) && local))) ||
     (a === 'migration' && ['up', 'down'].includes(b) && local) || (a === 'test' && b === 'db');
   if (!mutating) return null;
   const projectEnv = [...cw.assignments, ...words.filter(isAssignment)].find(w => w.startsWith('SUPABASE_PROJECT_ID='))?.slice('SUPABASE_PROJECT_ID='.length) ?? null;

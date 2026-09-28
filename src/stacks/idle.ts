@@ -45,6 +45,8 @@ export interface StackRecord {
   freeSince: string | null;
   stoppedAt: string | null;
   startedAt: string | null;
+  /** Last check of `apv gates run` that passed under its lock: the stack answered then. */
+  upAt: string | null;
 }
 
 export interface Observation {
@@ -76,11 +78,11 @@ export const stacksDir = (common: string): string => join(common, 'apv', 'stacks
 const recordPath = (common: string, id: string): string => join(stacksDir(common), `${id.replace(/[^A-Za-z0-9._-]/g, '_')}.json`);
 
 export function readRecord(common: string, id: string): StackRecord {
-  const empty: StackRecord = { version: 1, id, lastObservedAt: null, lastUsedAt: null, freeSince: null, stoppedAt: null, startedAt: null };
+  const empty: StackRecord = { version: 1, id, lastObservedAt: null, lastUsedAt: null, freeSince: null, stoppedAt: null, startedAt: null, upAt: null };
   try {
     const raw = JSON.parse(readFileSync(recordPath(common, id), 'utf8')) as Partial<StackRecord>;
     const at = (v: unknown): string | null => typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? v : null;
-    return { ...empty, lastObservedAt: at(raw.lastObservedAt), lastUsedAt: at(raw.lastUsedAt), freeSince: at(raw.freeSince), stoppedAt: at(raw.stoppedAt), startedAt: at(raw.startedAt) };
+    return { ...empty, lastObservedAt: at(raw.lastObservedAt), lastUsedAt: at(raw.lastUsedAt), freeSince: at(raw.freeSince), stoppedAt: at(raw.stoppedAt), startedAt: at(raw.startedAt), upAt: at(raw.upAt) };
   } catch { return empty; }
 }
 
@@ -103,11 +105,11 @@ export function journal(common: string, entry: Record<string, unknown>): void {
 }
 
 /** Notes a known use of the stacks (a check of `apv gates run` under their lock that just ended). */
-export function markStacksUsed(common: string, ids: readonly string[], at = new Date()): void {
+export function markStacksUsed(common: string, ids: readonly string[], passed = false, at = new Date()): void {
   for (const id of ids) {
     try {
       const record = readRecord(common, id);
-      writeRecord(common, { ...record, lastUsedAt: at.toISOString(), freeSince: null });
+      writeRecord(common, { ...record, lastUsedAt: at.toISOString(), freeSince: null, ...(passed ? { upAt: at.toISOString() } : {}) });
     } catch { /* a missing note only delays an idle stop */ }
   }
 }
@@ -293,4 +295,16 @@ export async function idlePass(stacks: readonly ResolvedStack[], context: ProbeC
     journal(context.common, { event: result.ok ? 'stopped' : 'stop-failed', stack: stack.id, idleMs: seen.idleMs, command: stack.config.stop, output: result.output.slice(-1000) });
   }
   return out;
+}
+
+/**
+ * The stop by `apv stacks idle-stop` not followed by a restart: `stoppedAt` later than `apv stacks start` and than
+ * the last check that passed under its lock. Null when the stack is not known to be stopped.
+ */
+export function stoppedSince(common: string, id: string): string | null {
+  const r = readRecord(common, id);
+  if (!r.stoppedAt) return null;
+  const stopped = Date.parse(r.stoppedAt);
+  const up = Math.max(r.startedAt ? Date.parse(r.startedAt) : 0, r.upAt ? Date.parse(r.upAt) : 0);
+  return stopped > up ? r.stoppedAt : null;
 }

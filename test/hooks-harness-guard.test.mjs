@@ -175,3 +175,17 @@ test('without declared stacks, docker and supabase commands are never blocked', 
     assert.equal(runHook(command, repo).decision, 'allow', command);
   }
 });
+
+test('data that mentions a ppid, a liveness check (kill -0) and a remote reset are not refused', t => {
+  for (const command of ['ps -o pid,ppid,cmd; kill 12345', 'ps -eo pid,ppid | grep node', 'kill -0 4242', 'kill -s 0 4100', 'kill -n 0 900']) {
+    assert.equal(evaluateCommand(command, {}, withAncestors).decision, 'allow', command);
+  }
+  for (const command of ['kill $(ps -o ppid= -p $$)', 'kill "$(ps -o ppid= -p $$)"', 'kill -9 $PPID']) {
+    assert.equal(evaluateCommand(command, {}, withAncestors).decision, 'deny', command);
+  }
+  const { repo } = stackRepo(t);
+  for (const command of ['npx supabase db reset --linked', 'supabase db reset --db-url postgresql://u@db.example/x', 'supabase seed --linked']) {
+    assert.equal(runHook(command, repo).decision, 'allow', command);
+  }
+  assert.equal(runHook('npx supabase db reset --local', repo).decision, 'deny');
+});

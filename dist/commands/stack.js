@@ -7,7 +7,8 @@ import { MAX_OVERRIDE_REASON } from '../run/state.js';
 import { cleanLine } from '../run/summary.js';
 import { MERGE_REFUSED, mergeStack, planStack, processGh } from '../stack/github.js';
 import { batchMerge, processGit } from '../stack/batch.js';
-import { loadConfig } from '../config/load.js';
+import { loadConfigAtCommit } from '../config/load.js';
+import { hash } from '../domain/hash.js';
 import { runGates } from '../gates/run.js';
 import { verifyGates } from '../gates/verify.js';
 import { success } from '../engine/scheduler.js';
@@ -258,8 +259,31 @@ async function batch(prs, values, io) {
         process.on(signal, handler);
         return [signal, handler];
     });
-    const prove = async (worktree, head) => {
-        const loaded = loadConfig(worktree);
+    /** The sections of the configuration that decide what proves a batch: the checks, their variables, the stacks, the setup. */
+    const checksOf = (config) => hash({ gates: config.gates, passEnv: config.environment.passEnv, batch: config.batch ?? null, stacks: config.stacks ?? null, suite: config.suite ?? null });
+    const atCommit = (sha) => loadConfigAtCommit(repo, sha);
+    // What the pull request changes: its head against its merge base with the target (a target that moved since is not its change).
+    const configDrift = (base, head) => {
+        const fork = gitRead(repo, ['merge-base', base, head]);
+        if (!fork)
+            return `aucune base commune avec la cible`;
+        let before;
+        try {
+            before = checksOf(atCommit(fork).config);
+        }
+        catch (error) {
+            return `configuration illisible à la base de la PR : ${errorMessage(error)}`;
+        }
+        try {
+            return checksOf(atCommit(head).config) === before ? null : 'elle change gates, environment.passEnv, batch, stacks ou suite de .apv/config.json';
+        }
+        catch (error) {
+            return `configuration de la PR illisible : ${errorMessage(error)}`;
+        }
+    };
+    const prove = async (worktree, head, base) => {
+        // The checks, the setup and the verification come from the target, never from the batch they prove.
+        const loaded = atCommit(base);
         const settings = loaded.config.batch;
         if (settings?.setup) {
             log(`Lot : préparation de la copie (${settings.setup.join(' ')}).`);
@@ -284,7 +308,7 @@ async function batch(prs, values, io) {
             onCall: call => { calls.push(call); if (values.merge || call.status !== 0 || call.error)
                 (values.json ? io.stderr : io.stdout)(transcript(bin, call)); },
             pollMs: positiveInt(io.env['APV_STACK_POLL_MS'], 3000), pollAttempts: positiveInt(io.env['APV_STACK_POLL_ATTEMPTS'], 20),
-            prove, journal: entry => journalEntry(io, entry),
+            prove, configDrift, journal: entry => journalEntry(io, entry), signal: abort.signal,
             ...(values.target !== undefined ? { target: values.target } : {}), ...(values.dir !== undefined ? { dir: resolve(io.cwd, values.dir) } : {}),
         });
     }
@@ -292,12 +316,19 @@ async function batch(prs, values, io) {
         for (const [signal, handler] of handlers)
             process.off(signal, handler);
     }
+    const partial = !report.stopped && report.left.length > 0;
+    const status = report.interrupted ? 'interrompu' : report.stopped ? 'arrêté' : partial ? 'partiel' : values.merge ? 'fusionné' : 'prouvé';
     if (values.json)
-        json(io, { ...report, calls });
-    else
-        io.stdout(`${batchLines(report).join('\n')}\n${report.stopped ? '' : values.merge ? 'Lot fusionné.\n' : 'Lot prouvé : APV_ALLOW_MERGE=1 apv stack batch <mêmes PR> --merge le fusionne, sur ordre de l\'opérateur (une nouvelle suite tourne sur un nouveau lot).\n'}`);
+        json(io, { ...report, status, calls });
+    else {
+        const verdict = report.interrupted ? `Lot interrompu (${received ?? 'signal'}) : rien d'autre ne sera fusionné.\n`
+            : report.stopped ? ''
+                : partial ? `Lot PARTIEL : ${report.left.map(l => `#${l.pr} (${l.reason})`).join(', ')} hors du lot${values.merge ? ' ; les autres sont fusionnées' : ''}. Les PR laissées se traitent à part.\n`
+                    : values.merge ? 'Lot fusionné.\n' : 'Lot prouvé : APV_ALLOW_MERGE=1 apv stack batch <mêmes PR> --merge le fusionne, sur ordre de l\'opérateur (une nouvelle suite tourne sur un nouveau lot).\n';
+        io.stdout(`${batchLines(report).join('\n')}\n${verdict}`);
+    }
     if (received)
         return signalExitCode(received);
-    return report.stopped ? EXIT.failed : EXIT.ok;
+    return report.stopped || partial ? EXIT.failed : EXIT.ok;
 }
 //# sourceMappingURL=stack.js.map

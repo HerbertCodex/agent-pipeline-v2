@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
@@ -91,4 +91,38 @@ test('a copy that cannot be prepared: its checks are not run and say why; wrong 
   const unknown = await p.run('--stacks', '1,9');
   assert.equal(unknown.code, 1);
   assert.match(unknown.stderr, /--stacks : pile inconnue 9/);
+});
+
+test('--stacks refuses a check that does not receive the variables selecting its stack; the other keys of an env file are only listed', { skip: !hasFlock && 'flock(1) missing' }, async t => {
+  const p = project(t, { holdMs: 50 });
+  const config = JSON.parse(readFileSync(join(p.repo, '.apv/config.json'), 'utf8'));
+  config.gates[2].passEnv = ['STACK_URL', 'LOCK_FILE'];
+  writeFileSync(join(p.repo, '.apv/config.json'), JSON.stringify(config));
+  git(p.repo, 'commit', '-qam', 'passEnv sans STACK');
+  const r = await p.run('--stacks', '1,2');
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /--stacks : le contrôle browser ne reçoit pas STACK, variable\(s\) qui désignent la pile 2 \(stacks\.2\.env\)/);
+  assert.ok(!existsSync(join(p.out, 'integration.json')), 'nothing ran');
+  config.gates[2].passEnv = ['STACK', 'STACK_URL', 'LOCK_FILE'];
+  writeFileSync(join(p.repo, '.apv/config.json'), JSON.stringify(config));
+  git(p.repo, 'commit', '-qam', 'passEnv avec STACK');
+  const ok = await p.run('--stacks', '1,2', '--json');
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.deepEqual(ok.json().spread.find(a => a.gate === 'browser').notPassed, ['IGNORED']);
+  assert.match(ok.stderr, /Note : browser ne reçoit pas IGNORED du fichier d'environnement de la pile 2/);
+});
+
+test('a suite warns when a stack it locks was stopped by apv stacks idle-stop and not restarted', { skip: !hasFlock && 'flock(1) missing' }, async t => {
+  const p = project(t, { holdMs: 50 });
+  const dir = join(p.common, 'apv', 'stacks');
+  mkdirSync(dir, { recursive: true });
+  const at = new Date(Date.now() - 60_000).toISOString();
+  writeFileSync(join(dir, '1.json'), JSON.stringify({ version: 1, id: '1', lastObservedAt: at, lastUsedAt: at, freeSince: null, stoppedAt: at, startedAt: null, upAt: null }));
+  const r = await p.run('--json');
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(r.json().stoppedStacks.map(x => [x.stack, x.gates]), [['1', ['integration', 'browser']]]);
+  assert.match(r.stderr, /ATTENTION : la pile 1 a été arrêtée par apv stacks idle-stop le .* Redémarrer d'abord : apv stacks start 1\./);
+  // The checks passed under its lock: the stack answered, the warning is gone.
+  const again = await p.run('--json');
+  assert.deepEqual(again.json().stoppedStacks, []);
 });

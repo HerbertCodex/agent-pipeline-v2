@@ -30,6 +30,8 @@ export interface StackRecord {
     freeSince: string | null;
     stoppedAt: string | null;
     startedAt: string | null;
+    /** Last check of `apv gates run` that passed under its lock: the stack answered then. */
+    upAt: string | null;
 }
 export interface Observation {
     id: string;
@@ -48,7 +50,7 @@ export declare function writeRecord(common: string, record: StackRecord): void;
 /** Appends one decision to `<git common dir>/apv/stacks/events.log` (one JSON object per line, rotated at 1 MB). */
 export declare function journal(common: string, entry: Record<string, unknown>): void;
 /** Notes a known use of the stacks (a check of `apv gates run` under their lock that just ended). */
-export declare function markStacksUsed(common: string, ids: readonly string[], at?: Date): void;
+export declare function markStacksUsed(common: string, ids: readonly string[], passed?: boolean, at?: Date): void;
 /** The stacks whose lock is the lock of this check (same flock file, or same lease resource). */
 export declare function stacksOfLock(stacks: readonly ResolvedStack[], lock: {
     kind: 'lease';
@@ -109,3 +111,8 @@ export declare function idlePass(stacks: readonly ResolvedStack[], context: Prob
     dryRun: boolean;
     now?: number;
 }): Promise<IdleDecision[]>;
+/**
+ * The stop by `apv stacks idle-stop` not followed by a restart: `stoppedAt` later than `apv stacks start` and than
+ * the last check that passed under its lock. Null when the stack is not known to be stopped.
+ */
+export declare function stoppedSince(common: string, id: string): string | null;

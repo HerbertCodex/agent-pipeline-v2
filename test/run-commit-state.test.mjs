@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { chmodSync } from 'node:fs';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 
@@ -91,4 +92,16 @@ test('without a Git identity the state is not committed, with a clear message', 
   assert.equal(r.code, 1, r.stdout + r.stderr);
   assert.match(r.stdout, /état non commité : identité Git absente : git config user\.name/);
   assert.equal(git(p.repo, 'rev-parse', 'HEAD'), head);
+});
+
+test('the state commit never runs the hooks of the project', async t => {
+  const p = project(t);
+  git(p.repo, 'switch', '-q', '-c', 'apv/livraison');
+  await p.run('start', 'livraison');
+  write(p.repo, '.git/hooks-projet/pre-commit', '#!/bin/sh\nexit 1\n');
+  chmodSync(join(p.repo, '.git/hooks-projet/pre-commit'), 0o755);
+  git(p.repo, 'config', 'core.hooksPath', '.git/hooks-projet');
+  const r = await apv(p.repo, ['run', 'save', 'livraison'], { APV_LOCK_DIR: join(p.root, 'locks'), GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@localhost', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@localhost' });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /état commité sur apv\/livraison/);
 });

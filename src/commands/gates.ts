@@ -324,7 +324,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
         stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
         reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
         sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
-        suite: result.suite, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, interrupted: received,
+        suite: result.suite, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, interrupted: received,
         rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
           level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
     } else {
@@ -338,6 +338,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       }
       if (result.ports?.stopped.length) lines.push(`Orphelins de cette copie arrêtés sur les ports de la suite : ${result.ports.stopped.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}.`);
       if (result.ports?.left.length) lines.push(`Ports de la suite tenus par d'autres processus, non arrêtés : ${result.ports.left.map(p => `pid ${p.pid} (${p.ports.join(', ')}, ${p.reason})`).join(', ')}.`);
+      for (const x of result.stoppedStacks) lines.push(`ATTENTION : pile ${x.stack} arrêtée par apv stacks idle-stop le ${x.since}, pas redémarrée depuis (${x.gates.join(', ')}) : apv stacks start ${x.stack}, puis relancer si ces contrôles échouent.`);
       if (result.spread) lines.push(`Répartition sur les piles : ${result.spread.map(a => `${a.gate} sur la pile ${a.stack}${a.workspace === result.repo ? '' : ' (copie détachée)'}${a.error ? ` : copie non préparée, ${a.error}` : ''}`).join(', ') || 'aucun contrôle de pile'}.`);
       const end = result.cleanup;
       if (end?.stopped.length) lines.push(`Fin de suite : processus lancés par la suite encore vivants, arrêtés : ${end.stopped.map(p => `pid ${p.pid}${p.ports.length ? ` (${p.ports.join(', ')})` : ''}`).join(', ')}.`);

@@ -80,11 +80,18 @@ export interface GateRunResult {
     flaky: string[];
     /** The end of a full suite: processes it started still alive, and orphans of this copy on `suite.ports`, stopped. */
     cleanup: CleanupRecord | null;
+    /** Stacks the checks lock that `apv stacks idle-stop` stopped and nothing restarted since: their checks will likely fail. */
+    stoppedStacks: {
+        stack: string;
+        since: string;
+        gates: string[];
+    }[];
     /** The checks spread over the stacks (`--stacks`): check, stack, copy where it ran; null without `--stacks`. */
     spread: {
         gate: string;
         stack: string;
         workspace: string;
+        notPassed: string[];
         error: string | null;
     }[] | null;
     ok: boolean;

@@ -16,7 +16,11 @@ import { commonPath, type GateLock } from './suite.js';
  * commit, prepared by `batch.setup`, with the variables of its stack and under its lock. A check with dependencies, or
  * that others depend on, stays in the copy of the suite (on the first stack): its inputs and outputs live there.
  */
-export interface SpreadAssignment { gateId: string; stack: ResolvedStack; workspace: string }
+export interface SpreadAssignment {
+  gateId: string; stack: ResolvedStack; workspace: string;
+  /** Keys of the env file of the stack the check does not receive (not in its passEnv): listed, never passed. */
+  notPassed: string[];
+}
 export interface SpreadCopy { stack: ResolvedStack; dir: string; gates: string[]; error: string | null }
 export interface SpreadPlan { assignments: Map<string, SpreadAssignment>; copies: SpreadCopy[] }
 
@@ -49,7 +53,21 @@ export async function planSpread(options: { git: Git; repo: string; common: stri
       copies.set(stack.id, copy);
       workspace = copy.dir;
     }
-    assignments.set(gate.id, { gateId: gate.id, stack, workspace });
+    // The variables that select the stack must reach the check: otherwise it would run against another stack
+    // (its default) while its receipt says this one.
+    const received = new Set([...options.config.environment.passEnv, ...gate.passEnv]);
+    const missing = Object.keys(stack.config.env ?? {}).filter(k => !received.has(k));
+    if (missing.length) {
+      throw new PipelineError('GATE_STACKS', `--stacks : le contrôle ${gate.id} ne reçoit pas ${missing.join(', ')}, variable(s) qui désignent la pile ${stack.id} (stacks.${stack.id}.env) : ` +
+        `l'ajouter à son passEnv, sinon il tournerait sur une autre pile que celle de son reçu.`);
+    }
+    // The env file is the whole environment of the stack: its other keys are not for this check, but are said.
+    let notPassed: string[] = [];
+    if (stack.envFile) {
+      try { notPassed = Object.keys(readEnvFile(stack.envFile)).filter(k => !received.has(k)); }
+      catch (error) { throw new PipelineError('GATE_STACKS', `--stacks : fichier d'environnement de la pile ${stack.id} illisible (${stack.envFile}) : ${errorMessage(error)}`); }
+    }
+    assignments.set(gate.id, { gateId: gate.id, stack, workspace, notPassed });
   }
   return { assignments, copies: [...copies.values()] };
 }

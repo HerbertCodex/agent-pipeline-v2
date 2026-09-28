@@ -14,6 +14,8 @@ export interface SpreadAssignment {
     gateId: string;
     stack: ResolvedStack;
     workspace: string;
+    /** Keys of the env file of the stack the check does not receive (not in its passEnv): listed, never passed. */
+    notPassed: string[];
 }
 export interface SpreadCopy {
     stack: ResolvedStack;

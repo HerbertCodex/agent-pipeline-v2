@@ -97,7 +97,8 @@ async function removeLot(options, lot) {
  * proven and asked, merges its pull requests in order, each checked by content before and after its merge.
  */
 export async function batchMerge(options) {
-    const report = { target: null, base: null, prs: [], lots: [], culprits: [], interaction: false, proven: null, merged: [], stopped: null, finalTree: null };
+    const report = { target: null, base: null, prs: [], lots: [], culprits: [], interaction: false, proven: null, merged: [], stopped: null, finalTree: null,
+        interrupted: false, left: [] };
     try {
         return await batchSteps(options, report);
     }
@@ -118,6 +119,14 @@ async function batchSteps(options, report) {
             report.stopped.reasons.push(`(journal non écrit : ${failed})`);
         return report;
     };
+    /** A signal received: the batch stops here, with what is already merged, and says so. */
+    const interrupted = async (pr, where) => {
+        report.interrupted = true;
+        for (const lot of report.lots)
+            await removeLot(options, lot);
+        return stop(pr, [`lot interrompu (signal) ${where} ; fusionnées : ${report.merged.length ? report.merged.map(n => `#${n}`).join(', ') : 'aucune'}`]);
+    };
+    const aborted = () => options.signal?.aborted === true;
     for (const n of options.prs) {
         const { pr, error } = await settled(options, n);
         report.prs.push({ number: n, pr, anomalies: error ? [error] : [] });
@@ -151,6 +160,12 @@ async function batchSteps(options, report) {
             return stop(item.number, [`tête ${item.pr.headRefOid} de la PR #${item.number} introuvable sur ${options.remote} (refs/pull/${item.number}/head)`]);
         members.push({ number: item.number, headRefName: item.pr.headRefName, head });
     }
+    // The batch is proven with the checks of the target: a pull request that changes them is proven alone.
+    const drifting = members.map(m => ({ m, why: options.configDrift(base.sha, m.head) })).filter(x => x.why !== null);
+    if (drifting.length) {
+        return stop(drifting[0].m.number, drifting.map(({ m, why }) => `PR #${m.number} change la configuration des contrôles par rapport à ${target} (${why}) : ` +
+            'un lot se prouve avec les contrôles de la cible ; prouver cette PR seule (sa suite complète, puis apv stack plan et apv stack merge) et la retirer du lot'));
+    }
     // A batch commits its merges: without an identity, a clear refusal before anything is built.
     const ident = await options.git.run(options.repo, ['-c', 'user.useConfigOnly=true', 'var', 'GIT_COMMITTER_IDENT']);
     const author = await options.git.run(options.repo, ['-c', 'user.useConfigOnly=true', 'var', 'GIT_AUTHOR_IDENT']);
@@ -174,7 +189,7 @@ async function batchSteps(options, report) {
         }
         options.log(`Lot ${lotName} : ${lot.members.map(m => `#${m.number}`).join(', ')} fusionnées sur ${target} (${short(base.sha)}), tête ${short(lot.head)} ; suite complète.`);
         try {
-            lot.proof = await options.prove(lot.dir, lot.head);
+            lot.proof = await options.prove(lot.dir, lot.head, base.sha);
         }
         catch (error) {
             lot.proof = { ok: false, runId: null, summary: `preuve impossible : ${errorMessage(error)}` };
@@ -205,14 +220,20 @@ async function batchSteps(options, report) {
         return found;
     };
     const whole = await prove(members, '');
+    if (aborted())
+        return interrupted(null, 'pendant la preuve du lot, avant toute fusion');
     let proven = whole.proof?.ok ? whole : null;
     if (!proven && options.bisect && whole.members.length > 1) {
         await removeLot(options, whole);
         const inLot = members.filter(m => whole.members.some(x => x.number === m.number));
         report.culprits = await culprits(inLot);
+        if (aborted())
+            return interrupted(null, 'pendant la bissection, avant toute fusion');
         const rest = inLot.filter(m => !report.culprits.includes(m.number));
         if (!report.interaction && rest.length) {
             const final = await prove(rest, 'final');
+            if (aborted())
+                return interrupted(null, 'pendant la preuve du reste du lot, avant toute fusion');
             if (final.proof?.ok)
                 proven = final;
             else
@@ -220,6 +241,16 @@ async function batchSteps(options, report) {
         }
     }
     report.proven = proven;
+    if (proven) {
+        // Every pull request asked for and left out of the proven batch: the batch is partial.
+        const lastBuilt = proven;
+        for (const n of options.prs) {
+            if (lastBuilt.members.some(m => m.number === n))
+                continue;
+            const conflict = report.lots.flatMap(l => l.excluded).find(x => x.pr === n);
+            report.left.push({ pr: n, reason: report.culprits.includes(n) ? 'isolée par la bissection : la suite échoue avec elle' : conflict?.reason ?? 'hors du lot' });
+        }
+    }
     if (!proven) {
         await removeLot(options, whole);
         return stop(null, [report.interaction ? 'la suite échoue sur le lot entier mais passe sur chaque moitié : échec d\'interaction, aucune PR isolée, rien n\'est fusionné'
@@ -231,6 +262,8 @@ async function batchSteps(options, report) {
     }
     // Merge, in the order of the proven batch, each one checked by content before and after.
     for (const [k, member] of proven.members.entries()) {
+        if (aborted())
+            return interrupted(member.number, `avant la fusion de la PR #${member.number}`);
         const expectedBefore = k === 0 ? proven.baseTree : proven.members[k - 1].tree;
         let { pr, error } = await settled(options, member.number);
         if (!pr)
@@ -261,6 +294,9 @@ async function batchSteps(options, report) {
         if (now.tree !== expectedBefore) {
             return stop(member.number, [`la cible ${target} (${short(now.sha)}) n'a plus le contenu du lot avant la PR #${member.number} : elle a changé hors du lot ; relancer le lot sur la nouvelle cible`]);
         }
+        // Last point before the external effect: a signal received meanwhile stops here, nothing half done.
+        if (aborted())
+            return interrupted(member.number, `avant la fusion de la PR #${member.number}`);
         const merge = await options.gh(['pr', 'merge', String(member.number), '--merge', '--match-head-commit', member.head]);
         options.onCall(merge);
         let after = await view(options, member.number);

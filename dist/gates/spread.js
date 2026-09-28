@@ -40,7 +40,25 @@ export async function planSpread(options) {
             copies.set(stack.id, copy);
             workspace = copy.dir;
         }
-        assignments.set(gate.id, { gateId: gate.id, stack, workspace });
+        // The variables that select the stack must reach the check: otherwise it would run against another stack
+        // (its default) while its receipt says this one.
+        const received = new Set([...options.config.environment.passEnv, ...gate.passEnv]);
+        const missing = Object.keys(stack.config.env ?? {}).filter(k => !received.has(k));
+        if (missing.length) {
+            throw new PipelineError('GATE_STACKS', `--stacks : le contrôle ${gate.id} ne reçoit pas ${missing.join(', ')}, variable(s) qui désignent la pile ${stack.id} (stacks.${stack.id}.env) : ` +
+                `l'ajouter à son passEnv, sinon il tournerait sur une autre pile que celle de son reçu.`);
+        }
+        // The env file is the whole environment of the stack: its other keys are not for this check, but are said.
+        let notPassed = [];
+        if (stack.envFile) {
+            try {
+                notPassed = Object.keys(readEnvFile(stack.envFile)).filter(k => !received.has(k));
+            }
+            catch (error) {
+                throw new PipelineError('GATE_STACKS', `--stacks : fichier d'environnement de la pile ${stack.id} illisible (${stack.envFile}) : ${errorMessage(error)}`);
+            }
+        }
+        assignments.set(gate.id, { gateId: gate.id, stack, workspace, notPassed });
     }
     return { assignments, copies: [...copies.values()] };
 }

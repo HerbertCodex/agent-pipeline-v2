@@ -7,7 +7,10 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { apv } from './cli-helpers.mjs';
 import { evaluateCommand, REASONS } from '../hooks/scripts/bash-guard.mjs';
-import { MERGE_REFUSED } from '../dist/stack/github.js';
+import { MERGE_REFUSED, processGh } from '../dist/stack/github.js';
+import { batchMerge, processGit } from '../dist/stack/batch.js';
+import { spawn } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 
 /**
  * Batch merge (docs/APV3-SPEC.md, section 18.5): one integration branch for several independent pull requests, one
@@ -51,6 +54,8 @@ function batchProject(t, behavior = {}) {
   branch(12, 'pr-b', 'b.txt', 'b\n');
   branch(13, 'pr-bad', 'BAD', 'casse la suite\n');
   branch(14, 'pr-conflit', 'a.txt', 'a changé par 14\n');
+  // #15 changes the checks: a suite that never fails (it would prove #13 with the checks it brings).
+  branch(15, 'pr-config', '.apv/config.json', JSON.stringify({ gates: [{ id: 'suite', stage: 'full', command: [process.execPath, '-e', 'process.exit(0)'] }] }));
   git(repo, 'switch', '-q', 'main');
   const file = join(root, 'gh.json');
   writeFileSync(file, JSON.stringify({ prs, behavior, calls: [], origin }));
@@ -118,8 +123,13 @@ test('a failed batch is not merged; --bisect isolates the faulty pull request, p
   assert.match(failed.json().stopped.reasons.join('\n'), /lot non prouvé \(--bisect isole les PR fautives\)/);
   assert.deepEqual(p.merges(), []);
   const r = await p.run(['11', '13', '12', '--bisect', '--merge', '--json'], allow);
-  assert.equal(r.code, 0, r.stdout + r.stderr);
+  // Partial: the proven rest is merged, but a pull request asked for stayed out: never a plain success.
+  assert.equal(r.code, 1, r.stdout + r.stderr);
   const report = r.json();
+  assert.equal(report.status, 'partiel');
+  assert.deepEqual(report.left.map(l => l.pr), [13]);
+  assert.match(report.left[0].reason, /isolée par la bissection/);
+  assert.equal(report.stopped, null);
   assert.deepEqual(report.culprits, [13]);
   assert.equal(report.interaction, false);
   assert.deepEqual(report.proven.members.map(m => m.number), [11, 12]);
@@ -132,7 +142,12 @@ test('a failed batch is not merged; --bisect isolates the faulty pull request, p
 test('a pull request in conflict with the previous ones stays out of the batch', async t => {
   const p = batchProject(t);
   const r = await p.run(['11', '14', '12', '--json']);
-  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.equal(r.json().status, 'partiel');
+  assert.deepEqual(r.json().left.map(l => l.pr), [14]);
+  const human = await p.run(['11', '14', '12']);
+  assert.equal(human.code, 1);
+  assert.match(human.stdout, /Lot PARTIEL : #14 \(conflit avec les PR précédentes du lot/);
   const lot = r.json().proven;
   assert.deepEqual(lot.members.map(m => m.number), [11, 12]);
   assert.deepEqual(lot.excluded.map(x => x.pr), [14]);
@@ -198,4 +213,70 @@ test('two batches started in the same second get two branches', async t => {
   assert.equal(a.code, 0, a.stdout + a.stderr);
   assert.equal(b.code, 0, b.stdout + b.stderr);
   assert.notEqual(a.json().proven.name, b.json().proven.name);
+});
+
+test('a batch is proven with the checks of the target: a pull request that changes them is refused', async t => {
+  const p = batchProject(t);
+  const r = await p.run(['13', '15', '--merge', '--json'], allow);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.equal(r.json().stopped.pr, 15);
+  assert.match(r.json().stopped.reasons[0], /PR #15 change la configuration des contrôles par rapport à main .* prouver cette PR seule/);
+  assert.deepEqual(r.json().lots, [], 'nothing built');
+  assert.deepEqual(p.merges(), []);
+});
+
+test('the setup of the batch comes from the target, not from the pull requests', async t => {
+  const p = batchProject(t);
+  // The target declares a setup that leaves a marker next to the batch; the check fails without it.
+  const marker = join(p.root, 'setup-de-la-cible');
+  git(p.repo, 'switch', '-q', 'main');
+  writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({
+    gates: [{ id: 'suite', stage: 'full', command: [process.execPath, '-e', `process.exit(require("fs").existsSync(${JSON.stringify(marker)}) && !require("fs").existsSync("BAD") ? 0 : 1)`] }],
+    batch: { setup: [process.execPath, '-e', `require("fs").writeFileSync(${JSON.stringify(marker)}, "")`] } }));
+  git(p.repo, 'commit', '-qam', 'setup'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const r = await p.run(['12', '--target', 'main', '--json']);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.ok(existsSync(marker), 'the setup of the target ran');
+});
+
+test('a signal between the proof and a merge stops the batch before it: interrupted, nothing merged', async t => {
+  const p = batchProject(t);
+  const env = { ...process.env, ...p.env };
+  const controller = new AbortController();
+  const gh = processGh(fakeGh, env, p.repo);
+  let views = 0;
+  const report = await batchMerge({
+    repo: p.repo, common: realpathSync(join(p.repo, '.git')), prs: [11, 12], bisect: false, merge: true, ready: false, keep: false, remote: 'origin',
+    // The operator presses Ctrl-C while PR #11 is read again, just before its merge.
+    gh: async args => { const r = await gh(args); if (args[1] === 'view' && args[2] === '11' && ++views === 2) controller.abort(); return r; },
+    git: processGit(env), log: () => {}, onCall: () => {}, pollMs: 5, pollAttempts: 3,
+    configDrift: () => null, journal: () => null, signal: controller.signal,
+    prove: async () => ({ ok: true, runId: 'x', summary: 'prouvé' }),
+  });
+  assert.equal(report.interrupted, true);
+  assert.deepEqual(report.merged, []);
+  assert.match(report.stopped.reasons[0], /lot interrompu \(signal\) avant la fusion de la PR #11 ; fusionnées : aucune/);
+  assert.deepEqual(p.merges(), []);
+});
+
+test('Ctrl-C during the suite of a batch --merge: exit 130, "Lot interrompu", nothing merged', async t => {
+  const p = batchProject(t);
+  const started = join(p.root, 'suite-lancee');
+  git(p.repo, 'switch', '-q', 'main');
+  writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({ gates: [{ id: 'suite', stage: 'full', timeoutMs: 60000,
+    command: [process.execPath, '-e', `require("fs").writeFileSync(${JSON.stringify(started)}, ""); setTimeout(() => {}, 30000)`] }] }));
+  git(p.repo, 'commit', '-qam', 'suite lente'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+  const child = spawn(process.execPath, [cli, 'stack', 'batch', '11', '12', '--merge', '--target', 'main'], { cwd: p.repo, env: { ...process.env, ...p.env, APV_ALLOW_MERGE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = ''; let err = '';
+  child.stdout.on('data', c => { out += c; }); child.stderr.on('data', c => { err += c; });
+  const exited = new Promise(done => child.once('exit', code => done(code)));
+  const end = Date.now() + 20000;
+  while (!existsSync(started) && Date.now() < end) await new Promise(r => setTimeout(r, 50));
+  assert.ok(existsSync(started), err);
+  child.kill('SIGINT');
+  assert.equal(await exited, 130, out + err);
+  assert.match(out, /Lot interrompu \(SIGINT\) : rien d'autre ne sera fusionné\./);
+  assert.match(out, /lot interrompu \(signal\) pendant la preuve du lot, avant toute fusion ; fusionnées : aucune/);
+  assert.deepEqual(p.merges(), []);
 });

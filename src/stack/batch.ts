@@ -54,8 +54,18 @@ export interface BatchOptions {
   log: (line: string) => void;
   pollMs: number;
   pollAttempts: number;
-  /** Proves a batch head in its worktree (setup, full suite, verify). */
-  prove: (worktree: string, head: string) => Promise<Proof>;
+  /**
+   * Proves a batch head in its worktree (setup, full suite, verify), with the configuration of the target at `base`:
+   * a batch is never proven by the checks it brings.
+   */
+  prove: (worktree: string, head: string, base: string) => Promise<Proof>;
+  /**
+   * Why the head of a pull request changes the checks against the target at `base` (`gates`, `batch`, `stacks`,
+   * `suite`, `environment` of `.apv/config.json`, or an unreadable configuration), or null when it does not.
+   */
+  configDrift: (base: string, head: string) => string | null;
+  /** Aborted by SIGINT, SIGTERM or SIGHUP: the batch stops at the next step, never between a check and a merge. */
+  signal?: AbortSignal;
   /** Journals one merge or stop of the batch; returns an error message when it could not. */
   journal: (entry: Record<string, unknown>) => string | null;
   now?: () => Date;
@@ -81,6 +91,13 @@ export interface BatchReport {
   merged: number[];
   stopped: { pr: number | null; reasons: string[] } | null;
   finalTree: { target: string; lot: string; identical: boolean } | null;
+  /** True when a signal stopped the batch (exit 128 + signal). */
+  interrupted: boolean;
+  /**
+   * The pull requests asked for that the proven batch leaves out (in conflict, or isolated as faulty): the batch is
+   * then partial, never a success (exit 1), even when the rest is proven and merged.
+   */
+  left: { pr: number; reason: string }[];
 }
 
 const short = (sha: string): string => sha.slice(0, 12);
@@ -162,7 +179,8 @@ async function removeLot(options: BatchOptions, lot: Lot): Promise<void> {
  * proven and asked, merges its pull requests in order, each checked by content before and after its merge.
  */
 export async function batchMerge(options: BatchOptions): Promise<BatchReport> {
-  const report: BatchReport = { target: null, base: null, prs: [], lots: [], culprits: [], interaction: false, proven: null, merged: [], stopped: null, finalTree: null };
+  const report: BatchReport = { target: null, base: null, prs: [], lots: [], culprits: [], interaction: false, proven: null, merged: [], stopped: null, finalTree: null,
+    interrupted: false, left: [] };
   try { return await batchSteps(options, report); }
   catch (error) {
     // A Git or GitHub failure the steps did not foresee: the report says where it stopped, never a crash.
@@ -180,6 +198,13 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     if (failed) report.stopped.reasons.push(`(journal non écrit : ${failed})`);
     return report;
   };
+  /** A signal received: the batch stops here, with what is already merged, and says so. */
+  const interrupted = async (pr: number | null, where: string): Promise<BatchReport> => {
+    report.interrupted = true;
+    for (const lot of report.lots) await removeLot(options, lot);
+    return stop(pr, [`lot interrompu (signal) ${where} ; fusionnées : ${report.merged.length ? report.merged.map(n => `#${n}`).join(', ') : 'aucune'}`]);
+  };
+  const aborted = (): boolean => options.signal?.aborted === true;
   for (const n of options.prs) {
     const { pr, error } = await settled(options, n);
     report.prs.push({ number: n, pr, anomalies: error ? [error] : [] });
@@ -203,6 +228,12 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     if (!head) return stop(item.number, [`tête ${item.pr!.headRefOid} de la PR #${item.number} introuvable sur ${options.remote} (refs/pull/${item.number}/head)`]);
     members.push({ number: item.number, headRefName: item.pr!.headRefName, head });
   }
+  // The batch is proven with the checks of the target: a pull request that changes them is proven alone.
+  const drifting = members.map(m => ({ m, why: options.configDrift(base.sha, m.head) })).filter(x => x.why !== null);
+  if (drifting.length) {
+    return stop(drifting[0]!.m.number, drifting.map(({ m, why }) => `PR #${m.number} change la configuration des contrôles par rapport à ${target} (${why}) : ` +
+      'un lot se prouve avec les contrôles de la cible ; prouver cette PR seule (sa suite complète, puis apv stack plan et apv stack merge) et la retirer du lot'));
+  }
   // A batch commits its merges: without an identity, a clear refusal before anything is built.
   const ident = await options.git.run(options.repo, ['-c', 'user.useConfigOnly=true', 'var', 'GIT_COMMITTER_IDENT']);
   const author = await options.git.run(options.repo, ['-c', 'user.useConfigOnly=true', 'var', 'GIT_AUTHOR_IDENT']);
@@ -220,7 +251,7 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     report.lots.push(lot);
     if (!lot.members.length) { lot.proof = { ok: false, runId: null, summary: 'aucune PR fusionnée dans le lot' }; return lot; }
     options.log(`Lot ${lotName} : ${lot.members.map(m => `#${m.number}`).join(', ')} fusionnées sur ${target} (${short(base.sha)}), tête ${short(lot.head!)} ; suite complète.`);
-    try { lot.proof = await options.prove(lot.dir, lot.head!); }
+    try { lot.proof = await options.prove(lot.dir, lot.head!, base.sha); }
     catch (error) { lot.proof = { ok: false, runId: null, summary: `preuve impossible : ${errorMessage(error)}` }; }
     options.log(`Lot ${lotName} : ${lot.proof.ok ? 'prouvé' : 'NON prouvé'} (${lot.proof.summary}).`);
     return lot;
@@ -241,19 +272,31 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     return found;
   };
   const whole = await prove(members, '');
+  if (aborted()) return interrupted(null, 'pendant la preuve du lot, avant toute fusion');
   let proven: Lot | null = whole.proof?.ok ? whole : null;
   if (!proven && options.bisect && whole.members.length > 1) {
     await removeLot(options, whole);
     const inLot = members.filter(m => whole.members.some(x => x.number === m.number));
     report.culprits = await culprits(inLot);
+    if (aborted()) return interrupted(null, 'pendant la bissection, avant toute fusion');
     const rest = inLot.filter(m => !report.culprits.includes(m.number));
     if (!report.interaction && rest.length) {
       const final = await prove(rest, 'final');
+      if (aborted()) return interrupted(null, 'pendant la preuve du reste du lot, avant toute fusion');
       if (final.proof?.ok) proven = final;
       else await removeLot(options, final);
     }
   }
   report.proven = proven;
+  if (proven) {
+    // Every pull request asked for and left out of the proven batch: the batch is partial.
+    const lastBuilt = proven;
+    for (const n of options.prs) {
+      if (lastBuilt.members.some(m => m.number === n)) continue;
+      const conflict = report.lots.flatMap(l => l.excluded).find(x => x.pr === n);
+      report.left.push({ pr: n, reason: report.culprits.includes(n) ? 'isolée par la bissection : la suite échoue avec elle' : conflict?.reason ?? 'hors du lot' });
+    }
+  }
   if (!proven) {
     await removeLot(options, whole);
     return stop(null, [report.interaction ? 'la suite échoue sur le lot entier mais passe sur chaque moitié : échec d\'interaction, aucune PR isolée, rien n\'est fusionné'
@@ -263,6 +306,7 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
 
   // Merge, in the order of the proven batch, each one checked by content before and after.
   for (const [k, member] of proven.members.entries()) {
+    if (aborted()) return interrupted(member.number, `avant la fusion de la PR #${member.number}`);
     const expectedBefore = k === 0 ? proven.baseTree : proven.members[k - 1]!.tree;
     let { pr, error } = await settled(options, member.number);
     if (!pr) return stop(member.number, [error!]);
@@ -282,6 +326,8 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     if (now.tree !== expectedBefore) {
       return stop(member.number, [`la cible ${target} (${short(now.sha)}) n'a plus le contenu du lot avant la PR #${member.number} : elle a changé hors du lot ; relancer le lot sur la nouvelle cible`]);
     }
+    // Last point before the external effect: a signal received meanwhile stops here, nothing half done.
+    if (aborted()) return interrupted(member.number, `avant la fusion de la PR #${member.number}`);
     const merge = await options.gh(['pr', 'merge', String(member.number), '--merge', '--match-head-commit', member.head]);
     options.onCall(merge);
     let after = await view(options, member.number);

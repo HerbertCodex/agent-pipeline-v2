@@ -14,7 +14,7 @@ import { suiteSettings, type ApvConfig } from '../config/load.js';
 import type { ProcessResult } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
 import { publishRun, pruneStore, receiptRetention, sharedStore, type PruneResult } from './store.js';
-import { markStacksUsed, resolveStacks, stacksOfLock } from '../stacks/idle.js';
+import { markStacksUsed, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables, type SpreadPlan } from './spread.js';
 import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, flockCommand, freePorts, resolveGateLock, withGateLease,
@@ -91,8 +91,10 @@ export interface GateRunResult {
   flaky: string[];
   /** The end of a full suite: processes it started still alive, and orphans of this copy on `suite.ports`, stopped. */
   cleanup: CleanupRecord | null;
+  /** Stacks the checks lock that `apv stacks idle-stop` stopped and nothing restarted since: their checks will likely fail. */
+  stoppedStacks: { stack: string; since: string; gates: string[] }[];
   /** The checks spread over the stacks (`--stacks`): check, stack, copy where it ran; null without `--stacks`. */
-  spread: { gate: string; stack: string; workspace: string; error: string | null }[] | null;
+  spread: { gate: string; stack: string; workspace: string; notPassed: string[]; error: string | null }[] | null;
   ok: boolean;
 }
 
@@ -257,7 +259,25 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     if (options.stacks && common) {
       spread = await planSpread({ git, repo, common, config: options.config, gates, ids: options.stacks, runId });
       log(`Répartition sur les piles : ${[...spread.assignments.values()].map(a => `${a.gateId} sur la pile ${a.stack.id}${a.workspace === repo ? '' : ` (copie ${a.workspace})`}`).join(', ') || 'aucun contrôle de pile'}.`);
+      for (const a of spread.assignments.values()) if (a.notPassed.length) log(`Note : ${a.gateId} ne reçoit pas ${a.notPassed.join(', ')} du fichier d'environnement de la pile ${a.stack.id} (absents de son passEnv).`);
       await prepareCopies(spread, { git, repo, sha: candidateSha, config: options.config, env: source, signal: options.signal, log });
+    }
+    // A stack stopped by idle-stop and not restarted: said before the checks, not discovered as a refused connection.
+    const stoppedStacks: GateRunResult['stoppedStacks'] = [];
+    if (common) {
+      for (const gate of gates) {
+        const assignedStack = spread?.assignments.get(gate.id)?.stack.id;
+        if (!gate.lock && !assignedStack) continue;
+        const ids = assignedStack ? [assignedStack]
+          : stacksOfLock(stacks, await resolveGateLock(git, repo, gate.lock!, environment([...options.config.environment.passEnv, ...gate.passEnv], source), source));
+        for (const id of ids) {
+          const since = stoppedSince(common, id);
+          if (!since) continue;
+          const entry = stoppedStacks.find(x => x.stack === id) ?? (stoppedStacks.push({ stack: id, since, gates: [] }), stoppedStacks[stoppedStacks.length - 1]!);
+          entry.gates.push(gate.id);
+        }
+      }
+      for (const x of stoppedStacks) log(`ATTENTION : la pile ${x.stack} a été arrêtée par apv stacks idle-stop le ${x.since} et rien ne montre qu'elle ait redémarré depuis ; ${x.gates.join(', ')} la verrouille(nt). Redémarrer d'abord : apv stacks start ${x.stack}.`);
     }
     const keys = new Map<string, string>();
     const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
@@ -358,13 +378,16 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
           diagnostic: `Relance (retryFailed) en échec aussi :\n${failure}`.slice(0, MAX_DIAGNOSTIC_CHARS), retry, ...withLockWait(lockWaitMs) });
       };
       const used = lock && common ? stacksOfLock(stacks, lock) : [];
+      let outcome: GateReceipt | null = null;
       try {
         if (lock?.kind === 'lease') {
-          return await withGateLease(lock, { label: `apv gates run ${gate.id} (${workspace})`, env, source, signal, log, hooks: options.hooks }, body, lockRefused);
+          outcome = await withGateLease(lock, { label: `apv gates run ${gate.id} (${workspace})`, env, source, signal, log, hooks: options.hooks }, body, lockRefused);
+          return outcome;
         }
-        return await body(env, 0);
+        outcome = await body(env, 0);
+        return outcome;
       } finally {
-        if (used.length && common) markStacksUsed(common, used);
+        if (used.length && common) markStacksUsed(common, used, outcome !== null && success(outcome));
       }
     };
     const blocked = (gate: Gate, reason: string): GateReceipt => write({ id: randomUUID(), runId, gateId: gate.id, key: hash({ blocked: gate.id, candidateSha }), candidateSha, configHash,
@@ -391,14 +414,14 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     }
     const flaky = list.filter(r => r.status === 'passed_after_retry').map(r => r.gateId);
     await endSuite(runId);
-    const spreadRecord = spread ? [...spread.assignments.values()].map(a => ({ gate: a.gateId, stack: a.stack.id, workspace: a.workspace,
+    const spreadRecord = spread ? [...spread.assignments.values()].map(a => ({ gate: a.gateId, stack: a.stack.id, workspace: a.workspace, notPassed: a.notPassed,
       error: spread!.copies.find(c => c.dir === a.workspace)?.error ?? null })) : null;
     const result: GateRunResult = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
       reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, shared: null, suite, queue: queue?.record ?? null, ports, flaky, cleanup,
-      spread: spreadRecord, ok: list.every(success) };
+      stoppedStacks, spread: spreadRecord, ok: list.every(success) };
     writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
       reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}),
-      ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup } : {}), ...(spreadRecord ? { spread: spreadRecord } : {}),
+      ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup } : {}), ...(spreadRecord ? { spread: spreadRecord } : {}), ...(stoppedStacks.length ? { stoppedStacks } : {}),
       receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),
         ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}), ...(r.stack ? { stack: r.stack } : {}) })) }, null, 2) + '\n');
     if (options.share !== false) result.shared = await shareRun(git, repo, directory, runId, candidateSha, options.config);
