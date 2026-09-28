@@ -281,60 +281,89 @@ test('verify recomputes the scope from the commit: a receipt « not required » 
   assert.match(v.json().gates.find(x => x.gateId === 'browser').scope.reason, /docs\/guide\.md : hors de skipWhenOnly\.paths/);
 });
 
-test('a dispensed file the application or its tests read by name, or that a symbolic link points to, is required (H1)', async t => {
+/** A project whose main already holds `files`, then a branch that changes `changes`: the receipt of browser. */
+async function scenario(t, files, changes, remove = []) {
   const f = project(t);
-  // The pilot case: a Markdown file under docs/ read by the application.
-  write(f.repo, 'src/lib/content.mjs', "import { readFileSync } from 'node:fs';\nexport const text = readFileSync('docs/content.md', 'utf8');\n");
-  write(f.repo, 'docs/content.md', 'v1\n');
-  write(f.repo, 'docs/other.md', 'v1\n');
-  write(f.repo, 'test/reads.test.mjs', "const page = 'Other.MD';\n");
-  write(f.repo, 'docs/plain.md', 'v1\n');
-  commit(f.repo, 'content on the branch');
-  git(f.repo, 'switch', '-q', 'main'); git(f.repo, 'merge', '-q', '--ff-only', 'feature'); git(f.repo, 'switch', '-q', '-C', 'feature', 'main');
-  const cases = [
-    ['docs/content.md', 'v2\n', /docs\/content\.md : nommé littéralement/],
-    ['docs/other.md', 'v2\n', /docs\/other\.md : nommé littéralement/],
-  ];
-  for (const [path, text, why] of cases) {
-    git(f.repo, 'switch', '-q', '-C', `m-${path.replace(/\W/g, '')}`, 'main');
-    write(f.repo, path, text);
-    commit(f.repo, path);
-    f.reset();
-    const r = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', 'main', '--json']);
-    assert.equal(r.code, 0, r.stdout + r.stderr);
-    assert.ok(f.calls().includes('browser'), path);
-    assert.match(receipt(r.json().receiptsDirectory, 'browser').scope.reason, why);
-    assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD'])).code, 0);
-  }
-  // Deleted, it is still read: required.
-  git(f.repo, 'switch', '-q', '-C', 'gone', 'main');
-  git(f.repo, 'rm', '-q', 'docs/content.md');
-  commit(f.repo, 'gone');
-  f.reset();
-  assert.match(receipt((await full(f.repo)).json().receiptsDirectory, 'browser').scope.reason, /docs\/content\.md : nommé littéralement/);
-  // Named by a file of the commands of the check (run.mjs).
-  git(f.repo, 'switch', '-q', '-C', 'named', 'main');
-  write(f.repo, 'run.mjs', `${readFileSync(join(f.repo, 'run.mjs'), 'utf8')}// reads docs/plain.md\n`);
-  commit(f.repo, 'runner names plain');
-  git(f.repo, 'switch', '-q', 'main'); git(f.repo, 'merge', '-q', '--ff-only', 'named'); git(f.repo, 'switch', '-q', '-C', 'named2', 'main');
-  write(f.repo, 'docs/plain.md', 'v2\n');
-  commit(f.repo, 'plain');
-  assert.match(receipt((await full(f.repo)).json().receiptsDirectory, 'browser').scope.reason, /docs\/plain\.md : nommé littéralement/);
-  // An existing symbolic link that points to the dispensed file (or its folder).
   git(f.repo, 'switch', '-q', 'main');
+  for (const [path, text] of Object.entries(files)) write(f.repo, path, typeof text === 'function' ? text(readFileSync(join(f.repo, path), 'utf8')) : text);
+  commit(f.repo, 'on main');
+  git(f.repo, 'switch', '-q', '-C', 'feature', 'main');
+  for (const [path, text] of Object.entries(changes)) write(f.repo, path, text);
+  for (const path of remove) git(f.repo, 'rm', '-q', path);
+  commit(f.repo, 'change');
+  f.reset();
+  const r = await full(f.repo);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  return { f, rec: receipt(r.json().receiptsDirectory, 'browser'), ran: f.calls().includes('browser') };
+}
+const NAMED = /nommé \(ou son dossier\) dans un fichier suivi/;
+
+test('a dispensed file the rest of the tree may read (named, its folder named, a path built from it) is required (H1, H1-bis)', async t => {
+  // The pilot case: a Markdown file under docs/ read by the application, and every other file under docs/ with it.
+  let s = await scenario(t, { 'src/lib/content.mjs': "export const text = readFileSync('docs/content.md', 'utf8');\n", 'docs/content.md': 'v1\n', 'docs/free.md': 'v1\n' },
+    { 'docs/content.md': 'v2\n', 'docs/free.md': 'v2\n' });
+  assert.ok(s.ran);
+  assert.deepEqual(s.rec.scope.blocking, ['docs/content.md', 'docs/free.md']);
+  assert.match(s.rec.scope.reason, NAMED);
+  // Folders read without naming the file: readdirSync, join, import.meta.glob, from the root or another folder (app/, lib/*.py).
+  for (const [reader, text] of [['src/lib/list.mjs', "readdirSync(join(root, 'docs'))\n"], ['src/lib/glob.ts', "import.meta.glob('../../docs/*.md')\n"],
+    ['vite.plugin.mjs', 'const dir = path.resolve(__dirname, "../docs")\n'], ['app/read.py', 'open(os.path.join("docs", name))\n'], ['packages/a/src/x.ts', 'const d = `docs`;\n']]) {
+    s = await scenario(t, { [reader]: text, 'docs/page.md': 'v1\n' }, { 'docs/page.md': 'v2\n' });
+    assert.ok(s.ran, reader);
+    assert.match(s.rec.scope.reason, /docs\/page\.md : nommé/, reader);
+  }
+  // A root file named by a test, whatever the case; a deleted one still named; one named by a file of the commands.
+  s = await scenario(t, { 'test/reads.test.mjs': "const page = 'NOTES.MD';\n", 'notes.md': 'v1\n' }, { 'notes.md': 'v2\n' });
+  assert.match(s.rec.scope.reason, /notes\.md : nommé/);
+  s = await scenario(t, { 'src/x.mjs': "load('gone.md')\n", 'gone.md': 'v1\n' }, {}, ['gone.md']);
+  assert.match(s.rec.scope.reason, /gone\.md : nommé/);
+  s = await scenario(t, { 'plain.md': 'v1\n', 'run.mjs': text => `${text}// reads plain.md\n` }, { 'plain.md': 'v2\n' });
+  assert.match(s.rec.scope.reason, /plain\.md : nommé/);
+  // Unnamed anywhere but in dispensed files and APV's own files: still dispensed.
+  s = await scenario(t, { 'docs/a.md': 'see docs/b.md\n', 'docs/b.md': 'v1\n', '.apv/brief.md': 'docs/b.md\n' }, { 'docs/b.md': 'v2\n' });
+  assert.equal(s.rec.status, 'not_required', s.rec.scope.reason);
+  assert.equal(s.ran, false);
+});
+
+test('symbolic links (B5, B6): a link to a dispensed file or folder, to the root or an ancestor, resolved through real paths', async t => {
+  const { linkedFiles } = await import('../dist/gates/proof-scope.js');
+  const { Git } = await import('../dist/execution/git.js');
+  const f = fixture(t);
   mkdirSync(join(f.repo, 'site'), { recursive: true });
-  symlinkSync('../docs/notes', join(f.repo, 'site/notes'));
-  write(f.repo, 'docs/notes/a.md', 'v1\n');
-  commit(f.repo, 'link to a folder');
-  git(f.repo, 'switch', '-q', '-C', 'linked', 'main');
-  write(f.repo, 'docs/notes/a.md', 'v2\n');
-  commit(f.repo, 'linked change');
-  assert.match(receipt((await full(f.repo)).json().receiptsDirectory, 'browser').scope.reason, /docs\/notes\/a\.md : cible d'un lien symbolique du dépôt/);
-  // Unmentioned, unlinked: still dispensed.
-  git(f.repo, 'switch', '-q', '-C', 'free', 'main');
-  write(f.repo, 'docs/free.md', 'free\n');
-  commit(f.repo, 'free');
-  assert.equal(receipt((await full(f.repo)).json().receiptsDirectory, 'browser').status, 'not_required');
+  write(f.repo, 'notes/a.md', 'a\n');
+  symlinkSync('../notes', join(f.repo, 'site/notes'));
+  commit(f.repo, 'folder link');
+  const head = () => git(f.repo, 'rev-parse', 'HEAD');
+  const g = new Git();
+  assert.deepEqual([...await linkedFiles(g, f.repo, head(), ['notes/a.md', 'docs/guide.md'])], ['notes/a.md']);
+  // Outside by its text, inside by its real path: ../../<repo name>/docs.
+  symlinkSync(`../../${f.repo.split('/').at(-1)}/docs`, join(f.repo, 'site/docs'));
+  commit(f.repo, 'roundabout link');
+  assert.deepEqual([...await linkedFiles(g, f.repo, head(), ['docs/guide.md', 'other.md'])], ['docs/guide.md']);
+  // The root, or an ancestor of it: every candidate.
+  for (const target of ['..', '../..', '/']) {
+    rmSync(join(f.repo, 'site/all'), { force: true });
+    symlinkSync(target, join(f.repo, 'site/all'));
+    commit(f.repo, `link ${target}`);
+    assert.deepEqual([...await linkedFiles(g, f.repo, head(), ['x.md', 'y/z.md'])], ['x.md', 'y/z.md'], target);
+  }
+  // Truly outside: ignored.
+  rmSync(join(f.repo, 'site/all'));
+  symlinkSync('/usr/share', join(f.repo, 'site/all'));
+  commit(f.repo, 'outside');
+  assert.deepEqual([...await linkedFiles(g, f.repo, head(), ['x.md'])], []);
+  // Through gates run: the folder link makes the change required.
+  const p = project(t);
+  git(p.repo, 'switch', '-q', 'main');
+  mkdirSync(join(p.repo, 'site'), { recursive: true });
+  symlinkSync('..', join(p.repo, 'site/root'));
+  commit(p.repo, 'root link');
+  git(p.repo, 'switch', '-q', '-C', 'feature', 'main');
+  write(p.repo, 'README.md', 'changed\n');
+  commit(p.repo, 'readme');
+  const rec = receipt((await full(p.repo)).json().receiptsDirectory, 'browser');
+  assert.equal(rec.status, 'passed');
+  assert.match(rec.scope.reason, /README\.md : cible d'un lien symbolique du dépôt/);
 });
 
 test('a reference is resolved by its full ref: a local branch or a tag that shadows the remote-tracking one is refused as ambiguous (M1), for skipWhenOnly and repeatChanged', async t => {
@@ -416,6 +445,9 @@ test('configuration: skipWhenOnly validated (portable globs, never a glob that c
     assert.ok(issues.some(i => message.test(i.message)), `${paths}: ${issues.map(i => i.message).join(' | ')}`);
   }
   assert.ok(configIssues({ gates: [{ id: 'b', command: ['x'], skipWhenOnly: { paths: ['docs/**'] } }] }).issues.length > 0, 'reference required');
+  // M3: never on a check that runs apv web audit (the audit decides from web.paths).
+  const web = configIssues({ gates: [{ id: 'web', command: ['apv', 'lock', 'run', 'e2e', '--', 'apv', 'web', 'audit', '--preview', '--base', 'origin/main'], skipWhenOnly: scopeOf() }] }).issues;
+  assert.ok(web.some(i => /skipWhenOnly cannot be declared on a check that runs apv web audit/.test(i.message)), web.map(i => i.message).join(' | '));
   // **/*.md with src/** only: static, public and content still covered.
   const partial = configIssues({ gates: [{ id: 'b', command: ['x'], skipWhenOnly: { paths: ['**/*.md'], except: ['src/**'], reference: 'main' } }] }).issues;
   assert.ok(partial.some(i => /content\/x\.md/.test(i.message)), partial.map(i => i.message).join(' | '));

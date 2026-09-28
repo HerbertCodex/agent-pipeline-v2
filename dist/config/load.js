@@ -273,6 +273,9 @@ export function configIssues(raw) {
         const scope = gate.skipWhenOnly;
         if (!scope)
             continue;
+        // `apv web audit` decides its own scope (web paths, recomputed by verify): never mixed with skipWhenOnly.
+        const webAudit = [gate.command, gate.affected ?? []].some(argv => argv.some((x, i) => x === 'web' && argv[i + 1] === 'audit'));
+        list.check(!webAudit, 'CONFIG', `Gate ${gate.id}: skipWhenOnly cannot be declared on a check that runs apv web audit (the audit decides whether it is required from web.paths)`);
         for (const [field, globs] of [['paths', scope.paths], ['except', scope.except ?? []]]) {
             for (const glob of globs)
                 list.attempt('CONFIG', () => { try {

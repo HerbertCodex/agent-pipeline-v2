@@ -15,8 +15,6 @@ import { type ApvConfig } from '../config/load.js';
  * configuration, the tests and test scripts, the database migrations.
  */
 export declare const ALWAYS_REQUIRED: readonly string[];
-/** Folders searched for a literal mention of a dispensed file (with the files the commands of the check name). */
-export declare const MENTION_ROOTS: readonly string[];
 /** A file of a raw diff: its path, its status (`A`, `M`, `D`, `T`...) and its modes before and after. */
 export interface ChangedFile {
     path: string;
@@ -53,15 +51,28 @@ export declare function modeChange(f: ChangedFile): string | null;
  */
 export declare function commandPaths(gate: Gate, repo: string): string[];
 /**
- * The files among `candidates` whose path or file name appears literally (case ignored) in a file of `pathspecs` at
- * `head` (`git grep -F`): a file the application or its tests read by name is never without effect. Null when the
- * search could not be made (then every candidate is required).
+ * Files never searched for mentions: APV's own configuration and state (`.apv/`, `pipeline.v2.json`: never read by the
+ * application; the configuration lists the dispensed paths themselves) and `.gitignore` files (they read nothing).
  */
-export declare function mentionedFiles(repo: string, head: string, candidates: readonly string[], pathspecs: readonly string[]): Promise<Set<string> | null>;
+export declare const NOT_SEARCHED: readonly string[];
+/** What a file or folder is searched as: its path, its name, and each parent folder as a path segment or a quoted name. */
+export declare function mentionNeedles(file: string): {
+    needle: string;
+    folder: string | null;
+}[];
 /**
- * The files among `candidates` that a symbolic link of `head` points to, or lies under (one level, relative targets
- * inside the repository; a chain of links or an absolute target is not followed). Null beyond `MAX_LINKS` links or
- * when the tree cannot be read.
+ * The files among `candidates` the rest of the tree may read (`git grep -F -i` at `head`, the whole tracked tree except
+ * `searchable` = false and `NOT_SEARCHED`): a file whose path or name appears literally, and every file under a parent
+ * folder that appears as a path segment (`docs/`, `/docs`) or a quoted name (`'docs'`, `"docs"`, `` `docs` ``: a
+ * `readdirSync('docs')`, a `join('docs', name)`, an `import.meta.glob('../docs/*.md')`). False positives are accepted:
+ * the default is the full run. Null when the search could not be made (then every candidate is required).
+ */
+export declare function mentionedFiles(repo: string, head: string, candidates: readonly string[], searchable: (path: string) => boolean): Promise<Set<string> | null>;
+/**
+ * The files among `candidates` that a symbolic link of `head` points to, or lies under. A target is resolved to its
+ * real path (links of the checkout followed) before it is judged outside the repository; a link to the root of the
+ * repository or to one of its ancestors makes every candidate linked. Null beyond `MAX_LINKS` links or when the tree
+ * cannot be read.
  */
 export declare function linkedFiles(git: Git, repo: string, head: string, candidates: readonly string[]): Promise<Set<string> | null>;
 export interface ScopeInput {

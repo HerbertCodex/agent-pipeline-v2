@@ -1,4 +1,5 @@
-import { isAbsolute, posix, relative } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, posix, relative, sep } from 'node:path';
 import { DEFAULT_GENERATED_PATHS, MAX_SCOPE_FILES, type Gate } from '../domain/contracts.js';
 import type { Git } from '../execution/git.js';
 import { matches, validRelativePath } from '../policy/policy.js';
@@ -37,8 +38,6 @@ export const ALWAYS_REQUIRED: readonly string[] = [
   // Content the application compiles or serves: Markdown, MDX and mdsvex under the source, static, public and content folders.
   ...['src', 'static', 'public', 'content'].flatMap(dir => ['md', 'mdx', 'svx'].flatMap(ext => [`${dir}/**/*.${ext}`, `**/${dir}/**/*.${ext}`])),
 ];
-/** Folders searched for a literal mention of a dispensed file (with the files the commands of the check name). */
-export const MENTION_ROOTS: readonly string[] = ['src', 'tests', 'test', 'scripts', 'e2e'];
 /** Most needles of one literal search, and most symbolic links read; beyond, the check is required. */
 const MAX_NEEDLES = 1000;
 const MAX_LINKS = 500;
@@ -117,38 +116,83 @@ const safeMatch = (path: string, glob: string): boolean => { try { return matche
 const ciMatch = (path: string, glob: string): boolean => safeMatch(path.toLowerCase(), glob.toLowerCase());
 
 /**
- * The files among `candidates` whose path or file name appears literally (case ignored) in a file of `pathspecs` at
- * `head` (`git grep -F`): a file the application or its tests read by name is never without effect. Null when the
- * search could not be made (then every candidate is required).
+ * Files never searched for mentions: APV's own configuration and state (`.apv/`, `pipeline.v2.json`: never read by the
+ * application; the configuration lists the dispensed paths themselves) and `.gitignore` files (they read nothing).
  */
-export async function mentionedFiles(repo: string, head: string, candidates: readonly string[], pathspecs: readonly string[]): Promise<Set<string> | null> {
-  const byNeedle = new Map<string, string[]>();
+export const NOT_SEARCHED: readonly string[] = ['.apv/**', 'pipeline.v2.json', '**/.gitignore'];
+
+/** What a file or folder is searched as: its path, its name, and each parent folder as a path segment or a quoted name. */
+export function mentionNeedles(file: string): { needle: string; folder: string | null }[] {
+  const out: { needle: string; folder: string | null }[] = [{ needle: file, folder: null }, { needle: posix.basename(file), folder: null }];
+  const parts = file.split('/');
+  for (let i = 1; i < parts.length; i++) {
+    const dir = parts.slice(0, i).join('/');
+    for (const needle of [`${dir}/`, `/${dir}`, `'${dir}'`, `"${dir}"`, `\`${dir}\``]) out.push({ needle, folder: dir });
+  }
+  return out;
+}
+
+/**
+ * The files among `candidates` the rest of the tree may read (`git grep -F -i` at `head`, the whole tracked tree except
+ * `searchable` = false and `NOT_SEARCHED`): a file whose path or name appears literally, and every file under a parent
+ * folder that appears as a path segment (`docs/`, `/docs`) or a quoted name (`'docs'`, `"docs"`, `` `docs` ``: a
+ * `readdirSync('docs')`, a `join('docs', name)`, an `import.meta.glob('../docs/*.md')`). False positives are accepted:
+ * the default is the full run. Null when the search could not be made (then every candidate is required).
+ */
+export async function mentionedFiles(repo: string, head: string, candidates: readonly string[], searchable: (path: string) => boolean): Promise<Set<string> | null> {
+  const byNeedle = new Map<string, Set<string>>();
   for (const file of candidates) {
-    for (const needle of new Set([file, posix.basename(file)])) {
-      if (!needle || /[\n\r\0]/.test(needle)) return null;
+    if (/[\n\r\0]/.test(file)) return null;
+    for (const { needle, folder } of mentionNeedles(file)) {
       const key = needle.toLowerCase();
-      byNeedle.set(key, [...(byNeedle.get(key) ?? []), file]);
+      if (!byNeedle.has(key)) byNeedle.set(key, new Set());
+      // A folder named: every candidate under it.
+      for (const f of folder === null ? [file] : candidates.filter(c => c.toLowerCase().startsWith(`${folder.toLowerCase()}/`))) byNeedle.get(key)!.add(f);
     }
   }
   if (!byNeedle.size) return new Set();
   if (byNeedle.size > MAX_NEEDLES) return null;
-  const specs = [...new Set(pathspecs)].filter(p => p && !p.includes('*') && !p.includes('?')).map(p => `:(literal)${p}`);
-  const r = await runProcess({ command: ['git', '-c', 'core.quotePath=false', 'grep', '-F', '-i', '-o', '-h', '-I', '--no-color', '--no-textconv', '-f', '-', head, '--', ...specs],
-    cwd: repo, env: { ...environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']), GIT_TERMINAL_PROMPT: '0' }, timeoutMs: 60000,
-    input: `${[...byNeedle.keys()].join('\n')}\n`, maxOutputBytes: 4 * 1024 * 1024 });
+  const r = await runProcess({ command: ['git', '-c', 'core.quotePath=false', 'grep', '-F', '-i', '-o', '-z', '-I', '--no-color', '--no-textconv', '-f', '-', head, '--'],
+    cwd: repo, env: { ...environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']), GIT_TERMINAL_PROMPT: '0' }, timeoutMs: 120000,
+    input: `${[...byNeedle.keys()].join('\n')}\n`, maxOutputBytes: 64 * 1024 * 1024 });
   if (r.truncated || (r.exitCode !== 0 && r.exitCode !== 1) || (r.status !== 'passed' && r.exitCode !== 1)) return null;
-  const found = new Set<string>();
-  for (const line of r.stdout.split('\n')) {
-    const files = byNeedle.get(line.trim().toLowerCase());
-    if (files) for (const f of files) found.add(f);
+  const matched = new Set<string>();
+  const prefix = `${head}:`;
+  for (const record of r.stdout.split('\n')) {
+    if (!record) continue;
+    const cut = record.indexOf('\0');
+    // A record that does not parse (a file name with a line break): the search is not trusted.
+    if (cut < 0 || !record.startsWith(prefix)) return null;
+    const path = record.slice(prefix.length, cut);
+    if (!searchable(path) || NOT_SEARCHED.some(g => ciMatch(path, g))) continue;
+    matched.add(record.slice(cut + 1).toLowerCase());
   }
+  // `-o` prints the longest match only (`docs/content.md`, never the `docs/` inside it): every needle a match contains counts.
+  const found = new Set<string>();
+  for (const m of matched) for (const [needle, files] of byNeedle) if (m.includes(needle)) for (const f of files) found.add(f);
   return found;
 }
 
+/** The real path of `abs` (symbolic links resolved), through its nearest existing ancestor when it does not exist. */
+function realPath(abs: string): string {
+  let head = abs;
+  const rest: string[] = [];
+  for (;;) {
+    try { return join(realpathSync(head), ...rest.reverse()); }
+    catch {
+      const parent = dirname(head);
+      if (parent === head) return abs;
+      rest.push(basename(head));
+      head = parent;
+    }
+  }
+}
+
 /**
- * The files among `candidates` that a symbolic link of `head` points to, or lies under (one level, relative targets
- * inside the repository; a chain of links or an absolute target is not followed). Null beyond `MAX_LINKS` links or
- * when the tree cannot be read.
+ * The files among `candidates` that a symbolic link of `head` points to, or lies under. A target is resolved to its
+ * real path (links of the checkout followed) before it is judged outside the repository; a link to the root of the
+ * repository or to one of its ancestors makes every candidate linked. Null beyond `MAX_LINKS` links or when the tree
+ * cannot be read.
  */
 export async function linkedFiles(git: Git, repo: string, head: string, candidates: readonly string[]): Promise<Set<string> | null> {
   let tree: string;
@@ -159,6 +203,8 @@ export async function linkedFiles(git: Git, repo: string, head: string, candidat
   const r = await runProcess({ command: ['git', 'cat-file', '--batch'], cwd: repo, env: environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']),
     timeoutMs: 60000, input: `${links.map(l => l.oid).join('\n')}\n`, maxOutputBytes: 4 * 1024 * 1024 });
   if (r.status !== 'passed' || r.truncated) return null;
+  let root: string;
+  try { root = realpathSync(repo); } catch { return null; }
   const targets: string[] = [];
   let rest = Buffer.from(r.stdout, 'utf8');
   for (const link of links) {
@@ -168,10 +214,12 @@ export async function linkedFiles(git: Git, repo: string, head: string, candidat
     if (header[1] !== 'blob' || !Number.isInteger(size)) return null;
     const target = rest.subarray(nl + 1, nl + 1 + size).toString('utf8');
     rest = rest.subarray(nl + 1 + size + 1);
-    if (posix.isAbsolute(target)) continue;
-    const resolved = posix.normalize(posix.join(posix.dirname(link.path), target)).replace(/\/+$/, '');
-    if (resolved === '.' || resolved.startsWith('../') || resolved === '..') continue;
-    targets.push(resolved.toLowerCase());
+    const real = realPath(isAbsolute(target) ? target : join(root, dirname(link.path), target));
+    const rel = relative(root, real);
+    // The root itself, or one of its ancestors: the link reaches every file.
+    if (rel === '' || root.startsWith(`${real}${sep}`) || real === sep) return new Set(candidates);
+    if (rel.startsWith('..') || isAbsolute(rel)) continue;
+    targets.push(rel.split(sep).join('/').toLowerCase());
   }
   return new Set(candidates.filter(file => { const f = file.toLowerCase(); return targets.some(t => f === t || f.startsWith(`${t}/`)); }));
 }
@@ -274,13 +322,15 @@ export async function planScope(git: Git, repo: string, config: ApvConfig, input
     // A file the application or its tests read by name, or that a symbolic link points to, is never without effect.
     const rest = blocking.length ? [] : files;
     if (rest.length) {
-      const pathspecs = [...MENTION_ROOTS, ...named.filter(p => !p.endsWith('/**'))];
-      const mentioned = await mentionedFiles(repo, head, rest, pathspecs);
+      // Searched: the whole tracked tree but the files the list of the reference dispenses (by declaration without effect).
+      const dispensable = (path: string): boolean => target.paths.some(g => safeMatch(path, g)) && !(target.except ?? []).some(g => ciMatch(path, g))
+        && !inputs.some(g => ciMatch(path, g));
+      const mentioned = await mentionedFiles(repo, head, rest, path => !dispensable(path));
       const linked = await linkedFiles(git, repo, head, rest);
       if (!mentioned || !linked) { blocking.push(...rest.slice(0, 50)); first = `${rest[0]} : recherche des mentions ou des liens symboliques impossible ou trop grande, toujours requis`; }
       else {
         for (const path of rest) {
-          const why = mentioned.has(path) ? `nommé littéralement dans ${MENTION_ROOTS.join('/, ')}/ ou un fichier des commandes du contrôle (lu par l'application ou les tests : à mettre dans except)`
+          const why = mentioned.has(path) ? 'nommé (ou son dossier) dans un fichier suivi qui n\'est pas lui-même dispensé : peut-être lu par l\'application ou les tests (à mettre dans except, ou lister des fichiers précis)'
             : linked.has(path) ? 'cible d\'un lien symbolique du dépôt' : null;
           if (!why) continue;
           if (blocking.length < 50) blocking.push(path);
