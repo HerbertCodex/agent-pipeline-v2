@@ -8,6 +8,7 @@ import { errorMessage } from '../domain/errors.js';
 import { designDir } from '../design/config.js';
 import { environment, runProcess } from '../execution/process.js';
 import { resolveReference } from './repeat.js';
+import { webImpact } from '../web/impact.js';
 
 /**
  * Scope of the proof of a check (`skipWhenOnly`, docs/APV3-SPEC.md, section 21): a change that only touches files with
@@ -117,18 +118,22 @@ const safeMatch = (path: string, glob: string): boolean => { try { return matche
 const ciMatch = (path: string, glob: string): boolean => safeMatch(path.toLowerCase(), glob.toLowerCase());
 
 /**
- * Files never searched for mentions: APV's own configuration and state (`.apv/`, `pipeline.v2.json`: never read by the
- * application; the configuration lists the dispensed paths themselves) and `.gitignore` files (they read nothing).
+ * Files never searched for mentions: APV's configuration, decisions, specs and state (never read by the application; the
+ * configuration lists the dispensed paths themselves), and the ignore files of tools (`.gitignore`, `.prettierignore`...:
+ * they read nothing). Any other file under `.apv/` (a tool script) is searched.
  */
-export const NOT_SEARCHED: readonly string[] = ['.apv/**', 'pipeline.v2.json', '**/.gitignore'];
+export const NOT_SEARCHED: readonly string[] = ['.apv/config.json', '.apv/DECISIONS.*', '.apv/specs/**', '.apv/state/**', 'pipeline.v2.json', '**/.*ignore'];
 
 /** What a file or folder is searched as: its path, its name, and each parent folder as a path segment or a quoted name. */
-export function mentionNeedles(file: string): { needle: string; folder: string | null }[] {
+export function mentionNeedles(file: string, folders = true): { needle: string; folder: string | null }[] {
   const out: { needle: string; folder: string | null }[] = [{ needle: file, folder: null }, { needle: posix.basename(file), folder: null }];
+  if (file.includes('/')) out.push({ needle: file.split('/').join('\\'), folder: null });
+  if (!folders) return out;
   const parts = file.split('/');
   for (let i = 1; i < parts.length; i++) {
     const dir = parts.slice(0, i).join('/');
-    for (const needle of [`${dir}/`, `/${dir}`, `'${dir}'`, `"${dir}"`, `\`${dir}\``]) out.push({ needle, folder: dir });
+    const win = parts.slice(0, i).join('\\');
+    for (const needle of [`${dir}/`, `/${dir}`, `'${dir}'`, `"${dir}"`, `\`${dir}\``, `\\${win}`, `${win}\\`]) out.push({ needle, folder: dir });
   }
   return out;
 }
@@ -140,11 +145,12 @@ export function mentionNeedles(file: string): { needle: string; folder: string |
  * `readdirSync('docs')`, a `join('docs', name)`, an `import.meta.glob('../docs/*.md')`). False positives are accepted:
  * the default is the full run. Null when the search could not be made (then every candidate is required).
  */
-export async function mentionedFiles(repo: string, head: string, candidates: readonly string[], searchable: (path: string) => boolean): Promise<Set<string> | null> {
+export async function mentionedFiles(repo: string, head: string, candidates: readonly string[], searchable: (path: string) => boolean,
+  withFolders: (file: string) => boolean = () => true): Promise<Set<string> | null> {
   const byNeedle = new Map<string, Set<string>>();
   for (const file of candidates) {
     if (/[\n\r\0]/.test(file)) return null;
-    for (const { needle, folder } of mentionNeedles(file)) {
+    for (const { needle, folder } of mentionNeedles(file, withFolders(file))) {
       const key = needle.toLowerCase();
       if (!byNeedle.has(key)) byNeedle.set(key, new Set());
       // A folder named: every candidate under it.
@@ -303,6 +309,9 @@ export async function planScope(git: Git, repo: string, config: ApvConfig, input
     const files = [...byPath.keys()].sort();
     const targetGate = ref.config.gates.find(g => g.id === gate.id)!;
     const design = [config, ref.config].map(c => { try { return designDir(c.design); } catch { return 'docs/design'; } });
+    // A project that audits its site: every file the web audit would find « web » requires the check too.
+    const webSettings = [config.web, ref.config.web].filter((w): w is NonNullable<ApvConfig['web']> => w !== undefined);
+    const webEffect = (path: string): boolean => webSettings.some(w => webImpact([path], w).required);
     const named = [gate, targetGate].flatMap(g => commandPaths(g, repo));
     const inputs = [...new Set([...ALWAYS_REQUIRED, ...(configPath ? [configPath] : []), ...design.map(d => `${d}/**`),
       ...[gate, targetGate].flatMap(g => [...g.testPaths, ...(g.repeatChanged?.paths ?? [])]), ...named])];
@@ -313,6 +322,7 @@ export async function planScope(git: Git, repo: string, config: ApvConfig, input
       const why = !validRelativePath(path) ? 'chemin invalide'
         : modeChange(f) ? `${modeChange(f)} (lien symbolique, sous-module ou exécutable : toujours requis)`
         : inputs.some(g => ciMatch(path, g)) ? 'toujours requis (configuration, dépendances, CI, build, maquettes, tests, scripts, migrations ou contenu de l\'application)'
+        : webEffect(path) ? 'effet web (section web : l\'audit web le jugerait requis)'
         : !target.paths.some(g => safeMatch(path, g)) ? 'hors de skipWhenOnly.paths'
         : (target.except ?? []).some(g => ciMatch(path, g)) ? 'exclu par skipWhenOnly.except'
         : null;
@@ -326,7 +336,10 @@ export async function planScope(git: Git, repo: string, config: ApvConfig, input
       // Searched: the whole tracked tree but the files the list of the reference dispenses (by declaration without effect).
       const dispensable = (path: string): boolean => target.paths.some(g => safeMatch(path, g)) && !(target.except ?? []).some(g => ciMatch(path, g))
         && !inputs.some(g => ciMatch(path, g));
-      const mentioned = await mentionedFiles(repo, head, rest, path => !dispensable(path));
+      // A file listed exactly (a pattern without wildcard) is searched by its path and name only; one reached by a
+      // wildcard pattern, by its folders too (a folder read whole).
+      const byWildcard = (path: string): boolean => target.paths.some(g => /[*?]/.test(g) && safeMatch(path, g));
+      const mentioned = await mentionedFiles(repo, head, rest, path => !dispensable(path), path => byWildcard(path) || !target.paths.includes(path));
       const linked = await linkedFiles(git, repo, head, rest);
       if (!mentioned || !linked) { blocking.push(...rest.slice(0, 50)); first = `${rest[0]} : recherche des mentions ou des liens symboliques impossible ou trop grande, toujours requis`; }
       else {

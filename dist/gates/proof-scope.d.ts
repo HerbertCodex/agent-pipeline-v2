@@ -51,12 +51,13 @@ export declare function modeChange(f: ChangedFile): string | null;
  */
 export declare function commandPaths(gate: Gate, repo: string): string[];
 /**
- * Files never searched for mentions: APV's own configuration and state (`.apv/`, `pipeline.v2.json`: never read by the
- * application; the configuration lists the dispensed paths themselves) and `.gitignore` files (they read nothing).
+ * Files never searched for mentions: APV's configuration, decisions, specs and state (never read by the application; the
+ * configuration lists the dispensed paths themselves), and the ignore files of tools (`.gitignore`, `.prettierignore`...:
+ * they read nothing). Any other file under `.apv/` (a tool script) is searched.
  */
 export declare const NOT_SEARCHED: readonly string[];
 /** What a file or folder is searched as: its path, its name, and each parent folder as a path segment or a quoted name. */
-export declare function mentionNeedles(file: string): {
+export declare function mentionNeedles(file: string, folders?: boolean): {
     needle: string;
     folder: string | null;
 }[];
@@ -67,7 +68,7 @@ export declare function mentionNeedles(file: string): {
  * `readdirSync('docs')`, a `join('docs', name)`, an `import.meta.glob('../docs/*.md')`). False positives are accepted:
  * the default is the full run. Null when the search could not be made (then every candidate is required).
  */
-export declare function mentionedFiles(repo: string, head: string, candidates: readonly string[], searchable: (path: string) => boolean): Promise<Set<string> | null>;
+export declare function mentionedFiles(repo: string, head: string, candidates: readonly string[], searchable: (path: string) => boolean, withFolders?: (file: string) => boolean): Promise<Set<string> | null>;
 /**
  * The files among `candidates` that a symbolic link of `head` points to, or lies under. A target is resolved to its
  * real path (links of the checkout followed) before it is judged outside the repository; a link to the root of the

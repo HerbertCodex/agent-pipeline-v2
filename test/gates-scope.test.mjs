@@ -285,8 +285,8 @@ test('verify recomputes the scope from the commit: a receipt « not required » 
 });
 
 /** A project whose main already holds `files`, then a branch that changes `changes`: the receipt of browser. */
-async function scenario(t, files, changes, remove = []) {
-  const f = project(t);
+async function scenario(t, files, changes, remove = [], gates = null) {
+  const f = project(t, gates);
   git(f.repo, 'switch', '-q', 'main');
   for (const [path, text] of Object.entries(files)) write(f.repo, path, typeof text === 'function' ? text(readFileSync(join(f.repo, path), 'utf8')) : text);
   commit(f.repo, 'on main');
@@ -326,6 +326,45 @@ test('a dispensed file the rest of the tree may read (named, its folder named, a
   s = await scenario(t, { 'docs/a.md': 'see docs/b.md\n', 'docs/b.md': 'v1\n', '.apv/brief.md': 'docs/b.md\n' }, { 'docs/b.md': 'v2\n' });
   assert.equal(s.rec.status, 'not_required', s.rec.scope.reason);
   assert.equal(s.ran, false);
+});
+
+test('third review: web effect of a project that audits its site, tool scripts under .apv/, Windows paths, exact files, ignore files', async t => {
+  const browser = (scope, extra = {}) => [{ id: 'browser', stage: 'full', command: [process.execPath, 'run.mjs', 'browser'], skipWhenOnly: scope, ...extra }];
+  // (1) A project with a web section: whatever the command of the check (npm run audit:web escaped a detection by argv),
+  // every file the web audit finds « web » requires it.
+  const webGates = browser(scopeOf({ paths: [...NON_CODE.filter(p => p !== 'notes/**'), 'site/**'] }));
+  const withWeb = async (changes) => {
+    const f = project(t, webGates);
+    git(f.repo, 'switch', '-q', 'main');
+    write(f.repo, '.apv/config.json', { gates: webGates, web: { pages: ['/'], paths: ['docs/site/**'] } });
+    commit(f.repo, 'web section');
+    git(f.repo, 'switch', '-q', '-C', 'feature', 'main');
+    for (const [path, text] of Object.entries(changes)) write(f.repo, path, text);
+    commit(f.repo, 'change');
+    return receipt((await full(f.repo)).json().receiptsDirectory, 'browser');
+  };
+  assert.match((await withWeb({ 'docs/site/index.md': 'x\n' })).scope.reason, /docs\/site\/index\.md : effet web/);
+  assert.match((await withWeb({ 'site/page.md': 'x\n' })).scope.reason, /site\/page\.md : effet web/, 'outside the neutral paths of the audit');
+  assert.equal((await withWeb({ 'docs/guide.md': 'x\n' })).status, 'not_required', 'docs/** is neutral for the audit');
+  // (2) A tool script under .apv/ is searched; APV's decisions, specs, state and configuration are not.
+  let s = await scenario(t, { '.apv/tools/gen.mjs': "readFileSync('docs/b.md')\n", 'docs/b.md': 'v1\n' }, { 'docs/b.md': 'v2\n' });
+  assert.match(s.rec.scope.reason, /docs\/b\.md : nommé/);
+  s = await scenario(t, { '.apv/state/run-x.json': '{"note":"docs/b.md"}\n', '.apv/specs/s.json': '{"f":"docs/b.md"}\n', 'docs/b.md': 'v1\n' }, { 'docs/b.md': 'v2\n' });
+  assert.equal(s.rec.status, 'not_required', s.rec.scope.reason);
+  // (3) Windows paths.
+  s = await scenario(t, { 'tools/Load.cs': 'var p = Path.Combine(root, "..\\docs\\page.md");\n', 'docs/page.md': 'v1\n' }, { 'docs/page.md': 'v2\n' });
+  assert.match(s.rec.scope.reason, /docs\/page\.md : nommé/);
+  // (4) A file listed exactly is searched by its path and name only, not its folder; ignore files are never searched.
+  const exact = browser({ paths: ['docs/exact.md', 'AGENTS.md'], reference: 'main' });
+  s = await scenario(t, { 'src/list.mjs': "readdirSync('docs')\n", 'docs/exact.md': 'v1\n' }, { 'docs/exact.md': 'v2\n' }, [], exact);
+  assert.equal(s.rec.status, 'not_required', s.rec.scope.reason);
+  s = await scenario(t, { 'src/read.mjs': "readFileSync('docs/exact.md')\n", 'docs/exact.md': 'v1\n' }, { 'docs/exact.md': 'v2\n' }, [], exact);
+  assert.match(s.rec.scope.reason, /docs\/exact\.md : nommé/);
+  s = await scenario(t, { '.prettierignore': 'docs/\n', 'sub/.eslintignore': 'docs/**\n', 'docs/b.md': 'v1\n' }, { 'docs/b.md': 'v2\n' });
+  assert.equal(s.rec.status, 'not_required', s.rec.scope.reason);
+  // A comment is a mention.
+  s = await scenario(t, { 'src/x.mjs': '// see docs/\n', 'docs/b.md': 'v1\n' }, { 'docs/b.md': 'v2\n' });
+  assert.match(s.rec.scope.reason, /docs\/b\.md : nommé/);
 });
 
 test('symbolic links (B5, B6): a link to a dispensed file or folder, to the root or an ancestor, resolved through real paths', async t => {
