@@ -53,12 +53,11 @@ const num = (value: unknown): number | null => typeof value === 'number' && Numb
 const str = (value: unknown): string | null => typeof value === 'string' ? value : null;
 const one = (text: string): string => text.replace(/\s+/g, ' ').trim().slice(0, 300);
 
-/** Same page for Lighthouse: scheme, host, path and query compared, a trailing slash of the path ignored. */
+/** Same page for Lighthouse: scheme, host, path and query compared exactly (`/faq/` is another page than `/faq`). */
 export function samePage(a: string, b: string): boolean {
   try {
     const x = new URL(a); const y = new URL(b);
-    const path = (u: URL) => u.pathname.replace(/\/+$/, '') || '/';
-    return x.protocol === y.protocol && x.host === y.host && path(x) === path(y) && x.search === y.search;
+    return x.protocol === y.protocol && x.host === y.host && x.pathname === y.pathname && x.search === y.search;
   } catch { return a === b; }
 }
 

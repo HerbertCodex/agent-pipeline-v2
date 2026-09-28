@@ -1,9 +1,16 @@
-export function parseRobots(text) {
+/** Percent-encoding normalised for comparisons (RFC 9309, section 2.2.2): non-ASCII characters encoded, escapes in upper case. */
+export function normalizePath(path) {
+    return path.replace(/[^\x00-\x7f]+/g, c => encodeURIComponent(c)).replace(/%[0-9a-f]{2}/gi, m => m.toUpperCase());
+}
+/** The product token of a user-agent line (`Googlebot/2.1` is `googlebot`), `*` kept. */
+const agentToken = (value) => value.startsWith('*') ? '*' : (/^[A-Za-z_-]+/.exec(value)?.[0] ?? value).toLowerCase();
+export function parseRobots(input) {
+    const text = input.replace(/^\uFEFF/, '');
     const groups = [];
     const sitemaps = [];
     let current = null;
     let lastWasAgent = false;
-    for (const raw of text.split(/\r?\n/)) {
+    for (const raw of text.split(/\r\n|\r|\n/)) {
         const line = raw.replace(/#.*$/, '').trim();
         const m = /^([A-Za-z-]+)\s*:\s*(.*)$/.exec(line);
         if (!m)
@@ -15,7 +22,7 @@ export function parseRobots(text) {
                 current = { agents: [], rules: [] };
                 groups.push(current);
             }
-            current.agents.push(value.toLowerCase());
+            current.agents.push(agentToken(value));
             lastWasAgent = true;
             continue;
         }
@@ -28,14 +35,17 @@ export function parseRobots(text) {
         if ((key === 'allow' || key === 'disallow') && current) {
             // An empty Disallow allows everything: no rule.
             if (value)
-                current.rules.push({ allow: key === 'allow', path: value });
+                current.rules.push({ allow: key === 'allow', path: normalizePath(value) });
         }
     }
     return { groups, sitemaps };
 }
-/** The group that applies to a crawler: the one naming its product token (case-insensitive), else `*`, else none. */
+/**
+ * The groups that apply to a crawler, as Google reads them: every group naming its product token (case-insensitive,
+ * merged), else every `*` group (merged), else none.
+ */
 export function robotsGroup(robots, agent) {
-    const token = agent.toLowerCase();
+    const token = agentToken(agent);
     const named = robots.groups.filter(g => g.agents.some(a => a !== '*' && a === token));
     if (named.length)
         return named;
@@ -55,7 +65,8 @@ function ruleMatches(pattern, path) {
     return new RegExp(regex).test(path);
 }
 /** Whether a crawler may fetch a path: the longest matching rule wins, Allow on a tie; no rule: allowed. */
-export function robotsAllows(robots, agent, path) {
+export function robotsAllows(robots, agent, rawPath) {
+    const path = normalizePath(rawPath);
     let best = null;
     for (const group of robotsGroup(robots, agent)) {
         for (const rule of group.rules) {
@@ -67,16 +78,20 @@ export function robotsAllows(robots, agent, path) {
     }
     return { allowed: best ? best.allow : true, rule: best };
 }
-export function parseSitemap(xml) {
+export function parseSitemap(input) {
+    const xml = input.replace(/^\uFEFF/, '');
     const kind = /<(?:[A-Za-z0-9]+:)?urlset[\s>]/.test(xml) ? 'urlset' : /<(?:[A-Za-z0-9]+:)?sitemapindex[\s>]/.test(xml) ? 'sitemapindex' : 'unknown';
     const locs = [...xml.matchAll(/<(?:[A-Za-z0-9]+:)?loc>\s*(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?\s*<\/(?:[A-Za-z0-9]+:)?loc>/g)].map(m => decodeEntities(m[1].trim()));
     return { kind, locs };
 }
-/** Path of a URL for comparisons between the audited origin and absolute URLs of another host (a preview's sitemap names production). */
+/**
+ * Path of a URL for comparisons between the audited origin and absolute URLs of another host (a preview's sitemap names
+ * production). Exact: a trailing slash makes another URL (`/faq/` is not `/faq`), escapes normalised.
+ */
 export function pagePath(url, base) {
     try {
         const u = new URL(url, base);
-        return `${u.pathname.replace(/\/+$/, '') || '/'}${u.search}`;
+        return normalizePath(`${u.pathname}${u.search}`);
     }
     catch {
         return null;
@@ -178,6 +193,10 @@ export function readinessFindings(input) {
     };
     const heads = new Map();
     for (const page of input.pages) {
+        if (page.redirectedTo) {
+            add('status', page.path, `page redirigée vers ${page.redirectedTo} : déclarer l'adresse finale ; balises non lues`);
+            continue;
+        }
         if (page.html === null || page.status !== 200) {
             const redirect = page.status !== null && page.status >= 300 && page.status < 400;
             add('status', page.path, `page ${described(page)}${redirect ? ' (redirection : déclarer l\'adresse finale)' : ''} ; 200 attendu, balises non lues`);

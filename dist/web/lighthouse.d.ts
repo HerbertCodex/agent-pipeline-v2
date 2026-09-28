@@ -43,7 +43,7 @@ export interface Expectation {
     lighthouse: string;
 }
 type Json = Record<string, unknown>;
-/** Same page for Lighthouse: scheme, host, path and query compared, a trailing slash of the path ignored. */
+/** Same page for Lighthouse: scheme, host, path and query compared exactly (`/faq/` is another page than `/faq`). */
 export declare function samePage(a: string, b: string): boolean;
 /** Opportunities and diagnostics that cost points in the measured categories, best gains first. */
 export declare function opportunities(report: Json, categories: readonly WebCategory[], limit?: number): Opportunity[];

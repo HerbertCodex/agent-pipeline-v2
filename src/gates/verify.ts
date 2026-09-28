@@ -8,6 +8,7 @@ import type { ApvConfig } from '../config/load.js';
 import { RECEIPTS_DIR, gatesConfigHash, stageGates } from './run.js';
 import { planRepeat, resolveRef } from './repeat.js';
 import { manifestCommit, readSharedRun, sharedRunIds, sharedStore } from './store.js';
+import { auditBase, changedBetween, webAuditGate, webImpact } from '../web/impact.js';
 
 export interface VerifyOptions {
   repo: string;
@@ -37,9 +38,11 @@ export interface VerifyOptions {
  * - `dirty`: receipts exist at this commit, but only with uncommitted changes (or an unknown tree state);
  * - `missing`: no receipt at this commit with the current configuration;
  * - `unrepeated`: that latest receipt succeeded, but the check declares `repeatChanged` and the receipt does not show
- *   the repetition of every test file the commit adds or modifies (run without a base, a base too close, files missing).
+ *   the repetition of every test file the commit adds or modifies (run without a base, a base too close, files missing);
+ * - `unaudited`: that latest receipt succeeded, but the check runs `apv web audit --preview --base <ref>`, the receipt
+ *   says « audit not required » (or records nothing) and the recomputation from the commit says required.
  */
-export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated';
+export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'unaudited';
 export interface GateEvidence {
   gateId: string;
   state: EvidenceState;
@@ -61,6 +64,8 @@ export interface GateEvidence {
   source: ReceiptSource | null;
   /** A check that declares `repeatChanged`: the test files its receipt should have repeated and did not, and why; null otherwise. */
   repeat: { missing: string[]; reason: string } | null;
+  /** A check that runs `apv web audit --preview --base`: why its successful receipt does not prove the audit (files with a web effect, reason); null otherwise. */
+  web: { files: string[]; reason: string } | null;
 }
 export interface VerifyResult {
   repo: string;
@@ -85,6 +90,8 @@ export interface VerifyResult {
   flaky: string[];
   /** Required checks that declare `repeatChanged`: their proof needs a run with `--base`. */
   repeating: string[];
+  /** Required checks that run `apv web audit --preview --base`: « not required » is recomputed from the commit. */
+  auditing: string[];
   ok: boolean;
 }
 
@@ -240,6 +247,23 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     }
     return null;
   };
+  /**
+   * Why a successful receipt of a check that runs `apv web audit --preview --base <ref>` does not prove the audit, or null.
+   * An audit made proves itself (its exit code is the receipt's); « not required » is recomputed here from the commit,
+   * against the reference of the command and the base the run recorded: a file with a web effect changed since either,
+   * a reference that no longer resolves, or a receipt without record, and nothing is proven.
+   */
+  const webGap = (reference: string, receipt: GateReceipt): { files: string[]; reason: string } | null => {
+    const record = receipt.web;
+    if (!record) return { files: [], reason: 'reçu sans relevé de l\'audit web (APV_WEB_RECORD) : relancer le contrôle avec cette version' };
+    if (record.required && record.auditId !== null) return null;
+    const recomputed = auditBase(repo, reference, commit);
+    if (!recomputed.ok) return { files: [], reason: `« non requis » invérifiable : ${recomputed.message}` };
+    const changed = new Set(changedBetween(repo, recomputed.base, commit) ?? []);
+    if (record.base && record.base !== commit) for (const f of changedBetween(repo, record.base, commit) ?? []) changed.add(f);
+    const impact = webImpact([...changed].sort(), options.config.web);
+    return impact.required ? { files: impact.files, reason: `audit requis au commit (${impact.files.length} fichier(s) à effet web modifié(s) depuis ${recomputed.base.slice(0, 12)}), reçu « non requis »` } : null;
+  };
   const gates: GateEvidence[] = [];
   for (const gateId of required) {
     const all = atCommit.filter(f => f.receipt.gateId === gateId);
@@ -256,17 +280,20 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     const clean = current.filter(f => f.dirty === false);
     if (!clean.length) {
       const state: EvidenceState = current.length ? 'dirty' : 'missing';
-      gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null, repeat: null });
+      gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null, repeat: null, web: null });
       continue;
     }
     const last = clean.reduce(latest);
     const proof = last.receipt.targeted === true ? 'targeted' : 'full';
     const gate = options.config.gates.find(g => g.id === gateId)!;
     const repeat = success(last.receipt) && gate.repeatChanged ? await repeatGap(gate.repeatChanged, last.receipt, stage === 'full' && proof === 'full') : null;
-    gates.push({ gateId, state: !success(last.receipt) ? 'failed' : repeat ? 'unrepeated' : 'passed', status: last.receipt.status, receipt: last.receipt.id,
-      runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof, otherBase, source: last.source, repeat });
+    const audit = webAuditGate(proof === 'targeted' ? gate.affected ?? gate.command : gate.command);
+    const web = success(last.receipt) && audit?.base ? webGap(audit.base, last.receipt) : null;
+    gates.push({ gateId, state: !success(last.receipt) ? 'failed' : repeat ? 'unrepeated' : web ? 'unaudited' : 'passed', status: last.receipt.status, receipt: last.receipt.id,
+      runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof, otherBase, source: last.source, repeat, web });
   }
   return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered,
     flaky: gates.filter(g => g.state === 'passed' && g.status === 'passed_after_retry').map(g => g.gateId),
-    repeating: required.filter(id => options.config.gates.some(g => g.id === id && g.repeatChanged)), ok: gates.every(g => g.state === 'passed') };
+    repeating: required.filter(id => options.config.gates.some(g => g.id === id && g.repeatChanged)),
+    auditing: required.filter(id => options.config.gates.some(g => g.id === id && webAuditGate(g.command)?.base)), ok: gates.every(g => g.state === 'passed') };
 }

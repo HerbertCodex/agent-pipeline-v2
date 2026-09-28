@@ -1,6 +1,6 @@
 import { availableParallelism } from 'node:os';
 import { s } from '../domain/schema.js';
-import { matches } from '../policy/policy.js';
+import { matches, validRelativePath } from '../policy/policy.js';
 import { errorMessage } from '../domain/errors.js';
 /**
  * Settings of `apv web audit` (section `web` of `.apv/config.json`, docs/CONFIGURATION.md « Qualité web ») : the public
@@ -60,8 +60,17 @@ export const webThresholdsSchema = s.object({
         si: s.default(s.nullable(s.number(1, 120_000)), null),
     }), { ...DEFAULT_METRIC_THRESHOLDS, fcp: null, si: null }),
 });
-/** A page: an absolute path of the site, query allowed, never a fragment nor an origin. */
-export const PAGE_PATH = /^\/(?!\/)[^\s#]*$/;
+/** A page: an absolute path of the site, query allowed, never a fragment, a backslash nor an origin (the resolved URL is checked too). */
+export const PAGE_PATH = /^\/(?![\/\\])[^\s#\\]*$/;
+/** Default files without any effect on the served site: a change limited to them needs no audit. */
+export const DEFAULT_NEUTRAL_PATHS = ['tests/**', 'docs/**', '**/*.md', '.github/**'];
+/**
+ * Chrome options refused in `web.chromeFlags`: they run another program, open the browser to the network, load code
+ * or reroute the traffic; the measure would no longer be the one of a plain headless Chrome.
+ */
+export const REFUSED_CHROME_FLAGS = ['renderer-cmd-prefix', 'utility-cmd-prefix', 'gpu-launcher', 'plugin-launcher', 'ppapi-plugin-launcher', 'browser-subprocess-path',
+    'remote-debugging-address', 'remote-debugging-port', 'remote-debugging-pipe', 'remote-debugging-io-pipes', 'remote-allow-origins', 'load-extension',
+    'disable-extensions-except', 'user-data-dir', 'proxy-server', 'proxy-pac-url', 'host-resolver-rules', 'host-rules', 'enable-logging', 'log-file'];
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 export const webSchema = s.object({
     pages: s.array(s.string(1, 2000, PAGE_PATH), 1, 100),
@@ -87,8 +96,12 @@ export const webSchema = s.object({
     queue: s.default(s.boolean(), true),
     checks: s.default(webChecksSchema, { ...CHECK_DEFAULTS }),
     robotsAgents: s.default(s.array(s.string(1, 100, /^[A-Za-z0-9*._-]+$/), 1, 30), [...DEFAULT_ROBOTS_AGENTS]),
-    /** Globs of the files whose change calls for an audit (`--base`); absent: `review.paths.ui`, else the generic interface globs. */
-    paths: s.optional(s.array(s.string(1, 500), 1, 500)),
+    /**
+     * `--base`: the audit is required as soon as a changed file is outside `neutralPaths` (files without effect on the site);
+     * `.apv/config.json`, every `package.json` and the lock files always count, and so do the files of `paths`, even inside `neutralPaths`.
+     */
+    neutralPaths: s.default(s.array(s.string(1, 500), 0, 500), [...DEFAULT_NEUTRAL_PATHS]),
+    paths: s.default(s.array(s.string(1, 500), 0, 500), []),
 });
 /** Every problem of a `web` section beyond its schema: duplicate pages, non-portable globs. */
 export function webIssues(web) {
@@ -100,13 +113,23 @@ export function webIssues(web) {
         issues.push('web.formFactors: duplicate form factor');
     if (new Set(web.categories).size !== web.categories.length)
         issues.push('web.categories: duplicate category');
-    for (const glob of web.paths ?? []) {
-        try {
-            matches('probe', glob);
+    for (const [key, globs] of [['paths', web.paths], ['neutralPaths', web.neutralPaths]]) {
+        for (const glob of globs) {
+            try {
+                matches('probe', glob);
+            }
+            catch (error) {
+                issues.push(`web.${key}: ${errorMessage(error)}`);
+            }
         }
-        catch (error) {
-            issues.push(`web.paths: ${errorMessage(error)}`);
-        }
+    }
+    // Relative, inside the repository: the folder is emptied of its old audits and ignores itself.
+    if (!validRelativePath(web.reportsDir.replace(/\/+$/, '')))
+        issues.push(`web.reportsDir: relative path inside the repository expected, without . or .. segments: ${web.reportsDir}`);
+    for (const flag of web.chromeFlags) {
+        const name = flag.replace(/^--/, '').split('=')[0].toLowerCase();
+        if (REFUSED_CHROME_FLAGS.includes(name))
+            issues.push(`web.chromeFlags: --${name} is refused (it runs another program, opens the browser or reroutes its traffic)`);
     }
     return issues;
 }

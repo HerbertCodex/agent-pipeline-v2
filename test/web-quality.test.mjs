@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { analyzeReport, aggregate, median, opportunities, shortfalls, samePage } from '../dist/web/lighthouse.js';
 import { webSchema, webThresholdsSchema, webIssues } from '../dist/web/config.js';
+import { webImpact, webAuditGate, auditBase } from '../dist/web/impact.js';
+import { lighthouseCommand } from '../dist/web/chrome.js';
+import { pageUrl, reportsFolder } from '../dist/web/audit.js';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { parseRobots, robotsAllows, parseSitemap, parseHead, jsonLdIssues, readinessFindings } from '../dist/web/readiness.js';
 import { configIssues } from '../dist/config/load.js';
 
@@ -65,8 +72,9 @@ test('an invalid measure is refused, never counted: NO_FCP, run warnings, HTTP s
   const noMetric = clone(REAL); delete noMetric.audits['largest-contentful-paint'];
   assert.match(analyzeReport(noMetric, expectation()).reasons.join(), /métrique LCP absente/);
   assert.equal(analyzeReport('pas un rapport', expectation()).valid, false);
-  // A trailing slash is the same page; another query is not.
-  assert.ok(samePage('https://a.test/faq/', 'https://a.test/faq'));
+  // Exact: a trailing slash or another query is another page (a redirect from /faq to /faq/ is a redirect).
+  assert.ok(samePage('https://a.test/faq', 'https://a.test/faq'));
+  assert.ok(!samePage('https://a.test/faq/', 'https://a.test/faq'));
   assert.ok(!samePage('https://a.test/faq?x=1', 'https://a.test/faq'));
 });
 
@@ -102,8 +110,8 @@ test('thresholds: ambitious defaults, a category under its minimum, a metric ove
 
 test('the web section: defaults, validation and refusals of the common loader', () => {
   const web = webSchema.parse({ pages: ['/', '/faq'] });
-  assert.deepEqual([web.lighthouse, web.runs, web.formFactors, web.categories.length, web.reportsDir, web.queue, web.locale],
-    ['13.5.0', 3, ['mobile', 'desktop'], 5, '.apv/web', true, 'fr']);
+  assert.deepEqual([web.lighthouse, web.runs, web.formFactors, web.categories.length, web.reportsDir, web.queue, web.locale, web.neutralPaths, web.paths],
+    ['13.5.0', 3, ['mobile', 'desktop'], 5, '.apv/web', true, 'fr', ['tests/**', 'docs/**', '**/*.md', '.github/**'], []]);
   assert.deepEqual(web.checks, { status: 'refuse', robots: 'refuse', sitemap: 'refuse', canonical: 'refuse', title: 'refuse', description: 'refuse', lang: 'refuse', jsonLd: 'refuse', hreflang: 'refuse', llmsTxt: 'off' });
   assert.equal(web.load.max, undefined);
   for (const bad of [{ pages: [] }, { pages: ['faq'] }, { pages: ['//evil.test/'] }, { pages: ['/#x'] }, { pages: ['/'], lighthouse: 'latest' },
@@ -112,6 +120,17 @@ test('the web section: defaults, validation and refusals of the common loader', 
     assert.throws(() => webSchema.parse(bad), undefined, JSON.stringify(bad));
   }
   assert.deepEqual(webIssues(webSchema.parse({ pages: ['/', '/'], paths: ['src/{a,b}/**'] })).length, 2);
+  // Pages: a backslash or a second slash could leave the origin; refused by the schema, and by the resolved URL.
+  for (const bad of ['/\\evil.test/', '/\\\\evil', '//evil.test']) assert.throws(() => webSchema.parse({ pages: [bad] }), undefined, bad);
+  assert.equal(pageUrl('/faq?x=1', 'https://site.exemple'), 'https://site.exemple/faq?x=1');
+  assert.throws(() => pageUrl('//evil.test/x', 'https://site.exemple'), e => e.code === 'WEB_PAGE');
+  assert.throws(() => pageUrl('\\\\evil.test', 'https://site.exemple'), e => e.code === 'WEB_PAGE');
+  // Chrome options that run another program or open the browser are refused; the reports folder stays relative, inside.
+  for (const flag of ['--renderer-cmd-prefix=gdb', '--remote-debugging-address=0.0.0.0', '--load-extension=/x', '--user-data-dir=/tmp/x']) {
+    assert.match(webIssues(webSchema.parse({ pages: ['/'], chromeFlags: [flag] })).join(), /web\.chromeFlags: --[a-z-]+ is refused/, flag);
+  }
+  assert.deepEqual(webIssues(webSchema.parse({ pages: ['/'], chromeFlags: ['--headless=new', '--no-sandbox'] })), []);
+  for (const dir of ['/tmp/rapports', '../rapports', 'a/../../b', '.']) assert.match(webIssues(webSchema.parse({ pages: ['/'], reportsDir: dir })).join(), /web\.reportsDir/, dir);
   const ok = configIssues({ web: { pages: ['/'] } });
   assert.deepEqual(ok.issues, []);
   assert.deepEqual(ok.ignored, [], 'web is a read section, never reported as ignored');
@@ -231,4 +250,70 @@ test('readiness: a well-formed site passes; each check refuses what it guards', 
   // A preview whose sitemap names the production host: compared by path, never a false refusal.
   assert.deepEqual(readinessFindings({ origin: 'http://127.0.0.1:5190', pages: [{ ...page('/', good('/')), url: 'http://127.0.0.1:5190/' }], robots: ROBOTS,
     sitemaps: [SITEMAP(['/'])], llms: null, checks: CHECKS, agents: ['*'] }).findings, []);
+});
+
+test('robots.txt as Google reads it: BOM, product tokens, merged groups, percent-encoding; exact trailing slash', () => {
+  const robots = parseRobots('\uFEFFUser-agent: Googlebot/2.1\nDisallow: /café\n\nUser-agent: googlebot\nDisallow: /b\n\nUser-agent: *\nDisallow: /tout\n');
+  assert.equal(robots.groups[0].agents[0], 'googlebot', 'the BOM is not part of the first line, the version not part of the token');
+  assert.equal(robotsAllows(robots, 'Googlebot', '/caf%C3%A9/menu').allowed, false, 'a raw UTF-8 rule matches the encoded path');
+  assert.equal(robotsAllows(robots, 'Googlebot', '/caf%c3%a9').allowed, false, 'escapes compared in upper case');
+  assert.equal(robotsAllows(robots, 'Googlebot', '/b').allowed, false, 'the groups of one agent are merged');
+  assert.equal(robotsAllows(robots, 'Googlebot', '/tout').allowed, true, 'a named group replaces *');
+  assert.equal(robotsAllows(robots, 'Bingbot', '/tout').allowed, false);
+  const { findings } = readinessFindings({ origin: 'https://site.exemple', pages: [page('/faq', good('/faq').replace('https://site.exemple/faq', 'https://site.exemple/faq/'))], robots: ROBOTS,
+    sitemaps: [SITEMAP(['/faq/'])], llms: null, checks: CHECKS, agents: ['*'] });
+  assert.deepEqual(findings.map(f => f.check).sort(), ['canonical', 'sitemap'], '/faq/ is another URL than /faq');
+  const redirected = readinessFindings({ origin: 'https://site.exemple', pages: [page('/ancienne', good('/ancienne'), { redirectedTo: 'https://site.exemple/faq', html: null })], robots: ROBOTS,
+    sitemaps: [SITEMAP(['/ancienne'])], llms: null, checks: CHECKS, agents: ['*'] });
+  assert.match(redirected.findings.map(f => f.message).join(), /page redirigée vers https:\/\/site\.exemple\/faq/);
+});
+
+test('audit required by default: any change outside the files without web effect; manifests, lock files, config and web.paths always count', () => {
+  const settings = webSchema.parse({ pages: ['/'] });
+  assert.deepEqual(webImpact(['tests/e2e/a.spec.ts', 'docs/guide.md', 'README.md', 'src/lib/README.md', '.github/workflows/ci.yml'], settings), { required: false, files: [] });
+  for (const file of ['src/hooks.server.ts', 'src/routes/+page.ts', 'src/routes/+layout.ts', 'src/routes/api/+server.ts', 'src/lib/db.ts', 'svelte.config.js', 'vite.config.ts',
+    'static/robots.txt', 'src/app.html', 'Makefile']) {
+    assert.deepEqual(webImpact(['docs/x.md', file], settings), { required: true, files: [file] }, file);
+  }
+  const everything = webSchema.parse({ pages: ['/'], neutralPaths: ['**'], paths: ['docs/site/**'] });
+  for (const file of ['.apv/config.json', 'package.json', 'apps/web/package.json', 'package-lock.json', 'pnpm-lock.yaml', 'docs/site/index.md']) {
+    assert.equal(webImpact([file], everything).required, true, `${file} always counts, even in neutralPaths`);
+  }
+  assert.equal(webImpact(['src/x.ts'], everything).required, false);
+  // The check that runs the audit, read from its argv.
+  assert.deepEqual(webAuditGate(['apv', 'web', 'audit', '--preview', '--base', 'origin/main']), { base: 'origin/main' });
+  assert.deepEqual(webAuditGate(['node', 'dist/cli.js', 'web', 'audit', '--preview', '--base=origin/main']), { base: 'origin/main' });
+  assert.deepEqual(webAuditGate(['apv', 'web', 'audit', '--preview']), { base: null });
+  assert.equal(webAuditGate(['apv', 'web', 'audit', '--url', 'https://a.test']), undefined);
+  assert.equal(webAuditGate(['npm', 'test']), undefined);
+});
+
+test('the base of an audit: HEAD equal to or upstream of the reference is refused; the project Lighthouse only when it is the real package', t => {
+  const root = mkdtempSync(join(tmpdir(), 'apv-web-base-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd: root, encoding: 'utf8' }).trim();
+  git('init', '-q', '-b', 'main'); writeFileSync(join(root, 'a.txt'), '1'); git('add', '.'); git('commit', '-qm', 'a');
+  const first = git('rev-parse', 'HEAD');
+  git('branch', 'ref');
+  writeFileSync(join(root, 'b.txt'), '2'); git('add', '.'); git('commit', '-qm', 'b');
+  const head = git('rev-parse', 'HEAD');
+  assert.deepEqual(auditBase(root, 'ref', head), { ok: true, base: first, reference: first });
+  assert.equal(auditBase(root, 'main', head).reason, 'not-behind', 'HEAD equal to the reference');
+  assert.equal(auditBase(root, 'ref', first).reason, 'not-behind', 'HEAD upstream of the reference');
+  assert.equal(auditBase(root, 'absente', head).reason, 'missing');
+  // Lighthouse: an alias (npm:other) installed under node_modules/lighthouse is never run.
+  const pkg = (name, version) => { mkdirSync(join(root, 'node_modules', 'lighthouse', 'cli'), { recursive: true });
+    writeFileSync(join(root, 'node_modules', 'lighthouse', 'package.json'), JSON.stringify({ name, version, bin: { lighthouse: 'cli/index.js' } }));
+    writeFileSync(join(root, 'node_modules', 'lighthouse', 'cli', 'index.js'), ''); };
+  pkg('other', '13.5.0');
+  assert.equal(lighthouseCommand(root, '13.5.0').source, 'npx');
+  pkg('lighthouse', '13.4.0');
+  assert.equal(lighthouseCommand(root, '13.5.0').source, 'npx', 'another version');
+  pkg('lighthouse', '13.5.0');
+  assert.equal(lighthouseCommand(root, '13.5.0').source, 'project');
+  // Reports: inside the repository, never a tracked folder.
+  mkdirSync(join(root, 'docs')); writeFileSync(join(root, 'docs', 'x.md'), 'x'); git('add', '.'); git('commit', '-qm', 'docs');
+  assert.throws(() => reportsFolder(root, 'docs'), e => e.code === 'WEB_REPORTS' && /suivis par Git/.test(e.message));
+  assert.throws(() => reportsFolder(root, '../ailleurs'), e => e.code === 'WEB_REPORTS');
+  assert.equal(reportsFolder(root, '.apv/web'), join(execFileSync('realpath', [root], { encoding: 'utf8' }).trim(), '.apv', 'web'));
 });

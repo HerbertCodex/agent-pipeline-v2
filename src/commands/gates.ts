@@ -83,7 +83,10 @@ leur reçu ciblé (ou complet) ; --base <ref> est alors obligatoire (le dernier 
 la suite complète) : un reçu ciblé ne compte que si la base de son exécution est ce commit ou
 l'un de ses ancêtres. Un contrôle qui déclare repeatChanged n'est prouvé que si son reçu montre la
 répétition de chaque fichier de test que le commit ajoute ou modifie (recalculé depuis la base enregistrée
-et la référence) : sinon « tests modifiés non répétés ».
+et la référence) : sinon « tests modifiés non répétés ». Un contrôle qui lance apv web audit --preview
+--base <ref> et dont le reçu dit « audit non requis » n'est prouvé que si le recalcul depuis le commit
+(fichiers à effet web depuis la base commune de <ref> et depuis la base enregistrée) le confirme :
+sinon « audit web non prouvé ».
 Les reçus sont lus dans .apv/receipts/ du worktree, puis dans le magasin partagé pour les
 exécutions que le worktree n'a pas : la preuve d'un commit se vérifie depuis n'importe quel
 checkout du dépôt, avec les mêmes exigences. Une exécution du magasin partagé dont un fichier ne
@@ -106,7 +109,7 @@ const FLAKY = 'instable';
 const RESERVED = 'réservé à la suite complète';
 const TARGETED = 'ciblé';
 const SHARED = 'magasin partagé';
-const EVIDENCE: Record<EvidenceState, string> = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu', unrepeated: 'tests modifiés non répétés' };
+const EVIDENCE: Record<EvidenceState, string> = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu', unrepeated: 'tests modifiés non répétés', unaudited: 'audit web non prouvé' };
 
 /** One line of the repetition of the changed test files of a check. */
 function repeatLine(r: { status: string; base: string | null; files: string[]; times: number; failures: { test: string; count: number }[] }): string {
@@ -142,6 +145,9 @@ function verifyLines(result: VerifyResult): string[] {
   const unrepeated = result.gates.filter(g => g.state === 'unrepeated');
   if (unrepeated.length) lines.push('', 'Tests modifiés non répétés (repeatChanged) : le reçu réussi ne prouve pas la répétition des tests que ce commit ajoute ou modifie :',
     ...unrepeated.map(g => `- ${g.gateId} : ${g.repeat!.reason}${g.repeat!.missing.length ? ` : ${g.repeat!.missing.slice(0, 10).join(', ')}${g.repeat!.missing.length > 10 ? ' ...' : ''}` : ''}`));
+  const unaudited = result.gates.filter(g => g.state === 'unaudited');
+  if (unaudited.length) lines.push('', 'Audit web non prouvé (apv web audit --preview --base) : le reçu dit « non requis », le recalcul depuis ce commit dit requis :',
+    ...unaudited.map(g => `- ${g.gateId} : ${g.web!.reason}${g.web!.files.length ? ` : ${g.web!.files.slice(0, 10).join(', ')}${g.web!.files.length > 10 ? ' ...' : ''}` : ''}`));
   const missing = result.gates.filter(g => g.state !== 'passed');
   const rerun = result.stage === 'task' && result.base ? `apv gates run --stage task --base ${result.base.slice(0, 12)}`
     : `apv gates run --stage ${result.stage}${result.repeating.length ? ' --base <base de la branche>' : ''}`;
@@ -258,7 +264,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       if (values.json) {
         json(io, { ok: result.ok, commit: result.commit, stage: result.stage, base: result.base, config: loaded.file, configHash: result.configHash,
           required: result.required, targeted: result.targeted, reserved: result.reserved, gates: result.gates, unreadable: result.unreadable,
-          store: result.store, altered: result.altered, flaky: result.flaky, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
+          store: result.store, altered: result.altered, flaky: result.flaky, repeating: result.repeating, auditing: result.auditing, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
       } else {
         io.stdout(`${verifyLines(result).join('\n')}\n`);
       }

@@ -13,12 +13,21 @@ export interface RobotsRule { allow: boolean; path: string }
 export interface RobotsGroup { agents: string[]; rules: RobotsRule[] }
 export interface Robots { groups: RobotsGroup[]; sitemaps: string[] }
 
-export function parseRobots(text: string): Robots {
+/** Percent-encoding normalised for comparisons (RFC 9309, section 2.2.2): non-ASCII characters encoded, escapes in upper case. */
+export function normalizePath(path: string): string {
+  return path.replace(/[^\x00-\x7f]+/g, c => encodeURIComponent(c)).replace(/%[0-9a-f]{2}/gi, m => m.toUpperCase());
+}
+
+/** The product token of a user-agent line (`Googlebot/2.1` is `googlebot`), `*` kept. */
+const agentToken = (value: string): string => value.startsWith('*') ? '*' : (/^[A-Za-z_-]+/.exec(value)?.[0] ?? value).toLowerCase();
+
+export function parseRobots(input: string): Robots {
+  const text = input.replace(/^\uFEFF/, '');
   const groups: RobotsGroup[] = [];
   const sitemaps: string[] = [];
   let current: RobotsGroup | null = null;
   let lastWasAgent = false;
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of text.split(/\r\n|\r|\n/)) {
     const line = raw.replace(/#.*$/, '').trim();
     const m = /^([A-Za-z-]+)\s*:\s*(.*)$/.exec(line);
     if (!m) continue;
@@ -26,7 +35,7 @@ export function parseRobots(text: string): Robots {
     const value = m[2]!.trim();
     if (key === 'user-agent') {
       if (!current || !lastWasAgent) { current = { agents: [], rules: [] }; groups.push(current); }
-      current.agents.push(value.toLowerCase());
+      current.agents.push(agentToken(value));
       lastWasAgent = true;
       continue;
     }
@@ -34,15 +43,18 @@ export function parseRobots(text: string): Robots {
     if (key === 'sitemap') { if (value) sitemaps.push(value); continue; }
     if ((key === 'allow' || key === 'disallow') && current) {
       // An empty Disallow allows everything: no rule.
-      if (value) current.rules.push({ allow: key === 'allow', path: value });
+      if (value) current.rules.push({ allow: key === 'allow', path: normalizePath(value) });
     }
   }
   return { groups, sitemaps };
 }
 
-/** The group that applies to a crawler: the one naming its product token (case-insensitive), else `*`, else none. */
+/**
+ * The groups that apply to a crawler, as Google reads them: every group naming its product token (case-insensitive,
+ * merged), else every `*` group (merged), else none.
+ */
 export function robotsGroup(robots: Robots, agent: string): RobotsGroup[] {
-  const token = agent.toLowerCase();
+  const token = agentToken(agent);
   const named = robots.groups.filter(g => g.agents.some(a => a !== '*' && a === token));
   if (named.length) return named;
   return robots.groups.filter(g => g.agents.includes('*'));
@@ -60,7 +72,8 @@ function ruleMatches(pattern: string, path: string): boolean {
 }
 
 /** Whether a crawler may fetch a path: the longest matching rule wins, Allow on a tie; no rule: allowed. */
-export function robotsAllows(robots: Robots, agent: string, path: string): { allowed: boolean; rule: RobotsRule | null } {
+export function robotsAllows(robots: Robots, agent: string, rawPath: string): { allowed: boolean; rule: RobotsRule | null } {
+  const path = normalizePath(rawPath);
   let best: RobotsRule | null = null;
   for (const group of robotsGroup(robots, agent)) {
     for (const rule of group.rules) {
@@ -75,17 +88,21 @@ export function robotsAllows(robots: Robots, agent: string, path: string): { all
 
 export interface Sitemap { kind: 'urlset' | 'sitemapindex' | 'unknown'; locs: string[] }
 
-export function parseSitemap(xml: string): Sitemap {
+export function parseSitemap(input: string): Sitemap {
+  const xml = input.replace(/^\uFEFF/, '');
   const kind = /<(?:[A-Za-z0-9]+:)?urlset[\s>]/.test(xml) ? 'urlset' : /<(?:[A-Za-z0-9]+:)?sitemapindex[\s>]/.test(xml) ? 'sitemapindex' : 'unknown';
   const locs = [...xml.matchAll(/<(?:[A-Za-z0-9]+:)?loc>\s*(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?\s*<\/(?:[A-Za-z0-9]+:)?loc>/g)].map(m => decodeEntities(m[1]!.trim()));
   return { kind, locs };
 }
 
-/** Path of a URL for comparisons between the audited origin and absolute URLs of another host (a preview's sitemap names production). */
+/**
+ * Path of a URL for comparisons between the audited origin and absolute URLs of another host (a preview's sitemap names
+ * production). Exact: a trailing slash makes another URL (`/faq/` is not `/faq`), escapes normalised.
+ */
 export function pagePath(url: string, base?: string): string | null {
   try {
     const u = new URL(url, base);
-    return `${u.pathname.replace(/\/+$/, '') || '/'}${u.search}`;
+    return normalizePath(`${u.pathname}${u.search}`);
   } catch { return null; }
 }
 
@@ -186,7 +203,8 @@ export interface Finding {
   message: string;
 }
 
-export interface FetchedPage { path: string; url: string; status: number | null; error: string | null; xRobotsTag: string | null; html: string | null }
+/** A page as served: `redirectedTo`, the final address after the redirects followed on the audited origin (null: none). */
+export interface FetchedPage { path: string; url: string; status: number | null; error: string | null; xRobotsTag: string | null; html: string | null; redirectedTo?: string | null }
 export interface FetchedText { url: string; status: number | null; error: string | null; contentType: string | null; text: string | null }
 
 export interface ReadinessInput {
@@ -214,6 +232,10 @@ export function readinessFindings(input: ReadinessInput): ReadinessResult {
   };
   const heads = new Map<string, HeadInfo>();
   for (const page of input.pages) {
+    if (page.redirectedTo) {
+      add('status', page.path, `page redirigée vers ${page.redirectedTo} : déclarer l'adresse finale ; balises non lues`);
+      continue;
+    }
     if (page.html === null || page.status !== 200) {
       const redirect = page.status !== null && page.status >= 300 && page.status < 400;
       add('status', page.path, `page ${described(page)}${redirect ? ' (redirection : déclarer l\'adresse finale)' : ''} ; 200 attendu, balises non lues`);

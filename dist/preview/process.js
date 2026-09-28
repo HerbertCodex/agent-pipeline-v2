@@ -27,7 +27,7 @@ const FORWARDED = ['SIGINT', 'SIGTERM', 'SIGHUP'];
  * reaches apv (Ctrl+C) is passed on to the group before apv stops.
  * Resolves with the exit status (null when killed by a signal, -1 when the command cannot start).
  */
-export function runStep(args, cwd, env, onOutput, timeoutMs = 0) {
+export function runStep(args, cwd, env, onOutput, timeoutMs = 0, signal) {
     return new Promise((resolve) => {
         const [file, ...rest] = args;
         if (!file) {
@@ -53,8 +53,18 @@ export function runStep(args, cwd, env, onOutput, timeoutMs = 0) {
             detach();
             process.kill(process.pid, signal);
         };
-        const detach = () => { for (const signal of FORWARDED)
-            process.removeListener(signal, forward); };
+        // Cancelled by the caller: the whole group of the step is stopped, as on a timeout.
+        const cancel = () => {
+            if (child.pid)
+                signalGroup(child.pid, 'SIGTERM');
+            kill = setTimeout(() => { if (child.pid)
+                signalGroup(child.pid, 'SIGKILL'); }, STEP_KILL_GRACE_MS);
+        };
+        signal?.addEventListener('abort', cancel, { once: true });
+        if (signal?.aborted)
+            cancel();
+        const detach = () => { for (const s of FORWARDED)
+            process.removeListener(s, forward); signal?.removeEventListener('abort', cancel); };
         for (const signal of FORWARDED)
             process.once(signal, forward);
         const finish = (value) => {

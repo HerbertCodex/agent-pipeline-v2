@@ -74,8 +74,15 @@ export declare const webThresholdsSchema: import("../domain/schema.js").Schema<{
     };
 }>;
 export type WebThresholds = Infer<typeof webThresholdsSchema>;
-/** A page: an absolute path of the site, query allowed, never a fragment nor an origin. */
+/** A page: an absolute path of the site, query allowed, never a fragment, a backslash nor an origin (the resolved URL is checked too). */
 export declare const PAGE_PATH: RegExp;
+/** Default files without any effect on the served site: a change limited to them needs no audit. */
+export declare const DEFAULT_NEUTRAL_PATHS: readonly ["tests/**", "docs/**", "**/*.md", ".github/**"];
+/**
+ * Chrome options refused in `web.chromeFlags`: they run another program, open the browser to the network, load code
+ * or reroute the traffic; the measure would no longer be the one of a plain headless Chrome.
+ */
+export declare const REFUSED_CHROME_FLAGS: readonly ["renderer-cmd-prefix", "utility-cmd-prefix", "gpu-launcher", "plugin-launcher", "ppapi-plugin-launcher", "browser-subprocess-path", "remote-debugging-address", "remote-debugging-port", "remote-debugging-pipe", "remote-debugging-io-pipes", "remote-allow-origins", "load-extension", "disable-extensions-except", "user-data-dir", "proxy-server", "proxy-pac-url", "host-resolver-rules", "host-rules", "enable-logging", "log-file"];
 export declare const webSchema: import("../domain/schema.js").Schema<{
     readonly pages: string[];
     readonly productionUrl: string | undefined;
@@ -123,7 +130,8 @@ export declare const webSchema: import("../domain/schema.js").Schema<{
         llmsTxt: "off" | "warn" | "refuse";
     };
     readonly robotsAgents: string[];
-    readonly paths: string[] | undefined;
+    readonly neutralPaths: string[];
+    readonly paths: string[];
 }>;
 export type WebSettings = Infer<typeof webSchema>;
 /** Every problem of a `web` section beyond its schema: duplicate pages, non-portable globs. */

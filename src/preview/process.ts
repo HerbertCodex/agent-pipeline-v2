@@ -34,7 +34,7 @@ export interface StepResult { status: number | null; signal: NodeJS.Signals | nu
  * reaches apv (Ctrl+C) is passed on to the group before apv stops.
  * Resolves with the exit status (null when killed by a signal, -1 when the command cannot start).
  */
-export function runStep(args: string[], cwd: string, env: NodeJS.ProcessEnv, onOutput: (s: string) => void, timeoutMs = 0): Promise<StepResult> {
+export function runStep(args: string[], cwd: string, env: NodeJS.ProcessEnv, onOutput: (s: string) => void, timeoutMs = 0, signal?: AbortSignal): Promise<StepResult> {
   return new Promise((resolve) => {
     const [file, ...rest] = args;
     if (!file) { resolve({ status: -1, signal: null, error: 'commande vide' }); return; }
@@ -54,7 +54,14 @@ export function runStep(args: string[], cwd: string, env: NodeJS.ProcessEnv, onO
       detach();
       process.kill(process.pid, signal);
     };
-    const detach = () => { for (const signal of FORWARDED) process.removeListener(signal, forward); };
+    // Cancelled by the caller: the whole group of the step is stopped, as on a timeout.
+    const cancel = () => {
+      if (child.pid) signalGroup(child.pid, 'SIGTERM');
+      kill = setTimeout(() => { if (child.pid) signalGroup(child.pid, 'SIGKILL'); }, STEP_KILL_GRACE_MS);
+    };
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) cancel();
+    const detach = () => { for (const s of FORWARDED) process.removeListener(s, forward); signal?.removeEventListener('abort', cancel); };
     for (const signal of FORWARDED) process.once(signal, forward);
     const finish = (value: StepResult) => {
       if (done) return;

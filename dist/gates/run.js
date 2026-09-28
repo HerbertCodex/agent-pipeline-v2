@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { gateStage, validateReceipt } from '../domain/contracts.js';
+import { gateStage, validateReceipt, webRecordSchema } from '../domain/contracts.js';
 import { errorMessage, invariant } from '../domain/errors.js';
 import { hash } from '../domain/hash.js';
 import { environmentIdentity, executableIdentity, proofKey } from '../evidence/key.js';
@@ -12,6 +13,7 @@ import { failureExcerpt, MAX_DIAGNOSTIC_CHARS } from '../engine/diagnostic.js';
 import { schedule, success } from '../engine/scheduler.js';
 import { suiteSettings } from '../config/load.js';
 import { PipelineError } from '../domain/errors.js';
+import { WEB_RECORD } from '../web/impact.js';
 import { publishRun, pruneStore, receiptRetention, sharedStore } from './store.js';
 import { markStacksUsed, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
@@ -179,6 +181,7 @@ export async function runGates(options) {
     let started = null;
     let cleanup = null;
     let spread = null;
+    let webRecords = null;
     const endSuite = async (runId) => {
         if (!suite || cleanup)
             return cleanup;
@@ -216,6 +219,8 @@ export async function runGates(options) {
         started = runId;
         const directory = join(repo, RECEIPTS_DIR, runId);
         mkdirSync(directory, { recursive: true, mode: 0o700 });
+        // Where `apv web audit`, run by a check, writes its record (`APV_WEB_RECORD`), outside the copy.
+        webRecords = mkdtempSync(join(tmpdir(), 'apv-web-record-'));
         // Receipts are local evidence: keep them out of diffs, scope checks and commits, before any gate
         // (a gate that checks the working tree is clean must not see the receipts of its siblings).
         const ignore = join(repo, RECEIPTS_DIR, '.gitignore');
@@ -264,6 +269,7 @@ export async function runGates(options) {
         };
         const execute = async (gate, signal) => {
             const startedAt = Date.now();
+            const webRecord = join(webRecords, `${gate.id}.json`);
             const elapsedStart = performance.now();
             // On a stack of `--stacks`: its copy, its variables (over those of the check) and its lock.
             const assigned = spread?.assignments.get(gate.id) ?? null;
@@ -298,7 +304,9 @@ export async function runGates(options) {
             /** One pass of a command, under the flock of the check when it has one: the timeout starts once it is held. */
             const pass = async (argv, checkEnv, timeoutMs = gate.timeoutMs) => {
                 // The marker of a full suite, outside the environment identity: its processes are found at its end.
-                const passEnv = suite ? { ...checkEnv, [SUITE_MARKER]: runId } : checkEnv;
+                // The record file of `apv web audit`, outside the environment identity too: emptied before each pass.
+                rmSync(webRecord, { force: true });
+                const passEnv = { ...(suite ? { ...checkEnv, [SUITE_MARKER]: runId } : checkEnv), [WEB_RECORD]: webRecord };
                 if (lock?.kind !== 'flock') {
                     const result = await runProcess({ command: argv, cwd: workspace, env: passEnv, timeoutMs, signal, maxOutputBytes: 1024 * 1024 });
                     return { result, commandMs: result.durationMs, lockWaitMs: 0, lockError: null };
@@ -314,6 +322,18 @@ export async function runGates(options) {
                     return { result: { ...result, status }, commandMs: 0, lockWaitMs: result.durationMs, lockError };
                 }
                 return { result, commandMs: result.durationMs - result.readyMs, lockWaitMs: result.readyMs, lockError: null };
+            };
+            /** The record of `apv web audit` left by the last pass, when the command is one: added to the receipt. */
+            const withWebRecord = (fields) => {
+                try {
+                    return { ...fields, web: webRecordSchema.parse(JSON.parse(readFileSync(webRecord, 'utf8'))) };
+                }
+                catch {
+                    return fields;
+                }
+                finally {
+                    rmSync(webRecord, { force: true });
+                }
             };
             const lockRefused = (reason, waitedMs) => write({ ...base, status: 'timed_out', durationMs: 0, exitCode: null,
                 stdoutHash: '', stderrHash: '', diagnostic: `Verrou du contrôle non obtenu : ${reason}. La commande n'a pas été lancée.`, lockWaitMs: Math.round(waitedMs) });
@@ -417,7 +437,7 @@ export async function runGates(options) {
                 // The state the repetition must find again: taken just before the command, under the lock.
                 const plan = repeatPlans.get(gate.id);
                 const before = plan?.files.length ? { head: await git.sha(workspace), tree: await treeOf(workspace) } : null;
-                return write(await repeated(await main(passEnv, leaseWaitMs), passEnv, before));
+                return write(await repeated(withWebRecord(await main(passEnv, leaseWaitMs)), passEnv, before));
             };
             const used = lock && common ? stacksOfLock(stacks, lock) : [];
             let outcome = null;
@@ -470,12 +490,15 @@ export async function runGates(options) {
             ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup } : {}), ...(spreadRecord ? { spread: spreadRecord } : {}), ...(stoppedStacks.length ? { stoppedStacks } : {}),
             receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),
                 ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}), ...(r.stack ? { stack: r.stack } : {}),
-                ...(r.repeat ? { repeat: { status: r.repeat.status, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures } } : {}) })) }, null, 2) + '\n');
+                ...(r.repeat ? { repeat: { status: r.repeat.status, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures } } : {}),
+                ...(r.web ? { web: { required: r.web.required, auditId: r.web.auditId, ok: r.web.ok } } : {}) })) }, null, 2) + '\n');
         if (options.share !== false)
             result.shared = await shareRun(git, repo, directory, runId, candidateSha, options.config);
         return result;
     }
     finally {
+        if (webRecords)
+            rmSync(webRecords, { recursive: true, force: true });
         if (started)
             await endSuite(started);
         if (spread)

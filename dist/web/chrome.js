@@ -1,6 +1,7 @@
-import { accessSync, constants, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { delimiter, isAbsolute, join, resolve } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { PipelineError } from '../domain/errors.js';
 const executable = (path) => {
     try {
@@ -69,19 +70,24 @@ export function findBrowser(configured, repo, env) {
             return { path, source: 'system' };
     throw new PipelineError('WEB_CHROME', 'Aucun Chrome ni Chromium trouvé : déclarer web.chrome, ou CHROME_PATH, ou installer le Chromium de Playwright (npx playwright install chromium).');
 }
-/** The project's `node_modules/lighthouse` when its version is the pinned one, else `npx -y lighthouse@<version>`. */
+/**
+ * The project's own Lighthouse when Node resolves `lighthouse` from the repository to the real package (named
+ * `lighthouse`, never an alias `npm:other`) at exactly the pinned version, its command inside that package; else
+ * `npx -y lighthouse@<version>`.
+ */
 export function lighthouseCommand(repo, version) {
-    const dir = join(repo, 'node_modules', 'lighthouse');
     try {
-        const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+        const manifest = realpathSync(createRequire(join(repo, 'package.json')).resolve('lighthouse/package.json'));
+        const dir = dirname(manifest);
+        const pkg = JSON.parse(readFileSync(manifest, 'utf8'));
         const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.['lighthouse'];
-        if (pkg.version === version && typeof bin === 'string') {
-            const cli = resolve(dir, bin);
-            if (cli.startsWith(`${dir}/`) && existsSync(cli))
+        if (pkg.name === 'lighthouse' && pkg.version === version && typeof bin === 'string') {
+            const cli = realpathSync(resolve(dir, bin));
+            if (cli.startsWith(`${dir}/`))
                 return { argv: [process.execPath, cli], source: 'project' };
         }
     }
-    catch { /* no project dependency: npx */ }
+    catch { /* no project dependency resolved: npx */ }
     return { argv: ['npx', '-y', `lighthouse@${version}`], source: 'npx' };
 }
 //# sourceMappingURL=chrome.js.map

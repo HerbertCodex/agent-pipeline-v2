@@ -1,5 +1,5 @@
 import type { SuiteQueueSettings } from '../config/load.js';
-import { type SuiteHooks } from '../gates/suite.js';
+import { type QueueHandle, type SuiteHooks } from '../gates/suite.js';
 import { type Browser, type LighthouseCommand } from './chrome.js';
 import { type FormFactor, type WebSettings } from './config.js';
 import { type Opportunity, type RunMeasure, type Shortfall } from './lighthouse.js';
@@ -69,10 +69,13 @@ export interface AuditSummary {
         waitedMs: number;
         reason: string;
     } | null;
+    /** The load threshold, the load at the first run and the highest seen, the time waited for it, and the refusal when it never dropped. */
     load: {
         max: number;
         atStart: number | null;
         highest: number | null;
+        waitedMs: number;
+        refused: string | null;
     };
     pages: PageResult[];
     readiness: {
@@ -104,11 +107,34 @@ export interface AuditOptions {
     log: (line: string) => void;
     signal?: AbortSignal | undefined;
     hooks?: SuiteHooks | undefined;
+    /** The queue as the caller took it (enterAuditQueue), recorded in the summary. */
+    queue?: QueueRecord | null | undefined;
 }
 /** File-safe name of a page path: `/` is `accueil`, `/a/b?x=1` is `a-b-x-1`. */
 export declare function pageSlug(path: string): string;
+/** Redirects followed, on the audited origin only. */
+export declare const MAX_REDIRECTS = 5;
+/** The URL of a page on the audited origin; a path that would leave it is refused. */
+export declare function pageUrl(path: string, origin: string): string;
 export declare function checkReadiness(options: Pick<AuditOptions, 'origin' | 'pages' | 'settings' | 'signal'>): Promise<{
     findings: Finding[];
     notes: string[];
 }>;
+export type QueueRecord = NonNullable<AuditSummary['queue']>;
+/**
+ * The queue of the full suites around a measure (`suite.queue`), taken by the caller before anything else (before the
+ * preview lock and its build): no suite runs while Lighthouse measures. Inside a full suite (`APV_SUITE_RUN`), the suite
+ * already holds it: never taken twice. `web.queue` false or the queue disabled: none.
+ */
+export declare function enterAuditQueue(options: Pick<AuditOptions, 'repo' | 'settings' | 'suiteQueue' | 'env' | 'log' | 'signal' | 'hooks'>): Promise<{
+    handle: QueueHandle | null;
+    record: QueueRecord;
+}>;
+/** Name of an audit folder: only folders with such a name (and a summary) are ever removed by the retention. */
+export declare const AUDIT_ID: RegExp;
+/**
+ * The reports folder: relative to the repository and inside it (symbolic links resolved), and holding no file tracked
+ * by Git: it is emptied of its old audits and ignores itself (its own `.gitignore`, never written into a tracked folder).
+ */
+export declare function reportsFolder(repo: string, dir: string): string;
 export declare function runAudit(options: AuditOptions): Promise<AuditSummary>;

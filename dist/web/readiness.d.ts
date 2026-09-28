@@ -17,11 +17,16 @@ export interface Robots {
     groups: RobotsGroup[];
     sitemaps: string[];
 }
-export declare function parseRobots(text: string): Robots;
-/** The group that applies to a crawler: the one naming its product token (case-insensitive), else `*`, else none. */
+/** Percent-encoding normalised for comparisons (RFC 9309, section 2.2.2): non-ASCII characters encoded, escapes in upper case. */
+export declare function normalizePath(path: string): string;
+export declare function parseRobots(input: string): Robots;
+/**
+ * The groups that apply to a crawler, as Google reads them: every group naming its product token (case-insensitive,
+ * merged), else every `*` group (merged), else none.
+ */
 export declare function robotsGroup(robots: Robots, agent: string): RobotsGroup[];
 /** Whether a crawler may fetch a path: the longest matching rule wins, Allow on a tie; no rule: allowed. */
-export declare function robotsAllows(robots: Robots, agent: string, path: string): {
+export declare function robotsAllows(robots: Robots, agent: string, rawPath: string): {
     allowed: boolean;
     rule: RobotsRule | null;
 };
@@ -29,8 +34,11 @@ export interface Sitemap {
     kind: 'urlset' | 'sitemapindex' | 'unknown';
     locs: string[];
 }
-export declare function parseSitemap(xml: string): Sitemap;
-/** Path of a URL for comparisons between the audited origin and absolute URLs of another host (a preview's sitemap names production). */
+export declare function parseSitemap(input: string): Sitemap;
+/**
+ * Path of a URL for comparisons between the audited origin and absolute URLs of another host (a preview's sitemap names
+ * production). Exact: a trailing slash makes another URL (`/faq/` is not `/faq`), escapes normalised.
+ */
 export declare function pagePath(url: string, base?: string): string | null;
 export interface HeadInfo {
     lang: string | null;
@@ -60,6 +68,7 @@ export interface Finding {
     page: string | null;
     message: string;
 }
+/** A page as served: `redirectedTo`, the final address after the redirects followed on the audited origin (null: none). */
 export interface FetchedPage {
     path: string;
     url: string;
@@ -67,6 +76,7 @@ export interface FetchedPage {
     error: string | null;
     xRobotsTag: string | null;
     html: string | null;
+    redirectedTo?: string | null;
 }
 export interface FetchedText {
     url: string;

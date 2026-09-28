@@ -201,46 +201,111 @@ test('apv web audit --readiness-only: the readiness refusals decide, no browser 
   assert.equal(p.calls().length, 0);
 });
 
-test('apv web audit --preview --base: nothing to audit without an interface change; with one, the preview is built, audited and stopped', async t => {
+test('apv web audit --preview --base: not required when every change is without web effect; otherwise the preview is built, audited and stopped', async t => {
   const port = await freePort();
-  const p = project(t, { formFactors: ['mobile'], runs: 1, paths: ['src/ui/**'] }, {
+  const p = project(t, { formFactors: ['mobile'], runs: 1 }, {
     preview: { dir: '../apercu', serve: { command: [process.execPath, 'site.cjs'], port, host: '127.0.0.1' }, health: { path: '/', timeoutSec: 20 } },
   });
   git(p.repo, 'branch', 'base');
-  write(p.repo, 'src/math.mjs', 'export const add = (a, b) => a + b;\n');
-  git(p.repo, 'commit', '-qam', 'hors interface');
-  const skip = await p.run(['--preview', '--base', 'base']);
+  // HEAD equal to the base: nothing to compare, refused as an incorrect call.
+  const same = await p.run(['--preview', '--base', 'base']);
+  assert.equal(same.code, 2, same.stderr);
+  assert.match(same.stderr, /--base base : la base commune de base et de [0-9a-f]{12} est [0-9a-f]{12} lui-même/);
+  assert.equal((await p.run(['--preview', '--base', 'absente'])).code, 2);
+  write(p.repo, 'test/web.test.mjs', '// test\n');
+  write(p.repo, 'docs/notes.md', 'notes\n');
+  git(p.repo, 'add', '.'); git(p.repo, 'commit', '-qm', 'tests et docs');
+  const skip = await p.run(['--preview', '--base', 'base'], { });
+  // test/ is not tests/: a file outside the list counts, prudence first.
   assert.equal(skip.code, 0, skip.stderr);
-  assert.match(skip.stdout, /Aucun fichier d'interface modifié depuis [0-9a-f]{12} \(base commune avec base, motifs web\.paths\) : audit web non requis\./);
-  assert.equal(p.calls().length, 0);
+  assert.match(skip.stderr, /1 fichier\(s\) à effet web modifié\(s\) .*test\/web\.test\.mjs/);
+  write(p.repo, '.apv/config.json', { web: { pages: ['/', '/faq'], load: { max: 10000 }, formFactors: ['mobile'], runs: 1, neutralPaths: ['test/**', 'docs/**'] },
+    preview: { dir: '../apercu', serve: { command: [process.execPath, 'site.cjs'], port, host: '127.0.0.1' }, health: { path: '/', timeoutSec: 20 } } });
+  git(p.repo, 'commit', '-qam', 'configuration');
+  git(p.repo, 'branch', '-f', 'base');
+  write(p.repo, 'test/autre.test.mjs', '// test\n');
+  git(p.repo, 'add', 'test/autre.test.mjs'); git(p.repo, 'commit', '-qm', 'tests seulement');
+  const calls = p.calls().length;
+  const none = await p.run(['--preview', '--base', 'base']);
+  assert.equal(none.code, 0, none.stderr);
+  assert.match(none.stdout, /Aucun fichier à effet web modifié depuis [0-9a-f]{12} \(base commune avec base\) : 1 fichier\(s\) changé\(s\), tous dans web\.neutralPaths ; audit web non requis\./);
+  assert.equal(p.calls().length, calls, 'nothing built nor measured');
 
-  write(p.repo, 'src/ui/Button.svelte', '<button>ok</button>\n');
-  git(p.repo, 'add', '.'); git(p.repo, 'commit', '-qm', 'interface');
+  write(p.repo, 'src/hooks.server.ts', 'export const handle = ({ event, resolve }) => resolve(event);\n');
+  git(p.repo, 'add', 'src/hooks.server.ts'); git(p.repo, 'commit', '-qm', 'serveur');
   const r = await p.run(['--preview', '--base', 'base', '--json']);
   assert.equal(r.code, 0, r.stderr + r.stdout);
   const s = r.json();
   assert.deepEqual([s.source, s.origin, s.commit], ['preview', `http://127.0.0.1:${port}`, git(p.repo, 'rev-parse', 'HEAD')]);
-  assert.match(r.stderr, /1 fichier\(s\) d'interface modifié\(s\) .*src\/ui\/Button\.svelte/);
+  assert.match(r.stderr, /1 fichier\(s\) à effet web modifié\(s\) .*src\/hooks\.server\.ts/);
   assert.match(r.stderr, /Aperçu arrêté/);
-  assert.equal(p.calls().length, 2);
   const status = await apv(p.repo, ['preview', 'status', '--json'], p.env);
   assert.equal(status.json().running, false, 'never a server left running');
+  // In a full suite, --preview without --base is refused: the proof must say from which base the audit was required.
+  const inSuite = await p.run(['--preview'], { APV_SUITE_RUN: 'essai' });
+  assert.equal(inSuite.code, 2);
+  assert.match(inSuite.stderr, /exige --base/);
 });
 
-test('runAudit: a machine load above the threshold refuses the measure instead of measuring under load', async t => {
+test('runAudit: a machine load that stays above the threshold stops the measure; the valid measures already made are kept', async t => {
   const p = project(t);
   const origin = await serve(t, p.repo);
-  const settings = webSchema.parse({ pages: ['/'], load: { max: 2, waitMs: 0 }, queue: false });
-  await assert.rejects(runAudit({ repo: p.repo, settings, suiteQueue: suiteQueueSchema.parse({}), suiteMaxLoad: undefined, origin, source: 'url', commit: null,
-    pages: ['/'], formFactors: ['mobile'], runs: 1, readinessOnly: false, env: { ...process.env, ...p.env }, log: () => {}, hooks: { loadAverage: () => 9, loadPollMs: 5 } }),
-  e => e.code === 'WEB_LOAD' && /mesure refusée/.test(e.message));
-  assert.equal(p.calls().length, 0, 'nothing measured');
-  // The threshold of the full suites applies when the web section sets none.
+  let calls = 0;
+  const settings = webSchema.parse({ pages: ['/', '/faq'], formFactors: ['mobile'], runs: 1, load: { max: 2, waitMs: 0 }, queue: false });
+  const summary = await runAudit({ repo: p.repo, settings, suiteQueue: suiteQueueSchema.parse({}), suiteMaxLoad: undefined, origin, source: 'url', commit: null,
+    pages: ['/', '/faq'], formFactors: ['mobile'], runs: 1, readinessOnly: false, env: { ...process.env, ...p.env }, log: () => {},
+    hooks: { loadAverage: () => (++calls <= 2 ? 1 : 9), loadPollMs: 5 } });
+  assert.equal(summary.ok, false);
+  assert.match(summary.load.refused, /charge moyenne sur 1 min à 9\.00, au-dessus du seuil 2/);
+  const [home, faq] = summary.pages.map(x => x.results[0]);
+  assert.equal(home.valid, true, 'the measure made before the load rose is kept');
+  assert.equal(home.median.scores.performance, 95);
+  assert.equal(faq.valid, false);
+  assert.match(faq.invalid[0].reasons[0], /non mesuré/);
+  assert.equal(p.calls().length, 1);
+  // The threshold of the full suites applies when the web section sets none; the budget is the time waited, not the audit's.
   const inherited = webSchema.parse({ pages: ['/'], load: { waitMs: 0 }, queue: false });
-  await assert.rejects(runAudit({ repo: p.repo, settings: inherited, suiteQueue: suiteQueueSchema.parse({}), suiteMaxLoad: 3, origin, source: 'url', commit: null,
-    pages: ['/'], formFactors: ['mobile'], runs: 1, readinessOnly: false, env: { ...process.env, ...p.env }, log: () => {}, hooks: { loadAverage: () => 4, loadPollMs: 5 } }),
-  e => e.code === 'WEB_LOAD' && /seuil 3/.test(e.message));
-  assert.ok(readdirSync(join(p.repo, '.apv', 'web')).length >= 1);
+  const refused = await runAudit({ repo: p.repo, settings: inherited, suiteQueue: suiteQueueSchema.parse({}), suiteMaxLoad: 3, origin, source: 'url', commit: null,
+    pages: ['/'], formFactors: ['mobile'], runs: 1, readinessOnly: false, env: { ...process.env, ...p.env }, log: () => {}, hooks: { loadAverage: () => 4, loadPollMs: 5 } });
+  assert.match(refused.load.refused, /seuil 3/);
+  const cli = await p.run(['--url', origin, '--page', '/', '--form-factor', 'mobile', '--runs', '1']);
+  assert.equal(cli.code, 0, 'a calm machine measures');
+});
+
+test('apv web audit: redirects followed on the audited origin only, five at most; the reports folder is never a tracked one, the retention touches only audits', async t => {
+  const p = project(t, { formFactors: ['mobile'], runs: 1, pages: ['/', '/faq', '/ancienne', '/boucle', '/dehors'] });
+  const { handle } = await import(join(p.repo, 'site.cjs'));
+  const server = createServer((req, res) => {
+    if (req.url === '/robots.txt') { res.writeHead(301, { location: '/robots-reel.txt' }); return res.end(); }
+    if (req.url === '/robots-reel.txt') { req.url = '/robots.txt'; return handle(req, res); }
+    if (req.url === '/ancienne') { res.writeHead(308, { location: '/faq' }); return res.end(); }
+    if (req.url.startsWith('/boucle')) { res.writeHead(302, { location: `/boucle${req.url.length}` }); return res.end(); }
+    if (req.url === '/dehors') { res.writeHead(301, { location: 'https://ailleurs.test/' }); return res.end(); }
+    return handle(req, res);
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  t.after(() => new Promise(r => server.close(r)));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const r = await p.run(['--url', origin, '--readiness-only', '--json']);
+  const findings = r.json().readiness.findings.filter(f => f.check === 'status' || f.check === 'robots').map(f => `${f.page} ${f.message}`);
+  assert.ok(findings.some(f => /^\/ancienne page redirigée vers http:\/\/127\.0\.0\.1:\d+\/faq/.test(f)), findings.join('\n'));
+  assert.ok(findings.some(f => /^\/boucle .*plus de 5 redirections/.test(f)), findings.join('\n'));
+  assert.ok(findings.some(f => /^\/dehors .*redirection hors de l'origine auditée vers https:\/\/ailleurs\.test\/ : non suivie/.test(f)), findings.join('\n'));
+  assert.ok(!findings.some(f => /robots\.txt/.test(f)), 'robots.txt reached through a same-origin redirect');
+  // Retention: only folders named like an audit go; a tracked reports folder is refused before anything is written.
+  write(p.repo, '.apv/web/a-garder/note.txt', 'à moi');
+  for (let i = 0; i < 3; i++) await p.run(['--url', origin, '--readiness-only', '--page', '/']);
+  write(p.repo, '.apv/config.json', { web: { pages: ['/'], load: { max: 10000 }, keepAudits: 1 } });
+  await p.run(['--url', origin, '--readiness-only']);
+  const left = readdirSync(join(p.repo, '.apv', 'web')).filter(e => e !== '.gitignore');
+  assert.equal(left.filter(e => /^\d{8}-\d{6}-url/.test(e)).length, 1);
+  assert.ok(left.includes('a-garder'));
+  write(p.repo, 'rapports/suivi.txt', 'suivi'); git(p.repo, 'add', 'rapports/suivi.txt'); git(p.repo, 'commit', '-qm', 'dossier suivi');
+  write(p.repo, '.apv/config.json', { web: { pages: ['/'], load: { max: 10000 }, reportsDir: 'rapports' } });
+  const tracked = await p.run(['--url', origin, '--readiness-only']);
+  assert.equal(tracked.code, 1);
+  assert.match(tracked.stderr, /WEB_REPORTS.*suivis par Git/);
+  assert.equal(existsSync(join(p.repo, 'rapports', '.gitignore')), false, 'no .gitignore written into a tracked folder');
 });
 
 test('a web check in the full suite: the audit runs as a gate with its receipt, inside the queue the suite already holds', async t => {
@@ -263,4 +328,57 @@ test('a web check in the full suite: the audit runs as a gate with its receipt, 
   assert.equal(verify.code, 0, verify.stdout + verify.stderr);
   const [summary] = readdirSync(join(p.repo, '.apv', 'web')).filter(d => d !== '.gitignore').map(d => JSON.parse(readFileSync(join(p.repo, '.apv', 'web', d, 'summary.json'), 'utf8')));
   assert.deepEqual([summary.queue.held, /APV_SUITE_RUN/.test(summary.queue.reason)], [false, true], 'the suite holds the queue: never waited for twice');
+});
+
+test('apv gates verify recomputes « not required » from the commit: a skip proves nothing when the commit changes a file with a web effect', async t => {
+  const p = project(t, { formFactors: ['mobile'], runs: 1, pages: ['/'] });
+  const cli = new URL('../dist/cli.js', import.meta.url).pathname;
+  // A check that runs the audit on the preview against the branch `base`; the preview is never built here (not required).
+  const previewPort = await freePort();
+  const config = async (command) => ({ web: { pages: ['/'], load: { max: 10000 } }, preview: { serve: { command: ['true'], port: previewPort } },
+    gates: [{ id: 'web', stage: 'full', command, timeoutMs: 60000, passEnv: ['CHROME_PATH', 'APV_LOCK_DIR', 'HOME'] }] });
+  write(p.repo, '.apv/config.json', await config([process.execPath, cli, 'web', 'audit', '--preview', '--base', 'base']));
+  git(p.repo, 'add', '.'); git(p.repo, 'commit', '-qm', 'contrôle web');
+  git(p.repo, 'branch', 'base');
+  write(p.repo, 'docs/notes.md', 'notes\n');
+  git(p.repo, 'add', '.'); git(p.repo, 'commit', '-qm', 'docs');
+  const run = await apv(p.repo, ['gates', 'run', '--stage', 'full', '--json'], p.env);
+  assert.equal(run.code, 0, run.stdout + run.stderr);
+  const receipt = JSON.parse(readFileSync(join(p.repo, '.apv', 'receipts', run.json().runId, 'web.json'), 'utf8'));
+  assert.deepEqual([receipt.web.required, receipt.web.auditId, receipt.web.reference, receipt.web.changed], [false, null, 'base', 1]);
+  const ok = await apv(p.repo, ['gates', 'verify', '--commit', 'HEAD'], p.env);
+  assert.equal(ok.code, 0, ok.stdout);
+
+  // The same command, but its record claims « not required » for a commit that changes a server file: not proven.
+  const forged = `require('node:fs').writeFileSync(process.env.APV_WEB_RECORD, JSON.stringify({ required: false, base: null, reference: 'base', files: [], changed: 0, auditId: null, ok: true }))`;
+  write(p.repo, '.apv/config.json', await config([process.execPath, '-e', forged, 'web', 'audit', '--preview', '--base', 'base']));
+  write(p.repo, 'src/hooks.server.ts', 'export {};\n');
+  git(p.repo, 'add', '.'); git(p.repo, 'commit', '-qm', 'serveur');
+  const run2 = await apv(p.repo, ['gates', 'run', '--stage', 'full'], p.env);
+  assert.equal(run2.code, 0, run2.stdout + run2.stderr);
+  const verify = await apv(p.repo, ['gates', 'verify', '--commit', 'HEAD', '--json'], p.env);
+  assert.equal(verify.code, 1);
+  const gate = verify.json().gates[0];
+  assert.equal(gate.state, 'unaudited');
+  assert.ok(gate.web.files.includes('src/hooks.server.ts') && gate.web.files.includes('.apv/config.json'), JSON.stringify(gate.web));
+  assert.deepEqual(verify.json().auditing, ['web']);
+  const text = await apv(p.repo, ['gates', 'verify', '--commit', 'HEAD'], p.env);
+  assert.match(text.stdout, /web\s+audit web non prouvé/);
+  assert.match(text.stdout, /Audit web non prouvé \(apv web audit --preview --base\)/);
+  // A receipt without record (an older apv, another command) proves no skip either.
+  write(p.repo, '.apv/config.json', await config([process.execPath, '-e', '0', 'web', 'audit', '--preview', '--base', 'base']));
+  git(p.repo, 'commit', '-qam', 'sans relevé');
+  await apv(p.repo, ['gates', 'run', '--stage', 'full'], p.env);
+  const none = await apv(p.repo, ['gates', 'verify', '--commit', 'HEAD', '--json'], p.env);
+  assert.match(none.json().gates[0].web.reason, /reçu sans relevé/);
+});
+
+test('apv web audit: the performance run always happens (document status, metrics), only the configured categories are judged', async t => {
+  const p = project(t, { formFactors: ['mobile'], runs: 1, pages: ['/'], categories: ['seo'] });
+  const origin = await serve(t, p.repo);
+  p.plan({ '/': { performance: 0.5 } });
+  const r = await p.run(['--url', origin, '--json']);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.ok(p.calls()[0].args.includes('--only-categories=performance,seo'));
+  assert.deepEqual(r.json().pages[0].results[0].median.scores, { seo: 100 });
 });

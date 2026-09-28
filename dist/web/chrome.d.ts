@@ -14,5 +14,9 @@ export interface LighthouseCommand {
     argv: string[];
     source: 'project' | 'npx';
 }
-/** The project's `node_modules/lighthouse` when its version is the pinned one, else `npx -y lighthouse@<version>`. */
+/**
+ * The project's own Lighthouse when Node resolves `lighthouse` from the repository to the real package (named
+ * `lighthouse`, never an alias `npm:other`) at exactly the pinned version, its command inside that package; else
+ * `npx -y lighthouse@<version>`.
+ */
 export declare function lighthouseCommand(repo: string, version: string): LighthouseCommand;

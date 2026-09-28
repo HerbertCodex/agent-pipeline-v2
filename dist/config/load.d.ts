@@ -382,7 +382,8 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             llmsTxt: "off" | "warn" | "refuse";
         };
         readonly robotsAgents: string[];
-        readonly paths: string[] | undefined;
+        readonly neutralPaths: string[];
+        readonly paths: string[];
     } | undefined;
 }>;
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */

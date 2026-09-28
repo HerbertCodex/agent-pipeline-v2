@@ -2,12 +2,13 @@ import { loadConfig, suiteSettings } from '../config/load.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { parseDuration } from '../lock/store.js';
 import { signalExitCode } from '../lock/run.js';
-import { matches } from '../policy/policy.js';
 import { probeHost } from '../preview/config.js';
 import { loadPreview, previewStatus, stopPreview, updatePreview, withPreviewLock, type PreviewContext } from '../preview/service.js';
-import { DEFAULT_REVIEW_PATHS } from '../review/config.js';
+import { WEB_RECORD, auditBase, changedBetween, webImpact } from '../web/impact.js';
+import { writeFileSync } from 'node:fs';
+import type { WebRecord } from '../domain/contracts.js';
 import { gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
-import { runAudit, type AuditSummary, type PageFactorResult } from '../web/audit.js';
+import { enterAuditQueue, runAudit, type AuditSummary, type PageFactorResult } from '../web/audit.js';
 import { FORM_FACTORS, PAGE_PATH, WEB_METRIC_IDS, type FormFactor, type WebCategory, type WebMetric, type WebSettings } from '../web/config.js';
 import type { Shortfall } from '../web/lighthouse.js';
 import { EXIT, UsageError, guard, json, parse, repoPath, table } from './common.js';
@@ -33,17 +34,23 @@ warn ou off). On mesure ce que le projet contrôle : aucun classement n'est prom
   --preview         l'aperçu local d'APV (section preview) sur le commit HEAD : réutilisé s'il sert
                     déjà ce commit, sinon construit et démarré puis arrêté à la fin (jamais laissé en
                     marche), sous le verrou preview:<projet> ; --wait borne l'attente du verrou (30m).
-  --base <ref>      avec --preview (contrôle d'une PR) : audit seulement si un fichier qui répond à
-                    web.paths (défaut : review.paths.ui, sinon les motifs d'interface génériques) a
-                    changé depuis la base commune de <ref> et de HEAD ; sinon « non concerné », sortie 0.
+  --base <ref>      avec --preview (contrôle d'une PR) : audit sauf si TOUS les fichiers changés depuis
+                    la base commune de <ref> et de HEAD sont sans effet web (web.neutralPaths : tests/**,
+                    docs/**, **/*.md, .github/** par défaut ; .apv/config.json, package.json, fichiers de
+                    verrouillage et web.paths comptent toujours) ; alors « non requis », sortie 0. Base
+                    commune égale à HEAD (HEAD égal à <ref> ou en amont) ou <ref> introuvable : sortie 2.
+                    Obligatoire avec --preview dans une suite complète (APV_SUITE_RUN) ; apv gates verify
+                    recalcule « non requis » depuis le commit.
   --page <chemin>   limite aux pages données (répétable), déclarées ou non dans web.pages.
   --readiness-only  contrôles de préparation seulement, sans Lighthouse.
-Mesure sous la file des suites complètes (suite.queue ; déjà tenue quand l'audit tourne dans une
-suite, APV_SUITE_RUN), et seulement si la charge moyenne sur 1 min est sous web.load.max (défaut :
-suite.queue.maxLoad, sinon la moitié des processeurs), attendue au plus web.load.waitMs : au-delà,
-refus WEB_LOAD. Chrome : web.chrome, CHROME_PATH, le Chromium de Playwright, sinon celui du
+Mesure sous la file des suites complètes (suite.queue, prise avant le verrou et la construction de
+l'aperçu ; déjà tenue quand l'audit tourne dans une suite, APV_SUITE_RUN), et seulement si la charge
+moyenne sur 1 min est sous web.load.max (défaut : suite.queue.maxLoad, sinon la moitié des
+processeurs), attendue au plus web.load.waitMs en tout : au-delà, refus WEB_LOAD (les mesures déjà
+faites restent dans le rapport). Chrome : web.chrome, CHROME_PATH, le Chromium de Playwright, sinon celui du
 système ; ceux qu'une mesure laisse sont arrêtés. Rapports (JSON et HTML du passage médian,
-summary.json) dans web.reportsDir (.apv/web/<audit>/ par défaut, ignoré par Git).
+summary.json) dans web.reportsDir (.apv/web/<audit>/ par défaut, relatif, dans le dépôt, sans fichier
+suivi par Git ; il s'ignore lui-même).
 Sortie : 0 tous les seuils atteints et aucun refus, 1 seuil manqué, mesure invalide, refus d'un
 contrôle, charge trop haute ou aperçu en échec, 2 appel incorrect.`;
 
@@ -112,16 +119,6 @@ function resultLines(path: string, r: PageFactorResult): string[] {
   return out;
 }
 
-/** Files changed between the merge base of `ref` and HEAD. */
-function changedSince(repo: string, ref: string): { base: string; files: string[] } {
-  const target = resolveCommit(repo, ref);
-  if (!target) throw new UsageError(`--base : référence introuvable : ${ref}`);
-  const base = gitRead(repo, ['merge-base', target, 'HEAD']);
-  if (!base) throw new PipelineError('WEB_BASE', `Aucune base commune entre ${ref} et HEAD`);
-  const out = gitRead(repo, ['diff', '--name-only', '--no-renames', '-z', base, 'HEAD']);
-  return { base, files: (out ?? '').split('\0').filter(Boolean) };
-}
-
 function origin(value: string, what: string): string {
   let url: URL;
   try { url = new URL(value); } catch { throw new UsageError(`${what} : adresse invalide : ${value}`); }
@@ -163,17 +160,31 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const head = resolveCommit(repo, 'HEAD');
     const say = (line: string): void => { io.stderr(`${line}\n`); };
 
+    // Suite complète : un audit de l'aperçu n'y est « non requis » que prouvé depuis une base (recalculée par gates verify).
+    if (values.preview && values.base === undefined && io.env['APV_SUITE_RUN']) {
+      throw new UsageError('--preview dans une suite complète (APV_SUITE_RUN) exige --base <branche où va le changement> : la preuve dit depuis quelle base l\'audit était requis');
+    }
+    /** The record for the receipt of the check that runs the audit (`apv gates run`), when there is one. */
+    const record = (value: WebRecord): void => {
+      const file = io.env[WEB_RECORD];
+      if (file) { try { writeFileSync(file, `${JSON.stringify(value)}\n`); } catch (error) { say(`Relevé de l'audit pour le reçu non écrit (${file}) : ${errorMessage(error)}`); } }
+    };
+    let impact: { base: string; reference: string; files: string[]; changed: number } | null = null;
     if (values.base !== undefined) {
-      const globs = settings.paths ?? loaded.config.review?.paths?.ui ?? [...DEFAULT_REVIEW_PATHS.ui];
-      const { base, files } = changedSince(repo, values.base);
-      const touched = files.filter(f => globs.some(g => matches(f, g)));
-      if (!touched.length) {
-        const message = `Aucun fichier d'interface modifié depuis ${base.slice(0, 12)} (base commune avec ${values.base}, motifs web.paths) : audit web non requis.`;
-        if (values.json) json(io, { ok: true, skipped: true, reason: message, base, changed: files.length });
+      if (!head) throw new PipelineError('WEB_PREVIEW', `Aucun commit dans ${repo}`);
+      const outcome = auditBase(repo, values.base, head);
+      if (!outcome.ok) throw new UsageError(`--base ${values.base} : ${outcome.message}`);
+      const changed = changedBetween(repo, outcome.base, head) ?? [];
+      const found = webImpact(changed, settings);
+      impact = { base: outcome.base, reference: values.base, files: found.files, changed: changed.length };
+      if (!found.required) {
+        const message = `Aucun fichier à effet web modifié depuis ${outcome.base.slice(0, 12)} (base commune avec ${values.base}) : ${changed.length} fichier(s) changé(s), tous dans web.neutralPaths ; audit web non requis.`;
+        record({ required: false, base: outcome.base, reference: values.base, files: [], changed: changed.length, auditId: null, ok: true });
+        if (values.json) json(io, { ok: true, skipped: true, reason: message, base: outcome.base, changed: changed.length });
         else io.stdout(`${message}\n`);
         return EXIT.ok;
       }
-      say(`${touched.length} fichier(s) d'interface modifié(s) depuis ${base.slice(0, 12)} (${touched.slice(0, 5).join(', ')}${touched.length > 5 ? ', ...' : ''}) : audit de l'aperçu.`);
+      say(`${found.files.length} fichier(s) à effet web modifié(s) depuis ${outcome.base.slice(0, 12)} (${found.files.slice(0, 5).join(', ')}${found.files.length > 5 ? ', ...' : ''}) : audit de l'aperçu.`);
     }
 
     const abort = new AbortController();
@@ -186,30 +197,37 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       process.on(signal, handler);
       return [signal, handler] as const;
     });
-    const audit = (target: string, source: 'url' | 'preview', commit: string | null) => runAudit({
-      repo, settings, suiteQueue: suite.queue, suiteMaxLoad: suite.queue.maxLoad, origin: target, source, commit, pages, formFactors,
-      runs: runs ?? settings.runs, readinessOnly: values['readiness-only'] === true, env: io.env, log: say, signal: abort.signal,
-      ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}),
+    const readinessOnly = values['readiness-only'] === true;
+    const hooks = io.env['APV_LOCK_POLL_MS'] ? { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } : undefined;
+    const common = { repo, settings, suiteQueue: suite.queue, env: io.env, log: say, signal: abort.signal, ...(hooks ? { hooks } : {}) };
+    const audit = (target: string, source: 'url' | 'preview', commit: string | null, queue: AuditSummary['queue']) => runAudit({
+      ...common, suiteMaxLoad: suite.queue.maxLoad, origin: target, source, commit, pages, formFactors,
+      runs: runs ?? settings.runs, readinessOnly, queue,
     });
     let summary: AuditSummary;
     const notes: string[] = [];
+    // The queue of the full suites first, before the preview lock and its build: no suite starts while the preview is built and measured.
+    let queue: Awaited<ReturnType<typeof enterAuditQueue>> | null = null;
     try {
+      if (!readinessOnly) queue = await enterAuditQueue(common);
       if (values.preview) {
         if (!head) throw new PipelineError('WEB_PREVIEW', `Aucun commit dans ${repo}`);
         if (gitRead(repo, ['status', '--porcelain', '--untracked-files=no'])) notes.push(`l'arbre a des modifications non commitées : l'aperçu audite le commit ${head.slice(0, 12)}, pas l'arbre de travail`);
         const loadedPreview = loadPreview(repo, io.env);
-        const ctx: PreviewContext = { repo, env: io.env, progress: s => { if (!values.json) io.stderr(s); } };
+        const ctx: PreviewContext = { repo, env: io.env, signal: abort.signal, progress: s => { if (!values.json) io.stderr(s); } };
         summary = await withPreviewLock(ctx, waitSeconds, 'apv web audit --preview', async lockEnv => {
           const status = await previewStatus(repo);
           const reuse = status.running && status.state?.commit === head;
           if (!reuse) {
             if (status.running && status.state) notes.push(`l'aperçu en marche (branche ${status.state.branch}, commit ${status.state.commit.slice(0, 12)}) a été remplacé puis arrêté ; apv preview update ${status.state.branch} le relance`);
             say(`Aperçu du commit ${head.slice(0, 12)} : construction et démarrage...`);
-            const updated = await updatePreview(ctx, loadedPreview, head, lockEnv);
-            if (!updated.ok) throw new PipelineError('WEB_PREVIEW', `Aperçu en échec à l'étape « ${updated.step} » : ${updated.message} (journal : ${updated.updateLog}${updated.step === 'health' || updated.step === 'serve' ? `, serveur : ${updated.logFile}` : ''}). Aucun serveur ne reste.`);
-          } else notes.push(`aperçu déjà en marche sur ce commit, réutilisé et laissé comme il était`);
+            try {
+              const updated = await updatePreview(ctx, loadedPreview, head, lockEnv);
+              if (!updated.ok) throw new PipelineError('WEB_PREVIEW', `Aperçu en échec à l'étape « ${updated.step} » : ${updated.message} (journal : ${updated.updateLog}${updated.step === 'health' || updated.step === 'serve' ? `, serveur : ${updated.logFile}` : ''}). Aucun serveur ne reste.`);
+            } catch (error) { await stopPreview(repo).catch(() => undefined); throw error; }
+          } else notes.push('aperçu déjà en marche sur ce commit, réutilisé et laissé comme il était');
           const { port, host } = loadedPreview.config.serve;
-          try { return await audit(`http://${probeHost(host)}:${port}`, 'preview', head); }
+          try { return await audit(`http://${probeHost(host)}:${port}`, 'preview', head, queue?.record ?? null); }
           finally {
             if (!reuse) { const stopped = await stopPreview(repo); if (stopped.stopped) say(`Aperçu arrêté (groupe de processus ${stopped.pid}).`); }
           }
@@ -217,28 +235,32 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       } else {
         const target = values.production ? (settings.productionUrl ? origin(settings.productionUrl, 'web.productionUrl') : null) : origin(values.url!, '--url');
         if (!target) throw new PipelineError('WEB_NONE', 'web.productionUrl absent : --production ne sait pas quelle origine auditer (ou --url <origine>)');
-        summary = await audit(target, 'url', head);
+        summary = await audit(target, 'url', head, queue?.record ?? null);
       }
     } catch (error) {
       if (received) { io.stderr(`Interrompu (${received}) : ${errorMessage(error)}\n`); return signalExitCode(received); }
       throw error;
     } finally {
+      await queue?.handle?.release();
       for (const [signal, handler] of handlers) process.off(signal, handler);
     }
+    record({ required: true, base: impact?.base ?? null, reference: impact?.reference ?? null, files: (impact?.files ?? []).slice(0, 50),
+      changed: impact?.changed ?? 0, auditId: summary.auditId, ok: summary.ok });
 
     if (values.json) { json(io, { ...summary, notes }); return summary.ok ? EXIT.ok : EXIT.failed; }
     const head0 = summary.lighthouse
       ? `Lighthouse ${summary.lighthouse.version} (${summary.lighthouse.source === 'npx' ? 'npx' : 'dépendance du projet'}), ${summary.browser?.path} (${summary.browser?.source}), ${summary.runs} passage(s) valides par page et appareil`
       : 'contrôles de préparation seulement (--readiness-only)';
-    const queue = summary.queue ? `${summary.queue.held ? `file des suites tenue${summary.queue.waitedMs > 1000 ? ` après ${Math.round(summary.queue.waitedMs / 1000)} s` : ''}` : summary.queue.reason} ; ` : '';
-    const load = summary.lighthouse ? `${queue}charge au départ ${summary.load.atStart?.toFixed(2) ?? '?'}, la plus haute ${summary.load.highest?.toFixed(2) ?? '?'} (seuil ${summary.load.max})` : '';
+    const queueText = summary.queue ? `${summary.queue.held ? `file des suites tenue${summary.queue.waitedMs > 1000 ? ` après ${Math.round(summary.queue.waitedMs / 1000)} s` : ''}` : summary.queue.reason} ; ` : '';
+    const load = summary.lighthouse ? `${queueText}charge au départ ${summary.load.atStart?.toFixed(2) ?? '?'}, la plus haute ${summary.load.highest?.toFixed(2) ?? '?'} (seuil ${summary.load.max})` : '';
     io.stdout([
       `Audit web de ${summary.origin} (${summary.source === 'preview' ? `aperçu, commit ${summary.commit?.slice(0, 12)}` : 'en ligne, lecture seule'}) : ${head0}.`,
       ...(load ? [load] : []), '', text(summary), ...(notes.length ? [''] : []), ...notes.map(n => `Note : ${n}`), '',
       `Rapports : ${summary.reportsDir} (summary.json, <page>.<appareil>.report.html)`,
+      ...(summary.load.refused ? [`Refus WEB_LOAD : ${summary.load.refused} ; mesure arrêtée, une mesure sous charge fausse la performance (les mesures déjà faites restent au rapport). Relancer quand la machine est calme (apv procs list, apv stacks status).`] : []),
       summary.ok ? 'Verdict : tous les seuils atteints, aucun refus.'
         : `Verdict : ${[summary.counts.shortfalls ? `${summary.counts.shortfalls} seuil(s) manqué(s)` : '', summary.counts.invalid ? `${summary.counts.invalid} mesure(s) invalide(s)` : '',
-          summary.counts.refused ? `${summary.counts.refused} refus de préparation` : ''].filter(Boolean).join(', ')}.`,
+          summary.counts.refused ? `${summary.counts.refused} refus de préparation` : '', summary.load.refused ? 'charge trop haute (WEB_LOAD)' : ''].filter(Boolean).join(', ')}.`,
     ].join('\n') + '\n');
     return summary.ok ? EXIT.ok : EXIT.failed;
   });
