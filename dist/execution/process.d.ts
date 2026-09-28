@@ -11,6 +11,12 @@ export interface ProcessOptions extends ProcessHooks {
     signal?: AbortSignal;
     input?: string;
     maxOutputBytes?: number;
+    /**
+     * The command signals on file descriptor 3 (a pipe) when its real work starts, for instance once a wrapper holds
+     * a lock: `timeoutMs` starts at the first byte read there, not at the spawn. The wait before it is unbounded here
+     * (the wrapper bounds it). `readyMs` of the result says when it came.
+     */
+    waitReady?: boolean;
 }
 export declare function environment(names: readonly string[], source?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export declare function redact(text: string, env: NodeJS.ProcessEnv): string;

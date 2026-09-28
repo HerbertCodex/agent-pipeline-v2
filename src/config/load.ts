@@ -22,7 +22,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources'] as const;
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite'] as const;
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'] as const;
 
@@ -101,6 +101,28 @@ export const testResourceSchema = s.object({
   description: s.optional(s.string(1, 500)),
 });
 export const resourcesSchema = s.record(RESOURCE_ID, testResourceSchema, 100);
+/**
+ * The full suite of `apv gates run` (a run that executes a check of stage `full` in full): its machine queue, taken
+ * before the first check, with an optional load threshold, and the test ports freed from orphans of the same copy.
+ * `lockFile` is relative to the Git common directory (shared by every worktree of the repository) or absolute.
+ */
+export const DEFAULT_SUITE_QUEUE = { enabled: true, lockFile: 'apv/locks/full-suite.lock', waitMs: 7_200_000, loadWaitMs: 1_800_000 } as const;
+export const suiteQueueSchema = s.object({
+  enabled: s.default(s.boolean(), DEFAULT_SUITE_QUEUE.enabled),
+  lockFile: s.default(s.string(1, 4000, /(^|\/)[A-Za-z0-9][A-Za-z0-9._-]{0,110}\.lock$/), DEFAULT_SUITE_QUEUE.lockFile),
+  waitMs: s.default(s.number(0, 86_400_000), DEFAULT_SUITE_QUEUE.waitMs),
+  maxLoad: s.optional(s.finite(0.1, 10_000)),
+  loadWaitMs: s.default(s.number(0, 86_400_000), DEFAULT_SUITE_QUEUE.loadWaitMs),
+});
+export type SuiteQueueSettings = Infer<typeof suiteQueueSchema>;
+export const suiteSettingsSchema = s.object({
+  queue: s.optional(suiteQueueSchema),
+  ports: s.default(s.array(s.number(1, 65535), 0, 100), []),
+});
+/** The full suite settings of a configuration: `suite`, defaults for what is absent (queue on, no ports). */
+export const suiteSettings = (config: { suite?: { queue?: SuiteQueueSettings | undefined; ports: number[] } | undefined }): { queue: SuiteQueueSettings; ports: number[] } =>
+  ({ queue: config.suite?.queue ?? suiteQueueSchema.parse({}), ports: config.suite?.ports ?? [] });
+
 /** Declared test ports, sorted and without duplicates, with the resources that declare them. */
 export function declaredTestPorts(config: { resources?: Record<string, { ports: number[] }> | undefined }): Map<number, string[]> {
   const ports = new Map<number, string[]>();
@@ -134,6 +156,8 @@ export const apvConfigSchema = s.object({
   receipts: s.optional(receiptsSettingsSchema),
   /** Test resources and their ports (docs/CONFIGURATION.md, « Ressources de test »); absent: none declared. */
   resources: s.optional(resourcesSchema),
+  /** Full suite of `apv gates run`: queue, load threshold, ports freed (docs/CONFIGURATION.md, « Suite complète »); absent: queue on. */
+  suite: s.optional(suiteSettingsSchema),
 });
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export const specLimits = (config: { spec?: Partial<SpecLimits> | undefined }): SpecLimits => ({ ...DEFAULT_SPEC_LIMITS, ...config.spec });
@@ -196,6 +220,14 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
   }
   for (const [resource, { ports }] of Object.entries(value.resources ?? {})) {
     list.check(new Set(ports).size === ports.length, 'CONFIG', `resources.${resource}.ports: duplicate port`);
+  }
+  const suitePorts = value.suite?.ports ?? [];
+  list.check(new Set(suitePorts).size === suitePorts.length, 'CONFIG', 'suite.ports: duplicate port');
+  for (const gate of value.gates) {
+    if (gate.retryFailed?.testPattern !== undefined) list.attempt('CONFIG', () => {
+      try { new RegExp(gate.retryFailed!.testPattern!, 'm'); }
+      catch (error) { throw new PipelineError('CONFIG', `Gate ${gate.id}: retryFailed.testPattern is not a valid regular expression: ${errorMessage(error)}`); }
+    });
   }
   const ruleIds = value.validationRules.map(r => r.id);
   list.check(new Set(ruleIds).size === ruleIds.length, 'CONFIG', 'Duplicate validation rule id');

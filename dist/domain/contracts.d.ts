@@ -1,5 +1,5 @@
 import { type Infer } from './schema.js';
-export declare const VERSION = "3.0.0-alpha.3";
+export declare const VERSION = "3.0.0-alpha.4";
 export declare const lanes: readonly ["fast", "standard", "high"];
 export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];
@@ -15,6 +15,8 @@ export declare const commandSchema: import("./schema.js").Schema<{
     readonly timeoutMs: number;
     readonly passEnv: string[];
 }>;
+/** Longest wait for the lock of a check (`lock.waitMs`) when absent: 30 minutes. */
+export declare const DEFAULT_LOCK_WAIT_MS = 1800000;
 export declare const gateSchema: import("./schema.js").Schema<{
     readonly id: string;
     readonly command: string[];
@@ -32,6 +34,18 @@ export declare const gateSchema: import("./schema.js").Schema<{
     readonly cacheTtlMs: number;
     readonly stage: "task" | "full" | undefined;
     readonly affected: string[] | undefined;
+    readonly lock: {
+        readonly resource: string;
+        readonly waitMs: number;
+    } | {
+        readonly file: string;
+        readonly fileEnv: string | undefined;
+        readonly waitMs: number;
+    } | undefined;
+    readonly retryFailed: {
+        readonly command: string[];
+        readonly testPattern: string | undefined;
+    } | undefined;
 }>;
 /** Stage of a check; absent means `task`. */
 export declare const gateStage: (gate: {
@@ -218,6 +232,18 @@ export declare const configSchema: import("./schema.js").Schema<{
         readonly cacheTtlMs: number;
         readonly stage: "task" | "full" | undefined;
         readonly affected: string[] | undefined;
+        readonly lock: {
+            readonly resource: string;
+            readonly waitMs: number;
+        } | {
+            readonly file: string;
+            readonly fileEnv: string | undefined;
+            readonly waitMs: number;
+        } | undefined;
+        readonly retryFailed: {
+            readonly command: string[];
+            readonly testPattern: string | undefined;
+        } | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;
@@ -260,7 +286,14 @@ export interface ProcessResult {
     stdout: string;
     stderr: string;
     truncated: boolean;
+    /** With `waitReady`: milliseconds from the spawn to the ready signal on fd 3 (the timeout started then), null when it never came. */
+    readyMs?: number | null;
 }
+/**
+ * Status of a receipt. `passed_after_retry`: the command failed, then its relaunch of the failed tests
+ * (`retryFailed`) passed on the same commit and tree; counted as passed, always shown apart (unstable).
+ */
+export declare const receiptStatuses: readonly ["passed", "failed", "timed_out", "cancelled", "spawn_error", "blocked", "cached", "passed_after_retry"];
 export declare const receiptSchema: import("./schema.js").Schema<{
     readonly id: string;
     readonly runId: string;
@@ -269,7 +302,7 @@ export declare const receiptSchema: import("./schema.js").Schema<{
     readonly candidateSha: string;
     readonly configHash: string;
     readonly environmentHash: string;
-    readonly status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "blocked" | "cached";
+    readonly status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "blocked" | "cached" | "passed_after_retry";
     readonly startedAt: number;
     readonly durationMs: number;
     readonly exitCode: number | null;
@@ -283,6 +316,20 @@ export declare const receiptSchema: import("./schema.js").Schema<{
     readonly override: {
         readonly run: string;
         readonly reason: string;
+    } | undefined;
+    readonly lockWaitMs: number | undefined;
+    readonly retry: {
+        readonly command: string[];
+        readonly first: {
+            readonly status: "failed";
+            readonly exitCode: number | null;
+            readonly durationMs: number;
+            readonly stdoutHash: string;
+            readonly stderrHash: string;
+            readonly diagnostic: string;
+        };
+        readonly output: string;
+        readonly tests: string[];
     } | undefined;
 }>;
 export type GateReceipt = Infer<typeof receiptSchema>;

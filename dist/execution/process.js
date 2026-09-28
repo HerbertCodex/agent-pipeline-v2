@@ -36,7 +36,7 @@ export function runProcess(options) {
         });
     return new Promise((resolve, reject) => {
         const child = spawn(options.command[0], options.command.slice(1), {
-            cwd: options.cwd, env: options.env, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
+            cwd: options.cwd, env: options.env, shell: false, detached: true, stdio: options.waitReady ? ['pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
         });
         let hardKill;
         let hookFailure;
@@ -64,7 +64,17 @@ export function runProcess(options) {
         }
         const abort = () => stop('cancelled');
         options.signal?.addEventListener('abort', abort, { once: true });
-        const timeout = setTimeout(() => stop('timed_out'), options.timeoutMs);
+        let timeout;
+        let readyMs = null;
+        const arm = () => { timeout ??= setTimeout(() => stop('timed_out'), options.timeoutMs); };
+        if (options.waitReady) {
+            const ready = child.stdio[3];
+            ready?.once('data', () => { readyMs = Math.round((performance.now() - started) * 1000) / 1000; arm(); });
+            ready?.on('error', () => { });
+            ready?.resume();
+        }
+        else
+            arm();
         const collect = (i, chunk) => {
             hashes[i].update(chunk);
             const combined = Buffer.concat([buffers[i], chunk]);
@@ -95,10 +105,11 @@ export function runProcess(options) {
         let pipeGrace;
         child.once('exit', () => {
             kill('SIGKILL');
-            pipeGrace = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); }, PIPE_GRACE_MS);
+            pipeGrace = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); child.stdio[3]?.destroy?.(); }, PIPE_GRACE_MS);
         });
         child.once('close', (code, signal) => {
-            clearTimeout(timeout);
+            if (timeout)
+                clearTimeout(timeout);
             if (hardKill)
                 clearTimeout(hardKill);
             if (pipeGrace)
@@ -119,7 +130,7 @@ export function runProcess(options) {
             resolve({ status: status ?? (code === 0 ? 'passed' : 'failed'), exitCode: code, signal,
                 durationMs: Math.round((performance.now() - started) * 1000) / 1000,
                 stdout: buffers[0].toString('utf8'), stderr: spawnError || buffers[1].toString('utf8'),
-                stdoutHash: hashes[0].digest('hex'), stderrHash: hashes[1].digest('hex'), truncated });
+                stdoutHash: hashes[0].digest('hex'), stderrHash: hashes[1].digest('hex'), truncated, ...(options.waitReady ? { readyMs } : {}) });
         });
         child.stdin.end(options.input ?? '');
     });

@@ -20,7 +20,8 @@ export interface VerifyOptions {
 }
 /**
  * State of one required check at the commit:
- * - `passed`: its latest receipt on a clean tree with the current configuration succeeded;
+ * - `passed`: its latest receipt on a clean tree with the current configuration succeeded (`passed_after_retry` included:
+ *   every test passed on this exact commit, the failed ones in a single relaunch; reported apart in `flaky`);
  * - `failed`: that latest receipt did not succeed (a later failure always overrides an earlier success);
  * - `dirty`: receipts exist at this commit, but only with uncommitted changes (or an unknown tree state);
  * - `missing`: no receipt at this commit with the current configuration.
@@ -65,6 +66,8 @@ export interface VerifyResult {
     store: string;
     /** Runs of the shared store refused as a whole (files altered or contradicting their manifest). */
     altered: AlteredRun[];
+    /** Required checks proven by a receipt `passed_after_retry`: passed, but only after the relaunch of their failed tests (unstable). */
+    flaky: string[];
     ok: boolean;
 }
 /** Where a receipt was read: the `.apv/receipts/` of the worktree, or the shared store of the repository. */

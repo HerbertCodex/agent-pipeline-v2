@@ -1,7 +1,7 @@
 import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s } from './schema.js';
 import { invariant } from './errors.js';
-export const VERSION = '3.0.0-alpha.3';
+export const VERSION = '3.0.0-alpha.4';
 export const lanes = ['fast', 'standard', 'high'];
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'];
 /**
@@ -18,6 +18,8 @@ export const commandSchema = s.object({
     timeoutMs: s.default(s.number(10, 3600000), 120000),
     passEnv: s.default(envNamesSchema, []),
 });
+/** Longest wait for the lock of a check (`lock.waitMs`) when absent: 30 minutes. */
+export const DEFAULT_LOCK_WAIT_MS = 1_800_000;
 export const gateSchema = s.object({
     id, command: argv,
     // Reviewed coverage labels, never inferred from a successful exit code or a gate name.
@@ -43,6 +45,14 @@ export const gateSchema = s.object({
     // base, for example `playwright test --only-changed={{baseSha}}`. Run by the task stage in place of the check,
     // never counted as proof of it. Optional, never defaulted: absent, parsing and hashing are unchanged.
     affected: s.optional(argv),
+    // Resource the check shares with other copies of the repository (a test stack): held around its command, whose
+    // timeout starts once it is held. A lease of `apv lock` (`resource`) or a kernel `flock` on a file (`file`).
+    // Optional, never defaulted: absent, parsing and hashing are unchanged.
+    lock: s.optional(s.union(s.object({ resource: id, waitMs: s.default(s.number(0, 86_400_000), DEFAULT_LOCK_WAIT_MS) }), s.object({ file: s.string(1, 4000), fileEnv: s.optional(s.string(1, 100, /^[a-zA-Z_][a-zA-Z0-9_]*$/)), waitMs: s.default(s.number(0, 86_400_000), DEFAULT_LOCK_WAIT_MS) }))),
+    // Relaunch of the failed tests only (argv, same placeholders), run once when the command fails by itself, on the
+    // same commit and tree: success gives `passed_after_retry`. `testPattern`: regular expression whose matches in the
+    // output of the first pass name the tests concerned (capture group 1 when present). Optional, never defaulted.
+    retryFailed: s.optional(s.object({ command: argv, testPattern: s.optional(s.string(1, 500)) })),
 });
 /** Stage of a check; absent means `task`. */
 export const gateStage = (gate) => gate.stage ?? 'task';
@@ -164,12 +174,17 @@ export const configSchema = s.object({
     validationMaxAgeMs: s.default(s.number(1000, 86400000), 86400000),
     risk: riskSchema,
 });
+/**
+ * Status of a receipt. `passed_after_retry`: the command failed, then its relaunch of the failed tests
+ * (`retryFailed`) passed on the same commit and tree; counted as passed, always shown apart (unstable).
+ */
+export const receiptStatuses = ['passed', 'failed', 'timed_out', 'cancelled', 'spawn_error', 'blocked', 'cached', 'passed_after_retry'];
 const digest = s.string(64, 64, /^[a-f0-9]{64}$/);
 const sha = s.string(40, 64, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 export const receiptSchema = s.object({
     id, runId: id, gateId: id, key: digest, candidateSha: sha, configHash: digest, environmentHash: digest,
-    status: s.enum(['passed', 'failed', 'timed_out', 'cancelled', 'spawn_error', 'blocked', 'cached']),
-    startedAt: s.number(0, Number.MAX_SAFE_INTEGER), durationMs: s.finite(0, 7200000),
+    status: s.enum(receiptStatuses),
+    startedAt: s.number(0, Number.MAX_SAFE_INTEGER), durationMs: s.finite(0, 86_400_000),
     exitCode: s.nullable(s.number(0, 255)),
     stdoutHash: s.string(0, 64, /^(?:[a-f0-9]{64})?$/), stderrHash: s.string(0, 64, /^(?:[a-f0-9]{64})?$/),
     diagnostic: s.string(0, 16000), reusedFrom: s.nullable(id),
@@ -182,10 +197,22 @@ export const receiptSchema = s.object({
     // A full suite run while the execution `run` expected the task level at its current step (`apv gates run
     // --reason`): the reason, also journaled in the state of the execution. Absent otherwise.
     override: s.optional(s.object({ run: s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/), reason: s.string(1, 500) })),
+    // Time spent waiting for the lock of the check (`lock`) before its command started. Absent without a lock.
+    lockWaitMs: s.optional(s.finite(0, 86_400_000)),
+    // A failed first pass relaunched through `retryFailed`: that pass, the relaunch command, an excerpt of its output
+    // and the tests concerned. Present on `passed_after_retry` and on a relaunch that failed too.
+    retry: s.optional(s.object({
+        command: argv,
+        first: s.object({ status: s.enum(['failed']), exitCode: s.nullable(s.number(0, 255)), durationMs: s.finite(0, 86_400_000),
+            stdoutHash: s.string(0, 64, /^(?:[a-f0-9]{64})?$/), stderrHash: s.string(0, 64, /^(?:[a-f0-9]{64})?$/), diagnostic: s.string(0, 16000) }),
+        output: s.string(0, 16000),
+        tests: s.array(s.string(1, 500), 0, 100),
+    })),
 });
 export function validateReceipt(value) {
     const r = receiptSchema.parse(value);
-    if (r.status === 'passed' || r.status === 'cached')
+    invariant(r.status !== 'passed_after_retry' || r.retry !== undefined, 'RECEIPT', 'A receipt passed after retry carries its first pass');
+    if (r.status === 'passed' || r.status === 'cached' || r.status === 'passed_after_retry')
         invariant(r.exitCode === 0 && r.stdoutHash.length === 64 &&
             r.stderrHash.length === 64, 'RECEIPT', 'Successful receipt requires exit 0 and both stream digests');
     invariant((r.status === 'cached') === (r.reusedFrom !== null), 'RECEIPT', 'Only cache hits may reference an earlier receipt');

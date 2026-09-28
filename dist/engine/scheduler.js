@@ -1,6 +1,7 @@
 import { invariant } from '../domain/errors.js';
 import { validateDag } from '../policy/policy.js';
-export const success = (r) => r.status === 'passed' || r.status === 'cached';
+/** A receipt that counts as passed: `passed_after_retry` too (every test passed on the exact code; shown apart as unstable). */
+export const success = (r) => r.status === 'passed' || r.status === 'cached' || r.status === 'passed_after_retry';
 /** Ready queue with dependencies, named resources and shared-workspace read/write exclusion.
  * Only explicitly read-only gates overlap; a writer excludes readers too. An error never
  * leaves sibling processes running: all active promises are drained before throw. */

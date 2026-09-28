@@ -164,7 +164,10 @@ test('verify: missing, failed, another commit, dirty tree, then complete', async
   // Another commit has no proof, whatever the previous one had; a dirty run proves nothing.
   write(f.repo, 'docs/next.md', 'next\n'); git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'next');
   write(f.repo, 'scratch.txt', 'uncommitted\n');
-  const dirty = await apv(f.repo, ['gates', 'run', '--json']);
+  // A full suite refuses to start on a dirty tree, listing the files (3.0.0-alpha.4); --allow-dirty runs it, proving nothing.
+  const refused = await apv(f.repo, ['gates', 'run', '--json']);
+  assert.equal(refused.code, 1); assert.match(refused.stderr, /GATE_DIRTY.*\(1 fichier\(s\)\)[^]*\?\? scratch\.txt[^]*--allow-dirty/);
+  const dirty = await apv(f.repo, ['gates', 'run', '--allow-dirty', '--json']);
   assert.equal(dirty.code, 0); assert.equal(dirty.json().dirty, true);
   v = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--json']);
   assert.equal(v.code, 1);

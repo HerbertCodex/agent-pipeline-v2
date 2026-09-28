@@ -179,6 +179,7 @@ export async function verifyGates(options) {
         gates.push({ gateId, state: success(last.receipt) ? 'passed' : 'failed', status: last.receipt.status, receipt: last.receipt.id,
             runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof: last.receipt.targeted === true ? 'targeted' : 'full', otherBase, source: last.source });
     }
-    return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered, ok: gates.every(g => g.state === 'passed') };
+    return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered,
+        flaky: gates.filter(g => g.state === 'passed' && g.status === 'passed_after_retry').map(g => g.gateId), ok: gates.every(g => g.state === 'passed') };
 }
 //# sourceMappingURL=verify.js.map
