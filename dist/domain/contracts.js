@@ -1,7 +1,7 @@
 import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s } from './schema.js';
 import { invariant } from './errors.js';
-export const VERSION = '3.0.0-alpha.5';
+export const VERSION = '3.0.0-alpha.6';
 export const lanes = ['fast', 'standard', 'high'];
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'];
 /**
@@ -20,6 +20,27 @@ export const commandSchema = s.object({
 });
 /** Longest wait for the lock of a check (`lock.waitMs`) when absent: 30 minutes. */
 export const DEFAULT_LOCK_WAIT_MS = 1_800_000;
+/** Fixed waits found in the lines a change adds to a repeated test file: off, a warning, or a refusal of the run. */
+export const fixedWaitModes = ['off', 'warn', 'refuse'];
+/** Default ceilings of `repeatChanged`: repetitions of each test, files repeated in one run. */
+export const DEFAULT_REPEAT = { times: 5, maxFiles: 10 };
+/**
+ * `repeatChanged` of a check: `paths` (globs of the test files concerned), `command` (the repetition, the files
+ * appended), `times` (repetitions of each test, `{{repeat}}`), `maxFiles` (above: the run is refused), `timeoutMs`
+ * (duration ceiling of the repetition), `testPattern` (lines naming a failed test), `stressArgs`, `fixedWaits`.
+ */
+export const repeatChangedSchema = s.object({
+    paths: s.array(s.string(1, 500), 1, 50),
+    command: argv,
+    times: s.default(s.number(2, 100), DEFAULT_REPEAT.times),
+    maxFiles: s.default(s.number(1, 100), DEFAULT_REPEAT.maxFiles),
+    // Duration ceiling of the repetition (its own timeout); absent: the timeout of the check.
+    timeoutMs: s.optional(s.number(10, 3600000)),
+    testPattern: s.optional(s.string(1, 500)),
+    // Extra arguments that load the repetition (more parallel workers), before the files.
+    stressArgs: s.optional(s.array(s.string(1, 1000), 1, 20)),
+    fixedWaits: s.default(s.enum(fixedWaitModes), 'warn'),
+});
 export const gateSchema = s.object({
     id, command: argv,
     // Reviewed coverage labels, never inferred from a successful exit code or a gate name.
@@ -53,6 +74,10 @@ export const gateSchema = s.object({
     // same commit and tree: success gives `passed_after_retry`. `testPattern`: regular expression whose matches in the
     // output of the first pass name the tests concerned (capture group 1 when present). Optional, never defaulted.
     retryFailed: s.optional(s.object({ command: argv, testPattern: s.optional(s.string(1, 500)) })),
+    // Repetition of the test files the diff against `--base` adds or modifies (globs `paths`): once the command passed,
+    // `command` (`{{repeat}}` anywhere in an argument, `stressArgs` appended) runs on those files only, which are
+    // appended; any failure turns the check red, never relaunched by `retryFailed`. Optional, never defaulted.
+    repeatChanged: s.optional(repeatChangedSchema),
 });
 /** Stage of a check; absent means `task`. */
 export const gateStage = (gate) => gate.stage ?? 'task';
@@ -178,6 +203,8 @@ export const configSchema = s.object({
  * Status of a receipt. `passed_after_retry`: the command failed, then its relaunch of the failed tests
  * (`retryFailed`) passed on the same commit and tree; counted as passed, always shown apart (unstable).
  */
+/** Outcome of the repetition of the changed test files recorded in a receipt (`repeat.status`). */
+export const repeatStatuses = ['passed', 'failed', 'timed_out', 'cancelled', 'spawn_error', 'none', 'no_base', 'not_run'];
 export const receiptStatuses = ['passed', 'failed', 'timed_out', 'cancelled', 'spawn_error', 'blocked', 'cached', 'passed_after_retry'];
 const digest = s.string(64, 64, /^[a-f0-9]{64}$/);
 const sha = s.string(40, 64, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
@@ -210,6 +237,21 @@ export const receiptSchema = s.object({
         output: s.string(0, 16000),
         tests: s.array(s.string(1, 500), 0, 100),
     })),
+    // The repetition of the changed test files (`repeatChanged`): the files, how many times, and its outcome. Present
+    // whenever the check declares it: `none` (no changed test file), `no_base` (run without `--base`), `not_run` (the
+    // command itself did not pass), else the status of the repetition.
+    repeat: s.optional(s.object({
+        base: s.nullable(sha),
+        files: s.array(s.string(1, 500), 0, 100),
+        times: s.number(2, 100),
+        status: s.enum(repeatStatuses),
+        command: s.optional(argv),
+        durationMs: s.optional(s.finite(0, 86_400_000)),
+        exitCode: s.optional(s.nullable(s.number(0, 255))),
+        failures: s.default(s.array(s.object({ test: s.string(1, 500), count: s.number(1, 1_000_000) }), 0, 100), []),
+        output: s.optional(s.string(0, 16000)),
+        fixedWaits: s.default(s.array(s.object({ file: s.string(1, 500), line: s.number(1, 10_000_000), text: s.string(0, 300) }), 0, 100), []),
+    })),
 });
 export function validateReceipt(value) {
     const r = receiptSchema.parse(value);
@@ -218,6 +260,7 @@ export function validateReceipt(value) {
         invariant(r.exitCode === 0 && r.stdoutHash.length === 64 &&
             r.stderrHash.length === 64, 'RECEIPT', 'Successful receipt requires exit 0 and both stream digests');
     invariant((r.status === 'cached') === (r.reusedFrom !== null), 'RECEIPT', 'Only cache hits may reference an earlier receipt');
+    invariant(!r.repeat || !['failed', 'timed_out', 'cancelled', 'spawn_error'].includes(r.repeat.status) || (r.status !== 'passed' && r.status !== 'cached' && r.status !== 'passed_after_retry'), 'RECEIPT', 'A receipt whose repetition of the changed tests failed is never a success');
     return r;
 }
 export function validateConfig(value) {

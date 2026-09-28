@@ -286,6 +286,25 @@ export declare function targetedQaContext(context: {
             readonly output: string;
             readonly tests: string[];
         } | undefined;
+        repeat: {
+            readonly base: string | null;
+            readonly files: string[];
+            readonly times: number;
+            readonly status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "none" | "no_base" | "not_run";
+            readonly command: string[] | undefined;
+            readonly durationMs: number | undefined;
+            readonly exitCode: number | null | undefined;
+            readonly failures: {
+                readonly test: string;
+                readonly count: number;
+            }[];
+            readonly output: string | undefined;
+            readonly fixedWaits: {
+                readonly file: string;
+                readonly line: number;
+                readonly text: string;
+            }[];
+        } | undefined;
     }[];
     qaScope: {
         mode: string;

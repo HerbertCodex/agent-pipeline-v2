@@ -113,6 +113,37 @@ Par défaut, un contrôle a un accès exclusif au répertoire de validation, y c
 
 `--last-failed` relit `test-results/.last-run.json`, écrit par la première passe : la relance ne rejoue que ses tests en échec. Pourquoi la garde ne baisse pas : chaque test a réussi sur le code exact du commit, arbre inchangé ; un test qui échoue deux fois fait échouer le contrôle ; un délai dépassé n'est jamais relancé ; l'instabilité reste visible (statut propre, tests listés) et se traite comme un constat.
 
+`repeatChanged` (facultatif, 3.0.0-alpha.6) : la répétition des fichiers de test que le changement ajoute ou modifie, pour qu'un test instable (attente à durée fixe, horloge réelle, données partagées entre tests) soit rouge sur la branche qui l'apporte plutôt que, des jours plus tard, dans la suite d'un autre. Avec `apv gates run --base <ref>`, une fois la commande du contrôle réussie, `command` est lancée sur ces seuls fichiers, ajoutés à la fin, sous le même verrou ; tout échec rend le contrôle rouge, jamais masqué par `retryFailed` ([CLI.md](CLI.md#apv-gates-run)). Champs :
+- `paths` (obligatoire) : motifs des fichiers de test concernés (`*`, `**`, `?`, sans accolades ni `!`) ;
+- `command` (obligatoire) : la commande de répétition, mêmes substitutions que `command`, plus `{{repeat}}` (obligatoire, remplacé partout dans un argument par `times`) ; sans relance interne (`--retries=0` pour Playwright), sinon un échec rattrapé passerait inaperçu ;
+- `times` : répétitions de chaque test, de 2 à 100, 5 par défaut ;
+- `maxFiles` : plafond de fichiers répétés, de 1 à 100, 10 par défaut ; au-delà, l'exécution est refusée avant toute attente (`GATE_REPEAT`), jamais un saut silencieux ;
+- `timeoutMs` : plafond de durée de la répétition, sinon le `timeoutMs` du contrôle ; au-delà, reçu `timed_out` et refus explicite ;
+- `testPattern` : expression régulière qui nomme un test en échec dans la sortie (groupe 1 s'il existe), pour « échoue X fois sur N » ; sinon celle de `retryFailed` ;
+- `stressArgs` : arguments ajoutés avant les fichiers pour charger la répétition, par exemple `["--workers=4", "--fully-parallel"]` pour Playwright : les répétitions d'un même test tournent alors en même temps, ce qui révèle les données partagées entre tests et les attentes trop courtes sous charge ; plus lent sur une petite machine, et la charge compte dans `timeoutMs` ;
+- `fixedWaits` : lignes ajoutées par le changement aux fichiers répétés qui attendent une durée (`waitForTimeout(`, `sleep(`, `new Promise(r => setTimeout(r, …))`) : `"warn"` (défaut, listées), `"refuse"` (exécution refusée avant toute attente), `"off"`.
+
+Le reçu note les fichiers répétés, `times` et l'issue (`repeat`) ; ajouter ou changer `repeatChanged` change l'empreinte des contrôles, comme tout champ d'un contrôle. Exemple pour Playwright (reporter `list` ou `line`) :
+
+```json
+{
+  "id": "browser",
+  "stage": "full",
+  "command": ["npm", "run", "test:browser"],
+  "lock": { "file": "../../pilotage/.e2e.lock", "fileEnv": "E2E_LOCK_FILE" },
+  "retryFailed": { "command": ["npm", "run", "test:browser", "--", "--last-failed"], "testPattern": "^\\s*\\d+\\) (\\[[^\\]]+\\] › .+?)\\s*─*$" },
+  "repeatChanged": {
+    "paths": ["tests/e2e/**/*.e2e.ts"],
+    "command": ["npm", "run", "e2e:browser", "--", "--repeat-each={{repeat}}", "--retries=0"],
+    "times": 5,
+    "maxFiles": 10,
+    "timeoutMs": 1200000
+  }
+}
+```
+
+La répétition ne se fait qu'avec `--base` : l'étape de tâche l'exige déjà ; la suite complète avant une PR se lance avec `--base <base de la PR>`, et `apv stack batch` passe la cible. Sans `--base`, la sortie le dit et le reçu porte `repeat.status` = `no_base`.
+
 `readOnly: true` est une déclaration revue par l'opérateur : la commande **et ses sous-processus** ne doivent écrire aucun fichier dans ce répertoire. Seuls ces contrôles peuvent tourner ensemble, dans la limite de `concurrency` et des ressources nommées ; ils attendent aussi la fin d'un contrôle susceptible d'écrire. Ce champ n'est pas un sandbox ni une détection automatique. Ne pas l'activer pour un lint avec cache, un compilateur incrémental, des tests avec couverture ou des E2E qui lancent un build. Les anciens profils peuvent donc valider plus lentement ; déclarer uniquement les commandes réellement en lecture seule permet de retrouver du parallélisme sûr.
 
 ```json

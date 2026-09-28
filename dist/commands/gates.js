@@ -56,7 +56,11 @@ des orphelins de cette copie sur suite.ports (jamais une autre copie ni le check
 délais des contrôles ne commencent qu'après. Un contrôle avec lock attend son verrou (bail apv lock ou
 flock) avant que son délai commence ; un contrôle avec retryFailed qui échoue relance une fois ses tests
 en échec, même commit et même arbre : « réussi après relance » (instable), compté comme réussi et
-signalé à part. À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
+signalé à part. Un contrôle avec repeatChanged relance ensuite, avec --base, les seuls fichiers de test
+ajoutés ou modifiés depuis la base (motifs repeatChanged.paths) repeatChanged.times fois, sous le même
+verrou : tout échec le rend rouge (« échoue X fois sur N »), jamais masqué par retryFailed ; plus de
+fichiers que repeatChanged.maxFiles, ou une attente à durée fixe avec fixedWaits = refuse : refus avant
+toute attente. À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
 annulés, sortie 128 + signal), les processus qu'elle a lancés encore vivants et les orphelins de cette
 copie sur suite.ports sont arrêtés (jamais la session, une autre copie ni le checkout principal).
 --stacks 1,2 (suite complète, deux piles déclarées au moins, section stacks) : les contrôles d'une pile
@@ -65,7 +69,7 @@ configuration ; sur la première dans cette copie, sur une autre dans une copie 
 (préparée par batch.setup, retirée à la fin), avec les variables de sa pile et sous son verrou. Un
 contrôle qui a des dépendances, ou dont d'autres dépendent, reste dans cette copie.
 Sortie : 0 si tous les contrôles exécutés passent, 1 sinon (ou suite complète refusée par le
-rythme, l'arbre modifié ou la file), 2 appel incorrect.
+rythme, l'arbre modifié ou la file, ou répétition refusée), 2 appel incorrect.
 
 verify : vérifie dans les reçus que chaque contrôle exigé a réussi sur ce commit exact, arbre
 propre, avec la configuration actuelle ; pour chaque contrôle, seul son reçu le plus récent
@@ -96,6 +100,20 @@ const RESERVED = 'réservé à la suite complète';
 const TARGETED = 'ciblé';
 const SHARED = 'magasin partagé';
 const EVIDENCE = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu' };
+/** One line of the repetition of the changed test files of a check. */
+function repeatLine(r) {
+    const files = r.files.length > 5 ? `${r.files.slice(0, 5).join(', ')} ... (${r.files.length})` : r.files.join(', ');
+    if (r.status === 'no_base')
+        return 'non répétés : --base absent (apv gates run --base <base de la branche> les répète)';
+    if (r.status === 'none')
+        return `aucun fichier de test ajouté ou modifié depuis ${r.base?.slice(0, 12)}`;
+    if (r.status === 'not_run')
+        return `non répétés, la commande du contrôle n'a pas réussi (${files})`;
+    if (r.status === 'passed')
+        return `${r.files.length} fichier(s), ${r.times} fois chacun : réussi (${files})`;
+    const tests = r.failures.map(f => `${f.test} échoue ${f.count} fois sur ${r.times}`).join(' ; ');
+    return `${r.files.length} fichier(s), ${r.times} fois chacun : ${STATUS[r.status] ?? r.status}${tests ? `, test instable : ${tests}` : ''} (${files})`;
+}
 /** Human lines of `apv gates verify`. */
 function verifyLines(result) {
     const what = result.stage === 'full' ? 'suite complète' : result.targeted.length ? 'contrôles de tâche et ciblés' : 'contrôles de tâche';
@@ -356,7 +374,8 @@ export async function run(args, io) {
         }
         const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, status: r.status, exitCode: r.exitCode,
             durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic,
-            ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}) }));
+            ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}),
+            ...(r.repeat ? { repeat: { status: r.repeat.status, base: r.repeat.base, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures, fixedWaits: r.repeat.fixedWaits } } : {}) }));
         const name = (r) => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
         if (values.json) {
             json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null,
@@ -400,6 +419,12 @@ export async function run(args, io) {
             const flaky = rows.filter(r => r.status === 'passed_after_retry');
             if (flaky.length)
                 lines.push('', `Instables (${flaky.length}) : réussis seulement après la relance unique de leurs tests en échec, même commit et même arbre ; comptés comme réussis, à traiter comme un constat :`, ...flaky.map(r => `- ${name(r)}${r.retriedTests?.length ? ` : ${r.retriedTests.join(' ; ')}` : ' (tests concernés non relevés : retryFailed.testPattern)'}`));
+            const repeated = rows.filter(r => r.repeat);
+            if (repeated.length)
+                lines.push('', 'Tests modifiés répétés (repeatChanged) :', ...repeated.map(r => `- ${name(r)} : ${repeatLine(r.repeat)}`));
+            const waits = repeated.flatMap(r => r.repeat.fixedWaits.map(w => `- ${name(r)} : ${w.file}:${w.line} : ${w.text}`));
+            if (waits.length)
+                lines.push('', `Attentes à durée fixe dans les tests modifiés (${waits.length}) : attendre un fait observable (réponse, élément, état), jamais une durée ; page.clock pour le temps :`, ...waits);
             const waited = rows.filter(r => (r.lockWaitMs ?? 0) >= 1000);
             if (waited.length)
                 lines.push('', `Attente de verrou avant le délai des contrôles : ${waited.map(r => `${name(r)} ${Math.round(r.lockWaitMs / 1000)} s`).join(', ')}.`);

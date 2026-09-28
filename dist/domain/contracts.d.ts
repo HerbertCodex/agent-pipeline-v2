@@ -1,5 +1,5 @@
 import { type Infer } from './schema.js';
-export declare const VERSION = "3.0.0-alpha.5";
+export declare const VERSION = "3.0.0-alpha.6";
 export declare const lanes: readonly ["fast", "standard", "high"];
 export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];
@@ -17,6 +17,28 @@ export declare const commandSchema: import("./schema.js").Schema<{
 }>;
 /** Longest wait for the lock of a check (`lock.waitMs`) when absent: 30 minutes. */
 export declare const DEFAULT_LOCK_WAIT_MS = 1800000;
+/** Fixed waits found in the lines a change adds to a repeated test file: off, a warning, or a refusal of the run. */
+export declare const fixedWaitModes: readonly ["off", "warn", "refuse"];
+/** Default ceilings of `repeatChanged`: repetitions of each test, files repeated in one run. */
+export declare const DEFAULT_REPEAT: {
+    readonly times: 5;
+    readonly maxFiles: 10;
+};
+/**
+ * `repeatChanged` of a check: `paths` (globs of the test files concerned), `command` (the repetition, the files
+ * appended), `times` (repetitions of each test, `{{repeat}}`), `maxFiles` (above: the run is refused), `timeoutMs`
+ * (duration ceiling of the repetition), `testPattern` (lines naming a failed test), `stressArgs`, `fixedWaits`.
+ */
+export declare const repeatChangedSchema: import("./schema.js").Schema<{
+    readonly paths: string[];
+    readonly command: string[];
+    readonly times: number;
+    readonly maxFiles: number;
+    readonly timeoutMs: number | undefined;
+    readonly testPattern: string | undefined;
+    readonly stressArgs: string[] | undefined;
+    readonly fixedWaits: "off" | "warn" | "refuse";
+}>;
 export declare const gateSchema: import("./schema.js").Schema<{
     readonly id: string;
     readonly command: string[];
@@ -45,6 +67,16 @@ export declare const gateSchema: import("./schema.js").Schema<{
     readonly retryFailed: {
         readonly command: string[];
         readonly testPattern: string | undefined;
+    } | undefined;
+    readonly repeatChanged: {
+        readonly paths: string[];
+        readonly command: string[];
+        readonly times: number;
+        readonly maxFiles: number;
+        readonly timeoutMs: number | undefined;
+        readonly testPattern: string | undefined;
+        readonly stressArgs: string[] | undefined;
+        readonly fixedWaits: "off" | "warn" | "refuse";
     } | undefined;
 }>;
 /** Stage of a check; absent means `task`. */
@@ -244,6 +276,16 @@ export declare const configSchema: import("./schema.js").Schema<{
             readonly command: string[];
             readonly testPattern: string | undefined;
         } | undefined;
+        readonly repeatChanged: {
+            readonly paths: string[];
+            readonly command: string[];
+            readonly times: number;
+            readonly maxFiles: number;
+            readonly timeoutMs: number | undefined;
+            readonly testPattern: string | undefined;
+            readonly stressArgs: string[] | undefined;
+            readonly fixedWaits: "off" | "warn" | "refuse";
+        } | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;
@@ -293,6 +335,8 @@ export interface ProcessResult {
  * Status of a receipt. `passed_after_retry`: the command failed, then its relaunch of the failed tests
  * (`retryFailed`) passed on the same commit and tree; counted as passed, always shown apart (unstable).
  */
+/** Outcome of the repetition of the changed test files recorded in a receipt (`repeat.status`). */
+export declare const repeatStatuses: readonly ["passed", "failed", "timed_out", "cancelled", "spawn_error", "none", "no_base", "not_run"];
 export declare const receiptStatuses: readonly ["passed", "failed", "timed_out", "cancelled", "spawn_error", "blocked", "cached", "passed_after_retry"];
 export declare const receiptSchema: import("./schema.js").Schema<{
     readonly id: string;
@@ -331,6 +375,25 @@ export declare const receiptSchema: import("./schema.js").Schema<{
         };
         readonly output: string;
         readonly tests: string[];
+    } | undefined;
+    readonly repeat: {
+        readonly base: string | null;
+        readonly files: string[];
+        readonly times: number;
+        readonly status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "none" | "no_base" | "not_run";
+        readonly command: string[] | undefined;
+        readonly durationMs: number | undefined;
+        readonly exitCode: number | null | undefined;
+        readonly failures: {
+            readonly test: string;
+            readonly count: number;
+        }[];
+        readonly output: string | undefined;
+        readonly fixedWaits: {
+            readonly file: string;
+            readonly line: number;
+            readonly text: string;
+        }[];
     } | undefined;
 }>;
 export type GateReceipt = Infer<typeof receiptSchema>;

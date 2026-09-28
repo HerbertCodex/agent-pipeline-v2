@@ -292,7 +292,8 @@ async function batch(prs, values, io) {
             if (r.status !== 'passed')
                 return { ok: false, runId: null, summary: `préparation batch.setup en échec (${r.status}, code ${r.exitCode ?? '-'}) : ${`${r.stdout}\n${r.stderr}`.trim().slice(-800)}` };
         }
-        const result = await runGates({ repo: worktree, config: loaded.config, stage: 'full', env: io.env, log, signal: abort.signal,
+        // The target as base: the checks that repeat their changed test files (repeatChanged) repeat those the batch brings.
+        const result = await runGates({ repo: worktree, config: loaded.config, stage: 'full', base, env: io.env, log, signal: abort.signal,
             ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}) });
         const verified = await verifyGates({ repo: worktree, config: loaded.config, commit: head, stage: 'full' });
         const passed = result.receipts.filter(success).length;

@@ -240,6 +240,28 @@ export function configIssues(raw) {
                     throw new PipelineError('CONFIG', `Gate ${gate.id}: retryFailed.testPattern is not a valid regular expression: ${errorMessage(error)}`);
                 }
             });
+        const repeat = gate.repeatChanged;
+        if (repeat) {
+            if (repeat.testPattern !== undefined)
+                list.attempt('CONFIG', () => {
+                    try {
+                        new RegExp(repeat.testPattern, 'm');
+                    }
+                    catch (error) {
+                        throw new PipelineError('CONFIG', `Gate ${gate.id}: repeatChanged.testPattern is not a valid regular expression: ${errorMessage(error)}`);
+                    }
+                });
+            // Portable globs only: a brace or a negation would silently match nothing, and a changed test would never repeat.
+            for (const glob of repeat.paths)
+                list.attempt('CONFIG', () => { try {
+                    matches('probe', glob);
+                }
+                catch (error) {
+                    throw new PipelineError('CONFIG', `Gate ${gate.id}: repeatChanged.paths: ${errorMessage(error)}`);
+                } });
+            // The number recorded in the receipt is the number the command runs: never a literal that could differ from `times`.
+            list.check(repeat.command.some(a => a.includes('{{repeat}}')), 'CONFIG', `Gate ${gate.id}: repeatChanged.command must repeat the tests through {{repeat}} (for example "--repeat-each={{repeat}}"), replaced by repeatChanged.times`);
+        }
     }
     const ruleIds = value.validationRules.map(r => r.id);
     list.check(new Set(ruleIds).size === ruleIds.length, 'CONFIG', 'Duplicate validation rule id');

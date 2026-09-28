@@ -17,6 +17,7 @@ import { publishRun, pruneStore, receiptRetention, sharedStore, type PruneResult
 import { markStacksUsed, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables, type SpreadPlan } from './spread.js';
+import { fixedWaitRefusal, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, tooManyFiles, type RepeatPlan } from './repeat.js';
 import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, flockCommand, freePorts, resolveGateLock, withGateLease,
   type CleanupRecord, type PortsRecord, type QueueHandle, type QueueRecord, type SuiteHooks } from './suite.js';
 
@@ -211,6 +212,23 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   };
   const commands = new Map(gates.map(g => [g.id, expand(g, g.command)]));
   const retries = new Map(gates.filter(g => g.retryFailed).map(g => [g.id, expand(g, g.retryFailed!.command)]));
+  const repeats = new Map(gates.filter(g => g.repeatChanged).map(g => [g.id, expand(g, repeatArgv(g.repeatChanged!))]));
+  // The changed test files each check repeats, decided before any wait: a ceiling exceeded or a refused fixed wait
+  // stops the run here, explicitly, rather than after a full suite or by a silent skip. Null: no --base to compare to.
+  const repeatPlans = new Map<string, RepeatPlan | null>();
+  for (const g of gates) {
+    if (!g.repeatChanged) continue;
+    if (!baseSha) {
+      repeatPlans.set(g.id, null);
+      log(`${g.id} : repeatChanged déclaré mais --base absent : ses tests modifiés ne sont pas répétés (reçu : repeat.status = no_base).`);
+      continue;
+    }
+    const plan = await planRepeat(git, repo, baseSha, g.repeatChanged);
+    if (plan.files.length > g.repeatChanged.maxFiles) throw tooManyFiles(g.id, plan, g.repeatChanged);
+    if (plan.fixedWaits.length && g.repeatChanged.fixedWaits === 'refuse') throw fixedWaitRefusal(g.id, plan.fixedWaits);
+    for (const w of plan.fixedWaits) log(`${g.id} : attente à durée fixe dans un test modifié, ${w.file}:${w.line} : ${w.text} (attendre un fait observable ; page.clock pour le temps).`);
+    repeatPlans.set(g.id, plan);
+  }
   // The queue of the full suites, then the load: every timeout of a check starts after them.
   const settings = suiteSettings(options.config);
   let queue: QueueHandle | null = null;
@@ -281,7 +299,10 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     }
     const keys = new Map<string, string>();
     const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
-    const write = (receipt: Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack'>>): GateReceipt => {
+    type Repeat = NonNullable<GateReceipt['repeat']>;
+    type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'>>;
+    type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack'>> & { repeat?: RepeatFields };
+    const write = (receipt: Fields): GateReceipt => {
       const valid = validateReceipt({ ...receipt, stage, dirty, ...(targeted.has(receipt.gateId) ? { targeted: true } : {}), ...(override ? { override } : {}) });
       writeFileSync(join(directory, `${valid.gateId}.json`), JSON.stringify(valid, null, 2) + '\n');
       return valid;
@@ -315,14 +336,14 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       const lock = assigned ? stackLock(assigned.stack, gate, defaultLockDir(source)) : gate.lock ? await resolveGateLock(git, repo, gate.lock, env, source) : null;
       const withLockWait = (ms: number): { lockWaitMs?: number } => lock ? { lockWaitMs: Math.round(ms) } : {};
       /** One pass of a command, under the flock of the check when it has one: the timeout starts once it is held. */
-      const pass = async (argv: string[], checkEnv: NodeJS.ProcessEnv): Promise<{ result: ProcessResult; commandMs: number; lockWaitMs: number; lockError: string | null }> => {
+      const pass = async (argv: string[], checkEnv: NodeJS.ProcessEnv, timeoutMs = gate.timeoutMs): Promise<{ result: ProcessResult; commandMs: number; lockWaitMs: number; lockError: string | null }> => {
         // The marker of a full suite, outside the environment identity: its processes are found at its end.
         const passEnv = suite ? { ...checkEnv, [SUITE_MARKER]: runId } : checkEnv;
         if (lock?.kind !== 'flock') {
-          const result = await runProcess({ command: argv, cwd: workspace, env: passEnv, timeoutMs: gate.timeoutMs, signal, maxOutputBytes: 1024 * 1024 });
+          const result = await runProcess({ command: argv, cwd: workspace, env: passEnv, timeoutMs, signal, maxOutputBytes: 1024 * 1024 });
           return { result, commandMs: result.durationMs, lockWaitMs: 0, lockError: null };
         }
-        const result = await runProcess({ command: flockCommand(lock.file, lock.waitMs, argv), cwd: workspace, env: passEnv, timeoutMs: gate.timeoutMs, signal,
+        const result = await runProcess({ command: flockCommand(lock.file, lock.waitMs, argv), cwd: workspace, env: passEnv, timeoutMs, signal,
           maxOutputBytes: 1024 * 1024, waitReady: true });
         if (result.readyMs === null || result.readyMs === undefined) {
           const lockError = result.status === 'cancelled' ? null
@@ -336,15 +357,16 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       };
       const lockRefused = (reason: string, waitedMs: number): GateReceipt => write({ ...base, status: 'timed_out', durationMs: 0, exitCode: null,
         stdoutHash: '', stderrHash: '', diagnostic: `Verrou du contrôle non obtenu : ${reason}. La commande n'a pas été lancée.`, lockWaitMs: Math.round(waitedMs) });
-      const body = async (passEnv: NodeJS.ProcessEnv, leaseWaitMs: number): Promise<GateReceipt> => {
+      /** The command, and its single relaunch (`retryFailed`): the fields of the receipt, before any repetition. */
+      const main = async (passEnv: NodeJS.ProcessEnv, leaseWaitMs: number): Promise<Fields> => {
         const first = await pass(command, passEnv);
         let lockWaitMs = leaseWaitMs + first.lockWaitMs;
         const r1 = first.result;
         if (first.lockError !== null || r1.status === 'cancelled' && first.commandMs === 0 && lock?.kind === 'flock') {
-          return write({ ...base, status: r1.status, durationMs: 0, exitCode: null, stdoutHash: '', stderrHash: '',
+          return ({ ...base, status: r1.status, durationMs: 0, exitCode: null, stdoutHash: '', stderrHash: '',
             diagnostic: first.lockError ?? 'cancelled', ...withLockWait(lockWaitMs) });
         }
-        const plain = (): GateReceipt => write({ ...base, status: r1.status, durationMs: first.commandMs, exitCode: exitOf(r1),
+        const plain = (): Fields => ({ ...base, status: r1.status, durationMs: first.commandMs, exitCode: exitOf(r1),
           stdoutHash: r1.stdoutHash, stderrHash: r1.stderrHash, diagnostic: r1.status === 'passed' ? '' : excerpt(r1), ...withLockWait(lockWaitMs) });
         const retryCommand = retries.has(gate.id) && workspace !== repo ? expandCommand(gate.retryFailed!.command, { ...context, workspace }) : retries.get(gate.id);
         // Only a command that failed by itself is relaunched: a timeout, a cancellation or a missing command is not.
@@ -355,7 +377,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         const head = await git.sha(workspace);
         const now = workspace === repo ? await treeStatus() : await git.exec(workspace, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
         if (head !== candidateSha || now !== (workspace === repo ? status : '')) {
-          return write({ ...base, status: 'failed', durationMs: first.commandMs, exitCode: exitOf(r1), stdoutHash: r1.stdoutHash, stderrHash: r1.stderrHash,
+          return ({ ...base, status: 'failed', durationMs: first.commandMs, exitCode: exitOf(r1), stdoutHash: r1.stdoutHash, stderrHash: r1.stderrHash,
             diagnostic: `Relance refusée : ${head !== candidateSha ? 'HEAD a changé' : 'l\'arbre de travail a changé'} pendant la première passe (la relance ne prouverait pas le même code).\n${excerpt(r1, MAX_DIAGNOSTIC_CHARS - 300)}`,
             ...withLockWait(lockWaitMs) });
         }
@@ -368,15 +390,61 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         const durationMs = first.commandMs + second.commandMs;
         if (second.lockError === null && r2.status === 'passed') {
           log(`${gate.id} : réussi après relance (instable).`);
-          return write({ ...base, status: 'passed_after_retry', durationMs, exitCode: 0, stdoutHash: r2.stdoutHash, stderrHash: r2.stderrHash,
+          return ({ ...base, status: 'passed_after_retry', durationMs, exitCode: 0, stdoutHash: r2.stdoutHash, stderrHash: r2.stderrHash,
             diagnostic: `Réussi après relance (retryFailed) : première passe en échec (code ${firstPass.exitCode ?? '-'})${tests.length ? ` ; tests relancés : ${tests.join(' ; ')}` : ''}.\n${excerpt(r1, 8000)}`.slice(0, MAX_DIAGNOSTIC_CHARS),
             retry, ...withLockWait(lockWaitMs) });
         }
         const failure = second.lockError ?? excerpt(r2, MAX_DIAGNOSTIC_CHARS - 300);
-        return write({ ...base, status: r2.status === 'passed' ? 'failed' : r2.status, durationMs, exitCode: second.lockError === null ? exitOf(r2) : null,
+        return ({ ...base, status: r2.status === 'passed' ? 'failed' : r2.status, durationMs, exitCode: second.lockError === null ? exitOf(r2) : null,
           stdoutHash: second.lockError === null ? r2.stdoutHash : '', stderrHash: second.lockError === null ? r2.stderrHash : '',
           diagnostic: `Relance (retryFailed) en échec aussi :\n${failure}`.slice(0, MAX_DIAGNOSTIC_CHARS), retry, ...withLockWait(lockWaitMs) });
       };
+      /**
+       * The repetition of the changed test files (`repeatChanged`), once the command passed (after its relaunch
+       * included), under the same lock: never relaunched, and any failure turns the check red whatever `retryFailed`
+       * said. Without a plan (no --base), no changed file or a command that did not pass, only recorded.
+       */
+      const repeated = async (fields: Fields, passEnv: NodeJS.ProcessEnv): Promise<Fields> => {
+        const settings = gate.repeatChanged;
+        if (!settings) return fields;
+        const plan = repeatPlans.get(gate.id) ?? null;
+        const times = settings.times;
+        if (!plan) return { ...fields, repeat: { base: null, files: [], times, status: 'no_base', failures: [], fixedWaits: [] } };
+        const record = { base: plan.base, files: plan.files, times, fixedWaits: plan.fixedWaits };
+        if (!plan.files.length) return { ...fields, repeat: { ...record, status: 'none', failures: [] } };
+        const afterRetry = fields.status === 'passed_after_retry';
+        if (fields.status !== 'passed' && !afterRetry) return { ...fields, repeat: { ...record, status: 'not_run', failures: [] } };
+        const prefix = workspace === repo ? repeats.get(gate.id)! : expandCommand(repeatArgv(settings), { ...context, workspace });
+        const withWait = (ms: number): { lockWaitMs?: number } => lock ? { lockWaitMs: Math.round((fields.lockWaitMs ?? 0) + ms) } : {};
+        // Same commit, same tree: otherwise the repetition would prove other code.
+        const head = await git.sha(workspace);
+        const now = workspace === repo ? await treeStatus() : await git.exec(workspace, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+        if (head !== candidateSha || now !== (workspace === repo ? status : '')) {
+          return { ...fields, status: 'failed', exitCode: null, repeat: { ...record, status: 'failed', command: prefix, failures: [] },
+            diagnostic: `Répétition des tests modifiés refusée : ${head !== candidateSha ? 'HEAD a changé' : 'l\'arbre de travail a changé'} pendant la commande du contrôle (elle ne prouverait pas le même code).` };
+        }
+        log(`${gate.id} : répétition des tests modifiés (repeatChanged), ${times} fois chacun : ${plan.files.join(', ')}${settings.stressArgs ? ` ; charge : ${settings.stressArgs.join(' ')}` : ''}.`);
+        const timeoutMs = settings.timeoutMs ?? gate.timeoutMs;
+        const run = await pass([...prefix, ...plan.files], passEnv, timeoutMs);
+        const r = run.result;
+        const output = `${r.stdout}\n${r.stderr}`;
+        const pattern = settings.testPattern ?? gate.retryFailed?.testPattern;
+        const failures = run.lockError === null ? repeatFailures(pattern, output).map(f => ({ ...f, test: redact(f.test, secrets).slice(0, 500) })) : [];
+        const durationMs = fields.durationMs + run.commandMs;
+        const repeat = { ...record, command: prefix, durationMs: run.commandMs, exitCode: run.lockError === null ? exitOf(r) : null, failures,
+          output: redact(output.trim(), secrets).slice(-4000) };
+        if (run.lockError === null && r.status === 'passed') {
+          log(`${gate.id} : répétition des tests modifiés réussie (${plan.files.length} fichier(s), ${times} fois).`);
+          return { ...fields, durationMs, repeat: { ...repeat, status: 'passed' }, ...withWait(run.lockWaitMs) };
+        }
+        const failed = r.status === 'passed' ? 'failed' : r.status;
+        log(`${gate.id} : répétition des tests modifiés en échec (${failed})${failures.length ? ` : ${failures.slice(0, 5).map(f => `${f.test} échoue ${f.count} fois sur ${times}`).join(' ; ')}` : ''}.`);
+        const diagnostic = repeatDiagnostic({ files: plan.files, times, failures, afterRetry, status: failed, timeoutMs, hasPattern: pattern !== undefined,
+          excerpt: run.lockError ?? excerpt(r, 6000) });
+        return { ...fields, status: failed, durationMs, exitCode: repeat.exitCode, stdoutHash: run.lockError === null ? r.stdoutHash : '', stderrHash: run.lockError === null ? r.stderrHash : '',
+          diagnostic: diagnostic.slice(0, MAX_DIAGNOSTIC_CHARS), repeat: { ...repeat, status: failed }, ...withWait(run.lockWaitMs) };
+      };
+      const body = async (passEnv: NodeJS.ProcessEnv, leaseWaitMs: number): Promise<GateReceipt> => write(await repeated(await main(passEnv, leaseWaitMs), passEnv));
       const used = lock && common ? stacksOfLock(stacks, lock) : [];
       let outcome: GateReceipt | null = null;
       try {
@@ -423,7 +491,8 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}),
       ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup } : {}), ...(spreadRecord ? { spread: spreadRecord } : {}), ...(stoppedStacks.length ? { stoppedStacks } : {}),
       receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),
-        ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}), ...(r.stack ? { stack: r.stack } : {}) })) }, null, 2) + '\n');
+        ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}), ...(r.stack ? { stack: r.stack } : {}),
+        ...(r.repeat ? { repeat: { status: r.repeat.status, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures } } : {}) })) }, null, 2) + '\n');
     if (options.share !== false) result.shared = await shareRun(git, repo, directory, runId, candidateSha, options.config);
     return result;
   } finally {
