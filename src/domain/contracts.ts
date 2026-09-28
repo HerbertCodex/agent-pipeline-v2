@@ -42,9 +42,10 @@ export const repeatChangedSchema = s.object({
   // Extra arguments that load the repetition (more parallel workers), before the files.
   stressArgs: s.optional(s.array(s.string(1, 1000), 1, 20)),
   fixedWaits: s.default(s.enum(fixedWaitModes), 'warn'),
-  // The branch the change goes to (a Git ref, `origin/main` for example): a full run also repeats the test files changed
-  // since its merge base, and `apv gates verify` requires them. Absent: `origin/HEAD`, when it resolves.
-  reference: s.optional(s.string(1, 200, /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/)),
+  // The branch the change goes to (a Git ref, `origin/main` for example), required: a full run also repeats the test
+  // files changed since its merge base, and `apv gates verify` requires them; a reference that does not resolve refuses
+  // both, never a silent fallback on `--base` alone.
+  reference: s.string(1, 200, /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/),
 });
 export const gateSchema = s.object({
   id, command: argv,

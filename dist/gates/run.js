@@ -16,7 +16,7 @@ import { publishRun, pruneStore, receiptRetention, sharedStore } from './store.j
 import { markStacksUsed, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables } from './spread.js';
-import { DEFAULT_REPEAT_REFERENCE, fixedWaitRefusal, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, resolveRef, tooManyFiles } from './repeat.js';
+import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, resolveRef, tooManyFiles } from './repeat.js';
 import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, flockCommand, freePorts, resolveGateLock, withGateLease } from './suite.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
 export const RECEIPTS_DIR = '.apv/receipts';
@@ -155,10 +155,10 @@ export async function runGates(options) {
         // A check run in full also compares to the reference (the branch the change goes to): a --base too close cannot narrow it.
         let reference = null;
         if (stage === 'full' && !targeted.has(g.id)) {
-            const name = options.repeatReference ?? settings.reference ?? DEFAULT_REPEAT_REFERENCE;
+            const name = options.repeatReference ?? settings.reference;
             reference = await resolveRef(git, repo, name);
             if (!reference)
-                log(`${g.id} : référence ${name} introuvable (repeatChanged.reference) : seuls les tests modifiés depuis --base sont répétés.`);
+                throw new PipelineError('GATE_BASE', referenceMissing(g.id, name));
         }
         const plan = await planRepeat(git, repo, { base: baseSha, reference }, settings);
         const optionLike = plan.files.find(f => f.startsWith('-'));

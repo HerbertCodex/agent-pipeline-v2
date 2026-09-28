@@ -17,7 +17,7 @@ import { publishRun, pruneStore, receiptRetention, sharedStore, type PruneResult
 import { markStacksUsed, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables, type SpreadPlan } from './spread.js';
-import { DEFAULT_REPEAT_REFERENCE, fixedWaitRefusal, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, resolveRef, tooManyFiles,
+import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, resolveRef, tooManyFiles,
   type RepeatPlan } from './repeat.js';
 import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, flockCommand, freePorts, resolveGateLock, withGateLease,
   type CleanupRecord, type PortsRecord, type QueueHandle, type QueueRecord, type SuiteHooks } from './suite.js';
@@ -64,7 +64,7 @@ export interface GateRunOptions {
   stacks?: readonly string[];
   /**
    * The reference the full checks that declare `repeatChanged` also compare their changed test files to, in place of
-   * `repeatChanged.reference` (`apv stack batch`: its target). Absent: the configuration, then `origin/HEAD`.
+   * `repeatChanged.reference` (`apv stack batch`: its target). Absent: `repeatChanged.reference` of the configuration.
    */
   repeatReference?: string;
   /**
@@ -240,9 +240,9 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     // A check run in full also compares to the reference (the branch the change goes to): a --base too close cannot narrow it.
     let reference: string | null = null;
     if (stage === 'full' && !targeted.has(g.id)) {
-      const name = options.repeatReference ?? settings.reference ?? DEFAULT_REPEAT_REFERENCE;
+      const name = options.repeatReference ?? settings.reference;
       reference = await resolveRef(git, repo, name);
-      if (!reference) log(`${g.id} : référence ${name} introuvable (repeatChanged.reference) : seuls les tests modifiés depuis --base sont répétés.`);
+      if (!reference) throw new PipelineError('GATE_BASE', referenceMissing(g.id, name));
     }
     const plan = await planRepeat(git, repo, { base: baseSha!, reference }, settings);
     const optionLike = plan.files.find(f => f.startsWith('-'));

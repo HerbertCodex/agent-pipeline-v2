@@ -218,7 +218,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly testPattern: string | undefined;
             readonly stressArgs: string[] | undefined;
             readonly fixedWaits: "off" | "warn" | "refuse";
-            readonly reference: string | undefined;
+            readonly reference: string;
         } | undefined;
     }[];
     readonly validationRules: {

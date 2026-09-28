@@ -6,7 +6,7 @@ import { Git } from '../execution/git.js';
 import { success } from '../engine/scheduler.js';
 import type { ApvConfig } from '../config/load.js';
 import { RECEIPTS_DIR, gatesConfigHash, stageGates } from './run.js';
-import { DEFAULT_REPEAT_REFERENCE, planRepeat, resolveRef } from './repeat.js';
+import { planRepeat, resolveRef } from './repeat.js';
 import { manifestCommit, readSharedRun, sharedRunIds, sharedStore } from './store.js';
 
 export interface VerifyOptions {
@@ -26,7 +26,7 @@ export interface VerifyOptions {
    * this commit or one of its ancestors (it then covered at least these changes).
    */
   base?: string;
-  /** In place of `repeatChanged.reference` (then `origin/HEAD`): the branch the changed test files are counted from (`apv stack batch`: its target). */
+  /** In place of `repeatChanged.reference`: the branch the changed test files are counted from (`apv stack batch`: its target). */
   repeatReference?: string;
 }
 /**
@@ -226,9 +226,10 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     if (r.base === commit) return { missing: [], reason: 'base égale au commit : aucun test modifié ne pouvait être répété' };
     let reference: string | null = null;
     if (full) {
-      const name = options.repeatReference ?? settings.reference ?? DEFAULT_REPEAT_REFERENCE;
+      const name = options.repeatReference ?? settings.reference;
       if (!references.has(name)) references.set(name, await resolveRef(git, repo, name));
       reference = references.get(name)!;
+      if (!reference) return { missing: [], reason: `référence ${name} introuvable (repeatChanged.reference) : les tests modifiés depuis la branche où va le changement ne peuvent pas être recomptés` };
     }
     const expected = await planRepeat(git, repo, { base: r.base, reference }, { ...settings, fixedWaits: settings.fixedWaits === 'refuse' ? 'refuse' : 'off' }, commit);
     const done = new Set(r.files);

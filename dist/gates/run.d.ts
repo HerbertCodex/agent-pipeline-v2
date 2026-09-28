@@ -47,7 +47,7 @@ export interface GateRunOptions {
     stacks?: readonly string[];
     /**
      * The reference the full checks that declare `repeatChanged` also compare their changed test files to, in place of
-     * `repeatChanged.reference` (`apv stack batch`: its target). Absent: the configuration, then `origin/HEAD`.
+     * `repeatChanged.reference` (`apv stack batch`: its target). Absent: `repeatChanged.reference` of the configuration.
      */
     repeatReference?: string;
     /**

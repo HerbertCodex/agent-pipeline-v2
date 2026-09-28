@@ -25,8 +25,8 @@ export interface RepeatPlan {
 }
 /** Placeholder of the number of repetitions, replaced anywhere in an argument (`--repeat-each={{repeat}}`). */
 export declare const REPEAT_PLACEHOLDER = "{{repeat}}";
-/** Reference a full suite and `apv gates verify` compare the changes to when `repeatChanged.reference` is absent. */
-export declare const DEFAULT_REPEAT_REFERENCE = "origin/HEAD";
+/** The refusal of a full run whose reference does not resolve: the changes would be counted from `--base` alone. */
+export declare function referenceMissing(gateId: string, name: string): string;
 export declare function fixedWaitIn(line: string): boolean;
 /**
  * The fixed waits of consecutive lines: each line alone, and a `new Promise(` joined with the (at most three)

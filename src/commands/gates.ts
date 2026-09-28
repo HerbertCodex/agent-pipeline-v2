@@ -10,6 +10,7 @@ import { resolveCommit, gitRoot } from '../run/git-probe.js';
 import { MAX_OVERRIDE_REASON, RUN_ID, applyFullSuiteOverride, readRunState, withRunLock, writeRunState } from '../run/state.js';
 import { cleanLine } from '../run/summary.js';
 import { verifyGates, type EvidenceState, type VerifyResult } from '../gates/verify.js';
+import { referenceMissing, resolveRef } from '../gates/repeat.js';
 import { Git } from '../execution/git.js';
 import { signalExitCode } from '../lock/run.js';
 import { EXIT, UsageError, guard, json, list, parse, repoPath, table } from './common.js';
@@ -63,7 +64,7 @@ ajoutés ou modifiés depuis la base (motifs repeatChanged.paths) repeatChanged.
 verrou : tout échec le rend rouge (« échoue X fois sur N »), jamais masqué par retryFailed ; plus de
 fichiers que repeatChanged.maxFiles, ou une attente à durée fixe avec fixedWaits = refuse : refus avant
 toute attente. Sans --base, un tel contrôle ne se lance pas (appel incorrect) ; une suite complète compare
-aussi à repeatChanged.reference (défaut origin/HEAD). À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
+aussi à repeatChanged.reference (obligatoire ; introuvable : appel incorrect). À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
 annulés, sortie 128 + signal), les processus qu'elle a lancés encore vivants et les orphelins de cette
 copie sur suite.ports sont arrêtés (jamais la session, une autre copie ni le checkout principal).
 --stacks 1,2 (suite complète, deux piles déclarées au moins, section stacks) : les contrôles d'une pile
@@ -285,6 +286,14 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const repeating = [...staged.run, ...staged.targeted].filter(g => g.repeatChanged).map(g => g.id);
     if (repeating.length && values.base === undefined) {
       throw new UsageError(`${repeating.join(', ')} déclare(nt) repeatChanged : --base <base de la branche> est obligatoire (ses tests ajoutés ou modifiés depuis elle sont répétés ; sans base, rien ne le serait)`);
+    }
+    // At the full stage, the changes are also counted from the reference: one that does not resolve is refused here.
+    if ((stage ?? 'full') === 'full') {
+      const git = new Git();
+      const root = await git.root(repo);
+      for (const g of staged.run.filter(x => x.repeatChanged)) {
+        if (!(await resolveRef(git, root, g.repeatChanged!.reference))) throw new UsageError(referenceMissing(g.id, g.repeatChanged!.reference));
+      }
     }
     const allowDirty = values['allow-dirty'] === true;
     // A full suite: a check of stage full run in full. On a dirty tree it proves nothing: refused first, before the

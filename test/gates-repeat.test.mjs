@@ -39,7 +39,7 @@ if (mode === 'fail') { console.log('  1) [chromium] › tests/e2e/a.e2e.ts:3:5 �
   return { ...f, base, calls: read, reset: () => rmSync(calls, { force: true }) };
 }
 const script = name => [process.execPath, name];
-const repeatOf = (extra = {}) => ({ paths: ['tests/e2e/**/*.e2e.ts'], command: [...script('run-pass.mjs'), 'repeat', '--repeat-each={{repeat}}', '--retries=0'], ...extra });
+const repeatOf = (extra = {}) => ({ paths: ['tests/e2e/**/*.e2e.ts'], command: [...script('run-pass.mjs'), 'repeat', '--repeat-each={{repeat}}', '--retries=0'], reference: 'main', ...extra });
 const receipt = (dir, gate) => validateReceipt(JSON.parse(readFileSync(join(dir, `${gate}.json`), 'utf8')));
 const commit = (repo, message) => { git(repo, 'add', '-A'); git(repo, 'commit', '-qm', message); };
 
@@ -226,6 +226,33 @@ test('a red repetition is never erased: verify refuses a receipt that repeated n
   writeFileSync(file, original);
 });
 
+test('a reference that does not resolve (no origin/HEAD, no remote) refuses the full run and never proves: no silent fallback on --base', async t => {
+  // The pilot case: no remote, a --base (HEAD~1) that touches no test, while the branch changed one before it.
+  const f = project(t, [{ id: 'browser', stage: 'full', command: script('run-pass.mjs'), repeatChanged: repeatOf({ reference: 'origin/main' }) }]);
+  git(f.repo, 'switch', '-q', '-c', 'feature');
+  write(f.repo, 'tests/e2e/a.e2e.ts', 'changed\n');
+  commit(f.repo, 'test change');
+  write(f.repo, 'src/other.mjs', 'export {}\n');
+  commit(f.repo, 'unrelated');
+  const r = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', 'HEAD~1']);
+  assert.equal(r.code, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /browser : référence origin\/main introuvable \(repeatChanged\.reference\) : une suite complète compte les tests modifiés depuis la branche où va le changement, jamais depuis --base seule/);
+  assert.deepEqual(f.calls(), [], 'nothing ran');
+  // A receipt made with a reference that resolved (here passed by the caller, as apv stack batch does) is not proven
+  // where the configured reference does not resolve.
+  const { runGates } = await import('../dist/gates/run.js');
+  const { loadConfig } = await import('../dist/config/load.js');
+  const run = await runGates({ repo: f.repo, config: loadConfig(f.repo).config, stage: 'full', base: 'HEAD~1', repeatReference: 'main', share: false });
+  assert.equal(run.ok, true);
+  assert.deepEqual(run.receipts[0].repeat.files, ['tests/e2e/a.e2e.ts']);
+  const v = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--json']);
+  assert.equal(v.code, 1);
+  assert.equal(v.json().gates[0].state, 'unrepeated');
+  assert.match(v.json().gates[0].repeat.reason, /référence origin\/main introuvable/);
+  // The library refuses too.
+  await assert.rejects(runGates({ repo: f.repo, config: loadConfig(f.repo).config, stage: 'full', base: 'HEAD~1', share: false }), /GATE_BASE|référence origin\/main introuvable/);
+});
+
 test('the repetition finds the tree as it was just before the command: a command that writes a tracked-visible file is refused, with the entries', async t => {
   const f = project(t, [{ id: 'browser', command: [process.execPath, 'writer.mjs'], repeatChanged: repeatOf() }], {
     'writer.mjs': 'import { writeFileSync } from "node:fs";\nwriteFileSync("leftover.txt", "x");\n' });
@@ -290,7 +317,8 @@ test('the repetition runs under the lock of the check (APV_LOCK_HELD seen by the
 
 test('configuration: repeatChanged validated, and it changes the gates hash like any other field', () => {
   const bad = (config, pattern) => { const { issues } = configIssues(config); assert.ok(issues.some(i => pattern.test(i.message)), JSON.stringify(issues)); };
-  const gate = extra => ({ gates: [{ id: 'e2e', command: ['x'], repeatChanged: { paths: ['tests/**/*.e2e.ts'], command: ['y', '--repeat-each={{repeat}}'], ...extra } }] });
+  const gate = extra => ({ gates: [{ id: 'e2e', command: ['x'], repeatChanged: { paths: ['tests/**/*.e2e.ts'], command: ['y', '--repeat-each={{repeat}}'], reference: 'origin/main', ...extra } }] });
+  bad({ gates: [{ id: 'e2e', command: ['x'], repeatChanged: { paths: ['a'], command: ['y', '{{repeat}}'] } }] }, /reference/);
   bad(gate({ command: ['y', '--repeat-each=5'] }), /repeatChanged\.command must repeat the tests through \{\{repeat\}\}/);
   bad(gate({ paths: ['tests/{a,b}/*.ts'] }), /repeatChanged\.paths: Unsupported glob/);
   bad(gate({ testPattern: '(' }), /repeatChanged\.testPattern is not a valid regular expression/);
@@ -302,7 +330,7 @@ test('configuration: repeatChanged validated, and it changes the gates hash like
   const plain = configIssues({ gates: [{ id: 'e2e', command: ['x'] }] }).config;
   assert.equal(Object.hasOwn(plain.gates[0], 'repeatChanged'), false);
   const one = configIssues(gate({})).config;
-  assert.deepEqual(one.gates[0].repeatChanged, { paths: ['tests/**/*.e2e.ts'], command: ['y', '--repeat-each={{repeat}}'], times: 5, maxFiles: 10, fixedWaits: 'warn' });
+  assert.deepEqual(one.gates[0].repeatChanged, { paths: ['tests/**/*.e2e.ts'], command: ['y', '--repeat-each={{repeat}}'], times: 5, maxFiles: 10, fixedWaits: 'warn', reference: 'origin/main' });
   const other = configIssues(gate({ times: 6 })).config;
   const hashes = new Set([plain, one, other].map(gatesConfigHash));
   assert.equal(hashes.size, 3, 'adding or changing repeatChanged changes the identity of the checks');

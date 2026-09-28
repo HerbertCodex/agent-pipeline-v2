@@ -17,7 +17,7 @@ export interface VerifyOptions {
      * this commit or one of its ancestors (it then covered at least these changes).
      */
     base?: string;
-    /** In place of `repeatChanged.reference` (then `origin/HEAD`): the branch the changed test files are counted from (`apv stack batch`: its target). */
+    /** In place of `repeatChanged.reference`: the branch the changed test files are counted from (`apv stack batch`: its target). */
     repeatReference?: string;
 }
 /**

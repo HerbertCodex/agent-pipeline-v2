@@ -5,7 +5,7 @@ import { invariant } from '../domain/errors.js';
 import { Git } from '../execution/git.js';
 import { success } from '../engine/scheduler.js';
 import { RECEIPTS_DIR, gatesConfigHash, stageGates } from './run.js';
-import { DEFAULT_REPEAT_REFERENCE, planRepeat, resolveRef } from './repeat.js';
+import { planRepeat, resolveRef } from './repeat.js';
 import { manifestCommit, readSharedRun, sharedRunIds, sharedStore } from './store.js';
 /** Tree state and base of a run, from its summary (null when unknown). */
 function summaryOf(text) {
@@ -168,10 +168,12 @@ export async function verifyGates(options) {
             return { missing: [], reason: 'base égale au commit : aucun test modifié ne pouvait être répété' };
         let reference = null;
         if (full) {
-            const name = options.repeatReference ?? settings.reference ?? DEFAULT_REPEAT_REFERENCE;
+            const name = options.repeatReference ?? settings.reference;
             if (!references.has(name))
                 references.set(name, await resolveRef(git, repo, name));
             reference = references.get(name);
+            if (!reference)
+                return { missing: [], reason: `référence ${name} introuvable (repeatChanged.reference) : les tests modifiés depuis la branche où va le changement ne peuvent pas être recomptés` };
         }
         const expected = await planRepeat(git, repo, { base: r.base, reference }, { ...settings, fixedWaits: settings.fixedWaits === 'refuse' ? 'refuse' : 'off' }, commit);
         const done = new Set(r.files);

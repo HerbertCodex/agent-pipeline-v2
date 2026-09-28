@@ -38,7 +38,7 @@ export declare const repeatChangedSchema: import("./schema.js").Schema<{
     readonly testPattern: string | undefined;
     readonly stressArgs: string[] | undefined;
     readonly fixedWaits: "off" | "warn" | "refuse";
-    readonly reference: string | undefined;
+    readonly reference: string;
 }>;
 export declare const gateSchema: import("./schema.js").Schema<{
     readonly id: string;
@@ -78,7 +78,7 @@ export declare const gateSchema: import("./schema.js").Schema<{
         readonly testPattern: string | undefined;
         readonly stressArgs: string[] | undefined;
         readonly fixedWaits: "off" | "warn" | "refuse";
-        readonly reference: string | undefined;
+        readonly reference: string;
     } | undefined;
 }>;
 /** Stage of a check; absent means `task`. */
@@ -287,7 +287,7 @@ export declare const configSchema: import("./schema.js").Schema<{
             readonly testPattern: string | undefined;
             readonly stressArgs: string[] | undefined;
             readonly fixedWaits: "off" | "warn" | "refuse";
-            readonly reference: string | undefined;
+            readonly reference: string;
         } | undefined;
     }[];
     readonly validationRules: {

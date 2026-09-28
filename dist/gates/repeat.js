@@ -4,8 +4,11 @@ import { PipelineError } from '../domain/errors.js';
 import { matches } from '../policy/policy.js';
 /** Placeholder of the number of repetitions, replaced anywhere in an argument (`--repeat-each={{repeat}}`). */
 export const REPEAT_PLACEHOLDER = '{{repeat}}';
-/** Reference a full suite and `apv gates verify` compare the changes to when `repeatChanged.reference` is absent. */
-export const DEFAULT_REPEAT_REFERENCE = 'origin/HEAD';
+/** The refusal of a full run whose reference does not resolve: the changes would be counted from `--base` alone. */
+export function referenceMissing(gateId, name) {
+    return `${gateId} : référence ${name} introuvable (repeatChanged.reference) : une suite complète compte les tests modifiés depuis la branche où va le changement, ` +
+        `jamais depuis --base seule. Récupérer la référence (git fetch) ou corriger repeatChanged.reference dans .apv/config.json (par exemple "origin/main").`;
+}
 /** Most fixed waits listed for one check. */
 const MAX_FIXED_WAITS = 100;
 /**

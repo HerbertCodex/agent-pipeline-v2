@@ -286,7 +286,7 @@ function repeatBatch(t) {
   const p = batchProject(t);
   git(p.repo, 'switch', '-q', 'main');
   writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({ gates: [{ id: 'suite', stage: 'full', command: [process.execPath, '-e', '0'],
-    repeatChanged: { paths: ['*.e2e.ts'], command: [process.execPath, '-e', '0', '{{repeat}}'], maxFiles: 1 } }] }));
+    repeatChanged: { paths: ['*.e2e.ts'], command: [process.execPath, '-e', '0', '{{repeat}}'], maxFiles: 1, reference: 'origin/main' } }] }));
   git(p.repo, 'commit', '-qam', 'repeat'); git(p.repo, 'push', '-q', 'origin', 'main');
   const state = JSON.parse(readFileSync(join(p.root, 'gh.json'), 'utf8'));
   for (const [n, files] of [[16, ['a.e2e.ts']], [17, ['b.e2e.ts']], [18, ['c.e2e.ts', 'd.e2e.ts']]]) {
