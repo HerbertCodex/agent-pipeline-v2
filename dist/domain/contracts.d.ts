@@ -370,6 +370,17 @@ export declare const repeatStatuses: readonly ["passed", "failed", "timed_out", 
 export declare const receiptStatuses: readonly ["passed", "failed", "timed_out", "cancelled", "spawn_error", "blocked", "cached", "passed_after_retry", "not_required"];
 /** Most changed files a receipt lists in `scope.files`; beyond, a check is always required. */
 export declare const MAX_SCOPE_FILES = 2000;
+/** What `apv web audit` records for the receipt of the check that runs it (`APV_WEB_RECORD`). */
+export declare const webRecordSchema: import("./schema.js").Schema<{
+    readonly required: boolean;
+    readonly base: string | null;
+    readonly reference: string | null;
+    readonly files: string[];
+    readonly changed: number;
+    readonly auditId: string | null;
+    readonly ok: boolean;
+}>;
+export type WebRecord = Infer<typeof webRecordSchema>;
 export declare const receiptSchema: import("./schema.js").Schema<{
     readonly id: string;
     readonly runId: string;
@@ -427,6 +438,15 @@ export declare const receiptSchema: import("./schema.js").Schema<{
             readonly line: number;
             readonly text: string;
         }[];
+    } | undefined;
+    readonly web: {
+        readonly required: boolean;
+        readonly base: string | null;
+        readonly reference: string | null;
+        readonly files: string[];
+        readonly changed: number;
+        readonly auditId: string | null;
+        readonly ok: boolean;
     } | undefined;
     readonly scope: {
         readonly required: boolean;

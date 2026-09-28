@@ -25,6 +25,7 @@ export const commands = {
     structure: { summary: 'structure check [--path <dossier>]... : analyse de l\'arborescence (dossiers trop pleins, préfixes répétés, rôles mêlés, fichiers égarés) et plan de rangement proposé', load: () => import('./structure.js') },
     quota: { summary: 'quota : relève l\'usage (session, semaine) et le journalise', load: () => import('./quota.js') },
     preview: { summary: 'preview update [branche]|status|stop|logs : aperçu vivant (copie de la branche, build, serveur détaché)', load: () => import('./preview.js') },
+    web: { summary: 'web audit --url <origine> | --production | --preview [--base <ref>] : qualité mesurable des pages publiques (Lighthouse médian mobile et bureau, seuils, préparation recherche et IA)', load: () => import('./web.js') },
     status: { summary: 'status : résumé de .apv/ (configuration, registre, specs, état, quota)', load: () => import('./status.js') },
 };
 export function helpText() {

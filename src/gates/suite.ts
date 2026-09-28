@@ -92,12 +92,14 @@ async function holdLease(store: LockStore, resource: string, options: { label: s
  * lock held, the wait for the 1-minute load to drop under `maxLoad` (at most `loadWaitMs`, then the suite starts anyway,
  * noted). A lock not obtained within `waitMs` is a refusal (`SUITE_QUEUE`), nothing has run.
  */
-export async function enterQueue(options: { lockFile: string; settings: SuiteQueueSettings; repo: string; log: (line: string) => void; signal?: AbortSignal | undefined; hooks?: SuiteHooks | undefined }): Promise<QueueHandle> {
+export async function enterQueue(options: { lockFile: string; settings: SuiteQueueSettings; repo: string; log: (line: string) => void; signal?: AbortSignal | undefined; hooks?: SuiteHooks | undefined;
+  /** Who waits (`apv gates run` by default) and why: shown to the other runs of the queue. */
+  label?: string; purpose?: string }): Promise<QueueHandle> {
   const { settings, log } = options;
   const dir = dirname(options.lockFile);
   const resource = basename(options.lockFile).replace(/\.lock$/, '');
   const store = new LockStore(dir, options.hooks?.lockPollMs !== undefined ? { pollMs: options.hooks.lockPollMs } : {});
-  const lease = await holdLease(store, resource, { label: `apv gates run (${options.repo})`, waitMs: settings.waitMs, purpose: 'suite complète', signal: options.signal, log });
+  const lease = await holdLease(store, resource, { label: options.label ?? `apv gates run (${options.repo})`, waitMs: settings.waitMs, purpose: options.purpose ?? 'suite complète', signal: options.signal, log });
   if (!lease.ok) {
     if (lease.aborted) throw new PipelineError('CANCELLED', `File des suites complètes : ${lease.reason}`);
     throw new PipelineError('SUITE_QUEUE', `File des suites complètes (${options.lockFile}) : ${lease.reason}. Rien n'a été exécuté. ` +
@@ -112,7 +114,9 @@ export async function enterQueue(options: { lockFile: string; settings: SuiteQue
 }
 
 /** Waits for the 1-minute load average to drop under `max`, at most `limitMs`; journaled at most every minute. */
-export async function waitForLoad(max: number, limitMs: number, log: (line: string) => void, signal?: AbortSignal, hooks?: SuiteHooks):
+export async function waitForLoad(max: number, limitMs: number, log: (line: string) => void, signal?: AbortSignal, hooks?: SuiteHooks,
+  /** What waits: `suite` starts anyway past the limit (never blocked forever); `measure` (a Lighthouse audit) is refused by its caller. */
+  subject: 'suite' | 'measure' = 'suite'):
   Promise<{ max: number; atStart: number; waitedMs: number; exceeded: boolean }> {
   const read = hooks?.loadAverage ?? (() => loadavg()[0] ?? 0);
   const poll = hooks?.loadPollMs ?? 15_000;
@@ -122,7 +126,7 @@ export async function waitForLoad(max: number, limitMs: number, log: (line: stri
   while (load >= max) {
     const waited = Date.now() - started;
     if (waited >= limitMs) {
-      log(`Charge moyenne sur 1 min encore à ${load.toFixed(2)} (seuil ${max}) après ${seconds(waited)} : la suite démarre quand même.`);
+      log(`Charge moyenne sur 1 min encore à ${load.toFixed(2)} (seuil ${max}) après ${seconds(waited)} : ${subject === 'suite' ? 'la suite démarre quand même' : 'mesure refusée (une mesure sous charge fausse la performance)'}.`);
       return { max, atStart: load, waitedMs: waited, exceeded: true };
     }
     if (lastLog === 0 || Date.now() - lastLog >= 60_000) {
@@ -134,7 +138,7 @@ export async function waitForLoad(max: number, limitMs: number, log: (line: stri
     load = read();
   }
   const waitedMs = Date.now() - started;
-  if (waitedMs > 1000) log(`Charge moyenne sur 1 min à ${load.toFixed(2)}, sous le seuil ${max} : la suite démarre (attente ${seconds(waitedMs)}).`);
+  if (waitedMs > 1000) log(`Charge moyenne sur 1 min à ${load.toFixed(2)}, sous le seuil ${max} : ${subject === 'suite' ? 'la suite démarre' : 'la mesure démarre'} (attente ${seconds(waitedMs)}).`);
   return { max, atStart: load, waitedMs, exceeded: false };
 }
 
@@ -228,9 +232,9 @@ export function flockCommand(file: string, waitMs: number, command: readonly str
 /** Variable that marks every command of a full suite: its processes, and those they start, are found by it at the end. */
 export const SUITE_MARKER = 'APV_SUITE_RUN';
 
-/** Processes of this user whose environment carries `<SUITE_MARKER>=<runId>` (read in `/proc/<pid>/environ`). */
-export function markedProcesses(runId: string, processes: readonly ProcessInfo[], root = '/proc'): ProcessInfo[] {
-  const needle = `${SUITE_MARKER}=${runId}`;
+/** Processes of this user whose environment carries `<marker>=<runId>` (read in `/proc/<pid>/environ`), `APV_SUITE_RUN` by default. */
+export function markedProcesses(runId: string, processes: readonly ProcessInfo[], root = '/proc', marker = SUITE_MARKER): ProcessInfo[] {
+  const needle = `${marker}=${runId}`;
   return processes.filter(p => {
     if (p.zombie) return false;
     try { return readFileSync(join(root, String(p.pid), 'environ'), 'latin1').split('\0').includes(needle); }

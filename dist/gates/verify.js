@@ -8,6 +8,7 @@ import { RECEIPTS_DIR, gatesConfigHash, stageGates } from './run.js';
 import { mergeBase, planRepeat, resolveReference } from './repeat.js';
 import { planScope } from './proof-scope.js';
 import { manifestCommit, readSharedRun, sharedRunIds, sharedStore } from './store.js';
+import { auditBase, changedBetween, webAuditGate, webImpact } from '../web/impact.js';
 /** Tree state and base of a run, from its summary (null when unknown). */
 function summaryOf(text) {
     let dirty = null;
@@ -209,6 +210,41 @@ export async function verifyGates(options) {
             return need('portée non recalculée');
         return { required: d.required, reason: d.reason, files: d.files, blocking: d.blocking };
     };
+    /**
+     * Why a successful receipt of a check that runs `apv web audit --preview --base <ref>` does not prove the audit, or null.
+     * An audit made proves itself (its exit code is the receipt's); « not required » is recomputed here from the commit,
+     * against the reference of the command and the base the run recorded: a file with a web effect changed since either,
+     * a reference that no longer resolves, or a receipt without record, and nothing is proven.
+     */
+    const webGap = (receipt, declared) => {
+        const record = receipt.web;
+        // No record: only a check whose command shows an audit with --base could have skipped it (fallback on the argv).
+        if (!record)
+            return declared?.base ? { files: [], reason: 'reçu sans relevé de l\'audit web (APV_WEB_RECORD) : relancer le contrôle avec cette version' } : null;
+        if (record.required && record.auditId !== null)
+            return null;
+        // « Not required », whatever the command (wrapped in `apv lock run`, a script...): recomputed from the recorded reference and base.
+        const bases = [];
+        if (record.reference) {
+            const recomputed = auditBase(repo, record.reference, commit);
+            if (!recomputed.ok)
+                return { files: [], reason: `« non requis » invérifiable : ${recomputed.message}` };
+            bases.push(recomputed.base);
+        }
+        if (record.base) {
+            if (record.base === commit)
+                return { files: [], reason: 'base enregistrée égale au commit : « non requis » ne prouve rien' };
+            bases.push(record.base);
+        }
+        if (!bases.length)
+            return { files: [], reason: '« non requis » sans référence ni base enregistrées : invérifiable' };
+        const changed = new Set();
+        for (const base of bases)
+            for (const f of changedBetween(repo, base, commit) ?? [])
+                changed.add(f);
+        const impact = webImpact([...changed].sort(), options.config.web);
+        return impact.required ? { files: impact.files, reason: `audit requis au commit (${impact.files.length} fichier(s) à effet web modifié(s) depuis ${bases[0].slice(0, 12)}), reçu « non requis »` } : null;
+    };
     const gates = [];
     for (const gateId of required) {
         const all = atCommit.filter(f => f.receipt.gateId === gateId);
@@ -231,7 +267,7 @@ export async function verifyGates(options) {
         const clean = current.filter(f => f.dirty === false);
         if (!clean.length) {
             const state = current.length ? 'dirty' : 'missing';
-            gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null, repeat: null, scope: null });
+            gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null, repeat: null, scope: null, web: null });
             continue;
         }
         const last = clean.reduce(latest);
@@ -240,16 +276,20 @@ export async function verifyGates(options) {
         const common = { status: last.receipt.status, receipt: last.receipt.id, runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof, otherBase, source: last.source };
         if (last.receipt.status === 'not_required') {
             const scope = await scopeGap(gate, last.receipt);
-            gates.push({ gateId, state: scope.required ? 'required' : 'passed', ...common, repeat: null, scope });
+            gates.push({ gateId, state: scope.required ? 'required' : 'passed', ...common, repeat: null, scope, web: null });
             continue;
         }
         const repeat = success(last.receipt) && gate.repeatChanged ? await repeatGap(gate.repeatChanged, last.receipt, stage === 'full' && proof === 'full') : null;
-        gates.push({ gateId, state: !success(last.receipt) ? 'failed' : repeat ? 'unrepeated' : 'passed', ...common, repeat, scope: null });
+        const audit = webAuditGate(proof === 'targeted' ? gate.affected ?? gate.command : gate.command);
+        const web = success(last.receipt) ? webGap(last.receipt, audit) : null;
+        gates.push({ gateId, state: !success(last.receipt) ? 'failed' : repeat ? 'unrepeated' : web ? 'unaudited' : 'passed', ...common, repeat, scope: null, web });
     }
     return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered,
         flaky: gates.filter(g => g.state === 'passed' && g.status === 'passed_after_retry').map(g => g.gateId),
         repeating: required.filter(id => options.config.gates.some(g => g.id === id && g.repeatChanged)),
         notRequired: gates.filter(g => g.state === 'passed' && g.status === 'not_required').map(g => g.gateId),
-        scoped: required.filter(id => options.config.gates.some(g => g.id === id && g.skipWhenOnly)), ok: gates.every(g => g.state === 'passed') };
+        scoped: required.filter(id => options.config.gates.some(g => g.id === id && g.skipWhenOnly)),
+        auditing: [...new Set([...required.filter(id => options.config.gates.some(g => g.id === id && webAuditGate(g.command)?.base)),
+                ...gates.filter(g => g.state === 'unaudited' || (g.web === null && atCommit.some(f => f.receipt.gateId === g.gateId && f.receipt.web))).map(g => g.gateId)])], ok: gates.every(g => g.state === 'passed') };
 }
 //# sourceMappingURL=verify.js.map

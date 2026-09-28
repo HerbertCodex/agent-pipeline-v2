@@ -16,6 +16,8 @@ export interface PreviewContext {
     env: NodeJS.ProcessEnv;
     /** Progress lines (stderr of the command). */
     progress: (s: string) => void;
+    /** Cancels the wait for the lock, the build (the running step's process group is stopped) and the health check. */
+    signal?: AbortSignal | undefined;
 }
 export interface LoadedPreview {
     config: PreviewConfig;

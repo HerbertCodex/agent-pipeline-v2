@@ -9,6 +9,7 @@ import { RECEIPTS_DIR, gatesConfigHash, stageGates } from './run.js';
 import { mergeBase, planRepeat, resolveReference } from './repeat.js';
 import { planScope } from './proof-scope.js';
 import { manifestCommit, readSharedRun, sharedRunIds, sharedStore } from './store.js';
+import { auditBase, changedBetween, webAuditGate, webImpact } from '../web/impact.js';
 
 export interface VerifyOptions {
   repo: string;
@@ -43,10 +44,13 @@ export interface VerifyOptions {
  * - `missing`: no receipt at this commit with the current configuration;
  * - `unrepeated`: that latest receipt succeeded, but the check declares `repeatChanged` and the receipt does not show
  *   the repetition of every test file the commit adds or modifies (run without a base, a base too close, files missing);
+ * - `unaudited`: that latest receipt succeeded, but its record of `apv web audit` says « audit not required » (whatever
+ *   the command that ran it) and the recomputation from the commit says required; or the command shows such an audit
+ *   and the receipt records nothing;
  * - `required`: that latest receipt says the check was not required (`not_required`, scope `skipWhenOnly`), but the scope
  *   recomputed from the commit requires it (a file with an effect, a base equal to the commit, a reference unresolved).
  */
-export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'required';
+export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'unaudited' | 'required';
 export interface GateEvidence {
   gateId: string;
   state: EvidenceState;
@@ -73,6 +77,8 @@ export interface GateEvidence {
    * does not, with the reason and the files that require it); null otherwise.
    */
   scope: { required: boolean; reason: string; files: string[]; blocking: string[] } | null;
+  /** A check that runs `apv web audit --preview --base`: why its successful receipt does not prove the audit (files with a web effect, reason); null otherwise. */
+  web: { files: string[]; reason: string } | null;
 }
 export interface VerifyResult {
   repo: string;
@@ -101,6 +107,8 @@ export interface VerifyResult {
   notRequired: string[];
   /** Required checks that declare `skipWhenOnly`: their scope is counted from a run with `--base`. */
   scoped: string[];
+  /** Required checks that run `apv web audit --preview --base`: « not required » is recomputed from the commit. */
+  auditing: string[];
   ok: boolean;
 }
 
@@ -274,6 +282,34 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     if (!d) return need('portée non recalculée');
     return { required: d.required, reason: d.reason, files: d.files, blocking: d.blocking };
   };
+  /**
+   * Why a successful receipt of a check that runs `apv web audit --preview --base <ref>` does not prove the audit, or null.
+   * An audit made proves itself (its exit code is the receipt's); « not required » is recomputed here from the commit,
+   * against the reference of the command and the base the run recorded: a file with a web effect changed since either,
+   * a reference that no longer resolves, or a receipt without record, and nothing is proven.
+   */
+  const webGap = (receipt: GateReceipt, declared: { base: string | null } | undefined): { files: string[]; reason: string } | null => {
+    const record = receipt.web;
+    // No record: only a check whose command shows an audit with --base could have skipped it (fallback on the argv).
+    if (!record) return declared?.base ? { files: [], reason: 'reçu sans relevé de l\'audit web (APV_WEB_RECORD) : relancer le contrôle avec cette version' } : null;
+    if (record.required && record.auditId !== null) return null;
+    // « Not required », whatever the command (wrapped in `apv lock run`, a script...): recomputed from the recorded reference and base.
+    const bases: string[] = [];
+    if (record.reference) {
+      const recomputed = auditBase(repo, record.reference, commit);
+      if (!recomputed.ok) return { files: [], reason: `« non requis » invérifiable : ${recomputed.message}` };
+      bases.push(recomputed.base);
+    }
+    if (record.base) {
+      if (record.base === commit) return { files: [], reason: 'base enregistrée égale au commit : « non requis » ne prouve rien' };
+      bases.push(record.base);
+    }
+    if (!bases.length) return { files: [], reason: '« non requis » sans référence ni base enregistrées : invérifiable' };
+    const changed = new Set<string>();
+    for (const base of bases) for (const f of changedBetween(repo, base, commit) ?? []) changed.add(f);
+    const impact = webImpact([...changed].sort(), options.config.web);
+    return impact.required ? { files: impact.files, reason: `audit requis au commit (${impact.files.length} fichier(s) à effet web modifié(s) depuis ${bases[0]!.slice(0, 12)}), reçu « non requis »` } : null;
+  };
   const gates: GateEvidence[] = [];
   for (const gateId of required) {
     const all = atCommit.filter(f => f.receipt.gateId === gateId);
@@ -290,7 +326,7 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     const clean = current.filter(f => f.dirty === false);
     if (!clean.length) {
       const state: EvidenceState = current.length ? 'dirty' : 'missing';
-      gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null, repeat: null, scope: null });
+      gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null, repeat: null, scope: null, web: null });
       continue;
     }
     const last = clean.reduce(latest);
@@ -299,15 +335,19 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     const common = { status: last.receipt.status, receipt: last.receipt.id, runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof, otherBase, source: last.source };
     if (last.receipt.status === 'not_required') {
       const scope = await scopeGap(gate, last.receipt);
-      gates.push({ gateId, state: scope.required ? 'required' : 'passed', ...common, repeat: null, scope });
+      gates.push({ gateId, state: scope.required ? 'required' : 'passed', ...common, repeat: null, scope, web: null });
       continue;
     }
     const repeat = success(last.receipt) && gate.repeatChanged ? await repeatGap(gate.repeatChanged, last.receipt, stage === 'full' && proof === 'full') : null;
-    gates.push({ gateId, state: !success(last.receipt) ? 'failed' : repeat ? 'unrepeated' : 'passed', ...common, repeat, scope: null });
+    const audit = webAuditGate(proof === 'targeted' ? gate.affected ?? gate.command : gate.command);
+    const web = success(last.receipt) ? webGap(last.receipt, audit) : null;
+    gates.push({ gateId, state: !success(last.receipt) ? 'failed' : repeat ? 'unrepeated' : web ? 'unaudited' : 'passed', ...common, repeat, scope: null, web });
   }
   return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered,
     flaky: gates.filter(g => g.state === 'passed' && g.status === 'passed_after_retry').map(g => g.gateId),
     repeating: required.filter(id => options.config.gates.some(g => g.id === id && g.repeatChanged)),
     notRequired: gates.filter(g => g.state === 'passed' && g.status === 'not_required').map(g => g.gateId),
-    scoped: required.filter(id => options.config.gates.some(g => g.id === id && g.skipWhenOnly)), ok: gates.every(g => g.state === 'passed') };
+    scoped: required.filter(id => options.config.gates.some(g => g.id === id && g.skipWhenOnly)),
+    auditing: [...new Set([...required.filter(id => options.config.gates.some(g => g.id === id && webAuditGate(g.command)?.base)),
+      ...gates.filter(g => g.state === 'unaudited' || (g.web === null && atCommit.some(f => f.receipt.gateId === g.gateId && f.receipt.web))).map(g => g.gateId)])], ok: gates.every(g => g.state === 'passed') };
 }

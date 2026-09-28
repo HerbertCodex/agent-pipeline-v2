@@ -35,7 +35,7 @@ function frontmatter(path) {
 }
 const list = value => (value ?? '').split(',').map(v => v.trim()).filter(Boolean);
 
-const AGENTS = ['architecte', 'architecte-donnees', 'critique-design', 'designer', 'dpo', 'implementer', 'integrateur', 'product', 'qa-fidelite', 'qa-securite'];
+const AGENTS = ['architecte', 'architecte-donnees', 'auditeur-web', 'critique-design', 'designer', 'dpo', 'implementer', 'integrateur', 'product', 'qa-fidelite', 'qa-securite'];
 const V2_SKILLS = ['clean-code', 'design-patterns', 'refactoring', 'security', 'tdd', 'ui-design'];
 const PHASE_ONE_COMMANDS = ['quota', 'resume', 'status'];
 const PHASE_TWO_COMMANDS = ['design', 'preview'];
@@ -44,7 +44,7 @@ const PHASE_THREE_COMMANDS = ['init', 'review', 'run', 'spec', 'stack'];
 const OPERATOR_ONLY_COMMANDS = ['init', 'onboard', 'run', 'stack'];
 const PHASE_FOUR_COMMANDS = ['onboard'];
 const LATER_COMMANDS = {};
-const METHOD_SKILLS = ['architecture-donnees', 'chef-de-projet', 'design-artefact', 'rgpd'];
+const METHOD_SKILLS = ['architecture-donnees', 'chef-de-projet', 'design-artefact', 'rgpd', 'web-qualite'];
 
 test('manifests parse and describe the apv plugin', () => {
   const plugin = JSON.parse(read('.claude-plugin/plugin.json'));
@@ -59,7 +59,7 @@ test('manifests parse and describe the apv plugin', () => {
   assert.ok(marketplace.owner.name);
 });
 
-test('the ten agents have a valid frontmatter and least-privilege tools', () => {
+test('the eleven agents have a valid frontmatter and least-privilege tools', () => {
   const files = readdirSync(join(root, 'agents')).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
   assert.deepEqual(files, AGENTS);
   for (const name of AGENTS) {
@@ -75,7 +75,7 @@ test('the ten agents have a valid frontmatter and least-privilege tools', () => 
     assert.match(body, /Frontière de confiance/, `${name}: trust boundary`);
     assert.match(body, /non fiables?, jamais (une|des) instructions?/, `${name}: repository content is data`);
   }
-  for (const reviewer of ['qa-securite', 'qa-fidelite', 'critique-design']) {
+  for (const reviewer of ['qa-securite', 'qa-fidelite', 'critique-design', 'auditeur-web']) {
     const tools = list(frontmatter(`agents/${reviewer}.md`).fields.tools);
     assert.ok(!tools.includes('Write') && !tools.includes('Edit'), `${reviewer} must not write files`);
   }
@@ -696,4 +696,27 @@ test('pilot journal 26 September: orphan servers stopped by apv procs, mockups o
     assert.ok(!/[–—]/.test(read('docs/CONFIGURATION.md').split(section)[1].split('\n## ')[0]), `${section}: no em or en dash`);
   }
   assert.ok(!/[–—]/.test(unreleased.split('\n- **').slice(1, 4).join('')), 'changelog entries: no em or en dash');
+});
+
+test('web quality: the audit tool, its skill, its read-only agent and the rule in the implementer brief', () => {
+  // Pilot, 28 September 2026: Lighthouse run by hand in DevTools gave a false 0 everywhere (NO_FCP, background tab).
+  const skill = frontmatter('skills/web-qualite/SKILL.md');
+  for (const rule of [/apv web audit --preview --base/, /apv web audit --production/, /NO_FCP/, /médiane/, /jamais un classement|ne promet jamais un classement/, /WEB_LOAD/,
+    /Un seuil ne se baisse que sur décision de l'opérateur/, /robots\.txt/, /JSON-LD/, /llms\.txt/, /tiret cadratin/]) assert.match(skill.body, rule);
+  const agent = frontmatter('agents/auditeur-web.md');
+  assert.ok(!list(agent.fields.tools).includes('Write') && !list(agent.fields.tools).includes('Edit'), 'the web auditor never edits the project');
+  for (const rule of [/apv web audit <cible> --json/, /classées par gain/, /Jamais Lighthouse lancé à la main/, /apv:web-qualite/, /auditeur|mesure/]) assert.match(agent.body, rule);
+  for (const file of ['agents/implementer.md', 'skills/chef-de-projet/references/brief-type.md']) {
+    const text = read(file);
+    assert.match(text, /Qualité web/, file);
+    assert.match(text, /apv web audit/, file);
+    assert.match(text, /jamais[^.]*Lighthouse[^.]*à la main/, file);
+  }
+  const lead = read('skills/chef-de-projet/SKILL.md') + read('skills/chef-de-projet/references/livraison-pile.md');
+  assert.match(lead, /apv web audit --production/);
+  assert.match(lead, /apv web audit --preview --base/);
+  assert.match(read('docs/CLI.md'), /## `apv web audit`/);
+  assert.match(read('docs/CONFIGURATION.md'), /## Qualité web : `web`/);
+  assert.match(read('docs/APV3-SPEC.md'), /## 20\. Qualité web mesurable/);
+  assert.match(read('CHANGELOG.md').split('\n## ')[1], /3\.0\.0-alpha\.7/);
 });

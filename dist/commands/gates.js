@@ -88,7 +88,11 @@ l'un de ses ancêtres. Un contrôle qui déclare repeatChanged n'est prouvé que
 répétition de chaque fichier de test que le commit ajoute ou modifie (recalculé depuis la base enregistrée
 et la référence) : sinon « tests modifiés non répétés ». Un reçu « non requis » (skipWhenOnly) ne compte
 que si la portée, recalculée depuis le commit, la base enregistrée et la liste lue à la référence, le dit
-non requis : sinon « requis (dispense non prouvée) ».
+non requis : sinon « requis (dispense non prouvée) ». Un reçu dont le relevé de apv web audit dit
+« audit non requis » (quelle que soit la commande) n'est prouvé que si le recalcul depuis le commit
+(fichiers à effet web depuis la base commune de la référence enregistrée et depuis la base enregistrée)
+le confirme ; sans relevé, un contrôle dont la commande montre web audit --preview --base ne l'est pas :
+sinon « audit web non prouvé ».
 Les reçus sont lus dans .apv/receipts/ du worktree, puis dans le magasin partagé pour les
 exécutions que le worktree n'a pas : la preuve d'un commit se vérifie depuis n'importe quel
 checkout du dépôt, avec les mêmes exigences. Une exécution du magasin partagé dont un fichier ne
@@ -111,7 +115,7 @@ const RESERVED = 'réservé à la suite complète';
 const TARGETED = 'ciblé';
 const SHARED = 'magasin partagé';
 const EVIDENCE = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu', unrepeated: 'tests modifiés non répétés',
-    required: 'requis (dispense non prouvée)' };
+    unaudited: 'audit web non prouvé', required: 'requis (dispense non prouvée)' };
 /** One line of the repetition of the changed test files of a check. */
 function repeatLine(r) {
     const files = r.files.length > 5 ? `${r.files.slice(0, 5).join(', ')} ... (${r.files.length})` : r.files.join(', ');
@@ -156,6 +160,9 @@ function verifyLines(result) {
     const unrepeated = result.gates.filter(g => g.state === 'unrepeated');
     if (unrepeated.length)
         lines.push('', 'Tests modifiés non répétés (repeatChanged) : le reçu réussi ne prouve pas la répétition des tests que ce commit ajoute ou modifie :', ...unrepeated.map(g => `- ${g.gateId} : ${g.repeat.reason}${g.repeat.missing.length ? ` : ${g.repeat.missing.slice(0, 10).join(', ')}${g.repeat.missing.length > 10 ? ' ...' : ''}` : ''}`));
+    const unaudited = result.gates.filter(g => g.state === 'unaudited');
+    if (unaudited.length)
+        lines.push('', 'Audit web non prouvé (apv web audit --preview --base) : le reçu dit « non requis », le recalcul depuis ce commit dit requis :', ...unaudited.map(g => `- ${g.gateId} : ${g.web.reason}${g.web.files.length ? ` : ${g.web.files.slice(0, 10).join(', ')}${g.web.files.length > 10 ? ' ...' : ''}` : ''}`));
     const scoped = result.gates.filter(g => g.scope);
     if (scoped.length)
         lines.push('', 'Portée de la preuve (skipWhenOnly), recalculée depuis le commit :', ...scoped.map(g => `- ${g.gateId} : ${g.scope.required ? 'REQUIS, le reçu « non requis » ne prouve rien' : 'non requis'} : ${g.scope.reason}` +
@@ -290,7 +297,7 @@ export async function run(args, io) {
             if (values.json) {
                 json(io, { ok: result.ok, commit: result.commit, stage: result.stage, base: result.base, config: loaded.file, configHash: result.configHash,
                     required: result.required, targeted: result.targeted, reserved: result.reserved, gates: result.gates, unreadable: result.unreadable,
-                    store: result.store, altered: result.altered, flaky: result.flaky, notRequired: result.notRequired, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
+                    store: result.store, altered: result.altered, flaky: result.flaky, repeating: result.repeating, auditing: result.auditing, notRequired: result.notRequired, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
             }
             else {
                 io.stdout(`${verifyLines(result).join('\n')}\n`);

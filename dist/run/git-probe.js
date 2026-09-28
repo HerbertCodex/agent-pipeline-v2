@@ -26,6 +26,31 @@ export function resolveCommit(repo, ref) {
     const sha = gitRead(repo, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]);
     return sha && /^[a-f0-9]{40,64}$/.test(sha) ? sha : null;
 }
+/**
+ * The commit a reference NAME designates, by its full ref only (synchronous twin of `resolveReference`, src/gates/repeat.ts):
+ * `refs/remotes/<name>`, `refs/heads/<name>`, `refs/tags/<name>` and `refs/<name>` are listed, and the name is refused
+ * when none or several exist (a local branch or a tag `origin/main` never hides the remote-tracking one). A full ref, a
+ * full commit id, `HEAD` or a revision expression (`HEAD~1`, `x^`, `@{u}`) is resolved as Git resolves it.
+ */
+export function resolveFullRef(repo, name) {
+    if (!name || name.startsWith('-'))
+        return { sha: null, reason: 'introuvable' };
+    if (name === 'HEAD' || name.startsWith('refs/') || /[~^@:{]/.test(name) || /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(name)) {
+        const sha = resolveCommit(repo, name);
+        return { sha, reason: sha ? '' : 'introuvable' };
+    }
+    const candidates = [`refs/remotes/${name}`, `refs/heads/${name}`, `refs/tags/${name}`, `refs/${name}`];
+    const out = gitRead(repo, ['for-each-ref', '--format=%(refname)', ...candidates]);
+    if (out === null)
+        return { sha: null, reason: 'illisible (git for-each-ref)' };
+    const found = [...new Set(out.split('\n').map(l => l.trim()).filter(r => candidates.includes(r)))];
+    if (!found.length)
+        return { sha: null, reason: 'introuvable' };
+    if (found.length > 1)
+        return { sha: null, reason: `ambiguë (${found.join(', ')} existent : donner la référence complète, par exemple refs/remotes/${name})` };
+    const sha = resolveCommit(repo, found[0]);
+    return { sha, reason: sha ? '' : 'introuvable' };
+}
 export function gitProbe(repo) {
     return {
         exists: path => existsSync(path),

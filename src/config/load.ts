@@ -14,6 +14,7 @@ import { DEFAULT_RECEIPT_RETENTION } from '../gates/store.js';
 import { gitRead } from '../run/git-probe.js';
 import { reviewAlwaysSchema, reviewPathsSchema, reviewTermsSchema } from '../review/config.js';
 import { stackIssues, stacksSchema } from '../stacks/config.js';
+import { webIssues, webSchema } from '../web/config.js';
 
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
@@ -23,7 +24,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch'] as const;
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'web'] as const;
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'] as const;
 
@@ -177,6 +178,8 @@ export const apvConfigSchema = s.object({
   stacks: s.optional(stacksSchema),
   /** Preparation of a fresh copy (docs/CONFIGURATION.md, « Lot et copies »); absent: nothing is prepared. */
   batch: s.optional(batchSettingsSchema),
+  /** Web quality of the public pages: Lighthouse and search and AI readiness (docs/CONFIGURATION.md, « Qualité web »); absent: `apv web audit` refuses. */
+  web: s.optional(webSchema),
 });
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export const specLimits = (config: { spec?: Partial<SpecLimits> | undefined }): SpecLimits => ({ ...DEFAULT_SPEC_LIMITS, ...config.spec });
@@ -293,6 +296,7 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
   for (const [key, globs] of Object.entries(value.review?.paths ?? {})) {
     for (const glob of globs ?? []) list.attempt('CONFIG', () => { try { matches('probe', glob); } catch (error) { throw new PipelineError('CONFIG', `review.paths.${key}: ${errorMessage(error)}`); } });
   }
+  if (value.web) for (const message of webIssues(value.web)) list.check(false, 'CONFIG', message);
   if (list.empty) list.attempt('DAG', () => validateDag(value.gates));
   return { config: list.empty ? value : undefined, ignored: sections.ignored, issues: list.items };
 }

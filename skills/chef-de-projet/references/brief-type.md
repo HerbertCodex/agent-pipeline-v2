@@ -24,6 +24,7 @@ Tu codes UNE tâche d'une spec de <nom du projet> (<description en une ligne : p
 - Écritures idempotentes (bouton en cours, clé d'idempotence, unicité en base) et verrou optimiste sur les modifications.
 - Styles propres à un composant dans son bloc ; styles partagés au strict nécessaire, dans une section commentée au nom de la tâche.
 - Accessibilité : focus visible, rôles et libellés, `prefers-reduced-motion`, contrastes.
+- <projet web qui déclare la section `web`> Qualité web des pages publiques : `<title>` et meta description présents et uniques, canonical absolu vers la page, `lang`, JSON-LD valide et fidèle au contenu visible, images dimensionnées, image principale jamais en `loading="lazy"`, polices préchargées sans décalage. Le contrôle `apv web audit` de la suite complète le mesure (Lighthouse médian, seuils de `web.thresholds`) : jamais de Lighthouse lancé à la main, jamais un seuil baissé (compétence `apv:web-qualite`).
 
 ## Contrôles obligatoires avant de rendre la main (tous verts)
 1. `apv gates run --stage task --base <base>` : les contrôles rapides déclarés dans `.apv/config.json` (<par exemple : typage, lint, analyseur du framework, code mort, tests unitaires, build>). Les contrôles `"stage": "full"` (<par exemple : suite navigateur complète>) sont « réservés à la suite complète » : tu ne les lances pas ; le chef de projet les passe sur la tête intégrée de chaque vague.

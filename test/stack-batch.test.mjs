@@ -325,7 +325,7 @@ test('batch and skipWhenOnly: documentation PRs leave the scoped check not requi
   const calls = join(p.root, 'calls.txt');
   writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({ gates: [{ id: 'suite', stage: 'full',
     command: [process.execPath, '-e', `require("fs").appendFileSync(${JSON.stringify(calls)}, "x")`],
-    skipWhenOnly: { paths: ['docs/**', '**/*.md'], reference: 'origin/main' } }] }));
+    skipWhenOnly: { paths: ['docs/**', '**/*.md'], except: ['src/**', 'static/**', 'public/**', 'content/**'], reference: 'origin/main' } }] }));
   git(p.repo, 'commit', '-qam', 'scope'); git(p.repo, 'push', '-q', 'origin', 'main');
   const state = JSON.parse(readFileSync(join(p.root, 'gh.json'), 'utf8'));
   for (const [n, file] of [[21, 'docs/a.md'], [22, 'README.md'], [23, 'c.txt']]) {

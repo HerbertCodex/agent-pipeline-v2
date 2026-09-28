@@ -24,6 +24,7 @@ Une commande « réservée à l'opérateur » porte `disable-model-invocation: t
 - `design-artefact` : la boucle de maquette, résumée pour les rôles, et la grille de critique notée (`references/grille-critique.md`).
 - `rgpd` : grille du DPO, registres, modèles de textes sans promesse risquée.
 - `architecture-donnees` : règles du modèle de données (spécification, section 13 bis), exemples SQL, tests et grille générique des conditions de course (`references/concurrence.md`).
+- `web-qualite` : qualité mesurable d'un site (spécification, section 20) : quand lancer `apv web audit`, lire les rapports Lighthouse et les contrôles de préparation à la recherche et aux IA, prioriser les corrections par gain, sans promesse de classement.
 
 ## Compétences héritées de V2
 

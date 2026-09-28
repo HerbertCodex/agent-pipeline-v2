@@ -254,6 +254,17 @@ export const receiptStatuses = ['passed','failed','timed_out','cancelled','spawn
 export const MAX_SCOPE_FILES = 2000;
 const digest = s.string(64,64,/^[a-f0-9]{64}$/);
 const sha = s.string(40,64,/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+/** What `apv web audit` records for the receipt of the check that runs it (`APV_WEB_RECORD`). */
+export const webRecordSchema = s.object({
+  required: s.boolean(),
+  base: s.nullable(sha),
+  reference: s.nullable(s.string(1, 200)),
+  files: s.array(s.string(1, 500), 0, 50),
+  changed: s.number(0, 10_000_000),
+  auditId: s.nullable(s.string(1, 100, /^[A-Za-z0-9][A-Za-z0-9._-]*$/)),
+  ok: s.boolean(),
+});
+export type WebRecord = Infer<typeof webRecordSchema>;
 export const receiptSchema = s.object({
   id,runId: id,gateId: id,key: digest,candidateSha: sha,configHash: digest,environmentHash: digest,
   status: s.enum(receiptStatuses),
@@ -300,6 +311,10 @@ export const receiptSchema = s.object({
     output: s.optional(s.string(0, 16000)),
     fixedWaits: s.default(s.array(s.object({ file: s.string(1, 500), line: s.number(1, 10_000_000), text: s.string(0, 300) }), 0, 100), []),
   })),
+  // What `apv web audit` run by the check recorded (`APV_WEB_RECORD`): whether the audit was required, from which base,
+  // the changed files with a web effect, and the audit made (null: « not required », nothing measured). `apv gates verify`
+  // recomputes « required » from the commit: a « not required » receipt proves nothing when the recomputation says required.
+  web: s.optional(webRecordSchema),
   // The scope of the proof of a check that declares `skipWhenOnly` (full run): whether it was required and why, the
   // merge bases of `--base` (`base`) and of the reference (`reference`, its name and the commit it named), and the files
   // changed since them (all of them when not required; `blocking`: those that made it required).

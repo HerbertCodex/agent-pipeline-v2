@@ -50,9 +50,14 @@ export declare function enterQueue(options: {
     log: (line: string) => void;
     signal?: AbortSignal | undefined;
     hooks?: SuiteHooks | undefined;
+    /** Who waits (`apv gates run` by default) and why: shown to the other runs of the queue. */
+    label?: string;
+    purpose?: string;
 }): Promise<QueueHandle>;
 /** Waits for the 1-minute load average to drop under `max`, at most `limitMs`; journaled at most every minute. */
-export declare function waitForLoad(max: number, limitMs: number, log: (line: string) => void, signal?: AbortSignal, hooks?: SuiteHooks): Promise<{
+export declare function waitForLoad(max: number, limitMs: number, log: (line: string) => void, signal?: AbortSignal, hooks?: SuiteHooks, 
+/** What waits: `suite` starts anyway past the limit (never blocked forever); `measure` (a Lighthouse audit) is refused by its caller. */
+subject?: 'suite' | 'measure'): Promise<{
     max: number;
     atStart: number;
     waitedMs: number;
@@ -126,8 +131,8 @@ export declare const FLOCK_TIMEOUT_EXIT = 75;
 export declare function flockCommand(file: string, waitMs: number, command: readonly string[]): string[];
 /** Variable that marks every command of a full suite: its processes, and those they start, are found by it at the end. */
 export declare const SUITE_MARKER = "APV_SUITE_RUN";
-/** Processes of this user whose environment carries `<SUITE_MARKER>=<runId>` (read in `/proc/<pid>/environ`). */
-export declare function markedProcesses(runId: string, processes: readonly ProcessInfo[], root?: string): ProcessInfo[];
+/** Processes of this user whose environment carries `<marker>=<runId>` (read in `/proc/<pid>/environ`), `APV_SUITE_RUN` by default. */
+export declare function markedProcesses(runId: string, processes: readonly ProcessInfo[], root?: string, marker?: string): ProcessInfo[];
 export interface CleanupRecord {
     /** Processes started by the suite (its marker) still alive at its end, stopped. */
     stopped: (PortProcess & {
