@@ -43,7 +43,8 @@ export function commitRunState(checkout: string, specId: string, branch: string,
   const add = git(['add', '--', ...changed]);
   if (!add.ok) return { sha: null, files: [], refused: true, note: `état non commité : git add a échoué (${add.out.slice(0, 500)})` };
   // Paths given to `git commit`: only them, whatever else is staged (the other staged files stay staged).
-  const commit = git(['commit', '-m', `chore(apv) : état de l'exécution ${specId} (${label})`, '--', ...changed]);
+  // The identity of the repository, never guessed from the host; the origin of the commit stays readable (trailer).
+  const commit = git(['-c', 'user.useConfigOnly=true', 'commit', '-m', `chore(apv) : état de l'exécution ${specId} (${label})`, '-m', `Generated-by: apv run ${label === 'livraison' ? 'set' : 'save'}`, '--', ...changed]);
   if (!commit.ok) return { sha: null, files: [], refused: true, note: `état non commité : git commit a échoué (${commit.out.slice(0, 500)})` };
   const sha = gitRead(checkout, ['rev-parse', 'HEAD']);
   return { sha, files: changed, refused: false, note: `état commité sur ${current} : ${sha?.slice(0, 12) ?? '?'} (${changed.join(', ')})` };

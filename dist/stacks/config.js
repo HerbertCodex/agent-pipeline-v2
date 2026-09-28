@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { s } from '../domain/schema.js';
 /**
@@ -63,4 +64,24 @@ export function stackIssues(stacks) {
 }
 /** A path of a stack: absolute as is, else relative to the Git common directory `common`. */
 export const stackPath = (common, path) => isAbsolute(path) ? path : resolve(common, path);
+/**
+ * Variables of an env file (`KEY=value` lines, `export ` and quotes accepted, comments and blank lines skipped), as a
+ * shell `set -a; . <file>` would set them for simple values. No expansion: a value is taken as written.
+ */
+export function readEnvFile(file) {
+    const out = {};
+    for (const raw of readFileSync(file, 'utf8').split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line || line.startsWith('#'))
+            continue;
+        const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
+        if (!m)
+            continue;
+        let value = m[2].trim();
+        if ((value.startsWith('"') && value.endsWith('"') && value.length >= 2) || (value.startsWith("'") && value.endsWith("'") && value.length >= 2))
+            value = value.slice(1, -1);
+        out[m[1]] = value;
+    }
+    return out;
+}
 //# sourceMappingURL=config.js.map

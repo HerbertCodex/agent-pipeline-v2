@@ -23,6 +23,7 @@ function project(t) {
 }
 
 const committed = (repo, ref = 'HEAD') => git(repo, 'show', '--name-only', '--format=%s', ref).split('\n').filter(Boolean);
+const trailer = (repo, ref = 'HEAD') => git(repo, 'log', '-1', '--format=%(trailers:key=Generated-by,valueonly)', ref).trim();
 
 test('delivery running commits the state of the execution, and only it, on the branch of the execution', async t => {
   const p = project(t);
@@ -39,6 +40,7 @@ test('delivery running commits the state of the execution, and only it, on the b
   assert.match(r.stdout, /la suite complète de livraison tourne sur cette tête/);
   assert.equal(git(p.repo, 'rev-parse', 'HEAD~1'), before);
   assert.deepEqual(committed(p.repo), ['chore(apv) : état de l\'exécution livraison (livraison)', '.apv/state/resume.md', '.apv/state/run-livraison.json']);
+  assert.equal(trailer(p.repo), 'apv run set');
   assert.equal(git(p.repo, 'status', '--porcelain', '--', '.apv/state'), '');
   assert.equal(git(p.repo, 'diff', '--cached', '--name-only'), 'docs/other.md');
   // Nothing new: nothing committed.

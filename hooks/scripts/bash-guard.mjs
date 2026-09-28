@@ -220,7 +220,7 @@ export function githubWrite(words) {
 }
 
 /**
- * True when the words of one simple command run `apv stack merge`: the `apv` binary (also through npx), or
+ * True when the words of one simple command run `apv stack merge` (or `apv stack batch --merge`): the `apv` binary (also through npx), or
  * the bundled tool `node …/dist/cli.js`. Options may sit between `stack` and `merge`; the command merges
  * pull requests on GitHub, so it needs the same explicit authorisation as `gh pr merge`.
  */
@@ -234,7 +234,8 @@ export function isStackMerge(words) {
     if (name !== 'apv' && name !== 'cli.js') return false;
     if (!(k === start && name === 'apv') && !(k > start && LAUNCHERS.has(lead))) return false;
     const [command, ...rest] = positional(words.slice(k + 1));
-    return command === 'stack' && rest.includes('merge');
+    // `apv stack batch <pr...> --merge` merges too (docs/APV3-SPEC.md, section 18.5).
+    return command === 'stack' && (rest.includes('merge') || (rest[0] === 'batch' && words.slice(k + 1).includes('--merge')));
   });
 }
 

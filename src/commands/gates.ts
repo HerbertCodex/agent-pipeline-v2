@@ -18,7 +18,7 @@ import type { CommandIO } from './io.js';
 export const usage = `Utilisation :
   apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>]
                 [--concurrency N] [--keep-going] [--skip-proven] [--run <spec-id>]
-                [--reason <texte>] [--allow-dirty] [--repo <chemin>] [--json]
+                [--reason <texte>] [--allow-dirty] [--stacks <pile>,<pile>] [--repo <chemin>] [--json]
   apv gates verify --commit <sha> [--stage full|task] [--base <ref>]
                    [--config <fichier> | --commit-config] [--repo <chemin>] [--json]
   apv gates receipts list [--commit <ref>] [--limit N] [--repo <chemin>] [--json]
@@ -58,7 +58,14 @@ des orphelins de cette copie sur suite.ports (jamais une autre copie ni le check
 délais des contrôles ne commencent qu'après. Un contrôle avec lock attend son verrou (bail apv lock ou
 flock) avant que son délai commence ; un contrôle avec retryFailed qui échoue relance une fois ses tests
 en échec, même commit et même arbre : « réussi après relance » (instable), compté comme réussi et
-signalé à part.
+signalé à part. À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
+annulés, sortie 128 + signal), les processus qu'elle a lancés encore vivants et les orphelins de cette
+copie sur suite.ports sont arrêtés (jamais la session, une autre copie ni le checkout principal).
+--stacks 1,2 (suite complète, deux piles déclarées au moins, section stacks) : les contrôles d'une pile
+(lock égal au verrou d'une pile déclarée) sont répartis sur ces piles, tour à tour dans l'ordre de la
+configuration ; sur la première dans cette copie, sur une autre dans une copie détachée du même commit
+(préparée par batch.setup, retirée à la fin), avec les variables de sa pile et sous son verrou. Un
+contrôle qui a des dépendances, ou dont d'autres dépendent, reste dans cette copie.
 Sortie : 0 si tous les contrôles exécutés passent, 1 sinon (ou suite complète refusée par le
 rythme, l'arbre modifié ou la file), 2 appel incorrect.
 
@@ -200,6 +207,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       stage: { type: 'string' }, commit: { type: 'string' }, 'skip-proven': { type: 'boolean' }, run: { type: 'string' }, reason: { type: 'string' },
       'keep-going': { type: 'boolean' }, 'allow-dirty': { type: 'boolean' }, repo: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
       'commit-config': { type: 'boolean' }, limit: { type: 'string' }, out: { type: 'string' }, 'keep-days': { type: 'string' }, 'keep-runs': { type: 'string' },
+      stacks: { type: 'string' },
     });
     if (values.help) { io.stdout(`${usage}\n`); return EXIT.ok; }
     const [action, ...rest] = positionals;
@@ -210,7 +218,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     if (rest.length) throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
     const stage = stageOf(values.stage);
     if (action === 'verify') {
-      const extra = (['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason', 'allow-dirty'] as const).filter(k => values[k] !== undefined);
+      const extra = (['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason', 'allow-dirty', 'stacks'] as const).filter(k => values[k] !== undefined);
       if (extra.length) throw new UsageError(`option de gates run seulement : --${extra.join(', --')}`);
       if (!values.commit) throw new UsageError('gates verify attend --commit <sha>');
       if (values.base !== undefined && stage !== 'task') throw new UsageError('gates verify : --base va avec --stage task (base des tests ciblés)');
@@ -235,6 +243,9 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     }
     if (values.commit !== undefined) throw new UsageError('--commit est une option de gates verify');
     if (values['commit-config']) throw new UsageError('--commit-config est une option de gates verify');
+    const spreadOver = values.stacks === undefined ? undefined : list(values.stacks);
+    if (spreadOver !== undefined && (spreadOver.length < 2 || new Set(spreadOver).size !== spreadOver.length)) throw new UsageError('--stacks attend au moins deux piles différentes, par exemple --stacks 1,2');
+    if (spreadOver !== undefined && stage === 'task') throw new UsageError('--stacks répartit la suite complète (--stage full)');
     const skipProven = values['skip-proven'] === true;
     if (skipProven && (stage === 'task' || values.only !== undefined)) throw new UsageError('--skip-proven va avec la suite complète entière (--stage full, sans --only)');
     if (values.run !== undefined && (!RUN_ID.test(values.run) || values.run.length > 80)) throw new UsageError(`--run : identifiant de spec invalide : ${values.run}`);
@@ -296,7 +307,8 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     try {
       result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env, signal: abort.signal,
         allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}),
-        ...(values.base ? { base: values.base } : {}), ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}) });
+        ...(values.base ? { base: values.base } : {}), ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
+        ...(spreadOver ? { stacks: spreadOver } : {}) });
     } catch (error) {
       if (received) { io.stderr(`Interrompu (${received}) : ${error instanceof Error ? error.message : String(error)}\n`); return signalExitCode(received); }
       throw error;
@@ -312,7 +324,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
         stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
         reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
         sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
-        suite: result.suite, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, interrupted: received,
+        suite: result.suite, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, interrupted: received,
         rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
           level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
     } else {
@@ -326,6 +338,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       }
       if (result.ports?.stopped.length) lines.push(`Orphelins de cette copie arrêtés sur les ports de la suite : ${result.ports.stopped.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}.`);
       if (result.ports?.left.length) lines.push(`Ports de la suite tenus par d'autres processus, non arrêtés : ${result.ports.left.map(p => `pid ${p.pid} (${p.ports.join(', ')}, ${p.reason})`).join(', ')}.`);
+      if (result.spread) lines.push(`Répartition sur les piles : ${result.spread.map(a => `${a.gate} sur la pile ${a.stack}${a.workspace === result.repo ? '' : ' (copie détachée)'}${a.error ? ` : copie non préparée, ${a.error}` : ''}`).join(', ') || 'aucun contrôle de pile'}.`);
       const end = result.cleanup;
       if (end?.stopped.length) lines.push(`Fin de suite : processus lancés par la suite encore vivants, arrêtés : ${end.stopped.map(p => `pid ${p.pid}${p.ports.length ? ` (${p.ports.join(', ')})` : ''}`).join(', ')}.`);
       if (end?.ports?.stopped.length) lines.push(`Fin de suite : orphelins de cette copie arrêtés sur les ports de la suite : ${end.ports.stopped.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}.`);
@@ -369,7 +382,7 @@ async function receipts(args: string[], values: Values, io: CommandIO): Promise<
   const [sub, ...rest] = args;
   if (sub !== 'list' && sub !== 'export' && sub !== 'prune') throw new UsageError(sub ? `sous-commande inconnue : gates receipts ${sub}` : 'sous-commande manquante (list, export, prune)');
   const allowed: Record<string, readonly string[]> = { list: ['commit', 'limit'], export: ['out'], prune: ['keep-days', 'keep-runs', 'config'] };
-  const foreign = ['only', 'config', 'base', 'concurrency', 'stage', 'commit', 'skip-proven', 'run', 'reason', 'keep-going', 'allow-dirty', 'commit-config', 'limit', 'out', 'keep-days', 'keep-runs']
+  const foreign = ['only', 'config', 'base', 'concurrency', 'stage', 'commit', 'skip-proven', 'run', 'reason', 'keep-going', 'allow-dirty', 'commit-config', 'limit', 'out', 'keep-days', 'keep-runs', 'stacks']
     .filter(k => values[k] !== undefined && !allowed[sub]!.includes(k));
   if (foreign.length) throw new UsageError(`option inattendue pour gates receipts ${sub} : --${foreign.join(', --')}`);
   const repo = gitRoot(repoPath(io, values['repo']));

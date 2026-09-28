@@ -8,6 +8,10 @@
 // `gh pr edit` fails as it did on the real merge of PR #70 and #71 (deprecated classic projects).
 // `gh api repos/o/r/compare/<head sha>...<base> --jq …` answers the object the jq filter builds, from `behind` for the
 // PR with that head (up to date by default: ahead_by 0, no file).
+// With `origin` (path of a bare repository), `pr merge --merge` makes the real merge commit there (the batch tests of
+// `apv stack batch`); `behavior.alterAfterMerge: [n]` then adds a commit that changes a file on the base (a merge whose
+// content differs), `behavior.pushOnView: { "<n>": k }` pushes such a commit on the base at the k-th read of PR n.
+import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const file = process.env.FAKE_GH_STATE;
@@ -21,6 +25,16 @@ const option = name => { const i = args.indexOf(name); return i === -1 ? undefin
 const [group, action, number] = args;
 const pr = state.prs[number];
 let code = 0;
+const originGit = (...a) => execFileSync('git', a, { cwd: state.origin, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+  env: { ...process.env, GIT_AUTHOR_NAME: 'GitHub', GIT_AUTHOR_EMAIL: 'gh@localhost', GIT_COMMITTER_NAME: 'GitHub', GIT_COMMITTER_EMAIL: 'gh@localhost' } }).trim();
+/** A commit on `branch` of the origin that changes one file: someone else pushed. */
+function externalPush(branch, label) {
+  const head = originGit('rev-parse', `refs/heads/${branch}`);
+  const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: state.origin, input: `${label}\n`, encoding: 'utf8' }).trim();
+  const tree = execFileSync('git', ['mktree'], { cwd: state.origin, input: `${originGit('ls-tree', head)}\n100644 blob ${blob}\texternal-${label}.txt\n`, encoding: 'utf8' }).trim();
+  const commit = originGit('commit-tree', tree, '-p', head, '-m', `external ${label}`);
+  originGit('update-ref', `refs/heads/${branch}`, commit, head);
+}
 const compare = /^repos\/o\/r\/compare\/([^.]+)\.\.\.(.+)$/.exec(args.find(a => a.startsWith('repos/')) ?? '');
 if (group === 'api' && compare) {
   const [, head, base] = compare;
@@ -50,6 +64,9 @@ if (group === 'api' && compare) {
   process.stderr.write(`no pull requests found for ${number}\n`);
   code = 1;
 } else if (action === 'view') {
+  state.views ??= {};
+  state.views[number] = (state.views[number] ?? 0) + 1;
+  if (state.origin && state.behavior.pushOnView?.[number] === state.views[number]) externalPush(pr.baseRefName, `view-${number}`);
   const left = state.behavior.unknownViews?.[number] ?? 0;
   if (left > 0) state.behavior.unknownViews[number] = left - 1;
   const fields = option('--json').split(',');
@@ -70,6 +87,13 @@ if (group === 'api' && compare) {
   if (head && head !== pr.headRefOid) { process.stderr.write(`GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)\n`); code = 1; }
   else if (state.behavior.mergeFail?.includes(Number(number))) { process.stderr.write('X Pull request o/r#' + number + ' is not mergeable: the base branch policy prohibits the merge.\n'); code = 1; }
   else {
+    if (state.origin) {
+      const base = originGit('rev-parse', `refs/heads/${pr.baseRefName}`);
+      const tree = originGit('merge-tree', '--write-tree', base, pr.headRefOid);
+      const merged = originGit('commit-tree', tree, '-p', base, '-p', pr.headRefOid, '-m', `Merge pull request #${number} from ${pr.headRefName}`);
+      originGit('update-ref', `refs/heads/${pr.baseRefName}`, merged, base);
+      if (state.behavior.alterAfterMerge?.includes(Number(number))) externalPush(pr.baseRefName, `after-${number}`);
+    }
     pr.state = 'MERGED';
     for (const [other, fields] of Object.entries(state.behavior.afterMerge?.[number] ?? {})) Object.assign(state.prs[other], fields);
     for (const [other, bases] of Object.entries(state.behavior.afterMergeBehind?.[number] ?? {})) {

@@ -40,6 +40,11 @@ export interface GateRunOptions {
     log?: (line: string) => void;
     /** Injected by tests: load average and polling delays. */
     hooks?: SuiteHooks;
+    /**
+     * Declared test stacks to spread the checks of a stack over (`--stacks 1,2`, docs/APV3-SPEC.md, section 18.6): a
+     * full suite only, two stacks at least.
+     */
+    stacks?: readonly string[];
 }
 /** The copy of a run in the shared store: its directory, or why it could not be made (the run itself stands). */
 export interface SharedCopy {
@@ -75,6 +80,13 @@ export interface GateRunResult {
     flaky: string[];
     /** The end of a full suite: processes it started still alive, and orphans of this copy on `suite.ports`, stopped. */
     cleanup: CleanupRecord | null;
+    /** The checks spread over the stacks (`--stacks`): check, stack, copy where it ran; null without `--stacks`. */
+    spread: {
+        gate: string;
+        stack: string;
+        workspace: string;
+        error: string | null;
+    }[] | null;
     ok: boolean;
 }
 /** Files of a `git status --porcelain=v1 -z` output, as `XY path` lines. */

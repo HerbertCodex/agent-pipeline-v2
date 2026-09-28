@@ -318,6 +318,7 @@ export declare const receiptSchema: import("./schema.js").Schema<{
         readonly reason: string;
     } | undefined;
     readonly lockWaitMs: number | undefined;
+    readonly stack: string | undefined;
     readonly retry: {
         readonly command: string[];
         readonly first: {

@@ -46,3 +46,8 @@ export declare const stacksSchema: import("../domain/schema.js").Schema<{
 export declare function stackIssues(stacks: readonly StackConfig[]): string[];
 /** A path of a stack: absolute as is, else relative to the Git common directory `common`. */
 export declare const stackPath: (common: string, path: string) => string;
+/**
+ * Variables of an env file (`KEY=value` lines, `export ` and quotes accepted, comments and blank lines skipped), as a
+ * shell `set -a; . <file>` would set them for simple values. No expansion: a value is taken as written.
+ */
+export declare function readEnvFile(file: string): Record<string, string>;
