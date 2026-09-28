@@ -13,7 +13,7 @@ Installation locale : `npm run build`, puis `node dist/cli.js <commande>` ou `np
 - Fichiers lus dans le projet :
   - configuration : `.apv/config.json`, sinon `pipeline.v2.json` (projet V2, tant que `apv onboard` n'a pas créé `.apv/config.json`) ;
   - registre des décisions : `.apv/DECISIONS.json`, sinon `.agent-pipeline/DECISIONS.json` (projet V2).
-- De la configuration, seules les sections `name` (nom du projet, écrit par `apv init`), `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review` et `receipts` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
+- De la configuration, seules les sections `name` (nom du projet, écrit par `apv init`), `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts`, `resources`, `suite`, `stacks`, `batch` et `web` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
 
 ## `apv init`
 
@@ -574,6 +574,50 @@ Aperçu vivant du projet (spécification, section 12), décrit par la section `p
 Chaque étape a un délai maximal (`timeoutSec`, 900 s par défaut, réglable par étape) ; au-delà, tout son groupe de processus est arrêté. Les valeurs du fichier d'environnement sont masquées dans le journal de mise à jour et les sorties ; le journal du serveur, écrit par le serveur lui-même, n'est masqué qu'à l'affichage (`logs`) et reste en droits 600. Un port occupé par un processus qui n'est pas l'aperçu n'est jamais libéré de force : `update` refuse. Configuration, forme des commandes (chaîne pour `sh -c`, tableau sans shell), masquage, sûreté et exemple Supabase : [PREVIEW.md](PREVIEW.md).
 
 Sortie : `0` succès (pour `status` : aperçu en marche), `1` échec ou aperçu arrêté, `2` appel incorrect.
+
+## `apv web audit`
+
+```
+apv web audit (--url <origine> | --production | --preview) [--page <chemin>]... [--runs N]
+              [--form-factor mobile|desktop] [--base <ref>] [--readiness-only] [--wait <durée>]
+              [--repo <chemin>] [--json]
+```
+
+Qualité mesurable des pages publiques d'un site (spécification, section 20), déclarée par la section `web` de `.apv/config.json` ([CONFIGURATION.md](CONFIGURATION.md#qualité-web--web)). Constat du projet pilote (28 septembre 2026) : Lighthouse lancé à la main dans DevTools a rendu un faux 0 partout (`NO_FCP`, onglet en arrière-plan), quand une mesure sans interface donnait 89/100/100/100/100 ; la qualité se mesure donc par la pipeline, de façon reproductible.
+
+**Cible** (une et une seule) :
+- `--url <origine>` : un site en ligne, lu seulement (Lighthouse charge les pages comme un navigateur ; les contrôles de préparation ne lisent que cette origine). Le chemin de l'adresse est ignoré : les pages sont celles de `web.pages`.
+- `--production` : l'origine `web.productionUrl` ; c'est l'étape d'après déploiement, à lancer une fois une fusion déployée en ligne.
+- `--preview` : l'aperçu local d'APV (section `preview`, [PREVIEW.md](PREVIEW.md)) sur le commit HEAD, sous le verrou `preview:<projet>` (`--wait`, 30 min par défaut). S'il sert déjà ce commit, il est réutilisé et laissé comme il était ; sinon il est construit (copie du commit, étapes, serveur), audité, puis **arrêté à la fin**, quelle que soit l'issue (interruption comprise) : aucun serveur ne reste. Un aperçu en marche sur un autre commit est remplacé puis arrêté (la sortie le dit, avec la commande qui le relance). L'arbre de travail non commité n'est pas audité (note).
+- `--base <ref>` (avec `--preview` seulement, pour le contrôle d'une PR) : l'audit n'a lieu que si un fichier qui répond à `web.paths` (défaut : `review.paths.ui`, sinon les motifs d'interface génériques de `apv review plan`) a changé entre la base commune de `<ref>` et de HEAD, et HEAD ; sinon « audit web non requis », sortie `0`, rien n'est construit ni mesuré (`skipped: true` en JSON).
+
+**Mesure** :
+- Lighthouse est la version épinglée `web.lighthouse` (13.5.0 par défaut) : la dépendance du projet (`node_modules/lighthouse`) si c'est exactement cette version, sinon `npx -y lighthouse@<version>` ; lancé sans shell, dans un dossier temporaire, borné par `web.timeoutMs` (180 s par passage, puis tout son groupe de processus est arrêté). Catégories `web.categories` (performance, accessibility, best-practices, seo, agentic-browsing), langue `web.locale`, `--chrome-flags` de `web.chromeFlags` (`--headless=new`), bureau par `--preset=desktop`.
+- Chrome : `web.chrome`, sinon `CHROME_PATH`, sinon le Chromium le plus récent de Playwright (`PLAYWRIGHT_BROWSERS_PATH`, `~/.cache/ms-playwright`), sinon Chrome ou Chromium du système ; aucun : refus `WEB_CHROME`. Chaque passage marque ses processus (`APV_WEB_AUDIT`) : un Chrome resté en vie après un passage est arrêté (jamais la session ni un outil protégé).
+- Pour chaque page (`web.pages`, ou `--page`) et chaque appareil (`web.formFactors`, ou `--form-factor`) : `web.runs` passages **valides** (3 par défaut, `--runs`). Un passage est **invalide**, jamais compté, s'il a une erreur Lighthouse (`runtimeError`, dont `NO_FCP`), un avertissement de mesure (`runWarnings`), un document servi avec un autre statut que 200, une redirection hors de la page demandée, un score de catégorie ou une métrique absents, une autre version de Lighthouse ou un autre appareil que ceux demandés, ou s'il n'a pas produit de rapport (délai, erreur) ; il est écarté avec sa raison et refait, au plus `runs` fois de plus. Moins de `runs` passages valides : « mesure invalide », sortie `1`.
+- Médiane par catégorie (score sur 100) et par métrique (FCP, LCP, TBT et SI en millisecondes, CLS sans unité) ; le passage le plus proche des médianes représente la page : son rapport JSON et HTML complet est gardé, ses trois principales opportunités ou diagnostics (audits en échec des catégories mesurées, métriques exclues, classés par économie estimée la plus grande, puis points de catégorie perdus, puis octets) sont affichés.
+- **Seuils** (`web.thresholds`) : une catégorie sous son minimum ou une métrique au-dessus de son maximum est un seuil manqué, marqué `!` dans le tableau et détaillé sous lui (« performance 89 < 90 ; LCP 2,6 s > 2,5 s ») avec les opportunités.
+- **File et charge** : la mesure prend la file des suites complètes (`suite.queue`, même verrou à bail que `apv gates run`), sauf quand elle tourne déjà dans une suite complète (`APV_SUITE_RUN` : la suite tient la file) ou avec `web.queue` à `false` ; puis, avant **chaque** passage, elle attend que la charge moyenne sur 1 minute passe sous `web.load.max` (défaut : `suite.queue.maxLoad`, sinon la moitié des processeurs), au plus `web.load.waitMs` en tout (30 min) ; au-delà : refus `WEB_LOAD`, sortie `1` (une mesure sous charge fausse la performance ; contrairement à une suite, elle ne démarre jamais « quand même »). La charge au départ et la plus haute relevée sont dans la sortie et le résumé.
+
+**Préparation à la recherche et aux IA** (sans réseau tiers : seulement l'origine auditée ; un sitemap déclaré sur une autre origine, par exemple celui de la production dans l'aperçu, est lu sur l'origine auditée, note à l'appui) : chaque contrôle de `web.checks` vaut `refuse` (sortie `1`), `warn` (signalé) ou `off`.
+- `status` : chaque page servie avec 200, sans redirection (HTML du serveur lu tel quel : ce que lisent les robots qui n'exécutent pas de script) ;
+- `robots` : `/robots.txt` accessible ; aucune page interdite aux robots de `web.robotsAgents` (groupe le plus précis, règle la plus longue, `Allow` à égalité, `*` et `$`, RFC 9309) ; aucune page marquée `noindex` (balise meta `robots` ou en-tête `X-Robots-Tag`) ;
+- `sitemap` : un sitemap déclaré dans robots.txt (sinon `/sitemap.xml` est lu et l'absence de déclaration signalée), lisible (`<urlset>`, index suivis, 20 au plus), qui liste chaque page (comparaison par chemin) ;
+- `canonical` : une seule balise, adresse absolue, vers la page elle-même (une autre origine, celle de la production vue depuis l'aperçu, est notée sans refus) ;
+- `title`, `description` : présents, non vides, un seul par page, **uniques entre les pages** auditées ;
+- `lang` : attribut `lang` valide sur `<html>` ;
+- `jsonLd` : chaque bloc `application/ld+json` est du JSON valide, avec `@context` et `@type` (nœuds de `@graph` compris) ; aucune donnée structurée n'est seulement notée ;
+- `hreflang` (si la page en déclare) : valeurs valides, sans double, adresses absolues, la page se cite elle-même, réciprocité entre pages auditées ;
+- `llmsTxt` (`off` par défaut ; `warn` ou `refuse` quand le projet en attend un) : `/llms.txt` servi avec 200, en texte, commençant par un titre Markdown.
+`--readiness-only` ne lance que ces contrôles (ni navigateur, ni file, ni charge).
+
+**Rapports** : `web.reportsDir` (`.apv/web/` par défaut, relatif au dépôt) reçoit un dossier par audit (`<AAAAMMJJ-HHMMSS>-url|apercu`, heure UTC) avec `summary.json` et, par page et appareil, `<page>.<appareil>.report.json` et `.report.html` du passage médian (`accueil` pour `/`) ; le dossier porte son propre `.gitignore` (`*`) : jamais versionné, l'arbre reste propre pour la suite complète. Les `web.keepAudits` audits les plus récents sont gardés (10).
+
+**Comme contrôle** (`gates`) : par exemple `{ "id": "web", "stage": "full", "command": ["apv", "web", "audit", "--preview", "--base", "origin/main"], "timeoutMs": 2400000, "passEnv": ["HOME", "CHROME_PATH"] }` : reçu, empreinte et `apv gates verify` comme tout contrôle ; « non requis » passe (sortie `0`) quand la PR ne touche pas l'interface. Ne pas le déclarer `readOnly` : il écrit ses rapports, et l'ordonnanceur lui laisse ainsi la copie pour lui seul (aucun autre contrôle de la suite ne tourne pendant la mesure). Variables : `HOME` (cache de `npx`), `CHROME_PATH` si besoin, et celles du fichier d'environnement de l'aperçu s'il en dépend.
+
+Sortie texte : en-tête (origine, commit, Lighthouse, navigateur, passages), file et charge, tableau `page`, `appareil`, `perf`, `a11y`, `bp`, `seo`, `agent`, `FCP`, `LCP`, `TBT`, `CLS`, `SI`, seuils, détail des seuils manqués et des mesures invalides avec leurs opportunités et le rapport, puis la préparation (`[refus]`, `[avert.]`, notes), le dossier des rapports et le verdict. JSON (`--json`) : le contenu de `summary.json` (`ok`, `auditId`, `source`, `origin`, `commit`, `lighthouse`, `browser`, `runs`, `formFactors`, `categories`, `thresholds`, `queue`, `load`, `pages[]` avec `results[]` : `formFactor`, `valid`, `runs`, `invalid`, `median`, `shortfalls`, `opportunities`, `report`, `browser` ; `readiness` : `findings`, `notes` ; `counts` ; `reportsDir`) et `notes`.
+
+Sortie : `0` tous les seuils atteints, toutes les mesures valides et aucun refus de préparation (ou « non requis » avec `--base`), `1` seuil manqué, mesure invalide, refus d'un contrôle de préparation, charge trop haute (`WEB_LOAD`), navigateur introuvable (`WEB_CHROME`), aperçu en échec (`WEB_PREVIEW`) ou section `web` absente (`WEB_NONE`), `128 + signal` interruption (Chrome et l'aperçu lancés par l'audit arrêtés), `2` appel incorrect.
 
 ## `apv status`
 

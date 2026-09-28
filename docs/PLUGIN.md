@@ -1,6 +1,6 @@
 # Plugin Claude Code « apv » (Agent Pipeline V3)
 
-Version 3.0.0-alpha.6, phases 1 (socle), 2 (design et aperçu vivant) et 3 (exécution) ; phase 4 en cours (`/apv:onboard` disponible : reprise d'un projet V2 ou existant). Spécification : [APV3-SPEC.md](APV3-SPEC.md). Retour d'expérience qui l'a motivée : [RETOUR-TOUJOURS-RIEN.md](RETOUR-TOUJOURS-RIEN.md).
+Version 3.0.0-alpha.7, phases 1 (socle), 2 (design et aperçu vivant) et 3 (exécution) ; phase 4 en cours (`/apv:onboard` disponible : reprise d'un projet V2 ou existant). Spécification : [APV3-SPEC.md](APV3-SPEC.md). Retour d'expérience qui l'a motivée : [RETOUR-TOUJOURS-RIEN.md](RETOUR-TOUJOURS-RIEN.md).
 
 Le plugin fait de la session Claude Code principale un chef de projet : il orchestre de vrais sous-agents (spec, données, design, implémentation en parallèle, intégration, revues), tient l'état du travail dans le dépôt (`.apv/`), suit le quota et bloque les effets externes dangereux.
 
@@ -60,6 +60,7 @@ Chaque agent est un fichier de `agents/`, appelé `apv:<nom>` par l'outil Agent.
 | `qa-securite` | Attaques à deux utilisateurs, API directe, en-têtes, secrets, lecture du rapport du scan dynamique (ZAP) lancé par le chef de projet (`apv dast run`) | lecture, Bash (pas d'écriture de fichiers) | copie isolée |
 | `qa-fidelite` | Captures 390 et 1280, clair et sombre, comparaison des textes, accessibilité, états, animations et mouvement réduit, test des 5 secondes, fichiers mal placés | lecture, Bash (pas d'écriture de fichiers) | copie isolée |
 | `dpo` | Registre RGPD, sous-traitants vérifiés sur les DPA officiels, pages légales contre le code | lecture, Bash, web, écriture de `.apv/rgpd/` (pages légales sur demande) | aucun |
+| `auditeur-web` | Lance `apv web audit` (Lighthouse médian mobile et bureau, seuils, préparation à la recherche et aux IA) sur l'aperçu ou la production, lit les rapports, propose des corrections classées par gain mesuré | lecture, Bash (pas d'écriture de fichiers) | aucun |
 
 Un agent de plugin ne peut pas déclarer `hooks`, `mcpServers` ni `permissionMode`. Pour les ajuster dans un projet, copiez le fichier dans `.claude/agents/` du projet et modifiez la copie.
 
@@ -100,6 +101,7 @@ Sans outil Workflow (désactivé ou version trop ancienne), les commandes lancen
 - `design-artefact` : boucle de maquette avec l'opérateur et versement de la référence (résumé pour les rôles ; le chef de projet la mène par `/apv:design`), et la grille de critique notée `references/grille-critique.md` (designer, `critique-design`, `qa-fidelite`).
 - `rgpd` : grille du DPO, registres, modèles de textes sans promesse risquée.
 - `architecture-donnees` : règles de la section 13 bis, exemples SQL, tests exigés et grille générique des conditions de course (`references/concurrence.md` : dix familles, toute stack et tout stockage, motif à chercher, question, corrections, preuve).
+- `web-qualite` : qualité mesurable d'un site (section 20 de la spécification) : quand lancer `apv web audit` (contrôle des PR d'interface, après chaque déploiement), lire les rapports, écarter une mesure faussée, prioriser les corrections par gain, sans jamais promettre un classement.
 - Héritées de V2, inchangées : `clean-code`, `design-patterns`, `refactoring`, `security`, `tdd`, `ui-design`.
 
 ## Hooks
