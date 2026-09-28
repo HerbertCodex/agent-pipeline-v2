@@ -26,7 +26,7 @@ export interface RepeatPlan {
 /** Placeholder of the number of repetitions, replaced anywhere in an argument (`--repeat-each={{repeat}}`). */
 export declare const REPEAT_PLACEHOLDER = "{{repeat}}";
 /** The refusal of a full run whose reference does not resolve: the changes would be counted from `--base` alone. */
-export declare function referenceMissing(gateId: string, name: string): string;
+export declare function referenceMissing(gateId: string, name: string, detail?: string): string;
 export declare function fixedWaitIn(line: string): boolean;
 /**
  * The fixed waits of consecutive lines: each line alone, and a `new Promise(` joined with the (at most three)
@@ -49,6 +49,17 @@ export declare function addedLines(diff: string): {
 }[];
 /** The commit `ref` names, or null when it does not resolve (no remote, reference absent). */
 export declare function resolveRef(git: Git, repo: string, ref: string): Promise<string | null>;
+/**
+ * The commit a configured reference names (`repeatChanged.reference`, `skipWhenOnly.reference`), by its full ref only:
+ * `refs/remotes/<name>`, `refs/heads/<name>`, `refs/tags/<name>` and `refs/<name>` are listed (`git for-each-ref`), and
+ * the name is refused when none or more than one exist (a local branch or a tag `origin/main` never hides the
+ * remote-tracking one: both exist, the name is ambiguous). A full ref (`refs/...`) or a full commit id is taken as is.
+ */
+export declare function resolveReference(git: Git, repo: string, name: string): Promise<{
+    sha: string | null;
+    ref: string | null;
+    reason: string;
+}>;
 /** The merge base of `a` and `b`; `a` itself without a common ancestor (unrelated histories: everything counts). */
 export declare function mergeBase(git: Git, repo: string, a: string, b: string): Promise<string>;
 /**

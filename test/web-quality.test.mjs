@@ -306,6 +306,16 @@ test('the base of an audit: HEAD equal to or upstream of the reference is refuse
   assert.equal(auditBase(root, 'main', head).reason, 'not-behind', 'HEAD equal to the reference');
   assert.equal(auditBase(root, 'ref', first).reason, 'not-behind', 'HEAD upstream of the reference');
   assert.equal(auditBase(root, 'absente', head).reason, 'missing');
+  // By its full ref (M1 of the review of #94): a local branch or a tag that shadows the remote-tracking reference is refused.
+  git('update-ref', 'refs/remotes/origin/main', first);
+  assert.deepEqual(auditBase(root, 'origin/main', head), { ok: true, base: first, reference: first });
+  git('branch', 'origin/main', head);
+  const ambiguous = auditBase(root, 'origin/main', head);
+  assert.equal(ambiguous.reason, 'missing');
+  assert.match(ambiguous.message, /ambiguë \(refs\/heads\/origin\/main, refs\/remotes\/origin\/main existent/);
+  assert.equal(auditBase(root, 'refs/remotes/origin/main', head).ok, true);
+  assert.equal(auditBase(root, 'HEAD~1', head).ok, true, 'a revision expression is resolved as Git does');
+  git('branch', '-D', 'origin/main');
   // Lighthouse: an alias (npm:other) installed under node_modules/lighthouse is never run.
   const pkg = (name, version) => { mkdirSync(join(root, 'node_modules', 'lighthouse', 'cli'), { recursive: true });
     writeFileSync(join(root, 'node_modules', 'lighthouse', 'package.json'), JSON.stringify({ name, version, bin: { lighthouse: 'cli/index.js' } }));

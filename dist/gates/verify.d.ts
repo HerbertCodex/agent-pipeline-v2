@@ -19,6 +19,10 @@ export interface VerifyOptions {
     base?: string;
     /** In place of `repeatChanged.reference`: the branch the changed test files are counted from (`apv stack batch`: its target). */
     repeatReference?: string;
+    /** In place of `skipWhenOnly.reference`: the branch the scope of a not required check is counted from (`apv stack batch`: its target). */
+    reference?: string;
+    /** The configuration file read (`--config`), always required by the scope of a check when inside the repository. */
+    configFile?: string | null;
 }
 /**
  * State of one required check at the commit:
@@ -31,9 +35,11 @@ export interface VerifyOptions {
  *   the repetition of every test file the commit adds or modifies (run without a base, a base too close, files missing);
  * - `unaudited`: that latest receipt succeeded, but its record of `apv web audit` says « audit not required » (whatever
  *   the command that ran it) and the recomputation from the commit says required; or the command shows such an audit
- *   and the receipt records nothing.
+ *   and the receipt records nothing;
+ * - `required`: that latest receipt says the check was not required (`not_required`, scope `skipWhenOnly`), but the scope
+ *   recomputed from the commit requires it (a file with an effect, a base equal to the commit, a reference unresolved).
  */
-export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'unaudited';
+export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'unaudited' | 'required';
 export interface GateEvidence {
     gateId: string;
     state: EvidenceState;
@@ -57,6 +63,16 @@ export interface GateEvidence {
     repeat: {
         missing: string[];
         reason: string;
+    } | null;
+    /**
+     * A receipt `not_required`: the scope recomputed from the commit (`required` false: it proves the check; true: it
+     * does not, with the reason and the files that require it); null otherwise.
+     */
+    scope: {
+        required: boolean;
+        reason: string;
+        files: string[];
+        blocking: string[];
     } | null;
     /** A check that runs `apv web audit --preview --base`: why its successful receipt does not prove the audit (files with a web effect, reason); null otherwise. */
     web: {
@@ -87,6 +103,10 @@ export interface VerifyResult {
     flaky: string[];
     /** Required checks that declare `repeatChanged`: their proof needs a run with `--base`. */
     repeating: string[];
+    /** Required checks proven by a receipt `not_required` whose scope the commit confirms (never run: no effect on them). */
+    notRequired: string[];
+    /** Required checks that declare `skipWhenOnly`: their scope is counted from a run with `--base`. */
+    scoped: string[];
     /** Required checks that run `apv web audit --preview --base`: « not required » is recomputed from the commit. */
     auditing: string[];
     ok: boolean;

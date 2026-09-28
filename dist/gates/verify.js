@@ -5,7 +5,8 @@ import { invariant } from '../domain/errors.js';
 import { Git } from '../execution/git.js';
 import { success } from '../engine/scheduler.js';
 import { RECEIPTS_DIR, gatesConfigHash, stageGates } from './run.js';
-import { planRepeat, resolveRef } from './repeat.js';
+import { mergeBase, planRepeat, resolveReference } from './repeat.js';
+import { planScope } from './proof-scope.js';
 import { manifestCommit, readSharedRun, sharedRunIds, sharedStore } from './store.js';
 import { auditBase, changedBetween, webAuditGate, webImpact } from '../web/impact.js';
 /** Tree state and base of a run, from its summary (null when unknown). */
@@ -171,10 +172,10 @@ export async function verifyGates(options) {
         if (full) {
             const name = options.repeatReference ?? settings.reference;
             if (!references.has(name))
-                references.set(name, await resolveRef(git, repo, name));
-            reference = references.get(name);
+                references.set(name, await resolveReference(git, repo, name));
+            reference = references.get(name).sha;
             if (!reference)
-                return { missing: [], reason: `référence ${name} introuvable (repeatChanged.reference) : les tests modifiés depuis la branche où va le changement ne peuvent pas être recomptés` };
+                return { missing: [], reason: `référence ${name} ${references.get(name).reason} (repeatChanged.reference) : les tests modifiés depuis la branche où va le changement ne peuvent pas être recomptés` };
         }
         const expected = await planRepeat(git, repo, { base: r.base, reference }, { ...settings, fixedWaits: settings.fixedWaits === 'refuse' ? 'refuse' : 'off' }, commit);
         const done = new Set(r.files);
@@ -185,6 +186,29 @@ export async function verifyGates(options) {
             return { missing: [], reason: `attente(s) à durée fixe refusée(s) : ${expected.fixedWaits.slice(0, 5).map(w => `${w.file}:${w.line}`).join(', ')}` };
         }
         return null;
+    };
+    /**
+     * The scope of a receipt `not_required`, recomputed here from the commit: never taken from the receipt. The base the run
+     * recorded (it must not be the commit, nor below it), the reference of the configuration (or the one passed), the paths
+     * read at that reference: the check is proven not required only when this recomputation says so.
+     */
+    const scopeGap = async (gate, receipt) => {
+        const need = (reason) => ({ required: true, reason, files: [], blocking: [] });
+        if (!gate.skipWhenOnly)
+            return need('le contrôle ne déclare plus skipWhenOnly : il est requis');
+        const base = receipt.scope?.base;
+        if (!base)
+            return need('reçu sans base : la portée ne se recompte pas');
+        if (base === commit || await mergeBase(git, repo, base, commit) === commit)
+            return need('base égale au commit ou en aval : aucun changement à comparer');
+        const name = options.reference ?? gate.skipWhenOnly.reference;
+        const resolved = await resolveReference(git, repo, name);
+        if (!resolved.sha)
+            return need(`référence ${name} ${resolved.reason} (skipWhenOnly.reference) : la portée ne se recompte pas`);
+        const d = (await planScope(git, repo, options.config, { base, head: commit, reference: name, configFile: options.configFile ?? null })).get(gate.id);
+        if (!d)
+            return need('portée non recalculée');
+        return { required: d.required, reason: d.reason, files: d.files, blocking: d.blocking };
     };
     /**
      * Why a successful receipt of a check that runs `apv web audit --preview --base <ref>` does not prove the audit, or null.
@@ -243,21 +267,28 @@ export async function verifyGates(options) {
         const clean = current.filter(f => f.dirty === false);
         if (!clean.length) {
             const state = current.length ? 'dirty' : 'missing';
-            gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null, repeat: null, web: null });
+            gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null, repeat: null, scope: null, web: null });
             continue;
         }
         const last = clean.reduce(latest);
         const proof = last.receipt.targeted === true ? 'targeted' : 'full';
         const gate = options.config.gates.find(g => g.id === gateId);
+        const common = { status: last.receipt.status, receipt: last.receipt.id, runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof, otherBase, source: last.source };
+        if (last.receipt.status === 'not_required') {
+            const scope = await scopeGap(gate, last.receipt);
+            gates.push({ gateId, state: scope.required ? 'required' : 'passed', ...common, repeat: null, scope, web: null });
+            continue;
+        }
         const repeat = success(last.receipt) && gate.repeatChanged ? await repeatGap(gate.repeatChanged, last.receipt, stage === 'full' && proof === 'full') : null;
         const audit = webAuditGate(proof === 'targeted' ? gate.affected ?? gate.command : gate.command);
         const web = success(last.receipt) ? webGap(last.receipt, audit) : null;
-        gates.push({ gateId, state: !success(last.receipt) ? 'failed' : repeat ? 'unrepeated' : web ? 'unaudited' : 'passed', status: last.receipt.status, receipt: last.receipt.id,
-            runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof, otherBase, source: last.source, repeat, web });
+        gates.push({ gateId, state: !success(last.receipt) ? 'failed' : repeat ? 'unrepeated' : web ? 'unaudited' : 'passed', ...common, repeat, scope: null, web });
     }
     return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered,
         flaky: gates.filter(g => g.state === 'passed' && g.status === 'passed_after_retry').map(g => g.gateId),
         repeating: required.filter(id => options.config.gates.some(g => g.id === id && g.repeatChanged)),
+        notRequired: gates.filter(g => g.state === 'passed' && g.status === 'not_required').map(g => g.gateId),
+        scoped: required.filter(id => options.config.gates.some(g => g.id === id && g.skipWhenOnly)),
         auditing: [...new Set([...required.filter(id => options.config.gates.some(g => g.id === id && webAuditGate(g.command)?.base)),
                 ...gates.filter(g => g.state === 'unaudited' || (g.web === null && atCommit.some(f => f.receipt.gateId === g.gateId && f.receipt.web))).map(g => g.gateId)])], ok: gates.every(g => g.state === 'passed') };
 }

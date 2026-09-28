@@ -257,7 +257,7 @@ export declare function targetedQaContext(context: {
         candidateSha: string;
         configHash: string;
         environmentHash: string;
-        status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "blocked" | "cached" | "passed_after_retry";
+        status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "blocked" | "cached" | "passed_after_retry" | "not_required";
         startedAt: number;
         durationMs: number;
         exitCode: number | null;
@@ -314,6 +314,17 @@ export declare function targetedQaContext(context: {
             readonly changed: number;
             readonly auditId: string | null;
             readonly ok: boolean;
+        } | undefined;
+        scope: {
+            readonly required: boolean;
+            readonly reason: string;
+            readonly base: string | null;
+            readonly reference: string | null;
+            readonly referenceName: string;
+            readonly referenceSha: string | null;
+            readonly fileCount: number;
+            readonly files: string[];
+            readonly blocking: string[];
         } | undefined;
     }[];
     qaScope: {

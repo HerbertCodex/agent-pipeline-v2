@@ -319,6 +319,39 @@ test('batch and repeatChanged: maxFiles applies pull request by pull request, a 
   assert.deepEqual(refused.json().culprits, []);
 });
 
+test('batch and skipWhenOnly: documentation PRs leave the scoped check not required (paths of the target), a PR that touches anything else runs it', async t => {
+  const p = batchProject(t);
+  git(p.repo, 'switch', '-q', 'main');
+  const calls = join(p.root, 'calls.txt');
+  writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({ gates: [{ id: 'suite', stage: 'full',
+    command: [process.execPath, '-e', `require("fs").appendFileSync(${JSON.stringify(calls)}, "x")`],
+    skipWhenOnly: { paths: ['docs/**', '**/*.md'], except: ['src/**', 'static/**', 'public/**', 'content/**'], reference: 'origin/main' } }] }));
+  git(p.repo, 'commit', '-qam', 'scope'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const state = JSON.parse(readFileSync(join(p.root, 'gh.json'), 'utf8'));
+  for (const [n, file] of [[21, 'docs/a.md'], [22, 'README.md'], [23, 'c.txt']]) {
+    git(p.repo, 'switch', '-q', '-c', `pr-${n}`, 'main');
+    mkdirSync(join(p.repo, 'docs'), { recursive: true });
+    writeFileSync(join(p.repo, file), `pr ${n}\n`);
+    git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', `pr ${n}`); git(p.repo, 'push', '-q', 'origin', `pr-${n}`);
+    const sha = git(p.repo, 'rev-parse', 'HEAD');
+    git(p.origin, 'update-ref', `refs/pull/${n}/head`, sha);
+    state.prs[n] = { ...state.prs[11], number: n, headRefName: `pr-${n}`, headRefOid: sha };
+  }
+  writeFileSync(join(p.root, 'gh.json'), JSON.stringify(state));
+  git(p.repo, 'switch', '-q', 'main');
+  const docs = await p.run(['21', '22', '--json']);
+  assert.equal(docs.code, 0, docs.stdout + docs.stderr);
+  assert.equal(existsSync(calls), false, 'the suite did not run');
+  assert.match(docs.json().lots[0].proof.summary, /non requis par leur portée : suite ; apv gates verify à 0/);
+  const summary = JSON.parse(readFileSync(join(p.repo, '.git', 'apv', 'receipts', docs.json().lots[0].proof.runId, 'summary.json'), 'utf8'));
+  assert.equal(summary.receipts[0].status, 'not_required');
+  assert.match(summary.receipts[0].scope.reason, /2 fichier\(s\) changé\(s\)/);
+  const code = await p.run(['21', '23', '--json']);
+  assert.equal(code.code, 0, code.stdout + code.stderr);
+  assert.equal(readFileSync(calls, 'utf8'), 'x', 'the suite ran once');
+  assert.doesNotMatch(code.json().lots[0].proof.summary, /non requis/);
+});
+
 test('batch: a suite refused before it ran is never bisected nor taken for a failure', async t => {
   const p = batchProject(t);
   const env = { ...process.env, ...p.env };

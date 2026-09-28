@@ -266,6 +266,25 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
       list.check(!(repeat.stressArgs ?? []).some(a => a.includes('{{repeat}}')), 'CONFIG', `Gate ${gate.id}: repeatChanged.stressArgs cannot use {{repeat}} (only repeatChanged.command does)`);
     }
   }
+  // The scope of a proof (skipWhenOnly): portable globs, and none so broad that it would cover source code.
+  for (const gate of value.gates) {
+    const scope = gate.skipWhenOnly;
+    if (!scope) continue;
+    // `apv web audit` decides its own scope (web paths, recomputed by verify): never mixed with skipWhenOnly.
+    const webAudit = [gate.command, gate.affected ?? []].some(argv => argv.some((x, i) => x === 'web' && argv[i + 1] === 'audit'));
+    list.check(!webAudit, 'CONFIG', `Gate ${gate.id}: skipWhenOnly cannot be declared on a check that runs apv web audit (the audit decides whether it is required from web.paths)`);
+    for (const [field, globs] of [['paths', scope.paths], ['except', scope.except ?? []]] as const) {
+      for (const glob of globs) list.attempt('CONFIG', () => { try { matches('probe', glob); } catch (error) { throw new PipelineError('CONFIG', `Gate ${gate.id}: skipWhenOnly.${field}: ${errorMessage(error)}`); } });
+    }
+    // A probe of source or served content left in a glob, unless an `except` takes it out: `**/*.md` needs src/**, static/**,
+    // public/** and content/** in `except`.
+    const excepted = (path: string): boolean => (scope.except ?? []).some(e => { try { return matches(path.toLowerCase(), e.toLowerCase()); } catch { return false; } });
+    for (const glob of scope.paths) {
+      let covered: string | undefined;
+      try { covered = CODE_PROBES.find(path => matches(path, glob) && !excepted(path)); } catch { continue; }
+      list.check(!covered, 'CONFIG', `Gate ${gate.id}: skipWhenOnly.paths « ${glob} » covers source code or served content (${covered}): list only files without effect on the check (docs/**...), and take the source, static, public and content folders out through skipWhenOnly.except (src/**, static/**, public/**, content/**)`);
+    }
+  }
   const ruleIds = value.validationRules.map(r => r.id);
   list.check(new Set(ruleIds).size === ruleIds.length, 'CONFIG', 'Duplicate validation rule id');
   if (value.design) list.attempt('CONFIG', () => designDir(value.design));
@@ -284,6 +303,11 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
   if (list.empty) list.attempt('DAG', () => validateDag(value.gates));
   return { config: list.empty ? value : undefined, ignored: sections.ignored, issues: list.items };
 }
+
+/** Source files of common stacks: a `skipWhenOnly.paths` glob that matches one of them is too broad (refused). */
+const CODE_PROBES = ['src/app.ts', 'src/app.js', 'src/lib/view.svelte', 'src/routes/+page.svelte', 'lib/app.py', 'app/models/user.rb', 'main.go', 'index.ts', 'index.js',
+  'src/main.rs', 'server/index.mjs', 'app/page.tsx', 'pages/index.vue', 'App.java', 'Program.cs',
+  'src/routes/+page.md', 'content/x.md', 'static/x.md', 'public/x.md', 'src/content/x.mdx', 'src/lib/x.svx'];
 
 /** Configuration file of a project: `--config` when given, then `.apv/config.json`, then `pipeline.v2.json`. */
 export function configFile(repo: string, explicit?: string): { file: string | null; legacy: boolean } {

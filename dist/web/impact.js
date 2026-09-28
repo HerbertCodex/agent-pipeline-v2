@@ -1,6 +1,6 @@
 import { DEFAULT_GENERATED_PATHS } from '../domain/contracts.js';
 import { matches } from '../policy/policy.js';
-import { gitRead, resolveCommit } from '../run/git-probe.js';
+import { gitRead, resolveFullRef } from '../run/git-probe.js';
 import { DEFAULT_NEUTRAL_PATHS } from './config.js';
 /**
  * Whether a change calls for a web audit (`apv web audit --preview --base <ref>`, and its recomputation by
@@ -38,9 +38,11 @@ export function changedBetween(repo, from, to) {
  * itself (`head` equal to or upstream of `ref`: nothing to compare, every change would be missed).
  */
 export function auditBase(repo, ref, head) {
-    const reference = resolveCommit(repo, ref);
+    // By its full ref: a local branch or a tag named like the remote-tracking reference never hides it (ambiguous: refused).
+    const resolved = resolveFullRef(repo, ref);
+    const reference = resolved.sha;
     if (!reference)
-        return { ok: false, reason: 'missing', message: `référence introuvable : ${ref}` };
+        return { ok: false, reason: 'missing', message: `référence ${resolved.reason === 'introuvable' ? 'introuvable' : resolved.reason} : ${ref}` };
     const base = gitRead(repo, ['merge-base', reference, head]);
     if (!base)
         return { ok: false, reason: 'no-merge-base', message: `aucune base commune entre ${ref} et ${head.slice(0, 12)}` };

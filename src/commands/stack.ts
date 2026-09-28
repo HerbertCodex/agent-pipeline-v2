@@ -277,17 +277,19 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO): Promise
     // batch brings; their ceiling of files was applied pull request by pull request (repeatRefusal), never to the sum.
     let result: Awaited<ReturnType<typeof runGates>>;
     try {
-      result = await runGates({ repo: worktree, config: loaded.config, stage: 'full', base, repeatReference: base, repeatCeiling: false, env: io.env, log, signal: abort.signal,
+      // The target is also the reference of the scope of the proof (skipWhenOnly): its paths, its merge base with the batch.
+      result = await runGates({ repo: worktree, config: loaded.config, stage: 'full', base, repeatReference: base, reference: base, repeatCeiling: false, env: io.env, log, signal: abort.signal,
         ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}) });
     } catch (error) {
       if (error instanceof PipelineError && error.code === 'GATE_REPEAT') return { ok: false, runId: null, summary: `suite refusée : ${cleanLine(error.message, 600)}`, refused: cleanLine(error.message, 600) };
       throw error;
     }
-    const verified = await verifyGates({ repo: worktree, config: loaded.config, commit: head, stage: 'full', repeatReference: base });
+    const verified = await verifyGates({ repo: worktree, config: loaded.config, commit: head, stage: 'full', repeatReference: base, reference: base });
     const passed = result.receipts.filter(success).length;
-    const failed = result.receipts.filter(r => !success(r)).map(r => `${r.gateId} (${r.status})`);
+    const notRequired = result.receipts.filter(r => r.status === 'not_required').map(r => r.gateId);
+    const failed = result.receipts.filter(r => !success(r) && r.status !== 'not_required').map(r => `${r.gateId} (${r.status})`);
     return { ok: result.ok && verified.ok, runId: result.runId,
-      summary: `${passed}/${result.receipts.length} contrôle(s) réussi(s)${failed.length ? `, en échec : ${failed.join(', ')}` : ''} ; apv gates verify ${verified.ok ? 'à 0' : 'en échec'} ; exécution ${result.runId}` };
+      summary: `${passed}/${result.receipts.length} contrôle(s) réussi(s)${notRequired.length ? `, non requis par leur portée : ${notRequired.join(', ')}` : ''}${failed.length ? `, en échec : ${failed.join(', ')}` : ''} ; apv gates verify ${verified.ok ? 'à 0' : 'en échec'} ; exécution ${result.runId}` };
   };
   let report: BatchReport;
   try {
