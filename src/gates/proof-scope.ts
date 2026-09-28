@@ -172,6 +172,11 @@ export async function planScope(git: Git, repo: string, config: ApvConfig, input
     // The lists of the reference, never those of the change: a change cannot grant itself a dispensation.
     const target = ref.config.gates.find(g => g.id === gate.id)?.skipWhenOnly;
     if (!target) { decide(true, `la référence ${referenceName} ne déclare pas skipWhenOnly pour ${gate.id} (les chemins sont lus à la référence)`, at); continue; }
+    // The reference names itself: a change that points its reference elsewhere than where the target points is never dispensed.
+    if (target.reference !== settings.reference) {
+      decide(true, `la référence du contrôle (${settings.reference}) diffère de celle que déclare ${referenceName} (${target.reference}) : une dispense se compte depuis la cible, jamais depuis une autre branche`, at);
+      continue;
+    }
     const byPath = new Map<string, ChangedFile>();
     for (const from of new Set([baseMb, ref.mb])) for (const f of await diff(from)) if (!byPath.has(f.path) || modeChange(f)) byPath.set(f.path, f);
     const files = [...byPath.keys()].sort();

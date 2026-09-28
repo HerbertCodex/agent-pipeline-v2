@@ -188,6 +188,11 @@ export async function planScope(git, repo, config, input) {
             decide(true, `la référence ${referenceName} ne déclare pas skipWhenOnly pour ${gate.id} (les chemins sont lus à la référence)`, at);
             continue;
         }
+        // The reference names itself: a change that points its reference elsewhere than where the target points is never dispensed.
+        if (target.reference !== settings.reference) {
+            decide(true, `la référence du contrôle (${settings.reference}) diffère de celle que déclare ${referenceName} (${target.reference}) : une dispense se compte depuis la cible, jamais depuis une autre branche`, at);
+            continue;
+        }
         const byPath = new Map();
         for (const from of new Set([baseMb, ref.mb]))
             for (const f of await diff(from))

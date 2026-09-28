@@ -146,6 +146,20 @@ test('the configuration of the checks touched, or the list changed by the change
   assert.ok(f.calls().includes('browser'), 'the list of the reference has no notes/**');
   rec = receipt(r.json().receiptsDirectory, 'browser');
   assert.match(rec.scope.reason, /notes\/plan\.txt : hors de skipWhenOnly\.paths/);
+  // A configuration that points its reference at another branch (one that already holds the change): never dispensed.
+  git(f.repo, 'switch', '-q', '-C', 'holder', 'main');
+  write(f.repo, 'src/math.mjs', 'export const add = (a, b) => a + b;\n');
+  const moved = JSON.parse(readFileSync(join(f.repo, '.apv/config.json'), 'utf8'));
+  moved.gates[1].skipWhenOnly.reference = 'holder';
+  write(f.repo, '.apv/config.json', moved);
+  commit(f.repo, 'code and a reference to itself');
+  git(f.repo, 'switch', '-q', '-c', 'on-holder');
+  write(f.repo, 'docs/guide.md', 'docs on top\n');
+  commit(f.repo, 'docs on top');
+  const main2 = { ...moved, gates: [moved.gates[0], { ...moved.gates[1], skipWhenOnly: { ...moved.gates[1].skipWhenOnly, reference: 'main' } }] };
+  f.reset();
+  const mismatch = await runGates({ repo: f.repo, config: loadConfig(f.repo, write(f.root, 'main2.json', main2)).config, stage: 'full', base: 'HEAD~1', reference: 'holder', share: false });
+  assert.match(mismatch.receipts.find(r => r.gateId === 'browser').scope.reason, /la référence du contrôle \(main\) diffère de celle que déclare holder \(holder\)/);
   // A reference that does not declare the scope: required.
   const bare = project(t, [{ id: 'browser', stage: 'full', command: [process.execPath, 'run.mjs', 'browser'] }]);
   write(bare.repo, 'docs/guide.md', 'x\n');
