@@ -185,8 +185,8 @@ export async function planScope(git: Git, repo: string, config: ApvConfig, input
       const why = !validRelativePath(path) ? 'chemin invalide'
         : modeChange(f) ? `${modeChange(f)} (lien symbolique, sous-module ou exécutable : toujours requis)`
         : inputs.some(g => safeMatch(path, g)) ? 'toujours requis (configuration, dépendances, CI, build, tests, scripts ou migrations)'
-        : (target.except ?? []).some(g => safeMatch(path, g)) ? 'exclu par skipWhenOnly.except'
         : !target.paths.some(g => safeMatch(path, g)) ? 'hors de skipWhenOnly.paths'
+        : (target.except ?? []).some(g => safeMatch(path, g)) ? 'exclu par skipWhenOnly.except'
         : null;
       if (!why) continue;
       if (blocking.length < 50) blocking.push(path);

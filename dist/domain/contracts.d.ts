@@ -1,5 +1,5 @@
 import { type Infer } from './schema.js';
-export declare const VERSION = "3.0.0-alpha.6";
+export declare const VERSION = "3.0.0-alpha.8";
 export declare const lanes: readonly ["fast", "standard", "high"];
 export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];
@@ -40,6 +40,19 @@ export declare const repeatChangedSchema: import("./schema.js").Schema<{
     readonly fixedWaits: "off" | "warn" | "refuse";
     readonly reference: string;
 }>;
+/**
+ * `skipWhenOnly` of a check: the scope of its proof (docs/APV3-SPEC.md, section 21). `paths` (globs of the files that
+ * have no effect on what the check proves: documentation, decisions, specs), `except` (globs taken out of `paths`, for
+ * example the sources out of the Markdown files), `reference` (the branch the change goes to, `origin/main` for example, required: the
+ * files are also counted from its merge base, and the lists are read there, never in the change). A full run where
+ * every file changed since the merge bases of `--base` and of the reference matches `paths` (and no `except`, no file
+ * of `ALWAYS_REQUIRED`, no change of mode or type) records the check as not required instead of running it.
+ */
+export declare const skipWhenOnlySchema: import("./schema.js").Schema<{
+    readonly paths: string[];
+    readonly except: string[] | undefined;
+    readonly reference: string;
+}>;
 export declare const gateSchema: import("./schema.js").Schema<{
     readonly id: string;
     readonly command: string[];
@@ -78,6 +91,11 @@ export declare const gateSchema: import("./schema.js").Schema<{
         readonly testPattern: string | undefined;
         readonly stressArgs: string[] | undefined;
         readonly fixedWaits: "off" | "warn" | "refuse";
+        readonly reference: string;
+    } | undefined;
+    readonly skipWhenOnly: {
+        readonly paths: string[];
+        readonly except: string[] | undefined;
         readonly reference: string;
     } | undefined;
 }>;
@@ -289,6 +307,11 @@ export declare const configSchema: import("./schema.js").Schema<{
             readonly fixedWaits: "off" | "warn" | "refuse";
             readonly reference: string;
         } | undefined;
+        readonly skipWhenOnly: {
+            readonly paths: string[];
+            readonly except: string[] | undefined;
+            readonly reference: string;
+        } | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;
@@ -340,7 +363,13 @@ export interface ProcessResult {
  */
 /** Outcome of the repetition of the changed test files recorded in a receipt (`repeat.status`). */
 export declare const repeatStatuses: readonly ["passed", "failed", "timed_out", "cancelled", "spawn_error", "none", "no_base", "not_run"];
-export declare const receiptStatuses: readonly ["passed", "failed", "timed_out", "cancelled", "spawn_error", "blocked", "cached", "passed_after_retry"];
+/**
+ * `not_required`: a check that declares `skipWhenOnly`, not run because every file the change touches is outside its
+ * scope (`scope` of the receipt); never a success by itself, `apv gates verify` recomputes the scope from the commit.
+ */
+export declare const receiptStatuses: readonly ["passed", "failed", "timed_out", "cancelled", "spawn_error", "blocked", "cached", "passed_after_retry", "not_required"];
+/** Most changed files a receipt lists in `scope.files`; beyond, a check is always required. */
+export declare const MAX_SCOPE_FILES = 2000;
 export declare const receiptSchema: import("./schema.js").Schema<{
     readonly id: string;
     readonly runId: string;
@@ -349,7 +378,7 @@ export declare const receiptSchema: import("./schema.js").Schema<{
     readonly candidateSha: string;
     readonly configHash: string;
     readonly environmentHash: string;
-    readonly status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "blocked" | "cached" | "passed_after_retry";
+    readonly status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "blocked" | "cached" | "passed_after_retry" | "not_required";
     readonly startedAt: number;
     readonly durationMs: number;
     readonly exitCode: number | null;
@@ -398,6 +427,17 @@ export declare const receiptSchema: import("./schema.js").Schema<{
             readonly line: number;
             readonly text: string;
         }[];
+    } | undefined;
+    readonly scope: {
+        readonly required: boolean;
+        readonly reason: string;
+        readonly base: string | null;
+        readonly reference: string | null;
+        readonly referenceName: string;
+        readonly referenceSha: string | null;
+        readonly fileCount: number;
+        readonly files: string[];
+        readonly blocking: string[];
     } | undefined;
 }>;
 export type GateReceipt = Infer<typeof receiptSchema>;

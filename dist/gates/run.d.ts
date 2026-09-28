@@ -2,6 +2,7 @@ import { type Gate, type GateReceipt, type GateStage } from '../domain/contracts
 import { type ApvConfig } from '../config/load.js';
 import { PipelineError } from '../domain/errors.js';
 import { type PruneResult } from './store.js';
+import { type ScopeDecision } from './proof-scope.js';
 import { type CleanupRecord, type PortsRecord, type QueueRecord, type SuiteHooks } from './suite.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
 export declare const RECEIPTS_DIR = ".apv/receipts";
@@ -55,6 +56,13 @@ export interface GateRunOptions {
      * request): the run then repeats the union of their files. Default true.
      */
     repeatCeiling?: boolean;
+    /**
+     * The reference the full checks that declare `skipWhenOnly` count their changed files from, and whose configuration
+     * gives their paths, in place of `skipWhenOnly.reference` (`apv stack batch`: its target).
+     */
+    reference?: string;
+    /** The configuration file read (`--config`), always required by the scope of a check when inside the repository. */
+    configFile?: string | null;
 }
 /** The copy of a run in the shared store: its directory, or why it could not be made (the run itself stands). */
 export interface SharedCopy {
@@ -82,6 +90,10 @@ export interface GateRunResult {
     shared: SharedCopy | null;
     /** True when the run is a full suite (a check of stage full run in full): queue, clean tree and ports apply. */
     suite: boolean;
+    /** The checks recorded as not required by the scope of their proof (`skipWhenOnly`): never run. */
+    notRequired: string[];
+    /** The scope decisions of the checks of the run that declare `skipWhenOnly` (full run). */
+    scope: ScopeDecision[];
     /** The queue of the full suites: its lock, the wait, the load; null outside a full suite or when disabled. */
     queue: QueueRecord | null;
     /** The ports of `suite.ports` freed from orphans of this copy; null when none are declared or outside a full suite. */

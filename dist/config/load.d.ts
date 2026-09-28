@@ -220,6 +220,11 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly fixedWaits: "off" | "warn" | "refuse";
             readonly reference: string;
         } | undefined;
+        readonly skipWhenOnly: {
+            readonly paths: string[];
+            readonly except: string[] | undefined;
+            readonly reference: string;
+        } | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;

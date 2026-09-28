@@ -265,6 +265,31 @@ export function configIssues(raw) {
             list.check(!(repeat.stressArgs ?? []).some(a => a.includes('{{repeat}}')), 'CONFIG', `Gate ${gate.id}: repeatChanged.stressArgs cannot use {{repeat}} (only repeatChanged.command does)`);
         }
     }
+    // The scope of a proof (skipWhenOnly): portable globs, and none so broad that it would cover source code.
+    for (const gate of value.gates) {
+        const scope = gate.skipWhenOnly;
+        if (!scope)
+            continue;
+        for (const [field, globs] of [['paths', scope.paths], ['except', scope.except ?? []]]) {
+            for (const glob of globs)
+                list.attempt('CONFIG', () => { try {
+                    matches('probe', glob);
+                }
+                catch (error) {
+                    throw new PipelineError('CONFIG', `Gate ${gate.id}: skipWhenOnly.${field}: ${errorMessage(error)}`);
+                } });
+        }
+        for (const glob of scope.paths) {
+            let covered;
+            try {
+                covered = CODE_PROBES.find(path => matches(path, glob));
+            }
+            catch {
+                continue;
+            }
+            list.check(!covered, 'CONFIG', `Gate ${gate.id}: skipWhenOnly.paths « ${glob} » covers source code (${covered}): list only files without effect on the check (docs/**, **/*.md...)`);
+        }
+    }
     const ruleIds = value.validationRules.map(r => r.id);
     list.check(new Set(ruleIds).size === ruleIds.length, 'CONFIG', 'Duplicate validation rule id');
     if (value.design)
@@ -291,6 +316,9 @@ export function configIssues(raw) {
         list.attempt('DAG', () => validateDag(value.gates));
     return { config: list.empty ? value : undefined, ignored: sections.ignored, issues: list.items };
 }
+/** Source files of common stacks: a `skipWhenOnly.paths` glob that matches one of them is too broad (refused). */
+const CODE_PROBES = ['src/app.ts', 'src/app.js', 'src/lib/view.svelte', 'src/routes/+page.svelte', 'lib/app.py', 'app/models/user.rb', 'main.go', 'index.ts', 'index.js',
+    'src/main.rs', 'server/index.mjs', 'app/page.tsx', 'pages/index.vue', 'App.java', 'Program.cs'];
 /** Configuration file of a project: `--config` when given, then `.apv/config.json`, then `pipeline.v2.json`. */
 export function configFile(repo, explicit) {
     if (explicit)

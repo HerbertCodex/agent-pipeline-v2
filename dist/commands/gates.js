@@ -11,6 +11,7 @@ import { MAX_OVERRIDE_REASON, RUN_ID, applyFullSuiteOverride, readRunState, with
 import { cleanLine } from '../run/summary.js';
 import { verifyGates } from '../gates/verify.js';
 import { referenceMissing, resolveRef } from '../gates/repeat.js';
+import { scopeReferenceMissing } from '../gates/proof-scope.js';
 import { Git } from '../execution/git.js';
 import { signalExitCode } from '../lock/run.js';
 import { EXIT, UsageError, guard, json, list, parse, repoPath, table } from './common.js';
@@ -98,12 +99,13 @@ receipts prune : applique la rétention au magasin partagé (--keep-days, --keep
 la configuration). Les reçus du worktree ne sont jamais touchés.
 Sortie : 0, 1 exécution introuvable, altérée ou destination existante, 2 appel incorrect.`;
 const STATUS = { passed: 'réussi', failed: 'échec', timed_out: 'délai dépassé', cancelled: 'annulé',
-    spawn_error: 'non lancé', blocked: 'bloqué', cached: 'réutilisé', passed_after_retry: 'réussi après relance' };
+    spawn_error: 'non lancé', blocked: 'bloqué', cached: 'réutilisé', passed_after_retry: 'réussi après relance', not_required: 'non requis (portée)' };
 const FLAKY = 'instable';
 const RESERVED = 'réservé à la suite complète';
 const TARGETED = 'ciblé';
 const SHARED = 'magasin partagé';
-const EVIDENCE = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu', unrepeated: 'tests modifiés non répétés' };
+const EVIDENCE = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu', unrepeated: 'tests modifiés non répétés',
+    required: 'requis (dispense non prouvée)' };
 /** One line of the repetition of the changed test files of a check. */
 function repeatLine(r) {
     const files = r.files.length > 5 ? `${r.files.slice(0, 5).join(', ')} ... (${r.files.length})` : r.files.join(', ');
@@ -123,7 +125,8 @@ function verifyLines(result) {
     const what = result.stage === 'full' ? 'suite complète' : result.targeted.length ? 'contrôles de tâche et ciblés' : 'contrôles de tâche';
     const state = (g) => {
         const text = g.state === 'failed' ? `${EVIDENCE.failed} (${STATUS[g.status] ?? g.status})`
-            : g.state === 'passed' && g.status === 'passed_after_retry' ? `${STATUS['passed_after_retry']} (${FLAKY})` : EVIDENCE[g.state];
+            : g.state === 'passed' && g.status === 'passed_after_retry' ? `${STATUS['passed_after_retry']} (${FLAKY})`
+                : g.state === 'passed' && g.status === 'not_required' ? 'non requis (portée recalculée)' : EVIDENCE[g.state];
         return g.proof === 'targeted' ? `${text} (${TARGETED})` : text;
     };
     const lines = [`Vérification (${what}) au commit ${result.commit.slice(0, 12)}${result.base ? ` ; tests ciblés depuis ${result.base.slice(0, 12)}` : ''}`, '',
@@ -147,25 +150,29 @@ function verifyLines(result) {
     const unrepeated = result.gates.filter(g => g.state === 'unrepeated');
     if (unrepeated.length)
         lines.push('', 'Tests modifiés non répétés (repeatChanged) : le reçu réussi ne prouve pas la répétition des tests que ce commit ajoute ou modifie :', ...unrepeated.map(g => `- ${g.gateId} : ${g.repeat.reason}${g.repeat.missing.length ? ` : ${g.repeat.missing.slice(0, 10).join(', ')}${g.repeat.missing.length > 10 ? ' ...' : ''}` : ''}`));
+    const scoped = result.gates.filter(g => g.scope);
+    if (scoped.length)
+        lines.push('', 'Portée de la preuve (skipWhenOnly), recalculée depuis le commit :', ...scoped.map(g => `- ${g.gateId} : ${g.scope.required ? 'REQUIS, le reçu « non requis » ne prouve rien' : 'non requis'} : ${g.scope.reason}` +
+            `${g.scope.blocking.length ? ` ; fichiers qui le requièrent : ${g.scope.blocking.slice(0, 10).join(', ')}${g.scope.blocking.length > 10 ? ' ...' : ''}` : ''}`));
     const missing = result.gates.filter(g => g.state !== 'passed');
     const rerun = result.stage === 'task' && result.base ? `apv gates run --stage task --base ${result.base.slice(0, 12)}`
-        : `apv gates run --stage ${result.stage}${result.repeating.length ? ' --base <base de la branche>' : ''}`;
+        : `apv gates run --stage ${result.stage}${result.repeating.length || result.scoped.length ? ' --base <base de la branche>' : ''}`;
     if (result.flaky.length)
         lines.push('', `Instables (réussis seulement après la relance de leurs tests en échec, même commit) : ${result.flaky.join(', ')} : à traiter comme un constat.`);
     lines.push('', result.ok
-        ? `Preuve complète : ${result.required.length} contrôle(s) réussi(s) sur ce commit, arbre propre${result.flaky.length ? `, dont ${result.flaky.length} ${FLAKY}(s)` : ''}${result.stage === 'task' && (result.targeted.length || result.reserved.length) ? ' (niveau tâche : la suite complète reste à passer)' : ''}.`
+        ? `Preuve complète : ${result.required.length} contrôle(s) ${result.notRequired.length ? `prouvé(s) sur ce commit (dont ${result.notRequired.length} non requis par leur portée : ${result.notRequired.join(', ')})` : 'réussi(s) sur ce commit'}, arbre propre${result.flaky.length ? `, dont ${result.flaky.length} ${FLAKY}(s)` : ''}${result.stage === 'task' && (result.targeted.length || result.reserved.length) ? ' (niveau tâche : la suite complète reste à passer)' : ''}.`
         : `Preuve incomplète. Manque : ${missing.map(g => `${g.gateId} (${EVIDENCE[g.state]})`).join(', ')}. ` +
             `Relancer : ${rerun} sur ce commit, arbre propre.`);
     return lines;
 }
 /** The full proof of HEAD when it exists on a clean tree, else null (any refusal of verify counts as « not proven »). */
-async function provenFull(repo, config) {
+async function provenFull(repo, config, configFile) {
     try {
         const git = new Git();
         const root = await git.root(repo);
         if ((await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])) !== '')
             return null;
-        const result = await verifyGates({ repo: root, config, commit: 'HEAD', stage: 'full' });
+        const result = await verifyGates({ repo: root, config, commit: 'HEAD', stage: 'full', configFile });
         return result.ok ? result : null;
     }
     catch {
@@ -272,11 +279,12 @@ export async function run(args, io) {
             }
             else
                 loaded = loadConfig(repo, values.config);
-            const result = await verifyGates({ repo, config: loaded.config, commit: values.commit, ...(stage ? { stage } : {}), ...(values.base ? { base: values.base } : {}) });
+            const result = await verifyGates({ repo, config: loaded.config, commit: values.commit, ...(stage ? { stage } : {}), ...(values.base ? { base: values.base } : {}),
+                configFile: values['commit-config'] ? null : loaded.file });
             if (values.json) {
                 json(io, { ok: result.ok, commit: result.commit, stage: result.stage, base: result.base, config: loaded.file, configHash: result.configHash,
                     required: result.required, targeted: result.targeted, reserved: result.reserved, gates: result.gates, unreadable: result.unreadable,
-                    store: result.store, altered: result.altered, flaky: result.flaky, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
+                    store: result.store, altered: result.altered, flaky: result.flaky, notRequired: result.notRequired, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
             }
             else {
                 io.stdout(`${verifyLines(result).join('\n')}\n`);
@@ -315,6 +323,11 @@ export async function run(args, io) {
         if (repeating.length && values.base === undefined) {
             throw new UsageError(`${repeating.join(', ')} déclare(nt) repeatChanged : --base <base de la branche> est obligatoire (ses tests ajoutés ou modifiés depuis elle sont répétés ; sans base, rien ne le serait)`);
         }
+        // The scope of the proof (skipWhenOnly) is counted at the full stage from the base and the reference: both required.
+        const scoped = (stage ?? 'full') === 'full' ? staged.run.filter(g => g.skipWhenOnly).map(g => g.id) : [];
+        if (scoped.length && values.base === undefined) {
+            throw new UsageError(`${scoped.join(', ')} déclare(nt) skipWhenOnly : --base <base de la branche> est obligatoire à la suite complète (la portée se compte depuis elle et depuis la référence ; sans base, rien ne se compte)`);
+        }
         // At the full stage, the changes are also counted from the reference: one that does not resolve is refused here.
         if ((stage ?? 'full') === 'full') {
             const git = new Git();
@@ -322,6 +335,10 @@ export async function run(args, io) {
             for (const g of staged.run.filter(x => x.repeatChanged)) {
                 if (!(await resolveRef(git, root, g.repeatChanged.reference)))
                     throw new UsageError(referenceMissing(g.id, g.repeatChanged.reference));
+            }
+            for (const g of staged.run.filter(x => x.skipWhenOnly)) {
+                if (!(await resolveRef(git, root, g.skipWhenOnly.reference)))
+                    throw new UsageError(scopeReferenceMissing(g.id, g.skipWhenOnly.reference));
             }
         }
         const allowDirty = values['allow-dirty'] === true;
@@ -346,7 +363,7 @@ export async function run(args, io) {
         };
         // The full suite already proven on this exact commit, clean tree: said before a run of several minutes, and
         // with --skip-proven, not run again. The proof is the one `apv gates verify` checks, nothing weaker.
-        const proven = stage !== 'task' && values.only === undefined ? await provenFull(repo, loaded.config) : null;
+        const proven = stage !== 'task' && values.only === undefined ? await provenFull(repo, loaded.config, loaded.file) : null;
         if (proven && skipProven) {
             if (values.json)
                 json(io, { ok: true, skipped: true, candidateSha: proven.commit, stage: 'full', config: loaded.file, required: proven.required,
@@ -384,7 +401,7 @@ export async function run(args, io) {
             result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env, signal: abort.signal,
                 allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}),
                 ...(values.base ? { base: values.base } : {}), ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
-                ...(spreadOver ? { stacks: spreadOver } : {}) });
+                ...(spreadOver ? { stacks: spreadOver } : {}), configFile: loaded.file });
         }
         catch (error) {
             if (received) {
@@ -400,14 +417,15 @@ export async function run(args, io) {
         const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, status: r.status, exitCode: r.exitCode,
             durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic,
             ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}),
-            ...(r.repeat ? { repeat: { status: r.repeat.status, base: r.repeat.base, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures, fixedWaits: r.repeat.fixedWaits } } : {}) }));
+            ...(r.repeat ? { repeat: { status: r.repeat.status, base: r.repeat.base, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures, fixedWaits: r.repeat.fixedWaits } } : {}),
+            ...(r.scope ? { scope: r.scope } : {}) }));
         const name = (r) => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
         if (values.json) {
             json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null,
                 stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
                 reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
                 sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
-                suite: result.suite, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, interrupted: received,
+                suite: result.suite, notRequired: result.notRequired, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, interrupted: received,
                 rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
                     level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
         }
@@ -450,14 +468,20 @@ export async function run(args, io) {
             const waits = repeated.flatMap(r => r.repeat.fixedWaits.map(w => `- ${name(r)} : ${w.file}:${w.line} : ${w.text}`));
             if (waits.length)
                 lines.push('', `Attentes à durée fixe dans les tests modifiés (${waits.length}) : attendre un fait observable (réponse, élément, état), jamais une durée ; page.clock pour le temps :`, ...waits);
+            const scopedRows = rows.filter(r => r.scope);
+            if (scopedRows.length)
+                lines.push('', 'Portée de la preuve (skipWhenOnly) :', ...scopedRows.map(r => `- ${name(r)} : ${r.scope.required ? 'requis' : 'NON REQUIS, non lancé'} : ${r.scope.reason}` +
+                    `${r.scope.required && r.scope.blocking.length ? ` ; fichiers qui le requièrent : ${r.scope.blocking.slice(0, 10).join(', ')}${r.scope.blocking.length > 10 ? ' ...' : ''}` : ''}`));
             const waited = rows.filter(r => (r.lockWaitMs ?? 0) >= 1000);
             if (waited.length)
                 lines.push('', `Attente de verrou avant le délai des contrôles : ${waited.map(r => `${name(r)} ${Math.round(r.lockWaitMs / 1000)} s`).join(', ')}.`);
-            for (const r of rows.filter(r => r.diagnostic && r.status !== 'blocked'))
+            for (const r of rows.filter(r => r.diagnostic && r.status !== 'blocked' && r.status !== 'not_required'))
                 lines.push('', `--- ${name(r)} (${STATUS[r.status] ?? r.status}) ---`, r.diagnostic.trimEnd());
             const verdict = !result.ok ? 'Des contrôles échouent.'
                 : result.stage === 'task' && !rows.length ? 'Aucun contrôle de tâche à exécuter.'
-                    : result.stage === 'task' ? 'Tous les contrôles de tâche passent.' : 'Tous les contrôles passent.';
+                    : result.stage === 'task' ? 'Tous les contrôles de tâche passent.'
+                        : result.notRequired.length ? `Tous les contrôles requis passent ; ${result.notRequired.length} non requis par leur portée (${result.notRequired.join(', ')}), non lancé(s) : apv gates verify recalcule leur portée depuis le commit.`
+                            : 'Tous les contrôles passent.';
             const reserved = result.reserved.length
                 ? ` ${result.reserved.length} contrôle(s) ${RESERVED}, non exécuté(s) : la suite complète (apv gates run --stage full) les vérifie.` : '';
             const targeted = result.targeted.length
