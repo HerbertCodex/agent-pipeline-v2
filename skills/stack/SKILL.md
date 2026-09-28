@@ -1,9 +1,9 @@
 ---
 name: stack
-description: "Fusionne une pile de PR dans l'ordre avec apv stack : plan vérifié et montré en entier, puis APV_ALLOW_MERGE=1 apv stack merge qui re-cible, revérifie chaque PR juste avant de la fusionner (base à jour comprise) et s'arrête à la première anomalie, sortie lue en entier, compte rendu. Uniquement sur ordre explicite de l'opérateur dans son message courant."
+description: "Fusionne une pile de PR dans l'ordre avec apv stack : plan vérifié et montré en entier, puis APV_ALLOW_MERGE=1 apv stack merge qui re-cible, revérifie chaque PR juste avant de la fusionner (base à jour comprise) et s'arrête à la première anomalie ; ou, pour des PR indépendantes, apv stack batch (un lot, une seule suite complète, fusion vérifiée par contenu). Sortie lue en entier, compte rendu. Uniquement sur ordre explicite de l'opérateur dans son message courant."
 argument-hint: "<pr...> [--method merge|squash|rebase]"
 disable-model-invocation: true
-allowed-tools: Read Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js stack plan*) Bash(apv stack plan*) Bash(gh pr view*) Bash(gh pr list*) Bash(git fetch*) Bash(git log*) Bash(git branch -r*)
+allowed-tools: Read Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js stack plan*) Bash(apv stack plan*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js wait*) Bash(apv wait*) Bash(gh pr view*) Bash(gh pr list*) Bash(git fetch*) Bash(git log*) Bash(git branch -r*)
 ---
 
 # /apv:stack
@@ -18,6 +18,12 @@ Dans ce document, `apv` désigne `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` (ou 
 3. PR en brouillon (le cas normal : `/apv:run` ouvre des brouillons) : sans option, un brouillon est une anomalie du plan. Si l'ordre de l'opérateur vise ces PR, ajoute `--ready` au plan et à la fusion : l'outil retire le statut brouillon (`gh pr ready`) juste avant chaque fusion. Sinon, arrête-toi et dis-le.
 4. Branche cible : par défaut la base de la première PR ; `--target <branche>` si l'opérateur en a nommé une autre.
 5. **PR parallèles** (préparées côte à côte sur la même base, par deux exécutions par exemple) : ce n'est pas une pile. Chacune se fusionne par sa propre commande, l'une après l'autre : d'abord celle dont les autres dépendent, sinon la première prête. Après chaque fusion, la PR suivante est mise à jour (section 2 bis) avant la sienne, même si elle est au vert : ses contrôles n'ont jamais vu la base qui contient la précédente (incident du 25 septembre 2026 : deux PR au vert chacune seule, `main` rouge une fois les deux fusionnées).
+
+## 1 bis. PR indépendantes : fusion par lot
+Plusieurs PR prêtes, indépendantes, toutes vers la même cible (livrées en parallèle) : plutôt qu'une mise à jour et une suite par PR (section 2 bis), **une seule suite complète pour toutes** :
+1. `apv stack batch <pr...> [--bisect]` (sans `--merge`) : l'outil construit la branche `apv/lot-<date>` depuis `origin/<cible>` (fusions des têtes dans l'ordre, jamais de rebase ; une PR en conflit reste hors du lot), prépare la copie (`batch.setup`), lance la suite complète dans la file et `apv gates verify` sur sa tête. Plus long qu'un appel Bash : lance-le en arrière-plan, sortie dans un fichier de ton dossier de session, et attends par `apv wait --pid <pid>`. `--bisect` : en cas d'échec, les PR fautives sont isolées par moitiés et sortent du lot.
+2. Montre **tout** le rapport à l'opérateur : lots, preuves, PR hors du lot et pourquoi.
+3. Sur son ordre explicite (section 3) : `APV_ALLOW_MERGE=1 apv stack batch <pr...> --merge [--ready] [--bisect]`, mêmes PR. Il reconstruit et reprouve le lot, puis fusionne dans l'ordre : chaque PR seulement si sa tête est celle du lot et si la cible a exactement le contenu du lot avant elle, et après chaque fusion le contenu de la cible est comparé à celui du lot ; l'arbre final doit être celui de la tête prouvée. Toute différence arrête tout (rapport, section 5).
 
 ## 2. Plan, montré en entier
 `apv stack plan <pr...> [--ready] [--target <branche>]` (ajoute `--json` seulement pour le traiter, et montre quand même la sortie humaine). L'outil lit chaque PR par `gh pr view` et vérifie : PR ouverte, base de la PR n+1 = tête de la PR n (la première vise la branche cible), fusionnable, contrôles au vert ou absents, et **base à jour** : la tête de chaque PR contient la tête actuelle de sa base (comparaison par l'API REST ; seuls des commits de fusion sans changement de fichier sont tolérés). `EN RETARD sur <base>` dans la sortie : section 2 bis.

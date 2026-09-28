@@ -1,5 +1,5 @@
 {
-  "description": "Garde-fous et reprise d'Agent Pipeline V3 : contexte de reprise au démarrage, blocage du force-push, de la fusion, du déploiement en production et des écritures GitHub à sortie masquée, rappel des chemins autorisés après chaque écriture d'un implementer, journal de fin de tour.",
+  "description": "Garde-fous et reprise d'Agent Pipeline V3 : contexte de reprise au démarrage, blocage du force-push, de la fusion, du déploiement en production et des écritures GitHub à sortie masquée, gardes du harnais (arrêt de la session ou de ses parents, killall et pkill -f, installation à travers un node_modules lié, Docker ou Supabase sur une pile de test sans son verrou, écriture Supabase sur une base distante), rappel des chemins autorisés après chaque écriture d'un implementer, journal de fin de tour.",
   "hooks": {
     "SessionStart": [
       {

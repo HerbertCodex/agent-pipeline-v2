@@ -1,5 +1,5 @@
 import { type Infer } from './schema.js';
-export declare const VERSION = "3.0.0-alpha.4";
+export declare const VERSION = "3.0.0-alpha.5";
 export declare const lanes: readonly ["fast", "standard", "high"];
 export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];
@@ -318,6 +318,7 @@ export declare const receiptSchema: import("./schema.js").Schema<{
         readonly reason: string;
     } | undefined;
     readonly lockWaitMs: number | undefined;
+    readonly stack: string | undefined;
     readonly retry: {
         readonly command: string[];
         readonly first: {

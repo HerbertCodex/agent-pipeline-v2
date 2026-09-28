@@ -12,6 +12,7 @@ import { matches, validateDag } from '../policy/policy.js';
 import { DEFAULT_RECEIPT_RETENTION } from '../gates/store.js';
 import { gitRead } from '../run/git-probe.js';
 import { reviewAlwaysSchema, reviewPathsSchema, reviewTermsSchema } from '../review/config.js';
+import { stackIssues, stacksSchema } from '../stacks/config.js';
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
 /** V2 configuration, read as is for projects not yet migrated. */
@@ -20,7 +21,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite'];
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch'];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'];
 /**
@@ -111,12 +112,27 @@ export const suiteSettingsSchema = s.object({
 });
 /** The full suite settings of a configuration: `suite`, defaults for what is absent (queue on, no ports). */
 export const suiteSettings = (config) => ({ queue: config.suite?.queue ?? suiteQueueSchema.parse({}), ports: config.suite?.ports ?? [] });
-/** Declared test ports, sorted and without duplicates, with the resources that declare them. */
+/**
+ * Preparation of a fresh copy of the repository before a full suite runs in it (`apv stack batch`, the copies of
+ * `apv gates run --stacks`): a command without shell run at its root, typically the install of the dependencies.
+ */
+export const DEFAULT_SETUP_TIMEOUT_MS = 900_000;
+export const batchSettingsSchema = s.object({
+    setup: s.optional(s.array(s.string(1, 16000), 1, 200)),
+    setupTimeoutMs: s.default(s.number(1000, 3_600_000), DEFAULT_SETUP_TIMEOUT_MS),
+    passEnv: s.default(envNamesSchema, []),
+});
+/** Declared test ports, sorted and without duplicates, with the resources (and stacks, `pile <id>`) that declare them. */
 export function declaredTestPorts(config) {
     const ports = new Map();
     for (const [resource, { ports: list }] of Object.entries(config.resources ?? {})) {
         for (const port of list)
             ports.set(port, [...(ports.get(port) ?? []), resource]);
+    }
+    for (const stack of config.stacks ?? []) {
+        for (const port of stack.ports ?? [])
+            if (!(ports.get(port) ?? []).includes(`pile ${stack.id}`))
+                ports.set(port, [...(ports.get(port) ?? []), `pile ${stack.id}`]);
     }
     return new Map([...ports].sort((a, b) => a[0] - b[0]));
 }
@@ -146,6 +162,10 @@ export const apvConfigSchema = s.object({
     resources: s.optional(resourcesSchema),
     /** Full suite of `apv gates run`: queue, load threshold, ports freed (docs/CONFIGURATION.md, « Suite complète »); absent: queue on. */
     suite: s.optional(suiteSettingsSchema),
+    /** Test stacks (docs/CONFIGURATION.md, « Piles de test »); absent: none, the stack rules block and stop nothing. */
+    stacks: s.optional(stacksSchema),
+    /** Preparation of a fresh copy (docs/CONFIGURATION.md, « Lot et copies »); absent: nothing is prepared. */
+    batch: s.optional(batchSettingsSchema),
 });
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export const specLimits = (config) => ({ ...DEFAULT_SPEC_LIMITS, ...config.spec });
@@ -206,6 +226,8 @@ export function configIssues(raw) {
     for (const [resource, { ports }] of Object.entries(value.resources ?? {})) {
         list.check(new Set(ports).size === ports.length, 'CONFIG', `resources.${resource}.ports: duplicate port`);
     }
+    for (const message of stackIssues(value.stacks ?? []))
+        list.check(false, 'CONFIG', message);
     const suitePorts = value.suite?.ports ?? [];
     list.check(new Set(suitePorts).size === suitePorts.length, 'CONFIG', 'suite.ports: duplicate port');
     for (const gate of value.gates) {

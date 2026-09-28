@@ -2,7 +2,7 @@ import { type Gate, type GateReceipt, type GateStage } from '../domain/contracts
 import { type ApvConfig } from '../config/load.js';
 import { PipelineError } from '../domain/errors.js';
 import { type PruneResult } from './store.js';
-import { type PortsRecord, type QueueRecord, type SuiteHooks } from './suite.js';
+import { type CleanupRecord, type PortsRecord, type QueueRecord, type SuiteHooks } from './suite.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
 export declare const RECEIPTS_DIR = ".apv/receipts";
 /** Environment identity of a V3 local run; V2 read it from `environment.id`, a field V3 no longer reads. */
@@ -40,6 +40,11 @@ export interface GateRunOptions {
     log?: (line: string) => void;
     /** Injected by tests: load average and polling delays. */
     hooks?: SuiteHooks;
+    /**
+     * Declared test stacks to spread the checks of a stack over (`--stacks 1,2`, docs/APV3-SPEC.md, section 18.6): a
+     * full suite only, two stacks at least.
+     */
+    stacks?: readonly string[];
 }
 /** The copy of a run in the shared store: its directory, or why it could not be made (the run itself stands). */
 export interface SharedCopy {
@@ -73,6 +78,22 @@ export interface GateRunResult {
     ports: PortsRecord | null;
     /** Checks passed only after the relaunch of their failed tests (`passed_after_retry`): unstable, shown apart. */
     flaky: string[];
+    /** The end of a full suite: processes it started still alive, and orphans of this copy on `suite.ports`, stopped. */
+    cleanup: CleanupRecord | null;
+    /** Stacks the checks lock that `apv stacks idle-stop` stopped and nothing restarted since: their checks will likely fail. */
+    stoppedStacks: {
+        stack: string;
+        since: string;
+        gates: string[];
+    }[];
+    /** The checks spread over the stacks (`--stacks`): check, stack, copy where it ran; null without `--stacks`. */
+    spread: {
+        gate: string;
+        stack: string;
+        workspace: string;
+        notPassed: string[];
+        error: string | null;
+    }[] | null;
     ok: boolean;
 }
 /** Files of a `git status --porcelain=v1 -z` output, as `XY path` lines. */

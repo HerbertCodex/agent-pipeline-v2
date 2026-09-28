@@ -1,7 +1,7 @@
 import type { SuiteQueueSettings } from '../config/load.js';
 import type { Gate } from '../domain/contracts.js';
 import type { Git } from '../execution/git.js';
-import { type StopOutcome, type StopRefusal } from '../execution/procs.js';
+import { type ProcessInfo, type StopOutcome, type StopRefusal } from '../execution/procs.js';
 /**
  * The full suite of `apv gates run` (docs/APV3-SPEC.md, section 17): the machine queue taken before its first check,
  * the load threshold, the ports freed from orphans of the same copy, and the locks of the checks that share a
@@ -124,3 +124,29 @@ export declare const FLOCK_TIMEOUT_EXIT = 75;
  * there).
  */
 export declare function flockCommand(file: string, waitMs: number, command: readonly string[]): string[];
+/** Variable that marks every command of a full suite: its processes, and those they start, are found by it at the end. */
+export declare const SUITE_MARKER = "APV_SUITE_RUN";
+/** Processes of this user whose environment carries `<SUITE_MARKER>=<runId>` (read in `/proc/<pid>/environ`). */
+export declare function markedProcesses(runId: string, processes: readonly ProcessInfo[], root?: string): ProcessInfo[];
+export interface CleanupRecord {
+    /** Processes started by the suite (its marker) still alive at its end, stopped. */
+    stopped: (PortProcess & {
+        outcome: StopOutcome;
+    })[];
+    /** Marked processes left running: the session (never stopped). */
+    left: (PortProcess & {
+        reason: StopRefusal;
+    })[];
+    /** Orphans of this copy on `suite.ports`, after the suite. */
+    ports: PortsRecord | null;
+    unsupported: string | null;
+}
+/**
+ * The end of a full suite, whatever its outcome (docs/APV3-SPEC.md, section 18.4): the processes it started that are
+ * still alive (a server that left the process group of its check) are stopped as `apv procs stop` does, then the
+ * orphans of this copy on `suite.ports`. Never the session, a protected tool, another copy or the main checkout.
+ */
+export declare function cleanupSuite(repo: string, runId: string, ports: readonly number[], options: {
+    graceMs?: number;
+    log: (line: string) => void;
+}): Promise<CleanupRecord>;

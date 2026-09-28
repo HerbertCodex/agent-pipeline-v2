@@ -1,7 +1,7 @@
 import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s } from './schema.js';
 import { invariant } from './errors.js';
-export const VERSION = '3.0.0-alpha.4';
+export const VERSION = '3.0.0-alpha.5';
 export const lanes = ['fast', 'standard', 'high'];
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'];
 /**
@@ -199,6 +199,8 @@ export const receiptSchema = s.object({
     override: s.optional(s.object({ run: s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/), reason: s.string(1, 500) })),
     // Time spent waiting for the lock of the check (`lock`) before its command started. Absent without a lock.
     lockWaitMs: s.optional(s.finite(0, 86_400_000)),
+    // The declared test stack the check ran on (`apv gates run --stacks`), in its own copy when not the first. Absent otherwise.
+    stack: s.optional(s.string(1, 80, /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/)),
     // A failed first pass relaunched through `retryFailed`: that pass, the relaunch command, an excerpt of its output
     // and the tests concerned. Present on `passed_after_retry` and on a relaunch that failed too.
     retry: s.optional(s.object({

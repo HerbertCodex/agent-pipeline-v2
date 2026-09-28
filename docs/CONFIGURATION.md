@@ -423,7 +423,7 @@ Section APV3, facultative, validée par le chargeur commun (port hors de 1 à 65
 - `ports` (obligatoire, de 1 à 100 ports) : ports d'écoute des serveurs de la ressource.
 - `description` (facultatif, 500 caractères au plus) : texte libre.
 
-`apv procs` lit ces ports ([CLI.md](CLI.md#apv-procs)) : `apv procs stop` sans option arrête les processus qui y écoutent encore, s'ils ont été lancés dans un worktree lié du dépôt (serveurs laissés par une suite coupée au délai d'un appel Bash), jamais un processus hors du dépôt ; un processus du checkout principal seulement avec `--include-main`, et seulement sur un port déclaré ici. Absente : aucun port déclaré, et `apv procs stop` demande `--port` ou `--repo <copie>`. Déclarer ici les ports de toutes les piles de test, pas celui de l'aperçu (`preview.serve.port`), qui tourne dans sa propre copie hors du dépôt et que `apv procs` n'arrête jamais.
+`apv procs` lit ces ports, et ceux des piles de `stacks` ([CLI.md](CLI.md#apv-procs)) : `apv procs stop` sans option arrête les processus qui y écoutent encore, s'ils ont été lancés dans un worktree lié du dépôt (serveurs laissés par une suite coupée au délai d'un appel Bash), jamais un processus hors du dépôt ; un processus du checkout principal seulement avec `--include-main`, et seulement sur un port déclaré ici. Absente : aucun port déclaré, et `apv procs stop` demande `--port` ou `--repo <copie>`. Déclarer ici les ports de toutes les piles de test, pas celui de l'aperçu (`preview.serve.port`), qui tourne dans sa propre copie hors du dépôt et que `apv procs` n'arrête jamais.
 
 ## Suite complète : `suite`
 
@@ -446,6 +446,48 @@ Section APV3, facultative, validée par le chargeur commun (3.0.0-alpha.4, spéc
 - `ports` (défaut aucun, 100 au plus, sans doublon) : ports libérés des orphelins de la copie où tourne la suite (processus lancés dans ce worktree lié), jamais d'une autre copie ni du checkout principal ; en pratique les ports de `resources`.
 
 La file ne coûte rien à une suite seule ; elle évite qu'une suite complète en rende d'autres instables par la charge (projet pilote, 28 septembre 2026 : quatre chantiers en parallèle, charge jusqu'à 16, six suites rouges sur des tests chaque fois différents).
+
+## Piles de test : `stacks`
+
+Section APV3, facultative, validée par le chargeur commun (3.0.0-alpha.5, spécification section 18.1). Un tableau (10 piles au plus) des piles de test partagées par les copies du dépôt (une pile Supabase locale et ses serveurs de test, par exemple), avec leur verrou, ce qui les désigne et comment les arrêter. Absente : aucune des règles qui en dépendent ne bloque ni n'arrête rien.
+
+```json
+{
+  "stacks": [
+    { "id": "1", "lockFile": "../../pilote/.e2e.lock", "dockerProject": "mon-projet",
+      "lockCommand": ["node", "scripts/e2e/lock.mjs"], "env": { "E2E_STACK": "1" },
+      "envFile": "../../pilote/supabase-local/.env.local-supabase", "ports": [4173, 4174, 4175],
+      "stop": ["npx", "-y", "supabase@2.117.0", "stop", "--workdir", "/chemin/pilote/supabase-local"],
+      "start": ["npx", "-y", "supabase@2.117.0", "start", "--workdir", "/chemin/pilote/supabase-local"],
+      "idleAfterMs": 1800000 },
+    { "id": "2", "lockFile": "../../pilote/.e2e-2.lock", "dockerProject": "mon-projet-2", "env": { "E2E_STACK": "2" } }
+  ]
+}
+```
+
+- `id` (obligatoire, unique) : lettres, chiffres, `.`, `_`, `-`.
+- `lockFile` et `resource` (au moins l'un des deux) : le verrou de la pile, `flock` du noyau sur un fichier (relatif au répertoire Git commun, ou absolu, comme `lock.file` d'un contrôle) ou bail de `apv lock`.
+- `lockCommand` (facultatif) : commande du projet qui prend elle-même ce verrou puis lance le reste de ses arguments (un script de verrou du projet) ; le crochet Bash la reconnaît comme tenant le verrou, précédée des variables `env` de la pile quand elle en déclare.
+- `dockerProject` (facultatif, unique) : nom de projet Docker de ses conteneurs (`<préfixe>_<dockerProject>`, libellé `…=<dockerProject>`, `project_id` de la CLI Supabase) ; le crochet Bash refuse `docker` et `supabase` qui la modifient sans son verrou.
+- `env` et `envFile` (facultatifs) : variables qui désignent la pile, et fichier `CLÉ=valeur` à charger (relatif au répertoire Git commun ou absolu ; `export`, guillemets et commentaires admis, aucune expansion) ; un contrôle réparti sur la pile par `apv gates run --stacks` les reçoit, pour les noms de son `passEnv`.
+- `ports` (facultatif) : ports de ses serveurs de test ; ce sont aussi des ports de test déclarés pour `apv procs`, et une pile dont un port écoute est occupée pour `apv stacks idle-stop`.
+- `stop`, `start` (facultatifs, sans shell, lancés depuis la racine du dépôt, sous le verrou de la pile) : arrêt et redémarrage de la pile par `apv stacks idle-stop` et `apv stacks start` ; `commandTimeoutMs` (défaut 10 min) les borne.
+- `idleAfterMs` (facultatif, d'une minute à 7 jours, défaut 30 min) : inactivité prouvée avant l'arrêt.
+- `description` (facultatif).
+
+Refusés : deux piles au même `id`, au même `lockFile`, à la même `resource` ou au même `dockerProject`, une pile sans verrou, un port en double. Les piles ne changent pas l'empreinte des contrôles : les reçus restent valides.
+
+## Lot et copies : `batch`
+
+Section APV3, facultative (3.0.0-alpha.5, spécification sections 18.5 et 18.6) : la préparation d'une copie neuve du dépôt avant qu'une suite complète y tourne, celle d'un lot de `apv stack batch` et celles des piles suivantes de `apv gates run --stacks`.
+
+```json
+{ "batch": { "setup": ["npm", "ci", "--no-audit", "--no-fund"], "setupTimeoutMs": 900000, "passEnv": ["npm_config_cache"] } }
+```
+
+- `setup` (facultatif, sans shell, lancé à la racine de la copie) : typiquement l'installation des dépendances. Elle reçoit `environment.passEnv`, `HOME` et `passEnv`. Après elle, la copie doit être propre (fichiers créés ignorés par Git), sinon la copie est refusée.
+- `setupTimeoutMs` (défaut 15 min, jusqu'à 1 h).
+- Absente : rien n'est préparé (projet sans dépendances à installer).
 
 ## Maquettes validées : `design`
 

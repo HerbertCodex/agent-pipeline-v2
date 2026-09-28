@@ -272,6 +272,7 @@ export declare function targetedQaContext(context: {
             readonly reason: string;
         } | undefined;
         lockWaitMs: number | undefined;
+        stack: string | undefined;
         retry: {
             readonly command: string[];
             readonly first: {

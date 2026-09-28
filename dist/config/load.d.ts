@@ -9,7 +9,7 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite", "stacks", "batch"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
 /**
@@ -150,11 +150,25 @@ export declare const suiteSettings: (config: {
     queue: SuiteQueueSettings;
     ports: number[];
 };
-/** Declared test ports, sorted and without duplicates, with the resources that declare them. */
+/**
+ * Preparation of a fresh copy of the repository before a full suite runs in it (`apv stack batch`, the copies of
+ * `apv gates run --stacks`): a command without shell run at its root, typically the install of the dependencies.
+ */
+export declare const DEFAULT_SETUP_TIMEOUT_MS = 900000;
+export declare const batchSettingsSchema: import("../domain/schema.js").Schema<{
+    readonly setup: string[] | undefined;
+    readonly setupTimeoutMs: number;
+    readonly passEnv: string[];
+}>;
+/** Declared test ports, sorted and without duplicates, with the resources (and stacks, `pile <id>`) that declare them. */
 export declare function declaredTestPorts(config: {
     resources?: Record<string, {
         ports: number[];
     }> | undefined;
+    stacks?: {
+        id: string;
+        ports?: number[] | undefined;
+    }[] | undefined;
 }): Map<number, string[]>;
 export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
     readonly name: string | undefined;
@@ -289,6 +303,26 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly loadWaitMs: number;
         } | undefined;
         readonly ports: number[];
+    } | undefined;
+    readonly stacks: {
+        readonly id: string;
+        readonly lockFile: string | undefined;
+        readonly resource: string | undefined;
+        readonly lockCommand: string[] | undefined;
+        readonly dockerProject: string | undefined;
+        readonly env: Record<string, string> | undefined;
+        readonly envFile: string | undefined;
+        readonly ports: number[] | undefined;
+        readonly stop: string[] | undefined;
+        readonly start: string[] | undefined;
+        readonly idleAfterMs: number | undefined;
+        readonly commandTimeoutMs: number;
+        readonly description: string | undefined;
+    }[] | undefined;
+    readonly batch: {
+        readonly setup: string[] | undefined;
+        readonly setupTimeoutMs: number;
+        readonly passEnv: string[];
     } | undefined;
 }>;
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */

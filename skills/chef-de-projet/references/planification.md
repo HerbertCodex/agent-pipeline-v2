@@ -28,7 +28,7 @@ Nuit du 24 au 25 septembre 2026 sur le projet pilote : une spec de 12 tâches et
 - Nommage sous `/apv:run` : `apv/<id>` pour la branche de la spec (fixée par `apv run start`), `apv/<id>-<tâche>` pour une tâche, `apv/<id>-integration-<n>` pour l'intégration de la vague n, `apv/<id>-fix-<domaine>` pour une passe de correction. Un projet qui a sa propre convention la garde et la passe à `apv run set … --branch`.
 - La branche de la spec part de la bonne base : `main`, ou la branche de la spec précédente pour une pile (voir `livraison-pile.md`).
 - Chaque implementer travaille dans son worktree (`isolation: worktree`). Comme ce worktree part de la branche par défaut, la consigne lui fait créer sa branche depuis la base exacte : `git switch -c spec/<n>-t<k> <base>`. Alternative : `worktree.baseRef: "head"` dans `.claude/settings.json` du projet.
-- Dépendances dans un worktree neuf : `npm ci` (ou l'équivalent), ou un lien vers `node_modules` du dépôt principal si le fichier de verrouillage est identique.
+- Dépendances dans un worktree neuf : `npm ci` (ou l'équivalent), ou un lien vers `node_modules` du dépôt principal si le fichier de verrouillage est identique. Jamais d'installation dans une copie dont `node_modules` est ce lien (elle viderait la cible partagée ; le crochet Bash la refuse) : `unlink node_modules` d'abord.
 - Pour reprendre à la main un travail dans un worktree précis : `git worktree add <dossier> <branche>`, puis lancer l'agent sans isolement en lui donnant le dossier.
 
 ## 4. La consigne commune (brief)

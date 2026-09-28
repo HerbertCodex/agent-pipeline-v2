@@ -11,11 +11,12 @@ import { MAX_OVERRIDE_REASON, RUN_ID, applyFullSuiteOverride, readRunState, with
 import { cleanLine } from '../run/summary.js';
 import { verifyGates } from '../gates/verify.js';
 import { Git } from '../execution/git.js';
+import { signalExitCode } from '../lock/run.js';
 import { EXIT, UsageError, guard, json, list, parse, repoPath, table } from './common.js';
 export const usage = `Utilisation :
   apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>]
                 [--concurrency N] [--keep-going] [--skip-proven] [--run <spec-id>]
-                [--reason <texte>] [--allow-dirty] [--repo <chemin>] [--json]
+                [--reason <texte>] [--allow-dirty] [--stacks <pile>,<pile>] [--repo <chemin>] [--json]
   apv gates verify --commit <sha> [--stage full|task] [--base <ref>]
                    [--config <fichier> | --commit-config] [--repo <chemin>] [--json]
   apv gates receipts list [--commit <ref>] [--limit N] [--repo <chemin>] [--json]
@@ -55,7 +56,14 @@ des orphelins de cette copie sur suite.ports (jamais une autre copie ni le check
 délais des contrôles ne commencent qu'après. Un contrôle avec lock attend son verrou (bail apv lock ou
 flock) avant que son délai commence ; un contrôle avec retryFailed qui échoue relance une fois ses tests
 en échec, même commit et même arbre : « réussi après relance » (instable), compté comme réussi et
-signalé à part.
+signalé à part. À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
+annulés, sortie 128 + signal), les processus qu'elle a lancés encore vivants et les orphelins de cette
+copie sur suite.ports sont arrêtés (jamais la session, une autre copie ni le checkout principal).
+--stacks 1,2 (suite complète, deux piles déclarées au moins, section stacks) : les contrôles d'une pile
+(lock égal au verrou d'une pile déclarée) sont répartis sur ces piles, tour à tour dans l'ordre de la
+configuration ; sur la première dans cette copie, sur une autre dans une copie détachée du même commit
+(préparée par batch.setup, retirée à la fin), avec les variables de sa pile et sous son verrou. Un
+contrôle qui a des dépendances, ou dont d'autres dépendent, reste dans cette copie.
 Sortie : 0 si tous les contrôles exécutés passent, 1 sinon (ou suite complète refusée par le
 rythme, l'arbre modifié ou la file), 2 appel incorrect.
 
@@ -200,6 +208,7 @@ export async function run(args, io) {
             stage: { type: 'string' }, commit: { type: 'string' }, 'skip-proven': { type: 'boolean' }, run: { type: 'string' }, reason: { type: 'string' },
             'keep-going': { type: 'boolean' }, 'allow-dirty': { type: 'boolean' }, repo: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
             'commit-config': { type: 'boolean' }, limit: { type: 'string' }, out: { type: 'string' }, 'keep-days': { type: 'string' }, 'keep-runs': { type: 'string' },
+            stacks: { type: 'string' },
         });
         if (values.help) {
             io.stdout(`${usage}\n`);
@@ -217,7 +226,7 @@ export async function run(args, io) {
             throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
         const stage = stageOf(values.stage);
         if (action === 'verify') {
-            const extra = ['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason', 'allow-dirty'].filter(k => values[k] !== undefined);
+            const extra = ['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason', 'allow-dirty', 'stacks'].filter(k => values[k] !== undefined);
             if (extra.length)
                 throw new UsageError(`option de gates run seulement : --${extra.join(', --')}`);
             if (!values.commit)
@@ -252,6 +261,11 @@ export async function run(args, io) {
             throw new UsageError('--commit est une option de gates verify');
         if (values['commit-config'])
             throw new UsageError('--commit-config est une option de gates verify');
+        const spreadOver = values.stacks === undefined ? undefined : list(values.stacks);
+        if (spreadOver !== undefined && (spreadOver.length < 2 || new Set(spreadOver).size !== spreadOver.length))
+            throw new UsageError('--stacks attend au moins deux piles différentes, par exemple --stacks 1,2');
+        if (spreadOver !== undefined && stage === 'task')
+            throw new UsageError('--stacks répartit la suite complète (--stage full)');
         const skipProven = values['skip-proven'] === true;
         if (skipProven && (stage === 'task' || values.only !== undefined))
             throw new UsageError('--skip-proven va avec la suite complète entière (--stage full, sans --only)');
@@ -308,9 +322,38 @@ export async function run(args, io) {
         await cleanTree();
         if (!values.json && rhythm.notes.length)
             io.stdout(`${rhythm.notes.join('\n')}\n`);
-        const result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env,
-            allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}),
-            ...(values.base ? { base: values.base } : {}), ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}) });
+        // SIGINT, SIGTERM, SIGHUP: the checks are cancelled, the end of the suite stops what it started, then the exit.
+        const abort = new AbortController();
+        let received = null;
+        const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => {
+            const handler = () => {
+                if (!received) {
+                    received = signal;
+                    io.stderr(`Signal ${signal} reçu : contrôles annulés ; les processus lancés par la suite sont arrêtés avant la sortie.\n`);
+                }
+                abort.abort();
+            };
+            process.on(signal, handler);
+            return [signal, handler];
+        });
+        let result;
+        try {
+            result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env, signal: abort.signal,
+                allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}),
+                ...(values.base ? { base: values.base } : {}), ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
+                ...(spreadOver ? { stacks: spreadOver } : {}) });
+        }
+        catch (error) {
+            if (received) {
+                io.stderr(`Interrompu (${received}) : ${error instanceof Error ? error.message : String(error)}\n`);
+                return signalExitCode(received);
+            }
+            throw error;
+        }
+        finally {
+            for (const [signal, handler] of handlers)
+                process.off(signal, handler);
+        }
         const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, status: r.status, exitCode: r.exitCode,
             durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic,
             ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}) }));
@@ -320,7 +363,7 @@ export async function run(args, io) {
                 stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
                 reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
                 sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
-                suite: result.suite, queue: result.queue, ports: result.ports, flaky: result.flaky,
+                suite: result.suite, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, interrupted: received,
                 rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
                     level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
         }
@@ -339,6 +382,17 @@ export async function run(args, io) {
                 lines.push(`Orphelins de cette copie arrêtés sur les ports de la suite : ${result.ports.stopped.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}.`);
             if (result.ports?.left.length)
                 lines.push(`Ports de la suite tenus par d'autres processus, non arrêtés : ${result.ports.left.map(p => `pid ${p.pid} (${p.ports.join(', ')}, ${p.reason})`).join(', ')}.`);
+            for (const x of result.stoppedStacks)
+                lines.push(`ATTENTION : pile ${x.stack} arrêtée par apv stacks idle-stop le ${x.since}, pas redémarrée depuis (${x.gates.join(', ')}) : apv stacks start ${x.stack}, puis relancer si ces contrôles échouent.`);
+            if (result.spread)
+                lines.push(`Répartition sur les piles : ${result.spread.map(a => `${a.gate} sur la pile ${a.stack}${a.workspace === result.repo ? '' : ' (copie détachée)'}${a.error ? ` : copie non préparée, ${a.error}` : ''}`).join(', ') || 'aucun contrôle de pile'}.`);
+            const end = result.cleanup;
+            if (end?.stopped.length)
+                lines.push(`Fin de suite : processus lancés par la suite encore vivants, arrêtés : ${end.stopped.map(p => `pid ${p.pid}${p.ports.length ? ` (${p.ports.join(', ')})` : ''}`).join(', ')}.`);
+            if (end?.ports?.stopped.length)
+                lines.push(`Fin de suite : orphelins de cette copie arrêtés sur les ports de la suite : ${end.ports.stopped.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}.`);
+            if (received)
+                lines.push(`Interrompu par ${received} : contrôles annulés.`);
             lines.push('', table(['contrôle', 'statut', 'code', 'durée'], [
                 ...rows.map(r => [name(r), STATUS[r.status] ?? r.status, r.exitCode === null ? '-' : String(r.exitCode), `${(r.durationMs / 1000).toFixed(1)} s`]),
                 ...result.reserved.map(id => [id, RESERVED, '-', '-'])
@@ -364,6 +418,8 @@ export async function run(args, io) {
                 lines.push(`Attention : copie dans le magasin partagé impossible (${cleanLine(result.shared.error, 300)}) ; ces reçus disparaîtront avec ce worktree.`);
             io.stdout(`${lines.join('\n')}\n`);
         }
+        if (received)
+            return signalExitCode(received);
         return result.ok ? EXIT.ok : EXIT.failed;
     });
 }
@@ -381,7 +437,7 @@ async function receipts(args, values, io) {
     if (sub !== 'list' && sub !== 'export' && sub !== 'prune')
         throw new UsageError(sub ? `sous-commande inconnue : gates receipts ${sub}` : 'sous-commande manquante (list, export, prune)');
     const allowed = { list: ['commit', 'limit'], export: ['out'], prune: ['keep-days', 'keep-runs', 'config'] };
-    const foreign = ['only', 'config', 'base', 'concurrency', 'stage', 'commit', 'skip-proven', 'run', 'reason', 'keep-going', 'allow-dirty', 'commit-config', 'limit', 'out', 'keep-days', 'keep-runs']
+    const foreign = ['only', 'config', 'base', 'concurrency', 'stage', 'commit', 'skip-proven', 'run', 'reason', 'keep-going', 'allow-dirty', 'commit-config', 'limit', 'out', 'keep-days', 'keep-runs', 'stacks']
         .filter(k => values[k] !== undefined && !allowed[sub].includes(k));
     if (foreign.length)
         throw new UsageError(`option inattendue pour gates receipts ${sub} : --${foreign.join(', --')}`);
