@@ -15,6 +15,8 @@ import { type ApvConfig } from '../config/load.js';
  * configuration, the tests and test scripts, the database migrations.
  */
 export declare const ALWAYS_REQUIRED: readonly string[];
+/** Folders searched for a literal mention of a dispensed file (with the files the commands of the check name). */
+export declare const MENTION_ROOTS: readonly string[];
 /** A file of a raw diff: its path, its status (`A`, `M`, `D`, `T`...) and its modes before and after. */
 export interface ChangedFile {
     path: string;
@@ -50,6 +52,18 @@ export declare function modeChange(f: ChangedFile): string | null;
  * a change to a script the check runs always requires it. Options, placeholders and paths outside the repository ignored.
  */
 export declare function commandPaths(gate: Gate, repo: string): string[];
+/**
+ * The files among `candidates` whose path or file name appears literally (case ignored) in a file of `pathspecs` at
+ * `head` (`git grep -F`): a file the application or its tests read by name is never without effect. Null when the
+ * search could not be made (then every candidate is required).
+ */
+export declare function mentionedFiles(repo: string, head: string, candidates: readonly string[], pathspecs: readonly string[]): Promise<Set<string> | null>;
+/**
+ * The files among `candidates` that a symbolic link of `head` points to, or lies under (one level, relative targets
+ * inside the repository; a chain of links or an absolute target is not followed). Null beyond `MAX_LINKS` links or
+ * when the tree cannot be read.
+ */
+export declare function linkedFiles(git: Git, repo: string, head: string, candidates: readonly string[]): Promise<Set<string> | null>;
 export interface ScopeInput {
     /** `--base` (any revision); its merge base with `head` must not be `head`. */
     base: string;
@@ -82,4 +96,4 @@ export declare function scopeRecord(d: ScopeDecision): {
     blocking: string[];
 };
 /** The refusal of a full run whose `skipWhenOnly.reference` does not resolve. */
-export declare function scopeReferenceMissing(gateId: string, name: string): string;
+export declare function scopeReferenceMissing(gateId: string, name: string, detail?: string): string;

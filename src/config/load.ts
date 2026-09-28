@@ -270,10 +270,13 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
     for (const [field, globs] of [['paths', scope.paths], ['except', scope.except ?? []]] as const) {
       for (const glob of globs) list.attempt('CONFIG', () => { try { matches('probe', glob); } catch (error) { throw new PipelineError('CONFIG', `Gate ${gate.id}: skipWhenOnly.${field}: ${errorMessage(error)}`); } });
     }
+    // A probe of source or served content left in a glob, unless an `except` takes it out: `**/*.md` needs src/**, static/**,
+    // public/** and content/** in `except`.
+    const excepted = (path: string): boolean => (scope.except ?? []).some(e => { try { return matches(path.toLowerCase(), e.toLowerCase()); } catch { return false; } });
     for (const glob of scope.paths) {
       let covered: string | undefined;
-      try { covered = CODE_PROBES.find(path => matches(path, glob)); } catch { continue; }
-      list.check(!covered, 'CONFIG', `Gate ${gate.id}: skipWhenOnly.paths « ${glob} » covers source code (${covered}): list only files without effect on the check (docs/**, **/*.md...)`);
+      try { covered = CODE_PROBES.find(path => matches(path, glob) && !excepted(path)); } catch { continue; }
+      list.check(!covered, 'CONFIG', `Gate ${gate.id}: skipWhenOnly.paths « ${glob} » covers source code or served content (${covered}): list only files without effect on the check (docs/**...), and take the source, static, public and content folders out through skipWhenOnly.except (src/**, static/**, public/**, content/**)`);
     }
   }
   const ruleIds = value.validationRules.map(r => r.id);
@@ -296,7 +299,8 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
 
 /** Source files of common stacks: a `skipWhenOnly.paths` glob that matches one of them is too broad (refused). */
 const CODE_PROBES = ['src/app.ts', 'src/app.js', 'src/lib/view.svelte', 'src/routes/+page.svelte', 'lib/app.py', 'app/models/user.rb', 'main.go', 'index.ts', 'index.js',
-  'src/main.rs', 'server/index.mjs', 'app/page.tsx', 'pages/index.vue', 'App.java', 'Program.cs'];
+  'src/main.rs', 'server/index.mjs', 'app/page.tsx', 'pages/index.vue', 'App.java', 'Program.cs',
+  'src/routes/+page.md', 'content/x.md', 'static/x.md', 'public/x.md', 'src/content/x.mdx', 'src/lib/x.svx'];
 
 /** Configuration file of a project: `--config` when given, then `.apv/config.json`, then `pipeline.v2.json`. */
 export function configFile(repo: string, explicit?: string): { file: string | null; legacy: boolean } {

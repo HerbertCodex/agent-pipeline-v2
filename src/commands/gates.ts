@@ -10,7 +10,7 @@ import { resolveCommit, gitRoot } from '../run/git-probe.js';
 import { MAX_OVERRIDE_REASON, RUN_ID, applyFullSuiteOverride, readRunState, withRunLock, writeRunState } from '../run/state.js';
 import { cleanLine } from '../run/summary.js';
 import { verifyGates, type EvidenceState, type VerifyResult } from '../gates/verify.js';
-import { referenceMissing, resolveRef } from '../gates/repeat.js';
+import { referenceMissing, resolveReference } from '../gates/repeat.js';
 import { scopeReferenceMissing } from '../gates/proof-scope.js';
 import { Git } from '../execution/git.js';
 import { signalExitCode } from '../lock/run.js';
@@ -311,10 +311,12 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       const git = new Git();
       const root = await git.root(repo);
       for (const g of staged.run.filter(x => x.repeatChanged)) {
-        if (!(await resolveRef(git, root, g.repeatChanged!.reference))) throw new UsageError(referenceMissing(g.id, g.repeatChanged!.reference));
+        const resolved = await resolveReference(git, root, g.repeatChanged!.reference);
+        if (!resolved.sha) throw new UsageError(referenceMissing(g.id, g.repeatChanged!.reference, resolved.reason));
       }
       for (const g of staged.run.filter(x => x.skipWhenOnly)) {
-        if (!(await resolveRef(git, root, g.skipWhenOnly!.reference))) throw new UsageError(scopeReferenceMissing(g.id, g.skipWhenOnly!.reference));
+        const resolved = await resolveReference(git, root, g.skipWhenOnly!.reference);
+        if (!resolved.sha) throw new UsageError(scopeReferenceMissing(g.id, g.skipWhenOnly!.reference, resolved.reason));
       }
     }
     const allowDirty = values['allow-dirty'] === true;

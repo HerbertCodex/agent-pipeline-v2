@@ -5,7 +5,7 @@ import { invariant } from '../domain/errors.js';
 import { Git } from '../execution/git.js';
 import { success } from '../engine/scheduler.js';
 import { RECEIPTS_DIR, gatesConfigHash, stageGates } from './run.js';
-import { mergeBase, planRepeat, resolveRef } from './repeat.js';
+import { mergeBase, planRepeat, resolveReference } from './repeat.js';
 import { planScope } from './proof-scope.js';
 import { manifestCommit, readSharedRun, sharedRunIds, sharedStore } from './store.js';
 /** Tree state and base of a run, from its summary (null when unknown). */
@@ -171,10 +171,10 @@ export async function verifyGates(options) {
         if (full) {
             const name = options.repeatReference ?? settings.reference;
             if (!references.has(name))
-                references.set(name, await resolveRef(git, repo, name));
-            reference = references.get(name);
+                references.set(name, await resolveReference(git, repo, name));
+            reference = references.get(name).sha;
             if (!reference)
-                return { missing: [], reason: `référence ${name} introuvable (repeatChanged.reference) : les tests modifiés depuis la branche où va le changement ne peuvent pas être recomptés` };
+                return { missing: [], reason: `référence ${name} ${references.get(name).reason} (repeatChanged.reference) : les tests modifiés depuis la branche où va le changement ne peuvent pas être recomptés` };
         }
         const expected = await planRepeat(git, repo, { base: r.base, reference }, { ...settings, fixedWaits: settings.fixedWaits === 'refuse' ? 'refuse' : 'off' }, commit);
         const done = new Set(r.files);
@@ -201,8 +201,9 @@ export async function verifyGates(options) {
         if (base === commit || await mergeBase(git, repo, base, commit) === commit)
             return need('base égale au commit ou en aval : aucun changement à comparer');
         const name = options.reference ?? gate.skipWhenOnly.reference;
-        if (!(await resolveRef(git, repo, name)))
-            return need(`référence ${name} introuvable (skipWhenOnly.reference) : la portée ne se recompte pas`);
+        const resolved = await resolveReference(git, repo, name);
+        if (!resolved.sha)
+            return need(`référence ${name} ${resolved.reason} (skipWhenOnly.reference) : la portée ne se recompte pas`);
         const d = (await planScope(git, repo, options.config, { base, head: commit, reference: name, configFile: options.configFile ?? null })).get(gate.id);
         if (!d)
             return need('portée non recalculée');

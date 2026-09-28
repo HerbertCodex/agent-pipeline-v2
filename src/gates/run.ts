@@ -17,7 +17,7 @@ import { publishRun, pruneStore, receiptRetention, sharedStore, type PruneResult
 import { markStacksUsed, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables, type SpreadPlan } from './spread.js';
-import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, resolveRef, tooManyFiles,
+import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, resolveReference, tooManyFiles,
   type RepeatPlan } from './repeat.js';
 import { planScope, scopeRecord, scopeReferenceMissing, type ScopeDecision } from './proof-scope.js';
 import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, flockCommand, freePorts, resolveGateLock, withGateLease,
@@ -236,7 +236,8 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       `--base ${options.base} : HEAD n'en descend pas strictement (base égale à HEAD, ou en aval) ; la portée de ${scoped.map(g => g.id).join(', ')} ne peut pas se compter. Donner la base de la branche (le commit d'où elle part).`);
     for (const g of scoped) {
       const name = options.reference ?? g.skipWhenOnly!.reference;
-      if (!(await resolveRef(git, repo, name))) throw new PipelineError('GATE_BASE', scopeReferenceMissing(g.id, name));
+      const resolved = await resolveReference(git, repo, name);
+      if (!resolved.sha) throw new PipelineError('GATE_BASE', scopeReferenceMissing(g.id, name, resolved.reason));
     }
     const all = await planScope(git, repo, options.config, { base: baseSha!, head: candidateSha, dirty, configFile: options.configFile ?? null,
       ...(options.reference ? { reference: options.reference } : {}) });
@@ -275,8 +276,9 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     let reference: string | null = null;
     if (stage === 'full' && !targeted.has(g.id)) {
       const name = options.repeatReference ?? settings.reference;
-      reference = await resolveRef(git, repo, name);
-      if (!reference) throw new PipelineError('GATE_BASE', referenceMissing(g.id, name));
+      const resolved = await resolveReference(git, repo, name);
+      reference = resolved.sha;
+      if (!reference) throw new PipelineError('GATE_BASE', referenceMissing(g.id, name, resolved.reason));
     }
     const plan = await planRepeat(git, repo, { base: baseSha!, reference }, settings);
     const optionLike = plan.files.find(f => f.startsWith('-'));

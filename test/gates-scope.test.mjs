@@ -16,7 +16,8 @@ import { validateReceipt } from '../dist/domain/contracts.js';
  */
 
 const NON_CODE = ['docs/**', '**/*.md', '.apv/DECISIONS.*', '.apv/specs/**', 'notes/**'];
-const scopeOf = (extra = {}) => ({ paths: NON_CODE.filter(p => p !== 'notes/**'), except: ['src/**'], reference: 'main', ...extra });
+const EXCEPT = ['src/**', 'static/**', 'public/**', 'content/**', 'private/**'];
+const scopeOf = (extra = {}) => ({ paths: NON_CODE.filter(p => p !== 'notes/**'), except: EXCEPT, reference: 'main', ...extra });
 /**
  * A project on main with a fake runner `run.mjs` (each call appends its arguments to `calls`, outside the repository):
  * `lint` (always run) and `browser` (stage full, skipWhenOnly), then a branch `feature` to change.
@@ -87,7 +88,11 @@ test('a source file, a file taken out by except, a test or a script: the check i
   const f = project(t);
   const cases = [
     ['src/math.mjs', 'export const add = (a, b) => a + b;\n', /hors de skipWhenOnly\.paths/],
-    ['src/notes.md', 'notes beside the code\n', /exclu par skipWhenOnly\.except/],
+    ['private/notes.md', 'notes taken out\n', /exclu par skipWhenOnly\.except/],
+    ['src/notes.md', 'notes beside the code\n', /toujours requis/],
+    ['SRC/Notes.MD', 'case\n', /exclu par skipWhenOnly\.except|toujours requis/],
+    ['docs/design/home.html', '<p>maquette</p>\n', /toujours requis/],
+    ['pkg/.gitattributes', '* text\n', /toujours requis/],
     ['tests/e2e/README.md', 'how to run\n', /toujours requis/],
     ['run.mjs', null, /toujours requis/],
     ['package.json', '{"name":"x"}\n', /toujours requis/],
@@ -276,6 +281,114 @@ test('verify recomputes the scope from the commit: a receipt « not required » 
   assert.match(v.json().gates.find(x => x.gateId === 'browser').scope.reason, /docs\/guide\.md : hors de skipWhenOnly\.paths/);
 });
 
+test('a dispensed file the application or its tests read by name, or that a symbolic link points to, is required (H1)', async t => {
+  const f = project(t);
+  // The pilot case: a Markdown file under docs/ read by the application.
+  write(f.repo, 'src/lib/content.mjs', "import { readFileSync } from 'node:fs';\nexport const text = readFileSync('docs/content.md', 'utf8');\n");
+  write(f.repo, 'docs/content.md', 'v1\n');
+  write(f.repo, 'docs/other.md', 'v1\n');
+  write(f.repo, 'test/reads.test.mjs', "const page = 'Other.MD';\n");
+  write(f.repo, 'docs/plain.md', 'v1\n');
+  commit(f.repo, 'content on the branch');
+  git(f.repo, 'switch', '-q', 'main'); git(f.repo, 'merge', '-q', '--ff-only', 'feature'); git(f.repo, 'switch', '-q', '-C', 'feature', 'main');
+  const cases = [
+    ['docs/content.md', 'v2\n', /docs\/content\.md : nommé littéralement/],
+    ['docs/other.md', 'v2\n', /docs\/other\.md : nommé littéralement/],
+  ];
+  for (const [path, text, why] of cases) {
+    git(f.repo, 'switch', '-q', '-C', `m-${path.replace(/\W/g, '')}`, 'main');
+    write(f.repo, path, text);
+    commit(f.repo, path);
+    f.reset();
+    const r = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', 'main', '--json']);
+    assert.equal(r.code, 0, r.stdout + r.stderr);
+    assert.ok(f.calls().includes('browser'), path);
+    assert.match(receipt(r.json().receiptsDirectory, 'browser').scope.reason, why);
+    assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD'])).code, 0);
+  }
+  // Deleted, it is still read: required.
+  git(f.repo, 'switch', '-q', '-C', 'gone', 'main');
+  git(f.repo, 'rm', '-q', 'docs/content.md');
+  commit(f.repo, 'gone');
+  f.reset();
+  assert.match(receipt((await full(f.repo)).json().receiptsDirectory, 'browser').scope.reason, /docs\/content\.md : nommé littéralement/);
+  // Named by a file of the commands of the check (run.mjs).
+  git(f.repo, 'switch', '-q', '-C', 'named', 'main');
+  write(f.repo, 'run.mjs', `${readFileSync(join(f.repo, 'run.mjs'), 'utf8')}// reads docs/plain.md\n`);
+  commit(f.repo, 'runner names plain');
+  git(f.repo, 'switch', '-q', 'main'); git(f.repo, 'merge', '-q', '--ff-only', 'named'); git(f.repo, 'switch', '-q', '-C', 'named2', 'main');
+  write(f.repo, 'docs/plain.md', 'v2\n');
+  commit(f.repo, 'plain');
+  assert.match(receipt((await full(f.repo)).json().receiptsDirectory, 'browser').scope.reason, /docs\/plain\.md : nommé littéralement/);
+  // An existing symbolic link that points to the dispensed file (or its folder).
+  git(f.repo, 'switch', '-q', 'main');
+  mkdirSync(join(f.repo, 'site'), { recursive: true });
+  symlinkSync('../docs/notes', join(f.repo, 'site/notes'));
+  write(f.repo, 'docs/notes/a.md', 'v1\n');
+  commit(f.repo, 'link to a folder');
+  git(f.repo, 'switch', '-q', '-C', 'linked', 'main');
+  write(f.repo, 'docs/notes/a.md', 'v2\n');
+  commit(f.repo, 'linked change');
+  assert.match(receipt((await full(f.repo)).json().receiptsDirectory, 'browser').scope.reason, /docs\/notes\/a\.md : cible d'un lien symbolique du dépôt/);
+  // Unmentioned, unlinked: still dispensed.
+  git(f.repo, 'switch', '-q', '-C', 'free', 'main');
+  write(f.repo, 'docs/free.md', 'free\n');
+  commit(f.repo, 'free');
+  assert.equal(receipt((await full(f.repo)).json().receiptsDirectory, 'browser').status, 'not_required');
+});
+
+test('a reference is resolved by its full ref: a local branch or a tag that shadows the remote-tracking one is refused as ambiguous (M1), for skipWhenOnly and repeatChanged', async t => {
+  const f = project(t, [{ id: 'browser', stage: 'full', command: [process.execPath, 'run.mjs', 'browser'], skipWhenOnly: scopeOf({ reference: 'origin/main' }),
+    repeatChanged: { paths: ['tests/**/*.e2e.ts'], command: [process.execPath, 'run.mjs', 'repeat', '{{repeat}}'], reference: 'origin/main' } }]);
+  git(f.repo, 'update-ref', 'refs/remotes/origin/main', f.main);
+  write(f.repo, 'docs/guide.md', 'x\n');
+  commit(f.repo, 'docs');
+  const ok = await full(f.repo);
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr);
+  assert.equal(receipt(ok.json().receiptsDirectory, 'browser').status, 'not_required');
+  assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD'])).code, 0);
+  // A local branch named origin/main that already holds the change would hide the real one: refused.
+  git(f.repo, 'branch', 'origin/main', 'HEAD');
+  const r = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', 'main']);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /référence origin\/main ambiguë \(refs\/heads\/origin\/main, refs\/remotes\/origin\/main existent/);
+  const v = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--json']);
+  assert.equal(v.code, 1);
+  assert.match(JSON.stringify(v.json().gates[0]), /ambiguë/);
+  git(f.repo, 'branch', '-D', 'origin/main');
+  git(f.repo, 'tag', 'origin/main', 'HEAD');
+  assert.equal((await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', 'main'])).code, 2);
+  const { resolveReference } = await import('../dist/gates/repeat.js');
+  const { Git } = await import('../dist/execution/git.js');
+  assert.match((await resolveReference(new Git(), f.repo, 'origin/main')).reason, /ambiguë \(refs\/remotes\/origin\/main, refs\/tags\/origin\/main/);
+  assert.equal((await resolveReference(new Git(), f.repo, 'refs/remotes/origin/main')).sha, f.main);
+  assert.equal((await resolveReference(new Git(), f.repo, 'nowhere')).reason, 'introuvable');
+});
+
+test('repeatChanged and skipWhenOnly together (B4): documentation only, nothing runs nor repeats; a changed test runs and repeats', async t => {
+  const f = project(t, [{ id: 'browser', stage: 'full', command: [process.execPath, 'run.mjs', 'browser'], skipWhenOnly: scopeOf(),
+    repeatChanged: { paths: ['tests/**/*.e2e.ts'], command: [process.execPath, 'run.mjs', 'repeat', '{{repeat}}'], reference: 'main' } }]);
+  write(f.repo, 'docs/guide.md', 'x\n');
+  commit(f.repo, 'docs');
+  let r = await full(f.repo);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.deepEqual(f.calls(), []);
+  let rec = receipt(r.json().receiptsDirectory, 'browser');
+  assert.equal(rec.status, 'not_required');
+  assert.equal(rec.repeat, undefined);
+  assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD'])).code, 0);
+  write(f.repo, 'tests/e2e/a.e2e.ts', 'test("a")\n');
+  commit(f.repo, 'a test');
+  r = await full(f.repo);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.deepEqual(f.calls(), ['browser', 'repeat']);
+  rec = receipt(r.json().receiptsDirectory, 'browser');
+  assert.equal(rec.status, 'passed');
+  assert.equal(rec.scope.required, true);
+  assert.deepEqual(rec.repeat.files, ['tests/e2e/a.e2e.ts']);
+  assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD'])).code, 0);
+});
+
 test('a required check makes its dependencies required: a check never runs without what it depends on', async t => {
   const f = project(t, [
     { id: 'build', stage: 'full', command: [process.execPath, 'run.mjs', 'build'], skipWhenOnly: scopeOf() },
@@ -297,12 +410,16 @@ test('configuration: skipWhenOnly validated (portable globs, never a glob that c
   const scoped = { gates: [{ id: 'browser', command: ['x'], skipWhenOnly: scopeOf() }] };
   assert.equal(configIssues(scoped).issues.length, 0);
   assert.notEqual(gatesConfigHash(configIssues(base).config), gatesConfigHash(configIssues(scoped).config));
-  for (const [paths, message] of [[['**'], /covers source code \(src\/app\.ts\)/], [['**/*'], /covers source code/], [['src/**'], /covers source code/],
+  for (const [paths, message] of [[['**'], /covers source code or served content \(src\/app\.ts\)/], [['**/*.md'], /covers source code or served content \(src\/routes\/\+page\.md\)/], [['**/*'], /covers source code/], [['src/**'], /covers source code/],
     [['docs/{a,b}/**'], /Unsupported glob/]]) {
     const issues = configIssues({ gates: [{ id: 'browser', command: ['x'], skipWhenOnly: { paths, reference: 'main' } }] }).issues;
     assert.ok(issues.some(i => message.test(i.message)), `${paths}: ${issues.map(i => i.message).join(' | ')}`);
   }
   assert.ok(configIssues({ gates: [{ id: 'b', command: ['x'], skipWhenOnly: { paths: ['docs/**'] } }] }).issues.length > 0, 'reference required');
+  // **/*.md with src/** only: static, public and content still covered.
+  const partial = configIssues({ gates: [{ id: 'b', command: ['x'], skipWhenOnly: { paths: ['**/*.md'], except: ['src/**'], reference: 'main' } }] }).issues;
+  assert.ok(partial.some(i => /content\/x\.md/.test(i.message)), partial.map(i => i.message).join(' | '));
+  assert.equal(configIssues({ gates: [{ id: 'b', command: ['x'], skipWhenOnly: { paths: ['**/*.md'], except: ['SRC/**', 'static/**', 'public/**', 'content/**'], reference: 'main' } }] }).issues.length, 0);
 });
 
 test('helpers: raw diff, changes of mode and type, paths named by the commands, the always required list', () => {

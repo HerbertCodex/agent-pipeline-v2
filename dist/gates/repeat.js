@@ -5,8 +5,8 @@ import { matches } from '../policy/policy.js';
 /** Placeholder of the number of repetitions, replaced anywhere in an argument (`--repeat-each={{repeat}}`). */
 export const REPEAT_PLACEHOLDER = '{{repeat}}';
 /** The refusal of a full run whose reference does not resolve: the changes would be counted from `--base` alone. */
-export function referenceMissing(gateId, name) {
-    return `${gateId} : référence ${name} introuvable (repeatChanged.reference) : une suite complète compte les tests modifiés depuis la branche où va le changement, ` +
+export function referenceMissing(gateId, name, detail = 'introuvable') {
+    return `${gateId} : référence ${name} ${detail} (repeatChanged.reference) : une suite complète compte les tests modifiés depuis la branche où va le changement, ` +
         `jamais depuis --base seule. Récupérer la référence (git fetch) ou corriger repeatChanged.reference dans .apv/config.json (par exemple "origin/main").`;
 }
 /** Most fixed waits listed for one check. */
@@ -89,6 +89,33 @@ export async function resolveRef(git, repo, ref) {
     catch {
         return null;
     }
+}
+/**
+ * The commit a configured reference names (`repeatChanged.reference`, `skipWhenOnly.reference`), by its full ref only:
+ * `refs/remotes/<name>`, `refs/heads/<name>`, `refs/tags/<name>` and `refs/<name>` are listed (`git for-each-ref`), and
+ * the name is refused when none or more than one exist (a local branch or a tag `origin/main` never hides the
+ * remote-tracking one: both exist, the name is ambiguous). A full ref (`refs/...`) or a full commit id is taken as is.
+ */
+export async function resolveReference(git, repo, name) {
+    if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(name)) {
+        const sha = await resolveRef(git, repo, name);
+        return { sha, ref: null, reason: sha ? '' : 'introuvable' };
+    }
+    const candidates = name.startsWith('refs/') ? [name] : [`refs/remotes/${name}`, `refs/heads/${name}`, `refs/tags/${name}`, `refs/${name}`];
+    let listed;
+    try {
+        listed = (await git.exec(repo, ['for-each-ref', '--format=%(refname)', ...candidates])).split('\n').map(l => l.trim()).filter(Boolean);
+    }
+    catch {
+        return { sha: null, ref: null, reason: 'illisible (git for-each-ref)' };
+    }
+    const found = [...new Set(listed.filter(r => candidates.includes(r)))];
+    if (!found.length)
+        return { sha: null, ref: null, reason: 'introuvable' };
+    if (found.length > 1)
+        return { sha: null, ref: null, reason: `ambiguë (${found.join(', ')} existent : donner la référence complète, par exemple refs/remotes/${name})` };
+    const sha = await resolveRef(git, repo, found[0]);
+    return { sha, ref: found[0], reason: sha ? '' : 'introuvable' };
 }
 /** The merge base of `a` and `b`; `a` itself without a common ancestor (unrelated histories: everything counts). */
 export async function mergeBase(git, repo, a, b) {

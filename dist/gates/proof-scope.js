@@ -1,8 +1,11 @@
-import { isAbsolute, relative } from 'node:path';
+import { isAbsolute, posix, relative } from 'node:path';
 import { DEFAULT_GENERATED_PATHS, MAX_SCOPE_FILES } from '../domain/contracts.js';
 import { matches, validRelativePath } from '../policy/policy.js';
 import { CONFIG_FILE, LEGACY_CONFIG_FILE, loadConfigAtCommit } from '../config/load.js';
 import { errorMessage } from '../domain/errors.js';
+import { designDir } from '../design/config.js';
+import { environment, runProcess } from '../execution/process.js';
+import { resolveReference } from './repeat.js';
 /**
  * Scope of the proof of a check (`skipWhenOnly`, docs/APV3-SPEC.md, section 21): a change that only touches files with
  * no effect on what the check proves (documentation, decisions, specs) does not pay its full run. The check is « not
@@ -23,12 +26,19 @@ export const ALWAYS_REQUIRED = [
     '**/go.mod', '**/go.work', '**/Gemfile', '**/*.gemspec', '**/composer.json', '**/pom.xml', '**/build.gradle*', '**/settings.gradle*', '**/*.csproj',
     '**/pubspec.yaml', '**/mix.exs', '**/flake.nix', '**/deno.json', '**/deno.jsonc', '**/bunfig.toml',
     '.github/**', '.gitlab-ci.yml', '.gitlab/**', '.circleci/**', '.buildkite/**', '.woodpecker/**', '.woodpecker.yml', '.drone.yml', '.travis.yml',
-    'azure-pipelines*.yml', 'bitbucket-pipelines.yml', '**/Jenkinsfile', '.gitattributes', '.gitmodules', '.husky/**',
+    'azure-pipelines*.yml', 'bitbucket-pipelines.yml', '**/Jenkinsfile', '**/.gitattributes', '.gitmodules', '.husky/**',
     '**/*.config.*', '**/tsconfig*.json', '**/jsconfig*.json', '**/.babelrc*', '**/.env*', '**/Dockerfile*', '**/docker-compose*', '**/compose.yml',
     '**/compose.yaml', '**/Makefile', '**/*.mk', '**/justfile', '**/Taskfile.yml', '**/Taskfile.yaml', 'vercel.json', 'netlify.toml',
     'scripts/**', '**/*.sh', 'test/**', 'tests/**', 'e2e/**', '**/__tests__/**', '**/*.test.*', '**/*.spec.*', '**/*.e2e.*',
     '**/migrations/**', '**/*.sql',
+    // Content the application compiles or serves: Markdown, MDX and mdsvex under the source, static, public and content folders.
+    ...['src', 'static', 'public', 'content'].flatMap(dir => ['md', 'mdx', 'svx'].flatMap(ext => [`${dir}/**/*.${ext}`, `**/${dir}/**/*.${ext}`])),
 ];
+/** Folders searched for a literal mention of a dispensed file (with the files the commands of the check name). */
+export const MENTION_ROOTS = ['src', 'tests', 'test', 'scripts', 'e2e'];
+/** Most needles of one literal search, and most symbolic links read; beyond, the check is required. */
+const MAX_NEEDLES = 1000;
+const MAX_LINKS = 500;
 /** Parses `git diff --raw -z --no-renames`: `:<old mode> <new mode> <old> <new> <status>\0<path>\0`. */
 export function parseRawDiff(out) {
     const parts = out.split('\0');
@@ -89,6 +99,83 @@ const safeMatch = (path, glob) => { try {
 catch {
     return false;
 } };
+/** Case-insensitive: a file that must require the check still does on a case-insensitive file system (`Package.json`, `SRC/`). */
+const ciMatch = (path, glob) => safeMatch(path.toLowerCase(), glob.toLowerCase());
+/**
+ * The files among `candidates` whose path or file name appears literally (case ignored) in a file of `pathspecs` at
+ * `head` (`git grep -F`): a file the application or its tests read by name is never without effect. Null when the
+ * search could not be made (then every candidate is required).
+ */
+export async function mentionedFiles(repo, head, candidates, pathspecs) {
+    const byNeedle = new Map();
+    for (const file of candidates) {
+        for (const needle of new Set([file, posix.basename(file)])) {
+            if (!needle || /[\n\r\0]/.test(needle))
+                return null;
+            const key = needle.toLowerCase();
+            byNeedle.set(key, [...(byNeedle.get(key) ?? []), file]);
+        }
+    }
+    if (!byNeedle.size)
+        return new Set();
+    if (byNeedle.size > MAX_NEEDLES)
+        return null;
+    const specs = [...new Set(pathspecs)].filter(p => p && !p.includes('*') && !p.includes('?')).map(p => `:(literal)${p}`);
+    const r = await runProcess({ command: ['git', '-c', 'core.quotePath=false', 'grep', '-F', '-i', '-o', '-h', '-I', '--no-color', '--no-textconv', '-f', '-', head, '--', ...specs],
+        cwd: repo, env: { ...environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']), GIT_TERMINAL_PROMPT: '0' }, timeoutMs: 60000,
+        input: `${[...byNeedle.keys()].join('\n')}\n`, maxOutputBytes: 4 * 1024 * 1024 });
+    if (r.truncated || (r.exitCode !== 0 && r.exitCode !== 1) || (r.status !== 'passed' && r.exitCode !== 1))
+        return null;
+    const found = new Set();
+    for (const line of r.stdout.split('\n')) {
+        const files = byNeedle.get(line.trim().toLowerCase());
+        if (files)
+            for (const f of files)
+                found.add(f);
+    }
+    return found;
+}
+/**
+ * The files among `candidates` that a symbolic link of `head` points to, or lies under (one level, relative targets
+ * inside the repository; a chain of links or an absolute target is not followed). Null beyond `MAX_LINKS` links or
+ * when the tree cannot be read.
+ */
+export async function linkedFiles(git, repo, head, candidates) {
+    let tree;
+    try {
+        tree = await git.exec(repo, ['ls-tree', '-r', '-z', '--full-tree', head]);
+    }
+    catch {
+        return null;
+    }
+    const links = tree.split('\0').filter(e => e.startsWith('120000 ')).map(e => ({ oid: e.split(' ')[2].split('\t')[0], path: e.slice(e.indexOf('\t') + 1) }));
+    if (!links.length)
+        return new Set();
+    if (links.length > MAX_LINKS)
+        return null;
+    const r = await runProcess({ command: ['git', 'cat-file', '--batch'], cwd: repo, env: environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']),
+        timeoutMs: 60000, input: `${links.map(l => l.oid).join('\n')}\n`, maxOutputBytes: 4 * 1024 * 1024 });
+    if (r.status !== 'passed' || r.truncated)
+        return null;
+    const targets = [];
+    let rest = Buffer.from(r.stdout, 'utf8');
+    for (const link of links) {
+        const nl = rest.indexOf(10);
+        const header = rest.subarray(0, nl).toString('utf8').split(' ');
+        const size = Number(header[2]);
+        if (header[1] !== 'blob' || !Number.isInteger(size))
+            return null;
+        const target = rest.subarray(nl + 1, nl + 1 + size).toString('utf8');
+        rest = rest.subarray(nl + 1 + size + 1);
+        if (posix.isAbsolute(target))
+            continue;
+        const resolved = posix.normalize(posix.join(posix.dirname(link.path), target)).replace(/\/+$/, '');
+        if (resolved === '.' || resolved.startsWith('../') || resolved === '..')
+            continue;
+        targets.push(resolved.toLowerCase());
+    }
+    return new Set(candidates.filter(file => { const f = file.toLowerCase(); return targets.some(t => f === t || f.startsWith(`${t}/`)); }));
+}
 async function mergeBaseOf(git, repo, a, b) {
     try {
         return (await git.exec(repo, ['merge-base', a, b])).trim() || null;
@@ -97,7 +184,7 @@ async function mergeBaseOf(git, repo, a, b) {
         return null;
     }
 }
-async function resolve(git, repo, ref) {
+async function resolveCommit(git, repo, ref) {
     try {
         return (await git.exec(repo, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`])).trim() || null;
     }
@@ -116,7 +203,7 @@ export async function planScope(git, repo, config, input) {
     const scoped = config.gates.filter(g => g.skipWhenOnly);
     if (!scoped.length)
         return decisions;
-    const head = await resolve(git, repo, input.head);
+    const head = await resolveCommit(git, repo, input.head);
     const baseMb = head ? await mergeBaseOf(git, repo, input.base, head) : null;
     const refs = new Map();
     const diffs = new Map();
@@ -151,7 +238,7 @@ export async function planScope(git, repo, config, input) {
             continue;
         }
         if (!refs.has(referenceName)) {
-            const sha = await resolve(git, repo, referenceName);
+            const { sha, reason } = await resolveReference(git, repo, referenceName);
             let config = null;
             let error = null;
             if (sha) {
@@ -162,11 +249,11 @@ export async function planScope(git, repo, config, input) {
                     error = errorMessage(e);
                 }
             }
-            refs.set(referenceName, { sha, mb: sha ? await mergeBaseOf(git, repo, sha, head) : null, config, error });
+            refs.set(referenceName, { sha, reason, mb: sha ? await mergeBaseOf(git, repo, sha, head) : null, config, error });
         }
         const ref = refs.get(referenceName);
         if (!ref.sha) {
-            decide(true, `référence ${referenceName} introuvable (skipWhenOnly.reference)`);
+            decide(true, `référence ${referenceName} ${ref.reason} (skipWhenOnly.reference)`);
             continue;
         }
         const at = { referenceSha: ref.sha, reference: ref.mb };
@@ -200,17 +287,24 @@ export async function planScope(git, repo, config, input) {
                     byPath.set(f.path, f);
         const files = [...byPath.keys()].sort();
         const targetGate = ref.config.gates.find(g => g.id === gate.id);
-        const inputs = [...new Set([...ALWAYS_REQUIRED, ...(configPath ? [configPath] : []),
-                ...[gate, targetGate].flatMap(g => [...g.testPaths, ...(g.repeatChanged?.paths ?? []), ...commandPaths(g, repo)])])];
+        const design = [config, ref.config].map(c => { try {
+            return designDir(c.design);
+        }
+        catch {
+            return 'docs/design';
+        } });
+        const named = [gate, targetGate].flatMap(g => commandPaths(g, repo));
+        const inputs = [...new Set([...ALWAYS_REQUIRED, ...(configPath ? [configPath] : []), ...design.map(d => `${d}/**`),
+                ...[gate, targetGate].flatMap(g => [...g.testPaths, ...(g.repeatChanged?.paths ?? [])]), ...named])];
         const blocking = [];
         let first = '';
         for (const path of files) {
             const f = byPath.get(path);
             const why = !validRelativePath(path) ? 'chemin invalide'
                 : modeChange(f) ? `${modeChange(f)} (lien symbolique, sous-module ou exécutable : toujours requis)`
-                    : inputs.some(g => safeMatch(path, g)) ? 'toujours requis (configuration, dépendances, CI, build, tests, scripts ou migrations)'
+                    : inputs.some(g => ciMatch(path, g)) ? 'toujours requis (configuration, dépendances, CI, build, maquettes, tests, scripts, migrations ou contenu de l\'application)'
                         : !target.paths.some(g => safeMatch(path, g)) ? 'hors de skipWhenOnly.paths'
-                            : (target.except ?? []).some(g => safeMatch(path, g)) ? 'exclu par skipWhenOnly.except'
+                            : (target.except ?? []).some(g => ciMatch(path, g)) ? 'exclu par skipWhenOnly.except'
                                 : null;
             if (!why)
                 continue;
@@ -218,6 +312,29 @@ export async function planScope(git, repo, config, input) {
                 blocking.push(path);
             if (!first)
                 first = `${path} : ${why}`;
+        }
+        // A file the application or its tests read by name, or that a symbolic link points to, is never without effect.
+        const rest = blocking.length ? [] : files;
+        if (rest.length) {
+            const pathspecs = [...MENTION_ROOTS, ...named.filter(p => !p.endsWith('/**'))];
+            const mentioned = await mentionedFiles(repo, head, rest, pathspecs);
+            const linked = await linkedFiles(git, repo, head, rest);
+            if (!mentioned || !linked) {
+                blocking.push(...rest.slice(0, 50));
+                first = `${rest[0]} : recherche des mentions ou des liens symboliques impossible ou trop grande, toujours requis`;
+            }
+            else {
+                for (const path of rest) {
+                    const why = mentioned.has(path) ? `nommé littéralement dans ${MENTION_ROOTS.join('/, ')}/ ou un fichier des commandes du contrôle (lu par l'application ou les tests : à mettre dans except)`
+                        : linked.has(path) ? 'cible d\'un lien symbolique du dépôt' : null;
+                    if (!why)
+                        continue;
+                    if (blocking.length < 50)
+                        blocking.push(path);
+                    if (!first)
+                        first = `${path} : ${why}`;
+                }
+            }
         }
         const since = `depuis ${baseMb.slice(0, 12)} (--base) et ${ref.mb.slice(0, 12)} (${referenceName})`;
         const common = { ...at, files: files.slice(0, MAX_SCOPE_FILES), fileCount: files.length, blocking };
@@ -260,8 +377,8 @@ export function scopeRecord(d) {
         fileCount: d.fileCount, files: d.files.slice(0, MAX_SCOPE_FILES), blocking: d.blocking };
 }
 /** The refusal of a full run whose `skipWhenOnly.reference` does not resolve. */
-export function scopeReferenceMissing(gateId, name) {
-    return `${gateId} : référence ${name} introuvable (skipWhenOnly.reference) : la portée d'une suite complète se compte depuis la branche où va le changement, ` +
+export function scopeReferenceMissing(gateId, name, detail = 'introuvable') {
+    return `${gateId} : référence ${name} ${detail} (skipWhenOnly.reference) : la portée d'une suite complète se compte depuis la branche où va le changement, ` +
         `jamais depuis --base seule, et ses chemins se lisent à cette référence. Récupérer la référence (git fetch) ou corriger skipWhenOnly.reference dans .apv/config.json (par exemple "origin/main").`;
 }
 //# sourceMappingURL=proof-scope.js.map
