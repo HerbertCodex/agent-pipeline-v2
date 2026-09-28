@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -10,8 +10,8 @@ import { describeHolder, waitReporter } from '../lock/run.js';
 import { LockStore, defaultLockDir, type LockRecord } from '../lock/store.js';
 import type { Git } from '../execution/git.js';
 import {
-  assertProcSupported, listProcesses, repositoryWorktrees, sessionPids, stopProcesses, stopRefusal,
-  type StopOutcome, type StopRefusal,
+  assertProcSupported, listProcesses, protectedTool, repositoryWorktrees, sessionPids, stopProcesses, stopRefusal,
+  type ProcessInfo, type StopOutcome, type StopRefusal,
 } from '../execution/procs.js';
 
 /**
@@ -223,4 +223,54 @@ export const FLOCK_TIMEOUT_EXIT = 75;
 export function flockCommand(file: string, waitMs: number, command: readonly string[]): string[] {
   mkdirSync(join(file, '..'), { recursive: true });
   return ['flock', '-w', String(waitMs / 1000), '-E', String(FLOCK_TIMEOUT_EXIT), file, 'sh', '-c', 'printf 1 >&3 && exec 3>&- "$@"', 'apv-lock', ...command];
+}
+
+/** Variable that marks every command of a full suite: its processes, and those they start, are found by it at the end. */
+export const SUITE_MARKER = 'APV_SUITE_RUN';
+
+/** Processes of this user whose environment carries `<SUITE_MARKER>=<runId>` (read in `/proc/<pid>/environ`). */
+export function markedProcesses(runId: string, processes: readonly ProcessInfo[], root = '/proc'): ProcessInfo[] {
+  const needle = `${SUITE_MARKER}=${runId}`;
+  return processes.filter(p => {
+    if (p.zombie) return false;
+    try { return readFileSync(join(root, String(p.pid), 'environ'), 'latin1').split('\0').includes(needle); }
+    catch { return false; }
+  });
+}
+
+export interface CleanupRecord {
+  /** Processes started by the suite (its marker) still alive at its end, stopped. */
+  stopped: (PortProcess & { outcome: StopOutcome })[];
+  /** Marked processes left running: the session (never stopped). */
+  left: (PortProcess & { reason: StopRefusal })[];
+  /** Orphans of this copy on `suite.ports`, after the suite. */
+  ports: PortsRecord | null;
+  unsupported: string | null;
+}
+
+/**
+ * The end of a full suite, whatever its outcome (docs/APV3-SPEC.md, section 18.4): the processes it started that are
+ * still alive (a server that left the process group of its check) are stopped as `apv procs stop` does, then the
+ * orphans of this copy on `suite.ports`. Never the session, a protected tool, another copy or the main checkout.
+ */
+export async function cleanupSuite(repo: string, runId: string, ports: readonly number[], options: { graceMs?: number; log: (line: string) => void }): Promise<CleanupRecord> {
+  const record: CleanupRecord = { stopped: [], left: [], ports: null, unsupported: null };
+  try { assertProcSupported(); }
+  catch (error) { record.unsupported = errorMessage(error); options.log(`Fin de suite : processus non vérifiés (${record.unsupported}).`); return record; }
+  const all = listProcesses();
+  const session = sessionPids(all);
+  const marked = markedProcesses(runId, all);
+  const stoppable: ProcessInfo[] = [];
+  for (const info of marked) {
+    const entry = { pid: info.pid, ports: info.ports, command: info.command.slice(0, 300), worktree: null };
+    if (session.has(info.pid) || protectedTool(info) !== null) record.left.push({ ...entry, reason: session.has(info.pid) ? 'protected' : 'tool' });
+    else stoppable.push(info);
+  }
+  if (stoppable.length) {
+    const outcomes = await stopProcesses(stoppable, { graceMs: options.graceMs ?? 5000 });
+    for (const info of stoppable) record.stopped.push({ pid: info.pid, ports: info.ports, command: info.command.slice(0, 300), worktree: null, outcome: outcomes.get(info.pid) ?? 'gone' });
+  }
+  for (const p of record.stopped) options.log(`Fin de suite : processus lancé par la suite encore vivant, arrêté (pid ${p.pid}, ${p.outcome}${p.ports.length ? `, ports ${p.ports.join(', ')}` : ''}) : ${p.command.slice(0, 120)}`);
+  if (ports.length) record.ports = await freePorts(repo, ports, { log: line => options.log(`Fin de suite : ${line}`), ...(options.graceMs !== undefined ? { graceMs: options.graceMs } : {}) });
+  return record;
 }

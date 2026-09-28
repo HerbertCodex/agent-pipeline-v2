@@ -9,12 +9,14 @@ import { checkSpec, readSpecDocument } from '../spec/check.js';
 import { gitProbe, gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
 import { CONFIDENCE_LEVELS, CONFIDENCE_STEPS, REVIEWS, RUN_ID, STATUSES, STATUS_LABEL, STEPS, STEP_LABEL, applyPause, applyResume, applySet, computeNext, createRunState, describeEvent, integrationCheck, parseTarget, readRunState, runStateFile, splitWave, summarize, summaryLine, withRunLock, writeRunState, } from '../run/state.js';
 import { cleanLine, readRunSummaries, runSummaryLine, unreadRunsLine } from '../run/summary.js';
+import { commitRunState } from '../run/commit-state.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 export const usage = `Utilisation :
   apv run start <spec> [--base <branche>] [--repo <chemin>] [--json]
   apv run set <spec-id> <cible> <statut> [--branch b] [--worktree w] [--agent id] [--commit ref]
               [--base ref] [--findings n] [--confidence prouve|probable|suppose] [--note texte]
-              [--force-unintegrated] [--repo <chemin>] [--json]
+              [--force-unintegrated] [--no-commit-state] [--repo <chemin>] [--json]
+  apv run save <spec-id> [--repo <chemin>] [--json]
   apv run next <spec-id> [--repo <chemin>] [--json]
   apv run status [<spec-id>] [--repo <chemin>] [--json]
   apv run pause <spec-id> --until <HH:MM | date ISO> [--note texte] [--repo <chemin>] [--json]
@@ -40,6 +42,10 @@ set     <cible> : ${STEPS.join(', ')},
         --findings : nombre de constats d'une revue. --confidence : niveau de confiance du
         travail terminé (avec done, une tâche ou fixes), gardé dans l'état, retiré s'il est
         rouvert. Rouvrir un travail fait, ou remplacer son commit, exige --note.
+        delivery running commite ensuite l'état (.apv/state/run-<id>.json et resume.md, rien
+        d'autre, même indexé) si le checkout de l'état est sur la branche de l'exécution (apv/<id>
+        ou apv/<id>-…) : la suite de livraison part d'un arbre propre ; --no-commit-state l'évite.
+save    même commit de l'état, à n'importe quel point de sauvegarde.
 next    ce qu'il faut faire maintenant : étape courante, tâches prêtes (dépendances faites et
         intégrées, à lancer dès maintenant, quelle que soit leur vague), en attente d'intégration,
         à reprendre ou à relancer (worktree absent, aucun commit après la base), revues à lancer,
@@ -57,7 +63,7 @@ Sortie : 0 succès, 1 refus (spec invalide, état existant ou absent, transition
 const options = {
     repo: { type: 'string' }, base: { type: 'string' }, branch: { type: 'string' }, worktree: { type: 'string' }, agent: { type: 'string' },
     commit: { type: 'string' }, note: { type: 'string' }, findings: { type: 'string' }, confidence: { type: 'string' }, 'force-unintegrated': { type: 'boolean' },
-    until: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+    until: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, 'no-commit-state': { type: 'boolean' },
 };
 const posix = (path) => path.split(sep).join('/');
 function specIdArg(value) {
@@ -224,8 +230,14 @@ async function set(repo, positionals, values, io) {
         return applied;
     });
     const name = targetText;
+    // At the delivery, the state is committed: the full suite of the delivery then starts from a clean tree.
+    let saved = null;
+    if (target.kind === 'step' && target.name === 'delivery' && status === 'running' && values['no-commit-state'] !== true) {
+        saved = commitRunState(repo, specId, readRunState(file, { specId }).branch, 'livraison');
+    }
+    // The transition is recorded whatever happens to the commit: a refused commit is said, never an error of the transition.
     if (values['json']) {
-        json(io, { specId, target: name, from: result.from, to: status, event: result.event, resolved });
+        json(io, { specId, target: name, from: result.from, to: status, event: result.event, resolved, ...(saved ? { stateCommit: saved } : {}) });
         return EXIT.ok;
     }
     const forced = result.event.unintegrated ? ` ; démarrée sans l'intégration de ${result.event.unintegrated.join(', ')} (--force-unintegrated, journalisé)` : '';
@@ -237,7 +249,30 @@ async function set(repo, positionals, values, io) {
     };
     const commits = [...shown('commit'), ...shown('base')];
     io.stdout(`${specId} ${name} : ${STATUS_LABEL[result.from]} -> ${STATUS_LABEL[status]}${commits.length ? ` ; ${commits.join(' ; ')}` : ''}${level}${forced}\n`);
+    if (saved)
+        io.stdout(`${saveLine(saved)}\n`);
     return EXIT.ok;
+}
+/** The line that reports the commit of the state, with what to do when it was not made. */
+function saveLine(saved) {
+    if (saved.refused)
+        return `ATTENTION : ${saved.note}. La suite complète refusera l'arbre modifié tant que l'état n'est pas commité.`;
+    return saved.sha ? `${saved.note} ; la suite complète de livraison tourne sur cette tête (apv gates run --stage full --skip-proven, puis apv gates verify --commit ${saved.sha.slice(0, 12)}).` : `${saved.note}.`;
+}
+/** `apv run save <id>`: the commit of the state at any save point. */
+function save(repo, positionals, asJson, io) {
+    const [id, ...rest] = positionals;
+    const specId = specIdArg(id);
+    if (rest.length)
+        throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
+    const file = runStateFile(repo, specId);
+    const state = readRunState(file, { shown: posix(relative(repo, file)), specId });
+    const saved = commitRunState(repo, specId, state.branch, 'sauvegarde');
+    if (asJson)
+        json(io, { specId, stateCommit: saved });
+    else
+        io.stdout(`${saveLine(saved)}\n`);
+    return saved.refused ? EXIT.failed : EXIT.ok;
 }
 /**
  * The branch of a task to suggest when its commit is not found: `--branch` of the call, else the one the state
@@ -425,10 +460,10 @@ export async function run(args, io) {
         }
         const [action, ...rest] = positionals;
         if (!action)
-            throw new UsageError('sous-commande manquante (start, set, next, status, pause, resume)');
-        if (!['start', 'set', 'next', 'status', 'pause', 'resume'].includes(action))
+            throw new UsageError('sous-commande manquante (start, set, next, status, pause, resume, save)');
+        if (!['start', 'set', 'next', 'status', 'pause', 'resume', 'save'].includes(action))
             throw new UsageError(`sous-commande inconnue : run ${action}`);
-        const setOnly = ['branch', 'worktree', 'agent', 'commit', 'note', 'findings', 'confidence', 'force-unintegrated'];
+        const setOnly = ['branch', 'worktree', 'agent', 'commit', 'note', 'findings', 'confidence', 'force-unintegrated', 'no-commit-state'];
         const forbidden = action === 'set' ? ['until'] : action === 'start' ? [...setOnly, 'until']
             : action === 'pause' ? ['base', ...setOnly.filter(o => o !== 'note')] : action === 'resume' ? ['base', 'until', ...setOnly.filter(o => o !== 'note')]
                 : ['base', 'until', ...setOnly];
@@ -444,6 +479,8 @@ export async function run(args, io) {
             return next(repo, rest, Boolean(values.json), io);
         if (action === 'pause' || action === 'resume')
             return pause(repo, action, rest, values, io);
+        if (action === 'save')
+            return save(repo, rest, Boolean(values.json), io);
         return status(repo, rest, Boolean(values.json), io);
     });
 }

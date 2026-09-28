@@ -13,7 +13,8 @@ import { schedule, success } from '../engine/scheduler.js';
 import { suiteSettings } from '../config/load.js';
 import { PipelineError } from '../domain/errors.js';
 import { publishRun, pruneStore, receiptRetention, sharedStore } from './store.js';
-import { FLOCK_TIMEOUT_EXIT, commonPath, enterQueue, flockCommand, freePorts, resolveGateLock, withGateLease } from './suite.js';
+import { markStacksUsed, resolveStacks, stacksOfLock } from '../stacks/idle.js';
+import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, flockCommand, freePorts, resolveGateLock, withGateLease } from './suite.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
 export const RECEIPTS_DIR = '.apv/receipts';
 /** Environment identity of a V3 local run; V2 read it from `environment.id`, a field V3 no longer reads. */
@@ -133,6 +134,20 @@ export async function runGates(options) {
     // The queue of the full suites, then the load: every timeout of a check starts after them.
     const settings = suiteSettings(options.config);
     let queue = null;
+    // Set once the run has an id: the end of a full suite stops what it started, even when it is interrupted.
+    let started = null;
+    let cleanup = null;
+    const endSuite = async (runId) => {
+        if (!suite || cleanup)
+            return cleanup;
+        try {
+            cleanup = await cleanupSuite(repo, runId, settings.ports, { log });
+        }
+        catch (error) {
+            log(`Fin de suite : nettoyage des processus en échec (${errorMessage(error)}).`);
+        }
+        return cleanup;
+    };
     if (suite && settings.queue.enabled) {
         queue = await enterQueue({ lockFile: await commonPath(git, repo, settings.queue.lockFile), settings: settings.queue, repo, log, signal: options.signal, hooks: options.hooks });
     }
@@ -156,6 +171,7 @@ export async function runGates(options) {
                 ports = await freePorts(repo, settings.ports, { log });
         }
         const runId = `${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}-${randomUUID().slice(0, 8)}`;
+        started = runId;
         const directory = join(repo, RECEIPTS_DIR, runId);
         mkdirSync(directory, { recursive: true, mode: 0o700 });
         // Receipts are local evidence: keep them out of diffs, scope checks and commits, before any gate
@@ -164,6 +180,9 @@ export async function runGates(options) {
         if (!existsSync(ignore))
             writeFileSync(ignore, '*\n');
         const configHash = gatesConfigHash(options.config);
+        // The declared test stacks: a check under the lock of one of them notes its use (apv stacks idle-stop reads it).
+        const common = options.config.stacks?.length ? await commonPath(git, repo, '.') : null;
+        const stacks = common ? resolveStacks(options.config, common) : [];
         const source = options.env ?? process.env;
         const keys = new Map();
         const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
@@ -197,7 +216,9 @@ export async function runGates(options) {
             const lock = gate.lock ? await resolveGateLock(git, repo, gate.lock, env, source) : null;
             const withLockWait = (ms) => lock ? { lockWaitMs: Math.round(ms) } : {};
             /** One pass of a command, under the flock of the check when it has one: the timeout starts once it is held. */
-            const pass = async (argv, passEnv) => {
+            const pass = async (argv, checkEnv) => {
+                // The marker of a full suite, outside the environment identity: its processes are found at its end.
+                const passEnv = suite ? { ...checkEnv, [SUITE_MARKER]: runId } : checkEnv;
                 if (lock?.kind !== 'flock') {
                     const result = await runProcess({ command: argv, cwd: repo, env: passEnv, timeoutMs: gate.timeoutMs, signal, maxOutputBytes: 1024 * 1024 });
                     return { result, commandMs: result.durationMs, lockWaitMs: 0, lockError: null };
@@ -258,10 +279,17 @@ export async function runGates(options) {
                     stdoutHash: second.lockError === null ? r2.stdoutHash : '', stderrHash: second.lockError === null ? r2.stderrHash : '',
                     diagnostic: `Relance (retryFailed) en échec aussi :\n${failure}`.slice(0, MAX_DIAGNOSTIC_CHARS), retry, ...withLockWait(lockWaitMs) });
             };
-            if (lock?.kind === 'lease') {
-                return withGateLease(lock, { label: `apv gates run ${gate.id} (${repo})`, env, source, signal, log, hooks: options.hooks }, body, lockRefused);
+            const used = lock && common ? stacksOfLock(stacks, lock) : [];
+            try {
+                if (lock?.kind === 'lease') {
+                    return await withGateLease(lock, { label: `apv gates run ${gate.id} (${repo})`, env, source, signal, log, hooks: options.hooks }, body, lockRefused);
+                }
+                return await body(env, 0);
             }
-            return body(env, 0);
+            finally {
+                if (used.length && common)
+                    markStacksUsed(common, used);
+            }
         };
         const list = await schedule(gates, {
             concurrency: options.concurrency ?? 3, failFast: options.failFast ?? true, signal: options.signal ?? new AbortController().signal, execute,
@@ -270,11 +298,12 @@ export async function runGates(options) {
                 stdoutHash: '', stderrHash: '', diagnostic: reason, reusedFrom: null }),
         });
         const flaky = list.filter(r => r.status === 'passed_after_retry').map(r => r.gateId);
+        await endSuite(runId);
         const result = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
-            reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, shared: null, suite, queue: queue?.record ?? null, ports, flaky, ok: list.every(success) };
+            reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, shared: null, suite, queue: queue?.record ?? null, ports, flaky, cleanup, ok: list.every(success) };
         writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
             reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}),
-            ...(suite ? { suite: true, queue: result.queue, ports, flaky } : {}),
+            ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup } : {}),
             receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),
                 ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}) })) }, null, 2) + '\n');
         if (options.share !== false)
@@ -282,6 +311,8 @@ export async function runGates(options) {
         return result;
     }
     finally {
+        if (started)
+            await endSuite(started);
         await queue?.release();
     }
 }

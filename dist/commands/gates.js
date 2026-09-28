@@ -11,6 +11,7 @@ import { MAX_OVERRIDE_REASON, RUN_ID, applyFullSuiteOverride, readRunState, with
 import { cleanLine } from '../run/summary.js';
 import { verifyGates } from '../gates/verify.js';
 import { Git } from '../execution/git.js';
+import { signalExitCode } from '../lock/run.js';
 import { EXIT, UsageError, guard, json, list, parse, repoPath, table } from './common.js';
 export const usage = `Utilisation :
   apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>]
@@ -308,9 +309,37 @@ export async function run(args, io) {
         await cleanTree();
         if (!values.json && rhythm.notes.length)
             io.stdout(`${rhythm.notes.join('\n')}\n`);
-        const result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env,
-            allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}),
-            ...(values.base ? { base: values.base } : {}), ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}) });
+        // SIGINT, SIGTERM, SIGHUP: the checks are cancelled, the end of the suite stops what it started, then the exit.
+        const abort = new AbortController();
+        let received = null;
+        const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => {
+            const handler = () => {
+                if (!received) {
+                    received = signal;
+                    io.stderr(`Signal ${signal} reçu : contrôles annulés ; les processus lancés par la suite sont arrêtés avant la sortie.\n`);
+                }
+                abort.abort();
+            };
+            process.on(signal, handler);
+            return [signal, handler];
+        });
+        let result;
+        try {
+            result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env, signal: abort.signal,
+                allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}),
+                ...(values.base ? { base: values.base } : {}), ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}) });
+        }
+        catch (error) {
+            if (received) {
+                io.stderr(`Interrompu (${received}) : ${error instanceof Error ? error.message : String(error)}\n`);
+                return signalExitCode(received);
+            }
+            throw error;
+        }
+        finally {
+            for (const [signal, handler] of handlers)
+                process.off(signal, handler);
+        }
         const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, status: r.status, exitCode: r.exitCode,
             durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic,
             ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}) }));
@@ -320,7 +349,7 @@ export async function run(args, io) {
                 stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
                 reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
                 sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
-                suite: result.suite, queue: result.queue, ports: result.ports, flaky: result.flaky,
+                suite: result.suite, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, interrupted: received,
                 rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
                     level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
         }
@@ -339,6 +368,13 @@ export async function run(args, io) {
                 lines.push(`Orphelins de cette copie arrêtés sur les ports de la suite : ${result.ports.stopped.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}.`);
             if (result.ports?.left.length)
                 lines.push(`Ports de la suite tenus par d'autres processus, non arrêtés : ${result.ports.left.map(p => `pid ${p.pid} (${p.ports.join(', ')}, ${p.reason})`).join(', ')}.`);
+            const end = result.cleanup;
+            if (end?.stopped.length)
+                lines.push(`Fin de suite : processus lancés par la suite encore vivants, arrêtés : ${end.stopped.map(p => `pid ${p.pid}${p.ports.length ? ` (${p.ports.join(', ')})` : ''}`).join(', ')}.`);
+            if (end?.ports?.stopped.length)
+                lines.push(`Fin de suite : orphelins de cette copie arrêtés sur les ports de la suite : ${end.ports.stopped.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}.`);
+            if (received)
+                lines.push(`Interrompu par ${received} : contrôles annulés.`);
             lines.push('', table(['contrôle', 'statut', 'code', 'durée'], [
                 ...rows.map(r => [name(r), STATUS[r.status] ?? r.status, r.exitCode === null ? '-' : String(r.exitCode), `${(r.durationMs / 1000).toFixed(1)} s`]),
                 ...result.reserved.map(id => [id, RESERVED, '-', '-'])
@@ -364,6 +400,8 @@ export async function run(args, io) {
                 lines.push(`Attention : copie dans le magasin partagé impossible (${cleanLine(result.shared.error, 300)}) ; ces reçus disparaîtront avec ce worktree.`);
             io.stdout(`${lines.join('\n')}\n`);
         }
+        if (received)
+            return signalExitCode(received);
         return result.ok ? EXIT.ok : EXIT.failed;
     });
 }

@@ -2,7 +2,7 @@ import { type Gate, type GateReceipt, type GateStage } from '../domain/contracts
 import { type ApvConfig } from '../config/load.js';
 import { PipelineError } from '../domain/errors.js';
 import { type PruneResult } from './store.js';
-import { type PortsRecord, type QueueRecord, type SuiteHooks } from './suite.js';
+import { type CleanupRecord, type PortsRecord, type QueueRecord, type SuiteHooks } from './suite.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
 export declare const RECEIPTS_DIR = ".apv/receipts";
 /** Environment identity of a V3 local run; V2 read it from `environment.id`, a field V3 no longer reads. */
@@ -73,6 +73,8 @@ export interface GateRunResult {
     ports: PortsRecord | null;
     /** Checks passed only after the relaunch of their failed tests (`passed_after_retry`): unstable, shown apart. */
     flaky: string[];
+    /** The end of a full suite: processes it started still alive, and orphans of this copy on `suite.ports`, stopped. */
+    cleanup: CleanupRecord | null;
     ok: boolean;
 }
 /** Files of a `git status --porcelain=v1 -z` output, as `XY path` lines. */

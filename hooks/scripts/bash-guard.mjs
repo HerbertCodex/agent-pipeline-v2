@@ -1,12 +1,16 @@
 #!/usr/bin/env node
-// PreToolUse guard for the Bash tool (APV3 spec, section 11).
+// PreToolUse guard for the Bash tool (APV3 spec, sections 11 and 18.2).
 // Blocks force-pushes, merges (gh pr merge, gh api …/merge, apv stack merge) and production deploys
-// without their explicit authorisation, and
-// commands that write to GitHub while hiding their output (incident 30).
+// without their explicit authorisation, commands that write to GitHub while hiding their output (incident 30),
+// and the harness mistakes of section 18.2 (harness-guard.mjs): kills that may reach the session, installs
+// through a symlinked node_modules, docker or supabase commands on a declared test stack without its lock.
 // This is a guard rail against mistakes, not a security boundary: a determined command can
 // always be written in a shape this parser does not recognise.
 import { basename } from 'node:path';
 import { isMainModule, readHookInput } from './lib.mjs';
+import { EMPTY_CONTEXT, HARNESS_REASONS, commandWords, hookContext, installProblem, killProblem, lockWrapper, mergeHeld, stackProblem } from './harness-guard.mjs';
+
+export { HARNESS_REASONS };
 
 const OPERATORS = ['&&', '||', ';;', '$(', ';', '|', '&', '(', ')', '`', '\n'];
 
@@ -271,12 +275,60 @@ export const REASONS = {
     'Relance sans masquer la sortie, lis-la, puis vérifie le résultat (par exemple gh pr view <n> --json baseRefName).',
 };
 
-/** Pure decision for one Bash command: { decision: 'allow' } or { decision: 'deny', reason }. */
-export function evaluateCommand(command, env = {}) {
+const SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'ksh', 'mksh', 'ash']);
+/** Depth of the `sh -c` scripts examined as commands. */
+const MAX_NESTING = 3;
+
+/**
+ * The script a simple command runs through a shell (`sh -c`, `bash -lc`, `flock <file> -c`), or null. The script is
+ * then examined as a command, with the locks its wrapper took.
+ */
+export function nestedScript(words) {
+  const cw = commandWords(words);
+  if (!cw) return null;
+  const w = cw.words;
+  const tool = basename(w[0]);
+  if (SHELLS.has(tool)) {
+    const at = w.findIndex((x, k) => k > 0 && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(x));
+    return at !== -1 && w[at + 1] !== undefined ? w[at + 1] : null;
+  }
+  if (tool === 'flock') {
+    const at = w.findIndex((x, k) => k > 0 && (x === '-c' || x === '--command'));
+    return at !== -1 && w[at + 1] !== undefined ? w[at + 1] : null;
+  }
+  return null;
+}
+
+/**
+ * Pure decision for one Bash command: { decision: 'allow' } or { decision: 'deny', reason }. `context` gives what
+ * the harness rules read around the command (docs/APV3-SPEC.md, section 18.2): the session's ancestors, the working
+ * directory, the declared test stacks and the locks already held; the default knows nothing, so those rules only
+ * apply to what the command itself says.
+ */
+export function evaluateCommand(command, env = {}, context = EMPTY_CONTEXT) {
+  return evaluate(command, env, context, 0, { files: [], resources: [], stacks: [] });
+}
+
+function evaluate(command, env, context, depth, inherited) {
   if (typeof command !== 'string' || command.trim() === '') return { decision: 'allow' };
   const { segments, shadow } = tokenize(command);
   let writesGithub = false;
+  const kill = killProblem(segments, context.ancestors);
+  if (kill) return { decision: 'deny', reason: kill };
+  const install = installProblem(segments, context.cwd, context.home);
+  if (install) return { decision: 'deny', reason: install };
+  // The declared stacks are read (git, config) only for a command that may reach one.
+  const stacks = /\b(docker|podman|supabase)\b/.test(command) ? context.stacks() : [];
   for (const words of segments) {
+    const wrapped = lockWrapper(words, stacks, context.cwd);
+    const held = mergeHeld(inherited, wrapped.held);
+    const stack = stacks.length ? stackProblem(wrapped.words, held, context, context.cwd) : null;
+    if (stack) return { decision: 'deny', reason: stack };
+    const script = depth < MAX_NESTING ? nestedScript(wrapped.words) ?? nestedScript(words) : null;
+    if (script !== null) {
+      const nested = evaluate(script, env, context, depth + 1, held);
+      if (nested.decision === 'deny') return nested;
+    }
     if (isForcePush(words)) return { decision: 'deny', reason: REASONS.forcePush };
     const write = githubWrite(words) ?? (isStackMerge(words) ? { merge: true } : null);
     if (write) {
@@ -294,7 +346,7 @@ export function evaluateCommand(command, env = {}) {
 async function main() {
   const input = await readHookInput();
   if (!input || input.tool_name !== 'Bash') return 0;
-  const result = evaluateCommand(input.tool_input?.command, process.env);
+  const result = evaluateCommand(input.tool_input?.command, process.env, hookContext(input, process.env));
   if (result.decision === 'allow') return 0;
   process.stdout.write(`${JSON.stringify({
     hookSpecificOutput: {
