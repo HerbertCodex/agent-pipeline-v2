@@ -96,6 +96,19 @@ async function removeLot(options, lot) {
  */
 export async function batchMerge(options) {
     const report = { target: null, base: null, prs: [], lots: [], culprits: [], interaction: false, proven: null, merged: [], stopped: null, finalTree: null };
+    try {
+        return await batchSteps(options, report);
+    }
+    catch (error) {
+        // A Git or GitHub failure the steps did not foresee: the report says where it stopped, never a crash.
+        for (const lot of report.lots)
+            await removeLot(options, lot).catch(() => undefined);
+        report.stopped = { pr: null, reasons: [`erreur inattendue : ${errorMessage(error)}`] };
+        options.journal({ event: 'batch-stop', prs: options.prs, target: report.target, pr: null, reasons: report.stopped.reasons });
+        return report;
+    }
+}
+async function batchSteps(options, report) {
     const stop = (pr, reasons) => {
         report.stopped = { pr, reasons };
         const failed = options.journal({ event: 'batch-stop', prs: options.prs, target: report.target, pr, reasons });

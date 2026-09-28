@@ -121,13 +121,14 @@ Extrait de V2, sans le contrôleur :
 - `apv db check [--live]` : contrôle du modèle de données (section 13 bis) ; `--live` lit la base en lecture seule par `psql` (`APV_DB_URL`, ou la commande `APV_PSQL`).
 - `apv quota` : relevé et journal (`.apv/state/quota.log`, un objet JSON par ligne, ignoré par Git via `.apv/.gitignore` généré par l'outil).
 - `apv preview update <branche>` : aperçu vivant (section 12), pilotable par projet.
+- `apv stacks status|idle-stop|start` : piles de test déclarées, arrêt de celles inactives prouvées, redémarrage (section 18.4) ; `apv stack batch` : fusion par lot (section 18.5).
 
 Tests : les suites V2 des parties conservées (contrats, politique, OWASP, preuves, ordonnanceur, inventaire) sont gardées ; les suites du contrôleur sont retirées.
 
 ## 11. Hooks
 
 - `SessionStart` : affiche l'état de reprise (`.apv/state`) et le dernier relevé de quota.
-- `PreToolUse` sur Bash : bloque `git push --force`, la fusion et le déploiement hors commande dédiée, et les commandes qui masquent la sortie d'une écriture externe (incident 30).
+- `PreToolUse` sur Bash : bloque `git push --force`, la fusion et le déploiement hors commande dédiée, et les commandes qui masquent la sortie d'une écriture externe (incident 30) ; gardes du harnais depuis 3.0.0-alpha.5 (arrêt de la session ou de ses parents, `killall`, `pkill -f`, installation à travers un `node_modules` lié, Docker ou Supabase sur une pile de test sans son verrou : section 18.2).
 - `PostToolUse` sur les écritures d'un implementer : rappel des chemins autorisés quand une écriture en sort, d'après le marqueur de tâche `.apv/state/task.json` du worktree (vérification stricte par `apv scope check` à la fin de la tâche).
 - `Stop` : enregistre l'état de reprise.
 

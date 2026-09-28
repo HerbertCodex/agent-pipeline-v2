@@ -36,3 +36,7 @@ Sans outil Workflow, les agents lancés par l'outil Agent rendent un rapport lib
 ## Contrôles réussis après relance
 
 Un contrôle « réussi après relance » (`passed_after_retry`, champ `retryFailed`, [CLI.md](CLI.md#apv-gates-run)) prouve que chaque test a réussi sur le code exact du commit : il compte comme réussi. Il ne prouve pas que le code est stable : l'affirmation « la suite est stable » reste au mieux `probable` tant que le test instable n'a pas été reproduit et stabilisé, et l'instabilité se note comme un constat (niveau `prouve` pour le constat lui-même : le reçu garde les deux passes et les tests concernés).
+
+## Fusion par lot
+
+Une PR fusionnée par `apv stack batch --merge` ([CLI.md](CLI.md#apv-stack)) l'est au niveau `prouve` pour « la cible contient le contenu prouvé » : la suite complète a tourné une fois sur la tête du lot, `apv gates verify` y est à `0`, et l'outil a constaté, avant et après chaque fusion, que l'arbre de la cible était celui du lot au même point (sinon il s'arrête). La tête de chaque PR, elle, n'a jamais été prouvée seule avec les fusions précédentes du lot : l'affirmation « la PR n passe seule sur la cible » n'est pas faite, et n'est pas nécessaire. Une PR isolée par `--bisect` comme fautive est un constat `prouve` (le lot échoue avec elle, sa moitié sans elle passe) ; un échec d'interaction (chaque moitié passe, le lot entier échoue) reste `probable` sur sa cause, à reproduire avant de trancher.

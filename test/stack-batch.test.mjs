@@ -171,3 +171,14 @@ test('batch refuses an incoherent batch before building anything', async t => {
   const usage = await p.run(['11', '--method', 'squash']);
   assert.equal(usage.code, 2);
 });
+
+test('an unforeseen Git failure stops the batch with a report, never a crash', async t => {
+  const p = batchProject(t);
+  const taken = join(p.root, 'occupe');
+  mkdirSync(taken);
+  writeFileSync(join(taken, 'fichier'), 'x');
+  const r = await p.run(['11', '12', '--dir', taken, '--json']);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.json().stopped.reasons[0], /erreur inattendue : git worktree add/);
+  assert.equal(p.log().at(-1).event, 'batch-stop');
+});

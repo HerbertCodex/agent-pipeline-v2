@@ -16,7 +16,7 @@ export const usage = `Utilisation :
 
 Processus du dépôt, lus dans /proc (Linux ; ailleurs, refus clair, sortie 1) : ceux dont le répertoire
 courant est dans un worktree du dépôt (git worktree list, copie principale comprise) et ceux qui
-écoutent sur les ports de test déclarés (resources.<ressource>.ports de .apv/config.json).
+écoutent sur les ports de test déclarés (resources.<ressource>.ports et ports des piles de stacks).
 Cibles : --port <p> (répétable) les processus qui écoutent sur ces ports ; sans --port, --repo <copie>
 ceux lancés dans cette copie (un worktree lié du dépôt, jamais la copie principale, qui porte la
 session) ; sans l'un ni l'autre, ceux qui écoutent sur les ports de test déclarés. Avec --port, --repo
