@@ -1,7 +1,7 @@
 import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s, type Infer } from './schema.js';
 import { invariant } from './errors.js';
-export const VERSION = '3.0.0-alpha.6';
+export const VERSION = '3.0.0-alpha.8';
 export const lanes = ['fast', 'standard', 'high'] as const;
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'] as const;
 export type Lane = typeof lanes[number];
@@ -47,6 +47,19 @@ export const repeatChangedSchema = s.object({
   // both, never a silent fallback on `--base` alone.
   reference: s.string(1, 200, /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/),
 });
+/**
+ * `skipWhenOnly` of a check: the scope of its proof (docs/APV3-SPEC.md, section 21). `paths` (globs of the files that
+ * have no effect on what the check proves: documentation, decisions, specs), `except` (globs taken out of `paths`, for
+ * example the sources out of the Markdown files), `reference` (the branch the change goes to, `origin/main` for example, required: the
+ * files are also counted from its merge base, and the lists are read there, never in the change). A full run where
+ * every file changed since the merge bases of `--base` and of the reference matches `paths` (and no `except`, no file
+ * of `ALWAYS_REQUIRED`, no change of mode or type) records the check as not required instead of running it.
+ */
+export const skipWhenOnlySchema = s.object({
+  paths: s.array(s.string(1, 500), 1, 100),
+  except: s.optional(s.array(s.string(1, 500), 1, 100)),
+  reference: s.string(1, 200, /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/),
+});
 export const gateSchema = s.object({
   id, command: argv,
   // Reviewed coverage labels, never inferred from a successful exit code or a gate name.
@@ -87,6 +100,9 @@ export const gateSchema = s.object({
   // `command` (`{{repeat}}` anywhere in an argument, `stressArgs` appended) runs on those files only, which are
   // appended; any failure turns the check red, never relaunched by `retryFailed`. Optional, never defaulted.
   repeatChanged: s.optional(repeatChangedSchema),
+  // Scope of the proof: a full run whose changes only touch these paths records the check as not required (never run,
+  // never proven by the command) after recomputing it from the commit. Optional, never defaulted.
+  skipWhenOnly: s.optional(skipWhenOnlySchema),
 });
 /** Stage of a check; absent means `task`. */
 export const gateStage = (gate: { stage?: GateStage | undefined }): GateStage => gate.stage ?? 'task';
@@ -229,7 +245,13 @@ export interface ProcessResult {
  */
 /** Outcome of the repetition of the changed test files recorded in a receipt (`repeat.status`). */
 export const repeatStatuses = ['passed', 'failed', 'timed_out', 'cancelled', 'spawn_error', 'none', 'no_base', 'not_run'] as const;
-export const receiptStatuses = ['passed','failed','timed_out','cancelled','spawn_error','blocked','cached','passed_after_retry'] as const;
+/**
+ * `not_required`: a check that declares `skipWhenOnly`, not run because every file the change touches is outside its
+ * scope (`scope` of the receipt); never a success by itself, `apv gates verify` recomputes the scope from the commit.
+ */
+export const receiptStatuses = ['passed','failed','timed_out','cancelled','spawn_error','blocked','cached','passed_after_retry','not_required'] as const;
+/** Most changed files a receipt lists in `scope.files`; beyond, a check is always required. */
+export const MAX_SCOPE_FILES = 2000;
 const digest = s.string(64,64,/^[a-f0-9]{64}$/);
 const sha = s.string(40,64,/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 export const receiptSchema = s.object({
@@ -278,6 +300,20 @@ export const receiptSchema = s.object({
     output: s.optional(s.string(0, 16000)),
     fixedWaits: s.default(s.array(s.object({ file: s.string(1, 500), line: s.number(1, 10_000_000), text: s.string(0, 300) }), 0, 100), []),
   })),
+  // The scope of the proof of a check that declares `skipWhenOnly` (full run): whether it was required and why, the
+  // merge bases of `--base` (`base`) and of the reference (`reference`, its name and the commit it named), and the files
+  // changed since them (all of them when not required; `blocking`: those that made it required).
+  scope: s.optional(s.object({
+    required: s.boolean(),
+    reason: s.string(1, 2000),
+    base: s.nullable(sha),
+    reference: s.nullable(sha),
+    referenceName: s.string(1, 200),
+    referenceSha: s.nullable(sha),
+    fileCount: s.number(0, 100_000_000),
+    files: s.array(s.string(1, 4096), 0, MAX_SCOPE_FILES),
+    blocking: s.default(s.array(s.string(1, 4096), 0, 50), []),
+  })),
 });
 export type GateReceipt = Infer<typeof receiptSchema>;
 export function validateReceipt(value: unknown): GateReceipt {
@@ -288,6 +324,9 @@ export function validateReceipt(value: unknown): GateReceipt {
   invariant((r.status === 'cached') === (r.reusedFrom !== null),'RECEIPT','Only cache hits may reference an earlier receipt');
   invariant(!r.repeat || !['failed', 'timed_out', 'cancelled', 'spawn_error'].includes(r.repeat.status) || (r.status !== 'passed' && r.status !== 'cached' && r.status !== 'passed_after_retry'),
     'RECEIPT', 'A receipt whose repetition of the changed tests failed is never a success');
+  invariant((r.status === 'not_required') === (r.scope?.required === false), 'RECEIPT', 'A receipt is not_required exactly when its scope says the check is not required');
+  invariant(r.status !== 'not_required' || (r.exitCode === null && r.scope!.base !== null && r.scope!.reference !== null && r.scope!.referenceSha !== null &&
+    r.scope!.files.length === r.scope!.fileCount), 'RECEIPT', 'A not_required receipt runs nothing and lists every changed file with its bases');
   return r;
 }
 export function validateConfig(value: unknown): Config {

@@ -19,6 +19,7 @@ import { defaultLockDir } from '../lock/store.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables, type SpreadPlan } from './spread.js';
 import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, resolveRef, tooManyFiles,
   type RepeatPlan } from './repeat.js';
+import { planScope, scopeRecord, scopeReferenceMissing, type ScopeDecision } from './proof-scope.js';
 import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, flockCommand, freePorts, resolveGateLock, withGateLease,
   type CleanupRecord, type PortsRecord, type QueueHandle, type QueueRecord, type SuiteHooks } from './suite.js';
 
@@ -72,6 +73,13 @@ export interface GateRunOptions {
    * request): the run then repeats the union of their files. Default true.
    */
   repeatCeiling?: boolean;
+  /**
+   * The reference the full checks that declare `skipWhenOnly` count their changed files from, and whose configuration
+   * gives their paths, in place of `skipWhenOnly.reference` (`apv stack batch`: its target).
+   */
+  reference?: string;
+  /** The configuration file read (`--config`), always required by the scope of a check when inside the repository. */
+  configFile?: string | null;
 }
 /** The copy of a run in the shared store: its directory, or why it could not be made (the run itself stands). */
 export interface SharedCopy { directory: string | null; error: string | null; pruned: PruneResult | null }
@@ -95,6 +103,10 @@ export interface GateRunResult {
   shared: SharedCopy | null;
   /** True when the run is a full suite (a check of stage full run in full): queue, clean tree and ports apply. */
   suite: boolean;
+  /** The checks recorded as not required by the scope of their proof (`skipWhenOnly`): never run. */
+  notRequired: string[];
+  /** The scope decisions of the checks of the run that declare `skipWhenOnly` (full run). */
+  scope: ScopeDecision[];
   /** The queue of the full suites: its lock, the wait, the load; null outside a full suite or when disabled. */
   queue: QueueRecord | null;
   /** The ports of `suite.ports` freed from orphans of this copy; null when none are declared or outside a full suite. */
@@ -205,14 +217,36 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   // Configuration order; a targeted check keeps its id, dependencies and resources, with its targeted command.
   const gates = selection.gates.filter(g => staged.run.includes(g) || targeted.has(g.id))
     .map(g => targeted.has(g.id) ? { ...g, command: g.affected! } : g);
-  const suite = isFullSuite(gates, stage);
+  const asked = isFullSuite(gates, stage);
   if (options.stacks) {
-    invariant(suite, 'GATE_STACKS', '--stacks répartit une suite complète : aucun contrôle de stage full à exécuter en entier ici');
+    invariant(asked, 'GATE_STACKS', '--stacks répartit une suite complète : aucun contrôle de stage full à exécuter en entier ici');
     invariant(options.stacks.length >= 2 && new Set(options.stacks).size === options.stacks.length, 'GATE_STACKS', '--stacks attend au moins deux piles différentes, par exemple --stacks 1,2');
     invariant((options.config.stacks ?? []).length >= 2, 'GATE_STACKS', '--stacks : déclarer au moins deux piles (section stacks de .apv/config.json)');
   }
   // A full suite on a dirty tree proves nothing: refused before any wait, unless asked for.
-  if (suite && dirty && !options.allowDirty) throw dirtyRefusal(status);
+  if (asked && dirty && !options.allowDirty) throw dirtyRefusal(status);
+  // The scope of the proof (`skipWhenOnly`), decided before any wait: at the full stage, a check whose change only
+  // touches files without effect on it is recorded as not required instead of running. Same rigour as repeatChanged:
+  // --base required, HEAD strictly below it, the reference resolved; the paths are those of the reference.
+  const scopeDecisions = new Map<string, ScopeDecision>();
+  const scoped = stage === 'full' ? gates.filter(g => g.skipWhenOnly) : [];
+  if (scoped.length) {
+    invariant(baseSha, 'GATE_BASE', `${scoped.map(g => g.id).join(', ')} déclare(nt) skipWhenOnly : --base <base de la branche> est obligatoire à la suite complète (la portée se compte depuis elle et depuis la référence).`);
+    invariant(await mergeBase(git, repo, baseSha!, candidateSha) !== candidateSha, 'GATE_BASE',
+      `--base ${options.base} : HEAD n'en descend pas strictement (base égale à HEAD, ou en aval) ; la portée de ${scoped.map(g => g.id).join(', ')} ne peut pas se compter. Donner la base de la branche (le commit d'où elle part).`);
+    for (const g of scoped) {
+      const name = options.reference ?? g.skipWhenOnly!.reference;
+      if (!(await resolveRef(git, repo, name))) throw new PipelineError('GATE_BASE', scopeReferenceMissing(g.id, name));
+    }
+    const all = await planScope(git, repo, options.config, { base: baseSha!, head: candidateSha, dirty, configFile: options.configFile ?? null,
+      ...(options.reference ? { reference: options.reference } : {}) });
+    for (const g of scoped) if (all.has(g.id)) scopeDecisions.set(g.id, all.get(g.id)!);
+  }
+  const skipped = new Set([...scopeDecisions.values()].filter(d => !d.required).map(d => d.gateId));
+  for (const d of scopeDecisions.values()) log(`${d.gateId} : ${d.required ? 'requis' : 'non requis'} (portée, skipWhenOnly) : ${d.reason}.`);
+  // What actually runs: a check not required is never started (its dependents are not required either).
+  const runnable = gates.filter(g => !skipped.has(g.id));
+  const suite = isFullSuite(runnable, stage);
   const context: Record<string, string> = { workspace: repo, candidateSha, ...(baseSha ? { baseSha } : {}) };
   // Placeholders are resolved before anything runs: a missing --base never fails halfway through a batch.
   const expand = (g: Gate, argv: readonly string[]): string[] => {
@@ -228,7 +262,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   // The changed test files each check repeats, decided before any wait: a ceiling exceeded or a refused fixed wait
   // stops the run here, explicitly, rather than after a full suite or by a silent skip. Null: no --base to compare to.
   const repeatPlans = new Map<string, RepeatPlan>();
-  const repeating = gates.filter(g => g.repeatChanged);
+  const repeating = runnable.filter(g => g.repeatChanged);
   if (repeating.length) {
     // Without a base, or with one HEAD does not strictly descend from, nothing would be repeated: refused, never a silent pass.
     invariant(baseSha, 'GATE_BASE', `${repeating.map(g => g.id).join(', ')} déclare(nt) repeatChanged : --base <base de la branche> est obligatoire (les tests ajoutés ou modifiés depuis elle sont répétés).`);
@@ -298,7 +332,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     const source = options.env ?? process.env;
     // A suite spread over stacks: checks dealt to the stacks, the copies of the other stacks made now.
     if (options.stacks && common) {
-      spread = await planSpread({ git, repo, common, config: options.config, gates, ids: options.stacks, runId });
+      spread = await planSpread({ git, repo, common, config: options.config, gates: runnable, ids: options.stacks, runId });
       log(`Répartition sur les piles : ${[...spread.assignments.values()].map(a => `${a.gateId} sur la pile ${a.stack.id}${a.workspace === repo ? '' : ` (copie ${a.workspace})`}`).join(', ') || 'aucun contrôle de pile'}.`);
       for (const a of spread.assignments.values()) if (a.notPassed.length) log(`Note : ${a.gateId} ne reçoit pas ${a.notPassed.join(', ')} du fichier d'environnement de la pile ${a.stack.id} (absents de son passEnv).`);
       await prepareCopies(spread, { git, repo, sha: candidateSha, config: options.config, env: source, signal: options.signal, log });
@@ -306,7 +340,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     // A stack stopped by idle-stop and not restarted: said before the checks, not discovered as a refused connection.
     const stoppedStacks: GateRunResult['stoppedStacks'] = [];
     if (common) {
-      for (const gate of gates) {
+      for (const gate of runnable) {
         const assignedStack = spread?.assignments.get(gate.id)?.stack.id;
         if (!gate.lock && !assignedStack) continue;
         const ids = assignedStack ? [assignedStack]
@@ -324,9 +358,11 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
     type Repeat = NonNullable<GateReceipt['repeat']>;
     type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'>>;
-    type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack'>> & { repeat?: RepeatFields };
+    type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat' | 'scope'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack'>> & { repeat?: RepeatFields };
     const write = (receipt: Fields): GateReceipt => {
-      const valid = validateReceipt({ ...receipt, stage, dirty, ...(targeted.has(receipt.gateId) ? { targeted: true } : {}), ...(override ? { override } : {}) });
+      const decision = scopeDecisions.get(receipt.gateId);
+      const valid = validateReceipt({ ...receipt, stage, dirty, ...(targeted.has(receipt.gateId) ? { targeted: true } : {}), ...(override ? { override } : {}),
+        ...(decision ? { scope: scopeRecord(decision) } : {}) });
       writeFileSync(join(directory, `${valid.gateId}.json`), JSON.stringify(valid, null, 2) + '\n');
       return valid;
     };
@@ -494,15 +530,22 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       environmentHash: hash('not-executed'), status: 'blocked', startedAt: Date.now(), durationMs: 0, exitCode: null,
       stdoutHash: '', stderrHash: '', diagnostic: reason, reusedFrom: null });
     const failFast = options.failFast ?? true;
+    // The checks not required: a receipt that says so, with the scope, and nothing run.
+    const notRequired = new Map(gates.filter(g => skipped.has(g.id)).map(g => {
+      const d = scopeDecisions.get(g.id)!;
+      return [g.id, write({ id: randomUUID(), runId, gateId: g.id, key: hash({ notRequired: g.id, candidateSha, configHash, base: d.base, reference: d.reference, referenceSha: d.referenceSha }),
+        candidateSha, configHash, environmentHash: hash('not-executed'), status: 'not_required', startedAt: Date.now(), durationMs: 0, exitCode: null,
+        stdoutHash: '', stderrHash: '', diagnostic: `Non requis (portée, skipWhenOnly) : ${d.reason}.`.slice(0, MAX_DIAGNOSTIC_CHARS), reusedFrom: null })] as const;
+    }));
     let list: GateReceipt[];
     if (!spread?.copies.length) {
-      list = await schedule(gates, { concurrency: options.concurrency ?? 3, failFast, signal: options.signal ?? new AbortController().signal, execute, blocked });
+      list = await schedule(runnable, { concurrency: options.concurrency ?? 3, failFast, signal: options.signal ?? new AbortController().signal, execute, blocked });
     } else {
       // One scheduler per copy (each has its own workspace), run together; a failure stops them all under failFast.
       const stop = new AbortController();
       const signal = options.signal ? AbortSignal.any([options.signal, stop.signal]) : stop.signal;
       const inCopy = new Set(spread.copies.flatMap(c => c.gates));
-      const groups = [gates.filter(g => !inCopy.has(g.id)), ...spread.copies.map(c => gates.filter(g => c.gates.includes(g.id)))].filter(g => g.length);
+      const groups = [runnable.filter(g => !inCopy.has(g.id)), ...spread.copies.map(c => runnable.filter(g => c.gates.includes(g.id)))].filter(g => g.length);
       const run = async (gate: Gate, s: AbortSignal): Promise<GateReceipt> => {
         const receipt = await execute(gate, s);
         if (failFast && !success(receipt)) stop.abort();
@@ -510,21 +553,24 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       };
       const results = await Promise.all(groups.map(group => schedule(group, { concurrency: options.concurrency ?? 3, failFast, signal, execute: run, blocked })));
       const byId = new Map(results.flat().map(r => [r.gateId, r]));
-      list = gates.map(g => byId.get(g.id)!);
+      list = runnable.map(g => byId.get(g.id)!);
     }
+    const ran = new Map(list.map(r => [r.gateId, r]));
+    list = gates.map(g => notRequired.get(g.id) ?? ran.get(g.id)!);
     const flaky = list.filter(r => r.status === 'passed_after_retry').map(r => r.gateId);
     await endSuite(runId);
     const spreadRecord = spread ? [...spread.assignments.values()].map(a => ({ gate: a.gateId, stack: a.stack.id, workspace: a.workspace, notPassed: a.notPassed,
       error: spread!.copies.find(c => c.dir === a.workspace)?.error ?? null })) : null;
     const result: GateRunResult = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
-      reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, shared: null, suite, queue: queue?.record ?? null, ports, flaky, cleanup,
-      stoppedStacks, spread: spreadRecord, ok: list.every(success) };
+      reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, shared: null, suite, notRequired: [...notRequired.keys()], scope: [...scopeDecisions.values()],
+      queue: queue?.record ?? null, ports, flaky, cleanup, stoppedStacks, spread: spreadRecord, ok: list.every(r => success(r) || r.status === 'not_required') };
     writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
       reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}),
       ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup } : {}), ...(spreadRecord ? { spread: spreadRecord } : {}), ...(stoppedStacks.length ? { stoppedStacks } : {}),
       receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),
         ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}), ...(r.stack ? { stack: r.stack } : {}),
-        ...(r.repeat ? { repeat: { status: r.repeat.status, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures } } : {}) })) }, null, 2) + '\n');
+        ...(r.repeat ? { repeat: { status: r.repeat.status, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures } } : {}),
+        ...(r.scope ? { scope: { required: r.scope.required, reason: r.scope.reason, fileCount: r.scope.fileCount } } : {}) })) }, null, 2) + '\n');
     if (options.share !== false) result.shared = await shareRun(git, repo, directory, runId, candidateSha, options.config);
     return result;
   } finally {
