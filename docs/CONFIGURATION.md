@@ -95,6 +95,24 @@ Par défaut, un contrôle a un accès exclusif au répertoire de validation, y c
 
 `apv lock run e2e` sérialise le navigateur de test entre agents (voir [LOCKS.md](LOCKS.md)) ; le verrou ne dure que le temps des tests ciblés. `--base <ref>` est obligatoire à l'étape de tâche (`apv gates run --stage task --base <base>`). Limite : `--only-changed` suit les imports des fichiers de tests, pas le navigateur ; une modification de l'application seule ne sélectionne pas les tests e2e qui la parcourent. L'implementer ajoute ou modifie donc le test du comportement qu'il change, et la suite complète reste le filet à la dernière intégration et à la livraison. Pour une interface, faites tourner les tests navigateur en mouvement réduit par défaut (Playwright : `use: { reducedMotion: 'reduce' }` dans la configuration, et des animations CSS qui respectent `prefers-reduced-motion`) : un clic pendant une animation est la première cause d'instabilité ; seuls les tests qui vérifient une animation remettent `reducedMotion: 'no-preference'`.
 
+`lock` (facultatif, 3.0.0-alpha.4) : la ressource que le contrôle partage avec d'autres copies du dépôt (une pile de test), tenue autour de sa commande ; son délai (`timeoutMs`) ne commence qu'une fois le verrou obtenu, l'attente est notée dans le reçu (`lockWaitMs`). Deux formes :
+- `{ "resource": "e2e", "waitMs": 1800000 }` : bail de `apv lock` ([LOCKS.md](LOCKS.md)), dans le même dossier (`APV_LOCK_DIR` compris), visible par `apv lock status` ; la commande reçoit `APV_LOCK_HELD` (un `apv lock run e2e` à l'intérieur ne s'attend pas lui-même) ; déjà tenu par l'appelant, il n'est pas repris ;
+- `{ "file": "../../pilotage/.e2e.lock", "fileEnv": "E2E_LOCK_FILE", "waitMs": 1800000 }` : `flock` du noyau sur ce fichier (relatif au répertoire Git commun, ou absolu ; créé au besoin), pris par `flock(1)` (util-linux) dont la commande du contrôle est un descendant : un script de projet qui prouve le verrou par un ancêtre détenteur (`/proc/locks`) le voit tenu. `fileEnv` : variable qui, transmise au contrôle (`passEnv`) et non vide, remplace le chemin (relatif au dépôt).
+`waitMs` : attente maximale, 30 min par défaut ; au-delà, reçu `timed_out`, commande jamais lancée. Sans `lock`, rien ne change (empreinte de configuration comprise). À ne pas confondre avec `resources`, qui n'ordonne que les contrôles d'une même exécution.
+
+`retryFailed` (facultatif, 3.0.0-alpha.4) : `{ "command": [...], "testPattern": "<expression régulière>" }`. Si la commande du contrôle échoue d'elle-même (statut `failed`), `apv gates run` vérifie que HEAD et l'arbre n'ont pas changé, puis lance une seule fois `command` (mêmes substitutions, variables, délai et verrou), qui doit ne relancer que les tests en échec. Réussite : statut `passed_after_retry`, compté comme réussi mais signalé « instable » par `gates run` et `gates verify` ; échec : échec normal. `testPattern` relève les tests concernés dans la sortie de la première passe (groupe 1 s'il existe, sinon la correspondance entière ; codes de couleur retirés ; 100 au plus). Exemple pour Playwright (reporter `list` ou `line`, qui écrit `  1) [chromium] › tests/a.spec.ts:3:5 › titre`) :
+
+```json
+{
+  "id": "browser",
+  "stage": "full",
+  "command": ["npm", "run", "test:browser"],
+  "retryFailed": { "command": ["npm", "run", "test:e2e", "--", "--last-failed"], "testPattern": "^\\s*\\d+\\) (\\[[^\\]]+\\] › .+?)\\s*─*$" }
+}
+```
+
+`--last-failed` relit `test-results/.last-run.json`, écrit par la première passe : la relance ne rejoue que ses tests en échec. Pourquoi la garde ne baisse pas : chaque test a réussi sur le code exact du commit, arbre inchangé ; un test qui échoue deux fois fait échouer le contrôle ; un délai dépassé n'est jamais relancé ; l'instabilité reste visible (statut propre, tests listés) et se traite comme un constat.
+
 `readOnly: true` est une déclaration revue par l'opérateur : la commande **et ses sous-processus** ne doivent écrire aucun fichier dans ce répertoire. Seuls ces contrôles peuvent tourner ensemble, dans la limite de `concurrency` et des ressources nommées ; ils attendent aussi la fin d'un contrôle susceptible d'écrire. Ce champ n'est pas un sandbox ni une détection automatique. Ne pas l'activer pour un lint avec cache, un compilateur incrémental, des tests avec couverture ou des E2E qui lancent un build. Les anciens profils peuvent donc valider plus lentement ; déclarer uniquement les commandes réellement en lecture seule permet de retrouver du parallélisme sûr.
 
 ```json
@@ -406,6 +424,28 @@ Section APV3, facultative, validée par le chargeur commun (port hors de 1 à 65
 - `description` (facultatif, 500 caractères au plus) : texte libre.
 
 `apv procs` lit ces ports ([CLI.md](CLI.md#apv-procs)) : `apv procs stop` sans option arrête les processus qui y écoutent encore, s'ils ont été lancés dans un worktree lié du dépôt (serveurs laissés par une suite coupée au délai d'un appel Bash), jamais un processus hors du dépôt ; un processus du checkout principal seulement avec `--include-main`, et seulement sur un port déclaré ici. Absente : aucun port déclaré, et `apv procs stop` demande `--port` ou `--repo <copie>`. Déclarer ici les ports de toutes les piles de test, pas celui de l'aperçu (`preview.serve.port`), qui tourne dans sa propre copie hors du dépôt et que `apv procs` n'arrête jamais.
+
+## Suite complète : `suite`
+
+Section APV3, facultative, validée par le chargeur commun (3.0.0-alpha.4, spécification section 17). Elle règle la suite complète de `apv gates run` (une exécution qui lance en entier au moins un contrôle de stage `full`) : sa file d'attente sur la machine et les ports à libérer avant qu'elle démarre ([CLI.md](CLI.md#apv-gates-run)). Absente : file active avec les valeurs par défaut, aucun port.
+
+```json
+{
+  "suite": {
+    "queue": { "lockFile": "apv/locks/full-suite.lock", "waitMs": 7200000, "maxLoad": 6, "loadWaitMs": 1800000 },
+    "ports": [4173, 4174, 4273, 4274]
+  }
+}
+```
+
+- `queue.enabled` (défaut `true`) : `false` retire la file (chaque suite démarre aussitôt, comme avant 3.0.0-alpha.4).
+- `queue.lockFile` (défaut `apv/locks/full-suite.lock`) : verrou à bail de la file, relatif au répertoire Git commun (`git rev-parse --git-common-dir`, commun à tous les worktrees du dépôt) ou absolu (partagé par plusieurs dépôts de la machine) ; nom de fichier en `.lock` ([A-Za-z0-9._-]). Format et garanties de `apv lock` ([LOCKS.md](LOCKS.md)) : FIFO, propriétaire vérifié, bail renouvelé, reprise d'un détenteur mort journalisée ; `apv lock status --dir <dossier du fichier>` le montre.
+- `queue.waitMs` (défaut 2 h, de 0 à 24 h) : attente maximale de la file ; au-delà, refus `SUITE_QUEUE`, rien n'est exécuté.
+- `queue.maxLoad` (facultatif, nombre de 0,1 à 10000) : une fois le verrou obtenu, la suite attend que la charge moyenne sur 1 minute (`os.loadavg()`) passe sous ce seuil ; repère : le nombre de cœurs, ou un peu moins si des agents travaillent en même temps.
+- `queue.loadWaitMs` (défaut 30 min) : attente maximale de la charge ; au-delà, la suite démarre quand même et le note (sortie, `summary.json`).
+- `ports` (défaut aucun, 100 au plus, sans doublon) : ports libérés des orphelins de la copie où tourne la suite (processus lancés dans ce worktree lié), jamais d'une autre copie ni du checkout principal ; en pratique les ports de `resources`.
+
+La file ne coûte rien à une suite seule ; elle évite qu'une suite complète en rende d'autres instables par la charge (projet pilote, 28 septembre 2026 : quatre chantiers en parallèle, charge jusqu'à 16, six suites rouges sur des tests chaque fois différents).
 
 ## Maquettes validées : `design`
 
