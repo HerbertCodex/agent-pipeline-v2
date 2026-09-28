@@ -35,8 +35,9 @@ export const ALWAYS_REQUIRED: readonly string[] = [
   '**/compose.yaml', '**/Makefile', '**/*.mk', '**/justfile', '**/Taskfile.yml', '**/Taskfile.yaml', 'vercel.json', 'netlify.toml',
   'scripts/**', '**/*.sh', 'test/**', 'tests/**', 'e2e/**', '**/__tests__/**', '**/*.test.*', '**/*.spec.*', '**/*.e2e.*',
   '**/migrations/**', '**/*.sql',
-  // Content the application compiles or serves: Markdown, MDX and mdsvex under the source, static, public and content folders.
-  ...['src', 'static', 'public', 'content'].flatMap(dir => ['md', 'mdx', 'svx'].flatMap(ext => [`${dir}/**/*.${ext}`, `**/${dir}/**/*.${ext}`])),
+  // Content the application compiles, serves or loads by convention of its framework (Next.js pages/ and app/, Astro, mdsvex):
+  // Markdown, MDX, mdsvex and HTML under the source, static, public, content, app and pages folders, at any depth.
+  ...['src', 'static', 'public', 'content', 'app', 'pages'].flatMap(dir => ['md', 'mdx', 'svx', 'html'].flatMap(ext => [`${dir}/**/*.${ext}`, `**/${dir}/**/*.${ext}`])),
 ];
 /** Most needles of one literal search, and most symbolic links read; beyond, the check is required. */
 const MAX_NEEDLES = 1000;
