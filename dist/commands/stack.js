@@ -11,6 +11,8 @@ import { loadConfigAtCommit } from '../config/load.js';
 import { hash } from '../domain/hash.js';
 import { runGates } from '../gates/run.js';
 import { verifyGates } from '../gates/verify.js';
+import { planRepeat } from '../gates/repeat.js';
+import { Git } from '../execution/git.js';
 import { success } from '../engine/scheduler.js';
 import { environment, runProcess } from '../execution/process.js';
 import { commonDir } from '../stacks/idle.js';
@@ -281,6 +283,31 @@ async function batch(prs, values, io) {
             return `configuration de la PR illisible : ${errorMessage(error)}`;
         }
     };
+    // The ceilings of repeatChanged in the checks of the target, applied to the test files each pull request changes.
+    const repeatRefusal = async (base, head) => {
+        let config;
+        try {
+            config = atCommit(base).config;
+        }
+        catch (error) {
+            return `configuration de la cible illisible : ${errorMessage(error)}`;
+        }
+        const reasons = [];
+        for (const gate of config.gates) {
+            const settings = gate.repeatChanged;
+            if (!settings)
+                continue;
+            const plan = await planRepeat(new Git(abort.signal), repo, { base }, settings, head);
+            if (plan.files.length > settings.maxFiles)
+                reasons.push(`${gate.id} : ${plan.files.length} fichier(s) de test ajouté(s) ou modifié(s), au-delà de repeatChanged.maxFiles (${settings.maxFiles})`);
+            const optionLike = plan.files.find(f => f.startsWith('-'));
+            if (optionLike)
+                reasons.push(`${gate.id} : fichier ${optionLike} qui commence par « - »`);
+            if (settings.fixedWaits === 'refuse' && plan.fixedWaits.length)
+                reasons.push(`${gate.id} : attente(s) à durée fixe refusée(s) (${plan.fixedWaits.slice(0, 5).map(w => `${w.file}:${w.line}`).join(', ')})`);
+        }
+        return reasons.length ? reasons.join(' ; ') : null;
+    };
     const prove = async (worktree, head, base) => {
         // The checks, the setup and the verification come from the target, never from the batch they prove.
         const loaded = atCommit(base);
@@ -292,9 +319,19 @@ async function batch(prs, values, io) {
             if (r.status !== 'passed')
                 return { ok: false, runId: null, summary: `préparation batch.setup en échec (${r.status}, code ${r.exitCode ?? '-'}) : ${`${r.stdout}\n${r.stderr}`.trim().slice(-800)}` };
         }
-        const result = await runGates({ repo: worktree, config: loaded.config, stage: 'full', env: io.env, log, signal: abort.signal,
-            ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}) });
-        const verified = await verifyGates({ repo: worktree, config: loaded.config, commit: head, stage: 'full' });
+        // The target as base and reference: the checks that repeat their changed test files (repeatChanged) repeat those the
+        // batch brings; their ceiling of files was applied pull request by pull request (repeatRefusal), never to the sum.
+        let result;
+        try {
+            result = await runGates({ repo: worktree, config: loaded.config, stage: 'full', base, repeatReference: base, repeatCeiling: false, env: io.env, log, signal: abort.signal,
+                ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}) });
+        }
+        catch (error) {
+            if (error instanceof PipelineError && error.code === 'GATE_REPEAT')
+                return { ok: false, runId: null, summary: `suite refusée : ${cleanLine(error.message, 600)}`, refused: cleanLine(error.message, 600) };
+            throw error;
+        }
+        const verified = await verifyGates({ repo: worktree, config: loaded.config, commit: head, stage: 'full', repeatReference: base });
         const passed = result.receipts.filter(success).length;
         const failed = result.receipts.filter(r => !success(r)).map(r => `${r.gateId} (${r.status})`);
         return { ok: result.ok && verified.ok, runId: result.runId,
@@ -308,7 +345,7 @@ async function batch(prs, values, io) {
             onCall: call => { calls.push(call); if (values.merge || call.status !== 0 || call.error)
                 (values.json ? io.stderr : io.stdout)(transcript(bin, call)); },
             pollMs: positiveInt(io.env['APV_STACK_POLL_MS'], 3000), pollAttempts: positiveInt(io.env['APV_STACK_POLL_ATTEMPTS'], 20),
-            prove, configDrift, journal: entry => journalEntry(io, entry), signal: abort.signal,
+            prove, configDrift, repeatRefusal, journal: entry => journalEntry(io, entry), signal: abort.signal,
             ...(values.target !== undefined ? { target: values.target } : {}), ...(values.dir !== undefined ? { dir: resolve(io.cwd, values.dir) } : {}),
         });
     }

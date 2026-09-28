@@ -209,6 +209,17 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly command: string[];
             readonly testPattern: string | undefined;
         } | undefined;
+        readonly repeatChanged: {
+            readonly paths: string[];
+            readonly command: string[];
+            readonly times: number;
+            readonly maxFiles: number;
+            readonly timeoutMs: number | undefined;
+            readonly testPattern: string | undefined;
+            readonly stressArgs: string[] | undefined;
+            readonly fixedWaits: "off" | "warn" | "refuse";
+            readonly reference: string;
+        } | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;

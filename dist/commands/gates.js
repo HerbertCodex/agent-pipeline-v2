@@ -3,13 +3,14 @@ import { join, relative, resolve } from 'node:path';
 import { loadConfig, loadConfigAtCommit } from '../config/load.js';
 import { gateStages } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
-import { RECEIPTS_DIR, dirtyRefusal, isFullSuite, runGates, selectGates } from '../gates/run.js';
+import { RECEIPTS_DIR, dirtyRefusal, isFullSuite, runGates, selectGates, stageGates } from '../gates/run.js';
 import { exportRun, listRuns, pruneStore, receiptRetention, sharedStore } from '../gates/store.js';
 import { expectedLevel, findRun } from '../run/rhythm.js';
 import { resolveCommit, gitRoot } from '../run/git-probe.js';
 import { MAX_OVERRIDE_REASON, RUN_ID, applyFullSuiteOverride, readRunState, withRunLock, writeRunState } from '../run/state.js';
 import { cleanLine } from '../run/summary.js';
 import { verifyGates } from '../gates/verify.js';
+import { referenceMissing, resolveRef } from '../gates/repeat.js';
 import { Git } from '../execution/git.js';
 import { signalExitCode } from '../lock/run.js';
 import { EXIT, UsageError, guard, json, list, parse, repoPath, table } from './common.js';
@@ -56,7 +57,12 @@ des orphelins de cette copie sur suite.ports (jamais une autre copie ni le check
 délais des contrôles ne commencent qu'après. Un contrôle avec lock attend son verrou (bail apv lock ou
 flock) avant que son délai commence ; un contrôle avec retryFailed qui échoue relance une fois ses tests
 en échec, même commit et même arbre : « réussi après relance » (instable), compté comme réussi et
-signalé à part. À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
+signalé à part. Un contrôle avec repeatChanged relance ensuite, avec --base, les seuls fichiers de test
+ajoutés ou modifiés depuis la base (motifs repeatChanged.paths) repeatChanged.times fois, sous le même
+verrou : tout échec le rend rouge (« échoue X fois sur N »), jamais masqué par retryFailed ; plus de
+fichiers que repeatChanged.maxFiles, ou une attente à durée fixe avec fixedWaits = refuse : refus avant
+toute attente. Sans --base, un tel contrôle ne se lance pas (appel incorrect) ; une suite complète compare
+aussi à repeatChanged.reference (obligatoire ; introuvable : appel incorrect). À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
 annulés, sortie 128 + signal), les processus qu'elle a lancés encore vivants et les orphelins de cette
 copie sur suite.ports sont arrêtés (jamais la session, une autre copie ni le checkout principal).
 --stacks 1,2 (suite complète, deux piles déclarées au moins, section stacks) : les contrôles d'une pile
@@ -65,7 +71,7 @@ configuration ; sur la première dans cette copie, sur une autre dans une copie 
 (préparée par batch.setup, retirée à la fin), avec les variables de sa pile et sous son verrou. Un
 contrôle qui a des dépendances, ou dont d'autres dépendent, reste dans cette copie.
 Sortie : 0 si tous les contrôles exécutés passent, 1 sinon (ou suite complète refusée par le
-rythme, l'arbre modifié ou la file), 2 appel incorrect.
+rythme, l'arbre modifié ou la file, ou répétition refusée), 2 appel incorrect.
 
 verify : vérifie dans les reçus que chaque contrôle exigé a réussi sur ce commit exact, arbre
 propre, avec la configuration actuelle ; pour chaque contrôle, seul son reçu le plus récent
@@ -73,7 +79,9 @@ compte. --stage full (défaut) : tous les contrôles, les reçus ciblés ne comp
 --stage task : ceux de stage task, plus les contrôles full qui déclarent affected, prouvés par
 leur reçu ciblé (ou complet) ; --base <ref> est alors obligatoire (le dernier commit prouvé par
 la suite complète) : un reçu ciblé ne compte que si la base de son exécution est ce commit ou
-l'un de ses ancêtres.
+l'un de ses ancêtres. Un contrôle qui déclare repeatChanged n'est prouvé que si son reçu montre la
+répétition de chaque fichier de test que le commit ajoute ou modifie (recalculé depuis la base enregistrée
+et la référence) : sinon « tests modifiés non répétés ».
 Les reçus sont lus dans .apv/receipts/ du worktree, puis dans le magasin partagé pour les
 exécutions que le worktree n'a pas : la preuve d'un commit se vérifie depuis n'importe quel
 checkout du dépôt, avec les mêmes exigences. Une exécution du magasin partagé dont un fichier ne
@@ -95,7 +103,21 @@ const FLAKY = 'instable';
 const RESERVED = 'réservé à la suite complète';
 const TARGETED = 'ciblé';
 const SHARED = 'magasin partagé';
-const EVIDENCE = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu' };
+const EVIDENCE = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu', unrepeated: 'tests modifiés non répétés' };
+/** One line of the repetition of the changed test files of a check. */
+function repeatLine(r) {
+    const files = r.files.length > 5 ? `${r.files.slice(0, 5).join(', ')} ... (${r.files.length})` : r.files.join(', ');
+    if (r.status === 'no_base')
+        return 'non répétés : --base absent (apv gates run --base <base de la branche> les répète)';
+    if (r.status === 'none')
+        return `aucun fichier de test ajouté ou modifié depuis ${r.base?.slice(0, 12)}`;
+    if (r.status === 'not_run')
+        return `non répétés, la commande du contrôle n'a pas réussi (${files})`;
+    if (r.status === 'passed')
+        return `${r.files.length} fichier(s), ${r.times} fois chacun : réussi (${files})`;
+    const tests = r.failures.map(f => `${f.test} échoue ${f.count} fois sur ${r.times}`).join(' ; ');
+    return `${r.files.length} fichier(s), ${r.times} fois chacun : ${STATUS[r.status] ?? r.status}${tests ? `, test instable : ${tests}` : ''} (${files})`;
+}
 /** Human lines of `apv gates verify`. */
 function verifyLines(result) {
     const what = result.stage === 'full' ? 'suite complète' : result.targeted.length ? 'contrôles de tâche et ciblés' : 'contrôles de tâche';
@@ -122,8 +144,12 @@ function verifyLines(result) {
         lines.push('', `Reçus illisibles ignorés : ${result.unreadable.join(', ')}`);
     if (result.altered.length)
         lines.push('', `Exécutions du magasin partagé refusées (altérées) : ${result.altered.map(a => `${a.runId} (${a.reason})`).join(', ')}`);
+    const unrepeated = result.gates.filter(g => g.state === 'unrepeated');
+    if (unrepeated.length)
+        lines.push('', 'Tests modifiés non répétés (repeatChanged) : le reçu réussi ne prouve pas la répétition des tests que ce commit ajoute ou modifie :', ...unrepeated.map(g => `- ${g.gateId} : ${g.repeat.reason}${g.repeat.missing.length ? ` : ${g.repeat.missing.slice(0, 10).join(', ')}${g.repeat.missing.length > 10 ? ' ...' : ''}` : ''}`));
     const missing = result.gates.filter(g => g.state !== 'passed');
-    const rerun = result.stage === 'task' && result.base ? `apv gates run --stage task --base ${result.base.slice(0, 12)}` : `apv gates run --stage ${result.stage}`;
+    const rerun = result.stage === 'task' && result.base ? `apv gates run --stage task --base ${result.base.slice(0, 12)}`
+        : `apv gates run --stage ${result.stage}${result.repeating.length ? ' --base <base de la branche>' : ''}`;
     if (result.flaky.length)
         lines.push('', `Instables (réussis seulement après la relance de leurs tests en échec, même commit) : ${result.flaky.join(', ')} : à traiter comme un constat.`);
     lines.push('', result.ok
@@ -281,6 +307,23 @@ export async function run(args, io) {
             throw new UsageError('--concurrency attend un entier entre 1 et 16');
         const repo = repoPath(io, values.repo);
         const loaded = loadConfig(repo, values.config);
+        // A check that repeats its changed test files needs the base they changed from: refused as an incorrect call, before
+        // the proof lookup (--skip-proven) and any wait, so that a red repetition is never replaced by a run that repeats nothing.
+        const selected = selectGates(loaded.config.gates, list(values.only)).gates;
+        const staged = stageGates(selected, stage ?? 'full');
+        const repeating = [...staged.run, ...staged.targeted].filter(g => g.repeatChanged).map(g => g.id);
+        if (repeating.length && values.base === undefined) {
+            throw new UsageError(`${repeating.join(', ')} déclare(nt) repeatChanged : --base <base de la branche> est obligatoire (ses tests ajoutés ou modifiés depuis elle sont répétés ; sans base, rien ne le serait)`);
+        }
+        // At the full stage, the changes are also counted from the reference: one that does not resolve is refused here.
+        if ((stage ?? 'full') === 'full') {
+            const git = new Git();
+            const root = await git.root(repo);
+            for (const g of staged.run.filter(x => x.repeatChanged)) {
+                if (!(await resolveRef(git, root, g.repeatChanged.reference)))
+                    throw new UsageError(referenceMissing(g.id, g.repeatChanged.reference));
+            }
+        }
         const allowDirty = values['allow-dirty'] === true;
         // A full suite: a check of stage full run in full. On a dirty tree it proves nothing: refused first, before the
         // proof lookup, the rhythm (which may journal an override in the state) and any wait.
@@ -356,7 +399,8 @@ export async function run(args, io) {
         }
         const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, status: r.status, exitCode: r.exitCode,
             durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic,
-            ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}) }));
+            ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}),
+            ...(r.repeat ? { repeat: { status: r.repeat.status, base: r.repeat.base, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures, fixedWaits: r.repeat.fixedWaits } } : {}) }));
         const name = (r) => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
         if (values.json) {
             json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null,
@@ -400,6 +444,12 @@ export async function run(args, io) {
             const flaky = rows.filter(r => r.status === 'passed_after_retry');
             if (flaky.length)
                 lines.push('', `Instables (${flaky.length}) : réussis seulement après la relance unique de leurs tests en échec, même commit et même arbre ; comptés comme réussis, à traiter comme un constat :`, ...flaky.map(r => `- ${name(r)}${r.retriedTests?.length ? ` : ${r.retriedTests.join(' ; ')}` : ' (tests concernés non relevés : retryFailed.testPattern)'}`));
+            const repeated = rows.filter(r => r.repeat);
+            if (repeated.length)
+                lines.push('', 'Tests modifiés répétés (repeatChanged) :', ...repeated.map(r => `- ${name(r)} : ${repeatLine(r.repeat)}`));
+            const waits = repeated.flatMap(r => r.repeat.fixedWaits.map(w => `- ${name(r)} : ${w.file}:${w.line} : ${w.text}`));
+            if (waits.length)
+                lines.push('', `Attentes à durée fixe dans les tests modifiés (${waits.length}) : attendre un fait observable (réponse, élément, état), jamais une durée ; page.clock pour le temps :`, ...waits);
             const waited = rows.filter(r => (r.lockWaitMs ?? 0) >= 1000);
             if (waited.length)
                 lines.push('', `Attente de verrou avant le délai des contrôles : ${waited.map(r => `${name(r)} ${Math.round(r.lockWaitMs / 1000)} s`).join(', ')}.`);

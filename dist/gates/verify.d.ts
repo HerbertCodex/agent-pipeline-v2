@@ -17,6 +17,8 @@ export interface VerifyOptions {
      * this commit or one of its ancestors (it then covered at least these changes).
      */
     base?: string;
+    /** In place of `repeatChanged.reference`: the branch the changed test files are counted from (`apv stack batch`: its target). */
+    repeatReference?: string;
 }
 /**
  * State of one required check at the commit:
@@ -24,9 +26,11 @@ export interface VerifyOptions {
  *   every test passed on this exact commit, the failed ones in a single relaunch; reported apart in `flaky`);
  * - `failed`: that latest receipt did not succeed (a later failure always overrides an earlier success);
  * - `dirty`: receipts exist at this commit, but only with uncommitted changes (or an unknown tree state);
- * - `missing`: no receipt at this commit with the current configuration.
+ * - `missing`: no receipt at this commit with the current configuration;
+ * - `unrepeated`: that latest receipt succeeded, but the check declares `repeatChanged` and the receipt does not show
+ *   the repetition of every test file the commit adds or modifies (run without a base, a base too close, files missing).
  */
-export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing';
+export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated';
 export interface GateEvidence {
     gateId: string;
     state: EvidenceState;
@@ -46,6 +50,11 @@ export interface GateEvidence {
     otherBase: number;
     /** Where the receipt retained was read (the worktree, or the shared store of the repository); null without one. */
     source: ReceiptSource | null;
+    /** A check that declares `repeatChanged`: the test files its receipt should have repeated and did not, and why; null otherwise. */
+    repeat: {
+        missing: string[];
+        reason: string;
+    } | null;
 }
 export interface VerifyResult {
     repo: string;
@@ -68,6 +77,8 @@ export interface VerifyResult {
     altered: AlteredRun[];
     /** Required checks proven by a receipt `passed_after_retry`: passed, but only after the relaunch of their failed tests (unstable). */
     flaky: string[];
+    /** Required checks that declare `repeatChanged`: their proof needs a run with `--base`. */
+    repeating: string[];
     ok: boolean;
 }
 /** Where a receipt was read: the `.apv/receipts/` of the worktree, or the shared store of the repository. */

@@ -280,3 +280,57 @@ test('Ctrl-C during the suite of a batch --merge: exit 130, "Lot interrompu", no
   assert.match(out, /lot interrompu \(signal\) pendant la preuve du lot, avant toute fusion ; fusionnées : aucune/);
   assert.deepEqual(p.merges(), []);
 });
+
+/** Target checks with repeatChanged (maxFiles 1), and PRs #16 (one test), #17 (one other test), #18 (two tests). */
+function repeatBatch(t) {
+  const p = batchProject(t);
+  git(p.repo, 'switch', '-q', 'main');
+  writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({ gates: [{ id: 'suite', stage: 'full', command: [process.execPath, '-e', '0'],
+    repeatChanged: { paths: ['*.e2e.ts'], command: [process.execPath, '-e', '0', '{{repeat}}'], maxFiles: 1, reference: 'origin/main' } }] }));
+  git(p.repo, 'commit', '-qam', 'repeat'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const state = JSON.parse(readFileSync(join(p.root, 'gh.json'), 'utf8'));
+  for (const [n, files] of [[16, ['a.e2e.ts']], [17, ['b.e2e.ts']], [18, ['c.e2e.ts', 'd.e2e.ts']]]) {
+    git(p.repo, 'switch', '-q', '-c', `pr-${n}`, 'main');
+    for (const f of files) writeFileSync(join(p.repo, f), `test ${f}\n`);
+    git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', `pr ${n}`); git(p.repo, 'push', '-q', 'origin', `pr-${n}`);
+    const sha = git(p.repo, 'rev-parse', 'HEAD');
+    git(p.origin, 'update-ref', `refs/pull/${n}/head`, sha);
+    state.prs[n] = { ...state.prs[11], number: n, headRefName: `pr-${n}`, headRefOid: sha };
+  }
+  writeFileSync(join(p.root, 'gh.json'), JSON.stringify(state));
+  git(p.repo, 'switch', '-q', 'main');
+  return p;
+}
+
+test('batch and repeatChanged: maxFiles applies pull request by pull request, a PR over it refuses the batch before anything is built', async t => {
+  const p = repeatBatch(t);
+  // Two PRs of one test each: the batch repeats both (2 files, over maxFiles 1 for the sum, never for one PR).
+  const ok = await p.run(['16', '17', '--json']);
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr);
+  const run = ok.json().proven;
+  assert.deepEqual(run.members.map(m => m.number), [16, 17]);
+  const summary = JSON.parse(readFileSync(join(p.repo, '.git', 'apv', 'receipts', ok.json().lots[0].proof.runId, 'summary.json'), 'utf8'));
+  assert.deepEqual(summary.receipts[0].repeat, { status: 'passed', files: ['a.e2e.ts', 'b.e2e.ts'], times: 5, failures: [] });
+  const refused = await p.run(['16', '18', '--bisect', '--json']);
+  assert.equal(refused.code, 1);
+  assert.equal(refused.json().stopped.pr, 18);
+  assert.match(refused.json().stopped.reasons[0], /lot refusé avant toute construction \(répétition des tests modifiés, repeatChanged\) : PR #18 : suite : 2 fichier\(s\) de test ajouté\(s\) ou modifié\(s\), au-delà de repeatChanged\.maxFiles \(1\) ; ce n'est pas un échec de suite, la bissection ne s'applique pas/);
+  assert.deepEqual(refused.json().lots, [], 'nothing built');
+  assert.deepEqual(refused.json().culprits, []);
+});
+
+test('batch: a suite refused before it ran is never bisected nor taken for a failure', async t => {
+  const p = batchProject(t);
+  const env = { ...process.env, ...p.env };
+  let proofs = 0;
+  const report = await batchMerge({
+    repo: p.repo, common: realpathSync(join(p.repo, '.git')), prs: [11, 12], bisect: true, merge: false, ready: false, keep: false, remote: 'origin',
+    gh: processGh(fakeGh, env, p.repo), git: processGit(env), log: () => {}, onCall: () => {}, pollMs: 5, pollAttempts: 3,
+    configDrift: () => null, journal: () => null,
+    prove: async () => { proofs += 1; return { ok: false, runId: null, summary: 'suite refusée : GATE_REPEAT', refused: 'GATE_REPEAT' }; },
+  });
+  assert.equal(proofs, 1, 'no bisection');
+  assert.deepEqual(report.culprits, []);
+  assert.equal(report.proven, null);
+  assert.match(report.stopped.reasons[0], /suite du lot refusée avant de tourner \(GATE_REPEAT\) : ce n'est pas un échec de suite, la bissection ne s'applique pas/);
+});
