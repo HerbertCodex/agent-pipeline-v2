@@ -28,7 +28,8 @@ export interface VerifyOptions {
 }
 /**
  * State of one required check at the commit:
- * - `passed`: its latest receipt on a clean tree with the current configuration succeeded;
+ * - `passed`: its latest receipt on a clean tree with the current configuration succeeded (`passed_after_retry` included:
+ *   every test passed on this exact commit, the failed ones in a single relaunch; reported apart in `flaky`);
  * - `failed`: that latest receipt did not succeed (a later failure always overrides an earlier success);
  * - `dirty`: receipts exist at this commit, but only with uncommitted changes (or an unknown tree state);
  * - `missing`: no receipt at this commit with the current configuration.
@@ -73,6 +74,8 @@ export interface VerifyResult {
   store: string;
   /** Runs of the shared store refused as a whole (files altered or contradicting their manifest). */
   altered: AlteredRun[];
+  /** Required checks proven by a receipt `passed_after_retry`: passed, but only after the relaunch of their failed tests (unstable). */
+  flaky: string[];
   ok: boolean;
 }
 
@@ -223,5 +226,6 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     gates.push({ gateId, state: success(last.receipt) ? 'passed' : 'failed', status: last.receipt.status, receipt: last.receipt.id,
       runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof: last.receipt.targeted === true ? 'targeted' : 'full', otherBase, source: last.source });
   }
-  return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered, ok: gates.every(g => g.state === 'passed') };
+  return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered,
+    flaky: gates.filter(g => g.state === 'passed' && g.status === 'passed_after_retry').map(g => g.gateId), ok: gates.every(g => g.state === 'passed') };
 }

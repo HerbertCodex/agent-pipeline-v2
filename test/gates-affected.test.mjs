@@ -213,7 +213,7 @@ test('gates run --stage full says when the full suite is already proven; --skip-
   assert.deepEqual(p.log(), ['full', 'full']);
   // A dirty tree, or a later failure on the commit: not proven, so the suite runs again.
   write(f.repo, 'scratch.txt', 'x\n');
-  r = await apv(f.repo, ['gates', 'run', '--skip-proven', '--json']);
+  r = await apv(f.repo, ['gates', 'run', '--skip-proven', '--allow-dirty', '--json']);
   assert.equal(r.json().alreadyProven, false); assert.equal(r.json().dirty, true);
   assert.deepEqual(p.log(), ['full', 'full', 'full']);
   rmSync(join(f.repo, 'scratch.txt'));

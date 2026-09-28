@@ -3,7 +3,7 @@ import { declaredTestPorts, loadConfig } from '../config/load.js';
 import { canonicalPath } from '../domain/paths.js';
 import { errorMessage } from '../domain/errors.js';
 import { cleanLine } from '../run/summary.js';
-import { listProcesses, pipelineSiblings, protectedPids, protectedTool, repositoryWorktrees, stopProcesses, worktreeOf } from '../execution/procs.js';
+import { listProcesses, pipelineSiblings, protectedPids, repositoryWorktrees, stopProcesses, stopRefusal, worktreeOf } from '../execution/procs.js';
 import { EXIT, UsageError, guard, json, parse, repoPath, table } from './common.js';
 export const DEFAULT_GRACE_SECONDS = 5;
 export const MAX_GRACE_SECONDS = 60;
@@ -40,6 +40,7 @@ const REFUSAL_LABEL = {
     'unknown-cwd': 'répertoire courant illisible (autre utilisateur) : non arrêté',
     tool: 'protégé : outil',
     'main-checkout': 'protégé : checkout principal',
+    'other-copy': 'autre copie : non arrêté',
 };
 const OUTCOME_LABEL = {
     terminated: 'arrêté (SIGTERM)', killed: 'arrêté (SIGKILL)', survived: 'ENCORE VIVANT après SIGKILL', gone: 'déjà terminé', denied: 'signal refusé (droits)',
@@ -147,13 +148,8 @@ export async function run(args, io) {
         });
         // A process of the main checkout may be stopped only with --include-main, and only if it holds a declared test port.
         const mainAllowed = (info) => includeMain && info.ports.some(port => targetPorts.includes(port) && declared.has(port));
-        const every = selected.map(info => {
-            const worktree = worktreeOf(info.cwd, worktrees);
-            const tool = protectedTool(info);
-            const refusal = session.has(info.pid) ? 'protected' : tool !== null ? 'tool' : info.cwd === null ? 'unknown-cwd' : worktree === null ? 'outside'
-                : worktree === main && !mainAllowed(info) ? 'main-checkout' : null;
-            return { info, worktree, refusal, tool };
-        }).sort((a, b) => a.info.pid - b.info.pid);
+        const every = selected.map(info => ({ info, ...stopRefusal(info, { session, worktrees, mainAllowed: mainAllowed(info) }) }))
+            .sort((a, b) => a.info.pid - b.info.pid);
         // list shows by default what stop would stop and what holds a targeted port; --all shows the rest of the worktrees too.
         const shown = (c) => values.all === true || action === 'stop' || c.refusal === null || c.info.ports.some(port => targetPorts.includes(port));
         const candidates = every.filter(shown);

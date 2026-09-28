@@ -3,7 +3,7 @@ import { declaredTestPorts, loadConfig } from '../config/load.js';
 import { canonicalPath } from '../domain/paths.js';
 import { errorMessage } from '../domain/errors.js';
 import { cleanLine } from '../run/summary.js';
-import { listProcesses, pipelineSiblings, protectedPids, protectedTool, repositoryWorktrees, stopProcesses, worktreeOf, type ProcessInfo, type StopOutcome } from '../execution/procs.js';
+import { listProcesses, pipelineSiblings, protectedPids, repositoryWorktrees, stopProcesses, stopRefusal, worktreeOf, type ProcessInfo, type StopOutcome, type StopRefusal } from '../execution/procs.js';
 import { EXIT, UsageError, guard, json, parse, repoPath, table } from './common.js';
 import type { CommandIO } from './io.js';
 
@@ -39,7 +39,7 @@ const options = {
   'include-main': { type: 'boolean' }, all: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
 } as const;
 
-type Refusal = 'outside' | 'protected' | 'unknown-cwd' | 'tool' | 'main-checkout';
+type Refusal = StopRefusal;
 interface Candidate { info: ProcessInfo; worktree: string | null; refusal: Refusal | null; tool: string | null }
 
 const REFUSAL_LABEL: Record<Refusal, string> = {
@@ -48,6 +48,7 @@ const REFUSAL_LABEL: Record<Refusal, string> = {
   'unknown-cwd': 'répertoire courant illisible (autre utilisateur) : non arrêté',
   tool: 'protégé : outil',
   'main-checkout': 'protégé : checkout principal',
+  'other-copy': 'autre copie : non arrêté',
 };
 const OUTCOME_LABEL: Record<StopOutcome, string> = {
   terminated: 'arrêté (SIGTERM)', killed: 'arrêté (SIGKILL)', survived: 'ENCORE VIVANT après SIGKILL', gone: 'déjà terminé', denied: 'signal refusé (droits)',
@@ -130,13 +131,8 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     });
     // A process of the main checkout may be stopped only with --include-main, and only if it holds a declared test port.
     const mainAllowed = (info: ProcessInfo): boolean => includeMain && info.ports.some(port => targetPorts.includes(port) && declared.has(port));
-    const every: Candidate[] = selected.map(info => {
-      const worktree = worktreeOf(info.cwd, worktrees);
-      const tool = protectedTool(info);
-      const refusal: Refusal | null = session.has(info.pid) ? 'protected' : tool !== null ? 'tool' : info.cwd === null ? 'unknown-cwd' : worktree === null ? 'outside'
-        : worktree === main && !mainAllowed(info) ? 'main-checkout' : null;
-      return { info, worktree, refusal, tool };
-    }).sort((a, b) => a.info.pid - b.info.pid);
+    const every: Candidate[] = selected.map(info => ({ info, ...stopRefusal(info, { session, worktrees, mainAllowed: mainAllowed(info) }) }))
+      .sort((a, b) => a.info.pid - b.info.pid);
     // list shows by default what stop would stop and what holds a targeted port; --all shows the rest of the worktrees too.
     const shown = (c: Candidate): boolean => values.all === true || action === 'stop' || c.refusal === null || c.info.ports.some(port => targetPorts.includes(port));
     const candidates = every.filter(shown);

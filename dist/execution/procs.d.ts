@@ -69,3 +69,22 @@ export declare function stopProcesses(targets: readonly ProcessInfo[], options: 
     pollMs?: number;
     root?: string;
 }): Promise<Map<number, StopOutcome>>;
+/**
+ * Why a process may not be stopped, or null when it may: the session that runs apv (and the other commands of its
+ * pipeline), a protected tool, an unreadable working directory, a process outside the repository, a process of the
+ * main checkout (unless `mainAllowed`), and, when `copy` is given, a process of another worktree than that copy.
+ * Shared by `apv procs stop` and the port cleanup of a full suite (`apv gates run`).
+ */
+export type StopRefusal = 'outside' | 'protected' | 'unknown-cwd' | 'tool' | 'main-checkout' | 'other-copy';
+export declare function stopRefusal(info: ProcessInfo, context: {
+    session: ReadonlySet<number>;
+    worktrees: readonly string[];
+    mainAllowed?: boolean;
+    copy?: string | null;
+}): {
+    worktree: string | null;
+    tool: string | null;
+    refusal: StopRefusal | null;
+};
+/** The session that runs apv: its process and ancestors, and the other commands of its pipeline. */
+export declare function sessionPids(processes: readonly ProcessInfo[], root?: string): Set<number>;

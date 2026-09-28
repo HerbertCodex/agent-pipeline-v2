@@ -46,7 +46,8 @@ async function project(t, { lead = false } = {}) {
   git(f.repo, 'worktree', 'add', '-q', '-b', 'apv/rythme-integration-1', worktree, 'HEAD');
   const state = () => JSON.parse(readFileSync(join(checkout, '.apv/state/run-rythme.json'), 'utf8'));
   const ran = () => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [];
-  const gates = (cwd, ...args) => apv(cwd, ['gates', 'run', ...args], env);
+  // The state of the execution is not committed here: the full suite runs on a dirty tree (--allow-dirty, 3.0.0-alpha.4).
+  const gates = (cwd, ...args) => apv(cwd, ['gates', 'run', ...args, ...(args.includes('--stage') && args[args.indexOf('--stage') + 1] === 'task' ? [] : ['--allow-dirty'])], env);
   return { ...f, env, run, checkout, worktree, state, ran, gates };
 }
 
@@ -252,4 +253,21 @@ test('no state anywhere: outside any execution, unchanged', async t => {
   const next = await apv(other, ['run', 'next', 'absente'], p.env);
   assert.equal(next.code, 1);
   assert.match(next.stderr, /RUN_MISSING/);
+});
+
+test('a full suite with --reason in the copy that holds the state is refused before the override is journaled (3.0.0-alpha.4)', async t => {
+  const p = await project(t);
+  git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'état de l’exécution');
+  const before = p.state().events.length;
+  const r = await apv(p.repo, ['gates', 'run', '--stage', 'full', '--run', 'rythme', '--reason', 'reproduire un constat'], p.env);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /GATE_DIRTY.*la dérogation \(--reason\) s'écrit dans l'état de l'exécution, dans cette copie/);
+  assert.equal(p.state().events.length, before, 'nothing journaled');
+  assert.deepEqual(p.ran(), []);
+  assert.equal(git(p.repo, 'status', '--porcelain'), '');
+  // From a clean copy of the head (the integration worktree), the override is journaled and the suite runs.
+  const ok = await apv(p.worktree, ['gates', 'run', '--stage', 'full', '--run', 'rythme', '--reason', 'reproduire un constat', '--json'], p.env);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.equal(ok.json().dirty, false);
+  assert.equal(p.state().events.length, before + 1);
 });

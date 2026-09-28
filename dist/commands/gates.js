@@ -1,8 +1,9 @@
+import { realpathSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { loadConfig, loadConfigAtCommit } from '../config/load.js';
-import { gateStage, gateStages } from '../domain/contracts.js';
+import { gateStages } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
-import { RECEIPTS_DIR, runGates, selectGates } from '../gates/run.js';
+import { RECEIPTS_DIR, dirtyRefusal, isFullSuite, runGates, selectGates } from '../gates/run.js';
 import { exportRun, listRuns, pruneStore, receiptRetention, sharedStore } from '../gates/store.js';
 import { expectedLevel, findRun } from '../run/rhythm.js';
 import { resolveCommit, gitRoot } from '../run/git-probe.js';
@@ -14,7 +15,7 @@ import { EXIT, UsageError, guard, json, list, parse, repoPath, table } from './c
 export const usage = `Utilisation :
   apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>]
                 [--concurrency N] [--keep-going] [--skip-proven] [--run <spec-id>]
-                [--reason <texte>] [--repo <chemin>] [--json]
+                [--reason <texte>] [--allow-dirty] [--repo <chemin>] [--json]
   apv gates verify --commit <sha> [--stage full|task] [--base <ref>]
                    [--config <fichier> | --commit-config] [--repo <chemin>] [--json]
   apv gates receipts list [--commit <ref>] [--limit N] [--repo <chemin>] [--json]
@@ -46,8 +47,17 @@ quand un worktree du dépôt a son état .apv/state/run-<id>.json (plusieurs : c
 sinon le checkout principal, sinon refus qui liste les emplacements) ; aucune : rien ne change.
 --reason <texte> (1 à ${MAX_OVERRIDE_REASON} caractères) laisse passer la suite complète : la raison est journalisée
 dans l'état de l'exécution et écrite dans les reçus (override).
+Suite complète (au moins un contrôle de stage full exécuté en entier) : refusée sur un arbre modifié
+(fichiers suivis modifiés ou non suivis hors ignorés, listés) sauf --allow-dirty (reçus non prouvants) ;
+puis file des suites complètes (section suite.queue, active par défaut : un verrou à bail commun aux
+worktrees, et si suite.queue.maxLoad est posé, attente d'une charge sur 1 min sous ce seuil) ; puis arrêt
+des orphelins de cette copie sur suite.ports (jamais une autre copie ni le checkout principal). Les
+délais des contrôles ne commencent qu'après. Un contrôle avec lock attend son verrou (bail apv lock ou
+flock) avant que son délai commence ; un contrôle avec retryFailed qui échoue relance une fois ses tests
+en échec, même commit et même arbre : « réussi après relance » (instable), compté comme réussi et
+signalé à part.
 Sortie : 0 si tous les contrôles exécutés passent, 1 sinon (ou suite complète refusée par le
-rythme), 2 appel incorrect.
+rythme, l'arbre modifié ou la file), 2 appel incorrect.
 
 verify : vérifie dans les reçus que chaque contrôle exigé a réussi sur ce commit exact, arbre
 propre, avec la configuration actuelle ; pour chaque contrôle, seul son reçu le plus récent
@@ -72,7 +82,8 @@ receipts prune : applique la rétention au magasin partagé (--keep-days, --keep
 la configuration). Les reçus du worktree ne sont jamais touchés.
 Sortie : 0, 1 exécution introuvable, altérée ou destination existante, 2 appel incorrect.`;
 const STATUS = { passed: 'réussi', failed: 'échec', timed_out: 'délai dépassé', cancelled: 'annulé',
-    spawn_error: 'non lancé', blocked: 'bloqué', cached: 'réutilisé' };
+    spawn_error: 'non lancé', blocked: 'bloqué', cached: 'réutilisé', passed_after_retry: 'réussi après relance' };
+const FLAKY = 'instable';
 const RESERVED = 'réservé à la suite complète';
 const TARGETED = 'ciblé';
 const SHARED = 'magasin partagé';
@@ -81,7 +92,8 @@ const EVIDENCE = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié',
 function verifyLines(result) {
     const what = result.stage === 'full' ? 'suite complète' : result.targeted.length ? 'contrôles de tâche et ciblés' : 'contrôles de tâche';
     const state = (g) => {
-        const text = g.state === 'failed' ? `${EVIDENCE.failed} (${STATUS[g.status] ?? g.status})` : EVIDENCE[g.state];
+        const text = g.state === 'failed' ? `${EVIDENCE.failed} (${STATUS[g.status] ?? g.status})`
+            : g.state === 'passed' && g.status === 'passed_after_retry' ? `${STATUS['passed_after_retry']} (${FLAKY})` : EVIDENCE[g.state];
         return g.proof === 'targeted' ? `${text} (${TARGETED})` : text;
     };
     const lines = [`Vérification (${what}) au commit ${result.commit.slice(0, 12)}${result.base ? ` ; tests ciblés depuis ${result.base.slice(0, 12)}` : ''}`, '',
@@ -104,8 +116,10 @@ function verifyLines(result) {
         lines.push('', `Exécutions du magasin partagé refusées (altérées) : ${result.altered.map(a => `${a.runId} (${a.reason})`).join(', ')}`);
     const missing = result.gates.filter(g => g.state !== 'passed');
     const rerun = result.stage === 'task' && result.base ? `apv gates run --stage task --base ${result.base.slice(0, 12)}` : `apv gates run --stage ${result.stage}`;
+    if (result.flaky.length)
+        lines.push('', `Instables (réussis seulement après la relance de leurs tests en échec, même commit) : ${result.flaky.join(', ')} : à traiter comme un constat.`);
     lines.push('', result.ok
-        ? `Preuve complète : ${result.required.length} contrôle(s) réussi(s) sur ce commit, arbre propre${result.stage === 'task' && (result.targeted.length || result.reserved.length) ? ' (niveau tâche : la suite complète reste à passer)' : ''}.`
+        ? `Preuve complète : ${result.required.length} contrôle(s) réussi(s) sur ce commit, arbre propre${result.flaky.length ? `, dont ${result.flaky.length} ${FLAKY}(s)` : ''}${result.stage === 'task' && (result.targeted.length || result.reserved.length) ? ' (niveau tâche : la suite complète reste à passer)' : ''}.`
         : `Preuve incomplète. Manque : ${missing.map(g => `${g.gateId} (${EVIDENCE[g.state]})`).join(', ')}. ` +
             `Relancer : ${rerun} sur ce commit, arbre propre.`);
     return lines;
@@ -129,7 +143,7 @@ async function provenFull(repo, config) {
  * level only (the level of `apv run next`), unless `reason` is given, journaled in the state of the execution.
  * Outside any execution, or when the level is full or unknown, nothing changes.
  */
-async function rhythmCheck(repo, explicit, reason, io) {
+async function rhythmCheck(repo, explicit, reason, io, beforeWrite) {
     const notes = [];
     const context = findRun(repo, explicit);
     if (!context) {
@@ -163,6 +177,7 @@ async function rhythmCheck(repo, explicit, reason, io) {
             'La suite complète vient à la dernière intégration et à la livraison. ' +
             'Dérogation motivée seulement : --reason "<raison>" (journalisée dans l\'état de l\'exécution et écrite dans les reçus).');
     }
+    await beforeWrite(context.checkout);
     const commit = resolveCommit(gitRoot(repo), 'HEAD') ?? undefined;
     await withRunLock(context.specId, io.env, () => {
         const current = readRunState(context.file, { shown: `.apv/state/run-${context.specId}.json`, specId: context.specId });
@@ -183,7 +198,7 @@ export async function run(args, io) {
         const { values, positionals } = parse(args, {
             only: { type: 'string' }, config: { type: 'string' }, base: { type: 'string' }, concurrency: { type: 'string' },
             stage: { type: 'string' }, commit: { type: 'string' }, 'skip-proven': { type: 'boolean' }, run: { type: 'string' }, reason: { type: 'string' },
-            'keep-going': { type: 'boolean' }, repo: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+            'keep-going': { type: 'boolean' }, 'allow-dirty': { type: 'boolean' }, repo: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
             'commit-config': { type: 'boolean' }, limit: { type: 'string' }, out: { type: 'string' }, 'keep-days': { type: 'string' }, 'keep-runs': { type: 'string' },
         });
         if (values.help) {
@@ -202,7 +217,7 @@ export async function run(args, io) {
             throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
         const stage = stageOf(values.stage);
         if (action === 'verify') {
-            const extra = ['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason'].filter(k => values[k] !== undefined);
+            const extra = ['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason', 'allow-dirty'].filter(k => values[k] !== undefined);
             if (extra.length)
                 throw new UsageError(`option de gates run seulement : --${extra.join(', --')}`);
             if (!values.commit)
@@ -226,7 +241,7 @@ export async function run(args, io) {
             if (values.json) {
                 json(io, { ok: result.ok, commit: result.commit, stage: result.stage, base: result.base, config: loaded.file, configHash: result.configHash,
                     required: result.required, targeted: result.targeted, reserved: result.reserved, gates: result.gates, unreadable: result.unreadable,
-                    store: result.store, altered: result.altered, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
+                    store: result.store, altered: result.altered, flaky: result.flaky, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
             }
             else {
                 io.stdout(`${verifyLines(result).join('\n')}\n`);
@@ -252,6 +267,26 @@ export async function run(args, io) {
             throw new UsageError('--concurrency attend un entier entre 1 et 16');
         const repo = repoPath(io, values.repo);
         const loaded = loadConfig(repo, values.config);
+        const allowDirty = values['allow-dirty'] === true;
+        // A full suite: a check of stage full run in full. On a dirty tree it proves nothing: refused first, before the
+        // proof lookup, the rhythm (which may journal an override in the state) and any wait.
+        const full = isFullSuite(selectGates(loaded.config.gates, list(values.only)).gates, stage ?? 'full');
+        let treeChecked = false;
+        const cleanTree = async (stateCheckout) => {
+            if (treeChecked || !full || allowDirty)
+                return;
+            treeChecked = true;
+            const git = new Git();
+            const root = await git.root(repo);
+            const status = await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+            if (status !== '')
+                throw dirtyRefusal(status);
+            // The override is journaled in the state of the execution: in this very copy, it would dirty the tree of the suite.
+            if (stateCheckout !== undefined && realpathSync(stateCheckout) === root) {
+                throw new PipelineError('GATE_DIRTY', `Suite complète refusée : la dérogation (--reason) s'écrit dans l'état de l'exécution, dans cette copie (${root}), ` +
+                    'dont l\'arbre serait alors modifié et les reçus non prouvants. Lancer la suite dans une copie propre de la tête (worktree d\'intégration ou de livraison), ou --allow-dirty.');
+            }
+        };
         // The full suite already proven on this exact commit, clean tree: said before a run of several minutes, and
         // with --skip-proven, not run again. The proof is the one `apv gates verify` checks, nothing weaker.
         const proven = stage !== 'task' && values.only === undefined ? await provenFull(repo, loaded.config) : null;
@@ -267,21 +302,25 @@ export async function run(args, io) {
             io.stdout(`Note : la suite complète est déjà prouvée au commit ${proven.commit.slice(0, 12)} (apv gates verify à 0, arbre propre) ; --skip-proven évite de la relancer.\n`);
         }
         // The rhythm of an execution: only a run that executes a check of stage full in full is concerned.
-        const full = stage !== 'task' && selectGates(loaded.config.gates, list(values.only)).gates.some(g => gateStage(g) === 'full');
-        const rhythm = full ? await rhythmCheck(repo, values.run, reason, io)
+        // The rhythm refusal first (it says what to run instead), then the clean tree, checked before an override is journaled.
+        const rhythm = full ? await rhythmCheck(repo, values.run, reason, io, cleanTree)
             : { context: null, expected: null, override: null, notes: reason !== undefined ? ['Note : --reason sans effet, aucun contrôle de stage full à exécuter.'] : [] };
+        await cleanTree();
         if (!values.json && rhythm.notes.length)
             io.stdout(`${rhythm.notes.join('\n')}\n`);
         const result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env,
+            allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}),
             ...(values.base ? { base: values.base } : {}), ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}) });
         const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, status: r.status, exitCode: r.exitCode,
-            durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic }));
+            durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic,
+            ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}) }));
         const name = (r) => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
         if (values.json) {
             json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null,
                 stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
                 reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
                 sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
+                suite: result.suite, queue: result.queue, ports: result.ports, flaky: result.flaky,
                 rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
                     level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
         }
@@ -290,11 +329,26 @@ export async function run(args, io) {
             if (result.added.length)
                 lines.push(`Dépendances ajoutées : ${result.added.join(', ')}`);
             if (result.dirty)
-                lines.push('Attention : modifications non commitées présentes ; les reçus décrivent plus que le commit.');
+                lines.push(`Attention : modifications non commitées présentes ; les reçus décrivent plus que le commit${result.suite ? ' (--allow-dirty : ils ne prouvent rien)' : ''}.`);
+            const q = result.queue;
+            if (q) {
+                const load = q.load ? ` ; charge sur 1 min au démarrage ${q.load.atStart.toFixed(2)} (seuil ${q.load.max}${q.load.waitedMs >= 1000 ? `, attendu ${Math.round(q.load.waitedMs / 1000)} s` : ''}${q.load.exceeded ? ', délai d\'attente de la charge dépassé : démarrée quand même' : ''})` : '';
+                lines.push(`File des suites complètes : ${q.waitedMs >= 1000 ? `attendu ${Math.round(q.waitedMs / 1000)} s${q.heldBy ? ` (tenue par ${q.heldBy})` : ''}` : 'libre'}${load}.`);
+            }
+            if (result.ports?.stopped.length)
+                lines.push(`Orphelins de cette copie arrêtés sur les ports de la suite : ${result.ports.stopped.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}.`);
+            if (result.ports?.left.length)
+                lines.push(`Ports de la suite tenus par d'autres processus, non arrêtés : ${result.ports.left.map(p => `pid ${p.pid} (${p.ports.join(', ')}, ${p.reason})`).join(', ')}.`);
             lines.push('', table(['contrôle', 'statut', 'code', 'durée'], [
                 ...rows.map(r => [name(r), STATUS[r.status] ?? r.status, r.exitCode === null ? '-' : String(r.exitCode), `${(r.durationMs / 1000).toFixed(1)} s`]),
                 ...result.reserved.map(id => [id, RESERVED, '-', '-'])
             ]));
+            const flaky = rows.filter(r => r.status === 'passed_after_retry');
+            if (flaky.length)
+                lines.push('', `Instables (${flaky.length}) : réussis seulement après la relance unique de leurs tests en échec, même commit et même arbre ; comptés comme réussis, à traiter comme un constat :`, ...flaky.map(r => `- ${name(r)}${r.retriedTests?.length ? ` : ${r.retriedTests.join(' ; ')}` : ' (tests concernés non relevés : retryFailed.testPattern)'}`));
+            const waited = rows.filter(r => (r.lockWaitMs ?? 0) >= 1000);
+            if (waited.length)
+                lines.push('', `Attente de verrou avant le délai des contrôles : ${waited.map(r => `${name(r)} ${Math.round(r.lockWaitMs / 1000)} s`).join(', ')}.`);
             for (const r of rows.filter(r => r.diagnostic && r.status !== 'blocked'))
                 lines.push('', `--- ${name(r)} (${STATUS[r.status] ?? r.status}) ---`, r.diagnostic.trimEnd());
             const verdict = !result.ok ? 'Des contrôles échouent.'
@@ -327,7 +381,7 @@ async function receipts(args, values, io) {
     if (sub !== 'list' && sub !== 'export' && sub !== 'prune')
         throw new UsageError(sub ? `sous-commande inconnue : gates receipts ${sub}` : 'sous-commande manquante (list, export, prune)');
     const allowed = { list: ['commit', 'limit'], export: ['out'], prune: ['keep-days', 'keep-runs', 'config'] };
-    const foreign = ['only', 'config', 'base', 'concurrency', 'stage', 'commit', 'skip-proven', 'run', 'reason', 'keep-going', 'commit-config', 'limit', 'out', 'keep-days', 'keep-runs']
+    const foreign = ['only', 'config', 'base', 'concurrency', 'stage', 'commit', 'skip-proven', 'run', 'reason', 'keep-going', 'allow-dirty', 'commit-config', 'limit', 'out', 'keep-days', 'keep-runs']
         .filter(k => values[k] !== undefined && !allowed[sub].includes(k));
     if (foreign.length)
         throw new UsageError(`option inattendue pour gates receipts ${sub} : --${foreign.join(', --')}`);

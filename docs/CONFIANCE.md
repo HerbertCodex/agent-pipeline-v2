@@ -32,3 +32,7 @@ Les comptes rendus à l'opérateur (points d'étape, PR, remise finale, fusion p
 Un rapport sans niveau, avec un niveau inconnu, ou dont la preuve est vide est refusé : il va dans `refused` (avec la raison et le rapport reçu, pour le redemander à l'agent) et n'est jamais compté. Le résultat contient `escalation` : `verify` (résultats ou constats `probable`, à vérifier avant d'agir) et `operator` (`suppose`, à remonter). Un constat fusionné par le dédoublonnage garde la preuve la plus forte de ses membres.
 
 Sans outil Workflow, les agents lancés par l'outil Agent rendent un rapport libre avec les mêmes niveaux ; le chef de projet applique les mêmes refus.
+
+## Contrôles réussis après relance
+
+Un contrôle « réussi après relance » (`passed_after_retry`, champ `retryFailed`, [CLI.md](CLI.md#apv-gates-run)) prouve que chaque test a réussi sur le code exact du commit : il compte comme réussi. Il ne prouve pas que le code est stable : l'affirmation « la suite est stable » reste au mieux `probable` tant que le test instable n'a pas été reproduit et stabilisé, et l'instabilité se note comme un constat (niveau `prouve` pour le constat lui-même : le reçu garde les deux passes et les tests concernés).

@@ -8,6 +8,12 @@ export interface ProcessHooks { onStart?: (pid: number) => void; onFinish?: (pid
 export interface ProcessOptions extends ProcessHooks {
   command: readonly string[]; cwd: string; env: NodeJS.ProcessEnv;
   timeoutMs: number; signal?: AbortSignal; input?: string; maxOutputBytes?: number;
+  /**
+   * The command signals on file descriptor 3 (a pipe) when its real work starts, for instance once a wrapper holds
+   * a lock: `timeoutMs` starts at the first byte read there, not at the spawn. The wait before it is unbounded here
+   * (the wrapper bounds it). `readyMs` of the result says when it came.
+   */
+  waitReady?: boolean;
 }
 export function environment(names: readonly string[], source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return Object.fromEntries([...new Set(names)].filter(k => source[k] !== undefined).map(k => [k, source[k]]));
@@ -41,7 +47,7 @@ export function runProcess(options: ProcessOptions): Promise<ProcessResult> {
   });
   return new Promise<ProcessResult>((resolve, reject) => {
     const child = spawn(options.command[0]!, options.command.slice(1), {
-      cwd: options.cwd, env: options.env, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: options.cwd, env: options.env, shell: false, detached: true, stdio: options.waitReady ? ['pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
     });
     let hardKill: NodeJS.Timeout | undefined;
     let hookFailure: unknown;
@@ -57,7 +63,15 @@ export function runProcess(options: ProcessOptions): Promise<ProcessResult> {
     }
     const abort = (): void => stop('cancelled');
     options.signal?.addEventListener('abort', abort, { once: true });
-    const timeout = setTimeout(() => stop('timed_out'), options.timeoutMs);
+    let timeout: NodeJS.Timeout | undefined;
+    let readyMs: number | null = null;
+    const arm = (): void => { timeout ??= setTimeout(() => stop('timed_out'), options.timeoutMs); };
+    if (options.waitReady) {
+      const ready = child.stdio[3] as NodeJS.ReadableStream | null;
+      ready?.once('data', () => { readyMs = Math.round((performance.now() - started) * 1000) / 1000; arm(); });
+      ready?.on('error', () => { /* The command closed its end. */ });
+      ready?.resume();
+    } else arm();
     const collect = (i: number, chunk: Buffer): void => {
       hashes[i]!.update(chunk);
       const combined = Buffer.concat([buffers[i]!, chunk]);
@@ -78,10 +92,10 @@ export function runProcess(options: ProcessOptions): Promise<ProcessResult> {
     let pipeGrace: NodeJS.Timeout | undefined;
     child.once('exit', () => {
       kill('SIGKILL');
-      pipeGrace = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); }, PIPE_GRACE_MS);
+      pipeGrace = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); (child.stdio[3] as { destroy?: () => void } | null)?.destroy?.(); }, PIPE_GRACE_MS);
     });
     child.once('close', (code, signal) => {
-      clearTimeout(timeout); if (hardKill) clearTimeout(hardKill); if (pipeGrace) clearTimeout(pipeGrace);
+      if (timeout) clearTimeout(timeout); if (hardKill) clearTimeout(hardKill); if (pipeGrace) clearTimeout(pipeGrace);
       kill('SIGKILL'); options.signal?.removeEventListener('abort', abort);
       try { if (child.pid) options.onFinish?.(child.pid); }
       catch (error) { hookFailure = error; }
@@ -89,7 +103,7 @@ export function runProcess(options: ProcessOptions): Promise<ProcessResult> {
       resolve({ status: status ?? (code === 0 ? 'passed' : 'failed'), exitCode: code, signal,
         durationMs: Math.round((performance.now() - started) * 1000) / 1000,
         stdout: buffers[0]!.toString('utf8'), stderr: spawnError || buffers[1]!.toString('utf8'),
-        stdoutHash: hashes[0]!.digest('hex'), stderrHash: hashes[1]!.digest('hex'), truncated });
+        stdoutHash: hashes[0]!.digest('hex'), stderrHash: hashes[1]!.digest('hex'), truncated, ...(options.waitReady ? { readyMs } : {}) });
     });
     child.stdin.end(options.input ?? '');
   });

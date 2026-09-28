@@ -9,7 +9,7 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
 /**
@@ -111,6 +111,45 @@ export declare const resourcesSchema: import("../domain/schema.js").Schema<Recor
     readonly ports: number[];
     readonly description: string | undefined;
 }>>;
+/**
+ * The full suite of `apv gates run` (a run that executes a check of stage `full` in full): its machine queue, taken
+ * before the first check, with an optional load threshold, and the test ports freed from orphans of the same copy.
+ * `lockFile` is relative to the Git common directory (shared by every worktree of the repository) or absolute.
+ */
+export declare const DEFAULT_SUITE_QUEUE: {
+    readonly enabled: true;
+    readonly lockFile: "apv/locks/full-suite.lock";
+    readonly waitMs: 7200000;
+    readonly loadWaitMs: 1800000;
+};
+export declare const suiteQueueSchema: import("../domain/schema.js").Schema<{
+    readonly enabled: boolean;
+    readonly lockFile: string;
+    readonly waitMs: number;
+    readonly maxLoad: number | undefined;
+    readonly loadWaitMs: number;
+}>;
+export type SuiteQueueSettings = Infer<typeof suiteQueueSchema>;
+export declare const suiteSettingsSchema: import("../domain/schema.js").Schema<{
+    readonly queue: {
+        readonly enabled: boolean;
+        readonly lockFile: string;
+        readonly waitMs: number;
+        readonly maxLoad: number | undefined;
+        readonly loadWaitMs: number;
+    } | undefined;
+    readonly ports: number[];
+}>;
+/** The full suite settings of a configuration: `suite`, defaults for what is absent (queue on, no ports). */
+export declare const suiteSettings: (config: {
+    suite?: {
+        queue?: SuiteQueueSettings | undefined;
+        ports: number[];
+    } | undefined;
+}) => {
+    queue: SuiteQueueSettings;
+    ports: number[];
+};
 /** Declared test ports, sorted and without duplicates, with the resources that declare them. */
 export declare function declaredTestPorts(config: {
     resources?: Record<string, {
@@ -144,6 +183,18 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly cacheTtlMs: number;
         readonly stage: "task" | "full" | undefined;
         readonly affected: string[] | undefined;
+        readonly lock: {
+            readonly resource: string;
+            readonly waitMs: number;
+        } | {
+            readonly file: string;
+            readonly fileEnv: string | undefined;
+            readonly waitMs: number;
+        } | undefined;
+        readonly retryFailed: {
+            readonly command: string[];
+            readonly testPattern: string | undefined;
+        } | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;
@@ -229,6 +280,16 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly ports: number[];
         readonly description: string | undefined;
     }> | undefined;
+    readonly suite: {
+        readonly queue: {
+            readonly enabled: boolean;
+            readonly lockFile: string;
+            readonly waitMs: number;
+            readonly maxLoad: number | undefined;
+            readonly loadWaitMs: number;
+        } | undefined;
+        readonly ports: number[];
+    } | undefined;
 }>;
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export declare const specLimits: (config: {

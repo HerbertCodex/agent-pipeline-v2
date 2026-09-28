@@ -257,7 +257,7 @@ export declare function targetedQaContext(context: {
         candidateSha: string;
         configHash: string;
         environmentHash: string;
-        status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "blocked" | "cached";
+        status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "blocked" | "cached" | "passed_after_retry";
         startedAt: number;
         durationMs: number;
         exitCode: number | null;
@@ -270,6 +270,20 @@ export declare function targetedQaContext(context: {
         override: {
             readonly run: string;
             readonly reason: string;
+        } | undefined;
+        lockWaitMs: number | undefined;
+        retry: {
+            readonly command: string[];
+            readonly first: {
+                readonly status: "failed";
+                readonly exitCode: number | null;
+                readonly durationMs: number;
+                readonly stdoutHash: string;
+                readonly stderrHash: string;
+                readonly diagnostic: string;
+            };
+            readonly output: string;
+            readonly tests: string[];
         } | undefined;
     }[];
     qaScope: {

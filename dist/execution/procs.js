@@ -233,4 +233,18 @@ export async function stopProcesses(targets, options) {
         outcome.set(p.pid, afterKill.includes(p) ? 'survived' : 'killed');
     return outcome;
 }
+export function stopRefusal(info, context) {
+    const worktree = worktreeOf(info.cwd, context.worktrees);
+    const tool = protectedTool(info);
+    const main = context.worktrees[0];
+    const refusal = context.session.has(info.pid) ? 'protected' : tool !== null ? 'tool' : info.cwd === null ? 'unknown-cwd'
+        : worktree === null ? 'outside' : worktree === main && !context.mainAllowed ? 'main-checkout'
+            : context.copy !== undefined && context.copy !== null && worktree !== context.copy ? 'other-copy' : null;
+    return { worktree, tool, refusal };
+}
+/** The session that runs apv: its process and ancestors, and the other commands of its pipeline. */
+export function sessionPids(processes, root = PROC_ROOT) {
+    const own = protectedPids(root);
+    return new Set([...own, ...pipelineSiblings(processes, own, root)]);
+}
 //# sourceMappingURL=procs.js.map

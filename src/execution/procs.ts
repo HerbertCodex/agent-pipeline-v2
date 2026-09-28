@@ -222,3 +222,27 @@ export async function stopProcesses(targets: readonly ProcessInfo[], options: { 
   for (const p of killed) outcome.set(p.pid, afterKill.includes(p) ? 'survived' : 'killed');
   return outcome;
 }
+
+/**
+ * Why a process may not be stopped, or null when it may: the session that runs apv (and the other commands of its
+ * pipeline), a protected tool, an unreadable working directory, a process outside the repository, a process of the
+ * main checkout (unless `mainAllowed`), and, when `copy` is given, a process of another worktree than that copy.
+ * Shared by `apv procs stop` and the port cleanup of a full suite (`apv gates run`).
+ */
+export type StopRefusal = 'outside' | 'protected' | 'unknown-cwd' | 'tool' | 'main-checkout' | 'other-copy';
+export function stopRefusal(info: ProcessInfo, context: { session: ReadonlySet<number>; worktrees: readonly string[]; mainAllowed?: boolean; copy?: string | null }):
+  { worktree: string | null; tool: string | null; refusal: StopRefusal | null } {
+  const worktree = worktreeOf(info.cwd, context.worktrees);
+  const tool = protectedTool(info);
+  const main = context.worktrees[0];
+  const refusal: StopRefusal | null = context.session.has(info.pid) ? 'protected' : tool !== null ? 'tool' : info.cwd === null ? 'unknown-cwd'
+    : worktree === null ? 'outside' : worktree === main && !context.mainAllowed ? 'main-checkout'
+    : context.copy !== undefined && context.copy !== null && worktree !== context.copy ? 'other-copy' : null;
+  return { worktree, tool, refusal };
+}
+
+/** The session that runs apv: its process and ancestors, and the other commands of its pipeline. */
+export function sessionPids(processes: readonly ProcessInfo[], root = PROC_ROOT): Set<number> {
+  const own = protectedPids(root);
+  return new Set([...own, ...pipelineSiblings(processes, own, root)]);
+}

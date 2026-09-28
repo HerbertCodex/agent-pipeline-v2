@@ -13,6 +13,12 @@ apv lock run e2e --label agent-t4 -- npx playwright test
 
 Le verrou ne vit que le temps d'une commande : c'est la règle qui évite l'incident 25. Mettre le verrou dans les scripts npm eux-mêmes (`"test:e2e": "apv lock run e2e -- playwright test"`) plutôt que dans la discipline des agents.
 
+## Dans `apv gates run`
+
+Deux usages du même mécanisme, sans commande à ajouter (3.0.0-alpha.4, [CLI.md](CLI.md#apv-gates-run)) :
+- **File des suites complètes** (`suite.queue` de `.apv/config.json`) : chaque suite complète prend le bail `full-suite` dans `<répertoire git commun>/apv/locks/` (ou le fichier `suite.queue.lockFile`) avant son premier contrôle, attend en FIFO, puis libère à la fin ; `apv lock status --dir <répertoire git commun>/apv/locks` montre qui la tient et qui attend.
+- **Verrou d'un contrôle** (`lock` d'un contrôle) : `{ "resource": "e2e" }` prend le bail `e2e` du dossier de `apv lock` (celui de `apv lock run e2e`) autour de la commande ; `{ "file": "...", "fileEnv": "VAR" }` prend un `flock` du noyau pour les projets dont les scripts se verrouillent par `flock` (un ancêtre détenteur, lu dans `/proc/locks`). Dans les deux cas le délai du contrôle ne commence qu'une fois le verrou obtenu : l'attente d'un verrou ne fait plus expirer un contrôle (projet pilote, 26 septembre 2026 : `integration` en délai dépassé après 600 s passées presque entièrement à attendre le verrou de la pile).
+
 ## Autres sous-commandes
 
 - `apv lock acquire <ressource> [--ttl 900] [--wait 1800] [--label L] [--purpose P] [--pid N] [--json]` : prend le verrou et rend la main. Affiche le jeton. Sans `--pid`, seul le bail protège le verrou (aucun renouvellement) : l'outil Bash de Claude Code lance chaque commande dans un shell éphémère, dont le pid mourrait aussitôt. `--pid $$` lie le verrou à un shell qui reste vivant.
