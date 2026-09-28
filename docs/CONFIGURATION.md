@@ -146,6 +146,26 @@ Le reçu note les fichiers répétés, `times` et l'issue (`repeat`) ; ajouter o
 
 Une exécution qui lance un tel contrôle exige `--base` (sinon appel incorrect, sortie `2`), et une base dont HEAD descend strictement (sinon `GATE_BASE`) : la suite complète avant une PR se lance avec `--base <base de la PR>`, et `apv stack batch` passe la cible (où `maxFiles` s'applique PR par PR). `apv gates verify` ne compte comme réussi un tel contrôle que si son reçu prouve la répétition de chaque fichier de test que le commit ajoute ou modifie depuis la base enregistrée et depuis la référence ([CLI.md](CLI.md#apv-gates-verify)). `stressArgs` n'accepte pas `{{repeat}}` (seule `command` le remplace).
 
+`skipWhenOnly` (facultatif, 3.0.0-alpha.8, spécification section 21) : la **portée de la preuve** d'un contrôle long, pour qu'une PR qui ne change que de la documentation, des décisions ou des specs ne paie pas une suite navigateur complète, sans rien retirer à la preuve d'une PR qui touche le code. Absent : le contrôle est toujours requis, comme avant (empreinte comprise). Champs :
+- `paths` (obligatoire) : motifs des fichiers **sans effet** sur ce contrôle (`*`, `**`, `?`, sans accolades ni `!`) ; un motif qui couvrirait du code source (`**`, `**/*`, `src/**`...) est refusé à la validation ;
+- `except` (facultatif) : motifs retirés de `paths`, par exemple `["src/**"]` quand `paths` contient `**/*.md` et que le projet compile des fichiers Markdown de `src/` ;
+- `reference` (obligatoire) : la branche où va le changement (par exemple `"origin/main"`), sans défaut implicite : les fichiers changés se comptent aussi depuis sa base commune avec le commit, et **`paths` et `except` sont lus dans la configuration de cette référence**, jamais dans celle du changement.
+
+À la suite complète (`apv gates run --stage full --base <base de la PR>`, `--base` obligatoire), le contrôle est « non requis » seulement si chaque fichier changé depuis la base commune de `--base` et depuis celle de la référence répond à `paths` de la référence, à aucun `except`, à aucun fichier toujours requis (`.apv/config.json`, `package.json` et les verrous de dépendances, la CI, la configuration de build et de test, les tests, les scripts de test, les chemins que nomment les commandes du contrôle, ses `testPaths` et `repeatChanged.paths`, les migrations : liste de [CLI.md](CLI.md#apv-gates-run)) et garde son mode et son type (un lien symbolique ou un fichier rendu exécutable le rend requis). Il n'est alors pas lancé : reçu `not_required` avec la portée (`scope` : bases, référence, fichiers, raison), que `apv gates verify` recalcule depuis le commit. Tout autre cas, ou une incertitude, le rend requis et il tourne. Une PR qui change la liste touche `.apv/config.json` : elle est prouvée sans dispense. Un contrôle requis rend requises ses dépendances. Exemple :
+
+```json
+{
+  "id": "browser",
+  "stage": "full",
+  "command": ["npm", "run", "test:browser"],
+  "skipWhenOnly": {
+    "paths": ["docs/**", "**/*.md", ".apv/DECISIONS.*", ".apv/specs/**"],
+    "except": ["src/**"],
+    "reference": "origin/main"
+  }
+}
+```
+
 `readOnly: true` est une déclaration revue par l'opérateur : la commande **et ses sous-processus** ne doivent écrire aucun fichier dans ce répertoire. Seuls ces contrôles peuvent tourner ensemble, dans la limite de `concurrency` et des ressources nommées ; ils attendent aussi la fin d'un contrôle susceptible d'écrire. Ce champ n'est pas un sandbox ni une détection automatique. Ne pas l'activer pour un lint avec cache, un compilateur incrémental, des tests avec couverture ou des E2E qui lancent un build. Les anciens profils peuvent donc valider plus lentement ; déclarer uniquement les commandes réellement en lecture seule permet de retrouver du parallélisme sûr.
 
 ```json

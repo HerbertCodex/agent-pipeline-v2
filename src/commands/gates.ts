@@ -65,7 +65,11 @@ ajoutés ou modifiés depuis la base (motifs repeatChanged.paths) repeatChanged.
 verrou : tout échec le rend rouge (« échoue X fois sur N »), jamais masqué par retryFailed ; plus de
 fichiers que repeatChanged.maxFiles, ou une attente à durée fixe avec fixedWaits = refuse : refus avant
 toute attente. Sans --base, un tel contrôle ne se lance pas (appel incorrect) ; une suite complète compare
-aussi à repeatChanged.reference (obligatoire ; introuvable : appel incorrect). À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
+aussi à repeatChanged.reference (obligatoire ; introuvable : appel incorrect).
+Portée (skipWhenOnly, suite complète, --base obligatoire) : un contrôle dont chaque fichier changé depuis
+la base et depuis skipWhenOnly.reference répond aux chemins sans effet lus à la référence (jamais dans le
+changement), hors fichiers toujours requis (configuration, dépendances, CI, build, tests, scripts,
+migrations, mode ou type changé), n'est pas lancé : reçu « non requis » (not_required) avec la portée. À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
 annulés, sortie 128 + signal), les processus qu'elle a lancés encore vivants et les orphelins de cette
 copie sur suite.ports sont arrêtés (jamais la session, une autre copie ni le checkout principal).
 --stacks 1,2 (suite complète, deux piles déclarées au moins, section stacks) : les contrôles d'une pile
@@ -84,7 +88,9 @@ leur reçu ciblé (ou complet) ; --base <ref> est alors obligatoire (le dernier 
 la suite complète) : un reçu ciblé ne compte que si la base de son exécution est ce commit ou
 l'un de ses ancêtres. Un contrôle qui déclare repeatChanged n'est prouvé que si son reçu montre la
 répétition de chaque fichier de test que le commit ajoute ou modifie (recalculé depuis la base enregistrée
-et la référence) : sinon « tests modifiés non répétés ».
+et la référence) : sinon « tests modifiés non répétés ». Un reçu « non requis » (skipWhenOnly) ne compte
+que si la portée, recalculée depuis le commit, la base enregistrée et la liste lue à la référence, le dit
+non requis : sinon « requis (dispense non prouvée) ».
 Les reçus sont lus dans .apv/receipts/ du worktree, puis dans le magasin partagé pour les
 exécutions que le worktree n'a pas : la preuve d'un commit se vérifie depuis n'importe quel
 checkout du dépôt, avec les mêmes exigences. Une exécution du magasin partagé dont un fichier ne
