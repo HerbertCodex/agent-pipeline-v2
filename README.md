@@ -32,6 +32,8 @@ APV3 est un plugin Claude Code. L'opérateur délègue ; la session principale d
 
 Puis suivez [START-HERE.md](START-HERE.md). Détails : [docs/PLUGIN.md](docs/PLUGIN.md). Outil `apv` : [docs/CLI.md](docs/CLI.md). Spécification : [docs/APV3-SPEC.md](docs/APV3-SPEC.md).
 
+**Mise à jour vers 3.0.0-alpha.11**, sur un projet déjà sous APV : lancez `apv map` une fois après la mise à jour et commitez `.apv/code-map.md` (et la carte de l'architecture si elle existe) dans une PR à part : la carte du code gagne une section « Dossiers », et le contrôle `code-map` la dit périmée « par la mise à jour d'APV » jusque-là. Pour le contrôle `structure` et la carte de l'architecture sur un projet existant : `apv structure map`, puis le contrôle à ajouter à `.apv/config.json` ([docs/STRUCTURE.md](docs/STRUCTURE.md)).
+
 ## Développer
 
 ```bash

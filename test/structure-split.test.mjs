@@ -83,10 +83,10 @@ test('split: a flat folder without common prefix is split by use, its core kept 
   assert.equal(f.folder, 'src/lib/orders');
   assert.deepEqual(f.core.map(c => c.path.split('/').pop()), ['dates.ts', 'model.ts', 'money.ts']);
   assert.match(f.core.find(c => c.path.endsWith('model.ts')).reason, /importé par 7 fichiers du dossier/);
+  // Named by the vocabulary of the project, never after one of their files: the folder that uses them, the route.
   assert.deepEqual(groupsOf(f), {
     checkout: ['address.ts', 'checkout.ts', 'payment.ts'],
-    list: ['filters.ts', 'list.ts'],
-    tracking: ['carrier.ts', 'eta.ts', 'tracking.ts'],
+    shipping: ['carrier.ts', 'eta.ts', 'tracking.ts'],
     invoice: ['invoice.ts', 'tax.ts'],
   });
   const checkout = f.groups.find(g => g.dir === 'checkout');
@@ -94,26 +94,31 @@ test('split: a flat folder without common prefix is split by use, its core kept 
   assert.deepEqual([checkout.existing, checkout.naming, checkout.conventions], [false, 'mirror', ['feature-folders', 'mirror']]);
   assert.match(checkout.reasons[0], /même découpage que src\/lib\/components\/orders\/checkout\//);
   assert.ok(checkout.reasons.some(r => /liés par import : .*checkout\.ts importe address\.ts/.test(r)), checkout.reasons.join(' | '));
-  assert.equal(f.groups.find(g => g.dir === 'invoice').naming, 'module');
-  // Plan: tests follow their module; the core stays; nothing is left to decide.
+  assert.deepEqual(f.groups.filter(g => g.dir !== 'checkout').map(g => [g.dir, g.naming, g.reasons[0]]), [
+    ['shipping', 'place', 'nom repris : dossier src/lib/components/shipping/, qui les utilise (3 sur 3)'],
+    ['invoice', 'place', 'nom repris : route /invoice, qui les utilise (2 sur 2)'],
+  ]);
+  // Used together, but no name of the project says what they do: grouped, never named after a file, left to the operator.
+  assert.deepEqual(f.unnamed.map(u => u.members.map(m => m.split('/').pop())), [['filters.ts', 'list.ts']]);
+  // Plan: tests follow their module; the core stays; the unnamed group and the lone file stay for the operator.
   const moved = new Map(report.plan.map(m => [m.from, m.to]));
   assert.equal(moved.get('src/lib/orders/checkout.test.ts'), 'src/lib/orders/checkout/checkout.test.ts');
-  assert.equal(moved.get('src/lib/orders/tracking.ts'), 'src/lib/orders/tracking/tracking.ts');
+  assert.equal(moved.get('src/lib/orders/tracking.ts'), 'src/lib/orders/shipping/tracking.ts');
   assert.equal(moved.get('src/lib/orders/model.ts'), undefined);
-  // A file used by one component only, linked to nothing: left to the operator (the root is already under the threshold).
-  assert.deepEqual(report.folders.find(x => x.folder === 'src/lib/orders').unplaced, ['src/lib/orders/pagination.ts']);
-  assert.match(f.proposal, /dont 10 par usage dans 4 sous-dossier\(s\), 3 fichier\(s\) socle gardés à la racine\), 1 fichier\(s\) restent à placer/);
+  assert.equal(moved.get('src/lib/orders/list.ts'), undefined);
+  assert.deepEqual(report.folders.find(x => x.folder === 'src/lib/orders').unplaced, ['src/lib/orders/filters.ts', 'src/lib/orders/list.ts', 'src/lib/orders/pagination.ts']);
+  assert.match(f.proposal, /dont 8 par usage dans 3 sous-dossier\(s\), 3 fichier\(s\) socle gardés à la racine, 1 groupe\(s\) à nommer par l'opérateur\), 3 fichier\(s\) restent à placer/);
   // Once applied, the folder is no longer flat.
   const after = analyzeStructure(paths.map(p => moved.get(p) ?? p), structureSettings(undefined), { usage: exampleGraph() });
   assert.equal(flat(after), undefined);
 });
 
 test('split: the root always ends under the threshold when a group is close enough', () => {
-  const settings = structureSettings({ maxFlatFiles: 3 });
+  const settings = structureSettings({ maxFlatFiles: 5 });
   const f = flat(analyzeStructure(paths, settings, { usage: exampleGraph() }));
-  const all = f.groups.flatMap(g => g.members);
-  assert.ok(all.includes('src/lib/orders/pagination.ts'), JSON.stringify(f.groups));
-  assert.ok(f.groups.some(g => g.reasons.some(r => /^pagination\.ts rattaché au groupe le plus proche \(similarité \d,\d\d\) pour ramener la racine sous le seuil$/.test(r))));
+  const pending = f.unnamed.find(u => u.members.includes('src/lib/orders/pagination.ts'));
+  assert.ok(pending, JSON.stringify(f.unnamed));
+  assert.ok(pending.reasons.some(r => /^pagination\.ts rattaché au groupe le plus proche \(similarité \d,\d\d\) pour ramener la racine sous le seuil$/.test(r)), pending.reasons.join(' | '));
 });
 
 test('split: deterministic and explainable, whatever the order of the files and of the graph', () => {
@@ -142,10 +147,9 @@ test('split: an existing subfolder attracts what its files use; generic folders 
     dirs: new Set(['src', 'src/lib', 'src/lib/components', dir, `${dir}/menu`, 'src/lib/components/agenda', 'src/lib/components/settings']),
     files: [...entries.map(e => e.path), `${dir}/menu/Menu.svelte`, `${dir}/menu/MenuItem.svelte`], domains: [], maxFlatFiles: 12,
   });
-  assert.deepEqual(split.groups.map(g => [g.dir, g.existing, g.members.map(m => m.split('/').pop())]), [
-    ['menu', true, ['listbox.ts']],
-    ['dialog', false, ['ConfirmDialog.svelte', 'Dialog.svelte', 'ModalHead.svelte']],
-  ]);
+  assert.deepEqual(split.groups.map(g => [g.dir, g.existing, g.members.map(m => m.split('/').pop())]), [['menu', true, ['listbox.ts']]]);
+  // `dialog` is no name of the project here: the group waits for the operator, never named after Dialog.svelte.
+  assert.deepEqual(split.unnamed.map(u => u.members.map(m => m.split('/').pop())), [['ConfirmDialog.svelte', 'Dialog.svelte', 'ModalHead.svelte']]);
   assert.ok(!split.groups.some(g => ['agenda', 'settings'].includes(g.dir)), 'a shared folder is never split by who uses it');
 });
 
@@ -209,7 +213,7 @@ test('e2e: apv init writes the architecture map and the structure gate; a flat f
   const report = check.json();
   assert.equal(report.architectureMap.profile, 'sveltekit');
   const orders = flat(report);
-  assert.deepEqual(Object.keys(groupsOf(orders)).sort(), ['checkout', 'invoice', 'list', 'tracking']);
+  assert.deepEqual(Object.keys(groupsOf(orders)).sort(), ['checkout', 'invoice', 'shipping']);
   assert.deepEqual(orders.core.map(c => c.path.split('/').pop()).sort(), ['dates.ts', 'model.ts', 'money.ts']);
   const text = (await apv(f.repo, ['structure', 'check', '--path', 'src/lib/orders'])).stdout;
   assert.match(text, /    socle : model\.ts \(importé par 7 fichiers du dossier/);
@@ -300,4 +304,20 @@ test('apv structure map: creates the map, never rewrites its written parts, --ch
   assert.match(read(f.repo, mapFile), /`src\/lib\/catalog\/` : \*\*à décrire\*\*/);
   const again = (await apv(f.repo, ['structure', 'map', '--check', '--json'])).json();
   assert.equal(again.status, 'up-to-date', JSON.stringify(again.difference));
+});
+
+test('split: a name that is an existing subfolder joins it; one use never names a group', () => {
+  const dir = 'src/lib/home';
+  const entry = (name, tokens) => ({ path: `${dir}/${name}`, stem: name.split('.')[0], files: [`${dir}/${name}`], component: /\.svelte$/.test(name), tokens });
+  const entries = [entry('LexiconScene.svelte', ['lexicon', 'scene']), entry('lexicon-scene.ts', ['lexicon', 'scene']), entry('HomeLexicon.svelte', ['home', 'lexicon'])];
+  const importers = new Map([
+    [`${dir}/lexicon-scene.ts`, [`${dir}/LexiconScene.svelte`, `${dir}/HomeLexicon.svelte`]],
+    [`${dir}/LexiconScene.svelte`, [`${dir}/HomeLexicon.svelte`]],
+    [`${dir}/HomeLexicon.svelte`, ['src/routes/+page.svelte']],
+  ]);
+  const split = proposeSplit(dir, entries, { importers, exports: new Map() }, {
+    dirs: new Set(['src', 'src/lib', dir, `${dir}/scenes`, 'src/routes']), files: [...entries.map(e => e.path), `${dir}/scenes/Plane.svelte`, 'src/routes/+page.svelte'], domains: [], maxFlatFiles: 12,
+  });
+  assert.deepEqual(split.groups.map(g => [g.dir, g.existing, g.naming]), [['scenes', true, 'existing']]);
+  assert.match(split.groups[0].reasons[0], /sous-dossier existant src\/lib\/home\/scenes\/ \(mot commun à 2 fichiers, « scene »/);
 });

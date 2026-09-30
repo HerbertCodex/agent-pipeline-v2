@@ -1,7 +1,7 @@
 import { posix } from 'node:path';
 import { routeOf } from '../knowledge/code-map.js';
-import { globToRegExp } from '../db/glob.js';
-import { DEFAULT_IGNORE, type StructureSettings } from './config.js';
+import { PipelineError } from '../domain/errors.js';
+import { ignoreTest, type StructureSettings } from './config.js';
 import { parseName } from './names.js';
 import { COMMON_KNOWN, conventionOf, knownPath, segmentGlob, type KnownPath, type StackProfile } from './profiles.js';
 
@@ -31,6 +31,19 @@ const HEADINGS: Record<BlockId, string> = {
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const PLACEHOLDER = /^(?:à décrire|a decrire|todo|tbd|\?+|…|\.\.\.)?[.\s]*$/i;
 
+/** A role says something: three words at least, placeholders apart (`x`, `divers`, « à décrire » are no role). */
+export const MIN_ROLE_WORDS = 3;
+export function meaningfulRole(role: string): boolean {
+  return !PLACEHOLDER.test(role) && role.trim().split(/\s+/).filter(w => /[\p{L}\p{N}]/u.test(w)).length >= MIN_ROLE_WORDS;
+}
+
+/** Markers present more than once: a copied block would make a stale map look up to date. */
+export function duplicateMarkers(text: string): string[] {
+  const counts = new Map<string, number>();
+  for (const m of text.matchAll(/<!--\s*\/?apv:(?:ecrit|genere):[a-z]+\s*-->/g)) counts.set(m[0], (counts.get(m[0]) ?? 0) + 1);
+  return [...counts].filter(([, n]) => n > 1).map(([m]) => m).sort();
+}
+
 /** Content of a block, or null when the file does not have it. */
 export function blockOf(text: string, id: BlockId): string | null {
   const start = text.indexOf(open(id));
@@ -55,17 +68,20 @@ export function writtenRoles(text: string | null): Map<string, string> {
     const m = /^\s*[-*]\s+`([^`]+)`\s*:?\s*(.*)$/.exec(line);
     if (!m) continue;
     const role = m[2]!.trim();
-    if (!PLACEHOLDER.test(role)) out.set(m[1]!.trim(), role);
+    if (meaningfulRole(role)) out.set(m[1]!.trim(), role);
   }
   return out;
 }
 
-/** The written role of an item: its exact key, else a glob of the roles block (`src/lib/*` or `src/lib/*\/`). */
-export function roleOf(item: ArchItem, roles: ReadonlyMap<string, string>): string | null {
+/**
+ * The written role of an item: its exact key, else a glob of the roles block (`src/lib/*` or `src/lib/*\/`). With `globs`,
+ * only those globs count (for an item the change adds: the globs already at the base, never a catch-all it brings).
+ */
+export function roleOf(item: ArchItem, roles: ReadonlyMap<string, string>, globs?: ReadonlySet<string>): string | null {
   const bare = item.key.replace(/\/$/, '');
   for (const key of [item.key, bare, `${bare}/`]) if (roles.has(key)) return roles.get(key)!;
   for (const [key, role] of [...roles].sort((a, b) => byText(a[0], b[0]))) {
-    if (!key.includes('*')) continue;
+    if (!key.includes('*') || (globs && !globs.has(key))) continue;
     if (segmentGlob(key.replace(/\/$/, '')).test(bare)) return role;
   }
   return null;
@@ -81,9 +97,9 @@ const COMMON_ENTRIES: KnownPath[] = [
  * profile, route folders apart), main routes (first segment), entry points (the profile's, crons, migrations).
  * `read` gives a file's text (crons, scheduled workflows); null when unreadable.
  */
-export function archItems(files: readonly string[], profile: StackProfile, settings: Pick<StructureSettings, 'ignore'>, read: (path: string) => string | null): ArchItem[] {
-  const ignored = [...DEFAULT_IGNORE.map(g => globToRegExp(g)), ...settings.ignore];
-  const kept = files.filter(f => !ignored.some(re => re.test(f)));
+export function archItems(files: readonly string[], profile: StackProfile, settings: Pick<StructureSettings, 'ignore'>, read: (path: string) => string | null, always: ReadonlySet<string> = new Set()): ArchItem[] {
+  const ignored = ignoreTest(settings, files, always);
+  const kept = files.filter(f => !ignored(f));
   const dirs = new Set<string>();
   for (const f of kept) for (let d = posix.dirname(f); d !== '.'; d = posix.dirname(d)) dirs.add(d);
   const routeRoots = new Set([...profile.routeRoots.filter(r => dirs.has(r)), ...kept.map(f => routeOf(f)?.root).filter((r): r is string => !!r)]);
@@ -307,6 +323,8 @@ export function newMap(inputs: MapInputs): string {
  * its end (a written one with its draft): nothing written by hand is ever replaced.
  */
 export function refreshMap(current: string, inputs: MapInputs): string {
+  const duplicated = duplicateMarkers(current);
+  if (duplicated.length) throw new PipelineError('ARCHITECTURE_MAP', `${inputs.mapPath} : marqueur présent plusieurs fois (${duplicated.join(', ')}) ; garder un seul bloc de chaque, puis relancer apv structure map.`);
   const roles = writtenRoles(current);
   const generated = generatedBlocks(inputs, roles);
   const drafts = writtenDrafts(inputs);

@@ -22,10 +22,22 @@ export declare const DEFAULT_MAX_FLAT_FILES = 12;
  */
 export declare const DEFAULT_ROLES: Readonly<Record<string, string>>;
 /**
- * Paths never analysed, whatever the configuration: dependencies, build outputs and tool folders
- * (a path segment that starts with a dot: `.github`, `.claude`, `.svelte-kit`).
+ * Folders left out by default (docs: « exclusions par défaut »): dependencies anywhere (`node_modules`), build outputs and
+ * tool folders (`dist`, `build`, `coverage`, `vendor`, a name that starts with a dot) only at the root of the repository
+ * or of a package (a folder with its own `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `composer.json`).
+ * A folder of that name deeper in the sources (`src/lib/x/vendor/`) is code like any other. With `--base`, what the change
+ * creates is always analysed, default exclusions or not: only `structure.ignore` (of the base) leaves it out.
  */
-export declare const DEFAULT_IGNORE: readonly ["**/node_modules/**", "**/dist/**", "**/build/**", "**/coverage/**", "**/vendor/**", "**/.*/**"];
+export declare const DEFAULT_IGNORE: readonly ["**/node_modules/**", "dist/**", "build/**", "coverage/**", "vendor/**", ".*/**"];
+/** Roots of the packages of a file list (folders with a manifest), node_modules left out. */
+export declare function packageRoots(paths: readonly string[]): Set<string>;
+/** Left out by the default exclusions: `node_modules` anywhere, outputs and tool folders at the root of the repository or of a package. */
+export declare function defaultIgnored(path: string, roots: ReadonlySet<string>): boolean;
+/**
+ * The exclusion test of a file list: `structure.ignore` always, the default exclusions for what is not in `always` (the
+ * files the change creates, which are always analysed).
+ */
+export declare function ignoreTest(settings: Pick<StructureSettings, 'ignore'>, paths: readonly string[], always?: ReadonlySet<string>): (path: string) => boolean;
 /** The `structure` section of `.apv/config.json` (docs/CONFIGURATION.md, « Arborescence »). */
 export declare const structureSchema: import("../domain/schema.js").Schema<{
     readonly roots: string[] | undefined;

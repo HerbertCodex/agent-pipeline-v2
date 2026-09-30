@@ -38,14 +38,16 @@ export interface SplitGroup {
   reasons: string[];
   /** Conventions of the stack profile the group follows (ids of src/structure/profiles.ts). */
   conventions: string[];
-  /** Where the name comes from: an existing subfolder, the same split elsewhere, the main module or component, a shared word, a declared domain, the folder or route that uses the group. */
-  naming: 'existing' | 'mirror' | 'module' | 'component' | 'word' | 'domain' | 'place';
+  /** Where the name comes from, always the vocabulary of the project: an existing subfolder, the same split elsewhere, a word the files share that names a folder, route or domain, a declared domain, the folder or route that uses the group. */
+  naming: 'existing' | 'mirror' | 'word' | 'domain' | 'place';
 }
 
 export interface SplitResult {
   /** Files that stay at the root of the folder: its core (imported by much of it) or its model by convention. */
   core: { path: string; reason: string }[];
   groups: SplitGroup[];
+  /** Groups of files used together that no name of the project describes: to be named by the operator, never moved. */
+  unnamed: { members: string[]; reasons: string[] }[];
   /** Files no group takes: left to the operator. */
   unplaced: string[];
 }
@@ -89,13 +91,15 @@ function cosine(a: Vector, b: Vector): number {
 }
 
 /** What a consumer file says of its use: the route it serves (first two segments), or its folder. */
-function consumerContext(path: string): { key: string; route: string | null; dir: string } {
+function consumerContext(path: string): { key: string; route: string | null; leaf: string | null; dir: string } {
   const route = routeOf(path);
   if (route) {
     const segments = route.route.split('/').filter(Boolean);
-    return { key: `route:/${segments.slice(0, 2).join('/')}`, route: segments[0] ?? '', dir: dirOf(path) };
+    // The most specific segment that names something (`/orders/[id]/invoice`: invoice), parameters and groups apart.
+    const named = segments.filter(seg => !/^[([@+_.]/.test(seg));
+    return { key: `route:/${segments.slice(0, 2).join('/')}`, route: segments[0] ?? '', leaf: named.at(-1) ?? null, dir: dirOf(path) };
   }
-  return { key: `dir:${dirOf(path)}`, route: null, dir: dirOf(path) };
+  return { key: `dir:${dirOf(path)}`, route: null, leaf: null, dir: dirOf(path) };
 }
 
 /** Words of a name, short, stop and folder words left out. */
@@ -254,7 +258,14 @@ export function proposeSplit(folder: string, entries: readonly SplitEntry[], gra
     .sort((a, b) => Number(!!b.anchor) - Number(!!a.anchor) || b.members.length - a.members.length || byText(label(a), label(b)));
 
   // 5. Names.
-  const vocabulary = new Set([...context.dirs].map(d => posix.basename(d).toLowerCase()));
+  // The vocabulary of the project: names of its folders, segments of its routes, declared domains. A group is named by
+  // what it does in that vocabulary, never after one of its files (`event-icon/`, `in-view/` say nothing of a feature).
+  const vocabulary = new Set([
+    ...[...context.dirs].map(d => posix.basename(d).toLowerCase()),
+    ...context.files.flatMap(f => routeOf(f)?.route.split('/') ?? []).filter(seg => seg && !/^[([@+_.]/.test(seg)).map(seg => seg.toLowerCase()),
+    ...context.domains,
+  ].filter(w => !GENERIC.has(w)));
+  const known = (name: string): boolean => vocabulary.has(name) || [...vocabulary].some(v => related(v, name));
   const staying = new Set([...coreSet, ...(context.others ?? [])].map(e => kebab(e.tokens)));
   interface Candidate { name: string; score: number; source: string; conventions: string[]; naming: SplitGroup['naming'] }
   const candidatesOf = (members: SplitEntry[]): Candidate[] => {
@@ -266,40 +277,37 @@ export function proposeSplit(folder: string, entries: readonly SplitEntry[], gra
       if (c) { c.score += score; if (c.score - score < score) Object.assign(c, { source, conventions, naming }); }
       else map.set(clean, { name: clean, score, source, conventions, naming });
     };
-    // The main module of the group: the one the others import most, else the most used.
-    const degree = (x: SplitEntry): number => members.filter(m => m !== x && (internal(x).includes(m) || internal(m).includes(x))).length;
-    // Equal degree: the one that imports the others (`invoice` imports `tax`), then the most used.
-    const uses = (x: SplitEntry): number => members.filter(m => m !== x && internal(m).includes(x)).length;
-    const main = [...members].sort((a, b) => degree(b) - degree(a) || uses(b) - uses(a) || imp.get(b)!.length - imp.get(a)!.length || byText(a.path, b.path))[0]!;
-    if (!main.component || members.length > 1) give(kebab(main.tokens), 1.5, `${main.component ? 'composant' : 'module'} principal du groupe, ${posix.basename(main.path)}`, ['feature-folders'], main.component ? 'component' : 'module');
+    // Words several files share, when the project already uses them for a folder, a route or a domain.
     const counts = new Map<string, number>();
     for (const e of members) for (const w of new Set(words(e.tokens, own))) counts.set(w, (counts.get(w) ?? 0) + 1);
     for (const [w, c] of [...counts].sort((a, b) => byText(a[0], b[0]))) {
       if (c < 2) continue;
-      // The words the files share after it too (`FirstVisit`, `FirstVisitHint`: first-visit).
+      // The words the files share after it too (`FirstVisit`, `FirstVisitHint`: first-visit), when that name is known.
       const lists = members.map(e => e.tokens.filter(t => !own.some(o => related(o, t)))).map(l => l.slice(l.indexOf(w))).filter(l => l[0] === w);
       let k = 1;
       while (lists.length >= 2 && lists.every(l => l.length > k && l[k] === lists[0]![k])) k++;
-      const name = lists.length >= 2 ? lists[0]!.slice(0, k).join('-') : w;
-      give(name, 0.8 * c, `mot commun à ${c} fichiers, « ${name} »`, ['feature-folders'], 'word');
+      const long = lists.length >= 2 ? lists[0]!.slice(0, k).join('-') : w;
+      const name = known(long) ? long : known(w) ? w : null;
+      if (name) give(name, 0.8 * c, `mot commun à ${c} fichiers, « ${name} », déjà un nom du projet (dossier, route ou domaine)`, ['feature-folders'], 'word');
     }
     for (const d of context.domains) {
       const hits = members.filter(e => kebab(e.tokens).startsWith(d)).length;
-      if (hits) give(d, hits, `domaine déclaré (structure.domains) « ${d} »`, ['feature-folders'], 'domain');
+      if (hits) give(d, 1.5 * hits, `domaine déclaré (structure.domains) « ${d} »`, ['feature-folders'], 'domain');
     }
     if (!sharedKind) {
-      // The folder or the route that uses the group, when one of them accounts for most of its use.
+      // The feature folder or the route that uses the group, when one of them accounts for half of its use.
       const where = new Map<string, number>();
       let total = 0;
       for (const e of members) for (const c of external(e)) {
         const ctx = consumerContext(c);
-        const k = ctx.route !== null ? `route:${ctx.route}` : `dir:${ctx.dir}`;
+        const k = ctx.route !== null ? `route:${ctx.leaf ?? ctx.route}` : `dir:${ctx.dir}`;
         where.set(k, (where.get(k) ?? 0) + 1); total++;
       }
       for (const [k, count] of [...where].sort((a, b) => b[1] - a[1] || byText(a[0], b[0]))) {
-        if (count / total < 0.6) break;
-        if (k.startsWith('route:')) give(k.slice(6), 1.2, `route /${k.slice(6)}, qui les utilise`, ['feature-folders'], 'place');
-        else if (vocabulary.has(posix.basename(k.slice(4)).toLowerCase())) give(posix.basename(k.slice(4)), 1.2, `dossier ${k.slice(4)}/, qui les utilise`, ['feature-folders'], 'place');
+        // Half of the use at least, and two uses: one import is no feature.
+        if (count / total < 0.5 || count < 2) break;
+        if (k.startsWith('route:')) give(k.slice(6), 2 * count / total, `route /${k.slice(6)}, qui les utilise (${count} sur ${total})`, ['feature-folders'], 'place');
+        else give(posix.basename(k.slice(4)), 2 * count / total, `dossier ${k.slice(4)}/, qui les utilise (${count} sur ${total})`, ['feature-folders'], 'place');
       }
     }
     return [...map.values()].sort((a, b) => b.score - a.score || byText(a.name, b.name));
@@ -307,6 +315,7 @@ export function proposeSplit(folder: string, entries: readonly SplitEntry[], gra
 
   const groups: SplitGroup[] = [];
   const unplaced: SplitEntry[] = [];
+  const unnamed: SplitResult['unnamed'] = [];
   const reasonsOf = (members: SplitEntry[], source: string): string[] => {
     const reasons = [`nom repris : ${source}`];
     const ctx = new Map<string, number>();
@@ -348,18 +357,30 @@ export function proposeSplit(folder: string, entries: readonly SplitEntry[], gra
       continue;
     }
     if (c.members.length < 2) { unplaced.push(...c.members); continue; }
-    const chosen = candidatesOf(c.members).find(x => !taken.has(x.name) && !anchors.some(a => a.existing && a.name === x.name));
-    if (!chosen) { unplaced.push(...c.members); continue; }
+    let chosen = candidatesOf(c.members).find(x => !taken.has(x.name));
+    // A name that is an existing subfolder of the folder (`scene` next to `scenes/`): the files join it.
+    const existing = chosen ? anchors.find(a => a.existing && related(a.name, chosen!.name)) : undefined;
+    if (existing) {
+      const same = groups.find(g => g.dir === existing.name);
+      const reasons = reasonsOf(c.members, `sous-dossier existant ${existing.path}/ (${chosen!.source})`);
+      if (same) { same.members.push(...c.members.map(e => e.path)); same.reasons.push(...reasons.slice(0, 1)); continue; }
+      taken.add(existing.name);
+      groups.push({ dir: existing.name, members: c.members.map(e => e.path), existing: true, reasons, conventions: ['feature-folders'], naming: 'existing' });
+      continue;
+    }
+    if (chosen && taken.has(chosen.name)) chosen = undefined;
+    // No name of the project says what the group does: grouped, but left to the operator to name (never invented).
+    if (!chosen) { unnamed.push({ members: c.members.map(e => e.path).sort(byText), reasons: reasonsOf(c.members, 'aucun nom du projet (dossier, route, domaine) ne dit ce que fait ce groupe : à nommer par l\'opérateur').slice(1) }); continue; }
     taken.add(chosen.name);
     groups.push({ dir: chosen.name, members: c.members.map(e => e.path), existing: false, reasons: reasonsOf(c.members, chosen.source), conventions: chosen.conventions, naming: chosen.naming });
   }
   // The root must end under the threshold: while it does not, the file closest to a group joins it (never above the
   // threshold, never a file that shares nothing with the group), and the group says so.
-  const rootCount = (): number => (context.staying ?? 0) + core.length + unplaced.length;
+  const rootCount = (): number => (context.staying ?? 0) + core.length + unplaced.length + unnamed.reduce((n, u) => n + u.members.length, 0);
   while (rootCount() > context.maxFlatFiles && unplaced.length) {
-    let best: { e: SplitEntry; g: SplitGroup; s: number } | null = null;
+    let best: { e: SplitEntry; g: { members: string[]; reasons: string[] }; s: number } | null = null;
     for (const e of [...unplaced].sort((a, b) => byText(a.path, b.path))) {
-      for (const g of groups) {
+      for (const g of [...groups, ...unnamed]) {
         if (g.members.length >= context.maxFlatFiles) continue;
         const sims = g.members.map(m => (vectors.has(m) ? pairSim(e.path, m) : 0));
         const s = sims.reduce((a, b) => a + b, 0) / Math.max(1, sims.length);
@@ -371,8 +392,8 @@ export function proposeSplit(folder: string, entries: readonly SplitEntry[], gra
     best.g.reasons.push(`${posix.basename(best.e.path)} rattaché au groupe le plus proche (similarité ${best.s.toFixed(2).replace('.', ',')}) pour ramener la racine sous le seuil`);
     unplaced.splice(unplaced.indexOf(best.e), 1);
   }
-  for (const g of groups) g.members.sort(byText);
-  return { core, groups, unplaced: unplaced.map(e => e.path).sort(byText) };
+  for (const g of [...groups, ...unnamed]) g.members.sort(byText);
+  return { core, groups, unnamed, unplaced: unplaced.map(e => e.path).sort(byText) };
 }
 
 /** The usage graph of a code map: who imports each component and module, and what the modules export. */

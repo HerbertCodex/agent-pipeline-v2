@@ -43,10 +43,42 @@ export const DEFAULT_ROLES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Paths never analysed, whatever the configuration: dependencies, build outputs and tool folders
- * (a path segment that starts with a dot: `.github`, `.claude`, `.svelte-kit`).
+ * Folders left out by default (docs: « exclusions par défaut »): dependencies anywhere (`node_modules`), build outputs and
+ * tool folders (`dist`, `build`, `coverage`, `vendor`, a name that starts with a dot) only at the root of the repository
+ * or of a package (a folder with its own `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `composer.json`).
+ * A folder of that name deeper in the sources (`src/lib/x/vendor/`) is code like any other. With `--base`, what the change
+ * creates is always analysed, default exclusions or not: only `structure.ignore` (of the base) leaves it out.
  */
-export const DEFAULT_IGNORE = ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/vendor/**', '**/.*/**'] as const;
+export const DEFAULT_IGNORE = ['**/node_modules/**', 'dist/**', 'build/**', 'coverage/**', 'vendor/**', '.*/**'] as const;
+const OUTPUT_NAMES = new Set(['dist', 'build', 'coverage', 'vendor']);
+const PACKAGE_FILES = /(?:^|\/)(?:package\.json|pyproject\.toml|go\.mod|Cargo\.toml|composer\.json)$/;
+
+/** Roots of the packages of a file list (folders with a manifest), node_modules left out. */
+export function packageRoots(paths: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const p of paths) if (PACKAGE_FILES.test(p) && !p.split('/').includes('node_modules')) out.add(posix.dirname(p));
+  return out;
+}
+
+/** Left out by the default exclusions: `node_modules` anywhere, outputs and tool folders at the root of the repository or of a package. */
+export function defaultIgnored(path: string, roots: ReadonlySet<string>): boolean {
+  const parts = path.split('/');
+  if (parts.includes('node_modules')) return true;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const parent = i === 0 ? '.' : parts.slice(0, i).join('/');
+    if ((parent === '.' || roots.has(parent)) && (OUTPUT_NAMES.has(parts[i]!) || parts[i]!.startsWith('.'))) return true;
+  }
+  return false;
+}
+
+/**
+ * The exclusion test of a file list: `structure.ignore` always, the default exclusions for what is not in `always` (the
+ * files the change creates, which are always analysed).
+ */
+export function ignoreTest(settings: Pick<StructureSettings, 'ignore'>, paths: readonly string[], always: ReadonlySet<string> = new Set()): (path: string) => boolean {
+  const roots = packageRoots(paths);
+  return path => settings.ignore.some(re => re.test(path)) || (!always.has(path) && defaultIgnored(path, roots));
+}
 
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ROLE_KEY = /^-?[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -107,7 +139,8 @@ export function structureSettings(section: StructureSection | undefined): Struct
     const fallback: Severity = (CHANGE_CODES as readonly string[]).includes(code) ? 'error' : 'warning';
     return [code, typeof value === 'string' ? value : value?.[code] ?? fallback];
   })) as Record<FindingCode | ChangeCode, Severity>;
-  const ignore = [...DEFAULT_IGNORE, ...(section?.ignore ?? []).map(glob => relativeInside(glob, 'ignore'))];
+  // Declared exclusions only: the default ones are applied by `ignoreTest` (root and package roots, existing files).
+  const ignore = (section?.ignore ?? []).map(glob => relativeInside(glob, 'ignore'));
   return {
     roots: [...new Set((section?.roots ?? ['.']).map(root => relativeInside(root, 'roots')))],
     maxFlatFiles: section?.maxFlatFiles ?? DEFAULT_MAX_FLAT_FILES,

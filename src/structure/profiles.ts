@@ -74,7 +74,7 @@ const SVELTEKIT: StackProfile = {
     { path: 'src/hooks.client.*', role: 'hooks du navigateur (erreurs inattendues)', convention: 'sveltekit-hooks' },
     { path: 'src/hooks.*', role: 'hooks universels (réécriture d\'URL, transport)', convention: 'sveltekit-hooks' },
     { path: 'src/app.html', role: 'page HTML de base', convention: 'sveltekit-structure' },
-    { path: 'src/service-worker.*', role: 'service worker', convention: 'sveltekit-structure' },
+    { path: 'src/service-worker.*', role: 'service worker du navigateur', convention: 'sveltekit-structure' },
     { path: 'src/params/*', role: 'validateur de paramètre de route', convention: 'sveltekit-params' },
     { path: 'src/routes/+layout.*', role: 'layout racine : entoure toutes les pages', convention: 'sveltekit-structure' },
     { path: 'src/routes/*/+layout.*', role: 'layout d\'une section ou d\'un groupe de routes', convention: 'sveltekit-structure' },
@@ -105,8 +105,8 @@ const NEXT: StackProfile = {
     { path: 'middleware.*', role: 'middleware : exécuté avant chaque requête', convention: 'next-structure' },
     { path: 'src/middleware.*', role: 'middleware : exécuté avant chaque requête', convention: 'next-structure' },
     { path: 'instrumentation.*', role: 'instrumentation au démarrage du serveur', convention: 'next-structure' },
-    { path: 'app/layout.*', role: 'layout racine', convention: 'next-structure' },
-    { path: 'src/app/layout.*', role: 'layout racine', convention: 'next-structure' },
+    { path: 'app/layout.*', role: 'layout racine de l\'application', convention: 'next-structure' },
+    { path: 'src/app/layout.*', role: 'layout racine de l\'application', convention: 'next-structure' },
     { path: 'pages/_app.*', role: 'application racine (pages router)', convention: 'next-structure' },
   ],
 };
@@ -123,11 +123,11 @@ const NUXT: StackProfile = {
   ],
   known: ['pages', 'components', 'composables', 'layouts', 'middleware', 'server', 'plugins', 'utils', 'public', 'assets', 'stores'].map(p => ({ path: p, role: `dossier ${p} reconnu par Nuxt`, convention: 'nuxt-structure' })),
   entries: [
-    { path: 'app.vue', role: 'composant racine', convention: 'nuxt-structure' },
-    { path: 'app/app.vue', role: 'composant racine', convention: 'nuxt-structure' },
+    { path: 'app.vue', role: 'composant racine de l\'application', convention: 'nuxt-structure' },
+    { path: 'app/app.vue', role: 'composant racine de l\'application', convention: 'nuxt-structure' },
     { path: 'nuxt.config.*', role: 'configuration de Nuxt', convention: 'nuxt-structure' },
     { path: 'middleware/*', role: 'middleware de route', convention: 'nuxt-structure' },
-    { path: 'layouts/*', role: 'layout', convention: 'nuxt-structure' },
+    { path: 'layouts/*', role: 'layout des pages', convention: 'nuxt-structure' },
   ],
 };
 
@@ -142,13 +142,13 @@ const ASTRO: StackProfile = {
     MIRROR, CORE,
   ],
   known: [
-    { path: 'src/pages', role: 'routes', convention: 'astro-structure' },
-    { path: 'src/components', role: 'composants', convention: 'astro-structure' },
-    { path: 'src/layouts', role: 'layouts', convention: 'astro-structure' },
+    { path: 'src/pages', role: 'routes du site', convention: 'astro-structure' },
+    { path: 'src/components', role: 'composants de l\'interface', convention: 'astro-structure' },
+    { path: 'src/layouts', role: 'layouts des pages', convention: 'astro-structure' },
     { path: 'src/content', role: 'collections de contenu', convention: 'astro-structure' },
     { path: 'public', role: 'fichiers servis tels quels', convention: 'astro-structure' },
   ],
-  entries: [{ path: 'src/middleware.*', role: 'middleware', convention: 'astro-structure' }],
+  entries: [{ path: 'src/middleware.*', role: 'middleware des requêtes', convention: 'astro-structure' }],
 };
 
 const ANGULAR: StackProfile = {
@@ -175,8 +175,8 @@ const VUE: StackProfile = {
     FEATURE('https://legacy.reactjs.org/docs/faq-structure.html', 'src/<fonctionnalité> ou src/components/<fonctionnalité>'),
     MIRROR, CORE,
   ],
-  known: [{ path: 'src/components', role: 'composants', convention: 'vue-style' }],
-  entries: [{ path: 'src/main.*', role: 'démarrage de l\'application', convention: 'vue-style' }, { path: 'src/App.vue', role: 'composant racine', convention: 'vue-style' }],
+  known: [{ path: 'src/components', role: 'composants de l\'interface', convention: 'vue-style' }],
+  entries: [{ path: 'src/main.*', role: 'démarrage de l\'application', convention: 'vue-style' }, { path: 'src/App.vue', role: 'composant racine de l\'application', convention: 'vue-style' }],
 };
 
 const REACT: StackProfile = {
@@ -189,8 +189,8 @@ const REACT: StackProfile = {
     FEATURE('https://legacy.reactjs.org/docs/faq-structure.html', 'src/features/<fonctionnalité> ou src/<fonctionnalité>'),
     MIRROR, CORE,
   ],
-  known: [{ path: 'src/components', role: 'composants partagés', convention: 'react-structure' }, { path: 'public', role: 'fichiers servis tels quels', convention: 'react-structure' }],
-  entries: [{ path: 'src/main.*', role: 'démarrage de l\'application', convention: 'react-structure' }, { path: 'src/index.*', role: 'démarrage de l\'application', convention: 'react-structure' }, { path: 'src/App.*', role: 'composant racine', convention: 'react-structure' }],
+  known: [{ path: 'src/components', role: 'composants partagés de l\'interface', convention: 'react-structure' }, { path: 'public', role: 'fichiers servis tels quels', convention: 'react-structure' }],
+  entries: [{ path: 'src/main.*', role: 'démarrage de l\'application', convention: 'react-structure' }, { path: 'src/index.*', role: 'démarrage de l\'application', convention: 'react-structure' }, { path: 'src/App.*', role: 'composant racine de l\'application', convention: 'react-structure' }],
 };
 
 const PYTHON: StackProfile = {
@@ -204,8 +204,8 @@ const PYTHON: StackProfile = {
     FEATURE('https://docs.python-guide.org/writing/structure/', 'un sous-paquet par domaine'),
     CORE,
   ],
-  known: [{ path: 'tests', role: 'tests', convention: 'python-structure' }, { path: 'src', role: 'paquets de l\'application', convention: 'python-structure' }],
-  entries: [{ path: 'manage.py', role: 'commande Django', convention: 'django-apps' }, { path: '*/settings.py', role: 'réglages Django', convention: 'django-apps' }, { path: '*/urls.py', role: 'routes Django', convention: 'django-apps' }],
+  known: [{ path: 'tests', role: 'tests du projet', convention: 'python-structure' }, { path: 'src', role: 'paquets de l\'application', convention: 'python-structure' }],
+  entries: [{ path: 'manage.py', role: 'commande de gestion Django', convention: 'django-apps' }, { path: '*/settings.py', role: 'réglages du projet Django', convention: 'django-apps' }, { path: '*/urls.py', role: 'routes du projet Django', convention: 'django-apps' }],
 };
 
 const GO: StackProfile = {
@@ -218,8 +218,8 @@ const GO: StackProfile = {
     FEATURE('https://go.dev/doc/modules/layout', 'internal/<domaine>'),
     CORE,
   ],
-  known: [{ path: 'cmd', role: 'programmes (un dossier par exécutable)', convention: 'go-layout' }, { path: 'internal', role: 'paquets privés du module', convention: 'go-layout' }, { path: 'pkg', role: 'paquets réutilisables', convention: 'go-layout' }],
-  entries: [{ path: 'main.go', role: 'programme principal', convention: 'go-layout' }, { path: 'cmd/*/main.go', role: 'programme', convention: 'go-layout' }],
+  known: [{ path: 'cmd', role: 'programmes (un dossier par exécutable)', convention: 'go-layout' }, { path: 'internal', role: 'paquets privés du module', convention: 'go-layout' }, { path: 'pkg', role: 'paquets réutilisables du module', convention: 'go-layout' }],
+  entries: [{ path: 'main.go', role: 'programme principal du module', convention: 'go-layout' }, { path: 'cmd/*/main.go', role: 'point d\'entrée d\'un programme', convention: 'go-layout' }],
 };
 
 const GENERIC: StackProfile = {
@@ -231,13 +231,13 @@ const GENERIC: StackProfile = {
     FEATURE('https://legacy.reactjs.org/docs/faq-structure.html', 'un sous-dossier par fonctionnalité'),
     MIRROR, CORE,
   ],
-  known: [{ path: 'src', role: 'sources', convention: 'feature-folders' }, { path: 'tests', role: 'tests', convention: 'feature-folders' }],
+  known: [{ path: 'src', role: 'sources du projet', convention: 'feature-folders' }, { path: 'tests', role: 'tests du projet', convention: 'feature-folders' }],
   entries: [],
 };
 
 /** Folders and files every project may have, whatever its stack: migrations, scheduled tasks, CI. */
 export const COMMON_KNOWN: KnownPath[] = [
-  { path: 'docs', role: 'documentation', convention: 'common' },
+  { path: 'docs', role: 'documentation du projet', convention: 'common' },
   { path: 'scripts', role: 'scripts de développement et d\'exploitation', convention: 'common' },
   { path: 'supabase', role: 'base Supabase : migrations, fonctions, configuration locale', convention: 'common' },
   { path: 'supabase/migrations', role: 'migrations de la base, appliquées dans l\'ordre', convention: 'common' },

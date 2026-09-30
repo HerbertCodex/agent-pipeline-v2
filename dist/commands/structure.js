@@ -41,7 +41,7 @@ const short = (dir, path) => (dir === '.' ? path : path.slice(dir.length + 1));
 export async function trackedFiles(git, repo) {
     return (await git.exec(repo, ['ls-files', '--cached', '--deduplicate', '-z'])).split('\0').filter(Boolean);
 }
-const CODE_LABEL = { 'flat-growth': 'dossier à plat alourdi', 'architecture-map': 'carte de l\'architecture', configuration: 'configuration' };
+const CODE_LABEL = { 'flat-growth': 'dossier à plat alourdi', 'architecture-map': 'carte de l\'architecture', configuration: 'configuration', coverage: 'hors du contrôle' };
 const EXISTING_SHOWN = 10;
 /** Labels of the conventions a group follows, with their documentation. */
 function conventions(profile, ids) {
@@ -73,6 +73,11 @@ export function formatReport(report, scope, all = false) {
                 const c = conventions(profile, g.conventions);
                 if (c)
                     lines.push(`      convention : ${c}`);
+            }
+            for (const u of f.unnamed ?? []) {
+                lines.push(`    à nommer par l'opérateur : ${u.members.map(p => short(dir, p)).join(', ')}`);
+                if (u.reasons.length)
+                    lines.push(`      pourquoi ensemble : ${u.reasons.join(' ; ')}`);
             }
         }
         // One line per main file; its tests and companion files follow it.

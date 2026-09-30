@@ -17,20 +17,28 @@ export interface ArchItem {
 export declare const GENERATED_BLOCKS: readonly ["arborescence", "entrees", "liens"];
 export declare const WRITTEN_BLOCKS: readonly ["resume", "flux", "regles", "roles"];
 type BlockId = typeof GENERATED_BLOCKS[number] | typeof WRITTEN_BLOCKS[number];
+/** A role says something: three words at least, placeholders apart (`x`, `divers`, « à décrire » are no role). */
+export declare const MIN_ROLE_WORDS = 3;
+export declare function meaningfulRole(role: string): boolean;
+/** Markers present more than once: a copied block would make a stale map look up to date. */
+export declare function duplicateMarkers(text: string): string[];
 /** Content of a block, or null when the file does not have it. */
 export declare function blockOf(text: string, id: BlockId): string | null;
 /** The map without the content of its `roles` block: what a task must leave as it is. */
 export declare function withoutRoles(text: string): string;
 /** The roles written in the `roles` block: key (a path, `/route`, a glob with `*`) -> role, placeholders left out. */
 export declare function writtenRoles(text: string | null): Map<string, string>;
-/** The written role of an item: its exact key, else a glob of the roles block (`src/lib/*` or `src/lib/*\/`). */
-export declare function roleOf(item: ArchItem, roles: ReadonlyMap<string, string>): string | null;
+/**
+ * The written role of an item: its exact key, else a glob of the roles block (`src/lib/*` or `src/lib/*\/`). With `globs`,
+ * only those globs count (for an item the change adds: the globs already at the base, never a catch-all it brings).
+ */
+export declare function roleOf(item: ArchItem, roles: ReadonlyMap<string, string>, globs?: ReadonlySet<string>): string | null;
 /**
  * What the map must describe, from the file list: folders of levels 1 and 2 (from the root and from the anchors of the
  * profile, route folders apart), main routes (first segment), entry points (the profile's, crons, migrations).
  * `read` gives a file's text (crons, scheduled workflows); null when unreadable.
  */
-export declare function archItems(files: readonly string[], profile: StackProfile, settings: Pick<StructureSettings, 'ignore'>, read: (path: string) => string | null): ArchItem[];
+export declare function archItems(files: readonly string[], profile: StackProfile, settings: Pick<StructureSettings, 'ignore'>, read: (path: string) => string | null, always?: ReadonlySet<string>): ArchItem[];
 /** A relative Markdown link of the map, broken when its target is neither a file nor a folder of the repository. */
 export declare function brokenLinks(text: string, mapPath: string, exists: (path: string) => boolean): {
     target: string;

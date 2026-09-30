@@ -1,6 +1,6 @@
 import { posix } from 'node:path';
-import type { FindingCode, Severity, StructureSettings } from './config.js';
-import { folderName, joinLike, parseName, related, singular, startsWith, tokenize, type FileName } from './names.js';
+import { ignoreTest, type FindingCode, type Severity, type StructureSettings } from './config.js';
+import { entryKey, folderName, joinLike, parseName, related, singular, startsWith, tokenize, type FileName } from './names.js';
 import { proposeSplit, type SplitGroup, type UsageGraph } from './split.js';
 
 /** A proposed move, `from` and `to` relative to the repository root. Never applied by the tool. */
@@ -16,6 +16,10 @@ export interface Finding {
   moves: Move[];
   /** flat-folder with a usage graph: the proposed subfolders, with their reasons and conventions. */
   groups?: SplitGroup[];
+  /** flat-folder with a usage graph: files used together that no name of the project describes, to be named by the operator. */
+  unnamed?: { members: string[]; reasons: string[] }[];
+  /** flat-folder: a folder of primitives (`components/ui`), never split by use (a flat list or one folder per component). */
+  primitives?: boolean;
   /** flat-folder with a usage graph: files most of the folder imports, which stay at its root. */
   core?: { path: string; reason: string }[];
   /** `apv structure check`: the finding concerns a file the change creates or moves (always true without base). */
@@ -52,6 +56,8 @@ export interface AnalyzeOptions {
    * prefix. Without it, only the names are read.
    */
   usage?: UsageGraph;
+  /** Files always analysed, default exclusions or not (what the change creates). */
+  always?: ReadonlySet<string>;
   /** Groups proposed by a first pass (folder -> groups), for the folders of the same domain: set by analyzeStructure itself. */
   proposed?: ReadonlyMap<string, readonly { dir: string; members: readonly string[] }[]>;
 }
@@ -63,6 +69,12 @@ interface Entry {
   role: Role | null;
 }
 interface Role { name: string; suffix: boolean; domain: string[] }
+
+/** Folders of generic components (primitives): `components/ui`, `ui`, `primitives`, `design-system`, `atoms`... */
+const PRIMITIVE_NAMES = new Set(['ui', 'primitives', 'design-system', 'designsystem', 'atoms', 'elements', 'base-components']);
+export function isPrimitivesFolder(dir: string): boolean {
+  return PRIMITIVE_NAMES.has(posix.basename(dir).toLowerCase());
+}
 
 /** A set of entries that go to one new folder, renamed or not. */
 interface Placement { dir: string; entries: Entry[]; rename: (entry: Entry) => string }
@@ -87,7 +99,7 @@ function roleOf(file: FileName, roles: readonly [string[], boolean, string][]): 
 /** Folder entries: one per stem, the main file first by fewest name parts, then by name. */
 function entriesOf(files: FileName[], roles: readonly [string[], boolean, string][]): { entries: Entry[]; tests: number; companions: number } {
   const byStem = new Map<string, FileName[]>();
-  for (const f of files) byStem.set(f.stem, [...(byStem.get(f.stem) ?? []), f]);
+  for (const f of files) byStem.set(entryKey(f), [...(byStem.get(entryKey(f)) ?? []), f]);
   const entries: Entry[] = [];
   let tests = 0; let companions = 0;
   for (const group of byStem.values()) {
@@ -142,19 +154,22 @@ export function analyzeStructure(paths: readonly string[], settings: StructureSe
   // With a usage graph, two passes: the second knows the groups the first proposed everywhere, so that two folders of the
   // same domain (`lib/applications`, `components/applications`) get the same split.
   if (options.usage && !options.proposed) {
-    const first = analyzeStructure(paths, settings, { usage: options.usage, proposed: new Map() });
+    const first = analyzeStructure(paths, settings, { usage: options.usage, proposed: new Map(), ...(options.always ? { always: options.always } : {}) });
     const proposed = new Map<string, { dir: string; members: string[] }[]>();
-    // Only the split of a folder of modules is followed elsewhere, and only its groups named by a folder or a module:
-    // the business code decides the split, the components follow it (never a name made of a component).
+    // Only the split of a folder of modules is followed elsewhere: the business code decides the split, the components
+    // follow it. Every group is named by the vocabulary of the project, never after one of its files.
     for (const f of first.findings) {
       const modules = f.files.filter(p => !parseName(p)?.component).length;
       if (!f.groups?.length || modules * 2 < f.files.length) continue;
-      const kept = f.groups.filter(g => g.members.length >= 2 && (g.naming === 'existing' || g.naming === 'mirror' || g.naming === 'module'));
+      // Only groups named by a folder that exists (in the folder, or the same split elsewhere): a name the first pass chose
+      // by a word or a use is not strong enough to be copied into another folder.
+      const kept = f.groups.filter(g => g.members.length >= 2 && (g.naming === 'existing' || g.naming === 'mirror'));
       if (kept.length) proposed.set(f.folder, kept.map(g => ({ dir: g.dir, members: g.members })));
     }
     return analyzeStructure(paths, settings, { ...options, proposed });
   }
-  const kept = paths.filter(p => !settings.ignore.some(re => re.test(p)));
+  const ignored = ignoreTest(settings, paths, options.always);
+  const kept = paths.filter(p => !ignored(p));
   const tracked = new Set(paths);
   // Directories of the tree (for sibling folders and the domain vocabulary), ignored paths left out.
   const dirs = new Set<string>();
@@ -295,7 +310,9 @@ export function analyzeStructure(paths: readonly string[], settings: StructureSe
 
     // Flat folder with a usage graph: what no name rule placed is split by proximity of use.
     let split: ReturnType<typeof proposeSplit> | null = null;
-    if (flat && options.usage) {
+    // A folder of primitives keeps its convention: a flat list, or one folder per component; never split by use.
+    const primitives = flat && isPrimitivesFolder(dir);
+    if (flat && options.usage && !primitives) {
       const asSplit = (e: Entry) => ({ path: e.main.path, stem: e.main.stem, files: [e.main.path, ...e.followers.map(f => f.path)], component: e.main.component, tokens: e.main.tokens });
       const pool = entries.filter(e => free(e) && !e.main.reserved);
       split = proposeSplit(dir, pool.map(asSplit), options.usage, {
@@ -317,10 +334,12 @@ export function analyzeStructure(paths: readonly string[], settings: StructureSe
     const unplaced = entries.filter(e => !e.main.reserved && !placed.has(e) && !split?.core.some(c => c.path === e.main.path)).map(e => e.main.path);
     if (flat) {
       const moved = placed.size;
-      const proposal = moved
-        ? `${entries.length} fichiers de code directement dans le dossier (seuil ${settings.maxFlatFiles}) : ranger par domaine selon le plan (${moved} fichier(s) placés${split?.groups.length ? `, dont ${split.groups.reduce((n, g) => n + g.members.length, 0)} par usage dans ${split.groups.length} sous-dossier(s)` : ''}${split?.core.length ? `, ${split.core.length} fichier(s) socle gardés à la racine` : ''}), ${unplaced.length} fichier(s) restent à placer avec l'opérateur.`
-        : `${entries.length} fichiers de code directement dans le dossier (seuil ${settings.maxFlatFiles}), sans préfixe commun ni rôle reconnu : découpage en sous-dossiers par domaine à décider avec l'opérateur (ou relever structure.maxFlatFiles).`;
-      const extra = split ? { groups: split.groups, core: split.core } : {};
+      const proposal = primitives
+        ? `${entries.length} fichiers de code directement dans un dossier de composants génériques (seuil ${settings.maxFlatFiles}) : la convention y est une liste à plat, ou un dossier par composant (${dir}/<Composant>/) ; jamais de découpage par usage. Un nouveau composant va dans son propre dossier ; relever le seuil pour ce dossier reste une décision de l'opérateur.`
+        : moved
+        ? `${entries.length} fichiers de code directement dans le dossier (seuil ${settings.maxFlatFiles}) : ranger par domaine selon le plan (${moved} fichier(s) placés${split?.groups.length ? `, dont ${split.groups.reduce((n, g) => n + g.members.length, 0)} par usage dans ${split.groups.length} sous-dossier(s)` : ''}${split?.core.length ? `, ${split.core.length} fichier(s) socle gardés à la racine` : ''}${split?.unnamed.length ? `, ${split.unnamed.length} groupe(s) à nommer par l'opérateur` : ''}), ${unplaced.length} fichier(s) restent à placer avec l'opérateur.`
+        : `${entries.length} fichiers de code directement dans le dossier (seuil ${settings.maxFlatFiles}), sans préfixe commun ni rôle reconnu${split?.unnamed.length ? ` ; ${split.unnamed.length} groupe(s) d'usage sans nom du projet, à nommer par l'opérateur` : ''} : découpage en sous-dossiers par domaine à décider avec l'opérateur (ou relever structure.maxFlatFiles).`;
+      const extra = { ...(split ? { groups: split.groups, core: split.core, unnamed: split.unnamed } : {}), ...(primitives ? { primitives: true } : {}) };
       local.unshift({ code: 'flat-folder', severity: settings.severity['flat-folder'], folder: dir, files: entries.map(e => e.main.path), proposal, moves: flatMoves, ...extra });
     }
     if (!local.length) continue;

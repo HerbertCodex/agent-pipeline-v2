@@ -1,4 +1,4 @@
-import type { FindingCode, Severity, StructureSettings } from './config.js';
+import { type FindingCode, type Severity, type StructureSettings } from './config.js';
 import { type SplitGroup, type UsageGraph } from './split.js';
 /** A proposed move, `from` and `to` relative to the repository root. Never applied by the tool. */
 export interface Move {
@@ -15,6 +15,13 @@ export interface Finding {
     moves: Move[];
     /** flat-folder with a usage graph: the proposed subfolders, with their reasons and conventions. */
     groups?: SplitGroup[];
+    /** flat-folder with a usage graph: files used together that no name of the project describes, to be named by the operator. */
+    unnamed?: {
+        members: string[];
+        reasons: string[];
+    }[];
+    /** flat-folder: a folder of primitives (`components/ui`), never split by use (a flat list or one folder per component). */
+    primitives?: boolean;
     /** flat-folder with a usage graph: files most of the folder imports, which stay at its root. */
     core?: {
         path: string;
@@ -51,12 +58,15 @@ export interface AnalyzeOptions {
      * prefix. Without it, only the names are read.
      */
     usage?: UsageGraph;
+    /** Files always analysed, default exclusions or not (what the change creates). */
+    always?: ReadonlySet<string>;
     /** Groups proposed by a first pass (folder -> groups), for the folders of the same domain: set by analyzeStructure itself. */
     proposed?: ReadonlyMap<string, readonly {
         dir: string;
         members: readonly string[];
     }[]>;
 }
+export declare function isPrimitivesFolder(dir: string): boolean;
 /**
  * Deterministic analysis of a list of tracked paths: findings per folder and a move plan. Pure: reads no
  * file, runs nothing, applies nothing.

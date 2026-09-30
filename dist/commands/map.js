@@ -39,6 +39,10 @@ export async function currentMap(repo, config) {
     const crowded = tree.findings.filter(f => f.code === 'flat-folder').map(f => ({ folder: f.folder, code: f.files.length, groups: (f.groups ?? []).map(g => g.dir) }));
     return { file: settings.file, map, files, tree, usage, text: codeMapMarkdown(map, settings, { architectureMap: structure.architectureMap, maxFlatFiles: structure.maxFlatFiles, crowded }) };
 }
+/** The map without its « Dossiers » section (added by 3.0.0-alpha.11). */
+function withoutFolders(text) {
+    return text.replace(/\n## Dossiers\n[\s\S]*?(?=\n## |$)/, '\n');
+}
 /** Lines present on one side only (10 at most each): enough to see what went stale. */
 function difference(actual, expected) {
     const a = new Set(actual.split('\n'));
@@ -88,7 +92,10 @@ export async function writeMap(repo, config, check) {
     if (check) {
         if (actual === null)
             return done({ file, status: 'missing', difference: null });
-        return actual === text ? done({ file, status: 'up-to-date', difference: null }) : done({ file, status: 'stale', difference: difference(actual, text) });
+        if (actual === text)
+            return done({ file, status: 'up-to-date', difference: null });
+        // Only the « Dossiers » section is missing: a map written before 3.0.0-alpha.11, stale by the update of APV itself.
+        return done({ file, status: 'stale', difference: difference(actual, text), ...(withoutFolders(actual) === withoutFolders(text) ? { migration: true } : {}) });
     }
     if (actual === text)
         return done({ file, status: 'unchanged', difference: null });
@@ -137,6 +144,9 @@ export async function run(args, io) {
             lines.push(`Carte du code à jour : ${result.file} (${counts}).`);
         else if (result.status === 'missing')
             lines.push(`Carte du code absente : ${result.file}. Lancez apv map, puis commitez ${result.file}.`);
+        else if (result.migration) {
+            lines.push(`Carte du code périmée par la mise à jour d'APV (3.0.0-alpha.11 : nouvelle section « Dossiers », dossiers à plat et sous-dossiers proposés), pas par le code : lancez apv map une fois après la mise à jour, puis commitez ${result.file} (PR à part).`);
+        }
         else {
             lines.push(`Carte du code périmée : ${result.file} ne correspond plus au code. Lancez apv map, relisez-la, puis commitez ${result.file} avec le changement.`);
             if (result.difference?.onlyExpected.length)

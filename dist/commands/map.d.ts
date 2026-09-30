@@ -14,6 +14,8 @@ export interface MapResult {
         onlyInFile: string[];
         onlyExpected: string[];
     } | null;
+    /** Stale only because the map predates the « Dossiers » section of 3.0.0-alpha.11: `apv map` once after the update. */
+    migration?: true;
 }
 type MapConfig = {
     reuse?: ReuseSection | undefined;

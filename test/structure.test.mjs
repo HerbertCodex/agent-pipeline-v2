@@ -209,7 +209,7 @@ test('apv structure check: text, JSON, tracked files only, exit codes', async t 
   const report = out.json();
   assert.deepEqual(Object.keys(report).sort(), ['analyzedFiles', 'architectureMap', 'base', 'changes', 'findings', 'folders', 'maxFlatFiles', 'ok', 'paths', 'plan', 'repo', 'usageError'].sort());
   assert.equal(report.ok, true);
-  assert.deepEqual(Object.keys(report.findings[0]).sort(), ['blocking', 'code', 'core', 'files', 'folder', 'groups', 'isNew', 'moves', 'proposal', 'severity']);
+  assert.deepEqual(Object.keys(report.findings[0]).sort(), ['blocking', 'code', 'core', 'files', 'folder', 'groups', 'isNew', 'moves', 'proposal', 'severity', 'unnamed']);
   assert.deepEqual([report.base.source, report.changes.map(c => [c.code, c.blocking])], ['none', [['architecture-map', false]]], 'without base, the missing map is only said');
   assert.ok(report.plan.some(m => m.from === 'src/lib/server/form-body.ts' && m.to === 'src/lib/server/http/form-body.ts'));
   assert.equal(git(f.repo, 'status', '--porcelain', '--', 'src/lib/server'), '', 'nothing moved');

@@ -1,7 +1,7 @@
 import { posix } from 'node:path';
 import { routeOf } from '../knowledge/code-map.js';
-import { globToRegExp } from '../db/glob.js';
-import { DEFAULT_IGNORE } from './config.js';
+import { PipelineError } from '../domain/errors.js';
+import { ignoreTest } from './config.js';
 import { parseName } from './names.js';
 import { COMMON_KNOWN, conventionOf, knownPath, segmentGlob } from './profiles.js';
 export const GENERATED_BLOCKS = ['arborescence', 'entrees', 'liens'];
@@ -15,6 +15,18 @@ const HEADINGS = {
 };
 const byText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const PLACEHOLDER = /^(?:à décrire|a decrire|todo|tbd|\?+|…|\.\.\.)?[.\s]*$/i;
+/** A role says something: three words at least, placeholders apart (`x`, `divers`, « à décrire » are no role). */
+export const MIN_ROLE_WORDS = 3;
+export function meaningfulRole(role) {
+    return !PLACEHOLDER.test(role) && role.trim().split(/\s+/).filter(w => /[\p{L}\p{N}]/u.test(w)).length >= MIN_ROLE_WORDS;
+}
+/** Markers present more than once: a copied block would make a stale map look up to date. */
+export function duplicateMarkers(text) {
+    const counts = new Map();
+    for (const m of text.matchAll(/<!--\s*\/?apv:(?:ecrit|genere):[a-z]+\s*-->/g))
+        counts.set(m[0], (counts.get(m[0]) ?? 0) + 1);
+    return [...counts].filter(([, n]) => n > 1).map(([m]) => m).sort();
+}
 /** Content of a block, or null when the file does not have it. */
 export function blockOf(text, id) {
     const start = text.indexOf(open(id));
@@ -40,19 +52,22 @@ export function writtenRoles(text) {
         if (!m)
             continue;
         const role = m[2].trim();
-        if (!PLACEHOLDER.test(role))
+        if (meaningfulRole(role))
             out.set(m[1].trim(), role);
     }
     return out;
 }
-/** The written role of an item: its exact key, else a glob of the roles block (`src/lib/*` or `src/lib/*\/`). */
-export function roleOf(item, roles) {
+/**
+ * The written role of an item: its exact key, else a glob of the roles block (`src/lib/*` or `src/lib/*\/`). With `globs`,
+ * only those globs count (for an item the change adds: the globs already at the base, never a catch-all it brings).
+ */
+export function roleOf(item, roles, globs) {
     const bare = item.key.replace(/\/$/, '');
     for (const key of [item.key, bare, `${bare}/`])
         if (roles.has(key))
             return roles.get(key);
     for (const [key, role] of [...roles].sort((a, b) => byText(a[0], b[0]))) {
-        if (!key.includes('*'))
+        if (!key.includes('*') || (globs && !globs.has(key)))
             continue;
         if (segmentGlob(key.replace(/\/$/, '')).test(bare))
             return role;
@@ -68,9 +83,9 @@ const COMMON_ENTRIES = [
  * profile, route folders apart), main routes (first segment), entry points (the profile's, crons, migrations).
  * `read` gives a file's text (crons, scheduled workflows); null when unreadable.
  */
-export function archItems(files, profile, settings, read) {
-    const ignored = [...DEFAULT_IGNORE.map(g => globToRegExp(g)), ...settings.ignore];
-    const kept = files.filter(f => !ignored.some(re => re.test(f)));
+export function archItems(files, profile, settings, read, always = new Set()) {
+    const ignored = ignoreTest(settings, files, always);
+    const kept = files.filter(f => !ignored(f));
     const dirs = new Set();
     for (const f of kept)
         for (let d = posix.dirname(f); d !== '.'; d = posix.dirname(d))
@@ -308,6 +323,9 @@ export function newMap(inputs) {
  * its end (a written one with its draft): nothing written by hand is ever replaced.
  */
 export function refreshMap(current, inputs) {
+    const duplicated = duplicateMarkers(current);
+    if (duplicated.length)
+        throw new PipelineError('ARCHITECTURE_MAP', `${inputs.mapPath} : marqueur présent plusieurs fois (${duplicated.join(', ')}) ; garder un seul bloc de chaque, puis relancer apv structure map.`);
     const roles = writtenRoles(current);
     const generated = generatedBlocks(inputs, roles);
     const drafts = writtenDrafts(inputs);

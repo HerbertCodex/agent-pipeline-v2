@@ -4,33 +4,39 @@ import { join, posix } from 'node:path';
 import { Git } from '../execution/git.js';
 import { loadConfigAtCommit } from '../config/load.js';
 import { buildCodeMap } from '../knowledge/code-map.js';
-import { mapSettings, reuseSettings } from '../reuse/config.js';
+import { GENERATED_PATHS, globMatcher, mapSettings, reuseSettings } from '../reuse/config.js';
 import { collectChanges, readWorktree, resolveBase } from '../reuse/changes.js';
 import { designDir } from '../design/config.js';
 import { environment } from '../execution/process.js';
 import { analyzeStructure } from './analyze.js';
-import { archItems, brokenLinks, roleOf, writtenRoles } from './archmap.js';
-import { structureSettings } from './config.js';
-import { parseName } from './names.js';
+import { archItems, brokenLinks, duplicateMarkers, roleOf, writtenRoles } from './archmap.js';
+import { ignoreTest, structureSettings } from './config.js';
+import { COMPANION_INFIXES, entryKey, parseName } from './names.js';
 import { detectProfile, profileById } from './profiles.js';
 import { usageFromMap } from './split.js';
+const TEST_INFIX = /^(?:test|tests|spec|specs|e2e|bench|fixture|fixtures|mock|mocks|stories|story)$/;
 const byText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const inside = (path, dir) => dir === '.' || path === dir || path.startsWith(`${dir}/`);
-/** Main files per folder (stems of code files that are not tests), as `flat-folder` counts them. */
-export function folderEntries(paths, settings) {
+/**
+ * Modules per folder, as `flat-folder` counts them: one per module key (`x.ts`, `x.svelte.ts` and `x.test.ts` are one;
+ * `x.extra.ts` is another), tests alone apart. The default exclusions never apply to `always` (what the change creates).
+ */
+export function folderEntries(paths, settings, always = new Set()) {
     const out = new Map();
+    const ignored = ignoreTest(settings, paths, always);
     for (const p of paths) {
-        if (settings.ignore.some(re => re.test(p)))
+        if (ignored(p))
             continue;
         const f = parseName(p);
         if (!f || f.test || !settings.roots.some(r => inside(p, r)))
             continue;
-        const stems = out.get(f.dir) ?? new Map();
-        const known = stems.get(f.stem);
-        // The main file of a stem: fewest name parts (`x.ts` before `x.svelte.ts`), then the name.
+        const keys = out.get(f.dir) ?? new Map();
+        const key = entryKey(f);
+        const known = keys.get(key);
+        // The main file of a module: fewest name parts (`x.ts` before `x.svelte.ts`), then the name.
         if (!known || f.infixes.length < (parseName(known)?.infixes.length ?? 0) || (f.infixes.length === (parseName(known)?.infixes.length ?? 0) && p < known))
-            stems.set(f.stem, p);
-        out.set(f.dir, stems);
+            keys.set(key, p);
+        out.set(f.dir, keys);
     }
     return out;
 }
@@ -96,7 +102,7 @@ export async function checkStructure(repo, config, options = {}) {
     if (mergeBase) {
         const atBase = loadConfigAtCommit(repo, mergeBase);
         if (atBase.file) {
-            judged = { ...config, structure: atBase.config.structure };
+            judged = { ...config, structure: atBase.config.structure, reuse: atBase.config.reuse };
             if (stable(config.structure ?? null) !== stable(atBase.config.structure ?? null)) {
                 const blocking = codeTouched();
                 out.push({ code: 'configuration', severity: blocking ? 'error' : 'warning', isNew: true, blocking, path: atBase.file.slice(atBase.file.indexOf(':') + 1),
@@ -116,7 +122,9 @@ export async function checkStructure(repo, config, options = {}) {
         }
     }
     const files = changes ? changes.files : options.tracked ?? (await git.exec(repo, ['ls-files', '--cached', '--deduplicate', '-z'])).split('\0').filter(Boolean);
-    const report = analyzeStructure(files, settings, { ...(options.paths?.length ? { paths: options.paths } : {}), ...(usage ? { usage } : {}) });
+    // What the change creates or moves is always analysed, default exclusions or not (only structure.ignore of the base).
+    const created = new Set(changes && !changes.all ? [...changes.created, ...changes.renamed.keys()] : []);
+    const report = analyzeStructure(files, settings, { ...(options.paths?.length ? { paths: options.paths } : {}), ...(usage ? { usage } : {}), always: created });
     const wanted = (dir) => !options.paths?.length || options.paths.some(p => inside(dir, p));
     // What the change moves or creates: the analysis findings on those files are new; the others existed.
     const touchedPaths = new Set(changes && !changes.all ? [...changes.created, ...changes.renamed.keys()] : []);
@@ -125,43 +133,81 @@ export async function checkStructure(repo, config, options = {}) {
         Object.assign(f, { isNew, blocking: f.severity === 'error' && isNew });
     }
     const baseFiles = mergeBase ? (await git.exec(repo, ['ls-tree', '-r', '--name-only', '-z', mergeBase])).split('\0').filter(Boolean) : null;
-    // Flat folders: an added code file blocks, what was there is signalled by the analysis.
-    if (changes && baseFiles && !changes.all) {
-        const now = folderEntries(files, settings);
-        const before = folderEntries(baseFiles, settings);
-        const max = settings.maxFlatFiles;
-        for (const [dir, stems] of [...now].sort((a, b) => byText(a[0], b[0]))) {
-            if (stems.size <= max || !wanted(dir))
+    // Links and submodules the change adds: their content escapes the check (docs/STRUCTURE.md, section 2).
+    if (changes && !changes.all) {
+        for (const { path, kind } of changes.special) {
+            if (settings.ignore.some(re => re.test(path)))
                 continue;
-            const had = before.get(dir) ?? new Map();
-            for (const [stem, main] of [...stems].sort((a, b) => byText(a[0], b[0]))) {
-                if (had.has(stem))
+            out.push({ code: 'coverage', severity: 'error', isNew: true, blocking: true, path,
+                message: `${kind} ajouté par le changement : son contenu échappe au contrôle de l'arborescence ; le retirer, ou le déclarer dans structure.ignore (configuration de la base, décision de l'opérateur).` });
+        }
+    }
+    // Flat folders: every code file the change creates or moves in blocks, except a known companion of a module that was
+    // there (its tests, `.svelte.ts`, `.server.ts`, `.d.ts`), a rename in place and a move down into a subfolder.
+    if (changes && baseFiles && !changes.all) {
+        const now = folderEntries(files, settings, created);
+        const before = folderEntries(baseFiles, settings);
+        const baseStems = new Map();
+        for (const p of baseFiles) {
+            const f = parseName(p);
+            if (f && !f.test)
+                baseStems.set(f.dir, new Set([...(baseStems.get(f.dir) ?? []), f.stem]));
+        }
+        const max = settings.maxFlatFiles;
+        const reuseGenerated = globMatcher(reuseSettings(judged.reuse).generated);
+        const generatedName = globMatcher([...GENERATED_PATHS]);
+        const ignored = ignoreTest(settings, files, created);
+        const reported = new Set();
+        for (const path of [...created].sort(byText)) {
+            const f = parseName(path);
+            if (!f || ignored(path) || !settings.roots.some(r => inside(path, r)) || !wanted(f.dir))
+                continue;
+            const dir = f.dir;
+            const count = now.get(dir)?.size ?? 0;
+            if (count <= max)
+                continue;
+            const from = changes.renamed.get(path);
+            if (from) {
+                const origin = posix.dirname(from);
+                // Renamed in place (Git similarity, `-M`), or moved down from a flat folder into one of its subfolders.
+                if (origin === dir)
                     continue;
-                const from = changes.renamed.get(main);
-                if (from) {
-                    const origin = posix.dirname(from);
-                    // Renamed in place, or moved down from a flat folder into one of its subfolders: never an addition.
-                    if (origin === dir)
-                        continue;
-                    if (dir.startsWith(`${origin}/`) && (before.get(origin)?.size ?? 0) > max)
-                        continue;
-                }
-                const flat = report.findings.find(f => f.folder === dir && f.code === 'flat-folder');
-                const group = flat?.groups?.find(g => g.members.includes(main));
-                const core = flat?.core?.find(c => c.path === main);
-                const others = group?.members.filter(m => m !== main).map(m => posix.basename(m)) ?? [];
-                // Placed by a rule of names (prefix, role, neighbouring folder): the move of the plan.
-                const byName = report.findings.find(f => f.folder === dir && f.code !== 'flat-folder' && f.moves.some(m => m.from === main));
-                const move = byName?.moves.find(m => m.from === main);
-                const where = group
+                if (dir.startsWith(`${origin}/`) && (before.get(origin)?.size ?? 0) > max)
+                    continue;
+            }
+            const companion = f.infixes.length > 0 && f.infixes.every(i => COMPANION_INFIXES.has(i) || TEST_INFIX.test(i));
+            if ((companion || f.test) && (baseStems.get(dir)?.has(f.stem) ?? false))
+                continue;
+            const key = `${dir}/${entryKey(f)}`;
+            if (reported.has(key))
+                continue;
+            reported.add(key);
+            const severity = settings.severity['flat-growth'];
+            const had = before.get(dir)?.size ?? 0;
+            const size = had > max ? `${dir}/ a déjà ${had} fichiers de code (seuil ${max})` : `${dir}/ passe de ${had} à ${count} fichiers de code (seuil ${max})`;
+            if (generatedName(path)) {
+                if (reuseGenerated(path))
+                    continue;
+                out.push({ code: 'flat-growth', severity, isNew: true, blocking: severity === 'error', path,
+                    message: `nommé comme un fichier généré, mais non déclaré dans reuse.generated de la base : ${size} ; le déclarer (PR de configuration, décision de l'opérateur) s'il est vraiment écrit par un outil, sinon le ranger dans un sous-dossier.` });
+                continue;
+            }
+            const main = now.get(dir)?.get(entryKey(f)) ?? path;
+            const flat = report.findings.find(x => x.folder === dir && x.code === 'flat-folder');
+            const group = flat?.groups?.find(g => g.members.includes(main));
+            const core = flat?.core?.find(c => c.path === main);
+            const others = group?.members.filter(m => m !== main).map(m => posix.basename(m)) ?? [];
+            // Placed by a rule of names (prefix, role, neighbouring folder): the move of the plan.
+            const byName = report.findings.find(x => x.folder === dir && x.code !== 'flat-folder' && x.moves.some(m => m.from === main));
+            const move = byName?.moves.find(m => m.from === main);
+            const where = flat?.primitives
+                ? `dossier de composants génériques : mettre le nouveau composant dans son propre dossier (${dir}/<Composant>/), jamais un fichier de plus à plat`
+                : group
                     ? `à ranger dans ${dir}/${group.dir}/ (${group.existing ? 'sous-dossier existant' : 'sous-dossier proposé'}${others.length ? ` avec ${others.slice(0, 4).join(', ')}${others.length > 4 ? ', …' : ''}` : ''} ; ${group.reasons[0]})`
                     : move ? `à ranger en ${move.to} (${byName.code} : ${byName.proposal.replace(/[.\s]+$/, '')})`
                         : core ? 'fichier que le dossier importe beaucoup : le ranger d\'abord avec l\'opérateur (apv structure check --path) plutôt que d\'alourdir la racine'
-                            : `aucun groupe ne s'impose : le placer dans un sous-dossier de fonctionnalité (apv structure check --path ${dir} donne le découpage proposé), décidé avec l'opérateur`;
-                const size = had.size > max ? `${dir}/ a déjà ${had.size} fichiers de code (seuil ${max})` : `${dir}/ passe de ${had.size} à ${stems.size} fichiers de code (seuil ${max})`;
-                const severity = settings.severity['flat-growth'];
-                out.push({ code: 'flat-growth', severity, isNew: true, blocking: severity === 'error', path: main, message: `fichier de code ajouté à un dossier à plat : ${size} ; ${where}.` });
-            }
+                            : `aucun groupe nommé ne s'impose : le placer dans un sous-dossier de fonctionnalité (apv structure check --path ${dir} donne le découpage proposé), décidé avec l'opérateur`;
+            out.push({ code: 'flat-growth', severity, isNew: true, blocking: severity === 'error', path, message: `fichier de code ajouté à un dossier à plat : ${size} ; ${where}.` });
         }
     }
     // Architecture map.
@@ -169,18 +215,21 @@ export async function checkStructure(repo, config, options = {}) {
     const mapPath = settings.architectureMap;
     const mapText = readWorktree(repo, mapPath);
     const roles = writtenRoles(mapText);
-    const items = archItems(files, profile, settings, p => readWorktree(repo, p));
+    const items = archItems(files, profile, settings, p => readWorktree(repo, p), created);
     const scoped = (item) => !options.paths?.length || (item.kind === 'folder' && wanted(item.key.replace(/\/$/, '')));
-    const undescribed = items.filter(i => scoped(i) && roleOf(i, roles) === null);
     const severity = settings.severity['architecture-map'];
     const label = { folder: 'dossier', route: 'route principale', entry: 'point d\'entrée' };
     const added = { folder: ['ajouté', 'existant'], route: ['ajoutée', 'existante'], entry: ['ajouté', 'existant'] };
+    const duplicated = mapText === null ? [] : duplicateMarkers(mapText);
     if (!changes) {
+        const undescribed = items.filter(i => scoped(i) && roleOf(i, roles) === null);
         if (mapText === null)
             out.push({ code: 'architecture-map', severity: 'warning', isNew: false, blocking: false, path: mapPath, message: `carte de l'architecture absente : apv structure map l'écrit (partie générée remplie, partie écrite à compléter).` });
         else
             for (const i of undescribed)
                 out.push({ code: 'architecture-map', severity: 'warning', isNew: false, blocking: false, path: mapPath, message: `${label[i.kind]} ${i.key} sans rôle dans « Rôles ».` });
+        for (const m of duplicated)
+            out.push({ code: 'architecture-map', severity: 'warning', isNew: false, blocking: false, path: mapPath, message: `marqueur ${m} présent plusieurs fois : garder un seul bloc.` });
         for (const b of mapText === null ? [] : brokenLinks(mapText, mapPath, p => existsSync(join(repo, p)))) {
             out.push({ code: 'architecture-map', severity: 'warning', isNew: false, blocking: false, path: `${mapPath}:${b.line}`, message: `lien cassé : ${b.target}.` });
         }
@@ -189,13 +238,42 @@ export async function checkStructure(repo, config, options = {}) {
         const baseKeys = new Set(archItems(baseFiles, profile, settings, p => gitShow(repo, mergeBase, p)).map(i => i.key));
         const baseMapPath = structureSettings(judged.structure).architectureMap;
         const baseMap = gitShow(repo, mergeBase, baseMapPath);
+        // A new item is described by its own key, or by a glob the base already had: never by a catch-all the change brings.
+        const baseGlobs = new Set([...writtenRoles(baseMap).keys()].filter(k => k.includes('*')));
         if (mapText === null && baseMap !== null) {
             out.push({ code: 'architecture-map', severity, isNew: true, blocking: severity === 'error', path: mapPath, message: 'carte de l\'architecture supprimée par le changement : la rétablir (apv structure map).' });
         }
-        for (const i of undescribed) {
-            const isNew = !baseKeys.has(i.key);
+        const duplicatedAtBase = new Set(baseMap === null ? [] : duplicateMarkers(baseMap));
+        for (const m of duplicated) {
+            const isNew = !duplicatedAtBase.has(m);
             out.push({ code: 'architecture-map', severity: isNew ? severity : 'warning', isNew, blocking: isNew && severity === 'error', path: mapPath,
-                message: `${label[i.kind]} ${i.key} ${added[i.kind][isNew ? 0 : 1]} sans rôle dans la carte de l'architecture${mapText === null ? ' (carte absente : apv structure map)' : ''} : écrire « - \`${i.key}\` : <rôle en une ligne> » dans le bloc « Rôles »${i.known ? ` (rôle connu de la pile : ${i.known.role})` : ''}.` });
+                message: `marqueur ${m} présent plusieurs fois : un bloc recopié ferait croire la carte à jour ; garder un seul bloc de chaque.` });
+        }
+        // Folders a move down from their flat parent creates: the split proposed them, their role is proposed, never blocking.
+        const before = folderEntries(baseFiles, settings);
+        const descent = (item) => {
+            if (item.kind !== 'folder')
+                return [];
+            const dir = item.key.replace(/\/$/, '');
+            const parent = posix.dirname(dir);
+            if ((before.get(parent)?.size ?? 0) <= settings.maxFlatFiles)
+                return [];
+            return [...changes.renamed].filter(([to, from]) => to.startsWith(`${dir}/`) && posix.dirname(from) === parent).map(([to]) => to).sort(byText);
+        };
+        for (const i of items.filter(scoped)) {
+            const isNew = !baseKeys.has(i.key);
+            if (roleOf(i, roles, isNew ? baseGlobs : undefined) !== null)
+                continue;
+            const moved = isNew ? descent(i) : [];
+            if (moved.length) {
+                const name = posix.basename(i.key.replace(/\/$/, ''));
+                out.push({ code: 'architecture-map', severity: 'warning', isNew: true, blocking: false, path: mapPath,
+                    message: `dossier ${i.key} créé par le rangement de ${posix.dirname(i.key.replace(/\/$/, ''))}/ : rôle proposé à confirmer dans « Rôles » : « - \`${i.key}\` : ${name} : ${moved.slice(0, 4).map(m => posix.basename(m)).join(', ')}${moved.length > 4 ? ', …' : ''} (découpage proposé) ».` });
+                continue;
+            }
+            const catchAll = isNew && roleOf(i, roles) !== null;
+            out.push({ code: 'architecture-map', severity: isNew ? severity : 'warning', isNew, blocking: isNew && severity === 'error', path: mapPath,
+                message: `${label[i.kind]} ${i.key} ${added[i.kind][isNew ? 0 : 1]} sans rôle dans la carte de l'architecture${mapText === null ? ' (carte absente : apv structure map)' : ''}${catchAll ? ' (un motif ajouté par le changement ne décrit pas un élément nouveau)' : ''} : écrire « - \`${i.key}\` : <rôle en une ligne, trois mots au moins> » dans le bloc « Rôles »${i.known ? ` (rôle connu de la pile : ${i.known.role})` : ''}.` });
         }
         if (mapText !== null) {
             const baseSet = new Set(baseFiles);

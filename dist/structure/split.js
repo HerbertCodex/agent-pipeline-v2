@@ -32,9 +32,11 @@ function consumerContext(path) {
     const route = routeOf(path);
     if (route) {
         const segments = route.route.split('/').filter(Boolean);
-        return { key: `route:/${segments.slice(0, 2).join('/')}`, route: segments[0] ?? '', dir: dirOf(path) };
+        // The most specific segment that names something (`/orders/[id]/invoice`: invoice), parameters and groups apart.
+        const named = segments.filter(seg => !/^[([@+_.]/.test(seg));
+        return { key: `route:/${segments.slice(0, 2).join('/')}`, route: segments[0] ?? '', leaf: named.at(-1) ?? null, dir: dirOf(path) };
     }
-    return { key: `dir:${dirOf(path)}`, route: null, dir: dirOf(path) };
+    return { key: `dir:${dirOf(path)}`, route: null, leaf: null, dir: dirOf(path) };
 }
 /** Words of a name, short, stop and folder words left out. */
 function words(tokens, own) {
@@ -219,7 +221,14 @@ export function proposeSplit(folder, entries, graph, context) {
         .map(c => ({ ...c, members: [...c.members].sort((a, b) => byText(a.path, b.path)) }))
         .sort((a, b) => Number(!!b.anchor) - Number(!!a.anchor) || b.members.length - a.members.length || byText(label(a), label(b)));
     // 5. Names.
-    const vocabulary = new Set([...context.dirs].map(d => posix.basename(d).toLowerCase()));
+    // The vocabulary of the project: names of its folders, segments of its routes, declared domains. A group is named by
+    // what it does in that vocabulary, never after one of its files (`event-icon/`, `in-view/` say nothing of a feature).
+    const vocabulary = new Set([
+        ...[...context.dirs].map(d => posix.basename(d).toLowerCase()),
+        ...context.files.flatMap(f => routeOf(f)?.route.split('/') ?? []).filter(seg => seg && !/^[([@+_.]/.test(seg)).map(seg => seg.toLowerCase()),
+        ...context.domains,
+    ].filter(w => !GENERIC.has(w)));
+    const known = (name) => vocabulary.has(name) || [...vocabulary].some(v => related(v, name));
     const staying = new Set([...coreSet, ...(context.others ?? [])].map(e => kebab(e.tokens)));
     const candidatesOf = (members) => {
         const map = new Map();
@@ -236,13 +245,7 @@ export function proposeSplit(folder, entries, graph, context) {
             else
                 map.set(clean, { name: clean, score, source, conventions, naming });
         };
-        // The main module of the group: the one the others import most, else the most used.
-        const degree = (x) => members.filter(m => m !== x && (internal(x).includes(m) || internal(m).includes(x))).length;
-        // Equal degree: the one that imports the others (`invoice` imports `tax`), then the most used.
-        const uses = (x) => members.filter(m => m !== x && internal(m).includes(x)).length;
-        const main = [...members].sort((a, b) => degree(b) - degree(a) || uses(b) - uses(a) || imp.get(b).length - imp.get(a).length || byText(a.path, b.path))[0];
-        if (!main.component || members.length > 1)
-            give(kebab(main.tokens), 1.5, `${main.component ? 'composant' : 'module'} principal du groupe, ${posix.basename(main.path)}`, ['feature-folders'], main.component ? 'component' : 'module');
+        // Words several files share, when the project already uses them for a folder, a route or a domain.
         const counts = new Map();
         for (const e of members)
             for (const w of new Set(words(e.tokens, own)))
@@ -250,43 +253,47 @@ export function proposeSplit(folder, entries, graph, context) {
         for (const [w, c] of [...counts].sort((a, b) => byText(a[0], b[0]))) {
             if (c < 2)
                 continue;
-            // The words the files share after it too (`FirstVisit`, `FirstVisitHint`: first-visit).
+            // The words the files share after it too (`FirstVisit`, `FirstVisitHint`: first-visit), when that name is known.
             const lists = members.map(e => e.tokens.filter(t => !own.some(o => related(o, t)))).map(l => l.slice(l.indexOf(w))).filter(l => l[0] === w);
             let k = 1;
             while (lists.length >= 2 && lists.every(l => l.length > k && l[k] === lists[0][k]))
                 k++;
-            const name = lists.length >= 2 ? lists[0].slice(0, k).join('-') : w;
-            give(name, 0.8 * c, `mot commun à ${c} fichiers, « ${name} »`, ['feature-folders'], 'word');
+            const long = lists.length >= 2 ? lists[0].slice(0, k).join('-') : w;
+            const name = known(long) ? long : known(w) ? w : null;
+            if (name)
+                give(name, 0.8 * c, `mot commun à ${c} fichiers, « ${name} », déjà un nom du projet (dossier, route ou domaine)`, ['feature-folders'], 'word');
         }
         for (const d of context.domains) {
             const hits = members.filter(e => kebab(e.tokens).startsWith(d)).length;
             if (hits)
-                give(d, hits, `domaine déclaré (structure.domains) « ${d} »`, ['feature-folders'], 'domain');
+                give(d, 1.5 * hits, `domaine déclaré (structure.domains) « ${d} »`, ['feature-folders'], 'domain');
         }
         if (!sharedKind) {
-            // The folder or the route that uses the group, when one of them accounts for most of its use.
+            // The feature folder or the route that uses the group, when one of them accounts for half of its use.
             const where = new Map();
             let total = 0;
             for (const e of members)
                 for (const c of external(e)) {
                     const ctx = consumerContext(c);
-                    const k = ctx.route !== null ? `route:${ctx.route}` : `dir:${ctx.dir}`;
+                    const k = ctx.route !== null ? `route:${ctx.leaf ?? ctx.route}` : `dir:${ctx.dir}`;
                     where.set(k, (where.get(k) ?? 0) + 1);
                     total++;
                 }
             for (const [k, count] of [...where].sort((a, b) => b[1] - a[1] || byText(a[0], b[0]))) {
-                if (count / total < 0.6)
+                // Half of the use at least, and two uses: one import is no feature.
+                if (count / total < 0.5 || count < 2)
                     break;
                 if (k.startsWith('route:'))
-                    give(k.slice(6), 1.2, `route /${k.slice(6)}, qui les utilise`, ['feature-folders'], 'place');
-                else if (vocabulary.has(posix.basename(k.slice(4)).toLowerCase()))
-                    give(posix.basename(k.slice(4)), 1.2, `dossier ${k.slice(4)}/, qui les utilise`, ['feature-folders'], 'place');
+                    give(k.slice(6), 2 * count / total, `route /${k.slice(6)}, qui les utilise (${count} sur ${total})`, ['feature-folders'], 'place');
+                else
+                    give(posix.basename(k.slice(4)), 2 * count / total, `dossier ${k.slice(4)}/, qui les utilise (${count} sur ${total})`, ['feature-folders'], 'place');
             }
         }
         return [...map.values()].sort((a, b) => b.score - a.score || byText(a.name, b.name));
     };
     const groups = [];
     const unplaced = [];
+    const unnamed = [];
     const reasonsOf = (members, source) => {
         const reasons = [`nom repris : ${source}`];
         const ctx = new Map();
@@ -350,9 +357,26 @@ export function proposeSplit(folder, entries, graph, context) {
             unplaced.push(...c.members);
             continue;
         }
-        const chosen = candidatesOf(c.members).find(x => !taken.has(x.name) && !anchors.some(a => a.existing && a.name === x.name));
+        let chosen = candidatesOf(c.members).find(x => !taken.has(x.name));
+        // A name that is an existing subfolder of the folder (`scene` next to `scenes/`): the files join it.
+        const existing = chosen ? anchors.find(a => a.existing && related(a.name, chosen.name)) : undefined;
+        if (existing) {
+            const same = groups.find(g => g.dir === existing.name);
+            const reasons = reasonsOf(c.members, `sous-dossier existant ${existing.path}/ (${chosen.source})`);
+            if (same) {
+                same.members.push(...c.members.map(e => e.path));
+                same.reasons.push(...reasons.slice(0, 1));
+                continue;
+            }
+            taken.add(existing.name);
+            groups.push({ dir: existing.name, members: c.members.map(e => e.path), existing: true, reasons, conventions: ['feature-folders'], naming: 'existing' });
+            continue;
+        }
+        if (chosen && taken.has(chosen.name))
+            chosen = undefined;
+        // No name of the project says what the group does: grouped, but left to the operator to name (never invented).
         if (!chosen) {
-            unplaced.push(...c.members);
+            unnamed.push({ members: c.members.map(e => e.path).sort(byText), reasons: reasonsOf(c.members, 'aucun nom du projet (dossier, route, domaine) ne dit ce que fait ce groupe : à nommer par l\'opérateur').slice(1) });
             continue;
         }
         taken.add(chosen.name);
@@ -360,11 +384,11 @@ export function proposeSplit(folder, entries, graph, context) {
     }
     // The root must end under the threshold: while it does not, the file closest to a group joins it (never above the
     // threshold, never a file that shares nothing with the group), and the group says so.
-    const rootCount = () => (context.staying ?? 0) + core.length + unplaced.length;
+    const rootCount = () => (context.staying ?? 0) + core.length + unplaced.length + unnamed.reduce((n, u) => n + u.members.length, 0);
     while (rootCount() > context.maxFlatFiles && unplaced.length) {
         let best = null;
         for (const e of [...unplaced].sort((a, b) => byText(a.path, b.path))) {
-            for (const g of groups) {
+            for (const g of [...groups, ...unnamed]) {
                 if (g.members.length >= context.maxFlatFiles)
                     continue;
                 const sims = g.members.map(m => (vectors.has(m) ? pairSim(e.path, m) : 0));
@@ -379,9 +403,9 @@ export function proposeSplit(folder, entries, graph, context) {
         best.g.reasons.push(`${posix.basename(best.e.path)} rattaché au groupe le plus proche (similarité ${best.s.toFixed(2).replace('.', ',')}) pour ramener la racine sous le seuil`);
         unplaced.splice(unplaced.indexOf(best.e), 1);
     }
-    for (const g of groups)
+    for (const g of [...groups, ...unnamed])
         g.members.sort(byText);
-    return { core, groups, unplaced: unplaced.map(e => e.path).sort(byText) };
+    return { core, groups, unnamed, unplaced: unplaced.map(e => e.path).sort(byText) };
 }
 /** The usage graph of a code map: who imports each component and module, and what the modules export. */
 export function usageFromMap(map) {

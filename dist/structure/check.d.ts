@@ -7,7 +7,7 @@ import { type StackProfile } from './profiles.js';
 import { type UsageGraph } from './split.js';
 /** A finding of the comparison with the base (`--base`), or about the architecture map. */
 export interface ChangeFinding {
-    code: 'flat-growth' | 'architecture-map' | 'configuration';
+    code: 'flat-growth' | 'architecture-map' | 'configuration' | 'coverage';
     severity: Severity;
     /** Added by the change (never true without base). */
     isNew: boolean;
@@ -35,8 +35,11 @@ export type StructureConfig = {
     map?: ApvConfig['map'] | undefined;
     design?: ApvConfig['design'] | undefined;
 };
-/** Main files per folder (stems of code files that are not tests), as `flat-folder` counts them. */
-export declare function folderEntries(paths: readonly string[], settings: Pick<StructureSettings, 'ignore' | 'roots'>): Map<string, Map<string, string>>;
+/**
+ * Modules per folder, as `flat-folder` counts them: one per module key (`x.ts`, `x.svelte.ts` and `x.test.ts` are one;
+ * `x.extra.ts` is another), tests alone apart. The default exclusions never apply to `always` (what the change creates).
+ */
+export declare function folderEntries(paths: readonly string[], settings: Pick<StructureSettings, 'ignore' | 'roots'>, always?: ReadonlySet<string>): Map<string, Map<string, string>>;
 /** The usage graph of the working tree, from the code map (who imports whom, what modules export). */
 export declare function usageGraph(repo: string, config: StructureConfig): Promise<UsageGraph>;
 /** The stack profile: `structure.profile`, else detected. */

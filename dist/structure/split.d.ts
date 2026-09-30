@@ -37,8 +37,8 @@ export interface SplitGroup {
     reasons: string[];
     /** Conventions of the stack profile the group follows (ids of src/structure/profiles.ts). */
     conventions: string[];
-    /** Where the name comes from: an existing subfolder, the same split elsewhere, the main module or component, a shared word, a declared domain, the folder or route that uses the group. */
-    naming: 'existing' | 'mirror' | 'module' | 'component' | 'word' | 'domain' | 'place';
+    /** Where the name comes from, always the vocabulary of the project: an existing subfolder, the same split elsewhere, a word the files share that names a folder, route or domain, a declared domain, the folder or route that uses the group. */
+    naming: 'existing' | 'mirror' | 'word' | 'domain' | 'place';
 }
 export interface SplitResult {
     /** Files that stay at the root of the folder: its core (imported by much of it) or its model by convention. */
@@ -47,6 +47,11 @@ export interface SplitResult {
         reason: string;
     }[];
     groups: SplitGroup[];
+    /** Groups of files used together that no name of the project describes: to be named by the operator, never moved. */
+    unnamed: {
+        members: string[];
+        reasons: string[];
+    }[];
     /** Files no group takes: left to the operator. */
     unplaced: string[];
 }
