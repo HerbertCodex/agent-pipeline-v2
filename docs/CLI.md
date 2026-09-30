@@ -25,12 +25,13 @@ Prépare un projet pour APV3 (`/apv:init`). Crée ce qui manque dans `.apv/`, **
 
 | Élément | Contenu initial |
 |---|---|
-| `.apv/config.json` | `{ "name": "<nom>", "gates": [...] }` : les contrôles de la réutilisation seulement, `code-map` (`apv map --check`, étape `full`) pour tout projet et `reuse` (`apv reuse check --base {{baseSha}}`, étape `task` : `apv gates run` demande alors `--base`) pour un projet web, avec la section `reuse` détectée ([REUSE.md](REUSE.md)) ; pas de section `preview` ni `design` |
+| `.apv/config.json` | `{ "name": "<nom>", "gates": [...] }` : les contrôles de l'arborescence et de la réutilisation seulement, `structure` (`apv structure check --base {{baseSha}}`, étape `task`, [STRUCTURE.md](STRUCTURE.md)) et `code-map` (`apv map --check`, étape `full`) pour tout projet et `reuse` (`apv reuse check --base {{baseSha}}`, étape `task` : `apv gates run` demande alors `--base`) pour un projet web, avec la section `reuse` détectée ([REUSE.md](REUSE.md)) ; pas de section `preview` ni `design` |
 | `.apv/DECISIONS.json` | registre vide, valide pour `apv ledger validate` |
 | `.apv/brief.md` | consigne commune des implementers, tirée du modèle `skills/chef-de-projet/references/brief-type.md` du plugin (le bloc de modèle, nom du projet substitué) ; les passages entre chevrons restent à adapter |
 | `.apv/specs/`, `.apv/state/` | dossiers vides |
 | `.apv/.gitignore` | fichiers machine (`state/*.log`, `state/task.json`, `state/preview.json`, `receipts/`), créé ou complété comme par `apv quota` |
-| `.apv/code-map.md` | la carte du code, comme [`apv map`](#apv-map), écrite en dernier |
+| `.apv/code-map.md` | la carte du code, comme [`apv map`](#apv-map) |
+| `docs/carte-architecture.md` (`structure.architectureMap`) | la carte de l'architecture, comme [`apv structure map`](#apv-structure-map), écrite en dernier quand elle manque, jamais remplacée |
 
 Le nom du projet est `--name`, sinon le nom du dossier du dépôt. La commande travaille à la racine du dépôt Git qui contient le dossier courant (ou `--repo`) et refuse hors d'un dépôt Git. Elle liste ce qui est créé, complété et ce qui existait déjà ; rien n'est commité.
 
@@ -72,13 +73,13 @@ Un `pipeline.v2.json` ou un registre V2 illisible, ou refusé par le schéma (le
 
 Le gestionnaire de paquets vient de `packageManager`, sinon du fichier de verrouillage (`pnpm`, `yarn`, `bun`, sinon `npm run <script>`) ; les outils Python passent par `uv run` ou `poetry run` si le projet a leur fichier de verrouillage. La première source trouvée gagne ; aucune commande n'est inventée. Le registre créé est vide.
 
-**Réutilisation**, dans les deux cas, quand la configuration est créée : les contrôles `code-map` et, pour un projet web, `reuse` sont ajoutés après les autres (sous un identifiant que V2 n'utilisait pas), avec la section `reuse` détectée comme par `apv init`. La carte du code est écrite (`.apv/code-map.md`). Pour un projet web, le rapport liste ce qui est **déjà** dupliqué ou refait sur tout le projet (règles de `apv reuse check` sans base : nombre par règle, 20 premiers constats, blocs copiés d'abord) : ces constats existent sur la référence et ne bloqueront pas ; leur résorption est une spec de rangement décidée par l'opérateur.
+**Arborescence et réutilisation**, dans les deux cas, quand la configuration est créée : les contrôles `structure`, `code-map` et, pour un projet web, `reuse` sont ajoutés après les autres (sous un identifiant que V2 n'utilisait pas), avec la section `reuse` détectée comme par `apv init`. La carte du code est écrite (`.apv/code-map.md`). Pour un projet web, le rapport liste ce qui est **déjà** dupliqué ou refait sur tout le projet (règles de `apv reuse check` sans base : nombre par règle, 20 premiers constats, blocs copiés d'abord) : ces constats existent sur la référence et ne bloqueront pas ; leur résorption est une spec de rangement décidée par l'opérateur.
 
-Dans les deux cas, le reste est celui d'`apv init` : `brief.md`, `specs/`, `state/`, `.gitignore`, `code-map.md`. La sortie liste aussi les fichiers de `.agent-pipeline/` non repris (rôles, compétences : le plugin les fournit) et les indices d'aperçu (script `preview` ou `apercu`, fichier de `scripts/`), à décrire dans la section `preview` avec l'opérateur ; puis la suite : relire `config.json` et `brief.md`, `apv ledger validate`, `apv gates run` (avec `--base` si un contrôle utilise `{{baseSha}}`), commit de `.apv/`. Rien n'est commité.
+Le rapport liste aussi les dossiers à plat déjà présents avec leurs sous-dossiers proposés (signalés sans bloquer par le contrôle `structure` ; tout ajout y sera refusé). Dans les deux cas, le reste est celui d'`apv init` : `brief.md`, `specs/`, `state/`, `.gitignore`, `code-map.md`, la carte de l'architecture (`docs/carte-architecture.md`, jamais remplacée). La sortie liste aussi les fichiers de `.agent-pipeline/` non repris (rôles, compétences : le plugin les fournit) et les indices d'aperçu (script `preview` ou `apercu`, fichier de `scripts/`), à décrire dans la section `preview` avec l'opérateur ; puis la suite : relire `config.json` et `brief.md`, `apv ledger validate`, `apv gates run` (avec `--base` si un contrôle utilise `{{baseSha}}`), commit de `.apv/`. Rien n'est commité.
 
 `--dry-run` prend les mêmes décisions et affiche le même plan (« Serait créé »), sans rien écrire.
 
-Sortie : `0` succès, `1` hors d'un dépôt Git, fichier V2 illisible ou invalide, modèle de consigne introuvable, `2` appel incorrect (dont un dossier `--specs` introuvable). En JSON : `repo`, `name`, `dryRun`, `v2` (`config`, `ledger`, `notImported`), `config` (`status`, `source`, `kept`, `ignored`, `gates`, `detected`), `reuse` (comme `apv init`, plus `existing` : `counts` par règle et `examples`, ou `null` hors projet web), `ledger` (`status`, `source`, `decisions`, `hash`), `specs` (`searched`, `imported`, `existing`, `rejected`), `previewHints`, `created`, `completed`, `existing`, `next`.
+Sortie : `0` succès, `1` hors d'un dépôt Git, fichier V2 illisible ou invalide, modèle de consigne introuvable, `2` appel incorrect (dont un dossier `--specs` introuvable). En JSON : `repo`, `name`, `dryRun`, `v2` (`config`, `ledger`, `notImported`), `config` (`status`, `source`, `kept`, `ignored`, `gates`, `detected`), `reuse` (comme `apv init`, plus `existing` : `counts` par règle et `examples`, ou `null` hors projet web ; `architecture` : `file`, `status`, `note`), `structure` (`crowded` : dossier, fichiers de code, sous-dossiers proposés), `ledger` (`status`, `source`, `decisions`, `hash`), `specs` (`searched`, `imported`, `existing`, `rejected`), `previewHints`, `created`, `completed`, `existing`, `next`.
 
 ## `apv spec validate`
 
@@ -256,7 +257,7 @@ apv scope check --spec <fichier> --task <id> [--base <ref>] [--repo <chemin>] [-
 
 Compare les fichiers modifiés par les commits de la tâche aux `allowedPaths` de cette tâche dans la spec. La base est le point de divergence entre `<ref>` et `HEAD` (`main`, sinon `master`, par défaut) : le travail arrivé sur la branche principale depuis n'est pas imputé à la tâche. Les motifs suivent les règles de V2 (`*`, `**`, `?` ; crochets et parenthèses littéraux ; accolades et `!` refusés).
 
-Tous les fichiers hors périmètre sont listés. Les modifications non commitées ne sont pas vérifiées : elles sont signalées, car la vérification stricte a lieu à la fin de la tâche, sur ses commits.
+Tous les fichiers hors périmètre sont listés. Les modifications non commitées ne sont pas vérifiées : elles sont signalées, car la vérification stricte a lieu à la fin de la tâche, sur ses commits. La carte du code commitée par une tâche est hors périmètre, avec la marche à suivre (`codeMap` en JSON). La carte de l'architecture (`structure.architectureMap`) est acceptée quand seul son bloc écrit « Rôles » change (la tâche y décrit ce qu'elle crée), hors périmètre sinon (`architectureMap` en JSON : `none`, `roles-only` ou `other`).
 
 Sortie : `0` dans le périmètre, `1` hors périmètre, `2` appel incorrect (spec illisible, tâche inconnue, base introuvable).
 
@@ -522,26 +523,48 @@ Sortie : `0` succès (maquettes intactes pour `check`), `1` refus ou dérive, `2
 ## `apv structure check`
 
 ```
-apv structure check [--path <dossier>]... [--repo <chemin>] [--json]
+apv structure check [--base <ref>] [--path <dossier>]... [--all] [--repo <chemin>] [--json]
 ```
 
-Analyse déterministe de l'arborescence : les fichiers suivis par Git (`git ls-files`), jamais les fichiers ignorés ni non suivis, et seulement les fichiers de code (TypeScript, JavaScript, Svelte, Vue, Python, Go, Rust...). `node_modules/`, `dist/`, `build/`, `coverage/`, `vendor/` et les dossiers qui commencent par un point (`.github`, `.claude`...) sont toujours laissés de côté. Chaque dossier est examiné pour ses fichiers directs ; un fichier et ses compagnons (`x.ts`, `x.svelte.ts`, `x.d.ts`) comptent pour un, ses tests (`x.test.ts`, `x.spec.ts`, `x.fixture.ts`, dossiers `tests/`, `__tests__/`, `e2e/`) sont comptés à part et le suivent quand il est déplacé.
+Analyse déterministe de l'arborescence ([STRUCTURE.md](STRUCTURE.md)) : les fichiers de code suivis par Git (`git ls-files`, sans `--base`), jamais les fichiers ignorés (TypeScript, JavaScript, Svelte, Vue, Python, Go, Rust...). Exclusions par défaut : `node_modules/` partout ; `dist/`, `build/`, `coverage/`, `vendor/` et les dossiers qui commencent par un point (`.github`, `.claude`...) seulement à la racine du dépôt ou d'un paquet, et seulement pour l'existant : avec `--base`, ce que le changement crée est toujours analysé. Chaque dossier est examiné pour ses fichiers directs ; un fichier et ses compagnons (`x.ts`, `x.svelte.ts`, `x.d.ts`) comptent pour un, ses tests (`x.test.ts`, `x.spec.ts`, `x.fixture.ts`, dossiers `tests/`, `__tests__/`, `e2e/`) sont comptés à part et le suivent quand il est déplacé.
 
 | Constat | Quand | Proposition |
 |---|---|---|
-| `flat-folder` | plus de `maxFlatFiles` fichiers de code directement dans le dossier (12 par défaut) | ranger par domaine selon le plan, ou découpage à décider avec l'opérateur si aucun préfixe ni rôle n'aide |
+| `flat-folder` | plus de `maxFlatFiles` fichiers de code directement dans le dossier (12 par défaut) | ranger par domaine selon le plan : règles de noms d'abord, puis **découpage par usage**, même sans préfixe commun (graphe des imports de la carte du code : qui importe quoi, routes et dossiers de composants qui s'en servent, fichiers importés ensemble, mots des noms et des exports) ; socle gardé à la racine ; chaque sous-dossier nommé par le vocabulaire du projet (dossiers, domaines ; une route seulement pour un dossier de routes ; jamais un synonyme d'un dossier voisin), jamais d'après un de ses fichiers, avec ses raisons et la convention de la pile suivie ; sans nom qui s'impose, groupe « à nommer par l'opérateur » (`groups`, `core`, `unnamed` en JSON) ; dossier de primitives (`components/ui`) jamais découpé (`primitives`) |
 | `repeated-prefix` | plusieurs fichiers commencent par le même mot de domaine, singulier et pluriel rapprochés (`application-actions.ts`, `applications-repository.ts`) : deux fichiers qui ont un rôle, trois fichiers, ou un mot qui est déjà le nom d'un dossier du projet ou un domaine déclaré | `<domaine>/` avec des noms sans préfixe (`applications/actions.ts`) ; des composants (`QuickAddDialog.svelte`) gardent leur nom et ne sont regroupés, par trois au moins, que dans un dossier trop plein |
 | `mixed-roles` | au moins trois fichiers à rôle, deux rôles et deux domaines côte à côte (`*-actions`, `*-repository`, `*-client`, utilitaires HTTP ou d'authentification) | un dossier par domaine (`settings/repository.ts`), les utilitaires transverses regroupés par rôle (`http/`, `auth/`) sans changer leur nom |
 | `stray-file` | un fichier dont le nom commence par celui d'un dossier voisin (`email-templates.ts` à côté de `email/`) | le ranger dans ce dossier (`email/templates.ts`) |
 
 Les rôles se reconnaissent par suffixe (`-actions`, `-action`, `-repository`, `-repo`, `-client`, `-service`, `-controller`, `-handler`, `-middleware`, `-utils`, `-helpers`) ou par un mot du nom (`http`, `headers`, `cookie`, `cors`, `csrf`, `request`, `response`, `body`, `ip` pour le rôle `http` ; `auth`, `oauth`, `login`, `logout`, `sign-in`, `sign-out`, `sign-up`, `session`, `password` pour `auth`). Dans un dossier à rôles mêlés, des noms composés qui s'enchaînent sont un même sujet : `account-deletion.ts`, `deletion-purge.ts` et `purge-schedule.ts` vont ensemble dans `account/`. Un déplacement n'écrase jamais un fichier suivi : le nom est gardé, sinon le fichier reste en place. Les fichiers qu'aucune règle ne place sont listés « restent en place, à décider avec l'opérateur ».
 
-Le plan (`ancien -> nouveau`) n'est **jamais appliqué** par l'outil : il se valide avec l'opérateur, puis se fait par `git mv`, imports, configuration des outils et documentation mis à jour, sans changement de comportement.
+Le plan (`ancien -> nouveau`) n'est **jamais appliqué** par l'outil : il se valide avec l'opérateur, puis se fait par `git mv`, imports, configuration des outils et documentation mis à jour, sans changement de comportement (compétence `apv:structure`).
+
+**`--base <ref>`** (le contrôle `structure` écrit par `apv init` et `apv onboard` passe `{{baseSha}}`) : comparaison avec la base commune de `<ref>` et HEAD, arbre de travail compris (fichiers non suivis non ignorés), configuration lue **à la base** (un changement de la section `structure` est signalé, bloquant quand le changement touche aussi du code) :
+
+| Constat | Bloquant (nouveau) | Existant (sans bloquer) |
+|---|---|---|
+| `flat-growth` | tout fichier de code créé ou déplacé (tests à part) dans un dossier qui a plus de `maxFlatFiles` modules (déjà à plat, ou qu'il y fait passer), sauf un compagnon connu d'un module présent (tests, `.svelte.ts`, `.server.ts`, `.client.ts`, `.d.ts`) ; un nom de fichier généré seulement s'il est déclaré dans `reuse.generated` de la base ; le message nomme le sous-dossier où le mettre, d'après le découpage proposé | le dossier à plat, en `flat-folder` |
+| `architecture-map` | dossier de premier ou deuxième niveau (et deux niveaux sous les ancres de la pile), route principale ou point d'entrée ajouté sans rôle dans le bloc « Rôles » (clé exacte ou motif déjà présent à la base ; trois mots au moins) ; marqueur dupliqué ; lien de la carte cassé par le changement ; carte supprimée | ce qui existait sans rôle, lien déjà cassé |
+| `coverage` | lien symbolique ou sous-module ajouté par le changement, sauf déclaré dans `structure.ignore` de la base | |
+| constat d'analyse de gravité `error` | sur un fichier créé ou déplacé par le changement | les autres |
+
+Toujours accepté : un renommage dans le même dossier (similarité de Git, même réécrit), un fichier qui descend d'un dossier à plat dans l'un de ses sous-dossiers (rangement) ; le sous-dossier ainsi créé reçoit un rôle proposé, en avertissement. Sans `--base`, rien n'est comparé et la carte est signalée sans bloquer.
 
 - `--path` limite les constats à un dossier et à ses sous-dossiers (chemin relatif à la racine du dépôt, répétable) : l'architecte l'utilise sur les dossiers que touche son plan.
+- `--all` liste tous les constats existants de la comparaison (par défaut : 10).
 - Configuration facultative, section `structure` de `.apv/config.json` : [CONFIGURATION.md](CONFIGURATION.md#arborescence--structure).
 
-Sortie : `0` aucun constat de gravité `error` (par défaut tout est `warning` : l'analyse ne fait pas échouer un projet qui n'a rien déclaré), `1` au moins un constat `error` ou configuration invalide, `2` appel incorrect (sous-commande, option, `--path` hors du dépôt). En JSON : `ok`, `analyzedFiles`, `maxFlatFiles`, `folders` (dossier, fichiers de code, tests, compagnons, fichiers non placés), `findings` (`code`, `severity`, `folder`, `files`, `proposal`, `moves`), `plan` (tous les déplacements, tests et compagnons compris), `repo`, `paths`.
+Sortie : `0` aucun constat bloquant (sans `--base` : aucun constat de gravité `error` ; par défaut l'analyse est en `warning`), `1` au moins un, configuration invalide ou base introuvable, `2` appel incorrect (sous-commande, option, `--path` hors du dépôt, `--base` vide). En JSON : `ok`, `analyzedFiles`, `maxFlatFiles`, `folders` (dossier, fichiers de code, tests, compagnons, fichiers non placés), `findings` (`code`, `severity`, `folder`, `files`, `proposal`, `moves`, `isNew`, `blocking` ; pour `flat-folder` : `groups` avec `dir`, `members`, `existing`, `reasons`, `conventions`, `naming`, et `core`), `plan` (tous les déplacements, tests et compagnons compris), `base`, `changes` (`code`, `severity`, `isNew`, `blocking`, `path`, `message`), `architectureMap` (`path`, `exists`, `profile`, `items`, `described`), `usageError`, `repo`, `paths`.
+
+## `apv structure map`
+
+```
+apv structure map [--check] [--repo <chemin>] [--json]
+```
+
+Écrit la carte de l'architecture (`structure.architectureMap`, par défaut `docs/carte-architecture.md`) si elle manque : parties générées remplies (arborescence commentée avec les conventions de la pile, points d'entrée, routes principales, liens), parties écrites en brouillon (en bref, couches et flux en mermaid, règles transverses, rôles). Sinon, réécrit ses seules parties générées, sans jamais toucher aux parties écrites (entre marqueurs `apv:ecrit`) ni au texte hors marqueurs. `--check` n'écrit rien et échoue quand les parties générées ne correspondent plus au code. Un marqueur présent plusieurs fois est refusé (sortie `1`). `apv map` fait de même quand la carte existe (jamais il ne la crée). Détails : [STRUCTURE.md](STRUCTURE.md#3-carte-de-larchitecture).
+
+Sortie : `0` écrite ou à jour, `1` périmée ou absente (`--check`) ou configuration invalide, `2` appel incorrect. En JSON : `file`, `status` (`created`, `written`, `unchanged`, `up-to-date`, `stale`, `missing`), `difference`, `repo`.
 
 ## `apv reuse check`
 
@@ -571,11 +594,11 @@ Sortie : `0` aucun constat bloquant (gravité `error` et nouveau), `1` au moins 
 apv map [--check] [--repo <chemin>] [--json]
 ```
 
-Écrit la carte du code, `.apv/code-map.md` (ou `map.file`), depuis l'inventaire du dépôt ([REUSE.md](REUSE.md#1-la-carte-du-code-apv-map)) : composants partagés (rôle, props, variantes, où ils sont utilisés), modules partagés (exports, utilisateurs), routes, et ce qui est propre à une fonctionnalité avec les doublons possibles. Arbre de travail (fichiers suivis et non suivis, jamais les ignorés), sans modèle, déterministe, bornée (40 entrées par dossier, `map.maxEntries` en tout, `map.maxBytes`, 32 Ko, les composants partagés gardés en premier), partielle au-delà de 50 000 fichiers. Fichiers non suivis sans résumé, secrets masqués. Écriture atomique, jamais à travers un lien symbolique ni hors du dépôt (`MAP_PATH`). Les tâches ne la commitent pas : l'intégration la régénère une fois par vague.
+Écrit la carte du code, `.apv/code-map.md` (ou `map.file`), depuis l'inventaire du dépôt ([REUSE.md](REUSE.md#1-la-carte-du-code-apv-map)) : composants partagés (rôle, props, variantes, où ils sont utilisés), modules partagés (exports, utilisateurs), routes, et ce qui est propre à une fonctionnalité avec les doublons possibles, et une section « Dossiers » (chemin de la carte de l'architecture, dossiers à plat et sous-dossiers proposés pour chacun). Arbre de travail (fichiers suivis et non suivis, jamais les ignorés), sans modèle, déterministe, bornée (40 entrées par dossier, `map.maxEntries` en tout, `map.maxBytes`, 32 Ko, les composants partagés gardés en premier), partielle au-delà de 50 000 fichiers. Fichiers non suivis sans résumé, secrets masqués. Écriture atomique, jamais à travers un lien symbolique ni hors du dépôt (`MAP_PATH`). Les tâches ne la commitent pas : l'intégration la régénère une fois par vague.
 
-`--check` ne l'écrit pas : il la compare à celle qui serait écrite et échoue si elle est absente ou périmée, avec les lignes attendues et celles qui ne le sont plus (contrôle `code-map`, étape `full`, déclaré par `apv init` et `apv onboard`).
+`--check` ne l'écrit pas : il la compare à celle qui serait écrite et échoue si elle est absente ou périmée, avec les lignes attendues et celles qui ne le sont plus (contrôle `code-map`, étape `full`, déclaré par `apv init` et `apv onboard`). La carte de l'architecture, quand elle existe, suit : ses parties générées sont réécrites (ou comparées avec `--check`, périmées : sortie `1`), ses parties écrites jamais (`apv structure map`).
 
-Sortie : `0` écrite ou à jour, `1` absente ou périmée (`--check`), chemin refusé (`MAP_PATH`) ou configuration invalide, `2` appel incorrect. En JSON : `file`, `status` (`written`, `unchanged`, `up-to-date`, `stale`, `missing`), `difference` (`onlyInFile`, `onlyExpected`), `map` (`components`, `modules`, `routes`, `skipped`, sans borne), `repo`.
+Sortie : `0` écrite ou à jour, `1` absente ou périmée (`--check`), chemin refusé (`MAP_PATH`) ou configuration invalide, `2` appel incorrect. En JSON : `file`, `status` (`written`, `unchanged`, `up-to-date`, `stale`, `missing`), `difference` (`onlyInFile`, `onlyExpected`), `migration` (`true` quand la carte n'a pas encore la section « Dossiers » de 3.0.0-alpha.11 : `apv map` une fois après la mise à jour), `map` (`components`, `modules`, `routes`, `skipped`, sans borne), `architecture` (`file`, `status`, `difference` : comme `apv structure map`, `absent` quand le projet n'a pas de carte de l'architecture), `repo`.
 
 ## `apv quota`
 

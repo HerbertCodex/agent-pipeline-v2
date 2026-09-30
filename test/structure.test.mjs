@@ -207,9 +207,10 @@ test('apv structure check: text, JSON, tracked files only, exit codes', async t 
   const out = await apv(f.repo, ['structure', 'check', '--json']);
   assert.equal(out.code, 0);
   const report = out.json();
-  assert.deepEqual(Object.keys(report).sort(), ['analyzedFiles', 'findings', 'folders', 'maxFlatFiles', 'ok', 'paths', 'plan', 'repo'].sort());
+  assert.deepEqual(Object.keys(report).sort(), ['analyzedFiles', 'architectureMap', 'base', 'changes', 'findings', 'folders', 'maxFlatFiles', 'ok', 'paths', 'plan', 'repo', 'usageError'].sort());
   assert.equal(report.ok, true);
-  assert.deepEqual(Object.keys(report.findings[0]).sort(), ['code', 'files', 'folder', 'moves', 'proposal', 'severity']);
+  assert.deepEqual(Object.keys(report.findings[0]).sort(), ['blocking', 'code', 'core', 'files', 'folder', 'groups', 'isNew', 'moves', 'proposal', 'severity', 'unnamed']);
+  assert.deepEqual([report.base.source, report.changes.map(c => [c.code, c.blocking])], ['none', [['architecture-map', false]]], 'without base, the missing map is only said');
   assert.ok(report.plan.some(m => m.from === 'src/lib/server/form-body.ts' && m.to === 'src/lib/server/http/form-body.ts'));
   assert.equal(git(f.repo, 'status', '--porcelain', '--', 'src/lib/server'), '', 'nothing moved');
 
@@ -233,16 +234,19 @@ test('apv structure check: text, JSON, tracked files only, exit codes', async t 
 
 test('apv structure check: wrong invocations exit 2', async t => {
   const f = fixture(t);
-  for (const args of [['structure'], ['structure', 'fix'], ['structure', 'check', 'extra'], ['structure', 'check', '--path', '../dehors'], ['structure', 'check', '--bogus']]) {
+  for (const args of [['structure'], ['structure', 'fix'], ['structure', 'check', 'extra'], ['structure', 'check', '--path', '../dehors'], ['structure', 'check', '--bogus'],
+    ['structure', 'check', '--base', '-x'], ['structure', 'check', '--check'], ['structure', 'map', '--base', 'main'], ['structure', 'map', 'x']]) {
     const out = await apv(f.repo, args);
     assert.equal(out.code, 2, args.join(' '));
     assert.match(out.stderr, /Utilisation :\n  apv structure check/);
   }
   const help = await apv(f.repo, ['help', 'structure']);
   assert.equal(help.code, 0);
-  assert.match(help.stdout, /flat-folder[\s\S]*repeated-prefix[\s\S]*mixed-roles[\s\S]*stray-file/);
+  assert.match(help.stdout, /flat-folder[\s\S]*repeated-prefix[\s\S]*mixed-roles[\s\S]*stray-file[\s\S]*flat-growth[\s\S]*architecture-map/);
   const clean = await apv(f.repo, ['structure', 'check']);
-  assert.deepEqual([clean.code, clean.stdout.trim().split('\n').at(-1)], [0, 'Aucun constat.']);
+  assert.equal(clean.code, 0);
+  assert.match(clean.stdout, /\nAucun constat\.\n/);
+  assert.match(clean.stdout, /carte de l'architecture absente : apv structure map/);
 });
 
 test('the structure section is read by the common loader, never reported as ignored', async t => {

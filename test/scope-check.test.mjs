@@ -5,6 +5,10 @@ import { demoSpec } from './lifecycle-helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 import { porcelainPaths } from '../dist/commands/scope.js';
 import { scopeReport, assertScope } from '../dist/policy/policy.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const read = (repo, path) => readFileSync(join(repo, path), 'utf8');
 
 function branch(t) {
   const f = fixture(t);
@@ -100,4 +104,23 @@ test('the code map of a custom map.file is recognised too', async t => {
   const r = await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH', '--json']);
   assert.equal(r.json().codeMap, true);
   assert.match((await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH'])).stdout, /La carte du code \(docs\/CODE-MAP\.md\) ne se commite pas/);
+});
+
+test('the architecture map: a task may write its « Rôles » block only', async t => {
+  const map = '# Carte\n\n<!-- apv:genere:arborescence -->\n- `src/`\n<!-- /apv:genere:arborescence -->\n\n<!-- apv:ecrit:roles -->\n- `src/` : sources\n<!-- /apv:ecrit:roles -->\n';
+  const f = fixture(t, { files: { 'docs/carte-architecture.md': map } });
+  const spec = write(f.root, 'spec.json', demoSpec());
+  git(f.repo, 'checkout', '-qb', 'feature');
+  const commit = (path, text) => { write(f.repo, path, text); git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', `change ${path}`); };
+  commit('src/math.mjs', 'export const add = (a, b) => a + b;\n');
+  commit('docs/carte-architecture.md', map.replace('- `src/` : sources\n', '- `src/` : sources\n- `src/relances/` : relances des candidatures\n'));
+  const ok = await apv(f.repo, ['scope', 'check', '--spec', spec, '--task', 'MATH', '--json']);
+  assert.equal(ok.code, 0, ok.stdout);
+  assert.deepEqual([ok.json().outOfScope, ok.json().architectureMap], [[], 'roles-only']);
+  assert.match((await apv(f.repo, ['scope', 'check', '--spec', spec, '--task', 'MATH'])).stdout, /seul son bloc « Rôles » change/);
+  // Anything else of the map (a generated part, the summary) stays out of scope.
+  commit('docs/carte-architecture.md', read(f.repo, 'docs/carte-architecture.md').replace('- `src/`\n<!-- /apv:genere', '- `src/` modifié à la main\n<!-- /apv:genere'));
+  const out = await apv(f.repo, ['scope', 'check', '--spec', spec, '--task', 'MATH', '--json']);
+  assert.equal(out.code, 1);
+  assert.deepEqual([out.json().outOfScope, out.json().architectureMap], [['docs/carte-architecture.md'], 'other']);
 });

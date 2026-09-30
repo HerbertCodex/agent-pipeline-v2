@@ -101,6 +101,7 @@ Sans outil Workflow (désactivé ou version trop ancienne), les commandes lancen
 - `design-artefact` : boucle de maquette avec l'opérateur et versement de la référence (résumé pour les rôles ; le chef de projet la mène par `/apv:design`), et la grille de critique notée `references/grille-critique.md` (designer, `critique-design`, `qa-fidelite`).
 - `rgpd` : grille du DPO, registres, modèles de textes sans promesse risquée.
 - `architecture-donnees` : règles de la section 13 bis, exemples SQL, tests exigés et grille générique des conditions de course (`references/concurrence.md` : dix familles, toute stack et tout stockage, motif à chercher, question, corrections, preuve).
+- `structure` : arborescence et carte de l'architecture (section 23 de la spécification, [STRUCTURE.md](STRUCTURE.md)) : relire les constats de `apv structure check`, juger le découpage proposé selon les conventions de la pile, préparer un plan de rangement validé par l'opérateur, tenir la carte de l'architecture.
 - `web-qualite` : qualité mesurable d'un site (section 20 de la spécification) : quand lancer `apv web audit` (contrôle des PR d'interface, après chaque déploiement), lire les rapports, écarter une mesure faussée, prioriser les corrections par gain, sans jamais promettre un classement.
 - Héritées de V2, inchangées : `clean-code`, `design-patterns`, `refactoring`, `security`, `tdd`, `ui-design`.
 

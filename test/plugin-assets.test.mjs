@@ -44,12 +44,12 @@ const PHASE_THREE_COMMANDS = ['init', 'review', 'run', 'spec', 'stack'];
 const OPERATOR_ONLY_COMMANDS = ['init', 'onboard', 'run', 'stack'];
 const PHASE_FOUR_COMMANDS = ['onboard'];
 const LATER_COMMANDS = {};
-const METHOD_SKILLS = ['architecture-donnees', 'chef-de-projet', 'design-artefact', 'rgpd', 'web-qualite'];
+const METHOD_SKILLS = ['architecture-donnees', 'chef-de-projet', 'design-artefact', 'rgpd', 'structure', 'web-qualite'];
 
 test('manifests parse and describe the apv plugin', () => {
   const plugin = JSON.parse(read('.claude-plugin/plugin.json'));
   assert.equal(plugin.name, 'apv');
-  assert.equal(plugin.version, '3.0.0-alpha.10');
+  assert.equal(plugin.version, '3.0.0-alpha.11');
   assert.equal(plugin.license, 'MIT');
   assert.match(read('LICENSE'), /^MIT License/);
   assert.equal(plugin.repository, 'https://github.com/HerbertCodex/agent-pipeline-v2');
@@ -313,7 +313,7 @@ test('the tree analysis is part of the cycle: onboarding, plan, review and docum
   const tool = 'Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js';
   const onboard = frontmatter('skills/onboard/SKILL.md');
   for (const t of [`${tool} structure check*)`, 'Bash(apv structure check*)']) assert.ok(onboard.fields['allowed-tools'].includes(t), t);
-  assert.match(onboard.body, /## 4\. Arborescence\n1\. `apv structure check`/);
+  assert.match(onboard.body, /## 4\. Arborescence et carte de l'architecture\nCharge la compétence `apv:structure`[^\n]*\n1\. `apv structure check`/);
   assert.match(onboard.body, /Rien n'est déplacé pendant la reprise/);
   assert.match(onboard.body, /spec à part/);
   const architect = frontmatter('agents/architecte.md').body;
@@ -321,11 +321,20 @@ test('the tree analysis is part of the cycle: onboarding, plan, review and docum
   assert.match(architect, /apv structure check --path <dossier>/);
   assert.match(read('skills/chef-de-projet/references/planification.md'), /\*\*Placement\*\*[^\n]*apv structure check --path <dossier>/);
   assert.match(read('skills/run/SKILL.md'), /apv structure check --path/);
-  assert.match(frontmatter('agents/qa-fidelite.md').body, /\*\*Placement des fichiers\*\*[^\n]*apv structure check --path <dossier> --repo <copie>[^\n]*mal placé/);
+  assert.match(frontmatter('agents/qa-fidelite.md').body, /\*\*Placement des fichiers\*\*[^\n]*apv structure check --repo <copie> --base <base>[^\n]*mal placé/);
   const config = read('docs/CONFIGURATION.md');
   assert.match(config, /## Arborescence : `structure`/);
-  assert.match(config, /"command": \["apv", "structure", "check"\][^\n]*"stage": "task"/);
+  assert.match(config, /"command": \["apv", "structure", "check", "--base", "\{\{baseSha\}\}"\][^\n]*"stage": "task"/);
   assert.match(read('docs/CLI.md'), /## `apv structure check`/);
+  assert.match(read('docs/CLI.md'), /## `apv structure map`/);
+  // The structure skill, the architecture map read first, the placement in the wave report.
+  const skill = frontmatter('skills/structure/SKILL.md');
+  assert.equal(skill.fields.name, 'structure');
+  assert.match(skill.body, /jamais appliqué par l'outil/);
+  for (const file of ['agents/implementer.md', 'skills/chef-de-projet/references/brief-type.md', 'skills/run/SKILL.md']) assert.match(read(file), /carte de l'architecture[^\n]*(?:EN PREMIER|en premier)/i, file);
+  assert.match(architect, /apv:structure/);
+  assert.match(read('workflows/vague.js'), /placementProblems/);
+  assert.match(read('docs/STRUCTURE.md'), /## 3\. Carte de l'architecture/);
   assert.match(read('CHANGELOG.md').split('\n## ')[1], /apv structure check/);
 });
 

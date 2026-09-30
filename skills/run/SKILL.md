@@ -100,8 +100,11 @@ si la branche <branche> existe déjà, git switch <branche> ; sinon git switch -
 Vérifie git log -1. Écris le marqueur .apv/state/task.json : {"spec": ".apv/specs/<id>.json", "task": "<tâche>"}.
 Sources : la tâche dans la spec, la consigne commune .apv/brief.md, les notes .apv/state/notes-<id>-vague-<n>.md,
 les maquettes validées (apv design list), .apv/data-model.md et le registre quand la tâche les concerne,
-la carte du code .apv/code-map.md AVANT de créer un composant, un module ou une route (réutiliser ou étendre
-une entrée ; jamais de copie propre à une fonctionnalité ; la carte ne se commite pas dans la tâche).
+la carte de l'architecture docs/carte-architecture.md EN PREMIER (où va quoi, conventions de la pile ; un nouveau
+fichier dans le sous-dossier de sa fonctionnalité, jamais dans un dossier à plat ; tout nouveau dossier, route
+principale ou point d'entrée décrit dans son bloc « Rôles »),
+puis la carte du code .apv/code-map.md AVANT de créer un composant, un module ou une route (réutiliser ou étendre
+une entrée ; jamais de copie propre à une fonctionnalité ; la carte du code ne se commite pas dans la tâche).
 Fin : contrôles de tâche au vert (apv gates run --stage task --base <sha> ; un contrôle « ciblé » y lance déjà
 les tests e2e concernés par tes changements) ; sans contrôle ciblé, tes seuls fichiers de tests e2e créés ou
 modifiés sous apv lock run e2e -- <commande du projet> <fichiers> (projet sans contrôle marqué full : --stage task
@@ -112,7 +115,8 @@ Rapport (moins de 300 mots) : branche, sorties brutes de git rev-parse HEAD et d
 telles quelles (jamais un sha retapé), chemin du worktree (pwd), chaque contrôle
 (commande, vert ou rouge, nombre de tests ; réservés à la suite complète nommés comme tels, ciblés nommés « ciblé »), résultat du scope check et fichiers hors périmètre,
 réutilisation (pour chaque composant, module ou route créé ou modifié : l'entrée de la carte réutilisée
-ou étendue, ou pourquoi un ajout), critères couverts, écarts et pourquoi, points ouverts.
+ou étendue, ou pourquoi un ajout), placement (chaque fichier de code créé, son dossier et pourquoi),
+critères couverts, écarts et pourquoi, points ouverts.
 Niveau de confiance sur le résultat et sur chaque affirmation importante : prouve (preuve reproductible jointe :
 commande et sortie, test rouge avant puis vert après pour une correction), probable (code lu, sans exécution,
 chemins cités) ou suppose (hypothèse, ce qui la prouverait) ; jamais sans preuve ni justification.
@@ -123,7 +127,8 @@ Dès qu'une tâche, ou un lot de tâches finies, est vérifiée (section 4, éta
 
 **Niveau de vérification.** `apv run next` le donne à chaque étape, avec la base ciblée (le dernier commit prouvé par la suite complète ; la base de l'exécution tant qu'aucune n'est passée).
 - **Intégration intermédiaire** (il restera des tâches à intégrer après elle), `run.fullSuite` à `"final"` : niveau tâche. Sur la tête intégrée, arbre propre : `apv gates run --stage task --base <base ciblée> --repo <worktree>`, puis `apv gates verify --commit <tête> --stage task --base <base ciblée> --repo <worktree>` à `0`. La vérification exige les contrôles de tâche et les contrôles ciblés, et refuse un reçu ciblé dont la base ne couvre pas tous les changements depuis la base ciblée. Un contrôle `full` sans commande ciblée n'est pas prouvé à ce niveau : lance en plus, sous `apv lock run e2e`, les fichiers e2e créés ou modifiés depuis la base ciblée (`git diff --name-only <base ciblée>..<tête>`).
-- **Carte du code** : à chaque intégration (une seule tâche comprise, intégrée par toi), `apv map` sur la tête intégrée puis commit de `.apv/code-map.md` s'il a changé, avant la vérification : les tâches ne la commitent pas, et le contrôle `code-map` (suite complète) échoue sur une carte périmée.
+- **Carte du code** : à chaque intégration (une seule tâche comprise, intégrée par toi), `apv map` sur la tête intégrée puis commit de `.apv/code-map.md` et de la carte de l'architecture (parties générées seulement) s'ils ont changé, avant la vérification : les tâches ne la commitent pas, et le contrôle `code-map` (suite complète) échoue sur une carte périmée.
+- **Arborescence au rapport de vague** : pour chaque tâche, relis son champ `placement` (fichiers de code créés, dossier, raison) et les constats du contrôle `structure` ; un constat nouveau se corrige avant l'intégration, un dossier à plat existant reste un risque listé dans le rapport, avec le plan de rangement proposé (compétence `apv:structure`) à soumettre à l'opérateur.
 - **Dernière intégration** (toutes les tâches de la spec intégrées après elle) : suite complète, `apv gates run --stage full --base <base de l'exécution> --run <id> --repo <worktree>`, puis `apv gates verify --commit <tête> --repo <worktree>` à `0`. Ses reçus servent aux revues et à la livraison : `apv gates run` les copie aussi dans le magasin partagé du dépôt, si bien que `apv gates verify --commit <tête>` les retrouve depuis n'importe quel checkout, même après le retrait de ce worktree.
 - `"fullSuite": "each-integration"` : suite complète à chaque intégration.
 - Si `apv gates run --stage full` refuse (`GATE_RHYTHM`), c'est que l'étape attend le niveau tâche : lance la commande que donne le message, ne contourne pas.

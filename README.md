@@ -4,7 +4,7 @@
 
 **Un chef de projet Claude Code, de vrais sous-agents, des garde-fous qui ont fait leurs preuves.**
 
-[![Version](https://img.shields.io/badge/alpha-3.0.0--alpha.10-a8461a?style=flat-square)](docs/PLUGIN.md)
+[![Version](https://img.shields.io/badge/alpha-3.0.0--alpha.11-a8461a?style=flat-square)](docs/PLUGIN.md)
 [![CI](https://github.com/HerbertCodex/agent-pipeline-v2/actions/workflows/ci.yml/badge.svg)](https://github.com/HerbertCodex/agent-pipeline-v2/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A5%2022.16-2d6e45?style=flat-square)](package.json)
 [![License](https://img.shields.io/badge/licence-MIT-55514a?style=flat-square)](LICENSE)
@@ -31,6 +31,8 @@ APV3 est un plugin Claude Code. L'opérateur délègue ; la session principale d
 ```
 
 Puis suivez [START-HERE.md](START-HERE.md). Détails : [docs/PLUGIN.md](docs/PLUGIN.md). Outil `apv` : [docs/CLI.md](docs/CLI.md). Spécification : [docs/APV3-SPEC.md](docs/APV3-SPEC.md).
+
+**Mise à jour vers 3.0.0-alpha.11**, sur un projet déjà sous APV : lancez `apv map` une fois après la mise à jour et commitez `.apv/code-map.md` (et la carte de l'architecture si elle existe) dans une PR à part : la carte du code gagne une section « Dossiers », et le contrôle `code-map` la dit périmée « par la mise à jour d'APV » jusque-là. Pour le contrôle `structure` et la carte de l'architecture sur un projet existant : `apv structure map`, puis le contrôle à ajouter à `.apv/config.json` ([docs/STRUCTURE.md](docs/STRUCTURE.md)).
 
 ## Développer
 

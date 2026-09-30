@@ -13,7 +13,7 @@ APV3 y répond à quatre endroits, pour toute pile :
 | Contrôle automatique | `apv reuse check` (contrôle `reuse`) : éléments natifs réservés, primitives de style redéfinies, blocs copiés, composants homonymes, valeurs typographiques sécables. |
 | Relecture | point obligatoire de la revue `fidelite` (`agents/qa-fidelite.md`, workflow `apv:revues`, `/apv:review`) : « pour chaque nouveau composant ou bloc d'interface, quel composant existant aurait dû servir ? », gravité `eleve` quand un équivalent partagé existe et n'est pas utilisé. |
 
-`apv init` et `apv onboard` déclarent les deux contrôles (`code-map` pour tout projet, `reuse` pour un projet web), détectent la section `reuse` et écrivent la première carte.
+`apv init` et `apv onboard` déclarent les deux contrôles (`code-map` pour tout projet, `reuse` pour un projet web), détectent la section `reuse` et écrivent la première carte. L'arborescence (dossiers à plat, carte de l'architecture, contrôle `structure`) a son guide : [STRUCTURE.md](STRUCTURE.md).
 
 ## 1. La carte du code (`apv map`)
 
