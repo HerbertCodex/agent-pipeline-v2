@@ -24,12 +24,13 @@ export function isScreen(path: string, extra: readonly RegExp[] = []): boolean {
   return /\.(svelte|vue|astro|tsx|jsx|mdx)$/.test(name);
 }
 
-export interface Mockup { id: string; screens: string[]; paths: string[]; sourceQuote: string }
+export interface Mockup { id: string; slug: string; screens: string[]; paths: string[]; sourceQuote: string }
 
 /** The confirmed operator mockups of a ledger. */
 export function mockupsOf(decisions: readonly Decision[]): Mockup[] {
   return decisions.filter(d => MOCKUP_ID.test(d.id) && d.status === 'confirmed' && d.source === 'operator').map(d => ({
     id: d.id,
+    slug: MOCKUP_ID.exec(d.id)![1]!,
     screens: VALUE_SCREENS.exec(d.value)?.[1]?.split(',').map(x => x.trim()).filter(Boolean) ?? [],
     paths: d.scope?.paths ?? [],
     sourceQuote: d.sourceQuote,
@@ -46,13 +47,13 @@ function routeKeys(path: string): string[] {
   return [...new Set(keys.filter(Boolean))];
 }
 
-/** Whether a mockup covers a screen file: a path of its scope matches the file, or one of its screens names its route. */
+/** Whether a mockup covers a screen file: a path of its scope matches the file, or its name or one of its screens names its route. */
 export function covers(mockup: Mockup, path: string): boolean {
   for (const glob of mockup.paths) {
     try { if (globToRegExp(glob).test(path)) return true; } catch { /* invalid glob: ignored */ }
   }
   const keys = routeKeys(path);
-  return mockup.screens.some(s => keys.includes(screenKey(s)));
+  return [mockup.slug, ...mockup.screens].some(s => keys.includes(screenKey(s)));
 }
 
 export interface ScreenCoverage {

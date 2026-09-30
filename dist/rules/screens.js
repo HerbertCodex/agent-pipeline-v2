@@ -29,6 +29,7 @@ export function isScreen(path, extra = []) {
 export function mockupsOf(decisions) {
     return decisions.filter(d => MOCKUP_ID.test(d.id) && d.status === 'confirmed' && d.source === 'operator').map(d => ({
         id: d.id,
+        slug: MOCKUP_ID.exec(d.id)[1],
         screens: VALUE_SCREENS.exec(d.value)?.[1]?.split(',').map(x => x.trim()).filter(Boolean) ?? [],
         paths: d.scope?.paths ?? [],
         sourceQuote: d.sourceQuote,
@@ -45,7 +46,7 @@ function routeKeys(path) {
         keys.push('accueil', 'home', 'index');
     return [...new Set(keys.filter(Boolean))];
 }
-/** Whether a mockup covers a screen file: a path of its scope matches the file, or one of its screens names its route. */
+/** Whether a mockup covers a screen file: a path of its scope matches the file, or its name or one of its screens names its route. */
 export function covers(mockup, path) {
     for (const glob of mockup.paths) {
         try {
@@ -55,7 +56,7 @@ export function covers(mockup, path) {
         catch { /* invalid glob: ignored */ }
     }
     const keys = routeKeys(path);
-    return mockup.screens.some(s => keys.includes(screenKey(s)));
+    return [mockup.slug, ...mockup.screens].some(s => keys.includes(screenKey(s)));
 }
 /**
  * For each screen the change adds or modifies, the validated mockup that covers it. A mockup counts when it is in the

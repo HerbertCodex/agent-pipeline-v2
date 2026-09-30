@@ -8,13 +8,14 @@ import { type OperatorMessage } from './operator.js';
 export declare function isScreen(path: string, extra?: readonly RegExp[]): boolean;
 export interface Mockup {
     id: string;
+    slug: string;
     screens: string[];
     paths: string[];
     sourceQuote: string;
 }
 /** The confirmed operator mockups of a ledger. */
 export declare function mockupsOf(decisions: readonly Decision[]): Mockup[];
-/** Whether a mockup covers a screen file: a path of its scope matches the file, or one of its screens names its route. */
+/** Whether a mockup covers a screen file: a path of its scope matches the file, or its name or one of its screens names its route. */
 export declare function covers(mockup: Mockup, path: string): boolean;
 export interface ScreenCoverage {
     file: string;

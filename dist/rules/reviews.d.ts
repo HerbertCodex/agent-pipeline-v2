@@ -68,7 +68,7 @@ export declare function parseCapture(value: string): CaptureInput;
 /**
  * Records a review at the exact commit the checkout holds. Refused when the checkout is elsewhere or modified, the
  * reviewer is not the agent of the domain, the report is too short or does not cite the commit, a capture is not an image
- * or the same image stands for two captures. The record is written even with critical or high findings: it is what the
+ * or the same image stands for two captures (several screens: several captures per width and theme, each its own image). The record is written even with critical or high findings: it is what the
  * reviewer saw, and `apv rules check` refuses the merge on it.
  */
 export declare function recordReview(common: string, input: RecordInput): ReviewRecord;

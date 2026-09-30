@@ -86,7 +86,7 @@ export function parseCapture(value: string): CaptureInput {
 /**
  * Records a review at the exact commit the checkout holds. Refused when the checkout is elsewhere or modified, the
  * reviewer is not the agent of the domain, the report is too short or does not cite the commit, a capture is not an image
- * or the same image stands for two captures. The record is written even with critical or high findings: it is what the
+ * or the same image stands for two captures (several screens: several captures per width and theme, each its own image). The record is written even with critical or high findings: it is what the
  * reviewer saw, and `apv rules check` refuses the merge on it.
  */
 export function recordReview(common: string, input: RecordInput): ReviewRecord {
@@ -115,15 +115,13 @@ export function recordReview(common: string, input: RecordInput): ReviewRecord {
     invariant(data.length >= MIN_CAPTURE_BYTES, 'REVIEW_RECORD', `capture ${c.path} : ${data.length} octets, image vide ou factice`);
     images.push({ input: c, data, format });
   }
-  const pairs = new Set<string>();
+  // Several screens: several captures per width and theme, never the same image twice.
   const hashes = new Map<string, string>();
   for (const img of images) {
     const pair = `${img.input.viewport}:${img.input.theme}`;
-    invariant(!pairs.has(pair), 'REVIEW_RECORD', `deux captures pour ${pair}`);
-    pairs.add(pair);
     const digest = sha256(img.data);
     const twin = hashes.get(digest);
-    invariant(!twin, 'REVIEW_RECORD', `la même image sert pour ${twin} et ${pair} : une capture par largeur et par thème`);
+    invariant(!twin, 'REVIEW_RECORD', `la même image sert pour ${twin} et ${pair} : une capture distincte par écran, largeur et thème`);
     hashes.set(digest, pair);
   }
   const now = input.now ?? new Date();
@@ -132,8 +130,8 @@ export function recordReview(common: string, input: RecordInput): ReviewRecord {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const reportFile = `${id}-rapport${extname(input.report).slice(0, 10) || '.md'}`;
   writeFileSync(join(dir, reportFile), report, { mode: 0o600, flag: 'wx' });
-  const captures: StoredCapture[] = images.map(img => {
-    const file = `${id}-${img.input.viewport}-${img.input.theme}.${img.format}`;
+  const captures: StoredCapture[] = images.map((img, k) => {
+    const file = `${id}-${img.input.viewport}-${img.input.theme}-${k + 1}.${img.format}`;
     copyFileSync(img.input.path, join(dir, file));
     return { viewport: img.input.viewport, theme: img.input.theme, file, sha256: sha256(img.data), bytes: img.data.length };
   });

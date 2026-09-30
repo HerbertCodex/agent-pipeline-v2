@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // PreToolUse guard for the Bash tool (APV3 spec, sections 11 and 18.2).
-// Blocks force-pushes, merges (gh pr merge, gh api …/merge, apv stack merge) and production deploys
-// without their explicit authorisation, commands that write to GitHub while hiding their output (incident 30),
+// Blocks force-pushes, merges outside apv stack merge (gh pr merge and gh api …/merge always; apv stack merge without its
+// explicit authorisation, or inside a subagent) and production deploys without their explicit authorisation, commands that write to GitHub while hiding their output (incident 30),
 // and the harness mistakes of section 18.2 (harness-guard.mjs): kills that may reach the session, installs
 // through a symlinked node_modules, docker or supabase commands on a declared test stack without its lock.
 // This is a guard rail against mistakes, not a security boundary: a determined command can
@@ -321,6 +321,9 @@ export const REASONS = {
     `relecteur du domaine (apv:${role}), lancé sur une copie détachée au commit relu, jamais par le chef de projet ni par qui a écrit le code.`,
   reviewByOther: (domain, role, agent) => `APV : apv review record ${domain} refusé pour ${agent || 'cet agent'}. Seul l'agent apv:${role} ` +
     `enregistre la relecture ${domain}, sous son nom (--reviewer apv:${role}) : l'implementer et l'intégrateur ne relisent pas leur propre travail.`,
+  rawMerge: 'APV : fusion directe par gh refusée. Seul apv stack merge fusionne (APV_ALLOW_MERGE=1 apv stack merge <pr...>) : il vérifie juste ' +
+    'avant chaque fusion les règles du chef de projet (preuve complète au commit, aucun test instable, relectures, captures, contrôles de base, ' +
+    'maquettes ; docs/REGLES.md du plugin). Sans l\'outil, l\'opérateur fusionne lui-même sur GitHub.',
   mergeBySubagent: 'APV : fusion refusée dans un sous-agent. Seul le chef de projet (session principale) fusionne, par apv stack merge, ' +
     'qui vérifie les règles avant chaque fusion.',
   hiddenOutput: 'APV : commande qui écrit sur GitHub avec une sortie masquée (redirection vers /dev/null). ' +
@@ -389,10 +392,13 @@ function evaluate(command, env, context, depth, inherited) {
     if (isForcePush(words)) return { decision: 'deny', reason: REASONS.forcePush };
     const review = reviewRecordProblem(words, context.agentType ?? null);
     if (review) return { decision: 'deny', reason: review };
-    const write = githubWrite(words) ?? (isStackMerge(words) ? { merge: true } : null);
+    const raw = githubWrite(words);
+    const write = raw ?? (isStackMerge(words) ? { merge: true } : null);
     if (write) {
       writesGithub = true;
       if (write.merge && context.agentId) return { decision: 'deny', reason: REASONS.mergeBySubagent };
+      // A merge through gh skips the rules the tool checks before any merge: only apv stack merge merges.
+      if (raw?.merge) return { decision: 'deny', reason: REASONS.rawMerge };
       if (write.merge && !authorised(words, 'APV_ALLOW_MERGE', env)) return { decision: 'deny', reason: REASONS.merge };
     }
     if (isProductionDeploy(words) && !authorised(words, 'APV_ALLOW_DEPLOY', env)) {
