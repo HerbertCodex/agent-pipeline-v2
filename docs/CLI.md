@@ -555,7 +555,7 @@ Fichiers générés (par leur nom, `*.types.ts`, `database.types.*`, `*.generate
 
 Configuration facultative : section `reuse` de `.apv/config.json` ([CONFIGURATION.md](CONFIGURATION.md#réutilisation--reuse-et-carte-du-code--map)). Le contrôle déclaré par `apv init` et `apv onboard` : `{ "id": "reuse", "command": ["apv", "reuse", "check", "--base", "{{baseSha}}"], "stage": "task", "readOnly": true }`.
 
-Sortie : `0` aucun constat bloquant (gravité `error` et nouveau), `1` au moins un, configuration invalide ou référence introuvable, `2` appel incorrect (sous-commande, option, `--base` vide). En JSON : `ok`, `base` (`source`, `ref`, `mergeBase`), `analyzedFiles`, `rules` (`severity`, `active`, `note`, `new`, `existing` par règle), `findings` (`rule`, `severity`, `isNew`, `blocking`, `path`, `line`, `endLine`, `other`, `message`), `primitives` (`sources`, `count`), `generated` (`count`, `files`), `repo`.
+Sortie : `0` aucun constat bloquant (gravité `error` et nouveau), `1` au moins un, configuration invalide ou référence introuvable, `2` appel incorrect (sous-commande, option, `--base` vide). En JSON : `ok`, `base` (`source`, `ref`, `mergeBase`), `analyzedFiles`, `rules` (`severity`, `active`, `note`, `new`, `existing` par règle), `findings` (`rule`, `severity`, `isNew`, `blocking`, `path`, `line`, `endLine`, `other`, `message`), `primitives` (`sources`, `count`), `generated` (`count`, `files`), `excluded` (`count`, `files` : fichiers écartés par un chemin ignoré), `repo`.
 
 ## `apv map`
 

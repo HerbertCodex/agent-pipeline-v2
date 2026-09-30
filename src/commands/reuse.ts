@@ -49,6 +49,7 @@ export function formatReuse(report: ReuseReport, all: boolean): string {
     for (const f of all ? existing : existing.slice(0, EXISTING_SHOWN)) lines.push(`  [existant] ${place(f)} : ${f.message}`);
     if (!all && existing.length > EXISTING_SHOWN) lines.push(`  et ${existing.length - EXISTING_SHOWN} autre(s) existant(s) (--all pour tout lister).`);
   }
+  if (report.excluded.count) lines.push('', `Fichiers écartés par un chemin ignoré (dépendances, dossiers d'outils, sorties de build à la racine, reuse.ignore) : ${report.excluded.count} (${report.excluded.files.slice(0, 5).join(', ')}${report.excluded.count > 5 ? ', …' : ''}).`);
   if (report.generated.count) lines.push('', `Fichiers générés laissés de côté : ${report.generated.count} (${report.generated.files.slice(0, 5).join(', ')}${report.generated.count > 5 ? ', …' : ''}), jamais comptés.`);
   const blocking = report.findings.filter(f => f.blocking).length;
   lines.push('', report.ok

@@ -1,7 +1,7 @@
 import { posix } from 'node:path';
 import { buildWorktreeInventory, trackedFiles, type Inventory } from './inventory.js';
 import { CODE_EXTENSIONS, parseName } from '../structure/names.js';
-import { COMPONENT_EXTENSIONS, DEFAULT_PRIMITIVE_PATHS, extensionOf, globMatcher, type MapSettings, type ReuseSettings } from '../reuse/config.js';
+import { COMPONENT_EXTENSIONS, DEFAULT_PRIMITIVE_PATHS, extensionOf, globMatcher, outputMatcher, type MapSettings, type ReuseSettings } from '../reuse/config.js';
 import { clashOf, componentName, describeClash, type Clash } from '../reuse/names.js';
 import { readWorktree } from '../reuse/changes.js';
 
@@ -346,6 +346,7 @@ export async function buildCodeMap(repo: string, reuse: ReuseSettings, settings:
   const summary = (path: string, text: string, ext: string): string | null => (tracked.has(path) ? summaryOf(text, ext) : null);
   const read = options.read ?? ((path: string) => readWorktree(repo, path));
   const ignored = globMatcher(settings.ignore);
+  const output = outputMatcher(inventory.files);
   const shared = globMatcher(reuse.shared);
   const primitive = globMatcher([...DEFAULT_PRIMITIVE_PATHS, ...reuse.native.allowedPaths]);
   const skipped = { tests: 0, ignored: 0, silentModules: 0 };
@@ -353,7 +354,7 @@ export async function buildCodeMap(repo: string, reuse: ReuseSettings, settings:
   for (const path of inventory.files) {
     const ext = extensionOf(path);
     if (!CODE_EXTENSIONS.has(ext) && !COMPONENT_EXTENSIONS.has(ext)) continue;
-    if (ignored(path) || path === settings.file) { skipped.ignored++; continue; }
+    if (ignored(path) || output(path) || path === settings.file) { skipped.ignored++; continue; }
     if (parseName(path)?.test) { skipped.tests++; continue; }
     sources.push(path);
   }

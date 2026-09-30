@@ -40,6 +40,11 @@ export interface ReuseReport {
         count: number;
         files: string[];
     };
+    /** Files left out by an ignored path (dependencies, tool folders, build outputs, `reuse.ignore`): never silently. */
+    excluded: {
+        count: number;
+        files: string[];
+    };
 }
 export interface ReuseConfig {
     reuse?: ReuseSection | undefined;

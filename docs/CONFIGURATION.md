@@ -610,7 +610,8 @@ Sections APV3, facultatives, lues par `apv reuse check` et `apv map` et validée
 ```
 
 - `reuse.reference` : branche où vont les PR, pour `apv reuse check` sans `--base` ; ce que le changement ajoute depuis sa base commune est nouveau (bloquant en `error`), le reste existant (signalé). Le contrôle déclaré passe `--base {{baseSha}}`, la base du passage, qui entre dans la clé de preuve.
-- `reuse.shared`, `reuse.ignore` : motifs des dossiers de composants partagés, et des chemins laissés de côté par toutes les règles.
+- `reuse.shared`, `reuse.ignore` : motifs des dossiers de composants partagés, et des chemins laissés de côté par toutes les règles (listés dans le rapport). Par défaut : dépendances, dossiers d'outils connus, `dist/`, `build/`, `coverage/`, `vendor/` à la racine du dépôt et des paquets seulement.
+- `reuse.generated` : motifs des fichiers écrits par un outil, acceptés comme générés même quand le changement les crée ; sans cela, un fichier généré nouveau (par son nom ou sa mention en tête) est un constat bloquant.
 - `reuse.native` : `elements` (sélecteur `select` ou `input[type=date]`, vers le composant partagé qui le remplace, ou `null` : le composant générique de même rôle), `allowedPaths` (défaut : les composants génériques, `**/components/ui/**`, `**/ui/**`, `**/primitives/**`, `**/design-system/**`, `**/shared/**`, `**/common/**`).
 - `reuse.styles` : `sources` (feuilles globales dont les classes de base des règles de premier niveau sont les primitives), `selectors` et `except` (classes ou préfixes `.btn--*` ajoutés ou retirés), `allowedPaths` (défaut : comme `native.allowedPaths`), `nested` (`layout` par défaut : sous une classe du composant, seule la mise en page d'une primitive se retouche ; `refuse` ; `allow`).
 - `reuse.duplicates` : `minLines`, `minTokens`, `paths`, `ignore`, `styles` (gravité d'une copie de styles seuls, `warning` par défaut).

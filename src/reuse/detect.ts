@@ -3,7 +3,7 @@ import { delimiter, join } from 'node:path';
 import { gitRead, resolveFullRef } from '../run/git-probe.js';
 import { isComponentFile, routeOf } from '../knowledge/code-map.js';
 import { replacementFor } from './names.js';
-import { DEFAULT_NATIVE_ELEMENTS, DEFAULT_PRIMITIVE_PATHS, DEFAULT_REUSE_IGNORE, DEFAULT_ROLE_FAMILIES, DEFAULT_STYLE_SOURCES, ELEMENT_FAMILIES, UI_EXTENSIONS, extensionOf, globMatcher } from './config.js';
+import { DEFAULT_NATIVE_ELEMENTS, DEFAULT_PRIMITIVE_PATHS, DEFAULT_REUSE_IGNORE, DEFAULT_ROLE_FAMILIES, DEFAULT_STYLE_SOURCES, ELEMENT_FAMILIES, UI_EXTENSIONS, extensionOf, globMatcher, outputMatcher } from './config.js';
 
 /**
  * The gate of `apv reuse check`, added by `apv init` and `apv onboard` to a web project (task stage: it also runs in the
@@ -89,7 +89,8 @@ export function detectLocale(repo: string): string | null {
  */
 export function detectReuse(repo: string, files: readonly string[]): ReuseProposal {
   const ignored = globMatcher([...DEFAULT_REUSE_IGNORE]);
-  const kept = files.filter(f => !ignored(f));
+  const output = outputMatcher(files);
+  const kept = files.filter(f => !ignored(f) && !output(f));
   const signals: string[] = [];
   const pkg = readJson(join(repo, 'package.json'));
   const deps = Object.keys({ ...(pkg?.['dependencies'] as object ?? {}), ...(pkg?.['devDependencies'] as object ?? {}) }).filter(d => WEB_DEPENDENCIES.test(d)).sort();

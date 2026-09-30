@@ -3,7 +3,7 @@ import { posix } from 'node:path';
 import { CODE_EXTENSIONS, parseName } from '../structure/names.js';
 import { buildCodeMap, clashesFor } from '../knowledge/code-map.js';
 import { collectChanges, isAdded, readAtBase, readWorktree, resolveBase } from './changes.js';
-import { COMPONENT_EXTENSIONS, DEFAULT_PRIMITIVE_PATHS, DEFAULT_STYLE_SOURCES, ELEMENT_FAMILIES, GENERATED_HEADER, GENERATED_PATHS, REUSE_RULES, STYLE_EXTENSIONS, UI_EXTENSIONS, extensionOf, globMatcher, mapSettings, reuseSettings, } from './config.js';
+import { COMPONENT_EXTENSIONS, DEFAULT_PRIMITIVE_PATHS, DEFAULT_STYLE_SOURCES, ELEMENT_FAMILIES, GENERATED_HEADER, GENERATED_PATHS, REUSE_RULES, outputMatcher, STYLE_EXTENSIONS, UI_EXTENSIONS, extensionOf, globMatcher, mapSettings, reuseSettings, } from './config.js';
 import { TokenTable, blankImports, findClones, occurs, tokenize } from './duplicates.js';
 import { blocks, elementRule, findElements } from './markup.js';
 import { componentName, describeClash, replacementFor } from './names.js';
@@ -45,29 +45,43 @@ export async function checkReuse(repo, config, options = {}) {
             cache.set(path, readWorktree(repo, path));
         return cache.get(path);
     };
-    // Generated files (database types, clients): left out of every rule, listed apart, never counted.
+    // Generated files (database types, clients): left out of every rule, listed apart, never counted. A name or a mention
+    // is trusted only if the file was already generated at the base, or declared in `reuse.generated`: otherwise a name
+    // (`shell.gen.css`, `generated/`) or a comment would be enough to take a copy out of the check. Interface files never are.
     const generatedName = globMatcher([...GENERATED_PATHS]);
+    const declared = globMatcher(settings.generated);
+    const output = outputMatcher(changes.files);
     const generated = [];
-    // A mention in the first lines counts only if the file already carried it at the base: otherwise a comment would be
-    // enough to take a copy out of the check. Interface files are never generated.
+    const excluded = [];
     const claimed = [];
     const header = (text) => GENERATED_HEADER.test((text ?? '').slice(0, 600));
     const files = changes.files.filter(path => {
-        if (ignored(path))
-            return false;
         const ext = extensionOf(path);
+        if (ignored(path) || output(path)) {
+            if (ext !== 'json' && READ_EXTENSIONS(ext))
+                excluded.push(path);
+            return false;
+        }
         if (UI_EXTENSIONS.has(ext))
             return true;
-        let isGenerated = generatedName(path);
-        if (!isGenerated && READ_EXTENSIONS(ext) && header(read(path))) {
-            if (changes.all || header(readAtBase(repo, changes, path, gitShow)))
-                isGenerated = true;
-            else
-                claimed.push(path);
-        }
-        if (isGenerated)
+        if (declared(path)) {
             generated.push(path);
-        return !isGenerated;
+            return false;
+        }
+        const byName = generatedName(path);
+        if (!byName && !(READ_EXTENSIONS(ext) && header(read(path))))
+            return true;
+        let trusted = changes.all;
+        if (!trusted) {
+            const before = readAtBase(repo, changes, path, gitShow);
+            trusted = before !== null && (byName ? generatedName(changes.renamed.get(path) ?? path) : header(before));
+        }
+        if (trusted) {
+            generated.push(path);
+            return false;
+        }
+        claimed.push({ path, how: byName ? 'name' : 'header' });
+        return true;
     });
     const isTest = (path) => parseName(path)?.test ?? /(?:^|\/)(?:tests?|__tests__|e2e|fixtures)\//.test(path);
     let map = null;
@@ -78,9 +92,9 @@ export async function checkReuse(repo, config, options = {}) {
         const severity = (override ?? settings.severity[finding.rule]);
         findings.push({ ...finding, severity, blocking: severity === 'error' && finding.isNew });
     };
-    for (const path of claimed) {
+    for (const { path, how } of claimed) {
         add({ rule: 'duplicates', isNew: true, path, line: 1,
-            message: 'mention « fichier généré » ajoutée par le changement (absente à la base) : un fichier ne sort pas du contrôle par un commentaire ; le fichier reste analysé. Un vrai fichier généré se nomme comme tel (*.generated.*, generated/, database.types.*) ou se déclare dans reuse.ignore, avec l\'accord de l\'opérateur.' }, 'error');
+            message: `${how === 'name' ? 'nommé comme un fichier généré' : 'mention « fichier généré » en tête'}, mais ${how === 'name' ? 'créé par le changement (absent à la base)' : 'ajoutée par le changement (absente à la base)'} : un fichier ne sort pas du contrôle par son nom ni par un commentaire, il reste analysé. S'il est vraiment écrit par un outil, déclarez-le dans reuse.generated de .apv/config.json (motif de chemin), avec l'accord de l'opérateur.` }, 'error');
     }
     if (summary.native.active)
         await nativeRule(settings, files, read, isTest, changes, codeMap, add);
@@ -142,7 +156,7 @@ export async function checkReuse(repo, config, options = {}) {
         summary[finding.rule][finding.isNew ? 'new' : 'existing']++;
     findings.sort(order);
     return { ok: !findings.some(f => f.blocking), base: changes.base, analyzedFiles: files.length, rules: summary, findings, primitives,
-        generated: { count: generated.length, files: generated.slice(0, 20) } };
+        generated: { count: generated.length, files: generated.slice(0, 20) }, excluded: { count: excluded.length, files: excluded.slice(0, 20) } };
 }
 async function nativeRule(settings, files, read, isTest, changes, codeMap, add) {
     const rules = Object.keys(settings.native.elements).sort().map(elementRule);

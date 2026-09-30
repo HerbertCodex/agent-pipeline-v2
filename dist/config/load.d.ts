@@ -393,6 +393,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
     readonly reuse: {
         readonly reference: string | undefined;
         readonly shared: string[] | undefined;
+        readonly generated: string[] | undefined;
         readonly ignore: string[] | undefined;
         readonly native: {
             readonly elements: Record<string, string | null> | undefined;

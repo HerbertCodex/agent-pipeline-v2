@@ -29,11 +29,17 @@ export declare const UI_EXTENSIONS: Set<string>;
 export declare const COMPONENT_EXTENSIONS: Set<string>;
 /** Stylesheets. */
 export declare const STYLE_EXTENSIONS: Set<string>;
+/** Folders of tools, left out wherever they are: never a hidden folder in general (`src/.hidden/` is analysed). */
+export declare const TOOL_FOLDERS: readonly [".git", ".svelte-kit", ".next", ".nuxt", ".output", ".vercel", ".netlify", ".turbo", ".cache", ".parcel-cache", ".astro", ".angular", ".docusaurus", ".expo", ".yarn", ".pnpm-store", ".husky", ".idea", ".vscode", ".github", ".claude", ".apv", ".apv2"];
+/** Build outputs and vendored code: left out at the root of the repository and of each package (a folder with a `package.json`) only. */
+export declare const OUTPUT_FOLDERS: readonly ["dist", "build", "coverage", "vendor"];
 /**
- * Paths never analysed: dependencies, build outputs, tool folders (DEFAULT_IGNORE of `structure`), the documentation
- * (validated mockups are HTML copies of the interface by design) and the files a tool writes.
+ * Paths never analysed: dependencies, tool folders, the documentation (validated mockups are HTML copies of the
+ * interface by design) and minified or declaration files. Build outputs: OUTPUT_FOLDERS, see outputMatcher.
  */
-export declare const DEFAULT_REUSE_IGNORE: readonly ["**/node_modules/**", "**/dist/**", "**/build/**", "**/coverage/**", "**/vendor/**", "**/.*/**", "docs/**", "**/*.min.js", "**/*.min.css", "**/*.d.ts", "**/*.lock", "**/package-lock.json"];
+export declare const DEFAULT_REUSE_IGNORE: readonly ["**/node_modules/**", ...string[], "docs/**", "**/*.min.js", "**/*.min.css", "**/*.d.ts", "**/*.lock", "**/package-lock.json"];
+/** Build outputs (OUTPUT_FOLDERS) at the root of the repository and at the root of each package that `files` holds. */
+export declare function outputMatcher(files: readonly string[]): (path: string) => boolean;
 /**
  * Files a tool writes (database types, clients, schemas), recognised by their name: left out of every rule and listed
  * apart in the report, never counted. A file whose first lines say it is generated (`@generated`, « do not edit »,
@@ -60,6 +66,7 @@ export declare const PRIMITIVE_SELECTOR: RegExp;
 export declare const reuseSchema: import("../domain/schema.js").Schema<{
     readonly reference: string | undefined;
     readonly shared: string[] | undefined;
+    readonly generated: string[] | undefined;
     readonly ignore: string[] | undefined;
     readonly native: {
         readonly elements: Record<string, string | null> | undefined;
@@ -104,6 +111,7 @@ export interface ReuseSettings {
     reference: string | null;
     shared: string[];
     sharedDeclared: boolean;
+    generated: string[];
     ignore: string[];
     native: {
         elements: Record<string, string | null>;

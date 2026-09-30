@@ -2,7 +2,6 @@ import { isAbsolute, posix } from 'node:path';
 import { s } from '../domain/schema.js';
 import { invariant } from '../domain/errors.js';
 import { globToRegExp } from '../db/glob.js';
-import { DEFAULT_IGNORE } from '../structure/config.js';
 /** Rules of `apv reuse check` (docs/REUSE.md). */
 export const REUSE_RULES = ['native', 'styles', 'duplicates', 'names', 'typography'];
 export const REUSE_SEVERITIES = ['off', 'warning', 'error'];
@@ -32,11 +31,22 @@ export const UI_EXTENSIONS = new Set(['svelte', 'vue', 'tsx', 'jsx', 'astro', 'h
 export const COMPONENT_EXTENSIONS = new Set(['svelte', 'vue', 'tsx', 'jsx', 'astro']);
 /** Stylesheets. */
 export const STYLE_EXTENSIONS = new Set(['css', 'scss', 'sass', 'less', 'pcss', 'postcss', 'styl']);
+/** Folders of tools, left out wherever they are: never a hidden folder in general (`src/.hidden/` is analysed). */
+export const TOOL_FOLDERS = ['.git', '.svelte-kit', '.next', '.nuxt', '.output', '.vercel', '.netlify', '.turbo', '.cache', '.parcel-cache', '.astro', '.angular',
+    '.docusaurus', '.expo', '.yarn', '.pnpm-store', '.husky', '.idea', '.vscode', '.github', '.claude', '.apv', '.apv2'];
+/** Build outputs and vendored code: left out at the root of the repository and of each package (a folder with a `package.json`) only. */
+export const OUTPUT_FOLDERS = ['dist', 'build', 'coverage', 'vendor'];
 /**
- * Paths never analysed: dependencies, build outputs, tool folders (DEFAULT_IGNORE of `structure`), the documentation
- * (validated mockups are HTML copies of the interface by design) and the files a tool writes.
+ * Paths never analysed: dependencies, tool folders, the documentation (validated mockups are HTML copies of the
+ * interface by design) and minified or declaration files. Build outputs: OUTPUT_FOLDERS, see outputMatcher.
  */
-export const DEFAULT_REUSE_IGNORE = [...DEFAULT_IGNORE, 'docs/**', '**/*.min.js', '**/*.min.css', '**/*.d.ts', '**/*.lock', '**/package-lock.json'];
+export const DEFAULT_REUSE_IGNORE = ['**/node_modules/**', ...TOOL_FOLDERS.map(d => `**/${d}/**`), 'docs/**', '**/*.min.js', '**/*.min.css', '**/*.d.ts', '**/*.lock', '**/package-lock.json'];
+/** Build outputs (OUTPUT_FOLDERS) at the root of the repository and at the root of each package that `files` holds. */
+export function outputMatcher(files) {
+    const roots = ['', ...files.filter(f => f.endsWith('/package.json') && !f.includes('node_modules/')).map(f => f.slice(0, -'package.json'.length))];
+    const prefixes = roots.flatMap(root => OUTPUT_FOLDERS.map(d => `${root}${d}/`));
+    return path => prefixes.some(p => path.startsWith(p));
+}
 /**
  * Files a tool writes (database types, clients, schemas), recognised by their name: left out of every rule and listed
  * apart in the report, never counted. A file whose first lines say it is generated (`@generated`, « do not edit »,
@@ -71,6 +81,8 @@ export const reuseSchema = s.object({
     reference: s.optional(s.string(1, 200, REFERENCE)),
     /** Globs of the shared component folders (`src/lib/components/**`). */
     shared: s.optional(s.array(glob, 1, 100)),
+    /** Globs of files a tool writes, accepted as generated even when the change creates them (see GENERATED_PATHS). */
+    generated: s.optional(globs),
     /** Globs of paths left out of every rule, added to the defaults. */
     ignore: s.optional(globs),
     native: s.optional(s.object({
@@ -196,6 +208,7 @@ export function reuseSettings(section) {
         reference: section?.reference ?? null,
         shared,
         sharedDeclared: section?.shared !== undefined,
+        generated: (section?.generated ?? []).map(g => relativeGlob(g, 'reuse.generated')),
         ignore: [...DEFAULT_REUSE_IGNORE, ...(section?.ignore ?? []).map(g => relativeGlob(g, 'reuse.ignore'))],
         native: { elements: { ...elements }, allowedPaths: (section?.native?.allowedPaths ?? [...DEFAULT_PRIMITIVE_PATHS]).map(g => relativeGlob(g, 'reuse.native.allowedPaths')) },
         styles: {
