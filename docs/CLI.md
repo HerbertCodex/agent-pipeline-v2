@@ -323,6 +323,14 @@ En JSON : `ok`, `runId`, `candidateSha`, `baseSha`, `dirty`, `alreadyProven`, `s
 
 Sortie : `0` tous les contrôles exécutés passent (réussis après relance compris), `128 + signal` interruption, `1` au moins un échec, une configuration invalide ou une suite complète refusée (rythme de l'exécution `GATE_RHYTHM`, arbre modifié `GATE_DIRTY`, file `SUITE_QUEUE`) ou une répétition refusée (`GATE_REPEAT` : plafond `repeatChanged.maxFiles`, attente à durée fixe refusée), `2` appel incorrect (dont `--base` absent alors qu'un contrôle lancé déclare `repeatChanged`, ou à la suite complète `skipWhenOnly`, une référence `skipWhenOnly.reference` introuvable, un `--stage` inconnu, `--commit`, propre à `verify`, un `--run` invalide ou un `--reason` vide, trop long ou avec `--stage task`).
 
+### Contrôles obligatoires de la base
+
+Un commit porte sa propre `.apv/config.json` : lue seule, elle pourrait retirer ou relâcher les contrôles qui le prouvent. `apv gates run` et `apv gates verify` lisent donc aussi la configuration de la **base** : la base commune du commit et de `--against <ref>`, sinon de `--base`, sinon de la branche par défaut du dépôt distant (`origin/HEAD`, `origin/main`, `origin/master`). Chaque contrôle **obligatoire** (`mandatory: true`) de la base reste exigé avec sa définition de base (commande, étape, dépendances, verrou...) quand le candidat le retire, le rend facultatif ou le modifie ; ses dépendances de base le suivent. La sortie le dit (`Contrôles obligatoires de la base maintenus…`, sur la sortie d'erreur de `run` et en tête de `verify` ; `baseGates` en JSON : `reference`, `mergeBase`, `file`, `differences` avec `id` et `kind`, `removed`, `optional`, `changed` ou `dependency`). Le candidat peut seulement **ajouter** des contrôles ou les **durcir** (un contrôle nouveau, un contrôle rendu obligatoire). Sans référence, ou si la base n'a pas de configuration (adoption d'APV), les contrôles du candidat s'appliquent tels quels (`file: null`). Une référence qui ne se résout pas : refus `GATE_BASE`, « git fetch ou --against ».
+
+`run` et `verify` doivent lire la même base pour qu'une preuve se vérifie (l'empreinte de configuration des reçus est celle de la liste maintenue) : passer la même `--base` (étape `task`) ou la même `--against`.
+
+**Changer la liste des contrôles** : c'est une décision de l'opérateur, par une **PR de configuration seule**. Elle est prouvée par les contrôles de sa base (ceux qu'elle retire tournent encore, sur un code inchangé : ils passent), puis l'opérateur la fusionne ; les changements suivants sont jugés par la nouvelle liste. Une PR qui mêle ce changement à du code reste jugée par l'ancienne liste, et `apv reuse check` le signale en bloquant ([REUSE.md](REUSE.md#28-échec-fermé--aucun-fichier-du-changement-ne-sort-du-contrôle-sans-déclaration)).
+
 ## `apv gates verify`
 
 ```
