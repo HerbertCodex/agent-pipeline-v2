@@ -14,6 +14,7 @@ Agent Pipeline V3 est un plugin Claude Code. Pour commencer : [présentation](..
 | Sécurité | [Sécurité](SECURITY.md) · [Routage OWASP](OWASP-SECURITY.md) |
 | Configuration reprise de V2, contrôles et preuves | [Configuration](CONFIGURATION.md) · [Qualité et validation](QUALITY.md) · [Compétences](SKILLS.md) |
 | Réutiliser l'existant : carte du code, contrôle des copies, éléments réservés, primitives | [Réutilisation](REUSE.md) |
+| Arborescence : dossiers à plat découpés par usage, ajouts refusés, carte de l'architecture, conventions par pile | [Arborescence](STRUCTURE.md) |
 
 Les contrats exécutables sont dans [src/domain/contracts.ts](../src/domain/contracts.ts) et [src/lifecycle/contracts.ts](../src/lifecycle/contracts.ts). Exemples : [spec](../examples/spec.example.json) et [tâche](../examples/task.example.json).
 
