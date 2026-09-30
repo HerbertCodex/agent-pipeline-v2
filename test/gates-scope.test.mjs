@@ -38,7 +38,9 @@ function project(t, gates = null) {
 }
 const commit = (repo, message) => { git(repo, 'add', '-A'); git(repo, 'commit', '-qm', message); };
 const receipt = (dir, gate) => validateReceipt(JSON.parse(readFileSync(join(dir, `${gate}.json`), 'utf8')));
-const full = (repo, extra = []) => apv(repo, ['gates', 'run', '--stage', 'full', '--base', 'main', '--json', ...extra]);
+// Judged against the commit itself (--against HEAD): these tests change the checks commit by commit; the checks of the
+// base are covered by test/gates-base.test.mjs.
+const full = (repo, extra = []) => apv(repo, ['gates', 'run', '--stage', 'full', '--base', 'main', '--against', 'HEAD', '--json', ...extra]);
 
 test('documentation only: the check is not required, nothing runs, the receipt records base, reference, files and reason; verify and --skip-proven agree', async t => {
   const f = project(t);
@@ -175,7 +177,8 @@ test('the configuration of the checks touched, or the list changed by the change
   const c = JSON.parse(readFileSync(join(bare.repo, '.apv/config.json'), 'utf8'));
   c.gates[0].skipWhenOnly = scopeOf();
   const cfg = write(bare.root, 'scoped.json', c);
-  rec = receipt((await full(bare.repo, ['--config', cfg])).json().receiptsDirectory, 'browser');
+  // An explicit --config is judged too: against the first commit (no configuration there), it applies as written.
+  rec = receipt((await apv(bare.repo, ['gates', 'run', '--stage', 'full', '--base', 'main', '--against', 'main~1', '--json', '--config', cfg])).json().receiptsDirectory, 'browser');
   assert.equal(rec.status, 'passed');
   assert.match(rec.scope.reason, /la référence main ne déclare pas skipWhenOnly pour browser \(les chemins sont lus à la référence\)/);
 });
@@ -212,7 +215,7 @@ test('same rigour as repeatChanged: --base required, a base equal to HEAD refuse
   const missing = JSON.parse(readFileSync(join(f.repo, '.apv/config.json'), 'utf8'));
   missing.gates[1].skipWhenOnly.reference = 'origin/main';
   const file = write(f.root, 'missing.json', missing);
-  const r = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', 'main', '--config', file]);
+  const r = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', 'main', '--against', 'main~1', '--config', file]);
   assert.equal(r.code, 2);
   assert.match(r.stderr, /browser : référence origin\/main introuvable \(skipWhenOnly\.reference\)/);
   await assert.rejects(runGates({ repo: f.repo, config: loadConfig(f.repo, file).config, stage: 'full', base: 'main', share: false }), /introuvable \(skipWhenOnly\.reference\)/);

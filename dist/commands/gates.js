@@ -1,6 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { loadConfig, loadConfigAtCommit } from '../config/load.js';
+import { applyBaseGates, baseGatesLines } from '../gates/base-gates.js';
 import { gateStages } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
 import { RECEIPTS_DIR, dirtyRefusal, isFullSuite, runGates, selectGates, stageGates } from '../gates/run.js';
@@ -16,15 +17,21 @@ import { Git } from '../execution/git.js';
 import { signalExitCode } from '../lock/run.js';
 import { EXIT, UsageError, guard, json, list, parse, repoPath, table } from './common.js';
 export const usage = `Utilisation :
-  apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>]
+  apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>] [--against <ref>]
                 [--concurrency N] [--keep-going] [--skip-proven] [--run <spec-id>]
                 [--reason <texte>] [--allow-dirty] [--stacks <pile>,<pile>] [--repo <chemin>] [--json]
-  apv gates verify --commit <sha> [--stage full|task] [--base <ref>]
+  apv gates verify --commit <sha> [--stage full|task] [--base <ref>] [--against <ref>]
                    [--config <fichier> | --commit-config] [--repo <chemin>] [--json]
   apv gates receipts list [--commit <ref>] [--limit N] [--repo <chemin>] [--json]
   apv gates receipts export <exécution> --out <dossier> [--repo <chemin>] [--json]
   apv gates receipts prune [--keep-days N] [--keep-runs N] [--config <fichier>]
                          [--repo <chemin>] [--json]
+
+Contrôles de la base : run et verify lisent aussi la configuration de la base commune de --against (sinon
+--base, sinon la branche par défaut du dépôt distant ; référence complète, vérifiée auprès du dépôt distant
+quand le réseau le permet) ; tout contrôle de la base, obligatoire ou non, retiré, rendu facultatif ou modifié
+par le candidat reste exigé avec sa définition de base, et la différence est dite. Le candidat peut seulement
+ajouter ou durcir des contrôles ; les changer passe par une PR de configuration seule.
 
 run : exécute les contrôles déclarés (.apv/config.json, sinon pipeline.v2.json) dans le dépôt :
 dépendances, ressources, variables transmises, délais et masquage des secrets respectés.
@@ -240,6 +247,14 @@ async function rhythmCheck(repo, explicit, reason, io, beforeWrite) {
     notes.push(cleanLine(`Dérogation au rythme de l'exécution ${context.specId} (${where}, niveau attendu : contrôles de tâche et ciblés), journalisée dans son état : ${reason}`, 700));
     return { context, expected, override: { run: context.specId, reason }, notes };
 }
+/** `--against <ref>`: the branch the change goes to, whose mandatory checks are kept. */
+function againstOf(value) {
+    if (value === undefined)
+        return undefined;
+    if (typeof value !== 'string' || !value || value.startsWith('-'))
+        throw new UsageError('--against attend une référence Git (la branche où va le changement, par exemple origin/main)');
+    return value;
+}
 function stageOf(value) {
     if (value === undefined)
         return undefined;
@@ -253,7 +268,7 @@ export async function run(args, io) {
             only: { type: 'string' }, config: { type: 'string' }, base: { type: 'string' }, concurrency: { type: 'string' },
             stage: { type: 'string' }, commit: { type: 'string' }, 'skip-proven': { type: 'boolean' }, run: { type: 'string' }, reason: { type: 'string' },
             'keep-going': { type: 'boolean' }, 'allow-dirty': { type: 'boolean' }, repo: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
-            'commit-config': { type: 'boolean' }, limit: { type: 'string' }, out: { type: 'string' }, 'keep-days': { type: 'string' }, 'keep-runs': { type: 'string' },
+            'commit-config': { type: 'boolean' }, against: { type: 'string' }, limit: { type: 'string' }, out: { type: 'string' }, 'keep-days': { type: 'string' }, 'keep-runs': { type: 'string' },
             stacks: { type: 'string' },
         });
         if (values.help) {
@@ -292,15 +307,21 @@ export async function run(args, io) {
             }
             else
                 loaded = loadConfig(repo, values.config);
+            const verifyRoot = gitRoot(repo);
+            const verified = resolveCommit(verifyRoot, values.commit);
+            if (!verified)
+                throw new PipelineError('SHA', `Commit introuvable : ${values.commit}`);
+            const kept = applyBaseGates(verifyRoot, loaded.config, verified, againstOf(values.against) ?? values.base ?? null, { strict: true });
+            loaded = { ...loaded, config: kept.config };
             const result = await verifyGates({ repo, config: loaded.config, commit: values.commit, ...(stage ? { stage } : {}), ...(values.base ? { base: values.base } : {}),
                 configFile: values['commit-config'] ? null : loaded.file });
             if (values.json) {
-                json(io, { ok: result.ok, commit: result.commit, stage: result.stage, base: result.base, config: loaded.file, configHash: result.configHash,
+                json(io, { ok: result.ok, commit: result.commit, stage: result.stage, base: result.base, config: loaded.file, configHash: result.configHash, baseGates: kept.base,
                     required: result.required, targeted: result.targeted, reserved: result.reserved, gates: result.gates, unreadable: result.unreadable,
                     store: result.store, altered: result.altered, flaky: result.flaky, repeating: result.repeating, auditing: result.auditing, notRequired: result.notRequired, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
             }
             else {
-                io.stdout(`${verifyLines(result).join('\n')}\n`);
+                io.stdout(`${[...baseGatesLines(kept.base), ...verifyLines(result)].join('\n')}\n`);
             }
             return result.ok ? EXIT.ok : EXIT.failed;
         }
@@ -327,7 +348,16 @@ export async function run(args, io) {
         if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16)
             throw new UsageError('--concurrency attend un entier entre 1 et 16');
         const repo = repoPath(io, values.repo);
-        const loaded = loadConfig(repo, values.config);
+        let loaded = loadConfig(repo, values.config);
+        // The mandatory checks of the base are kept, whatever the candidate's configuration says (src/gates/base-gates.ts).
+        const runRoot = gitRoot(repo);
+        const runHead = resolveCommit(runRoot, 'HEAD');
+        const kept = runHead ? applyBaseGates(runRoot, loaded.config, runHead, againstOf(values.against) ?? values.base ?? null) : null;
+        if (kept)
+            loaded = { ...loaded, config: kept.config };
+        const keptLines = kept ? baseGatesLines(kept.base) : [];
+        if (keptLines.length && !values.json)
+            io.stderr(`${keptLines.join('\n')}\n`);
         // A check that repeats its changed test files needs the base they changed from: refused as an incorrect call, before
         // the proof lookup (--skip-proven) and any wait, so that a red repetition is never replaced by a run that repeats nothing.
         const selected = selectGates(loaded.config.gates, list(values.only)).gates;
@@ -436,7 +466,7 @@ export async function run(args, io) {
             ...(r.scope ? { scope: r.scope } : {}) }));
         const name = (r) => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
         if (values.json) {
-            json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null,
+            json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null, baseGates: kept?.base ?? null,
                 stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
                 reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
                 sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
