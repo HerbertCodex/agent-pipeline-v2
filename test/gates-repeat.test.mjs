@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 import { gatesConfigHash } from '../dist/gates/run.js';
-import { addedLines, fixedWaitIn, fixedWaitLines, repeatArgv, repeatFailures } from '../dist/gates/repeat.js';
+import { addedLines, fixedWaitIn, fixedWaitLines, onlyImportPathsChanged, repeatArgv, repeatFailures } from '../dist/gates/repeat.js';
 import { configIssues } from '../dist/config/load.js';
 import { validateReceipt } from '../dist/domain/contracts.js';
 
@@ -54,13 +54,13 @@ test('no changed test file: the check passes, nothing is repeated, the receipt s
   assert.equal(r.code, 0, r.stdout + r.stderr);
   const row = r.json().gates[0];
   assert.equal(row.status, 'passed');
-  assert.deepEqual(row.repeat, { status: 'none', base: f.base, files: [], times: 5, failures: [], fixedWaits: [] });
+  assert.deepEqual(row.repeat, { status: 'none', base: f.base, files: [], importsOnly: [], times: 5, failures: [], fixedWaits: [] });
   assert.equal(f.calls().length, 1, 'only the command of the check ran');
   const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
   assert.match(human.stdout, /Tests modifiés répétés \(repeatChanged\) :\n- browser : aucun fichier de test ajouté ou modifié depuis/);
 });
 
-test('changed test files: added, modified, untracked and renamed ones repeated N times after the check; deleted and unmatched ones ignored', async t => {
+test('changed test files: added, modified and untracked ones repeated N times after the check; renamed without change listed apart; deleted and unmatched ones ignored', async t => {
   const f = project(t, [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ times: 7, stressArgs: ['--workers=4'] }) }],
     { 'tests/e2e/gone.e2e.ts': 'x\n', 'tests/e2e/moved.e2e.ts': 'moved\n' });
   write(f.repo, 'tests/e2e/a.e2e.ts', 'test("a", async () => { await expect(page.getByRole("button")).toBeVisible(); });\n');
@@ -72,13 +72,15 @@ test('changed test files: added, modified, untracked and renamed ones repeated N
   write(f.repo, 'tests/e2e/wip.e2e.ts', 'test("wip")\n');
   const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
   assert.equal(r.code, 0, r.stdout + r.stderr);
-  const files = ['tests/e2e/a.e2e.ts', 'tests/e2e/new/b.e2e.ts', 'tests/e2e/renamed.e2e.ts', 'tests/e2e/wip.e2e.ts'];
+  // A rename by Git without any other change is listed, never repeated.
+  const files = ['tests/e2e/a.e2e.ts', 'tests/e2e/new/b.e2e.ts', 'tests/e2e/wip.e2e.ts'];
   const calls = f.calls();
   assert.deepEqual(calls, [[], ['repeat', '--repeat-each=7', '--retries=0', '--workers=4', ...files]], 'the check, then the repetition of the changed files only');
   const rec = receipt(r.json().receiptsDirectory, 'browser');
   assert.equal(rec.status, 'passed');
   assert.equal(rec.repeat.status, 'passed');
   assert.deepEqual(rec.repeat.files, files);
+  assert.deepEqual(rec.repeat.importsOnly, ['tests/e2e/renamed.e2e.ts']);
   assert.equal(rec.repeat.times, 7);
   assert.equal(rec.repeat.base, f.base);
   assert.deepEqual(rec.repeat.command.slice(1), ['run-pass.mjs', 'repeat', '--repeat-each=7', '--retries=0', '--workers=4']);
@@ -355,4 +357,57 @@ test('helpers: repetition argv, failures counted by test, added lines, fixed wai
   assert.deepEqual(fixedWaitLines([{ line: 4, text: 'await new Promise(resolve =>' }, { line: 9, text: 'setTimeout(resolve, 100));' }]), []);
   // An added line "++i;" is "+++i;" in the diff: a line, not a header.
   assert.deepEqual(addedLines('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n+++i;\n+ok\n'), [{ line: 1, text: '++i;' }, { line: 2, text: 'ok' }]);
+});
+
+test('imports only: a test whose only changes are the paths of its imports is listed, never repeated; any other change is', () => {
+  const before = [
+    "import { expect, test } from '@playwright/test';",
+    "import { login, seed } from '../support/account';",
+    "import type { Row } from '$lib/applications/model';",
+    "export { helper } from './helpers';",
+    "vi.mock('$lib/applications/list', () => ({ list: [] }));",
+    "const lazy = await import('../support/lazy');",
+    "import '../support/setup';",
+    "test('liste', async ({ page }) => { await login(page); });",
+    '',
+  ].join('\n');
+  const moved = before.replace("'../support/account'", "'../support/auth/account'").replace("'$lib/applications/model'", "'$lib/applications/core/model'")
+    .replace("'./helpers'", "'./shared/helpers'").replace("'$lib/applications/list'", '"$lib/applications/list/list"').replace("'../support/lazy'", "'../support/x/lazy'")
+    .replace("'../support/setup'", "'../support/x/setup'");
+  assert.equal(onlyImportPathsChanged(before, moved), true, 'static, type, export-from, vi.mock, import(), side effect');
+  // Prettier rewrites a long import over several lines, trailing comma included.
+  const prettier = moved.replace("import { login, seed } from '../support/auth/account';", "import {\n  login,\n  seed,\n} from '../support/auth/account';");
+  assert.equal(onlyImportPathsChanged(before, prettier), true);
+  // A name imported, a specifier (`as`), the order, or any other line: a real change.
+  assert.equal(onlyImportPathsChanged(before, moved.replace('login, seed', 'login, seed, reset')), false);
+  assert.equal(onlyImportPathsChanged(before, moved.replace('login, seed', 'login as signIn, seed')), false);
+  assert.equal(onlyImportPathsChanged(before, moved.replace("test('liste'", "test('liste 2'")), false);
+  assert.equal(onlyImportPathsChanged(before, `${moved}// note\n`), false);
+  assert.equal(onlyImportPathsChanged(before, moved.replace("const lazy = await import('../support/x/lazy');", 'const lazy = await import(path);')), false, 'a computed import() is a change');
+  assert.equal(onlyImportPathsChanged(before, before), false, 'no difference: not a change at all');
+});
+
+test('imports only, end to end: moved and renamed tests are listed in the output and the receipt, the others repeated; the ceiling counts only them; verify proves it', async t => {
+  const tests = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`tests/e2e/m${i}.e2e.ts`, `import { go } from '../support/old';\ntest("m${i}", async () => { await go(); });\n`]));
+  const f = project(t, [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ maxFiles: 2 }) }], { ...tests, 'tests/support/old.ts': 'export const go = async () => {};\n' });
+  git(f.repo, 'mv', 'tests/support/old.ts', 'tests/support/new.ts');
+  for (let i = 0; i < 12; i++) writeFileSync(join(f.repo, `tests/e2e/m${i}.e2e.ts`), `import { go } from "../support/new";\ntest("m${i}", async () => { await go(); });\n`);
+  // Moved by Git without any other change.
+  mkdirSync(join(f.repo, 'tests/e2e/moved'));
+  git(f.repo, 'mv', 'tests/e2e/a.e2e.ts', 'tests/e2e/moved/a.e2e.ts');
+  // A real change: repeated.
+  writeFileSync(join(f.repo, 'tests/e2e/m0.e2e.ts'), 'import { go } from "../support/new";\ntest("m0 bis", async () => { await go(); });\n');
+  commit(f.repo, 'rangement');
+  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  const row = r.json().gates[0];
+  assert.deepEqual(row.repeat.files, ['tests/e2e/m0.e2e.ts']);
+  assert.deepEqual(row.repeat.importsOnly, ['tests/e2e/moved/a.e2e.ts', ...Array.from({ length: 11 }, (_, i) => `tests/e2e/m${i + 1}.e2e.ts`)].sort());
+  assert.deepEqual(receipt(join(f.repo, '.apv/receipts', r.json().runId), 'browser').repeat.importsOnly, row.repeat.importsOnly);
+  assert.deepEqual(f.calls().at(-1).slice(-1), ['tests/e2e/m0.e2e.ts'], 'only the really changed test is repeated');
+  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
+  assert.match(human.stdout, /tests dont seuls les imports changent : non répétés \(tests\/e2e\/m1\.e2e\.ts, /);
+  assert.match(human.stderr + human.stdout, /browser : tests dont seuls les imports changent : non répétés \(le contrôle les exécute comme les autres\)/);
+  const v = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--against', 'HEAD']);
+  assert.equal(v.code, 0, v.stdout + v.stderr);
 });

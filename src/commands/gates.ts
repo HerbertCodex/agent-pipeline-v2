@@ -70,7 +70,8 @@ flock) avant que son délai commence ; un contrôle avec retryFailed qui échoue
 en échec, même commit et même arbre : « réussi après relance » (instable), compté comme réussi et
 signalé à part. Un contrôle avec repeatChanged relance ensuite, avec --base, les seuls fichiers de test
 ajoutés ou modifiés depuis la base (motifs repeatChanged.paths) repeatChanged.times fois, sous le même
-verrou : tout échec le rend rouge (« échoue X fois sur N »), jamais masqué par retryFailed ; plus de
+verrou (un test dont seuls les chemins d'import changent, ou renommé sans autre changement, est listé
+« tests dont seuls les imports changent : non répétés », jamais répété ni compté dans maxFiles) : tout échec le rend rouge (« échoue X fois sur N »), jamais masqué par retryFailed ; plus de
 fichiers que repeatChanged.maxFiles, ou une attente à durée fixe avec fixedWaits = refuse : refus avant
 toute attente. Sans --base, un tel contrôle ne se lance pas (appel incorrect) ; une suite complète compare
 aussi à repeatChanged.reference (obligatoire ; introuvable : appel incorrect).
@@ -129,10 +130,14 @@ const EVIDENCE: Record<EvidenceState, string> = { passed: 'réussi', failed: 'é
   unaudited: 'audit web non prouvé', required: 'requis (dispense non prouvée)' };
 
 /** One line of the repetition of the changed test files of a check. */
-function repeatLine(r: { status: string; base: string | null; files: string[]; times: number; failures: { test: string; count: number }[] }): string {
+function repeatLine(r: { status: string; base: string | null; files: string[]; importsOnly?: string[]; times: number; failures: { test: string; count: number }[] }): string {
+  const only = r.importsOnly?.length ? ` ; tests dont seuls les imports changent : non répétés (${r.importsOnly.length > 5 ? `${r.importsOnly.slice(0, 5).join(', ')} ... (${r.importsOnly.length})` : r.importsOnly.join(', ')})` : '';
+  return `${repeatText(r)}${only}`;
+}
+function repeatText(r: { status: string; base: string | null; files: string[]; importsOnly?: string[]; times: number; failures: { test: string; count: number }[] }): string {
   const files = r.files.length > 5 ? `${r.files.slice(0, 5).join(', ')} ... (${r.files.length})` : r.files.join(', ');
   if (r.status === 'no_base') return 'non répétés : --base absent (apv gates run --base <base de la branche> les répète)';
-  if (r.status === 'none') return `aucun fichier de test ajouté ou modifié depuis ${r.base?.slice(0, 12)}`;
+  if (r.status === 'none') return `aucun fichier de test ${r.importsOnly?.length ? 'à répéter' : 'ajouté ou modifié'} depuis ${r.base?.slice(0, 12)}`;
   if (r.status === 'not_run') return `non répétés, la commande du contrôle n'a pas réussi (${files})`;
   if (r.status === 'passed') return `${r.files.length} fichier(s), ${r.times} fois chacun : réussi (${files})`;
   const tests = r.failures.map(f => `${f.test} échoue ${f.count} fois sur ${r.times}`).join(' ; ');
@@ -416,7 +421,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, status: r.status, exitCode: r.exitCode,
       durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic,
       ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}),
-      ...(r.repeat ? { repeat: { status: r.repeat.status, base: r.repeat.base, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures, fixedWaits: r.repeat.fixedWaits } } : {}),
+      ...(r.repeat ? { repeat: { status: r.repeat.status, base: r.repeat.base, files: r.repeat.files, importsOnly: r.repeat.importsOnly, times: r.repeat.times, failures: r.repeat.failures, fixedWaits: r.repeat.fixedWaits } } : {}),
       ...(r.scope ? { scope: r.scope } : {}) }));
     const name = (r: { gate: string; targeted: boolean }): string => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
     if (values.json) {

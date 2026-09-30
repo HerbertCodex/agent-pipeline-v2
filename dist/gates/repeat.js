@@ -81,6 +81,32 @@ export function addedLines(diff) {
     }
     return out;
 }
+/** The canonical form of a module path in an import: every path is the same, only the path may change. */
+const PATH = '\u0000chemin\u0000';
+const SPECIFIER = String.raw `(?<q>['"])(?:(?!\k<q>)[^\n\\])+\k<q>`;
+/** Names of an import clause, whatever the layout (Prettier over several lines, trailing comma). */
+const clauseOf = (text) => text.replace(/\s+/g, '').replace(/,(?=[}\]])/g, '');
+const IMPORT_FROM = new RegExp(String.raw `\b(import|export)(\s+type\b)?\s*([^;'"\`]*?)\s*\bfrom\s*${SPECIFIER}(\s*(?:with|assert)\s*\{[^}]*\})?\s*;?`, 'g');
+const SIDE_EFFECT = new RegExp(String.raw `\bimport\s*${SPECIFIER}\s*;?`, 'g');
+const MOCK = new RegExp(String.raw `\b((?:vi|jest)\s*\.\s*(?:mock|doMock|unmock|doUnmock|importActual|importMock|requireActual|requireMock))\s*\(\s*${SPECIFIER}`, 'g');
+const DYNAMIC = new RegExp(String.raw `\bimport\s*\(\s*${SPECIFIER}\s*\)`, 'g');
+/**
+ * A test file with every module path of its imports replaced by the same placeholder, and each import statement put
+ * on one line: static `import` (and `import type`), `export ... from`, side-effect `import '...'`, `vi.mock('...')`
+ * (`jest.mock`, `importActual`...), `import('...')` with a literal. The names imported, the order of the statements and
+ * every other line stay as they are.
+ */
+export function withoutImportPaths(text) {
+    return text
+        .replace(IMPORT_FROM, (_m, keyword, type, clause, _q, attributes) => `${keyword}${type ? ' type' : ''} ${clauseOf(clause)} from ${PATH}${attributes ? clauseOf(attributes) : ''};`)
+        .replace(SIDE_EFFECT, `import ${PATH};`)
+        .replace(MOCK, (_m, call) => `${call.replace(/\s+/g, '')}(${PATH}`)
+        .replace(DYNAMIC, `import(${PATH})`);
+}
+/** Only the paths of the imports differ (a module moved or renamed): the names imported and every other line are the same. */
+export function onlyImportPathsChanged(before, after) {
+    return before !== after && withoutImportPaths(before) === withoutImportPaths(after);
+}
 /** The commit `ref` names, or null when it does not resolve (no remote, reference absent). */
 export async function resolveRef(git, repo, ref) {
     try {
@@ -139,12 +165,32 @@ export async function planRepeat(git, repo, bases, settings, head) {
     const reference = bases.reference ? await mergeBase(git, repo, bases.reference, tip) : null;
     const from = [...new Set([base, ...(reference ? [reference] : [])])];
     const diffArgs = (mb) => ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', mb, ...(head ? [head] : [])];
-    const tracked = [];
-    for (const mb of from)
-        tracked.push(...(await git.exec(repo, [...diffArgs(mb), '--diff-filter=AM', '--name-only', '-z', '--'])).split('\0').filter(Boolean));
+    // File -> the merge bases it changed from, and where it was at each (a rename or a move by Git keeps its old path).
+    const changedFrom = new Map();
+    for (const mb of from) {
+        const renames = new Map();
+        const status = (await git.exec(repo, ['diff', '--no-ext-diff', '--no-textconv', '-M', '--name-status', '-z', mb, ...(head ? [head] : []), '--'])).split('\0');
+        for (let i = 0; i < status.length;) {
+            const code = status[i] ?? '';
+            if (!code) {
+                i++;
+                continue;
+            }
+            if (code.startsWith('R') || code.startsWith('C')) {
+                if (code.startsWith('R') && status[i + 1] && status[i + 2])
+                    renames.set(status[i + 2], status[i + 1]);
+                i += 3;
+            }
+            else
+                i += 2;
+        }
+        for (const path of (await git.exec(repo, [...diffArgs(mb), '--diff-filter=AM', '--name-only', '-z', '--'])).split('\0').filter(Boolean)) {
+            changedFrom.set(path, new Map([...(changedFrom.get(path) ?? []), [mb, renames.get(path) ?? path]]));
+        }
+    }
     const untracked = head ? new Set() : new Set((await git.exec(repo, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean));
     const wanted = (path) => settings.paths.some(glob => matches(path, glob));
-    const files = [...new Set([...tracked, ...untracked])].filter(wanted).filter(path => {
+    const changed = [...new Set([...changedFrom.keys(), ...untracked])].filter(wanted).filter(path => {
         if (head)
             return true;
         try {
@@ -154,6 +200,38 @@ export async function planRepeat(git, repo, bases, settings, head) {
             return false;
         }
     }).sort();
+    // A test file whose only differences with every base it changed from are the paths of its imports is listed apart.
+    const show = async (spec) => { try {
+        return await git.exec(repo, ['show', '--no-textconv', spec]);
+    }
+    catch {
+        return null;
+    } };
+    const importsOnly = [];
+    for (const path of changed) {
+        const was = changedFrom.get(path);
+        if (untracked.has(path) || !was)
+            continue;
+        const now = head ? await show(`${head}:${path}`) : (() => { try {
+            return readFileSync(join(repo, path), 'utf8');
+        }
+        catch {
+            return null;
+        } })();
+        if (now === null)
+            continue;
+        let only = true;
+        for (const [mb, old] of was) {
+            const before = await show(`${mb}:${old}`);
+            if (before === null || !(before === now || onlyImportPathsChanged(before, now))) {
+                only = false;
+                break;
+            }
+        }
+        if (only)
+            importsOnly.push(path);
+    }
+    const files = changed.filter(path => !importsOnly.includes(path));
     const fixedWaits = [];
     if (settings.fixedWaits !== 'off') {
         for (const file of files) {
@@ -173,7 +251,7 @@ export async function planRepeat(git, repo, bases, settings, head) {
         }
         fixedWaits.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
     }
-    return { base, reference, files, fixedWaits };
+    return { base, reference, files, importsOnly, fixedWaits };
 }
 /** The refusal of a repeated file whose path starts with `-`: appended to the command, it would read as an option. */
 export function optionLikeFile(gateId, file) {

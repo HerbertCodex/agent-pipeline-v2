@@ -21,6 +21,11 @@ export interface RepeatPlan {
     /** The merge base of the reference (the branch the change goes to, `repeatChanged.reference`) and HEAD, when used. */
     reference: string | null;
     files: string[];
+    /**
+     * Changed test files whose only differences with the base are the paths of their imports (a move or a rename of
+     * modules rewrites them): listed, never repeated (the check itself still runs them), never skipped silently.
+     */
+    importsOnly: string[];
     fixedWaits: FixedWait[];
 }
 /** Placeholder of the number of repetitions, replaced anywhere in an argument (`--repeat-each={{repeat}}`). */
@@ -47,6 +52,15 @@ export declare function addedLines(diff: string): {
     line: number;
     text: string;
 }[];
+/**
+ * A test file with every module path of its imports replaced by the same placeholder, and each import statement put
+ * on one line: static `import` (and `import type`), `export ... from`, side-effect `import '...'`, `vi.mock('...')`
+ * (`jest.mock`, `importActual`...), `import('...')` with a literal. The names imported, the order of the statements and
+ * every other line stay as they are.
+ */
+export declare function withoutImportPaths(text: string): string;
+/** Only the paths of the imports differ (a module moved or renamed): the names imported and every other line are the same. */
+export declare function onlyImportPathsChanged(before: string, after: string): boolean;
 /** The commit `ref` names, or null when it does not resolve (no remote, reference absent). */
 export declare function resolveRef(git: Git, repo: string, ref: string): Promise<string | null>;
 /**
