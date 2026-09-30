@@ -198,6 +198,8 @@ export async function runGates(options) {
             throw tooManyFiles(g.id, plan, settings);
         if (plan.fixedWaits.length && settings.fixedWaits === 'refuse')
             throw fixedWaitRefusal(g.id, plan.fixedWaits);
+        if (plan.importsOnly.length)
+            log(`${g.id} : tests dont seuls les imports changent : non répétés (le contrôle les exécute comme les autres) : ${plan.importsOnly.join(', ')}.`);
         for (const w of plan.fixedWaits)
             log(`${g.id} : attente à durée fixe dans un test modifié, ${w.file}:${w.line} : ${w.text} (attendre un fait observable ; page.clock pour le temps).`);
         repeatPlans.set(g.id, plan);
@@ -421,7 +423,7 @@ export async function runGates(options) {
                 if (!settings || !plan)
                     return fields;
                 const times = settings.times;
-                const record = { base: plan.base, reference: plan.reference, files: plan.files, times, fixedWaits: plan.fixedWaits };
+                const record = { base: plan.base, reference: plan.reference, files: plan.files, importsOnly: plan.importsOnly, times, fixedWaits: plan.fixedWaits };
                 if (!plan.files.length)
                     return { ...fields, repeat: { ...record, status: 'none', failures: [] } };
                 const afterRetry = fields.status === 'passed_after_retry';
