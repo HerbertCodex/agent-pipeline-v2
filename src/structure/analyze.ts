@@ -1,6 +1,7 @@
 import { posix } from 'node:path';
 import type { FindingCode, Severity, StructureSettings } from './config.js';
 import { folderName, joinLike, parseName, related, singular, startsWith, tokenize, type FileName } from './names.js';
+import { proposeSplit, type SplitGroup, type UsageGraph } from './split.js';
 
 /** A proposed move, `from` and `to` relative to the repository root. Never applied by the tool. */
 export interface Move { from: string; to: string }
@@ -13,6 +14,14 @@ export interface Finding {
   files: string[];
   proposal: string;
   moves: Move[];
+  /** flat-folder with a usage graph: the proposed subfolders, with their reasons and conventions. */
+  groups?: SplitGroup[];
+  /** flat-folder with a usage graph: files most of the folder imports, which stay at its root. */
+  core?: { path: string; reason: string }[];
+  /** `apv structure check`: the finding concerns a file the change creates or moves (always true without base). */
+  isNew?: boolean;
+  /** `apv structure check`: severity `error` and new. */
+  blocking?: boolean;
 }
 
 export interface FolderSummary {
@@ -38,6 +47,13 @@ export interface StructureReport {
 export interface AnalyzeOptions {
   /** Restricts the findings to these folders and their subfolders (repository-relative). */
   paths?: readonly string[];
+  /**
+   * Who imports whom (src/structure/split.ts): a flat folder is then split by proximity of use, even without a common
+   * prefix. Without it, only the names are read.
+   */
+  usage?: UsageGraph;
+  /** Groups proposed by a first pass (folder -> groups), for the folders of the same domain: set by analyzeStructure itself. */
+  proposed?: ReadonlyMap<string, readonly { dir: string; members: readonly string[] }[]>;
 }
 
 /** A main file of a folder with the tests and companion files that share its stem. */
@@ -123,6 +139,21 @@ function clusters(size: number, linked: (a: number, b: number) => boolean): numb
  * file, runs nothing, applies nothing.
  */
 export function analyzeStructure(paths: readonly string[], settings: StructureSettings, options: AnalyzeOptions = {}): StructureReport {
+  // With a usage graph, two passes: the second knows the groups the first proposed everywhere, so that two folders of the
+  // same domain (`lib/applications`, `components/applications`) get the same split.
+  if (options.usage && !options.proposed) {
+    const first = analyzeStructure(paths, settings, { usage: options.usage, proposed: new Map() });
+    const proposed = new Map<string, { dir: string; members: string[] }[]>();
+    // Only the split of a folder of modules is followed elsewhere, and only its groups named by a folder or a module:
+    // the business code decides the split, the components follow it (never a name made of a component).
+    for (const f of first.findings) {
+      const modules = f.files.filter(p => !parseName(p)?.component).length;
+      if (!f.groups?.length || modules * 2 < f.files.length) continue;
+      const kept = f.groups.filter(g => g.members.length >= 2 && (g.naming === 'existing' || g.naming === 'mirror' || g.naming === 'module'));
+      if (kept.length) proposed.set(f.folder, kept.map(g => ({ dir: g.dir, members: g.members })));
+    }
+    return analyzeStructure(paths, settings, { ...options, proposed });
+  }
   const kept = paths.filter(p => !settings.ignore.some(re => re.test(p)));
   const tracked = new Set(paths);
   // Directories of the tree (for sibling folders and the domain vocabulary), ignored paths left out.
@@ -262,13 +293,35 @@ export function analyzeStructure(paths: readonly string[], settings: StructureSe
       }
     }
 
-    const unplaced = entries.filter(e => !e.main.reserved && !placed.has(e)).map(e => e.main.path);
+    // Flat folder with a usage graph: what no name rule placed is split by proximity of use.
+    let split: ReturnType<typeof proposeSplit> | null = null;
+    if (flat && options.usage) {
+      const asSplit = (e: Entry) => ({ path: e.main.path, stem: e.main.stem, files: [e.main.path, ...e.followers.map(f => f.path)], component: e.main.component, tokens: e.main.tokens });
+      const pool = entries.filter(e => free(e) && !e.main.reserved);
+      split = proposeSplit(dir, pool.map(asSplit), options.usage, {
+        dirs, files: code.map(f => f.path), domains: settings.domains, maxFlatFiles: settings.maxFlatFiles, staying: entries.filter(e => !pool.includes(e) && !placed.has(e)).length, ...(options.proposed ? { proposed: options.proposed } : {}), others: entries.filter(e => !pool.includes(e)).map(asSplit),
+      });
+      for (const group of split.groups) {
+        const words = tokenize(group.dir);
+        const members = pool.filter(e => group.members.includes(e.main.path));
+        const moves = place({ dir: group.dir, entries: members, rename: e => {
+          if (e.main.component) return e.main.stem;
+          const t = e.main.tokens;
+          return t.length > words.length && startsWith(t, words) ? joinLike(e.main.stem, t.slice(words.length)) : e.main.stem;
+        } });
+        flatMoves.push(...moves);
+        group.members = members.filter(e => placed.has(e)).map(e => e.main.path);
+      }
+      split.groups = split.groups.filter(g => g.members.length);
+    }
+    const unplaced = entries.filter(e => !e.main.reserved && !placed.has(e) && !split?.core.some(c => c.path === e.main.path)).map(e => e.main.path);
     if (flat) {
       const moved = placed.size;
       const proposal = moved
-        ? `${entries.length} fichiers de code directement dans le dossier (seuil ${settings.maxFlatFiles}) : ranger par domaine selon le plan (${moved} fichier(s) placés), ${unplaced.length} fichier(s) restent à placer avec l'opérateur.`
+        ? `${entries.length} fichiers de code directement dans le dossier (seuil ${settings.maxFlatFiles}) : ranger par domaine selon le plan (${moved} fichier(s) placés${split?.groups.length ? `, dont ${split.groups.reduce((n, g) => n + g.members.length, 0)} par usage dans ${split.groups.length} sous-dossier(s)` : ''}${split?.core.length ? `, ${split.core.length} fichier(s) socle gardés à la racine` : ''}), ${unplaced.length} fichier(s) restent à placer avec l'opérateur.`
         : `${entries.length} fichiers de code directement dans le dossier (seuil ${settings.maxFlatFiles}), sans préfixe commun ni rôle reconnu : découpage en sous-dossiers par domaine à décider avec l'opérateur (ou relever structure.maxFlatFiles).`;
-      local.unshift({ code: 'flat-folder', severity: settings.severity['flat-folder'], folder: dir, files: entries.map(e => e.main.path), proposal, moves: flatMoves });
+      const extra = split ? { groups: split.groups, core: split.core } : {};
+      local.unshift({ code: 'flat-folder', severity: settings.severity['flat-folder'], folder: dir, files: entries.map(e => e.main.path), proposal, moves: flatMoves, ...extra });
     }
     if (!local.length) continue;
     findings.push(...local);

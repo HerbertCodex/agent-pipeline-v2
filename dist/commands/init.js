@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { APV_DIR, apvGitignoreMissing, ensureApvGitignore } from '../config/apv-files.js';
 import { CONFIG_FILE, configIssues, loadConfig } from '../config/load.js';
 import { worktreeFiles } from '../knowledge/inventory.js';
-import { apvOnPath, detectReuse, MAP_GATE, REUSE_GATE } from '../reuse/detect.js';
+import { apvOnPath, detectReuse, MAP_GATE, REUSE_GATE, STRUCTURE_GATE } from '../reuse/detect.js';
+import { architectureMap } from '../structure/map-file.js';
+import { structureSettings } from '../structure/config.js';
 import { currentMap } from './map.js';
 import { designDir } from '../design/config.js';
 import { GITATTRIBUTES, ensureDesignAttribute } from '../design/attributes.js';
@@ -134,7 +136,7 @@ export function writeApvSkeleton(writer, name, template, content = {}) {
  * always, both at the task stage so that they also run in the full suite) and the detected `reuse` section.
  */
 export function reuseConfig(name, proposal) {
-    const gates = [...(proposal.web ? [REUSE_GATE] : []), MAP_GATE].map(g => ({ ...g, command: [...g.command], covers: [...g.covers] }));
+    const gates = [...(proposal.web ? [REUSE_GATE] : []), STRUCTURE_GATE, MAP_GATE].map(g => ({ ...g, command: [...g.command], covers: [...g.covers] }));
     return { document: { name, gates, ...(proposal.web ? { reuse: proposal.section } : {}) }, gates: gates.map(g => g.id) };
 }
 /** The code map of the repository under `config` (the one about to be written, or the existing one); null when unreadable. */
@@ -155,8 +157,9 @@ export async function initialMap(repo, configText) {
     }
     // The map never blocks the setup: a repository too large or unreadable for the inventory gets its configuration anyway.
     try {
-        const { file, text, map } = await currentMap(repo, config);
-        return { path: file, text, partial: map.partial !== null };
+        const { file, text, map, tree } = await currentMap(repo, config);
+        const crowded = tree.findings.filter(f => f.code === 'flat-folder').map(f => ({ folder: f.folder, code: f.files.length, groups: (f.groups ?? []).map(g => g.dir) }));
+        return { path: file, text, partial: map.partial !== null, crowded };
     }
     catch (error) {
         return { path: null, text: '', partial: false, error: errorMessage(error) };
@@ -177,8 +180,39 @@ export async function initProject(repo, name, pluginRoot = PLUGIN_ROOT) {
         ...(configText !== undefined ? { config: () => configText } : {}),
         ...(map?.path ? { map: { path: map.path, content: () => map.text } } : {}),
     });
-    const reuse = { web: proposal.web, signals: proposal.signals, gates: configExists ? [] : gates, section: !configExists && proposal.web ? proposal.section : null, ...mapFields(map) };
+    const architecture = await initialArchitecture(repo, writer);
+    const reuse = { web: proposal.web, signals: proposal.signals, gates: configExists ? [] : gates, section: !configExists && proposal.web ? proposal.section : null, ...mapFields(map), architecture };
     return { repo, name, created: writer.created, existing: writer.existing, completed: writer.completed, reuse };
+}
+/**
+ * The architecture map (docs/STRUCTURE.md), written when it does not exist, never touched when it does: generated parts
+ * filled, written parts as drafts to complete with the operator. With a dry run, only said. Never blocks the setup.
+ */
+export async function initialArchitecture(repo, writer) {
+    let config;
+    try {
+        config = loadConfig(repo).config;
+    }
+    catch (error) {
+        return { file: 'docs/carte-architecture.md', status: 'failed', note: `configuration illisible (${errorMessage(error)})` };
+    }
+    const file = structureSettings(config.structure).architectureMap;
+    if (existsSync(join(repo, file))) {
+        writer.existing.push(file);
+        return { file, status: 'existing', note: null };
+    }
+    if (writer.dryRun) {
+        writer.created.push(file);
+        return { file, status: 'created', note: null };
+    }
+    try {
+        await architectureMap(repo, config, { check: false, create: true });
+        writer.created.push(file);
+        return { file, status: 'created', note: null };
+    }
+    catch (error) {
+        return { file, status: 'failed', note: errorMessage(error) };
+    }
 }
 /** The map fields of the setup, from what `initialMap` returned. */
 export function mapFields(map) {
@@ -189,7 +223,12 @@ export function mapFields(map) {
 export function reuseLines(reuse) {
     const lines = [];
     if (reuse.gates.length) {
-        lines.push(`Contrôles ajoutés : ${reuse.gates.map(g => (g === 'reuse' ? 'reuse (apv reuse check --base {{baseSha}}, étape tâche et suite complète ; apv gates run demande donc --base)' : 'code-map (apv map --check, suite complète ; la carte est régénérée à l\'intégration)')).join(', ')}.`);
+        const described = {
+            reuse: 'reuse (apv reuse check --base {{baseSha}}, étape tâche et suite complète ; apv gates run demande donc --base)',
+            structure: 'structure (apv structure check --base {{baseSha}}, étape tâche : un fichier ajouté à un dossier à plat, un dossier ou un point d\'entrée non décrit dans la carte de l\'architecture bloquent)',
+            'code-map': 'code-map (apv map --check, suite complète ; la carte du code et celle de l\'architecture sont régénérées à l\'intégration)',
+        };
+        lines.push(`Contrôles ajoutés : ${reuse.gates.map(g => described[g] ?? g).join(', ')}.`);
         if (!reuse.apvOnPath)
             lines.push('ATTENTION : apv n\'est pas sur le PATH de cette machine ; ces contrôles échoueront (commande introuvable). Activez le plugin (son exécutable bin/apv) ou npm link, ou remplacez "apv" par ["node", "<chemin du plugin>/dist/cli.js", ...] dans .apv/config.json.');
     }
@@ -197,6 +236,11 @@ export function reuseLines(reuse) {
         const s = reuse.section;
         lines.push(`Réutilisation (projet web : ${reuse.signals.join(' ; ')}) : dossiers partagés ${s.shared?.join(', ') ?? 'par défaut (**/components/**, **/ui/**...)'} ; éléments natifs réservés ${Object.entries(s.native?.elements ?? {}).map(([e, t]) => `<${e}>${t ? ` -> ${t}` : ''}`).join(', ')}, permis dans ${s.native?.allowedPaths?.join(', ') ?? 'les composants génériques (**/components/ui/**, **/ui/**, **/primitives/**...)'} ; langue ${s.typography?.locale ?? 'non trouvée (reuse.typography.locale)'} ; référence ${s.reference ?? 'non trouvée (pas de branche distante origin) : déclarez reuse.reference pour apv reuse check sans --base'}.`);
     }
+    const a = reuse.architecture;
+    if (a?.status === 'created')
+        lines.push(`Carte de l'architecture : ${a.file} (parties générées remplies ; à compléter avec l'opérateur : en bref, couches et flux, règles transverses, rôles des dossiers). Relire aussi apv structure check : dossiers à plat et découpage proposé.`);
+    else if (a?.status === 'failed')
+        lines.push(`Carte de l'architecture non écrite (${a.note ?? 'erreur'}) : apv structure map.`);
     if (reuse.map === null)
         lines.push(`Carte du code non écrite : ${reuse.mapNote ?? 'configuration illisible'} ; corriger, puis apv map.`);
     else if (reuse.mapNote)

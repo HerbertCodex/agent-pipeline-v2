@@ -77,7 +77,7 @@ test('apv onboard on an existing web project: reuse and code map checks, detecte
   const out = r.json();
   const config = JSON.parse(read(f.repo, '.apv/config.json'));
   // The base of the run ({{baseSha}}, in the proof key) says what is new; the map is checked by the full suite.
-  assert.deepEqual(config.gates.map(g => [g.id, g.command.join(' '), g.stage, g.readOnly]), [['reuse', 'apv reuse check --base {{baseSha}}', 'task', true], ['code-map', 'apv map --check', 'full', true]]);
+  assert.deepEqual(config.gates.map(g => [g.id, g.command.join(' '), g.stage, g.readOnly]), [['reuse', 'apv reuse check --base {{baseSha}}', 'task', true], ['structure', 'apv structure check --base {{baseSha}}', 'task', true], ['code-map', 'apv map --check', 'full', true]]);
   assert.deepEqual(config.reuse, {
     reference: 'origin/main',
     shared: ['src/lib/components/**'],
@@ -86,7 +86,7 @@ test('apv onboard on an existing web project: reuse and code map checks, detecte
     typography: { locale: 'fr' },
   });
   assert.equal(out.reuse.web, true);
-  assert.deepEqual(out.reuse.gates, ['reuse', 'code-map']);
+  assert.deepEqual(out.reuse.gates, ['reuse', 'structure', 'code-map']);
   assert.ok(out.created.includes('.apv/code-map.md'));
   assert.equal(out.reuse.existing.counts.duplicates, 1);
   assert.match(out.reuse.existing.examples[0].place, /^src\/lib\/legacy\/total-copy\.ts:2-10$/);
@@ -239,7 +239,7 @@ test('apv init on a new web project declares both checks, and apv gates run prov
   const env = withApvOnPath(f);
   const init = await apv(f.repo, ['init', '--json']);
   assert.equal(init.code, 0, init.stderr);
-  assert.deepEqual(init.json().reuse.gates, ['reuse', 'code-map']);
+  assert.deepEqual(init.json().reuse.gates, ['reuse', 'structure', 'code-map']);
   assert.match((await apv(f.repo, ['init'])).stdout, /Existait déjà/);
   commit(f.repo, 'apv');
   git(f.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
@@ -247,11 +247,11 @@ test('apv init on a new web project declares both checks, and apv gates run prov
   assert.match((await apv(f.repo, ['gates', 'run', '--stage', 'task', '--json'], env)).stderr, /Le contrôle reuse utilise \{\{baseSha\}\} : passez --base/, 'the base of the run is required');
   const green = await apv(f.repo, ['gates', 'run', '--stage', 'task', '--base', 'origin/main', '--json'], env);
   assert.equal(green.code, 0, green.stdout + green.stderr);
-  assert.deepEqual(green.json().gates.map(g => [g.gate, g.status]), [['reuse', 'passed']]);
+  assert.deepEqual(green.json().gates.map(g => [g.gate, g.status]), [['reuse', 'passed'], ['structure', 'passed']]);
   assert.deepEqual(green.json().reserved, ['code-map'], 'the map is checked by the full suite only');
   const full = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/main', '--json'], env);
   assert.equal(full.code, 0, full.stdout + full.stderr);
-  assert.deepEqual(full.json().gates.map(g => [g.gate, g.status]).sort(), [['code-map', 'passed'], ['reuse', 'passed']]);
+  assert.deepEqual(full.json().gates.map(g => [g.gate, g.status]).sort(), [['code-map', 'passed'], ['reuse', 'passed'], ['structure', 'passed']]);
   git(f.repo, 'switch', '-q', '-c', 'feature/admin');
   badAdmin(f.repo);
   commit(f.repo, 'admin');
@@ -263,6 +263,9 @@ test('apv init on a new web project declares both checks, and apv gates run prov
   assert.deepEqual([rows.reuse.status, rows['code-map'].status], ['failed', 'failed']);
   assert.match(rows.reuse.diagnostic, /<select> natif réservé/);
   assert.match(rows['code-map'].diagnostic, /Carte du code périmée/);
+  // The new /admin route has no role in the architecture map: the tree check fails too.
+  assert.equal(rows.structure.status, 'failed');
+  assert.match(rows.structure.diagnostic, /route principale \/admin ajoutée sans rôle/);
   const receipt = JSON.parse(read(f.repo, `.apv/receipts/${red.json().runId}/reuse.json`));
   assert.equal(receipt.status, 'failed');
 });
@@ -408,7 +411,7 @@ test('M: apv init warns when apv is not on the PATH of the generated checks', as
   const f = project(t);
   const r = await apv(f.repo, ['init']);
   assert.equal(r.code, 0);
-  assert.equal(JSON.parse(read(f.repo, '.apv/config.json')).gates.length, 2);
+  assert.equal(JSON.parse(read(f.repo, '.apv/config.json')).gates.length, 3);
   const json = (await apv(fixture(t, { files: PROJECT }).repo, ['init', '--json'])).json();
   assert.equal(typeof json.reuse.apvOnPath, 'boolean');
   if (!json.reuse.apvOnPath) assert.match(r.stdout, /ATTENTION : apv n'est pas sur le PATH/);

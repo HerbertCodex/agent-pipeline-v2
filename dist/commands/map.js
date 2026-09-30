@@ -6,6 +6,11 @@ import { loadConfig } from '../config/load.js';
 import { gitRoot } from '../run/git-probe.js';
 import { buildCodeMap, codeMapMarkdown } from '../knowledge/code-map.js';
 import { mapSettings, reuseSettings } from '../reuse/config.js';
+import { worktreeFiles } from '../knowledge/inventory.js';
+import { structureSettings } from '../structure/config.js';
+import { analyzeStructure } from '../structure/analyze.js';
+import { usageFromMap } from '../structure/split.js';
+import { architectureMap } from '../structure/map-file.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 export const usage = `Utilisation :
   apv map [--check] [--repo <chemin>] [--json]
@@ -15,13 +20,24 @@ sont utilisés), modules partagés (exports, utilisateurs), routes, et ce qui es
 avec les doublons possibles. Construite depuis les fichiers du dépôt (suivis et non suivis, jamais les
 ignorés), sans modèle, bornée pour rester lisible par un agent. À commiter avec le code qu'elle décrit.
 --check ne l'écrit pas : il la compare à celle qui serait écrite (contrôle de tâche « code-map »).
+La carte de l'architecture (structure.architectureMap, par défaut docs/carte-architecture.md), quand elle
+existe, suit : ses parties générées sont réécrites (ou comparées avec --check), ses parties écrites jamais.
+La carte du code nomme aussi les dossiers à plat et les sous-dossiers proposés pour chacun.
 Configuration facultative : section « map » (file, ignore, maxEntries) ; dossiers partagés : reuse.shared.
 Sortie : 0 écrite ou à jour, 1 périmée ou absente (--check) ou configuration invalide, 2 appel incorrect.`;
-/** The map of the repository as its configuration describes it, and its Markdown. */
+/**
+ * The map of the repository as its configuration describes it, and its Markdown, with the analysis of the tree it
+ * reflects (flat folders and their proposed subfolders, from the import graph of the map).
+ */
 export async function currentMap(repo, config) {
     const settings = mapSettings(config.map);
     const map = await buildCodeMap(repo, reuseSettings(config.reuse), settings);
-    return { file: settings.file, map, text: codeMapMarkdown(map, settings) };
+    const files = await worktreeFiles(repo);
+    const structure = structureSettings(config.structure);
+    const usage = usageFromMap(map);
+    const tree = analyzeStructure(files, structure, { usage });
+    const crowded = tree.findings.filter(f => f.code === 'flat-folder').map(f => ({ folder: f.folder, code: f.files.length, groups: (f.groups ?? []).map(g => g.dir) }));
+    return { file: settings.file, map, files, tree, usage, text: codeMapMarkdown(map, settings, { architectureMap: structure.architectureMap, maxFlatFiles: structure.maxFlatFiles, crowded }) };
 }
 /** Lines present on one side only (10 at most each): enough to see what went stale. */
 function difference(actual, expected) {
@@ -62,16 +78,26 @@ export function mapPath(repo, file) {
 }
 /** Writes the map when it changed, atomically (temporary file created exclusively, then renamed); with `check`, compares only. */
 export async function writeMap(repo, config, check) {
-    const { file, map, text } = await currentMap(repo, config);
+    const current = await currentMap(repo, config);
+    const { file, map, text } = current;
+    // The architecture map, when the project has one: its generated parts follow the code as the code map does.
+    const architecture = await architectureMap(repo, config, { check, create: false, current });
+    const done = (result) => ({ ...result, map, architecture });
     const full = mapPath(repo, file);
     const actual = existsSync(full) ? readFileSync(full, 'utf8') : null;
     if (check) {
         if (actual === null)
-            return { file, status: 'missing', difference: null, map };
-        return actual === text ? { file, status: 'up-to-date', difference: null, map } : { file, status: 'stale', difference: difference(actual, text), map };
+            return done({ file, status: 'missing', difference: null });
+        return actual === text ? done({ file, status: 'up-to-date', difference: null }) : done({ file, status: 'stale', difference: difference(actual, text) });
     }
     if (actual === text)
-        return { file, status: 'unchanged', difference: null, map };
+        return done({ file, status: 'unchanged', difference: null });
+    writeAtomically(repo, file, text);
+    return done({ file, status: 'written', difference: null });
+}
+/** Writes a file of the repository atomically (temporary file created exclusively, then renamed), never through a link. */
+export function writeAtomically(repo, file, text) {
+    const full = mapPath(repo, file);
     mkdirSync(dirname(full), { recursive: true });
     mapPath(repo, file);
     const temporary = `${full}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
@@ -83,7 +109,6 @@ export async function writeMap(repo, config, check) {
         rmSync(temporary, { force: true });
         throw error;
     }
-    return { file, status: 'written', difference: null, map };
 }
 export async function run(args, io) {
     return guard(io, usage, async () => {
@@ -97,7 +122,8 @@ export async function run(args, io) {
         const repo = gitRoot(repoPath(io, values.repo));
         const { config } = loadConfig(repo);
         const result = await writeMap(repo, config, values.check === true);
-        const failed = result.status === 'stale' || result.status === 'missing';
+        const architectureFailed = result.architecture.status === 'stale';
+        const failed = result.status === 'stale' || result.status === 'missing' || architectureFailed;
         if (values.json) {
             json(io, { ...result, repo });
             return failed ? EXIT.failed : EXIT.ok;
@@ -117,6 +143,16 @@ export async function run(args, io) {
                 lines.push('  Attendu, absent de la carte :', ...result.difference.onlyExpected.map(l => `    ${l}`));
             if (result.difference?.onlyInFile.length)
                 lines.push('  Dans la carte, plus attendu :', ...result.difference.onlyInFile.map(l => `    ${l}`));
+        }
+        const a = result.architecture;
+        if (a.status === 'written')
+            lines.push(`Carte de l'architecture mise à jour (parties générées) : ${a.file}. À commiter avec le code.`);
+        else if (a.status === 'unchanged' || a.status === 'up-to-date')
+            lines.push(`Carte de l'architecture à jour : ${a.file}.`);
+        else if (a.status === 'stale') {
+            lines.push(`Carte de l'architecture périmée : ses parties générées ne correspondent plus au code (${a.file}). Lancez apv map, puis commitez-la.`);
+            if (a.difference?.onlyExpected.length)
+                lines.push('  Attendu, absent de la carte :', ...a.difference.onlyExpected.map(l => `    ${l}`));
         }
         const clashes = m.components.flatMap(c => c.clashes);
         if (clashes.length && !failed)

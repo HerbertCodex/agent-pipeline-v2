@@ -489,6 +489,18 @@ export function shares(sizes: readonly number[], total: number): number[] {
   return given;
 }
 
+/** The tree part of the map: the architecture map to read first, and the flat folders (20 at most). */
+function folderLines(folders: MapFolders): string[] {
+  const lines = ['## Dossiers', ''];
+  if (folders.architectureMap) lines.push(`Arborescence commentée, conventions et points d'entrée : carte de l'architecture \`${folders.architectureMap}\` (apv structure map l'écrit si elle manque), à lire avant cette carte.`, '');
+  if (!folders.crowded.length) { lines.push(`Aucun dossier à plat (au-delà de ${folders.maxFlatFiles} fichiers de code).`, ''); return lines; }
+  lines.push(`Dossiers à plat (plus de ${folders.maxFlatFiles} fichiers de code) : ne pas y ajouter de fichier (le contrôle \`structure\` le refuse) ; placer un nouveau fichier dans le sous-dossier proposé qui lui correspond.`, '');
+  for (const c of folders.crowded.slice(0, 20)) lines.push(`- \`${c.folder}/\` : ${c.code} fichiers${c.groups.length ? ` ; sous-dossiers proposés : ${c.groups.join(', ')}` : ''}.`);
+  if (folders.crowded.length > 20) lines.push(`- et ${folders.crowded.length - 20} autre(s) (apv structure check).`);
+  lines.push('');
+  return lines;
+}
+
 interface Section { title: string; entries: { dir: string; line: string }[]; empty: string; grouped: boolean; rank: number }
 
 /** The entries of a section a count allows: in folder order, 40 per folder at most. */
@@ -511,7 +523,15 @@ function selected(section: Section, count: number): { dir: string; line: string 
  * first, then the shared modules, the routes, the other shared components, what belongs to one feature. The folders left
  * out are named, with their count.
  */
-export function codeMapMarkdown(map: CodeMap, settings: Pick<MapSettings, 'maxEntries'> & { maxBytes?: number }): string {
+/** What the code map says of the tree: where the architecture map is, and the flat folders not to add files to. */
+export interface MapFolders {
+  architectureMap: string | null;
+  maxFlatFiles: number;
+  /** Folders above the threshold, with the subfolders `apv structure check` proposes. */
+  crowded: { folder: string; code: number; groups: string[] }[];
+}
+
+export function codeMapMarkdown(map: CodeMap, settings: Pick<MapSettings, 'maxEntries'> & { maxBytes?: number }, folders?: MapFolders): string {
   const sharedComponents = map.components.filter(c => c.shared);
   const generic = sharedComponents.filter(c => c.generic);
   const otherShared = sharedComponents.filter(c => !c.generic);
@@ -531,7 +551,8 @@ export function codeMapMarkdown(map: CodeMap, settings: Pick<MapSettings, 'maxEn
   const header = ['# Carte du code', '',
     'Générée par `apv map` à partir des fichiers du dépôt, sans modèle. À lire avant de créer un composant, un module ou une route : réutiliser une entrée existante, ou l\'étendre de façon générique (paramètre, variante) ; un élément utilisé par deux fonctionnalités devient partagé. Ne pas modifier à la main : l\'intégration la régénère (`apv map`), et le contrôle `apv map --check` de la suite complète échoue quand elle ne correspond plus au code.', '',
     `Composants génériques : ${generic.length}. Autres composants partagés : ${otherShared.length}. Modules partagés : ${sharedModules.length}. Routes : ${map.routes.length}. Propres à une fonctionnalité : ${featureComponents.length} composant(s), ${featureModules.length} module(s). Laissés de côté : ${map.skipped.tests} test(s), ${map.skipped.ignored} fichier(s) ignoré(s), ${map.skipped.silentModules} module(s) sans export ni import.`, '',
-    ...(map.partial ? [`Carte partielle : le dépôt compte ${map.partial.total} fichiers, au-delà de la limite de l'inventaire ; seuls les ${map.partial.described} premiers (ordre des chemins) sont décrits.`, ''] : [])];
+    ...(map.partial ? [`Carte partielle : le dépôt compte ${map.partial.total} fichiers, au-delà de la limite de l'inventaire ; seuls les ${map.partial.described} premiers (ordre des chemins) sont décrits.`, ''] : []),
+    ...(folders ? folderLines(folders) : [])];
   const render = (take: readonly number[]): string => {
     const lines = [...header];
     sections.forEach((section, index) => {

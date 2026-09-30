@@ -6,6 +6,17 @@ import { globToRegExp } from '../db/glob.js';
 /** Codes of the tree findings of `apv structure check`. */
 export const FINDING_CODES = ['flat-folder', 'repeated-prefix', 'mixed-roles', 'stray-file'] as const;
 export type FindingCode = typeof FINDING_CODES[number];
+/**
+ * Codes of the findings that compare the change with its base (`--base`): a code file added to a flat folder, and the
+ * architecture map (a folder, route or entry point without description, a broken link). `error` by default: new ones block.
+ */
+export const CHANGE_CODES = ['flat-growth', 'architecture-map'] as const;
+export type ChangeCode = typeof CHANGE_CODES[number];
+
+/** Default path of the architecture map (docs/STRUCTURE.md, « Carte de l'architecture »). */
+export const DEFAULT_ARCHITECTURE_MAP = 'docs/carte-architecture.md';
+/** Stack profiles (src/structure/profiles.ts). */
+export const PROFILE_IDS = ['sveltekit', 'nextjs', 'nuxt', 'astro', 'angular', 'vue', 'react', 'python', 'go', 'generic'] as const;
 export type Severity = 'warning' | 'error';
 
 /** Default number of code files a folder may hold directly before `flat-folder`. */
@@ -53,8 +64,15 @@ export const structureSchema = s.object({
   domains: s.optional(s.array(s.string(1, 100, NAME), 0, 500)),
   /** Globs (`*`, `**`, `?`, `{a,b}`) of paths left out of the analysis (`src/generated/**`), added to the defaults. */
   ignore: s.optional(s.array(s.string(1, 4096), 0, 200)),
-  /** Severity of every finding, or per finding code; `warning` by default (exit 0). */
-  severity: s.optional(s.union(severitySchema, s.record(/^(?:flat-folder|repeated-prefix|mixed-roles|stray-file)$/, severitySchema, 4))),
+  /**
+   * Severity of every finding, or per finding code; `warning` by default for the analysis (exit 0), `error` for the
+   * comparison with the base (`flat-growth`, `architecture-map`: only what the change adds blocks).
+   */
+  severity: s.optional(s.union(severitySchema, s.record(/^(?:flat-folder|repeated-prefix|mixed-roles|stray-file|flat-growth|architecture-map)$/, severitySchema, 6))),
+  /** The architecture map, relative to the repository root (Markdown). */
+  architectureMap: s.optional(s.string(1, 4096, /^[^\0]+\.md$/)),
+  /** The stack profile whose conventions apply; detected from the dependencies when absent. */
+  profile: s.optional(s.enum(PROFILE_IDS)),
 });
 export type StructureSection = Infer<typeof structureSchema>;
 
@@ -64,7 +82,9 @@ export interface StructureSettings {
   roles: Record<string, string>;
   domains: string[];
   ignore: RegExp[];
-  severity: Record<FindingCode, Severity>;
+  severity: Record<FindingCode | ChangeCode, Severity>;
+  architectureMap: string;
+  profile: typeof PROFILE_IDS[number] | null;
 }
 
 /** A relative folder or glob inside the repository, normalized with `/` and without trailing slash. */
@@ -82,10 +102,11 @@ export function structureSettings(section: StructureSection | undefined): Struct
     if (role === null) delete roles[key];
     else roles[key] = role;
   }
-  const severity = Object.fromEntries(FINDING_CODES.map(code => {
+  const severity = Object.fromEntries([...FINDING_CODES, ...CHANGE_CODES].map(code => {
     const value = section?.severity;
-    return [code, typeof value === 'string' ? value : value?.[code] ?? 'warning'];
-  })) as Record<FindingCode, Severity>;
+    const fallback: Severity = (CHANGE_CODES as readonly string[]).includes(code) ? 'error' : 'warning';
+    return [code, typeof value === 'string' ? value : value?.[code] ?? fallback];
+  })) as Record<FindingCode | ChangeCode, Severity>;
   const ignore = [...DEFAULT_IGNORE, ...(section?.ignore ?? []).map(glob => relativeInside(glob, 'ignore'))];
   return {
     roots: [...new Set((section?.roots ?? ['.']).map(root => relativeInside(root, 'roots')))],
@@ -94,5 +115,7 @@ export function structureSettings(section: StructureSection | undefined): Struct
     domains: [...new Set(section?.domains ?? [])],
     ignore: ignore.map(glob => globToRegExp(glob)),
     severity,
+    architectureMap: relativeInside(section?.architectureMap ?? DEFAULT_ARCHITECTURE_MAP, 'architectureMap'),
+    profile: section?.profile ?? null,
   };
 }

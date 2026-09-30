@@ -8,6 +8,8 @@ import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
 import { DEFAULT_MAP_FILE, mapSettings } from '../reuse/config.js';
 import { loadConfig } from '../config/load.js';
+import { DEFAULT_ARCHITECTURE_MAP, structureSettings } from '../structure/config.js';
+import { withoutRoles } from '../structure/archmap.js';
 
 export const usage = `Utilisation :
   apv scope check --spec <fichier> --task <id> [--base <ref>] [--repo <chemin>] [--json]
@@ -67,15 +69,28 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     let codeMap = DEFAULT_MAP_FILE;
     try { codeMap = mapSettings(loadConfig(repo).config.map).file; } catch { /* unreadable configuration: the default */ }
     const mapTouched = report.rejected.includes(codeMap);
+    // The architecture map: a task writes the role of what it creates in its « Rôles » block, and nothing else of it.
+    let architectureMap = DEFAULT_ARCHITECTURE_MAP;
+    try { architectureMap = structureSettings(loadConfig(repo).config.structure).architectureMap; } catch { /* the default */ }
+    let roles: 'none' | 'roles-only' | 'other' = 'none';
+    if (report.rejected.includes(architectureMap)) {
+      const show = async (rev: string): Promise<string | null> => { try { return await git.exec(repo, ['show', `${rev}:${architectureMap}`]); } catch { return null; } };
+      const before = await show(mergeBase); const after = await show(head);
+      const outside = (text: string | null): string | null => (text === null ? null : withoutRoles(text));
+      roles = before !== null && after !== null && outside(before) === outside(after) ? 'roles-only' : 'other';
+      if (roles === 'roles-only') report.rejected.splice(report.rejected.indexOf(architectureMap), 1);
+    }
     const uncommitted = porcelainPaths(await git.exec(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all']));
     const ok = report.rejected.length === 0 && !report.tooManyNew;
     if (values.json) {
-      json(io, { ok, task: task.id, base, mergeBase, head, allowedPaths: task.allowedPaths, files: changes.files, outOfScope: report.rejected, uncommitted, codeMap: mapTouched });
+      json(io, { ok, task: task.id, base, mergeBase, head, allowedPaths: task.allowedPaths, files: changes.files, outOfScope: report.rejected, uncommitted, codeMap: mapTouched, architectureMap: roles });
     } else {
       const lines = [`Tâche ${task.id} : ${changes.files.length} fichier(s) modifié(s) entre ${base} (${mergeBase.slice(0, 12)}) et HEAD (${head.slice(0, 12)})`,
         `Chemins autorisés : ${task.allowedPaths.join(', ')}`];
       lines.push(ok ? 'Dans le périmètre.' : `Hors périmètre (${report.rejected.length}) :`, ...report.rejected.map(f => `- ${f}`));
       if (mapTouched) lines.push(`La carte du code (${codeMap}) ne se commite pas dans une tâche : l'intégration la régénère une fois par vague (apv map), sans conflit entre tâches parallèles. Retire-la : git checkout ${mergeBase.slice(0, 12)} -- ${codeMap} (ou git rm si elle n'existait pas), puis commit.`);
+      if (roles === 'roles-only') lines.push(`Carte de l'architecture (${architectureMap}) : seul son bloc « Rôles » change (rôle des dossiers, routes ou points d'entrée créés), accepté dans une tâche.`);
+      if (roles === 'other') lines.push(`La carte de l'architecture (${architectureMap}) ne se modifie dans une tâche que dans son bloc « Rôles » : ses parties générées sont régénérées par l'intégration (apv map), ses autres parties écrites relèvent de l'opérateur.`);
       if (uncommitted.length) lines.push(`Attention : ${uncommitted.length} modification(s) non commitée(s) non vérifiée(s) : ${uncommitted.slice(0, 10).join(', ')}${uncommitted.length > 10 ? ', ...' : ''}`);
       io.stdout(`${lines.join('\n')}\n`);
     }

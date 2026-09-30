@@ -40,6 +40,14 @@ export interface OnboardResult {
     reuse: ReuseSetup & {
         existing: ExistingReuse | null;
     };
+    /** Flat folders already there (signalled without blocking by the `structure` gate), with their proposed subfolders. */
+    structure: {
+        crowded: {
+            folder: string;
+            code: number;
+            groups: string[];
+        }[];
+    };
     ledger: {
         file: string;
         status: 'imported' | 'created' | 'existing';

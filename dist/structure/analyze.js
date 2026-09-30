@@ -1,5 +1,6 @@
 import { posix } from 'node:path';
 import { folderName, joinLike, parseName, related, singular, startsWith, tokenize } from './names.js';
+import { proposeSplit } from './split.js';
 const inside = (path, dir) => dir === '.' || path === dir || path.startsWith(`${dir}/`);
 const join = (dir, name) => (dir === '.' ? name : `${dir}/${name}`);
 /** The role of a module by its name: longest matching key, name suffixes first. */
@@ -79,6 +80,23 @@ function clusters(size, linked) {
  * file, runs nothing, applies nothing.
  */
 export function analyzeStructure(paths, settings, options = {}) {
+    // With a usage graph, two passes: the second knows the groups the first proposed everywhere, so that two folders of the
+    // same domain (`lib/applications`, `components/applications`) get the same split.
+    if (options.usage && !options.proposed) {
+        const first = analyzeStructure(paths, settings, { usage: options.usage, proposed: new Map() });
+        const proposed = new Map();
+        // Only the split of a folder of modules is followed elsewhere, and only its groups named by a folder or a module:
+        // the business code decides the split, the components follow it (never a name made of a component).
+        for (const f of first.findings) {
+            const modules = f.files.filter(p => !parseName(p)?.component).length;
+            if (!f.groups?.length || modules * 2 < f.files.length)
+                continue;
+            const kept = f.groups.filter(g => g.members.length >= 2 && (g.naming === 'existing' || g.naming === 'mirror' || g.naming === 'module'));
+            if (kept.length)
+                proposed.set(f.folder, kept.map(g => ({ dir: g.dir, members: g.members })));
+        }
+        return analyzeStructure(paths, settings, { ...options, proposed });
+    }
     const kept = paths.filter(p => !settings.ignore.some(re => re.test(p)));
     const tracked = new Set(paths);
     // Directories of the tree (for sibling folders and the domain vocabulary), ignored paths left out.
@@ -231,13 +249,36 @@ export function analyzeStructure(paths, settings, options = {}) {
                 finding('mixed-roles', roledEntries, `Les rôles ${roleNames.join(', ')} se mêlent pour ${domainKeys.size} domaines : un dossier par domaine avec des noms courts (<domaine>/actions, <domaine>/repository), les utilitaires transverses regroupés par rôle.`, mixedMoves);
             }
         }
-        const unplaced = entries.filter(e => !e.main.reserved && !placed.has(e)).map(e => e.main.path);
+        // Flat folder with a usage graph: what no name rule placed is split by proximity of use.
+        let split = null;
+        if (flat && options.usage) {
+            const asSplit = (e) => ({ path: e.main.path, stem: e.main.stem, files: [e.main.path, ...e.followers.map(f => f.path)], component: e.main.component, tokens: e.main.tokens });
+            const pool = entries.filter(e => free(e) && !e.main.reserved);
+            split = proposeSplit(dir, pool.map(asSplit), options.usage, {
+                dirs, files: code.map(f => f.path), domains: settings.domains, maxFlatFiles: settings.maxFlatFiles, staying: entries.filter(e => !pool.includes(e) && !placed.has(e)).length, ...(options.proposed ? { proposed: options.proposed } : {}), others: entries.filter(e => !pool.includes(e)).map(asSplit),
+            });
+            for (const group of split.groups) {
+                const words = tokenize(group.dir);
+                const members = pool.filter(e => group.members.includes(e.main.path));
+                const moves = place({ dir: group.dir, entries: members, rename: e => {
+                        if (e.main.component)
+                            return e.main.stem;
+                        const t = e.main.tokens;
+                        return t.length > words.length && startsWith(t, words) ? joinLike(e.main.stem, t.slice(words.length)) : e.main.stem;
+                    } });
+                flatMoves.push(...moves);
+                group.members = members.filter(e => placed.has(e)).map(e => e.main.path);
+            }
+            split.groups = split.groups.filter(g => g.members.length);
+        }
+        const unplaced = entries.filter(e => !e.main.reserved && !placed.has(e) && !split?.core.some(c => c.path === e.main.path)).map(e => e.main.path);
         if (flat) {
             const moved = placed.size;
             const proposal = moved
-                ? `${entries.length} fichiers de code directement dans le dossier (seuil ${settings.maxFlatFiles}) : ranger par domaine selon le plan (${moved} fichier(s) placés), ${unplaced.length} fichier(s) restent à placer avec l'opérateur.`
+                ? `${entries.length} fichiers de code directement dans le dossier (seuil ${settings.maxFlatFiles}) : ranger par domaine selon le plan (${moved} fichier(s) placés${split?.groups.length ? `, dont ${split.groups.reduce((n, g) => n + g.members.length, 0)} par usage dans ${split.groups.length} sous-dossier(s)` : ''}${split?.core.length ? `, ${split.core.length} fichier(s) socle gardés à la racine` : ''}), ${unplaced.length} fichier(s) restent à placer avec l'opérateur.`
                 : `${entries.length} fichiers de code directement dans le dossier (seuil ${settings.maxFlatFiles}), sans préfixe commun ni rôle reconnu : découpage en sous-dossiers par domaine à décider avec l'opérateur (ou relever structure.maxFlatFiles).`;
-            local.unshift({ code: 'flat-folder', severity: settings.severity['flat-folder'], folder: dir, files: entries.map(e => e.main.path), proposal, moves: flatMoves });
+            const extra = split ? { groups: split.groups, core: split.core } : {};
+            local.unshift({ code: 'flat-folder', severity: settings.severity['flat-folder'], folder: dir, files: entries.map(e => e.main.path), proposal, moves: flatMoves, ...extra });
         }
         if (!local.length)
             continue;
