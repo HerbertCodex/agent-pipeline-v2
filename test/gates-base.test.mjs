@@ -112,34 +112,75 @@ test('every check of the base is kept, mandatory or not: test replaced by true, 
   assert.ok(task.reserved.includes('integration'));
 });
 
-test('the reference of the base: full refs only, checked against the remote; moved onto a commit the remote lacks, refused', async t => {
-  const f = project(t, [gate('unit', 'process.exit(0)', { mandatory: true })]);
+/** A project with a real bare remote: main pushed and fetched, and a second clone that can advance the remote. */
+function withRemote(t, gates) {
+  const f = project(t, gates);
   const remote = `${f.root}/remote.git`;
   git(f.root, 'init', '-q', '--bare', remote);
   git(f.repo, 'remote', 'add', 'origin', remote);
   git(f.repo, 'push', '-q', 'origin', 'main');
   git(f.repo, 'fetch', '-q', 'origin');
+  const other = `${f.root}/other`;
+  git(f.root, 'clone', '-q', '-b', 'main', remote, other);
+  /** Another PR merged on the remote, never fetched here. */
+  const advance = () => {
+    write(other, 'docs/merged.md', `merged ${Date.now()}\n`);
+    git(other, 'add', '-A'); git(other, 'commit', '-qm', 'another PR'); git(other, 'push', '-q', 'origin', 'HEAD:main');
+    return git(other, 'rev-parse', 'HEAD');
+  };
+  return { ...f, remote, advance };
+}
+
+test('the remote advanced without a local fetch: its branch is fetched, then run and verify pass on the remote base', async t => {
+  const f = withRemote(t, [gate('unit', 'process.exit(0)', { mandatory: true })]);
   f.candidate([gate('unit', 'process.exit(0)', { mandatory: true })]);
-  const ok = (await apv(f.repo, ['gates', 'run', '--json'])).json();
-  assert.deepEqual([ok.baseGates.reference, ok.baseGates.warnings], ['origin/main', []]);
-  // The remote-tracking ref moved locally onto the candidate: its configuration would judge itself. Refused.
+  const merged = f.advance();
+  const run = await apv(f.repo, ['gates', 'run', '--json']);
+  assert.equal(run.code, 0, run.stdout + run.stderr);
+  assert.match(run.json().baseGates.warnings.join(' '), /origin\/main récupérée auprès du dépôt distant \([0-9a-f]{12} -> [0-9a-f]{12}\)/);
+  assert.equal(git(f.repo, 'rev-parse', 'refs/remotes/origin/main'), merged, 'the remote-tracking ref is up to date');
+  const verify = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD']);
+  assert.equal(verify.code, 0, verify.stdout + verify.stderr);
+  // Offline: not verified, said, never refused.
+  git(f.repo, 'remote', 'set-url', 'origin', `${f.root}/nowhere.git`);
+  const offline = await apv(f.repo, ['gates', 'run']);
+  assert.equal(offline.code, 0, offline.stderr);
+  assert.match(offline.stderr, /Attention : base non vérifiée auprès du dépôt distant \(origin illisible[^\n]*git fetch origin/);
+});
+
+test('a reference moved back: run warns, verify refuses; moved out of the remote history: refused', async t => {
+  const f = withRemote(t, [gate('unit', 'process.exit(0)', { mandatory: true })]);
+  f.advance();
+  git(f.repo, 'fetch', '-q', 'origin');
+  f.candidate([gate('unit', 'process.exit(0)', { mandatory: true })]);
+  assert.equal((await apv(f.repo, ['gates', 'run'])).code, 0);
+  // Moved back onto an ancestor the remote has: behind.
+  git(f.repo, 'update-ref', 'refs/remotes/origin/main', 'main');
+  const behind = await apv(f.repo, ['gates', 'run', '--json']);
+  assert.equal(behind.code, 0);
+  assert.match(behind.json().baseGates.warnings.join(' '), /origin\/main \([0-9a-f]{12}\) est en retard sur le dépôt distant[^\n]*git fetch origin/);
+  const refused = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD']);
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /GATE_BASE.*est en retard sur le dépôt distant.*jamais sur une base en retard/);
+  // Moved onto the candidate, which the remote does not contain: refused, for run as for verify.
   git(f.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
   const moved = await apv(f.repo, ['gates', 'run']);
   assert.equal(moved.code, 1);
   assert.match(moved.stderr, /GATE_BASE.*origin\/main pointe localement sur [0-9a-f]{12}, que le dépôt distant ne contient pas/);
-  // Behind the remote (not fetched): a warning.
-  git(f.repo, 'fetch', '-q', 'origin', '+refs/heads/main:refs/remotes/origin/main');
-  git(f.repo, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
-  git(f.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD~1');
-  const behind = (await apv(f.repo, ['gates', 'run', '--json'])).json();
-  assert.match(behind.baseGates.warnings.join(' '), /en retard sur le dépôt distant[^\n]*git fetch origin/);
-  // Remote unreadable: said, never silently trusted.
-  git(f.repo, 'remote', 'set-url', 'origin', `${f.root}/nowhere.git`);
-  const offline = await apv(f.repo, ['gates', 'run']);
-  assert.match(offline.stderr, /Attention : base non vérifiée auprès du dépôt distant \(origin illisible/);
   // Ambiguous name (a local branch named like the remote-tracking one): refused.
+  git(f.repo, 'fetch', '-q', 'origin');
   git(f.repo, 'branch', 'origin/main');
   const ambiguous = await apv(f.repo, ['gates', 'run', '--against', 'origin/main']);
   assert.equal(ambiguous.code, 1);
   assert.match(ambiguous.stderr, /GATE_BASE.*ambiguë/);
+});
+
+test('a local branch with a remote twin as base, or a remote without any base applied: warned', async t => {
+  const f = withRemote(t, [gate('unit', 'process.exit(0)', { mandatory: true })]);
+  f.candidate([gate('unit', 'process.exit(0)', { mandatory: true })]);
+  const local = await apv(f.repo, ['gates', 'run', '--against', 'main']);
+  assert.match(local.stderr, /main est une branche locale, qui peut différer de origin\/main : pour la base des contrôles, passer la branche distante \(--against origin\/main\)/);
+  git(f.repo, 'update-ref', '-d', 'refs/remotes/origin/main');
+  const none = await apv(f.repo, ['gates', 'run']);
+  assert.match(none.stderr, /le dépôt a un dépôt distant \(origin\) mais aucune base n'est appliquée aux contrôles/);
 });

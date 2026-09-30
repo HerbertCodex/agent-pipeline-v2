@@ -81,11 +81,22 @@ export function applyBaseGates(repo: string, candidate: ApvConfig, head: string,
   const name = reference ?? detectReference(repo);
   const warnings: string[] = [];
   const none = { config: candidate, base: { reference: name, mergeBase: null, file: null, differences: [], warnings } };
-  if (!name) return none;
+  if (!name) {
+    const remotes = gitRead(repo, ['remote']);
+    if (remotes) warnings.push(`le dépôt a un dépôt distant (${remotes.split('\n').join(', ')}) mais aucune base n'est appliquée aux contrôles (ni --against, ni --base, ni branche distante par défaut) : passer --against <branche distante>, par exemple origin/main.`);
+    return none;
+  }
   // Full refs only: a local branch or a tag named like the remote-tracking one is ambiguous, refused.
-  const { sha, reason } = /^[0-9a-f]{7,39}$/.test(name) ? { sha: resolveCommit(repo, name), reason: 'introuvable' } : resolveFullRef(repo, name);
+  let { sha, reason } = /^[0-9a-f]{7,39}$/.test(name) ? { sha: resolveCommit(repo, name), reason: 'introuvable' } : resolveFullRef(repo, name);
   if (!sha) throw new PipelineError('GATE_BASE', `Référence des contrôles ${name} ${reason}. Récupérez-la (git fetch) ou passez --against <branche de base>.`);
-  warnings.push(...checkRemote(repo, name, sha, options));
+  // A local branch that has a remote-tracking twin: the remote one is what the change goes to.
+  const twins = gitRead(repo, ['for-each-ref', '--format=%(refname:short)', `refs/remotes/*/${name}`]);
+  if (gitRead(repo, ['for-each-ref', '--format=%(refname)', `refs/heads/${name}`]) === `refs/heads/${name}` && twins) {
+    warnings.push(`${name} est une branche locale, qui peut différer de ${twins.split('\n')[0]} : pour la base des contrôles, passer la branche distante (--against ${twins.split('\n')[0]}).`);
+  }
+  const remote = checkRemote(repo, name, sha, options);
+  sha = remote.sha;
+  warnings.push(...remote.warnings);
   const mergeBase = gitRead(repo, ['merge-base', sha, head]);
   // No common history: the base cannot be read, refused (never a silent fall back on the candidate's checks).
   if (!mergeBase || !/^[0-9a-f]{40,64}$/.test(mergeBase)) throw new PipelineError('GATE_BASE', `Aucune base commune entre ${name} et ${head.slice(0, 12)} : clone superficiel (git fetch --unshallow) ou référence sans lien ; les contrôles de la base ne peuvent pas être lus.`);
@@ -98,35 +109,65 @@ export function applyBaseGates(repo: string, candidate: ApvConfig, head: string,
 export interface RemoteCheck {
   /** Reads the commit a remote branch points to (`git ls-remote`), null when the remote cannot be read. Tests inject it. */
   lsRemote?: (repo: string, remote: string, branch: string) => string | null;
+  /**
+   * `gates verify`: a reference behind the remote is refused (a base moved back on purpose would otherwise be accepted);
+   * `gates run` only warns.
+   */
+  strict?: boolean;
 }
+
+const GIT_ENV = (): NodeJS.ProcessEnv => ({ ...environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'HOME', 'SSH_AUTH_SOCK', 'GIT_SSH_COMMAND']), GIT_TERMINAL_PROMPT: '0' });
 
 function lsRemote(repo: string, remote: string, branch: string): string | null {
   try {
     const out = execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'ls-remote', '--end-of-options', remote, `refs/heads/${branch}`], {
-      cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000,
-      env: { ...environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'HOME', 'SSH_AUTH_SOCK', 'GIT_SSH_COMMAND']), GIT_TERMINAL_PROMPT: '0' },
+      cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000, env: GIT_ENV(),
     });
     return /^([0-9a-f]{40,64})\s/.exec(out)?.[1] ?? null;
   } catch { return null; }
 }
 
+/** Fetches this one branch into its remote-tracking ref (no tags, no submodules, no hooks, bounded); true when done. */
+function fetchBranch(repo: string, remote: string, branch: string): boolean {
+  try {
+    execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--end-of-options', remote,
+      `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`], { cwd: repo, stdio: ['ignore', 'ignore', 'ignore'], timeout: 60_000, env: GIT_ENV() });
+    return true;
+  } catch { return false; }
+}
+
+const hasCommit = (repo: string, sha: string): boolean => gitRead(repo, ['cat-file', '-e', `${sha}^{commit}`]) !== null;
+
 /**
  * A remote-tracking reference (`origin/main`) is a local file anyone can move (`git update-ref`): when the network
- * allows, it is compared with the remote. Moved onto a commit the remote does not have: refused. Behind the remote (not
- * fetched): a warning. Remote unreadable: a warning that says the base was not verified.
+ * allows, it is compared with the remote. The remote commit missing locally (another PR merged since the last fetch):
+ * this one branch is fetched, then compared again; if it cannot be fetched, a warning (not verified). Refused only when it
+ * is proven that the local reference is not in the remote history. Behind the remote: a warning for `run`, a refusal for
+ * `verify` (strict). The remote unreadable: a warning.
  */
-function checkRemote(repo: string, name: string, sha: string, options: RemoteCheck): string[] {
+function checkRemote(repo: string, name: string, sha: string, options: RemoteCheck): { sha: string; warnings: string[] } {
   const tracking = gitRead(repo, ['for-each-ref', '--format=%(refname)', `refs/remotes/${name}`]);
-  if (tracking !== `refs/remotes/${name}`) return [];
+  if (tracking !== `refs/remotes/${name}`) return { sha, warnings: [] };
   const slash = name.indexOf('/');
   const remote = name.slice(0, slash); const branch = name.slice(slash + 1);
-  if (!remote || !branch || branch === 'HEAD') return [];
+  if (!remote || !branch || branch === 'HEAD') return { sha, warnings: [] };
   const remoteSha = (options.lsRemote ?? lsRemote)(repo, remote, branch);
-  if (remoteSha === null) return [`base non vérifiée auprès du dépôt distant (${remote} illisible, réseau absent ?) : ${name} est lue telle que le dépôt local la connaît (${sha.slice(0, 12)}).`];
-  if (remoteSha === sha) return [];
+  if (remoteSha === null) return { sha, warnings: [`base non vérifiée auprès du dépôt distant (${remote} illisible, réseau absent ?) : ${name} est lue telle que le dépôt local la connaît (${sha.slice(0, 12)}) ; faire git fetch ${remote} dès que possible.`] };
+  if (remoteSha === sha) return { sha, warnings: [] };
+  if (!hasCommit(repo, remoteSha)) {
+    if (!fetchBranch(repo, remote, branch) || !hasCommit(repo, remoteSha)) {
+      return { sha, warnings: [`base non vérifiée : ${remote}/${branch} est à ${remoteSha.slice(0, 12)}, commit que le dépôt local n'a pas et n'a pas pu récupérer ; faire git fetch ${remote}, puis relancer.`] };
+    }
+    const fetched = resolveCommit(repo, `refs/remotes/${name}`);
+    if (fetched === remoteSha) return { sha: remoteSha, warnings: [`${name} récupérée auprès du dépôt distant (${sha.slice(0, 12)} -> ${remoteSha.slice(0, 12)}) : la base des contrôles est celle du dépôt distant.`] };
+  }
   const behind = gitRead(repo, ['merge-base', '--is-ancestor', sha, remoteSha]) !== null;
-  if (behind) return [`${name} (${sha.slice(0, 12)}) est en retard sur le dépôt distant (${remoteSha.slice(0, 12)}) : git fetch ${remote}, puis relancer.`];
-  throw new PipelineError('GATE_BASE', `${name} pointe localement sur ${sha.slice(0, 12)}, que le dépôt distant ne contient pas (${remote}/${branch} : ${remoteSha.slice(0, 12)}) : référence déplacée ou divergente. git fetch ${remote} pour la remettre à jour ; la base des contrôles ne se lit jamais sur une référence que le dépôt distant contredit.`);
+  if (!behind) {
+    throw new PipelineError('GATE_BASE', `${name} pointe localement sur ${sha.slice(0, 12)}, que le dépôt distant ne contient pas (${remote}/${branch} : ${remoteSha.slice(0, 12)}) : référence déplacée ou divergente. git fetch ${remote} pour la remettre à jour ; la base des contrôles ne se lit jamais sur une référence que le dépôt distant contredit.`);
+  }
+  const message = `${name} (${sha.slice(0, 12)}) est en retard sur le dépôt distant (${remoteSha.slice(0, 12)}) : git fetch ${remote}, puis relancer.`;
+  if (options.strict) throw new PipelineError('GATE_BASE', `${message} La vérification d'une preuve ne se fait jamais sur une base en retard (une base reculée ferait accepter des contrôles relâchés depuis).`);
+  return { sha, warnings: [message] };
 }
 
 const KIND: Readonly<Record<GateDifferenceKind, string>> = {

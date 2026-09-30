@@ -291,7 +291,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       const verifyRoot = gitRoot(repo);
       const verified = resolveCommit(verifyRoot, values.commit);
       if (!verified) throw new PipelineError('SHA', `Commit introuvable : ${values.commit}`);
-      const kept = applyBaseGates(verifyRoot, loaded.config, verified, againstOf(values.against) ?? values.base ?? null);
+      const kept = applyBaseGates(verifyRoot, loaded.config, verified, againstOf(values.against) ?? values.base ?? null, { strict: true });
       loaded = { ...loaded, config: kept.config };
       const result = await verifyGates({ repo, config: loaded.config, commit: values.commit, ...(stage ? { stage } : {}), ...(values.base ? { base: values.base } : {}),
         configFile: values['commit-config'] ? null : loaded.file });

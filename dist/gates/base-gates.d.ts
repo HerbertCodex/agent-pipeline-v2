@@ -41,6 +41,11 @@ export declare function applyBaseGates(repo: string, candidate: ApvConfig, head:
 export interface RemoteCheck {
     /** Reads the commit a remote branch points to (`git ls-remote`), null when the remote cannot be read. Tests inject it. */
     lsRemote?: (repo: string, remote: string, branch: string) => string | null;
+    /**
+     * `gates verify`: a reference behind the remote is refused (a base moved back on purpose would otherwise be accepted);
+     * `gates run` only warns.
+     */
+    strict?: boolean;
 }
 /** Lines for the text output: the warnings on the reference, and the checks kept, if any. */
 export declare function baseGatesLines(base: BaseGates): string[];
