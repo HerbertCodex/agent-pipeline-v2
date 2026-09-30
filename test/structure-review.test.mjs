@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
+import { proposeSplit } from '../dist/structure/split.js';
 
 /**
  * One test per trial of the review of PR #98: every way around the ratchet, and every false block, on a small SvelteKit
@@ -118,6 +119,11 @@ test('review: a code map written before the « Dossiers » section says so, and 
   assert.equal((await apv(f.repo, ['map', '--check', '--json'])).json().migration, true);
   await apv(f.repo, ['map']);
   assert.equal((await apv(f.repo, ['map', '--check'])).code, 0);
+  // Recognised by the missing section, whatever else changed (a real map drops other entries past its 32 KB bound).
+  writeFileSync(join(f.repo, file), read(f.repo, file).replace(/\n## Dossiers\n[\s\S]*?(?=\n## )/, '\n').replace(/\n- `[^\n]*/, ''));
+  write(f.repo, 'src/lib/more.ts', 'export const more = 1;\n');
+  assert.match((await apv(f.repo, ['map', '--check'])).stdout, /périmée par la mise à jour d'APV/);
+  await apv(f.repo, ['map']);
   // Any other difference is a plain stale map.
   write(f.repo, 'src/lib/extra.ts', 'export const extra = 1;\n');
   assert.doesNotMatch((await apv(f.repo, ['map', '--check'])).stdout, /mise à jour d'APV/);
@@ -161,4 +167,35 @@ test('review: a folder of primitives is never split; a new primitive goes in its
   assert.match(flat.proposal, /dossier de composants génériques[^\n]*liste à plat, ou un dossier par composant/);
   write(f.repo, 'src/lib/components/ui/Badge.svelte', '<span></span>\n');
   assert.match(blocking(await f.check()).join('\n'), /Badge\.svelte [^\n]*mettre le nouveau composant dans son propre dossier \(src\/lib\/components\/ui\/<Composant>\/\)/);
+});
+
+test('review 2: a test file alone never counts in the ratchet, as in the threshold', async t => {
+  const f = await project(t);
+  write(f.repo, 'src/lib/tools/newthing.test.ts', "import { test } from 'node:test';\n");
+  write(f.repo, 'src/lib/tools/flows.test.ts', "import { test } from 'node:test';\n");
+  const report = await f.check();
+  assert.ok(!report.changes.some(c => c.code === 'flat-growth'), JSON.stringify(report.changes));
+});
+
+test('review 2: never a route name for a folder of code, never a synonym of a neighbour, never one file for a domain', () => {
+  const dir = 'src/lib/components/applications';
+  const entry = (name, tokens) => ({ path: `${dir}/${name}`, stem: name.split('.')[0], files: [`${dir}/${name}`], component: true, tokens });
+  const cards = [entry('CompanyLine.svelte', ['company', 'line']), entry('CountryChip.svelte', ['country', 'chip'])];
+  const table = [entry('ApplicationsTable.svelte', ['applications', 'table']), entry('RowMenu.svelte', ['row', 'menu'])];
+  const accounts = [entry('AccountsList.svelte', ['accounts', 'list']), entry('Lists.svelte', ['lists']), entry('Repository.svelte', ['repository'])];
+  const importers = new Map([
+    [`${dir}/CountryChip.svelte`, [`${dir}/CompanyLine.svelte`, 'src/lib/components/dashboard/A.svelte']],
+    [`${dir}/CompanyLine.svelte`, ['src/lib/components/dashboard/A.svelte', 'src/lib/components/dashboard/B.svelte']],
+    [`${dir}/RowMenu.svelte`, [`${dir}/ApplicationsTable.svelte`, 'src/routes/tableau-de-bord/+page.svelte']],
+    [`${dir}/ApplicationsTable.svelte`, ['src/routes/tableau-de-bord/+page.svelte', 'src/routes/tableau-de-bord/+layout.svelte']],
+    [`${dir}/Lists.svelte`, [`${dir}/AccountsList.svelte`, `${dir}/Repository.svelte`]],
+    [`${dir}/AccountsList.svelte`, [`${dir}/Repository.svelte`]],
+  ]);
+  const files = ['src/lib/components/dashboard/A.svelte', 'src/lib/components/dashboard/B.svelte', 'src/routes/tableau-de-bord/+page.svelte', 'src/routes/tableau-de-bord/+layout.svelte'];
+  const split = proposeSplit(dir, [...cards, ...table, ...accounts], { importers, exports: new Map() }, {
+    dirs: new Set(['src', 'src/lib', 'src/lib/components', dir, 'src/lib/components/dashboard', 'src/routes', 'src/routes/tableau-de-bord']),
+    files: [...cards, ...table, ...accounts].map(e => e.path).concat(files), domains: ['account'], maxFlatFiles: 12,
+  });
+  assert.deepEqual(split.groups, [], JSON.stringify(split.groups));
+  assert.equal(split.unnamed.length, 3);
 });

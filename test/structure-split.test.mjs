@@ -87,7 +87,6 @@ test('split: a flat folder without common prefix is split by use, its core kept 
   assert.deepEqual(groupsOf(f), {
     checkout: ['address.ts', 'checkout.ts', 'payment.ts'],
     shipping: ['carrier.ts', 'eta.ts', 'tracking.ts'],
-    invoice: ['invoice.ts', 'tax.ts'],
   });
   const checkout = f.groups.find(g => g.dir === 'checkout');
   // Same split as the components of the same domain, and why.
@@ -96,18 +95,18 @@ test('split: a flat folder without common prefix is split by use, its core kept 
   assert.ok(checkout.reasons.some(r => /liés par import : .*checkout\.ts importe address\.ts/.test(r)), checkout.reasons.join(' | '));
   assert.deepEqual(f.groups.filter(g => g.dir !== 'checkout').map(g => [g.dir, g.naming, g.reasons[0]]), [
     ['shipping', 'place', 'nom repris : dossier src/lib/components/shipping/, qui les utilise (3 sur 3)'],
-    ['invoice', 'place', 'nom repris : route /invoice, qui les utilise (2 sur 2)'],
   ]);
-  // Used together, but no name of the project says what they do: grouped, never named after a file, left to the operator.
-  assert.deepEqual(f.unnamed.map(u => u.members.map(m => m.split('/').pop())), [['filters.ts', 'list.ts']]);
+  // Used together, but no name of the project says what they do: grouped, never named after a file nor after the route
+  // that uses them (`/orders/[id]/invoice`: the language of the URLs stays in src/routes), left to the operator.
+  assert.deepEqual(f.unnamed.map(u => u.members.map(m => m.split('/').pop())), [['filters.ts', 'list.ts'], ['invoice.ts', 'tax.ts']]);
   // Plan: tests follow their module; the core stays; the unnamed group and the lone file stay for the operator.
   const moved = new Map(report.plan.map(m => [m.from, m.to]));
   assert.equal(moved.get('src/lib/orders/checkout.test.ts'), 'src/lib/orders/checkout/checkout.test.ts');
   assert.equal(moved.get('src/lib/orders/tracking.ts'), 'src/lib/orders/shipping/tracking.ts');
   assert.equal(moved.get('src/lib/orders/model.ts'), undefined);
   assert.equal(moved.get('src/lib/orders/list.ts'), undefined);
-  assert.deepEqual(report.folders.find(x => x.folder === 'src/lib/orders').unplaced, ['src/lib/orders/filters.ts', 'src/lib/orders/list.ts', 'src/lib/orders/pagination.ts']);
-  assert.match(f.proposal, /dont 8 par usage dans 3 sous-dossier\(s\), 3 fichier\(s\) socle gardés à la racine, 1 groupe\(s\) à nommer par l'opérateur\), 3 fichier\(s\) restent à placer/);
+  assert.deepEqual(report.folders.find(x => x.folder === 'src/lib/orders').unplaced, ['src/lib/orders/filters.ts', 'src/lib/orders/invoice.ts', 'src/lib/orders/list.ts', 'src/lib/orders/pagination.ts', 'src/lib/orders/tax.ts']);
+  assert.match(f.proposal, /dont 6 par usage dans 2 sous-dossier\(s\), 3 fichier\(s\) socle gardés à la racine, 2 groupe\(s\) à nommer par l'opérateur\), 5 fichier\(s\) restent à placer/);
   // Once applied, the folder is no longer flat.
   const after = analyzeStructure(paths.map(p => moved.get(p) ?? p), structureSettings(undefined), { usage: exampleGraph() });
   assert.equal(flat(after), undefined);
@@ -213,7 +212,7 @@ test('e2e: apv init writes the architecture map and the structure gate; a flat f
   const report = check.json();
   assert.equal(report.architectureMap.profile, 'sveltekit');
   const orders = flat(report);
-  assert.deepEqual(Object.keys(groupsOf(orders)).sort(), ['checkout', 'invoice', 'shipping']);
+  assert.deepEqual(Object.keys(groupsOf(orders)).sort(), ['checkout', 'shipping']);
   assert.deepEqual(orders.core.map(c => c.path.split('/').pop()).sort(), ['dates.ts', 'model.ts', 'money.ts']);
   const text = (await apv(f.repo, ['structure', 'check', '--path', 'src/lib/orders'])).stdout;
   assert.match(text, /    socle : model\.ts \(importé par 7 fichiers du dossier/);

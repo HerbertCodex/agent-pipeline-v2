@@ -39,10 +39,6 @@ export async function currentMap(repo, config) {
     const crowded = tree.findings.filter(f => f.code === 'flat-folder').map(f => ({ folder: f.folder, code: f.files.length, groups: (f.groups ?? []).map(g => g.dir) }));
     return { file: settings.file, map, files, tree, usage, text: codeMapMarkdown(map, settings, { architectureMap: structure.architectureMap, maxFlatFiles: structure.maxFlatFiles, crowded }) };
 }
-/** The map without its « Dossiers » section (added by 3.0.0-alpha.11). */
-function withoutFolders(text) {
-    return text.replace(/\n## Dossiers\n[\s\S]*?(?=\n## |$)/, '\n');
-}
 /** Lines present on one side only (10 at most each): enough to see what went stale. */
 function difference(actual, expected) {
     const a = new Set(actual.split('\n'));
@@ -94,8 +90,8 @@ export async function writeMap(repo, config, check) {
             return done({ file, status: 'missing', difference: null });
         if (actual === text)
             return done({ file, status: 'up-to-date', difference: null });
-        // Only the « Dossiers » section is missing: a map written before 3.0.0-alpha.11, stale by the update of APV itself.
-        return done({ file, status: 'stale', difference: difference(actual, text), ...(withoutFolders(actual) === withoutFolders(text) ? { migration: true } : {}) });
+        // No « Dossiers » section: a map written before 3.0.0-alpha.11, stale by the update of APV itself (whatever else changed).
+        return done({ file, status: 'stale', difference: difference(actual, text), ...(!/\n## Dossiers\n/.test(actual) && /\n## Dossiers\n/.test(text) ? { migration: true } : {}) });
     }
     if (actual === text)
         return done({ file, status: 'unchanged', difference: null });

@@ -160,7 +160,8 @@ export async function checkStructure(repo, config, options = {}) {
         const reported = new Set();
         for (const path of [...created].sort(byText)) {
             const f = parseName(path);
-            if (!f || ignored(path) || !settings.roots.some(r => inside(path, r)) || !wanted(f.dir))
+            // Tests never count, as in the threshold, which counts them apart.
+            if (!f || f.test || ignored(path) || !settings.roots.some(r => inside(path, r)) || !wanted(f.dir))
                 continue;
             const dir = f.dir;
             const count = now.get(dir)?.size ?? 0;

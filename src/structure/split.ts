@@ -261,10 +261,12 @@ export function proposeSplit(folder: string, entries: readonly SplitEntry[], gra
   // The vocabulary of the project: names of its folders, segments of its routes, declared domains. A group is named by
   // what it does in that vocabulary, never after one of its files (`event-icon/`, `in-view/` say nothing of a feature).
   const vocabulary = new Set([
-    ...[...context.dirs].map(d => posix.basename(d).toLowerCase()),
-    ...context.files.flatMap(f => routeOf(f)?.route.split('/') ?? []).filter(seg => seg && !/^[([@+_.]/.test(seg)).map(seg => seg.toLowerCase()),
+    ...[...context.dirs].filter(d => inRoutes(folder) || !inRoutes(d)).map(d => posix.basename(d).toLowerCase()),
+    // Route segments name folders of routes only (the language of the URLs stays in src/routes).
+    ...(inRoutes(folder) ? context.files.flatMap(f => routeOf(f)?.route.split('/') ?? []).filter(seg => seg && !/^[([@+_.]/.test(seg)).map(seg => seg.toLowerCase()) : []),
     ...context.domains,
   ].filter(w => !GENERIC.has(w)));
+  const neighbours = [...context.dirs].filter(d => d !== folder && dirOf(d) === dirOf(folder)).map(d => posix.basename(d).toLowerCase());
   const known = (name: string): boolean => vocabulary.has(name) || [...vocabulary].some(v => related(v, name));
   const staying = new Set([...coreSet, ...(context.others ?? [])].map(e => kebab(e.tokens)));
   interface Candidate { name: string; score: number; source: string; conventions: string[]; naming: SplitGroup['naming'] }
@@ -273,6 +275,9 @@ export function proposeSplit(folder: string, entries: readonly SplitEntry[], gra
     const give = (name: string, score: number, source: string, conventions: string[], naming: SplitGroup['naming']): void => {
       const clean = name.toLowerCase();
       if (!clean || GENERIC.has(clean) || /^[([@+_.]/.test(clean) || own.some(o => related(o, clean)) || staying.has(clean)) return;
+      // Never a synonym of a neighbour (`components/applications/dashboard/` next to `components/dashboard/`): those files
+      // belong to the neighbour, or wait for a name.
+      if (neighbours.some(n => related(n, clean))) return;
       const c = map.get(clean);
       if (c) { c.score += score; if (c.score - score < score) Object.assign(c, { source, conventions, naming }); }
       else map.set(clean, { name: clean, score, source, conventions, naming });
@@ -291,8 +296,9 @@ export function proposeSplit(folder: string, entries: readonly SplitEntry[], gra
       if (name) give(name, 0.8 * c, `mot commun à ${c} fichiers, « ${name} », déjà un nom du projet (dossier, route ou domaine)`, ['feature-folders'], 'word');
     }
     for (const d of context.domains) {
-      const hits = members.filter(e => kebab(e.tokens).startsWith(d)).length;
-      if (hits) give(d, 1.5 * hits, `domaine déclaré (structure.domains) « ${d} »`, ['feature-folders'], 'domain');
+      // Half of the files at least (two when the group has more than two): one `accounts.ts` never names `lists.ts` and `repository.ts`.
+      const hits = members.filter(e => kebab(e.tokens).startsWith(d) || e.tokens.some(t => related(t, d))).length;
+      if (hits * 2 >= members.length && (hits >= 2 || members.length <= 2)) give(d, 1.5 * hits, `domaine déclaré (structure.domains) « ${d} », dans ${hits} fichiers sur ${members.length}`, ['feature-folders'], 'domain');
     }
     if (!sharedKind) {
       // The feature folder or the route that uses the group, when one of them accounts for half of its use.
@@ -306,7 +312,8 @@ export function proposeSplit(folder: string, entries: readonly SplitEntry[], gra
       for (const [k, count] of [...where].sort((a, b) => b[1] - a[1] || byText(a[0], b[0]))) {
         // Half of the use at least, and two uses: one import is no feature.
         if (count / total < 0.5 || count < 2) break;
-        if (k.startsWith('route:')) give(k.slice(6), 2 * count / total, `route /${k.slice(6)}, qui les utilise (${count} sur ${total})`, ['feature-folders'], 'place');
+        // A route names a folder of routes only: in the code it would bring the language of the URLs and synonyms.
+        if (k.startsWith('route:')) { if (inRoutes(folder)) give(k.slice(6), 2 * count / total, `route /${k.slice(6)}, qui les utilise (${count} sur ${total})`, ['feature-folders'], 'place'); }
         else give(posix.basename(k.slice(4)), 2 * count / total, `dossier ${k.slice(4)}/, qui les utilise (${count} sur ${total})`, ['feature-folders'], 'place');
       }
     }
