@@ -28,6 +28,8 @@ export interface RegisteredMockup {
     artifact: string | null;
     sourceQuote: string;
 }
+/** Validated mockups of the ledger as a commit has it (the base of a change), checked against the files on disk. */
+export declare function listMockupsAt(repo: string, sha: string): Promise<RegisteredMockup[]>;
 /** Validated mockups of the working-tree ledger, in ledger order. */
 export declare function listMockups(repo: string): RegisteredMockup[];
 export interface RegisterInput {

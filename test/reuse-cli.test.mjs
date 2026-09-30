@@ -510,12 +510,16 @@ test('the review of 3df791a: a generated name or a build folder never hides a ne
     assert.ok(named.findings.some(x => x.path === path && x.blocking && /nommé comme un fichier généré, mais créé par le changement[^\n]*reuse\.generated/.test(x.message)), path);
     assert.ok(named.findings.some(x => x.path === path && x.rule === 'duplicates' && x.blocking && /identiques? à/.test(x.message)), `${path}: its copy`);
   }
-  // Declared by the operator in reuse.generated: accepted, listed as generated.
+  // Declared by the operator in reuse.generated, in a configuration merged before (the base): accepted, listed as generated.
   write(f.repo, '.apv/config.json', { reuse: { generated: ['src/lib/generated/**', 'src/lib/styles/*.gen.css'] } });
-  const declared = (await apv(f.repo, ['reuse', 'check', '--base', base, '--json'])).json();
+  git(f.repo, 'add', '.apv/config.json');
+  git(f.repo, 'commit', '-qm', 'configuration');
+  const configured = git(f.repo, 'rev-parse', 'HEAD');
+  const declared = (await apv(f.repo, ['reuse', 'check', '--base', configured, '--json'])).json();
   assert.equal(declared.ok, true, JSON.stringify(declared.findings.filter(x => x.blocking)));
   assert.deepEqual(declared.generated.files, ['src/lib/generated/format2.ts', 'src/lib/styles/shell.gen.css']);
-  rmSync(join(f.repo, '.apv'), { recursive: true });
+  git(f.repo, 'rm', '-q', '-r', '.apv');
+  git(f.repo, 'commit', '-qm', 'no configuration');
   rmSync(join(f.repo, 'src/lib/styles'), { recursive: true });
   rmSync(join(f.repo, 'src/lib/generated'), { recursive: true });
   // 2. An interface file is never generated, even by its name.
@@ -533,9 +537,9 @@ test('the review of 3df791a: a generated name or a build folder never hides a ne
   for (const path of ['src/lib/admin/Nav.generated.svelte', 'src/lib/vendor/AdminNav.svelte', 'src/routes/admin/build/+page.svelte', 'src/.local/Hidden.svelte']) assert.ok(native.includes(path), path);
   assert.ok(r.findings.some(x => x.path === 'src/lib/vendor/AdminNav.svelte' && x.rule === 'duplicates' && x.blocking), 'the side bar styles copied into vendor/');
   assert.ok(!r.findings.some(x => x.path.startsWith('vendor/')));
-  assert.deepEqual(r.excluded.changed, ['vendor/bundle.js'], JSON.stringify(r.excluded));
-  assert.ok(r.findings.some(x => x.path === 'packages/ui/build/index.js' && x.rule === 'coverage' && x.blocking && /dossier exclu par défaut/.test(x.message)));
-  assert.ok(r.findings.some(x => x.path === 'packages/ui/build/index.js' && x.rule === 'duplicates' && x.blocking), 'analysed');
+  // A build output of a package the base knows, neither a component nor in a source folder nor imported: left out, listed.
+  assert.deepEqual(r.excluded.changed, ['packages/ui/build/index.js', 'vendor/bundle.js'], JSON.stringify(r.excluded));
+  assert.ok(!r.findings.some(x => x.path === 'packages/ui/build/index.js'));
   assert.match((await apv(f.repo, ['reuse', 'check', '--base', base])).stdout, /Fichiers du changement écartés[^\n]*vendor\/bundle\.js/);
 });
 
@@ -585,9 +589,11 @@ test('fail closed 3: a component under docs/ is analysed; a validated mockup of 
   assert.ok(f.blocked(r, 'docs/components/Admin.svelte'));
   assert.ok(!r.findings.some(x => x.path === 'docs/design/admin-validee.html'), 'the registered mockup');
   assert.ok(r.excluded.changed.includes('docs/design/admin-validee.html'));
-  // An HTML file dropped in the mockup folder without being registered is reported.
+  // A documentation page that is not a component is not held to the strict coverage: left out, and listed.
   write(f.repo, 'docs/design/rogue.html', SELECT);
-  assert.ok(f.blocked(await f.check(), 'docs/design/rogue.html'));
+  const docs = await f.check();
+  assert.ok(!f.blocked(docs, 'docs/design/rogue.html'));
+  assert.ok(docs.excluded.changed.includes('docs/design/rogue.html'));
 });
 
 test('fail closed 4: a package.json added by the change makes no package root for this change', async t => {
@@ -642,4 +648,111 @@ test('fail closed, generic: any new .svelte file, whatever its path, is analysed
   git(f.repo, 'add', '-f', '--', ...paths);
   const r = await f.check();
   for (const path of paths) assert.ok(f.blocked(r, path), path);
+});
+
+// Fifth review (0b948f1): the change never rewrites what judges it.
+
+/** A project with its configuration committed on main (reuse and code-map checks, a mandatory unit check). */
+async function configured(t, reuse = {}) {
+  const f = project(t);
+  write(f.repo, '.apv/config.json', { gates: [
+    { id: 'unit', command: ['npm', 'test'], mandatory: true },
+    { id: 'reuse', command: ['apv', 'reuse', 'check', '--base', '{{baseSha}}'], stage: 'task', readOnly: true, mandatory: true },
+    { id: 'code-map', command: ['apv', 'map', '--check'], stage: 'full', readOnly: true, mandatory: true },
+  ], reuse });
+  commit(f.repo, 'configuration');
+  const base = git(f.repo, 'rev-parse', 'HEAD');
+  git(f.repo, 'switch', '-q', '-c', 'feature/config');
+  const config = () => JSON.parse(read(f.repo, '.apv/config.json'));
+  const check = async () => (await apv(f.repo, ['reuse', 'check', '--base', base, '--json'])).json();
+  return { ...f, base, config, check };
+}
+const COPY = ['src/routes/admin/total.ts', TOTAL.replace('total(', 'adminTotal(')];
+const configBlocked = r => r.findings.some(x => x.rule === 'coverage' && x.path === '.apv/config.json' && x.blocking);
+
+test('review 5, H1: reuse.ignore, reuse.generated, severity off, thresholds or nested added with the copy never let it through', async t => {
+  for (const loosen of [{ ignore: ['src/routes/admin/**'] }, { generated: ['src/routes/admin/**'] }, { severity: 'off' }, { severity: { duplicates: 'off' } },
+    { duplicates: { minLines: 500 } }, { styles: { nested: 'allow' } }]) {
+    const f = await configured(t);
+    write(f.repo, ...COPY);
+    write(f.repo, '.apv/config.json', { ...f.config(), reuse: loosen });
+    const r = await f.check();
+    assert.equal(r.ok, false, JSON.stringify(loosen));
+    assert.ok(configBlocked(r), JSON.stringify(loosen));
+    if (!('styles' in loosen)) assert.ok(r.findings.some(x => x.path === COPY[0] && x.rule === 'duplicates' && x.blocking), `${JSON.stringify(loosen)}: judged by the base`);
+  }
+});
+
+test('review 5, H1: the checks of the reuse removed or changed, a mandatory check made optional: blocking, read against the base', async t => {
+  const cases = [
+    c => ({ ...c, gates: c.gates.filter(g => g.id !== 'reuse') }),
+    c => ({ ...c, gates: c.gates.map(g => (g.id === 'reuse' ? { ...g, command: ['true'] } : g)) }),
+    c => ({ ...c, gates: c.gates.filter(g => g.id !== 'code-map') }),
+    c => ({ ...c, gates: c.gates.map(g => (g.id === 'unit' ? { ...g, mandatory: false } : g)) }),
+    c => ({ ...c, gates: c.gates.filter(g => g.id !== 'unit') }),
+  ];
+  for (const [i, change] of cases.entries()) {
+    const f = await configured(t);
+    write(f.repo, 'src/lib/cart/extra.ts', 'export const extra = 1;\n');
+    write(f.repo, '.apv/config.json', change(f.config()));
+    const r = await f.check();
+    assert.ok(configBlocked(r), `case ${i}`);
+    assert.match(r.findings.find(x => x.path === '.apv/config.json').message, /(retiré|modifié|rendu facultatif) par le changement/);
+  }
+});
+
+test('review 5, H1: a configuration change alone is a PR of configuration (warning); adopting the configuration is not a finding', async t => {
+  const f = await configured(t);
+  write(f.repo, '.apv/config.json', { ...f.config(), reuse: { ignore: ['legacy/**'] } });
+  const r = await f.check();
+  assert.equal(r.ok, true);
+  const found = r.findings.find(x => x.path === '.apv/config.json');
+  assert.deepEqual([found.severity, found.blocking], ['warning', false]);
+  // A project that adopts APV: no configuration at the base.
+  const fresh = project(t);
+  git(fresh.repo, 'switch', '-q', '-c', 'feature/adopt');
+  write(fresh.repo, '.apv/config.json', { reuse: { typography: { locale: 'fr' } } });
+  assert.ok(!(await apv(fresh.repo, ['reuse', 'check', '--base', 'origin/main', '--json'])).json().findings.some(x => x.path === '.apv/config.json'));
+});
+
+test('review 5, H2: a symbolic link or a submodule added by the change blocks, unless the base declares it', async t => {
+  const f = await configured(t, { ignore: ['src/lib/allowed-link'] });
+  symlinkSync('../cart/total.ts', join(f.repo, 'src/lib/components/Linked.svelte'));
+  symlinkSync('cart', join(f.repo, 'src/lib/allowed-link'));
+  commit(f.repo, 'links');
+  symlinkSync('../../lib/cart/total.ts', join(f.repo, 'src/routes/Untracked.ts'));
+  git(f.repo, 'update-index', '--add', '--cacheinfo', `160000,${f.base},vendor/sub`);
+  const r = await f.check();
+  const special = Object.fromEntries(r.findings.filter(x => x.rule === 'coverage' && /ajouté par le changement : son contenu n'est pas analysé/.test(x.message)).map(x => [x.path, x.message.split(' ajouté')[0]]));
+  assert.deepEqual(special, { 'src/lib/components/Linked.svelte': 'lien symbolique', 'src/routes/Untracked.ts': 'lien symbolique', 'vendor/sub': 'sous-module' });
+  assert.ok(r.findings.filter(x => x.path in special).every(x => x.blocking));
+});
+
+test('review 5, medium: a CI script or a documentation page is not held to the strict coverage; code imported by the application is', async t => {
+  const f = await configured(t);
+  write(f.repo, '.github/scripts/ci.mjs', TOTAL.replace('total(', 'ci('));
+  write(f.repo, 'docs/guide/index.html', '<html><body><select><option>a</option></select></body></html>\n');
+  write(f.repo, 'vendor/money.js', TOTAL.replace('total(', 'money('));
+  write(f.repo, 'src/routes/pay/+page.svelte', "<script lang=\"ts\">\n  import { money } from '../../../vendor/money.js';\n</script>\n<p>{money([])}</p>\n");
+  const r = await f.check();
+  for (const path of ['.github/scripts/ci.mjs', 'docs/guide/index.html']) {
+    assert.ok(!r.findings.some(x => x.path === path), path);
+    assert.ok(r.excluded.changed.includes(path), path);
+  }
+  assert.ok(r.findings.some(x => x.path === 'vendor/money.js' && x.rule === 'coverage' && x.blocking), 'imported by the application');
+});
+
+test('review 5, low: a validated mockup counts only once the base registers it', async t => {
+  const f = await configured(t);
+  write(f.repo, '.apv/config.json', { ...f.config(), design: { dir: 'src/mockups' } });
+  commit(f.repo, 'design dir');
+  const withDir = git(f.repo, 'rev-parse', 'HEAD');
+  write(f.root, 'mockup.html', '<!doctype html><html lang="fr"><body><select><option>a</option></select></body></html>\n');
+  assert.equal((await apv(f.repo, ['design', 'register', join(f.root, 'mockup.html'), '--name', 'pay', '--quote', 'je valide'])).code, 0);
+  const pending = (await apv(f.repo, ['reuse', 'check', '--base', withDir, '--json'])).json();
+  assert.ok(pending.findings.some(x => x.path === 'src/mockups/pay-validee.html' && x.blocking), 'registered in the change only');
+  commit(f.repo, 'registered');
+  const registered = git(f.repo, 'rev-parse', 'HEAD');
+  const after = (await apv(f.repo, ['reuse', 'check', '--base', registered, '--json'])).json();
+  assert.ok(!after.findings.some(x => x.path === 'src/mockups/pay-validee.html'));
 });

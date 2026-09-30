@@ -56,6 +56,12 @@ export interface ReuseConfig {
     design?: {
         dir?: string | undefined;
     } | undefined;
+    /** The checks the configuration declares: compared with those of the base (a change never weakens what judges it). */
+    gates?: readonly {
+        id: string;
+        command: readonly string[];
+        mandatory?: boolean | undefined;
+    }[] | undefined;
 }
 export interface CheckOptions {
     /** `--base`: any commit-ish; else `reuse.reference`; else no base (everything counts as new). */

@@ -3,7 +3,8 @@ import { posix } from 'node:path';
 import { CODE_EXTENSIONS, parseName } from '../structure/names.js';
 import { buildCodeMap, clashesFor, importsOf } from '../knowledge/code-map.js';
 import { nonSourceExtensions } from '../knowledge/languages.js';
-import { listMockups } from '../design/registry.js';
+import { listMockups, listMockupsAt } from '../design/registry.js';
+import { loadConfigAtCommit } from '../config/load.js';
 import { collectChanges, isAdded, readAtBase, readWorktree, readWorktreeStatus, resolveBase } from './changes.js';
 import { COMPONENT_EXTENSIONS, DEFAULT_PRIMITIVE_PATHS, DEFAULT_STYLE_SOURCES, ELEMENT_FAMILIES, DEFAULT_REUSE_IGNORE, GENERATED_HEADER, GENERATED_PATHS, REUSE_RULES, frameworkExtensions, outputMatcher, STYLE_EXTENSIONS, UI_EXTENSIONS, extensionOf, globMatcher, mapSettings, reuseSettings, } from './config.js';
 import { TokenTable, blankImports, findClones, occurs, tokenize } from './duplicates.js';
@@ -13,6 +14,19 @@ import { Primitives, isLayoutOnly, primitivesOf, restyledPrimitives, styleRules 
 import { environment } from '../execution/process.js';
 import { rangesOf } from './markup.js';
 import { breakableValues, typographyPatterns } from './typography.js';
+/** JSON with sorted keys: two configurations compare by content, whatever the order of their fields. */
+function stable(value) {
+    if (Array.isArray(value))
+        return `[${value.map(stable).join(',')}]`;
+    if (value && typeof value === 'object')
+        return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stable(value[k])}`).join(',')}}`;
+    return JSON.stringify(value) ?? 'null';
+}
+/** The checks of the reuse itself: `apv reuse check` and `apv map --check`, whatever the form of the call. */
+const judgesReuse = (command) => command.some((a, i) => (a === 'reuse' && command[i + 1] === 'check') || (a === 'map' && command.slice(i + 1).includes('--check')));
+/** Folders of sources: a code or style file there is held to the strict coverage of the check. */
+const SOURCE_ROOTS = /^(?:src|app|lib|pages|components|routes|server)\/|^(?:packages|apps)\/[^/]+\/(?:src|app|lib|pages|components|routes|server)\//;
+const withoutExtensions = (path) => path.replace(/(?:\.[A-Za-z0-9]{1,6}){1,3}$/, '');
 const SCRIPT_EXTENSIONS = new Set(['ts', 'js', 'mjs', 'cjs', 'mts', 'cts']);
 const LOCALE_FILE = /(?:^|\/)(?:locales?|i18n|messages|lang|translations)\//;
 /** Content of a file at a commit, or null (absent, unreadable, larger than 4 MB); Git runs with the environment of the checks only. */
@@ -34,10 +48,35 @@ const order = (a, b) => REUSE_RULES.indexOf(a.rule) - REUSE_RULES.indexOf(b.rule
  * history adopts the check without first cleaning everything.
  */
 export async function checkReuse(repo, config, options = {}) {
-    const base = reuseSettings(config.reuse);
-    const mapConfig = mapSettings(config.map);
-    const changes = options.changes ?? await collectChanges(repo, resolveBase(repo, options.base, base.reference));
-    const designDir = config.design?.dir?.replace(/\/+$/, '');
+    const changes = options.changes ?? await collectChanges(repo, resolveBase(repo, options.base, reuseSettings(config.reuse).reference));
+    // The configuration that judges the change is the one of its base: a change never loosens its own check
+    // (`reuse.ignore`, `severity: "off"`, thresholds, the checks themselves). Its own changes are reported below.
+    let judged = config;
+    const configFindings = [];
+    if (changes.base.mergeBase) {
+        const atBase = loadConfigAtCommit(repo, changes.base.mergeBase);
+        if (atBase.file) {
+            judged = atBase.config;
+            const file = atBase.file.slice(atBase.file.indexOf(':') + 1);
+            const sections = (c) => stable({ reuse: c.reuse ?? null, map: c.map ?? null, designDir: c.design?.dir ?? null });
+            if (sections(config) !== sections(atBase.config)) {
+                configFindings.push({ path: file, message: 'configuration de réutilisation modifiée par le changement (sections reuse, map ou design.dir) : le contrôle juge avec celle de la base ; c\'est une décision de l\'opérateur, à fusionner dans une PR de configuration à part.' });
+            }
+            const candidateGates = config.gates ?? [];
+            for (const gate of atBase.config.gates) {
+                const now = candidateGates.find(g => g.id === gate.id);
+                if (judgesReuse(gate.command) && (!now || stable(now) !== stable(gate))) {
+                    configFindings.push({ path: file, message: `contrôle « ${gate.id} » (${gate.command.join(' ')}) ${now ? 'modifié' : 'retiré'} par le changement : il juge la réutilisation ; décision de l'opérateur, à fusionner dans une PR de configuration à part.` });
+                }
+                else if (gate.mandatory && (!now || now.mandatory !== true)) {
+                    configFindings.push({ path: file, message: `contrôle obligatoire « ${gate.id} » ${now ? 'rendu facultatif' : 'retiré'} par le changement : décision de l'opérateur, à fusionner dans une PR de configuration à part.` });
+                }
+            }
+        }
+    }
+    const base = reuseSettings(judged.reuse);
+    const mapConfig = mapSettings(judged.map);
+    const designDir = judged.design?.dir?.replace(/\/+$/, '');
     const cache = new Map();
     const read = (path) => {
         if (!cache.has(path))
@@ -60,11 +99,40 @@ export async function checkReuse(repo, config, options = {}) {
     const output = outputMatcher(changes.files.filter(f => !f.endsWith('package.json') || atBase(f) || changes.all));
     const generatedName = globMatcher([...GENERATED_PATHS]);
     const declaredGenerated = globMatcher(settings.generated);
+    // Validated mockups as the ledger of the BASE registers them, checked against the files on disk.
     let mockups = new Set();
     try {
-        mockups = new Set(listMockups(repo).filter(m => m.state === 'ok' && m.file).map(m => m.file));
+        mockups = new Set((changes.base.mergeBase ? await listMockupsAt(repo, changes.base.mergeBase) : listMockups(repo)).filter(m => m.state === 'ok' && m.file).map(m => m.file));
     }
     catch { /* no ledger: none */ }
+    // Strict coverage: a component anywhere; a code, interface or style file in a source folder, or imported by the
+    // application. A script of the CI or a documentation page is analysed where it is, never forced out of an exclusion.
+    let imported = null;
+    const importedByApp = (path) => {
+        if (!imported) {
+            imported = { exact: new Set(), suffixes: [] };
+            for (const file of changes.files) {
+                const ext = extensionOf(file);
+                if (!(settings.ui.has(ext) || SCRIPT_EXTENSIONS.has(ext) || ext === 'tsx' || ext === 'jsx') || !(SOURCE_ROOTS.test(file) || COMPONENT_EXTENSIONS.has(ext)))
+                    continue;
+                for (const ref of importsOf(read(file) ?? '', ext)) {
+                    if (ref.spec.startsWith('.'))
+                        imported.exact.add(withoutExtensions(posix.normalize(posix.join(posix.dirname(file), ref.spec))));
+                    else if (/^(?:\$|~|#|@\/)/.test(ref.spec) && ref.spec.includes('/'))
+                        imported.suffixes.push(withoutExtensions(ref.spec.slice(ref.spec.indexOf('/') + 1)));
+                }
+            }
+        }
+        const key = withoutExtensions(path);
+        const dir = key.endsWith('/index') ? key.slice(0, -'/index'.length) : null;
+        return imported.exact.has(key) || (dir !== null && imported.exact.has(dir)) || imported.suffixes.some(s => key === s || key.endsWith(`/${s}`));
+    };
+    const strict = (path) => {
+        const ext = extensionOf(path);
+        if (COMPONENT_EXTENSIONS.has(ext) || (settings.ui.has(ext) && !UI_EXTENSIONS.has(ext)))
+            return true;
+        return relevant(ext) && (SOURCE_ROOTS.test(path) || importedByApp(path));
+    };
     const generated = [];
     const excludedChanged = [];
     const excludedExisting = [];
@@ -81,7 +149,7 @@ export async function checkReuse(repo, config, options = {}) {
         if (byDefault(path) || output(path)) {
             if (!counts || !changed)
                 return exclude();
-            if (mockups.has(path) || atBase(path))
+            if (mockups.has(path) || atBase(path) || !strict(path))
                 return exclude();
             coverage.push({ path, message: `fichier créé ou déplacé par le changement dans un dossier exclu par défaut (dépendances, outils, sorties de build, documentation) : il est analysé ; le déclarer dans reuse.ignore de .apv/config.json, avec l'accord de l'opérateur, ou le déplacer.` });
         }
@@ -90,6 +158,8 @@ export async function checkReuse(repo, config, options = {}) {
         if (changed) {
             const status = readWorktreeStatus(repo, path);
             if (status.text === null) {
+                if (!strict(path))
+                    return exclude();
                 coverage.push({ path, message: `fichier du changement illisible comme texte (${status.reason}) alors que son extension est .${ext} : le contrôle ne peut pas l'analyser ; le ramener à du texte UTF-8 de moins de 2 Mo, ou le déclarer dans reuse.ignore avec l'accord de l'opérateur.` });
                 return false;
             }
@@ -108,7 +178,7 @@ export async function checkReuse(repo, config, options = {}) {
             const before = readAtBase(repo, changes, path, gitShow);
             trusted = before !== null && (byName ? generatedName(changes.renamed.get(path) ?? path) : header(before));
         }
-        if (trusted) {
+        if (trusted || !strict(path)) {
             generated.push(path);
             return false;
         }
@@ -142,6 +212,16 @@ export async function checkReuse(repo, config, options = {}) {
     };
     for (const item of coverage)
         add({ rule: 'coverage', isNew: true, path: item.path, line: 1, message: item.message }, item.severity);
+    // Links and submodules the change adds: their content is never read here.
+    for (const { path, kind } of changes.special) {
+        if (declaredIgnore(path))
+            continue;
+        add({ rule: 'coverage', isNew: true, path, line: 1, message: `${kind} ajouté par le changement : son contenu n'est pas analysé par le contrôle ; le retirer, ou le déclarer dans reuse.ignore (configuration de la base, décision de l'opérateur).` }, 'error');
+    }
+    // A change of the configuration mixed with code blocks; a change of configuration alone (a PR of configuration) is said.
+    const codeTouched = files.some(touched);
+    for (const item of configFindings)
+        add({ rule: 'coverage', isNew: true, path: item.path, line: 1, message: item.message }, codeTouched ? 'error' : 'warning');
     if (summary.native.active)
         await nativeRule(settings, files, read, isTest, changes, codeMap, add);
     const primitives = summary.styles.active ? stylesRule(settings, files, read, isTest, changes, add, summary.styles) : { sources: [], count: 0 };

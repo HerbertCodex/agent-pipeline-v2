@@ -22,6 +22,11 @@ export interface Changes {
     created: Set<string>;
     /** New path -> path at the merge base. */
     renamed: Map<string, string>;
+    /** Paths the change turns into a symbolic link or a submodule: never read as files, reported by the check. */
+    special: {
+        path: string;
+        kind: 'lien symbolique' | 'sous-module';
+    }[];
 }
 /** Content of a working tree file, or null when it is unreadable, binary-looking or larger than 2 MB. */
 export declare function readWorktree(repo: string, path: string): string | null;

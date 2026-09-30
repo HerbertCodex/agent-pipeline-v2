@@ -5,7 +5,7 @@ import { invariant } from '../domain/errors.js';
 import { loadConfig } from '../config/load.js';
 import { designDir } from './config.js';
 import { Git } from '../execution/git.js';
-import { ambiguousApprovalFragments, readWorkingDecisionLedger } from '../lifecycle/decisions.js';
+import { ambiguousApprovalFragments, loadDecisionLedger, readWorkingDecisionLedger } from '../lifecycle/decisions.js';
 import { applyLedgerUpdate, planLedgerUpdate } from '../lifecycle/ledger-update.js';
 import { ensureDesignAttribute } from './attributes.js';
 export { DEFAULT_DESIGN_DIR } from './config.js';
@@ -45,6 +45,11 @@ function parseMockup(repo, decision) {
     const inside = !relative(repo, path).startsWith('..') && !isAbsolute(relative(repo, path));
     const actual = inside && existsSync(path) && statSync(path).isFile() ? sha256File(path) : null;
     return { ...base, file, sha256: expected, actualSha256: actual, state: actual === null ? 'missing' : actual === expected ? 'ok' : 'drift' };
+}
+/** Validated mockups of the ledger as a commit has it (the base of a change), checked against the files on disk. */
+export async function listMockupsAt(repo, sha) {
+    const ledger = await loadDecisionLedger(repo, sha);
+    return ledger.decisions.map(d => parseMockup(repo, d)).filter((m) => m !== null);
 }
 /** Validated mockups of the working-tree ledger, in ledger order. */
 export function listMockups(repo) {

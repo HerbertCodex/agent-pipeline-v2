@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { Git } from '../execution/git.js';
 import { PipelineError } from '../domain/errors.js';
@@ -92,7 +92,7 @@ export function parseAddedLines(diff) {
 export async function collectChanges(repo, base, git = new Git()) {
     const files = await worktreeFiles(repo);
     if (!base.sha)
-        return { base: { source: 'none', ref: null, mergeBase: null }, files, all: true, added: new Map(), created: new Set(), renamed: new Map() };
+        return { base: { source: 'none', ref: null, mergeBase: null }, files, all: true, added: new Map(), created: new Set(), renamed: new Map(), special: [] };
     const head = await git.sha(repo);
     let mergeBase;
     try {
@@ -135,7 +135,34 @@ export async function collectChanges(repo, base, git = new Git()) {
     const untracked = (await git.exec(repo, ['ls-files', '-z', '--others', '--exclude-standard'])).split('\0').filter(Boolean);
     for (const path of untracked)
         created.add(path);
-    return { base: { source: base.source, ref: base.ref, mergeBase }, files, all: false, added: parseAddedLines(diff), created, renamed };
+    // Links and submodules the change adds or makes (mode 120000, 160000), committed or not: never skipped silently.
+    const special = [];
+    // Against the working tree and against the index (a submodule not checked out is only in the index).
+    for (const scope of [[], ['--cached']]) {
+        const raw = (await git.exec(repo, ['diff', '--raw', '-z', '--no-renames', ...scope, mergeBase, '--'])).split('\0');
+        for (let i = 0; i + 1 < raw.length; i += 2) {
+            const m = /^:\d{6} (\d{6}) \S+ \S+ ([A-Z])/.exec(raw[i] ?? '');
+            const path = raw[i + 1];
+            if (!m || !path || m[2] === 'D' || special.some(x => x.path === path))
+                continue;
+            if (m[1] === '120000')
+                special.push({ path, kind: 'lien symbolique' });
+            if (m[1] === '160000')
+                special.push({ path, kind: 'sous-module' });
+        }
+    }
+    for (const path of untracked) {
+        if (path.endsWith('/')) {
+            special.push({ path: path.slice(0, -1), kind: 'sous-module' });
+            continue;
+        }
+        try {
+            if (lstatSync(join(repo, path)).isSymbolicLink() && !special.some(s => s.path === path))
+                special.push({ path, kind: 'lien symbolique' });
+        }
+        catch { /* gone */ }
+    }
+    return { base: { source: base.source, ref: base.ref, mergeBase }, files, all: false, added: parseAddedLines(diff), created, renamed, special };
 }
 /** Content of a file at the merge base (following a rename), or null when it did not exist there. */
 export function readAtBase(repo, changes, path, read) {
