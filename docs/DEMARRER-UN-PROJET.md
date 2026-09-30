@@ -24,7 +24,9 @@ APV3 fait de la session Claude Code un chef de projet. Il fait écrire la spec, 
 
 Le reste, tu ne le fais pas : le chef de projet s'en charge et te rend compte.
 
-**Ce que le plugin garde de tes messages.** Pour prouver qu'une validation ou une dérogation vient de toi, un crochet garde, pour chaque message que tu tapes dans la session : l'empreinte de chaque phrase (pas le texte), les huit premiers mots des phrases qui valident, et tes lignes de dérogation, secrets masqués. C'est signé par une clé créée dans `~/.config/apv/anchor.key`, rangé dans le répertoire Git du projet (`apv/operator/`, jamais versionné, jamais envoyé ailleurs) et effacé après 90 jours (`rules.journalDays`). Conséquence pratique : une validation de maquette se cite par phrases entières.
+**Ce que le plugin garde de tes messages.** Pour prouver qu'une validation ou une dérogation vient de toi, un crochet garde, pour chaque message que tu tapes dans la session : l'empreinte de chaque phrase (pas le texte), les huit premiers mots des phrases qui valident, et tes lignes de dérogation, secrets masqués. C'est signé par une clé créée dans `~/.apv-ancrage/cle-ancrage`, rangé dans le répertoire Git du projet (`apv/operator/`, jamais versionné, jamais envoyé ailleurs) et effacé après 90 jours (`rules.journalDays`). Conséquence pratique : une validation de maquette se cite par phrases entières.
+
+**La clé d'ancrage** (`~/.apv-ancrage/cle-ancrage`) : sauvegarde-la hors de la machine dès sa création (`apv status` te le rappelle). Perdue ou remplacée, elle ne se recrée pas en silence et plus rien de signé n'est accepté ; seule ta sauvegarde la rétablit. Dis-toi aussi que, tant que les agents tournent sous ton compte, ces protections arrêtent les erreurs et les raccourcis, pas un agent décidé à tromper : le contrôle extérieur, c'est la protection de branche de GitHub quand ton plan l'offre, et l'audit des fusions ([REGLES.md](REGLES.md), section 3 bis, qui décrit aussi un durcissement possible).
 
 ## 3. Ce que le chef de projet fait seul
 
@@ -128,7 +130,8 @@ Quand l'outil refuse, il dit quoi faire. Le chef de projet corrige ; il ne conto
 - masquer la sortie d'une commande qui écrit sur GitHub ;
 - arrêter un processus par `kill` de son parent ou par `pkill -f` (seule voie : `apv procs stop`).
 
-- pousser directement sur la branche principale.
+- pousser directement sur la branche principale ;
+- lancer une session `claude` imbriquée, ou exécuter le code du plugin autrement que par `apv`.
 
 Les crochets du plugin refusent la plupart de ces gestes ; ce sont des garde-fous, pas une sandbox : ils tiennent contre l'erreur, pas contre un agent décidé à tromper sous le même compte. La vraie barrière est la protection de branche de GitHub, quand ton plan l'offre ; sinon, l'audit des fusions montre après coup ce qui est passé hors de l'outil.
 

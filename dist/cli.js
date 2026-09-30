@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { dispatch } from './commands/index.js';
+// Run as the apv command (bin/apv or dist/cli.js): the only process of the tool allowed to sign (src/rules/operator.ts).
+process.env['APV_ENTRY'] = 'cli';
 /** Terminal adapter: commands write text; a missing final newline is added so both styles print cleanly. */
 const line = (write) => (s) => { write(s.endsWith('\n') ? s : `${s}\n`); };
 const io = {

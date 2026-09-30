@@ -6,7 +6,9 @@
 // through a symlinked node_modules, docker or supabase commands on a declared test stack without its lock.
 // This is a guard rail against mistakes, not a security boundary: a determined command can
 // always be written in a shape this parser does not recognise.
+import { realpathSync } from 'node:fs';
 import { basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { DOMAIN_REVIEWERS, agentName, flatten, isMainModule, namesAnchor, readHookInput } from './lib.mjs';
 import { EMPTY_CONTEXT, HARNESS_REASONS, commandWords, hookContext, installProblem, killProblem, lockWrapper, mergeHeld, remoteWriteProblem, stackProblem } from './harness-guard.mjs';
 
@@ -231,6 +233,47 @@ export function pushToDefault(words, defaults = ['main', 'master'], current = nu
   return null;
 }
 
+/** The root of this plugin, as launched and with its links resolved: its files run only through apv and the hooks. */
+const PLUGIN_ROOTS = (() => {
+  const raw = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/, '');
+  let real = raw; try { real = realpathSync(raw); } catch { /* as launched */ }
+  return [...new Set([raw, real])];
+})();
+const INTERPRETERS = new Set(['node', 'nodejs', 'python', 'python3', 'deno', 'bun', 'tsx', 'ts-node', 'perl', 'ruby', 'php']);
+/** Modules of the tool that sign or read what is signed: never imported by a script. */
+const TOOL_MODULES = /dist\/+(?:rules|stack|review|gates|lifecycle|commands)\/|CLAUDE_PLUGIN_ROOT|\.claude\/+plugins|hooks\/+scripts\//;
+
+/**
+ * Why a command reaches the plugin's own code or the key other than through apv and the hooks, or null: an interpreter
+ * that names the plugin or its modules (a script that imports dist/rules/*.js signs without the key), a file of the plugin
+ * run other than dist/cli.js or bin/apv, the home folder searched, copied or globbed, a path decoded from base64 and used,
+ * the variables of the tool.
+ */
+export function pluginCodeProblem(words, flat) {
+  const cw = commandWords(words);
+  const w = cw ? cw.words : words;
+  const tool = basename(w[0] ?? '');
+  if (INTERPRETERS.has(tool)) {
+    const script = w.slice(1).find(a => !a.startsWith('-'));
+    const runsApv = script && (/(^|\/)dist\/cli\.js$/.test(script) || /(^|\/)bin\/apv$/.test(script));
+    if (!runsApv && (TOOL_MODULES.test(flat) || PLUGIN_ROOTS.some(r => flat.includes(r)))) return REASONS.pluginCode;
+    if (/expanduser|Path\.home|homedir|os\.environ\[.HOME|process\.env\.HOME|getenv\(.HOME/i.test(flat)) return REASONS.homeFolder;
+  }
+  return null;
+}
+
+const HOME_ROOT = /^(?:~\/?|\$HOME\/?|\$\{HOME\}\/?|\/home\/[^/\s]+\/?|\/root\/?|\/Users\/[^/\s]+\/?)$/;
+const HOME_HIDDEN_GLOB = /(?:~|\$\{?HOME\}?|\/home\/[^/\s]+|\/root|\/Users\/[^/\s]+)\/\.[^/\s'"]*[*?[]/;
+/** The home folder itself handed to a command that walks, copies or lists (find ~, tar ~, cp -r $HOME), or hidden folders of the home globbed. */
+export function homeFolderProblem(words, flat) {
+  const cw = commandWords(words);
+  const w = cw ? cw.words : words;
+  const tool = basename(w[0] ?? '');
+  if (HOME_HIDDEN_GLOB.test(flat)) return REASONS.homeFolder;
+  if (tool !== 'cd' && w.slice(1).some(a => HOME_ROOT.test(a))) return REASONS.homeFolder;
+  return null;
+}
+
 /** A merge of a pull request through any client (gh api graphql, curl, a script): the API names it. */
 const MERGE_API = /mergePullRequest|enablePullRequestAutoMerge|pulls\/+[^\s/'"]+\/+merge\b/i;
 
@@ -376,6 +419,14 @@ export const REASONS = {
   computedApv: 'APV : commande apv dont la commande ou la sous-commande est calculée (variable, substitution, eval) refusée : écris-la en clair, ' +
     'les garde-fous doivent pouvoir la lire.',
   commonDir: 'APV : git rev-parse --git-common-dir seulement seul, en lecture ; le répertoire commun porte les magasins de l\'outil (reçus, relectures, journal de l\'opérateur).',
+  pluginCode: 'APV : commande refusée, elle exécute ou importe le code du plugin hors de la commande apv (un script qui charge dist/rules, dist/stack... ' +
+    'signerait à la place des crochets). Lance l\'outil par apv (ou node <plugin>/dist/cli.js).',
+  homeFolder: 'APV : commande refusée, elle parcourt, copie ou liste le dossier personnel (ou ses dossiers cachés), où se trouve la clé d\'ancrage du plugin. ' +
+    'Nomme le dossier précis dont tu as besoin, hors des dossiers cachés du dossier personnel.',
+  encodedPath: 'APV : chemin décodé (base64) puis utilisé dans la même commande : refusé, les garde-fous doivent pouvoir lire ce que la commande touche.',
+  toolVariable: 'APV : les variables internes de l\'outil (APV_ENTRY, APV_ANCHOR_KEY_FILE) ne se posent pas à la main.',
+  nestedClaude: 'APV : lancer claude depuis une session gérée par APV est refusé (sauf claude --version) : une session imbriquée échappe aux garde-fous des sous-agents ' +
+    '(fusion, relecture). Les agents se lancent par l\'outil Agent du chef de projet.',
   mergeBySubagent: 'APV : fusion refusée dans un sous-agent. Seul le chef de projet (session principale) fusionne, par apv stack merge, ' +
     'qui vérifie les règles avant chaque fusion.',
   hiddenOutput: 'APV : commande qui écrit sur GitHub avec une sortie masquée (redirection vers /dev/null). ' +
@@ -424,6 +475,9 @@ function evaluate(command, env, context, depth, inherited) {
   if (MERGE_API.test(flat)) return { decision: 'deny', reason: context.agentId ? REASONS.mergeBySubagent : REASONS.rawMerge };
   if (/--git-common-dir/.test(flat) && !/^\s*git\s+rev-parse(\s+--path-format=(absolute|relative))?\s+--git-common-dir\s*$/.test(flat)) return { decision: 'deny', reason: REASONS.commonDir };
   if (/(^|[\s;&|(])eval\b/.test(flat) && /\bapv\b|cli\.js/.test(flat)) return { decision: 'deny', reason: REASONS.computedApv };
+  if (/\bAPV_ENTRY\b|\bAPV_ANCHOR_KEY_FILE\b/.test(flat)) return { decision: 'deny', reason: REASONS.toolVariable };
+  if (/\banchor/i.test(flat)) return { decision: 'deny', reason: REASONS.anchorStore };
+  if (/\bbase64\b[^|;&]*(?:\s-d\b|\s-D\b|--decode)/.test(flat) && /[|`]|\$\(/.test(flat)) return { decision: 'deny', reason: REASONS.encodedPath };
   const { segments, shadow } = tokenize(command);
   let writesGithub = false;
   const kill = killProblem(segments, context.ancestors);
@@ -446,6 +500,12 @@ function evaluate(command, env, context, depth, inherited) {
       if (nested.decision === 'deny') return nested;
     }
     if (isForcePush(words)) return { decision: 'deny', reason: REASONS.forcePush };
+    const code = pluginCodeProblem(words, flat) ?? homeFolderProblem(words, flat);
+    if (code) return { decision: 'deny', reason: code };
+    const cwords = commandWords(words)?.words ?? words;
+    const usage = cwords.length === 3 && cwords[1] === '-p' && cwords[2] === '/usage';
+    if (['claude', 'claude-code'].includes(basename(cwords[0] ?? '')) && !usage && !(cwords.length === 2 && ['--version', '-v'].includes(cwords[1]))) return { decision: 'deny', reason: REASONS.nestedClaude };
+    if (basename(cwords[0] ?? '') === 'npx' && cwords.some(a => /@anthropic-ai\/claude-code/.test(a))) return { decision: 'deny', reason: REASONS.nestedClaude };
     const pushed = pushToDefault(words, (context.defaultBranches ?? (() => ['main', 'master']))(), (context.currentBranch ?? (() => null))());
     if (pushed) return { decision: 'deny', reason: REASONS.pushToDefault(pushed) };
     const apvArgs = apvArguments(words);

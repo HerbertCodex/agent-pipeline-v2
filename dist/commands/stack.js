@@ -8,7 +8,7 @@ import { cleanLine } from '../run/summary.js';
 import { MERGE_REFUSED, mergeStack, planStack, processGh } from '../stack/github.js';
 import { checkMergeRules, rulesLines } from '../rules/check.js';
 import { auditLines, auditMerges, writeMergeTrace } from '../rules/merges.js';
-import { ensureAnchorKey } from '../rules/operator.js';
+import { anchorKey } from '../rules/operator.js';
 import { branchProtection } from '../rules/protection.js';
 import { batchMerge, processGit } from '../stack/batch.js';
 import { loadConfigAtCommit } from '../config/load.js';
@@ -147,7 +147,11 @@ function traceMerge(cwd, merge) {
         const root = gitRead(cwd, ['rev-parse', '--show-toplevel']);
         if (!root)
             return 'pas un dépôt Git';
-        writeMergeTrace(commonDir(root), { ...merge, at: new Date().toISOString() }, ensureAnchorKey());
+        const common = commonDir(root);
+        const anchor = anchorKey(common);
+        if (!anchor.key)
+            return anchor.problem ?? 'clé d\'ancrage absente';
+        writeMergeTrace(common, { ...merge, at: new Date().toISOString() }, anchor.key);
         return null;
     }
     catch (error) {

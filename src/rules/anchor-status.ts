@@ -25,7 +25,11 @@ export function journalLines(j: JournalState): string[] {
       ? `  Le crochet a refusé le dernier message (${j.refused.at.slice(0, 16).replace('T', ' ')}) : ${j.refused.reason}. Mets Claude Code à jour (claude update) : il doit transmettre au crochet UserPromptSubmit le champ source (user ou tty). Sans lui, seules comptent les maquettes déjà fusionnées, et aucune dérogation n'est possible.`
       : '  Rien reçu encore : le plugin est-il activé dans cette session (/plugin) ? Le journal se remplit quand l\'opérateur écrit dans la session.');
   }
-  if (!j.key) lines.push('  Clé d\'ancrage absente (~/.config/apv/anchor.key) : elle se crée au premier message de l\'opérateur.');
+  if (j.keyProblem && j.keyCreatedAt) lines.push(`  ATTENTION : ${j.keyProblem}.`);
+  else if (!j.key) lines.push('  Clé d\'ancrage pas encore créée (~/.apv-ancrage/cle-ancrage) : elle se crée au premier message de l\'opérateur.');
+  if (j.key && j.keyCreatedAt && Date.now() - Date.parse(j.keyCreatedAt) < 7 * 86_400_000) {
+    lines.push(`  Clé d'ancrage créée le ${j.keyCreatedAt.slice(0, 10)} : l'opérateur la sauvegarde hors de cette machine (~/.apv-ancrage/cle-ancrage). Perdue ou remplacée, elle ne se recrée pas en silence et plus rien de signé n'est accepté ; seule la sauvegarde la rétablit.`);
+  }
   return lines;
 }
 

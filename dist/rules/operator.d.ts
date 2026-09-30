@@ -2,8 +2,8 @@ import type { MergeRule } from './config.js';
 /**
  * The operator journal: what the operator typed himself in the session, kept by the UserPromptSubmit hook of the plugin
  * (hooks/scripts/operator-journal.mjs) in the Git common directory, outside every worktree and never versioned
- * (docs/REGLES.md, « Ancrage »). Each line is signed (HMAC-SHA256) with the anchor key, kept outside the repository in the
- * user's configuration folder (`~/.config/apv/anchor.key`, 0600): an unsigned or altered line is ignored. Only what a
+ * (docs/REGLES.md, « Ancrage »). Each line is signed (HMAC-SHA256) with the anchor key, kept outside the repository
+ * (`~/.apv-ancrage/cle-ancrage`, 0400): an unsigned or altered line is ignored. Only what a
  * rule needs is kept: the hash of each sentence (to recognise a quoted validation), a few words of the sentences that
  * validate, and the waiver lines, secrets masked; lines older than `rules.journalDays` (90 by default) are purged.
  * Limit: the key is on the same machine, under the same account; an agent that reads it (a guard refuses the usual forms,
@@ -16,14 +16,33 @@ export declare const OPERATOR_REFUSED: readonly ["apv", "operator", "refused.jso
 export declare const DEFAULT_JOURNAL_DAYS = 90;
 /** In-process tests only: the anchor key file. No option nor variable of the tool changes it. */
 export declare function setAnchorKeyFile(file: string | null): void;
+/** Folder and file of the anchor key: a place agents have no reason to touch, whose name the guards recognise. */
+export declare const ANCHOR_DIR = ".apv-ancrage";
+export declare const ANCHOR_FILE = "cle-ancrage";
 /**
- * The anchor key file: `<home of the account>/.config/apv/anchor.key`. The home comes from the account database
- * (`os.userInfo()`), never from `HOME` or `XDG_CONFIG_HOME`, which a command can set for itself.
+ * The anchor key file: `<home of the account>/.apv-ancrage/cle-ancrage` (folder 0700, file 0400). The home comes from the
+ * account database (`os.userInfo()`), never from `HOME` or `XDG_CONFIG_HOME`, which a command can set for itself.
  */
 export declare function anchorKeyFile(): string;
 export declare function readAnchorKey(file?: string): Buffer | null;
-/** The key, created (32 random bytes, file 0600 in a folder 0700) when absent. Only the hooks create it. */
-export declare function ensureAnchorKey(file?: string): Buffer;
+/** Fingerprint of the key in the Git common directory of each project: a replaced key is detected, never trusted. */
+export declare const KEY_FINGERPRINT: readonly ["apv", "operator", "cle.empreinte"];
+export interface AnchorKey {
+    key: Buffer | null;
+    problem: string | null;
+    createdAt: string | null;
+}
+/**
+ * The key as the tool may trust it for a project: present, and the one whose fingerprint the project recorded. A missing
+ * key, or another one (deleted then made anew), gives no key and the problem: nothing signed is then accepted.
+ */
+export declare function anchorKey(common: string, file?: string): AnchorKey;
+/**
+ * The key, for the hooks only. Created (32 random bytes, file 0400 in a folder 0700) only when absent and the project holds
+ * nothing signed yet; never made anew in silence once something was signed (a deleted key would otherwise let anyone sign).
+ * Records the fingerprint of the key in the project on first use.
+ */
+export declare function ensureAnchorKey(common: string, file?: string): Buffer;
 export declare function sign(key: Buffer, kind: string, payload: string): string;
 export declare function signatureValid(key: Buffer, kind: string, payload: string, signature: unknown): boolean;
 /** Text compared without its typography: spaces collapsed, apostrophes and quotes unified, case ignored. */
@@ -41,7 +60,7 @@ export interface JournalEntry {
     v: 2;
     at: string;
     session: string;
-    /** sha256 of each comparable sentence of the message. */
+    /** HMAC (anchor key) of each comparable sentence of the message. */
     sentences: string[];
     /** The first words of the sentences that validate or waive, secrets masked. */
     preview: string[];
@@ -64,6 +83,8 @@ export declare function readOperatorMessages(common: string, key?: Buffer<ArrayB
 export interface JournalState {
     file: string;
     key: boolean;
+    keyProblem: string | null;
+    keyCreatedAt: string | null;
     messages: number;
     ignored: number;
     last: string | null;
@@ -79,7 +100,7 @@ export declare function recordRefusal(common: string, reason: string, now?: Date
  * The message of the operator that holds every sentence of `quote`, or null. Whole sentences only: the journal keeps
  * their hashes, never the text, so a quote cut in the middle of a sentence is not recognised.
  */
-export declare function anchoredQuote(messages: readonly OperatorMessage[], quote: string): OperatorMessage | null;
+export declare function anchoredQuote(messages: readonly OperatorMessage[], quote: string, key?: Buffer | null): OperatorMessage | null;
 /** The sentence the operator types himself to waive `rule` for `sha` (shown in every refusal). */
 export declare function waiverSentence(rule: MergeRule, sha: string): string;
 /**

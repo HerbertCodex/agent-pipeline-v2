@@ -55,7 +55,7 @@ Règles :
 
 ### Exécution détachée et suivi
 
-Une exécution lancée dans une autre session (`claude -p "/apv:run <id>"`, depuis la session du chef de projet ou un terminal) doit être **détachée** : un processus lancé en tâche de fond du shell (`&` seul) appartient à la session qui l'a lancé et s'arrête avec elle. Nuit du 23 au 24 septembre 2026 sur « Toujours rien » : l'exécution `statut-a-envoyer`, lancée ainsi, a été coupée en vague 2 à la fin de la session du chef de projet ; relancée détachée, elle a survécu. `setsid` la place dans une nouvelle session sans terminal, `nohup` la protège de SIGHUP, et ses entrées et sorties ne dépendent plus du shell :
+Une exécution lancée dans une autre session (`claude -p "/apv:run <id>"`, depuis le terminal de l'opérateur : depuis 3.0.0-alpha.12, le crochet refuse au chef de projet tout lancement de `claude` sauf `claude --version` et `claude -p /usage`) doit être **détachée** : un processus lancé en tâche de fond du shell (`&` seul) appartient à la session qui l'a lancé et s'arrête avec elle. Nuit du 23 au 24 septembre 2026 sur « Toujours rien » : l'exécution `statut-a-envoyer`, lancée ainsi, a été coupée en vague 2 à la fin de la session du chef de projet ; relancée détachée, elle a survécu. `setsid` la place dans une nouvelle session sans terminal, `nohup` la protège de SIGHUP, et ses entrées et sorties ne dépendent plus du shell :
 
 ```sh
 setsid nohup sh -c 'echo "pid $$"; exec claude -p "/apv:run <id>" --plugin-dir <plugin> --output-format stream-json --verbose' \

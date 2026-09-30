@@ -1,13 +1,13 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import { maskSecrets } from '../knowledge/code-map.js';
 /**
  * The operator journal: what the operator typed himself in the session, kept by the UserPromptSubmit hook of the plugin
  * (hooks/scripts/operator-journal.mjs) in the Git common directory, outside every worktree and never versioned
- * (docs/REGLES.md, « Ancrage »). Each line is signed (HMAC-SHA256) with the anchor key, kept outside the repository in the
- * user's configuration folder (`~/.config/apv/anchor.key`, 0600): an unsigned or altered line is ignored. Only what a
+ * (docs/REGLES.md, « Ancrage »). Each line is signed (HMAC-SHA256) with the anchor key, kept outside the repository
+ * (`~/.apv-ancrage/cle-ancrage`, 0400): an unsigned or altered line is ignored. Only what a
  * rule needs is kept: the hash of each sentence (to recognise a quoted validation), a few words of the sentences that
  * validate, and the waiver lines, secrets masked; lines older than `rules.journalDays` (90 by default) are purged.
  * Limit: the key is on the same machine, under the same account; an agent that reads it (a guard refuses the usual forms,
@@ -21,12 +21,15 @@ export const DEFAULT_JOURNAL_DAYS = 90;
 let keyFileOverride = null;
 /** In-process tests only: the anchor key file. No option nor variable of the tool changes it. */
 export function setAnchorKeyFile(file) { keyFileOverride = file; }
+/** Folder and file of the anchor key: a place agents have no reason to touch, whose name the guards recognise. */
+export const ANCHOR_DIR = '.apv-ancrage';
+export const ANCHOR_FILE = 'cle-ancrage';
 /**
- * The anchor key file: `<home of the account>/.config/apv/anchor.key`. The home comes from the account database
- * (`os.userInfo()`), never from `HOME` or `XDG_CONFIG_HOME`, which a command can set for itself.
+ * The anchor key file: `<home of the account>/.apv-ancrage/cle-ancrage` (folder 0700, file 0400). The home comes from the
+ * account database (`os.userInfo()`), never from `HOME` or `XDG_CONFIG_HOME`, which a command can set for itself.
  */
 export function anchorKeyFile() {
-    return keyFileOverride ?? join(userInfo().homedir, '.config', 'apv', 'anchor.key');
+    return keyFileOverride ?? join(userInfo().homedir, ANCHOR_DIR, ANCHOR_FILE);
 }
 export function readAnchorKey(file = anchorKeyFile()) {
     try {
@@ -37,33 +40,97 @@ export function readAnchorKey(file = anchorKeyFile()) {
         return null;
     }
 }
-/** The key, created (32 random bytes, file 0600 in a folder 0700) when absent. Only the hooks create it. */
-export function ensureAnchorKey(file = anchorKeyFile()) {
-    const existing = readAnchorKey(file);
-    if (existing)
-        return existing;
-    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-    const key = randomBytes(32);
+/** Fingerprint of the key in the Git common directory of each project: a replaced key is detected, never trusted. */
+export const KEY_FINGERPRINT = ['apv', 'operator', 'cle.empreinte'];
+const fingerprintOf = (key) => createHash('sha256').update(Buffer.concat([Buffer.from('apv-anchor-fingerprint\n'), key])).digest('hex');
+function readFingerprint(common) {
     try {
-        writeFileSync(file, `${key.toString('hex')}\n`, { mode: 0o600, flag: 'wx' });
+        const v = JSON.parse(readFileSync(join(common, ...KEY_FINGERPRINT), 'utf8'));
+        return typeof v.sha256 === 'string' && typeof v.createdAt === 'string' ? { sha256: v.sha256, createdAt: v.createdAt } : null;
     }
     catch {
-        const again = readAnchorKey(file);
-        if (again)
-            return again;
-        throw new Error(`clé d'ancrage illisible : ${file}`);
+        return null;
     }
-    chmodSync(file, 0o600);
+}
+/** Whether the project already holds something signed (journal, review seals, merge traces): its key cannot be made anew. */
+function signedArtifacts(common) {
+    try {
+        if (readFileSync(operatorJournalPath(common), 'utf8').trim())
+            return true;
+    }
+    catch { /* none */ }
+    try {
+        if (readdirSync(join(common, 'apv', 'merges')).some(n => n.endsWith('.json')))
+            return true;
+    }
+    catch { /* none */ }
+    try {
+        const root = join(common, 'apv', 'reviews');
+        for (const commit of readdirSync(root))
+            for (const domain of readdirSync(join(root, commit)))
+                if (readdirSync(join(root, commit, domain)).some(n => n.endsWith('.sig')))
+                    return true;
+    }
+    catch { /* none */ }
+    return false;
+}
+/**
+ * The key as the tool may trust it for a project: present, and the one whose fingerprint the project recorded. A missing
+ * key, or another one (deleted then made anew), gives no key and the problem: nothing signed is then accepted.
+ */
+export function anchorKey(common, file = anchorKeyFile()) {
+    const key = readAnchorKey(file);
+    const fp = readFingerprint(common);
+    if (!key)
+        return { key: null, problem: `clé d'ancrage absente (${file}) : l'opérateur la restaure depuis sa sauvegarde ; rien de signé n'est accepté sans elle`, createdAt: fp?.createdAt ?? null };
+    if (fp && fp.sha256 !== fingerprintOf(key))
+        return { key: null, problem: `clé d'ancrage remplacée (empreinte différente de celle du projet) : l'opérateur restaure l'ancienne depuis sa sauvegarde ; rien de signé n'est accepté`, createdAt: fp.createdAt };
+    return { key, problem: null, createdAt: fp?.createdAt ?? null };
+}
+/**
+ * The key, for the hooks only. Created (32 random bytes, file 0400 in a folder 0700) only when absent and the project holds
+ * nothing signed yet; never made anew in silence once something was signed (a deleted key would otherwise let anyone sign).
+ * Records the fingerprint of the key in the project on first use.
+ */
+export function ensureAnchorKey(common, file = anchorKeyFile()) {
+    const found = anchorKey(common, file);
+    if (found.key) {
+        if (!readFingerprint(common))
+            writeFingerprint(common, found.key, new Date().toISOString());
+        return found.key;
+    }
+    if (readAnchorKey(file) || readFingerprint(common) || signedArtifacts(common))
+        throw new Error(found.problem ?? 'clé d\'ancrage inutilisable');
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    const key = randomBytes(32);
+    writeFileSync(file, `${key.toString('hex')}\n`, { mode: 0o400, flag: 'wx' });
+    chmodSync(file, 0o400);
+    writeFingerprint(common, key, new Date().toISOString());
     return key;
 }
+function writeFingerprint(common, key, createdAt) {
+    const f = join(common, ...KEY_FINGERPRINT);
+    mkdirSync(dirname(f), { recursive: true, mode: 0o700 });
+    writeFileSync(f, `${JSON.stringify({ sha256: fingerprintOf(key), createdAt })}\n`, { mode: 0o600 });
+}
+/**
+ * Signing is for the tool run as a command (`bin/apv`, `dist/cli.js`, which set APV_ENTRY) and for the hooks: a script
+ * that imports the module directly cannot sign (the Bash guard also refuses such scripts). A guard rail, not a secret.
+ */
+const SIGNERS = new Set(['cli', 'hook', 'test']);
 export function sign(key, kind, payload) {
+    if (!SIGNERS.has(process.env['APV_ENTRY'] ?? ''))
+        throw new Error('signature refusée hors de la commande apv et des crochets du plugin');
     return createHmac('sha256', key).update(`${kind}\n${payload}`).digest('hex');
 }
 export function signatureValid(key, kind, payload, signature) {
     if (typeof signature !== 'string' || !/^[0-9a-f]{64}$/.test(signature))
         return false;
-    return timingSafeEqual(Buffer.from(sign(key, kind, payload), 'hex'), Buffer.from(signature, 'hex'));
+    const expected = createHmac('sha256', key).update(`${kind}\n${payload}`).digest('hex');
+    return timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(signature, 'hex'));
 }
+/** A sentence keyed with the anchor key: a short code typed alone is not found back by a dictionary. */
+const keyed = (key, text) => createHmac('sha256', key).update(`sentence\n${text}`).digest('hex');
 /** Text compared without its typography: spaces collapsed, apostrophes and quotes unified, case ignored. */
 export function comparable(text) {
     return text.normalize('NFC').replace(/[‘’ʼ]/g, '\'').replace(/[“”«»]/g, '"').replace(/[\s  ]+/g, ' ').trim().toLowerCase();
@@ -73,7 +140,6 @@ const EDGE = /^[\s.!?…,;:"'()-]+|[\s.!?…,;:"'()-]+$/g;
 export function sentences(text) {
     return text.split(/\n+|(?<=[.!?…])\s+/).map(s => comparable(s).replace(EDGE, '')).filter(s => s.length > 0);
 }
-const digest = (text) => createHash('sha256').update(text).digest('hex');
 /** Shortest quote that can anchor a validation: « ok » or « oui » alone never does. */
 export const MIN_QUOTE = 12;
 /** Words that make a sentence a validation, whose first words are kept for the reader. */
@@ -95,7 +161,7 @@ export function journalEntry(text, meta, key) {
         const head = WAIVER_LINE.exec(line);
         return `${line.slice(0, head.index + head[0].length)}${maskSecrets(line.slice(head.index + head[0].length))}`.slice(0, 500);
     }).slice(0, 20);
-    const body = { v: 2, at: meta.at, session: meta.session.slice(0, 100), sentences: [...new Set(list.map(digest))].slice(0, 200), preview, waivers };
+    const body = { v: 2, at: meta.at, session: meta.session.slice(0, 100), sentences: [...new Set(list.map(s => keyed(key, s)))].slice(0, 200), preview, waivers };
     return { ...body, sig: sign(key, 'operator', JSON.stringify(body)) };
 }
 export function operatorJournalPath(common) { return join(common, ...OPERATOR_JOURNAL); }
@@ -139,7 +205,7 @@ export function appendJournal(common, entry, keepDays = DEFAULT_JOURNAL_DAYS, no
     renameSync(tmp, file);
 }
 /** The signed messages of the journal, oldest first; unsigned, altered or unreadable lines are ignored. */
-export function readOperatorMessages(common, key = readAnchorKey()) {
+export function readOperatorMessages(common, key = anchorKey(common).key) {
     let raw;
     try {
         raw = readFileSync(operatorJournalPath(common), 'utf8');
@@ -152,7 +218,8 @@ export function readOperatorMessages(common, key = readAnchorKey()) {
 }
 export function journalState(common) {
     const file = operatorJournalPath(common);
-    const key = readAnchorKey();
+    const anchor = anchorKey(common);
+    const key = anchor.key;
     let lines = [];
     try {
         lines = readFileSync(file, 'utf8').split('\n').filter(l => l.trim());
@@ -170,7 +237,7 @@ export function journalState(common) {
     catch {
         refused = null;
     }
-    return { file, key: key !== null, messages: ok.length, ignored: lines.length - ok.length, last: ok.at(-1)?.at ?? null, refused };
+    return { file, key: key !== null, keyProblem: anchor.problem, keyCreatedAt: anchor.createdAt, messages: ok.length, ignored: lines.length - ok.length, last: ok.at(-1)?.at ?? null, refused };
 }
 /** Notes, for `apv status`, that the hook refused a prompt: date and reason, never the text. */
 export function recordRefusal(common, reason, now = new Date()) {
@@ -182,11 +249,11 @@ export function recordRefusal(common, reason, now = new Date()) {
  * The message of the operator that holds every sentence of `quote`, or null. Whole sentences only: the journal keeps
  * their hashes, never the text, so a quote cut in the middle of a sentence is not recognised.
  */
-export function anchoredQuote(messages, quote) {
+export function anchoredQuote(messages, quote, key = readAnchorKey()) {
     const wanted = sentences(quote);
-    if (!wanted.length || comparable(quote).length < MIN_QUOTE)
+    if (!key || !wanted.length || comparable(quote).length < MIN_QUOTE)
         return null;
-    const hashes = wanted.map(digest);
+    const hashes = wanted.map(s => keyed(key, s));
     return messages.find(m => hashes.every(h => m.sentences.includes(h))) ?? null;
 }
 /** The sentence the operator types himself to waive `rule` for `sha` (shown in every refusal). */

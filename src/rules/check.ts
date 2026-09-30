@@ -13,7 +13,7 @@ import { WEB_DEPENDENCIES } from '../reuse/detect.js';
 import { gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
 import { commonDir } from '../stacks/idle.js';
 import { MERGE_RULES, RULE_TITLES, rulesSettings, type MergeRule } from './config.js';
-import { readOperatorMessages, waiverFor, waiverSentence, type OperatorMessage } from './operator.js';
+import { anchorKey, readOperatorMessages, waiverFor, waiverSentence, type OperatorMessage } from './operator.js';
 import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
@@ -104,7 +104,8 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   // What the rules read comes from the base: a change never sets its own rules.
   const atBase = loadConfigAtCommit(repo, mergeBase).config;
   const settings = rulesSettings(atBase.rules, REQUIRED_WEB_GATES);
-  const messages = readOperatorMessages(common);
+  const anchor = anchorKey(common);
+  const messages = readOperatorMessages(common, anchor.key);
   const rules: RuleOutcome[] = [];
 
   // preuve, instable: the full suite at this exact commit, with the checks of the base kept.
@@ -206,7 +207,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   }
   const order = new Map(MERGE_RULES.map((r, i) => [r, i]));
   rules.sort((a, b) => order.get(a.rule)! - order.get(b.rule)!);
-  return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, warnings: base.warnings };
+  return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, warnings: [...base.warnings, ...(anchor.problem ? [anchor.problem] : [])] };
 }
 
 /** Lines of a report, for the text output of `apv rules check` and of the stack commands. */

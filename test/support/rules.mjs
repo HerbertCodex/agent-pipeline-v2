@@ -6,14 +6,19 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appendJournal, ensureAnchorKey, journalEntry, setAnchorKeyFile, sign } from '../../dist/rules/operator.js';
+import { randomBytes } from 'node:crypto';
+import { appendJournal, journalEntry, readAnchorKey, setAnchorKeyFile, sign } from '../../dist/rules/operator.js';
+
+// The tests sign as the tool and the hooks do (src/rules/operator.ts: signing needs APV_ENTRY).
+process.env.APV_ENTRY = 'test';
 
 export const RULES = ['preuve', 'instable', 'relecture', 'captures', 'controles', 'maquette'];
 
 /** The anchor key of the tests of this file (one process per test file). */
-export const TEST_KEY_FILE = join(mkdtempSync(join(tmpdir(), 'apv3-anchor-')), 'anchor.key');
+export const TEST_KEY_FILE = join(mkdtempSync(join(tmpdir(), 'apv3-cle-')), 'cle-ancrage');
+writeFileSync(TEST_KEY_FILE, `${randomBytes(32).toString('hex')}\n`, { mode: 0o400 });
 setAnchorKeyFile(TEST_KEY_FILE);
-export const TEST_KEY = ensureAnchorKey(TEST_KEY_FILE);
+export const TEST_KEY = readAnchorKey(TEST_KEY_FILE);
 
 export const commonDirOf = repo => execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: repo, encoding: 'utf8' }).trim();
 

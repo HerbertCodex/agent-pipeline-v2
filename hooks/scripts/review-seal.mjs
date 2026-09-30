@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // PostToolUse hook for Bash: seals a review record right after `apv review record` ran, when the agent that ran it is
 // the reviewer agent of the domain (`apv:qa-securite` for securite...), under its own name. The seal is an HMAC of the
-// record with the anchor key, kept outside the repository (`~/.config/apv/anchor.key`, 0600): `apv rules check` counts
+// record with the anchor key, kept outside the repository (`~/.apv-ancrage/cle-ancrage`, 0400): `apv rules check` counts
 // only sealed records, so a record written by anyone else (the implementer, the lead, a script) proves nothing.
 // Never blocks, never prints.
 import { spawnSync } from 'node:child_process';
@@ -28,6 +28,7 @@ export function sealRequest(input) {
 }
 
 async function main() {
+  process.env.APV_ENTRY = 'hook';
   const input = await readHookInput();
   const request = sealRequest(input);
   if (!request) return 0;
@@ -37,7 +38,10 @@ async function main() {
   const operator = await import(OPERATOR_MODULE.href);
   const reviews = await import(REVIEWS_MODULE.href);
   const keyFile = typeof process.env.APV_ANCHOR_KEY_FILE === 'string' && process.env.APV_ANCHOR_KEY_FILE ? process.env.APV_ANCHOR_KEY_FILE : operator.anchorKeyFile();
-  reviews.sealReview(r.stdout.trim(), request.id, request.domain, request.agent, operator.ensureAnchorKey(keyFile));
+  const common = r.stdout.trim();
+  let key;
+  try { key = operator.ensureAnchorKey(common, keyFile); } catch (error) { operator.recordRefusal(common, `relecture non scellée : ${error?.message ?? error}`); return 0; }
+  reviews.sealReview(common, request.id, request.domain, request.agent, key);
   return 0;
 }
 

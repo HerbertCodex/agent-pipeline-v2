@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gitRead } from '../run/git-probe.js';
-import { readAnchorKey, sign, signatureValid } from './operator.js';
+import { anchorKey, sign, signatureValid } from './operator.js';
 /**
  * Merge traces: `apv stack merge` and `apv stack batch --merge` write one per merge, signed with the anchor key kept
  * outside the repository, in `<git common dir>/apv/merges/`. `apv audit merges` walks the default branch and names every
@@ -18,7 +18,7 @@ export function writeMergeTrace(common, body, key) {
     return file;
 }
 /** The signed traces; unsigned, altered or unreadable files are ignored. */
-export function readMergeTraces(common, key = readAnchorKey()) {
+export function readMergeTraces(common, key = anchorKey(common).key) {
     if (!key)
         return [];
     let names;

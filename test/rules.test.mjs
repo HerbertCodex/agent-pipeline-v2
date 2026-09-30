@@ -346,6 +346,10 @@ test('audit merges: a commit no signed trace of apv stack merge accounts for is 
   assert.match(status.stdout, /Audit des fusions sur origin\/main/);
   assert.match(status.stdout, /Protection de branche : dépôt distant origin hors de github\.com : protection de branche non vérifiée\./);
   assert.match(status.stdout, /Journal de l'opérateur : aucun message de l'opérateur reçu/);
+  // 7. A key created this week: apv status reminds to back it up.
+  const { ensureAnchorKey } = await import('../dist/rules/operator.js');
+  ensureAnchorKey(common);
+  assert.match((await apv(p.repo, ['status'])).stdout, /Clé d'ancrage créée le \d{4}-\d\d-\d\d : l'opérateur la sauvegarde hors de cette machine/);
   assert.equal((await apv(p.repo, ['audit', 'merges', '--since', 'hier'])).code, 2);
 });
 

@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gitRead } from '../run/git-probe.js';
-import { readAnchorKey, sign, signatureValid } from './operator.js';
+import { anchorKey, sign, signatureValid } from './operator.js';
 
 /**
  * Merge traces: `apv stack merge` and `apv stack batch --merge` write one per merge, signed with the anchor key kept
@@ -24,7 +24,7 @@ export function writeMergeTrace(common: string, body: Omit<MergeTraceBody, 'v'>,
 }
 
 /** The signed traces; unsigned, altered or unreadable files are ignored. */
-export function readMergeTraces(common: string, key = readAnchorKey()): MergeTrace[] {
+export function readMergeTraces(common: string, key = anchorKey(common).key): MergeTrace[] {
   if (!key) return [];
   let names: string[];
   try { names = readdirSync(join(common, ...MERGES_DIR)).filter(n => n.endsWith('.json')); } catch { return []; }

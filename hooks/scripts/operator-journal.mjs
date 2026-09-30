@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // UserPromptSubmit hook: keeps what the operator types himself in the session, in the Git common directory of the project
 // (`<git common dir>/apv/operator/messages.jsonl`, never versioned, never sent anywhere). It is the trace an agent cannot
-// write: each line is signed with the anchor key kept outside the repository (`~/.config/apv/anchor.key`, 0600), and the
+// write: each line is signed with the anchor key kept outside the repository (`~/.apv-ancrage/cle-ancrage`, 0400), and the
 // tool ignores an unsigned or altered line (docs/REGLES.md, « Ancrage »). Only what the rules need is kept: the hash of each
 // sentence, the first words of the sentences that validate, the waiver lines, secrets masked; purged after
 // `rules.journalDays` (90 days by default).
@@ -54,6 +54,7 @@ function journalDays(apvDir, fallback) {
 }
 
 async function main() {
+  process.env.APV_ENTRY = 'hook';
   const input = await readHookInput();
   const decision = operatorEntry(input);
   if (!decision) return 0;
@@ -63,7 +64,9 @@ async function main() {
   if (!common) return 0;
   const operator = await import(OPERATOR_MODULE.href);
   if (decision.refuse) { operator.recordRefusal(common, decision.refuse); return 0; }
-  const key = operator.ensureAnchorKey(hookKeyFile(operator));
+  let key;
+  try { key = operator.ensureAnchorKey(common, hookKeyFile(operator)); }
+  catch (error) { operator.recordRefusal(common, error?.message ?? String(error)); return 0; }
   const entry = operator.journalEntry(decision.keep.text, { at: new Date().toISOString(), session: decision.keep.session }, key);
   if (entry) operator.appendJournal(common, entry, journalDays(apvDir, operator.DEFAULT_JOURNAL_DAYS));
   return 0;

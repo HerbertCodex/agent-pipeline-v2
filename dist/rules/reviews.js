@@ -5,7 +5,7 @@ import { PipelineError, invariant } from '../domain/errors.js';
 import { REVIEW_DOMAINS } from '../review/config.js';
 import { gitRead, resolveCommit } from '../run/git-probe.js';
 import { CAPTURE_THEMES, CAPTURE_VIEWPORTS } from './config.js';
-import { readAnchorKey, sign, signatureValid } from './operator.js';
+import { anchorKey, sign, signatureValid } from './operator.js';
 /**
  * Review records: what a reviewer agent found at one exact commit, kept in the Git common directory
  * (`<git common dir>/apv/reviews/<commit>/<domaine>/`), outside every worktree and never versioned, with a copy of its
@@ -182,7 +182,7 @@ function parseRecord(value, commit, domain) {
  * A record that does not match (another commit, another domain, a reviewer that is not the agent of the domain, a file
  * changed) is returned with its problem: it proves nothing.
  */
-export function latestReviews(common, commit, key = readAnchorKey()) {
+export function latestReviews(common, commit, key = anchorKey(common).key) {
     const out = new Map();
     for (const domain of REVIEW_DOMAINS) {
         const dir = join(reviewsDir(common, commit), domain);

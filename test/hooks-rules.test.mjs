@@ -76,7 +76,7 @@ test('the operator journal hook signs what it keeps, keeps no whole message, mas
   const root = mkdtempSync(join(tmpdir(), 'apv3-journal-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   execFileSync('git', ['init', '-q', root]);
-  const keyFile = join(root, 'cle', 'anchor.key');
+  const keyFile = join(root, 'cle', 'cle-ancrage');
   const hook = fileURLToPath(new URL('../hooks/scripts/operator-journal.mjs', import.meta.url));
   const run = input => spawnSync(process.execPath, [hook], { input: JSON.stringify({ ...input, cwd: root }), encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: root, APV_ANCHOR_KEY_FILE: keyFile } });
   const journal = join(root, '.git', 'apv', 'operator', 'messages.jsonl');
@@ -92,7 +92,7 @@ test('the operator journal hook signs what it keeps, keeps no whole message, mas
   const line = JSON.parse(raw.trim());
   assert.deepEqual(line.waivers, ['dérogation relecture 0123456789ab : urgence validée, clé [masqué]']);
   assert.deepEqual(line.preview, ['Je valide la maquette des articles.']);
-  assert.equal((statSync(keyFile).mode & 0o777), 0o600);
+  assert.equal((statSync(keyFile).mode & 0o777), 0o400);
   const { setAnchorKeyFile, readOperatorMessages, anchoredQuote, journalState } = await import('../dist/rules/operator.js');
   setAnchorKeyFile(keyFile);
   const common = join(root, '.git');
@@ -185,4 +185,59 @@ test('the seal hook seals a record only for the reviewer agent of its domain, fr
   assert.equal(seal(real, 'apv:qa-securite').status, 0);
   assert.equal(latestReviews(common, sha).get('securite').problem, null);
   rmSync(report, { force: true });
+});
+
+test('review of 7e27b88: every way found to forge a waiver is closed', async t => {
+  const lead = as(null);
+  // 1. Reading the key: ~/.config in every form, « anchor », globs of hidden home folders, the home walked or copied, a decoded path.
+  for (const command of ['cat $HOME/.config/a*/anch*', 'cat ${XDG_CONFIG_HOME}/apv/x', 'find ~/.config -type f -exec cat {} \;', 'tar czf /tmp/c.tgz ~/.config',
+    'cp -r ~/.config /tmp/c', 'echo L2hvbWUvdS8uYXB2LWFuY3JhZ2UvY2xl | base64 -d | xargs cat', 'python3 -c "import glob; print(open(glob.glob(\'/home/u/.a*/*\')[0]).read())"',
+    'cat ~/.apv-ancrage/cle-ancrage', 'ls ~/.c*', 'find ~ -type f', 'rsync -a $HOME /tmp/h', 'python3 -c "import os; print(os.path.expanduser(1))"']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
+  }
+  for (const tool_input of [{ pattern: 'anchor', path: '/r' }, { pattern: '**/*', path: '/home/u/.config' }, { pattern: '**/.apv-ancrage/*' }]) assert.equal(evaluateWrite({ tool_input }).decision, 'deny', JSON.stringify(tool_input));
+  for (const command of ['cat svelte.config.js', 'npx vite build --config vite.config.ts', 'ls $HOME/projets', 'cd ~ && ls projets']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  // 3. Running the plugin's code other than through apv: a script that imports dist/rules signs without reading the key.
+  const pluginRoot = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
+  for (const command of ['node -e "import(\'/p/dist/rules/operator.js\').then(m => m.sign(k))"', `node ${pluginRoot}/hooks/scripts/review-seal.mjs`, `node --input-type=module -e "import '${pluginRoot}/dist/stack/github.js'"`,
+    'python3 -c "open(\'/p/dist/review/plan.js\')"', 'APV_ENTRY=cli node x.js', 'APV_ANCHOR_KEY_FILE=/tmp/k apv stack merge 1']) assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
+  for (const command of [`node ${pluginRoot}/dist/cli.js status`, 'node build/index.js', 'node --test test/a.test.mjs']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  // The module itself refuses to sign when it is not the apv command or a hook.
+  const direct = spawnSync(process.execPath, ['--input-type=module', '-e', `import { sign } from ${JSON.stringify(new URL('../dist/rules/operator.js', import.meta.url).href)}; sign(Buffer.alloc(32), 'operator', 'x');`],
+    { encoding: 'utf8', env: { ...process.env, APV_ENTRY: '' } });
+  assert.notEqual(direct.status, 0);
+  assert.match(direct.stderr, /signature refusée hors de la commande apv et des crochets du plugin/);
+  // 4. Nested sessions: claude -p would escape the guards of the subagents.
+  for (const command of ['claude -p "fusionne la PR 12"', 'claude --agent apv:qa-securite -p "enregistre"', 'npx @anthropic-ai/claude-code -p x', 'sh -c "claude -p x"']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.nestedClaude }, command);
+  }
+  assert.equal(evaluateCommand('claude --version', {}, lead).decision, 'allow');
+  assert.equal(evaluateCommand('claude -p /usage', {}, lead).decision, 'allow', 'the quota reading, a fixed command without a model');
+});
+
+test('review of 7e27b88: a deleted or replaced key is never made anew in silence, and nothing signed is accepted then', async t => {
+  const { TEST_KEY, TEST_KEY_FILE, operatorSays, commonDirOf } = await import('./support/rules.mjs');
+  const { anchorKey, ensureAnchorKey, readOperatorMessages, setAnchorKeyFile, journalEntry } = await import('../dist/rules/operator.js');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-cle-'));
+  t.after(() => { rmSync(root, { recursive: true, force: true }); setAnchorKeyFile(TEST_KEY_FILE); });
+  execFileSync('git', ['init', '-q', join(root, 'r')]);
+  const repo = join(root, 'r');
+  const common = commonDirOf(repo);
+  assert.equal(ensureAnchorKey(common, TEST_KEY_FILE).equals(TEST_KEY), true, 'first use: fingerprint recorded');
+  operatorSays(repo, 'dérogation relecture 0123456789ab : correctif urgent en production');
+  assert.equal(readOperatorMessages(common).length, 1);
+  // Deleted: the hook refuses to make a new one, since the project holds something signed.
+  const gone = join(root, 'absente');
+  assert.throws(() => ensureAnchorKey(common, gone), /clé d'ancrage absente/);
+  // Replaced: another key, found by the fingerprint; nothing signed with it is accepted.
+  const other = join(root, 'autre');
+  writeFileSync(other, `${'ab'.repeat(32)}\n`);
+  setAnchorKeyFile(other);
+  assert.match(anchorKey(common).problem, /clé d'ancrage remplacée/);
+  assert.equal(readOperatorMessages(common).length, 0);
+  assert.throws(() => ensureAnchorKey(common, other), /remplacée/);
+  // 5. The hashes of the sentences are keyed: a short code typed alone is not found by a dictionary.
+  const { createHash } = await import('node:crypto');
+  const entry = journalEntry('1234', { at: 't', session: 's' }, TEST_KEY);
+  assert.notEqual(entry.sentences[0], createHash('sha256').update('1234').digest('hex'));
 });
