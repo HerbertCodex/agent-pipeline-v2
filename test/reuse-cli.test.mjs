@@ -77,7 +77,7 @@ test('apv onboard on an existing web project: reuse and code map checks, detecte
   const out = r.json();
   const config = JSON.parse(read(f.repo, '.apv/config.json'));
   // The base of the run ({{baseSha}}, in the proof key) says what is new; the map is checked by the full suite.
-  assert.deepEqual(config.gates.map(g => [g.id, g.command.join(' '), g.stage, g.readOnly]), [['reuse', 'apv reuse check --base {{baseSha}}', 'task', true], ['structure', 'apv structure check', 'task', true], ['code-map', 'apv map --check', 'full', true]]);
+  assert.deepEqual(config.gates.map(g => [g.id, g.command.join(' '), g.stage, g.readOnly]), [['reuse', 'apv reuse check --base {{baseSha}}', 'task', true], ['structure', 'apv structure check --base {{baseSha}}', 'task', true], ['code-map', 'apv map --check', 'full', true]]);
   assert.deepEqual(config.reuse, {
     reference: 'origin/main',
     shared: ['src/lib/components/**'],
@@ -234,7 +234,7 @@ test('apv map: written, checked, stale when the code changes, missing, JSON mode
   assert.ok(existsSync(join(f.repo, 'docs/CODE-MAP.md')));
 });
 
-test('apv init on a new web project declares the checks the rules require (reuse, structure, code-map), and apv gates run proves them at the task stage (receipts)', async t => {
+test('apv init on a new web project declares both checks, and apv gates run proves them at the task stage (receipts)', async t => {
   const f = project(t);
   const env = withApvOnPath(f);
   const init = await apv(f.repo, ['init', '--json']);
@@ -263,6 +263,9 @@ test('apv init on a new web project declares the checks the rules require (reuse
   assert.deepEqual([rows.reuse.status, rows['code-map'].status], ['failed', 'failed']);
   assert.match(rows.reuse.diagnostic, /<select> natif réservé/);
   assert.match(rows['code-map'].diagnostic, /Carte du code périmée/);
+  // The new /admin route has no role in the architecture map: the tree check fails too.
+  assert.equal(rows.structure.status, 'failed');
+  assert.match(rows.structure.diagnostic, /route principale \/admin ajoutée sans rôle/);
   const receipt = JSON.parse(read(f.repo, `.apv/receipts/${red.json().runId}/reuse.json`));
   assert.equal(receipt.status, 'failed');
 });

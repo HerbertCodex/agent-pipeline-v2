@@ -4,7 +4,7 @@
 
 **Un chef de projet Claude Code, de vrais sous-agents, des règles que l'outil fait respecter.**
 
-[![Version](https://img.shields.io/badge/alpha-3.0.0--alpha.11-a8461a?style=flat-square)](docs/PLUGIN.md)
+[![Version](https://img.shields.io/badge/alpha-3.0.0--alpha.12-a8461a?style=flat-square)](docs/PLUGIN.md)
 [![CI](https://github.com/HerbertCodex/agent-pipeline-v2/actions/workflows/ci.yml/badge.svg)](https://github.com/HerbertCodex/agent-pipeline-v2/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A5%2022.16-2d6e45?style=flat-square)](package.json)
 [![License](https://img.shields.io/badge/licence-MIT-55514a?style=flat-square)](LICENSE)
@@ -48,9 +48,10 @@ Depuis la racine du dépôt (Git, dépôt distant `origin`) :
 
 Créé sans jamais écraser un fichier existant :
 
-- `.apv/config.json` : les contrôles (`code-map` toujours ; `reuse` et `structure` pour un projet web ; pour un projet existant, aussi ceux détectés dans `package.json`, `Makefile` ou `pyproject.toml`) ;
+- `.apv/config.json` : les contrôles (`structure` et `code-map` toujours ; `reuse` pour un projet web ; pour un projet existant, aussi ceux détectés dans `package.json`, `Makefile` ou `pyproject.toml`) ;
 - `.apv/DECISIONS.json` : le registre des décisions de l'opérateur ;
 - `.apv/code-map.md` : la carte du code, lue par les agents avant de créer quoi que ce soit ;
+- `docs/carte-architecture.md` : la carte de l'architecture (partie générée remplie, partie écrite à compléter avec l'opérateur), vérifiée par le contrôle `structure` ;
 - `.apv/brief.md` : la consigne commune des implementers ; `.apv/specs/` et `.apv/state/`.
 
 Sur une configuration existante, l'outil liste les contrôles que les règles exigent et qui lui manquent. Protège la branche principale sur GitHub (PR obligatoire, pas de force-push) si ton plan l'offre ; sinon, `apv audit merges` montre après coup ce qui est passé hors de l'outil ([règles](docs/REGLES.md), section 3 bis). Ensuite, colle dans la session la phrase de départ de [docs/DEMARRER-UN-PROJET.md](docs/DEMARRER-UN-PROJET.md).
@@ -83,8 +84,10 @@ Sur une configuration existante, l'outil liste les contrôles que les règles ex
 - [Démarrer un projet](docs/DEMARRER-UN-PROJET.md) et [règles du chef de projet](docs/REGLES.md)
 - [Plugin](docs/PLUGIN.md) : agents, compétences, crochets, mise à jour
 - [Outil apv](docs/CLI.md), [configuration](docs/CONFIGURATION.md), [exécution d'une spec](docs/RUN.md)
-- [Réutilisation](docs/REUSE.md), [design](docs/DESIGN.md), [décisions](docs/DECISIONS.md), [sécurité](docs/SECURITY.md)
+- [Arborescence](docs/STRUCTURE.md), [réutilisation](docs/REUSE.md), [design](docs/DESIGN.md), [décisions](docs/DECISIONS.md), [sécurité](docs/SECURITY.md)
 - [Toute la documentation](docs/README.md), [spécification](docs/APV3-SPEC.md), [évolutions](CHANGELOG.md)
+
+**Mise à jour vers 3.0.0-alpha.11**, sur un projet déjà sous APV : lancez `apv map` une fois après la mise à jour et commitez `.apv/code-map.md` (et la carte de l'architecture si elle existe) dans une PR à part : la carte du code gagne une section « Dossiers », et le contrôle `code-map` la dit périmée « par la mise à jour d'APV » jusque-là. Pour le contrôle `structure` et la carte de l'architecture sur un projet existant : `apv structure map`, puis le contrôle à ajouter à `.apv/config.json` ([docs/STRUCTURE.md](docs/STRUCTURE.md)).
 
 ## Développer
 

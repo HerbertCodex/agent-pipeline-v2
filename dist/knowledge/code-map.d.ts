@@ -110,7 +110,18 @@ export declare function shares(sizes: readonly number[], total: number): number[
  * first, then the shared modules, the routes, the other shared components, what belongs to one feature. The folders left
  * out are named, with their count.
  */
+/** What the code map says of the tree: where the architecture map is, and the flat folders not to add files to. */
+export interface MapFolders {
+    architectureMap: string | null;
+    maxFlatFiles: number;
+    /** Folders above the threshold, with the subfolders `apv structure check` proposes. */
+    crowded: {
+        folder: string;
+        code: number;
+        groups: string[];
+    }[];
+}
 export declare function codeMapMarkdown(map: CodeMap, settings: Pick<MapSettings, 'maxEntries'> & {
     maxBytes?: number;
-}): string;
+}, folders?: MapFolders): string;
 export {};

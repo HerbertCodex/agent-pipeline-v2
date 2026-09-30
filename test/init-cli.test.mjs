@@ -15,13 +15,16 @@ test('apv init creates .apv/ with a valid ledger, a named configuration and the 
   assert.equal(r.code, 0, r.stderr);
   const out = r.json();
   assert.equal(out.name, 'Toujours rien');
-  assert.deepEqual(out.created, ['.apv/', '.apv/config.json', '.apv/DECISIONS.json', '.apv/brief.md', '.apv/specs/', '.apv/state/', '.apv/.gitignore', '.apv/code-map.md']);
+  assert.deepEqual(out.created, ['.apv/', '.apv/config.json', '.apv/DECISIONS.json', '.apv/brief.md', '.apv/specs/', '.apv/state/', '.apv/.gitignore', '.apv/code-map.md', 'docs/carte-architecture.md']);
   assert.deepEqual([out.existing, out.completed], [[], []]);
-  // Not a web project: the code map and its check only, no reuse section.
+  // Not a web project: the tree and the code map checks, no reuse section.
   assert.deepEqual(JSON.parse(read(f.repo, '.apv/config.json')), { name: 'Toujours rien', gates: [
+    { id: 'structure', command: ['apv', 'structure', 'check', '--base', '{{baseSha}}'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true },
     { id: 'code-map', command: ['apv', 'map', '--check'], covers: ['architecture'], stage: 'full', readOnly: true, mandatory: true },
   ] });
-  assert.deepEqual([out.reuse.web, out.reuse.gates, out.reuse.section, out.reuse.map], [false, ['code-map'], null, '.apv/code-map.md']);
+  assert.deepEqual([out.reuse.web, out.reuse.gates, out.reuse.section, out.reuse.map], [false, ['structure', 'code-map'], null, '.apv/code-map.md']);
+  assert.match(read(f.repo, 'docs/carte-architecture.md'), /^# Carte de l'architecture\n[\s\S]*<!-- apv:ecrit:roles -->/);
+  assert.equal((await apv(f.repo, ['structure', 'map', '--check'])).code, 0, 'the architecture map written by init is up to date');
   assert.match(read(f.repo, '.apv/code-map.md'), /^# Carte du code\n/);
   assert.equal((await apv(f.repo, ['map', '--check'])).code, 0, 'the map written by init is up to date');
   for (const dir of ['.apv/specs', '.apv/state']) assert.ok(statSync(join(f.repo, dir)).isDirectory(), dir);

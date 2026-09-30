@@ -12,6 +12,12 @@ import { DEFAULT_NATIVE_ELEMENTS, DEFAULT_PRIMITIVE_PATHS, DEFAULT_REUSE_IGNORE,
  */
 export const REUSE_GATE = { id: 'reuse', command: ['apv', 'reuse', 'check', '--base', '{{baseSha}}'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true } as const;
 /**
+ * The gate of the tree, added by `apv init` and `apv onboard` to every project (task stage, docs/STRUCTURE.md): a code file
+ * added to a flat folder, or a folder, main route or entry point added without a role in the architecture map, fails it;
+ * what existed at `{{baseSha}}` is reported without blocking.
+ */
+export const STRUCTURE_GATE = { id: 'structure', command: ['apv', 'structure', 'check', '--base', '{{baseSha}}'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true } as const;
+/**
  * The gate of the code map, added to every project: it fails when `.apv/code-map.md` no longer matches the code. Full
  * stage: tasks never commit the map (parallel tasks would conflict on it); the integration regenerates it once per wave.
  */

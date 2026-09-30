@@ -271,6 +271,8 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly domains: string[] | undefined;
         readonly ignore: string[] | undefined;
         readonly severity: "warning" | "error" | Record<string, "warning" | "error"> | undefined;
+        readonly architectureMap: string | undefined;
+        readonly profile: "sveltekit" | "nextjs" | "nuxt" | "astro" | "angular" | "vue" | "react" | "python" | "go" | "generic" | undefined;
     } | undefined;
     readonly run: {
         readonly fullSuite: "final" | "each-integration";

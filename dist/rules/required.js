@@ -1,13 +1,9 @@
 /**
- * The check of the tree structure, added by `apv init` and `apv onboard` to a web project (task stage: it also runs in the
- * full suite). By default every finding is a warning: the check fails only on what the project raised to `error`.
- */
-export const STRUCTURE_GATE = { id: 'structure', command: ['apv', 'structure', 'check'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true };
-/**
  * Checks every web project must declare, mandatory, before a merge (rule `controles`): the reuse of the shared components,
  * the code map and the tree structure. A check is recognised by the start of its command (`apv reuse check ...`), wrapped
- * or not (`node .../cli.js reuse check`, `npx apv ...`), whatever its id. A new capability of the tool (the architecture
- * map, for instance) is added here, and a project adds its own through `rules.requiredGates`.
+ * or not (`node .../cli.js reuse check`, `npx apv ...`), whatever its id and its options (`--base {{baseSha}}`). The
+ * architecture map is checked by `apv structure check` itself (its rule `architecture-map`): the `structure` check covers
+ * it. A new capability of the tool that has its own check is added here; a project adds its own through `rules.requiredGates`.
  */
 export const REQUIRED_WEB_GATES = [
     { id: 'reuse', command: ['apv', 'reuse', 'check'], source: 'apv' },

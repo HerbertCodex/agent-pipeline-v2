@@ -59,7 +59,7 @@ export interface ReuseSetup {
     /** Web interface detected, and why. */
     web: boolean;
     signals: string[];
-    /** Gates added to the created configuration (`reuse` for a web project, `code-map` always); empty when it existed. */
+    /** Gates added to the created configuration (`reuse` for a web project, `structure` and `code-map` always); empty when it existed. */
     gates: string[];
     /** The `reuse` section written, or null. */
     section: ReuseDocument | null;
@@ -69,6 +69,12 @@ export interface ReuseSetup {
     mapNote: string | null;
     /** The generated checks call `apv` by name: false when it is not on the PATH of this machine. */
     apvOnPath: boolean;
+    /** Architecture map: its path when created (or to be created), null when it existed; why it could not be written. */
+    architecture?: {
+        file: string;
+        status: 'created' | 'existing' | 'failed';
+        note: string | null;
+    };
     /** Checks the rules before a merge require (rule `controles`) that an existing configuration lacks, or declares optional. */
     missingRequired: string[];
 }
@@ -88,8 +94,18 @@ export declare function initialMap(repo: string, configText: string | undefined)
     text: string;
     partial: boolean;
     error?: string;
+    crowded?: {
+        folder: string;
+        code: number;
+        groups: string[];
+    }[];
 } | null>;
 export declare function initProject(repo: string, name: string, pluginRoot?: string): Promise<InitResult>;
+/**
+ * The architecture map (docs/STRUCTURE.md), written when it does not exist, never touched when it does: generated parts
+ * filled, written parts as drafts to complete with the operator. With a dry run, only said. Never blocks the setup.
+ */
+export declare function initialArchitecture(repo: string, writer: ApvWriter): Promise<NonNullable<ReuseSetup['architecture']>>;
 /** The map fields of the setup, from what `initialMap` returned. */
 export declare function mapFields(map: Awaited<ReturnType<typeof initialMap>>): Pick<ReuseSetup, 'map' | 'mapNote' | 'apvOnPath'>;
 /** Lines of the reuse setup for the text output of `apv init` and `apv onboard`. */

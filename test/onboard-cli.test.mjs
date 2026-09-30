@@ -11,6 +11,7 @@ import { specIdOf } from '../dist/onboard/v2.js';
 
 const read = (repo, path) => readFileSync(join(repo, path), 'utf8');
 const CODE_MAP_GATE = { id: 'code-map', command: ['apv', 'map', '--check'], covers: ['architecture'], stage: 'full', readOnly: true, mandatory: true };
+const STRUCTURE_GATE = { id: 'structure', command: ['apv', 'structure', 'check', '--base', '{{baseSha}}'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true };
 
 /** Every file under a folder with its content: a before/after snapshot shows that nothing changed. */
 function snapshot(dir) {
@@ -74,18 +75,18 @@ test('apv onboard takes over a V2 project: the read sections, the ledger as is, 
   const r = await apv(f.repo, ['onboard', '--json']);
   assert.equal(r.code, 0, r.stderr);
   const out = r.json();
-  assert.deepEqual(out.created, ['.apv/', '.apv/config.json', '.apv/DECISIONS.json', '.apv/DECISIONS.md', '.apv/brief.md', '.apv/specs/', '.apv/state/', '.apv/.gitignore', '.apv/code-map.md', '.apv/specs/accueil.json']);
+  assert.deepEqual(out.created, ['.apv/', '.apv/config.json', '.apv/DECISIONS.json', '.apv/DECISIONS.md', '.apv/brief.md', '.apv/specs/', '.apv/state/', '.apv/.gitignore', '.apv/code-map.md', 'docs/carte-architecture.md', '.apv/specs/accueil.json']);
   assert.deepEqual([out.dryRun, out.v2.config, out.v2.ledger, out.v2.notImported], [false, 'pipeline.v2.json', '.agent-pipeline/DECISIONS.json', ['.agent-pipeline/roles/']]);
   // Configuration: exactly the sections of spec section 14, as V2 wrote them.
   const v2 = v2Config();
   const config = JSON.parse(read(f.repo, '.apv/config.json'));
   // The code map check is added after the V2 checks (not a web project: no reuse check).
-  assert.deepEqual(config, { name: 'repo', gates: [...v2.gates, CODE_MAP_GATE], risk: v2.risk, validationRules: [], skills: v2.skills, environment: { passEnv: v2.environment.passEnv } });
+  assert.deepEqual(config, { name: 'repo', gates: [...v2.gates, STRUCTURE_GATE, CODE_MAP_GATE], risk: v2.risk, validationRules: [], skills: v2.skills, environment: { passEnv: v2.environment.passEnv } });
   assert.deepEqual(out.config.kept, ['gates', 'risk', 'validationRules', 'skills', 'environment.passEnv']);
   assert.deepEqual(out.config.ignored, ['agent', 'concurrency', 'environment.id', 'executionMode', 'failFast', 'feedback', 'knowledge', 'limits', 'maxRunMs',
     'roleProfiles', 'roles', 'schemaVersion', 'setup', 'workflow']);
-  assert.deepEqual(out.config.gates, ['diff-check', 'test', 'integration', 'code-map']);
-  assert.deepEqual([out.reuse.web, out.reuse.gates, out.reuse.existing], [false, ['code-map'], null]);
+  assert.deepEqual(out.config.gates, ['diff-check', 'test', 'integration', 'structure', 'code-map']);
+  assert.deepEqual([out.reuse.web, out.reuse.gates, out.reuse.existing], [false, ['structure', 'code-map'], null]);
   // Ledger: the V2 file byte for byte, and its readable version.
   assert.equal(read(f.repo, '.apv/DECISIONS.json'), read(f.repo, '.agent-pipeline/DECISIONS.json'));
   assert.match(read(f.repo, '.apv/DECISIONS.md'), /langue-francais/);
@@ -168,6 +169,7 @@ test('apv onboard without V2 proposes the detected gates, never mandatory', asyn
     { id: 'test', command: ['pnpm', 'run', 'test'], mandatory: false },
     { id: 'build', command: ['pnpm', 'run', 'build'], mandatory: false },
     { id: 'e2e', command: ['pnpm', 'run', 'test:e2e'], mandatory: false },
+    STRUCTURE_GATE,
     CODE_MAP_GATE,
   ] });
   assert.match(out.config.detected[0].source, /package\.json, script « check » \(svelte-check\)/);

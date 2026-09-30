@@ -12,6 +12,19 @@ export declare const REUSE_GATE: {
     readonly mandatory: true;
 };
 /**
+ * The gate of the tree, added by `apv init` and `apv onboard` to every project (task stage, docs/STRUCTURE.md): a code file
+ * added to a flat folder, or a folder, main route or entry point added without a role in the architecture map, fails it;
+ * what existed at `{{baseSha}}` is reported without blocking.
+ */
+export declare const STRUCTURE_GATE: {
+    readonly id: "structure";
+    readonly command: readonly ["apv", "structure", "check", "--base", "{{baseSha}}"];
+    readonly covers: readonly ["architecture"];
+    readonly stage: "task";
+    readonly readOnly: true;
+    readonly mandatory: true;
+};
+/**
  * The gate of the code map, added to every project: it fails when `.apv/code-map.md` no longer matches the code. Full
  * stage: tasks never commit the map (parallel tasks would conflict on it); the integration regenerates it once per wave.
  */

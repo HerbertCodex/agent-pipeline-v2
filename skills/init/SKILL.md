@@ -3,7 +3,7 @@ name: init
 description: "Nouveau projet APV : crée .apv/ avec apv init (configuration, registre des décisions, consigne commune, specs, état), puis complète avec l'opérateur les contrôles détectés du dépôt, la consigne commune et les premières décisions, vérifie le tout et propose un commit. À utiliser une fois par projet, avant la première spec."
 argument-hint: "[nom du projet]"
 disable-model-invocation: true
-allowed-tools: Read Glob Grep Write Edit Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js init*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js status*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js ledger*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js map*) Bash(apv init*) Bash(apv status*) Bash(apv ledger*) Bash(apv map*) Bash(git status*) Bash(git log*) Bash(git diff*) Bash(git rev-parse*)
+allowed-tools: Read Glob Grep Write Edit Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js init*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js status*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js ledger*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js map*) Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js structure*) Bash(apv init*) Bash(apv structure*) Bash(apv status*) Bash(apv ledger*) Bash(apv map*) Bash(git status*) Bash(git log*) Bash(git diff*) Bash(git rev-parse*)
 ---
 
 # /apv:init
@@ -15,12 +15,13 @@ Dans ce document, `apv` désigne `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` (ou 
 ## 1. Créer le dossier
 1. `git rev-parse --show-toplevel` : la commande se lance à la racine d'un dépôt Git. `apv init` refuse hors d'un dépôt (code 1).
 2. `apv init --name "<nom>"`, sortie lue en entier. L'outil crée seulement ce qui manque, sans jamais écraser un fichier existant, et liste ce qu'il a créé et ce qui existait déjà :
-   - `.apv/config.json` : nom du projet et les contrôles de la réutilisation : `code-map` (`apv map --check`, carte du code à jour, suite complète) pour tout projet, `reuse` (`apv reuse check --base {{baseSha}}`, étape tâche : `apv gates run` demande alors `--base`), `structure` (`apv structure check`, étape tâche) et la section `reuse` détectée pour un projet web (`${CLAUDE_PLUGIN_ROOT}/docs/REUSE.md`) : les contrôles qu'exigent les règles avant fusion (`${CLAUDE_PLUGIN_ROOT}/docs/REGLES.md`) ;
+   - `.apv/config.json` : nom du projet et les contrôles de la réutilisation et de l'arborescence : `structure` (`apv structure check --base {{baseSha}}`, étape tâche : un fichier ajouté à un dossier à plat, un dossier, une route principale ou un point d'entrée ajouté sans rôle dans la carte de l'architecture bloquent ; `${CLAUDE_PLUGIN_ROOT}/docs/STRUCTURE.md`) et `code-map` (`apv map --check`, carte du code à jour, suite complète) pour tout projet, `reuse` (`apv reuse check --base {{baseSha}}`, étape tâche : `apv gates run` demande alors `--base`) et la section `reuse` détectée pour un projet web (`${CLAUDE_PLUGIN_ROOT}/docs/REUSE.md`) ; Ce sont aussi les contrôles qu'exigent les règles avant fusion (`${CLAUDE_PLUGIN_ROOT}/docs/REGLES.md`).
    - `.apv/DECISIONS.json` : registre vide et valide ;
    - `.apv/brief.md` : consigne commune, depuis le modèle `references/brief-type.md` de la compétence `chef-de-projet` ;
    - `.apv/specs/`, `.apv/state/` ;
    - `.apv/.gitignore` : `state/*.log`, `state/task.json`, `receipts/`.
    - `.apv/code-map.md` : la carte du code (`apv map`), à lire par les implementers avant de créer un composant, un module ou une route.
+   - `docs/carte-architecture.md` (`structure.architectureMap`) : la carte de l'architecture, à lire en premier par tous ; parties générées remplies (arborescence avec les conventions de la pile, points d'entrée, liens), parties écrites en brouillon (en bref, couches et flux en mermaid, règles transverses, rôles).
 3. Un fichier qui existait déjà n'est pas remplacé : lis-le et complète-le à la main si besoin, sans perdre ce qu'il contient.
 
 ## 2. Contrôles détectés du dépôt
@@ -35,7 +36,9 @@ Tu les détectes toi-même, en lecture, puis tu les écris dans `gates` de `.apv
 - **Taille des specs** : section facultative `spec` de `.apv/config.json`, `{ "spec": { "maxTasks": 6, "maxAcceptance": 30, "maxDepth": 3 } }` (défauts, section absente comprise) : au-delà, `apv spec validate` avertit sans refuser et propose de découper la spec ou de raccourcir sa chaîne de dépendances ; ne la change que sur demande de l'opérateur.
 - Un contrôle qui dépend d'un service (Docker, base locale) le dit dans son identifiant ou sa ressource ; les tests « live » échouent quand le service manque, ils ne sont jamais sautés.
 - Si le projet a des maquettes validées : ajoute `apv design check` ; si le projet a une base : `apv db check` (section `db`, voir `${CLAUDE_PLUGIN_ROOT}/docs/DB-CHECK.md`).
-- **Réutilisation et règles** : garde les contrôles `code-map`, `reuse` et `structure` écrits par `apv init`, obligatoires : `apv stack merge` refuse de fusionner sans eux ; si la sortie liste des contrôles requis absents d'une configuration existante, ajoute-les avec l'opérateur ; relis la section `reuse` avec l'opérateur (dossiers partagés, composant qui remplace chaque élément natif réservé, langue, `reference` : la branche où vont les PR). Ne baisse aucune gravité (`docs/REUSE.md`).
+- **Arborescence** : garde le contrôle `structure` écrit par `apv init`. Charge la compétence `apv:structure` : relis avec l'opérateur le brouillon de la carte de l'architecture (schéma des couches, règles transverses) et complète les rôles des dossiers que le code rend évidents ; présente les dossiers à plat de `apv structure check` avec le découpage proposé, jugé (noms, convention de la pile) ; leur rangement est une spec à part, sur décision de l'opérateur.
+- **Réutilisation** : garde les contrôles `code-map` et `reuse` écrits par `apv init` ; relis la section `reuse` avec l'opérateur (dossiers partagés, composant qui remplace chaque élément natif réservé, langue, `reference` : la branche où vont les PR). Ne baisse aucune gravité (`docs/REUSE.md`).
+- **Règles** : `structure`, `reuse` et `code-map` restent obligatoires : `apv stack merge` refuse de fusionner sans eux ; si la sortie liste des contrôles requis absents d'une configuration existante, ajoute-les avec l'opérateur.
 - Vérifie la configuration avec `apv status` (fichier lu, contrôles déclarés, erreurs). Ne lance pas tous les contrôles ici : `apv gates run` viendra avec la première spec, ou tout de suite si l'opérateur le demande.
 
 Présente la liste à l'opérateur en une phrase par contrôle ; il peut en retirer ou en ajouter.

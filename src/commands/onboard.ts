@@ -9,7 +9,7 @@ import { findSpecCandidates, importV2Config, importV2Ledger, specFileName, V2_SP
 import { gitRoot } from '../run/git-probe.js';
 import { checkSpec, parseSpecDocument } from '../spec/check.js';
 import { GITATTRIBUTES } from '../design/attributes.js';
-import { ApvWriter, PLUGIN_ROOT, initialMap, mapFields, missingRequired, readBriefTemplate, reuseConfig, reuseLines, writeApvSkeleton, type ReuseSetup } from './init.js';
+import { ApvWriter, PLUGIN_ROOT, initialArchitecture, initialMap, mapFields, missingRequired, readBriefTemplate, reuseConfig, reuseLines, writeApvSkeleton, type ReuseSetup } from './init.js';
 import { worktreeFiles } from '../knowledge/inventory.js';
 import { detectReuse } from '../reuse/detect.js';
 import { checkReuse } from '../reuse/check.js';
@@ -46,6 +46,8 @@ export interface OnboardResult {
   config: { file: string; status: 'created' | 'existing'; source: 'v2' | 'detected' | null; kept: string[]; ignored: string[]; gates: string[]; detected: DetectedGate[] };
   /** Reuse of the existing components: what was set up, and what is already duplicated or redone (docs/REUSE.md). */
   reuse: ReuseSetup & { existing: ExistingReuse | null };
+  /** Flat folders already there (signalled without blocking by the `structure` gate), with their proposed subfolders. */
+  structure: { crowded: { folder: string; code: number; groups: string[] }[] };
   ledger: { file: string; status: 'imported' | 'created' | 'existing'; source: string | null; decisions: number | null; hash: string | null };
   specs: SpecReport & { searched: string[] };
   previewHints: string[];
@@ -131,6 +133,7 @@ export async function onboardProject(repo: string, options: { dryRun: boolean; s
     ...(ledgerFiles ? { ledger: ledgerFiles } : {}),
     ...(map?.path ? { map: { path: map.path, content: () => map.text } } : {}),
   });
+  const architecture = await initialArchitecture(repo, writer);
   for (const candidate of accepted) {
     const to = specFileName(candidate.id);
     if (writer.file(to, () => candidate.content!)) specs.imported.push({ from: candidate.file, to, request: candidate.requestFile });
@@ -142,6 +145,7 @@ export async function onboardProject(repo: string, options: { dryRun: boolean; s
   const next = [
     ...(options.dryRun ? ['relancer sans --dry-run pour écrire ce plan'] : []),
     'relire .apv/config.json (contrôles, mandatory) et adapter .apv/brief.md (passages entre chevrons)',
+    'compléter avec l\'opérateur les parties écrites de la carte de l\'architecture (en bref, couches et flux, règles transverses, rôles) ; les dossiers à plat existants restent signalés sans bloquer, leur rangement est une spec à part (compétence apv:structure)',
     ...(proposal.web && configText !== undefined ? ['relire la section reuse (dossiers partagés, éléments réservés, référence) et la carte du code .apv/code-map.md ; ce qui est déjà dupliqué reste signalé sans bloquer'] : []),
     'apv ledger validate',
     'lire les règles avant fusion (docs/REGLES.md du plugin) : preuve complète, aucun test instable, relectures enregistrées, captures, contrôles de base, maquettes validées',
@@ -152,8 +156,9 @@ export async function onboardProject(repo: string, options: { dryRun: boolean; s
     repo, name, dryRun: options.dryRun,
     v2: { config: hasV2Config ? LEGACY_CONFIG_FILE : null, ledger: hasV2Ledger ? LEGACY_LEDGER_FILE : null, notImported: v2FilesNotImported(repo) },
     config, ledger, specs, previewHints: previewHints(repo),
-    reuse: { web: proposal.web, signals: proposal.signals, gates: added, section: configText !== undefined && proposal.web ? proposal.section : null, ...mapFields(map), existing: existingReuse,
+    reuse: { web: proposal.web, signals: proposal.signals, gates: added, section: configText !== undefined && proposal.web ? proposal.section : null, ...mapFields(map), existing: existingReuse, architecture,
       missingRequired: configExists ? missingRequired(repo, proposal.web) : [] },
+    structure: { crowded: map?.crowded ?? [] },
     created: writer.created, completed: writer.completed, existing: writer.existing, next,
   };
 }
@@ -234,6 +239,12 @@ function text(result: OnboardResult): string {
   const reuse = reuseLines(result.reuse);
   if (reuse.length || result.reuse.existing) lines.push('', 'Réutilisation des éléments existants :', ...reuse.map(l => `  ${l}`));
   if (result.reuse.existing) lines.push(...existingLines(result.reuse.existing).map(l => `  ${l}`));
+  const crowded = result.structure.crowded;
+  if (crowded.length) {
+    lines.push(`  Dossiers à plat déjà présents (signalés sans bloquer ; un fichier de plus y sera refusé) : ${crowded.length}.`);
+    for (const c of crowded.slice(0, 10)) lines.push(`    ${c.folder}/ : ${c.code} fichiers${c.groups.length ? ` ; sous-dossiers proposés : ${c.groups.join(', ')}` : ''}`);
+    if (crowded.length > 10) lines.push(`    et ${crowded.length - 10} autre(s) : apv structure check.`);
+  }
   if (result.previewHints.length) lines.push('', `Aperçu : indices trouvés, à décrire dans la section preview (docs/PREVIEW.md) : ${result.previewHints.join(' ; ')}`);
   lines.push('');
   lines.push(result.created.length ? `${result.dryRun ? 'Serait créé' : 'Créé'} : ${result.created.join(', ')}` : 'Rien à créer : .apv/ est complet.');

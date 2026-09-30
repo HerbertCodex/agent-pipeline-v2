@@ -61,7 +61,8 @@ test('vague: one isolated apv:implementer per task, with the start and scope ins
   const { run } = load('vague.js');
   const rt = runtime((prompt, opts) => ({ taskId: opts.label, status: 'done', confidence: 'prouve', evidence: 'apv gates run --stage task : 12 verts', branch: `apv/relances-${opts.label}`,
     worktree: '/tmp/w', commit: 'b'.repeat(40), checks: [], scopeCheck: 'in', outOfScopeFiles: [],
-    reuse: [{ item: 'src/routes/relances/+page.svelte', decision: 'reused', mapEntry: 'src/lib/components/ui/Select.svelte' }], summary: 'ok', openPoints: [] }));
+    reuse: [{ item: 'src/routes/relances/+page.svelte', decision: 'reused', mapEntry: 'src/lib/components/ui/Select.svelte' }],
+    placement: [{ file: 'src/lib/relances/delays.ts', folder: 'src/lib/relances', reason: 'fonctionnalité relances' }], summary: 'ok', openPoints: [] }));
   const result = await run(...rt.hooks, WAVE_ARGS);
   assert.equal(rt.calls.length, 2);
   for (const [i, call] of rt.calls.entries()) {
@@ -86,6 +87,9 @@ test('vague: one isolated apv:implementer per task, with the start and scope ins
     assert.match(call.prompt, /carte du code `\.apv\/code-map\.md` : à lire AVANT de créer/);
     assert.match(call.prompt, /ne commite jamais `\.apv\/code-map\.md`/);
     assert.ok(call.opts.schema.required.includes('reuse'));
+    assert.ok(call.opts.schema.required.includes('placement'));
+    assert.match(call.prompt, /carte de l'architecture \(`docs\/carte-architecture\.md`[^\n]*à lire EN PREMIER/);
+    assert.match(call.prompt, /contrôle `structure` rouge se corrige en plaçant le fichier dans le sous-dossier/);
   }
   assert.ok(rt.calls[1].prompt.includes('termine depuis le wip abc1234'));
   assert.equal(result.reports.length, 2);
@@ -97,7 +101,7 @@ test('vague: one isolated apv:implementer per task, with the start and scope ins
 
 test('vague: a report without its reuse list, an addition without justification or a reuse without map entry is refused', async () => {
   const { run } = load('vague.js');
-  const base = { status: 'done', confidence: 'prouve', evidence: 'sortie', commit: 'b'.repeat(40) };
+  const base = { status: 'done', confidence: 'prouve', evidence: 'sortie', commit: 'b'.repeat(40), placement: [] };
   const reuse = { T2: undefined, T3: [{ item: 'src/lib/AdminToast.svelte', decision: 'added' }, { item: 'src/lib/x.ts', decision: 'reused' }, { item: 'y', decision: 'copied' }] };
   const rt = runtime((prompt, opts) => ({ ...base, taskId: opts.label, ...(reuse[opts.label] ? { reuse: reuse[opts.label] } : {}) }));
   const result = await run(...rt.hooks, WAVE_ARGS);
@@ -116,6 +120,20 @@ test('vague: a report without its reuse list, an addition without justification 
   assert.doesNotMatch(why, /src\/b\.svelte/);
   const ok = runtime((prompt, opts) => ({ ...base, taskId: opts.label, reuse: [] }));
   assert.equal((await run(...ok.hooks, WAVE_ARGS)).refused.length, 0, 'an empty list: nothing created nor modified');
+});
+
+test('vague: a report without its placement list, or a file placed outside its folder or without reason, is refused', async () => {
+  const { run } = load('vague.js');
+  const base = { status: 'done', confidence: 'prouve', evidence: 'sortie', commit: 'b'.repeat(40), reuse: [] };
+  const placement = { T2: undefined, T3: [{ file: 'src/lib/orders/checkout/refund.ts', folder: 'src/lib/orders', reason: 'x' }, { file: 'src/lib/a.ts', folder: 'src/lib' }] };
+  const rt = runtime((prompt, opts) => ({ ...base, taskId: opts.label, ...(placement[opts.label] ? { placement: placement[opts.label] } : {}) }));
+  const result = await run(...rt.hooks, WAVE_ARGS);
+  assert.match(result.refused[0].problems.join(' | '), /placement absent/);
+  const t3 = result.refused[1].problems.join(' | ');
+  assert.match(t3, /src\/lib\/orders\/checkout\/refund\.ts n'est pas directement dans src\/lib\/orders/);
+  assert.match(t3, /raison absente \(reason\) pour src\/lib\/a\.ts/);
+  const ok = runtime((prompt, opts) => ({ ...base, taskId: opts.label, placement: [{ file: 'src/lib/orders/checkout/refund.ts', folder: 'src/lib/orders/checkout/', reason: 'sous-dossier proposé' }] }));
+  assert.equal((await run(...ok.hooks, WAVE_ARGS)).refused.length, 0);
 });
 
 test('vague: a stopped agent is reported, never hidden', async () => {
@@ -240,7 +258,7 @@ test('revues: the concurrence audit runs alone, never by default, and returns it
 // Calibrated confidence: a report says how sure it is, and why (docs/CONFIANCE.md).
 const LEVELS = ['prouve', 'probable', 'suppose'];
 const task = (id, extra = {}) => ({ taskId: id, status: 'done', confidence: 'prouve', evidence: 'test rouge puis vert : npm test -- relances (1 échec, puis 14 réussis)',
-  branch: `apv/relances-${id}`, worktree: '/tmp/w', commit: 'b'.repeat(40), checks: [], scopeCheck: 'in', outOfScopeFiles: [], reuse: [], summary: 'ok', openPoints: [], ...extra });
+  branch: `apv/relances-${id}`, worktree: '/tmp/w', commit: 'b'.repeat(40), checks: [], scopeCheck: 'in', outOfScopeFiles: [], reuse: [], placement: [], summary: 'ok', openPoints: [], ...extra });
 
 test('vague: the report schema requires a confidence level and its evidence, and the prompt defines the levels', async () => {
   const { run } = load('vague.js');

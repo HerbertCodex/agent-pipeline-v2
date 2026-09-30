@@ -12,7 +12,7 @@ export declare const ledgerUpdateSchema: import("../domain/schema.js").Schema<{
         readonly subject: string;
         readonly value: string;
         readonly enforcement: "product" | "bootstrap" | "deferred";
-        readonly status: "deferred" | "confirmed" | "proposed" | "ambiguous";
+        readonly status: "proposed" | "deferred" | "confirmed" | "ambiguous";
         readonly source: "operator" | "derived";
         readonly sourceQuote: string;
         readonly rationale: string;

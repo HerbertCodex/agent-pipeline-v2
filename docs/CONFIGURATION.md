@@ -327,7 +327,7 @@ Si l'Implementer configuré n'a pas de shell (adaptateur Claude natif), une spec
 
 ## Arborescence : `structure`
 
-Section APV3, facultative, lue par `apv structure check` ([CLI.md](CLI.md#apv-structure-check)) et validée par le chargeur commun (`apv status` signale une valeur invalide, jamais la section comme ignorée). Absente, l'analyse tourne avec ses valeurs par défaut et ne signale que des avertissements.
+Section APV3, facultative, lue par `apv structure check`, `apv structure map` et `apv map` ([CLI.md](CLI.md#apv-structure-check), [STRUCTURE.md](STRUCTURE.md)) et validée par le chargeur commun (`apv status` signale une valeur invalide, jamais la section comme ignorée). Absente, tout tourne avec les valeurs par défaut. Avec `--base`, c'est la section **de la base** qui juge le changement : la modifier passe par une PR de configuration à part, décidée par l'opérateur.
 
 ```json
 {
@@ -337,30 +337,33 @@ Section APV3, facultative, lue par `apv structure check` ([CLI.md](CLI.md#apv-st
     "roles": { "-gateway": "client", "-store": "store", "session": null },
     "domains": ["offer-prefill"],
     "ignore": ["src/lib/generated/**"],
-    "severity": { "flat-folder": "error", "mixed-roles": "error" }
+    "severity": { "flat-folder": "error", "mixed-roles": "error" },
+    "architectureMap": "docs/carte-architecture.md",
+    "profile": "sveltekit"
   }
 }
 ```
 
 - `roots` : dossiers analysés, relatifs à la racine du dépôt (par défaut tout le dépôt, fichiers de code seulement).
-- `maxFlatFiles` : fichiers de code qu'un dossier peut contenir directement, tests et fichiers compagnons à part (12 par défaut, de 2 à 1000).
+- `maxFlatFiles` : fichiers de code qu'un dossier peut contenir directement, tests et fichiers compagnons à part (12 par défaut, de 2 à 1000). Au-delà : `flat-folder` (découpage proposé) et, avec `--base`, tout ajout refusé (`flat-growth`).
 - `roles` : rôles ajoutés à ceux par défaut. Une clé qui commence par `-` est un suffixe de nom (`-gateway` : `payment-gateway.ts` a le rôle `client`, domaine `payment`) ; une autre clé est un mot du nom, pour un utilitaire transverse sans domaine (`session` : rôle `auth`). `null` retire un rôle par défaut. Clés et rôles en kebab-case.
-- `domains` : noms de domaines connus, en kebab-case. Un domaine de plusieurs mots (`offer-prefill`) regroupe les fichiers qui commencent par lui ; un domaine déclaré suffit à regrouper deux fichiers. Les noms des dossiers du projet sont déjà des domaines connus.
-- `ignore` : globs (`*`, `**`, `?`, `{a,b}`) des chemins laissés de côté, en plus de `node_modules/`, `dist/`, `build/`, `coverage/`, `vendor/` et des dossiers qui commencent par un point.
-- `severity` : `warning` (défaut) ou `error`, pour tous les constats ou par code (`flat-folder`, `repeated-prefix`, `mixed-roles`, `stray-file`). `apv structure check` sort en `1` dès qu'un constat a la gravité `error`.
+- `domains` : noms de domaines connus, en kebab-case. Un domaine de plusieurs mots (`offer-prefill`) regroupe les fichiers qui commencent par lui ; un domaine déclaré suffit à regrouper deux fichiers et sert de nom au découpage par usage. Les noms des dossiers du projet sont déjà des domaines connus.
+- `ignore` : globs (`*`, `**`, `?`, `{a,b}`) des chemins laissés de côté, en plus des exclusions par défaut (`node_modules/` partout ; `dist/`, `build/`, `coverage/`, `vendor/` et dossiers qui commencent par un point à la racine du dépôt ou d'un paquet, pour l'existant seulement : ce qu'un changement crée est toujours analysé). Seule façon d'écarter un fichier, un lien symbolique ou un sous-module qu'un changement ajoute ; lue à la base.
+- `severity` : `warning` ou `error`, pour tous les constats ou par code. Par défaut `warning` pour l'analyse (`flat-folder`, `repeated-prefix`, `mixed-roles`, `stray-file` : sans `--base`, une gravité `error` fait sortir en `1` ; avec `--base`, seulement sur un fichier créé ou déplacé par le changement) et `error` pour la comparaison avec la base (`flat-growth`, `architecture-map` : seul ce que le changement ajoute bloque).
+- `architectureMap` : chemin de la carte de l'architecture (Markdown), `docs/carte-architecture.md` par défaut.
+- `profile` : profil de pile dont les conventions s'appliquent (`sveltekit`, `nextjs`, `nuxt`, `astro`, `angular`, `vue`, `react`, `python`, `go`, `generic`) ; détecté par les dépendances et les fichiers marqueurs quand il est absent.
 
-**En faire un contrôle.** Une fois l'arborescence rangée avec l'opérateur (plan validé, `git mv`, imports mis à jour), passez en `error` les constats à ne plus laisser revenir et déclarez la commande comme contrôle de tâche, en lecture seule :
+**Le contrôle.** `apv init` et `apv onboard` déclarent pour tout projet :
 
 ```json
 {
   "gates": [
-    { "id": "structure", "command": ["apv", "structure", "check"], "covers": ["architecture"], "stage": "task", "readOnly": true }
-  ],
-  "structure": { "severity": { "flat-folder": "error", "mixed-roles": "error", "stray-file": "error" } }
+    { "id": "structure", "command": ["apv", "structure", "check", "--base", "{{baseSha}}"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true }
+  ]
 }
 ```
 
-`apv` doit être sur le `PATH` de la machine (plugin activé ou `npm link`), sinon utilisez `["node", "<chemin du plugin>/dist/cli.js", "structure", "check"]`. Sans gravité `error`, le contrôle réussit toujours : il ne fait que rapporter. Un projet pas encore rangé garde `warning` (ou relève `maxFlatFiles`) plutôt qu'un contrôle rouge dès le départ ; le rangement est une spec à part, décidée par l'opérateur.
+`{{baseSha}}` est la base du passage (`apv gates run --base <ref>`), qui fait partie de la clé de preuve de chaque reçu. Un projet pas encore rangé n'est jamais rouge pour son existant : ses dossiers à plat et ses dossiers non décrits sont signalés sans bloquer, seul ce que le changement ajoute bloque. Le rangement est une spec à part, décidée par l'opérateur (compétence `apv:structure`). `apv` doit être sur le `PATH` de la machine (plugin activé ou `npm link`), sinon utilisez `["node", "<chemin du plugin>/dist/cli.js", "structure", "check", "--base", "{{baseSha}}"]`.
 
 ## Exécution : `run`
 
@@ -625,7 +628,7 @@ Chaque règle, son motif et ses limites : [REUSE.md](REUSE.md). Baisser une grav
 
 ## Règles avant fusion : `rules`
 
-Section APV3, facultative (3.0.0-alpha.11), lue **à la base commune** de la PR et de sa cible par `apv rules check`, `apv stack merge` et `apv stack batch --merge` ([REGLES.md](REGLES.md)). Elle complète les règles, elle ne peut en retirer aucune : il n'existe pas de clé pour les désactiver.
+Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR et de sa cible par `apv rules check`, `apv stack merge` et `apv stack batch --merge` ([REGLES.md](REGLES.md)). Elle complète les règles, elle ne peut en retirer aucune : il n'existe pas de clé pour les désactiver.
 
 ```json
 "rules": {
