@@ -808,3 +808,13 @@ test('review 6, low: a change of configuration next to a left-out code file is n
   const r = await f.check();
   assert.ok(configBlocked(r), 'blocking: the change carries code too');
 });
+
+test('an import with a query (?inline, ?raw, ?url) loads the file without it: held and counted', async t => {
+  const f = closedProject(t);
+  write(f.repo, '.cache/styles/admin.css', '.nav { display: flex; }\n');
+  write(f.repo, 'src/lib/theme.ts', "import css from '../../.cache/styles/admin.css?inline';\nimport icon from '../lib/components/ui/Select.svelte?raw';\nexport const all = [css, icon];\n");
+  const r = await f.check();
+  assert.ok(r.findings.some(x => x.path === '.cache/styles/admin.css' && x.rule === 'coverage' && x.blocking), 'held through ?inline');
+  const map = (await apv(f.repo, ['map', '--json'])).json().map;
+  assert.ok(map.components.find(c => c.path === 'src/lib/components/ui/Select.svelte').usedBy.includes('src/lib/theme.ts'), 'counted through ?raw');
+});

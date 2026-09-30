@@ -189,7 +189,8 @@ Un projet qui a déjà `.apv/config.json` ne reçoit rien automatiquement (aucun
 - Un bloc rendu identique par une simple suppression de lignes n'est pas compté comme nouveau.
 - La règle des noms repose sur des mots anglais usuels des noms de composants ; des noms dans une autre langue demandent `names.roles`.
 - Les styles écrits en JavaScript (CSS-in-JS) ne sont pas analysés par la règle `styles` ; leurs copies restent vues par `duplicates`.
-- Les usages de la carte ne sont calculés que pour les imports ECMAScript et Python.
+- Les usages de la carte ne sont calculés que pour les imports ECMAScript et Python. La requête d'un import (`./a.css?inline`, `./icon.svg?raw`, `?url`) est retirée avant de le résoudre.
+- Un import à chemin **calculé** (`import(\`./pages/${name}.ts\`)`, `require(base + nom)`, un chemin lu dans une variable ou une configuration) ne se résout pas sans exécuter le code : le fichier qu'il charge n'est tenu par la couverture stricte que s'il est un composant, dans un dossier de sources, ou chargé autrement (import statique, `import.meta.glob`, `require.context`). Un tel fichier hors de ces cas, dans une exclusion par défaut, est écarté et listé (« ni composant, ni source, ni importé ») ; le déclarer ou le déplacer sous les sources le fait tenir.
 - La typographie ne connaît que le français.
 - Tout le dépôt est analysé à chaque passage (quelques secondes pour quelques milliers de fichiers) ; `duplicates.paths` le restreint si besoin.
 - Un fichier généré qui ne le dit ni par son nom ni par ses premières lignes est analysé comme du code : l'ajouter à `reuse.ignore`, avec l'accord de l'opérateur.

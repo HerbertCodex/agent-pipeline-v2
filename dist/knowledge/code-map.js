@@ -57,6 +57,8 @@ const JS_IMPORTS = [
     /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
     /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
 ];
+/** A specifier without its query or fragment (`./a.css?inline`, `./icon.svg?raw`, `./x.js#y`): the file it loads. */
+export const withoutQuery = (spec) => spec.replace(/[?#].*$/, '');
 /** Imports of a source file: ECMAScript (static, dynamic, `require`) and Python (`import`, `from ... import`). */
 export function importsOf(text, ext) {
     const out = [];
@@ -74,11 +76,11 @@ export function importsOf(text, ext) {
         const fallback = /^\s*([A-Za-z_$][\w$]*)/.exec(clause.replace(/\{[^}]*\}/, ''))?.[1];
         if (fallback)
             names.push(fallback);
-        out.push({ spec: m[2], names });
+        out.push({ spec: withoutQuery(m[2]), names });
     }
     for (const re of JS_IMPORTS.slice(1))
         for (const m of text.matchAll(re))
-            out.push({ spec: m[1], names: [] });
+            out.push({ spec: withoutQuery(m[1]), names: [] });
     return out;
 }
 const STRIP_EXT = /\.(?:js|mjs|cjs|ts|mts|cts|jsx|tsx|svelte|vue|astro|json|py)$/;

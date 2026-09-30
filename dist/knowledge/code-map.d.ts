@@ -67,6 +67,8 @@ interface ImportRef {
     spec: string;
     names: string[];
 }
+/** A specifier without its query or fragment (`./a.css?inline`, `./icon.svg?raw`, `./x.js#y`): the file it loads. */
+export declare const withoutQuery: (spec: string) => string;
 /** Imports of a source file: ECMAScript (static, dynamic, `require`) and Python (`import`, `from ... import`). */
 export declare function importsOf(text: string, ext: string): ImportRef[];
 export declare const maskSecrets: (text: string) => string;
