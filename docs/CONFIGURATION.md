@@ -1,6 +1,6 @@
 # Configuration et politique
 
-> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts`, `resources`, `suite`, `stacks`, `batch` et `web` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
+> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts`, `resources`, `suite`, `stacks`, `batch`, `web`, `reuse` et `map` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
 
 La configuration est un JSON déclaratif lu avant l'agent et conservé avec la tentative. La tâche ne peut pas fournir une commande à la place d'un contrôle, changer un verdict ni s'accorder une exemption. Les champs inconnus sont refusés.
 
@@ -585,3 +585,38 @@ Section APV3, facultative, validée par le chargeur commun (3.0.0-alpha.7, spéc
 - `paths` (défaut aucun) : fichiers qui comptent **toujours** comme web, même dans `neutralPaths` (par exemple `docs/**` pour une documentation publiée) ; un ajout, jamais une restriction.
 
 Contrôle d'une PR, dans `gates` (« non requis » quand elle ne change que des fichiers de `neutralPaths`, recalculé par `apv gates verify`) : `{ "id": "web", "stage": "full", "command": ["apv", "web", "audit", "--preview", "--base", "origin/main"], "timeoutMs": 2400000, "passEnv": ["HOME", "CHROME_PATH"] }` (compter environ 15 s par passage : 7 pages, 2 appareils et 3 passages font 42 passages, une dizaine de minutes, plus la construction de l'aperçu). Il exige une section `preview` ([PREVIEW.md](PREVIEW.md)) dont le port est libre dans la copie de la suite. Après un déploiement : `apv web audit --production`. Sur la branche principale elle-même, `--preview --base origin/main` n'a rien à comparer (sortie `2`) : y utiliser `apv web audit --production` ou `--url <origine>`.
+
+## Réutilisation : `reuse` et carte du code : `map`
+
+Sections APV3, facultatives, lues par `apv reuse check` et `apv map` et validées par le chargeur commun (`apv status` signale une valeur invalide, jamais la section comme ignorée). Absentes, les valeurs par défaut s'appliquent : dossiers partagés `**/components/**`, `**/ui/**`, `**/shared/**`, `**/common/**` ; éléments réservés `select`, `dialog`, `datalist` ; feuille globale cherchée parmi les emplacements usuels ; blocs de 5 lignes et 50 jetons ; aucune langue, donc pas de règle typographique ; aucune référence, donc tout compte comme nouveau. Écrites par `apv init` et `apv onboard` pour un projet web.
+
+```json
+{
+  "gates": [
+    { "id": "reuse", "command": ["apv", "reuse", "check"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true },
+    { "id": "code-map", "command": ["apv", "map", "--check"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true }
+  ],
+  "reuse": {
+    "reference": "origin/main",
+    "shared": ["src/lib/components/**"],
+    "native": { "elements": { "select": "src/lib/components/ui/Select.svelte", "dialog": null, "datalist": null }, "allowedPaths": ["src/lib/components/ui/**"] },
+    "styles": { "sources": ["src/app.css"], "nested": "refuse" },
+    "duplicates": { "minLines": 5, "minTokens": 50 },
+    "typography": { "locale": "fr" },
+    "severity": { "native": "error", "styles": "error", "duplicates": "error", "names": "warning", "typography": "warning" }
+  },
+  "map": { "file": ".apv/code-map.md", "maxEntries": 400 }
+}
+```
+
+- `reuse.reference` : branche où vont les PR ; ce que le changement ajoute depuis sa base commune est nouveau (bloquant en `error`), le reste existant (signalé). `--base` la remplace.
+- `reuse.shared`, `reuse.ignore` : motifs des dossiers de composants partagés, et des chemins laissés de côté par toutes les règles.
+- `reuse.native` : `elements` (sélecteur `select` ou `input[type=date]`, vers le composant partagé qui le remplace, ou `null`), `allowedPaths` (défaut : `shared`).
+- `reuse.styles` : `sources` (feuilles globales dont les classes de premier niveau sont les primitives), `selectors` et `except` (classes ou préfixes `.btn--*` ajoutés ou retirés), `allowedPaths` (défaut : `shared`), `nested` (`refuse` par défaut, `allow` pour accepter `.panel .btn`).
+- `reuse.duplicates` : `minLines`, `minTokens`, `paths`, `ignore`.
+- `reuse.names.roles` : familles de rôles ajoutées ou retirées (`null`).
+- `reuse.typography.locale` : langue des textes (`fr` active la règle).
+- `reuse.severity` : `off`, `warning` ou `error`, pour toutes les règles ou par règle.
+- `map.file` (`.md`), `map.ignore`, `map.maxEntries` (de 20 à 5000, partagées entre les sections de la carte).
+
+Chaque règle, son motif et ses limites : [REUSE.md](REUSE.md). Baisser une gravité, élargir `ignore` ou `allowedPaths`, ou retirer un de ces contrôles est une décision de l'opérateur, jamais un moyen de faire passer une tâche.

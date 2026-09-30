@@ -13,7 +13,7 @@ Installation locale : `npm run build`, puis `node dist/cli.js <commande>` ou `np
 - Fichiers lus dans le projet :
   - configuration : `.apv/config.json`, sinon `pipeline.v2.json` (projet V2, tant que `apv onboard` n'a pas créé `.apv/config.json`) ;
   - registre des décisions : `.apv/DECISIONS.json`, sinon `.agent-pipeline/DECISIONS.json` (projet V2).
-- De la configuration, seules les sections `name` (nom du projet, écrit par `apv init`), `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts`, `resources`, `suite`, `stacks`, `batch` et `web` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
+- De la configuration, seules les sections `name` (nom du projet, écrit par `apv init`), `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts`, `resources`, `suite`, `stacks`, `batch`, `web`, `reuse` et `map` sont lues par le chargeur commun ; la section `db` est lue et validée par `apv db check`. Les champs d'agent, de budget, de délais, de modèles et de réglage d'un fichier V2 sont ignorés (et listés comme tels par `apv gates run --json` et `apv status --json`).
 
 ## `apv init`
 
@@ -25,17 +25,20 @@ Prépare un projet pour APV3 (`/apv:init`). Crée ce qui manque dans `.apv/`, **
 
 | Élément | Contenu initial |
 |---|---|
-| `.apv/config.json` | `{ "name": "<nom>", "gates": [] }` : aucun contrôle déclaré, pas de section `preview` ni `design` |
+| `.apv/config.json` | `{ "name": "<nom>", "gates": [...] }` : les contrôles de la réutilisation seulement, `code-map` (`apv map --check`) pour tout projet et `reuse` (`apv reuse check`) pour un projet web, avec la section `reuse` détectée ([REUSE.md](REUSE.md)) ; pas de section `preview` ni `design` |
 | `.apv/DECISIONS.json` | registre vide, valide pour `apv ledger validate` |
 | `.apv/brief.md` | consigne commune des implementers, tirée du modèle `skills/chef-de-projet/references/brief-type.md` du plugin (le bloc de modèle, nom du projet substitué) ; les passages entre chevrons restent à adapter |
 | `.apv/specs/`, `.apv/state/` | dossiers vides |
 | `.apv/.gitignore` | fichiers machine (`state/*.log`, `state/task.json`, `state/preview.json`, `receipts/`), créé ou complété comme par `apv quota` |
+| `.apv/code-map.md` | la carte du code, comme [`apv map`](#apv-map), écrite en dernier |
 
 Le nom du projet est `--name`, sinon le nom du dossier du dépôt. La commande travaille à la racine du dépôt Git qui contient le dossier courant (ou `--repo`) et refuse hors d'un dépôt Git. Elle liste ce qui est créé, complété et ce qui existait déjà ; rien n'est commité.
 
 Maquettes validées : si la configuration existante déclare leur dossier (`design.dir`) ou si ce dossier existe (`docs/design` par défaut), `apv init` ajoute aussi à `.gitattributes` (créé ou complété) la ligne `<dossier>/*.html -whitespace`, quand Git ne l'applique pas déjà (`git check-attr whitespace`) : voir [`apv design`](#apv-design). `apv onboard` fait de même.
 
-Sortie : `0` succès, `1` hors d'un dépôt Git ou modèle de consigne introuvable, `2` appel incorrect. En JSON : `repo`, `name`, `created`, `completed`, `existing`.
+Projet web : dépendance d'interface dans `package.json` (Svelte, SvelteKit, React, Next.js, Vue, Nuxt, Astro, Solid, Preact, Lit, Angular, Remix, Qwik, htmx, Alpine) ou fichier d'interface (`.svelte`, `.vue`, `.tsx`, `.jsx`, `.astro`, `.html`...) hors de la documentation. La section `reuse` détectée : `reference` (`origin/HEAD`, sinon `origin/main` ou `origin/master`, sinon la branche courante), `shared` (les plus hauts dossiers `components`, `ui`, `shared`, `common`, `widgets`, `primitives`... qui contiennent des composants, hors des dossiers de routes), `native` (composant partagé qui remplace `select`, `dialog`, `datalist`, dossier des primitives `ui` ou `primitives` comme chemin permis), `typography.locale` (le `lang` du document). Une configuration existante n'est jamais modifiée.
+
+Sortie : `0` succès, `1` hors d'un dépôt Git, modèle de consigne introuvable ou configuration détectée refusée par le schéma, `2` appel incorrect. En JSON : `repo`, `name`, `created`, `completed`, `existing`, `reuse` (`web`, `signals`, `gates` ajoutés, `section` écrite ou `null`, `map` : chemin de la carte ou `null` si la configuration est illisible).
 
 ## `apv onboard`
 
@@ -69,11 +72,13 @@ Un `pipeline.v2.json` ou un registre V2 illisible, ou refusé par le schéma (le
 
 Le gestionnaire de paquets vient de `packageManager`, sinon du fichier de verrouillage (`pnpm`, `yarn`, `bun`, sinon `npm run <script>`) ; les outils Python passent par `uv run` ou `poetry run` si le projet a leur fichier de verrouillage. La première source trouvée gagne ; aucune commande n'est inventée. Le registre créé est vide.
 
-Dans les deux cas, le reste est celui d'`apv init` : `brief.md`, `specs/`, `state/`, `.gitignore`. La sortie liste aussi les fichiers de `.agent-pipeline/` non repris (rôles, compétences : le plugin les fournit) et les indices d'aperçu (script `preview` ou `apercu`, fichier de `scripts/`), à décrire dans la section `preview` avec l'opérateur ; puis la suite : relire `config.json` et `brief.md`, `apv ledger validate`, `apv gates run` (avec `--base` si un contrôle utilise `{{baseSha}}`), commit de `.apv/`. Rien n'est commité.
+**Réutilisation**, dans les deux cas, quand la configuration est créée : les contrôles `code-map` et, pour un projet web, `reuse` sont ajoutés après les autres (sous un identifiant que V2 n'utilisait pas), avec la section `reuse` détectée comme par `apv init`. La carte du code est écrite (`.apv/code-map.md`). Pour un projet web, le rapport liste ce qui est **déjà** dupliqué ou refait sur tout le projet (règles de `apv reuse check` sans base : nombre par règle, 20 premiers constats, blocs copiés d'abord) : ces constats existent sur la référence et ne bloqueront pas ; leur résorption est une spec de rangement décidée par l'opérateur.
+
+Dans les deux cas, le reste est celui d'`apv init` : `brief.md`, `specs/`, `state/`, `.gitignore`, `code-map.md`. La sortie liste aussi les fichiers de `.agent-pipeline/` non repris (rôles, compétences : le plugin les fournit) et les indices d'aperçu (script `preview` ou `apercu`, fichier de `scripts/`), à décrire dans la section `preview` avec l'opérateur ; puis la suite : relire `config.json` et `brief.md`, `apv ledger validate`, `apv gates run` (avec `--base` si un contrôle utilise `{{baseSha}}`), commit de `.apv/`. Rien n'est commité.
 
 `--dry-run` prend les mêmes décisions et affiche le même plan (« Serait créé »), sans rien écrire.
 
-Sortie : `0` succès, `1` hors d'un dépôt Git, fichier V2 illisible ou invalide, modèle de consigne introuvable, `2` appel incorrect (dont un dossier `--specs` introuvable). En JSON : `repo`, `name`, `dryRun`, `v2` (`config`, `ledger`, `notImported`), `config` (`status`, `source`, `kept`, `ignored`, `gates`, `detected`), `ledger` (`status`, `source`, `decisions`, `hash`), `specs` (`searched`, `imported`, `existing`, `rejected`), `previewHints`, `created`, `completed`, `existing`, `next`.
+Sortie : `0` succès, `1` hors d'un dépôt Git, fichier V2 illisible ou invalide, modèle de consigne introuvable, `2` appel incorrect (dont un dossier `--specs` introuvable). En JSON : `repo`, `name`, `dryRun`, `v2` (`config`, `ledger`, `notImported`), `config` (`status`, `source`, `kept`, `ignored`, `gates`, `detected`), `reuse` (comme `apv init`, plus `existing` : `counts` par règle et `examples`, ou `null` hors projet web), `ledger` (`status`, `source`, `decisions`, `hash`), `specs` (`searched`, `imported`, `existing`, `rejected`), `previewHints`, `created`, `completed`, `existing`, `next`.
 
 ## `apv spec validate`
 
@@ -529,6 +534,40 @@ Le plan (`ancien -> nouveau`) n'est **jamais appliqué** par l'outil : il se val
 - Configuration facultative, section `structure` de `.apv/config.json` : [CONFIGURATION.md](CONFIGURATION.md#arborescence--structure).
 
 Sortie : `0` aucun constat de gravité `error` (par défaut tout est `warning` : l'analyse ne fait pas échouer un projet qui n'a rien déclaré), `1` au moins un constat `error` ou configuration invalide, `2` appel incorrect (sous-commande, option, `--path` hors du dépôt). En JSON : `ok`, `analyzedFiles`, `maxFlatFiles`, `folders` (dossier, fichiers de code, tests, compagnons, fichiers non placés), `findings` (`code`, `severity`, `folder`, `files`, `proposal`, `moves`), `plan` (tous les déplacements, tests et compagnons compris), `repo`, `paths`.
+
+## `apv reuse check`
+
+```
+apv reuse check [--base <ref>] [--all] [--repo <chemin>] [--json]
+```
+
+Contrôle que le changement réutilise les éléments existants du projet ([REUSE.md](REUSE.md)). Cinq règles, chacune réglable en `off`, `warning` ou `error` (`reuse.severity`) :
+
+| Règle | Défaut | Constat |
+|---|---|---|
+| `native` | `error` | élément natif réservé (`select`, `dialog`, `datalist` par défaut ; `input[type=date]` possible) écrit dans un fichier d'interface hors des chemins permis ; le message nomme le composant partagé à utiliser |
+| `styles` | `error` | classe primitive de la feuille globale (`.btn`, `.input`...) redéfinie dans un style local, ou ajustée sous une classe du composant (`.panel .btn`, refusé sauf `reuse.styles.nested: "allow"`) |
+| `duplicates` | `error` | bloc copié d'au moins 5 lignes et 50 jetons (réglables), paires `fichier:lignes` ; imports, espaces et commentaires ignorés |
+| `names` | `warning` | composant créé dont le nom ou le rôle doublonne un composant partagé (`AdminToast` et `Toast`, `Snackbar` et `Toast`, une coquille à côté d'une barre latérale partagée), composition exceptée |
+| `typography` | `warning` | heure, date, montant, nombre et unité séparés par une espace sécable, pour une langue qui l'interdit (`reuse.typography.locale` : français) |
+
+Ce que le changement ajoute depuis la base commune de `--base` (tout commit), sinon de `reuse.reference` (résolue par sa ref complète ; introuvable ou ambiguë : `REUSE_BASE`, sortie `1`), compte comme **nouveau** ; le reste est **existant**, signalé sans bloquer. Sans base ni référence, tout compte comme nouveau. Un bloc déjà copié dans les deux mêmes fichiers à la base reste existant même si l'une de ses lignes a bougé ; modifier ses deux copies en fait un bloc nouveau. `--all` liste tous les constats existants (par défaut, 5 par règle).
+
+Configuration facultative : section `reuse` de `.apv/config.json` ([CONFIGURATION.md](CONFIGURATION.md#réutilisation--reuse-et-carte-du-code--map)). Le contrôle déclaré par `apv init` et `apv onboard` : `{ "id": "reuse", "command": ["apv", "reuse", "check"], "stage": "task", "readOnly": true }`.
+
+Sortie : `0` aucun constat bloquant (gravité `error` et nouveau), `1` au moins un, configuration invalide ou référence introuvable, `2` appel incorrect (sous-commande, option, `--base` vide). En JSON : `ok`, `base` (`source`, `ref`, `mergeBase`), `analyzedFiles`, `rules` (`severity`, `active`, `note`, `new`, `existing` par règle), `findings` (`rule`, `severity`, `isNew`, `blocking`, `path`, `line`, `endLine`, `other`, `message`), `primitives` (`sources`, `count`), `repo`.
+
+## `apv map`
+
+```
+apv map [--check] [--repo <chemin>] [--json]
+```
+
+Écrit la carte du code, `.apv/code-map.md` (ou `map.file`), depuis l'inventaire du dépôt ([REUSE.md](REUSE.md#1-la-carte-du-code-apv-map)) : composants partagés (rôle, props, variantes, où ils sont utilisés), modules partagés (exports, utilisateurs), routes, et ce qui est propre à une fonctionnalité avec les doublons possibles. Arbre de travail (fichiers suivis et non suivis, jamais les ignorés), sans modèle, déterministe, bornée (40 entrées par dossier, `map.maxEntries` en tout, partagées entre les sections). La carte se commite avec le code qu'elle décrit.
+
+`--check` ne l'écrit pas : il la compare à celle qui serait écrite et échoue si elle est absente ou périmée, avec les lignes attendues et celles qui ne le sont plus (contrôle `code-map` déclaré par `apv init` et `apv onboard`).
+
+Sortie : `0` écrite ou à jour, `1` absente ou périmée (`--check`) ou configuration invalide, `2` appel incorrect. En JSON : `file`, `status` (`written`, `unchanged`, `up-to-date`, `stale`, `missing`), `difference` (`onlyInFile`, `onlyExpected`), `map` (`components`, `modules`, `routes`, `skipped`, sans borne), `repo`.
 
 ## `apv quota`
 

@@ -150,6 +150,8 @@ La QA doit vérifier les appelants, points d'entrée du framework, usages dynami
 
 Pour compatibilité, les anciens rapports sans `resolution` gardent `advisory` ; ce changement ne requalifie pas rétroactivement leurs constats ni ne relance une QA déjà enregistrée. Une nouvelle revue suit les instructions actualisées. Le contrôleur refuse un verdict `pass` avec une correction requise à l'import et lors de la vérification avant publication.
 
+Le code copié échappe à l'analyse de code mort : chaque copie est utilisée. APV3 le traite à part (section 22 de la spécification, [REUSE.md](REUSE.md)) : le contrôle `reuse` (`apv reuse check`) bloque les blocs copiés, les éléments natifs réservés et les primitives de style redéfinies qu'un changement ajoute, le contrôle `code-map` tient la carte du code à jour, et la revue de fidélité demande pour chaque nouveau composant quel composant existant aurait dû servir.
+
 L'onboarding recherche les scripts existants `check:dead-code`, `lint:dead-code`, `dead-code`, `deadcode`, puis `knip`, et propose le premier comme gate obligatoire dans toutes les lanes. Les commandes explicitement interactives ou avec `--fix`/`--write` sont exclues. Les scripts restent des propositions à inspecter, pas une garantie d'absence d'effets de bord. En l'absence d'analyseur, une note expose la lacune ; aucun outil n'est installé et aucune configuration approuvée n'est modifiée automatiquement.
 
 Exemple à ajouter à une configuration revue **seulement si le script existe et analyse réellement les usages du projet** :
