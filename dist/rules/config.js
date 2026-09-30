@@ -32,6 +32,8 @@ export const rulesSchema = s.object({
     })),
     /** Checks a web project must declare, added to those of the tool (reuse, code-map, structure): an id and the start of its command. */
     requiredGates: s.optional(s.array(s.object({ id: gateId, command: s.array(s.string(1, 200), 1, 10) }), 0, 20)),
+    /** Days a line of the operator journal is kept (docs/REGLES.md, « Ancrage »); default 90. */
+    journalDays: s.optional(s.number(1, 3650)),
     /** Files that are screens, added to those the tool knows (routes of SvelteKit, Next, Nuxt, Astro, Remix...). */
     screens: s.optional(s.array(s.string(1, 4096), 0, 100)),
 });

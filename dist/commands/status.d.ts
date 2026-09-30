@@ -1,7 +1,7 @@
 import { lastQuotaReading } from '../quota/usage.js';
 import { type RunSummaryEntry } from '../run/summary.js';
 import type { CommandIO } from './io.js';
-export declare const usage = "Utilisation :\n  apv status [--repo <chemin>] [--json]\n\nR\u00E9sume l'\u00E9tat de .apv/ : configuration, registre des d\u00E9cisions (empreinte), specs de .apv/specs/,\n\u00E9tat de reprise de .apv/state/, une ligne par ex\u00E9cution en cours (apv run) et dernier relev\u00E9 de quota.";
+export declare const usage = "Utilisation :\n  apv status [--repo <chemin>] [--json]\n\nR\u00E9sume l'\u00E9tat de .apv/ : configuration, registre des d\u00E9cisions (empreinte), specs de .apv/specs/,\n\u00E9tat de reprise de .apv/state/, une ligne par ex\u00E9cution en cours (apv run) et dernier relev\u00E9 de quota ; puis les\nancrages des r\u00E8gles avant fusion : journal de l'op\u00E9rateur (messages re\u00E7us, ou pourquoi aucun), protection de la\nbranche par d\u00E9faut sur GitHub (gh api ; indisponible en plan gratuit pour un d\u00E9p\u00F4t priv\u00E9, dit une fois), audit des\nfusions faites hors de apv stack merge (apv audit merges).";
 export interface ApvStatus {
     repo: string;
     config: {

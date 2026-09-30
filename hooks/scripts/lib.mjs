@@ -88,7 +88,22 @@ export function isMainModule(moduleUrl, argv1 = process.argv[1]) {
  * (`apv/operator/`, written by the UserPromptSubmit hook) and the review records (`apv/reviews/`, written by
  * `apv review record`). A command or a write that names them is refused by the guards.
  */
-export const ANCHOR_STORES = /\bapv[\\/]+(?:operator|reviews)(?:[\\/]|\b)/;
+export const ANCHOR_STORES = /\bapv[\\/]+(?:operator|reviews|merges)(?:[\\/]|\b)/;
+
+/**
+ * The same stores, and the anchor key, looked for in a text flattened by `flatten` (quotes, backslashes and quote
+ * concatenations removed), so that `.git/ap""v/...` or `join('ap'+'v', ...)` are recognised: file names, key, commit folders.
+ */
+export const ANCHOR_FRAGMENTS = [/messages\.jsonl/i, /anchor\.key/i, /\.config\/+apv\b/i, /\bapv\W{1,4}(?:operator|reviews|merges)\b/i, /operator\/+(?:messages|refused)/i,
+  /reviews\/+[0-9a-f]{12,}/i, /merges\/+[0-9a-f]{12,}/i];
+
+/** A command or a path as a guard reads it: quote concatenations ('ap'+'v', "ap" "v"), quotes and backslashes removed. */
+export function flatten(text) {
+  return String(text ?? '').replace(/(['"`])\s*\+?\s*\1/g, '').replace(/['"`\\]/g, '');
+}
+
+/** True when a text names a store of the anchor or the anchor key, even cut in pieces. */
+export const namesAnchor = text => ANCHOR_STORES.test(String(text ?? '')) || ANCHOR_FRAGMENTS.some(re => re.test(flatten(text)));
 
 /** The reviewer agent of each review domain (same table as DOMAIN_REVIEWERS of src/rules/reviews.ts; a test keeps them equal). */
 export const DOMAIN_REVIEWERS = { securite: 'qa-securite', fidelite: 'qa-fidelite', donnees: 'architecte-donnees', rgpd: 'dpo' };

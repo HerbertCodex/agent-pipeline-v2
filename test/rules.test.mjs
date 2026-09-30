@@ -5,11 +5,12 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
-import { ALL_CAPTURES, commonDirOf, operatorSays, png, seedReview, waive } from './support/rules.mjs';
-import { waiverFor, anchoredQuote } from '../dist/rules/operator.js';
+import { ALL_CAPTURES, TEST_KEY, commonDirOf, operatorSays, png, seedReview, waive } from './support/rules.mjs';
+import { waiverFor, anchoredQuote, journalEntry } from '../dist/rules/operator.js';
 import { isScreen } from '../dist/rules/screens.js';
 import { runsCommand } from '../dist/rules/required.js';
 import { nearTimeout, busyReasons } from '../dist/gates/run.js';
+import { sealReview } from '../dist/rules/reviews.js';
 
 /**
  * The rules checked before any merge (docs/REGLES.md): each one refuses what it protects against and accepts the same
@@ -197,13 +198,14 @@ test('waiver: only the operator lifts a refusal, in his own words, for this comm
 });
 
 test('operator journal: quotes and waivers are compared without typography, never a short quote', () => {
-  const messages = [{ at: 't', session: 's', text: 'Je valide la maquette : on part là-dessus' }, { at: 'u', session: 's', text: 'ok' }];
+  const said = text => journalEntry(text, { at: 't', session: 's' }, TEST_KEY);
+  const messages = [said('Je valide la maquette\u00a0: on part là-dessus'), said('ok')];
   assert.ok(anchoredQuote(messages, 'je valide la maquette : on part là-dessus'));
   assert.equal(anchoredQuote(messages, 'ok'), null, 'too short to anchor anything');
   assert.equal(anchoredQuote(messages, 'Je valide la maquette : on part ailleurs'), null);
   const sha = 'abcdef0123456789'.repeat(3).slice(0, 40);
-  assert.equal(waiverFor([{ at: 't', session: '', text: `derogation maquette ${sha.slice(0, 11)} : trop court comme préfixe` }], 'maquette', sha), null);
-  assert.ok(waiverFor([{ at: 't', session: '', text: `Bonjour\ndérogation maquette pour ${sha} : écran déjà validé à l'oral` }], 'maquette', sha));
+  assert.equal(waiverFor([said(`derogation maquette ${sha.slice(0, 11)} : trop court comme préfixe`)], 'maquette', sha), null);
+  assert.ok(waiverFor([said(`Bonjour\ndérogation maquette pour ${sha} : écran déjà validé à l'oral`)], 'maquette', sha));
 });
 
 test('screens: pages, layouts and error pages of the known routers; never server code', () => {
@@ -272,6 +274,10 @@ test('apv review record: the reviewer records at the exact commit, from a clean 
   assert.match((await apv(p.repo, [...args.slice(0, 8), '--report', join(p.root, 'court.md'), ...args.slice(10)])).stderr, /rapport trop court/);
   const ok = await apv(p.repo, [...args, ...shots.flatMap(s => ['--capture', s])]);
   assert.equal(ok.code, 0, ok.stderr);
+  const id = /Enregistrement (\S+)/.exec(ok.stdout)[1];
+  // Not sealed yet: the PostToolUse hook seals it when the reviewer agent ran the command.
+  assert.match(rule((await p.check()).report, 'relecture').problems.join('\n'), /fidelite : relecture inutilisable \(relecture non scellée/);
+  assert.equal(sealReview(commonDirOf(p.repo), id, 'fidelite', 'apv:qa-fidelite', TEST_KEY).problem, null);
   assert.match(ok.stdout, /Relecture fidelite enregistrée à [0-9a-f]{12} par apv:qa-fidelite .* captures desktop:light, desktop:dark, phone:light, phone:dark/);
   const shown = await apv(p.repo, ['review', 'show', '--commit', p.head]);
   assert.match(shown.stdout, /fidelite : apv:qa-fidelite, .*, critique 0, haut 0, moyen 1, bas 2, 4 capture\(s\)/);
@@ -301,5 +307,77 @@ test('apv stack merge stops on the rules before any merge; apv stack plan lists 
   const merged = await apv(p.repo, ['stack', 'merge', '21'], { ...env, APV_ALLOW_MERGE: '1' });
   assert.equal(merged.code, 0, merged.stdout + merged.stderr);
   assert.match(merged.stdout, /Règles avant la fusion de la PR #21 : respectées/);
+  assert.match(merged.stdout, /Rapport de fusion :\nProtection de branche : [^\n]*\nAudit des fusions sur origin\/main/, 'said once, at the head of the report');
+  const { readMergeTraces } = await import('../dist/rules/merges.js');
+  assert.deepEqual(readMergeTraces(commonDirOf(p.repo)).map(m => [m.pr, m.head]), [[21, p.head]], 'a signed trace for apv audit merges');
   void waive;
+});
+
+test('audit merges: a commit no signed trace of apv stack merge accounts for is named; a traced merge or squash is not', async t => {
+  const { writeMergeTrace, auditMerges } = await import('../dist/rules/merges.js');
+  const p = project(t, { change: { 'notes.txt': 'x\n' } });
+  const common = commonDirOf(p.repo);
+  // Merged by the tool (merge commit, second parent = the head): traced.
+  git(p.repo, 'switch', '-q', 'main');
+  git(p.repo, 'merge', '-q', '--no-ff', '-m', 'Merge pull request #1', p.head);
+  const merged = git(p.repo, 'rev-parse', 'HEAD');
+  writeMergeTrace(common, { pr: 1, head: p.head, target: 'main', method: 'merge', mergeCommit: null, at: new Date(Date.now() - 60_000).toISOString() }, TEST_KEY);
+  // Pushed directly: nothing accounts for it.
+  put(p.repo, 'direct.txt', 'x\n'); git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'poussée directe');
+  const direct = git(p.repo, 'rev-parse', 'HEAD');
+  // Squashed by the tool: its trace names the merge commit.
+  put(p.repo, 'squash.txt', 'x\n'); git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'Squash (#2)');
+  const squash = git(p.repo, 'rev-parse', 'HEAD');
+  writeMergeTrace(common, { pr: 2, head: 'f'.repeat(40), target: 'main', method: 'squash', mergeCommit: squash, at: new Date().toISOString() }, TEST_KEY);
+  // A forged trace (not signed with the key) accounts for nothing.
+  const forged = join(common, 'apv', 'merges', 'forged.json');
+  writeFileSync(forged, JSON.stringify({ v: 1, pr: 3, head: 'e'.repeat(40), target: 'main', method: 'merge', mergeCommit: direct, at: new Date().toISOString(), sig: '0'.repeat(64) }));
+  git(p.repo, 'push', '-q', 'origin', 'main');
+  const audit = auditMerges(p.repo, common, 'origin/main', { since: new Date(Date.now() - 3_600_000).toISOString() });
+  // The base commit of the fixture was pushed directly too: named as well.
+  assert.deepEqual(audit.unaccounted.map(c => c.subject), ['poussée directe', 'base'], JSON.stringify(audit));
+  assert.equal(audit.unaccounted[0].sha, direct);
+  assert.equal(audit.traces, 2);
+  assert.ok(!audit.unaccounted.some(c => c.sha === merged || c.sha === squash));
+  const cli = await apv(p.repo, ['audit', 'merges', '--since', new Date(Date.now() - 3_600_000).toISOString().slice(0, 10)]);
+  assert.equal(cli.code, 1);
+  assert.match(cli.stdout, new RegExp(`ATTENTION : 2 commit\\(s\\) arrivé\\(s\\) sans apv stack merge[^]*${direct.slice(0, 12)} .* commit : poussée directe`));
+  const status = await apv(p.repo, ['status']);
+  assert.match(status.stdout, /Audit des fusions sur origin\/main/);
+  assert.match(status.stdout, /Protection de branche : dépôt distant origin hors de github\.com : protection de branche non vérifiée\./);
+  assert.match(status.stdout, /Journal de l'opérateur : aucun message de l'opérateur reçu/);
+  assert.equal((await apv(p.repo, ['audit', 'merges', '--since', 'hier'])).code, 2);
+});
+
+test('branch protection: available and set, weak, absent with the steps, or unavailable on the free plan, said once and never a refusal', async t => {
+  const { branchProtection } = await import('../dist/rules/protection.js');
+  const p = project(t, { change: { 'notes.txt': 'x\n' } });
+  git(p.repo, 'remote', 'set-url', 'origin', 'git@github.com:o/r.git');
+  const gh = answers => async args => {
+    const path = args[1];
+    const [status, body] = answers.find(([re]) => re.test(path))?.slice(1) ?? [1, 'gh: Not Found (HTTP 404)'];
+    return { args, status, stdout: status === 0 ? body : '', stderr: status === 0 ? '' : body, error: null };
+  };
+  const repo = [/^repos\/o\/r$/, 0, JSON.stringify({ default_branch: 'main', private: true })];
+  const upgrade = 'gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)';
+  const free = await branchProtection(p.repo, gh([repo, [/protection$/, 1, upgrade], [/rules\/branches/, 0, '[]']]));
+  assert.equal(free.state, 'unavailable');
+  assert.match(free.message, /dépôt privé en plan gratuit\) : les garde-fous du plugin et l'audit des fusions \(apv audit merges\) en tiennent lieu/);
+  const absent = await branchProtection(p.repo, gh([repo, [/protection$/, 1, 'gh: Branch not protected (HTTP 404)'], [/rules\/branches/, 0, '[]']]));
+  assert.equal(absent.state, 'absent');
+  assert.match(absent.message, /main non protégée sur GitHub : réglage de l'opérateur sur GitHub : Settings > Rules > Rulesets .* PR obligatoire avant fusion, force-push bloqué/);
+  const ruleset = await branchProtection(p.repo, gh([repo, [/protection$/, 1, 'gh: Branch not protected (HTTP 404)'], [/rules\/branches/, 0, JSON.stringify([{ type: 'pull_request' }, { type: 'non_fast_forward' }, { type: 'deletion' }])]]));
+  assert.equal(ruleset.state, 'ok');
+  const weak = await branchProtection(p.repo, gh([repo, [/protection$/, 0, JSON.stringify({ required_pull_request_reviews: {}, allow_force_pushes: { enabled: false }, enforce_admins: { enabled: false } })], [/rules\/branches/, 0, '[]']]));
+  assert.deepEqual([weak.state, weak.missing], ['weak', ['règles appliquées aux administrateurs']]);
+  git(p.repo, 'remote', 'set-url', 'origin', join(p.root, 'origin.git'));
+});
+
+test('stack merge never takes --offline; the busy refusal names the preview server and how to stop it', async t => {
+  const merge = await apv(tmpdir(), ['stack', 'merge', '12', '--offline'], { APV_ALLOW_MERGE: '1' });
+  assert.equal(merge.code, 2);
+  assert.match(merge.stderr, /offline/);
+  const ports = { ports: [4173], stopped: [], left: [{ pid: 7, ports: [4173], command: 'node build', worktree: '/r', reason: 'main-checkout' }], unsupported: null };
+  assert.match(busyReasons(ports, [], () => true, [4173])[0], /c'est le serveur de l'aperçu vivant : apv preview stop/);
+  assert.doesNotMatch(busyReasons(ports, [], () => true, [5000])[0], /aperçu/);
 });

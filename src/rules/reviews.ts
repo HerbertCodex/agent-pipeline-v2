@@ -5,6 +5,7 @@ import { PipelineError, invariant } from '../domain/errors.js';
 import { REVIEW_DOMAINS, type ReviewDomainName } from '../review/config.js';
 import { gitRead, resolveCommit } from '../run/git-probe.js';
 import { CAPTURE_THEMES, CAPTURE_VIEWPORTS, type CaptureTheme, type CaptureViewport } from './config.js';
+import { readAnchorKey, sign, signatureValid } from './operator.js';
 
 /**
  * Review records: what a reviewer agent found at one exact commit, kept in the Git common directory
@@ -141,6 +142,34 @@ export function recordReview(common: string, input: RecordInput): ReviewRecord {
   return record;
 }
 
+/** The seal of a record: HMAC of its file with the anchor key, written by the PostToolUse hook, never by the tool. */
+const sealOf = (key: Buffer, content: Buffer): string => sign(key, 'review', sha256(content));
+
+/**
+ * Seals the record `id` of `domain` (PostToolUse hook, hooks/scripts/review-seal.mjs): only when the command that wrote it
+ * was run by the reviewer agent of the domain, which the hook checked. The seal is what `apv rules check` trusts: the
+ * tool, run by any agent, never holds a way to make one. Returns the sealed file, or why nothing was sealed.
+ */
+export function sealReview(common: string, id: string, domain: string, agent: string, key: Buffer): { file: string | null; problem: string | null } {
+  if (!/^[\w-]+$/.test(id) || !(REVIEW_DOMAINS as readonly string[]).includes(domain)) return { file: null, problem: 'enregistrement ou domaine invalide' };
+  if (agentName(agent) !== DOMAIN_REVIEWERS[domain as ReviewDomainName]) return { file: null, problem: `agent ${agent} : pas le relecteur du domaine ${domain}` };
+  const root = join(common, ...REVIEWS_DIR);
+  let commits: string[];
+  try { commits = readdirSync(root); } catch { return { file: null, problem: 'aucune relecture enregistrée' }; }
+  for (const commit of commits) {
+    const file = join(root, commit, domain, `${id}.json`);
+    if (!existsSync(file)) continue;
+    const content = readFileSync(file);
+    const record = parseRecord(JSON.parse(content.toString('utf8')) as unknown, commit, domain);
+    if (!record || agentName(record.reviewer) !== agentName(agent)) return { file: null, problem: 'enregistrement illisible, ou écrit sous un autre nom' };
+    const seal = join(root, commit, domain, `${id}.sig`);
+    try { writeFileSync(seal, `${sealOf(key, content)}\n`, { mode: 0o600, flag: 'wx' }); }
+    catch { return { file: null, problem: 'déjà scellé' }; }
+    return { file: seal, problem: null };
+  }
+  return { file: null, problem: `enregistrement ${id} introuvable` };
+}
+
 export interface ReadRecord { record: ReviewRecord | null; file: string; problem: string | null }
 
 function checkStored(dir: string, stored: StoredFile): string | null {
@@ -164,7 +193,7 @@ function parseRecord(value: unknown, commit: string, domain: string): ReviewReco
  * A record that does not match (another commit, another domain, a reviewer that is not the agent of the domain, a file
  * changed) is returned with its problem: it proves nothing.
  */
-export function latestReviews(common: string, commit: string): Map<ReviewDomainName, ReadRecord> {
+export function latestReviews(common: string, commit: string, key = readAnchorKey()): Map<ReviewDomainName, ReadRecord> {
   const out = new Map<ReviewDomainName, ReadRecord>();
   for (const domain of REVIEW_DOMAINS) {
     const dir = join(reviewsDir(common, commit), domain);
@@ -178,6 +207,12 @@ export function latestReviews(common: string, commit: string): Map<ReviewDomainN
     try { record = parseRecord(JSON.parse(readFileSync(file, 'utf8')) as unknown, commit, domain); } catch { record = null; }
     if (!record) { out.set(domain, { record: null, file, problem: 'enregistrement illisible ou pour un autre commit' }); continue; }
     if (agentName(record.reviewer) !== DOMAIN_REVIEWERS[domain]) { out.set(domain, { record, file, problem: `relecteur ${record.reviewer}, pas apv:${DOMAIN_REVIEWERS[domain]}` }); continue; }
+    let seal = '';
+    try { seal = readFileSync(join(dir, `${record.id}.sig`), 'utf8').trim(); } catch { seal = ''; }
+    if (!key || !signatureValid(key, 'review', sha256(readFileSync(file)), seal)) {
+      out.set(domain, { record, file, problem: key ? 'relecture non scellée par le crochet du plugin (écrite hors de l\'agent relecteur, ou modifiée depuis)' : 'clé d\'ancrage absente : aucune relecture ne peut être vérifiée' });
+      continue;
+    }
     const problem = [record.report, ...record.captures].map(s => checkStored(dir, s)).find(p => p !== null) ?? null;
     out.set(domain, { record, file, problem });
   }

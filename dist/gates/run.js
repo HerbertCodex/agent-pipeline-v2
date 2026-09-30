@@ -15,6 +15,8 @@ import { suiteSettings } from '../config/load.js';
 import { PipelineError } from '../domain/errors.js';
 import { WEB_RECORD } from '../web/impact.js';
 import { publishRun, pruneStore, receiptRetention, sharedStore } from './store.js';
+import { readPreviewState } from '../preview/state.js';
+import { repositoryWorktrees } from '../execution/procs.js';
 import { flockFree, markStacksUsed, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables } from './spread.js';
@@ -99,8 +101,9 @@ const HELD_BY = {
     outside: 'un processus hors du dépôt', 'unknown-cwd': 'un processus au dossier illisible',
 };
 /** Why a full suite cannot start: ports of the suite held by others, declared stacks whose lock is held. */
-export function busyReasons(ports, stacks, free = flockFree) {
-    const out = (ports?.left ?? []).map(p => `port ${p.ports.join(', ')} tenu par le pid ${p.pid} (${HELD_BY[p.reason] ?? p.reason}${p.worktree ? ` : ${p.worktree}` : ''}) : ${p.command.slice(0, 100)}`);
+export function busyReasons(ports, stacks, free = flockFree, previewPorts = []) {
+    const out = (ports?.left ?? []).map(p => `port ${p.ports.join(', ')} tenu par le pid ${p.pid} (${HELD_BY[p.reason] ?? p.reason}${p.worktree ? ` : ${p.worktree}` : ''}) : ${p.command.slice(0, 100)}` +
+        `${p.ports.some(port => previewPorts.includes(port)) ? ' ; c\'est le serveur de l\'aperçu vivant : apv preview stop (depuis le checkout qui l\'a lancé), puis relancer la suite' : ''}`);
     for (const s of stacks)
         if (s.lockFile && free(s.lockFile) === false)
             out.push(`pile ${s.id} : son verrou (${s.lockFile}) est tenu`);
@@ -269,7 +272,13 @@ export async function runGates(options) {
                 ports = await freePorts(repo, settings.ports, { log });
             // One full suite at a time on a test stack, and no e2e beside it: a port of the suite held by another copy,
             // the main checkout or a tool, or a declared stack whose lock is held, refuses the suite before anything runs.
-            const busy = busyReasons(ports, options.config.stacks?.length ? resolveStacks(options.config, await commonPath(git, repo, '.')) : []);
+            const previews = [repo, repositoryWorktrees(repo)[0] ?? repo].map(r => { try {
+                return readPreviewState(r)?.port ?? null;
+            }
+            catch {
+                return null;
+            } }).filter((x) => x !== null);
+            const busy = busyReasons(ports, options.config.stacks?.length ? resolveStacks(options.config, await commonPath(git, repo, '.')) : [], flockFree, previews);
             if (busy.length) {
                 throw new PipelineError('GATE_BUSY', `Suite complète refusée, rien n'a été exécuté : ${busy.join(' ; ')}. Une autre suite, un e2e lancé par un agent ou un serveur ` +
                     'utilise déjà la pile de test : deux exécutions en même temps rendent les tests instables. Attendre sa fin (apv lock status, apv stacks status), ' +

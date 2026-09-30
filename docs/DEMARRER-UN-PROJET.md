@@ -24,6 +24,8 @@ APV3 fait de la session Claude Code un chef de projet. Il fait écrire la spec, 
 
 Le reste, tu ne le fais pas : le chef de projet s'en charge et te rend compte.
 
+**Ce que le plugin garde de tes messages.** Pour prouver qu'une validation ou une dérogation vient de toi, un crochet garde, pour chaque message que tu tapes dans la session : l'empreinte de chaque phrase (pas le texte), les huit premiers mots des phrases qui valident, et tes lignes de dérogation, secrets masqués. C'est signé par une clé créée dans `~/.config/apv/anchor.key`, rangé dans le répertoire Git du projet (`apv/operator/`, jamais versionné, jamais envoyé ailleurs) et effacé après 90 jours (`rules.journalDays`). Conséquence pratique : une validation de maquette se cite par phrases entières.
+
 ## 3. Ce que le chef de projet fait seul
 
 Spec et plan, maquettes à te présenter, découpage en tâches, lancement des sous-agents (chacun dans sa copie du dépôt), intégration, contrôles, revues et corrections, PR brouillon, aperçu vivant, suivi du quota, journal des incidents. Il décide seul, en ingénieur, de tout ce qui n'est pas dans la section 2, note ses choix et ne te pose aucune question avant la fin, sauf pour ce qui t'appartient.
@@ -44,10 +46,11 @@ Prérequis : Claude Code, Git, Node.js 22.16 ou plus récent, `gh` connecté à 
    - projet existant : `apv onboard --dry-run` pour voir le plan, puis `apv onboard` (ou `/apv:onboard`).
 
    Sont créés, sans jamais écraser un fichier existant : `.apv/config.json` (les contrôles : pour un projet web, `reuse`, `structure` et `code-map`, plus ceux que l'outil détecte dans `package.json`, `Makefile` ou `pyproject.toml` pour un projet existant), `.apv/DECISIONS.json` (registre des décisions), `.apv/brief.md` (consigne commune des implementers), `.apv/code-map.md` (carte du code), `.apv/specs/`, `.apv/state/`. Si la configuration existait, l'outil liste les contrôles requis qui lui manquent.
-4. **Vérifier que tout marche** :
-   - `apv status` : configuration, registre, specs lus sans erreur ;
+4. **Protéger la branche principale sur GitHub** (toi, une fois) : pour un dépôt public ou un plan payant, Settings, puis Rules > Rulesets (ou Branches) sur la branche par défaut : PR obligatoire avant fusion, force-push bloqué, règles appliquées aux administrateurs. C'est la seule barrière hors de la machine. Pour un dépôt privé en plan gratuit, GitHub ne l'offre pas : les garde-fous du plugin et l'audit des fusions (`apv audit merges`, lancé aussi par `apv status`) en tiennent lieu ; l'audit ne bloque rien, il montre après coup toute fusion ou poussée faite hors de l'outil. `apv status` te dit dans quel cas tu es ([REGLES.md](REGLES.md), section 3 bis).
+5. **Vérifier que tout marche** :
+   - `apv status` : configuration, registre, specs lus sans erreur ; journal de l'opérateur (il doit avoir reçu ton premier message ; sinon la ligne dit pourquoi, par exemple une version de Claude Code qui ne transmet pas le champ `source` : `claude update`) ; protection de branche ; audit des fusions ;
    - `apv ledger validate` : registre valide ;
-   - commit et push de `.apv/`, puis `apv gates run --stage task --base origin/main` : les contrôles de tâche passent ;
+   - `.apv/` commité et arrivé sur la branche principale : par une PR, ou poussé par toi dans ton terminal (le chef de projet ne pousse jamais sur la branche principale, le crochet le refuse) ; puis `apv gates run --stage task --base origin/main` : les contrôles de tâche passent ;
    - sur une branche de travail poussée, `apv rules check --commit HEAD --target origin/main` : la liste des règles avant fusion et ce qui manque encore.
 
 ## 5. La phrase de départ
@@ -95,6 +98,7 @@ Source unique, avec la raison de chacune : [REGLES.md](REGLES.md).
 | Une seule suite complète à la fois, aucun e2e d'agent pendant une preuve | vérifiée par l'outil |
 | Alerte quand un contrôle approche de son délai | vérifiée par l'outil |
 | Une validation humaine se lit dans une trace que l'agent ne peut pas écrire | vérifiée par l'outil pour APV ; à faire par le chef de projet pour les fonctionnalités du projet |
+| Toute fusion passe par `apv stack merge` ; aucune poussée directe sur la branche principale | vérifiée par l'outil (crochets, audit des fusions) ; protection de branche sur GitHub à régler par l'opérateur quand son plan l'offre |
 | Un seul composant par type d'élément, étendu plutôt que recopié | vérifiée par l'outil (en partie) ; à faire par le chef de projet |
 | Arborescence selon les conventions reconnues, rangement validé par l'opérateur | vérifiée par l'outil (signalement) ; à faire par le chef de projet |
 | Cohérence produit, maquettes qui partent de l'existant | à faire par le chef de projet |
@@ -124,7 +128,9 @@ Quand l'outil refuse, il dit quoi faire. Le chef de projet corrige ; il ne conto
 - masquer la sortie d'une commande qui écrit sur GitHub ;
 - arrêter un processus par `kill` de son parent ou par `pkill -f` (seule voie : `apv procs stop`).
 
-Les crochets du plugin refusent la plupart de ces gestes ; ce sont des garde-fous, pas une sandbox.
+- pousser directement sur la branche principale.
+
+Les crochets du plugin refusent la plupart de ces gestes ; ce sont des garde-fous, pas une sandbox : ils tiennent contre l'erreur, pas contre un agent décidé à tromper sous le même compte. La vraie barrière est la protection de branche de GitHub, quand ton plan l'offre ; sinon, l'audit des fusions montre après coup ce qui est passé hors de l'outil.
 
 ## 11. Une leçon devient une capacité
 

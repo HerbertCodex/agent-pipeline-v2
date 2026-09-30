@@ -1,5 +1,7 @@
 import { detectReference } from '../reuse/detect.js';
 import { checkMergeRules, rulesLines } from '../rules/check.js';
+import { branchProtection } from '../rules/protection.js';
+import { processGh } from '../stack/github.js';
 import { gitRoot } from '../run/git-probe.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
@@ -26,6 +28,8 @@ Aucune option ne lève un refus. Sans correction, seul l'opérateur le peut, en 
 crochet du plugin, que les agents ne peuvent pas écrire).
 --target   branche où va le changement (défaut : la branche distante par défaut, origin/HEAD).
 --offline  cible non vérifiée contre le dépôt distant (avec un avertissement), comme apv gates verify --offline.
+Protection de la branche par défaut sur GitHub (gh api) : dite en une ligne, jamais un refus ; indisponible pour un
+dépôt privé en plan gratuit, où les garde-fous et apv audit merges en tiennent lieu.
 Sortie : 0 règles respectées, 1 au moins un refus, 2 appel incorrect.`;
 
 export async function run(args: string[], io: CommandIO): Promise<number> {
@@ -44,8 +48,10 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const target = values.target ?? detectReference(repo);
     if (!target) throw new UsageError('--target manquant : aucune branche distante par défaut (origin/HEAD, origin/main, origin/master)');
     const report = await checkMergeRules({ repo, commit: values.commit, target, remote: { strict: true, offline: values.offline === true } });
-    if (values.json) json(io, report);
-    else io.stdout(`${rulesLines(report).join('\n')}\n`);
+    // Never a refusal: the only barrier outside the machine, said once (docs/REGLES.md).
+    const protection = values.offline ? null : await branchProtection(repo, processGh(io.env['APV_GH'] || 'gh', io.env, repo));
+    if (values.json) json(io, { ...report, protection });
+    else io.stdout(`${[...rulesLines(report), ...(protection ? [`Protection de branche : ${protection.message}.`] : [])].join('\n')}\n`);
     return report.ok ? EXIT.ok : EXIT.failed;
   });
 }

@@ -268,7 +268,7 @@ export async function planStack(numbers, options) {
  */
 export async function mergeStack(numbers, method, options) {
     const plan = await planStack(numbers, options);
-    const report = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [], rules: [] };
+    const report = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [], rules: [], traceErrors: [] };
     const stop = (pr, reasons) => { report.stopped = { pr, reasons }; return report; };
     if (!plan.ok) {
         const bad = plan.prs.find(p => p.anomalies.length);
@@ -352,6 +352,20 @@ export async function mergeStack(numbers, method, options) {
             return stop(n, [`fusion de la PR #${n} non constatée : état ${after.pr.state || 'inconnu'}, base ${after.pr.baseRefName || '?'} (gh pr merge : ${merge.error ?? `code ${merge.status}`})`]);
         }
         report.merged.push(n);
+        if (options.onMerged) {
+            const read = await call(options, ['pr', 'view', String(n), '--json', 'mergeCommit']);
+            let mergeCommit = null;
+            try {
+                const oid = JSON.parse(read.stdout).mergeCommit?.oid;
+                mergeCommit = typeof oid === 'string' && /^[0-9a-f]{40,64}$/.test(oid) ? oid : null;
+            }
+            catch {
+                mergeCommit = null;
+            }
+            const failed = options.onMerged({ pr: n, head: pr.headRefOid, target, method, mergeCommit });
+            if (failed)
+                report.traceErrors.push(`PR #${n} : trace de fusion non écrite (${failed}) : apv audit merges la signalera`);
+        }
     }
     return report;
 }

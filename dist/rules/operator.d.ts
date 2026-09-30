@@ -1,40 +1,94 @@
 import type { MergeRule } from './config.js';
 /**
  * The operator journal: what the operator typed himself in the session, kept by the UserPromptSubmit hook of the plugin
- * (hooks/scripts/operator-journal.mjs) in the Git common directory, outside every worktree and never versioned. It is
- * the trace an agent cannot write through the plugin: the hook keeps only the prompts of the interactive composer, and
- * the guards refuse the commands and the writes that name this folder. A human validation or a waiver the tool reads
- * elsewhere (the ledger, GitHub, a file) counts only when these words are there (docs/REGLES.md, « Ancrage »).
- * Limit: a guard rail, not a sandbox; a process outside Claude Code (or a command the guard does not recognise) can write
- * the file. The tool compares texts: it never decides that words mean a validation.
+ * (hooks/scripts/operator-journal.mjs) in the Git common directory, outside every worktree and never versioned
+ * (docs/REGLES.md, « Ancrage »). Each line is signed (HMAC-SHA256) with the anchor key, kept outside the repository in the
+ * user's configuration folder (`~/.config/apv/anchor.key`, 0600): an unsigned or altered line is ignored. Only what a
+ * rule needs is kept: the hash of each sentence (to recognise a quoted validation), a few words of the sentences that
+ * validate, and the waiver lines, secrets masked; lines older than `rules.journalDays` (90 by default) are purged.
+ * Limit: the key is on the same machine, under the same account; an agent that reads it (a guard refuses the usual forms,
+ * not all) could sign. The tool compares texts: it never decides that words mean a validation.
  */
 export declare const OPERATOR_JOURNAL: readonly ["apv", "operator", "messages.jsonl"];
-export interface OperatorMessage {
-    at: string;
-    session: string;
-    text: string;
-}
-export declare function operatorJournalPath(common: string): string;
-/** The messages of the journal, oldest first; unreadable lines are skipped, a missing journal is empty. */
-export declare function readOperatorMessages(common: string): OperatorMessage[];
+/** Written by the hook when it refuses a prompt (source absent or not the operator's): its date and reason, never the text. */
+export declare const OPERATOR_REFUSED: readonly ["apv", "operator", "refused.json"];
+/** Days a line of the journal is kept by default (`rules.journalDays`). */
+export declare const DEFAULT_JOURNAL_DAYS = 90;
+/** In-process tests only: the anchor key file. No option nor variable of the tool changes it. */
+export declare function setAnchorKeyFile(file: string | null): void;
+/**
+ * The anchor key file: `<home of the account>/.config/apv/anchor.key`. The home comes from the account database
+ * (`os.userInfo()`), never from `HOME` or `XDG_CONFIG_HOME`, which a command can set for itself.
+ */
+export declare function anchorKeyFile(): string;
+export declare function readAnchorKey(file?: string): Buffer | null;
+/** The key, created (32 random bytes, file 0600 in a folder 0700) when absent. Only the hooks create it. */
+export declare function ensureAnchorKey(file?: string): Buffer;
+export declare function sign(key: Buffer, kind: string, payload: string): string;
+export declare function signatureValid(key: Buffer, kind: string, payload: string, signature: unknown): boolean;
 /** Text compared without its typography: spaces collapsed, apostrophes and quotes unified, case ignored. */
 export declare function comparable(text: string): string;
+/** The sentences of a text (split on line breaks and on . ! ? followed by a space), each made comparable, empty ones dropped. */
+export declare function sentences(text: string): string[];
 /** Shortest quote that can anchor a validation: « ok » or « oui » alone never does. */
 export declare const MIN_QUOTE = 12;
-/** The message of the operator that contains `quote` word for word, or null. */
-export declare function anchoredQuote(messages: readonly OperatorMessage[], quote: string): OperatorMessage | null;
 /** Shortest prefix of the commit a waiver must name. */
 export declare const WAIVER_SHA = 12;
 /** Shortest reason after the commit, in characters. */
 export declare const MIN_WAIVER_REASON = 10;
+/** One line of the journal: hashes, a few words, waiver lines; never the whole message. */
+export interface JournalEntry {
+    v: 2;
+    at: string;
+    session: string;
+    /** sha256 of each comparable sentence of the message. */
+    sentences: string[];
+    /** The first words of the sentences that validate or waive, secrets masked. */
+    preview: string[];
+    /** Lines « dérogation <règle> <commit> : <raison> », secrets masked. */
+    waivers: string[];
+    sig: string;
+}
+export type OperatorMessage = Omit<JournalEntry, 'sig' | 'v'>;
+/** The signed entry of a message the operator typed; null when it has no sentence. */
+export declare function journalEntry(text: string, meta: {
+    at: string;
+    session: string;
+}, key: Buffer): JournalEntry | null;
+export declare function operatorJournalPath(common: string): string;
+/** Appends an entry, then drops the lines older than `keepDays` (and unreadable ones). */
+export declare function appendJournal(common: string, entry: JournalEntry, keepDays?: number, now?: Date): void;
+/** The signed messages of the journal, oldest first; unsigned, altered or unreadable lines are ignored. */
+export declare function readOperatorMessages(common: string, key?: Buffer<ArrayBufferLike> | null): OperatorMessage[];
+/** What `apv status` says of the journal: signed messages kept, ignored lines, last message, last refusal of the hook. */
+export interface JournalState {
+    file: string;
+    key: boolean;
+    messages: number;
+    ignored: number;
+    last: string | null;
+    refused: {
+        at: string;
+        reason: string;
+    } | null;
+}
+export declare function journalState(common: string): JournalState;
+/** Notes, for `apv status`, that the hook refused a prompt: date and reason, never the text. */
+export declare function recordRefusal(common: string, reason: string, now?: Date): void;
+/**
+ * The message of the operator that holds every sentence of `quote`, or null. Whole sentences only: the journal keeps
+ * their hashes, never the text, so a quote cut in the middle of a sentence is not recognised.
+ */
+export declare function anchoredQuote(messages: readonly OperatorMessage[], quote: string): OperatorMessage | null;
 /** The sentence the operator types himself to waive `rule` for `sha` (shown in every refusal). */
 export declare function waiverSentence(rule: MergeRule, sha: string): string;
 /**
- * The waiver of `rule` for the commit `sha` the operator typed himself, or null: a message that says
- * « dérogation <règle> <12 premiers caractères du commit au moins> : <raison> ». Never a waiver for another commit,
- * never « dérogation » alone, never a waiver without its reason.
+ * The waiver of `rule` for the commit `sha` the operator typed himself, or null: a line « dérogation <règle> <12 premiers
+ * caractères du commit au moins> : <raison> ». Never for another commit, never « dérogation » alone, never without a reason.
  */
 export declare function waiverFor(messages: readonly OperatorMessage[], rule: MergeRule, sha: string): {
     message: OperatorMessage;
     reason: string;
 } | null;
+/** Whether the key file exists with no access for group and others. */
+export declare function anchorKeyPrivate(file?: string): boolean;

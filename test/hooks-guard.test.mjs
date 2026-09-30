@@ -41,7 +41,7 @@ test('ordinary pushes and text that merely mentions a force-push are allowed', (
   for (const command of [
     'git push',
     'git push -u origin spec/3-t2',
-    'git push origin main',
+    'git push origin feat/x',
     'git commit -m "docs: interdire git push --force"',
     "git commit -m 'git push -f est interdit'",
     'cat > notes.md <<EOF\ngit push --force\nEOF\ngit add notes.md',
@@ -165,7 +165,9 @@ test('hooks.json registers the five events in exec form with the plugin root pla
   const config = JSON.parse(readFileSync(hooksFile, 'utf8'));
   assert.deepEqual(Object.keys(config.hooks).sort(), ['PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit']);
   assert.equal(config.hooks.PreToolUse[0].matcher, 'Bash');
-  assert.equal(config.hooks.PreToolUse[1].matcher, 'Write|Edit|MultiEdit|NotebookEdit');
+  assert.equal(config.hooks.PreToolUse[1].matcher, 'Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob');
+  assert.deepEqual(config.hooks.PostToolUse.map(g => g.matcher), ['Write|Edit|MultiEdit|NotebookEdit', 'Bash']);
+  assert.match(config.hooks.PostToolUse[1].hooks[0].args[0], /review-seal\.mjs$/);
   assert.match(config.hooks.PreToolUse[1].hooks[0].args[0], /write-guard\.mjs$/);
   assert.match(config.hooks.UserPromptSubmit[0].hooks[0].args[0], /operator-journal\.mjs$/);
   assert.equal(config.hooks.PostToolUse[0].matcher, 'Write|Edit|MultiEdit|NotebookEdit');

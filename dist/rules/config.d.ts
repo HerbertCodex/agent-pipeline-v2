@@ -24,6 +24,7 @@ export declare const rulesSchema: import("../domain/schema.js").Schema<{
         readonly id: string;
         readonly command: string[];
     }[] | undefined;
+    readonly journalDays: number | undefined;
     readonly screens: string[] | undefined;
 }>;
 export type RulesSection = Infer<typeof rulesSchema>;

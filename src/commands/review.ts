@@ -124,8 +124,9 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       const captures = (values.capture ?? []).map(c => { const parsed = parseCapture(c); return { ...parsed, path: resolve(io.cwd, parsed.path) }; });
       const record = recordReview(common, { checkout, commit: values.commit, domain: values.domain, reviewer: values.reviewer, findings, report: resolve(io.cwd, values.report), captures });
       if (values.json) { json(io, record); return EXIT.ok; }
-      io.stdout(`Relecture ${record.domain} enregistrée à ${record.commit.slice(0, 12)} par ${record.reviewer} : critique ${findings.critical}, haut ${findings.high}, moyen ${findings.medium}, bas ${findings.low}` +
+      io.stdout(`Enregistrement ${record.id}\nRelecture ${record.domain} enregistrée à ${record.commit.slice(0, 12)} par ${record.reviewer} : critique ${findings.critical}, haut ${findings.high}, moyen ${findings.medium}, bas ${findings.low}` +
         `${record.captures.length ? ` ; captures ${record.captures.map(c => `${c.viewport}:${c.theme}`).join(', ')}` : ''}.\n` +
+        'Le crochet du plugin la scelle si tu es l\'agent relecteur du domaine ; sans ce sceau, apv rules check ne la compte pas.\n' +
         `${findings.critical || findings.high ? 'Constats critiques ou hauts : la fusion de ce commit sera refusée (apv rules check) tant qu\'un nouveau commit corrigé n\'est pas relu.\n' : ''}`);
       return EXIT.ok;
     }

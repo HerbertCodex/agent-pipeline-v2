@@ -438,6 +438,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly id: string;
             readonly command: string[];
         }[] | undefined;
+        readonly journalDays: number | undefined;
         readonly screens: string[] | undefined;
     } | undefined;
 }>;

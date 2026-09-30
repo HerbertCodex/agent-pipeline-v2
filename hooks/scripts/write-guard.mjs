@@ -1,19 +1,19 @@
 #!/usr/bin/env node
-// PreToolUse guard for the Write, Edit, MultiEdit and NotebookEdit tools: refuses a write into the stores of the Git
-// common directory that only the tool writes, the operator journal (`apv/operator/`) and the review records
-// (`apv/reviews/`) (docs/REGLES.md, « Ancrage »). A guard rail against an agent writing its own validation, not a
-// sandbox: a script written elsewhere and run later escapes it.
-import { ANCHOR_STORES, isMainModule, readHookInput } from './lib.mjs';
+// PreToolUse guard for the Write, Edit, MultiEdit, NotebookEdit, Read, Grep and Glob tools: refuses to touch the stores of
+// the Git common directory that only the tool and its hooks write (operator journal `apv/operator/`, review records
+// `apv/reviews/`, merge traces `apv/merges/`) and the anchor key (`~/.config/apv/anchor.key`) that signs them
+// (docs/REGLES.md, « Ancrage »). A guard rail, not a sandbox: a script written elsewhere and run later escapes it.
+import { isMainModule, namesAnchor, readHookInput } from './lib.mjs';
 
-export const WRITE_REASON = 'APV : écriture refusée dans un magasin que seul l\'outil écrit (apv/operator : les mots tapés par l\'opérateur ; ' +
-  'apv/reviews : les relectures enregistrées). Une validation ne s\'écrit pas à la main : l\'opérateur la tape dans la session, ' +
-  'une relecture s\'enregistre par apv review record, par l\'agent relecteur du domaine.';
+export const WRITE_REASON = 'APV : accès refusé à un magasin que seuls l\'outil et ses crochets écrivent (apv/operator : les mots tapés par l\'opérateur ; ' +
+  'apv/reviews : les relectures ; apv/merges : les fusions) ou à la clé d\'ancrage qui les signe. Une validation ne s\'écrit pas à la main : l\'opérateur la tape dans la session, ' +
+  'une relecture s\'enregistre par apv review record, par l\'agent relecteur du domaine ; on lit par apv review show et apv rules check.';
 
 /** { decision: 'allow' } or { decision: 'deny', reason } for one write. */
 export function evaluateWrite(input) {
-  const target = input?.tool_input?.file_path ?? input?.tool_input?.notebook_path;
-  if (typeof target !== 'string') return { decision: 'allow' };
-  return ANCHOR_STORES.test(target.replace(/\\/g, '/')) ? { decision: 'deny', reason: WRITE_REASON } : { decision: 'allow' };
+  const tool = input?.tool_input ?? {};
+  const targets = [tool.file_path, tool.notebook_path, tool.path, tool.pattern, tool.glob].filter(v => typeof v === 'string');
+  return targets.some(target => namesAnchor(target.replace(/\\/g, '/'))) ? { decision: 'deny', reason: WRITE_REASON } : { decision: 'allow' };
 }
 
 async function main() {

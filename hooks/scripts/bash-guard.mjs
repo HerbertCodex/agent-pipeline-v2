@@ -7,7 +7,7 @@
 // This is a guard rail against mistakes, not a security boundary: a determined command can
 // always be written in a shape this parser does not recognise.
 import { basename } from 'node:path';
-import { ANCHOR_STORES, DOMAIN_REVIEWERS, agentName, isMainModule, readHookInput } from './lib.mjs';
+import { DOMAIN_REVIEWERS, agentName, flatten, isMainModule, namesAnchor, readHookInput } from './lib.mjs';
 import { EMPTY_CONTEXT, HARNESS_REASONS, commandWords, hookContext, installProblem, killProblem, lockWrapper, mergeHeld, remoteWriteProblem, stackProblem } from './harness-guard.mjs';
 
 export { HARNESS_REASONS };
@@ -199,6 +199,41 @@ export function isForcePush(words) {
     /^-[A-Za-z]*f[A-Za-z]*$/.test(arg) || (arg.startsWith('+') && arg.length > 1));
 }
 
+const GIT_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env']);
+
+/**
+ * The branch a `git push` writes to the default branch, or null: a refspec whose destination is the default branch
+ * (`main`, `HEAD:main`, `+x:refs/heads/main`), `--all` or `--mirror`, or no refspec (or `HEAD`) from the default branch.
+ * Changes reach the default branch through a PR merged by `apv stack merge`, never by a push.
+ */
+export function pushToDefault(words, defaults = ['main', 'master'], current = null) {
+  const at = commandIndex(words, 'git');
+  if (at === -1) return null;
+  let i = at + 1;
+  while (i < words.length && words[i].startsWith('-')) i += GIT_WITH_VALUE.has(words[i]) ? 2 : 1;
+  if (words[i] !== 'push') return null;
+  const args = words.slice(i + 1);
+  if (args.some(a => a === '--all' || a === '--mirror' || a === '--branches')) return defaults[0] ?? 'main';
+  const valued = new Set(['--repo', '--receive-pack', '--exec', '-o', '--push-option', '--signed', '--force-with-lease', '--recurse-submodules']);
+  const plain = [];
+  for (let k = 0; k < args.length; k += 1) {
+    if (args[k].startsWith('-')) { if (valued.has(args[k]) && !args[k].includes('=')) k += 1; continue; }
+    plain.push(args[k]);
+  }
+  const specs = plain.slice(1);
+  const name = ref => ref.replace(/^\+/, '').replace(/^refs\/heads\//, '');
+  if (!specs.length) return current && defaults.includes(current) ? current : null;
+  for (const spec of specs) {
+    const [src, dst] = spec.includes(':') ? spec.split(':') : [spec, spec];
+    const target = name(dst === '' ? src : dst) === 'HEAD' ? current : name(dst === '' ? src : dst);
+    if (target && defaults.includes(target)) return target;
+  }
+  return null;
+}
+
+/** A merge of a pull request through any client (gh api graphql, curl, a script): the API names it. */
+const MERGE_API = /mergePullRequest|enablePullRequestAutoMerge|pulls\/+[^\s/'"]+\/+merge\b/i;
+
 const PR_WRITES = new Set(['create', 'edit', 'merge', 'ready', 'close', 'reopen', 'comment', 'review']);
 const API_WRITE_FLAGS = new Set(['-f', '-F', '--field', '--raw-field', '--input']);
 
@@ -282,6 +317,18 @@ export function reviewRecordProblem(words, agentType) {
   return null;
 }
 
+/** The `apv review record` call of a command, its words and its domain, or null (the seal hook reads it after the run). */
+export function reviewRecordCall(command) {
+  if (typeof command !== 'string') return null;
+  for (const words of tokenize(command).segments) {
+    const args = apvArguments(words);
+    if (!args) continue;
+    const [name, sub] = positional(args);
+    if (name === 'review' && sub === 'record') return { words, domain: optionValue(args, '--domain') ?? null, reviewer: optionValue(args, '--reviewer') ?? null };
+  }
+  return null;
+}
+
 /** True when the words of one simple command deploy to production with the Vercel CLI. */
 export function isProductionDeploy(words) {
   const at = commandIndex(words, 'vercel');
@@ -324,6 +371,11 @@ export const REASONS = {
   rawMerge: 'APV : fusion directe par gh refusée. Seul apv stack merge fusionne (APV_ALLOW_MERGE=1 apv stack merge <pr...>) : il vérifie juste ' +
     'avant chaque fusion les règles du chef de projet (preuve complète au commit, aucun test instable, relectures, captures, contrôles de base, ' +
     'maquettes ; docs/REGLES.md du plugin). Sans l\'outil, l\'opérateur fusionne lui-même sur GitHub.',
+  pushToDefault: branch => `APV : poussée directe vers ${branch} refusée. La branche par défaut ne change que par une PR fusionnée par apv stack merge, ` +
+    'après les règles du chef de projet ; pousse ta branche de travail et ouvre une PR.',
+  computedApv: 'APV : commande apv dont la commande ou la sous-commande est calculée (variable, substitution, eval) refusée : écris-la en clair, ' +
+    'les garde-fous doivent pouvoir la lire.',
+  commonDir: 'APV : git rev-parse --git-common-dir seulement seul, en lecture ; le répertoire commun porte les magasins de l\'outil (reçus, relectures, journal de l\'opérateur).',
   mergeBySubagent: 'APV : fusion refusée dans un sous-agent. Seul le chef de projet (session principale) fusionne, par apv stack merge, ' +
     'qui vérifie les règles avant chaque fusion.',
   hiddenOutput: 'APV : commande qui écrit sur GitHub avec une sortie masquée (redirection vers /dev/null). ' +
@@ -367,7 +419,11 @@ export function evaluateCommand(command, env = {}, context = EMPTY_CONTEXT) {
 
 function evaluate(command, env, context, depth, inherited) {
   if (typeof command !== 'string' || command.trim() === '') return { decision: 'allow' };
-  if (ANCHOR_STORES.test(command)) return { decision: 'deny', reason: REASONS.anchorStore };
+  if (namesAnchor(command)) return { decision: 'deny', reason: REASONS.anchorStore };
+  const flat = flatten(command);
+  if (MERGE_API.test(flat)) return { decision: 'deny', reason: context.agentId ? REASONS.mergeBySubagent : REASONS.rawMerge };
+  if (/--git-common-dir/.test(flat) && !/^\s*git\s+rev-parse(\s+--path-format=(absolute|relative))?\s+--git-common-dir\s*$/.test(flat)) return { decision: 'deny', reason: REASONS.commonDir };
+  if (/(^|[\s;&|(])eval\b/.test(flat) && /\bapv\b|cli\.js/.test(flat)) return { decision: 'deny', reason: REASONS.computedApv };
   const { segments, shadow } = tokenize(command);
   let writesGithub = false;
   const kill = killProblem(segments, context.ancestors);
@@ -390,6 +446,10 @@ function evaluate(command, env, context, depth, inherited) {
       if (nested.decision === 'deny') return nested;
     }
     if (isForcePush(words)) return { decision: 'deny', reason: REASONS.forcePush };
+    const pushed = pushToDefault(words, (context.defaultBranches ?? (() => ['main', 'master']))(), (context.currentBranch ?? (() => null))());
+    if (pushed) return { decision: 'deny', reason: REASONS.pushToDefault(pushed) };
+    const apvArgs = apvArguments(words);
+    if (apvArgs && positional(apvArgs).slice(0, 2).some(w => /[$`]/.test(w))) return { decision: 'deny', reason: REASONS.computedApv };
     const review = reviewRecordProblem(words, context.agentType ?? null);
     if (review) return { decision: 'deny', reason: review };
     const raw = githubWrite(words);

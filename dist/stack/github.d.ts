@@ -131,6 +131,14 @@ export interface StackOptions {
      * lists them, `apv stack merge` stops on them right before each merge. The command always passes them.
      */
     rules?: (pr: PullRequest, target: string) => Promise<RulesVerdict>;
+    /** After each merge seen by a read: writes its signed trace (`apv audit merges`); returns an error message when it could not. */
+    onMerged?: (merge: {
+        pr: number;
+        head: string;
+        target: string;
+        method: string;
+        mergeCommit: string | null;
+    }) => string | null;
 }
 /** What the rules say about the head of one pull request. */
 export interface RulesVerdict {
@@ -177,6 +185,8 @@ export interface MergeReport {
     rules: Array<{
         pr: number;
     } & RulesVerdict>;
+    /** Merges whose signed trace could not be written. */
+    traceErrors: string[];
 }
 /**
  * `apv stack merge`: merges the stack in order and stops at the first anomaly. Before each merge the pull

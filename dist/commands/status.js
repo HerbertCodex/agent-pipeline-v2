@@ -8,11 +8,16 @@ import { parseSpecDocument } from '../spec/check.js';
 import { cleanLine, isActiveRun, readRunSummaries, runSummaryLine, unreadRunsLine } from '../run/summary.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import { localTime } from '../domain/time.js';
+import { anchorLines, anchorStatus } from '../rules/anchor-status.js';
+import { processGh } from '../stack/github.js';
 export const usage = `Utilisation :
   apv status [--repo <chemin>] [--json]
 
 Résume l'état de .apv/ : configuration, registre des décisions (empreinte), specs de .apv/specs/,
-état de reprise de .apv/state/, une ligne par exécution en cours (apv run) et dernier relevé de quota.`;
+état de reprise de .apv/state/, une ligne par exécution en cours (apv run) et dernier relevé de quota ; puis les
+ancrages des règles avant fusion : journal de l'opérateur (messages reçus, ou pourquoi aucun), protection de la
+branche par défaut sur GitHub (gh api ; indisponible en plan gratuit pour un dépôt privé, dit une fois), audit des
+fusions faites hors de apv stack merge (apv audit merges).`;
 function files(dir) {
     if (!existsSync(dir))
         return [];
@@ -80,8 +85,9 @@ export async function run(args, io) {
         if (positionals.length)
             throw new UsageError(`argument inattendu : ${positionals.join(' ')}`);
         const status = apvStatus(repoPath(io, values.repo));
+        const anchor = await anchorStatus(status.repo, processGh(io.env['APV_GH'] || 'gh', io.env, status.repo)).catch(() => null);
         if (values.json) {
-            json(io, status);
+            json(io, { ...status, anchor });
             return EXIT.ok;
         }
         const c = status.config;
@@ -101,6 +107,8 @@ export async function run(args, io) {
             ...(status.runsUnread ? [`- ${unreadRunsLine(status.runsUnread)}`] : []),
             `Quota : ${q ? `${localTime(q.at)} ; session ${q.session ? `${q.session.percent} %` : '?'} ; semaine ${q.week ? `${q.week.percent} %` : '?'} ; niveau ${q.level}` : 'aucun relevé'}`,
         ];
+        if (anchor)
+            lines.push(...anchorLines(anchor));
         io.stdout(`${lines.map(l => l.trimEnd()).join('\n')}\n`);
         return EXIT.ok;
     });

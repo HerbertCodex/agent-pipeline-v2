@@ -230,6 +230,8 @@ export interface StackOptions {
    * lists them, `apv stack merge` stops on them right before each merge. The command always passes them.
    */
   rules?: (pr: PullRequest, target: string) => Promise<RulesVerdict>;
+  /** After each merge seen by a read: writes its signed trace (`apv audit merges`); returns an error message when it could not. */
+  onMerged?: (merge: { pr: number; head: string; target: string; method: string; mergeCommit: string | null }) => string | null;
 }
 
 /** What the rules say about the head of one pull request. */
@@ -338,6 +340,8 @@ export interface MergeReport {
   derogations: Derogation[];
   /** The rules read right before each merge. */
   rules: Array<{ pr: number } & RulesVerdict>;
+  /** Merges whose signed trace could not be written. */
+  traceErrors: string[];
 }
 
 /**
@@ -348,7 +352,7 @@ export interface MergeReport {
  */
 export async function mergeStack(numbers: number[], method: 'merge' | 'squash' | 'rebase', options: StackOptions): Promise<MergeReport> {
   const plan = await planStack(numbers, options);
-  const report: MergeReport = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [], rules: [] };
+  const report: MergeReport = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [], rules: [], traceErrors: [] };
   const stop = (pr: number, reasons: string[]): MergeReport => { report.stopped = { pr, reasons }; return report; };
   if (!plan.ok) {
     const bad = plan.prs.find(p => p.anomalies.length)!;
@@ -418,6 +422,13 @@ export async function mergeStack(numbers: number[], method: 'merge' | 'squash' |
       return stop(n, [`fusion de la PR #${n} non constatée : état ${after.pr.state || 'inconnu'}, base ${after.pr.baseRefName || '?'} (gh pr merge : ${merge.error ?? `code ${merge.status}`})`]);
     }
     report.merged.push(n);
+    if (options.onMerged) {
+      const read = await call(options, ['pr', 'view', String(n), '--json', 'mergeCommit']);
+      let mergeCommit: string | null = null;
+      try { const oid = (JSON.parse(read.stdout) as { mergeCommit?: { oid?: unknown } }).mergeCommit?.oid; mergeCommit = typeof oid === 'string' && /^[0-9a-f]{40,64}$/.test(oid) ? oid : null; } catch { mergeCommit = null; }
+      const failed = options.onMerged({ pr: n, head: pr.headRefOid, target, method, mergeCommit });
+      if (failed) report.traceErrors.push(`PR #${n} : trace de fusion non écrite (${failed}) : apv audit merges la signalera`);
+    }
   }
   return report;
 }

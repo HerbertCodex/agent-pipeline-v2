@@ -7,6 +7,9 @@ import { MAX_OVERRIDE_REASON } from '../run/state.js';
 import { cleanLine } from '../run/summary.js';
 import { MERGE_REFUSED, mergeStack, planStack, processGh, type Derogation, type Freshness, type GhCall, type PullRequest, type RulesVerdict, type StackOptions, type StackPlan } from '../stack/github.js';
 import { checkMergeRules, rulesLines } from '../rules/check.js';
+import { auditLines, auditMerges, writeMergeTrace } from '../rules/merges.js';
+import { ensureAnchorKey } from '../rules/operator.js';
+import { branchProtection } from '../rules/protection.js';
 import { batchMerge, processGit, type BatchReport, type Proof } from '../stack/batch.js';
 import { loadConfigAtCommit, type ApvConfig } from '../config/load.js';
 import { hash } from '../domain/hash.js';
@@ -141,6 +144,16 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return Number.isInteger(n) && n >= 0 ? n : fallback;
 }
 
+/** Writes the signed trace of a merge (`apv audit merges`); returns the error when it could not. */
+function traceMerge(cwd: string, merge: { pr: number; head: string; target: string; method: string; mergeCommit: string | null }): string | null {
+  try {
+    const root = gitRead(cwd, ['rev-parse', '--show-toplevel']);
+    if (!root) return 'pas un dépôt Git';
+    writeMergeTrace(commonDir(root), { ...merge, at: new Date().toISOString() }, ensureAnchorKey());
+    return null;
+  } catch (error) { return errorMessage(error); }
+}
+
 /** Journal of the waivers of `apv stack merge`, relative to the root of the repository (never versioned). */
 export const STACK_LOG = `${APV_DIR}/state/stack.log`;
 
@@ -218,6 +231,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       ...(values['allow-behind'] ? { allowBehind: { reason } } : {}),
       onDerogation: derogation => journal(io, prs, method, derogation),
       rules: stackRules(io.cwd),
+      onMerged: merge => traceMerge(io.cwd, merge),
     };
     if (action === 'plan') {
       const plan = await planStack(prs, options);
@@ -226,8 +240,13 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       return plan.ok ? EXIT.ok : EXIT.failed;
     }
     const report = await mergeStack(prs, method, options);
-    if (values.json) { json(io, { ...report, calls }); return report.stopped ? EXIT.failed : EXIT.ok; }
-    const lines = ['', 'Rapport de fusion :', ...planLines(report.plan).map(l => `  ${l}`),
+    // Said once, at the head of the report: the branch protection on GitHub and the merges made outside the tool.
+    const root = gitRead(io.cwd, ['rev-parse', '--show-toplevel']);
+    const protection = root ? await branchProtection(root, processGh(bin, io.env, io.cwd)) : null;
+    const audit = root && report.target ? auditMerges(root, commonDir(root), `origin/${report.target}`) : null;
+    if (values.json) { json(io, { ...report, protection, audit, calls }); return report.stopped ? EXIT.failed : EXIT.ok; }
+    const lines = ['', 'Rapport de fusion :', ...(protection ? [`Protection de branche : ${protection.message}.`] : []), ...(audit ? auditLines(audit) : []),
+      ...planLines(report.plan).map(l => `  ${l}`), ...report.traceErrors.map(e => `ATTENTION : ${e}`),
       ...report.freshness.map(f => `Base juste avant la fusion de la PR #${f.pr} : ${freshnessText(f)}`),
       ...report.derogations.map(d => `DÉROGATION (--allow-behind) : PR #${d.pr} admise en retard de ${d.missing ?? '?'} commit(s) sur ${d.base}, ` +
         `journalisée dans ${STACK_LOG} ; raison : ${d.reason}`),
@@ -333,7 +352,16 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO): Promise
       remote: 'origin', gh: processGh(bin, io.env, io.cwd), git: processGit(io.env), log,
       onCall: call => { calls.push(call); if (values.merge || call.status !== 0 || call.error) (values.json ? io.stderr : io.stdout)(transcript(bin, call)); },
       pollMs: positiveInt(io.env['APV_STACK_POLL_MS'], 3000), pollAttempts: positiveInt(io.env['APV_STACK_POLL_ATTEMPTS'], 20),
-      prove, configDrift, repeatRefusal, journal: entry => journalEntry(io, entry), signal: abort.signal,
+      prove, configDrift, repeatRefusal, signal: abort.signal,
+      journal: entry => {
+        // Each merge of a batch leaves its signed trace, its merge commit being the target just after it.
+        if (entry['event'] === 'batch-merge' && typeof entry['pr'] === 'number' && typeof entry['head'] === 'string') {
+          const failed = traceMerge(io.cwd, { pr: entry['pr'], head: entry['head'], target: String(entry['target'] ?? ''), method: 'merge',
+            mergeCommit: typeof entry['targetAfter'] === 'string' ? entry['targetAfter'] : null });
+          if (failed) return `trace de fusion non écrite : ${failed}`;
+        }
+        return journalEntry(io, entry);
+      },
       rules: async (head, target) => {
         try {
           const r = await checkMergeRules({ repo, commit: head, target: `origin/${target}`, skip: ['preuve', 'instable'] });

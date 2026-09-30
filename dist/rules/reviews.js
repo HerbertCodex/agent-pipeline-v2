@@ -5,6 +5,7 @@ import { PipelineError, invariant } from '../domain/errors.js';
 import { REVIEW_DOMAINS } from '../review/config.js';
 import { gitRead, resolveCommit } from '../run/git-probe.js';
 import { CAPTURE_THEMES, CAPTURE_VIEWPORTS } from './config.js';
+import { readAnchorKey, sign, signatureValid } from './operator.js';
 /**
  * Review records: what a reviewer agent found at one exact commit, kept in the Git common directory
  * (`<git common dir>/apv/reviews/<commit>/<domaine>/`), outside every worktree and never versioned, with a copy of its
@@ -118,6 +119,45 @@ export function recordReview(common, input) {
     writeFileSync(join(dir, `${id}.json`), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
     return record;
 }
+/** The seal of a record: HMAC of its file with the anchor key, written by the PostToolUse hook, never by the tool. */
+const sealOf = (key, content) => sign(key, 'review', sha256(content));
+/**
+ * Seals the record `id` of `domain` (PostToolUse hook, hooks/scripts/review-seal.mjs): only when the command that wrote it
+ * was run by the reviewer agent of the domain, which the hook checked. The seal is what `apv rules check` trusts: the
+ * tool, run by any agent, never holds a way to make one. Returns the sealed file, or why nothing was sealed.
+ */
+export function sealReview(common, id, domain, agent, key) {
+    if (!/^[\w-]+$/.test(id) || !REVIEW_DOMAINS.includes(domain))
+        return { file: null, problem: 'enregistrement ou domaine invalide' };
+    if (agentName(agent) !== DOMAIN_REVIEWERS[domain])
+        return { file: null, problem: `agent ${agent} : pas le relecteur du domaine ${domain}` };
+    const root = join(common, ...REVIEWS_DIR);
+    let commits;
+    try {
+        commits = readdirSync(root);
+    }
+    catch {
+        return { file: null, problem: 'aucune relecture enregistrée' };
+    }
+    for (const commit of commits) {
+        const file = join(root, commit, domain, `${id}.json`);
+        if (!existsSync(file))
+            continue;
+        const content = readFileSync(file);
+        const record = parseRecord(JSON.parse(content.toString('utf8')), commit, domain);
+        if (!record || agentName(record.reviewer) !== agentName(agent))
+            return { file: null, problem: 'enregistrement illisible, ou écrit sous un autre nom' };
+        const seal = join(root, commit, domain, `${id}.sig`);
+        try {
+            writeFileSync(seal, `${sealOf(key, content)}\n`, { mode: 0o600, flag: 'wx' });
+        }
+        catch {
+            return { file: null, problem: 'déjà scellé' };
+        }
+        return { file: seal, problem: null };
+    }
+    return { file: null, problem: `enregistrement ${id} introuvable` };
+}
 function checkStored(dir, stored) {
     const path = join(dir, stored.file);
     if (!/^[\w.-]+$/.test(stored.file) || !existsSync(path) || !statSync(path).isFile())
@@ -142,7 +182,7 @@ function parseRecord(value, commit, domain) {
  * A record that does not match (another commit, another domain, a reviewer that is not the agent of the domain, a file
  * changed) is returned with its problem: it proves nothing.
  */
-export function latestReviews(common, commit) {
+export function latestReviews(common, commit, key = readAnchorKey()) {
     const out = new Map();
     for (const domain of REVIEW_DOMAINS) {
         const dir = join(reviewsDir(common, commit), domain);
@@ -171,6 +211,17 @@ export function latestReviews(common, commit) {
         }
         if (agentName(record.reviewer) !== DOMAIN_REVIEWERS[domain]) {
             out.set(domain, { record, file, problem: `relecteur ${record.reviewer}, pas apv:${DOMAIN_REVIEWERS[domain]}` });
+            continue;
+        }
+        let seal = '';
+        try {
+            seal = readFileSync(join(dir, `${record.id}.sig`), 'utf8').trim();
+        }
+        catch {
+            seal = '';
+        }
+        if (!key || !signatureValid(key, 'review', sha256(readFileSync(file)), seal)) {
+            out.set(domain, { record, file, problem: key ? 'relecture non scellée par le crochet du plugin (écrite hors de l\'agent relecteur, ou modifiée depuis)' : 'clé d\'ancrage absente : aucune relecture ne peut être vérifiée' });
             continue;
         }
         const problem = [record.report, ...record.captures].map(s => checkStored(dir, s)).find(p => p !== null) ?? null;

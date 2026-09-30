@@ -72,6 +72,15 @@ export declare function parseCapture(value: string): CaptureInput;
  * reviewer saw, and `apv rules check` refuses the merge on it.
  */
 export declare function recordReview(common: string, input: RecordInput): ReviewRecord;
+/**
+ * Seals the record `id` of `domain` (PostToolUse hook, hooks/scripts/review-seal.mjs): only when the command that wrote it
+ * was run by the reviewer agent of the domain, which the hook checked. The seal is what `apv rules check` trusts: the
+ * tool, run by any agent, never holds a way to make one. Returns the sealed file, or why nothing was sealed.
+ */
+export declare function sealReview(common: string, id: string, domain: string, agent: string, key: Buffer): {
+    file: string | null;
+    problem: string | null;
+};
 export interface ReadRecord {
     record: ReviewRecord | null;
     file: string;
@@ -82,4 +91,4 @@ export interface ReadRecord {
  * A record that does not match (another commit, another domain, a reviewer that is not the agent of the domain, a file
  * changed) is returned with its problem: it proves nothing.
  */
-export declare function latestReviews(common: string, commit: string): Map<ReviewDomainName, ReadRecord>;
+export declare function latestReviews(common: string, commit: string, key?: Buffer<ArrayBufferLike> | null): Map<ReviewDomainName, ReadRecord>;

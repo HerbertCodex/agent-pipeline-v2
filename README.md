@@ -44,7 +44,7 @@ Depuis la racine du dépôt (Git, dépôt distant `origin`) :
 |---|---|
 | Projet neuf | `apv init` (ou `/apv:init`) |
 | Projet existant | `apv onboard --dry-run` pour voir le plan, puis `apv onboard` (ou `/apv:onboard`) |
-| Vérifier | `apv status`, `apv ledger validate`, puis, `.apv/` commité et poussé, `apv gates run --stage task --base origin/main` |
+| Vérifier | `apv status`, `apv ledger validate`, puis, `.apv/` arrivé sur la branche principale (par une PR, ou poussé par l'opérateur : les agents ne poussent jamais sur elle), `apv gates run --stage task --base origin/main` |
 
 Créé sans jamais écraser un fichier existant :
 
@@ -53,7 +53,7 @@ Créé sans jamais écraser un fichier existant :
 - `.apv/code-map.md` : la carte du code, lue par les agents avant de créer quoi que ce soit ;
 - `.apv/brief.md` : la consigne commune des implementers ; `.apv/specs/` et `.apv/state/`.
 
-Sur une configuration existante, l'outil liste les contrôles que les règles exigent et qui lui manquent. Ensuite, colle dans la session la phrase de départ de [docs/DEMARRER-UN-PROJET.md](docs/DEMARRER-UN-PROJET.md).
+Sur une configuration existante, l'outil liste les contrôles que les règles exigent et qui lui manquent. Protège la branche principale sur GitHub (PR obligatoire, pas de force-push) si ton plan l'offre ; sinon, `apv audit merges` montre après coup ce qui est passé hors de l'outil ([règles](docs/REGLES.md), section 3 bis). Ensuite, colle dans la session la phrase de départ de [docs/DEMARRER-UN-PROJET.md](docs/DEMARRER-UN-PROJET.md).
 
 ## Le cycle d'une fonctionnalité
 
@@ -73,6 +73,7 @@ Sur une configuration existante, l'outil liste les contrôles que les règles ex
 | `/apv:status`, `/apv:resume`, `/apv:quota`, `/apv:preview` | état, reprise après coupure, quota, aperçu vivant |
 | `apv gates run`, `apv gates verify` | contrôles et preuve au commit exact |
 | `apv rules check` | règles vérifiées avant toute fusion |
+| `apv audit merges` | fusions et poussées arrivées sur la branche principale sans `apv stack merge` |
 | `apv review plan`, `apv review record`, `apv review show` | domaines de revue, relectures enregistrées |
 | `apv reuse check`, `apv map`, `apv structure check` | réutilisation, carte du code, arborescence |
 | `apv help <commande>` | aide de chaque commande |

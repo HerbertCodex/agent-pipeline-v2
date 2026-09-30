@@ -1,19 +1,25 @@
 // Helpers of the tests for the rules checked before a merge (src/rules): the operator journal the UserPromptSubmit hook
-// writes, and review records written as `apv review record` does, without the checkout it requires.
+// writes, and review records written and sealed as `apv review record` and its PostToolUse hook do. The anchor key of the
+// tests lives in a temporary folder, set in this process (setAnchorKeyFile) and given to spawned hooks (APV_ANCHOR_KEY_FILE).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { appendJournal, ensureAnchorKey, journalEntry, setAnchorKeyFile, sign } from '../../dist/rules/operator.js';
 
 export const RULES = ['preuve', 'instable', 'relecture', 'captures', 'controles', 'maquette'];
 
+/** The anchor key of the tests of this file (one process per test file). */
+export const TEST_KEY_FILE = join(mkdtempSync(join(tmpdir(), 'apv3-anchor-')), 'anchor.key');
+setAnchorKeyFile(TEST_KEY_FILE);
+export const TEST_KEY = ensureAnchorKey(TEST_KEY_FILE);
+
 export const commonDirOf = repo => execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: repo, encoding: 'utf8' }).trim();
 
-/** A message the operator typed in the session, as the hook keeps it. */
+/** A message the operator typed in the session, as the hook keeps it (signed). */
 export function operatorSays(repo, text, at = new Date().toISOString()) {
-  const dir = join(commonDirOf(repo), 'apv', 'operator');
-  mkdirSync(dir, { recursive: true });
-  appendFileSync(join(dir, 'messages.jsonl'), `${JSON.stringify({ at, session: 'test', sha256: createHash('sha256').update(text).digest('hex'), text })}\n`);
+  appendJournal(commonDirOf(repo), journalEntry(text, { at, session: 'test' }, TEST_KEY));
 }
 
 /** The operator waives `rules` for `sha`, in one message, one line per rule. */
@@ -30,12 +36,12 @@ export function png(seed, size = 2048) {
   return data;
 }
 
-/** A review record in the store, as `apv review record` writes it. */
-export function seedReview(repo, sha, domain, { critical = 0, high = 0, reviewer = null, captures = [], at = '2026-09-30T10:00:00.000Z' } = {}) {
+/** A review record in the store, as `apv review record` writes it, sealed as the hook does (`seal: false`: not sealed). */
+export function seedReview(repo, sha, domain, { critical = 0, high = 0, reviewer = null, captures = [], at = '2026-09-30T10:00:00.000Z', seal = true } = {}) {
   const roles = { securite: 'qa-securite', fidelite: 'qa-fidelite', donnees: 'architecte-donnees', rgpd: 'dpo' };
   const dir = join(commonDirOf(repo), 'apv', 'reviews', sha, domain);
   mkdirSync(dir, { recursive: true });
-  const id = `${at.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}-${Math.random().toString(16).slice(2, 10)}`;
+  const id = `${at.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}-${Math.random().toString(16).slice(2, 10).padEnd(8, '0')}`;
   const report = Buffer.from(`Relecture ${domain} du commit ${sha}\n${'constat détaillé. '.repeat(20)}\n`);
   writeFileSync(join(dir, `${id}-rapport.md`), report);
   const stored = captures.map(([viewport, theme], k) => {
@@ -46,7 +52,9 @@ export function seedReview(repo, sha, domain, { critical = 0, high = 0, reviewer
   });
   const record = { version: 1, id, commit: sha, domain, reviewer: reviewer ?? `apv:${roles[domain]}`, at, findings: { critical, high, medium: 0, low: 0 },
     report: { file: `${id}-rapport.md`, sha256: digest(report), bytes: report.length }, captures: stored };
-  writeFileSync(join(dir, `${id}.json`), JSON.stringify(record, null, 2));
+  const content = Buffer.from(JSON.stringify(record, null, 2));
+  writeFileSync(join(dir, `${id}.json`), content);
+  if (seal) writeFileSync(join(dir, `${id}.sig`), `${sign(TEST_KEY, 'review', digest(content))}\n`);
   return record;
 }
 
