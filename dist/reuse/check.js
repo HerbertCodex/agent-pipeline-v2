@@ -1,0 +1,229 @@
+import { execFileSync } from 'node:child_process';
+import { posix } from 'node:path';
+import { CODE_EXTENSIONS, parseName } from '../structure/names.js';
+import { buildCodeMap, clashesFor } from '../knowledge/code-map.js';
+import { collectChanges, isAdded, readAtBase, readWorktree, resolveBase } from './changes.js';
+import { COMPONENT_EXTENSIONS, DEFAULT_STYLE_SOURCES, ELEMENT_FAMILIES, REUSE_RULES, STYLE_EXTENSIONS, UI_EXTENSIONS, extensionOf, globMatcher, mapSettings, reuseSettings, } from './config.js';
+import { TokenTable, blankImports, findClones, occurs, tokenize } from './duplicates.js';
+import { blocks, elementRule, findElements } from './markup.js';
+import { componentName, describeClash } from './names.js';
+import { Primitives, primitivesOf, restyledPrimitives, styleRules } from './styles.js';
+import { breakableValues, typographyPatterns } from './typography.js';
+const SCRIPT_EXTENSIONS = new Set(['ts', 'js', 'mjs', 'cjs', 'mts', 'cts']);
+const LOCALE_FILE = /(?:^|\/)(?:locales?|i18n|messages|lang|translations)\//;
+/** Content of a file at a commit, or null (absent, unreadable, larger than 4 MB). */
+function gitShow(repo, spec) {
+    try {
+        return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'show', spec], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 4 * 1024 * 1024, timeout: 30_000 });
+    }
+    catch {
+        return null;
+    }
+}
+const order = (a, b) => REUSE_RULES.indexOf(a.rule) - REUSE_RULES.indexOf(b.rule) || Number(b.isNew) - Number(a.isNew) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || a.line - b.line;
+/**
+ * `apv reuse check` (docs/REUSE.md): what a change adds against the existing components of the project. Every rule
+ * reports what the change adds (new) and what was already there (existing, never blocking), so that a project with a
+ * history adopts the check without first cleaning everything.
+ */
+export async function checkReuse(repo, config, options = {}) {
+    const settings = reuseSettings(config.reuse);
+    const mapConfig = mapSettings(config.map);
+    const changes = options.changes ?? await collectChanges(repo, resolveBase(repo, options.base, settings.reference));
+    const designDir = config.design?.dir?.replace(/\/+$/, '');
+    const ignored = globMatcher([...settings.ignore, ...(designDir ? [`${designDir}/**`] : [])]);
+    const files = changes.files.filter(path => !ignored(path));
+    const cache = new Map();
+    const read = (path) => {
+        if (!cache.has(path))
+            cache.set(path, readWorktree(repo, path));
+        return cache.get(path);
+    };
+    const isTest = (path) => parseName(path)?.test ?? /(?:^|\/)(?:tests?|__tests__|e2e|fixtures)\//.test(path);
+    let map = null;
+    const codeMap = async () => (map ??= await buildCodeMap(repo, settings, mapConfig, { read }));
+    const findings = [];
+    const summary = Object.fromEntries(REUSE_RULES.map(rule => [rule, { severity: settings.severity[rule], active: settings.severity[rule] !== 'off', note: null, new: 0, existing: 0 }]));
+    const add = (finding) => {
+        const severity = settings.severity[finding.rule];
+        findings.push({ ...finding, severity, blocking: severity === 'error' && finding.isNew });
+    };
+    if (summary.native.active)
+        await nativeRule(settings, files, read, isTest, changes, codeMap, add);
+    const primitives = summary.styles.active ? stylesRule(settings, files, read, isTest, changes, add, summary.styles) : { sources: [], count: 0 };
+    if (summary.duplicates.active)
+        duplicatesRule(repo, settings, files, read, isTest, changes, add);
+    if (summary.names.active) {
+        const current = await codeMap();
+        for (const component of current.components) {
+            if (!changes.all && !changes.created.has(component.path))
+                continue;
+            if (ignored(component.path))
+                continue;
+            const clashes = changes.all ? component.clashes : clashesFor(current, component.path, settings.roles, true);
+            if (!clashes.length)
+                continue;
+            add({ rule: 'names', isNew: true, path: component.path, line: 1, other: { path: clashes[0].with, line: 1 },
+                message: `${clashes.map(describeClash).join(' ; ')}, ${clashes.length > 1 ? 'composants partagés' : 'composant partagé'} : le réutiliser ou l'étendre (paramètre, variante), sinon justifier ce nouveau composant dans le rapport.` });
+        }
+    }
+    if (summary.typography.active) {
+        const patterns = typographyPatterns(settings.locale);
+        if (!patterns) {
+            summary.typography.active = false;
+            summary.typography.note = settings.locale
+                ? `la langue « ${settings.locale} » n'exige pas d'espace insécable dans ces valeurs : règle inactive`
+                : 'langue des textes non déclarée (reuse.typography.locale) : règle inactive';
+        }
+        else {
+            for (const path of files) {
+                const ext = extensionOf(path);
+                const markup = UI_EXTENSIONS.has(ext);
+                if (isTest(path) || !(markup || SCRIPT_EXTENSIONS.has(ext) || (ext === 'json' && LOCALE_FILE.test(path))))
+                    continue;
+                const whole = changes.all || changes.created.has(path);
+                const lines = whole ? undefined : changes.added.get(path);
+                if (!whole && !lines?.size)
+                    continue;
+                const text = read(path);
+                if (text === null)
+                    continue;
+                for (const hit of breakableValues(text, ext, patterns, markup, lines)) {
+                    add({ rule: 'typography', isNew: true, path, line: hit.line,
+                        message: `${hit.values.join(', ')} : espace insécable attendue (U+00A0, ou fine U+202F ; &nbsp; ou &#8239; dans le balisage, \\u00a0 ou \\u202f dans une chaîne), sinon la valeur se coupe en fin de ligne.` });
+                }
+            }
+        }
+    }
+    for (const finding of findings)
+        summary[finding.rule][finding.isNew ? 'new' : 'existing']++;
+    findings.sort(order);
+    return { ok: !findings.some(f => f.blocking), base: changes.base, analyzedFiles: files.length, rules: summary, findings, primitives };
+}
+async function nativeRule(settings, files, read, isTest, changes, codeMap, add) {
+    const rules = Object.keys(settings.native.elements).sort().map(elementRule);
+    const allowed = globMatcher(settings.native.allowedPaths);
+    let shared = null;
+    for (const path of files) {
+        if (!UI_EXTENSIONS.has(extensionOf(path)) || allowed(path) || isTest(path))
+            continue;
+        const text = read(path);
+        if (text === null)
+            continue;
+        for (const hit of findElements(text, rules)) {
+            let target = settings.native.elements[hit.selector] ?? null;
+            if (target === null) {
+                shared ??= (await codeMap()).components.filter(c => c.shared).map(c => ({ path: c.path, family: componentName(c.path, settings.roles).family }));
+                const family = ELEMENT_FAMILIES[elementRule(hit.selector).tag];
+                target = shared.find(c => family && c.family === family)?.path ?? null;
+            }
+            const tag = hit.selector.replace(/^([a-z0-9-]+)(.*)$/, '<$1$2>');
+            add({ rule: 'native', isNew: isAdded(changes, path, hit.line), path, line: hit.line,
+                message: target
+                    ? `${tag} natif réservé aux composants partagés : utiliser ${target}.`
+                    : `${tag} natif réservé aux composants partagés (${settings.native.allowedPaths.join(', ')}) : aucun composant partagé ne le remplace encore ; en créer un là, paramétrable, et le déclarer dans reuse.native.elements.` });
+        }
+    }
+}
+function stylesRule(settings, files, read, isTest, changes, add, summary) {
+    const present = new Set(files);
+    const declared = settings.styles.sources
+        ? files.filter(globMatcher(settings.styles.sources))
+        : DEFAULT_STYLE_SOURCES.filter(path => present.has(path));
+    // The sheets a global sheet imports (`@import './styles/buttons.css'`) are global too.
+    const sources = [];
+    const queue = [...declared];
+    while (queue.length && sources.length < 50) {
+        const path = queue.shift();
+        if (sources.includes(path))
+            continue;
+        sources.push(path);
+        for (const m of (read(path) ?? '').matchAll(/@import\s+(?:url\(\s*)?['"]([^'"]+)['"]/g)) {
+            const target = m[1];
+            if (!target.startsWith('.'))
+                continue;
+            const resolved = posix.normalize(posix.join(posix.dirname(path), target));
+            if (present.has(resolved))
+                queue.push(resolved);
+        }
+    }
+    const classes = sources.flatMap(path => primitivesOf(read(path) ?? ''));
+    const primitives = new Primitives(classes, settings.styles.selectors, settings.styles.except);
+    if (!primitives.size) {
+        summary.active = false;
+        summary.note = sources.length ? `aucune classe primitive dans ${sources.join(', ')} : règle inactive` : 'aucune feuille globale trouvée (reuse.styles.sources) : règle inactive';
+        return { sources, count: 0 };
+    }
+    const allowed = globMatcher([...settings.styles.allowedPaths, ...sources]);
+    const sourceList = sources.length ? sources.join(', ') : 'reuse.styles.selectors';
+    for (const path of files) {
+        const ext = extensionOf(path);
+        const markup = UI_EXTENSIONS.has(ext);
+        if (allowed(path) || isTest(path) || !(markup || STYLE_EXTENSIONS.has(ext)))
+            continue;
+        const text = read(path);
+        if (text === null)
+            continue;
+        const rules = markup ? blocks(text, 'style').flatMap(b => styleRules(b.content, b.line)) : styleRules(text);
+        for (const hit of restyledPrimitives(rules, primitives)) {
+            if (hit.nested && settings.styles.nested === 'allow')
+                continue;
+            add({ rule: 'styles', isNew: isAdded(changes, path, hit.line), path, line: hit.line,
+                message: hit.nested
+                    ? `« ${hit.selector} » ajuste la primitive .${hit.primitive} (${sourceList}) sous une classe du composant : ajustement imbriqué refusé (reuse.styles.nested) ; ajouter une variante à la primitive ou au composant partagé.`
+                    : `« ${hit.selector} » redéfinit la primitive .${hit.primitive} (${sourceList}) dans un style local : utiliser la classe telle quelle, ou ajouter une variante à la primitive ou au composant partagé.` });
+        }
+    }
+    return { sources, count: primitives.size };
+}
+function duplicatesRule(repo, settings, files, read, isTest, changes, add) {
+    const included = settings.duplicates.paths ? globMatcher(settings.duplicates.paths) : (path) => {
+        const ext = extensionOf(path);
+        return CODE_EXTENSIONS.has(ext) || STYLE_EXTENSIONS.has(ext) || COMPONENT_EXTENSIONS.has(ext) || ext === 'html';
+    };
+    const excluded = globMatcher(settings.duplicates.ignore);
+    const table = new TokenTable();
+    const tokens = new Map();
+    for (const path of files) {
+        if (!included(path) || excluded(path) || isTest(path))
+            continue;
+        const text = read(path);
+        if (text !== null)
+            tokens.set(path, tokenize(blankImports(text, extensionOf(path)), extensionOf(path), table));
+    }
+    const options = { minTokens: settings.duplicates.minTokens, minLines: settings.duplicates.minLines };
+    const baseIds = new Map();
+    const atBase = (path) => {
+        if (!baseIds.has(path)) {
+            const text = readAtBase(repo, changes, path, gitShow);
+            baseIds.set(path, text === null ? null : Int32Array.from(tokenize(blankImports(text, extensionOf(path)), extensionOf(path), table), t => t.id));
+        }
+        return baseIds.get(path);
+    };
+    const touched = (path, from, to) => {
+        if (changes.all || changes.created.has(path))
+            return true;
+        const lines = changes.added.get(path);
+        if (!lines)
+            return false;
+        for (let l = from; l <= to; l++)
+            if (lines.has(l))
+                return true;
+        return false;
+    };
+    for (const clone of findClones(tokens, options)) {
+        let isNew = touched(clone.a.path, clone.a.startLine, clone.a.endLine) || touched(clone.b.path, clone.b.startLine, clone.b.endLine);
+        // Touched but already duplicated at the base (same tokens in both files there): the copy is not the change's.
+        if (isNew && !changes.all) {
+            const needle = Int32Array.from(tokens.get(clone.a.path).slice(clone.a.start, clone.a.end + 1), t => t.id);
+            const a = atBase(clone.a.path);
+            const b = atBase(clone.b.path);
+            if (a && b && (clone.a.path === clone.b.path ? occurs(a, needle, true) : occurs(a, needle) && occurs(b, needle)))
+                isNew = false;
+        }
+        add({ rule: 'duplicates', isNew, path: clone.a.path, line: clone.a.startLine, endLine: clone.a.endLine,
+            other: { path: clone.b.path, line: clone.b.startLine, endLine: clone.b.endLine },
+            message: `bloc identique à ${clone.b.path}:${clone.b.startLine}-${clone.b.endLine} (${clone.lines} lignes, ${clone.tokens} jetons) : le factoriser dans un module ou un composant partagé et paramétrable, puis retirer la copie.` });
+    }
+}
+//# sourceMappingURL=check.js.map

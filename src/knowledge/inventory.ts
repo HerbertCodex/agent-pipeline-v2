@@ -1,4 +1,5 @@
-import { posix } from 'node:path';
+import { lstatSync } from 'node:fs';
+import { join, posix } from 'node:path';
 import { environment, runProcess } from '../execution/process.js';
 import { invariant } from '../domain/errors.js';
 import { extensionOf, isExported, isTestPath, nonSourceExtensions, resolveLanguages, type LanguageProfile } from './languages.js';
@@ -25,13 +26,19 @@ const MAX_LINE = 2000;
 const PATHSPEC_CHUNK = 1000;
 const GREP_BYTES = 32 * 1024 * 1024;
 
-function stripRev(entry: string, sha: string): string { return entry.startsWith(`${sha}:`) ? entry.slice(sha.length + 1) : entry; }
+/** `sha` of an inventory built from the working tree (`buildWorktreeInventory`) rather than from a commit. */
+export const WORKTREE = 'worktree';
 
+function stripRev(entry: string, sha: string): string { return sha !== WORKTREE && entry.startsWith(`${sha}:`) ? entry.slice(sha.length + 1) : entry; }
+
+/** `git grep` over a commit, or over the working tree (tracked and untracked files, ignored ones never) when `sha` is WORKTREE. */
 async function grep(repo: string, sha: string, args: string[], paths: string[], signal?: AbortSignal, includeBinary = false): Promise<string[]> {
   const env = environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']);
   const rows: string[] = [];
+  const source = sha === WORKTREE ? ['--untracked'] : [];
+  const rev = sha === WORKTREE ? [] : [sha];
   for (let i = 0; i < paths.length; i += PATHSPEC_CHUNK) {
-    const result = await runProcess({ command: ['git', '-c', 'core.quotePath=false', 'grep', ...(includeBinary ? ['--text'] : ['-I']), '--null', ...args, sha, '--', ...paths.slice(i, i + PATHSPEC_CHUNK).map(p => `:(literal)${p}`)],
+    const result = await runProcess({ command: ['git', '-c', 'core.quotePath=false', 'grep', ...source, ...(includeBinary ? ['--text'] : ['-I']), '--null', ...args, ...rev, '--', ...paths.slice(i, i + PATHSPEC_CHUNK).map(p => `:(literal)${p}`)],
       cwd: repo, env, timeoutMs: 120000, ...(signal ? { signal } : {}), maxOutputBytes: GREP_BYTES });
     // Exit 1 only means no match in this chunk.
     invariant(result.status === 'passed' || result.exitCode === 1, 'REPOSITORY_INDEX', 'Repository inventory scan failed');
@@ -53,7 +60,30 @@ export async function buildInventory(repo: string, ref: string, options: Invento
   const sha = resolved.stdout.trim();
   const tree = await runProcess({ command: ['git', '-c', 'core.quotePath=false', 'ls-tree', '-r', '--name-only', '-z', sha], cwd: repo, env, timeoutMs: 30000, ...(options.signal ? { signal: options.signal } : {}), maxOutputBytes: 8 * 1024 * 1024 });
   invariant(tree.status === 'passed' && !tree.truncated, 'REPOSITORY_INDEX', 'Unable to enumerate repository');
-  const files = tree.stdout.split('\0').filter(Boolean);
+  return scan(repo, sha, tree.stdout.split('\0').filter(Boolean), options);
+}
+
+/**
+ * The same inventory, of the working tree: the tracked files still present and the untracked files Git does not
+ * ignore, as they are on disk. `sha` is WORKTREE. Used where the result must follow uncommitted work (the code map
+ * regenerated before a commit, and checked against the files of the commit under proof).
+ */
+export async function buildWorktreeInventory(repo: string, options: InventoryOptions = {}): Promise<Inventory> {
+  return scan(repo, WORKTREE, await worktreeFiles(repo, options.signal), options);
+}
+
+/** Files of the working tree: tracked ones present on disk and untracked ones not ignored, sorted, without duplicates. */
+export async function worktreeFiles(repo: string, signal?: AbortSignal): Promise<string[]> {
+  const env = environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']);
+  const listed = await runProcess({ command: ['git', '-c', 'core.quotePath=false', 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--deduplicate'], cwd: repo, env, timeoutMs: 30000, ...(signal ? { signal } : {}), maxOutputBytes: 8 * 1024 * 1024 });
+  invariant(listed.status === 'passed' && !listed.truncated, 'REPOSITORY_INDEX', 'Unable to enumerate repository');
+  const files = [...new Set(listed.stdout.split('\0').filter(Boolean))].filter(path => {
+    try { return lstatSync(join(repo, path)).isFile(); } catch { return false; }
+  });
+  return files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+async function scan(repo: string, sha: string, files: string[], options: InventoryOptions): Promise<Inventory> {
   invariant(files.length <= MAX_FILES, 'REPOSITORY_INDEX', 'Repository file count exceeds alpha indexing limit');
 
   const languages = resolveLanguages(options.languages);

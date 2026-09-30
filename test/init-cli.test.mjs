@@ -15,9 +15,15 @@ test('apv init creates .apv/ with a valid ledger, a named configuration and the 
   assert.equal(r.code, 0, r.stderr);
   const out = r.json();
   assert.equal(out.name, 'Toujours rien');
-  assert.deepEqual(out.created, ['.apv/', '.apv/config.json', '.apv/DECISIONS.json', '.apv/brief.md', '.apv/specs/', '.apv/state/', '.apv/.gitignore']);
+  assert.deepEqual(out.created, ['.apv/', '.apv/config.json', '.apv/DECISIONS.json', '.apv/brief.md', '.apv/specs/', '.apv/state/', '.apv/.gitignore', '.apv/code-map.md']);
   assert.deepEqual([out.existing, out.completed], [[], []]);
-  assert.deepEqual(JSON.parse(read(f.repo, '.apv/config.json')), { name: 'Toujours rien', gates: [] });
+  // Not a web project: the code map and its check only, no reuse section.
+  assert.deepEqual(JSON.parse(read(f.repo, '.apv/config.json')), { name: 'Toujours rien', gates: [
+    { id: 'code-map', command: ['apv', 'map', '--check'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true },
+  ] });
+  assert.deepEqual([out.reuse.web, out.reuse.gates, out.reuse.section, out.reuse.map], [false, ['code-map'], null, '.apv/code-map.md']);
+  assert.match(read(f.repo, '.apv/code-map.md'), /^# Carte du code\n/);
+  assert.equal((await apv(f.repo, ['map', '--check'])).code, 0, 'the map written by init is up to date');
   for (const dir of ['.apv/specs', '.apv/state']) assert.ok(statSync(join(f.repo, dir)).isDirectory(), dir);
   const brief = read(f.repo, '.apv/brief.md');
   assert.match(brief, /^# Consigne commune des implementers \(Toujours rien\)\n/);
@@ -72,12 +78,12 @@ test('apv init refuses outside a Git repository and rejects wrong calls', async 
   assert.match((await apv(f.repo, ['init', '--help'])).stdout, /sans jamais écraser/);
 });
 
-test('the brief comes from the reference of the project lead skill, resolved from dist/', t => {
+test('the brief comes from the reference of the project lead skill, resolved from dist/', async t => {
   assert.ok(existsSync(join(PLUGIN_ROOT, BRIEF_TEMPLATE)));
   assert.equal(briefFromTemplate('intro\n```markdown\n# Consigne (<nom du projet>)\nTexte `code`.\n```\n', 'X'), '# Consigne (X)\nTexte `code`.\n');
   assert.equal(briefFromTemplate('# Sans bloc\n', 'X'), '# Sans bloc\n');
   const f = fixture(t);
-  assert.throws(() => initProject(f.repo, 'X', join(f.root, 'nowhere')), /Modèle de consigne introuvable/);
+  await assert.rejects(initProject(f.repo, 'X', join(f.root, 'nowhere')), /Modèle de consigne introuvable/);
   assert.ok(!existsSync(join(f.repo, '.apv')), 'nothing written when the model is missing');
 });
 

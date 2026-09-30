@@ -2,7 +2,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APV_DIR, apvGitignoreMissing, ensureApvGitignore } from '../config/apv-files.js';
-import { CONFIG_FILE, loadConfig } from '../config/load.js';
+import { CONFIG_FILE, configIssues, loadConfig } from '../config/load.js';
+import { worktreeFiles } from '../knowledge/inventory.js';
+import { detectReuse, MAP_GATE, REUSE_GATE } from '../reuse/detect.js';
+import { currentMap } from './map.js';
 import { designDir } from '../design/config.js';
 import { GITATTRIBUTES, ensureDesignAttribute } from '../design/attributes.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
@@ -15,7 +18,10 @@ export const usage = `Utilisation :
 Crée ce qui manque dans .apv/ sans jamais écraser un fichier existant (la commande peut être relancée) :
 config.json (nom du projet, contrôles vides), DECISIONS.json (registre vide), brief.md (consigne commune
 des implementers, depuis le modèle de la compétence chef-de-projet), specs/, state/ et .gitignore
-(fichiers machine). Si la configuration déclare le dossier des maquettes validées (design.dir) ou si ce
+(fichiers machine) et la carte du code (.apv/code-map.md, comme apv map). La configuration créée déclare les
+contrôles code-map (apv map --check) et, pour un projet web, reuse (apv reuse check) avec la section reuse
+détectée (dossiers partagés, composant qui remplace chaque élément natif réservé, langue, branche de référence).
+Si la configuration déclare le dossier des maquettes validées (design.dir) ou si ce
 dossier existe, ajoute à .gitattributes « <dossier>/*.html -whitespace » quand Git ne l'applique pas déjà. Liste ce qui est créé et ce qui existait déjà. Refuse hors d'un dépôt Git.
 Le nom du projet est --name, sinon le nom du dossier du dépôt.
 Sortie : 0 succès, 1 hors d'un dépôt Git ou modèle de consigne introuvable, 2 appel incorrect.`;
@@ -120,12 +126,67 @@ export function writeApvSkeleton(writer, name, template, content = {}) {
     writer.dir(`${APV_DIR}/state`);
     writer.gitignore();
     writer.designAttributes();
+    if (content.map)
+        writer.file(content.map.path, content.map.content);
 }
-export function initProject(repo, name, pluginRoot = PLUGIN_ROOT) {
+/**
+ * The configuration of a new project: its name, the checks of the reuse (`reuse` for a web project, `code-map`
+ * always, both at the task stage so that they also run in the full suite) and the detected `reuse` section.
+ */
+export function reuseConfig(name, proposal) {
+    const gates = [...(proposal.web ? [REUSE_GATE] : []), MAP_GATE].map(g => ({ ...g, command: [...g.command], covers: [...g.covers] }));
+    return { document: { name, gates, ...(proposal.web ? { reuse: proposal.section } : {}) }, gates: gates.map(g => g.id) };
+}
+/** The code map of the repository under `config` (the one about to be written, or the existing one); null when unreadable. */
+export async function initialMap(repo, configText) {
+    let config;
+    try {
+        if (configText === undefined)
+            config = loadConfig(repo).config;
+        else {
+            const checked = configIssues(JSON.parse(configText));
+            if (!checked.config)
+                return null;
+            config = checked.config;
+        }
+    }
+    catch {
+        return null;
+    }
+    const { file, text } = await currentMap(repo, config);
+    return { path: file, text };
+}
+export async function initProject(repo, name, pluginRoot = PLUGIN_ROOT) {
     const template = readBriefTemplate(pluginRoot);
+    const proposal = detectReuse(repo, await worktreeFiles(repo));
+    const configExists = existsSync(join(repo, CONFIG_FILE));
+    const { document, gates } = reuseConfig(name, proposal);
+    const { issues } = configIssues(document);
+    if (!configExists && issues.length)
+        throw new PipelineError('INIT', `Configuration détectée refusée par le schéma : ${issues.map(i => i.message).join(' ; ')}`);
+    const configText = configExists ? undefined : `${JSON.stringify(document, null, 2)}\n`;
+    const map = await initialMap(repo, configText);
     const writer = new ApvWriter(repo);
-    writeApvSkeleton(writer, name, template);
-    return { repo, name, created: writer.created, existing: writer.existing, completed: writer.completed };
+    writeApvSkeleton(writer, name, template, {
+        ...(configText !== undefined ? { config: () => configText } : {}),
+        ...(map ? { map: { path: map.path, content: () => map.text } } : {}),
+    });
+    const reuse = { web: proposal.web, signals: proposal.signals, gates: configExists ? [] : gates, section: !configExists && proposal.web ? proposal.section : null, map: map?.path ?? null };
+    return { repo, name, created: writer.created, existing: writer.existing, completed: writer.completed, reuse };
+}
+/** Lines of the reuse setup for the text output of `apv init` and `apv onboard`. */
+export function reuseLines(reuse) {
+    const lines = [];
+    if (reuse.gates.length) {
+        lines.push(`Contrôles ajoutés (étape tâche, donc aussi dans la suite complète) : ${reuse.gates.map(g => (g === 'reuse' ? 'reuse (apv reuse check)' : 'code-map (apv map --check)')).join(', ')}.`);
+    }
+    if (reuse.section) {
+        const s = reuse.section;
+        lines.push(`Réutilisation (projet web : ${reuse.signals.join(' ; ')}) : dossiers partagés ${s.shared?.join(', ') ?? 'par défaut (**/components/**, **/ui/**...)'} ; éléments natifs réservés ${Object.entries(s.native?.elements ?? {}).map(([e, t]) => `<${e}>${t ? ` -> ${t}` : ''}`).join(', ')}${s.native?.allowedPaths ? `, permis dans ${s.native.allowedPaths.join(', ')}` : ''} ; langue ${s.typography?.locale ?? 'non trouvée (reuse.typography.locale)'} ; référence ${s.reference ?? 'non trouvée : sans reuse.reference, tout le code existant compte comme nouveau'}.`);
+    }
+    if (reuse.map === null)
+        lines.push('Carte du code non écrite : configuration illisible ; la corriger, puis apv map.');
+    return lines;
 }
 export async function run(args, io) {
     return guard(io, usage, async () => {
@@ -140,7 +201,7 @@ export async function run(args, io) {
         const name = (values.name ?? basename(repo)).trim();
         if (!name || name.length > 100 || /[\n\r\0]/.test(name))
             throw new UsageError('--name : de 1 à 100 caractères, sur une ligne');
-        const result = initProject(repo, name);
+        const result = await initProject(repo, name);
         if (values.json) {
             json(io, result);
             return EXIT.ok;
@@ -151,6 +212,7 @@ export async function run(args, io) {
             lines.push(`Complété : ${result.completed.join(', ')}`);
         if (result.existing.length)
             lines.push(`Existait déjà (inchangé) : ${result.existing.join(', ')}`);
+        lines.push(...reuseLines(result.reuse));
         if (result.created.length || result.completed.length) {
             const attributes = [...result.created, ...result.completed].includes(GITATTRIBUTES) ? ` et ${GITATTRIBUTES}` : '';
             lines.push(`Suite : adapter .apv/brief.md (passages entre chevrons) et déclarer les contrôles dans .apv/config.json, puis commiter .apv/${attributes}.`);
