@@ -22,7 +22,7 @@ export const usage = `Utilisation :
   apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>] [--against <ref>]
                 [--concurrency N] [--keep-going] [--skip-proven] [--run <spec-id>]
                 [--reason <texte>] [--allow-dirty] [--stacks <pile>,<pile>] [--repo <chemin>] [--json]
-  apv gates verify --commit <sha> [--stage full|task] [--base <ref>] [--against <ref>]
+  apv gates verify --commit <sha> [--stage full|task] [--base <ref>] [--against <ref>] [--offline]
                    [--config <fichier> | --commit-config] [--repo <chemin>] [--json]
   apv gates receipts list [--commit <ref>] [--limit N] [--repo <chemin>] [--json]
   apv gates receipts export <exécution> --out <dossier> [--repo <chemin>] [--json]
@@ -33,7 +33,8 @@ Contrôles de la base : run et verify lisent aussi la configuration de la base c
 --base, sinon la branche par défaut du dépôt distant ; référence complète, vérifiée auprès du dépôt distant
 quand le réseau le permet) ; tout contrôle de la base, obligatoire ou non, retiré, rendu facultatif ou modifié
 par le candidat reste exigé avec sa définition de base, et la différence est dite. Le candidat peut seulement
-ajouter ou durcir des contrôles ; les changer passe par une PR de configuration seule.
+ajouter ou durcir des contrôles ; les changer passe par une PR de configuration seule. Dépôt distant illisible :
+run avertit, verify refuse sauf --offline (accepté avec un avertissement).
 
 run : exécute les contrôles déclarés (.apv/config.json, sinon pipeline.v2.json) dans le dépôt :
 dépendances, ressources, variables transmises, délais et masquage des secrets respectés.
@@ -263,7 +264,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       only: { type: 'string' }, config: { type: 'string' }, base: { type: 'string' }, concurrency: { type: 'string' },
       stage: { type: 'string' }, commit: { type: 'string' }, 'skip-proven': { type: 'boolean' }, run: { type: 'string' }, reason: { type: 'string' },
       'keep-going': { type: 'boolean' }, 'allow-dirty': { type: 'boolean' }, repo: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
-      'commit-config': { type: 'boolean' }, against: { type: 'string' }, limit: { type: 'string' }, out: { type: 'string' }, 'keep-days': { type: 'string' }, 'keep-runs': { type: 'string' },
+      'commit-config': { type: 'boolean' }, against: { type: 'string' }, offline: { type: 'boolean' }, limit: { type: 'string' }, out: { type: 'string' }, 'keep-days': { type: 'string' }, 'keep-runs': { type: 'string' },
       stacks: { type: 'string' },
     });
     if (values.help) { io.stdout(`${usage}\n`); return EXIT.ok; }
@@ -291,7 +292,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       const verifyRoot = gitRoot(repo);
       const verified = resolveCommit(verifyRoot, values.commit);
       if (!verified) throw new PipelineError('SHA', `Commit introuvable : ${values.commit}`);
-      const kept = applyBaseGates(verifyRoot, loaded.config, verified, againstOf(values.against) ?? values.base ?? null, { strict: true });
+      const kept = applyBaseGates(verifyRoot, loaded.config, verified, againstOf(values.against) ?? values.base ?? null, { strict: true, offline: values.offline === true });
       loaded = { ...loaded, config: kept.config };
       const result = await verifyGates({ repo, config: loaded.config, commit: values.commit, ...(stage ? { stage } : {}), ...(values.base ? { base: values.base } : {}),
         configFile: values['commit-config'] ? null : loaded.file });
@@ -306,6 +307,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     }
     if (values.commit !== undefined) throw new UsageError('--commit est une option de gates verify');
     if (values['commit-config']) throw new UsageError('--commit-config est une option de gates verify');
+    if (values.offline) throw new UsageError('--offline est une option de gates verify (gates run avertit seulement quand le dépôt distant est illisible)');
     const spreadOver = values.stacks === undefined ? undefined : list(values.stacks);
     if (spreadOver !== undefined && (spreadOver.length < 2 || new Set(spreadOver).size !== spreadOver.length)) throw new UsageError('--stacks attend au moins deux piles différentes, par exemple --stacks 1,2');
     if (spreadOver !== undefined && stage === 'task') throw new UsageError('--stacks répartit la suite complète (--stage full)');

@@ -111,7 +111,7 @@ function lsRemote(repo, remote, branch) {
 /** Fetches this one branch into its remote-tracking ref (no tags, no submodules, no hooks, bounded); true when done. */
 function fetchBranch(repo, remote, branch) {
     try {
-        execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--end-of-options', remote,
+        execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--no-auto-gc', '--end-of-options', remote,
             `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`], { cwd: repo, stdio: ['ignore', 'ignore', 'ignore'], timeout: 60_000, env: GIT_ENV() });
         return true;
     }
@@ -137,13 +137,19 @@ function checkRemote(repo, name, sha, options) {
     if (!remote || !branch || branch === 'HEAD')
         return { sha, warnings: [] };
     const remoteSha = (options.lsRemote ?? lsRemote)(repo, remote, branch);
+    // Not verified: `run` warns; `verify` refuses, unless the operator says --offline (then a warning).
+    const unverified = (message) => {
+        if (options.strict && !options.offline)
+            throw new PipelineError('GATE_BASE', `${message} La vérification d'une preuve exige la base du dépôt distant : rétablir l'accès (git fetch ${remote}), ou --offline pour l'accepter en le disant.`);
+        return { sha, warnings: [message] };
+    };
     if (remoteSha === null)
-        return { sha, warnings: [`base non vérifiée auprès du dépôt distant (${remote} illisible, réseau absent ?) : ${name} est lue telle que le dépôt local la connaît (${sha.slice(0, 12)}) ; faire git fetch ${remote} dès que possible.`] };
+        return unverified(`base non vérifiée auprès du dépôt distant (${remote} illisible, réseau absent ?) : ${name} est lue telle que le dépôt local la connaît (${sha.slice(0, 12)}) ; faire git fetch ${remote} dès que possible.`);
     if (remoteSha === sha)
         return { sha, warnings: [] };
     if (!hasCommit(repo, remoteSha)) {
         if (!fetchBranch(repo, remote, branch) || !hasCommit(repo, remoteSha)) {
-            return { sha, warnings: [`base non vérifiée : ${remote}/${branch} est à ${remoteSha.slice(0, 12)}, commit que le dépôt local n'a pas et n'a pas pu récupérer ; faire git fetch ${remote}, puis relancer.`] };
+            return unverified(`base non vérifiée : ${remote}/${branch} est à ${remoteSha.slice(0, 12)}, commit que le dépôt local n'a pas et n'a pas pu récupérer ; faire git fetch ${remote}, puis relancer.`);
         }
         const fetched = resolveCommit(repo, `refs/remotes/${name}`);
         if (fetched === remoteSha)

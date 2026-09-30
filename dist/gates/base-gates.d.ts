@@ -46,6 +46,8 @@ export interface RemoteCheck {
      * `gates run` only warns.
      */
     strict?: boolean;
+    /** `gates verify --offline`: a remote that cannot be read is accepted with a warning instead of refused (strict only). */
+    offline?: boolean;
 }
 /** Lines for the text output: the warnings on the reference, and the checks kept, if any. */
 export declare function baseGatesLines(base: BaseGates): string[];

@@ -420,7 +420,9 @@ test('a reference is resolved by its full ref: a local branch or a tag that shad
   const ok = await full(f.repo);
   assert.equal(ok.code, 0, ok.stdout + ok.stderr);
   assert.equal(receipt(ok.json().receiptsDirectory, 'browser').status, 'not_required');
-  assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD'])).code, 0);
+  // origin/main here has no remote to read: verify says it with --offline (refused without).
+  assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD'])).code, 1);
+  assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--offline'])).code, 0);
   // A local branch named origin/main that already holds the change would hide the real one: refused.
   git(f.repo, 'branch', 'origin/main', 'HEAD');
   const r = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', 'main']);

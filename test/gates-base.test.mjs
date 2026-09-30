@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
@@ -51,10 +52,12 @@ test('gates verify reads the same base: a proof made with the kept checks verifi
   const f = project(t, [gate('unit', 'process.exit(0)', { mandatory: true }), gate('lint', 'process.exit(0)', { mandatory: true })]);
   f.candidate([gate('unit', 'process.exit(0)', { mandatory: true })]);
   assert.equal((await apv(f.repo, ['gates', 'run'])).code, 0);
-  const verified = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--json']);
+  // This fixture has a remote-tracking ref but no remote to read: verify needs --offline (said, never silent).
+  assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD'])).code, 1);
+  const verified = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--offline', '--json']);
   assert.equal(verified.code, 0, verified.stdout);
   assert.deepEqual(verified.json().baseGates.differences, [{ id: 'lint', kind: 'removed' }]);
-  assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--against', 'origin/main'])).code, 0);
+  assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--against', 'origin/main', '--offline'])).code, 0);
   // A proof made on the candidate's checks alone (a reference that knows nothing) does not prove the kept ones.
   const lonely = git(f.repo, 'commit-tree', '-m', 'lonely', git(f.repo, 'rev-parse', 'HEAD^{tree}'));
   git(f.repo, 'update-ref', 'refs/heads/lonely', lonely);
@@ -146,6 +149,19 @@ test('the remote advanced without a local fetch: its branch is fetched, then run
   const offline = await apv(f.repo, ['gates', 'run']);
   assert.equal(offline.code, 0, offline.stderr);
   assert.match(offline.stderr, /Attention : base non vérifiée auprès du dépôt distant \(origin illisible[^\n]*git fetch origin/);
+  // verify refuses an unreadable remote, unless --offline says it (then a warning, and the proof is checked).
+  const refused = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD']);
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /GATE_BASE.*base non vérifiée auprès du dépôt distant.*--offline pour l'accepter en le disant/);
+  const accepted = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--offline']);
+  assert.equal(accepted.code, 0, accepted.stdout + accepted.stderr);
+  assert.match(accepted.stdout, /^Attention : base non vérifiée auprès du dépôt distant/);
+  assert.equal((await apv(f.repo, ['gates', 'run', '--offline'])).code, 2, '--offline belongs to verify');
+});
+
+test('the automatic fetch never starts a garbage collection', () => {
+  const source = readFileSync(new URL('../src/gates/base-gates.ts', import.meta.url), 'utf8');
+  assert.match(source, /'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--no-auto-gc'/);
 });
 
 test('a reference moved back: run warns, verify refuses; moved out of the remote history: refused', async t => {
