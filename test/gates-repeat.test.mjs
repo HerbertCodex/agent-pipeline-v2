@@ -40,6 +40,8 @@ if (mode === 'fail') { console.log('  1) [chromium] › tests/e2e/a.e2e.ts:3:5 �
 }
 const script = name => [process.execPath, name];
 const repeatOf = (extra = {}) => ({ paths: ['tests/e2e/**/*.e2e.ts'], command: [...script('run-pass.mjs'), 'repeat', '--repeat-each={{repeat}}', '--retries=0'], reference: 'main', ...extra });
+// These tests configure the checks commit by commit: they are judged against the commit itself (--against HEAD), the
+// checks of the base (src/gates/base-gates.ts) being covered by test/gates-base.test.mjs.
 const receipt = (dir, gate) => validateReceipt(JSON.parse(readFileSync(join(dir, `${gate}.json`), 'utf8')));
 const commit = (repo, message) => { git(repo, 'add', '-A'); git(repo, 'commit', '-qm', message); };
 
@@ -48,13 +50,13 @@ test('no changed test file: the check passes, nothing is repeated, the receipt s
   write(f.repo, 'src/app.mjs', 'export const x = 1;\n');
   write(f.repo, 'tests/unit/x.test.ts', 'test("x")\n');
   commit(f.repo, 'app only');
-  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json']);
+  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
   assert.equal(r.code, 0, r.stdout + r.stderr);
   const row = r.json().gates[0];
   assert.equal(row.status, 'passed');
   assert.deepEqual(row.repeat, { status: 'none', base: f.base, files: [], times: 5, failures: [], fixedWaits: [] });
   assert.equal(f.calls().length, 1, 'only the command of the check ran');
-  const human = await apv(f.repo, ['gates', 'run', '--base', f.base]);
+  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
   assert.match(human.stdout, /Tests modifiés répétés \(repeatChanged\) :\n- browser : aucun fichier de test ajouté ou modifié depuis/);
 });
 
@@ -68,7 +70,7 @@ test('changed test files: added, modified, untracked and renamed ones repeated N
   git(f.repo, 'mv', 'tests/e2e/moved.e2e.ts', 'tests/e2e/renamed.e2e.ts');
   commit(f.repo, 'tests');
   write(f.repo, 'tests/e2e/wip.e2e.ts', 'test("wip")\n');
-  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json']);
+  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
   assert.equal(r.code, 0, r.stdout + r.stderr);
   const files = ['tests/e2e/a.e2e.ts', 'tests/e2e/new/b.e2e.ts', 'tests/e2e/renamed.e2e.ts', 'tests/e2e/wip.e2e.ts'];
   const calls = f.calls();
@@ -90,7 +92,7 @@ test('a failed repetition turns the check red with « échoue X fois sur N »; v
     { id: 'after', stage: 'full', dependsOn: ['browser'], command: script('run-pass.mjs') }]);
   write(f.repo, 'tests/e2e/a.e2e.ts', 'changed\n');
   commit(f.repo, 'change a');
-  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--keep-going']);
+  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--keep-going']);
   assert.equal(r.code, 1, r.stdout + r.stderr);
   assert.match(r.stdout, /browser\s+échec\s+1/);
   assert.match(r.stdout, /after\s+bloqué/);
@@ -108,7 +110,7 @@ test('a failed repetition turns the check red with « échoue X fois sur N »; v
   // Without a pattern: still red, at least once out of N.
   write(f.repo, '.apv/config.json', { gates: [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ command: [...script('run-fail.mjs'), '{{repeat}}'] }) }] });
   commit(f.repo, 'no pattern');
-  const plain = (await apv(f.repo, ['gates', 'run', '--base', f.base, '--json'])).json().gates[0];
+  const plain = (await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json'])).json().gates[0];
   assert.equal(plain.status, 'failed');
   assert.match(plain.diagnostic, /nombre d'échecs par test non relevé \(repeatChanged\.testPattern absent\) : échoue au moins 1 fois sur 5/);
 });
@@ -125,7 +127,7 @@ if (!existsSync(${JSON.stringify(markerFile)})) { writeFileSync(${JSON.stringify
   write(f.repo, 'tests/e2e/a.e2e.ts', 'changed\n');
   commit(f.repo, 'change');
   f.reset();
-  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json']);
+  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
   assert.equal(r.code, 1, r.stdout + r.stderr);
   const row = r.json().gates[0];
   assert.equal(row.status, 'failed');
@@ -142,7 +144,7 @@ test('ceilings: more changed files than maxFiles is refused before anything runs
   const f = project(t, [{ id: 'browser', stage: 'full', command: script('run-pass.mjs'), repeatChanged: repeatOf({ maxFiles: 2 }) }]);
   for (const n of [1, 2, 3]) write(f.repo, `tests/e2e/n${n}.e2e.ts`, `test("${n}")\n`);
   commit(f.repo, 'three tests');
-  const r = await apv(f.repo, ['gates', 'run', '--base', f.base]);
+  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
   assert.equal(r.code, 1);
   assert.match(r.stderr, /GATE_REPEAT/);
   assert.match(r.stderr, /Répétition des tests modifiés refusée pour browser : 3 fichier\(s\) de test ajouté\(s\) ou modifié\(s\) depuis [0-9a-f]{12}, au-delà du plafond repeatChanged\.maxFiles \(2\) :\n  tests\/e2e\/n1\.e2e\.ts/);
@@ -152,7 +154,7 @@ test('ceilings: more changed files than maxFiles is refused before anything runs
   // Duration ceiling.
   write(f.repo, '.apv/config.json', { gates: [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ command: [...script('run-hang.mjs'), '{{repeat}}'], timeoutMs: 300 }) }] });
   commit(f.repo, 'hang');
-  const hang = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json']);
+  const hang = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
   assert.equal(hang.code, 1);
   const row = hang.json().gates[0];
   assert.equal(row.status, 'timed_out');
@@ -260,7 +262,7 @@ test('the repetition finds the tree as it was just before the command: a command
   commit(f.repo, 'change');
   write(f.repo, 'notes.txt', 'uncommitted before the run\n');
   f.reset();
-  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json']);
+  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
   assert.equal(r.code, 1, r.stdout + r.stderr);
   const row = r.json().gates[0];
   assert.equal(row.status, 'failed');
@@ -272,7 +274,7 @@ test('a changed test file whose path starts with - is refused: it would read as 
   const f = project(t, [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ paths: ['**/*.e2e.ts'] }) }]);
   write(f.repo, '-x.e2e.ts', 'test\n');
   commit(f.repo, 'dash');
-  const r = await apv(f.repo, ['gates', 'run', '--base', f.base]);
+  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
   assert.equal(r.code, 1);
   assert.match(r.stderr, /GATE_REPEAT[^]*le fichier -x\.e2e\.ts commence par « - »/);
   assert.deepEqual(f.calls(), []);
@@ -283,25 +285,25 @@ test('fixed waits in the lines a change adds: warned by default, refused with fi
   write(f.repo, 'tests/e2e/old.e2e.ts', 'await page.waitForTimeout(500);\nawait expect(page.getByText("ok")).toBeVisible();\n// never page.waitForTimeout(100)\n');
   write(f.repo, 'tests/e2e/new.e2e.ts', 'test("n", async () => {\n  await sleep(200);\n  await new Promise(r => setTimeout(r, 50));\n  await page.clock.fastForward(1000);\n});\n');
   commit(f.repo, 'waits');
-  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json']);
+  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.deepEqual(r.json().gates[0].repeat.fixedWaits, [
     { file: 'tests/e2e/new.e2e.ts', line: 2, text: 'await sleep(200);' },
     { file: 'tests/e2e/new.e2e.ts', line: 3, text: 'await new Promise(r => setTimeout(r, 50));' },
   ], 'the untouched waitForTimeout of old.e2e.ts and the comment are not reported');
   assert.match(r.stderr, /browser : attente à durée fixe dans un test modifié, tests\/e2e\/new\.e2e\.ts:2 : await sleep\(200\);/);
-  const human = await apv(f.repo, ['gates', 'run', '--base', f.base]);
+  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
   assert.match(human.stdout, /Attentes à durée fixe dans les tests modifiés \(2\)[^\n]*\n- browser : tests\/e2e\/new\.e2e\.ts:2 : await sleep\(200\);/);
   write(f.repo, '.apv/config.json', { gates: [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ fixedWaits: 'refuse' }) }] });
   commit(f.repo, 'refuse');
   f.reset();
-  const refused = await apv(f.repo, ['gates', 'run', '--base', f.base]);
+  const refused = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
   assert.equal(refused.code, 1);
   assert.match(refused.stderr, /GATE_REPEAT[^]*Attentes à durée fixe dans les tests modifiés de browser \(repeatChanged\.fixedWaits = refuse\) :\n  tests\/e2e\/new\.e2e\.ts:2 : await sleep\(200\);/);
   assert.deepEqual(f.calls(), []);
   write(f.repo, '.apv/config.json', { gates: [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ fixedWaits: 'off' }) }] });
   commit(f.repo, 'off');
-  assert.deepEqual((await apv(f.repo, ['gates', 'run', '--base', f.base, '--json'])).json().gates[0].repeat.fixedWaits, []);
+  assert.deepEqual((await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json'])).json().gates[0].repeat.fixedWaits, []);
 });
 
 test('the repetition runs under the lock of the check (APV_LOCK_HELD seen by the repeated command)', async t => {
@@ -310,7 +312,7 @@ test('the repetition runs under the lock of the check (APV_LOCK_HELD seen by the
     'held.mjs': 'process.exit(process.env.APV_LOCK_HELD === "stack" ? 0 : 9);\n' });
   write(f.repo, 'tests/e2e/a.e2e.ts', 'changed\n');
   commit(f.repo, 'change');
-  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json'], { APV_LOCK_DIR: join(f.root, 'locks') });
+  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json'], { APV_LOCK_DIR: join(f.root, 'locks') });
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.equal(r.json().gates[0].repeat.status, 'passed');
 });

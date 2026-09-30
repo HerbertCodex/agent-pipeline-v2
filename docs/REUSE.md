@@ -118,7 +118,7 @@ Les relectures ont trouvé des chemins de sortie l'un après l'autre (nom de fic
 6. Un fichier du changement qui importe un fichier d'une extension que le contrôle ne lit pas (ni code, ni interface, ni style, ni donnée connue) produit un avertissement : déclarer l'extension au framework.
 7. Un **lien symbolique** ou un **sous-module** ajouté par le changement (mode 120000 ou 160000, commité, indexé ou non suivi) produit un constat bloquant, sauf déclaration dans `reuse.ignore` de la base : son contenu n'est jamais lu ici.
 
-**Contrôles obligatoires de la base** (3.0.0-alpha.10) : `apv gates run` et `apv gates verify` lisent aussi la liste des contrôles de la base ; un contrôle `reuse` ou `code-map` obligatoire retiré par le candidat reste exigé avec sa définition de base ([CLI.md](CLI.md#contrôles-obligatoires-de-la-base)).
+**Contrôles de la base** (3.0.0-alpha.10) : `apv gates run` et `apv gates verify` lisent aussi la liste des contrôles de la base ; un contrôle `reuse` ou `code-map` retiré par le candidat reste exigé avec sa définition de base ([CLI.md](CLI.md#contrôles-de-la-base)).
 
 Un nouveau fichier `.svelte`, quel que soit son chemin (`node_modules/`, `dist/`, `.github/`, `docs/`, `generated/`...), est donc analysé ou bloque.
 

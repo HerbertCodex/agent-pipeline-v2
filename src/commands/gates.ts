@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { loadConfig, loadConfigAtCommit } from '../config/load.js';
-import { applyBaseGates, baseGatesLine } from '../gates/base-gates.js';
+import { applyBaseGates, baseGatesLines } from '../gates/base-gates.js';
 import { gateStages, type GateStage } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
 import { RECEIPTS_DIR, dirtyRefusal, isFullSuite, runGates, selectGates, stageGates } from '../gates/run.js';
@@ -29,10 +29,11 @@ export const usage = `Utilisation :
   apv gates receipts prune [--keep-days N] [--keep-runs N] [--config <fichier>]
                          [--repo <chemin>] [--json]
 
-Contrôles obligatoires de la base : run et verify lisent aussi la configuration de la base commune de
---against (sinon --base, sinon la branche par défaut du dépôt distant) ; un contrôle obligatoire retiré, rendu
-facultatif ou modifié par le candidat reste exigé avec sa définition de base, et la différence est dite. Le
-candidat peut seulement ajouter ou durcir des contrôles ; les changer passe par une PR de configuration seule.
+Contrôles de la base : run et verify lisent aussi la configuration de la base commune de --against (sinon
+--base, sinon la branche par défaut du dépôt distant ; référence complète, vérifiée auprès du dépôt distant
+quand le réseau le permet) ; tout contrôle de la base, obligatoire ou non, retiré, rendu facultatif ou modifié
+par le candidat reste exigé avec sa définition de base, et la différence est dite. Le candidat peut seulement
+ajouter ou durcir des contrôles ; les changer passe par une PR de configuration seule.
 
 run : exécute les contrôles déclarés (.apv/config.json, sinon pipeline.v2.json) dans le dépôt :
 dépendances, ressources, variables transmises, délais et masquage des secrets respectés.
@@ -299,8 +300,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
           required: result.required, targeted: result.targeted, reserved: result.reserved, gates: result.gates, unreadable: result.unreadable,
           store: result.store, altered: result.altered, flaky: result.flaky, repeating: result.repeating, auditing: result.auditing, notRequired: result.notRequired, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
       } else {
-        const line = baseGatesLine(kept.base);
-        io.stdout(`${[...(line ? [line] : []), ...verifyLines(result)].join('\n')}\n`);
+        io.stdout(`${[...baseGatesLines(kept.base), ...verifyLines(result)].join('\n')}\n`);
       }
       return result.ok ? EXIT.ok : EXIT.failed;
     }
@@ -324,8 +324,8 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const runHead = resolveCommit(runRoot, 'HEAD');
     const kept = runHead ? applyBaseGates(runRoot, loaded.config, runHead, againstOf(values.against) ?? values.base ?? null) : null;
     if (kept) loaded = { ...loaded, config: kept.config };
-    const keptLine = kept ? baseGatesLine(kept.base) : null;
-    if (keptLine && !values.json) io.stderr(`${keptLine}\n`);
+    const keptLines = kept ? baseGatesLines(kept.base) : [];
+    if (keptLines.length && !values.json) io.stderr(`${keptLines.join('\n')}\n`);
     // A check that repeats its changed test files needs the base they changed from: refused as an incorrect call, before
     // the proof lookup (--skip-proven) and any wait, so that a red repetition is never replaced by a run that repeats nothing.
     const selected = selectGates(loaded.config.gates, list(values.only)).gates;
