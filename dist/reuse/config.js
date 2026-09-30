@@ -3,14 +3,14 @@ import { s } from '../domain/schema.js';
 import { invariant } from '../domain/errors.js';
 import { globToRegExp } from '../db/glob.js';
 /** Rules of `apv reuse check` (docs/REUSE.md). */
-export const REUSE_RULES = ['native', 'styles', 'duplicates', 'names', 'typography'];
+export const REUSE_RULES = ['native', 'styles', 'duplicates', 'names', 'typography', 'coverage'];
 export const REUSE_SEVERITIES = ['off', 'warning', 'error'];
 /**
  * Default severity of each rule: a native element or a primitive restyled outside the shared components, and a block
  * copied by the change, fail the check; a component whose name doubles a shared one and a breakable space in a
  * typographic value are warnings (their rule is a prompt to look, not a proof).
  */
-export const DEFAULT_REUSE_SEVERITY = { native: 'error', styles: 'error', duplicates: 'error', names: 'warning', typography: 'warning' };
+export const DEFAULT_REUSE_SEVERITY = { native: 'error', styles: 'error', duplicates: 'error', names: 'warning', typography: 'warning', coverage: 'error' };
 /** Native elements reserved to the shared components by default: their look and behaviour differ between browsers. */
 export const DEFAULT_NATIVE_ELEMENTS = ['select', 'dialog', 'datalist'];
 /** The role family of the shared component that stands for a native element (`select` is replaced by a select). */
@@ -41,6 +41,19 @@ export const OUTPUT_FOLDERS = ['dist', 'build', 'coverage', 'vendor'];
  * interface by design) and minified or declaration files. Build outputs: OUTPUT_FOLDERS, see outputMatcher.
  */
 export const DEFAULT_REUSE_IGNORE = ['**/node_modules/**', ...TOOL_FOLDERS.map(d => `**/${d}/**`), 'docs/**', '**/*.min.js', '**/*.min.css', '**/*.d.ts', '**/*.lock', '**/package-lock.json'];
+/**
+ * Extensions a framework declares for its components (`extensions: ['.svelte', '.svx']` of `svelte.config.js`): read as
+ * interface files too.
+ */
+export function frameworkExtensions(read, files) {
+    const out = new Set();
+    for (const file of files.filter(f => /^svelte\.config\.(?:js|mjs|cjs|ts)$/.test(f))) {
+        const list = /\bextensions\s*:\s*\[([^\]]{0,500})\]/.exec(read(file) ?? '')?.[1] ?? '';
+        for (const m of list.matchAll(/['"`]\.([A-Za-z0-9]{1,12})['"`]/g))
+            out.add(m[1].toLowerCase());
+    }
+    return [...out].sort();
+}
 /** Build outputs (OUTPUT_FOLDERS) at the root of the repository and at the root of each package that `files` holds. */
 export function outputMatcher(files) {
     const roots = ['', ...files.filter(f => f.endsWith('/package.json') && !f.includes('node_modules/')).map(f => f.slice(0, -'package.json'.length))];
@@ -200,6 +213,8 @@ export function reuseSettings(section) {
     }
     const value = section?.severity;
     const severity = Object.fromEntries(REUSE_RULES.map(rule => [rule, typeof value === 'string' ? value : value?.[rule] ?? DEFAULT_REUSE_SEVERITY[rule]]));
+    // Coverage (what the check could not read, or what a change moves out of it) is never lowered: the check fails closed.
+    severity.coverage = 'error';
     const elements = section?.native?.elements ?? Object.fromEntries(DEFAULT_NATIVE_ELEMENTS.map(e => [e, null]));
     for (const target of Object.values(elements))
         if (target !== null)
@@ -209,6 +224,7 @@ export function reuseSettings(section) {
         shared,
         sharedDeclared: section?.shared !== undefined,
         generated: (section?.generated ?? []).map(g => relativeGlob(g, 'reuse.generated')),
+        declaredIgnore: (section?.ignore ?? []).map(g => relativeGlob(g, 'reuse.ignore')),
         ignore: [...DEFAULT_REUSE_IGNORE, ...(section?.ignore ?? []).map(g => relativeGlob(g, 'reuse.ignore'))],
         native: { elements: { ...elements }, allowedPaths: (section?.native?.allowedPaths ?? [...DEFAULT_PRIMITIVE_PATHS]).map(g => relativeGlob(g, 'reuse.native.allowedPaths')) },
         styles: {

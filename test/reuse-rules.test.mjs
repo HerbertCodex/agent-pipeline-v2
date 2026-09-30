@@ -168,7 +168,8 @@ test('names: role families, affixes and the exact rule that says why two compone
 
 test('configuration: defaults, overrides, and every invalid value refused by the common loader', () => {
   const d = reuseSettings(undefined);
-  assert.deepEqual(d.severity, { native: 'error', styles: 'error', duplicates: 'error', names: 'warning', typography: 'warning' });
+  assert.deepEqual(d.severity, { native: 'error', styles: 'error', duplicates: 'error', names: 'warning', typography: 'warning', coverage: 'error' });
+  assert.equal(reuseSettings({ severity: 'off' }).severity.coverage, 'error', 'the coverage of the check is never lowered');
   assert.deepEqual(Object.keys(d.native.elements), ['select', 'dialog', 'datalist']);
   // Native elements and primitives: the generic shared components only, never a component folder of one feature.
   assert.deepEqual(d.native.allowedPaths, ['**/components/ui/**', '**/ui/**', '**/primitives/**', '**/design-system/**', '**/shared/**', '**/common/**']);

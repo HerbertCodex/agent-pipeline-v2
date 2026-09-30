@@ -40,10 +40,14 @@ export interface ReuseReport {
         count: number;
         files: string[];
     };
-    /** Files left out by an ignored path (dependencies, tool folders, build outputs, `reuse.ignore`): never silently. */
+    /**
+     * Files left out: by `reuse.ignore`, or by a default exclusion for a file already there at the base. `changed`: every
+     * one the change creates or modifies, never truncated; `existing`: the first 20 of the others; `count`: all.
+     */
     excluded: {
         count: number;
-        files: string[];
+        changed: string[];
+        existing: string[];
     };
 }
 export interface ReuseConfig {

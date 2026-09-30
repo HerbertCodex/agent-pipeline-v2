@@ -4,7 +4,7 @@ import { invariant } from '../domain/errors.js';
 import { globToRegExp } from '../db/glob.js';
 
 /** Rules of `apv reuse check` (docs/REUSE.md). */
-export const REUSE_RULES = ['native', 'styles', 'duplicates', 'names', 'typography'] as const;
+export const REUSE_RULES = ['native', 'styles', 'duplicates', 'names', 'typography', 'coverage'] as const;
 export type ReuseRule = typeof REUSE_RULES[number];
 export const REUSE_SEVERITIES = ['off', 'warning', 'error'] as const;
 export type ReuseSeverity = typeof REUSE_SEVERITIES[number];
@@ -14,7 +14,7 @@ export type ReuseSeverity = typeof REUSE_SEVERITIES[number];
  * copied by the change, fail the check; a component whose name doubles a shared one and a breakable space in a
  * typographic value are warnings (their rule is a prompt to look, not a proof).
  */
-export const DEFAULT_REUSE_SEVERITY: Readonly<Record<ReuseRule, ReuseSeverity>> = { native: 'error', styles: 'error', duplicates: 'error', names: 'warning', typography: 'warning' };
+export const DEFAULT_REUSE_SEVERITY: Readonly<Record<ReuseRule, ReuseSeverity>> = { native: 'error', styles: 'error', duplicates: 'error', names: 'warning', typography: 'warning', coverage: 'error' };
 
 /** Native elements reserved to the shared components by default: their look and behaviour differ between browsers. */
 export const DEFAULT_NATIVE_ELEMENTS = ['select', 'dialog', 'datalist'] as const;
@@ -53,6 +53,19 @@ export const OUTPUT_FOLDERS = ['dist', 'build', 'coverage', 'vendor'] as const;
  * interface by design) and minified or declaration files. Build outputs: OUTPUT_FOLDERS, see outputMatcher.
  */
 export const DEFAULT_REUSE_IGNORE = ['**/node_modules/**', ...TOOL_FOLDERS.map(d => `**/${d}/**`), 'docs/**', '**/*.min.js', '**/*.min.css', '**/*.d.ts', '**/*.lock', '**/package-lock.json'] as const;
+
+/**
+ * Extensions a framework declares for its components (`extensions: ['.svelte', '.svx']` of `svelte.config.js`): read as
+ * interface files too.
+ */
+export function frameworkExtensions(read: (path: string) => string | null, files: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const file of files.filter(f => /^svelte\.config\.(?:js|mjs|cjs|ts)$/.test(f))) {
+    const list = /\bextensions\s*:\s*\[([^\]]{0,500})\]/.exec(read(file) ?? '')?.[1] ?? '';
+    for (const m of list.matchAll(/['"`]\.([A-Za-z0-9]{1,12})['"`]/g)) out.add(m[1]!.toLowerCase());
+  }
+  return [...out].sort();
+}
 
 /** Build outputs (OUTPUT_FOLDERS) at the root of the repository and at the root of each package that `files` holds. */
 export function outputMatcher(files: readonly string[]): (path: string) => boolean {
@@ -166,6 +179,8 @@ export interface ReuseSettings {
   shared: string[];
   sharedDeclared: boolean;
   generated: string[];
+  /** The globs of `reuse.ignore` as declared (the only ones that exempt a file the change creates or modifies). */
+  declaredIgnore: string[];
   ignore: string[];
   native: { elements: Record<string, string | null>; allowedPaths: string[] };
   styles: { sources: string[] | null; selectors: string[]; except: string[]; allowedPaths: string[]; nested: NestedMode };
@@ -237,7 +252,9 @@ export function reuseSettings(section: ReuseSection | undefined): ReuseSettings 
     else roles[key] = [...new Set(words)];
   }
   const value = section?.severity;
-  const severity = Object.fromEntries(REUSE_RULES.map(rule => [rule, typeof value === 'string' ? value : value?.[rule] ?? DEFAULT_REUSE_SEVERITY[rule]])) as Record<ReuseRule, ReuseSeverity>;
+  const severity = Object.fromEntries(REUSE_RULES.map(rule => [rule, typeof value === 'string' ? value : (value as Partial<Record<ReuseRule, ReuseSeverity>> | undefined)?.[rule] ?? DEFAULT_REUSE_SEVERITY[rule]])) as Record<ReuseRule, ReuseSeverity>;
+  // Coverage (what the check could not read, or what a change moves out of it) is never lowered: the check fails closed.
+  severity.coverage = 'error';
   const elements = section?.native?.elements ?? Object.fromEntries(DEFAULT_NATIVE_ELEMENTS.map(e => [e, null]));
   for (const target of Object.values(elements)) if (target !== null) relativeGlob(target, 'reuse.native.elements');
   return {
@@ -245,6 +262,7 @@ export function reuseSettings(section: ReuseSection | undefined): ReuseSettings 
     shared,
     sharedDeclared: section?.shared !== undefined,
     generated: (section?.generated ?? []).map(g => relativeGlob(g, 'reuse.generated')),
+    declaredIgnore: (section?.ignore ?? []).map(g => relativeGlob(g, 'reuse.ignore')),
     ignore: [...DEFAULT_REUSE_IGNORE, ...(section?.ignore ?? []).map(g => relativeGlob(g, 'reuse.ignore'))],
     native: { elements: { ...elements }, allowedPaths: (section?.native?.allowedPaths ?? [...DEFAULT_PRIMITIVE_PATHS]).map(g => relativeGlob(g, 'reuse.native.allowedPaths')) },
     styles: {

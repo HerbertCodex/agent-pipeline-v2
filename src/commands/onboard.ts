@@ -185,7 +185,7 @@ async function existingFindings(repo: string, configText: string | undefined): P
   return { counts, examples };
 }
 
-const RULE_WORDS: Record<ReuseRule, string> = { duplicates: 'bloc(s) dupliqué(s)', native: 'élément(s) natif(s) réservé(s)', styles: 'primitive(s) de style redéfinie(s)', names: 'composant(s) homonyme(s) ou redondant(s)', typography: 'valeur(s) typographique(s) sécable(s)' };
+const RULE_WORDS: Record<ReuseRule, string> = { duplicates: 'bloc(s) dupliqué(s)', native: 'élément(s) natif(s) réservé(s)', styles: 'primitive(s) de style redéfinie(s)', names: 'composant(s) homonyme(s) ou redondant(s)', typography: 'valeur(s) typographique(s) sécable(s)', coverage: 'fichier(s) hors du contrôle' };
 
 function existingLines(existing: ExistingReuse): string[] {
   const total = Object.values(existing.counts).reduce((a, b) => a + b, 0);

@@ -1,6 +1,6 @@
 import { type Infer } from '../domain/schema.js';
 /** Rules of `apv reuse check` (docs/REUSE.md). */
-export declare const REUSE_RULES: readonly ["native", "styles", "duplicates", "names", "typography"];
+export declare const REUSE_RULES: readonly ["native", "styles", "duplicates", "names", "typography", "coverage"];
 export type ReuseRule = typeof REUSE_RULES[number];
 export declare const REUSE_SEVERITIES: readonly ["off", "warning", "error"];
 export type ReuseSeverity = typeof REUSE_SEVERITIES[number];
@@ -38,6 +38,11 @@ export declare const OUTPUT_FOLDERS: readonly ["dist", "build", "coverage", "ven
  * interface by design) and minified or declaration files. Build outputs: OUTPUT_FOLDERS, see outputMatcher.
  */
 export declare const DEFAULT_REUSE_IGNORE: readonly ["**/node_modules/**", ...string[], "docs/**", "**/*.min.js", "**/*.min.css", "**/*.d.ts", "**/*.lock", "**/package-lock.json"];
+/**
+ * Extensions a framework declares for its components (`extensions: ['.svelte', '.svx']` of `svelte.config.js`): read as
+ * interface files too.
+ */
+export declare function frameworkExtensions(read: (path: string) => string | null, files: readonly string[]): string[];
 /** Build outputs (OUTPUT_FOLDERS) at the root of the repository and at the root of each package that `files` holds. */
 export declare function outputMatcher(files: readonly string[]): (path: string) => boolean;
 /**
@@ -112,6 +117,8 @@ export interface ReuseSettings {
     shared: string[];
     sharedDeclared: boolean;
     generated: string[];
+    /** The globs of `reuse.ignore` as declared (the only ones that exempt a file the change creates or modifies). */
+    declaredIgnore: string[];
     ignore: string[];
     native: {
         elements: Record<string, string | null>;

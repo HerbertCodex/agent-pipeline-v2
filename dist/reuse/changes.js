@@ -7,15 +7,26 @@ import { resolveCommit, resolveFullRef } from '../run/git-probe.js';
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 /** Content of a working tree file, or null when it is unreadable, binary-looking or larger than 2 MB. */
 export function readWorktree(repo, path) {
+    return readWorktreeStatus(repo, path).text;
+}
+/** A working tree file as text, or why it cannot be read as text: too large, a NUL byte, not UTF-8, unreadable. */
+export function readWorktreeStatus(repo, path) {
     try {
         const full = join(repo, path);
         if (statSync(full).size > MAX_FILE_BYTES)
-            return null;
-        const text = readFileSync(full, 'utf8');
-        return text.includes('\0') ? null : text;
+            return { text: null, reason: 'plus de 2 Mo' };
+        const bytes = readFileSync(full);
+        if (bytes.includes(0))
+            return { text: null, reason: 'octet nul' };
+        try {
+            return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), reason: null };
+        }
+        catch {
+            return { text: null, reason: 'encodage invalide (pas de l\'UTF-8)' };
+        }
     }
     catch {
-        return null;
+        return { text: null, reason: 'illisible' };
     }
 }
 /** The line is added or modified by the change (always true without base, and in a created file). */

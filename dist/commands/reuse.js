@@ -25,6 +25,7 @@ const LABEL = {
     duplicates: 'Code dupliqué',
     names: 'Composants homonymes ou redondants',
     typography: 'Valeurs typographiques sécables',
+    coverage: 'Couverture du contrôle (fichiers du changement exclus ou illisibles)',
 };
 const SEVERITY = { off: 'désactivée', warning: 'avertissement', error: 'erreur' };
 const EXISTING_SHOWN = 5;
@@ -47,8 +48,11 @@ export function formatReuse(report, all) {
         if (!all && existing.length > EXISTING_SHOWN)
             lines.push(`  et ${existing.length - EXISTING_SHOWN} autre(s) existant(s) (--all pour tout lister).`);
     }
-    if (report.excluded.count)
-        lines.push('', `Fichiers écartés par un chemin ignoré (dépendances, dossiers d'outils, sorties de build à la racine, reuse.ignore) : ${report.excluded.count} (${report.excluded.files.slice(0, 5).join(', ')}${report.excluded.count > 5 ? ', …' : ''}).`);
+    if (report.excluded.changed.length)
+        lines.push('', `Fichiers du changement écartés (reuse.ignore, ou déjà exclus à la base au même chemin) : ${report.excluded.changed.length} : ${report.excluded.changed.join(', ')}.`);
+    const others = report.excluded.count - report.excluded.changed.length;
+    if (others)
+        lines.push('', `Fichiers existants écartés (dépendances, dossiers d'outils, sorties de build, documentation, reuse.ignore) : ${others} (${report.excluded.existing.slice(0, 5).join(', ')}${others > 5 ? ', …' : ''}).`);
     if (report.generated.count)
         lines.push('', `Fichiers générés laissés de côté : ${report.generated.count} (${report.generated.files.slice(0, 5).join(', ')}${report.generated.count > 5 ? ', …' : ''}), jamais comptés.`);
     const blocking = report.findings.filter(f => f.blocking).length;

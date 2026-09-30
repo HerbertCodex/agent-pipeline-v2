@@ -497,7 +497,8 @@ test('the review of 3df791a: a generated name or a build folder never hides a ne
   const f = project(t);
   write(f.repo, 'src/lib/components/Sidebar.svelte', `<nav class="nav"><slot /></nav>\n<style>\n${sidebar}</style>\n`);
   write(f.repo, 'vendor/bundle.js', TOTAL);
-  commit(f.repo, 'sidebar and a vendored bundle');
+  write(f.repo, 'packages/ui/package.json', '{}');
+  commit(f.repo, 'sidebar, a vendored bundle, a package');
   const base = git(f.repo, 'rev-parse', 'HEAD');
   git(f.repo, 'switch', '-q', '-c', 'feature/bypass');
   // 1. A generated name created by the change: reported, blocking, and the copy it hides is found.
@@ -523,15 +524,122 @@ test('the review of 3df791a: a generated name or a build folder never hides a ne
   write(f.repo, 'src/lib/vendor/AdminNav.svelte', `<nav class="nav"><select><option>a</option></select></nav>\n<style>\n${sidebar}</style>\n`);
   write(f.repo, 'src/routes/admin/build/+page.svelte', '<select name="b"><option>b</option></select>\n');
   write(f.repo, 'src/.local/Hidden.svelte', '<dialog open>x</dialog>\n');
-  // 4. A build output at the root (and at the root of a package) stays left out, and is listed.
+  // 4. A build output at the root (and at the root of a package the base knows) that was there at the base stays left
+  // out, and is listed; a new file there is analysed and reported (fail closed).
   write(f.repo, 'vendor/bundle.js', `${TOTAL}${TOTAL.replace('total(', 'again(')}`);
-  write(f.repo, 'packages/ui/package.json', '{}');
   write(f.repo, 'packages/ui/build/index.js', TOTAL.replace('total(', 'built('));
   const r = (await apv(f.repo, ['reuse', 'check', '--base', base, '--json'])).json();
   const native = r.findings.filter(x => x.rule === 'native' && x.blocking).map(x => x.path);
   for (const path of ['src/lib/admin/Nav.generated.svelte', 'src/lib/vendor/AdminNav.svelte', 'src/routes/admin/build/+page.svelte', 'src/.local/Hidden.svelte']) assert.ok(native.includes(path), path);
   assert.ok(r.findings.some(x => x.path === 'src/lib/vendor/AdminNav.svelte' && x.rule === 'duplicates' && x.blocking), 'the side bar styles copied into vendor/');
-  assert.ok(!r.findings.some(x => x.path.startsWith('vendor/') || x.path.startsWith('packages/ui/build/')));
-  assert.ok(r.excluded.files.includes('vendor/bundle.js') && r.excluded.files.includes('packages/ui/build/index.js'), JSON.stringify(r.excluded));
-  assert.match((await apv(f.repo, ['reuse', 'check', '--base', base])).stdout, /Fichiers écartés par un chemin ignoré[^\n]*vendor\/bundle\.js/);
+  assert.ok(!r.findings.some(x => x.path.startsWith('vendor/')));
+  assert.deepEqual(r.excluded.changed, ['vendor/bundle.js'], JSON.stringify(r.excluded));
+  assert.ok(r.findings.some(x => x.path === 'packages/ui/build/index.js' && x.rule === 'coverage' && x.blocking && /dossier exclu par défaut/.test(x.message)));
+  assert.ok(r.findings.some(x => x.path === 'packages/ui/build/index.js' && x.rule === 'duplicates' && x.blocking), 'analysed');
+  assert.match((await apv(f.repo, ['reuse', 'check', '--base', base])).stdout, /Fichiers du changement écartés[^\n]*vendor\/bundle\.js/);
+});
+
+// Fourth review (f28c6fd): the check fails closed.
+
+/** A project on main with `origin/main`, then a branch: the base is main. */
+function closedProject(t, files = {}) {
+  const f = project(t);
+  for (const [path, text] of Object.entries(files)) write(f.repo, path, text);
+  if (Object.keys(files).length) commit(f.repo, 'base files');
+  const base = git(f.repo, 'rev-parse', 'HEAD');
+  git(f.repo, 'switch', '-q', '-c', 'feature/closed');
+  const check = async () => (await apv(f.repo, ['reuse', 'check', '--base', base, '--json'])).json();
+  const blocked = (report, path) => report.findings.some(x => x.path === path && x.blocking);
+  return { ...f, base, check, blocked };
+}
+const SELECT = '<select><option>a</option></select>\n';
+
+test('fail closed 1: a tool folder at any depth never hides a new file', async t => {
+  const f = closedProject(t);
+  write(f.repo, 'src/lib/.vscode/Evil.svelte', SELECT);
+  write(f.repo, 'src/lib/.cache/format.ts', TOTAL.replace('total(', 'cached('));
+  const r = await f.check();
+  for (const path of ['src/lib/.vscode/Evil.svelte', 'src/lib/.cache/format.ts']) {
+    assert.ok(r.findings.some(x => x.path === path && x.rule === 'coverage' && x.blocking && /dossier exclu par défaut/.test(x.message)), path);
+  }
+  assert.ok(r.findings.some(x => x.path === 'src/lib/.vscode/Evil.svelte' && x.rule === 'native'), 'analysed');
+  assert.ok(r.findings.some(x => x.path === 'src/lib/.cache/format.ts' && x.rule === 'duplicates'), 'analysed');
+});
+
+test('fail closed 2: a new file in vendor/ at the root, imported by the application, is analysed and reported', async t => {
+  const f = closedProject(t);
+  write(f.repo, 'vendor/AdminNav.svelte', SELECT);
+  write(f.repo, 'src/routes/admin/+page.svelte', "<script lang=\"ts\">\n  import AdminNav from '../../../vendor/AdminNav.svelte';\n</script>\n<AdminNav />\n");
+  const r = await f.check();
+  assert.ok(r.findings.some(x => x.path === 'vendor/AdminNav.svelte' && x.rule === 'coverage' && x.blocking));
+  assert.ok(r.findings.some(x => x.path === 'vendor/AdminNav.svelte' && x.rule === 'native' && x.blocking));
+});
+
+test('fail closed 3: a component under docs/ is analysed; a validated mockup of the ledger is not a finding', async t => {
+  const f = closedProject(t);
+  write(f.repo, 'docs/components/Admin.svelte', SELECT);
+  write(f.root, 'mockup.html', '<!doctype html><html lang="fr"><body><select><option>a</option></select></body></html>\n');
+  const registered = await apv(f.repo, ['design', 'register', join(f.root, 'mockup.html'), '--name', 'admin', '--quote', 'je valide']);
+  assert.equal(registered.code, 0, registered.stderr);
+  const r = await f.check();
+  assert.ok(f.blocked(r, 'docs/components/Admin.svelte'));
+  assert.ok(!r.findings.some(x => x.path === 'docs/design/admin-validee.html'), 'the registered mockup');
+  assert.ok(r.excluded.changed.includes('docs/design/admin-validee.html'));
+  // An HTML file dropped in the mockup folder without being registered is reported.
+  write(f.repo, 'docs/design/rogue.html', SELECT);
+  assert.ok(f.blocked(await f.check(), 'docs/design/rogue.html'));
+});
+
+test('fail closed 4: a package.json added by the change makes no package root for this change', async t => {
+  const f = closedProject(t);
+  write(f.repo, 'src/lib/pkg/package.json', '{}');
+  write(f.repo, 'src/lib/pkg/dist/Nav.svelte', SELECT);
+  git(f.repo, 'add', '-f', 'src/lib/pkg/dist/Nav.svelte');
+  const r = await f.check();
+  assert.ok(r.findings.some(x => x.path === 'src/lib/pkg/dist/Nav.svelte' && x.rule === 'native' && x.blocking));
+  assert.ok(!r.excluded.changed.includes('src/lib/pkg/dist/Nav.svelte'));
+});
+
+test('fail closed 5: a NUL byte or more than 2 MB makes a file of the change a blocking finding, never a silent skip', async t => {
+  const f = closedProject(t);
+  write(f.repo, 'src/lib/components/Nul.svelte', `<!-- \u0000 -->\n${SELECT}`);
+  write(f.repo, 'src/lib/big.ts', `export const big = '${'x'.repeat(2_200_000)}';\n`);
+  writeFileSync(join(f.repo, 'src/lib/latin.ts'), Buffer.from([0x2f, 0x2f, 0x20, 0xe9, 0x0a]));
+  const r = await f.check();
+  const reason = path => r.findings.find(x => x.path === path && x.rule === 'coverage')?.message ?? '';
+  assert.match(reason('src/lib/components/Nul.svelte'), /illisible comme texte \(octet nul\)/);
+  assert.match(reason('src/lib/big.ts'), /\(plus de 2 Mo\)/);
+  assert.match(reason('src/lib/latin.ts'), /\(encodage invalide/);
+  for (const path of ['src/lib/components/Nul.svelte', 'src/lib/big.ts', 'src/lib/latin.ts']) assert.ok(f.blocked(r, path), path);
+});
+
+test('fail closed 6: the files of the change left out are all listed, never truncated', async t => {
+  const f = closedProject(t, Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`vendor/lib${i}.js`, `export const v${i} = ${i};\n`])));
+  for (let i = 0; i < 25; i++) write(f.repo, `vendor/lib${i}.js`, `export const v${i} = ${i + 1};\n`);
+  const r = await f.check();
+  assert.equal(r.excluded.changed.length, 25);
+  const text = (await apv(f.repo, ['reuse', 'check', '--base', f.base])).stdout;
+  for (let i = 0; i < 25; i++) assert.ok(text.includes(`vendor/lib${i}.js`), `vendor/lib${i}.js`);
+});
+
+test('fail closed: extensions declared by the framework are read; an unknown one imported by the change is said', async t => {
+  const f = closedProject(t, { 'svelte.config.js': "export default { extensions: ['.svelte', '.svx'] };\n" });
+  write(f.repo, 'src/routes/guide/+page.svx', `# Guide\n\n${SELECT}`);
+  write(f.repo, 'src/routes/other/+page.svelte', "<script lang=\"ts\">\n  import Widget from './Widget.xyz';\n</script>\n<Widget />\n");
+  write(f.repo, 'src/routes/other/Widget.xyz', SELECT);
+  const r = await f.check();
+  assert.ok(r.findings.some(x => x.path === 'src/routes/guide/+page.svx' && x.rule === 'native' && x.blocking));
+  const unknown = r.findings.find(x => x.rule === 'coverage' && x.path === 'src/routes/other/+page.svelte');
+  assert.deepEqual([unknown.severity, unknown.blocking], ['warning', false]);
+  assert.match(unknown.message, /importe src\/routes\/other\/Widget\.xyz, d'extension \.xyz que le contrôle ne lit pas/);
+});
+
+test('fail closed, generic: any new .svelte file, whatever its path, is analysed or blocks', async t => {
+  const f = closedProject(t);
+  const paths = ['src/a/b/C.svelte', 'node_modules/x/C.svelte', 'dist/C.svelte', 'build/C.svelte', 'coverage/C.svelte', 'vendor/C.svelte', '.github/C.svelte',
+    'docs/C.svelte', 'x/.cache/C.svelte', 'x/.svelte-kit/C.svelte', 'src/generated/C.svelte', 'src/C.generated.svelte', 'src/__generated__/C.svelte', '.apv/C.svelte'];
+  for (const path of paths) write(f.repo, path, SELECT);
+  git(f.repo, 'add', '-f', '--', ...paths);
+  const r = await f.check();
+  for (const path of paths) assert.ok(f.blocked(r, path), path);
 });

@@ -25,6 +25,11 @@ export interface Changes {
 }
 /** Content of a working tree file, or null when it is unreadable, binary-looking or larger than 2 MB. */
 export declare function readWorktree(repo: string, path: string): string | null;
+/** A working tree file as text, or why it cannot be read as text: too large, a NUL byte, not UTF-8, unreadable. */
+export declare function readWorktreeStatus(repo: string, path: string): {
+    text: string | null;
+    reason: string | null;
+};
 /** The line is added or modified by the change (always true without base, and in a created file). */
 export declare function isAdded(changes: Changes, path: string, line: number): boolean;
 /** Resolves the base of the comparison: `--base` (any commit-ish), else the configured reference (full ref), else none. */

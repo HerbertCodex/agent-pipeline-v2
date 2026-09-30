@@ -1,10 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { posix } from 'node:path';
 import { CODE_EXTENSIONS, parseName } from '../structure/names.js';
-import { buildCodeMap, clashesFor, type CodeMap } from '../knowledge/code-map.js';
-import { collectChanges, isAdded, readAtBase, readWorktree, resolveBase, type ChangeBase, type Changes } from './changes.js';
+import { buildCodeMap, clashesFor, importsOf, type CodeMap } from '../knowledge/code-map.js';
+import { nonSourceExtensions } from '../knowledge/languages.js';
+import { listMockups } from '../design/registry.js';
+import { collectChanges, isAdded, readAtBase, readWorktree, readWorktreeStatus, resolveBase, type ChangeBase, type Changes } from './changes.js';
 import {
-  COMPONENT_EXTENSIONS, DEFAULT_PRIMITIVE_PATHS, DEFAULT_STYLE_SOURCES, ELEMENT_FAMILIES, GENERATED_HEADER, GENERATED_PATHS, REUSE_RULES, outputMatcher, STYLE_EXTENSIONS, UI_EXTENSIONS, extensionOf, globMatcher, mapSettings, reuseSettings,
+  COMPONENT_EXTENSIONS, DEFAULT_PRIMITIVE_PATHS, DEFAULT_STYLE_SOURCES, ELEMENT_FAMILIES, DEFAULT_REUSE_IGNORE, GENERATED_HEADER, GENERATED_PATHS, REUSE_RULES, frameworkExtensions, outputMatcher, STYLE_EXTENSIONS, UI_EXTENSIONS, extensionOf, globMatcher, mapSettings, reuseSettings,
   type MapSection, type ReuseRule, type ReuseSection, type ReuseSettings, type ReuseSeverity,
 } from './config.js';
 import { TokenTable, blankImports, findClones, occurs, tokenize, type Token } from './duplicates.js';
@@ -41,8 +43,11 @@ export interface ReuseReport {
   primitives: { sources: string[]; count: number };
   /** Files a tool writes (by name or first lines), left out of every rule: their count and the first 20. */
   generated: { count: number; files: string[] };
-  /** Files left out by an ignored path (dependencies, tool folders, build outputs, `reuse.ignore`): never silently. */
-  excluded: { count: number; files: string[] };
+  /**
+   * Files left out: by `reuse.ignore`, or by a default exclusion for a file already there at the base. `changed`: every
+   * one the change creates or modifies, never truncated; `existing`: the first 20 of the others; `count`: all.
+   */
+  excluded: { count: number; changed: string[]; existing: string[] };
 }
 
 export interface ReuseConfig { reuse?: ReuseSection | undefined; map?: MapSection | undefined; design?: { dir?: string | undefined } | undefined }
@@ -67,8 +72,6 @@ function gitShow(repo: string, spec: string): string | null {
   } catch { return null; }
 }
 
-/** Extensions a rule reads: the only files whose first lines are read to tell a generated one. */
-const READ_EXTENSIONS = (ext: string): boolean => CODE_EXTENSIONS.has(ext) || UI_EXTENSIONS.has(ext) || STYLE_EXTENSIONS.has(ext) || ext === 'json';
 
 const order = (a: ReuseFinding, b: ReuseFinding): number =>
   REUSE_RULES.indexOf(a.rule) - REUSE_RULES.indexOf(b.rule) || Number(b.isNew) - Number(a.isNew) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || a.line - b.line;
@@ -79,45 +82,84 @@ const order = (a: ReuseFinding, b: ReuseFinding): number =>
  * history adopts the check without first cleaning everything.
  */
 export async function checkReuse(repo: string, config: ReuseConfig, options: CheckOptions = {}): Promise<ReuseReport> {
-  const settings = reuseSettings(config.reuse);
+  const base = reuseSettings(config.reuse);
   const mapConfig = mapSettings(config.map);
-  const changes = options.changes ?? await collectChanges(repo, resolveBase(repo, options.base, settings.reference));
+  const changes = options.changes ?? await collectChanges(repo, resolveBase(repo, options.base, base.reference));
   const designDir = config.design?.dir?.replace(/\/+$/, '');
-  const ignored = globMatcher([...settings.ignore, ...(designDir ? [`${designDir}/**`] : [])]);
   const cache = new Map<string, string | null>();
   const read = (path: string): string | null => {
     if (!cache.has(path)) cache.set(path, readWorktree(repo, path));
     return cache.get(path)!;
   };
-  // Generated files (database types, clients): left out of every rule, listed apart, never counted. A name or a mention
-  // is trusted only if the file was already generated at the base, or declared in `reuse.generated`: otherwise a name
-  // (`shell.gen.css`, `generated/`) or a comment would be enough to take a copy out of the check. Interface files never are.
+  // Interface files: the known extensions and those the framework declares (`.svx` in svelte.config.js).
+  const settings: Ctx = { ...base, ui: new Set([...UI_EXTENSIONS, ...frameworkExtensions(read, changes.files)]) };
+  const relevant = (ext: string): boolean => CODE_EXTENSIONS.has(ext) || settings.ui.has(ext) || STYLE_EXTENSIONS.has(ext);
+
+  // FAIL CLOSED (docs/REUSE.md, section 2.8). A file the change creates, modifies or moves, tracked by Git, whose
+  // extension is code, interface or style, is analysed. It leaves the check only through what the configuration declares
+  // (`reuse.ignore`, `reuse.generated`, a validated mockup of the ledger) or because it was already excluded at the base
+  // under the same path. The default exclusions (dependencies, tool folders, build outputs, docs) apply to the files that
+  // existed at the base; a file the change puts there is analysed AND reported, blocking. An unreadable one is reported.
+  const touched = (path: string): boolean => !changes.all && (changes.created.has(path) || changes.renamed.has(path) || (changes.added.get(path)?.size ?? 0) > 0);
+  const atBase = (path: string): boolean => !changes.all && !changes.created.has(path) && !changes.renamed.has(path);
+  const declaredIgnore = globMatcher(settings.declaredIgnore);
+  const byDefault = globMatcher([...DEFAULT_REUSE_IGNORE, ...(designDir ? [`${designDir}/**`] : [])]);
+  // Packages as the base knows them: a package.json the change adds never makes a folder of build outputs.
+  const output = outputMatcher(changes.files.filter(f => !f.endsWith('package.json') || atBase(f) || changes.all));
   const generatedName = globMatcher([...GENERATED_PATHS]);
-  const declared = globMatcher(settings.generated);
-  const output = outputMatcher(changes.files);
+  const declaredGenerated = globMatcher(settings.generated);
+  let mockups = new Set<string>();
+  try { mockups = new Set(listMockups(repo).filter(m => m.state === 'ok' && m.file).map(m => m.file!)); } catch { /* no ledger: none */ }
   const generated: string[] = [];
-  const excluded: string[] = [];
-  const claimed: { path: string; how: 'name' | 'header' }[] = [];
+  const excludedChanged: string[] = [];
+  const excludedExisting: string[] = [];
+  const coverage: { path: string; message: string; severity?: 'warning' }[] = [];
   const header = (text: string | null): boolean => GENERATED_HEADER.test((text ?? '').slice(0, 600));
   const files = changes.files.filter(path => {
     const ext = extensionOf(path);
-    if (ignored(path) || output(path)) {
-      if (ext !== 'json' && READ_EXTENSIONS(ext)) excluded.push(path);
-      return false;
+    const counts = relevant(ext);
+    const changed = touched(path);
+    const exclude = (): false => { if (counts) (changed ? excludedChanged : excludedExisting).push(path); return false; };
+    if (declaredIgnore(path)) return exclude();
+    if (byDefault(path) || output(path)) {
+      if (!counts || !changed) return exclude();
+      if (mockups.has(path) || atBase(path)) return exclude();
+      coverage.push({ path, message: `fichier créé ou déplacé par le changement dans un dossier exclu par défaut (dépendances, outils, sorties de build, documentation) : il est analysé ; le déclarer dans reuse.ignore de .apv/config.json, avec l'accord de l'opérateur, ou le déplacer.` });
     }
-    if (UI_EXTENSIONS.has(ext)) return true;
-    if (declared(path)) { generated.push(path); return false; }
+    if (!counts) return true;
+    if (changed) {
+      const status = readWorktreeStatus(repo, path);
+      if (status.text === null) {
+        coverage.push({ path, message: `fichier du changement illisible comme texte (${status.reason}) alors que son extension est .${ext} : le contrôle ne peut pas l'analyser ; le ramener à du texte UTF-8 de moins de 2 Mo, ou le déclarer dans reuse.ignore avec l'accord de l'opérateur.` });
+        return false;
+      }
+    }
+    if (settings.ui.has(ext)) return true;
+    if (declaredGenerated(path)) { generated.push(path); return false; }
     const byName = generatedName(path);
-    if (!byName && !(READ_EXTENSIONS(ext) && header(read(path)))) return true;
-    let trusted = changes.all;
+    if (!byName && !header(read(path))) return true;
+    let trusted = changes.all || !changed;
     if (!trusted) {
       const before = readAtBase(repo, changes, path, gitShow);
       trusted = before !== null && (byName ? generatedName(changes.renamed.get(path) ?? path) : header(before));
     }
     if (trusted) { generated.push(path); return false; }
-    claimed.push({ path, how: byName ? 'name' : 'header' });
+    coverage.push({ path, message: `${byName ? 'nommé comme un fichier généré' : 'mention « fichier généré » en tête'}, mais ${byName ? 'créé par le changement (absent à la base)' : 'ajoutée par le changement (absente à la base)'} : un fichier ne sort pas du contrôle par son nom ni par un commentaire, il reste analysé. S'il est vraiment écrit par un outil, déclarez-le dans reuse.generated de .apv/config.json (motif de chemin), avec l'accord de l'opérateur.` });
     return true;
   });
+  // A file of the change imports a file of an extension the check does not read: said, never silently skipped.
+  const present = new Set(changes.files);
+  for (const path of files.filter(touched)) {
+    const ext = extensionOf(path);
+    if (!(settings.ui.has(ext) || SCRIPT_EXTENSIONS.has(ext) || ext === 'tsx' || ext === 'jsx')) continue;
+    for (const ref of importsOf(read(path) ?? '', ext)) {
+      if (!ref.spec.startsWith('.')) continue;
+      const target = posix.normalize(posix.join(posix.dirname(path), ref.spec));
+      const targetExt = extensionOf(target);
+      if (!present.has(target) || relevant(targetExt) || nonSourceExtensions.has(targetExt) || targetExt === 'json') continue;
+      coverage.push({ path, severity: 'warning', message: `importe ${target}, d'extension .${targetExt} que le contrôle ne lit pas : déclarer l'extension au framework (svelte.config.js, extensions) pour qu'il soit analysé.` });
+    }
+  }
   const isTest = (path: string): boolean => parseName(path)?.test ?? /(?:^|\/)(?:tests?|__tests__|e2e|fixtures)\//.test(path);
   let map: CodeMap | null = null;
   const codeMap = async (): Promise<CodeMap> => (map ??= await buildCodeMap(repo, settings, mapConfig, { read }));
@@ -129,18 +171,16 @@ export async function checkReuse(repo: string, config: ReuseConfig, options: Che
     findings.push({ ...finding, severity, blocking: severity === 'error' && finding.isNew });
   };
 
-  for (const { path, how } of claimed) {
-    add({ rule: 'duplicates', isNew: true, path, line: 1,
-      message: `${how === 'name' ? 'nommé comme un fichier généré' : 'mention « fichier généré » en tête'}, mais ${how === 'name' ? 'créé par le changement (absent à la base)' : 'ajoutée par le changement (absente à la base)'} : un fichier ne sort pas du contrôle par son nom ni par un commentaire, il reste analysé. S'il est vraiment écrit par un outil, déclarez-le dans reuse.generated de .apv/config.json (motif de chemin), avec l'accord de l'opérateur.` }, 'error');
-  }
+  for (const item of coverage) add({ rule: 'coverage', isNew: true, path: item.path, line: 1, message: item.message }, item.severity);
   if (summary.native.active) await nativeRule(settings, files, read, isTest, changes, codeMap, add);
   const primitives = summary.styles.active ? stylesRule(settings, files, read, isTest, changes, add, summary.styles) : { sources: [], count: 0 };
   if (summary.duplicates.active) duplicatesRule(repo, settings, files, read, isTest, changes, add);
   if (summary.names.active) {
     const current = await codeMap();
+    const analyzed = new Set(files);
     for (const component of current.components) {
       if (!changes.all && !changes.created.has(component.path)) continue;
-      if (ignored(component.path)) continue;
+      if (!analyzed.has(component.path)) continue;
       const clashes = changes.all ? component.clashes : clashesFor(current, component.path, settings.roles, true);
       if (!clashes.length) continue;
       // Strong: it redoes a generic shared component of the structure or of the design system (`AdminToast` next to
@@ -166,7 +206,7 @@ export async function checkReuse(repo: string, config: ReuseConfig, options: Che
     } else {
       for (const path of files) {
         const ext = extensionOf(path);
-        const markup = UI_EXTENSIONS.has(ext);
+        const markup = settings.ui.has(ext);
         if (isTest(path) || !(markup || SCRIPT_EXTENSIONS.has(ext) || (ext === 'json' && LOCALE_FILE.test(path)))) continue;
         const whole = changes.all || changes.created.has(path);
         const lines = whole ? undefined : changes.added.get(path);
@@ -183,19 +223,22 @@ export async function checkReuse(repo: string, config: ReuseConfig, options: Che
   for (const finding of findings) summary[finding.rule][finding.isNew ? 'new' : 'existing']++;
   findings.sort(order);
   return { ok: !findings.some(f => f.blocking), base: changes.base, analyzedFiles: files.length, rules: summary, findings, primitives,
-    generated: { count: generated.length, files: generated.slice(0, 20) }, excluded: { count: excluded.length, files: excluded.slice(0, 20) } };
+    generated: { count: generated.length, files: generated.slice(0, 20) },
+    excluded: { count: excludedChanged.length + excludedExisting.length, changed: excludedChanged, existing: excludedExisting.slice(0, 20) } };
 }
 
+/** The settings of one check, with the interface extensions of the project. */
+type Ctx = ReuseSettings & { ui: Set<string> };
 type Add = (finding: Omit<ReuseFinding, 'severity' | 'blocking'>, severity?: 'warning' | 'error') => void;
 type Read = (path: string) => string | null;
 
-async function nativeRule(settings: ReuseSettings, files: string[], read: Read, isTest: (p: string) => boolean, changes: Changes, codeMap: () => Promise<CodeMap>, add: Add): Promise<void> {
+async function nativeRule(settings: Ctx, files: string[], read: Read, isTest: (p: string) => boolean, changes: Changes, codeMap: () => Promise<CodeMap>, add: Add): Promise<void> {
   const rules = Object.keys(settings.native.elements).sort().map(elementRule);
   const allowed = globMatcher(settings.native.allowedPaths);
   const preferred = globMatcher([...DEFAULT_PRIMITIVE_PATHS, ...settings.native.allowedPaths]);
   let shared: string[] | null = null;
   for (const path of files) {
-    if (!UI_EXTENSIONS.has(extensionOf(path)) || allowed(path) || isTest(path)) continue;
+    if (!settings.ui.has(extensionOf(path)) || allowed(path) || isTest(path)) continue;
     const text = read(path);
     if (text === null) continue;
     for (const hit of findElements(text, rules, extensionOf(path))) {
@@ -216,7 +259,7 @@ async function nativeRule(settings: ReuseSettings, files: string[], read: Read, 
   }
 }
 
-function stylesRule(settings: ReuseSettings, files: string[], read: Read, isTest: (p: string) => boolean, changes: Changes, add: Add, summary: RuleSummary): { sources: string[]; count: number } {
+function stylesRule(settings: Ctx, files: string[], read: Read, isTest: (p: string) => boolean, changes: Changes, add: Add, summary: RuleSummary): { sources: string[]; count: number } {
   const present = new Set(files);
   const declared = settings.styles.sources
     ? files.filter(globMatcher(settings.styles.sources))
@@ -246,7 +289,7 @@ function stylesRule(settings: ReuseSettings, files: string[], read: Read, isTest
   const sourceList = sources.length ? sources.join(', ') : 'reuse.styles.selectors';
   for (const path of files) {
     const ext = extensionOf(path);
-    const markup = UI_EXTENSIONS.has(ext);
+    const markup = settings.ui.has(ext);
     if (allowed(path) || isTest(path) || !(markup || STYLE_EXTENSIONS.has(ext))) continue;
     const text = read(path);
     if (text === null) continue;
@@ -262,7 +305,7 @@ function stylesRule(settings: ReuseSettings, files: string[], read: Read, isTest
   return { sources, count: primitives.size };
 }
 
-function duplicatesRule(repo: string, settings: ReuseSettings, files: string[], read: Read, isTest: (p: string) => boolean, changes: Changes, add: Add): void {
+function duplicatesRule(repo: string, settings: Ctx, files: string[], read: Read, isTest: (p: string) => boolean, changes: Changes, add: Add): void {
   const shared = globMatcher(settings.shared);
   const primitive = globMatcher([...DEFAULT_PRIMITIVE_PATHS, ...settings.native.allowedPaths]);
   /** A generic shared component: a component of the shared folders whose name is only its role, or of the primitives. */
@@ -273,14 +316,14 @@ function duplicatesRule(repo: string, settings: ReuseSettings, files: string[], 
     let ranges = styleLines.get(path);
     if (!ranges) {
       const ext = extensionOf(path);
-      ranges = STYLE_EXTENSIONS.has(ext) ? 'all' : UI_EXTENSIONS.has(ext) ? rangesOf(read(path) ?? '', 'style') : [];
+      ranges = STYLE_EXTENSIONS.has(ext) ? 'all' : settings.ui.has(ext) ? rangesOf(read(path) ?? '', 'style') : [];
       styleLines.set(path, ranges);
     }
     return ranges === 'all' || ranges.some(([a, b]) => from >= a && to <= b);
   };
   const included = settings.duplicates.paths ? globMatcher(settings.duplicates.paths) : (path: string) => {
     const ext = extensionOf(path);
-    return CODE_EXTENSIONS.has(ext) || STYLE_EXTENSIONS.has(ext) || COMPONENT_EXTENSIONS.has(ext) || ext === 'html';
+    return CODE_EXTENSIONS.has(ext) || STYLE_EXTENSIONS.has(ext) || COMPONENT_EXTENSIONS.has(ext) || settings.ui.has(ext);
   };
   const excluded = globMatcher(settings.duplicates.ignore);
   const table = new TokenTable();

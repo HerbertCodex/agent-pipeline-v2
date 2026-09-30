@@ -173,7 +173,7 @@ async function existingFindings(repo, configText) {
     const examples = ranked.slice(0, 20).map(f => ({ rule: f.rule, place: `${f.path}:${f.line}${f.endLine && f.endLine !== f.line ? `-${f.endLine}` : ''}`, message: f.message }));
     return { counts, examples };
 }
-const RULE_WORDS = { duplicates: 'bloc(s) dupliqué(s)', native: 'élément(s) natif(s) réservé(s)', styles: 'primitive(s) de style redéfinie(s)', names: 'composant(s) homonyme(s) ou redondant(s)', typography: 'valeur(s) typographique(s) sécable(s)' };
+const RULE_WORDS = { duplicates: 'bloc(s) dupliqué(s)', native: 'élément(s) natif(s) réservé(s)', styles: 'primitive(s) de style redéfinie(s)', names: 'composant(s) homonyme(s) ou redondant(s)', typography: 'valeur(s) typographique(s) sécable(s)', coverage: 'fichier(s) hors du contrôle' };
 function existingLines(existing) {
     const total = Object.values(existing.counts).reduce((a, b) => a + b, 0);
     if (!total)
