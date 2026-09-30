@@ -9,7 +9,7 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite", "stacks", "batch", "web"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite", "stacks", "batch", "web", "reuse", "map"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
 /**
@@ -389,6 +389,45 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly robotsAgents: string[];
         readonly neutralPaths: string[];
         readonly paths: string[];
+    } | undefined;
+    readonly reuse: {
+        readonly reference: string | undefined;
+        readonly shared: string[] | undefined;
+        readonly generated: string[] | undefined;
+        readonly ignore: string[] | undefined;
+        readonly native: {
+            readonly elements: Record<string, string | null> | undefined;
+            readonly allowedPaths: string[] | undefined;
+        } | undefined;
+        readonly styles: {
+            readonly sources: string[] | undefined;
+            readonly selectors: string[] | undefined;
+            readonly except: string[] | undefined;
+            readonly allowedPaths: string[] | undefined;
+            readonly nested: "refuse" | "layout" | "allow" | undefined;
+        } | undefined;
+        readonly duplicates: {
+            readonly minLines: number | undefined;
+            readonly minTokens: number | undefined;
+            readonly paths: string[] | undefined;
+            readonly ignore: string[] | undefined;
+            readonly styles: "off" | "warning" | "error" | undefined;
+        } | undefined;
+        readonly names: {
+            readonly roles: Record<string, string[] | null> | undefined;
+            readonly strong: string[] | undefined;
+            readonly strongSeverity: "off" | "warning" | "error" | undefined;
+        } | undefined;
+        readonly typography: {
+            readonly locale: string;
+        } | undefined;
+        readonly severity: "off" | "warning" | "error" | Record<string, "off" | "warning" | "error"> | undefined;
+    } | undefined;
+    readonly map: {
+        readonly file: string | undefined;
+        readonly ignore: string[] | undefined;
+        readonly maxEntries: number | undefined;
+        readonly maxBytes: number | undefined;
     } | undefined;
 }>;
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */

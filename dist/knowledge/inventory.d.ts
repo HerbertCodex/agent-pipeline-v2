@@ -32,13 +32,27 @@ export interface Inventory {
 export interface InventoryOptions {
     languages?: readonly LanguageProfile[];
     signal?: AbortSignal;
+    /** Files indexed at most (50 000 by default). A commit above it is refused; the working tree is cut, `truncated` set. */
+    maxFiles?: number;
 }
+/** `sha` of an inventory built from the working tree (`buildWorktreeInventory`) rather than from a commit. */
+export declare const WORKTREE = "worktree";
 /**
  * Deterministic, model-free inventory of an immutable Git tree. Languages are recognised by
  * declarative profiles (extension + declaration grammar); every other text source file becomes
  * a file-level unit so that no technology is invisible and none needs a controller special case.
  */
 export declare function buildInventory(repo: string, ref: string, options?: InventoryOptions): Promise<Inventory>;
+/**
+ * The same inventory, of the working tree: the tracked files still present and the untracked files Git does not
+ * ignore, as they are on disk. `sha` is WORKTREE. Used where the result must follow uncommitted work (the code map
+ * regenerated before a commit, and checked against the files of the commit under proof).
+ */
+export declare function buildWorktreeInventory(repo: string, options?: InventoryOptions): Promise<Inventory>;
+/** Files tracked by Git (the index), whatever their state on disk. */
+export declare function trackedFiles(repo: string, signal?: AbortSignal): Promise<Set<string>>;
+/** Files of the working tree: tracked ones present on disk and untracked ones not ignored, sorted, without duplicates. */
+export declare function worktreeFiles(repo: string, signal?: AbortSignal): Promise<string[]>;
 /** Compact, bounded view handed to agents: the full public surface, not a lexical sample. */
 export declare function inventoryForAgents(inventory: Inventory, maxSymbols?: number, maxUnits?: number): {
     sha: string;

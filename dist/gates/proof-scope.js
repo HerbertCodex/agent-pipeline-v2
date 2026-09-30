@@ -103,11 +103,11 @@ catch {
 /** Case-insensitive: a file that must require the check still does on a case-insensitive file system (`Package.json`, `SRC/`). */
 const ciMatch = (path, glob) => safeMatch(path.toLowerCase(), glob.toLowerCase());
 /**
- * Files never searched for mentions: APV's configuration, decisions, specs and state (never read by the application; the
- * configuration lists the dispensed paths themselves), and the ignore files of tools (`.gitignore`, `.prettierignore`...:
+ * Files never searched for mentions: APV's configuration, decisions, specs, state and code map (never read by the
+ * application; the configuration lists the dispensed paths themselves, the map names every file of the project), and the ignore files of tools (`.gitignore`, `.prettierignore`...:
  * they read nothing). Any other file under `.apv/` (a tool script) is searched.
  */
-export const NOT_SEARCHED = ['.apv/config.json', '.apv/DECISIONS.*', '.apv/specs/**', '.apv/state/**', 'pipeline.v2.json', '**/.*ignore'];
+export const NOT_SEARCHED = ['.apv/config.json', '.apv/DECISIONS.*', '.apv/specs/**', '.apv/state/**', '.apv/code-map.md', 'pipeline.v2.json', '**/.*ignore'];
 /** What a file or folder is searched as: its path, its name, and each parent folder as a path segment or a quoted name. */
 export function mentionNeedles(file, folders = true) {
     const out = [{ needle: file, folder: null }, { needle: posix.basename(file), folder: null }];

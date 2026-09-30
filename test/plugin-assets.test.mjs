@@ -49,7 +49,7 @@ const METHOD_SKILLS = ['architecture-donnees', 'chef-de-projet', 'design-artefac
 test('manifests parse and describe the apv plugin', () => {
   const plugin = JSON.parse(read('.claude-plugin/plugin.json'));
   assert.equal(plugin.name, 'apv');
-  assert.equal(plugin.version, '3.0.0-alpha.8');
+  assert.equal(plugin.version, '3.0.0-alpha.9');
   assert.equal(plugin.license, 'MIT');
   assert.match(read('LICENSE'), /^MIT License/);
   assert.equal(plugin.repository, 'https://github.com/HerbertCodex/agent-pipeline-v2');
@@ -719,4 +719,39 @@ test('web quality: the audit tool, its skill, its read-only agent and the rule i
   assert.match(read('docs/CONFIGURATION.md'), /## Qualité web : `web`/);
   assert.match(read('docs/APV3-SPEC.md'), /## 20\. Qualité web mesurable/);
   assert.match(read('CHANGELOG.md').split('\n## ')[1], /3\.0\.0-alpha\.7/);
+});
+
+test('reuse of existing elements: instructions, planning, review, the tools and their documentation', () => {
+  const implementer = frontmatter('agents/implementer.md').body;
+  for (const rule of [/\*\*Réutilise avant de créer\*\*/, /\.apv\/code-map\.md/, /jamais de copie propre à une fonctionnalité/, /devient partagé et paramétrable/,
+    /Éléments natifs réservés/, /primitives de style/, /retiré dans le même changement/, /Valeurs insécables/, /apv map/, /apv reuse check/, /\*\*réutilisation\*\* \(pour chaque composant/]) {
+    assert.match(implementer, rule);
+  }
+  const brief = read('skills/chef-de-projet/references/brief-type.md');
+  for (const rule of [/Réutiliser avant de créer/, /\.apv\/code-map\.md/, /Éléments natifs réservés/, /Valeurs insécables/, /`reuse` : blocs copiés/, /réutilisation \(pour chaque composant/]) assert.match(brief, rule);
+  assert.match(frontmatter('agents/architecte.md').body, /\*\*Réutilisation d'abord\.\*\*[^\n]*\.apv\/code-map\.md/);
+  assert.match(frontmatter('agents/integrateur.md').body, /jamais à la main[^\n]*`apv map`|ne se résout jamais à la main ; après les fusions[^\n]*`apv map`/);
+  const fidelity = frontmatter('agents/qa-fidelite.md').body;
+  assert.match(fidelity, /\*\*Réutilisation \(point obligatoire, jamais sauté\)\*\*[^\n]*quel composant existant aurait dû servir \?/);
+  assert.match(fidelity, /constat de gravité \*\*eleve\*\*/);
+  assert.match(read('skills/review/SKILL.md'), /\*\*Réutilisation\*\*[^\n]*quel composant existant aurait dû servir \?[^\n]*`eleve`/);
+  assert.match(frontmatter('agents/critique-design.md').body, /\*\*Composants existants\*\*/);
+  for (const skill of ['clean-code', 'ui-design']) assert.match(read(`skills/${skill}/SKILL.md`), /\.apv\/code-map\.md/, skill);
+  assert.match(read('skills/refactoring/SKILL.md'), /apv reuse check/);
+  assert.match(read('skills/run/SKILL.md'), /la carte du code \.apv\/code-map\.md AVANT de créer/);
+  const tool = 'Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js';
+  const onboard = frontmatter('skills/onboard/SKILL.md');
+  for (const t of [`${tool} reuse check*)`, `${tool} map*)`, 'Bash(apv reuse check*)', 'Bash(apv map*)']) assert.ok(onboard.fields['allowed-tools'].includes(t), t);
+  assert.match(onboard.body, /## 4 bis\. Réutilisation et carte du code/);
+  assert.ok(frontmatter('skills/init/SKILL.md').fields['allowed-tools'].includes(`${tool} map*)`));
+  assert.match(read('docs/CLI.md'), /## `apv reuse check`/);
+  assert.match(read('docs/CLI.md'), /## `apv map`/);
+  assert.match(read('docs/CONFIGURATION.md'), /## Réutilisation : `reuse` et carte du code : `map`/);
+  assert.match(read('docs/APV3-SPEC.md'), /## 22\. Réutilisation des éléments existants et carte du code/);
+  assert.match(read('docs/README.md'), /\[Réutilisation\]\(REUSE\.md\)/);
+  const guide = read('docs/REUSE.md');
+  for (const part of ['## 1. La carte du code', '## 2. Le contrôle `apv reuse check`', '## 3. Configuration', '## 4. Intégration à la preuve', '## 5. Adopter sur un projet existant', '## 6. Limites connues']) assert.ok(guide.includes(part), part);
+  assert.ok(!/[–—]/.test(guide), 'REUSE.md: no em or en dash');
+  assert.ok(!/[–—]/.test(read('docs/CONFIGURATION.md').split('## Réutilisation : `reuse`')[1]), 'reuse section: no em or en dash');
+  assert.match(read('CHANGELOG.md').split('\n## ')[1], /3\.0\.0-alpha\.9 : réutilisation des éléments existants, carte du code/);
 });

@@ -203,7 +203,7 @@ export declare const qaSchema: import("../domain/schema.js").Schema<{
         readonly evidence: string;
     }[];
     readonly qualityChecks: {
-        readonly axis: "architecture" | "tests" | "ui" | "simplicity" | "reuse" | "operations";
+        readonly axis: "architecture" | "tests" | "ui" | "reuse" | "simplicity" | "operations";
         readonly status: "unknown" | "pass" | "fail" | "not_applicable";
         readonly evidence: string;
         readonly paths: string[];

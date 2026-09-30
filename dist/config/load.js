@@ -14,6 +14,7 @@ import { gitRead } from '../run/git-probe.js';
 import { reviewAlwaysSchema, reviewPathsSchema, reviewTermsSchema } from '../review/config.js';
 import { stackIssues, stacksSchema } from '../stacks/config.js';
 import { webIssues, webSchema } from '../web/config.js';
+import { mapSchema, mapSettings, reuseSchema, reuseSettings } from '../reuse/config.js';
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
 /** V2 configuration, read as is for projects not yet migrated. */
@@ -22,7 +23,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'web'];
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'web', 'reuse', 'map'];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'];
 /**
@@ -169,6 +170,10 @@ export const apvConfigSchema = s.object({
     batch: s.optional(batchSettingsSchema),
     /** Web quality of the public pages: Lighthouse and search and AI readiness (docs/CONFIGURATION.md, « Qualité web »); absent: `apv web audit` refuses. */
     web: s.optional(webSchema),
+    /** Reuse of the existing components: `apv reuse check` (docs/REUSE.md); absent: defaults. */
+    reuse: s.optional(reuseSchema),
+    /** The code map written by `apv map` (docs/REUSE.md); absent: `.apv/code-map.md`. */
+    map: s.optional(mapSchema),
 });
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export const specLimits = (config) => ({ ...DEFAULT_SPEC_LIMITS, ...config.spec });
@@ -310,6 +315,10 @@ export function configIssues(raw) {
         list.attempt('CONFIG', () => designDir(value.design));
     if (value.structure)
         list.attempt('CONFIG', () => structureSettings(value.structure));
+    if (value.reuse)
+        list.attempt('CONFIG', () => reuseSettings(value.reuse));
+    if (value.map)
+        list.attempt('CONFIG', () => mapSettings(value.map));
     for (const arg of value.review?.dast?.command ?? []) {
         if (!arg.includes('{{'))
             continue;

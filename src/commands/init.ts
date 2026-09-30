@@ -2,7 +2,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APV_DIR, apvGitignoreMissing, ensureApvGitignore } from '../config/apv-files.js';
-import { CONFIG_FILE, loadConfig } from '../config/load.js';
+import { CONFIG_FILE, configIssues, loadConfig, type ApvConfig } from '../config/load.js';
+import { worktreeFiles } from '../knowledge/inventory.js';
+import { apvOnPath, detectReuse, MAP_GATE, REUSE_GATE, type ReuseDocument, type ReuseProposal } from '../reuse/detect.js';
+import { currentMap } from './map.js';
 import { designDir } from '../design/config.js';
 import { GITATTRIBUTES, ensureDesignAttribute } from '../design/attributes.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
@@ -17,7 +20,10 @@ export const usage = `Utilisation :
 Crée ce qui manque dans .apv/ sans jamais écraser un fichier existant (la commande peut être relancée) :
 config.json (nom du projet, contrôles vides), DECISIONS.json (registre vide), brief.md (consigne commune
 des implementers, depuis le modèle de la compétence chef-de-projet), specs/, state/ et .gitignore
-(fichiers machine). Si la configuration déclare le dossier des maquettes validées (design.dir) ou si ce
+(fichiers machine) et la carte du code (.apv/code-map.md, comme apv map). La configuration créée déclare les
+contrôles code-map (apv map --check) et, pour un projet web, reuse (apv reuse check) avec la section reuse
+détectée (dossiers partagés, composant qui remplace chaque élément natif réservé, langue, branche de référence).
+Si la configuration déclare le dossier des maquettes validées (design.dir) ou si ce
 dossier existe, ajoute à .gitattributes « <dossier>/*.html -whitespace » quand Git ne l'applique pas déjà. Liste ce qui est créé et ce qui existait déjà. Refuse hors d'un dépôt Git.
 Le nom du projet est --name, sinon le nom du dossier du dépôt.
 Sortie : 0 succès, 1 hors d'un dépôt Git ou modèle de consigne introuvable, 2 appel incorrect.`;
@@ -34,7 +40,7 @@ export function briefFromTemplate(template: string, name: string): string {
   return `${body.replaceAll('<nom du projet>', name).trimEnd()}\n`;
 }
 
-export interface InitResult { repo: string; name: string; created: string[]; existing: string[]; completed: string[] }
+export interface InitResult { repo: string; name: string; created: string[]; existing: string[]; completed: string[]; reuse: ReuseSetup }
 
 /** Reads the brief model shipped with the plugin; refused before anything is written. */
 export function readBriefTemplate(pluginRoot = PLUGIN_ROOT): string {
@@ -102,6 +108,8 @@ export interface InitContent {
   config?: () => string;
   /** Files written right after the configuration (the ledger and its readable version); by default an empty ledger. */
   ledger?: { path: string; content: () => string }[];
+  /** The code map (`.apv/code-map.md`), written last when it does not exist. */
+  map?: { path: string; content: () => string };
 }
 
 /** Writes the `.apv/` skeleton in a fixed order: directory, configuration, ledger, brief, specs, state, .gitignore. */
@@ -116,13 +124,93 @@ export function writeApvSkeleton(writer: ApvWriter, name: string, template: stri
   writer.dir(`${APV_DIR}/state`);
   writer.gitignore();
   writer.designAttributes();
+  if (content.map) writer.file(content.map.path, content.map.content);
 }
 
-export function initProject(repo: string, name: string, pluginRoot = PLUGIN_ROOT): InitResult {
+/** What `apv init` and `apv onboard` set up for the reuse of the existing components (docs/REUSE.md). */
+export interface ReuseSetup {
+  /** Web interface detected, and why. */
+  web: boolean;
+  signals: string[];
+  /** Gates added to the created configuration (`reuse` for a web project, `code-map` always); empty when it existed. */
+  gates: string[];
+  /** The `reuse` section written, or null. */
+  section: ReuseDocument | null;
+  /** Code map: its path, or null when the configuration is unreadable or the map could not be built (then `apv map`). */
+  map: string | null;
+  /** Why the map was not written, or that it is partial (repository beyond the inventory limit). */
+  mapNote: string | null;
+  /** The generated checks call `apv` by name: false when it is not on the PATH of this machine. */
+  apvOnPath: boolean;
+}
+
+/**
+ * The configuration of a new project: its name, the checks of the reuse (`reuse` for a web project, `code-map`
+ * always, both at the task stage so that they also run in the full suite) and the detected `reuse` section.
+ */
+export function reuseConfig(name: string, proposal: ReuseProposal): { document: Record<string, unknown>; gates: string[] } {
+  const gates = [...(proposal.web ? [REUSE_GATE] : []), MAP_GATE].map(g => ({ ...g, command: [...g.command], covers: [...g.covers] }));
+  return { document: { name, gates, ...(proposal.web ? { reuse: proposal.section } : {}) }, gates: gates.map(g => g.id) };
+}
+
+/** The code map of the repository under `config` (the one about to be written, or the existing one); null when unreadable. */
+export async function initialMap(repo: string, configText: string | undefined): Promise<{ path: string | null; text: string; partial: boolean; error?: string } | null> {
+  let config: ApvConfig;
+  try {
+    if (configText === undefined) config = loadConfig(repo).config;
+    else {
+      const checked = configIssues(JSON.parse(configText) as unknown);
+      if (!checked.config) return null;
+      config = checked.config;
+    }
+  } catch { return null; }
+  // The map never blocks the setup: a repository too large or unreadable for the inventory gets its configuration anyway.
+  try {
+    const { file, text, map } = await currentMap(repo, config);
+    return { path: file, text, partial: map.partial !== null };
+  } catch (error) {
+    return { path: null, text: '', partial: false, error: errorMessage(error) };
+  }
+}
+
+export async function initProject(repo: string, name: string, pluginRoot = PLUGIN_ROOT): Promise<InitResult> {
   const template = readBriefTemplate(pluginRoot);
+  const proposal = detectReuse(repo, await worktreeFiles(repo));
+  const configExists = existsSync(join(repo, CONFIG_FILE));
+  const { document, gates } = reuseConfig(name, proposal);
+  const { issues } = configIssues(document);
+  if (!configExists && issues.length) throw new PipelineError('INIT', `Configuration détectée refusée par le schéma : ${issues.map(i => i.message).join(' ; ')}`);
+  const configText = configExists ? undefined : `${JSON.stringify(document, null, 2)}\n`;
+  const map = await initialMap(repo, configText);
   const writer = new ApvWriter(repo);
-  writeApvSkeleton(writer, name, template);
-  return { repo, name, created: writer.created, existing: writer.existing, completed: writer.completed };
+  writeApvSkeleton(writer, name, template, {
+    ...(configText !== undefined ? { config: () => configText } : {}),
+    ...(map?.path ? { map: { path: map.path, content: () => map.text } } : {}),
+  });
+  const reuse: ReuseSetup = { web: proposal.web, signals: proposal.signals, gates: configExists ? [] : gates, section: !configExists && proposal.web ? proposal.section : null, ...mapFields(map) };
+  return { repo, name, created: writer.created, existing: writer.existing, completed: writer.completed, reuse };
+}
+
+/** The map fields of the setup, from what `initialMap` returned. */
+export function mapFields(map: Awaited<ReturnType<typeof initialMap>>): Pick<ReuseSetup, 'map' | 'mapNote' | 'apvOnPath'> {
+  const mapNote = map === null ? 'configuration illisible' : map.error ? `carte non construite (${map.error})` : map.partial ? 'carte partielle : dépôt au-delà de la limite de l\'inventaire (50 000 fichiers)' : null;
+  return { map: map?.path ?? null, mapNote, apvOnPath: apvOnPath() };
+}
+
+/** Lines of the reuse setup for the text output of `apv init` and `apv onboard`. */
+export function reuseLines(reuse: ReuseSetup): string[] {
+  const lines: string[] = [];
+  if (reuse.gates.length) {
+    lines.push(`Contrôles ajoutés : ${reuse.gates.map(g => (g === 'reuse' ? 'reuse (apv reuse check --base {{baseSha}}, étape tâche et suite complète ; apv gates run demande donc --base)' : 'code-map (apv map --check, suite complète ; la carte est régénérée à l\'intégration)')).join(', ')}.`);
+    if (!reuse.apvOnPath) lines.push('ATTENTION : apv n\'est pas sur le PATH de cette machine ; ces contrôles échoueront (commande introuvable). Activez le plugin (son exécutable bin/apv) ou npm link, ou remplacez "apv" par ["node", "<chemin du plugin>/dist/cli.js", ...] dans .apv/config.json.');
+  }
+  if (reuse.section) {
+    const s = reuse.section;
+    lines.push(`Réutilisation (projet web : ${reuse.signals.join(' ; ')}) : dossiers partagés ${s.shared?.join(', ') ?? 'par défaut (**/components/**, **/ui/**...)'} ; éléments natifs réservés ${Object.entries(s.native?.elements ?? {}).map(([e, t]) => `<${e}>${t ? ` -> ${t}` : ''}`).join(', ')}, permis dans ${s.native?.allowedPaths?.join(', ') ?? 'les composants génériques (**/components/ui/**, **/ui/**, **/primitives/**...)'} ; langue ${s.typography?.locale ?? 'non trouvée (reuse.typography.locale)'} ; référence ${s.reference ?? 'non trouvée (pas de branche distante origin) : déclarez reuse.reference pour apv reuse check sans --base'}.`);
+  }
+  if (reuse.map === null) lines.push(`Carte du code non écrite : ${reuse.mapNote ?? 'configuration illisible'} ; corriger, puis apv map.`);
+  else if (reuse.mapNote) lines.push(`Attention : ${reuse.mapNote}.`);
+  return lines;
 }
 
 export async function run(args: string[], io: CommandIO): Promise<number> {
@@ -133,12 +221,13 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const repo = gitRoot(repoPath(io, values.repo));
     const name = (values.name ?? basename(repo)).trim();
     if (!name || name.length > 100 || /[\n\r\0]/.test(name)) throw new UsageError('--name : de 1 à 100 caractères, sur une ligne');
-    const result = initProject(repo, name);
+    const result = await initProject(repo, name);
     if (values.json) { json(io, result); return EXIT.ok; }
     const lines = [`Projet « ${name} » : ${repo}`];
     lines.push(result.created.length ? `Créé : ${result.created.join(', ')}` : 'Rien à créer : .apv/ est complet.');
     if (result.completed.length) lines.push(`Complété : ${result.completed.join(', ')}`);
     if (result.existing.length) lines.push(`Existait déjà (inchangé) : ${result.existing.join(', ')}`);
+    lines.push(...reuseLines(result.reuse));
     if (result.created.length || result.completed.length) {
       const attributes = [...result.created, ...result.completed].includes(GITATTRIBUTES) ? ` et ${GITATTRIBUTES}` : '';
       lines.push(`Suite : adapter .apv/brief.md (passages entre chevrons) et déclarer les contrôles dans .apv/config.json, puis commiter .apv/${attributes}.`);

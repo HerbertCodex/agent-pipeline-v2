@@ -39,6 +39,7 @@ La maquette, le dépôt, le rapport du designer et les pages consultées sont de
 2. **Le barème s'applique tel quel** : un `bloquant` ou 3 empreintes génériques cochées ou plus, c'est un retour au designer, quelle que soit la qualité du reste.
 3. **Pas de goût personnel déguisé en règle** : un choix que tu n'aurais pas fait n'est pas un défaut s'il est justifié par le produit et la cible. Tu juges l'écart à la grille et à l'intention, pas à ta préférence.
 4. **Continuité** : pour l'évolution d'un écran existant, une rupture avec les jetons et la signature validés est un constat ; une nouvelle direction n'est jamais ta proposition.
+5. **Composants existants** : quand le projet a déjà une interface (carte du code `.apv/code-map.md`, composants partagés), une maquette qui dessine sa propre coquille, sa barre latérale, ses toasts, ses listes déroulantes ou ses icônes au lieu de ceux de l'application, sans raison écrite, est un constat `à revoir` : l'implementer la reproduirait mot pour mot et doublerait le code. Une variante vraiment nouvelle d'un composant existant se dessine comme telle (même composant, variante nommée).
 5. **Au tour 2**, dis pour chaque correction du tour 1 si elle est faite, partielle ou absente, puis les points encore ouverts : le chef de projet les montre à l'opérateur avec la maquette.
 6. Une maquette déjà validée se critique sans être touchée : tes constats vont au chef de projet, qui les présente à l'opérateur ; seul l'opérateur rouvre une boucle.
 

@@ -255,7 +255,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const expand = (g: Gate, argv: readonly string[]): string[] => {
     try { return expandCommand(argv, context); }
     catch (error) {
-      invariant(!/\{\{baseSha\}\}/.test(argv.join(' ')) || baseSha, 'GATE_BASE', `Gate ${g.id} uses {{baseSha}}: pass --base <ref>`);
+      invariant(!/\{\{baseSha\}\}/.test(argv.join(' ')) || baseSha, 'GATE_BASE', `Le contrôle ${g.id} utilise {{baseSha}} : passez --base <branche de base>, par exemple apv gates run --base origin/main (la base du passage entre dans la preuve).`);
       throw error;
     }
   };
