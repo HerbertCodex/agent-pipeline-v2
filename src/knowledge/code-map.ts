@@ -129,6 +129,7 @@ function stripExtensions(spec: string): string {
   return out;
 }
 const ENTRY = new Set(['index', '__init__', 'mod']);
+const VIRTUAL = /^(?:\$app\/|\$env\/|\$service-worker|~icons\/|virtual:)/;
 
 /** Resolves import specifiers to the files of the project: relative paths exactly, aliases (`$lib/`, `@/`, `~/`, `#`) and Python modules by suffix. */
 class Resolver {
@@ -159,6 +160,8 @@ class Resolver {
       const target = stripExtensions(posix.normalize(posix.join(dirOf(importer), spec)));
       return this.keys.get(target) ?? [];
     }
+    // Modules the framework provides (`$app/stores`, `$env/static/public`, `virtual:pwa`): never a file of the project.
+    if (VIRTUAL.test(spec)) return [];
     let rest: string | null = null;
     if (/^(?:\$|~|#|@\/)/.test(spec)) rest = spec.includes('/') ? spec.slice(spec.indexOf('/') + 1) : null;
     else if (py) rest = spec.replace(/\./g, '/');

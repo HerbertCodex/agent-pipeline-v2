@@ -217,6 +217,10 @@ test('apv map: written, checked, stale when the code changes, missing, JSON mode
   const model = (await apv(f.repo, ['map', '--check', '--json'])).json();
   assert.equal(model.status, 'stale');
   assert.deepEqual(model.map.components.find(c => c.path.endsWith('Select.svelte')).usedBy, ['src/routes/+page.svelte', 'src/routes/settings/+page.svelte']);
+  // A module of the framework (`$app/stores`) is never a file of the project.
+  write(f.repo, 'src/lib/stores.ts', 'export const count = 1;\n');
+  write(f.repo, 'src/routes/about/+page.svelte', "<script lang=\"ts\">\n  import { page } from '$app/stores';\n</script>\n<p>{$page.url.pathname}</p>\n");
+  assert.deepEqual((await apv(f.repo, ['map', '--json'])).json().map.modules.find(m => m.path === 'src/lib/stores.ts').usedBy, []);
   write(f.repo, '.apv/config.json', { map: { file: 'docs/CODE-MAP.md' } });
   assert.equal((await apv(f.repo, ['map', '--json'])).json().file, 'docs/CODE-MAP.md');
   assert.ok(existsSync(join(f.repo, 'docs/CODE-MAP.md')));
