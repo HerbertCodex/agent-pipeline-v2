@@ -174,7 +174,7 @@ export interface StyleHit { line: number; selector: string; primitive: string; n
  * placement, position. A nested adjustment that declares only these is accepted with `styles.nested: "layout"`; colour,
  * border, radius, size, font, padding or shadow are a redefinition of the primitive.
  */
-const LAYOUT = /^(?:margin(?:-[a-z-]+)?|width|min-width|max-width|inline-size|min-inline-size|max-inline-size|flex|flex-grow|flex-shrink|flex-basis|order|align-self|justify-self|place-self|grid-(?:area|column|row|column-start|column-end|row-start|row-end)|position|inset(?:-[a-z-]+)?|top|right|bottom|left|z-index|display|visibility)$/;
+const LAYOUT = /^(?:margin(?:-[a-z-]+)?|width|min-width|max-width|min-height|white-space|inline-size|min-inline-size|max-inline-size|flex|flex-grow|flex-shrink|flex-basis|order|align-self|justify-self|place-self|grid-(?:area|column|row|column-start|column-end|row-start|row-end)|position|inset(?:-[a-z-]+)?|top|right|bottom|left|z-index|display|visibility)$/;
 export const isLayoutOnly = (properties: readonly string[]): boolean => properties.every(p => LAYOUT.test(p));
 
 /**

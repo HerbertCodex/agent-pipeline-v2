@@ -92,3 +92,12 @@ test('the code map committed by a task is out of scope, with what to do: the int
   const human = await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH']);
   assert.match(human.stdout, /La carte du code \(\.apv\/code-map\.md\) ne se commite pas dans une tâche : l'intégration la régénère une fois par vague/);
 });
+
+test('the code map of a custom map.file is recognised too', async t => {
+  const f = branch(t);
+  f.commit('.apv/config.json', '{ "map": { "file": "docs/CODE-MAP.md" } }\n');
+  f.commit('docs/CODE-MAP.md', '# Carte du code\n');
+  const r = await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH', '--json']);
+  assert.equal(r.json().codeMap, true);
+  assert.match((await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH'])).stdout, /La carte du code \(docs\/CODE-MAP\.md\) ne se commite pas/);
+});

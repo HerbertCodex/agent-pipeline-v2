@@ -90,9 +90,19 @@ export async function checkReuse(repo: string, config: ReuseConfig, options: Che
   // Generated files (database types, clients): left out of every rule, listed apart, never counted.
   const generatedName = globMatcher([...GENERATED_PATHS]);
   const generated: string[] = [];
+  // A mention in the first lines counts only if the file already carried it at the base: otherwise a comment would be
+  // enough to take a copy out of the check. Interface files are never generated.
+  const claimed: string[] = [];
+  const header = (text: string | null): boolean => GENERATED_HEADER.test((text ?? '').slice(0, 600));
   const files = changes.files.filter(path => {
     if (ignored(path)) return false;
-    const isGenerated = generatedName(path) || (READ_EXTENSIONS(extensionOf(path)) && GENERATED_HEADER.test((read(path) ?? '').slice(0, 600)));
+    const ext = extensionOf(path);
+    if (UI_EXTENSIONS.has(ext)) return true;
+    let isGenerated = generatedName(path);
+    if (!isGenerated && READ_EXTENSIONS(ext) && header(read(path))) {
+      if (changes.all || header(readAtBase(repo, changes, path, gitShow))) isGenerated = true;
+      else claimed.push(path);
+    }
     if (isGenerated) generated.push(path);
     return !isGenerated;
   });
@@ -107,6 +117,10 @@ export async function checkReuse(repo: string, config: ReuseConfig, options: Che
     findings.push({ ...finding, severity, blocking: severity === 'error' && finding.isNew });
   };
 
+  for (const path of claimed) {
+    add({ rule: 'duplicates', isNew: true, path, line: 1,
+      message: 'mention « fichier généré » ajoutée par le changement (absente à la base) : un fichier ne sort pas du contrôle par un commentaire ; le fichier reste analysé. Un vrai fichier généré se nomme comme tel (*.generated.*, generated/, database.types.*) ou se déclare dans reuse.ignore, avec l\'accord de l\'opérateur.' }, 'error');
+  }
   if (summary.native.active) await nativeRule(settings, files, read, isTest, changes, codeMap, add);
   const primitives = summary.styles.active ? stylesRule(settings, files, read, isTest, changes, add, summary.styles) : { sources: [], count: 0 };
   if (summary.duplicates.active) duplicatesRule(repo, settings, files, read, isTest, changes, add);
@@ -119,7 +133,9 @@ export async function checkReuse(repo: string, config: ReuseConfig, options: Che
       if (!clashes.length) continue;
       // Strong: it redoes a generic shared component of the structure or of the design system (`AdminToast` next to
       // `ToastRegion`, `AdminShell` next to `Sidebar`) without composing it (composition is never a clash).
-      const strong = clashes.filter(c => { const shared = componentName(c.with, settings.roles); return shared.generic && shared.family !== null && settings.strong.includes(shared.family); });
+      // Same family exactly (a toast next to the toast, a dialog next to the dialog); a layout next to the side bar, or a
+      // part named after it (`SidebarSection`), stays a warning.
+      const strong = clashes.filter(c => { const shared = componentName(c.with, settings.roles); return shared.generic && shared.family !== null && c.family === shared.family && settings.strong.includes(shared.family); });
       const severity = strong.length && settings.strongSeverity !== 'off' ? settings.strongSeverity : undefined;
       const listed = strong.length ? strong : clashes;
       add({ rule: 'names', isNew: true, path: component.path, line: 1, other: { path: listed[0]!.with, line: 1 },

@@ -9,6 +9,8 @@ import { type Clash } from '../reuse/names.js';
 export interface MapComponent {
     path: string;
     shared: boolean;
+    /** A shared component of the design system or of the structure: in a primitives folder, or named only by its role. */
+    generic: boolean;
     summary: string | null;
     props: string[];
     variants: Record<string, string[]>;
@@ -84,8 +86,13 @@ export interface BuildOptions {
 /** Is this file a component (and not a route file)? Svelte, Vue and Astro files always; JSX files named in PascalCase. */
 export declare function isComponentFile(path: string): boolean;
 /**
+ * Every file `path` builds on, from import to import (5 steps at most): a dialog that imports a confirmation dialog built
+ * on the shared dialog composes the shared dialog.
+ */
+export declare function composes(map: CodeMap, path: string): Set<string>;
+/**
  * Shared components `path` may double (rule in src/reuse/names.ts), composition excepted: a component that imports the
- * shared one, or is imported by it, builds on it. With `symmetric` false, two shared components are compared once
+ * shared one (directly or through what it imports, `composes`), or is imported by it, builds on it. With `symmetric` false, two shared components are compared once
  * (the later path against the earlier), which is what the map prints.
  */
 export declare function clashesFor(map: CodeMap, path: string, families: Readonly<Record<string, readonly string[]>>, symmetric?: boolean): Clash[];
@@ -95,7 +102,12 @@ export declare function buildCodeMap(repo: string, reuse: ReuseSettings, setting
  * the larger ones, so that no section is starved by the ones printed before it.
  */
 export declare function shares(sizes: readonly number[], total: number): number[];
-/** The map as Markdown: sections by folder, bounded in entries (40 per folder, `maxEntries` shared between the sections) and in bytes (`maxBytes`), counts of what is left out. */
+/**
+ * The map as Markdown, bounded in entries (40 per folder, `maxEntries`) and in bytes (`maxBytes`). Every section first
+ * gets a minimum share of the bytes, then the rest goes by priority: the generic components (design system, structure)
+ * first, then the shared modules, the routes, the other shared components, what belongs to one feature. The folders left
+ * out are named, with their count.
+ */
 export declare function codeMapMarkdown(map: CodeMap, settings: Pick<MapSettings, 'maxEntries'> & {
     maxBytes?: number;
 }): string;

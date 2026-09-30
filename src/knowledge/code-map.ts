@@ -1,7 +1,7 @@
 import { posix } from 'node:path';
 import { buildWorktreeInventory, trackedFiles, type Inventory } from './inventory.js';
 import { CODE_EXTENSIONS, parseName } from '../structure/names.js';
-import { COMPONENT_EXTENSIONS, extensionOf, globMatcher, type MapSettings, type ReuseSettings } from '../reuse/config.js';
+import { COMPONENT_EXTENSIONS, DEFAULT_PRIMITIVE_PATHS, extensionOf, globMatcher, type MapSettings, type ReuseSettings } from '../reuse/config.js';
 import { clashOf, componentName, describeClash, type Clash } from '../reuse/names.js';
 import { readWorktree } from '../reuse/changes.js';
 
@@ -14,6 +14,8 @@ import { readWorktree } from '../reuse/changes.js';
 export interface MapComponent {
   path: string;
   shared: boolean;
+  /** A shared component of the design system or of the structure: in a primitives folder, or named only by its role. */
+  generic: boolean;
   summary: string | null;
   props: string[];
   variants: Record<string, string[]>;
@@ -300,18 +302,38 @@ export function isComponentFile(path: string): boolean {
 }
 
 /**
+ * Every file `path` builds on, from import to import (5 steps at most): a dialog that imports a confirmation dialog built
+ * on the shared dialog composes the shared dialog.
+ */
+export function composes(map: CodeMap, path: string): Set<string> {
+  const imports = new Map<string, string[]>();
+  for (const entry of [...map.components, ...map.modules]) {
+    for (const user of entry.usedBy) imports.set(user, [...(imports.get(user) ?? []), entry.path]);
+  }
+  const reached = new Set<string>();
+  let frontier = [path];
+  for (let depth = 0; depth < 5 && frontier.length; depth++) {
+    const next: string[] = [];
+    for (const file of frontier) for (const target of imports.get(file) ?? []) if (!reached.has(target) && target !== path) { reached.add(target); next.push(target); }
+    frontier = next;
+  }
+  return reached;
+}
+
+/**
  * Shared components `path` may double (rule in src/reuse/names.ts), composition excepted: a component that imports the
- * shared one, or is imported by it, builds on it. With `symmetric` false, two shared components are compared once
+ * shared one (directly or through what it imports, `composes`), or is imported by it, builds on it. With `symmetric` false, two shared components are compared once
  * (the later path against the earlier), which is what the map prints.
  */
 export function clashesFor(map: CodeMap, path: string, families: Readonly<Record<string, readonly string[]>>, symmetric = true): Clash[] {
   const self = map.components.find(c => c.path === path);
   const candidate = componentName(path, families);
   const out: Clash[] = [];
+  const reached = composes(map, path);
   for (const shared of map.components) {
     if (!shared.shared || shared.path === path) continue;
     if (!symmetric && self?.shared && !(shared.path < path)) continue;
-    if (shared.usedBy.includes(path) || (self?.usedBy.includes(shared.path) ?? false)) continue;
+    if (reached.has(shared.path) || (self?.usedBy.includes(shared.path) ?? false)) continue;
     const clash = clashOf(candidate, componentName(shared.path, families));
     if (clash) out.push(clash);
   }
@@ -325,6 +347,7 @@ export async function buildCodeMap(repo: string, reuse: ReuseSettings, settings:
   const read = options.read ?? ((path: string) => readWorktree(repo, path));
   const ignored = globMatcher(settings.ignore);
   const shared = globMatcher(reuse.shared);
+  const primitive = globMatcher([...DEFAULT_PRIMITIVE_PATHS, ...reuse.native.allowedPaths]);
   const skipped = { tests: 0, ignored: 0, silentModules: 0 };
   const sources: string[] = [];
   for (const path of inventory.files) {
@@ -389,7 +412,8 @@ export async function buildCodeMap(repo: string, reuse: ReuseSettings, settings:
     }
     if (isComponentFile(path)) {
       const props = propsOf(text, ext, baseOf(path).split('.')[0]!);
-      components.push({ path, shared: shared(path), summary: summary(path, text, ext), props, variants: variantsOf(text, props), usedBy: users(path), clashes: [] });
+      const isShared = shared(path);
+      components.push({ path, shared: isShared, generic: isShared && (primitive(path) || componentName(path, reuse.roles).generic), summary: summary(path, text, ext), props, variants: variantsOf(text, props), usedBy: users(path), clashes: [] });
       continue;
     }
     for (const declared of declaredRoutes(text)) addRoute(declared.route, `${path}:${declared.line}`);
@@ -461,60 +485,110 @@ export function shares(sizes: readonly number[], total: number): number[] {
   return given;
 }
 
-/** The map as Markdown: sections by folder, bounded in entries (40 per folder, `maxEntries` shared between the sections) and in bytes (`maxBytes`), counts of what is left out. */
+interface Section { title: string; entries: { dir: string; line: string }[]; empty: string; grouped: boolean; rank: number }
+
+/** The entries of a section a count allows: in folder order, 40 per folder at most. */
+function selected(section: Section, count: number): { dir: string; line: string }[] {
+  const out: { dir: string; line: string }[] = [];
+  const perFolder = new Map<string, number>();
+  for (const entry of section.entries) {
+    if (out.length >= count) break;
+    const n = perFolder.get(entry.dir) ?? 0;
+    if (section.grouped && n >= PER_FOLDER) continue;
+    perFolder.set(entry.dir, n + 1);
+    out.push(entry);
+  }
+  return out;
+}
+
+/**
+ * The map as Markdown, bounded in entries (40 per folder, `maxEntries`) and in bytes (`maxBytes`). Every section first
+ * gets a minimum share of the bytes, then the rest goes by priority: the generic components (design system, structure)
+ * first, then the shared modules, the routes, the other shared components, what belongs to one feature. The folders left
+ * out are named, with their count.
+ */
 export function codeMapMarkdown(map: CodeMap, settings: Pick<MapSettings, 'maxEntries'> & { maxBytes?: number }): string {
   const sharedComponents = map.components.filter(c => c.shared);
+  const generic = sharedComponents.filter(c => c.generic);
+  const otherShared = sharedComponents.filter(c => !c.generic);
   const featureComponents = map.components.filter(c => !c.shared);
   const sharedModules = map.modules.filter(m => !m.feature);
   const featureModules = map.modules.filter(m => m.feature);
-  const feature = [...featureComponents.map(c => ({ path: c.path, line: componentLine(c, true) })), ...featureModules.map(m => ({ path: m.path, line: moduleLine(m, true) }))]
-    .sort((a, b) => byBytes(a.path, b.path));
-  // Sections in the order printed; `rank` is the order in which they give up entries when the map is too large
-  // (the shared components last: they are what an agent must see first).
-  const sections = [
-    { title: 'Composants partagés', entries: sharedComponents.map(c => ({ path: c.path, line: componentLine(c, false) })), empty: 'Aucun composant partagé (dossiers de `reuse.shared`).', grouped: true, rank: 3 },
-    { title: 'Modules partagés', entries: sharedModules.map(m => ({ path: m.path, line: moduleLine(m, false) })), empty: 'Aucun module partagé.', grouped: true, rank: 0 },
-    { title: 'Routes', entries: map.routes.map(r => ({ path: r.route, line: routeLine(r) })), empty: 'Aucune route trouvée.', grouped: false, rank: 1 },
-    { title: 'Propre à une fonctionnalité', entries: feature, empty: 'Rien de propre à une fonctionnalité.', grouped: true, rank: 2 },
+  const byPath = <T extends { path: string }>(list: T[], line: (x: T) => string) => list.slice().sort((a, b) => byBytes(a.path, b.path)).map(x => ({ dir: dirOf(x.path), line: line(x) }));
+  // Printed in this order; `rank` 0 is served first when the bytes are shared out.
+  const sections: Section[] = [
+    { title: 'Composants génériques (socle et structure)', entries: byPath(generic, c => componentLine(c, false)), empty: 'Aucun composant générique (dossiers de primitives, ou composants partagés nommés par leur seul rôle).', grouped: true, rank: 0 },
+    { title: 'Autres composants partagés', entries: byPath(otherShared, c => componentLine(c, false)), empty: 'Aucun autre composant partagé (dossiers de `reuse.shared`).', grouped: true, rank: 3 },
+    { title: 'Modules partagés', entries: byPath(sharedModules, m => moduleLine(m, false)), empty: 'Aucun module partagé.', grouped: true, rank: 1 },
+    { title: 'Routes', entries: map.routes.map(r => ({ dir: '', line: routeLine(r) })), empty: 'Aucune route trouvée.', grouped: false, rank: 2 },
+    { title: 'Propre à une fonctionnalité', entries: [...byPath(featureComponents, c => componentLine(c, true)), ...byPath(featureModules, m => moduleLine(m, true))]
+      .sort((a, b) => byBytes(a.dir, b.dir) || byBytes(a.line, b.line)), empty: 'Rien de propre à une fonctionnalité.', grouped: true, rank: 4 },
   ];
   const header = ['# Carte du code', '',
     'Générée par `apv map` à partir des fichiers du dépôt, sans modèle. À lire avant de créer un composant, un module ou une route : réutiliser une entrée existante, ou l\'étendre de façon générique (paramètre, variante) ; un élément utilisé par deux fonctionnalités devient partagé. Ne pas modifier à la main : l\'intégration la régénère (`apv map`), et le contrôle `apv map --check` de la suite complète échoue quand elle ne correspond plus au code.', '',
-    `Composants partagés : ${sharedComponents.length}. Modules partagés : ${sharedModules.length}. Routes : ${map.routes.length}. Propres à une fonctionnalité : ${featureComponents.length} composant(s), ${featureModules.length} module(s). Laissés de côté : ${map.skipped.tests} test(s), ${map.skipped.ignored} fichier(s) ignoré(s), ${map.skipped.silentModules} module(s) sans export ni import.`, '',
+    `Composants génériques : ${generic.length}. Autres composants partagés : ${otherShared.length}. Modules partagés : ${sharedModules.length}. Routes : ${map.routes.length}. Propres à une fonctionnalité : ${featureComponents.length} composant(s), ${featureModules.length} module(s). Laissés de côté : ${map.skipped.tests} test(s), ${map.skipped.ignored} fichier(s) ignoré(s), ${map.skipped.silentModules} module(s) sans export ni import.`, '',
     ...(map.partial ? [`Carte partielle : le dépôt compte ${map.partial.total} fichiers, au-delà de la limite de l'inventaire ; seuls les ${map.partial.described} premiers (ordre des chemins) sont décrits.`, ''] : [])];
   const render = (take: readonly number[]): string => {
     const lines = [...header];
     sections.forEach((section, index) => {
       lines.push(`## ${section.title}`, '');
       if (!section.entries.length) { lines.push(section.empty, ''); return; }
-      let budget = take[index]!;
+      const chosen = selected(section, take[index]!);
       if (!section.grouped) {
-        const shown = section.entries.slice(0, budget);
-        lines.push(...shown.map(e => e.line));
-        if (section.entries.length > shown.length) lines.push(`- et ${plural(section.entries.length - shown.length, 'autre route', 'autres routes')} (liste complète : apv map --json).`);
+        lines.push(...chosen.map(e => e.line));
+        if (section.entries.length > chosen.length) lines.push(`- et ${plural(section.entries.length - chosen.length, 'autre route', 'autres routes')} (liste complète : apv map --json).`);
         lines.push('');
         return;
       }
-      const folders = new Map<string, string[]>();
-      for (const e of section.entries) folders.set(dirOf(e.path), [...(folders.get(dirOf(e.path)) ?? []), e.line]);
-      let hidden = 0;
-      for (const [dir, list] of [...folders].sort((a, b) => byBytes(a[0], b[0]))) {
-        const shown = list.slice(0, Math.min(PER_FOLDER, Math.max(0, budget)));
-        budget -= shown.length;
-        if (!shown.length) { hidden += list.length; continue; }
-        lines.push(`### ${dir}`, '', ...shown);
-        if (list.length > shown.length) lines.push(`- et ${plural(list.length - shown.length, 'autre entrée', 'autres entrées')} dans ce dossier (liste complète : apv map --json).`);
+      const total = new Map<string, number>();
+      for (const e of section.entries) total.set(e.dir, (total.get(e.dir) ?? 0) + 1);
+      const shown = new Map<string, string[]>();
+      for (const e of chosen) shown.set(e.dir, [...(shown.get(e.dir) ?? []), e.line]);
+      for (const [dir, list] of [...shown].sort((a, b) => byBytes(a[0], b[0]))) {
+        lines.push(`### ${dir}`, '', ...list);
+        const rest = total.get(dir)! - list.length;
+        if (rest) lines.push(`- et ${plural(rest, 'autre entrée', 'autres entrées')} dans ce dossier (liste complète : apv map --json).`);
         lines.push('');
       }
-      if (hidden) lines.push(`Et ${plural(hidden, 'autre entrée', 'autres entrées')} dans d'autres dossiers, au-delà de la taille de la carte (liste complète : apv map --json).`, '');
+      const hidden = [...total].filter(([dir]) => !shown.has(dir)).sort((a, b) => byBytes(a[0], b[0]));
+      if (hidden.length) {
+        const named = hidden.slice(0, 15).map(([dir, n]) => `${dir} (${n})`).join(', ');
+        lines.push(`Dossiers non listés, au-delà de la taille de la carte : ${named}${hidden.length > 15 ? `, et ${hidden.length - 15} autre(s)` : ''} (liste complète : apv map --json).`, '');
+      }
     });
     return `${lines.join('\n').replace(/ +$/gm, '').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
   };
-  const take = shares(sections.map(s => s.entries.length), settings.maxEntries);
+  // Entries: the `maxEntries` shares. Bytes: a minimum for every section, then by rank.
+  const limits = shares(sections.map(s => s.entries.length), settings.maxEntries);
   const maxBytes = settings.maxBytes ?? Number.POSITIVE_INFINITY;
+  const cost = (line: string): number => Buffer.byteLength(line) + 1;
+  const headerBytes = Buffer.byteLength(render(sections.map(() => 0)));
+  const budget = Math.max(0, maxBytes - headerBytes - 600 * sections.length);
+  const take = sections.map(() => 0);
+  const used = sections.map(() => 0);
+  const grow = (index: number, allowance: number): void => {
+    const section = sections[index]!;
+    const all = selected(section, limits[index]!);
+    while (take[index]! < all.length) {
+      const entry = all[take[index]!]!;
+      const extra = cost(entry.line) + (section.grouped && !all.slice(0, take[index]).some(e => e.dir === entry.dir) ? Buffer.byteLength(entry.dir) + 7 : 0);
+      if (used[index]! + extra > allowance) break;
+      used[index]! += extra;
+      take[index]!++;
+    }
+  };
+  const floor = Math.floor(budget / 10);
+  sections.forEach((_, index) => grow(index, floor));
+  let left = budget - used.reduce((a, b) => a + b, 0);
+  for (const index of [...sections.keys()].sort((a, b) => sections[a]!.rank - sections[b]!.rank)) {
+    const before = used[index]!;
+    grow(index, before + Math.max(0, left));
+    left -= used[index]! - before;
+  }
   let text = render(take);
-  // Too large: the section of lowest rank gives up a fifth of its entries at a time, then the next one.
+  // Still too large (long folder names, omission lines): the section of highest rank gives up a fifth at a time.
   for (let guard = 0; guard < 400 && Buffer.byteLength(text) > maxBytes; guard++) {
-    const index = [...sections.keys()].sort((a, b) => sections[a]!.rank - sections[b]!.rank).find(i => take[i]! > 0);
+    const index = [...sections.keys()].sort((a, b) => sections[b]!.rank - sections[a]!.rank).find(i => take[i]! > 0);
     if (index === undefined) break;
     take[index] = Math.max(0, take[index]! - Math.max(1, Math.ceil(take[index]! / 5)));
     text = render(take);

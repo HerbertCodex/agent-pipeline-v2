@@ -37,9 +37,10 @@ export declare const DEFAULT_REUSE_IGNORE: readonly ["**/node_modules/**", "**/d
 /**
  * Files a tool writes (database types, clients, schemas), recognised by their name: left out of every rule and listed
  * apart in the report, never counted. A file whose first lines say it is generated (`@generated`, « do not edit »,
- * « auto-generated ») is treated the same way (GENERATED_HEADER).
+ * « auto-generated ») is treated the same way (GENERATED_HEADER), but only when it already said so at the base: a change
+ * that adds the mention is reported, never trusted. An interface file (UI_EXTENSIONS) is never generated.
  */
-export declare const GENERATED_PATHS: readonly ["**/*.generated.*", "**/*.gen.*", "**/generated/**", "**/__generated__/**", "**/*.types.ts", "**/database.types.*", "**/supabase.types.*"];
+export declare const GENERATED_PATHS: readonly ["**/*.generated.*", "**/*.gen.*", "**/generated/**", "**/__generated__/**", "**/database.types.*", "**/supabase.types.*"];
 export declare const GENERATED_HEADER: RegExp;
 /**
  * Where native elements and primitive styles may be written by default: the generic shared components (a design system
