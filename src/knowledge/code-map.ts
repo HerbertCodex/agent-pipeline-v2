@@ -101,6 +101,9 @@ const JS_IMPORTS = [
   /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
 ];
 
+/** A specifier without its query or fragment (`./a.css?inline`, `./icon.svg?raw`, `./x.js#y`): the file it loads. */
+export const withoutQuery = (spec: string): string => spec.replace(/[?#].*$/, '');
+
 /** Imports of a source file: ECMAScript (static, dynamic, `require`) and Python (`import`, `from ... import`). */
 export function importsOf(text: string, ext: string): ImportRef[] {
   const out: ImportRef[] = [];
@@ -114,9 +117,9 @@ export function importsOf(text: string, ext: string): ImportRef[] {
     const names = [...(/\{([^}]*)\}/.exec(clause)?.[1] ?? '').split(',').map(x => x.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0]!.trim()).filter(Boolean)];
     const fallback = /^\s*([A-Za-z_$][\w$]*)/.exec(clause.replace(/\{[^}]*\}/, ''))?.[1];
     if (fallback) names.push(fallback);
-    out.push({ spec: m[2]!, names });
+    out.push({ spec: withoutQuery(m[2]!), names });
   }
-  for (const re of JS_IMPORTS.slice(1)) for (const m of text.matchAll(re)) out.push({ spec: m[1]!, names: [] });
+  for (const re of JS_IMPORTS.slice(1)) for (const m of text.matchAll(re)) out.push({ spec: withoutQuery(m[1]!), names: [] });
   return out;
 }
 

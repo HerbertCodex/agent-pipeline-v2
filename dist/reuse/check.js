@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { posix } from 'node:path';
 import { globToRegExp } from '../db/glob.js';
 import { CODE_EXTENSIONS, parseName } from '../structure/names.js';
-import { buildCodeMap, clashesFor, importsOf } from '../knowledge/code-map.js';
+import { buildCodeMap, clashesFor, importsOf, withoutQuery } from '../knowledge/code-map.js';
 import { nonSourceExtensions } from '../knowledge/languages.js';
 import { listMockups, listMockupsAt } from '../design/registry.js';
 import { loadConfigAtCommit } from '../config/load.js';
@@ -122,7 +122,7 @@ export async function checkReuse(repo, config, options = {}) {
             const at = (spec) => posix.normalize(spec.startsWith('/') ? spec.slice(1) : posix.join(posix.dirname(file), spec));
             if (STYLE_EXTENSIONS.has(ext) || settings.ui.has(ext)) {
                 for (const m of text.matchAll(/@import\s+(?:url\(\s*)?['"]?([^'")\s;]+)|\burl\(\s*['"]?([^'")\s]+)/g)) {
-                    const spec = (m[1] ?? m[2]);
+                    const spec = withoutQuery((m[1] ?? m[2]));
                     if (/^(?:[a-z]+:|#|data:)/i.test(spec))
                         continue;
                     for (const candidate of [at(spec), posix.normalize(spec.replace(/^\//, ''))])
