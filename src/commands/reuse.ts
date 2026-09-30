@@ -50,7 +50,11 @@ export function formatReuse(report: ReuseReport, all: boolean): string {
     for (const f of all ? existing : existing.slice(0, EXISTING_SHOWN)) lines.push(`  [existant] ${place(f)} : ${f.message}`);
     if (!all && existing.length > EXISTING_SHOWN) lines.push(`  et ${existing.length - EXISTING_SHOWN} autre(s) existant(s) (--all pour tout lister).`);
   }
-  if (report.excluded.changed.length) lines.push('', `Fichiers du changement écartés (reuse.ignore, ou déjà exclus à la base au même chemin) : ${report.excluded.changed.length} : ${report.excluded.changed.join(', ')}.`);
+  const WHY = { declared: 'déclarés dans reuse.ignore', base: 'déjà exclus à la base au même chemin', mockup: 'maquettes validées du registre de la base', 'not-strict': 'écartés : ni composant, ni source, ni importés par l\'application' } as const;
+  for (const reason of ['declared', 'base', 'mockup', 'not-strict'] as const) {
+    const list = report.excluded.changed.filter(p => report.excluded.why[p] === reason);
+    if (list.length) lines.push('', `Fichiers du changement ${WHY[reason]} : ${list.length} : ${list.join(', ')}.`);
+  }
   const others = report.excluded.count - report.excluded.changed.length;
   if (others) lines.push('', `Fichiers existants écartés (dépendances, dossiers d'outils, sorties de build, documentation, reuse.ignore) : ${others} (${report.excluded.existing.slice(0, 5).join(', ')}${others > 5 ? ', …' : ''}).`);
   if (report.generated.count) lines.push('', `Fichiers générés laissés de côté : ${report.generated.count} (${report.generated.files.slice(0, 5).join(', ')}${report.generated.count > 5 ? ', …' : ''}), jamais comptés.`);

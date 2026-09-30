@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { posix } from 'node:path';
+import { globToRegExp } from '../db/glob.js';
 import { CODE_EXTENSIONS, parseName } from '../structure/names.js';
 import { buildCodeMap, clashesFor, importsOf, type CodeMap } from '../knowledge/code-map.js';
 import { nonSourceExtensions } from '../knowledge/languages.js';
@@ -48,7 +49,7 @@ export interface ReuseReport {
    * Files left out: by `reuse.ignore`, or by a default exclusion for a file already there at the base. `changed`: every
    * one the change creates or modifies, never truncated; `existing`: the first 20 of the others; `count`: all.
    */
-  excluded: { count: number; changed: string[]; existing: string[] };
+  excluded: { count: number; changed: string[]; why: Record<string, ExcludedReason>; existing: string[] };
 }
 
 export interface ReuseConfig {
@@ -158,30 +159,77 @@ export async function checkReuse(repo: string, config: ReuseConfig, options: Che
   try { mockups = new Set((changes.base.mergeBase ? await listMockupsAt(repo, changes.base.mergeBase) : listMockups(repo)).filter(m => m.state === 'ok' && m.file).map(m => m.file!)); } catch { /* no ledger: none */ }
   // Strict coverage: a component anywhere; a code, interface or style file in a source folder, or imported by the
   // application. A script of the CI or a documentation page is analysed where it is, never forced out of an exclusion.
-  let imported: { exact: Set<string>; suffixes: string[] } | null = null;
-  const importedByApp = (path: string): boolean => {
-    if (!imported) {
-      imported = { exact: new Set(), suffixes: [] };
-      for (const file of changes.files) {
-        const ext = extensionOf(file);
-        if (!(settings.ui.has(ext) || SCRIPT_EXTENSIONS.has(ext) || ext === 'tsx' || ext === 'jsx') || !(SOURCE_ROOTS.test(file) || COMPONENT_EXTENSIONS.has(ext))) continue;
-        for (const ref of importsOf(read(file) ?? '', ext)) {
-          if (ref.spec.startsWith('.')) imported.exact.add(withoutExtensions(posix.normalize(posix.join(posix.dirname(file), ref.spec))));
-          else if (/^(?:\$|~|#|@\/)/.test(ref.spec) && ref.spec.includes('/')) imported.suffixes.push(withoutExtensions(ref.spec.slice(ref.spec.indexOf('/') + 1)));
+  // The import graph of the application, from its sources and components, followed from file to file (5 steps): ES
+  // imports, `import.meta.glob` and `globEager`, `require.context`, CSS `@import` and `url()`.
+  let imported: { exact: Set<string>; suffixes: string[]; files: Set<string> } | null = null;
+  const present = new Set(changes.files);
+  const graph = (): NonNullable<typeof imported> => {
+    if (imported) return imported;
+    const found = { exact: new Set<string>(), suffixes: [] as string[], files: new Set<string>() };
+    const reads = (file: string): void => {
+      const ext = extensionOf(file);
+      const text = read(file) ?? '';
+      const at = (spec: string): string => posix.normalize(spec.startsWith('/') ? spec.slice(1) : posix.join(posix.dirname(file), spec));
+      if (STYLE_EXTENSIONS.has(ext) || settings.ui.has(ext)) {
+        for (const m of text.matchAll(/@import\s+(?:url\(\s*)?['"]?([^'")\s;]+)|\burl\(\s*['"]?([^'")\s]+)/g)) {
+          const spec = (m[1] ?? m[2])!;
+          if (/^(?:[a-z]+:|#|data:)/i.test(spec)) continue;
+          for (const candidate of [at(spec), posix.normalize(spec.replace(/^\//, ''))]) if (present.has(candidate)) found.files.add(candidate);
         }
       }
+      if (!(settings.ui.has(ext) || SCRIPT_EXTENSIONS.has(ext) || ext === 'tsx' || ext === 'jsx')) return;
+      for (const ref of importsOf(text, ext)) {
+        if (ref.spec.startsWith('.')) found.exact.add(withoutExtensions(posix.normalize(posix.join(posix.dirname(file), ref.spec))));
+        else if (/^(?:\$|~|#|@\/)/.test(ref.spec) && ref.spec.includes('/')) found.suffixes.push(withoutExtensions(ref.spec.slice(ref.spec.indexOf('/') + 1)));
+      }
+      // import.meta.glob('./x/*.ts'), globEager, arrays of patterns; require.context('./dir', true, /\.ts$/).
+      for (const m of text.matchAll(/import\.meta\.glob(?:Eager)?\s*(?:<[^>]{0,200}>)?\s*\(\s*(\[[^\]]{0,2000}\]|['"`][^'"`]{1,500}['"`])/g)) {
+        for (const q of m[1]!.matchAll(/['"`]([^'"`]{1,500})['"`]/g)) {
+          const pattern = q[1]!;
+          if (pattern.startsWith('!') || !(pattern.startsWith('.') || pattern.startsWith('/'))) continue;
+          const re = globToRegExp(at(pattern));
+          for (const candidate of changes.files) if (re.test(candidate)) found.files.add(candidate);
+        }
+      }
+      for (const m of text.matchAll(/require\.context\(\s*['"`]([^'"`]{1,500})['"`]\s*(?:,\s*(true|false))?\s*(?:,\s*\/((?:[^/\\\n]|\\.){1,200})\/[a-z]*)?/g)) {
+        const dir = at(m[1]!); const deep = m[2] !== 'false';
+        let re: RegExp | null = null;
+        try { re = m[3] ? new RegExp(m[3]) : null; } catch { re = null; }
+        for (const candidate of changes.files) {
+          if (!candidate.startsWith(`${dir}/`)) continue;
+          const rest = candidate.slice(dir.length + 1);
+          if (!deep && rest.includes('/')) continue;
+          if (!re || re.test(`./${rest}`)) found.files.add(candidate);
+        }
+      }
+    };
+    const seen = new Set<string>();
+    let wave = changes.files.filter(f => SOURCE_ROOTS.test(f) || COMPONENT_EXTENSIONS.has(extensionOf(f)));
+    imported = found;
+    for (let step = 0; step < 5 && wave.length; step++) {
+      for (const file of wave) { seen.add(file); reads(file); }
+      wave = changes.files.filter(f => !seen.has(f) && relevant(extensionOf(f)) && reached(f));
     }
+    return found;
+  };
+  const reached = (path: string): boolean => {
+    const g = imported!;
+    if (g.files.has(path)) return true;
     const key = withoutExtensions(path);
     const dir = key.endsWith('/index') ? key.slice(0, -'/index'.length) : null;
-    return imported.exact.has(key) || (dir !== null && imported.exact.has(dir)) || imported.suffixes.some(s => key === s || key.endsWith(`/${s}`));
+    return g.exact.has(key) || (dir !== null && g.exact.has(dir)) || g.suffixes.some(x => key === x || key.endsWith(`/${x}`));
   };
+  const importedByApp = (path: string): boolean => { graph(); return reached(path); };
   const strict = (path: string): boolean => {
     const ext = extensionOf(path);
     if (COMPONENT_EXTENSIONS.has(ext) || (settings.ui.has(ext) && !UI_EXTENSIONS.has(ext))) return true;
+    // Code and styles in a build output or a vendored folder: always, whatever imports them.
+    if (output(path) && (CODE_EXTENSIONS.has(ext) || STYLE_EXTENSIONS.has(ext))) return true;
     return relevant(ext) && (SOURCE_ROOTS.test(path) || importedByApp(path));
   };
   const generated: string[] = [];
   const excludedChanged: string[] = [];
+  const excludedWhy: Record<string, ExcludedReason> = {};
   const excludedExisting: string[] = [];
   const coverage: { path: string; message: string; severity?: 'warning' }[] = [];
   const header = (text: string | null): boolean => GENERATED_HEADER.test((text ?? '').slice(0, 600));
@@ -189,18 +237,28 @@ export async function checkReuse(repo: string, config: ReuseConfig, options: Che
     const ext = extensionOf(path);
     const counts = relevant(ext);
     const changed = touched(path);
-    const exclude = (): false => { if (counts) (changed ? excludedChanged : excludedExisting).push(path); return false; };
-    if (declaredIgnore(path)) return exclude();
+    const exclude = (why: ExcludedReason): false => {
+      if (counts) {
+        (changed ? excludedChanged : excludedExisting).push(path);
+        if (changed) excludedWhy[path] = why;
+      }
+      return false;
+    };
+    if (declaredIgnore(path)) return exclude('declared');
     if (byDefault(path) || output(path)) {
-      if (!counts || !changed) return exclude();
-      if (mockups.has(path) || atBase(path) || !strict(path)) return exclude();
+      if (!counts || !changed) return exclude('base');
+      if (mockups.has(path)) return exclude('mockup');
+      const held = strict(path);
+      if (!held) return exclude('not-strict');
+      // Already excluded at the base under the same path: accepted, except code and styles of an output folder.
+      if (atBase(path) && !output(path)) return exclude('base');
       coverage.push({ path, message: `fichier créé ou déplacé par le changement dans un dossier exclu par défaut (dépendances, outils, sorties de build, documentation) : il est analysé ; le déclarer dans reuse.ignore de .apv/config.json, avec l'accord de l'opérateur, ou le déplacer.` });
     }
     if (!counts) return true;
     if (changed) {
       const status = readWorktreeStatus(repo, path);
       if (status.text === null) {
-        if (!strict(path)) return exclude();
+        if (!strict(path)) return exclude('not-strict');
         coverage.push({ path, message: `fichier du changement illisible comme texte (${status.reason}) alors que son extension est .${ext} : le contrôle ne peut pas l'analyser ; le ramener à du texte UTF-8 de moins de 2 Mo, ou le déclarer dans reuse.ignore avec l'accord de l'opérateur.` });
         return false;
       }
@@ -219,7 +277,6 @@ export async function checkReuse(repo: string, config: ReuseConfig, options: Che
     return true;
   });
   // A file of the change imports a file of an extension the check does not read: said, never silently skipped.
-  const present = new Set(changes.files);
   for (const path of files.filter(touched)) {
     const ext = extensionOf(path);
     if (!(settings.ui.has(ext) || SCRIPT_EXTENSIONS.has(ext) || ext === 'tsx' || ext === 'jsx')) continue;
@@ -249,7 +306,8 @@ export async function checkReuse(repo: string, config: ReuseConfig, options: Che
     add({ rule: 'coverage', isNew: true, path, line: 1, message: `${kind} ajouté par le changement : son contenu n'est pas analysé par le contrôle ; le retirer, ou le déclarer dans reuse.ignore (configuration de la base, décision de l'opérateur).` }, 'error');
   }
   // A change of the configuration mixed with code blocks; a change of configuration alone (a PR of configuration) is said.
-  const codeTouched = files.some(touched);
+  // Any code, interface or style file of the change, analysed or left out.
+  const codeTouched = changes.files.some(f => touched(f) && relevant(extensionOf(f)));
   for (const item of configFindings) add({ rule: 'coverage', isNew: true, path: item.path, line: 1, message: item.message }, codeTouched ? 'error' : 'warning');
   if (summary.native.active) await nativeRule(settings, files, read, isTest, changes, codeMap, add);
   const primitives = summary.styles.active ? stylesRule(settings, files, read, isTest, changes, add, summary.styles) : { sources: [], count: 0 };
@@ -303,8 +361,14 @@ export async function checkReuse(repo: string, config: ReuseConfig, options: Che
   findings.sort(order);
   return { ok: !findings.some(f => f.blocking), base: changes.base, analyzedFiles: files.length, rules: summary, findings, primitives,
     generated: { count: generated.length, files: generated.slice(0, 20) },
-    excluded: { count: excludedChanged.length + excludedExisting.length, changed: excludedChanged, existing: excludedExisting.slice(0, 20) } };
+    excluded: { count: excludedChanged.length + excludedExisting.length, changed: excludedChanged, why: excludedWhy, existing: excludedExisting.slice(0, 20) } };
 }
+
+/**
+ * Why a file of the change is left out: declared in `reuse.ignore`, already excluded at the base under the same path, a
+ * validated mockup of the base ledger, or neither a component nor a source nor imported by the application.
+ */
+export type ExcludedReason = 'declared' | 'base' | 'mockup' | 'not-strict';
 
 /** The settings of one check, with the interface extensions of the project. */
 type Ctx = ReuseSettings & { ui: Set<string> };

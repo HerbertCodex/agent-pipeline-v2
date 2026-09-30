@@ -528,19 +528,19 @@ test('the review of 3df791a: a generated name or a build folder never hides a ne
   write(f.repo, 'src/lib/vendor/AdminNav.svelte', `<nav class="nav"><select><option>a</option></select></nav>\n<style>\n${sidebar}</style>\n`);
   write(f.repo, 'src/routes/admin/build/+page.svelte', '<select name="b"><option>b</option></select>\n');
   write(f.repo, 'src/.local/Hidden.svelte', '<dialog open>x</dialog>\n');
-  // 4. A build output at the root (and at the root of a package the base knows) that was there at the base stays left
-  // out, and is listed; a new file there is analysed and reported (fail closed).
+  // 4. Code in a build output or a vendored folder, at the root or at the root of a package the base knows, created or
+  // modified by the change: always analysed and reported (review of 322b5fd).
   write(f.repo, 'vendor/bundle.js', `${TOTAL}${TOTAL.replace('total(', 'again(')}`);
   write(f.repo, 'packages/ui/build/index.js', TOTAL.replace('total(', 'built('));
   const r = (await apv(f.repo, ['reuse', 'check', '--base', base, '--json'])).json();
   const native = r.findings.filter(x => x.rule === 'native' && x.blocking).map(x => x.path);
   for (const path of ['src/lib/admin/Nav.generated.svelte', 'src/lib/vendor/AdminNav.svelte', 'src/routes/admin/build/+page.svelte', 'src/.local/Hidden.svelte']) assert.ok(native.includes(path), path);
   assert.ok(r.findings.some(x => x.path === 'src/lib/vendor/AdminNav.svelte' && x.rule === 'duplicates' && x.blocking), 'the side bar styles copied into vendor/');
-  assert.ok(!r.findings.some(x => x.path.startsWith('vendor/')));
-  // A build output of a package the base knows, neither a component nor in a source folder nor imported: left out, listed.
-  assert.deepEqual(r.excluded.changed, ['packages/ui/build/index.js', 'vendor/bundle.js'], JSON.stringify(r.excluded));
-  assert.ok(!r.findings.some(x => x.path === 'packages/ui/build/index.js'));
-  assert.match((await apv(f.repo, ['reuse', 'check', '--base', base])).stdout, /Fichiers du changement écartés[^\n]*vendor\/bundle\.js/);
+  // Code of a build output or a vendored folder (root or package the base knows), created or modified: always held.
+  assert.deepEqual(r.excluded.changed, [], JSON.stringify(r.excluded));
+  for (const path of ['vendor/bundle.js', 'packages/ui/build/index.js']) {
+    assert.ok(r.findings.some(x => x.path === path && x.rule === 'coverage' && x.blocking), path);
+  }
 });
 
 // Fourth review (f28c6fd): the check fails closed.
@@ -620,12 +620,12 @@ test('fail closed 5: a NUL byte or more than 2 MB makes a file of the change a b
 });
 
 test('fail closed 6: the files of the change left out are all listed, never truncated', async t => {
-  const f = closedProject(t, Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`vendor/lib${i}.js`, `export const v${i} = ${i};\n`])));
-  for (let i = 0; i < 25; i++) write(f.repo, `vendor/lib${i}.js`, `export const v${i} = ${i + 1};\n`);
+  const f = closedProject(t, Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`.github/scripts/lib${i}.mjs`, `export const v${i} = ${i};\n`])));
+  for (let i = 0; i < 25; i++) write(f.repo, `.github/scripts/lib${i}.mjs`, `export const v${i} = ${i + 1};\n`);
   const r = await f.check();
   assert.equal(r.excluded.changed.length, 25);
   const text = (await apv(f.repo, ['reuse', 'check', '--base', f.base])).stdout;
-  for (let i = 0; i < 25; i++) assert.ok(text.includes(`vendor/lib${i}.js`), `vendor/lib${i}.js`);
+  for (let i = 0; i < 25; i++) assert.ok(text.includes(`.github/scripts/lib${i}.mjs`), `lib${i}`);
 });
 
 test('fail closed: extensions declared by the framework are read; an unknown one imported by the change is said', async t => {
@@ -755,4 +755,56 @@ test('review 5, low: a validated mockup counts only once the base registers it',
   const registered = git(f.repo, 'rev-parse', 'HEAD');
   const after = (await apv(f.repo, ['reuse', 'check', '--base', registered, '--json'])).json();
   assert.ok(!after.findings.some(x => x.path === 'src/mockups/pay-validee.html'));
+});
+
+// Sixth review (322b5fd): what the application loads is held, and the reason of each exclusion is said.
+
+test('review 6: a copy of styles in vendor/, loaded by @import from src/app.css, blocks', async t => {
+  const nav = ['nav', 'nav__item', 'nav__icon', 'nav__label', 'nav__badge', 'nav__toggle', 'nav__footer'].map(c => `.${c} { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem; }`).join('\n');
+  const f = closedProject(t, { 'src/lib/styles/nav.css': `${nav}\n` });
+  const app = read(f.repo, 'src/app.css');
+  write(f.repo, 'vendor/admin.css', `${nav}\n`);
+  write(f.repo, 'src/app.css', `@import '../vendor/admin.css';\n${app}`);
+  const r = await f.check();
+  assert.ok(r.findings.some(x => x.path === 'vendor/admin.css' && x.rule === 'coverage' && x.blocking));
+  assert.ok(r.findings.some(x => x.path === 'vendor/admin.css' && x.rule === 'duplicates'), 'analysed');
+});
+
+test('review 6: code in a tool folder loaded by import.meta.glob or require.context is held; a CSS url() too', async t => {
+  const f = closedProject(t);
+  write(f.repo, '.github/lib/fmt.ts', TOTAL.replace('total(', 'fmt('));
+  write(f.repo, 'src/lib/loader.ts', "export const all = import.meta.glob(['../../.github/lib/*.ts', '!../../.github/lib/skip.ts']);\n");
+  write(f.repo, '.cache/ctx/one.js', TOTAL.replace('total(', 'one('));
+  write(f.repo, 'src/lib/context.js', "export const ctx = require.context('../../.cache/ctx', true, /\\.js$/);\n");
+  write(f.repo, '.cache/fonts/face.css', '.btn { padding: 0; }\n');
+  write(f.repo, 'src/lib/fonts.css', "@font-face { src: url('../../.cache/fonts/face.css'); }\n");
+  const r = await f.check();
+  for (const path of ['.github/lib/fmt.ts', '.cache/ctx/one.js', '.cache/fonts/face.css']) {
+    assert.ok(r.findings.some(x => x.path === path && x.rule === 'coverage' && x.blocking), path);
+  }
+  assert.ok(r.findings.some(x => x.path === '.github/lib/fmt.ts' && x.rule === 'duplicates' && x.blocking), 'analysed');
+});
+
+test('review 6: the reason of each exclusion is said: declared, already excluded at the base, neither component nor source nor imported', async t => {
+  const f = closedProject(t, { '.apv/config.json': JSON.stringify({ reuse: { ignore: ['legacy/**'] } }), '.github/old.mjs': 'export const a = 1;\n' });
+  write(f.repo, 'legacy/old.ts', 'export const b = 2;\n');
+  write(f.repo, '.github/old.mjs', 'export const a = 2;\n');
+  write(f.repo, '.github/new.mjs', 'export const c = 3;\n');
+  const r = await f.check();
+  assert.deepEqual(r.excluded.why, { '.github/new.mjs': 'not-strict', '.github/old.mjs': 'not-strict', 'legacy/old.ts': 'declared' });
+  const text = (await apv(f.repo, ['reuse', 'check', '--base', f.base])).stdout;
+  assert.match(text, /Fichiers du changement déclarés dans reuse\.ignore : 1 : legacy\/old\.ts\./);
+  assert.match(text, /Fichiers du changement écartés : ni composant, ni source, ni importés par l'application : 2 : \.github\/new\.mjs, \.github\/old\.mjs\./);
+  // Already excluded at the base under the same path: a tool file under src/ (strict by its folder).
+  const g = closedProject(t, { 'src/.vscode/settings.ts': 'export const s = 1;\n' });
+  write(g.repo, 'src/.vscode/settings.ts', 'export const s = 2;\n');
+  assert.equal((await g.check()).excluded.why['src/.vscode/settings.ts'], 'base');
+});
+
+test('review 6, low: a change of configuration next to a left-out code file is not a configuration-only PR', async t => {
+  const f = await configured(t);
+  write(f.repo, '.github/scripts/new.mjs', 'export const x = 1;\n');
+  write(f.repo, '.apv/config.json', { ...f.config(), reuse: { ignore: ['src/**'] } });
+  const r = await f.check();
+  assert.ok(configBlocked(r), 'blocking: the change carries code too');
 });

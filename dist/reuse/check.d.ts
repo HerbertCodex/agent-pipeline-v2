@@ -47,6 +47,7 @@ export interface ReuseReport {
     excluded: {
         count: number;
         changed: string[];
+        why: Record<string, ExcludedReason>;
         existing: string[];
     };
 }
@@ -75,3 +76,8 @@ export interface CheckOptions {
  * history adopts the check without first cleaning everything.
  */
 export declare function checkReuse(repo: string, config: ReuseConfig, options?: CheckOptions): Promise<ReuseReport>;
+/**
+ * Why a file of the change is left out: declared in `reuse.ignore`, already excluded at the base under the same path, a
+ * validated mockup of the base ledger, or neither a component nor a source nor imported by the application.
+ */
+export type ExcludedReason = 'declared' | 'base' | 'mockup' | 'not-strict';
