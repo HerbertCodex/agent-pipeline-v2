@@ -58,6 +58,9 @@ function reuseProblems(report, where) {
     if (!entry || typeof entry !== 'object' || typeof entry.item !== 'string' || !entry.item.trim()) return problems.push(at + ' : élément absent (item)')
     if (!REUSE_DECISIONS.includes(entry.decision)) return problems.push(at + ' : décision inconnue « ' + String(entry.decision) + ' » (reused, extended, added)')
     if (entry.decision !== 'added' && (typeof entry.mapEntry !== 'string' || !entry.mapEntry.trim())) problems.push(at + ' : entrée de la carte du code absente (mapEntry) pour ' + entry.item)
+    // An entry of the map is a path of the repository (`src/lib/components/ui/Select.svelte`), never a sentence.
+    else if (entry.decision !== 'added' && !/^[^\s]+\/[^\s]+$/.test(entry.mapEntry.trim())) problems.push(at + ' : mapEntry « ' + entry.mapEntry + ' » n\'est pas un chemin de la carte du code (dossier/fichier)')
+    else if (entry.decision === 'reused' && entry.mapEntry.trim() === entry.item.trim()) problems.push(at + ' : ' + entry.item + ' se réutilise lui-même (reused) : c\'est extended, ou une autre entrée de la carte')
     if (entry.decision === 'added' && (typeof entry.justification !== 'string' || !entry.justification.trim())) problems.push(at + ' : ajout sans justification (justification) pour ' + entry.item)
   })
   return problems
@@ -147,7 +150,7 @@ function prompt(task) {
     '   Sinon, tests navigateur : seulement les fichiers e2e que tu as créés ou modifiés, sous `' + APV + ' lock run e2e -- <commande du projet> <fichiers>` (par exemple `npx playwright test <fichiers>`) ; aucun fichier e2e touché, rien à lancer. Jamais la suite navigateur entière.',
     '   Test instable : répète seulement le test en cause (`<fichier>:<ligne>` ou `-g "<titre>"`), `--repeat-each` 20 au plus, sous le verrou `e2e` ; jamais un fichier entier répété sous le verrou. Cherche d\'abord un clic pendant une animation : attends l\'état stable, pas un délai fixe. Projet à interface : tests navigateur en mouvement réduit par défaut (Playwright `reducedMotion: \'reduce\'`), sauf les tests d\'animation.',
     '   Projet sans contrôle marqué `full` : `--stage task` exécute déjà tout, comme avant. Autres ressources partagées sous bail (`' + APV + ' lock run <ressource> -- <commande>`).',
-    '   Composant, module ou route ajouté, déplacé ou retiré : `' + APV + ' map`, puis `.apv/code-map.md` commité avec le changement (contrôle `code-map`). Un contrôle `reuse` rouge (bloc copié, élément natif réservé, primitive de style redéfinie) se corrige en réutilisant ou en factorisant, jamais en baissant sa gravité ni en élargissant `reuse.ignore`.',
+    '   La carte du code ne se commite pas dans une tâche (l\'intégration la régénère une fois par vague, `' + APV + ' map`) : ne commite jamais `.apv/code-map.md`. Un contrôle `reuse` rouge (bloc copié, élément natif réservé, primitive de style redéfinie) se corrige en réutilisant ou en factorisant, jamais en baissant sa gravité ni en élargissant `reuse.ignore`.',
     '2. Tout est commité sur `' + task.branch + '` ; aucun fichier non commité.',
     '3. `' + APV + ' scope check --spec ' + input.specFile + ' --task ' + task.id + ' --base ' + input.baseCommit + '` : note son résultat et chaque fichier hors périmètre avec sa raison.',
     '4. Ne pousse pas, ne fusionne pas, ne réécris aucun commit.',

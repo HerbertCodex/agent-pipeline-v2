@@ -9,7 +9,7 @@ APV3 y répond à quatre endroits, pour toute pile :
 | Où | Quoi |
 |---|---|
 | Consigne | `agents/implementer.md`, le modèle de consigne commune (`.apv/brief.md`), l'architecte, les compétences `clean-code`, `refactoring`, `ui-design` et `design` : lire la carte du code avant de créer, réutiliser ou étendre de façon générique, jamais de copie par fonctionnalité, partager ce que deux fonctionnalités utilisent, retirer ce que le changement rend inutile, valeurs typographiques insécables. Le rapport d'un implementer cite l'entrée de la carte réutilisée ou justifie l'ajout (champ `reuse` du workflow `apv:vague`, refusé s'il manque). |
-| Carte du code | `apv map` écrit `.apv/code-map.md` ; le contrôle `code-map` (`apv map --check`) échoue quand elle ne correspond plus au code. |
+| Carte du code | `apv map` écrit `.apv/code-map.md` ; le contrôle `code-map` (`apv map --check`, suite complète) échoue quand elle ne correspond plus au code. L'intégration la régénère une fois par vague ; les tâches ne la commitent pas. |
 | Contrôle automatique | `apv reuse check` (contrôle `reuse`) : éléments natifs réservés, primitives de style redéfinies, blocs copiés, composants homonymes, valeurs typographiques sécables. |
 | Relecture | point obligatoire de la revue `fidelite` (`agents/qa-fidelite.md`, workflow `apv:revues`, `/apv:review`) : « pour chaque nouveau composant ou bloc d'interface, quel composant existant aurait dû servir ? », gravité `eleve` quand un équivalent partagé existe et n'est pas utilisé. |
 
@@ -21,18 +21,20 @@ APV3 y répond à quatre endroits, pour toute pile :
 apv map [--check] [--repo <chemin>] [--json]
 ```
 
-La carte est construite depuis l'inventaire du dépôt (`src/knowledge/inventory.ts`, le même que celui de `apv spec validate`), sur l'arbre de travail : fichiers suivis présents et fichiers non suivis non ignorés, jamais les fichiers ignorés. Elle est déterministe (tri par octets, aucun identifiant de commit, aucune date), sans modèle, et bornée pour rester lisible par un agent : sections par dossier, 40 entrées par dossier, `map.maxEntries` (400) en tout ; ce qui dépasse est compté, jamais listé (`apv map --json` donne tout).
+La carte est construite depuis l'inventaire du dépôt (`src/knowledge/inventory.ts`, le même que celui de `apv spec validate`), sur l'arbre de travail : fichiers suivis présents et fichiers non suivis non ignorés, jamais les fichiers ignorés. Elle est déterministe (tri par octets, aucun identifiant de commit, aucune date), sans modèle, et bornée pour rester lisible par un agent à chaque tâche : sections par dossier, 40 entrées par dossier, `map.maxEntries` (400) en tout, et `map.maxBytes` (32 Ko) ; quand elle est trop grande, les modules partagés cèdent des entrées d'abord, puis les routes, puis ce qui est propre à une fonctionnalité, les composants partagés en dernier. Ce qui dépasse est compté, jamais listé (`apv map --json` donne tout). Un dépôt au-delà de la limite de l'inventaire (50 000 fichiers) reçoit une carte partielle, qui le dit, jamais un échec. Les fichiers non suivis y figurent sans résumé (un fichier non commité peut contenir ce que personne n'a décidé de publier), et un résumé masque ce qui ressemble à un secret (clés d'API, jetons, longues chaînes aléatoires).
 
 | Section | Contenu |
 |---|---|
-| Composants partagés | composants des dossiers `reuse.shared` : rôle en une ligne (commentaire `@component` ou premier commentaire du fichier), props (Svelte `$props()` et `export let`, Vue `defineProps`, Astro `Astro.props`, React paramètres ou `XxxProps`), variantes (unions de chaînes d'une prop : `variant (primary / ghost)`), où ils sont utilisés (nombre de fichiers, trois exemples) |
-| Modules partagés | modules hors des dossiers de routes qui exportent quelque chose ou sont importés : rôle, exports (fonctions suivies de `()`), utilisateurs |
+| Composants partagés | composants des dossiers `reuse.shared` : rôle en une ligne (commentaire `@component` ou premier commentaire du fichier), props (Svelte `$props()` et `export let`, Vue `defineProps`, Astro `Astro.props`, React paramètres ou `XxxProps`), variantes (unions de chaînes d'une prop : `variant (primary / ghost)`), où ils sont utilisés (nombre de fichiers, deux exemples) |
+| Modules partagés | modules hors des dossiers de routes qui exportent quelque chose ou sont importés : rôle, exports (six au plus, fonctions suivies de `()`), utilisateurs (nombre, un exemple) |
 | Routes | routeurs à fichiers (SvelteKit `routes/**/+page`, Remix `app/routes`, Next.js `app/**/page` et `pages/`, Nuxt et Astro `pages/`) et routes déclarées dans le code (`app.get('/x')`, `@router.post("/x")`...) |
-| Propre à une fonctionnalité | composants hors des dossiers partagés, modules des dossiers de routes, avec les **doublons possibles** (règle des noms, section 2.4) |
+| Propre à une fonctionnalité | composants hors des dossiers partagés, modules des dossiers de routes, avec les **doublons possibles** (règle des noms, section 2.6) |
 
-Un composant « utilisé nulle part » est un candidat au retrait. Les usages sont lus dans les imports ECMAScript (statiques, dynamiques, `require`), y compris par un fichier d'index qui réexporte, et Python ; les chemins relatifs sont résolus exactement, les alias (`$lib/`, `@/`, `~/`, `#`) par suffixe. Les tests ne comptent pas comme usage.
+Un composant « utilisé nulle part » est un candidat au retrait. Les usages sont lus dans les imports ECMAScript (statiques, dynamiques, `require`), y compris par un fichier d'index qui réexporte, et Python ; les chemins relatifs sont résolus exactement, les alias (`$lib/`, `@/`, `~/`, `#`) par suffixe ; les modules du framework (`$app/`, `$env/`, `virtual:`) ne sont jamais des fichiers du projet. Les tests ne comptent pas comme usage.
 
-`apv map` écrit la carte si elle a changé ; `apv map --check` la compare seulement et sort en `1` si elle est absente ou périmée, avec les lignes attendues et celles qui ne le sont plus. **À commiter avec le code qu'elle décrit** : un changement qui ajoute, déplace ou retire un composant, un module, une route ou un import d'un élément partagé la rend périmée. Un conflit de fusion sur la carte ne se résout jamais à la main : `apv map` après la fusion.
+`apv map` écrit la carte si elle a changé, atomiquement (fichier temporaire créé en exclusivité, puis renommé) ; `apv map --check` la compare seulement et sort en `1` si elle est absente ou périmée, avec les lignes attendues et celles qui ne le sont plus. Aucun élément du chemin de la carte ne peut être un lien symbolique, et elle reste dans le dépôt une fois résolue (refus `MAP_PATH`) : une carte liée vers un fichier extérieur n'est jamais lue dans la sortie ni écrasée.
+
+**Qui la régénère.** Un changement qui ajoute, déplace ou retire un composant, un module, une route, ou qui **ajoute un import** d'un élément partagé (son nombre d'utilisateurs change), rend la carte périmée. Les tâches ne la commitent pas : des tâches parallèles se disputeraient le même fichier. L'intégration (l'intégrateur, ou le chef de projet pour une tâche seule) lance `apv map` une fois sur la tête intégrée et commite la carte à part ; le contrôle `code-map` est à l'étape `full`, il vérifie la carte de la suite complète. `apv scope check` signale une carte commitée par une tâche, avec la commande qui la retire. Un conflit de fusion sur la carte ne se résout jamais à la main : `apv map` après la fusion. Une tâche qui a besoin de la carte à jour pour elle-même lance `apv map` en local, sans commit.
 
 ## 2. Le contrôle `apv reuse check`
 
@@ -42,34 +44,36 @@ apv reuse check [--base <ref>] [--all] [--repo <chemin>] [--json]
 
 ### 2.1 Nouveau ou existant
 
-Ce que le changement ajoute (lignes ajoutées ou modifiées, fichiers créés, depuis la base commune de la base et de HEAD, arbre de travail compris) est **nouveau** ; le reste est **existant**. Seul un constat nouveau de gravité `error` est bloquant (sortie `1`) ; un constat existant est signalé sans bloquer, pour qu'un projet qui a un historique adopte le contrôle sans tout nettoyer d'abord. La base est `--base <ref>` (tout commit), sinon `reuse.reference` (la branche où vont les PR, `origin/main` par exemple, résolue par sa ref complète comme `skipWhenOnly.reference` : introuvable ou ambiguë, refus `REUSE_BASE`, sortie `1`, « récupérez-la (git fetch) »). Sans l'une ni l'autre, tout compte comme nouveau.
+Ce que le changement ajoute (lignes ajoutées ou modifiées, fichiers créés, depuis la base commune de la base et de HEAD, arbre de travail compris) est **nouveau** ; le reste est **existant**. Seul un constat nouveau de gravité `error` est bloquant (sortie `1`) ; un constat existant est signalé sans bloquer, pour qu'un projet qui a un historique adopte le contrôle sans tout nettoyer d'abord. La base est `--base <ref>` (tout commit ; le contrôle déclaré passe `{{baseSha}}`, la base du passage, qui entre dans la clé de preuve de chaque reçu : une ref de suivi déplacée par `git update-ref` ne rend jamais une copie « existante »), sinon `reuse.reference` (la branche où vont les PR, `origin/main` par exemple, résolue par sa ref complète comme `skipWhenOnly.reference` : introuvable ou ambiguë, refus `REUSE_BASE`, sortie `1`, « récupérez-la (git fetch) »). Sans l'une ni l'autre, tout compte comme nouveau. Sans base commune (clone superficiel, historiques sans lien) : refus `REUSE_BASE`, « git fetch --unshallow ».
 
-Sortie : `0` aucun constat bloquant, `1` au moins un, une configuration invalide ou une référence introuvable, `2` appel incorrect. Texte : une section par règle (gravité, nombre de nouveaux et d'existants, puis chaque constat nouveau et les 5 premiers existants ; `--all` les liste tous). JSON : `ok`, `base` (`source` : `option`, `reference` ou `none` ; `ref` ; `mergeBase`), `analyzedFiles`, `rules` (par règle : `severity`, `active`, `note`, `new`, `existing`), `findings` (`rule`, `severity`, `isNew`, `blocking`, `path`, `line`, `endLine`, `other`, `message`), `primitives`.
+Sortie : `0` aucun constat bloquant, `1` au moins un, une configuration invalide ou une référence introuvable, `2` appel incorrect. Texte : une section par règle (gravité, nombre de nouveaux et d'existants, puis chaque constat nouveau et les 5 premiers existants ; `--all` les liste tous). JSON : `ok`, `base` (`source` : `option`, `reference` ou `none` ; `ref` ; `mergeBase`), `analyzedFiles`, `rules` (par règle : `severity`, `active`, `note`, `new`, `existing`), `findings` (`rule`, `severity`, `isNew`, `blocking`, `path`, `line`, `endLine`, `other`, `message`), `primitives`, `generated` (`count`, `files`).
 
 ### 2.2 Règles
 
 | Règle | Défaut | Constat |
 |---|---|---|
 | `native` | `error` | élément natif réservé (`select`, `dialog`, `datalist` par défaut) écrit dans un fichier d'interface (`.svelte`, `.vue`, `.tsx`, `.jsx`, `.astro`, `.html`, `.hbs`, `.erb`, `.ejs`, `.njk`, `.twig`, `.liquid`, `.mdx`) hors de `native.allowedPaths` ; le message nomme le composant partagé à utiliser |
-| `styles` | `error` | primitive de la feuille globale redéfinie dans un style local |
-| `duplicates` | `error` | bloc copié (paires `fichier:lignes`) |
+| `styles` | `error` | primitive de la feuille globale redéfinie dans un style local, ou retouchée sous une classe du composant ailleurs que dans sa mise en page |
+| `duplicates` | `error` | bloc copié (paires `fichier:lignes`) ; styles seuls copiés : `warning` (`duplicates.styles`) |
 | `names` | `warning` | nouveau composant dont le nom ou le rôle doublonne un composant partagé |
 | `typography` | `warning` | heure, date, montant, nombre et unité séparés par une espace sécable, dans une langue qui l'interdit |
 
-Chaque règle se règle en `off`, `warning` ou `error` (`reuse.severity`). Les chemins de `reuse.ignore` et les dossiers ignorés par défaut (dépendances, sorties de build, dossiers qui commencent par un point, `docs/**` où vivent les maquettes, fichiers minifiés ou générés, `*.d.ts`, le dossier `design.dir`) sont laissés de côté par toutes les règles ; les tests aussi (sauf pour la carte, qui les compte à part).
+Chaque règle se règle en `off`, `warning` ou `error` (`reuse.severity`). Les chemins de `reuse.ignore` et les dossiers ignorés par défaut (dépendances, sorties de build, dossiers qui commencent par un point, `docs/**` où vivent les maquettes, fichiers minifiés, `*.d.ts`, le dossier `design.dir`) sont laissés de côté par toutes les règles ; les tests aussi (sauf pour la carte, qui les compte à part).
+
+**Fichiers générés.** Un fichier écrit par un outil (types de base de données, clients d'API, schémas) répète des blocs par construction : les types Supabase (`database.types.ts`) ont des blocs `Insert` et `Update` identiques pour chaque table. Il est reconnu par son nom (`*.generated.*`, `*.gen.*`, `generated/`, `__generated__/`, `*.types.ts`, `database.types.*`, `supabase.types.*`) ou par ses 600 premiers caractères (`@generated`, « do not edit », « auto-generated », « this file was generated », « code generated by … do not edit », « généré automatiquement », « fichier généré … ne pas modifier » ; une simple mention d'une génération ne suffit pas), laissé de côté par toutes les règles et listé à part dans le rapport (`generated`), jamais compté.
 
 ### 2.3 Éléments natifs réservés (`native`)
 
-`native.elements` associe à chaque élément réservé le composant partagé qui le remplace : `{ "select": "src/lib/components/ui/Select.svelte", "dialog": null }`. Un sélecteur est un nom d'élément en minuscules (`select`) ou un élément et une valeur d'attribut (`input[type=date]`, qui reconnaît aussi `type={'date'}`). `null` : l'outil cherche dans la carte un composant partagé du même rôle (liste déroulante pour `select` et `datalist`, dialogue pour `dialog`) et le nomme ; sinon le message demande d'en créer un, paramétrable, dans les dossiers partagés. Seules les balises en minuscules comptent (`<Select>` est un composant), commentaires exclus. `native.allowedPaths` (par défaut `shared`) : là où ces éléments restent permis, les primitives qui les enveloppent.
+`native.elements` associe à chaque élément réservé le composant partagé qui le remplace : `{ "select": "src/lib/components/ui/Select.svelte", "dialog": null }`. Un sélecteur est un nom d'élément en minuscules (`select`) ou un élément et une valeur d'attribut (`input[type=date]`, qui reconnaît aussi `type={'date'}`). `null` : l'outil cherche dans la carte un composant partagé du même rôle (liste déroulante pour `select` et `datalist`, dialogue pour `dialog`) et le nomme ; sinon le message demande d'en créer un, paramétrable, dans les dossiers partagés. Le composant proposé est toujours **générique** (son nom n'est que son rôle : `Select`, `Dialog`, `Dropdown`), celui des dossiers de primitives d'abord (`ui/Select` plutôt que `Dropdown`), jamais un composant propre à une fonctionnalité (`AddDeviceDialog`) ; sans composant générique, aucun n'est proposé. Seules les balises en minuscules du balisage comptent (`<Select>` est un composant) : commentaires, blocs `<script>` et, dans un fichier JSX, commentaires et chaînes qui ne sont pas des valeurs d'attribut sont exclus. `native.allowedPaths` (par défaut les composants partagés génériques : `**/components/ui/**`, `**/ui/**`, `**/primitives/**`, `**/design-system/**`, `**/shared/**`, `**/common/**`, jamais le dossier `components` d'une fonctionnalité) : là où ces éléments restent permis, les primitives qui les enveloppent. Le composant qui remplace un élément n'est jamais signalé pour lui-même.
 
 ### 2.4 Primitives de style (`styles`)
 
-Les **primitives** sont les classes qui ouvrent une règle de premier niveau de la feuille globale (`.btn`, `.btn--primary`, `.input` ; dans `@media`, `@layer`, `@supports` compris ; `@utility nom` de Tailwind 4 aussi), plus `styles.selectors` (`.pill--*` pour un préfixe), moins `styles.except`. Feuille globale : `styles.sources`, sinon celles de la liste par défaut présentes dans le dépôt (`src/app.css`, `src/app.scss`, `src/styles/global.css`, `app/globals.css`, `styles/globals.css`...), plus les feuilles du dépôt qu'elles importent par un chemin relatif (`@import './styles/buttons.css'`). Sans feuille ni sélecteur, la règle est inactive et le dit.
+Les **primitives** sont les classes de base des règles de premier niveau de la feuille globale : la première classe du premier composé (`.btn`, `.btn--primary`, `.input` ; `.btn.active` et `.btn:hover` donnent `btn` seulement ; dans `@media`, `@layer`, `@supports` compris ; `@utility nom` de Tailwind 4 aussi). Une règle du document, d'un thème ou d'un état (`:root`, `html`, `body`, `[data-theme]`, `.dark`, `.light`, `.theme-*`, `.active`, `.open`, `.disabled`, `.is-*`, `.has-*`...) ou sans classe (`a:hover`) n'en donne aucune ; plus `styles.selectors` (`.pill--*` pour un préfixe), moins `styles.except`. Feuille globale : `styles.sources`, sinon celles de la liste par défaut présentes dans le dépôt (`src/app.css`, `src/app.scss`, `src/styles/global.css`, `app/globals.css`, `styles/globals.css`...), plus les feuilles du dépôt qu'elles importent par un chemin relatif (`@import './styles/buttons.css'`). Sans feuille ni sélecteur, la règle est inactive et le dit.
 
-Les styles locaux lus : les blocs `<style>` des fichiers d'interface et les feuilles de style hors des sources et de `styles.allowedPaths` (par défaut `shared`). Règle, simple et vérifiable à la main :
+Les styles locaux lus : les blocs `<style>` des fichiers d'interface et les feuilles de style hors des sources et de `styles.allowedPaths` (par défaut les mêmes composants génériques que `native.allowedPaths`). Règle, simple et vérifiable à la main :
 - le sélecteur est d'abord déballé (`:global(.btn)`, `:deep(.btn)`, `::v-deep`, `:is()`, `:where()` deviennent `.btn`) et les règles imbriquées aplaties (`.card { .btn {} }` donne `.card .btn`, `&.x` donne `.card.x`) ;
 - une primitive dans le **premier composé** du sélecteur (`.btn`, `.btn:hover`, `.btn.mine`) est une **redéfinition** : constat ;
-- une primitive seulement après un combinateur, sous une classe du composant (`.panel .btn`, `.own > .input`), est un **ajustement imbriqué** : constat aussi, sauf si `styles.nested` vaut `"allow"`.
+- une primitive seulement après un combinateur, sous une classe du composant (`.panel .btn`, `.own > .input`), est un **ajustement imbriqué**. Avec `styles.nested: "layout"` (défaut), il est accepté s'il ne déclare que de la mise en page (marges, largeur, alignement, ordre, placement dans une grille ou un flex, position, `display`) et refusé s'il touche l'apparence (couleur, fond, bordure, rayon, hauteur, marges internes, police, ombre...) ; `"refuse"` les refuse tous, `"allow"` les accepte tous.
 
 Une variante manquante s'ajoute à la primitive (feuille globale) ou au composant partagé, jamais par une copie locale.
 
@@ -78,23 +82,24 @@ Une variante manquante s'ajoute à la primitive (feuille globale) ou au composan
 Détecteur de clones exacts par jetons, écrit dans l'outil : la méthode de jscpd (fenêtres de `minTokens` jetons comparées par empreinte roulante de Rabin-Karp, puis étendues tant que les deux copies restent égales), sans dépendance. Raisons de ce choix plutôt que jscpd (libre, MIT) : l'outil `apv` n'a aucune dépendance d'exécution et ne télécharge rien pendant une preuve ; le détecteur lit le contenu d'un fichier à la base commune (`git show`) pour dire si un bloc était déjà copié, ce qu'un outil externe ne fait pas ; le résultat est le même sur toutes les piles et toutes les machines.
 
 - Jetons : identifiants, nombres, chaînes (une chaîne entre guillemets s'arrête en fin de ligne, un gabarit peut en couvrir plusieurs) et chaque autre caractère ; espaces et commentaires ignorés (`//`, `/* */`, `<!-- -->`, `#` pour Python, Ruby, YAML...). Les instructions `import` et `export ... from` (ECMAScript, Python) sont effacées : deux pages qui importent les mêmes composants ne sont pas une copie.
-- Seuils : `duplicates.minTokens` (50) et `duplicates.minLines` (5, sur chacune des deux copies), comme jscpd par défaut. Une copie est ramenée aux lignes qu'elle couvre entièrement.
+- Seuils : `duplicates.minTokens` (50) et `duplicates.minLines` (5, sur chacune des deux copies), comme jscpd par défaut. Une copie est ramenée aux lignes qu'elle couvre entièrement. Un opérateur (`=>`, `===`) compte pour un jeton.
+- **Styles copiés** : une copie dont les deux côtés sont des styles (feuilles de style, blocs `<style>`) a sa propre gravité, `duplicates.styles`, `warning` par défaut. Choix : des déclarations répétées (`display: flex; align-items: center`) sont souvent légitimes dans un composant, et la règle `styles` bloque déjà ce qui compte, la redéfinition d'une primitive ; une copie de styles reste signalée (« les mettre dans une primitive ou une variante partagée »), et `"error"` la rend bloquante. Une copie qui couvre aussi le balisage ou le script reste un bloc de code, bloquant.
 - Fichiers : code, balisage et styles (`duplicates.paths` pour restreindre), tests exclus, `duplicates.ignore` en plus.
 - **Nouveau** : un bloc dont l'une des copies contient une ligne ajoutée ou modifiée par le changement, sauf si la même suite de jetons existait déjà dans les deux fichiers à la base commune (un bloc seulement déplacé, ou raccourci, reste existant). Modifier les deux copies d'un bloc déjà dupliqué en fait un bloc nouveau : c'est le moment de le factoriser.
-- Sortie : `fichier:début-fin` de la copie, `other` pour l'autre, nombre de lignes et de jetons. Un bloc copié trois fois donne deux paires, chacune avec la première copie.
+- Sortie : `fichier:début-fin` de la copie, `other` pour l'autre, nombre de lignes et de jetons. Le constat porte sur le côté que le changement ajoute ou modifie, jamais sur l'original. Un bloc copié trois fois donne deux paires, chacune avec la première copie.
 
 ### 2.6 Composants homonymes ou redondants (`names`)
 
 S'appuie sur la carte du code (section 1). Pour chaque composant **créé** par le changement (tous sans base), comparé à chaque composant partagé, par une règle que chacun peut refaire à la main :
 - **même nom** : les mêmes mots (`admin/Toast.svelte` et `ui/Toast.svelte`) ;
 - **nom construit sur lui** : le nom partagé commence ou termine l'autre (`AdminToast` et `Toast`, `SelectField` et `Select`) ;
-- **même rôle** : les deux noms finissent par un mot de la même famille de rôles (`Snackbar` et `Toast`, `AdminLayout` et `AppShell`), ou le nouveau est une coquille (`shell`, `layout`, `frame`...) à côté d'une barre latérale, d'une barre du haut ou d'une barre d'onglets partagées.
+- **même rôle** : le composant partagé est générique (son nom n'est que son rôle, `Toast`, `AppShell`, `TabBar`, `ToastRegion`) et le nouveau finit par un mot de la même famille (`Snackbar` et `Toast`, `AdminLayout` et `AppShell`), ou le nouveau est une coquille (`shell`, `layout`, `frame`...) à côté d'une barre latérale, d'une barre du haut ou d'une barre d'onglets partagées. Deux composants spécifiques d'une même famille (`AddDeviceDialog`, `ConfirmDialog`) font des choses différentes : pas de constat.
 
-Les mots d'un nom viennent de sa casse (`AdminToast` : admin, toast) ; les mots de position finaux (`Container`, `Wrapper`, `Provider`, `List`, `Item`...) sont retirés avant de lire le rôle ; un mot composé se lit joint (`TabBar` : `tabbar`). Familles par défaut : coquille, barre latérale, barre du haut, barre d'onglets, toast, dialogue, tiroir, liste déroulante, sélecteur de date, menu, bulle, bouton, icône, champ, case à cocher, onglets, carte, badge, tableau, pagination, indicateur de chargement, squelette, alerte, avatar, fil d'Ariane, accordéon, état vide (`src/reuse/config.ts`) ; `names.roles` en ajoute ou en retire. **Composition** : un composant qui importe le composant partagé, ou que celui-ci importe, s'appuie sur lui : pas de constat. Un constat par composant, qui liste tous les partagés concernés. Avertissement par défaut : la règle invite à regarder, elle ne prouve pas une copie.
+Les mots d'un nom viennent de sa casse (`AdminToast` : admin, toast) ; les mots de position finaux (`Container`, `Wrapper`, `Provider`, `List`, `Item`...) sont retirés avant de lire le rôle ; un mot composé se lit joint (`TabBar` : `tabbar`). Familles par défaut : coquille, barre latérale, barre du haut, barre d'onglets, toast, dialogue, tiroir, liste déroulante, sélecteur de date, menu, bulle, bouton, icône, champ, case à cocher, onglets, carte, badge, tableau, pagination, indicateur de chargement, squelette, alerte, avatar, fil d'Ariane, accordéon, état vide (`src/reuse/config.ts`) ; `names.roles` en ajoute ou en retire. **Composition** : un composant qui importe le composant partagé, ou que celui-ci importe, s'appuie sur lui : pas de constat ; une partie (`MenuItem` et `Menu`, seuls des mots de position diffèrent) non plus. Un constat par composant, qui liste tous les partagés concernés. Avertissement par défaut : la règle invite à regarder, elle ne prouve pas une copie.
 
 ### 2.7 Valeurs typographiques (`typography`)
 
-Actif seulement pour une langue qui l'exige (`typography.locale`, détectée par `apv init` et `apv onboard` depuis le `lang` du document) : le français (`fr`, `fr-CA`...). Motifs : heure (`14 h 47`, `{h} h {m}`, `${h} h ${m}`), date (`30 septembre`), nombre et unité ou devise (`12 €`, `50 %`, `3 km`, `5 min`, `2 Go`), séparateur de milliers (`1 000`), séparés par une espace ordinaire (U+0020). Lus : les lignes de balisage des fichiers d'interface (hors `<script>` et `<style>`), et dans le code (scripts, `.ts`, `.js`, JSX, fichiers JSON de traduction sous `locales/`, `i18n/`, `messages/`, `lang/`) les seules chaînes et le texte JSX. Seules les lignes ajoutées ou modifiées sont examinées. Correction : espace insécable (U+00A0, `&nbsp;`, ` `) ou fine insécable (U+202F, `&#8239;`, ` `).
+Actif seulement pour une langue qui l'exige (`typography.locale`, détectée par `apv init` et `apv onboard` depuis le `lang` du document) : le français (`fr`, `fr-CA`...). Motifs : heure (`14 h 47`, `{h} h {m}`, `${h} h ${m}`), date (`30 septembre`), nombre et unité ou devise (`12 €`, `50 %`, `3 km`, `5 min`, `2 Go`), séparateur de milliers (`1 000`), séparés par une espace ordinaire (U+0020). Lus : les lignes de balisage des fichiers d'interface (hors `<script>`, `<style>`, commentaires, dessins `<svg>` et attributs de géométrie comme `d`, `points`, `viewBox`), et dans le code (scripts, `.ts`, `.js`, JSX, fichiers JSON de traduction sous `locales/`, `i18n/`, `messages/`, `lang/`) les seules chaînes et le texte JSX. Seules les lignes ajoutées ou modifiées sont examinées. Correction : espace insécable (U+00A0, `&nbsp;`, `\u00a0`) ou fine insécable (U+202F, `&#8239;`, `\u202f`).
 
 ## 3. Configuration
 
@@ -110,13 +115,13 @@ Sections facultatives de `.apv/config.json`, validées par le chargeur commun (`
       "elements": { "select": "src/lib/components/ui/Select.svelte", "dialog": "src/lib/components/ui/Dialog.svelte", "datalist": null, "input[type=date]": null },
       "allowedPaths": ["src/lib/components/ui/**"]
     },
-    "styles": { "sources": ["src/app.css"], "selectors": [".pill--*"], "except": [".sr-only"], "allowedPaths": ["src/lib/components/ui/**"], "nested": "refuse" },
-    "duplicates": { "minLines": 5, "minTokens": 50, "ignore": ["src/lib/generated/**"] },
+    "styles": { "sources": ["src/app.css"], "selectors": [".pill--*"], "except": [".sr-only"], "allowedPaths": ["src/lib/components/ui/**"], "nested": "layout" },
+    "duplicates": { "minLines": 5, "minTokens": 50, "styles": "warning", "ignore": ["src/lib/legacy/**"] },
     "names": { "roles": { "feed": ["feed", "timeline"], "badge": null } },
     "typography": { "locale": "fr" },
     "severity": { "names": "warning", "typography": "warning" }
   },
-  "map": { "file": ".apv/code-map.md", "ignore": ["scripts/**"], "maxEntries": 400 }
+  "map": { "file": ".apv/code-map.md", "ignore": ["scripts/**"], "maxEntries": 400, "maxBytes": 32768 }
 }
 ```
 
@@ -125,29 +130,32 @@ Sections facultatives de `.apv/config.json`, validées par le chargeur commun (`
 - `ignore`, `native.allowedPaths`, `styles.sources`, `styles.allowedPaths`, `duplicates.paths`, `duplicates.ignore`, `map.ignore` : motifs relatifs au dépôt (un chemin absolu ou qui sort du dépôt est refusé).
 - `native.elements` : 50 éléments au plus ; valeur `null` ou chemin du composant partagé.
 - `styles.selectors`, `styles.except` : classes (`.btn`) ou préfixes (`.btn--*`).
-- `duplicates.minLines` de 2 à 1000, `minTokens` de 10 à 10000.
+- `duplicates.minLines` de 2 à 1000, `minTokens` de 10 à 10000, `styles` (`off`, `warning`, `error`) pour les copies de styles seuls.
+- `styles.nested` : `layout` (défaut), `refuse` ou `allow`.
 - `names.roles` : familles en kebab-case, mots en minuscules sans séparateur ; `null` retire une famille par défaut.
 - `typography.locale` : étiquette de langue (`fr`, `fr-CA`).
 - `severity` : `off`, `warning` ou `error`, pour toutes les règles ou par règle.
-- `map.file` : chemin `.md` relatif (défaut `.apv/code-map.md`) ; `map.maxEntries` de 20 à 5000.
+- `map.file` : chemin `.md` relatif (défaut `.apv/code-map.md`) ; `map.maxEntries` de 20 à 5000 ; `map.maxBytes` de 4096 à 1 000 000 (défaut 32 768).
 
 ## 4. Intégration à la preuve
 
 `apv init` et `apv onboard` ajoutent, quand ils créent la configuration :
 
 ```json
-{ "id": "reuse", "command": ["apv", "reuse", "check"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true },
-{ "id": "code-map", "command": ["apv", "map", "--check"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true }
+{ "id": "reuse", "command": ["apv", "reuse", "check", "--base", "{{baseSha}}"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true },
+{ "id": "code-map", "command": ["apv", "map", "--check"], "covers": ["architecture"], "stage": "full", "readOnly": true, "mandatory": true }
 ```
 
-Étape `task` : ils tournent après chaque tâche et dans la suite complète (qui exécute aussi les contrôles de tâche), avec leurs reçus comme les autres (`apv gates run`, `apv gates verify`). Lecture seule : ils tournent en parallèle des autres. `apv` doit être sur le `PATH` (plugin activé, ou `npm link`), sinon `["node", "<chemin du plugin>/dist/cli.js", "reuse", "check"]`. Le contrôle `reuse` ne prend pas `{{baseSha}}` : il compte depuis `reuse.reference`, ce qui n'oblige pas `apv gates run` à recevoir `--base`.
+`reuse` est à l'étape `task` : il tourne après chaque tâche et dans la suite complète (qui exécute aussi les contrôles de tâche), avec ses reçus comme les autres (`apv gates run`, `apv gates verify`). Il compte ce qui est nouveau depuis `{{baseSha}}`, la base du passage : `apv gates run` exige donc `--base` (ce que font déjà `/apv:run`, l'implementer et la livraison), et la base entre dans la clé de preuve. `code-map` est à l'étape `full` : la carte n'est régénérée qu'à l'intégration, et la suite complète la vérifie. Les deux sont en lecture seule.
+
+`apv` doit être sur le `PATH` (plugin activé, son exécutable `bin/apv`, ou `npm link`) : `apv init` et `apv onboard` le vérifient et avertissent sinon (`reuse.apvOnPath` en JSON) ; la forme `["node", "<chemin du plugin>/dist/cli.js", "reuse", "check", "--base", "{{baseSha}}"]` marche partout mais inscrit un chemin propre à la machine dans la configuration.
 
 Un contrôle `reuse` rouge se corrige en réutilisant ou en factorisant ; jamais en baissant une gravité, en élargissant `reuse.ignore` ou `allowedPaths`, ni en retirant le contrôle : ces changements de `.apv/config.json` sont des décisions de l'opérateur.
 
 ## 5. Adopter sur un projet existant
 
-1. `apv onboard --dry-run`, puis `apv onboard` : la section `reuse` détectée (dossiers partagés : les plus hauts dossiers `components`, `ui`, `shared`, `common`, `widgets`, `primitives`... qui contiennent des composants, hors des dossiers de routes ; dossier des primitives `ui` ou `primitives` pour les éléments natifs ; composant qui remplace chaque élément réservé ; langue ; branche de référence `origin/HEAD`, sinon `origin/main` ou `origin/master`, sinon la branche courante), les deux contrôles, la carte du code, et la liste de ce qui est **déjà** dupliqué ou refait (20 premiers constats, blocs copiés d'abord ; `apv reuse check --all` pour tout).
-2. Relire avec l'opérateur `shared`, `native.elements`, `reference` (compétence `/apv:onboard`, étape 4 bis). Sans `reference`, tout le code existant compte comme nouveau.
+1. `apv onboard --dry-run`, puis `apv onboard` : la section `reuse` détectée (dossiers partagés : les plus hauts dossiers `components`, `ui`, `shared`, `common`, `widgets`, `primitives`... qui contiennent des composants, hors des dossiers de routes ; dossier des primitives `ui` ou `primitives`, seul chemin permis aux éléments natifs et aux primitives de style ; composant générique qui remplace chaque élément réservé ; langue ; branche de référence `origin/HEAD`, sinon `origin/main` ou `origin/master`, jamais la branche courante : sans dépôt distant, à déclarer), les deux contrôles, la carte du code, et la liste de ce qui est **déjà** dupliqué ou refait (20 premiers constats, blocs copiés d'abord ; `apv reuse check --all` pour tout).
+2. Relire avec l'opérateur `shared`, `native.elements`, `reference` (compétence `/apv:onboard`, étape 4 bis). Le contrôle déclaré compte depuis la base de chaque passage (`{{baseSha}}`) ; `reference` sert à `apv reuse check` lancé à la main sans `--base` (sans elle, tout y compte comme nouveau).
 3. Commiter `.apv/` (configuration et carte). Les constats existants ne bloquent pas ; les résorber est une spec de rangement à part, décidée par l'opérateur. Chaque PR suivante ne peut plus en ajouter.
 
 Un projet qui a déjà `.apv/config.json` ne reçoit rien automatiquement (aucun fichier n'est jamais écrasé) : ajouter les deux contrôles et la section à la main, puis `apv map`.
@@ -161,3 +169,5 @@ Un projet qui a déjà `.apv/config.json` ne reçoit rien automatiquement (aucun
 - Les usages de la carte ne sont calculés que pour les imports ECMAScript et Python.
 - La typographie ne connaît que le français.
 - Tout le dépôt est analysé à chaque passage (quelques secondes pour quelques milliers de fichiers) ; `duplicates.paths` le restreint si besoin.
+- Un fichier généré qui ne le dit ni par son nom ni par ses premières lignes est analysé comme du code : l'ajouter à `reuse.ignore`, avec l'accord de l'opérateur.
+- La règle `styles` ne lit pas les classes appliquées par `@apply` : un ajustement qui en contient compte comme une retouche de l'apparence, refusée en mode `layout`.

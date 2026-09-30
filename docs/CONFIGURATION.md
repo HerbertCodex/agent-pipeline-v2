@@ -593,30 +593,31 @@ Sections APV3, facultatives, lues par `apv reuse check` et `apv map` et validée
 ```json
 {
   "gates": [
-    { "id": "reuse", "command": ["apv", "reuse", "check"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true },
-    { "id": "code-map", "command": ["apv", "map", "--check"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true }
+    { "id": "reuse", "command": ["apv", "reuse", "check", "--base", "{{baseSha}}"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true },
+    { "id": "code-map", "command": ["apv", "map", "--check"], "covers": ["architecture"], "stage": "full", "readOnly": true, "mandatory": true }
   ],
   "reuse": {
     "reference": "origin/main",
     "shared": ["src/lib/components/**"],
     "native": { "elements": { "select": "src/lib/components/ui/Select.svelte", "dialog": null, "datalist": null }, "allowedPaths": ["src/lib/components/ui/**"] },
-    "styles": { "sources": ["src/app.css"], "nested": "refuse" },
-    "duplicates": { "minLines": 5, "minTokens": 50 },
+    "styles": { "sources": ["src/app.css"], "allowedPaths": ["src/lib/components/ui/**"], "nested": "layout" },
+    "duplicates": { "minLines": 5, "minTokens": 50, "styles": "warning" },
     "typography": { "locale": "fr" },
     "severity": { "native": "error", "styles": "error", "duplicates": "error", "names": "warning", "typography": "warning" }
   },
-  "map": { "file": ".apv/code-map.md", "maxEntries": 400 }
+  "map": { "file": ".apv/code-map.md", "maxEntries": 400, "maxBytes": 32768 }
 }
 ```
 
-- `reuse.reference` : branche où vont les PR ; ce que le changement ajoute depuis sa base commune est nouveau (bloquant en `error`), le reste existant (signalé). `--base` la remplace.
+- `reuse.reference` : branche où vont les PR, pour `apv reuse check` sans `--base` ; ce que le changement ajoute depuis sa base commune est nouveau (bloquant en `error`), le reste existant (signalé). Le contrôle déclaré passe `--base {{baseSha}}`, la base du passage, qui entre dans la clé de preuve.
 - `reuse.shared`, `reuse.ignore` : motifs des dossiers de composants partagés, et des chemins laissés de côté par toutes les règles.
-- `reuse.native` : `elements` (sélecteur `select` ou `input[type=date]`, vers le composant partagé qui le remplace, ou `null`), `allowedPaths` (défaut : `shared`).
-- `reuse.styles` : `sources` (feuilles globales dont les classes de premier niveau sont les primitives), `selectors` et `except` (classes ou préfixes `.btn--*` ajoutés ou retirés), `allowedPaths` (défaut : `shared`), `nested` (`refuse` par défaut, `allow` pour accepter `.panel .btn`).
-- `reuse.duplicates` : `minLines`, `minTokens`, `paths`, `ignore`.
+- `reuse.native` : `elements` (sélecteur `select` ou `input[type=date]`, vers le composant partagé qui le remplace, ou `null` : le composant générique de même rôle), `allowedPaths` (défaut : les composants génériques, `**/components/ui/**`, `**/ui/**`, `**/primitives/**`, `**/design-system/**`, `**/shared/**`, `**/common/**`).
+- `reuse.styles` : `sources` (feuilles globales dont les classes de base des règles de premier niveau sont les primitives), `selectors` et `except` (classes ou préfixes `.btn--*` ajoutés ou retirés), `allowedPaths` (défaut : comme `native.allowedPaths`), `nested` (`layout` par défaut : sous une classe du composant, seule la mise en page d'une primitive se retouche ; `refuse` ; `allow`).
+- `reuse.duplicates` : `minLines`, `minTokens`, `paths`, `ignore`, `styles` (gravité d'une copie de styles seuls, `warning` par défaut).
+- Fichiers générés (nom ou premières lignes) : toujours laissés de côté, listés dans le rapport.
 - `reuse.names.roles` : familles de rôles ajoutées ou retirées (`null`).
 - `reuse.typography.locale` : langue des textes (`fr` active la règle).
 - `reuse.severity` : `off`, `warning` ou `error`, pour toutes les règles ou par règle.
-- `map.file` (`.md`), `map.ignore`, `map.maxEntries` (de 20 à 5000, partagées entre les sections de la carte).
+- `map.file` (`.md`), `map.ignore`, `map.maxEntries` (de 20 à 5000, partagées entre les sections de la carte), `map.maxBytes` (de 4096 à 1 000 000, 32 768 par défaut).
 
 Chaque règle, son motif et ses limites : [REUSE.md](REUSE.md). Baisser une gravité, élargir `ignore` ou `allowedPaths`, ou retirer un de ces contrôles est une décision de l'opérateur, jamais un moyen de faire passer une tâche.

@@ -15,7 +15,7 @@ Dans ce document, `apv` désigne `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` (ou 
 ## 1. Créer le dossier
 1. `git rev-parse --show-toplevel` : la commande se lance à la racine d'un dépôt Git. `apv init` refuse hors d'un dépôt (code 1).
 2. `apv init --name "<nom>"`, sortie lue en entier. L'outil crée seulement ce qui manque, sans jamais écraser un fichier existant, et liste ce qu'il a créé et ce qui existait déjà :
-   - `.apv/config.json` : nom du projet et les contrôles de la réutilisation : `code-map` (`apv map --check`, carte du code à jour) pour tout projet, `reuse` (`apv reuse check`) et la section `reuse` détectée pour un projet web (`${CLAUDE_PLUGIN_ROOT}/docs/REUSE.md`) ;
+   - `.apv/config.json` : nom du projet et les contrôles de la réutilisation : `code-map` (`apv map --check`, carte du code à jour, suite complète) pour tout projet, `reuse` (`apv reuse check --base {{baseSha}}`, étape tâche : `apv gates run` demande alors `--base`) et la section `reuse` détectée pour un projet web (`${CLAUDE_PLUGIN_ROOT}/docs/REUSE.md`) ;
    - `.apv/DECISIONS.json` : registre vide et valide ;
    - `.apv/brief.md` : consigne commune, depuis le modèle `references/brief-type.md` de la compétence `chef-de-projet` ;
    - `.apv/specs/`, `.apv/state/` ;
