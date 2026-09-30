@@ -80,6 +80,8 @@ export declare const reuseSchema: import("../domain/schema.js").Schema<{
     } | undefined;
     readonly names: {
         readonly roles: Record<string, string[] | null> | undefined;
+        readonly strong: string[] | undefined;
+        readonly strongSeverity: "off" | "warning" | "error" | undefined;
     } | undefined;
     readonly typography: {
         readonly locale: string;
@@ -121,6 +123,9 @@ export interface ReuseSettings {
         styles: ReuseSeverity;
     };
     roles: Record<string, string[]>;
+    /** Families of STRONG_FAMILIES (or `names.strong`), and the severity of a new component that redoes one of their generic shared components. */
+    strong: string[];
+    strongSeverity: ReuseSeverity;
     locale: string | null;
     severity: Record<ReuseRule, ReuseSeverity>;
 }
@@ -129,6 +134,12 @@ export interface ReuseSettings {
  * (`AdminToast` and `Toast`, `Snackbar` and `Toast`). A compound (`TabBar`) is matched joined (`tabbar`).
  */
 export declare const DEFAULT_ROLE_FAMILIES: Readonly<Record<string, readonly string[]>>;
+/**
+ * Families of the application's structure and of its design system: a new component that redoes the generic shared one
+ * (its name is only its role: `Sidebar`, `Toast`, `Select`) without composing it is a copy of the interface, blocking by
+ * default. The other resemblances of names stay warnings.
+ */
+export declare const STRONG_FAMILIES: readonly ["shell", "sidebar", "tabbar", "topbar", "toast", "select", "dialog", "datepicker", "pagination", "tabs", "icon"];
 /** A relative path or glob inside the repository, `/` separated, without leading `./` nor trailing slash. */
 export declare function relativeGlob(value: string, field: string): string;
 /** Effective settings of a `reuse` section: defaults completed, paths checked. Throws a CONFIG error. */

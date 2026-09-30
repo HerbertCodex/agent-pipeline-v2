@@ -9,7 +9,7 @@ import {
 } from './config.js';
 import { TokenTable, blankImports, findClones, occurs, tokenize, type Token } from './duplicates.js';
 import { blocks, elementRule, findElements } from './markup.js';
-import { describeClash, replacementFor } from './names.js';
+import { componentName, describeClash, replacementFor } from './names.js';
 import { Primitives, isLayoutOnly, primitivesOf, restyledPrimitives, styleRules } from './styles.js';
 import { environment } from '../execution/process.js';
 import { rangesOf } from './markup.js';
@@ -117,8 +117,15 @@ export async function checkReuse(repo: string, config: ReuseConfig, options: Che
       if (ignored(component.path)) continue;
       const clashes = changes.all ? component.clashes : clashesFor(current, component.path, settings.roles, true);
       if (!clashes.length) continue;
-      add({ rule: 'names', isNew: true, path: component.path, line: 1, other: { path: clashes[0]!.with, line: 1 },
-        message: `${clashes.map(describeClash).join(' ; ')}, ${clashes.length > 1 ? 'composants partagés' : 'composant partagé'} : le réutiliser ou l'étendre (paramètre, variante), sinon justifier ce nouveau composant dans le rapport.` });
+      // Strong: it redoes a generic shared component of the structure or of the design system (`AdminToast` next to
+      // `ToastRegion`, `AdminShell` next to `Sidebar`) without composing it (composition is never a clash).
+      const strong = clashes.filter(c => { const shared = componentName(c.with, settings.roles); return shared.generic && shared.family !== null && settings.strong.includes(shared.family); });
+      const severity = strong.length && settings.strongSeverity !== 'off' ? settings.strongSeverity : undefined;
+      const listed = strong.length ? strong : clashes;
+      add({ rule: 'names', isNew: true, path: component.path, line: 1, other: { path: listed[0]!.with, line: 1 },
+        message: strong.length
+          ? `refait ${listed.map(c => `${c.with} (rôle ${componentName(c.with, settings.roles).family})`).join(', ')}, ${listed.length > 1 ? 'composants partagés génériques' : 'composant partagé générique'} : l'utiliser, ou le composer (l'importer et l'envelopper), ou l'étendre (paramètre, variante) ; jamais une copie propre à une fonctionnalité.`
+          : `${clashes.map(describeClash).join(' ; ')}, ${clashes.length > 1 ? 'composants partagés' : 'composant partagé'} : le réutiliser ou l'étendre (paramètre, variante), sinon justifier ce nouveau composant dans le rapport.` }, severity);
     }
   }
   if (summary.typography.active) {
@@ -228,6 +235,10 @@ function stylesRule(settings: ReuseSettings, files: string[], read: Read, isTest
 }
 
 function duplicatesRule(repo: string, settings: ReuseSettings, files: string[], read: Read, isTest: (p: string) => boolean, changes: Changes, add: Add): void {
+  const shared = globMatcher(settings.shared);
+  const primitive = globMatcher([...DEFAULT_PRIMITIVE_PATHS, ...settings.native.allowedPaths]);
+  /** A generic shared component: a component of the shared folders whose name is only its role, or of the primitives. */
+  const genericShared = (path: string): boolean => COMPONENT_EXTENSIONS.has(extensionOf(path)) && shared(path) && (primitive(path) || componentName(path, settings.roles).generic);
   // Lines of style: whole style sheets, and the `<style>` blocks of interface files.
   const styleLines = new Map<string, [number, number][] | 'all'>();
   const inStyle = (path: string, from: number, to: number): boolean => {
@@ -280,10 +291,13 @@ function duplicatesRule(repo: string, settings: ReuseSettings, files: string[], 
     }
     // Style declarations only: their own severity (`duplicates.styles`, warning by default).
     const styles = inStyle(clone.a.path, clone.a.startLine, clone.a.endLine) && inStyle(clone.b.path, clone.b.startLine, clone.b.endLine);
-    const severity = styles ? settings.duplicates.styles : settings.severity.duplicates;
+    // Styles copied from a generic shared component (its look redone elsewhere) are a copy of the interface: the severity
+    // of code copies. Only styles copied between components of features take `duplicates.styles`.
+    const fromShared = genericShared(clone.a.path) || genericShared(clone.b.path);
+    const severity = styles && !fromShared ? settings.duplicates.styles : settings.severity.duplicates;
     if (severity === 'off') continue;
     add({ rule: 'duplicates', isNew, path: clone.a.path, line: clone.a.startLine, endLine: clone.a.endLine,
       other: { path: clone.b.path, line: clone.b.startLine, endLine: clone.b.endLine },
-      message: `${styles ? 'styles identiques à' : 'bloc identique à'} ${clone.b.path}:${clone.b.startLine}-${clone.b.endLine} (${clone.lines} lignes, ${clone.tokens} jetons) : ${styles ? 'les mettre dans une primitive ou une variante partagée' : 'le factoriser dans un module ou un composant partagé et paramétrable'}, puis retirer la copie.` }, severity);
+      message: `${styles ? `styles identiques à${fromShared ? ' ceux du composant partagé' : ''}` : 'bloc identique à'} ${clone.b.path}:${clone.b.startLine}-${clone.b.endLine} (${clone.lines} lignes, ${clone.tokens} jetons) : ${styles ? 'les mettre dans une primitive ou une variante partagée' : 'le factoriser dans un module ou un composant partagé et paramétrable'}, puis retirer la copie.` }, severity);
   }
 }

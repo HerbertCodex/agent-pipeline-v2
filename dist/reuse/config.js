@@ -103,6 +103,9 @@ export const reuseSchema = s.object({
     names: s.optional(s.object({
         /** Role families added to the defaults (`"toast": ["toast", "snackbar"]`); `null` removes a default family. */
         roles: s.optional(s.record(ROLE, s.nullable(s.array(s.string(1, 50, WORD), 1, 50)), 100)),
+        /** Families whose generic shared component a new component must never redo (`strongSeverity`, error by default). */
+        strong: s.optional(s.array(s.string(1, 50, ROLE), 0, 100)),
+        strongSeverity: s.optional(severity),
     })),
     typography: s.optional(s.object({
         /** Language of the interface texts (`fr`, `fr-CA`); only the languages that require non-breaking spaces are checked. */
@@ -154,6 +157,12 @@ export const DEFAULT_ROLE_FAMILIES = {
     accordion: ['accordion', 'collapsible', 'disclosure'],
     empty: ['emptystate', 'empty', 'placeholder'],
 };
+/**
+ * Families of the application's structure and of its design system: a new component that redoes the generic shared one
+ * (its name is only its role: `Sidebar`, `Toast`, `Select`) without composing it is a copy of the interface, blocking by
+ * default. The other resemblances of names stay warnings.
+ */
+export const STRONG_FAMILIES = ['shell', 'sidebar', 'tabbar', 'topbar', 'toast', 'select', 'dialog', 'datepicker', 'pagination', 'tabs', 'icon'];
 /** A relative path or glob inside the repository, `/` separated, without leading `./` nor trailing slash. */
 export function relativeGlob(value, field) {
     const clean = posix.normalize(value.trim().replace(/\\/g, '/')).replace(/\/+$/, '').replace(/^\.\//, '');
@@ -203,6 +212,8 @@ export function reuseSettings(section) {
             styles: section?.duplicates?.styles ?? 'warning',
         },
         roles,
+        strong: [...new Set(section?.names?.strong ?? [...STRONG_FAMILIES])],
+        strongSeverity: section?.names?.strongSeverity ?? 'error',
         locale: section?.typography?.locale ?? null,
         severity,
     };

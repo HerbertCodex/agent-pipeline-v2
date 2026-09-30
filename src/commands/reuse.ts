@@ -41,7 +41,8 @@ export function formatReuse(report: ReuseReport, all: boolean): string {
   const lines = [`Réutilisation : ${report.analyzedFiles} fichier(s) analysé(s), ${base}.`];
   for (const rule of REUSE_RULES) {
     const s = report.rules[rule];
-    lines.push('', `${LABEL[rule]} (${SEVERITY[s.severity]}) : ${s.active ? `${s.new} nouveau(x), ${s.existing} existant(s)` : s.note ?? 'règle désactivée'}`);
+    const extra = rule === 'names' && report.rules.names.active ? ', erreur pour un composant partagé générique refait' : rule === 'duplicates' ? ', avertissement pour des styles copiés entre fonctionnalités' : '';
+    lines.push('', `${LABEL[rule]} (${SEVERITY[s.severity]}${s.active ? extra : ''}) : ${s.active ? `${s.new} nouveau(x), ${s.existing} existant(s)` : s.note ?? 'règle désactivée'}`);
     const found = report.findings.filter(f => f.rule === rule);
     for (const f of found.filter(x => x.isNew)) lines.push(`  ${f.blocking ? '[bloquant] ' : ''}${place(f)} : ${f.message}`);
     const existing = found.filter(x => !x.isNew);

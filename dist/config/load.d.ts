@@ -414,6 +414,8 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         } | undefined;
         readonly names: {
             readonly roles: Record<string, string[] | null> | undefined;
+            readonly strong: string[] | undefined;
+            readonly strongSeverity: "off" | "warning" | "error" | undefined;
         } | undefined;
         readonly typography: {
             readonly locale: string;

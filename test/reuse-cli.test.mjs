@@ -107,7 +107,7 @@ test('apv onboard on an existing web project: reuse and code map checks, detecte
   assert.equal((await apv(f.repo, ['map', '--check'])).code, 0);
 });
 
-test('apv reuse check blocks what a change adds: native select, restyled primitives, copied block; names and hours are warnings', async t => {
+test('apv reuse check blocks what a change adds: native select, restyled primitives, copied block, redone shared components; hours are warnings', async t => {
   const f = project(t);
   assert.equal((await apv(f.repo, ['onboard'])).code, 0);
   commit(f.repo, 'apv');
@@ -124,8 +124,8 @@ test('apv reuse check blocks what a change adds: native select, restyled primiti
     'styles:src/routes/admin/AdminShell.svelte:7:true',
     'styles:src/routes/admin/AdminShell.svelte:8:true',
     'duplicates:src/routes/admin/total.ts:2:true',
-    'names:src/routes/admin/AdminShell.svelte:1:false',
-    'names:src/routes/admin/AdminToast.svelte:1:false',
+    'names:src/routes/admin/AdminShell.svelte:1:true',
+    'names:src/routes/admin/AdminToast.svelte:1:true',
     'typography:src/routes/admin/+page.svelte:8:false',
   ]);
   const byRule = rule => out.findings.find(x => x.rule === rule && x.isNew);
@@ -133,16 +133,16 @@ test('apv reuse check blocks what a change adds: native select, restyled primiti
   assert.match(byRule('styles').message, /« \.btn » redéfinit la primitive \.btn \(src\/app\.css\)/);
   assert.match(out.findings.find(x => x.rule === 'styles' && x.line === 8).message, /sous une classe du composant avec border \(seule la mise en page est permise/);
   assert.deepEqual(byRule('duplicates').other, { path: 'src/lib/cart/total.ts', line: 2, endLine: 9 });
-  assert.match(out.findings.find(x => x.path.endsWith('AdminToast.svelte')).message, /nom construit sur celui de src\/lib\/components\/Toast\.svelte \(rôle toast\)/);
+  assert.match(out.findings.find(x => x.path.endsWith('AdminToast.svelte')).message, /^refait src\/lib\/components\/Toast\.svelte \(rôle toast\), composant partagé générique/);
   assert.match(out.findings.find(x => x.path.endsWith('AdminShell.svelte') && x.rule === 'names').message,
-    /^même rôle que src\/lib\/components\/Sidebar\.svelte \(rôle shell\) ; même rôle que src\/lib\/components\/TabBar\.svelte \(rôle shell\) ; même rôle que src\/lib\/components\/Topbar\.svelte \(rôle shell\), composants partagés/);
+    /^refait src\/lib\/components\/Sidebar\.svelte \(rôle sidebar\), src\/lib\/components\/TabBar\.svelte \(rôle tabbar\), src\/lib\/components\/Topbar\.svelte \(rôle topbar\), composants partagés génériques : l'utiliser, ou le composer/);
   assert.match(byRule('typography').message, /heure « 14 h 47 » : espace insécable attendue/);
   assert.equal(out.rules.duplicates.existing, 1, 'the copy already on main stays reported, never blocking');
   const human = await apv(f.repo, ['reuse', 'check']);
   assert.match(human.stdout, /\[bloquant\] src\/routes\/admin\/\+page\.svelte:7 : <select> natif/);
   assert.match(human.stdout, /\[bloquant\] src\/routes\/admin\/total\.ts:2-9 : bloc identique à src\/lib\/cart\/total\.ts:2-9/);
   assert.match(human.stdout, /\[existant\] src\/lib\/legacy\/total-copy\.ts/);
-  assert.match(human.stdout, /Résultat : ÉCHEC, 4 constat\(s\) bloquant\(s\)/);
+  assert.match(human.stdout, /Résultat : ÉCHEC, 6 constat\(s\) bloquant\(s\)/);
   // The same project fixed: the shared components reused, the block imported, the hour unbreakable.
   rmSync(join(f.repo, 'src/routes/admin'), { recursive: true });
   write(f.repo, 'src/routes/admin/+page.svelte', '<script lang="ts">\n  import Select from \'$lib/components/ui/Select.svelte\';\n  import Toast from \'$lib/components/Toast.svelte\';\n  import { total } from \'$lib/cart/total\';\n  let v = $state(\'a\');\n</script>\n<Select bind:value={v} options={[\'a\']} />\n<p>Publié à 14 h 47.</p>\n<Toast message={String(total([]))} />\n');
@@ -390,4 +390,58 @@ test('M: apv init warns when apv is not on the PATH of the generated checks', as
   const json = (await apv(fixture(t, { files: PROJECT }).repo, ['init', '--json'])).json();
   assert.equal(typeof json.reuse.apvOnPath, 'boolean');
   if (!json.reuse.apvOnPath) assert.match(r.stdout, /ATTENTION : apv n'est pas sur le PATH/);
+});
+
+test('the original case, replayed: a PR that redoes the shell, the toast and the select fails on all three; a wrapper that composes the shell passes', async t => {
+  const sidebarStyle = `<style>\n${['nav', 'nav__item', 'nav__icon', 'nav__label', 'nav__badge', 'nav__toggle', 'nav__footer'].map(c => `  .${c} { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem; }`).join('\n')}\n</style>\n`;
+  const f = fixture(t, { files: {
+    'package.json': JSON.stringify({ dependencies: { svelte: '5.0.0' } }),
+    'src/app.html': '<html lang="fr"><body>%sveltekit.body%</body></html>\n',
+    'src/lib/components/ui/Select.svelte': '<script lang="ts">\n  let { value = $bindable(), options }: { value: string; options: string[] } = $props();\n</script>\n<select bind:value>{#each options as o (o)}<option>{o}</option>{/each}</select>\n',
+    'src/lib/components/shell/Sidebar.svelte': `<script lang="ts">\n  let { children } = $props();\n</script>\n<nav class="nav">{@render children()}</nav>\n${sidebarStyle}`,
+    'src/lib/components/shell/Toast.svelte': '<script lang="ts">\n  let { text }: { text: string } = $props();\n</script>\n<div role="status">{text}</div>\n',
+    'src/routes/+layout.svelte': "<script lang=\"ts\">\n  import Sidebar from '$lib/components/shell/Sidebar.svelte';\n  import Toast from '$lib/components/shell/Toast.svelte';\n  let { children } = $props();\n</script>\n<Sidebar>{@render children()}</Sidebar><Toast text=\"ok\" />\n",
+  } });
+  git(f.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  assert.equal((await apv(f.repo, ['onboard'])).code, 0);
+  commit(f.repo, 'apv');
+  const main = git(f.repo, 'rev-parse', 'HEAD');
+  // The pull request of the pilot: its own shell (the side bar's look copied), its own toast, a native select.
+  git(f.repo, 'switch', '-q', '-c', 'feature/admin');
+  write(f.repo, 'src/lib/admin/components/AdminShell.svelte', `<script lang="ts">\n  let { children } = $props();\n</script>\n<aside class="nav">{@render children()}</aside>\n${sidebarStyle}`);
+  write(f.repo, 'src/lib/admin/components/AdminToast.svelte', '<script lang="ts">\n  let { text }: { text: string } = $props();\n</script>\n<p role="status" class="admin-toast">{text}</p>\n');
+  write(f.repo, 'src/routes/admin/+page.svelte', "<script lang=\"ts\">\n  import AdminShell from '$lib/admin/components/AdminShell.svelte';\n  import AdminToast from '$lib/admin/components/AdminToast.svelte';\n  let v = $state('a');\n</script>\n<AdminShell><select bind:value={v}><option>a</option></select><AdminToast text=\"ok\" /></AdminShell>\n");
+  commit(f.repo, 'admin');
+  const r = await apv(f.repo, ['reuse', 'check', '--base', main, '--json']);
+  assert.equal(r.code, 1);
+  const blocking = r.json().findings.filter(x => x.blocking).map(x => `${x.rule}:${x.path}`);
+  assert.ok(blocking.includes('names:src/lib/admin/components/AdminShell.svelte'), blocking.join(' | '));
+  assert.ok(blocking.includes('names:src/lib/admin/components/AdminToast.svelte'), blocking.join(' | '));
+  assert.ok(blocking.includes('native:src/routes/admin/+page.svelte'), blocking.join(' | '));
+  const copy = r.json().findings.find(x => x.rule === 'duplicates' && x.path === 'src/lib/admin/components/AdminShell.svelte');
+  assert.deepEqual([copy.other.path, copy.severity, copy.blocking], ['src/lib/components/shell/Sidebar.svelte', 'error', true], 'the look of a generic shared component copied: blocking');
+  assert.match(copy.message, /^styles identiques à ceux du composant partagé/);
+  assert.match(r.json().findings.find(x => x.path.endsWith('AdminToast.svelte')).message, /^refait src\/lib\/components\/shell\/Toast\.svelte \(rôle toast\), composant partagé générique/);
+  // The same need met by composition: a wrapper that imports the shared shell and the shared toast, the shared select.
+  rmSync(join(f.repo, 'src/lib/admin'), { recursive: true });
+  write(f.repo, 'src/lib/admin/components/AdminShell.svelte', "<script lang=\"ts\">\n  import Sidebar from '$lib/components/shell/Sidebar.svelte';\n  let { children } = $props();\n</script>\n<Sidebar><h2>Administration</h2>{@render children()}</Sidebar>\n");
+  write(f.repo, 'src/routes/admin/+page.svelte', "<script lang=\"ts\">\n  import AdminShell from '$lib/admin/components/AdminShell.svelte';\n  import Select from '$lib/components/ui/Select.svelte';\n  import Toast from '$lib/components/shell/Toast.svelte';\n  let v = $state('a');\n</script>\n<AdminShell><Select bind:value={v} options={['a']} /><Toast text=\"ok\" /></AdminShell>\n");
+  commit(f.repo, 'admin composed');
+  const fixed = await apv(f.repo, ['reuse', 'check', '--base', main, '--json']);
+  assert.equal(fixed.code, 0, JSON.stringify(fixed.json().findings.filter(x => x.isNew)));
+  assert.deepEqual(fixed.json().findings.filter(x => x.isNew), []);
+});
+
+test('styles copied between two components of features stay a warning; a weak resemblance of names too', async t => {
+  const f = project(t);
+  git(f.repo, 'switch', '-q', '-c', 'feature/weak');
+  write(f.repo, 'src/routes/news/NewsCard.svelte', '<p>news</p>\n');
+  write(f.repo, 'src/lib/components/FirstVisit.svelte', '<p>x</p>\n');
+  commit(f.repo, 'base features');
+  const base = git(f.repo, 'rev-parse', 'HEAD');
+  write(f.repo, 'src/lib/components/FirstVisitHint.svelte', '<p>hint</p>\n');
+  const r = (await apv(f.repo, ['reuse', 'check', '--base', base, '--json'])).json();
+  const names = r.findings.find(x => x.rule === 'names');
+  assert.deepEqual([names.path, names.severity, names.blocking], ['src/lib/components/FirstVisitHint.svelte', 'warning', false]);
+  assert.equal(r.ok, true);
 });

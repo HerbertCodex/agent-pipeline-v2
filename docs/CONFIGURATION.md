@@ -615,7 +615,7 @@ Sections APV3, facultatives, lues par `apv reuse check` et `apv map` et validée
 - `reuse.styles` : `sources` (feuilles globales dont les classes de base des règles de premier niveau sont les primitives), `selectors` et `except` (classes ou préfixes `.btn--*` ajoutés ou retirés), `allowedPaths` (défaut : comme `native.allowedPaths`), `nested` (`layout` par défaut : sous une classe du composant, seule la mise en page d'une primitive se retouche ; `refuse` ; `allow`).
 - `reuse.duplicates` : `minLines`, `minTokens`, `paths`, `ignore`, `styles` (gravité d'une copie de styles seuls, `warning` par défaut).
 - Fichiers générés (nom ou premières lignes) : toujours laissés de côté, listés dans le rapport.
-- `reuse.names.roles` : familles de rôles ajoutées ou retirées (`null`).
+- `reuse.names.roles` : familles de rôles ajoutées ou retirées (`null`) ; `names.strong` (familles dont le composant partagé générique ne se refait jamais : coquille, barres, toast, liste déroulante, dialogue, sélecteur de date, pagination, onglets, icône) et `names.strongSeverity` (`error` par défaut).
 - `reuse.typography.locale` : langue des textes (`fr` active la règle).
 - `reuse.severity` : `off`, `warning` ou `error`, pour toutes les règles ou par règle.
 - `map.file` (`.md`), `map.ignore`, `map.maxEntries` (de 20 à 5000, partagées entre les sections de la carte), `map.maxBytes` (de 4096 à 1 000 000, 32 768 par défaut).

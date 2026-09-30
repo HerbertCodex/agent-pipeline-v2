@@ -121,6 +121,9 @@ export const reuseSchema = s.object({
   names: s.optional(s.object({
     /** Role families added to the defaults (`"toast": ["toast", "snackbar"]`); `null` removes a default family. */
     roles: s.optional(s.record(ROLE, s.nullable(s.array(s.string(1, 50, WORD), 1, 50)), 100)),
+    /** Families whose generic shared component a new component must never redo (`strongSeverity`, error by default). */
+    strong: s.optional(s.array(s.string(1, 50, ROLE), 0, 100)),
+    strongSeverity: s.optional(severity),
   })),
   typography: s.optional(s.object({
     /** Language of the interface texts (`fr`, `fr-CA`); only the languages that require non-breaking spaces are checked. */
@@ -152,6 +155,9 @@ export interface ReuseSettings {
   styles: { sources: string[] | null; selectors: string[]; except: string[]; allowedPaths: string[]; nested: NestedMode };
   duplicates: { minLines: number; minTokens: number; paths: string[] | null; ignore: string[]; styles: ReuseSeverity };
   roles: Record<string, string[]>;
+  /** Families of STRONG_FAMILIES (or `names.strong`), and the severity of a new component that redoes one of their generic shared components. */
+  strong: string[];
+  strongSeverity: ReuseSeverity;
   locale: string | null;
   severity: Record<ReuseRule, ReuseSeverity>;
 }
@@ -189,6 +195,13 @@ export const DEFAULT_ROLE_FAMILIES: Readonly<Record<string, readonly string[]>> 
   accordion: ['accordion', 'collapsible', 'disclosure'],
   empty: ['emptystate', 'empty', 'placeholder'],
 };
+
+/**
+ * Families of the application's structure and of its design system: a new component that redoes the generic shared one
+ * (its name is only its role: `Sidebar`, `Toast`, `Select`) without composing it is a copy of the interface, blocking by
+ * default. The other resemblances of names stay warnings.
+ */
+export const STRONG_FAMILIES = ['shell', 'sidebar', 'tabbar', 'topbar', 'toast', 'select', 'dialog', 'datepicker', 'pagination', 'tabs', 'icon'] as const;
 
 /** A relative path or glob inside the repository, `/` separated, without leading `./` nor trailing slash. */
 export function relativeGlob(value: string, field: string): string {
@@ -232,6 +245,8 @@ export function reuseSettings(section: ReuseSection | undefined): ReuseSettings 
       styles: section?.duplicates?.styles ?? 'warning',
     },
     roles,
+    strong: [...new Set(section?.names?.strong ?? [...STRONG_FAMILIES])],
+    strongSeverity: section?.names?.strongSeverity ?? 'error',
     locale: section?.typography?.locale ?? null,
     severity,
   };
