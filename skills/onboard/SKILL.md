@@ -20,7 +20,7 @@ Dans ce document, `apv` désigne `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"` (ou 
    - les specs V2 copiées, et celles qui ne le sont pas avec leur raison ;
    - projet sans V2 : les contrôles détectés, chacun avec sa source et `mandatory: false` ;
    - les indices d'aperçu et les fichiers V2 non repris (rôles, compétences : le plugin les fournit).
-   - la réutilisation des éléments existants : les contrôles ajoutés (`code-map` toujours, `reuse` pour un projet web), la section `reuse` détectée (dossiers de composants partagés, composant qui remplace chaque élément natif réservé, langue, branche de référence) et ce qui est **déjà** dupliqué ou refait (blocs copiés, éléments natifs, primitives redéfinies, composants homonymes).
+   - la réutilisation des éléments existants : les contrôles ajoutés (`code-map` toujours, `reuse` et `structure` pour un projet web ; sur une configuration existante, les contrôles requis qui lui manquent, à ajouter avec l'opérateur, sans quoi `apv stack merge` refuse de fusionner : `${CLAUDE_PLUGIN_ROOT}/docs/REGLES.md`), la section `reuse` détectée (dossiers de composants partagés, composant qui remplace chaque élément natif réservé, langue, branche de référence) et ce qui est **déjà** dupliqué ou refait (blocs copiés, éléments natifs, primitives redéfinies, composants homonymes).
 3. Un refus (code 1) : `pipeline.v2.json` ou le registre V2 illisible ou invalide. Rien n'a été écrit. Montre le message exact ; corrige le fichier V2 seulement avec l'accord de l'opérateur (un registre se corrige par `apv ledger plan` puis `apv ledger apply`, tant que `.apv/DECISIONS.json` n'existe pas), puis relance l'essai.
 
 ## 2. Créer `.apv/`

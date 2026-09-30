@@ -49,7 +49,7 @@ const METHOD_SKILLS = ['architecture-donnees', 'chef-de-projet', 'design-artefac
 test('manifests parse and describe the apv plugin', () => {
   const plugin = JSON.parse(read('.claude-plugin/plugin.json'));
   assert.equal(plugin.name, 'apv');
-  assert.equal(plugin.version, '3.0.0-alpha.10');
+  assert.equal(plugin.version, '3.0.0-alpha.11');
   assert.equal(plugin.license, 'MIT');
   assert.match(read('LICENSE'), /^MIT License/);
   assert.equal(plugin.repository, 'https://github.com/HerbertCodex/agent-pipeline-v2');
@@ -464,7 +464,7 @@ test('design critique: a scored generic grid, directions before details, a read-
   assert.match(read('docs/PLUGIN.md'), /^\| `critique-design` \| [^\n]*\| lecture, Bash \(pas d'écriture de fichiers\) \| aucun \|$/m);
   assert.match(read('docs/PLUGIN.md'), /`\/apv:design critique <chemin>`/);
   assert.match(read('docs/DESIGN.md'), /apv:critique-design/);
-  assert.match(read('README.md'), /\*\*10 sous-agents\*\*[^\n]*`critique-design`/);
+  assert.match(read('README.md'), /\*\*11 sous-agents\*\*[^\n]*`critique-design`/);
   const unreleased = read('CHANGELOG.md').split('\n## ')[1];
   for (const topic of [/critique-design/, /grille-critique\.md/, /test des 5 secondes/, /2 ou 3 directions/]) assert.match(unreleased, topic);
 });
@@ -754,4 +754,32 @@ test('reuse of existing elements: instructions, planning, review, the tools and 
   assert.ok(!/[–—]/.test(guide), 'REUSE.md: no em or en dash');
   assert.ok(!/[–—]/.test(read('docs/CONFIGURATION.md').split('## Réutilisation : `reuse`')[1]), 'reuse section: no em or en dash');
   assert.match(read('CHANGELOG.md').split('\n## ')[1], /3\.0\.0-alpha\.9 : réutilisation des éléments existants, carte du code/);
+});
+
+test('rules of the project lead: one source, linked both ways, carried by the agents, stated in the README', () => {
+  const rules = read('docs/REGLES.md');
+  const start = read('docs/DEMARRER-UN-PROJET.md');
+  const lead = frontmatter('skills/chef-de-projet/SKILL.md').body;
+  for (const rule of ['preuve', 'instable', 'relecture', 'captures', 'controles', 'maquette']) assert.match(rules, new RegExp(`\\| \`${rule}\` \\|`), rule);
+  assert.match(rules, /## 4\. Ce qui reste au chef de projet/);
+  assert.match(rules, /dérogation <règle>/);
+  // The skill points to the documents, the start guide points back to the skill: no rule written twice.
+  assert.match(lead, /docs\/REGLES\.md/);
+  assert.match(lead, /docs\/DEMARRER-UN-PROJET\.md/);
+  assert.match(start, /apv:chef-de-projet/);
+  assert.match(start, /\[REGLES\.md\]\(REGLES\.md\)/);
+  for (const section of ['Ce que tu fais, toi', 'Ce que le chef de projet fait seul', 'Installer', 'La phrase de départ', 'La délégation type', 'Le rôle du chef de projet',
+    'Les règles non négociables', 'Rendre compte', 'Ce qu\'il ne faut jamais faire', 'Une leçon devient une capacité']) assert.match(start, new RegExp(`## \\d+\\. ${section}`), section);
+  for (const line of start.split('\n').filter(l => /^\| [A-Z]/.test(l) && /vérifiée par l'outil|à faire par le chef de projet/.test(l))) assert.ok(line.length < 400, line);
+  for (const agent of ['implementer', 'integrateur', 'qa-fidelite', 'qa-securite', 'critique-design', 'designer', 'architecte', 'architecte-donnees', 'dpo', 'product']) {
+    const body = frontmatter(`agents/${agent}.md`).body;
+    assert.match(body, /## Règles non négociables\n/, agent);
+    assert.match(body, /docs\/REGLES\.md/, agent);
+  }
+  for (const reviewer of ['qa-fidelite', 'qa-securite', 'architecte-donnees', 'dpo']) assert.match(frontmatter(`agents/${reviewer}.md`).body, /apv review record --commit <sha> --domain/, reviewer);
+  assert.match(frontmatter('agents/qa-fidelite.md').body, /--capture desktop:light/);
+  const readme = read('README.md');
+  for (const topic of [/apv init/, /apv onboard --dry-run/, /apv rules check/, /DEMARRER-UN-PROJET\.md/, /REGLES\.md/, /installPath/]) assert.match(readme, topic);
+  for (const file of ['docs/REGLES.md', 'docs/DEMARRER-UN-PROJET.md', 'README.md', 'docs/CLI.md', 'docs/PLUGIN.md']) assert.ok(!/[–—]/.test(read(file)), `${file}: no em or en dash`);
+  assert.ok(!/Toujours rien/.test(start), 'the start guide is generic');
 });
