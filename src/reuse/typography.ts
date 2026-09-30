@@ -1,4 +1,12 @@
-import { scriptRanges, styleRanges } from './markup.js';
+import { blankComments, scriptRanges, styleRanges } from './markup.js';
+
+const spaces = (m: string): string => m.replace(/[^\n]/g, ' ');
+/** Comments and drawings left out: `<!-- 14 h -->`, an `<svg>` and geometry attributes (`d="M 10 20 h 30"`) are not texts. */
+function withoutDrawings(text: string): string {
+  return blankComments(text)
+    .replace(/<svg\b[\s\S]*?<\/svg\s*>/gi, spaces)
+    .replace(/\s(?:d|points|viewBox|transform|path|x|y|cx|cy|r|width|height)\s*=\s*(?:"[^"\n]*"|'[^'\n]*')/g, spaces);
+}
 
 /**
  * Typographic values that must not break at the end of a line, per language: an hour (`14 h 47`), a date
@@ -47,6 +55,7 @@ export interface TypographyHit { line: number; values: string[] }
  */
 export function breakableValues(text: string, ext: string, patterns: readonly TypographyPattern[], markup: boolean, lines?: ReadonlySet<number>): TypographyHit[] {
   const hits: TypographyHit[] = [];
+  text = withoutDrawings(text);
   const scripts = markup ? scriptRanges(text, ext) : [];
   const styles = markup ? styleRanges(text) : [];
   const jsx = ext === 'tsx' || ext === 'jsx';

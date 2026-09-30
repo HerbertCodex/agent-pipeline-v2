@@ -1,4 +1,11 @@
-import { scriptRanges, styleRanges } from './markup.js';
+import { blankComments, scriptRanges, styleRanges } from './markup.js';
+const spaces = (m) => m.replace(/[^\n]/g, ' ');
+/** Comments and drawings left out: `<!-- 14 h -->`, an `<svg>` and geometry attributes (`d="M 10 20 h 30"`) are not texts. */
+function withoutDrawings(text) {
+    return blankComments(text)
+        .replace(/<svg\b[\s\S]*?<\/svg\s*>/gi, spaces)
+        .replace(/\s(?:d|points|viewBox|transform|path|x|y|cx|cy|r|width|height)\s*=\s*(?:"[^"\n]*"|'[^'\n]*')/g, spaces);
+}
 const MONTHS_FR = 'janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre|janv\\.|févr\\.|avr\\.|juil\\.|sept\\.|oct\\.|nov\\.|déc\\.';
 const UNITS_FR = '%|€|\\$|£|¥|k€|M€|Md€|km|m|cm|mm|kg|g|mg|ml|cl|min|ms|Ko|Mo|Go|To|ko|mo|go|°C|°F|px|pts?';
 const END = '(?=$|[\\s.,;:!?)\\]<"\'`/»])';
@@ -35,6 +42,7 @@ function textSegments(line) {
  */
 export function breakableValues(text, ext, patterns, markup, lines) {
     const hits = [];
+    text = withoutDrawings(text);
     const scripts = markup ? scriptRanges(text, ext) : [];
     const styles = markup ? styleRanges(text) : [];
     const jsx = ext === 'tsx' || ext === 'jsx';

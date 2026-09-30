@@ -3,23 +3,30 @@ import { posix } from 'node:path';
 import { CODE_EXTENSIONS, parseName } from '../structure/names.js';
 import { buildCodeMap, clashesFor } from '../knowledge/code-map.js';
 import { collectChanges, isAdded, readAtBase, readWorktree, resolveBase } from './changes.js';
-import { COMPONENT_EXTENSIONS, DEFAULT_STYLE_SOURCES, ELEMENT_FAMILIES, REUSE_RULES, STYLE_EXTENSIONS, UI_EXTENSIONS, extensionOf, globMatcher, mapSettings, reuseSettings, } from './config.js';
+import { COMPONENT_EXTENSIONS, DEFAULT_PRIMITIVE_PATHS, DEFAULT_STYLE_SOURCES, ELEMENT_FAMILIES, GENERATED_HEADER, GENERATED_PATHS, REUSE_RULES, STYLE_EXTENSIONS, UI_EXTENSIONS, extensionOf, globMatcher, mapSettings, reuseSettings, } from './config.js';
 import { TokenTable, blankImports, findClones, occurs, tokenize } from './duplicates.js';
 import { blocks, elementRule, findElements } from './markup.js';
-import { componentName, describeClash } from './names.js';
-import { Primitives, primitivesOf, restyledPrimitives, styleRules } from './styles.js';
+import { describeClash, replacementFor } from './names.js';
+import { Primitives, isLayoutOnly, primitivesOf, restyledPrimitives, styleRules } from './styles.js';
+import { environment } from '../execution/process.js';
+import { rangesOf } from './markup.js';
 import { breakableValues, typographyPatterns } from './typography.js';
 const SCRIPT_EXTENSIONS = new Set(['ts', 'js', 'mjs', 'cjs', 'mts', 'cts']);
 const LOCALE_FILE = /(?:^|\/)(?:locales?|i18n|messages|lang|translations)\//;
-/** Content of a file at a commit, or null (absent, unreadable, larger than 4 MB). */
+/** Content of a file at a commit, or null (absent, unreadable, larger than 4 MB); Git runs with the environment of the checks only. */
 function gitShow(repo, spec) {
     try {
-        return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'show', spec], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 4 * 1024 * 1024, timeout: 30_000 });
+        return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '--no-pager', 'show', '--no-textconv', '--end-of-options', spec], {
+            cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 4 * 1024 * 1024, timeout: 30_000,
+            env: { ...environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'TMP', 'LANG']), GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1' },
+        });
     }
     catch {
         return null;
     }
 }
+/** Extensions a rule reads: the only files whose first lines are read to tell a generated one. */
+const READ_EXTENSIONS = (ext) => CODE_EXTENSIONS.has(ext) || UI_EXTENSIONS.has(ext) || STYLE_EXTENSIONS.has(ext) || ext === 'json';
 const order = (a, b) => REUSE_RULES.indexOf(a.rule) - REUSE_RULES.indexOf(b.rule) || Number(b.isNew) - Number(a.isNew) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || a.line - b.line;
 /**
  * `apv reuse check` (docs/REUSE.md): what a change adds against the existing components of the project. Every rule
@@ -32,20 +39,30 @@ export async function checkReuse(repo, config, options = {}) {
     const changes = options.changes ?? await collectChanges(repo, resolveBase(repo, options.base, settings.reference));
     const designDir = config.design?.dir?.replace(/\/+$/, '');
     const ignored = globMatcher([...settings.ignore, ...(designDir ? [`${designDir}/**`] : [])]);
-    const files = changes.files.filter(path => !ignored(path));
     const cache = new Map();
     const read = (path) => {
         if (!cache.has(path))
             cache.set(path, readWorktree(repo, path));
         return cache.get(path);
     };
+    // Generated files (database types, clients): left out of every rule, listed apart, never counted.
+    const generatedName = globMatcher([...GENERATED_PATHS]);
+    const generated = [];
+    const files = changes.files.filter(path => {
+        if (ignored(path))
+            return false;
+        const isGenerated = generatedName(path) || (READ_EXTENSIONS(extensionOf(path)) && GENERATED_HEADER.test((read(path) ?? '').slice(0, 600)));
+        if (isGenerated)
+            generated.push(path);
+        return !isGenerated;
+    });
     const isTest = (path) => parseName(path)?.test ?? /(?:^|\/)(?:tests?|__tests__|e2e|fixtures)\//.test(path);
     let map = null;
     const codeMap = async () => (map ??= await buildCodeMap(repo, settings, mapConfig, { read }));
     const findings = [];
     const summary = Object.fromEntries(REUSE_RULES.map(rule => [rule, { severity: settings.severity[rule], active: settings.severity[rule] !== 'off', note: null, new: 0, existing: 0 }]));
-    const add = (finding) => {
-        const severity = settings.severity[finding.rule];
+    const add = (finding, override) => {
+        const severity = (override ?? settings.severity[finding.rule]);
         findings.push({ ...finding, severity, blocking: severity === 'error' && finding.isNew });
     };
     if (summary.native.active)
@@ -98,11 +115,13 @@ export async function checkReuse(repo, config, options = {}) {
     for (const finding of findings)
         summary[finding.rule][finding.isNew ? 'new' : 'existing']++;
     findings.sort(order);
-    return { ok: !findings.some(f => f.blocking), base: changes.base, analyzedFiles: files.length, rules: summary, findings, primitives };
+    return { ok: !findings.some(f => f.blocking), base: changes.base, analyzedFiles: files.length, rules: summary, findings, primitives,
+        generated: { count: generated.length, files: generated.slice(0, 20) } };
 }
 async function nativeRule(settings, files, read, isTest, changes, codeMap, add) {
     const rules = Object.keys(settings.native.elements).sort().map(elementRule);
     const allowed = globMatcher(settings.native.allowedPaths);
+    const preferred = globMatcher([...DEFAULT_PRIMITIVE_PATHS, ...settings.native.allowedPaths]);
     let shared = null;
     for (const path of files) {
         if (!UI_EXTENSIONS.has(extensionOf(path)) || allowed(path) || isTest(path))
@@ -110,13 +129,16 @@ async function nativeRule(settings, files, read, isTest, changes, codeMap, add) 
         const text = read(path);
         if (text === null)
             continue;
-        for (const hit of findElements(text, rules)) {
+        for (const hit of findElements(text, rules, extensionOf(path))) {
             let target = settings.native.elements[hit.selector] ?? null;
             if (target === null) {
-                shared ??= (await codeMap()).components.filter(c => c.shared).map(c => ({ path: c.path, family: componentName(c.path, settings.roles).family }));
+                shared ??= (await codeMap()).components.filter(c => c.shared).map(c => c.path);
                 const family = ELEMENT_FAMILIES[elementRule(hit.selector).tag];
-                target = shared.find(c => family && c.family === family)?.path ?? null;
+                target = family ? replacementFor(shared, family, settings.roles, preferred) : null;
             }
+            // The shared component that wraps the element is its replacement: never reported against itself.
+            if (target === path)
+                continue;
             const tag = hit.selector.replace(/^([a-z0-9-]+)(.*)$/, '<$1$2>');
             add({ rule: 'native', isNew: isAdded(changes, path, hit.line), path, line: hit.line,
                 message: target
@@ -166,17 +188,28 @@ function stylesRule(settings, files, read, isTest, changes, add, summary) {
             continue;
         const rules = markup ? blocks(text, 'style').flatMap(b => styleRules(b.content, b.line)) : styleRules(text);
         for (const hit of restyledPrimitives(rules, primitives)) {
-            if (hit.nested && settings.styles.nested === 'allow')
+            if (hit.nested && (settings.styles.nested === 'allow' || (settings.styles.nested === 'layout' && isLayoutOnly(hit.properties))))
                 continue;
             add({ rule: 'styles', isNew: isAdded(changes, path, hit.line), path, line: hit.line,
                 message: hit.nested
-                    ? `« ${hit.selector} » ajuste la primitive .${hit.primitive} (${sourceList}) sous une classe du composant : ajustement imbriqué refusé (reuse.styles.nested) ; ajouter une variante à la primitive ou au composant partagé.`
+                    ? `« ${hit.selector} » ajuste la primitive .${hit.primitive} (${sourceList}) sous une classe du composant avec ${hit.properties.filter(p => settings.styles.nested === 'refuse' || !isLayoutOnly([p])).join(', ') || 'des propriétés'}${settings.styles.nested === 'layout' ? ' (seule la mise en page est permise : marges, largeur, alignement, ordre, position)' : ''} : ajouter une variante à la primitive ou au composant partagé.`
                     : `« ${hit.selector} » redéfinit la primitive .${hit.primitive} (${sourceList}) dans un style local : utiliser la classe telle quelle, ou ajouter une variante à la primitive ou au composant partagé.` });
         }
     }
     return { sources, count: primitives.size };
 }
 function duplicatesRule(repo, settings, files, read, isTest, changes, add) {
+    // Lines of style: whole style sheets, and the `<style>` blocks of interface files.
+    const styleLines = new Map();
+    const inStyle = (path, from, to) => {
+        let ranges = styleLines.get(path);
+        if (!ranges) {
+            const ext = extensionOf(path);
+            ranges = STYLE_EXTENSIONS.has(ext) ? 'all' : UI_EXTENSIONS.has(ext) ? rangesOf(read(path) ?? '', 'style') : [];
+            styleLines.set(path, ranges);
+        }
+        return ranges === 'all' || ranges.some(([a, b]) => from >= a && to <= b);
+    };
     const included = settings.duplicates.paths ? globMatcher(settings.duplicates.paths) : (path) => {
         const ext = extensionOf(path);
         return CODE_EXTENSIONS.has(ext) || STYLE_EXTENSIONS.has(ext) || COMPONENT_EXTENSIONS.has(ext) || ext === 'html';
@@ -211,7 +244,10 @@ function duplicatesRule(repo, settings, files, read, isTest, changes, add) {
                 return true;
         return false;
     };
-    for (const clone of findClones(tokens, options)) {
+    for (const found of findClones(tokens, options)) {
+        // The finding sits on the copy the change adds or modifies, never on the original it copies.
+        const swap = !touched(found.a.path, found.a.startLine, found.a.endLine) && touched(found.b.path, found.b.startLine, found.b.endLine);
+        const clone = swap ? { ...found, a: found.b, b: found.a } : found;
         let isNew = touched(clone.a.path, clone.a.startLine, clone.a.endLine) || touched(clone.b.path, clone.b.startLine, clone.b.endLine);
         // Touched but already duplicated at the base (same tokens in both files there): the copy is not the change's.
         if (isNew && !changes.all) {
@@ -221,9 +257,14 @@ function duplicatesRule(repo, settings, files, read, isTest, changes, add) {
             if (a && b && (clone.a.path === clone.b.path ? occurs(a, needle, true) : occurs(a, needle) && occurs(b, needle)))
                 isNew = false;
         }
+        // Style declarations only: their own severity (`duplicates.styles`, warning by default).
+        const styles = inStyle(clone.a.path, clone.a.startLine, clone.a.endLine) && inStyle(clone.b.path, clone.b.startLine, clone.b.endLine);
+        const severity = styles ? settings.duplicates.styles : settings.severity.duplicates;
+        if (severity === 'off')
+            continue;
         add({ rule: 'duplicates', isNew, path: clone.a.path, line: clone.a.startLine, endLine: clone.a.endLine,
             other: { path: clone.b.path, line: clone.b.startLine, endLine: clone.b.endLine },
-            message: `bloc identique à ${clone.b.path}:${clone.b.startLine}-${clone.b.endLine} (${clone.lines} lignes, ${clone.tokens} jetons) : le factoriser dans un module ou un composant partagé et paramétrable, puis retirer la copie.` });
+            message: `${styles ? 'styles identiques à' : 'bloc identique à'} ${clone.b.path}:${clone.b.startLine}-${clone.b.endLine} (${clone.lines} lignes, ${clone.tokens} jetons) : ${styles ? 'les mettre dans une primitive ou une variante partagée' : 'le factoriser dans un module ou un composant partagé et paramétrable'}, puis retirer la copie.` }, severity);
     }
 }
 //# sourceMappingURL=check.js.map

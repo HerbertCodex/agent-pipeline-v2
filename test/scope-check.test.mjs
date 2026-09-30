@@ -81,3 +81,14 @@ test('porcelain status paths skip the source of a rename', () => {
   assert.deepEqual(porcelainPaths('R  new.txt\0old.txt\0?? added.txt\0 M src/a.ts\0'), ['new.txt', 'added.txt', 'src/a.ts']);
   assert.deepEqual(porcelainPaths(''), []);
 });
+
+test('the code map committed by a task is out of scope, with what to do: the integration regenerates it', async t => {
+  const f = branch(t);
+  f.commit('src/math.mjs', 'export const add = (a, b) => a + b;\n');
+  f.commit('.apv/code-map.md', '# Carte du code\n');
+  const r = await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH', '--json']);
+  assert.equal(r.code, 1);
+  assert.deepEqual([r.json().outOfScope, r.json().codeMap], [['.apv/code-map.md'], true]);
+  const human = await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH']);
+  assert.match(human.stdout, /La carte du code \(\.apv\/code-map\.md\) ne se commite pas dans une tâche : l'intégration la régénère une fois par vague/);
+});

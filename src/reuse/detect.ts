@@ -1,14 +1,31 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { accessSync, constants, readFileSync, statSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import { gitRead, resolveFullRef } from '../run/git-probe.js';
 import { isComponentFile, routeOf } from '../knowledge/code-map.js';
-import { componentName } from './names.js';
-import { DEFAULT_NATIVE_ELEMENTS, DEFAULT_REUSE_IGNORE, DEFAULT_ROLE_FAMILIES, DEFAULT_STYLE_SOURCES, ELEMENT_FAMILIES, UI_EXTENSIONS, extensionOf, globMatcher } from './config.js';
+import { replacementFor } from './names.js';
+import { DEFAULT_NATIVE_ELEMENTS, DEFAULT_PRIMITIVE_PATHS, DEFAULT_REUSE_IGNORE, DEFAULT_ROLE_FAMILIES, DEFAULT_STYLE_SOURCES, ELEMENT_FAMILIES, UI_EXTENSIONS, extensionOf, globMatcher } from './config.js';
 
-/** The gate of `apv reuse check`, added by `apv init` and `apv onboard` to a web project (task stage: it also runs in the full suite). */
-export const REUSE_GATE = { id: 'reuse', command: ['apv', 'reuse', 'check'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true } as const;
-/** The gate of the code map, added to every project: it fails when `.apv/code-map.md` no longer matches the code. */
-export const MAP_GATE = { id: 'code-map', command: ['apv', 'map', '--check'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true } as const;
+/**
+ * The gate of `apv reuse check`, added by `apv init` and `apv onboard` to a web project (task stage: it also runs in the
+ * full suite). What is new is counted from `{{baseSha}}`, the base of the run, which is part of the proof key of every
+ * receipt: a moved remote-tracking ref (`git update-ref`) can never turn a copy into an existing block.
+ */
+export const REUSE_GATE = { id: 'reuse', command: ['apv', 'reuse', 'check', '--base', '{{baseSha}}'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true } as const;
+/**
+ * The gate of the code map, added to every project: it fails when `.apv/code-map.md` no longer matches the code. Full
+ * stage: tasks never commit the map (parallel tasks would conflict on it); the integration regenerates it once per wave.
+ */
+export const MAP_GATE = { id: 'code-map', command: ['apv', 'map', '--check'], covers: ['architecture'], stage: 'full', readOnly: true, mandatory: true } as const;
+
+/** True when an executable `apv` is on the PATH: the generated checks call it by that name. */
+export function apvOnPath(path = process.env['PATH'] ?? ''): boolean {
+  for (const dir of path.split(delimiter).filter(Boolean)) {
+    for (const name of process.platform === 'win32' ? ['apv.cmd', 'apv.exe', 'apv'] : ['apv']) {
+      try { accessSync(join(dir, name), constants.X_OK); if (statSync(join(dir, name)).isFile()) return true; } catch { /* next */ }
+    }
+  }
+  return false;
+}
 
 /** Dependencies that make a project a web interface. */
 const WEB_DEPENDENCIES = /^(?:svelte|@sveltejs\/kit|react|react-dom|next|vue|nuxt|astro|solid-js|@solidjs\/start|preact|lit|@angular\/core|@remix-run\/[\w-]+|@builder\.io\/qwik|@qwik\.dev\/core|htmx\.org|alpinejs)$/;
@@ -22,6 +39,7 @@ export interface ReuseDocument {
   reference?: string;
   shared?: string[];
   native: { elements: Record<string, string | null>; allowedPaths?: string[] };
+  styles?: { allowedPaths: string[] };
   typography?: { locale: string };
 }
 
@@ -43,13 +61,13 @@ function readJson(path: string): Record<string, unknown> | null {
   catch { return null; }
 }
 
-/** The branch changes go to: `origin/HEAD`, else `origin/main` or `origin/master`, else the current branch. */
+/** The branch changes go to: `origin/HEAD`, else `origin/main` or `origin/master`; null otherwise (to configure). */
 export function detectReference(repo: string): string | null {
   const head = gitRead(repo, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
   if (head?.startsWith('refs/remotes/')) return head.slice('refs/remotes/'.length);
   for (const name of ['origin/main', 'origin/master']) if (resolveFullRef(repo, name).sha) return name;
-  const branch = gitRead(repo, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
-  return branch && resolveFullRef(repo, branch).sha ? branch : null;
+  // Never the current branch: comparing a branch with itself would call everything existing.
+  return null;
 }
 
 /** The language of the interface texts, from the `lang` of the document (`<html lang="fr">`, `lang: 'fr'`). */
@@ -96,10 +114,11 @@ export function detectReuse(repo: string, files: readonly string[]): ReusePropos
   const shared = [...sharedDirs].sort().map(d => `${d}/**`);
   const primitives = [...primitiveDirs].sort().map(d => `${d}/**`);
   const sharedMatch = globMatcher(shared.length ? shared : ['**/components/**']);
-  const sharedComponents = components.filter(sharedMatch).map(p => componentName(p, DEFAULT_ROLE_FAMILIES));
+  const sharedComponents = components.filter(sharedMatch);
+  const preferred = globMatcher(primitives.length ? primitives : [...DEFAULT_PRIMITIVE_PATHS]);
   const elements: Record<string, string | null> = {};
   for (const element of DEFAULT_NATIVE_ELEMENTS) {
-    elements[element] = sharedComponents.find(c => c.family === ELEMENT_FAMILIES[element])?.path ?? null;
+    elements[element] = replacementFor(sharedComponents, ELEMENT_FAMILIES[element]!, DEFAULT_ROLE_FAMILIES, preferred);
   }
   const present = new Set(files);
   const styleSources = DEFAULT_STYLE_SOURCES.filter(s => present.has(s));
@@ -109,6 +128,7 @@ export function detectReuse(repo: string, files: readonly string[]): ReusePropos
     ...(reference ? { reference } : {}),
     ...(shared.length ? { shared } : {}),
     native: { elements, ...(primitives.length ? { allowedPaths: primitives } : {}) },
+    ...(primitives.length ? { styles: { allowedPaths: primitives } } : {}),
     ...(locale ? { typography: { locale } } : {}),
   };
   return { web: deps.length > 0 || ui.length > 0, signals, section, shared, primitives, styleSources, locale, reference };

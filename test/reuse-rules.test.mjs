@@ -2,13 +2,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { TokenTable, blankImports, findClones, occurs, tokenize } from '../dist/reuse/duplicates.js';
 import { blocks, elementRule, findElements } from '../dist/reuse/markup.js';
-import { Primitives, primitivesOf, restyledPrimitives, styleRules, unwrapScoping } from '../dist/reuse/styles.js';
+import { Primitives, isLayoutOnly, primitivesOf, restyledPrimitives, styleRules, unwrapScoping } from '../dist/reuse/styles.js';
 import { breakableValues, typographyPatterns } from '../dist/reuse/typography.js';
-import { clashOf, componentName, describeClash } from '../dist/reuse/names.js';
-import { DEFAULT_ROLE_FAMILIES, reuseSettings } from '../dist/reuse/config.js';
+import { clashOf, componentName, describeClash, replacementFor } from '../dist/reuse/names.js';
+import { DEFAULT_ROLE_FAMILIES, GENERATED_HEADER, reuseSettings } from '../dist/reuse/config.js';
 import { parseAddedLines } from '../dist/reuse/changes.js';
-import { codeMapMarkdown, shares, importsOf, propsOf, routeOf, summaryOf, variantsOf, declaredRoutes } from '../dist/knowledge/code-map.js';
+import { codeMapMarkdown, maskSecrets, shares, importsOf, propsOf, routeOf, summaryOf, variantsOf, declaredRoutes } from '../dist/knowledge/code-map.js';
 import { configIssues } from '../dist/config/load.js';
+import { NOT_SEARCHED } from '../dist/gates/proof-scope.js';
+import { apvOnPath } from '../dist/reuse/detect.js';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const BLOCK = `function total(items) {
   let sum = 0;
@@ -165,10 +170,12 @@ test('configuration: defaults, overrides, and every invalid value refused by the
   const d = reuseSettings(undefined);
   assert.deepEqual(d.severity, { native: 'error', styles: 'error', duplicates: 'error', names: 'warning', typography: 'warning' });
   assert.deepEqual(Object.keys(d.native.elements), ['select', 'dialog', 'datalist']);
-  assert.deepEqual(d.native.allowedPaths, d.shared);
-  assert.deepEqual([d.duplicates.minLines, d.duplicates.minTokens, d.reference, d.locale, d.styles.nested], [5, 50, null, null, 'refuse']);
+  // Native elements and primitives: the generic shared components only, never a component folder of one feature.
+  assert.deepEqual(d.native.allowedPaths, ['**/components/ui/**', '**/ui/**', '**/primitives/**', '**/design-system/**', '**/shared/**', '**/common/**']);
+  assert.deepEqual(d.styles.allowedPaths, d.native.allowedPaths);
+  assert.deepEqual([d.duplicates.minLines, d.duplicates.minTokens, d.duplicates.styles, d.reference, d.locale, d.styles.nested], [5, 50, 'warning', null, null, 'layout']);
   const s = reuseSettings({ shared: ['src/lib/components/**'], severity: 'warning', names: { roles: { toast: null, feed: ['feed', 'timeline'] } }, native: { elements: { 'input[type=date]': 'src/lib/ui/DateField.svelte' } } });
-  assert.deepEqual([s.severity.duplicates, s.roles.toast, s.roles.feed, s.native.allowedPaths], ['warning', undefined, ['feed', 'timeline'], ['src/lib/components/**']]);
+  assert.deepEqual([s.severity.duplicates, s.roles.toast, s.roles.feed], ['warning', undefined, ['feed', 'timeline']]);
   assert.deepEqual(configIssues({ reuse: { reference: 'origin/main', styles: { nested: 'allow', selectors: ['.btn', '.pill--*'] }, typography: { locale: 'fr' } }, map: { file: 'docs/code-map.md' } }).issues, []);
   for (const reuse of [{ shared: ['../x/**'] }, { shared: ['/abs/**'] }, { native: { elements: { Select: null } } }, { severity: { native: 'fatal' } },
     { duplicates: { minTokens: 1 } }, { styles: { selectors: ['btn'] } }, { typography: { locale: 'français' } }, { bogus: true }, { reference: '-x' }]) {
@@ -234,4 +241,108 @@ test('code map markdown: sections by folder, bounded, deterministic', () => {
   assert.match(tight, /- et 28 autres entrées dans ce dossier/);
   assert.match(tight, /## Routes\n\n- `\/` : src\/routes \(\+page\.svelte\)/);
   assert.match(tight, /AdminToast\.svelte/, 'the feature section is never starved');
+});
+
+// Review of PR #95: one test per correction.
+
+test('H4: only the base class of a top-level rule is a primitive; states, themes and the document never are', () => {
+  const css = `.btn { padding: 0; }
+.btn.active { color: red; }
+.btn--primary:hover { color: blue; }
+.dark { --bg: #000; }
+.dark .card { color: white; }
+html.dark .panel { color: white; }
+:root { --x: 1; }
+[data-theme="dark"] .field { color: red; }
+.is-open { display: block; }
+.active { color: red; }
+body { margin: 0; }
+a:hover { color: red; }`;
+  assert.deepEqual(primitivesOf(css), ['btn', 'btn--primary']);
+});
+
+test('M: nested adjustments of layout are accepted by default, a redefinition of the look is not', () => {
+  const primitives = new Primitives(['btn'], [], []);
+  const rules = styleRules('.own .btn { margin-top: 1rem; width: 100%; align-self: end; order: 2 }\n.own .btn { color: red; }\n.own { .btn { border-radius: 0 } }\n');
+  const hits = restyledPrimitives(rules, primitives);
+  assert.deepEqual(hits.map(h => [h.line, isLayoutOnly(h.properties)]), [[1, true], [2, false], [3, false]]);
+  assert.deepEqual(rules[0].properties, ['margin-top', 'width', 'align-self', 'order']);
+});
+
+test('M: a native element in a comment, in a script or in a JSX string is not markup', () => {
+  const rules = ['select'].map(elementRule);
+  const svelte = '<script>\n  // <select> natif\n  const html = "<select>";\n</script>\n<!-- <select> -->\n<select bind:value={v}></select>\n';
+  assert.deepEqual(findElements(svelte, rules, 'svelte').map(h => h.line), [6]);
+  const jsx = 'const a = "<select>"; // <select>\nexport const F = () => <select value="a" />;\n';
+  assert.deepEqual(findElements(jsx, rules, 'tsx').map(h => h.line), [2]);
+  assert.deepEqual(findElements('<input type="date" />', ['input[type=date]'].map(elementRule), 'tsx').length, 1, 'attribute values are kept');
+});
+
+test('M: the replacement of an element is the generic shared component, primitives first; never a feature component', () => {
+  const paths = ['src/lib/components/Dropdown.svelte', 'src/lib/components/ui/Select.svelte', 'src/lib/admin/components/AddDeviceDialog.svelte', 'src/lib/components/ui/ConfirmDialog.svelte'];
+  const ui = p => p.includes('/ui/');
+  assert.equal(replacementFor(paths, 'select', DEFAULT_ROLE_FAMILIES, ui), 'src/lib/components/ui/Select.svelte');
+  assert.equal(replacementFor(paths, 'dialog', DEFAULT_ROLE_FAMILIES, ui), null, 'no generic dialog: none proposed');
+  assert.equal(replacementFor(['src/lib/components/Dropdown.svelte'], 'select', DEFAULT_ROLE_FAMILIES, ui), 'src/lib/components/Dropdown.svelte');
+});
+
+test('BAS: typography leaves comments and drawings out', () => {
+  const fr = typographyPatterns('fr');
+  const markup = '<!-- publié à 14 h 47 -->\n<svg viewBox="0 0 24 24"><path d="M 10 20 h 30" /></svg>\n<path d="M 1 2 h 3" />\n<p>à 14 h 47</p>\n';
+  assert.deepEqual(breakableValues(markup, 'svelte', fr, true).map(h => h.line), [4]);
+});
+
+test('M: the map is bounded in bytes, the shared components kept first', () => {
+  const component = (path, shared) => ({ path, shared, summary: 'Un composant du socle avec un rôle décrit en une ligne.', props: ['a', 'b'], variants: {}, usedBy: ['src/routes/+page.svelte'], clashes: [] });
+  const map = {
+    components: [...Array.from({ length: 30 }, (_, i) => component(`src/lib/components/C${String(i).padStart(2, '0')}.svelte`, true)),
+      ...Array.from({ length: 30 }, (_, i) => component(`src/routes/f/F${String(i).padStart(2, '0')}.svelte`, false))],
+    modules: Array.from({ length: 200 }, (_, i) => ({ path: `src/lib/m${i}/mod.ts`, feature: false, summary: 'Un module.', exports: [{ name: 'f', kind: 'function' }], usedBy: [] })),
+    routes: Array.from({ length: 50 }, (_, i) => ({ route: `/r${i}`, files: [`src/routes/r${i}/+page.svelte`] })),
+    skipped: { tests: 0, ignored: 0, silentModules: 0 }, partial: null,
+  };
+  const text = codeMapMarkdown(map, { maxEntries: 400, maxBytes: 8192 });
+  assert.ok(Buffer.byteLength(text) <= 8192, `${Buffer.byteLength(text)} bytes`);
+  assert.equal((text.match(/`C\d\d\.svelte`/g) ?? []).length, 30, 'every shared component listed');
+  assert.match(text, /au-delà de la taille de la carte/);
+  assert.match(codeMapMarkdown({ ...map, partial: { described: 10, total: 60000 } }, { maxEntries: 400 }), /Carte partielle : le dépôt compte 60000 fichiers/);
+});
+
+test('BAS: secrets are masked in summaries; paths and words are not', () => {
+  // Fake keys assembled at run time: no key-shaped literal in the repository (secret scanning).
+  const live = ['sk', 'live', 'abcdefgh12345678'].join('_');
+  const test = ['sk', 'test', 'Zx81QwErTy67UiOp90AsDf'].join('_');
+  assert.equal(maskSecrets(`clé ${live} et jeton eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig`), 'clé [masqué] et jeton [masqué]');
+  assert.equal(maskSecrets('voir src/lib/components/app-shell/toast/ToastRegion'), 'voir src/lib/components/app-shell/toast/ToastRegion');
+  assert.equal(maskSecrets('hash 0123456789abcdef0123456789abcdef'), 'hash [masqué]');
+  assert.equal(summaryOf(`/** Client de paiement, clé ${test}. */\nexport const x = 1;`, 'ts'), 'Client de paiement, clé [masqué].');
+});
+
+test('BAS: patterns with a bounded repetition stay linear on a hostile input', () => {
+  const started = Date.now();
+  importsOf(`import ${'a '.repeat(40000)}`, 'ts');
+  propsOf(`const Card ${'x'.repeat(40000)}`, 'tsx', 'Card');
+  summaryOf(`${'# commentaire\n'.repeat(2000)}`, 'py');
+  assert.ok(Date.now() - started < 2000, `${Date.now() - started} ms`);
+});
+
+test('M: the code map file is never searched for mentions by the scope of a proof', () => {
+  assert.ok(NOT_SEARCHED.includes('.apv/code-map.md'));
+});
+
+test('M: apv on the PATH is found or reported', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'apv3-path-'));
+  try {
+    assert.equal(apvOnPath(dir), false);
+    writeFileSync(join(dir, 'apv'), '#!/bin/sh\n');
+    chmodSync(join(dir, 'apv'), 0o755);
+    assert.equal(apvOnPath(`/nonexistent:${dir}`), true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('H3: a generated file says so in its first lines; a comment that only mentions generation is not enough', () => {
+  for (const header of ['// @generated', '/* eslint-disable */\n// This file was automatically generated. Do not edit.', '// Code generated by protoc-gen-go. DO NOT EDIT.', '// Fichier généré, ne pas modifier.', '# auto-generated'])
+    assert.ok(GENERATED_HEADER.test(header), header);
+  for (const header of ['// Le QR code generated by the authenticator app.', '// Codes générés par l\'appareil : ne pas les journaliser.'])
+    assert.ok(!GENERATED_HEADER.test(header), header);
 });

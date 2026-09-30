@@ -1,5 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, sep } from 'node:path';
+import { PipelineError } from '../domain/errors.js';
 import { loadConfig } from '../config/load.js';
 import { gitRoot } from '../run/git-probe.js';
 import { buildCodeMap, codeMapMarkdown, type CodeMap } from '../knowledge/code-map.js';
@@ -33,10 +35,33 @@ function difference(actual: string, expected: string): { onlyInFile: string[]; o
   return { onlyInFile: [...a].filter(l => l && !e.has(l)).slice(0, 10), onlyExpected: [...e].filter(l => l && !a.has(l)).slice(0, 10) };
 }
 
-/** Writes the map when it changed; with `check`, compares only. */
+/**
+ * The map file, checked before any read or write: no component of its path (from the repository root) may be a symbolic
+ * link, it must stay inside the repository once resolved, and an existing file must be a regular file. A map linked to a
+ * file outside the repository is never read into the output or the receipts, nor overwritten.
+ */
+export function mapPath(repo: string, file: string): string {
+  const root = realpathSync(repo);
+  let current = repo;
+  for (const part of file.split('/')) {
+    current = join(current, part);
+    let stat;
+    try { stat = lstatSync(current); } catch { break; }
+    if (stat.isSymbolicLink()) throw new PipelineError('MAP_PATH', `${file} : ${relative(repo, current) || part} est un lien symbolique ; la carte du code s'écrit dans le dépôt, jamais à travers un lien. Retirez le lien (ou changez map.file), puis relancez apv map.`);
+  }
+  const full = join(repo, file);
+  let parent = dirname(full);
+  while (!existsSync(parent)) parent = dirname(parent);
+  const real = realpathSync(parent);
+  if (real !== root && !real.startsWith(`${root}${sep}`)) throw new PipelineError('MAP_PATH', `${file} sort du dépôt une fois résolu (${real}).`);
+  if (existsSync(full) && !lstatSync(full).isFile()) throw new PipelineError('MAP_PATH', `${file} n'est pas un fichier ordinaire.`);
+  return full;
+}
+
+/** Writes the map when it changed, atomically (temporary file created exclusively, then renamed); with `check`, compares only. */
 export async function writeMap(repo: string, config: { reuse?: ReuseSection | undefined; map?: MapSection | undefined }, check: boolean): Promise<MapResult & { map: CodeMap }> {
   const { file, map, text } = await currentMap(repo, config);
-  const full = join(repo, file);
+  const full = mapPath(repo, file);
   const actual = existsSync(full) ? readFileSync(full, 'utf8') : null;
   if (check) {
     if (actual === null) return { file, status: 'missing', difference: null, map };
@@ -44,7 +69,15 @@ export async function writeMap(repo: string, config: { reuse?: ReuseSection | un
   }
   if (actual === text) return { file, status: 'unchanged', difference: null, map };
   mkdirSync(dirname(full), { recursive: true });
-  writeFileSync(full, text);
+  mapPath(repo, file);
+  const temporary = `${full}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    writeFileSync(temporary, text, { flag: 'wx' });
+    renameSync(temporary, full);
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
+  }
   return { file, status: 'written', difference: null, map };
 }
 

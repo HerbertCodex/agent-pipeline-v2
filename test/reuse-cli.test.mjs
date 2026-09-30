@@ -1,10 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
+import { detectReference } from '../dist/reuse/detect.js';
+import { buildWorktreeInventory } from '../dist/knowledge/inventory.js';
+import { buildCodeMap } from '../dist/knowledge/code-map.js';
+import { mapSettings, reuseSettings } from '../dist/reuse/config.js';
+import { mapFields } from '../dist/commands/init.js';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const read = (repo, path) => readFileSync(join(repo, path), 'utf8');
@@ -71,11 +76,13 @@ test('apv onboard on an existing web project: reuse and code map checks, detecte
   assert.equal(r.code, 0, r.stderr);
   const out = r.json();
   const config = JSON.parse(read(f.repo, '.apv/config.json'));
-  assert.deepEqual(config.gates.map(g => [g.id, g.command.join(' '), g.stage, g.readOnly]), [['reuse', 'apv reuse check', 'task', true], ['code-map', 'apv map --check', 'task', true]]);
+  // The base of the run ({{baseSha}}, in the proof key) says what is new; the map is checked by the full suite.
+  assert.deepEqual(config.gates.map(g => [g.id, g.command.join(' '), g.stage, g.readOnly]), [['reuse', 'apv reuse check --base {{baseSha}}', 'task', true], ['code-map', 'apv map --check', 'full', true]]);
   assert.deepEqual(config.reuse, {
     reference: 'origin/main',
     shared: ['src/lib/components/**'],
     native: { elements: { select: 'src/lib/components/ui/Select.svelte', dialog: null, datalist: 'src/lib/components/ui/Select.svelte' }, allowedPaths: ['src/lib/components/ui/**'] },
+    styles: { allowedPaths: ['src/lib/components/ui/**'] },
     typography: { locale: 'fr' },
   });
   assert.equal(out.reuse.web, true);
@@ -124,7 +131,7 @@ test('apv reuse check blocks what a change adds: native select, restyled primiti
   const byRule = rule => out.findings.find(x => x.rule === rule && x.isNew);
   assert.match(byRule('native').message, /<select> natif réservé aux composants partagés : utiliser src\/lib\/components\/ui\/Select\.svelte\./);
   assert.match(byRule('styles').message, /« \.btn » redéfinit la primitive \.btn \(src\/app\.css\)/);
-  assert.match(out.findings.find(x => x.rule === 'styles' && x.line === 8).message, /ajustement imbriqué refusé/);
+  assert.match(out.findings.find(x => x.rule === 'styles' && x.line === 8).message, /sous une classe du composant avec border \(seule la mise en page est permise/);
   assert.deepEqual(byRule('duplicates').other, { path: 'src/lib/cart/total.ts', line: 2, endLine: 9 });
   assert.match(out.findings.find(x => x.path.endsWith('AdminToast.svelte')).message, /nom construit sur celui de src\/lib\/components\/Toast\.svelte \(rôle toast\)/);
   assert.match(out.findings.find(x => x.path.endsWith('AdminShell.svelte') && x.rule === 'names').message,
@@ -235,13 +242,21 @@ test('apv init on a new web project declares both checks, and apv gates run prov
   assert.match((await apv(f.repo, ['init'])).stdout, /Existait déjà/);
   commit(f.repo, 'apv');
   git(f.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
-  const green = await apv(f.repo, ['gates', 'run', '--stage', 'task', '--json'], env);
+  const main = git(f.repo, 'rev-parse', 'HEAD');
+  assert.match((await apv(f.repo, ['gates', 'run', '--stage', 'task', '--json'], env)).stderr, /reuse uses \{\{baseSha\}\}: pass --base/, 'the base of the run is required');
+  const green = await apv(f.repo, ['gates', 'run', '--stage', 'task', '--base', 'origin/main', '--json'], env);
   assert.equal(green.code, 0, green.stdout + green.stderr);
-  assert.deepEqual(green.json().gates.map(g => [g.gate, g.status]), [['reuse', 'passed'], ['code-map', 'passed']]);
+  assert.deepEqual(green.json().gates.map(g => [g.gate, g.status]), [['reuse', 'passed']]);
+  assert.deepEqual(green.json().reserved, ['code-map'], 'the map is checked by the full suite only');
+  const full = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/main', '--json'], env);
+  assert.equal(full.code, 0, full.stdout + full.stderr);
+  assert.deepEqual(full.json().gates.map(g => [g.gate, g.status]).sort(), [['code-map', 'passed'], ['reuse', 'passed']]);
   git(f.repo, 'switch', '-q', '-c', 'feature/admin');
   badAdmin(f.repo);
   commit(f.repo, 'admin');
-  const red = await apv(f.repo, ['gates', 'run', '--stage', 'task', '--keep-going', '--json'], env);
+  // A remote-tracking ref moved onto the change never makes its copies « existing »: the base is the one of the run.
+  git(f.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  const red = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', main, '--keep-going', '--json'], env);
   assert.equal(red.code, 1);
   const rows = Object.fromEntries(red.json().gates.map(g => [g.gate, g]));
   assert.deepEqual([rows.reuse.status, rows['code-map'].status], ['failed', 'failed']);
@@ -249,4 +264,130 @@ test('apv init on a new web project declares both checks, and apv gates run prov
   assert.match(rows['code-map'].diagnostic, /Carte du code périmée/);
   const receipt = JSON.parse(read(f.repo, `.apv/receipts/${red.json().runId}/reuse.json`));
   assert.equal(receipt.status, 'failed');
+});
+
+// Review of PR #95: one test per correction.
+
+test('H1: apv map never reads nor writes through a symbolic link, and writes inside the repository only', async t => {
+  const f = project(t);
+  const outside = join(f.root, 'outside.md');
+  writeFileSync(outside, 'SECRET OUTSIDE\n');
+  mkdirSync(join(f.repo, '.apv'), { recursive: true });
+  symlinkSync(outside, join(f.repo, '.apv/code-map.md'));
+  for (const args of [['map', '--check'], ['map'], ['map', '--check', '--json']]) {
+    const r = await apv(f.repo, args);
+    assert.equal(r.code, 1, args.join(' '));
+    assert.match(r.stderr, /MAP_PATH.*lien symbolique/);
+    assert.doesNotMatch(r.stdout + r.stderr, /SECRET OUTSIDE/);
+  }
+  assert.equal(readFileSync(outside, 'utf8'), 'SECRET OUTSIDE\n', 'never overwritten');
+  // A linked folder on the way is refused too.
+  rmSync(join(f.repo, '.apv'), { recursive: true });
+  mkdirSync(join(f.root, 'elsewhere'));
+  symlinkSync(join(f.root, 'elsewhere'), join(f.repo, '.apv'));
+  assert.equal((await apv(f.repo, ['map'])).code, 1);
+  assert.ok(!existsSync(join(f.root, 'elsewhere/code-map.md')));
+  // Written atomically: no temporary file left.
+  rmSync(join(f.repo, '.apv'));
+  assert.equal((await apv(f.repo, ['map'])).code, 0);
+  assert.deepEqual(readdirSync(join(f.repo, '.apv')), ['code-map.md']);
+});
+
+test('H3: generated files (by name or first lines) are left out and listed apart, never counted', async t => {
+  const f = project(t);
+  git(f.repo, 'switch', '-q', '-c', 'feature/types');
+  const table = name => `      ${name}: {\n        Row: { id: string; title: string; created_at: string; owner: string; status: string }\n        Insert: { id?: string; title: string; created_at?: string; owner: string; status?: string }\n        Update: { id?: string; title?: string; created_at?: string; owner?: string; status?: string }\n        Relationships: []\n      }\n`;
+  write(f.repo, 'src/lib/database.types.ts', `export type Database = {\n  public: {\n    Tables: {\n${table('a')}${table('b')}${table('c')}    }\n  }\n}\n`);
+  write(f.repo, 'src/lib/api/client.ts', `/* eslint-disable */\n// This file was generated by openapi-typescript. Do not edit.\n${TOTAL}${TOTAL.replace('total(', 'total2(')}`);
+  const r = await apv(f.repo, ['reuse', 'check', '--base', 'origin/main', '--json']);
+  assert.equal(r.code, 0, JSON.stringify(r.json().findings.filter(x => x.isNew)));
+  assert.deepEqual(r.json().generated, { count: 2, files: ['src/lib/api/client.ts', 'src/lib/database.types.ts'] });
+  assert.ok(!r.json().findings.some(x => x.path.includes('database.types') || x.path.includes('api/client')));
+  assert.match((await apv(f.repo, ['reuse', 'check', '--base', 'origin/main'])).stdout, /Fichiers générés laissés de côté : 2 \(src\/lib\/api\/client\.ts, src\/lib\/database\.types\.ts\)/);
+});
+
+test('M: a copy is reported on the side the change adds, whatever the path order', async t => {
+  const f = project(t);
+  git(f.repo, 'switch', '-q', '-c', 'feature/copy');
+  write(f.repo, 'src/aaa/copy.ts', TOTAL.replace('total(', 'copied('));
+  const r = await apv(f.repo, ['reuse', 'check', '--base', 'origin/main', '--json']);
+  const found = r.json().findings.find(x => x.rule === 'duplicates' && x.isNew);
+  assert.equal(found.path, 'src/aaa/copy.ts');
+  assert.equal(found.other.path, 'src/lib/cart/total.ts');
+});
+
+test('M: native elements are allowed in the generic shared components only; the target is the generic one, never the file itself', async t => {
+  const f = project(t);
+  git(f.repo, 'switch', '-q', '-c', 'feature/filters');
+  write(f.repo, 'src/lib/components/Dropdown.svelte', '<script lang="ts">\n  let { value } = $props();\n</script>\n<button>{value}</button>\n');
+  write(f.repo, 'src/lib/admin/components/Filters.svelte', '<select name="s"><option>a</option></select>\n');
+  write(f.repo, 'src/lib/admin/components/Confirm.svelte', '<dialog open>ok</dialog>\n');
+  const r = await apv(f.repo, ['reuse', 'check', '--base', 'origin/main', '--json']);
+  const native = r.json().findings.filter(x => x.rule === 'native');
+  assert.deepEqual(native.map(x => x.path), ['src/lib/admin/components/Confirm.svelte', 'src/lib/admin/components/Filters.svelte']);
+  assert.match(native[1].message, /utiliser src\/lib\/components\/ui\/Select\.svelte\./, 'the generic one in ui/, not Dropdown');
+  assert.match(native[0].message, /aucun composant partagé ne le remplace encore/);
+  // Allowed nowhere: the shared component that wraps the element is still never reported against itself.
+  write(f.repo, '.apv/config.json', { reuse: { native: { allowedPaths: ['nowhere/**'] } } });
+  const self = (await apv(f.repo, ['reuse', 'check', '--base', 'origin/main', '--json'])).json();
+  assert.ok(!self.findings.some(x => x.rule === 'native' && x.path === 'src/lib/components/ui/Select.svelte'));
+});
+
+test('M: styles copied between components are a warning by default (duplicates.styles), code copies stay blocking', async t => {
+  const f = project(t);
+  git(f.repo, 'switch', '-q', '-c', 'feature/styles');
+  const style = markup => `${markup}\n<style>\n${Array.from({ length: 12 }, (_, i) => `  .field-${i} { display: flex; gap: ${i}px; align-items: center; }`).join('\n')}\n</style>\n`;
+  write(f.repo, 'src/routes/a/Field.svelte', style('<label class="field-0">Nom</label>'));
+  write(f.repo, 'src/routes/b/Field.svelte', style('<p class="field-1">{count} éléments</p>'));
+  const r = await apv(f.repo, ['reuse', 'check', '--base', 'origin/main', '--json']);
+  assert.equal(r.code, 0);
+  const copy = r.json().findings.find(x => x.rule === 'duplicates' && x.isNew);
+  assert.deepEqual([copy.severity, copy.blocking], ['warning', false]);
+  assert.match(copy.message, /^styles identiques à/);
+  write(f.repo, '.apv/config.json', { reuse: { duplicates: { styles: 'error' } } });
+  assert.equal((await apv(f.repo, ['reuse', 'check', '--base', 'origin/main'])).code, 1);
+});
+
+test('M: without a common history the base is refused with what to do; the reference is never the current branch', async t => {
+  const f = project(t);
+  git(f.repo, 'checkout', '-q', '--orphan', 'lonely');
+  git(f.repo, 'commit', '-qm', 'orphan');
+  const r = await apv(f.repo, ['reuse', 'check', '--base', 'main']);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /REUSE_BASE.*aucune base commune entre main et HEAD : clone superficiel \(git fetch --unshallow/);
+  const bare = fixture(t, { files: PROJECT });
+  assert.equal(detectReference(bare.repo), null, 'no origin: to configure, never main itself');
+  git(bare.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  assert.equal(detectReference(bare.repo), 'origin/main');
+});
+
+test('M: a repository beyond the inventory limit gets a partial map, never a failure', async t => {
+  const f = project(t);
+  const inventory = await buildWorktreeInventory(f.repo, { maxFiles: 5 });
+  assert.equal(inventory.truncated, true);
+  assert.equal(inventory.files.length, 5);
+  assert.ok(inventory.fileCount > 5);
+  const map = await buildCodeMap(f.repo, reuseSettings(undefined), mapSettings(undefined), { maxFiles: 5 });
+  assert.deepEqual(map.partial, { described: 5, total: inventory.fileCount });
+  assert.deepEqual(mapFields({ path: null, text: '', partial: false, error: 'Repository file count exceeds alpha indexing limit' }).map, null);
+  assert.match(mapFields({ path: '.apv/code-map.md', text: '', partial: true }).mapNote, /carte partielle/);
+});
+
+test('BAS: an untracked file is listed in the map without its summary', async t => {
+  const f = project(t);
+  write(f.repo, 'src/lib/components/Draft.svelte', '<!-- @component Brouillon local, clé interne. -->\n<p>x</p>\n');
+  const map = (await apv(f.repo, ['map', '--json'])).json().map;
+  assert.equal(map.components.find(c => c.path.endsWith('Draft.svelte')).summary, null);
+  git(f.repo, 'add', 'src/lib/components/Draft.svelte');
+  assert.equal((await apv(f.repo, ['map', '--json'])).json().map.components.find(c => c.path.endsWith('Draft.svelte')).summary, 'Brouillon local, clé interne.');
+});
+
+test('M: apv init warns when apv is not on the PATH of the generated checks', async t => {
+  const f = project(t);
+  const r = await apv(f.repo, ['init']);
+  assert.equal(r.code, 0);
+  assert.equal(JSON.parse(read(f.repo, '.apv/config.json')).gates.length, 2);
+  const json = (await apv(fixture(t, { files: PROJECT }).repo, ['init', '--json'])).json();
+  assert.equal(typeof json.reuse.apvOnPath, 'boolean');
+  if (!json.reuse.apvOnPath) assert.match(r.stdout, /ATTENTION : apv n'est pas sur le PATH/);
 });

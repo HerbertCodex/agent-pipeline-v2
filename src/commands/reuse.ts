@@ -14,8 +14,8 @@ Contrôle que le changement réutilise les éléments existants du projet (docs/
   duplicates  bloc de code copié (au moins 5 lignes et 50 jetons par défaut), paires fichier:lignes ;
   names       nouveau composant dont le nom ou le rôle doublonne un composant partagé (AdminToast et Toast) ;
   typography  valeur qui se coupe en fin de ligne faute d'espace insécable (14 h 47, 12 €), langue déclarée.
-Ce que le changement ajoute depuis la base commune de --base (sinon de reuse.reference, par exemple
-origin/main) compte comme nouveau ; ce qui existait déjà est signalé sans bloquer. Sans base ni référence,
+Ce que le changement ajoute depuis la base commune de --base (le contrôle déclaré passe {{baseSha}}, la
+base du passage ; sinon reuse.reference, par exemple origin/main) compte comme nouveau ; ce qui existait déjà est signalé sans bloquer. Sans base ni référence,
 tout compte comme nouveau. --all liste aussi tous les constats existants (par défaut : 5 par règle).
 Configuration facultative : section « reuse » de .apv/config.json (reference, shared, ignore, native, styles,
 duplicates, names, typography, severity).
@@ -48,6 +48,7 @@ export function formatReuse(report: ReuseReport, all: boolean): string {
     for (const f of all ? existing : existing.slice(0, EXISTING_SHOWN)) lines.push(`  [existant] ${place(f)} : ${f.message}`);
     if (!all && existing.length > EXISTING_SHOWN) lines.push(`  et ${existing.length - EXISTING_SHOWN} autre(s) existant(s) (--all pour tout lister).`);
   }
+  if (report.generated.count) lines.push('', `Fichiers générés laissés de côté : ${report.generated.count} (${report.generated.files.slice(0, 5).join(', ')}${report.generated.count > 5 ? ', …' : ''}), jamais comptés.`);
   const blocking = report.findings.filter(f => f.blocking).length;
   lines.push('', report.ok
     ? 'Résultat : aucun constat bloquant.'

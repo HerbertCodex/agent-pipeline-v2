@@ -94,3 +94,14 @@ const CLASH_LABEL: Readonly<Record<ClashReason, string>> = {
 export function describeClash(clash: Clash): string {
   return `${CLASH_LABEL[clash.reason]} ${clash.with}${clash.family ? ` (rôle ${clash.family})` : ''}`;
 }
+
+/**
+ * The shared component that replaces a native element or a family: a generic one (its name is only its role, `Select`,
+ * `Dialog`), never a component of one feature (`AddDeviceDialog`); those under `preferred` (the design system folders)
+ * first, then the shortest path. Null when there is none.
+ */
+export function replacementFor(paths: readonly string[], family: string, families: Readonly<Record<string, readonly string[]>>, preferred: (path: string) => boolean): string | null {
+  const candidates = paths.map(p => componentName(p, families)).filter(c => c.family === family && c.generic)
+    .sort((a, b) => Number(preferred(b.path)) - Number(preferred(a.path)) || a.path.length - b.path.length || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return candidates[0]?.path ?? null;
+}

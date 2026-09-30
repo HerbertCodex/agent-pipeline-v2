@@ -9,7 +9,7 @@ import { findSpecCandidates, importV2Config, importV2Ledger, specFileName, V2_SP
 import { gitRoot } from '../run/git-probe.js';
 import { checkSpec, parseSpecDocument } from '../spec/check.js';
 import { GITATTRIBUTES } from '../design/attributes.js';
-import { ApvWriter, PLUGIN_ROOT, initialMap, readBriefTemplate, reuseConfig, reuseLines, writeApvSkeleton, type ReuseSetup } from './init.js';
+import { ApvWriter, PLUGIN_ROOT, initialMap, mapFields, readBriefTemplate, reuseConfig, reuseLines, writeApvSkeleton, type ReuseSetup } from './init.js';
 import { worktreeFiles } from '../knowledge/inventory.js';
 import { detectReuse } from '../reuse/detect.js';
 import { checkReuse } from '../reuse/check.js';
@@ -129,7 +129,7 @@ export async function onboardProject(repo: string, options: { dryRun: boolean; s
   writeApvSkeleton(writer, name, template, {
     ...(configText !== undefined ? { config: () => configText } : {}),
     ...(ledgerFiles ? { ledger: ledgerFiles } : {}),
-    ...(map ? { map: { path: map.path, content: () => map.text } } : {}),
+    ...(map?.path ? { map: { path: map.path, content: () => map.text } } : {}),
   });
   for (const candidate of accepted) {
     const to = specFileName(candidate.id);
@@ -151,7 +151,7 @@ export async function onboardProject(repo: string, options: { dryRun: boolean; s
     repo, name, dryRun: options.dryRun,
     v2: { config: hasV2Config ? LEGACY_CONFIG_FILE : null, ledger: hasV2Ledger ? LEGACY_LEDGER_FILE : null, notImported: v2FilesNotImported(repo) },
     config, ledger, specs, previewHints: previewHints(repo),
-    reuse: { web: proposal.web, signals: proposal.signals, gates: added, section: configText !== undefined && proposal.web ? proposal.section : null, map: map?.path ?? null, existing: existingReuse },
+    reuse: { web: proposal.web, signals: proposal.signals, gates: added, section: configText !== undefined && proposal.web ? proposal.section : null, ...mapFields(map), existing: existingReuse },
     created: writer.created, completed: writer.completed, existing: writer.existing, next,
   };
 }
@@ -175,7 +175,10 @@ async function existingFindings(repo: string, configText: string | undefined): P
     if (!checked.config) return null;
     config = checked.config;
   } catch { return null; }
-  const report = await checkReuse(repo, config, { changes: await collectChanges(repo, { source: 'none', ref: null, sha: null }) });
+  let report: Awaited<ReturnType<typeof checkReuse>>;
+  // A report, never a refusal: an analysis that fails leaves the onboarding done, without the list.
+  try { report = await checkReuse(repo, config, { changes: await collectChanges(repo, { source: 'none', ref: null, sha: null }) }); }
+  catch { return null; }
   const counts = Object.fromEntries(REUSE_RULES.map(rule => [rule, report.findings.filter(f => f.rule === rule).length])) as Record<ReuseRule, number>;
   const ranked = [...report.findings].sort((a, b) => Number(b.rule === 'duplicates') - Number(a.rule === 'duplicates'));
   const examples = ranked.slice(0, 20).map(f => ({ rule: f.rule, place: `${f.path}:${f.line}${f.endLine && f.endLine !== f.line ? `-${f.endLine}` : ''}`, message: f.message }));

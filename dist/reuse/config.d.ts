@@ -33,7 +33,24 @@ export declare const STYLE_EXTENSIONS: Set<string>;
  * Paths never analysed: dependencies, build outputs, tool folders (DEFAULT_IGNORE of `structure`), the documentation
  * (validated mockups are HTML copies of the interface by design) and the files a tool writes.
  */
-export declare const DEFAULT_REUSE_IGNORE: readonly ["**/node_modules/**", "**/dist/**", "**/build/**", "**/coverage/**", "**/vendor/**", "**/.*/**", "docs/**", "**/*.min.js", "**/*.min.css", "**/*.d.ts", "**/*.generated.*", "**/generated/**", "**/*.lock", "**/package-lock.json"];
+export declare const DEFAULT_REUSE_IGNORE: readonly ["**/node_modules/**", "**/dist/**", "**/build/**", "**/coverage/**", "**/vendor/**", "**/.*/**", "docs/**", "**/*.min.js", "**/*.min.css", "**/*.d.ts", "**/*.lock", "**/package-lock.json"];
+/**
+ * Files a tool writes (database types, clients, schemas), recognised by their name: left out of every rule and listed
+ * apart in the report, never counted. A file whose first lines say it is generated (`@generated`, « do not edit »,
+ * « auto-generated ») is treated the same way (GENERATED_HEADER).
+ */
+export declare const GENERATED_PATHS: readonly ["**/*.generated.*", "**/*.gen.*", "**/generated/**", "**/__generated__/**", "**/*.types.ts", "**/database.types.*", "**/supabase.types.*"];
+export declare const GENERATED_HEADER: RegExp;
+/**
+ * Where native elements and primitive styles may be written by default: the generic shared components (a design system
+ * folder), never a component folder of one feature (`src/lib/admin/components`).
+ */
+export declare const DEFAULT_PRIMITIVE_PATHS: readonly ["**/components/ui/**", "**/ui/**", "**/primitives/**", "**/design-system/**", "**/shared/**", "**/common/**"];
+/** Nested adjustments of a primitive under a class of the component: `layout` (default) accepts layout properties only. */
+export declare const NESTED_MODES: readonly ["layout", "refuse", "allow"];
+export type NestedMode = typeof NESTED_MODES[number];
+/** Default bound of the code map in bytes: a few tens of kilobytes, read whole by an agent before each task. */
+export declare const DEFAULT_MAP_MAX_BYTES = 32768;
 /** A native element (`select`) or an element with one attribute value (`input[type=date]`). */
 export declare const ELEMENT_SELECTOR: RegExp;
 /** A class selector of a primitive (`.btn`), or a prefix of classes (`.btn--*`). */
@@ -52,13 +69,14 @@ export declare const reuseSchema: import("../domain/schema.js").Schema<{
         readonly selectors: string[] | undefined;
         readonly except: string[] | undefined;
         readonly allowedPaths: string[] | undefined;
-        readonly nested: "refuse" | "allow" | undefined;
+        readonly nested: "refuse" | "layout" | "allow" | undefined;
     } | undefined;
     readonly duplicates: {
         readonly minLines: number | undefined;
         readonly minTokens: number | undefined;
         readonly paths: string[] | undefined;
         readonly ignore: string[] | undefined;
+        readonly styles: "off" | "warning" | "error" | undefined;
     } | undefined;
     readonly names: {
         readonly roles: Record<string, string[] | null> | undefined;
@@ -76,6 +94,7 @@ export declare const mapSchema: import("../domain/schema.js").Schema<{
     readonly file: string | undefined;
     readonly ignore: string[] | undefined;
     readonly maxEntries: number | undefined;
+    readonly maxBytes: number | undefined;
 }>;
 export type MapSection = Infer<typeof mapSchema>;
 export interface ReuseSettings {
@@ -92,13 +111,14 @@ export interface ReuseSettings {
         selectors: string[];
         except: string[];
         allowedPaths: string[];
-        nested: 'refuse' | 'allow';
+        nested: NestedMode;
     };
     duplicates: {
         minLines: number;
         minTokens: number;
         paths: string[] | null;
         ignore: string[];
+        styles: ReuseSeverity;
     };
     roles: Record<string, string[]>;
     locale: string | null;
@@ -117,6 +137,7 @@ export interface MapSettings {
     file: string;
     ignore: string[];
     maxEntries: number;
+    maxBytes: number;
 }
 export declare function mapSettings(section: MapSection | undefined): MapSettings;
 /** A matcher over repository paths for a list of globs (`{a,b}` accepted), compiled once. */

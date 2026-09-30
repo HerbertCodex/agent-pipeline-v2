@@ -99,7 +99,12 @@ export async function collectChanges(repo: string, base: { source: BaseSource; r
   const files = await worktreeFiles(repo);
   if (!base.sha) return { base: { source: 'none', ref: null, mergeBase: null }, files, all: true, added: new Map(), created: new Set(), renamed: new Map() };
   const head = await git.sha(repo);
-  const mergeBase = (await git.exec(repo, ['merge-base', base.sha, head])).trim();
+  let mergeBase: string;
+  try { mergeBase = (await git.exec(repo, ['merge-base', base.sha, head])).trim(); }
+  catch { mergeBase = ''; }
+  if (!/^[0-9a-f]{40,64}$/.test(mergeBase)) {
+    throw new PipelineError('REUSE_BASE', `aucune base commune entre ${base.ref} et HEAD : clone superficiel (git fetch --unshallow, ou un clone avec l'historique) ou historiques sans lien. Sans elle, le contrôle ne sait pas ce que le changement ajoute.`);
+  }
   const diff = await git.exec(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', '-M', '--src-prefix=a/', '--dst-prefix=b/', mergeBase, '--']);
   const status = (await git.exec(repo, ['diff', '--name-status', '-z', '-M', mergeBase, '--'])).split('\0');
   const created = new Set<string>();

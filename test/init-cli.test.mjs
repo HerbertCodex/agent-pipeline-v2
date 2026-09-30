@@ -19,7 +19,7 @@ test('apv init creates .apv/ with a valid ledger, a named configuration and the 
   assert.deepEqual([out.existing, out.completed], [[], []]);
   // Not a web project: the code map and its check only, no reuse section.
   assert.deepEqual(JSON.parse(read(f.repo, '.apv/config.json')), { name: 'Toujours rien', gates: [
-    { id: 'code-map', command: ['apv', 'map', '--check'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true },
+    { id: 'code-map', command: ['apv', 'map', '--check'], covers: ['architecture'], stage: 'full', readOnly: true, mandatory: true },
   ] });
   assert.deepEqual([out.reuse.web, out.reuse.gates, out.reuse.section, out.reuse.map], [false, ['code-map'], null, '.apv/code-map.md']);
   assert.match(read(f.repo, '.apv/code-map.md'), /^# Carte du code\n/);

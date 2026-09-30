@@ -51,8 +51,8 @@ export declare function modeChange(f: ChangedFile): string | null;
  */
 export declare function commandPaths(gate: Gate, repo: string): string[];
 /**
- * Files never searched for mentions: APV's configuration, decisions, specs and state (never read by the application; the
- * configuration lists the dispensed paths themselves), and the ignore files of tools (`.gitignore`, `.prettierignore`...:
+ * Files never searched for mentions: APV's configuration, decisions, specs, state and code map (never read by the
+ * application; the configuration lists the dispensed paths themselves, the map names every file of the project), and the ignore files of tools (`.gitignore`, `.prettierignore`...:
  * they read nothing). Any other file under `.apv/` (a tool script) is searched.
  */
 export declare const NOT_SEARCHED: readonly string[];

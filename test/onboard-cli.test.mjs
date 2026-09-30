@@ -10,7 +10,7 @@ import { detectGates, previewHints } from '../dist/onboard/detect.js';
 import { specIdOf } from '../dist/onboard/v2.js';
 
 const read = (repo, path) => readFileSync(join(repo, path), 'utf8');
-const CODE_MAP_GATE = { id: 'code-map', command: ['apv', 'map', '--check'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true };
+const CODE_MAP_GATE = { id: 'code-map', command: ['apv', 'map', '--check'], covers: ['architecture'], stage: 'full', readOnly: true, mandatory: true };
 
 /** Every file under a folder with its content: a before/after snapshot shows that nothing changed. */
 function snapshot(dir) {

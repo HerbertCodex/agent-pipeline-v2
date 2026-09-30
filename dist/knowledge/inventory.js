@@ -47,7 +47,20 @@ export async function buildInventory(repo, ref, options = {}) {
  * regenerated before a commit, and checked against the files of the commit under proof).
  */
 export async function buildWorktreeInventory(repo, options = {}) {
-    return scan(repo, WORKTREE, await worktreeFiles(repo, options.signal), options);
+    const files = await worktreeFiles(repo, options.signal);
+    const max = options.maxFiles ?? MAX_FILES;
+    if (files.length <= max)
+        return scan(repo, WORKTREE, files, options);
+    // Degraded, never refused: the first files (in byte order) are described, and the inventory says it is partial.
+    const inventory = await scan(repo, WORKTREE, files.slice(0, max), options);
+    return { ...inventory, fileCount: files.length, truncated: true };
+}
+/** Files tracked by Git (the index), whatever their state on disk. */
+export async function trackedFiles(repo, signal) {
+    const env = environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']);
+    const listed = await runProcess({ command: ['git', '-c', 'core.quotePath=false', 'ls-files', '-z', '--cached'], cwd: repo, env, timeoutMs: 30000, ...(signal ? { signal } : {}), maxOutputBytes: 8 * 1024 * 1024 });
+    invariant(listed.status === 'passed' && !listed.truncated, 'REPOSITORY_INDEX', 'Unable to enumerate repository');
+    return new Set(listed.stdout.split('\0').filter(Boolean));
 }
 /** Files of the working tree: tracked ones present on disk and untracked ones not ignored, sorted, without duplicates. */
 export async function worktreeFiles(repo, signal) {
@@ -65,7 +78,7 @@ export async function worktreeFiles(repo, signal) {
     return files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 async function scan(repo, sha, files, options) {
-    invariant(files.length <= MAX_FILES, 'REPOSITORY_INDEX', 'Repository file count exceeds alpha indexing limit');
+    invariant(files.length <= (options.maxFiles ?? MAX_FILES), 'REPOSITORY_INDEX', 'Repository file count exceeds alpha indexing limit');
     const languages = resolveLanguages(options.languages);
     const byExtension = new Map(languages.flatMap(l => l.profile.extensions.map(x => [x, l])));
     const symbols = [];

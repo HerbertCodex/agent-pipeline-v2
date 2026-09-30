@@ -1,7 +1,13 @@
 import { blankComments } from './markup.js';
 
 /** A style rule, its selector resolved against the enclosing rules (CSS nesting, `&`), and the line it starts on. */
-export interface StyleRule { selector: string; line: number; topLevel: boolean }
+export interface StyleRule {
+  selector: string;
+  line: number;
+  topLevel: boolean;
+  /** Properties the rule declares directly (`color`, `margin-top`), lower case, custom properties included. */
+  properties: string[];
+}
 
 /** At-rules whose block holds ordinary rules (their selectors are read); every other at-rule block is skipped. */
 const TRANSPARENT = new Set(['media', 'supports', 'layer', 'container', 'scope', 'document', 'starting-style']);
@@ -20,7 +26,7 @@ function splitTop(text: string, separator: ','): string[] {
   return out.map(x => x.trim()).filter(Boolean);
 }
 
-interface Context { kind: 'rule' | 'transparent' | 'skip'; selectors: string[] }
+interface Context { kind: 'rule' | 'transparent' | 'skip'; selectors: string[]; rules: StyleRule[] }
 
 /**
  * Rules of a stylesheet (or of a `<style>` block, lines offset by `firstLine - 1`). Comments and strings are handled;
@@ -45,28 +51,37 @@ export function styleRules(text: string, firstLine = 1): StyleRule[] {
       prelude += src.slice(i, j + 1); i = j; continue;
     }
     if (!prelude.trim() && !/\s/.test(c)) preludeLine = line;
-    if (c === ';') { prelude = ''; continue; }
-    if (c === '}') { stack.pop(); prelude = ''; continue; }
+    if (c === ';' || c === '}') {
+      // A declaration (`color: red`) of the rule being read.
+      const top = stack.at(-1);
+      // `@apply x` (Tailwind) counts as a property of its own: never a layout one.
+      const property = /^\s*(-{0,2}[A-Za-z][\w-]*)\s*:/.exec(prelude)?.[1]?.toLowerCase() ?? /^\s*(@[A-Za-z-]+)/.exec(prelude)?.[1]?.toLowerCase();
+      if (top?.kind === 'rule' && property) for (const rule of top.rules) if (!rule.properties.includes(property)) rule.properties.push(property);
+      prelude = '';
+      if (c === '}') stack.pop();
+      continue;
+    }
     if (c !== '{') { prelude += c; continue; }
     const head = prelude.trim();
     prelude = '';
     const enclosing = parent();
-    if (enclosing?.kind === 'skip' || stack.some(s => s.kind === 'skip')) { stack.push({ kind: 'skip', selectors: [] }); continue; }
+    if (enclosing?.kind === 'skip' || stack.some(s => s.kind === 'skip')) { stack.push({ kind: 'skip', selectors: [], rules: [] }); continue; }
     if (head.startsWith('@')) {
       const name = /^@([a-zA-Z-]+)/.exec(head)?.[1]?.toLowerCase() ?? '';
       if (name === 'utility') {
         const utility = /^@utility\s+([A-Za-z_][\w-]*)/.exec(head)?.[1];
-        if (utility) rules.push({ selector: `.${utility}`, line: preludeLine, topLevel: !enclosing });
-        stack.push({ kind: 'skip', selectors: [] });
-      } else stack.push({ kind: TRANSPARENT.has(name) ? 'transparent' : 'skip', selectors: [] });
+        if (utility) rules.push({ selector: `.${utility}`, line: preludeLine, topLevel: !enclosing, properties: [] });
+        stack.push({ kind: 'skip', selectors: [], rules: [] });
+      } else stack.push({ kind: TRANSPARENT.has(name) ? 'transparent' : 'skip', selectors: [], rules: [] });
       continue;
     }
     const own = splitTop(head, ',');
     const selectors = enclosing?.kind === 'rule'
       ? enclosing.selectors.flatMap(p => own.map(s => (s.includes('&') ? s.replaceAll('&', p) : `${p} ${s}`)))
       : own;
-    for (const selector of selectors) rules.push({ selector, line: preludeLine, topLevel: !enclosing });
-    stack.push({ kind: 'rule', selectors });
+    const ownRules = selectors.map(selector => ({ selector, line: preludeLine, topLevel: !enclosing, properties: [] as string[] }));
+    rules.push(...ownRules);
+    stack.push({ kind: 'rule', selectors, rules: ownRules });
   }
   return rules;
 }
@@ -107,16 +122,25 @@ export function classesOf(compound: string): string[] {
 }
 
 /**
- * Primitives defined by a global stylesheet: the classes of the first compound of its top-level rules (inside
- * `@media`, `@layer` and the like included), `@utility` names too. `.btn:hover` and `.btn--primary` count; the classes
- * that only follow a combinator (`.card .title`) do not.
+ * Selectors of a theme, a state or the document, never primitives: `html`, `:root`, `body`, `.dark`, `.light`,
+ * `.theme-*`, `[data-theme]`, and state classes (`.active`, `.is-open`, `.has-error`, `.disabled`...).
+ */
+const THEME_OR_STATE = /^(?:dark|light|theme(?:-[\w-]+)?|[\w-]+-theme|active|inactive|open|opened|closed|selected|checked|disabled|enabled|current|visible|hidden|expanded|collapsed|focused|pressed|loading|error|success|warning|valid|invalid|(?:is|has|js|no|can)-[\w-]+)$/;
+
+/**
+ * Primitives defined by a global stylesheet: the base class of each top-level rule (inside `@media`, `@layer` and the
+ * like included), that is the first class of its first compound, `@utility` names too. `.btn:hover` and `.btn.active`
+ * give `btn` only; a rule whose first compound is the document, a theme or a state (`:root`, `html.dark .x`, `.dark .x`,
+ * `.is-open`) or has no class (`body`, `a:hover`) gives nothing.
  */
 export function primitivesOf(text: string): string[] {
   const found = new Set<string>();
   for (const rule of styleRules(text)) {
     if (!rule.topLevel) continue;
     const first = compounds(unwrapScoping(rule.selector))[0];
-    if (first) for (const c of classesOf(first)) found.add(c);
+    if (!first || /^(?:html|:root|body)\b|\[data-(?:theme|mode|color-scheme)/i.test(first)) continue;
+    const base = classesOf(first)[0];
+    if (base && !THEME_OR_STATE.test(base)) found.add(base);
   }
   return [...found].sort();
 }
@@ -143,7 +167,15 @@ export class Primitives {
   }
 }
 
-export interface StyleHit { line: number; selector: string; primitive: string; nested: boolean }
+export interface StyleHit { line: number; selector: string; primitive: string; nested: boolean; properties: string[] }
+
+/**
+ * Properties that place a component without changing how it looks: margins, width, alignment, order, grid and flex
+ * placement, position. A nested adjustment that declares only these is accepted with `styles.nested: "layout"`; colour,
+ * border, radius, size, font, padding or shadow are a redefinition of the primitive.
+ */
+const LAYOUT = /^(?:margin(?:-[a-z-]+)?|width|min-width|max-width|inline-size|min-inline-size|max-inline-size|flex|flex-grow|flex-shrink|flex-basis|order|align-self|justify-self|place-self|grid-(?:area|column|row|column-start|column-end|row-start|row-end)|position|inset(?:-[a-z-]+)?|top|right|bottom|left|z-index|display|visibility)$/;
+export const isLayoutOnly = (properties: readonly string[]): boolean => properties.every(p => LAYOUT.test(p));
 
 /**
  * Local rules that restyle a primitive. The selector is unwrapped (`:global(.btn)` is `.btn`), then: a primitive
@@ -155,9 +187,9 @@ export function restyledPrimitives(rules: readonly StyleRule[], primitives: Prim
   for (const rule of rules) {
     const parts = compounds(unwrapScoping(rule.selector));
     const first = parts[0] ? classesOf(parts[0]).find(c => primitives.has(c)) : undefined;
-    if (first) { hits.push({ line: rule.line, selector: rule.selector, primitive: first, nested: false }); continue; }
+    if (first) { hits.push({ line: rule.line, selector: rule.selector, primitive: first, nested: false, properties: rule.properties }); continue; }
     const later = parts.slice(1).flatMap(classesOf).find(c => primitives.has(c));
-    if (later) hits.push({ line: rule.line, selector: rule.selector, primitive: later, nested: true });
+    if (later) hits.push({ line: rule.line, selector: rule.selector, primitive: later, nested: true, properties: rule.properties });
   }
   return hits;
 }

@@ -40,6 +40,11 @@ export interface CodeMap {
         ignored: number;
         silentModules: number;
     };
+    /** Files of the repository beyond the inventory limit: the map describes the first ones only (null when complete). */
+    partial: {
+        described: number;
+        total: number;
+    } | null;
 }
 export interface RouteOf {
     route: string;
@@ -62,6 +67,7 @@ interface ImportRef {
 }
 /** Imports of a source file: ECMAScript (static, dynamic, `require`) and Python (`import`, `from ... import`). */
 export declare function importsOf(text: string, ext: string): ImportRef[];
+export declare const maskSecrets: (text: string) => string;
 /** Role of a file in one line: its `@component` comment, else the first comment of its first 40 lines (tool directives left out). */
 export declare function summaryOf(text: string, ext: string): string | null;
 /** Props of a component: Svelte (`$props()`, `export let`), Vue (`defineProps`), Astro (`Astro.props`), React (parameters or `XxxProps`). */
@@ -71,6 +77,9 @@ export declare function variantsOf(text: string, props: readonly string[]): Reco
 export interface BuildOptions {
     inventory?: Inventory;
     read?: (path: string) => string | null;
+    /** Files tracked by Git: only they are summarised (an untracked file may hold what nobody decided to commit). */
+    tracked?: Set<string>;
+    maxFiles?: number;
 }
 /** Is this file a component (and not a route file)? Svelte, Vue and Astro files always; JSX files named in PascalCase. */
 export declare function isComponentFile(path: string): boolean;
@@ -86,6 +95,8 @@ export declare function buildCodeMap(repo: string, reuse: ReuseSettings, setting
  * the larger ones, so that no section is starved by the ones printed before it.
  */
 export declare function shares(sizes: readonly number[], total: number): number[];
-/** The map as Markdown: sections by folder, bounded (40 entries per folder, `maxEntries` shared between the sections), counts of what is left out. */
-export declare function codeMapMarkdown(map: CodeMap, settings: Pick<MapSettings, 'maxEntries'>): string;
+/** The map as Markdown: sections by folder, bounded in entries (40 per folder, `maxEntries` shared between the sections) and in bytes (`maxBytes`), counts of what is left out. */
+export declare function codeMapMarkdown(map: CodeMap, settings: Pick<MapSettings, 'maxEntries'> & {
+    maxBytes?: number;
+}): string;
 export {};

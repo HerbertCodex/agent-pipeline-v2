@@ -34,3 +34,9 @@ export interface Clash {
 export declare function clashOf(candidate: ComponentName, shared: ComponentName): Clash | null;
 /** The clash in words: « même rôle que src/lib/Toast.svelte (rôle toast) ». */
 export declare function describeClash(clash: Clash): string;
+/**
+ * The shared component that replaces a native element or a family: a generic one (its name is only its role, `Select`,
+ * `Dialog`), never a component of one feature (`AddDeviceDialog`); those under `preferred` (the design system folders)
+ * first, then the shortest path. Null when there is none.
+ */
+export declare function replacementFor(paths: readonly string[], family: string, families: Readonly<Record<string, readonly string[]>>, preferred: (path: string) => boolean): string | null;

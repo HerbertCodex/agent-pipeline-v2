@@ -18,7 +18,12 @@ export interface Inventory {
   units: InventoryUnit[];
   truncated: boolean;
 }
-export interface InventoryOptions { languages?: readonly LanguageProfile[]; signal?: AbortSignal }
+export interface InventoryOptions {
+  languages?: readonly LanguageProfile[];
+  signal?: AbortSignal;
+  /** Files indexed at most (50 000 by default). A commit above it is refused; the working tree is cut, `truncated` set. */
+  maxFiles?: number;
+}
 
 const MAX_FILES = 50000;
 const MAX_SYMBOLS = 20000;
@@ -69,7 +74,20 @@ export async function buildInventory(repo: string, ref: string, options: Invento
  * regenerated before a commit, and checked against the files of the commit under proof).
  */
 export async function buildWorktreeInventory(repo: string, options: InventoryOptions = {}): Promise<Inventory> {
-  return scan(repo, WORKTREE, await worktreeFiles(repo, options.signal), options);
+  const files = await worktreeFiles(repo, options.signal);
+  const max = options.maxFiles ?? MAX_FILES;
+  if (files.length <= max) return scan(repo, WORKTREE, files, options);
+  // Degraded, never refused: the first files (in byte order) are described, and the inventory says it is partial.
+  const inventory = await scan(repo, WORKTREE, files.slice(0, max), options);
+  return { ...inventory, fileCount: files.length, truncated: true };
+}
+
+/** Files tracked by Git (the index), whatever their state on disk. */
+export async function trackedFiles(repo: string, signal?: AbortSignal): Promise<Set<string>> {
+  const env = environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']);
+  const listed = await runProcess({ command: ['git', '-c', 'core.quotePath=false', 'ls-files', '-z', '--cached'], cwd: repo, env, timeoutMs: 30000, ...(signal ? { signal } : {}), maxOutputBytes: 8 * 1024 * 1024 });
+  invariant(listed.status === 'passed' && !listed.truncated, 'REPOSITORY_INDEX', 'Unable to enumerate repository');
+  return new Set(listed.stdout.split('\0').filter(Boolean));
 }
 
 /** Files of the working tree: tracked ones present on disk and untracked ones not ignored, sorted, without duplicates. */
@@ -84,7 +102,7 @@ export async function worktreeFiles(repo: string, signal?: AbortSignal): Promise
 }
 
 async function scan(repo: string, sha: string, files: string[], options: InventoryOptions): Promise<Inventory> {
-  invariant(files.length <= MAX_FILES, 'REPOSITORY_INDEX', 'Repository file count exceeds alpha indexing limit');
+  invariant(files.length <= (options.maxFiles ?? MAX_FILES), 'REPOSITORY_INDEX', 'Repository file count exceeds alpha indexing limit');
 
   const languages = resolveLanguages(options.languages);
   const byExtension = new Map(languages.flatMap(l => l.profile.extensions.map(x => [x, l] as const)));

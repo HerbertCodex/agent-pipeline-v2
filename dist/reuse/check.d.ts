@@ -35,6 +35,11 @@ export interface ReuseReport {
         sources: string[];
         count: number;
     };
+    /** Files a tool writes (by name or first lines), left out of every rule: their count and the first 20. */
+    generated: {
+        count: number;
+        files: string[];
+    };
 }
 export interface ReuseConfig {
     reuse?: ReuseSection | undefined;

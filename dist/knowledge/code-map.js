@@ -1,5 +1,5 @@
 import { posix } from 'node:path';
-import { buildWorktreeInventory } from './inventory.js';
+import { buildWorktreeInventory, trackedFiles } from './inventory.js';
 import { CODE_EXTENSIONS, parseName } from '../structure/names.js';
 import { COMPONENT_EXTENSIONS, extensionOf, globMatcher } from '../reuse/config.js';
 import { clashOf, componentName, describeClash } from '../reuse/names.js';
@@ -52,7 +52,7 @@ export function declaredRoutes(text) {
     return out;
 }
 const JS_IMPORTS = [
-    /\bimport\s+(?:type\s+)?([\w$*{}\s,]+?)\s+from\s+['"]([^'"]+)['"]/g,
+    /\bimport\s+(?:type\s+)?([\w$*{}\s,]{1,2000}?)\s+from\s+['"]([^'"]+)['"]/g,
     /\bimport\s*['"]([^'"]+)['"]/g,
     /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
     /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
@@ -148,9 +148,14 @@ class Resolver {
 const IGNORED_COMMENT = /eslint|@ts-|prettier|biome|licen[cs]e|copyright|svelte-ignore|@jsx|use client|use strict|@vitest|istanbul|c8 ignore|#!/i;
 /** Longest role line of an entry: the map stays short enough for an agent to read it whole. */
 const SUMMARY_MAX = 90;
+/** Secret-looking values (API keys, tokens, JWT, long random strings), masked in a summary. */
+const KNOWN_SECRET = /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{8,}|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]*)?|\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\b(?:sb|service)_[A-Za-z0-9_]{20,}/g;
+/** A long string of 32 characters or more that looks random: hexadecimal, or digits with both letter cases. */
+const randomLooking = (token) => /^[A-Fa-f0-9]{32,}$/.test(token) || (/\d/.test(token) && /[A-Z]/.test(token) && /[a-z]/.test(token));
+export const maskSecrets = (text) => text.replace(KNOWN_SECRET, '[masqué]').replace(/[A-Za-z0-9+/=_-]{32,}/g, token => (randomLooking(token) ? '[masqué]' : token));
 /** First sentence of a text, on one line, SUMMARY_MAX characters at most, with Markdown code quotes and table pipes neutralised. */
 function sentence(text) {
-    const flat = text.replace(/^\s*\*+/gm, ' ').replace(/@component/g, ' ').replace(/\s+/g, ' ').trim();
+    const flat = maskSecrets(text.replace(/^\s*\*+/gm, ' ').replace(/@component/g, ' ').replace(/\s+/g, ' ').trim());
     if (!flat)
         return null;
     const end = flat.search(/[.!?](?:\s|$)/);
@@ -166,8 +171,8 @@ export function summaryOf(text, ext) {
         return sentence(component[1]);
     const head = text.split('\n').slice(0, 40).join('\n');
     const patterns = ext === 'py'
-        ? [/^\s*(?:"""|''')([\s\S]*?)(?:"""|''')/, /^((?:\s*#[^\n]*\n)+)/m]
-        : [/<!--([\s\S]*?)-->/g, /\/\*\*?([\s\S]*?)\*\//g, /((?:^[ \t]*\/\/[^\n]*\n?)+)/gm];
+        ? [/^\s*(?:"""|''')([\s\S]*?)(?:"""|''')/, /^((?:[ \t]*#[^\n]*\n){1,40})/m]
+        : [/<!--([\s\S]*?)-->/g, /\/\*\*?([\s\S]*?)\*\//g, /((?:^[ \t]*\/\/[^\n]*\n?){1,40})/gm];
     let best = null;
     for (const re of patterns) {
         for (const m of head.matchAll(new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`))) {
@@ -246,7 +251,7 @@ export function propsOf(text, ext, stem) {
     else {
         const name = stem.replace(/[^\w$]/g, '');
         add(new RegExp(`function\\s+${name}\\s*(?:<[^>]*>)?\\s*\\(\\s*\\{([\\s\\S]*?)\\}\\s*(?::[^)]*)?\\)`).exec(text)?.[1]
-            ?? new RegExp(`(?:const|let)\\s+${name}\\b[^=]*=\\s*(?:\\w+\\()?\\s*\\(\\s*\\{([\\s\\S]*?)\\}\\s*(?::[^)]*)?\\)\\s*=>`).exec(text)?.[1]
+            ?? new RegExp(`(?:const|let)\\s+${name}\\b[^=\\n]{0,200}=\\s*(?:\\w+\\()?\\s*\\(\\s*\\{([\\s\\S]*?)\\}\\s*(?::[^)]*)?\\)\\s*=>`).exec(text)?.[1]
             ?? new RegExp(`(?:interface\\s+${name}Props\\s*(?:extends[^{]*)?|type\\s+${name}Props\\s*=\\s*)\\{([\\s\\S]*?)\\n\\}`).exec(text)?.[1]);
     }
     return [...new Set(found)].slice(0, 16);
@@ -299,7 +304,9 @@ export function clashesFor(map, path, families, symmetric = true) {
     return out;
 }
 export async function buildCodeMap(repo, reuse, settings, options = {}) {
-    const inventory = options.inventory ?? await buildWorktreeInventory(repo);
+    const inventory = options.inventory ?? await buildWorktreeInventory(repo, options.maxFiles ? { maxFiles: options.maxFiles } : {});
+    const tracked = options.tracked ?? await trackedFiles(repo);
+    const summary = (path, text, ext) => (tracked.has(path) ? summaryOf(text, ext) : null);
     const read = options.read ?? ((path) => readWorktree(repo, path));
     const ignored = globMatcher(settings.ignore);
     const shared = globMatcher(reuse.shared);
@@ -387,7 +394,7 @@ export async function buildCodeMap(repo, reuse, settings, options = {}) {
         }
         if (isComponentFile(path)) {
             const props = propsOf(text, ext, baseOf(path).split('.')[0]);
-            components.push({ path, shared: shared(path), summary: summaryOf(text, ext), props, variants: variantsOf(text, props), usedBy: users(path), clashes: [] });
+            components.push({ path, shared: shared(path), summary: summary(path, text, ext), props, variants: variantsOf(text, props), usedBy: users(path), clashes: [] });
             continue;
         }
         for (const declared of declaredRoutes(text))
@@ -400,12 +407,13 @@ export async function buildCodeMap(repo, reuse, settings, options = {}) {
             skipped.silentModules++;
             continue;
         }
-        modules.push({ path, feature: inFeature(path), summary: summaryOf(text, ext), exports, usedBy: used });
+        modules.push({ path, feature: inFeature(path), summary: summary(path, text, ext), exports, usedBy: used });
     }
     const map = {
         components, modules,
         routes: [...routes].map(([route, files]) => ({ route, files: [...files].sort(byBytes) })).sort((a, b) => byBytes(a.route, b.route)),
         skipped,
+        partial: inventory.fileCount > inventory.files.length ? { described: inventory.files.length, total: inventory.fileCount } : null,
     };
     for (const component of map.components)
         component.clashes = clashesFor(map, component.path, reuse.roles, false);
@@ -457,50 +465,75 @@ export function shares(sizes, total) {
     }
     return given;
 }
-/** The map as Markdown: sections by folder, bounded (40 entries per folder, `maxEntries` shared between the sections), counts of what is left out. */
+/** The map as Markdown: sections by folder, bounded in entries (40 per folder, `maxEntries` shared between the sections) and in bytes (`maxBytes`), counts of what is left out. */
 export function codeMapMarkdown(map, settings) {
-    const lines = [];
-    const section = (title, entries, limit, empty) => {
-        lines.push(`## ${title}`, '');
-        if (!entries.length) {
-            lines.push(empty, '');
-            return;
-        }
-        let budget = limit;
-        const folders = new Map();
-        for (const e of entries)
-            folders.set(dirOf(e.path), [...(folders.get(dirOf(e.path)) ?? []), e.line]);
-        for (const [dir, list] of [...folders].sort((a, b) => byBytes(a[0], b[0]))) {
-            lines.push(`### ${dir}`, '');
-            const shown = list.slice(0, Math.min(PER_FOLDER, Math.max(0, budget)));
-            budget -= shown.length;
-            lines.push(...shown);
-            if (list.length > shown.length)
-                lines.push(`- et ${plural(list.length - shown.length, 'autre entrée', 'autres entrées')} dans ce dossier (liste complète : apv map --json).`);
-            lines.push('');
-        }
-    };
     const sharedComponents = map.components.filter(c => c.shared);
     const featureComponents = map.components.filter(c => !c.shared);
     const sharedModules = map.modules.filter(m => !m.feature);
     const featureModules = map.modules.filter(m => m.feature);
     const feature = [...featureComponents.map(c => ({ path: c.path, line: componentLine(c, true) })), ...featureModules.map(m => ({ path: m.path, line: moduleLine(m, true) }))]
         .sort((a, b) => byBytes(a.path, b.path));
-    const [componentsLimit, modulesLimit, routesLimit, featureLimit] = shares([sharedComponents.length, sharedModules.length, map.routes.length, feature.length], settings.maxEntries);
-    lines.push('# Carte du code', '', 'Générée par `apv map` à partir des fichiers du dépôt, sans modèle. À lire avant de créer un composant, un module ou une route : réutiliser une entrée existante, ou l\'étendre de façon générique (paramètre, variante) ; un élément utilisé par deux fonctionnalités devient partagé. Ne pas modifier à la main : `apv map` la régénère, et le contrôle `apv map --check` échoue quand elle ne correspond plus au code.', '', `Composants partagés : ${sharedComponents.length}. Modules partagés : ${sharedModules.length}. Routes : ${map.routes.length}. Propres à une fonctionnalité : ${featureComponents.length} composant(s), ${featureModules.length} module(s). Laissés de côté : ${map.skipped.tests} test(s), ${map.skipped.ignored} fichier(s) ignoré(s), ${map.skipped.silentModules} module(s) sans export ni import.`, '');
-    section('Composants partagés', sharedComponents.map(c => ({ path: c.path, line: componentLine(c, false) })), componentsLimit, 'Aucun composant partagé (dossiers de `reuse.shared`).');
-    section('Modules partagés', sharedModules.map(m => ({ path: m.path, line: moduleLine(m, false) })), modulesLimit, 'Aucun module partagé.');
-    lines.push('## Routes', '');
-    if (!map.routes.length)
-        lines.push('Aucune route trouvée.', '');
-    else {
-        const shown = map.routes.slice(0, routesLimit);
-        lines.push(...shown.map(routeLine));
-        if (map.routes.length > shown.length)
-            lines.push(`- et ${plural(map.routes.length - shown.length, 'autre route', 'autres routes')} (liste complète : apv map --json).`);
-        lines.push('');
+    // Sections in the order printed; `rank` is the order in which they give up entries when the map is too large
+    // (the shared components last: they are what an agent must see first).
+    const sections = [
+        { title: 'Composants partagés', entries: sharedComponents.map(c => ({ path: c.path, line: componentLine(c, false) })), empty: 'Aucun composant partagé (dossiers de `reuse.shared`).', grouped: true, rank: 3 },
+        { title: 'Modules partagés', entries: sharedModules.map(m => ({ path: m.path, line: moduleLine(m, false) })), empty: 'Aucun module partagé.', grouped: true, rank: 0 },
+        { title: 'Routes', entries: map.routes.map(r => ({ path: r.route, line: routeLine(r) })), empty: 'Aucune route trouvée.', grouped: false, rank: 1 },
+        { title: 'Propre à une fonctionnalité', entries: feature, empty: 'Rien de propre à une fonctionnalité.', grouped: true, rank: 2 },
+    ];
+    const header = ['# Carte du code', '',
+        'Générée par `apv map` à partir des fichiers du dépôt, sans modèle. À lire avant de créer un composant, un module ou une route : réutiliser une entrée existante, ou l\'étendre de façon générique (paramètre, variante) ; un élément utilisé par deux fonctionnalités devient partagé. Ne pas modifier à la main : l\'intégration la régénère (`apv map`), et le contrôle `apv map --check` de la suite complète échoue quand elle ne correspond plus au code.', '',
+        `Composants partagés : ${sharedComponents.length}. Modules partagés : ${sharedModules.length}. Routes : ${map.routes.length}. Propres à une fonctionnalité : ${featureComponents.length} composant(s), ${featureModules.length} module(s). Laissés de côté : ${map.skipped.tests} test(s), ${map.skipped.ignored} fichier(s) ignoré(s), ${map.skipped.silentModules} module(s) sans export ni import.`, '',
+        ...(map.partial ? [`Carte partielle : le dépôt compte ${map.partial.total} fichiers, au-delà de la limite de l'inventaire ; seuls les ${map.partial.described} premiers (ordre des chemins) sont décrits.`, ''] : [])];
+    const render = (take) => {
+        const lines = [...header];
+        sections.forEach((section, index) => {
+            lines.push(`## ${section.title}`, '');
+            if (!section.entries.length) {
+                lines.push(section.empty, '');
+                return;
+            }
+            let budget = take[index];
+            if (!section.grouped) {
+                const shown = section.entries.slice(0, budget);
+                lines.push(...shown.map(e => e.line));
+                if (section.entries.length > shown.length)
+                    lines.push(`- et ${plural(section.entries.length - shown.length, 'autre route', 'autres routes')} (liste complète : apv map --json).`);
+                lines.push('');
+                return;
+            }
+            const folders = new Map();
+            for (const e of section.entries)
+                folders.set(dirOf(e.path), [...(folders.get(dirOf(e.path)) ?? []), e.line]);
+            let hidden = 0;
+            for (const [dir, list] of [...folders].sort((a, b) => byBytes(a[0], b[0]))) {
+                const shown = list.slice(0, Math.min(PER_FOLDER, Math.max(0, budget)));
+                budget -= shown.length;
+                if (!shown.length) {
+                    hidden += list.length;
+                    continue;
+                }
+                lines.push(`### ${dir}`, '', ...shown);
+                if (list.length > shown.length)
+                    lines.push(`- et ${plural(list.length - shown.length, 'autre entrée', 'autres entrées')} dans ce dossier (liste complète : apv map --json).`);
+                lines.push('');
+            }
+            if (hidden)
+                lines.push(`Et ${plural(hidden, 'autre entrée', 'autres entrées')} dans d'autres dossiers, au-delà de la taille de la carte (liste complète : apv map --json).`, '');
+        });
+        return `${lines.join('\n').replace(/ +$/gm, '').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
+    };
+    const take = shares(sections.map(s => s.entries.length), settings.maxEntries);
+    const maxBytes = settings.maxBytes ?? Number.POSITIVE_INFINITY;
+    let text = render(take);
+    // Too large: the section of lowest rank gives up a fifth of its entries at a time, then the next one.
+    for (let guard = 0; guard < 400 && Buffer.byteLength(text) > maxBytes; guard++) {
+        const index = [...sections.keys()].sort((a, b) => sections[a].rank - sections[b].rank).find(i => take[i] > 0);
+        if (index === undefined)
+            break;
+        take[index] = Math.max(0, take[index] - Math.max(1, Math.ceil(take[index] / 5)));
+        text = render(take);
     }
-    section('Propre à une fonctionnalité', feature, featureLimit, 'Rien de propre à une fonctionnalité.');
-    return `${lines.join('\n').replace(/ +$/gm, '').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
+    return text;
 }
 //# sourceMappingURL=code-map.js.map

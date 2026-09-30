@@ -19,7 +19,13 @@ export declare function currentMap(repo: string, config: {
     map: CodeMap;
     text: string;
 }>;
-/** Writes the map when it changed; with `check`, compares only. */
+/**
+ * The map file, checked before any read or write: no component of its path (from the repository root) may be a symbolic
+ * link, it must stay inside the repository once resolved, and an existing file must be a regular file. A map linked to a
+ * file outside the repository is never read into the output or the receipts, nor overwritten.
+ */
+export declare function mapPath(repo: string, file: string): string;
+/** Writes the map when it changed, atomically (temporary file created exclusively, then renamed); with `check`, compares only. */
 export declare function writeMap(repo: string, config: {
     reuse?: ReuseSection | undefined;
     map?: MapSection | undefined;

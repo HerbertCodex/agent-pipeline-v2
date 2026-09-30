@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { APV_DIR, apvGitignoreMissing, ensureApvGitignore } from '../config/apv-files.js';
 import { CONFIG_FILE, configIssues, loadConfig } from '../config/load.js';
 import { worktreeFiles } from '../knowledge/inventory.js';
-import { detectReuse, MAP_GATE, REUSE_GATE } from '../reuse/detect.js';
+import { apvOnPath, detectReuse, MAP_GATE, REUSE_GATE } from '../reuse/detect.js';
 import { currentMap } from './map.js';
 import { designDir } from '../design/config.js';
 import { GITATTRIBUTES, ensureDesignAttribute } from '../design/attributes.js';
@@ -153,8 +153,14 @@ export async function initialMap(repo, configText) {
     catch {
         return null;
     }
-    const { file, text } = await currentMap(repo, config);
-    return { path: file, text };
+    // The map never blocks the setup: a repository too large or unreadable for the inventory gets its configuration anyway.
+    try {
+        const { file, text, map } = await currentMap(repo, config);
+        return { path: file, text, partial: map.partial !== null };
+    }
+    catch (error) {
+        return { path: null, text: '', partial: false, error: errorMessage(error) };
+    }
 }
 export async function initProject(repo, name, pluginRoot = PLUGIN_ROOT) {
     const template = readBriefTemplate(pluginRoot);
@@ -169,23 +175,32 @@ export async function initProject(repo, name, pluginRoot = PLUGIN_ROOT) {
     const writer = new ApvWriter(repo);
     writeApvSkeleton(writer, name, template, {
         ...(configText !== undefined ? { config: () => configText } : {}),
-        ...(map ? { map: { path: map.path, content: () => map.text } } : {}),
+        ...(map?.path ? { map: { path: map.path, content: () => map.text } } : {}),
     });
-    const reuse = { web: proposal.web, signals: proposal.signals, gates: configExists ? [] : gates, section: !configExists && proposal.web ? proposal.section : null, map: map?.path ?? null };
+    const reuse = { web: proposal.web, signals: proposal.signals, gates: configExists ? [] : gates, section: !configExists && proposal.web ? proposal.section : null, ...mapFields(map) };
     return { repo, name, created: writer.created, existing: writer.existing, completed: writer.completed, reuse };
+}
+/** The map fields of the setup, from what `initialMap` returned. */
+export function mapFields(map) {
+    const mapNote = map === null ? 'configuration illisible' : map.error ? `carte non construite (${map.error})` : map.partial ? 'carte partielle : dépôt au-delà de la limite de l\'inventaire (50 000 fichiers)' : null;
+    return { map: map?.path ?? null, mapNote, apvOnPath: apvOnPath() };
 }
 /** Lines of the reuse setup for the text output of `apv init` and `apv onboard`. */
 export function reuseLines(reuse) {
     const lines = [];
     if (reuse.gates.length) {
-        lines.push(`Contrôles ajoutés (étape tâche, donc aussi dans la suite complète) : ${reuse.gates.map(g => (g === 'reuse' ? 'reuse (apv reuse check)' : 'code-map (apv map --check)')).join(', ')}.`);
+        lines.push(`Contrôles ajoutés : ${reuse.gates.map(g => (g === 'reuse' ? 'reuse (apv reuse check --base {{baseSha}}, étape tâche et suite complète ; apv gates run demande donc --base)' : 'code-map (apv map --check, suite complète ; la carte est régénérée à l\'intégration)')).join(', ')}.`);
+        if (!reuse.apvOnPath)
+            lines.push('ATTENTION : apv n\'est pas sur le PATH de cette machine ; ces contrôles échoueront (commande introuvable). Activez le plugin (son exécutable bin/apv) ou npm link, ou remplacez "apv" par ["node", "<chemin du plugin>/dist/cli.js", ...] dans .apv/config.json.');
     }
     if (reuse.section) {
         const s = reuse.section;
-        lines.push(`Réutilisation (projet web : ${reuse.signals.join(' ; ')}) : dossiers partagés ${s.shared?.join(', ') ?? 'par défaut (**/components/**, **/ui/**...)'} ; éléments natifs réservés ${Object.entries(s.native?.elements ?? {}).map(([e, t]) => `<${e}>${t ? ` -> ${t}` : ''}`).join(', ')}${s.native?.allowedPaths ? `, permis dans ${s.native.allowedPaths.join(', ')}` : ''} ; langue ${s.typography?.locale ?? 'non trouvée (reuse.typography.locale)'} ; référence ${s.reference ?? 'non trouvée : sans reuse.reference, tout le code existant compte comme nouveau'}.`);
+        lines.push(`Réutilisation (projet web : ${reuse.signals.join(' ; ')}) : dossiers partagés ${s.shared?.join(', ') ?? 'par défaut (**/components/**, **/ui/**...)'} ; éléments natifs réservés ${Object.entries(s.native?.elements ?? {}).map(([e, t]) => `<${e}>${t ? ` -> ${t}` : ''}`).join(', ')}, permis dans ${s.native?.allowedPaths?.join(', ') ?? 'les composants génériques (**/components/ui/**, **/ui/**, **/primitives/**...)'} ; langue ${s.typography?.locale ?? 'non trouvée (reuse.typography.locale)'} ; référence ${s.reference ?? 'non trouvée (pas de branche distante origin) : déclarez reuse.reference pour apv reuse check sans --base'}.`);
     }
     if (reuse.map === null)
-        lines.push('Carte du code non écrite : configuration illisible ; la corriger, puis apv map.');
+        lines.push(`Carte du code non écrite : ${reuse.mapNote ?? 'configuration illisible'} ; corriger, puis apv map.`);
+    else if (reuse.mapNote)
+        lines.push(`Attention : ${reuse.mapNote}.`);
     return lines;
 }
 export async function run(args, io) {

@@ -63,8 +63,12 @@ export interface ReuseSetup {
     gates: string[];
     /** The `reuse` section written, or null. */
     section: ReuseDocument | null;
-    /** Code map: its path, or null when the configuration is unreadable (then `apv map` after fixing it). */
+    /** Code map: its path, or null when the configuration is unreadable or the map could not be built (then `apv map`). */
     map: string | null;
+    /** Why the map was not written, or that it is partial (repository beyond the inventory limit). */
+    mapNote: string | null;
+    /** The generated checks call `apv` by name: false when it is not on the PATH of this machine. */
+    apvOnPath: boolean;
 }
 /**
  * The configuration of a new project: its name, the checks of the reuse (`reuse` for a web project, `code-map`
@@ -76,10 +80,14 @@ export declare function reuseConfig(name: string, proposal: ReuseProposal): {
 };
 /** The code map of the repository under `config` (the one about to be written, or the existing one); null when unreadable. */
 export declare function initialMap(repo: string, configText: string | undefined): Promise<{
-    path: string;
+    path: string | null;
     text: string;
+    partial: boolean;
+    error?: string;
 } | null>;
 export declare function initProject(repo: string, name: string, pluginRoot?: string): Promise<InitResult>;
+/** The map fields of the setup, from what `initialMap` returned. */
+export declare function mapFields(map: Awaited<ReturnType<typeof initialMap>>): Pick<ReuseSetup, 'map' | 'mapNote' | 'apvOnPath'>;
 /** Lines of the reuse setup for the text output of `apv init` and `apv onboard`. */
 export declare function reuseLines(reuse: ReuseSetup): string[];
 export declare function run(args: string[], io: CommandIO): Promise<number>;

@@ -84,7 +84,7 @@ test('vague: one isolated apv:implementer per task, with the start and scope ins
     assert.match(call.prompt, /`<fichier>:<ligne>` ou `-g "<titre>"`\), `--repeat-each` 20 au plus/);
     assert.doesNotMatch(call.prompt, /Tous les contrôles de la consigne commune/);
     assert.match(call.prompt, /carte du code `\.apv\/code-map\.md` : à lire AVANT de créer/);
-    assert.match(call.prompt, /lock run e2e|map`, puis `\.apv\/code-map\.md` commité/);
+    assert.match(call.prompt, /ne commite jamais `\.apv\/code-map\.md`/);
     assert.ok(call.opts.schema.required.includes('reuse'));
   }
   assert.ok(rt.calls[1].prompt.includes('termine depuis le wip abc1234'));
@@ -107,6 +107,13 @@ test('vague: a report without its reuse list, an addition without justification 
   assert.match(t3, /ajout sans justification \(justification\) pour src\/lib\/AdminToast\.svelte/);
   assert.match(t3, /entrée de la carte du code absente \(mapEntry\) pour src\/lib\/x\.ts/);
   assert.match(t3, /décision inconnue « copied »/);
+  // The entry of the map is a path, and a file never reuses itself.
+  const paths = runtime((prompt, opts) => ({ ...base, taskId: opts.label, reuse: [{ item: 'src/a/Page.svelte', decision: 'reused', mapEntry: 'le composant Select' },
+    { item: 'src/lib/ui/Select.svelte', decision: 'reused', mapEntry: 'src/lib/ui/Select.svelte' }, { item: 'src/b.svelte', decision: 'extended', mapEntry: 'src/lib/ui/Select.svelte' }] }));
+  const why = (await run(...paths.hooks, WAVE_ARGS)).refused[0].problems.join(' | ');
+  assert.match(why, /mapEntry « le composant Select » n'est pas un chemin de la carte du code/);
+  assert.match(why, /src\/lib\/ui\/Select\.svelte se réutilise lui-même/);
+  assert.doesNotMatch(why, /src\/b\.svelte/);
   const ok = runtime((prompt, opts) => ({ ...base, taskId: opts.label, reuse: [] }));
   assert.equal((await run(...ok.hooks, WAVE_ARGS)).refused.length, 0, 'an empty list: nothing created nor modified');
 });

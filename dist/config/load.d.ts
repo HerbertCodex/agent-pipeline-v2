@@ -403,13 +403,14 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly selectors: string[] | undefined;
             readonly except: string[] | undefined;
             readonly allowedPaths: string[] | undefined;
-            readonly nested: "refuse" | "allow" | undefined;
+            readonly nested: "refuse" | "layout" | "allow" | undefined;
         } | undefined;
         readonly duplicates: {
             readonly minLines: number | undefined;
             readonly minTokens: number | undefined;
             readonly paths: string[] | undefined;
             readonly ignore: string[] | undefined;
+            readonly styles: "off" | "warning" | "error" | undefined;
         } | undefined;
         readonly names: {
             readonly roles: Record<string, string[] | null> | undefined;
@@ -423,6 +424,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly file: string | undefined;
         readonly ignore: string[] | undefined;
         readonly maxEntries: number | undefined;
+        readonly maxBytes: number | undefined;
     } | undefined;
 }>;
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */

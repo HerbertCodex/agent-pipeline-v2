@@ -38,9 +38,36 @@ export function scriptRanges(text: string, ext: string): [number, number][] {
   return ranges;
 }
 
+/** Line ranges (first and last line, inclusive) of the `<style>` or `<script>` blocks of a file. */
+export function rangesOf(text: string, tag: 'style' | 'script'): [number, number][] {
+  return blocks(text, tag).map(b => [b.line, b.line + (b.content.match(/\n/g)?.length ?? 0)]);
+}
+
 /** Ranges of the `<style>` blocks of a file. */
 export function styleRanges(text: string): [number, number][] {
   return blocks(text, 'style').map(b => [b.start, b.end]);
+}
+
+const spaces = (m: string): string => m.replace(/[^\n]/g, ' ');
+
+/**
+ * The markup of an interface file, everything else blanked (lines kept): comments, and the code, where a tag is only
+ * text (`// <select>`, `'<dialog>'`). In a file with `<script>` blocks (Svelte, Vue, Astro, HTML), those blocks and an
+ * Astro frontmatter are code; in a JSX file, line comments and the string literals that are not attribute values.
+ */
+export function markupOnly(text: string, ext: string): string {
+  let out = blankComments(text);
+  if (ext === 'tsx' || ext === 'jsx') {
+    out = out.replace(/(^|[^:\\])\/\/[^\n]*/g, (m, lead: string) => lead + spaces(m.slice(lead.length)));
+    // A string is markup only as an attribute value: `type="date"` (no space before `=`) or `type={'date'}`.
+    return out.replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, (m, offset: number) => {
+      const before = out[offset - 1] ?? '';
+      const attribute = before === '{' || (before === '=' && /[\w-]/.test(out[offset - 2] ?? ''));
+      return attribute ? m : spaces(m);
+    });
+  }
+  for (const [start, end] of scriptRanges(out, ext)) out = out.slice(0, start) + spaces(out.slice(start, end)) + out.slice(end);
+  return out;
 }
 
 export interface ElementRule { selector: string; tag: string; attribute: { name: string; value: string } | null }
@@ -54,11 +81,12 @@ export function elementRule(selector: string): ElementRule {
 export interface ElementHit { selector: string; line: number; excerpt: string }
 
 /**
- * Native elements of `rules` written in the markup of a file (lower-case tags only: `<Select>` is a component). An
+ * Native elements of `rules` written in the markup of a file (lower-case tags only: `<Select>` is a component; comments
+ * and code left out, see markupOnly). An
  * attribute rule (`input[type=date]`) matches the value quoted or in a constant expression (`type={'date'}`).
  */
-export function findElements(text: string, rules: readonly ElementRule[]): ElementHit[] {
-  const clean = blankComments(text);
+export function findElements(text: string, rules: readonly ElementRule[], ext = 'html'): ElementHit[] {
+  const clean = markupOnly(text, ext);
   const hits: ElementHit[] = [];
   for (const rule of rules) {
     const re = new RegExp(`<${rule.tag}(?=[\\s/>])[^>]*>?`, 'g');
