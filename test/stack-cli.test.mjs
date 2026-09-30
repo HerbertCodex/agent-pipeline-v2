@@ -4,26 +4,68 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { apv } from './cli-helpers.mjs';
+import { waive } from './support/rules.mjs';
 import { REASONS } from '../hooks/scripts/bash-guard.mjs';
 import { MERGE_REFUSED, anomalies, compareArgs, parseFreshness, readChecks } from '../dist/stack/github.js';
 
 const fakeGh = fileURLToPath(new URL('./support/fake-gh.mjs', import.meta.url));
 chmodSync(fakeGh, 0o755);
 
+const identity = { GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@localhost', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@localhost',
+  GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z' };
+const git = (cwd, ...args) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'init.defaultBranch=main', ...args],
+  { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...identity } }).trim();
+
+/**
+ * The repository of the stacks: an origin and a clone, main, spec/1 on main, spec/2 on spec/1, spec/3 on spec/2, and
+ * spec/2-bis on spec/1 (a head pushed while the stack merges). Dates and identity are fixed: the heads are the same in
+ * every copy. The operator waived the rules checked before a merge for each head: these tests are about GitHub.
+ */
+function stackRepo(dir) {
+  const origin = `${dir}-origin.git`;
+  git(tmpdir(), 'init', '-q', '--bare', '-b', 'main', origin);
+  git(tmpdir(), 'clone', '-q', origin, dir);
+  git(dir, 'switch', '-q', '-c', 'main');
+  const heads = {};
+  const commit = (name, from, file) => {
+    if (from) git(dir, 'switch', '-q', '-c', name, from);
+    writeFileSync(join(dir, file), `${name}\n`);
+    git(dir, 'add', file); git(dir, 'commit', '-qm', name); git(dir, 'push', '-q', 'origin', name);
+    return git(dir, 'rev-parse', 'HEAD');
+  };
+  commit('main', null, 'README.md');
+  heads[11] = commit('spec/1', 'main', 's1.txt');
+  heads[12] = commit('spec/2', 'spec/1', 's2.txt');
+  heads[13] = commit('spec/3', 'spec/2', 's3.txt');
+  heads.moved = commit('spec/2-bis', 'spec/1', 's2b.txt');
+  git(dir, 'switch', '-q', 'main');
+  for (const head of Object.values(heads)) waive(dir, head);
+  return { origin, heads };
+}
+const HEADS = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'apv3-stack-heads-'));
+  try { return stackRepo(join(dir, 'repo')).heads; } finally { rmSync(dir, { recursive: true, force: true }); }
+})();
+const sha = n => HEADS[n];
+
 const pr = (number, base, head, extra = {}) => ({
-  number, state: 'OPEN', isDraft: false, baseRefName: base, headRefName: head, headRefOid: `${String(number).repeat(40)}`.slice(0, 40),
+  number, state: 'OPEN', isDraft: false, baseRefName: base, headRefName: head, headRefOid: sha(number),
   mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN',
   statusCheckRollup: [{ __typename: 'CheckRun', name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }], ...extra,
 });
 
-/** A stack of three pull requests: #11 on main, #12 on #11, #13 on #12. */
+/** A stack of three pull requests: #11 on main, #12 on #11, #13 on #12, in a real repository (the rules read it). */
 function stack(t, overrides = {}, behavior = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'apv3-stack-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const root = mkdtempSync(join(tmpdir(), 'apv3-stack-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const dir = join(root, 'repo');
+  const { heads } = stackRepo(dir);
+  assert.deepEqual(heads, HEADS, 'the same heads in every copy');
   const prs = { 11: pr(11, 'main', 'spec/1'), 12: pr(12, 'spec/1', 'spec/2'), 13: pr(13, 'spec/2', 'spec/3') };
   for (const [n, fields] of Object.entries(overrides)) Object.assign(prs[n], fields);
-  const file = join(dir, 'gh.json');
+  const file = join(root, 'gh.json');
   writeFileSync(file, JSON.stringify({ prs, behavior, calls: [] }));
   const env = { APV_GH: fakeGh, FAKE_GH_STATE: file, APV_STACK_POLL_MS: '5', APV_STACK_POLL_ATTEMPTS: '3', APV_ALLOW_MERGE: '' };
   return {
@@ -37,7 +79,6 @@ function stack(t, overrides = {}, behavior = {}) {
 }
 const allow = { APV_ALLOW_MERGE: '1' };
 const isCompare = c => c[0] === 'api' && c.some(a => /^repos\/[^/]+\/[^/]+\/compare\//.test(a));
-const sha = n => `${String(n).repeat(40)}`.slice(0, 40);
 /** GitHub's answer once the previous PR of a merge-method stack is merged: one merge commit, no file changed. */
 const mergeCommitOnly = { ahead_by: 1, files: [], merges: 1 };
 
@@ -108,9 +149,9 @@ test('apv stack merge merges in order, retargets and verifies each base, and pri
   const r = await s.run(['merge', '11', '12', '13'], allow);
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.deepEqual(s.writes(), [
-    `pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`,
-    'api -X PATCH repos/o/r/pulls/12 -f base=main', `pr merge 12 --merge --match-head-commit ${'12'.repeat(20)}`,
-    'api -X PATCH repos/o/r/pulls/13 -f base=main', `pr merge 13 --merge --match-head-commit ${'13'.repeat(20)}`,
+    `pr merge 11 --merge --match-head-commit ${sha(11)}`,
+    'api -X PATCH repos/o/r/pulls/12 -f base=main', `pr merge 12 --merge --match-head-commit ${sha(12)}`,
+    'api -X PATCH repos/o/r/pulls/13 -f base=main', `pr merge 13 --merge --match-head-commit ${sha(13)}`,
   ]);
   const prs = s.state().prs;
   assert.deepEqual(Object.values(prs).map(p => [p.state, p.baseRefName]), [['MERGED', 'main'], ['MERGED', 'main'], ['MERGED', 'main']]);
@@ -140,7 +181,7 @@ test('a retarget that does not take effect stops the stack, whatever its exit co
   assert.equal(r.code, 1);
   assert.match(r.stdout, /ARRÊT à la PR #12 :\n- re-ciblage de la PR #12 non effectif : elle vise spec\/1 au lieu de main \(gh api : code 0\)/);
   assert.match(r.stdout, /Non fusionnées : #12, #13\. Rien d'autre n'a été fusionné/);
-  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main']);
+  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${sha(11)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main']);
   assert.deepEqual(Object.values(s.state().prs).map(p => p.state), ['MERGED', 'OPEN', 'OPEN']);
 });
 
@@ -150,7 +191,7 @@ test('a failed retarget call stops the stack, its whole output shown, the base r
   assert.equal(f.code, 1);
   assert.match(f.stdout, /\$ .*api -X PATCH repos\/o\/r\/pulls\/12 -f base=main\n\{"message":"Validation Failed".*\ngh: Validation Failed \(HTTP 422\)\n\(code de sortie 1\)/);
   assert.match(f.stdout, /ARRÊT à la PR #12 :\n- re-ciblage de la PR #12 en échec \(gh api : code 1\) ; relue, elle vise spec\/1/);
-  assert.deepEqual(failed.writes(), [`pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main']);
+  assert.deepEqual(failed.writes(), [`pr merge 11 --merge --match-head-commit ${sha(11)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main']);
   assert.deepEqual(Object.values(failed.state().prs).map(p => p.state), ['MERGED', 'OPEN', 'OPEN']);
   const calls = failed.state().calls.map(c => c.slice(0, 3).join(' '));
   assert.equal(calls[calls.indexOf('api -X PATCH') + 1], 'pr view 12', 'the result is read again even after a failed call');
@@ -187,7 +228,7 @@ test('merge re-checks each pull request just before merging it and stops at the 
   const r = await s.run(['merge', '11', '12', '13'], allow);
   assert.equal(r.code, 1);
   assert.match(r.stdout, /ARRÊT à la PR #12 :\n- PR #12 : contrôle\(s\) en échec : ci/);
-  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main']);
+  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${sha(11)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main']);
   // An incoherent stack is refused before any merge.
   const bad = stack(t, { 13: { baseRefName: 'main' } });
   const b = await bad.run(['merge', '11', '12', '13'], allow);
@@ -200,15 +241,15 @@ test('merge re-checks each pull request just before merging it and stops at the 
   assert.equal(m.code, 1);
   assert.match(m.stdout, /is not mergeable: the base branch policy prohibits the merge\.\n\(code de sortie 1\)/);
   assert.match(m.stdout, /fusion de la PR #11 non constatée : état OPEN, base main \(gh pr merge : code 1\)/);
-  assert.deepEqual(refused.writes(), [`pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`]);
+  assert.deepEqual(refused.writes(), [`pr merge 11 --merge --match-head-commit ${sha(11)}`]);
 });
 
 test('merge: a head that moved is refused by GitHub, drafts need --ready, mergeability is awaited', async t => {
   // The merge carries the head read just before it: a head that moved since is refused by GitHub, and the stack stops.
-  const updated = stack(t, {}, { afterMerge: { 11: { 12: { headRefOid: 'f'.repeat(40) } } } });
+  const updated = stack(t, {}, { afterMerge: { 11: { 12: { headRefOid: sha('moved') } } } });
   const r = await updated.run(['merge', '11', '12', '--method', 'squash'], allow);
   assert.equal(r.code, 0, r.stdout);
-  assert.deepEqual(updated.writes().filter(w => w.startsWith('pr merge')), [`pr merge 11 --squash --match-head-commit ${'1'.repeat(40)}`, `pr merge 12 --squash --match-head-commit ${'f'.repeat(40)}`]);
+  assert.deepEqual(updated.writes().filter(w => w.startsWith('pr merge')), [`pr merge 11 --squash --match-head-commit ${sha(11)}`, `pr merge 12 --squash --match-head-commit ${sha('moved')}`]);
   const moved = stack(t, {}, { headMovesAtMerge: [12] });
   const m = await moved.run(['merge', '11', '12', '13'], allow);
   assert.equal(m.code, 1);
@@ -220,7 +261,7 @@ test('merge: a head that moved is refused by GitHub, drafts need --ready, mergea
   assert.match(refused.stdout, /PR #11 est un brouillon/);
   const ready = await drafts.run(['merge', '11', '--ready'], allow);
   assert.equal(ready.code, 0, ready.stdout);
-  assert.deepEqual(drafts.writes(), ['pr ready 11', `pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`]);
+  assert.deepEqual(drafts.writes(), ['pr ready 11', `pr merge 11 --merge --match-head-commit ${sha(11)}`]);
   const slow = stack(t, {}, { unknownViews: { 11: 2 } });
   assert.equal((await slow.run(['merge', '11'], allow)).code, 0, 'UNKNOWN mergeability is polled');
   const stuck = stack(t, {}, { unknownViews: { 11: 10 } });
@@ -260,7 +301,7 @@ test('freshness: an up-to-date PR is accepted, a PR behind its base is refused w
   assert.equal(m.code, 1);
   assert.deepEqual(behind.writes(), [], 'nothing merged');
   for (const step of [
-    /PR #11 n'est pas à jour de sa base main : 2 commit\(s\) de main absent\(s\) de la tête 111111111111 \(1 fichier\(s\) changé\(s\) : src\/lib\/server\/security-headers\.test\.ts\)/,
+    /PR #11 n'est pas à jour de sa base main : 2 commit\(s\) de main absent\(s\) de la tête [0-9a-f]{12} \(1 fichier\(s\) changé\(s\) : src\/lib\/server\/security-headers\.test\.ts\)/,
     /ses contrôles n'ont donc pas porté sur le résultat de la fusion/,
     /dans la branche spec\/1, git fetch origin puis git merge origin\/main \(une fusion, jamais de rebase ni de force-push\)/,
     /apv gates run --stage task --base origin\/main, puis apv gates verify --commit <nouvelle tête> --stage task --base origin\/main à 0/,
@@ -306,7 +347,7 @@ test('freshness: a waiver with its reason merges a PR behind its base, journaled
   const failing = stack(t, {}, { compareFail: [11] });
   const f = await failing.run(['merge', '11', '--allow-behind', '--reason', 'x'], allow);
   assert.equal(f.code, 1);
-  assert.match(f.stdout, /PR #11 : impossible de vérifier que la tête 111111111111 contient sa base main \(gh api compare a échoué \(code 1\)\)/);
+  assert.match(f.stdout, /PR #11 : impossible de vérifier que la tête [0-9a-f]{12} contient sa base main \(gh api compare a échoué \(code 1\)\)/);
   assert.match(f.stdout, /Server Error \(HTTP 502\)/, 'the failed call is shown');
   assert.deepEqual(failing.writes(), []);
 });
@@ -324,7 +365,7 @@ test('freshness in a stack: each PR against its base, and again against the targ
   assert.equal((await s.run(['plan', '11', '12'])).code, 0);
   const r = await s.run(['merge', '11', '12'], allow);
   assert.equal(r.code, 1);
-  assert.match(r.stdout, /ARRÊT à la PR #12 :\n- PR #12 n'est pas à jour de sa base main : 2 commit\(s\) de main absent\(s\) de la tête 121212121212/);
+  assert.match(r.stdout, /ARRÊT à la PR #12 :\n- PR #12 n'est pas à jour de sa base main : 2 commit\(s\) de main absent\(s\) de la tête [0-9a-f]{12}/);
   assert.match(r.stdout, /Non fusionnées : #12\./);
   assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${sha(11)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main']);
   assert.deepEqual(Object.values(s.state().prs).slice(0, 2).map(p => p.state), ['MERGED', 'OPEN']);

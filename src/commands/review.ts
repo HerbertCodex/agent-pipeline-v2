@@ -4,7 +4,11 @@ import { designDir } from '../design/config.js';
 import { sensitivePaths } from '../policy/policy.js';
 import { ALWAYS_REVIEWED, REVIEW_DOMAINS, reviewPlanSettings, type ReviewDomainName } from '../review/config.js';
 import { planReviews, type ReviewPlan } from '../review/plan.js';
-import { gitRoot } from '../run/git-probe.js';
+import { gitRoot, resolveCommit } from '../run/git-probe.js';
+import { PipelineError } from '../domain/errors.js';
+import { DOMAIN_REVIEWERS, latestReviews, parseCapture, recordReview, type Findings } from '../rules/reviews.js';
+import { commonDir } from '../stacks/idle.js';
+import { resolve } from 'node:path';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
 
@@ -24,12 +28,36 @@ contenu changé garde tous les domaines (prudence) : un domaine n'est sauté que
 --repo     le dépôt (défaut : le dossier courant) ; la configuration (review de .apv/config.json) y est lue.
 Chemins et termes : review.paths (ui, data, migrations, personal, legal, neutral), review.terms (data,
 personal), review.always (domaines toujours gardés), db.migrations et design.dir ; docs/CONFIGURATION.md.
-Sortie : 0 plan établi, 1 référence introuvable ou configuration invalide, 2 appel incorrect.`;
+Sortie : 0 plan établi, 1 référence introuvable ou configuration invalide, 2 appel incorrect.
+
+  apv review record --commit <sha> --domain <domaine> --reviewer <agent> --report <fichier>
+                    --critical <n> --high <n> --medium <n> --low <n> [--capture <largeur>:<thème>:<fichier>]...
+  apv review show --commit <sha> [--json]
+
+record  enregistre une relecture au commit exact, lancée depuis la copie relue (HEAD à ce commit, fichiers
+        suivis inchangés) : domaine, agent relecteur (celui du domaine : securite apv:qa-securite, fidelite
+        apv:qa-fidelite, donnees apv:architecte-donnees, rgpd apv:dpo), nombres de constats par gravité, rapport
+        complet (qui cite le commit) et, pour fidelite, les captures (largeur desktop, phone ou tablet ; thème light
+        ou dark ; PNG, JPEG ou WebP, une image différente par capture). Copie le tout dans le magasin du dépôt
+        (<répertoire git commun>/apv/reviews/<commit>/), jamais versionné. Le crochet Bash du plugin ne laisse
+        lancer record qu'à l'agent relecteur du domaine : ni l'implementer, ni l'intégrateur, ni le chef de projet.
+show    affiche la dernière relecture de chaque domaine à ce commit (lue par apv rules check avant une fusion).
+Sortie de record et show : 0 fait, 1 refusé (copie à un autre commit, relecteur ou fichiers invalides), 2 appel incorrect.`;
 
 const options = {
   base: { type: 'string' }, head: { type: 'string' }, force: { type: 'string', multiple: true }, repo: { type: 'string' },
   json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+  commit: { type: 'string' }, domain: { type: 'string' }, reviewer: { type: 'string' }, report: { type: 'string' },
+  critical: { type: 'string' }, high: { type: 'string' }, medium: { type: 'string' }, low: { type: 'string' }, capture: { type: 'string', multiple: true },
 } as const;
+
+const RECORD_ONLY = ['domain', 'reviewer', 'report', 'critical', 'high', 'medium', 'low', 'capture'] as const;
+
+function count(value: string | undefined, name: string): number {
+  if (value === undefined) throw new UsageError(`--${name} manquant (nombre de constats ${name}, 0 s'il n'y en a pas)`);
+  if (!/^\d{1,5}$/.test(value)) throw new UsageError(`--${name} : entier attendu (${value})`);
+  return Number(value);
+}
 
 function forced(values: string[] | undefined): ReviewDomainName[] {
   const out: ReviewDomainName[] = [];
@@ -62,9 +90,46 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const { values, positionals } = parse(args, options);
     if (values.help) { io.stdout(`${usage}\n`); return EXIT.ok; }
     const [action, ...rest] = positionals;
-    if (!action) throw new UsageError('sous-commande manquante (plan)');
-    if (action !== 'plan') throw new UsageError(`sous-commande inconnue : review ${action}`);
+    if (!action) throw new UsageError('sous-commande manquante (plan, record ou show)');
+    if (action !== 'plan' && action !== 'record' && action !== 'show') throw new UsageError(`sous-commande inconnue : review ${action}`);
     if (rest.length) throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
+    if (action !== 'record') {
+      const extra = RECORD_ONLY.filter(k => values[k] !== undefined);
+      if (extra.length) throw new UsageError(`option de review record seulement : --${extra.join(', --')}`);
+    }
+    if (action === 'record' || action === 'show') {
+      const planOnly = (['base', 'head', 'force'] as const).filter(k => values[k] !== undefined);
+      if (planOnly.length) throw new UsageError(`option de review plan seulement : --${planOnly.join(', --')}`);
+      if (!values.commit) throw new UsageError('--commit <sha> manquant (le commit relu)');
+      const checkout = gitRoot(repoPath(io, values.repo));
+      const common = commonDir(checkout);
+      if (action === 'show') {
+        const sha = resolveCommit(checkout, values.commit);
+        if (!sha) throw new PipelineError('SHA', `Commit introuvable : ${values.commit}`);
+        const found = latestReviews(common, sha);
+        if (values.json) { json(io, { commit: sha, reviews: Object.fromEntries(found) }); return EXIT.ok; }
+        const lines = [`Relectures enregistrées à ${sha.slice(0, 12)} :`];
+        if (!found.size) lines.push('  aucune');
+        for (const [domain, r] of found) {
+          const f = r.record?.findings;
+          lines.push(`  ${domain} : ${r.record ? `${r.record.reviewer}, ${r.record.at}, critique ${f!.critical}, haut ${f!.high}, moyen ${f!.medium}, bas ${f!.low}, ${r.record.captures.length} capture(s)` : 'illisible'}${r.problem ? ` ; INUTILISABLE : ${r.problem}` : ''}`);
+        }
+        io.stdout(`${lines.join('\n')}\n`);
+        return EXIT.ok;
+      }
+      if (!values.domain) throw new UsageError(`--domain manquant (${Object.keys(DOMAIN_REVIEWERS).join(', ')})`);
+      if (!values.reviewer) throw new UsageError('--reviewer manquant (l\'agent relecteur du domaine, par exemple apv:qa-securite)');
+      if (!values.report) throw new UsageError('--report <fichier> manquant (le rapport complet de la relecture)');
+      const findings: Findings = { critical: count(values.critical, 'critical'), high: count(values.high, 'high'), medium: count(values.medium, 'medium'), low: count(values.low, 'low') };
+      const captures = (values.capture ?? []).map(c => { const parsed = parseCapture(c); return { ...parsed, path: resolve(io.cwd, parsed.path) }; });
+      const record = recordReview(common, { checkout, commit: values.commit, domain: values.domain, reviewer: values.reviewer, findings, report: resolve(io.cwd, values.report), captures });
+      if (values.json) { json(io, record); return EXIT.ok; }
+      io.stdout(`Relecture ${record.domain} enregistrée à ${record.commit.slice(0, 12)} par ${record.reviewer} : critique ${findings.critical}, haut ${findings.high}, moyen ${findings.medium}, bas ${findings.low}` +
+        `${record.captures.length ? ` ; captures ${record.captures.map(c => `${c.viewport}:${c.theme}`).join(', ')}` : ''}.\n` +
+        `${findings.critical || findings.high ? 'Constats critiques ou hauts : la fusion de ce commit sera refusée (apv rules check) tant qu\'un nouveau commit corrigé n\'est pas relu.\n' : ''}`);
+      return EXIT.ok;
+    }
+    if (values.commit !== undefined) throw new UsageError('--commit : option de review record et review show');
     if (!values.base) throw new UsageError('--base manquant (la branche de départ, base de la PR)');
     const force = forced(values.force);
     const repo = gitRoot(repoPath(io, values.repo));

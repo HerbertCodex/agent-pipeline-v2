@@ -125,12 +125,25 @@ export interface StackOptions {
     };
     /** Journals a waiver before the merge it allows; returns an error message when it could not. */
     onDerogation?: (derogation: Derogation) => string | null;
+    /**
+     * The rules checked before any merge (`apv rules check`, docs/REGLES.md) for the head of a pull request going to
+     * `target`: what refuses it (empty when nothing does) and what to note (waivers of the operator). `apv stack plan`
+     * lists them, `apv stack merge` stops on them right before each merge. The command always passes them.
+     */
+    rules?: (pr: PullRequest, target: string) => Promise<RulesVerdict>;
+}
+/** What the rules say about the head of one pull request. */
+export interface RulesVerdict {
+    problems: string[];
+    notes: string[];
 }
 export interface PlannedPr {
     number: number;
     pr: PullRequest | null;
     expectedBase: string | null;
     anomalies: string[];
+    /** The rules before a merge at its head, against the target (null when not checked: PR unread, no target). */
+    rules: RulesVerdict | null;
     /** Whether the head contains its expected base (null when not compared: PR unread, base unknown, address unreadable). */
     freshness: Freshness | null;
 }
@@ -160,6 +173,10 @@ export interface MergeReport {
     } & Freshness>;
     /** Pull requests merged behind their base by waiver (`--allow-behind`), each journaled before its merge. */
     derogations: Derogation[];
+    /** The rules read right before each merge. */
+    rules: Array<{
+        pr: number;
+    } & RulesVerdict>;
 }
 /**
  * `apv stack merge`: merges the stack in order and stops at the first anomaly. Before each merge the pull

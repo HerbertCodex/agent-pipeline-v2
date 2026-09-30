@@ -180,6 +180,20 @@ async function batchSteps(options, report) {
         if (refused.length)
             return stop(first, refused.map(r => `lot refusé avant toute construction (répétition des tests modifiés, repeatChanged) : ${r} ; ce n'est pas un échec de suite, la bissection ne s'applique pas`));
     }
+    // The batch proves the suite, never a review, captures, the base checks or a mockup: each pull request passes them itself.
+    if (options.merge && options.rules) {
+        const refused = [];
+        let first = null;
+        for (const m of members) {
+            const why = await options.rules(m.head, target);
+            if (why.length) {
+                refused.push(`PR #${m.number} :`, ...why);
+                first ??= m.number;
+            }
+        }
+        if (refused.length)
+            return stop(first, ['lot refusé avant toute construction : règles avant fusion (apv rules check --commit <tête> --target <cible>)', ...refused]);
+    }
     // A batch commits its merges: without an identity, a clear refusal before anything is built.
     const ident = await options.git.run(options.repo, ['-c', 'user.useConfigOnly=true', 'var', 'GIT_COMMITTER_IDENT']);
     const author = await options.git.run(options.repo, ['-c', 'user.useConfigOnly=true', 'var', 'GIT_AUTHOR_IDENT']);

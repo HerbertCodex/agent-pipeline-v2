@@ -82,3 +82,16 @@ export function isMainModule(moduleUrl, argv1 = process.argv[1]) {
   try { return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(argv1); }
   catch { return false; }
 }
+
+/**
+ * Stores of the Git common directory that only the tool writes (docs/REGLES.md, « Ancrage »): the operator journal
+ * (`apv/operator/`, written by the UserPromptSubmit hook) and the review records (`apv/reviews/`, written by
+ * `apv review record`). A command or a write that names them is refused by the guards.
+ */
+export const ANCHOR_STORES = /\bapv[\\/]+(?:operator|reviews)(?:[\\/]|\b)/;
+
+/** The reviewer agent of each review domain (same table as DOMAIN_REVIEWERS of src/rules/reviews.ts; a test keeps them equal). */
+export const DOMAIN_REVIEWERS = { securite: 'qa-securite', fidelite: 'qa-fidelite', donnees: 'architecte-donnees', rgpd: 'dpo' };
+
+/** `apv:qa-securite` and `qa-securite` name the same agent. */
+export const agentName = value => String(value ?? '').trim().replace(/^apv:/, '');

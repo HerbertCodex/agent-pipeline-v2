@@ -1,0 +1,226 @@
+import { PipelineError, errorMessage } from '../domain/errors.js';
+import { loadConfigAtCommit } from '../config/load.js';
+import { loadDbConfig } from '../db/config.js';
+import { designDir } from '../design/config.js';
+import { applyBaseGates, type BaseGates, type RemoteCheck } from '../gates/base-gates.js';
+import { verifyGates, type VerifyResult } from '../gates/verify.js';
+import { loadDecisionLedger } from '../lifecycle/decisions.js';
+import { sensitivePaths } from '../policy/policy.js';
+import { reviewPlanSettings } from '../review/config.js';
+import { planReviews } from '../review/plan.js';
+import { DEFAULT_REUSE_IGNORE, UI_EXTENSIONS, extensionOf, globMatcher } from '../reuse/config.js';
+import { WEB_DEPENDENCIES } from '../reuse/detect.js';
+import { gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
+import { commonDir } from '../stacks/idle.js';
+import { MERGE_RULES, RULE_TITLES, rulesSettings, type MergeRule } from './config.js';
+import { readOperatorMessages, waiverFor, waiverSentence, type OperatorMessage } from './operator.js';
+import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
+import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
+import { isScreen, screenCoverage, screenMatchers } from './screens.js';
+
+export type RuleStatus = 'ok' | 'refused' | 'waived' | 'not_applicable';
+export interface RuleOutcome {
+  rule: MergeRule;
+  title: string;
+  status: RuleStatus;
+  /** What was checked, in one sentence. */
+  detail: string;
+  /** Why the rule refuses (empty when it does not). */
+  problems: string[];
+  /** What to do to pass, in order; the last line is the only waiver there is. */
+  todo: string[];
+  /** The operator's own waiver, when there is one: when he typed it and his reason. */
+  waiver: { at: string; reason: string } | null;
+}
+export interface RulesReport {
+  commit: string;
+  target: string;
+  mergeBase: string | null;
+  ok: boolean;
+  rules: RuleOutcome[];
+  /** What could not be verified about the target (remote unreadable...), from the base of the checks. */
+  warnings: string[];
+}
+
+export interface RulesInput {
+  repo: string;
+  commit: string;
+  /** The branch the change goes to, as a reference of this repository (`origin/main`). */
+  target: string;
+  /** Rules proven elsewhere (`apv stack batch` proves the batch itself: `preuve` and `instable`). */
+  skip?: readonly MergeRule[];
+  /** How the target is checked against the remote (`apv gates verify`: strict; tests inject `lsRemote`). */
+  remote?: RemoteCheck;
+}
+
+/** Whether the commit is a web interface: web dependencies in its package.json, or tracked interface files. */
+export function isWebAt(repo: string, sha: string): boolean {
+  const pkg = gitRead(repo, ['show', `${sha}:package.json`]);
+  if (pkg) {
+    try {
+      const value = JSON.parse(pkg) as Record<string, unknown>;
+      const deps = Object.keys({ ...(value['dependencies'] as object ?? {}), ...(value['devDependencies'] as object ?? {}) });
+      if (deps.some(d => WEB_DEPENDENCIES.test(d))) return true;
+    } catch { /* not JSON: the files decide */ }
+  }
+  const ignored = globMatcher([...DEFAULT_REUSE_IGNORE]);
+  const files = gitRead(repo, ['ls-tree', '-r', '-z', '--name-only', sha])?.split('\0').filter(Boolean) ?? [];
+  return files.some(f => !ignored(f) && UI_EXTENSIONS.has(extensionOf(f)));
+}
+
+/** Files the change adds or modifies since the base (renames counted as an addition: a moved screen is a new address). */
+function changedFiles(repo: string, base: string, head: string): string[] {
+  const raw = gitRead(repo, ['diff', '--name-status', '-z', '--no-renames', base, head]);
+  if (raw === null) throw new PipelineError('RULES', `diff illisible entre ${base.slice(0, 12)} et ${head.slice(0, 12)}`);
+  const parts = raw.split('\0').filter(Boolean);
+  const out: string[] = [];
+  for (let i = 0; i + 1 < parts.length; i += 2) if (/^[AMT]/.test(parts[i]!)) out.push(parts[i + 1]!);
+  return out;
+}
+
+const short = (sha: string): string => sha.slice(0, 12);
+
+function outcome(rule: MergeRule, status: RuleStatus, detail: string, problems: string[] = [], todo: string[] = []): RuleOutcome {
+  return { rule, title: RULE_TITLES[rule], status, detail, problems, todo, waiver: null };
+}
+
+/**
+ * The rules checked before any merge (docs/REGLES.md). Each one says what it checked, why it refuses and what to do. A
+ * refusal is lifted by the correction it asks for, or by the operator himself: « dérogation <règle> <commit> : <raison> »
+ * typed in the session (operator journal); no option of the tool lifts it.
+ */
+export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
+  const repo = gitRoot(input.repo);
+  const common = commonDir(repo);
+  const sha = resolveCommit(repo, input.commit);
+  if (!sha) throw new PipelineError('RULES', `Commit ${input.commit} absent de ce dépôt : récupérez la branche (git fetch origin <branche>) puis relancez.`);
+  const skip = new Set(input.skip ?? []);
+  const candidate = loadConfigAtCommit(repo, sha).config;
+  const applied = applyBaseGates(repo, candidate, sha, input.target, input.remote ?? { strict: true });
+  const base: BaseGates = applied.base;
+  const effective = applied.config;
+  const mergeBase = base.mergeBase;
+  if (!mergeBase) throw new PipelineError('RULES', `Aucune base commune entre ${input.target} et ${short(sha)}.`);
+  // What the rules read comes from the base: a change never sets its own rules.
+  const atBase = loadConfigAtCommit(repo, mergeBase).config;
+  const settings = rulesSettings(atBase.rules, REQUIRED_WEB_GATES);
+  const messages = readOperatorMessages(common);
+  const rules: RuleOutcome[] = [];
+
+  // preuve, instable: the full suite at this exact commit, with the checks of the base kept.
+  let proof: VerifyResult | null = null;
+  let proofError: string | null = null;
+  if (!skip.has('preuve') || !skip.has('instable')) {
+    try { proof = await verifyGates({ repo, config: effective, commit: sha, stage: 'full', configFile: null }); }
+    catch (error) { proofError = errorMessage(error); }
+  }
+  const proveTodo = [
+    `Dans une copie à ${short(sha)} : apv gates run --stage full --base ${input.target}`,
+    `puis apv gates verify --commit ${short(sha)} --against ${input.target} doit sortir en 0.`,
+  ];
+  if (skip.has('preuve')) rules.push(outcome('preuve', 'not_applicable', 'prouvée par le lot (une suite complète sur la tête du lot)'));
+  else if (proofError) rules.push(outcome('preuve', 'refused', 'suite complète au commit exact', [proofError], proveTodo));
+  else if (proof!.ok) rules.push(outcome('preuve', 'ok', `${proof!.required.length} contrôle(s) prouvé(s) à ${short(sha)}, contrôles de la base compris`));
+  else {
+    const missing = proof!.gates.filter(g => g.state !== 'passed').map(g => `${g.gateId} (${g.state})`);
+    rules.push(outcome('preuve', 'refused', 'suite complète au commit exact', [`contrôle(s) non prouvé(s) à ${short(sha)} : ${missing.join(', ')}`], proveTodo));
+  }
+  if (skip.has('instable')) rules.push(outcome('instable', 'not_applicable', 'jugée sur la suite du lot'));
+  else if (!proof) rules.push(outcome('instable', 'refused', 'contrôles réussis au premier passage', ['preuve illisible : rien ne montre que les contrôles ont réussi sans relance'], proveTodo));
+  else if (proof.flaky.length) {
+    rules.push(outcome('instable', 'refused', 'contrôles réussis au premier passage', [`réussi(s) seulement après relance : ${proof.flaky.join(', ')}`], [
+      'Examine chaque test instable comme un bug possible du produit (course, attente d\'un fait non observé, données partagées entre tests), pas seulement du test.',
+      'Corrige la cause, pousse, puis relance la suite complète sur le nouveau commit : aucune fusion sur un vert obtenu par relance.',
+    ]));
+  } else rules.push(outcome('instable', 'ok', 'aucun contrôle réussi seulement après relance'));
+
+  // relecture, captures: the domains `apv review plan` retains for the change, each recorded at this commit.
+  const plan = planReviews({ repo, base: mergeBase, head: sha, settings: reviewPlanSettings(atBase.review), migrations: loadDbConfig(repo).config.migrations,
+    designDir: designDir(atBase.design), sensitive: [...sensitivePaths, ...atBase.risk.highPaths], force: [] });
+  const reviews = latestReviews(common, sha);
+  const reviewProblems: string[] = [];
+  const reviewTodo: string[] = [];
+  for (const domain of plan.retained) {
+    const agent = `apv:${DOMAIN_REVIEWERS[domain]}`;
+    const found = reviews.get(domain);
+    const ask = `Relecture ${domain} par ${agent} sur une copie détachée à ${short(sha)} ; l'agent l'enregistre lui-même (apv review record --commit ${short(sha)} --domain ${domain} ...).`;
+    if (!found) { reviewProblems.push(`${domain} : aucune relecture enregistrée à ${short(sha)}`); reviewTodo.push(ask); continue; }
+    if (found.problem || !found.record) { reviewProblems.push(`${domain} : relecture inutilisable (${found.problem ?? 'illisible'})`); reviewTodo.push(ask); continue; }
+    const f = found.record.findings;
+    if (f.critical > 0 || f.high > 0) {
+      reviewProblems.push(`${domain} : ${f.critical} constat(s) critique(s) et ${f.high} haut(s) à ${short(sha)}`);
+      reviewTodo.push(`Corrige chaque constat critique ou haut de la relecture ${domain}, avec le test qui le prouve, puis fais relire le nouveau commit (${agent}).`);
+    }
+  }
+  rules.push(reviewProblems.length
+    ? outcome('relecture', 'refused', `relectures demandées par le diff : ${plan.retained.join(', ')}`, reviewProblems, reviewTodo)
+    : outcome('relecture', 'ok', `relectures enregistrées à ${short(sha)} sans constat critique ni haut : ${plan.retained.join(', ')}`));
+
+  if (!plan.retained.includes('fidelite')) rules.push(outcome('captures', 'not_applicable', 'aucun fichier d\'interface ni de maquette changé'));
+  else {
+    const record = reviews.get('fidelite')?.record ?? null;
+    const needed = settings.captures.viewports.flatMap(v => settings.captures.themes.map(t => `${v}:${t}`));
+    const have = new Set((reviews.get('fidelite')?.problem ? [] : record?.captures ?? []).map(c => `${c.viewport}:${c.theme}`));
+    const missing = needed.filter(n => !have.has(n));
+    rules.push(missing.length
+      ? outcome('captures', 'refused', `captures attendues : ${needed.join(', ')}`, [`capture(s) absente(s) de la relecture fidelite à ${short(sha)} : ${missing.join(', ')}`], [
+        `apv:qa-fidelite capture chaque écran changé (${missing.join(', ')}), les regarde à côté de la maquette validée et les joint à sa relecture : apv review record --commit ${short(sha)} --domain fidelite --capture <largeur>:<thème>:<fichier> ...`,
+      ])
+      : outcome('captures', 'ok', `captures jointes à ${short(sha)} : ${needed.join(', ')}`));
+  }
+
+  // controles: the base checks of a web project, in the configuration the proof uses (the base's, kept, and the change's).
+  const required = isWebAt(repo, sha) ? settings.requiredGates : settings.requiredGates.filter(g => g.source === 'config');
+  const missingGates = missingRequiredGates(effective, required);
+  if (!required.length) rules.push(outcome('controles', 'not_applicable', 'projet sans interface web et sans contrôle requis par rules.requiredGates'));
+  else if (missingGates.length) {
+    rules.push(outcome('controles', 'refused', `contrôles requis : ${required.map(g => g.id).join(', ')}`,
+      missingGates.map(m => `${m.id} (${m.command.join(' ')}) ${m.problem === 'absent' ? 'absent de .apv/config.json' : 'déclaré sans "mandatory": true'}`), [
+        'Ajoute ces contrôles à .apv/config.json, obligatoires ("mandatory": true) : apv onboard --dry-run les propose ; exemple : {"id": "structure", "command": ["apv", "structure", "check"], "stage": "task", "mandatory": true}.',
+        'Commite, relance la suite complète : la PR qui les ajoute se prouve avec eux.',
+      ]));
+  } else rules.push(outcome('controles', 'ok', `contrôles requis présents et obligatoires : ${required.map(g => g.id).join(', ')}`));
+
+  // maquette: every screen added or changed is covered by a mockup the operator validated.
+  const screens = changedFiles(repo, mergeBase, sha).filter(f => isScreen(f, screenMatchers(settings.screens)));
+  if (!screens.length) rules.push(outcome('maquette', 'not_applicable', 'aucun écran ajouté ni modifié'));
+  else {
+    const coverage = screenCoverage(screens, (await loadDecisionLedger(repo, mergeBase)).decisions, (await loadDecisionLedger(repo, sha)).decisions, messages);
+    const uncovered = coverage.filter(c => !c.mockup);
+    rules.push(uncovered.length
+      ? outcome('maquette', 'refused', `${screens.length} écran(s) ajouté(s) ou modifié(s)`, uncovered.map(c => c.unanchored.length
+        ? `${c.file} : maquette(s) ${c.unanchored.join(', ')} de la PR, dont la validation n'est pas dans les messages de l'opérateur`
+        : `${c.file} : aucune maquette validée ne le couvre (portée ou écrans de la décision)`), [
+        'Fais valider la maquette de cet écran par l\'opérateur (/apv:design), puis verse-la : apv design register <fichier.html> --name <nom> --quote "<ses mots exacts>" --scope <chemin de l\'écran>.',
+        'Elle compte quand ses mots exacts sont dans ses messages de la session (tapés par lui), ou quand elle est déjà sur la branche cible.',
+      ])
+      : outcome('maquette', 'ok', `écrans couverts : ${coverage.map(c => `${c.file} (${c.mockup!.id}${c.mockup!.anchor === 'operator' ? ', validée dans la session' : ''})`).join(', ')}`));
+  }
+
+  // The only way past a refusal without its correction: the operator's own words.
+  for (const r of rules) {
+    if (r.status !== 'refused') continue;
+    const waiver = waiverFor(messages as OperatorMessage[], r.rule, sha);
+    if (waiver) { r.status = 'waived'; r.waiver = { at: waiver.message.at, reason: waiver.reason }; }
+    else r.todo.push(`Sans correction, seul l'opérateur peut lever ce refus, en tapant lui-même dans la session : « ${waiverSentence(r.rule, sha)} ».`);
+  }
+  const order = new Map(MERGE_RULES.map((r, i) => [r, i]));
+  rules.sort((a, b) => order.get(a.rule)! - order.get(b.rule)!);
+  return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, warnings: base.warnings };
+}
+
+/** Lines of a report, for the text output of `apv rules check` and of the stack commands. */
+export function rulesLines(report: RulesReport, indent = ''): string[] {
+  const label: Record<RuleStatus, string> = { ok: 'ok', refused: 'REFUSÉ', waived: 'DÉROGATION', not_applicable: 'sans objet' };
+  const lines = [`${indent}Règles avant fusion à ${short(report.commit)} (cible ${report.target}, base commune ${report.mergeBase ? short(report.mergeBase) : '?'}) :`];
+  for (const r of report.rules) {
+    lines.push(`${indent}- ${r.rule} (${r.title}) : ${label[r.status]} : ${r.detail}`);
+    for (const p of r.problems) lines.push(`${indent}    ${p}`);
+    if (r.waiver) lines.push(`${indent}    dérogation de l'opérateur (${r.waiver.at}) : ${r.waiver.reason}`);
+    if (r.status === 'refused') for (const t of r.todo) lines.push(`${indent}    à faire : ${t}`);
+  }
+  for (const w of report.warnings) lines.push(`${indent}Attention : ${w}`);
+  lines.push(`${indent}${report.ok ? 'Règles respectées.' : 'Fusion refusée : corriger ce qui est REFUSÉ, puis relancer.'}`);
+  return lines;
+}
+

@@ -7,7 +7,7 @@
 // This is a guard rail against mistakes, not a security boundary: a determined command can
 // always be written in a shape this parser does not recognise.
 import { basename } from 'node:path';
-import { isMainModule, readHookInput } from './lib.mjs';
+import { ANCHOR_STORES, DOMAIN_REVIEWERS, agentName, isMainModule, readHookInput } from './lib.mjs';
 import { EMPTY_CONTEXT, HARNESS_REASONS, commandWords, hookContext, installProblem, killProblem, lockWrapper, mergeHeld, remoteWriteProblem, stackProblem } from './harness-guard.mjs';
 
 export { HARNESS_REASONS };
@@ -239,6 +239,49 @@ export function isStackMerge(words) {
   });
 }
 
+/**
+ * The arguments of an `apv` call in the words of one simple command (the binary, `npx apv`, or `node …/dist/cli.js`),
+ * or null when the command does not run the tool.
+ */
+export function apvArguments(words) {
+  const start = words.findIndex(w => !isAssignment(w) && w !== 'env');
+  if (start === -1) return null;
+  const lead = basename(words[start]);
+  for (let k = start; k < words.length; k += 1) {
+    const name = basename(words[k]);
+    if (name !== 'apv' && name !== 'cli.js') continue;
+    if ((k === start && name === 'apv') || (k > start && LAUNCHERS.has(lead))) return words.slice(k + 1);
+  }
+  return null;
+}
+
+/** The value of `--name <v>` or `--name=<v>` in `args`, or undefined. */
+function optionValue(args, name) {
+  const at = args.indexOf(name);
+  if (at !== -1) return args[at + 1];
+  return args.find(a => a.startsWith(`${name}=`))?.slice(name.length + 1);
+}
+
+/**
+ * Why `apv review record` is refused here, or null: only the reviewer agent of the domain records its review
+ * (`apv:qa-securite` for securite, `apv:qa-fidelite` for fidelite...), under its own name. Never the main session
+ * (the lead), never the implementer or the integrator: a review recorded by who wrote the code proves nothing.
+ */
+export function reviewRecordProblem(words, agentType) {
+  const args = apvArguments(words);
+  if (!args) return null;
+  const [command, sub] = positional(args);
+  if (command !== 'review' || sub !== 'record') return null;
+  const domain = optionValue(args, '--domain');
+  const role = DOMAIN_REVIEWERS[domain];
+  if (!role) return null; // the tool refuses an unknown domain itself
+  const agent = agentName(agentType);
+  if (!agentType) return REASONS.reviewByLead(domain, role);
+  if (agent !== role) return REASONS.reviewByOther(domain, role, agent);
+  if (agentName(optionValue(args, '--reviewer')) !== agent) return REASONS.reviewByOther(domain, role, `${agent} sous un autre nom (--reviewer ${optionValue(args, '--reviewer') ?? 'absent'})`);
+  return null;
+}
+
 /** True when the words of one simple command deploy to production with the Vercel CLI. */
 export function isProductionDeploy(words) {
   const at = commandIndex(words, 'vercel');
@@ -271,6 +314,15 @@ export const REASONS = {
   deploy: "APV : déploiement en production bloqué hors de la commande dédiée. Il se fait seulement sur ordre " +
     "explicite de l'opérateur, par la commande de déploiement du projet (qui pose APV_ALLOW_DEPLOY=1). " +
     'Un aperçu (preview) reste autorisé.',
+  anchorStore: 'APV : commande refusée, elle nomme un magasin que seul l\'outil écrit (apv/operator : les mots tapés par l\'opérateur ; ' +
+    'apv/reviews : les relectures enregistrées). Ces traces ancrent les validations et les relectures ; un agent ne les lit ni ne les écrit ' +
+    'directement. Lire : apv review show --commit <sha>, apv rules check --commit <sha>. Écrire : apv review record, par l\'agent relecteur du domaine.',
+  reviewByLead: (domain, role) => `APV : apv review record ${domain} refusé dans la session principale. Une relecture s'enregistre par l'agent ` +
+    `relecteur du domaine (apv:${role}), lancé sur une copie détachée au commit relu, jamais par le chef de projet ni par qui a écrit le code.`,
+  reviewByOther: (domain, role, agent) => `APV : apv review record ${domain} refusé pour ${agent || 'cet agent'}. Seul l'agent apv:${role} ` +
+    `enregistre la relecture ${domain}, sous son nom (--reviewer apv:${role}) : l'implementer et l'intégrateur ne relisent pas leur propre travail.`,
+  mergeBySubagent: 'APV : fusion refusée dans un sous-agent. Seul le chef de projet (session principale) fusionne, par apv stack merge, ' +
+    'qui vérifie les règles avant chaque fusion.',
   hiddenOutput: 'APV : commande qui écrit sur GitHub avec une sortie masquée (redirection vers /dev/null). ' +
     'Incident 30 : un `gh pr edit --base` a échoué sans message et les PR ont été fusionnées dans la mauvaise base. ' +
     'Relance sans masquer la sortie, lis-la, puis vérifie le résultat (par exemple gh pr view <n> --json baseRefName).',
@@ -312,6 +364,7 @@ export function evaluateCommand(command, env = {}, context = EMPTY_CONTEXT) {
 
 function evaluate(command, env, context, depth, inherited) {
   if (typeof command !== 'string' || command.trim() === '') return { decision: 'allow' };
+  if (ANCHOR_STORES.test(command)) return { decision: 'deny', reason: REASONS.anchorStore };
   const { segments, shadow } = tokenize(command);
   let writesGithub = false;
   const kill = killProblem(segments, context.ancestors);
@@ -334,9 +387,12 @@ function evaluate(command, env, context, depth, inherited) {
       if (nested.decision === 'deny') return nested;
     }
     if (isForcePush(words)) return { decision: 'deny', reason: REASONS.forcePush };
+    const review = reviewRecordProblem(words, context.agentType ?? null);
+    if (review) return { decision: 'deny', reason: review };
     const write = githubWrite(words) ?? (isStackMerge(words) ? { merge: true } : null);
     if (write) {
       writesGithub = true;
+      if (write.merge && context.agentId) return { decision: 'deny', reason: REASONS.mergeBySubagent };
       if (write.merge && !authorised(words, 'APV_ALLOW_MERGE', env)) return { decision: 'deny', reason: REASONS.merge };
     }
     if (isProductionDeploy(words) && !authorised(words, 'APV_ALLOW_DEPLOY', env)) {

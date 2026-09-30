@@ -164,10 +164,13 @@ test('the hook script allows silently, and honours the environment authorisation
   assert.equal(allowed.stdout, '');
 });
 
-test('hooks.json registers the four hooks in exec form with the plugin root placeholder', () => {
+test('hooks.json registers the five events in exec form with the plugin root placeholder', () => {
   const config = JSON.parse(readFileSync(hooksFile, 'utf8'));
-  assert.deepEqual(Object.keys(config.hooks).sort(), ['PostToolUse', 'PreToolUse', 'SessionStart', 'Stop']);
+  assert.deepEqual(Object.keys(config.hooks).sort(), ['PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit']);
   assert.equal(config.hooks.PreToolUse[0].matcher, 'Bash');
+  assert.equal(config.hooks.PreToolUse[1].matcher, 'Write|Edit|MultiEdit|NotebookEdit');
+  assert.match(config.hooks.PreToolUse[1].hooks[0].args[0], /write-guard\.mjs$/);
+  assert.match(config.hooks.UserPromptSubmit[0].hooks[0].args[0], /operator-journal\.mjs$/);
   assert.equal(config.hooks.PostToolUse[0].matcher, 'Write|Edit|MultiEdit|NotebookEdit');
   for (const [event, groups] of Object.entries(config.hooks)) {
     for (const group of groups) {

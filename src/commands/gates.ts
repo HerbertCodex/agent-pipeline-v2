@@ -173,7 +173,8 @@ function verifyLines(result: VerifyResult): string[] {
   const missing = result.gates.filter(g => g.state !== 'passed');
   const rerun = result.stage === 'task' && result.base ? `apv gates run --stage task --base ${result.base.slice(0, 12)}`
     : `apv gates run --stage ${result.stage}${result.repeating.length || result.scoped.length ? ' --base <base de la branche>' : ''}`;
-  if (result.flaky.length) lines.push('', `Instables (réussis seulement après la relance de leurs tests en échec, même commit) : ${result.flaky.join(', ')} : à traiter comme un constat.`);
+  if (result.flaky.length) lines.push('', `Instables (réussis seulement après la relance de leurs tests en échec, même commit) : ${result.flaky.join(', ')} : à traiter comme un constat ; apv stack merge refuse ce commit (règle instable).`);
+  if (result.nearTimeout.length) lines.push('', `ATTENTION, délai presque atteint : ${result.nearTimeout.map(n => `${n.gateId} ${n.percent} % de ${Math.round(n.timeoutMs / 1000)} s`).join(', ')} : augmenter timeoutMs avant qu'un délai dépassé ne casse une preuve.`);
   lines.push('', result.ok
     ? `Preuve complète : ${result.required.length} contrôle(s) ${result.notRequired.length ? `prouvé(s) sur ce commit (dont ${result.notRequired.length} non requis par leur portée : ${result.notRequired.join(', ')})` : 'réussi(s) sur ce commit'}, arbre propre${result.flaky.length ? `, dont ${result.flaky.length} ${FLAKY}(s)` : ''}${result.stage === 'task' && (result.targeted.length || result.reserved.length) ? ' (niveau tâche : la suite complète reste à passer)' : ''}.`
     : `Preuve incomplète. Manque : ${missing.map(g => `${g.gateId} (${EVIDENCE[g.state]})`).join(', ')}. ` +
@@ -299,7 +300,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       if (values.json) {
         json(io, { ok: result.ok, commit: result.commit, stage: result.stage, base: result.base, config: loaded.file, configHash: result.configHash, baseGates: kept.base,
           required: result.required, targeted: result.targeted, reserved: result.reserved, gates: result.gates, unreadable: result.unreadable,
-          store: result.store, altered: result.altered, flaky: result.flaky, repeating: result.repeating, auditing: result.auditing, notRequired: result.notRequired, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
+          store: result.store, altered: result.altered, flaky: result.flaky, nearTimeout: result.nearTimeout, repeating: result.repeating, auditing: result.auditing, notRequired: result.notRequired, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
       } else {
         io.stdout(`${[...baseGatesLines(kept.base), ...verifyLines(result)].join('\n')}\n`);
       }
@@ -417,7 +418,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic,
       ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}),
       ...(r.repeat ? { repeat: { status: r.repeat.status, base: r.repeat.base, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures, fixedWaits: r.repeat.fixedWaits } } : {}),
-      ...(r.scope ? { scope: r.scope } : {}) }));
+      ...(r.scope ? { scope: r.scope } : {}), ...(r.nearTimeout ? { nearTimeout: r.nearTimeout } : {}) }));
     const name = (r: { gate: string; targeted: boolean }): string => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
     if (values.json) {
       json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null, baseGates: kept?.base ?? null,
@@ -450,6 +451,8 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       const flaky = rows.filter(r => r.status === 'passed_after_retry');
       if (flaky.length) lines.push('', `Instables (${flaky.length}) : réussis seulement après la relance unique de leurs tests en échec, même commit et même arbre ; comptés comme réussis, à traiter comme un constat :`,
         ...flaky.map(r => `- ${name(r)}${r.retriedTests?.length ? ` : ${r.retriedTests.join(' ; ')}` : ' (tests concernés non relevés : retryFailed.testPattern)'}`));
+      const near = rows.filter(r => r.nearTimeout);
+      if (near.length) lines.push('', `ATTENTION, délai presque atteint (85 % ou plus) : ${near.map(r => `${name(r)} ${r.nearTimeout!.percent} % de ${Math.round(r.nearTimeout!.timeoutMs / 1000)} s`).join(', ')} : augmenter timeoutMs de ces contrôles avant qu'un délai dépassé ne casse une preuve.`);
       const repeated = rows.filter(r => r.repeat);
       if (repeated.length) lines.push('', 'Tests modifiés répétés (repeatChanged) :', ...repeated.map(r => `- ${name(r)} : ${repeatLine(r.repeat!)}`));
       const waits = repeated.flatMap(r => r.repeat!.fixedWaits.map(w => `- ${name(r)} : ${w.file}:${w.line} : ${w.text}`));

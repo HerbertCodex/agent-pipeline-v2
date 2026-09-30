@@ -404,6 +404,10 @@ export declare const receiptSchema: import("./schema.js").Schema<{
         readonly run: string;
         readonly reason: string;
     } | undefined;
+    readonly nearTimeout: {
+        readonly timeoutMs: number;
+        readonly percent: number;
+    } | undefined;
     readonly lockWaitMs: number | undefined;
     readonly stack: string | undefined;
     readonly retry: {

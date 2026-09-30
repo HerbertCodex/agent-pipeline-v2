@@ -224,10 +224,21 @@ export interface StackOptions {
   allowBehind?: { reason: string };
   /** Journals a waiver before the merge it allows; returns an error message when it could not. */
   onDerogation?: (derogation: Derogation) => string | null;
+  /**
+   * The rules checked before any merge (`apv rules check`, docs/REGLES.md) for the head of a pull request going to
+   * `target`: what refuses it (empty when nothing does) and what to note (waivers of the operator). `apv stack plan`
+   * lists them, `apv stack merge` stops on them right before each merge. The command always passes them.
+   */
+  rules?: (pr: PullRequest, target: string) => Promise<RulesVerdict>;
 }
+
+/** What the rules say about the head of one pull request. */
+export interface RulesVerdict { problems: string[]; notes: string[] }
 
 export interface PlannedPr {
   number: number; pr: PullRequest | null; expectedBase: string | null; anomalies: string[];
+  /** The rules before a merge at its head, against the target (null when not checked: PR unread, no target). */
+  rules: RulesVerdict | null;
   /** Whether the head contains its expected base (null when not compared: PR unread, base unknown, address unreadable). */
   freshness: Freshness | null;
 }
@@ -284,7 +295,7 @@ export async function planStack(numbers: number[], options: StackOptions): Promi
   const prs: PlannedPr[] = [];
   for (const n of numbers) {
     const { pr, error } = await settled(options, n);
-    prs.push({ number: n, pr, expectedBase: null, anomalies: error ? [error] : [], freshness: null });
+    prs.push({ number: n, pr, expectedBase: null, anomalies: error ? [error] : [], freshness: null, rules: null });
   }
   const first = prs[0]?.pr;
   const target = options.target ?? first?.baseRefName ?? null;
@@ -307,6 +318,12 @@ export async function planStack(numbers: number[], options: StackOptions): Promi
     item.freshness = await freshness(options, item.pr, item.expectedBase, where);
     const problem = freshnessProblem(item.number, item.pr, item.freshness, options);
     if (problem) item.anomalies.push(problem);
+    // Every pull request lands on the target: its rules are read against it, whatever PR it sits on now (a pull request
+    // already refused for another anomaly is not checked further: the stack stops on it anyway).
+    if (options.rules && target && !item.anomalies.length) {
+      item.rules = await options.rules(item.pr, target);
+      item.anomalies.push(...item.rules.problems);
+    }
   }
   return { target, prs, ok: prs.every(p => p.anomalies.length === 0) };
 }
@@ -319,6 +336,8 @@ export interface MergeReport {
   freshness: Array<{ pr: number } & Freshness>;
   /** Pull requests merged behind their base by waiver (`--allow-behind`), each journaled before its merge. */
   derogations: Derogation[];
+  /** The rules read right before each merge. */
+  rules: Array<{ pr: number } & RulesVerdict>;
 }
 
 /**
@@ -329,7 +348,7 @@ export interface MergeReport {
  */
 export async function mergeStack(numbers: number[], method: 'merge' | 'squash' | 'rebase', options: StackOptions): Promise<MergeReport> {
   const plan = await planStack(numbers, options);
-  const report: MergeReport = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [] };
+  const report: MergeReport = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [], rules: [] };
   const stop = (pr: number, reasons: string[]): MergeReport => { report.stopped = { pr, reasons }; return report; };
   if (!plan.ok) {
     const bad = plan.prs.find(p => p.anomalies.length)!;
@@ -381,6 +400,12 @@ export async function mergeStack(numbers: number[], method: 'merge' | 'squash' |
       const failed = options.onDerogation ? options.onDerogation(derogation) : 'aucun journal';
       if (failed) return stop(n, [`dérogation --allow-behind non journalisée (${failed}) : fusion de la PR #${n} refusée`, behindReason(n, pr, fresh)]);
       report.derogations.push(derogation);
+    }
+    // The rules last, at the head GitHub will merge (--match-head-commit), against the target as it is now.
+    if (options.rules) {
+      const verdict = await options.rules(pr, target);
+      report.rules.push({ pr: n, ...verdict });
+      if (verdict.problems.length) return stop(n, verdict.problems);
     }
     const merge = await call(options, ['pr', 'merge', String(n), `--${method}`, '--match-head-commit', pr.headRefOid]);
     let after = await view(options, n);

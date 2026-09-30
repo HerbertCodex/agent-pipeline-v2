@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { apv } from './cli-helpers.mjs';
+import { waive } from './support/rules.mjs';
 import { evaluateCommand, REASONS } from '../hooks/scripts/bash-guard.mjs';
 import { MERGE_REFUSED, processGh } from '../dist/stack/github.js';
 import { batchMerge, processGit } from '../dist/stack/batch.js';
@@ -47,6 +48,8 @@ function batchProject(t, behavior = {}) {
     git(repo, 'add', '-A'); git(repo, 'commit', '-qm', name); git(repo, 'push', '-q', 'origin', name);
     const sha = git(repo, 'rev-parse', 'HEAD');
     git(origin, 'update-ref', `refs/pull/${n}/head`, sha);
+    // The rules of each pull request (reviews, captures...) are not what these tests are about: the operator waived them.
+    waive(repo, sha, ['relecture', 'captures', 'controles', 'maquette']);
     prs[n] = { number: n, state: 'OPEN', isDraft: false, baseRefName: 'main', headRefName: name, headRefOid: sha, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN',
       statusCheckRollup: [{ __typename: 'CheckRun', name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }] };
   };

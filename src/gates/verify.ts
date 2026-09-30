@@ -101,6 +101,8 @@ export interface VerifyResult {
   altered: AlteredRun[];
   /** Required checks proven by a receipt `passed_after_retry`: passed, but only after the relaunch of their failed tests (unstable). */
   flaky: string[];
+  /** Checks whose retained receipt took at least 85 % of their timeout (`nearTimeout`): the timeout to raise before it breaks. */
+  nearTimeout: { gateId: string; timeoutMs: number; percent: number }[];
   /** Required checks that declare `repeatChanged`: their proof needs a run with `--base`. */
   repeating: string[];
   /** Required checks proven by a receipt `not_required` whose scope the commit confirms (never run: no effect on them). */
@@ -311,6 +313,7 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     return impact.required ? { files: impact.files, reason: `audit requis au commit (${impact.files.length} fichier(s) à effet web modifié(s) depuis ${bases[0]!.slice(0, 12)}), reçu « non requis »` } : null;
   };
   const gates: GateEvidence[] = [];
+  const near: VerifyResult['nearTimeout'] = [];
   for (const gateId of required) {
     const all = atCommit.filter(f => f.receipt.gateId === gateId);
     const targetedOnes = all.filter(f => f.receipt.targeted === true);
@@ -330,6 +333,7 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
       continue;
     }
     const last = clean.reduce(latest);
+    if (last.receipt.nearTimeout) near.push({ gateId, ...last.receipt.nearTimeout });
     const proof: 'full' | 'targeted' = last.receipt.targeted === true ? 'targeted' : 'full';
     const gate = options.config.gates.find(g => g.id === gateId)!;
     const common = { status: last.receipt.status, receipt: last.receipt.id, runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof, otherBase, source: last.source };
@@ -344,7 +348,7 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     gates.push({ gateId, state: !success(last.receipt) ? 'failed' : repeat ? 'unrepeated' : web ? 'unaudited' : 'passed', ...common, repeat, scope: null, web });
   }
   return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered,
-    flaky: gates.filter(g => g.state === 'passed' && g.status === 'passed_after_retry').map(g => g.gateId),
+    flaky: gates.filter(g => g.state === 'passed' && g.status === 'passed_after_retry').map(g => g.gateId), nearTimeout: near,
     repeating: required.filter(id => options.config.gates.some(g => g.id === id && g.repeatChanged)),
     notRequired: gates.filter(g => g.state === 'passed' && g.status === 'not_required').map(g => g.gateId),
     scoped: required.filter(id => options.config.gates.some(g => g.id === id && g.skipWhenOnly)),

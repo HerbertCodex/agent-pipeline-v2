@@ -16,6 +16,7 @@ import { reviewAlwaysSchema, reviewPathsSchema, reviewTermsSchema } from '../rev
 import { stackIssues, stacksSchema } from '../stacks/config.js';
 import { webIssues, webSchema } from '../web/config.js';
 import { mapSchema, mapSettings, reuseSchema, reuseSettings } from '../reuse/config.js';
+import { rulesSchema, rulesSettings } from '../rules/config.js';
 
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
@@ -25,7 +26,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'web', 'reuse', 'map'] as const;
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'web', 'reuse', 'map', 'rules'] as const;
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'] as const;
 
@@ -185,6 +186,8 @@ export const apvConfigSchema = s.object({
   reuse: s.optional(reuseSchema),
   /** The code map written by `apv map` (docs/REUSE.md); absent: `.apv/code-map.md`. */
   map: s.optional(mapSchema),
+  /** What the rules checked before a merge add to their defaults (docs/REGLES.md); absent: defaults. No rule can be switched off. */
+  rules: s.optional(rulesSchema),
 });
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export const specLimits = (config: { spec?: Partial<SpecLimits> | undefined }): SpecLimits => ({ ...DEFAULT_SPEC_LIMITS, ...config.spec });
@@ -296,6 +299,7 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
   if (value.structure) list.attempt('CONFIG', () => structureSettings(value.structure));
   if (value.reuse) list.attempt('CONFIG', () => reuseSettings(value.reuse));
   if (value.map) list.attempt('CONFIG', () => mapSettings(value.map));
+  if (value.rules) list.attempt('CONFIG', () => rulesSettings(value.rules, []));
   for (const arg of value.review?.dast?.command ?? []) {
     if (!arg.includes('{{')) continue;
     const key = /^\{\{([A-Za-z]+)\}\}$/.exec(arg)?.[1];
