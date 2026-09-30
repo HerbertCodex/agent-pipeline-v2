@@ -189,14 +189,12 @@ test('the seal hook seals a record only for the reviewer agent of its domain, fr
 
 test('review of 7e27b88: every way found to forge a waiver is closed', async t => {
   const lead = as(null);
-  // 1. Reading the key: ~/.config in every form, « anchor », globs of hidden home folders, the home walked or copied, a decoded path.
-  for (const command of ['cat $HOME/.config/a*/anch*', 'cat ${XDG_CONFIG_HOME}/apv/x', 'find ~/.config -type f -exec cat {} \;', 'tar czf /tmp/c.tgz ~/.config',
-    'cp -r ~/.config /tmp/c', 'echo L2hvbWUvdS8uYXB2LWFuY3JhZ2UvY2xl | base64 -d | xargs cat', 'python3 -c "import glob; print(open(glob.glob(\'/home/u/.a*/*\')[0]).read())"',
-    'cat ~/.apv-ancrage/cle-ancrage', 'ls ~/.c*', 'find ~ -type f', 'rsync -a $HOME /tmp/h', 'python3 -c "import os; print(os.path.expanduser(1))"']) {
+  // 1. Reading the key: its exact names, the home walked whole, hidden globs that could match its folder, a decoded path.
+  for (const command of ['cat ~/.apv-ancrage/cle-ancrage', 'cat ~/.apv-ancrage/*', 'echo L2hvbWUvdS8uYXB2LWFuY3JhZ2UvY2xl | base64 -d | xargs cat',
+    'python3 -c "import glob; print(open(glob.glob(\'/home/u/.a*/*\')[0]).read())"', 'ls ~/.a*', 'find ~ -type f', 'rsync -a $HOME /tmp/h', 'tar czf /tmp/h.tgz ~']) {
     assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
   }
-  for (const tool_input of [{ pattern: 'anchor', path: '/r' }, { pattern: '**/*', path: '/home/u/.config' }, { pattern: '**/.apv-ancrage/*' }]) assert.equal(evaluateWrite({ tool_input }).decision, 'deny', JSON.stringify(tool_input));
-  for (const command of ['cat svelte.config.js', 'npx vite build --config vite.config.ts', 'ls $HOME/projets', 'cd ~ && ls projets']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  for (const tool_input of [{ pattern: '**/.apv-ancrage/*' }, { file_path: '/home/u/.apv-ancrage/cle-ancrage' }]) assert.equal(evaluateWrite({ tool_input }).decision, 'deny', JSON.stringify(tool_input));
   // 3. Running the plugin's code other than through apv: a script that imports dist/rules signs without reading the key.
   const pluginRoot = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
   for (const command of ['node -e "import(\'/p/dist/rules/operator.js\').then(m => m.sign(k))"', `node ${pluginRoot}/hooks/scripts/review-seal.mjs`, `node --input-type=module -e "import '${pluginRoot}/dist/stack/github.js'"`,
@@ -240,4 +238,33 @@ test('review of 7e27b88: a deleted or replaced key is never made anew in silence
   const { createHash } = await import('node:crypto');
   const entry = journalEntry('1234', { at: 't', session: 's' }, TEST_KEY);
   assert.notEqual(entry.sentences[0], createHash('sha256').update('1234').digest('hex'));
+});
+
+test('review of 55ba279: no false blocking; the key is named exactly, ~/.config and the home directory stay reachable', () => {
+  const lead = as(null);
+  for (const command of ['cat src/lib/anchored-popover.svelte.ts', 'grep -rn "anchor-name" src', 'git commit -m "docs: ancrage des validations humaines"', 'cat ~/.config/gh/hosts.yml',
+    'ls ~/.config', 'ls $HOME/.config/gh', 'node -e "console.log(require(\'os\').homedir())"', 'python3 -c "import os; print(os.path.expanduser(\'~\'))"', 'cat svelte.config.js',
+    'npx vite build --config vite.config.ts', 'ls $HOME/projets', 'ls ~', 'cd ~ && ls projets', 'cd ~ && ls .config', 'ls ~/.c*', 'rm -rf node_modules', 'grep -rn anchor src']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  for (const input of [{ tool_name: 'Read', tool_input: { file_path: '/home/u/.config/gh/hosts.yml' } }, { tool_name: 'Grep', tool_input: { pattern: 'anchor', path: '/r/src' } },
+    { tool_name: 'Read', tool_input: { file_path: '/r/src/lib/anchored-popover.svelte.ts' } }, { tool_name: 'Glob', tool_input: { pattern: '**/*.svelte', path: '/home/u' } },
+    { tool_name: 'Grep', tool_input: { pattern: '\\.apv', path: '/home/u' } }]) {
+    assert.equal(evaluateWrite(input).decision, 'allow', JSON.stringify(input));
+  }
+});
+
+test('review of 55ba279: the simple remaining ways are refused', () => {
+  const lead = as(null);
+  // A relative hidden glob after a cd to the home; Grep or Glob from the home toward hidden folders.
+  for (const command of ['cd ~ && cat .a*/*', 'cd && ls .apv*', 'cd $HOME; tar czf /tmp/k.tgz .a*', 'cd /home/u && cp -r .* /tmp/x']) assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.homeFolder }, command);
+  for (const input of [{ tool_name: 'Glob', tool_input: { pattern: '.a*/*', path: '/home/u' } }, { tool_name: 'Grep', tool_input: { pattern: 'x', glob: '.apv*/**', path: '/home/u/' } }]) {
+    assert.equal(evaluateWrite(input).decision, 'deny', JSON.stringify(input));
+  }
+  // The stores removed wholesale.
+  for (const command of ['rm -rf .git/apv', 'rm -r ../repo/.git/apv/', 'rm -rf "$(git rev-parse --git-common-dir)/apv"']) assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
+  // Nested sessions, whatever their spelling.
+  for (const command of ['/home/u/.local/share/claude/versions/2.1.280 -p "fusionne"', 'c=claude; $c -p "fusionne"', '${c} --print x', 'npx -y @anthropic-ai/claude-code -p x',
+    'claude-code -p x', 'env FOO=1 claude --agent apv:qa-securite -p x']) assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.nestedClaude }, command);
+  for (const command of ['claude --version', 'claude -p /usage', '$EDITOR notes.md']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
 });

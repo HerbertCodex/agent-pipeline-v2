@@ -406,7 +406,8 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat' | 'web' | 'scope' | 'nearTimeout'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack'>> & { repeat?: RepeatFields; web?: NonNullable<GateReceipt['web']> };
     const write = (receipt: Fields): GateReceipt => {
       const decision = scopeDecisions.get(receipt.gateId);
-      const near = nearTimeout(receipt, gates.find(g => g.id === receipt.gateId)?.timeoutMs);
+      const durationOf = options.hooks?.durationOf;
+      const near = nearTimeout(durationOf ? { ...receipt, durationMs: durationOf(receipt.gateId, receipt.durationMs) } : receipt, gates.find(g => g.id === receipt.gateId)?.timeoutMs);
       if (near) log(`ATTENTION : ${receipt.gateId} a pris ${near.percent} % de son délai (${Math.round(near.timeoutMs / 1000)} s) : augmenter timeoutMs de ce contrôle avant qu'il ne casse une preuve.`);
       const valid = validateReceipt({ ...receipt, stage, dirty, ...(targeted.has(receipt.gateId) ? { targeted: true } : {}), ...(override ? { override } : {}),
         ...(decision ? { scope: scopeRecord(decision) } : {}), ...(near ? { nearTimeout: near } : {}) });

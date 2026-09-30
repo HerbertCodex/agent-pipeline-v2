@@ -13,9 +13,11 @@ export const WRITE_REASON = 'APV : accès refusé à un magasin que seuls l\'out
 export function evaluateWrite(input) {
   const tool = input?.tool_input ?? {};
   const targets = [tool.file_path, tool.notebook_path, tool.path, tool.pattern, tool.glob].filter(v => typeof v === 'string');
-  // Grep and Glob: nothing searched for « anchor » (the key), wherever.
-  const patterns = [tool.pattern, tool.glob].filter(v => typeof v === 'string');
-  if (patterns.some(x => /anchor|ancrage/i.test(x))) return { decision: 'deny', reason: WRITE_REASON };
+  // Grep and Glob from the home folder itself toward its hidden folders (where the key is).
+  // Glob: its pattern is a path glob; Grep: its glob (its pattern is the text searched, never a path).
+  const globs = (input?.tool_name === 'Grep' ? [tool.glob] : [tool.pattern]).filter(v => typeof v === 'string');
+  const home = typeof tool.path === 'string' && /^(?:~|\/home\/[^/]+|\/root|\/Users\/[^/]+)\/?$/.test(tool.path.replace(/\\/g, '/'));
+  if (home && globs.some(x => /(^|\/)\.[^/.]/.test(x))) return { decision: 'deny', reason: WRITE_REASON };
   return targets.some(target => namesAnchor(target.replace(/\\/g, '/'))) ? { decision: 'deny', reason: WRITE_REASON } : { decision: 'allow' };
 }
 

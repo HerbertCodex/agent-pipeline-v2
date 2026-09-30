@@ -234,14 +234,22 @@ test('near timeout: a receipt at 85 % of its timeout or more says so, each pass 
   assert.equal(nearTimeout({ status: 'not_required', durationMs: 0 }, 1), null);
 });
 
-test('near timeout: the run and verify warn, the receipt records it', async t => {
-  const p = project(t, { change: { 'notes.txt': 'x\n' }, gates: [{ id: 'lent', stage: 'full', timeoutMs: 400, command: node('setTimeout(() => {}, 360)') }] });
-  const run = await apv(p.repo, ['gates', 'run', '--stage', 'full']);
-  assert.equal(run.code, 0, run.stdout + run.stderr);
-  assert.match(run.stdout, /ATTENTION, délai presque atteint \(85 % ou plus\) : lent 9\d % de 0 s/);
-  assert.match(run.stderr, /ATTENTION : lent a pris 9\d % de son délai/);
-  const verify = await apv(p.repo, ['gates', 'verify', '--commit', 'HEAD', '--against', 'origin/main', '--json']);
-  assert.equal(verify.json().nearTimeout[0].gateId, 'lent');
+test('near timeout: the run and verify warn, the receipt records it (durations injected, no real waiting)', async t => {
+  const { runGates } = await import('../dist/gates/run.js');
+  const { loadConfig } = await import('../dist/config/load.js');
+  const p = project(t, { change: { 'notes.txt': 'x\n' }, gates: [{ id: 'lent', stage: 'full', timeoutMs: 100_000, command: node('0') }, { id: 'vif', stage: 'full', timeoutMs: 100_000, command: node('0') }] });
+  const logs = [];
+  const result = await runGates({ repo: p.repo, config: loadConfig(p.repo).config, stage: 'full', log: l => logs.push(l),
+    hooks: { durationOf: (gate, measured) => gate === 'lent' ? 92_000 : measured } });
+  assert.equal(result.ok, true);
+  const receipts = Object.fromEntries(result.receipts.map(r => [r.gateId, r]));
+  assert.deepEqual(receipts.lent.nearTimeout, { timeoutMs: 100_000, percent: 92 });
+  assert.equal(receipts.vif.nearTimeout, undefined);
+  assert.ok(logs.some(l => /ATTENTION : lent a pris 92 % de son délai \(100 s\)/.test(l)), logs.join('\n'));
+  const verify = await apv(p.repo, ['gates', 'verify', '--commit', 'HEAD', '--against', 'origin/main']);
+  assert.match(verify.stdout, /ATTENTION, délai presque atteint : lent 92 % de 100 s/);
+  const json = await apv(p.repo, ['gates', 'verify', '--commit', 'HEAD', '--against', 'origin/main', '--json']);
+  assert.deepEqual(json.json().nearTimeout, [{ gateId: 'lent', timeoutMs: 100_000, percent: 92 }]);
 });
 
 test('busy stacks: a port held by another process or a stack whose lock is held refuse the full suite', () => {

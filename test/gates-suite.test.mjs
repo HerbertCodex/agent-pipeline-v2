@@ -29,18 +29,21 @@ function project(t, config) {
 const common = repo => realpathSync(resolve(repo, git(repo, 'rev-parse', '--git-common-dir')));
 const receipt = (dir, gate) => validateReceipt(JSON.parse(readFileSync(join(dir, `${gate}.json`), 'utf8')));
 const owner = label => ({ pid: process.pid, host: hostname(), label });
-/** Holds the lease `resource` of `dir` for `ms`, then releases it; resolves to the release time. */
+/**
+ * Takes the lease `resource` of `dir`, and resolves once it is held (never racing the run that must wait for it) to a
+ * promise of its release after `ms`, which resolves to the release time.
+ */
 async function holdLease(dir, resource, ms) {
   const store = new LockStore(dir);
   const held = await store.tryAcquire(resource, owner('test'), 60);
   assert.ok(held.ok, 'lease taken by the test');
-  return new Promise(done => setTimeout(async () => { const at = Date.now(); await store.release(resource, { token: held.record.token }); done(at); }, ms));
+  return { released: new Promise(done => setTimeout(async () => { const at = Date.now(); await store.release(resource, { token: held.record.token }); done(at); }, ms)) };
 }
 
 test('the queue of the full suites: the first check starts only once the lock is free, and its timeout after that', async t => {
   const f = project(t, { gates: [{ id: 'e2e', stage: 'full', timeoutMs: 1000, command: node(`require("fs").writeFileSync(${JSON.stringify(join(f0(t), 'started'))}, String(Date.now())); setTimeout(() => {}, 100)`) }] });
   const locks = join(common(f.repo), 'apv', 'locks');
-  const released = holdLease(locks, 'full-suite', 2500);
+  const { released } = await holdLease(locks, 'full-suite', 2500);
   const r = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_POLL_MS: '20' });
   const releasedAt = await released;
   assert.equal(r.code, 0, r.stdout + r.stderr);
@@ -67,7 +70,7 @@ test('the queue refuses after waitMs, nothing runs; a disabled queue is not take
   const f = project(t, { gates: [{ id: 'e2e', stage: 'full', command: node(`require("fs").writeFileSync(${JSON.stringify(join(f0(t), 'ran'))}, "")`) }],
     suite: { queue: { lockFile: 'apv/queue/suites.lock', waitMs: 300 } } });
   const locks = join(common(f.repo), 'apv', 'queue');
-  const released = holdLease(locks, 'suites', 1500);
+  const { released } = await holdLease(locks, 'suites', 1500);
   const r = await apv(f.repo, ['gates', 'run'], { APV_LOCK_POLL_MS: '20' });
   await released;
   assert.equal(r.code, 1);
@@ -75,7 +78,7 @@ test('the queue refuses after waitMs, nothing runs; a disabled queue is not take
   assert.ok(!existsSync(join(f0(t), 'ran')));
   write(f.repo, '.apv/config.json', { gates: [{ id: 'e2e', stage: 'full', command: node('0') }], suite: { queue: { enabled: false } } });
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'no queue');
-  const held = holdLease(locks, 'suites', 800);
+  const { released: held } = await holdLease(locks, 'suites', 800);
   const free = await apv(f.repo, ['gates', 'run', '--json']);
   await held;
   assert.equal(free.code, 0); assert.equal(free.json().queue, null);
@@ -85,7 +88,7 @@ test('a check with a lease lock waits for it before its timeout starts; the comm
   const dir = join(f0(t), 'locks');
   const f = project(t, { gates: [{ id: 'integration', stage: 'full', timeoutMs: 1000, lock: { resource: 'stack' }, passEnv: [],
     command: node('process.exit(process.env.APV_LOCK_HELD === "stack" ? 0 : 7)') }] });
-  const released = holdLease(dir, 'stack', 2500);
+  const { released } = await holdLease(dir, 'stack', 2500);
   const r = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_DIR: dir, APV_LOCK_POLL_MS: '20' });
   await released;
   assert.equal(r.code, 0, r.stdout + r.stderr);
@@ -97,7 +100,7 @@ test('a check with a lease lock waits for it before its timeout starts; the comm
   // Lock not obtained within waitMs: a receipt that fails, the command never launched.
   write(f.repo, '.apv/config.json', { gates: [{ id: 'integration', stage: 'full', lock: { resource: 'stack', waitMs: 200 }, command: node(`require("fs").writeFileSync(${JSON.stringify(join(f0(t), 'ran'))}, "")`) }] });
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'short wait');
-  const held = holdLease(dir, 'stack', 1200);
+  const { released: held } = await holdLease(dir, 'stack', 1200);
   const refused = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_DIR: dir, APV_LOCK_POLL_MS: '20' });
   await held;
   assert.equal(refused.code, 1);
@@ -107,7 +110,7 @@ test('a check with a lease lock waits for it before its timeout starts; the comm
   // Already held by the caller (apv lock run stack -- apv gates run): not taken again.
   write(f.repo, '.apv/config.json', { gates: [{ id: 'integration', stage: 'full', timeoutMs: 1000, lock: { resource: 'stack', waitMs: 100 }, command: node('0') }] });
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'held');
-  const nested = holdLease(dir, 'stack', 600);
+  const { released: nested } = await holdLease(dir, 'stack', 600);
   const inside = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_DIR: dir, APV_LOCK_HELD: 'stack' });
   await nested;
   assert.equal(inside.code, 0, inside.stderr);

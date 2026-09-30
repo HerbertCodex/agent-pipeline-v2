@@ -94,7 +94,7 @@ export const ANCHOR_STORES = /\bapv[\\/]+(?:operator|reviews|merges)(?:[\\/]|\b)
  * The same stores, and the anchor key, looked for in a text flattened by `flatten` (quotes, backslashes and quote
  * concatenations removed), so that `.git/ap""v/...` or `join('ap'+'v', ...)` are recognised: file names, key, commit folders.
  */
-export const ANCHOR_FRAGMENTS = [/messages\.jsonl/i, /anchor\.key/i, /ancrage/i, /cle\.empreinte/i, /(^|[\s/~}=:(])\.config(\/|\s|$)/, /xdg_config_home/i, /(^|[\s/~}])\.c[*?[]/, /\bapv\W{1,4}(?:operator|reviews|merges)\b/i, /operator\/+(?:messages|refused)/i,
+export const ANCHOR_FRAGMENTS = [/messages\.jsonl/i, /anchor\.key/i, /\.apv-ancrage\b/i, /\bcle-ancrage\b/i, /cle\.empreinte/i, /\bapv\W{1,4}(?:operator|reviews|merges)\b/i, /operator\/+(?:messages|refused)/i,
   /reviews\/+[0-9a-f]{12,}/i, /merges\/+[0-9a-f]{12,}/i];
 
 /** A command or a path as a guard reads it: quote concatenations ('ap'+'v', "ap" "v"), quotes and backslashes removed. */
