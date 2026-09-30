@@ -61,6 +61,8 @@ Une maquette se juge sur la grille de critique de la compétence `apv:design-art
 - **Aucune promesse risquée** : rien d'absolu sur la gratuité, les données, la publicité, les délais ou le support (« gratuit pendant la bêta », pas « gratuit pour toujours »).
 - **Noms fictifs** pour les entreprises, les personnes et les adresses de démonstration ; identité de l'éditeur jamais inventée (champ à compléter laissé visible).
 - **Mode sombre conçu, pas inversé** : surfaces en paliers, couleurs d'accent réajustées pour le contraste, ombres remplacées par des bordures ou des surfaces plus claires, illustrations vérifiées sur fond sombre.
+- **Composants existants d'abord.** Un nouvel écran d'une application qui existe reprend sa coquille, sa navigation, ses toasts, ses listes déroulantes, ses dialogues et ses icônes (carte du code `.apv/code-map.md`) ; une variante nécessaire se dessine comme variante nommée du composant existant. Projet pilote, 30 septembre 2026 : une administration codée avec sa propre coquille à côté de celle de l'application.
+- **Valeurs insécables.** Heures, dates, montants, nombres et unités ne se coupent pas en fin de ligne : en français, espaces insécables (« 14 h 47 », « 12 € »), vérifiées sur la capture à 390 px.
 - La référence est absolue : un écart nécessaire plus tard (accessibilité, contraste) est présenté à l'opérateur comme « écart assumé », et il décide.
 
 ## 6. Sans outil Artifact
