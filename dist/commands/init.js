@@ -29,7 +29,9 @@ Si la configuration déclare le dossier des maquettes validées (design.dir) ou 
 dossier existe, ajoute à .gitattributes « <dossier>/*.html -whitespace » quand Git ne l'applique pas déjà. Liste ce qui est créé et ce qui existait déjà. Refuse hors d'un dépôt Git.
 Dépôt GitHub (adresse de origin) : lit son réglage delete_branch_on_merge (gh api repos/<propriétaire>/<dépôt>) et,
 s'il est faux, le signale avec la commande qui l'active (gh api -X PATCH repos/<propriétaire>/<dépôt>
--F delete_branch_on_merge=true), sans jamais la lancer. Lecture impossible : signalée, sans effet sur la sortie.
+-F delete_branch_on_merge=true), sans jamais la lancer. Seul github.com est interrogé d'office, un autre hôte
+seulement si gh y est connecté (gh auth status --hostname) ; identifiants de l'adresse masqués. Lecture
+impossible : signalée, sans effet sur la sortie.
 Le nom du projet est --name, sinon le nom du dossier du dépôt.
 Sortie : 0 succès, 1 hors d'un dépôt Git ou modèle de consigne introuvable, 2 appel incorrect.`;
 /** Root of the plugin, resolved from the compiled tool (`dist/commands/init.js`). */

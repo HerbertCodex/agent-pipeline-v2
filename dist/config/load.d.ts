@@ -9,7 +9,7 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite", "stacks", "batch", "web", "reuse", "map"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite", "stacks", "batch", "stack", "web", "reuse", "map"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
 /**
@@ -159,6 +159,13 @@ export declare const batchSettingsSchema: import("../domain/schema.js").Schema<{
     readonly setup: string[] | undefined;
     readonly setupTimeoutMs: number;
     readonly passEnv: string[];
+}>;
+/**
+ * `apv stack merge` and `apv stack batch --merge`: the branches their cleanup never deletes (globs, `*` within a segment,
+ * `**` across). Absent: the usual long-lived branches (DEFAULT_KEEP_BRANCHES of src/stack/branches.ts); `[]`: none by name.
+ */
+export declare const stackSettingsSchema: import("../domain/schema.js").Schema<{
+    readonly keepBranches: string[] | undefined;
 }>;
 /** Declared test ports, sorted and without duplicates, with the resources (and stacks, `pile <id>`) that declare them. */
 export declare function declaredTestPorts(config: {
@@ -341,6 +348,9 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly setup: string[] | undefined;
         readonly setupTimeoutMs: number;
         readonly passEnv: string[];
+    } | undefined;
+    readonly stack: {
+        readonly keepBranches: string[] | undefined;
     } | undefined;
     readonly web: {
         readonly pages: string[];

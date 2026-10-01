@@ -157,18 +157,18 @@ const HTML_SPACED = '<p>Accueil</p> \n';
 test('apv init reads delete_branch_on_merge of the GitHub repository of origin and gives the command, never runs it', async t => {
   const fakeGh = fileURLToPath(new URL('./support/fake-gh.mjs', import.meta.url));
   chmodSync(fakeGh, 0o755);
-  const project = repo => {
+  const project = (repo, origin = 'git@github.com:o/r.git', extra = {}) => {
     const f = fixture(t);
-    git(f.repo, 'remote', 'add', 'origin', 'git@github.com:o/r.git');
+    git(f.repo, 'remote', 'add', 'origin', origin);
     const state = join(f.root, 'gh.json');
-    writeFileSync(state, JSON.stringify({ prs: {}, calls: [], repo }));
+    writeFileSync(state, JSON.stringify({ prs: {}, calls: [], repo, ...extra }));
     return { f, env: { APV_GH: fakeGh, FAKE_GH_STATE: state }, calls: () => JSON.parse(readFileSync(state, 'utf8')).calls };
   };
   const off = project({ delete_branch_on_merge: false });
   const r = await apv(off.f.repo, ['init'], off.env);
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /ATTENTION : le dépôt GitHub o\/r ne supprime pas la branche d'une PR fusionnée \(delete_branch_on_merge faux\) : les branches s'accumulent\. Pour l'activer : gh api -X PATCH repos\/o\/r -F delete_branch_on_merge=true \(commande non lancée par apv init\)\./);
-  assert.deepEqual(off.calls(), [['api', 'repos/o/r', '--jq', '{default_branch, delete_branch_on_merge}']], 'one read, never the PATCH');
+  assert.deepEqual(off.calls(), [['api', 'repos/o/r', '--jq', '{default_branch, fork, delete_branch_on_merge}']], 'one read, never the PATCH');
   const j = await apv(off.f.repo, ['init', '--json'], off.env);
   assert.deepEqual(j.json().github, { repo: 'o/r', host: 'github.com', deleteBranchOnMerge: false, command: 'gh api -X PATCH repos/o/r -F delete_branch_on_merge=true', note: null });
 
@@ -185,6 +185,26 @@ test('apv init reads delete_branch_on_merge of the GitHub repository of origin a
   const failing = await apv(hidden.f.repo, ['init', '--json'], { APV_GH: join(hidden.f.root, 'pas-de-gh') });
   assert.equal(failing.code, 0);
   assert.match(failing.json().github.note, /ENOENT/);
+
+  // Another server: asked only when gh is logged in to it; credentials in the address never shown.
+  const other = project({ delete_branch_on_merge: false }, 'https://deploy:s3cr3t-token@git.example.com/o/r.git');
+  const o = await apv(other.f.repo, ['init', '--json'], other.env);
+  assert.equal(o.code, 0, o.stderr);
+  assert.deepEqual(other.calls(), [['auth', 'status', '--hostname', 'git.example.com']], 'the repository is never asked');
+  assert.match(o.json().github.note, /hôte git\.example\.com inconnu de gh .* non interrogé/);
+  const ot = await apv(other.f.repo, ['init'], other.env);
+  assert.match(ot.stdout, /Réglage delete_branch_on_merge du dépôt GitHub o\/r non vérifié : hôte git\.example\.com inconnu de gh/);
+  for (const out of [o.stdout, o.stderr, ot.stdout, ot.stderr]) assert.ok(!out.includes('s3cr3t') && !out.includes('deploy'), out);
+  const known = project({ delete_branch_on_merge: false }, 'https://deploy:s3cr3t-token@ghe.example.com/o/r.git', { authHosts: ['ghe.example.com'] });
+  const k = await apv(known.f.repo, ['init', '--json'], known.env);
+  assert.deepEqual(known.calls(), [['auth', 'status', '--hostname', 'ghe.example.com'], ['api', '--hostname', 'ghe.example.com', 'repos/o/r', '--jq', '{default_branch, fork, delete_branch_on_merge}']]);
+  assert.equal(k.json().github.command, 'gh api --hostname ghe.example.com -X PATCH repos/o/r -F delete_branch_on_merge=true');
+  assert.ok(!k.stdout.includes('s3cr3t'));
+  const odd = project({}, 'https://deploy:s3cr3t-token@example.com/seul');
+  const u = await apv(odd.f.repo, ['init', '--json'], odd.env);
+  assert.equal(u.json().github.note, 'adresse de origin non reconnue comme un dépôt GitHub (https://***@example.com/seul)');
+  assert.ok(!u.stdout.includes('s3cr3t'));
+  assert.deepEqual(odd.calls(), []);
 
   // No GitHub origin: nothing called, nothing said.
   const local = fixture(t);

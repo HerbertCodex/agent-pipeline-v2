@@ -8,7 +8,7 @@ import { cleanLine } from '../run/summary.js';
 import { MERGE_REFUSED, mergeStack, planStack, processGh, type Derogation, type Freshness, type GhCall, type StackOptions, type StackPlan } from '../stack/github.js';
 import { batchMerge, processGit, type BatchReport, type Proof } from '../stack/batch.js';
 import { cleanMergedBranches, cleanupLines, type BranchCleanup } from '../stack/branches.js';
-import { loadConfigAtCommit, type ApvConfig } from '../config/load.js';
+import { loadConfig, loadConfigAtCommit, type ApvConfig } from '../config/load.js';
 import { hash } from '../domain/hash.js';
 import { runGates } from '../gates/run.js';
 import { verifyGates } from '../gates/verify.js';
@@ -67,10 +67,12 @@ batch  fusion par lot de PR indépendantes, chacune vers la cible : lit chaque P
        .apv/state/stack.log. --keep garde les worktrees des lots.
 Branches fusionnées (merge, batch --merge) : après les fusions, la branche de tête de chaque PR fusionnée
        est supprimée sur GitHub (gh api -X DELETE repos/<propriétaire>/<dépôt>/git/refs/heads/<branche>),
-       puis son absence constatée par une relecture. Elle est gardée, avec la raison : --keep-branches ; PR
-       venue d'un fork ; branche cible ou branche par défaut du dépôt ; branche protégée ; base ou tête d'une
-       PR encore ouverte (lu par l'API ; dans une pile, la PR suivante est re-ciblée avant) ; tête qui n'est
-       plus le commit fusionné. Déjà absente (réglage delete_branch_on_merge du dépôt) : notée, sans erreur.
+       relue juste avant, puis son absence constatée par une relecture. Elle est gardée, avec la raison :
+       --keep-branches ; PR venue d'un fork ; dépôt lui-même fork ; branche cible ou par défaut du dépôt ;
+       motif de stack.keepBranches (.apv/config.json ; défaut develop, development, release/*, releases/*,
+       staging, hotfix/*) ; base ou tête d'une PR encore ouverte, ou déjà base d'une PR (lu par l'API ;
+       dans une pile, la PR suivante est re-ciblée avant) ; branche protégée ; tête qui n'est plus le commit
+       fusionné ; lot interrompu ou arrêté sur une anomalie. Absente : « absente (404) », sans erreur.
        Un échec de suppression est un avertissement : la fusion reste acquise, le code de sortie ne change
        pas. Une ligne par branche ; si delete_branch_on_merge est faux, la commande qui l'active est donnée
        (gh api -X PATCH repos/<propriétaire>/<dépôt> -F delete_branch_on_merge=true), jamais lancée.
@@ -210,7 +212,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     }
     const report = await mergeStack(prs, method, options);
     // After the merges (and the retarget of each next PR of the stack), the merged branches; a failure never fails the merge.
-    const cleanup = await branchCleanup(report.mergedHeads, report.target, values['keep-branches'] ? '--keep-branches' : null,
+    const cleanup = await branchCleanup(io, report.mergedHeads, report.target, values['keep-branches'] ? '--keep-branches' : null,
       async args => { const call = await options.gh(args); options.onCall(call); return call; });
     if (values.json) { json(io, { ...report, cleanup, calls }); return report.stopped ? EXIT.failed : EXIT.ok; }
     const lines = ['', 'Rapport de fusion :', ...planLines(report.plan).map(l => `  ${l}`),
@@ -230,10 +232,14 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
 }
 
 /** The cleanup of the merged branches (src/stack/branches.ts); nothing to do, nothing called, when nothing was merged. */
-async function branchCleanup(merged: Parameters<typeof cleanMergedBranches>[0], target: string | null, keep: string | null,
+async function branchCleanup(io: CommandIO, merged: Parameters<typeof cleanMergedBranches>[0], target: string | null, keep: string | null,
   run: (args: string[]) => Promise<GhCall>): Promise<BranchCleanup> {
   if (!merged.length) return { branches: [], repositories: [] };
-  try { return await cleanMergedBranches(merged, { run, target, keep }); }
+  // The long-lived branches named by `stack.keepBranches` of the checkout; an unreadable configuration keeps every branch.
+  let keepPatterns: string[] | undefined;
+  try { keepPatterns = loadConfig(gitRead(io.cwd, ['rev-parse', '--show-toplevel']) || io.cwd).config.stack?.keepBranches; }
+  catch (error) { keep ??= `configuration illisible, stack.keepBranches inconnu (${cleanLine(errorMessage(error), 300)})`; }
+  try { return await cleanMergedBranches(merged, { run, target, keep, ...(keepPatterns ? { keepPatterns } : {}) }); }
   catch (error) {
     // Never a crash after a merge: every branch left is said, as a warning.
     return { branches: merged.map(m => ({ pr: m.pr, branch: m.branch, head: m.head, status: 'failed' as const, reason: `erreur inattendue : ${errorMessage(error)}` })), repositories: [] };
@@ -333,9 +339,11 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO): Promise
   } finally {
     for (const [signal, handler] of handlers) process.off(signal, handler);
   }
-  // An interrupted batch does nothing more: its merged branches stay, and the report says so.
-  const keep = report.interrupted || received ? 'lot interrompu (signal) : rien d\'autre n\'est fait' : values['keep-branches'] ? '--keep-branches' : null;
-  const cleanup = await branchCleanup(report.mergedHeads, report.target, keep, async args => { const call = await gh(args); onCall(call); return call; });
+  // An interrupted batch does nothing more, and a batch stopped by an anomaly (after a merge: content of the target
+  // different from the proven batch, journal not written) is left as it is to be examined: its merged branches stay.
+  const keep = report.interrupted || received ? 'lot interrompu (signal) : rien d\'autre n\'est fait'
+    : report.stopped ? 'lot arrêté sur une anomalie : branches gardées pour l\'examen' : values['keep-branches'] ? '--keep-branches' : null;
+  const cleanup = await branchCleanup(io, report.mergedHeads, report.target, keep, async args => { const call = await gh(args); onCall(call); return call; });
   const partial = !report.stopped && report.left.length > 0;
   const status = report.interrupted ? 'interrompu' : report.stopped ? 'arrêté' : partial ? 'partiel' : values.merge ? 'fusionné' : 'prouvé';
   if (values.json) json(io, { ...report, status, cleanup, calls });

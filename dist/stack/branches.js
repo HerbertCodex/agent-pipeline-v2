@@ -1,8 +1,11 @@
+import { globToRegExp } from '../db/glob.js';
 import { errorMessage } from '../domain/errors.js';
 import { hostname, pullRequestPath, refSegment } from './github.js';
-export const REPOSITORY_JQ = '{default_branch, delete_branch_on_merge}';
+/** Long-lived branches never deleted by the cleanup when `stack.keepBranches` is absent (globs: `*` within a segment, `**` across). */
+export const DEFAULT_KEEP_BRANCHES = ['develop', 'development', 'release/*', 'releases/*', 'staging', 'hotfix/*'];
+export const REPOSITORY_JQ = '{default_branch, fork, delete_branch_on_merge}';
 const BRANCH_JQ = '{sha: .commit.sha, protected}';
-/** `gh api repos/<owner>/<repo> --jq …`: the default branch and `delete_branch_on_merge`. */
+/** `gh api repos/<owner>/<repo> --jq …`: the default branch, `fork` and `delete_branch_on_merge`. */
 export function repositoryArgs(where) {
     return ['api', ...hostname(where), where.repo, '--jq', REPOSITORY_JQ];
 }
@@ -10,9 +13,13 @@ export function repositoryArgs(where) {
 export function branchArgs(where, branch) {
     return ['api', ...hostname(where), `${where.repo}/branches/${refSegment(branch)}`, '--jq', BRANCH_JQ];
 }
-/** `gh api -X GET repos/<owner>/<repo>/pulls -f state=open -f <field>=<value>`: the open pull requests with this base or head. */
-export function openPullsArgs(where, field, value) {
-    return ['api', ...hostname(where), '-X', 'GET', `${where.repo}/pulls`, '-f', 'state=open', '-f', `${field}=${value}`, '-f', 'per_page=100', '--jq', '[.[].number]'];
+/**
+ * `gh api -X GET repos/<owner>/<repo>/pulls -f state=<state> -f <field>=<value>`: the pull requests with this base or
+ * head, open ones (all of them, up to 100) or of any state (one is enough).
+ */
+export function pullsArgs(where, state, field, value) {
+    return ['api', ...hostname(where), '-X', 'GET', `${where.repo}/pulls`, '-f', `state=${state}`, '-f', `${field}=${value}`,
+        '-f', `per_page=${state === 'open' ? 100 : 1}`, '--jq', '[.[].number]'];
 }
 /** `gh api -X DELETE repos/<owner>/<repo>/git/refs/heads/<branch>`. */
 export function deleteBranchArgs(where, branch) {
@@ -32,11 +39,13 @@ export function parseRepositorySettings(text) {
     if (!raw || typeof raw !== 'object')
         throw new Error('réponse illisible');
     const defaultBranch = typeof raw['default_branch'] === 'string' && raw['default_branch'] ? raw['default_branch'] : null;
-    return { defaultBranch, deleteBranchOnMerge: typeof raw['delete_branch_on_merge'] === 'boolean' ? raw['delete_branch_on_merge'] : null };
+    const flag = (key) => typeof raw[key] === 'boolean' ? raw[key] : null;
+    return { defaultBranch, fork: flag('fork'), deleteBranchOnMerge: flag('delete_branch_on_merge') };
 }
 /** Deletes the head branch of each merged pull request, in order, under the rules above; one outcome per branch. */
 export async function cleanMergedBranches(merged, options) {
     const cleanup = { branches: [], repositories: [] };
+    const patterns = (options.keepPatterns ?? DEFAULT_KEEP_BRANCHES).map(glob => ({ glob, re: globToRegExp(glob) }));
     const settings = new Map();
     const repository = async (where) => {
         const key = `${where.host}/${where.repo}`;
@@ -44,7 +53,7 @@ export async function cleanMergedBranches(merged, options) {
         if (known)
             return known;
         const call = await options.run(repositoryArgs(where));
-        const read = { host: where.host, repo: where.repo.replace(/^repos\//, ''), defaultBranch: null, deleteBranchOnMerge: null, error: null };
+        const read = { host: where.host, repo: where.repo.replace(/^repos\//, ''), defaultBranch: null, fork: null, deleteBranchOnMerge: null, error: null };
         if (failed(call))
             read.error = `gh api ${where.repo} : ${outcome(call)}`;
         else {
@@ -77,9 +86,9 @@ export async function cleanMergedBranches(merged, options) {
             return { state: 'error', error: `réponse illisible : ${errorMessage(error)}` };
         }
     };
-    /** Numbers of the open pull requests whose `field` is `value`; a string when the list could not be read. */
-    const openPulls = async (where, field, value) => {
-        const call = await options.run(openPullsArgs(where, field, value));
+    /** Numbers of the pull requests the query lists; a string when the list could not be read. */
+    const pulls = async (where, state, field, value) => {
+        const call = await options.run(pullsArgs(where, state, field, value));
         if (failed(call))
             return `gh api ${where.repo}/pulls : ${outcome(call)}`;
         try {
@@ -112,6 +121,11 @@ export async function cleanMergedBranches(merged, options) {
             done('kept', 'branche cible');
             continue;
         }
+        const pattern = patterns.find(p => p.re.test(m.branch));
+        if (pattern) {
+            done('kept', `branche de longue durée (stack.keepBranches : ${pattern.glob})`);
+            continue;
+        }
         const where = pullRequestPath({ number: m.pr, url: m.url });
         if (!where) {
             done('kept', `adresse de la PR illisible (${m.url || 'absente'})`);
@@ -122,20 +136,46 @@ export async function cleanMergedBranches(merged, options) {
             done('failed', `réglages du dépôt illisibles (${repo.error}) : branche par défaut inconnue`);
             continue;
         }
+        // In a fork, a branch may be the head of an open pull request of the parent repository, which this one cannot list.
+        if (repo.fork !== false) {
+            done('kept', repo.fork ? 'dépôt fork : la branche peut être la tête d\'une PR du dépôt parent' : 'dépôt fork ou non (fork non lu)');
+            continue;
+        }
         if (m.branch === repo.defaultBranch) {
             done('kept', 'branche par défaut du dépôt');
             continue;
         }
+        // Deleting the base or the head of an open pull request would close it; a branch that already was the base of a pull
+        // request is a long-lived one (in a stack, the next pull request was retargeted: its base is no longer this branch).
+        const owner = repo.repo.split('/')[0];
+        let blocked = null;
+        for (const [state, field, value] of [['open', 'base', m.branch], ['open', 'head', `${owner}:${m.branch}`], ['all', 'base', m.branch]]) {
+            const list = await pulls(where, state, field, value);
+            if (typeof list === 'string') {
+                blocked = { status: 'failed', reason: `PR ${state === 'open' ? 'ouvertes' : 'qui la visent'} illisibles (${list})` };
+                break;
+            }
+            if (!list.length)
+                continue;
+            const names = list.map(n => `la PR #${n}`).join(', ');
+            blocked = { status: 'kept', reason: state === 'all' ? `elle a déjà servi de base à ${names} : branche de longue durée probable`
+                    : `${field === 'base' ? 'base' : 'tête'} de ${names}, encore ouverte${list.length > 1 ? 's' : ''}` };
+            break;
+        }
+        if (blocked) {
+            done(blocked.status, blocked.reason);
+            continue;
+        }
+        // The branch read last, right before the deletion: the head the merge carried, never another.
         const before = await branchState(where, m.branch);
         if (before.state === 'absent') {
-            done('absent', repo.deleteBranchOnMerge ? 'déjà supprimée (par GitHub, delete_branch_on_merge)' : 'déjà supprimée');
+            done('absent', repo.deleteBranchOnMerge ? 'absente (404) ; le dépôt supprime les branches fusionnées (delete_branch_on_merge)' : 'absente (404)');
             continue;
         }
         if (before.state === 'error') {
             done('failed', `lecture de la branche impossible (${before.error})`);
             continue;
         }
-        // The head the merge carried, never another: a branch that received commits since keeps them.
         if (before.sha !== m.head) {
             done('kept', `tête déplacée depuis la fusion (${short(before.sha)} au lieu de ${short(m.head)})`);
             continue;
@@ -144,29 +184,11 @@ export async function cleanMergedBranches(merged, options) {
             done('kept', before.protected ? 'branche protégée' : 'protection de la branche inconnue');
             continue;
         }
-        // Deleting the base or the head of an open pull request would close it.
-        const owner = repo.repo.split('/')[0];
-        let blocked = null;
-        for (const [field, value, role] of [['base', m.branch, 'base'], ['head', `${owner}:${m.branch}`, 'tête']]) {
-            const open = await openPulls(where, field, value);
-            if (typeof open === 'string') {
-                blocked = { status: 'failed', reason: `PR ouvertes illisibles (${open})` };
-                break;
-            }
-            if (open.length) {
-                blocked = { status: 'kept', reason: `${role} de ${open.map(n => `la PR #${n}`).join(', ')}, encore ouverte${open.length > 1 ? 's' : ''}` };
-                break;
-            }
-        }
-        if (blocked) {
-            done(blocked.status, blocked.reason);
-            continue;
-        }
         const deletion = await options.run(deleteBranchArgs(where, m.branch));
         // The result is read again whatever the exit code: the absence of the branch is the only proof (incident 30).
         const after = await branchState(where, m.branch);
         if (after.state === 'absent')
-            done(failed(deletion) ? 'absent' : 'deleted', failed(deletion) ? 'déjà supprimée (pendant la suppression)' : 'supprimée');
+            done(failed(deletion) ? 'absent' : 'deleted', failed(deletion) ? `absente (404) après une suppression en échec (gh api -X DELETE : ${outcome(deletion)})` : 'supprimée');
         else if (after.state === 'present')
             done('failed', `suppression non constatée : la branche existe encore (gh api -X DELETE : ${outcome(deletion)})`);
         else
@@ -206,22 +228,29 @@ export function remoteRepository(url) {
         return null;
     return { host: m[1].toLowerCase(), repo: `repos/${m[2]}/${m[3]}` };
 }
-/** Reads `delete_branch_on_merge` of the repository of the `origin` address (`gh api repos/<owner>/<repo>`). Never changes it. */
+/** A remote address with any credentials or user name (`user:token@`) masked: what may be shown or written. */
+export function maskRemote(url) {
+    return url.replace(/^([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^@/]*@/, '$1***@').replace(/^[^@/:]+@(?=[^/:]+:)/, '***@');
+}
+/**
+ * Reads `delete_branch_on_merge` of the repository of the `origin` address (`gh api repos/<owner>/<repo>`). Never changes
+ * it. Only github.com, or a host `gh` is logged in to (`gh auth status --hostname <host>`), is asked: the address of
+ * another server is never sent anywhere.
+ */
 export async function checkDeleteOnMerge(origin, gh) {
     const none = { repo: null, host: null, deleteBranchOnMerge: null, command: null };
     if (!origin)
         return { ...none, note: 'pas de dépôt distant origin' };
     const where = remoteRepository(origin);
     if (!where)
-        return { ...none, note: `adresse de origin non reconnue comme un dépôt GitHub (${origin})` };
+        return { ...none, note: `adresse de origin non reconnue comme un dépôt GitHub (${maskRemote(origin)})` };
     const base = { repo: where.repo.replace(/^repos\//, ''), host: where.host, deleteBranchOnMerge: null, command: null };
-    let call;
-    try {
-        call = await gh(repositoryArgs(where));
+    if (where.host !== 'github.com') {
+        const auth = await gh(['auth', 'status', '--hostname', where.host]);
+        if (failed(auth))
+            return { ...base, note: `hôte ${where.host} inconnu de gh (gh auth status --hostname ${where.host} : ${outcome(auth)}) : non interrogé` };
     }
-    catch (error) {
-        return { ...base, note: `gh : ${errorMessage(error)}` };
-    }
+    const call = await gh(repositoryArgs(where));
     if (failed(call))
         return { ...base, note: `gh api ${where.repo} : ${outcome(call)}${call.stderr.trim() ? ` (${call.stderr.trim().split('\n').at(-1)})` : ''}` };
     let read;
