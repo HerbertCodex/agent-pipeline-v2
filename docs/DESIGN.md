@@ -42,7 +42,7 @@ apv design register docs/design/brouillons/agenda.html --name agenda --title "Ag
 ```
 
 L'outil :
-- copie le fichier vers `docs/design/agenda-validee.html` (dossier réglable, voir plus bas) ;
+- copie le fichier vers `docs/design/agenda-validee.html` (dossier réglable, rangement par groupe possible, voir plus bas) ;
 - calcule son sha256 ;
 - inscrit au registre la décision `maquette-agenda-validee` : confirmée, source opérateur, citation exacte, enforcement `product`, valeur avec le chemin, l'empreinte, les écrans et l'adresse de l'artefact ;
 - affiche les fichiers à commiter. Rien n'est commité à sa place.
@@ -88,7 +88,36 @@ Section facultative de `.apv/config.json` :
 { "design": { "dir": "docs/design" } }
 ```
 
-`dir` est un dossier relatif au dépôt, sans espace, qui ne sort pas du dépôt. Il ne change que la destination des prochains versements : les maquettes déjà versées restent à l'emplacement enregistré au registre.
+`dir` est un dossier relatif au dépôt, sans espace, qui ne sort pas du dépôt. Il ne change que la destination des prochains versements : les maquettes déjà versées restent à l'emplacement enregistré au registre (`apv design organize` les déplace, voir ci-dessous).
+
+**Rangement par groupe** (facultatif). Un projet qui a beaucoup de maquettes les range par sous-dossier plutôt qu'à plat :
+
+```json
+{
+  "design": {
+    "dir": "docs/design",
+    "groups": [
+      { "dir": "admin", "match": ["admin-*", "console"] }
+    ],
+    "defaultGroup": "produit"
+  }
+}
+```
+
+- `groups` : liste **ordonnée** ; le premier groupe dont un motif reconnaît le nom de la maquette (`--name`) donne son sous-dossier : `docs/design/admin/admin-utilisateurs-validee.html`. Motifs `*` et `?`, portant sur le nom seul (sans `/`).
+- `defaultGroup` : sous-dossier des noms qu'aucun motif ne reconnaît (`docs/design/produit/accueil-validee.html`) ; absent, ils restent à la racine de `dir`, comme sans groupes.
+- Validation stricte : sous-dossier relatif à `dir`, sans `..`, sans espace (lettres, chiffres, `.`, `_`, `-`, segments séparés par `/`) ; au moins un motif non vide par groupe ; deux groupes jamais au même dossier.
+- `apv design register --group <dossier>` choisit un groupe déclaré à la place des motifs ; le choix est noté dans la décision (`Groupe : <dossier>.`) et suivi ensuite. Un nouveau versement garde le groupe actuel de la maquette (groupe noté, ou dossier de son fichier) : il ne déplace jamais une maquette.
+- `apv design check` signale, sans échouer, une maquette hors du dossier de son groupe ; `apv design list` affiche le groupe.
+- `apv design organize` range les maquettes déjà versées : déplacement par `git mv`, chemin réécrit dans **leur** décision au registre (pas de nouvelle version : le contenu validé n'a pas changé, l'empreinte est vérifiée), aucun autre fichier modifié ; il liste les fichiers qui citent encore un ancien chemin (specs, `AGENTS.md`, tests de fidélité), à mettre à jour dans le même commit. `--dry-run` montre le plan d'abord.
+- La ligne de `.gitattributes` couvre les sous-dossiers (`docs/design/**/*.html -whitespace`) ; l'ancienne ligne `docs/design/*.html -whitespace` ne les couvre pas : `apv design register` (et `apv init`) la remplace à sa place, `apv design check` la signale.
+
+Mise en place sur un projet qui a déjà des maquettes à plat, dans une branche dédiée :
+
+1. Déclarer `groups` (et `defaultGroup`) dans `.apv/config.json`, puis `apv design organize --dry-run` : relire le plan avec l'opérateur.
+2. `apv design organize` : maquettes déplacées, registre (JSON et Markdown) réécrit ; mettre à jour les fichiers listés qui citent un ancien chemin.
+3. `apv init` (ou le prochain `apv design register`) pose la ligne de `.gitattributes` qui couvre les sous-dossiers.
+4. Un commit avec la configuration, les déplacements, le registre, les renvois et `.gitattributes` ; `apv design check` doit sortir en `0` sans avertissement.
 
 ## 7. Projet existant
 
