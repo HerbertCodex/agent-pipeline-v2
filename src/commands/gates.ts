@@ -129,15 +129,17 @@ const SHARED = 'magasin partagé';
 const EVIDENCE: Record<EvidenceState, string> = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu', unrepeated: 'tests modifiés non répétés',
   unaudited: 'audit web non prouvé', required: 'requis (dispense non prouvée)' };
 
+/** The repetition of a check as shown: the receipt's `repeat`, or the row of `--json`. */
+type RepeatRow = { status: string; base: string | null; files: string[]; importsOnly?: string[]; movedPathsOnly?: string[]; times: number; failures: { test: string; count: number }[] };
 /** One line of the repetition of the changed test files of a check. */
-function repeatLine(r: { status: string; base: string | null; files: string[]; importsOnly?: string[]; times: number; failures: { test: string; count: number }[] }): string {
-  const only = r.importsOnly?.length ? ` ; tests dont seuls les imports changent : non répétés (${r.importsOnly.length > 5 ? `${r.importsOnly.slice(0, 5).join(', ')} ... (${r.importsOnly.length})` : r.importsOnly.join(', ')})` : '';
-  return `${repeatText(r)}${only}`;
+function repeatLine(r: RepeatRow): string {
+  const listed = (label: string, list?: string[]): string => list?.length ? ` ; ${label} : non répétés (${list.length > 5 ? `${list.slice(0, 5).join(', ')} ... (${list.length})` : list.join(', ')})` : '';
+  return `${repeatText(r)}${listed('tests dont seuls les imports changent', r.importsOnly)}${listed('tests dont seuls des chemins de fichiers déplacés changent', r.movedPathsOnly)}`;
 }
-function repeatText(r: { status: string; base: string | null; files: string[]; importsOnly?: string[]; times: number; failures: { test: string; count: number }[] }): string {
+function repeatText(r: RepeatRow): string {
   const files = r.files.length > 5 ? `${r.files.slice(0, 5).join(', ')} ... (${r.files.length})` : r.files.join(', ');
   if (r.status === 'no_base') return 'non répétés : --base absent (apv gates run --base <base de la branche> les répète)';
-  if (r.status === 'none') return `aucun fichier de test ${r.importsOnly?.length ? 'à répéter' : 'ajouté ou modifié'} depuis ${r.base?.slice(0, 12)}`;
+  if (r.status === 'none') return `aucun fichier de test ${r.importsOnly?.length || r.movedPathsOnly?.length ? 'à répéter' : 'ajouté ou modifié'} depuis ${r.base?.slice(0, 12)}`;
   if (r.status === 'not_run') return `non répétés, la commande du contrôle n'a pas réussi (${files})`;
   if (r.status === 'passed') return `${r.files.length} fichier(s), ${r.times} fois chacun : réussi (${files})`;
   const tests = r.failures.map(f => `${f.test} échoue ${f.count} fois sur ${r.times}`).join(' ; ');
@@ -421,7 +423,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, status: r.status, exitCode: r.exitCode,
       durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic,
       ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}),
-      ...(r.repeat ? { repeat: { status: r.repeat.status, base: r.repeat.base, files: r.repeat.files, importsOnly: r.repeat.importsOnly, times: r.repeat.times, failures: r.repeat.failures, fixedWaits: r.repeat.fixedWaits } } : {}),
+      ...(r.repeat ? { repeat: { status: r.repeat.status, base: r.repeat.base, files: r.repeat.files, importsOnly: r.repeat.importsOnly, movedPathsOnly: r.repeat.movedPathsOnly, times: r.repeat.times, failures: r.repeat.failures, fixedWaits: r.repeat.fixedWaits } } : {}),
       ...(r.scope ? { scope: r.scope } : {}) }));
     const name = (r: { gate: string; targeted: boolean }): string => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
     if (values.json) {

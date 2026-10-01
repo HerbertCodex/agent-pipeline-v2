@@ -304,6 +304,8 @@ export const receiptSchema = s.object({
     files: s.array(s.string(1, 500), 0, 2000),
     // Changed test files whose only differences with the base are the paths of their imports: listed, not repeated.
     importsOnly: s.default(s.array(s.string(1, 500), 0, 2000), []),
+    // Changed test files whose only differing lines cite files renamed without change (old path -> new path): listed, not repeated.
+    movedPathsOnly: s.default(s.array(s.string(1, 500), 0, 2000), []),
     times: s.number(2, 100),
     status: s.enum(repeatStatuses),
     command: s.optional(argv),
