@@ -28,7 +28,7 @@ export interface RepeatPlan {
    */
   importsOnly: string[];
   /**
-   * Changed test files whose only differing lines cite a file the same diff renamed without changing it (`R100`): the
+   * Changed test files whose only differing lines cite a file the same diff renamed without changing it (same blob, same mode): the
    * old path replaced by the new one, nothing else (their imports may also have moved). Listed, never repeated (the
    * check itself still runs them), never skipped silently.
    */
@@ -128,7 +128,11 @@ export function onlyImportPathsChanged(before: string, after: string): boolean {
   return before !== after && withoutImportPaths(before) === withoutImportPaths(after);
 }
 
-/** A file renamed by the diff without any change of its content (`git diff -M`, similarity 100 %). */
+/**
+ * A file the diff renamed without any change: same blob and same mode at both paths (`git diff -M --raw`; in the
+ * working tree, the blob of the new path hashed), never a symbolic link (mode 120000). A similarity of 100 % is not
+ * enough (permuted lines, a changed mode).
+ */
 export interface Rename { from: string; to: string }
 /** A character of a path: a cited path never continues with one (nor starts after one, apart from `./` and `../`). */
 const PATH_CHAR = String.raw`[\p{L}\p{N}_\-@$~+%/\\]`;
@@ -137,8 +141,9 @@ const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g
 /**
  * The forms under which a test cites a renamed file, old -> new: the full path, and each shorter suffix (cut on a `/`)
  * that still begins inside the folder both paths share (`docs/design/x.html` -> `docs/design/produit/x.html`: also
- * `design/x.html` -> `design/produit/x.html`, never `x.html` -> `produit/x.html`, which names no folder). A form two
- * renames would replace differently is dropped.
+ * `design/x.html` -> `design/produit/x.html`, never `x.html` -> `produit/x.html`, which names no folder). A form
+ * without any `/` (a file at the root: a bare name could be an identifier or a word) is never one; a form two renames
+ * would replace differently is dropped.
  */
 export function renamedPathForms(renames: readonly Rename[]): Map<string, string> {
   const forms = new Map<string, string | null>();
@@ -151,6 +156,7 @@ export function renamedPathForms(renames: readonly Rename[]): Map<string, string
     for (let cut = 0; cut === 0 || cut < common; cut++) {
       const old = a.slice(cut).join('/');
       const next = b.slice(cut).join('/');
+      if (!old.includes('/')) continue;
       forms.set(old, forms.has(old) && forms.get(old) !== next ? null : next);
     }
   }
@@ -158,37 +164,111 @@ export function renamedPathForms(renames: readonly Rename[]): Map<string, string
 }
 
 /**
- * A line with each cited form of a renamed file replaced by its new form, in one pass (a chain of renames is never
- * applied twice): a whole path only, optionally after `./` or `../`, never inside a longer path or name.
+ * Where a text is prose rather than code, character by character: inside a string literal (`'…'`, `"…"`, a template
+ * `` `…` `` outside its `${…}`) or a comment (`//`, `/* … *\/`, `<!-- … -->`, `#` at the start of a line or after a
+ * space). A lexical reading, not a parser: regular expression literals are skipped after an operator or a bracket; a
+ * quote left open ends with its line. Only there may a cited path be replaced: never an identifier, never `a/b` in code.
  */
-export function withRenamedPaths(line: string, forms: ReadonlyMap<string, string>): string {
-  return renamedPathsReplacer(forms)(line);
+export function textRegions(text: string): Uint8Array {
+  const mask = new Uint8Array(text.length);
+  type State = 'code' | 'line' | 'block' | 'html' | 'single' | 'double' | 'template';
+  let state: State = 'code';
+  // Template literals and the code of their `${…}`, with the depth of braces inside that code.
+  const stack: { depth: number }[] = [];
+  let depth = 0;
+  let last = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    const next = text[i + 1] ?? '';
+    if (state === 'line') { if (c === '\n') state = 'code'; else mask[i] = 1; continue; }
+    if (state === 'block') { if (c === '*' && next === '/') { state = 'code'; i++; } else mask[i] = 1; continue; }
+    if (state === 'html') { if (text.startsWith('-->', i)) { state = 'code'; i += 2; } else mask[i] = 1; continue; }
+    if (state === 'single' || state === 'double') {
+      if (c === '\n' || c === (state === 'single' ? "'" : '"')) { state = 'code'; last = c; continue; }
+      mask[i] = 1;
+      if (c === '\\' && next !== '\n') { mask[i + 1] = 1; i++; }
+      continue;
+    }
+    if (state === 'template') {
+      if (c === '`') { state = 'code'; last = c; continue; }
+      if (c === '$' && next === '{') { stack.push({ depth }); depth = 0; state = 'code'; i++; last = '{'; continue; }
+      mask[i] = 1;
+      if (c === '\\') { mask[i + 1] = 1; i++; }
+      continue;
+    }
+    // Code.
+    if (c === '/' && next === '/') { state = 'line'; i++; continue; }
+    if (c === '/' && next === '*') { state = 'block'; i++; continue; }
+    if (text.startsWith('<!--', i)) { state = 'html'; i += 3; continue; }
+    if (c === '#' && (next === '' || /[\s!]/.test(next)) && (i === 0 || /\s/.test(text[i - 1]!))) { state = 'line'; continue; }
+    if (c === "'") { state = 'single'; continue; }
+    if (c === '"') { state = 'double'; continue; }
+    if (c === '`') { state = 'template'; continue; }
+    if (c === '/' && (last === '' || /[(,=:[!&|?{};+\-*%<>~^]/.test(last))) {
+      // A regular expression literal: skipped to its closing slash (outside a class), or to the end of the line.
+      let inClass = false;
+      let j = i + 1;
+      for (; j < text.length && text[j] !== '\n'; j++) {
+        const r = text[j]!;
+        if (r === '\\') { j++; continue; }
+        if (r === '[') inClass = true; else if (r === ']') inClass = false; else if (r === '/' && !inClass) break;
+      }
+      i = j;
+      last = '/';
+      continue;
+    }
+    if (c === '{') depth++;
+    if (c === '}') {
+      if (depth === 0 && stack.length) { depth = stack.pop()!.depth; state = 'template'; continue; }
+      depth = Math.max(0, depth - 1);
+    }
+    if (!/\s/.test(c)) last = c;
+  }
+  return mask;
 }
-function renamedPathsReplacer(forms: ReadonlyMap<string, string>): (line: string) => string {
-  if (!forms.size) return line => line;
+
+/** The replacement of the cited forms of renamed files, prepared once for a base. */
+export interface RenamedPaths { forms: Map<string, string>; pattern: RegExp | null }
+export function renamedPaths(renames: readonly Rename[]): RenamedPaths {
+  const forms = renamedPathForms(renames);
+  if (!forms.size) return { forms, pattern: null };
   const alternatives = [...forms.keys()].sort((x, y) => y.length - x.length).map(escapeRegex).join('|');
-  const re = new RegExp(String.raw`(?<!${PATH_CHAR}|\.)((?:\.{1,2}/)*)(${alternatives})(?!${PATH_CHAR}|\.${PATH_CHAR}|\.\.)`, 'gu');
-  return line => line.replace(re, (_m, prefix: string, path: string) => `${prefix}${forms.get(path)!}`);
+  return { forms, pattern: new RegExp(String.raw`(?<!${PATH_CHAR}|\.)((?:\.{1,2}/)*)(${alternatives})(?!${PATH_CHAR}|\.${PATH_CHAR}|\.\.)`, 'gu') };
+}
+
+/**
+ * A line with each cited form of a renamed file replaced by its new form, in one pass (a chain of renames is never
+ * applied twice): a whole path only, optionally after `./` or `../`, never inside a longer path or name, and only where
+ * `region` marks the characters as text (a string or a comment; every character when absent).
+ */
+export function withRenamedPaths(line: string, paths: RenamedPaths, region?: Uint8Array): string {
+  if (!paths.pattern) return line;
+  const inText = (from: number, to: number): boolean => { if (!region) return true; for (let k = from; k < to; k++) if (!region[k]) return false; return true; };
+  return line.replace(paths.pattern, (match: string, prefix: string, path: string, offset: number) =>
+    inText(offset, offset + match.length) ? `${prefix}${paths.forms.get(path)!}` : match);
 }
 
 /**
  * Only cited paths of renamed files (and the paths of imports) differ: the two texts, imports put in their canonical
  * form, have the same number of lines, and each line that differs becomes the new one once the old paths of the
- * renamed files are replaced by the new ones (`withRenamedPaths`). Lines are paired in order: a line added, removed
- * or changed in any other way is a change.
+ * renamed files are replaced by the new ones inside its strings and comments (`withRenamedPaths`). Lines are paired
+ * in order: a line added, removed or changed in any other way is a change. The content of each renamed file is the
+ * same at both paths; which file a cited path resolves to at run time (the folder it is read from) is not known.
  */
-export function onlyRenamedPathsChanged(before: string, after: string, renames: readonly Rename[]): boolean {
+export function onlyRenamedPathsChanged(before: string, after: string, renames: readonly Rename[] | RenamedPaths): boolean {
   if (before === after) return false;
-  const forms = renamedPathForms(renames);
-  if (!forms.size) return false;
-  const replace = renamedPathsReplacer(forms);
-  const a = withoutImportPaths(before).split('\n');
+  const paths = Array.isArray(renames) ? renamedPaths(renames as readonly Rename[]) : renames as RenamedPaths;
+  if (!paths.pattern) return false;
+  const old = withoutImportPaths(before);
+  const regions = textRegions(old);
+  const a = old.split('\n');
   const b = withoutImportPaths(after).split('\n');
   if (a.length !== b.length) return false;
   let moved = false;
-  for (let i = 0; i < a.length; i++) {
+  let start = 0;
+  for (let i = 0; i < a.length; start += a[i]!.length + 1, i++) {
     if (a[i] === b[i]) continue;
-    if (replace(a[i]!) !== b[i]) return false;
+    if (withRenamedPaths(a[i]!, paths, regions.subarray(start, start + a[i]!.length)) !== b[i]) return false;
     moved = true;
   }
   return moved;
@@ -239,24 +319,32 @@ export async function planRepeat(git: Git, repo: string, bases: { base: string; 
   const diffArgs = (mb: string): string[] => ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', mb, ...(head ? [head] : [])];
   // File -> the merge bases it changed from, and where it was at each (a rename or a move by Git keeps its old path).
   const changedFrom = new Map<string, Map<string, string>>();
-  // Merge base -> the files renamed since it without any change of content (`R100`): the paths a test may cite.
-  const renamedFrom = new Map<string, Rename[]>();
+  // Merge base -> the files renamed since it without any change (same blob, same mode): the paths a test may cite.
+  const renamedFrom = new Map<string, RenamedPaths>();
   for (const mb of from) {
     const renames = new Map<string, string>();
     const identical: Rename[] = [];
-    const status = (await git.exec(repo, ['diff', '--no-ext-diff', '--no-textconv', '-M', '--name-status', '-z', mb, ...(head ? [head] : []), '--'])).split('\0');
-    for (let i = 0; i < status.length;) {
-      const code = status[i] ?? '';
-      if (!code) { i++; continue; }
-      if (code.startsWith('R') || code.startsWith('C')) {
-        if (code.startsWith('R') && status[i + 1] && status[i + 2]) {
-          renames.set(status[i + 2]!, status[i + 1]!);
-          if (code === 'R100') identical.push({ from: status[i + 1]!, to: status[i + 2]! });
-        }
-        i += 3;
-      } else i += 2;
+    // `--raw`: modes and blobs of both sides (a new side read from the working tree has no blob: hashed below).
+    const raw = (await git.exec(repo, ['diff', '--no-ext-diff', '--no-textconv', '-M', '--raw', '--no-abbrev', '-z', mb, ...(head ? [head] : []), '--'])).split('\0');
+    for (let i = 0; i < raw.length;) {
+      const meta = /^:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) ([A-Z])(\d*)$/.exec(raw[i] ?? '');
+      if (!meta) { i++; continue; }
+      const [, oldMode, newMode, oldBlob, newBlob, code] = meta;
+      if (code !== 'R' && code !== 'C') { i += 2; continue; }
+      const was = raw[i + 1];
+      const now = raw[i + 2];
+      i += 3;
+      if (code !== 'R' || !was || !now) continue;
+      renames.set(now, was);
+      if (oldMode !== newMode || oldMode === '120000' || !/^100(?:644|755)$/.test(oldMode!)) continue;
+      let blob = newBlob!;
+      if (/^0+$/.test(blob)) {
+        if (head) continue;
+        try { blob = (await git.exec(repo, ['hash-object', '--', now])).trim(); } catch { continue; }
+      }
+      if (blob === oldBlob) identical.push({ from: was, to: now });
     }
-    renamedFrom.set(mb, identical);
+    renamedFrom.set(mb, renamedPaths(identical));
     for (const path of (await git.exec(repo, [...diffArgs(mb), '--diff-filter=AM', '--name-only', '-z', '--'])).split('\0').filter(Boolean)) {
       changedFrom.set(path, new Map([...(changedFrom.get(path) ?? []), [mb, renames.get(path) ?? path]]));
     }
@@ -282,7 +370,7 @@ export async function planRepeat(git: Git, repo: string, bases: { base: string; 
     for (const [mb, old] of was) {
       const before = await show(`${mb}:${old}`);
       if (before !== null && (before === now || onlyImportPathsChanged(before, now))) continue;
-      if (before !== null && old === path && onlyRenamedPathsChanged(before, now, renamedFrom.get(mb) ?? [])) { moved = true; continue; }
+      if (before !== null && old === path && onlyRenamedPathsChanged(before, now, renamedFrom.get(mb) ?? renamedPaths([]))) { moved = true; continue; }
       only = false;
       break;
     }

@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 import { gatesConfigHash } from '../dist/gates/run.js';
-import { addedLines, fixedWaitIn, fixedWaitLines, onlyImportPathsChanged, onlyRenamedPathsChanged, renamedPathForms, repeatArgv, repeatFailures, withRenamedPaths } from '../dist/gates/repeat.js';
+import { Git } from '../dist/execution/git.js';
+import { addedLines, fixedWaitIn, fixedWaitLines, onlyImportPathsChanged, onlyRenamedPathsChanged, planRepeat, renamedPathForms, renamedPaths, repeatArgv, repeatFailures, textRegions, withRenamedPaths } from '../dist/gates/repeat.js';
 import { configIssues } from '../dist/config/load.js';
 import { validateReceipt } from '../dist/domain/contracts.js';
 
@@ -418,31 +419,55 @@ test('moved paths only: a test whose only changed lines cite files renamed witho
 });
 
 test('moved paths only: the cited forms of a renamed file are the full path and its suffixes that still name a shared folder; several renames, in one pass', () => {
-  const forms = renamedPathForms([{ from: 'docs/design/x-validee.html', to: 'docs/design/produit/x-validee.html' },
+  const paths = renamedPaths([{ from: 'docs/design/x-validee.html', to: 'docs/design/produit/x-validee.html' },
     { from: 'docs/design/accueil-maquette-validee.html', to: 'docs/design/produit/accueil-validee.html' }, { from: 'src/a.ts', to: 'lib/a.ts' }]);
+  const forms = paths.forms;
   assert.deepEqual([...forms], [
     ['docs/design/x-validee.html', 'docs/design/produit/x-validee.html'], ['design/x-validee.html', 'design/produit/x-validee.html'],
     ['docs/design/accueil-maquette-validee.html', 'docs/design/produit/accueil-validee.html'], ['design/accueil-maquette-validee.html', 'design/produit/accueil-validee.html'],
     ['src/a.ts', 'lib/a.ts'],
   ]);
   // A suffix that still names a shared folder is a cited path; the name alone (relative to the shared folder) never.
-  assert.equal(withRenamedPaths("read('design/x-validee.html')", forms), "read('design/produit/x-validee.html')");
-  assert.equal(withRenamedPaths("mockupSource('accueil-maquette-validee.html')", forms), "mockupSource('accueil-maquette-validee.html')");
+  assert.equal(withRenamedPaths("read('design/x-validee.html')", paths), "read('design/produit/x-validee.html')");
+  assert.equal(withRenamedPaths("mockupSource('accueil-maquette-validee.html')", paths), "mockupSource('accueil-maquette-validee.html')");
   assert.equal(onlyRenamedPathsChanged("mockupSource('x-validee.html');\n", "mockupSource('produit/x-validee.html');\n", [{ from: 'docs/design/x-validee.html', to: 'docs/design/produit/x-validee.html' }]), false);
   // Never inside a longer path or name.
-  assert.equal(withRenamedPaths('mydocs/design/x-validee.html other/design/x-validee.html docs/design/x-validee.html.bak docs/design/x-validee.htmlx', forms),
+  assert.equal(withRenamedPaths('mydocs/design/x-validee.html other/design/x-validee.html docs/design/x-validee.html.bak docs/design/x-validee.htmlx', paths),
     'mydocs/design/x-validee.html other/design/x-validee.html docs/design/x-validee.html.bak docs/design/x-validee.htmlx');
-  assert.equal(withRenamedPaths('src/a.ts, ./src/a.ts et src/a.tsx', forms), 'lib/a.ts, ./lib/a.ts et src/a.tsx');
+  assert.equal(withRenamedPaths('src/a.ts, ./src/a.ts et src/a.tsx', paths), 'lib/a.ts, ./lib/a.ts et src/a.tsx');
   // Several renames on one line; a chain (a -> b, b -> c) replaced once.
   assert.equal(onlyRenamedPathsChanged("const pages = ['docs/design/x-validee.html', 'docs/design/accueil-maquette-validee.html'];\n",
     "const pages = ['docs/design/produit/x-validee.html', 'docs/design/produit/accueil-validee.html'];\n",
     [{ from: 'docs/design/x-validee.html', to: 'docs/design/produit/x-validee.html' }, { from: 'docs/design/accueil-maquette-validee.html', to: 'docs/design/produit/accueil-validee.html' }]), true);
-  const chain = renamedPathForms([{ from: 'p/a.html', to: 'p/b.html' }, { from: 'p/b.html', to: 'p/c.html' }]);
+  const chain = renamedPaths([{ from: 'p/a.html', to: 'p/b.html' }, { from: 'p/b.html', to: 'p/c.html' }]);
   assert.equal(withRenamedPaths('p/a.html p/b.html', chain), 'p/b.html p/c.html');
   // A form two renames would replace differently is dropped; full paths stay.
   const clash = renamedPathForms([{ from: 'docs/x/a.html', to: 'docs/x/p/a.html' }, { from: 'src/x/a.html', to: 'src/x/q/a.html' }]);
   assert.equal(clash.has('x/a.html'), false);
   assert.equal(clash.get('docs/x/a.html'), 'docs/x/p/a.html');
+});
+
+test('moved paths only: a cited path is replaced only inside strings and comments, never in code; a bare root name never counts', () => {
+  // A file at the root renamed: no form without « / » (an identifier, a word).
+  assert.equal(renamedPathForms([{ from: 'VERSION', to: 'LICENSE_X' }]).size, 0);
+  assert.equal(onlyRenamedPathsChanged('expect(v).toBe(VERSION);\n', 'expect(v).toBe(LICENSE_X);\n', [{ from: 'VERSION', to: 'LICENSE_X' }]), false, 'an identifier is code');
+  assert.equal(onlyRenamedPathsChanged("read('VERSION');\n", "read('LICENSE_X');\n", [{ from: 'VERSION', to: 'LICENSE_X' }]), false, 'a bare name, even in a string');
+  // A division in code is not a path; the same text in a string or a comment is.
+  const division = [{ from: 'total/count', to: 'total/new/count' }];
+  assert.equal(onlyRenamedPathsChanged('const r = total/count;\n', 'const r = total/new/count;\n', division), false, 'a division is code');
+  assert.equal(onlyRenamedPathsChanged("const r = read('total/count');\n", "const r = read('total/new/count');\n", division), true, 'a name in a string');
+  assert.equal(onlyRenamedPathsChanged('const r = read(`${root}/total/count`);\n', 'const r = read(`${root}/total/new/count`);\n', division), false, 'after a / in a template: part of a longer path');
+  assert.equal(onlyRenamedPathsChanged('const r = read(`total/count`, x);\n', 'const r = read(`total/new/count`, x);\n', division), true, 'in a template');
+  assert.equal(onlyRenamedPathsChanged('const r = `${total/count}`;\n', 'const r = `${total/new/count}`;\n', division), false, 'the code of ${} is code');
+  assert.equal(onlyRenamedPathsChanged('/* voir\n   total/count */\nx();\n', '/* voir\n   total/new/count */\nx();\n', division), true, 'a block comment over several lines');
+  assert.equal(onlyRenamedPathsChanged('x(); // total/count\n', 'x(); // total/new/count\n', division), true, 'a line comment');
+  assert.equal(onlyRenamedPathsChanged('<!-- total/count -->\n', '<!-- total/new/count -->\n', division), true, 'an HTML comment');
+  assert.equal(onlyRenamedPathsChanged('# total/count\n', '# total/new/count\n', division), true, 'a # comment');
+  assert.equal(onlyRenamedPathsChanged("const re = /'/; const r = total/count;\n", "const re = /'/; const r = total/new/count;\n", division), false, 'a quote in a regular expression opens no string');
+  // The regions themselves.
+  const text = "a/b; 'c/d' // e/f\n`g${h/i}j`";
+  const marked = [...textRegions(text)].map((m, i) => m ? text[i] : '.').join('');
+  assert.equal(marked, "......c/d.... e/f..g......j.");
 });
 
 test('moved paths only, end to end: tests citing files renamed without change are listed and not counted in the ceiling; a rename with a change, another change or a renamed test are repeated; verify proves it', async t => {
@@ -521,4 +546,43 @@ test('imports only, end to end: moved and renamed tests are listed in the output
   assert.match(human.stderr + human.stdout, /browser : tests dont seuls les imports changent : non répétés \(le contrôle les exécute comme les autres\)/);
   const v = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--against', 'HEAD']);
   assert.equal(v.code, 0, v.stdout + v.stderr);
+});
+
+test('moved paths only: a rename by similarity is not « without change »: permuted lines, a changed mode, a symbolic link; the working tree is hashed', async t => {
+  const lines = Array.from({ length: 30 }, (_, i) => `<p>ligne ${i}</p>`);
+  const cite = (i, path) => `/** Maquette ${path}. */\nconst page = read('${path}');\ntest("q${i}", async () => { expect(page).toBeTruthy(); });\n`;
+  const f = project(t, [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ maxFiles: 10 }) }], {
+    'docs/design/permute.html': `${lines.join('\n')}\n`,
+    'docs/design/mode.html': '<p>mode</p>\n',
+    'docs/design/same.html': '<p>same</p>\n',
+    'tests/e2e/permute.e2e.ts': cite('p', 'docs/design/permute.html'),
+    'tests/e2e/mode.e2e.ts': cite('m', 'docs/design/mode.html'),
+    'tests/e2e/link.e2e.ts': cite('l', 'docs/design/link.html'),
+    'tests/e2e/same.e2e.ts': cite('s', 'docs/design/same.html'),
+  });
+  symlinkSync('same.html', join(f.repo, 'docs/design/link.html'));
+  commit(f.repo, 'lien');
+  const base = git(f.repo, 'rev-parse', 'HEAD');
+  mkdirSync(join(f.repo, 'docs/design/produit'));
+  git(f.repo, 'mv', 'docs/design/permute.html', 'docs/design/produit/permute.html');
+  writeFileSync(join(f.repo, 'docs/design/produit/permute.html'), `${[...lines].reverse().join('\n')}\n`);
+  git(f.repo, 'mv', 'docs/design/mode.html', 'docs/design/produit/mode.html');
+  chmodSync(join(f.repo, 'docs/design/produit/mode.html'), 0o755);
+  git(f.repo, 'mv', 'docs/design/link.html', 'docs/design/produit/link.html');
+  git(f.repo, 'mv', 'docs/design/same.html', 'docs/design/produit/same.html');
+  for (const [name, i] of [['permute', 'p'], ['mode', 'm'], ['link', 'l'], ['same', 's']]) writeFileSync(join(f.repo, `tests/e2e/${name}.e2e.ts`), cite(i, `docs/design/produit/${name}.html`));
+  git(f.repo, 'add', '-A');
+  // Git calls them renames at 100 % similarity (the symbolic link aside, on some versions), yet none is the same file.
+  const status = git(f.repo, 'diff', '--cached', '-M', '--name-status', base);
+  assert.match(status, /^R100\tdocs\/design\/permute\.html\tdocs\/design\/produit\/permute\.html$/m);
+  assert.match(status, /^R100\tdocs\/design\/mode\.html\tdocs\/design\/produit\/mode\.html$/m);
+  // Working tree (no commit): the new side is hashed.
+  const plan = await planRepeat(new Git(), f.repo, { base }, repeatOf({ maxFiles: 10, fixedWaits: 'off', times: 5 }));
+  assert.deepEqual(plan.files, ['tests/e2e/link.e2e.ts', 'tests/e2e/mode.e2e.ts', 'tests/e2e/permute.e2e.ts']);
+  assert.deepEqual(plan.movedPathsOnly, ['tests/e2e/same.e2e.ts']);
+  // The same, committed.
+  commit(f.repo, 'rangement');
+  const committed = await planRepeat(new Git(), f.repo, { base }, repeatOf({ maxFiles: 10, fixedWaits: 'off', times: 5 }), 'HEAD');
+  assert.deepEqual(committed.files, plan.files);
+  assert.deepEqual(committed.movedPathsOnly, plan.movedPathsOnly);
 });
