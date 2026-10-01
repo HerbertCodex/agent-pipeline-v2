@@ -65,6 +65,7 @@ function batchProject(t, behavior = {}) {
     root, origin, repo, env,
     run: (args, extra = {}) => apv(repo, ['stack', 'batch', ...args], { ...env, ...extra }),
     main: () => git(origin, 'rev-parse', 'refs/heads/main'),
+    has: branch => { try { git(origin, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`); return true; } catch { return false; } },
     tree: ref => git(origin, 'rev-parse', `${ref}^{tree}`),
     merges: () => JSON.parse(readFileSync(file, 'utf8')).calls.filter(c => c[1] === 'merge').map(c => Number(c[2])),
     log: () => existsSync(join(repo, '.apv/state/stack.log')) ? readFileSync(join(repo, '.apv/state/stack.log'), 'utf8').trim().split('\n').map(l => JSON.parse(l)) : [],
@@ -114,6 +115,18 @@ test('batch --merge merges in order, tolerates the gap of each head, and ends on
   assert.equal(report.finalTree.identical, true);
   assert.equal(p.tree(p.main()), git(p.repo, 'rev-parse', `${report.proven.head}^{tree}`));
   assert.deepEqual(p.log().map(e => [e.event, e.pr, e.sameContent]), [['batch-merge', 11, true], ['batch-merge', 12, true]]);
+  // Then their branches are deleted on the remote, the others stay.
+  assert.deepEqual(report.cleanup.branches.map(b => [b.pr, b.branch, b.status]), [[11, 'pr-a', 'deleted'], [12, 'pr-b', 'deleted']]);
+  assert.deepEqual(['pr-a', 'pr-b', 'pr-bad', 'main'].map(b => p.has(b)), [false, false, true, true]);
+});
+
+test('batch --merge --keep-branches keeps the merged branches; --keep-branches goes with --merge', async t => {
+  const p = batchProject(t);
+  const r = await p.run(['11', '12', '--merge', '--keep-branches'], allow);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /Branche pr-a \(PR #11\) : gardée, --keep-branches\.\nBranche pr-b \(PR #12\) : gardée, --keep-branches\.\nLot fusionné\./);
+  assert.deepEqual(['pr-a', 'pr-b'].map(b => p.has(b)), [true, true]);
+  assert.equal((await p.run(['11', '12', '--keep-branches'])).code, 2);
 });
 
 test('a failed batch is not merged; --bisect isolates the faulty pull request, proves the rest and merges it', async t => {
@@ -169,6 +182,10 @@ test('the merge stops when the target changed outside the batch, or when a merge
   assert.match(s.json().stopped.reasons[0], /après la fusion de la PR #11, le contenu de main .* diffère de celui du lot prouvé/);
   assert.deepEqual(altered.merges(), [11], 'nothing else merged');
   assert.equal(altered.log().at(-1).event, 'batch-stop');
+  // Stopped on an anomaly after a merge: the branches stay for the examination, nothing is called for them.
+  assert.deepEqual(s.json().cleanup.branches.map(b => [b.branch, b.status, b.reason]), [['pr-a', 'kept', 'lot arrêté sur une anomalie : branches gardées pour l\'examen']]);
+  assert.ok(altered.has('pr-a'));
+  assert.ok(!JSON.parse(readFileSync(altered.env.FAKE_GH_STATE, 'utf8')).calls.some(c => c[0] === 'api'));
 });
 
 test('batch refuses an incoherent batch before building anything', async t => {
@@ -279,6 +296,20 @@ test('Ctrl-C during the suite of a batch --merge: exit 130, "Lot interrompu", no
   assert.match(out, /Lot interrompu \(SIGINT\) : rien d'autre ne sera fusionné\./);
   assert.match(out, /lot interrompu \(signal\) pendant la preuve du lot, avant toute fusion ; fusionnées : aucune/);
   assert.deepEqual(p.merges(), []);
+});
+
+test('a signal received after a merge: the batch stops, its merged branches stay, no branch call', async t => {
+  const p = batchProject(t, { signalOnMerge: [11] });
+  const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+  const child = spawn(process.execPath, [cli, 'stack', 'batch', '11', '12', '--merge'], { cwd: p.repo, env: { ...process.env, ...p.env, APV_ALLOW_MERGE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = ''; let err = '';
+  child.stdout.on('data', c => { out += c; }); child.stderr.on('data', c => { err += c; });
+  const code = await new Promise(done => child.once('exit', c => done(c)));
+  assert.equal(code, 130, out + err);
+  assert.deepEqual(p.merges(), [11]);
+  assert.match(out, /Branche pr-a \(PR #11\) : gardée, lot interrompu \(signal\) : rien d'autre n'est fait\./);
+  assert.ok(p.has('pr-a'));
+  assert.ok(!JSON.parse(readFileSync(p.env.FAKE_GH_STATE, 'utf8')).calls.some(c => c[0] === 'api'), 'no branch call');
 });
 
 /** Target checks with repeatChanged (maxFiles 1), and PRs #16 (one test), #17 (one other test), #18 (two tests). */

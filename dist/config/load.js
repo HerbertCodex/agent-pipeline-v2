@@ -23,7 +23,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'web', 'reuse', 'map'];
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'stack', 'web', 'reuse', 'map'];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'];
 /**
@@ -124,6 +124,13 @@ export const batchSettingsSchema = s.object({
     setupTimeoutMs: s.default(s.number(1000, 3_600_000), DEFAULT_SETUP_TIMEOUT_MS),
     passEnv: s.default(envNamesSchema, []),
 });
+/**
+ * `apv stack merge` and `apv stack batch --merge`: the branches their cleanup never deletes (globs, `*` within a segment,
+ * `**` across). Absent: the usual long-lived branches (DEFAULT_KEEP_BRANCHES of src/stack/branches.ts); `[]`: none by name.
+ */
+export const stackSettingsSchema = s.object({
+    keepBranches: s.optional(s.array(s.string(1, 200), 0, 100)),
+});
 /** Declared test ports, sorted and without duplicates, with the resources (and stacks, `pile <id>`) that declare them. */
 export function declaredTestPorts(config) {
     const ports = new Map();
@@ -168,6 +175,8 @@ export const apvConfigSchema = s.object({
     stacks: s.optional(stacksSchema),
     /** Preparation of a fresh copy (docs/CONFIGURATION.md, « Lot et copies »); absent: nothing is prepared. */
     batch: s.optional(batchSettingsSchema),
+    /** Pull request stacks: branches never deleted after a merge (docs/CONFIGURATION.md, « Pile de PR »); absent: the usual long-lived ones. */
+    stack: s.optional(stackSettingsSchema),
     /** Web quality of the public pages: Lighthouse and search and AI readiness (docs/CONFIGURATION.md, « Qualité web »); absent: `apv web audit` refuses. */
     web: s.optional(webSchema),
     /** Reuse of the existing components: `apv reuse check` (docs/REUSE.md); absent: defaults. */

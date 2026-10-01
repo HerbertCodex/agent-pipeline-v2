@@ -21,7 +21,7 @@ APV3 est un plugin Claude Code. L'opérateur délègue ; la session principale d
 - **La méthode du chef de projet** (compétence `chef-de-projet`) : vagues parallèles précédées des fondations, verrous à bail, suivi du quota et sauvegarde, reprise après coupure, pile de PR, journal du pipeline.
 - **Des commandes** `/apv:init`, `/apv:spec`, `/apv:run`, `/apv:review`, `/apv:stack`, `/apv:design`, `/apv:preview`, `/apv:status`, `/apv:quota`, `/apv:resume` et `/apv:onboard` (reprise d'un projet V2 ou existant), et deux **workflows** de vagues parallèles (`apv:vague`, `apv:revues`).
 - **Des hooks** : contexte de reprise au démarrage, exécutions non livrées comprises ; blocage du force-push, de la fusion et du déploiement hors commande dédiée, et des écritures GitHub à sortie masquée.
-- **L'outil `apv`** (TypeScript, sans dépendance) : validation des specs, registre des décisions, contrôles, périmètre, verrous, contrôle du modèle de données, carte du code et contrôle de réutilisation (blocs copiés, éléments natifs réservés, primitives redéfinies, composants en double), quota. L'exécutable `bin/apv` le rend appelable par `apv` dans les commandes Bash de Claude Code.
+- **L'outil `apv`** (TypeScript, sans dépendance) : validation des specs, registre des décisions, contrôles, périmètre, verrous, contrôle du modèle de données, carte du code et contrôle de réutilisation (blocs copiés, éléments natifs réservés, primitives redéfinies, composants en double), pile de PR (vérification, fusion dans l'ordre, puis suppression des branches fusionnées sauf règle qui les garde), quota. L'exécutable `bin/apv` le rend appelable par `apv` dans les commandes Bash de Claude Code.
 
 ## Démarrer
 

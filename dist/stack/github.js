@@ -9,8 +9,8 @@ export const MERGE_REFUSED = "APV : fusion de PR bloquée hors de la commande d�
     "de l'opérateur, par /apv:stack (outil : APV_ALLOW_MERGE=1 apv stack merge <pr...>), qui re-cible, vérifie la base de chaque PR " +
     "juste avant de fusionner et s'arrête à la première anomalie. APV_ALLOW_MERGE=1 se pose devant cette seule commande.";
 const GH_TIMEOUT_MS = 120_000;
-/** Runs `gh` (or `APV_GH`) without a shell, with the caller's environment. */
-export function processGh(bin, env, cwd) {
+/** Runs `gh` (or `APV_GH`) without a shell, with the caller's environment; stopped after `timeoutMs`. */
+export function processGh(bin, env, cwd, timeoutMs = GH_TIMEOUT_MS) {
     return args => new Promise(done => {
         const out = [];
         const err = [];
@@ -22,7 +22,7 @@ export function processGh(bin, env, cwd) {
             done({ args, status: null, stdout: '', stderr: '', error: errorMessage(error) });
             return;
         }
-        const timer = setTimeout(() => child.kill('SIGTERM'), GH_TIMEOUT_MS);
+        const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
         child.stdout?.on('data', (c) => out.push(c));
         child.stderr?.on('data', (c) => err.push(c));
         child.once('error', error => { clearTimeout(timer); done({ args, status: null, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), error: error.message }); });
@@ -32,7 +32,7 @@ export function processGh(bin, env, cwd) {
         });
     });
 }
-export const VIEW_FIELDS = 'number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,url';
+export const VIEW_FIELDS = 'number,state,isDraft,baseRefName,headRefName,headRefOid,isCrossRepository,mergeable,mergeStateStatus,statusCheckRollup,url';
 const str = (v) => typeof v === 'string' ? v : '';
 /** Check runs and commit statuses of `statusCheckRollup`, reduced to success, pending or failure. */
 export function readChecks(rollup) {
@@ -60,6 +60,7 @@ export function parsePullRequest(text) {
         number: raw['number'], state: str(raw['state']), isDraft: raw['isDraft'] === true, baseRefName: str(raw['baseRefName']),
         headRefName: str(raw['headRefName']), headRefOid: str(raw['headRefOid']), mergeable: str(raw['mergeable']),
         mergeStateStatus: str(raw['mergeStateStatus']), checks: readChecks(raw['statusCheckRollup']), url: str(raw['url']),
+        crossRepository: typeof raw['isCrossRepository'] === 'boolean' ? raw['isCrossRepository'] : null,
     };
 }
 const NAME = /^[A-Za-z0-9._-]{1,100}$/;
@@ -75,7 +76,8 @@ export function pullRequestPath(pr) {
     const repo = `repos/${m[2]}/${m[3]}`;
     return { host: m[1].toLowerCase(), path: `${repo}/pulls/${pr.number}`, repo };
 }
-const hostname = (where) => where.host === 'github.com' ? [] : ['--hostname', where.host];
+/** `--hostname <host>` for a repository outside github.com. */
+export const hostname = (where) => where.host === 'github.com' ? [] : ['--hostname', where.host];
 /**
  * Arguments of the retarget: `gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -f base=<target>`. The REST API
  * and not `gh pr edit --base`, whose GraphQL query also reads the classic projects of the pull request and
@@ -92,7 +94,7 @@ export function retargetArgs(where, target) {
 export const FRESHNESS_JQ = '{ahead_by, merge_base: .merge_base_commit.sha, listed: ((.commits // []) | length), ' +
     'merges: ([(.commits // [])[] | select((.parents // []) | length > 1)] | length), files: (if .files == null then null else [.files[].filename] end)}';
 /** A ref in a REST path: every character escaped but the slashes of a branch name. */
-const refSegment = (ref) => encodeURIComponent(ref).replaceAll('%2F', '/');
+export const refSegment = (ref) => encodeURIComponent(ref).replaceAll('%2F', '/');
 /**
  * Arguments of the freshness read: `gh api repos/<owner>/<repo>/compare/<head sha>...<base>`. In this order,
  * GitHub's `ahead_by` counts the commits of the base the head of the pull request does not contain, and `files`
@@ -262,7 +264,7 @@ export async function planStack(numbers, options) {
  */
 export async function mergeStack(numbers, method, options) {
     const plan = await planStack(numbers, options);
-    const report = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [] };
+    const report = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [], mergedHeads: [] };
     const stop = (pr, reasons) => { report.stopped = { pr, reasons }; return report; };
     if (!plan.ok) {
         const bad = plan.prs.find(p => p.anomalies.length);
@@ -339,6 +341,7 @@ export async function mergeStack(numbers, method, options) {
             return stop(n, [`fusion de la PR #${n} non constatée : état ${after.pr.state || 'inconnu'}, base ${after.pr.baseRefName || '?'} (gh pr merge : ${merge.error ?? `code ${merge.status}`})`]);
         }
         report.merged.push(n);
+        report.mergedHeads.push({ pr: n, branch: pr.headRefName, head: pr.headRefOid, crossRepository: pr.crossRepository, url: pr.url });
     }
     return report;
 }

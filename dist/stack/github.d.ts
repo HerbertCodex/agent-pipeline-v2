@@ -12,9 +12,9 @@ export interface GhCall {
     error: string | null;
 }
 export type GhRunner = (args: string[]) => Promise<GhCall>;
-/** Runs `gh` (or `APV_GH`) without a shell, with the caller's environment. */
-export declare function processGh(bin: string, env: NodeJS.ProcessEnv, cwd: string): GhRunner;
-export declare const VIEW_FIELDS = "number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,url";
+/** Runs `gh` (or `APV_GH`) without a shell, with the caller's environment; stopped after `timeoutMs`. */
+export declare function processGh(bin: string, env: NodeJS.ProcessEnv, cwd: string, timeoutMs?: number): GhRunner;
+export declare const VIEW_FIELDS = "number,state,isDraft,baseRefName,headRefName,headRefOid,isCrossRepository,mergeable,mergeStateStatus,statusCheckRollup,url";
 export interface CheckItem {
     name: string;
     state: 'success' | 'pending' | 'failure';
@@ -29,6 +29,8 @@ export interface PullRequest {
     mergeable: string;
     mergeStateStatus: string;
     checks: CheckItem[];
+    /** Whether the head branch lives in another repository (a fork); null when GitHub did not say. */
+    crossRepository: boolean | null;
     /** Web address of the pull request: its host, owner and repository name the REST calls. */
     url: string;
 }
@@ -46,7 +48,9 @@ export interface PullRequestPath {
  * that answered the read, host included (GitHub Enterprise). Null when the address is not the one of pull
  * request `n` (another number, unexpected form, owner or name with other characters than GitHub allows).
  */
-export declare function pullRequestPath(pr: PullRequest): PullRequestPath | null;
+export declare function pullRequestPath(pr: Pick<PullRequest, 'number' | 'url'>): PullRequestPath | null;
+/** `--hostname <host>` for a repository outside github.com. */
+export declare const hostname: (where: Pick<PullRequestPath, "host">) => string[];
 /**
  * Arguments of the retarget: `gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -f base=<target>`. The REST API
  * and not `gh pr edit --base`, whose GraphQL query also reads the classic projects of the pull request and
@@ -59,6 +63,8 @@ export declare function retargetArgs(where: PullRequestPath, target: string): st
  * not list them) and the merge base itself.
  */
 export declare const FRESHNESS_JQ: string;
+/** A ref in a REST path: every character escaped but the slashes of a branch name. */
+export declare const refSegment: (ref: string) => string;
 /**
  * Arguments of the freshness read: `gh api repos/<owner>/<repo>/compare/<head sha>...<base>`. In this order,
  * GitHub's `ahead_by` counts the commits of the base the head of the pull request does not contain, and `files`
@@ -160,6 +166,21 @@ export interface MergeReport {
     } & Freshness>;
     /** Pull requests merged behind their base by waiver (`--allow-behind`), each journaled before its merge. */
     derogations: Derogation[];
+    /** Each pull request whose merge was seen, with the head it was merged at: what the branch cleanup works from. */
+    mergedHeads: MergedHead[];
+}
+/**
+ * A pull request whose merge was seen (state `MERGED` read again), with its head branch and the head the merge carried
+ * (`--match-head-commit`): its branch is deleted only while it still points there.
+ */
+export interface MergedHead {
+    pr: number;
+    branch: string;
+    head: string;
+    /** From a fork (`isCrossRepository`); null when GitHub did not say. */
+    crossRepository: boolean | null;
+    /** Web address of the pull request: host, owner and repository of the branch. */
+    url: string;
 }
 /**
  * `apv stack merge`: merges the stack in order and stops at the first anomaly. Before each merge the pull

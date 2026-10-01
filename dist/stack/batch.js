@@ -97,7 +97,7 @@ async function removeLot(options, lot) {
  * proven and asked, merges its pull requests in order, each checked by content before and after its merge.
  */
 export async function batchMerge(options) {
-    const report = { target: null, base: null, prs: [], lots: [], culprits: [], interaction: false, proven: null, merged: [], stopped: null, finalTree: null,
+    const report = { target: null, base: null, prs: [], lots: [], culprits: [], interaction: false, proven: null, merged: [], mergedHeads: [], stopped: null, finalTree: null,
         interrupted: false, left: [] };
     try {
         return await batchSteps(options, report);
@@ -342,6 +342,7 @@ async function batchSteps(options, report) {
         if (after.pr.state !== 'MERGED')
             return stop(member.number, [`fusion de la PR #${member.number} non constatée : état ${after.pr.state || 'inconnu'} (gh pr merge : ${merge.error ?? `code ${merge.status}`})`]);
         report.merged.push(member.number);
+        report.mergedHeads.push({ pr: member.number, branch: pr.headRefName, head: member.head, crossRepository: pr.crossRepository, url: pr.url });
         let landed;
         try {
             landed = await targetHead(options, target);
