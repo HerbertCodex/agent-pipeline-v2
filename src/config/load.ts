@@ -6,7 +6,7 @@ import { IssueList, schemaIssues, type Issue } from '../domain/issues.js';
 import { DEFAULT_PASS_ENV, envNamesSchema, gateSchema, gateStage, riskSchema, validationRulesSchema } from '../domain/contracts.js';
 import { skillsSchema } from '../domain/knowledge.js';
 import { previewSchema } from '../preview/config.js';
-import { designDir, designSchema } from '../design/config.js';
+import { designSchema, designSettings } from '../design/config.js';
 import { structureSchema, structureSettings } from '../structure/config.js';
 import type { PolicyConfig } from '../policy/policy.js';
 import { matches, validateDag } from '../policy/policy.js';
@@ -292,7 +292,7 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
   }
   const ruleIds = value.validationRules.map(r => r.id);
   list.check(new Set(ruleIds).size === ruleIds.length, 'CONFIG', 'Duplicate validation rule id');
-  if (value.design) list.attempt('CONFIG', () => designDir(value.design));
+  if (value.design) list.attempt('CONFIG', () => designSettings(value.design));
   if (value.structure) list.attempt('CONFIG', () => structureSettings(value.structure));
   if (value.reuse) list.attempt('CONFIG', () => reuseSettings(value.reuse));
   if (value.map) list.attempt('CONFIG', () => mapSettings(value.map));

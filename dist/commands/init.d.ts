@@ -31,7 +31,7 @@ export declare class ApvWriter {
     /** Writes `content()` unless the file exists; returns true when the file is (or would be) created. */
     file(path: string, content: () => string): boolean;
     /**
-     * The `.gitattributes` line of the validated mockups, when the configuration declares their folder (`design.dir`)
+     * The `.gitattributes` line of the validated mockups, when the configuration declares their folder (`design.dir`) or groups
      * or the folder exists: registered under their sha256, they must stay out of `git diff --check`. An unreadable
      * configuration is left to `apv status` and the other commands: nothing is written then.
      */
