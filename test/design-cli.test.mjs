@@ -163,10 +163,10 @@ test('register keeps validated mockups out of git diff --check: .gitattributes l
   const f = project(t, [decision('D-1')], { 'brouillons/accueil.html': SPACED, '.gitattributes': '*.png binary' });
   const out = await apv(f.repo, ['design', 'register', 'brouillons/accueil.html', '--name', 'accueil', '--quote', 'je valide l\'accueil', '--json']);
   assert.equal(out.code, 0, out.stderr);
-  assert.deepEqual(out.json().attributes, { file: '.gitattributes', line: 'docs/design/*.html -whitespace', status: 'added' });
+  assert.deepEqual(out.json().attributes, { file: '.gitattributes', line: 'docs/design/**/*.html -whitespace', status: 'added' });
   assert.deepEqual(out.json().toCommit, ['docs/design/accueil-validee.html', '.apv/DECISIONS.json', '.apv/DECISIONS.md', '.gitattributes']);
   const attributes = readFileSync(join(f.repo, '.gitattributes'), 'utf8');
-  assert.match(attributes, /^\*\.png binary\n# Maquettes validées[^\n]*\ndocs\/design\/\*\.html -whitespace\n$/);
+  assert.match(attributes, /^\*\.png binary\n# Maquettes validées[^\n]*\ndocs\/design\/\*\*\/\*\.html -whitespace\n$/);
   assert.ok(!/[–—]/.test(attributes));
   assert.equal(git(f.repo, 'check-attr', 'whitespace', '--', 'docs/design/accueil-validee.html'), 'docs/design/accueil-validee.html: whitespace: unset');
   // What the projects' diff-check gate runs: the mockup with its trailing spaces passes.
@@ -183,12 +183,12 @@ test('register adds the line for a project registered before it, with a custom d
   const f = project(t, [decision('D-1')], { '.apv/config.json': '{ "name": "demo", "design": { "dir": "maquettes/validees" } }\n' });
   const out = await apv(f.repo, ['design', 'register', 'brouillons/tableau-v3.html', '--name', 'tableau', '--quote', 'je valide']);
   assert.equal(out.code, 0, out.stderr);
-  assert.match(out.stdout, /\.gitattributes : ligne « maquettes\/validees\/\*\.html -whitespace » ajoutée/);
+  assert.match(out.stdout, /\.gitattributes : ligne « maquettes\/validees\/\*\*\/\*\.html -whitespace » ajoutée/);
   assert.match(out.stdout, /git add -- maquettes\/validees\/tableau-validee\.html \.apv\/DECISIONS\.json \.apv\/DECISIONS\.md \.gitattributes/);
   // Removed afterwards (the pilot's situation before its manual fix): the same registration puts it back.
   writeFileSync(join(f.repo, '.gitattributes'), '');
   const unchanged = await apv(f.repo, ['design', 'register', 'brouillons/tableau-v3.html', '--name', 'tableau', '--quote', 'je valide']);
-  assert.match(unchanged.stdout, /Déjà enregistrée[\s\S]*ligne « maquettes\/validees\/\*\.html -whitespace » ajoutée[\s\S]*À commiter : git add -- \.gitattributes/);
+  assert.match(unchanged.stdout, /Déjà enregistrée[\s\S]*ligne « maquettes\/validees\/\*\*\/\*\.html -whitespace » ajoutée[\s\S]*À commiter : git add -- \.gitattributes/);
 });
 
 test('design check reports a missing .gitattributes line, and fails when a validated mockup has trailing whitespace', async t => {
@@ -197,7 +197,7 @@ test('design check reports a missing .gitattributes line, and fails when a valid
   writeFileSync(join(f.repo, '.gitattributes'), '');
   const clean = await apv(f.repo, ['design', 'check']);
   assert.equal(clean.code, 0, 'no trailing whitespace: reported only');
-  assert.match(clean.stdout, /Attention : \.gitattributes ne contient pas « docs\/design\/\*\.html -whitespace »/);
+  assert.match(clean.stdout, /Attention : \.gitattributes ne contient pas « docs\/design\/\*\*\/\*\.html -whitespace »/);
   assert.equal((await apv(f.repo, ['design', 'check', '--json'])).json().attributes.status, 'missing');
   git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'propre');
   assert.equal((await apv(f.repo, ['design', 'register', 'brouillons/espaces.html', '--name', 'espaces', '--quote', 'je valide'])).code, 0);

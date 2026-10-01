@@ -760,6 +760,29 @@ test('review 5, low: a validated mockup counts only once the base registers it',
   assert.ok(!after.findings.some(x => x.path === 'src/mockups/pay-validee.html'));
 });
 
+test('a validated mockup the change only moves (apv design organize) keeps its exclusion; changed on the way, it is analysed', async t => {
+  const f = await configured(t);
+  write(f.repo, '.apv/config.json', { ...f.config(), design: { dir: 'src/mockups' } });
+  commit(f.repo, 'design dir');
+  write(f.root, 'mockup.html', '<!doctype html><html lang="fr"><body><select><option>a</option></select></body></html>\n');
+  assert.equal((await apv(f.repo, ['design', 'register', join(f.root, 'mockup.html'), '--name', 'pay', '--quote', 'je valide'])).code, 0);
+  commit(f.repo, 'registered');
+  write(f.repo, '.apv/config.json', { ...f.config(), design: { dir: 'src/mockups', defaultGroup: 'produit' } });
+  commit(f.repo, 'groups');
+  const base = git(f.repo, 'rev-parse', 'HEAD');
+  const organized = await apv(f.repo, ['design', 'organize', '--json']);
+  assert.deepEqual(organized.json().moves.map(m => m.to), ['src/mockups/produit/pay-validee.html'], organized.stderr);
+  commit(f.repo, 'organize');
+  const moved = (await apv(f.repo, ['reuse', 'check', '--base', base, '--json'])).json();
+  assert.ok(!moved.findings.some(x => x.path === 'src/mockups/produit/pay-validee.html'), JSON.stringify(moved.findings));
+  assert.equal(moved.excluded.why['src/mockups/produit/pay-validee.html'], 'mockup');
+  // Moved AND changed: no longer the registered content, analysed and blocking.
+  write(f.repo, 'src/mockups/produit/pay-validee.html', '<!doctype html><html lang="fr"><body><select><option>a</option><option>b</option></select></body></html>\n');
+  commit(f.repo, 'retouche');
+  const changed = (await apv(f.repo, ['reuse', 'check', '--base', base, '--json'])).json();
+  assert.ok(changed.findings.some(x => x.path === 'src/mockups/produit/pay-validee.html' && x.blocking));
+});
+
 // Sixth review (322b5fd): what the application loads is held, and the reason of each exclusion is said.
 
 test('review 6: a copy of styles in vendor/, loaded by @import from src/app.css, blocks', async t => {

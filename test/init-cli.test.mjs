@@ -133,7 +133,7 @@ test('apv init and apv onboard add the validated-mockup line to .gitattributes w
   const r = await apv(declared.repo, ['init', '--json']);
   assert.equal(r.code, 0, r.stderr);
   assert.ok(r.json().created.includes('.gitattributes'));
-  assert.match(read(declared.repo, '.gitattributes'), /^# Maquettes validées[^\n]*\nmaquettes\/\*\.html -whitespace\n$/);
+  assert.match(read(declared.repo, '.gitattributes'), /^# Maquettes validées[^\n]*\nmaquettes\/\*\*\/\*\.html -whitespace\n$/);
   assert.match((await apv(declared.repo, ['init'])).stdout, /Existait déjà \(inchangé\) : [^\n]*\.gitattributes/);
   // Onboarding a project whose default folder exists and whose .gitattributes lacks the line: completed.
   const pilot = fixture(t, { files: { 'docs/design/accueil-validee.html': HTML_SPACED, '.gitattributes': '* text=auto\n' } });
@@ -142,8 +142,15 @@ test('apv init and apv onboard add the validated-mockup line to .gitattributes w
   assert.equal(read(pilot.repo, '.gitattributes'), '* text=auto\n', 'dry run writes nothing');
   const onboard = await apv(pilot.repo, ['onboard', '--json']);
   assert.equal(onboard.code, 0, onboard.stderr);
-  assert.match(read(pilot.repo, '.gitattributes'), /^\* text=auto\n# Maquettes validées[^\n]*\ndocs\/design\/\*\.html -whitespace\n$/);
+  assert.match(read(pilot.repo, '.gitattributes'), /^\* text=auto\n# Maquettes validées[^\n]*\ndocs\/design\/\*\*\/\*\.html -whitespace\n$/);
   assert.match(onboard.json().next.at(-1), /git add \.apv \.gitattributes/);
+  // Groups declared and the root-only line of an earlier version: replaced in place, never duplicated.
+  const grouped = fixture(t, { files: { '.apv/config.json': '{ "name": "demo", "design": { "groups": [{ "dir": "admin", "match": ["admin-*"] }] } }\n',
+    '.gitattributes': '# maquettes\ndocs/design/*.html -whitespace\n' } });
+  const replaced = await apv(grouped.repo, ['init', '--json']);
+  assert.equal(replaced.code, 0, replaced.stderr);
+  assert.ok(replaced.json().completed.includes('.gitattributes'));
+  assert.equal(read(grouped.repo, '.gitattributes'), '# maquettes\ndocs/design/**/*.html -whitespace\n');
   // Neither declared nor present: untouched.
   const bare = fixture(t);
   assert.ok(!(await apv(bare.repo, ['init', '--json'])).json().created.includes('.gitattributes'));
