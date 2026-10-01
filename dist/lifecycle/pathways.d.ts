@@ -291,6 +291,7 @@ export declare function targetedQaContext(context: {
             readonly reference: string | null | undefined;
             readonly files: string[];
             readonly importsOnly: string[];
+            readonly movedPathsOnly: string[];
             readonly times: number;
             readonly status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "none" | "no_base" | "not_run";
             readonly command: string[] | undefined;

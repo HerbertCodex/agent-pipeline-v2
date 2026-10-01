@@ -26,6 +26,12 @@ export interface RepeatPlan {
      * modules rewrites them): listed, never repeated (the check itself still runs them), never skipped silently.
      */
     importsOnly: string[];
+    /**
+     * Changed test files whose only differing lines cite a file the same diff renamed without changing it (`R100`): the
+     * old path replaced by the new one, nothing else (their imports may also have moved). Listed, never repeated (the
+     * check itself still runs them), never skipped silently.
+     */
+    movedPathsOnly: string[];
     fixedWaits: FixedWait[];
 }
 /** Placeholder of the number of repetitions, replaced anywhere in an argument (`--repeat-each={{repeat}}`). */
@@ -61,6 +67,30 @@ export declare function addedLines(diff: string): {
 export declare function withoutImportPaths(text: string): string;
 /** Only the paths of the imports differ (a module moved or renamed): the names imported and every other line are the same. */
 export declare function onlyImportPathsChanged(before: string, after: string): boolean;
+/** A file renamed by the diff without any change of its content (`git diff -M`, similarity 100 %). */
+export interface Rename {
+    from: string;
+    to: string;
+}
+/**
+ * The forms under which a test cites a renamed file, old -> new: the full path, and each shorter suffix (cut on a `/`)
+ * that still begins inside the folder both paths share (`docs/design/x.html` -> `docs/design/produit/x.html`: also
+ * `design/x.html` -> `design/produit/x.html`, never `x.html` -> `produit/x.html`, which names no folder). A form two
+ * renames would replace differently is dropped.
+ */
+export declare function renamedPathForms(renames: readonly Rename[]): Map<string, string>;
+/**
+ * A line with each cited form of a renamed file replaced by its new form, in one pass (a chain of renames is never
+ * applied twice): a whole path only, optionally after `./` or `../`, never inside a longer path or name.
+ */
+export declare function withRenamedPaths(line: string, forms: ReadonlyMap<string, string>): string;
+/**
+ * Only cited paths of renamed files (and the paths of imports) differ: the two texts, imports put in their canonical
+ * form, have the same number of lines, and each line that differs becomes the new one once the old paths of the
+ * renamed files are replaced by the new ones (`withRenamedPaths`). Lines are paired in order: a line added, removed
+ * or changed in any other way is a change.
+ */
+export declare function onlyRenamedPathsChanged(before: string, after: string, renames: readonly Rename[]): boolean;
 /** The commit `ref` names, or null when it does not resolve (no remote, reference absent). */
 export declare function resolveRef(git: Git, repo: string, ref: string): Promise<string | null>;
 /**

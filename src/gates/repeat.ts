@@ -27,6 +27,12 @@ export interface RepeatPlan {
    * modules rewrites them): listed, never repeated (the check itself still runs them), never skipped silently.
    */
   importsOnly: string[];
+  /**
+   * Changed test files whose only differing lines cite a file the same diff renamed without changing it (`R100`): the
+   * old path replaced by the new one, nothing else (their imports may also have moved). Listed, never repeated (the
+   * check itself still runs them), never skipped silently.
+   */
+  movedPathsOnly: string[];
   fixedWaits: FixedWait[];
 }
 
@@ -122,6 +128,72 @@ export function onlyImportPathsChanged(before: string, after: string): boolean {
   return before !== after && withoutImportPaths(before) === withoutImportPaths(after);
 }
 
+/** A file renamed by the diff without any change of its content (`git diff -M`, similarity 100 %). */
+export interface Rename { from: string; to: string }
+/** A character of a path: a cited path never continues with one (nor starts after one, apart from `./` and `../`). */
+const PATH_CHAR = String.raw`[\p{L}\p{N}_\-@$~+%/\\]`;
+const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * The forms under which a test cites a renamed file, old -> new: the full path, and each shorter suffix (cut on a `/`)
+ * that still begins inside the folder both paths share (`docs/design/x.html` -> `docs/design/produit/x.html`: also
+ * `design/x.html` -> `design/produit/x.html`, never `x.html` -> `produit/x.html`, which names no folder). A form two
+ * renames would replace differently is dropped.
+ */
+export function renamedPathForms(renames: readonly Rename[]): Map<string, string> {
+  const forms = new Map<string, string | null>();
+  for (const { from, to } of renames) {
+    if (!from || !to || from === to) continue;
+    const a = from.split('/');
+    const b = to.split('/');
+    let common = 0;
+    while (common < a.length - 1 && common < b.length - 1 && a[common] === b[common]) common++;
+    for (let cut = 0; cut === 0 || cut < common; cut++) {
+      const old = a.slice(cut).join('/');
+      const next = b.slice(cut).join('/');
+      forms.set(old, forms.has(old) && forms.get(old) !== next ? null : next);
+    }
+  }
+  return new Map([...forms].filter((entry): entry is [string, string] => entry[1] !== null));
+}
+
+/**
+ * A line with each cited form of a renamed file replaced by its new form, in one pass (a chain of renames is never
+ * applied twice): a whole path only, optionally after `./` or `../`, never inside a longer path or name.
+ */
+export function withRenamedPaths(line: string, forms: ReadonlyMap<string, string>): string {
+  return renamedPathsReplacer(forms)(line);
+}
+function renamedPathsReplacer(forms: ReadonlyMap<string, string>): (line: string) => string {
+  if (!forms.size) return line => line;
+  const alternatives = [...forms.keys()].sort((x, y) => y.length - x.length).map(escapeRegex).join('|');
+  const re = new RegExp(String.raw`(?<!${PATH_CHAR}|\.)((?:\.{1,2}/)*)(${alternatives})(?!${PATH_CHAR}|\.${PATH_CHAR}|\.\.)`, 'gu');
+  return line => line.replace(re, (_m, prefix: string, path: string) => `${prefix}${forms.get(path)!}`);
+}
+
+/**
+ * Only cited paths of renamed files (and the paths of imports) differ: the two texts, imports put in their canonical
+ * form, have the same number of lines, and each line that differs becomes the new one once the old paths of the
+ * renamed files are replaced by the new ones (`withRenamedPaths`). Lines are paired in order: a line added, removed
+ * or changed in any other way is a change.
+ */
+export function onlyRenamedPathsChanged(before: string, after: string, renames: readonly Rename[]): boolean {
+  if (before === after) return false;
+  const forms = renamedPathForms(renames);
+  if (!forms.size) return false;
+  const replace = renamedPathsReplacer(forms);
+  const a = withoutImportPaths(before).split('\n');
+  const b = withoutImportPaths(after).split('\n');
+  if (a.length !== b.length) return false;
+  let moved = false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue;
+    if (replace(a[i]!) !== b[i]) return false;
+    moved = true;
+  }
+  return moved;
+}
+
 /** The commit `ref` names, or null when it does not resolve (no remote, reference absent). */
 export async function resolveRef(git: Git, repo: string, ref: string): Promise<string | null> {
   try { return (await git.exec(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).trim() || null; } catch { return null; }
@@ -167,14 +239,24 @@ export async function planRepeat(git: Git, repo: string, bases: { base: string; 
   const diffArgs = (mb: string): string[] => ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', mb, ...(head ? [head] : [])];
   // File -> the merge bases it changed from, and where it was at each (a rename or a move by Git keeps its old path).
   const changedFrom = new Map<string, Map<string, string>>();
+  // Merge base -> the files renamed since it without any change of content (`R100`): the paths a test may cite.
+  const renamedFrom = new Map<string, Rename[]>();
   for (const mb of from) {
     const renames = new Map<string, string>();
+    const identical: Rename[] = [];
     const status = (await git.exec(repo, ['diff', '--no-ext-diff', '--no-textconv', '-M', '--name-status', '-z', mb, ...(head ? [head] : []), '--'])).split('\0');
     for (let i = 0; i < status.length;) {
       const code = status[i] ?? '';
       if (!code) { i++; continue; }
-      if (code.startsWith('R') || code.startsWith('C')) { if (code.startsWith('R') && status[i + 1] && status[i + 2]) renames.set(status[i + 2]!, status[i + 1]!); i += 3; } else i += 2;
+      if (code.startsWith('R') || code.startsWith('C')) {
+        if (code.startsWith('R') && status[i + 1] && status[i + 2]) {
+          renames.set(status[i + 2]!, status[i + 1]!);
+          if (code === 'R100') identical.push({ from: status[i + 1]!, to: status[i + 2]! });
+        }
+        i += 3;
+      } else i += 2;
     }
+    renamedFrom.set(mb, identical);
     for (const path of (await git.exec(repo, [...diffArgs(mb), '--diff-filter=AM', '--name-only', '-z', '--'])).split('\0').filter(Boolean)) {
       changedFrom.set(path, new Map([...(changedFrom.get(path) ?? []), [mb, renames.get(path) ?? path]]));
     }
@@ -185,22 +267,28 @@ export async function planRepeat(git: Git, repo: string, bases: { base: string; 
     if (head) return true;
     try { return statSync(join(repo, path)).isFile(); } catch { return false; }
   }).sort();
-  // A test file whose only differences with every base it changed from are the paths of its imports is listed apart.
+  // A test file whose only differences with every base it changed from are the paths of its imports, or the cited
+  // paths of files renamed without change (a test renamed itself: its imports only), is listed apart.
   const show = async (spec: string): Promise<string | null> => { try { return await git.exec(repo, ['show', '--no-textconv', spec]); } catch { return null; } };
   const importsOnly: string[] = [];
+  const movedPathsOnly: string[] = [];
   for (const path of changed) {
     const was = changedFrom.get(path);
     if (untracked.has(path) || !was) continue;
     const now = head ? await show(`${head}:${path}`) : (() => { try { return readFileSync(join(repo, path), 'utf8'); } catch { return null; } })();
     if (now === null) continue;
     let only = true;
+    let moved = false;
     for (const [mb, old] of was) {
       const before = await show(`${mb}:${old}`);
-      if (before === null || !(before === now || onlyImportPathsChanged(before, now))) { only = false; break; }
+      if (before !== null && (before === now || onlyImportPathsChanged(before, now))) continue;
+      if (before !== null && old === path && onlyRenamedPathsChanged(before, now, renamedFrom.get(mb) ?? [])) { moved = true; continue; }
+      only = false;
+      break;
     }
-    if (only) importsOnly.push(path);
+    if (only) (moved ? movedPathsOnly : importsOnly).push(path);
   }
-  const files = changed.filter(path => !importsOnly.includes(path));
+  const files = changed.filter(path => !importsOnly.includes(path) && !movedPathsOnly.includes(path));
   const fixedWaits: FixedWait[] = [];
   if (settings.fixedWaits !== 'off') {
     for (const file of files) {
@@ -218,7 +306,7 @@ export async function planRepeat(git: Git, repo: string, bases: { base: string; 
     }
     fixedWaits.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   }
-  return { base, reference, files, importsOnly, fixedWaits };
+  return { base, reference, files, importsOnly, movedPathsOnly, fixedWaits };
 }
 
 /** The refusal of a repeated file whose path starts with `-`: appended to the command, it would read as an option. */
