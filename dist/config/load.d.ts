@@ -270,6 +270,11 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
     } | undefined;
     readonly design: {
         readonly dir: string | undefined;
+        readonly groups: {
+            readonly dir: string;
+            readonly match: string[];
+        }[] | undefined;
+        readonly defaultGroup: string | undefined;
     } | undefined;
     readonly structure: {
         readonly roots: string[] | undefined;

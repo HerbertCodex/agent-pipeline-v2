@@ -8,7 +8,7 @@ import { apvOnPath, detectReuse, MAP_GATE, REUSE_GATE, STRUCTURE_GATE } from '..
 import { architectureMap } from '../structure/map-file.js';
 import { structureSettings } from '../structure/config.js';
 import { currentMap } from './map.js';
-import { designDir } from '../design/config.js';
+import { declaredGroups, designSettings } from '../design/config.js';
 import { GITATTRIBUTES, ensureDesignAttribute } from '../design/attributes.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { LEDGER_FILE } from '../lifecycle/decisions.js';
@@ -95,17 +95,20 @@ export class ApvWriter {
         return true;
     }
     /**
-     * The `.gitattributes` line of the validated mockups, when the configuration declares their folder (`design.dir`)
+     * The `.gitattributes` line of the validated mockups, when the configuration declares their folder (`design.dir`) or groups
      * or the folder exists: registered under their sha256, they must stay out of `git diff --check`. An unreadable
      * configuration is left to `apv status` and the other commands: nothing is written then.
      */
     designAttributes() {
         let dir;
         let declared;
+        let groups;
         try {
             const { config } = loadConfig(this.repo);
-            declared = config.design?.dir !== undefined;
-            dir = designDir(config.design);
+            const settings = designSettings(config.design);
+            groups = declaredGroups(settings);
+            declared = config.design?.dir !== undefined || groups.length > 0;
+            dir = settings.dir;
         }
         catch {
             return;
@@ -113,7 +116,7 @@ export class ApvWriter {
         if (!declared && !existsSync(join(this.repo, dir)))
             return;
         const had = existsSync(join(this.repo, GITATTRIBUTES));
-        const result = ensureDesignAttribute(this.repo, dir, this.dryRun);
+        const result = ensureDesignAttribute(this.repo, dir, this.dryRun, groups);
         (result.status === 'present' ? this.existing : had ? this.completed : this.created).push(GITATTRIBUTES);
     }
     gitignore() {

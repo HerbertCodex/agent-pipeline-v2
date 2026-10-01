@@ -144,7 +144,7 @@ Les variables d'autorisation se posent devant la seule commande concernée (`APV
 | `.apv/receipts/` | reçus de `apv gates run` | non |
 | `.apv/.gitignore` | ignore les trois lignes ci-dessus ; créé ou complété par `apv quota` et par le hook de fin de tour, sans toucher aux lignes ajoutées par le projet | oui |
 
-Hors de `.apv/`, les maquettes validées vivent dans `docs/design/<nom>-validee.html` (dossier réglable par `design.dir` de `.apv/config.json`), chacune liée à sa décision `maquette-<nom>-validee` du registre par son empreinte sha256 ; les brouillons de la boucle dans `docs/design/brouillons/`.
+Hors de `.apv/`, les maquettes validées vivent dans `docs/design/<nom>-validee.html` (dossier réglable par `design.dir` de `.apv/config.json`), ou dans le sous-dossier de leur groupe (`docs/design/<groupe>/<nom>-validee.html`, `design.groups`), chacune liée à sa décision `maquette-<nom>-validee` du registre par son empreinte sha256 ; les brouillons de la boucle dans `docs/design/brouillons/`.
 
 ## Ancienne version (V2)
 
