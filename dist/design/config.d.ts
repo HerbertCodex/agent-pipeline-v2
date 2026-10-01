@@ -31,10 +31,12 @@ export interface DesignSettings {
  * normalized (no trailing slash). Throws a CONFIG error that names the faulty value.
  */
 export declare function designDir(section: DesignSection | undefined): string;
+/** Folder of the drafts of the mockup loop (`<design.dir>/brouillons/`): never a group. */
+export declare const RESERVED_GROUP = "brouillons";
 /**
  * A group sub-folder (`design.groups[].dir`, `design.defaultGroup`, `--group`), without its trailing slash:
  * relative to `design.dir`, without `..`, `.` or empty segment, without spaces; letters, digits, `.`, `_` and `-`
- * only. Throws a CONFIG error that names `field` and the faulty value.
+ * only, never under `brouillons/` (the drafts). Throws a CONFIG error that names `field` and the faulty value.
  */
 export declare function groupDir(value: string, field: string): string;
 /** Every setting of a `design` section, validated (CONFIG error naming the faulty field otherwise). */

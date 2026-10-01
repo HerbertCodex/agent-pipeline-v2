@@ -4,7 +4,9 @@ import { globToRegExp } from '../db/glob.js';
 import { CODE_EXTENSIONS, parseName } from '../structure/names.js';
 import { buildCodeMap, clashesFor, importsOf, withoutQuery } from '../knowledge/code-map.js';
 import { nonSourceExtensions } from '../knowledge/languages.js';
-import { listMockups, listMockupsAt } from '../design/registry.js';
+import { listMockups, listMockupsAt, sha256File } from '../design/registry.js';
+import { lstatSync } from 'node:fs';
+import { join } from 'node:path';
 import { loadConfigAtCommit } from '../config/load.js';
 import { collectChanges, isAdded, readAtBase, readWorktree, readWorktreeStatus, resolveBase } from './changes.js';
 import { COMPONENT_EXTENSIONS, DEFAULT_PRIMITIVE_PATHS, DEFAULT_STYLE_SOURCES, ELEMENT_FAMILIES, DEFAULT_REUSE_IGNORE, GENERATED_HEADER, GENERATED_PATHS, REUSE_RULES, frameworkExtensions, outputMatcher, STYLE_EXTENSIONS, UI_EXTENSIONS, extensionOf, globMatcher, mapSettings, reuseSettings, } from './config.js';
@@ -102,10 +104,27 @@ export async function checkReuse(repo, config, options = {}) {
     const declaredGenerated = globMatcher(settings.generated);
     // Validated mockups as the ledger of the BASE registers them, checked against the files on disk.
     let mockups = new Set();
+    // Fingerprints the base registers, by file: a mockup the change only moves (`apv design organize`) keeps its exclusion
+    // when its content is exactly the registered one.
+    let registered = new Map();
     try {
-        mockups = new Set((changes.base.mergeBase ? await listMockupsAt(repo, changes.base.mergeBase) : listMockups(repo)).filter(m => m.state === 'ok' && m.file).map(m => m.file));
+        const listed = changes.base.mergeBase ? await listMockupsAt(repo, changes.base.mergeBase) : listMockups(repo);
+        mockups = new Set(listed.filter(m => m.state === 'ok' && m.file).map(m => m.file));
+        registered = new Map(listed.filter(m => m.file && m.sha256).map(m => [m.file, m.sha256]));
     }
     catch { /* no ledger: none */ }
+    const movedMockup = (path) => {
+        const from = changes.renamed.get(path);
+        const expected = from === undefined ? undefined : registered.get(from);
+        if (!expected)
+            return false;
+        try {
+            return lstatSync(join(repo, path)).isFile() && sha256File(join(repo, path)) === expected;
+        }
+        catch {
+            return false;
+        }
+    };
     // Strict coverage: a component anywhere; a code, interface or style file in a source folder, or imported by the
     // application. A script of the CI or a documentation page is analysed where it is, never forced out of an exclusion.
     // The import graph of the application, from its sources and components, followed from file to file (5 steps): ES
@@ -224,7 +243,7 @@ export async function checkReuse(repo, config, options = {}) {
         if (byDefault(path) || output(path)) {
             if (!counts || !changed)
                 return exclude('base');
-            if (mockups.has(path))
+            if (mockups.has(path) || movedMockup(path))
                 return exclude('mockup');
             const held = strict(path);
             if (!held)

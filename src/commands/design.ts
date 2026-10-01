@@ -23,7 +23,12 @@ maquette-<nom>-validee au registre, avec la citation exacte de l'opérateur (obl
 n'invente jamais une validation).
 --group <dossier> choisit un groupe déclaré (design.groups ou design.defaultGroup) ; le choix est noté
 dans la décision. Un nouvel enregistrement garde le groupe de la maquette (groupe noté, ou dossier de
-son fichier) sauf --group : il ne déplace jamais une maquette, organize le fait.
+son fichier s'il est la racine ou un groupe déclaré) sauf --group : il ne la déplace pas, organize le
+fait. Seule exception : un fichier dans un dossier qui n'est plus un groupe déclaré (groupe retiré de
+la configuration) ; la nouvelle version va alors dans le groupe des motifs et l'ancien fichier, laissé
+en place, est nommé dans la sortie. Le groupe « brouillons » est réservé ; une cible ou une source qui
+passe par un lien symbolique est refusée ; un titre ou un écran ne contient pas « Groupe : »,
+« Écrans : », « Artefact : » ni « fichier … sha256 ».
 --scope donne un périmètre à la décision (motifs de chemins, syntaxe des chemins autorisés) : seules
 les specs dont les tâches peuvent toucher ces chemins doivent la couvrir ; absent, le périmètre de
 l'enregistrement actif est gardé (aucun : toute spec la couvre).
@@ -40,8 +45,10 @@ si la ligne de .gitattributes manque alors qu'une maquette validée porte des es
 signalées sans échec.
 organize range dans le dossier de leur groupe les maquettes validées qui n'y sont pas (git mv si Git
 suit le fichier) et réécrit leur chemin dans leur décision au registre, sans nouvelle version (le
-contenu validé ne change pas, empreinte vérifiée). Tout ou rien : une maquette modifiée ou absente,
-ou une cible qui existe déjà, bloque tout. Aucun autre fichier n'est modifié : les fichiers qui citent
+contenu validé ne change pas, empreinte vérifiée). Il ne déplace que des fichiers HTML réguliers sous
+design.dir, jamais à travers un lien symbolique. Tout ou rien : une maquette modifiée, absente, hors
+de design.dir ou liée, ou une cible qui existe déjà, bloque tout ; un échec en cours de route remet
+fichiers et registre comme avant. Aucun autre fichier n'est modifié : les fichiers qui citent
 encore un ancien chemin sont listés. --dry-run montre le plan sans rien toucher. Rien n'est commité.`;
 
 const STATE_LABEL: Record<RegisteredMockup['state'], string> = {

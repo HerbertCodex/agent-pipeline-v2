@@ -1,12 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
-import { invariant } from '../domain/errors.js';
+import { PipelineError, errorMessage, invariant } from '../domain/errors.js';
 import { Git } from '../execution/git.js';
 import { gitRead } from '../run/git-probe.js';
 import { LEDGER_FILE, LEGACY_LEDGER_FILE, decisionLedgerMarkdown, readWorkingDecisionLedger, validateDecisionLedger } from '../lifecycle/decisions.js';
 import { designAttributeState, type DesignAttributeResult } from './attributes.js';
 import { declaredGroups } from './config.js';
 import { listMockups, loadDesignConfig, mockupPlacement, relocatedValue, sha256File } from './registry.js';
+import { assertNoLink, assertRealFolder, linkedComponent } from './links.js';
 
 /** A validated mockup to move into the folder of its group. */
 export interface OrganizeMove {
@@ -62,8 +63,10 @@ function citing(repo: string, text: string, excluded: string[]): string[] {
  * Moves every validated mockup (confirmed decision with file and hash) that is not in the folder of its group
  * (`mockupPlacement`) into it, by `git mv` when Git follows the file, and rewrites the file path in the value of
  * its decision, in place: the validated content does not change, so no new version of the decision is added. The
- * ledger (JSON and its Markdown view) is the only other file written. All or nothing: a mockup changed or missing
- * since its validation, or a target that already exists, blocks every move; the ledger must be committed. Lists the
+ * ledger (JSON and its Markdown view) is the only other file written. Only regular HTML files under `design.dir`
+ * move, never through a symbolic link (source or target). All or nothing: a mockup out of `design.dir`, linked,
+ * changed or missing since its validation, or a target that already exists, blocks every move; the ledger must be
+ * committed; a failure on the way puts the files and the ledger back. Lists the
  * tracked files that still name an old path, without changing them. `dryRun` computes the plan and writes nothing.
  */
 export async function organizeMockups(repoPath: string, options: { dryRun?: boolean } = {}): Promise<OrganizeResult> {
@@ -79,7 +82,16 @@ export async function organizeMockups(repoPath: string, options: { dryRun?: bool
     if (place.placed) continue;
     const to = `${place.folder}/${posix.basename(m.file)}`;
     const base = { slug: m.slug, decisionId: m.decisionId, file: m.file, to };
-    if (m.state === 'missing') blocked.push({ ...base, reason: 'fichier absent' });
+    const sourceLink = linkedComponent(repo, m.file);
+    const targetLink = linkedComponent(repo, to);
+    let regular = false;
+    try { regular = lstatSync(join(repo, m.file)).isFile(); } catch { /* absent */ }
+    if (!m.file.startsWith(`${settings.dir}/`)) blocked.push({ ...base, reason: `fichier hors de ${settings.dir}/ : organize ne range que le dossier des maquettes (apv design register la verse dans son groupe)` });
+    else if (!/\.html?$/i.test(m.file)) blocked.push({ ...base, reason: 'pas un fichier HTML (.html ou .htm) : organize ne le déplace pas' });
+    else if (sourceLink) blocked.push({ ...base, reason: `le fichier passe par un lien symbolique (${sourceLink}) : refusé` });
+    else if (m.state === 'missing') blocked.push({ ...base, reason: 'fichier absent' });
+    else if (!regular) blocked.push({ ...base, reason: 'pas un fichier régulier : refusé' });
+    else if (targetLink) blocked.push({ ...base, reason: `la cible passe par un lien symbolique (${targetLink}) : refusé, elle pourrait sortir du dépôt` });
     else if (m.state !== 'ok') blocked.push({ ...base, reason: `fichier modifié depuis la validation (sha256 ${m.actualSha256} au lieu de ${m.sha256})` });
     else if (existsSync(join(repo, to)) || tracked(repo, to)) blocked.push({ ...base, reason: `la cible ${to} existe déjà` });
     else if (moves.some(x => x.to === to)) blocked.push({ ...base, reason: `une autre maquette va déjà vers ${to}` });
@@ -113,17 +125,19 @@ export async function organizeMockups(repoPath: string, options: { dryRun?: bool
 
   const dirty = await git.exec(repo, ['status', '--porcelain=v1', '--', ledgerFile!, ledgerMarkdown!]);
   invariant(dirty.trim() === '', 'LEDGER_DIRTY', `${ledgerFile} ou ${ledgerMarkdown} a des changements non commités : commitez-les ou annulez-les d'abord`);
+  for (const file of [ledgerFile!, ledgerMarkdown!]) assertNoLink(repo, file, 'Le registre');
   const saved = [ledgerFile!, ledgerMarkdown!].map(f => ({ path: join(repo, f), text: existsSync(join(repo, f)) ? readFileSync(join(repo, f)) : null }));
   const done: OrganizeMove[] = [];
-  const undo = async (): Promise<void> => {
-    for (const m of done.reverse()) {
-      if (m.tracked) await git.exec(repo, ['mv', '--', m.to, m.from]);
-      else renameSync(join(repo, m.to), join(repo, m.from));
-    }
-  };
+  /** Folders created by the moves (deepest first when walked back): removed on the way back while empty. */
+  const created: { deepest: string; top: string }[] = [];
+  let applied = false;
   try {
     for (const m of moves) {
-      mkdirSync(join(repo, dirname(m.to)), { recursive: true });
+      const folder = dirname(m.to);
+      const top = mkdirSync(join(repo, folder), { recursive: true });
+      if (top) created.push({ deepest: join(repo, folder), top });
+      assertRealFolder(repo, folder);
+      assertNoLink(repo, m.to, 'La cible');
       if (m.tracked) await git.exec(repo, ['mv', '--', m.from, m.to]);
       else renameSync(join(repo, m.from), join(repo, m.to));
       done.push(m);
@@ -131,10 +145,27 @@ export async function organizeMockups(repoPath: string, options: { dryRun?: bool
     }
     writeFileSync(join(repo, ledgerFile!), nextJson);
     writeFileSync(join(repo, ledgerMarkdown!), nextMarkdown);
+    applied = true;
   } catch (error) {
-    await undo();
-    for (const { path, text } of saved) { if (text) writeFileSync(path, text); else rmSync(path, { force: true }); }
-    throw error;
+    // Back as it was, as far as possible: every move undone in reverse order, each failure kept and reported.
+    const problems: string[] = [];
+    for (const m of done.reverse()) {
+      try {
+        if (m.tracked) await git.exec(repo, ['mv', '--', m.to, m.from]);
+        else renameSync(join(repo, m.to), join(repo, m.from));
+      } catch (undoError) { problems.push(`${m.to} -> ${m.from} : ${errorMessage(undoError)}`); }
+    }
+    for (const { deepest, top } of created.reverse()) {
+      for (let dir = deepest; dir.startsWith(top); dir = dirname(dir)) {
+        try { rmdirSync(dir); } catch { break; }
+        if (dir === top) break;
+      }
+    }
+    throw new PipelineError('DESIGN_ORGANIZE', `Rangement interrompu (${errorMessage(error)}) : ${problems.length
+      ? `déplacements annulés sauf ${problems.join(' ; ')}, à remettre à la main`
+      : 'tous les déplacements ont été annulés'} ; registre remis comme avant.`, { cause: error });
+  } finally {
+    if (!applied) for (const { path, text } of saved) { if (text) writeFileSync(path, text); else rmSync(path, { force: true }); }
   }
   return { ...plan, applied: true };
 }

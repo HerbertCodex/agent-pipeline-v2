@@ -35,10 +35,12 @@ export function designDir(section) {
     return clean;
 }
 const GROUP_SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
+/** Folder of the drafts of the mockup loop (`<design.dir>/brouillons/`): never a group. */
+export const RESERVED_GROUP = 'brouillons';
 /**
  * A group sub-folder (`design.groups[].dir`, `design.defaultGroup`, `--group`), without its trailing slash:
  * relative to `design.dir`, without `..`, `.` or empty segment, without spaces; letters, digits, `.`, `_` and `-`
- * only. Throws a CONFIG error that names `field` and the faulty value.
+ * only, never under `brouillons/` (the drafts). Throws a CONFIG error that names `field` and the faulty value.
  */
 export function groupDir(value, field) {
     const clean = value.trim().replace(/\/+$/, '');
@@ -47,6 +49,7 @@ export function groupDir(value, field) {
     invariant(!clean.startsWith('/') && !/^[a-zA-Z]:/.test(clean) && !clean.includes('\\'), 'CONFIG', `${field} doit être un sous-dossier relatif de design.dir (${value})`);
     invariant(!clean.split('/').some(p => p === '..'), 'CONFIG', `${field} ne contient pas « .. » (${value})`);
     invariant(clean.split('/').every(p => GROUP_SEGMENT.test(p)), 'CONFIG', `${field} invalide (${value}) : lettres, chiffres, « . », « _ » et « - », segments séparés par « / », sans segment vide ni commençant par un point`);
+    invariant(clean.split('/')[0].toLowerCase() !== RESERVED_GROUP, 'CONFIG', `${field} : « ${RESERVED_GROUP} » est réservé aux brouillons de la boucle de maquette (${value})`);
     return clean;
 }
 /** Every setting of a `design` section, validated (CONFIG error naming the faulty field otherwise). */

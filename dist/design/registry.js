@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, extname, isAbsolute, join, posix, relative, resolve } from 'node:path';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, extname, join, posix, resolve } from 'node:path';
 import { PipelineError, invariant } from '../domain/errors.js';
 import { loadConfig } from '../config/load.js';
 import { declaredGroups, designSettings, groupDir, groupFolder, groupForName } from './config.js';
@@ -8,18 +8,46 @@ import { Git } from '../execution/git.js';
 import { ambiguousApprovalFragments, loadDecisionLedger, readWorkingDecisionLedger } from '../lifecycle/decisions.js';
 import { applyLedgerUpdate, planLedgerUpdate } from '../lifecycle/ledger-update.js';
 import { ensureDesignAttribute } from './attributes.js';
+import { assertNoLink, assertRealFolder, realInside } from './links.js';
 export { DEFAULT_DESIGN_DIR } from './config.js';
 /** Lowercase words joined by single dashes; short enough for the decision id (80 characters at most). */
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SLUG_MAX = 50;
 /** Decision ids of a registration: `maquette-<slug>-validee`, then `-v2`, `-v3`... for each re-registration. */
 const DECISION_ID = /^maquette-([a-z0-9]+(?:-[a-z0-9]+)*?)-validee(?:-v([0-9]+))?$/;
-/** Machine-readable part of the decision value written by `register`. */
+/** Machine-readable part of the decision value written by `register`: the file and its fingerprint. */
 const VALUE_FILE = /fichier (\S+?),? sha256 ([0-9a-f]{64})/;
-const VALUE_SCREENS = /Écrans : ([^.]+)\./;
-const VALUE_ARTIFACT = /Artefact : (\S+?)\.?(?:\s|$)/;
+const FILE_PREFIX = 'fichier ';
+/**
+ * Structured mentions, read only right after the file and fingerprint, in the order `register` writes them (a title
+ * or a screen never makes one, and `register` refuses those words in them). Screens and artifact of a decision
+ * written before the tool (no fingerprint) are read anywhere, as before.
+ */
+const TAIL_SCREENS = /^ Écrans : ([^.]+)\./;
 /** Group chosen with `register --group`, kept by the next registrations and followed by `organize`. */
-const VALUE_GROUP = /Groupe : (\S+?)\.(?:\s|$)/;
+const TAIL_GROUP = /^ Groupe : ([A-Za-z0-9._/-]+?)\.(?=\s|$)/;
+const TAIL_ARTIFACT = /^ Artefact : (\S+?)\.?(?:\s|$)/;
+const LEGACY_SCREENS = /Écrans : ([^.]+)\./;
+const LEGACY_ARTIFACT = /Artefact : (\S+?)\.?(?:\s|$)/;
+/** Words of the structured mentions, refused in a title or a screen name. */
+const RESERVED_WORDS = /(?:Groupe|Écrans|Ecrans|Artefact)\s*:|fichier\s+\S+?,?\s+sha256/i;
+function valueParts(value) {
+    const split = (list) => list?.split(',').map(x => x.trim()).filter(Boolean) ?? [];
+    const found = VALUE_FILE.exec(value);
+    if (!found)
+        return { file: null, sha256: null, screens: split(LEGACY_SCREENS.exec(value)?.[1]), artifact: LEGACY_ARTIFACT.exec(value)?.[1] ?? null, group: null };
+    let tail = value.slice(found.index + found[0].length).replace(/^\./, '');
+    const take = (pattern) => {
+        const m = pattern.exec(tail);
+        if (m)
+            tail = tail.slice(m[0].length);
+        return m?.[1];
+    };
+    const screens = split(take(TAIL_SCREENS));
+    const group = take(TAIL_GROUP) ?? null;
+    const artifact = take(TAIL_ARTIFACT) ?? null;
+    return { file: found[1], sha256: found[2], screens, artifact, group };
+}
 /**
  * `design` section of the project configuration, read by the main loader (`.apv/config.json`, else
  * `pipeline.v2.json`): the folder must stay inside the repository, the groups inside the folder.
@@ -35,18 +63,16 @@ function parseMockup(repo, decision) {
     const id = DECISION_ID.exec(decision.id);
     if (!id || decision.status !== 'confirmed')
         return null;
-    const value = VALUE_FILE.exec(decision.value);
-    const screens = VALUE_SCREENS.exec(decision.value)?.[1]?.split(',').map(x => x.trim()).filter(Boolean) ?? [];
-    const artifact = VALUE_ARTIFACT.exec(decision.value)?.[1] ?? null;
-    const recordedGroup = VALUE_GROUP.exec(decision.value)?.[1] ?? null;
-    const base = { slug: id[1], decisionId: decision.id, version: id[2] ? Number(id[2]) : 1, subject: decision.subject, screens, artifact, recordedGroup, sourceQuote: decision.sourceQuote };
-    if (!value)
+    const parts = valueParts(decision.value);
+    const base = { slug: id[1], decisionId: decision.id, version: id[2] ? Number(id[2]) : 1, subject: decision.subject, screens: parts.screens, artifact: parts.artifact,
+        recordedGroup: parts.group, sourceQuote: decision.sourceQuote };
+    if (!parts.file || !parts.sha256)
         return { ...base, file: null, sha256: null, actualSha256: null, state: 'legacy' };
-    const file = value[1];
-    const expected = value[2];
-    const path = resolve(repo, file);
-    const inside = !relative(repo, path).startsWith('..') && !isAbsolute(relative(repo, path));
-    const actual = inside && existsSync(path) && statSync(path).isFile() ? sha256File(path) : null;
+    const file = parts.file;
+    const expected = parts.sha256;
+    // By real path: a file reached through a link that leaves the repository is not read (absent).
+    const real = realInside(repo, file);
+    const actual = real && statSync(real).isFile() ? sha256File(real) : null;
     return { ...base, file, sha256: expected, actualSha256: actual, state: actual === null ? 'missing' : actual === expected ? 'ok' : 'drift' };
 }
 /**
@@ -56,7 +82,7 @@ function parseMockup(repo, decision) {
 export function relocatedValue(value, from, to) {
     const found = VALUE_FILE.exec(value);
     invariant(found && found[1] === from, 'DESIGN_ORGANIZE', `La décision ne porte pas le fichier ${from}`);
-    const start = found.index + found[0].indexOf(from);
+    const start = found.index + FILE_PREFIX.length;
     return `${value.slice(0, start)}${to}${value.slice(start + from.length)}`;
 }
 /** Validated mockups of the ledger as a commit has it (the base of a change), checked against the files on disk. */
@@ -100,6 +126,7 @@ export async function registerMockup(repoPath, input) {
     const repo = await git.root(repoPath);
     const source = resolve(repoPath, input.file);
     invariant(existsSync(source) && statSync(source).isFile(), 'DESIGN_FILE', `Fichier introuvable : ${input.file}`);
+    invariant(!lstatSync(source).isSymbolicLink(), 'DESIGN_LINK', `La maquette ${input.file} est un lien symbolique : versez le fichier lui-même`);
     invariant(['.html', '.htm'].includes(extname(source).toLowerCase()), 'DESIGN_FILE', `La maquette doit être un fichier HTML : ${input.file}`);
     invariant(statSync(source).size > 0, 'DESIGN_FILE', `Fichier vide : ${input.file}`);
     const settings = loadDesignConfig(repo);
@@ -123,8 +150,10 @@ export async function registerMockup(repoPath, input) {
     const version = active ? Math.max(...current.map(m => m.version)) + 1 : 1;
     const decisionId = version === 1 ? `maquette-${input.slug}-validee` : `maquette-${input.slug}-validee-v${version}`;
     const title = input.title?.trim() || input.slug;
+    invariant(!RESERVED_WORDS.test(title), 'DESIGN_TITLE', `Titre invalide « ${title} » : « Groupe : », « Écrans : », « Artefact : » et « fichier … sha256 » sont réservés à la valeur de la décision`);
     const screens = (input.screens ?? []).map(x => x.trim()).filter(Boolean);
     invariant(screens.every(x => !/[,.]/.test(x)), 'DESIGN_SCREENS', 'Un nom d\'écran ne contient ni virgule ni point');
+    invariant(screens.every(x => !RESERVED_WORDS.test(x)), 'DESIGN_SCREENS', 'Un nom d\'écran ne contient pas « Groupe : », « Écrans : », « Artefact : » ni « fichier … sha256 »');
     const artifact = input.artifact?.trim();
     invariant(!artifact || /^https:\/\/\S+$/.test(artifact), 'DESIGN_ARTIFACT', `Adresse d'artefact invalide : ${artifact}`);
     const day = (input.now ?? new Date()).toISOString().slice(0, 10);
@@ -142,9 +171,11 @@ export async function registerMockup(repoPath, input) {
     };
     const update = { decisions: [decision] };
     const plan = await planLedgerUpdate(repo, update);
+    assertNoLink(repo, target, 'La cible');
     const previous = existsSync(targetPath) ? readFileSync(targetPath) : null;
     if (resolve(source) !== resolve(targetPath)) {
         mkdirSync(dirname(targetPath), { recursive: true });
+        assertRealFolder(repo, dirname(target));
         copyFileSync(source, targetPath);
     }
     invariant(sha256File(targetPath) === sha, 'DESIGN_FILE', `Copie altérée : ${target}`);

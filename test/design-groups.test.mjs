@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture, git } from './helpers.mjs';
 import { apv, write, decision } from './cli-helpers.mjs';
-import { listMockups, loadDesignConfig, registerMockup, sha256File } from '../dist/design/registry.js';
+import { listMockups, loadDesignConfig, registerMockup, relocatedValue, sha256File } from '../dist/design/registry.js';
 
 const HTML = '<!doctype html><html lang="fr"><title>Maquette</title><body>Maquette</body></html>\n';
 const sha = text => createHash('sha256').update(text).digest('hex');
@@ -48,6 +48,9 @@ test('design.groups and design.defaultGroup: strict validation, normalized setti
     [{ groups: [{ dir: 'admin', match: ['*'], dossier: 'x' }] }, /unknown property dossier/],
     [{ defaultGroup: '..' }, /design\.defaultGroup ne contient pas « \.\. »/],
     [{ defaultGroup: 'a b' }, /design\.defaultGroup ne contient pas d'espace/],
+    [{ groups: [{ dir: 'brouillons', match: ['*'] }] }, /design\.groups\[0\]\.dir : « brouillons » est réservé aux brouillons/],
+    [{ groups: [{ dir: 'Brouillons/anciens', match: ['*'] }] }, /« brouillons » est réservé/],
+    [{ defaultGroup: 'brouillons/' }, /design\.defaultGroup : « brouillons » est réservé/],
   ];
   for (const [design, pattern] of invalid) {
     write(f.repo, '.apv/config.json', { design });
@@ -312,4 +315,153 @@ test('apv help lists organize and --group', async () => {
   const own = await apv(process.cwd(), ['help', 'design']);
   assert.match(own.stdout, /apv design organize \[--dry-run\]/);
   assert.match(own.stdout, /--group <dossier>/);
+});
+
+// Review of PR #101: symbolic links, files out of the mockup folder, structured mentions, rollback, ledger cases.
+
+test('register refuses to write through a symbolic link (group folder, design.dir, target) and a linked source', async t => {
+  const f = project(t, GROUPS);
+  const outside = join(f.root, 'dehors');
+  mkdirSync(outside);
+  mkdirSync(join(f.repo, 'docs/design'), { recursive: true });
+  symlinkSync(outside, join(f.repo, 'docs/design/admin'));
+  const group = await register(f.repo, 'brouillons/a.html', 'admin-roles');
+  assert.equal(group.code, 1);
+  assert.match(group.stderr, /DESIGN_LINK.*docs\/design\/admin\/admin-roles-validee\.html passe par un lien symbolique \(docs\/design\/admin\)/);
+  assert.deepEqual(readdirSync(outside), [], 'nothing written outside the repository');
+  assert.equal(ledger(f.repo).length, 1, 'ledger untouched');
+  // design.dir itself a link.
+  rmSync(join(f.repo, 'docs/design'), { recursive: true });
+  symlinkSync(outside, join(f.repo, 'docs/design'));
+  assert.match((await register(f.repo, 'brouillons/a.html', 'accueil')).stderr, /DESIGN_LINK.*\(docs\/design\)/);
+  assert.deepEqual(readdirSync(outside), []);
+  rmSync(join(f.repo, 'docs/design'));
+  // The target file itself a link (to a file outside).
+  writeFileSync(join(outside, 'cible.html'), 'dehors\n');
+  mkdirSync(join(f.repo, 'docs/design/produit'), { recursive: true });
+  symlinkSync(join(outside, 'cible.html'), join(f.repo, 'docs/design/produit/accueil-validee.html'));
+  assert.match((await register(f.repo, 'brouillons/a.html', 'accueil')).stderr, /DESIGN_LINK.*\(docs\/design\/produit\/accueil-validee\.html\)/);
+  assert.equal(readFileSync(join(outside, 'cible.html'), 'utf8'), 'dehors\n');
+  // A linked source.
+  symlinkSync(join(f.repo, 'brouillons/a.html'), join(f.repo, 'brouillons/lien.html'));
+  assert.match((await register(f.repo, 'brouillons/lien.html', 'console')).stderr, /DESIGN_LINK.*brouillons\/lien\.html est un lien symbolique/);
+  assert.equal(ledger(f.repo).length, 1);
+});
+
+test('a registered file reached through a link is read by its real path: outside the repository, it is absent', async t => {
+  const f = project(t);
+  assert.equal((await register(f.repo, 'brouillons/a.html', 'accueil')).code, 0);
+  commit(f.repo);
+  writeFileSync(join(f.root, 'copie.html'), HTML);
+  rmSync(join(f.repo, 'docs/design/accueil-validee.html'));
+  symlinkSync(join(f.root, 'copie.html'), join(f.repo, 'docs/design/accueil-validee.html'));
+  assert.equal(listMockups(f.repo)[0].state, 'missing', 'same content, but outside the repository');
+  assert.equal((await apv(f.repo, ['design', 'check'])).code, 1);
+});
+
+test('organize moves no file through a link, out of design.dir or that is not HTML', async t => {
+  const f = await grouped(t);
+  const outside = join(f.root, 'dehors');
+  mkdirSync(outside);
+  symlinkSync(outside, join(f.repo, 'docs/design/admin'));
+  const target = await apv(f.repo, ['design', 'organize', '--json']);
+  assert.equal(target.code, 1);
+  assert.deepEqual(target.json().blocked.map(b => [b.decisionId, b.reason]),
+    [['maquette-admin-roles-validee', 'la cible passe par un lien symbolique (docs/design/admin) : refusé, elle pourrait sortir du dépôt']]);
+  assert.deepEqual(readdirSync(outside), []);
+  assert.ok(existsSync(join(f.repo, 'docs/design/accueil-validee.html')), 'all or nothing');
+  rmSync(join(f.repo, 'docs/design/admin'));
+  // A source that is a link inside the repository (same content): refused too.
+  rmSync(join(f.repo, 'docs/design/accueil-validee.html'));
+  symlinkSync(join(f.repo, 'brouillons/b.html'), join(f.repo, 'docs/design/accueil-validee.html'));
+  assert.equal(listMockups(f.repo)[1].state, 'ok');
+  const source = await apv(f.repo, ['design', 'organize', '--json']);
+  assert.deepEqual(source.json().blocked.map(b => b.reason), ['le fichier passe par un lien symbolique (docs/design/accueil-validee.html) : refusé']);
+  assert.ok(existsSync(join(f.repo, 'docs/design/admin-roles-validee.html')));
+
+  // Decisions that name a file out of the mockup folder, or not HTML: never moved.
+  const g = project(t, GROUPS, { 'docs/design/notes.txt': 'notes\n' });
+  const description = readFileSync(join(g.repo, '.git/description'));
+  const forged = (name, file, content) => decision(`maquette-${name}-validee`, { value: `La maquette : fichier ${file}, sha256 ${sha(content)}.` });
+  write(g.repo, '.apv/DECISIONS.json', { schemaVersion: 1, decisions: [forged('git', '.git/description', description), forged('notes', 'docs/design/notes.txt', 'notes\n')] });
+  commit(g.repo, 'forged');
+  const out = await apv(g.repo, ['design', 'organize', '--json']);
+  assert.equal(out.code, 1);
+  assert.deepEqual(out.json().blocked.map(b => b.reason), [
+    'fichier hors de docs/design/ : organize ne range que le dossier des maquettes (apv design register la verse dans son groupe)',
+    'pas un fichier HTML (.html ou .htm) : organize ne le déplace pas']);
+  assert.ok(existsSync(join(g.repo, '.git/description')) && existsSync(join(g.repo, 'docs/design/notes.txt')));
+  assert.deepEqual(changes(g.repo), []);
+});
+
+test('structured mentions are read only right after the file and fingerprint; register refuses them in a title or a screen', async t => {
+  const f = project(t, GROUPS);
+  for (const title of ['Accueil. Groupe : admin.', 'Écrans : a.', 'Artefact : https://x', `fichier x.html, sha256 ${sha(HTML)}`]) {
+    const out = await register(f.repo, 'brouillons/a.html', 'accueil', '--title', title);
+    assert.equal(out.code, 1, title);
+    assert.match(out.stderr, /DESIGN_TITLE/);
+  }
+  assert.match((await register(f.repo, 'brouillons/a.html', 'accueil', '--screens', 'Groupe : admin')).stderr, /DESIGN_SCREENS/);
+  assert.equal(ledger(f.repo).length, 1);
+  const file = 'docs/design/produit/accueil-validee.html';
+  const value = `La maquette « Groupe : admin. Écrans : faux. », validée : fichier ${file}, sha256 ${sha(HTML)}. Écrans : accueil, menu. Groupe : produit. Artefact : https://claude.ai/artifact/x`;
+  const g = project(t, GROUPS, { [file]: HTML });
+  write(g.repo, '.apv/DECISIONS.json', { schemaVersion: 1, decisions: [decision('maquette-accueil-validee', { value })] });
+  const [m] = listMockups(g.repo);
+  assert.deepEqual([m.file, m.recordedGroup, m.screens, m.artifact, m.state], [file, 'produit', ['accueil', 'menu'], 'https://claude.ai/artifact/x', 'ok']);
+  const forged = decision('maquette-accueil-validee', { value: `La maquette « Groupe : admin. », validée : fichier ${file}, sha256 ${sha(HTML)}.` });
+  write(g.repo, '.apv/DECISIONS.json', { schemaVersion: 1, decisions: [forged] });
+  assert.equal(listMockups(g.repo)[0].recordedGroup, null, 'a group in the title is not a recorded group');
+  // The path is replaced at its place, never where another copy of the same text appears first.
+  const twice = `Voir docs/a.html. La maquette : fichier docs/a.html, sha256 ${sha(HTML)}.`;
+  assert.equal(relocatedValue(twice, 'docs/a.html', 'docs/b/a.html'), `Voir docs/a.html. La maquette : fichier docs/b/a.html, sha256 ${sha(HTML)}.`);
+});
+
+test('organize puts back the moves, the folders it created and the ledger when it fails on the way', async t => {
+  const f = await grouped(t);
+  const before = readFileSync(join(f.repo, '.apv/DECISIONS.json'), 'utf8');
+  const beforeMd = readFileSync(join(f.repo, '.apv/DECISIONS.md'), 'utf8');
+  // A file where the folder of the second group should be: the first move is done, the second fails.
+  writeFileSync(join(f.repo, 'docs/design/produit'), 'occupé\n');
+  const out = await apv(f.repo, ['design', 'organize']);
+  assert.equal(out.code, 1);
+  assert.match(out.stderr, /DESIGN_ORGANIZE.*Rangement interrompu \(.*\) : tous les déplacements ont été annulés ; registre remis comme avant\./);
+  assert.ok(existsSync(join(f.repo, 'docs/design/admin-roles-validee.html')) && existsSync(join(f.repo, 'docs/design/accueil-validee.html')));
+  assert.ok(!existsSync(join(f.repo, 'docs/design/admin')), 'the folder it created is removed');
+  assert.equal(readFileSync(join(f.repo, '.apv/DECISIONS.json'), 'utf8'), before);
+  assert.equal(readFileSync(join(f.repo, '.apv/DECISIONS.md'), 'utf8'), beforeMd);
+  assert.deepEqual(changes(f.repo), ['docs/design/produit']);
+  assert.deepEqual(git(f.repo, 'diff', '--cached', '--name-only'), '', 'nothing left staged');
+});
+
+test('organize: a legacy decision is listed, never moved; an old path cited elsewhere in the ledger is reported', async t => {
+  const f = await grouped(t);
+  const legacy = decision('maquette-appli-validee', { value: 'La maquette validée, versée dans docs/design/appli.html, est la référence.' });
+  const citing = decision('D-2', { value: 'Les écrans admin suivent docs/design/admin-roles-validee.html.' });
+  write(f.repo, '.apv/DECISIONS.json', { schemaVersion: 1, decisions: [...ledger(f.repo), legacy, citing] });
+  commit(f.repo, 'registre');
+  const out = await apv(f.repo, ['design', 'organize', '--json']);
+  assert.equal(out.code, 0, out.stderr);
+  assert.deepEqual(out.json().legacy, ['maquette-appli-validee']);
+  assert.deepEqual(out.json().references, [{ path: 'docs/design/admin-roles-validee.html', files: ['docs/notes.md', '.apv/DECISIONS.json', '.apv/DECISIONS.md'] }]);
+  const after = ledger(f.repo);
+  assert.equal(after.find(d => d.id === 'D-2').value, citing.value, 'another decision is never rewritten');
+  assert.equal(after.find(d => d.id === 'maquette-appli-validee').value, legacy.value);
+  assert.match((await apv(f.repo, ['design', 'organize'])).stdout, /Non rangeable \(décision sans fichier ni empreinte\) : maquette-appli-validee/);
+});
+
+test('organize rewrites a V2 ledger at its place (.agent-pipeline/)', async t => {
+  const f = fixture(t, { files: { '.agent-pipeline/DECISIONS.json': `${JSON.stringify({ schemaVersion: 1, decisions: [decision('D-1')] })}\n`, 'brouillons/a.html': HTML } });
+  assert.equal((await register(f.repo, 'brouillons/a.html', 'admin-roles')).code, 0);
+  commit(f.repo, 'maquette');
+  write(f.repo, '.apv/config.json', { name: 'demo', design: GROUPS });
+  commit(f.repo, 'groupes');
+  const out = await apv(f.repo, ['design', 'organize', '--json']);
+  assert.equal(out.code, 0, out.stderr);
+  assert.deepEqual([out.json().ledgerFile, out.json().ledgerMarkdown], ['.agent-pipeline/DECISIONS.json', '.agent-pipeline/DECISIONS.md']);
+  assert.ok(!existsSync(join(f.repo, '.apv/DECISIONS.json')));
+  const v2 = JSON.parse(readFileSync(join(f.repo, '.agent-pipeline/DECISIONS.json'), 'utf8')).decisions;
+  assert.ok(v2.find(d => d.id === 'maquette-admin-roles-validee').value.includes('fichier docs/design/admin/admin-roles-validee.html, sha256'));
+  assert.match(readFileSync(join(f.repo, '.agent-pipeline/DECISIONS.md'), 'utf8'), /docs\/design\/admin\/admin-roles-validee\.html/);
+  assert.equal(listMockups(f.repo)[0].state, 'ok');
 });
