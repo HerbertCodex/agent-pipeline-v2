@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { IDENTITY_HINT } from '../run/commit-state.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { errorMessage } from '../domain/errors.js';
-import { anomalies, parsePullRequest, VIEW_FIELDS, type GhCall, type GhRunner, type PullRequest } from './github.js';
+import { anomalies, parsePullRequest, VIEW_FIELDS, type GhCall, type GhRunner, type MergedHead, type PullRequest } from './github.js';
 
 /**
  * Batch merge (docs/APV3-SPEC.md, section 18.5): several independent pull requests, each proven at the task level,
@@ -99,6 +99,8 @@ export interface BatchReport {
   /** The batch whose proof allows the merge, or null. */
   proven: Lot | null;
   merged: number[];
+  /** Each pull request whose merge was seen, with the head it was merged at (the branch cleanup works from it). */
+  mergedHeads: MergedHead[];
   stopped: { pr: number | null; reasons: string[] } | null;
   finalTree: { target: string; lot: string; identical: boolean } | null;
   /** True when a signal stopped the batch (exit 128 + signal). */
@@ -189,7 +191,7 @@ async function removeLot(options: BatchOptions, lot: Lot): Promise<void> {
  * proven and asked, merges its pull requests in order, each checked by content before and after its merge.
  */
 export async function batchMerge(options: BatchOptions): Promise<BatchReport> {
-  const report: BatchReport = { target: null, base: null, prs: [], lots: [], culprits: [], interaction: false, proven: null, merged: [], stopped: null, finalTree: null,
+  const report: BatchReport = { target: null, base: null, prs: [], lots: [], culprits: [], interaction: false, proven: null, merged: [], mergedHeads: [], stopped: null, finalTree: null,
     interrupted: false, left: [] };
   try { return await batchSteps(options, report); }
   catch (error) {
@@ -371,6 +373,7 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     if (!after.pr) return stop(member.number, [after.error!]);
     if (after.pr.state !== 'MERGED') return stop(member.number, [`fusion de la PR #${member.number} non constatée : état ${after.pr.state || 'inconnu'} (gh pr merge : ${merge.error ?? `code ${merge.status}`})`]);
     report.merged.push(member.number);
+    report.mergedHeads.push({ pr: member.number, branch: pr.headRefName, head: member.head, crossRepository: pr.crossRepository, url: pr.url });
     let landed: { sha: string; tree: string };
     try { landed = await targetHead(options, target); } catch (error) { return stop(member.number, [`cible ${target} illisible après la fusion : ${errorMessage(error)}`]); }
     const same = landed.tree === member.tree;

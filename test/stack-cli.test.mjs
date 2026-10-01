@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { apv } from './cli-helpers.mjs';
 import { REASONS } from '../hooks/scripts/bash-guard.mjs';
 import { MERGE_REFUSED, anomalies, compareArgs, parseFreshness, readChecks } from '../dist/stack/github.js';
+import { cleanMergedBranches, remoteRepository } from '../dist/stack/branches.js';
 
 const fakeGh = fileURLToPath(new URL('./support/fake-gh.mjs', import.meta.url));
 chmodSync(fakeGh, 0o755);
@@ -18,25 +19,29 @@ const pr = (number, base, head, extra = {}) => ({
 });
 
 /** A stack of three pull requests: #11 on main, #12 on #11, #13 on #12. */
-function stack(t, overrides = {}, behavior = {}) {
+function stack(t, overrides = {}, behavior = {}, extra = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'apv3-stack-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const prs = { 11: pr(11, 'main', 'spec/1'), 12: pr(12, 'spec/1', 'spec/2'), 13: pr(13, 'spec/2', 'spec/3') };
   for (const [n, fields] of Object.entries(overrides)) Object.assign(prs[n], fields);
   const file = join(dir, 'gh.json');
-  writeFileSync(file, JSON.stringify({ prs, behavior, calls: [] }));
+  writeFileSync(file, JSON.stringify({ prs, behavior, calls: [], ...extra }));
   const env = { APV_GH: fakeGh, FAKE_GH_STATE: file, APV_STACK_POLL_MS: '5', APV_STACK_POLL_ATTEMPTS: '3', APV_ALLOW_MERGE: '' };
   return {
     dir, env,
     run: (args, extra = {}) => apv(dir, ['stack', ...args], { ...env, ...extra }),
     state: () => JSON.parse(readFileSync(file, 'utf8')),
-    // Calls that change something: neither the reads of a pull request nor the compare reads of the REST API.
-    writes: () => JSON.parse(readFileSync(file, 'utf8')).calls.filter(c => c[1] !== 'view' && !isCompare(c)).map(c => c.join(' ')),
+    // Calls that change something: neither the reads of a pull request nor the reads of the REST API (compare, branches, pulls).
+    writes: () => JSON.parse(readFileSync(file, 'utf8')).calls.filter(c => c[1] !== 'view' && !isRead(c)).map(c => c.join(' ')),
+    branches: () => JSON.parse(readFileSync(file, 'utf8')).branches ?? {},
     compares: () => JSON.parse(readFileSync(file, 'utf8')).calls.filter(isCompare).map(c => c.find(a => a.includes('/compare/')).replace(/^.*\/compare\//, '')),
   };
 }
 const allow = { APV_ALLOW_MERGE: '1' };
 const isCompare = c => c[0] === 'api' && c.some(a => /^repos\/[^/]+\/[^/]+\/compare\//.test(a));
+/** A read of the REST API: `gh api` without `-X`, or with `-X GET`. */
+const isRead = c => c[0] === 'api' && (!c.includes('-X') || c[c.indexOf('-X') + 1] === 'GET');
+const del = branch => `api -X DELETE repos/o/r/git/refs/heads/${branch}`;
 const sha = n => `${String(n).repeat(40)}`.slice(0, 40);
 /** GitHub's answer once the previous PR of a merge-method stack is merged: one merge commit, no file changed. */
 const mergeCommitOnly = { ahead_by: 1, files: [], merges: 1 };
@@ -73,7 +78,7 @@ test('apv stack plan accepts a coherent stack and changes nothing', async t => {
   assert.deepEqual(j.json().prs.map(p => p.freshness.state), ['up_to_date', 'up_to_date', 'up_to_date']);
   // Each PR against its own base: the previous PR of the stack, the target for the first.
   assert.deepEqual(s.compares().slice(-3), [`${sha(11)}...main`, `${sha(12)}...spec/1`, `${sha(13)}...spec/2`]);
-  assert.equal(j.json().calls[0].args.join(' '), 'pr view 11 --json number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,url');
+  assert.equal(j.json().calls[0].args.join(' '), 'pr view 11 --json number,state,isDraft,baseRefName,headRefName,headRefOid,isCrossRepository,mergeable,mergeStateStatus,statusCheckRollup,url');
 });
 
 test('apv stack plan lists every anomaly of the stack', async t => {
@@ -111,7 +116,12 @@ test('apv stack merge merges in order, retargets and verifies each base, and pri
     `pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`,
     'api -X PATCH repos/o/r/pulls/12 -f base=main', `pr merge 12 --merge --match-head-commit ${'12'.repeat(20)}`,
     'api -X PATCH repos/o/r/pulls/13 -f base=main', `pr merge 13 --merge --match-head-commit ${'13'.repeat(20)}`,
+    // Then the merged branches, each next PR already retargeted.
+    del('spec/1'), del('spec/2'), del('spec/3'),
   ]);
+  assert.deepEqual(s.branches(), { 'spec/1': null, 'spec/2': null, 'spec/3': null });
+  assert.match(r.stdout, /Branche spec\/1 \(PR #11\) : supprimée, tête 111111111111 \(à recréer au besoin : git push origin 1{40}:refs\/heads\/spec\/1\)\./);
+  assert.match(r.stdout, /Réglage du dépôt o\/r : delete_branch_on_merge est faux\. .*gh api -X PATCH repos\/o\/r -F delete_branch_on_merge=true \(commande non lancée\)\./);
   const prs = s.state().prs;
   assert.deepEqual(Object.values(prs).map(p => [p.state, p.baseRefName]), [['MERGED', 'main'], ['MERGED', 'main'], ['MERGED', 'main']]);
   assert.match(r.stdout, /\$ .*fake-gh\.mjs api -X PATCH repos\/o\/r\/pulls\/12 -f base=main\n\{"number":12,"state":"open","base":\{"ref":"main"\}.*\n\(code de sortie 0\)/);
@@ -140,6 +150,8 @@ test('a retarget that does not take effect stops the stack, whatever its exit co
   assert.equal(r.code, 1);
   assert.match(r.stdout, /ARRÊT à la PR #12 :\n- re-ciblage de la PR #12 non effectif : elle vise spec\/1 au lieu de main \(gh api : code 0\)/);
   assert.match(r.stdout, /Non fusionnées : #12, #13\. Rien d'autre n'a été fusionné/);
+  // #12 still targets spec/1: deleting it would close #12.
+  assert.match(r.stdout, /Branche spec\/1 \(PR #11\) : gardée, base de la PR #12, encore ouverte\./);
   assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main']);
   assert.deepEqual(Object.values(s.state().prs).map(p => p.state), ['MERGED', 'OPEN', 'OPEN']);
 });
@@ -187,7 +199,8 @@ test('merge re-checks each pull request just before merging it and stops at the 
   const r = await s.run(['merge', '11', '12', '13'], allow);
   assert.equal(r.code, 1);
   assert.match(r.stdout, /ARRÊT à la PR #12 :\n- PR #12 : contrôle\(s\) en échec : ci/);
-  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main']);
+  // #12 was retargeted onto main before the stop: the branch of #11 is no one's base any more.
+  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${'1'.repeat(40)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main', del('spec/1')]);
   // An incoherent stack is refused before any merge.
   const bad = stack(t, { 13: { baseRefName: 'main' } });
   const b = await bad.run(['merge', '11', '12', '13'], allow);
@@ -326,7 +339,7 @@ test('freshness in a stack: each PR against its base, and again against the targ
   assert.equal(r.code, 1);
   assert.match(r.stdout, /ARRÊT à la PR #12 :\n- PR #12 n'est pas à jour de sa base main : 2 commit\(s\) de main absent\(s\) de la tête 121212121212/);
   assert.match(r.stdout, /Non fusionnées : #12\./);
-  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${sha(11)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main']);
+  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${sha(11)}`, 'api -X PATCH repos/o/r/pulls/12 -f base=main', del('spec/1')]);
   assert.deepEqual(Object.values(s.state().prs).slice(0, 2).map(p => p.state), ['MERGED', 'OPEN']);
   assert.deepEqual(s.compares().slice(-1), [`${sha(12)}...main`]);
 
@@ -352,4 +365,138 @@ test('freshness: same content only on the full evidence, and the compare call re
   assert.deepEqual(args.slice(0, 2), ['api', `repos/o/r/compare/${'a'.repeat(40)}...feat/x%20y`]);
   assert.equal(args[2], '--jq');
   assert.deepEqual(compareArgs({ ...where, host: 'ghe.example.com' }, 'b', 'main').slice(0, 3), ['api', '--hostname', 'ghe.example.com']);
+});
+
+// Pilot project, 1 October 2026: the merges left their branches behind (54 merged branches on a repository without
+// GitHub's « delete branch after merge »). After its merges, the stack deletes them, unless a rule keeps one.
+
+/** #11 alone (its branch spec/1 is nobody's base: #12 targets main). */
+const single = (t, overrides = {}, behavior = {}, extra = {}) => stack(t, { 12: { baseRefName: 'main' }, ...overrides }, behavior, extra);
+const line = (r, branch) => r.stdout.split('\n').find(l => l.includes(`ranche ${branch} (PR #`));
+
+test('merged branches: deleted through the REST API after the merge, the absence read again, one line each', async t => {
+  const s = single(t);
+  const r = await s.run(['merge', '11'], allow);
+  assert.equal(r.code, 0, r.stdout);
+  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${sha(11)}`, del('spec/1')]);
+  assert.deepEqual(s.branches(), { 'spec/1': null });
+  const calls = s.state().calls.map(c => c.join(' '));
+  const after = calls.slice(calls.indexOf(`pr merge 11 --merge --match-head-commit ${sha(11)}`));
+  assert.deepEqual(after.filter(c => c.startsWith('api')), [
+    'api repos/o/r --jq {default_branch, delete_branch_on_merge}',
+    'api repos/o/r/branches/spec/1 --jq {sha: .commit.sha, protected}',
+    'api -X GET repos/o/r/pulls -f state=open -f base=spec/1 -f per_page=100 --jq [.[].number]',
+    'api -X GET repos/o/r/pulls -f state=open -f head=o:spec/1 -f per_page=100 --jq [.[].number]',
+    del('spec/1'),
+    'api repos/o/r/branches/spec/1 --jq {sha: .commit.sha, protected}',
+  ]);
+  assert.match(r.stdout, /Pile fusionnée dans main\.\nBranche spec\/1 \(PR #11\) : supprimée, tête 111111111111/);
+  const j = await single(t).run(['merge', '11', '--json'], allow);
+  assert.deepEqual(j.json().cleanup.branches, [{ pr: 11, branch: 'spec/1', head: sha(11), status: 'deleted', reason: 'supprimée' }]);
+  assert.deepEqual(j.json().cleanup.repositories, [{ host: 'github.com', repo: 'o/r', defaultBranch: 'main', deleteBranchOnMerge: false, error: null }]);
+  assert.match(j.stderr, /api -X DELETE repos\/o\/r\/git\/refs\/heads\/spec\/1\n\(code de sortie 0\)/, 'every call shown, on stderr in JSON mode');
+});
+
+test('merged branches: --keep-branches, a fork, an unknown origin, the default branch, a protected branch, a moved head, an open PR keep it', async t => {
+  const keep = single(t);
+  const k = await keep.run(['merge', '11', '--keep-branches'], allow);
+  assert.equal(k.code, 0, k.stdout);
+  assert.equal(line(k, 'spec/1'), 'Branche spec/1 (PR #11) : gardée, --keep-branches.');
+  assert.ok(!keep.state().calls.some(c => c[0] === 'api' && !isCompare(c)), 'no call at all');
+  const cases = [
+    [{ 11: { isCrossRepository: true } }, {}, { branches: { 'spec/1': { sha: sha(11) } } }, 'gardée, PR venue d\'un fork : la branche appartient à un autre dépôt.'],
+    [{ 11: { isCrossRepository: null } }, {}, {}, 'gardée, origine de la branche inconnue (isCrossRepository non lu) : peut-être un fork.'],
+    [{}, {}, { repo: { default_branch: 'spec/1' } }, 'gardée, branche par défaut du dépôt.'],
+    [{}, { protected: ['spec/1'] }, {}, 'gardée, branche protégée.'],
+    // Someone pushed on the branch after the merge: its new commits are never deleted.
+    [{}, {}, { branches: { 'spec/1': { sha: 'c'.repeat(40) } } }, `gardée, tête déplacée depuis la fusion (${'c'.repeat(12)} au lieu de ${sha(11).slice(0, 12)}).`],
+    // Another open PR from the same branch: deleting it would close that PR.
+    [{ 14: pr(14, 'release', 'spec/1') }, {}, {}, 'gardée, tête de la PR #14, encore ouverte.'],
+    [{ 14: pr(14, 'spec/1', 'spec/9'), 15: pr(15, 'spec/1', 'spec/8') }, {}, {}, 'gardée, base de la PR #14, la PR #15, encore ouvertes.'],
+  ];
+  for (const [overrides, behavior, extra, expected] of cases) {
+    const s = stack(t, { 12: { baseRefName: 'main' } }, behavior, extra);
+    const state = s.state();
+    for (const [n, fields] of Object.entries(overrides)) state.prs[n] = { ...state.prs[n], ...fields };
+    writeFileSync(s.env.FAKE_GH_STATE, JSON.stringify(state));
+    const r = await s.run(['merge', '11'], allow);
+    assert.equal(r.code, 0, `${expected}\n${r.stdout}`);
+    assert.equal(line(r, 'spec/1'), `Branche spec/1 (PR #11) : ${expected}`);
+    assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${sha(11)}`], expected);
+  }
+});
+
+test('merged branches: already deleted by GitHub (delete_branch_on_merge) is noted, no deletion, no advice', async t => {
+  const s = single(t, {}, {}, { repo: { delete_branch_on_merge: true } });
+  const r = await s.run(['merge', '11'], allow);
+  assert.equal(r.code, 0, r.stdout);
+  assert.equal(line(r, 'spec/1'), 'Branche spec/1 (PR #11) : déjà supprimée (par GitHub, delete_branch_on_merge).');
+  assert.deepEqual(s.writes(), [`pr merge 11 --merge --match-head-commit ${sha(11)}`]);
+  assert.doesNotMatch(r.stdout, /Réglage du dépôt/);
+  const j = await single(t, {}, {}, { repo: { delete_branch_on_merge: true } }).run(['merge', '11', '--json'], allow);
+  assert.equal(j.code, 0);
+  assert.deepEqual(j.json().cleanup.branches.map(b => b.status), ['absent']);
+});
+
+test('merged branches: a failed deletion is a warning, never a failed merge', async t => {
+  const cases = [
+    [{ deleteFail: ['spec/1'] }, /AVERTISSEMENT : branche spec\/1 \(PR #11\) non supprimée : suppression non constatée : la branche existe encore \(gh api -X DELETE : code 1\) ; la fusion reste acquise\./],
+    [{ deleteIgnored: ['spec/1'] }, /AVERTISSEMENT : branche spec\/1 \(PR #11\) non supprimée : suppression non constatée : la branche existe encore \(gh api -X DELETE : code 0\)/],
+    [{ repoFail: true }, /AVERTISSEMENT : branche spec\/1 \(PR #11\) non supprimée : réglages du dépôt illisibles \(gh api repos\/o\/r : code 1\) : branche par défaut inconnue/],
+    [{ branchReadFail: ['spec/1'] }, /AVERTISSEMENT : branche spec\/1 \(PR #11\) non supprimée : lecture de la branche impossible/],
+    [{ pullsFail: true }, /AVERTISSEMENT : branche spec\/1 \(PR #11\) non supprimée : PR ouvertes illisibles/],
+  ];
+  for (const [behavior, expected] of cases) {
+    const s = single(t, {}, behavior);
+    const r = await s.run(['merge', '11'], allow);
+    assert.equal(r.code, 0, r.stdout);
+    assert.match(r.stdout, /Pile fusionnée dans main\./);
+    assert.match(r.stdout, expected);
+    assert.equal(s.state().prs[11].state, 'MERGED');
+  }
+  const j = await single(t, {}, { deleteFail: ['spec/1'] }).run(['merge', '11', '--json'], allow);
+  assert.equal(j.code, 0);
+  assert.deepEqual(j.json().cleanup.branches.map(b => b.status), ['failed']);
+  assert.match(j.stderr, /Resource not accessible by integration \(HTTP 403\)/);
+});
+
+test('merged branches: nothing merged, nothing deleted; --keep-branches only where something merges', async t => {
+  const s = stack(t, { 11: { statusCheckRollup: [{ __typename: 'CheckRun', name: 'ci', status: 'COMPLETED', conclusion: 'FAILURE' }] } });
+  const r = await s.run(['merge', '11', '12'], allow);
+  assert.equal(r.code, 1);
+  assert.deepEqual(s.writes(), []);
+  assert.ok(!s.state().calls.some(c => c[0] === 'api' && !isCompare(c)));
+  assert.doesNotMatch(r.stdout, /Branche /);
+  assert.equal((await s.run(['plan', '11', '--keep-branches'])).code, 2);
+  assert.match((await s.run(['--help'])).stdout, /--keep-branches/);
+});
+
+test('branch cleanup: the target is never deleted, and the REST paths escape the branch name', async () => {
+  const calls = [];
+  const answers = { 'repos/o/r': '{"default_branch":"main","delete_branch_on_merge":false}' };
+  const run = async args => {
+    calls.push(args);
+    const path = args.find(a => a.startsWith('repos/'));
+    if (path in answers) return { args, status: 0, stdout: answers[path], stderr: '', error: null };
+    if (path.includes('/branches/')) return { args, status: 1, stdout: '', stderr: 'gh: Branch not found (HTTP 404)\n', error: null };
+    return { args, status: 0, stdout: '[]', stderr: '', error: null };
+  };
+  const head = { pr: 5, head: 'a'.repeat(40), crossRepository: false, url: 'https://github.com/o/r/pull/5' };
+  const kept = await cleanMergedBranches([{ ...head, branch: 'develop' }], { run, target: 'develop', keep: null });
+  assert.deepEqual(kept.branches.map(b => [b.status, b.reason]), [['kept', 'branche cible']]);
+  assert.equal(calls.length, 0);
+  const odd = await cleanMergedBranches([{ ...head, branch: 'feat/a b#c' }], { run, target: 'main', keep: null });
+  assert.deepEqual(odd.branches.map(b => b.status), ['absent']);
+  assert.ok(calls.some(c => c.includes('repos/o/r/branches/feat/a%20b%23c')));
+  const enterprise = await cleanMergedBranches([{ ...head, branch: 'x', url: 'https://ghe.example.com/o/r/pull/5' }], { run, target: 'main', keep: null });
+  assert.deepEqual(enterprise.repositories.map(r => r.host), ['ghe.example.com']);
+  assert.deepEqual(calls.at(-1).slice(0, 3), ['api', '--hostname', 'ghe.example.com']);
+});
+
+test('remote addresses of GitHub repositories', () => {
+  for (const url of ['https://github.com/o/r.git', 'https://github.com/o/r', 'git@github.com:o/r.git', 'ssh://git@github.com/o/r.git', 'https://user@github.com/o/r/']) {
+    assert.deepEqual(remoteRepository(url), { host: 'github.com', repo: 'repos/o/r' }, url);
+  }
+  assert.deepEqual(remoteRepository('git@ghe.example.com:team/app.git'), { host: 'ghe.example.com', repo: 'repos/team/app' });
+  for (const url of ['/srv/git/r.git', 'file:///srv/r.git', '../origin.git', 'https://github.com/o/../x', 'https://github.com/o']) assert.equal(remoteRepository(url), null, url);
 });

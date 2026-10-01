@@ -65,6 +65,7 @@ function batchProject(t, behavior = {}) {
     root, origin, repo, env,
     run: (args, extra = {}) => apv(repo, ['stack', 'batch', ...args], { ...env, ...extra }),
     main: () => git(origin, 'rev-parse', 'refs/heads/main'),
+    has: branch => { try { git(origin, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`); return true; } catch { return false; } },
     tree: ref => git(origin, 'rev-parse', `${ref}^{tree}`),
     merges: () => JSON.parse(readFileSync(file, 'utf8')).calls.filter(c => c[1] === 'merge').map(c => Number(c[2])),
     log: () => existsSync(join(repo, '.apv/state/stack.log')) ? readFileSync(join(repo, '.apv/state/stack.log'), 'utf8').trim().split('\n').map(l => JSON.parse(l)) : [],
@@ -114,6 +115,18 @@ test('batch --merge merges in order, tolerates the gap of each head, and ends on
   assert.equal(report.finalTree.identical, true);
   assert.equal(p.tree(p.main()), git(p.repo, 'rev-parse', `${report.proven.head}^{tree}`));
   assert.deepEqual(p.log().map(e => [e.event, e.pr, e.sameContent]), [['batch-merge', 11, true], ['batch-merge', 12, true]]);
+  // Then their branches are deleted on the remote, the others stay.
+  assert.deepEqual(report.cleanup.branches.map(b => [b.pr, b.branch, b.status]), [[11, 'pr-a', 'deleted'], [12, 'pr-b', 'deleted']]);
+  assert.deepEqual(['pr-a', 'pr-b', 'pr-bad', 'main'].map(b => p.has(b)), [false, false, true, true]);
+});
+
+test('batch --merge --keep-branches keeps the merged branches; --keep-branches goes with --merge', async t => {
+  const p = batchProject(t);
+  const r = await p.run(['11', '12', '--merge', '--keep-branches'], allow);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /Branche pr-a \(PR #11\) : gardée, --keep-branches\.\nBranche pr-b \(PR #12\) : gardée, --keep-branches\.\nLot fusionné\./);
+  assert.deepEqual(['pr-a', 'pr-b'].map(b => p.has(b)), [true, true]);
+  assert.equal((await p.run(['11', '12', '--keep-branches'])).code, 2);
 });
 
 test('a failed batch is not merged; --bisect isolates the faulty pull request, proves the rest and merges it', async t => {

@@ -52,6 +52,7 @@ Si le message courant de l'opérateur contient l'ordre de fusionner ces PR (voir
 - La variable se pose devant **cette seule commande**, jamais par `export`, jamais dans une autre commande. Le hook du plugin bloque la fusion sans elle (code 2 avec son message) : ne cherche pas à le contourner, et n'utilise jamais `gh pr merge` à la place de l'outil.
 - L'outil revérifie chaque PR **juste avant** de la fusionner (base à jour comprise, contre la cible telle qu'elle est à cet instant), re-cible la suivante sur la base finale quand la précédente est fusionnée (par l'API REST, `gh api -X PATCH repos/<propriétaire>/<dépôt>/pulls/<n> -f base=<cible>`, et non `gh pr edit`, qui échoue sur les projets classiques abandonnés), vérifie le résultat par une relecture (jamais par le seul code de sortie), affiche la sortie complète de chaque appel `gh`, et s'arrête à la première anomalie avec un rapport.
 - Avec `--method squash` ou `rebase`, la PR suivante d'une pile est toujours en retard après la fusion de la précédente : l'outil s'arrête sur elle, tu la mets à jour (section 2 bis) et relances la fusion à partir d'elle. Avec `--method merge` (défaut), une pile dont chaque PR est à jour de la précédente passe d'un trait, sauf si autre chose arrive sur la cible entre-temps.
+- Après les fusions, l'outil supprime la branche de chaque PR fusionnée, sauf règle qui la garde (fork, branche cible ou par défaut, branche protégée, base ou tête d'une PR encore ouverte, tête qui a bougé depuis la fusion), et le dit branche par branche ; un échec de suppression est un avertissement, la fusion reste acquise. Si l'opérateur veut garder les branches, ajoute `--keep-branches`. Si le rapport dit que `delete_branch_on_merge` est faux, transmets-lui la commande donnée : c'est à lui de changer ce réglage du dépôt.
 - **Lis toute la sortie**, ligne par ligne, jamais filtrée, jamais redirigée vers `/dev/null` ni tronquée (incident 30 : des re-ciblages ont échoué en silence et les PR ont été fusionnées dans la mauvaise base).
 
 ## 5. Vérifier et rendre compte
@@ -62,6 +63,6 @@ Si le message courant de l'opérateur contient l'ordre de fusionner ces PR (voir
    - PR où l'outil s'est arrêté, avec l'extrait de sortie qui montre l'anomalie ;
    - PR restantes et leur base actuelle ;
    - ce que tu recommandes, en attendant son ordre.
-4. Tout s'est bien passé : liste des PR fusionnées dans l'ordre avec leur commit de fusion, cible finale, et rappel des étapes qui restent à l'opérateur (déploiement, suppression des branches distantes : jamais sans son ordre).
+4. Tout s'est bien passé : liste des PR fusionnées dans l'ordre avec leur commit de fusion, cible finale, branches supprimées ou gardées (avec la raison, d'après le rapport de l'outil), et rappel des étapes qui restent à l'opérateur (déploiement ; aucune autre suppression de branche distante sans son ordre).
 
 Note l'opération au journal du pipeline (`.apv/journal-pipeline.md`). Réponds dans la langue de l'opérateur, en phrases courtes, sans tiret cadratin ni demi-cadratin.

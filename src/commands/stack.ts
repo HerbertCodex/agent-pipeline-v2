@@ -7,6 +7,7 @@ import { MAX_OVERRIDE_REASON } from '../run/state.js';
 import { cleanLine } from '../run/summary.js';
 import { MERGE_REFUSED, mergeStack, planStack, processGh, type Derogation, type Freshness, type GhCall, type StackOptions, type StackPlan } from '../stack/github.js';
 import { batchMerge, processGit, type BatchReport, type Proof } from '../stack/batch.js';
+import { cleanMergedBranches, cleanupLines, type BranchCleanup } from '../stack/branches.js';
 import { loadConfigAtCommit, type ApvConfig } from '../config/load.js';
 import { hash } from '../domain/hash.js';
 import { runGates } from '../gates/run.js';
@@ -24,9 +25,10 @@ import type { CommandIO } from './io.js';
 export const usage = `Utilisation :
   apv stack plan <pr...> [--target <branche>] [--ready] [--allow-behind --reason <texte>] [--json]
   APV_ALLOW_MERGE=1 apv stack merge <pr...> [--method merge|squash|rebase] [--target <branche>] [--ready]
-                                   [--allow-behind --reason <texte>] [--json]
+                                   [--allow-behind --reason <texte>] [--keep-branches] [--json]
   apv stack batch <pr...> [--target <branche>] [--dir <dossier>] [--bisect] [--keep] [--json]
   APV_ALLOW_MERGE=1 apv stack batch <pr...> --merge [--ready] [--target <branche>] [--dir <dossier>] [--bisect]
+                                   [--keep-branches]
 
 Pile de PR, de la base vers le sommet (numéros de PR dans l'ordre de fusion).
 plan   lit chaque PR (gh pr view) et vérifie la pile : chaque PR ouverte, la base de la PR n+1 est la
@@ -63,6 +65,15 @@ batch  fusion par lot de PR indépendantes, chacune vers la cible : lit chaque P
        lot : l'écart dû aux fusions précédentes du lot est toléré, le contenu fusionné est celui prouvé. À la
        fin, arbre de la cible identique à la tête prouvée du lot ; toute différence arrête tout. Journal :
        .apv/state/stack.log. --keep garde les worktrees des lots.
+Branches fusionnées (merge, batch --merge) : après les fusions, la branche de tête de chaque PR fusionnée
+       est supprimée sur GitHub (gh api -X DELETE repos/<propriétaire>/<dépôt>/git/refs/heads/<branche>),
+       puis son absence constatée par une relecture. Elle est gardée, avec la raison : --keep-branches ; PR
+       venue d'un fork ; branche cible ou branche par défaut du dépôt ; branche protégée ; base ou tête d'une
+       PR encore ouverte (lu par l'API ; dans une pile, la PR suivante est re-ciblée avant) ; tête qui n'est
+       plus le commit fusionné. Déjà absente (réglage delete_branch_on_merge du dépôt) : notée, sans erreur.
+       Un échec de suppression est un avertissement : la fusion reste acquise, le code de sortie ne change
+       pas. Une ligne par branche ; si delete_branch_on_merge est faux, la commande qui l'active est donnée
+       (gh api -X PATCH repos/<propriétaire>/<dépôt> -F delete_branch_on_merge=true), jamais lancée.
 La variable APV_GH remplace l'exécutable gh (tests). Sortie : 0 pile cohérente ou fusionnée (lot prouvé,
 et fusionné avec --merge), 1 anomalie (rien d'autre n'est fusionné), 2 appel incorrect ou APV_ALLOW_MERGE absent.`;
 
@@ -157,7 +168,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const { values, positionals } = parse(args, {
       method: { type: 'string' }, target: { type: 'string' }, ready: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
       'allow-behind': { type: 'boolean' }, reason: { type: 'string' },
-      dir: { type: 'string' }, bisect: { type: 'boolean' }, merge: { type: 'boolean' }, keep: { type: 'boolean' },
+      dir: { type: 'string' }, bisect: { type: 'boolean' }, merge: { type: 'boolean' }, keep: { type: 'boolean' }, 'keep-branches': { type: 'boolean' },
     });
     if (values.help) { io.stdout(`${usage}\n`); return EXIT.ok; }
     const [action, ...rest] = positionals;
@@ -165,6 +176,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const prs = numbers(rest);
     const batchOnly = (['dir', 'bisect', 'merge', 'keep'] as const).filter(k => values[k] !== undefined);
     if (action !== 'batch' && batchOnly.length) throw new UsageError(`--${batchOnly.join(', --')} : réservé(s) à stack batch`);
+    if (action === 'plan' && values['keep-branches'] !== undefined) throw new UsageError('--keep-branches : réservé à stack merge et stack batch --merge');
     if (action === 'batch') return batch(prs, values, io);
     if (action === 'plan' && values.method !== undefined) throw new UsageError('--method : réservé à stack merge');
     const method = (values.method ?? 'merge') as typeof METHODS[number];
@@ -197,7 +209,10 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       return plan.ok ? EXIT.ok : EXIT.failed;
     }
     const report = await mergeStack(prs, method, options);
-    if (values.json) { json(io, { ...report, calls }); return report.stopped ? EXIT.failed : EXIT.ok; }
+    // After the merges (and the retarget of each next PR of the stack), the merged branches; a failure never fails the merge.
+    const cleanup = await branchCleanup(report.mergedHeads, report.target, values['keep-branches'] ? '--keep-branches' : null,
+      async args => { const call = await options.gh(args); options.onCall(call); return call; });
+    if (values.json) { json(io, { ...report, cleanup, calls }); return report.stopped ? EXIT.failed : EXIT.ok; }
     const lines = ['', 'Rapport de fusion :', ...planLines(report.plan).map(l => `  ${l}`),
       ...report.freshness.map(f => `Base juste avant la fusion de la PR #${f.pr} : ${freshnessText(f)}`),
       ...report.derogations.map(d => `DÉROGATION (--allow-behind) : PR #${d.pr} admise en retard de ${d.missing ?? '?'} commit(s) sur ${d.base}, ` +
@@ -208,13 +223,25 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       lines.push(`ARRÊT à la PR #${report.stopped.pr} :`, ...report.stopped.reasons.map(r => `- ${r}`),
         `Non fusionnées : ${left.map(n => `#${n}`).join(', ')}. Rien d'autre n'a été fusionné ; vérifier l'état exact (gh pr view) avant de reprendre.`);
     } else lines.push(`Pile fusionnée dans ${report.target}.`);
+    lines.push(...cleanupLines(cleanup));
     io.stdout(`${lines.join('\n')}\n`);
     return report.stopped ? EXIT.failed : EXIT.ok;
   });
 }
 
+/** The cleanup of the merged branches (src/stack/branches.ts); nothing to do, nothing called, when nothing was merged. */
+async function branchCleanup(merged: Parameters<typeof cleanMergedBranches>[0], target: string | null, keep: string | null,
+  run: (args: string[]) => Promise<GhCall>): Promise<BranchCleanup> {
+  if (!merged.length) return { branches: [], repositories: [] };
+  try { return await cleanMergedBranches(merged, { run, target, keep }); }
+  catch (error) {
+    // Never a crash after a merge: every branch left is said, as a warning.
+    return { branches: merged.map(m => ({ pr: m.pr, branch: m.branch, head: m.head, status: 'failed' as const, reason: `erreur inattendue : ${errorMessage(error)}` })), repositories: [] };
+  }
+}
+
 type BatchValues = { target?: string | undefined; ready?: boolean | undefined; json?: boolean | undefined; dir?: string | undefined; bisect?: boolean | undefined;
-  merge?: boolean | undefined; keep?: boolean | undefined; method?: string | undefined; 'allow-behind'?: boolean | undefined; reason?: string | undefined };
+  merge?: boolean | undefined; keep?: boolean | undefined; 'keep-branches'?: boolean | undefined; method?: string | undefined; 'allow-behind'?: boolean | undefined; reason?: string | undefined };
 
 /** `apv stack batch`: one full suite for several independent pull requests, then their merge by content. */
 async function batch(prs: number[], values: BatchValues, io: CommandIO): Promise<number> {
@@ -222,6 +249,7 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO): Promise
   if (foreign.length) throw new UsageError(`--${foreign.join(', --')} : sans effet pour stack batch (fusion --merge de GitHub seulement, contenu vérifié)`);
   if (values.target !== undefined && !values.target.trim()) throw new UsageError('--target vide');
   if (values.ready && !values.merge) throw new UsageError('--ready va avec --merge');
+  if (values['keep-branches'] && !values.merge) throw new UsageError('--keep-branches va avec --merge');
   if (values.merge && io.env['APV_ALLOW_MERGE'] !== '1') { io.stderr(`${MERGE_REFUSED}\n`); return EXIT.usage; }
   const repo = gitRead(io.cwd, ['rev-parse', '--show-toplevel']);
   if (!repo) throw new PipelineError('NOT_A_REPOSITORY', `Pas un dépôt Git : ${io.cwd}`);
@@ -292,11 +320,12 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO): Promise
       summary: `${passed}/${result.receipts.length} contrôle(s) réussi(s)${notRequired.length ? `, non requis par leur portée : ${notRequired.join(', ')}` : ''}${failed.length ? `, en échec : ${failed.join(', ')}` : ''} ; apv gates verify ${verified.ok ? 'à 0' : 'en échec'} ; exécution ${result.runId}` };
   };
   let report: BatchReport;
+  const gh = processGh(bin, io.env, io.cwd);
+  const onCall = (call: GhCall): void => { calls.push(call); if (values.merge || call.status !== 0 || call.error) (values.json ? io.stderr : io.stdout)(transcript(bin, call)); };
   try {
     report = await batchMerge({
       repo, common: commonDir(repo), prs, bisect: values.bisect === true, merge: values.merge === true, ready: values.ready === true, keep: values.keep === true,
-      remote: 'origin', gh: processGh(bin, io.env, io.cwd), git: processGit(io.env), log,
-      onCall: call => { calls.push(call); if (values.merge || call.status !== 0 || call.error) (values.json ? io.stderr : io.stdout)(transcript(bin, call)); },
+      remote: 'origin', gh, git: processGit(io.env), log, onCall,
       pollMs: positiveInt(io.env['APV_STACK_POLL_MS'], 3000), pollAttempts: positiveInt(io.env['APV_STACK_POLL_ATTEMPTS'], 20),
       prove, configDrift, repeatRefusal, journal: entry => journalEntry(io, entry), signal: abort.signal,
       ...(values.target !== undefined ? { target: values.target } : {}), ...(values.dir !== undefined ? { dir: resolve(io.cwd, values.dir) } : {}),
@@ -304,15 +333,18 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO): Promise
   } finally {
     for (const [signal, handler] of handlers) process.off(signal, handler);
   }
+  // An interrupted batch does nothing more: its merged branches stay, and the report says so.
+  const keep = report.interrupted || received ? 'lot interrompu (signal) : rien d\'autre n\'est fait' : values['keep-branches'] ? '--keep-branches' : null;
+  const cleanup = await branchCleanup(report.mergedHeads, report.target, keep, async args => { const call = await gh(args); onCall(call); return call; });
   const partial = !report.stopped && report.left.length > 0;
   const status = report.interrupted ? 'interrompu' : report.stopped ? 'arrêté' : partial ? 'partiel' : values.merge ? 'fusionné' : 'prouvé';
-  if (values.json) json(io, { ...report, status, calls });
+  if (values.json) json(io, { ...report, status, cleanup, calls });
   else {
     const verdict = report.interrupted ? `Lot interrompu (${received ?? 'signal'}) : rien d'autre ne sera fusionné.\n`
       : report.stopped ? ''
       : partial ? `Lot PARTIEL : ${report.left.map(l => `#${l.pr} (${l.reason})`).join(', ')} hors du lot${values.merge ? ' ; les autres sont fusionnées' : ''}. Les PR laissées se traitent à part.\n`
       : values.merge ? 'Lot fusionné.\n' : 'Lot prouvé : APV_ALLOW_MERGE=1 apv stack batch <mêmes PR> --merge le fusionne, sur ordre de l\'opérateur (une nouvelle suite tourne sur un nouveau lot).\n';
-    io.stdout(`${batchLines(report).join('\n')}\n${verdict}`);
+    io.stdout(`${[...batchLines(report), ...cleanupLines(cleanup)].join('\n')}\n${verdict}`);
   }
   if (received) return signalExitCode(received);
   return report.stopped || partial ? EXIT.failed : EXIT.ok;

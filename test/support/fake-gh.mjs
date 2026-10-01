@@ -11,6 +11,13 @@
 // With `origin` (path of a bare repository), `pr merge --merge` makes the real merge commit there (the batch tests of
 // `apv stack batch`); `behavior.alterAfterMerge: [n]` then adds a commit that changes a file on the base (a merge whose
 // content differs), `behavior.pushOnView: { "<n>": k }` pushes such a commit on the base at the k-th read of PR n.
+// Branches (cleanup after the merges): `repo` ({ default_branch, delete_branch_on_merge }, main and false by default)
+// answers `gh api repos/o/r`; `gh api repos/o/r/branches/<b>` gives { sha, protected } from `branches` ({ "<b>": { sha,
+// protected } | null }, null for deleted), else from the head of the PR of that branch (not a fork), else the default
+// branch; with `origin`, from the refs of that bare repository. `gh api -X GET repos/o/r/pulls -f state=open -f base=<b>`
+// (or `head=o:<b>`) lists the open PRs; `gh api -X DELETE repos/o/r/git/refs/heads/<b>` deletes the branch. Behaviors:
+// `protected: [b]`, `repoFail`, `branchReadFail: [b]`, `pullsFail`, `deleteFail: [b]` (403), `deleteIgnored: [b]` (code 0,
+// branch kept); with `repo.delete_branch_on_merge`, a merge deletes the head branch as GitHub does.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 
@@ -35,6 +42,25 @@ function externalPush(branch, label) {
   const commit = originGit('commit-tree', tree, '-p', head, '-m', `external ${label}`);
   originGit('update-ref', `refs/heads/${branch}`, commit, head);
 }
+const repoSettings = () => ({ default_branch: 'main', delete_branch_on_merge: false, ...state.repo });
+/** The branch `name` of o/r: { sha, protected }, or null when it does not exist. */
+function branchOf(name) {
+  const isProtected = state.behavior.protected?.includes(name) ?? false;
+  if (state.origin) {
+    try { return { sha: originGit('rev-parse', '--verify', '--quiet', `refs/heads/${name}`), protected: isProtected }; } catch { return null; }
+  }
+  if (state.branches && name in state.branches) return state.branches[name] && { protected: isProtected, ...state.branches[name] };
+  const owner = Object.values(state.prs).find(p => p.headRefName === name && p.isCrossRepository !== true);
+  if (owner) return { sha: owner.headRefOid, protected: isProtected };
+  return name === repoSettings().default_branch ? { sha: 'd'.repeat(40), protected: isProtected } : null;
+}
+function deleteBranch(name) {
+  if (state.origin) originGit('update-ref', '-d', `refs/heads/${name}`);
+  else { state.branches ??= {}; state.branches[name] = null; }
+}
+const field = name => args.find((a, k) => args[k - 1] === '-f' && a.startsWith(`${name}=`))?.slice(name.length + 1);
+const restPath = args.find(a => a.startsWith('repos/')) ?? '';
+const method = option('-X') ?? 'GET';
 const compare = /^repos\/o\/r\/compare\/([^.]+)\.\.\.(.+)$/.exec(args.find(a => a.startsWith('repos/')) ?? '');
 if (group === 'api' && compare) {
   const [, head, base] = compare;
@@ -47,6 +73,33 @@ if (group === 'api' && compare) {
     const answer = { ahead_by: found.ahead_by, merge_base: 'b'.repeat(40), listed: found.listed ?? found.ahead_by, merges: found.merges ?? 0, files: found.files };
     process.stdout.write(`${JSON.stringify(answer)}\n`);
   }
+} else if (group === 'api' && restPath === 'repos/o/r' && method === 'GET') {
+  if (state.behavior.repoFail) { process.stderr.write('gh: Server Error (HTTP 500)\n'); code = 1; }
+  else {
+    const repo = repoSettings();
+    process.stdout.write(`${JSON.stringify({ default_branch: repo.default_branch, delete_branch_on_merge: repo.delete_branch_on_merge ?? null })}\n`);
+  }
+} else if (group === 'api' && /^repos\/o\/r\/branches\/./.test(restPath) && method === 'GET') {
+  const name = decodeURIComponent(restPath.slice('repos/o/r/branches/'.length));
+  const branch = branchOf(name);
+  if (!args.includes('--jq')) { process.stderr.write('fake gh: branch read without --jq\n'); code = 1; }
+  else if (state.behavior.branchReadFail?.includes(name)) { process.stderr.write('gh: Server Error (HTTP 502)\n'); code = 1; }
+  else if (!branch) { process.stdout.write('{"message":"Branch not found","status":"404"}'); process.stderr.write('gh: Branch not found (HTTP 404)\n'); code = 1; }
+  else process.stdout.write(`${JSON.stringify({ sha: branch.sha, protected: branch.protected })}\n`);
+} else if (group === 'api' && restPath === 'repos/o/r/pulls' && method === 'GET') {
+  const [base, head] = [field('base'), field('head')];
+  if (state.behavior.pullsFail) { process.stderr.write('gh: Server Error (HTTP 500)\n'); code = 1; }
+  else if (field('state') !== 'open' || (base === undefined) === (head === undefined)) { process.stderr.write('fake gh: unexpected pulls query\n'); code = 1; }
+  else {
+    const open = Object.values(state.prs).filter(p => p.state === 'OPEN' &&
+      (base !== undefined ? p.baseRefName === base : p.isCrossRepository !== true && `o:${p.headRefName}` === head));
+    process.stdout.write(`${JSON.stringify(open.map(p => p.number))}\n`);
+  }
+} else if (group === 'api' && /^repos\/o\/r\/git\/refs\/heads\/./.test(restPath) && method === 'DELETE') {
+  const name = decodeURIComponent(restPath.slice('repos/o/r/git/refs/heads/'.length));
+  if (state.behavior.deleteFail?.includes(name)) { process.stderr.write('gh: Resource not accessible by integration (HTTP 403)\n'); code = 1; }
+  else if (!branchOf(name)) { process.stderr.write('gh: Reference does not exist (HTTP 422)\n'); code = 1; }
+  else if (!state.behavior.deleteIgnored?.includes(name)) deleteBranch(name);
 } else if (group === 'api') {
   const path = args.find(a => a.startsWith('repos/'));
   const m = /^repos\/o\/r\/pulls\/(\d+)$/.exec(path ?? '');
@@ -72,6 +125,7 @@ if (group === 'api' && compare) {
   const fields = option('--json').split(',');
   const view = Object.fromEntries(fields.filter(f => f in pr).map(f => [f, pr[f]]));
   if (fields.includes('url') && !('url' in pr)) view.url = `https://github.com/o/r/pull/${number}`;
+  if (fields.includes('isCrossRepository') && !('isCrossRepository' in pr)) view.isCrossRepository = false;
   if (left > 0) Object.assign(view, { mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' });
   process.stdout.write(`${JSON.stringify(view)}\n`);
 } else if (action === 'edit') {
@@ -95,6 +149,7 @@ if (group === 'api' && compare) {
       if (state.behavior.alterAfterMerge?.includes(Number(number))) externalPush(pr.baseRefName, `after-${number}`);
     }
     pr.state = 'MERGED';
+    if (repoSettings().delete_branch_on_merge && branchOf(pr.headRefName)) deleteBranch(pr.headRefName);
     for (const [other, fields] of Object.entries(state.behavior.afterMerge?.[number] ?? {})) Object.assign(state.prs[other], fields);
     for (const [other, bases] of Object.entries(state.behavior.afterMergeBehind?.[number] ?? {})) {
       state.behavior.behind ??= {};

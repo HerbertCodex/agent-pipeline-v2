@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fixture } from './helpers.mjs';
+import { fileURLToPath } from 'node:url';
+import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 import { briefFromTemplate, initProject, PLUGIN_ROOT, BRIEF_TEMPLATE } from '../dist/commands/init.js';
 
@@ -151,3 +152,43 @@ test('apv init and apv onboard add the validated-mockup line to .gitattributes w
 });
 
 const HTML_SPACED = '<p>Accueil</p> \n';
+
+// Pilot project, 1 October 2026: the repository did not delete merged branches (delete_branch_on_merge false), 54 piled up.
+test('apv init reads delete_branch_on_merge of the GitHub repository of origin and gives the command, never runs it', async t => {
+  const fakeGh = fileURLToPath(new URL('./support/fake-gh.mjs', import.meta.url));
+  chmodSync(fakeGh, 0o755);
+  const project = repo => {
+    const f = fixture(t);
+    git(f.repo, 'remote', 'add', 'origin', 'git@github.com:o/r.git');
+    const state = join(f.root, 'gh.json');
+    writeFileSync(state, JSON.stringify({ prs: {}, calls: [], repo }));
+    return { f, env: { APV_GH: fakeGh, FAKE_GH_STATE: state }, calls: () => JSON.parse(readFileSync(state, 'utf8')).calls };
+  };
+  const off = project({ delete_branch_on_merge: false });
+  const r = await apv(off.f.repo, ['init'], off.env);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /ATTENTION : le dépôt GitHub o\/r ne supprime pas la branche d'une PR fusionnée \(delete_branch_on_merge faux\) : les branches s'accumulent\. Pour l'activer : gh api -X PATCH repos\/o\/r -F delete_branch_on_merge=true \(commande non lancée par apv init\)\./);
+  assert.deepEqual(off.calls(), [['api', 'repos/o/r', '--jq', '{default_branch, delete_branch_on_merge}']], 'one read, never the PATCH');
+  const j = await apv(off.f.repo, ['init', '--json'], off.env);
+  assert.deepEqual(j.json().github, { repo: 'o/r', host: 'github.com', deleteBranchOnMerge: false, command: 'gh api -X PATCH repos/o/r -F delete_branch_on_merge=true', note: null });
+
+  const on = project({ delete_branch_on_merge: true });
+  const ok = await apv(on.f.repo, ['init'], on.env);
+  assert.match(ok.stdout, /Dépôt GitHub o\/r : la branche d'une PR fusionnée est supprimée par GitHub \(delete_branch_on_merge\)\./);
+  assert.doesNotMatch(ok.stdout, /ATTENTION : le dépôt GitHub/);
+
+  // Read without the rights to see the setting, or a failed call: said, never a failed init.
+  const hidden = project({ delete_branch_on_merge: null });
+  const h = await apv(hidden.f.repo, ['init'], hidden.env);
+  assert.equal(h.code, 0);
+  assert.match(h.stdout, /Réglage delete_branch_on_merge du dépôt GitHub o\/r non vérifié : delete_branch_on_merge absent de la réponse/);
+  const failing = await apv(hidden.f.repo, ['init', '--json'], { APV_GH: join(hidden.f.root, 'pas-de-gh') });
+  assert.equal(failing.code, 0);
+  assert.match(failing.json().github.note, /ENOENT/);
+
+  // No GitHub origin: nothing called, nothing said.
+  const local = fixture(t);
+  const none = await apv(local.repo, ['init', '--json'], { APV_GH: join(local.root, 'pas-de-gh') });
+  assert.deepEqual(none.json().github, { repo: null, host: null, deleteBranchOnMerge: null, command: null, note: 'pas de dépôt distant origin' });
+  assert.doesNotMatch((await apv(local.repo, ['init'])).stdout, /delete_branch_on_merge/);
+});
