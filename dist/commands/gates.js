@@ -15,6 +15,7 @@ import { referenceMissing, resolveReference } from '../gates/repeat.js';
 import { scopeReferenceMissing } from '../gates/proof-scope.js';
 import { Git } from '../execution/git.js';
 import { signalExitCode } from '../lock/run.js';
+import { infrastructureAdvice, infrastructureText } from '../gates/infrastructure.js';
 import { EXIT, UsageError, guard, json, list, parse, repoPath, table } from './common.js';
 export const usage = `Utilisation :
   apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>] [--against <ref>]
@@ -79,11 +80,16 @@ changement), hors fichiers toujours requis (configuration, dépendances, CI, bui
 migrations, mode ou type changé), n'est pas lancé : reçu « non requis » (not_required) avec la portée. À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
 annulés, sortie 128 + signal), les processus qu'elle a lancés encore vivants et les orphelins de cette
 copie sur suite.ports sont arrêtés (jamais la session, une autre copie ni le checkout principal).
---stacks 1,2 (suite complète, deux piles déclarées au moins, section stacks) : les contrôles d'une pile
+--stacks 1,2 (suite complète, piles déclarées dans la section stacks) : les contrôles d'une pile
 (lock égal au verrou d'une pile déclarée) sont répartis sur ces piles, tour à tour dans l'ordre de la
 configuration ; sur la première dans cette copie, sur une autre dans une copie détachée du même commit
 (préparée par batch.setup, retirée à la fin), avec les variables de sa pile et sous son verrou. Un
-contrôle qui a des dépendances, ou dont d'autres dépendent, reste dans cette copie.
+contrôle qui a des dépendances, ou dont d'autres dépendent, reste dans cette copie. Une seule pile
+(--stacks 2) : tous les contrôles de pile tournent sur elle, dans cette copie, avec ses variables et sous
+son verrou.
+Panne d'infrastructure : un contrôle en échec dont la sortie nomme une variable de son passEnv absente,
+ou une pile injoignable (connexion refusée, conteneur arrêté), est signalé à part, avec la marche ; son
+reçu reste en échec.
 Sortie : 0 si tous les contrôles exécutés passent, 1 sinon (ou suite complète refusée par le
 rythme, l'arbre modifié ou la file, ou répétition refusée), 2 appel incorrect.
 
@@ -340,8 +346,8 @@ export async function run(args, io) {
         if (values.offline)
             throw new UsageError('--offline est une option de gates verify (gates run avertit seulement quand le dépôt distant est illisible)');
         const spreadOver = values.stacks === undefined ? undefined : list(values.stacks);
-        if (spreadOver !== undefined && (spreadOver.length < 2 || new Set(spreadOver).size !== spreadOver.length))
-            throw new UsageError('--stacks attend au moins deux piles différentes, par exemple --stacks 1,2');
+        if (spreadOver !== undefined && (spreadOver.length < 1 || new Set(spreadOver).size !== spreadOver.length))
+            throw new UsageError('--stacks attend une ou plusieurs piles différentes, par exemple --stacks 2 ou --stacks 1,2');
         if (spreadOver !== undefined && stage === 'task')
             throw new UsageError('--stacks répartit la suite complète (--stage full)');
         const skipProven = values['skip-proven'] === true;
@@ -480,7 +486,7 @@ export async function run(args, io) {
                 stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
                 reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
                 sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
-                suite: result.suite, notRequired: result.notRequired, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, interrupted: received,
+                suite: result.suite, notRequired: result.notRequired, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, infrastructure: result.infrastructure, interrupted: received,
                 rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
                     level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
         }
@@ -535,6 +541,10 @@ export async function run(args, io) {
                 lines.push('', `Attente de verrou avant le délai des contrôles : ${waited.map(r => `${name(r)} ${Math.round(r.lockWaitMs / 1000)} s`).join(', ')}.`);
             for (const r of rows.filter(r => r.diagnostic && r.status !== 'blocked' && r.status !== 'not_required'))
                 lines.push('', `--- ${name(r)} (${STATUS[r.status] ?? r.status}) ---`, r.diagnostic.trimEnd());
+            const infra = result.infrastructure;
+            if (infra.causes.length) {
+                lines.push('', `Panne d'infrastructure probable (${infra.all ? 'tous les échecs' : `${infra.causes.length} échec(s) sur les contrôles en échec`}) : lecture de la sortie, le statut des reçus ne change pas :`, ...infra.causes.map(c => `- ${infrastructureText(c)}`), `Marche : ${infrastructureAdvice(infra.causes, (loaded.config.stacks ?? []).map(x => x.id))}.`);
+            }
             const verdict = !result.ok ? 'Des contrôles échouent.'
                 : result.stage === 'task' && !rows.length ? 'Aucun contrôle de tâche à exécuter.'
                     : result.stage === 'task' ? 'Tous les contrôles de tâche passent.'

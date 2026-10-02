@@ -3,7 +3,8 @@
 // { prs: { "<n>": { ...gh pr view fields } }, behavior: { retargetIgnored: [n], retargetFail: [n], mergeFail: [n],
 //   headMovesAtMerge: [n], unknownViews: { "<n>": count }, afterMerge: { "<n>": { "<m>": { ...fields } } },
 //   behind: { "<n>": { "<base>": { ahead_by, files, listed, merges } } }, compareFail: [n],
-//   afterMergeBehind: { "<n>": { "<m>": { "<base>": { ...compare } } } } }, calls: [[...args]] }.
+//   afterMergeBehind: { "<n>": { "<m>": { "<base>": { ...compare } } } }, pendingViews: { "<n>": count } }, calls: [[...args]] }.
+// `pendingViews`: the next `count` reads of PR n show its CI still running (a check IN_PROGRESS, state BLOCKED).
 // The repository is o/r on github.com. The retarget goes through `gh api -X PATCH repos/o/r/pulls/<n> -f base=<b>`;
 // `gh pr edit` fails as it did on the real merge of PR #70 and #71 (deprecated classic projects).
 // `gh api repos/o/r/compare/<head sha>...<base> --jq …` answers the object the jq filter builds, from `behind` for the
@@ -132,6 +133,12 @@ if (group === 'api' && compare) {
   if (fields.includes('url') && !('url' in pr)) view.url = `https://github.com/o/r/pull/${number}`;
   if (fields.includes('isCrossRepository') && !('isCrossRepository' in pr)) view.isCrossRepository = false;
   if (left > 0) Object.assign(view, { mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' });
+  // The CI still runs for the next `pendingViews[n]` reads (--wait-ci).
+  const running = state.behavior.pendingViews?.[number] ?? 0;
+  if (running > 0) {
+    state.behavior.pendingViews[number] = running - 1;
+    Object.assign(view, { statusCheckRollup: [{ __typename: 'CheckRun', name: 'ci', status: 'IN_PROGRESS', conclusion: '' }], mergeStateStatus: 'BLOCKED' });
+  }
   process.stdout.write(`${JSON.stringify(view)}\n`);
 } else if (action === 'edit') {
   process.stderr.write('GraphQL: Projects (classic) is being deprecated in favor of the new Projects experience, see: https://github.blog/changelog/2024-05-23-sunset-notice-projects-classic/. (repository.pullRequest.projectCards)\n');

@@ -72,6 +72,30 @@ function stable(value: unknown): string {
 /** The checks of the reuse itself: `apv reuse check` and `apv map --check`, whatever the form of the call. */
 const judgesReuse = (command: readonly string[]): boolean => command.some((a, i) => (a === 'reuse' && command[i + 1] === 'check') || (a === 'map' && command.slice(i + 1).includes('--check')));
 
+/**
+ * What a change does to the configuration the reuse check watches, from `before` (its base) to `after`: the sections
+ * `reuse`, `map` and `design.dir`, the checks that judge the reuse, and the mandatory checks. Each one is a decision
+ * of the operator, merged in a pull request of configuration of its own: `apv reuse check` refuses it mixed with code,
+ * and `apv stack plan` names it in a stack (to merge alone first). Empty when nothing watched changes.
+ */
+export function reuseConfigChanges(before: ReuseConfig, after: ReuseConfig): string[] {
+  const out: string[] = [];
+  const sections = (c: ReuseConfig): string => stable({ reuse: c.reuse ?? null, map: c.map ?? null, designDir: c.design?.dir ?? null });
+  if (sections(after) !== sections(before)) {
+    out.push('configuration de réutilisation modifiée par le changement (sections reuse, map ou design.dir) : le contrôle juge avec celle de la base ; c\'est une décision de l\'opérateur, à fusionner dans une PR de configuration à part.');
+  }
+  const candidateGates = after.gates ?? [];
+  for (const gate of before.gates ?? []) {
+    const now = candidateGates.find(g => g.id === gate.id);
+    if (judgesReuse(gate.command) && (!now || stable(now) !== stable(gate))) {
+      out.push(`contrôle « ${gate.id} » (${gate.command.join(' ')}) ${now ? 'modifié' : 'retiré'} par le changement : il juge la réutilisation ; décision de l'opérateur, à fusionner dans une PR de configuration à part.`);
+    } else if (gate.mandatory && (!now || now.mandatory !== true)) {
+      out.push(`contrôle obligatoire « ${gate.id} » ${now ? 'rendu facultatif' : 'retiré'} par le changement : décision de l'opérateur, à fusionner dans une PR de configuration à part.`);
+    }
+  }
+  return out;
+}
+
 /** Folders of sources: a code or style file there is held to the strict coverage of the check. */
 const SOURCE_ROOTS = /^(?:src|app|lib|pages|components|routes|server)\/|^(?:packages|apps)\/[^/]+\/(?:src|app|lib|pages|components|routes|server)\//;
 const withoutExtensions = (path: string): string => path.replace(/(?:\.[A-Za-z0-9]{1,6}){1,3}$/, '');
@@ -116,19 +140,7 @@ export async function checkReuse(repo: string, config: ReuseConfig, options: Che
     if (atBase.file) {
       judged = atBase.config;
       const file = atBase.file.slice(atBase.file.indexOf(':') + 1);
-      const sections = (c: ReuseConfig) => stable({ reuse: c.reuse ?? null, map: c.map ?? null, designDir: c.design?.dir ?? null });
-      if (sections(config) !== sections(atBase.config)) {
-        configFindings.push({ path: file, message: 'configuration de réutilisation modifiée par le changement (sections reuse, map ou design.dir) : le contrôle juge avec celle de la base ; c\'est une décision de l\'opérateur, à fusionner dans une PR de configuration à part.' });
-      }
-      const candidateGates = config.gates ?? [];
-      for (const gate of atBase.config.gates) {
-        const now = candidateGates.find(g => g.id === gate.id);
-        if (judgesReuse(gate.command) && (!now || stable(now) !== stable(gate))) {
-          configFindings.push({ path: file, message: `contrôle « ${gate.id} » (${gate.command.join(' ')}) ${now ? 'modifié' : 'retiré'} par le changement : il juge la réutilisation ; décision de l'opérateur, à fusionner dans une PR de configuration à part.` });
-        } else if (gate.mandatory && (!now || now.mandatory !== true)) {
-          configFindings.push({ path: file, message: `contrôle obligatoire « ${gate.id} » ${now ? 'rendu facultatif' : 'retiré'} par le changement : décision de l'opérateur, à fusionner dans une PR de configuration à part.` });
-        }
-      }
+      for (const message of reuseConfigChanges(atBase.config, config)) configFindings.push({ path: file, message });
     }
   }
   const base = reuseSettings(judged.reuse);

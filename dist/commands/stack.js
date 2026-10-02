@@ -5,12 +5,14 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { gitRead } from '../run/git-probe.js';
 import { MAX_OVERRIDE_REASON } from '../run/state.js';
 import { cleanLine } from '../run/summary.js';
-import { MERGE_REFUSED, mergeStack, planStack, processGh } from '../stack/github.js';
+import { CI_POLL_MS, MERGE_REFUSED, mergeStack, planStack, processGh } from '../stack/github.js';
 import { checkMergeRules, rulesLines } from '../rules/check.js';
 import { auditLines, auditMerges, writeMergeTrace } from '../rules/merges.js';
 import { anchorKey } from '../rules/operator.js';
 import { branchProtection } from '../rules/protection.js';
 import { batchMerge, processGit } from '../stack/batch.js';
+import { stackChecks, stackChecksLines } from '../stack/plan-checks.js';
+import { infrastructureAdvice, infrastructureText } from '../gates/infrastructure.js';
 import { cleanMergedBranches, cleanupLines } from '../stack/branches.js';
 import { loadConfig, loadConfigAtCommit } from '../config/load.js';
 import { hash } from '../domain/hash.js';
@@ -23,26 +25,38 @@ import { environment, runProcess } from '../execution/process.js';
 import { commonDir } from '../stacks/idle.js';
 import { signalExitCode } from '../lock/run.js';
 import { resolve } from 'node:path';
-import { EXIT, UsageError, guard, json, parse } from './common.js';
+import { EXIT, UsageError, guard, json, list, parse } from './common.js';
 export const usage = `Utilisation :
   apv stack plan <pr...> [--target <branche>] [--ready] [--allow-behind --reason <texte>] [--json]
   APV_ALLOW_MERGE=1 apv stack merge <pr...> [--method merge|squash|rebase] [--target <branche>] [--ready]
-                                   [--allow-behind --reason <texte>] [--keep-branches] [--json]
-  apv stack batch <pr...> [--target <branche>] [--dir <dossier>] [--bisect] [--keep] [--json]
+                                   [--allow-behind --reason <texte>] [--keep-branches] [--wait-ci <minutes>] [--json]
+  apv stack batch <pr...> [--target <branche>] [--dir <dossier>] [--bisect] [--keep] [--stacks <pile>,<pile>]
+                          [--wait-ci <minutes>] [--json]
   APV_ALLOW_MERGE=1 apv stack batch <pr...> --merge [--ready] [--target <branche>] [--dir <dossier>] [--bisect]
-                                   [--keep-branches]
+                                   [--keep-branches] [--stacks <pile>,<pile>] [--wait-ci <minutes>]
 
 Pile de PR, de la base vers le sommet (numéros de PR dans l'ordre de fusion).
 plan   lit chaque PR (gh pr view) et vérifie la pile : chaque PR ouverte, la base de la PR n+1 est la
        tête de la PR n (la branche cible pour la première), fusionnable, contrôles au vert ou absents,
        et la tête de chaque PR contient la tête actuelle de sa base (gh api .../compare/<tête>...<base>).
-       Toutes les anomalies sont listées. Ne modifie rien.
+       Toutes les anomalies sont listées. Ne modifie rien (la cible et les têtes sont récupérées par git fetch).
+       Code de la pile, depuis la cible (configuration de la cible) : pour chaque contrôle qui répète ses tests
+       modifiés (repeatChanged), le nombre de fichiers de test ajoutés ou modifiés à chaque étage ; un étage
+       au-delà de repeatChanged.maxFiles est signalé avec la coupe proposée (parties prouvées et fusionnées
+       l'une après l'autre), une PR seule au-delà est à découper. Une PR qui change la configuration surveillée
+       par reuse (sections reuse, map, design.dir, contrôles qui jugent la réutilisation) dans une pile est
+       signalée : à fusionner seule d'abord. Une PR au-dessus de la première, sans contrôle alors que la première
+       en a, est notée (la CI de la cible peut ne tourner que sur les PR vers elle). Ces signalements ne
+       changent pas le code de sortie.
 merge  uniquement sur ordre explicite de l'opérateur, avec APV_ALLOW_MERGE=1 devant la commande.
        Refait la vérification juste avant chaque fusion ; une fois la PR précédente fusionnée, re-cible
        la suivante sur la branche cible par l'API REST (gh api -X PATCH repos/<propriétaire>/<dépôt>/pulls/<n>)
        et vérifie la nouvelle base par une relecture, quel que soit le code de sortie ; vérifie que la tête
        contient la cible telle qu'elle est à cet instant ; fusionne avec --match-head-commit ; constate la
-       fusion par une relecture ; s'arrête à la première anomalie.
+       fusion par une relecture ; s'arrête à la première anomalie. Une PR re-ciblée qui n'a aucun contrôle,
+       alors que la première PR de la pile (qui visait la cible) en avait, arrête la pile : la CI de la cible ne
+       se déclenche que sur les PR vers elle ; la marche est donnée (fusionner origin/<cible> dans la branche,
+       sans changement de fichier, pousser sans force, relancer avec --wait-ci).
        La sortie complète de chaque appel gh est affichée (sur la sortie d'erreur avec --json).
 Base à jour : une PR dont la tête ne contient pas la tête actuelle de sa base est refusée (ses contrôles
        n'ont pas porté sur le résultat de la fusion), avec la marche à suivre : fusionner la base dans la
@@ -51,6 +65,10 @@ Base à jour : une PR dont la tête ne contient pas la tête actuelle de sa base
        fichier (la fusion de la PR précédente d'une pile, par --method merge).
 --target  branche d'arrivée de la pile (par défaut la base de la première PR).
 --ready   retire le statut brouillon (gh pr ready) avant la fusion ; sans lui, un brouillon est une anomalie.
+--wait-ci <minutes>  (merge, batch) une PR dont des contrôles sont en cours est relue jusqu'à leur fin, au
+       plus ce délai par lecture (1 à 360 minutes, relecture toutes les 30 s) ; sans lui, des contrôles en cours
+       sont une anomalie. Un contrôle encore en cours au bout du délai reste une anomalie ; un contrôle en
+       échec aussi, jamais attendu.
 --allow-behind --reason <texte>  dérogation exceptionnelle : laisse passer une PR en retard sur sa base
        (1 à ${MAX_OVERRIDE_REASON} caractères de raison) ; merge la journalise avant la fusion, dans
        .apv/state/stack.log (une ligne JSON par PR) et dans le rapport. Jamais pour gagner du temps.
@@ -61,6 +79,11 @@ batch  fusion par lot de PR indépendantes, chacune vers la cible : lit chaque P
        de .apv/config.json (facultatif), UNE suite complète (apv gates run --stage full) puis apv gates verify
        à la tête du lot. --bisect : suite en échec, le lot est coupé en deux, chaque moitié prouvée, jusqu'à
        isoler la ou les PR fautives, qui sortent du lot ; le reste est prouvé une dernière fois.
+       --stacks 2 ou --stacks 1,2 : la suite du lot reçoit les piles de test déclarées (section stacks), comme
+       apv gates run --stacks : chaque contrôle de pile tourne sur une pile donnée, avec ses variables (envFile,
+       env) et sous son verrou ; une seule pile : tous sur elle. Une suite dont tous les échecs sont une panne
+       d'infrastructure (variable d'environnement absente, pile injoignable) n'est pas un échec de code : ni
+       bissection ni PR fautive, arrêt avec la marche.
        --merge (avec APV_ALLOW_MERGE=1, sur ordre de l'opérateur) : lot prouvé, fusionne ses PR dans l'ordre
        (gh pr merge --merge --match-head-commit), chacune après avoir vérifié sa tête (celle du lot) et que
        l'arbre de la cible est celui du lot avant elle, puis que l'arbre de la cible après elle est celui du
@@ -113,7 +136,8 @@ function planLines(plan) {
     const rules = plan.prs.filter(p => p.rules).map(p => `Règles avant fusion, PR #${p.number} : ${p.rules.problems.length ? 'REFUSÉES (détail ci-dessus)' : 'respectées'}${p.rules.notes.length ? ` ; ${p.rules.notes.join(' ; ')}` : ''}`);
     return [`Cible : ${plan.target ?? 'inconnue'}`, ...plan.prs.map((p, i) => {
             const head = p.pr ? `${p.pr.headRefName} -> ${p.pr.baseRefName}${p.pr.isDraft ? ' (brouillon)' : ''}, ${p.pr.mergeable || '?'}/${p.pr.mergeStateStatus || '?'}, contrôles ${p.pr.checks.length ? `${p.pr.checks.filter(c => c.state === 'success').length}/${p.pr.checks.length} au vert` : 'absents'}, ${freshnessText(p.freshness)}` : 'illisible';
-            return `${i + 1}. PR #${p.number} : ${head}${p.anomalies.length ? `\n${p.anomalies.map(a => `   ANOMALIE : ${a}`).join('\n')}` : ' : ok'}`;
+            return `${i + 1}. PR #${p.number} : ${head}${p.anomalies.length ? `\n${p.anomalies.map(a => `   ANOMALIE : ${a}`).join('\n')}` : ' : ok'}` +
+                `${p.notes.length ? `\n${p.notes.map(n => `   NOTE : ${n}`).join('\n')}` : ''}`;
         }), ...rules];
 }
 /**
@@ -153,6 +177,15 @@ function numbers(values) {
     if (new Set(out).size !== out.length)
         throw new UsageError('une PR figure deux fois dans la pile');
     return out;
+}
+/** `--wait-ci <minutes>`: 1 to 360 whole minutes, in milliseconds; 0 when absent. */
+function waitCi(value) {
+    if (value === undefined)
+        return 0;
+    const n = Number(value);
+    if (!/^\d{1,3}$/.test(value) || !Number.isInteger(n) || n < 1 || n > 360)
+        throw new UsageError(`--wait-ci attend un nombre entier de minutes, de 1 à 360 : ${value}`);
+    return n * 60_000;
 }
 function positiveInt(value, fallback) {
     const n = value === undefined || value === '' ? NaN : Number(value);
@@ -227,6 +260,7 @@ export async function run(args, io) {
             method: { type: 'string' }, target: { type: 'string' }, ready: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
             'allow-behind': { type: 'boolean' }, reason: { type: 'string' },
             dir: { type: 'string' }, bisect: { type: 'boolean' }, merge: { type: 'boolean' }, keep: { type: 'boolean' }, 'keep-branches': { type: 'boolean' },
+            stacks: { type: 'string' }, 'wait-ci': { type: 'string' },
         });
         if (values.help) {
             io.stdout(`${usage}\n`);
@@ -236,13 +270,17 @@ export async function run(args, io) {
         if (action !== 'plan' && action !== 'merge' && action !== 'batch')
             throw new UsageError(action ? `sous-commande inconnue : stack ${action}` : 'sous-commande manquante (plan, merge ou batch)');
         const prs = numbers(rest);
-        const batchOnly = ['dir', 'bisect', 'merge', 'keep'].filter(k => values[k] !== undefined);
+        const batchOnly = ['dir', 'bisect', 'merge', 'keep', 'stacks'].filter(k => values[k] !== undefined);
         if (action !== 'batch' && batchOnly.length)
             throw new UsageError(`--${batchOnly.join(', --')} : réservé(s) à stack batch`);
         if (action === 'plan' && values['keep-branches'] !== undefined)
             throw new UsageError('--keep-branches : réservé à stack merge et stack batch --merge');
+        if (action === 'plan' && values['wait-ci'] !== undefined)
+            throw new UsageError('--wait-ci : réservé à stack merge et stack batch');
+        const ciWaitMs = waitCi(values['wait-ci']);
+        const ciPollMs = positiveInt(io.env['APV_STACK_CI_POLL_MS'], CI_POLL_MS) || CI_POLL_MS;
         if (action === 'batch')
-            return batch(prs, values, io);
+            return batch(prs, values, io, { ciWaitMs, ciPollMs });
         if (action === 'plan' && values.method !== undefined)
             throw new UsageError('--method : réservé à stack merge');
         const method = (values.method ?? 'merge');
@@ -274,15 +312,18 @@ export async function run(args, io) {
             ...(values.target !== undefined ? { target: values.target } : {}),
             ...(values['allow-behind'] ? { allowBehind: { reason } } : {}),
             onDerogation: derogation => journal(io, prs, method, derogation),
+            ciWaitMs, ciPollMs, log: line => io.stderr(`${line}\n`),
             rules: stackRules(io.cwd),
             onMerged: merge => traceMerge(io.cwd, merge),
         };
         if (action === 'plan') {
             const plan = await planStack(prs, options);
+            const checks = await codeOfStack(io, plan);
             if (values.json)
-                json(io, { ...plan, calls });
+                json(io, { ...plan, checks, calls });
             else
-                io.stdout(`${[...planLines(plan), plan.ok ? 'Pile cohérente.' : 'Pile incohérente : corriger avant toute fusion.'].join('\n')}\n`);
+                io.stdout(`${[...planLines(plan), ...(checks ? stackChecksLines(checks, prs.length) : []),
+                    plan.ok ? 'Pile cohérente.' : 'Pile incohérente : corriger avant toute fusion.'].join('\n')}\n`);
             return plan.ok ? EXIT.ok : EXIT.failed;
         }
         const report = await mergeStack(prs, method, options);
@@ -314,6 +355,18 @@ export async function run(args, io) {
         return report.stopped ? EXIT.failed : EXIT.ok;
     });
 }
+/**
+ * The code of the stack (src/stack/plan-checks.ts): changed test files per stage and watched configuration, read from
+ * the checkout the command runs in; null when every pull request could not be read (the plan already says why).
+ */
+async function codeOfStack(io, plan) {
+    if (!plan.target || plan.prs.some(p => !p.pr?.headRefOid))
+        return null;
+    const repo = gitRead(io.cwd, ['rev-parse', '--show-toplevel']);
+    if (!repo)
+        return { read: false, error: `pas un dépôt Git : ${io.cwd}`, gates: [], stages: [], parts: [], alone: [], reuseConfig: [] };
+    return stackChecks({ repo, git: processGit(io.env), remote: 'origin', target: plan.target, prs: plan.prs.map(p => ({ number: p.number, head: p.pr.headRefOid })) });
+}
 /** The cleanup of the merged branches (src/stack/branches.ts); nothing to do, nothing called, when nothing was merged. */
 async function branchCleanup(io, merged, target, keep, run) {
     if (!merged.length)
@@ -335,7 +388,7 @@ async function branchCleanup(io, merged, target, keep, run) {
     }
 }
 /** `apv stack batch`: one full suite for several independent pull requests, then their merge by content. */
-async function batch(prs, values, io) {
+async function batch(prs, values, io, ci) {
     const foreign = ['method', 'allow-behind', 'reason'].filter(k => values[k] !== undefined);
     if (foreign.length)
         throw new UsageError(`--${foreign.join(', --')} : sans effet pour stack batch (fusion --merge de GitHub seulement, contenu vérifié)`);
@@ -352,6 +405,22 @@ async function batch(prs, values, io) {
     const repo = gitRead(io.cwd, ['rev-parse', '--show-toplevel']);
     if (!repo)
         throw new PipelineError('NOT_A_REPOSITORY', `Pas un dépôt Git : ${io.cwd}`);
+    // The test stacks of the suite: checked against the stacks the checkout declares before anything is built.
+    const stacks = values.stacks === undefined ? undefined : list(values.stacks);
+    if (stacks !== undefined) {
+        if (!stacks.length || new Set(stacks).size !== stacks.length)
+            throw new UsageError('--stacks attend une ou plusieurs piles différentes, par exemple --stacks 2 ou --stacks 1,2');
+        let declared;
+        try {
+            declared = (loadConfig(repo).config.stacks ?? []).map(x => x.id);
+        }
+        catch (error) {
+            throw new UsageError(`--stacks : configuration illisible (${cleanLine(errorMessage(error), 300)})`);
+        }
+        const unknown = stacks.filter(id => !declared.includes(id));
+        if (unknown.length)
+            throw new UsageError(`--stacks : pile inconnue ${unknown.join(', ')} (déclarées : ${declared.join(', ') || 'aucune'}, section stacks de .apv/config.json)`);
+    }
     const bin = io.env['APV_GH'] || 'gh';
     const calls = [];
     const log = (line) => io.stderr(`${line}\n`);
@@ -426,11 +495,13 @@ async function batch(prs, values, io) {
         try {
             // The target is also the reference of the scope of the proof (skipWhenOnly): its paths, its merge base with the batch.
             result = await runGates({ repo: worktree, config: loaded.config, stage: 'full', base, repeatReference: base, reference: base, repeatCeiling: false, env: io.env, log, signal: abort.signal,
-                ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}) });
+                ...(stacks ? { stacks } : {}), ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}) });
         }
         catch (error) {
-            if (error instanceof PipelineError && error.code === 'GATE_REPEAT')
+            // Refused before it ran (repetition ceiling, stacks the target does not declare or cannot give): nothing about the code.
+            if (error instanceof PipelineError && ['GATE_REPEAT', 'GATE_STACKS', 'STACK_UNKNOWN'].includes(error.code)) {
                 return { ok: false, runId: null, summary: `suite refusée : ${cleanLine(error.message, 600)}`, refused: cleanLine(error.message, 600) };
+            }
             throw error;
         }
         const verified = await verifyGates({ repo: worktree, config: loaded.config, commit: head, stage: 'full', repeatReference: base, reference: base });
@@ -442,8 +513,13 @@ async function batch(prs, values, io) {
             const flaky = [...new Set([...verified.flaky, ...result.flaky])];
             return { ok: false, runId: result.runId, summary: `réussi(s) seulement après relance : ${flaky.join(', ')} ; règle instable : examiner le test comme un bug possible du produit, corriger, relancer ; exécution ${result.runId}` };
         }
-        return { ok: result.ok && verified.ok, runId: result.runId,
-            summary: `${passed}/${result.receipts.length} contrôle(s) réussi(s)${notRequired.length ? `, non requis par leur portée : ${notRequired.join(', ')}` : ''}${failed.length ? `, en échec : ${failed.join(', ')}` : ''} ; apv gates verify ${verified.ok ? 'à 0' : 'en échec'} ; exécution ${result.runId}` };
+        // Failures of the infrastructure (a variable absent, a stack unreachable) are said apart; all of them: not the code.
+        const infra = result.infrastructure;
+        const infraText = infra.causes.length ? ` ; panne d'infrastructure probable : ${infra.causes.map(infrastructureText).join(' ; ')}` : '';
+        const ok = result.ok && verified.ok;
+        return { ok, runId: result.runId,
+            summary: `${passed}/${result.receipts.length} contrôle(s) réussi(s)${notRequired.length ? `, non requis par leur portée : ${notRequired.join(', ')}` : ''}${failed.length ? `, en échec : ${failed.join(', ')}` : ''}${infraText} ; apv gates verify ${verified.ok ? 'à 0' : 'en échec'} ; exécution ${result.runId}`,
+            ...(!ok && infra.all ? { infrastructure: `${infra.causes.map(infrastructureText).join(' ; ')} ; ${infrastructureAdvice(infra.causes, stacks ? [] : (loaded.config.stacks ?? []).map(x => x.id))}` } : {}) };
     };
     let report;
     const gh = processGh(bin, io.env, io.cwd);
@@ -453,7 +529,7 @@ async function batch(prs, values, io) {
         report = await batchMerge({
             repo, common: commonDir(repo), prs, bisect: values.bisect === true, merge: values.merge === true, ready: values.ready === true, keep: values.keep === true,
             remote: 'origin', gh, git: processGit(io.env), log, onCall,
-            pollMs: positiveInt(io.env['APV_STACK_POLL_MS'], 3000), pollAttempts: positiveInt(io.env['APV_STACK_POLL_ATTEMPTS'], 20),
+            pollMs: positiveInt(io.env['APV_STACK_POLL_MS'], 3000), pollAttempts: positiveInt(io.env['APV_STACK_POLL_ATTEMPTS'], 20), ...ci,
             prove, configDrift, repeatRefusal, signal: abort.signal,
             journal: entry => {
                 // Each merge of a batch leaves its signed trace, its merge commit being the target just after it.

@@ -20,6 +20,7 @@ import { readPreviewState } from '../preview/state.js';
 import { repositoryWorktrees } from '../execution/procs.js';
 import { flockFree, markStacksUsed, resolveStacks, stacksOfLock, stoppedSince, type ResolvedStack } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
+import { classifyFailures, type InfrastructureCause } from './infrastructure.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables, type SpreadPlan } from './spread.js';
 import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, resolveReference, tooManyFiles,
   type RepeatPlan } from './repeat.js';
@@ -121,6 +122,11 @@ export interface GateRunResult {
   cleanup: CleanupRecord | null;
   /** Stacks the checks lock that `apv stacks idle-stop` stopped and nothing restarted since: their checks will likely fail. */
   stoppedStacks: { stack: string; since: string; gates: string[] }[];
+  /**
+   * Failed checks whose output points at their infrastructure (a variable of their environment absent, a test stack
+   * unreachable, a copy not prepared), and whether every failure of the run is one (src/gates/infrastructure.ts).
+   */
+  infrastructure: { causes: InfrastructureCause[]; all: boolean };
   /** The checks spread over the stacks (`--stacks`): check, stack, copy where it ran; null without `--stacks`. */
   spread: { gate: string; stack: string; workspace: string; notPassed: string[]; error: string | null }[] | null;
   ok: boolean;
@@ -251,8 +257,8 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const asked = isFullSuite(gates, stage);
   if (options.stacks) {
     invariant(asked, 'GATE_STACKS', '--stacks répartit une suite complète : aucun contrôle de stage full à exécuter en entier ici');
-    invariant(options.stacks.length >= 2 && new Set(options.stacks).size === options.stacks.length, 'GATE_STACKS', '--stacks attend au moins deux piles différentes, par exemple --stacks 1,2');
-    invariant((options.config.stacks ?? []).length >= 2, 'GATE_STACKS', '--stacks : déclarer au moins deux piles (section stacks de .apv/config.json)');
+    invariant(options.stacks.length >= 1 && new Set(options.stacks).size === options.stacks.length, 'GATE_STACKS', '--stacks attend une ou plusieurs piles différentes, par exemple --stacks 2 ou --stacks 1,2');
+    invariant((options.config.stacks ?? []).length >= 1, 'GATE_STACKS', '--stacks : déclarer les piles (section stacks de .apv/config.json)');
   }
   // A full suite on a dirty tree proves nothing: refused before any wait, unless asked for.
   if (asked && dirty && !options.allowDirty) throw dirtyRefusal(status);
@@ -402,6 +408,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       for (const x of stoppedStacks) log(`ATTENTION : la pile ${x.stack} a été arrêtée par apv stacks idle-stop le ${x.since} et rien ne montre qu'elle ait redémarré depuis ; ${x.gates.join(', ')} la verrouille(nt). Redémarrer d'abord : apv stacks start ${x.stack}.`);
     }
     const keys = new Map<string, string>();
+    const missingEnv = new Map<string, string[]>();
     const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
     type Repeat = NonNullable<GateReceipt['repeat']>;
     type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'>>;
@@ -425,6 +432,8 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       const workspace = assigned?.workspace ?? repo;
       const env = { ...environment([...options.config.environment.passEnv, ...gate.passEnv], source),
         ...(assigned ? stackVariables(assigned.stack, gate, options.config.environment.passEnv) : {}) };
+      // The variables the check asks for and does not get: read again if it fails (infrastructure or test).
+      missingEnv.set(gate.id, gate.passEnv.filter(name => !env[name]));
       const command = workspace === repo ? commands.get(gate.id)! : expandCommand(targeted.has(gate.id) ? gate.affected! : gate.command, { ...context, workspace });
       let executable: { path: string; sha256: string } | null = null;
       try { executable = await executableIdentity(command[0]!, workspace, env); } catch { /* reported as spawn_error below */ }
@@ -622,10 +631,12 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       error: spread!.copies.find(c => c.dir === a.workspace)?.error ?? null })) : null;
     const result: GateRunResult = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
       reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, shared: null, suite, notRequired: [...notRequired.keys()], scope: [...scopeDecisions.values()],
-      queue: queue?.record ?? null, ports, flaky, cleanup, stoppedStacks, spread: spreadRecord, ok: list.every(r => success(r) || r.status === 'not_required') };
+      queue: queue?.record ?? null, ports, flaky, cleanup, stoppedStacks, infrastructure: classifyFailures(list, missingEnv), spread: spreadRecord,
+      ok: list.every(r => success(r) || r.status === 'not_required') };
     writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
       reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}),
       ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup } : {}), ...(spreadRecord ? { spread: spreadRecord } : {}), ...(stoppedStacks.length ? { stoppedStacks } : {}),
+      ...(result.infrastructure.causes.length ? { infrastructure: result.infrastructure } : {}),
       receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),
         ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}), ...(r.stack ? { stack: r.stack } : {}),
         ...(r.nearTimeout ? { nearTimeout: r.nearTimeout } : {}),

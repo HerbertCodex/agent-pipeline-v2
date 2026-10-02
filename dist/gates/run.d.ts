@@ -3,6 +3,7 @@ import { type ApvConfig } from '../config/load.js';
 import { PipelineError } from '../domain/errors.js';
 import { type PruneResult } from './store.js';
 import { type ResolvedStack } from '../stacks/idle.js';
+import { type InfrastructureCause } from './infrastructure.js';
 import { type ScopeDecision } from './proof-scope.js';
 import { type CleanupRecord, type PortsRecord, type QueueRecord, type SuiteHooks } from './suite.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
@@ -109,6 +110,14 @@ export interface GateRunResult {
         since: string;
         gates: string[];
     }[];
+    /**
+     * Failed checks whose output points at their infrastructure (a variable of their environment absent, a test stack
+     * unreachable, a copy not prepared), and whether every failure of the run is one (src/gates/infrastructure.ts).
+     */
+    infrastructure: {
+        causes: InfrastructureCause[];
+        all: boolean;
+    };
     /** The checks spread over the stacks (`--stacks`): check, stack, copy where it ran; null without `--stacks`. */
     spread: {
         gate: string;

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { IDENTITY_HINT } from '../run/commit-state.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { errorMessage } from '../domain/errors.js';
-import { anomalies, parsePullRequest, VIEW_FIELDS } from './github.js';
+import { anomalies, parsePullRequest, VIEW_FIELDS, waitForChecks } from './github.js';
 export function processGit(env) {
     return {
         run: (cwd, args) => new Promise(done => {
@@ -17,6 +17,16 @@ export function processGit(env) {
             child.once('close', code => done({ ok: code === 0, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') }));
         }),
     };
+}
+/** Why a proof says nothing about the code of the pull requests (refused before it ran, or an infrastructure failure), or null. */
+export function notAboutCode(proof) {
+    if (!proof)
+        return null;
+    if (proof.refused)
+        return `suite refusée avant de tourner (${proof.refused})`;
+    if (proof.infrastructure)
+        return `${proof.infrastructure}`;
+    return null;
 }
 const short = (sha) => sha.slice(0, 12);
 async function must(git, cwd, args) {
@@ -38,12 +48,16 @@ async function view(options, n) {
     }
 }
 async function settled(options, n) {
-    let result = await view(options, n);
-    for (let i = 0; i < options.pollAttempts && result.pr && (result.pr.mergeable === 'UNKNOWN' || result.pr.mergeStateStatus === 'UNKNOWN'); i += 1) {
-        await sleep(options.pollMs);
-        result = await view(options, n);
-    }
-    return result;
+    const mergeability = async () => {
+        let result = await view(options, n);
+        for (let i = 0; i < options.pollAttempts && result.pr && (result.pr.mergeable === 'UNKNOWN' || result.pr.mergeStateStatus === 'UNKNOWN'); i += 1) {
+            await sleep(options.pollMs);
+            result = await view(options, n);
+        }
+        return result;
+    };
+    // --wait-ci: a pull request whose CI still runs is waited for, never taken as green; the end is judged by the caller.
+    return waitForChecks(n, await mergeability(), mergeability, { ciWaitMs: options.ciWaitMs, ciPollMs: options.ciPollMs, log: options.log });
 }
 const stamp = (d) => d.toISOString().replace(/[-:]/g, '').replace('T', '-').replace(/\..*$/, '');
 /** The head of a pull request fetched from the remote (`refs/pull/<n>/head`, else its sha), checked to be `headRefOid`. */
@@ -225,7 +239,7 @@ async function batchSteps(options, report) {
         options.log(`Lot ${lotName} : ${lot.proof.ok ? 'prouvé' : 'NON prouvé'} (${lot.proof.summary}).`);
         return lot;
     };
-    /** A suite refused before it ran during the bisection: the bisection stops, nothing is concluded. */
+    /** A suite refused before it ran, or failed by its infrastructure, during the bisection: the bisection stops, nothing is concluded. */
     let refusedDuring = null;
     /** The pull requests of `list` (whose batch failed) that fail the suite, by halves. */
     const culprits = async (list) => {
@@ -239,8 +253,9 @@ async function batchSteps(options, report) {
                 return found;
             counter += 1;
             const lot = await prove(part, `b${counter}`);
-            if (lot.proof?.refused) {
-                refusedDuring ??= lot.proof.refused;
+            const elsewhere = notAboutCode(lot.proof);
+            if (elsewhere) {
+                refusedDuring ??= elsewhere;
                 await removeLot(options, lot);
                 return found;
             }
@@ -264,6 +279,11 @@ async function batchSteps(options, report) {
         await removeLot(options, whole);
         return stop(null, [`suite du lot refusée avant de tourner (${whole.proof.refused}) : ce n'est pas un échec de suite, la bissection ne s'applique pas ; rien n'est fusionné`]);
     }
+    // A suite failed by its infrastructure only (a variable absent, a stack unreachable): no pull request is blamed.
+    if (whole.proof?.infrastructure) {
+        await removeLot(options, whole);
+        return stop(null, [`suite du lot en échec par son infrastructure, pas par le code (${whole.proof.infrastructure}) : ce n'est pas un échec de test, la bissection ne s'applique pas ; rien n'est fusionné`]);
+    }
     let proven = whole.proof?.ok ? whole : null;
     if (!proven && options.bisect && whole.members.length > 1) {
         await removeLot(options, whole);
@@ -272,7 +292,7 @@ async function batchSteps(options, report) {
         if (refusedDuring) {
             report.culprits = [];
             report.interaction = false;
-            return stop(null, [`bissection arrêtée : la suite d'une moitié a été refusée avant de tourner (${refusedDuring}) ; ce n'est pas un échec de suite, aucune PR n'est isolée ni fusionnée`]);
+            return stop(null, [`bissection arrêtée : la suite d'une moitié n'a rien dit du code (${refusedDuring}) ; ce n'est pas un échec de test, aucune PR n'est isolée ni fusionnée`]);
         }
         if (aborted())
             return interrupted(null, 'pendant la bissection, avant toute fusion');

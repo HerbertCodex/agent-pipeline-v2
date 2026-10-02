@@ -85,7 +85,9 @@ test('a copy that cannot be prepared: its checks are not run and say why; wrong 
   assert.equal(browser.status, 'spawn_error');
   assert.match(browser.diagnostic, /Copie de la pile 2 non préparée : batch\.setup en échec \(failed, code 4\)/);
   assert.equal(r.json().gates.find(g => g.gate === 'integration').status, 'passed');
-  assert.equal((await p.run('--stacks', '1')).code, 2);
+  // A copy not prepared is a failure of the infrastructure, said apart; the receipt stays failed.
+  assert.deepEqual(r.json().infrastructure.causes.map(c => [c.gateId, c.kind]), [['browser', 'setup']]);
+  assert.equal(r.json().infrastructure.all, true);
   assert.equal((await p.run('--stacks', '1,1')).code, 2);
   assert.equal((await p.run('--stage', 'task', '--stacks', '1,2')).code, 2);
   const unknown = await p.run('--stacks', '1,9');
@@ -125,4 +127,36 @@ test('a suite warns when a stack it locks was stopped by apv stacks idle-stop an
   // The checks passed under its lock: the stack answered, the warning is gone.
   const again = await p.run('--json');
   assert.deepEqual(again.json().stoppedStacks, []);
+});
+
+test('--stacks 2: one stack, every check of a stack runs on it, in this copy, with its variables and under its lock', { skip: !hasFlock && 'flock(1) missing' }, async t => {
+  const p = project(t, { holdMs: 50 });
+  const r = await p.run('--stacks', '2', '--json');
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.deepEqual(r.json().spread.map(a => [a.gate, a.stack, a.workspace === realpathSync(p.repo)]), [['integration', '2', true], ['browser', '2', true]]);
+  for (const name of ['integration', 'browser']) {
+    const ran = p.ran(name);
+    assert.deepEqual([ran.cwd, ran.stack, ran.url, ran.lockFile], [realpathSync(p.repo), '2', 'http://127.0.0.1:57521', p.lock2]);
+  }
+  assert.ok(!existsSync(join(p.common, 'apv', 'copies')) || readdirSync(join(p.common, 'apv', 'copies')).length === 0, 'no copy for a single stack');
+  assert.deepEqual(r.json().infrastructure, { causes: [], all: false });
+});
+
+test('a check failed for a variable of its environment absent, or a stack unreachable, is said to be infrastructure', { skip: !hasFlock && 'flock(1) missing' }, async t => {
+  const p = project(t, { holdMs: 10 });
+  const config = JSON.parse(readFileSync(join(p.repo, '.apv/config.json'), 'utf8'));
+  config.gates[1].command = [process.execPath, '-e', 'if (!process.env.STACK_URL) { console.error("Error: Variable STACK_URL absente"); process.exit(1); }'];
+  writeFileSync(join(p.repo, '.apv/config.json'), JSON.stringify(config));
+  git(p.repo, 'commit', '-qam', 'integration lit STACK_URL');
+  const r = await p.run('--json');
+  assert.equal(r.code, 1);
+  assert.deepEqual(r.json().infrastructure.causes.map(c => [c.gateId, c.kind, c.detail]), [['integration', 'environment', 'variable STACK_URL absente de l\'environnement du contrôle']]);
+  assert.equal(r.json().infrastructure.all, true);
+  const human = await p.run();
+  assert.match(human.stdout, /Panne d'infrastructure probable \(tous les échecs\)/);
+  assert.match(human.stdout, /- integration : variable d'environnement absente \(variable STACK_URL absente/);
+  assert.match(human.stdout, /Marche : panne d'infrastructure, pas un test en échec : donner l'environnement des piles de test : --stacks <pile> \(déclarées : 1, 2\)/);
+  // With the variables of its stack, the same check passes.
+  const ok = await p.run('--stacks', '1', '--json');
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr);
 });
