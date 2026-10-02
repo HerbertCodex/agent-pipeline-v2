@@ -118,6 +118,10 @@ export function stackRules(cwd: string, remote = 'origin'): (pr: PullRequest, ta
     const repo = gitRead(cwd, ['rev-parse', '--show-toplevel']);
     const head = pr.headRefOid.slice(0, 12);
     if (!repo) return { problems: [`PR #${pr.number} : règles avant fusion non vérifiables hors d'une copie du dépôt (reçus, relectures, journal de l'opérateur) : lancer apv stack depuis le dépôt`], notes: [] };
+    // The base of a stacked pull request (the head branch of the one below) may not be fetched yet: its remote branch only.
+    if (gitRead(repo, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${target}`]) === null) {
+      gitRead(repo, ['fetch', '--no-tags', remote, `+refs/heads/${target}:refs/remotes/${remote}/${target}`]);
+    }
     try {
       const report = await checkMergeRules({ repo, commit: pr.headRefOid, target: `${remote}/${target}` });
       const notes = report.rules.filter(r => r.status === 'waived').map(r => `dérogation de l'opérateur à la règle ${r.rule} (${r.waiver!.at}) : ${r.waiver!.reason}`);
@@ -145,7 +149,7 @@ function positiveInt(value: string | undefined, fallback: number): number {
 }
 
 /** Writes the signed trace of a merge (`apv audit merges`); returns the error when it could not. */
-function traceMerge(cwd: string, merge: { pr: number; head: string; target: string; method: string; mergeCommit: string | null }): string | null {
+function traceMerge(cwd: string, merge: { pr: number; head: string; target: string; method: string; mergeCommit: string | null; commits?: number }): string | null {
   try {
     const root = gitRead(cwd, ['rev-parse', '--show-toplevel']);
     if (!root) return 'pas un dépôt Git';

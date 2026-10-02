@@ -13,6 +13,8 @@ export interface MergeTraceBody {
     method: string;
     mergeCommit: string | null;
     at: string;
+    /** A rebase merge: the number of commits it landed, `mergeCommit` the last one (absent: one commit). */
+    commits?: number;
 }
 export interface MergeTrace extends MergeTraceBody {
     sig: string;
@@ -42,7 +44,8 @@ export declare const DEFAULT_AUDIT_DAYS = 30;
 /**
  * Walks the first-parent history of `ref` since `since` (default: the first trace, else 30 days) and lists the commits
  * no signed trace accounts for: a merge commit is accounted for by the trace of its merge commit or of the head it
- * merged (second parent); a squash or a rebase by the trace of its merge commit.
+ * merged (second parent); a squash by the trace of its merge commit; a rebase by the trace of its last commit, which
+ * also accounts for the commits before it that the same merge landed (`commits`).
  */
 export declare function auditMerges(repo: string, common: string, ref: string, options?: {
     since?: string;

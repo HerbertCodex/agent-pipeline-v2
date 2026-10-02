@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { gitRead } from '../run/git-probe.js';
 
 export interface DbExplainQuery { name: string; sql: string }
 export interface DbException { rule: string; target: string; reason: string }
@@ -53,9 +54,28 @@ export function loadDbConfig(root: string, configPath?: string): LoadedConfig {
     if (configPath) problems.push(`fichier de configuration introuvable : ${path}`);
     return { config, path: null, problems };
   }
+  return parseDbConfig(readFileSync(path, 'utf8'), path);
+}
+
+/**
+ * The `db` section of `.apv/config.json` as committed at `commit` (`git show <commit>:.apv/config.json`): what a rule
+ * reads at a base, never the working tree a change can edit. Defaults when the file is absent at that commit.
+ */
+export function loadDbConfigAtCommit(repo: string, commit: string): LoadedConfig {
+  const file = `${commit}:.apv/config.json`;
+  if (gitRead(repo, ['cat-file', '-e', file]) === null) return { config: structuredClone(DEFAULT_DB_CONFIG), path: null, problems: [] };
+  const text = gitRead(repo, ['show', file]);
+  if (text === null) return { config: structuredClone(DEFAULT_DB_CONFIG), path: file, problems: [`${file} : illisible`] };
+  return parseDbConfig(text, file);
+}
+
+/** Reads the `db` section of the text of a configuration file. */
+export function parseDbConfig(text: string, path: string): LoadedConfig {
+  const config: DbConfig = structuredClone(DEFAULT_DB_CONFIG);
+  const problems: string[] = [];
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(path, 'utf8'));
+    raw = JSON.parse(text);
   } catch (error) {
     problems.push(`${path} : JSON invalide (${(error as Error).message})`);
     return { config, path, problems };

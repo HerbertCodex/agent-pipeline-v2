@@ -6,8 +6,8 @@
 // through a symlinked node_modules, docker or supabase commands on a declared test stack without its lock.
 // This is a guard rail against mistakes, not a security boundary: a determined command can
 // always be written in a shape this parser does not recognise.
-import { realpathSync } from 'node:fs';
-import { basename } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DOMAIN_REVIEWERS, agentName, flatten, isMainModule, namesAnchor, readHookInput } from './lib.mjs';
 import { EMPTY_CONTEXT, HARNESS_REASONS, commandWords, hookContext, installProblem, killProblem, lockWrapper, mergeHeld, remoteWriteProblem, stackProblem } from './harness-guard.mjs';
@@ -88,6 +88,8 @@ export function tokenize(command) {
   let inWord = false;
   let shadow = '';
   const pending = [];
+  /** Index of the simple command each heredoc feeds (its body is that command's standard input). */
+  const heredocOwners = [];
   const flushWord = () => {
     if (inWord) words.push(word);
     word = '';
@@ -157,7 +159,7 @@ export function tokenize(command) {
     if (command.startsWith('<<', i) && !command.startsWith('<<<', i)) {
       flushWord();
       const { heredoc, next } = readHeredoc(command, i);
-      if (heredoc) pending.push(heredoc);
+      if (heredoc) { pending.push(heredoc); heredocOwners.push(segments.length); }
       shadow += command.slice(i, next);
       i = next;
       continue;
@@ -181,7 +183,52 @@ export function tokenize(command) {
     i += 1;
   }
   flushSegment();
-  return { segments, shadow };
+  return { segments, shadow, heredocOwners };
+}
+
+/**
+ * Commands whose standard input is data, never run: a heredoc they read is text (a PR body, a commit message, a file
+ * written by cat or tee). Any other command reading a heredoc (sh, bash, node, python, patch, psql...) may run it.
+ */
+const DATA_SINKS = new Set(['cat', 'tee', 'gh', 'git', 'wc', 'head', 'tail', 'sort', 'uniq', 'grep', 'rg', 'jq', 'column', 'fmt', 'fold', 'less', 'more', 'echo', 'printf']);
+/** Options whose value is a message, never a path: `git commit -m`, `gh pr create --body`. */
+const MESSAGE_OPTIONS = { git: ['-m', '--message'], gh: ['--body', '-b', '--title', '-t', '--notes'] };
+
+/** The command substitutions inside a word (`$(…)` and backquotes): commands the shell runs, even inside a message. */
+export function substitutions(word) {
+  const out = [];
+  for (let i = 0; i < word.length; i += 1) {
+    if (word.startsWith('$(', i)) { const end = skipSubstitution(word, i + 2); out.push(word.slice(i + 2, Math.max(i + 2, end - 1))); i = end - 1; continue; }
+    if (word[i] === '`') { const end = word.indexOf('`', i + 1); out.push(word.slice(i + 1, end === -1 ? word.length : end)); i = end === -1 ? word.length : end; }
+  }
+  return out;
+}
+
+/**
+ * Whether a command names a store of the anchor or its key in what it runs or touches: its words, its redirections,
+ * the substitutions it runs, the heredocs a command runs. Text that is only data is left out: the value of a message
+ * option (`git commit -m "…apv/reviews…"`, `gh pr create --body "$(cat <<'EOF' … EOF)"`, whose substitutions are read
+ * as commands) and the body of a heredoc read by a data command (`cat <<EOF`). Any doubt reads the whole command.
+ */
+export function anchorInCommand(command, depth = 0) {
+  if (typeof command !== 'string' || !namesAnchor(command)) return false;
+  if (depth > MAX_NESTING) return true;
+  const { segments, heredocOwners } = tokenize(command);
+  const lead = words => basename(commandWords(words)?.words[0] ?? words[0] ?? '');
+  if (heredocOwners.some(i => !DATA_SINKS.has(lead(segments[i] ?? [])))) return true;
+  const kept = [];
+  for (const words of segments) {
+    const options = MESSAGE_OPTIONS[lead(words)] ?? [];
+    for (let k = 0; k < words.length; k += 1) {
+      const word = words[k];
+      const attached = options.map(o => o.startsWith('--') ? `${o}=` : o).find(o => word.startsWith(o) && word.length > o.length && (o.endsWith('=') || o.length === 2));
+      const value = k > 0 && options.includes(words[k - 1]) ? word : attached ? word.slice(attached.length) : null;
+      if (value === null) { kept.push(word); continue; }
+      if (attached) kept.push(attached);
+      for (const sub of substitutions(value)) if (anchorInCommand(sub, depth + 1)) return true;
+    }
+  }
+  return namesAnchor(kept.join(' '));
 }
 
 const isAssignment = word => /^[A-Za-z_][A-Za-z0-9_]*=/.test(word);
@@ -216,7 +263,9 @@ export function pushToDefault(words, defaults = ['main', 'master'], current = nu
   if (words[i] !== 'push') return null;
   const args = words.slice(i + 1);
   if (args.some(a => a === '--all' || a === '--mirror' || a === '--branches')) return defaults[0] ?? 'main';
-  const valued = new Set(['--repo', '--receive-pack', '--exec', '-o', '--push-option', '--signed', '--force-with-lease', '--recurse-submodules']);
+  // Options followed by a separate value. `--signed`, `--force-with-lease` and `--recurse-submodules` take theirs only
+  // after `=`: alone, the next word is the remote (`git push --signed origin main`).
+  const valued = new Set(['--repo', '--receive-pack', '--exec', '-o', '--push-option']);
   const plain = [];
   for (let k = 0; k < args.length; k += 1) {
     if (args[k].startsWith('-')) { if (valued.has(args[k]) && !args[k].includes('=')) k += 1; continue; }
@@ -240,8 +289,40 @@ const PLUGIN_ROOTS = (() => {
   return [...new Set([raw, real])];
 })();
 const INTERPRETERS = new Set(['node', 'nodejs', 'python', 'python3', 'deno', 'bun', 'tsx', 'ts-node', 'perl', 'ruby', 'php']);
-/** Modules of the tool that sign or read what is signed: never imported by a script. */
-const TOOL_MODULES = /dist\/+(?:rules|stack|review|gates|lifecycle|commands)\/|CLAUDE_PLUGIN_ROOT|\.claude\/+plugins|hooks\/+scripts\//;
+/** Places that are the plugin wherever it is installed: never run or imported by a script. */
+const PLUGIN_PLACES = /CLAUDE_PLUGIN_ROOT|\.claude\/+plugins|hooks\/+scripts\//;
+/** Modules of the tool that sign or read what is signed, by their path in a build of the plugin. */
+const TOOL_MODULE_PATHS = /(?:[\w.~$@{}-]*\/+)*dist\/+(?:rules|stack|review|gates|lifecycle|commands)\/[\w./-]*/g;
+
+/**
+ * Whether `dir` (or one of its parents) is a build of this plugin: a checkout or an install holding both `dist/cli.js`
+ * and `hooks/scripts/bash-guard.mjs`. A project's own `dist/commands/` is not the plugin.
+ */
+export function insidePluginBuild(dir) {
+  let current = dir;
+  for (let k = 0; k < 40 && current; k += 1) {
+    if (PLUGIN_ROOTS.includes(current) || (existsSync(resolve(current, 'dist', 'cli.js')) && existsSync(resolve(current, 'hooks', 'scripts', 'bash-guard.mjs')))) return true;
+    const up = dirname(current);
+    if (up === current) break;
+    current = up;
+  }
+  return false;
+}
+
+/**
+ * Whether the text of a command names a module of the tool (`dist/rules/…`, `dist/commands/…`) that resolves, from `cwd`,
+ * inside a build of the plugin; a path the guard cannot resolve (a variable, `~`, a file that is not there) counts as the plugin's.
+ */
+export function namesToolModule(flat, cwd) {
+  for (const m of flat.matchAll(TOOL_MODULE_PATHS)) {
+    const path = m[0];
+    if (/[$~{}]/.test(path)) return true;
+    const full = isAbsolute(path) ? path : resolve(cwd ?? process.cwd(), path);
+    // A module that is not there cannot be told apart: counted as the plugin's (an installed copy elsewhere).
+    if (!existsSync(full) || insidePluginBuild(dirname(full))) return true;
+  }
+  return false;
+}
 
 /**
  * Why a command reaches the plugin's own code or the key other than through apv and the hooks, or null: an interpreter
@@ -249,14 +330,14 @@ const TOOL_MODULES = /dist\/+(?:rules|stack|review|gates|lifecycle|commands)\/|C
  * run other than dist/cli.js or bin/apv, the home folder searched, copied or globbed, a path decoded from base64 and used,
  * the variables of the tool.
  */
-export function pluginCodeProblem(words, flat) {
+export function pluginCodeProblem(words, flat, cwd = null) {
   const cw = commandWords(words);
   const w = cw ? cw.words : words;
   const tool = basename(w[0] ?? '');
   if (INTERPRETERS.has(tool)) {
     const script = w.slice(1).find(a => !a.startsWith('-'));
     const runsApv = script && (/(^|\/)dist\/cli\.js$/.test(script) || /(^|\/)bin\/apv$/.test(script));
-    if (!runsApv && (TOOL_MODULES.test(flat) || PLUGIN_ROOTS.some(r => flat.includes(r)))) return REASONS.pluginCode;
+    if (!runsApv && (PLUGIN_PLACES.test(flat) || PLUGIN_ROOTS.some(r => flat.includes(r)) || namesToolModule(flat, cwd))) return REASONS.pluginCode;
   }
   return null;
 }
@@ -288,14 +369,15 @@ export function homeFolderProblem(words, flat) {
 /**
  * Whether one command starts a Claude Code session: a command named claude or claude-code, a binary under
  * .local/share/claude/versions/, @anthropic-ai/claude-code, or a variable in command position on a line that prints
- * (`$c -p ...`). `claude --version` and `claude -p /usage` (the quota reading, without a model) stay allowed.
+ * (`$c -p ...`, `-p` among its own words). `claude --version` and `claude -p /usage` (the quota reading, without a model) stay allowed.
  */
 export function nestedClaude(cwords, flat) {
   const first = cwords[0] ?? '';
   const allowed = (cwords.length === 2 && ['--version', '-v'].includes(cwords[1])) || (cwords.length === 3 && cwords[1] === '-p' && cwords[2] === '/usage');
   if (['claude', 'claude-code'].includes(basename(first)) || /\.local\/+share\/+claude\/+versions\//.test(first)) return !allowed;
   if (cwords.some(a => /@anthropic-ai\/+claude-code/.test(a))) return true;
-  if (/^\$\{?\w+\}?$/.test(first) && /(^|\s)(-p|--print)(\s|$)/.test(flat)) return true;
+  // A variable in command position that prints: `-p` among the words of that same command, never elsewhere in the line.
+  if (/^\$\{?\w+\}?$/.test(first) && cwords.slice(1).some(a => a === '-p' || a === '--print' || /^-[a-zA-Z]*p$/.test(a) && !a.startsWith('--'))) return true;
   return false;
 }
 
@@ -328,34 +410,57 @@ export function githubWrite(words) {
  * pull requests on GitHub, so it needs the same explicit authorisation as `gh pr merge`.
  */
 const LAUNCHERS = new Set(['node', 'npx', 'bunx', 'npm', 'pnpm', 'yarn']);
+/**
+ * Commands that only print, search or name their arguments, never run them: an `apv` among their words is text
+ * (`echo apv stack merge`, `grep -rn "apv stack merge" docs`). Any other command that carries `apv` in its words is
+ * taken as running it, whatever prefix sits in front (timeout, nice, command, env -i, watch, unbuffer...).
+ */
+const TEXT_COMMANDS = new Set(['echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'man', 'which', 'type', 'whereis', 'cat', 'less',
+  'more', 'head', 'tail', 'wc', 'sed', 'awk', 'git', 'gh', 'ls', 'test', '[', 'true', ':']);
+
+/**
+ * The `apv` call of the words of one simple command: its arguments and the assignments set for it, or null. Prefixes
+ * that run the rest of their arguments are passed by `commandWords` (assignments, sudo, env -i, nohup, timeout, nice,
+ * command, exec, xargs...); `apv` then runs as the binary, or after a launcher (`npx apv`, `node …/dist/cli.js`).
+ * A prefix it does not know (`watch`, `unbuffer`, `script -c`...) still counts: `apv` anywhere in the words of a
+ * command that is not a text command (`TEXT_COMMANDS`) is taken as run, so a guard never lets a wrapper hide it.
+ */
+/** Commands of the tool (src/commands/index.ts): what follows `apv` behind an unknown prefix. */
+const APV_COMMANDS = new Set(['init', 'onboard', 'spec', 'run', 'stack', 'rules', 'audit', 'ledger', 'scope', 'gates', 'lock', 'wait', 'procs', 'stacks',
+  'review', 'dast', 'db', 'design', 'structure', 'reuse', 'map', 'quota', 'preview', 'web', 'status', 'help']);
+
+export function apvCall(words) {
+  const cw = commandWords(words);
+  if (!cw) return null;
+  const w = cw.words;
+  const lead = basename(w[0]);
+  if (lead === 'apv') return { args: w.slice(1), assignments: cw.assignments };
+  if (TEXT_COMMANDS.has(lead)) return null;
+  for (let k = 1; k < w.length; k += 1) {
+    const name = basename(w[k]);
+    if (name !== 'apv' && name !== 'cli.js') continue;
+    // After a launcher (npx apv, node …/dist/cli.js): the tool, as always.
+    if (LAUNCHERS.has(lead) || w.slice(1, k).some(x => LAUNCHERS.has(basename(x)))) return { args: w.slice(k + 1), assignments: cw.assignments };
+    // Behind a prefix this guard does not know: the tool when a command of the tool follows (never `cp apv /x`).
+    if (name === 'apv' && APV_COMMANDS.has(positional(w.slice(k + 1))[0] ?? '')) return { args: w.slice(k + 1), assignments: cw.assignments };
+  }
+  return null;
+}
+
 export function isStackMerge(words) {
-  const start = words.findIndex(w => !isAssignment(w) && w !== 'env');
-  if (start === -1) return false;
-  const lead = basename(words[start]);
-  return words.some((word, k) => {
-    const name = basename(word);
-    if (name !== 'apv' && name !== 'cli.js') return false;
-    if (!(k === start && name === 'apv') && !(k > start && LAUNCHERS.has(lead))) return false;
-    const [command, ...rest] = positional(words.slice(k + 1));
-    // `apv stack batch <pr...> --merge` merges too (docs/APV3-SPEC.md, section 18.5).
-    return command === 'stack' && (rest.includes('merge') || (rest[0] === 'batch' && words.slice(k + 1).includes('--merge')));
-  });
+  const call = apvCall(words);
+  if (!call) return false;
+  const [command, ...rest] = positional(call.args);
+  // `apv stack batch <pr...> --merge` merges too (docs/APV3-SPEC.md, section 18.5).
+  return command === 'stack' && (rest.includes('merge') || (rest[0] === 'batch' && call.args.includes('--merge')));
 }
 
 /**
- * The arguments of an `apv` call in the words of one simple command (the binary, `npx apv`, or `node …/dist/cli.js`),
- * or null when the command does not run the tool.
+ * The arguments of an `apv` call in the words of one simple command (the binary, `npx apv`, or `node …/dist/cli.js`,
+ * behind any prefix: see `apvCall`), or null when the command does not run the tool.
  */
 export function apvArguments(words) {
-  const start = words.findIndex(w => !isAssignment(w) && w !== 'env');
-  if (start === -1) return null;
-  const lead = basename(words[start]);
-  for (let k = start; k < words.length; k += 1) {
-    const name = basename(words[k]);
-    if (name !== 'apv' && name !== 'cli.js') continue;
-    if ((k === start && name === 'apv') || (k > start && LAUNCHERS.has(lead))) return words.slice(k + 1);
-  }
-  return null;
+  return apvCall(words)?.args ?? null;
 }
 
 /** The value of `--name <v>` or `--name=<v>` in `args`, or undefined. */
@@ -374,7 +479,8 @@ export function reviewRecordProblem(words, agentType) {
   const args = apvArguments(words);
   if (!args) return null;
   const [command, sub] = positional(args);
-  if (command !== 'review' || sub !== 'record') return null;
+  // `record` among the words, wherever the options put it (`apv review --domain securite record`).
+  if (command !== 'review' || (sub !== 'record' && !args.includes('record'))) return null;
   const domain = optionValue(args, '--domain');
   const role = DOMAIN_REVIEWERS[domain];
   if (!role) return null; // the tool refuses an unknown domain itself
@@ -392,7 +498,7 @@ export function reviewRecordCall(command) {
     const args = apvArguments(words);
     if (!args) continue;
     const [name, sub] = positional(args);
-    if (name === 'review' && sub === 'record') return { words, domain: optionValue(args, '--domain') ?? null, reviewer: optionValue(args, '--reviewer') ?? null };
+    if (name === 'review' && (sub === 'record' || args.includes('record'))) return { words, domain: optionValue(args, '--domain') ?? null, reviewer: optionValue(args, '--reviewer') ?? null };
   }
   return null;
 }
@@ -408,12 +514,14 @@ export function isProductionDeploy(words) {
     (a === '--target' && args[k + 1] === 'production'));
 }
 
-/** An explicit authorisation: set in the hook environment, or as an assignment prefixing the command. */
+/**
+ * An explicit authorisation: set in the hook environment, or as an assignment set for the command itself (before it,
+ * or after a prefix such as `env` or `timeout`, as `commandWords` reads them).
+ */
 function authorised(words, variable, env) {
   if (env[variable] === '1') return true;
-  const at = words.findIndex(w => !isAssignment(w) && w !== 'env');
-  const prefix = at === -1 ? words : words.slice(0, at);
-  return prefix.includes(`${variable}=1`);
+  const assignments = apvCall(words)?.assignments ?? commandWords(words)?.assignments ?? [];
+  return assignments.includes(`${variable}=1`);
 }
 
 const HIDDEN_OUTPUT = /(?:&>>?|>&|\d*>>?)\s*\/dev\/null\b|\btee\s+(?:-a\s+)?\/dev\/null\b/;
@@ -495,7 +603,7 @@ export function evaluateCommand(command, env = {}, context = EMPTY_CONTEXT) {
 
 function evaluate(command, env, context, depth, inherited) {
   if (typeof command !== 'string' || command.trim() === '') return { decision: 'allow' };
-  if (namesAnchor(command)) return { decision: 'deny', reason: REASONS.anchorStore };
+  if (anchorInCommand(command)) return { decision: 'deny', reason: REASONS.anchorStore };
   const flat = flatten(command);
   if (MERGE_API.test(flat)) return { decision: 'deny', reason: context.agentId ? REASONS.mergeBySubagent : REASONS.rawMerge };
   if (/--git-common-dir/.test(flat) && !/^\s*git\s+rev-parse(\s+--path-format=(absolute|relative))?\s+--git-common-dir\s*$/.test(flat)) return { decision: 'deny', reason: REASONS.commonDir };
@@ -525,7 +633,7 @@ function evaluate(command, env, context, depth, inherited) {
       if (nested.decision === 'deny') return nested;
     }
     if (isForcePush(words)) return { decision: 'deny', reason: REASONS.forcePush };
-    const code = pluginCodeProblem(words, flat) ?? homeFolderProblem(words, flat);
+    const code = pluginCodeProblem(words, flat, context.cwd ?? null) ?? homeFolderProblem(words, flat);
     if (code) return { decision: 'deny', reason: code };
     const cwords = commandWords(words)?.words ?? words;
     if (nestedClaude(cwords, flat)) return { decision: 'deny', reason: REASONS.nestedClaude };

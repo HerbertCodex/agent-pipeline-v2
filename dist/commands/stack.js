@@ -114,6 +114,10 @@ export function stackRules(cwd, remote = 'origin') {
         const head = pr.headRefOid.slice(0, 12);
         if (!repo)
             return { problems: [`PR #${pr.number} : règles avant fusion non vérifiables hors d'une copie du dépôt (reçus, relectures, journal de l'opérateur) : lancer apv stack depuis le dépôt`], notes: [] };
+        // The base of a stacked pull request (the head branch of the one below) may not be fetched yet: its remote branch only.
+        if (gitRead(repo, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${target}`]) === null) {
+            gitRead(repo, ['fetch', '--no-tags', remote, `+refs/heads/${target}:refs/remotes/${remote}/${target}`]);
+        }
         try {
             const report = await checkMergeRules({ repo, commit: pr.headRefOid, target: `${remote}/${target}` });
             const notes = report.rules.filter(r => r.status === 'waived').map(r => `dérogation de l'opérateur à la règle ${r.rule} (${r.waiver.at}) : ${r.waiver.reason}`);

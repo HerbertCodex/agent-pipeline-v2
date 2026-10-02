@@ -12,7 +12,9 @@ export const WRITE_REASON = 'APV : accès refusé à un magasin que seuls l\'out
 /** { decision: 'allow' } or { decision: 'deny', reason } for one write. */
 export function evaluateWrite(input) {
   const tool = input?.tool_input ?? {};
-  const targets = [tool.file_path, tool.notebook_path, tool.path, tool.pattern, tool.glob].filter(v => typeof v === 'string');
+  // Paths only: the pattern of Grep is the text searched (a search for « apv/reviews » in src is not a read of the store);
+  // the pattern of Glob is a path glob.
+  const targets = [tool.file_path, tool.notebook_path, tool.path, input?.tool_name === 'Grep' ? undefined : tool.pattern, tool.glob].filter(v => typeof v === 'string');
   // Grep and Glob from the home folder itself toward its hidden folders (where the key is).
   // Glob: its pattern is a path glob; Grep: its glob (its pattern is the text searched, never a path).
   const globs = (input?.tool_name === 'Grep' ? [tool.glob] : [tool.pattern]).filter(v => typeof v === 'string');

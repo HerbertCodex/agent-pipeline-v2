@@ -45,7 +45,8 @@ export const DEFAULT_AUDIT_DAYS = 30;
 /**
  * Walks the first-parent history of `ref` since `since` (default: the first trace, else 30 days) and lists the commits
  * no signed trace accounts for: a merge commit is accounted for by the trace of its merge commit or of the head it
- * merged (second parent); a squash or a rebase by the trace of its merge commit.
+ * merged (second parent); a squash by the trace of its merge commit; a rebase by the trace of its last commit, which
+ * also accounts for the commits before it that the same merge landed (`commits`).
  */
 export function auditMerges(repo, common, ref, options = {}) {
     const traces = readMergeTraces(common);
@@ -60,6 +61,15 @@ export function auditMerges(repo, common, ref, options = {}) {
     if (!raw)
         return empty;
     const merged = new Set(traces.map(t => t.mergeCommit).filter((x) => typeof x === 'string'));
+    // A rebase merge landed `commits` commits, the last one being its merge commit: the ones before it on the first parent
+    // are accounted for by the same signed trace (never more than it says).
+    for (const t of traces) {
+        if (!t.mergeCommit || !Number.isInteger(t.commits) || (t.commits ?? 1) <= 1 || (t.commits ?? 1) > 1000)
+            continue;
+        const landed = gitRead(repo, ['rev-list', '--first-parent', `--max-count=${t.commits}`, t.mergeCommit]);
+        for (const sha of (landed ?? '').split('\n').map(x => x.trim()).filter(Boolean))
+            merged.add(sha);
+    }
     const heads = new Set(traces.map(t => t.head));
     const unaccounted = [];
     let commits = 0;

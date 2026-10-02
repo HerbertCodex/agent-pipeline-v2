@@ -1,6 +1,6 @@
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { loadConfigAtCommit } from '../config/load.js';
-import { loadDbConfig } from '../db/config.js';
+import { loadDbConfigAtCommit } from '../db/config.js';
 import { designDir } from '../design/config.js';
 import { applyBaseGates } from '../gates/base-gates.js';
 import { verifyGates } from '../gates/verify.js';
@@ -112,7 +112,10 @@ export async function checkMergeRules(input) {
     else
         rules.push(outcome('instable', 'ok', 'aucun contrôle réussi seulement après relance'));
     // relecture, captures: the domains `apv review plan` retains for the change, each recorded at this commit.
-    const plan = planReviews({ repo, base: mergeBase, head: sha, settings: reviewPlanSettings(atBase.review), migrations: loadDbConfig(repo).config.migrations,
+    // The migrations as the base declares them, and as the change declares them: a change that moves db.migrations
+    // never takes its migrations out of the data review (both sets of paths count, never the working tree).
+    const migrations = [...new Set([...loadDbConfigAtCommit(repo, mergeBase).config.migrations, ...loadDbConfigAtCommit(repo, sha).config.migrations])];
+    const plan = planReviews({ repo, base: mergeBase, head: sha, settings: reviewPlanSettings(atBase.review), migrations,
         designDir: designDir(atBase.design), sensitive: [...sensitivePaths, ...atBase.risk.highPaths], force: [] });
     const reviews = latestReviews(common, sha);
     const reviewProblems = [];

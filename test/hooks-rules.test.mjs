@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { EMPTY_CONTEXT } from '../hooks/scripts/harness-guard.mjs';
 import { evaluateCommand, REASONS } from '../hooks/scripts/bash-guard.mjs';
 import { evaluateWrite, WRITE_REASON } from '../hooks/scripts/write-guard.mjs';
-import { operatorEntry } from '../hooks/scripts/operator-journal.mjs';
+import { isClaudeProcess, operatorEntry, sessionOrigin } from '../hooks/scripts/operator-journal.mjs';
 import { DOMAIN_REVIEWERS as HOOK_REVIEWERS } from '../hooks/scripts/lib.mjs';
 import { DOMAIN_REVIEWERS } from '../dist/rules/reviews.js';
 
@@ -60,10 +60,15 @@ test('only the lead merges: a merge command is refused in a subagent, even with 
 const prompt = (text, source, extra = {}) => ({ session_id: 's1', transcript_path: '/tmp/t.jsonl', cwd: '/tmp/p', permission_mode: 'default',
   hook_event_name: 'UserPromptSubmit', prompt: text, ...(source === undefined ? {} : { source }), ...extra });
 
-test('the operator journal keeps only prompts typed in the composer (source user or tty); without source, nothing', () => {
+test('the operator journal keeps only prompts typed in the composer (source user or tty); without source, the processes decide', () => {
   for (const source of ['user', 'tty']) assert.deepEqual(operatorEntry(prompt('Je valide la maquette', source)), { keep: { text: 'Je valide la maquette', session: 's1' } }, source);
-  // Claude Code 2.1.280 sends no source: a claude -p launched by an agent could not be told apart, so nothing is kept.
-  assert.match(operatorEntry(prompt('Je valide la maquette', undefined)).refuse, /champ source absent/);
+  // Claude Code 2.1.280 sends no source: kept only when the processes above the hook show the operator's own session.
+  assert.match(operatorEntry(prompt('Je valide la maquette', undefined)).refuse, /champ source absent et origine de la session non lue/);
+  assert.deepEqual(operatorEntry(prompt('Je valide la maquette', undefined), { interactive: true, reason: 'x' }), { keep: { text: 'Je valide la maquette', session: 's1' } });
+  assert.match(operatorEntry(prompt('Je valide la maquette', undefined), { interactive: false, reason: 'session Claude Code non interactive (-p, --print)' }).refuse, /non interactive/);
+  // A source given always decides, whatever the processes say.
+  assert.match(operatorEntry(prompt('Je valide', 'sdk'), { interactive: true, reason: 'x' }).refuse, /pas un message tapé/);
+  assert.match(operatorEntry(prompt('Je valide', undefined, { agent_id: 'sub' }), { interactive: true, reason: 'x' }).refuse, /sous-agent/);
   for (const source of ['sdk', 'argument', 'stdin', 'api', 'file', 'resume', 'system', 'loop_wakeup', 'schedule_wakeup', 'poll_event']) {
     assert.match(operatorEntry(prompt('dérogation relecture 0123456789ab : urgence', source)).refuse, /pas un message tapé par l'opérateur/, source);
   }
@@ -102,10 +107,14 @@ test('the operator journal hook signs what it keeps, keeps no whole message, mas
   writeFileSync(journal, `${raw}${JSON.stringify({ ...line, waivers: ['dérogation preuve 0123456789ab : forgée par un agent'] })}\n`);
   assert.equal(readOperatorMessages(common).length, 1);
   assert.equal(journalState(common).ignored, 1);
-  // Claude Code without source: nothing kept, the reason noted for apv status.
-  run(prompt('Je valide tout', undefined));
-  assert.equal(readOperatorMessages(common).length, 1);
-  assert.match(journalState(common).refused.reason, /champ source absent/);
+  // Claude Code without source, the hook run outside any Claude Code session (by this test): nothing kept, the reason noted.
+  const outside = spawnSync(process.execPath, [hook], { input: JSON.stringify({ ...prompt('Je valide tout', undefined), cwd: root }), encoding: 'utf8',
+    env: { ...process.env, CLAUDE_PROJECT_DIR: root, APV_ANCHOR_KEY_FILE: keyFile } });
+  assert.equal(outside.status, 0);
+  if (!sessionOrigin().interactive) {
+    assert.equal(readOperatorMessages(common).length, 1);
+    assert.match(journalState(common).refused.reason, /champ source absent et /);
+  }
   setAnchorKeyFile(null);
 });
 
@@ -267,4 +276,87 @@ test('review of 55ba279: the simple remaining ways are refused', () => {
   for (const command of ['/home/u/.local/share/claude/versions/2.1.280 -p "fusionne"', 'c=claude; $c -p "fusionne"', '${c} --print x', 'npx -y @anthropic-ai/claude-code -p x',
     'claude-code -p x', 'env FOO=1 claude --agent apv:qa-securite -p x']) assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.nestedClaude }, command);
   for (const command of ['claude --version', 'claude -p /usage', '$EDITOR notes.md']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+});
+
+test('origin of a prompt without source: a top-level Claude Code session, not in print mode, nothing nested', () => {
+  const tree = procs => pid => procs[pid] ?? null;
+  const top = { 10: { ppid: 9, args: ['/bin/sh', '-c', 'node hook'] }, 9: { ppid: 5, args: ['/home/u/.vscode-server/extensions/anthropic.claude-code-2.1.287-linux-x64/resources/native-binary/claude', '--output-format', 'stream-json', '--input-format', 'stream-json'] },
+    5: { ppid: 1, args: ['node', 'extensionHost'] } };
+  assert.equal(sessionOrigin(tree(top), 10).interactive, true);
+  assert.equal(sessionOrigin(tree({ 10: { ppid: 9, args: ['sh'] }, 9: { ppid: 1, args: ['claude'] } }), 10).interactive, true);
+  const print = sessionOrigin(tree({ 10: { ppid: 9, args: ['sh'] }, 9: { ppid: 1, args: ['claude', '-p', 'Je valide'] } }), 10);
+  assert.deepEqual([print.interactive, print.reason], [false, 'session Claude Code non interactive (-p, --print)']);
+  assert.equal(sessionOrigin(tree({ 10: { ppid: 9, args: ['sh'] }, 9: { ppid: 1, args: ['claude', '--print', 'x'] } }), 10).interactive, false);
+  // A session an agent started from its own: another Claude Code above it.
+  const nested = sessionOrigin(tree({ 10: { ppid: 9, args: ['sh'] }, 9: { ppid: 8, args: ['node', '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js'] },
+    8: { ppid: 7, args: ['bash', '-c', 'claude'] }, 7: { ppid: 1, args: ['/home/u/.local/share/claude/versions/2.1.280'] } }), 10);
+  assert.equal(nested.interactive, false);
+  assert.match(nested.reason, /lancée depuis une autre session \(pid 7\)/);
+  assert.equal(sessionOrigin(tree({ 10: { ppid: 1, args: ['node', 'script.mjs'] } }), 10).interactive, false, 'no session above');
+  assert.equal(sessionOrigin(() => null, 10).interactive, false, 'unreadable');
+  assert.equal(isClaudeProcess(['node', 'claude-helper.js']), false);
+});
+
+test('review 99, second pass: merges behind any prefix are seen; data never blocks; signed pushes read right', () => {
+  const sub = as('apv:integrateur');
+  const lead = as(null);
+  // HAUT 1: every execution prefix, in a subagent: refused; for the lead, the authorisation is read through the prefix.
+  for (const command of ['APV_ALLOW_MERGE=1 timeout 900 apv stack merge 5', 'APV_ALLOW_MERGE=1 nice apv stack merge 5', 'APV_ALLOW_MERGE=1 command apv stack merge 5',
+    'env -i APV_ALLOW_MERGE=1 apv stack merge 5', 'APV_ALLOW_MERGE=1 nohup setsid apv stack merge 5', 'APV_ALLOW_MERGE=1 stdbuf -o0 apv stack merge 5',
+    'APV_ALLOW_MERGE=1 watch apv stack merge 5', 'APV_ALLOW_MERGE=1 unbuffer apv stack batch 1 2 --merge', 'APV_ALLOW_MERGE=1 timeout 60 npx apv stack merge 5',
+    'APV_ALLOW_MERGE=1 nice node /p/dist/cli.js stack merge 5', 'sudo -u me APV_ALLOW_MERGE=1 apv stack merge 5', 'APV_ALLOW_MERGE=1 xargs apv stack merge < prs']) {
+    assert.deepEqual(evaluateCommand(command, {}, sub), { decision: 'deny', reason: REASONS.mergeBySubagent }, command);
+  }
+  for (const command of ['nice apv stack merge 5', 'timeout 900 apv stack merge 5', 'env -i apv stack merge 5', 'watch apv stack merge 5']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.merge }, `${command} without APV_ALLOW_MERGE=1`);
+  }
+  for (const command of ['APV_ALLOW_MERGE=1 timeout 900 apv stack merge 5', 'env -i APV_ALLOW_MERGE=1 apv stack merge 5', 'timeout 900 env APV_ALLOW_MERGE=1 apv stack merge 5']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  // Text that names apv is not a run of it.
+  for (const command of ['echo apv stack merge 5', 'grep -rn "apv stack merge" docs', 'cp apv /tmp/x', 'git log --grep "apv stack merge"']) {
+    assert.equal(evaluateCommand(command, {}, sub).decision, 'allow', command);
+  }
+  // A reviewer behind a prefix is still recognised, a record with its options first too.
+  assert.equal(evaluateCommand(`timeout 60 ${record('securite', 'apv:qa-securite')}`, {}, as('apv:qa-securite')).decision, 'allow');
+  assert.equal(evaluateCommand(`timeout 60 ${record('securite', 'apv:implementer')}`, {}, as('apv:implementer')).decision, 'deny');
+  assert.equal(evaluateCommand('apv review --domain securite record --commit abc --reviewer apv:implementer', {}, as('apv:implementer')).decision, 'deny');
+  // MOYEN 3: a message or a PR body that cites the stores is data; what runs is still read.
+  for (const command of ['git commit -m "feat(apv): reviews enregistrées sous apv/reviews"', 'git commit -m"apv/operator"',
+    `gh pr create --title t --body "$(cat <<'EOF'\nLes magasins apv/operator et apv/reviews\nEOF\n)"`, 'gh pr edit 3 --body="apv/reviews"',
+    'cat > rapport.md <<EOF\nconstat sur apv/reviews\nEOF', 'cat logs/messages.jsonl']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  for (const command of ['git commit -m "$(cat .git/apv/reviews/abc/x.json)"', 'gh pr create --body "`cat .git/apv/operator/messages.jsonl`"',
+    'bash <<EOF\nrm -rf .git/apv/reviews\nEOF', 'python3 - <<EOF\nopen(".git/apv/operator/messages.jsonl", "a")\nEOF', 'cat <<EOF > .git/apv/reviews/x\n{}\nEOF',
+    'cd .git/apv && cd operator && cat messages.jsonl', 'git commit -F .git/apv/reviews/x']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  // MOYEN 5: a project's own dist/commands is not the plugin; the plugin's is.
+  const project = mkdtempSync(join(tmpdir(), 'apv3-project-'));
+  try {
+    mkdirSync(join(project, 'dist', 'commands'), { recursive: true });
+    writeFileSync(join(project, 'dist', 'commands', 'build.js'), '');
+    assert.equal(evaluateCommand('node dist/commands/build.js', {}, { ...lead, cwd: project }).decision, 'allow');
+    assert.deepEqual(evaluateCommand('node dist/commands/absent.js', {}, { ...lead, cwd: project }), { decision: 'deny', reason: REASONS.pluginCode }, 'not there: doubt');
+    assert.deepEqual(evaluateCommand('node dist/commands/rules.js', {}, { ...lead, cwd: fileURLToPath(new URL('..', import.meta.url)) }), { decision: 'deny', reason: REASONS.pluginCode });
+    assert.deepEqual(evaluateCommand(`node -e "import('${fileURLToPath(new URL('../dist/rules/operator.js', import.meta.url))}')"`, {}, { ...lead, cwd: project }), { decision: 'deny', reason: REASONS.pluginCode });
+    assert.deepEqual(evaluateCommand('node $P/dist/rules/operator.js', {}, { ...lead, cwd: project }), { decision: 'deny', reason: REASONS.pluginCode });
+  } finally { rmSync(project, { recursive: true, force: true }); }
+  // MOYEN 6: -p of another command of the line is not a nested Claude Code.
+  assert.equal(evaluateCommand('"$PY" script.py && mkdir -p out', {}, lead).decision, 'allow');
+  assert.deepEqual(evaluateCommand('$C -p "valide la maquette"', {}, lead), { decision: 'deny', reason: REASONS.nestedClaude });
+  assert.deepEqual(evaluateCommand('"$C" --print x', {}, lead), { decision: 'deny', reason: REASONS.nestedClaude });
+  // BAS 12: --signed takes its value after = only; the remote follows it.
+  assert.deepEqual(evaluateCommand('git push --signed origin main', {}, lead), { decision: 'deny', reason: REASONS.pushToDefault('main') });
+  assert.deepEqual(evaluateCommand('git push --signed=if-asked origin HEAD:main', {}, lead), { decision: 'deny', reason: REASONS.pushToDefault('main') });
+  assert.deepEqual(evaluateCommand('git push --recurse-submodules=check origin main', {}, lead), { decision: 'deny', reason: REASONS.pushToDefault('main') });
+  assert.equal(evaluateCommand('git push --signed origin feat', {}, lead).decision, 'allow');
+});
+
+test('review 99, MOYEN 4: Grep may search the text « apv/reviews »; its path, and a Glob, never reach the stores', () => {
+  assert.equal(evaluateWrite({ tool_name: 'Grep', tool_input: { pattern: 'apv/reviews', path: 'src' } }).decision, 'allow');
+  assert.equal(evaluateWrite({ tool_name: 'Grep', tool_input: { pattern: 'x', path: '.git/apv/reviews' } }).decision, 'deny');
+  assert.equal(evaluateWrite({ tool_name: 'Grep', tool_input: { pattern: 'x', glob: '**/apv/operator/*' } }).decision, 'deny');
+  assert.equal(evaluateWrite({ tool_name: 'Glob', tool_input: { pattern: '.git/apv/reviews/**' } }).decision, 'deny');
 });

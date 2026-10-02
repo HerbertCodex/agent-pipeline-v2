@@ -393,3 +393,58 @@ test('stack merge never takes --offline; the busy refusal names the preview serv
   assert.match(busyReasons(ports, [], () => true, [4173])[0], /c'est le serveur de l'aperçu vivant : apv preview stop/);
   assert.doesNotMatch(busyReasons(ports, [], () => true, [5000])[0], /aperçu/);
 });
+
+test('review 99, MOYEN 8: the migrations are those the base declares (and the commit), never the working tree', async t => {
+  // The base declares its migrations under docs/changes (a neutral place otherwise); the change adds one there and moves
+  // db.migrations away in its commit, then once more in the working tree: the data review is still asked.
+  const p = project(t, { config: { db: { migrations: ['docs/changes/*.md'] } }, change: { 'docs/changes/001.md': 'alter table x;\n' } });
+  const config = JSON.parse(readFileSync(join(p.repo, '.apv/config.json'), 'utf8'));
+  writeFileSync(join(p.repo, '.apv/config.json'), JSON.stringify({ ...config, db: { migrations: ['ailleurs/*.sql'] } }));
+  const r = await p.check();
+  const relecture = rule(r.report, 'relecture');
+  assert.match(relecture.detail, /relectures demandées par le diff : .*donnees/, JSON.stringify(relecture));
+  const { loadDbConfigAtCommit } = await import('../dist/db/config.js');
+  assert.deepEqual(loadDbConfigAtCommit(p.repo, p.head).config.migrations, ['docs/changes/*.md']);
+  assert.deepEqual(loadDbConfigAtCommit(p.repo, 'HEAD~1').config.migrations, ['docs/changes/*.md']);
+});
+
+test('review 99, MOYEN 10: a rebase merge is accounted for whole by its trace (every commit it landed)', async t => {
+  const { writeMergeTrace, auditMerges } = await import('../dist/rules/merges.js');
+  const p = project(t, { change: { 'notes.txt': 'x\n' } });
+  const common = commonDirOf(p.repo);
+  git(p.repo, 'switch', '-q', 'main');
+  const since = new Date(Date.now() - 60_000).toISOString();
+  // Three commits rebased onto main by GitHub; the trace names the last one and their number.
+  for (const n of [1, 2, 3]) { put(p.repo, `r${n}.txt`, `${n}\n`); git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', `rebasé ${n}`); }
+  const last = git(p.repo, 'rev-parse', 'HEAD');
+  writeMergeTrace(common, { pr: 7, head: 'a'.repeat(40), target: 'main', method: 'rebase', mergeCommit: last, commits: 3, at: new Date().toISOString() }, TEST_KEY);
+  // One more pushed directly after: still named.
+  put(p.repo, 'direct.txt', 'x\n'); git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'poussée directe');
+  git(p.repo, 'push', '-q', 'origin', 'main');
+  const audit = auditMerges(p.repo, common, 'origin/main', { since: new Date(Date.parse(since) - 3_600_000).toISOString() });
+  assert.deepEqual(audit.unaccounted.map(c => c.subject), ['poussée directe', 'base'], JSON.stringify(audit.unaccounted));
+  // A trace without its number accounts for its last commit only, as before.
+  const bare = project(t, { change: { 'notes.txt': 'x\n' } });
+  git(bare.repo, 'switch', '-q', 'main');
+  for (const n of [1, 2]) { put(bare.repo, `r${n}.txt`, `${n}\n`); git(bare.repo, 'add', '-A'); git(bare.repo, 'commit', '-qm', `rebasé ${n}`); }
+  writeMergeTrace(commonDirOf(bare.repo), { pr: 8, head: 'b'.repeat(40), target: 'main', method: 'rebase', mergeCommit: git(bare.repo, 'rev-parse', 'HEAD'), at: new Date().toISOString() }, TEST_KEY);
+  git(bare.repo, 'push', '-q', 'origin', 'main');
+  assert.deepEqual(auditMerges(bare.repo, commonDirOf(bare.repo), 'origin/main', { since: new Date(Date.now() - 3_600_000).toISOString() }).unaccounted.map(c => c.subject), ['rebasé 1', 'base']);
+});
+
+test('review 99, MOYEN 9: in a stack, plan reads the rules of each PR on its own change (against the PR below it)', async t => {
+  const { planStack, processGh } = await import('../dist/stack/github.js');
+  const { fileURLToPath } = await import('node:url');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-stack-rules-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const fakeGh = fileURLToPath(new URL('./support/fake-gh.mjs', import.meta.url));
+  const pr = (number, base, head) => ({ number, state: 'OPEN', isDraft: false, baseRefName: base, headRefName: head, headRefOid: String(number).repeat(40).slice(0, 40),
+    mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', statusCheckRollup: [] });
+  const state = join(root, 'gh.json');
+  writeFileSync(state, JSON.stringify({ prs: { 11: pr(11, 'main', 'spec/1'), 12: pr(12, 'spec/1', 'spec/2'), 13: pr(13, 'spec/2', 'spec/3') }, behavior: {}, calls: [] }));
+  const seen = [];
+  const plan = await planStack([11, 12, 13], { gh: processGh(fakeGh, { ...process.env, FAKE_GH_STATE: state }, root), onCall: () => {}, ready: false, pollMs: 1, pollAttempts: 1,
+    rules: async (p, base) => { seen.push([p.number, base]); return { problems: [], notes: [] }; } });
+  assert.equal(plan.ok, true, JSON.stringify(plan.prs.map(p => p.anomalies)));
+  assert.deepEqual(seen, [[11, 'main'], [12, 'spec/1'], [13, 'spec/2']]);
+});

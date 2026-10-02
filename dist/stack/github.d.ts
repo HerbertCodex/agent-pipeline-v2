@@ -138,6 +138,7 @@ export interface StackOptions {
         target: string;
         method: string;
         mergeCommit: string | null;
+        commits?: number;
     }) => string | null;
 }
 /** What the rules say about the head of one pull request. */

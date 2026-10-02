@@ -22,7 +22,7 @@ export function journalLines(j: JournalState): string[] {
   const lines = [`Journal de l'opérateur : ${kept}${j.ignored ? ` ; ${j.ignored} ligne(s) non signée(s) ou altérée(s), ignorée(s)` : ''}.`];
   if (!j.messages) {
     lines.push(j.refused
-      ? `  Le crochet a refusé le dernier message (${j.refused.at.slice(0, 16).replace('T', ' ')}) : ${j.refused.reason}. Mets Claude Code à jour (claude update) : il doit transmettre au crochet UserPromptSubmit le champ source (user ou tty). Sans lui, seules comptent les maquettes déjà fusionnées, et aucune dérogation n'est possible.`
+      ? `  Le crochet a refusé le dernier message (${j.refused.at.slice(0, 16).replace('T', ' ')}) : ${j.refused.reason}. Seuls comptent les messages tapés dans la session de l'opérateur : champ source user ou tty, ou, sans ce champ, une session Claude Code de premier niveau, pas en mode -p. Un message refusé n'entre pas au journal : une dérogation ou une validation se tape dans la session principale.`
       : '  Rien reçu encore : le plugin est-il activé dans cette session (/plugin) ? Le journal se remplit quand l\'opérateur écrit dans la session.');
   }
   if (j.keyProblem && j.keyCreatedAt) lines.push(`  ATTENTION : ${j.keyProblem}.`);
