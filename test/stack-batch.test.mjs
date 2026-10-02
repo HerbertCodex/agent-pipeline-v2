@@ -72,6 +72,7 @@ function batchProject(t, behavior = {}) {
   };
 }
 const allow = { APV_ALLOW_MERGE: '1' };
+const execFileSyncOk = (cmd, args) => { try { execFileSync(cmd, args, { stdio: 'ignore' }); return true; } catch { return false; } };
 
 test('batch: one full suite proves two pull requests together; without --merge nothing is merged', async t => {
   const p = batchProject(t);
@@ -397,4 +398,93 @@ test('batch: a suite refused before it ran is never bisected nor taken for a fai
   assert.deepEqual(report.culprits, []);
   assert.equal(report.proven, null);
   assert.match(report.stopped.reasons[0], /suite du lot refusée avant de tourner \(GATE_REPEAT\) : ce n'est pas un échec de suite, la bissection ne s'applique pas/);
+});
+
+test('batch: a suite failed by its infrastructure only is never bisected; --stacks gives the suite its test stacks', { skip: execFileSyncOk('flock', ['--version']) ? false : 'flock(1) missing' }, async t => {
+  const p = batchProject(t);
+  git(p.repo, 'switch', '-q', 'main');
+  const lock = join(p.root, 'stack1.lock');
+  // A check of a stack that needs the variable its stack gives; without it, it says so as a test would.
+  writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({
+    gates: [{ id: 'integration', stage: 'full', passEnv: ['STACK_URL'], lock: { file: lock },
+      command: [process.execPath, '-e', 'if (!process.env.STACK_URL) { console.error("Error: Variable STACK_URL absente"); process.exit(1); }'] }],
+    stacks: [{ id: '1', lockFile: lock, env: { STACK_URL: 'http://127.0.0.1:55321' } }, { id: '2', lockFile: join(p.root, 'stack2.lock'), env: { STACK_URL: 'http://127.0.0.1:57521' } }],
+  }));
+  git(p.repo, 'commit', '-qam', 'pile'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const failed = await p.run(['11', '12', '--bisect', '--json']);
+  assert.equal(failed.code, 1, failed.stdout + failed.stderr);
+  const report = failed.json();
+  assert.equal(report.lots.length, 1, 'no bisection');
+  assert.deepEqual(report.culprits, []);
+  assert.match(report.stopped.reasons[0], /suite du lot en échec par son infrastructure, pas par le code \(integration : variable d'environnement absente \(variable STACK_URL absente de l'environnement du contrôle\) ; panne d'infrastructure, pas un test en échec : donner l'environnement des piles de test : --stacks <pile> \(déclarées : 1, 2\)/);
+  const proven = await p.run(['11', '12', '--stacks', '2', '--json']);
+  assert.equal(proven.code, 0, proven.stdout + proven.stderr);
+  assert.deepEqual(proven.json().proven.members.map(m => m.number), [11, 12]);
+  // Wrong calls: an unknown stack, --stacks outside batch.
+  const unknown = await p.run(['11', '12', '--stacks', '9']);
+  assert.equal(unknown.code, 2);
+  assert.match(unknown.stderr, /--stacks : pile inconnue 9 \(déclarées : 1, 2/);
+  assert.equal((await p.run(['11', '12', '--stacks', '1,1'])).code, 2);
+  assert.equal((await apv(p.repo, ['stack', 'plan', '11', '--stacks', '1'], p.env)).code, 2);
+});
+
+test('batch --wait-ci: a pull request whose CI still runs is waited for; without it, the batch stops', async t => {
+  const p = batchProject(t, { pendingViews: { 11: 1 } });
+  const refused = await p.run(['11', '12', '--json']);
+  assert.equal(refused.code, 1);
+  assert.match(refused.json().stopped.reasons.join('\n'), /PR #11 : contrôle\(s\) en cours : ci/);
+  const state = JSON.parse(readFileSync(join(p.root, 'gh.json'), 'utf8'));
+  state.behavior.pendingViews = { 11: 3 };
+  writeFileSync(join(p.root, 'gh.json'), JSON.stringify(state));
+  const waited = await p.run(['11', '12', '--wait-ci', '1', '--json'], { APV_STACK_CI_POLL_MS: '5' });
+  assert.equal(waited.code, 0, waited.stdout + waited.stderr);
+  assert.match(waited.stderr, /PR #11 : contrôle\(s\) en cours \(ci\), attente de la CI \(--wait-ci, au plus 1 min\)\./);
+  assert.match(waited.stderr, /PR #11 : CI terminée \(1\/1 au vert\)\./);
+  for (const bad of ['0', '361', '1.5', 'x']) assert.equal((await p.run(['11', '12', '--wait-ci', bad])).code, 2, bad);
+});
+
+test('stack plan counts the changed test files at each stage, proposes the cut under maxFiles, and names a PR of reuse configuration', async t => {
+  const p = batchProject(t);
+  git(p.repo, 'switch', '-q', 'main');
+  const config = { gates: [{ id: 'e2e', stage: 'full', command: [process.execPath, '-e', '0'],
+    repeatChanged: { paths: ['tests/**/*.test.js'], command: [process.execPath, '-e', '0', '{{repeat}}'], maxFiles: 2, reference: 'origin/main' } }] };
+  writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify(config));
+  git(p.repo, 'commit', '-qam', 'repeat'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const state = JSON.parse(readFileSync(join(p.root, 'gh.json'), 'utf8'));
+  let base = 'main';
+  // #31 adds two tests, #32 and #33 one each, #34 changes the reuse section of the configuration.
+  for (const [n, files] of [[31, ['tests/a.test.js', 'tests/b.test.js']], [32, ['tests/c.test.js']], [33, ['tests/d.test.js']], [34, []]]) {
+    git(p.repo, 'switch', '-q', '-c', `pr-${n}`, base === 'main' ? 'main' : base);
+    mkdirSync(join(p.repo, 'tests'), { recursive: true });
+    for (const f of files) writeFileSync(join(p.repo, f), `test ${f}\n`);
+    if (n === 34) writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({ ...config, reuse: { shared: ['src/lib/**'] } }));
+    git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', `pr ${n}`); git(p.repo, 'push', '-q', 'origin', `pr-${n}`);
+    const sha = git(p.repo, 'rev-parse', 'HEAD');
+    git(p.origin, 'update-ref', `refs/pull/${n}/head`, sha);
+    state.prs[n] = { ...state.prs[11], number: n, baseRefName: base, headRefName: `pr-${n}`, headRefOid: sha };
+    base = `pr-${n}`;
+  }
+  writeFileSync(join(p.root, 'gh.json'), JSON.stringify(state));
+  git(p.repo, 'switch', '-q', 'main');
+  const r = await apv(p.repo, ['stack', 'plan', '31', '32', '33', '34', '--json'], p.env);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  const checks = r.json().checks;
+  assert.equal(checks.read, true, checks.error);
+  assert.deepEqual(checks.stages.map(s => [s.pr, s.counts[0].files, s.over]), [[31, 2, false], [32, 3, true], [33, 4, true], [34, 4, true]]);
+  assert.deepEqual(checks.parts, [[31], [32, 33, 34]]);
+  assert.deepEqual(checks.alone, []);
+  assert.deepEqual(checks.reuseConfig.map(x => x.pr), [34]);
+  const human = await apv(p.repo, ['stack', 'plan', '31', '32', '33', '34'], p.env);
+  assert.equal(human.code, 0, 'warnings never change the exit code');
+  assert.match(human.stdout, /Tests modifiés par étage \(depuis la cible ; plafond repeatChanged\.maxFiles : e2e 2\) :\n  PR #31 : e2e 2\n  PR #32 : e2e 3 : AU-DELÀ DU PLAFOND/);
+  assert.match(human.stdout, /ATTENTION : la suite complète du sommet serait refusée \(repeatChanged\.maxFiles\)\. Coupe proposée, chaque partie prouvée et fusionnée avant la suivante : #31 \| #32 #33 #34\./);
+  assert.match(human.stdout, /ATTENTION : PR #34 change la configuration surveillée par reuse : à fusionner seule d'abord/);
+  // One pull request over the ceiling on its own: to split, whatever the cut.
+  const alone = await apv(p.repo, ['stack', 'plan', '31', '--json'], p.env);
+  assert.deepEqual(alone.json().checks.alone, []);
+  config.gates[0].repeatChanged.maxFiles = 1;
+  writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify(config));
+  git(p.repo, 'commit', '-qam', 'plafond 1'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const over = await apv(p.repo, ['stack', 'plan', '31', '--json'], p.env);
+  assert.deepEqual(over.json().checks.alone, [{ pr: 31, gate: 'e2e', files: 2, max: 1 }]);
 });

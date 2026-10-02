@@ -64,6 +64,13 @@ export interface ReuseConfig {
         mandatory?: boolean | undefined;
     }[] | undefined;
 }
+/**
+ * What a change does to the configuration the reuse check watches, from `before` (its base) to `after`: the sections
+ * `reuse`, `map` and `design.dir`, the checks that judge the reuse, and the mandatory checks. Each one is a decision
+ * of the operator, merged in a pull request of configuration of its own: `apv reuse check` refuses it mixed with code,
+ * and `apv stack plan` names it in a stack (to merge alone first). Empty when nothing watched changes.
+ */
+export declare function reuseConfigChanges(before: ReuseConfig, after: ReuseConfig): string[];
 export interface CheckOptions {
     /** `--base`: any commit-ish; else `reuse.reference`; else no base (everything counts as new). */
     base?: string;

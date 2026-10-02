@@ -17,6 +17,7 @@ import { WEB_RECORD } from '../web/impact.js';
 import { publishRun, pruneStore, receiptRetention, sharedStore } from './store.js';
 import { markStacksUsed, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
+import { classifyFailures } from './infrastructure.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables } from './spread.js';
 import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, resolveReference, tooManyFiles } from './repeat.js';
 import { planScope, scopeRecord, scopeReferenceMissing } from './proof-scope.js';
@@ -124,8 +125,8 @@ export async function runGates(options) {
     const asked = isFullSuite(gates, stage);
     if (options.stacks) {
         invariant(asked, 'GATE_STACKS', '--stacks répartit une suite complète : aucun contrôle de stage full à exécuter en entier ici');
-        invariant(options.stacks.length >= 2 && new Set(options.stacks).size === options.stacks.length, 'GATE_STACKS', '--stacks attend au moins deux piles différentes, par exemple --stacks 1,2');
-        invariant((options.config.stacks ?? []).length >= 2, 'GATE_STACKS', '--stacks : déclarer au moins deux piles (section stacks de .apv/config.json)');
+        invariant(options.stacks.length >= 1 && new Set(options.stacks).size === options.stacks.length, 'GATE_STACKS', '--stacks attend une ou plusieurs piles différentes, par exemple --stacks 2 ou --stacks 1,2');
+        invariant((options.config.stacks ?? []).length >= 1, 'GATE_STACKS', '--stacks : déclarer les piles (section stacks de .apv/config.json)');
     }
     // A full suite on a dirty tree proves nothing: refused before any wait, unless asked for.
     if (asked && dirty && !options.allowDirty)
@@ -293,6 +294,7 @@ export async function runGates(options) {
                 log(`ATTENTION : la pile ${x.stack} a été arrêtée par apv stacks idle-stop le ${x.since} et rien ne montre qu'elle ait redémarré depuis ; ${x.gates.join(', ')} la verrouille(nt). Redémarrer d'abord : apv stacks start ${x.stack}.`);
         }
         const keys = new Map();
+        const missingEnv = new Map();
         const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
         const write = (receipt) => {
             const decision = scopeDecisions.get(receipt.gateId);
@@ -310,6 +312,8 @@ export async function runGates(options) {
             const workspace = assigned?.workspace ?? repo;
             const env = { ...environment([...options.config.environment.passEnv, ...gate.passEnv], source),
                 ...(assigned ? stackVariables(assigned.stack, gate, options.config.environment.passEnv) : {}) };
+            // The variables the check asks for and does not get: read again if it fails (infrastructure or test).
+            missingEnv.set(gate.id, gate.passEnv.filter(name => !env[name]));
             const command = workspace === repo ? commands.get(gate.id) : expandCommand(targeted.has(gate.id) ? gate.affected : gate.command, { ...context, workspace });
             let executable = null;
             try {
@@ -527,10 +531,12 @@ export async function runGates(options) {
             error: spread.copies.find(c => c.dir === a.workspace)?.error ?? null })) : null;
         const result = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
             reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, shared: null, suite, notRequired: [...notRequired.keys()], scope: [...scopeDecisions.values()],
-            queue: queue?.record ?? null, ports, flaky, cleanup, stoppedStacks, spread: spreadRecord, ok: list.every(r => success(r) || r.status === 'not_required') };
+            queue: queue?.record ?? null, ports, flaky, cleanup, stoppedStacks, infrastructure: classifyFailures(list, missingEnv), spread: spreadRecord,
+            ok: list.every(r => success(r) || r.status === 'not_required') };
         writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
             reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}),
             ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup } : {}), ...(spreadRecord ? { spread: spreadRecord } : {}), ...(stoppedStacks.length ? { stoppedStacks } : {}),
+            ...(result.infrastructure.causes.length ? { infrastructure: result.infrastructure } : {}),
             receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),
                 ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}), ...(r.stack ? { stack: r.stack } : {}),
                 ...(r.repeat ? { repeat: { status: r.repeat.status, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures } } : {}),

@@ -171,6 +171,44 @@ export function anomalies(pr, expectedBase, allowDraft) {
         out.push(`PR #${pr.number} : contrôle(s) en cours : ${pending.join(', ')}`);
     return out;
 }
+/** The interval between two reads of the checks while `--wait-ci` waits: 30 seconds. */
+export const CI_POLL_MS = 30_000;
+const pendingNames = (pr) => pr.checks.filter(c => c.state === 'pending').map(c => c.name);
+/**
+ * `--wait-ci`: reads the pull request again while some of its checks are pending, at most `ciWaitMs` from now; returns
+ * the last read (its checks finished, failed, or still pending when the time is up: the caller judges, never this wait).
+ */
+export async function waitForChecks(n, first, read, wait) {
+    let result = first;
+    const budget = wait.ciWaitMs ?? 0;
+    if (budget <= 0 || !result.pr || !pendingNames(result.pr).length)
+        return result;
+    const deadline = Date.now() + budget;
+    const every = Math.max(1, wait.ciPollMs ?? CI_POLL_MS);
+    wait.log?.(`PR #${n} : contrôle(s) en cours (${pendingNames(result.pr).join(', ')}), attente de la CI (--wait-ci, au plus ${Math.ceil(budget / 60_000)} min).`);
+    while (result.pr && pendingNames(result.pr).length && Date.now() < deadline) {
+        await sleep(Math.min(every, Math.max(1, deadline - Date.now())));
+        result = await read();
+    }
+    if (result.pr) {
+        const left = pendingNames(result.pr);
+        wait.log?.(left.length ? `PR #${n} : délai de --wait-ci écoulé, contrôle(s) encore en cours : ${left.join(', ')}.`
+            : `PR #${n} : CI terminée (${result.pr.checks.filter(c => c.state === 'success').length}/${result.pr.checks.length} au vert).`);
+    }
+    return result;
+}
+/**
+ * Refusal of a pull request that has no check once retargeted onto the target, while the first pull request of the
+ * stack, which aimed at the target, had some: the CI of the target runs only for pull requests opened towards it
+ * (event `pull_request` with `branches`), and a retarget does not start it. Absent checks are not green.
+ */
+export function noChecksAfterRetargetReason(n, pr, target, firstPr, firstChecks) {
+    return `PR #${n} : aucun contrôle après son re-ciblage sur ${target}, alors que la PR #${firstPr}, qui visait ${target}, en avait ${firstChecks} : ` +
+        `la CI de ${target} ne se déclenche que sur les PR ouvertes vers elle et un re-ciblage ne la relance pas ; des contrôles absents ne valent pas le vert. ` +
+        `Marche à suivre : dans la branche ${pr.headRefName || '?'}, git fetch origin puis git merge origin/${target} (fusion de la base, aucun fichier changé ` +
+        `attendu ; jamais de rebase ni de force-push ; si Git répond « Already up to date », git commit --allow-empty -m "ci : relance sur ${target}") ; ` +
+        `git push (sans force) ; puis relancer APV_ALLOW_MERGE=1 apv stack merge sur les PR restantes avec --wait-ci <minutes>, qui attend la fin de la CI.`;
+}
 async function call(options, args) {
     const result = await options.gh(args);
     options.onCall(result);
@@ -197,12 +235,16 @@ async function freshness(options, pr, base, where) {
 }
 /** Re-reads a pull request while GitHub still computes its mergeability. */
 async function settled(options, n) {
-    let result = await view(options, n);
-    for (let i = 0; i < options.pollAttempts && result.pr && (result.pr.mergeable === 'UNKNOWN' || result.pr.mergeStateStatus === 'UNKNOWN'); i += 1) {
-        await sleep(options.pollMs);
-        result = await view(options, n);
-    }
-    return result;
+    const mergeability = async () => {
+        let result = await view(options, n);
+        for (let i = 0; i < options.pollAttempts && result.pr && (result.pr.mergeable === 'UNKNOWN' || result.pr.mergeStateStatus === 'UNKNOWN'); i += 1) {
+            await sleep(options.pollMs);
+            result = await view(options, n);
+        }
+        return result;
+    };
+    // --wait-ci: the pending checks may end; their end changes the merge state, read again with its own wait.
+    return waitForChecks(n, await mergeability(), mergeability, options);
 }
 /**
  * Whether a pull request may be merged onto `base` as far as freshness goes: null when its head contains the base
@@ -224,7 +266,7 @@ export async function planStack(numbers, options) {
     const prs = [];
     for (const n of numbers) {
         const { pr, error } = await settled(options, n);
-        prs.push({ number: n, pr, expectedBase: null, anomalies: error ? [error] : [], freshness: null });
+        prs.push({ number: n, pr, expectedBase: null, anomalies: error ? [error] : [], notes: [], freshness: null });
     }
     const first = prs[0]?.pr;
     const target = options.target ?? first?.baseRefName ?? null;
@@ -239,6 +281,13 @@ export async function planStack(numbers, options) {
             item.anomalies.push(...anomalies(item.pr, item.expectedBase, options.ready));
         if (target && item.pr.headRefName === target)
             item.anomalies.push(`PR #${item.number} part de la branche cible ${target}`);
+        // Above the first pull request: no check while the first one, aimed at the target, has some. The CI of the target may
+        // run only for pull requests towards it: the merge will stop after the retarget and give the way (a merge of the base).
+        const firstChecks = first?.checks.length ?? 0;
+        if (i > 0 && target && item.pr.baseRefName !== target && item.pr.checks.length === 0 && firstChecks > 0) {
+            item.notes.push(`PR #${item.number} : aucun contrôle (sa base ${item.pr.baseRefName || '?'} n'est pas ${target}) ; si la CI de ${target} ne tourne que sur les PR vers elle, ` +
+                'elle ne tournera pas au re-ciblage : apv stack merge s\'arrêtera alors avant de la fusionner, avec la marche (une fusion de la base poussée, puis --wait-ci)');
+        }
         // The address gives the path of the compare call, and of the retarget for every PR after the first: an address
         // the tool cannot use stops the stack before any merge.
         const where = pullRequestPath(item.pr);
@@ -271,11 +320,14 @@ export async function mergeStack(numbers, method, options) {
         return stop(bad.number, ['pile incohérente avant toute fusion (apv stack plan)', ...plan.prs.flatMap(p => p.anomalies)]);
     }
     const target = plan.target;
+    const firstPr = plan.prs[0];
+    const firstChecks = firstPr.pr?.checks.length ?? 0;
     for (const [i, n] of numbers.entries()) {
         let { pr, error } = await view(options, n);
         if (!pr)
             return stop(n, [error]);
-        if (i > 0 && pr.baseRefName !== target) {
+        const retargeted = i > 0 && pr.baseRefName !== target;
+        if (retargeted) {
             const previousHead = plan.prs[i - 1].pr.headRefName;
             if (pr.baseRefName !== previousHead)
                 return stop(n, [`PR #${n} vise ${pr.baseRefName}, ni la cible ${target} ni la tête de la PR précédente ${previousHead}`]);
@@ -298,6 +350,17 @@ export async function mergeStack(numbers, method, options) {
         ({ pr, error } = await settled(options, n));
         if (!pr)
             return stop(n, [error]);
+        if (retargeted && pr.checks.length === 0 && firstChecks > 0) {
+            // A workflow that also listens to the edit of a pull request may start: a few reads (and --wait-ci) let it show.
+            for (let k = 0; k < options.pollAttempts && pr && pr.checks.length === 0; k += 1) {
+                await sleep(options.pollMs);
+                ({ pr, error } = await settled(options, n));
+            }
+            if (!pr)
+                return stop(n, [error]);
+            if (pr.checks.length === 0)
+                return stop(n, [noChecksAfterRetargetReason(n, pr, target, firstPr.number, firstChecks)]);
+        }
         let problems = anomalies(pr, target, options.ready);
         if (problems.length)
             return stop(n, problems);

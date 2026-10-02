@@ -16,17 +16,22 @@ export interface LotGit {
     }>;
 }
 export declare function processGit(env: NodeJS.ProcessEnv): LotGit;
-/** The proof of a batch head: its full suite and `apv gates verify` at 0. */
 /**
- * The proof of a batch head. `refused`: the suite was refused before it ran (a ceiling of the repetition of the changed
- * test files, `GATE_REPEAT`), which says nothing about the pull requests being faulty: never bisected.
+ * The proof of a batch head: its full suite and `apv gates verify` at 0. `refused`: the suite was refused before it ran
+ * (a ceiling of the repetition of the changed test files, `GATE_REPEAT`, or a wrong `--stacks`), which says nothing about
+ * the pull requests being faulty: never bisected. `infrastructure`: every failure of the suite is one of its
+ * infrastructure (a variable of the environment absent, a test stack unreachable, src/gates/infrastructure.ts): never
+ * bisected either, nothing is concluded about the code.
  */
 export interface Proof {
     ok: boolean;
     runId: string | null;
     summary: string;
     refused?: string;
+    infrastructure?: string;
 }
+/** Why a proof says nothing about the code of the pull requests (refused before it ran, or an infrastructure failure), or null. */
+export declare function notAboutCode(proof: Proof | null): string | null;
 export interface BatchOptions {
     /** Checkout of the repository (the batches are worktrees of it). */
     repo: string;
@@ -47,6 +52,10 @@ export interface BatchOptions {
     log: (line: string) => void;
     pollMs: number;
     pollAttempts: number;
+    /** `--wait-ci <minutes>`: how long a read waits for the pending checks of a pull request to end (absent: no wait). */
+    ciWaitMs?: number;
+    /** Interval between two reads while waiting for the checks. */
+    ciPollMs?: number;
     /**
      * Proves a batch head in its worktree (setup, full suite, verify), with the configuration of the target at `base`:
      * a batch is never proven by the checks it brings.

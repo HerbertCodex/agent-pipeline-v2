@@ -596,3 +596,36 @@ test('remote addresses of GitHub repositories', () => {
   assert.equal(maskRemote('user@host:o/r.git'), '***@host:o/r.git');
   assert.equal(maskRemote('/srv/git/r.git'), '/srv/git/r.git');
 });
+
+test('merge: a PR without any check once retargeted stops the stack with the way (CI only on pull requests towards the target)', async t => {
+  // #12 aims at spec/1: the CI of main, started only by pull requests towards main, never ran on it.
+  const s = stack(t, { 12: { statusCheckRollup: [] } }, { afterMergeBehind: { 11: { 12: { main: mergeCommitOnly } } } });
+  const plan = await s.run(['plan', '11', '12']);
+  assert.equal(plan.code, 0, plan.stdout + plan.stderr);
+  assert.match(plan.stdout, /2\. PR #12 : .*contrôles absents.* : ok\n   NOTE : PR #12 : aucun contrôle \(sa base spec\/1 n'est pas main\) ; si la CI de main ne tourne que sur les PR vers elle/);
+  const r = await s.run(['merge', '11', '12', '--json'], allow);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  const report = r.json();
+  assert.deepEqual(report.merged, [11]);
+  assert.equal(report.stopped.pr, 12);
+  assert.match(report.stopped.reasons[0], /PR #12 : aucun contrôle après son re-ciblage sur main, alors que la PR #11, qui visait main, en avait 1 : la CI de main ne se déclenche que sur les PR ouvertes vers elle .* des contrôles absents ne valent pas le vert\. Marche à suivre : dans la branche spec\/2, git fetch origin puis git merge origin\/main .* git push \(sans force\) ; puis relancer APV_ALLOW_MERGE=1 apv stack merge sur les PR restantes avec --wait-ci <minutes>/);
+  assert.ok(!s.writes().some(w => w.startsWith('pr merge 12')), '#12 is not merged');
+  // A stack whose first PR has no check either (no CI at all): absent checks keep their meaning, nothing changes.
+  const none = stack(t, { 11: { statusCheckRollup: [] }, 12: { statusCheckRollup: [] } }, { afterMergeBehind: { 11: { 12: { main: mergeCommitOnly } } } });
+  const merged = await none.run(['merge', '11', '12'], allow);
+  assert.equal(merged.code, 0, merged.stdout + merged.stderr);
+});
+
+test('merge --wait-ci: pending checks are waited for; without it they stop the stack; --wait-ci is refused on plan', async t => {
+  const s = stack(t, {}, { pendingViews: { 11: 2 } });
+  const stopped = await s.run(['merge', '11', '--json'], allow);
+  assert.equal(stopped.code, 1);
+  assert.match(stopped.json().stopped.reasons.join('\n'), /PR #11 : contrôle\(s\) en cours : ci/);
+  const w = stack(t, {}, { pendingViews: { 11: 4 } });
+  const r = await w.run(['merge', '11', '--wait-ci', '2', '--json'], { ...allow, APV_STACK_CI_POLL_MS: '5' });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.deepEqual(r.json().merged, [11]);
+  assert.match(r.stderr, /PR #11 : contrôle\(s\) en cours \(ci\), attente de la CI \(--wait-ci, au plus 2 min\)\./);
+  assert.equal((await w.run(['plan', '11', '--wait-ci', '1'])).code, 2);
+  assert.equal((await w.run(['merge', '11', '--wait-ci', '0'], allow)).code, 2);
+});
