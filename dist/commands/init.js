@@ -9,11 +9,13 @@ import { REQUIRED_WEB_GATES, missingRequiredGates } from '../rules/required.js';
 import { architectureMap } from '../structure/map-file.js';
 import { structureSettings } from '../structure/config.js';
 import { currentMap } from './map.js';
-import { designDir } from '../design/config.js';
+import { declaredGroups, designSettings } from '../design/config.js';
 import { GITATTRIBUTES, ensureDesignAttribute } from '../design/attributes.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { LEDGER_FILE } from '../lifecycle/decisions.js';
-import { gitRoot } from '../run/git-probe.js';
+import { gitRead, gitRoot } from '../run/git-probe.js';
+import { checkDeleteOnMerge } from '../stack/branches.js';
+import { processGh } from '../stack/github.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 export const usage = `Utilisation :
   apv init [--name <nom>] [--repo <chemin>] [--json]
@@ -28,6 +30,11 @@ et structure (apv structure check) : les contrôles qu'exigent les règles avant
 configuration existante n'est jamais modifiée : les contrôles requis qui lui manquent sont listés.
 Si la configuration déclare le dossier des maquettes validées (design.dir) ou si ce
 dossier existe, ajoute à .gitattributes « <dossier>/*.html -whitespace » quand Git ne l'applique pas déjà. Liste ce qui est créé et ce qui existait déjà. Refuse hors d'un dépôt Git.
+Dépôt GitHub (adresse de origin) : lit son réglage delete_branch_on_merge (gh api repos/<propriétaire>/<dépôt>) et,
+s'il est faux, le signale avec la commande qui l'active (gh api -X PATCH repos/<propriétaire>/<dépôt>
+-F delete_branch_on_merge=true), sans jamais la lancer. Seul github.com est interrogé d'office, un autre hôte
+seulement si gh y est connecté (gh auth status --hostname) ; identifiants de l'adresse masqués. Lecture
+impossible : signalée, sans effet sur la sortie.
 Le nom du projet est --name, sinon le nom du dossier du dépôt.
 Sortie : 0 succès, 1 hors d'un dépôt Git ou modèle de consigne introuvable, 2 appel incorrect.`;
 /** Root of the plugin, resolved from the compiled tool (`dist/commands/init.js`). */
@@ -91,17 +98,20 @@ export class ApvWriter {
         return true;
     }
     /**
-     * The `.gitattributes` line of the validated mockups, when the configuration declares their folder (`design.dir`)
+     * The `.gitattributes` line of the validated mockups, when the configuration declares their folder (`design.dir`) or groups
      * or the folder exists: registered under their sha256, they must stay out of `git diff --check`. An unreadable
      * configuration is left to `apv status` and the other commands: nothing is written then.
      */
     designAttributes() {
         let dir;
         let declared;
+        let groups;
         try {
             const { config } = loadConfig(this.repo);
-            declared = config.design?.dir !== undefined;
-            dir = designDir(config.design);
+            const settings = designSettings(config.design);
+            groups = declaredGroups(settings);
+            declared = config.design?.dir !== undefined || groups.length > 0;
+            dir = settings.dir;
         }
         catch {
             return;
@@ -109,7 +119,7 @@ export class ApvWriter {
         if (!declared && !existsSync(join(this.repo, dir)))
             return;
         const had = existsSync(join(this.repo, GITATTRIBUTES));
-        const result = ensureDesignAttribute(this.repo, dir, this.dryRun);
+        const result = ensureDesignAttribute(this.repo, dir, this.dryRun, groups);
         (result.status === 'present' ? this.existing : had ? this.completed : this.created).push(GITATTRIBUTES);
     }
     gitignore() {
@@ -264,6 +274,23 @@ export function reuseLines(reuse) {
         lines.push(`Attention : ${reuse.mapNote}.`);
     return lines;
 }
+/** Time allowed to read the setting of the repository: `apv init` never waits long on the network. */
+const GH_CHECK_TIMEOUT_MS = 20_000;
+/** The setting « delete head branches after merge » of the GitHub repository of `origin`, read, never changed. */
+export async function deleteOnMergeCheck(repo, io) {
+    const origin = gitRead(repo, ['remote', 'get-url', 'origin']) || null;
+    return checkDeleteOnMerge(origin, processGh(io.env['APV_GH'] || 'gh', io.env, repo, GH_CHECK_TIMEOUT_MS));
+}
+/** The line of `apv init` about that setting; none without a GitHub `origin`. */
+export function deleteOnMergeLine(check) {
+    if (check.deleteBranchOnMerge === false) {
+        return `ATTENTION : le dépôt GitHub ${check.repo} ne supprime pas la branche d'une PR fusionnée (delete_branch_on_merge faux) : les branches s'accumulent. ` +
+            `Pour l'activer : ${check.command} (commande non lancée par apv init). apv stack merge et apv stack batch --merge suppriment de toute façon les branches qu'ils fusionnent.`;
+    }
+    if (check.deleteBranchOnMerge === true)
+        return `Dépôt GitHub ${check.repo} : la branche d'une PR fusionnée est supprimée par GitHub (delete_branch_on_merge).`;
+    return check.repo ? `Réglage delete_branch_on_merge du dépôt GitHub ${check.repo} non vérifié : ${check.note ?? 'raison inconnue'}.` : null;
+}
 export async function run(args, io) {
     return guard(io, usage, async () => {
         const { values, positionals } = parse(args, { name: { type: 'string' }, repo: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' } });
@@ -278,8 +305,9 @@ export async function run(args, io) {
         if (!name || name.length > 100 || /[\n\r\0]/.test(name))
             throw new UsageError('--name : de 1 à 100 caractères, sur une ligne');
         const result = await initProject(repo, name);
+        const github = await deleteOnMergeCheck(repo, io);
         if (values.json) {
-            json(io, result);
+            json(io, { ...result, github });
             return EXIT.ok;
         }
         const lines = [`Projet « ${name} » : ${repo}`];
@@ -289,6 +317,9 @@ export async function run(args, io) {
         if (result.existing.length)
             lines.push(`Existait déjà (inchangé) : ${result.existing.join(', ')}`);
         lines.push(...reuseLines(result.reuse));
+        const setting = deleteOnMergeLine(github);
+        if (setting)
+            lines.push(setting);
         if (result.created.length || result.completed.length) {
             const attributes = [...result.created, ...result.completed].includes(GITATTRIBUTES) ? ` et ${GITATTRIBUTES}` : '';
             lines.push(`Suite : adapter .apv/brief.md (passages entre chevrons) et déclarer les contrôles dans .apv/config.json, puis commiter .apv/${attributes}.`);

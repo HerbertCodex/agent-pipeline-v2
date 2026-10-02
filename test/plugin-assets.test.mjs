@@ -692,7 +692,7 @@ test('pilot journal 26 September: orphan servers stopped by apv procs, mockups o
   assert.match(read('docs/RUN.md'), /### Serveurs de test orphelins : `apv procs`/);
   assert.match(read('docs/CLI.md'), /## `apv procs`/);
   assert.match(read('docs/CONFIGURATION.md'), /## Ressources de test : `resources`/);
-  assert.match(read('docs/CONFIGURATION.md'), /<dir>\/\*\.html -whitespace/);
+  assert.match(read('docs/CONFIGURATION.md'), /<dir>\/\*\*\/\*\.html -whitespace/);
   assert.match(read('docs/DECISIONS.md'), /## Périmètre d'une décision : `scope`/);
   for (const file of ['skills/spec/SKILL.md', 'agents/product.md', 'agents/architecte.md']) assert.match(read(file), /`scope`/, file);
   const unreleased = read('CHANGELOG.md').split('\n## ')[1];

@@ -1,4 +1,4 @@
-import { type GhCall, type GhRunner, type PullRequest } from './github.js';
+import { type GhCall, type GhRunner, type MergedHead, type PullRequest } from './github.js';
 /**
  * Batch merge (docs/APV3-SPEC.md, section 18.5): several independent pull requests, each proven at the task level,
  * are merged into one integration branch made from the target, the full suite runs ONCE on its head, and, proven,
@@ -113,6 +113,8 @@ export interface BatchReport {
     /** The batch whose proof allows the merge, or null. */
     proven: Lot | null;
     merged: number[];
+    /** Each pull request whose merge was seen, with the head it was merged at (the branch cleanup works from it). */
+    mergedHeads: MergedHead[];
     stopped: {
         pr: number | null;
         reasons: string[];

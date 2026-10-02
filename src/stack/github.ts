@@ -16,14 +16,14 @@ export type GhRunner = (args: string[]) => Promise<GhCall>;
 
 const GH_TIMEOUT_MS = 120_000;
 
-/** Runs `gh` (or `APV_GH`) without a shell, with the caller's environment. */
-export function processGh(bin: string, env: NodeJS.ProcessEnv, cwd: string): GhRunner {
+/** Runs `gh` (or `APV_GH`) without a shell, with the caller's environment; stopped after `timeoutMs`. */
+export function processGh(bin: string, env: NodeJS.ProcessEnv, cwd: string, timeoutMs = GH_TIMEOUT_MS): GhRunner {
   return args => new Promise(done => {
     const out: Buffer[] = []; const err: Buffer[] = [];
     let child: ReturnType<typeof spawn>;
     try { child = spawn(bin, args, { cwd, env: { ...env, GH_PROMPT_DISABLED: '1' }, stdio: ['ignore', 'pipe', 'pipe'] }); }
     catch (error) { done({ args, status: null, stdout: '', stderr: '', error: errorMessage(error) }); return; }
-    const timer = setTimeout(() => child.kill('SIGTERM'), GH_TIMEOUT_MS);
+    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
     child.stdout?.on('data', (c: Buffer) => out.push(c));
     child.stderr?.on('data', (c: Buffer) => err.push(c));
     child.once('error', error => { clearTimeout(timer); done({ args, status: null, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), error: error.message }); });
@@ -34,12 +34,14 @@ export function processGh(bin: string, env: NodeJS.ProcessEnv, cwd: string): GhR
   });
 }
 
-export const VIEW_FIELDS = 'number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,url';
+export const VIEW_FIELDS = 'number,state,isDraft,baseRefName,headRefName,headRefOid,isCrossRepository,mergeable,mergeStateStatus,statusCheckRollup,url';
 
 export interface CheckItem { name: string; state: 'success' | 'pending' | 'failure' }
 export interface PullRequest {
   number: number; state: string; isDraft: boolean; baseRefName: string; headRefName: string; headRefOid: string;
   mergeable: string; mergeStateStatus: string; checks: CheckItem[];
+  /** Whether the head branch lives in another repository (a fork); null when GitHub did not say. */
+  crossRepository: boolean | null;
   /** Web address of the pull request: its host, owner and repository name the REST calls. */
   url: string;
 }
@@ -70,6 +72,7 @@ export function parsePullRequest(text: string): PullRequest {
     number: raw['number'], state: str(raw['state']), isDraft: raw['isDraft'] === true, baseRefName: str(raw['baseRefName']),
     headRefName: str(raw['headRefName']), headRefOid: str(raw['headRefOid']), mergeable: str(raw['mergeable']),
     mergeStateStatus: str(raw['mergeStateStatus']), checks: readChecks(raw['statusCheckRollup']), url: str(raw['url']),
+    crossRepository: typeof raw['isCrossRepository'] === 'boolean' ? raw['isCrossRepository'] : null,
   };
 }
 
@@ -83,14 +86,15 @@ const NAME = /^[A-Za-z0-9._-]{1,100}$/;
  * that answered the read, host included (GitHub Enterprise). Null when the address is not the one of pull
  * request `n` (another number, unexpected form, owner or name with other characters than GitHub allows).
  */
-export function pullRequestPath(pr: PullRequest): PullRequestPath | null {
+export function pullRequestPath(pr: Pick<PullRequest, 'number' | 'url'>): PullRequestPath | null {
   const m = /^https:\/\/([A-Za-z0-9.-]{1,253}(?::\d{1,5})?)\/([^/]+)\/([^/]+)\/pull\/(\d{1,9})$/.exec(pr.url);
   if (!m || Number(m[4]) !== pr.number || [m[2]!, m[3]!].some(name => !NAME.test(name) || name === '.' || name === '..')) return null;
   const repo = `repos/${m[2]}/${m[3]}`;
   return { host: m[1]!.toLowerCase(), path: `${repo}/pulls/${pr.number}`, repo };
 }
 
-const hostname = (where: PullRequestPath): string[] => where.host === 'github.com' ? [] : ['--hostname', where.host];
+/** `--hostname <host>` for a repository outside github.com. */
+export const hostname = (where: Pick<PullRequestPath, 'host'>): string[] => where.host === 'github.com' ? [] : ['--hostname', where.host];
 
 /**
  * Arguments of the retarget: `gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -f base=<target>`. The REST API
@@ -110,7 +114,7 @@ export const FRESHNESS_JQ = '{ahead_by, merge_base: .merge_base_commit.sha, list
   'merges: ([(.commits // [])[] | select((.parents // []) | length > 1)] | length), files: (if .files == null then null else [.files[].filename] end)}';
 
 /** A ref in a REST path: every character escaped but the slashes of a branch name. */
-const refSegment = (ref: string): string => encodeURIComponent(ref).replaceAll('%2F', '/');
+export const refSegment = (ref: string): string => encodeURIComponent(ref).replaceAll('%2F', '/');
 
 /**
  * Arguments of the freshness read: `gh api repos/<owner>/<repo>/compare/<head sha>...<base>`. In this order,
@@ -344,6 +348,20 @@ export interface MergeReport {
   rules: Array<{ pr: number } & RulesVerdict>;
   /** Merges whose signed trace could not be written. */
   traceErrors: string[];
+  /** Each pull request whose merge was seen, with the head it was merged at: what the branch cleanup works from. */
+  mergedHeads: MergedHead[];
+}
+
+/**
+ * A pull request whose merge was seen (state `MERGED` read again), with its head branch and the head the merge carried
+ * (`--match-head-commit`): its branch is deleted only while it still points there.
+ */
+export interface MergedHead {
+  pr: number; branch: string; head: string;
+  /** From a fork (`isCrossRepository`); null when GitHub did not say. */
+  crossRepository: boolean | null;
+  /** Web address of the pull request: host, owner and repository of the branch. */
+  url: string;
 }
 
 /**
@@ -354,7 +372,7 @@ export interface MergeReport {
  */
 export async function mergeStack(numbers: number[], method: 'merge' | 'squash' | 'rebase', options: StackOptions): Promise<MergeReport> {
   const plan = await planStack(numbers, options);
-  const report: MergeReport = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [], rules: [], traceErrors: [] };
+  const report: MergeReport = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [], rules: [], traceErrors: [], mergedHeads: [] };
   const stop = (pr: number, reasons: string[]): MergeReport => { report.stopped = { pr, reasons }; return report; };
   if (!plan.ok) {
     const bad = plan.prs.find(p => p.anomalies.length)!;
@@ -424,6 +442,7 @@ export async function mergeStack(numbers: number[], method: 'merge' | 'squash' |
       return stop(n, [`fusion de la PR #${n} non constatée : état ${after.pr.state || 'inconnu'}, base ${after.pr.baseRefName || '?'} (gh pr merge : ${merge.error ?? `code ${merge.status}`})`]);
     }
     report.merged.push(n);
+    report.mergedHeads.push({ pr: n, branch: pr.headRefName, head: pr.headRefOid, crossRepository: pr.crossRepository, url: pr.url });
     if (options.onMerged) {
       // A rebase lands one new commit per commit of the pull request, the last one being `mergeCommit`: their number is
       // kept in the trace, so that the audit accounts for all of them, not only the last one.

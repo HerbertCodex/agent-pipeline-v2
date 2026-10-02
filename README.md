@@ -89,6 +89,10 @@ Sur une configuration existante, l'outil liste les contrôles que les règles ex
 
 **Mise à jour vers 3.0.0-alpha.11**, sur un projet déjà sous APV : lancez `apv map` une fois après la mise à jour et commitez `.apv/code-map.md` (et la carte de l'architecture si elle existe) dans une PR à part : la carte du code gagne une section « Dossiers », et le contrôle `code-map` la dit périmée « par la mise à jour d'APV » jusque-là. Pour le contrôle `structure` et la carte de l'architecture sur un projet existant : `apv structure map`, puis le contrôle à ajouter à `.apv/config.json` ([docs/STRUCTURE.md](docs/STRUCTURE.md)).
 
+## Maquettes validées
+
+Une maquette validée par l'opérateur est versée par `apv design register` : copie dans `docs/design/`, empreinte sha256 et décision au registre avec sa citation exacte ; `apv design check` détecte toute retouche. Un projet qui a beaucoup de maquettes les range par groupe (`docs/design/admin/`, `docs/design/produit/`) en déclarant `design.groups` (motifs sur le nom) et `design.defaultGroup` dans `.apv/config.json` ; `apv design organize` range celles déjà versées (`git mv`, chemin réécrit dans leur décision, empreinte vérifiée, fichiers qui citent l'ancien chemin listés). Détails : [docs/DESIGN.md](docs/DESIGN.md#6-configuration) et [`apv design`](docs/CLI.md#apv-design).
+
 ## Développer
 
 ```bash

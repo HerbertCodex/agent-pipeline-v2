@@ -34,7 +34,7 @@ Pour l'**évolution d'un écran existant** ou un nouvel état, la continuité pr
 ## 4. Verser la référence
 1. Seulement après les mots explicites de l'opérateur, sur la version exacte qu'il a vue en dernier :
    `apv design register <brouillon> --name <ecran> --quote "<ses mots exacts>" [--title "…"] [--screens a,b] [--artifact <adresse>]`.
-2. L'outil copie le fichier vers `docs/design/<ecran>-validee.html` (dossier fixé par `design.dir` dans `.apv/config.json`), calcule son sha256 et inscrit au registre la décision `maquette-<ecran>-validee` : confirmée, source opérateur, citation exacte, chemin et empreinte. Sans citation, ou avec une validation sous réserve, il refuse : le pipeline n'invente jamais une approbation.
+2. L'outil copie le fichier vers `docs/design/<ecran>-validee.html` (dossier fixé par `design.dir` dans `.apv/config.json` ; sous-dossier du groupe, `docs/design/<groupe>/<ecran>-validee.html`, quand `design.groups` le déclare), calcule son sha256 et inscrit au registre la décision `maquette-<ecran>-validee` : confirmée, source opérateur, citation exacte, chemin et empreinte. Sans citation, ou avec une validation sous réserve, il refuse : le pipeline n'invente jamais une approbation.
 3. Commit dédié des fichiers qu'il affiche (« design: maquette validée <écran> »), puis `apv design check`.
 4. Les brouillons restent comme historique ; seule la référence fait foi.
 

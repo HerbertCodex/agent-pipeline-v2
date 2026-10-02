@@ -36,5 +36,6 @@ export { parseUsage, classifyQuota, reading as quotaReading, readQuota, QUOTA_TH
 export type { QuotaReading, QuotaLevel, UsageRunner } from './quota/usage.js';
 export { dispatch, commands } from './commands/index.js';
 export type { CommandIO } from './commands/io.js';
-export { registerMockup, listMockups, loadDesignConfig, sha256File, matchesScreen, DEFAULT_DESIGN_DIR } from './design/registry.js';
+export { registerMockup, listMockups, loadDesignConfig, sha256File, matchesScreen, mockupPlacement, DEFAULT_DESIGN_DIR } from './design/registry.js';
+export { organizeMockups } from './design/organize.js';
 export type { RegisteredMockup, RegisterInput, RegisterResult, MockupState } from './design/registry.js';

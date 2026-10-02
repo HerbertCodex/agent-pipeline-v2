@@ -1,6 +1,6 @@
 # Configuration et politique
 
-> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts`, `resources`, `suite`, `stacks`, `batch`, `web`, `reuse` et `map` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
+> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts`, `resources`, `suite`, `stacks`, `batch`, `stack`, `web`, `reuse` et `map` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
 
 La configuration est un JSON déclaratif lu avant l'agent et conservé avec la tentative. La tâche ne peut pas fournir une commande à la place d'un contrôle, changer un verdict ni s'accorder une exemption. Les champs inconnus sont refusés.
 
@@ -544,9 +544,20 @@ Section APV3, facultative (3.0.0-alpha.5, spécification sections 18.5 et 18.6) 
 - `setupTimeoutMs` (défaut 15 min, jusqu'à 1 h).
 - Absente : rien n'est préparé (projet sans dépendances à installer).
 
+## Pile de PR : `stack`
+
+Section APV3, facultative : les branches que `apv stack merge` et `apv stack batch --merge` ne suppriment jamais après une fusion ([CLI.md](CLI.md#apv-stack)), en plus des règles de l'outil (branche cible ou par défaut, protégée, fork, base ou tête d'une PR ouverte, déjà base d'une PR, tête déplacée).
+
+```json
+{ "stack": { "keepBranches": ["develop", "release/*", "env/**"] } }
+```
+
+- `keepBranches` : motifs de noms de branches (`*` à l'intérieur d'un segment, `**` à travers les `/`, `?`, `{a,b}`), 100 au plus. Absente : `develop`, `development`, `release/*`, `releases/*`, `staging`, `hotfix/*`. `[]` : aucune branche gardée par son nom (les autres règles restent).
+- La configuration lue est celle du dépôt où la commande est lancée ; illisible, toutes les branches fusionnées sont gardées (avec la raison).
+
 ## Maquettes validées : `design`
 
-Section facultative : `{ "design": { "dir": "docs/design" } }`, le dossier des maquettes validées ([DESIGN.md](DESIGN.md), [CLI.md](CLI.md#apv-design)), relatif, dans le dépôt, sans espace ; absente : `docs/design`. Une maquette validée est figée par son empreinte sha256 : ses espaces de fin de ligne ne peuvent pas être nettoyés sans changer l'empreinte, et `git diff --check` (contrôle `diff-check`, CI des projets) échouerait sur elle. `apv design register`, et `apv init` ou `apv onboard` quand le dossier est déclaré ou existe, ajoutent donc à `.gitattributes` la ligne `<dir>/*.html -whitespace` si Git ne l'applique pas déjà ; `apv design check` signale son absence (sortie `1` si une maquette validée porte des espaces de fin de ligne). Un dossier changé après coup (nouveau `design.dir`) : relancer `apv design register` ou `apv init`, puis commiter `.gitattributes`.
+Section facultative : `{ "design": { "dir": "docs/design" } }`, le dossier des maquettes validées ([DESIGN.md](DESIGN.md), [CLI.md](CLI.md#apv-design)), relatif, dans le dépôt, sans espace ; absente : `docs/design`. Une maquette validée est figée par son empreinte sha256 : ses espaces de fin de ligne ne peuvent pas être nettoyés sans changer l'empreinte, et `git diff --check` (contrôle `diff-check`, CI des projets) échouerait sur elle. `apv design register`, et `apv init` ou `apv onboard` quand le dossier est déclaré ou existe, ajoutent donc à `.gitattributes` la ligne `<dir>/**/*.html -whitespace` (racine et sous-dossiers des groupes) si Git ne l'applique pas déjà ; l'ancienne ligne `<dir>/*.html -whitespace` reste acceptée sans groupes et, avec des groupes (`design.groups`, `design.defaultGroup`, rangement par sous-dossier, [DESIGN.md](DESIGN.md#6-configuration)), est remplacée à sa place ; `apv design check` signale son absence (sortie `1` si une maquette validée porte des espaces de fin de ligne). Un dossier changé après coup (nouveau `design.dir`) : relancer `apv design register` ou `apv init`, puis commiter `.gitattributes`.
 
 ## Qualité web : `web`
 
