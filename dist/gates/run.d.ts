@@ -2,6 +2,7 @@ import { type Gate, type GateReceipt, type GateStage } from '../domain/contracts
 import { type ApvConfig } from '../config/load.js';
 import { PipelineError } from '../domain/errors.js';
 import { type PruneResult } from './store.js';
+import { type ResolvedStack } from '../stacks/idle.js';
 import { type InfrastructureCause } from './infrastructure.js';
 import { type ScopeDecision } from './proof-scope.js';
 import { type CleanupRecord, type PortsRecord, type QueueRecord, type SuiteHooks } from './suite.js';
@@ -151,6 +152,26 @@ export declare function stageGates(gates: readonly Gate[], stage: GateStage): {
 };
 /** Identity of the declared checks and passed variables, recorded in every receipt and compared by `apv gates verify`. */
 export declare function gatesConfigHash(config: ApvConfig): string;
+/** Why a full suite cannot start: ports of the suite held by others, declared stacks whose lock is held. */
+export declare function busyReasons(ports: PortsRecord | null, stacks: readonly ResolvedStack[], free?: (file: string) => boolean | null, previewPorts?: readonly number[]): string[];
+/** Share of its timeout beyond which a receipt warns (`nearTimeout`): 85 %. */
+export declare const NEAR_TIMEOUT = 0.85;
+/**
+ * The warning of a receipt whose longest pass took at least 85 % of the timeout of its check (a relaunch has its own
+ * timeout: each pass is compared alone), or null. A pass that ran out of time is at 100 % or more.
+ */
+export declare function nearTimeout(receipt: {
+    status: string;
+    durationMs: number;
+    retry?: {
+        first: {
+            durationMs: number;
+        };
+    } | undefined;
+}, timeoutMs: number | undefined): {
+    timeoutMs: number;
+    percent: number;
+} | null;
 /**
  * Runs configured checks in the project working tree: dependency graph, named resources and read/write
  * exclusion through the V2 scheduler, only the declared variables passed, each command bounded by its

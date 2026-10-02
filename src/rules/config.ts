@@ -1,0 +1,68 @@
+import { s, type Infer } from '../domain/schema.js';
+import { relativeGlob } from '../reuse/config.js';
+
+/**
+ * The rules the tool enforces before a merge (`apv rules check`, `apv stack merge`, `apv stack batch --merge`), docs/REGLES.md.
+ * Every rule applies to every project: none can be switched off by the configuration. The only way past a refusal is
+ * the correction it asks for, or a waiver the operator writes himself (src/rules/operator.ts).
+ */
+export const MERGE_RULES = ['preuve', 'instable', 'relecture', 'captures', 'controles', 'maquette'] as const;
+export type MergeRule = typeof MERGE_RULES[number];
+
+/** What each rule protects, in a few words (texts of the refusals and of docs/REGLES.md). */
+export const RULE_TITLES: Readonly<Record<MergeRule, string>> = {
+  preuve: 'suite complète prouvée au commit exact',
+  instable: 'aucun contrôle réussi seulement après relance',
+  relecture: 'relecture enregistrée à ce commit, sans constat critique ni haut',
+  captures: 'captures de la revue de fidélité (ordinateur et téléphone, clair et sombre)',
+  controles: 'contrôles de base d\'un projet web présents',
+  maquette: 'maquette validée par l\'opérateur pour chaque écran nouveau ou changé',
+};
+
+export const CAPTURE_VIEWPORTS = ['desktop', 'phone', 'tablet'] as const;
+export type CaptureViewport = typeof CAPTURE_VIEWPORTS[number];
+export const CAPTURE_THEMES = ['light', 'dark'] as const;
+export type CaptureTheme = typeof CAPTURE_THEMES[number];
+/** Captures required by default for a change of interface: computer and phone, light and dark theme. */
+export const DEFAULT_CAPTURE_VIEWPORTS: readonly CaptureViewport[] = ['desktop', 'phone'];
+export const DEFAULT_CAPTURE_THEMES: readonly CaptureTheme[] = ['light', 'dark'];
+
+const gateId = s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
+
+export const rulesSchema = s.object({
+  /**
+   * Captures the fidelity review attaches to the commit of a change of interface. `themes: ["light"]` only for a
+   * project without a dark theme; the tablet may be added, never less than one width.
+   */
+  captures: s.optional(s.object({
+    viewports: s.optional(s.array(s.enum(CAPTURE_VIEWPORTS), 1, 3)),
+    themes: s.optional(s.array(s.enum(CAPTURE_THEMES), 1, 2)),
+  })),
+  /** Checks a web project must declare, added to those of the tool (reuse, code-map, structure): an id and the start of its command. */
+  requiredGates: s.optional(s.array(s.object({ id: gateId, command: s.array(s.string(1, 200), 1, 10) }), 0, 20)),
+  /** Days a line of the operator journal is kept (docs/REGLES.md, « Ancrage »); default 90. */
+  journalDays: s.optional(s.number(1, 3650)),
+  /** Files that are screens, added to those the tool knows (routes of SvelteKit, Next, Nuxt, Astro, Remix...). */
+  screens: s.optional(s.array(s.string(1, 4096), 0, 100)),
+});
+export type RulesSection = Infer<typeof rulesSchema>;
+
+export interface RequiredGate { id: string; command: string[]; source: 'apv' | 'config' }
+export interface RulesSettings {
+  captures: { viewports: CaptureViewport[]; themes: CaptureTheme[] };
+  requiredGates: RequiredGate[];
+  screens: string[];
+}
+
+/** Effective settings of a `rules` section: the defaults, completed by what the project adds. Throws a CONFIG error. */
+export function rulesSettings(section: RulesSection | undefined, builtIn: readonly RequiredGate[]): RulesSettings {
+  const unique = <T>(values: readonly T[]): T[] => [...new Set(values)];
+  return {
+    captures: {
+      viewports: unique(section?.captures?.viewports ?? [...DEFAULT_CAPTURE_VIEWPORTS]),
+      themes: unique(section?.captures?.themes ?? [...DEFAULT_CAPTURE_THEMES]),
+    },
+    requiredGates: [...builtIn, ...(section?.requiredGates ?? []).map(g => ({ id: g.id, command: [...g.command], source: 'config' as const }))],
+    screens: (section?.screens ?? []).map(g => relativeGlob(g, 'rules.screens')),
+  };
+}

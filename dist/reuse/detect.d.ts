@@ -38,6 +38,8 @@ export declare const MAP_GATE: {
 };
 /** True when an executable `apv` is on the PATH: the generated checks call it by that name. */
 export declare function apvOnPath(path?: string): boolean;
+/** Dependencies that make a project a web interface. */
+export declare const WEB_DEPENDENCIES: RegExp;
 /** The `reuse` section as `apv init` and `apv onboard` write it (validated by the schema of src/reuse/config.ts). */
 export interface ReuseDocument {
     reference?: string;

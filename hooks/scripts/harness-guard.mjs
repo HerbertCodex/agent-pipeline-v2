@@ -536,6 +536,9 @@ export function hookContext(input, env = process.env) {
   const context = {
     cwd,
     home: env.HOME ?? null,
+    // Set by Claude Code when the hook fires inside a subagent (`apv:implementer`...); null in the main session.
+    agentType: typeof input?.agent_type === 'string' && input.agent_type ? input.agent_type : null,
+    agentId: typeof input?.agent_id === 'string' && input.agent_id ? input.agent_id : null,
     ancestors: () => (ancestors ??= processAncestors()),
     stacks: () => {
       if (stacks) return stacks;
@@ -544,6 +547,12 @@ export function hookContext(input, env = process.env) {
       const common = git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
       return (stacks = readStacks(root, common));
     },
+    // The default branch of the remote (`origin/HEAD`), plus main and master: never pushed to directly.
+    defaultBranches: () => {
+      const head = git(cwd, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+      return [...new Set([...(head && head.startsWith('origin/') ? [head.slice('origin/'.length)] : []), 'main', 'master'])];
+    },
+    currentBranch: () => git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
     flockHeldByAncestor: file => flockHeldBy(file, context.ancestors()),
     leaseHeld: () => (env.APV_LOCK_HELD ?? '').split(',').map(x => x.trim()).filter(Boolean),
   };
@@ -551,4 +560,5 @@ export function hookContext(input, env = process.env) {
 }
 
 /** A context where nothing is known: no ancestors, no stacks, no directory (the pure calls of the tests). */
-export const EMPTY_CONTEXT = { cwd: null, home: null, ancestors: () => [], stacks: () => [], flockHeldByAncestor: () => false, leaseHeld: () => [] };
+export const EMPTY_CONTEXT = { cwd: null, home: null, agentType: null, agentId: null, ancestors: () => [], stacks: () => [], flockHeldByAncestor: () => false, leaseHeld: () => [],
+  defaultBranches: () => ['main', 'master'], currentBranch: () => null };

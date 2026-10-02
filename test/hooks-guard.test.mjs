@@ -41,7 +41,7 @@ test('ordinary pushes and text that merely mentions a force-push are allowed', (
   for (const command of [
     'git push',
     'git push -u origin spec/3-t2',
-    'git push origin main',
+    'git push origin feat/x',
     'git commit -m "docs: interdire git push --force"',
     "git commit -m 'git push -f est interdit'",
     'cat > notes.md <<EOF\ngit push --force\nEOF\ngit add notes.md',
@@ -51,17 +51,13 @@ test('ordinary pushes and text that merely mentions a force-push are allowed', (
   ]) assert.equal(decision(command, {}), 'allow', command);
 });
 
-test('pull request merges are blocked unless explicitly authorised', () => {
-  for (const command of ['gh pr merge 5 --squash', 'gh pr merge', 'gh -R o/r pr merge 3', 'gh api -X PUT repos/o/r/pulls/3/merge']) {
-    assert.deepEqual(evaluateCommand(command, {}), { decision: 'deny', reason: REASONS.merge }, command);
+test('a merge through gh is always refused: only apv stack merge merges, after the rules', () => {
+  for (const command of ['gh pr merge 5 --squash', 'gh pr merge', 'gh -R o/r pr merge 3', 'gh api -X PUT repos/o/r/pulls/3/merge',
+    'APV_ALLOW_MERGE=1 gh pr merge 5 --merge', 'env APV_ALLOW_MERGE=1 gh pr merge 5 --merge', 'APV_ALLOW_MERGE=1 true; gh pr merge 5']) {
+    assert.deepEqual(evaluateCommand(command, {}), { decision: 'deny', reason: REASONS.rawMerge }, command);
   }
-  assert.equal(decision('APV_ALLOW_MERGE=1 gh pr merge 5 --merge', {}), 'allow');
-  assert.equal(decision('env APV_ALLOW_MERGE=1 gh pr merge 5 --merge', {}), 'allow');
-  assert.equal(decision('gh pr merge 5 --merge', { APV_ALLOW_MERGE: '1' }), 'allow');
-  assert.equal(decision('APV_ALLOW_MERGE=0 gh pr merge 5', {}), 'deny');
-  assert.equal(decision('APV_ALLOW_DEPLOY=1 gh pr merge 5', {}), 'deny');
-  // The authorisation applies to its own command only.
-  assert.equal(decision('APV_ALLOW_MERGE=1 true; gh pr merge 5', {}), 'deny');
+  assert.deepEqual(evaluateCommand('gh pr merge 5 --merge', { APV_ALLOW_MERGE: '1' }), { decision: 'deny', reason: REASONS.rawMerge });
+  assert.match(REASONS.rawMerge, /apv stack merge/);
 });
 
 test('apv stack merge needs the same explicit authorisation as gh pr merge', () => {
@@ -117,7 +113,7 @@ test('GitHub writes with hidden output are blocked, even when authorised (incide
     'gh pr edit 3 --base main | tee /dev/null',
     'for p in 3 4 5; do gh pr edit $p --base main >/dev/null 2>&1; done',
     '{ gh pr edit 3 --base main; } >/dev/null 2>&1',
-    'APV_ALLOW_MERGE=1 gh pr merge 3 --merge >/dev/null 2>&1',
+    'APV_ALLOW_MERGE=1 apv stack merge 3 >/dev/null 2>&1',
     'gh api -X PATCH repos/o/r/pulls/3 -f base=main >/dev/null',
   ]) assert.deepEqual(evaluateCommand(command, {}), { decision: 'deny', reason: REASONS.hiddenOutput }, command);
 });
@@ -158,16 +154,22 @@ test('the hook script allows silently, and honours the environment authorisation
     assert.equal(result.status, 0, JSON.stringify(payload));
     assert.equal(result.stdout, '');
   }
-  assert.equal(runHook(bash('gh pr merge 3 --merge')).status, 2);
-  const allowed = runHook(bash('gh pr merge 3 --merge'), { APV_ALLOW_MERGE: '1' });
+  assert.equal(runHook(bash('apv stack merge 3')).status, 2);
+  assert.equal(runHook(bash('gh pr merge 3 --merge'), { APV_ALLOW_MERGE: '1' }).status, 2, 'never through gh');
+  const allowed = runHook(bash('apv stack merge 3'), { APV_ALLOW_MERGE: '1' });
   assert.equal(allowed.status, 0);
   assert.equal(allowed.stdout, '');
 });
 
-test('hooks.json registers the four hooks in exec form with the plugin root placeholder', () => {
+test('hooks.json registers the five events in exec form with the plugin root placeholder', () => {
   const config = JSON.parse(readFileSync(hooksFile, 'utf8'));
-  assert.deepEqual(Object.keys(config.hooks).sort(), ['PostToolUse', 'PreToolUse', 'SessionStart', 'Stop']);
+  assert.deepEqual(Object.keys(config.hooks).sort(), ['PostToolUse', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit']);
   assert.equal(config.hooks.PreToolUse[0].matcher, 'Bash');
+  assert.equal(config.hooks.PreToolUse[1].matcher, 'Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob');
+  assert.deepEqual(config.hooks.PostToolUse.map(g => g.matcher), ['Write|Edit|MultiEdit|NotebookEdit', 'Bash']);
+  assert.match(config.hooks.PostToolUse[1].hooks[0].args[0], /review-seal\.mjs$/);
+  assert.match(config.hooks.PreToolUse[1].hooks[0].args[0], /write-guard\.mjs$/);
+  assert.match(config.hooks.UserPromptSubmit[0].hooks[0].args[0], /operator-journal\.mjs$/);
   assert.equal(config.hooks.PostToolUse[0].matcher, 'Write|Edit|MultiEdit|NotebookEdit');
   for (const [event, groups] of Object.entries(config.hooks)) {
     for (const group of groups) {

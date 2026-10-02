@@ -5,6 +5,7 @@ import { APV_DIR, apvGitignoreMissing, ensureApvGitignore } from '../config/apv-
 import { CONFIG_FILE, configIssues, loadConfig, type ApvConfig } from '../config/load.js';
 import { worktreeFiles } from '../knowledge/inventory.js';
 import { apvOnPath, detectReuse, MAP_GATE, REUSE_GATE, STRUCTURE_GATE, type ReuseDocument, type ReuseProposal } from '../reuse/detect.js';
+import { REQUIRED_WEB_GATES, missingRequiredGates } from '../rules/required.js';
 import { architectureMap } from '../structure/map-file.js';
 import { structureSettings } from '../structure/config.js';
 import { currentMap } from './map.js';
@@ -26,7 +27,9 @@ config.json (nom du projet, contrôles vides), DECISIONS.json (registre vide), b
 des implementers, depuis le modèle de la compétence chef-de-projet), specs/, state/ et .gitignore
 (fichiers machine) et la carte du code (.apv/code-map.md, comme apv map). La configuration créée déclare les
 contrôles code-map (apv map --check) et, pour un projet web, reuse (apv reuse check) avec la section reuse
-détectée (dossiers partagés, composant qui remplace chaque élément natif réservé, langue, branche de référence).
+détectée (dossiers partagés, composant qui remplace chaque élément natif réservé, langue, branche de référence)
+et structure (apv structure check) : les contrôles qu'exigent les règles avant fusion (docs/REGLES.md). Une
+configuration existante n'est jamais modifiée : les contrôles requis qui lui manquent sont listés.
 Si la configuration déclare le dossier des maquettes validées (design.dir) ou si ce
 dossier existe, ajoute à .gitattributes « <dossier>/*.html -whitespace » quand Git ne l'applique pas déjà. Liste ce qui est créé et ce qui existait déjà. Refuse hors d'un dépôt Git.
 Dépôt GitHub (adresse de origin) : lit son réglage delete_branch_on_merge (gh api repos/<propriétaire>/<dépôt>) et,
@@ -155,6 +158,15 @@ export interface ReuseSetup {
   apvOnPath: boolean;
   /** Architecture map: its path when created (or to be created), null when it existed; why it could not be written. */
   architecture?: { file: string; status: 'created' | 'existing' | 'failed'; note: string | null };
+  /** Checks the rules before a merge require (rule `controles`) that an existing configuration lacks, or declares optional. */
+  missingRequired: string[];
+}
+
+/** The required checks an existing configuration lacks (rule `controles` of `apv rules check`); empty when unreadable or absent. */
+export function missingRequired(repo: string, web: boolean): string[] {
+  if (!web || !existsSync(join(repo, CONFIG_FILE))) return [];
+  try { return missingRequiredGates(loadConfig(repo).config, REQUIRED_WEB_GATES).map(m => `${m.id} (${m.command.join(' ')}${m.problem === 'optional' ? ', à rendre obligatoire' : ''})`); }
+  catch { return []; }
 }
 
 /**
@@ -202,7 +214,8 @@ export async function initProject(repo: string, name: string, pluginRoot = PLUGI
     ...(map?.path ? { map: { path: map.path, content: () => map.text } } : {}),
   });
   const architecture = await initialArchitecture(repo, writer);
-  const reuse: ReuseSetup = { web: proposal.web, signals: proposal.signals, gates: configExists ? [] : gates, section: !configExists && proposal.web ? proposal.section : null, ...mapFields(map), architecture };
+  const reuse: ReuseSetup = { web: proposal.web, signals: proposal.signals, gates: configExists ? [] : gates, section: !configExists && proposal.web ? proposal.section : null, ...mapFields(map), architecture,
+    missingRequired: configExists ? missingRequired(repo, proposal.web) : [] };
   return { repo, name, created: writer.created, existing: writer.existing, completed: writer.completed, reuse };
 }
 
@@ -247,6 +260,7 @@ export function reuseLines(reuse: ReuseSetup): string[] {
     const s = reuse.section;
     lines.push(`Réutilisation (projet web : ${reuse.signals.join(' ; ')}) : dossiers partagés ${s.shared?.join(', ') ?? 'par défaut (**/components/**, **/ui/**...)'} ; éléments natifs réservés ${Object.entries(s.native?.elements ?? {}).map(([e, t]) => `<${e}>${t ? ` -> ${t}` : ''}`).join(', ')}, permis dans ${s.native?.allowedPaths?.join(', ') ?? 'les composants génériques (**/components/ui/**, **/ui/**, **/primitives/**...)'} ; langue ${s.typography?.locale ?? 'non trouvée (reuse.typography.locale)'} ; référence ${s.reference ?? 'non trouvée (pas de branche distante origin) : déclarez reuse.reference pour apv reuse check sans --base'}.`);
   }
+  if (reuse.missingRequired.length) lines.push(`ATTENTION : contrôles requis avant toute fusion absents de .apv/config.json : ${reuse.missingRequired.join(', ')}. apv stack merge refuse sans eux (règle controles, docs/REGLES.md) : les ajouter, obligatoires ("mandatory": true).`);
   const a = reuse.architecture;
   if (a?.status === 'created') lines.push(`Carte de l'architecture : ${a.file} (parties générées remplies ; à compléter avec l'opérateur : en bref, couches et flux, règles transverses, rôles des dossiers). Relire aussi apv structure check : dossiers à plat et découpage proposé.`);
   else if (a?.status === 'failed') lines.push(`Carte de l'architecture non écrite (${a.note ?? 'erreur'}) : apv structure map.`);
@@ -296,6 +310,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       const attributes = [...result.created, ...result.completed].includes(GITATTRIBUTES) ? ` et ${GITATTRIBUTES}` : '';
       lines.push(`Suite : adapter .apv/brief.md (passages entre chevrons) et déclarer les contrôles dans .apv/config.json, puis commiter .apv/${attributes}.`);
     }
+    lines.push('Règles avant toute fusion, vérifiées par apv stack merge (docs/REGLES.md du plugin) : preuve complète au commit, aucun test instable, relectures enregistrées sans constat critique ni haut, captures de fidélité, contrôles de base, maquette validée pour chaque écran.');
     io.stdout(`${lines.join('\n')}\n`);
     return EXIT.ok;
   });

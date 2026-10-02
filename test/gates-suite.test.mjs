@@ -29,18 +29,21 @@ function project(t, config) {
 const common = repo => realpathSync(resolve(repo, git(repo, 'rev-parse', '--git-common-dir')));
 const receipt = (dir, gate) => validateReceipt(JSON.parse(readFileSync(join(dir, `${gate}.json`), 'utf8')));
 const owner = label => ({ pid: process.pid, host: hostname(), label });
-/** Holds the lease `resource` of `dir` for `ms`, then releases it; resolves to the release time. */
+/**
+ * Takes the lease `resource` of `dir`, and resolves once it is held (never racing the run that must wait for it) to a
+ * promise of its release after `ms`, which resolves to the release time.
+ */
 async function holdLease(dir, resource, ms) {
   const store = new LockStore(dir);
   const held = await store.tryAcquire(resource, owner('test'), 60);
   assert.ok(held.ok, 'lease taken by the test');
-  return new Promise(done => setTimeout(async () => { const at = Date.now(); await store.release(resource, { token: held.record.token }); done(at); }, ms));
+  return { released: new Promise(done => setTimeout(async () => { const at = Date.now(); await store.release(resource, { token: held.record.token }); done(at); }, ms)) };
 }
 
 test('the queue of the full suites: the first check starts only once the lock is free, and its timeout after that', async t => {
   const f = project(t, { gates: [{ id: 'e2e', stage: 'full', timeoutMs: 1000, command: node(`require("fs").writeFileSync(${JSON.stringify(join(f0(t), 'started'))}, String(Date.now())); setTimeout(() => {}, 100)`) }] });
   const locks = join(common(f.repo), 'apv', 'locks');
-  const released = holdLease(locks, 'full-suite', 2500);
+  const { released } = await holdLease(locks, 'full-suite', 2500);
   const r = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_POLL_MS: '20' });
   const releasedAt = await released;
   assert.equal(r.code, 0, r.stdout + r.stderr);
@@ -67,7 +70,7 @@ test('the queue refuses after waitMs, nothing runs; a disabled queue is not take
   const f = project(t, { gates: [{ id: 'e2e', stage: 'full', command: node(`require("fs").writeFileSync(${JSON.stringify(join(f0(t), 'ran'))}, "")`) }],
     suite: { queue: { lockFile: 'apv/queue/suites.lock', waitMs: 300 } } });
   const locks = join(common(f.repo), 'apv', 'queue');
-  const released = holdLease(locks, 'suites', 1500);
+  const { released } = await holdLease(locks, 'suites', 1500);
   const r = await apv(f.repo, ['gates', 'run'], { APV_LOCK_POLL_MS: '20' });
   await released;
   assert.equal(r.code, 1);
@@ -75,7 +78,7 @@ test('the queue refuses after waitMs, nothing runs; a disabled queue is not take
   assert.ok(!existsSync(join(f0(t), 'ran')));
   write(f.repo, '.apv/config.json', { gates: [{ id: 'e2e', stage: 'full', command: node('0') }], suite: { queue: { enabled: false } } });
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'no queue');
-  const held = holdLease(locks, 'suites', 800);
+  const { released: held } = await holdLease(locks, 'suites', 800);
   const free = await apv(f.repo, ['gates', 'run', '--json']);
   await held;
   assert.equal(free.code, 0); assert.equal(free.json().queue, null);
@@ -85,7 +88,7 @@ test('a check with a lease lock waits for it before its timeout starts; the comm
   const dir = join(f0(t), 'locks');
   const f = project(t, { gates: [{ id: 'integration', stage: 'full', timeoutMs: 1000, lock: { resource: 'stack' }, passEnv: [],
     command: node('process.exit(process.env.APV_LOCK_HELD === "stack" ? 0 : 7)') }] });
-  const released = holdLease(dir, 'stack', 2500);
+  const { released } = await holdLease(dir, 'stack', 2500);
   const r = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_DIR: dir, APV_LOCK_POLL_MS: '20' });
   await released;
   assert.equal(r.code, 0, r.stdout + r.stderr);
@@ -97,7 +100,7 @@ test('a check with a lease lock waits for it before its timeout starts; the comm
   // Lock not obtained within waitMs: a receipt that fails, the command never launched.
   write(f.repo, '.apv/config.json', { gates: [{ id: 'integration', stage: 'full', lock: { resource: 'stack', waitMs: 200 }, command: node(`require("fs").writeFileSync(${JSON.stringify(join(f0(t), 'ran'))}, "")`) }] });
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'short wait');
-  const held = holdLease(dir, 'stack', 1200);
+  const { released: held } = await holdLease(dir, 'stack', 1200);
   const refused = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_DIR: dir, APV_LOCK_POLL_MS: '20' });
   await held;
   assert.equal(refused.code, 1);
@@ -107,7 +110,7 @@ test('a check with a lease lock waits for it before its timeout starts; the comm
   // Already held by the caller (apv lock run stack -- apv gates run): not taken again.
   write(f.repo, '.apv/config.json', { gates: [{ id: 'integration', stage: 'full', timeoutMs: 1000, lock: { resource: 'stack', waitMs: 100 }, command: node('0') }] });
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'held');
-  const nested = holdLease(dir, 'stack', 600);
+  const { released: nested } = await holdLease(dir, 'stack', 600);
   const inside = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_DIR: dir, APV_LOCK_HELD: 'stack' });
   await nested;
   assert.equal(inside.code, 0, inside.stderr);
@@ -270,7 +273,7 @@ function server(t, cwd, port) {
 }
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
-test('ports of the suite: orphans of the same copy are stopped, never those of another copy or of the main checkout', { skip: !existsSync('/proc/net/tcp') && 'no /proc' }, async t => {
+test('ports of the suite: orphans of the same copy are stopped, never those of another copy or of the main checkout, which refuse the suite', { skip: !existsSync('/proc/net/tcp') && 'no /proc' }, async t => {
   const [own, other, main] = [await freePort(), await freePort(), await freePort()];
   const f = project(t, { gates: [{ id: 'e2e', stage: 'full', command: node('0') }], suite: { ports: [own, other, main] } });
   const copy = join(f.root, 'copy'); const sibling = join(f.root, 'sibling');
@@ -279,22 +282,29 @@ test('ports of the suite: orphans of the same copy are stopped, never those of a
   const orphan = await server(t, copy, own);
   const theirs = await server(t, sibling, other);
   const operator = await server(t, f.repo, main);
-  const r = await apv(copy, ['gates', 'run', '--json']);
-  assert.equal(r.code, 0, r.stdout + r.stderr);
-  const ports = r.json().ports;
-  assert.deepEqual(ports.stopped.map(p => [p.pid, p.ports]), [[orphan.child.pid, [own]]]);
-  assert.match(ports.stopped[0].outcome, /terminated|killed/);
-  assert.deepEqual(ports.left.map(p => [p.pid, p.reason]).sort((a, b) => a[0] - b[0]),
-    [[theirs.child.pid, 'other-copy'], [operator.child.pid, 'main-checkout']].sort((a, b) => a[0] - b[0]));
+  // Another copy (an e2e of an agent, another suite) and the main checkout hold ports of the suite: refused, nothing run.
+  const r = await apv(copy, ['gates', 'run']);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /Suite complète refusée, rien n'a été exécuté/);
+  assert.match(r.stderr, new RegExp(`port ${other} tenu par le pid ${theirs.child.pid} \\(une autre copie du dépôt`));
+  assert.match(r.stderr, new RegExp(`port ${main} tenu par le pid ${operator.child.pid} \\(le checkout principal`));
+  assert.match(r.stderr, /apv procs stop --port <p>/);
+  assert.ok(!existsSync(join(copy, '.apv/receipts')) || !readdirSync(join(copy, '.apv/receipts')).some(d => d !== '.gitignore'), 'no receipt');
+  // The orphan of the copy itself was stopped all the same; another copy and the main checkout are untouched.
   assert.equal(await orphan.exited, true);
-  assert.ok(alive(theirs.child.pid) && alive(operator.child.pid), 'another copy and the main checkout untouched');
   assert.match(r.stderr, new RegExp(`Port ${own} : orphelin de cette copie arrêté \\(pid ${orphan.child.pid}`));
-  const human = await apv(copy, ['gates', 'run']);
-  assert.match(human.stdout, /Ports de la suite tenus par d'autres processus, non arrêtés : .*other-copy/);
-  // From the main checkout, nothing of its own is ever stopped.
-  const fromMain = await apv(f.repo, ['gates', 'run', '--json']);
-  assert.ok(fromMain.json().ports.left.some(p => p.pid === operator.child.pid && p.reason === 'main-checkout'));
+  assert.ok(alive(theirs.child.pid) && alive(operator.child.pid), 'another copy and the main checkout untouched');
+  // From the main checkout, nothing of its own is ever stopped: its server refuses the suite too.
+  const fromMain = await apv(f.repo, ['gates', 'run']);
+  assert.equal(fromMain.code, 1);
+  assert.match(fromMain.stderr, new RegExp(`port ${main} tenu par le pid ${operator.child.pid}`));
   assert.ok(alive(operator.child.pid));
+  // Once they are gone, the suite runs.
+  process.kill(theirs.child.pid, 'SIGKILL'); process.kill(operator.child.pid, 'SIGKILL');
+  await theirs.exited; await operator.exited;
+  const ok = await apv(copy, ['gates', 'run', '--json']);
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr);
+  assert.deepEqual(ok.json().ports.left, []);
 });
 
 test('configuration: suite and the new gate fields are validated; absent, the gates hash is unchanged', () => {

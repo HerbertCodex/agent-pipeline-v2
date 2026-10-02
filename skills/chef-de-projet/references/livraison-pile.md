@@ -38,9 +38,11 @@ La commande `/apv:stack` automatise cette procédure : `apv stack plan <pr...>` 
 4. `apv stack plan <n>` : la PR doit être `à jour`, puis `APV_ALLOW_MERGE=1 apv stack merge <n>` sur l'ordre de l'opérateur.
 Même mise à jour pour la PR suivante d'une pile fusionnée par `--method squash` ou `rebase` : la fusion de la précédente crée sur la cible des commits neufs, et l'outil s'arrête sur elle.
 
-Dérogation exceptionnelle : `--allow-behind --reason "<raison>"`, seulement sur ordre explicite de l'opérateur qui connaît le risque, dans une commande qui ne vise que cette PR ; l'outil la journalise avant la fusion (`.apv/state/stack.log`), et tu la notes au journal du pipeline. Le hook du plugin bloque `gh pr merge` et `apv stack merge` sans `APV_ALLOW_MERGE=1` : cette variable se pose devant la seule commande de fusion, uniquement sur l'ordre explicite de l'opérateur dans son message courant.
+Dérogation exceptionnelle : `--allow-behind --reason "<raison>"`, seulement sur ordre explicite de l'opérateur qui connaît le risque, dans une commande qui ne vise que cette PR ; l'outil la journalise avant la fusion (`.apv/state/stack.log`), et tu la notes au journal du pipeline. Le hook du plugin bloque `apv stack merge` sans `APV_ALLOW_MERGE=1` (et toujours dans un sous-agent), et `gh pr merge` dans tous les cas : cette variable se pose devant la seule commande de fusion, uniquement sur l'ordre explicite de l'opérateur dans son message courant.
 
-Procédure manuelle, si l'outil n'est pas disponible : une PR à la fois, arrêt à la première anomalie.
+**Règles avant fusion** : `apv stack merge` vérifie, juste avant chaque fusion, les règles de `apv rules check` (`${CLAUDE_PLUGIN_ROOT}/docs/REGLES.md`) et s'arrête au premier refus ; lance `apv rules check --commit <tête> --target origin/<cible>` avant de proposer la fusion, et corrige chaque refus. Le crochet du plugin refuse toute fusion par `gh pr merge` ou `gh api .../merge` : seul `apv stack merge` fusionne.
+
+Sans l'outil (plugin sans son `dist/`), tu ne fusionnes pas : prépare pour l'opérateur ce que l'outil aurait vérifié (étapes ci-dessous, sauf la fusion), une PR à la fois, arrêt à la première anomalie ; il fusionne lui-même sur GitHub.
 
 Avant la fusion : si le corps d'une PR contient une affirmation qui n'est pas `prouve`, montre-la à l'opérateur avec le plan ; son ordre de fusion vaut alors en connaissance de cause.
 
@@ -49,7 +51,7 @@ Pour chaque PR, de la base vers le sommet :
 2. Si la PR précédente vient d'être fusionnée, re-cible par l'API REST : `gh api -X PATCH repos/<propriétaire>/<dépôt>/pulls/<n> -f base=<cible>` **sans masquer la sortie** (propriétaire et dépôt : `gh pr view <n> --json url`). N'emploie pas `gh pr edit --base` : sa requête GraphQL lit aussi les projets classiques de la PR et échoue depuis leur abandon (« Projects (classic) is being deprecated »).
 3. **Vérifie la base juste avant de fusionner** : `gh pr view <n> --json baseRefName` doit renvoyer la cible attendue. Sinon, arrêt.
 4. Retire le statut brouillon si l'opérateur l'a demandé (`gh pr ready <n>`).
-5. `APV_ALLOW_MERGE=1 gh pr merge <n> --merge` (ou la méthode que l'opérateur a fixée), sortie lue.
+5. L'opérateur fusionne lui-même sur GitHub (méthode qu'il a fixée) ; tu ne lances jamais `gh pr merge`, refusé par le crochet.
 6. Vérifie : `gh pr view <n> --json state,mergeCommit,baseRefName` (état `MERGED`, bonne base), puis `git fetch` et contrôle que la cible contient le commit de tête attendu.
 7. À la moindre anomalie (échec d'une commande, base inattendue, contrôles rouges, conflit) : arrêt, rien d'autre n'est fusionné, rapport à l'opérateur avec l'état exact.
 

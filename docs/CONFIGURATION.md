@@ -636,3 +636,19 @@ Sections APV3, facultatives, lues par `apv reuse check` et `apv map` et validée
 - `map.file` (`.md`), `map.ignore`, `map.maxEntries` (de 20 à 5000, partagées entre les sections de la carte), `map.maxBytes` (de 4096 à 1 000 000, 32 768 par défaut).
 
 Chaque règle, son motif et ses limites : [REUSE.md](REUSE.md). Baisser une gravité, élargir `ignore` ou `allowedPaths`, ou retirer un de ces contrôles est une décision de l'opérateur, jamais un moyen de faire passer une tâche.
+
+## Règles avant fusion : `rules`
+
+Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR et de sa cible par `apv rules check`, `apv stack merge` et `apv stack batch --merge` ([REGLES.md](REGLES.md)). Elle complète les règles, elle ne peut en retirer aucune : il n'existe pas de clé pour les désactiver.
+
+```json
+"rules": {
+  "captures": { "viewports": ["desktop", "phone"], "themes": ["light", "dark"] },
+  "requiredGates": [{ "id": "a11y", "command": ["npm", "run", "check:a11y"] }],
+  "screens": ["src/views/**/*.vue"]
+}
+```
+
+- `captures.viewports` (`desktop`, `phone`, `tablet` ; défaut `desktop` et `phone`) et `captures.themes` (`light`, `dark` ; défaut les deux) : captures qu'exige la relecture de fidélité d'un changement d'interface. `["light"]` seulement pour un projet sans thème sombre.
+- `requiredGates` : contrôles qu'un projet exige en plus de `reuse`, `code-map` et `structure` (projet web) : un identifiant et le début de la commande, reconnue enveloppée ou non (`node <plugin>/dist/cli.js`, `npx apv`) ; ils valent aussi pour un projet sans interface web.
+- `screens` : motifs des fichiers d'écran que l'outil ne reconnaît pas seul (il connaît les pages, mises en page et pages d'erreur de SvelteKit, Next, Remix, Nuxt, Astro et `pages/`).

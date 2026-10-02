@@ -137,6 +137,21 @@ export interface StackOptions {
     ciPollMs?: number;
     /** Progress lines (the wait for the checks). */
     log?: (line: string) => void;
+    /**
+     * The rules checked before any merge (`apv rules check`, docs/REGLES.md) for the head of a pull request going to
+     * `target`: what refuses it (empty when nothing does) and what to note (waivers of the operator). `apv stack plan`
+     * lists them, `apv stack merge` stops on them right before each merge. The command always passes them.
+     */
+    rules?: (pr: PullRequest, target: string) => Promise<RulesVerdict>;
+    /** After each merge seen by a read: writes its signed trace (`apv audit merges`); returns an error message when it could not. */
+    onMerged?: (merge: {
+        pr: number;
+        head: string;
+        target: string;
+        method: string;
+        mergeCommit: string | null;
+        commits?: number;
+    }) => string | null;
 }
 /** The interval between two reads of the checks while `--wait-ci` waits: 30 seconds. */
 export declare const CI_POLL_MS = 30000;
@@ -166,6 +181,11 @@ export declare function waitForChecks(n: number, first: {
  * (event `pull_request` with `branches`), and a retarget does not start it. Absent checks are not green.
  */
 export declare function noChecksAfterRetargetReason(n: number, pr: PullRequest, target: string, firstPr: number, firstChecks: number): string;
+/** What the rules say about the head of one pull request. */
+export interface RulesVerdict {
+    problems: string[];
+    notes: string[];
+}
 export interface PlannedPr {
     number: number;
     pr: PullRequest | null;
@@ -173,6 +193,8 @@ export interface PlannedPr {
     anomalies: string[];
     /** What does not stop the stack but will matter at the merge (a pull request without checks above the first one). */
     notes: string[];
+    /** The rules before a merge at its head, against the target (null when not checked: PR unread, no target). */
+    rules: RulesVerdict | null;
     /** Whether the head contains its expected base (null when not compared: PR unread, base unknown, address unreadable). */
     freshness: Freshness | null;
 }
@@ -202,6 +224,12 @@ export interface MergeReport {
     } & Freshness>;
     /** Pull requests merged behind their base by waiver (`--allow-behind`), each journaled before its merge. */
     derogations: Derogation[];
+    /** The rules read right before each merge. */
+    rules: Array<{
+        pr: number;
+    } & RulesVerdict>;
+    /** Merges whose signed trace could not be written. */
+    traceErrors: string[];
     /** Each pull request whose merge was seen, with the head it was merged at: what the branch cleanup works from. */
     mergedHeads: MergedHead[];
 }

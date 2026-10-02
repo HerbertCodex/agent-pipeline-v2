@@ -1,0 +1,128 @@
+# Règles du chef de projet
+
+Demande de l'opérateur : « Il faut que la pipeline soit mise à jour et que les règles soient rigides. Toi, tu as ta mémoire, mais dans un nouveau projet on n'aura pas ça, donc le chef de projet peut laisser passer ça. »
+
+Ce document est la source unique des règles : chaque règle vient d'un incident réel du projet pilote, rendu générique. Pour chacune : la règle, pourquoi, et qui la vérifie. **Outil** : `apv` refuse, aucune option ne lève le refus. **Chef de projet** : elle demande un jugement ; la compétence `apv:chef-de-projet` et les agents la portent, l'outil ne peut pas la prouver. Le guide de démarrage d'un projet ([DEMARRER-UN-PROJET.md](DEMARRER-UN-PROJET.md)) en donne la liste courte.
+
+## 1. Ce que l'outil vérifie avant toute fusion
+
+`apv rules check --commit <tête> --target origin/<cible>` les vérifie ; `apv stack merge` les vérifie juste avant chaque fusion et s'arrête au premier refus, `apv stack plan` les liste, `apv stack batch --merge` les vérifie pour chaque PR avant de construire le lot. Tout se lit à la base commune de la PR et de sa cible (configuration, maquettes déjà fusionnées) : une PR ne change pas ses propres règles.
+
+| Règle | Refusé quand | Pourquoi |
+|---|---|---|
+| `preuve` | la suite complète n'est pas prouvée au commit exact de la tête, contrôles de la base compris (`apv gates verify`) | un vert annoncé par un agent n'est pas une preuve ; au projet pilote, deux PR vertes chacune de leur côté ont cassé la branche principale une fois fusionnées |
+| `instable` | un contrôle n'a réussi qu'après la relance de ses tests en échec (`passed_after_retry`) | un test qui ne passe qu'à la relance cache souvent une course ou une attente dans le produit ; zéro relance acceptée à la fusion |
+| `relecture` | un domaine que `apv review plan` retient pour le diff (sécurité toujours ; fidélité, données, RGPD selon les fichiers) n'a pas de relecture enregistrée **à ce commit**, par l'agent relecteur du domaine, sans constat critique ni haut | une revue annoncée n'est pas une revue faite ; une correction après revue change le code relu ; un constat critique ou haut ne se fusionne pas |
+| `captures` | un changement d'interface (fidélité retenue) n'a pas, dans sa relecture de fidélité, les captures ordinateur et téléphone, thème clair et sombre (`rules.captures`) | un écran se juge à l'œil, dans les deux largeurs et les deux thèmes, pas sur la foi d'un rapport |
+| `controles` | un projet web ne déclare pas, obligatoires, les contrôles `reuse` (`apv reuse check`), `code-map` (`apv map --check`) et `structure` (`apv structure check`), ni ceux de `rules.requiredGates` | au projet pilote, une administration a recréé sa coquille, ses listes déroulantes et ses toasts à côté des composants partagés, et aucune étape ne l'a arrêtée |
+| `maquette` | un écran ajouté ou modifié (page, mise en page ou page d'erreur d'un routeur connu, ou `rules.screens`) n'est couvert par aucune maquette validée par l'opérateur | la maquette validée par l'opérateur est la référence absolue ; un écran codé sans elle se refait |
+
+Une maquette couvre un écran quand sa décision (`maquette-<nom>-validee`, confirmée, source opérateur) a une portée (`scope.paths`) qui contient le fichier, ou quand son nom ou l'un de ses écrans (`Écrans : ...`) nomme la route (`/admin/articles` répond à `admin-articles`, `admin` et `articles`). Elle compte si elle est déjà sur la branche cible, ou si la PR l'apporte et que la citation de l'opérateur (`sourceQuote`) figure mot pour mot dans ses messages de la session (section 3). Pour une maquette qui couvre plusieurs écrans, déclarer sa portée : `apv design register ... --scope 'src/routes/(app)/**'`.
+
+Chaque refus dit ce qui manque et quoi faire, dans l'ordre, par exemple :
+
+```
+- relecture (relecture enregistrée à ce commit, sans constat critique ni haut) : REFUSÉ : relectures demandées par le diff : securite, fidelite
+    securite : aucune relecture enregistrée à 1a59cf7db7f9
+    à faire : Relecture securite par apv:qa-securite sur une copie détachée à 1a59cf7db7f9 ; l'agent l'enregistre lui-même (apv review record ...).
+    à faire : Sans correction, seul l'opérateur peut lever ce refus, en tapant lui-même dans la session : « dérogation relecture 1a59cf7db7f9 : <ta raison> ».
+```
+
+### Relectures enregistrées
+
+```
+apv review record --commit <sha> --domain <securite|fidelite|donnees|rgpd> --reviewer apv:<agent> --report <fichier>
+                  --critical <n> --high <n> --medium <n> --low <n> [--capture <desktop|phone|tablet>:<light|dark>:<fichier>]...
+apv review show --commit <sha>
+```
+
+L'agent relecteur l'appelle lui-même à la fin de sa relecture, depuis sa copie détachée : la tête de la copie doit être le commit, ses fichiers suivis inchangés ; le rapport complet (200 octets au moins) cite le commit ; chaque capture est une vraie image (PNG, JPEG ou WebP, 1 Ko au moins), jamais la même image deux fois. Rapport et captures sont copiés sous leur empreinte dans `<répertoire git commun>/apv/reviews/<commit>/<domaine>/`, jamais versionnés ; le crochet du plugin scelle la relecture quand la commande vient de l'agent relecteur du domaine (section 3) ; une relecture non scellée, ou un fichier modifié après coup, la rend inutilisable. La dernière relecture d'un domaine à un commit fait foi. Un nouveau commit (une correction) demande une nouvelle relecture : c'est voulu.
+
+| Domaine | Seul agent qui l'enregistre |
+|---|---|
+| `securite` | `apv:qa-securite` |
+| `fidelite` | `apv:qa-fidelite` (avec les captures) |
+| `donnees` | `apv:architecte-donnees` (mode revue) |
+| `rgpd` | `apv:dpo` |
+
+## 2. Les autres garde-fous de l'outil
+
+| Règle | Comment l'outil la tient |
+|---|---|
+| Une seule suite complète à la fois | file des suites de la machine (`suite.queue`) : une suite attend son tour, jamais deux en même temps |
+| Aucun e2e d'agent pendant une preuve | `apv gates run --stage full` refuse de démarrer, sans rien lancer, quand un port de la suite (`suite.ports`) est tenu par une autre copie, le checkout principal ou un outil, ou quand le verrou d'une pile déclarée (`stacks`) est tenu ; le message dit quoi attendre ou arrêter (`apv procs list`, `apv procs stop --port <p>`) |
+| Alerte quand un contrôle approche de son délai | un reçu à 85 % ou plus du délai de son contrôle porte `nearTimeout` ; `apv gates run` et `apv gates verify` l'affichent (« délai presque atteint ») : augmenter `timeoutMs` avant qu'un délai dépassé ne casse une preuve. Un délai n'est pas un garde-fou de sécurité : l'ajuster à la durée mesurée est permis |
+| Toute fusion hors de l'outil se voit | trace signée de chaque fusion par `apv stack merge` ; `apv audit merges` (lancé aussi par `apv status` et `apv stack merge`) nomme chaque commit de la branche par défaut arrivé sans elle (section 3) |
+| Seul le chef de projet fusionne | le crochet Bash refuse `gh pr merge`, `apv stack merge` et `apv stack batch --merge` dans un sous-agent, même avec `APV_ALLOW_MERGE=1`, derrière n'importe quel préfixe d'exécution (`timeout`, `nice`, `command`, `env -i`, `nohup`, `watch`, `xargs`...) : `apv` suivi d'une commande de l'outil compte comme lancé, sauf dans une commande qui ne fait que l'afficher ou le chercher (`echo`, `grep`, `git log`...) |
+| Une relecture n'est jamais écrite par qui a écrit le code | le crochet Bash ne laisse lancer `apv review record` qu'à l'agent relecteur du domaine, sous son propre nom : ni l'implementer, ni l'intégrateur, ni la session principale |
+| Contrôles lus à la base | `apv gates run` et `verify` gardent chaque contrôle de la base dans sa définition de la base (docs/CONFIGURATION.md) |
+| Un seul composant par type d'élément | `apv reuse check` refuse un élément natif réservé (`<select>`, `<dialog>`...) hors des composants partagés, une primitive de style redéfinie, un bloc copié ; signale un composant homonyme d'un composant partagé ([REUSE.md](REUSE.md)) |
+| Jamais de force-push, de fusion hors commande, de déploiement manuel, de sortie masquée d'une écriture GitHub, d'arrêt du parent de la session, de `pkill -f`, de Docker sur une pile sans son verrou, d'écriture sur une base distante | crochet Bash du plugin ([PLUGIN.md](PLUGIN.md)) |
+
+## 3. Ancrage : ce qu'un agent ne peut pas écrire
+
+Règle générique : **toute validation humaine lue dans un endroit que l'agent peut écrire (un fichier du dépôt, GitHub, une base) est ancrée dans une trace qu'il ne peut pas écrire.** Incident d'origine : un statut « validé » lu sur une étiquette GitHub, alors que l'agent publie avec le compte de l'opérateur ; il pouvait se valider lui-même.
+
+APV3 l'applique à ses propres validations, avec une **clé d'ancrage** : 32 octets aléatoires créés par les crochets du plugin dans `~/.apv-ancrage/cle-ancrage` (fichier 0400, dossier 0700), hors de tout dépôt, à un endroit que les agents n'ont aucune raison de toucher et dont les crochets reconnaissent le nom. L'outil la cherche toujours là, dans le dossier du compte lu dans la base des comptes, jamais par une option ni par `HOME` ou `XDG_CONFIG_HOME`. Ce qu'elle signe (HMAC-SHA256), seuls les crochets et la commande `apv` l'écrivent : un script qui importe les modules de l'outil ne peut pas signer. Une ligne non signée ou modifiée est ignorée. Chaque projet garde l'empreinte de sa clé (`<répertoire git commun>/apv/operator/cle.empreinte`) : une clé supprimée n'est jamais recréée en silence dès que le projet a quelque chose de signé, et une clé remplacée est détectée ; dans les deux cas, plus rien de signé n'est accepté et `apv status` demande de restaurer la clé depuis sa sauvegarde. **Sauvegarde-la** hors de la machine dès sa création (`apv status` le rappelle la première semaine).
+
+- **Journal de l'opérateur.** Le crochet `UserPromptSubmit` garde ce que l'opérateur tape dans le compositeur (champ `source` à `user` ou `tty`). Il ne garde rien d'un sous-agent, d'une session non interactive (`claude -p`, SDK : `sdk`, `argument`, `stdin`, `api`, `file`), d'une reprise, du système ni d'un réveil programmé. **Sans champ `source`** (Claude Code 2.1.280 ne l'envoie pas), l'origine se lit dans les processus au-dessus du crochet : le message est gardé seulement si la première session Claude Code rencontrée n'est pas en mode `-p`/`--print` et qu'aucune autre session Claude Code ne tourne au-dessus d'elle (une session lancée par un agent depuis la sienne est refusée ; le crochet Bash refuse déjà de lancer `claude` imbriqué). Sinon il ne garde rien et note la date et la raison du refus, que `apv status` affiche. Limites, dites franchement : une session de premier niveau lancée par un programme de l'opérateur (Agent SDK depuis son terminal) compte comme la sienne ; un processus détaché de ses parents (`setsid`, puis sortie du parent) n'a plus de session au-dessus de lui, et un script qui charge l'Agent SDK sans nommer `claude` échappe au crochet Bash. C'est un garde-fou contre les erreurs et les raccourcis, pas une barrière contre un agent déterminé (même limite que le reste de l'ancrage) ; avec `source`, quand Claude Code l'envoie, seul ce champ décide. Une maquette apportée par une PR compte si ses phrases citées y figurent ; une dérogation n'existe que là.
+- **Ce que le journal garde, et combien de temps.** Jamais le message entier : l'empreinte de chaque phrase, calculée avec la clé (un code court tapé seul ne se retrouve pas par dictionnaire) (pour reconnaître une validation citée, phrases entières), les huit premiers mots des phrases qui valident, et les lignes de dérogation, secrets masqués. Fichier `<répertoire git commun>/apv/operator/messages.jsonl`, jamais versionné, jamais envoyé ailleurs, purgé au-delà de 90 jours (`rules.journalDays`). Pourquoi : prouver qu'une validation ou une dérogation vient de l'opérateur.
+- **Relectures scellées.** `apv review record` écrit la relecture ; le crochet `PostToolUse` la scelle aussitôt, seulement si la commande a été lancée par l'agent relecteur du domaine, sous son nom. `apv rules check` ne compte qu'une relecture scellée : écrite par l'implementer, le chef de projet ou un script, elle ne prouve rien.
+- **Fusions tracées.** Chaque fusion par `apv stack merge` ou `apv stack batch --merge` écrit une trace signée, liée à la tête fusionnée et au commit de fusion (en méthode `rebase`, aussi le nombre de commits posés : l'audit les compte tous) (`<répertoire git commun>/apv/merges/`). `apv audit merges` parcourt la branche par défaut et nomme chaque commit arrivé sans elle : fusion à la main, poussée directe. `apv status` et chaque `apv stack merge` le lancent et le montrent en tête.
+- **Dérogation.** Sans correction, seul l'opérateur lève un refus, en tapant lui-même dans la session : `dérogation <règle> <12 premiers caractères du commit au moins> : <raison>`. Une dérogation vaut pour une règle et un commit ; sans raison, elle ne compte pas. Aucune option de l'outil, aucune variable d'environnement, aucune décision écrite dans `.apv/DECISIONS.json` par un agent ne lève un refus.
+- **Garde-fous des crochets.** Refusés : toute commande qui nomme la clé par ses noms exacts (`.apv-ancrage`, `cle-ancrage`, `anchor.key`), parcourt ou copie le dossier personnel entier (`find ~`, `tar ~`, `rsync $HOME`), vise par un motif les dossiers cachés du dossier personnel qui pourraient être celui de la clé (`~/.a*`, `.apv*` après un `cd ~`), supprime les magasins (`rm -rf .git/apv`), ou utilise un chemin décodé de base64 ; `~/.config`, `os.homedir()` et les mots « anchor » ou « ancrage » ailleurs restent libres ; tout interpréteur (`node`, `python`, `deno`, `bun`...) qui importe ou lit le code du plugin, et toute exécution d'un fichier du plugin hors de `dist/cli.js` et `bin/apv` ; les variables internes de l'outil ; tout lancement de `claude` depuis une session gérée par APV (nom `claude` ou `claude-code`, binaire sous `.local/share/claude/versions/`, `@anthropic-ai/claude-code`, variable en position de commande sur une ligne avec `-p` ou `--print`), sauf `claude --version` et `claude -p /usage` (relevé du quota, sans modèle) : une session imbriquée échapperait aux garde-fous des sous-agents. Refusés aussi : toute commande qui nomme les magasins (`apv/operator`, `apv/reviews`, `apv/merges`) ou la clé, y compris en morceaux (`ap""v`, `'ap'+'v'`, `messages.jsonl`) ; `--git-common-dir` hors de sa lecture seule ; une commande `apv` dont la sous-commande est calculée ou passée par `eval` ; toute fusion d'une PR par un autre client que `apv stack merge` (`gh pr merge`, `mergePullRequest`, `enablePullRequestAutoMerge`, `.../pulls/<n>/merge` par `curl` ou autre) ; toute poussée vers la branche par défaut (`git push origin main`, `HEAD:main`, `refs/heads/main`, `--all`, poussée sans destination depuis la branche par défaut). Les outils de fichiers (`Read`, `Grep`, `Glob`, `Write`, `Edit`) ne touchent ni les magasins ni la clé.
+
+## 3 bis. Ce que l'outil garantit, et ce qu'il ne garantit pas
+
+L'outil garantit, **sur la machine et le compte où travaillent les agents**, qu'un agent qui passe par les commandes du plugin ne fusionne pas sans les règles, n'enregistre pas la relecture d'un autre, ne fabrique pas une validation de l'opérateur, et que l'audit nomme ce qui est arrivé autrement.
+
+**Les contrefaçons délibérées, par des commandes construites pour échapper aux motifs des crochets, relèvent de cette limite documentée : l'objectif est d'empêcher les erreurs et les raccourcis d'un chef de projet ou d'un agent pressé, et l'audit de l'historique (`apv audit merges`) rattrape après coup ce qui passerait quand même.** Les motifs restent volontairement étroits (les noms exacts de la clé et des magasins), pour ne pas bloquer le travail normal.
+
+Il ne garantit pas davantage, et le dit franchement : **sur un seul utilisateur système, tout ceci est un garde-fou contre les erreurs et les raccourcis d'un agent, pas une barrière contre un agent déterminé.** Les agents tournent sous le même compte que la clé : un agent décidé à tromper (un script écrit puis lancé, une forme de commande que les crochets ne reconnaissent pas, un processus lancé hors de Claude Code) peut lire la clé, écrire ces fichiers, ou pousser avec le compte GitHub de l'opérateur. Chaque relecture de ces garde-fous a trouvé de nouvelles voies ; les crochets en ferment les formes connues, jamais toutes. L'outil compare des textes et ne décide jamais que des mots valent une validation.
+
+Durcissement possible, pour qui le veut (non fourni par APV3) : garder la clé sous **un autre utilisateur système**, que les agents ne sont pas, avec un petit assistant appelé par `sudo` (règle `sudoers` limitée à cet assistant) qui signe et vérifie sans jamais rendre la clé ; ou la garder dans le **trousseau du système** (GNOME Keyring, macOS Keychain) avec une confirmation de l'opérateur à chaque signature. Les contrôles extérieurs restent l'audit des fusions après coup et la protection de branche de GitHub quand elle est disponible.
+
+**La seule vraie barrière hors de la machine est la protection de branche de GitHub** : PR obligatoire avant fusion, force-push bloqué, règles appliquées aux administrateurs. `apv status`, `apv rules check` et `apv stack merge` la vérifient par `gh api` et le disent une fois, sans jamais bloquer :
+
+- **dépôt public, ou plan payant** (GitHub Pro, Team, Enterprise) : elle est disponible ; si elle manque, la sortie dit quoi régler (Settings, puis Rules > Rulesets ou Branches). C'est un réglage de l'opérateur, à faire dès le début du projet ;
+- **dépôt privé en plan gratuit** : ni protection de branche ni ruleset ne sont disponibles. La sortie le dit une fois ; les garde-fous des crochets et l'audit des fusions en tiennent lieu, avec les limites ci-dessus : l'audit ne bloque rien, il montre après coup ce qui est passé hors de l'outil.
+
+## 4. Ce qui reste au chef de projet
+
+| Règle | Pourquoi | Comment le chef de projet la vérifie |
+|---|---|---|
+| Rôle product : cohérence entre les écrans, maquettes qui partent de l'existant | sans cohérence, chaque écran devient un produit à part ; une maquette qui ignore l'existant se refait | la maquette part d'une capture de l'écran actuel et des composants partagés ; `apv:critique-design` la note avant l'opérateur ; `apv:product` relit la cohérence des parcours |
+| Captures regardées avant fusion | l'outil prouve qu'elles existent, pas qu'on les a regardées | `apv:qa-fidelite` les compare à la maquette et le dit dans son rapport ; le chef de projet ouvre au moins celles des écrans changés |
+| Maquette validée par l'opérateur avant tout écran nouveau ou changé | l'outil vérifie la couverture ; la validation est un acte humain | boucle `/apv:design`, validation par les mots de l'opérateur, versement par `apv design register` avec sa portée |
+| Un seul composant par type d'élément, étendu plutôt que recopié | `apv reuse check` ne voit pas tout (un composant nouveau au nom différent) | consigne des implementers ; la relecture fidélité répond à « quel composant existant aurait dû servir ? » |
+| Arborescence selon des conventions reconnues | `apv structure check` signale, n'applique jamais | plan de rangement proposé par l'architecte, validé par l'opérateur avant tout déplacement |
+| Test instable examiné comme un bug possible du produit | l'outil refuse la fusion ; la cause demande une enquête | reproduire seul (`--repeat-each` 20 au plus), chercher d'abord une course ou une attente côté produit, puis côté test ; jamais relancer jusqu'au vert |
+| Aucune promesse absolue ; textes humains et sourcés | une promesse (données, prix, publicité, support) peut se retourner contre le projet ; un texte qui sonne généré fait fuir | relecture `apv:product` (et `apv:dpo` pour les textes légaux) ; toute affirmation chiffrée a sa source vérifiée |
+| Toute validation humaine d'une fonctionnalité du projet ancrée | la section 3 couvre APV3, pas les fonctionnalités du projet | point de la relecture sécurité : une validation lue sur un système que l'agent peut écrire est un constat haut |
+| Serveurs arrêtés après usage | des serveurs d'aperçu et des piles oubliés occupent la machine et les ports | la suite complète arrête ce qu'elle a lancé ; `apv procs list` en fin de tâche, `apv procs stop`, `apv stacks idle-stop` ; jamais `kill` du parent |
+| Vitesse sans retirer un garde-fou | accélérer ne doit jamais coûter une preuve | on réduit les suites complètes redondantes (`run.fullSuite`, preuve partagée), jamais un contrôle, une revue ou une règle |
+| Une leçon devient une capacité générique | la mémoire du chef de projet ne suit pas dans un nouveau projet | section 6 |
+
+## 5. Configuration : section `rules`
+
+Facultative, lue à la base. Elle ajoute, elle ne retire jamais une règle :
+
+```json
+"rules": {
+  "captures": { "viewports": ["desktop", "phone"], "themes": ["light", "dark"] },
+  "requiredGates": [{ "id": "a11y", "command": ["npm", "run", "check:a11y"] }],
+  "screens": ["src/views/**/*.vue"],
+  "journalDays": 90
+}
+```
+
+`captures.themes: ["light"]` seulement pour un projet sans thème sombre ; `tablet` s'ajoute aux largeurs. `requiredGates` : contrôles qu'un projet exige en plus de `reuse`, `code-map` et `structure` (reconnus par le début de leur commande). `screens` : fichiers d'écran que l'outil ne reconnaît pas seul. `journalDays` : durée de conservation du journal de l'opérateur (1 à 3650 jours, 90 par défaut). Une nouvelle capacité d'APV (par exemple une carte d'architecture vérifiée) s'ajoute à la liste des contrôles requis dans `src/rules/required.ts`.
+
+`apv init` et `apv onboard` déclarent `reuse`, `structure` et `code-map` pour un projet web ; sur une configuration existante, ils listent les contrôles requis qui manquent, sans la modifier.
+
+## 6. Une leçon devient une capacité
+
+1. L'incident va dans le journal du pipeline du projet (`.apv/journal-pipeline.md`) : symptôme, cause, coût.
+2. On l'écrit comme une règle générique, sans rien de propre au projet.
+3. Si l'outil peut la vérifier, elle devient une règle de `apv rules check` ou un garde-fou d'un crochet, avec un test qui refuse et un test qui accepte ; sinon, elle va ici (section 4), dans la compétence du chef de projet et chez les agents concernés.
+4. Elle entre dans ce document, puis dans le CHANGELOG.

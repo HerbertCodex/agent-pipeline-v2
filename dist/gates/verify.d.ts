@@ -101,6 +101,12 @@ export interface VerifyResult {
     altered: AlteredRun[];
     /** Required checks proven by a receipt `passed_after_retry`: passed, but only after the relaunch of their failed tests (unstable). */
     flaky: string[];
+    /** Checks whose retained receipt took at least 85 % of their timeout (`nearTimeout`): the timeout to raise before it breaks. */
+    nearTimeout: {
+        gateId: string;
+        timeoutMs: number;
+        percent: number;
+    }[];
     /** Required checks that declare `repeatChanged`: their proof needs a run with `--base`. */
     repeating: string[];
     /** Required checks proven by a receipt `not_required` whose scope the commit confirms (never run: no effect on them). */
