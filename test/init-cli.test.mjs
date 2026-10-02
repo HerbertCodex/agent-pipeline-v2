@@ -160,6 +160,19 @@ test('apv init and apv onboard add the validated-mockup line to .gitattributes w
 
 const HTML_SPACED = '<p>Accueil</p> \n';
 
+test('apv init and apv onboard list the checks the rules require that an existing configuration lacks, never changing it', async t => {
+  const f = fixture(t, { files: { 'package.json': JSON.stringify({ name: 'x', dependencies: { svelte: '5.0.0' } }), 'src/App.svelte': '<p>x</p>\n',
+    '.apv/config.json': JSON.stringify({ name: 'x', gates: [{ id: 'reuse', command: ['apv', 'reuse', 'check'], mandatory: true }, { id: 'structure', command: ['apv', 'structure', 'check'] }] }) } });
+  const before = readFileSync(join(f.repo, '.apv/config.json'), 'utf8');
+  const init = await apv(f.repo, ['init']);
+  assert.equal(init.code, 0, init.stderr);
+  assert.match(init.stdout, /ATTENTION : contrôles requis avant toute fusion absents de \.apv\/config\.json : code-map \(apv map --check\), structure \(apv structure check, à rendre obligatoire\)/);
+  assert.match(init.stdout, /Règles avant toute fusion, vérifiées par apv stack merge/);
+  const onboard = await apv(f.repo, ['onboard', '--dry-run', '--json']);
+  assert.deepEqual(onboard.json().reuse.missingRequired, ['code-map (apv map --check)', 'structure (apv structure check, à rendre obligatoire)']);
+  assert.equal(readFileSync(join(f.repo, '.apv/config.json'), 'utf8'), before, 'never changed');
+});
+
 // Pilot project, 1 October 2026: the repository did not delete merged branches (delete_branch_on_merge false), 54 piled up.
 test('apv init reads delete_branch_on_merge of the GitHub repository of origin and gives the command, never runs it', async t => {
   const fakeGh = fileURLToPath(new URL('./support/fake-gh.mjs', import.meta.url));

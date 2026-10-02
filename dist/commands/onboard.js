@@ -9,7 +9,7 @@ import { findSpecCandidates, importV2Config, importV2Ledger, specFileName, V2_SP
 import { gitRoot } from '../run/git-probe.js';
 import { checkSpec, parseSpecDocument } from '../spec/check.js';
 import { GITATTRIBUTES } from '../design/attributes.js';
-import { ApvWriter, PLUGIN_ROOT, initialArchitecture, initialMap, mapFields, readBriefTemplate, reuseConfig, reuseLines, writeApvSkeleton } from './init.js';
+import { ApvWriter, PLUGIN_ROOT, initialArchitecture, initialMap, mapFields, missingRequired, readBriefTemplate, reuseConfig, reuseLines, writeApvSkeleton } from './init.js';
 import { worktreeFiles } from '../knowledge/inventory.js';
 import { detectReuse } from '../reuse/detect.js';
 import { checkReuse } from '../reuse/check.js';
@@ -135,6 +135,7 @@ export async function onboardProject(repo, options) {
         'compléter avec l\'opérateur les parties écrites de la carte de l\'architecture (en bref, couches et flux, règles transverses, rôles) ; les dossiers à plat existants restent signalés sans bloquer, leur rangement est une spec à part (compétence apv:structure)',
         ...(proposal.web && configText !== undefined ? ['relire la section reuse (dossiers partagés, éléments réservés, référence) et la carte du code .apv/code-map.md ; ce qui est déjà dupliqué reste signalé sans bloquer'] : []),
         'apv ledger validate',
+        'lire les règles avant fusion (docs/REGLES.md du plugin) : preuve complète, aucun test instable, relectures enregistrées, captures, contrôles de base, maquettes validées',
         baseGates.length ? `apv gates run --base <branche de base, par exemple main> (${baseGates.join(', ')} utilise {{baseSha}})` : 'apv gates run',
         `git add ${[APV_DIR, ...([...writer.created, ...writer.completed].includes(GITATTRIBUTES) ? [GITATTRIBUTES] : [])].join(' ')} && git commit -m "chore(apv): reprise du projet" (sur accord de l'opérateur)`,
     ];
@@ -142,7 +143,8 @@ export async function onboardProject(repo, options) {
         repo, name, dryRun: options.dryRun,
         v2: { config: hasV2Config ? LEGACY_CONFIG_FILE : null, ledger: hasV2Ledger ? LEGACY_LEDGER_FILE : null, notImported: v2FilesNotImported(repo) },
         config, ledger, specs, previewHints: previewHints(repo),
-        reuse: { web: proposal.web, signals: proposal.signals, gates: added, section: configText !== undefined && proposal.web ? proposal.section : null, ...mapFields(map), existing: existingReuse, architecture },
+        reuse: { web: proposal.web, signals: proposal.signals, gates: added, section: configText !== undefined && proposal.web ? proposal.section : null, ...mapFields(map), existing: existingReuse, architecture,
+            missingRequired: configExists ? missingRequired(repo, proposal.web) : [] },
         structure: { crowded: map?.crowded ?? [] },
         created: writer.created, completed: writer.completed, existing: writer.existing, next,
     };

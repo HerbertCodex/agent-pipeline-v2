@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { apv } from './cli-helpers.mjs';
+import { TEST_KEY_FILE, waive } from './support/rules.mjs';
 import { evaluateCommand, REASONS } from '../hooks/scripts/bash-guard.mjs';
 import { MERGE_REFUSED, processGh } from '../dist/stack/github.js';
 import { batchMerge, processGit } from '../dist/stack/batch.js';
@@ -47,6 +48,8 @@ function batchProject(t, behavior = {}) {
     git(repo, 'add', '-A'); git(repo, 'commit', '-qm', name); git(repo, 'push', '-q', 'origin', name);
     const sha = git(repo, 'rev-parse', 'HEAD');
     git(origin, 'update-ref', `refs/pull/${n}/head`, sha);
+    // The rules of each pull request (reviews, captures...) are not what these tests are about: the operator waived them.
+    waive(repo, sha, ['relecture', 'captures', 'controles', 'maquette']);
     prs[n] = { number: n, state: 'OPEN', isDraft: false, baseRefName: 'main', headRefName: name, headRefOid: sha, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN',
       statusCheckRollup: [{ __typename: 'CheckRun', name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }] };
   };
@@ -283,8 +286,9 @@ test('Ctrl-C during the suite of a batch --merge: exit 130, "Lot interrompu", no
   writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({ gates: [{ id: 'suite', stage: 'full', timeoutMs: 60000,
     command: [process.execPath, '-e', `require("fs").writeFileSync(${JSON.stringify(started)}, ""); setTimeout(() => {}, 30000)`] }] }));
   git(p.repo, 'commit', '-qam', 'suite lente'); git(p.repo, 'push', '-q', 'origin', 'main');
-  const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
-  const child = spawn(process.execPath, [cli, 'stack', 'batch', '11', '12', '--merge', '--target', 'main'], { cwd: p.repo, env: { ...process.env, ...p.env, APV_ALLOW_MERGE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  // The rules read the operator journal signed with the key of the tests: the tool is loaded with it.
+  const cli = fileURLToPath(new URL('./support/cli-with-key.mjs', import.meta.url));
+  const child = spawn(process.execPath, [cli, TEST_KEY_FILE, 'stack', 'batch', '11', '12', '--merge', '--target', 'main'], { cwd: p.repo, env: { ...process.env, ...p.env, APV_ALLOW_MERGE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = ''; let err = '';
   child.stdout.on('data', c => { out += c; }); child.stderr.on('data', c => { err += c; });
   const exited = new Promise(done => child.once('exit', code => done(code)));
@@ -300,8 +304,9 @@ test('Ctrl-C during the suite of a batch --merge: exit 130, "Lot interrompu", no
 
 test('a signal received after a merge: the batch stops, its merged branches stay, no branch call', async t => {
   const p = batchProject(t, { signalOnMerge: [11] });
-  const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
-  const child = spawn(process.execPath, [cli, 'stack', 'batch', '11', '12', '--merge'], { cwd: p.repo, env: { ...process.env, ...p.env, APV_ALLOW_MERGE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  // The rules read the operator journal signed with the key of the tests: the tool is loaded with it.
+  const cli = fileURLToPath(new URL('./support/cli-with-key.mjs', import.meta.url));
+  const child = spawn(process.execPath, [cli, TEST_KEY_FILE, 'stack', 'batch', '11', '12', '--merge'], { cwd: p.repo, env: { ...process.env, ...p.env, APV_ALLOW_MERGE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = ''; let err = '';
   child.stdout.on('data', c => { out += c; }); child.stderr.on('data', c => { err += c; });
   const code = await new Promise(done => child.once('exit', c => done(c)));

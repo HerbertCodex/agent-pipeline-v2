@@ -17,6 +17,8 @@ export interface SuiteHooks {
     loadPollMs?: number;
     /** Polling of the lock queues (default: that of `apv lock`, 500 ms). */
     lockPollMs?: number;
+    /** Tests only: the duration the near-timeout warning reads for a check, in place of the measured one (the receipt keeps the measure). */
+    durationOf?: (gateId: string, measuredMs: number) => number;
 }
 export interface QueueRecord {
     lockFile: string;

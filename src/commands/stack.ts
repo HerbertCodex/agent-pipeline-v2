@@ -5,7 +5,11 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { gitRead } from '../run/git-probe.js';
 import { MAX_OVERRIDE_REASON } from '../run/state.js';
 import { cleanLine } from '../run/summary.js';
-import { MERGE_REFUSED, mergeStack, planStack, processGh, type Derogation, type Freshness, type GhCall, type StackOptions, type StackPlan } from '../stack/github.js';
+import { MERGE_REFUSED, mergeStack, planStack, processGh, type Derogation, type Freshness, type GhCall, type PullRequest, type RulesVerdict, type StackOptions, type StackPlan } from '../stack/github.js';
+import { checkMergeRules, rulesLines } from '../rules/check.js';
+import { auditLines, auditMerges, writeMergeTrace } from '../rules/merges.js';
+import { anchorKey } from '../rules/operator.js';
+import { branchProtection } from '../rules/protection.js';
 import { batchMerge, processGit, type BatchReport, type Proof } from '../stack/batch.js';
 import { cleanMergedBranches, cleanupLines, type BranchCleanup } from '../stack/branches.js';
 import { loadConfig, loadConfigAtCommit, type ApvConfig } from '../config/load.js';
@@ -65,6 +69,12 @@ batch  fusion par lot de PR indépendantes, chacune vers la cible : lit chaque P
        lot : l'écart dû aux fusions précédentes du lot est toléré, le contenu fusionné est celui prouvé. À la
        fin, arbre de la cible identique à la tête prouvée du lot ; toute différence arrête tout. Journal :
        .apv/state/stack.log. --keep garde les worktrees des lots.
+Règles avant fusion (docs/REGLES.md) : merge vérifie, juste avant chaque fusion, les règles de apv rules check à
+       la tête de la PR contre origin/<cible> (preuve complète au commit, aucun contrôle réussi après relance,
+       relectures enregistrées sans constat critique ni haut, captures de fidélité, contrôles de base d'un projet
+       web, maquette validée pour chaque écran) et s'arrête au premier refus ; plan les liste ; batch --merge les
+       vérifie pour chaque PR avant de construire le lot (la preuve est celle du lot, sans contrôle instable). Aucune
+       option ne les lève : seul l'opérateur, par « dérogation <règle> <commit> : <raison> » tapé dans la session.
 Branches fusionnées (merge, batch --merge) : après les fusions, la branche de tête de chaque PR fusionnée
        est supprimée sur GitHub (gh api -X DELETE repos/<propriétaire>/<dépôt>/git/refs/heads/<branche>),
        relue juste avant, puis son absence constatée par une relecture. Elle est gardée, avec la raison :
@@ -104,10 +114,35 @@ export function freshnessText(f: Freshness | null): string {
 }
 
 function planLines(plan: StackPlan): string[] {
+  const rules = plan.prs.filter(p => p.rules).map(p => `Règles avant fusion, PR #${p.number} : ${p.rules!.problems.length ? 'REFUSÉES (détail ci-dessus)' : 'respectées'}${p.rules!.notes.length ? ` ; ${p.rules!.notes.join(' ; ')}` : ''}`);
   return [`Cible : ${plan.target ?? 'inconnue'}`, ...plan.prs.map((p, i) => {
     const head = p.pr ? `${p.pr.headRefName} -> ${p.pr.baseRefName}${p.pr.isDraft ? ' (brouillon)' : ''}, ${p.pr.mergeable || '?'}/${p.pr.mergeStateStatus || '?'}, contrôles ${p.pr.checks.length ? `${p.pr.checks.filter(c => c.state === 'success').length}/${p.pr.checks.length} au vert` : 'absents'}, ${freshnessText(p.freshness)}` : 'illisible';
     return `${i + 1}. PR #${p.number} : ${head}${p.anomalies.length ? `\n${p.anomalies.map(a => `   ANOMALIE : ${a}`).join('\n')}` : ' : ok'}`;
-  })];
+  }), ...rules];
+}
+
+/**
+ * The rules checked before any merge (src/rules/check.ts) for the head of a pull request, against `origin/<target>`, read
+ * in the repository the command runs in: its receipts, its review records, the operator's journal. Outside a repository,
+ * nothing can be verified: refused.
+ */
+export function stackRules(cwd: string, remote = 'origin'): (pr: PullRequest, target: string) => Promise<RulesVerdict> {
+  return async (pr, target) => {
+    const repo = gitRead(cwd, ['rev-parse', '--show-toplevel']);
+    const head = pr.headRefOid.slice(0, 12);
+    if (!repo) return { problems: [`PR #${pr.number} : règles avant fusion non vérifiables hors d'une copie du dépôt (reçus, relectures, journal de l'opérateur) : lancer apv stack depuis le dépôt`], notes: [] };
+    // The base of a stacked pull request (the head branch of the one below) may not be fetched yet: its remote branch only.
+    if (gitRead(repo, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${target}`]) === null) {
+      gitRead(repo, ['fetch', '--no-tags', remote, `+refs/heads/${target}:refs/remotes/${remote}/${target}`]);
+    }
+    try {
+      const report = await checkMergeRules({ repo, commit: pr.headRefOid, target: `${remote}/${target}` });
+      const notes = report.rules.filter(r => r.status === 'waived').map(r => `dérogation de l'opérateur à la règle ${r.rule} (${r.waiver!.at}) : ${r.waiver!.reason}`);
+      return { problems: report.ok ? [] : [`PR #${pr.number} : règles avant fusion refusées à ${head} (apv rules check --commit ${head} --target ${remote}/${target}) :`, ...rulesLines(report, '  ').slice(1, -1)], notes };
+    } catch (error) {
+      return { problems: [`PR #${pr.number} : règles avant fusion non vérifiables à ${head} : ${errorMessage(error)}`], notes: [] };
+    }
+  };
 }
 
 function numbers(values: string[]): number[] {
@@ -124,6 +159,19 @@ function numbers(values: string[]): number[] {
 function positiveInt(value: string | undefined, fallback: number): number {
   const n = value === undefined || value === '' ? NaN : Number(value);
   return Number.isInteger(n) && n >= 0 ? n : fallback;
+}
+
+/** Writes the signed trace of a merge (`apv audit merges`); returns the error when it could not. */
+function traceMerge(cwd: string, merge: { pr: number; head: string; target: string; method: string; mergeCommit: string | null; commits?: number }): string | null {
+  try {
+    const root = gitRead(cwd, ['rev-parse', '--show-toplevel']);
+    if (!root) return 'pas un dépôt Git';
+    const common = commonDir(root);
+    const anchor = anchorKey(common);
+    if (!anchor.key) return anchor.problem ?? 'clé d\'ancrage absente';
+    writeMergeTrace(common, { ...merge, at: new Date().toISOString() }, anchor.key);
+    return null;
+  } catch (error) { return errorMessage(error); }
 }
 
 /** Journal of the waivers of `apv stack merge`, relative to the root of the repository (never versioned). */
@@ -203,6 +251,8 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       ...(values.target !== undefined ? { target: values.target } : {}),
       ...(values['allow-behind'] ? { allowBehind: { reason } } : {}),
       onDerogation: derogation => journal(io, prs, method, derogation),
+      rules: stackRules(io.cwd),
+      onMerged: merge => traceMerge(io.cwd, merge),
     };
     if (action === 'plan') {
       const plan = await planStack(prs, options);
@@ -211,14 +261,20 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       return plan.ok ? EXIT.ok : EXIT.failed;
     }
     const report = await mergeStack(prs, method, options);
+    // Said once, at the head of the report: the branch protection on GitHub and the merges made outside the tool.
+    const root = gitRead(io.cwd, ['rev-parse', '--show-toplevel']);
+    const protection = root ? await branchProtection(root, processGh(bin, io.env, io.cwd)) : null;
+    const audit = root && report.target ? auditMerges(root, commonDir(root), `origin/${report.target}`) : null;
     // After the merges (and the retarget of each next PR of the stack), the merged branches; a failure never fails the merge.
     const cleanup = await branchCleanup(io, report.mergedHeads, report.target, values['keep-branches'] ? '--keep-branches' : null,
       async args => { const call = await options.gh(args); options.onCall(call); return call; });
-    if (values.json) { json(io, { ...report, cleanup, calls }); return report.stopped ? EXIT.failed : EXIT.ok; }
-    const lines = ['', 'Rapport de fusion :', ...planLines(report.plan).map(l => `  ${l}`),
+    if (values.json) { json(io, { ...report, protection, audit, cleanup, calls }); return report.stopped ? EXIT.failed : EXIT.ok; }
+    const lines = ['', 'Rapport de fusion :', ...(protection ? [`Protection de branche : ${protection.message}.`] : []), ...(audit ? auditLines(audit) : []),
+      ...planLines(report.plan).map(l => `  ${l}`), ...report.traceErrors.map(e => `ATTENTION : ${e}`),
       ...report.freshness.map(f => `Base juste avant la fusion de la PR #${f.pr} : ${freshnessText(f)}`),
       ...report.derogations.map(d => `DÉROGATION (--allow-behind) : PR #${d.pr} admise en retard de ${d.missing ?? '?'} commit(s) sur ${d.base}, ` +
         `journalisée dans ${STACK_LOG} ; raison : ${d.reason}`),
+      ...report.rules.filter(r => !r.problems.length).map(r => `Règles avant la fusion de la PR #${r.pr} : respectées${r.notes.length ? ` ; ${r.notes.join(' ; ')}` : ''}`),
       `Méthode : ${method} ; fusionnées : ${report.merged.length ? report.merged.map(n => `#${n}`).join(', ') : 'aucune'}`];
     if (report.stopped) {
       const left = prs.filter(n => !report.merged.includes(n));
@@ -322,6 +378,11 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO): Promise
     const passed = result.receipts.filter(success).length;
     const notRequired = result.receipts.filter(r => r.status === 'not_required').map(r => r.gateId);
     const failed = result.receipts.filter(r => !success(r) && r.status !== 'not_required').map(r => `${r.gateId} (${r.status})`);
+    // A check passed only after the relaunch of its failed tests proves nothing for a merge (rule instable).
+    if (verified.flaky.length || result.flaky.length) {
+      const flaky = [...new Set([...verified.flaky, ...result.flaky])];
+      return { ok: false, runId: result.runId, summary: `réussi(s) seulement après relance : ${flaky.join(', ')} ; règle instable : examiner le test comme un bug possible du produit, corriger, relancer ; exécution ${result.runId}` };
+    }
     return { ok: result.ok && verified.ok, runId: result.runId,
       summary: `${passed}/${result.receipts.length} contrôle(s) réussi(s)${notRequired.length ? `, non requis par leur portée : ${notRequired.join(', ')}` : ''}${failed.length ? `, en échec : ${failed.join(', ')}` : ''} ; apv gates verify ${verified.ok ? 'à 0' : 'en échec'} ; exécution ${result.runId}` };
   };
@@ -333,7 +394,22 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO): Promise
       repo, common: commonDir(repo), prs, bisect: values.bisect === true, merge: values.merge === true, ready: values.ready === true, keep: values.keep === true,
       remote: 'origin', gh, git: processGit(io.env), log, onCall,
       pollMs: positiveInt(io.env['APV_STACK_POLL_MS'], 3000), pollAttempts: positiveInt(io.env['APV_STACK_POLL_ATTEMPTS'], 20),
-      prove, configDrift, repeatRefusal, journal: entry => journalEntry(io, entry), signal: abort.signal,
+      prove, configDrift, repeatRefusal, signal: abort.signal,
+      journal: entry => {
+        // Each merge of a batch leaves its signed trace, its merge commit being the target just after it.
+        if (entry['event'] === 'batch-merge' && typeof entry['pr'] === 'number' && typeof entry['head'] === 'string') {
+          const failed = traceMerge(io.cwd, { pr: entry['pr'], head: entry['head'], target: String(entry['target'] ?? ''), method: 'merge',
+            mergeCommit: typeof entry['targetAfter'] === 'string' ? entry['targetAfter'] : null });
+          if (failed) return `trace de fusion non écrite : ${failed}`;
+        }
+        return journalEntry(io, entry);
+      },
+      rules: async (head, target) => {
+        try {
+          const r = await checkMergeRules({ repo, commit: head, target: `origin/${target}`, skip: ['preuve', 'instable'] });
+          return r.ok ? [] : rulesLines(r, '  ').slice(1, -1);
+        } catch (error) { return [`règles avant fusion non vérifiables à ${head.slice(0, 12)} : ${errorMessage(error)}`]; }
+      },
       ...(values.target !== undefined ? { target: values.target } : {}), ...(values.dir !== undefined ? { dir: resolve(io.cwd, values.dir) } : {}),
     });
   } finally {

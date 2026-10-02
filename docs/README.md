@@ -1,6 +1,6 @@
 # Documentation
 
-Agent Pipeline V3 est un plugin Claude Code. Pour commencer : [présentation](../README.md) et [démarrage](../START-HERE.md).
+Agent Pipeline V3 est un plugin Claude Code. Pour commencer : [présentation](../README.md), [démarrer un projet](DEMARRER-UN-PROJET.md) et [démarrage pas à pas](../START-HERE.md).
 
 | Besoin | Guide |
 | --- | --- |
@@ -15,6 +15,8 @@ Agent Pipeline V3 est un plugin Claude Code. Pour commencer : [présentation](..
 | Configuration reprise de V2, contrôles et preuves | [Configuration](CONFIGURATION.md) · [Qualité et validation](QUALITY.md) · [Compétences](SKILLS.md) |
 | Réutiliser l'existant : carte du code, contrôle des copies, éléments réservés, primitives | [Réutilisation](REUSE.md) |
 | Arborescence : dossiers à plat découpés par usage, ajouts refusés, carte de l'architecture, conventions par pile | [Arborescence](STRUCTURE.md) |
+| Démarrer un nouveau projet : ce que fait l'opérateur, ce que fait le chef de projet | [Démarrer un projet](DEMARRER-UN-PROJET.md) |
+| Règles non négociables : ce que l'outil vérifie avant toute fusion, ce qui reste au chef de projet | [Règles du chef de projet](REGLES.md) |
 
 Les contrats exécutables sont dans [src/domain/contracts.ts](../src/domain/contracts.ts) et [src/lifecycle/contracts.ts](../src/lifecycle/contracts.ts). Exemples : [spec](../examples/spec.example.json) et [tâche](../examples/task.example.json).
 

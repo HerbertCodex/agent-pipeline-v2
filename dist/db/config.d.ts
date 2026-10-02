@@ -37,3 +37,10 @@ export interface LoadedConfig {
 }
 /** Reads `db` from `.apv/config.json` (or `configPath`); unknown or invalid fields are reported, never ignored silently. */
 export declare function loadDbConfig(root: string, configPath?: string): LoadedConfig;
+/**
+ * The `db` section of `.apv/config.json` as committed at `commit` (`git show <commit>:.apv/config.json`): what a rule
+ * reads at a base, never the working tree a change can edit. Defaults when the file is absent at that commit.
+ */
+export declare function loadDbConfigAtCommit(repo: string, commit: string): LoadedConfig;
+/** Reads the `db` section of the text of a configuration file. */
+export declare function parseDbConfig(text: string, path: string): LoadedConfig;

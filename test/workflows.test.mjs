@@ -430,3 +430,18 @@ test('revues: the domains skipped on the plan of apv review plan come back with 
   await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, reviews: REVIEW_ARGS.reviews.slice(0, 1), skipped: [{ domain: 'rgpd' }] }), /raison/);
   await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, reviews: REVIEW_ARGS.reviews.slice(0, 1), skipped: [{ domain: 'concurrence', reason: 'x' }] }), /inconnu/);
 });
+
+test('revues: every reviewer records its review at the commit itself; the fidelity review attaches its captures', async () => {
+  const { run } = load('revues.js');
+  const rt = runtime((prompt, opts) => ({ domain: opts.label, commit: REVIEW_ARGS.commit, findings: [], notVerified: [], cleanup: 'fait', summary: 'ok' }));
+  await run(...rt.hooks, REVIEW_ARGS);
+  const roles = { securite: 'qa-securite', fidelite: 'qa-fidelite', donnees: 'architecte-donnees', rgpd: 'dpo' };
+  for (const [domain, agent] of Object.entries(roles)) {
+    const prompt = rt.calls.find(c => c.opts.label === domain).prompt;
+    assert.match(prompt, new RegExp(`review record --commit ${REVIEW_ARGS.commit} --domain ${domain} --reviewer apv:${agent} --report <fichier>`), domain);
+    assert.match(prompt, /Tu es le seul à pouvoir l'enregistrer/);
+  }
+  const fidelity = rt.calls.find(c => c.opts.label === 'fidelite').prompt;
+  assert.match(fidelity, /--capture desktop:light:<fichier>`, `desktop:dark`, `phone:light`, `phone:dark`/);
+  assert.doesNotMatch(rt.calls.find(c => c.opts.label === 'securite').prompt, /--capture/);
+});

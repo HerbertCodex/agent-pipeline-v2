@@ -271,6 +271,10 @@ export declare function targetedQaContext(context: {
             readonly run: string;
             readonly reason: string;
         } | undefined;
+        nearTimeout: {
+            readonly timeoutMs: number;
+            readonly percent: number;
+        } | undefined;
         lockWaitMs: number | undefined;
         stack: string | undefined;
         retry: {

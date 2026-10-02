@@ -36,7 +36,7 @@ export function apvOnPath(path = process.env['PATH'] ?? '') {
     return false;
 }
 /** Dependencies that make a project a web interface. */
-const WEB_DEPENDENCIES = /^(?:svelte|@sveltejs\/kit|react|react-dom|next|vue|nuxt|astro|solid-js|@solidjs\/start|preact|lit|@angular\/core|@remix-run\/[\w-]+|@builder\.io\/qwik|@qwik\.dev\/core|htmx\.org|alpinejs)$/;
+export const WEB_DEPENDENCIES = /^(?:svelte|@sveltejs\/kit|react|react-dom|next|vue|nuxt|astro|solid-js|@solidjs\/start|preact|lit|@angular\/core|@remix-run\/[\w-]+|@builder\.io\/qwik|@qwik\.dev\/core|htmx\.org|alpinejs)$/;
 /** Folder names of shared components. */
 const SHARED_NAMES = new Set(['components', 'ui', 'shared', 'common', 'widgets', 'primitives', 'design-system', 'designsystem', 'atoms', 'molecules', 'organisms', 'elements']);
 /** Files that declare the language of the document. */

@@ -228,10 +228,23 @@ export interface StackOptions {
   allowBehind?: { reason: string };
   /** Journals a waiver before the merge it allows; returns an error message when it could not. */
   onDerogation?: (derogation: Derogation) => string | null;
+  /**
+   * The rules checked before any merge (`apv rules check`, docs/REGLES.md) for the head of a pull request going to
+   * `target`: what refuses it (empty when nothing does) and what to note (waivers of the operator). `apv stack plan`
+   * lists them, `apv stack merge` stops on them right before each merge. The command always passes them.
+   */
+  rules?: (pr: PullRequest, target: string) => Promise<RulesVerdict>;
+  /** After each merge seen by a read: writes its signed trace (`apv audit merges`); returns an error message when it could not. */
+  onMerged?: (merge: { pr: number; head: string; target: string; method: string; mergeCommit: string | null; commits?: number }) => string | null;
 }
+
+/** What the rules say about the head of one pull request. */
+export interface RulesVerdict { problems: string[]; notes: string[] }
 
 export interface PlannedPr {
   number: number; pr: PullRequest | null; expectedBase: string | null; anomalies: string[];
+  /** The rules before a merge at its head, against the target (null when not checked: PR unread, no target). */
+  rules: RulesVerdict | null;
   /** Whether the head contains its expected base (null when not compared: PR unread, base unknown, address unreadable). */
   freshness: Freshness | null;
 }
@@ -288,7 +301,7 @@ export async function planStack(numbers: number[], options: StackOptions): Promi
   const prs: PlannedPr[] = [];
   for (const n of numbers) {
     const { pr, error } = await settled(options, n);
-    prs.push({ number: n, pr, expectedBase: null, anomalies: error ? [error] : [], freshness: null });
+    prs.push({ number: n, pr, expectedBase: null, anomalies: error ? [error] : [], freshness: null, rules: null });
   }
   const first = prs[0]?.pr;
   const target = options.target ?? first?.baseRefName ?? null;
@@ -311,6 +324,14 @@ export async function planStack(numbers: number[], options: StackOptions): Promi
     item.freshness = await freshness(options, item.pr, item.expectedBase, where);
     const problem = freshnessProblem(item.number, item.pr, item.freshness, options);
     if (problem) item.anomalies.push(problem);
+    // Each pull request is judged on its own change: the first against the target, the next ones against the head of the
+    // previous one, their base now (against the target, the diff would hold the changes of the PR below, and ask this one
+    // for their reviews and captures). Right before its merge, `mergeStack` reads them again against the target, which then
+    // holds the PR below: the same own change. A pull request already refused for another anomaly is not checked further.
+    if (options.rules && target && !item.anomalies.length) {
+      item.rules = await options.rules(item.pr, i === 0 ? target : item.expectedBase);
+      item.anomalies.push(...item.rules.problems);
+    }
   }
   return { target, prs, ok: prs.every(p => p.anomalies.length === 0) };
 }
@@ -323,6 +344,10 @@ export interface MergeReport {
   freshness: Array<{ pr: number } & Freshness>;
   /** Pull requests merged behind their base by waiver (`--allow-behind`), each journaled before its merge. */
   derogations: Derogation[];
+  /** The rules read right before each merge. */
+  rules: Array<{ pr: number } & RulesVerdict>;
+  /** Merges whose signed trace could not be written. */
+  traceErrors: string[];
   /** Each pull request whose merge was seen, with the head it was merged at: what the branch cleanup works from. */
   mergedHeads: MergedHead[];
 }
@@ -347,7 +372,7 @@ export interface MergedHead {
  */
 export async function mergeStack(numbers: number[], method: 'merge' | 'squash' | 'rebase', options: StackOptions): Promise<MergeReport> {
   const plan = await planStack(numbers, options);
-  const report: MergeReport = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [], mergedHeads: [] };
+  const report: MergeReport = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [], rules: [], traceErrors: [], mergedHeads: [] };
   const stop = (pr: number, reasons: string[]): MergeReport => { report.stopped = { pr, reasons }; return report; };
   if (!plan.ok) {
     const bad = plan.prs.find(p => p.anomalies.length)!;
@@ -400,6 +425,12 @@ export async function mergeStack(numbers: number[], method: 'merge' | 'squash' |
       if (failed) return stop(n, [`dérogation --allow-behind non journalisée (${failed}) : fusion de la PR #${n} refusée`, behindReason(n, pr, fresh)]);
       report.derogations.push(derogation);
     }
+    // The rules last, at the head GitHub will merge (--match-head-commit), against the target as it is now.
+    if (options.rules) {
+      const verdict = await options.rules(pr, target);
+      report.rules.push({ pr: n, ...verdict });
+      if (verdict.problems.length) return stop(n, verdict.problems);
+    }
     const merge = await call(options, ['pr', 'merge', String(n), `--${method}`, '--match-head-commit', pr.headRefOid]);
     let after = await view(options, n);
     for (let k = 0; k < options.pollAttempts && after.pr && after.pr.state === 'OPEN' && merge.status === 0; k += 1) {
@@ -412,6 +443,21 @@ export async function mergeStack(numbers: number[], method: 'merge' | 'squash' |
     }
     report.merged.push(n);
     report.mergedHeads.push({ pr: n, branch: pr.headRefName, head: pr.headRefOid, crossRepository: pr.crossRepository, url: pr.url });
+    if (options.onMerged) {
+      // A rebase lands one new commit per commit of the pull request, the last one being `mergeCommit`: their number is
+      // kept in the trace, so that the audit accounts for all of them, not only the last one.
+      const read = await call(options, ['pr', 'view', String(n), '--json', method === 'rebase' ? 'mergeCommit,commits' : 'mergeCommit']);
+      let mergeCommit: string | null = null;
+      let commits: number | undefined;
+      try {
+        const answer = JSON.parse(read.stdout) as { mergeCommit?: { oid?: unknown }; commits?: unknown };
+        const oid = answer.mergeCommit?.oid;
+        mergeCommit = typeof oid === 'string' && /^[0-9a-f]{40,64}$/.test(oid) ? oid : null;
+        if (method === 'rebase' && Array.isArray(answer.commits) && answer.commits.length > 0) commits = answer.commits.length;
+      } catch { mergeCommit = null; }
+      const failed = options.onMerged({ pr: n, head: pr.headRefOid, target, method, mergeCommit, ...(commits ? { commits } : {}) });
+      if (failed) report.traceErrors.push(`PR #${n} : trace de fusion non écrite (${failed}) : apv audit merges la signalera`);
+    }
   }
   return report;
 }

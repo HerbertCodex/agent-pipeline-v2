@@ -16,7 +16,9 @@ import type { ProcessResult } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
 import { WEB_RECORD } from '../web/impact.js';
 import { publishRun, pruneStore, receiptRetention, sharedStore, type PruneResult } from './store.js';
-import { markStacksUsed, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
+import { readPreviewState } from '../preview/state.js';
+import { repositoryWorktrees } from '../execution/procs.js';
+import { flockFree, markStacksUsed, resolveStacks, stacksOfLock, stoppedSince, type ResolvedStack } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables, type SpreadPlan } from './spread.js';
 import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, resolveReference, tooManyFiles,
@@ -192,6 +194,33 @@ export function gatesConfigHash(config: ApvConfig): string {
   return hash({ gates: config.gates, passEnv: config.environment.passEnv });
 }
 
+const HELD_BY: Readonly<Record<string, string>> = {
+  'other-copy': 'une autre copie du dépôt', 'main-checkout': 'le checkout principal', tool: 'un outil protégé', protected: 'la session',
+  outside: 'un processus hors du dépôt', 'unknown-cwd': 'un processus au dossier illisible',
+};
+
+/** Why a full suite cannot start: ports of the suite held by others, declared stacks whose lock is held. */
+export function busyReasons(ports: PortsRecord | null, stacks: readonly ResolvedStack[], free: (file: string) => boolean | null = flockFree, previewPorts: readonly number[] = []): string[] {
+  const out = (ports?.left ?? []).map(p => `port ${p.ports.join(', ')} tenu par le pid ${p.pid} (${HELD_BY[p.reason] ?? p.reason}${p.worktree ? ` : ${p.worktree}` : ''}) : ${p.command.slice(0, 100)}` +
+    `${p.ports.some(port => previewPorts.includes(port)) ? ' ; c\'est le serveur de l\'aperçu vivant : apv preview stop (depuis le checkout qui l\'a lancé), puis relancer la suite' : ''}`);
+  for (const s of stacks) if (s.lockFile && free(s.lockFile) === false) out.push(`pile ${s.id} : son verrou (${s.lockFile}) est tenu`);
+  return out;
+}
+
+/** Share of its timeout beyond which a receipt warns (`nearTimeout`): 85 %. */
+export const NEAR_TIMEOUT = 0.85;
+
+/**
+ * The warning of a receipt whose longest pass took at least 85 % of the timeout of its check (a relaunch has its own
+ * timeout: each pass is compared alone), or null. A pass that ran out of time is at 100 % or more.
+ */
+export function nearTimeout(receipt: { status: string; durationMs: number; retry?: { first: { durationMs: number } } | undefined }, timeoutMs: number | undefined): { timeoutMs: number; percent: number } | null {
+  if (!timeoutMs || receipt.status === 'blocked' || receipt.status === 'not_required' || receipt.status === 'cached') return null;
+  const longest = receipt.retry ? Math.max(receipt.retry.first.durationMs, receipt.durationMs - receipt.retry.first.durationMs) : receipt.durationMs;
+  const ratio = longest / timeoutMs;
+  return ratio >= NEAR_TIMEOUT ? { timeoutMs, percent: Math.min(1_000_000, Math.max(85, Math.floor(ratio * 100))) } : null;
+}
+
 /**
  * Runs configured checks in the project working tree: dependency graph, named resources and read/write
  * exclusion through the V2 scheduler, only the declared variables passed, each command bounded by its
@@ -323,6 +352,15 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         }
       }
       if (settings.ports.length) ports = await freePorts(repo, settings.ports, { log });
+      // One full suite at a time on a test stack, and no e2e beside it: a port of the suite held by another copy,
+      // the main checkout or a tool, or a declared stack whose lock is held, refuses the suite before anything runs.
+      const previews = [repo, repositoryWorktrees(repo)[0] ?? repo].map(r => { try { return readPreviewState(r)?.port ?? null; } catch { return null; } }).filter((x): x is number => x !== null);
+      const busy = busyReasons(ports, options.config.stacks?.length ? resolveStacks(options.config, await commonPath(git, repo, '.')) : [], flockFree, previews);
+      if (busy.length) {
+        throw new PipelineError('GATE_BUSY', `Suite complète refusée, rien n'a été exécuté : ${busy.join(' ; ')}. Une autre suite, un e2e lancé par un agent ou un serveur ` +
+          'utilise déjà la pile de test : deux exécutions en même temps rendent les tests instables. Attendre sa fin (apv lock status, apv stacks status), ' +
+          'ou l\'arrêter s\'il est orphelin (apv procs list, puis apv procs stop --port <p>), puis relancer.');
+      }
     }
     const runId = `${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}-${randomUUID().slice(0, 8)}`;
     started = runId;
@@ -367,11 +405,14 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
     type Repeat = NonNullable<GateReceipt['repeat']>;
     type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'>>;
-    type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat' | 'web' | 'scope'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack'>> & { repeat?: RepeatFields; web?: NonNullable<GateReceipt['web']> };
+    type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat' | 'web' | 'scope' | 'nearTimeout'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack'>> & { repeat?: RepeatFields; web?: NonNullable<GateReceipt['web']> };
     const write = (receipt: Fields): GateReceipt => {
       const decision = scopeDecisions.get(receipt.gateId);
+      const durationOf = options.hooks?.durationOf;
+      const near = nearTimeout(durationOf ? { ...receipt, durationMs: durationOf(receipt.gateId, receipt.durationMs) } : receipt, gates.find(g => g.id === receipt.gateId)?.timeoutMs);
+      if (near) log(`ATTENTION : ${receipt.gateId} a pris ${near.percent} % de son délai (${Math.round(near.timeoutMs / 1000)} s) : augmenter timeoutMs de ce contrôle avant qu'il ne casse une preuve.`);
       const valid = validateReceipt({ ...receipt, stage, dirty, ...(targeted.has(receipt.gateId) ? { targeted: true } : {}), ...(override ? { override } : {}),
-        ...(decision ? { scope: scopeRecord(decision) } : {}) });
+        ...(decision ? { scope: scopeRecord(decision) } : {}), ...(near ? { nearTimeout: near } : {}) });
       writeFileSync(join(directory, `${valid.gateId}.json`), JSON.stringify(valid, null, 2) + '\n');
       return valid;
     };
@@ -587,6 +628,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup } : {}), ...(spreadRecord ? { spread: spreadRecord } : {}), ...(stoppedStacks.length ? { stoppedStacks } : {}),
       receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),
         ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}), ...(r.stack ? { stack: r.stack } : {}),
+        ...(r.nearTimeout ? { nearTimeout: r.nearTimeout } : {}),
         ...(r.repeat ? { repeat: { status: r.repeat.status, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures } } : {}),
         ...(r.scope ? { scope: { required: r.scope.required, reason: r.scope.reason, fileCount: r.scope.fileCount } } : {}),
         ...(r.web ? { web: { required: r.web.required, auditId: r.web.auditId, ok: r.web.ok } } : {}) })) }, null, 2) + '\n');

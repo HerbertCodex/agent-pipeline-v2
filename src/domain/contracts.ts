@@ -1,7 +1,7 @@
 import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s, type Infer } from './schema.js';
 import { invariant } from './errors.js';
-export const VERSION = '3.0.0-alpha.11';
+export const VERSION = '3.0.0-alpha.12';
 export const lanes = ['fast', 'standard', 'high'] as const;
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'] as const;
 export type Lane = typeof lanes[number];
@@ -281,6 +281,9 @@ export const receiptSchema = s.object({
   // A full suite run while the execution `run` expected the task level at its current step (`apv gates run
   // --reason`): the reason, also journaled in the state of the execution. Absent otherwise.
   override: s.optional(s.object({ run: s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/), reason: s.string(1, 500) })),
+  // The longest pass of the command took at least 85 % of its timeout (`timeoutMs`): its share in percent. The timeout
+  // is to be raised before it breaks a proof (a timeout is not a safety guard). Absent below 85 %.
+  nearTimeout: s.optional(s.object({ timeoutMs: s.number(10, 86_400_000), percent: s.number(85, 1_000_000) })),
   // Time spent waiting for the lock of the check (`lock`) before its command started. Absent without a lock.
   lockWaitMs: s.optional(s.finite(0, 86_400_000)),
   // The declared test stack the check ran on (`apv gates run --stacks`), in its own copy when not the first. Absent otherwise.

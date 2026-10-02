@@ -63,6 +63,11 @@ export interface BatchOptions {
      * request by pull request, before anything is built. Absent: no such check.
      */
     repeatRefusal?: (base: string, head: string) => Promise<string | null>;
+    /**
+     * With `merge`: what the rules checked before any merge (`apv rules check`, docs/REGLES.md) refuse at the head of a
+     * pull request going to `target`, apart from the proof, which is the batch's own (empty when nothing refuses).
+     */
+    rules?: (head: string, target: string) => Promise<string[]>;
     /** Aborted by SIGINT, SIGTERM or SIGHUP: the batch stops at the next step, never between a check and a merge. */
     signal?: AbortSignal;
     /** Journals one merge or stop of the batch; returns an error message when it could not. */
