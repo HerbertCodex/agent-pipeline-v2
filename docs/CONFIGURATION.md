@@ -674,3 +674,30 @@ Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR 
 - `captures.viewports` (`desktop`, `phone`, `tablet` ; défaut `desktop` et `phone`) et `captures.themes` (`light`, `dark` ; défaut les deux) : captures qu'exige la relecture de fidélité quand le plan des revues la retient, sauf dans un projet sans écran qui n'en ajoute pas (règle `captures`, REGLES.md). `["light"]` seulement pour un projet sans thème sombre.
 - `requiredGates` : contrôles qu'un projet exige en plus de `reuse`, `code-map` et `structure` (projet web) : un identifiant et le début de la commande, reconnue enveloppée ou non (`node <plugin>/dist/cli.js`, `npx apv`) ; ils valent aussi pour un projet sans interface web.
 - `screens` : motifs des fichiers d'écran que l'outil ne reconnaît pas seul (il connaît les pages, mises en page et pages d'erreur de SvelteKit, Next, Remix, Nuxt, Astro et `pages/`).
+
+## Fraîcheur de l'état : `freshness`
+
+Section APV3, facultative, validée par le chargeur commun : les fichiers vivants d'état et de reprise que `apv status` (section « Fichiers d'état périmés », `freshness` en JSON) et le crochet de début de session surveillent. Un état de reprise se réécrit court à chaque étape et ce qui est terminé part en archive : un fichier qui n'a pas bougé depuis plus de `maxAgeDays` jours, ou un journal qui dépasse `maxLines` lignes, est signalé avec la proposition « couper : état court + archive ». Lecture seule : rien n'est déplacé ni supprimé.
+
+```json
+{
+  "freshness": {
+    "maxAgeDays": 2,
+    "maxLines": 300,
+    "paths": ["~/projets/mon-pilotage/lancement/REPRISE.md", "docs/etat/*.md"],
+    "ignore": [".apv/state/revues-*.md"],
+    "archive": "~/projets/mon-pilotage/archives"
+  }
+}
+```
+
+- Toujours surveillés, sans rien déclarer : `.apv/state/resume.md` et les `.apv/state/*.md` (premier niveau seulement : `.apv/state/archive/` et les autres sous-dossiers ne le sont pas), sauf `.apv/state/suivi-constats.md`, le suivi groupé des constats mineurs, traité par lot. Les journaux machine (`quota.log`, `journal.log`, états `run-*.json`) ne le sont pas. Les rapports de revue et de corrections (`revues-*.md`, `corrections-*.md`) le sont : une fois leur PR fusionnée, ils partent dans le dossier d'archive.
+- `maxAgeDays` (défaut 2, de 1 à 365) : au-delà, le fichier est « périmé » (date de dernière modification).
+- `maxLines` (défaut 300, de 10 à 1 000 000) : au-delà, le fichier est « trop long ». Le compte s'arrête à `maxLines` + 1 lignes, et un fichier de plus de `maxLines` × 4 Kio est « trop long » d'après sa taille, sans être lu : un journal énorme ne ralentit ni `apv status` ni le début de session.
+- `paths` (défaut aucun, 100 au plus) : **fichiers de pilotage** du projet (notes de reprise, plans, journaux de lancement), jamais un dossier de documents personnels ou de clients : leurs noms sont affichés (voir plus bas). Motifs portables (`*`, `**`, `?` ; ni accolades ni `!`, aucun segment `.` ou `..`), relatifs au dépôt, sous le dossier personnel avec `~/` (y compris hors du dépôt), ou absolus. Un fichier ou un dossier absent est ignoré. Un motif lit les entrées de dossier une à une, 5 000 au plus, et garde 200 fichiers ; `node_modules` et `.git` ne sont jamais parcourus, un lien vers un dossier jamais suivi.
+- `ignore` (défaut aucun) : motifs de la même forme, retirés de la surveillance.
+- `archive` (défaut `.apv/state/archive`) : dossier d'archive cité dans les messages (chemin sans joker, même forme) ; les fichiers qui s'y trouvent ne sont jamais signalés.
+- Liens : un lien n'est suivi que si sa cible réelle reste dans le dossier de son motif (la partie avant le premier joker, ou le dossier du fichier nommé), et dans le dépôt pour les motifs par défaut ; `.apv/state/notes.md` lié à `~/.ssh/id_rsa` est ignoré.
+- Secrets : seules la date, la taille et le nombre de lignes d'un fichier sont lus, jamais son contenu au-delà du comptage des fins de ligne. Un chemin qui ressemble à un secret, jugé sur son nom **et** sur sa cible réelle, n'est jamais ouvert : seule sa date est lue (`lines` à `null`, `secret` à `true`). Sont des secrets : les noms `.env*`, `id_*` (clés SSH), `*key*`, `*secret*`, `*token*`, `*credential*`, `*password*`, `*passwd*`, `.npmrc`, `.netrc`, `.pgpass`, `.git-credentials`, `hosts.yml`, `.pypirc`, `.htpasswd`, les extensions `.pem`, `.p12`, `.pfx`, `.kdbx`, `.keystore`, `.jks`, `.asc`, `.gpg`, et tout ce qui est sous un dossier `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker` ou `.password-store`.
+- Noms affichés : `apv status` affiche le chemin de chaque fichier signalé (dans le terminal de l'opérateur, et dans sa sortie JSON). Le crochet de début de session verse la ligne « Fichiers d'état à rafraîchir » au **contexte de chaque session** : il y nomme les fichiers du dépôt (8 au plus) et ne donne, pour les fichiers hors du dépôt, que leur nombre.
+- Configuration invalide : refusée par le chargeur ; `apv status` et le crochet surveillent alors les fichiers par défaut avec les seuils par défaut.
