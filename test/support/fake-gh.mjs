@@ -3,7 +3,8 @@
 // { prs: { "<n>": { ...gh pr view fields } }, behavior: { retargetIgnored: [n], retargetFail: [n], mergeFail: [n],
 //   headMovesAtMerge: [n], unknownViews: { "<n>": count }, afterMerge: { "<n>": { "<m>": { ...fields } } },
 //   behind: { "<n>": { "<base>": { ahead_by, files, listed, merges } } }, compareFail: [n],
-//   afterMergeBehind: { "<n>": { "<m>": { "<base>": { ...compare } } } }, pendingViews: { "<n>": count } }, calls: [[...args]] }.
+//   afterMergeBehind: { "<n>": { "<m>": { "<base>": { ...compare } } } }, pendingViews: { "<n>": count }, liveHeads: [n] }, calls: [[...args]] }.
+// `liveHeads`: the head of PR n is read from its branch of `origin` at each call (a branch the batch updated).
 // `pendingViews`: the next `count` reads of PR n show its CI still running (a check IN_PROGRESS, state BLOCKED).
 // The repository is o/r on github.com. The retarget goes through `gh api -X PATCH repos/o/r/pulls/<n> -f base=<b>`;
 // `gh pr edit` fails as it did on the real merge of PR #70 and #71 (deprecated classic projects).
@@ -33,6 +34,10 @@ const option = name => { const i = args.indexOf(name); return i === -1 ? undefin
 const [group, action, number] = args;
 const pr = state.prs[number];
 let code = 0;
+// `liveHeads: [n]`: the head of PR n is read from its branch in `origin` (the batch pushed an update to it), as GitHub does.
+if (pr && state.origin && state.behavior.liveHeads?.includes(Number(number))) {
+  try { pr.headRefOid = execFileSync('git', ['rev-parse', `refs/heads/${pr.headRefName}`], { cwd: state.origin, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { /* branch gone: the recorded head */ }
+}
 const originGit = (...a) => execFileSync('git', a, { cwd: state.origin, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
   env: { ...process.env, GIT_AUTHOR_NAME: 'GitHub', GIT_AUTHOR_EMAIL: 'gh@localhost', GIT_COMMITTER_NAME: 'GitHub', GIT_COMMITTER_EMAIL: 'gh@localhost' } }).trim();
 /** A commit on `branch` of the origin that changes one file: someone else pushed. */

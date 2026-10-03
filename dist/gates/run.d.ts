@@ -173,6 +173,16 @@ export declare function stageGates(gates: readonly Gate[], stage: GateStage): {
 export declare function gatesConfigHash(config: ApvConfig): string;
 /** Why a full suite cannot start: ports of the suite held by others, declared stacks whose lock is held. */
 export declare function busyReasons(ports: PortsRecord | null, stacks: readonly ResolvedStack[], free?: (file: string) => boolean | null, previewPorts?: readonly number[], heldByUs?: (file: string) => boolean): string[];
+/**
+ * Whether every port of the suite still held is held by another copy of this repository (`other-copy`: a process whose
+ * working directory is in another worktree of the repository: a review that captures screens, a dynamic scan, another
+ * suite). Those are APV's own, and finite: the suite waits for them (pilot project, 3 October 2026: a full suite refused
+ * because the fidelity review held the three test ports for its captures). A port held by the main checkout, a process
+ * outside the repository, a protected tool or the session is never waited for: refused at once, as before.
+ */
+export declare function heldByCopies(ports: PortsRecord | null): boolean;
+/** How long a suite waits for its ports: the longest `lock.waitMs` of the checks that lock, else the default lock delay. */
+export declare function portsWaitMs(gates: readonly Gate[]): number;
 /** Share of its timeout beyond which a receipt warns (`nearTimeout`): 85 %. */
 export declare const NEAR_TIMEOUT = 0.85;
 /**

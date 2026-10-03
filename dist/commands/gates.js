@@ -487,7 +487,9 @@ export async function run(args, io) {
         let result;
         try {
             result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env, signal: abort.signal,
-                allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}),
+                allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] || io.env['APV_PORTS_POLL_MS'] ? { hooks: {
+                        ...(io.env['APV_LOCK_POLL_MS'] ? { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } : {}), ...(io.env['APV_PORTS_POLL_MS'] ? { portsPollMs: Number(io.env['APV_PORTS_POLL_MS']) } : {})
+                    } } : {}),
                 ...(values.base ? { base: values.base } : {}), ...(since ? { base: since.commit, since: { commit: since.commit, head: since.head, risk: since.risk.level, reason: since.risk.reason } } : {}),
                 ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
                 ...(spreadOver ? { stacks: spreadOver } : {}), configFile: loaded.file });
@@ -532,6 +534,8 @@ export async function run(args, io) {
             }
             if (result.ports?.stopped.length)
                 lines.push(`Orphelins de cette copie arrêtés sur les ports de la suite : ${result.ports.stopped.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}.`);
+            if (result.ports?.wait)
+                lines.push(`Ports de la suite tenus par une autre copie du dépôt au départ (${result.ports.wait.holders.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}) : attendu ${Math.round(result.ports.wait.ms / 1000)} s, puis ${result.ports.wait.outcome === 'freed' ? 'libérés' : result.ports.wait.outcome === 'timeout' ? 'toujours tenus (délai de verrou)' : 'pris par un processus étranger'}.`);
             if (result.ports?.left.length)
                 lines.push(`Ports de la suite tenus par d'autres processus, non arrêtés : ${result.ports.left.map(p => `pid ${p.pid} (${p.ports.join(', ')}, ${p.reason})`).join(', ')}.`);
             for (const x of result.stoppedStacks)

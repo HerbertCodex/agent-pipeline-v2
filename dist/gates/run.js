@@ -3,7 +3,8 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { gateStage, validateReceipt, webRecordSchema } from '../domain/contracts.js';
+import { DEFAULT_LOCK_WAIT_MS, gateStage, validateReceipt, webRecordSchema } from '../domain/contracts.js';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { errorMessage, invariant } from '../domain/errors.js';
 import { hash } from '../domain/hash.js';
 import { environmentIdentity, executableIdentity, proofKey } from '../evidence/key.js';
@@ -138,6 +139,23 @@ export function busyReasons(ports, stacks, free = flockFree, previewPorts = [], 
             out.push(`pile ${s.id} : son verrou (${s.lockFile}) est tenu`);
     return out;
 }
+/**
+ * Whether every port of the suite still held is held by another copy of this repository (`other-copy`: a process whose
+ * working directory is in another worktree of the repository: a review that captures screens, a dynamic scan, another
+ * suite). Those are APV's own, and finite: the suite waits for them (pilot project, 3 October 2026: a full suite refused
+ * because the fidelity review held the three test ports for its captures). A port held by the main checkout, a process
+ * outside the repository, a protected tool or the session is never waited for: refused at once, as before.
+ */
+export function heldByCopies(ports) {
+    return ports !== null && ports.left.length > 0 && ports.left.every(p => p.reason === 'other-copy');
+}
+/** How long a suite waits for its ports: the longest `lock.waitMs` of the checks that lock, else the default lock delay. */
+export function portsWaitMs(gates) {
+    const waits = gates.flatMap(g => g.lock ? [g.lock.waitMs] : []);
+    return waits.length ? Math.max(...waits) : DEFAULT_LOCK_WAIT_MS;
+}
+const seconds = (ms) => ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`;
+const holderText = (p) => `port ${p.ports.join(', ')} tenu par le pid ${p.pid} (${p.worktree ?? 'copie inconnue'}) : ${p.command.slice(0, 100)}`;
 /** Share of its timeout beyond which a receipt warns (`nearTimeout`): 85 %. */
 export const NEAR_TIMEOUT = 0.85;
 /**
@@ -292,34 +310,76 @@ export async function runGates(options) {
     try {
         let ports = null;
         if (suite) {
-            // The copy may have changed during the wait: the run is on the commit and tree it was asked for, or not at all.
-            if (queue && queue.record.waitedMs + (queue.record.load?.waitedMs ?? 0) > 0) {
-                const head = await git.sha(repo);
-                if (head !== candidateSha)
-                    throw new PipelineError('GATE_DIRTY', `Suite complète refusée : HEAD est passé de ${candidateSha.slice(0, 12)} à ${head.slice(0, 12)} pendant l'attente de la file. Relancer sur le nouveau commit.`);
-                const now = await treeStatus();
-                if (now !== status) {
-                    if (now !== '' && !options.allowDirty)
-                        throw dirtyRefusal(now, ' (arbre modifié pendant l\'attente de la file)');
-                    status = now;
-                    dirty = now !== '';
-                }
-            }
             if (settings.ports.length)
                 ports = await freePorts(repo, settings.ports, { log });
-            // One full suite at a time on a test stack, and no e2e beside it: a port of the suite held by another copy,
-            // the main checkout or a tool, or a declared stack whose lock is held, refuses the suite before anything runs.
+            // One full suite at a time on a test stack, and no e2e beside it: a port of the suite held by the main checkout
+            // or a tool, or a declared stack whose lock is held, refuses the suite before anything runs. Ports held by another
+            // copy of this repository (a review, a dynamic scan, another suite: APV's own, finite) are waited for instead, up
+            // to the lock delay of the checks, each wait said; a holder outside a copy appearing meanwhile refuses as before.
             const previews = [repo, repositoryWorktrees(repo)[0] ?? repo].map(r => { try {
                 return readPreviewState(r)?.port ?? null;
             }
             catch {
                 return null;
             } }).filter((x) => x !== null);
-            const busy = busyReasons(ports, options.config.stacks?.length ? resolveStacks(options.config, await commonPath(git, repo, '.')) : [], flockFree, previews, file => flockHeldByAncestor(file));
-            if (busy.length) {
-                throw new PipelineError('GATE_BUSY', `Suite complète refusée, rien n'a été exécuté : ${busy.join(' ; ')}. Une autre suite, un e2e lancé par un agent ou un serveur ` +
-                    'utilise déjà la pile de test : deux exécutions en même temps rendent les tests instables. Attendre sa fin (apv lock status, apv stacks status), ' +
-                    'ou l\'arrêter s\'il est orphelin (apv procs list, puis apv procs stop --port <p>), puis relancer.');
+            const stacksDeclared = options.config.stacks?.length ? resolveStacks(options.config, await commonPath(git, repo, '.')) : [];
+            const heldByUs = (file) => flockHeldByAncestor(file);
+            const refusal = (busy, waited) => new PipelineError('GATE_BUSY', `Suite complète refusée, rien n'a été exécuté${waited ? ` après ${seconds(waited)} d'attente des ports` : ''} : ${busy.join(' ; ')}. ` +
+                'Une autre suite, un e2e lancé par un agent ou un serveur utilise déjà la pile de test : deux exécutions en même temps rendent les tests instables. ' +
+                'Attendre sa fin (apv lock status, apv stacks status), ou l\'arrêter s\'il est orphelin (apv procs list, puis apv procs stop --port <p>), puis relancer.');
+            let portsWaited = 0;
+            if (ports && heldByCopies(ports) && !busyReasons(null, stacksDeclared, flockFree, previews, heldByUs).length) {
+                const limit = portsWaitMs(runnable);
+                const pollMs = options.hooks?.portsPollMs ?? 5000;
+                const holders = ports.left.map(({ pid, ports: held, command, worktree }) => ({ pid, ports: held, command, worktree }));
+                const started = Date.now();
+                log(`Ports de la suite tenus par une autre copie du dépôt (une relecture, un scan dynamique ou une autre suite) : ${holders.map(holderText).join(' ; ')}. ` +
+                    `Attente de leur libération, jusqu'à ${seconds(limit)} (délai de verrou des contrôles), relue toutes les ${seconds(pollMs)}.`);
+                let outcome = 'timeout';
+                let lastSaid = started;
+                while (Date.now() - started < limit) {
+                    try {
+                        await sleep(pollMs, undefined, { signal: options.signal });
+                    }
+                    catch {
+                        throw new PipelineError('CANCELLED', 'Attente des ports de la suite annulée.');
+                    }
+                    const again = await freePorts(repo, settings.ports, { log: () => { } });
+                    ports = { ...again, stopped: [...ports.stopped, ...again.stopped] };
+                    if (!ports.left.length) {
+                        outcome = 'freed';
+                        break;
+                    }
+                    if (!heldByCopies(ports)) {
+                        outcome = 'foreign';
+                        break;
+                    }
+                    if (Date.now() - lastSaid >= 60_000) {
+                        lastSaid = Date.now();
+                        log(`Ports de la suite toujours tenus après ${seconds(Date.now() - started)} : ${ports.left.map(holderText).join(' ; ')}.`);
+                    }
+                }
+                portsWaited = Date.now() - started;
+                ports.wait = { ms: portsWaited, holders, outcome };
+                log(outcome === 'freed' ? `Ports de la suite libérés après ${seconds(portsWaited)} : la suite démarre.`
+                    : outcome === 'foreign' ? `Ports de la suite pris entre-temps par un processus hors d'une copie du dépôt : refus.`
+                        : `Ports de la suite toujours tenus après ${seconds(portsWaited)} (délai de verrou) : refus.`);
+            }
+            const busy = busyReasons(ports, stacksDeclared, flockFree, previews, heldByUs);
+            if (busy.length)
+                throw refusal(busy, portsWaited);
+            // The copy may have changed during the waits: the run is on the commit and tree it was asked for, or not at all.
+            if (portsWaited > 0 || (queue && queue.record.waitedMs + (queue.record.load?.waitedMs ?? 0) > 0)) {
+                const head = await git.sha(repo);
+                if (head !== candidateSha)
+                    throw new PipelineError('GATE_DIRTY', `Suite complète refusée : HEAD est passé de ${candidateSha.slice(0, 12)} à ${head.slice(0, 12)} pendant l'attente de la file ou des ports. Relancer sur le nouveau commit.`);
+                const now = await treeStatus();
+                if (now !== status) {
+                    if (now !== '' && !options.allowDirty)
+                        throw dirtyRefusal(now, ' (arbre modifié pendant l\'attente)');
+                    status = now;
+                    dirty = now !== '';
+                }
             }
         }
         const runId = `${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}-${randomUUID().slice(0, 8)}`;

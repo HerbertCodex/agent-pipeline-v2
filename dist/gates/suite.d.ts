@@ -17,6 +17,8 @@ export interface SuiteHooks {
     loadPollMs?: number;
     /** Polling of the lock queues (default: that of `apv lock`, 500 ms). */
     lockPollMs?: number;
+    /** Delay between two readings of the ports of the suite held by another copy of the repository (default 5 s). */
+    portsPollMs?: number;
     /** Tests only: the duration the near-timeout warning reads for a check, in place of the measured one (the receipt keeps the measure). */
     durationOf?: (gateId: string, measuredMs: number) => number;
 }
@@ -83,6 +85,16 @@ export interface PortsRecord {
     })[];
     /** Why nothing could be read (a system without /proc), else null. */
     unsupported: string | null;
+    /**
+     * The wait for ports held by another copy of this repository (a review, a dynamic scan, another suite; src/gates/run.ts):
+     * how long, who held them at the start, and how it ended (`freed`: the suite starts; `timeout`: the lock delay ran out,
+     * refused; `foreign`: a process outside a copy of the repository took a port meanwhile, refused). Null without a wait.
+     */
+    wait: {
+        ms: number;
+        holders: PortProcess[];
+        outcome: 'freed' | 'timeout' | 'foreign';
+    } | null;
 }
 /**
  * Frees the declared ports from the orphans of the copy `repo` (a linked worktree): processes that listen there and

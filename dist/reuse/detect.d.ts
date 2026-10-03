@@ -25,14 +25,15 @@ export declare const STRUCTURE_GATE: {
     readonly mandatory: true;
 };
 /**
- * The gate of the code map, added to every project: it fails when `.apv/code-map.md` no longer matches the code. Full
- * stage: tasks never commit the map (parallel tasks would conflict on it); the integration regenerates it once per wave.
+ * The gate of the code map, added to every project: it fails when `.apv/code-map.md` no longer matches the code. Task
+ * stage (decision D1, 3 October 2026): the implementer regenerates and commits the map with the code, and a stale map
+ * blocks in two seconds, before the heavy checks of the full suite (which runs the task checks too).
  */
 export declare const MAP_GATE: {
     readonly id: "code-map";
     readonly command: readonly ["apv", "map", "--check"];
     readonly covers: readonly ["architecture"];
-    readonly stage: "full";
+    readonly stage: "task";
     readonly readOnly: true;
     readonly mandatory: true;
 };

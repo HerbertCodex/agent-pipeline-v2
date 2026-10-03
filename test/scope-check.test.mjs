@@ -86,15 +86,21 @@ test('porcelain status paths skip the source of a rename', () => {
   assert.deepEqual(porcelainPaths(''), []);
 });
 
-test('the code map committed by a task is out of scope, with what to do: the integration regenerates it', async t => {
+test('the code map committed by a task is in scope (decision D1: the implementer regenerates and commits it), and said', async t => {
   const f = branch(t);
   f.commit('src/math.mjs', 'export const add = (a, b) => a + b;\n');
   f.commit('.apv/code-map.md', '# Carte du code\n');
   const r = await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH', '--json']);
-  assert.equal(r.code, 1);
-  assert.deepEqual([r.json().outOfScope, r.json().codeMap], [['.apv/code-map.md'], true]);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.deepEqual([r.json().outOfScope, r.json().codeMap], [[], true]);
   const human = await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH']);
-  assert.match(human.stdout, /La carte du code \(\.apv\/code-map\.md\) ne se commite pas dans une tâche : l'intégration la régénère une fois par vague/);
+  assert.match(human.stdout, /Dans le périmètre\./);
+  assert.match(human.stdout, /Carte du code \(\.apv\/code-map\.md\) commitée avec la tâche : attendu/);
+  // Another file out of scope still fails: the map is the only one accepted.
+  f.commit('README.md', '# Changed\n');
+  const out = await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH', '--json']);
+  assert.equal(out.code, 1);
+  assert.deepEqual(out.json().outOfScope, ['README.md']);
 });
 
 test('the code map of a custom map.file is recognised too', async t => {
@@ -103,7 +109,8 @@ test('the code map of a custom map.file is recognised too', async t => {
   f.commit('docs/CODE-MAP.md', '# Carte du code\n');
   const r = await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH', '--json']);
   assert.equal(r.json().codeMap, true);
-  assert.match((await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH'])).stdout, /La carte du code \(docs\/CODE-MAP\.md\) ne se commite pas/);
+  assert.deepEqual(r.json().outOfScope, ['.apv/config.json']);
+  assert.match((await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH'])).stdout, /Carte du code \(docs\/CODE-MAP\.md\) commitée avec la tâche : attendu/);
 });
 
 test('the architecture map: a task may write its « Rôles » block only', async t => {

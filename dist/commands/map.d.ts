@@ -6,7 +6,7 @@ import { type UsageGraph } from '../structure/split.js';
 import { type ArchitectureMapResult } from '../structure/map-file.js';
 import type { DesignSection } from '../design/config.js';
 import type { CommandIO } from './io.js';
-export declare const usage = "Utilisation :\n  apv map [--check] [--repo <chemin>] [--json]\n\n\u00C9crit la carte du code (.apv/code-map.md, ou map.file) : composants partag\u00E9s (r\u00F4le, props, variantes, o\u00F9 ils\nsont utilis\u00E9s), modules partag\u00E9s (exports, utilisateurs), routes, et ce qui est propre \u00E0 une fonctionnalit\u00E9,\navec les doublons possibles. Construite depuis les fichiers du d\u00E9p\u00F4t (suivis et non suivis, jamais les\nignor\u00E9s), sans mod\u00E8le, born\u00E9e pour rester lisible par un agent. \u00C0 commiter avec le code qu'elle d\u00E9crit.\n--check ne l'\u00E9crit pas : il la compare \u00E0 celle qui serait \u00E9crite (contr\u00F4le de t\u00E2che \u00AB code-map \u00BB).\nLa carte de l'architecture (structure.architectureMap, par d\u00E9faut docs/carte-architecture.md), quand elle\nexiste, suit : ses parties g\u00E9n\u00E9r\u00E9es sont r\u00E9\u00E9crites (ou compar\u00E9es avec --check), ses parties \u00E9crites jamais.\nLa carte du code nomme aussi les dossiers \u00E0 plat et les sous-dossiers propos\u00E9s pour chacun.\nConfiguration facultative : section \u00AB map \u00BB (file, ignore, maxEntries) ; dossiers partag\u00E9s : reuse.shared.\nSortie : 0 \u00E9crite ou \u00E0 jour, 1 p\u00E9rim\u00E9e ou absente (--check) ou configuration invalide, 2 appel incorrect.";
+export declare const usage = "Utilisation :\n  apv map [--check] [--repo <chemin>] [--json]\n\n\u00C9crit la carte du code (.apv/code-map.md, ou map.file) : composants partag\u00E9s (r\u00F4le, props, variantes, o\u00F9 ils\nsont utilis\u00E9s), modules partag\u00E9s (exports, utilisateurs), routes, et ce qui est propre \u00E0 une fonctionnalit\u00E9,\navec les doublons possibles. Construite depuis les fichiers du d\u00E9p\u00F4t (suivis et non suivis, jamais les\nignor\u00E9s), sans mod\u00E8le, born\u00E9e pour rester lisible par un agent. \u00C0 commiter avec le code qu'elle d\u00E9crit.\n--check ne l'\u00E9crit pas : il la compare \u00E0 celle qui serait \u00E9crite (contr\u00F4le de t\u00E2che \u00AB code-map \u00BB) ; les comptes\n\u00AB Laiss\u00E9s de c\u00F4t\u00E9 \u00BB (tests, fichiers ignor\u00E9s, modules muets) ne sont pas compar\u00E9s. L'implementer la r\u00E9g\u00E9n\u00E8re\net la commite dans son commit ; un conflit de fusion sur elle se r\u00E9sout par apv map, jamais \u00E0 la main.\nLa carte de l'architecture (structure.architectureMap, par d\u00E9faut docs/carte-architecture.md), quand elle\nexiste, suit : ses parties g\u00E9n\u00E9r\u00E9es sont r\u00E9\u00E9crites (ou compar\u00E9es avec --check), ses parties \u00E9crites jamais.\nLa carte du code nomme aussi les dossiers \u00E0 plat et les sous-dossiers propos\u00E9s pour chacun.\nConfiguration facultative : section \u00AB map \u00BB (file, ignore, maxEntries) ; dossiers partag\u00E9s : reuse.shared.\nSortie : 0 \u00E9crite ou \u00E0 jour, 1 p\u00E9rim\u00E9e ou absente (--check) ou configuration invalide, 2 appel incorrect.";
 export interface MapResult {
     file: string;
     status: 'written' | 'unchanged' | 'up-to-date' | 'stale' | 'missing';
@@ -16,7 +16,15 @@ export interface MapResult {
     } | null;
     /** Stale only because the map predates the « Dossiers » section of 3.0.0-alpha.11: `apv map` once after the update. */
     migration?: true;
+    /** Up to date with `--check` although the counts « Laissés de côté » differ (what the map leaves out): `apv map` refreshes them. */
+    skippedOnly?: true;
 }
+/**
+ * The text of a map as `--check` compares it: the counts « Laissés de côté » are left out. They count what the map does
+ * not describe (tests, ignored files, modules without export nor import): a test file added or removed changed them and
+ * made a correct map « stale » (pilot project, 3 October 2026), for a line that says nothing of the architecture.
+ */
+export declare function comparableMap(text: string): string;
 type MapConfig = {
     reuse?: ReuseSection | undefined;
     map?: MapSection | undefined;
