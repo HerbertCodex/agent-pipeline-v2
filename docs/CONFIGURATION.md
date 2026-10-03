@@ -387,17 +387,21 @@ Repère (nuit du 24 au 25 septembre 2026, même projet pilote) : une session a l
 
 ## Taille des specs : `spec`
 
-Section APV3, facultative, lue par `apv spec validate` et validée par le chargeur commun (entier hors bornes ou propriété inconnue refusés). Elle fixe les seuils au-delà desquels la validation **avertit**, sans jamais rendre la spec invalide ni changer le code de sortie.
+Section APV3, facultative, lue par `apv spec validate` et validée par le chargeur commun (entier hors bornes ou propriété inconnue refusés). Elle fixe les seuils au-delà desquels la validation **avertit**, sans jamais rendre la spec invalide ni changer le code de sortie (seul `userScenarios: "error"`, plus bas, fait d'un constat une erreur).
 
 ```json
-{ "spec": { "maxTasks": 6, "maxAcceptance": 30, "maxDepth": 3 } }
+{ "spec": { "maxTasks": 6, "maxAcceptance": 30, "maxDepth": 3, "minUserScenarios": 3, "userScenarios": "warning" } }
 ```
 
 - `maxTasks` (défaut `6`, de 1 à 100) : nombre de tâches au-delà duquel la validation propose de découper la demande en specs indépendantes de 4 à 6 tâches, livrées en parallèle (sur des piles de test distinctes quand le projet en déclare plusieurs, par exemple des ressources de contrôle distinctes), chacune avec sa PR.
 - `maxAcceptance` (défaut `30`, de 1 à 1000) : même avertissement au-delà de ce nombre de critères d'acceptation.
 - `maxDepth` (défaut `3`, de 1 à 100) : nombre de couches du graphe des tâches (les vagues de `apv run start`) au-delà duquel la validation nomme le chemin le plus long. Chaque couche attend l'intégration de la précédente : le motif « contrats d'abord » (une première tâche pose les types, schémas, signatures de fonctions, interfaces de composants et migrations, avec des implémentations minimales testées) laisse les tâches suivantes se construire en parallèle contre ces contrats. Une dépendance ne se déclare que si la tâche a besoin du code de l'autre, pas seulement de son existence future.
 
-Les avertissements sortent aussi en JSON (`warnings`, codes `SPEC_SIZE` et `SPEC_DEPTH`, et `limits`, les seuils appliqués). Une spec déjà validée par l'opérateur s'exécute telle quelle.
+- `minUserScenarios` (défaut `3`, de 1 à 5) et `userScenarios` (`warning` par défaut, ou `error`) : **scénarios utilisateur** (`SPEC_USER_SCENARIOS`, hors `--draft`). Une spec qui touche une interface doit porter au moins `minUserScenarios` critères `AC-USER-<n>`, écrits « Étant donné … Quand … Alors … » (ou « Given … When … Then … »), du point de vue de la personne cible, chacun avec une vérification qui nomme un test navigateur (navigateur, browser, Playwright, Cypress, e2e…). Une spec touche une interface quand l'outil le sait déjà : `experience.uiImpact` autre que `none`, un chemin autorisé d'une tâche dans la classe `ui` des revues (`review.paths.ui`, ou ses défauts : les chemins qui gardent la revue de fidélité), ou une maquette validée citée (un texte de la spec qui nomme `design.dir`, `docs/design/` par défaut). Un scénario mal formé (sans « Étant donné/Quand/Alors » dans l'ordre, ou sans test navigateur) est signalé aussi. `warning` laisse valider les specs existantes ; `error` refuse la spec, à `apv spec validate` comme à `apv run start`.
+
+Les avertissements sortent aussi en JSON (`warnings`, codes `SPEC_SIZE`, `SPEC_DEPTH` et `SPEC_USER_SCENARIOS`, `limits`, les seuils appliqués, et `userScenarios`, le seuil et le niveau des scénarios). Une spec déjà validée par l'opérateur s'exécute telle quelle.
+
+Repère (projet pilote, 4 octobre 2026) : les specs rédigées décrivaient surtout le code, sans scénario du point de vue de la personne qui utilise l'écran ; l'opérateur a demandé 3 à 5 scénarios par spec, portés par le pipeline pour tous les projets.
 
 Repère (projet pilote, nuit du 24 au 25 septembre 2026) : une spec de 12 tâches et 65 critères, en chaîne de 5 couches (base, données, relances et documents, ajout et actions et fiche, liste et colonnes), a demandé environ 9 h d'exécution, chaque couche attendant l'intégration de la précédente.
 

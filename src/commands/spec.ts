@@ -18,6 +18,10 @@ range dans .apv/state/demande-<id>.md (lue aussi par apv run start : même minim
 Avertit aussi, sans invalider la spec, quand elle dépasse les seuils de la section spec de
 .apv/config.json : plus de maxTasks tâches (6 par défaut) ou de maxAcceptance critères (30), ou
 un graphe de plus de maxDepth couches de dépendances (3), chemin le plus long nommé.
+Hors --draft, une spec qui touche une interface (experience.uiImpact, chemin d'interface d'une tâche,
+maquette validée citée) doit porter minUserScenarios scénarios AC-USER-<n> (3), écrits « Étant donné …
+Quand … Alors … » et vérifiés par un test navigateur [SPEC_USER_SCENARIOS] : avertissement, ou erreur
+avec "userScenarios": "error" dans la section spec.
 Sortie : 0 si la spec est valide, 1 sinon, 2 si l'appel est incorrect.
 new : écrit le gabarit .apv/specs/<id>.json (une tâche exemple, passages « À compléter »), au format
 accepté par apv spec validate --draft ; <id> en kebab-case ; refuse d'écraser (sortie 1).`;
@@ -35,7 +39,12 @@ export function specTemplate(title: string): Record<string, unknown> {
     problem: 'À compléter : le problème que cette spec résout, pour qui, et pourquoi maintenant.',
     scope: ['À compléter : ce que la spec change, une ligne par élément.'],
     outOfScope: ['À compléter : ce que la spec exclut explicitement.'],
-    acceptance: [{ id: 'AC-1', description: 'À compléter : un critère observable.', verification: 'À compléter : comment le vérifier (test, capture, commande).' }],
+    // A spec that touches an interface opens its criteria with 3 to 5 user scenarios AC-USER-<n> (SPEC_USER_SCENARIOS).
+    acceptance: [
+      { id: 'AC-USER-1', description: 'À compléter : Étant donné la situation de la personne cible, Quand elle fait une action, Alors elle voit le résultat attendu.',
+        verification: 'À compléter : test navigateur qui rejoue le parcours (fichier, largeur 390 px).' },
+      { id: 'AC-1', description: 'À compléter : un critère observable.', verification: 'À compléter : comment le vérifier (test, capture, commande).' },
+    ],
     decisions: [],
     decisionCoverage: [],
     decisionResolutions: [],
@@ -43,7 +52,7 @@ export function specTemplate(title: string): Record<string, unknown> {
     questions: [{ id: 'Q-REDACTION', question: 'Spec à rédiger : remplacer chaque passage « À compléter », puis retirer cette question.' }],
     tasks: [{
       id: 'T1', title: 'À compléter : première tâche', description: 'À compléter : ce que la tâche fait, ses fichiers, ses tests.',
-      acceptanceIds: ['AC-1'], allowedPaths: ['src/**'], dependsOn: [], minimumLane: 'standard',
+      acceptanceIds: ['AC-USER-1', 'AC-1'], allowedPaths: ['src/**'], dependsOn: [], minimumLane: 'standard',
     }],
     minimumLane: 'standard',
     experience: { uiImpact: 'none', surfaces: [], rationale: 'À compléter : effet sur l\'interface (none, minor ou major) et pourquoi.' },
@@ -112,7 +121,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     if (values.json) {
       json(io, { valid: result.valid, file: path, title: result.title, sha: result.sha, mode: values.draft ? 'draft' : 'ready',
         requestSource: result.requestSource, requestFile: result.requestFile, ledgerFile: result.ledgerFile, configFile: result.configFile, security, issues: result.issues,
-        warnings: result.warnings, limits: result.limits });
+        warnings: result.warnings, limits: result.limits, userScenarios: result.userScenarios });
     } else {
       const source = { option: 'ligne de commande', document: 'document de spec', stored: `demande rangée (${result.requestFile})`, spec: 'texte de la spec (aucune demande fournie)' }[result.requestSource];
       const lines = [

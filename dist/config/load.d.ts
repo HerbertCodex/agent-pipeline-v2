@@ -36,15 +36,30 @@ export declare const DEFAULT_SPEC_LIMITS: {
     readonly maxAcceptance: 30;
     readonly maxDepth: 3;
 };
+/**
+ * User scenarios of a spec that touches an interface (`apv spec validate`, code SPEC_USER_SCENARIOS): at least
+ * `minUserScenarios` criteria `AC-USER-<n>` written « Étant donné … Quand … Alors … » (or Given/When/Then) and
+ * verified by a browser test. `userScenarios` is the level of the finding: `warning` (default, existing specs keep
+ * validating) or `error` (the spec is refused, at validation and at launch).
+ */
+export declare const USER_SCENARIO_LEVELS: readonly ["warning", "error"];
+export type UserScenarioLevel = typeof USER_SCENARIO_LEVELS[number];
+export declare const DEFAULT_USER_SCENARIOS: UserScenarioSettings;
 export declare const specSettingsSchema: import("../domain/schema.js").Schema<{
     readonly maxTasks: number;
     readonly maxAcceptance: number;
     readonly maxDepth: number;
+    readonly minUserScenarios: number;
+    readonly userScenarios: "warning" | "error";
 }>;
 export type SpecLimits = {
     maxTasks: number;
     maxAcceptance: number;
     maxDepth: number;
+};
+export type UserScenarioSettings = {
+    minUserScenarios: number;
+    userScenarios: UserScenarioLevel;
 };
 /** Placeholders of the dynamic scan command (`review.dast.command`), replaced as whole arguments. */
 export declare const DAST_PLACEHOLDERS: readonly ["reportDir", "commit", "repo"];
@@ -297,6 +312,8 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly maxTasks: number;
         readonly maxAcceptance: number;
         readonly maxDepth: number;
+        readonly minUserScenarios: number;
+        readonly userScenarios: "warning" | "error";
     } | undefined;
     readonly review: {
         readonly dast: {
@@ -490,6 +507,10 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
 export declare const specLimits: (config: {
     spec?: Partial<SpecLimits> | undefined;
 }) => SpecLimits;
+/** The user scenario settings of a configuration: `spec.minUserScenarios` and `spec.userScenarios`, defaults for what is absent. */
+export declare const userScenarioSettings: (config: {
+    spec?: Partial<UserScenarioSettings> | undefined;
+}) => UserScenarioSettings;
 /** The full suite rhythm of a configuration: `run.fullSuite`, `final` when absent. */
 export declare const fullSuiteMode: (config: {
     run?: {

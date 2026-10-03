@@ -8,8 +8,11 @@ import { specIssues, specSchema, type Spec } from '../lifecycle/contracts.js';
 import { decisionLedgerIssues, decisionLedgerSchema, LEDGER_FILE, LEGACY_LEDGER_FILE, type DecisionLedger } from '../lifecycle/decisions.js';
 import { assessSecurity, type SecurityContext } from '../security/owasp.js';
 import { pathsMentioned } from '../security/change-signals.js';
-import { DEFAULT_SPEC_LIMITS, loadConfig, specLimits, type SpecLimits } from '../config/load.js';
+import { DEFAULT_SPEC_LIMITS, DEFAULT_USER_SCENARIOS, loadConfig, specLimits, userScenarioSettings, type SpecLimits, type UserScenarioSettings } from '../config/load.js';
 import { longestChain } from '../run/state.js';
+import { DEFAULT_DESIGN_DIR, designDir } from '../design/config.js';
+import { DEFAULT_REVIEW_PATHS } from '../review/config.js';
+import { userScenarioIssues, type InterfaceSignals } from './scenarios.js';
 
 /**
  * A spec file is either the spec itself, or `{ "request": "...", "spec": { ... } }` when the author keeps the
@@ -81,6 +84,8 @@ export interface SpecCheckResult {
   warnings: Issue[];
   /** Thresholds the warnings were measured against. */
   limits: SpecLimits;
+  /** User scenario settings: SPEC_USER_SCENARIOS goes to `warnings` (level `warning`) or to `issues` (level `error`). */
+  userScenarios: UserScenarioSettings;
 }
 
 /**
@@ -123,9 +128,13 @@ export async function checkSpec(options: SpecCheckOptions): Promise<SpecCheckRes
   let projectType = 'unknown';
   let configFile: string | null = null;
   let limits: SpecLimits = { ...DEFAULT_SPEC_LIMITS };
+  let scenarios: UserScenarioSettings = { ...DEFAULT_USER_SCENARIOS };
+  let signals: InterfaceSignals = { uiPaths: DEFAULT_REVIEW_PATHS.ui, designDir: DEFAULT_DESIGN_DIR };
   try {
     const loaded = loadConfig(repo, options.configFile);
     projectType = loaded.config.skills.projectType; configFile = loaded.file; limits = specLimits(loaded.config);
+    scenarios = userScenarioSettings(loaded.config);
+    signals = { uiPaths: loaded.config.review?.paths?.ui ?? DEFAULT_REVIEW_PATHS.ui, designDir: designDir(loaded.config.design) };
   } catch (error) { issues.push({ code: error instanceof PipelineError ? error.code : 'CONFIG', message: errorMessage(error) }); }
   const ledger = workingLedger(repo);
   issues.push(...ledger.issues);
@@ -146,8 +155,13 @@ export async function checkSpec(options: SpecCheckOptions): Promise<SpecCheckRes
   issues.push(...specIssues(options.document.spec, { ready: options.ready ?? true, securityContext: security, ...(specId ? { specId } : {}),
     ...(ledger.ledger ? { ledger: ledger.ledger } : {}), ...(explicit !== undefined ? { operatorText: explicit } : {}) }));
   const warnings = declared ? specWarnings(declared, limits) : [];
+  // User scenarios are asked of a launch-ready spec only: a draft is still being written.
+  if (declared && (options.ready ?? true)) {
+    const found = userScenarioIssues(declared, scenarios, signals);
+    (scenarios.userScenarios === 'error' ? issues : warnings).push(...found);
+  }
   return { valid: issues.length === 0, issues, title: declared?.title ?? null, sha, requestSource, requestFile: stored?.file ?? null, ledgerFile: ledger.file, configFile, security,
-    warnings, limits };
+    warnings, limits, userScenarios: scenarios };
 }
 
 /** `.apv/state/demande-<id>.md` for a spec file `<id>.json`, when it exists and is a readable regular file. */
