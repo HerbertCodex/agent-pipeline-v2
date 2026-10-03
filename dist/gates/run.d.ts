@@ -128,6 +128,12 @@ export interface GateRunResult {
     }[] | null;
     ok: boolean;
 }
+/**
+ * The companion of a kernel lock held by an ancestor of the suite: the lock its checks take turns on. One per real lock
+ * file (two paths to the same file share it), in the lock folder of the account (`apv lock`, writable even when the
+ * folder of the lock is not), so that every project and process under that ancestor shares it.
+ */
+export declare function companionLock(file: string, env: NodeJS.ProcessEnv): string;
 /** Files of a `git status --porcelain=v1 -z` output, as `XY path` lines. */
 export declare function statusLines(porcelain: string): string[];
 /** The refusal of a full suite on a working tree with uncommitted changes, listing them (50 at most). */

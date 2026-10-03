@@ -5,7 +5,8 @@
 // only sealed records, so a record written by anyone else (the implementer, the lead, a script) proves nothing.
 // Never blocks, never prints.
 import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { isMainModule, readHookInput } from './lib.mjs';
 import { apvArguments, reviewRecordCall, reviewRecordProblem, tokenize } from './bash-guard.mjs';
 import { cdTarget } from './harness-guard.mjs';
@@ -71,6 +72,11 @@ async function main() {
     reviews.sealReview(common, request.id, request.domain, request.agent, key);
     return 0;
   }
+  // Written where this hook cannot follow (`cd "$X" && apv review record`): said by apv status of the session's project,
+  // never by creating the stores of a repository that has none.
+  const r = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+  const common = r.status === 0 ? r.stdout.trim() : '';
+  if (common && existsSync(join(common, 'apv'))) operator.recordRefusal(common, `relecture ${request.id} non scellée : enregistrée dans un dépôt que le crochet ne retrouve pas (lance apv review record depuis la copie relue, par un cd en clair ou --repo)`);
   return 0;
 }
 

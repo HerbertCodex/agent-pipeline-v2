@@ -456,9 +456,27 @@ export function mayBeStore(path) {
 }
 
 /** Commands that delete, move, empty or copy away what they are given: handed a store, they reach it. */
-const STORE_WRITERS = new Set(['rm', 'unlink', 'rmdir', 'shred', 'truncate', 'mv', 'cp', 'rsync', 'tar', 'zip', 'ln', 'chmod', 'chown', 'chgrp', 'install', 'setfacl', 'chattr']);
-/** The file a word redirects into (`> f`, `>>f`, `2> f`, `&> f`, `>| f`) or names as the output of dd (`of=f`): `''` when it is the next word. */
-const writtenBy = word => /^(?:\d*|&)>{1,2}\|?(.*)$/.exec(word)?.[1] ?? /^of=(.+)$/.exec(word)?.[1] ?? null;
+const STORE_WRITERS = new Set(['rm', 'unlink', 'rmdir', 'shred', 'truncate', 'mv', 'cp', 'rsync', 'tar', 'zip', 'ln', 'chmod', 'chown', 'chgrp', 'install', 'setfacl', 'chattr',
+  'tee', 'trash', 'trash-put', 'rmtrash', 'gio']);
+/** Options that name the file a command writes (`sort -o f`, `curl -o f`, `wget -O f`, `dd of=f`), by command. */
+const OUTPUT_OPTIONS = { sort: ['-o', '--output'], curl: ['-o', '--output'], wget: ['-O', '--output-document'], dd: ['of'] };
+const outputsOf = (tool, args) => {
+  const names = OUTPUT_OPTIONS[tool] ?? [];
+  const out = [];
+  args.forEach((a, k) => {
+    for (const n of names) {
+      if (a === n) out.push(args[k + 1] ?? '');
+      else if (a.startsWith(`${n}=`)) out.push(a.slice(n.length + 1));
+      else if (n.length === 2 && n.startsWith('-') && !n.startsWith('--') && a.startsWith(n) && a.length > 2) out.push(a.slice(2));
+    }
+  });
+  return out.filter(Boolean);
+};
+/** Interpreters given a script on their command line: `python3 -c`, `node -e`, `perl -e`, `ruby -e`, `php -r`, and awk. */
+const AWKS = new Set(['awk', 'gawk', 'mawk', 'nawk']);
+const inlineScript = (tool, args) => AWKS.has(tool) || (INTERPRETERS.has(tool) && args.some(a => /^-(?:c|e|E|p|r|-eval|-print)$/.test(a) || a === 'eval'));
+/** A value of a variable set by the line that may be a piece of a store path (`d=.git/ap`, `d=.gi`, `e=ap`). */
+const storePiece = value => /\.git|apv/.test(value) || (value.replace(/\/$/, '').length >= 2 && '.git/apv'.includes(value.replace(/\/$/, '')));
 
 /**
  * Why a command reaches the stores of the tool, or null (docs/PLUGIN.md, « toujours refusés : magasins, suppression
@@ -468,13 +486,17 @@ const writtenBy = word => /^(?:\d*|&)>{1,2}\|?(.*)$/.exec(word)?.[1] ?? /^of=(.+
  * that ends in `apv` (`$dir/apv`, `$(git rev-parse --git-common-dir)/apv`). For any command, a glob that may reach into a
  * store (`cat .git/apv/rev*\/*`). A folder of the project named `apv` (`build/apv`) is not a store.
  */
-export function storeProblem(segments, cwd = null, home = null, command = '') {
+export function storeProblem(segments, cwd = null, home = null, command = '', shadow = null) {
   let dir = cwd;
   const at = (arg, base) => (isAbsolute(arg) || !base ? arg : resolve(base, arg));
   const lineWords = segments.flat();
+  const dirs = [cwd];
+  // Variables the line sets to a piece of a store path: a computed path that uses one may be the store.
+  const pieces = lineWords.map(w => /^[A-Za-z_]\w*=(.*)$/.exec(w)?.[1]).filter(v => v && storePiece(v));
+  const computedStore = arg => /[$`]/.test(arg) && (/\/apv\/?$/.test(arg) || /\.gi|(?:^|\/)apv?(?:\/|$)/.test(arg.replace(/\$\{?\w+\}?/g, '')) || pieces.length > 0);
   for (const words of segments) {
     const moved = cdTarget(words, dir, home);
-    if (moved !== undefined) { dir = moved; continue; }
+    if (moved !== undefined) { dir = moved; dirs.push(moved); continue; }
     let cw = commandWords(words)?.words ?? words;
     // busybox rm, toybox mv: the applet is the command.
     if (['busybox', 'toybox'].includes(basename(cw[0] ?? '')) && cw.length > 1) cw = cw.slice(1);
@@ -482,14 +504,11 @@ export function storeProblem(segments, cwd = null, home = null, command = '') {
     const args = cw.slice(1).filter(a => !a.startsWith('-'));
     // A glob that may reach into a store, whatever reads it.
     for (const arg of args) if (GLOB.test(arg) && mayBeStore(dirname(at(arg, dir)))) return REASONS.anchorStore;
-    // A redirection or `of=` into a store empties or replaces what is there, whatever the command (`: > …`, `dd of=…`).
-    for (let k = 0; k < words.length; k += 1) {
-      const target = writtenBy(words[k]);
-      const path = target === '' ? words[k + 1] : target;
-      if (path && (mayBeStore(at(path, dir)) || mayBeStore(path))) return REASONS.anchorStore;
-    }
-    // An interpreter given a script that names the store folder (`python3 -c "shutil.rmtree('.git/apv')"`).
-    if (INTERPRETERS.has(tool) && /\.git\W{1,4}apv\b/.test(flatten(cw.join(' ')))) return REASONS.anchorStore;
+    // The file a command writes by an option (`sort -o`, `curl -o`, `wget -O`, `dd of=`).
+    for (const path of outputsOf(tool, cw.slice(1))) if (mayBeStore(at(path, dir)) || mayBeStore(path) || computedStore(path)) return REASONS.anchorStore;
+    // A script given on the command line that names the store folder (`python3 -c "shutil.rmtree('.git/apv')"`, awk);
+    // a script file only read (`python3 tools/inspect.py .git/apv/receipts`) is not refused here.
+    if (inlineScript(tool, cw.slice(1)) && /\.git\W{1,4}apv\b/.test(flatten(cw.join(' ')))) return REASONS.anchorStore;
     const fedByLine = words.slice(0, words.length - cw.length).some(w => ['xargs', 'parallel'].includes(basename(w))) || tool === 'xargs';
     const inPlace = ['sed', 'gsed', 'perl'].includes(tool) && cw.some(a => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place'));
     if (tool === 'find') {
@@ -502,13 +521,22 @@ export function storeProblem(segments, cwd = null, home = null, command = '') {
     }
     if (!STORE_WRITERS.has(tool) && !inPlace) continue;
     for (const arg of fedByLine ? [...args, ...lineWords] : args) {
-      if (/[$`]/.test(arg) && /\/apv\/?$/.test(arg)) return REASONS.anchorStore;
-      // A computed path on a line that names a Git directory (`d=.git/ap; rm -rf ${d}v`): it may be the store.
-      if (/[$`]/.test(arg) && /\.git\b/.test(String(command))) return REASONS.anchorStore;
+      // A computed path that ends in apv, holds a piece of a store path, or uses a variable the line set to one
+      // (`$d/apv`, `d=.git/ap; rm -rf ${d}v`, `d=.gi; e=ap; rm -rf ${d}t/${e}v`): it may be the store.
+      if (computedStore(arg)) return REASONS.anchorStore;
       if (mayBeStore(at(arg, dir)) || mayBeStore(arg)) return REASONS.anchorStore;
     }
     // An unquoted substitution followed by `/apv` is split from its command by the tokenizer: read in the line.
     for (const m of String(command).matchAll(/[)`]\/+([^\s/;&|'"<>()]+)/g)) if (globMayMatch(m[1], 'apv')) return REASONS.anchorStore;
+  }
+  // A redirection into a store empties or replaces what is there, whatever the command (`: > …`, `exec 3> …`). Read in
+  // the shadow of the line (quoted text blanked, same positions), so `grep -c '>' f` is no redirection.
+  if (shadow) {
+    for (const m of shadow.matchAll(/(?<![<>=&-])(?:\d+|&)?>{1,2}\|?(?!&)/g)) {
+      const rest = String(command).slice(m.index + m[0].length).trimStart();
+      const target = /^("[^"]*"|'[^']*'|[^\s;&|<>()]+)/.exec(rest)?.[1]?.replace(/^(['"])(.*)\1$/, '$2');
+      if (target && (dirs.some(d => mayBeStore(at(target, d))) || mayBeStore(target) || computedStore(target))) return REASONS.anchorStore;
+    }
   }
   return null;
 }
@@ -572,7 +600,9 @@ const GIT_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--names
  * (`main`, `HEAD:main`, `+x:refs/heads/main`), `--all` or `--mirror`, or no refspec (or `HEAD`) from the default branch.
  * Changes reach the default branch through a PR merged by `apv stack merge`, never by a push.
  */
-export function pushToDefault(words, defaults = ['main', 'master'], current = null) {
+export function pushToDefault(words, defaults = ['main', 'master'], ...branch) {
+  // No default value for the branch: `undefined` (a folder the guard cannot follow) is not `null` (no branch checked out).
+  const current = branch.length ? branch[0] : null;
   const at = commandIndex(words, 'git');
   if (at === -1) return null;
   let i = at + 1;
@@ -590,17 +620,19 @@ export function pushToDefault(words, defaults = ['main', 'master'], current = nu
   }
   const specs = plain.slice(1);
   const name = ref => ref.replace(/^\+/, '').replace(/^refs\/heads\//, '');
-  if (!specs.length) return current && defaults.includes(current) ? current : null;
+  // The branch of a folder the guard cannot follow (`undefined`): the push may go to the default branch.
+  const head = current === undefined ? defaults[0] ?? 'main' : current;
+  if (!specs.length) return head && defaults.includes(head) ? head : null;
   for (const spec of specs) {
     const [src, dst] = spec.includes(':') ? spec.split(':') : [spec, spec];
-    const target = name(dst === '' ? src : dst) === 'HEAD' ? current : name(dst === '' ? src : dst);
+    const target = name(dst === '' ? src : dst) === 'HEAD' ? head : name(dst === '' ? src : dst);
     if (target && defaults.includes(target)) return target;
   }
   return null;
 }
 
 /** Variables that move Git or gh to another repository, or `cd` to another folder: in the line or in the environment. */
-const SCOPE_VARIABLE = /^(?:GIT_(?:DIR|WORK_TREE|COMMON_DIR|CONFIG\w*|NAMESPACE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM)|GH_(?:REPO|HOST)|GITHUB_\w+|CDPATH)$/;
+const SCOPE_VARIABLE = /^(?:GIT_(?!(?:TERMINAL_PROMPT|PAGER|EDITOR|SEQUENCE_EDITOR|AUTHOR_(?:NAME|EMAIL|DATE)|COMMITTER_(?:NAME|EMAIL|DATE)|TRACE\w*|MERGE_AUTOEDIT|ASKPASS|OPTIONAL_LOCKS|FLUSH)$)\w+|GH_(?:REPO|HOST|CONFIG_DIR)|CDPATH)$/;
 /** Global options of git that change nothing of where it acts. Any other (`-C`, `-c`, `--git-dir`, `--work-tree`...) does. */
 const GIT_NEUTRAL = new Set(['--no-pager', '-p', '--paginate', '-P', '--no-replace-objects', '--literal-pathspecs', '--no-optional-locks', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs']);
 /** Commands that run a text of their own (shells, eval, source, xargs...): their commands are not read from here. */
@@ -680,6 +712,23 @@ export function commandScope(command, segments, cwd = null, home = null, env = {
     }
   }
   return scope;
+}
+
+/**
+ * The folder a git command acts in: `dir`, or its literal `-C` (resolved from `dir`); undefined when computed or unknown.
+ * Any other command: `dir`.
+ */
+export function gitDirectory(cwords, dir) {
+  if (basename(cwords[0] ?? '') !== 'git') return dir;
+  let where = dir;
+  for (let k = 1; k < cwords.length && cwords[k].startsWith('-'); k += 1) {
+    const option = /^-C(.*)$/.exec(cwords[k]);
+    if (!option) { if (GIT_WITH_VALUE.has(cwords[k])) k += 1; continue; }
+    const value = option[1] || cwords[(k += 1)];
+    if (value === undefined || /[$`~]/.test(value) || (where === null && !isAbsolute(value))) return undefined;
+    where = resolve(where ?? '/', value);
+  }
+  return where;
 }
 
 /** The root of this plugin, as launched and with its links resolved: its files run only through apv and the hooks. */
@@ -936,6 +985,9 @@ export const REASONS = {
   merge: "APV : fusion de PR bloquée hors de la commande dédiée. Une fusion se fait seulement sur ordre explicite " +
     "de l'opérateur, par /apv:stack (outil : APV_ALLOW_MERGE=1 apv stack merge <pr...>), qui re-cible, vérifie la base de chaque PR " +
     "juste avant de fusionner et s'arrête à la première anomalie. APV_ALLOW_MERGE=1 se pose devant cette seule commande.",
+  scopeNote: "Ce dépôt n'est pas un projet APV, mais l'outil reste actif pour cette commande (docs/PLUGIN.md, « Portée des crochets ») : " +
+    "sa forme n'est pas lue en entier (substitution, variable, shell, cd ailleurs, option de git ou de gh...), ou un dépôt distant qu'elle atteint " +
+    "n'est pas vérifié (jamais récupéré : git fetch ; adresse de poussée différente). Écris-la simplement, récupère le dépôt distant, ou fais-la hors de Claude.",
   mergeOutside: "APV : fusion de PR bloquée sans autorisation explicite. Hors d'un projet sous APV, une fusion se fait seulement sur ordre " +
     "de l'opérateur, avec APV_ALLOW_MERGE=1 devant la seule commande (APV_ALLOW_MERGE=1 gh pr merge <pr>) ; dans un projet sous APV, " +
     'par apv stack merge.',
@@ -1020,9 +1072,11 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false) 
   const scope = commandScope(command, segments, context.cwd ?? null, context.home ?? null, env);
   if (mergeApi && !scope.slugs.length) scope.plain = false;
   const active = activeAbove || !context.apvProject || !scope.plain || context.apvProject(scope) !== false;
+  // A refusal in a repository outside the tool says why the tool stays active there (docs/PLUGIN.md, « Portée »).
+  const explain = reason => (context.apvProject && context.apvProject({ plain: true, dirs: [], remotes: [], slugs: [] }) === false ? `${reason} ${REASONS.scopeNote}` : reason);
   if (mergeApi) {
     if (context.agentId) return { decision: 'deny', reason: REASONS.mergeBySubagent };
-    if (active) return { decision: 'deny', reason: REASONS.rawMerge };
+    if (active) return { decision: 'deny', reason: explain(REASONS.rawMerge) };
     // The authorisation is set for the command that merges (or in the environment), never elsewhere in the line.
     const merging = segments.filter(w => MERGE_API.test(flatten(w.join(' '))));
     if (env.APV_ALLOW_MERGE !== '1' && !merging.some(w => authorised(w, 'APV_ALLOW_MERGE', env))) return { decision: 'deny', reason: REASONS.mergeOutside };
@@ -1031,7 +1085,7 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false) 
   if (active && /(^|[\s;&|(])eval\b/.test(flat) && /\bapv\b|cli\.js/.test(flat)) return { decision: 'deny', reason: REASONS.computedApv };
   if (/\bAPV_ENTRY\b|\bAPV_ANCHOR_KEY_FILE\b/.test(flat)) return { decision: 'deny', reason: REASONS.toolVariable };
   if (decodedAndUsed(command) || decodedAndUsed(flat)) return { decision: 'deny', reason: REASONS.encodedPath };
-  const store = storeProblem(segments, context.cwd ?? null, context.home ?? null, command);
+  const store = storeProblem(segments, context.cwd ?? null, context.home ?? null, command, shadow);
   if (store) return { decision: 'deny', reason: store };
   let writesGithub = false;
   const kill = killProblem(segments, context.ancestors);
@@ -1040,7 +1094,12 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false) 
   if (install) return { decision: 'deny', reason: install };
   // The declared stacks are read (git, config) only for a command that may reach one.
   const stacks = /\b(docker|podman|supabase)\b/.test(command) ? context.stacks() : [];
+  // The folder each simple command runs in (literal cd, git -C): its branch decides where a push without refspec goes.
+  // A cd the guard cannot follow leaves it unknown (undefined): such a push counts as one to the default branch.
+  let dir = context.cwd ?? null; let dirKnown = true;
   for (const [index, words] of segments.entries()) {
+    const moved = cdTarget(words, dir, context.home ?? null);
+    if (moved !== undefined) { dir = moved; dirKnown = moved !== null; }
     // A write to a remote database (production): refused whatever the locks, no variable lifts it.
     const remote = remoteWriteProblem(words) ?? remoteWriteProblem(lockWrapper(words, stacks, context.cwd).words);
     if (remote) return { decision: 'deny', reason: remote };
@@ -1061,8 +1120,15 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false) 
     if (code) return { decision: 'deny', reason: code };
     const cwords = commandWords(words)?.words ?? words;
     if (active && nestedClaude(cwords, flat)) return { decision: 'deny', reason: REASONS.nestedClaude };
-    const pushed = active ? pushToDefault(words, (context.defaultBranches ?? (() => ['main', 'master']))(), (context.currentBranch ?? (() => null))()) : null;
-    if (pushed) return { decision: 'deny', reason: REASONS.pushToDefault(pushed) };
+    let pushed = null;
+    if (active) {
+      const where = gitDirectory(cwords, dir);
+      const known = dirKnown && where !== undefined;
+      const moved = known && where !== (context.cwd ?? null);
+      const current = !known ? undefined : (context.currentBranch ?? (() => null))(...(moved ? [where] : []));
+      pushed = pushToDefault(words, (context.defaultBranches ?? (() => ['main', 'master']))(...(moved ? [where] : [])), current);
+    }
+    if (pushed) return { decision: 'deny', reason: explain(REASONS.pushToDefault(pushed)) };
     const apvArgs = apvArguments(words);
     if (apvArgs && positional(apvArgs).slice(0, 2).some(w => /[$`]/.test(w))) return { decision: 'deny', reason: REASONS.computedApv };
     const review = reviewRecordProblem(words, context.agentType ?? null);
@@ -1074,7 +1140,7 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false) 
       if (write.merge && context.agentId) return { decision: 'deny', reason: REASONS.mergeBySubagent };
       // A merge through gh skips the rules the tool checks before any merge: only apv stack merge merges (where the tool
       // is active; elsewhere, gh pr merge needs APV_ALLOW_MERGE=1, as before the rules).
-      if (raw?.merge && active) return { decision: 'deny', reason: REASONS.rawMerge };
+      if (raw?.merge && active) return { decision: 'deny', reason: explain(REASONS.rawMerge) };
       if (write.merge && !authorised(words, 'APV_ALLOW_MERGE', env)) return { decision: 'deny', reason: raw?.merge && !active ? REASONS.mergeOutside : REASONS.merge };
     }
     if (isProductionDeploy(words) && !authorised(words, 'APV_ALLOW_DEPLOY', env)) {

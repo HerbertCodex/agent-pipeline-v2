@@ -560,3 +560,39 @@ test('review of #105: the seal goes to the repository where apv review record wr
   assert.deepEqual(recordDirectories(rec, '/s'), ['/s']);
   assert.deepEqual(recordDirectories(`apv status && cd /r/b && ${rec}`, '/s'), ['/r/b', '/s'], 'the record, not the first call of the tool');
 });
+
+test('review of 440d57d: no false block on computed paths and quoted text; tee, sort -o, awk reach no store; a push is judged on the branch of its folder', async t => {
+  const lead = { ...as(null), cwd: '/r' };
+  // N1, N7: commands that passed before stay free.
+  for (const command of ['rm -rf "$tmp" && git clone https://github.com/o/r.git "$tmp"', 'mv "$f" dist/ && cat .git/HEAD', 'chmod +x "$script" && git commit -m "fix .git hooks"',
+    "grep -c '>' .git/apv/receipts/x.json", 'python3 tools/inspect.py .git/apv/receipts', 'rm -rf "$HOME/apps/x"']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  // N6: writes by other commands, and a path made of several pieces set by the line.
+  for (const command of ['echo x | tee .git/apv/receipts/x.json', 'sort -o .git/apv/receipts/x.json f', 'curl -o .git/apv/receipts/x.json https://e.x',
+    `awk 'BEGIN{system("rm -rf .git/apv")}'`, 'd=.gi; e=ap; rm -rf ${d}t/${e}v', 'exec 3> .git/apv/receipts/x.json', 'echo x > ".git/apv/receipts/x.json"']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  // Fidélité 1: only the variables of git that change where it acts or its configuration keep the tool active.
+  const { commandScope, tokenize } = await import('../hooks/scripts/bash-guard.mjs');
+  const plain = command => commandScope(command, tokenize(command).segments, '/r', null, {}).plain;
+  assert.equal(plain('GIT_SSH_COMMAND=ssh git push origin main'), false);
+  assert.equal(plain('GIT_TERMINAL_PROMPT=0 git push origin main'), true);
+  assert.equal(commandScope('git push origin main', tokenize('git push origin main').segments, '/r', null, { GITHUB_TOKEN: 'x' }).plain, true);
+  // Fidélité 3: outside the tool, a refusal says why the tool stays active there.
+  const outsideRepo = { ...lead, apvProject: scope => scope.remotes?.length > 0 };
+  assert.match(evaluateCommand('git push origin main', {}, outsideRepo).reason, /n'est pas un projet APV, mais l'outil reste actif/);
+  // Journal, lesson 11: `cd <worktree> && git push` is judged on the branch of that worktree, not on the session's.
+  const { hookContext } = await import('../hooks/scripts/harness-guard.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-branche-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, stdio: 'pipe' });
+  const main = join(root, 'principal'); mkdirSync(main); git(main, 'init', '-q', '-b', 'main');
+  mkdirSync(join(main, '.apv')); writeFileSync(join(main, '.apv', 'config.json'), '{}'); git(main, 'add', '-A'); git(main, 'commit', '-qm', 'x');
+  const worktree = join(root, 'copie'); git(main, 'worktree', 'add', '-q', '-b', 'feat', worktree);
+  const context = hookContext({ cwd: main }, { HOME: root });
+  assert.equal(evaluateCommand(`cd ${worktree} && git push`, {}, context).decision, 'allow', 'the branch of the worktree');
+  assert.equal(evaluateCommand(`git -C ${worktree} push`, {}, context).decision, 'allow');
+  assert.deepEqual(evaluateCommand('git push', {}, context), { decision: 'deny', reason: REASONS.pushToDefault('main') });
+  assert.deepEqual(evaluateCommand('cd "$X" && git push', {}, context), { decision: 'deny', reason: REASONS.pushToDefault('main') }, 'unknown folder');
+});

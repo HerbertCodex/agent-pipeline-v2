@@ -99,7 +99,17 @@ export function ensureAnchorKey(common, file = anchorKeyFile()) {
             writeFingerprint(common, found.key, new Date().toISOString());
         return found.key;
     }
-    if (readAnchorKey(file) || readFingerprint(common) || signedArtifacts(common))
+    if (readAnchorKey(file)) {
+        // Written by another hook since the first reading (four reviewers sealing together): read again.
+        const again = anchorKey(common, file);
+        if (again.key) {
+            if (!readFingerprint(common))
+                writeFingerprint(common, again.key, new Date().toISOString());
+            return again.key;
+        }
+        throw new Error(again.problem ?? 'clé d\'ancrage inutilisable');
+    }
+    if (readFingerprint(common) || signedArtifacts(common))
         throw new Error(found.problem ?? 'clé d\'ancrage inutilisable');
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     const key = randomBytes(32);

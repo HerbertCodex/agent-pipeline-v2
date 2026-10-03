@@ -612,11 +612,12 @@ export function hookContext(input, env = process.env) {
       return (stacks = readStacks(root, common));
     },
     // The default branch of the remote (`origin/HEAD`), plus main and master: never pushed to directly.
-    defaultBranches: () => {
-      const head = git(cwd, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+    defaultBranches: (dir = cwd) => {
+      const head = git(dir, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
       return [...new Set([...(head && head.startsWith('origin/') ? [head.slice('origin/'.length)] : []), 'main', 'master'])];
     },
-    currentBranch: () => git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
+    // The branch checked out in `dir` (the folder a literal cd or git -C of the command leads to; by default the working directory).
+    currentBranch: (dir = cwd) => git(dir, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
     // Whether the tool is active for a command (docs/PLUGIN.md, « Portée des crochets »): the repository of the working
     // directory, the project of the session, or a repository the command targets (`targets` of commandTargets) is a project
     // of the tool (projectOfTool). A target that cannot be placed (computed, an address that is not a remote of this
