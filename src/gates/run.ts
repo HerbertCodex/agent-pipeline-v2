@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { gateStage, validateReceipt, webRecordSchema, type Gate, type GateReceipt, type GateStage } from '../domain/contracts.js';
 import { errorMessage, invariant } from '../domain/errors.js';
@@ -130,6 +130,22 @@ export interface GateRunResult {
   /** The checks spread over the stacks (`--stacks`): check, stack, copy where it ran; null without `--stacks`. */
   spread: { gate: string; stack: string; workspace: string; notPassed: string[]; error: string | null }[] | null;
   ok: boolean;
+}
+
+/**
+ * The companion of a kernel lock held by an ancestor of the suite: the lock its checks take turns on. One per real lock
+ * file (two paths to the same file share it), in the lock folder of the account (`apv lock`, writable even when the
+ * folder of the lock is not), so that every project and process under that ancestor shares it, with the same
+ * APV_LOCK_DIR (or XDG_STATE_HOME, HOME). That folder cannot be made: the system's temporary folder, per account.
+ */
+export function companionLock(file: string, env: NodeJS.ProcessEnv): string {
+  let real = file;
+  try { real = realpathSync(file); } catch { /* the path as given */ }
+  const name = `${basename(real).replace(/[^\w.-]/g, '_').slice(0, 100)}-${hash(real).slice(0, 12)}.lock`;
+  for (const dir of [join(defaultLockDir(env), 'under'), join(tmpdir(), `apv-under-${process.getuid?.() ?? 'user'}`)]) {
+    try { mkdirSync(dir, { recursive: true, mode: 0o700 }); return join(dir, name); } catch { /* the next place */ }
+  }
+  return `${real}.under`;
 }
 
 /** Files of a `git status --porcelain=v1 -z` output, as `XY path` lines. */
@@ -470,14 +486,16 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         // The record file of `apv web audit`, outside the environment identity too: emptied before each pass.
         rmSync(webRecord, { force: true });
         const passEnv = { ...(suite ? { ...checkEnv, [SUITE_MARKER]: runId } : checkEnv), [WEB_RECORD]: webRecord };
-        if (lock?.kind !== 'flock') {
+        // A kernel lock already held by an ancestor (the suite launched under `flock <file>`) is held for the whole run and
+        // never taken again: a second flock on the same file from a child would wait for its own parent. The checks that
+        // ask for it take turns on a companion lock instead (companionLock: one per real lock file, in the lock folder of
+        // the account, shared by every project and process), under the same lock.waitMs. A suite run by such a check
+        // (its ancestor holds the companion too) runs under it without taking it again.
+        const file = lock?.kind !== 'flock' ? null : !heldAbove(lock.file) ? lock.file : companionLock(lock.file, source);
+        if (lock?.kind !== 'flock' || file === null || heldAbove(file)) {
           const result = await runProcess({ command: argv, cwd: workspace, env: passEnv, timeoutMs, signal, maxOutputBytes: 1024 * 1024 });
           return { result, commandMs: result.durationMs, lockWaitMs: 0, lockError: null };
         }
-        // A kernel lock already held by an ancestor (the suite launched under `flock <file>`) is held for the whole run and
-        // never taken again: a second flock on the same file from a child would wait for its own parent. The checks that
-        // ask for it take turns on a companion lock (`<file>.under`) instead, across processes, under the same lock.waitMs.
-        const file = heldAbove(lock.file) ? `${lock.file}.under` : lock.file;
         const result = await runProcess({ command: flockCommand(file, lock.waitMs, argv), cwd: workspace, env: passEnv, timeoutMs, signal,
           maxOutputBytes: 1024 * 1024, waitReady: true });
         if (result.readyMs === null || result.readyMs === undefined) {
