@@ -772,7 +772,13 @@ Sortie : `0` tous les seuils atteints, toutes les mesures valides et aucun refus
 apv status [--repo <chemin>] [--json]
 ```
 
-Résumé de l'état du projet : fichier de configuration (et format V2 le cas échéant), contrôles déclarés, registre des décisions (nombre de décisions et empreinte, ou nombre d'erreurs), specs de `.apv/specs/` (titre ou erreur de lecture), fichiers d'état de `.apv/state/` (taille et date), une ligne par exécution en cours (`apv run` : étape, tâches faites, en cours, en échec ; un état illisible est signalé), dernier relevé de `.apv/state/quota.log`. En JSON, `runs` liste les exécutions lues, terminées comprises, et `runsUnread` le nombre de fichiers d'état laissés de côté (50 fichiers et 16 Mio au plus, les plus récents d'abord). Les noms de fichiers, titres et erreurs affichés sont nettoyés (une ligne, sans séquence d'échappement ni caractère de contrôle). La commande ne modifie rien et sort toujours avec `0`, sauf appel incorrect.
+Résumé de l'état du projet : fichier de configuration (et format V2 le cas échéant), contrôles déclarés, registre des décisions (nombre de décisions et empreinte, ou nombre d'erreurs), specs de `.apv/specs/` (titre ou erreur de lecture), fichiers d'état de `.apv/state/` (taille et date), une ligne par exécution en cours (`apv run` : étape, tâches faites, en cours, en échec ; un état illisible est signalé), dernier relevé de `.apv/state/quota.log`. **Plugin** (`plugin` en JSON) :
+- le plugin `apv@…` tel que Claude Code l'a installé (`<CLAUDE_CONFIG_DIR ou ~/.claude>/plugins/installed_plugins.json`, `enabledPlugins` du compte puis du projet), avec sa version et son commit, face à ceux de l'outil lancé ;
+- « ATTENTION » quand un projet sous APV n'a pas de plugin installé ou l'a désactivé, avec la commande d'installation ou d'activation ;
+- les règles de fusion que l'outil applique et que le plugin installé ne connaît pas (catalogue `docs/merge-rules.json` de chacun, lu au commit d'installation, sinon par la version qui les apporte), avec ce qu'elles exigent et la commande de mise à jour ;
+- « Mise à jour à venir » : les règles qu'ajoute la branche suivie par la copie de l'outil, telle que récupérée (`git fetch`), pour réunir ce qu'elles exigent avant de mettre à jour l'outil et le plugin ensemble. Lancé depuis la copie installée, l'outil lit la prochaine version dans le dossier de la marketplace locale.
+
+En JSON, `runs` liste les exécutions lues, terminées comprises, et `runsUnread` le nombre de fichiers d'état laissés de côté (50 fichiers et 16 Mio au plus, les plus récents d'abord). Les noms de fichiers, titres et erreurs affichés sont nettoyés (une ligne, sans séquence d'échappement ni caractère de contrôle). La commande ne modifie rien et sort toujours avec `0`, sauf appel incorrect.
 
 ## `apv help`
 

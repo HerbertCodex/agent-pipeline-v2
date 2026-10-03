@@ -1,0 +1,84 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { compareVersions, newRules, pluginLines, pluginStatus } from '../dist/rules/plugin-status.js';
+
+/**
+ * apv status and the plugin (projet pilote, 3 octobre 2026): a project under APV without its plugin, and a version of
+ * the tool whose merge rules the installed plugin cannot satisfy, are said before they block, with the commands to run.
+ */
+
+const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+const catalog = ids => JSON.stringify({ needs: { plugin: 'le plugin actif', cle: 'la clé' },
+  rules: ids.map(id => ({ id, since: id === 'nouvelle' ? '3.0.0-alpha.13' : '3.0.0-alpha.12', needs: id === 'nouvelle' ? ['plugin', 'cle'] : [], summary: id })) });
+
+function setup(t) {
+  const root = mkdtempSync(join(tmpdir(), 'apv3-plugin-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  // The tool: a checkout whose second commit adds a merge rule, pushed to its upstream.
+  const origin = join(root, 'outil.git'); git(root, 'init', '-q', '--bare', '-b', 'apv3', origin);
+  const tool = join(root, 'outil'); git(root, 'clone', '-q', origin, tool); git(tool, 'switch', '-q', '-c', 'apv3');
+  mkdirSync(join(tool, 'docs'));
+  writeFileSync(join(tool, 'package.json'), '{"version":"3.0.0-alpha.12"}');
+  writeFileSync(join(tool, 'docs', 'merge-rules.json'), catalog(['preuve', 'relecture']));
+  git(tool, 'add', '-A'); git(tool, 'commit', '-qm', 'v12'); const old = git(tool, 'rev-parse', 'HEAD');
+  writeFileSync(join(tool, 'docs', 'merge-rules.json'), catalog(['preuve', 'relecture', 'nouvelle']));
+  writeFileSync(join(tool, 'package.json'), '{"version":"3.0.0-alpha.13"}');
+  git(tool, 'commit', '-qam', 'v13'); const next = git(tool, 'rev-parse', 'HEAD');
+  git(tool, 'push', '-q', '-u', 'origin', 'apv3');
+  const project = join(root, 'projet'); mkdirSync(join(project, '.apv'), { recursive: true });
+  const claude = join(root, 'claude'); mkdirSync(join(claude, 'plugins'), { recursive: true });
+  const install = (sha, { enabled = true, installPath = join(root, 'cache') } = {}) => {
+    writeFileSync(join(claude, 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'apv@herbertcodex-apv': [{ scope: 'user', installPath, version: '3.0.0-alpha.12', gitCommitSha: sha }] } }));
+    writeFileSync(join(claude, 'settings.json'), JSON.stringify({ enabledPlugins: { 'apv@herbertcodex-apv': enabled } }));
+  };
+  return { root, tool, old, next, project, claude, install, env: { CLAUDE_CONFIG_DIR: claude } };
+}
+
+test('a project under APV without its plugin, or with the plugin turned off, is said with the command to run', t => {
+  const s = setup(t);
+  let lines = pluginLines(pluginStatus(s.project, s.env, s.tool));
+  assert.match(lines[0], /ATTENTION : aucun plugin APV installé.*claude plugin install apv@herbertcodex-apv/);
+  s.install(s.next, { enabled: false });
+  lines = pluginLines(pluginStatus(s.project, s.env, s.tool));
+  assert.match(lines[0], /installé mais désactivé.*claude plugin enable apv@herbertcodex-apv/);
+  // Turned on by the settings of the project: enabled.
+  mkdirSync(join(s.project, '.claude')); writeFileSync(join(s.project, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'apv@herbertcodex-apv': true } }));
+  assert.equal(pluginStatus(s.project, s.env, s.tool).install.enabled, true);
+});
+
+test('merge rules the installed plugin does not know are said, with what they need and the update command', t => {
+  const s = setup(t);
+  // The plugin installed from the old commit (its copy without a catalog: read at its commit in the checkout).
+  s.install(s.old, { installPath: join(s.root, 'absent') });
+  const status = pluginStatus(s.project, s.env, s.tool);
+  assert.deepEqual(status.unknownToPlugin.map(r => r.id), ['nouvelle']);
+  const lines = pluginLines(status);
+  assert.match(lines.join('\n'), /ne connaît pas : nouvelle \(exige : le plugin actif ; la clé\).*claude plugin update apv@herbertcodex-apv/);
+  // Up to date: nothing to say.
+  s.install(s.next, { installPath: join(s.root, 'absent') });
+  assert.deepEqual(pluginStatus(s.project, s.env, s.tool).unknownToPlugin, []);
+});
+
+test('the rules of the next version (upstream branch as fetched) are said before the update', t => {
+  const s = setup(t);
+  git(s.tool, 'reset', '-q', '--hard', s.old);
+  s.install(s.old, { installPath: join(s.root, 'absent') });
+  const status = pluginStatus(s.project, s.env, s.tool);
+  assert.equal(status.upcoming.ref, 'origin/apv3');
+  assert.equal(status.upcoming.behind, 1);
+  assert.deepEqual(status.upcoming.rules.map(r => r.id), ['nouvelle']);
+  assert.match(pluginLines(status).join('\n'), /Mise à jour à venir \(origin\/apv3, 1 commit\(s\)\) : nouvelles règles de fusion nouvelle \(exige/);
+});
+
+test('versions compare with their tags; without a catalog, rules count by the version they come with', () => {
+  assert.ok(compareVersions('3.0.0-alpha.13', '3.0.0-alpha.12') > 0);
+  assert.ok(compareVersions('3.0.0', '3.0.0-alpha.12') > 0);
+  assert.equal(compareVersions('3.0.0-alpha.12', '3.0.0-alpha.12'), 0);
+  const next = { needs: {}, rules: [{ id: 'a', since: '3.0.0-alpha.12', needs: [], summary: '' }, { id: 'b', since: '3.0.0-alpha.13', needs: [], summary: '' }] };
+  assert.deepEqual(newRules(next, null, '3.0.0-alpha.12').map(r => r.id), ['b']);
+  assert.deepEqual(newRules(next, { needs: {}, rules: [next.rules[0]] }, null).map(r => r.id), ['b']);
+});
