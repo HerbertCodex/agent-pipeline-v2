@@ -41,15 +41,19 @@ export interface PluginStatus {
     /** Merge rules the running tool applies that the installed plugin does not know (its hooks may not satisfy them). */
     unknownToPlugin: CatalogRule[];
     /**
-     * The installed plugin is older than the running tool in what it runs (hooks, agents, skills): its commit differs and
-     * those files changed since, or it cannot be compared (installed from a commit this checkout does not have).
+     * The installed plugin is not at the level of the running tool in what it runs (hooks, agents, skills, workflows, the
+     * manifest, the compiled tool): older (`changed`), newer (`ahead`), from another branch (`diverged`), or not comparable
+     * (`unknown`: installed from a commit this checkout does not have, or naming none).
      */
-    pluginBehind: 'changed' | 'unknown' | null;
-    /** Merge rules of the next version of the tool (the upstream branch of its checkout, as last fetched), not in this one. */
+    pluginBehind: 'changed' | 'unknown' | 'ahead' | 'diverged' | null;
+    /**
+     * Merge rules of the next version of the tool (the upstream branch of its checkout, as last fetched), not in this one;
+     * `rules` is null when the catalog of that version could not be read (a partial clone that never fetched it).
+     */
     upcoming: {
         ref: string;
         behind: number;
-        rules: CatalogRule[];
+        rules: CatalogRule[] | null;
     } | null;
     needs: Record<string, string>;
 }

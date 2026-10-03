@@ -3,9 +3,9 @@
 // tests lives in a temporary folder, set in this process (setAnchorKeyFile) and given to spawned hooks (APV_ANCHOR_KEY_FILE).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { constants as osConstants, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { appendJournal, journalEntry, readAnchorKey, setAnchorKeyFile, sign } from '../../dist/rules/operator.js';
 
@@ -17,6 +17,12 @@ export const RULES = ['preuve', 'instable', 'relecture', 'captures', 'controles'
 /** The anchor key of the tests of this file (one process per test file). */
 export const TEST_KEY_FILE = join(mkdtempSync(join(tmpdir(), 'apv3-cle-')), 'cle-ancrage');
 writeFileSync(TEST_KEY_FILE, `${randomBytes(32).toString('hex')}\n`, { mode: 0o400 });
+// Removed with its folder when the test process ends, normally or stopped by SIGINT, SIGTERM or SIGHUP (Ctrl-C, the
+// runner's timeout): the process then ends with the code of that signal, whatever other listener it has. SIGKILL
+// cannot be caught: the key stays in the temporary folder of the system.
+const removeKey = () => { try { rmSync(dirname(TEST_KEY_FILE), { recursive: true, force: true }); } catch { /* already gone */ } };
+process.on('exit', removeKey);
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => { removeKey(); process.exit(128 + osConstants.signals[signal]); });
 setAnchorKeyFile(TEST_KEY_FILE);
 export const TEST_KEY = readAnchorKey(TEST_KEY_FILE);
 

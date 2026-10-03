@@ -6,7 +6,8 @@
 // through a symlinked node_modules, docker or supabase commands on a declared test stack without its lock.
 // This is a guard rail against mistakes, not a security boundary: a determined command can
 // always be written in a shape this parser does not recognise.
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { accessSync, constants as fsConstants, existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DOMAIN_REVIEWERS, agentName, flatten, isMainModule, namesAnchor, readHookInput } from './lib.mjs';
@@ -79,6 +80,12 @@ function skipSubstitution(s, i) {
 }
 
 /**
+ * A `$` or a backquote the shell takes literally (between apostrophes, or escaped) becomes a private character in the
+ * words, so that no rule reads a substitution or a variable there (`git commit -m 'cite `git push`'`, `echo '$(x)'`).
+ */
+const literal = text => text.replace(/\$/g, '').replace(/`/g, '');
+
+/**
  * Splits a shell command into simple commands (arrays of words) with quotes removed, and
  * returns a "shadow" copy where quoted text and heredoc bodies are blanked out, so that
  * redirections can be searched without matching text inside strings.
@@ -94,7 +101,9 @@ export function tokenize(command) {
   const heredocOwners = [];
   /** The texts fed to each simple command on its standard input (heredoc bodies, here-strings), by index: a shell runs them. */
   const scripts = {};
-  const feed = (owner, text) => { (scripts[owner] ??= []).push(text); };
+  /** The operator right after each simple command, by index (`&&`, `;`, `|`…); none when a heredoc body or the end follows. */
+  const after = {};
+  const feed =(owner, text) => { (scripts[owner] ??= []).push(text); };
   let pendingOwners = [];
   let hereString = false;
   const flushWord = () => {
@@ -126,7 +135,7 @@ export function tokenize(command) {
       continue;
     }
     if (c === '\\' && i + 1 < command.length) {
-      word += command[i + 1];
+      word += literal(command[i + 1]);
       inWord = true;
       blank(i, i + 2);
       i += 2;
@@ -135,7 +144,7 @@ export function tokenize(command) {
     if (c === "'") {
       const end = command.indexOf("'", i + 1);
       const stop = end === -1 ? command.length : end;
-      word += command.slice(i + 1, stop);
+      word += literal(command.slice(i + 1, stop));
       inWord = true;
       blank(i, stop + 1);
       i = stop + 1;
@@ -145,7 +154,7 @@ export function tokenize(command) {
       let j = i + 1;
       while (j < command.length && command[j] !== '"') {
         if (command[j] === '\\' && j + 1 < command.length && '"\\$`'.includes(command[j + 1])) {
-          word += command[j + 1];
+          word += literal(command[j + 1]);
           j += 2;
         } else if (command.startsWith('$(', j)) {
           const next = skipSubstitution(command, j + 2);
@@ -186,7 +195,9 @@ export function tokenize(command) {
     }
     const operator = OPERATORS.find(op => command.startsWith(op, i));
     if (operator) {
+      const before = segments.length;
       flushSegment();
+      if (segments.length > before) after[segments.length - 1] = operator;
       shadow += operator;
       i += operator.length;
       continue;
@@ -203,7 +214,7 @@ export function tokenize(command) {
     i += 1;
   }
   flushSegment();
-  return { segments, shadow, heredocOwners, scripts };
+  return { segments, shadow, heredocOwners, scripts, after };
 }
 
 /**
@@ -455,11 +466,42 @@ export function mayBeStore(path) {
   return false;
 }
 
+/**
+ * Whether a glob in a store may reach a store of the anchor (operator, reviews, merges): the folder after `apv` is one of
+ * them, a glob that may match one, or the glob itself. `.git/apv/receipts/*.json` cannot.
+ */
+export function mayReachAnchor(path) {
+  const parts = String(path).split('/').filter(Boolean);
+  for (let k = 0; k + 1 < parts.length; k += 1) {
+    const gitDir = GLOB.test(parts[k]) ? globMayMatch(parts[k], '.git', false) : parts[k].endsWith('.git');
+    if (!gitDir || !(GLOB.test(parts[k + 1]) ? globMayMatch(parts[k + 1], 'apv') : parts[k + 1] === 'apv')) continue;
+    // A glob segment that may be `..` (`.?`, `..*`; sh and bash before 5.2 match it) climbs back to the anchor. Only a
+    // segment that starts with a dot (or a bracket) may: `*` never matches a name that starts with one.
+    if (parts.slice(k + 2).some(p => GLOB.test(p) && /^[.[]/.test(p) && globMayMatch(p, '..'))) return true;
+    const next = parts[k + 2];
+    if (next === undefined || ['operator', 'reviews', 'merges'].some(n => (GLOB.test(next) ? globMayMatch(next, n) : next === n))) return true;
+  }
+  return false;
+}
+
+/** Commands that only read what a glob names: they may glob a store outside the anchor (the receipts of the checks). */
+/**
+ * Not `rg` (`--pre` runs a program on each file) nor `tree` (`-o` writes a file); no pager either (`less` and `more` run
+ * LESSOPEN or an editor, `bat` its pager and preprocessors): `cat` reads the same.
+ */
+const GLOB_READERS = new Set(['cat', 'head', 'tail', 'ls', 'jq', 'wc', 'grep', 'egrep', 'fgrep', 'diff', 'cmp', 'stat', 'file',
+  'sha256sum', 'sha1sum', 'md5sum', 'du', 'zcat']);
+/** Commands that only read or print what they are given: the only ones that may be handed a path in a store. */
+const READS_ONLY = new Set([...GLOB_READERS, 'rg', 'tree', 'echo', 'printf', 'test', '[', 'realpath', 'readlink', 'basename', 'dirname', 'apv',
+  // dd writes only by `of=`, read by OUTPUT_OPTIONS.
+  'dd']);
 /** Commands that delete, move, empty or copy away what they are given: handed a store, they reach it. */
 const STORE_WRITERS = new Set(['rm', 'unlink', 'rmdir', 'shred', 'truncate', 'mv', 'cp', 'rsync', 'tar', 'zip', 'ln', 'chmod', 'chown', 'chgrp', 'install', 'setfacl', 'chattr',
   'tee', 'trash', 'trash-put', 'rmtrash', 'gio', 'sponge', 'gzip', 'gunzip', 'bzip2', 'xz', 'zstd']);
 /** Options that name the file a command writes (`sort -o f`, `curl -o f`, `curl -so f`, `wget -qO f`, `dd of=f`), by command. */
-const OUTPUT_OPTIONS = { sort: ['-o', '--output'], curl: ['-o', '--output'], wget: ['-O', '--output-document'], dd: ['of'] };
+const OUTPUT_OPTIONS = { sort: ['-o', '--output'], curl: ['-o', '--output'], wget: ['-O', '--output-document'], dd: ['of'], tree: ['-o'] };
+/** Options with which ripgrep runs a program of its own choosing (on each file searched, or to name the host). */
+const RG_RUNS = /^--(?:pre|pre-glob|hostname-bin)(?:=|$)/;
 const outputsOf = (tool, args) => {
   const names = OUTPUT_OPTIONS[tool] ?? [];
   const out = [];
@@ -481,7 +523,61 @@ const outputsOf = (tool, args) => {
  * `ruby -e`, `php -r`) or on their standard input (`python3 - <<EOF`), and awk.
  */
 const AWKS = new Set(['awk', 'gawk', 'mawk', 'nawk']);
-const inlineScript = (tool, args) => AWKS.has(tool) || (INTERPRETERS.has(tool) && args.some(a => /^-[a-zA-Z]*[ceEpr][a-zA-Z]*$/.test(a) || /^--(?:eval|print|exec)(?:=|$)/.test(a) || a === 'eval' || a === '-'));
+/** By interpreter: the letters that give a script on the command line, and the options whose value follows them. */
+const SCRIPT_OPTIONS = {
+  python: { script: 'c', valued: 'WXQm' }, node: { script: 'ep', valued: 'r' }, perl: { script: 'eE', valued: 'MImxdlC0' },
+  ruby: { script: 'e', valued: 'rIECFKTx' }, php: { script: 'r', valued: 'dcfz' }, other: { script: 'e', valued: '' },
+};
+const scriptOptions = tool => SCRIPT_OPTIONS[/^python/.test(tool) ? 'python' : /^node/.test(tool) ? 'node' : ['perl', 'ruby', 'php'].includes(tool) ? tool : 'other'];
+/**
+ * The parts of an interpreter's command line: the script texts it is given (`-c`, `-e`, `-pe`, `--eval=`, attached or in
+ * the next word; the program of awk), and its operands (the files or values the script works on). A group of short
+ * options gives a script only when its last letter is the script letter and no letter before it takes a value
+ * (`-rfileutils`, `-Werror`, `-Mstrict` give none); a word that starts with `-` is never a script.
+ */
+function interpreterParts(tool, args) {
+  const scripts = []; const operands = [];
+  const awk = AWKS.has(tool);
+  const { script, valued } = awk ? { script: '', valued: 'vFfi' } : scriptOptions(tool);
+  let program = null;
+  for (let k = 0; k < args.length; k += 1) {
+    const a = args[k];
+    if (a === '--') { operands.push(...args.slice(k + 1)); break; }
+    const long = /^--(?:eval|print|exec)(?:=(.*))?$/.exec(a);
+    if (long) { const v = long[1] ?? args[(k += 1)]; if (v !== undefined) scripts.push(v); continue; }
+    if (a === 'eval' && !scripts.length && !operands.length) { scripts.push(...args.slice(k + 1)); break; }
+    const group = /^-([A-Za-z0-9]+)$/.exec(a);
+    if (group && !a.startsWith('--')) {
+      const letters = group[1];
+      const at = [...letters].findIndex(l => valued.includes(l) || script.includes(l));
+      if (at === -1) continue;
+      const rest = letters.slice(at + 1);
+      if (script.includes(letters[at])) {
+        // The script letter: its value is the rest of the group, unless the rest is only more option letters (`-pe`),
+        // else the next word (never an option).
+        const flags = /^[a-zA-Z]+$/.test(rest) && [...rest].every(l => script.includes(l) || !valued.includes(l));
+        const v = rest && !flags ? rest : (args[k + 1] !== undefined && !args[k + 1].startsWith('-') ? args[(k += 1)] : undefined);
+        if (v !== undefined) scripts.push(v);
+      } else {
+        // A valued option, its value attached or the next word (`-v x=1`, `-F ,`, `-r lib`). For awk, a value of `-v`
+        // is code too (`awk -v p=.git/apv 'BEGIN{system(…)}'`), and `-i inplace` writes its operands.
+        const value = rest || args[(k += 1)];
+        if (awk && letters[at] === 'v' && value !== undefined) scripts.push(value);
+        if (awk && letters[at] === 'i' && value === 'inplace') scripts.push('inplace >');
+      }
+      if (awk && letters[at] === 'f') program = '';
+      continue;
+    }
+    // A script attached to its option (`python3 -c"…"`, `node -e'…'`): what follows the letter.
+    if (/^-[A-Za-z]/.test(a) && !a.startsWith('--') && script.includes(a[1])) { scripts.push(a.slice(2)); continue; }
+    if (a.startsWith('-')) continue;
+    if (awk && program === null) { program = a; scripts.push(a); continue; }
+    operands.push(a);
+  }
+  return { scripts, operands };
+}
+const inlineScript = (tool, args) => (AWKS.has(tool) || INTERPRETERS.has(tool)) && interpreterParts(tool, args).scripts.length > 0;
+const inlineTexts = (tool, args) => interpreterParts(tool, args).scripts;
 /** A value of a variable set by the line that may be a piece of a store path (`d=.git/ap`, `d=.gi`, `e=ap`); never `git` or `it`. */
 const storePiece = value => {
   const v = value.replace(/\/$/, '');
@@ -500,31 +596,109 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
   let dir = cwd;
   const at = (arg, base) => (isAbsolute(arg) || !base ? arg : resolve(base, arg));
   const lineWords = segments.flat();
+  // The folders the line works in: the working directory, then each literal cd target (`reached`). A Git directory among
+  // them (`.git`, or a bare `x.git`, the working directory included when it is one) makes a computed path suspect; a
+  // worktree inside a bare repository (`proj.git/feat`) is not one.
   const dirs = [cwd];
-  // Variables the line sets to a piece of a store path (`d=.git/ap`, `d=.gi`): a computed path that uses one of them
-  // by name may be the store. `.github`, `.gitignore` are no piece.
-  const pieceNames = lineWords.map(w => /^([A-Za-z_]\w*)=(.*)$/.exec(w)).filter(m => m && m[2] && storePiece(m[2])).map(m => m[1]);
-  // A computed path read after a cd into a Git directory (`cd .git && rm -rf "$x"`) may be the store too.
-  const inGitDir = () => dirs.some(d => d && /(?:^|\/)[^/]*\.git(?:\/|$)/.test(d));
+  const reached = cwd && /(?:^|\/)[^/]*\.git$/.test(cwd) ? [cwd] : [];
+  let cdComputed = false;
+  // The assignments of the line: the leading words of a simple command or of its wrappers (`d=.gi; …`, `GIT_TRACE=f git
+  // status`, `env GIT_TRACE=f …`), and the words of export, declare, typeset, readonly, local; never an operand that only
+  // looks like one (`dd if=…`, `echo key=…`).
+  const EXPORTERS = new Set(['export', 'declare', 'typeset', 'readonly', 'local']);
+  const assignmentsOf = words => {
+    if (EXPORTERS.has(basename(words[0] ?? ''))) return words.slice(1).filter(isAssignment);
+    const out = []; for (const w of words) { if (!isAssignment(w)) break; out.push(w); }
+    return [...out, ...(commandWords(words)?.assignments ?? []).filter(w => !out.includes(w))];
+  };
+  const assignments = segments.flatMap(words => assignmentsOf(words).map(w => ({ words, w })));
+  // A variable set alone (`x=…;`) reaches the commands of the line when it is exported (`export x`, `set -a`) or is one
+  // of git's own (`GIT_TRACE=…; git status`).
+  const exported = name => /^GIT_/.test(name) || /(?:^|[\s;&|(])set\s+(?:-[A-Za-z]*a|-o\s+allexport)/.test(String(command)) ||
+    segments.some(s => EXPORTERS.has(basename(s[0] ?? '')) && s.slice(1).includes(name));
+  // Variables the line sets to a piece of a store path (`d=.git/ap`, `d=.gi`), or to a value built on such a variable
+  // (`e=${d}t`): a computed path that uses one of them by name may be the store. `.github`, `.gitignore` are no piece.
+  const pieceNames = [];
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const { w } of assignments) {
+      const [, n, v] = /^([A-Za-z_]\w*)=(.*)$/.exec(w);
+      if (pieceNames.includes(n) || !v) continue;
+      if (storePiece(v) || pieceNames.some(p => new RegExp(`\\$\\{?${p}\\b`).test(v))) { pieceNames.push(n); changed = true; }
+    }
+  }
+  // A computed path read after a cd into a Git directory (`cd .git && rm -rf "$x"`, `cd .. ` into `proj.git`) may be the store too.
+  const inGitDir = () => reached.some(d => /(?:^|\/)[^/]*\.git$/.test(d) || /(?:^|\/)\.git\//.test(d));
   const computedStore = arg => /[$`]/.test(arg) && (/\/apv\/?$/.test(arg) || /\.git?(?![A-Za-z])|(?:^|\/)apv?(?:\/|$)/.test(arg.replace(/\$\{?\w+\}?/g, '')) ||
     pieceNames.some(n => new RegExp(`\\$\\{?${n}\\b`).test(arg)) || inGitDir());
-  // A variable set to a path in a store (`GIT_TRACE=.git/apv/receipts/x git status`): written by the command.
-  for (const w of lineWords) { const m = /^[A-Za-z_]\w*=(.+)$/.exec(w); if (m && (mayBeStore(at(m[1], dir)) || mayBeStore(m[1]))) return REASONS.anchorStore; }
+  // A variable set to a path in a store (`GIT_TRACE=.git/apv/receipts/x git status`, `export GIT_TRACE=…; git status`):
+  // written by a command of the line. Set alone and kept local (`f=.git/apv/x; jq . "$f"`), it only names a path.
+  for (const { words, w } of assignments) {
+    const name = w.slice(0, w.indexOf('='));
+    const alone = !EXPORTERS.has(basename(words[0] ?? '')) && assignmentsOf(words).length === words.length;
+    if (alone && !exported(name)) continue;
+    const value = w.slice(w.indexOf('=') + 1);
+    if (mayBeStore(at(value, dir)) || mayBeStore(value) || computedStore(value)) return REASONS.anchorStore;
+  }
+  // What an interpreter reads on its standard input: its own heredoc or here-string, or the line piped into it.
+  const pipedInto = tool => new RegExp(`\\|\\s*(?:\\S*/)?${tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(String(shadow ?? command));
+  const fed = Object.values(scripts).flat().join('\n');
+  // Whether a command of the line may write what a glob names: a writer, an editor, an in-place edit, a loop, `set --`,
+  // xargs, or find that deletes or runs.
+  const EDITING = new Set(['for', 'set', 'ed', 'ex', 'vi', 'vim', 'nvim', 'nano', 'emacs', 'xargs', 'parallel']);
+  const lineWrites = segments.some(s => {
+    const c = commandWords(s)?.words ?? s;
+    const t = basename(c[0] ?? '');
+    if (STORE_WRITERS.has(t) || EDITING.has(t)) return true;
+    if (t === 'find') return c.some(a => a === '-delete' || a.startsWith('-exec') || a.startsWith('-ok'));
+    if (['sed', 'gsed', 'perl', 'ruby'].includes(t)) return c.some(a => /^-[A-Za-z]*i/.test(a));
+    if (AWKS.has(t)) return c.some(a => a === 'inplace' || /^--include=inplace$/.test(a)) || interpreterParts(t, c.slice(1)).scripts.some(x => />|system/.test(x));
+    return false;
+  });
   for (const [index, words] of segments.entries()) {
     const moved = cdTarget(words, dir, home);
-    if (moved !== undefined) { if (moved !== null) { dir = moved; dirs.push(moved); } continue; }
+    if (moved !== undefined) {
+      if (moved !== null) { dir = moved; dirs.push(moved); reached.push(moved); } else cdComputed = true;
+      continue;
+    }
     let cw = commandWords(words)?.words ?? words;
     // busybox rm, toybox mv: the applet is the command.
     if (['busybox', 'toybox'].includes(basename(cw[0] ?? '')) && cw.length > 1) cw = cw.slice(1);
     const tool = basename(cw[0] ?? '');
     const args = cw.slice(1).filter(a => !a.startsWith('-'));
     // A glob that may reach into a store, whatever reads it.
-    for (const arg of args) if (GLOB.test(arg) && mayBeStore(dirname(at(arg, dir)))) return REASONS.anchorStore;
-    // The file a command writes by an option (`sort -o`, `curl -o`, `wget -O`, `dd of=`).
+    // A glob that may reach into a store: refused, except for one reading command alone on its line, without redirection,
+    // that cannot reach a store of the anchor (`cat .git/apv/receipts/*.json`). Paths are normalized first (`..`, `.`).
+    // A command is known by its name only as the command of the system: written without a folder (or from /bin,
+    // /usr/bin), and not defined on the line as a function or an alias of that name.
+    const systemTool = (!/\//.test(cw[0] ?? '') || /^\/(?:usr\/)?(?:local\/)?bin\/[^/]+$/.test(cw[0] ?? ''))
+      && !new RegExp(`(?:^|[\\s;&|(])(?:function\\s+)?${tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(\\s*\\)|\\balias\\s+${tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=`).test(String(command));
+    const alone = segments.length === 1 && !/[<>]/.test(String(shadow ?? ''));
+    const reader = GLOB_READERS.has(tool) && systemTool && alone && !lineWrites;
+    for (const arg of args) {
+      const path = resolve(dir ?? '/', at(arg, dir));
+      if (GLOB.test(arg) && (mayBeStore(dirname(path)) || mayBeStore(dirname(at(arg, dir)))) && (!reader || mayReachAnchor(path))) return REASONS.anchorStore;
+      // A path that climbs (`..`) into a store of the anchor names it once normalized.
+      if (/(?:^|\/)\.\.(?:\/|$)/.test(arg) && /\.git\/apv\/(?:operator|reviews|merges)(?:\/|$)/.test(path)) return REASONS.anchorStore;
+    }
+    // ripgrep that runs a program on what it searches (`rg --pre rm '' .git/apv`): that program may write anywhere it
+    // walks, the stores included, without naming them. Never needed to read the receipts: refused.
+    if (tool === 'rg' && cw.slice(1).some(a => RG_RUNS.test(a))) return REASONS.anchorStore;
+    // The file a command writes by an option (`sort -o`, `curl -o`, `wget -O`, `dd of=`, `tree -o`).
     for (const path of outputsOf(tool, cw.slice(1))) if (mayBeStore(at(path, dir)) || mayBeStore(path) || computedStore(path)) return REASONS.anchorStore;
-    // A script given on the command line that names the store folder (`python3 -c "shutil.rmtree('.git/apv')"`, awk);
-    // a script file only read (`python3 tools/inspect.py .git/apv/receipts`) is not refused here.
-    if (inlineScript(tool, cw.slice(1)) && /\.git\W{1,4}apv\b/.test(flatten([...cw, ...(scripts[index] ?? [])].join(' ')))) return REASONS.anchorStore;
+    // An interpreter given a script on its command line, whatever its options (`perl -MFile::Path -le`, `ruby -x -e`,
+    // `awk -- '…'`): refused when anything of its command line names the store folder or an operand may lie in it. Only a
+    // script file it runs (`python3 tools/inspect.py .git/apv/receipts`) is not judged here.
+    if (INTERPRETERS.has(tool) || AWKS.has(tool)) {
+      const { scripts: texts, operands } = interpreterParts(tool, cw.slice(1));
+      const inline = AWKS.has(tool) || texts.length > 0 || cw.slice(1).some(a => /^-[a-zA-Z0-9]*[ceEpr]/.test(a) || /^--(?:eval|print|exec)/.test(a));
+      if (inline && /\.git\W{1,4}apv\b/.test(flatten([...cw.slice(1), ...(scripts[index] ?? [])].join(' ')))) return REASONS.anchorStore;
+      if (inline && cw.slice(1).some(o => !o.startsWith('-') && (mayBeStore(at(o, dir)) || mayBeStore(o) || computedStore(o)))) return REASONS.anchorStore;
+      // Without a script file, it runs what it reads on its standard input: its own heredoc or here-string, or a pipe.
+      const stdinScript = !texts.length && (cw.slice(1).includes('-') || !operands.length);
+      const input = [...(scripts[index] ?? []), ...(pipedInto(tool) ? [fed] : [])].join('\n');
+      if (stdinScript && /\.git\W{1,4}apv\b/.test(flatten(input))) return REASONS.anchorStore;
+    }
     const fedByLine = words.slice(0, words.length - cw.length).some(w => ['xargs', 'parallel'].includes(basename(w))) || tool === 'xargs';
     const inPlace = ['sed', 'gsed', 'perl'].includes(tool) && cw.some(a => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place'));
     if (tool === 'find') {
@@ -535,21 +709,59 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
       if (starts.some(s => mayBeStore(at(s, dir)) || mayBeStore(`${at(s, dir)}/apv`)) || names.some(n => globMayMatch(n.split('/').pop() ?? n, 'apv') || /apv/.test(n))) return REASONS.anchorStore;
       continue;
     }
-    if (!STORE_WRITERS.has(tool) && !inPlace) continue;
-    for (const arg of fedByLine ? [...args, ...lineWords] : args) {
+    // Any command handed a store is taken for a writer, except the ones known to only read: a program unknown to the
+    // guard may write its operands (`python3 -m json.tool forged.json .git/apv/receipts/r.json`, `deno run x.ts …`).
+    // A bare assignment (`f=.git/apv/receipts/r.json`) runs nothing.
+    if (!cw.length || /^[A-Za-z_]\w*=/.test(cw[0])) continue;
+    const writer = STORE_WRITERS.has(tool) || inPlace;
+    // ripgrep reads its options from the file RIPGREP_CONFIG_PATH names (`--pre=rm` written there earlier): set on the
+    // line or in the environment, rg may run any program on what it walks.
+    // Set, not cited: an assignment, `export`/`declare`/`read`… of it, or `printf -v` (`echo RIPGREP_CONFIG_PATH` is text).
+    // Read with quotes and backslashes removed (`export RIPGREP_CONF''IG_PATH=…`).
+    const text = flatten(String(command));
+    const rgConfig = /\bRIPGREP_CONFIG_PATH=/.test(text) || /\b(?:export|declare|typeset|readonly|local|read)\b[^;&|\n]*\bRIPGREP_CONFIG_PATH\b/.test(text) ||
+      /\bprintf\s+-v\s*RIPGREP_CONFIG_PATH\b/.test(text) || Boolean(process.env.RIPGREP_CONFIG_PATH);
+    if (tool === 'rg' && rgConfig) return REASONS.anchorStore;
+    // A recursive read handed the Git directory or the store folder walks into the stores of the anchor
+    // (`grep -r . .git/apv`, `rg '' .git`, `diff -r .git/apv x`, `zcat -rf .git/apv`) without naming them. The pattern
+    // searched, the first operand of grep or rg when no `-e` or `-f` gives it, is no path (`grep -rn ".git" src`).
+    const opts = cw.slice(1);
+    const greps = ['grep', 'egrep', 'fgrep'].includes(tool);
+    const recursive = tool === 'rg'
+      || (greps && opts.some((a, k) => /^-[a-zA-Z]*[rR]/.test(a) || /^--(?:recursive|dereference-recursive|directories=recurse)$/.test(a) || /^-[a-zA-Z]*drecurse$/.test(a)
+        || ((a === '--directories' || /^-[a-zA-Z]*d$/.test(a)) && opts[k + 1] === 'recurse')))
+      || (['diff', 'zcat', 'gzip', 'gunzip'].includes(tool) && opts.some(a => /^-[a-zA-Z]*r/.test(a) || a === '--recursive'));
+    const patternGiven = opts.some(a => /^-[a-zA-Z]*[ef]/.test(a) || /^--(?:regexp|file)(?:=|$)/.test(a));
+    const searched = (greps || tool === 'rg') && !patternGiven ? args.slice(1) : args;
+    if (recursive && searched.some(a => { const p = resolve(dir ?? '/', at(a, dir)); return mayReachAnchor(join(p, 'apv', 'operator')) || mayReachAnchor(join(p, 'operator')); })) return REASONS.anchorStore;
+    if (!writer && READS_ONLY.has(tool) && systemTool) continue;
+    // What another program reads on its standard input (`python3 x.py - < .git/apv/receipts/r.json`, `<f`) is not
+    // handed to it.
+    const plainArgs = writer ? args : cw.slice(1).filter((a, k, all) => !a.startsWith('-') && !/^\d*</.test(a) && !/^\d*<$/.test(all[k - 1] ?? ''));
+    // A value given with its option (`--out=<path>`, `-C<path>`) is a path the program receives, like an operand.
+    const optionValues = cw.slice(1).flatMap(a => {
+      const m = /^--[\w-]+=(.+)$/.exec(a) ?? (a.startsWith('--') ? null : /^-[A-Za-z](.+)$/.exec(a));
+      return m ? [m[1]] : [];
+    });
+    const handed = [...plainArgs, ...optionValues];
+    for (const arg of fedByLine ? [...handed, ...lineWords] : handed) {
       // A computed path that ends in apv, holds a piece of a store path, or uses a variable the line set to one
       // (`$d/apv`, `d=.git/ap; rm -rf ${d}v`, `d=.gi; e=ap; rm -rf ${d}t/${e}v`): it may be the store.
       if (computedStore(arg)) return REASONS.anchorStore;
       if (mayBeStore(at(arg, dir)) || mayBeStore(arg)) return REASONS.anchorStore;
+      // After a cd the guard cannot follow (`G=.git; cd "$G"`), a relative path that may name the store is one.
+      if (cdComputed && !isAbsolute(arg) && globMayMatch(arg.replace(/^\.\//, '').split('/')[0], 'apv')) return REASONS.anchorStore;
     }
     // An unquoted substitution followed by `/apv` is split from its command by the tokenizer: read in the line.
     for (const m of String(command).matchAll(/[)`]\/+([^\s/;&|'"<>()]+)/g)) if (globMayMatch(m[1], 'apv')) return REASONS.anchorStore;
+    // A Git directory followed by a substitution (`rm -rf .git/$(echo apv)`): the rest of the path is computed.
+    if (/\.git\/+(?:\$\(|`)/.test(String(command))) return REASONS.anchorStore;
   }
   // A redirection into a store empties or replaces what is there, whatever the command (`: > …`, `exec 3> …`, `1<> …`,
   // `>& f`). The operator is read in the shadow of the line (quoted text blanked, same positions), so `grep -c '>' f` is
   // no redirection; its target is read in the line, quotes and backslashes removed (`.git/"apv"`, `a\pv`).
   if (shadow) {
-    for (const m of shadow.matchAll(/(?<![<>=&-])(?:\d+|&)?(?:<>|>{1,2}[|&]?)/g)) {
+    for (const m of shadow.matchAll(/(?<![<>&])(?:\d+|&)?(?:<>|>{1,2}[|&]?)/g)) {
       const rest = String(command).slice(m.index + m[0].length).trimStart();
       const raw = /^(?:"[^"]*"|'[^']*'|\\.|[^\s;&|<>()"'\\])+/.exec(rest)?.[0];
       const target = raw === undefined ? null : flatten(raw);
@@ -606,7 +818,7 @@ export function isForcePush(words) {
   let i = at + 1;
   const withValue = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env']);
   while (i < words.length && words[i].startsWith('-')) i += withValue.has(words[i]) ? 2 : 1;
-  if (words[i] !== 'push') return false;
+  if (words[i] !== 'push' && words[i] !== 'send-pack') return false;
   return words.slice(i + 1).some(arg =>
     arg === '--force' || arg === '--force-if-includes' || arg.startsWith('--force-with-lease') ||
     /^-[A-Za-z]*f[A-Za-z]*$/.test(arg) || (arg.startsWith('+') && arg.length > 1));
@@ -626,7 +838,9 @@ export function pushToDefault(words, defaults = ['main', 'master'], ...branch) {
   if (at === -1) return null;
   let i = at + 1;
   while (i < words.length && words[i].startsWith('-')) i += GIT_WITH_VALUE.has(words[i]) ? 2 : 1;
-  if (words[i] !== 'push') return null;
+  // `git send-pack <remote> <refs>` pushes as `git push` does; without refs, it updates the branches both sides have.
+  const sendPack = words[i] === 'send-pack';
+  if (words[i] !== 'push' && !sendPack) return null;
   const args = words.slice(i + 1);
   if (args.some(a => a === '--all' || a === '--mirror' || a === '--branches')) return defaults[0] ?? 'main';
   // Options followed by a separate value. `--signed`, `--force-with-lease` and `--recurse-submodules` take theirs only
@@ -638,16 +852,24 @@ export function pushToDefault(words, defaults = ['main', 'master'], ...branch) {
     plain.push(args[k]);
   }
   const specs = plain.slice(1);
-  const name = ref => ref.replace(/^\+/, '').replace(/^refs\/heads\//, '');
+  // `@` alone is HEAD for git.
+  const name = ref => { const n = ref.replace(/^\+/, '').replace(/^refs\/heads\//, ''); return n === '@' ? 'HEAD' : n; };
   // The branch of a folder the guard cannot follow (`undefined`): the push may go to the default branch.
   const head = current === undefined ? defaults[0] ?? 'main' : current;
+  if (!specs.length && sendPack) return defaults[0] ?? 'main';
   if (!specs.length) return head && defaults.includes(head) ? head : null;
   for (const spec of specs) {
+    // `:` alone pushes every branch that has a namesake on the remote, the default one included.
+    if (spec.replace(/^\+/, '') === ':') return defaults[0] ?? 'main';
     const [src, dst] = spec.includes(':') ? spec.split(':') : [spec, spec];
-    const target = name(dst === '' ? src : dst) === 'HEAD' ? head : name(dst === '' ? src : dst);
+    const raw = (dst === '' ? src : dst).replace(/^\+/, '');
+    const target = name(raw) === 'HEAD' ? head : name(raw);
     if (target && defaults.includes(target)) return target;
-    // A refspec pattern (`refs/heads/*:refs/heads/*`, `m*`) that may name the default branch.
-    if (target && GLOB.test(target)) { const hit = defaults.find(d => globMayMatch(target, d)); if (hit) return hit; }
+    // A destination git completes or a pattern (`heads/main`, `refs/*:refs/*`, `r*:r*`, `m*`) that may name the default
+    // branch, compared with its short and full names.
+    const names = d => [d, `heads/${d}`, `refs/heads/${d}`];
+    const hit = defaults.find(d => names(d).includes(raw) || (GLOB.test(raw) && names(d).some(n => globMayMatch(raw, n))));
+    if (hit) return hit;
   }
   return null;
 }
@@ -692,7 +914,7 @@ export function commandScope(command, segments, cwd = null, home = null, env = {
       dir = target;
       continue;
     }
-    if (['export', 'declare', 'typeset', 'readonly', 'local', 'set', 'unset'].includes(lead) && words.some(w => lineVariable(w.split('=')[0]))) return stop();
+    if (['export', 'declare', 'typeset', 'readonly', 'local', 'set', 'unset', 'read', 'printf', 'mapfile', 'readarray', 'getopts'].includes(lead) && words.some(w => lineVariable(w.split('=')[0]))) return stop();
     const cw = commandWords(words);
     if (!cw) continue;
     const prefix = words.slice(0, words.length - cw.words.length);
@@ -708,8 +930,10 @@ export function commandScope(command, segments, cwd = null, home = null, env = {
       const sub = w[k];
       const args = w.slice(k + 1);
       if (sub === 'config' || (sub === 'remote' && args.some(a => ['add', 'set-url', 'rename', 'set-branches'].includes(a)))) return stop();
+      // send-pack names its remote as an address or a path, with its own program: never a plain push.
+      if (sub === 'send-pack') return stop();
       if (sub === 'push') {
-        if (args.some(a => a === '--repo' || a.startsWith('--repo=') || a === '--receive-pack' || a.startsWith('--exec'))) return stop();
+        if (args.some(a => a === '--repo' || a.startsWith('--repo=') || a.startsWith('--receive-pack') || a.startsWith('--exec'))) return stop();
         const valued = new Set(['-o', '--push-option']);
         let remote;
         for (let j = 0; remote === undefined && j < args.length; j += 1) {
@@ -753,15 +977,51 @@ export function gitDirectory(cwords, dir, words = cwords, env = {}) {
     if (!option) { if (GIT_WITH_VALUE.has(cwords[k])) k += 1; continue; }
     const value = option[1] || cwords[(k += 1)];
     if (value === undefined || /[$`~]/.test(value) || (where === null && !isAbsolute(value))) return undefined;
-    const next = resolve(where ?? '/', value);
-    // `git -C <folder that is not there>` fails before pushing: nothing to judge there; keep the folder as it is.
-    where = next;
+    // `git -C <folder that is not there>` fails before pushing: judged on that folder, whose branch reads as none.
+    where = resolve(where ?? '/', value);
   }
   return where;
 }
 
+/**
+ * How a git command changes the branch checked out: null (it does not), `{ created }` (`checkout -b x`, `switch -c x`),
+ * or `{ unknown: true }` (any other switch, a checkout of a branch, `symbolic-ref HEAD …`). The global options of git
+ * (`-C .`, `-c a=b`) are skipped before the subcommand. `git checkout -- f`, `git checkout <commit> <paths>` (two
+ * operands or more: files taken from a commit), and a checkout of one path that exists in the folder and names no branch,
+ * tag or remote branch (`git checkout package-lock.json`, never `git checkout main` beside a folder `main`), change no
+ * branch.
+ */
+export function branchChange(cwords, dir = null) {
+  if (basename(cwords[0] ?? '') !== 'git') return null;
+  let k = 1;
+  while (k < cwords.length && cwords[k].startsWith('-')) k += GIT_WITH_VALUE.has(cwords[k]) ? 2 : 1;
+  const sub = cwords[k];
+  const rest = cwords.slice(k + 1);
+  if (sub === 'symbolic-ref') return rest.filter(a => !a.startsWith('-')).length > 1 ? { unknown: true } : null;
+  if (sub !== 'switch' && sub !== 'checkout') return null;
+  const create = rest.findIndex(a => ['-b', '-B', '-c', '-C', '--create', '--force-create', '--orphan'].includes(a));
+  if (create !== -1) return rest[create + 1] && !/[$`]/.test(rest[create + 1]) ? { created: rest[create + 1] } : { unknown: true };
+  if (sub === 'checkout' && rest.includes('--')) return null;
+  const operands = rest.filter(a => !a.startsWith('-'));
+  if (sub !== 'checkout' || operands.some(p => /[$`]/.test(p))) return { unknown: true };
+  if (operands.length >= 2) return null;
+  if (dir && operands.length === 1 && existsSync(resolve(dir, operands[0])) && !namesRef(dir, operands[0])) return null;
+  return { unknown: true };
+}
+
+/** Whether `name` is a revision git would check out in `dir` (branch, tag, commit) or a remote branch it would follow. */
+function namesRef(dir, name) {
+  const run = args => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 });
+  const rev = run(['rev-parse', '--verify', '--quiet', '--end-of-options', `${name}^{commit}`]);
+  if (rev.status === 0 || rev.error) return true;
+  const remote = run(['for-each-ref', '--count=1', '--format=%(refname)', `refs/remotes/*/${name}`]);
+  return remote.status !== 0 || Boolean(remote.stdout.trim());
+}
+
 /** Whether a path is a folder that exists. */
 const isDirectory = path => { try { return statSync(path).isDirectory(); } catch { return false; } };
+/** Whether a cd to this path succeeds: a folder that exists and can be entered (x permission). */
+const enterable = path => { try { accessSync(path, fsConstants.X_OK); return isDirectory(path); } catch { return false; } };
 
 /** The root of this plugin, as launched and with its links resolved: its files run only through apv and the hooks. */
 const PLUGIN_ROOTS = (() => {
@@ -981,7 +1241,7 @@ export function reviewRecordCall(command) {
     const args = apvArguments(words);
     if (!args) continue;
     const [name, sub] = positional(args);
-    if (name === 'review' && (sub === 'record' || args.includes('record'))) return { words, domain: optionValue(args, '--domain') ?? null, reviewer: optionValue(args, '--reviewer') ?? null };
+    if (name === 'review' && (sub === 'record' || args.includes('record'))) return { words, domain: optionValue(args, '--domain') ?? null, reviewer: optionValue(args, '--reviewer') ?? null, commit: optionValue(args, '--commit') ?? null };
   }
   return null;
 }
@@ -1069,15 +1329,17 @@ export function nestedScript(words) {
   if (!cw) return null;
   const w = cw.words;
   const tool = basename(w[0]);
+  // The script is run by its shell: what was literal here (between apostrophes) is shell text there again.
+  const script = text => (text === undefined ? null : text.replace(//g, '$').replace(//g, '`'));
   if (SHELLS.has(tool)) {
     const at = w.findIndex((x, k) => k > 0 && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(x));
-    return at !== -1 && w[at + 1] !== undefined ? w[at + 1] : null;
+    return at !== -1 ? script(w[at + 1]) : null;
   }
   if (tool === 'flock') {
     const at = w.findIndex((x, k) => k > 0 && (x === '-c' || x === '--command'));
-    return at !== -1 && w[at + 1] !== undefined ? w[at + 1] : null;
+    return at !== -1 ? script(w[at + 1]) : null;
   }
-  if (tool === 'eval') return w.slice(1).join(' ') || null;
+  if (tool === 'eval') return script(w.slice(1).join(' ')) || null;
   return null;
 }
 
@@ -1091,12 +1353,12 @@ export function evaluateCommand(command, env = {}, context = EMPTY_CONTEXT) {
   return evaluate(command, env, context, 0, { files: [], resources: [], stacks: [] });
 }
 
-function evaluate(command, env, context, depth, inherited, activeAbove = false) {
+function evaluate(command, env, context, depth, inherited, activeAbove = false, start = null) {
   if (typeof command !== 'string' || command.trim() === '') return { decision: 'allow' };
   if (anchorInCommand(command)) return { decision: 'deny', reason: REASONS.anchorStore };
   const flat = flatten(command);
   const mergeApi = mergeApiInCommand(command);
-  const { segments, shadow, scripts } = tokenize(command);
+  const { segments, shadow, scripts, after } = tokenize(command);
   // Where the tool is active (docs/PLUGIN.md, « Portée des crochets »), every rule; elsewhere, the rules that protect the
   // key and the stores of every project, and the ones that held before the rules. Relaxed only for a plain command
   // (commandScope) whose repository, folders and remotes are known to be outside the tool (context.apvProject); a merge
@@ -1117,7 +1379,8 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false) 
   if (active && /(^|[\s;&|(])eval\b/.test(flat) && /\bapv\b|cli\.js/.test(flat)) return { decision: 'deny', reason: REASONS.computedApv };
   if (/\bAPV_ENTRY\b|\bAPV_ANCHOR_KEY_FILE\b/.test(flat)) return { decision: 'deny', reason: REASONS.toolVariable };
   if (decodedAndUsed(command) || decodedAndUsed(flat)) return { decision: 'deny', reason: REASONS.encodedPath };
-  const store = storeProblem(segments, context.cwd ?? null, context.home ?? null, command, shadow, scripts);
+  // A script or substitution run by a command of the line is judged in the folder where that command runs.
+  const store = storeProblem(segments, start && start.known ? start.dir : context.cwd ?? null, context.home ?? null, command, shadow, scripts);
   if (store) return { decision: 'deny', reason: store };
   let writesGithub = false;
   const kill = killProblem(segments, context.ancestors);
@@ -1128,18 +1391,24 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false) 
   const stacks = /\b(docker|podman|supabase)\b/.test(command) ? context.stacks() : [];
   // The folder each simple command runs in (literal cd, git -C): its branch decides where a push without refspec goes.
   // A cd the guard cannot follow leaves it unknown (undefined): such a push counts as one to the default branch.
-  let dir = context.cwd ?? null; let dirKnown = true;
+  // A script or a substitution run by a command of the line starts where that command runs (`start` from the line above).
+  let dir = start ? start.dir : context.cwd ?? null; let dirKnown = start ? start.known : true; let branchSet = start ? start.branch : null;
+  // A branch the line created holds only along the chain of `&&` that follows its creation.
+  let created = false;
   for (const [index, words] of segments.entries()) {
-    // A cd to a folder that is not there fails and leaves the shell where it was (`cd nope || git push`, `cd /x; git push`):
-    // only a folder that exists is followed. `builtin cd`, a substitution as its target (cut out by the tokenizer, read as a
-    // bare cd) or a relative target with CDPATH set: unknown.
+    if (created && index > 0 && after[index - 1] !== '&&') { created = false; branchSet = null; dirKnown = false; }
+    // Only a cd to a folder that exists and can be entered is followed. One that fails leaves the shell where it was
+    // (`cd nope || git push`, `cd /root; git push`), and one to a folder the line itself creates (`git clone u x && cd x &&
+    // git push`) cannot be read now: both make the folder unknown, as do `builtin cd` to such a folder, a substitution
+    // anywhere in the words of the cd (cut out by the tokenizer: `cd -P $(…)`), and a relative target with CDPATH set.
     const cdWords = basename(words[0] ?? '') === 'builtin' ? words.slice(1) : words;
     const moved = cdTarget(cdWords, dir, context.home ?? null);
     if (moved !== undefined) {
       const arg = cdWords.slice(1).find(a => !a.startsWith('-'));
       const viaCdpath = arg !== undefined && !/^(?:\/|~|\.\.?(?:\/|$))/.test(arg) && (env.CDPATH || words.some(w => w.startsWith('CDPATH=')) || /\bCDPATH=/.test(command));
-      if (moved === null || viaCdpath || (arg === undefined && /(?:^|[\s;&|(])(?:builtin\s+)?(?:cd|pushd)\s+[$`]/.test(command))) dirKnown = false;
-      else if (isDirectory(moved)) dir = moved;
+      const computed = arg === undefined && /(?:^|[\s;&|(])(?:builtin\s+)?(?:cd|pushd)(?:\s+-\S*)*\s+[$`]/.test(command);
+      if (moved === null || viaCdpath || computed || !enterable(moved)) dirKnown = false;
+      else { dir = moved; branchSet = null; }
     }
     // A write to a remote database (production): refused whatever the locks, no variable lifts it.
     const remote = remoteWriteProblem(words) ?? remoteWriteProblem(lockWrapper(words, stacks, context.cwd).words);
@@ -1152,21 +1421,40 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false) 
     const lead = basename((commandWords(wrapped.words)?.words ?? wrapped.words)[0] ?? '');
     const fed = SHELLS.has(lead) || ['eval', 'source', '.'].includes(lead) ? (scripts[index] ?? []) : [];
     const own = depth < MAX_NESTING ? nestedScript(wrapped.words) ?? nestedScript(words) : null;
-    for (const script of depth < MAX_NESTING ? [...(own !== null ? [own] : []), ...fed] : []) {
-      const nested = evaluate(script, env, context, depth + 1, held, active);
+    const inner = depth < MAX_NESTING ? [...(own !== null ? [own] : []), ...fed, ...words.flatMap(w => substitutions(w))] : [];
+    for (const script of inner) {
+      const nested = evaluate(script, env, context, depth + 1, held, active, { dir, known: dirKnown, branch: branchSet });
       if (nested.decision === 'deny') return nested;
     }
+    // A branch changed by a command of such a script (`bash -c 'git switch main' && git push`): unknown for what follows.
+    // Read in its commands, never in the text it carries (a commit message that cites `git checkout`).
+    if (inner.some(s => tokenize(s).segments.some(w => branchChange(commandWords(w)?.words ?? w) !== null))) { dirKnown = false; branchSet = null; }
     if (isForcePush(words)) return { decision: 'deny', reason: REASONS.forcePush };
     const code = pluginCodeProblem(words, flat, context.cwd ?? null) ?? homeFolderProblem(words, flat, active);
     if (code) return { decision: 'deny', reason: code };
     const cwords = commandWords(words)?.words ?? words;
     if (active && nestedClaude(cwords, flat)) return { decision: 'deny', reason: REASONS.nestedClaude };
     let pushed = null;
+    // A branch changed by a command of the line, for the commands after it: the new branch it names (`checkout -b x`,
+    // `switch -c x`); unknown for any other switch, checkout of a branch or symbolic-ref (`git switch main && git push`).
+    // `git checkout -- <file>` changes no branch.
+    const change = branchChange(cwords, dir);
+    if (change !== null) {
+      // The new branch is believed only when the next command runs after its success (`&&`): after `;` or `||`, a
+      // creation that failed (the branch exists) leaves the shell on the branch it was on. The operator is the one that
+      // follows this very command, read by the tokenizer (`git checkout -b x main && …`, never an `x &&` further on).
+      const followedByAnd = after[index] === '&&';
+      // Made in this folder only: a creation with a global option of git that moves it (`-C`, `--git-dir`) is elsewhere.
+      const sub = cwords.findIndex((w, k) => k > 0 && (w === 'checkout' || w === 'switch'));
+      const here = !cwords.slice(1, sub === -1 ? undefined : sub).some(w => /^(?:-C|--git-dir|--work-tree)/.test(w));
+      if (change.created && followedByAnd && here) { branchSet = change.created; created = true; }
+      else if (change.created || change.unknown) { dirKnown = false; branchSet = null; created = false; }
+    }
     if (active) {
       const where = gitDirectory(cwords, dir, words, env);
       const known = dirKnown && where !== undefined;
       const moved = known && where !== (context.cwd ?? null);
-      const current = !known ? undefined : (context.currentBranch ?? (() => null))(...(moved ? [where] : []));
+      const current = !known ? undefined : (branchSet && where === dir ? branchSet : (context.currentBranch ?? (() => null))(...(moved ? [where] : [])));
       pushed = pushToDefault(words, (context.defaultBranches ?? (() => ['main', 'master']))(...(moved ? [where] : [])), current);
     }
     if (pushed) return { decision: 'deny', reason: explain(REASONS.pushToDefault(pushed)) };

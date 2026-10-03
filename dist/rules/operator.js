@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import { maskSecrets } from '../knowledge/code-map.js';
@@ -16,6 +16,8 @@ import { maskSecrets } from '../knowledge/code-map.js';
 export const OPERATOR_JOURNAL = ['apv', 'operator', 'messages.jsonl'];
 /** Written by the hook when it refuses a prompt (source absent or not the operator's): its date and reason, never the text. */
 export const OPERATOR_REFUSED = ['apv', 'operator', 'refused.json'];
+/** Written by the seal hook, one file per review it could not seal (`<id>.json`), removed once that domain is sealed. */
+export const OPERATOR_SEAL_NOTES = ['apv', 'operator', 'sceau'];
 /** Days a line of the journal is kept by default (`rules.journalDays`). */
 export const DEFAULT_JOURNAL_DAYS = 90;
 let keyFileOverride = null;
@@ -255,22 +257,117 @@ export function journalState(common) {
         lines = [];
     }
     const ok = lines.map(l => verified(l, key)).filter((e) => e !== null);
-    let refused = null;
+    const read = (note) => {
+        try {
+            const r = JSON.parse(readFileSync(note, 'utf8'));
+            return typeof r.at === 'string' && typeof r.reason === 'string' ? { at: r.at, reason: r.reason.slice(0, 300) } : null;
+        }
+        catch {
+            return null;
+        }
+    };
+    // `refused.json` holds the last refused message, or a seal note of the first versions (`relecture …`).
+    const single = read(join(common, ...OPERATOR_REFUSED));
+    const sealed = single && /^relecture\b/.test(single.reason) ? [single] : [];
+    // A note older than the journal keeps its lines is not said, even before the hook purges it on its next pass.
+    const fresh = (n) => n !== null && !(Date.now() - Date.parse(n.at) > DEFAULT_JOURNAL_DAYS * 86_400_000);
+    const sealRefusals = [...sealed, ...sealNotes(common).map(n => read(n.file))].filter(fresh).sort((a, b) => a.at.localeCompare(b.at));
+    return { file, key: key !== null, keyProblem: anchor.problem, keyCreatedAt: anchor.createdAt, messages: ok.length, ignored: lines.length - ok.length, last: ok.at(-1)?.at ?? null,
+        refused: sealed.length ? null : single, sealRefusals };
+}
+/** The notes of the seal hook, one file per review it could not seal (several reviewers run at once: no shared file). */
+function sealNotes(common) {
+    const dir = join(common, ...OPERATOR_SEAL_NOTES);
     try {
-        const r = JSON.parse(readFileSync(join(common, ...OPERATOR_REFUSED), 'utf8'));
-        if (typeof r.at === 'string' && typeof r.reason === 'string')
-            refused = { at: r.at, reason: r.reason.slice(0, 300) };
+        return readdirSync(dir).filter(f => /^[\w-]+\.json$/.test(f)).map(f => ({ file: join(dir, f), id: f.slice(0, -'.json'.length) }));
     }
     catch {
-        refused = null;
+        return [];
     }
-    return { file, key: key !== null, keyProblem: anchor.problem, keyCreatedAt: anchor.createdAt, messages: ok.length, ignored: lines.length - ok.length, last: ok.at(-1)?.at ?? null, refused };
+}
+/** Writes `content` to `file` whole or not at all (temporary file, then rename): a reader never sees half a note. */
+function writeWhole(file, content) {
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    const temporary = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+    writeFileSync(temporary, content, { mode: 0o600 });
+    renameSync(temporary, file);
+}
+/**
+ * Forgets the notes of the seal hook once the review `id` of `domain` at `commit` is sealed: the note about that review,
+ * and those about earlier reviews of the same domain at the same commit, which this one replaces (each record gets a new
+ * id, so a note kept for its own id only would stay for good; the unsealed record itself is still said by `apv review
+ * show`). A note about another domain or another commit, or a refused message, stays.
+ */
+export function clearSealRefusal(common, id, domain = null, commit = null, now = new Date()) {
+    forgetSealNotes(common, note => note.id === id || (domain !== null && note.domain === domain && sameCommit(note.commit, commit)), now);
+    // A seal note of the versions before one file per note, kept in `refused.json` (`relecture non scellée : …`,
+    // `relecture <id> non scellée : …`): no new one is written there, so the first seal lifts it.
+    const file = join(common, ...OPERATOR_REFUSED);
+    try {
+        const r = JSON.parse(readFileSync(file, 'utf8'));
+        if (typeof r.reason === 'string' && /^relecture\b/.test(r.reason))
+            rmSync(file, { force: true });
+    }
+    catch { /* no note */ }
+}
+/**
+ * Whether a note about `noted` (the commit the review was recorded at, as known when the note was written) is about the
+ * sealed `commit`. A note that knows no commit (`--commit HEAD`, a record not found) goes with any of its domain.
+ */
+function sameCommit(noted, commit) {
+    if (typeof noted !== 'string' || !/^[0-9a-f]{7,40}$/.test(noted))
+        return true;
+    return commit !== null && (commit.startsWith(noted) || noted.startsWith(commit));
+}
+/**
+ * Removes the notes `drop` picks, and in any case those older than the journal keeps its lines (`DEFAULT_JOURNAL_DAYS`)
+ * and the temporary files a stopped hook left behind: no note stays for good.
+ */
+function forgetSealNotes(common, drop, now) {
+    const dir = join(common, ...OPERATOR_SEAL_NOTES);
+    let names = [];
+    try {
+        names = readdirSync(dir);
+    }
+    catch {
+        return;
+    }
+    for (const name of names) {
+        const file = join(dir, name);
+        try {
+            // A temporary file younger than a minute may be a note being written by another hook.
+            const age = now.getTime() - statSync(file).mtimeMs;
+            if (age > DEFAULT_JOURNAL_DAYS * 86_400_000 || (name.endsWith('.tmp') && age > 60_000)) {
+                rmSync(file, { force: true });
+                continue;
+            }
+            if (!/^[\w-]+\.json$/.test(name))
+                continue;
+            let note = {};
+            try {
+                note = JSON.parse(readFileSync(file, 'utf8'));
+            }
+            catch { /* unreadable: by its id only */ }
+            if (drop({ id: name.slice(0, -'.json'.length), domain: note.domain ?? null, commit: note.commit ?? null }))
+                rmSync(file, { force: true });
+        }
+        catch { /* gone meanwhile */ }
+    }
+}
+/**
+ * Notes, for `apv status`, that the seal hook could not seal the review `id` of `domain` at `commit` (when known): date,
+ * id, domain, commit and reason. The note replaces those of earlier reviews of the same domain and commit.
+ */
+export function recordSealRefusal(common, id, domain, reason, now = new Date(), commit = null) {
+    if (!/^[\w-]+$/.test(id))
+        return;
+    const known = commit && /^[0-9a-f]{7,40}$/.test(commit) ? commit : null;
+    forgetSealNotes(common, note => note.id !== id && note.domain === domain && (known === null ? typeof note.commit !== 'string' : sameCommit(note.commit, known)), now);
+    writeWhole(join(common, ...OPERATOR_SEAL_NOTES, `${id}.json`), `${JSON.stringify({ at: now.toISOString(), domain, commit: known, reason: `relecture ${id} (${domain}${known ? ` ${known.slice(0, 12)}` : ''}) non scellée : ${reason}`.slice(0, 300) })}\n`);
 }
 /** Notes, for `apv status`, that the hook refused a prompt: date and reason, never the text. */
 export function recordRefusal(common, reason, now = new Date()) {
-    const file = join(common, ...OPERATOR_REFUSED);
-    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-    writeFileSync(file, `${JSON.stringify({ at: now.toISOString(), reason: reason.slice(0, 300) })}\n`, { mode: 0o600 });
+    writeWhole(join(common, ...OPERATOR_REFUSED), `${JSON.stringify({ at: now.toISOString(), reason: reason.slice(0, 300) })}\n`);
 }
 /**
  * The message of the operator that holds every sentence of `quote`, or null. Whole sentences only: the journal keeps

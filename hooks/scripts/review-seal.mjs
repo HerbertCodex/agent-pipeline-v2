@@ -5,8 +5,8 @@
 // only sealed records, so a record written by anyone else (the implementer, the lead, a script) proves nothing.
 // Never blocks, never prints.
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, readdirSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { isMainModule, readHookInput } from './lib.mjs';
 import { apvArguments, reviewRecordCall, reviewRecordProblem, tokenize } from './bash-guard.mjs';
 import { cdTarget } from './harness-guard.mjs';
@@ -14,20 +14,21 @@ import { cdTarget } from './harness-guard.mjs';
 const OPERATOR_MODULE = new URL('../../dist/rules/operator.js', import.meta.url);
 const REVIEWS_MODULE = new URL('../../dist/rules/reviews.js', import.meta.url);
 
-/** The record id printed by `apv review record` (text or JSON output), or null. */
+/** The record id printed by `apv review record` (text or JSON output), or null: none, or several different ones. */
 export function recordId(response) {
   const text = typeof response === 'string' ? response : [response?.stdout, response?.output, response?.content].filter(v => typeof v === 'string').join('\n');
-  return /Enregistrement (\d{8}T\d{6}Z-[0-9a-f]{8})\b/.exec(text)?.[1] ?? /"id":\s*"(\d{8}T\d{6}Z-[0-9a-f]{8})"/.exec(text)?.[1] ?? null;
+  const ids = new Set([...text.matchAll(/Enregistrement (\d{8}T\d{6}Z-[0-9a-f]{8})\b/g), ...text.matchAll(/"id":\s*"(\d{8}T\d{6}Z-[0-9a-f]{8})"/g)].map(m => m[1]));
+  return ids.size === 1 ? [...ids][0] : null;
 }
 
-/** What to seal for a PostToolUse payload: `{ id, domain, agent }`, or null. */
+/** What to seal for a PostToolUse payload: `{ id, domain, agent, commit }` (`commit`: as the command gave it), or null. */
 export function sealRequest(input) {
   if (!input || input.tool_name !== 'Bash') return null;
   const call = reviewRecordCall(input.tool_input?.command);
   if (!call || !call.domain || typeof input.agent_type !== 'string' || !input.agent_type) return null;
   if (reviewRecordProblem(call.words, input.agent_type) !== null) return null;
   const id = recordId(input.tool_response);
-  return id ? { id, domain: call.domain, agent: input.agent_type } : null;
+  return id ? { id, domain: call.domain, agent: input.agent_type, commit: call.commit ?? null } : null;
 }
 
 /**
@@ -51,6 +52,13 @@ export function recordDirectories(command, cwd, home = null) {
   return [...new Set([...out, cwd])];
 }
 
+/** The commit a record `id` of `domain` was written at, read from its folder under the reviews of `common`, or null. */
+export function recordCommit(common, id, domain) {
+  if (!/^[\w-]+$/.test(id) || !/^[\w-]+$/.test(domain)) return null;
+  const root = join(common, 'apv', 'reviews');
+  try { return readdirSync(root).find(commit => existsSync(join(root, commit, domain, `${id}.json`))) ?? null; } catch { return null; }
+}
+
 async function main() {
   process.env.APV_ENTRY = 'hook';
   const input = await readHookInput();
@@ -68,15 +76,27 @@ async function main() {
     const common = r.stdout.trim();
     if (!reviews.recordExists(common, request.id, request.domain)) continue;
     let key;
-    try { key = operator.ensureAnchorKey(common, keyFile); } catch (error) { operator.recordRefusal(common, `relecture non scellée : ${error?.message ?? error}`); return 0; }
-    reviews.sealReview(common, request.id, request.domain, request.agent, key);
+    try { key = operator.ensureAnchorKey(common, keyFile); } catch (error) {
+      // The record exists: its folder (reviews/<commit>/<domain>/) gives the commit, whatever `--commit` said (`HEAD`).
+      operator.recordSealRefusal(common, request.id, request.domain, String(error?.message ?? error), new Date(), recordCommit(common, request.id, request.domain) ?? request.commit);
+      return 0;
+    }
+    const sealed = reviews.sealReview(common, request.id, request.domain, request.agent, key);
+    // A sealed review lifts an earlier note of a review this hook could not seal, of its domain and commit (the folder
+    // of the record: reviews/<commit>/<domain>/), here and in the session's project.
+    if (sealed?.file) {
+      const commit = basename(dirname(dirname(sealed.file)));
+      operator.clearSealRefusal(common, request.id, request.domain, commit);
+      const s = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+      if (s.status === 0 && s.stdout.trim() && s.stdout.trim() !== common) operator.clearSealRefusal(s.stdout.trim(), request.id, request.domain, commit);
+    }
     return 0;
   }
   // Written where this hook cannot follow (`cd "$X" && apv review record`): said by apv status of the session's project,
   // never by creating the stores of a repository that has none.
   const r = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
   const common = r.status === 0 ? r.stdout.trim() : '';
-  if (common && existsSync(join(common, 'apv'))) operator.recordRefusal(common, `relecture ${request.id} non scellée : enregistrée dans un dépôt que le crochet ne retrouve pas (lance apv review record depuis la copie relue, par un cd en clair ou --repo)`);
+  if (common && existsSync(join(common, 'apv'))) operator.recordSealRefusal(common, request.id, request.domain, 'enregistrée dans un dépôt que le crochet ne retrouve pas (lance apv review record depuis la copie relue, par un cd en clair ou --repo)', new Date(), request.commit);
   return 0;
 }
 

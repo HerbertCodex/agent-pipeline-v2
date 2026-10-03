@@ -168,11 +168,20 @@ test('the seal hook seals a record only for the reviewer agent of its domain, fr
   const command = 'cd /tmp/copie && apv review record --commit abc --domain securite --reviewer apv:qa-securite --report r.md --critical 0 --high 0 --medium 0 --low 0';
   const out = { stdout: 'Enregistrement 20260930T101010Z-0a1b2c3d\nRelecture securite enregistrée' };
   assert.equal(recordId(out), '20260930T101010Z-0a1b2c3d');
-  assert.deepEqual(sealRequest({ tool_name: 'Bash', tool_input: { command }, tool_response: out, agent_type: 'apv:qa-securite' }), { id: '20260930T101010Z-0a1b2c3d', domain: 'securite', agent: 'apv:qa-securite' });
+  assert.deepEqual(sealRequest({ tool_name: 'Bash', tool_input: { command }, tool_response: out, agent_type: 'apv:qa-securite' }), { id: '20260930T101010Z-0a1b2c3d', domain: 'securite', agent: 'apv:qa-securite', commit: 'abc' });
   for (const agent_type of [undefined, 'apv:implementer', 'apv:qa-fidelite']) {
     assert.equal(sealRequest({ tool_name: 'Bash', tool_input: { command }, tool_response: out, agent_type }), null, String(agent_type));
   }
   assert.equal(sealRequest({ tool_name: 'Bash', tool_input: { command: 'apv review show --commit abc' }, tool_response: out, agent_type: 'apv:qa-securite' }), null);
+  // The commit of a record comes from its folder, whatever `--commit` said (review of ffcdb9e).
+  const { recordCommit } = await import('../hooks/scripts/review-seal.mjs');
+  const store = mkdtempSync(join(tmpdir(), 'apv3-rc-'));
+  t.after(() => rmSync(store, { recursive: true, force: true }));
+  mkdirSync(join(store, 'apv', 'reviews', 'c'.repeat(40), 'securite'), { recursive: true });
+  writeFileSync(join(store, 'apv', 'reviews', 'c'.repeat(40), 'securite', '20260930T101010Z-0a1b2c3d.json'), '{}');
+  assert.equal(recordCommit(store, '20260930T101010Z-0a1b2c3d', 'securite'), 'c'.repeat(40));
+  assert.equal(recordCommit(store, '20260930T101010Z-0a1b2c3d', 'rgpd'), null);
+  assert.equal(recordCommit(store, '../x', 'securite'), null);
   // The hook itself: a record written by the tool, sealed by the hook of the reviewer, counted; written by anyone else, not.
   const { TEST_KEY_FILE, commonDirOf } = await import('./support/rules.mjs');
   const { recordReview, latestReviews } = await import('../dist/rules/reviews.js');
@@ -565,7 +574,7 @@ test('review of 440d57d: no false block on computed paths and quoted text; tee, 
   const lead = { ...as(null), cwd: '/r' };
   // N1, N7: commands that passed before stay free.
   for (const command of ['rm -rf "$tmp" && git clone https://github.com/o/r.git "$tmp"', 'mv "$f" dist/ && cat .git/HEAD', 'chmod +x "$script" && git commit -m "fix .git hooks"',
-    "grep -c '>' .git/apv/receipts/x.json", 'python3 tools/inspect.py .git/apv/receipts', 'rm -rf "$HOME/apps/x"']) {
+    "grep -c '>' .git/apv/receipts/x.json", 'rm -rf "$HOME/apps/x"']) {
     assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
   }
   // N6: writes by other commands, and a path made of several pieces set by the line.
@@ -635,4 +644,179 @@ test('review of 4dc674e: a failed cd leaves the push on main; quoted redirection
   for (const command of [`HOME=${root} git push origin main`, `XDG_CONFIG_HOME=${root} git push origin main`, `export HOME=${root}; git push origin main`]) {
     assert.equal(commandScope(command, tokenize(command).segments, main, root, {}).plain, false, command);
   }
+});
+
+test('review of aa59c8f and 84d3c4a: closed folders, cd options, refspecs, real assignments, interpreters fed by the line, no false block in a bare layout', async t => {
+  const { hookContext } = await import('../hooks/scripts/harness-guard.mjs');
+  const { commandScope, tokenize } = await import('../hooks/scripts/bash-guard.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-fin-'));
+  t.after(() => { execFileSync('chmod', ['-R', 'u+rwx', root]); rmSync(root, { recursive: true, force: true }); });
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, stdio: 'pipe' });
+  const main = join(root, 'principal'); mkdirSync(main); git(main, 'init', '-q', '-b', 'main');
+  mkdirSync(join(main, '.apv')); writeFileSync(join(main, '.apv', 'config.json'), '{}'); git(main, 'add', '-A'); git(main, 'commit', '-qm', 'x');
+  const feat = join(root, 'copie'); git(main, 'worktree', 'add', '-q', '-b', 'feat', feat);
+  const closed = join(root, 'ferme'); mkdirSync(closed); execFileSync('chmod', ['000', closed]);
+  const context = hookContext({ cwd: main }, { HOME: root });
+  // From the checkout on main: every push that may land on main is refused.
+  for (const command of [`cd ${closed}; git push`, `cd ${closed} || git push`, `pushd ${closed}; git push`, `cd -P $(echo ${feat}) && git push`, `cd -- $(echo ${feat}) && git push`,
+    `git clone ${main} ${join(root, 'neuf')} && cd ${join(root, 'neuf')} && git push`, "git push origin 'refs/*:refs/*'", "git push origin 'r*:r*'", 'git push origin HEAD:heads/main',
+    'git push origin :']) {
+    assert.equal(evaluateCommand(command, {}, context).decision, 'deny', command);
+  }
+  const fromFeat = hookContext({ cwd: feat }, { HOME: root });
+  assert.equal(evaluateCommand('git switch --ignore-other-worktrees main && git push', {}, fromFeat).decision, 'deny', 'branch changed by the line');
+  assert.equal(evaluateCommand('git push', {}, fromFeat).decision, 'allow', 'a working branch');
+  for (const command of [`read HOME < f; git push origin main`, `printf -v HOME %s ${root}; git push origin main`]) {
+    assert.equal(commandScope(command, tokenize(command).segments, main, root, {}).plain, false, command);
+  }
+  // Stores: what reads is free, what writes is refused.
+  const lead = { ...as(null), cwd: '/r' };
+  for (const command of ['dd if=.git/apv/receipts/r.json of=/tmp/x', 'f=.git/apv/receipts/r.json; jq . "$f"', 'R=.git/apv/receipts; ls "$R"', 'echo key=.git/apv',
+    'python3 tools/x.py - < .git/apv/receipts/r.json']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  for (const command of ["python3 <<'EOF'\nimport shutil; shutil.rmtree('.git/apv')\nEOF", "node <<'EOF'\nrequire('fs').rmSync('.git/apv', {recursive: true})\nEOF",
+    "cat <<'EOF' | python3 -\nimport shutil; shutil.rmtree('.git/apv')\nEOF", 'd=.gi; e=${d}t; f=a; rm -rf "$e/${f}pv"', 'rm -rf .git/$(echo apv)',
+    'echo "$(echo x > .git/apv/receipts/r.json)"', 'echo -->.git/apv/receipts/r.json']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  // A worktree of a bare repository named x.git: its folder is no Git directory.
+  const bare = { ...as(null), cwd: '/srv/proj.git/feat2' };
+  for (const command of ['rm -rf "$tmp"', 'echo x > "$OUT"', 'curl -so "$f" https://e.x']) assert.equal(evaluateCommand(command, {}, bare).decision, 'allow', command);
+});
+
+test('review of 3871d24: scripts split per interpreter, exported variables, bare Git directories, new branches, literal text, scripts of the line', async t => {
+  const { hookContext } = await import('../hooks/scripts/harness-guard.mjs');
+  const lead = { ...as(null), cwd: '/r' };
+  // MOYEN 1 (sec) and F2 (data): the script of each interpreter, its operands, awk's program after its options.
+  for (const command of [`ruby -rfileutils -e 'FileUtils.rm_rf(".git/apv")'`, `python3 -E -c "import shutil; shutil.rmtree('.git/apv')"`, `python3 -Werror -c "import shutil; shutil.rmtree('.git/apv')"`,
+    `node -p -e "require('fs').rmSync('.git/apv')"`, `perl -Mstrict -e 'unlink ".git/apv/x"'`, `awk -v x=1 'BEGIN{system("rm -rf .git/apv")}'`, `awk -F , 'BEGIN{system("rm -rf .git/apv")}'`,
+    "perl -e 'unlink @ARGV' .git/apv/receipts/r.json", "python3 -c 'import shutil,sys; shutil.rmtree(sys.argv[1])' .git/apv", "awk '{print > FILENAME}' .git/apv/receipts/r.json"]) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  // F2 (sec), F3 (data): variables exported or set for a command.
+  for (const command of ['export GIT_TRACE=.git/apv/receipts/r.json; git status', 'env GIT_TRACE=.git/apv/receipts/r.json git status', 'declare -x GIT_TRACE=.git/apv/receipts/r.json',
+    'set -a; GIT_TRACE=.git/apv/receipts/r.json; git status', 'GIT_TRACE=.git/apv/receipts/r.json; export GIT_TRACE; git status', 'export d=.git/ap; rm -rf "${d}v"',
+    'G=.git; cd "$G" && rm -rf apv', 'cd "$(git rev-parse --git-dir)" && rm -rf apv']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  // F3 (sec): the Git directory of a bare repository, reached by cd or as the working directory.
+  const bare = { ...as(null), cwd: '/srv/proj.git/feat2' };
+  for (const command of ['cd .. && rm -rf "$x"', 'cd /srv/proj.git && rm -rf "$(cat n)"']) assert.equal(evaluateCommand(command, {}, bare).decision, 'deny', command);
+  assert.equal(evaluateCommand('rm -rf "$x"', {}, { ...as(null), cwd: '/srv/proj.git' }).decision, 'deny', 'in the bare Git directory');
+  // F1 (data), F5 (sec): literal text between apostrophes or escaped is no command; F4 (data): an interpreter reads only its own input.
+  for (const command of ["git commit -m 'docs: cite `git push origin main` et $(rm -rf .git/apv)'", "rg -n '`claude -p' docs/", "grep -rn '$(git push origin main)' docs",
+    'echo "\\$(git push origin main)"', "cat > f <<'EOF'\nvoir .git/apv\nEOF\nnode --version", "git commit -F - <<EOF\nvoir .git/apv\nEOF\npython3 -V",
+    'cat .git/apv/receipts/*.json', 'ls .git/apv/receipts/*']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  // In doubt, refused: an interpreter whose line names the store, a glob of the stores on a line that does more than read.
+  for (const command of ["perl -ne 'print' .git/apv/receipts/r.json", 'cat .git/apv/receipts/*.json | head']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  // F4 and F6 (sec): new branches, a branch changed inside a script, substitutions judged where they run, `@`.
+  const root = mkdtempSync(join(tmpdir(), 'apv3-fin2-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, stdio: 'pipe' });
+  const main = join(root, 'principal'); mkdirSync(main); git(main, 'init', '-q', '-b', 'main');
+  mkdirSync(join(main, '.apv')); writeFileSync(join(main, '.apv', 'config.json'), '{}'); git(main, 'add', '-A'); git(main, 'commit', '-qm', 'x');
+  const feat = join(root, 'copie'); git(main, 'worktree', 'add', '-q', '-b', 'feat', feat);
+  const fromFeat = hookContext({ cwd: feat }, { HOME: root });
+  for (const command of ['git checkout -b fix && git push -u origin HEAD', 'git switch -c fix && git push', 'git checkout -- src/x.ts && git push']) {
+    assert.equal(evaluateCommand(command, {}, fromFeat).decision, 'allow', command);
+  }
+  for (const command of [`bash -c 'git switch --ignore-other-worktrees main' && git push`, 'git symbolic-ref HEAD refs/heads/main && git push', `cd ${main} && echo "$(git push)"`]) {
+    assert.equal(evaluateCommand(command, {}, fromFeat).decision, 'deny', command);
+  }
+  assert.equal(evaluateCommand('git push origin @', {}, hookContext({ cwd: main }, { HOME: root })).decision, 'deny', '@ is HEAD');
+});
+
+test('review of 7e28f63: options of any interpreter, receipts globbed by a loop, failed branch creation, normalized paths, global options of git', async t => {
+  const { hookContext } = await import('../hooks/scripts/harness-guard.mjs');
+  const lead = { ...as(null), cwd: '/r' };
+  for (const command of [`perl -MFile::Path -le 'rmtree(".git/apv")'`, `perl -l -e 'unlink ".git/apv/x"'`, `perl -0 -e 'unlink ".git/apv/x"'`, `ruby -x -e 'File.delete(".git/apv/x")'`,
+    `awk -- 'BEGIN{system("rm -rf .git/apv")}'`, `awk -v p=.git/apv 'BEGIN{system("rm -rf " p)}'`, `python3 -c"import shutil; shutil.rmtree('.git/apv')"`,
+    "perl -ne 'unlink $ARGV' .git/apv/receipts/r.json", 'gawk -i inplace 1 .git/apv/receipts/r.json',
+    'for f in .git/apv/receipts/*; do rm -f "$f"; done', 'set -- .git/apv/receipts/*; rm -f "$@"', 'rm $(ls .git/apv/receipts/*)',
+    'cat /r/.git/apv/receipts/../o*/m*', 'cat .git/apv/./o*/m*', 'd=.git; export GIT_TRACE=$PWD/$d/apv/x; git status']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  const root = mkdtempSync(join(tmpdir(), 'apv3-fin3-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, stdio: 'pipe' });
+  const main = join(root, 'principal'); mkdirSync(main); git(main, 'init', '-q', '-b', 'main');
+  mkdirSync(join(main, '.apv')); writeFileSync(join(main, '.apv', 'config.json'), '{}'); writeFileSync(join(main, 'package-lock.json'), '{}'); git(main, 'add', '-A'); git(main, 'commit', '-qm', 'x');
+  const feat = join(root, 'copie'); git(main, 'worktree', 'add', '-q', '-b', 'feat', feat);
+  const fromMain = hookContext({ cwd: main }, { HOME: root }); const fromFeat = hookContext({ cwd: feat }, { HOME: root });
+  for (const command of ['git checkout -b feat ; git push origin HEAD', 'git switch -c feat; git push', 'git checkout -b feat || true; git push']) {
+    assert.equal(evaluateCommand(command, {}, fromMain).decision, 'deny', command);
+  }
+  assert.equal(evaluateCommand('git -C . switch main && git push', {}, fromFeat).decision, 'deny', 'global options of git');
+  for (const command of ['git checkout -b fix && git push -u origin HEAD', 'git checkout package-lock.json && git push',
+    "git commit -m \"$(cat <<'EOF'\nretour : git checkout et git switch cités\nEOF\n)\" && git push"]) {
+    assert.equal(evaluateCommand(command, {}, fromFeat).decision, 'allow', command);
+  }
+});
+
+test('review of c65f8c5: the operator after the creation itself, files from a commit, a folder named as a branch, rg and tree, a glob that climbs', async t => {
+  const { hookContext } = await import('../hooks/scripts/harness-guard.mjs');
+  const lead = { ...as(null), cwd: '/r' };
+  // Any program the guard does not know to only read, handed a path in a store, may write it (review of c65f8c5, high).
+  for (const command of ['python3 -m json.tool /tmp/forged.json .git/apv/receipts/run/01-tests.json', 'python3 -m compileall .git/apv/receipts',
+    'python3 tools/inspect.py .git/apv/receipts', 'python3.12 -m gzip .git/apv/receipts/run/x.json', 'node --loader x .git/apv/receipts/x', 'deno run s.ts .git/apv/receipts/x',
+    'uv run x.py .git/apv/receipts/r.json', 'bash script.sh .git/apv/receipts', './tools/fix .git/apv/receipts/r.json', 'sed -n p .git/apv/receipts/r.json',
+    "LESSOPEN='|rm %s' less .git/apv/receipts/r.json", 'more .git/apv/receipts/r.json', 'bat --pager=sh .git/apv/receipts/r.json', 'less .git/apv/receipts/*.json']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ["rg --pre rm '' .git/apv", 'rg --pre=sh x .', 'rg --hostname-bin=./x foo', 'rg x .git/apv/receipts/*', 'tree -o .git/apv/receipts/r.json .git/apv/receipts',
+    'tree .git/apv/receipts/*', 'cat .git/apv/receipts/.?/o*/m*', 'cat .git/apv/receipts/..*/operator/x']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ['rg -n TODO src', 'ls .git/apv/receipts/*', 'cat .git/apv/receipts/*/summary.json']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  // Review of dc0a075: rg with a configuration file, a recursive search of the Git directory, `<` stuck to its file.
+  for (const command of ["RIPGREP_CONFIG_PATH=/tmp/c rg '' .git/apv/receipts", "export RIPGREP_CONFIG_PATH=/tmp/c; rg x src", "rg '' .git/apv", "rg '' .git",
+    'grep -r . .git/apv', 'grep -R x .git', 'grep --recursive x /r/.git/apv', 'egrep -rn x .git/']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ["grep -e x -r .git", "rg -f p.txt .git", "export RIPGREP_CONF''IG_PATH=/tmp/c; rg '' .git/apv/receipts", 'grep -d recurse x .git/apv',
+    'grep --directories recurse x .git/apv', 'grep -drecurse x .git', 'diff -rN .git/apv /tmp/vide', 'zcat -rf .git/apv']) assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  for (const command of ['grep -r x .git/apv/receipts', 'grep -rn TODO src', 'python3 x.py <.git/apv/receipts/r.json', 'python3 x.py 0<.git/apv/receipts/r.json',
+    'grep -rn ".git" src', 'rg -n "\\.git/" src', 'echo RIPGREP_CONFIG_PATH; rg x src']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  const root = mkdtempSync(join(tmpdir(), 'apv3-fin4-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, stdio: 'pipe' });
+  const main = join(root, 'principal'); mkdirSync(main); git(main, 'init', '-q', '-b', 'main');
+  mkdirSync(join(main, '.apv')); writeFileSync(join(main, '.apv', 'config.json'), '{}'); writeFileSync(join(main, 'package-lock.json'), '{}'); git(main, 'add', '-A'); git(main, 'commit', '-qm', 'x');
+  const feat = join(root, 'copie'); git(main, 'worktree', 'add', '-q', '-b', 'feat', feat);
+  mkdirSync(join(feat, 'main'));
+  const fromMain = hookContext({ cwd: main }, { HOME: root }); const fromFeat = hookContext({ cwd: feat }, { HOME: root });
+  // A failed creation (`feat` exists) leaves the shell on main, even with `feat &&` further on the line.
+  assert.equal(evaluateCommand('git checkout -b feat; git commit -am "wip feat" && git push origin HEAD', {}, fromMain).decision, 'deny');
+  for (const command of ['git switch -c fix origin/main && git push -u origin HEAD', 'git checkout -b fix main && git push -u origin HEAD',
+    'git checkout HEAD package-lock.json && git push', 'git checkout main package-lock.json && git push']) {
+    assert.equal(evaluateCommand(command, {}, fromFeat).decision, 'allow', command);
+  }
+  assert.equal(evaluateCommand('git checkout main && git push', {}, fromFeat).decision, 'deny', 'a folder named as a branch');
+  // Review of ffcdb9e: the created branch holds along its chain of `&&` only, in its own folder; send-pack is a push.
+  for (const command of ['git checkout -b fix && echo ok; git push', 'git checkout -b fix && true || git push', 'git -C ../autre checkout -b fix && git push',
+    'git send-pack origin HEAD:refs/heads/main']) {
+    assert.equal(evaluateCommand(command, {}, fromMain).decision, 'deny', command);
+  }
+  assert.equal(evaluateCommand('git switch -C fix && git commit -m x && git push -u origin HEAD', {}, fromMain).decision, 'allow', 'switch -C is a creation');
+  // A path given with its option is read like an operand.
+  for (const command of ['tar -C.git/apv -xf a.tar', 'cp -t.git/apv/receipts f', 'node w.js --out=.git/apv/receipts/x']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  assert.equal(evaluateCommand('tar -C dist -cf a.tar .', {}, lead).decision, 'allow');
+  // A reader is the command of the system; a climbing path is judged normalized.
+  for (const command of ['./cat .git/apv/receipts/r.json', 'cat() { :; }; cat .git/apv/receipts/r.json', 'cat .git/apv/receipts/../operator/x.json']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ['cat .git/apv/receipts/r.json', '/usr/bin/cat .git/apv/receipts/r.json']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  // The seal follows one record only: two different ids printed, nothing is sealed.
+  const { recordId } = await import('../hooks/scripts/review-seal.mjs');
+  assert.equal(recordId({ stdout: 'Enregistrement 20261001T000000Z-0000000a\nEnregistrement 20261001T000000Z-0000000b' }), null);
+  assert.equal(recordId({ stdout: 'Enregistrement 20261001T000000Z-0000000a', output: 'Enregistrement 20261001T000000Z-0000000a' }), '20261001T000000Z-0000000a');
 });

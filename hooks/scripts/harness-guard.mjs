@@ -548,6 +548,13 @@ function verifiedRemote(root, name) {
   const fetchUrl = git(root, ['remote', 'get-url', name]);
   const pushUrl = git(root, ['remote', 'get-url', '--push', name]);
   if (!fetchUrl || fetchUrl !== pushUrl) return null;
+  // A program of its own on the remote side (`remote.<name>.receivepack`, `uploadpack`) may push anywhere: unknown.
+  if (git(root, ['config', '--get-regexp', `^remote\\.${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(receivepack|uploadpack)$`])) return null;
+  // A remote on this machine (a path, `file://`) that holds stores or a configuration of the tool is one of its projects.
+  if (/^(?:\/|\.|~|file:)/.test(fetchUrl) || !/:/.test(fetchUrl)) {
+    const path = resolve(root, fetchUrl.replace(/^file:\/\//, ''));
+    if (['apv', join('.git', 'apv'), '.apv'].some(mark => existsSync(join(path, mark)))) return null;
+  }
   const fetched = git(root, ['for-each-ref', '--count=1', '--format=%(refname)', `refs/remotes/${name}/`]);
   return fetched ? fetchUrl : null;
 }
