@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 import { configIssues } from '../dist/config/load.js';
-import { remoteHosts, runDast, parseEnvFile } from '../dist/review/dast.js';
+import { DAST_INSTALL, DAST_INSTALL_MARKER, addressRefusal, runDast, parseEnvFile } from '../dist/review/dast.js';
 import { LockStore } from '../dist/lock/store.js';
 
 /**
@@ -64,6 +64,17 @@ test('apv dast run: an envFile that names a remote address, or that is missing, 
     assert.ok(!r.stderr.includes('LOCAL'), 'only the refused keys are named');
     assert.ok(!existsSync(join(out, 'summary.json')) && !existsSync(join(out, 'scan.txt')), 'nothing ran');
   }
+  // Reserved variables: the tool's own (a nested lease would be skipped), and those that change what runs.
+  for (const line of ['APV_LOCK_HELD=supabase', 'NODE_OPTIONS=--require ./piege.js', 'PATH=/srv/piege/bin', 'HOME=/srv/piege', 'LD_PRELOAD=/srv/piege.so']) {
+    const p = project(t, scan({ envFile: 'dast.env' }));
+    writeFileSync(join(p.repo, 'dast.env'), `${line}\n`);
+    const out = join(p.root, 'rapports');
+    const r = await p.run(['--out', out]);
+    assert.equal(r.code, 1, line);
+    assert.match(r.stderr, new RegExp(`DAST_ENV.*réservée\\(s\\) ${line.split('=')[0]}`), line);
+    assert.ok(!r.stderr.includes(line.split('=')[1]), 'the value is never shown');
+    assert.ok(!existsSync(join(out, 'scan.txt')), 'nothing ran');
+  }
   const missing = project(t, scan({ envFile: '~/absent.env' }));
   const r = await missing.run(['--out', join(missing.root, 'r')]);
   assert.equal(r.code, 1);
@@ -83,24 +94,65 @@ test('apv dast run: the copy gets its dependencies installed when it has a lockf
   assert.deepEqual([first.install.status, first.install.exitCode], ['done', 0]);
   assert.ok(existsSync(join(p.repo, 'node_modules')));
   assert.match(readFileSync(join(p.root, 'r1', 'dast.log'), 'utf8'), /installation des dépendances de la copie[\s\S]*installé/);
+  // The marker of this lockfile: nothing to install again.
+  assert.equal(readFileSync(join(p.repo, 'node_modules', DAST_INSTALL_MARKER), 'utf8').trim().length, 64);
   const second = await runDast({ ...base, reportDir: join(p.root, 'r2') });
-  assert.deepEqual([second.install.status, second.install.reason], ['skipped', 'node_modules déjà présent dans la copie']);
+  assert.deepEqual([second.install.status, second.install.reason], ['skipped', 'dépendances déjà installées par apv dast run pour ce package-lock.json']);
+  // A node_modules without the marker (an interrupted installation, or one made by hand) is installed again.
+  rmSync(join(p.repo, 'node_modules', DAST_INSTALL_MARKER));
+  const third = await runDast({ ...base, reportDir: join(p.root, 'r3') });
+  assert.equal(third.install.status, 'done');
   // A failed installation: the scan never runs, the summary says why.
   const q = project(t, scan(), { 'package-lock.json': '{}\n' });
   const failed = await runDast({ ...base, repo: q.repo, reportDir: join(q.root, 'r'), installCommand: [process.execPath, '-e', 'process.exit(3)'] });
   assert.deepEqual([failed.status, failed.exitCode, failed.install.status], ['failed', 3, 'failed']);
   assert.ok(!existsSync(join(q.root, 'r', 'scan.txt')), 'the scan did not run');
   assert.ok(existsSync(join(q.root, 'r', 'summary.json')));
+  assert.ok(!existsSync(join(q.repo, 'node_modules', DAST_INSTALL_MARKER)), 'no marker after a failure');
+  // An installation past its delay: timed_out, the scan never runs.
+  const slow = await runDast({ ...base, repo: q.repo, reportDir: join(q.root, 'lent'), settings: { ...settings, timeoutMs: 1000 },
+    installCommand: [process.execPath, '-e', 'setTimeout(() => {}, 20000)'] });
+  assert.deepEqual([slow.status, slow.install.status], ['timed_out', 'timed_out']);
+  assert.ok(!existsSync(join(q.root, 'lent', 'scan.txt')));
+  // The default installation never runs the scripts of the packages.
+  assert.ok(DAST_INSTALL.includes('--ignore-scripts'));
 });
 
-test('dast envFile: addresses outside the loopback, unit', () => {
-  for (const v of ['http://localhost:5173', 'http://127.0.0.1:54321/rest/v1', 'http://[::1]:8080', 'http://app.localhost', 'plain text', 'eyJhbGciOi', '42', 'admin@exemple.fr']) {
-    assert.deepEqual(remoteHosts(v), [], v);
-  }
-  for (const [v, host] of [['https://prod.example.com', 'prod.example.com'], ['postgres://u:p@db.host.io:5432/x', 'db.host.io'], ['10.1.2.3', '10.1.2.3'],
-    ['db.example.org:5432', 'db.example.org'], ['http://localhost,https://evil.example', 'evil.example']]) {
-    assert.ok(remoteHosts(v).includes(host), v);
-  }
+/** Every value the security review got through (PR #110), and more: each must be refused. */
+const REMOTE = [
+  ['DATABASE_URL', 'u:p@db.prod.example.com:5432/app'],
+  ['PG', 'host=db.prod.example.com port=5432'],
+  ['PG', 'host=prodserver port=5432'],
+  ['DB_HOST', 'prodserver'],
+  ['TARGET_HOST', '2130706433'],
+  ['X', '2001:4860:4860::8888'],
+  ['X', '::ffff:10.0.0.1'],
+  ['X', 'localhost,db.prod.example.com'],
+  ['X', 'db.prod.example.com.'],
+  ['X', '//db.prod.example.com/app'],
+  ['X', 'bdd.exämple.fr'],
+  ['X', '{"host":"db.prod.example.com"}'],
+  ['X', '{"host":"prodserver"}'],
+  ['X', 'https://prod.example.com'],
+  ['X', 'postgresql://user:pass@db.abcdef.supabase.co:5432/postgres'],
+  ['X', '127.0.0.1.nip.io'],
+  ['X', '0.0.0.0'],
+  ['X', '10.0.0.5'],
+  ['X', 'http://2130706433/'],
+  ['X', 'api.example.com:443'],
+  ['X', 'admin@exemple.fr'],
+];
+/** Loopback, test accounts and plain values: each must pass. */
+const LOCAL = [
+  ['TARGET_URL', 'http://localhost:5173'], ['API_URL', 'http://127.0.0.1:54321/rest/v1'], ['X', 'http://[::1]:8080'], ['X', 'http://app.localhost'],
+  ['DATABASE_URL', 'postgresql://postgres:postgres@127.0.0.1:54322/postgres'], ['DB_HOST', 'localhost'], ['DB_PORT', '5432'], ['PG', 'host=127.0.0.1 port=5432'],
+  ['X', 'plain text'], ['SUPABASE_ANON_KEY', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiJ9.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE'],
+  ['X', '42'], ['VERSION', '1.2.3'], ['DAST_USER', 'demo@example.org'], ['DAST_USER', 'qa@site.test'], ['X', 'localhost,127.0.0.1'],
+];
+
+test('dast envFile: an allow-list of loopback addresses, unit (refusals and passes)', () => {
+  for (const [key, value] of REMOTE) assert.ok(addressRefusal(key, value), `${key}=${value} must be refused`);
+  for (const [key, value] of LOCAL) assert.equal(addressRefusal(key, value), null, `${key}=${value} must pass`);
   assert.deepEqual([...parseEnvFile('A=1\n# c\n\nexport B="deux mots"\nC=x # commentaire\n')], [['A', '1'], ['B', 'deux mots'], ['C', 'x']]);
   assert.throws(() => parseEnvFile('pas une ligne\n'), /ligne 1 illisible/);
 });

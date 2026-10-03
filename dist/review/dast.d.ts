@@ -36,39 +36,53 @@ export interface DastSummary {
     } | null;
 }
 /**
- * - `done`: `npm ci` ran in the copy and passed;
- * - `skipped`: nothing to install (no `package-lock.json`, or `node_modules` already there), with the reason;
- * - `failed`: `npm ci` failed or passed its delay: the scan command never ran.
+ * - `done`: `npm ci` ran in the copy and passed (its marker written);
+ * - `skipped`: nothing to install (no `package-lock.json`, or the marker of a successful installation of this very
+ *   lockfile), with the reason;
+ * - `failed`: `npm ci` failed; `timed_out`: it passed its delay. In both cases the scan command never ran.
  */
 export interface DastInstall {
-    status: 'done' | 'skipped' | 'failed';
+    status: 'done' | 'skipped' | 'failed' | 'timed_out';
     reason: string;
     command: string[] | null;
     exitCode: number | null;
     durationMs: number;
 }
-/** The installation of the dependencies of a copy that has a lockfile and no `node_modules`. */
-export declare const DAST_INSTALL: readonly ["npm", "ci", "--no-audit", "--no-fund"];
+/**
+ * The installation of the dependencies of the copy, without the scripts of the packages (`preinstall`, `postinstall`):
+ * they would run outside the lease of the scan.
+ */
+export declare const DAST_INSTALL: readonly ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"];
+/** Written in `node_modules` after a successful installation: the sha256 of the lockfile it installed. */
+export declare const DAST_INSTALL_MARKER = ".apv-dast-install";
+export declare const LOOPBACK_TEXT = "seuls localhost, *.localhost, 127.0.0.0/8 et ::1 sont admis";
+/**
+ * Why a value of an environment file names an address outside the loopback, or null. Each word of the value is read
+ * (a list, a JSON object, a libpq string `host=… port=…`): a URL (`scheme://`, `//`), `user@host`, `host=`, an IPv4 or
+ * IPv6 address, a host name with a dot (`db.prod.example.com`, `bdd.exämple.fr`, with a trailing dot) must be loopback;
+ * in a variable that names an address (`*_HOST`, `*_URL`...) or after `host`, a bare name (`prodserver`) or a number
+ * beyond a port too. An e-mail address on a domain reserved for examples (`demo@example.org`) is a test account, not a
+ * host. Never returns the value.
+ */
+export declare function addressRefusal(key: string, value: string): string | null;
 /** `~` and `~/…` as the home folder of the account; a relative path from the copy. */
 export declare function envFilePath(value: string, repo: string, home?: string): string;
 /** `KEY=value` lines (`export KEY=value`, quotes removed, `#` comments and blank lines skipped). */
 export declare function parseEnvFile(text: string): Map<string, string>;
 /**
- * The addresses of a value that leave the machine: the host of each URL (`scheme://[user[:pass]@]host[:port]`), and a
- * value that is itself a host name or an IPv4 address (`db.example.com`, `10.0.0.5:5432`). Only loopback hosts pass.
- */
-export declare function remoteHosts(value: string): string[];
-/**
- * Loads `review.dast.envFile`: refused (`DAST_ENV`) when it is absent, unreadable, or when a value names an address
- * outside the loopback (the scan must never target production). The refusal names the keys, never their values.
+ * Loads `review.dast.envFile`: refused (`DAST_ENV`) when it is absent, unreadable, sets a reserved variable (`APV_*`,
+ * `PATH`, `NODE_OPTIONS`, `HOME`...), or when a value names an address outside the loopback (the scan never targets
+ * production). The refusal names the keys, never their values.
  */
 export declare function loadDastEnvFile(value: string, repo: string, home?: string): {
     file: string;
     variables: Map<string, string>;
 };
 /**
- * Prepares the copy: with a `package-lock.json` and no `node_modules`, `npm ci` in the copy, output appended to the log,
- * bounded by `timeoutMs`. Receives the variables of the scan plus `HOME` and `USERPROFILE` (the cache of npm).
+ * Prepares the copy: with a `package-lock.json`, `npm ci --ignore-scripts` in the copy unless the marker of a successful
+ * installation of this very lockfile is there (an interrupted installation leaves a partial `node_modules`, never the
+ * marker), output appended to the log, bounded by `timeoutMs`. Receives the variables of the scan (never those of the
+ * environment file) plus `HOME` and `USERPROFILE` (the cache of npm).
  */
 export declare function prepareCopy(repo: string, env: NodeJS.ProcessEnv, logFd: number, timeoutMs: number, command?: readonly string[]): DastInstall;
 /**
