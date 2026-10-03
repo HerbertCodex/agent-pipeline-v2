@@ -623,7 +623,7 @@ export async function runGates(options) {
             queue: queue?.record ?? null, ports, flaky, cleanup, stoppedStacks, infrastructure: classifyFailures(list, missingEnv), spread: spreadRecord,
             ok: list.every(r => success(r) || r.status === 'not_required') };
         writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
-            reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}),
+            reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}), ...(options.since ? { since: options.since } : {}),
             ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup } : {}), ...(spreadRecord ? { spread: spreadRecord } : {}), ...(stoppedStacks.length ? { stoppedStacks } : {}),
             ...(result.infrastructure.causes.length ? { infrastructure: result.infrastructure } : {}),
             receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),

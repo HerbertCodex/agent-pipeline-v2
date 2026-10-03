@@ -65,6 +65,15 @@ export interface GateRunOptions {
     reference?: string;
     /** The configuration file read (`--config`), always required by the scope of a check when inside the repository. */
     configFile?: string | null;
+    /**
+     * Incremental proof of a round of corrections (`--since`, src/gates/since.ts): the proven commit the run counts from
+     * and the risk of the diff, written in the summary. A task run: never a proof of the full suite.
+     */
+    since?: {
+        commit: string;
+        risk: string;
+        reason: string;
+    };
 }
 /** The copy of a run in the shared store: its directory, or why it could not be made (the run itself stands). */
 export interface SharedCopy {
