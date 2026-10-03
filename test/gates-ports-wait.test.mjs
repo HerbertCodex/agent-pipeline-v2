@@ -21,7 +21,8 @@ const noProc = !existsSync('/proc/net/tcp') && 'no /proc';
 const freePort = () => new Promise(done => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => done(port)); }); });
 /** A server listening on `port`, started with `cwd` as working directory, resolved once it listens. */
 function server(t, cwd, port) {
-  const child = spawn(process.execPath, ['-e', `require("net").createServer().listen(${port}, "127.0.0.1", () => console.log("up"))`], { cwd, stdio: ['ignore', 'pipe', 'ignore'], detached: true });
+  // Never outlives its test, even if the test stops before its hook: five minutes at most (PR #117).
+  const child = spawn(process.execPath, ['-e', `setTimeout(() => process.exit(0), 300000); require("net").createServer().listen(${port}, "127.0.0.1", () => console.log("up"))`], { cwd, stdio: ['ignore', 'pipe', 'ignore'], detached: true });
   t.after(() => { try { process.kill(child.pid, 'SIGKILL'); } catch { /* gone */ } });
   const exited = new Promise(done => child.once('exit', () => done(true)));
   return new Promise(done => child.stdout.once('data', () => done({ child, exited })));
