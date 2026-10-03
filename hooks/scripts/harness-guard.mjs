@@ -3,7 +3,7 @@
 // Node built-ins only, like every hook: they run before any install and never need the compiled dist.
 // A guard rail against mistakes, not a security boundary: a command that computes its targets is not guessed.
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 export const HARNESS_REASONS = {
@@ -516,15 +516,79 @@ function git(cwd, args) {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
-/** True when a flock on `file` is held by one of `ancestors` (read from `/proc/locks`). */
-export function flockHeldBy(file, ancestors, locksPath = '/proc/locks') {
-  let locks; let inode;
-  try { locks = readFileSync(locksPath, 'utf8'); inode = statSync(file).ino; } catch { return false; }
+const MARKERS = ['.apv/config.json', 'pipeline.v2.json'];
+
+/**
+ * Whether `dir` lies in a project of the tool (docs/PLUGIN.md, « Portée des crochets »), by marks a commit of an agent
+ * does not take away: a `.apv/` folder or a configuration (`.apv/config.json`, the V2 `pipeline.v2.json`) in the working
+ * tree; the stores of the tool in the Git common directory (`apv/`, closed to every command); the configuration in the
+ * last commit, or at the tip of any local or remote-tracking branch. A directory that is no repository: its own files only.
+ */
+export function projectOfTool(dir) {
+  const root = git(dir, ['rev-parse', '--show-toplevel']);
+  const base = root ?? dir;
+  if (existsSync(join(base, '.apv')) || MARKERS.some(m => existsSync(join(base, m)))) return true;
+  const common = git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (common === null) return false;
+  if (existsSync(join(common, 'apv'))) return true;
+  const tips = (git(dir, ['for-each-ref', '--format=%(objectname)', 'refs/heads', 'refs/remotes']) ?? '').split('\n').filter(Boolean);
+  const commits = [...new Set(['HEAD', ...tips])].slice(0, 1000);
+  const r = spawnSync('git', ['cat-file', '--batch-check'], { cwd: dir, encoding: 'utf8', input: commits.flatMap(c => MARKERS.map(m => `${c}:${m}`)).join('\n') + '\n',
+    stdio: ['pipe', 'pipe', 'ignore'], timeout: 5000 });
+  if (r.status !== 0) return true;
+  return r.stdout.split('\n').some(line => line && !/ missing$/.test(line));
+}
+
+/**
+ * The address of a remote of the repository at `root` when it is known to be a repository outside the tool, or null:
+ * the same address to fetch and to push (`pushurl`, `pushInsteadOf` elsewhere: unknown), and at least one branch of it
+ * fetched (never fetched: unknown). That its branches carry no configuration of the tool is checked by projectOfTool.
+ */
+function verifiedRemote(root, name) {
+  const fetchUrl = git(root, ['remote', 'get-url', name]);
+  const pushUrl = git(root, ['remote', 'get-url', '--push', name]);
+  if (!fetchUrl || fetchUrl !== pushUrl) return null;
+  const fetched = git(root, ['for-each-ref', '--count=1', '--format=%(refname)', `refs/remotes/${name}/`]);
+  return fetched ? fetchUrl : null;
+}
+
+/** The `owner/repo` of a GitHub repository named by `owner/repo`, `host/owner/repo` or an address (`git@host:o/r.git`), lower case. */
+export function repoSlug(value) {
+  const m = /([^/:\s]+)\/([^/:\s]+?)(?:\.git)?\/?$/.exec(String(value ?? '').trim());
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+}
+
+
+/** The device of a `stat` (bigint) as `/proc/locks` prints it: `major:minor`, in hexadecimal. */
+export function lockDevice(dev) {
+  const major = ((dev >> 8n) & 0xfffn) | ((dev >> 32n) & ~0xfffn);
+  const minor = (dev & 0xffn) | ((dev >> 12n) & ~0xffn);
+  return `${major.toString(16)}:${minor.toString(16)}`;
+}
+
+/** Whether process `pid` holds `file` open (an entry of `/proc/<pid>/fd` leads to it). */
+function holdsOpen(pid, file, procRoot = '/proc') {
+  let real; let fds;
+  try { real = realpathSync(file); fds = readdirSync(join(procRoot, String(pid), 'fd')); } catch { return false; }
+  return fds.some(fd => { try { return readlinkSync(join(procRoot, String(pid), 'fd', fd)) === real; } catch { return false; } });
+}
+
+/**
+ * True when a flock on `file` is held by one of `ancestors` (read from `/proc/locks`): same inode on the same device.
+ * Some file systems print another device there than `stat` gives (btrfs subvolumes): the same inode then counts when
+ * that process holds the file open.
+ */
+export function flockHeldBy(file, ancestors, locksPath = '/proc/locks', procRoot = '/proc') {
+  let locks; let st;
+  try { locks = readFileSync(locksPath, 'utf8'); st = statSync(file, { bigint: true }); } catch { return false; }
   const pids = new Set(ancestors.map(a => a.pid));
+  const [major, minor] = lockDevice(st.dev).split(':').map(x => parseInt(x, 16));
   for (const line of locks.split('\n')) {
     const fields = line.trim().split(/\s+/);
-    if (fields[1] !== 'FLOCK' || fields[3] !== 'WRITE') continue;
-    if (Number(fields[5]?.split(':')[2]) === inode && pids.has(Number(fields[4]))) return true;
+    if (fields[1] !== 'FLOCK' || fields[3] !== 'WRITE' || !pids.has(Number(fields[4]))) continue;
+    const [maj, min, ino] = (fields[5] ?? '').split(':');
+    if (ino === undefined || BigInt(/^\d+$/.test(ino) ? ino : -1) !== st.ino) continue;
+    if ((parseInt(maj, 16) === major && parseInt(min, 16) === minor) || holdsOpen(Number(fields[4]), file, procRoot)) return true;
   }
   return false;
 }
@@ -532,7 +596,7 @@ export function flockHeldBy(file, ancestors, locksPath = '/proc/locks') {
 /** The context of the real hook: lazy, each part read once and only when a rule needs it. */
 export function hookContext(input, env = process.env) {
   const cwd = typeof input?.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
-  let ancestors = null; let stacks = null;
+  let ancestors = null; let stacks = null; let apvProject = null;
   const context = {
     cwd,
     home: env.HOME ?? null,
@@ -553,6 +617,34 @@ export function hookContext(input, env = process.env) {
       return [...new Set([...(head && head.startsWith('origin/') ? [head.slice('origin/'.length)] : []), 'main', 'master'])];
     },
     currentBranch: () => git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
+    // Whether the tool is active for a command (docs/PLUGIN.md, « Portée des crochets »): the repository of the working
+    // directory, the project of the session, or a repository the command targets (`targets` of commandTargets) is a project
+    // of the tool (projectOfTool). A target that cannot be placed (computed, an address that is not a remote of this
+    // repository): active. No repository at all: active.
+    apvProject: (scope = {}) => {
+      if (scope.plain === false) return true;
+      const root = git(cwd, ['rev-parse', '--show-toplevel']);
+      if (apvProject === null) {
+        const project = typeof env.CLAUDE_PROJECT_DIR === 'string' && env.CLAUDE_PROJECT_DIR ? env.CLAUDE_PROJECT_DIR : null;
+        // No repository at all (neither the working directory nor the project of the session): active.
+        apvProject = !root || projectOfTool(root) || (project !== null && projectOfTool(project));
+      }
+      if (apvProject) return true;
+      // A literal cd stays in the same repository, or the command is judged active.
+      for (const dir of scope.dirs ?? []) if (git(dir, ['rev-parse', '--show-toplevel']) !== root) return true;
+      const remotes = scope.remotes ?? []; const slugs = scope.slugs ?? [];
+      if (!remotes.length && !slugs.length) return false;
+      const names = (git(root, ['remote']) ?? '').split('\n').filter(Boolean);
+      const reached = remotes.includes('*') || slugs.length ? names : remotes;
+      if (!reached.length || remotes.some(r => r !== '*' && !names.includes(r))) return true;
+      const urls = new Map();
+      for (const name of reached) {
+        const url = verifiedRemote(root, name);
+        if (url === null) return true;
+        urls.set(name, repoSlug(url));
+      }
+      return slugs.some(slug => ![...urls.values()].includes(slug));
+    },
     flockHeldByAncestor: file => flockHeldBy(file, context.ancestors()),
     leaseHeld: () => (env.APV_LOCK_HELD ?? '').split(',').map(x => x.trim()).filter(Boolean),
   };
@@ -561,4 +653,4 @@ export function hookContext(input, env = process.env) {
 
 /** A context where nothing is known: no ancestors, no stacks, no directory (the pure calls of the tests). */
 export const EMPTY_CONTEXT = { cwd: null, home: null, agentType: null, agentId: null, ancestors: () => [], stacks: () => [], flockHeldByAncestor: () => false, leaseHeld: () => [],
-  defaultBranches: () => ['main', 'master'], currentBranch: () => null };
+  defaultBranches: () => ['main', 'master'], currentBranch: () => null, apvProject: () => true };

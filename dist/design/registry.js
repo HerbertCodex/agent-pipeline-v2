@@ -59,6 +59,18 @@ export function loadDesignConfig(repo) {
 export function sha256File(path) {
     return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
+/**
+ * The mockup a decision records, read as `apv design register` writes it (the registry's own parser): its slug, version,
+ * screens and group, or null when the decision is not a confirmed mockup registration. Shared with the rules before a
+ * merge (src/rules/screens.ts), so that both read the same screens.
+ */
+export function mockupDecision(decision) {
+    const id = DECISION_ID.exec(decision.id);
+    if (!id || decision.status !== 'confirmed')
+        return null;
+    const parts = valueParts(decision.value);
+    return { slug: id[1], version: id[2] ? Number(id[2]) : 1, screens: parts.screens, group: parts.group, file: parts.file };
+}
 function parseMockup(repo, decision) {
     const id = DECISION_ID.exec(decision.id);
     if (!id || decision.status !== 'confirmed')

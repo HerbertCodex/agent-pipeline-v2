@@ -1,4 +1,5 @@
 import { type DesignSettings } from './config.js';
+import { type Decision } from '../lifecycle/decisions.js';
 import { type DesignAttributeResult } from './attributes.js';
 export { DEFAULT_DESIGN_DIR } from './config.js';
 /** Lowercase words joined by single dashes; short enough for the decision id (80 characters at most). */
@@ -30,6 +31,18 @@ export interface RegisteredMockup {
     recordedGroup: string | null;
     sourceQuote: string;
 }
+/**
+ * The mockup a decision records, read as `apv design register` writes it (the registry's own parser): its slug, version,
+ * screens and group, or null when the decision is not a confirmed mockup registration. Shared with the rules before a
+ * merge (src/rules/screens.ts), so that both read the same screens.
+ */
+export declare function mockupDecision(decision: Decision): {
+    slug: string;
+    version: number;
+    screens: string[];
+    group: string | null;
+    file: string | null;
+} | null;
 /**
  * The value of a mockup decision with its file path `from` replaced by `to` (the sha256 and every other word kept):
  * the decision of a mockup moved by `apv design organize`. Throws when the value does not carry `from`.

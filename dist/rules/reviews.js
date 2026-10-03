@@ -121,6 +121,18 @@ export function recordReview(common, input) {
 }
 /** The seal of a record: HMAC of its file with the anchor key, written by the PostToolUse hook, never by the tool. */
 const sealOf = (key, content) => sign(key, 'review', sha256(content));
+/** Whether the record `id` of `domain` is stored under this Git common directory, at any commit. */
+export function recordExists(common, id, domain) {
+    if (!/^[\w-]+$/.test(id) || !/^[\w-]+$/.test(domain))
+        return false;
+    const root = join(common, ...REVIEWS_DIR);
+    try {
+        return readdirSync(root).some(commit => existsSync(join(root, commit, domain, `${id}.json`)));
+    }
+    catch {
+        return false;
+    }
+}
 /**
  * Seals the record `id` of `domain` (PostToolUse hook, hooks/scripts/review-seal.mjs): only when the command that wrote it
  * was run by the reviewer agent of the domain, which the hook checked. The seal is what `apv rules check` trusts: the

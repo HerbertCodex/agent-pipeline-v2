@@ -59,6 +59,14 @@ export declare function stacksOfLock(stacks: readonly ResolvedStack[], lock: {
     kind: 'flock';
     file: string;
 }): string[];
+/**
+ * Whether a kernel lock (`flock`) on `file` is held by this process or one of its ancestors (read in `/proc/locks`):
+ * a suite launched under the lock of its stack (`flock <lockFile> apv gates run ...`) holds it already. The lock is the
+ * same inode on the same device; some file systems print another device there than `stat` gives (btrfs subvolumes), and
+ * the same inode then counts when that ancestor holds the file open. Init (pid 1) is never counted. False when
+ * unreadable (another system, file absent): the lock then counts as another's.
+ */
+export declare function flockHeldByAncestor(file: string, ancestors?: ReadonlySet<number>, locksPath?: string, procRoot?: string): boolean;
 /** Whether the flock of `file` is free now: taken and released at once (`flock -n`). Null when unknown. */
 export declare function flockFree(file: string): boolean | null;
 export interface ProbeContext {

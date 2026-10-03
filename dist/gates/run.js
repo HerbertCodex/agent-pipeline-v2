@@ -17,7 +17,7 @@ import { WEB_RECORD } from '../web/impact.js';
 import { publishRun, pruneStore, receiptRetention, sharedStore } from './store.js';
 import { readPreviewState } from '../preview/state.js';
 import { repositoryWorktrees } from '../execution/procs.js';
-import { flockFree, markStacksUsed, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
+import { flockFree, flockHeldByAncestor, markStacksUsed, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
 import { classifyFailures } from './infrastructure.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables } from './spread.js';
@@ -102,11 +102,12 @@ const HELD_BY = {
     outside: 'un processus hors du dépôt', 'unknown-cwd': 'un processus au dossier illisible',
 };
 /** Why a full suite cannot start: ports of the suite held by others, declared stacks whose lock is held. */
-export function busyReasons(ports, stacks, free = flockFree, previewPorts = []) {
+export function busyReasons(ports, stacks, free = flockFree, previewPorts = [], heldByUs = () => false) {
     const out = (ports?.left ?? []).map(p => `port ${p.ports.join(', ')} tenu par le pid ${p.pid} (${HELD_BY[p.reason] ?? p.reason}${p.worktree ? ` : ${p.worktree}` : ''}) : ${p.command.slice(0, 100)}` +
         `${p.ports.some(port => previewPorts.includes(port)) ? ' ; c\'est le serveur de l\'aperçu vivant : apv preview stop (depuis le checkout qui l\'a lancé), puis relancer la suite' : ''}`);
+    // A lock held by the caller itself (the suite launched under `flock <lockFile>`) is its own, not another's.
     for (const s of stacks)
-        if (s.lockFile && free(s.lockFile) === false)
+        if (s.lockFile && free(s.lockFile) === false && !heldByUs(s.lockFile))
             out.push(`pile ${s.id} : son verrou (${s.lockFile}) est tenu`);
     return out;
 }
@@ -283,7 +284,7 @@ export async function runGates(options) {
             catch {
                 return null;
             } }).filter((x) => x !== null);
-            const busy = busyReasons(ports, options.config.stacks?.length ? resolveStacks(options.config, await commonPath(git, repo, '.')) : [], flockFree, previews);
+            const busy = busyReasons(ports, options.config.stacks?.length ? resolveStacks(options.config, await commonPath(git, repo, '.')) : [], flockFree, previews, file => flockHeldByAncestor(file));
             if (busy.length) {
                 throw new PipelineError('GATE_BUSY', `Suite complète refusée, rien n'a été exécuté : ${busy.join(' ; ')}. Une autre suite, un e2e lancé par un agent ou un serveur ` +
                     'utilise déjà la pile de test : deux exécutions en même temps rendent les tests instables. Attendre sa fin (apv lock status, apv stacks status), ' +
@@ -337,6 +338,15 @@ export async function runGates(options) {
         }
         const keys = new Map();
         const missingEnv = new Map();
+        const heldAboveCache = new Map();
+        const heldAbove = (file) => {
+            if (!heldAboveCache.has(file)) {
+                heldAboveCache.set(file, flockHeldByAncestor(file));
+                if (heldAboveCache.get(file))
+                    log(`Verrou ${file} déjà tenu par un processus parent de cette suite : les contrôles qui le demandent tournent sous lui, sans le reprendre.`);
+            }
+            return heldAboveCache.get(file);
+        };
         const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
         const write = (receipt) => {
             const decision = scopeDecisions.get(receipt.gateId);
@@ -395,13 +405,17 @@ export async function runGates(options) {
                     const result = await runProcess({ command: argv, cwd: workspace, env: passEnv, timeoutMs, signal, maxOutputBytes: 1024 * 1024 });
                     return { result, commandMs: result.durationMs, lockWaitMs: 0, lockError: null };
                 }
-                const result = await runProcess({ command: flockCommand(lock.file, lock.waitMs, argv), cwd: workspace, env: passEnv, timeoutMs, signal,
+                // A kernel lock already held by an ancestor (the suite launched under `flock <file>`) is held for the whole run and
+                // never taken again: a second flock on the same file from a child would wait for its own parent. The checks that
+                // ask for it take turns on a companion lock (`<file>.under`) instead, across processes, under the same lock.waitMs.
+                const file = heldAbove(lock.file) ? `${lock.file}.under` : lock.file;
+                const result = await runProcess({ command: flockCommand(file, lock.waitMs, argv), cwd: workspace, env: passEnv, timeoutMs, signal,
                     maxOutputBytes: 1024 * 1024, waitReady: true });
                 if (result.readyMs === null || result.readyMs === undefined) {
                     const lockError = result.status === 'cancelled' ? null
-                        : result.status === 'spawn_error' ? `flock introuvable (util-linux) pour le verrou ${lock.file} : ${result.stderr.slice(0, 500)}`
-                            : result.exitCode === FLOCK_TIMEOUT_EXIT ? `Verrou flock ${lock.file} non obtenu après ${Math.round(lock.waitMs / 1000)} s (lock.waitMs) : la commande n'a pas été lancée.`
-                                : `flock en échec pour le verrou ${lock.file} (code ${result.exitCode ?? '-'}) : ${redact(result.stderr, secrets).slice(0, 2000)}`;
+                        : result.status === 'spawn_error' ? `flock introuvable (util-linux) pour le verrou ${file} : ${result.stderr.slice(0, 500)}`
+                            : result.exitCode === FLOCK_TIMEOUT_EXIT ? `Verrou flock ${file} non obtenu après ${Math.round(lock.waitMs / 1000)} s (lock.waitMs) : la commande n'a pas été lancée.`
+                                : `flock en échec pour le verrou ${file} (code ${result.exitCode ?? '-'}) : ${redact(result.stderr, secrets).slice(0, 2000)}`;
                     const status = result.status === 'cancelled' ? 'cancelled' : result.status === 'spawn_error' ? 'spawn_error' : result.exitCode === FLOCK_TIMEOUT_EXIT ? 'timed_out' : 'failed';
                     return { result: { ...result, status }, commandMs: 0, lockWaitMs: result.durationMs, lockError };
                 }
