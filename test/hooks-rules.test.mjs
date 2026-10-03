@@ -820,3 +820,43 @@ test('review of c65f8c5: the operator after the creation itself, files from a co
   assert.equal(recordId({ stdout: 'Enregistrement 20261001T000000Z-0000000a\nEnregistrement 20261001T000000Z-0000000b' }), null);
   assert.equal(recordId({ stdout: 'Enregistrement 20261001T000000Z-0000000a', output: 'Enregistrement 20261001T000000Z-0000000a' }), '20261001T000000Z-0000000a');
 });
+
+test('issue 109: where a branch is created, readers of the system, rg handed a store, the pattern of a search', async t => {
+  const { hookContext } = await import('../hooks/scripts/harness-guard.mjs');
+  const lead = { ...as(null), cwd: '/r' };
+  // A reader is the command of the system only on a line that leaves names and commands as they are.
+  for (const command of ['PATH=/tmp/x cat .git/apv/receipts/r.json', 'hash -p /tmp/x/cat cat; cat .git/apv/receipts/r.json', 'function cat { :; }; cat .git/apv/receipts/r.json',
+    '/usr/local/bin/cat .git/apv/receipts/r.json', 'python3 w.py \\< .git/apv/receipts/r.json', 'x=CONFIG_PATH; rg x .git/apv/receipts/r.json']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ['cat .git/apv/receipts/r.json', 'python3 w.py < .git/apv/receipts/r.json', 'rg -t js .git src', 'grep -rn -m 3 .git src', 'rg -n TODO src']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  assert.deepEqual(evaluateCommand('rg -t js x .git', {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, 'the path after the pattern');
+  // Review of 582b168: `<` counted against real redirections, PATH set by name, a search without a path, --color.
+  for (const command of ['python3 w.py \\< .git/apv/receipts/r.json < /dev/null', 'python3 w.py "<" .git/apv/receipts/r.json 0</dev/null',
+    'printf -v PATH %s /tmp/x; cat .git/apv/receipts/r.json', 'read -r PATH < f; cat .git/apv/receipts/r.json', 'source /tmp/env.sh; cat .git/apv/receipts/r.json',
+    "cd .git/apv && rg ''", 'cd .git/apv && grep -r .', 'grep -r --color x .git']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ['cat .git/apv/receipts/hash.json', 'grep -r --color TODO src']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  // Review of cb75485: a heredoc or a here-string is no plain input redirection; PATH set only as an assignment.
+  for (const command of ['python3 w.py "<" .git/apv/receipts/r.json <<< foo', 'python3 w.py \\< .git/apv/receipts/r.json <<<x',
+    'python3 w.py "<" .git/apv/receipts/r.json <<EOF\nx\nEOF', 'env PATH=/tmp/x cat .git/apv/receipts/r.json',
+    'printf -vPATH %s /tmp/x; cat .git/apv/receipts/r.json', 'declare -n p=PATH; p=/tmp/x; cat .git/apv/receipts/r.json',
+    'cd .git/a* && grep -r .', "cd .git/a* && rg ''", 'X=.git/apv; cd "$X" && grep -r x sub']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ['echo PATH=x; cat .git/apv/receipts/r.json', 'python3 x.py < .git/apv/receipts/r.json']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  // A branch created where git acts elsewhere (a variable or an envelope in front of git) is not the branch of the line.
+  const root = mkdtempSync(join(tmpdir(), 'apv3-109-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, stdio: 'pipe' });
+  const main = join(root, 'principal'); mkdirSync(main); git(main, 'init', '-q', '-b', 'main');
+  mkdirSync(join(main, '.apv')); writeFileSync(join(main, '.apv', 'config.json'), '{}'); git(main, 'add', '-A'); git(main, 'commit', '-qm', 'x');
+  const fromMain = hookContext({ cwd: main }, { HOME: root });
+  for (const command of ['GIT_DIR=../autre/.git git checkout -b x && git push', 'env -C ../autre git checkout -b x && git push']) {
+    assert.equal(evaluateCommand(command, {}, fromMain).decision, 'deny', command);
+  }
+  assert.equal(evaluateCommand('git checkout -b x && git push -u origin HEAD', {}, fromMain).decision, 'allow');
+});
