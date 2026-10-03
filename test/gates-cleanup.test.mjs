@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -23,14 +23,20 @@ async function gone(pid, ms = 8000) {
   return !alive(pid);
 }
 const hasProc = existsSync('/proc/self/environ') && existsSync('/proc/net/tcp');
+/** The longest a test server may live, whatever happens to the test that started it. */
+const SERVER_LIFETIME_MS = 5 * 60_000;
 
 /**
  * A check that starts a server out of its process group (a detached child, as a daemonising test server does),
  * writes its pid in `pidFile` once it listens on `port`, then exits with `exit` (or waits `waitMs` first). With
  * `unmarked`, the server is started without the marker of the suite (another tool of the same copy).
+ * The server never outlives its test: it exits once its pid file is gone (the fixture folder is removed when the test
+ * ends, before the test's own hooks could read the pid; 141 such servers were found left running on 2026-10-03), and
+ * after SERVER_LIFETIME_MS in any case.
  */
 function daemonCheck(pidFile, port, { exit = 0, waitMs = 0, unmarked = false } = {}) {
-  const server = `require("net").createServer().listen(${port}, "127.0.0.1", () => require("fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)))`;
+  const watch = `setInterval(() => { if (!require("fs").existsSync(${JSON.stringify(pidFile)})) process.exit(0); }, 250); setTimeout(() => process.exit(0), ${SERVER_LIFETIME_MS});`;
+  const server = `require("net").createServer().listen(${port}, "127.0.0.1", () => { require("fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); ${watch} })`;
   const code = `const { spawn } = require("child_process");
 const env = { ...process.env }; ${unmarked ? 'delete env.APV_SUITE_RUN;' : ''}
 const c = spawn(process.execPath, ["-e", ${JSON.stringify(server)}], { detached: true, stdio: "ignore", env });
@@ -78,6 +84,11 @@ test('a task run is not a full suite: nothing is stopped at its end', { skip: !h
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.json().cleanup, null);
   assert.ok(alive(pidOf(file)));
+  // The server left by the task run stops once its pid file is gone, as when the fixture folder is removed: no test
+  // server outlives its test (141 were found left running on 2026-10-03).
+  const pid = pidOf(file);
+  rmSync(file);
+  assert.ok(await gone(pid), 'the server stops once its pid file is gone');
 });
 
 test('the orphans of the copy on suite.ports left during the suite are stopped at its end', { skip: !hasProc && 'no /proc' }, async t => {
