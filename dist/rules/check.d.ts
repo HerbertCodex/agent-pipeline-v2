@@ -1,5 +1,6 @@
 import { type RemoteCheck } from '../gates/base-gates.js';
 import { type MergeRule } from './config.js';
+import { type DocsOnlyLane } from './docs-only.js';
 export type RuleStatus = 'ok' | 'refused' | 'waived' | 'not_applicable';
 export interface RuleOutcome {
     rule: MergeRule;
@@ -23,6 +24,8 @@ export interface RulesReport {
     mergeBase: string | null;
     ok: boolean;
     rules: RuleOutcome[];
+    /** The lane without code (src/rules/docs-only.ts): whether the change takes it, why, and the files that allowed it. */
+    lane: DocsOnlyLane;
     /** What could not be verified about the target (remote unreadable...), from the base of the checks. */
     warnings: string[];
 }

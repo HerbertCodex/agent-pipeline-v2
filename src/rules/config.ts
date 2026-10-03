@@ -29,6 +29,13 @@ export const DEFAULT_CAPTURE_THEMES: readonly CaptureTheme[] = ['light', 'dark']
 
 const gateId = s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
 
+/**
+ * Kinds of files of the lane without code (`voie sans code`, src/rules/docs-only.ts): a closed list, fixed by the tool. A
+ * project can only narrow it (`rules.docsOnly.kinds`, `exclude`) or switch the lane off (`enabled: false`): never widen it.
+ */
+export const DOCS_ONLY_KINDS = ['decisions', 'mockups', 'drafts', 'specs', 'journal', 'state', 'docs'] as const;
+export type DocsOnlyKind = typeof DOCS_ONLY_KINDS[number];
+
 export const rulesSchema = s.object({
   /**
    * Captures the fidelity review attaches to the commit of a change of interface. `themes: ["light"]` only for a
@@ -44,6 +51,15 @@ export const rulesSchema = s.object({
   journalDays: s.optional(s.number(1, 3650)),
   /** Files that are screens, added to those the tool knows (routes of SvelteKit, Next, Nuxt, Astro, Remix...). */
   screens: s.optional(s.array(s.string(1, 4096), 0, 100)),
+  /**
+   * The lane without code (docs/REGLES.md, « Voie sans code »): on by default, with every kind. `enabled: false` switches
+   * it off, `kinds` keeps only some kinds, `exclude` takes paths out of it. Nothing here can add a path to the lane.
+   */
+  docsOnly: s.optional(s.object({
+    enabled: s.optional(s.boolean()),
+    kinds: s.optional(s.array(s.enum(DOCS_ONLY_KINDS), 0, DOCS_ONLY_KINDS.length)),
+    exclude: s.optional(s.array(s.string(1, 500), 0, 100)),
+  })),
 });
 export type RulesSection = Infer<typeof rulesSchema>;
 
@@ -52,6 +68,8 @@ export interface RulesSettings {
   captures: { viewports: CaptureViewport[]; themes: CaptureTheme[] };
   requiredGates: RequiredGate[];
   screens: string[];
+  /** The lane without code: off, or the kinds it accepts and the paths it excludes. */
+  docsOnly: { enabled: boolean; kinds: DocsOnlyKind[]; exclude: string[] };
 }
 
 /** Effective settings of a `rules` section: the defaults, completed by what the project adds. Throws a CONFIG error. */
@@ -64,5 +82,10 @@ export function rulesSettings(section: RulesSection | undefined, builtIn: readon
     },
     requiredGates: [...builtIn, ...(section?.requiredGates ?? []).map(g => ({ id: g.id, command: [...g.command], source: 'config' as const }))],
     screens: (section?.screens ?? []).map(g => relativeGlob(g, 'rules.screens')),
+    docsOnly: {
+      enabled: section?.docsOnly?.enabled ?? true,
+      kinds: unique(section?.docsOnly?.kinds ?? [...DOCS_ONLY_KINDS]),
+      exclude: (section?.docsOnly?.exclude ?? []).map(g => relativeGlob(g, 'rules.docsOnly.exclude')),
+    },
   };
 }

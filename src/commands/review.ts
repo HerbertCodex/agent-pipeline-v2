@@ -9,6 +9,10 @@ import { gitRoot, resolveCommit } from '../run/git-probe.js';
 import { PipelineError } from '../domain/errors.js';
 import { DOMAIN_REVIEWERS, latestReviews, parseCapture, recordReview, type Findings } from '../rules/reviews.js';
 import { commonDir } from '../stacks/idle.js';
+import { docsOnlyLane, laneLines, planInLane, type DocsOnlyLane } from '../rules/docs-only.js';
+import { rulesSettings } from '../rules/config.js';
+import { REQUIRED_WEB_GATES } from '../rules/required.js';
+import { anchorKey, readOperatorMessages } from '../rules/operator.js';
 import { resolve } from 'node:path';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
@@ -32,6 +36,11 @@ test (*.test.*, *.spec.*, *.e2e.*, dossiers test/ et tests/), de la documentatio
 servis) ou une maquette, sans terme de données ni RGPD (securite, plus fidelite pour une maquette) ;
 élevé pour tout le reste, interface comprise (le contenu n'est jamais lu comme du texte seul), plan
 inchangé.
+Voie sans code (docs/REGLES.md) : quand chaque fichier du diff est du registre des décisions, une maquette
+validée à l'empreinte de sa décision, un brouillon de maquette, une spec (.apv/specs), le journal du pipeline,
+un fichier d'état non exécutable (.apv/state) ou de la documentation *.md hors dossiers servis, aucun domaine
+n'est retenu (securite comprise), sauf ceux que forcent review.always ou --force ; le plan le dit et liste
+les fichiers qui l'ont permise (lane en JSON). Liste fermée, réduite seulement par rules.docsOnly.
 --base     la branche de départ (la base de la PR) ; --head : la tête revue (défaut HEAD).
 --force    garde un domaine quoi que dise le diff (répétable, ou liste séparée par des virgules).
 --repo     le dépôt (défaut : le dossier courant) ; la configuration (review de .apv/config.json) y est lue.
@@ -77,10 +86,11 @@ function forced(values: string[] | undefined): ReviewDomainName[] {
   return out;
 }
 
-function text(plan: ReviewPlan): string {
+function text(plan: ReviewPlan & { lane: DocsOnlyLane }): string {
   const c = plan.counts;
   const lines = [
     `Plan des revues : ${plan.base.ref} (${plan.mergeBase.slice(0, 12)}, base commune) à ${plan.head.ref} (${plan.head.sha.slice(0, 12)})`,
+    ...laneLines(plan.lane),
     `${c.files} fichier(s) : ${c.renames} renommage(s) pur(s), ${c.paths} aux seuls chemins réécrits (imports, références, mise en forme), ${c.content} au contenu changé (dont ${c.neutral} tests, documentation ou outillage, ${c.unclassified} non classé(s) ou plus fort(s) que tests et outillage)`,
     `Risque : ${RISK_LABEL[plan.risk.level]} : ${plan.risk.reason}`,
     ...plan.risk.files.slice(0, 10).map(f => `    ${f.path} : ${f.why}`),
@@ -148,12 +158,19 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const repo = gitRoot(repoPath(io, values.repo));
     const { config } = loadConfig(repo);
     const settings = reviewPlanSettings(config.review);
-    // `securite` in review.always or --force changes nothing: it is kept anyway.
-    const plan = planReviews({
+    // `securite` in review.always or --force changes nothing: it is kept anyway (but in the lane without code, it keeps it).
+    const sensitive = [...sensitivePaths, ...config.risk.highPaths];
+    const dir = designDir(config.design);
+    const raw = planReviews({
       repo, base: values.base, head: values.head ?? 'HEAD', settings,
-      migrations: loadDbConfig(repo).config.migrations, designDir: designDir(config.design),
-      sensitive: [...sensitivePaths, ...config.risk.highPaths], force: force.filter(d => d !== ALWAYS_REVIEWED),
+      migrations: loadDbConfig(repo).config.migrations, designDir: dir,
+      sensitive, force: force.filter(d => d !== ALWAYS_REVIEWED),
     });
+    const common = commonDir(repo);
+    const anchor = anchorKey(common);
+    const lane = await docsOnlyLane({ repo, mergeBase: raw.mergeBase, head: raw.head.sha, plan: raw, designDir: dir, sensitive,
+      settings: rulesSettings(config.rules, REQUIRED_WEB_GATES).docsOnly, messages: readOperatorMessages(common, anchor.key), key: anchor.key });
+    const plan = planInLane(raw, lane, { always: settings.always, operator: force });
     if (values.json) json(io, plan);
     else io.stdout(text(plan));
     return EXIT.ok;

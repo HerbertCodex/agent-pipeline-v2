@@ -4,6 +4,8 @@ import { type DesignAttributeResult } from './attributes.js';
 export { DEFAULT_DESIGN_DIR } from './config.js';
 /** Lowercase words joined by single dashes; short enough for the decision id (80 characters at most). */
 export declare const SLUG_PATTERN: RegExp;
+/** Decision ids of a registration: `maquette-<slug>-validee`, then `-v2`, `-v3`... for each re-registration. */
+export declare const DECISION_ID: RegExp;
 export interface DesignConfig extends DesignSettings {
     configFile: string | null;
 }
@@ -42,6 +44,7 @@ export declare function mockupDecision(decision: Decision): {
     screens: string[];
     group: string | null;
     file: string | null;
+    sha256: string | null;
 } | null;
 /**
  * The value of a mockup decision with its file path `from` replaced by `to` (the sha256 and every other word kept):

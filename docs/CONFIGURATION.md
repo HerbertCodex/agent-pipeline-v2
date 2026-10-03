@@ -661,19 +661,21 @@ Section facultative (3.0.0-alpha.15) de `apv tests check` ([CLI.md](CLI.md#apv-t
 
 ## Règles avant fusion : `rules`
 
-Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR et de sa cible par `apv rules check`, `apv stack merge` et `apv stack batch --merge` ([REGLES.md](REGLES.md)). Elle complète les règles, elle ne peut en retirer aucune : il n'existe pas de clé pour les désactiver.
+Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR et de sa cible par `apv rules check`, `apv stack merge` et `apv stack batch --merge` ([REGLES.md](REGLES.md)). Elle complète les règles, elle ne peut en retirer aucune : il n'existe pas de clé pour les désactiver (`docsOnly` ne fait que réduire ou couper la voie sans code).
 
 ```json
 "rules": {
   "captures": { "viewports": ["desktop", "phone"], "themes": ["light", "dark"] },
   "requiredGates": [{ "id": "a11y", "command": ["npm", "run", "check:a11y"] }],
-  "screens": ["src/views/**/*.vue"]
+  "screens": ["src/views/**/*.vue"],
+  "docsOnly": { "enabled": true, "kinds": ["decisions", "mockups", "drafts", "specs", "journal", "state", "docs"], "exclude": ["docs/legal/**"] }
 }
 ```
 
 - `captures.viewports` (`desktop`, `phone`, `tablet` ; défaut `desktop` et `phone`) et `captures.themes` (`light`, `dark` ; défaut les deux) : captures qu'exige la relecture de fidélité quand le plan des revues la retient, sauf dans un projet sans écran qui n'en ajoute pas (règle `captures`, REGLES.md). `["light"]` seulement pour un projet sans thème sombre.
 - `requiredGates` : contrôles qu'un projet exige en plus de `reuse`, `code-map` et `structure` (projet web) : un identifiant et le début de la commande, reconnue enveloppée ou non (`node <plugin>/dist/cli.js`, `npx apv`) ; ils valent aussi pour un projet sans interface web.
 - `screens` : motifs des fichiers d'écran que l'outil ne reconnaît pas seul (il connaît les pages, mises en page et pages d'erreur de SvelteKit, Next, Remix, Nuxt, Astro et `pages/`).
+- `docsOnly` : la **voie sans code** ([REGLES.md](REGLES.md), « Voie sans code »), active par défaut avec toutes ses sortes. Elle ne peut que se réduire : `enabled: false` la coupe (toute PR suit les règles normales), `kinds` garde seulement certaines sortes (`decisions`, `mockups`, `drafts`, `specs`, `journal`, `state`, `docs`), `exclude` (motifs relatifs) en retire des chemins. Aucune clé n'ajoute un chemin à la voie. Lue à la base commune par `apv rules check` et les commandes `stack` ; `apv review plan` la lit dans le dépôt, comme le reste de sa configuration.
 
 ## Fraîcheur de l'état : `freshness`
 

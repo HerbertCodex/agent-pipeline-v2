@@ -477,6 +477,11 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         }[] | undefined;
         readonly journalDays: number | undefined;
         readonly screens: string[] | undefined;
+        readonly docsOnly: {
+            readonly enabled: boolean | undefined;
+            readonly kinds: ("state" | "decisions" | "mockups" | "drafts" | "specs" | "journal" | "docs")[] | undefined;
+            readonly exclude: string[] | undefined;
+        } | undefined;
     } | undefined;
     readonly freshness: {
         readonly maxAgeDays: number;
