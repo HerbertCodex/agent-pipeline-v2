@@ -26,7 +26,51 @@ export interface DastSummary {
     timeoutMs: number;
     log: string;
     files: string[];
+    /** The preparation of the copy: its dependencies installed (`npm ci`) before the command, or why not. */
+    install: DastInstall;
+    /** The environment file of `review.dast.envFile`: its path, whether it was loaded, how many variables; never the values. */
+    envFile: {
+        file: string;
+        loaded: boolean;
+        variables: number;
+    } | null;
 }
+/**
+ * - `done`: `npm ci` ran in the copy and passed;
+ * - `skipped`: nothing to install (no `package-lock.json`, or `node_modules` already there), with the reason;
+ * - `failed`: `npm ci` failed or passed its delay: the scan command never ran.
+ */
+export interface DastInstall {
+    status: 'done' | 'skipped' | 'failed';
+    reason: string;
+    command: string[] | null;
+    exitCode: number | null;
+    durationMs: number;
+}
+/** The installation of the dependencies of a copy that has a lockfile and no `node_modules`. */
+export declare const DAST_INSTALL: readonly ["npm", "ci", "--no-audit", "--no-fund"];
+/** `~` and `~/…` as the home folder of the account; a relative path from the copy. */
+export declare function envFilePath(value: string, repo: string, home?: string): string;
+/** `KEY=value` lines (`export KEY=value`, quotes removed, `#` comments and blank lines skipped). */
+export declare function parseEnvFile(text: string): Map<string, string>;
+/**
+ * The addresses of a value that leave the machine: the host of each URL (`scheme://[user[:pass]@]host[:port]`), and a
+ * value that is itself a host name or an IPv4 address (`db.example.com`, `10.0.0.5:5432`). Only loopback hosts pass.
+ */
+export declare function remoteHosts(value: string): string[];
+/**
+ * Loads `review.dast.envFile`: refused (`DAST_ENV`) when it is absent, unreadable, or when a value names an address
+ * outside the loopback (the scan must never target production). The refusal names the keys, never their values.
+ */
+export declare function loadDastEnvFile(value: string, repo: string, home?: string): {
+    file: string;
+    variables: Map<string, string>;
+};
+/**
+ * Prepares the copy: with a `package-lock.json` and no `node_modules`, `npm ci` in the copy, output appended to the log,
+ * bounded by `timeoutMs`. Receives the variables of the scan plus `HOME` and `USERPROFILE` (the cache of npm).
+ */
+export declare function prepareCopy(repo: string, env: NodeJS.ProcessEnv, logFd: number, timeoutMs: number, command?: readonly string[]): DastInstall;
 /**
  * Default folder of the reports: under the temporary directory of the machine, named after the copy and the
  * commit, never beside the repository nor inside the copy (removed after the reviews).
@@ -46,6 +90,8 @@ export interface DastRunOptions {
     owner: LockOwner;
     waitSeconds: number;
     now?: () => Date;
+    /** The installation of the dependencies of the copy (tests inject it); default `npm ci --no-audit --no-fund`. */
+    installCommand?: readonly string[];
 }
 /**
  * Runs the scan command in the copy, under the lease `settings.resource`, output to `dast.log` of the report

@@ -74,6 +74,11 @@ export const dastSchema = s.object({
   passEnv: s.default(envNamesSchema, []),
   resource: s.default(s.string(1, 80, /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/), DEFAULT_DAST_RESOURCE),
   description: s.optional(s.string(1, 500)),
+  /**
+   * Environment file loaded into the command (`KEY=value`; `~` for the home folder, relative to the copy otherwise):
+   * refused when a value names an address outside the loopback (src/review/dast.ts). Never the values in the summary.
+   */
+  envFile: s.optional(s.string(1, 4096)),
 });
 export type DastSettings = Infer<typeof dastSchema>;
 /**

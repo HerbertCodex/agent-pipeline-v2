@@ -61,6 +61,7 @@ export declare const dastSchema: import("../domain/schema.js").Schema<{
     readonly passEnv: string[];
     readonly resource: string;
     readonly description: string | undefined;
+    readonly envFile: string | undefined;
 }>;
 export type DastSettings = Infer<typeof dastSchema>;
 /**
@@ -82,6 +83,7 @@ export declare const reviewSettingsSchema: import("../domain/schema.js").Schema<
         readonly passEnv: string[];
         readonly resource: string;
         readonly description: string | undefined;
+        readonly envFile: string | undefined;
     } | undefined;
     readonly paths: {
         readonly ui: string[] | undefined;
@@ -303,6 +305,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly passEnv: string[];
             readonly resource: string;
             readonly description: string | undefined;
+            readonly envFile: string | undefined;
         } | undefined;
         readonly paths: {
             readonly ui: string[] | undefined;

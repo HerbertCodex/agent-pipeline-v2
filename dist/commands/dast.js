@@ -22,7 +22,15 @@ le droit de lancer Docker, la revue sécurité lit le rapport.
 La commande tourne dans la copie, sous le verrou (défaut « dast »), bornée par review.dast.timeoutMs ;
 elle reçoit les variables de DEFAULT_PASS_ENV et de review.dast.passEnv, APV_DAST_REPORT_DIR,
 APV_DAST_COMMIT, APV_DAST_REPO, et les jokers {{reportDir}}, {{commit}}, {{repo}} (arguments entiers).
+Copie préparée seule : avec package-lock.json et sans node_modules, npm ci --no-audit --no-fund dans la
+copie avant la commande (sortie dans dast.log, même délai ; échec : scan non lancé).
+review.dast.envFile (facultatif, ~ admis, relatif à la copie sinon) : fichier KEY=valeur chargé dans
+l'environnement de la commande ; refusé, rien n'est lancé, si une valeur désigne une adresse hors
+bouclage (seuls localhost et 127.0.0.1) : le scan ne vise jamais la production. summary.json consigne
+install (done, skipped ou failed, avec la raison) et envFile (chemin, chargé, nombre de variables ;
+jamais les valeurs).
 Sortie : 0 scan terminé à 0, 1 scan en échec, délai dépassé, verrou non obtenu ou scan non déclaré,
+installation en échec, fichier d'environnement refusé,
 2 appel incorrect.`;
 const options = {
     repo: { type: 'string' }, out: { type: 'string' }, commit: { type: 'string' }, wait: { type: 'string' },
@@ -86,6 +94,8 @@ export async function run(args, io) {
         else {
             io.stdout([
                 `Scan dynamique ${STATUS_TEXT[summary.status]} (code ${summary.exitCode}) en ${duration(summary.durationMs)}${clean ? '' : ' ; attention : la copie avait des fichiers suivis modifiés'}`,
+                `Copie préparée : ${summary.install.status === 'done' ? `dépendances installées (${summary.install.command?.join(' ')}, ${duration(summary.install.durationMs)})` : summary.install.status === 'failed' ? `ÉCHEC de l'installation, scan non lancé : ${summary.install.reason}` : `rien à installer (${summary.install.reason})`}`,
+                `Fichier d'environnement : ${summary.envFile ? `${summary.envFile.file} chargé (${summary.envFile.variables} variable(s), adresses en bouclage seulement)` : 'aucun (review.dast.envFile absent)'}`,
                 `Rapports : ${reportDir} (${summary.files.length ? summary.files.join(', ') : 'aucun fichier'})`,
                 `Journal : ${reportDir}/${DAST_LOG} ; résumé : ${reportDir}/${DAST_SUMMARY}`,
                 'À donner à la revue sécurité (dossier des rapports), qui les lit sans relancer le scan.',
