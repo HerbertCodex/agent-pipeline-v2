@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitRead } from '../run/git-probe.js';
 
@@ -100,7 +100,7 @@ export function pluginInstall(dir: string, repo: string | null = null): PluginIn
     if (typeof value === 'boolean') enabled = value;
   }
   const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
-  // A plugin installed for the project only (scope project) counts as enabled where it is installed.
+  // Enabled only when a settings file says so (claude plugin install writes it); absent: off.
   return { key, version: str(entry['version']), sha: str(entry['gitCommitSha']), installPath: str(entry['installPath']), enabled: enabled ?? false };
 }
 
@@ -119,20 +119,29 @@ export function pluginStatus(repo: string, env: NodeJS.ProcessEnv, toolRoot = TO
   const project = existsSync(join(repo, '.apv')) || existsSync(join(repo, 'pipeline.v2.json'));
   const dir = claudeDir(env);
   const install = pluginInstall(dir, repo);
-  // Run from the installed copy (no checkout): the next version is read in the folder the marketplace was added from.
-  if (!gitRead(toolRoot, ['rev-parse', 'HEAD']) && install) toolRoot = marketplaceDir(dir, install.key) ?? toolRoot;
   const pkg = readJson(join(toolRoot, 'package.json')) as { version?: unknown } | null;
   const tool = { root: toolRoot, version: typeof pkg?.version === 'string' ? pkg.version : null, sha: gitRead(toolRoot, ['rev-parse', 'HEAD']) };
   const own = catalogAt(toolRoot);
   // The catalog of the installed plugin: its own files, else the commit it was installed from, in this checkout.
   const installed = install?.installPath ? catalogAt(install.installPath) ?? (install.sha && tool.sha ? catalogOf(toolRoot, install.sha) : null) : null;
-  const unknownToPlugin = install && install.sha !== tool.sha ? newRules(own, installed, install.version) : [];
+  // Rules the running tool applies that the installed plugin does not know; none when the tool runs from that copy.
+  const fromInstall = !!install?.installPath && resolve(install.installPath) === resolve(toolRoot);
+  const unknownToPlugin = install && !fromInstall && install.sha !== tool.sha ? newRules(own, installed, install.version) : [];
+  // The next version: the upstream of the running checkout, as last fetched; run from the installed copy (no checkout),
+  // the folder the marketplace was added from (its upstream, else its HEAD), counted from the installed commit.
   let upcoming: PluginStatus['upcoming'] = null;
   const upstream = tool.sha ? gitRead(toolRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']) : null;
   if (upstream) {
     const behind = Number(gitRead(toolRoot, ['rev-list', '--count', `HEAD..${upstream}`]) ?? '0') || 0;
     const rules = behind ? newRules(catalogOf(toolRoot, upstream), own, tool.version) : [];
     upcoming = { ref: upstream, behind, rules };
+  } else if (!tool.sha && install?.sha) {
+    const source = marketplaceDir(dir, install.key);
+    const ref = source && gitRead(source, ['rev-parse', 'HEAD']) ? gitRead(source, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']) ?? 'HEAD' : null;
+    if (source && ref) {
+      const behind = Number(gitRead(source, ['rev-list', '--count', `${install.sha}..${ref}`]) ?? '0') || 0;
+      upcoming = { ref: `${ref} de ${source}`, behind, rules: behind ? newRules(catalogOf(source, ref), own, tool.version) : [] };
+    }
   }
   return { project, install, tool, unknownToPlugin, upcoming, needs: own?.needs ?? {} };
 }

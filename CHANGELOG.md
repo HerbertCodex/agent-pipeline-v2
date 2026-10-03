@@ -2,7 +2,7 @@
 
 ## Non publié
 
-- **Redémarrer avec toute la puissance du pipeline : guide et deux signalements dans `apv status`.** Projet pilote, nuit du 2 au 3 octobre 2026 : le plugin était absent depuis des jours sans que rien ne le dise, et une mise à jour de l'outil a activé des règles de fusion que le plugin installé ne savait pas remplir. Plus aucune fusion ne passait. Désormais, `apv status` :
+- **3.0.0-alpha.13 : redémarrer avec toute la puissance du pipeline, guide et deux signalements dans `apv status`.** La version monte avec les PR #105 à #107 : Claude Code range la copie installée du plugin par version, et une même version pourrait ne pas être rafraîchie par `claude plugin update`. Projet pilote, nuit du 2 au 3 octobre 2026 : le plugin était absent depuis des jours sans que rien ne le dise, et une mise à jour de l'outil a activé des règles de fusion que le plugin installé ne savait pas remplir. Plus aucune fusion ne passait. Désormais, `apv status` :
   - dit le plugin installé (version, commit, activé ou non) face à l'outil lancé, et donne la commande à lancer quand un projet sous APV n'a pas de plugin, ou l'a désactivé ;
   - liste les règles de fusion que le plugin installé ne connaît pas, et celles qu'apporte la prochaine version (branche suivie, telle que récupérée), avec ce qu'elles exigent. La source est un catalogue des règles, `docs/merge-rules.json`.
   

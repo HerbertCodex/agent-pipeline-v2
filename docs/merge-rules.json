@@ -12,7 +12,7 @@
     { "id": "instable", "since": "3.0.0-alpha.12", "needs": ["suite"], "summary": "aucun contrôle réussi seulement après relance" },
     { "id": "relecture", "since": "3.0.0-alpha.12", "needs": ["plugin", "cle", "relecteurs"], "summary": "chaque domaine retenu par apv review plan relu et scellé au commit, sans constat critique ni haut" },
     { "id": "captures", "since": "3.0.0-alpha.12", "needs": ["plugin", "cle", "relecteurs"], "summary": "captures de la relecture de fidélité pour un changement d'interface" },
-    { "id": "controles", "since": "3.0.0-alpha.12", "needs": [], "summary": "contrôles requis (reuse, code-map, structure, rules.requiredGates) présents et obligatoires" },
-    { "id": "maquette", "since": "3.0.0-alpha.12", "needs": ["plugin", "cle", "journal"], "summary": "chaque écran ajouté ou modifié couvert par une maquette validée par l'opérateur" }
+    { "id": "controles", "since": "3.0.0-alpha.12", "needs": [], "summary": "contrôles requis présents et obligatoires : reuse, code-map et structure pour un projet web, et ceux de rules.requiredGates" },
+    { "id": "maquette", "since": "3.0.0-alpha.12", "needs": ["plugin", "cle", "journal"], "summary": "chaque écran ajouté ou modifié couvert par une maquette validée par l'opérateur (déjà sur la cible, ou validée par ses mots tapés dans la session : le journal ne sert qu'à ce second cas)" }
   ]
 }

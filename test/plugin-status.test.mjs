@@ -82,3 +82,27 @@ test('versions compare with their tags; without a catalog, rules count by the ve
   assert.deepEqual(newRules(next, null, '3.0.0-alpha.12').map(r => r.id), ['b']);
   assert.deepEqual(newRules(next, { needs: {}, rules: [next.rules[0]] }, null).map(r => r.id), ['b']);
 });
+
+test('the catalog of merge rules names exactly the rules apv rules check applies', async () => {
+  const { readFileSync } = await import('node:fs');
+  const catalog = JSON.parse(readFileSync(new URL('../docs/merge-rules.json', import.meta.url), 'utf8'));
+  const source = readFileSync(new URL('../src/rules/check.ts', import.meta.url), 'utf8');
+  const applied = [...new Set([...source.matchAll(/outcome\('([a-z]+)'/g)].map(m => m[1]))].sort();
+  assert.deepEqual(catalog.rules.map(r => r.id).sort(), applied);
+  for (const rule of catalog.rules) for (const need of rule.needs) assert.ok(catalog.needs[need], `${rule.id} : ${need}`);
+});
+
+test('run from the installed copy: no rule said unknown to itself; the next version is read in the folder of the marketplace', t => {
+  const s = setup(t);
+  const cache = join(s.root, 'cache'); mkdirSync(join(cache, 'docs'), { recursive: true });
+  writeFileSync(join(cache, 'package.json'), '{"version":"3.0.0-alpha.12"}');
+  writeFileSync(join(cache, 'docs', 'merge-rules.json'), catalog(['preuve', 'relecture']));
+  s.install(s.old, { installPath: cache });
+  writeFileSync(join(s.claude, 'plugins', 'known_marketplaces.json'), JSON.stringify({ 'herbertcodex-apv': { source: { source: 'directory', path: s.tool } } }));
+  git(s.tool, 'reset', '-q', '--hard', s.old);
+  const status = pluginStatus(s.project, s.env, cache);
+  assert.equal(status.tool.root, cache);
+  assert.deepEqual(status.unknownToPlugin, []);
+  assert.deepEqual(status.upcoming.rules.map(r => r.id), ['nouvelle']);
+  assert.match(pluginLines(status).join('\n'), /Mise à jour à venir \(origin\/apv3 de .*outil, 1 commit\(s\)\)/);
+});
