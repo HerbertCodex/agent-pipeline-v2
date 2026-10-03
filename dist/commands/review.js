@@ -77,7 +77,7 @@ function text(plan) {
     const c = plan.counts;
     const lines = [
         `Plan des revues : ${plan.base.ref} (${plan.mergeBase.slice(0, 12)}, base commune) à ${plan.head.ref} (${plan.head.sha.slice(0, 12)})`,
-        `${c.files} fichier(s) : ${c.renames} renommage(s) pur(s), ${c.paths} aux seuls chemins réécrits (imports, références, mise en forme), ${c.content} au contenu changé (dont ${c.neutral} tests, documentation ou outillage, ${c.texts} non classé(s) aux seuls textes, ${c.unclassified} non classé(s))`,
+        `${c.files} fichier(s) : ${c.renames} renommage(s) pur(s), ${c.paths} aux seuls chemins réécrits (imports, références, mise en forme), ${c.content} au contenu changé (dont ${c.neutral} tests, documentation ou outillage, ${c.unclassified} non classé(s) ou plus fort(s) que tests et outillage)`,
         `Risque : ${RISK_LABEL[plan.risk.level]} : ${plan.risk.reason}`,
         ...plan.risk.files.slice(0, 10).map(f => `    ${f.path} : ${f.why}`),
         ...(plan.risk.fileCount > 10 ? [`    (et ${plan.risk.fileCount - 10} autres)`] : []),

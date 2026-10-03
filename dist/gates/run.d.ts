@@ -71,6 +71,7 @@ export interface GateRunOptions {
      */
     since?: {
         commit: string;
+        head: string;
         risk: string;
         reason: string;
     };

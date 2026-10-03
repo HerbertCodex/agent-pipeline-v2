@@ -162,6 +162,10 @@ export async function runGates(options) {
     const git = new Git(options.signal);
     const repo = await git.root(options.repo);
     const candidateSha = await git.sha(repo);
+    // The incremental proof classified the diff up to one HEAD: a commit made since then is not what was classified.
+    if (options.since && options.since.head !== candidateSha) {
+        throw new PipelineError('GATE_SINCE', `--since refusé : HEAD a changé depuis le classement du diff (${options.since.head.slice(0, 12)} classé, ${candidateSha.slice(0, 12)} maintenant). Relancer la même commande.`);
+    }
     const baseSha = options.base ? await git.sha(repo, options.base) : null;
     const treeStatus = () => git.exec(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
     const treeOf = (dir) => dir === repo ? treeStatus() : git.exec(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);

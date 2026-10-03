@@ -11,10 +11,11 @@ export type ReviewDomainName = typeof REVIEW_DOMAINS[number];
 /** The review that no diff, no configuration and no option ever skips. */
 export declare const ALWAYS_REVIEWED: ReviewDomainName;
 /**
- * Path classes of a changed file. `neutral` (tests, documentation) and `tooling` (test tooling: runner configurations,
- * mocks, fixtures) keep no domain and count only for a file that matches no domain class. `server` (server code,
- * configuration) keeps no domain either: it marks a file of high risk, and keeps the prudence of a file no domain
- * class describes (src/review/risk.ts).
+ * Path classes of a changed file. `neutral` (tests, documentation) and `tooling` (mocks, fixtures, test helpers) keep
+ * no domain of their own, count only for a file that matches no domain class, and their changed lines are still read
+ * for the terms of data and GDPR. `server` (server code, configuration), a sensitive path of the high lane and a
+ * configuration file (src/review/risk.ts, CONFIG_FILES) are stronger: such a file keeps every domain, unless it is
+ * named as a test (the configuration, never).
  */
 export declare const PATH_CLASSES: readonly ["ui", "data", "migrations", "personal", "legal", "neutral", "tooling", "server"];
 export type PathClass = typeof PATH_CLASSES[number];

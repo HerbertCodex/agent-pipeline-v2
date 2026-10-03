@@ -4,7 +4,7 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { matches } from '../policy/policy.js';
 import { resolveCommit } from '../run/git-probe.js';
 import { ALWAYS_REVIEWED, PATH_CLASSES, REVIEW_DOMAINS } from './config.js';
-import { diffRisk, textOnly } from './risk.js';
+import { CONFIG_FILES, SERVED_DIR, TEST_DIRS, TEST_NAME, diffRisk, realAddress } from './risk.js';
 const FILES_SHOWN = 50;
 const MAX_DIFF_BYTES = 512 * 1024 * 1024;
 function git(repo, args) {
@@ -260,12 +260,27 @@ const WHY = {
     personal: 'données personnelles, export ou traceurs au contenu changé',
     legal: 'texte légal au contenu changé',
     unclassified: 'fichier non classé au contenu changé (prudence)',
-    texts: 'textes seuls d\'un fichier non classé (chaînes de prose changées, aucun code)',
+    strong: 'code serveur, chemin sensible ou configuration au contenu changé (prudence, plus fort que tests et outillage)',
 };
-/** Test files: never shipped, whatever their path (a test of the authentication is still a test). */
-const TEST_FILES = ['**/*.test.*', '**/*.spec.*', '**/__tests__/**', '**/test/**', '**/tests/**', '**/e2e/**'];
-/** Classes that keep no domain: a file matching only these is not « unclassified ». */
+/** Classes that keep no domain of their own: a file matching only these is not described by a domain class. */
 const NO_DOMAIN = ['neutral', 'tooling', 'server'];
+const sides = (file) => [file.path, ...(file.from !== undefined ? [file.from] : [])];
+/** Named as a test (`*.test.*`, `*.spec.*`, `*.e2e.*`) on every side of the change. */
+const testNamed = (file) => sides(file).every(p => TEST_NAME.test(p));
+const isConfig = (file) => sides(file).some(p => CONFIG_FILES.some(g => matches(p, g)));
+const isSensitive = (file, input) => sides(file).some(p => input.sensitive.some(g => matches(p, g)));
+/**
+ * Server code, a sensitive path of the high lane or a configuration: stronger than the neutral and tooling classes
+ * (`src/lib/server/fixtures/admin.ts`, `.apv/config.json`, `vitest.config.ts`, `src/routes/tests/+server.ts`). Only a
+ * file named as a test escapes the server and sensitive paths; nothing escapes the configuration.
+ */
+function strongPath(file, input) {
+    if (isConfig(file))
+        return true;
+    if (testNamed(file))
+        return false;
+    return file.classes.includes('server') || isSensitive(file, input);
+}
 function classify(path, input) {
     const { paths } = input.settings;
     const found = PATH_CLASSES.filter(c => paths[c].some(p => matches(path, p)) || (c === 'migrations' && input.migrations.some(p => matches(path, p))));
@@ -297,11 +312,28 @@ function fileKeeps(file, patch, input) {
     if (file.change !== 'content')
         return keeps;
     const meaningful = file.classes.filter(c => !NO_DOMAIN.includes(c));
+    const lines = patch && !patch.binary ? [...patch.added, ...patch.removed] : [];
+    // The words of the changed lines: a query written in a page, a tracker, a personal field, a real address in a fixture.
+    const terms = () => {
+        const data = termIn(lines, input.settings.terms.data);
+        if (data)
+            add('donnees', `terme de données « ${data} » dans les lignes changées`);
+        const personal = termIn(lines, input.settings.terms.personal);
+        if (personal)
+            add('rgpd', `terme RGPD « ${personal} » dans les lignes changées`);
+        const address = realAddress(patch?.added ?? []);
+        if (address)
+            add('rgpd', 'adresse e-mail réelle (domaine non réservé aux exemples) dans les lignes ajoutées');
+    };
     if (!meaningful.length && !inDesign) {
-        if (classes.has('neutral') || classes.has('tooling'))
+        if (strongPath(file, input)) {
+            for (const domain of ['fidelite', 'donnees', 'rgpd'])
+                add(domain, WHY.strong);
             return keeps;
-        if (proseOnly(file, patch, input)) {
-            add('fidelite', WHY.texts);
+        }
+        // Tests, documentation, tooling: no domain of their own, but their words still count (a fixture with personal data).
+        if (classes.has('neutral') || classes.has('tooling')) {
+            terms();
             return keeps;
         }
         for (const domain of ['fidelite', 'donnees', 'rgpd'])
@@ -316,70 +348,45 @@ function fileKeeps(file, patch, input) {
         add('rgpd', WHY.personal);
     if (classes.has('legal'))
         add('rgpd', WHY.legal);
-    // The words of the changed lines: a query written in a page, a tracker or a personal field added to a component.
-    const lines = patch ? [...patch.added, ...patch.removed] : [];
-    if (patch?.binary !== true) {
-        const data = termIn(lines, input.settings.terms.data);
-        if (data)
-            add('donnees', `terme de données « ${data} » dans les lignes changées`);
-        const personal = termIn(lines, input.settings.terms.personal);
-        if (personal)
-            add('rgpd', `terme RGPD « ${personal} » dans les lignes changées`);
-    }
+    terms();
     return keeps;
 }
-const isSensitive = (file, input) => [file.path, file.from].some(p => p !== undefined && input.sensitive.some(g => matches(p, g)));
-const isTest = (path) => TEST_FILES.some(g => matches(path, g));
+const SENSITIVE_WHY = 'chemin sensible (authentification, session, permissions, dépendances, configuration de sécurité, CI ou instructions des agents)';
 /**
- * A file no domain class describes whose changed lines only change prose (src/review/risk.ts), outside the server
- * code, the configuration and the sensitive paths, and without a term of data or GDPR in them: interface texts kept
- * in a module (messages, labels). It keeps the fidelity review instead of every domain.
+ * The risk of one changed file (src/review/risk.ts), by its path only: low for a test, documentation or a mockup
+ * without a word of data or GDPR; high for everything else (the plan of 3.0.0-alpha.14).
  */
-function proseOnly(file, patch, input) {
-    if (!patch || file.classes.includes('server') || isSensitive(file, input))
-        return false;
-    if (!textOnly(patch, file.path))
-        return false;
-    const lines = [...patch.added, ...patch.removed];
-    return !termIn(lines, input.settings.terms.data) && !termIn(lines, input.settings.terms.personal);
-}
-/** The risk of one changed file (src/review/risk.ts), from the same reading as the domains it keeps. */
-function fileRisk(file, patch, input) {
+function fileRisk(file, input) {
     const high = (riskWhy) => ({ risk: 'eleve', riskWhy });
     const low = (riskWhy) => ({ risk: 'faible', riskWhy });
     const classes = new Set(file.classes);
-    const test = [file.path, file.from].every(p => p === undefined || isTest(p) || input.settings.paths.tooling.some(g => matches(p, g)));
     if (classes.has('migrations'))
         return high('migration ou schéma');
-    if (isSensitive(file, input) && !test)
-        return high('chemin sensible (authentification, session, permissions, dépendances, configuration de sécurité ou CI)');
-    if (file.from !== undefined && file.from !== file.path && !test)
-        return high('fichier déplacé ou renommé (routes et imports changent de place)');
-    if (file.change !== 'content')
-        return low('chemins seuls réécrits');
-    if (classes.has('data'))
-        return high('données (requêtes, dépôts, modèles)');
-    if (classes.has('personal'))
-        return high('données personnelles, export ou traceur');
-    if (classes.has('legal'))
-        return high('texte légal');
-    // A word of data or GDPR in the changed lines (a query written in a page, a personal field, a tracker).
-    const term = file.keeps.find(k => (k.domain === 'donnees' || k.domain === 'rgpd') && k.why.startsWith('terme '));
-    if (term)
-        return high(term.why);
-    const inDesign = [file.path, file.from].some(p => p !== undefined && (p === input.designDir || p.startsWith(`${input.designDir}/`)));
-    if (classes.has('ui')) {
-        if (patch?.binary)
-            return low('fichier d\'interface binaire (image, police)');
-        return patch && textOnly(patch, file.path) ? low('texte d\'interface sans balisage nouveau') : high('interface au balisage ou au code changé');
-    }
-    if (inDesign)
+    if (isConfig(file))
+        return high('configuration (outil, exécuteurs de tests, lint, format, dépendances, CI)');
+    const named = testNamed(file);
+    if (!named && isSensitive(file, input))
+        return high(SENSITIVE_WHY);
+    if (!named && classes.has('server'))
+        return high('code serveur');
+    // A word of data or GDPR, or a real address, in the changed lines: stronger than a test or a document.
+    const word = file.keeps.find(k => (k.domain === 'donnees' || k.domain === 'rgpd') && (k.why.startsWith('terme ') || k.why.startsWith('adresse ')));
+    if (word)
+        return high(word.why);
+    if (named || sides(file).every(p => TEST_DIRS.some(g => matches(p, g))))
+        return low('tests');
+    // A validated mockup (never served): its fidelity review is kept by fileKeeps.
+    const design = (p) => p === input.designDir || p.startsWith(`${input.designDir}/`);
+    if (sides(file).every(design) && !classes.has('legal') && !classes.has('personal') && !classes.has('data'))
         return low('maquette');
-    if (classes.has('neutral') || classes.has('tooling'))
-        return low(classes.has('tooling') && !classes.has('neutral') ? 'outillage de test' : 'tests ou documentation');
-    if (file.keeps.some(k => k.why === WHY.texts))
-        return low('textes seuls d\'un fichier non classé');
-    return high(classes.has('server') ? 'fichier non classé touchant le code serveur ou la configuration' : 'fichier non classé au contenu changé (prudence)');
+    if (classes.has('legal') || classes.has('personal') || classes.has('data') || classes.has('ui')) {
+        return high(classes.has('ui') ? 'interface (le contenu n\'est jamais lu comme du texte seul)' : 'données, données personnelles ou texte légal');
+    }
+    if (sides(file).every(p => p.endsWith('.md') && !SERVED_DIR.test(p)))
+        return low('documentation');
+    return high(classes.has('tooling') || classes.has('neutral')
+        ? 'outillage ou fichier neutre hors tests nommés, dossiers de tests, documentation et maquettes'
+        : 'fichier non classé (prudence)');
 }
 const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 function skipReason(domain, counts) {
@@ -393,7 +400,6 @@ function skipReason(domain, counts) {
         counts.renames ? count(counts.renames, 'renommage pur', 'renommages purs') : '',
         counts.paths ? count(counts.paths, 'fichier aux seuls chemins réécrits', 'fichiers aux seuls chemins réécrits') : '',
         counts.neutral ? count(counts.neutral, 'fichier de tests, documentation ou outillage', 'fichiers de tests, documentation ou outillage') : '',
-        counts.texts && domain !== 'fidelite' ? count(counts.texts, 'fichier non classé aux seuls textes changés', 'fichiers non classés aux seuls textes changés') : '',
     ].filter(Boolean).join(', ');
     if (!counts.files)
         return 'rien à relire : diff vide';
@@ -431,16 +437,16 @@ export function planReviews(input) {
             .sort((a, b) => PATH_CLASSES.indexOf(a) - PATH_CLASSES.indexOf(b));
         const base = { path: entry.path, ...(entry.from !== undefined ? { from: entry.from } : {}), status: entry.status, change, classes };
         const keeping = { ...base, keeps: fileKeeps(base, patch, input) };
-        return { ...keeping, ...fileRisk(keeping, patch, input) };
+        return { ...keeping, ...fileRisk(keeping, input) };
     });
     const counts = {
         files: files.length,
         renames: files.filter(f => f.change === 'none' && f.from !== undefined).length,
         paths: files.filter(f => f.change === 'paths').length,
         content: files.filter(f => f.change === 'content').length,
-        neutral: files.filter(f => f.change === 'content' && f.classes.every(c => NO_DOMAIN.includes(c)) && (f.classes.includes('neutral') || f.classes.includes('tooling'))).length,
-        texts: files.filter(f => f.keeps.some(k => k.why === WHY.texts)).length,
-        unclassified: files.filter(f => f.change === 'content' && !f.classes.some(c => c !== 'server') && !f.keeps.some(k => k.why === WHY.texts)).length,
+        neutral: files.filter(f => f.change === 'content' && f.classes.every(c => NO_DOMAIN.includes(c)) && (f.classes.includes('neutral') || f.classes.includes('tooling'))
+            && !f.keeps.some(k => k.why === WHY.strong)).length,
+        unclassified: files.filter(f => f.change === 'content' && f.keeps.some(k => k.why === WHY.unclassified || k.why === WHY.strong)).length,
     };
     const risk = diffRisk(files, FILES_SHOWN);
     const sensitive = files.filter(f => [f.path, f.from].some(p => p !== undefined && input.sensitive.some(g => matches(p, g)))).map(f => f.path);

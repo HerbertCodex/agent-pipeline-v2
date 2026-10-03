@@ -441,7 +441,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     try {
       result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env, signal: abort.signal,
         allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}),
-        ...(values.base ? { base: values.base } : {}), ...(since ? { base: since.commit, since: { commit: since.commit, risk: since.risk.level, reason: since.risk.reason } } : {}),
+        ...(values.base ? { base: values.base } : {}), ...(since ? { base: since.commit, since: { commit: since.commit, head: since.head, risk: since.risk.level, reason: since.risk.reason } } : {}),
         ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
         ...(spreadOver ? { stacks: spreadOver } : {}), configFile: loaded.file });
     } catch (error) {
@@ -458,7 +458,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const name = (r: { gate: string; targeted: boolean }): string => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
     if (values.json) {
       json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null, baseGates: kept?.base ?? null,
-        since: since ? { commit: since.commit, proven: since.proven, risk: since.risk } : null,
+        since: since ? { commit: since.commit, head: since.head, proven: since.proven, risk: since.risk } : null,
         stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
         reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
         sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,

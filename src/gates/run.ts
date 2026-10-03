@@ -89,7 +89,7 @@ export interface GateRunOptions {
    * Incremental proof of a round of corrections (`--since`, src/gates/since.ts): the proven commit the run counts from
    * and the risk of the diff, written in the summary. A task run: never a proof of the full suite.
    */
-  since?: { commit: string; risk: string; reason: string };
+  since?: { commit: string; head: string; risk: string; reason: string };
 }
 /** The copy of a run in the shared store: its directory, or why it could not be made (the run itself stands). */
 export interface SharedCopy { directory: string | null; error: string | null; pruned: PruneResult | null }
@@ -268,6 +268,10 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const git = new Git(options.signal);
   const repo = await git.root(options.repo);
   const candidateSha = await git.sha(repo);
+  // The incremental proof classified the diff up to one HEAD: a commit made since then is not what was classified.
+  if (options.since && options.since.head !== candidateSha) {
+    throw new PipelineError('GATE_SINCE', `--since refusé : HEAD a changé depuis le classement du diff (${options.since.head.slice(0, 12)} classé, ${candidateSha.slice(0, 12)} maintenant). Relancer la même commande.`);
+  }
   const baseSha = options.base ? await git.sha(repo, options.base) : null;
   const treeStatus = (): Promise<string> => git.exec(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
   const treeOf = (dir: string): Promise<string> => dir === repo ? treeStatus() : git.exec(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
