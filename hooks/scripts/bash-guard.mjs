@@ -664,9 +664,13 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
   for (const [index, words] of segments.entries()) {
     const moved = cdTarget(words, dir, home);
     if (moved !== undefined) {
-      // A relative cd with CDPATH set (on the line or in the environment) may lead elsewhere: the folder is unknown.
+      // A relative cd may lead elsewhere through CDPATH: the folder is unknown when CDPATH is in the environment, when the
+      // line names it in any way (read with quotes removed: `printf -v CDPATH`, `export CDPAT''H=`, `declare -n c=CDPATH`),
+      // builds a name starting with CD (`export CD$x=`), or runs a text it does not show (`eval`, `source`, `.`).
       const cdArg = words.slice(1).find(a => !a.startsWith('-'));
-      const viaCdpath = cdArg !== undefined && !/^(?:\/|~|\.\.?(?:\/|$))/.test(cdArg) && (process.env.CDPATH || /\bCDPATH=/.test(String(command)));
+      const lineSetsCdpath = /CDPATH|\bCD\w*\$/.test(flatten(String(command)))
+        || segments.some(w => ['eval', 'source', '.'].includes(basename((commandWords(w)?.words ?? w)[0] ?? '')));
+      const viaCdpath = cdArg !== undefined && !/^(?:\/|~|\.\.?(?:\/|$))/.test(cdArg) && (process.env.CDPATH || lineSetsCdpath);
       if (moved !== null && !viaCdpath) { dir = moved; dirs.push(moved); reached.push(moved); } else cdComputed = true;
       continue;
     }
@@ -787,6 +791,9 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
       if (mayBeStore(at(arg, dir)) || mayBeStore(arg)) return REASONS.anchorStore;
       // After a cd the guard cannot follow (`G=.git; cd "$G"`), a relative path that may name the store is one.
       if (cdComputed && !isAbsolute(arg) && globMayMatch(arg.replace(/^\.\//, '').split('/')[0], 'apv')) return REASONS.anchorStore;
+      // When that cd may lead into the store folder itself (the line names `.git`, `apv` or CDPATH, or CDPATH is in the
+      // environment), any relative path may be a store (`cd apv && rm -rf operator`).
+      if (cdComputed && !isAbsolute(arg) && (/\.git|\bapv\b|CDPATH/.test(flatten(String(command))) || process.env.CDPATH)) return REASONS.anchorStore;
     }
     // An unquoted substitution followed by `/apv` is split from its command by the tokenizer: read in the line.
     for (const m of String(command).matchAll(/[)`]\/+([^\s/;&|'"<>()]+)/g)) if (globMayMatch(m[1], 'apv')) return REASONS.anchorStore;
@@ -1441,7 +1448,10 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
     const moved = cdTarget(cdWords, dir, context.home ?? null);
     if (moved !== undefined) {
       const arg = cdWords.slice(1).find(a => !a.startsWith('-'));
-      const viaCdpath = arg !== undefined && !/^(?:\/|~|\.\.?(?:\/|$))/.test(arg) && (env.CDPATH || words.some(w => w.startsWith('CDPATH=')) || /\bCDPATH=/.test(command));
+      // CDPATH named in any way on the line, a name built from CD, or a text run unseen: as in the store guard.
+      const lineSetsCdpath = /CDPATH|\bCD\w*\$/.test(flatten(String(command)))
+        || segments.some(w => ['eval', 'source', '.'].includes(basename((commandWords(w)?.words ?? w)[0] ?? '')));
+      const viaCdpath = arg !== undefined && !/^(?:\/|~|\.\.?(?:\/|$))/.test(arg) && (env.CDPATH || lineSetsCdpath);
       const computed = arg === undefined && /(?:^|[\s;&|(])(?:builtin\s+)?(?:cd|pushd)(?:\s+-\S*)*\s+[$`]/.test(command);
       if (moved === null || viaCdpath || computed || !enterable(moved)) dirKnown = false;
       else { dir = moved; branchSet = null; }
