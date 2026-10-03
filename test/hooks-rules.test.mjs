@@ -596,3 +596,43 @@ test('review of 440d57d: no false block on computed paths and quoted text; tee, 
   assert.deepEqual(evaluateCommand('git push', {}, context), { decision: 'deny', reason: REASONS.pushToDefault('main') });
   assert.deepEqual(evaluateCommand('cd "$X" && git push', {}, context), { decision: 'deny', reason: REASONS.pushToDefault('main') }, 'unknown folder');
 });
+
+test('review of 4dc674e: a failed cd leaves the push on main; quoted redirections, grouped options, .github and HOME are read right', async t => {
+  const { hookContext } = await import('../hooks/scripts/harness-guard.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-cd-rate-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, stdio: 'pipe' });
+  const main = join(root, 'principal'); mkdirSync(main); git(main, 'init', '-q', '-b', 'main');
+  mkdirSync(join(main, '.apv')); writeFileSync(join(main, '.apv', 'config.json'), '{}'); git(main, 'add', '-A'); git(main, 'commit', '-qm', 'x');
+  const feat = join(root, 'copie'); git(main, 'worktree', 'add', '-q', '-b', 'feat', feat);
+  writeFileSync(join(root, 'fichier'), '');
+  // From the checkout on main: ÉLEVÉ 1, the shell stays there when the cd fails; FAIBLE 4, folders the guard cannot follow.
+  const context = hookContext({ cwd: main }, { HOME: root });
+  for (const command of ['cd nope || git push', 'cd /nonexistent; git push', `cd ${join(root, 'fichier')}; git push`, 'pushd /nonexistent; git push origin HEAD',
+    'cd /nonexistent 2>/dev/null; git push', `cd $(echo ${feat}) && git push`, `CDPATH=${root} cd copie && git push`,
+    `git --git-dir=${feat}/.git push`, `env -C ${feat} git push`, "git push origin 'refs/heads/*:refs/heads/*'", "git push origin 'refs/heads/m*'"]) {
+    assert.equal(evaluateCommand(command, {}, context).decision, 'deny', command);
+  }
+  assert.equal(evaluateCommand(`cd ${feat} && git push`, {}, context).decision, 'allow', 'a cd that succeeds is followed');
+  assert.equal(evaluateCommand(`builtin cd ${feat} && git push`, {}, context).decision, 'allow', 'builtin cd is followed');
+  assert.equal(evaluateCommand(`builtin cd ${main} && git push`, {}, hookContext({ cwd: feat }, { HOME: root })).decision, 'deny', 'builtin cd to main');
+  // MOYEN 2 and FAIBLE 6: writes to the stores.
+  const lead = { ...as(null), cwd: '/r' };
+  for (const command of [': > .git/"apv"/receipts/r.json', '> ".git"/apv/receipts/r.json', "echo x > .git/ap'v'/receipts/r.json", 'echo x > .git/a\\pv/receipts/r.json',
+    'exec 3> .git/"apv"/receipts/r.json', 'printf x 1<> .git/apv/receipts/r.json', 'echo x >& .git/apv/receipts/r.json', `node --eval="require('fs').rmSync('.git/apv')"`,
+    `node -pe "require('fs').rmSync('.git/apv')"`, `perl -we 'rmtree(".git/apv")'`, `python3 -Ic "import shutil; shutil.rmtree('.git/apv')"`,
+    "python3 - <<'EOF'\nimport shutil; shutil.rmtree('.git/apv')\nEOF", 'cd .git && rm -rf "$(cat ../n)"', 'wget -qO .git/apv/receipts/r.json https://e.x',
+    'curl -so.git/apv/receipts/r.json https://e.x', 'GIT_TRACE=.git/apv/receipts/r.json git status', 'gzip .git/apv/receipts/r.json', 'sponge .git/apv/receipts/r.json']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  // A1: no false block on .github, .gitignore, or a word that only looks like a piece.
+  for (const command of ['cp "$tmpl" "$root/.github/workflows/ci.yml"', 'echo node_modules >> "$dir/.gitignore"', 'rm -f "$d/.gitkeep"', 'cat "$f" > "$HOME/.gitconfig"',
+    'tool=git; rm -rf "$tmp"', 'v=it; rm -rf "$out"', 'ext=pv; cp a.txt "$dest"', 'name=gi; npm test > "$LOG"']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  // MOYEN 3: HOME or XDG_CONFIG_HOME in front of git keeps the tool active.
+  const { commandScope, tokenize } = await import('../hooks/scripts/bash-guard.mjs');
+  for (const command of [`HOME=${root} git push origin main`, `XDG_CONFIG_HOME=${root} git push origin main`, `export HOME=${root}; git push origin main`]) {
+    assert.equal(commandScope(command, tokenize(command).segments, main, root, {}).plain, false, command);
+  }
+});

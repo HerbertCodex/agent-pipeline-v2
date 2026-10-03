@@ -131,7 +131,8 @@ export interface GateRunResult {
 /**
  * The companion of a kernel lock held by an ancestor of the suite: the lock its checks take turns on. One per real lock
  * file (two paths to the same file share it), in the lock folder of the account (`apv lock`, writable even when the
- * folder of the lock is not), so that every project and process under that ancestor shares it.
+ * folder of the lock is not), so that every project and process under that ancestor shares it, with the same
+ * APV_LOCK_DIR (or XDG_STATE_HOME, HOME). That folder cannot be made: the system's temporary folder, per account.
  */
 export declare function companionLock(file: string, env: NodeJS.ProcessEnv): string;
 /** Files of a `git status --porcelain=v1 -z` output, as `XY path` lines. */

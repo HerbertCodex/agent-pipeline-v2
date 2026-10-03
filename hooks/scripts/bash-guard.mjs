@@ -6,7 +6,7 @@
 // through a symlinked node_modules, docker or supabase commands on a declared test stack without its lock.
 // This is a guard rail against mistakes, not a security boundary: a determined command can
 // always be written in a shape this parser does not recognise.
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DOMAIN_REVIEWERS, agentName, flatten, isMainModule, namesAnchor, readHookInput } from './lib.mjs';
@@ -457,8 +457,8 @@ export function mayBeStore(path) {
 
 /** Commands that delete, move, empty or copy away what they are given: handed a store, they reach it. */
 const STORE_WRITERS = new Set(['rm', 'unlink', 'rmdir', 'shred', 'truncate', 'mv', 'cp', 'rsync', 'tar', 'zip', 'ln', 'chmod', 'chown', 'chgrp', 'install', 'setfacl', 'chattr',
-  'tee', 'trash', 'trash-put', 'rmtrash', 'gio']);
-/** Options that name the file a command writes (`sort -o f`, `curl -o f`, `wget -O f`, `dd of=f`), by command. */
+  'tee', 'trash', 'trash-put', 'rmtrash', 'gio', 'sponge', 'gzip', 'gunzip', 'bzip2', 'xz', 'zstd']);
+/** Options that name the file a command writes (`sort -o f`, `curl -o f`, `curl -so f`, `wget -qO f`, `dd of=f`), by command. */
 const OUTPUT_OPTIONS = { sort: ['-o', '--output'], curl: ['-o', '--output'], wget: ['-O', '--output-document'], dd: ['of'] };
 const outputsOf = (tool, args) => {
   const names = OUTPUT_OPTIONS[tool] ?? [];
@@ -467,16 +467,26 @@ const outputsOf = (tool, args) => {
     for (const n of names) {
       if (a === n) out.push(args[k + 1] ?? '');
       else if (a.startsWith(`${n}=`)) out.push(a.slice(n.length + 1));
-      else if (n.length === 2 && n.startsWith('-') && !n.startsWith('--') && a.startsWith(n) && a.length > 2) out.push(a.slice(2));
+      else if (/^-[A-Za-z]$/.test(n)) {
+        // A short option, alone or last of a group (`-so`, `-qO`), its value attached or in the next word.
+        const m = new RegExp(`^-[A-Za-z]*${n[1]}(.*)$`).exec(a);
+        if (m && !a.startsWith('--')) out.push(m[1] || (args[k + 1] ?? ''));
+      }
     }
   });
   return out.filter(Boolean);
 };
-/** Interpreters given a script on their command line: `python3 -c`, `node -e`, `perl -e`, `ruby -e`, `php -r`, and awk. */
+/**
+ * Interpreters given a script on their command line (`python3 -c`, `-Ic`, `-Sc`, `node -e`, `-pe`, `--eval=`, `perl -we`,
+ * `ruby -e`, `php -r`) or on their standard input (`python3 - <<EOF`), and awk.
+ */
 const AWKS = new Set(['awk', 'gawk', 'mawk', 'nawk']);
-const inlineScript = (tool, args) => AWKS.has(tool) || (INTERPRETERS.has(tool) && args.some(a => /^-(?:c|e|E|p|r|-eval|-print)$/.test(a) || a === 'eval'));
-/** A value of a variable set by the line that may be a piece of a store path (`d=.git/ap`, `d=.gi`, `e=ap`). */
-const storePiece = value => /\.git|apv/.test(value) || (value.replace(/\/$/, '').length >= 2 && '.git/apv'.includes(value.replace(/\/$/, '')));
+const inlineScript = (tool, args) => AWKS.has(tool) || (INTERPRETERS.has(tool) && args.some(a => /^-[a-zA-Z]*[ceEpr][a-zA-Z]*$/.test(a) || /^--(?:eval|print|exec)(?:=|$)/.test(a) || a === 'eval' || a === '-'));
+/** A value of a variable set by the line that may be a piece of a store path (`d=.git/ap`, `d=.gi`, `e=ap`); never `git` or `it`. */
+const storePiece = value => {
+  const v = value.replace(/\/$/, '');
+  return /\.git(?![A-Za-z])|(?:^|\/)apv(?:\/|$)/.test(v) || (v.length >= 2 && !['git', 'it'].includes(v) && '.git/apv'.includes(v));
+};
 
 /**
  * Why a command reaches the stores of the tool, or null (docs/PLUGIN.md, « toujours refusés : magasins, suppression
@@ -486,17 +496,23 @@ const storePiece = value => /\.git|apv/.test(value) || (value.replace(/\/$/, '')
  * that ends in `apv` (`$dir/apv`, `$(git rev-parse --git-common-dir)/apv`). For any command, a glob that may reach into a
  * store (`cat .git/apv/rev*\/*`). A folder of the project named `apv` (`build/apv`) is not a store.
  */
-export function storeProblem(segments, cwd = null, home = null, command = '', shadow = null) {
+export function storeProblem(segments, cwd = null, home = null, command = '', shadow = null, scripts = {}) {
   let dir = cwd;
   const at = (arg, base) => (isAbsolute(arg) || !base ? arg : resolve(base, arg));
   const lineWords = segments.flat();
   const dirs = [cwd];
-  // Variables the line sets to a piece of a store path: a computed path that uses one may be the store.
-  const pieces = lineWords.map(w => /^[A-Za-z_]\w*=(.*)$/.exec(w)?.[1]).filter(v => v && storePiece(v));
-  const computedStore = arg => /[$`]/.test(arg) && (/\/apv\/?$/.test(arg) || /\.gi|(?:^|\/)apv?(?:\/|$)/.test(arg.replace(/\$\{?\w+\}?/g, '')) || pieces.length > 0);
-  for (const words of segments) {
+  // Variables the line sets to a piece of a store path (`d=.git/ap`, `d=.gi`): a computed path that uses one of them
+  // by name may be the store. `.github`, `.gitignore` are no piece.
+  const pieceNames = lineWords.map(w => /^([A-Za-z_]\w*)=(.*)$/.exec(w)).filter(m => m && m[2] && storePiece(m[2])).map(m => m[1]);
+  // A computed path read after a cd into a Git directory (`cd .git && rm -rf "$x"`) may be the store too.
+  const inGitDir = () => dirs.some(d => d && /(?:^|\/)[^/]*\.git(?:\/|$)/.test(d));
+  const computedStore = arg => /[$`]/.test(arg) && (/\/apv\/?$/.test(arg) || /\.git?(?![A-Za-z])|(?:^|\/)apv?(?:\/|$)/.test(arg.replace(/\$\{?\w+\}?/g, '')) ||
+    pieceNames.some(n => new RegExp(`\\$\\{?${n}\\b`).test(arg)) || inGitDir());
+  // A variable set to a path in a store (`GIT_TRACE=.git/apv/receipts/x git status`): written by the command.
+  for (const w of lineWords) { const m = /^[A-Za-z_]\w*=(.+)$/.exec(w); if (m && (mayBeStore(at(m[1], dir)) || mayBeStore(m[1]))) return REASONS.anchorStore; }
+  for (const [index, words] of segments.entries()) {
     const moved = cdTarget(words, dir, home);
-    if (moved !== undefined) { dir = moved; dirs.push(moved); continue; }
+    if (moved !== undefined) { if (moved !== null) { dir = moved; dirs.push(moved); } continue; }
     let cw = commandWords(words)?.words ?? words;
     // busybox rm, toybox mv: the applet is the command.
     if (['busybox', 'toybox'].includes(basename(cw[0] ?? '')) && cw.length > 1) cw = cw.slice(1);
@@ -508,7 +524,7 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
     for (const path of outputsOf(tool, cw.slice(1))) if (mayBeStore(at(path, dir)) || mayBeStore(path) || computedStore(path)) return REASONS.anchorStore;
     // A script given on the command line that names the store folder (`python3 -c "shutil.rmtree('.git/apv')"`, awk);
     // a script file only read (`python3 tools/inspect.py .git/apv/receipts`) is not refused here.
-    if (inlineScript(tool, cw.slice(1)) && /\.git\W{1,4}apv\b/.test(flatten(cw.join(' ')))) return REASONS.anchorStore;
+    if (inlineScript(tool, cw.slice(1)) && /\.git\W{1,4}apv\b/.test(flatten([...cw, ...(scripts[index] ?? [])].join(' ')))) return REASONS.anchorStore;
     const fedByLine = words.slice(0, words.length - cw.length).some(w => ['xargs', 'parallel'].includes(basename(w))) || tool === 'xargs';
     const inPlace = ['sed', 'gsed', 'perl'].includes(tool) && cw.some(a => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place'));
     if (tool === 'find') {
@@ -529,13 +545,16 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
     // An unquoted substitution followed by `/apv` is split from its command by the tokenizer: read in the line.
     for (const m of String(command).matchAll(/[)`]\/+([^\s/;&|'"<>()]+)/g)) if (globMayMatch(m[1], 'apv')) return REASONS.anchorStore;
   }
-  // A redirection into a store empties or replaces what is there, whatever the command (`: > …`, `exec 3> …`). Read in
-  // the shadow of the line (quoted text blanked, same positions), so `grep -c '>' f` is no redirection.
+  // A redirection into a store empties or replaces what is there, whatever the command (`: > …`, `exec 3> …`, `1<> …`,
+  // `>& f`). The operator is read in the shadow of the line (quoted text blanked, same positions), so `grep -c '>' f` is
+  // no redirection; its target is read in the line, quotes and backslashes removed (`.git/"apv"`, `a\pv`).
   if (shadow) {
-    for (const m of shadow.matchAll(/(?<![<>=&-])(?:\d+|&)?>{1,2}\|?(?!&)/g)) {
+    for (const m of shadow.matchAll(/(?<![<>=&-])(?:\d+|&)?(?:<>|>{1,2}[|&]?)/g)) {
       const rest = String(command).slice(m.index + m[0].length).trimStart();
-      const target = /^("[^"]*"|'[^']*'|[^\s;&|<>()]+)/.exec(rest)?.[1]?.replace(/^(['"])(.*)\1$/, '$2');
-      if (target && (dirs.some(d => mayBeStore(at(target, d))) || mayBeStore(target) || computedStore(target))) return REASONS.anchorStore;
+      const raw = /^(?:"[^"]*"|'[^']*'|\\.|[^\s;&|<>()"'\\])+/.exec(rest)?.[0];
+      const target = raw === undefined ? null : flatten(raw);
+      if (!target || /^(?:\d+|-)$/.test(target)) continue;
+      if (dirs.some(d => mayBeStore(at(target, d))) || mayBeStore(target) || computedStore(target)) return REASONS.anchorStore;
     }
   }
   return null;
@@ -627,6 +646,8 @@ export function pushToDefault(words, defaults = ['main', 'master'], ...branch) {
     const [src, dst] = spec.includes(':') ? spec.split(':') : [spec, spec];
     const target = name(dst === '' ? src : dst) === 'HEAD' ? head : name(dst === '' ? src : dst);
     if (target && defaults.includes(target)) return target;
+    // A refspec pattern (`refs/heads/*:refs/heads/*`, `m*`) that may name the default branch.
+    if (target && GLOB.test(target)) { const hit = defaults.find(d => globMayMatch(target, d)); if (hit) return hit; }
   }
   return null;
 }
@@ -657,8 +678,10 @@ export function commandScope(command, segments, cwd = null, home = null, env = {
   if (typeof command !== 'string' || /[$`]|<<|<\(|>\(/.test(command)) return stop();
   if (Object.keys(env).some(k => SCOPE_VARIABLE.test(k) && env[k])) return stop();
   let dir = cwd;
+  // In the line, HOME and XDG_CONFIG_HOME also count: they choose the configuration git reads (`pushInsteadOf`...).
+  const lineVariable = name => SCOPE_VARIABLE.test(name) || name === 'HOME' || name === 'XDG_CONFIG_HOME';
   for (const words of segments) {
-    if (words.some(w => SCOPE_VARIABLE.test(w.split('=')[0]) && w.includes('='))) return stop();
+    if (words.some(w => lineVariable(w.split('=')[0]) && w.includes('='))) return stop();
     const lead = basename(words[0] ?? '');
     if (['cd', 'pushd'].includes(lead)) {
       const target = cdTarget(words, dir, home);
@@ -669,7 +692,7 @@ export function commandScope(command, segments, cwd = null, home = null, env = {
       dir = target;
       continue;
     }
-    if (['export', 'declare', 'typeset', 'readonly', 'local', 'set', 'unset'].includes(lead) && words.some(w => SCOPE_VARIABLE.test(w.split('=')[0]))) return stop();
+    if (['export', 'declare', 'typeset', 'readonly', 'local', 'set', 'unset'].includes(lead) && words.some(w => lineVariable(w.split('=')[0]))) return stop();
     const cw = commandWords(words);
     if (!cw) continue;
     const prefix = words.slice(0, words.length - cw.words.length);
@@ -718,18 +741,27 @@ export function commandScope(command, segments, cwd = null, home = null, env = {
  * The folder a git command acts in: `dir`, or its literal `-C` (resolved from `dir`); undefined when computed or unknown.
  * Any other command: `dir`.
  */
-export function gitDirectory(cwords, dir) {
+export function gitDirectory(cwords, dir, words = cwords, env = {}) {
   if (basename(cwords[0] ?? '') !== 'git') return dir;
+  // Where git acts is moved by GIT_DIR or GIT_WORK_TREE, by `env -C` or `sudo -D` in front of it: unknown.
+  const prefix = words.slice(0, words.length - cwords.length);
+  if (env.GIT_DIR || env.GIT_WORK_TREE || prefix.some(w => /^(?:GIT_DIR|GIT_WORK_TREE)=/.test(w) || /^-(?:-chdir|[A-Za-z]*[CD])/.test(w))) return undefined;
   let where = dir;
   for (let k = 1; k < cwords.length && cwords[k].startsWith('-'); k += 1) {
+    if (/^--(?:git-dir|work-tree)(?:=|$)/.test(cwords[k])) return undefined;
     const option = /^-C(.*)$/.exec(cwords[k]);
     if (!option) { if (GIT_WITH_VALUE.has(cwords[k])) k += 1; continue; }
     const value = option[1] || cwords[(k += 1)];
     if (value === undefined || /[$`~]/.test(value) || (where === null && !isAbsolute(value))) return undefined;
-    where = resolve(where ?? '/', value);
+    const next = resolve(where ?? '/', value);
+    // `git -C <folder that is not there>` fails before pushing: nothing to judge there; keep the folder as it is.
+    where = next;
   }
   return where;
 }
+
+/** Whether a path is a folder that exists. */
+const isDirectory = path => { try { return statSync(path).isDirectory(); } catch { return false; } };
 
 /** The root of this plugin, as launched and with its links resolved: its files run only through apv and the hooks. */
 const PLUGIN_ROOTS = (() => {
@@ -1016,7 +1048,7 @@ export const REASONS = {
   encodedPath: 'APV : chemin décodé (base64) puis utilisé dans la même commande : refusé, les garde-fous doivent pouvoir lire ce que la commande touche.',
   toolVariable: 'APV : les variables internes de l\'outil (APV_ENTRY, APV_ANCHOR_KEY_FILE) ne se posent pas à la main.',
   nestedClaude: 'APV : lancer claude depuis une session gérée par APV est refusé (sauf claude --version et claude -p /usage) : une session imbriquée échappe aux garde-fous des sous-agents ' +
-    '(fusion, relecture). Les agents se lancent par l\'outil Agent du chef de projet.',
+    '(fusion, relecture). Les agents se lancent par l\'outil Agent du chef de projet. Une commande `claude plugin …` (installation, mise à jour) se tape dans un terminal, hors de Claude Code.',
   mergeBySubagent: 'APV : fusion refusée dans un sous-agent. Seul le chef de projet (session principale) fusionne, par apv stack merge, ' +
     'qui vérifie les règles avant chaque fusion.',
   hiddenOutput: 'APV : commande qui écrit sur GitHub avec une sortie masquée (redirection vers /dev/null). ' +
@@ -1085,7 +1117,7 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false) 
   if (active && /(^|[\s;&|(])eval\b/.test(flat) && /\bapv\b|cli\.js/.test(flat)) return { decision: 'deny', reason: REASONS.computedApv };
   if (/\bAPV_ENTRY\b|\bAPV_ANCHOR_KEY_FILE\b/.test(flat)) return { decision: 'deny', reason: REASONS.toolVariable };
   if (decodedAndUsed(command) || decodedAndUsed(flat)) return { decision: 'deny', reason: REASONS.encodedPath };
-  const store = storeProblem(segments, context.cwd ?? null, context.home ?? null, command, shadow);
+  const store = storeProblem(segments, context.cwd ?? null, context.home ?? null, command, shadow, scripts);
   if (store) return { decision: 'deny', reason: store };
   let writesGithub = false;
   const kill = killProblem(segments, context.ancestors);
@@ -1098,8 +1130,17 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false) 
   // A cd the guard cannot follow leaves it unknown (undefined): such a push counts as one to the default branch.
   let dir = context.cwd ?? null; let dirKnown = true;
   for (const [index, words] of segments.entries()) {
-    const moved = cdTarget(words, dir, context.home ?? null);
-    if (moved !== undefined) { dir = moved; dirKnown = moved !== null; }
+    // A cd to a folder that is not there fails and leaves the shell where it was (`cd nope || git push`, `cd /x; git push`):
+    // only a folder that exists is followed. `builtin cd`, a substitution as its target (cut out by the tokenizer, read as a
+    // bare cd) or a relative target with CDPATH set: unknown.
+    const cdWords = basename(words[0] ?? '') === 'builtin' ? words.slice(1) : words;
+    const moved = cdTarget(cdWords, dir, context.home ?? null);
+    if (moved !== undefined) {
+      const arg = cdWords.slice(1).find(a => !a.startsWith('-'));
+      const viaCdpath = arg !== undefined && !/^(?:\/|~|\.\.?(?:\/|$))/.test(arg) && (env.CDPATH || words.some(w => w.startsWith('CDPATH=')) || /\bCDPATH=/.test(command));
+      if (moved === null || viaCdpath || (arg === undefined && /(?:^|[\s;&|(])(?:builtin\s+)?(?:cd|pushd)\s+[$`]/.test(command))) dirKnown = false;
+      else if (isDirectory(moved)) dir = moved;
+    }
     // A write to a remote database (production): refused whatever the locks, no variable lifts it.
     const remote = remoteWriteProblem(words) ?? remoteWriteProblem(lockWrapper(words, stacks, context.cwd).words);
     if (remote) return { decision: 'deny', reason: remote };
@@ -1122,7 +1163,7 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false) 
     if (active && nestedClaude(cwords, flat)) return { decision: 'deny', reason: REASONS.nestedClaude };
     let pushed = null;
     if (active) {
-      const where = gitDirectory(cwords, dir);
+      const where = gitDirectory(cwords, dir, words, env);
       const known = dirKnown && where !== undefined;
       const moved = known && where !== (context.cwd ?? null);
       const current = !known ? undefined : (context.currentBranch ?? (() => null))(...(moved ? [where] : []));
