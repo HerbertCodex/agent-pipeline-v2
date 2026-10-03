@@ -105,7 +105,7 @@ batch  fusion par lot de PR indépendantes, chacune vers la cible : lit chaque P
        du lot avant elle) est fusionnée dans sa branche avec la même régénération, dans un worktree détaché ;
        le commit obtenu doit avoir exactement l'arbre prouvé dans le lot (sinon arrêt, rien n'est poussé), il
        est poussé sans force sur sa branche (jamais depuis un fork, ni sur la cible, la branche par défaut, une
-       branche de longue durée de stack.keepBranches ou une branche protégée : arrêt, rien poussé), journalisé
+       branche de longue durée de stack.keepBranches, une branche protégée ou la base d'une PR ouverte : arrêt, rien poussé), journalisé
        (batch-refresh), relu par gh pr view, puis fusionné. Sans --dast alors que la cible déclare review.dast,
        le rapport dit « Scan dynamique non lancé (--dast absent) ». À la fin, arbre de la cible identique à la tête prouvée du lot ; toute
        différence arrête tout. Journal : .apv/state/stack.log. --keep garde les worktrees des lots.

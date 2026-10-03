@@ -243,8 +243,14 @@ test('batch --merge never pushes on a long-lived, protected or default branch: t
   await p.more(31, 'develop', module('dev', 3));
   await p.more(32, 'prot/1', module('rel', 4), { protected: ['prot/1'] });
   await p.more(33, 'apv3', module('apv', 5), { repo: { default_branch: 'apv3' } });
+  // #34 comes from an integration branch: neither default nor protected nor long-lived by name, but the base of open #37.
+  await p.more(34, 'integration', module('integ', 7));
+  await p.more(37, 'pr-on-integration', module('onit', 8));
+  const state = JSON.parse(readFileSync(join(p.root, 'gh.json'), 'utf8'));
+  state.prs[37].baseRefName = 'integration';
+  writeFileSync(join(p.root, 'gh.json'), JSON.stringify(state));
   // A partner merged first (#21, then #22), then the target itself moved: each refused branch conflicts on the map.
-  const cases = [[['21', '31'], 'develop', /est une branche de longue durée \(stack\.keepBranches : develop\)/], [['22', '32'], 'prot/1', /est protégée sur GitHub/], [['33'], 'apv3', /est la branche par défaut du dépôt sur GitHub \(apv3\)/]];
+  const cases = [[['21', '31'], 'develop', /est une branche de longue durée \(stack\.keepBranches : develop\)/], [['22', '32'], 'prot/1', /est protégée sur GitHub/], [['33'], 'apv3', /est la branche par défaut du dépôt sur GitHub \(apv3\)/], [['34'], 'integration', /est la base de la ou des PR ouverte\(s\) #37 \(branche d'intégration\)/]];
   for (const [prs, name, why] of cases) {
     const n = Number(prs[prs.length - 1]);
     const before = p.head(name);
@@ -258,6 +264,15 @@ test('batch --merge never pushes on a long-lived, protected or default branch: t
     assert.ok(!r.json().merged.includes(n), `#${n} never merged`);
   }
   assert.deepEqual(p.merges(), [21, 22], 'the partners only');
+  // The open pull requests of the branch unreadable: refused as well, never assumed free.
+  const broken = JSON.parse(readFileSync(join(p.root, 'gh.json'), 'utf8'));
+  broken.behavior.pullsFail = true;
+  writeFileSync(join(p.root, 'gh.json'), JSON.stringify(broken));
+  const unread = await p.run(['34', '--merge', '--json'], allow);
+  assert.equal(unread.code, 1);
+  assert.match(unread.json().stopped.reasons[0], /a des PR ouvertes qui ne se lisent pas \(gh api repos\/o\/r\/pulls\)/);
+  broken.behavior.pullsFail = false;
+  writeFileSync(join(p.root, 'gh.json'), JSON.stringify(broken));
   // The local default branch (origin/HEAD) refuses too, before any gh call.
   git(p.repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop');
   const local = await p.run(['31', '--merge', '--json'], allow);

@@ -5,7 +5,7 @@ import { IDENTITY_HINT } from '../run/commit-state.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { errorMessage } from '../domain/errors.js';
 import { anomalies, parsePullRequest, pullRequestPath, VIEW_FIELDS, waitForChecks } from './github.js';
-import { DEFAULT_KEEP_BRANCHES, branchArgs, parseRepositorySettings, repositoryArgs } from './branches.js';
+import { DEFAULT_KEEP_BRANCHES, branchArgs, parseRepositorySettings, pullsArgs, repositoryArgs } from './branches.js';
 import { globToRegExp } from '../db/glob.js';
 import { regenerateStaleMap, resolveGeneratedConflicts } from './regenerate.js';
 export function processGit(env) {
@@ -155,8 +155,8 @@ async function buildLot(options, name, dir, base, members) {
 /**
  * Why the branch of a pull request may never be updated by the batch (a push on it), or null when it may: the target
  * of the batch, the default branch of the repository (`origin/HEAD` locally, `default_branch` on GitHub), a long-lived
- * branch (`stack.keepBranches`, DEFAULT_KEEP_BRANCHES), a branch protected on GitHub, or one whose protection cannot be
- * read (refused, never assumed free). The push of a merge commit on a shared branch is an effect the batch never has,
+ * branch (`stack.keepBranches`, DEFAULT_KEEP_BRANCHES), a branch protected on GitHub, the base of an open pull request (an
+ * integration branch others build on), or one whose protection or pull requests cannot be read (refused, never assumed free). The push of a merge commit on a shared branch is an effect the batch never has,
  * whatever the content: the pull request is left to the operator (merge the target into it, `apv map`, push, run again).
  */
 async function refreshRefusal(options, pr, target) {
@@ -203,6 +203,22 @@ async function refreshRefusal(options, pr, target) {
     }
     if (isProtected !== false)
         return left(isProtected === true ? 'est protégée sur GitHub' : 'a une protection inconnue');
+    // An integration branch (apv3, a release branch...) is the base of other open pull requests: never written by the batch.
+    const pulls = await options.gh(pullsArgs(where, 'open', 'base', branch));
+    options.onCall(pulls);
+    if (pulls.status !== 0 || pulls.error)
+        return left(`a des PR ouvertes qui ne se lisent pas (gh api ${where.repo}/pulls)`);
+    let based;
+    try {
+        based = JSON.parse(pulls.stdout);
+    }
+    catch (error) {
+        return left(`a une liste de PR illisible (${errorMessage(error)})`);
+    }
+    if (!Array.isArray(based) || !based.every(n => typeof n === 'number'))
+        return left('a une liste de PR illisible');
+    if (based.length)
+        return left(`est la base de la ou des PR ouverte(s) #${based.join(', #')} (branche d'intégration)`);
     return null;
 }
 /**
