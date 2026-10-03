@@ -671,6 +671,6 @@ Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR 
 }
 ```
 
-- `captures.viewports` (`desktop`, `phone`, `tablet` ; défaut `desktop` et `phone`) et `captures.themes` (`light`, `dark` ; défaut les deux) : captures qu'exige la relecture de fidélité quand un fichier d'interface est ajouté ou modifié (écran, composant, style, gabarit, page des routes, `review.paths.ui`), sauf dans un projet sans écran (règle `captures`, REGLES.md). `["light"]` seulement pour un projet sans thème sombre.
+- `captures.viewports` (`desktop`, `phone`, `tablet` ; défaut `desktop` et `phone`) et `captures.themes` (`light`, `dark` ; défaut les deux) : captures qu'exige la relecture de fidélité quand le plan des revues la retient, sauf dans un projet sans écran qui n'en ajoute pas (règle `captures`, REGLES.md). `["light"]` seulement pour un projet sans thème sombre.
 - `requiredGates` : contrôles qu'un projet exige en plus de `reuse`, `code-map` et `structure` (projet web) : un identifiant et le début de la commande, reconnue enveloppée ou non (`node <plugin>/dist/cli.js`, `npx apv`) ; ils valent aussi pour un projet sans interface web.
 - `screens` : motifs des fichiers d'écran que l'outil ne reconnaît pas seul (il connaît les pages, mises en page et pages d'erreur de SvelteKit, Next, Remix, Nuxt, Astro et `pages/`).

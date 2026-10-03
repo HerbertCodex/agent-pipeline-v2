@@ -5,7 +5,7 @@ import { designDir } from '../design/config.js';
 import { applyBaseGates, type BaseGates, type RemoteCheck } from '../gates/base-gates.js';
 import { verifyGates, type VerifyResult } from '../gates/verify.js';
 import { loadDecisionLedger } from '../lifecycle/decisions.js';
-import { matches, sensitivePaths } from '../policy/policy.js';
+import { sensitivePaths } from '../policy/policy.js';
 import { reviewPlanSettings } from '../review/config.js';
 import { planReviews } from '../review/plan.js';
 import { DEFAULT_REUSE_IGNORE, UI_EXTENSIONS, extensionOf, globMatcher } from '../reuse/config.js';
@@ -72,18 +72,19 @@ export function isWebAt(repo: string, sha: string): boolean {
 const ROUTE_CONTENT = /(^|\/)(routes|pages)\/.*\.(md|svx|mdx)$/;
 
 /**
- * Whether a file changes what a screen shows: a screen (`isScreen`, rules.screens), a file of the class ui of
- * review.paths (components, styles, templates, app.html, assets), or a page in Markdown under the routes.
+ * Whether a file is, or brings, a screen: a screen of the routes or of rules.screens, a page in Markdown under the
+ * routes, or an interface file of the web detection (UI_EXTENSIONS: an HTML page, a component, a server template).
  */
-export function isInterfaceFile(path: string, screens: readonly RegExp[], ui: readonly string[]): boolean {
-  return isScreen(path, screens) || ui.some(g => matches(path, g)) || ROUTE_CONTENT.test(path);
+function screenLike(path: string, screens: readonly RegExp[]): boolean {
+  return isScreen(path, screens) || ROUTE_CONTENT.test(path) || UI_EXTENSIONS.has(extensionOf(path));
 }
 
-/** Whether the project has screens at `sha`: a web project, or a file the tool reads as a screen (routes, rules.screens). */
+/** Whether the project has screens at `sha`: a web project (isWebAt), or a file the tool reads as a screen. */
 function hasScreensAt(repo: string, sha: string, screens: readonly RegExp[]): boolean {
   if (isWebAt(repo, sha)) return true;
+  const ignored = globMatcher([...DEFAULT_REUSE_IGNORE]);
   const files = gitRead(repo, ['ls-tree', '-r', '-z', '--name-only', sha])?.split('\0').filter(Boolean) ?? [];
-  return files.some(f => isScreen(f, screens) || ROUTE_CONTENT.test(f));
+  return files.some(f => !ignored(f) && screenLike(f, screens));
 }
 
 /** Files the change adds or modifies since the base (renames counted as an addition: a moved screen is a new address). */
@@ -157,8 +158,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   // The migrations as the base declares them, and as the change declares them: a change that moves db.migrations
   // never takes its migrations out of the data review (both sets of paths count, never the working tree).
   const migrations = [...new Set([...loadDbConfigAtCommit(repo, mergeBase).config.migrations, ...loadDbConfigAtCommit(repo, sha).config.migrations])];
-  const reviewSettings = reviewPlanSettings(atBase.review);
-  const plan = planReviews({ repo, base: mergeBase, head: sha, settings: reviewSettings, migrations,
+  const plan = planReviews({ repo, base: mergeBase, head: sha, settings: reviewPlanSettings(atBase.review), migrations,
     designDir: designDir(atBase.design), sensitive: [...sensitivePaths, ...atBase.risk.highPaths], force: [] });
   const reviews = latestReviews(common, sha);
   const reviewProblems: string[] = [];
@@ -179,16 +179,15 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     ? outcome('relecture', 'refused', `relectures demandées par le diff : ${plan.retained.join(', ')}`, reviewProblems, reviewTodo)
     : outcome('relecture', 'ok', `relectures enregistrées à ${short(sha)} sans constat critique ni haut : ${plan.retained.join(', ')} (risque ${plan.risk.level === 'faible' ? 'faible' : 'élevé'} : ${plan.risk.reason.slice(0, 200)})`));
 
-  // captures: every interface file added or changed (a screen, a component, a style, a template, app.html, a page in
-  // Markdown under the routes, the class ui of review.paths read at the base) asks for them. Not applicable only to a
-  // diff without any interface file, or to a project without screens at the base (no route the tool knows, nothing in
-  // rules.screens, not a web project) that adds none: a command-line tool has nothing to capture.
+  // captures: in a project with screens at the base, required as soon as the plan retains fidelite (a component, a
+  // style, a message shown, a configuration of the styles change what a screen shows). Not applicable only to a project
+  // without screens at the base (not a web project, no route the tool knows, nothing in rules.screens, no interface
+  // file) that adds none: a command-line tool has nothing to capture, a first page or template added asks for them.
   const screenMatch = screenMatchers(settings.screens);
   const changed = changedFiles(repo, mergeBase, sha);
   const screens = changed.filter(f => isScreen(f, screenMatch));
-  const interfaceFiles = changed.filter(f => isInterfaceFile(f, screenMatch, reviewSettings.paths.ui));
-  if (!interfaceFiles.length) rules.push(outcome('captures', 'not_applicable', 'aucun fichier d\'interface ajouté ni modifié (écrans, composants, styles, gabarits, pages des routes, review.paths.ui) : rien à capturer'));
-  else if (!screens.length && !hasScreensAt(repo, mergeBase, screenMatch)) rules.push(outcome('captures', 'not_applicable', `projet sans écran à la base (aucune route reconnue ni rules.screens, pas un projet web) et aucun écran ajouté : rien à capturer (${interfaceFiles.length} fichier(s) d'interface)`));
+  const addedScreens = changed.filter(f => screenLike(f, screenMatch));
+  if (!addedScreens.length && !hasScreensAt(repo, mergeBase, screenMatch)) rules.push(outcome('captures', 'not_applicable', 'projet sans écran à la base (pas un projet web, aucune route reconnue ni rules.screens, aucun fichier d\'interface) et aucun écran ajouté : rien à capturer'));
   else if (!plan.retained.includes('fidelite')) rules.push(outcome('captures', 'not_applicable', 'relecture de fidélité non retenue par le plan des revues'));
   else {
     const record = reviews.get('fidelite')?.record ?? null;
@@ -196,7 +195,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     const have = new Set((reviews.get('fidelite')?.problem ? [] : record?.captures ?? []).map(c => `${c.viewport}:${c.theme}`));
     const missing = needed.filter(n => !have.has(n));
     rules.push(missing.length
-      ? outcome('captures', 'refused', `${interfaceFiles.length} fichier(s) d'interface ajouté(s) ou modifié(s) (${interfaceFiles.slice(0, 5).join(', ')}${interfaceFiles.length > 5 ? ', ...' : ''}), captures attendues : ${needed.join(', ')}`, [`capture(s) absente(s) de la relecture fidelite à ${short(sha)} : ${missing.join(', ')}`], [
+      ? outcome('captures', 'refused', `relecture de fidélité retenue${addedScreens.length ? ` (écran(s) ou fichier(s) d'interface : ${addedScreens.slice(0, 5).join(', ')}${addedScreens.length > 5 ? ', ...' : ''})` : ''}, captures attendues : ${needed.join(', ')}`, [`capture(s) absente(s) de la relecture fidelite à ${short(sha)} : ${missing.join(', ')}`], [
         `apv:qa-fidelite capture chaque écran changé ou qui utilise un fichier changé (${missing.join(', ')}), les regarde à côté de la maquette validée et les joint à sa relecture : apv review record --commit ${short(sha)} --domain fidelite --capture <largeur>:<thème>:<fichier> ...`,
       ])
       : outcome('captures', 'ok', `captures jointes à ${short(sha)} : ${needed.join(', ')}`));

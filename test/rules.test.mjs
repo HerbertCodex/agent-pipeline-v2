@@ -115,7 +115,7 @@ test('captures: a screen added needs the four captures of the fidelity review; a
   const p = project(t, { change: { 'src/routes/carte/+page.svelte': '<div class="carte">x</div>\n' } });
   const r0 = rule((await p.check()).report, 'captures');
   assert.equal(r0.status, 'refused');
-  assert.match(r0.detail, /1 fichier\(s\) d'interface ajouté\(s\) ou modifié\(s\) \(src\/routes\/carte\/\+page\.svelte\)/);
+  assert.match(r0.detail, /écran\(s\) ou fichier\(s\) d'interface : src\/routes\/carte\/\+page\.svelte\)/);
   assert.match(r0.problems[0], /desktop:light, desktop:dark, phone:light, phone:dark/);
   seedReview(p.repo, p.head, 'fidelite', { captures: [['desktop', 'light'], ['phone', 'light']] });
   assert.match(rule((await p.check()).report, 'captures').problems[0], /absente\(s\) de la relecture fidelite .*: desktop:dark, phone:dark/);
@@ -131,27 +131,29 @@ test('captures: a screen added needs the four captures of the fidelity review; a
   assert.equal(rule(s.report, 'captures').status, 'not_applicable');
 });
 
-test('captures: a command-line tool without any screen nor interface file has nothing to capture, even when the plan retains fidelite', async t => {
+test('captures: a command-line tool without any screen has nothing to capture, even when the plan retains fidelite', async t => {
   // The case of a CLI (agent-pipeline-v2 #110): unclassified source files keep every domain, fidelite included, but no
-  // no interface file is added nor changed (no screen either, the rule maquette says so too): captures are not applicable.
+  // screen at the base nor added (the rule maquette says so too): captures are not applicable, with the reason.
   const cli = { 'package.json': { name: 'outil', bin: { outil: 'dist/cli.js' } } };
   const p = project(t, { base: cli, change: { 'src/commands/tests.ts': 'export const run = () => 0;\n', 'src/cli.ts': 'export {};\n' } });
   const report = (await p.check()).report;
   assert.match(rule(report, 'relecture').detail, /fidelite/, 'the plan retains fidelite for unclassified files');
   const captures = rule(report, 'captures');
   assert.equal(captures.status, 'not_applicable', JSON.stringify(captures));
-  assert.match(captures.detail, /aucun fichier d'interface ajouté ni modifié/);
+  assert.match(captures.detail, /projet sans écran à la base .* et aucun écran ajouté/);
   assert.equal(rule(report, 'maquette').status, 'not_applicable');
-  // The same command-line tool that adds a file of interface (a page of documentation in HTML) and has no screen at the
-  // base, nor adds one: not applicable either.
-  const doc = project(t, { base: cli, change: { 'docs/aide.html': '<p>aide</p>\n' } });
-  const d = rule((await doc.check()).report, 'captures');
-  assert.equal(d.status, 'not_applicable', JSON.stringify(d));
-  assert.match(d.detail, /projet sans écran à la base/);
+  // The same tool that adds its first page (an HTML file outside any route) has a screen now: captures required.
+  const page = project(t, { base: cli, change: { 'index.html': '<!doctype html><title>outil</title><p>aide</p>\n' } });
+  const d = rule((await page.check()).report, 'captures');
+  assert.equal(d.status, 'refused', JSON.stringify(d));
+  assert.match(d.detail, /index\.html/);
+  // A Flask project without any screen at the base that adds a template (Jinja): required too.
+  const flask = project(t, { base: { 'app.py': 'from flask import Flask\napp = Flask(__name__)\n' }, change: { 'templates/x.jinja': '<h1>{{ titre }}</h1>\n' } });
+  assert.equal(rule((await flask.check()).report, 'captures').status, 'refused');
 });
 
-test('captures: in a project with screens, a component, a global style, app.html or a page in Markdown need them too', async t => {
-  // The cases of the security review of #115: each changes what a page shows without being a route file.
+test('captures: in a project with screens, whatever changes what a screen shows needs them when fidelite is retained', async t => {
+  // The cases of the security reviews of #115: each changes what a page shows without being a route file.
   const web = {
     'package.json': { name: 'site', devDependencies: { '@sveltejs/kit': '2.0.0', svelte: '5.0.0' } },
     'src/routes/compte/+page.svelte': '<script>import Header from "$lib/components/Header.svelte";</script>\n<Header />\n',
@@ -164,11 +166,13 @@ test('captures: in a project with screens, a component, a global style, app.html
     ['src/app.css', 'body { color: #fff; background: #fff; }\n'],
     ['src/app.html', '<!doctype html><html><body style="display:none">%sveltekit.body%</body></html>\n'],
     ['src/routes/compte/+page.md', '# Compte\n\nTexte de la page.\n'],
+    ['tailwind.config.js', 'export default { theme: { extend: { colors: { fond: "#fff" } } } };\n'],
+    ['src/lib/messages.ts', 'export const bienvenue = "Bienvenue sur votre compte";\n'],
   ]) {
     const p = project(t, { base: web, change: { [path]: value } });
     const r = rule((await p.check()).report, 'captures');
     assert.equal(r.status, 'refused', `${path} : ${JSON.stringify(r)}`);
-    assert.match(r.detail, new RegExp(`fichier\\(s\\) d'interface ajouté\\(s\\) ou modifié\\(s\\) \\(${path.replace(/[.+]/g, '\\$&')}\\)`));
+    assert.match(r.detail, /captures attendues/);
     seedReview(p.repo, p.head, 'fidelite', { captures: ALL_CAPTURES });
     assert.equal(rule((await p.check()).report, 'captures').status, 'ok', path);
   }

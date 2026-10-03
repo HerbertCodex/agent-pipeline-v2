@@ -36,7 +36,7 @@ export const DEFAULT_STYLE_SOURCES = [
 ] as const;
 
 /** Files that hold interface markup: the native elements, local styles and texts are read there. */
-export const UI_EXTENSIONS = new Set(['svelte', 'vue', 'tsx', 'jsx', 'astro', 'html', 'htm', 'hbs', 'handlebars', 'erb', 'ejs', 'njk', 'twig', 'liquid', 'mdx']);
+export const UI_EXTENSIONS = new Set(['svelte', 'vue', 'tsx', 'jsx', 'astro', 'html', 'htm', 'hbs', 'handlebars', 'erb', 'ejs', 'njk', 'twig', 'liquid', 'jinja', 'jinja2', 'j2', 'mdx']);
 /** Component files (a file that is one component), for the map and the name rule. */
 export const COMPONENT_EXTENSIONS = new Set(['svelte', 'vue', 'tsx', 'jsx', 'astro']);
 /** Stylesheets. */
