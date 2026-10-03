@@ -664,7 +664,10 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
   for (const [index, words] of segments.entries()) {
     const moved = cdTarget(words, dir, home);
     if (moved !== undefined) {
-      if (moved !== null) { dir = moved; dirs.push(moved); reached.push(moved); } else cdComputed = true;
+      // A relative cd with CDPATH set (on the line or in the environment) may lead elsewhere: the folder is unknown.
+      const cdArg = words.slice(1).find(a => !a.startsWith('-'));
+      const viaCdpath = cdArg !== undefined && !/^(?:\/|~|\.\.?(?:\/|$))/.test(cdArg) && (process.env.CDPATH || /\bCDPATH=/.test(String(command)));
+      if (moved !== null && !viaCdpath) { dir = moved; dirs.push(moved); reached.push(moved); } else cdComputed = true;
       continue;
     }
     let cw = commandWords(words)?.words ?? words;
@@ -684,9 +687,9 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
       // PATH set as an assignment: before the command of a segment, or a segment of assignments only (`echo PATH=x` is text).
       && !segments.some(w => { const c = commandWords(w)?.words ?? []; return w.slice(0, w.length - c.length).some(a => a.startsWith('PATH=')); })
       && !segments.some(w => {
-        // `hash`, `enable`, a sourced file, or a builtin that sets PATH by name (`printf -v PATH`, `read PATH`).
+        // `hash`, `enable`, a sourced or evaluated text, or a builtin that sets PATH by name (`printf -v PATH`, `read PATH`).
         const c = commandWords(w)?.words ?? w; const n = basename(c[0] ?? '');
-        return ['hash', 'enable', 'source', '.'].includes(n)
+        return ['hash', 'enable', 'source', '.', 'eval'].includes(n)
           || (['printf', 'read', 'mapfile', 'readarray', 'declare', 'typeset', 'export', 'local', 'readonly'].includes(n)
             && c.slice(1).some(a => /(?:^|^-[A-Za-z]*v|=)PATH(?:=|$)/.test(a)));
       })

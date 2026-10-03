@@ -2,6 +2,9 @@
 
 ## Non publié
 
+- **3.0.0-alpha.17 : suite de la PR #111 (issue #112).** La version monte pour que `claude plugin update` livre ces corrections du crochet.
+  - Crochet des magasins : un `cd` relatif avec CDPATH posé (sur la ligne ou dans l'environnement) rend le dossier inconnu, comme pour la garde de poussée ; une recherche récursive qui suit est jugée comme après un `cd` non suivi.
+  - Une commande évaluée (`eval`) sur la ligne fait perdre le statut de simple lecteur, comme `source` et `hash` : elle peut poser PATH.
 - **3.0.0-alpha.16 : suite de la PR #108 (issue #109), derniers constats moyens et faibles des relectures finales.** La version monte pour que `claude plugin update` livre ces corrections du crochet.
   - Une branche créée ne vaut que si git la crée dans le dossier de la ligne, tel que le crochet le lit (options globales de git, variable ou enveloppe placée devant lui).
   - Un simple lecteur n'est reconnu que sous son nom, ou depuis /bin et /usr/bin (et non plus /usr/local/bin), sur une ligne qui ne pose pas PATH (affectation devant une commande ou seule, `env`, `export`, `declare`, `declare -n …=PATH`, `printf -v` ou `-vPATH`, `read`, `mapfile`...), ne lance ni `hash`, ni `enable`, ni `source` ou `.`, et ne le redéfinit pas (fonction, avec ou sans parenthèses, ou alias).

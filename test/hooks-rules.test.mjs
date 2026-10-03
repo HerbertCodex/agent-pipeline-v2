@@ -860,3 +860,15 @@ test('issue 109: where a branch is created, readers of the system, rg handed a s
   }
   assert.equal(evaluateCommand('git checkout -b x && git push -u origin HEAD', {}, fromMain).decision, 'allow');
 });
+
+test('issue 112: a cd through CDPATH leaves the folder unknown to the store guard; eval may set PATH', () => {
+  const lead = { ...as(null), cwd: '/r' };
+  for (const command of ['CDPATH=.git; cd apv && grep -r .', "export CDPATH=.git; cd apv && rg ''"]) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  // eval on a line that names the store is refused by the computed-command guard as well.
+  assert.equal(evaluateCommand('eval PATH=/tmp/x; cat .git/apv/receipts/r.json', {}, lead).decision, 'deny');
+  for (const command of ['CDPATH=.git; cd ./src && grep -rn TODO', 'cd src && grep -rn TODO', 'cat .git/apv/receipts/r.json']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+});
