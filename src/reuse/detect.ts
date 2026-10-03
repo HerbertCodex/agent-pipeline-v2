@@ -18,10 +18,11 @@ export const REUSE_GATE = { id: 'reuse', command: ['apv', 'reuse', 'check', '--b
  */
 export const STRUCTURE_GATE = { id: 'structure', command: ['apv', 'structure', 'check', '--base', '{{baseSha}}'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true } as const;
 /**
- * The gate of the code map, added to every project: it fails when `.apv/code-map.md` no longer matches the code. Full
- * stage: tasks never commit the map (parallel tasks would conflict on it); the integration regenerates it once per wave.
+ * The gate of the code map, added to every project: it fails when `.apv/code-map.md` no longer matches the code. Task
+ * stage (decision D1, 3 October 2026): the implementer regenerates and commits the map with the code, and a stale map
+ * blocks in two seconds, before the heavy checks of the full suite (which runs the task checks too).
  */
-export const MAP_GATE = { id: 'code-map', command: ['apv', 'map', '--check'], covers: ['architecture'], stage: 'full', readOnly: true, mandatory: true } as const;
+export const MAP_GATE = { id: 'code-map', command: ['apv', 'map', '--check'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true } as const;
 
 /** True when an executable `apv` is on the PATH: the generated checks call it by that name. */
 export function apvOnPath(path = process.env['PATH'] ?? ''): boolean {

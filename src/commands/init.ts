@@ -251,7 +251,7 @@ export function reuseLines(reuse: ReuseSetup): string[] {
     const described: Record<string, string> = {
       reuse: 'reuse (apv reuse check --base {{baseSha}}, étape tâche et suite complète ; apv gates run demande donc --base)',
       structure: 'structure (apv structure check --base {{baseSha}}, étape tâche : un fichier ajouté à un dossier à plat, un dossier ou un point d\'entrée non décrit dans la carte de l\'architecture bloquent)',
-      'code-map': 'code-map (apv map --check, suite complète ; la carte du code et celle de l\'architecture sont régénérées à l\'intégration)',
+      'code-map': 'code-map (apv map --check, étape tâche et suite complète ; l\'implementer régénère la carte du code dans son commit, apv map)',
     };
     lines.push(`Contrôles ajoutés : ${reuse.gates.map(g => described[g] ?? g).join(', ')}.`);
     if (!reuse.apvOnPath) lines.push('ATTENTION : apv n\'est pas sur le PATH de cette machine ; ces contrôles échoueront (commande introuvable). Activez le plugin (son exécutable bin/apv) ou npm link, ou remplacez "apv" par ["node", "<chemin du plugin>/dist/cli.js", ...] dans .apv/config.json.');

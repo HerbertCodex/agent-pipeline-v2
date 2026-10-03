@@ -19,12 +19,24 @@ export const usage = `Utilisation :
 sont utilisés), modules partagés (exports, utilisateurs), routes, et ce qui est propre à une fonctionnalité,
 avec les doublons possibles. Construite depuis les fichiers du dépôt (suivis et non suivis, jamais les
 ignorés), sans modèle, bornée pour rester lisible par un agent. À commiter avec le code qu'elle décrit.
---check ne l'écrit pas : il la compare à celle qui serait écrite (contrôle de tâche « code-map »).
+--check ne l'écrit pas : il la compare à celle qui serait écrite (contrôle de tâche « code-map ») ; les comptes
+« Laissés de côté » (tests, fichiers ignorés, modules muets) ne sont pas comparés. L'implementer la régénère
+et la commite dans son commit ; un conflit de fusion sur elle se résout par apv map, jamais à la main.
 La carte de l'architecture (structure.architectureMap, par défaut docs/carte-architecture.md), quand elle
 existe, suit : ses parties générées sont réécrites (ou comparées avec --check), ses parties écrites jamais.
 La carte du code nomme aussi les dossiers à plat et les sous-dossiers proposés pour chacun.
 Configuration facultative : section « map » (file, ignore, maxEntries) ; dossiers partagés : reuse.shared.
 Sortie : 0 écrite ou à jour, 1 périmée ou absente (--check) ou configuration invalide, 2 appel incorrect.`;
+/** The clause of the summary line that counts what the map leaves out (tests, ignored files, silent modules). */
+const SKIPPED_CLAUSE = /Laissés de côté : \d+ test\(s\), \d+ fichier\(s\) ignoré\(s\), \d+ module\(s\) sans export ni import\./g;
+/**
+ * The text of a map as `--check` compares it: the counts « Laissés de côté » are left out. They count what the map does
+ * not describe (tests, ignored files, modules without export nor import): a test file added or removed changed them and
+ * made a correct map « stale » (pilot project, 3 October 2026), for a line that says nothing of the architecture.
+ */
+export function comparableMap(text) {
+    return text.replace(SKIPPED_CLAUSE, 'Laissés de côté : non comparés.');
+}
 /**
  * The map of the repository as its configuration describes it, and its Markdown, with the analysis of the tree it
  * reflects (flat folders and their proposed subfolders, from the import graph of the map).
@@ -90,6 +102,8 @@ export async function writeMap(repo, config, check) {
             return done({ file, status: 'missing', difference: null });
         if (actual === text)
             return done({ file, status: 'up-to-date', difference: null });
+        if (comparableMap(actual) === comparableMap(text))
+            return done({ file, status: 'up-to-date', difference: null, skippedOnly: true });
         // No « Dossiers » section: a map written before 3.0.0-alpha.11, stale by the update of APV itself (whatever else changed).
         return done({ file, status: 'stale', difference: difference(actual, text), ...(!/\n## Dossiers\n/.test(actual) && /\n## Dossiers\n/.test(text) ? { migration: true } : {}) });
     }
@@ -136,8 +150,9 @@ export async function run(args, io) {
         const lines = [];
         if (result.status === 'written')
             lines.push(`Carte du code écrite : ${result.file} (${counts}). À commiter avec le code qu'elle décrit.`);
-        else if (result.status === 'unchanged' || result.status === 'up-to-date')
-            lines.push(`Carte du code à jour : ${result.file} (${counts}).`);
+        else if (result.status === 'unchanged' || result.status === 'up-to-date') {
+            lines.push(`Carte du code à jour : ${result.file} (${counts})${result.skippedOnly ? ' ; seuls les comptes « Laissés de côté » diffèrent, non comparés (apv map les actualise)' : ''}.`);
+        }
         else if (result.status === 'missing')
             lines.push(`Carte du code absente : ${result.file}. Lancez apv map, puis commitez ${result.file}.`);
         else if (result.migration) {

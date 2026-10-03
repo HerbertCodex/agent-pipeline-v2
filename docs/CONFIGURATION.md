@@ -611,7 +611,7 @@ Sections APV3, facultatives, lues par `apv reuse check` et `apv map` et validée
 {
   "gates": [
     { "id": "reuse", "command": ["apv", "reuse", "check", "--base", "{{baseSha}}"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true },
-    { "id": "code-map", "command": ["apv", "map", "--check"], "covers": ["architecture"], "stage": "full", "readOnly": true, "mandatory": true }
+    { "id": "code-map", "command": ["apv", "map", "--check"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true }
   ],
   "reuse": {
     "reference": "origin/main",
