@@ -4,6 +4,7 @@ import { designDir } from '../design/config.js';
 import { sensitivePaths } from '../policy/policy.js';
 import { ALWAYS_REVIEWED, REVIEW_DOMAINS, reviewPlanSettings } from '../review/config.js';
 import { planReviews } from '../review/plan.js';
+import { RISK_LABEL } from '../review/risk.js';
 import { gitRoot, resolveCommit } from '../run/git-probe.js';
 import { PipelineError } from '../domain/errors.js';
 import { DOMAIN_REVIEWERS, latestReviews, parseCapture, recordReview } from '../rules/reviews.js';
@@ -21,10 +22,17 @@ des données personnelles, un export, un traceur ou un texte légal changent. Un
 des chemins seuls réécrits (imports, références à un fichier déplacé, imports remis en forme)
 ne changent pas le contenu (sauf une migration). Un fichier non classé au
 contenu changé garde tous les domaines (prudence) : un domaine n'est sauté que sur preuve positive.
+Niveau de risque du diff, avec sa raison : faible quand chaque fichier est un test, de l'outillage de
+test, de la documentation, une maquette ou un texte d'interface sans balisage nouveau (securite, plus
+fidelite si l'interface change de contenu visible) ; élevé sinon (migration, schéma, données, données
+personnelles, export, traceur, texte légal, chemin sensible, code serveur ou configuration, balisage ou
+code changé, fichier déplacé, terme de données ou RGPD, fichier non classé), plan inchangé. Un fichier
+non classé hors code serveur et configuration dont seules des chaînes de prose changent (module de
+messages) garde fidelite seule ; un fichier vraiment inconnu garde la prudence.
 --base     la branche de départ (la base de la PR) ; --head : la tête revue (défaut HEAD).
 --force    garde un domaine quoi que dise le diff (répétable, ou liste séparée par des virgules).
 --repo     le dépôt (défaut : le dossier courant) ; la configuration (review de .apv/config.json) y est lue.
-Chemins et termes : review.paths (ui, data, migrations, personal, legal, neutral), review.terms (data,
+Chemins et termes : review.paths (ui, data, migrations, personal, legal, neutral, tooling, server), review.terms (data,
 personal), review.always (domaines toujours gardés), db.migrations et design.dir ; docs/CONFIGURATION.md.
 Sortie : 0 plan établi, 1 référence introuvable ou configuration invalide, 2 appel incorrect.
 
@@ -69,7 +77,10 @@ function text(plan) {
     const c = plan.counts;
     const lines = [
         `Plan des revues : ${plan.base.ref} (${plan.mergeBase.slice(0, 12)}, base commune) à ${plan.head.ref} (${plan.head.sha.slice(0, 12)})`,
-        `${c.files} fichier(s) : ${c.renames} renommage(s) pur(s), ${c.paths} aux seuls chemins réécrits (imports, références, mise en forme), ${c.content} au contenu changé (dont ${c.neutral} tests, documentation ou outillage, ${c.unclassified} non classé(s))`,
+        `${c.files} fichier(s) : ${c.renames} renommage(s) pur(s), ${c.paths} aux seuls chemins réécrits (imports, références, mise en forme), ${c.content} au contenu changé (dont ${c.neutral} tests, documentation ou outillage, ${c.texts} non classé(s) aux seuls textes, ${c.unclassified} non classé(s))`,
+        `Risque : ${RISK_LABEL[plan.risk.level]} : ${plan.risk.reason}`,
+        ...plan.risk.files.slice(0, 10).map(f => `    ${f.path} : ${f.why}`),
+        ...(plan.risk.fileCount > 10 ? [`    (et ${plan.risk.fileCount - 10} autres)`] : []),
         '',
         'Domaines retenus :',
     ];

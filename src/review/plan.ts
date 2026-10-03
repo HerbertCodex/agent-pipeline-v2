@@ -4,6 +4,7 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { matches } from '../policy/policy.js';
 import { resolveCommit } from '../run/git-probe.js';
 import { ALWAYS_REVIEWED, PATH_CLASSES, REVIEW_DOMAINS, type PathClass, type ReviewDomainName, type ReviewPlanSettings } from './config.js';
+import { diffRisk, textOnly, type DiffRisk, type RiskLevel } from './risk.js';
 
 /**
  * `apv review plan`: the review domains proposed from the nature of a diff. Pilot project, 25 September 2026: a
@@ -14,7 +15,11 @@ import { ALWAYS_REVIEWED, PATH_CLASSES, REVIEW_DOMAINS, type PathClass, type Rev
  *   classified, and none of them touches the domain; a file that no class describes, with a changed content,
  *   keeps every domain (prudence);
  * - a pure rename (similarity 100 %) or a change that only rewrites import paths does not change content, except
- *   for a migration, whose name is what the migration tool records.
+ *   for a migration, whose name is what the migration tool records;
+ * - the risk level of the diff (src/review/risk.ts) is computed from the same reading: `faible` when every file is a
+ *   test, test tooling, documentation, a mockup or an interface text without new markup; a file no domain class
+ *   describes, outside the server code and the configuration, whose changed lines are only prose strings, then keeps
+ *   the fidelity review alone (interface texts); any other unclassified file keeps every domain.
  */
 
 /** How the content of a changed file changed. */
@@ -35,6 +40,9 @@ export interface PlannedFile {
   classes: PathClass[];
   /** Domains this file keeps, with the reason. */
   keeps: { domain: ReviewDomainName; why: string }[];
+  /** Risk of this file, and why (src/review/risk.ts). */
+  risk: RiskLevel;
+  riskWhy: string;
 }
 
 export interface DomainDecision {
@@ -53,7 +61,9 @@ export interface ReviewPlan {
   base: { ref: string; sha: string };
   head: { ref: string; sha: string };
   mergeBase: string;
-  counts: { files: number; renames: number; paths: number; content: number; neutral: number; unclassified: number };
+  counts: { files: number; renames: number; paths: number; content: number; neutral: number; texts: number; unclassified: number };
+  /** Risk level of the diff: `faible` keeps at most securite and fidelite (plus what is forced); `eleve` is the plan as before. */
+  risk: DiffRisk;
   domains: DomainDecision[];
   retained: ReviewDomainName[];
   skipped: { domain: ReviewDomainName; reason: string }[];
@@ -285,7 +295,13 @@ const WHY = {
   personal: 'données personnelles, export ou traceurs au contenu changé',
   legal: 'texte légal au contenu changé',
   unclassified: 'fichier non classé au contenu changé (prudence)',
+  texts: 'textes seuls d\'un fichier non classé (chaînes de prose changées, aucun code)',
 } as const;
+
+/** Test files: never shipped, whatever their path (a test of the authentication is still a test). */
+const TEST_FILES = ['**/*.test.*', '**/*.spec.*', '**/__tests__/**', '**/test/**', '**/tests/**', '**/e2e/**'];
+/** Classes that keep no domain: a file matching only these is not « unclassified ». */
+const NO_DOMAIN: readonly PathClass[] = ['neutral', 'tooling', 'server'];
 
 function classify(path: string, input: PlanInput): PathClass[] {
   const { paths } = input.settings;
@@ -302,7 +318,7 @@ function termIn(lines: string[], terms: string[]): string | null {
   return null;
 }
 
-function fileKeeps(file: Omit<PlannedFile, 'keeps'>, patch: FilePatch | undefined, input: PlanInput): PlannedFile['keeps'] {
+function fileKeeps(file: Omit<PlannedFile, 'keeps' | 'risk' | 'riskWhy'>, patch: FilePatch | undefined, input: PlanInput): PlannedFile['keeps'] {
   const keeps: PlannedFile['keeps'] = [];
   const add = (domain: ReviewDomainName, why: string): void => { if (!keeps.some(k => k.domain === domain)) keeps.push({ domain, why }); };
   const classes = new Set(file.classes);
@@ -314,9 +330,10 @@ function fileKeeps(file: Omit<PlannedFile, 'keeps'>, patch: FilePatch | undefine
   // A mockup is the reference of the fidelity review: a renamed one is touched too.
   if (inDesign) add('fidelite', WHY.design);
   if (file.change !== 'content') return keeps;
-  const meaningful = file.classes.filter(c => c !== 'neutral');
+  const meaningful = file.classes.filter(c => !NO_DOMAIN.includes(c));
   if (!meaningful.length && !inDesign) {
-    if (classes.has('neutral')) return keeps;
+    if (classes.has('neutral') || classes.has('tooling')) return keeps;
+    if (proseOnly(file, patch, input)) { add('fidelite', WHY.texts); return keeps; }
     for (const domain of ['fidelite', 'donnees', 'rgpd'] as const) add(domain, WHY.unclassified);
     return keeps;
   }
@@ -335,6 +352,49 @@ function fileKeeps(file: Omit<PlannedFile, 'keeps'>, patch: FilePatch | undefine
   return keeps;
 }
 
+const isSensitive = (file: { path: string; from?: string | undefined }, input: PlanInput): boolean =>
+  [file.path, file.from].some(p => p !== undefined && input.sensitive.some(g => matches(p, g)));
+const isTest = (path: string): boolean => TEST_FILES.some(g => matches(path, g));
+
+/**
+ * A file no domain class describes whose changed lines only change prose (src/review/risk.ts), outside the server
+ * code, the configuration and the sensitive paths, and without a term of data or GDPR in them: interface texts kept
+ * in a module (messages, labels). It keeps the fidelity review instead of every domain.
+ */
+function proseOnly(file: Omit<PlannedFile, 'keeps' | 'risk' | 'riskWhy'>, patch: FilePatch | undefined, input: PlanInput): boolean {
+  if (!patch || file.classes.includes('server') || isSensitive(file, input)) return false;
+  if (!textOnly(patch, file.path)) return false;
+  const lines = [...patch.added, ...patch.removed];
+  return !termIn(lines, input.settings.terms.data) && !termIn(lines, input.settings.terms.personal);
+}
+
+/** The risk of one changed file (src/review/risk.ts), from the same reading as the domains it keeps. */
+function fileRisk(file: Omit<PlannedFile, 'risk' | 'riskWhy'>, patch: FilePatch | undefined, input: PlanInput): { risk: RiskLevel; riskWhy: string } {
+  const high = (riskWhy: string): { risk: RiskLevel; riskWhy: string } => ({ risk: 'eleve', riskWhy });
+  const low = (riskWhy: string): { risk: RiskLevel; riskWhy: string } => ({ risk: 'faible', riskWhy });
+  const classes = new Set(file.classes);
+  const test = [file.path, file.from].every(p => p === undefined || isTest(p) || input.settings.paths.tooling.some(g => matches(p, g)));
+  if (classes.has('migrations')) return high('migration ou schéma');
+  if (isSensitive(file, input) && !test) return high('chemin sensible (authentification, session, permissions, dépendances, configuration de sécurité ou CI)');
+  if (file.from !== undefined && file.from !== file.path && !test) return high('fichier déplacé ou renommé (routes et imports changent de place)');
+  if (file.change !== 'content') return low('chemins seuls réécrits');
+  if (classes.has('data')) return high('données (requêtes, dépôts, modèles)');
+  if (classes.has('personal')) return high('données personnelles, export ou traceur');
+  if (classes.has('legal')) return high('texte légal');
+  // A word of data or GDPR in the changed lines (a query written in a page, a personal field, a tracker).
+  const term = file.keeps.find(k => (k.domain === 'donnees' || k.domain === 'rgpd') && k.why.startsWith('terme '));
+  if (term) return high(term.why);
+  const inDesign = [file.path, file.from].some(p => p !== undefined && (p === input.designDir || p.startsWith(`${input.designDir}/`)));
+  if (classes.has('ui')) {
+    if (patch?.binary) return low('fichier d\'interface binaire (image, police)');
+    return patch && textOnly(patch, file.path) ? low('texte d\'interface sans balisage nouveau') : high('interface au balisage ou au code changé');
+  }
+  if (inDesign) return low('maquette');
+  if (classes.has('neutral') || classes.has('tooling')) return low(classes.has('tooling') && !classes.has('neutral') ? 'outillage de test' : 'tests ou documentation');
+  if (file.keeps.some(k => k.why === WHY.texts)) return low('textes seuls d\'un fichier non classé');
+  return high(classes.has('server') ? 'fichier non classé touchant le code serveur ou la configuration' : 'fichier non classé au contenu changé (prudence)');
+}
+
 const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 function skipReason(domain: ReviewDomainName, counts: ReviewPlan['counts']): string {
@@ -348,6 +408,7 @@ function skipReason(domain: ReviewDomainName, counts: ReviewPlan['counts']): str
     counts.renames ? count(counts.renames, 'renommage pur', 'renommages purs') : '',
     counts.paths ? count(counts.paths, 'fichier aux seuls chemins réécrits', 'fichiers aux seuls chemins réécrits') : '',
     counts.neutral ? count(counts.neutral, 'fichier de tests, documentation ou outillage', 'fichiers de tests, documentation ou outillage') : '',
+    counts.texts && domain !== 'fidelite' ? count(counts.texts, 'fichier non classé aux seuls textes changés', 'fichiers non classés aux seuls textes changés') : '',
   ].filter(Boolean).join(', ');
   if (!counts.files) return 'rien à relire : diff vide';
   return `rien à relire : ${scope}, aucun fichier non classé au contenu changé (${count(counts.files, 'fichier', 'fichiers')}${detail ? ` : ${detail}` : ''})`;
@@ -377,16 +438,19 @@ export function planReviews(input: PlanInput): ReviewPlan {
     const classes = [...new Set([...classify(entry.path, input), ...(entry.from ? classify(entry.from, input) : [])])]
       .sort((a, b) => PATH_CLASSES.indexOf(a) - PATH_CLASSES.indexOf(b));
     const base = { path: entry.path, ...(entry.from !== undefined ? { from: entry.from } : {}), status: entry.status, change, classes };
-    return { ...base, keeps: fileKeeps(base, patch, input) };
+    const keeping = { ...base, keeps: fileKeeps(base, patch, input) };
+    return { ...keeping, ...fileRisk(keeping, patch, input) };
   });
   const counts = {
     files: files.length,
     renames: files.filter(f => f.change === 'none' && f.from !== undefined).length,
     paths: files.filter(f => f.change === 'paths').length,
     content: files.filter(f => f.change === 'content').length,
-    neutral: files.filter(f => f.change === 'content' && f.classes.length === 1 && f.classes[0] === 'neutral').length,
-    unclassified: files.filter(f => f.change === 'content' && !f.classes.length).length,
+    neutral: files.filter(f => f.change === 'content' && f.classes.every(c => NO_DOMAIN.includes(c)) && (f.classes.includes('neutral') || f.classes.includes('tooling'))).length,
+    texts: files.filter(f => f.keeps.some(k => k.why === WHY.texts)).length,
+    unclassified: files.filter(f => f.change === 'content' && !f.classes.some(c => c !== 'server') && !f.keeps.some(k => k.why === WHY.texts)).length,
   };
+  const risk = diffRisk(files, FILES_SHOWN);
   const sensitive = files.filter(f => [f.path, f.from].some(p => p !== undefined && input.sensitive.some(g => matches(p, g)))).map(f => f.path);
   const domains: DomainDecision[] = REVIEW_DOMAINS.map(domain => {
     if (domain === ALWAYS_REVIEWED) {
@@ -408,8 +472,13 @@ export function planReviews(input: PlanInput): ReviewPlan {
     }
     return { domain, decision: 'skipped', forced: null, fileCount: 0, files: [], reason: skipReason(domain, counts) };
   });
+  // A low risk keeps at most the security and fidelity reviews, besides what is forced: never a weaker plan elsewhere.
+  if (risk.level === 'faible') {
+    const extra = domains.filter(d => d.decision === 'retained' && d.domain !== ALWAYS_REVIEWED && d.domain !== 'fidelite' && !d.forced);
+    if (extra.length) throw new PipelineError('REVIEW_RISK', `risque faible incohérent : ${extra.map(d => d.domain).join(', ')} retenu(s) (${extra.map(d => d.reason).join(' ; ')})`);
+  }
   return {
-    tool: 'apv review plan', base: { ref: input.base, sha: baseSha }, head: { ref: input.head, sha: headSha }, mergeBase, counts, domains,
+    tool: 'apv review plan', base: { ref: input.base, sha: baseSha }, head: { ref: input.head, sha: headSha }, mergeBase, counts, risk, domains,
     retained: domains.filter(d => d.decision === 'retained').map(d => d.domain),
     skipped: domains.filter(d => d.decision === 'skipped').map(d => ({ domain: d.domain, reason: d.reason })),
     files,

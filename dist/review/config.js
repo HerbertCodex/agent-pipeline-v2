@@ -9,8 +9,13 @@ import { s } from '../domain/schema.js';
 export const REVIEW_DOMAINS = ['securite', 'fidelite', 'donnees', 'rgpd'];
 /** The review that no diff, no configuration and no option ever skips. */
 export const ALWAYS_REVIEWED = 'securite';
-/** Path classes of a changed file; `neutral` counts only for a file that matches no other class. */
-export const PATH_CLASSES = ['ui', 'data', 'migrations', 'personal', 'legal', 'neutral'];
+/**
+ * Path classes of a changed file. `neutral` (tests, documentation) and `tooling` (test tooling: runner configurations,
+ * mocks, fixtures) keep no domain and count only for a file that matches no domain class. `server` (server code,
+ * configuration) keeps no domain either: it marks a file of high risk, and keeps the prudence of a file no domain
+ * class describes (src/review/risk.ts).
+ */
+export const PATH_CLASSES = ['ui', 'data', 'migrations', 'personal', 'legal', 'neutral', 'tooling', 'server'];
 /** Generic defaults, for any stack: a project with other conventions declares its own lists. */
 export const DEFAULT_REVIEW_PATHS = {
     ui: [
@@ -44,6 +49,19 @@ export const DEFAULT_REVIEW_PATHS = {
         '.editorconfig', '**/.gitignore', '.gitattributes', '.prettierrc*', '.prettierignore', '.eslintrc*', 'eslint.config.*',
         'prettier.config.*', 'LICENSE*', '.nvmrc', '.node-version',
     ],
+    tooling: [
+        '**/playwright.config.*', '**/vitest.config.*', '**/vitest.workspace.*', '**/vitest.setup.*', '**/vitest-setup.*',
+        '**/jest.config.*', '**/jest.setup.*', '**/cypress.config.*', '**/cypress/**', '**/karma.conf.*', '**/.mocharc*',
+        '**/setupTests.*', '**/test-setup.*', '**/__mocks__/**', '**/__fixtures__/**', '**/fixtures/**',
+        '**/test-utils/**', '**/test-helpers/**', '**/testing-library/**',
+    ],
+    server: [
+        '**/server/**', '**/*.server.*', '**/+server.*', '**/+*.ts', '**/+*.js', '**/api/**', '**/hooks.*', '**/middleware.*',
+        '**/middleware/**', '**/functions/**', '**/workers/**', '**/*.worker.*', '**/cron/**', '**/jobs/**', '**/handlers/**',
+        '**/controllers/**', '**/app/**/route.*', '**/instrumentation.*', 'server.*', 'app.*', 'index.*', 'main.*',
+        '**/*.config.*', '**/*.conf', '**/*.toml', '**/*.yaml', '**/*.yml', '**/*.json', '**/*.ini', '**/*.env*', '**/.env*',
+        '**/Dockerfile*', '**/*.sh', '**/*.py', '**/*.rb', '**/*.go', '**/*.rs', '**/*.java', '**/*.kt', '**/*.php', '**/*.cs',
+    ],
 };
 /**
  * Words (case-insensitive substrings) that, in the changed lines of an interface or data file, keep a domain:
@@ -70,6 +88,7 @@ const terms = s.array(s.string(2, 200), 0, 500);
 export const reviewPathsSchema = s.object({
     ui: s.optional(patterns), data: s.optional(patterns), migrations: s.optional(patterns),
     personal: s.optional(patterns), legal: s.optional(patterns), neutral: s.optional(patterns),
+    tooling: s.optional(patterns), server: s.optional(patterns),
 });
 export const reviewTermsSchema = s.object({ data: s.optional(terms), personal: s.optional(terms) });
 /** Domains always kept, whatever the diff: `securite` is kept anyway, and no key can skip it. */

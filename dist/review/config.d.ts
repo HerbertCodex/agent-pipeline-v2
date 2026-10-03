@@ -10,8 +10,13 @@ export declare const REVIEW_DOMAINS: readonly ["securite", "fidelite", "donnees"
 export type ReviewDomainName = typeof REVIEW_DOMAINS[number];
 /** The review that no diff, no configuration and no option ever skips. */
 export declare const ALWAYS_REVIEWED: ReviewDomainName;
-/** Path classes of a changed file; `neutral` counts only for a file that matches no other class. */
-export declare const PATH_CLASSES: readonly ["ui", "data", "migrations", "personal", "legal", "neutral"];
+/**
+ * Path classes of a changed file. `neutral` (tests, documentation) and `tooling` (test tooling: runner configurations,
+ * mocks, fixtures) keep no domain and count only for a file that matches no domain class. `server` (server code,
+ * configuration) keeps no domain either: it marks a file of high risk, and keeps the prudence of a file no domain
+ * class describes (src/review/risk.ts).
+ */
+export declare const PATH_CLASSES: readonly ["ui", "data", "migrations", "personal", "legal", "neutral", "tooling", "server"];
 export type PathClass = typeof PATH_CLASSES[number];
 /** Generic defaults, for any stack: a project with other conventions declares its own lists. */
 export declare const DEFAULT_REVIEW_PATHS: Record<PathClass, readonly string[]>;
@@ -31,6 +36,8 @@ export declare const reviewPathsSchema: import("../domain/schema.js").Schema<{
     readonly personal: string[] | undefined;
     readonly legal: string[] | undefined;
     readonly neutral: string[] | undefined;
+    readonly tooling: string[] | undefined;
+    readonly server: string[] | undefined;
 }>;
 export declare const reviewTermsSchema: import("../domain/schema.js").Schema<{
     readonly data: string[] | undefined;

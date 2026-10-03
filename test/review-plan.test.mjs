@@ -63,7 +63,7 @@ test('review plan: pure renames keep the security review only, with a reason for
   const plan = await p.plan();
   assert.deepEqual(retained(plan), ['securite']);
   assert.deepEqual(plan.skipped.map(s => s.domain), ['fidelite', 'donnees', 'rgpd']);
-  assert.deepEqual(plan.counts, { files: 3, renames: 3, paths: 0, content: 0, neutral: 0, unclassified: 0 });
+  assert.deepEqual(plan.counts, { files: 3, renames: 3, paths: 0, content: 0, neutral: 0, texts: 0, unclassified: 0 });
   assert.ok(plan.files.every(f => f.change === 'none' && /^R100$/.test(f.status) && f.from));
   for (const s of plan.skipped) assert.match(s.reason, /^rien à relire : .*\(3 fichiers : 3 renommages purs\)$/);
   assert.match(decision(plan, 'securite').reason, /toujours relue, sans exception/);

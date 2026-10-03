@@ -90,6 +90,8 @@ export declare const reviewSettingsSchema: import("../domain/schema.js").Schema<
         readonly personal: string[] | undefined;
         readonly legal: string[] | undefined;
         readonly neutral: string[] | undefined;
+        readonly tooling: string[] | undefined;
+        readonly server: string[] | undefined;
     } | undefined;
     readonly terms: {
         readonly data: string[] | undefined;
@@ -309,6 +311,8 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly personal: string[] | undefined;
             readonly legal: string[] | undefined;
             readonly neutral: string[] | undefined;
+            readonly tooling: string[] | undefined;
+            readonly server: string[] | undefined;
         } | undefined;
         readonly terms: {
             readonly data: string[] | undefined;
