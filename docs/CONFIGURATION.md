@@ -639,6 +639,25 @@ Sections APV3, facultatives, lues par `apv reuse check` et `apv map` et validée
 
 Chaque règle, son motif et ses limites : [REUSE.md](REUSE.md). Baisser une gravité, élargir `ignore` ou `allowedPaths`, ou retirer un de ces contrôles est une décision de l'opérateur, jamais un moyen de faire passer une tâche.
 
+## Tests modifiés : `testsCheck`
+
+Section facultative (3.0.0-alpha.15) de `apv tests check` ([CLI.md](CLI.md#apv-tests-check)), déclaré comme contrôle de tâche :
+
+```json
+"gates": [{ "id": "tests", "command": ["apv", "tests", "check", "--base", "{{baseSha}}"] }],
+"testsCheck": {
+  "e2e": ["e2e/**", "tests/browser/**"],
+  "unit": ["src/**/*.test.ts"],
+  "ignore": ["tests/vendor/**"],
+  "severity": { "waitForTimeout": "error", "fixedWait": "error", "realClock": "warning", "sharedData": "off" }
+}
+```
+
+- `enabled` : `false` désactive le contrôle (il passe et le dit) ; absent : actif.
+- `reference` : la branche visée (`origin/main`), quand `--base` n'est pas donné.
+- `e2e`, `unit`, `ignore` : motifs portables ; une clé donnée remplace sa liste par défaut.
+- `severity` : `off`, `warning` ou `error` par règle ; défauts : `waitForTimeout` en erreur, `fixedWait`, `realClock` et `sharedData` en avertissement. Seule une erreur fait échouer le contrôle.
+
 ## Règles avant fusion : `rules`
 
 Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR et de sa cible par `apv rules check`, `apv stack merge` et `apv stack batch --merge` ([REGLES.md](REGLES.md)). Elle complète les règles, elle ne peut en retirer aucune : il n'existe pas de clé pour les désactiver.

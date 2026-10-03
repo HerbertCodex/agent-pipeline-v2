@@ -26,6 +26,7 @@ export const commands = {
     design: { summary: 'design register|list|check|organize : maquettes validées (copie, empreinte, décision au registre, dérive, rangement par groupe)', load: () => import('./design.js') },
     structure: { summary: 'structure check [--base <ref>] [--path <dossier>]... | structure map [--check] : arborescence (dossiers à plat découpés par usage, préfixes répétés, rôles mêlés, fichiers égarés), dossier à plat alourdi refusé face à la base, carte de l\'architecture', load: () => import('./structure.js') },
     reuse: { summary: 'reuse check [--base <ref>] [--all] : réutilisation des éléments existants (éléments natifs réservés, primitives de style redéfinies, blocs copiés, composants homonymes, espaces insécables) ; bloque ce que le changement ajoute', load: () => import('./reuse.js') },
+    tests: { summary: 'tests check [--base <ref>] : tests ajoutés ou modifiés par le changement (attente à durée fixe, horloge réelle, données partagées) ; contrôle de tâche', load: () => import('./tests.js') },
     map: { summary: 'map [--check] : carte du code (.apv/code-map.md : composants et modules partagés, routes, éléments propres à une fonctionnalité, doublons possibles) ; --check échoue si elle est périmée', load: () => import('./map.js') },
     quota: { summary: 'quota : relève l\'usage (session, semaine) et le journalise', load: () => import('./quota.js') },
     preview: { summary: 'preview update [branche]|status|stop|logs : aperçu vivant (copie de la branche, build, serveur détaché)', load: () => import('./preview.js') },

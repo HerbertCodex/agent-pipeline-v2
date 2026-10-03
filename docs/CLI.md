@@ -642,6 +642,18 @@ apv structure map [--check] [--repo <chemin>] [--json]
 
 Sortie : `0` écrite ou à jour, `1` périmée ou absente (`--check`) ou configuration invalide, `2` appel incorrect. En JSON : `file`, `status` (`created`, `written`, `unchanged`, `up-to-date`, `stale`, `missing`), `difference`, `repo`.
 
+## `apv tests check`
+
+```
+apv tests check [--base <ref>] [--repo <chemin>] [--json]
+```
+
+Contrôles déterministes des fichiers de test que le changement ajoute ou modifie (3.0.0-alpha.15), à déclarer comme **contrôle de tâche** : `{"id": "tests", "command": ["apv", "tests", "check", "--base", "{{baseSha}}"]}`. Les constats qui revenaient d'une relecture à l'autre (une attente à durée fixe, un délai testé sur l'horloge réelle) sont vus avant la revue, par l'implementer lui-même.
+
+- Fichiers lus : ceux que le changement ajoute ou modifie depuis la base commune de `--base` (sinon `testsCheck.reference` ; aucune des deux : refus, sortie `1`), arbre de travail et fichiers non suivis compris ; tests navigateur (`testsCheck.e2e`, défaut `**/e2e/**`, `**/*.e2e.*`, `**/playwright/**`, `**/cypress/**`, `tests/**/*.spec.*`, `**/*.pw.*`) et tests unitaires (`testsCheck.unit`, défaut `**/*.test.*`, `**/*.spec.*`, `**/__tests__/**`, `test/**`, `tests/**`, hors tests navigateur), fichiers JavaScript ou TypeScript seulement. Seules les lignes ajoutées par le changement comptent ; les lignes de commentaire sont ignorées.
+- Règles : `waitForTimeout` (`page.waitForTimeout(` dans un test navigateur ; **erreur** par défaut), `fixedWait` (autre attente à durée fixe dans un test navigateur : `sleep(`, `delay(`, `await setTimeout(`, `new Promise(r => setTimeout(r, …))` ; avertissement), `realClock` (test unitaire où `setTimeout(` et `Date.now()` ou `performance.now()` se côtoient sans faux minuteurs `useFakeTimers`, `mock.timers`, `page.clock`, `advanceTimers…` ; avertissement), `sharedData` (adresse e-mail écrite par le changement dans un test navigateur et aussi dans un autre test navigateur du projet : deux tests qui changent le même compte se gênent en parallèle ; avertissement). Les attentes sont reconnues comme par `repeatChanged.fixedWaits` (même détection, `src/gates/repeat.ts`), ici sur tout test modifié, à l'étape tâche, que les contrôles déclarent `repeatChanged` ou non.
+- Sortie : constats par règle (`[bloquant]` pour une erreur), `0` sans constat de gravité `error`, `1` sinon (ou référence absente, introuvable, configuration invalide), `2` appel incorrect. JSON : `enabled`, `base` (`ref`, `mergeBase`), `files` (`e2e`, `unit`), `severity`, `findings[]` (`rule`, `severity`, `file`, `line`, `text`, `message`), `ok`.
+
 ## `apv reuse check`
 
 ```
