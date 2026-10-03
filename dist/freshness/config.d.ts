@@ -10,6 +10,11 @@ export declare const DEFAULT_FRESHNESS: {
 };
 /** Living files watched in every project, whatever the configuration declares. */
 export declare const DEFAULT_FRESHNESS_PATHS: readonly [".apv/state/resume.md", ".apv/state/*.md"];
+/**
+ * Default files left out: the grouped follow-up of minor findings (`.apv/state/suivi-constats.md`, compétence review)
+ * is processed by batch, its age says nothing about the freshness of the resume state.
+ */
+export declare const DEFAULT_FRESHNESS_IGNORE: readonly [".apv/state/suivi-constats.md"];
 export declare const freshnessSchema: import("../domain/schema.js").Schema<{
     readonly maxAgeDays: number;
     readonly maxLines: number;

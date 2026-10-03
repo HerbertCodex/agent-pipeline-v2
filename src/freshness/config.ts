@@ -9,6 +9,11 @@ import { matches, validRelativePath } from '../policy/policy.js';
 export const DEFAULT_FRESHNESS = { maxAgeDays: 2, maxLines: 300, archive: '.apv/state/archive' } as const;
 /** Living files watched in every project, whatever the configuration declares. */
 export const DEFAULT_FRESHNESS_PATHS = ['.apv/state/resume.md', '.apv/state/*.md'] as const;
+/**
+ * Default files left out: the grouped follow-up of minor findings (`.apv/state/suivi-constats.md`, compétence review)
+ * is processed by batch, its age says nothing about the freshness of the resume state.
+ */
+export const DEFAULT_FRESHNESS_IGNORE = ['.apv/state/suivi-constats.md'] as const;
 
 const patternSchema = s.string(1, 4096);
 export const freshnessSchema = s.object({
