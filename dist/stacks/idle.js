@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { suiteSettings } from '../config/load.js';
@@ -119,18 +119,46 @@ function lastLeaseEvent(dir, resource) {
     }
     return last;
 }
-/** Whether the flock of `file` is free now: taken and released at once (`flock -n`). Null when unknown. */
+/** The device of a `stat` (bigint) as `/proc/locks` prints it: major and minor numbers. */
+function lockDevice(dev) {
+    const major = ((dev >> 8n) & 0xfffn) | ((dev >> 32n) & ~0xfffn);
+    const minor = (dev & 0xffn) | ((dev >> 12n) & ~0xffn);
+    return [Number(major), Number(minor)];
+}
+/** Whether process `pid` holds `file` open (an entry of `/proc/<pid>/fd` leads to it). */
+function holdsOpen(pid, file, procRoot) {
+    let real;
+    let fds;
+    try {
+        real = realpathSync(file);
+        fds = readdirSync(join(procRoot, String(pid), 'fd'));
+    }
+    catch {
+        return false;
+    }
+    return fds.some(fd => { try {
+        return readlinkSync(join(procRoot, String(pid), 'fd', fd)) === real;
+    }
+    catch {
+        return false;
+    } });
+}
 /**
  * Whether a kernel lock (`flock`) on `file` is held by this process or one of its ancestors (read in `/proc/locks`):
- * a suite launched under the lock of its stack (`flock <lockFile> apv gates run ...`) holds it already. Init (pid 1) is
- * never counted. False when unreadable (another system, file absent): the lock then counts as another's.
+ * a suite launched under the lock of its stack (`flock <lockFile> apv gates run ...`) holds it already. The lock is the
+ * same inode on the same device; some file systems print another device there than `stat` gives (btrfs subvolumes), and
+ * the same inode then counts when that ancestor holds the file open. Init (pid 1) is never counted. False when
+ * unreadable (another system, file absent): the lock then counts as another's.
  */
-export function flockHeldByAncestor(file, ancestors = protectedPids(), locksPath = '/proc/locks') {
+export function flockHeldByAncestor(file, ancestors = protectedPids(), locksPath = '/proc/locks', procRoot = '/proc') {
     let locks;
     let inode;
+    let device;
     try {
         locks = readFileSync(locksPath, 'utf8');
-        inode = statSync(file).ino;
+        const st = statSync(file, { bigint: true });
+        inode = st.ino;
+        device = lockDevice(st.dev);
     }
     catch {
         return false;
@@ -140,11 +168,15 @@ export function flockHeldByAncestor(file, ancestors = protectedPids(), locksPath
         if (fields[1] !== 'FLOCK' || fields[3] !== 'WRITE')
             continue;
         const pid = Number(fields[4]);
-        if (pid > 1 && ancestors.has(pid) && Number(fields[5]?.split(':')[2]) === inode)
+        const [major, minor, ino] = (fields[5] ?? '').split(':');
+        if (!(pid > 1 && ancestors.has(pid)) || ino === undefined || !/^\d+$/.test(ino) || BigInt(ino) !== inode)
+            continue;
+        if ((parseInt(major, 16) === device[0] && parseInt(minor, 16) === device[1]) || holdsOpen(pid, file, procRoot))
             return true;
     }
     return false;
 }
+/** Whether the flock of `file` is free now: taken and released at once (`flock -n`). Null when unknown. */
 export function flockFree(file) {
     if (!existsSync(file))
         return true;

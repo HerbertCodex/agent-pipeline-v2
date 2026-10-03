@@ -12,6 +12,7 @@ import { isScreen } from '../dist/rules/screens.js';
 import { runsCommand } from '../dist/rules/required.js';
 import { nearTimeout, busyReasons } from '../dist/gates/run.js';
 import { sealReview } from '../dist/rules/reviews.js';
+import { lockDevice } from '../hooks/scripts/harness-guard.mjs';
 
 /**
  * The rules checked before any merge (docs/REGLES.md): each one refuses what it protects against and accepts the same
@@ -459,7 +460,7 @@ test('review 99, BAS 15: a suite launched under the lock of its stack holds it: 
   const lockFile = join(root, 'e2e.lock'); writeFileSync(lockFile, '');
   const { statSync } = await import('node:fs');
   const ino = statSync(lockFile).ino;
-  const locks = join(root, 'locks'); writeFileSync(locks, `1: FLOCK  ADVISORY  WRITE 4242 08:01:${ino} 0 EOF\n`);
+  const locks = join(root, 'locks'); writeFileSync(locks, `1: FLOCK  ADVISORY  WRITE 4242 ${lockDevice(statSync(lockFile, { bigint: true }).dev)}:${ino} 0 EOF\n`);
   assert.equal(flockHeldByAncestor(lockFile, new Set([4242]), locks), true);
   assert.equal(flockHeldByAncestor(lockFile, new Set([7]), locks), false);
   assert.equal(flockHeldByAncestor(lockFile, new Set([1]), join(root, 'absent')), false);
@@ -477,6 +478,44 @@ test('review 99, BAS 15: a suite launched under the lock of its stack holds it: 
   assert.equal(JSON.parse(r.stdout).gates[0].status, 'passed');
 });
 
+test('review of #105, F1: a lock of an ancestor is the same inode on the same device, or a file that ancestor holds open', async t => {
+  const { flockHeldByAncestor } = await import('../dist/stacks/idle.js');
+  const { openSync, closeSync, statSync } = await import('node:fs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-lock-dev-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const lockFile = join(root, 'e2e.lock'); writeFileSync(lockFile, '');
+  const ino = statSync(lockFile).ino;
+  const locks = join(root, 'locks');
+  // Same inode on another device, a process that does not hold the file: another file.
+  writeFileSync(locks, `1: FLOCK  ADVISORY  WRITE 4242 fe:7f:${ino} 0 EOF\n`);
+  assert.equal(flockHeldByAncestor(lockFile, new Set([4242]), locks), false);
+  // Another device printed (btrfs), but the ancestor holds the file open: the same lock.
+  const fd = openSync(lockFile, 'r');
+  t.after(() => closeSync(fd));
+  writeFileSync(locks, `1: FLOCK  ADVISORY  WRITE ${process.pid} fe:7f:${ino} 0 EOF\n`);
+  assert.equal(flockHeldByAncestor(lockFile, new Set([process.pid]), locks), true);
+});
+
+test('review of #105, M1: under the lock of an ancestor, the checks that share it still run one at a time', { skip: spawnSyncOk('flock', ['--version']) ? false : 'flock(1) missing' }, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'apv3-held-queue-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const lockFile = join(root, 'e2e.lock'); writeFileSync(lockFile, '');
+  const log = join(root, 'log');
+  const body = id => node(`const fs=require('fs');fs.appendFileSync(${JSON.stringify(log)},'${id} start '+Date.now()+'\\n');` +
+    `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,700);fs.appendFileSync(${JSON.stringify(log)},'${id} end '+Date.now()+'\\n');`);
+  const p = project(t, { gates: [{ id: 'integration', stage: 'full', command: body('integration'), lock: { file: lockFile }, readOnly: true },
+    { id: 'browser', stage: 'full', command: body('browser'), lock: { file: lockFile }, readOnly: true }], config: { stacks: [{ id: '1', lockFile }] } });
+  const cli = fileURLToPath(new URL('./support/cli-with-key.mjs', import.meta.url));
+  const { TEST_KEY_FILE } = await import('./support/rules.mjs');
+  const r = spawnSync('flock', ['-w', '5', lockFile, process.execPath, cli, TEST_KEY_FILE, 'gates', 'run', '--stage', 'full', '--json'], { cwd: p.repo, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout).gates.map(g => g.status), ['passed', 'passed']);
+  const lines = readFileSync(log, 'utf8').trim().split('\n').map(l => l.split(' '));
+  const span = id => ['start', 'end'].map(k => Number(lines.find(l => l[0] === id && l[1] === k)[2]));
+  const [a, b] = [span('integration'), span('browser')];
+  assert.ok(a[1] <= b[0] || b[1] <= a[0], `overlap: ${JSON.stringify({ a, b })}`);
+});
+
 test('review 99, BAS 16: the rule maquette reads the screens of a mockup with the parser of the registry, never in its title', async () => {
   const { mockupsOf, covers } = await import('../dist/rules/screens.js');
   const sha = 'a'.repeat(64);
@@ -488,6 +527,8 @@ test('review 99, BAS 16: the rule maquette reads the screens of a mockup with th
   const registered = mockupsOf([decision(`La maquette « Accueil », validée : fichier docs/design/accueil.html, sha256 ${sha}. Écrans : admin, réglages.`)]);
   assert.deepEqual(registered[0].screens, ['admin', 'réglages']);
   assert.equal(covers(registered[0], 'src/routes/admin/+page.svelte'), true);
+  // An old decision, without file nor fingerprint, keeps the reading of its time (CHANGELOG): « Écrans : » anywhere in it.
+  assert.deepEqual(mockupsOf([decision('Maquette validée. Écrans : admin.')])[0].screens, ['admin']);
   // Not the operator's, or not confirmed: no mockup.
   assert.deepEqual(mockupsOf([{ ...decision(`fichier x.html, sha256 ${sha}.`), source: 'agent' }, { ...decision(`fichier x.html, sha256 ${sha}.`), status: 'proposed' }]), []);
 });

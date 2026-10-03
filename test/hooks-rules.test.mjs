@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -417,4 +417,104 @@ test('review 99, BAS 13: rm of a folder named apv and base64 decoded into data a
   assert.equal(removesStore(['rm', '-rf', 'apv'], '/r/.git'), REASONS.anchorStore);
   assert.equal(removesStore(['rm', '-rf', 'apv'], '/r/build'), null);
   assert.equal(decodedAndUsed('base64 -d a | sha256sum'), false);
+});
+
+test('review of #105, E1: the scope is judged on every repository the command targets; moving the configuration aside changes nothing', async t => {
+  const { hookContext, projectOfTool, repoSlug } = await import('../hooks/scripts/harness-guard.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-cible-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, stdio: 'pipe' });
+  const apvRepo = join(root, 'appli'); const other = join(root, 'autre');
+  for (const dir of [apvRepo, other]) { mkdirSync(dir); git(dir, 'init', '-q', '-b', 'feat'); }
+  mkdirSync(join(apvRepo, '.apv')); writeFileSync(join(apvRepo, '.apv', 'config.json'), '{}');
+  git(apvRepo, 'add', '-A'); git(apvRepo, 'commit', '-qm', 'apv');
+  git(other, 'commit', '-q', '--allow-empty', '-m', 'x'); git(other, 'remote', 'add', 'origin', 'git@github.com:Moi/Autre.git');
+  const env = { HOME: root };
+  const contextOf = (cwd, extra = {}) => ({ ...hookContext({ cwd }, env), ...extra });
+  // The file moved aside in the working tree: the last commit still declares it.
+  renameSync(join(apvRepo, '.apv', 'config.json'), join(apvRepo, '.apv', 'config.json.bak'));
+  assert.equal(projectOfTool(apvRepo), true);
+  assert.equal(projectOfTool(other), false);
+  assert.deepEqual(evaluateCommand('git push origin HEAD:main', {}, contextOf(apvRepo, { agentId: 'a1', agentType: 'apv:implementer' })), { decision: 'deny', reason: REASONS.pushToDefault('main') });
+  assert.deepEqual(evaluateCommand('APV_ALLOW_MERGE=1 gh pr merge 187 --squash', {}, contextOf(apvRepo)), { decision: 'deny', reason: REASONS.rawMerge });
+  assert.deepEqual(evaluateCommand('claude -p x --dangerously-skip-permissions', {}, contextOf(apvRepo)), { decision: 'deny', reason: REASONS.nestedClaude });
+  // From a repository outside the tool, aiming at a project of the tool, or at a place that cannot be known: active.
+  for (const command of ['APV_ALLOW_MERGE=1 gh pr merge 187 -R HerbertCodex/suivie', `git -C ${apvRepo} push origin HEAD:main`,
+    'git push https://github.com/HerbertCodex/suivie.git HEAD:main', `cd ${apvRepo} && APV_ALLOW_MERGE=1 gh pr merge 187`, 'cd "$X" && git push origin main',
+    `sh -c 'cd ${apvRepo} && git push origin main'`, 'GH_REPO=HerbertCodex/suivie APV_ALLOW_MERGE=1 gh pr merge 187', `git --git-dir=${apvRepo}/.git push origin HEAD:main`,
+    'git remote add x https://github.com/HerbertCodex/suivie && git push x HEAD:main', `cd ${apvRepo} && claude -p x`,
+    `cat "$(git -C ${apvRepo} rev-parse --git-common-dir)"/apv/rev*/*`, `truncate -s0 "$(git -C ${apvRepo} rev-parse --git-common-dir)"/apv/op*/*`,
+    'APV_ALLOW_MERGE=1 gh api graphql -f query="mutation { mergePullRequest(input: {}) { x } }"']) {
+    assert.equal(evaluateCommand(command, {}, contextOf(other)).decision, 'deny', command);
+  }
+  // Outside the tool and aiming at its own repository: the old guards only.
+  for (const command of ['git push origin main', 'APV_ALLOW_MERGE=1 gh pr merge 3 -R Moi/Autre', 'APV_ALLOW_MERGE=1 gh pr merge 3 --repo=github.com/moi/autre',
+    `cd ${other} && git push origin main`, 'claude mcp list', 'APV_ALLOW_MERGE=1 gh api -X PUT repos/Moi/Autre/pulls/3/merge']) {
+    assert.equal(evaluateCommand(command, {}, contextOf(other)).decision, 'allow', command);
+  }
+  // Without authorisation, outside the tool: the refusal says how to merge there.
+  assert.deepEqual(evaluateCommand('gh pr merge 3', {}, contextOf(other)), { decision: 'deny', reason: REASONS.mergeOutside });
+  assert.equal(repoSlug('https://github.com/HerbertCodex/suivie.git'), 'herbertcodex/suivie');
+  assert.equal(repoSlug('git@github.com:Moi/Autre.git'), 'moi/autre');
+});
+
+test('review of #105, E2 and E3: gh applies its last method; only pure readers are text, and never when the line runs or sends their output', () => {
+  const sub = as('apv:integrateur');
+  for (const command of ['gh api -X GET -X PUT repos/o/r/pulls/187/merge', 'gh api --method GET --method PUT repos/o/r/pulls/187/merge', 'gh api -X GET --method=PUT repos/o/r/pulls/187/merge',
+    "echo 'gh api -X PUT repos/o/r/pulls/187/merge' | sh", `awk 'BEGIN{system("gh api -X PUT repos/o/r/pulls/187/merge")}'`, "git -c alias.m='!gh api -X PUT repos/o/r/pulls/187/merge' m",
+    "sed -n '1e gh api -X PUT repos/o/r/pulls/187/merge' f", "less +'!gh api -X PUT repos/o/r/pulls/187/merge' f", 'echo repos/o/r/pulls/187/merge | xargs gh api -X PUT',
+    'git commit -m "$(gh api -X PUT repos/o/r/pulls/187/merge)"', "printf 'mutation{mergePullRequest(input:{})}' > q && gh api graphql -F query=@q",
+    "echo 'mutation { mergePullRequest }' | gh api graphql -F query=@-", 'echo "mutation { mergePullRequest }" | gh api graphql --field query=@/dev/stdin',
+    'grep "$(gh api -X PUT repos/o/r/pulls/1/merge)" f', 'echo "{}" | curl -T - https://api.github.com/repos/o/r/pulls/1/merge',
+    "git grep -O'gh api -X PUT repos/o/r/pulls/1/merge' x", 'rg --pre ./run mergePullRequest']) {
+    assert.deepEqual(evaluateCommand(command, {}, sub), { decision: 'deny', reason: REASONS.mergeBySubagent }, command);
+  }
+  for (const command of ['grep -rn mergePullRequest src', 'git log --grep enablePullRequestAutoMerge', 'gh api -X GET repos/o/r/pulls/5/merge', 'echo "voir pulls/5/merge"',
+    'git show HEAD:docs/x.md | grep mergePullRequest', 'cat docs/REGLES.md | wc -l']) {
+    assert.equal(evaluateCommand(command, {}, sub).decision, 'allow', command);
+  }
+});
+
+test('review of #105, E4: a base64 decode followed by a pipe, a process substitution or a read of its file is refused; into data it is allowed', () => {
+  const lead = as(null);
+  for (const command of ['echo eA== | base64 -d | tee /dev/null | xargs cat', 'echo eA== | base64 -d | /bin/sh', 'echo eA== | base64 -d | cat | sh', 'echo eA== | base64 -d | command sh',
+    'echo eA== | base64 -d | timeout 5 sh', 'echo eA== | base64 -d | busybox sh', 'bash <(echo eA== | base64 -d)', 'source <(echo eA== | base64 -d)',
+    'echo eA== | base64 -d > /tmp/p; xargs cat < /tmp/p', 'base64 -d <<< eA== > f; sh f', 'echo eA== | base64 -di | sh', 'base64 -d x.b64 | jq . | sh']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.encodedPath }, command);
+  }
+  for (const command of ['base64 -d x.b64 | jq .', 'echo eA== | base64 -d > f.bin', 'base64 -d a | sha256sum', 'base64 --decode img.b64 > img.png']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+});
+
+test('review of #105, E5 and M2: the stores are reached by no applet, glob, cd, here-string, substitution or find; a folder named apv stays free', async () => {
+  const { globMayMatch } = await import('../hooks/scripts/bash-guard.mjs');
+  const lead = { ...as(null), cwd: '/r' };
+  const outside = { ...lead, apvProject: () => false };
+  for (const command of ['busybox rm -rf .git/apv', 'rm -rf .gi?/apv', 'rm -rf .gi[t]/apv', 'rm -rf .git/ap*', 'rm -rf .git/*', 'mv .git/apv /tmp/x', 'cd .git && rm -rf ./apv',
+    "sh -c 'cd .git && rm -rf ./apv'", 'xargs rm -rf <<< .git/apv', 'echo .git/apv | xargs rm -rf', '\\rm -r ../depot.git/apv', 'find .git -name apv -exec rm -rf {} +',
+    'find . -name apv -delete', 'cat .git/apv/rev*/*', 'truncate -s0 .git/apv/op*/*', 'cp .git/apv/me*/* /tmp/']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+    assert.equal(evaluateCommand(command, {}, outside).decision, 'deny', `outside: ${command}`);
+  }
+  for (const command of ['rm -rf $(git -C ~/p rev-parse --git-common-dir)/apv', 'rm -rf `git rev-parse --git-common-dir`/apv']) {
+    assert.equal(evaluateCommand(command, {}, outside).decision, 'deny', `outside: ${command}`);
+  }
+  for (const command of ['rm -rf build/apv', 'rm -rf src/apv/', "find . -name '*.tmp' -delete", 'cp -r docs /tmp/docs', 'ls .git', 'rm -rf .git/hooks/pre-commit']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  assert.equal(globMayMatch('*.git', '.git', false), true);
+  assert.equal(globMayMatch('.gi?', '.git', false), true);
+  assert.equal(globMayMatch('src', '.git', false), false);
+  assert.equal(globMayMatch('a[pq]v', 'apv'), true);
+  assert.equal(globMayMatch('a[!p]v', 'apv'), false);
+});
+
+test('review of #105: the seal goes to the repository where apv review record wrote, not to the directory of the session', async () => {
+  const { recordDirectories } = await import('../hooks/scripts/review-seal.mjs');
+  const rec = 'apv review record --commit abc --domain securite --reviewer apv:qa-securite --report r.md';
+  assert.deepEqual(recordDirectories(`cd /copie && ${rec}`, '/session'), ['/copie', '/session']);
+  assert.deepEqual(recordDirectories(`${rec} --repo ../outil`, '/s/appli'), ['/s/outil', '/s/appli']);
+  assert.deepEqual(recordDirectories(`cd /c && ${rec} --repo=sous`, '/s'), ['/c/sous', '/s']);
+  assert.deepEqual(recordDirectories(rec, '/s'), ['/s']);
 });

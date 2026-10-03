@@ -5,8 +5,10 @@
 // only sealed records, so a record written by anyone else (the implementer, the lead, a script) proves nothing.
 // Never blocks, never prints.
 import { spawnSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { isMainModule, readHookInput } from './lib.mjs';
-import { reviewRecordCall, reviewRecordProblem } from './bash-guard.mjs';
+import { apvArguments, reviewRecordCall, reviewRecordProblem, tokenize } from './bash-guard.mjs';
+import { cdTarget } from './harness-guard.mjs';
 
 const OPERATOR_MODULE = new URL('../../dist/rules/operator.js', import.meta.url);
 const REVIEWS_MODULE = new URL('../../dist/rules/reviews.js', import.meta.url);
@@ -27,21 +29,47 @@ export function sealRequest(input) {
   return id ? { id, domain: call.domain, agent: input.agent_type } : null;
 }
 
+/**
+ * The directories where `apv review record` may have written, most likely first: the one the literal `cd` of the command
+ * lead to, with its `--repo` (which the tool reads from its own directory), then the directory of the session.
+ */
+export function recordDirectories(command, cwd, home = null) {
+  const out = [];
+  let dir = cwd;
+  for (const words of tokenize(String(command ?? '')).segments) {
+    const moved = cdTarget(words, dir, home);
+    if (moved !== undefined) { dir = moved; continue; }
+    const args = apvArguments(words);
+    if (!args) continue;
+    const flag = args.indexOf('--repo');
+    const repo = args.find(a => a.startsWith('--repo='))?.slice('--repo='.length) ?? (flag === -1 ? undefined : args[flag + 1]);
+    if (dir !== null) out.push(repo && !/[$`]/.test(repo) ? resolve(dir, repo) : dir);
+    break;
+  }
+  return [...new Set([...out, cwd])];
+}
+
 async function main() {
   process.env.APV_ENTRY = 'hook';
   const input = await readHookInput();
   const request = sealRequest(input);
   if (!request) return 0;
   const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
-  const r = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
-  if (r.status !== 0 || !r.stdout.trim()) return 0;
   const operator = await import(OPERATOR_MODULE.href);
   const reviews = await import(REVIEWS_MODULE.href);
   const keyFile = typeof process.env.APV_ANCHOR_KEY_FILE === 'string' && process.env.APV_ANCHOR_KEY_FILE ? process.env.APV_ANCHOR_KEY_FILE : operator.anchorKeyFile();
-  const common = r.stdout.trim();
-  let key;
-  try { key = operator.ensureAnchorKey(common, keyFile); } catch (error) { operator.recordRefusal(common, `relecture non scellée : ${error?.message ?? error}`); return 0; }
-  reviews.sealReview(common, request.id, request.domain, request.agent, key);
+  // Sealed in the repository where the record was written: the session may sit in another one (a reviewer launched from
+  // the session of an application, on a copy of the tool).
+  for (const dir of recordDirectories(input.tool_input?.command, cwd, process.env.HOME ?? null)) {
+    const r = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+    if (r.status !== 0 || !r.stdout.trim()) continue;
+    const common = r.stdout.trim();
+    if (!reviews.recordExists(common, request.id, request.domain)) continue;
+    let key;
+    try { key = operator.ensureAnchorKey(common, keyFile); } catch (error) { operator.recordRefusal(common, `relecture non scellée : ${error?.message ?? error}`); return 0; }
+    reviews.sealReview(common, request.id, request.domain, request.agent, key);
+    return 0;
+  }
   return 0;
 }
 

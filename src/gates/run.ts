@@ -419,7 +419,15 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       }
       return heldAboveCache.get(file)!;
     };
-    const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
+    // Under a lock held by an ancestor, the checks that ask for it still run one at a time, as they would under their own
+    // flock: one queue per lock file, in this process.
+    const heldQueues = new Map<string, Promise<unknown>>();
+    const oneAtATime = <T>(file: string, run: () => Promise<T>): Promise<T> => {
+      const next = (heldQueues.get(file) ?? Promise.resolve()).then(run, run);
+      heldQueues.set(file, next.catch(() => undefined));
+      return next;
+    };
+    const override =options.override ? { run: options.override.run, reason: options.override.reason } : null;
     type Repeat = NonNullable<GateReceipt['repeat']>;
     type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'>>;
     type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat' | 'web' | 'scope' | 'nearTimeout'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack'>> & { repeat?: RepeatFields; web?: NonNullable<GateReceipt['web']> };
@@ -470,11 +478,20 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         // The record file of `apv web audit`, outside the environment identity too: emptied before each pass.
         rmSync(webRecord, { force: true });
         const passEnv = { ...(suite ? { ...checkEnv, [SUITE_MARKER]: runId } : checkEnv), [WEB_RECORD]: webRecord };
-        // A kernel lock already held by an ancestor (the suite launched under `flock <file>`): held for the whole run,
-        // never taken again (a second flock on the same file from a child would wait for its own parent).
-        if (lock?.kind !== 'flock' || heldAbove(lock.file)) {
+        if (lock?.kind !== 'flock') {
           const result = await runProcess({ command: argv, cwd: workspace, env: passEnv, timeoutMs, signal, maxOutputBytes: 1024 * 1024 });
           return { result, commandMs: result.durationMs, lockWaitMs: 0, lockError: null };
+        }
+        // A kernel lock already held by an ancestor (the suite launched under `flock <file>`): held for the whole run,
+        // never taken again (a second flock on the same file from a child would wait for its own parent); the checks
+        // that share it take turns in this process, the timeout starting at their turn.
+        if (heldAbove(lock.file)) {
+          const queued = performance.now();
+          return oneAtATime(lock.file, async () => {
+            const waited = performance.now() - queued;
+            const result = await runProcess({ command: argv, cwd: workspace, env: passEnv, timeoutMs, signal, maxOutputBytes: 1024 * 1024 });
+            return { result, commandMs: result.durationMs, lockWaitMs: waited, lockError: null };
+          });
         }
         const result = await runProcess({ command: flockCommand(lock.file, lock.waitMs, argv), cwd: workspace, env: passEnv, timeoutMs, signal,
           maxOutputBytes: 1024 * 1024, waitReady: true });

@@ -3,7 +3,7 @@
 // Node built-ins only, like every hook: they run before any install and never need the compiled dist.
 // A guard rail against mistakes, not a security boundary: a command that computes its targets is not guessed.
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 export const HARNESS_REASONS = {
@@ -516,15 +516,65 @@ function git(cwd, args) {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
-/** True when a flock on `file` is held by one of `ancestors` (read from `/proc/locks`). */
-export function flockHeldBy(file, ancestors, locksPath = '/proc/locks') {
-  let locks; let inode;
-  try { locks = readFileSync(locksPath, 'utf8'); inode = statSync(file).ino; } catch { return false; }
+const MARKERS = ['.apv/config.json', 'pipeline.v2.json'];
+
+/**
+ * Whether `dir` lies in a project of the tool: its repository declares `.apv/config.json` (or the V2 `pipeline.v2.json`)
+ * in the working tree, in its last commit, or on the default branch of its remote. Moving the file aside in the working
+ * tree does not take a project out of the tool. A directory that is no repository: only its own files count.
+ */
+export function projectOfTool(dir) {
+  const root = git(dir, ['rev-parse', '--show-toplevel']);
+  if (MARKERS.some(m => existsSync(join(root ?? dir, m)))) return true;
+  if (root === null && git(dir, ['rev-parse', '--git-dir']) === null) return false;
+  for (const ref of ['HEAD', 'refs/remotes/origin/HEAD']) {
+    if (git(dir, ['ls-tree', '--name-only', '--full-tree', ref, '--', ...MARKERS])) return true;
+  }
+  return false;
+}
+
+/** The `owner/repo` of a GitHub repository named by `owner/repo`, `host/owner/repo` or an address (`git@host:o/r.git`), lower case. */
+export function repoSlug(value) {
+  const m = /([^/:\s]+)\/([^/:\s]+?)(?:\.git)?\/?$/.exec(String(value ?? '').trim());
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+}
+
+/** The repositories the remotes of the repository of `dir` point to (`owner/repo`). */
+function remoteRepos(dir) {
+  const out = git(dir, ['remote', '-v']);
+  return out ? [...new Set(out.split('\n').map(l => repoSlug(l.split(/\s+/)[1])).filter(Boolean))] : [];
+}
+
+/** The device of a `stat` (bigint) as `/proc/locks` prints it: `major:minor`, in hexadecimal. */
+export function lockDevice(dev) {
+  const major = ((dev >> 8n) & 0xfffn) | ((dev >> 32n) & ~0xfffn);
+  const minor = (dev & 0xffn) | ((dev >> 12n) & ~0xffn);
+  return `${major.toString(16)}:${minor.toString(16)}`;
+}
+
+/** Whether process `pid` holds `file` open (an entry of `/proc/<pid>/fd` leads to it). */
+function holdsOpen(pid, file, procRoot = '/proc') {
+  let real; let fds;
+  try { real = realpathSync(file); fds = readdirSync(join(procRoot, String(pid), 'fd')); } catch { return false; }
+  return fds.some(fd => { try { return readlinkSync(join(procRoot, String(pid), 'fd', fd)) === real; } catch { return false; } });
+}
+
+/**
+ * True when a flock on `file` is held by one of `ancestors` (read from `/proc/locks`): same inode on the same device.
+ * Some file systems print another device there than `stat` gives (btrfs subvolumes): the same inode then counts when
+ * that process holds the file open.
+ */
+export function flockHeldBy(file, ancestors, locksPath = '/proc/locks', procRoot = '/proc') {
+  let locks; let st;
+  try { locks = readFileSync(locksPath, 'utf8'); st = statSync(file, { bigint: true }); } catch { return false; }
   const pids = new Set(ancestors.map(a => a.pid));
+  const [major, minor] = lockDevice(st.dev).split(':').map(x => parseInt(x, 16));
   for (const line of locks.split('\n')) {
     const fields = line.trim().split(/\s+/);
-    if (fields[1] !== 'FLOCK' || fields[3] !== 'WRITE') continue;
-    if (Number(fields[5]?.split(':')[2]) === inode && pids.has(Number(fields[4]))) return true;
+    if (fields[1] !== 'FLOCK' || fields[3] !== 'WRITE' || !pids.has(Number(fields[4]))) continue;
+    const [maj, min, ino] = (fields[5] ?? '').split(':');
+    if (ino === undefined || BigInt(/^\d+$/.test(ino) ? ino : -1) !== st.ino) continue;
+    if ((parseInt(maj, 16) === major && parseInt(min, 16) === minor) || holdsOpen(Number(fields[4]), file, procRoot)) return true;
   }
   return false;
 }
@@ -553,14 +603,25 @@ export function hookContext(input, env = process.env) {
       return [...new Set([...(head && head.startsWith('origin/') ? [head.slice('origin/'.length)] : []), 'main', 'master'])];
     },
     currentBranch: () => git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
-    // Whether the tool is active here (docs/PLUGIN.md, « Portée des crochets »): the repository of the working directory,
-    // or the project of the session, declares `.apv/config.json` (or the V2 `pipeline.v2.json`). Unknown: active.
-    apvProject: () => {
-      if (apvProject !== null) return apvProject;
-      const roots = [git(cwd, ['rev-parse', '--show-toplevel']), typeof env.CLAUDE_PROJECT_DIR === 'string' && env.CLAUDE_PROJECT_DIR ? env.CLAUDE_PROJECT_DIR : null]
-        .filter(r => typeof r === 'string' && r);
-      if (!roots.length) return (apvProject = true);
-      return (apvProject = roots.some(r => existsSync(join(r, '.apv', 'config.json')) || existsSync(join(r, 'pipeline.v2.json'))));
+    // Whether the tool is active for a command (docs/PLUGIN.md, « Portée des crochets »): the repository of the working
+    // directory, the project of the session, or a repository the command targets (`targets` of commandTargets) is a project
+    // of the tool (projectOfTool). A target that cannot be placed (computed, an address that is not a remote of this
+    // repository): active. No repository at all: active.
+    apvProject: (targets = {}) => {
+      if (targets.unknown) return true;
+      if (apvProject === null) {
+        const roots = [git(cwd, ['rev-parse', '--show-toplevel']), typeof env.CLAUDE_PROJECT_DIR === 'string' && env.CLAUDE_PROJECT_DIR ? env.CLAUDE_PROJECT_DIR : null]
+          .filter(r => typeof r === 'string' && r);
+        apvProject = !roots.length || roots.some(projectOfTool);
+      }
+      if (apvProject) return true;
+      for (const dir of targets.dirs ?? []) if (projectOfTool(dir)) return true;
+      const own = (targets.remotes ?? []).length ? remoteRepos(cwd) : [];
+      for (const remote of targets.remotes ?? []) {
+        const repo = repoSlug(remote);
+        if (!repo || !own.includes(repo)) return true;
+      }
+      return false;
     },
     flockHeldByAncestor: file => flockHeldBy(file, context.ancestors()),
     leaseHeld: () => (env.APV_LOCK_HELD ?? '').split(',').map(x => x.trim()).filter(Boolean),
