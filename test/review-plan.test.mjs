@@ -171,7 +171,8 @@ test('review plan: an unclassified file with a changed content keeps every domai
   assert.deepEqual(retained(plan), ['securite', 'fidelite', 'donnees', 'rgpd']);
   for (const domain of ['fidelite', 'donnees', 'rgpd']) {
     assert.deepEqual(decision(plan, domain).files, ['src/lib/server/applications.ts'], domain);
-    assert.match(decision(plan, domain).reason, /fichier non classé au contenu changé \(prudence\)/);
+    // Server code (3.0.0-alpha.15: the server class, stronger than tests and tooling) keeps the same prudence.
+    assert.match(decision(plan, domain).reason, /code serveur, chemin sensible ou configuration au contenu changé \(prudence/);
   }
   assert.equal(plan.counts.unclassified, 1);
   assert.equal(plan.counts.neutral, 2);
@@ -206,8 +207,15 @@ test('review plan: the security review is never skipped, whatever the configurat
   p.edit('src/lib/server/auth/session.ts', 'export const session = 1;\n');
   p.commit();
   const plan = await p.plan();
-  assert.deepEqual(retained(plan), ['securite']);
+  // A sensitive path is stronger than a neutral class (3.0.0-alpha.15): every domain stays, security first.
+  assert.deepEqual(retained(plan), ['securite', 'fidelite', 'donnees', 'rgpd']);
+  assert.equal(plan.risk.level, 'eleve');
   assert.deepEqual(decision(plan, 'securite').files, ['src/lib/server/auth/session.ts'], 'sensitive paths of the high lane are cited');
+  // A plain file declared neutral: the security review alone, never less.
+  const plain = project(t, everything);
+  plain.edit('src/lib/format.ts', 'export const money = 1;\n');
+  plain.commit();
+  assert.deepEqual(retained(await plain.plan()), ['securite']);
   // No key can skip it: an unknown key is refused by the configuration schema.
   for (const review of [{ skip: ['securite'] }, { never: ['securite'] }, { always: ['perf'] }, { paths: { security: ['**'] } }]) {
     const { issues } = configIssues({ review });

@@ -85,6 +85,11 @@ export interface GateRunOptions {
   reference?: string;
   /** The configuration file read (`--config`), always required by the scope of a check when inside the repository. */
   configFile?: string | null;
+  /**
+   * Incremental proof of a round of corrections (`--since`, src/gates/since.ts): the proven commit the run counts from
+   * and the risk of the diff, written in the summary. A task run: never a proof of the full suite.
+   */
+  since?: { commit: string; head: string; risk: string; reason: string };
 }
 /** The copy of a run in the shared store: its directory, or why it could not be made (the run itself stands). */
 export interface SharedCopy { directory: string | null; error: string | null; pruned: PruneResult | null }
@@ -263,6 +268,10 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const git = new Git(options.signal);
   const repo = await git.root(options.repo);
   const candidateSha = await git.sha(repo);
+  // The incremental proof classified the diff up to one HEAD: a commit made since then is not what was classified.
+  if (options.since && options.since.head !== candidateSha) {
+    throw new PipelineError('GATE_SINCE', `--since refusé : HEAD a changé depuis le classement du diff (${options.since.head.slice(0, 12)} classé, ${candidateSha.slice(0, 12)} maintenant). Relancer la même commande.`);
+  }
   const baseSha = options.base ? await git.sha(repo, options.base) : null;
   const treeStatus = (): Promise<string> => git.exec(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
   const treeOf = (dir: string): Promise<string> => dir === repo ? treeStatus() : git.exec(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
@@ -673,7 +682,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       queue: queue?.record ?? null, ports, flaky, cleanup, stoppedStacks, infrastructure: classifyFailures(list, missingEnv), spread: spreadRecord,
       ok: list.every(r => success(r) || r.status === 'not_required') };
     writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
-      reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}),
+      reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}), ...(options.since ? { since: options.since } : {}),
       ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup } : {}), ...(spreadRecord ? { spread: spreadRecord } : {}), ...(stoppedStacks.length ? { stoppedStacks } : {}),
       ...(result.infrastructure.causes.length ? { infrastructure: result.infrastructure } : {}),
       receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),

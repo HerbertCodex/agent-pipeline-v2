@@ -1,4 +1,5 @@
 import { type PathClass, type ReviewDomainName, type ReviewPlanSettings } from './config.js';
+import { type DiffRisk, type RiskLevel } from './risk.js';
 /**
  * `apv review plan`: the review domains proposed from the nature of a diff. Pilot project, 25 September 2026: a
  * spec of pure tidying (77 renames, rewritten imports, no behavior change, no migration, no screen) went through the
@@ -8,7 +9,11 @@ import { type PathClass, type ReviewDomainName, type ReviewPlanSettings } from '
  *   classified, and none of them touches the domain; a file that no class describes, with a changed content,
  *   keeps every domain (prudence);
  * - a pure rename (similarity 100 %) or a change that only rewrites import paths does not change content, except
- *   for a migration, whose name is what the migration tool records.
+ *   for a migration, whose name is what the migration tool records;
+ * - the server code, the sensitive paths of the high lane and the configuration are stronger than the neutral and
+ *   tooling classes (a file named as a test excepted): such a file keeps every domain like an unclassified one;
+ * - the risk level of the diff (src/review/risk.ts) is decided by the path only: `faible` when every file is a test,
+ *   documentation or a mockup without a term of data or GDPR; the content is never read as « text ».
  */
 /** How the content of a changed file changed. */
 /**
@@ -30,6 +35,9 @@ export interface PlannedFile {
         domain: ReviewDomainName;
         why: string;
     }[];
+    /** Risk of this file, and why (src/review/risk.ts). */
+    risk: RiskLevel;
+    riskWhy: string;
 }
 export interface DomainDecision {
     domain: ReviewDomainName;
@@ -60,6 +68,8 @@ export interface ReviewPlan {
         neutral: number;
         unclassified: number;
     };
+    /** Risk level of the diff: `faible` keeps at most securite and fidelite (plus what is forced); `eleve` is the plan as before. */
+    risk: DiffRisk;
     domains: DomainDecision[];
     retained: ReviewDomainName[];
     skipped: {

@@ -1,7 +1,8 @@
-import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { basename, join, relative, sep } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DEFAULT_PASS_ENV, VERSION } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
 import { environment, expandCommand } from '../execution/process.js';
@@ -31,6 +32,212 @@ export interface DastSummary {
   startedAt: string; finishedAt: string; durationMs: number;
   status: DastStatus; exitCode: number;
   timeoutMs: number; log: string; files: string[];
+  /** The preparation of the copy: its dependencies installed (`npm ci`) before the command, or why not. */
+  install: DastInstall;
+  /** The environment file of `review.dast.envFile`: its path, whether it was loaded, how many variables; never the values. */
+  envFile: { file: string; loaded: boolean; variables: number } | null;
+}
+
+/**
+ * - `done`: `npm ci` ran in the copy and passed (its marker written);
+ * - `skipped`: nothing to install (no `package-lock.json`, or the marker of a successful installation of this very
+ *   lockfile), with the reason;
+ * - `failed`: `npm ci` failed; `timed_out`: it passed its delay. In both cases the scan command never ran.
+ */
+export interface DastInstall { status: 'done' | 'skipped' | 'failed' | 'timed_out'; reason: string; command: string[] | null; exitCode: number | null; durationMs: number }
+
+/**
+ * The installation of the dependencies of the copy, without the scripts of the packages (`preinstall`, `postinstall`):
+ * they would run outside the lease of the scan.
+ */
+export const DAST_INSTALL = ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'] as const;
+/** Written in `node_modules` after a successful installation: the sha256 of the lockfile it installed. */
+export const DAST_INSTALL_MARKER = '.apv-dast-install';
+
+/**
+ * Hosts that never leave the machine: `localhost`, `*.localhost`, 127.0.0.0/8 and `::1`. The only addresses an
+ * environment file may name: anything else that looks like an address is refused (an allow-list, never a deny-list).
+ */
+const LOOPBACK = /^(?:localhost|(?:[a-z0-9-]+\.)+localhost|127(?:\.\d{1,3}){3}|::1|0:0:0:0:0:0:0:1)\.?$/i;
+export const LOOPBACK_TEXT = 'seuls localhost, *.localhost, 127.0.0.0/8 et ::1 sont admis';
+/** Variables an environment file may not set: those of the tool, and those that change what runs. */
+const RESERVED_KEY = /^(?:APV_[A-Z0-9_]*|PATH|NODE_OPTIONS|NODE_PATH|HOME|LD_[A-Z0-9_]*|DYLD_[A-Z0-9_]*)$/;
+/** Variables that name an address: every word of their value must be a loopback address or a port. */
+const HOST_KEY = /HOST|URL|URI|ADDR|ENDPOINT|SERVER|DSN|DOMAIN|ORIGIN|PROXY|TARGET|SITE|BASE|API|DATABASE|(?:^|_)DB(?:_|$)/i;
+/** A variable of an address family whose value is not an address (`API_KEY`, `DB_PASSWORD`, `DATABASE_NAME`, `DB_PORT`). */
+const NOT_ADDRESS_KEY = /(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|PWD|USER|USERNAME|NAME|ID|PORT|TIMEOUT|VERSION|MODE|SCHEMA)$/i;
+/** `host:port` without a scheme (`prodserver:8080`, `localhost:5173`). */
+const HOST_PORT = /^([\p{L}\p{N}._-]+):(\d{1,5})(?:[/\\]\S*)?$/u;
+/** One or more schemes (`http:`, `jdbc:postgresql:`), then the rest. */
+const SCHEMES = /^((?:[a-z][\w+.-]*:)+)(.*)$/i;
+/** `%XX` decoded, a few times (`%253A`): an encoded address is read as the address. */
+function decoded(value: string): string {
+  let out = value;
+  for (let i = 0; i < 3; i++) {
+    let next: string;
+    try { next = decodeURIComponent(out); } catch { break; }
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+/** E-mail domains reserved for examples and tests: a test account there names no machine. */
+const RESERVED_MAIL = /^[^@\s/\\?#:]+@(?:[\w-]+\.)*(?:example\.(?:com|org|net)|example|test|invalid|localhost)$/i;
+/** A host name: labels of letters, digits and hyphens, the last one of letters only (a TLD; not a version, not a key). */
+const HOST_NAME = /^(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,62})?\.)+\p{L}{2,63}\.?(?::\d+)?(?:\/\S*)?$/u;
+const IPV4 = /^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?(?:\/\S*)?$/;
+const IPV6 = /^\[?([0-9a-f]*:[0-9a-f]*:[0-9a-f:.]*)\]?(?::\d+)?$/i;
+const URL_LIKE = /^(?:[a-z][\w+.-]*:)?\/\/(?:[^@/?#\\]*@)?(\[[^\]]*\]|[^:/?#\\]*)/i;
+
+/**
+ * The hosts a word with a scheme or `//` names, read two ways: by hand (the authority cut at `/`, `\`, `?` or `#`
+ * before any `@` is looked for, so that `host#@localhost` names `host`), and by `new URL` once the backslashes are
+ * slashes and the missing `//` added. Both must be loopback.
+ */
+function urlHosts(rest: string): string[] {
+  const authority = rest.replace(/^[/\\]+/, '').split(/[/\\?#]/)[0]!;
+  const afterUser = authority.slice(authority.lastIndexOf('@') + 1);
+  const manual = /^\[[^\]]*\]/.exec(afterUser)?.[0] ?? afterUser.split(':')[0]!;
+  const hosts = [manual];
+  try { hosts.push(new URL(`http://${rest.replace(/\\/g, '/').replace(/^\/+/, '')}`).hostname); } catch { /* the manual reading stands */ }
+  return hosts.filter(Boolean);
+}
+const loopback = (host: string): boolean => LOOPBACK.test(host.replace(/^\[|\]$/g, ''));
+
+/**
+ * Why a value of an environment file names an address outside the loopback, or null. Each word of the value is read
+ * (a list, a JSON object, a libpq string `host=… port=…`): a URL (`scheme://`, `//`), `user@host`, `host=`, an IPv4 or
+ * IPv6 address, a host name with a dot (`db.prod.example.com`, `bdd.exämple.fr`, with a trailing dot) must be loopback;
+ * in a variable that names an address (`*_HOST`, `*_URL`...) or after `host`, a bare name (`prodserver`) or a number
+ * beyond a port too. An e-mail address on a domain reserved for examples (`demo@example.org`) is a test account, not a
+ * host. Never returns the value.
+ */
+export function addressRefusal(key: string, value: string): string | null {
+  const words = decoded(value).split(/[\s,;|"'`{}()<>]+/).filter(Boolean);
+  // `HOSTNAME`, `DB_HOSTNAME`, `SERVER_NAME` name a host, whatever their suffix; `DB_NAME` names a database.
+  const addressKey = HOST_KEY.test(key) && (!NOT_ADDRESS_KEY.test(key) || /(?:HOST_?NAME|SERVER_?NAME)$/i.test(key));
+  let strictNext = false;
+  for (const raw of words) {
+    // A separator alone (`:` of a JSON object, `=`) is no word; an IPv6 address keeps its colons.
+    if (/^[:=]+$/.test(raw)) continue;
+    let word = raw.replace(/:$/, '');
+    let strict = addressKey || strictNext;
+    strictNext = /^(?:host|hostname|hostaddr|server|addr|address)$/i.test(word);
+    if (strictNext) continue;
+    const pair = /^([\w.-]+)=(.*)$/.exec(word);
+    if (pair) { word = pair[2]!; strict ||= /^(?:host|hostaddr|hostname|server|addr)$/i.test(pair[1]!); if (!word) continue; }
+    const url = URL_LIKE.exec(word);
+    if (url) {
+      const rest = word.replace(/^(?:[a-z][\w+.-]*:)?/i, '');
+      if (!loopback(url[1]!) || urlHosts(rest).some(h => !loopback(h))) return 'adresse (URL) hors bouclage';
+      continue;
+    }
+    // An IPv6 address before anything that reads colons (`fe80::1` starts with letters).
+    const v6first = IPV6.exec(word);
+    if (v6first && (v6first[1]!.match(/:/g)?.length ?? 0) >= 2) { if (!loopback(v6first[1]!)) return 'adresse IPv6 hors bouclage'; continue; }
+    // `host:port`: the host must be loopback, with or without a dot (`prodserver:8080`).
+    const hostPort = HOST_PORT.exec(word);
+    if (hostPort && !/^\d+$/.test(hostPort[1]!)) { if (!loopback(hostPort[1]!)) return 'hôte:port hors bouclage'; continue; }
+    // Any scheme, nested or not, with `//`, `/`, `\\` or nothing before the host (`http:host`, `jdbc:postgresql://host`).
+    const schemes = SCHEMES.exec(word);
+    if (schemes && schemes[2]) {
+      const rest = schemes[2]!;
+      const hosts = urlHosts(rest);
+      const urlish = /^[/\\]/.test(rest) || hosts.some(h => h.includes('.')) || rest.includes('@') || schemes[1]!.split(':').length > 2 || strict;
+      if (urlish && hosts.length) { if (hosts.some(h => !loopback(h))) return 'adresse (schéma:hôte) hors bouclage'; continue; }
+    }
+    if (word.includes('@')) {
+      if (RESERVED_MAIL.test(word)) continue;
+      // The authority ends at `/`, `\`, `?` or `#`: an `@` after it (fragment, query) names no host.
+      const segment = word.split(/[/\\?#]/)[0]!;
+      const host = segment.slice(segment.lastIndexOf('@') + 1).split(':')[0]!;
+      if (!loopback(host)) return 'adresse (utilisateur@hôte ou e-mail hors domaine d\'exemple) hors bouclage';
+      continue;
+    }
+    const v6 = IPV6.exec(word);
+    if (v6 && (v6[1]!.match(/:/g)?.length ?? 0) >= 2) { if (!loopback(v6[1]!)) return 'adresse IPv6 hors bouclage'; continue; }
+    const v4 = IPV4.exec(word);
+    if (v4) { if (!loopback(v4[1]!)) return 'adresse IPv4 hors bouclage'; continue; }
+    if (HOST_NAME.test(word)) { if (!loopback(word.split(/[:/]/)[0]!)) return 'nom d\'hôte hors bouclage'; continue; }
+    if (strict) {
+      const host = word.split(/[:/]/)[0]!;
+      if (/^\d+$/.test(word) && Number(word) <= 65535) continue;
+      if (!loopback(host)) return 'nom d\'hôte hors bouclage (variable d\'adresse)';
+    }
+  }
+  return null;
+}
+
+/** `~` and `~/…` as the home folder of the account; a relative path from the copy. */
+export function envFilePath(value: string, repo: string, home: string = homedir()): string {
+  const expanded = value === '~' ? home : value.startsWith('~/') ? join(home, value.slice(2)) : value;
+  return isAbsolute(expanded) ? expanded : resolve(repo, expanded);
+}
+
+/** `KEY=value` lines (`export KEY=value`, quotes removed, `#` comments and blank lines skipped). */
+export function parseEnvFile(text: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [i, raw] of text.split(/\r?\n/).entries()) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+    if (!m) throw new PipelineError('DAST_ENV', `review.dast.envFile : ligne ${i + 1} illisible (KEY=valeur attendu)`);
+    let value = m[2]!;
+    if (/^(['"]).*\1$/.test(value)) value = value.slice(1, -1);
+    else value = value.replace(/\s+#.*$/, '');
+    out.set(m[1]!, value);
+  }
+  return out;
+}
+
+/**
+ * Loads `review.dast.envFile`: refused (`DAST_ENV`) when it is absent, unreadable, sets a reserved variable (`APV_*`,
+ * `PATH`, `NODE_OPTIONS`, `HOME`...), or when a value names an address outside the loopback (the scan never targets
+ * production). The refusal names the keys, never their values.
+ */
+export function loadDastEnvFile(value: string, repo: string, home?: string): { file: string; variables: Map<string, string> } {
+  const file = envFilePath(value, repo, home || homedir());
+  let text: string;
+  try { text = readFileSync(file, 'utf8'); } catch { throw new PipelineError('DAST_ENV', `review.dast.envFile introuvable ou illisible : ${file}`); }
+  const variables = parseEnvFile(text);
+  const reserved = [...variables.keys()].filter(k => RESERVED_KEY.test(k));
+  if (reserved.length) {
+    throw new PipelineError('DAST_ENV', `review.dast.envFile (${file}) refusé : variable(s) réservée(s) ${reserved.join(', ')} (APV_*, PATH, NODE_OPTIONS, NODE_PATH, HOME, LD_*, DYLD_*) : elles changent ce que lance l'outil. Rien n'est lancé.`);
+  }
+  const remote = [...variables].map(([k, v]) => [k, addressRefusal(k, v)] as const).filter(([, why]) => why !== null);
+  if (remote.length) {
+    throw new PipelineError('DAST_ENV', `review.dast.envFile (${file}) refusé : ${remote.map(([k, why]) => `${k} (${why})`).join(', ')} ; ${LOOPBACK_TEXT} : le scan ne vise jamais la production. Rien n'est lancé.`);
+  }
+  return { file, variables };
+}
+
+/**
+ * Prepares the copy: with a `package-lock.json`, `npm ci --ignore-scripts` in the copy unless the marker of a successful
+ * installation of this very lockfile is there (an interrupted installation leaves a partial `node_modules`, never the
+ * marker), output appended to the log, bounded by `timeoutMs`. Receives the variables of the scan (never those of the
+ * environment file) plus `HOME` and `USERPROFILE` (the cache of npm).
+ */
+export function prepareCopy(repo: string, env: NodeJS.ProcessEnv, logFd: number, timeoutMs: number, command: readonly string[] = DAST_INSTALL): DastInstall {
+  const lock = join(repo, 'package-lock.json');
+  if (!existsSync(lock)) return { status: 'skipped', reason: 'pas de package-lock.json dans la copie', command: null, exitCode: null, durationMs: 0 };
+  const digest = createHash('sha256').update(readFileSync(lock)).digest('hex');
+  const marker = join(repo, 'node_modules', DAST_INSTALL_MARKER);
+  let installed = '';
+  try { installed = readFileSync(marker, 'utf8').trim(); } catch { /* never installed by the tool */ }
+  if (installed === digest) return { status: 'skipped', reason: 'dépendances déjà installées par apv dast run pour ce package-lock.json', command: null, exitCode: null, durationMs: 0 };
+  const started = Date.now();
+  writeSync(logFd, `[apv dast] installation des dépendances de la copie : ${command.join(' ')}\n`);
+  const r = spawnSync(command[0]!, command.slice(1), { cwd: repo, env, stdio: ['ignore', logFd, logFd], timeout: timeoutMs, killSignal: 'SIGTERM' });
+  const durationMs = Date.now() - started;
+  const exitCode = r.status ?? (r.error ? 127 : 1);
+  if ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT') {
+    return { status: 'timed_out', reason: `${command.join(' ')} : délai dépassé (${Math.round(timeoutMs / 1000)} s, review.dast.timeoutMs)`, command: [...command], exitCode: TIMEOUT_EXIT, durationMs };
+  }
+  if (r.error || r.status !== 0) {
+    return { status: 'failed', reason: `${command.join(' ')} en échec : ${r.error ? r.error.message : `code ${exitCode}`}`, command: [...command], exitCode, durationMs };
+  }
+  try { mkdirSync(join(repo, 'node_modules'), { recursive: true }); writeFileSync(marker, `${digest}\n`); } catch { /* the next run installs again */ }
+  return { status: 'done', reason: installed ? 'package-lock.json changé depuis la dernière installation' : 'aucune installation de apv dast run pour ce package-lock.json', command: [...command], exitCode: 0, durationMs };
 }
 
 /**
@@ -85,6 +292,8 @@ export interface DastRunOptions {
   repo: string; commit: string; clean: boolean; reportDir: string; settings: DastSettings;
   env: NodeJS.ProcessEnv; stderr: (s: string) => void; store: LockStore; owner: LockOwner; waitSeconds: number;
   now?: () => Date;
+  /** The installation of the dependencies of the copy (tests inject it); default `npm ci --no-audit --no-fund`. */
+  installCommand?: readonly string[];
 }
 
 /**
@@ -98,10 +307,13 @@ export async function runDast(options: DastRunOptions): Promise<DastSummary> {
   const { settings } = options;
   const reportDir = canonicalPath(options.reportDir);
   checkReportDir(options.repo, reportDir);
+  // The environment file first: an address outside the loopback refuses the scan before anything runs or is written.
+  const loaded = settings.envFile !== undefined ? loadDastEnvFile(settings.envFile, options.repo, options.env['HOME']) : null;
   mkdirSync(reportDir, { recursive: true });
   const command = expandCommand(settings.command, { reportDir, commit: options.commit, repo: options.repo });
+  const base = environment([...DEFAULT_PASS_ENV, ...settings.passEnv], options.env);
   const env = {
-    ...environment([...DEFAULT_PASS_ENV, ...settings.passEnv], options.env),
+    ...base, ...(loaded ? Object.fromEntries(loaded.variables) : {}),
     APV_DAST_REPORT_DIR: reportDir, APV_DAST_COMMIT: options.commit, APV_DAST_REPO: options.repo,
     ...(options.env['APV_LOCK_HELD'] ? { APV_LOCK_HELD: options.env['APV_LOCK_HELD'] } : {}),
   };
@@ -109,22 +321,32 @@ export async function runDast(options: DastRunOptions): Promise<DastSummary> {
   let acquired = false;
   const log = openSync(join(reportDir, DAST_LOG), 'w', 0o644);
   let code: number;
+  let install: DastInstall;
+  let commandMs = 0;
   try {
-    code = await runLocked(options.store, settings.resource, {
-      owner: options.owner, ttlSeconds: 300, waitSeconds: options.waitSeconds, purpose: `apv dast run (${options.commit.slice(0, 12)})`,
-      command, cwd: options.repo, env, stderr: options.stderr, stdio: ['ignore', log, log], timeoutMs: settings.timeoutMs,
-      onAcquired: () => { acquired = true; },
-    });
+    // The copy prepared before the lease: an installation takes no shared resource.
+    install = prepareCopy(options.repo, { ...base, ...environment(['HOME', 'USERPROFILE'], options.env) }, log, settings.timeoutMs, options.installCommand);
+    if (install.status === 'failed' || install.status === 'timed_out') code = install.exitCode ?? 1;
+    else {
+      const commandStarted = now().getTime();
+      code = await runLocked(options.store, settings.resource, {
+        owner: options.owner, ttlSeconds: 300, waitSeconds: options.waitSeconds, purpose: `apv dast run (${options.commit.slice(0, 12)})`,
+        command, cwd: options.repo, env, stderr: options.stderr, stdio: ['ignore', log, log], timeoutMs: settings.timeoutMs,
+        onAcquired: () => { acquired = true; },
+      });
+      commandMs = now().getTime() - commandStarted;
+    }
   } finally { closeSync(log); }
   const finished = now();
   const durationMs = finished.getTime() - started.getTime();
-  const status: DastStatus = !acquired && code === LOCK_WAIT_TIMEOUT_EXIT ? 'lock_timeout'
-    : code === 0 ? 'passed' : code === TIMEOUT_EXIT && durationMs >= settings.timeoutMs ? 'timed_out' : 'failed';
+  const status: DastStatus = install.status === 'failed' ? 'failed' : install.status === 'timed_out' ? 'timed_out' : !acquired && code === LOCK_WAIT_TIMEOUT_EXIT ? 'lock_timeout'
+    : code === 0 ? 'passed' : code === TIMEOUT_EXIT && commandMs >= settings.timeoutMs ? 'timed_out' : 'failed';
   const summary: DastSummary = {
     tool: 'apv dast run', version: VERSION, commit: options.commit, repo: options.repo, clean: options.clean,
     resource: settings.resource, command, description: settings.description ?? null,
     startedAt: started.toISOString(), finishedAt: finished.toISOString(), durationMs, status, exitCode: code,
-    timeoutMs: settings.timeoutMs, log: DAST_LOG, files: listFiles(reportDir),
+    timeoutMs: settings.timeoutMs, log: DAST_LOG, files: listFiles(reportDir), install,
+    envFile: settings.envFile !== undefined ? { file: loaded!.file, loaded: true, variables: loaded!.variables.size } : null,
   };
   writeSummary(reportDir, summary);
   return summary;

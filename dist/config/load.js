@@ -16,6 +16,7 @@ import { stackIssues, stacksSchema } from '../stacks/config.js';
 import { webIssues, webSchema } from '../web/config.js';
 import { mapSchema, mapSettings, reuseSchema, reuseSettings } from '../reuse/config.js';
 import { rulesSchema, rulesSettings } from '../rules/config.js';
+import { testsCheckSchema } from '../testcheck/check.js';
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
 /** V2 configuration, read as is for projects not yet migrated. */
@@ -24,7 +25,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'stack', 'web', 'reuse', 'map', 'rules'];
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'stack', 'web', 'reuse', 'map', 'rules', 'testsCheck'];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'];
 /**
@@ -66,6 +67,11 @@ export const dastSchema = s.object({
     passEnv: s.default(envNamesSchema, []),
     resource: s.default(s.string(1, 80, /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/), DEFAULT_DAST_RESOURCE),
     description: s.optional(s.string(1, 500)),
+    /**
+     * Environment file loaded into the command (`KEY=value`; `~` for the home folder, relative to the copy otherwise):
+     * refused when a value names an address outside the loopback (src/review/dast.ts). Never the values in the summary.
+     */
+    envFile: s.optional(s.string(1, 4096)),
 });
 /**
  * Settings of the reviews (`/apv:review`): the dynamic scan (absent: none declared), and what `apv review plan`
@@ -182,6 +188,8 @@ export const apvConfigSchema = s.object({
     web: s.optional(webSchema),
     /** Reuse of the existing components: `apv reuse check` (docs/REUSE.md); absent: defaults. */
     reuse: s.optional(reuseSchema),
+    /** Deterministic checks of the changed test files: `apv tests check` (docs/CONFIGURATION.md, « Tests modifiés »); absent: defaults. */
+    testsCheck: s.optional(testsCheckSchema),
     /** The code map written by `apv map` (docs/REUSE.md); absent: `.apv/code-map.md`. */
     map: s.optional(mapSchema),
     /** What the rules checked before a merge add to their defaults (docs/REGLES.md); absent: defaults. No rule can be switched off. */
@@ -340,6 +348,15 @@ export function configIssues(raw) {
         list.check(!!key && DAST_PLACEHOLDERS.includes(key), 'CONFIG', `review.dast.command: unknown or partial placeholder ${arg} (whole arguments only: ${DAST_PLACEHOLDERS.map(k => `{{${k}}}`).join(', ')})`);
     }
     // Portable globs only (the syntax of allowedPaths): a brace or a negation would silently match nothing.
+    for (const key of ['e2e', 'unit', 'ignore']) {
+        for (const glob of value.testsCheck?.[key] ?? [])
+            list.attempt('CONFIG', () => { try {
+                matches('probe', glob);
+            }
+            catch (error) {
+                throw new PipelineError('CONFIG', `testsCheck.${key}: ${errorMessage(error)}`);
+            } });
+    }
     for (const [key, globs] of Object.entries(value.review?.paths ?? {})) {
         for (const glob of globs ?? [])
             list.attempt('CONFIG', () => { try {

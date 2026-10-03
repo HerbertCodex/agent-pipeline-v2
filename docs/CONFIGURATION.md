@@ -432,6 +432,7 @@ Section APV3, facultative, validée par le chargeur commun (propriété inconnue
 - `resource` (défaut `"dast"`) : le verrou à bail pris pendant le scan, comme `apv lock run <ressource>` ; un scan qui se sert d'une pile partagée (base locale de test, ports fixes) y nomme la ressource de cette pile (par exemple `"e2e"`).
 - `timeoutMs` (défaut `3600000`, de 1000 à 14400000) : durée maximale ; au-delà, la commande est arrêtée (SIGTERM, puis SIGKILL) et le scan est `timed_out`.
 - `passEnv` (défaut `[]`) : variables transmises en plus de `environment.passEnv` par défaut (`PATH`, `LANG`, dossiers temporaires) ; un client Docker a souvent besoin de `HOME`.
+- `envFile` (facultatif, 3.0.0-alpha.15) : fichier `KEY=valeur` chargé dans l'environnement de la commande (`~/…` pour le dossier personnel, relatif à la copie sinon), par exemple `"~/.config/mon-projet/dast.env"` pour l'adresse de l'aperçu local et un compte de test. Refusé, rien n'est lancé, s'il pose une variable réservée (`APV_*`, `PATH`, `NODE_OPTIONS`, `NODE_PATH`, `HOME`, `LD_*`, `DYLD_*`) ou si une valeur ressemble à une adresse hors bouclage (liste d'autorisation : seuls `localhost`, `*.localhost`, `127.0.0.0/8` et `::1` sont admis ; détail dans [CLI.md](CLI.md#apv-dast-run)) : le scan ne vise jamais la production. Un compte de test s'écrit sur un domaine réservé aux exemples (`demo@example.org`). `summary.json` dit s'il a été chargé et combien de variables, jamais leurs valeurs. La copie reçoit aussi seule ses dépendances (`npm ci --ignore-scripts`) quand elle a un `package-lock.json` que l'outil n'a pas encore installé ([CLI.md](CLI.md#apv-dast-run)).
 - `description` (facultatif, 500 caractères au plus) : ce que fait le scan, recopié dans `summary.json`.
 
 Repère (projet pilote, septembre 2026) : la revue sécurité prévoyait un scan ZAP par Docker ; les permissions des agents de revue refusaient `docker run` et `docker pull`, et le scan n'a tourné sur aucune des livraisons suivies.
@@ -448,15 +449,17 @@ Repère (projet pilote, septembre 2026) : la revue sécurité prévoyait un scan
     "migrations": ["supabase/migrations/**"],
     "personal": ["src/lib/export/**", "src/routes/**/export/**"],
     "legal": ["src/routes/(legal)/**"],
-    "neutral": ["tests/**", "**/*.test.ts", "docs/**"]
+    "neutral": ["tests/**", "**/*.test.ts", "docs/**"],
+    "tooling": ["scripts/test-*.mjs"]
   },
   "terms": { "data": [".from('", ".rpc("], "personal": ["cookie", "localstorage", "email"] },
   "always": ["fidelite"]
 } }
 ```
 
-- `paths` : motifs par classe, syntaxe portable des chemins autorisés (`*`, `**`, `?` ; accolades et `!` refusés), 500 au plus par classe. `ui` (composants, styles, gabarits : garde `fidelite`), `data` (requêtes, dépôts, modèles : `donnees`), `migrations` (migrations et schémas : `donnees` et `rgpd`, renommage compris ; `db.migrations` s'y ajoute), `personal` (export, cookies, consentement, traceurs, registre `.apv/rgpd/` : `rgpd`), `legal` (mentions, confidentialité, CGU : `rgpd`), `neutral` (tests, documentation, outillage : aucun domaine, seulement pour un fichier qu'aucune autre classe ne décrit). Défauts : `src/review/config.ts` (`DEFAULT_REVIEW_PATHS`), par exemple `**/*.svelte`, `**/*.css`, `**/components/**` pour `ui`, `**/repositories/**`, `**/db/**`, `**/*schema*.*` pour `data`, `**/migrations/**`, `**/*.sql` pour `migrations`, `**/legal/**`, `**/*cgu*.*` pour `legal`, `**/*.test.*`, `docs/**`, `.apv/**` pour `neutral`. Une maquette validée touchée (dossier `design.dir`) garde `fidelite`.
-- `terms` : mots (sous-chaînes, sans casse, de 2 à 200 caractères) qui, dans les lignes changées d'un fichier `ui` ou `data`, gardent `donnees` (`data` : une requête écrite dans une page) ou `rgpd` (`personal` : un traceur, un cookie, un nouveau champ personnel). Défauts : `DEFAULT_REVIEW_TERMS`. Une fausse alerte garde une revue, jamais l'inverse.
+- `paths` : motifs par classe, syntaxe portable des chemins autorisés (`*`, `**`, `?` ; accolades et `!` refusés), 500 au plus par classe. `ui` (composants, styles, gabarits : garde `fidelite`), `data` (requêtes, dépôts, modèles : `donnees`), `migrations` (migrations et schémas : `donnees` et `rgpd`, renommage compris ; `db.migrations` s'y ajoute), `personal` (export, cookies, consentement, traceurs, registre `.apv/rgpd/` : `rgpd`), `legal` (mentions, confidentialité, CGU : `rgpd`), `neutral` (tests, documentation, outillage : aucun domaine, seulement pour un fichier qu'aucune autre classe ne décrit). Défauts : `src/review/config.ts` (`DEFAULT_REVIEW_PATHS`), par exemple `**/*.svelte`, `**/*.css`, `**/components/**` pour `ui`, `**/repositories/**`, `**/db/**`, `**/*schema*.*` pour `data`, `**/migrations/**`, `**/*.sql` pour `migrations`, `**/legal/**`, `**/*cgu*.*` pour `legal`, `**/*.test.*`, `docs/**`, `.apv/**` pour `neutral`. Une maquette validée touchée (dossier `design.dir`) garde `fidelite`. `tooling` (mocks, fixtures, utilitaires de test : `__mocks__/`, `fixtures/`, `test-utils/`... : aucun domaine en propre) et `server` (code serveur et configuration : `**/server/**`, `**/*.server.*`, `**/api/**`, `**/*.config.*`, `**/*.json`, `**/*.yml`... : aucun domaine en propre) complètent les classes (3.0.0-alpha.15). `personal` comprend aussi les modèles de messages (`**/email*/**`, `**/emails/**`, `**/mail/**`, `**/notifications/**`). **Priorités** : un fichier `neutral` ou `tooling` qui est aussi `server`, un chemin sensible de la voie high ou une configuration (liste fixe, non configurable : `.apv/config.json`, `pipeline.v2.json`, `*.config.*`, lint et format, `package.json` et verrous, `tsconfig*.json`, `.env*`, `.github/**`, `Dockerfile*`...) garde `fidelite`, `donnees` et `rgpd` ; seul un fichier nommé comme un test (`*.test.*`, `*.spec.*`, `*.e2e.*`) y échappe, jamais une configuration. Un fichier propre au projet que les défauts ne décrivent pas se classe ici : `"ui": ["src/lib/copy/**"]`, `"tooling": ["scripts/test-*.mjs"]` ; une clé donnée remplace sa liste par défaut, la reprendre en entier si on l'étend.
+- `terms` : mots (sous-chaînes, sans casse, de 2 à 200 caractères) qui, dans les lignes changées d'un fichier `ui` ou `data`, et aussi d'un test, d'un document ou d'un fichier d'outillage (3.0.0-alpha.15 : une fixture avec des données personnelles), gardent `donnees` (`data` : une requête écrite dans une page, du SQL dans une chaîne) ou `rgpd` (`personal` : un traceur, un cookie, un champ personnel, ce qu'un texte dit de la conservation, de l'hébergement, des prestataires, des transferts ou de la suppression). Une adresse e-mail réelle (domaine non réservé aux exemples) ajoutée garde aussi `rgpd`. Défauts : `DEFAULT_REVIEW_TERMS`, complétés en 3.0.0-alpha.15 (CLI.md). Une fausse alerte garde une revue, jamais l'inverse.
+- **Niveau de risque** (3.0.0-alpha.15, `src/review/risk.ts`) : `apv review plan` donne le niveau du diff et sa raison, décidé par le **chemin** seul (le contenu n'est jamais lu comme du « texte » : les relectures de la PR #110 ont contourné une telle lecture de neuf façons). **Faible** quand chaque fichier est un test (nommé `*.test.*`, `*.spec.*`, `*.e2e.*`, ou sous un dossier `test/` ou `tests/`), de la documentation (`*.md` classée neutre (`docs/`, `README`, `CHANGELOG`) hors dossiers servis et hors texte légal) ou une maquette validée, sans terme de `review.terms` ni adresse e-mail réelle dans ses lignes changées : le plan garde `securite`, plus `fidelite` pour une maquette. **Élevé** pour tout le reste, interface comprise (un `.svelte` dont seul le texte change) : le plan est celui de 3.0.0-alpha.14. `--force` et `always` restent au-dessus du niveau. `apv rules check` exige exactement les domaines du plan au commit (même calcul, configuration lue à la base commune), et `apv gates run --since` n'accepte qu'un diff de risque faible. Les instructions des agents (`agents/**`, `workflows/**`, `skills/**`, `SKILL.md`, `.apv/brief.md`, `CLAUDE.md`, `AGENTS.md`, `.claude/**`) sont des chemins sensibles, de risque élevé ; un `.md` non classé (`articles/`) aussi. L'outillage (`fixtures/`, `__mocks__/`) hors d'un dossier `test/` ou `tests/` garde tous les domaines (`src/lib/fixtures/demo.ts`), et un dossier `tests/` sous un dossier de routage (`routes/`, `pages/`, `app/`) n'est jamais un dossier de tests (`src/routes/tests/+page.svelte`).
 - `always` : domaines toujours gardés, quel que soit le diff (`fidelite`, `donnees`, `rgpd` ; `securite` l'est de toute façon). L'opérateur en force un autre au lancement par `apv review plan --force <domaine>`.
 - Aucune clé ne saute la revue sécurité : une clé inconnue (`skip`, `never`) est refusée par le schéma, et `apv run set <id> review:securite skipped` est refusé par l'état.
 
@@ -636,6 +639,25 @@ Sections APV3, facultatives, lues par `apv reuse check` et `apv map` et validée
 - `map.file` (`.md`), `map.ignore`, `map.maxEntries` (de 20 à 5000, partagées entre les sections de la carte), `map.maxBytes` (de 4096 à 1 000 000, 32 768 par défaut).
 
 Chaque règle, son motif et ses limites : [REUSE.md](REUSE.md). Baisser une gravité, élargir `ignore` ou `allowedPaths`, ou retirer un de ces contrôles est une décision de l'opérateur, jamais un moyen de faire passer une tâche.
+
+## Tests modifiés : `testsCheck`
+
+Section facultative (3.0.0-alpha.15) de `apv tests check` ([CLI.md](CLI.md#apv-tests-check)), déclaré comme contrôle de tâche :
+
+```json
+"gates": [{ "id": "tests", "command": ["apv", "tests", "check", "--base", "{{baseSha}}"] }],
+"testsCheck": {
+  "e2e": ["e2e/**", "tests/browser/**"],
+  "unit": ["src/**/*.test.ts"],
+  "ignore": ["tests/vendor/**"],
+  "severity": { "waitForTimeout": "error", "fixedWait": "error", "realClock": "warning", "sharedData": "off" }
+}
+```
+
+- `enabled` : `false` désactive le contrôle (il passe et le dit) ; absent : actif.
+- `reference` : la branche visée (`origin/main`), quand `--base` n'est pas donné.
+- `e2e`, `unit`, `ignore` : motifs portables ; une clé donnée remplace sa liste par défaut.
+- `severity` : `off`, `warning` ou `error` par règle ; défauts : `waitForTimeout` en erreur, `fixedWait`, `realClock` et `sharedData` en avertissement. Seule une erreur fait échouer le contrôle.
 
 ## Règles avant fusion : `rules`
 

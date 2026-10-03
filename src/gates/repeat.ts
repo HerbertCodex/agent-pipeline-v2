@@ -51,9 +51,12 @@ const MAX_FIXED_WAITS = 100;
  * `await setTimeout(` (`node:timers/promises`), and the `new Promise(r => setTimeout(r, ...))` idiom (type argument
  * and a line break or two included). Lines that are only a comment are ignored.
  */
-const FIXED_WAIT = [/\.waitForTimeout\s*\(/, /(?<![.\w$])(?:sleep|delay)\s*\(/, /\bawait\s+(?:[\w$]+\.)?setTimeout\s*\(/];
+/** Playwright `waitForTimeout(`: the fixed wait `apv tests check` blocks by default (src/testcheck/check.ts). */
+export const WAIT_FOR_TIMEOUT = /\.waitForTimeout\s*\(/;
+const FIXED_WAIT = [WAIT_FOR_TIMEOUT, /(?<![.\w$])(?:sleep|delay)\s*\(/, /\bawait\s+(?:[\w$]+\.)?setTimeout\s*\(/];
 const PROMISE_TIMEOUT = /new\s+Promise\s*(?:<[^>]*>\s*)?\(\s*(?:\((?:[^()]|\([^()]*\))*\)|[\w$]+)\s*=>\s*\{?\s*(?:[\w$]+\.)?setTimeout\s*\(/;
-const isComment = (code: string): boolean => code.startsWith('//') || code.startsWith('*') || code.startsWith('/*');
+/** A trimmed line that is only a comment (`//`, `/*`, or `*` inside a block). */
+export const isComment = (code: string): boolean => code.startsWith('//') || code.startsWith('*') || code.startsWith('/*');
 export function fixedWaitIn(line: string): boolean {
   const code = line.trim();
   if (isComment(code)) return false;

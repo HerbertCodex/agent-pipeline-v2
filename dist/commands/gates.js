@@ -12,6 +12,7 @@ import { MAX_OVERRIDE_REASON, RUN_ID, applyFullSuiteOverride, readRunState, with
 import { cleanLine } from '../run/summary.js';
 import { verifyGates } from '../gates/verify.js';
 import { referenceMissing, resolveReference } from '../gates/repeat.js';
+import { checkSince } from '../gates/since.js';
 import { scopeReferenceMissing } from '../gates/proof-scope.js';
 import { Git } from '../execution/git.js';
 import { signalExitCode } from '../lock/run.js';
@@ -21,6 +22,7 @@ export const usage = `Utilisation :
   apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>] [--against <ref>]
                 [--concurrency N] [--keep-going] [--skip-proven] [--run <spec-id>]
                 [--reason <texte>] [--allow-dirty] [--stacks <pile>,<pile>] [--repo <chemin>] [--json]
+  apv gates run --stage task --since <commit prouvé> [--only a,b] [--repo <chemin>] [--json]
   apv gates verify --commit <sha> [--stage full|task] [--base <ref>] [--against <ref>] [--offline]
                    [--config <fichier> | --commit-config] [--repo <chemin>] [--json]
   apv gates receipts list [--commit <ref>] [--limit N] [--repo <chemin>] [--json]
@@ -50,6 +52,17 @@ réussis. --stage full (défaut) exécute tout, jamais en ciblé ; si la suite c
 prouvée sur ce commit exact (apv gates verify à 0, arbre propre), elle le signale avant de la
 relancer ; avec --skip-proven, elle ne relance rien dans ce cas et sort en 0 (la preuve reste
 celle que vérifie apv gates verify).
+--since <commit prouvé> (avec --stage task, à la place de --base) : preuve incrémentale d'un tour de
+corrections. Refusée (sortie 1, rien n'est lancé) si l'arbre a des modifications non commitées, si HEAD
+ne descend pas strictement du commit, si la suite complète n'y est pas prouvée (apv gates verify à 0 avec
+cette configuration, aucun contrôle réussi après relance), ou si le diff depuis ce commit n'est pas de
+risque faible (classement de apv review plan par le chemin, configuration lue au commit prouvé : tests
+nommés comme tels ou sous test/ et tests/, documentation *.md classée neutral hors dossiers servis,
+maquettes ; jamais l'interface, le code, l'outillage hors dossier de tests ni une configuration), ou si
+HEAD change entre le classement et les contrôles. Sinon, contrôles de tâche, commandes
+ciblées ({{baseSha}} = le commit prouvé) et répétition des tests modifiés depuis ce commit. Jamais une
+preuve de la suite complète : la fusion l'exige toujours au commit exact, lancée une fois sur le
+commit final.
 Rythme d'une exécution (/apv:run) : dans le cadre d'une exécution, la suite complète (--stage full,
 avec au moins un contrôle de stage full) est refusée quand l'étape courante n'attend que les
 contrôles de tâche et ciblés (même calcul que apv run next : intégration intermédiaire ou
@@ -283,7 +296,7 @@ export async function run(args, io) {
             stage: { type: 'string' }, commit: { type: 'string' }, 'skip-proven': { type: 'boolean' }, run: { type: 'string' }, reason: { type: 'string' },
             'keep-going': { type: 'boolean' }, 'allow-dirty': { type: 'boolean' }, repo: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
             'commit-config': { type: 'boolean' }, against: { type: 'string' }, offline: { type: 'boolean' }, limit: { type: 'string' }, out: { type: 'string' }, 'keep-days': { type: 'string' }, 'keep-runs': { type: 'string' },
-            stacks: { type: 'string' },
+            stacks: { type: 'string' }, since: { type: 'string' },
         });
         if (values.help) {
             io.stdout(`${usage}\n`);
@@ -301,7 +314,7 @@ export async function run(args, io) {
             throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
         const stage = stageOf(values.stage);
         if (action === 'verify') {
-            const extra = ['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason', 'allow-dirty', 'stacks'].filter(k => values[k] !== undefined);
+            const extra = ['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason', 'allow-dirty', 'stacks', 'since'].filter(k => values[k] !== undefined);
             if (extra.length)
                 throw new UsageError(`option de gates run seulement : --${extra.join(', --')}`);
             if (!values.commit)
@@ -350,6 +363,14 @@ export async function run(args, io) {
             throw new UsageError('--stacks attend une ou plusieurs piles différentes, par exemple --stacks 2 ou --stacks 1,2');
         if (spreadOver !== undefined && stage === 'task')
             throw new UsageError('--stacks répartit la suite complète (--stage full)');
+        if (values.since !== undefined) {
+            if (!values.since || values.since.startsWith('-'))
+                throw new UsageError('--since : commit attendu (le dernier commit prouvé par la suite complète)');
+            if (stage !== 'task')
+                throw new UsageError('--since va avec --stage task : la preuve incrémentale des corrections ne remplace jamais la suite complète');
+            if (values.base !== undefined)
+                throw new UsageError('--since remplace --base (les tests ciblés et répétés se comptent depuis le commit prouvé) : pas les deux');
+        }
         const skipProven = values['skip-proven'] === true;
         if (skipProven && (stage === 'task' || values.only !== undefined))
             throw new UsageError('--skip-proven va avec la suite complète entière (--stage full, sans --only)');
@@ -379,7 +400,7 @@ export async function run(args, io) {
         const selected = selectGates(loaded.config.gates, list(values.only)).gates;
         const staged = stageGates(selected, stage ?? 'full');
         const repeating = [...staged.run, ...staged.targeted].filter(g => g.repeatChanged).map(g => g.id);
-        if (repeating.length && values.base === undefined) {
+        if (repeating.length && values.base === undefined && values.since === undefined) {
             throw new UsageError(`${repeating.join(', ')} déclare(nt) repeatChanged : --base <base de la branche> est obligatoire (ses tests ajoutés ou modifiés depuis elle sont répétés ; sans base, rien ne le serait)`);
         }
         // The scope of the proof (skipWhenOnly) is counted at the full stage from the base and the reference: both required.
@@ -457,11 +478,18 @@ export async function run(args, io) {
             process.on(signal, handler);
             return [signal, handler];
         });
+        // Incremental proof of a round of corrections: checked before any wait, never a proof of the full suite.
+        const since = values.since !== undefined ? await checkSince(repo, loaded.config, loaded.file, values.since) : null;
+        if (since && !values.json) {
+            io.stdout(`Preuve incrémentale depuis ${since.commit.slice(0, 12)} (suite complète verte à ce commit, ${since.proven.length} contrôle(s)) : diff de risque faible (${since.risk.reason}).\n` +
+                'Contrôles de tâche, tests ciblés et tests modifiés répétés depuis ce commit. La fusion exige toujours la suite complète au commit exact : une seule fois, sur le commit final.\n');
+        }
         let result;
         try {
             result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env, signal: abort.signal,
                 allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}),
-                ...(values.base ? { base: values.base } : {}), ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
+                ...(values.base ? { base: values.base } : {}), ...(since ? { base: since.commit, since: { commit: since.commit, head: since.head, risk: since.risk.level, reason: since.risk.reason } } : {}),
+                ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
                 ...(spreadOver ? { stacks: spreadOver } : {}), configFile: loaded.file });
         }
         catch (error) {
@@ -483,6 +511,7 @@ export async function run(args, io) {
         const name = (r) => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
         if (values.json) {
             json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null, baseGates: kept?.base ?? null,
+                since: since ? { commit: since.commit, head: since.head, proven: since.proven, risk: since.risk } : null,
                 stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
                 reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
                 sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
@@ -579,7 +608,7 @@ async function receipts(args, values, io) {
     if (sub !== 'list' && sub !== 'export' && sub !== 'prune')
         throw new UsageError(sub ? `sous-commande inconnue : gates receipts ${sub}` : 'sous-commande manquante (list, export, prune)');
     const allowed = { list: ['commit', 'limit'], export: ['out'], prune: ['keep-days', 'keep-runs', 'config'] };
-    const foreign = ['only', 'config', 'base', 'concurrency', 'stage', 'commit', 'skip-proven', 'run', 'reason', 'keep-going', 'allow-dirty', 'commit-config', 'limit', 'out', 'keep-days', 'keep-runs', 'stacks']
+    const foreign = ['only', 'config', 'base', 'concurrency', 'stage', 'commit', 'skip-proven', 'run', 'reason', 'keep-going', 'allow-dirty', 'commit-config', 'limit', 'out', 'keep-days', 'keep-runs', 'stacks', 'since']
         .filter(k => values[k] !== undefined && !allowed[sub].includes(k));
     if (foreign.length)
         throw new UsageError(`option inattendue pour gates receipts ${sub} : --${foreign.join(', --')}`);

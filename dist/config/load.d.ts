@@ -9,7 +9,7 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite", "stacks", "batch", "stack", "web", "reuse", "map", "rules"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite", "stacks", "batch", "stack", "web", "reuse", "map", "rules", "testsCheck"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
 /**
@@ -61,6 +61,7 @@ export declare const dastSchema: import("../domain/schema.js").Schema<{
     readonly passEnv: string[];
     readonly resource: string;
     readonly description: string | undefined;
+    readonly envFile: string | undefined;
 }>;
 export type DastSettings = Infer<typeof dastSchema>;
 /**
@@ -82,6 +83,7 @@ export declare const reviewSettingsSchema: import("../domain/schema.js").Schema<
         readonly passEnv: string[];
         readonly resource: string;
         readonly description: string | undefined;
+        readonly envFile: string | undefined;
     } | undefined;
     readonly paths: {
         readonly ui: string[] | undefined;
@@ -90,6 +92,8 @@ export declare const reviewSettingsSchema: import("../domain/schema.js").Schema<
         readonly personal: string[] | undefined;
         readonly legal: string[] | undefined;
         readonly neutral: string[] | undefined;
+        readonly tooling: string[] | undefined;
+        readonly server: string[] | undefined;
     } | undefined;
     readonly terms: {
         readonly data: string[] | undefined;
@@ -301,6 +305,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly passEnv: string[];
             readonly resource: string;
             readonly description: string | undefined;
+            readonly envFile: string | undefined;
         } | undefined;
         readonly paths: {
             readonly ui: string[] | undefined;
@@ -309,6 +314,8 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly personal: string[] | undefined;
             readonly legal: string[] | undefined;
             readonly neutral: string[] | undefined;
+            readonly tooling: string[] | undefined;
+            readonly server: string[] | undefined;
         } | undefined;
         readonly terms: {
             readonly data: string[] | undefined;
@@ -439,6 +446,19 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly locale: string;
         } | undefined;
         readonly severity: "off" | "warning" | "error" | Record<string, "off" | "warning" | "error"> | undefined;
+    } | undefined;
+    readonly testsCheck: {
+        readonly enabled: boolean | undefined;
+        readonly reference: string | undefined;
+        readonly e2e: string[] | undefined;
+        readonly unit: string[] | undefined;
+        readonly ignore: string[] | undefined;
+        readonly severity: {
+            readonly waitForTimeout: "off" | "warning" | "error" | undefined;
+            readonly fixedWait: "off" | "warning" | "error" | undefined;
+            readonly realClock: "off" | "warning" | "error" | undefined;
+            readonly sharedData: "off" | "warning" | "error" | undefined;
+        } | undefined;
     } | undefined;
     readonly map: {
         readonly file: string | undefined;

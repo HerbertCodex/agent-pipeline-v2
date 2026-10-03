@@ -142,7 +142,7 @@ export async function checkMergeRules(input) {
     }
     rules.push(reviewProblems.length
         ? outcome('relecture', 'refused', `relectures demandées par le diff : ${plan.retained.join(', ')}`, reviewProblems, reviewTodo)
-        : outcome('relecture', 'ok', `relectures enregistrées à ${short(sha)} sans constat critique ni haut : ${plan.retained.join(', ')}`));
+        : outcome('relecture', 'ok', `relectures enregistrées à ${short(sha)} sans constat critique ni haut : ${plan.retained.join(', ')} (risque ${plan.risk.level === 'faible' ? 'faible' : 'élevé'} : ${plan.risk.reason.slice(0, 200)})`));
     if (!plan.retained.includes('fidelite'))
         rules.push(outcome('captures', 'not_applicable', 'aucun fichier d\'interface ni de maquette changé'));
     else {

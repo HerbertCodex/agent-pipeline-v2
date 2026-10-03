@@ -97,7 +97,7 @@ test('the main loader reads the design section and checks its folder', async t =
 
 test('the dispatcher lists every command, init, onboard, run and stack included', async t => {
   const f = fixture(t);
-  assert.deepEqual(Object.keys(commands), ['init', 'onboard', 'spec', 'run', 'stack', 'rules', 'audit', 'ledger', 'scope', 'gates', 'lock', 'wait', 'procs', 'stacks', 'review', 'dast', 'db', 'design', 'structure', 'reuse', 'map', 'quota', 'preview', 'web', 'status']);
+  assert.deepEqual(Object.keys(commands), ['init', 'onboard', 'spec', 'run', 'stack', 'rules', 'audit', 'ledger', 'scope', 'gates', 'lock', 'wait', 'procs', 'stacks', 'review', 'dast', 'db', 'design', 'structure', 'reuse', 'tests', 'map', 'quota', 'preview', 'web', 'status']);
   const help = await apv(f.repo, ['help']);
   assert.equal(help.code, 0);
   for (const name of Object.keys(commands)) assert.match(help.stdout, new RegExp(`apv ${name}`));
@@ -122,7 +122,7 @@ test('the apv binary runs as a separate process', () => {
   const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
   const r = spawnSync(process.execPath, [cli, '--version'], { encoding: 'utf8' });
   assert.equal(r.status, 0); assert.equal(r.stdout, `${VERSION}\n`);
-  assert.equal(VERSION, '3.0.0-alpha.14');
+  assert.equal(VERSION, '3.0.0-alpha.15');
   // One version everywhere: tool, package and plugin manifest.
   const read = path => JSON.parse(readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8'));
   assert.deepEqual([read('../package.json').version, read('../.claude-plugin/plugin.json').version], [VERSION, VERSION]);

@@ -24,7 +24,18 @@ le droit de lancer Docker, la revue sécurité lit le rapport.
 La commande tourne dans la copie, sous le verrou (défaut « dast »), bornée par review.dast.timeoutMs ;
 elle reçoit les variables de DEFAULT_PASS_ENV et de review.dast.passEnv, APV_DAST_REPORT_DIR,
 APV_DAST_COMMIT, APV_DAST_REPO, et les jokers {{reportDir}}, {{commit}}, {{repo}} (arguments entiers).
+Copie préparée seule : avec package-lock.json, npm ci --ignore-scripts --no-audit --no-fund dans la
+copie avant la commande, sauf si le marqueur d'une installation réussie de ce même package-lock.json est
+dans node_modules (sortie dans dast.log, même délai ; échec ou délai dépassé : scan non lancé).
+review.dast.envFile (facultatif, ~ admis, relatif à la copie sinon) : fichier KEY=valeur chargé dans
+l'environnement de la commande ; refusé, rien n'est lancé, s'il pose une variable réservée (APV_*, PATH,
+NODE_OPTIONS, NODE_PATH, HOME, LD_*, DYLD_*) ou si une valeur ressemble à une adresse hors bouclage (URL,
+utilisateur@hôte, host=, IPv4, IPv6, nom d'hôte, liste ; nom sans point dans une variable d'adresse) :
+seuls localhost, *.localhost, 127.0.0.0/8 et ::1 sont admis, le scan ne vise jamais la production.
+summary.json consigne install (done, skipped, failed ou timed_out, avec la raison) et envFile (chemin,
+nombre de variables ; jamais les valeurs).
 Sortie : 0 scan terminé à 0, 1 scan en échec, délai dépassé, verrou non obtenu ou scan non déclaré,
+installation en échec, fichier d'environnement refusé,
 2 appel incorrect.`;
 
 const options = {
@@ -76,6 +87,8 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     else {
       io.stdout([
         `Scan dynamique ${STATUS_TEXT[summary.status]} (code ${summary.exitCode}) en ${duration(summary.durationMs)}${clean ? '' : ' ; attention : la copie avait des fichiers suivis modifiés'}`,
+        `Copie préparée : ${summary.install.status === 'done' ? `dépendances installées (${summary.install.command?.join(' ')}, ${duration(summary.install.durationMs)})` : summary.install.status === 'failed' || summary.install.status === 'timed_out' ? `ÉCHEC de l'installation, scan non lancé : ${summary.install.reason}` : `rien à installer (${summary.install.reason})`}`,
+        `Fichier d'environnement : ${summary.envFile ? `${summary.envFile.file} chargé (${summary.envFile.variables} variable(s), adresses en bouclage seulement)` : 'aucun (review.dast.envFile absent)'}`,
         `Rapports : ${reportDir} (${summary.files.length ? summary.files.join(', ') : 'aucun fichier'})`,
         `Journal : ${reportDir}/${DAST_LOG} ; résumé : ${reportDir}/${DAST_SUMMARY}`,
         'À donner à la revue sécurité (dossier des rapports), qui les lit sans relancer le scan.',

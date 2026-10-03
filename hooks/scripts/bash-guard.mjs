@@ -1170,7 +1170,7 @@ const TEXT_COMMANDS = new Set(['echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg',
  */
 /** Commands of the tool (src/commands/index.ts): what follows `apv` behind an unknown prefix. */
 const APV_COMMANDS = new Set(['init', 'onboard', 'spec', 'run', 'stack', 'rules', 'audit', 'ledger', 'scope', 'gates', 'lock', 'wait', 'procs', 'stacks',
-  'review', 'dast', 'db', 'design', 'structure', 'reuse', 'map', 'quota', 'preview', 'web', 'status', 'help']);
+  'review', 'dast', 'db', 'design', 'structure', 'reuse', 'tests', 'map', 'quota', 'preview', 'web', 'status', 'help']);
 
 export function apvCall(words) {
   const cw = commandWords(words);
