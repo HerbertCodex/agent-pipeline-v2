@@ -269,8 +269,9 @@ export function journalState(common) {
     // `refused.json` holds the last refused message, or a seal note of the first versions (`relecture …`).
     const single = read(join(common, ...OPERATOR_REFUSED));
     const sealed = single && /^relecture\b/.test(single.reason) ? [single] : [];
-    const sealRefusals = [...sealed, ...sealNotes(common).map(n => read(n.file)).filter((n) => n !== null)]
-        .sort((a, b) => a.at.localeCompare(b.at));
+    // A note older than the journal keeps its lines is not said, even before the hook purges it on its next pass.
+    const fresh = (n) => n !== null && !(Date.now() - Date.parse(n.at) > DEFAULT_JOURNAL_DAYS * 86_400_000);
+    const sealRefusals = [...sealed, ...sealNotes(common).map(n => read(n.file))].filter(fresh).sort((a, b) => a.at.localeCompare(b.at));
     return { file, key: key !== null, keyProblem: anchor.problem, keyCreatedAt: anchor.createdAt, messages: ok.length, ignored: lines.length - ok.length, last: ok.at(-1)?.at ?? null,
         refused: sealed.length ? null : single, sealRefusals };
 }

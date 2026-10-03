@@ -266,4 +266,7 @@ test('review of 3871d24: a forged key is said, the main checkout settings count 
   utimesSync(join(notes, '20261003T100002Z-0000000c.json'), new Date('2026-01-01'), new Date('2026-01-01'));
   clearSealRefusal(common, '20261003T130000Z-00000011', 'fidelite', A);
   assert.deepEqual(readdirSync(notes).sort(), ['20261003T120000Z-0000000e.json', 'fresh.json.2.cd.tmp'], 'old note and stale temporary file purged');
+  // A note older than 90 days is not said, even before the hook passes again.
+  recordSealRefusal(common, '20260601T120000Z-00000012', 'donnees', 'clé absente', new Date(Date.now() - 100 * 86_400_000), B);
+  assert.equal(journalState(common).sealRefusals.some(n => n.reason.includes('00000012')), false);
 });

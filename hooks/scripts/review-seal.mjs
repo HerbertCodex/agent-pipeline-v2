@@ -5,7 +5,7 @@
 // only sealed records, so a record written by anyone else (the implementer, the lead, a script) proves nothing.
 // Never blocks, never prints.
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { isMainModule, readHookInput } from './lib.mjs';
 import { apvArguments, reviewRecordCall, reviewRecordProblem, tokenize } from './bash-guard.mjs';
@@ -14,10 +14,11 @@ import { cdTarget } from './harness-guard.mjs';
 const OPERATOR_MODULE = new URL('../../dist/rules/operator.js', import.meta.url);
 const REVIEWS_MODULE = new URL('../../dist/rules/reviews.js', import.meta.url);
 
-/** The record id printed by `apv review record` (text or JSON output), or null. */
+/** The record id printed by `apv review record` (text or JSON output), or null: none, or several different ones. */
 export function recordId(response) {
   const text = typeof response === 'string' ? response : [response?.stdout, response?.output, response?.content].filter(v => typeof v === 'string').join('\n');
-  return /Enregistrement (\d{8}T\d{6}Z-[0-9a-f]{8})\b/.exec(text)?.[1] ?? /"id":\s*"(\d{8}T\d{6}Z-[0-9a-f]{8})"/.exec(text)?.[1] ?? null;
+  const ids = new Set([...text.matchAll(/Enregistrement (\d{8}T\d{6}Z-[0-9a-f]{8})\b/g), ...text.matchAll(/"id":\s*"(\d{8}T\d{6}Z-[0-9a-f]{8})"/g)].map(m => m[1]));
+  return ids.size === 1 ? [...ids][0] : null;
 }
 
 /** What to seal for a PostToolUse payload: `{ id, domain, agent, commit }` (`commit`: as the command gave it), or null. */
@@ -51,6 +52,13 @@ export function recordDirectories(command, cwd, home = null) {
   return [...new Set([...out, cwd])];
 }
 
+/** The commit a record `id` of `domain` was written at, read from its folder under the reviews of `common`, or null. */
+export function recordCommit(common, id, domain) {
+  if (!/^[\w-]+$/.test(id) || !/^[\w-]+$/.test(domain)) return null;
+  const root = join(common, 'apv', 'reviews');
+  try { return readdirSync(root).find(commit => existsSync(join(root, commit, domain, `${id}.json`))) ?? null; } catch { return null; }
+}
+
 async function main() {
   process.env.APV_ENTRY = 'hook';
   const input = await readHookInput();
@@ -68,7 +76,11 @@ async function main() {
     const common = r.stdout.trim();
     if (!reviews.recordExists(common, request.id, request.domain)) continue;
     let key;
-    try { key = operator.ensureAnchorKey(common, keyFile); } catch (error) { operator.recordSealRefusal(common, request.id, request.domain, String(error?.message ?? error), new Date(), request.commit); return 0; }
+    try { key = operator.ensureAnchorKey(common, keyFile); } catch (error) {
+      // The record exists: its folder (reviews/<commit>/<domain>/) gives the commit, whatever `--commit` said (`HEAD`).
+      operator.recordSealRefusal(common, request.id, request.domain, String(error?.message ?? error), new Date(), recordCommit(common, request.id, request.domain) ?? request.commit);
+      return 0;
+    }
     const sealed = reviews.sealReview(common, request.id, request.domain, request.agent, key);
     // A sealed review lifts an earlier note of a review this hook could not seal, of its domain and commit (the folder
     // of the record: reviews/<commit>/<domain>/), here and in the session's project.

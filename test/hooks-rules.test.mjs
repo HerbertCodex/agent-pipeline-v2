@@ -173,6 +173,15 @@ test('the seal hook seals a record only for the reviewer agent of its domain, fr
     assert.equal(sealRequest({ tool_name: 'Bash', tool_input: { command }, tool_response: out, agent_type }), null, String(agent_type));
   }
   assert.equal(sealRequest({ tool_name: 'Bash', tool_input: { command: 'apv review show --commit abc' }, tool_response: out, agent_type: 'apv:qa-securite' }), null);
+  // The commit of a record comes from its folder, whatever `--commit` said (review of ffcdb9e).
+  const { recordCommit } = await import('../hooks/scripts/review-seal.mjs');
+  const store = mkdtempSync(join(tmpdir(), 'apv3-rc-'));
+  t.after(() => rmSync(store, { recursive: true, force: true }));
+  mkdirSync(join(store, 'apv', 'reviews', 'c'.repeat(40), 'securite'), { recursive: true });
+  writeFileSync(join(store, 'apv', 'reviews', 'c'.repeat(40), 'securite', '20260930T101010Z-0a1b2c3d.json'), '{}');
+  assert.equal(recordCommit(store, '20260930T101010Z-0a1b2c3d', 'securite'), 'c'.repeat(40));
+  assert.equal(recordCommit(store, '20260930T101010Z-0a1b2c3d', 'rgpd'), null);
+  assert.equal(recordCommit(store, '../x', 'securite'), null);
   // The hook itself: a record written by the tool, sealed by the hook of the reviewer, counted; written by anyone else, not.
   const { TEST_KEY_FILE, commonDirOf } = await import('./support/rules.mjs');
   const { recordReview, latestReviews } = await import('../dist/rules/reviews.js');
@@ -769,7 +778,10 @@ test('review of c65f8c5: the operator after the creation itself, files from a co
     'grep -r . .git/apv', 'grep -R x .git', 'grep --recursive x /r/.git/apv', 'egrep -rn x .git/']) {
     assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
   }
-  for (const command of ['grep -r x .git/apv/receipts', 'grep -rn TODO src', 'python3 x.py <.git/apv/receipts/r.json', 'python3 x.py 0<.git/apv/receipts/r.json']) {
+  for (const command of ["grep -e x -r .git", "rg -f p.txt .git", "export RIPGREP_CONF''IG_PATH=/tmp/c; rg '' .git/apv/receipts", 'grep -d recurse x .git/apv',
+    'grep --directories recurse x .git/apv', 'grep -drecurse x .git', 'diff -rN .git/apv /tmp/vide', 'zcat -rf .git/apv']) assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  for (const command of ['grep -r x .git/apv/receipts', 'grep -rn TODO src', 'python3 x.py <.git/apv/receipts/r.json', 'python3 x.py 0<.git/apv/receipts/r.json',
+    'grep -rn ".git" src', 'rg -n "\\.git/" src', 'echo RIPGREP_CONFIG_PATH; rg x src']) {
     assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
   }
   const root = mkdtempSync(join(tmpdir(), 'apv3-fin4-'));
@@ -787,4 +799,24 @@ test('review of c65f8c5: the operator after the creation itself, files from a co
     assert.equal(evaluateCommand(command, {}, fromFeat).decision, 'allow', command);
   }
   assert.equal(evaluateCommand('git checkout main && git push', {}, fromFeat).decision, 'deny', 'a folder named as a branch');
+  // Review of ffcdb9e: the created branch holds along its chain of `&&` only, in its own folder; send-pack is a push.
+  for (const command of ['git checkout -b fix && echo ok; git push', 'git checkout -b fix && true || git push', 'git -C ../autre checkout -b fix && git push',
+    'git send-pack origin HEAD:refs/heads/main']) {
+    assert.equal(evaluateCommand(command, {}, fromMain).decision, 'deny', command);
+  }
+  assert.equal(evaluateCommand('git switch -C fix && git commit -m x && git push -u origin HEAD', {}, fromMain).decision, 'allow', 'switch -C is a creation');
+  // A path given with its option is read like an operand.
+  for (const command of ['tar -C.git/apv -xf a.tar', 'cp -t.git/apv/receipts f', 'node w.js --out=.git/apv/receipts/x']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  assert.equal(evaluateCommand('tar -C dist -cf a.tar .', {}, lead).decision, 'allow');
+  // A reader is the command of the system; a climbing path is judged normalized.
+  for (const command of ['./cat .git/apv/receipts/r.json', 'cat() { :; }; cat .git/apv/receipts/r.json', 'cat .git/apv/receipts/../operator/x.json']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ['cat .git/apv/receipts/r.json', '/usr/bin/cat .git/apv/receipts/r.json']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  // The seal follows one record only: two different ids printed, nothing is sealed.
+  const { recordId } = await import('../hooks/scripts/review-seal.mjs');
+  assert.equal(recordId({ stdout: 'Enregistrement 20261001T000000Z-0000000a\nEnregistrement 20261001T000000Z-0000000b' }), null);
+  assert.equal(recordId({ stdout: 'Enregistrement 20261001T000000Z-0000000a', output: 'Enregistrement 20261001T000000Z-0000000a' }), '20261001T000000Z-0000000a');
 });

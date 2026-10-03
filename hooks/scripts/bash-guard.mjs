@@ -669,11 +669,17 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
     // A glob that may reach into a store, whatever reads it.
     // A glob that may reach into a store: refused, except for one reading command alone on its line, without redirection,
     // that cannot reach a store of the anchor (`cat .git/apv/receipts/*.json`). Paths are normalized first (`..`, `.`).
+    // A command is known by its name only as the command of the system: written without a folder (or from /bin,
+    // /usr/bin), and not defined on the line as a function or an alias of that name.
+    const systemTool = (!/\//.test(cw[0] ?? '') || /^\/(?:usr\/)?(?:local\/)?bin\/[^/]+$/.test(cw[0] ?? ''))
+      && !new RegExp(`(?:^|[\\s;&|(])(?:function\\s+)?${tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(\\s*\\)|\\balias\\s+${tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=`).test(String(command));
     const alone = segments.length === 1 && !/[<>]/.test(String(shadow ?? ''));
-    const reader = GLOB_READERS.has(tool) && alone && !lineWrites;
+    const reader = GLOB_READERS.has(tool) && systemTool && alone && !lineWrites;
     for (const arg of args) {
       const path = resolve(dir ?? '/', at(arg, dir));
       if (GLOB.test(arg) && (mayBeStore(dirname(path)) || mayBeStore(dirname(at(arg, dir)))) && (!reader || mayReachAnchor(path))) return REASONS.anchorStore;
+      // A path that climbs (`..`) into a store of the anchor names it once normalized.
+      if (/(?:^|\/)\.\.(?:\/|$)/.test(arg) && /\.git\/apv\/(?:operator|reviews|merges)(?:\/|$)/.test(path)) return REASONS.anchorStore;
     }
     // ripgrep that runs a program on what it searches (`rg --pre rm '' .git/apv`): that program may write anywhere it
     // walks, the stores included, without naming them. Never needed to read the receipts: refused.
@@ -710,15 +716,34 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
     const writer = STORE_WRITERS.has(tool) || inPlace;
     // ripgrep reads its options from the file RIPGREP_CONFIG_PATH names (`--pre=rm` written there earlier): set on the
     // line or in the environment, rg may run any program on what it walks.
-    if (tool === 'rg' && (/\bRIPGREP_CONFIG_PATH\b/.test(String(command)) || process.env.RIPGREP_CONFIG_PATH)) return REASONS.anchorStore;
-    // A recursive search handed the Git directory or the store folder walks into the stores of the anchor
-    // (`grep -r . .git/apv`, `rg '' .git`) without naming them.
-    const recursive = tool === 'rg' || (['grep', 'egrep', 'fgrep'].includes(tool) && cw.slice(1).some(a => /^-[a-zA-Z]*[rR]/.test(a) || /^--(?:recursive|dereference-recursive|directories=recurse)$/.test(a)));
-    if (recursive && args.some(a => { const p = resolve(dir ?? '/', at(a, dir)); return mayReachAnchor(join(p, 'apv', 'operator')) || mayReachAnchor(join(p, 'operator')); })) return REASONS.anchorStore;
-    if (!writer && READS_ONLY.has(tool)) continue;
+    // Set, not cited: an assignment, `export`/`declare`/`read`… of it, or `printf -v` (`echo RIPGREP_CONFIG_PATH` is text).
+    // Read with quotes and backslashes removed (`export RIPGREP_CONF''IG_PATH=…`).
+    const text = flatten(String(command));
+    const rgConfig = /\bRIPGREP_CONFIG_PATH=/.test(text) || /\b(?:export|declare|typeset|readonly|local|read)\b[^;&|\n]*\bRIPGREP_CONFIG_PATH\b/.test(text) ||
+      /\bprintf\s+-v\s*RIPGREP_CONFIG_PATH\b/.test(text) || Boolean(process.env.RIPGREP_CONFIG_PATH);
+    if (tool === 'rg' && rgConfig) return REASONS.anchorStore;
+    // A recursive read handed the Git directory or the store folder walks into the stores of the anchor
+    // (`grep -r . .git/apv`, `rg '' .git`, `diff -r .git/apv x`, `zcat -rf .git/apv`) without naming them. The pattern
+    // searched, the first operand of grep or rg when no `-e` or `-f` gives it, is no path (`grep -rn ".git" src`).
+    const opts = cw.slice(1);
+    const greps = ['grep', 'egrep', 'fgrep'].includes(tool);
+    const recursive = tool === 'rg'
+      || (greps && opts.some((a, k) => /^-[a-zA-Z]*[rR]/.test(a) || /^--(?:recursive|dereference-recursive|directories=recurse)$/.test(a) || /^-[a-zA-Z]*drecurse$/.test(a)
+        || ((a === '--directories' || /^-[a-zA-Z]*d$/.test(a)) && opts[k + 1] === 'recurse')))
+      || (['diff', 'zcat', 'gzip', 'gunzip'].includes(tool) && opts.some(a => /^-[a-zA-Z]*r/.test(a) || a === '--recursive'));
+    const patternGiven = opts.some(a => /^-[a-zA-Z]*[ef]/.test(a) || /^--(?:regexp|file)(?:=|$)/.test(a));
+    const searched = (greps || tool === 'rg') && !patternGiven ? args.slice(1) : args;
+    if (recursive && searched.some(a => { const p = resolve(dir ?? '/', at(a, dir)); return mayReachAnchor(join(p, 'apv', 'operator')) || mayReachAnchor(join(p, 'operator')); })) return REASONS.anchorStore;
+    if (!writer && READS_ONLY.has(tool) && systemTool) continue;
     // What another program reads on its standard input (`python3 x.py - < .git/apv/receipts/r.json`, `<f`) is not
     // handed to it.
-    const handed = writer ? args : cw.slice(1).filter((a, k, all) => !a.startsWith('-') && !/^\d*</.test(a) && !/^\d*<$/.test(all[k - 1] ?? ''));
+    const plainArgs = writer ? args : cw.slice(1).filter((a, k, all) => !a.startsWith('-') && !/^\d*</.test(a) && !/^\d*<$/.test(all[k - 1] ?? ''));
+    // A value given with its option (`--out=<path>`, `-C<path>`) is a path the program receives, like an operand.
+    const optionValues = cw.slice(1).flatMap(a => {
+      const m = /^--[\w-]+=(.+)$/.exec(a) ?? (a.startsWith('--') ? null : /^-[A-Za-z](.+)$/.exec(a));
+      return m ? [m[1]] : [];
+    });
+    const handed = [...plainArgs, ...optionValues];
     for (const arg of fedByLine ? [...handed, ...lineWords] : handed) {
       // A computed path that ends in apv, holds a piece of a store path, or uses a variable the line set to one
       // (`$d/apv`, `d=.git/ap; rm -rf ${d}v`, `d=.gi; e=ap; rm -rf ${d}t/${e}v`): it may be the store.
@@ -793,7 +818,7 @@ export function isForcePush(words) {
   let i = at + 1;
   const withValue = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env']);
   while (i < words.length && words[i].startsWith('-')) i += withValue.has(words[i]) ? 2 : 1;
-  if (words[i] !== 'push') return false;
+  if (words[i] !== 'push' && words[i] !== 'send-pack') return false;
   return words.slice(i + 1).some(arg =>
     arg === '--force' || arg === '--force-if-includes' || arg.startsWith('--force-with-lease') ||
     /^-[A-Za-z]*f[A-Za-z]*$/.test(arg) || (arg.startsWith('+') && arg.length > 1));
@@ -813,7 +838,9 @@ export function pushToDefault(words, defaults = ['main', 'master'], ...branch) {
   if (at === -1) return null;
   let i = at + 1;
   while (i < words.length && words[i].startsWith('-')) i += GIT_WITH_VALUE.has(words[i]) ? 2 : 1;
-  if (words[i] !== 'push') return null;
+  // `git send-pack <remote> <refs>` pushes as `git push` does; without refs, it updates the branches both sides have.
+  const sendPack = words[i] === 'send-pack';
+  if (words[i] !== 'push' && !sendPack) return null;
   const args = words.slice(i + 1);
   if (args.some(a => a === '--all' || a === '--mirror' || a === '--branches')) return defaults[0] ?? 'main';
   // Options followed by a separate value. `--signed`, `--force-with-lease` and `--recurse-submodules` take theirs only
@@ -829,6 +856,7 @@ export function pushToDefault(words, defaults = ['main', 'master'], ...branch) {
   const name = ref => { const n = ref.replace(/^\+/, '').replace(/^refs\/heads\//, ''); return n === '@' ? 'HEAD' : n; };
   // The branch of a folder the guard cannot follow (`undefined`): the push may go to the default branch.
   const head = current === undefined ? defaults[0] ?? 'main' : current;
+  if (!specs.length && sendPack) return defaults[0] ?? 'main';
   if (!specs.length) return head && defaults.includes(head) ? head : null;
   for (const spec of specs) {
     // `:` alone pushes every branch that has a namesake on the remote, the default one included.
@@ -902,8 +930,10 @@ export function commandScope(command, segments, cwd = null, home = null, env = {
       const sub = w[k];
       const args = w.slice(k + 1);
       if (sub === 'config' || (sub === 'remote' && args.some(a => ['add', 'set-url', 'rename', 'set-branches'].includes(a)))) return stop();
+      // send-pack names its remote as an address or a path, with its own program: never a plain push.
+      if (sub === 'send-pack') return stop();
       if (sub === 'push') {
-        if (args.some(a => a === '--repo' || a.startsWith('--repo=') || a === '--receive-pack' || a.startsWith('--exec'))) return stop();
+        if (args.some(a => a === '--repo' || a.startsWith('--repo=') || a.startsWith('--receive-pack') || a.startsWith('--exec'))) return stop();
         const valued = new Set(['-o', '--push-option']);
         let remote;
         for (let j = 0; remote === undefined && j < args.length; j += 1) {
@@ -1363,7 +1393,10 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
   // A cd the guard cannot follow leaves it unknown (undefined): such a push counts as one to the default branch.
   // A script or a substitution run by a command of the line starts where that command runs (`start` from the line above).
   let dir = start ? start.dir : context.cwd ?? null; let dirKnown = start ? start.known : true; let branchSet = start ? start.branch : null;
+  // A branch the line created holds only along the chain of `&&` that follows its creation.
+  let created = false;
   for (const [index, words] of segments.entries()) {
+    if (created && index > 0 && after[index - 1] !== '&&') { created = false; branchSet = null; dirKnown = false; }
     // Only a cd to a folder that exists and can be entered is followed. One that fails leaves the shell where it was
     // (`cd nope || git push`, `cd /root; git push`), and one to a folder the line itself creates (`git clone u x && cd x &&
     // git push`) cannot be read now: both make the folder unknown, as do `builtin cd` to such a folder, a substitution
@@ -1411,8 +1444,11 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
       // creation that failed (the branch exists) leaves the shell on the branch it was on. The operator is the one that
       // follows this very command, read by the tokenizer (`git checkout -b x main && …`, never an `x &&` further on).
       const followedByAnd = after[index] === '&&';
-      if (change.created && followedByAnd) branchSet = change.created;
-      else if (change.created || change.unknown) { dirKnown = false; branchSet = null; }
+      // Made in this folder only: a creation with a global option of git that moves it (`-C`, `--git-dir`) is elsewhere.
+      const sub = cwords.findIndex((w, k) => k > 0 && (w === 'checkout' || w === 'switch'));
+      const here = !cwords.slice(1, sub === -1 ? undefined : sub).some(w => /^(?:-C|--git-dir|--work-tree)/.test(w));
+      if (change.created && followedByAnd && here) { branchSet = change.created; created = true; }
+      else if (change.created || change.unknown) { dirKnown = false; branchSet = null; created = false; }
     }
     if (active) {
       const where = gitDirectory(cwords, dir, words, env);
