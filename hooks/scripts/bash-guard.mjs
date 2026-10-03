@@ -498,7 +498,7 @@ const READS_ONLY = new Set([...GLOB_READERS, 'tree', 'echo', 'printf', 'test', '
   'dd']);
 /** Options of grep and rg followed by a separate value, which is neither the pattern nor a path searched. */
 const GREP_VALUED = new Set(['-m', '-A', '-B', '-C', '-d', '-D', '--max-count', '--after-context', '--before-context', '--context', '--directories', '--devices',
-  '--include', '--exclude', '--exclude-dir', '--label', '--color', '--binary-files']);
+  '--include', '--exclude', '--exclude-dir', '--label', '--binary-files']);
 const RG_VALUED = new Set(['-t', '-T', '-g', '-m', '-A', '-B', '-C', '-M', '-j', '-E', '--type', '--type-not', '--glob', '--iglob', '--max-count', '--after-context',
   '--before-context', '--context', '--max-columns', '--threads', '--encoding', '--type-add', '--max-depth', '--max-filesize', '--sort', '--sortr', '--color', '--colors']);
 /** Commands that delete, move, empty or copy away what they are given: handed a store, they reach it. */
@@ -681,7 +681,13 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
     const toolName = tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const flatLine = flatten(String(command));
     const systemTool = (!/\//.test(cw[0] ?? '') || /^\/(?:usr\/)?bin\/[^/]+$/.test(cw[0] ?? ''))
-      && !/\bPATH=|\b(?:hash|enable)\b/.test(flatLine)
+      && !/(?:^|[\s;&|(])(?:(?:export|declare|typeset|local|readonly)\s+(?:-\w+\s+)*)?PATH=/.test(flatLine)
+      && !segments.some(w => {
+        // `hash`, `enable`, a sourced file, or a builtin that sets PATH by name (`printf -v PATH`, `read PATH`).
+        const c = commandWords(w)?.words ?? w; const n = basename(c[0] ?? '');
+        return ['hash', 'enable', 'source', '.'].includes(n)
+          || (['printf', 'read', 'mapfile', 'readarray', 'declare', 'typeset', 'export', 'local', 'readonly'].includes(n) && c.slice(1).some(a => a === 'PATH' || a.startsWith('PATH=')));
+      })
       && !new RegExp(`(?:^|[\\s;&|(])(?:function\\s+${toolName}\\b|${toolName}\\s*\\(\\s*\\))|\\balias\\s+${toolName}=`).test(flatLine);
     const alone = segments.length === 1 && !/[<>]/.test(String(shadow ?? ''));
     const reader = GLOB_READERS.has(tool) && systemTool && alone && !lineWrites;
@@ -745,12 +751,19 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
     // The operands of grep or rg, the values of their options that take a separate one skipped (`rg -t js x .git`).
     const valued = greps ? GREP_VALUED : tool === 'rg' ? RG_VALUED : null;
     const operands = valued ? opts.filter((a, k) => !a.startsWith('-') && !valued.has(opts[k - 1] ?? '')) : args;
-    const searched = valued && !patternGiven ? operands.slice(1) : operands;
+    const named = valued && !patternGiven ? operands.slice(1) : operands;
+    // Without a path, grep -r and rg search the folder they run in.
+    const searched = named.length ? named : [dir ?? '.'];
+    // rg, no longer a reader, run from inside a store without a path, reaches what it walks there.
+    if (tool === 'rg' && !named.length && dir && mayBeStore(dir)) return REASONS.anchorStore;
     if (recursive && searched.some(a => { const p = resolve(dir ?? '/', at(a, dir)); return mayReachAnchor(join(p, 'apv', 'operator')) || mayReachAnchor(join(p, 'operator')); })) return REASONS.anchorStore;
     if (!writer && READS_ONLY.has(tool) && systemTool) continue;
     // What another program reads on its standard input (`python3 x.py - < .git/apv/receipts/r.json`, `<f`) is not
-    // handed to it. A `<` the shell does not read as a redirection (escaped or quoted: blank in the shadow) is a word.
-    const redirects = /</.test(String(shadow ?? ''));
+    // handed to it. A `<` the shell does not read as a redirection (escaped or quoted: blank in the shadow) is a word: as
+    // soon as the words of the line hold more `<` than the shadow holds redirections, none of them is exempted.
+    const realLt = (String(shadow ?? '').match(/</g) ?? []).length;
+    const wordLt = segments.flat().filter(w => /^\d*</.test(w)).reduce((n, w) => n + (w.match(/</g) ?? []).length, 0);
+    const redirects = realLt > 0 && wordLt <= realLt;
     const plainArgs = writer ? args : cw.slice(1).filter((a, k, all) => !a.startsWith('-') && !(redirects && (/^\d*</.test(a) || /^\d*<$/.test(all[k - 1] ?? ''))));
     // A value given with its option (`--out=<path>`, `-C<path>`) is a path the program receives, like an operand.
     const optionValues = cw.slice(1).flatMap(a => {

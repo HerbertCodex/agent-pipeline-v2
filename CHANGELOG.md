@@ -4,9 +4,9 @@
 
 - **3.0.0-alpha.16 : suite de la PR #108 (issue #109), derniers constats moyens et faibles des relectures finales.** La version monte pour que `claude plugin update` livre ces corrections du crochet.
   - Une branche créée ne vaut que si git la crée dans le dossier de la ligne, tel que le crochet le lit (options globales de git, variable ou enveloppe placée devant lui).
-  - Un simple lecteur n'est reconnu que sous son nom, ou depuis /bin et /usr/bin (plus /usr/local/bin), sur une ligne qui ne pose pas PATH, ne lance ni `hash` ni `enable` et ne le redéfinit pas (fonction, avec ou sans parenthèses, ou alias).
-  - `rg` n'est plus un simple lecteur : un chemin de magasin qu'on lui donne le fait refuser, quelle que soit la façon dont sa configuration est posée.
-  - Un `<` échappé ou entre guillemets est un mot passé au programme, pas une redirection.
+  - Un simple lecteur n'est reconnu que sous son nom, ou depuis /bin et /usr/bin (et non plus /usr/local/bin), sur une ligne qui ne pose pas PATH (affectation, `export`, `declare`, `printf -v`, `read`, `mapfile`...), ne lance ni `hash`, ni `enable`, ni `source` ou `.`, et ne le redéfinit pas (fonction, avec ou sans parenthèses, ou alias).
+  - `rg` n'est plus un simple lecteur : un chemin de magasin qu'on lui donne le fait refuser, quelle que soit la façon dont sa configuration est posée, comme `rg` lancé sans chemin depuis un magasin. Sans chemin, `grep -r` et `rg` sont jugés sur le dossier où ils tournent.
+  - Un `<` échappé ou entre guillemets est un mot passé au programme, pas une redirection : dès que la ligne compte plus de `<` dans ses mots que de vraies redirections, aucun n'est exempté.
   - Les valeurs des options de `grep` et `rg` qui en prennent une séparée (`-t`, `-g`, `-m`, `-A`...) ne sont plus prises pour le motif cherché.
   - CHANGELOG : la limite de `grep -r x .` dit ce que le journal de l'opérateur contient vraiment.
 - **3.0.0-alpha.15 : accélérations validées par l'opérateur le 3 octobre 2026, sans retirer de garde-fou.** Une PR de tests et de textes avait pris 3 h au projet pilote : 4 relectures, une boucle de corrections, deux suites complètes de 30 min, le scan ZAP lancé 3 fois. La relecture `securite` reste exigée pour toute PR, et la suite complète au commit exact fusionné aussi.

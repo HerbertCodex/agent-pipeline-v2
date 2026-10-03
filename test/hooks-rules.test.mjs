@@ -833,6 +833,13 @@ test('issue 109: where a branch is created, readers of the system, rg handed a s
     assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
   }
   assert.deepEqual(evaluateCommand('rg -t js x .git', {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, 'the path after the pattern');
+  // Review of 582b168: `<` counted against real redirections, PATH set by name, a search without a path, --color.
+  for (const command of ['python3 w.py \\< .git/apv/receipts/r.json < /dev/null', 'python3 w.py "<" .git/apv/receipts/r.json 0</dev/null',
+    'printf -v PATH %s /tmp/x; cat .git/apv/receipts/r.json', 'read -r PATH < f; cat .git/apv/receipts/r.json', 'source /tmp/env.sh; cat .git/apv/receipts/r.json',
+    "cd .git/apv && rg ''", 'cd .git/apv && grep -r .', 'grep -r --color x .git']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ['cat .git/apv/receipts/hash.json', 'grep -r --color TODO src']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
   // A branch created where git acts elsewhere (a variable or an envelope in front of git) is not the branch of the line.
   const root = mkdtempSync(join(tmpdir(), 'apv3-109-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
