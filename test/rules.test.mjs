@@ -111,10 +111,11 @@ test('relecture: every domain of the plan recorded at this commit by its reviewe
   assert.equal(rule(moved.json(), 'relecture').status, 'refused');
 });
 
-test('captures: a change of interface needs the four captures of the fidelity review; a server change needs none', async t => {
-  const p = project(t, { change: { 'src/lib/components/Carte.svelte': '<div class="carte">x</div>\n' } });
+test('captures: a screen added or changed needs the four captures of the fidelity review; a server change needs none', async t => {
+  const p = project(t, { change: { 'src/routes/carte/+page.svelte': '<div class="carte">x</div>\n' } });
   const r0 = rule((await p.check()).report, 'captures');
   assert.equal(r0.status, 'refused');
+  assert.match(r0.detail, /1 écran\(s\) ajouté\(s\) ou modifié\(s\) \(src\/routes\/carte\/\+page\.svelte\)/);
   assert.match(r0.problems[0], /desktop:light, desktop:dark, phone:light, phone:dark/);
   seedReview(p.repo, p.head, 'fidelite', { captures: [['desktop', 'light'], ['phone', 'light']] });
   assert.match(rule((await p.check()).report, 'captures').problems[0], /absente\(s\) de la relecture fidelite .*: desktop:dark, phone:dark/);
@@ -127,7 +128,25 @@ test('captures: a change of interface needs the four captures of the fidelity re
   assert.equal(rule((await p.check()).report, 'captures').status, 'refused');
   const server = project(t, { change: { 'scripts/job.sh': 'echo ok\n' } });
   const s = await server.check();
-  assert.ok(['not_applicable', 'refused'].includes(rule(s.report, 'captures').status));
+  assert.equal(rule(s.report, 'captures').status, 'not_applicable');
+});
+
+test('captures: a command-line tool without any screen has nothing to capture, even when the plan retains fidelite', async t => {
+  // The case of a CLI (agent-pipeline-v2 #110): unclassified source files keep every domain, fidelite included, but no
+  // screen is added nor changed (the rule maquette says so too): captures are not applicable, with the reason.
+  const cli = { 'package.json': { name: 'outil', bin: { outil: 'dist/cli.js' } } };
+  const p = project(t, { base: cli, change: { 'src/commands/tests.ts': 'export const run = () => 0;\n', 'src/cli.ts': 'export {};\n' } });
+  const report = (await p.check()).report;
+  assert.match(rule(report, 'relecture').detail, /fidelite/, 'the plan retains fidelite for unclassified files');
+  const captures = rule(report, 'captures');
+  assert.equal(captures.status, 'not_applicable', JSON.stringify(captures));
+  assert.match(captures.detail, /aucun écran ajouté ni modifié/);
+  assert.equal(rule(report, 'maquette').status, 'not_applicable');
+  // A component outside the routes is not a screen either: no capture asked, the fidelity review stays required.
+  const component = project(t, { change: { 'src/lib/components/Carte.svelte': '<div class="carte">x</div>\n' } });
+  const c = (await component.check()).report;
+  assert.equal(rule(c, 'captures').status, 'not_applicable');
+  assert.match(rule(c, 'relecture').detail, /fidelite/);
 });
 
 test('controles: a web project declares reuse, code-map and structure, mandatory; a project that lacks one is refused', async t => {
@@ -264,7 +283,7 @@ test('busy stacks: a port held by another process or a stack whose lock is held 
 });
 
 test('apv review record: the reviewer records at the exact commit, from a clean copy, with a report citing it and real captures', async t => {
-  const p = project(t, { change: { 'src/lib/Carte.svelte': '<div>x</div>\n' } });
+  const p = project(t, { change: { 'src/routes/carte/+page.svelte': '<div>x</div>\n' } });
   const report = join(p.root, 'rapport.md');
   writeFileSync(report, `# Relecture fidélité du commit ${p.head}\n${'Constat : rien à signaler sur cet écran. '.repeat(10)}\n`);
   const shots = ALL_CAPTURES.map(([v, th], k) => { const f = join(p.root, `${v}-${th}.png`); writeFileSync(f, png(k + 10)); return `${v}:${th}:${f}`; });

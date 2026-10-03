@@ -160,14 +160,18 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     ? outcome('relecture', 'refused', `relectures demandées par le diff : ${plan.retained.join(', ')}`, reviewProblems, reviewTodo)
     : outcome('relecture', 'ok', `relectures enregistrées à ${short(sha)} sans constat critique ni haut : ${plan.retained.join(', ')} (risque ${plan.risk.level === 'faible' ? 'faible' : 'élevé'} : ${plan.risk.reason.slice(0, 200)})`));
 
-  if (!plan.retained.includes('fidelite')) rules.push(outcome('captures', 'not_applicable', 'aucun fichier d\'interface ni de maquette changé'));
+  // captures: only for a screen added or changed (the detection of the rule maquette): a change without any screen (a
+  // command-line tool, a component library, a server) has nothing to capture, even when the plan retains fidelite.
+  const screens = changedFiles(repo, mergeBase, sha).filter(f => isScreen(f, screenMatchers(settings.screens)));
+  if (!screens.length) rules.push(outcome('captures', 'not_applicable', 'aucun écran ajouté ni modifié (pages des routes reconnues et rules.screens) : rien à capturer'));
+  else if (!plan.retained.includes('fidelite')) rules.push(outcome('captures', 'not_applicable', 'relecture de fidélité non retenue par le plan des revues'));
   else {
     const record = reviews.get('fidelite')?.record ?? null;
     const needed = settings.captures.viewports.flatMap(v => settings.captures.themes.map(t => `${v}:${t}`));
     const have = new Set((reviews.get('fidelite')?.problem ? [] : record?.captures ?? []).map(c => `${c.viewport}:${c.theme}`));
     const missing = needed.filter(n => !have.has(n));
     rules.push(missing.length
-      ? outcome('captures', 'refused', `captures attendues : ${needed.join(', ')}`, [`capture(s) absente(s) de la relecture fidelite à ${short(sha)} : ${missing.join(', ')}`], [
+      ? outcome('captures', 'refused', `${screens.length} écran(s) ajouté(s) ou modifié(s) (${screens.slice(0, 5).join(', ')}${screens.length > 5 ? ', ...' : ''}), captures attendues : ${needed.join(', ')}`, [`capture(s) absente(s) de la relecture fidelite à ${short(sha)} : ${missing.join(', ')}`], [
         `apv:qa-fidelite capture chaque écran changé (${missing.join(', ')}), les regarde à côté de la maquette validée et les joint à sa relecture : apv review record --commit ${short(sha)} --domain fidelite --capture <largeur>:<thème>:<fichier> ...`,
       ])
       : outcome('captures', 'ok', `captures jointes à ${short(sha)} : ${needed.join(', ')}`));
@@ -186,7 +190,6 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   } else rules.push(outcome('controles', 'ok', `contrôles requis présents et obligatoires : ${required.map(g => g.id).join(', ')}`));
 
   // maquette: every screen added or changed is covered by a mockup the operator validated.
-  const screens = changedFiles(repo, mergeBase, sha).filter(f => isScreen(f, screenMatchers(settings.screens)));
   if (!screens.length) rules.push(outcome('maquette', 'not_applicable', 'aucun écran ajouté ni modifié'));
   else {
     const coverage = screenCoverage(screens, (await loadDecisionLedger(repo, mergeBase)).decisions, (await loadDecisionLedger(repo, sha)).decisions, messages);
