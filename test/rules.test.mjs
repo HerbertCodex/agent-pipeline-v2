@@ -472,10 +472,12 @@ test('review 99, BAS 15: a suite launched under the lock of its stack holds it: 
   const cli = fileURLToPath(new URL('./support/cli-with-key.mjs', import.meta.url));
   const { TEST_KEY_FILE } = await import('./support/rules.mjs');
   const r = spawnSync('flock', ['-w', '5', lockFile, process.execPath, cli, TEST_KEY_FILE, 'gates', 'run', '--stage', 'full', '--json'], { cwd: p.repo, encoding: 'utf8', timeout: 60_000,
-    env: { ...process.env, APV_LOCK_POLL_MS: '20', APV_LOCK_DIR: join(root, 'locks') } });
+    env: { ...process.env, APV_LOCK_POLL_MS: '20', APV_LOCK_DIR: join(root, 'verrous') } });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stderr, /déjà tenu par un processus parent de cette suite/);
   assert.equal(JSON.parse(r.stdout).gates[0].status, 'passed');
+  // The companion lock is made in the lock folder the suite was given, never under the HOME or /tmp of the machine.
+  assert.equal(readdirSync(join(root, 'verrous', 'under')).length, 1);
 });
 
 test('review of #105, F1: a lock of an ancestor is the same inode on the same device, or a file that ancestor holds open', async t => {
@@ -507,7 +509,7 @@ test('review of #105, M1: under the lock of an ancestor, the checks that share i
     { id: 'browser', stage: 'full', command: body('browser'), lock: { file: lockFile }, readOnly: true }], config: { stacks: [{ id: '1', lockFile }] } });
   const cli = fileURLToPath(new URL('./support/cli-with-key.mjs', import.meta.url));
   const { TEST_KEY_FILE } = await import('./support/rules.mjs');
-  const r = spawnSync('flock', ['-w', '5', lockFile, process.execPath, cli, TEST_KEY_FILE, 'gates', 'run', '--stage', 'full', '--json'], { cwd: p.repo, encoding: 'utf8', timeout: 60_000, env: { ...process.env, APV_LOCK_DIR: join(root, 'locks') } });
+  const r = spawnSync('flock', ['-w', '5', lockFile, process.execPath, cli, TEST_KEY_FILE, 'gates', 'run', '--stage', 'full', '--json'], { cwd: p.repo, encoding: 'utf8', timeout: 60_000, env: { ...process.env, APV_LOCK_DIR: join(root, 'verrous') } });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.deepEqual(JSON.parse(r.stdout).gates.map(g => g.status), ['passed', 'passed']);
   const lines = readFileSync(log, 'utf8').trim().split('\n').map(l => l.split(' '));
@@ -528,6 +530,12 @@ test('review of 440d57d, N3 and N4: the companion lock lives in the lock folder 
   assert.equal(dirname(companion), join(root, 'verrous', 'under'), 'writable even when the folder of the lock is not');
   assert.equal(companionLock(join(root, 'lien.lock'), env), companion, 'two paths to the same file share one companion');
   assert.notEqual(companionLock(join(root, 'autre.lock'), env), companion);
+  // A fallback folder made by someone else, or open to others (a shared /tmp), is never used.
+  const { chmodSync } = await import('node:fs');
+  const tmp = join(root, 'tmp'); mkdirSync(tmp); const open = join(tmp, `apv-under-${process.getuid()}`); mkdirSync(open); chmodSync(open, 0o777);
+  writeFileSync(join(root, 'pas-un-dossier'), '');
+  const saved = process.env.TMPDIR; process.env.TMPDIR = tmp;
+  try { assert.equal(companionLock(lockFile, { APV_LOCK_DIR: join(root, 'pas-un-dossier') }), `${lockFile}.under`); } finally { if (saved === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved; }
 });
 
 test('review of 440d57d, N5: hooks creating the anchor key at the same instant all get the same key', async t => {
@@ -561,7 +569,7 @@ test('review of #105, D1 and D2: under the lock of an ancestor, the turn is boun
   // (and the suite stops the other, as after any failure).
   const p = project(t, { gates: [{ id: 'a', stage: 'full', command: body('a'), lock: { file: lockFile, waitMs: 300 }, readOnly: true },
     { id: 'b', stage: 'full', command: body('b'), lock: { file: lockFile, waitMs: 300 }, readOnly: true }], config: { stacks: [{ id: '1', lockFile }] } });
-  const r = spawnSync('flock', ['-w', '5', lockFile, process.execPath, cli, TEST_KEY_FILE, 'gates', 'run', '--stage', 'full', '--json'], { cwd: p.repo, encoding: 'utf8', timeout: 60_000, env: { ...process.env, APV_LOCK_DIR: join(root, 'locks') } });
+  const r = spawnSync('flock', ['-w', '5', lockFile, process.execPath, cli, TEST_KEY_FILE, 'gates', 'run', '--stage', 'full', '--json'], { cwd: p.repo, encoding: 'utf8', timeout: 60_000, env: { ...process.env, APV_LOCK_DIR: join(root, 'verrous') } });
   const refused = JSON.parse(r.stdout).gates.filter(g => g.status === 'timed_out');
   assert.equal(refused.length, 1, r.stdout);
   assert.match(refused[0].diagnostic ?? JSON.stringify(refused[0]), /non obtenu/);
@@ -571,7 +579,7 @@ test('review of #105, D1 and D2: under the lock of an ancestor, the turn is boun
   const q1 = project(t, { gates: [{ id: 'x', stage: 'full', command: body('x'), lock: { file: lockFile }, readOnly: true }], config: { stacks: [{ id: '1', lockFile }] } });
   const q2 = project(t, { gates: [{ id: 'y', stage: 'full', command: body('y'), lock: { file: lockFile }, readOnly: true }], config: { stacks: [{ id: '1', lockFile }] } });
   const run = (repo) => `(cd ${JSON.stringify(repo)} && ${JSON.stringify(process.execPath)} ${JSON.stringify(cli)} ${JSON.stringify(TEST_KEY_FILE)} gates run --stage full --json > /dev/null)`;
-  const both = spawnSync('flock', ['-w', '5', lockFile, 'sh', '-c', `${run(q1.repo)} & ${run(q2.repo)} & wait`], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, APV_LOCK_DIR: join(root, 'locks') } });
+  const both = spawnSync('flock', ['-w', '5', lockFile, 'sh', '-c', `${run(q1.repo)} & ${run(q2.repo)} & wait`], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, APV_LOCK_DIR: join(root, 'verrous') } });
   assert.equal(both.status, 0, both.stderr);
   const lines = readFileSync(log, 'utf8').trim().split('\n').map(l => l.split(' '));
   const span = id => ['start', 'end'].map(k => Number(lines.find(l => l[0] === id && l[1] === k)[2]));

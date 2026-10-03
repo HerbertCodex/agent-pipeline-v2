@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -32,7 +32,9 @@ export const ENVIRONMENT_ID = 'apv3-local';
  * The companion of a kernel lock held by an ancestor of the suite: the lock its checks take turns on. One per real lock
  * file (two paths to the same file share it), in the lock folder of the account (`apv lock`, writable even when the
  * folder of the lock is not), so that every project and process under that ancestor shares it, with the same
- * APV_LOCK_DIR (or XDG_STATE_HOME, HOME). That folder cannot be made: the system's temporary folder, per account.
+ * APV_LOCK_DIR (or XDG_STATE_HOME, HOME). That folder cannot be made: the system's temporary folder, per account, then
+ * `<lock>.under` beside the lock. A folder is used only if it is a real folder of this account that nobody else can
+ * enter (a shared /tmp: another account may have made it first, or put a link there).
  */
 export function companionLock(file, env) {
     let real = file;
@@ -41,10 +43,13 @@ export function companionLock(file, env) {
     }
     catch { /* the path as given */ }
     const name = `${basename(real).replace(/[^\w.-]/g, '_').slice(0, 100)}-${hash(real).slice(0, 12)}.lock`;
-    for (const dir of [join(defaultLockDir(env), 'under'), join(tmpdir(), `apv-under-${process.getuid?.() ?? 'user'}`)]) {
+    const uid = process.getuid?.();
+    for (const dir of [join(defaultLockDir(env), 'under'), join(tmpdir(), `apv-under-${uid ?? 'user'}`)]) {
         try {
             mkdirSync(dir, { recursive: true, mode: 0o700 });
-            return join(dir, name);
+            const st = lstatSync(dir);
+            if (st.isDirectory() && !st.isSymbolicLink() && (uid === undefined || st.uid === uid) && (st.mode & 0o077) === 0)
+                return join(dir, name);
         }
         catch { /* the next place */ }
     }

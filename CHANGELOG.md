@@ -2,6 +2,26 @@
 
 ## Non publié
 
+- **Fin des relectures de #105 à #107 : aucun constat laissé ouvert.**
+  - **Crochet de poussée.** Un `cd` n'est suivi que vers un dossier qui existe et où l'on peut entrer. Le dossier devient inconnu, donc compté comme la branche par défaut, dans ces cas : `cd` vers un dossier absent ou fermé, dossier créé par la ligne, substitution n'importe où dans les mots du `cd`, `git switch` ou `git checkout` plus tôt dans la ligne. Sont aussi refusés `heads/main`, les motifs `refs/*:refs/*` et `r*:r*`, et `:`. `HOME` ou `XDG_CONFIG_HOME` posées par `read` ou `printf -v` gardent l'outil actif.
+  - **Crochet des magasins.**
+    - Seules les vraies affectations sont lues : `dd if=`, `echo key=…` et `f=…; jq . "$f"` passent.
+    - Une variable bâtie sur un morceau (`e=${d}t`) reste suivie.
+    - Un interpréteur qui lit un heredoc ou un tube sans fichier de script est jugé sur ce texte.
+    - `rm -rf .git/$(…)`, `-->`, `=>` et les substitutions entre guillemets sont jugés.
+    - Le dossier de départ (worktree d'un dépôt nu `x.git`) n'est plus pris pour un répertoire Git.
+  - **Verrou compagnon.** Un repli n'est retenu que s'il est un vrai dossier de ce compte, fermé aux autres. Les tests n'écrivent plus ni dans HOME ni dans /tmp.
+  - **`apv status`.**
+    - Il compare aussi `dist/`.
+    - Il dit si le plugin est plus récent que l'outil ou d'une autre branche.
+    - Un réglage illisible est dit illisible.
+    - `disableAllHooks` suit la priorité des réglages.
+    - L'entrée de format ancien sans portée est reconnue, et l'installation pour le projet aussi depuis un worktree.
+    - « Règles non lues » remplace « aucune nouvelle règle » quand le catalogue manque.
+    - Le commit d'installation est validé avant tout appel à git, et une clé de plugin qui n'est pas un nom simple est écartée.
+    - Seuls les fichiers ordinaires sont lus (un FIFO ne bloque plus).
+    - Un refus du sceau est affiché sous son propre libellé.
+  - **README.** Restauration de la clé sous `umask 077`, sans écho, dossier remis en 0700 ; vérification de `~` face au dossier du compte ; le dernier recours n'archive que les relectures et les traces de fusion ; badge à jour.
 - **3.0.0-alpha.13 : redémarrer avec toute la puissance du pipeline, guide et deux signalements dans `apv status`.** La version monte avec les PR #105 à #107 : Claude Code range la copie installée du plugin par version, et une même version pourrait ne pas être rafraîchie par `claude plugin update`. Projet pilote, nuit du 2 au 3 octobre 2026 : le plugin était absent depuis des jours sans que rien ne le dise, et une mise à jour de l'outil a activé des règles de fusion que le plugin installé ne savait pas remplir. Plus aucune fusion ne passait. Désormais, `apv status` :
   - dit le plugin installé (version, commit, activé ou non) face à l'outil lancé, et donne la commande à lancer quand un projet sous APV n'a pas de plugin, ou l'a désactivé ;
   - liste les règles de fusion que le plugin installé ne connaît pas, et celles qu'apporte la prochaine version (branche suivie, telle que récupérée), avec ce qu'elles exigent. La source est un catalogue des règles, `docs/merge-rules.json`.

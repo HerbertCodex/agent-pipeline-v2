@@ -636,3 +636,42 @@ test('review of 4dc674e: a failed cd leaves the push on main; quoted redirection
     assert.equal(commandScope(command, tokenize(command).segments, main, root, {}).plain, false, command);
   }
 });
+
+test('review of aa59c8f and 84d3c4a: closed folders, cd options, refspecs, real assignments, interpreters fed by the line, no false block in a bare layout', async t => {
+  const { hookContext } = await import('../hooks/scripts/harness-guard.mjs');
+  const { commandScope, tokenize } = await import('../hooks/scripts/bash-guard.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-fin-'));
+  t.after(() => { execFileSync('chmod', ['-R', 'u+rwx', root]); rmSync(root, { recursive: true, force: true }); });
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, stdio: 'pipe' });
+  const main = join(root, 'principal'); mkdirSync(main); git(main, 'init', '-q', '-b', 'main');
+  mkdirSync(join(main, '.apv')); writeFileSync(join(main, '.apv', 'config.json'), '{}'); git(main, 'add', '-A'); git(main, 'commit', '-qm', 'x');
+  const feat = join(root, 'copie'); git(main, 'worktree', 'add', '-q', '-b', 'feat', feat);
+  const closed = join(root, 'ferme'); mkdirSync(closed); execFileSync('chmod', ['000', closed]);
+  const context = hookContext({ cwd: main }, { HOME: root });
+  // From the checkout on main: every push that may land on main is refused.
+  for (const command of [`cd ${closed}; git push`, `cd ${closed} || git push`, `pushd ${closed}; git push`, `cd -P $(echo ${feat}) && git push`, `cd -- $(echo ${feat}) && git push`,
+    `git clone ${main} ${join(root, 'neuf')} && cd ${join(root, 'neuf')} && git push`, "git push origin 'refs/*:refs/*'", "git push origin 'r*:r*'", 'git push origin HEAD:heads/main',
+    'git push origin :']) {
+    assert.equal(evaluateCommand(command, {}, context).decision, 'deny', command);
+  }
+  const fromFeat = hookContext({ cwd: feat }, { HOME: root });
+  assert.equal(evaluateCommand('git switch --ignore-other-worktrees main && git push', {}, fromFeat).decision, 'deny', 'branch changed by the line');
+  assert.equal(evaluateCommand('git push', {}, fromFeat).decision, 'allow', 'a working branch');
+  for (const command of [`read HOME < f; git push origin main`, `printf -v HOME %s ${root}; git push origin main`]) {
+    assert.equal(commandScope(command, tokenize(command).segments, main, root, {}).plain, false, command);
+  }
+  // Stores: what reads is free, what writes is refused.
+  const lead = { ...as(null), cwd: '/r' };
+  for (const command of ['dd if=.git/apv/receipts/r.json of=/tmp/x', 'f=.git/apv/receipts/r.json; jq . "$f"', 'R=.git/apv/receipts; ls "$R"', 'echo key=.git/apv',
+    "perl -ne 'print' .git/apv/receipts/r.json", 'python3 tools/x.py - < .git/apv/receipts/r.json']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  for (const command of ["python3 <<'EOF'\nimport shutil; shutil.rmtree('.git/apv')\nEOF", "node <<'EOF'\nrequire('fs').rmSync('.git/apv', {recursive: true})\nEOF",
+    "cat <<'EOF' | python3 -\nimport shutil; shutil.rmtree('.git/apv')\nEOF", 'd=.gi; e=${d}t; f=a; rm -rf "$e/${f}pv"', 'rm -rf .git/$(echo apv)',
+    'echo "$(echo x > .git/apv/receipts/r.json)"', 'echo -->.git/apv/receipts/r.json']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  // A worktree of a bare repository named x.git: its folder is no Git directory.
+  const bare = { ...as(null), cwd: '/srv/proj.git/feat2' };
+  for (const command of ['rm -rf "$tmp"', 'echo x > "$OUT"', 'curl -so "$f" https://e.x']) assert.equal(evaluateCommand(command, {}, bare).decision, 'allow', command);
+});

@@ -5,8 +5,10 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const PLUGIN_NAME = 'apv';
 const CATALOG = join('docs', 'merge-rules.json');
-/** What the plugin runs, besides the tool itself: a change there needs the plugin updated. */
-const PLUGIN_PARTS = ['hooks', 'agents', 'skills', 'workflows', '.claude-plugin'];
+/** What the plugin runs: its hooks, agents, skills and workflows, and the compiled tool they load (`dist/`). */
+const PLUGIN_PARTS = ['hooks', 'agents', 'skills', 'workflows', '.claude-plugin', 'dist'];
+const SHA = /^[0-9a-f]{7,40}$/;
+const PLUGIN_KEY = /^apv@[A-Za-z0-9._-]{1,64}$/;
 /** Files of Claude Code and catalogs larger than this are not read. */
 const MAX_BYTES = 1024 * 1024;
 /** The root of the running tool: `dist/rules/plugin-status.js`, two folders up. */
@@ -84,7 +86,11 @@ export function newRules(next, known, knownVersion) {
 /** A JSON file: its value, `undefined` when absent, or an Error when present but unreadable (invalid, too large). */
 function readJson(file) {
     try {
-        if (statSync(file).size > MAX_BYTES)
+        const st = statSync(file);
+        // Only a regular file is read: a FIFO or a device would block apv status.
+        if (!st.isFile())
+            return new Error(`${file} : pas un fichier ordinaire`);
+        if (st.size > MAX_BYTES)
             return new Error(`${file} : plus de 1 Mio`);
         return JSON.parse(readFileSync(file, 'utf8'));
     }
@@ -92,12 +98,15 @@ function readJson(file) {
         return error.code === 'ENOENT' ? undefined : new Error(`${file} : illisible`);
     }
 }
-const readText = (file) => { try {
-    return statSync(file).size > MAX_BYTES ? null : readFileSync(file, 'utf8');
-}
-catch {
-    return null;
-} };
+const readText = (file) => {
+    try {
+        const st = statSync(file);
+        return st.isFile() && st.size <= MAX_BYTES ? readFileSync(file, 'utf8') : null;
+    }
+    catch {
+        return null;
+    }
+};
 const objectOf = (v) => (v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Error) ? v : null);
 /** The folder of the configuration of Claude Code: CLAUDE_CONFIG_DIR, else `.claude` in the HOME of the environment. */
 export function claudeDir(env) {
@@ -117,19 +126,35 @@ export function pluginInstall(dir, repo = null) {
     const plugins = objectOf(objectOf(raw)?.['plugins']);
     if (!plugins)
         return null;
-    const settings = settingsFiles(dir, repo).map(f => objectOf(objectOf(readJson(f))?.['enabledPlugins']));
+    const settings = settingsFiles(dir, repo).map(f => {
+        const value = readJson(f);
+        if (value instanceof Error)
+            throw value;
+        return objectOf(objectOf(value)?.['enabledPlugins']);
+    });
     const enabledOf = (key) => settings.reduce((on, s) => (typeof s?.[key] === 'boolean' ? s[key] : on), false);
     const str = (v) => (typeof v === 'string' && v ? v : null);
+    // The project, and its main checkout when the command runs in one of its worktrees (an install for the project names it).
+    const places = repo ? [resolve(repo), ...[mainCheckout(repo)].filter((p) => p !== null)] : [];
     const candidates = [];
     for (const [key, value] of Object.entries(plugins)) {
-        if (key.split('@')[0] !== PLUGIN_NAME)
+        // A key that is not a plain plugin name would go into the commands this status gives: never taken.
+        if (key.split('@')[0] !== PLUGIN_NAME || !PLUGIN_KEY.test(key))
             continue;
         const entries = (Array.isArray(value) ? value : [value]).map(objectOf).filter((e) => e !== null);
-        const entry = entries.find(e => e['scope'] === 'user') ?? entries.find(e => repo && typeof e['projectPath'] === 'string' && resolve(e['projectPath']) === resolve(repo));
+        // An entry without scope nor projectPath (the older format) is the account's.
+        const entry = entries.find(e => e['scope'] === 'user' || (e['scope'] === undefined && e['projectPath'] === undefined))
+            ?? entries.find(e => typeof e['projectPath'] === 'string' && places.includes(resolve(e['projectPath'])));
         if (entry)
             candidates.push({ key, version: str(entry['version']), sha: str(entry['gitCommitSha']), installPath: str(entry['installPath']), enabled: enabledOf(key) });
     }
     return candidates.find(c => c.enabled) ?? candidates[0] ?? null;
+}
+/** The main checkout of the repository of `repo` (first worktree), or null. */
+function mainCheckout(repo) {
+    const out = git(repo, ['worktree', 'list', '--porcelain']);
+    const first = out ? /^worktree (.+)$/m.exec(out)?.[1] : undefined;
+    return first ? resolve(first) : null;
 }
 /** The folder of a marketplace added from a directory (`claude plugin marketplace add <dossier>`), or null. */
 export function marketplaceDir(dir, key) {
@@ -150,7 +175,11 @@ export function pluginStatus(repo, env, toolRoot = TOOL_ROOT) {
     catch (error) {
         unreadable = clean(error.message);
     }
-    const hooksDisabled = settingsFiles(dir, repo).some(f => objectOf(readJson(f))?.['disableAllHooks'] === true);
+    // disableAllHooks follows the same precedence as the other settings: the last file that sets it wins.
+    const hooksDisabled = settingsFiles(dir, repo).reduce((off, f) => {
+        const value = objectOf(readJson(f))?.['disableAllHooks'];
+        return typeof value === 'boolean' ? value : off;
+    }, false);
     const pkg = objectOf(readJson(join(toolRoot, 'package.json')));
     const sha = git(toolRoot, ['rev-parse', 'HEAD']);
     const tool = { root: toolRoot, version: typeof pkg?.['version'] === 'string' ? pkg['version'] : null, sha };
@@ -163,26 +192,35 @@ export function pluginStatus(repo, env, toolRoot = TOOL_ROOT) {
     const unknownToPlugin = differs ? newRules(own, installed, install.version) : [];
     let pluginBehind = null;
     if (differs) {
-        const known = install.sha && /^[0-9a-f]{7,40}$/.test(install.sha) && git(toolRoot, ['cat-file', '-e', `${install.sha}^{commit}`]) !== null;
+        const installedSha = install.sha;
+        const known = !!installedSha && SHA.test(installedSha) && git(toolRoot, ['cat-file', '-e', `${installedSha}^{commit}`]) !== null;
         if (!known)
             pluginBehind = 'unknown';
-        else if (git(toolRoot, ['diff', '--quiet', install.sha, sha, '--', ...PLUGIN_PARTS]) === null)
-            pluginBehind = 'changed';
+        else if (git(toolRoot, ['diff', '--quiet', installedSha, sha, '--', ...PLUGIN_PARTS]) === null) {
+            // Which side is behind: the plugin (an ancestor of the tool), the tool (behind the plugin), or neither (diverged).
+            const ancestor = (a, b) => git(toolRoot, ['merge-base', '--is-ancestor', a, b]) !== null;
+            pluginBehind = ancestor(installedSha, sha) ? 'changed' : ancestor(sha, installedSha) ? 'ahead' : 'diverged';
+        }
     }
     // The next version: the upstream of the running checkout, as last fetched; run from the installed copy (no checkout),
     // the folder the marketplace was added from (its upstream, else its HEAD), counted from the installed commit.
     let upcoming = null;
     const upstream = sha ? git(toolRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']) : null;
+    // The rules of the next version, or null when its catalog cannot be read (never said « no new rule » then).
+    const nextRules = (root, ref) => {
+        const next = catalogOf(root, ref);
+        return next ? newRules(next, own, tool.version) : null;
+    };
     if (upstream) {
         const behind = Number(git(toolRoot, ['rev-list', '--count', `HEAD..${upstream}`]) ?? '0') || 0;
-        upcoming = { ref: clean(upstream, 100), behind, rules: behind ? newRules(catalogOf(toolRoot, upstream), own, tool.version) : [] };
+        upcoming = { ref: clean(upstream, 100), behind, rules: behind ? nextRules(toolRoot, upstream) : [] };
     }
-    else if (!sha && install?.sha) {
+    else if (!sha && install?.sha && SHA.test(install.sha)) {
         const source = marketplaceDir(dir, install.key);
         const ref = source && git(source, ['rev-parse', 'HEAD']) ? git(source, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']) ?? 'HEAD' : null;
-        if (source && ref) {
-            const behind = Number(git(source, ['rev-list', '--count', `${install.sha}..${ref}`]) ?? '0') || 0;
-            upcoming = { ref: clean(`${ref} de ${source}`, 300), behind, rules: behind ? newRules(catalogOf(source, ref), own, tool.version) : [] };
+        if (source && ref && /^[\w./@{}-]+$/.test(ref) && !ref.startsWith('-')) {
+            const behind = Number(git(source, ['rev-list', '--count', '--end-of-options', `${install.sha}..${ref}`]) ?? '0') || 0;
+            upcoming = { ref: clean(`${ref} de ${source}`, 300), behind, rules: behind ? nextRules(source, ref) : [] };
         }
     }
     return { project, install, unreadable, hooksDisabled, tool, unknownToPlugin, pluginBehind, upcoming, needs: own?.needs ?? {} };
@@ -210,19 +248,30 @@ export function pluginLines(s) {
     }
     if (s.hooksDisabled)
         lines.push('  ATTENTION : disableAllHooks est posé dans les réglages de Claude Code : aucun crochet ne tourne (sceau, journal, garde-fous). Retire-le, puis une nouvelle session.');
+    const installed = short(s.install?.sha ?? null);
     if (s.pluginBehind === 'changed') {
-        lines.push(`  ATTENTION : le plugin installé (${short(s.install?.sha ?? null)}) est plus ancien que l'outil (${short(s.tool.sha)}) : ses crochets, agents ou compétences ont changé depuis. Mettre le plugin à jour ${UPDATE}.`);
+        lines.push(`  ATTENTION : le plugin installé (${installed}) est plus ancien que l'outil (${short(s.tool.sha)}) : ses crochets, agents, compétences ou son outil compilé ont changé depuis. Mettre le plugin à jour ${UPDATE}.`);
+    }
+    else if (s.pluginBehind === 'ahead') {
+        lines.push(`  ATTENTION : le plugin installé (${installed}) est plus récent que cette copie de l'outil (${short(s.tool.sha)}) : mettre l'outil à jour (git pull dans ${s.tool.root}).`);
+    }
+    else if (s.pluginBehind === 'diverged') {
+        lines.push(`  ATTENTION : le plugin installé (${installed}) et cette copie de l'outil (${short(s.tool.sha)}) viennent de branches différentes : remettre l'outil sur sa branche suivie, puis mettre le plugin à jour ${UPDATE}.`);
     }
     else if (s.pluginBehind === 'unknown') {
-        lines.push(`  ATTENTION : le plugin installé (${short(s.install?.sha ?? null)}) vient d'un commit que cette copie de l'outil ne connaît pas : rien ne dit que ses crochets suivent l'outil. Mettre le plugin à jour ${UPDATE}.`);
+        lines.push(s.install?.sha
+            ? `  ATTENTION : le plugin installé (${installed}) vient d'un commit que cette copie de l'outil ne connaît pas : rien ne dit que ses crochets suivent l'outil. Mettre le plugin à jour ${UPDATE}.`
+            : `  ATTENTION : le plugin installé ne dit pas de quel commit il vient : rien ne dit que ses crochets suivent l'outil. Mettre le plugin à jour ${UPDATE}.`);
     }
     if (s.unknownToPlugin.length) {
         lines.push(`  ATTENTION : règles de fusion que le plugin installé (${short(s.install?.sha ?? null)}) ne connaît pas : ${describe(s.unknownToPlugin)}. apv stack merge les applique déjà ; mettre le plugin à jour ${UPDATE}.`);
     }
     if (s.upcoming?.behind) {
-        lines.push(s.upcoming.rules.length
-            ? `  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : nouvelles règles de fusion ${describe(s.upcoming.rules)}. Avant de mettre à jour l'outil, réunis ce qu'elles exigent, puis mets à jour l'outil et le plugin ensemble (${UPDATE}).`
-            : `  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : aucune nouvelle règle de fusion ; mets à jour l'outil et le plugin ensemble (${UPDATE}).`);
+        lines.push(s.upcoming.rules === null
+            ? `  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : règles de fusion non lues (catalogue de cette version absent de la copie : git fetch) ; mets à jour l'outil et le plugin ensemble (${UPDATE}).`
+            : s.upcoming.rules.length
+                ? `  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : nouvelles règles de fusion ${describe(s.upcoming.rules)}. Avant de mettre à jour l'outil, réunis ce qu'elles exigent, puis mets à jour l'outil et le plugin ensemble (${UPDATE}).`
+                : `  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : aucune nouvelle règle de fusion ; mets à jour l'outil et le plugin ensemble (${UPDATE}).`);
     }
     return lines;
 }
