@@ -674,3 +674,28 @@ Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR 
 - `captures.viewports` (`desktop`, `phone`, `tablet` ; défaut `desktop` et `phone`) et `captures.themes` (`light`, `dark` ; défaut les deux) : captures qu'exige la relecture de fidélité quand le plan des revues la retient, sauf dans un projet sans écran qui n'en ajoute pas (règle `captures`, REGLES.md). `["light"]` seulement pour un projet sans thème sombre.
 - `requiredGates` : contrôles qu'un projet exige en plus de `reuse`, `code-map` et `structure` (projet web) : un identifiant et le début de la commande, reconnue enveloppée ou non (`node <plugin>/dist/cli.js`, `npx apv`) ; ils valent aussi pour un projet sans interface web.
 - `screens` : motifs des fichiers d'écran que l'outil ne reconnaît pas seul (il connaît les pages, mises en page et pages d'erreur de SvelteKit, Next, Remix, Nuxt, Astro et `pages/`).
+
+## Fraîcheur de l'état : `freshness`
+
+Section APV3, facultative, validée par le chargeur commun : les fichiers vivants d'état et de reprise que `apv status` (section « Fichiers d'état périmés », `freshness` en JSON) et le crochet de début de session surveillent. Un état de reprise se réécrit court à chaque étape et ce qui est terminé part en archive : un fichier qui n'a pas bougé depuis plus de `maxAgeDays` jours, ou un journal qui dépasse `maxLines` lignes, est signalé avec la proposition « couper : état court + archive ». Lecture seule : rien n'est déplacé ni supprimé.
+
+```json
+{
+  "freshness": {
+    "maxAgeDays": 2,
+    "maxLines": 300,
+    "paths": ["~/projets/mon-pilotage/lancement/REPRISE.md", "docs/etat/*.md"],
+    "ignore": [".apv/state/revues-*.md"],
+    "archive": "~/projets/mon-pilotage/archives"
+  }
+}
+```
+
+- Toujours surveillés, sans rien déclarer : `.apv/state/resume.md` et les `.apv/state/*.md` (premier niveau seulement : `.apv/state/archive/` et les autres sous-dossiers ne le sont pas). Les journaux machine (`quota.log`, `journal.log`, états `run-*.json`) ne le sont pas.
+- `maxAgeDays` (défaut 2, de 1 à 365) : au-delà, le fichier est « périmé » (date de dernière modification).
+- `maxLines` (défaut 300, de 10 à 1 000 000) : au-delà, le fichier est « trop long ».
+- `paths` (défaut aucun, 100 au plus) : fichiers vivants du projet, en motifs portables (`*`, `**`, `?` ; ni accolades ni `!`, aucun segment `.` ou `..`), relatifs au dépôt, sous le dossier personnel avec `~/` (y compris hors du dépôt), ou absolus. Un fichier ou un dossier absent est ignoré. Un motif parcourt 5 000 entrées au plus et garde 200 fichiers ; `node_modules` et `.git` ne sont jamais parcourus.
+- `ignore` (défaut aucun) : motifs de la même forme, retirés de la surveillance.
+- `archive` (défaut `.apv/state/archive`) : dossier d'archive cité dans les messages (chemin sans joker, même forme) ; les fichiers qui s'y trouvent ne sont jamais signalés.
+- Seules la date et le nombre de lignes d'un fichier sont lus, jamais son contenu au-delà du comptage des fins de ligne ; un nom qui ressemble à un secret (`.env*`, `*key*`, `*secret*`, `*token*`, `*credential*`, `*password*`, certificats `.pem`, `.p12`, `.pfx`) n'est jamais ouvert : seule sa date est lue (`lines` à `null`).
+- Configuration invalide : refusée par le chargeur ; `apv status` et le crochet surveillent alors les fichiers par défaut avec les seuils par défaut.

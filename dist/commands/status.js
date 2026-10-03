@@ -11,6 +11,7 @@ import { localTime } from '../domain/time.js';
 import { anchorLines, anchorStatus } from '../rules/anchor-status.js';
 import { pluginLines, pluginStatus } from '../rules/plugin-status.js';
 import { processGh } from '../stack/github.js';
+import { freshnessLines, freshnessReport } from '../freshness/check.js';
 export const usage = `Utilisation :
   apv status [--repo <chemin>] [--json]
 
@@ -20,7 +21,13 @@ de Claude Code (installé, activé, sa version face à celle de l'outil), les r�
 ne connaît pas encore et celles qu'apporte la prochaine version de l'outil (branche suivie, telle que récupérée) ;
 puis les ancrages des règles avant fusion : journal de l'opérateur (messages reçus, ou pourquoi aucun), protection
 de la branche par défaut sur GitHub (gh api ; indisponible en plan gratuit pour un dépôt privé, dit une fois),
-audit des fusions faites hors de apv stack merge (apv audit merges).`;
+audit des fusions faites hors de apv stack merge (apv audit merges).
+
+Section « Fichiers d'état périmés » (lecture seule, rien n'est déplacé ni supprimé) : .apv/state/resume.md, les
+.apv/state/*.md et les chemins de freshness.paths (~/ accepté) modifiés il y a plus de freshness.maxAgeDays jours
+(défaut 2), et ceux de plus de freshness.maxLines lignes (défaut 300), avec la proposition « couper : état court +
+archive ». Seules la date et le nombre de lignes sont lus ; la date seule pour un nom de secret (.env*, *key*,
+*secret*, *token*). Un fichier absent est ignoré.`;
 function files(dir) {
     if (!existsSync(dir))
         return [];
@@ -37,10 +44,13 @@ function files(dir) {
     walk(dir);
     return out;
 }
-export function apvStatus(repo) {
+export function apvStatus(repo, options = {}) {
     const cfg = { file: null, legacy: false, gates: [], ignored: [], error: null };
+    // An invalid configuration leaves the defaults: the default living files are still watched.
+    let freshnessSettings;
     try {
         const loaded = loadConfig(repo);
+        freshnessSettings = loaded.config.freshness;
         Object.assign(cfg, { file: loaded.file && relative(repo, loaded.file), legacy: loaded.legacy, gates: loaded.config.gates.map(g => g.id), ignored: loaded.ignored });
     }
     catch (error) {
@@ -76,7 +86,8 @@ export function apvStatus(repo) {
     });
     const state = files(join(repo, '.apv', 'state')).map(f => { const st = statSync(f); return { file: relative(repo, f), bytes: st.size, modifiedAt: st.mtime.toISOString() }; });
     const runs = readRunSummaries(repo);
-    return { repo, config: cfg, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)) };
+    return { repo, config: cfg, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)),
+        freshness: freshnessReport(repo, freshnessSettings, options) };
 }
 export async function run(args, io) {
     return guard(io, usage, async () => {
@@ -87,7 +98,7 @@ export async function run(args, io) {
         }
         if (positionals.length)
             throw new UsageError(`argument inattendu : ${positionals.join(' ')}`);
-        const status = apvStatus(repoPath(io, values.repo));
+        const status = apvStatus(repoPath(io, values.repo), { ...(io.env['HOME'] ? { home: io.env['HOME'] } : {}) });
         const anchor = await anchorStatus(status.repo, processGh(io.env['APV_GH'] || 'gh', io.env, status.repo)).catch(() => null);
         let plugin = null;
         try {
@@ -116,6 +127,7 @@ export async function run(args, io) {
             ...active.map(r => `- ${runSummaryLine(r)}`),
             ...(status.runsUnread ? [`- ${unreadRunsLine(status.runsUnread)}`] : []),
             `Quota : ${q ? `${localTime(q.at)} ; session ${q.session ? `${q.session.percent} %` : '?'} ; semaine ${q.week ? `${q.week.percent} %` : '?'} ; niveau ${q.level}` : 'aucun relevé'}`,
+            ...freshnessLines(status.freshness, value => cleanLine(value, 400), localTime),
         ];
         if (plugin)
             lines.push(...pluginLines(plugin));
