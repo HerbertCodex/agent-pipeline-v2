@@ -681,12 +681,14 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
     const toolName = tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const flatLine = flatten(String(command));
     const systemTool = (!/\//.test(cw[0] ?? '') || /^\/(?:usr\/)?bin\/[^/]+$/.test(cw[0] ?? ''))
-      && !/(?:^|[\s;&|(])(?:(?:export|declare|typeset|local|readonly)\s+(?:-\w+\s+)*)?PATH=/.test(flatLine)
+      // PATH set as an assignment: before the command of a segment, or a segment of assignments only (`echo PATH=x` is text).
+      && !segments.some(w => { const c = commandWords(w)?.words ?? []; return w.slice(0, w.length - c.length).some(a => a.startsWith('PATH=')); })
       && !segments.some(w => {
         // `hash`, `enable`, a sourced file, or a builtin that sets PATH by name (`printf -v PATH`, `read PATH`).
         const c = commandWords(w)?.words ?? w; const n = basename(c[0] ?? '');
         return ['hash', 'enable', 'source', '.'].includes(n)
-          || (['printf', 'read', 'mapfile', 'readarray', 'declare', 'typeset', 'export', 'local', 'readonly'].includes(n) && c.slice(1).some(a => a === 'PATH' || a.startsWith('PATH=')));
+          || (['printf', 'read', 'mapfile', 'readarray', 'declare', 'typeset', 'export', 'local', 'readonly'].includes(n)
+            && c.slice(1).some(a => /(?:^|^-[A-Za-z]*v|=)PATH(?:=|$)/.test(a)));
       })
       && !new RegExp(`(?:^|[\\s;&|(])(?:function\\s+${toolName}\\b|${toolName}\\s*\\(\\s*\\))|\\balias\\s+${toolName}=`).test(flatLine);
     const alone = segments.length === 1 && !/[<>]/.test(String(shadow ?? ''));
@@ -756,12 +758,16 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
     const searched = named.length ? named : [dir ?? '.'];
     // rg, no longer a reader, run from inside a store without a path, reaches what it walks there.
     if (tool === 'rg' && !named.length && dir && mayBeStore(dir)) return REASONS.anchorStore;
+    // After a cd the guard cannot follow, the folder is unknown: a recursive search without a path, or with a relative
+    // one, may walk the stores.
+    if (recursive && cdComputed && (!named.length || named.some(a => !isAbsolute(a)))) return REASONS.anchorStore;
     if (recursive && searched.some(a => { const p = resolve(dir ?? '/', at(a, dir)); return mayReachAnchor(join(p, 'apv', 'operator')) || mayReachAnchor(join(p, 'operator')); })) return REASONS.anchorStore;
     if (!writer && READS_ONLY.has(tool) && systemTool) continue;
     // What another program reads on its standard input (`python3 x.py - < .git/apv/receipts/r.json`, `<f`) is not
     // handed to it. A `<` the shell does not read as a redirection (escaped or quoted: blank in the shadow) is a word: as
-    // soon as the words of the line hold more `<` than the shadow holds redirections, none of them is exempted.
-    const realLt = (String(shadow ?? '').match(/</g) ?? []).length;
+    // soon as the words of the line hold more `<` than the shadow holds plain input redirections (a heredoc `<<`, a
+    // here-string `<<<`, `<&` and `<>` are not counted), none of them is exempted.
+    const realLt = (String(shadow ?? '').match(/(?<!<)<(?![<&>])/g) ?? []).length;
     const wordLt = segments.flat().filter(w => /^\d*</.test(w)).reduce((n, w) => n + (w.match(/</g) ?? []).length, 0);
     const redirects = realLt > 0 && wordLt <= realLt;
     const plainArgs = writer ? args : cw.slice(1).filter((a, k, all) => !a.startsWith('-') && !(redirects && (/^\d*</.test(a) || /^\d*<$/.test(all[k - 1] ?? ''))));

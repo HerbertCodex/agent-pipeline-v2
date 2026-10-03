@@ -840,6 +840,14 @@ test('issue 109: where a branch is created, readers of the system, rg handed a s
     assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
   }
   for (const command of ['cat .git/apv/receipts/hash.json', 'grep -r --color TODO src']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  // Review of cb75485: a heredoc or a here-string is no plain input redirection; PATH set only as an assignment.
+  for (const command of ['python3 w.py "<" .git/apv/receipts/r.json <<< foo', 'python3 w.py \\< .git/apv/receipts/r.json <<<x',
+    'python3 w.py "<" .git/apv/receipts/r.json <<EOF\nx\nEOF', 'env PATH=/tmp/x cat .git/apv/receipts/r.json',
+    'printf -vPATH %s /tmp/x; cat .git/apv/receipts/r.json', 'declare -n p=PATH; p=/tmp/x; cat .git/apv/receipts/r.json',
+    'cd .git/a* && grep -r .', "cd .git/a* && rg ''", 'X=.git/apv; cd "$X" && grep -r x sub']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ['echo PATH=x; cat .git/apv/receipts/r.json', 'python3 x.py < .git/apv/receipts/r.json']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
   // A branch created where git acts elsewhere (a variable or an envelope in front of git) is not the branch of the line.
   const root = mkdtempSync(join(tmpdir(), 'apv3-109-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
