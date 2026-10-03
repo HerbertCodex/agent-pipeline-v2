@@ -149,6 +149,11 @@ const REMOTE = [
   ['ZAP_TARGET', 'https%3A%2F%2Fdb.prod.example.com'], ['X', 'https%3A%2F%2Fdb.prod.example.com'], ['X', 'https%253A%252F%252Fdb.prod.example.com'],
   ['ZAP_TARGET', 'prodserver:8080'], ['X', 'prodserver:8080'],
   ['SITE', 'prodserver'], ['API_BASE', 'prodserver'], ['DB', 'prodserver'], ['X', 'fe80::1'],
+  // Third security review of PR #110: an `@` after the host (fragment, query, backslash), and host-name variables.
+  ['X', 'http://db.prod.example.com#@localhost'], ['X', 'http://db.prod.example.com?@localhost'], ['X', 'http://db.prod.example.com\\@localhost'],
+  ['X', 'jdbc:postgresql://db.prod.example.com/app?x=@localhost'], ['X', 'http:db.prod.example.com#@localhost'],
+  ['X', 'db.prod.example.com#@localhost'],
+  ['HOSTNAME', 'prodserver'], ['DB_HOSTNAME', 'prodserver'], ['SERVER_NAME', 'prodserver'], ['DB_HOST_NAME', 'prodserver'],
 ];
 /** Loopback, test accounts and plain values: each must pass. */
 const LOCAL = [
@@ -157,7 +162,7 @@ const LOCAL = [
   ['X', 'plain text'], ['SUPABASE_ANON_KEY', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiJ9.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE'],
   ['X', '42'], ['VERSION', '1.2.3'], ['DAST_USER', 'demo@example.org'], ['DAST_USER', 'qa@site.test'], ['X', 'localhost,127.0.0.1'],
   ['X', 'localhost:5173'], ['ZAP_TARGET', 'http://127.0.0.1:4173'], ['ZAP_TARGET', 'http:localhost'], ['X', 'mode:strict'], ['X', '12:30'],
-  ['API_KEY', 'abc123secret'], ['DB_PASSWORD', 'postgres'], ['DATABASE_NAME', 'app'], ['DB_USER', 'postgres'], ['X', 'texte%20encod%C3%A9'],
+  ['API_KEY', 'abc123secret'], ['DB_PASSWORD', 'postgres'], ['DATABASE_NAME', 'app'], ['DB_NAME', 'app'], ['DB_USER', 'postgres'], ['HOSTNAME', 'localhost'], ['X', 'http://user:pass@127.0.0.1:5432/db'], ['X', 'http://127.0.0.1/?next=@x'], ['X', 'texte%20encod%C3%A9'],
 ];
 
 test('dast envFile: an allow-list of loopback addresses, unit (refusals and passes)', () => {

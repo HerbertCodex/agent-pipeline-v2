@@ -82,13 +82,26 @@ function decoded(value: string): string {
   return out;
 }
 /** E-mail domains reserved for examples and tests: a test account there names no machine. */
-const RESERVED_MAIL = /^[^@\s]+@(?:[\w-]+\.)*(?:example\.(?:com|org|net)|example|test|invalid|localhost)$/i;
+const RESERVED_MAIL = /^[^@\s/\\?#:]+@(?:[\w-]+\.)*(?:example\.(?:com|org|net)|example|test|invalid|localhost)$/i;
 /** A host name: labels of letters, digits and hyphens, the last one of letters only (a TLD; not a version, not a key). */
 const HOST_NAME = /^(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,62})?\.)+\p{L}{2,63}\.?(?::\d+)?(?:\/\S*)?$/u;
 const IPV4 = /^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?(?:\/\S*)?$/;
 const IPV6 = /^\[?([0-9a-f]*:[0-9a-f]*:[0-9a-f:.]*)\]?(?::\d+)?$/i;
-const URL_LIKE = /^(?:[a-z][\w+.-]*:)?\/\/(?:[^@/]*@)?(\[[^\]]*\]|[^:/?#]*)/i;
+const URL_LIKE = /^(?:[a-z][\w+.-]*:)?\/\/(?:[^@/?#\\]*@)?(\[[^\]]*\]|[^:/?#\\]*)/i;
 
+/**
+ * The hosts a word with a scheme or `//` names, read two ways: by hand (the authority cut at `/`, `\`, `?` or `#`
+ * before any `@` is looked for, so that `host#@localhost` names `host`), and by `new URL` once the backslashes are
+ * slashes and the missing `//` added. Both must be loopback.
+ */
+function urlHosts(rest: string): string[] {
+  const authority = rest.replace(/^[/\\]+/, '').split(/[/\\?#]/)[0]!;
+  const afterUser = authority.slice(authority.lastIndexOf('@') + 1);
+  const manual = /^\[[^\]]*\]/.exec(afterUser)?.[0] ?? afterUser.split(':')[0]!;
+  const hosts = [manual];
+  try { hosts.push(new URL(`http://${rest.replace(/\\/g, '/').replace(/^\/+/, '')}`).hostname); } catch { /* the manual reading stands */ }
+  return hosts.filter(Boolean);
+}
 const loopback = (host: string): boolean => LOOPBACK.test(host.replace(/^\[|\]$/g, ''));
 
 /**
@@ -101,7 +114,8 @@ const loopback = (host: string): boolean => LOOPBACK.test(host.replace(/^\[|\]$/
  */
 export function addressRefusal(key: string, value: string): string | null {
   const words = decoded(value).split(/[\s,;|"'`{}()<>]+/).filter(Boolean);
-  const addressKey = HOST_KEY.test(key) && !NOT_ADDRESS_KEY.test(key);
+  // `HOSTNAME`, `DB_HOSTNAME`, `SERVER_NAME` name a host, whatever their suffix; `DB_NAME` names a database.
+  const addressKey = HOST_KEY.test(key) && (!NOT_ADDRESS_KEY.test(key) || /(?:HOST_?NAME|SERVER_?NAME)$/i.test(key));
   let strictNext = false;
   for (const raw of words) {
     // A separator alone (`:` of a JSON object, `=`) is no word; an IPv6 address keeps its colons.
@@ -113,7 +127,11 @@ export function addressRefusal(key: string, value: string): string | null {
     const pair = /^([\w.-]+)=(.*)$/.exec(word);
     if (pair) { word = pair[2]!; strict ||= /^(?:host|hostaddr|hostname|server|addr)$/i.test(pair[1]!); if (!word) continue; }
     const url = URL_LIKE.exec(word);
-    if (url) { if (!loopback(url[1]!)) return 'adresse (URL) hors bouclage'; continue; }
+    if (url) {
+      const rest = word.replace(/^(?:[a-z][\w+.-]*:)?/i, '');
+      if (!loopback(url[1]!) || urlHosts(rest).some(h => !loopback(h))) return 'adresse (URL) hors bouclage';
+      continue;
+    }
     // An IPv6 address before anything that reads colons (`fe80::1` starts with letters).
     const v6first = IPV6.exec(word);
     if (v6first && (v6first[1]!.match(/:/g)?.length ?? 0) >= 2) { if (!loopback(v6first[1]!)) return 'adresse IPv6 hors bouclage'; continue; }
@@ -122,16 +140,17 @@ export function addressRefusal(key: string, value: string): string | null {
     if (hostPort && !/^\d+$/.test(hostPort[1]!)) { if (!loopback(hostPort[1]!)) return 'hôte:port hors bouclage'; continue; }
     // Any scheme, nested or not, with `//`, `/`, `\\` or nothing before the host (`http:host`, `jdbc:postgresql://host`).
     const schemes = SCHEMES.exec(word);
-    if (schemes && !word.includes('@') && schemes[2]) {
+    if (schemes && schemes[2]) {
       const rest = schemes[2]!;
-      const authority = rest.replace(/^[/\\]+/, '').split(/[/\\?#]/)[0]!;
-      const host = (/^\[[^\]]*\]/.exec(authority)?.[0] ?? authority.split(':')[0]!);
-      const urlish = /^[/\\]/.test(rest) || host.includes('.') || schemes[1]!.split(':').length > 2 || strict;
-      if (urlish && host) { if (!loopback(host)) return 'adresse (schéma:hôte) hors bouclage'; continue; }
+      const hosts = urlHosts(rest);
+      const urlish = /^[/\\]/.test(rest) || hosts.some(h => h.includes('.')) || rest.includes('@') || schemes[1]!.split(':').length > 2 || strict;
+      if (urlish && hosts.length) { if (hosts.some(h => !loopback(h))) return 'adresse (schéma:hôte) hors bouclage'; continue; }
     }
     if (word.includes('@')) {
       if (RESERVED_MAIL.test(word)) continue;
-      const host = word.slice(word.lastIndexOf('@') + 1).split(/[:/]/)[0]!;
+      // The authority ends at `/`, `\`, `?` or `#`: an `@` after it (fragment, query) names no host.
+      const segment = word.split(/[/\\?#]/)[0]!;
+      const host = segment.slice(segment.lastIndexOf('@') + 1).split(':')[0]!;
       if (!loopback(host)) return 'adresse (utilisateur@hôte ou e-mail hors domaine d\'exemple) hors bouclage';
       continue;
     }
