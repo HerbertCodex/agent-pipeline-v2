@@ -153,7 +153,7 @@ export declare function stageGates(gates: readonly Gate[], stage: GateStage): {
 /** Identity of the declared checks and passed variables, recorded in every receipt and compared by `apv gates verify`. */
 export declare function gatesConfigHash(config: ApvConfig): string;
 /** Why a full suite cannot start: ports of the suite held by others, declared stacks whose lock is held. */
-export declare function busyReasons(ports: PortsRecord | null, stacks: readonly ResolvedStack[], free?: (file: string) => boolean | null, previewPorts?: readonly number[]): string[];
+export declare function busyReasons(ports: PortsRecord | null, stacks: readonly ResolvedStack[], free?: (file: string) => boolean | null, previewPorts?: readonly number[], heldByUs?: (file: string) => boolean): string[];
 /** Share of its timeout beyond which a receipt warns (`nearTimeout`): 85 %. */
 export declare const NEAR_TIMEOUT = 0.85;
 /**

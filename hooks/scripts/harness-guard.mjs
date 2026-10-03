@@ -532,7 +532,7 @@ export function flockHeldBy(file, ancestors, locksPath = '/proc/locks') {
 /** The context of the real hook: lazy, each part read once and only when a rule needs it. */
 export function hookContext(input, env = process.env) {
   const cwd = typeof input?.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
-  let ancestors = null; let stacks = null;
+  let ancestors = null; let stacks = null; let apvProject = null;
   const context = {
     cwd,
     home: env.HOME ?? null,
@@ -553,6 +553,15 @@ export function hookContext(input, env = process.env) {
       return [...new Set([...(head && head.startsWith('origin/') ? [head.slice('origin/'.length)] : []), 'main', 'master'])];
     },
     currentBranch: () => git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
+    // Whether the tool is active here (docs/PLUGIN.md, « Portée des crochets »): the repository of the working directory,
+    // or the project of the session, declares `.apv/config.json` (or the V2 `pipeline.v2.json`). Unknown: active.
+    apvProject: () => {
+      if (apvProject !== null) return apvProject;
+      const roots = [git(cwd, ['rev-parse', '--show-toplevel']), typeof env.CLAUDE_PROJECT_DIR === 'string' && env.CLAUDE_PROJECT_DIR ? env.CLAUDE_PROJECT_DIR : null]
+        .filter(r => typeof r === 'string' && r);
+      if (!roots.length) return (apvProject = true);
+      return (apvProject = roots.some(r => existsSync(join(r, '.apv', 'config.json')) || existsSync(join(r, 'pipeline.v2.json'))));
+    },
     flockHeldByAncestor: file => flockHeldBy(file, context.ancestors()),
     leaseHeld: () => (env.APV_LOCK_HELD ?? '').split(',').map(x => x.trim()).filter(Boolean),
   };
@@ -561,4 +570,4 @@ export function hookContext(input, env = process.env) {
 
 /** A context where nothing is known: no ancestors, no stacks, no directory (the pure calls of the tests). */
 export const EMPTY_CONTEXT = { cwd: null, home: null, agentType: null, agentId: null, ancestors: () => [], stacks: () => [], flockHeldByAncestor: () => false, leaseHeld: () => [],
-  defaultBranches: () => ['main', 'master'], currentBranch: () => null };
+  defaultBranches: () => ['main', 'master'], currentBranch: () => null, apvProject: () => true };

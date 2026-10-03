@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -54,6 +55,7 @@ function project(t, { base = {}, change = {}, gates = [{ id: 'unit', stage: 'ful
   };
 }
 const rule = (report, id) => report.rules.find(r => r.rule === id);
+const spawnSyncOk = (cmd, args) => spawnSync(cmd, args, { stdio: 'ignore' }).status === 0;
 
 test('preuve: refused without the full suite at the exact commit, accepted once proven', async t => {
   const p = project(t, { change: { 'notes.txt': 'x\n' } });
@@ -447,4 +449,45 @@ test('review 99, MOYEN 9: in a stack, plan reads the rules of each PR on its own
     rules: async (p, base) => { seen.push([p.number, base]); return { problems: [], notes: [] }; } });
   assert.equal(plan.ok, true, JSON.stringify(plan.prs.map(p => p.anomalies)));
   assert.deepEqual(seen, [[11, 'main'], [12, 'spec/1'], [13, 'spec/2']]);
+});
+
+test('review 99, BAS 15: a suite launched under the lock of its stack holds it: not busy, its checks run under it', { skip: spawnSyncOk('flock', ['--version']) ? false : 'flock(1) missing' }, async t => {
+  const { flockHeldByAncestor } = await import('../dist/stacks/idle.js');
+  // Pure: the lock held by an ancestor of this process is ours; held by another process, it is not.
+  const root = mkdtempSync(join(tmpdir(), 'apv3-own-lock-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const lockFile = join(root, 'e2e.lock'); writeFileSync(lockFile, '');
+  const { statSync } = await import('node:fs');
+  const ino = statSync(lockFile).ino;
+  const locks = join(root, 'locks'); writeFileSync(locks, `1: FLOCK  ADVISORY  WRITE 4242 08:01:${ino} 0 EOF\n`);
+  assert.equal(flockHeldByAncestor(lockFile, new Set([4242]), locks), true);
+  assert.equal(flockHeldByAncestor(lockFile, new Set([7]), locks), false);
+  assert.equal(flockHeldByAncestor(lockFile, new Set([1]), join(root, 'absent')), false);
+  const stacks = [{ id: '1', lockFile: '/l/e2e.lock', config: {}, resource: null, envFile: null }];
+  assert.deepEqual(busyReasons(null, stacks, () => false, [], file => file === '/l/e2e.lock'), [], 'held by us');
+  assert.equal(busyReasons(null, stacks, () => false, [], () => false).length, 1, 'held by another');
+  // Real: flock <lock> apv gates run --stage full, with a check of that stack: the suite runs, the check under the lock.
+  const p = project(t, { gates: [{ id: 'e2e', stage: 'full', command: node('0'), lock: { file: lockFile } }], config: { stacks: [{ id: '1', lockFile }] } });
+  const cli = fileURLToPath(new URL('./support/cli-with-key.mjs', import.meta.url));
+  const { TEST_KEY_FILE } = await import('./support/rules.mjs');
+  const r = spawnSync('flock', ['-w', '5', lockFile, process.execPath, cli, TEST_KEY_FILE, 'gates', 'run', '--stage', 'full', '--json'], { cwd: p.repo, encoding: 'utf8', timeout: 60_000,
+    env: { ...process.env, APV_LOCK_POLL_MS: '20' } });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stderr, /déjà tenu par un processus parent de cette suite/);
+  assert.equal(JSON.parse(r.stdout).gates[0].status, 'passed');
+});
+
+test('review 99, BAS 16: the rule maquette reads the screens of a mockup with the parser of the registry, never in its title', async () => {
+  const { mockupsOf, covers } = await import('../dist/rules/screens.js');
+  const sha = 'a'.repeat(64);
+  const decision = value => ({ id: 'maquette-accueil-validee', subject: 'Maquette validée : accueil', value, enforcement: 'product', status: 'confirmed', source: 'operator', sourceQuote: 'je valide' });
+  // Hand-written: « Écrans : admin. » in the title, before the file and fingerprint: not a screen of the mockup.
+  const forged = mockupsOf([decision(`La maquette « Accueil Écrans : admin. », validée : fichier docs/design/accueil.html, sha256 ${sha}.`)]);
+  assert.deepEqual(forged[0].screens, []);
+  assert.equal(covers(forged[0], 'src/routes/admin/+page.svelte'), false);
+  const registered = mockupsOf([decision(`La maquette « Accueil », validée : fichier docs/design/accueil.html, sha256 ${sha}. Écrans : admin, réglages.`)]);
+  assert.deepEqual(registered[0].screens, ['admin', 'réglages']);
+  assert.equal(covers(registered[0], 'src/routes/admin/+page.svelte'), true);
+  // Not the operator's, or not confirmed: no mockup.
+  assert.deepEqual(mockupsOf([{ ...decision(`fichier x.html, sha256 ${sha}.`), source: 'agent' }, { ...decision(`fichier x.html, sha256 ${sha}.`), status: 'proposed' }]), []);
 });

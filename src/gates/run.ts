@@ -18,7 +18,7 @@ import { WEB_RECORD } from '../web/impact.js';
 import { publishRun, pruneStore, receiptRetention, sharedStore, type PruneResult } from './store.js';
 import { readPreviewState } from '../preview/state.js';
 import { repositoryWorktrees } from '../execution/procs.js';
-import { flockFree, markStacksUsed, resolveStacks, stacksOfLock, stoppedSince, type ResolvedStack } from '../stacks/idle.js';
+import { flockFree, flockHeldByAncestor, markStacksUsed, resolveStacks, stacksOfLock, stoppedSince, type ResolvedStack } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
 import { classifyFailures, type InfrastructureCause } from './infrastructure.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables, type SpreadPlan } from './spread.js';
@@ -206,10 +206,12 @@ const HELD_BY: Readonly<Record<string, string>> = {
 };
 
 /** Why a full suite cannot start: ports of the suite held by others, declared stacks whose lock is held. */
-export function busyReasons(ports: PortsRecord | null, stacks: readonly ResolvedStack[], free: (file: string) => boolean | null = flockFree, previewPorts: readonly number[] = []): string[] {
+export function busyReasons(ports: PortsRecord | null, stacks: readonly ResolvedStack[], free: (file: string) => boolean | null = flockFree, previewPorts: readonly number[] = [],
+  heldByUs: (file: string) => boolean = () => false): string[] {
   const out = (ports?.left ?? []).map(p => `port ${p.ports.join(', ')} tenu par le pid ${p.pid} (${HELD_BY[p.reason] ?? p.reason}${p.worktree ? ` : ${p.worktree}` : ''}) : ${p.command.slice(0, 100)}` +
     `${p.ports.some(port => previewPorts.includes(port)) ? ' ; c\'est le serveur de l\'aperçu vivant : apv preview stop (depuis le checkout qui l\'a lancé), puis relancer la suite' : ''}`);
-  for (const s of stacks) if (s.lockFile && free(s.lockFile) === false) out.push(`pile ${s.id} : son verrou (${s.lockFile}) est tenu`);
+  // A lock held by the caller itself (the suite launched under `flock <lockFile>`) is its own, not another's.
+  for (const s of stacks) if (s.lockFile && free(s.lockFile) === false && !heldByUs(s.lockFile)) out.push(`pile ${s.id} : son verrou (${s.lockFile}) est tenu`);
   return out;
 }
 
@@ -361,7 +363,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       // One full suite at a time on a test stack, and no e2e beside it: a port of the suite held by another copy,
       // the main checkout or a tool, or a declared stack whose lock is held, refuses the suite before anything runs.
       const previews = [repo, repositoryWorktrees(repo)[0] ?? repo].map(r => { try { return readPreviewState(r)?.port ?? null; } catch { return null; } }).filter((x): x is number => x !== null);
-      const busy = busyReasons(ports, options.config.stacks?.length ? resolveStacks(options.config, await commonPath(git, repo, '.')) : [], flockFree, previews);
+      const busy = busyReasons(ports, options.config.stacks?.length ? resolveStacks(options.config, await commonPath(git, repo, '.')) : [], flockFree, previews, file => flockHeldByAncestor(file));
       if (busy.length) {
         throw new PipelineError('GATE_BUSY', `Suite complète refusée, rien n'a été exécuté : ${busy.join(' ; ')}. Une autre suite, un e2e lancé par un agent ou un serveur ` +
           'utilise déjà la pile de test : deux exécutions en même temps rendent les tests instables. Attendre sa fin (apv lock status, apv stacks status), ' +
@@ -409,6 +411,14 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     }
     const keys = new Map<string, string>();
     const missingEnv = new Map<string, string[]>();
+    const heldAboveCache = new Map<string, boolean>();
+    const heldAbove = (file: string): boolean => {
+      if (!heldAboveCache.has(file)) {
+        heldAboveCache.set(file, flockHeldByAncestor(file));
+        if (heldAboveCache.get(file)) log(`Verrou ${file} déjà tenu par un processus parent de cette suite : les contrôles qui le demandent tournent sous lui, sans le reprendre.`);
+      }
+      return heldAboveCache.get(file)!;
+    };
     const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
     type Repeat = NonNullable<GateReceipt['repeat']>;
     type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'>>;
@@ -460,7 +470,9 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         // The record file of `apv web audit`, outside the environment identity too: emptied before each pass.
         rmSync(webRecord, { force: true });
         const passEnv = { ...(suite ? { ...checkEnv, [SUITE_MARKER]: runId } : checkEnv), [WEB_RECORD]: webRecord };
-        if (lock?.kind !== 'flock') {
+        // A kernel lock already held by an ancestor (the suite launched under `flock <file>`): held for the whole run,
+        // never taken again (a second flock on the same file from a child would wait for its own parent).
+        if (lock?.kind !== 'flock' || heldAbove(lock.file)) {
           const result = await runProcess({ command: argv, cwd: workspace, env: passEnv, timeoutMs, signal, maxOutputBytes: 1024 * 1024 });
           return { result, commandMs: result.durationMs, lockWaitMs: 0, lockError: null };
         }

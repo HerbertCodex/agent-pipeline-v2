@@ -210,25 +210,101 @@ export function substitutions(word) {
  * option (`git commit -m "…apv/reviews…"`, `gh pr create --body "$(cat <<'EOF' … EOF)"`, whose substitutions are read
  * as commands) and the body of a heredoc read by a data command (`cat <<EOF`). Any doubt reads the whole command.
  */
-export function anchorInCommand(command, depth = 0) {
+export function anchorInCommand(command) {
   if (typeof command !== 'string' || !namesAnchor(command)) return false;
-  if (depth > MAX_NESTING) return true;
+  return namesAnchor(executedText(command));
+}
+
+const leadOf = words => basename(commandWords(words)?.words[0] ?? words[0] ?? '');
+
+/**
+ * The text of a command that runs or names what it touches: its words, minus the values of message options (whose
+ * substitutions are read as commands, recursively), and minus the words of the simple commands `skip` says are only
+ * text. The body of a heredoc is data when a data command reads it; read by anything else (sh, node, patch...), or
+ * when `rawBodies` says so, the whole command is returned. Beyond the nesting depth, the whole command too.
+ */
+export function executedText(command, { skip = () => false, rawBodies = () => false } = {}, depth = 0) {
+  if (typeof command !== 'string') return '';
+  if (depth > MAX_NESTING) return command;
   const { segments, heredocOwners } = tokenize(command);
-  const lead = words => basename(commandWords(words)?.words[0] ?? words[0] ?? '');
-  if (heredocOwners.some(i => !DATA_SINKS.has(lead(segments[i] ?? [])))) return true;
+  if (heredocOwners.length && (heredocOwners.some(i => !DATA_SINKS.has(leadOf(segments[i] ?? []))) || rawBodies(segments))) return command;
   const kept = [];
   for (const words of segments) {
-    const options = MESSAGE_OPTIONS[lead(words)] ?? [];
+    if (skip(words)) continue;
+    const options = MESSAGE_OPTIONS[leadOf(words)] ?? [];
     for (let k = 0; k < words.length; k += 1) {
       const word = words[k];
       const attached = options.map(o => o.startsWith('--') ? `${o}=` : o).find(o => word.startsWith(o) && word.length > o.length && (o.endsWith('=') || o.length === 2));
       const value = k > 0 && options.includes(words[k - 1]) ? word : attached ? word.slice(attached.length) : null;
       if (value === null) { kept.push(word); continue; }
       if (attached) kept.push(attached);
-      for (const sub of substitutions(value)) if (anchorInCommand(sub, depth + 1)) return true;
+      for (const sub of substitutions(value)) kept.push(executedText(sub, { skip, rawBodies }, depth + 1));
     }
   }
-  return namesAnchor(kept.join(' '));
+  return kept.join(' ');
+}
+
+/** Commands that only search or print text: a merge named in their arguments is never run by them. */
+const SEARCH_COMMANDS = new Set(['echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'man', 'cat', 'less', 'more', 'head', 'tail', 'wc', 'sed', 'awk', 'ls', 'git']);
+/** A `gh api` call that only reads (GET, no field, no input): `gh api repos/o/r/pulls/5/merge` asks whether it is merged. */
+function readOnlyGhApi(words) {
+  const cw = commandWords(words)?.words ?? words;
+  if (basename(cw[0] ?? '') !== 'gh' || cw[1] !== 'api') return false;
+  const args = cw.slice(2);
+  const method = args.find((a, k) => args[k - 1] === '-X' || args[k - 1] === '--method') ?? args.find(a => a.startsWith('--method='))?.slice(9) ?? args.find(a => /^-X[A-Za-z]+$/.test(a))?.slice(2);
+  return (!method || method.toUpperCase() === 'GET') && !args.some(a => API_WRITE_FLAGS.has(a) || /^-[fF].+|^--(?:raw-)?field=|^--input=/.test(a));
+}
+/** A command that sends its standard input to an API (`gh api --input -`, `curl -d @-`): what feeds it is not only text. */
+const SENDS_STDIN = words => {
+  const cw = commandWords(words)?.words ?? words;
+  const tool = basename(cw[0] ?? '');
+  return (tool === 'gh' && cw.some((a, k) => (a === '--input' && cw[k + 1] === '-') || a === '--input=-')) ||
+    (['curl', 'wget', 'http', 'xh'].includes(tool) && cw.some(a => /@-$/.test(a)));
+};
+
+/**
+ * Whether a command merges a pull request through the API (mergePullRequest, enablePullRequestAutoMerge, a write to
+ * …/pulls/<n>/merge) by any client: read in what the command runs, never in what it only searches or prints (`grep -rn
+ * mergePullRequest src`), never in a read-only `gh api` call. A command that feeds an API from its standard input is read
+ * whole.
+ */
+export function mergeApiInCommand(command) {
+  const flat = flatten(command);
+  if (!MERGE_API.test(flat)) return false;
+  const { segments } = tokenize(command);
+  if (segments.some(SENDS_STDIN)) return true;
+  const text = executedText(command, {
+    skip: words => SEARCH_COMMANDS.has(leadOf(words)) || readOnlyGhApi(words),
+    rawBodies: segs => segs.some(w => !DATA_SINKS.has(leadOf(w)) || (leadOf(w) === 'gh' && (commandWords(w)?.words ?? w)[1] === 'api')),
+  });
+  return MERGE_API.test(flatten(text));
+}
+
+/**
+ * Why an `rm` reaches the stores of the tool, or null: a path in a Git directory's `apv` folder (`.git/apv`,
+ * `repo.git/apv/...`, read from the working directory), or a computed path that ends in `apv` (`$dir/apv`). A folder
+ * of the project named `apv` (`build/apv`) is not a store.
+ */
+export function removesStore(words, cwd = null) {
+  const cw = commandWords(words)?.words ?? words;
+  if (basename(cw[0] ?? '') !== 'rm') return null;
+  for (const arg of cw.slice(1).filter(a => !a.startsWith('-'))) {
+    if (/[$`]/.test(arg) && /\/apv\/?$/.test(arg)) return REASONS.anchorStore;
+    const path = isAbsolute(arg) || !cwd ? arg : resolve(cwd, arg);
+    if (/(^|\/)[^/]*\.git\/+apv(\/|$)/.test(path) || /(^|\/)\.git\/+apv(\/|$)/.test(arg)) return REASONS.anchorStore;
+  }
+  return null;
+}
+
+/**
+ * Whether a command decodes base64 and uses the result as a path or a command (docs/REGLES.md): inside a substitution
+ * (`$(echo … | base64 -d)`, backquotes) or piped into a shell, an interpreter or xargs. Decoding into a file or a reader
+ * (`base64 -d x > f`, `| jq`) is data.
+ */
+export function decodedAndUsed(command) {
+  const decode = String.raw`\bbase64\b[^)\x60;&]*(?:\s-d\b|\s-D\b|--decode)`;
+  if (new RegExp(String.raw`\$\([^)]*${decode}`).test(command) || new RegExp(String.raw`\x60[^\x60]*${decode}`).test(command)) return true;
+  return new RegExp(String.raw`${decode}[^|;&]*\|\s*(?:sudo\s+)?(?:env\s+)?(?:sh|bash|dash|zsh|ksh|node|nodejs|python3?|perl|ruby|php|xargs|eval|source|deno|bun)\b`).test(command);
 }
 
 const isAssignment = word => /^[A-Za-z_][A-Za-z0-9_]*=/.test(word);
@@ -356,10 +432,12 @@ const CD_HOME = /(?:^|[;&|(]\s*)cd(?:\s+(?:~\/?|\$HOME\/?|\$\{HOME\}\/?|\/home\/
  * Whether a command reaches the key folder by the home folder: handed whole to a walker (find ~, tar $HOME), a glob of
  * hidden entries of the home that could match `.apv-ancrage`, or the same glob relative after a `cd` to the home.
  */
-export function homeFolderProblem(words, flat) {
+export function homeFolderProblem(words, flat, active = true) {
   const cw = commandWords(words);
   const w = cw ? cw.words : words;
   const tool = basename(w[0] ?? '');
+  // Outside a project of the tool, a command that only sizes the home folder (du) never reads the key: allowed there.
+  if (!active && tool === 'du') return null;
   for (const m of flat.matchAll(HOME_HIDDEN_GLOB)) if (matchesKeyFolder(m[1], m[2])) return REASONS.homeFolder;
   if (CD_HOME.test(flat)) for (const m of flat.matchAll(RELATIVE_HIDDEN_GLOB)) if (matchesKeyFolder(m[1], m[2])) return REASONS.homeFolder;
   if (WALKERS.has(tool) && w.slice(1).some(a => HOME_ROOT.test(a))) return REASONS.homeFolder;
@@ -395,10 +473,12 @@ export function githubWrite(words) {
   const [group, sub] = positional(args.filter((a, k) => !['-R', '--repo'].includes(args[k - 1])));
   if (group === 'pr' && PR_WRITES.has(sub)) return { merge: sub === 'merge' };
   if (group === 'api') {
-    if (args.some(a => /(^|\/)pulls\/[^/\s]+\/merge\b/.test(a))) return { merge: true };
     const method = args.find((a, k) => (args[k - 1] === '-X' || args[k - 1] === '--method'))
       ?? args.find(a => a.startsWith('--method='))?.slice('--method='.length)
       ?? args.find(a => /^-X[A-Za-z]+$/.test(a))?.slice(2);
+    // GET …/pulls/<n>/merge only asks whether the PR is merged; PUT (or fields, which make gh send a POST) merges.
+    const writes = (method && method.toUpperCase() !== 'GET') || args.some(a => API_WRITE_FLAGS.has(a));
+    if (writes && args.some(a => /(^|\/)pulls\/[^/\s]+\/merge\b/.test(a))) return { merge: true };
     if ((method && method.toUpperCase() !== 'GET') || args.some(a => API_WRITE_FLAGS.has(a))) return { merge: false };
   }
   return null;
@@ -603,15 +683,22 @@ export function evaluateCommand(command, env = {}, context = EMPTY_CONTEXT) {
 
 function evaluate(command, env, context, depth, inherited) {
   if (typeof command !== 'string' || command.trim() === '') return { decision: 'allow' };
+  // Where the tool is active (a repository with .apv/config.json, docs/PLUGIN.md « Portée des crochets »), every rule;
+  // elsewhere, the rules that protect the key and the stores of every project, and the ones that held before the rules.
+  const active = context.apvProject ? context.apvProject() !== false : true;
   if (anchorInCommand(command)) return { decision: 'deny', reason: REASONS.anchorStore };
   const flat = flatten(command);
-  if (MERGE_API.test(flat)) return { decision: 'deny', reason: context.agentId ? REASONS.mergeBySubagent : REASONS.rawMerge };
-  if (/--git-common-dir/.test(flat) && !/^\s*git\s+rev-parse(\s+--path-format=(absolute|relative))?\s+--git-common-dir\s*$/.test(flat)) return { decision: 'deny', reason: REASONS.commonDir };
-  if (/(^|[\s;&|(])eval\b/.test(flat) && /\bapv\b|cli\.js/.test(flat)) return { decision: 'deny', reason: REASONS.computedApv };
+  if (mergeApiInCommand(command)) {
+    if (context.agentId) return { decision: 'deny', reason: REASONS.mergeBySubagent };
+    if (active) return { decision: 'deny', reason: REASONS.rawMerge };
+    if (env.APV_ALLOW_MERGE !== '1' && !/(^|\s)APV_ALLOW_MERGE=1\s/.test(flat)) return { decision: 'deny', reason: REASONS.merge };
+  }
+  if (active && /--git-common-dir/.test(flat) && !/^\s*git\s+rev-parse(\s+--path-format=(absolute|relative))?\s+--git-common-dir\s*$/.test(flat)) return { decision: 'deny', reason: REASONS.commonDir };
+  if (active && /(^|[\s;&|(])eval\b/.test(flat) && /\bapv\b|cli\.js/.test(flat)) return { decision: 'deny', reason: REASONS.computedApv };
   if (/\bAPV_ENTRY\b|\bAPV_ANCHOR_KEY_FILE\b/.test(flat)) return { decision: 'deny', reason: REASONS.toolVariable };
-  if (/\brm\b[^;&|]*(?:\.git\/+apv\b|\/apv\/?(?:\s|$))/.test(flat)) return { decision: 'deny', reason: REASONS.anchorStore };
-  if (/\bbase64\b[^|;&]*(?:\s-d\b|\s-D\b|--decode)/.test(flat) && /[|`]|\$\(/.test(flat)) return { decision: 'deny', reason: REASONS.encodedPath };
+  if (decodedAndUsed(command) || decodedAndUsed(flat)) return { decision: 'deny', reason: REASONS.encodedPath };
   const { segments, shadow } = tokenize(command);
+  for (const words of segments) { const store = removesStore(words, context.cwd ?? null); if (store) return { decision: 'deny', reason: store }; }
   let writesGithub = false;
   const kill = killProblem(segments, context.ancestors);
   if (kill) return { decision: 'deny', reason: kill };
@@ -633,11 +720,11 @@ function evaluate(command, env, context, depth, inherited) {
       if (nested.decision === 'deny') return nested;
     }
     if (isForcePush(words)) return { decision: 'deny', reason: REASONS.forcePush };
-    const code = pluginCodeProblem(words, flat, context.cwd ?? null) ?? homeFolderProblem(words, flat);
+    const code = pluginCodeProblem(words, flat, context.cwd ?? null) ?? homeFolderProblem(words, flat, active);
     if (code) return { decision: 'deny', reason: code };
     const cwords = commandWords(words)?.words ?? words;
-    if (nestedClaude(cwords, flat)) return { decision: 'deny', reason: REASONS.nestedClaude };
-    const pushed = pushToDefault(words, (context.defaultBranches ?? (() => ['main', 'master']))(), (context.currentBranch ?? (() => null))());
+    if (active && nestedClaude(cwords, flat)) return { decision: 'deny', reason: REASONS.nestedClaude };
+    const pushed = active ? pushToDefault(words, (context.defaultBranches ?? (() => ['main', 'master']))(), (context.currentBranch ?? (() => null))()) : null;
     if (pushed) return { decision: 'deny', reason: REASONS.pushToDefault(pushed) };
     const apvArgs = apvArguments(words);
     if (apvArgs && positional(apvArgs).slice(0, 2).some(w => /[$`]/.test(w))) return { decision: 'deny', reason: REASONS.computedApv };
@@ -648,8 +735,9 @@ function evaluate(command, env, context, depth, inherited) {
     if (write) {
       writesGithub = true;
       if (write.merge && context.agentId) return { decision: 'deny', reason: REASONS.mergeBySubagent };
-      // A merge through gh skips the rules the tool checks before any merge: only apv stack merge merges.
-      if (raw?.merge) return { decision: 'deny', reason: REASONS.rawMerge };
+      // A merge through gh skips the rules the tool checks before any merge: only apv stack merge merges (where the tool
+      // is active; elsewhere, gh pr merge needs APV_ALLOW_MERGE=1, as before the rules).
+      if (raw?.merge && active) return { decision: 'deny', reason: REASONS.rawMerge };
       if (write.merge && !authorised(words, 'APV_ALLOW_MERGE', env)) return { decision: 'deny', reason: REASONS.merge };
     }
     if (isProductionDeploy(words) && !authorised(words, 'APV_ALLOW_DEPLOY', env)) {

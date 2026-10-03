@@ -13,7 +13,10 @@ export interface Mockup {
     paths: string[];
     sourceQuote: string;
 }
-/** The confirmed operator mockups of a ledger. */
+/**
+ * The confirmed operator mockups of a ledger, read by the registry's parser (`mockupDecision`): the screens of a
+ * registered mockup are those `apv design register` wrote after its file and fingerprint, never words of its title.
+ */
 export declare function mockupsOf(decisions: readonly Decision[]): Mockup[];
 /** Whether a mockup covers a screen file: a path of its scope matches the file, or its name or one of its screens names its route. */
 export declare function covers(mockup: Mockup, path: string): boolean;

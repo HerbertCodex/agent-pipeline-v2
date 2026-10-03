@@ -4,7 +4,7 @@ import { hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { suiteSettings } from '../config/load.js';
 import { errorMessage } from '../domain/errors.js';
-import { listeningInodes } from '../execution/procs.js';
+import { listeningInodes, protectedPids } from '../execution/procs.js';
 import { runProcess } from '../execution/process.js';
 import { LockStore, defaultLockDir } from '../lock/store.js';
 import { gitRead } from '../run/git-probe.js';
@@ -120,6 +120,31 @@ function lastLeaseEvent(dir, resource) {
     return last;
 }
 /** Whether the flock of `file` is free now: taken and released at once (`flock -n`). Null when unknown. */
+/**
+ * Whether a kernel lock (`flock`) on `file` is held by this process or one of its ancestors (read in `/proc/locks`):
+ * a suite launched under the lock of its stack (`flock <lockFile> apv gates run ...`) holds it already. Init (pid 1) is
+ * never counted. False when unreadable (another system, file absent): the lock then counts as another's.
+ */
+export function flockHeldByAncestor(file, ancestors = protectedPids(), locksPath = '/proc/locks') {
+    let locks;
+    let inode;
+    try {
+        locks = readFileSync(locksPath, 'utf8');
+        inode = statSync(file).ino;
+    }
+    catch {
+        return false;
+    }
+    for (const line of locks.split('\n')) {
+        const fields = line.trim().split(/\s+/);
+        if (fields[1] !== 'FLOCK' || fields[3] !== 'WRITE')
+            continue;
+        const pid = Number(fields[4]);
+        if (pid > 1 && ancestors.has(pid) && Number(fields[5]?.split(':')[2]) === inode)
+            return true;
+    }
+    return false;
+}
 export function flockFree(file) {
     if (!existsSync(file))
         return true;

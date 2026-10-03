@@ -60,6 +60,12 @@ export declare function stacksOfLock(stacks: readonly ResolvedStack[], lock: {
     file: string;
 }): string[];
 /** Whether the flock of `file` is free now: taken and released at once (`flock -n`). Null when unknown. */
+/**
+ * Whether a kernel lock (`flock`) on `file` is held by this process or one of its ancestors (read in `/proc/locks`):
+ * a suite launched under the lock of its stack (`flock <lockFile> apv gates run ...`) holds it already. Init (pid 1) is
+ * never counted. False when unreadable (another system, file absent): the lock then counts as another's.
+ */
+export declare function flockHeldByAncestor(file: string, ancestors?: ReadonlySet<number>, locksPath?: string): boolean;
 export declare function flockFree(file: string): boolean | null;
 export interface ProbeContext {
     repo: string;

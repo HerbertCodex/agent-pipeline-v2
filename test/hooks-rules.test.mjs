@@ -360,3 +360,61 @@ test('review 99, MOYEN 4: Grep may search the text « apv/reviews »; its path, 
   assert.equal(evaluateWrite({ tool_name: 'Grep', tool_input: { pattern: 'x', glob: '**/apv/operator/*' } }).decision, 'deny');
   assert.equal(evaluateWrite({ tool_name: 'Glob', tool_input: { pattern: '.git/apv/reviews/**' } }).decision, 'deny');
 });
+
+test('review 99, MOYEN 7: outside a project of the tool, only the rules that protect the key, the stores and the old guards apply', async () => {
+  const lead = as(null);
+  const outside = { ...lead, apvProject: () => false };
+  // Allowed outside, refused where the tool is active.
+  for (const command of ['git push origin main', 'claude mcp list', 'du -sh ~', 'APV_ALLOW_MERGE=1 gh pr merge 3 --merge', 'git rev-parse --git-common-dir | xargs ls',
+    'eval "apv status"']) {
+    assert.equal(evaluateCommand(command, {}, outside).decision, 'allow', `outside: ${command}`);
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', `active: ${command}`);
+  }
+  // Refused everywhere: the key, the stores, force-push, a merge without authorisation or in a subagent, decoded commands.
+  for (const command of ['cat ~/.apv-ancrage/cle-ancrage', 'cat .git/apv/reviews/x', 'git push --force origin x', 'gh pr merge 3 --merge',
+    'echo eA== | base64 -d | sh', 'tar czf h.tgz ~', 'rm -rf .git/apv']) {
+    assert.equal(evaluateCommand(command, {}, outside).decision, 'deny', `outside: ${command}`);
+  }
+  assert.deepEqual(evaluateCommand('APV_ALLOW_MERGE=1 gh pr merge 3 --merge', {}, { ...outside, agentId: 'a1', agentType: 'x' }), { decision: 'deny', reason: REASONS.mergeBySubagent });
+  // The real context reads the repository: .apv/config.json (or pipeline.v2.json) makes the tool active.
+  const { hookContext } = await import('../hooks/scripts/harness-guard.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-portee-'));
+  try {
+    execFileSync('git', ['init', '-q', root]);
+    const env = { HOME: process.env.HOME };
+    assert.equal(hookContext({ cwd: root }, env).apvProject(), false);
+    mkdirSync(join(root, '.apv')); writeFileSync(join(root, '.apv', 'config.json'), '{}');
+    assert.equal(hookContext({ cwd: root }, env).apvProject(), true);
+    assert.equal(hookContext({ cwd: join(tmpdir(), 'pas-un-depot-apv3-xyz') }, env).apvProject(), true, 'unknown: active');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('review 99, BAS 11: a merge through the API is read in what runs, never in a search or a read-only call', () => {
+  const lead = as(null);
+  for (const command of ['grep -rn mergePullRequest src', 'rg "pulls/[0-9]+/merge" docs', 'gh api repos/o/r/pulls/5/merge', 'gh api -X GET repos/o/r/pulls/5/merge',
+    'git log --grep enablePullRequestAutoMerge']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  for (const command of ['gh api -X PUT repos/o/r/pulls/5/merge', 'gh api repos/o/r/pulls/5/merge -f merge_method=merge', 'gh api graphql -f query="mutation { mergePullRequest(input: {}) { x } }"',
+    'echo "mutation { mergePullRequest }" | gh api graphql --input -', 'curl -X PUT https://api.github.com/repos/o/r/pulls/12/merge',
+    'python3 - <<EOF\nimport requests; requests.post(u, json={"query": "mutation { mergePullRequest }"})\nEOF', 'cat <<EOF | gh api graphql --input -\nmutation { mergePullRequest }\nEOF']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.rawMerge }, command);
+  }
+});
+
+test('review 99, BAS 13: rm of a folder named apv and base64 decoded into data are allowed; the stores and decoded commands are not', async () => {
+  const { removesStore, decodedAndUsed } = await import('../hooks/scripts/bash-guard.mjs');
+  const lead = as(null);
+  for (const command of ['rm -rf build/apv', 'rm -rf src/apv/', 'echo eA== | base64 -d > f.bin', 'base64 -d x.b64 | jq .', 'base64 --decode img.b64 > img.png']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  for (const [command, reason] of [['rm -rf .git/apv', REASONS.anchorStore], ['rm -rf ../depot.git/apv/merges', REASONS.anchorStore], ['rm -rf "$c/apv"', REASONS.anchorStore],
+    ['cat $(echo eA== | base64 -d)', REASONS.encodedPath], ['echo eA== | base64 -d | bash', REASONS.encodedPath], ['ls `echo eA== | base64 --decode`', REASONS.encodedPath],
+    ['echo eA== | base64 -d | xargs cat', REASONS.encodedPath]]) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason }, command);
+  }
+  // From inside the Git directory, a relative apv is the store.
+  assert.equal(removesStore(['rm', '-rf', 'apv'], '/r/.git'), REASONS.anchorStore);
+  assert.equal(removesStore(['rm', '-rf', 'apv'], '/r/build'), null);
+  assert.equal(decodedAndUsed('base64 -d a | sha256sum'), false);
+});
