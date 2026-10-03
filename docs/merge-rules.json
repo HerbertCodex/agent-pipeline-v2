@@ -1,0 +1,18 @@
+{
+  "about": "Règles vérifiées avant toute fusion (docs/REGLES.md), lues par apv status pour dire, avant une mise à jour, ce qu'une version ajoute et ce qu'elle exige. Une règle ajoutée ici porte la version qui l'introduit ; la version du plugin change avec elle.",
+  "needs": {
+    "plugin": "le plugin APV installé et activé dans Claude Code (ses crochets tournent dans chaque session)",
+    "cle": "la clé d'ancrage ~/.apv-ancrage/cle-ancrage, sauvegardée hors de la machine",
+    "relecteurs": "les agents relecteurs du plugin (apv:qa-securite, apv:qa-fidelite, apv:architecte-donnees, apv:dpo), dont le sceau vient du crochet",
+    "journal": "les mots de l'opérateur, tapés dans la session principale (journal signé par le crochet)",
+    "suite": "une suite complète prouvée au commit exact (apv gates run --stage full)"
+  },
+  "rules": [
+    { "id": "preuve", "since": "3.0.0-alpha.12", "needs": ["suite"], "summary": "suite complète prouvée au commit exact, contrôles de la base compris" },
+    { "id": "instable", "since": "3.0.0-alpha.12", "needs": ["suite"], "summary": "aucun contrôle réussi seulement après relance" },
+    { "id": "relecture", "since": "3.0.0-alpha.12", "needs": ["plugin", "cle", "relecteurs"], "summary": "chaque domaine retenu par apv review plan relu et scellé au commit, sans constat critique ni haut" },
+    { "id": "captures", "since": "3.0.0-alpha.12", "needs": ["plugin", "cle", "relecteurs"], "summary": "captures de la relecture de fidélité pour un changement d'interface" },
+    { "id": "controles", "since": "3.0.0-alpha.12", "needs": [], "summary": "contrôles requis présents et obligatoires : reuse, code-map et structure pour un projet web, et ceux de rules.requiredGates" },
+    { "id": "maquette", "since": "3.0.0-alpha.12", "needs": ["plugin", "cle", "journal"], "summary": "chaque écran ajouté ou modifié couvert par une maquette validée par l'opérateur (déjà sur la cible, ou validée par ses mots tapés dans la session : le journal ne sert qu'à ce second cas)" }
+  ]
+}

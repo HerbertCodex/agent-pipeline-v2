@@ -36,6 +36,34 @@ ou dans un terminal : `claude plugin marketplace add HerbertCodex/agent-pipeline
 
 Le plugin livre l'outil compilé et son exécutable `bin/apv`. Dans Claude Code, `apv` est sur le PATH des commandes Bash. Pour ton terminal, fais un lien : `ln -s "<dossier du plugin>/bin/apv" ~/.local/bin/apv` (le dossier est le `installPath` de `apv@herbertcodex-apv` dans `~/.claude/plugins/installed_plugins.json`), puis vérifie : `apv --version`.
 
+## Redémarrer : nouvelle machine, ou clé d'ancrage perdue
+
+Sans plugin actif, un projet sous APV tourne **sans ses crochets** : pas de sceau des relectures, pas de journal de l'opérateur, pas de garde-fous. Ses agents n'ont plus ni les compétences `/apv:*` ni les agents `apv:*`, et aucune fusion ne passe les règles. Fais ces étapes **dans ton terminal**, dans l'ordre, avant d'ouvrir une session dans un projet.
+
+1. **Le pipeline et son plugin.** Avec une marketplace locale, le plugin suit la copie que tu as sur la machine :
+   ```
+   git clone https://github.com/HerbertCodex/agent-pipeline-v2 ~/agent-pipeline-v2 && git -C ~/agent-pipeline-v2 switch apv3
+   claude plugin marketplace add ~/agent-pipeline-v2
+   claude plugin install apv@herbertcodex-apv
+   ```
+   Fais-le dans un terminal : l'extension VS Code n'a pas `/plugin`. Ouvre ensuite une **nouvelle** session, car une session déjà ouverte ne charge pas le plugin. Mets aussi `apv` sur le PATH (lien ci-dessus) et connecte `gh` (`gh auth status`).
+2. **La clé d'ancrage, avant la première session.** Elle signe le journal de l'opérateur, les sceaux des relectures et les traces de fusion. Elle vit hors de tout dépôt, dans `~/.apv-ancrage/cle-ancrage`, où `~` est le dossier de ton compte : l'outil le lit dans la base des comptes, jamais dans `HOME`. Les agents ne doivent pas y toucher, et les crochets refusent les commandes qui la nomment : chaque commande sur la clé se tape dans ton terminal.
+   - **Sauvegarder**, dès qu'elle existe (`apv status` le rappelle la première semaine) : `base64 -w0 ~/.apv-ancrage/cle-ancrage` (sur macOS : `base64 -i ~/.apv-ancrage/cle-ancrage`), puis range la sortie dans ton gestionnaire de mots de passe.
+   - **Restaurer**, sur une nouvelle machine, avant d'écrire le moindre message dans une session : `mkdir -p -m 700 ~/.apv-ancrage && base64 -d > ~/.apv-ancrage/cle-ancrage`, colle la sauvegarde, puis Entrée et Ctrl-D (la clé ne passe ainsi pas par l'historique du shell), et enfin `chmod 400 ~/.apv-ancrage/cle-ancrage`. Sans clé, le premier message de l'opérateur en crée une nouvelle dans tout projet qui n'a encore rien de signé. C'est le cas d'un clone neuf : ses magasins (`<répertoire git commun>/apv/`) restent sur l'ancienne machine, car Git ne les pousse pas. La restauration doit donc passer avant.
+   - **Garder l'historique**, au besoin : copie les magasins `<répertoire git commun>/apv/` de chaque projet depuis l'ancienne machine, dans ton terminal, avec `rsync -a` (qui garde leurs droits 0600 et 0700). Supprime-les ensuite de l'ancienne machine : le journal de l'opérateur qu'ils contiennent n'y serait plus purgé. Sans ces magasins, les relectures des PR ouvertes se refont, et `apv audit merges` ne connaît plus les fusions passées.
+   - **Clé perdue sans sauvegarde** : plus rien de signé n'est accepté dans les projets qui gardent son empreinte. Cela vaut pour les validations citées depuis le journal, les relectures scellées et les traces de fusion. La clé ne se recrée jamais en silence. Dernier recours, dans ton terminal, pour chaque projet concerné :
+     1. supprime le journal de l'opérateur, `rm -rf "$(git rev-parse --git-common-dir)/apv/operator"`. Sans la clé, il ne sert plus à rien, et une archive échapperait à sa purge à 90 jours ;
+     2. si tu veux garder une trace, archive les relectures et les traces de fusion, `mv "$(git rev-parse --git-common-dir)/apv" ~/apv-archive-<projet>`, et supprime l'archive dès qu'elle ne sert plus ; sinon, supprime-les aussi.
+
+     Une nouvelle clé se crée alors au premier message. Il faut ensuite refaire les relectures des PR ouvertes et retaper les validations, et l'audit des fusions repart de zéro. Sauvegarde aussitôt la nouvelle clé.
+3. **Vérifier**, dans chaque projet : `apv status` (ou `/apv:status` dans la session) doit montrer :
+   - `Plugin : apv@herbertcodex-apv <version>`, sans « ATTENTION » (plugin absent ou désactivé : la ligne donne la commande à lancer) ;
+   - aucune ligne « règles de fusion que le plugin installé ne connaît pas ». Si elle apparaît, mets le plugin à jour avec la commande qu'elle donne ;
+   - après un premier message tapé dans la session, `Journal de l'opérateur : 1 message(s) …` et aucune « ATTENTION » sur la clé.
+4. **Mettre à jour le pipeline** : d'abord `git -C ~/agent-pipeline-v2 fetch`, puis `apv status`. La ligne « Mise à jour à venir » liste les nouvelles règles de fusion et ce qu'elles exigent (plugin, clé, relecteurs). Réunis ces conditions avant la mise à jour, puis mets à jour l'outil et le plugin ensemble : `git -C ~/agent-pipeline-v2 pull`, puis `claude plugin marketplace update herbertcodex-apv && claude plugin update apv@herbertcodex-apv`, puis une nouvelle session. Une mise à jour de l'outil seul applique les nouvelles règles avant que les crochets sachent les remplir, et les fusions se bloquent (projet pilote, nuit du 2 au 3 octobre 2026).
+
+**Une PR du pipeline se travaille depuis une session ouverte dans le dépôt du pipeline**, jamais depuis la session d'un projet. Depuis une autre session, les crochets refusent d'exécuter le code du plugin, et, avec un plugin antérieur à la correction du sceau (PR #105), une relecture enregistrée là-bas se scelle dans le dépôt de la session au lieu de celui de la PR.
+
 ## Démarrer un projet
 
 Depuis la racine du dépôt (Git, dépôt distant `origin`) :

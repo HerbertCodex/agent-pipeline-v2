@@ -627,7 +627,7 @@ export function hookContext(input, env = process.env) {
       const root = git(cwd, ['rev-parse', '--show-toplevel']);
       if (apvProject === null) {
         const project = typeof env.CLAUDE_PROJECT_DIR === 'string' && env.CLAUDE_PROJECT_DIR ? env.CLAUDE_PROJECT_DIR : null;
-        // No repository at all (neither the working directory nor the project of the session): active.
+        // The working directory in no repository: active (whatever the project of the session).
         apvProject = !root || projectOfTool(root) || (project !== null && projectOfTool(project));
       }
       if (apvProject) return true;

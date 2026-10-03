@@ -10,16 +10,19 @@ import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
 import { localTime } from '../domain/time.js';
 import { anchorLines, anchorStatus } from '../rules/anchor-status.js';
+import { pluginLines, pluginStatus } from '../rules/plugin-status.js';
 import { processGh } from '../stack/github.js';
 
 export const usage = `Utilisation :
   apv status [--repo <chemin>] [--json]
 
 Résume l'état de .apv/ : configuration, registre des décisions (empreinte), specs de .apv/specs/,
-état de reprise de .apv/state/, une ligne par exécution en cours (apv run) et dernier relevé de quota ; puis les
-ancrages des règles avant fusion : journal de l'opérateur (messages reçus, ou pourquoi aucun), protection de la
-branche par défaut sur GitHub (gh api ; indisponible en plan gratuit pour un dépôt privé, dit une fois), audit des
-fusions faites hors de apv stack merge (apv audit merges).`;
+état de reprise de .apv/state/, une ligne par exécution en cours (apv run) et dernier relevé de quota ; le plugin
+de Claude Code (installé, activé, sa version face à celle de l'outil), les règles de fusion que le plugin installé
+ne connaît pas encore et celles qu'apporte la prochaine version de l'outil (branche suivie, telle que récupérée) ;
+puis les ancrages des règles avant fusion : journal de l'opérateur (messages reçus, ou pourquoi aucun), protection
+de la branche par défaut sur GitHub (gh api ; indisponible en plan gratuit pour un dépôt privé, dit une fois),
+audit des fusions faites hors de apv stack merge (apv audit merges).`;
 
 function files(dir: string): string[] {
   if (!existsSync(dir)) return [];
@@ -85,7 +88,9 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     if (positionals.length) throw new UsageError(`argument inattendu : ${positionals.join(' ')}`);
     const status = apvStatus(repoPath(io, values.repo));
     const anchor = await anchorStatus(status.repo, processGh(io.env['APV_GH'] || 'gh', io.env, status.repo)).catch(() => null);
-    if (values.json) { json(io, { ...status, anchor }); return EXIT.ok; }
+    let plugin: ReturnType<typeof pluginStatus> | null = null;
+    try { plugin = pluginStatus(status.repo, io.env); } catch { plugin = null; }
+    if (values.json) { json(io, { ...status, plugin, anchor }); return EXIT.ok; }
     const c = status.config;
     const q = status.quota;
     const active = status.runs.filter(isActiveRun);
@@ -103,6 +108,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       ...(status.runsUnread ? [`- ${unreadRunsLine(status.runsUnread)}`] : []),
       `Quota : ${q ? `${localTime(q.at)} ; session ${q.session ? `${q.session.percent} %` : '?'} ; semaine ${q.week ? `${q.week.percent} %` : '?'} ; niveau ${q.level}` : 'aucun relevé'}`,
     ];
+    if (plugin) lines.push(...pluginLines(plugin));
     if (anchor) lines.push(...anchorLines(anchor));
     io.stdout(`${lines.map(l => l.trimEnd()).join('\n')}\n`);
     return EXIT.ok;
