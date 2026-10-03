@@ -15,12 +15,11 @@ export async function anchorStatus(repo, gh) {
 export function journalLines(j) {
     const kept = j.messages ? `${j.messages} message(s) de l'opérateur signé(s), dernier le ${j.last.slice(0, 16).replace('T', ' ')}` : 'aucun message de l\'opérateur reçu';
     const lines = [`Journal de l'opérateur : ${kept}${j.ignored ? ` ; ${j.ignored} ligne(s) non signée(s) ou altérée(s), ignorée(s)` : ''}.`];
-    // A refusal of the seal hook (a review it could not seal) is said always, under its own label.
-    const sealRefusal = j.refused && /^relecture\b/.test(j.refused.reason) ? j.refused : null;
-    if (sealRefusal)
-        lines.push(`  ATTENTION : le crochet du sceau n'a pas scellé une relecture (${sealRefusal.at.slice(0, 16).replace('T', ' ')}) : ${sealRefusal.reason}.`);
+    // Each review the seal hook could not seal is said always, under its own label, whatever message was refused since.
+    for (const s of j.sealRefusals ?? [])
+        lines.push(`  ATTENTION : le crochet du sceau n'a pas scellé une relecture (${s.at.slice(0, 16).replace('T', ' ')}) : ${s.reason}.`);
     if (!j.messages) {
-        lines.push(j.refused && !sealRefusal
+        lines.push(j.refused
             ? `  Le crochet a refusé le dernier message (${j.refused.at.slice(0, 16).replace('T', ' ')}) : ${j.refused.reason}. Seuls comptent les messages tapés dans la session de l'opérateur : champ source user ou tty, ou, sans ce champ, une session Claude Code de premier niveau, pas en mode -p. Un message refusé n'entre pas au journal : une dérogation ou une validation se tape dans la session principale.`
             : '  Rien reçu encore : le plugin est-il activé dans cette session (/plugin) ? Le journal se remplit quand l\'opérateur écrit dans la session.');
     }

@@ -115,15 +115,16 @@ export function claudeDir(env) {
 /**
  * The settings files that apply in `repo`, in order of precedence (the last wins), as Claude Code ranks them: account,
  * the project file of `repo` (read in the folder of the session), then the local file. In a worktree, Claude Code keeps
- * and reads the local file at the root of the main checkout, never the worktree's own (code.claude.com/docs/en/settings,
- * « Where Claude Code keeps the local file in a git repository »).
+ * the local file at the root of the main checkout; one left in the worktree by an earlier version is still read, below
+ * it (code.claude.com/docs/en/settings, « Where Claude Code keeps the local file in a git repository »).
  */
 const settingsFiles = (dir, repo) => {
     if (!repo)
         return [join(dir, 'settings.json')];
     const main = mainCheckout(repo);
-    const local = main && main !== resolve(repo) ? main : repo;
-    return [join(dir, 'settings.json'), join(repo, '.claude', 'settings.json'), join(local, '.claude', 'settings.local.json')];
+    const worktree = main !== null && main !== resolve(repo);
+    return [join(dir, 'settings.json'), join(repo, '.claude', 'settings.json'), join(repo, '.claude', 'settings.local.json'),
+        ...(worktree ? [join(main, '.claude', 'settings.local.json')] : [])];
 };
 /**
  * The install of the plugin for this account, or null: an entry `apv@<marketplace>` of installed_plugins.json for the

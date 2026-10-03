@@ -257,8 +257,7 @@ export function journalState(common) {
         lines = [];
     }
     const ok = lines.map(l => verified(l, key)).filter((e) => e !== null);
-    // The latest note: a refused message, or a review the seal hook could not seal.
-    const notes = [join(common, ...OPERATOR_REFUSED), ...sealNotes(common).map(n => n.file)].map(note => {
+    const read = (note) => {
         try {
             const r = JSON.parse(readFileSync(note, 'utf8'));
             return typeof r.at === 'string' && typeof r.reason === 'string' ? { at: r.at, reason: r.reason.slice(0, 300) } : null;
@@ -266,9 +265,14 @@ export function journalState(common) {
         catch {
             return null;
         }
-    }).filter((n) => n !== null);
-    const refused = notes.sort((a, b) => a.at.localeCompare(b.at)).at(-1) ?? null;
-    return { file, key: key !== null, keyProblem: anchor.problem, keyCreatedAt: anchor.createdAt, messages: ok.length, ignored: lines.length - ok.length, last: ok.at(-1)?.at ?? null, refused };
+    };
+    // `refused.json` holds the last refused message, or a seal note of the first versions (`relecture …`).
+    const single = read(join(common, ...OPERATOR_REFUSED));
+    const sealed = single && /^relecture\b/.test(single.reason) ? [single] : [];
+    const sealRefusals = [...sealed, ...sealNotes(common).map(n => read(n.file)).filter((n) => n !== null)]
+        .sort((a, b) => a.at.localeCompare(b.at));
+    return { file, key: key !== null, keyProblem: anchor.problem, keyCreatedAt: anchor.createdAt, messages: ok.length, ignored: lines.length - ok.length, last: ok.at(-1)?.at ?? null,
+        refused: sealed.length ? null : single, sealRefusals };
 }
 /** The notes of the seal hook, one file per review it could not seal (several reviewers run at once: no shared file). */
 function sealNotes(common) {
@@ -288,37 +292,77 @@ function writeWhole(file, content) {
     renameSync(temporary, file);
 }
 /**
- * Forgets the notes of the seal hook once the review `id` of `domain` is sealed: the note about that review, and those
- * about earlier reviews of the same domain, which this one replaces (each record gets a new id, so a note kept for its
- * own id only would stay for good; the unsealed record itself is still said by `apv review show`). A note about another
- * domain, or a refused message, stays. A note of the former single file (`refused.json`) is forgotten the same way.
+ * Forgets the notes of the seal hook once the review `id` of `domain` at `commit` is sealed: the note about that review,
+ * and those about earlier reviews of the same domain at the same commit, which this one replaces (each record gets a new
+ * id, so a note kept for its own id only would stay for good; the unsealed record itself is still said by `apv review
+ * show`). A note about another domain or another commit, or a refused message, stays.
  */
-export function clearSealRefusal(common, id, domain = null) {
-    for (const note of sealNotes(common)) {
-        let noteDomain = null;
-        try {
-            noteDomain = JSON.parse(readFileSync(note.file, 'utf8')).domain;
-        }
-        catch { /* unreadable: by its id only */ }
-        if (note.id === id || (domain !== null && noteDomain === domain))
-            rmSync(note.file, { force: true });
-    }
+export function clearSealRefusal(common, id, domain = null, commit = null, now = new Date()) {
+    forgetSealNotes(common, note => note.id === id || (domain !== null && note.domain === domain && sameCommit(note.commit, commit)), now);
+    // A seal note of the versions before one file per note, kept in `refused.json` (`relecture non scellée : …`,
+    // `relecture <id> non scellée : …`): no new one is written there, so the first seal lifts it.
     const file = join(common, ...OPERATOR_REFUSED);
     try {
         const r = JSON.parse(readFileSync(file, 'utf8'));
-        if (typeof r.reason !== 'string')
-            return;
-        const sameDomain = domain !== null && /^relecture \S+ \(([\w-]+)\) /.exec(r.reason)?.[1] === domain;
-        if (r.reason.startsWith(`relecture ${id} `) || sameDomain)
+        if (typeof r.reason === 'string' && /^relecture\b/.test(r.reason))
             rmSync(file, { force: true });
     }
     catch { /* no note */ }
 }
-/** Notes, for `apv status`, that the seal hook could not seal the review `id` of `domain`: date, id, domain and reason. */
-export function recordSealRefusal(common, id, domain, reason, now = new Date()) {
+/**
+ * Whether a note about `noted` (the commit the review was recorded at, as known when the note was written) is about the
+ * sealed `commit`. A note that knows no commit (`--commit HEAD`, a record not found) goes with any of its domain.
+ */
+function sameCommit(noted, commit) {
+    if (typeof noted !== 'string' || !/^[0-9a-f]{7,40}$/.test(noted))
+        return true;
+    return commit !== null && (commit.startsWith(noted) || noted.startsWith(commit));
+}
+/**
+ * Removes the notes `drop` picks, and in any case those older than the journal keeps its lines (`DEFAULT_JOURNAL_DAYS`)
+ * and the temporary files a stopped hook left behind: no note stays for good.
+ */
+function forgetSealNotes(common, drop, now) {
+    const dir = join(common, ...OPERATOR_SEAL_NOTES);
+    let names = [];
+    try {
+        names = readdirSync(dir);
+    }
+    catch {
+        return;
+    }
+    for (const name of names) {
+        const file = join(dir, name);
+        try {
+            // A temporary file younger than a minute may be a note being written by another hook.
+            const age = now.getTime() - statSync(file).mtimeMs;
+            if (age > DEFAULT_JOURNAL_DAYS * 86_400_000 || (name.endsWith('.tmp') && age > 60_000)) {
+                rmSync(file, { force: true });
+                continue;
+            }
+            if (!/^[\w-]+\.json$/.test(name))
+                continue;
+            let note = {};
+            try {
+                note = JSON.parse(readFileSync(file, 'utf8'));
+            }
+            catch { /* unreadable: by its id only */ }
+            if (drop({ id: name.slice(0, -'.json'.length), domain: note.domain ?? null, commit: note.commit ?? null }))
+                rmSync(file, { force: true });
+        }
+        catch { /* gone meanwhile */ }
+    }
+}
+/**
+ * Notes, for `apv status`, that the seal hook could not seal the review `id` of `domain` at `commit` (when known): date,
+ * id, domain, commit and reason. The note replaces those of earlier reviews of the same domain and commit.
+ */
+export function recordSealRefusal(common, id, domain, reason, now = new Date(), commit = null) {
     if (!/^[\w-]+$/.test(id))
         return;
-    writeWhole(join(common, ...OPERATOR_SEAL_NOTES, `${id}.json`), `${JSON.stringify({ at: now.toISOString(), domain, reason: `relecture ${id} (${domain}) non scellée : ${reason}`.slice(0, 300) })}\n`);
+    const known = commit && /^[0-9a-f]{7,40}$/.test(commit) ? commit : null;
+    forgetSealNotes(common, note => note.id !== id && note.domain === domain && (known === null ? typeof note.commit !== 'string' : sameCommit(note.commit, known)), now);
+    writeWhole(join(common, ...OPERATOR_SEAL_NOTES, `${id}.json`), `${JSON.stringify({ at: now.toISOString(), domain, commit: known, reason: `relecture ${id} (${domain}${known ? ` ${known.slice(0, 12)}` : ''}) non scellée : ${reason}`.slice(0, 300) })}\n`);
 }
 /** Notes, for `apv status`, that the hook refused a prompt: date and reason, never the text. */
 export function recordRefusal(common, reason, now = new Date()) {

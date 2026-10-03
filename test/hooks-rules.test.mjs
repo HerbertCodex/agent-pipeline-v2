@@ -168,7 +168,7 @@ test('the seal hook seals a record only for the reviewer agent of its domain, fr
   const command = 'cd /tmp/copie && apv review record --commit abc --domain securite --reviewer apv:qa-securite --report r.md --critical 0 --high 0 --medium 0 --low 0';
   const out = { stdout: 'Enregistrement 20260930T101010Z-0a1b2c3d\nRelecture securite enregistrée' };
   assert.equal(recordId(out), '20260930T101010Z-0a1b2c3d');
-  assert.deepEqual(sealRequest({ tool_name: 'Bash', tool_input: { command }, tool_response: out, agent_type: 'apv:qa-securite' }), { id: '20260930T101010Z-0a1b2c3d', domain: 'securite', agent: 'apv:qa-securite' });
+  assert.deepEqual(sealRequest({ tool_name: 'Bash', tool_input: { command }, tool_response: out, agent_type: 'apv:qa-securite' }), { id: '20260930T101010Z-0a1b2c3d', domain: 'securite', agent: 'apv:qa-securite', commit: 'abc' });
   for (const agent_type of [undefined, 'apv:implementer', 'apv:qa-fidelite']) {
     assert.equal(sealRequest({ tool_name: 'Bash', tool_input: { command }, tool_response: out, agent_type }), null, String(agent_type));
   }
@@ -755,7 +755,8 @@ test('review of c65f8c5: the operator after the creation itself, files from a co
   // Any program the guard does not know to only read, handed a path in a store, may write it (review of c65f8c5, high).
   for (const command of ['python3 -m json.tool /tmp/forged.json .git/apv/receipts/run/01-tests.json', 'python3 -m compileall .git/apv/receipts',
     'python3 tools/inspect.py .git/apv/receipts', 'python3.12 -m gzip .git/apv/receipts/run/x.json', 'node --loader x .git/apv/receipts/x', 'deno run s.ts .git/apv/receipts/x',
-    'uv run x.py .git/apv/receipts/r.json', 'bash script.sh .git/apv/receipts', './tools/fix .git/apv/receipts/r.json', 'sed -n p .git/apv/receipts/r.json']) {
+    'uv run x.py .git/apv/receipts/r.json', 'bash script.sh .git/apv/receipts', './tools/fix .git/apv/receipts/r.json', 'sed -n p .git/apv/receipts/r.json',
+    "LESSOPEN='|rm %s' less .git/apv/receipts/r.json", 'more .git/apv/receipts/r.json', 'bat --pager=sh .git/apv/receipts/r.json', 'less .git/apv/receipts/*.json']) {
     assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
   }
   for (const command of ["rg --pre rm '' .git/apv", 'rg --pre=sh x .', 'rg --hostname-bin=./x foo', 'rg x .git/apv/receipts/*', 'tree -o .git/apv/receipts/r.json .git/apv/receipts',
@@ -763,6 +764,14 @@ test('review of c65f8c5: the operator after the creation itself, files from a co
     assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
   }
   for (const command of ['rg -n TODO src', 'ls .git/apv/receipts/*', 'cat .git/apv/receipts/*/summary.json']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  // Review of dc0a075: rg with a configuration file, a recursive search of the Git directory, `<` stuck to its file.
+  for (const command of ["RIPGREP_CONFIG_PATH=/tmp/c rg '' .git/apv/receipts", "export RIPGREP_CONFIG_PATH=/tmp/c; rg x src", "rg '' .git/apv", "rg '' .git",
+    'grep -r . .git/apv', 'grep -R x .git', 'grep --recursive x /r/.git/apv', 'egrep -rn x .git/']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ['grep -r x .git/apv/receipts', 'grep -rn TODO src', 'python3 x.py <.git/apv/receipts/r.json', 'python3 x.py 0<.git/apv/receipts/r.json']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
   const root = mkdtempSync(join(tmpdir(), 'apv3-fin4-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, stdio: 'pipe' });

@@ -485,9 +485,12 @@ export function mayReachAnchor(path) {
 }
 
 /** Commands that only read what a glob names: they may glob a store outside the anchor (the receipts of the checks). */
-/** Not `rg` (`--pre` runs a program on each file) nor `tree` (`-o` writes a file). */
-const GLOB_READERS = new Set(['cat', 'head', 'tail', 'less', 'more', 'ls', 'jq', 'wc', 'grep', 'egrep', 'fgrep', 'diff', 'cmp', 'stat', 'file',
-  'sha256sum', 'sha1sum', 'md5sum', 'du', 'bat', 'zcat']);
+/**
+ * Not `rg` (`--pre` runs a program on each file) nor `tree` (`-o` writes a file); no pager either (`less` and `more` run
+ * LESSOPEN or an editor, `bat` its pager and preprocessors): `cat` reads the same.
+ */
+const GLOB_READERS = new Set(['cat', 'head', 'tail', 'ls', 'jq', 'wc', 'grep', 'egrep', 'fgrep', 'diff', 'cmp', 'stat', 'file',
+  'sha256sum', 'sha1sum', 'md5sum', 'du', 'zcat']);
 /** Commands that only read or print what they are given: the only ones that may be handed a path in a store. */
 const READS_ONLY = new Set([...GLOB_READERS, 'rg', 'tree', 'echo', 'printf', 'test', '[', 'realpath', 'readlink', 'basename', 'dirname', 'apv',
   // dd writes only by `of=`, read by OUTPUT_OPTIONS.
@@ -705,9 +708,17 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
     // A bare assignment (`f=.git/apv/receipts/r.json`) runs nothing.
     if (!cw.length || /^[A-Za-z_]\w*=/.test(cw[0])) continue;
     const writer = STORE_WRITERS.has(tool) || inPlace;
+    // ripgrep reads its options from the file RIPGREP_CONFIG_PATH names (`--pre=rm` written there earlier): set on the
+    // line or in the environment, rg may run any program on what it walks.
+    if (tool === 'rg' && (/\bRIPGREP_CONFIG_PATH\b/.test(String(command)) || process.env.RIPGREP_CONFIG_PATH)) return REASONS.anchorStore;
+    // A recursive search handed the Git directory or the store folder walks into the stores of the anchor
+    // (`grep -r . .git/apv`, `rg '' .git`) without naming them.
+    const recursive = tool === 'rg' || (['grep', 'egrep', 'fgrep'].includes(tool) && cw.slice(1).some(a => /^-[a-zA-Z]*[rR]/.test(a) || /^--(?:recursive|dereference-recursive|directories=recurse)$/.test(a)));
+    if (recursive && args.some(a => { const p = resolve(dir ?? '/', at(a, dir)); return mayReachAnchor(join(p, 'apv', 'operator')) || mayReachAnchor(join(p, 'operator')); })) return REASONS.anchorStore;
     if (!writer && READS_ONLY.has(tool)) continue;
-    // What another program reads on its standard input (`python3 x.py - < .git/apv/receipts/r.json`) is not handed to it.
-    const handed = writer ? args : cw.slice(1).filter((a, k, all) => !a.startsWith('-') && !/^\d*<$/.test(all[k - 1] ?? ''));
+    // What another program reads on its standard input (`python3 x.py - < .git/apv/receipts/r.json`, `<f`) is not
+    // handed to it.
+    const handed = writer ? args : cw.slice(1).filter((a, k, all) => !a.startsWith('-') && !/^\d*</.test(a) && !/^\d*<$/.test(all[k - 1] ?? ''));
     for (const arg of fedByLine ? [...handed, ...lineWords] : handed) {
       // A computed path that ends in apv, holds a piece of a store path, or uses a variable the line set to one
       // (`$d/apv`, `d=.git/ap; rm -rf ${d}v`, `d=.gi; e=ap; rm -rf ${d}t/${e}v`): it may be the store.
@@ -1200,7 +1211,7 @@ export function reviewRecordCall(command) {
     const args = apvArguments(words);
     if (!args) continue;
     const [name, sub] = positional(args);
-    if (name === 'review' && (sub === 'record' || args.includes('record'))) return { words, domain: optionValue(args, '--domain') ?? null, reviewer: optionValue(args, '--reviewer') ?? null };
+    if (name === 'review' && (sub === 'record' || args.includes('record'))) return { words, domain: optionValue(args, '--domain') ?? null, reviewer: optionValue(args, '--reviewer') ?? null, commit: optionValue(args, '--commit') ?? null };
   }
   return null;
 }

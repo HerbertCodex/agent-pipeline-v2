@@ -81,7 +81,10 @@ export declare function operatorJournalPath(common: string): string;
 export declare function appendJournal(common: string, entry: JournalEntry, keepDays?: number, now?: Date): void;
 /** The signed messages of the journal, oldest first; unsigned, altered or unreadable lines are ignored. */
 export declare function readOperatorMessages(common: string, key?: Buffer<ArrayBufferLike> | null): OperatorMessage[];
-/** What `apv status` says of the journal: signed messages kept, ignored lines, last message, last refusal of the hook. */
+/**
+ * What `apv status` says of the journal: signed messages kept, ignored lines, last message, last refused message, and
+ * every review the seal hook could not seal (oldest first).
+ */
 export interface JournalState {
     file: string;
     key: boolean;
@@ -94,17 +97,24 @@ export interface JournalState {
         at: string;
         reason: string;
     } | null;
+    sealRefusals: {
+        at: string;
+        reason: string;
+    }[];
 }
 export declare function journalState(common: string): JournalState;
 /**
- * Forgets the notes of the seal hook once the review `id` of `domain` is sealed: the note about that review, and those
- * about earlier reviews of the same domain, which this one replaces (each record gets a new id, so a note kept for its
- * own id only would stay for good; the unsealed record itself is still said by `apv review show`). A note about another
- * domain, or a refused message, stays. A note of the former single file (`refused.json`) is forgotten the same way.
+ * Forgets the notes of the seal hook once the review `id` of `domain` at `commit` is sealed: the note about that review,
+ * and those about earlier reviews of the same domain at the same commit, which this one replaces (each record gets a new
+ * id, so a note kept for its own id only would stay for good; the unsealed record itself is still said by `apv review
+ * show`). A note about another domain or another commit, or a refused message, stays.
  */
-export declare function clearSealRefusal(common: string, id: string, domain?: string | null): void;
-/** Notes, for `apv status`, that the seal hook could not seal the review `id` of `domain`: date, id, domain and reason. */
-export declare function recordSealRefusal(common: string, id: string, domain: string, reason: string, now?: Date): void;
+export declare function clearSealRefusal(common: string, id: string, domain?: string | null, commit?: string | null, now?: Date): void;
+/**
+ * Notes, for `apv status`, that the seal hook could not seal the review `id` of `domain` at `commit` (when known): date,
+ * id, domain, commit and reason. The note replaces those of earlier reviews of the same domain and commit.
+ */
+export declare function recordSealRefusal(common: string, id: string, domain: string, reason: string, now?: Date, commit?: string | null): void;
 /** Notes, for `apv status`, that the hook refused a prompt: date and reason, never the text. */
 export declare function recordRefusal(common: string, reason: string, now?: Date): void;
 /**

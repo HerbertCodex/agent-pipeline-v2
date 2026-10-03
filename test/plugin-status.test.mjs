@@ -183,10 +183,16 @@ test('review of 84d3c4a: dist compared, plugin ahead or diverged, settings unrea
 
 test('review of 84d3c4a: a review the seal hook could not seal is said under its own label', async () => {
   const { journalLines } = await import('../dist/rules/anchor-status.js');
-  const lines = journalLines({ file: 'j', key: true, keyProblem: null, keyCreatedAt: null, messages: 3, ignored: 0, last: '2026-10-03T10:00:00Z',
-    refused: { at: '2026-10-03T10:00:00Z', reason: 'relecture 20261003T100000Z-0123abcd non scellée : dépôt introuvable' } });
+  const lines = journalLines({ file: 'j', key: true, keyProblem: null, keyCreatedAt: null, messages: 3, ignored: 0, last: '2026-10-03T10:00:00Z', refused: null,
+    sealRefusals: [{ at: '2026-10-03T10:00:00Z', reason: 'relecture 20261003T100000Z-0123abcd (securite) non scellée : dépôt introuvable' }] });
   assert.match(lines.join('\n'), /n'a pas scellé une relecture/);
   assert.doesNotMatch(lines.join('\n'), /a refusé le dernier message/);
+  // Every note is said, even after a refused message (review of dc0a075).
+  const both = journalLines({ file: 'j', key: true, keyProblem: null, keyCreatedAt: null, messages: 0, ignored: 0, last: null,
+    refused: { at: '2026-10-03T11:00:00Z', reason: 'source absente' },
+    sealRefusals: [{ at: '2026-10-03T10:00:00Z', reason: 'relecture a (securite) non scellée : x' }, { at: '2026-10-03T10:01:00Z', reason: 'relecture b (rgpd) non scellée : x' }] }).join('\n');
+  assert.equal(both.match(/n'a pas scellé une relecture/g).length, 2);
+  assert.match(both, /a refusé le dernier message/);
 });
 
 test('review of 3871d24: a forged key is said, the main checkout settings count from a worktree, a sealed review lifts the note', async t => {
@@ -203,44 +209,61 @@ test('review of 3871d24: a forged key is said, the main checkout settings count 
   mkdirSync(join(s.project, '.claude'), { recursive: true });
   writeFileSync(join(s.project, '.claude', 'settings.local.json'), JSON.stringify({ enabledPlugins: { 'apv@herbertcodex-apv': true } }));
   assert.equal(pluginStatus(worktree, s.env, s.tool).install.enabled, true);
-  // In a worktree, Claude Code reads the local file of the main checkout only, and the project file of the worktree only.
+  // In a worktree, Claude Code reads the project file of the worktree only, and the local file of the main checkout above
+  // the one an earlier version left in the worktree.
   mkdirSync(join(worktree, '.claude'), { recursive: true });
   writeFileSync(join(worktree, '.claude', 'settings.local.json'), JSON.stringify({ enabledPlugins: { 'apv@herbertcodex-apv': false } }));
   writeFileSync(join(s.project, '.claude', 'settings.json'), JSON.stringify({ disableAllHooks: true }));
   const fromWorktree = pluginStatus(worktree, s.env, s.tool);
-  assert.equal(fromWorktree.install.enabled, true, 'the local file of the worktree is not read');
+  assert.equal(fromWorktree.install.enabled, true, 'the local file of the main checkout wins over the worktree one');
   assert.equal(fromWorktree.hooksDisabled, false, 'the project file of the main checkout is not read');
+  writeFileSync(join(worktree, '.claude', 'settings.local.json'), JSON.stringify({ enabledPlugins: { 'apv@herbertcodex-apv': false }, disableAllHooks: true }));
+  assert.equal(pluginStatus(worktree, s.env, s.tool).hooksDisabled, true, 'the local file of the worktree is still read');
+  writeFileSync(join(worktree, '.claude', 'settings.local.json'), JSON.stringify({ enabledPlugins: { 'apv@herbertcodex-apv': false } }));
   writeFileSync(join(worktree, '.claude', 'settings.json'), JSON.stringify({ disableAllHooks: true }));
   assert.equal(pluginStatus(worktree, s.env, s.tool).hooksDisabled, true, 'the project file of the worktree');
   assert.equal(pluginStatus(s.project, s.env, s.tool).hooksDisabled, true, 'the main checkout reads its own');
-  // The note of a review the hook could not seal goes away once that review is sealed; another's, or a refused message, stays.
+  // Seal notes of the former single file (`relecture …` in refused.json) go at the first seal; a refused message stays.
   const common = join(s.root, 'commun'); mkdirSync(common);
-  recordRefusal(common, 'relecture X non scellée : dépôt introuvable');
-  clearSealRefusal(common, 'Y');
-  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), true, 'another review');
-  clearSealRefusal(common, 'X');
-  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), false);
-  // A new review of the same domain replaces the unsealed one (each record has a new id); another domain leaves the note.
-  recordRefusal(common, 'relecture X (securite) non scellée : dépôt introuvable');
-  clearSealRefusal(common, 'Z', 'rgpd');
-  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), true, 'another domain');
-  clearSealRefusal(common, 'Z', 'securite');
-  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), false, 'same domain');
+  const single = join(common, 'apv', 'operator', 'refused.json');
+  for (const former of ['relecture non scellée : clé absente', 'relecture X non scellée : dépôt introuvable']) {
+    recordRefusal(common, former);
+    clearSealRefusal(common, 'Y', 'rgpd', 'b'.repeat(40));
+    assert.equal(existsSync(single), false, former);
+  }
   recordRefusal(common, 'message hors de la session');
-  clearSealRefusal(common, 'X', 'securite');
-  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), true, 'refused message');
-  recordRefusal(common, 'message hors de la session');
-  clearSealRefusal(common, 'X');
-  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), true);
-  // One note per review the hook could not seal (reviewers run at once): a seal clears its domain only, never the message.
+  clearSealRefusal(common, 'X', 'securite', 'a'.repeat(40));
+  assert.equal(existsSync(single), true, 'refused message');
+  assert.equal(journalState(common).refused.reason, 'message hors de la session');
+  // One note per review the hook could not seal (reviewers run at once), written whole.
+  const A = 'a'.repeat(40); const B = 'b'.repeat(40);
   const notes = join(common, 'apv', 'operator', 'sceau');
-  recordSealRefusal(common, '20261003T100000Z-0000000a', 'securite', 'clé absente', new Date(Date.now() + 1000));
-  recordSealRefusal(common, '20261003T100001Z-0000000b', 'rgpd', 'clé absente', new Date(Date.now() + 2000));
-  assert.deepEqual(readdirSync(notes).sort(), ['20261003T100000Z-0000000a.json', '20261003T100001Z-0000000b.json'], 'no temporary file left');
-  assert.match(journalState(common).refused.reason, /^relecture 20261003T100001Z-0000000b \(rgpd\) non scellée : clé absente$/, 'the latest note');
-  clearSealRefusal(common, '20261003T110000Z-0000000c', 'securite');
-  assert.deepEqual(readdirSync(notes), ['20261003T100001Z-0000000b.json']);
-  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), true, 'the refused message stays');
+  recordSealRefusal(common, '20261003T100000Z-0000000a', 'securite', 'clé absente', new Date(Date.now() + 1000), A);
+  recordSealRefusal(common, '20261003T100001Z-0000000b', 'rgpd', 'clé absente', new Date(Date.now() + 2000), A);
+  recordSealRefusal(common, '20261003T100002Z-0000000c', 'securite', 'clé absente', new Date(Date.now() + 3000), B);
+  assert.equal(readdirSync(notes).length, 3, 'no temporary file left');
+  const state = journalState(common);
+  assert.equal(state.sealRefusals.length, 3, 'every note is said');
+  assert.match(state.sealRefusals[0].reason, /^relecture 20261003T100000Z-0000000a \(securite aaaaaaaaaaaa\) non scellée : clé absente$/);
+  assert.equal(state.refused.reason, 'message hors de la session', 'the refused message is said apart');
+  // A seal clears the notes of its domain at its commit only.
+  clearSealRefusal(common, '20261003T110000Z-0000000d', 'securite', A);
+  assert.deepEqual(readdirSync(notes).sort(), ['20261003T100001Z-0000000b.json', '20261003T100002Z-0000000c.json']);
+  assert.equal(existsSync(single), true, 'the refused message stays');
   recordSealRefusal(common, '../x', 'rgpd', 'nom forgé');
-  assert.deepEqual(readdirSync(notes), ['20261003T100001Z-0000000b.json'], 'a forged id writes nothing');
+  assert.equal(readdirSync(notes).length, 2, 'a forged id writes nothing');
+  // A new note replaces the one of the same domain and commit; a note without a known commit goes with its domain.
+  recordSealRefusal(common, '20261003T120000Z-0000000e', 'rgpd', 'clé absente', new Date(), A);
+  assert.deepEqual(readdirSync(notes).sort(), ['20261003T100002Z-0000000c.json', '20261003T120000Z-0000000e.json']);
+  recordSealRefusal(common, '20261003T120001Z-0000000f', 'donnees', 'introuvable', new Date(), 'HEAD');
+  clearSealRefusal(common, '20261003T120002Z-00000010', 'donnees', B);
+  assert.deepEqual(readdirSync(notes).sort(), ['20261003T100002Z-0000000c.json', '20261003T120000Z-0000000e.json'], 'commit unknown');
+  // Notes older than the journal keeps its lines, and stale temporary files, go away; a fresh temporary file stays.
+  const { utimesSync } = await import('node:fs');
+  writeFileSync(join(notes, 'x.json.1.ab.tmp'), '{');
+  utimesSync(join(notes, 'x.json.1.ab.tmp'), new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
+  writeFileSync(join(notes, 'fresh.json.2.cd.tmp'), '{');
+  utimesSync(join(notes, '20261003T100002Z-0000000c.json'), new Date('2026-01-01'), new Date('2026-01-01'));
+  clearSealRefusal(common, '20261003T130000Z-00000011', 'fidelite', A);
+  assert.deepEqual(readdirSync(notes).sort(), ['20261003T120000Z-0000000e.json', 'fresh.json.2.cd.tmp'], 'old note and stale temporary file purged');
 });
