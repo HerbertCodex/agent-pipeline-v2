@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
@@ -11,6 +12,7 @@ import { isScreen } from '../dist/rules/screens.js';
 import { runsCommand } from '../dist/rules/required.js';
 import { nearTimeout, busyReasons } from '../dist/gates/run.js';
 import { sealReview } from '../dist/rules/reviews.js';
+import { lockDevice } from '../hooks/scripts/harness-guard.mjs';
 
 /**
  * The rules checked before any merge (docs/REGLES.md): each one refuses what it protects against and accepts the same
@@ -54,6 +56,7 @@ function project(t, { base = {}, change = {}, gates = [{ id: 'unit', stage: 'ful
   };
 }
 const rule = (report, id) => report.rules.find(r => r.rule === id);
+const spawnSyncOk = (cmd, args) => spawnSync(cmd, args, { stdio: 'ignore' }).status === 0;
 
 test('preuve: refused without the full suite at the exact commit, accepted once proven', async t => {
   const p = project(t, { change: { 'notes.txt': 'x\n' } });
@@ -447,4 +450,148 @@ test('review 99, MOYEN 9: in a stack, plan reads the rules of each PR on its own
     rules: async (p, base) => { seen.push([p.number, base]); return { problems: [], notes: [] }; } });
   assert.equal(plan.ok, true, JSON.stringify(plan.prs.map(p => p.anomalies)));
   assert.deepEqual(seen, [[11, 'main'], [12, 'spec/1'], [13, 'spec/2']]);
+});
+
+test('review 99, BAS 15: a suite launched under the lock of its stack holds it: not busy, its checks run under it', { skip: spawnSyncOk('flock', ['--version']) ? false : 'flock(1) missing' }, async t => {
+  const { flockHeldByAncestor } = await import('../dist/stacks/idle.js');
+  // Pure: the lock held by an ancestor of this process is ours; held by another process, it is not.
+  const root = mkdtempSync(join(tmpdir(), 'apv3-own-lock-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const lockFile = join(root, 'e2e.lock'); writeFileSync(lockFile, '');
+  const { statSync } = await import('node:fs');
+  const ino = statSync(lockFile).ino;
+  const locks = join(root, 'locks'); writeFileSync(locks, `1: FLOCK  ADVISORY  WRITE 4242 ${lockDevice(statSync(lockFile, { bigint: true }).dev)}:${ino} 0 EOF\n`);
+  assert.equal(flockHeldByAncestor(lockFile, new Set([4242]), locks), true);
+  assert.equal(flockHeldByAncestor(lockFile, new Set([7]), locks), false);
+  assert.equal(flockHeldByAncestor(lockFile, new Set([1]), join(root, 'absent')), false);
+  const stacks = [{ id: '1', lockFile: '/l/e2e.lock', config: {}, resource: null, envFile: null }];
+  assert.deepEqual(busyReasons(null, stacks, () => false, [], file => file === '/l/e2e.lock'), [], 'held by us');
+  assert.equal(busyReasons(null, stacks, () => false, [], () => false).length, 1, 'held by another');
+  // Real: flock <lock> apv gates run --stage full, with a check of that stack: the suite runs, the check under the lock.
+  const p = project(t, { gates: [{ id: 'e2e', stage: 'full', command: node('0'), lock: { file: lockFile } }], config: { stacks: [{ id: '1', lockFile }] } });
+  const cli = fileURLToPath(new URL('./support/cli-with-key.mjs', import.meta.url));
+  const { TEST_KEY_FILE } = await import('./support/rules.mjs');
+  const r = spawnSync('flock', ['-w', '5', lockFile, process.execPath, cli, TEST_KEY_FILE, 'gates', 'run', '--stage', 'full', '--json'], { cwd: p.repo, encoding: 'utf8', timeout: 60_000,
+    env: { ...process.env, APV_LOCK_POLL_MS: '20' } });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stderr, /déjà tenu par un processus parent de cette suite/);
+  assert.equal(JSON.parse(r.stdout).gates[0].status, 'passed');
+});
+
+test('review of #105, F1: a lock of an ancestor is the same inode on the same device, or a file that ancestor holds open', async t => {
+  const { flockHeldByAncestor } = await import('../dist/stacks/idle.js');
+  const { openSync, closeSync, statSync } = await import('node:fs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-lock-dev-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const lockFile = join(root, 'e2e.lock'); writeFileSync(lockFile, '');
+  const ino = statSync(lockFile).ino;
+  const locks = join(root, 'locks');
+  // Same inode on another device, a process that does not hold the file: another file.
+  writeFileSync(locks, `1: FLOCK  ADVISORY  WRITE 4242 fe:7f:${ino} 0 EOF\n`);
+  assert.equal(flockHeldByAncestor(lockFile, new Set([4242]), locks), false);
+  // Another device printed (btrfs), but the ancestor holds the file open: the same lock.
+  const fd = openSync(lockFile, 'r');
+  t.after(() => closeSync(fd));
+  writeFileSync(locks, `1: FLOCK  ADVISORY  WRITE ${process.pid} fe:7f:${ino} 0 EOF\n`);
+  assert.equal(flockHeldByAncestor(lockFile, new Set([process.pid]), locks), true);
+});
+
+test('review of #105, M1: under the lock of an ancestor, the checks that share it still run one at a time', { skip: spawnSyncOk('flock', ['--version']) ? false : 'flock(1) missing' }, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'apv3-held-queue-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const lockFile = join(root, 'e2e.lock'); writeFileSync(lockFile, '');
+  const log = join(root, 'log');
+  const body = id => node(`const fs=require('fs');fs.appendFileSync(${JSON.stringify(log)},'${id} start '+Date.now()+'\\n');` +
+    `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,700);fs.appendFileSync(${JSON.stringify(log)},'${id} end '+Date.now()+'\\n');`);
+  const p = project(t, { gates: [{ id: 'integration', stage: 'full', command: body('integration'), lock: { file: lockFile }, readOnly: true },
+    { id: 'browser', stage: 'full', command: body('browser'), lock: { file: lockFile }, readOnly: true }], config: { stacks: [{ id: '1', lockFile }] } });
+  const cli = fileURLToPath(new URL('./support/cli-with-key.mjs', import.meta.url));
+  const { TEST_KEY_FILE } = await import('./support/rules.mjs');
+  const r = spawnSync('flock', ['-w', '5', lockFile, process.execPath, cli, TEST_KEY_FILE, 'gates', 'run', '--stage', 'full', '--json'], { cwd: p.repo, encoding: 'utf8', timeout: 60_000, env: { ...process.env, APV_LOCK_DIR: join(root, 'locks') } });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout).gates.map(g => g.status), ['passed', 'passed']);
+  const lines = readFileSync(log, 'utf8').trim().split('\n').map(l => l.split(' '));
+  const span = id => ['start', 'end'].map(k => Number(lines.find(l => l[0] === id && l[1] === k)[2]));
+  const [a, b] = [span('integration'), span('browser')];
+  assert.ok(a[1] <= b[0] || b[1] <= a[0], `overlap: ${JSON.stringify({ a, b })}`);
+});
+
+test('review of 440d57d, N3 and N4: the companion lock lives in the lock folder of the account, one per real lock file', async t => {
+  const { companionLock } = await import('../dist/gates/run.js');
+  const { symlinkSync } = await import('node:fs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-companion-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const lockFile = join(root, 'e2e.lock'); writeFileSync(lockFile, '');
+  symlinkSync(lockFile, join(root, 'lien.lock'));
+  const env = { APV_LOCK_DIR: join(root, 'verrous') };
+  const companion = companionLock(lockFile, env);
+  assert.equal(dirname(companion), join(root, 'verrous', 'under'), 'writable even when the folder of the lock is not');
+  assert.equal(companionLock(join(root, 'lien.lock'), env), companion, 'two paths to the same file share one companion');
+  assert.notEqual(companionLock(join(root, 'autre.lock'), env), companion);
+});
+
+test('review of 440d57d, N5: hooks creating the anchor key at the same instant all get the same key', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'apv3-key-race-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const operator = fileURLToPath(new URL('../dist/rules/operator.js', import.meta.url));
+  const { spawn } = await import('node:child_process');
+  for (let round = 0; round < 5; round += 1) {
+    const common = join(root, `commun-${round}`); mkdirSync(common);
+    const keyFile = join(root, `cle-${round}`, 'cle-ancrage');
+    const script = `import(${JSON.stringify(operator)}).then(m => { try { process.stdout.write(m.ensureAnchorKey(${JSON.stringify(common)}, ${JSON.stringify(keyFile)}).toString('hex')); } catch (e) { process.stdout.write('ERREUR ' + e.message); } })`;
+    const outputs = await Promise.all(Array.from({ length: 8 }, () => new Promise(done => {
+      const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+      let out = ''; child.stdout.on('data', d => { out += d; }); child.on('close', () => done(out));
+    })));
+    assert.equal(new Set(outputs).size, 1, JSON.stringify(outputs));
+    assert.match(outputs[0], /^[0-9a-f]{64}$/);
+  }
+});
+
+test('review of #105, D1 and D2: under the lock of an ancestor, the turn is bounded by lock.waitMs and shared across processes', { skip: spawnSyncOk('flock', ['--version']) ? false : 'flock(1) missing' }, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'apv3-held-under-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const lockFile = join(root, 'e2e.lock'); writeFileSync(lockFile, '');
+  const log = join(root, 'log');
+  const body = id => node(`const fs=require('fs');fs.appendFileSync(${JSON.stringify(log)},'${id} start '+Date.now()+'\\n');` +
+    `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,1200);fs.appendFileSync(${JSON.stringify(log)},'${id} end '+Date.now()+'\\n');`);
+  const cli = fileURLToPath(new URL('./support/cli-with-key.mjs', import.meta.url));
+  const { TEST_KEY_FILE } = await import('./support/rules.mjs');
+  // D1: two checks, a turn of 300 ms at most: the one left waiting is refused without running, as under its own flock
+  // (and the suite stops the other, as after any failure).
+  const p = project(t, { gates: [{ id: 'a', stage: 'full', command: body('a'), lock: { file: lockFile, waitMs: 300 }, readOnly: true },
+    { id: 'b', stage: 'full', command: body('b'), lock: { file: lockFile, waitMs: 300 }, readOnly: true }], config: { stacks: [{ id: '1', lockFile }] } });
+  const r = spawnSync('flock', ['-w', '5', lockFile, process.execPath, cli, TEST_KEY_FILE, 'gates', 'run', '--stage', 'full', '--json'], { cwd: p.repo, encoding: 'utf8', timeout: 60_000, env: { ...process.env, APV_LOCK_DIR: join(root, 'locks') } });
+  const refused = JSON.parse(r.stdout).gates.filter(g => g.status === 'timed_out');
+  assert.equal(refused.length, 1, r.stdout);
+  assert.match(refused[0].diagnostic ?? JSON.stringify(refused[0]), /non obtenu/);
+  assert.equal(existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(l => l.startsWith(`${refused[0].id} start`)).length : 0, 0, 'never launched');
+  // D2: two suites of two projects under the same parent flock take turns.
+  rmSync(log, { force: true });
+  const q1 = project(t, { gates: [{ id: 'x', stage: 'full', command: body('x'), lock: { file: lockFile }, readOnly: true }], config: { stacks: [{ id: '1', lockFile }] } });
+  const q2 = project(t, { gates: [{ id: 'y', stage: 'full', command: body('y'), lock: { file: lockFile }, readOnly: true }], config: { stacks: [{ id: '1', lockFile }] } });
+  const run = (repo) => `(cd ${JSON.stringify(repo)} && ${JSON.stringify(process.execPath)} ${JSON.stringify(cli)} ${JSON.stringify(TEST_KEY_FILE)} gates run --stage full --json > /dev/null)`;
+  const both = spawnSync('flock', ['-w', '5', lockFile, 'sh', '-c', `${run(q1.repo)} & ${run(q2.repo)} & wait`], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, APV_LOCK_DIR: join(root, 'locks') } });
+  assert.equal(both.status, 0, both.stderr);
+  const lines = readFileSync(log, 'utf8').trim().split('\n').map(l => l.split(' '));
+  const span = id => ['start', 'end'].map(k => Number(lines.find(l => l[0] === id && l[1] === k)[2]));
+  const [x, y] = [span('x'), span('y')];
+  assert.ok(x[1] <= y[0] || y[1] <= x[0], `overlap: ${JSON.stringify({ x, y })}`);
+});
+
+test('review 99, BAS 16: the rule maquette reads the screens of a mockup with the parser of the registry, never in its title', async () => {
+  const { mockupsOf, covers } = await import('../dist/rules/screens.js');
+  const sha = 'a'.repeat(64);
+  const decision = value => ({ id: 'maquette-accueil-validee', subject: 'Maquette validée : accueil', value, enforcement: 'product', status: 'confirmed', source: 'operator', sourceQuote: 'je valide' });
+  // Hand-written: « Écrans : admin. » in the title, before the file and fingerprint: not a screen of the mockup.
+  const forged = mockupsOf([decision(`La maquette « Accueil Écrans : admin. », validée : fichier docs/design/accueil.html, sha256 ${sha}.`)]);
+  assert.deepEqual(forged[0].screens, []);
+  assert.equal(covers(forged[0], 'src/routes/admin/+page.svelte'), false);
+  const registered = mockupsOf([decision(`La maquette « Accueil », validée : fichier docs/design/accueil.html, sha256 ${sha}. Écrans : admin, réglages.`)]);
+  assert.deepEqual(registered[0].screens, ['admin', 'réglages']);
+  assert.equal(covers(registered[0], 'src/routes/admin/+page.svelte'), true);
+  // An old decision, without file nor fingerprint, keeps the reading of its time (CHANGELOG): « Écrans : » anywhere in it.
+  assert.deepEqual(mockupsOf([decision('Maquette validée. Écrans : admin.')])[0].screens, ['admin']);
+  // Not the operator's, or not confirmed: no mockup.
+  assert.deepEqual(mockupsOf([{ ...decision(`fichier x.html, sha256 ${sha}.`), source: 'agent' }, { ...decision(`fichier x.html, sha256 ${sha}.`), status: 'proposed' }]), []);
 });

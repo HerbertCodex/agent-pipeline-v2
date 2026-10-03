@@ -1,10 +1,7 @@
 import { globToRegExp } from '../db/glob.js';
-import { screenKey } from '../design/registry.js';
+import { mockupDecision, screenKey } from '../design/registry.js';
 import { routeOf } from '../knowledge/code-map.js';
 import { anchoredQuote } from './operator.js';
-/** Decision ids of a validated mockup (`apv design register`). */
-const MOCKUP_ID = /^maquette-([a-z0-9]+(?:-[a-z0-9]+)*?)-validee(?:-v[0-9]+)?$/;
-const VALUE_SCREENS = /Écrans : ([^.]+)\./;
 /**
  * Whether a file is a screen: a page, a layout or an error page of the routes the tool knows (SvelteKit `+page.svelte`,
  * Next `app/**\/page.tsx`, Remix `app/routes/*.tsx`, Nuxt, Astro, Vue `pages/**`), or a file of `rules.screens`. Server
@@ -25,15 +22,20 @@ export function isScreen(path, extra = []) {
         return true;
     return /\.(svelte|vue|astro|tsx|jsx|mdx)$/.test(name);
 }
-/** The confirmed operator mockups of a ledger. */
+/**
+ * The confirmed operator mockups of a ledger, read by the registry's parser (`mockupDecision`): the screens of a
+ * registered mockup are those `apv design register` wrote after its file and fingerprint, never words of its title.
+ */
 export function mockupsOf(decisions) {
-    return decisions.filter(d => MOCKUP_ID.test(d.id) && d.status === 'confirmed' && d.source === 'operator').map(d => ({
-        id: d.id,
-        slug: MOCKUP_ID.exec(d.id)[1],
-        screens: VALUE_SCREENS.exec(d.value)?.[1]?.split(',').map(x => x.trim()).filter(Boolean) ?? [],
-        paths: d.scope?.paths ?? [],
-        sourceQuote: d.sourceQuote,
-    }));
+    const out = [];
+    for (const d of decisions) {
+        if (d.source !== 'operator')
+            continue;
+        const mockup = mockupDecision(d);
+        if (mockup)
+            out.push({ id: d.id, slug: mockup.slug, screens: mockup.screens, paths: d.scope?.paths ?? [], sourceQuote: d.sourceQuote });
+    }
+    return out;
 }
 /** Keys a route answers to: the whole route and each of its fixed segments (`/admin/articles`: admin-articles, admin, articles). */
 function routeKeys(path) {

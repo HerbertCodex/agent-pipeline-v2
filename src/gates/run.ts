@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { gateStage, validateReceipt, webRecordSchema, type Gate, type GateReceipt, type GateStage } from '../domain/contracts.js';
 import { errorMessage, invariant } from '../domain/errors.js';
@@ -18,7 +18,7 @@ import { WEB_RECORD } from '../web/impact.js';
 import { publishRun, pruneStore, receiptRetention, sharedStore, type PruneResult } from './store.js';
 import { readPreviewState } from '../preview/state.js';
 import { repositoryWorktrees } from '../execution/procs.js';
-import { flockFree, markStacksUsed, resolveStacks, stacksOfLock, stoppedSince, type ResolvedStack } from '../stacks/idle.js';
+import { flockFree, flockHeldByAncestor, markStacksUsed, resolveStacks, stacksOfLock, stoppedSince, type ResolvedStack } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
 import { classifyFailures, type InfrastructureCause } from './infrastructure.js';
 import { planSpread, prepareCopies, removeCopies, stackLock, stackVariables, type SpreadPlan } from './spread.js';
@@ -132,6 +132,19 @@ export interface GateRunResult {
   ok: boolean;
 }
 
+/**
+ * The companion of a kernel lock held by an ancestor of the suite: the lock its checks take turns on. One per real lock
+ * file (two paths to the same file share it), in the lock folder of the account (`apv lock`, writable even when the
+ * folder of the lock is not), so that every project and process under that ancestor shares it.
+ */
+export function companionLock(file: string, env: NodeJS.ProcessEnv): string {
+  let real = file;
+  try { real = realpathSync(file); } catch { /* the path as given */ }
+  const dir = join(defaultLockDir(env), 'under');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return join(dir, `${basename(real).replace(/[^\w.-]/g, '_')}-${hash(real).slice(0, 12)}.lock`);
+}
+
 /** Files of a `git status --porcelain=v1 -z` output, as `XY path` lines. */
 export function statusLines(porcelain: string): string[] {
   const parts = porcelain.split('\0');
@@ -206,10 +219,12 @@ const HELD_BY: Readonly<Record<string, string>> = {
 };
 
 /** Why a full suite cannot start: ports of the suite held by others, declared stacks whose lock is held. */
-export function busyReasons(ports: PortsRecord | null, stacks: readonly ResolvedStack[], free: (file: string) => boolean | null = flockFree, previewPorts: readonly number[] = []): string[] {
+export function busyReasons(ports: PortsRecord | null, stacks: readonly ResolvedStack[], free: (file: string) => boolean | null = flockFree, previewPorts: readonly number[] = [],
+  heldByUs: (file: string) => boolean = () => false): string[] {
   const out = (ports?.left ?? []).map(p => `port ${p.ports.join(', ')} tenu par le pid ${p.pid} (${HELD_BY[p.reason] ?? p.reason}${p.worktree ? ` : ${p.worktree}` : ''}) : ${p.command.slice(0, 100)}` +
     `${p.ports.some(port => previewPorts.includes(port)) ? ' ; c\'est le serveur de l\'aperçu vivant : apv preview stop (depuis le checkout qui l\'a lancé), puis relancer la suite' : ''}`);
-  for (const s of stacks) if (s.lockFile && free(s.lockFile) === false) out.push(`pile ${s.id} : son verrou (${s.lockFile}) est tenu`);
+  // A lock held by the caller itself (the suite launched under `flock <lockFile>`) is its own, not another's.
+  for (const s of stacks) if (s.lockFile && free(s.lockFile) === false && !heldByUs(s.lockFile)) out.push(`pile ${s.id} : son verrou (${s.lockFile}) est tenu`);
   return out;
 }
 
@@ -361,7 +376,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       // One full suite at a time on a test stack, and no e2e beside it: a port of the suite held by another copy,
       // the main checkout or a tool, or a declared stack whose lock is held, refuses the suite before anything runs.
       const previews = [repo, repositoryWorktrees(repo)[0] ?? repo].map(r => { try { return readPreviewState(r)?.port ?? null; } catch { return null; } }).filter((x): x is number => x !== null);
-      const busy = busyReasons(ports, options.config.stacks?.length ? resolveStacks(options.config, await commonPath(git, repo, '.')) : [], flockFree, previews);
+      const busy = busyReasons(ports, options.config.stacks?.length ? resolveStacks(options.config, await commonPath(git, repo, '.')) : [], flockFree, previews, file => flockHeldByAncestor(file));
       if (busy.length) {
         throw new PipelineError('GATE_BUSY', `Suite complète refusée, rien n'a été exécuté : ${busy.join(' ; ')}. Une autre suite, un e2e lancé par un agent ou un serveur ` +
           'utilise déjà la pile de test : deux exécutions en même temps rendent les tests instables. Attendre sa fin (apv lock status, apv stacks status), ' +
@@ -409,6 +424,14 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     }
     const keys = new Map<string, string>();
     const missingEnv = new Map<string, string[]>();
+    const heldAboveCache = new Map<string, boolean>();
+    const heldAbove = (file: string): boolean => {
+      if (!heldAboveCache.has(file)) {
+        heldAboveCache.set(file, flockHeldByAncestor(file));
+        if (heldAboveCache.get(file)) log(`Verrou ${file} déjà tenu par un processus parent de cette suite : les contrôles qui le demandent tournent sous lui, sans le reprendre.`);
+      }
+      return heldAboveCache.get(file)!;
+    };
     const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
     type Repeat = NonNullable<GateReceipt['repeat']>;
     type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'>>;
@@ -460,17 +483,23 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         // The record file of `apv web audit`, outside the environment identity too: emptied before each pass.
         rmSync(webRecord, { force: true });
         const passEnv = { ...(suite ? { ...checkEnv, [SUITE_MARKER]: runId } : checkEnv), [WEB_RECORD]: webRecord };
-        if (lock?.kind !== 'flock') {
+        // A kernel lock already held by an ancestor (the suite launched under `flock <file>`) is held for the whole run and
+        // never taken again: a second flock on the same file from a child would wait for its own parent. The checks that
+        // ask for it take turns on a companion lock instead (companionLock: one per real lock file, in the lock folder of
+        // the account, shared by every project and process), under the same lock.waitMs. A suite run by such a check
+        // (its ancestor holds the companion too) runs under it without taking it again.
+        const file = lock?.kind !== 'flock' ? null : !heldAbove(lock.file) ? lock.file : companionLock(lock.file, source);
+        if (lock?.kind !== 'flock' || file === null || heldAbove(file)) {
           const result = await runProcess({ command: argv, cwd: workspace, env: passEnv, timeoutMs, signal, maxOutputBytes: 1024 * 1024 });
           return { result, commandMs: result.durationMs, lockWaitMs: 0, lockError: null };
         }
-        const result = await runProcess({ command: flockCommand(lock.file, lock.waitMs, argv), cwd: workspace, env: passEnv, timeoutMs, signal,
+        const result = await runProcess({ command: flockCommand(file, lock.waitMs, argv), cwd: workspace, env: passEnv, timeoutMs, signal,
           maxOutputBytes: 1024 * 1024, waitReady: true });
         if (result.readyMs === null || result.readyMs === undefined) {
           const lockError = result.status === 'cancelled' ? null
-            : result.status === 'spawn_error' ? `flock introuvable (util-linux) pour le verrou ${lock.file} : ${result.stderr.slice(0, 500)}`
-            : result.exitCode === FLOCK_TIMEOUT_EXIT ? `Verrou flock ${lock.file} non obtenu après ${Math.round(lock.waitMs / 1000)} s (lock.waitMs) : la commande n'a pas été lancée.`
-            : `flock en échec pour le verrou ${lock.file} (code ${result.exitCode ?? '-'}) : ${redact(result.stderr, secrets).slice(0, 2000)}`;
+            : result.status === 'spawn_error' ? `flock introuvable (util-linux) pour le verrou ${file} : ${result.stderr.slice(0, 500)}`
+            : result.exitCode === FLOCK_TIMEOUT_EXIT ? `Verrou flock ${file} non obtenu après ${Math.round(lock.waitMs / 1000)} s (lock.waitMs) : la commande n'a pas été lancée.`
+            : `flock en échec pour le verrou ${file} (code ${result.exitCode ?? '-'}) : ${redact(result.stderr, secrets).slice(0, 2000)}`;
           const status: ProcessResult['status'] = result.status === 'cancelled' ? 'cancelled' : result.status === 'spawn_error' ? 'spawn_error' : result.exitCode === FLOCK_TIMEOUT_EXIT ? 'timed_out' : 'failed';
           return { result: { ...result, status }, commandMs: 0, lockWaitMs: result.durationMs, lockError };
         }

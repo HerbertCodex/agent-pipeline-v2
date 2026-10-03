@@ -128,6 +128,12 @@ export interface GateRunResult {
     }[] | null;
     ok: boolean;
 }
+/**
+ * The companion of a kernel lock held by an ancestor of the suite: the lock its checks take turns on. One per real lock
+ * file (two paths to the same file share it), in the lock folder of the account (`apv lock`, writable even when the
+ * folder of the lock is not), so that every project and process under that ancestor shares it.
+ */
+export declare function companionLock(file: string, env: NodeJS.ProcessEnv): string;
 /** Files of a `git status --porcelain=v1 -z` output, as `XY path` lines. */
 export declare function statusLines(porcelain: string): string[];
 /** The refusal of a full suite on a working tree with uncommitted changes, listing them (50 at most). */
@@ -153,7 +159,7 @@ export declare function stageGates(gates: readonly Gate[], stage: GateStage): {
 /** Identity of the declared checks and passed variables, recorded in every receipt and compared by `apv gates verify`. */
 export declare function gatesConfigHash(config: ApvConfig): string;
 /** Why a full suite cannot start: ports of the suite held by others, declared stacks whose lock is held. */
-export declare function busyReasons(ports: PortsRecord | null, stacks: readonly ResolvedStack[], free?: (file: string) => boolean | null, previewPorts?: readonly number[]): string[];
+export declare function busyReasons(ports: PortsRecord | null, stacks: readonly ResolvedStack[], free?: (file: string) => boolean | null, previewPorts?: readonly number[], heldByUs?: (file: string) => boolean): string[];
 /** Share of its timeout beyond which a receipt warns (`nearTimeout`): 85 %. */
 export declare const NEAR_TIMEOUT = 0.85;
 /**

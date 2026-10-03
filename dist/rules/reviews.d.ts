@@ -72,6 +72,8 @@ export declare function parseCapture(value: string): CaptureInput;
  * reviewer saw, and `apv rules check` refuses the merge on it.
  */
 export declare function recordReview(common: string, input: RecordInput): ReviewRecord;
+/** Whether the record `id` of `domain` is stored under this Git common directory, at any commit. */
+export declare function recordExists(common: string, id: string, domain: string): boolean;
 /**
  * Seals the record `id` of `domain` (PostToolUse hook, hooks/scripts/review-seal.mjs): only when the command that wrote it
  * was run by the reviewer agent of the domain, which the hook checked. The seal is what `apv rules check` trusts: the
