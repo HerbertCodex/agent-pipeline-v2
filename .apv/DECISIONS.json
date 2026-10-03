@@ -1,4 +1,23 @@
 {
   "schemaVersion": 1,
-  "decisions": []
+  "decisions": [
+    {
+      "id": "structure-src-commands-une-commande-par-fichier",
+      "subject": "Rangement de src/commands : écart accepté au constat flat-growth de apv structure check",
+      "value": "src/commands garde la convention « une commande par fichier » (un fichier par commande de la CLI apv, à plat). Le constat flat-growth de apv structure check sur un fichier de commande ajouté à src/commands (relevé sur src/commands/tests.ts) est un écart de rangement accepté par l'opérateur, pas un rangement à faire.",
+      "enforcement": "product",
+      "status": "confirmed",
+      "source": "operator",
+      "sourceQuote": "ok une commande par fichier dans src/commands",
+      "rationale": "Décision de l'opérateur du 2026-10-03, tapée dans la session du projet suivie, sur le constat flat-growth de apv structure check pour src/commands/tests.ts (suivi de la PR #110) : le dossier des commandes suit la convention reconnue d'une CLI, une commande par fichier.",
+      "supersedes": [],
+      "clarificationQuestion": "",
+      "interpretations": [],
+      "scope": {
+        "paths": [
+          "src/commands/**"
+        ]
+      }
+    }
+  ]
 }

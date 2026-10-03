@@ -111,10 +111,11 @@ test('relecture: every domain of the plan recorded at this commit by its reviewe
   assert.equal(rule(moved.json(), 'relecture').status, 'refused');
 });
 
-test('captures: a change of interface needs the four captures of the fidelity review; a server change needs none', async t => {
-  const p = project(t, { change: { 'src/lib/components/Carte.svelte': '<div class="carte">x</div>\n' } });
+test('captures: a screen added needs the four captures of the fidelity review; a server change needs none', async t => {
+  const p = project(t, { change: { 'src/routes/carte/+page.svelte': '<div class="carte">x</div>\n' } });
   const r0 = rule((await p.check()).report, 'captures');
   assert.equal(r0.status, 'refused');
+  assert.match(r0.detail, /écran\(s\) ou fichier\(s\) d'interface : src\/routes\/carte\/\+page\.svelte\)/);
   assert.match(r0.problems[0], /desktop:light, desktop:dark, phone:light, phone:dark/);
   seedReview(p.repo, p.head, 'fidelite', { captures: [['desktop', 'light'], ['phone', 'light']] });
   assert.match(rule((await p.check()).report, 'captures').problems[0], /absente\(s\) de la relecture fidelite .*: desktop:dark, phone:dark/);
@@ -127,7 +128,54 @@ test('captures: a change of interface needs the four captures of the fidelity re
   assert.equal(rule((await p.check()).report, 'captures').status, 'refused');
   const server = project(t, { change: { 'scripts/job.sh': 'echo ok\n' } });
   const s = await server.check();
-  assert.ok(['not_applicable', 'refused'].includes(rule(s.report, 'captures').status));
+  assert.equal(rule(s.report, 'captures').status, 'not_applicable');
+});
+
+test('captures: a command-line tool without any screen has nothing to capture, even when the plan retains fidelite', async t => {
+  // The case of a CLI (agent-pipeline-v2 #110): unclassified source files keep every domain, fidelite included, but no
+  // screen at the base nor added (the rule maquette says so too): captures are not applicable, with the reason.
+  const cli = { 'package.json': { name: 'outil', bin: { outil: 'dist/cli.js' } } };
+  const p = project(t, { base: cli, change: { 'src/commands/tests.ts': 'export const run = () => 0;\n', 'src/cli.ts': 'export {};\n' } });
+  const report = (await p.check()).report;
+  assert.match(rule(report, 'relecture').detail, /fidelite/, 'the plan retains fidelite for unclassified files');
+  const captures = rule(report, 'captures');
+  assert.equal(captures.status, 'not_applicable', JSON.stringify(captures));
+  assert.match(captures.detail, /projet sans écran à la base .* et aucun écran ajouté/);
+  assert.equal(rule(report, 'maquette').status, 'not_applicable');
+  // The same tool that adds its first page (an HTML file outside any route) has a screen now: captures required.
+  const page = project(t, { base: cli, change: { 'index.html': '<!doctype html><title>outil</title><p>aide</p>\n' } });
+  const d = rule((await page.check()).report, 'captures');
+  assert.equal(d.status, 'refused', JSON.stringify(d));
+  assert.match(d.detail, /index\.html/);
+  // A Flask project without any screen at the base that adds a template (Jinja): required too.
+  const flask = project(t, { base: { 'app.py': 'from flask import Flask\napp = Flask(__name__)\n' }, change: { 'templates/x.jinja': '<h1>{{ titre }}</h1>\n' } });
+  assert.equal(rule((await flask.check()).report, 'captures').status, 'refused');
+});
+
+test('captures: in a project with screens, whatever changes what a screen shows needs them when fidelite is retained', async t => {
+  // The cases of the security reviews of #115: each changes what a page shows without being a route file.
+  const web = {
+    'package.json': { name: 'site', devDependencies: { '@sveltejs/kit': '2.0.0', svelte: '5.0.0' } },
+    'src/routes/compte/+page.svelte': '<script>import Header from "$lib/components/Header.svelte";</script>\n<Header />\n',
+    'src/lib/components/Header.svelte': '<header>Compte</header>\n',
+    'src/app.css': 'body { color: #111; }\n',
+    'src/app.html': '<!doctype html><html><body>%sveltekit.body%</body></html>\n',
+  };
+  for (const [path, value] of [
+    ['src/lib/components/Header.svelte', '<header style="display:none">Compte</header>\n'],
+    ['src/app.css', 'body { color: #fff; background: #fff; }\n'],
+    ['src/app.html', '<!doctype html><html><body style="display:none">%sveltekit.body%</body></html>\n'],
+    ['src/routes/compte/+page.md', '# Compte\n\nTexte de la page.\n'],
+    ['tailwind.config.js', 'export default { theme: { extend: { colors: { fond: "#fff" } } } };\n'],
+    ['src/lib/messages.ts', 'export const bienvenue = "Bienvenue sur votre compte";\n'],
+  ]) {
+    const p = project(t, { base: web, change: { [path]: value } });
+    const r = rule((await p.check()).report, 'captures');
+    assert.equal(r.status, 'refused', `${path} : ${JSON.stringify(r)}`);
+    assert.match(r.detail, /captures attendues/);
+    seedReview(p.repo, p.head, 'fidelite', { captures: ALL_CAPTURES });
+    assert.equal(rule((await p.check()).report, 'captures').status, 'ok', path);
+  }
 });
 
 test('controles: a web project declares reuse, code-map and structure, mandatory; a project that lacks one is refused', async t => {
@@ -264,7 +312,7 @@ test('busy stacks: a port held by another process or a stack whose lock is held 
 });
 
 test('apv review record: the reviewer records at the exact commit, from a clean copy, with a report citing it and real captures', async t => {
-  const p = project(t, { change: { 'src/lib/Carte.svelte': '<div>x</div>\n' } });
+  const p = project(t, { change: { 'src/routes/carte/+page.svelte': '<div>x</div>\n' } });
   const report = join(p.root, 'rapport.md');
   writeFileSync(report, `# Relecture fidélité du commit ${p.head}\n${'Constat : rien à signaler sur cet écran. '.repeat(10)}\n`);
   const shots = ALL_CAPTURES.map(([v, th], k) => { const f = join(p.root, `${v}-${th}.png`); writeFileSync(f, png(k + 10)); return `${v}:${th}:${f}`; });

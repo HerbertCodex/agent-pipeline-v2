@@ -4,7 +4,7 @@
 
 **Un chef de projet Claude Code, de vrais sous-agents, des règles que l'outil fait respecter.**
 
-[![Version](https://img.shields.io/badge/alpha-3.0.0--alpha.17-a8461a?style=flat-square)](docs/PLUGIN.md)
+[![Version](https://img.shields.io/badge/alpha-3.0.0--alpha.18-a8461a?style=flat-square)](docs/PLUGIN.md)
 [![CI](https://github.com/HerbertCodex/agent-pipeline-v2/actions/workflows/ci.yml/badge.svg)](https://github.com/HerbertCodex/agent-pipeline-v2/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A5%2022.16-2d6e45?style=flat-square)](package.json)
 [![License](https://img.shields.io/badge/licence-MIT-55514a?style=flat-square)](LICENSE)
@@ -92,7 +92,7 @@ Sur une configuration existante, l'outil liste les contrôles que les règles ex
 3. **Implémentation** : `/apv:run <spec>` : fondations, tâches en parallèle, intégration ; `apv gates run --stage task` à chaque tâche.
 4. **Relecture** : `/apv:review` ; chaque relecteur enregistre sa relecture au commit relu (`apv review record`, captures comprises pour la fidélité).
 5. **Preuve** : `apv gates run --stage full --base origin/main`, puis `apv gates verify --commit <tête>`.
-6. **Fusion** : `apv rules check --commit <tête> --target origin/main`, puis `/apv:stack <pr...>` (`APV_ALLOW_MERGE=1 apv stack merge`), sur ordre de l'opérateur ou par sa délégation écrite. La fusion est refusée sans preuve complète au commit, avec un test réussi seulement à la relance, sans relecture enregistrée sans constat critique ni haut, sans les captures d'un changement d'interface, sans les contrôles de base d'un projet web, ou sans maquette validée pour un écran.
+6. **Fusion** : `apv rules check --commit <tête> --target origin/main`, puis `/apv:stack <pr...>` (`APV_ALLOW_MERGE=1 apv stack merge`), sur ordre de l'opérateur ou par sa délégation écrite. La fusion est refusée sans preuve complète au commit, avec un test réussi seulement à la relance, sans relecture enregistrée sans constat critique ni haut, sans les captures de la relecture de fidélité (sauf projet sans écran), sans les contrôles de base d'un projet web, ou sans maquette validée pour un écran.
 
 ## Commandes principales
 

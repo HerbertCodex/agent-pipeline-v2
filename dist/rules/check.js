@@ -33,6 +33,23 @@ export function isWebAt(repo, sha) {
     const files = gitRead(repo, ['ls-tree', '-r', '-z', '--name-only', sha])?.split('\0').filter(Boolean) ?? [];
     return files.some(f => !ignored(f) && UI_EXTENSIONS.has(extensionOf(f)));
 }
+/** Pages written in Markdown (mdsvex, MDX) under the routes or the pages of a project: screens the tool reads as files. */
+const ROUTE_CONTENT = /(^|\/)(routes|pages)\/.*\.(md|svx|mdx)$/;
+/**
+ * Whether a file is, or brings, a screen: a screen of the routes or of rules.screens, a page in Markdown under the
+ * routes, or an interface file of the web detection (UI_EXTENSIONS: an HTML page, a component, a server template).
+ */
+function screenLike(path, screens) {
+    return isScreen(path, screens) || ROUTE_CONTENT.test(path) || UI_EXTENSIONS.has(extensionOf(path));
+}
+/** Whether the project has screens at `sha`: a web project (isWebAt), or a file the tool reads as a screen. */
+function hasScreensAt(repo, sha, screens) {
+    if (isWebAt(repo, sha))
+        return true;
+    const ignored = globMatcher([...DEFAULT_REUSE_IGNORE]);
+    const files = gitRead(repo, ['ls-tree', '-r', '-z', '--name-only', sha])?.split('\0').filter(Boolean) ?? [];
+    return files.some(f => !ignored(f) && screenLike(f, screens));
+}
 /** Files the change adds or modifies since the base (renames counted as an addition: a moved screen is a new address). */
 function changedFiles(repo, base, head) {
     const raw = gitRead(repo, ['diff', '--name-status', '-z', '--no-renames', base, head]);
@@ -143,16 +160,26 @@ export async function checkMergeRules(input) {
     rules.push(reviewProblems.length
         ? outcome('relecture', 'refused', `relectures demandées par le diff : ${plan.retained.join(', ')}`, reviewProblems, reviewTodo)
         : outcome('relecture', 'ok', `relectures enregistrées à ${short(sha)} sans constat critique ni haut : ${plan.retained.join(', ')} (risque ${plan.risk.level === 'faible' ? 'faible' : 'élevé'} : ${plan.risk.reason.slice(0, 200)})`));
-    if (!plan.retained.includes('fidelite'))
-        rules.push(outcome('captures', 'not_applicable', 'aucun fichier d\'interface ni de maquette changé'));
+    // captures: in a project with screens at the base, required as soon as the plan retains fidelite (a component, a
+    // style, a message shown, a configuration of the styles change what a screen shows). Not applicable only to a project
+    // without screens at the base (not a web project, no route the tool knows, nothing in rules.screens, no interface
+    // file) that adds none: a command-line tool has nothing to capture, a first page or template added asks for them.
+    const screenMatch = screenMatchers(settings.screens);
+    const changed = changedFiles(repo, mergeBase, sha);
+    const screens = changed.filter(f => isScreen(f, screenMatch));
+    const addedScreens = changed.filter(f => screenLike(f, screenMatch));
+    if (!addedScreens.length && !hasScreensAt(repo, mergeBase, screenMatch))
+        rules.push(outcome('captures', 'not_applicable', 'projet sans écran à la base (pas un projet web, aucune route reconnue ni rules.screens, aucun fichier d\'interface) et aucun écran ajouté : rien à capturer'));
+    else if (!plan.retained.includes('fidelite'))
+        rules.push(outcome('captures', 'not_applicable', 'relecture de fidélité non retenue par le plan des revues'));
     else {
         const record = reviews.get('fidelite')?.record ?? null;
         const needed = settings.captures.viewports.flatMap(v => settings.captures.themes.map(t => `${v}:${t}`));
         const have = new Set((reviews.get('fidelite')?.problem ? [] : record?.captures ?? []).map(c => `${c.viewport}:${c.theme}`));
         const missing = needed.filter(n => !have.has(n));
         rules.push(missing.length
-            ? outcome('captures', 'refused', `captures attendues : ${needed.join(', ')}`, [`capture(s) absente(s) de la relecture fidelite à ${short(sha)} : ${missing.join(', ')}`], [
-                `apv:qa-fidelite capture chaque écran changé (${missing.join(', ')}), les regarde à côté de la maquette validée et les joint à sa relecture : apv review record --commit ${short(sha)} --domain fidelite --capture <largeur>:<thème>:<fichier> ...`,
+            ? outcome('captures', 'refused', `relecture de fidélité retenue${addedScreens.length ? ` (écran(s) ou fichier(s) d'interface : ${addedScreens.slice(0, 5).join(', ')}${addedScreens.length > 5 ? ', ...' : ''})` : ''}, captures attendues : ${needed.join(', ')}`, [`capture(s) absente(s) de la relecture fidelite à ${short(sha)} : ${missing.join(', ')}`], [
+                `apv:qa-fidelite capture chaque écran changé ou qui utilise un fichier changé (${missing.join(', ')}), les regarde à côté de la maquette validée et les joint à sa relecture : apv review record --commit ${short(sha)} --domain fidelite --capture <largeur>:<thème>:<fichier> ...`,
             ])
             : outcome('captures', 'ok', `captures jointes à ${short(sha)} : ${needed.join(', ')}`));
     }
@@ -170,7 +197,6 @@ export async function checkMergeRules(input) {
     else
         rules.push(outcome('controles', 'ok', `contrôles requis présents et obligatoires : ${required.map(g => g.id).join(', ')}`));
     // maquette: every screen added or changed is covered by a mockup the operator validated.
-    const screens = changedFiles(repo, mergeBase, sha).filter(f => isScreen(f, screenMatchers(settings.screens)));
     if (!screens.length)
         rules.push(outcome('maquette', 'not_applicable', 'aucun écran ajouté ni modifié'));
     else {
