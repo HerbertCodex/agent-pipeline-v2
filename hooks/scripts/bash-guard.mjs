@@ -92,8 +92,16 @@ export function tokenize(command) {
   const pending = [];
   /** Index of the simple command each heredoc feeds (its body is that command's standard input). */
   const heredocOwners = [];
+  /** The texts fed to each simple command on its standard input (heredoc bodies, here-strings), by index: a shell runs them. */
+  const scripts = {};
+  const feed = (owner, text) => { (scripts[owner] ??= []).push(text); };
+  let pendingOwners = [];
+  let hereString = false;
   const flushWord = () => {
-    if (inWord) words.push(word);
+    if (inWord) {
+      words.push(word);
+      if (hereString) { feed(segments.length, word); hereString = false; }
+    }
     word = '';
     inWord = false;
   };
@@ -110,6 +118,8 @@ export function tokenize(command) {
       // Heredoc bodies are data, not commands.
       flushSegment();
       const next = skipHeredocBodies(command, i + 1, pending);
+      for (const owner of pendingOwners) feed(owner, command.slice(i + 1, next));
+      pendingOwners = [];
       shadow += '\n';
       blank(i + 1, next);
       i = next;
@@ -161,6 +171,7 @@ export function tokenize(command) {
     // A here-string (`<<<`) is one operator, its word the standard input of the command: never a heredoc delimiter.
     if (command.startsWith('<<<', i)) {
       flushWord();
+      hereString = true;
       shadow += '<<<';
       i += 3;
       continue;
@@ -168,7 +179,7 @@ export function tokenize(command) {
     if (command.startsWith('<<', i)) {
       flushWord();
       const { heredoc, next } = readHeredoc(command, i);
-      if (heredoc) { pending.push(heredoc); heredocOwners.push(segments.length); }
+      if (heredoc) { pending.push(heredoc); heredocOwners.push(segments.length); pendingOwners.push(segments.length); }
       shadow += command.slice(i, next);
       i = next;
       continue;
@@ -192,7 +203,7 @@ export function tokenize(command) {
     i += 1;
   }
   flushSegment();
-  return { segments, shadow, heredocOwners };
+  return { segments, shadow, heredocOwners, scripts };
 }
 
 /**
@@ -445,7 +456,9 @@ export function mayBeStore(path) {
 }
 
 /** Commands that delete, move, empty or copy away what they are given: handed a store, they reach it. */
-const STORE_WRITERS = new Set(['rm', 'unlink', 'rmdir', 'shred', 'truncate', 'mv', 'cp', 'rsync', 'tar', 'zip', 'ln']);
+const STORE_WRITERS = new Set(['rm', 'unlink', 'rmdir', 'shred', 'truncate', 'mv', 'cp', 'rsync', 'tar', 'zip', 'ln', 'chmod', 'chown', 'chgrp', 'install', 'setfacl', 'chattr']);
+/** The file a word redirects into (`> f`, `>>f`, `2> f`, `&> f`, `>| f`) or names as the output of dd (`of=f`): `''` when it is the next word. */
+const writtenBy = word => /^(?:\d*|&)>{1,2}\|?(.*)$/.exec(word)?.[1] ?? /^of=(.+)$/.exec(word)?.[1] ?? null;
 
 /**
  * Why a command reaches the stores of the tool, or null (docs/PLUGIN.md, « toujours refusés : magasins, suppression
@@ -469,18 +482,29 @@ export function storeProblem(segments, cwd = null, home = null, command = '') {
     const args = cw.slice(1).filter(a => !a.startsWith('-'));
     // A glob that may reach into a store, whatever reads it.
     for (const arg of args) if (GLOB.test(arg) && mayBeStore(dirname(at(arg, dir)))) return REASONS.anchorStore;
+    // A redirection or `of=` into a store empties or replaces what is there, whatever the command (`: > …`, `dd of=…`).
+    for (let k = 0; k < words.length; k += 1) {
+      const target = writtenBy(words[k]);
+      const path = target === '' ? words[k + 1] : target;
+      if (path && (mayBeStore(at(path, dir)) || mayBeStore(path))) return REASONS.anchorStore;
+    }
+    // An interpreter given a script that names the store folder (`python3 -c "shutil.rmtree('.git/apv')"`).
+    if (INTERPRETERS.has(tool) && /\.git\W{1,4}apv\b/.test(flatten(cw.join(' ')))) return REASONS.anchorStore;
     const fedByLine = words.slice(0, words.length - cw.length).some(w => ['xargs', 'parallel'].includes(basename(w))) || tool === 'xargs';
+    const inPlace = ['sed', 'gsed', 'perl'].includes(tool) && cw.some(a => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place'));
     if (tool === 'find') {
-      const acts = cw.some((a, k) => a === '-delete' || (['-exec', '-execdir', '-ok', '-okdir'].includes(a) && STORE_WRITERS.has(basename(cw[k + 1] ?? ''))));
+      const acts = cw.some((a, k) => a === '-delete' || (['-exec', '-execdir', '-ok', '-okdir'].includes(a) && (STORE_WRITERS.has(basename(cw[k + 1] ?? '')) || EXECUTORS.has(basename(cw[k + 1] ?? '')))));
       if (!acts) continue;
       const starts = cw.slice(1, Math.max(1, cw.findIndex((a, k) => k > 0 && a.startsWith('-'))));
       const names = cw.filter((a, k) => ['-name', '-iname', '-path', '-ipath', '-wholename', '-regex', '-iregex'].includes(cw[k - 1] ?? ''));
       if (starts.some(s => mayBeStore(at(s, dir)) || mayBeStore(`${at(s, dir)}/apv`)) || names.some(n => globMayMatch(n.split('/').pop() ?? n, 'apv') || /apv/.test(n))) return REASONS.anchorStore;
       continue;
     }
-    if (!STORE_WRITERS.has(tool)) continue;
+    if (!STORE_WRITERS.has(tool) && !inPlace) continue;
     for (const arg of fedByLine ? [...args, ...lineWords] : args) {
       if (/[$`]/.test(arg) && /\/apv\/?$/.test(arg)) return REASONS.anchorStore;
+      // A computed path on a line that names a Git directory (`d=.git/ap; rm -rf ${d}v`): it may be the store.
+      if (/[$`]/.test(arg) && /\.git\b/.test(String(command))) return REASONS.anchorStore;
       if (mayBeStore(at(arg, dir)) || mayBeStore(arg)) return REASONS.anchorStore;
     }
     // An unquoted substitution followed by `/apv` is split from its command by the tokenizer: read in the line.
@@ -575,84 +599,87 @@ export function pushToDefault(words, defaults = ['main', 'master'], current = nu
   return null;
 }
 
-/** An address or a path given to `git push` in place of a remote name: `https://…`, `git@host:o/r`, `/srv/r.git`, `../r`. */
-const PUSH_URL = /^(?:[a-z][\w+.-]*:\/\/|[^/\s:]+@[^/\s:]+:|\/|\.\.?(?:\/|$)|~)/i;
+/** Variables that move Git or gh to another repository, or `cd` to another folder: in the line or in the environment. */
+const SCOPE_VARIABLE = /^(?:GIT_(?:DIR|WORK_TREE|COMMON_DIR|CONFIG\w*|NAMESPACE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM)|GH_(?:REPO|HOST)|GITHUB_\w+|CDPATH)$/;
+/** Global options of git that change nothing of where it acts. Any other (`-C`, `-c`, `--git-dir`, `--work-tree`...) does. */
+const GIT_NEUTRAL = new Set(['--no-pager', '-p', '--paginate', '-P', '--no-replace-objects', '--literal-pathspecs', '--no-optional-locks', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs']);
+/** Commands that run a text of their own (shells, eval, source, xargs...): their commands are not read from here. */
+const OPAQUE = new Set([...['sh', 'bash', 'dash', 'zsh', 'ksh', 'mksh', 'ash', 'fish', 'csh', 'tcsh'], 'eval', 'source', '.', 'xargs', 'parallel', 'busybox', 'toybox', 'su',
+  'script', 'watch', 'unbuffer', 'ssh', 'alias', 'unalias', 'function', 'popd', 'builtin', 'enable', 'hash']);
 
 /**
- * The repositories a command acts on besides the working directory and the project of the session (docs/PLUGIN.md,
- * « Portée des crochets »): the directories its literal `cd` lead to, `git -C`, `--git-dir`, `--work-tree` (and GIT_DIR,
- * GIT_WORK_TREE), a push to a path or an address, `gh -R <owner/repo>` (and GH_REPO), the repository of a `gh api
- * repos/<owner>/<repo>/…`. `unknown` when one of them is computed (`cd "$X"`, `git -C $(…)`) or a remote is added by the
- * line itself: the tool is then active.
+ * Whether a command keeps to the repository of its working directory in a shape this guard reads whole (docs/PLUGIN.md,
+ * « Portée des crochets »), and what it reaches there: `{ plain, dirs, remotes, slugs }`. The guards are relaxed outside
+ * a project of the tool only for a plain command; anything this guard cannot read to the end makes it not plain, so the
+ * tool stays active: a substitution, a variable, a heredoc or here-string, `<(…)`; a shell, eval, source, xargs or an
+ * unknown wrapper in front of git or gh; `env -C`, `sudo -D` and other options of a wrapper; GIT_*, GH_REPO or CDPATH set
+ * in the line or in the environment; a `cd` or `pushd` that is not literal; any global option of git that is not neutral
+ * (`-C`, `-C<p>`, `-c`, `--git-dir`...); a push to an address or a path, or with `--repo`; `git config` or `git remote`
+ * changing a remote; gh with `-R`, `--repo`, `--hostname` or an address; a GraphQL call. `dirs` are the literal `cd`
+ * targets, `remotes` the remote names reached (`*`: whichever gh or a push without remote picks), `slugs` the
+ * `owner/repo` of an API call.
  */
-export function commandTargets(segments, cwd = null, home = null, env = {}, depth = 0) {
-  const dirs = []; const remotes = []; let unknown = false;
+export function commandScope(command, segments, cwd = null, home = null, env = {}) {
+  const scope = { plain: true, dirs: [], remotes: [], slugs: [] };
+  const stop = () => { scope.plain = false; return scope; };
+  if (typeof command !== 'string' || /[$`]|<<|<\(|>\(/.test(command)) return stop();
+  if (Object.keys(env).some(k => SCOPE_VARIABLE.test(k) && env[k])) return stop();
   let dir = cwd;
-  const at = p => {
-    if (p === undefined || /[$`]/.test(p) || (p.startsWith('~') && !home)) { unknown = true; return null; }
-    const expanded = p === '~' ? home : p.startsWith('~/') ? join(home, p.slice(2)) : p;
-    if (!isAbsolute(expanded) && !dir) { unknown = true; return null; }
-    return resolve(dir ?? '/', expanded);
-  };
-  const addDir = p => { const full = at(p); if (full) dirs.push(full); };
-  if (typeof env.GH_REPO === 'string' && env.GH_REPO) remotes.push(env.GH_REPO);
-  for (const name of ['GIT_DIR', 'GIT_WORK_TREE']) if (typeof env[name] === 'string' && env[name]) addDir(env[name]);
   for (const words of segments) {
-    // The substitutions inside quoted words (`cat "$(git -C <p> rev-parse --git-common-dir)/x"`) run too.
-    for (const word of words) {
-      for (const sub of substitutions(word)) {
-        const inner = depth < MAX_NESTING ? commandTargets(tokenize(sub).segments, dir, home, {}, depth + 1) : { dirs: [], remotes: [], unknown: true };
-        dirs.push(...inner.dirs); remotes.push(...inner.remotes); unknown ||= inner.unknown;
-      }
-    }
-    const moved = cdTarget(words, dir, home);
-    if (moved !== undefined) {
-      if (moved === null) unknown = true; else dirs.push(moved);
-      dir = moved;
+    if (words.some(w => SCOPE_VARIABLE.test(w.split('=')[0]) && w.includes('='))) return stop();
+    const lead = basename(words[0] ?? '');
+    if (['cd', 'pushd'].includes(lead)) {
+      const target = cdTarget(words, dir, home);
+      const arg = words.slice(1).find(a => !a.startsWith('-'));
+      // A relative cd may follow CDPATH: only `./`, `../` or an absolute path, read without it.
+      if (!target || (arg !== undefined && !/^(?:\/|~|\.\.?(?:\/|$))/.test(arg) && env.CDPATH)) return stop();
+      scope.dirs.push(target);
+      dir = target;
       continue;
     }
+    if (['export', 'declare', 'typeset', 'readonly', 'local', 'set', 'unset'].includes(lead) && words.some(w => SCOPE_VARIABLE.test(w.split('=')[0]))) return stop();
     const cw = commandWords(words);
     if (!cw) continue;
-    for (const a of cw.assignments) {
-      if (a.startsWith('GH_REPO=')) remotes.push(a.slice('GH_REPO='.length));
-      if (/^GIT_(?:DIR|WORK_TREE)=/.test(a)) addDir(a.slice(a.indexOf('=') + 1));
-    }
+    const prefix = words.slice(0, words.length - cw.words.length);
+    // xargs or parallel run what they read; options of env, sudo, doas may move or rewrite the command (-C, -D, -S, -i...).
+    if (prefix.some(w => ['xargs', 'parallel'].includes(basename(w)) || /^-(?:-chdir|-split-string|-login|-shell|-user|[A-Za-z]*[CDSisu])/.test(w))) return stop();
     const w = cw.words;
     const tool = basename(w[0] ?? '');
+    if (OPAQUE.has(tool)) return stop();
+    if (tool !== 'git' && tool !== 'gh' && w.slice(1).some(x => ['git', 'gh'].includes(basename(x)))) return stop();
     if (tool === 'git') {
       let k = 1;
-      while (k < w.length && w[k].startsWith('-')) {
-        const option = /^(-C|--git-dir|--work-tree)(?:=(.*))?$/.exec(w[k]);
-        if (option) { addDir(option[2] ?? w[k + 1]); k += option[2] !== undefined ? 1 : 2; continue; }
-        k += GIT_WITH_VALUE.has(w[k]) ? 2 : 1;
-      }
-      if (w[k] === 'remote' && ['add', 'set-url', 'rename'].includes(w[k + 1])) unknown = true;
-      if (w[k] === 'push') {
-        const args = w.slice(k + 1);
-        const flag = args.indexOf('--repo');
-        const valued = new Set(['--repo', '--receive-pack', '--exec', '-o', '--push-option']);
-        let remote = args.find(a => a.startsWith('--repo='))?.slice('--repo='.length) ?? (flag === -1 ? undefined : args[flag + 1]);
+      for (; k < w.length && w[k].startsWith('-'); k += 1) if (!GIT_NEUTRAL.has(w[k])) return stop();
+      const sub = w[k];
+      const args = w.slice(k + 1);
+      if (sub === 'config' || (sub === 'remote' && args.some(a => ['add', 'set-url', 'rename', 'set-branches'].includes(a)))) return stop();
+      if (sub === 'push') {
+        if (args.some(a => a === '--repo' || a.startsWith('--repo=') || a === '--receive-pack' || a.startsWith('--exec'))) return stop();
+        const valued = new Set(['-o', '--push-option']);
+        let remote;
         for (let j = 0; remote === undefined && j < args.length; j += 1) {
           if (args[j].startsWith('-')) { if (valued.has(args[j])) j += 1; continue; }
           remote = args[j];
         }
-        if (remote !== undefined && PUSH_URL.test(remote)) {
-          if (/^(?:\/|\.\.?(?:\/|$)|~)/.test(remote) && !/^[a-z][\w+.-]*:\/\//i.test(remote)) addDir(remote);
-          else remotes.push(remote);
-        }
+        if (remote === undefined) scope.remotes.push('*');
+        else if (/[/:~]|^\./.test(remote)) return stop();
+        else scope.remotes.push(remote);
       }
     }
     if (tool === 'gh') {
       const args = w.slice(1);
-      args.forEach((a, j) => {
-        if (a === '-R' || a === '--repo') remotes.push(args[j + 1] ?? '');
-        else if (a.startsWith('--repo=')) remotes.push(a.slice('--repo='.length));
-        else if (/^-R./.test(a)) remotes.push(a.slice(2));
-      });
-      if (args.includes('api')) for (const a of args) { const m = /^\/?repos\/([^/\s]+)\/([^/\s]+)/.exec(a); if (m) remotes.push(`${m[1]}/${m[2]}`); }
+      if (args.some(a => /^(?:-R|--repo|--hostname)(?:=|$)|^-R./.test(a) || /^https?:\/\/|github\.com/i.test(a))) return stop();
+      if (args[0] === 'api') {
+        if (args.includes('graphql')) return stop();
+        for (const a of args) { const m = /^\/?repos\/([^/\s]+)\/([^/\s?]+)/.exec(a); if (m) scope.slugs.push(`${m[1]}/${m[2]}`.toLowerCase()); }
+      } else scope.remotes.push('*');
+    }
+    if (['curl', 'wget', 'http', 'https', 'xh', 'xhs'].includes(tool)) {
+      if (w.some(a => /graphql/i.test(a))) return stop();
+      for (const a of w) { const m = /\/repos\/([^/\s]+)\/([^/\s?]+)/.exec(a); if (m) scope.slugs.push(`${m[1]}/${m[2]}`.toLowerCase()); }
     }
   }
-  return { dirs, remotes, unknown };
+  return scope;
 }
 
 /** The root of this plugin, as launched and with its links resolved: its files run only through apv and the hooks. */
@@ -966,6 +993,7 @@ export function nestedScript(words) {
     const at = w.findIndex((x, k) => k > 0 && (x === '-c' || x === '--command'));
     return at !== -1 && w[at + 1] !== undefined ? w[at + 1] : null;
   }
+  if (tool === 'eval') return w.slice(1).join(' ') || null;
   return null;
 }
 
@@ -979,28 +1007,30 @@ export function evaluateCommand(command, env = {}, context = EMPTY_CONTEXT) {
   return evaluate(command, env, context, 0, { files: [], resources: [], stacks: [] });
 }
 
-function evaluate(command, env, context, depth, inherited) {
+function evaluate(command, env, context, depth, inherited, activeAbove = false) {
   if (typeof command !== 'string' || command.trim() === '') return { decision: 'allow' };
   if (anchorInCommand(command)) return { decision: 'deny', reason: REASONS.anchorStore };
   const flat = flatten(command);
   const mergeApi = mergeApiInCommand(command);
+  const { segments, shadow, scripts } = tokenize(command);
   // Where the tool is active (docs/PLUGIN.md, « Portée des crochets »), every rule; elsewhere, the rules that protect the
-  // key and the stores of every project, and the ones that held before the rules. Active is judged on every repository
-  // the command acts on (`cd`, `git -C`, `gh -R`, a push to an address...); a merge through the API that names no
-  // repository (a GraphQL mutation) cannot be placed: active.
-  const targets = commandTargets(tokenize(command).segments, context.cwd ?? null, context.home ?? null, env);
-  if (mergeApi && !/repos\/+[^/\s]+\/+[^/\s]+\/+pulls\//.test(flat)) targets.unknown = true;
-  const active = context.apvProject ? context.apvProject(targets) !== false : true;
+  // key and the stores of every project, and the ones that held before the rules. Relaxed only for a plain command
+  // (commandScope) whose repository, folders and remotes are known to be outside the tool (context.apvProject); a merge
+  // through the API that names no repository cannot be placed. A script run by a command of an active line stays active.
+  const scope = commandScope(command, segments, context.cwd ?? null, context.home ?? null, env);
+  if (mergeApi && !scope.slugs.length) scope.plain = false;
+  const active = activeAbove || !context.apvProject || !scope.plain || context.apvProject(scope) !== false;
   if (mergeApi) {
     if (context.agentId) return { decision: 'deny', reason: REASONS.mergeBySubagent };
     if (active) return { decision: 'deny', reason: REASONS.rawMerge };
-    if (env.APV_ALLOW_MERGE !== '1' && !/(^|\s)APV_ALLOW_MERGE=1\s/.test(flat)) return { decision: 'deny', reason: REASONS.mergeOutside };
+    // The authorisation is set for the command that merges (or in the environment), never elsewhere in the line.
+    const merging = segments.filter(w => MERGE_API.test(flatten(w.join(' '))));
+    if (env.APV_ALLOW_MERGE !== '1' && !merging.some(w => authorised(w, 'APV_ALLOW_MERGE', env))) return { decision: 'deny', reason: REASONS.mergeOutside };
   }
   if (active && /--git-common-dir/.test(flat) && !/^\s*git\s+rev-parse(\s+--path-format=(absolute|relative))?\s+--git-common-dir\s*$/.test(flat)) return { decision: 'deny', reason: REASONS.commonDir };
   if (active && /(^|[\s;&|(])eval\b/.test(flat) && /\bapv\b|cli\.js/.test(flat)) return { decision: 'deny', reason: REASONS.computedApv };
   if (/\bAPV_ENTRY\b|\bAPV_ANCHOR_KEY_FILE\b/.test(flat)) return { decision: 'deny', reason: REASONS.toolVariable };
   if (decodedAndUsed(command) || decodedAndUsed(flat)) return { decision: 'deny', reason: REASONS.encodedPath };
-  const { segments, shadow } = tokenize(command);
   const store = storeProblem(segments, context.cwd ?? null, context.home ?? null, command);
   if (store) return { decision: 'deny', reason: store };
   let writesGithub = false;
@@ -1010,7 +1040,7 @@ function evaluate(command, env, context, depth, inherited) {
   if (install) return { decision: 'deny', reason: install };
   // The declared stacks are read (git, config) only for a command that may reach one.
   const stacks = /\b(docker|podman|supabase)\b/.test(command) ? context.stacks() : [];
-  for (const words of segments) {
+  for (const [index, words] of segments.entries()) {
     // A write to a remote database (production): refused whatever the locks, no variable lifts it.
     const remote = remoteWriteProblem(words) ?? remoteWriteProblem(lockWrapper(words, stacks, context.cwd).words);
     if (remote) return { decision: 'deny', reason: remote };
@@ -1018,9 +1048,12 @@ function evaluate(command, env, context, depth, inherited) {
     const held = mergeHeld(inherited, wrapped.held);
     const stack = stacks.length ? stackProblem(wrapped.words, held, context, context.cwd) : null;
     if (stack) return { decision: 'deny', reason: stack };
-    const script = depth < MAX_NESTING ? nestedScript(wrapped.words) ?? nestedScript(words) : null;
-    if (script !== null) {
-      const nested = evaluate(script, env, context, depth + 1, held);
+    // The scripts a command runs: `sh -c`, `flock -c`, `eval`, a heredoc or a here-string read by a shell or by eval.
+    const lead = basename((commandWords(wrapped.words)?.words ?? wrapped.words)[0] ?? '');
+    const fed = SHELLS.has(lead) || ['eval', 'source', '.'].includes(lead) ? (scripts[index] ?? []) : [];
+    const own = depth < MAX_NESTING ? nestedScript(wrapped.words) ?? nestedScript(words) : null;
+    for (const script of depth < MAX_NESTING ? [...(own !== null ? [own] : []), ...fed] : []) {
+      const nested = evaluate(script, env, context, depth + 1, held, active);
       if (nested.decision === 'deny') return nested;
     }
     if (isForcePush(words)) return { decision: 'deny', reason: REASONS.forcePush };

@@ -365,14 +365,14 @@ test('review 99, MOYEN 7: outside a project of the tool, only the rules that pro
   const lead = as(null);
   const outside = { ...lead, apvProject: () => false };
   // Allowed outside, refused where the tool is active.
-  for (const command of ['git push origin main', 'claude mcp list', 'du -sh ~', 'APV_ALLOW_MERGE=1 gh pr merge 3 --merge', 'git rev-parse --git-common-dir | xargs ls',
-    'eval "apv status"']) {
+  for (const command of ['git push origin main', 'claude mcp list', 'du -sh ~', 'APV_ALLOW_MERGE=1 gh pr merge 3 --merge', 'git rev-parse --git-common-dir; ls']) {
     assert.equal(evaluateCommand(command, {}, outside).decision, 'allow', `outside: ${command}`);
     assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', `active: ${command}`);
   }
-  // Refused everywhere: the key, the stores, force-push, a merge without authorisation or in a subagent, decoded commands.
+  // Refused everywhere: the key, the stores, force-push, a merge without authorisation or in a subagent, decoded commands;
+  // and what this guard cannot read to the end (eval, xargs): the tool stays active there.
   for (const command of ['cat ~/.apv-ancrage/cle-ancrage', 'cat .git/apv/reviews/x', 'git push --force origin x', 'gh pr merge 3 --merge',
-    'echo eA== | base64 -d | sh', 'tar czf h.tgz ~', 'rm -rf .git/apv']) {
+    'echo eA== | base64 -d | sh', 'tar czf h.tgz ~', 'rm -rf .git/apv', 'eval "apv status"', 'git rev-parse --git-common-dir | xargs ls']) {
     assert.equal(evaluateCommand(command, {}, outside).decision, 'deny', `outside: ${command}`);
   }
   assert.deepEqual(evaluateCommand('APV_ALLOW_MERGE=1 gh pr merge 3 --merge', {}, { ...outside, agentId: 'a1', agentType: 'x' }), { decision: 'deny', reason: REASONS.mergeBySubagent });
@@ -419,43 +419,84 @@ test('review 99, BAS 13: rm of a folder named apv and base64 decoded into data a
   assert.equal(decodedAndUsed('base64 -d a | sha256sum'), false);
 });
 
-test('review of #105, E1: the scope is judged on every repository the command targets; moving the configuration aside changes nothing', async t => {
+test('review of #105, E1 (second pass): relaxed only for a plain command on a repository known to be outside the tool', async t => {
   const { hookContext, projectOfTool, repoSlug } = await import('../hooks/scripts/harness-guard.mjs');
   const root = mkdtempSync(join(tmpdir(), 'apv3-cible-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, stdio: 'pipe' });
-  const apvRepo = join(root, 'appli'); const other = join(root, 'autre');
-  for (const dir of [apvRepo, other]) { mkdirSync(dir); git(dir, 'init', '-q', '-b', 'feat'); }
-  mkdirSync(join(apvRepo, '.apv')); writeFileSync(join(apvRepo, '.apv', 'config.json'), '{}');
-  git(apvRepo, 'add', '-A'); git(apvRepo, 'commit', '-qm', 'apv');
-  git(other, 'commit', '-q', '--allow-empty', '-m', 'x'); git(other, 'remote', 'add', 'origin', 'git@github.com:Moi/Autre.git');
+  const repo = (name, { config = false } = {}) => {
+    const dir = join(root, name); mkdirSync(dir); git(dir, 'init', '-q', '-b', 'feat');
+    if (config) { mkdirSync(join(dir, '.apv')); writeFileSync(join(dir, '.apv', 'config.json'), '{}'); git(dir, 'add', '-A'); }
+    git(dir, 'commit', '-q', '--allow-empty', '-m', 'x');
+    return dir;
+  };
+  const bare = (name, from) => { const dir = join(root, name); git(root, 'clone', '-q', '--bare', from, dir); return dir; };
+  const apvRepo = repo('appli', { config: true }); const apvBare = bare('appli.git', apvRepo);
+  // A repository outside the tool, its remote fetched: the only one where the guards are relaxed.
+  const other = repo('autre'); const otherBare = bare('autre.git', other);
+  git(other, 'remote', 'add', 'origin', otherBare); git(other, 'fetch', '-q', 'origin');
   const env = { HOME: root };
   const contextOf = (cwd, extra = {}) => ({ ...hookContext({ cwd }, env), ...extra });
-  // The file moved aside in the working tree: the last commit still declares it.
-  renameSync(join(apvRepo, '.apv', 'config.json'), join(apvRepo, '.apv', 'config.json.bak'));
-  assert.equal(projectOfTool(apvRepo), true);
   assert.equal(projectOfTool(other), false);
-  assert.deepEqual(evaluateCommand('git push origin HEAD:main', {}, contextOf(apvRepo, { agentId: 'a1', agentType: 'apv:implementer' })), { decision: 'deny', reason: REASONS.pushToDefault('main') });
-  assert.deepEqual(evaluateCommand('APV_ALLOW_MERGE=1 gh pr merge 187 --squash', {}, contextOf(apvRepo)), { decision: 'deny', reason: REASONS.rawMerge });
-  assert.deepEqual(evaluateCommand('claude -p x --dangerously-skip-permissions', {}, contextOf(apvRepo)), { decision: 'deny', reason: REASONS.nestedClaude });
-  // From a repository outside the tool, aiming at a project of the tool, or at a place that cannot be known: active.
-  for (const command of ['APV_ALLOW_MERGE=1 gh pr merge 187 -R HerbertCodex/suivie', `git -C ${apvRepo} push origin HEAD:main`,
-    'git push https://github.com/HerbertCodex/suivie.git HEAD:main', `cd ${apvRepo} && APV_ALLOW_MERGE=1 gh pr merge 187`, 'cd "$X" && git push origin main',
-    `sh -c 'cd ${apvRepo} && git push origin main'`, 'GH_REPO=HerbertCodex/suivie APV_ALLOW_MERGE=1 gh pr merge 187', `git --git-dir=${apvRepo}/.git push origin HEAD:main`,
-    'git remote add x https://github.com/HerbertCodex/suivie && git push x HEAD:main', `cd ${apvRepo} && claude -p x`,
-    `cat "$(git -C ${apvRepo} rev-parse --git-common-dir)"/apv/rev*/*`, `truncate -s0 "$(git -C ${apvRepo} rev-parse --git-common-dir)"/apv/op*/*`,
-    'APV_ALLOW_MERGE=1 gh api graphql -f query="mutation { mergePullRequest(input: {}) { x } }"']) {
-    assert.equal(evaluateCommand(command, {}, contextOf(other)).decision, 'deny', command);
-  }
-  // Outside the tool and aiming at its own repository: the old guards only.
-  for (const command of ['git push origin main', 'APV_ALLOW_MERGE=1 gh pr merge 3 -R Moi/Autre', 'APV_ALLOW_MERGE=1 gh pr merge 3 --repo=github.com/moi/autre',
-    `cd ${other} && git push origin main`, 'claude mcp list', 'APV_ALLOW_MERGE=1 gh api -X PUT repos/Moi/Autre/pulls/3/merge']) {
+  for (const command of ['git push origin main', 'git push origin HEAD:main', 'APV_ALLOW_MERGE=1 gh pr merge 3', `cd ${other} && git push origin main`, 'claude mcp list']) {
     assert.equal(evaluateCommand(command, {}, contextOf(other)).decision, 'allow', command);
   }
-  // Without authorisation, outside the tool: the refusal says how to merge there.
   assert.deepEqual(evaluateCommand('gh pr merge 3', {}, contextOf(other)), { decision: 'deny', reason: REASONS.mergeOutside });
+  // Every form the second review found, and those of the first: active, so refused.
+  for (const command of ['APV_ALLOW_MERGE=1 gh pr merge https://github.com/acme/apvproj/pull/5', `git -C${apvRepo} push origin main`, `env -C ${apvRepo} git push origin main`,
+    `env --chdir=${apvRepo} git push origin main`, `sudo -D ${apvRepo} git push origin main`, `export GIT_DIR=${apvRepo}/.git; git push origin main`,
+    `cd ${apvRepo} && sh -c "git push origin main"`, `cd ${apvRepo} && bash -lc "git push origin main"`, `cd ${apvRepo} && eval "git push origin main"`,
+    `cd ${apvRepo} && bash <<< "git push origin main"`, `cd ${apvRepo} && bash <<X\ngit push origin main\nX`, `cd $(echo ${apvRepo}) && git push origin main`,
+    `pushd \`echo ${apvRepo}\` && git push origin main`, `CDPATH=${root} cd appli && git push origin main`, `git -c remote.x.url=${apvBare} push x HEAD:main`,
+    `git config remote.z.url ${apvBare} && git push z HEAD:main`, `git push ${apvBare} HEAD:main`, 'git push https://github.com/acme/apvproj.git HEAD:main',
+    'APV_ALLOW_MERGE=1 gh pr merge 187 -R acme/apvproj', 'GH_REPO=acme/apvproj APV_ALLOW_MERGE=1 gh pr merge 187', `git -C ${apvRepo} push origin HEAD:main`,
+    `cd ${apvRepo} && APV_ALLOW_MERGE=1 gh pr merge 187`, `git --git-dir=${apvRepo}/.git push origin HEAD:main`, 'git remote add x https://github.com/acme/apvproj && git push x HEAD:main',
+    `cd ${apvRepo} && claude -p x`, `cat "$(git -C ${apvRepo} rev-parse --git-common-dir)"/apv/rev*/*`, 'APV_ALLOW_MERGE=1 gh api graphql -f query="mutation { mergePullRequest(input: {}) { x } }"',
+    'xargs git push origin main < remotes', 'watch git push origin main', 'cd "$X" && git push origin main']) {
+    assert.equal(evaluateCommand(command, {}, contextOf(other)).decision, 'deny', command);
+  }
+  assert.equal(evaluateCommand('git push origin main', { GIT_DIR: `${apvRepo}/.git` }, contextOf(other)).decision, 'deny', 'GIT_DIR in the environment');
+  // A remote that points to a project of the tool, or that cannot be checked: never « itself ».
+  const mixed = repo('mixte'); git(mixed, 'remote', 'add', 'origin', otherBare); git(mixed, 'fetch', '-q', 'origin');
+  git(mixed, 'remote', 'add', 'apv', apvBare);
+  assert.equal(evaluateCommand('git push apv HEAD:main', {}, contextOf(mixed)).decision, 'deny', 'remote never fetched');
+  assert.equal(evaluateCommand('APV_ALLOW_MERGE=1 gh pr merge 3', {}, contextOf(mixed)).decision, 'deny', 'gh may pick that remote');
+  git(mixed, 'fetch', '-q', 'apv');
+  assert.equal(projectOfTool(mixed), true, 'a fetched branch carries the configuration');
+  const pushElsewhere = repo('pushurl'); git(pushElsewhere, 'remote', 'add', 'origin', otherBare); git(pushElsewhere, 'fetch', '-q', 'origin');
+  git(pushElsewhere, 'config', 'remote.origin.pushurl', apvBare);
+  assert.equal(evaluateCommand('git push origin HEAD:main', {}, contextOf(pushElsewhere)).decision, 'deny', 'pushurl elsewhere');
+  const fresh = repo('neuf'); git(fresh, 'remote', 'add', 'origin', otherBare);
+  assert.equal(evaluateCommand('git push origin main', {}, contextOf(fresh)).decision, 'deny', 'never fetched: unknown');
+  // S2: marks a commit does not take away. The configuration removed by a commit, no origin/HEAD: another branch keeps it.
+  git(apvRepo, 'switch', '-q', '-c', 'sans'); git(apvRepo, 'rm', '-q', '-r', '.apv'); git(apvRepo, 'commit', '-qm', 'retire');
+  assert.equal(existsSync(join(apvRepo, '.apv')), false);
+  assert.equal(projectOfTool(apvRepo), true, 'feat still declares it');
+  assert.deepEqual(evaluateCommand('git push origin HEAD:main', {}, contextOf(apvRepo)), { decision: 'deny', reason: REASONS.pushToDefault('main') });
+  git(apvRepo, 'switch', '-q', '--detach'); git(apvRepo, 'branch', '-q', '-D', 'feat', 'sans');
+  assert.equal(projectOfTool(apvRepo), false, 'no mark left at all');
+  mkdirSync(join(apvRepo, '.git', 'apv'));
+  assert.equal(projectOfTool(apvRepo), true, 'the stores of the tool mark it');
+  // S3: no repository at all, neither the working directory nor the project of the session: active.
+  const loose = join(root, 'libre'); mkdirSync(loose);
+  assert.equal(hookContext({ cwd: loose }, { HOME: root, CLAUDE_PROJECT_DIR: loose }).apvProject({ plain: true, dirs: [], remotes: [], slugs: [] }), true);
   assert.equal(repoSlug('https://github.com/HerbertCodex/suivie.git'), 'herbertcodex/suivie');
   assert.equal(repoSlug('git@github.com:Moi/Autre.git'), 'moi/autre');
+});
+
+test('review of #105, F5 and D3: the authorisation goes on the merging command; the store folder is reached by no redirection, dd, chmod, sed -i or script', () => {
+  const lead = { ...as(null), cwd: '/r' };
+  const outside = { ...lead, apvProject: () => false };
+  assert.equal(evaluateCommand('echo APV_ALLOW_MERGE=1 ; curl -X PUT https://api.github.com/repos/moi/autre/pulls/1/merge', {}, outside).decision, 'deny');
+  assert.equal(evaluateCommand('APV_ALLOW_MERGE=1 curl -X PUT https://api.github.com/repos/moi/autre/pulls/1/merge', {}, outside).decision, 'allow');
+  for (const command of [`find .git/apv -type f -exec sh -c 'rm "$0"' {} \\;`, ': > .git/apv/receipts/x.json', 'echo x >.git/apv/receipts/x.json', 'dd if=/dev/null of=.git/apv/receipts/x.json',
+    'chmod -R 000 .git/apv', 'install -m 600 /dev/null .git/apv/receipts/x.json', 'sed -i d .git/apv/receipts/x.json', `python3 -c "import shutil; shutil.rmtree('.git/apv')"`,
+    `node -e "require('fs').rmSync('.git/apv',{recursive:true})"`, 'd=.git/ap; rm -rf ${d}v']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ['echo x > build/apv/x', 'sed -i s/a/b/ src/apv/x.ts', 'chmod +x scripts/run.sh', 'npm test 2>&1 | tail -5', 'git status > /tmp/s.txt']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
 });
 
 test('review of #105, E2 and E3: gh applies its last method; only pure readers are text, and never when the line runs or sends their output', () => {
@@ -517,4 +558,5 @@ test('review of #105: the seal goes to the repository where apv review record wr
   assert.deepEqual(recordDirectories(`${rec} --repo ../outil`, '/s/appli'), ['/s/outil', '/s/appli']);
   assert.deepEqual(recordDirectories(`cd /c && ${rec} --repo=sous`, '/s'), ['/c/sous', '/s']);
   assert.deepEqual(recordDirectories(rec, '/s'), ['/s']);
+  assert.deepEqual(recordDirectories(`apv status && cd /r/b && ${rec}`, '/s'), ['/r/b', '/s'], 'the record, not the first call of the tool');
 });

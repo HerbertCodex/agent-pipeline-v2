@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
@@ -514,6 +514,37 @@ test('review of #105, M1: under the lock of an ancestor, the checks that share i
   const span = id => ['start', 'end'].map(k => Number(lines.find(l => l[0] === id && l[1] === k)[2]));
   const [a, b] = [span('integration'), span('browser')];
   assert.ok(a[1] <= b[0] || b[1] <= a[0], `overlap: ${JSON.stringify({ a, b })}`);
+});
+
+test('review of #105, D1 and D2: under the lock of an ancestor, the turn is bounded by lock.waitMs and shared across processes', { skip: spawnSyncOk('flock', ['--version']) ? false : 'flock(1) missing' }, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'apv3-held-under-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const lockFile = join(root, 'e2e.lock'); writeFileSync(lockFile, '');
+  const log = join(root, 'log');
+  const body = id => node(`const fs=require('fs');fs.appendFileSync(${JSON.stringify(log)},'${id} start '+Date.now()+'\\n');` +
+    `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,1200);fs.appendFileSync(${JSON.stringify(log)},'${id} end '+Date.now()+'\\n');`);
+  const cli = fileURLToPath(new URL('./support/cli-with-key.mjs', import.meta.url));
+  const { TEST_KEY_FILE } = await import('./support/rules.mjs');
+  // D1: two checks, a turn of 300 ms at most: the one left waiting is refused without running, as under its own flock
+  // (and the suite stops the other, as after any failure).
+  const p = project(t, { gates: [{ id: 'a', stage: 'full', command: body('a'), lock: { file: lockFile, waitMs: 300 }, readOnly: true },
+    { id: 'b', stage: 'full', command: body('b'), lock: { file: lockFile, waitMs: 300 }, readOnly: true }], config: { stacks: [{ id: '1', lockFile }] } });
+  const r = spawnSync('flock', ['-w', '5', lockFile, process.execPath, cli, TEST_KEY_FILE, 'gates', 'run', '--stage', 'full', '--json'], { cwd: p.repo, encoding: 'utf8', timeout: 60_000 });
+  const refused = JSON.parse(r.stdout).gates.filter(g => g.status === 'timed_out');
+  assert.equal(refused.length, 1, r.stdout);
+  assert.match(refused[0].diagnostic ?? JSON.stringify(refused[0]), /non obtenu/);
+  assert.equal(existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(l => l.startsWith(`${refused[0].id} start`)).length : 0, 0, 'never launched');
+  // D2: two suites of two projects under the same parent flock take turns.
+  rmSync(log, { force: true });
+  const q1 = project(t, { gates: [{ id: 'x', stage: 'full', command: body('x'), lock: { file: lockFile }, readOnly: true }], config: { stacks: [{ id: '1', lockFile }] } });
+  const q2 = project(t, { gates: [{ id: 'y', stage: 'full', command: body('y'), lock: { file: lockFile }, readOnly: true }], config: { stacks: [{ id: '1', lockFile }] } });
+  const run = (repo) => `(cd ${JSON.stringify(repo)} && ${JSON.stringify(process.execPath)} ${JSON.stringify(cli)} ${JSON.stringify(TEST_KEY_FILE)} gates run --stage full --json > /dev/null)`;
+  const both = spawnSync('flock', ['-w', '5', lockFile, 'sh', '-c', `${run(q1.repo)} & ${run(q2.repo)} & wait`], { encoding: 'utf8', timeout: 60_000 });
+  assert.equal(both.status, 0, both.stderr);
+  const lines = readFileSync(log, 'utf8').trim().split('\n').map(l => l.split(' '));
+  const span = id => ['start', 'end'].map(k => Number(lines.find(l => l[0] === id && l[1] === k)[2]));
+  const [x, y] = [span('x'), span('y')];
+  assert.ok(x[1] <= y[0] || y[1] <= x[0], `overlap: ${JSON.stringify({ x, y })}`);
 });
 
 test('review 99, BAS 16: the rule maquette reads the screens of a mockup with the parser of the registry, never in its title', async () => {

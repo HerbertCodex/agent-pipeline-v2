@@ -40,7 +40,8 @@ export function recordDirectories(command, cwd, home = null) {
     const moved = cdTarget(words, dir, home);
     if (moved !== undefined) { dir = moved; continue; }
     const args = apvArguments(words);
-    if (!args) continue;
+    // The record itself, never an earlier call of the tool on the line (`apv status && cd b && apv review record`).
+    if (!args || args.filter(a => !a.startsWith('-'))[0] !== 'review' || !args.includes('record')) continue;
     const flag = args.indexOf('--repo');
     const repo = args.find(a => a.startsWith('--repo='))?.slice('--repo='.length) ?? (flag === -1 ? undefined : args[flag + 1]);
     if (dir !== null) out.push(repo && !/[$`]/.test(repo) ? resolve(dir, repo) : dir);

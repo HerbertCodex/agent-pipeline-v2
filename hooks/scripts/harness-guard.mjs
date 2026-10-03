@@ -519,18 +519,37 @@ function git(cwd, args) {
 const MARKERS = ['.apv/config.json', 'pipeline.v2.json'];
 
 /**
- * Whether `dir` lies in a project of the tool: its repository declares `.apv/config.json` (or the V2 `pipeline.v2.json`)
- * in the working tree, in its last commit, or on the default branch of its remote. Moving the file aside in the working
- * tree does not take a project out of the tool. A directory that is no repository: only its own files count.
+ * Whether `dir` lies in a project of the tool (docs/PLUGIN.md, « Portée des crochets »), by marks a commit of an agent
+ * does not take away: a `.apv/` folder or a configuration (`.apv/config.json`, the V2 `pipeline.v2.json`) in the working
+ * tree; the stores of the tool in the Git common directory (`apv/`, closed to every command); the configuration in the
+ * last commit, or at the tip of any local or remote-tracking branch. A directory that is no repository: its own files only.
  */
 export function projectOfTool(dir) {
   const root = git(dir, ['rev-parse', '--show-toplevel']);
-  if (MARKERS.some(m => existsSync(join(root ?? dir, m)))) return true;
-  if (root === null && git(dir, ['rev-parse', '--git-dir']) === null) return false;
-  for (const ref of ['HEAD', 'refs/remotes/origin/HEAD']) {
-    if (git(dir, ['ls-tree', '--name-only', '--full-tree', ref, '--', ...MARKERS])) return true;
-  }
-  return false;
+  const base = root ?? dir;
+  if (existsSync(join(base, '.apv')) || MARKERS.some(m => existsSync(join(base, m)))) return true;
+  const common = git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (common === null) return false;
+  if (existsSync(join(common, 'apv'))) return true;
+  const tips = (git(dir, ['for-each-ref', '--format=%(objectname)', 'refs/heads', 'refs/remotes']) ?? '').split('\n').filter(Boolean);
+  const commits = [...new Set(['HEAD', ...tips])].slice(0, 1000);
+  const r = spawnSync('git', ['cat-file', '--batch-check'], { cwd: dir, encoding: 'utf8', input: commits.flatMap(c => MARKERS.map(m => `${c}:${m}`)).join('\n') + '\n',
+    stdio: ['pipe', 'pipe', 'ignore'], timeout: 5000 });
+  if (r.status !== 0) return true;
+  return r.stdout.split('\n').some(line => line && !/ missing$/.test(line));
+}
+
+/**
+ * The address of a remote of the repository at `root` when it is known to be a repository outside the tool, or null:
+ * the same address to fetch and to push (`pushurl`, `pushInsteadOf` elsewhere: unknown), and at least one branch of it
+ * fetched (never fetched: unknown). That its branches carry no configuration of the tool is checked by projectOfTool.
+ */
+function verifiedRemote(root, name) {
+  const fetchUrl = git(root, ['remote', 'get-url', name]);
+  const pushUrl = git(root, ['remote', 'get-url', '--push', name]);
+  if (!fetchUrl || fetchUrl !== pushUrl) return null;
+  const fetched = git(root, ['for-each-ref', '--count=1', '--format=%(refname)', `refs/remotes/${name}/`]);
+  return fetched ? fetchUrl : null;
 }
 
 /** The `owner/repo` of a GitHub repository named by `owner/repo`, `host/owner/repo` or an address (`git@host:o/r.git`), lower case. */
@@ -539,11 +558,6 @@ export function repoSlug(value) {
   return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
 }
 
-/** The repositories the remotes of the repository of `dir` point to (`owner/repo`). */
-function remoteRepos(dir) {
-  const out = git(dir, ['remote', '-v']);
-  return out ? [...new Set(out.split('\n').map(l => repoSlug(l.split(/\s+/)[1])).filter(Boolean))] : [];
-}
 
 /** The device of a `stat` (bigint) as `/proc/locks` prints it: `major:minor`, in hexadecimal. */
 export function lockDevice(dev) {
@@ -607,21 +621,29 @@ export function hookContext(input, env = process.env) {
     // directory, the project of the session, or a repository the command targets (`targets` of commandTargets) is a project
     // of the tool (projectOfTool). A target that cannot be placed (computed, an address that is not a remote of this
     // repository): active. No repository at all: active.
-    apvProject: (targets = {}) => {
-      if (targets.unknown) return true;
+    apvProject: (scope = {}) => {
+      if (scope.plain === false) return true;
+      const root = git(cwd, ['rev-parse', '--show-toplevel']);
       if (apvProject === null) {
-        const roots = [git(cwd, ['rev-parse', '--show-toplevel']), typeof env.CLAUDE_PROJECT_DIR === 'string' && env.CLAUDE_PROJECT_DIR ? env.CLAUDE_PROJECT_DIR : null]
-          .filter(r => typeof r === 'string' && r);
-        apvProject = !roots.length || roots.some(projectOfTool);
+        const project = typeof env.CLAUDE_PROJECT_DIR === 'string' && env.CLAUDE_PROJECT_DIR ? env.CLAUDE_PROJECT_DIR : null;
+        // No repository at all (neither the working directory nor the project of the session): active.
+        apvProject = !root || projectOfTool(root) || (project !== null && projectOfTool(project));
       }
       if (apvProject) return true;
-      for (const dir of targets.dirs ?? []) if (projectOfTool(dir)) return true;
-      const own = (targets.remotes ?? []).length ? remoteRepos(cwd) : [];
-      for (const remote of targets.remotes ?? []) {
-        const repo = repoSlug(remote);
-        if (!repo || !own.includes(repo)) return true;
+      // A literal cd stays in the same repository, or the command is judged active.
+      for (const dir of scope.dirs ?? []) if (git(dir, ['rev-parse', '--show-toplevel']) !== root) return true;
+      const remotes = scope.remotes ?? []; const slugs = scope.slugs ?? [];
+      if (!remotes.length && !slugs.length) return false;
+      const names = (git(root, ['remote']) ?? '').split('\n').filter(Boolean);
+      const reached = remotes.includes('*') || slugs.length ? names : remotes;
+      if (!reached.length || remotes.some(r => r !== '*' && !names.includes(r))) return true;
+      const urls = new Map();
+      for (const name of reached) {
+        const url = verifiedRemote(root, name);
+        if (url === null) return true;
+        urls.set(name, repoSlug(url));
       }
-      return false;
+      return slugs.some(slug => ![...urls.values()].includes(slug));
     },
     flockHeldByAncestor: file => flockHeldBy(file, context.ancestors()),
     leaseHeld: () => (env.APV_LOCK_HELD ?? '').split(',').map(x => x.trim()).filter(Boolean),

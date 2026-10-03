@@ -419,15 +419,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       }
       return heldAboveCache.get(file)!;
     };
-    // Under a lock held by an ancestor, the checks that ask for it still run one at a time, as they would under their own
-    // flock: one queue per lock file, in this process.
-    const heldQueues = new Map<string, Promise<unknown>>();
-    const oneAtATime = <T>(file: string, run: () => Promise<T>): Promise<T> => {
-      const next = (heldQueues.get(file) ?? Promise.resolve()).then(run, run);
-      heldQueues.set(file, next.catch(() => undefined));
-      return next;
-    };
-    const override =options.override ? { run: options.override.run, reason: options.override.reason } : null;
+    const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
     type Repeat = NonNullable<GateReceipt['repeat']>;
     type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'>>;
     type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat' | 'web' | 'scope' | 'nearTimeout'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack'>> & { repeat?: RepeatFields; web?: NonNullable<GateReceipt['web']> };
@@ -482,24 +474,17 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
           const result = await runProcess({ command: argv, cwd: workspace, env: passEnv, timeoutMs, signal, maxOutputBytes: 1024 * 1024 });
           return { result, commandMs: result.durationMs, lockWaitMs: 0, lockError: null };
         }
-        // A kernel lock already held by an ancestor (the suite launched under `flock <file>`): held for the whole run,
-        // never taken again (a second flock on the same file from a child would wait for its own parent); the checks
-        // that share it take turns in this process, the timeout starting at their turn.
-        if (heldAbove(lock.file)) {
-          const queued = performance.now();
-          return oneAtATime(lock.file, async () => {
-            const waited = performance.now() - queued;
-            const result = await runProcess({ command: argv, cwd: workspace, env: passEnv, timeoutMs, signal, maxOutputBytes: 1024 * 1024 });
-            return { result, commandMs: result.durationMs, lockWaitMs: waited, lockError: null };
-          });
-        }
-        const result = await runProcess({ command: flockCommand(lock.file, lock.waitMs, argv), cwd: workspace, env: passEnv, timeoutMs, signal,
+        // A kernel lock already held by an ancestor (the suite launched under `flock <file>`) is held for the whole run and
+        // never taken again: a second flock on the same file from a child would wait for its own parent. The checks that
+        // ask for it take turns on a companion lock (`<file>.under`) instead, across processes, under the same lock.waitMs.
+        const file = heldAbove(lock.file) ? `${lock.file}.under` : lock.file;
+        const result = await runProcess({ command: flockCommand(file, lock.waitMs, argv), cwd: workspace, env: passEnv, timeoutMs, signal,
           maxOutputBytes: 1024 * 1024, waitReady: true });
         if (result.readyMs === null || result.readyMs === undefined) {
           const lockError = result.status === 'cancelled' ? null
-            : result.status === 'spawn_error' ? `flock introuvable (util-linux) pour le verrou ${lock.file} : ${result.stderr.slice(0, 500)}`
-            : result.exitCode === FLOCK_TIMEOUT_EXIT ? `Verrou flock ${lock.file} non obtenu après ${Math.round(lock.waitMs / 1000)} s (lock.waitMs) : la commande n'a pas été lancée.`
-            : `flock en échec pour le verrou ${lock.file} (code ${result.exitCode ?? '-'}) : ${redact(result.stderr, secrets).slice(0, 2000)}`;
+            : result.status === 'spawn_error' ? `flock introuvable (util-linux) pour le verrou ${file} : ${result.stderr.slice(0, 500)}`
+            : result.exitCode === FLOCK_TIMEOUT_EXIT ? `Verrou flock ${file} non obtenu après ${Math.round(lock.waitMs / 1000)} s (lock.waitMs) : la commande n'a pas été lancée.`
+            : `flock en échec pour le verrou ${file} (code ${result.exitCode ?? '-'}) : ${redact(result.stderr, secrets).slice(0, 2000)}`;
           const status: ProcessResult['status'] = result.status === 'cancelled' ? 'cancelled' : result.status === 'spawn_error' ? 'spawn_error' : result.exitCode === FLOCK_TIMEOUT_EXIT ? 'timed_out' : 'failed';
           return { result: { ...result, status }, commandMs: 0, lockWaitMs: result.durationMs, lockError };
         }

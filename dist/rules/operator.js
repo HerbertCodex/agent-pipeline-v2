@@ -103,7 +103,24 @@ export function ensureAnchorKey(common, file = anchorKeyFile()) {
         throw new Error(found.problem ?? 'clé d\'ancrage inutilisable');
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     const key = randomBytes(32);
-    writeFileSync(file, `${key.toString('hex')}\n`, { mode: 0o400, flag: 'wx' });
+    try {
+        writeFileSync(file, `${key.toString('hex')}\n`, { mode: 0o400, flag: 'wx' });
+    }
+    catch (error) {
+        // Another hook created it at the same instant (four reviewers sealing together): use that key, once it is written.
+        if (error.code !== 'EEXIST')
+            throw error;
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+            const other = anchorKey(common, file);
+            if (other.key) {
+                if (!readFingerprint(common))
+                    writeFingerprint(common, other.key, new Date().toISOString());
+                return other.key;
+            }
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+        }
+        throw error;
+    }
     chmodSync(file, 0o400);
     writeFingerprint(common, key, new Date().toISOString());
     return key;
