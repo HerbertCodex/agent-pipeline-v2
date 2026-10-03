@@ -774,7 +774,13 @@ apv status [--repo <chemin>] [--json]
 
 Résumé de l'état du projet : fichier de configuration (et format V2 le cas échéant), contrôles déclarés, registre des décisions (nombre de décisions et empreinte, ou nombre d'erreurs), specs de `.apv/specs/` (titre ou erreur de lecture), fichiers d'état de `.apv/state/` (taille et date), une ligne par exécution en cours (`apv run` : étape, tâches faites, en cours, en échec ; un état illisible est signalé), dernier relevé de `.apv/state/quota.log`. **Plugin** (`plugin` en JSON) :
 - le plugin `apv@…` tel que Claude Code l'a installé (`<CLAUDE_CONFIG_DIR ou ~/.claude>/plugins/installed_plugins.json`, `enabledPlugins` du compte puis du projet), avec sa version et son commit, face à ceux de l'outil lancé ;
-- « ATTENTION » quand un projet sous APV n'a pas de plugin installé ou l'a désactivé, avec la commande d'installation ou d'activation ;
+- « ATTENTION » dans ces cas :
+  - un projet sous APV n'a pas de plugin installé, ou l'a désactivé : la ligne donne la commande d'installation ou d'activation, à taper dans un terminal, hors de Claude Code ;
+  - les fichiers de Claude Code existent mais sont illisibles (« état illisible ») ;
+  - `disableAllHooks` coupe tous les crochets ;
+  - le plugin installé est plus ancien que l'outil : ses crochets, agents ou compétences ont changé depuis son commit d'installation, ou ce commit est inconnu de la copie de l'outil ;
+
+  les fichiers de Claude Code (1 Mio au plus) sont lus sans rien écrire. git est lancé sans les variables `GIT_*` de l'appelant, sans crochets ni récupération réseau, et coupé après 5 s ;
 - les règles de fusion que l'outil applique et que le plugin installé ne connaît pas (catalogue `docs/merge-rules.json` de chacun, lu au commit d'installation, sinon par la version qui les apporte), avec ce qu'elles exigent et la commande de mise à jour ;
 - « Mise à jour à venir » : les règles qu'ajoute la branche suivie par la copie de l'outil, telle que récupérée (`git fetch`), pour réunir ce qu'elles exigent avant de mettre à jour l'outil et le plugin ensemble. Lancé depuis la copie installée, l'outil lit la prochaine version dans le dossier de la marketplace locale.
 

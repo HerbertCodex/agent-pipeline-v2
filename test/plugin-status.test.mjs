@@ -106,3 +106,34 @@ test('run from the installed copy: no rule said unknown to itself; the next vers
   assert.deepEqual(status.upcoming.rules.map(r => r.id), ['nouvelle']);
   assert.match(pluginLines(status).join('\n'), /Mise à jour à venir \(origin\/apv3 de .*outil, 1 commit\(s\)\)/);
 });
+
+test('review of b189216 and 16eabca: outdated hooks, unreadable files, disableAllHooks and a forged catalog are said, never printed raw', async t => {
+  const { parseCatalog } = await import('../dist/rules/plugin-status.js');
+  const s = setup(t);
+  // C1: the plugin installed from a commit whose hooks changed since, same rules on both sides.
+  mkdirSync(join(s.tool, 'hooks')); writeFileSync(join(s.tool, 'hooks', 'garde.mjs'), 'v1');
+  git(s.tool, 'add', '-A'); git(s.tool, 'commit', '-qm', 'crochet'); const installedSha = git(s.tool, 'rev-parse', 'HEAD');
+  writeFileSync(join(s.tool, 'hooks', 'garde.mjs'), 'v2'); git(s.tool, 'commit', '-qam', 'crochet corrigé');
+  s.install(installedSha, { installPath: join(s.root, 'absent') });
+  let status = pluginStatus(s.project, s.env, s.tool);
+  assert.equal(status.pluginBehind, 'changed');
+  assert.match(pluginLines(status).join('\n'), /plus ancien que l'outil.*hors de Claude Code/);
+  // Installed from a commit this checkout does not know: said too.
+  s.install('0123456789abcdef0123456789abcdef01234567', { installPath: join(s.root, 'absent') });
+  assert.equal(pluginStatus(s.project, s.env, s.tool).pluginBehind, 'unknown');
+  // B2: a file that exists but cannot be read is said, never taken for « not installed ».
+  writeFileSync(join(s.claude, 'plugins', 'installed_plugins.json'), '{ pas du json');
+  status = pluginStatus(s.project, s.env, s.tool);
+  assert.match(pluginLines(status)[0], /état illisible/);
+  // Format 1 (one object per plugin) is read as well.
+  writeFileSync(join(s.claude, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'apv@herbertcodex-apv': { scope: 'user', version: '3.0.0-alpha.13', gitCommitSha: s.next } } }));
+  assert.equal(pluginStatus(s.project, s.env, s.tool).install.version, '3.0.0-alpha.13');
+  // C3: disableAllHooks turns every hook off.
+  writeFileSync(join(s.claude, 'settings.json'), JSON.stringify({ enabledPlugins: { 'apv@herbertcodex-apv': true }, disableAllHooks: true }));
+  assert.match(pluginLines(pluginStatus(s.project, s.env, s.tool)).join('\n'), /disableAllHooks/);
+  // A forged catalog: ids and needs that are not plain names are left out, texts lose their control characters.
+  const forged = parseCatalog(JSON.stringify({ needs: { cle: 'la clé\u001b[2J' }, rules: [{ id: 'x\u001b[31mFAUX', since: '3.0.0' }, { id: 'ok', since: '3.0.0', needs: ['cle', 'a\nb'], summary: 'r\u0007' }] }));
+  assert.deepEqual(forged.rules.map(r => r.id), ['ok']);
+  assert.deepEqual(forged.rules[0].needs, ['cle']);
+  assert.doesNotMatch(JSON.stringify(forged), /\\u001b|\\u0007/);
+});

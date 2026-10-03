@@ -28,6 +28,10 @@ export interface PluginStatus {
     project: boolean;
     /** The install of the plugin, null when Claude Code knows none. */
     install: PluginInstall | null;
+    /** Why the files of Claude Code could not be read (they exist but are not what is expected), or null. */
+    unreadable: string | null;
+    /** The hooks are turned off for every plugin (`disableAllHooks` in the settings of the account or the project). */
+    hooksDisabled: boolean;
     /** The tool running this command: version and commit (null outside a checkout). */
     tool: {
         root: string;
@@ -36,6 +40,11 @@ export interface PluginStatus {
     };
     /** Merge rules the running tool applies that the installed plugin does not know (its hooks may not satisfy them). */
     unknownToPlugin: CatalogRule[];
+    /**
+     * The installed plugin is older than the running tool in what it runs (hooks, agents, skills): its commit differs and
+     * those files changed since, or it cannot be compared (installed from a commit this checkout does not have).
+     */
+    pluginBehind: 'changed' | 'unknown' | null;
     /** Merge rules of the next version of the tool (the upstream branch of its checkout, as last fetched), not in this one. */
     upcoming: {
         ref: string;
@@ -46,17 +55,18 @@ export interface PluginStatus {
 }
 /** The root of the running tool: `dist/rules/plugin-status.js`, two folders up. */
 export declare const TOOL_ROOT: string;
-/** Parses a catalog; null when it is not one. */
+/** Parses a catalog; null when it is not one. Ids and needs that are not plain names are left out; texts are cleaned. */
 export declare function parseCatalog(text: string | null): Catalog | null;
 /** Compares two versions `x.y.z[-tag.n]`: negative, zero or positive. A version without tag comes after its tags. */
 export declare function compareVersions(a: string, b: string): number;
 /** The rules of `next` that `known` does not have: by id when `known` has a catalog, else by the version they come with. */
 export declare function newRules(next: Catalog | null, known: Catalog | null, knownVersion: string | null): CatalogRule[];
-/** The folder of the configuration of Claude Code: CLAUDE_CONFIG_DIR, else ~/.claude. */
+/** The folder of the configuration of Claude Code: CLAUDE_CONFIG_DIR, else `.claude` in the HOME of the environment. */
 export declare function claudeDir(env: NodeJS.ProcessEnv): string;
 /**
- * The install of the plugin for this account, or null: the entry `apv@<marketplace>` of installed_plugins.json, enabled
- * when the settings of the account (then those of the project, which take precedence) do not turn it off.
+ * The install of the plugin for this account, or null: an entry `apv@<marketplace>` of installed_plugins.json for the
+ * account (scope user) or for this project (its projectPath), the enabled one first. Enabled when a settings file says so
+ * (`claude plugin install` writes it; the last file wins); absent: off. Throws when the file exists but cannot be read.
  */
 export declare function pluginInstall(dir: string, repo?: string | null): PluginInstall | null;
 /** The folder of a marketplace added from a directory (`claude plugin marketplace add <dossier>`), or null. */
