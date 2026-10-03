@@ -2,6 +2,26 @@
 
 ## Non publié
 
+- **3.0.0-alpha.15 : accélérations validées par l'opérateur le 3 octobre 2026, sans retirer de garde-fou.** Une PR de tests et de textes avait pris 3 h au projet pilote : 4 relectures, une boucle de corrections, deux suites complètes de 30 min, le scan ZAP lancé 3 fois. La relecture `securite` reste exigée pour toute PR, et la suite complète au commit exact fusionné aussi.
+  - **Relectures proportionnées au risque** (`apv review plan`). Le plan donne le niveau de risque du diff et sa raison (`risk` en JSON, ligne « Risque » en texte).
+    - Risque faible : tests, outillage de test, documentation, maquettes, textes d'interface sans balisage nouveau. Le plan retient alors `securite`, plus `fidelite` si l'interface change de contenu visible.
+    - Risque élevé : le plan d'avant.
+    - Nouvelles classes `review.paths.tooling` (outillage de test) et `review.paths.server` (code serveur et configuration).
+    - Un fichier non classé, hors serveur et hors chemins sensibles, dont seules des chaînes de prose changent garde `fidelite` seule. Un fichier vraiment inconnu garde la prudence.
+    - `--force` et `review.always` restent au-dessus du niveau. `apv rules check` exige exactement les domaines du plan au commit (même calcul, configuration lue à la base).
+  - **Preuve incrémentale des corrections** : `apv gates run --stage task --since <commit prouvé>`.
+    - Elle ne part que d'une suite complète verte à ce commit (sans relance), sur un arbre propre, pour un diff de risque faible (classement lu au commit prouvé). Refus `GATE_SINCE` sinon.
+    - Elle lance les contrôles de tâche, les commandes ciblées et la répétition des tests modifiés depuis ce commit.
+    - Ce n'est jamais une preuve de la suite complète : la fusion l'exige toujours, une fois, sur le commit final.
+  - **`apv tests check`**, contrôle de tâche des tests ajoutés ou modifiés, section `testsCheck`.
+    - `waitForTimeout` dans un test navigateur : bloquant par défaut.
+    - Autre attente à durée fixe, délai testé sur l'horloge réelle, adresse partagée entre tests navigateur : avertissements par défaut.
+    - Gravité réglable par règle ; contrôle désactivable.
+  - **Constats faibles et conseils en suivi groupé** (compétences `review`, `run`, `chef-de-projet`, REGLES section 4). Ils vont dans `.apv/state/suivi-constats.md` (ou dans une issue groupée déclarée dans `.apv/brief.md`), traités par lot, sans passe de corrections ni PR dédiée.
+  - **`apv dast run` prépare sa copie.**
+    - `npm ci` quand la copie a un `package-lock.json` sans `node_modules`.
+    - `review.dast.envFile` (`~` admis) est chargé dans la commande. Il est refusé si une valeur désigne une adresse hors bouclage.
+    - `summary.json` consigne `install` et `envFile`, jamais les valeurs.
 - **3.0.0-alpha.14 : fin des relectures de #105 à #108.** La version monte encore pour que `claude plugin update` livre ces corrections du crochet.
   - **Crochet de poussée.**
     - Un `cd` n'est suivi que vers un dossier qui existe et où l'on peut entrer.
