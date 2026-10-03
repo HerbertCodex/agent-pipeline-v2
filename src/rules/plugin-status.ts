@@ -32,8 +32,9 @@ export interface PluginStatus {
   /** Merge rules the running tool applies that the installed plugin does not know (its hooks may not satisfy them). */
   unknownToPlugin: CatalogRule[];
   /**
-   * The installed plugin is older than the running tool in what it runs (hooks, agents, skills): its commit differs and
-   * those files changed since, or it cannot be compared (installed from a commit this checkout does not have).
+   * The installed plugin is not at the level of the running tool in what it runs (hooks, agents, skills, workflows, the
+   * manifest, the compiled tool): older (`changed`), newer (`ahead`), from another branch (`diverged`), or not comparable
+   * (`unknown`: installed from a commit this checkout does not have, or naming none).
    */
   pluginBehind: 'changed' | 'unknown' | 'ahead' | 'diverged' | null;
   /**
@@ -134,9 +135,15 @@ export function claudeDir(env: NodeJS.ProcessEnv): string {
   return env['CLAUDE_CONFIG_DIR'] || join(env['HOME'] || homedir(), '.claude');
 }
 
-/** The settings files that apply in `repo`, in order of precedence (the last wins): account, project, local. */
-const settingsFiles = (dir: string, repo: string | null): string[] =>
-  [join(dir, 'settings.json'), ...(repo ? [join(repo, '.claude', 'settings.json'), join(repo, '.claude', 'settings.local.json')] : [])];
+/**
+ * The settings files that apply in `repo`, in order of precedence (the last wins): account, then the project's and the
+ * local ones of its main checkout (when `repo` is one of its worktrees), then those of `repo`.
+ */
+const settingsFiles = (dir: string, repo: string | null): string[] => {
+  const of = (root: string): string[] => [join(root, '.claude', 'settings.json'), join(root, '.claude', 'settings.local.json')];
+  const main = repo ? mainCheckout(repo) : null;
+  return [join(dir, 'settings.json'), ...(main && repo && main !== resolve(repo) ? of(main) : []), ...(repo ? of(repo) : [])];
+};
 
 /**
  * The install of the plugin for this account, or null: an entry `apv@<marketplace>` of installed_plugins.json for the
@@ -158,15 +165,18 @@ export function pluginInstall(dir: string, repo: string | null = null): PluginIn
   // The project, and its main checkout when the command runs in one of its worktrees (an install for the project names it).
   const places = repo ? [resolve(repo), ...[mainCheckout(repo)].filter((p): p is string => p !== null)] : [];
   const candidates: PluginInstall[] = [];
+  let forged = false;
   for (const [key, value] of Object.entries(plugins)) {
-    // A key that is not a plain plugin name would go into the commands this status gives: never taken.
-    if (key.split('@')[0] !== PLUGIN_NAME || !PLUGIN_KEY.test(key)) continue;
+    if (key.split('@')[0] !== PLUGIN_NAME) continue;
+    // A key that is not a plain plugin name would go into the commands this status gives: never taken, and said.
+    if (!PLUGIN_KEY.test(key)) { forged = true; continue; }
     const entries = (Array.isArray(value) ? value : [value]).map(objectOf).filter((e): e is Record<string, unknown> => e !== null);
     // An entry without scope nor projectPath (the older format) is the account's.
     const entry = entries.find(e => e['scope'] === 'user' || (e['scope'] === undefined && e['projectPath'] === undefined))
       ?? entries.find(e => typeof e['projectPath'] === 'string' && places.includes(resolve(e['projectPath'] as string)));
     if (entry) candidates.push({ key, version: str(entry['version']), sha: str(entry['gitCommitSha']), installPath: str(entry['installPath']), enabled: enabledOf(key) });
   }
+  if (!candidates.length && forged) throw new Error(`${join(dir, 'plugins', 'installed_plugins.json')} : nom de plugin apv invalide`);
   return candidates.find(c => c.enabled) ?? candidates[0] ?? null;
 }
 
@@ -278,9 +288,9 @@ export function pluginLines(s: PluginStatus): string[] {
   }
   if (s.upcoming?.behind) {
     lines.push(s.upcoming.rules === null
-      ? `  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : règles de fusion non lues (catalogue de cette version absent de la copie : git fetch) ; mets à jour l'outil et le plugin ensemble (${UPDATE}).`
+      ? `  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : règles de fusion non lues (catalogue de cette version absent de la copie : clone partiel, ou branche non récupérée) ; mets à jour l'outil et le plugin ensemble (${UPDATE}).`
       : s.upcoming.rules.length
-      ?`  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : nouvelles règles de fusion ${describe(s.upcoming.rules)}. Avant de mettre à jour l'outil, réunis ce qu'elles exigent, puis mets à jour l'outil et le plugin ensemble (${UPDATE}).`
+      ? `  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : nouvelles règles de fusion ${describe(s.upcoming.rules)}. Avant de mettre à jour l'outil, réunis ce qu'elles exigent, puis mets à jour l'outil et le plugin ensemble (${UPDATE}).`
       : `  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : aucune nouvelle règle de fusion ; mets à jour l'outil et le plugin ensemble (${UPDATE}).`);
   }
   return lines;

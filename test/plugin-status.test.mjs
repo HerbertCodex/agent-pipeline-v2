@@ -188,3 +188,27 @@ test('review of 84d3c4a: a review the seal hook could not seal is said under its
   assert.match(lines.join('\n'), /n'a pas scellé une relecture/);
   assert.doesNotMatch(lines.join('\n'), /a refusé le dernier message/);
 });
+
+test('review of 3871d24: a forged key is said, the main checkout settings count from a worktree, a sealed review lifts the note', async t => {
+  const { clearSealRefusal, recordRefusal } = await import('../dist/rules/operator.js');
+  const { existsSync } = await import('node:fs');
+  const s = setup(t);
+  writeFileSync(join(s.claude, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'apv@x; rm -rf ~': [{ scope: 'user' }] } }));
+  assert.match(pluginLines(pluginStatus(s.project, s.env, s.tool))[0], /état illisible.*nom de plugin apv invalide/);
+  // An install for the project, enabled in the local settings of its main checkout, seen from a worktree of it.
+  git(s.project, 'init', '-q'); git(s.project, 'commit', '-q', '--allow-empty', '-m', 'x');
+  const worktree = join(s.root, 'arbre'); git(s.project, 'worktree', 'add', '-q', '-b', 'w', worktree);
+  writeFileSync(join(s.claude, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'apv@herbertcodex-apv': [{ scope: 'local', projectPath: s.project, gitCommitSha: s.next }] } }));
+  writeFileSync(join(s.claude, 'settings.json'), '{}');
+  mkdirSync(join(s.project, '.claude'), { recursive: true });
+  writeFileSync(join(s.project, '.claude', 'settings.local.json'), JSON.stringify({ enabledPlugins: { 'apv@herbertcodex-apv': true } }));
+  assert.equal(pluginStatus(worktree, s.env, s.tool).install.enabled, true);
+  // The note of a review the hook could not seal goes away once a review is sealed; a refused message stays.
+  const common = join(s.root, 'commun'); mkdirSync(common);
+  recordRefusal(common, 'relecture X non scellée : dépôt introuvable');
+  clearSealRefusal(common);
+  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), false);
+  recordRefusal(common, 'message hors de la session');
+  clearSealRefusal(common);
+  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), true);
+});

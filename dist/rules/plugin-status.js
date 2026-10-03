@@ -112,8 +112,15 @@ const objectOf = (v) => (v && typeof v === 'object' && !Array.isArray(v) && !(v 
 export function claudeDir(env) {
     return env['CLAUDE_CONFIG_DIR'] || join(env['HOME'] || homedir(), '.claude');
 }
-/** The settings files that apply in `repo`, in order of precedence (the last wins): account, project, local. */
-const settingsFiles = (dir, repo) => [join(dir, 'settings.json'), ...(repo ? [join(repo, '.claude', 'settings.json'), join(repo, '.claude', 'settings.local.json')] : [])];
+/**
+ * The settings files that apply in `repo`, in order of precedence (the last wins): account, then the project's and the
+ * local ones of its main checkout (when `repo` is one of its worktrees), then those of `repo`.
+ */
+const settingsFiles = (dir, repo) => {
+    const of = (root) => [join(root, '.claude', 'settings.json'), join(root, '.claude', 'settings.local.json')];
+    const main = repo ? mainCheckout(repo) : null;
+    return [join(dir, 'settings.json'), ...(main && repo && main !== resolve(repo) ? of(main) : []), ...(repo ? of(repo) : [])];
+};
 /**
  * The install of the plugin for this account, or null: an entry `apv@<marketplace>` of installed_plugins.json for the
  * account (scope user) or for this project (its projectPath), the enabled one first. Enabled when a settings file says so
@@ -137,10 +144,15 @@ export function pluginInstall(dir, repo = null) {
     // The project, and its main checkout when the command runs in one of its worktrees (an install for the project names it).
     const places = repo ? [resolve(repo), ...[mainCheckout(repo)].filter((p) => p !== null)] : [];
     const candidates = [];
+    let forged = false;
     for (const [key, value] of Object.entries(plugins)) {
-        // A key that is not a plain plugin name would go into the commands this status gives: never taken.
-        if (key.split('@')[0] !== PLUGIN_NAME || !PLUGIN_KEY.test(key))
+        if (key.split('@')[0] !== PLUGIN_NAME)
             continue;
+        // A key that is not a plain plugin name would go into the commands this status gives: never taken, and said.
+        if (!PLUGIN_KEY.test(key)) {
+            forged = true;
+            continue;
+        }
         const entries = (Array.isArray(value) ? value : [value]).map(objectOf).filter((e) => e !== null);
         // An entry without scope nor projectPath (the older format) is the account's.
         const entry = entries.find(e => e['scope'] === 'user' || (e['scope'] === undefined && e['projectPath'] === undefined))
@@ -148,6 +160,8 @@ export function pluginInstall(dir, repo = null) {
         if (entry)
             candidates.push({ key, version: str(entry['version']), sha: str(entry['gitCommitSha']), installPath: str(entry['installPath']), enabled: enabledOf(key) });
     }
+    if (!candidates.length && forged)
+        throw new Error(`${join(dir, 'plugins', 'installed_plugins.json')} : nom de plugin apv invalide`);
     return candidates.find(c => c.enabled) ?? candidates[0] ?? null;
 }
 /** The main checkout of the repository of `repo` (first worktree), or null. */
@@ -268,7 +282,7 @@ export function pluginLines(s) {
     }
     if (s.upcoming?.behind) {
         lines.push(s.upcoming.rules === null
-            ? `  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : règles de fusion non lues (catalogue de cette version absent de la copie : git fetch) ; mets à jour l'outil et le plugin ensemble (${UPDATE}).`
+            ? `  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : règles de fusion non lues (catalogue de cette version absent de la copie : clone partiel, ou branche non récupérée) ; mets à jour l'outil et le plugin ensemble (${UPDATE}).`
             : s.upcoming.rules.length
                 ? `  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : nouvelles règles de fusion ${describe(s.upcoming.rules)}. Avant de mettre à jour l'outil, réunis ce qu'elles exigent, puis mets à jour l'outil et le plugin ensemble (${UPDATE}).`
                 : `  Mise à jour à venir (${s.upcoming.ref}, ${s.upcoming.behind} commit(s)) : aucune nouvelle règle de fusion ; mets à jour l'outil et le plugin ensemble (${UPDATE}).`);

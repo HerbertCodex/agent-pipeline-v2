@@ -94,6 +94,8 @@ export interface JournalState {
     } | null;
 }
 export declare function journalState(common: string): JournalState;
+/** Forgets a note of the seal hook (a review it could not seal) once a review is sealed: the note no longer holds. */
+export declare function clearSealRefusal(common: string): void;
 /** Notes, for `apv status`, that the hook refused a prompt: date and reason, never the text. */
 export declare function recordRefusal(common: string, reason: string, now?: Date): void;
 /**

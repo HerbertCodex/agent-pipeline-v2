@@ -69,7 +69,13 @@ async function main() {
     if (!reviews.recordExists(common, request.id, request.domain)) continue;
     let key;
     try { key = operator.ensureAnchorKey(common, keyFile); } catch (error) { operator.recordRefusal(common, `relecture non scellée : ${error?.message ?? error}`); return 0; }
-    reviews.sealReview(common, request.id, request.domain, request.agent, key);
+    const sealed = reviews.sealReview(common, request.id, request.domain, request.agent, key);
+    // A sealed review lifts an earlier note of a review this hook could not seal (here, and in the session's project).
+    if (sealed?.file) {
+      operator.clearSealRefusal(common);
+      const s = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+      if (s.status === 0 && s.stdout.trim() && s.stdout.trim() !== common) operator.clearSealRefusal(s.stdout.trim());
+    }
     return 0;
   }
   // Written where this hook cannot follow (`cd "$X" && apv review record`): said by apv status of the session's project,

@@ -675,3 +675,45 @@ test('review of aa59c8f and 84d3c4a: closed folders, cd options, refspecs, real 
   const bare = { ...as(null), cwd: '/srv/proj.git/feat2' };
   for (const command of ['rm -rf "$tmp"', 'echo x > "$OUT"', 'curl -so "$f" https://e.x']) assert.equal(evaluateCommand(command, {}, bare).decision, 'allow', command);
 });
+
+test('review of 3871d24: scripts split per interpreter, exported variables, bare Git directories, new branches, literal text, scripts of the line', async t => {
+  const { hookContext } = await import('../hooks/scripts/harness-guard.mjs');
+  const lead = { ...as(null), cwd: '/r' };
+  // MOYEN 1 (sec) and F2 (data): the script of each interpreter, its operands, awk's program after its options.
+  for (const command of [`ruby -rfileutils -e 'FileUtils.rm_rf(".git/apv")'`, `python3 -E -c "import shutil; shutil.rmtree('.git/apv')"`, `python3 -Werror -c "import shutil; shutil.rmtree('.git/apv')"`,
+    `node -p -e "require('fs').rmSync('.git/apv')"`, `perl -Mstrict -e 'unlink ".git/apv/x"'`, `awk -v x=1 'BEGIN{system("rm -rf .git/apv")}'`, `awk -F , 'BEGIN{system("rm -rf .git/apv")}'`,
+    "perl -e 'unlink @ARGV' .git/apv/receipts/r.json", "python3 -c 'import shutil,sys; shutil.rmtree(sys.argv[1])' .git/apv", "awk '{print > FILENAME}' .git/apv/receipts/r.json"]) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  // F2 (sec), F3 (data): variables exported or set for a command.
+  for (const command of ['export GIT_TRACE=.git/apv/receipts/r.json; git status', 'env GIT_TRACE=.git/apv/receipts/r.json git status', 'declare -x GIT_TRACE=.git/apv/receipts/r.json',
+    'set -a; GIT_TRACE=.git/apv/receipts/r.json; git status', 'GIT_TRACE=.git/apv/receipts/r.json; export GIT_TRACE; git status', 'export d=.git/ap; rm -rf "${d}v"',
+    'G=.git; cd "$G" && rm -rf apv', 'cd "$(git rev-parse --git-dir)" && rm -rf apv']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  // F3 (sec): the Git directory of a bare repository, reached by cd or as the working directory.
+  const bare = { ...as(null), cwd: '/srv/proj.git/feat2' };
+  for (const command of ['cd .. && rm -rf "$x"', 'cd /srv/proj.git && rm -rf "$(cat n)"']) assert.equal(evaluateCommand(command, {}, bare).decision, 'deny', command);
+  assert.equal(evaluateCommand('rm -rf "$x"', {}, { ...as(null), cwd: '/srv/proj.git' }).decision, 'deny', 'in the bare Git directory');
+  // F1 (data), F5 (sec): literal text between apostrophes or escaped is no command; F4 (data): an interpreter reads only its own input.
+  for (const command of ["git commit -m 'docs: cite `git push origin main` et $(rm -rf .git/apv)'", "rg -n '`claude -p' docs/", "grep -rn '$(git push origin main)' docs",
+    'echo "\\$(git push origin main)"', "cat > f <<'EOF'\nvoir .git/apv\nEOF\nnode --version", "git commit -F - <<EOF\nvoir .git/apv\nEOF\npython3 -V",
+    'cat .git/apv/receipts/*.json | head', "perl -ne 'print' .git/apv/receipts/r.json"]) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  // F4 and F6 (sec): new branches, a branch changed inside a script, substitutions judged where they run, `@`.
+  const root = mkdtempSync(join(tmpdir(), 'apv3-fin2-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, stdio: 'pipe' });
+  const main = join(root, 'principal'); mkdirSync(main); git(main, 'init', '-q', '-b', 'main');
+  mkdirSync(join(main, '.apv')); writeFileSync(join(main, '.apv', 'config.json'), '{}'); git(main, 'add', '-A'); git(main, 'commit', '-qm', 'x');
+  const feat = join(root, 'copie'); git(main, 'worktree', 'add', '-q', '-b', 'feat', feat);
+  const fromFeat = hookContext({ cwd: feat }, { HOME: root });
+  for (const command of ['git checkout -b fix && git push -u origin HEAD', 'git switch -c fix && git push', 'git checkout -- src/x.ts && git push']) {
+    assert.equal(evaluateCommand(command, {}, fromFeat).decision, 'allow', command);
+  }
+  for (const command of [`bash -c 'git switch --ignore-other-worktrees main' && git push`, 'git symbolic-ref HEAD refs/heads/main && git push', `cd ${main} && echo "$(git push)"`]) {
+    assert.equal(evaluateCommand(command, {}, fromFeat).decision, 'deny', command);
+  }
+  assert.equal(evaluateCommand('git push origin @', {}, hookContext({ cwd: main }, { HOME: root })).decision, 'deny', '@ is HEAD');
+});

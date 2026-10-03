@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import { maskSecrets } from '../knowledge/code-map.js';
@@ -265,6 +265,16 @@ export function journalState(common) {
         refused = null;
     }
     return { file, key: key !== null, keyProblem: anchor.problem, keyCreatedAt: anchor.createdAt, messages: ok.length, ignored: lines.length - ok.length, last: ok.at(-1)?.at ?? null, refused };
+}
+/** Forgets a note of the seal hook (a review it could not seal) once a review is sealed: the note no longer holds. */
+export function clearSealRefusal(common) {
+    const file = join(common, ...OPERATOR_REFUSED);
+    try {
+        const r = JSON.parse(readFileSync(file, 'utf8'));
+        if (typeof r.reason === 'string' && /^relecture\b/.test(r.reason))
+            rmSync(file, { force: true });
+    }
+    catch { /* no note */ }
 }
 /** Notes, for `apv status`, that the hook refused a prompt: date and reason, never the text. */
 export function recordRefusal(common, reason, now = new Date()) {

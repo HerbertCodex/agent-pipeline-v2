@@ -778,12 +778,13 @@ Résumé de l'état du projet : fichier de configuration (et format V2 le cas é
   - un projet sous APV n'a pas de plugin installé, ou l'a désactivé : la ligne donne la commande d'installation ou d'activation, à taper dans un terminal, hors de Claude Code ;
   - les fichiers de Claude Code existent mais sont illisibles (« état illisible ») ;
   - `disableAllHooks` coupe tous les crochets ;
-  - le plugin installé n'est pas au niveau de l'outil : ses crochets, agents, compétences, workflows ou son outil compilé (`dist/`) diffèrent. La ligne dit alors si le plugin est plus ancien (mettre le plugin à jour), plus récent (mettre l'outil à jour), d'une autre branche, ou d'un commit inconnu ou absent ;
-  - une relecture que le crochet du sceau n'a pas pu sceller ;
+  - le plugin installé n'est pas au niveau de l'outil : ses crochets, agents, compétences, workflows, son manifeste (`.claude-plugin`) ou son outil compilé (`dist/`) diffèrent. La ligne dit alors si le plugin est plus ancien (mettre le plugin à jour), plus récent (mettre l'outil à jour), d'une autre branche, ou d'un commit inconnu ou absent ;
 
   les fichiers de Claude Code (fichiers ordinaires de 1 Mio au plus ; un réglage illisible est dit illisible, jamais pris pour un plugin désactivé ; `disableAllHooks` suit la priorité des réglages) sont lus sans rien écrire. Une installation pour le projet est aussi reconnue depuis un de ses worktrees. git est lancé sans les variables `GIT_*` de l'appelant, sans crochets ni récupération réseau, et coupé après 5 s ;
 - les règles de fusion que l'outil applique et que le plugin installé ne connaît pas (catalogue `docs/merge-rules.json` de chacun, lu au commit d'installation, sinon par la version qui les apporte), avec ce qu'elles exigent et la commande de mise à jour ;
-- « Mise à jour à venir » : les règles qu'ajoute la branche suivie par la copie de l'outil, telle que récupérée (`git fetch`), pour réunir ce qu'elles exigent avant de mettre à jour l'outil et le plugin ensemble (« règles non lues » quand le catalogue de cette version manque à la copie). Lancé depuis la copie installée, l'outil lit la prochaine version dans le dossier de la marketplace locale.
+- « Mise à jour à venir » : les règles qu'ajoute la branche suivie par la copie de l'outil, telle que récupérée (`git fetch`), pour réunir ce qu'elles exigent avant de mettre à jour l'outil et le plugin ensemble (« règles non lues » quand le catalogue de cette version manque à la copie).
+
+Sous le journal de l'opérateur, `apv status` dit aussi qu'une relecture n'a pas pu être scellée par le crochet du sceau (date, identifiant). Cette note s'efface au prochain sceau posé. Lancé depuis la copie installée, l'outil lit la prochaine version dans le dossier de la marketplace locale.
 
 En JSON, `runs` liste les exécutions lues, terminées comprises, et `runsUnread` le nombre de fichiers d'état laissés de côté (50 fichiers et 16 Mio au plus, les plus récents d'abord). Les noms de fichiers, titres et erreurs affichés sont nettoyés (une ligne, sans séquence d'échappement ni caractère de contrôle). La commande ne modifie rien et sort toujours avec `0`, sauf appel incorrect.
 
