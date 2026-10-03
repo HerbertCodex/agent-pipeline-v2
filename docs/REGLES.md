@@ -104,6 +104,7 @@ Durcissement possible, pour qui le veut (non fourni par APV3) : garder la clé s
 | Toute validation humaine d'une fonctionnalité du projet ancrée | la section 3 couvre APV3, pas les fonctionnalités du projet | point de la relecture sécurité : une validation lue sur un système que l'agent peut écrire est un constat haut |
 | Serveurs arrêtés après usage | des serveurs d'aperçu et des piles oubliés occupent la machine et les ports | la suite complète arrête ce qu'elle a lancé ; `apv procs list` en fin de tâche, `apv procs stop`, `apv stacks idle-stop` ; jamais `kill` du parent |
 | Vitesse sans retirer un garde-fou | accélérer ne doit jamais coûter une preuve | on réduit les suites complètes redondantes (`run.fullSuite`, preuve partagée), jamais un contrôle, une revue ou une règle |
+| Constats faibles et conseils en suivi groupé | une passe de corrections et une relecture de plus pour un constat faible coûtent plus qu'elles ne rapportent (projet pilote, 3 octobre 2026 : 4 relectures sur une PR de tests et de textes) | constats `faible`, `info` et `conseil` (gravité moyenne au plus) dans `.apv/state/suivi-constats.md` (ou l'issue groupée que le projet déclare dans `.apv/brief.md`), traités par lot dans une seule PR ; critiques et élevés toujours corrigés, `requis` de gravité moyenne et plus en passe de corrections |
 | Une leçon devient une capacité générique | la mémoire du chef de projet ne suit pas dans un nouveau projet | section 6 |
 
 ## 5. Configuration : section `rules`
