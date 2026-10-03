@@ -136,13 +136,14 @@ export function claudeDir(env: NodeJS.ProcessEnv): string {
 }
 
 /**
- * The settings files that apply in `repo`, in order of precedence (the last wins): account, then the project's and the
- * local ones of its main checkout (when `repo` is one of its worktrees), then those of `repo`.
+ * The settings files that apply in `repo`, in order of precedence (the last wins), as Claude Code ranks them: account,
+ * then the project files (of the main checkout when `repo` is one of its worktrees, then of `repo`), then the local
+ * files in the same order.
  */
 const settingsFiles = (dir: string, repo: string | null): string[] => {
-  const of = (root: string): string[] => [join(root, '.claude', 'settings.json'), join(root, '.claude', 'settings.local.json')];
   const main = repo ? mainCheckout(repo) : null;
-  return [join(dir, 'settings.json'), ...(main && repo && main !== resolve(repo) ? of(main) : []), ...(repo ? of(repo) : [])];
+  const roots = [...(main && repo && main !== resolve(repo) ? [main] : []), ...(repo ? [repo] : [])];
+  return [join(dir, 'settings.json'), ...roots.map(r => join(r, '.claude', 'settings.json')), ...roots.map(r => join(r, '.claude', 'settings.local.json'))];
 };
 
 /**
@@ -181,10 +182,15 @@ export function pluginInstall(dir: string, repo: string | null = null): PluginIn
 }
 
 /** The main checkout of the repository of `repo` (first worktree), or null. */
+const mainCheckouts = new Map<string, string | null>();
 function mainCheckout(repo: string): string | null {
-  const out = git(repo, ['worktree', 'list', '--porcelain']);
-  const first = out ? /^worktree (.+)$/m.exec(out)?.[1] : undefined;
-  return first ? resolve(first) : null;
+  const key = resolve(repo);
+  if (!mainCheckouts.has(key)) {
+    const out = git(repo, ['worktree', 'list', '--porcelain']);
+    const first = out ? /^worktree (.+)$/m.exec(out)?.[1] : undefined;
+    mainCheckouts.set(key, first ? resolve(first) : null);
+  }
+  return mainCheckouts.get(key)!;
 }
 
 /** The folder of a marketplace added from a directory (`claude plugin marketplace add <dossier>`), or null. */
@@ -273,7 +279,7 @@ export function pluginLines(s: PluginStatus): string[] {
   if (s.hooksDisabled) lines.push('  ATTENTION : disableAllHooks est posé dans les réglages de Claude Code : aucun crochet ne tourne (sceau, journal, garde-fous). Retire-le, puis une nouvelle session.');
   const installed = short(s.install?.sha ?? null);
   if (s.pluginBehind === 'changed') {
-    lines.push(`  ATTENTION : le plugin installé (${installed}) est plus ancien que l'outil (${short(s.tool.sha)}) : ses crochets, agents, compétences ou son outil compilé ont changé depuis. Mettre le plugin à jour ${UPDATE}.`);
+    lines.push(`  ATTENTION : le plugin installé (${installed}) est plus ancien que l'outil (${short(s.tool.sha)}) : ses crochets, agents, compétences, workflows, son manifeste ou son outil compilé ont changé depuis. Mettre le plugin à jour ${UPDATE}.`);
   } else if (s.pluginBehind === 'ahead') {
     lines.push(`  ATTENTION : le plugin installé (${installed}) est plus récent que cette copie de l'outil (${short(s.tool.sha)}) : mettre l'outil à jour (git pull dans ${s.tool.root}).`);
   } else if (s.pluginBehind === 'diverged') {

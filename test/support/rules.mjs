@@ -17,8 +17,11 @@ export const RULES = ['preuve', 'instable', 'relecture', 'captures', 'controles'
 /** The anchor key of the tests of this file (one process per test file). */
 export const TEST_KEY_FILE = join(mkdtempSync(join(tmpdir(), 'apv3-cle-')), 'cle-ancrage');
 writeFileSync(TEST_KEY_FILE, `${randomBytes(32).toString('hex')}\n`, { mode: 0o400 });
-// Removed with its folder when the test process ends: the tests leave no key behind them.
-process.on('exit', () => { try { rmSync(dirname(TEST_KEY_FILE), { recursive: true, force: true }); } catch { /* already gone */ } });
+// Removed with its folder when the test process ends, normally or stopped by a signal (Ctrl-C, the runner's timeout):
+// the tests leave no key behind them.
+const removeKey = () => { try { rmSync(dirname(TEST_KEY_FILE), { recursive: true, force: true }); } catch { /* already gone */ } };
+process.on('exit', removeKey);
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => { removeKey(); process.kill(process.pid, signal); });
 setAnchorKeyFile(TEST_KEY_FILE);
 export const TEST_KEY = readAnchorKey(TEST_KEY_FILE);
 

@@ -203,12 +203,14 @@ test('review of 3871d24: a forged key is said, the main checkout settings count 
   mkdirSync(join(s.project, '.claude'), { recursive: true });
   writeFileSync(join(s.project, '.claude', 'settings.local.json'), JSON.stringify({ enabledPlugins: { 'apv@herbertcodex-apv': true } }));
   assert.equal(pluginStatus(worktree, s.env, s.tool).install.enabled, true);
-  // The note of a review the hook could not seal goes away once a review is sealed; a refused message stays.
+  // The note of a review the hook could not seal goes away once that review is sealed; another's, or a refused message, stays.
   const common = join(s.root, 'commun'); mkdirSync(common);
   recordRefusal(common, 'relecture X non scellée : dépôt introuvable');
-  clearSealRefusal(common);
+  clearSealRefusal(common, 'Y');
+  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), true, 'another review');
+  clearSealRefusal(common, 'X');
   assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), false);
   recordRefusal(common, 'message hors de la session');
-  clearSealRefusal(common);
+  clearSealRefusal(common, 'X');
   assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), true);
 });

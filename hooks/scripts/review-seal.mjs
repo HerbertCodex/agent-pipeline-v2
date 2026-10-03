@@ -68,13 +68,13 @@ async function main() {
     const common = r.stdout.trim();
     if (!reviews.recordExists(common, request.id, request.domain)) continue;
     let key;
-    try { key = operator.ensureAnchorKey(common, keyFile); } catch (error) { operator.recordRefusal(common, `relecture non scellée : ${error?.message ?? error}`); return 0; }
+    try { key = operator.ensureAnchorKey(common, keyFile); } catch (error) { operator.recordRefusal(common, `relecture ${request.id} non scellée : ${error?.message ?? error}`); return 0; }
     const sealed = reviews.sealReview(common, request.id, request.domain, request.agent, key);
     // A sealed review lifts an earlier note of a review this hook could not seal (here, and in the session's project).
     if (sealed?.file) {
-      operator.clearSealRefusal(common);
+      operator.clearSealRefusal(common, request.id);
       const s = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
-      if (s.status === 0 && s.stdout.trim() && s.stdout.trim() !== common) operator.clearSealRefusal(s.stdout.trim());
+      if (s.status === 0 && s.stdout.trim() && s.stdout.trim() !== common) operator.clearSealRefusal(s.stdout.trim(), request.id);
     }
     return 0;
   }

@@ -266,12 +266,15 @@ export function journalState(common) {
     }
     return { file, key: key !== null, keyProblem: anchor.problem, keyCreatedAt: anchor.createdAt, messages: ok.length, ignored: lines.length - ok.length, last: ok.at(-1)?.at ?? null, refused };
 }
-/** Forgets a note of the seal hook (a review it could not seal) once a review is sealed: the note no longer holds. */
-export function clearSealRefusal(common) {
+/**
+ * Forgets the note of the seal hook about the review `id` once that review is sealed: the note no longer holds. A note
+ * about another review, or a refused message, stays.
+ */
+export function clearSealRefusal(common, id) {
     const file = join(common, ...OPERATOR_REFUSED);
     try {
         const r = JSON.parse(readFileSync(file, 'utf8'));
-        if (typeof r.reason === 'string' && /^relecture\b/.test(r.reason))
+        if (typeof r.reason === 'string' && r.reason.startsWith(`relecture ${id} `))
             rmSync(file, { force: true });
     }
     catch { /* no note */ }
