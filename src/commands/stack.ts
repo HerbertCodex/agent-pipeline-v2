@@ -429,7 +429,8 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO, ci: { ci
     try {
       // The target is also the reference of the scope of the proof (skipWhenOnly): its paths, its merge base with the batch.
       result = await runGates({ repo: worktree, config: loaded.config, stage: 'full', base, repeatReference: base, reference: base, repeatCeiling: false, env: io.env, log, signal: abort.signal,
-        ...(stacks ? { stacks } : {}), ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}) });
+        ...(stacks ? { stacks } : {}), ...(io.env['APV_LOCK_POLL_MS'] || io.env['APV_PORTS_POLL_MS'] ? { hooks: {
+          ...(io.env['APV_LOCK_POLL_MS'] ? { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } : {}), ...(io.env['APV_PORTS_POLL_MS'] ? { portsPollMs: Number(io.env['APV_PORTS_POLL_MS']) } : {}) } } : {}) });
     } catch (error) {
       // Refused before it ran (repetition ceiling, stacks the target does not declare or cannot give): nothing about the code.
       if (error instanceof PipelineError && ['GATE_REPEAT', 'GATE_STACKS', 'STACK_UNKNOWN'].includes(error.code)) {

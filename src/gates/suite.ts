@@ -31,6 +31,8 @@ export interface SuiteHooks {
   loadPollMs?: number;
   /** Polling of the lock queues (default: that of `apv lock`, 500 ms). */
   lockPollMs?: number;
+  /** Delay between two readings of the ports of the suite held by another copy of the repository (default 5 s). */
+  portsPollMs?: number;
   /** Tests only: the duration the near-timeout warning reads for a check, in place of the measured one (the receipt keeps the measure). */
   durationOf?: (gateId: string, measuredMs: number) => number;
 }
@@ -153,6 +155,12 @@ export interface PortsRecord {
   left: (PortProcess & { reason: StopRefusal })[];
   /** Why nothing could be read (a system without /proc), else null. */
   unsupported: string | null;
+  /**
+   * The wait for ports held by another copy of this repository (a review, a dynamic scan, another suite; src/gates/run.ts):
+   * how long, who held them at the start, and how it ended (`freed`: the suite starts; `timeout`: the lock delay ran out,
+   * refused; `foreign`: a process outside a copy of the repository took a port meanwhile, refused). Null without a wait.
+   */
+  wait: { ms: number; holders: PortProcess[]; outcome: 'freed' | 'timeout' | 'foreign' } | null;
 }
 
 /**
@@ -162,7 +170,7 @@ export interface PortsRecord {
  * or the session: those are only reported.
  */
 export async function freePorts(repo: string, ports: readonly number[], options: { graceMs?: number; log: (line: string) => void }): Promise<PortsRecord> {
-  const record: PortsRecord = { ports: [...ports], stopped: [], left: [], unsupported: null };
+  const record: PortsRecord = { ports: [...ports], stopped: [], left: [], unsupported: null, wait: null };
   if (!ports.length) return record;
   try { assertProcSupported(); }
   catch (error) { record.unsupported = errorMessage(error); options.log(`Ports de la suite non vérifiés : ${record.unsupported}`); return record; }

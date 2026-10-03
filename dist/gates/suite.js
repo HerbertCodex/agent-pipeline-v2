@@ -129,7 +129,7 @@ subject = 'suite') {
  * or the session: those are only reported.
  */
 export async function freePorts(repo, ports, options) {
-    const record = { ports: [...ports], stopped: [], left: [], unsupported: null };
+    const record = { ports: [...ports], stopped: [], left: [], unsupported: null, wait: null };
     if (!ports.length)
         return record;
     try {
