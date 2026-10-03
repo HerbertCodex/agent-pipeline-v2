@@ -18,6 +18,7 @@ import { webIssues, webSchema } from '../web/config.js';
 import { mapSchema, mapSettings, reuseSchema, reuseSettings } from '../reuse/config.js';
 import { rulesSchema, rulesSettings } from '../rules/config.js';
 import { testsCheckSchema } from '../testcheck/check.js';
+import { freshnessIssues, freshnessSchema } from '../freshness/config.js';
 
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
@@ -27,7 +28,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'stack', 'web', 'reuse', 'map', 'rules', 'testsCheck'] as const;
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'stack', 'web', 'reuse', 'map', 'rules', 'testsCheck', 'freshness'] as const;
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'] as const;
 
@@ -206,6 +207,8 @@ export const apvConfigSchema = s.object({
   map: s.optional(mapSchema),
   /** What the rules checked before a merge add to their defaults (docs/REGLES.md); absent: defaults. No rule can be switched off. */
   rules: s.optional(rulesSchema),
+  /** Freshness of the living state and resume files reported by `apv status` (docs/CONFIGURATION.md, « Fraîcheur de l'état »); absent: defaults. */
+  freshness: s.optional(freshnessSchema),
 });
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export const specLimits = (config: { spec?: Partial<SpecLimits> | undefined }): SpecLimits => ({ ...DEFAULT_SPEC_LIMITS, ...config.spec });
@@ -332,6 +335,7 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
     for (const glob of globs ?? []) list.attempt('CONFIG', () => { try { matches('probe', glob); } catch (error) { throw new PipelineError('CONFIG', `review.paths.${key}: ${errorMessage(error)}`); } });
   }
   if (value.web) for (const message of webIssues(value.web)) list.check(false, 'CONFIG', message);
+  if (value.freshness) for (const message of freshnessIssues(value.freshness)) list.check(false, 'CONFIG', message);
   if (list.empty) list.attempt('DAG', () => validateDag(value.gates));
   return { config: list.empty ? value : undefined, ignored: sections.ignored, issues: list.items };
 }

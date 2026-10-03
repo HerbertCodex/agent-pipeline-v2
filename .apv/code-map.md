@@ -2,7 +2,7 @@
 
 Générée par `apv map` à partir des fichiers du dépôt, sans modèle. À lire avant de créer un composant, un module ou une route : réutiliser une entrée existante, ou l'étendre de façon générique (paramètre, variante) ; un élément utilisé par deux fonctionnalités devient partagé. Ne pas modifier à la main : l'intégration la régénère (`apv map`), et le contrôle `apv map --check` de la suite complète échoue quand elle ne correspond plus au code.
 
-Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 159. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 82 test(s), 300 fichier(s) ignoré(s), 5 module(s) sans export ni import.
+Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 161. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 83 test(s), 304 fichier(s) ignoré(s), 5 module(s) sans export ni import.
 
 ## Dossiers
 
@@ -30,7 +30,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `operator-journal.mjs` : UserPromptSubmit hook: keeps what the operator types himself in the session, in the Git… Exporte : MAX_MESSAGE, OPERATOR_SOURCES, hookKeyFile(), isClaudeProcess(), operatorEntry(), procProcess(), et 1 autre(s). Utilisé nulle part.
 - `review-seal.mjs` : PostToolUse hook for Bash: seals a review record right after 'apv review record' ran,… Exporte : recordCommit(), recordDirectories(), recordId(), sealRequest(). Utilisé nulle part.
 - `scope-reminder.mjs` : PostToolUse hook on file writes (APV3 spec, section 11): reminds an implementer of the… Exporte : TASK_MARKER, findTaskRoot(), loadTaskScope(), scopeReminder(), writtenFile(). Utilisé nulle part.
-- `session-start.mjs` : SessionStart hook: gives the lead a short resume context when the project uses APV… Exporte : buildResumeContext(), describeQuota(), lastLine(), loadRunSummary(), runLines(), stateEntries(). Utilisé nulle part.
+- `session-start.mjs` : SessionStart hook: gives the lead a short resume context when the project uses APV… Exporte : buildResumeContext(), describeQuota(), freshnessLines(), lastLine(), loadFreshness(), loadRunSummary(), et 2 autre(s). Utilisé nulle part.
 - `stop-journal.mjs` : Stop hook: appends one timestamped line to '.apv/state/journal.log' so that a resume… Exporte : journalLine(). Utilisé nulle part.
 - `write-guard.mjs` : PreToolUse guard for the Write, Edit, MultiEdit, NotebookEdit, Read, Grep and Glob… Exporte : WRITE_REASON, evaluateWrite(). Utilisé nulle part.
 
@@ -69,7 +69,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 ### src/config
 
 - `apv-files.ts` : The project directory of APV3: configuration, ledger, specs and state, versioned with… Exporte : APV_DIR, APV_IGNORED, apvGitignoreMissing(), ensureApvGitignore(). Utilisé par 5 fichiers (src/commands/init.ts, …).
-- `load.ts` : V3 project configuration, versioned with the project. Exporte : ApvConfig, CONFIG_FILE, DAST_PLACEHOLDERS, DEFAULT_DAST_RESOURCE, DEFAULT_DAST_TIMEOUT_MS, DEFAULT_FULL_SUITE, et 35 autre(s). Utilisé par 37 fichiers (src/commands/dast.ts, …).
+- `load.ts` : V3 project configuration, versioned with the project. Exporte : ApvConfig, CONFIG_FILE, DAST_PLACEHOLDERS, DEFAULT_DAST_RESOURCE, DEFAULT_DAST_TIMEOUT_MS, DEFAULT_FULL_SUITE, et 35 autre(s). Utilisé par 38 fichiers (src/commands/dast.ts, …).
 
 ### src/db
 
@@ -95,12 +95,12 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 ### src/domain
 
 - `contracts.ts` : When a check runs: 'task' after every task (fast feedback), 'full' only in the complete… Exporte : AgentConfig, ChangeSet, CommandSpec, Config, DEFAULT_GENERATED_PATHS, DEFAULT_LIMITS, et 35 autre(s). Utilisé par 22 fichiers (src/commands/gates.ts, …).
-- `errors.ts` : sans description. Exporte : PipelineError, errorMessage(), invariant(). Utilisé par 75 fichiers (src/commands/common.ts, …).
+- `errors.ts` : sans description. Exporte : PipelineError, errorMessage(), invariant(). Utilisé par 77 fichiers (src/commands/common.ts, …).
 - `hash.ts` : Hash raw bytes, distinct from the canonical-JSON identity helper. Exporte : canonical(), hash(), hashFile(), sha256(). Utilisé par 9 fichiers (src/commands/run.ts, …).
 - `issues.ts` : One validation problem. Exporte : Issue, IssueList, jsonSchemaIssues(), schemaIssues(). Utilisé par 4 fichiers (src/config/load.ts, …).
 - `knowledge.ts` : Old configurations opt into no new skills. Exporte : KnowledgeConfig, LanguageProfile, RoleName, SkillsConfig, exportRules, knowledgeSchema, et 5 autre(s). Utilisé par 3 fichiers (src/config/load.ts, …).
 - `paths.ts` : Absolute path with every symlink of its longest existing ancestor resolved, the missing… Exporte : canonicalPath(). Utilisé par 9 fichiers (src/commands/common.ts, …).
-- `schema.ts` : A deliberately small schema vocabulary: runtime parsing and JSON Schema share the same… Exporte : Infer, JsonSchema, Schema, parseJson(), s. Utilisé par 22 fichiers (src/config/load.ts, …).
+- `schema.ts` : A deliberately small schema vocabulary: runtime parsing and JSON Schema share the same… Exporte : Infer, JsonSchema, Schema, parseJson(), s. Utilisé par 23 fichiers (src/config/load.ts, …).
 - `time.ts` : Times shown to a human, in the local time zone of the machine (Intl, the zone of the… Exporte : LocalTimeOptions, localTime(), localTimeZone, parseUntil(). Utilisé par 6 fichiers (src/commands/lock.ts, …).
 
 ### src/engine
@@ -118,6 +118,11 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `process.ts` : The command signals on file descriptor 3 (a pipe) when its real work starts, for… Exporte : PIPE_GRACE_MS, ProcessHooks, ProcessOptions, environment(), expandCommand(), redact(), et 1 autre(s). Utilisé par 13 fichiers (src/commands/stack.ts, …).
 - `procs.ts` : Processes of a repository, read from '/proc' (Linux): the working directory of each… Exporte : PROC_ROOT, PROTECTED_TOOLS, ProcessInfo, StopOutcome, StopRefusal, assertProcSupported(), et 12 autre(s). Utilisé par 5 fichiers (src/commands/procs.ts, …).
 - `wait.ts` : Bounded waits for a session that may not sleep ('apv wait'). Exporte : DEFAULT_POLL_MS, FileWatch, MAX_WAIT_SECONDS, WaitCondition, WaitOptions, WaitResult, et 2 autre(s). Utilisé par 1 fichier (src/commands/wait.ts).
+
+### src/freshness
+
+- `check.ts` : Bounds of the walk of one glob: entries visited, files kept, depth below '**'. Exporte : FreshnessEntry, FreshnessOptions, FreshnessReport, expandPattern(), freshnessLines(), freshnessReport(), et 3 autre(s). Utilisé par 1 fichier (src/commands/status.ts).
+- `config.ts` : Freshness of the living state and resume files ('apv status', SessionStart hook): a… Exporte : DEFAULT_FRESHNESS, DEFAULT_FRESHNESS_IGNORE, DEFAULT_FRESHNESS_PATHS, FreshnessSettings, PatternRoot, SplitPattern, et 4 autre(s). Utilisé par 3 fichiers (src/commands/status.ts, …).
 
 ### src/gates
 
@@ -161,7 +166,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 
 - `decision.ts` : Clock-free audit identity. Exporte : decisionRecord(). Utilisé par 1 fichier (src/lifecycle/pathways.ts).
 - `overlap.ts` : Whether two portable globs (the syntax of 'allowedPaths': '*', '**', '?', everything… Exporte : globsOverlap(). Utilisé par 1 fichier (src/lifecycle/decisions.ts).
-- `policy.ts` : Restricted portable globs: *, **, ?. Exporte : PolicyConfig, ReviewMode, ScopeReport, ScopeTask, ValidationRequirement, assertScope(), et 12 autre(s). Utilisé par 21 fichiers (src/commands/review.ts, …).
+- `policy.ts` : Restricted portable globs: *, **, ?. Exporte : PolicyConfig, ReviewMode, ScopeReport, ScopeTask, ValidationRequirement, assertScope(), et 12 autre(s). Utilisé par 23 fichiers (src/commands/review.ts, …).
 
 ### src/preview
 
@@ -208,15 +213,9 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `plugin-status.ts` : What 'apv status' says of the plugin (projet pilote, 3 octobre 2026) : a project under… Exporte : Catalog, CatalogRule, PluginInstall, PluginStatus, TOOL_ROOT, claudeDir(), et 7 autre(s). Utilisé par 1 fichier (src/commands/status.ts).
 - `protection.ts` : Whether GitHub protects the default branch: a PR required before merging, no… Exporte : Protection, ProtectionState, branchProtection(), githubRepository(). Utilisé par 3 fichiers (src/commands/rules.ts, …).
 - `required.ts` : Checks every web project must declare, mandatory, before a merge (rule 'controles'):… Exporte : MissingGate, REQUIRED_WEB_GATES, missingRequiredGates(), runsCommand(). Utilisé par 2 fichiers (src/commands/init.ts, …).
-- `reviews.ts` : Review records: what a reviewer agent found at one exact commit, kept in the Git common… Exporte : CaptureInput, DOMAIN_REVIEWERS, Findings, MIN_CAPTURE_BYTES, MIN_REPORT_BYTES, REPORT_SHA, et 14 autre(s). Utilisé par 2 fichiers (src/commands/review.ts, …).
-- `screens.ts` : Whether a file is a screen: a page, a layout or an error page of the routes the tool… Exporte : Mockup, ScreenCoverage, covers(), isScreen(), mockupsOf(), screenCoverage(), et 1 autre(s). Utilisé par 1 fichier (src/rules/check.ts).
+- et 2 autres entrées dans ce dossier (liste complète : apv map --json).
 
-### src/run
-
-- `bounded-read.ts` : Bounded read of a state file, shared by the summary of the executions and… Exporte : BudgetSpent, MAX_RUN_STATE_BYTES, readBounded(). Utilisé par 2 fichiers (src/run/state.ts, …).
-- et 5 autres entrées dans ce dossier (liste complète : apv map --json).
-
-Dossiers non listés, au-delà de la taille de la carte : src/security (2), src/spec (1), src/stack (5), src/stacks (2), src/structure (8), src/testcheck (1), src/web (6), workflows (2) (liste complète : apv map --json).
+Dossiers non listés, au-delà de la taille de la carte : src/run (6), src/security (2), src/spec (1), src/stack (5), src/stacks (2), src/structure (8), src/testcheck (1), src/web (6), workflows (2) (liste complète : apv map --json).
 
 ## Routes
 

@@ -68,6 +68,7 @@ flowchart LR
   - `src/engine/` : ordonnancement des contrôles et diagnostics. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/evidence/` : clé de preuve des reçus. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/execution/` : processus, Git, environnement transmis. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
+  - `src/freshness/` : fraîcheur des fichiers d'état et de reprise (apv status, crochet de début de session). Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/gates/` : `apv gates run` et `verify` : contrôles, suite complète, répétition des tests modifiés, portée, preuve incrémentale (`--since`). Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/knowledge/` : inventaire du dépôt. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/lifecycle/` : cycle de vie hérité de la V2. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
@@ -172,6 +173,7 @@ Une ligne par dossier, route principale et point d'entrée, de la forme « - `ch
 - `src/engine/` : ordonnancement des contrôles et diagnostics
 - `src/evidence/` : clé de preuve des reçus
 - `src/execution/` : processus, Git, environnement transmis
+- `src/freshness/` : fraîcheur des fichiers d'état et de reprise (apv status, crochet de début de session)
 - `src/gates/` : `apv gates run` et `verify` : contrôles, suite complète, répétition des tests modifiés, portée, preuve incrémentale (`--since`)
 - `src/knowledge/` : inventaire du dépôt
 - `src/lifecycle/` : cycle de vie hérité de la V2

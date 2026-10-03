@@ -12,6 +12,8 @@ const MAX_RUNS = 8;
 const MAX_RUN_LINE = 240;
 // Summary module of the compiled tool shipped with the plugin (shared with `apv status`).
 const SUMMARY_MODULE = new URL('../../dist/run/summary.js', import.meta.url);
+// Freshness module of the compiled tool (shared with `apv status`, section « Fichiers d'état périmés »).
+const FRESHNESS_MODULE = new URL('../../dist/freshness/check.js', import.meta.url);
 const RUNS_UNAVAILABLE = 'Exécutions (apv run) : résumé indisponible (dist/run/summary.js non chargé) ; voir apv status.';
 const RUNS_UNREADABLE = 'Exécutions (apv run) : résumé indisponible (erreur de lecture de .apv/state) ; voir apv status.';
 
@@ -84,6 +86,30 @@ export async function loadRunSummary(url = SUMMARY_MODULE) {
   }
 }
 
+/** The freshness module, or null when it cannot be loaded: the session then starts without the line. */
+export async function loadFreshness(url = FRESHNESS_MODULE) {
+  try {
+    const mod = await import(url.href);
+    return typeof mod.repoFreshness === 'function' && typeof mod.freshnessSummary === 'function' ? mod : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One line naming the living state files not rewritten for too long or grown too long (read-only: dates and line
+ * counts, never a secret-like file's content), or none. File names are cleaned and bounded: they come from disk.
+ */
+export function freshnessLines(repo, freshness, options = {}) {
+  if (!freshness) return [];
+  try {
+    const line = freshness.freshnessSummary(freshness.repoFreshness(repo, options), value => oneLine(value, 160));
+    return line ? [oneLine(line, 1200)] : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Id that `apv run next` reads (`.apv/state/run-<id>.json`), taken from the entry's file name; null if none. */
 function runFileId(file) {
   const match = /(?:^|\/)run-([^/]+)\.json$/.exec(typeof file === 'string' ? file : '');
@@ -124,9 +150,10 @@ export function runLines(repo, summary) {
  * (loadRunSummary); null means unavailable. The executions come right after the header so that the
  * size bound, applied last, cuts the free-form resume notes before them.
  */
-export function buildResumeContext(apvDir, summary = null) {
+export function buildResumeContext(apvDir, summary = null, freshness = null, freshnessOptions = {}) {
   const stateDir = join(apvDir, 'state');
-  const lines = [`[APV] Projet sous Agent Pipeline V3 (${oneLine(apvDir, 300)}).`, ...runLines(dirname(apvDir), summary)];
+  const lines = [`[APV] Projet sous Agent Pipeline V3 (${oneLine(apvDir, 300)}).`, ...runLines(dirname(apvDir), summary),
+    ...freshnessLines(dirname(apvDir), freshness, freshnessOptions)];
   const notes = readText(join(stateDir, 'resume.md'));
   if (notes) {
     const kept = notes.split(/\r?\n/).slice(0, MAX_NOTES_LINES).map(l => oneLine(l, 300));
@@ -155,7 +182,7 @@ async function main() {
   if (!apvDir) return 0;
   process.stdout.write(`${JSON.stringify({
     systemMessage: 'APV : contexte de reprise chargé depuis .apv/state.',
-    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: buildResumeContext(apvDir, await loadRunSummary()) },
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: buildResumeContext(apvDir, await loadRunSummary(), await loadFreshness()) },
   })}\n`);
   return 0;
 }
