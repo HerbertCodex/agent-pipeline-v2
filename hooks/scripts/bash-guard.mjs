@@ -492,9 +492,15 @@ export function mayReachAnchor(path) {
 const GLOB_READERS = new Set(['cat', 'head', 'tail', 'ls', 'jq', 'wc', 'grep', 'egrep', 'fgrep', 'diff', 'cmp', 'stat', 'file',
   'sha256sum', 'sha1sum', 'md5sum', 'du', 'zcat']);
 /** Commands that only read or print what they are given: the only ones that may be handed a path in a store. */
-const READS_ONLY = new Set([...GLOB_READERS, 'rg', 'tree', 'echo', 'printf', 'test', '[', 'realpath', 'readlink', 'basename', 'dirname', 'apv',
+/** Not `rg`, whose options may come from a file a variable names (RIPGREP_CONFIG_PATH): handed a store, it is refused. */
+const READS_ONLY = new Set([...GLOB_READERS, 'tree', 'echo', 'printf', 'test', '[', 'realpath', 'readlink', 'basename', 'dirname', 'apv',
   // dd writes only by `of=`, read by OUTPUT_OPTIONS.
   'dd']);
+/** Options of grep and rg followed by a separate value, which is neither the pattern nor a path searched. */
+const GREP_VALUED = new Set(['-m', '-A', '-B', '-C', '-d', '-D', '--max-count', '--after-context', '--before-context', '--context', '--directories', '--devices',
+  '--include', '--exclude', '--exclude-dir', '--label', '--color', '--binary-files']);
+const RG_VALUED = new Set(['-t', '-T', '-g', '-m', '-A', '-B', '-C', '-M', '-j', '-E', '--type', '--type-not', '--glob', '--iglob', '--max-count', '--after-context',
+  '--before-context', '--context', '--max-columns', '--threads', '--encoding', '--type-add', '--max-depth', '--max-filesize', '--sort', '--sortr', '--color', '--colors']);
 /** Commands that delete, move, empty or copy away what they are given: handed a store, they reach it. */
 const STORE_WRITERS = new Set(['rm', 'unlink', 'rmdir', 'shred', 'truncate', 'mv', 'cp', 'rsync', 'tar', 'zip', 'ln', 'chmod', 'chown', 'chgrp', 'install', 'setfacl', 'chattr',
   'tee', 'trash', 'trash-put', 'rmtrash', 'gio', 'sponge', 'gzip', 'gunzip', 'bzip2', 'xz', 'zstd']);
@@ -670,9 +676,13 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
     // A glob that may reach into a store: refused, except for one reading command alone on its line, without redirection,
     // that cannot reach a store of the anchor (`cat .git/apv/receipts/*.json`). Paths are normalized first (`..`, `.`).
     // A command is known by its name only as the command of the system: written without a folder (or from /bin,
-    // /usr/bin), and not defined on the line as a function or an alias of that name.
-    const systemTool = (!/\//.test(cw[0] ?? '') || /^\/(?:usr\/)?(?:local\/)?bin\/[^/]+$/.test(cw[0] ?? ''))
-      && !new RegExp(`(?:^|[\\s;&|(])(?:function\\s+)?${tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(\\s*\\)|\\balias\\s+${tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=`).test(String(command));
+    // /usr/bin), on a line that changes neither the commands names lead to (PATH set, `hash`, `enable`) nor that name
+    // (a function or an alias of it).
+    const toolName = tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const flatLine = flatten(String(command));
+    const systemTool = (!/\//.test(cw[0] ?? '') || /^\/(?:usr\/)?bin\/[^/]+$/.test(cw[0] ?? ''))
+      && !/\bPATH=|\b(?:hash|enable)\b/.test(flatLine)
+      && !new RegExp(`(?:^|[\\s;&|(])(?:function\\s+${toolName}\\b|${toolName}\\s*\\(\\s*\\))|\\balias\\s+${toolName}=`).test(flatLine);
     const alone = segments.length === 1 && !/[<>]/.test(String(shadow ?? ''));
     const reader = GLOB_READERS.has(tool) && systemTool && alone && !lineWrites;
     for (const arg of args) {
@@ -732,12 +742,16 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
         || ((a === '--directories' || /^-[a-zA-Z]*d$/.test(a)) && opts[k + 1] === 'recurse')))
       || (['diff', 'zcat', 'gzip', 'gunzip'].includes(tool) && opts.some(a => /^-[a-zA-Z]*r/.test(a) || a === '--recursive'));
     const patternGiven = opts.some(a => /^-[a-zA-Z]*[ef]/.test(a) || /^--(?:regexp|file)(?:=|$)/.test(a));
-    const searched = (greps || tool === 'rg') && !patternGiven ? args.slice(1) : args;
+    // The operands of grep or rg, the values of their options that take a separate one skipped (`rg -t js x .git`).
+    const valued = greps ? GREP_VALUED : tool === 'rg' ? RG_VALUED : null;
+    const operands = valued ? opts.filter((a, k) => !a.startsWith('-') && !valued.has(opts[k - 1] ?? '')) : args;
+    const searched = valued && !patternGiven ? operands.slice(1) : operands;
     if (recursive && searched.some(a => { const p = resolve(dir ?? '/', at(a, dir)); return mayReachAnchor(join(p, 'apv', 'operator')) || mayReachAnchor(join(p, 'operator')); })) return REASONS.anchorStore;
     if (!writer && READS_ONLY.has(tool) && systemTool) continue;
     // What another program reads on its standard input (`python3 x.py - < .git/apv/receipts/r.json`, `<f`) is not
-    // handed to it.
-    const plainArgs = writer ? args : cw.slice(1).filter((a, k, all) => !a.startsWith('-') && !/^\d*</.test(a) && !/^\d*<$/.test(all[k - 1] ?? ''));
+    // handed to it. A `<` the shell does not read as a redirection (escaped or quoted: blank in the shadow) is a word.
+    const redirects = /</.test(String(shadow ?? ''));
+    const plainArgs = writer ? args : cw.slice(1).filter((a, k, all) => !a.startsWith('-') && !(redirects && (/^\d*</.test(a) || /^\d*<$/.test(all[k - 1] ?? ''))));
     // A value given with its option (`--out=<path>`, `-C<path>`) is a path the program receives, like an operand.
     const optionValues = cw.slice(1).flatMap(a => {
       const m = /^--[\w-]+=(.+)$/.exec(a) ?? (a.startsWith('--') ? null : /^-[A-Za-z](.+)$/.exec(a));
@@ -1444,9 +1458,11 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
       // creation that failed (the branch exists) leaves the shell on the branch it was on. The operator is the one that
       // follows this very command, read by the tokenizer (`git checkout -b x main && …`, never an `x &&` further on).
       const followedByAnd = after[index] === '&&';
-      // Made in this folder only: a creation with a global option of git that moves it (`-C`, `--git-dir`) is elsewhere.
+      // Made in this folder only: where git acts, as gitDirectory reads it (its global options, and what stands in front
+      // of it or in the environment), must be the folder of the line.
       const sub = cwords.findIndex((w, k) => k > 0 && (w === 'checkout' || w === 'switch'));
-      const here = !cwords.slice(1, sub === -1 ? undefined : sub).some(w => /^(?:-C|--git-dir|--work-tree)/.test(w));
+      const here = dirKnown && gitDirectory(cwords, dir, words, env) === dir
+        && !cwords.slice(1, sub === -1 ? undefined : sub).some(w => /^(?:-C|--git-dir|--work-tree)/.test(w));
       if (change.created && followedByAnd && here) { branchSet = change.created; created = true; }
       else if (change.created || change.unknown) { dirKnown = false; branchSet = null; created = false; }
     }
