@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
+import { setInterval } from 'node:timers/promises';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 import { runGates, failedTests, statusLines } from '../dist/gates/run.js';
@@ -30,22 +30,81 @@ const common = repo => realpathSync(resolve(repo, git(repo, 'rev-parse', '--git-
 const receipt = (dir, gate) => validateReceipt(JSON.parse(readFileSync(join(dir, `${gate}.json`), 'utf8')));
 const owner = label => ({ pid: process.pid, host: hostname(), label });
 /**
- * Takes the lease `resource` of `dir`, and resolves once it is held (never racing the run that must wait for it) to a
- * promise of its release after `ms`, which resolves to the release time.
+ * Takes the lease `resource` of `dir` and resolves once it is held (never racing the run that must wait for it). The
+ * test releases it on an observed fact, never after a fixed time: `release()` (after the run that must be refused has
+ * returned), or `releaseOnWait` (once the run announces it waits, kept a while longer than the timeout it must not count).
  */
-async function holdLease(dir, resource, ms) {
+async function holdLease(t, dir, resource) {
   const store = new LockStore(dir);
   const held = await store.tryAcquire(resource, owner('test'), 60);
   assert.ok(held.ok, 'lease taken by the test');
-  return { released: new Promise(done => setTimeout(async () => { const at = Date.now(); await store.release(resource, { token: held.record.token }); done(at); }, ms)) };
+  let releasing = null;
+  /** Releases the lease once; resolves to the time of the release. */
+  const release = () => releasing ??= (async () => { const at = Date.now(); await store.release(resource, { token: held.record.token }); return at; })();
+  t.after(release);
+  return { release };
+}
+
+/**
+ * The option `onStderr` of `apv` that releases `lease` `holdMs` after the run announces it waits for `resource`, and
+ * the promise of the release time. A run that never announces it fails its assertions: the lease is released at the
+ * end of the test.
+ */
+function releaseOnWait(lease, resource, holdMs) {
+  let resolve;
+  const released = new Promise(done => { resolve = done; });
+  let seen = false;
+  const onStderr = text => {
+    if (seen || !text.includes(`Attente du verrou « ${resource} »`)) return;
+    seen = true;
+    setTimeout(() => resolve(lease.release()), holdMs);
+  };
+  return { onStderr, released, announced: () => seen };
+}
+
+/** Resolves once `fact()` holds, read every 10 ms (a fact observed, never a duration); fails after `limitMs`. */
+async function until(fact, what, limitMs = 30_000) {
+  const end = Date.now() + limitMs;
+  for await (const _ of setInterval(10)) {
+    if (fact()) return;
+    if (Date.now() > end) throw new Error(`${what} : non observé après ${limitMs} ms`);
+  }
+}
+
+/** The FLOCK locks of /proc/locks on the inode of `file`: holders (WRITE held) and waiters (lines `->`). */
+function flocksOn(file) {
+  if (!existsSync(file)) return { holders: 0, waiters: 0 };
+  const ino = statSync(file).ino;
+  let holders = 0; let waiters = 0;
+  for (const line of readFileSync('/proc/locks', 'utf8').split('\n')) {
+    const f = line.trim().split(/\s+/);
+    const waiting = f[1] === '->';
+    const [kind, , , , dev] = waiting ? f.slice(2) : f.slice(1);
+    if (kind !== 'FLOCK' || Number(dev?.split(':')[2]) !== ino) continue;
+    if (waiting) waiters++; else holders++;
+  }
+  return { holders, waiters };
+}
+
+/** A process holding the flock of `file` until `release()` (its standard input closed), resolved once it holds it. */
+async function holdFlock(t, file) {
+  const holder = spawn('flock', [file, 'cat'], { stdio: ['pipe', 'ignore', 'ignore'] });
+  const exited = new Promise(done => holder.once('exit', done));
+  let releasing = null;
+  const release = () => releasing ??= (holder.stdin.end(), exited.then(() => Date.now()));
+  t.after(release);
+  await until(() => flocksOn(file).holders > 0, `flock de ${file} tenu`);
+  return { release };
 }
 
 test('the queue of the full suites: the first check starts only once the lock is free, and its timeout after that', async t => {
   const f = project(t, { gates: [{ id: 'e2e', stage: 'full', timeoutMs: 1000, command: node(`require("fs").writeFileSync(${JSON.stringify(join(f0(t), 'started'))}, String(Date.now())); setTimeout(() => {}, 100)`) }] });
   const locks = join(common(f.repo), 'apv', 'locks');
-  const { released } = await holdLease(locks, 'full-suite', 2500);
-  const r = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_POLL_MS: '20' });
-  const releasedAt = await released;
+  // Held until the run announces it waits, then 1.2 s more: longer than the 1 s timeout the wait must not count.
+  const wait = releaseOnWait(await holdLease(t, locks, 'full-suite'), 'full-suite', 1200);
+  const r = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_POLL_MS: '20' }, { onStderr: wait.onStderr });
+  assert.ok(wait.announced(), r.stderr);
+  const releasedAt = await wait.released;
   assert.equal(r.code, 0, r.stdout + r.stderr);
   const json = r.json();
   assert.equal(json.suite, true);
@@ -70,17 +129,18 @@ test('the queue refuses after waitMs, nothing runs; a disabled queue is not take
   const f = project(t, { gates: [{ id: 'e2e', stage: 'full', command: node(`require("fs").writeFileSync(${JSON.stringify(join(f0(t), 'ran'))}, "")`) }],
     suite: { queue: { lockFile: 'apv/queue/suites.lock', waitMs: 300 } } });
   const locks = join(common(f.repo), 'apv', 'queue');
-  const { released } = await holdLease(locks, 'suites', 1500);
+  // Held for the whole run (released once it has returned): the queue waits its 300 ms, then refuses.
+  const lease = await holdLease(t, locks, 'suites');
   const r = await apv(f.repo, ['gates', 'run'], { APV_LOCK_POLL_MS: '20' });
-  await released;
+  await lease.release();
   assert.equal(r.code, 1);
   assert.match(r.stderr, /SUITE_QUEUE.*suites\.lock.*non obtenu après .* tenu par test.*Rien n'a été exécuté/);
   assert.ok(!existsSync(join(f0(t), 'ran')));
   write(f.repo, '.apv/config.json', { gates: [{ id: 'e2e', stage: 'full', command: node('0') }], suite: { queue: { enabled: false } } });
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'no queue');
-  const { released: held } = await holdLease(locks, 'suites', 800);
+  const held = await holdLease(t, locks, 'suites');
   const free = await apv(f.repo, ['gates', 'run', '--json']);
-  await held;
+  await held.release();
   assert.equal(free.code, 0); assert.equal(free.json().queue, null);
 });
 
@@ -88,9 +148,11 @@ test('a check with a lease lock waits for it before its timeout starts; the comm
   const dir = join(f0(t), 'locks');
   const f = project(t, { gates: [{ id: 'integration', stage: 'full', timeoutMs: 1000, lock: { resource: 'stack' }, passEnv: [],
     command: node('process.exit(process.env.APV_LOCK_HELD === "stack" ? 0 : 7)') }] });
-  const { released } = await holdLease(dir, 'stack', 2500);
-  const r = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_DIR: dir, APV_LOCK_POLL_MS: '20' });
-  await released;
+  // Held until the check announces it waits, then 1.2 s more: longer than its 1 s timeout, which must not count the wait.
+  const wait = releaseOnWait(await holdLease(t, dir, 'stack'), 'stack', 1200);
+  const r = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_DIR: dir, APV_LOCK_POLL_MS: '20' }, { onStderr: wait.onStderr });
+  assert.ok(wait.announced(), r.stderr);
+  await wait.released;
   assert.equal(r.code, 0, r.stdout + r.stderr);
   const rec = receipt(r.json().receiptsDirectory, 'integration');
   assert.equal(rec.status, 'passed');
@@ -100,9 +162,10 @@ test('a check with a lease lock waits for it before its timeout starts; the comm
   // Lock not obtained within waitMs: a receipt that fails, the command never launched.
   write(f.repo, '.apv/config.json', { gates: [{ id: 'integration', stage: 'full', lock: { resource: 'stack', waitMs: 200 }, command: node(`require("fs").writeFileSync(${JSON.stringify(join(f0(t), 'ran'))}, "")`) }] });
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'short wait');
-  const { released: held } = await holdLease(dir, 'stack', 1200);
+  // Held for the whole run, released only once it has returned: the 200 ms of waitMs always run out first, whatever the load.
+  const held = await holdLease(t, dir, 'stack');
   const refused = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_DIR: dir, APV_LOCK_POLL_MS: '20' });
-  await held;
+  await held.release();
   assert.equal(refused.code, 1);
   assert.equal(refused.json().gates[0].status, 'timed_out');
   assert.match(refused.json().gates[0].diagnostic, /Verrou du contrôle non obtenu : verrou « stack » non obtenu après/);
@@ -110,9 +173,9 @@ test('a check with a lease lock waits for it before its timeout starts; the comm
   // Already held by the caller (apv lock run stack -- apv gates run): not taken again.
   write(f.repo, '.apv/config.json', { gates: [{ id: 'integration', stage: 'full', timeoutMs: 1000, lock: { resource: 'stack', waitMs: 100 }, command: node('0') }] });
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'held');
-  const { released: nested } = await holdLease(dir, 'stack', 600);
+  const nested = await holdLease(t, dir, 'stack');
   const inside = await apv(f.repo, ['gates', 'run', '--json'], { APV_LOCK_DIR: dir, APV_LOCK_HELD: 'stack' });
-  await nested;
+  await nested.release();
   assert.equal(inside.code, 0, inside.stderr);
 });
 
@@ -125,22 +188,23 @@ for (const l of fs.readFileSync("/proc/locks","utf8").split("\\n")) { const f=l.
 let pid=process.ppid; let held=false; while (pid>1) { if (holders.has(pid)) { held=true; break; } pid=Number(fs.readFileSync("/proc/"+pid+"/stat","utf8").split(") ")[1].split(" ")[1]); }
 process.exit(held?0:9);`;
   const f = project(t, { gates: [{ id: 'integration', stage: 'full', timeoutMs: 1000, lock: { file, fileEnv: 'STACK_LOCK' }, command: node(proof) }] });
-  const holder = spawn('flock', [file, 'sleep', '3'], { stdio: 'ignore' });
-  await sleep(200);
+  // Held until the check waits on it (a waiter in /proc/locks), then 1.2 s more: longer than its 1 s timeout.
+  const holder = await holdFlock(t, file);
+  until(() => flocksOn(file).waiters > 0, `attente du flock de ${file}`).then(() => setTimeout(holder.release, 1200), holder.release);
   const r = await apv(f.repo, ['gates', 'run', '--json']);
+  await holder.release();
   assert.equal(r.code, 0, r.stdout + r.stderr);
   const rec = receipt(r.json().receiptsDirectory, 'integration');
   assert.equal(rec.status, 'passed', rec.diagnostic);
   assert.ok(rec.lockWaitMs >= 1100, `lockWaitMs ${rec.lockWaitMs} (longer than the 1 s timeout)`);
-  holder.kill();
   // The variable named by fileEnv, when passed, replaces the path; lock not obtained in time: timed_out, never run.
   const other = join(f0(t), 'other.lock');
   write(f.repo, '.apv/config.json', { gates: [{ id: 'integration', stage: 'full', passEnv: ['STACK_LOCK'], lock: { file, fileEnv: 'STACK_LOCK', waitMs: 200 }, command: node('0') }] });
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'env lock');
-  const busy = spawn('flock', [other, 'sleep', '2'], { stdio: 'ignore' });
-  await sleep(200);
+  // Held for the whole run, released once it has returned: the 200 ms of waitMs always run out first.
+  const busy = await holdFlock(t, other);
   const refused = await apv(f.repo, ['gates', 'run', '--json'], { STACK_LOCK: other });
-  busy.kill();
+  await busy.release();
   assert.equal(refused.code, 1);
   assert.equal(refused.json().gates[0].status, 'timed_out');
   assert.match(refused.json().gates[0].diagnostic, /Verrou flock .*other\.lock non obtenu/);
