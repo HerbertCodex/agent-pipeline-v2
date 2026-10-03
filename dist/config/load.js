@@ -48,10 +48,20 @@ export const runSettingsSchema = s.object({
  * makes every layer wait for the integration of the previous one.
  */
 export const DEFAULT_SPEC_LIMITS = { maxTasks: 6, maxAcceptance: 30, maxDepth: 3 };
+/**
+ * User scenarios of a spec that touches an interface (`apv spec validate`, code SPEC_USER_SCENARIOS): at least
+ * `minUserScenarios` criteria `AC-USER-<n>` written « Étant donné … Quand … Alors … » (or Given/When/Then) and
+ * verified by a browser test. `userScenarios` is the level of the finding: `warning` (default, existing specs keep
+ * validating) or `error` (the spec is refused, at validation and at launch).
+ */
+export const USER_SCENARIO_LEVELS = ['warning', 'error'];
+export const DEFAULT_USER_SCENARIOS = { minUserScenarios: 3, userScenarios: 'warning' };
 export const specSettingsSchema = s.object({
     maxTasks: s.default(s.number(1, 100), DEFAULT_SPEC_LIMITS.maxTasks),
     maxAcceptance: s.default(s.number(1, 1000), DEFAULT_SPEC_LIMITS.maxAcceptance),
     maxDepth: s.default(s.number(1, 100), DEFAULT_SPEC_LIMITS.maxDepth),
+    minUserScenarios: s.default(s.number(1, 5), DEFAULT_USER_SCENARIOS.minUserScenarios),
+    userScenarios: s.default(s.enum(USER_SCENARIO_LEVELS), DEFAULT_USER_SCENARIOS.userScenarios),
 });
 /** Placeholders of the dynamic scan command (`review.dast.command`), replaced as whole arguments. */
 export const DAST_PLACEHOLDERS = ['reportDir', 'commit', 'repo'];
@@ -199,7 +209,16 @@ export const apvConfigSchema = s.object({
     freshness: s.optional(freshnessSchema),
 });
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
-export const specLimits = (config) => ({ ...DEFAULT_SPEC_LIMITS, ...config.spec });
+export const specLimits = (config) => ({
+    maxTasks: config.spec?.maxTasks ?? DEFAULT_SPEC_LIMITS.maxTasks,
+    maxAcceptance: config.spec?.maxAcceptance ?? DEFAULT_SPEC_LIMITS.maxAcceptance,
+    maxDepth: config.spec?.maxDepth ?? DEFAULT_SPEC_LIMITS.maxDepth,
+});
+/** The user scenario settings of a configuration: `spec.minUserScenarios` and `spec.userScenarios`, defaults for what is absent. */
+export const userScenarioSettings = (config) => ({
+    minUserScenarios: config.spec?.minUserScenarios ?? DEFAULT_USER_SCENARIOS.minUserScenarios,
+    userScenarios: config.spec?.userScenarios ?? DEFAULT_USER_SCENARIOS.userScenarios,
+});
 /** The full suite rhythm of a configuration: `run.fullSuite`, `final` when absent. */
 export const fullSuiteMode = (config) => config.run?.fullSuite ?? DEFAULT_FULL_SUITE;
 /** Picks the read sections: `environment.passEnv` only, whatever else a V2 environment declared. */

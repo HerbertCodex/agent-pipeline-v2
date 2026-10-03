@@ -49,7 +49,7 @@ const METHOD_SKILLS = ['architecture-donnees', 'chef-de-projet', 'design-artefac
 test('manifests parse and describe the apv plugin', () => {
   const plugin = JSON.parse(read('.claude-plugin/plugin.json'));
   assert.equal(plugin.name, 'apv');
-  assert.equal(plugin.version, '3.0.0-alpha.19');
+  assert.equal(plugin.version, '3.0.0-alpha.20');
   assert.equal(plugin.license, 'MIT');
   assert.match(read('LICENSE'), /^MIT License/);
   assert.equal(plugin.repository, 'https://github.com/HerbertCodex/agent-pipeline-v2');
@@ -589,6 +589,23 @@ test('acceleration: the rhythm held by the tool, small specs with short chains, 
   for (const section of ['## Taille des specs : `spec`', '**Le rythme est tenu par l\'outil.**']) {
     assert.ok(!/[–—]/.test(read('docs/CONFIGURATION.md').split(section)[1].split('\n## ')[0]), `${section}: no em or en dash`);
   }
+});
+
+test('user scenarios: product and the spec skill write them, the fidelity review plays them, the docs name the check', () => {
+  const product = read('agents/product.md');
+  for (const rule of [/\*\*Scénarios utilisateur d'abord\.\*\*/, /3 à 5 scénarios utilisateur/, /`AC-USER-1`/, /« Étant donné <sa situation>, Quand <ce qu'elle fait>, Alors <ce qu'elle voit> »/,
+    /jamais le code/, /\*\*test navigateur\*\*/, /pas de nouvelle suite lourde/, /fusionne des critères techniques plutôt que d'en ajouter/, /SPEC_USER_SCENARIOS/,
+    /ISO\/IEC\/IEEE 29148/, /\*\*nécessaire\*\*/, /\*\*non ambigu\*\*/, /\*\*vérifiable\*\*/, /\*\*une exigence par critère\*\*/, /\*\*traçable\*\*/]) assert.match(product, rule);
+  const spec = frontmatter('skills/spec/SKILL.md').body;
+  for (const rule of [/\*\*scénarios utilisateur\*\*/, /`SPEC_USER_SCENARIOS`/, /"userScenarios": "error"/, /ISO\/IEC\/IEEE 29148/, /scénarios utilisateur `AC-USER-<n>` \(un par ligne/]) assert.match(spec, rule);
+  const fidelity = frontmatter('agents/qa-fidelite.md').body;
+  assert.match(fidelity, /\*\*Parcours joué par la personne cible\*\*[^\n]*\*\*téléphone 390 px d'abord\*\*[^\n]*\*\*hésiterait\*\*[^\n]*\*\*se tromperait\*\*[^\n]*\*\*bloquant\*\*/);
+  assert.match(frontmatter('skills/review/SKILL.md').body, /\*\*Parcours joué par la personne cible\*\*[^\n]*390 px d'abord/);
+  assert.match(read('workflows/revues.js'), /Parcours joué par la personne cible[^\n]*AC-USER-<n>[^\n]*390 px d\\'abord/);
+  assert.match(read('docs/CLI.md'), /\*\*Scénarios utilisateur\*\* \(`SPEC_USER_SCENARIOS`, hors `--draft`\)/);
+  assert.match(read('docs/CONFIGURATION.md'), /`minUserScenarios` \(défaut `3`, de 1 à 5\) et `userScenarios` \(`warning` par défaut, ou `error`\)/);
+  for (const file of ['agents/product.md', 'agents/qa-fidelite.md', 'skills/spec/SKILL.md', 'skills/review/SKILL.md', 'workflows/revues.js', 'src/spec/scenarios.ts'])
+    assert.ok(!/[–—]/.test(read(file)), `${file}: no em or en dash`);
 });
 
 test('pilot journal: commits read by git, waits through apv wait, copies outside the repository, scan by the lead, confidence in the state', () => {
