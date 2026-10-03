@@ -860,3 +860,27 @@ test('issue 109: where a branch is created, readers of the system, rg handed a s
   }
   assert.equal(evaluateCommand('git checkout -b x && git push -u origin HEAD', {}, fromMain).decision, 'allow');
 });
+
+test('issue 112: a cd through CDPATH leaves the folder unknown to the store guard; eval may set PATH', () => {
+  const lead = { ...as(null), cwd: '/r' };
+  for (const command of ['CDPATH=.git; cd apv && grep -r .', "export CDPATH=.git; cd apv && rg ''", 'printf -v CDPATH %s .git; cd apv && grep -r .',
+    'read CDPATH <<< .git; cd apv && grep -r .', 'declare -n c=CDPATH; c=.git; cd apv && grep -r .', "export CDPAT''H=.git; cd apv && grep -r .",
+    'x=PATH; export CD$x=.git; cd apv && grep -r .', 'source ./env.sh; cd apv && grep -r .']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  // After a cd that may lead into the store folder, a writer handed any relative path is refused.
+  for (const command of ['CDPATH=/r/.git; cd apv && rm -rf operator reviews merges', 'export CDPATH=/r/.git; cd apv && rm -rf receipts',
+    'G=.git/apv; cd "$G" && rm -rf operator', 'printf -v CDPATH %s /r/.git; cd apv && rm -rf receipts']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ['cd src && rm -rf build', 'B=build; cd "$B" && rm -rf out']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  // The push guard reads CDPATH the same way: a relative cd after it leaves the branch unknown.
+  for (const command of ['printf -v CDPATH %s /x; cd sub && git push', 'read CDPATH <<< /x; cd sub && git push']) {
+    assert.equal(evaluateCommand(command, {}, { ...lead, currentBranch: () => 'feat', defaultBranches: () => ['main'] }).decision, 'deny', command);
+  }
+  // eval on a line that names the store is refused by the computed-command guard as well.
+  assert.equal(evaluateCommand('eval PATH=/tmp/x; cat .git/apv/receipts/r.json', {}, lead).decision, 'deny');
+  for (const command of ['CDPATH=.git; cd ./src && grep -rn TODO', 'cd src && grep -rn TODO', 'cat .git/apv/receipts/r.json']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+});
