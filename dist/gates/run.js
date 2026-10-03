@@ -31,7 +31,8 @@ export const ENVIRONMENT_ID = 'apv3-local';
 /**
  * The companion of a kernel lock held by an ancestor of the suite: the lock its checks take turns on. One per real lock
  * file (two paths to the same file share it), in the lock folder of the account (`apv lock`, writable even when the
- * folder of the lock is not), so that every project and process under that ancestor shares it.
+ * folder of the lock is not), so that every project and process under that ancestor shares it, with the same
+ * APV_LOCK_DIR (or XDG_STATE_HOME, HOME). That folder cannot be made: the system's temporary folder, per account.
  */
 export function companionLock(file, env) {
     let real = file;
@@ -39,9 +40,15 @@ export function companionLock(file, env) {
         real = realpathSync(file);
     }
     catch { /* the path as given */ }
-    const dir = join(defaultLockDir(env), 'under');
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    return join(dir, `${basename(real).replace(/[^\w.-]/g, '_')}-${hash(real).slice(0, 12)}.lock`);
+    const name = `${basename(real).replace(/[^\w.-]/g, '_').slice(0, 100)}-${hash(real).slice(0, 12)}.lock`;
+    for (const dir of [join(defaultLockDir(env), 'under'), join(tmpdir(), `apv-under-${process.getuid?.() ?? 'user'}`)]) {
+        try {
+            mkdirSync(dir, { recursive: true, mode: 0o700 });
+            return join(dir, name);
+        }
+        catch { /* the next place */ }
+    }
+    return `${real}.under`;
 }
 /** Files of a `git status --porcelain=v1 -z` output, as `XY path` lines. */
 export function statusLines(porcelain) {

@@ -472,7 +472,7 @@ test('review 99, BAS 15: a suite launched under the lock of its stack holds it: 
   const cli = fileURLToPath(new URL('./support/cli-with-key.mjs', import.meta.url));
   const { TEST_KEY_FILE } = await import('./support/rules.mjs');
   const r = spawnSync('flock', ['-w', '5', lockFile, process.execPath, cli, TEST_KEY_FILE, 'gates', 'run', '--stage', 'full', '--json'], { cwd: p.repo, encoding: 'utf8', timeout: 60_000,
-    env: { ...process.env, APV_LOCK_POLL_MS: '20' } });
+    env: { ...process.env, APV_LOCK_POLL_MS: '20', APV_LOCK_DIR: join(root, 'locks') } });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stderr, /déjà tenu par un processus parent de cette suite/);
   assert.equal(JSON.parse(r.stdout).gates[0].status, 'passed');
