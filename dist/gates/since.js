@@ -35,7 +35,7 @@ export async function checkSince(repo, config, configFile, since) {
         refuse('l\'arbre de travail a des modifications non commitées (le diff classé est celui des commits)', 'Commiter les corrections (ou retirer ces fichiers), puis relancer la même commande.');
     }
     if (sha === head)
-        refuse('HEAD est le commit prouvé lui-même : rien de nouveau à vérifier', 'apv gates verify --commit HEAD suffit : la suite complète y est déjà prouvée.');
+        refuse('HEAD est le commit donné lui-même : rien de nouveau à vérifier', 'Vérifier la preuve de ce commit par apv gates verify --commit HEAD (sortie 0 : la suite complète y est prouvée ; sinon, la lancer).');
     let ancestor = true;
     try {
         await git.exec(root, ['merge-base', '--is-ancestor', sha, head]);

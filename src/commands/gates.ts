@@ -58,8 +58,10 @@ celle que vérifie apv gates verify).
 corrections. Refusée (sortie 1, rien n'est lancé) si l'arbre a des modifications non commitées, si HEAD
 ne descend pas strictement du commit, si la suite complète n'y est pas prouvée (apv gates verify à 0 avec
 cette configuration, aucun contrôle réussi après relance), ou si le diff depuis ce commit n'est pas de
-risque faible (classement de apv review plan, configuration lue au commit prouvé : tests, outillage de
-test, documentation, textes d'interface sans balisage nouveau). Sinon, contrôles de tâche, commandes
+risque faible (classement de apv review plan par le chemin, configuration lue au commit prouvé : tests
+nommés comme tels ou sous test/ et tests/, documentation *.md classée neutral hors dossiers servis,
+maquettes ; jamais l'interface, le code, l'outillage hors dossier de tests ni une configuration), ou si
+HEAD change entre le classement et les contrôles. Sinon, contrôles de tâche, commandes
 ciblées ({{baseSha}} = le commit prouvé) et répétition des tests modifiés depuis ce commit. Jamais une
 preuve de la suite complète : la fusion l'exige toujours au commit exact, lancée une fois sur le
 commit final.

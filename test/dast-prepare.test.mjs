@@ -141,6 +141,14 @@ const REMOTE = [
   ['X', 'http://2130706433/'],
   ['X', 'api.example.com:443'],
   ['X', 'admin@exemple.fr'],
+  // Second security review of PR #110: any scheme, nested, without `//`, encoded; host:port without a dot.
+  ['ZAP_TARGET', 'http:db.prod.example.com'], ['X', 'http:db.prod.example.com'],
+  ['ZAP_TARGET', 'http:/db.prod.example.com'], ['X', 'http:/db.prod.example.com'],
+  ['ZAP_TARGET', 'http:\\\\db.prod.example.com'], ['X', 'http:\\\\db.prod.example.com'],
+  ['DATABASE', 'jdbc:postgresql://db.prod.example.com/app'], ['X', 'jdbc:postgresql://db.prod.example.com/app'],
+  ['ZAP_TARGET', 'https%3A%2F%2Fdb.prod.example.com'], ['X', 'https%3A%2F%2Fdb.prod.example.com'], ['X', 'https%253A%252F%252Fdb.prod.example.com'],
+  ['ZAP_TARGET', 'prodserver:8080'], ['X', 'prodserver:8080'],
+  ['SITE', 'prodserver'], ['API_BASE', 'prodserver'], ['DB', 'prodserver'], ['X', 'fe80::1'],
 ];
 /** Loopback, test accounts and plain values: each must pass. */
 const LOCAL = [
@@ -148,6 +156,8 @@ const LOCAL = [
   ['DATABASE_URL', 'postgresql://postgres:postgres@127.0.0.1:54322/postgres'], ['DB_HOST', 'localhost'], ['DB_PORT', '5432'], ['PG', 'host=127.0.0.1 port=5432'],
   ['X', 'plain text'], ['SUPABASE_ANON_KEY', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiJ9.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE'],
   ['X', '42'], ['VERSION', '1.2.3'], ['DAST_USER', 'demo@example.org'], ['DAST_USER', 'qa@site.test'], ['X', 'localhost,127.0.0.1'],
+  ['X', 'localhost:5173'], ['ZAP_TARGET', 'http://127.0.0.1:4173'], ['ZAP_TARGET', 'http:localhost'], ['X', 'mode:strict'], ['X', '12:30'],
+  ['API_KEY', 'abc123secret'], ['DB_PASSWORD', 'postgres'], ['DATABASE_NAME', 'app'], ['DB_USER', 'postgres'], ['X', 'texte%20encod%C3%A9'],
 ];
 
 test('dast envFile: an allow-list of loopback addresses, unit (refusals and passes)', () => {

@@ -196,7 +196,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `config.ts` : Settings of 'apv review plan' in the 'review' section of '.apv/config.json'… Exporte : ALWAYS_REVIEWED, DEFAULT_REVIEW_PATHS, DEFAULT_REVIEW_TERMS, PATH_CLASSES, PathClass, REVIEW_DOMAINS, et 8 autre(s). Utilisé par 6 fichiers (src/commands/review.ts, …).
 - `dast.ts` : 'apv dast run': the dynamic security scan (ZAP or another) that the project declares in… Exporte : DAST_INSTALL, DAST_INSTALL_MARKER, DAST_LOG, DAST_SUMMARY, DastInstall, DastRunOptions, et 11 autre(s). Utilisé par 1 fichier (src/commands/dast.ts).
 - `plan.ts` : 'apv review plan': the review domains proposed from the nature of a diff. Exporte : ChangeKind, DomainDecision, PlanInput, PlannedFile, ReferenceSide, Rename, et 5 autre(s). Utilisé par 3 fichiers (src/commands/review.ts, …).
-- `risk.ts` : Risk level of a diff ('apv review plan', 'apv gates run --since'). Exporte : CONFIG_FILES, DiffRisk, RISK_LABEL, RISK_LEVELS, RiskLevel, SERVED_DIR, et 4 autre(s). Utilisé par 3 fichiers (src/commands/review.ts, …).
+- `risk.ts` : Risk level of a diff ('apv review plan', 'apv gates run --since'). Exporte : AGENT_INSTRUCTIONS, CONFIG_FILES, DiffRisk, RISK_LABEL, RISK_LEVELS, ROUTING_DIR, et 7 autre(s). Utilisé par 3 fichiers (src/commands/review.ts, …).
 
 ### src/rules
 

@@ -35,7 +35,30 @@ export const LOOPBACK_TEXT = 'seuls localhost, *.localhost, 127.0.0.0/8 et ::1 s
 /** Variables an environment file may not set: those of the tool, and those that change what runs. */
 const RESERVED_KEY = /^(?:APV_[A-Z0-9_]*|PATH|NODE_OPTIONS|NODE_PATH|HOME|LD_[A-Z0-9_]*|DYLD_[A-Z0-9_]*)$/;
 /** Variables that name an address: every word of their value must be a loopback address or a port. */
-const HOST_KEY = /HOST|URL|URI|ADDR|ENDPOINT|SERVER|DSN|DOMAIN|ORIGIN|PROXY/i;
+const HOST_KEY = /HOST|URL|URI|ADDR|ENDPOINT|SERVER|DSN|DOMAIN|ORIGIN|PROXY|TARGET|SITE|BASE|API|DATABASE|(?:^|_)DB(?:_|$)/i;
+/** A variable of an address family whose value is not an address (`API_KEY`, `DB_PASSWORD`, `DATABASE_NAME`, `DB_PORT`). */
+const NOT_ADDRESS_KEY = /(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|PWD|USER|USERNAME|NAME|ID|PORT|TIMEOUT|VERSION|MODE|SCHEMA)$/i;
+/** `host:port` without a scheme (`prodserver:8080`, `localhost:5173`). */
+const HOST_PORT = /^([\p{L}\p{N}._-]+):(\d{1,5})(?:[/\\]\S*)?$/u;
+/** One or more schemes (`http:`, `jdbc:postgresql:`), then the rest. */
+const SCHEMES = /^((?:[a-z][\w+.-]*:)+)(.*)$/i;
+/** `%XX` decoded, a few times (`%253A`): an encoded address is read as the address. */
+function decoded(value) {
+    let out = value;
+    for (let i = 0; i < 3; i++) {
+        let next;
+        try {
+            next = decodeURIComponent(out);
+        }
+        catch {
+            break;
+        }
+        if (next === out)
+            break;
+        out = next;
+    }
+    return out;
+}
 /** E-mail domains reserved for examples and tests: a test account there names no machine. */
 const RESERVED_MAIL = /^[^@\s]+@(?:[\w-]+\.)*(?:example\.(?:com|org|net)|example|test|invalid|localhost)$/i;
 /** A host name: labels of letters, digits and hyphens, the last one of letters only (a TLD; not a version, not a key). */
@@ -53,14 +76,15 @@ const loopback = (host) => LOOPBACK.test(host.replace(/^\[|\]$/g, ''));
  * host. Never returns the value.
  */
 export function addressRefusal(key, value) {
-    const words = value.split(/[\s,;|"'`{}()<>]+/).filter(Boolean);
+    const words = decoded(value).split(/[\s,;|"'`{}()<>]+/).filter(Boolean);
+    const addressKey = HOST_KEY.test(key) && !NOT_ADDRESS_KEY.test(key);
     let strictNext = false;
     for (const raw of words) {
         // A separator alone (`:` of a JSON object, `=`) is no word; an IPv6 address keeps its colons.
         if (/^[:=]+$/.test(raw))
             continue;
         let word = raw.replace(/:$/, '');
-        let strict = HOST_KEY.test(key) || strictNext;
+        let strict = addressKey || strictNext;
         strictNext = /^(?:host|hostname|hostaddr|server|addr|address)$/i.test(word);
         if (strictNext)
             continue;
@@ -76,6 +100,33 @@ export function addressRefusal(key, value) {
             if (!loopback(url[1]))
                 return 'adresse (URL) hors bouclage';
             continue;
+        }
+        // An IPv6 address before anything that reads colons (`fe80::1` starts with letters).
+        const v6first = IPV6.exec(word);
+        if (v6first && (v6first[1].match(/:/g)?.length ?? 0) >= 2) {
+            if (!loopback(v6first[1]))
+                return 'adresse IPv6 hors bouclage';
+            continue;
+        }
+        // `host:port`: the host must be loopback, with or without a dot (`prodserver:8080`).
+        const hostPort = HOST_PORT.exec(word);
+        if (hostPort && !/^\d+$/.test(hostPort[1])) {
+            if (!loopback(hostPort[1]))
+                return 'hôte:port hors bouclage';
+            continue;
+        }
+        // Any scheme, nested or not, with `//`, `/`, `\\` or nothing before the host (`http:host`, `jdbc:postgresql://host`).
+        const schemes = SCHEMES.exec(word);
+        if (schemes && !word.includes('@') && schemes[2]) {
+            const rest = schemes[2];
+            const authority = rest.replace(/^[/\\]+/, '').split(/[/\\?#]/)[0];
+            const host = (/^\[[^\]]*\]/.exec(authority)?.[0] ?? authority.split(':')[0]);
+            const urlish = /^[/\\]/.test(rest) || host.includes('.') || schemes[1].split(':').length > 2 || strict;
+            if (urlish && host) {
+                if (!loopback(host))
+                    return 'adresse (schéma:hôte) hors bouclage';
+                continue;
+            }
         }
         if (word.includes('@')) {
             if (RESERVED_MAIL.test(word))

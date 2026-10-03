@@ -48,7 +48,7 @@ export async function checkSince(repo: string, config: ApvConfig, configFile: st
   if ((await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])) !== '') {
     refuse('l\'arbre de travail a des modifications non commitées (le diff classé est celui des commits)', 'Commiter les corrections (ou retirer ces fichiers), puis relancer la même commande.');
   }
-  if (sha === head) refuse('HEAD est le commit prouvé lui-même : rien de nouveau à vérifier', 'apv gates verify --commit HEAD suffit : la suite complète y est déjà prouvée.');
+  if (sha === head) refuse('HEAD est le commit donné lui-même : rien de nouveau à vérifier', 'Vérifier la preuve de ce commit par apv gates verify --commit HEAD (sortie 0 : la suite complète y est prouvée ; sinon, la lancer).');
   let ancestor = true;
   try { await git.exec(root, ['merge-base', '--is-ancestor', sha, head]); } catch { ancestor = false; }
   if (!ancestor) refuse(`HEAD (${head.slice(0, 12)}) ne descend pas de ${sha.slice(0, 12)}`, 'Donner un commit prouvé dont descend HEAD ; après un rebase, la preuve ne suit pas : lancer la suite complète (apv gates run --stage full --base <base de la branche>).');

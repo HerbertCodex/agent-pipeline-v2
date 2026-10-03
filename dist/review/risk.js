@@ -18,6 +18,17 @@ export const RISK_LABEL = { faible: 'faible', eleve: 'élevé' };
 export const TEST_NAME = /(?:^|\/)[^/]+\.(?:test|spec|e2e)\.[^/]+$/;
 /** A file under a test folder at any depth. */
 export const TEST_DIRS = ['**/test/**', '**/tests/**'];
+/** Routing folders of the frameworks: what lies under them is served, never a test nor a neutral file. */
+export const ROUTING_DIR = /(?:^|\/)(?:routes|pages|app)\//;
+/** A test folder under a routing folder (`src/routes/tests/+page.svelte`): a route, never a test. */
+export const ROUTING_TEST_DIR = /(?:^|\/)(?:routes|pages|app)\/(?:.*\/)?tests?\//;
+/**
+ * The instructions of the agents (the plugin's own and the project's): what they say changes what the agents do. Of
+ * high risk, like the sensitive paths of the high lane, whatever the classes say.
+ */
+export const AGENT_INSTRUCTIONS = [
+    'agents/**', 'workflows/**', 'skills/**', '**/SKILL.md', '.apv/brief.md', '**/CLAUDE.md', '**/AGENTS.md', '.claude/**', '.agents/**',
+];
 /** Folders whose Markdown is served or compiled by the application, never documentation. */
 export const SERVED_DIR = /(?:^|\/)(?:src|static|public|content|app|pages)\//;
 /**

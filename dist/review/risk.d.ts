@@ -20,6 +20,15 @@ export declare const RISK_LABEL: Readonly<Record<RiskLevel, string>>;
 export declare const TEST_NAME: RegExp;
 /** A file under a test folder at any depth. */
 export declare const TEST_DIRS: readonly ["**/test/**", "**/tests/**"];
+/** Routing folders of the frameworks: what lies under them is served, never a test nor a neutral file. */
+export declare const ROUTING_DIR: RegExp;
+/** A test folder under a routing folder (`src/routes/tests/+page.svelte`): a route, never a test. */
+export declare const ROUTING_TEST_DIR: RegExp;
+/**
+ * The instructions of the agents (the plugin's own and the project's): what they say changes what the agents do. Of
+ * high risk, like the sensitive paths of the high lane, whatever the classes say.
+ */
+export declare const AGENT_INSTRUCTIONS: readonly ["agents/**", "workflows/**", "skills/**", "**/SKILL.md", ".apv/brief.md", "**/CLAUDE.md", "**/AGENTS.md", ".claude/**", ".agents/**"];
 /** Folders whose Markdown is served or compiled by the application, never documentation. */
 export declare const SERVED_DIR: RegExp;
 /**

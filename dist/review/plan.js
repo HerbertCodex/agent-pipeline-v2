@@ -4,7 +4,7 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { matches } from '../policy/policy.js';
 import { resolveCommit } from '../run/git-probe.js';
 import { ALWAYS_REVIEWED, PATH_CLASSES, REVIEW_DOMAINS } from './config.js';
-import { CONFIG_FILES, SERVED_DIR, TEST_DIRS, TEST_NAME, diffRisk, realAddress } from './risk.js';
+import { AGENT_INSTRUCTIONS, CONFIG_FILES, ROUTING_DIR, ROUTING_TEST_DIR, SERVED_DIR, TEST_DIRS, TEST_NAME, diffRisk, realAddress } from './risk.js';
 const FILES_SHOWN = 50;
 const MAX_DIFF_BYTES = 512 * 1024 * 1024;
 function git(repo, args) {
@@ -268,18 +268,34 @@ const sides = (file) => [file.path, ...(file.from !== undefined ? [file.from] : 
 /** Named as a test (`*.test.*`, `*.spec.*`, `*.e2e.*`) on every side of the change. */
 const testNamed = (file) => sides(file).every(p => TEST_NAME.test(p));
 const isConfig = (file) => sides(file).some(p => CONFIG_FILES.some(g => matches(p, g)));
-const isSensitive = (file, input) => sides(file).some(p => input.sensitive.some(g => matches(p, g)));
+/** Sensitive paths of the high lane, and the instructions of the agents (`agents/**`, `workflows/**`, `.apv/brief.md`...). */
+const isSensitive = (file, input) => sides(file).some(p => input.sensitive.some(g => matches(p, g)) || AGENT_INSTRUCTIONS.some(g => matches(p, g)));
 /**
- * Server code, a sensitive path of the high lane or a configuration: stronger than the neutral and tooling classes
- * (`src/lib/server/fixtures/admin.ts`, `.apv/config.json`, `vitest.config.ts`, `src/routes/tests/+server.ts`). Only a
- * file named as a test escapes the server and sensitive paths; nothing escapes the configuration.
+ * Under a test folder (`test/`, `tests/`), outside a routing folder (`routes/`, `pages/`, `app/`): a `tests/` folder
+ * under `src/routes/` is a route, served, never a test.
+ */
+const inTestDir = (p) => TEST_DIRS.some(g => matches(p, g)) && !ROUTING_TEST_DIR.test(p);
+/** A test by its name, or every side under a test folder. */
+const testLike = (file) => testNamed(file) || sides(file).every(inTestDir);
+/**
+ * Server code, a sensitive path of the high lane, the instructions of the agents or a configuration: stronger than the
+ * neutral and tooling classes (`src/lib/server/fixtures/admin.ts`, `.apv/config.json`, `vitest.config.ts`,
+ * `src/routes/tests/+server.ts`). Only a file named as a test escapes the server and sensitive paths; nothing escapes
+ * the configuration. Tooling (`fixtures/`, `__mocks__/`) outside a test folder may be imported by the product: it keeps
+ * every domain too (`src/lib/fixtures/demo.ts`), and so does a neutral file under a routing folder.
  */
 function strongPath(file, input) {
     if (isConfig(file))
         return true;
     if (testNamed(file))
         return false;
-    return file.classes.includes('server') || isSensitive(file, input);
+    if (file.classes.includes('server') || isSensitive(file, input))
+        return true;
+    if (testLike(file))
+        return false;
+    if (file.classes.includes('tooling') && !file.classes.includes('neutral'))
+        return true;
+    return sides(file).some(p => ROUTING_DIR.test(p));
 }
 function classify(path, input) {
     const { paths } = input.settings;
@@ -368,12 +384,17 @@ function fileRisk(file, input) {
     if (!named && isSensitive(file, input))
         return high(SENSITIVE_WHY);
     if (!named && classes.has('server'))
-        return high('code serveur');
+        return high('code serveur ou configuration');
     // A word of data or GDPR, or a real address, in the changed lines: stronger than a test or a document.
     const word = file.keeps.find(k => (k.domain === 'donnees' || k.domain === 'rgpd') && (k.why.startsWith('terme ') || k.why.startsWith('adresse ')));
     if (word)
         return high(word.why);
-    if (named || sides(file).every(p => TEST_DIRS.some(g => matches(p, g))))
+    // Every domain a low file keeps is the fidelity of a mockup: any other kept domain makes the file high, so that a
+    // plan of low risk never retains more (REVIEW_RISK can never fire on a valid diff).
+    const other = file.keeps.find(k => k.domain !== 'fidelite' || k.why !== WHY.design);
+    if (other)
+        return high(other.why);
+    if (testLike(file))
         return low('tests');
     // A validated mockup (never served): its fidelity review is kept by fileKeeps.
     const design = (p) => p === input.designDir || p.startsWith(`${input.designDir}/`);
@@ -382,7 +403,8 @@ function fileRisk(file, input) {
     if (classes.has('legal') || classes.has('personal') || classes.has('data') || classes.has('ui')) {
         return high(classes.has('ui') ? 'interface (le contenu n\'est jamais lu comme du texte seul)' : 'données, données personnelles ou texte légal');
     }
-    if (sides(file).every(p => p.endsWith('.md') && !SERVED_DIR.test(p)))
+    // Documentation: Markdown the project classes neutral (docs/, README, CHANGELOG), outside the served folders.
+    if (classes.has('neutral') && sides(file).every(p => p.endsWith('.md') && !SERVED_DIR.test(p)))
         return low('documentation');
     return high(classes.has('tooling') || classes.has('neutral')
         ? 'outillage ou fichier neutre hors tests nommés, dossiers de tests, documentation et maquettes'

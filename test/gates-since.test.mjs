@@ -79,7 +79,7 @@ test('gates run --since: refused without a green full proof, on a high-risk diff
   const proven = p.head();
   r = await p.run(['--stage', 'task', '--since', proven]);
   assert.equal(r.code, 1);
-  assert.match(r.stderr, /HEAD est le commit prouvé lui-même/);
+  assert.match(r.stderr, /HEAD est le commit donné lui-même/);
 
   // Code changed since the proof: high risk, the full suite is required.
   p.change('src/math.mjs', 'export const add = (a, b) => a + b;\n');
@@ -87,7 +87,7 @@ test('gates run --since: refused without a green full proof, on a high-risk diff
   r = await p.run(['--stage', 'task', '--since', proven]);
   assert.equal(r.code, 1);
   assert.match(r.stderr, /diff de risque élevé/);
-  assert.match(r.stderr, /src\/math\.mjs : fichier non classé \(prudence\)/);
+  assert.match(r.stderr, /src\/math\.mjs : fichier non classé/);
   assert.match(r.stderr, /Lancer la suite complète/);
   assert.equal(p.log().length, before, 'nothing ran');
 
