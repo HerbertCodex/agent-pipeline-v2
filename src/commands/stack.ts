@@ -10,7 +10,10 @@ import { checkMergeRules, rulesLines } from '../rules/check.js';
 import { auditLines, auditMerges, writeMergeTrace } from '../rules/merges.js';
 import { anchorKey } from '../rules/operator.js';
 import { branchProtection } from '../rules/protection.js';
-import { batchMerge, processGit, type BatchReport, type Proof } from '../stack/batch.js';
+import { batchMerge, processGit, type BatchReport, type DastOutcome, type Proof } from '../stack/batch.js';
+import { LockStore, defaultLockDir, type LockOwner } from '../lock/store.js';
+import { canonicalPath } from '../domain/paths.js';
+import { DAST_SUMMARY, defaultReportDir, runDast } from '../review/dast.js';
 import { stackChecks, stackChecksLines, type StackChecks } from '../stack/plan-checks.js';
 import { infrastructureAdvice, infrastructureText } from '../gates/infrastructure.js';
 import { cleanMergedBranches, cleanupLines, type BranchCleanup } from '../stack/branches.js';
@@ -32,9 +35,9 @@ export const usage = `Utilisation :
   apv stack plan <pr...> [--target <branche>] [--ready] [--allow-behind --reason <texte>] [--json]
   APV_ALLOW_MERGE=1 apv stack merge <pr...> [--method merge|squash|rebase] [--target <branche>] [--ready]
                                    [--allow-behind --reason <texte>] [--keep-branches] [--wait-ci <minutes>] [--json]
-  apv stack batch <pr...> [--target <branche>] [--dir <dossier>] [--bisect] [--keep] [--stacks <pile>,<pile>]
+  apv stack batch <pr...> [--target <branche>] [--dir <dossier>] [--bisect] [--dast] [--keep] [--stacks <pile>,<pile>]
                           [--wait-ci <minutes>] [--json]
-  APV_ALLOW_MERGE=1 apv stack batch <pr...> --merge [--ready] [--target <branche>] [--dir <dossier>] [--bisect]
+  APV_ALLOW_MERGE=1 apv stack batch <pr...> --merge [--ready] [--target <branche>] [--dir <dossier>] [--bisect] [--dast]
                                    [--keep-branches] [--stacks <pile>,<pile>] [--wait-ci <minutes>]
 
 Pile de PR, de la base vers le sommet (numéros de PR dans l'ordre de fusion).
@@ -79,8 +82,17 @@ batch  fusion par lot de PR indépendantes, chacune vers la cible : lit chaque P
        worktree (--dir, défaut <répertoire git commun>/apv/lots/), y fusionne la tête de chaque PR dans
        l'ordre (git merge --no-ff, jamais de rebase ; une PR en conflit reste hors du lot), lance batch.setup
        de .apv/config.json (facultatif), UNE suite complète (apv gates run --stage full) puis apv gates verify
-       à la tête du lot. --bisect : suite en échec, le lot est coupé en deux, chaque moitié prouvée, jusqu'à
+       à la tête du lot. C'est la voie normale de fusion dès que deux PR indépendantes sont prêtes (D5).
+       Fichiers générés : un conflit qui ne touche que la carte du code (map.file), .apv/DECISIONS.json ou
+       .apv/DECISIONS.md n'exclut pas la PR : le registre est fusionné par union de ses décisions (une décision
+       modifiée des deux côtés reste un conflit), le Markdown rendu depuis le registre, la carte régénérée
+       (apv map) sur l'arbre fusionné, dans le commit de fusion du lot ; une carte périmée par une fusion sans
+       conflit est régénérée de même. Le contrôle code-map de la suite vérifie la carte régénérée.
+       --bisect : suite en échec, le lot est coupé en deux, chaque moitié prouvée, jusqu'à
        isoler la ou les PR fautives, qui sortent du lot ; le reste est prouvé une dernière fois.
+       --dast : lot prouvé, le scan dynamique déclaré par review.dast (le même que apv dast run) tourne sur la
+       tête du lot, dans son worktree, sous son verrou, avant toute fusion (D3 : un scan par lot sur le contenu
+       fusionné, jamais après la fusion) ; scan en échec ou non déclaré à la cible : arrêt, rien n'est fusionné.
        --stacks 2 ou --stacks 1,2 : la suite du lot reçoit les piles de test déclarées (section stacks), comme
        apv gates run --stacks : chaque contrôle de pile tourne sur une pile donnée, avec ses variables (envFile,
        env) et sous son verrou ; une seule pile : tous sur elle. Une suite dont tous les échecs sont une panne
@@ -89,9 +101,13 @@ batch  fusion par lot de PR indépendantes, chacune vers la cible : lit chaque P
        --merge (avec APV_ALLOW_MERGE=1, sur ordre de l'opérateur) : lot prouvé, fusionne ses PR dans l'ordre
        (gh pr merge --merge --match-head-commit), chacune après avoir vérifié sa tête (celle du lot) et que
        l'arbre de la cible est celui du lot avant elle, puis que l'arbre de la cible après elle est celui du
-       lot : l'écart dû aux fusions précédentes du lot est toléré, le contenu fusionné est celui prouvé. À la
-       fin, arbre de la cible identique à la tête prouvée du lot ; toute différence arrête tout. Journal :
-       .apv/state/stack.log. --keep garde les worktrees des lots.
+       lot : l'écart dû aux fusions précédentes du lot est toléré, le contenu fusionné est celui prouvé. Une PR
+       dont la fusion dans le lot a régénéré des fichiers générés est d'abord mise à jour : la cible (contenu
+       du lot avant elle) est fusionnée dans sa branche avec la même régénération, dans un worktree détaché ;
+       le commit obtenu doit avoir exactement l'arbre prouvé dans le lot (sinon arrêt, rien n'est poussé), il
+       est poussé sans force sur sa branche (jamais depuis un fork), journalisé (batch-refresh), relu par
+       gh pr view, puis fusionné. À la fin, arbre de la cible identique à la tête prouvée du lot ; toute
+       différence arrête tout. Journal : .apv/state/stack.log. --keep garde les worktrees des lots.
 Règles avant fusion (docs/REGLES.md) : merge vérifie, juste avant chaque fusion, les règles de apv rules check à
        la tête de la PR contre origin/<cible> (preuve complète au commit, aucun contrôle réussi après relance,
        relectures enregistrées sans constat critique ni haut, captures de fidélité, contrôles de base d'un projet
@@ -235,8 +251,11 @@ function batchLines(report: BatchReport): string[] {
   for (const lot of report.lots) {
     lines.push(`Lot ${lot.name} : ${lot.members.map(m => `#${m.number}`).join(', ') || 'vide'}${lot.head ? `, tête ${lot.head.slice(0, 12)}` : ''} : ` +
       `${lot.proof ? `${lot.proof.ok ? 'PROUVÉ' : 'NON PROUVÉ'} (${lot.proof.summary})` : 'non éprouvé'}`);
+    for (const m of lot.members) if (m.regenerated.length) lines.push(`  PR #${m.number} : fichiers générés régénérés dans le lot : ${m.regenerated.join(', ')}`);
     for (const x of lot.excluded) lines.push(`  PR #${x.pr} hors du lot : ${x.reason}`);
+    if (lot.dast) lines.push(`  Scan dynamique du lot : ${lot.dast.ok ? 'terminé à 0' : 'NON PASSÉ'} (${lot.dast.summary})${lot.dast.reportDir ? ` ; rapports : ${lot.dast.reportDir}` : ''}`);
   }
+  for (const r of report.refreshed) lines.push(`Branche ${r.branch} (PR #${r.pr}) mise à jour avant sa fusion : ${r.from.slice(0, 12)} vers ${r.to.slice(0, 12)} (${r.files.join(', ')}).`);
   if (report.culprits.length) lines.push(`PR fautive(s) isolée(s) par bissection, hors du lot : ${report.culprits.map(n => `#${n}`).join(', ')}`);
   if (report.proven) lines.push(`Lot prouvé : ${report.proven.name} (${report.proven.members.map(m => `#${m.number}`).join(', ')}), tête ${report.proven.head?.slice(0, 12)}.`);
   if (report.merged.length) lines.push(`Fusionnées dans l'ordre du lot : ${report.merged.map(n => `#${n}`).join(', ')}.`);
@@ -251,13 +270,13 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       method: { type: 'string' }, target: { type: 'string' }, ready: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
       'allow-behind': { type: 'boolean' }, reason: { type: 'string' },
       dir: { type: 'string' }, bisect: { type: 'boolean' }, merge: { type: 'boolean' }, keep: { type: 'boolean' }, 'keep-branches': { type: 'boolean' },
-      stacks: { type: 'string' }, 'wait-ci': { type: 'string' },
+      stacks: { type: 'string' }, 'wait-ci': { type: 'string' }, dast: { type: 'boolean' },
     });
     if (values.help) { io.stdout(`${usage}\n`); return EXIT.ok; }
     const [action, ...rest] = positionals;
     if (action !== 'plan' && action !== 'merge' && action !== 'batch') throw new UsageError(action ? `sous-commande inconnue : stack ${action}` : 'sous-commande manquante (plan, merge ou batch)');
     const prs = numbers(rest);
-    const batchOnly = (['dir', 'bisect', 'merge', 'keep', 'stacks'] as const).filter(k => values[k] !== undefined);
+    const batchOnly = (['dir', 'bisect', 'merge', 'keep', 'stacks', 'dast'] as const).filter(k => values[k] !== undefined);
     if (action !== 'batch' && batchOnly.length) throw new UsageError(`--${batchOnly.join(', --')} : réservé(s) à stack batch`);
     if (action === 'plan' && values['keep-branches'] !== undefined) throw new UsageError('--keep-branches : réservé à stack merge et stack batch --merge');
     if (action === 'plan' && values['wait-ci'] !== undefined) throw new UsageError('--wait-ci : réservé à stack merge et stack batch');
@@ -354,7 +373,9 @@ async function branchCleanup(io: CommandIO, merged: Parameters<typeof cleanMerge
 
 type BatchValues = { target?: string | undefined; ready?: boolean | undefined; json?: boolean | undefined; dir?: string | undefined; bisect?: boolean | undefined;
   merge?: boolean | undefined; keep?: boolean | undefined; 'keep-branches'?: boolean | undefined; method?: string | undefined; 'allow-behind'?: boolean | undefined; reason?: string | undefined;
-  stacks?: string | undefined };
+  stacks?: string | undefined; dast?: boolean | undefined };
+
+const DAST_TEXT: Record<string, string> = { passed: 'terminé à 0', failed: 'en échec', timed_out: 'arrêté au délai (review.dast.timeoutMs)', lock_timeout: 'non lancé : verrou non obtenu' };
 
 /** `apv stack batch`: one full suite for several independent pull requests, then their merge by content. */
 async function batch(prs: number[], values: BatchValues, io: CommandIO, ci: { ciWaitMs: number; ciPollMs: number }): Promise<number> {
@@ -374,6 +395,12 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO, ci: { ci
     try { declared = (loadConfig(repo).config.stacks ?? []).map(x => x.id); } catch (error) { throw new UsageError(`--stacks : configuration illisible (${cleanLine(errorMessage(error), 300)})`); }
     const unknown = stacks.filter(id => !declared.includes(id));
     if (unknown.length) throw new UsageError(`--stacks : pile inconnue ${unknown.join(', ')} (déclarées : ${declared.join(', ') || 'aucune'}, section stacks de .apv/config.json)`);
+  }
+  // --dast: the scan the checkout declares; the one of the target decides at the proof (configuration of the target).
+  if (values.dast) {
+    let declared: boolean;
+    try { declared = loadConfig(repo).config.review?.dast !== undefined; } catch (error) { throw new UsageError(`--dast : configuration illisible (${cleanLine(errorMessage(error), 300)})`); }
+    if (!declared) throw new UsageError('--dast : aucun scan dynamique déclaré (review.dast de .apv/config.json) ; la revue sécurité note le scan « non vérifié : non déclaré par le projet »');
   }
   const bin = io.env['APV_GH'] || 'gh';
   const calls: GhCall[] = [];
@@ -455,6 +482,20 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO, ci: { ci
       summary: `${passed}/${result.receipts.length} contrôle(s) réussi(s)${notRequired.length ? `, non requis par leur portée : ${notRequired.join(', ')}` : ''}${failed.length ? `, en échec : ${failed.join(', ')}` : ''}${infraText} ; apv gates verify ${verified.ok ? 'à 0' : 'en échec'} ; exécution ${result.runId}`,
       ...(!ok && infra.all ? { infrastructure: `${infra.causes.map(infrastructureText).join(' ; ')} ; ${infrastructureAdvice(infra.causes, stacks ? [] : (loaded.config.stacks ?? []).map(x => x.id))}` } : {}) };
   };
+  /** `--dast`: `apv dast run` on the worktree of the proven batch, with the scan the target declares, under its lease. */
+  const dast = async (worktree: string, head: string, base: string): Promise<DastOutcome> => {
+    const settings = atCommit(base).config.review?.dast;
+    if (!settings) return { ok: false, status: 'undeclared', reportDir: null, summary: `aucun scan dynamique déclaré à la cible (review.dast de .apv/config.json à ${base.slice(0, 12)})` };
+    const reportDir = canonicalPath(defaultReportDir(worktree, head, new Date()));
+    const poll = io.env['APV_LOCK_POLL_MS'] ? Number(io.env['APV_LOCK_POLL_MS']) : undefined;
+    const store = new LockStore(defaultLockDir(io.env), poll && Number.isFinite(poll) ? { pollMs: poll } : {});
+    const owner: LockOwner = { pid: process.pid, host: store.host, label: io.env['APV_LOCK_LABEL'] || io.env['USER'] || 'apv stack batch' };
+    const clean = gitRead(worktree, ['status', '--porcelain', '--untracked-files=no']) === '';
+    log(`Lot : scan dynamique du commit ${head.slice(0, 12)} dans ${worktree}, sous le verrou « ${settings.resource} » ; rapports : ${reportDir}`);
+    const summary = await runDast({ repo: worktree, commit: head, clean, reportDir, settings, env: io.env, stderr: io.stderr, store, owner, waitSeconds: 1800 });
+    return { ok: summary.status === 'passed', status: summary.status, reportDir,
+      summary: `scan dynamique ${DAST_TEXT[summary.status] ?? summary.status} (code ${summary.exitCode}) en ${Math.round(summary.durationMs / 1000)} s ; résumé : ${reportDir}/${DAST_SUMMARY}` };
+  };
   let report: BatchReport;
   const gh = processGh(bin, io.env, io.cwd);
   const onCall = (call: GhCall): void => { calls.push(call); if (values.merge || call.status !== 0 || call.error) (values.json ? io.stderr : io.stdout)(transcript(bin, call)); };
@@ -463,7 +504,7 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO, ci: { ci
       repo, common: commonDir(repo), prs, bisect: values.bisect === true, merge: values.merge === true, ready: values.ready === true, keep: values.keep === true,
       remote: 'origin', gh, git: processGit(io.env), log, onCall,
       pollMs: positiveInt(io.env['APV_STACK_POLL_MS'], 3000), pollAttempts: positiveInt(io.env['APV_STACK_POLL_ATTEMPTS'], 20), ...ci,
-      prove, configDrift, repeatRefusal, signal: abort.signal,
+      prove, configDrift, repeatRefusal, signal: abort.signal, ...(values.dast ? { dast } : {}),
       journal: entry => {
         // Each merge of a batch leaves its signed trace, its merge commit being the target just after it.
         if (entry['event'] === 'batch-merge' && typeof entry['pr'] === 'number' && typeof entry['head'] === 'string') {
@@ -496,7 +537,7 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO, ci: { ci
     const verdict = report.interrupted ? `Lot interrompu (${received ?? 'signal'}) : rien d'autre ne sera fusionné.\n`
       : report.stopped ? ''
       : partial ? `Lot PARTIEL : ${report.left.map(l => `#${l.pr} (${l.reason})`).join(', ')} hors du lot${values.merge ? ' ; les autres sont fusionnées' : ''}. Les PR laissées se traitent à part.\n`
-      : values.merge ? 'Lot fusionné.\n' : 'Lot prouvé : APV_ALLOW_MERGE=1 apv stack batch <mêmes PR> --merge le fusionne, sur ordre de l\'opérateur (une nouvelle suite tourne sur un nouveau lot).\n';
+      : values.merge ? 'Lot fusionné.\n' : `Lot prouvé${report.proven?.dast?.ok ? ' et scanné' : ''} : APV_ALLOW_MERGE=1 apv stack batch <mêmes PR> --merge${values.dast ? ' --dast' : ''} le fusionne, sur ordre de l'opérateur (une nouvelle suite tourne sur un nouveau lot).\n`;
     io.stdout(`${[...batchLines(report), ...cleanupLines(cleanup)].join('\n')}\n${verdict}`);
   }
   if (received) return signalExitCode(received);
