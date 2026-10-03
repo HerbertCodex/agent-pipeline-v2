@@ -24,13 +24,14 @@ des données personnelles, un export, un traceur ou un texte légal changent. Un
 des chemins seuls réécrits (imports, références à un fichier déplacé, imports remis en forme)
 ne changent pas le contenu (sauf une migration). Un fichier non classé au
 contenu changé garde tous les domaines (prudence) : un domaine n'est sauté que sur preuve positive.
-Niveau de risque du diff, avec sa raison : faible quand chaque fichier est un test, de l'outillage de
-test, de la documentation, une maquette ou un texte d'interface sans balisage nouveau (securite, plus
-fidelite si l'interface change de contenu visible) ; élevé sinon (migration, schéma, données, données
-personnelles, export, traceur, texte légal, chemin sensible, code serveur ou configuration, balisage ou
-code changé, fichier déplacé, terme de données ou RGPD, fichier non classé), plan inchangé. Un fichier
-non classé hors code serveur et configuration dont seules des chaînes de prose changent (module de
-messages) garde fidelite seule ; un fichier vraiment inconnu garde la prudence.
+Code serveur, chemin sensible et configuration l'emportent sur tests et outillage (sauf un fichier nommé
+comme un test) : ils gardent tous les domaines ; les lignes des tests et de l'outillage restent lues
+pour les termes de données et RGPD (adresse e-mail réelle comprise).
+Niveau de risque du diff, avec sa raison, décidé par le chemin seul : faible quand chaque fichier est un
+test (*.test.*, *.spec.*, *.e2e.*, dossiers test/ et tests/), de la documentation (*.md hors dossiers
+servis) ou une maquette, sans terme de données ni RGPD (securite, plus fidelite pour une maquette) ;
+élevé pour tout le reste, interface comprise (le contenu n'est jamais lu comme du texte seul), plan
+inchangé.
 --base     la branche de départ (la base de la PR) ; --head : la tête revue (défaut HEAD).
 --force    garde un domaine quoi que dise le diff (répétable, ou liste séparée par des virgules).
 --repo     le dépôt (défaut : le dossier courant) ; la configuration (review de .apv/config.json) y est lue.

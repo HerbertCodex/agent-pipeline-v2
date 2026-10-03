@@ -4,24 +4,28 @@
 
 - **3.0.0-alpha.15 : accélérations validées par l'opérateur le 3 octobre 2026, sans retirer de garde-fou.** Une PR de tests et de textes avait pris 3 h au projet pilote : 4 relectures, une boucle de corrections, deux suites complètes de 30 min, le scan ZAP lancé 3 fois. La relecture `securite` reste exigée pour toute PR, et la suite complète au commit exact fusionné aussi.
   - **Relectures proportionnées au risque** (`apv review plan`). Le plan donne le niveau de risque du diff et sa raison (`risk` en JSON, ligne « Risque » en texte).
-    - Risque faible : tests, outillage de test, documentation, maquettes, textes d'interface sans balisage nouveau. Le plan retient alors `securite`, plus `fidelite` si l'interface change de contenu visible.
-    - Risque élevé : le plan d'avant.
-    - Nouvelles classes `review.paths.tooling` (outillage de test) et `review.paths.server` (code serveur et configuration).
-    - Un fichier non classé, hors serveur et hors chemins sensibles, dont seules des chaînes de prose changent garde `fidelite` seule. Un fichier vraiment inconnu garde la prudence.
+    - Le niveau est décidé par le **chemin** seul. Les relectures de la PR #110 ont contourné de neuf façons une lecture du contenu comme « texte seul » (commentaire suivi de code, SQL dans une chaîne, `#isAdmin`, ligne en `*`, `requireAuth` dans un composant, commentaire HTML puis `<img onerror>`, promesses de conservation ou d'hébergement). Cette lecture est retirée.
+    - Risque faible : tests nommés comme tels ou sous `test/` et `tests/`, documentation (`*.md` hors dossiers servis), maquettes, sans terme de données ni RGPD ni adresse e-mail réelle. Le plan retient alors `securite`, plus `fidelite` pour une maquette.
+    - Risque élevé : tout le reste, interface comprise, avec le plan de 3.0.0-alpha.14.
+    - Code serveur, chemins sensibles et configuration (liste fixe : `.apv/config.json`, `*.config.*`, lint, format, `package.json`...) l'emportent sur tests et outillage ; seul un fichier nommé comme un test y échappe, jamais une configuration.
+    - Les lignes des tests, de la documentation et de l'outillage restent lues pour les termes ; une adresse e-mail réelle ajoutée garde `rgpd`. Termes complétés : vocabulaire RGPD français et anglais (donnée, conservation, hébergement, prestataire, sous-traitant, transfert, suppression, traceur, audience) et SQL dans une chaîne (`update `, ` set `, ` where `, `grant `...). Modèles de messages (`emails/`, `mail/`, `notifications/`) en `personal`.
+    - Nouvelles classes `review.paths.tooling` (mocks, fixtures, utilitaires de test) et `review.paths.server` (code serveur et configuration).
     - `--force` et `review.always` restent au-dessus du niveau. `apv rules check` exige exactement les domaines du plan au commit (même calcul, configuration lue à la base).
   - **Preuve incrémentale des corrections** : `apv gates run --stage task --since <commit prouvé>`.
-    - Elle ne part que d'une suite complète verte à ce commit (sans relance), sur un arbre propre, pour un diff de risque faible (classement lu au commit prouvé). Refus `GATE_SINCE` sinon.
+    - Elle ne part que d'une suite complète verte à ce commit (sans relance), sur un arbre propre, pour un diff de risque faible (classement lu au commit prouvé). Refus `GATE_SINCE` sinon, avec la conduite à tenir dans chaque cas.
+    - La tête classée est celle que les contrôles prouvent : refus si HEAD change entre les deux ; `summary.since.head` la consigne.
     - Elle lance les contrôles de tâche, les commandes ciblées et la répétition des tests modifiés depuis ce commit.
     - Ce n'est jamais une preuve de la suite complète : la fusion l'exige toujours, une fois, sur le commit final.
   - **`apv tests check`**, contrôle de tâche des tests ajoutés ou modifiés, section `testsCheck`.
     - `waitForTimeout` dans un test navigateur : bloquant par défaut.
     - Autre attente à durée fixe, délai testé sur l'horloge réelle, adresse partagée entre tests navigateur : avertissements par défaut.
     - Gravité réglable par règle ; contrôle désactivable.
-  - **Constats faibles et conseils en suivi groupé** (compétences `review`, `run`, `chef-de-projet`, REGLES section 4). Ils vont dans `.apv/state/suivi-constats.md` (ou dans une issue groupée déclarée dans `.apv/brief.md`), traités par lot, sans passe de corrections ni PR dédiée.
+  - **Constats faibles et conseils en suivi groupé** (compétences `review`, `run`, `chef-de-projet`, REGLES section 4). Ils vont dans `.apv/state/suivi-constats.md` (ou dans une issue groupée d'un dépôt privé déclarée dans `.apv/brief.md`), traités par lot, sans passe de corrections ni PR dédiée, sans donnée personnelle, secret ni valeur recopiés.
   - **`apv dast run` prépare sa copie.**
-    - `npm ci` quand la copie a un `package-lock.json` sans `node_modules`.
-    - `review.dast.envFile` (`~` admis) est chargé dans la commande. Il est refusé si une valeur désigne une adresse hors bouclage.
+    - `npm ci --ignore-scripts` quand la copie a un `package-lock.json` que l'outil n'a pas encore installé (marqueur par empreinte du verrou, écrit après une installation réussie). Délai dépassé : `timed_out`.
+    - `review.dast.envFile` (`~` admis) est chargé dans la commande. Il est refusé par une **liste d'autorisation** : seuls `localhost`, `*.localhost`, `127.0.0.0/8` et `::1` (URL, `utilisateur@hôte`, `host=`, IPv4, IPv6, nom d'hôte, liste ; nom sans point dans une variable d'adresse). Il est aussi refusé s'il pose une variable réservée (`APV_*`, `PATH`, `NODE_OPTIONS`, `HOME`...).
     - `summary.json` consigne `install` et `envFile`, jamais les valeurs.
+  - **Carte de l'architecture du dépôt** (`docs/carte-architecture.md`) et carte du code (`.apv/code-map.md`), créées par l'outil ; `src/testcheck/` y a son rôle.
 - **3.0.0-alpha.14 : fin des relectures de #105 à #108.** La version monte encore pour que `claude plugin update` livre ces corrections du crochet.
   - **Crochet de poussée.**
     - Un `cd` n'est suivi que vers un dossier qui existe et où l'on peut entrer.

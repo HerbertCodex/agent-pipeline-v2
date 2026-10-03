@@ -38,6 +38,15 @@ export interface RepeatPlan {
 export declare const REPEAT_PLACEHOLDER = "{{repeat}}";
 /** The refusal of a full run whose reference does not resolve: the changes would be counted from `--base` alone. */
 export declare function referenceMissing(gateId: string, name: string, detail?: string): string;
+/**
+ * Waits on a duration rather than on an observable fact: Playwright `waitForTimeout(`, a `sleep(` or `delay(` helper,
+ * `await setTimeout(` (`node:timers/promises`), and the `new Promise(r => setTimeout(r, ...))` idiom (type argument
+ * and a line break or two included). Lines that are only a comment are ignored.
+ */
+/** Playwright `waitForTimeout(`: the fixed wait `apv tests check` blocks by default (src/testcheck/check.ts). */
+export declare const WAIT_FOR_TIMEOUT: RegExp;
+/** A trimmed line that is only a comment (`//`, `/*`, or `*` inside a block). */
+export declare const isComment: (code: string) => boolean;
 export declare function fixedWaitIn(line: string): boolean;
 /**
  * The fixed waits of consecutive lines: each line alone, and a `new Promise(` joined with the (at most three)

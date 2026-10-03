@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { s } from '../domain/schema.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { matches } from '../policy/policy.js';
-import { addedLines, fixedWaitLines } from '../gates/repeat.js';
+import { WAIT_FOR_TIMEOUT, addedLines, fixedWaitLines, isComment } from '../gates/repeat.js';
 /**
  * `apv tests check`: deterministic checks of the test files a change adds or modifies, run as a check of the task
  * stage. Pilot project, 3 October 2026: the same findings came back review after review on a pull request of tests (a
@@ -49,8 +49,6 @@ function git(repo, args) {
         throw new PipelineError('TESTS_GIT', `git ${args.slice(0, 2).join(' ')} a échoué : ${stderr || errorMessage(error)}`);
     }
 }
-const isComment = (code) => /^(?:\/\/|\/\*|\*)/.test(code);
-const WAIT_FOR_TIMEOUT = /\.waitForTimeout\s*\(/;
 const REAL_TIMER = /\bsetTimeout\s*\(/;
 const REAL_NOW = /\bDate\.now\s*\(|\bperformance\.now\s*\(/;
 /** Fake timers of the usual runners: the clock of the test is controlled. */
