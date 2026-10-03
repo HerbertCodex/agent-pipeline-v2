@@ -121,6 +121,7 @@ Fichiers et dossiers appelés par le cadre ou la plateforme :
 - [README du projet](../README.md)
 - [Carte du code (composants, modules, routes) : .apv/code-map.md](../.apv/code-map.md)
 - [Consigne commune des implementers : .apv/brief.md](../.apv/brief.md)
+- [Registre des décisions](../.apv/DECISIONS.md)
 - [Specs](../.apv/specs)
 - [APV3-SPEC.md](APV3-SPEC.md)
 - [CLI.md](CLI.md)

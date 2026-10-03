@@ -69,7 +69,30 @@ export function mergeLedgers(base, ours, theirs) {
         added.set(id, d);
     }
     decisions.push(...[...added.values()].sort((x, y) => byBytes(x.id, y.id)));
-    return { ledger: { schemaVersion: ours.schemaVersion, decisions } };
+    // The union must be a valid ledger (each rule is checked here, not left to the Markdown), and its replacements must
+    // hold together: two decisions added on each side that replace the same one, or a replacement of a decision absent
+    // from the union (retired on the other side), are conflicts of meaning that a textual merge would never see.
+    const ids = new Set(decisions.map(d => d.id));
+    const replaced = new Map();
+    for (const d of decisions) {
+        const atBase = b.get(d.id);
+        if (atBase && same(d, atBase))
+            continue;
+        for (const target of d.supersedes) {
+            if (!ids.has(target))
+                return { conflict: `décision ${d.id} remplace ${target}, absente du registre fusionné` };
+            const other = replaced.get(target);
+            if (other !== undefined && !b.has(d.id) && !b.has(other))
+                return { conflict: `décisions ${other} et ${d.id}, ajoutées de part et d'autre, remplacent toutes deux ${target}` };
+            replaced.set(target, d.id);
+        }
+    }
+    try {
+        return { ledger: validateDecisionLedger({ schemaVersion: ours.schemaVersion, decisions }) };
+    }
+    catch (error) {
+        return { conflict: `registre fusionné invalide : ${errorMessage(error)}` };
+    }
 }
 /** A ledger read from a stage of the index of a stopped merge; null when that stage has no file (added or deleted on a side). */
 async function stagedLedger(git, dir, stage, path) {

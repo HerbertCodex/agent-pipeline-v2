@@ -97,6 +97,8 @@ export interface BatchOptions {
      * run`, once per batch on the merged content instead of once per pull request). A failed scan stops the batch.
      */
     dast?: (worktree: string, head: string, base: string) => Promise<DastOutcome>;
+    /** Globs of the long-lived branches (`stack.keepBranches`) the batch never updates; `DEFAULT_KEEP_BRANCHES` when absent. */
+    keepPatterns?: readonly string[];
     /** Aborted by SIGINT, SIGTERM or SIGHUP: the batch stops at the next step, never between a check and a merge. */
     signal?: AbortSignal;
     /** Journals one merge or stop of the batch; returns an error message when it could not. */

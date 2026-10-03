@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { IDENTITY_HINT } from '../run/commit-state.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { errorMessage } from '../domain/errors.js';
-import { anomalies, parsePullRequest, VIEW_FIELDS, waitForChecks, type GhCall, type GhRunner, type MergedHead, type PullRequest } from './github.js';
+import { anomalies, parsePullRequest, pullRequestPath, VIEW_FIELDS, waitForChecks, type GhCall, type GhRunner, type MergedHead, type PullRequest } from './github.js';
+import { DEFAULT_KEEP_BRANCHES, branchArgs, parseRepositorySettings, repositoryArgs } from './branches.js';
+import { globToRegExp } from '../db/glob.js';
 import { regenerateStaleMap, resolveGeneratedConflicts } from './regenerate.js';
 
 /**
@@ -105,6 +107,8 @@ export interface BatchOptions {
    * run`, once per batch on the merged content instead of once per pull request). A failed scan stops the batch.
    */
   dast?: (worktree: string, head: string, base: string) => Promise<DastOutcome>;
+  /** Globs of the long-lived branches (`stack.keepBranches`) the batch never updates; `DEFAULT_KEEP_BRANCHES` when absent. */
+  keepPatterns?: readonly string[];
   /** Aborted by SIGINT, SIGTERM or SIGHUP: the batch stops at the next step, never between a check and a merge. */
   signal?: AbortSignal;
   /** Journals one merge or stop of the batch; returns an error message when it could not. */
@@ -206,37 +210,49 @@ const GIT_COMMIT = ['-c', 'user.useConfigOnly=true', 'commit'] as const;
  * regenerated when the merge left it stale (folded into the merge commit). Returns the files regenerated, or why the
  * merge is impossible (a conflict of the code, or of a decision): the merge is then aborted, nothing is left behind.
  */
-async function mergeInto(git: LotGit, dir: string, head: string, messages: readonly string[], log: (line: string) => void, label: string): Promise<{ ok: true; regenerated: string[] } | { ok: false; reason: string }> {
-  const merged = await git.run(dir, ['-c', 'user.useConfigOnly=true', 'merge', '--no-ff', '--no-edit', ...messages.flatMap(m => ['-m', m]), head]);
-  const regenerated: string[] = [];
-  if (!merged.ok) {
-    const conflicted = (await git.run(dir, ['diff', '--name-only', '--diff-filter=U', '-z'])).stdout.split('\0').filter(Boolean);
-    const fix = conflicted.length ? await resolveGeneratedConflicts(git, dir, conflicted) : { ok: false as const, reason: merged.stderr.trim().slice(-300) || 'fusion impossible' };
-    if (!fix.ok) {
-      await git.run(dir, ['merge', '--abort']);
-      const lines = merged.stdout.trim().split('\n').filter(l => /CONFLICT|conflit/i.test(l)).slice(0, 5).join(' ; ');
-      return { ok: false, reason: `${lines || merged.stderr.trim().slice(-300)}${conflicted.length ? ` ; ${fix.reason}` : ''}` };
-    }
-    try {
+type MergeOutcome = { ok: true; regenerated: string[] } | { ok: false; kind: 'conflict' | 'regeneration'; reason: string };
+
+async function mergeInto(git: LotGit, dir: string, head: string, messages: readonly string[], log: (line: string) => void, label: string): Promise<MergeOutcome> {
+  // The commit the checkout returns to on any failure: a merge commit never stays in the batch when its regeneration failed.
+  const before = await must(git, dir, ['rev-parse', 'HEAD']);
+  const restore = async (): Promise<void> => {
+    await git.run(dir, ['merge', '--abort']);
+    await git.run(dir, ['reset', '--hard', before]);
+    await git.run(dir, ['clean', '-fdq']);
+  };
+  try {
+    const merged = await git.run(dir, ['-c', 'user.useConfigOnly=true', 'merge', '--no-ff', '--no-edit', ...messages.flatMap(m => ['-m', m]), head]);
+    const regenerated: string[] = [];
+    if (!merged.ok) {
+      const conflicted = (await git.run(dir, ['diff', '--name-only', '--diff-filter=U', '-z'])).stdout.split('\0').filter(Boolean);
+      const fix = conflicted.length ? await resolveGeneratedConflicts(git, dir, conflicted) : { ok: false as const, reason: merged.stderr.trim().slice(-300) || 'fusion impossible' };
+      if (!fix.ok) {
+        await restore();
+        const lines = merged.stdout.trim().split('\n').filter(l => /CONFLICT|conflit/i.test(l)).slice(0, 5).join(' ; ');
+        return { ok: false, kind: 'conflict', reason: `${lines || merged.stderr.trim().slice(-300)}${conflicted.length ? ` ; ${fix.reason}` : ''}` };
+      }
       await must(git, dir, ['add', '--', ...conflicted, ...fix.files]);
       await must(git, dir, [...GIT_COMMIT, '--no-edit']);
-    } catch (error) {
-      await git.run(dir, ['merge', '--abort']);
-      return { ok: false, reason: `fichiers générés régénérés mais fusion non commitée : ${errorMessage(error)}` };
+      regenerated.push(...new Set([...conflicted, ...fix.files]));
+      log(`${label} : conflit sur les seuls fichiers générés, régénérés dans la fusion (${regenerated.join(', ')}).`);
     }
-    regenerated.push(...new Set([...conflicted, ...fix.files]));
-    log(`${label} : conflit sur les seuls fichiers générés, régénérés dans la fusion (${regenerated.join(', ')}).`);
+    // A map merged without conflict but stale for the merged code: regenerated in the same merge commit.
+    const stale = await regenerateStaleMap(dir);
+    if (!stale.ok) { await restore(); return { ok: false, kind: 'regeneration', reason: stale.reason }; }
+    if (stale.files.length) {
+      await must(git, dir, ['add', '--', ...stale.files]);
+      await must(git, dir, [...GIT_COMMIT, '--amend', '--no-edit']);
+      regenerated.push(...stale.files.filter(f => !regenerated.includes(f)));
+      log(`${label} : carte du code périmée par la fusion, régénérée dans la fusion (${stale.files.join(', ')}).`);
+    }
+    // The checkout is exactly one merge commit ahead of `before`, nothing else: otherwise nothing of it is kept.
+    const parents = (await must(git, dir, ['rev-list', '--parents', '-n', '1', 'HEAD'])).split(/\s+/).slice(1);
+    if (parents.length !== 2 || parents[0] !== before) { await restore(); return { ok: false, kind: 'regeneration', reason: `commit de fusion inattendu (parents ${parents.map(short).join(', ')})` }; }
+    return { ok: true, regenerated };
+  } catch (error) {
+    await restore();
+    return { ok: false, kind: 'regeneration', reason: `fusion ou régénération en échec, lot ramené à ${short(before)} : ${errorMessage(error)}` };
   }
-  // A map merged without conflict but stale for the merged code: regenerated in the same merge commit.
-  const stale = await regenerateStaleMap(dir);
-  if (!stale.ok) return { ok: false, reason: stale.reason };
-  if (stale.files.length) {
-    await must(git, dir, ['add', '--', ...stale.files]);
-    await must(git, dir, [...GIT_COMMIT, '--amend', '--no-edit']);
-    regenerated.push(...stale.files.filter(f => !regenerated.includes(f)));
-    log(`${label} : carte du code périmée par la fusion, régénérée dans la fusion (${stale.files.join(', ')}).`);
-  }
-  return { ok: true, regenerated };
 }
 
 /**
@@ -251,8 +267,9 @@ async function buildLot(options: BatchOptions, name: string, dir: string, base: 
   for (const m of members) {
     const merged = await mergeInto(git, dir, m.head, [`lot : fusion de la PR #${m.number} (${m.headRefName})`, 'Generated-by: apv stack batch'], options.log, `Lot ${name}, PR #${m.number}`);
     if (!merged.ok) {
-      lot.excluded.push({ pr: m.number, reason: `conflit avec les PR précédentes du lot : ${merged.reason}` });
-      options.log(`Lot ${name} : PR #${m.number} en conflit avec les précédentes, laissée hors du lot.`);
+      const why = merged.kind === 'conflict' ? `conflit avec les PR précédentes du lot : ${merged.reason}` : `fichiers générés non régénérés après sa fusion (le lot reste à l'arbre d'avant) : ${merged.reason}`;
+      lot.excluded.push({ pr: m.number, reason: why });
+      options.log(`Lot ${name} : PR #${m.number} ${merged.kind === 'conflict' ? 'en conflit avec les précédentes' : 'sans fichiers générés régénérables après sa fusion'}, laissée hors du lot.`);
       continue;
     }
     const mergeCommit = await must(git, dir, ['rev-parse', 'HEAD']);
@@ -261,6 +278,41 @@ async function buildLot(options: BatchOptions, name: string, dir: string, base: 
   lot.head = await must(git, dir, ['rev-parse', 'HEAD']);
   lot.tree = await must(git, dir, ['rev-parse', 'HEAD^{tree}']);
   return lot;
+}
+
+/**
+ * Why the branch of a pull request may never be updated by the batch (a push on it), or null when it may: the target
+ * of the batch, the default branch of the repository (`origin/HEAD` locally, `default_branch` on GitHub), a long-lived
+ * branch (`stack.keepBranches`, DEFAULT_KEEP_BRANCHES), a branch protected on GitHub, or one whose protection cannot be
+ * read (refused, never assumed free). The push of a merge commit on a shared branch is an effect the batch never has,
+ * whatever the content: the pull request is left to the operator (merge the target into it, `apv map`, push, run again).
+ */
+async function refreshRefusal(options: BatchOptions, pr: PullRequest, target: string): Promise<string | null> {
+  const branch = pr.headRefName;
+  const left = (why: string): string => `PR #${pr.number} : fichiers générés régénérés dans le lot, mais sa branche ${branch} ${why} : le lot ne pousse jamais sur une telle branche ; ` +
+    `fusionner ${target} dans la branche, apv map, pousser, relancer le lot`;
+  if (branch === target) return left('est la cible du lot');
+  const head = await options.git.run(options.repo, ['symbolic-ref', '--quiet', `refs/remotes/${options.remote}/HEAD`]);
+  const local = head.ok ? head.stdout.trim().replace(`refs/remotes/${options.remote}/`, '') : null;
+  if (local && branch === local) return left(`est la branche par défaut du dépôt (${options.remote}/HEAD)`);
+  const pattern = (options.keepPatterns ?? DEFAULT_KEEP_BRANCHES).find(glob => globToRegExp(glob).test(branch));
+  if (pattern !== undefined) return left(`est une branche de longue durée (stack.keepBranches : ${pattern})`);
+  const where = pullRequestPath(pr);
+  if (!where) return left(`a un dépôt GitHub illisible (${pr.url || 'adresse absente'}), protection non vérifiable`);
+  const repository = await options.gh(repositoryArgs(where));
+  options.onCall(repository);
+  if (repository.status !== 0 || repository.error) return left(`a un dépôt dont la branche par défaut ne se lit pas (gh api ${where.repo})`);
+  let defaultBranch: string | null;
+  try { defaultBranch = parseRepositorySettings(repository.stdout).defaultBranch; } catch (error) { return left(`a un dépôt dont la réponse de gh api est illisible (${errorMessage(error)})`); }
+  if (!defaultBranch) return left('a un dépôt dont la branche par défaut est inconnue');
+  if (branch === defaultBranch) return left(`est la branche par défaut du dépôt sur GitHub (${defaultBranch})`);
+  const read = await options.gh(branchArgs(where, branch));
+  options.onCall(read);
+  if (read.status !== 0 || read.error) return left(`a une protection illisible (gh api ${where.repo}/branches/${branch})`);
+  let isProtected: unknown;
+  try { isProtected = (JSON.parse(read.stdout) as Record<string, unknown>)['protected']; } catch (error) { return left(`a une protection illisible (${errorMessage(error)})`); }
+  if (isProtected !== false) return left(isProtected === true ? 'est protégée sur GitHub' : 'a une protection inconnue');
+  return null;
 }
 
 /**
@@ -277,7 +329,7 @@ async function refreshBranch(options: BatchOptions, proven: Lot, member: LotMemb
   await must(git, options.repo, ['worktree', 'add', '--detach', dir, member.head]);
   try {
     const merged = await mergeInto(git, dir, targetSha, [`lot : mise à jour de ${member.headRefName} sur ${target} (fichiers générés régénérés)`, 'Generated-by: apv stack batch'], options.log, `Mise à jour de la PR #${member.number}`);
-    if (!merged.ok) return { ok: false, reason: `branche ${member.headRefName} non mise à jour : ${merged.reason}` };
+    if (!merged.ok) return { ok: false, reason: `branche ${member.headRefName} non mise à jour (${merged.kind === 'conflict' ? 'conflit' : 'régénération en échec'}) : ${merged.reason}` };
     const head = await must(git, dir, ['rev-parse', 'HEAD']);
     const tree = await must(git, dir, ['rev-parse', 'HEAD^{tree}']);
     if (tree !== member.tree) return { ok: false, reason: `la mise à jour de ${member.headRefName} sur ${target} (${short(head)}) n'a pas le contenu prouvé dans le lot (${short(member.mergeCommit)}) : rien n'est poussé ; comparer par git diff ${short(member.mergeCommit)} ${short(head)}` };
@@ -500,6 +552,9 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     // Generated files regenerated in the batch: the branch is updated first (same content as proven), then re-read.
     if (member.regenerated.length) {
       if (pr.crossRepository !== false) return stop(member.number, [`PR #${member.number} : fichiers générés régénérés dans le lot (${member.regenerated.join(', ')}), mais sa branche ${pr.crossRepository ? 'vient d\'un fork' : 'a une origine non lue'} : le lot ne peut pas la mettre à jour ; fusionner la cible dans la branche, apv map, pousser, relancer le lot`]);
+      // Never a push on the target, the default branch, a long-lived or a protected branch: the operator's own branches.
+      const refusal = await refreshRefusal(options, pr, target);
+      if (refusal) return stop(member.number, [refusal]);
       if (aborted()) return interrupted(member.number, `avant la mise à jour de la branche de la PR #${member.number}`);
       options.log(`PR #${member.number} : fichiers générés régénérés dans le lot (${member.regenerated.join(', ')}) : mise à jour de ${pr.headRefName} sur ${target} avant la fusion.`);
       let refreshed: Awaited<ReturnType<typeof refreshBranch>>;

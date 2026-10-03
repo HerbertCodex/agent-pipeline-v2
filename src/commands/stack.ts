@@ -82,7 +82,8 @@ batch  fusion par lot de PR indépendantes, chacune vers la cible : lit chaque P
        worktree (--dir, défaut <répertoire git commun>/apv/lots/), y fusionne la tête de chaque PR dans
        l'ordre (git merge --no-ff, jamais de rebase ; une PR en conflit reste hors du lot), lance batch.setup
        de .apv/config.json (facultatif), UNE suite complète (apv gates run --stage full) puis apv gates verify
-       à la tête du lot. C'est la voie normale de fusion dès que deux PR indépendantes sont prêtes (D5).
+       à la tête du lot. C'est la voie normale de fusion dès que deux PR indépendantes sont prêtes (D5, revue du
+       pipeline du 2026-10-03 validée par l'opérateur, projet pilote).
        Fichiers générés : un conflit qui ne touche que la carte du code (map.file), .apv/DECISIONS.json ou
        .apv/DECISIONS.md n'exclut pas la PR : le registre est fusionné par union de ses décisions (une décision
        modifiée des deux côtés reste un conflit), le Markdown rendu depuis le registre, la carte régénérée
@@ -105,8 +106,10 @@ batch  fusion par lot de PR indépendantes, chacune vers la cible : lit chaque P
        dont la fusion dans le lot a régénéré des fichiers générés est d'abord mise à jour : la cible (contenu
        du lot avant elle) est fusionnée dans sa branche avec la même régénération, dans un worktree détaché ;
        le commit obtenu doit avoir exactement l'arbre prouvé dans le lot (sinon arrêt, rien n'est poussé), il
-       est poussé sans force sur sa branche (jamais depuis un fork), journalisé (batch-refresh), relu par
-       gh pr view, puis fusionné. À la fin, arbre de la cible identique à la tête prouvée du lot ; toute
+       est poussé sans force sur sa branche (jamais depuis un fork, ni sur la cible, la branche par défaut, une
+       branche de longue durée de stack.keepBranches ou une branche protégée : arrêt, rien poussé), journalisé
+       (batch-refresh), relu par gh pr view, puis fusionné. Sans --dast alors que la cible déclare review.dast,
+       le rapport dit « Scan dynamique non lancé (--dast absent) ». À la fin, arbre de la cible identique à la tête prouvée du lot ; toute
        différence arrête tout. Journal : .apv/state/stack.log. --keep garde les worktrees des lots.
 Règles avant fusion (docs/REGLES.md) : merge vérifie, juste avant chaque fusion, les règles de apv rules check à
        la tête de la PR contre origin/<cible> (preuve complète au commit, aucun contrôle réussi après relance,
@@ -496,6 +499,9 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO, ci: { ci
     return { ok: summary.status === 'passed', status: summary.status, reportDir,
       summary: `scan dynamique ${DAST_TEXT[summary.status] ?? summary.status} (code ${summary.exitCode}) en ${Math.round(summary.durationMs / 1000)} s ; résumé : ${reportDir}/${DAST_SUMMARY}` };
   };
+  // The long-lived branches of the checkout (`stack.keepBranches`): never updated by the batch; unreadable: the defaults.
+  let keepPatterns: string[] | undefined;
+  try { keepPatterns = loadConfig(repo).config.stack?.keepBranches; } catch { keepPatterns = undefined; }
   let report: BatchReport;
   const gh = processGh(bin, io.env, io.cwd);
   const onCall = (call: GhCall): void => { calls.push(call); if (values.merge || call.status !== 0 || call.error) (values.json ? io.stderr : io.stdout)(transcript(bin, call)); };
@@ -504,7 +510,7 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO, ci: { ci
       repo, common: commonDir(repo), prs, bisect: values.bisect === true, merge: values.merge === true, ready: values.ready === true, keep: values.keep === true,
       remote: 'origin', gh, git: processGit(io.env), log, onCall,
       pollMs: positiveInt(io.env['APV_STACK_POLL_MS'], 3000), pollAttempts: positiveInt(io.env['APV_STACK_POLL_ATTEMPTS'], 20), ...ci,
-      prove, configDrift, repeatRefusal, signal: abort.signal, ...(values.dast ? { dast } : {}),
+      prove, configDrift, repeatRefusal, signal: abort.signal, ...(values.dast ? { dast } : {}), ...(keepPatterns ? { keepPatterns } : {}),
       journal: entry => {
         // Each merge of a batch leaves its signed trace, its merge commit being the target just after it.
         if (entry['event'] === 'batch-merge' && typeof entry['pr'] === 'number' && typeof entry['head'] === 'string') {
@@ -532,13 +538,17 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO, ci: { ci
   const cleanup = await branchCleanup(io, report.mergedHeads, report.target, keep, async args => { const call = await gh(args); onCall(call); return call; });
   const partial = !report.stopped && report.left.length > 0;
   const status = report.interrupted ? 'interrompu' : report.stopped ? 'arrêté' : partial ? 'partiel' : values.merge ? 'fusionné' : 'prouvé';
-  if (values.json) json(io, { ...report, status, cleanup, calls });
+  // The scan the target declares and this batch did not run (`--dast` absent): said, so that a merge without it is a choice.
+  let dastSkipped = false;
+  if (!values.dast && report.base) { try { dastSkipped = atCommit(report.base).config.review?.dast !== undefined; } catch { dastSkipped = false; } }
+  const skippedLine = dastSkipped ? `Scan dynamique non lancé (--dast absent) alors que la cible déclare review.dast${values.merge ? ' : PR fusionnées sans scan du lot ; le scan par PR (apv dast run) reste dû avant la fusion' : ''}.` : null;
+  if (values.json) json(io, { ...report, status, dastSkipped, cleanup, calls });
   else {
     const verdict = report.interrupted ? `Lot interrompu (${received ?? 'signal'}) : rien d'autre ne sera fusionné.\n`
       : report.stopped ? ''
       : partial ? `Lot PARTIEL : ${report.left.map(l => `#${l.pr} (${l.reason})`).join(', ')} hors du lot${values.merge ? ' ; les autres sont fusionnées' : ''}. Les PR laissées se traitent à part.\n`
       : values.merge ? 'Lot fusionné.\n' : `Lot prouvé${report.proven?.dast?.ok ? ' et scanné' : ''} : APV_ALLOW_MERGE=1 apv stack batch <mêmes PR> --merge${values.dast ? ' --dast' : ''} le fusionne, sur ordre de l'opérateur (une nouvelle suite tourne sur un nouveau lot).\n`;
-    io.stdout(`${[...batchLines(report), ...cleanupLines(cleanup)].join('\n')}\n${verdict}`);
+    io.stdout(`${[...batchLines(report), ...(skippedLine ? [skippedLine] : []), ...cleanupLines(cleanup)].join('\n')}\n${verdict}`);
   }
   if (received) return signalExitCode(received);
   return report.stopped || partial ? EXIT.failed : EXIT.ok;

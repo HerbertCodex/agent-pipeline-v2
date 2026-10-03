@@ -30,7 +30,7 @@ const allow = { APV_ALLOW_MERGE: '1' };
  * regenerated in its commit (decision D1): #21 adds src/one.mjs, #22 adds src/two.mjs, #23 adds decision D-A, #24 adds
  * decision D-B, #25 changes the value of D-0, #26 changes it otherwise, #27 changes a.txt and #28 changes a.txt otherwise.
  */
-async function lotProject(t, extraConfig = {}) {
+async function lotProject(t, extraConfig = {}, { archmap = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'apv3-lot-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const origin = join(root, 'origin.git');
@@ -46,13 +46,14 @@ async function lotProject(t, extraConfig = {}) {
   writeFileSync(join(repo, 'src', 'shared.mjs'), 'export const shared = 1;\n');
   const writeLedger = (dir, value) => { writeFileSync(join(dir, '.apv', 'DECISIONS.json'), `${JSON.stringify(value, null, 2)}\n`); writeFileSync(join(dir, '.apv', 'DECISIONS.md'), decisionLedgerMarkdown(value)); };
   writeLedger(repo, { schemaVersion: 1, decisions: [decision('D-0')] });
+  if (archmap) assert.equal((await apv(repo, ['structure', 'map'])).code, 0, 'the architecture map written at the base');
   assert.equal((await apv(repo, ['map'])).code, 0);
   git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'base'); git(repo, 'push', '-q', 'origin', 'main');
   const prs = {};
-  const branch = async (n, name, change) => {
+  const branch = async (n, name, change, withMap = true) => {
     git(repo, 'switch', '-q', '-c', name, 'main');
     await change(repo);
-    assert.equal((await apv(repo, ['map'])).code, 0, 'the implementer regenerates the map in his commit');
+    if (withMap) assert.equal((await apv(repo, ['map'])).code, 0, 'the implementer regenerates the map in his commit');
     git(repo, 'add', '-A'); git(repo, 'commit', '-qm', name); git(repo, 'push', '-q', 'origin', name);
     const sha = git(repo, 'rev-parse', 'HEAD');
     git(origin, 'update-ref', `refs/pull/${n}/head`, sha);
@@ -73,8 +74,18 @@ async function lotProject(t, extraConfig = {}) {
   writeFileSync(file, JSON.stringify({ prs, behavior: { liveHeads: [21, 22, 23, 24, 25, 26, 27, 28] }, calls: [], origin }));
   const env = { ...identity, APV_GH: fakeGh, FAKE_GH_STATE: file, APV_STACK_POLL_MS: '5', APV_STACK_POLL_ATTEMPTS: '3', APV_ALLOW_MERGE: '',
     APV_LOCK_DIR: join(root, 'locks'), APV_LOCK_POLL_MS: '20' };
+  /** Adds a pull request later (the behavior of the fake gh is kept), from the branch `name`, with its map regenerated. */
+  const more = async (n, name, change, behavior = {}, withMap = true) => {
+    await branch(n, name, change, withMap);
+    git(repo, 'switch', '-q', 'main');
+    const state = JSON.parse(readFileSync(file, 'utf8'));
+    state.prs[n] = prs[n]; state.behavior = { ...state.behavior, liveHeads: [...state.behavior.liveHeads, n], ...behavior };
+    if (behavior.repo) state.repo = behavior.repo;
+    writeFileSync(file, JSON.stringify(state));
+  };
   return {
-    root, origin, repo, env, prs,
+    root, origin, repo, env, prs, more,
+    head: branch => git(origin, 'rev-parse', `refs/heads/${branch}`),
     run: (args, extra = {}) => apv(repo, ['stack', 'batch', ...args], { ...env, ...extra }),
     main: () => git(origin, 'rev-parse', 'refs/heads/main'),
     tree: ref => git(origin, 'rev-parse', `${ref}^{tree}`),
@@ -164,6 +175,39 @@ test('mergeLedgers: symmetric union, changes on one side kept, deletions honoure
   assert.deepEqual(mergeLedgers(base, { schemaVersion: 1, decisions: [d0, { ...d1, value: 'x' }, d2] }, { schemaVersion: 1, decisions: [d0, { ...d1, value: 'y' }, d2] }), { conflict: 'décision D-1 modifiée des deux côtés' });
   assert.deepEqual(mergeLedgers(base, { schemaVersion: 1, decisions: [d0, d2] }, { schemaVersion: 1, decisions: [d0, { ...d1, value: 'y' }, d2] }), { conflict: "décision D-1 modifiée d'un côté et retirée de l'autre" });
   assert.deepEqual(mergeLedgers(base, { schemaVersion: 1, decisions: [d0, d1, d2, d3] }, { schemaVersion: 1, decisions: [d0, d1, d2, { ...d3, value: 'other' }] }), { conflict: 'décision D-3 ajoutée différemment des deux côtés' });
+  // Replacements across the two sides: two added decisions that replace the same one, or a replacement of a decision retired on the other side.
+  const over = (id, target) => decision(id, { supersedes: [target] });
+  assert.deepEqual(mergeLedgers(base, { schemaVersion: 1, decisions: [d0, d1, d2, over('D-3', 'D-1')] }, { schemaVersion: 1, decisions: [d0, d1, d2, over('D-4', 'D-1')] }), { conflict: 'décisions D-3 et D-4, ajoutées de part et d\'autre, remplacent toutes deux D-1' });
+  assert.deepEqual(mergeLedgers(base, { schemaVersion: 1, decisions: [d0, d1, d2, over('D-3', 'D-1')] }, { schemaVersion: 1, decisions: [d0, d2] }), { conflict: 'décision D-3 remplace D-1, absente du registre fusionné' });
+  assert.ok('ledger' in mergeLedgers(base, { schemaVersion: 1, decisions: [d0, d1, d2, over('D-3', 'D-1')] }, { schemaVersion: 1, decisions: [d0, d1, d2, over('D-4', 'D-2')] }), 'two replacements of two decisions: fine');
+  assert.match(mergeLedgers(base, { schemaVersion: 1, decisions: [d0, d1, d2, decision('D-3', { status: 'ambiguous' })] }, base).conflict ?? '', /registre fusionné invalide/);
+});
+
+test('batch: a pull request whose merge leaves the generated files impossible to regenerate is left out, the batch returns to the tree before it, the next one enters', async t => {
+  const p = await lotProject(t, {}, { archmap: true });
+  const module = (name, k) => r => writeFileSync(join(r, 'src', `${name}.mjs`), `import { shared } from './shared.mjs';\nexport const ${name} = shared + ${k};\n`);
+  // #35 duplicates a marker of the architecture map: apv map refuses it, nothing can be regenerated after its merge.
+  await p.more(35, 'pr-marker', r => {
+    const file = join(r, 'docs', 'carte-architecture.md');
+    const text = readFileSync(file, 'utf8');
+    writeFileSync(file, `${text}\n${/<!-- apv:[a-z]+:[a-z-]+ -->/.exec(text)[0]}\n<!-- /dup -->\n`);
+  }, {}, false);
+  await p.more(36, 'pr-three', module('three', 6));
+  const r = await p.run(['21', '35', '36', '--json']);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  const lot = r.json().proven;
+  assert.deepEqual(lot.members.map(m => m.number), [21, 36]);
+  assert.deepEqual(lot.excluded.map(x => x.pr), [35]);
+  assert.match(lot.excluded[0].reason, /fichiers générés non régénérés après sa fusion \(le lot reste à l'arbre d'avant\)/);
+  assert.doesNotMatch(lot.excluded[0].reason, /conflit avec les PR précédentes/);
+  assert.match(r.stderr, /PR #35 sans fichiers générés régénérables après sa fusion, laissée hors du lot/);
+  // Exactly two merges in the batch (#21, #36), #36 on top of #21's merge; nothing of #35 in the tree.
+  assert.equal(git(p.repo, 'rev-list', '--first-parent', '--count', `${lot.base}..${lot.head}`), '2');
+  assert.deepEqual(git(p.repo, 'rev-list', '--parents', '-n', '1', lot.members[1].mergeCommit).split(/\s+/).slice(1)[0], lot.members[0].mergeCommit);
+  assert.throws(() => git(p.repo, 'merge-base', '--is-ancestor', p.prs[35].headRefOid, lot.head), 'the head of #35 is not in the batch');
+  assert.doesNotMatch(git(p.repo, 'show', `${lot.head}:docs/carte-architecture.md`), /<!-- \/dup -->/);
+  assert.equal(r.json().status, 'partiel');
+  assert.match(lot.proof.summary, /2\/2 contrôle\(s\) réussi\(s\)/);
 });
 
 test('batch --dast: the dynamic scan the target declares runs on the proven head before any merge; a failed scan merges nothing; refused without review.dast', async t => {
@@ -190,4 +234,50 @@ test('batch --dast: the dynamic scan the target declares runs on the proven head
   const bare = await lotProject(t);
   assert.equal((await bare.run(['21', '22', '--dast'])).code, 2);
   assert.equal((await apv(bare.repo, ['stack', 'plan', '21', '--dast'], bare.env)).code, 2);
+});
+
+test('batch --merge never pushes on a long-lived, protected or default branch: the update is refused, nothing pushed, nothing else merged', async t => {
+  const p = await lotProject(t);
+  const module = (name, k) => r => writeFileSync(join(r, 'src', `${name}.mjs`), `import { shared } from './shared.mjs';\nexport const ${name} = shared + ${k};\n`);
+  // Each one adds a module, so its map conflicts with #21's once #21 is in the batch: an update would be needed.
+  await p.more(31, 'develop', module('dev', 3));
+  await p.more(32, 'prot/1', module('rel', 4), { protected: ['prot/1'] });
+  await p.more(33, 'apv3', module('apv', 5), { repo: { default_branch: 'apv3' } });
+  // A partner merged first (#21, then #22), then the target itself moved: each refused branch conflicts on the map.
+  const cases = [[['21', '31'], 'develop', /est une branche de longue durée \(stack\.keepBranches : develop\)/], [['22', '32'], 'prot/1', /est protégée sur GitHub/], [['33'], 'apv3', /est la branche par défaut du dépôt sur GitHub \(apv3\)/]];
+  for (const [prs, name, why] of cases) {
+    const n = Number(prs[prs.length - 1]);
+    const before = p.head(name);
+    const r = await p.run([...prs, '--merge', '--json'], allow);
+    assert.equal(r.code, 1, r.stdout + r.stderr);
+    assert.equal(r.json().stopped.pr, n);
+    assert.match(r.json().stopped.reasons[0], why);
+    assert.match(r.json().stopped.reasons[0], /le lot ne pousse jamais sur une telle branche ; fusionner main dans la branche, apv map, pousser, relancer le lot/);
+    assert.equal(p.head(name), before, `${name} untouched`);
+    assert.ok(!r.json().refreshed.some(x => x.pr === n), `#${n} never updated (the partner may be)`);
+    assert.ok(!r.json().merged.includes(n), `#${n} never merged`);
+  }
+  assert.deepEqual(p.merges(), [21, 22], 'the partners only');
+  // The local default branch (origin/HEAD) refuses too, before any gh call.
+  git(p.repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop');
+  const local = await p.run(['31', '--merge', '--json'], allow);
+  assert.equal(local.code, 1);
+  assert.match(local.json().stopped.reasons[0], /est la branche par défaut du dépôt \(origin\/HEAD\)/);
+  assert.deepEqual(p.merges(), [21, 22]);
+});
+
+test('batch without --dast while the target declares review.dast: said in the report and in JSON (dastSkipped)', async t => {
+  const scan = `const [dir] = process.argv.slice(1); require('fs').writeFileSync(require('path').join(dir, 'zap.html'), '<p>0</p>');`;
+  const p = await lotProject(t, { review: { dast: { command: [process.execPath, '-e', scan, '{{reportDir}}'] } } });
+  const r = await p.run(['21', '22', '--json']);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.equal(r.json().dastSkipped, true);
+  const human = await p.run(['21', '22']);
+  assert.match(human.stdout, /Scan dynamique non lancé \(--dast absent\) alors que la cible déclare review\.dast\./);
+  const merged = await p.run(['21', '22', '--merge'], allow);
+  assert.equal(merged.code, 0, merged.stdout + merged.stderr);
+  assert.match(merged.stdout, /Scan dynamique non lancé \(--dast absent\) alors que la cible déclare review\.dast : PR fusionnées sans scan du lot ; le scan par PR \(apv dast run\) reste dû avant la fusion\./);
+  assert.equal((await p.run(['21', '22', '--dast', '--json'])).json().dastSkipped, false);
+  const bare = await lotProject(t);
+  assert.equal((await bare.run(['21', '22', '--json'])).json().dastSkipped, false, 'nothing declared: nothing to say');
 });
