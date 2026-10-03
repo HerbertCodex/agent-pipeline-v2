@@ -39,6 +39,11 @@ export interface RulesInput {
 /** Whether the commit is a web interface: web dependencies in its package.json, or tracked interface files. */
 export declare function isWebAt(repo: string, sha: string): boolean;
 /**
+ * Whether a file changes what a screen shows: a screen (`isScreen`, rules.screens), a file of the class ui of
+ * review.paths (components, styles, templates, app.html, assets), or a page in Markdown under the routes.
+ */
+export declare function isInterfaceFile(path: string, screens: readonly RegExp[], ui: readonly string[]): boolean;
+/**
  * The rules checked before any merge (docs/REGLES.md). Each one says what it checked, why it refuses and what to do. A
  * refusal is lifted by the correction it asks for, or by the operator himself: « dérogation <règle> <commit> : <raison> »
  * typed in the session (operator journal); no option of the tool lifts it.

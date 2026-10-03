@@ -92,7 +92,7 @@ Sur une configuration existante, l'outil liste les contrôles que les règles ex
 3. **Implémentation** : `/apv:run <spec>` : fondations, tâches en parallèle, intégration ; `apv gates run --stage task` à chaque tâche.
 4. **Relecture** : `/apv:review` ; chaque relecteur enregistre sa relecture au commit relu (`apv review record`, captures comprises pour la fidélité).
 5. **Preuve** : `apv gates run --stage full --base origin/main`, puis `apv gates verify --commit <tête>`.
-6. **Fusion** : `apv rules check --commit <tête> --target origin/main`, puis `/apv:stack <pr...>` (`APV_ALLOW_MERGE=1 apv stack merge`), sur ordre de l'opérateur ou par sa délégation écrite. La fusion est refusée sans preuve complète au commit, avec un test réussi seulement à la relance, sans relecture enregistrée sans constat critique ni haut, sans les captures d'un écran ajouté ou modifié, sans les contrôles de base d'un projet web, ou sans maquette validée pour un écran.
+6. **Fusion** : `apv rules check --commit <tête> --target origin/main`, puis `/apv:stack <pr...>` (`APV_ALLOW_MERGE=1 apv stack merge`), sur ordre de l'opérateur ou par sa délégation écrite. La fusion est refusée sans preuve complète au commit, avec un test réussi seulement à la relance, sans relecture enregistrée sans constat critique ni haut, sans les captures d'un fichier d'interface ajouté ou modifié (écran, composant, style), sans les contrôles de base d'un projet web, ou sans maquette validée pour un écran.
 
 ## Commandes principales
 

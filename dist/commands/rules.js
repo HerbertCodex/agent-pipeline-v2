@@ -14,8 +14,10 @@ apv stack batch --merge, qui refusent de fusionner sans elles :
              comme un bug possible du produit, il ne se relance pas jusqu'au vert ;
   relecture  chaque domaine que apv review plan retient pour le diff a sa relecture enregistrée à ce commit
              (apv review record, par l'agent relecteur du domaine), sans constat critique ni haut ;
-  captures   un changement d'interface a les captures de la relecture fidelite (par défaut ordinateur et
-             téléphone, thème clair et sombre ; section rules.captures) ;
+  captures   un fichier d'interface ajouté ou modifié (écran, composant, style, gabarit, page des routes,
+             review.paths.ui) a les captures de la relecture fidelite (par défaut ordinateur et téléphone,
+             thème clair et sombre ; section rules.captures) ; sans objet pour un diff sans fichier
+             d'interface ou un projet sans écran (outil en ligne de commande) ;
   controles  un projet web déclare, obligatoires, les contrôles reuse, code-map et structure (et ceux de
              rules.requiredGates) ;
   maquette   chaque écran ajouté ou modifié est couvert par une maquette validée par l'opérateur : déjà sur la

@@ -89,11 +89,16 @@ function flocksOn(file) {
 /** A process holding the flock of `file` until `release()` (its standard input closed), resolved once it holds it. */
 async function holdFlock(t, file) {
   const holder = spawn('flock', [file, 'cat'], { stdio: ['pipe', 'ignore', 'ignore'] });
-  const exited = new Promise(done => holder.once('exit', done));
+  // flock that cannot start (util-linux missing, refused): a readable failure at once, never an uncaught error.
+  let spawnError = null;
+  const exited = new Promise(done => { holder.once('exit', done); holder.once('error', error => { spawnError = error; done(); }); });
   let releasing = null;
-  const release = () => releasing ??= (holder.stdin.end(), exited.then(() => Date.now()));
+  const release = () => releasing ??= (spawnError ? null : holder.stdin.end(), exited.then(() => Date.now()));
   t.after(release);
-  await until(() => flocksOn(file).holders > 0, `flock de ${file} tenu`);
+  await until(() => {
+    if (spawnError) throw new Error(`flock non lancé pour ${file} : ${spawnError.message}`);
+    return flocksOn(file).holders > 0;
+  }, `flock de ${file} tenu`);
   return { release };
 }
 
@@ -190,9 +195,13 @@ process.exit(held?0:9);`;
   const f = project(t, { gates: [{ id: 'integration', stage: 'full', timeoutMs: 1000, lock: { file, fileEnv: 'STACK_LOCK' }, command: node(proof) }] });
   // Held until the check waits on it (a waiter in /proc/locks), then 1.2 s more: longer than its 1 s timeout.
   const holder = await holdFlock(t, file);
-  until(() => flocksOn(file).waiters > 0, `attente du flock de ${file}`).then(() => setTimeout(holder.release, 1200), holder.release);
+  let waited = false;
+  until(() => flocksOn(file).waiters > 0, `attente du flock de ${file}`)
+    .then(() => { waited = true; setTimeout(holder.release, 1200); }, holder.release);
   const r = await apv(f.repo, ['gates', 'run', '--json']);
   await holder.release();
+  // The release followed the wait seen in /proc/locks, not the 30 s limit of the detection.
+  assert.ok(waited, 'the check waited on the flock (a waiter on the inode in /proc/locks)');
   assert.equal(r.code, 0, r.stdout + r.stderr);
   const rec = receipt(r.json().receiptsDirectory, 'integration');
   assert.equal(rec.status, 'passed', rec.diagnostic);
