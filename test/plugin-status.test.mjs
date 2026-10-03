@@ -190,8 +190,8 @@ test('review of 84d3c4a: a review the seal hook could not seal is said under its
 });
 
 test('review of 3871d24: a forged key is said, the main checkout settings count from a worktree, a sealed review lifts the note', async t => {
-  const { clearSealRefusal, recordRefusal } = await import('../dist/rules/operator.js');
-  const { existsSync } = await import('node:fs');
+  const { clearSealRefusal, journalState, recordRefusal, recordSealRefusal } = await import('../dist/rules/operator.js');
+  const { existsSync, readdirSync } = await import('node:fs');
   const s = setup(t);
   writeFileSync(join(s.claude, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'apv@x; rm -rf ~': [{ scope: 'user' }] } }));
   assert.match(pluginLines(pluginStatus(s.project, s.env, s.tool))[0], /état illisible.*nom de plugin apv invalide/);
@@ -203,6 +203,16 @@ test('review of 3871d24: a forged key is said, the main checkout settings count 
   mkdirSync(join(s.project, '.claude'), { recursive: true });
   writeFileSync(join(s.project, '.claude', 'settings.local.json'), JSON.stringify({ enabledPlugins: { 'apv@herbertcodex-apv': true } }));
   assert.equal(pluginStatus(worktree, s.env, s.tool).install.enabled, true);
+  // In a worktree, Claude Code reads the local file of the main checkout only, and the project file of the worktree only.
+  mkdirSync(join(worktree, '.claude'), { recursive: true });
+  writeFileSync(join(worktree, '.claude', 'settings.local.json'), JSON.stringify({ enabledPlugins: { 'apv@herbertcodex-apv': false } }));
+  writeFileSync(join(s.project, '.claude', 'settings.json'), JSON.stringify({ disableAllHooks: true }));
+  const fromWorktree = pluginStatus(worktree, s.env, s.tool);
+  assert.equal(fromWorktree.install.enabled, true, 'the local file of the worktree is not read');
+  assert.equal(fromWorktree.hooksDisabled, false, 'the project file of the main checkout is not read');
+  writeFileSync(join(worktree, '.claude', 'settings.json'), JSON.stringify({ disableAllHooks: true }));
+  assert.equal(pluginStatus(worktree, s.env, s.tool).hooksDisabled, true, 'the project file of the worktree');
+  assert.equal(pluginStatus(s.project, s.env, s.tool).hooksDisabled, true, 'the main checkout reads its own');
   // The note of a review the hook could not seal goes away once that review is sealed; another's, or a refused message, stays.
   const common = join(s.root, 'commun'); mkdirSync(common);
   recordRefusal(common, 'relecture X non scellée : dépôt introuvable');
@@ -210,7 +220,27 @@ test('review of 3871d24: a forged key is said, the main checkout settings count 
   assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), true, 'another review');
   clearSealRefusal(common, 'X');
   assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), false);
+  // A new review of the same domain replaces the unsealed one (each record has a new id); another domain leaves the note.
+  recordRefusal(common, 'relecture X (securite) non scellée : dépôt introuvable');
+  clearSealRefusal(common, 'Z', 'rgpd');
+  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), true, 'another domain');
+  clearSealRefusal(common, 'Z', 'securite');
+  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), false, 'same domain');
+  recordRefusal(common, 'message hors de la session');
+  clearSealRefusal(common, 'X', 'securite');
+  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), true, 'refused message');
   recordRefusal(common, 'message hors de la session');
   clearSealRefusal(common, 'X');
   assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), true);
+  // One note per review the hook could not seal (reviewers run at once): a seal clears its domain only, never the message.
+  const notes = join(common, 'apv', 'operator', 'sceau');
+  recordSealRefusal(common, '20261003T100000Z-0000000a', 'securite', 'clé absente', new Date(Date.now() + 1000));
+  recordSealRefusal(common, '20261003T100001Z-0000000b', 'rgpd', 'clé absente', new Date(Date.now() + 2000));
+  assert.deepEqual(readdirSync(notes).sort(), ['20261003T100000Z-0000000a.json', '20261003T100001Z-0000000b.json'], 'no temporary file left');
+  assert.match(journalState(common).refused.reason, /^relecture 20261003T100001Z-0000000b \(rgpd\) non scellée : clé absente$/, 'the latest note');
+  clearSealRefusal(common, '20261003T110000Z-0000000c', 'securite');
+  assert.deepEqual(readdirSync(notes), ['20261003T100001Z-0000000b.json']);
+  assert.equal(existsSync(join(common, 'apv', 'operator', 'refused.json')), true, 'the refused message stays');
+  recordSealRefusal(common, '../x', 'rgpd', 'nom forgé');
+  assert.deepEqual(readdirSync(notes), ['20261003T100001Z-0000000b.json'], 'a forged id writes nothing');
 });

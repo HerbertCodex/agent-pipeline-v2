@@ -6,6 +6,7 @@
 // through a symlinked node_modules, docker or supabase commands on a declared test stack without its lock.
 // This is a guard rail against mistakes, not a security boundary: a determined command can
 // always be written in a shape this parser does not recognise.
+import { spawnSync } from 'node:child_process';
 import { accessSync, constants as fsConstants, existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -100,7 +101,9 @@ export function tokenize(command) {
   const heredocOwners = [];
   /** The texts fed to each simple command on its standard input (heredoc bodies, here-strings), by index: a shell runs them. */
   const scripts = {};
-  const feed = (owner, text) => { (scripts[owner] ??= []).push(text); };
+  /** The operator right after each simple command, by index (`&&`, `;`, `|`…); none when a heredoc body or the end follows. */
+  const after = {};
+  const feed =(owner, text) => { (scripts[owner] ??= []).push(text); };
   let pendingOwners = [];
   let hereString = false;
   const flushWord = () => {
@@ -192,7 +195,9 @@ export function tokenize(command) {
     }
     const operator = OPERATORS.find(op => command.startsWith(op, i));
     if (operator) {
+      const before = segments.length;
       flushSegment();
+      if (segments.length > before) after[segments.length - 1] = operator;
       shadow += operator;
       i += operator.length;
       continue;
@@ -209,7 +214,7 @@ export function tokenize(command) {
     i += 1;
   }
   flushSegment();
-  return { segments, shadow, heredocOwners, scripts };
+  return { segments, shadow, heredocOwners, scripts, after };
 }
 
 /**
@@ -470,6 +475,9 @@ export function mayReachAnchor(path) {
   for (let k = 0; k + 1 < parts.length; k += 1) {
     const gitDir = GLOB.test(parts[k]) ? globMayMatch(parts[k], '.git', false) : parts[k].endsWith('.git');
     if (!gitDir || !(GLOB.test(parts[k + 1]) ? globMayMatch(parts[k + 1], 'apv') : parts[k + 1] === 'apv')) continue;
+    // A glob segment that may be `..` (`.?`, `..*`; sh and bash before 5.2 match it) climbs back to the anchor. Only a
+    // segment that starts with a dot (or a bracket) may: `*` never matches a name that starts with one.
+    if (parts.slice(k + 2).some(p => GLOB.test(p) && /^[.[]/.test(p) && globMayMatch(p, '..'))) return true;
     const next = parts[k + 2];
     if (next === undefined || ['operator', 'reviews', 'merges'].some(n => (GLOB.test(next) ? globMayMatch(next, n) : next === n))) return true;
   }
@@ -477,13 +485,20 @@ export function mayReachAnchor(path) {
 }
 
 /** Commands that only read what a glob names: they may glob a store outside the anchor (the receipts of the checks). */
-const GLOB_READERS = new Set(['cat', 'head', 'tail', 'less', 'more', 'ls', 'jq', 'wc', 'grep', 'egrep', 'fgrep', 'rg', 'diff', 'cmp', 'stat', 'file',
-  'sha256sum', 'sha1sum', 'md5sum', 'du', 'tree', 'bat', 'zcat']);
+/** Not `rg` (`--pre` runs a program on each file) nor `tree` (`-o` writes a file). */
+const GLOB_READERS = new Set(['cat', 'head', 'tail', 'less', 'more', 'ls', 'jq', 'wc', 'grep', 'egrep', 'fgrep', 'diff', 'cmp', 'stat', 'file',
+  'sha256sum', 'sha1sum', 'md5sum', 'du', 'bat', 'zcat']);
+/** Commands that only read or print what they are given: the only ones that may be handed a path in a store. */
+const READS_ONLY = new Set([...GLOB_READERS, 'rg', 'tree', 'echo', 'printf', 'test', '[', 'realpath', 'readlink', 'basename', 'dirname', 'apv',
+  // dd writes only by `of=`, read by OUTPUT_OPTIONS.
+  'dd']);
 /** Commands that delete, move, empty or copy away what they are given: handed a store, they reach it. */
 const STORE_WRITERS = new Set(['rm', 'unlink', 'rmdir', 'shred', 'truncate', 'mv', 'cp', 'rsync', 'tar', 'zip', 'ln', 'chmod', 'chown', 'chgrp', 'install', 'setfacl', 'chattr',
   'tee', 'trash', 'trash-put', 'rmtrash', 'gio', 'sponge', 'gzip', 'gunzip', 'bzip2', 'xz', 'zstd']);
 /** Options that name the file a command writes (`sort -o f`, `curl -o f`, `curl -so f`, `wget -qO f`, `dd of=f`), by command. */
-const OUTPUT_OPTIONS = { sort: ['-o', '--output'], curl: ['-o', '--output'], wget: ['-O', '--output-document'], dd: ['of'] };
+const OUTPUT_OPTIONS = { sort: ['-o', '--output'], curl: ['-o', '--output'], wget: ['-O', '--output-document'], dd: ['of'], tree: ['-o'] };
+/** Options with which ripgrep runs a program of its own choosing (on each file searched, or to name the host). */
+const RG_RUNS = /^--(?:pre|pre-glob|hostname-bin)(?:=|$)/;
 const outputsOf = (tool, args) => {
   const names = OUTPUT_OPTIONS[tool] ?? [];
   const out = [];
@@ -657,7 +672,10 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
       const path = resolve(dir ?? '/', at(arg, dir));
       if (GLOB.test(arg) && (mayBeStore(dirname(path)) || mayBeStore(dirname(at(arg, dir)))) && (!reader || mayReachAnchor(path))) return REASONS.anchorStore;
     }
-    // The file a command writes by an option (`sort -o`, `curl -o`, `wget -O`, `dd of=`).
+    // ripgrep that runs a program on what it searches (`rg --pre rm '' .git/apv`): that program may write anywhere it
+    // walks, the stores included, without naming them. Never needed to read the receipts: refused.
+    if (tool === 'rg' && cw.slice(1).some(a => RG_RUNS.test(a))) return REASONS.anchorStore;
+    // The file a command writes by an option (`sort -o`, `curl -o`, `wget -O`, `dd of=`, `tree -o`).
     for (const path of outputsOf(tool, cw.slice(1))) if (mayBeStore(at(path, dir)) || mayBeStore(path) || computedStore(path)) return REASONS.anchorStore;
     // An interpreter given a script on its command line, whatever its options (`perl -MFile::Path -le`, `ruby -x -e`,
     // `awk -- '…'`): refused when anything of its command line names the store folder or an operand may lie in it. Only a
@@ -682,8 +700,15 @@ export function storeProblem(segments, cwd = null, home = null, command = '', sh
       if (starts.some(s => mayBeStore(at(s, dir)) || mayBeStore(`${at(s, dir)}/apv`)) || names.some(n => globMayMatch(n.split('/').pop() ?? n, 'apv') || /apv/.test(n))) return REASONS.anchorStore;
       continue;
     }
-    if (!STORE_WRITERS.has(tool) && !inPlace) continue;
-    for (const arg of fedByLine ? [...args, ...lineWords] : args) {
+    // Any command handed a store is taken for a writer, except the ones known to only read: a program unknown to the
+    // guard may write its operands (`python3 -m json.tool forged.json .git/apv/receipts/r.json`, `deno run x.ts …`).
+    // A bare assignment (`f=.git/apv/receipts/r.json`) runs nothing.
+    if (!cw.length || /^[A-Za-z_]\w*=/.test(cw[0])) continue;
+    const writer = STORE_WRITERS.has(tool) || inPlace;
+    if (!writer && READS_ONLY.has(tool)) continue;
+    // What another program reads on its standard input (`python3 x.py - < .git/apv/receipts/r.json`) is not handed to it.
+    const handed = writer ? args : cw.slice(1).filter((a, k, all) => !a.startsWith('-') && !/^\d*<$/.test(all[k - 1] ?? ''));
+    for (const arg of fedByLine ? [...handed, ...lineWords] : handed) {
       // A computed path that ends in apv, holds a piece of a store path, or uses a variable the line set to one
       // (`$d/apv`, `d=.git/ap; rm -rf ${d}v`, `d=.gi; e=ap; rm -rf ${d}t/${e}v`): it may be the store.
       if (computedStore(arg)) return REASONS.anchorStore;
@@ -920,8 +945,10 @@ export function gitDirectory(cwords, dir, words = cwords, env = {}) {
 /**
  * How a git command changes the branch checked out: null (it does not), `{ created }` (`checkout -b x`, `switch -c x`),
  * or `{ unknown: true }` (any other switch, a checkout of a branch, `symbolic-ref HEAD …`). The global options of git
- * (`-C .`, `-c a=b`) are skipped before the subcommand. `git checkout -- f`, and a checkout of paths that exist in the
- * folder (`git checkout package-lock.json`), change no branch.
+ * (`-C .`, `-c a=b`) are skipped before the subcommand. `git checkout -- f`, `git checkout <commit> <paths>` (two
+ * operands or more: files taken from a commit), and a checkout of one path that exists in the folder and names no branch,
+ * tag or remote branch (`git checkout package-lock.json`, never `git checkout main` beside a folder `main`), change no
+ * branch.
  */
 export function branchChange(cwords, dir = null) {
   if (basename(cwords[0] ?? '') !== 'git') return null;
@@ -935,8 +962,19 @@ export function branchChange(cwords, dir = null) {
   if (create !== -1) return rest[create + 1] && !/[$`]/.test(rest[create + 1]) ? { created: rest[create + 1] } : { unknown: true };
   if (sub === 'checkout' && rest.includes('--')) return null;
   const operands = rest.filter(a => !a.startsWith('-'));
-  if (sub === 'checkout' && dir && operands.length && operands.every(p => !/[$`]/.test(p) && existsSync(resolve(dir, p)))) return null;
+  if (sub !== 'checkout' || operands.some(p => /[$`]/.test(p))) return { unknown: true };
+  if (operands.length >= 2) return null;
+  if (dir && operands.length === 1 && existsSync(resolve(dir, operands[0])) && !namesRef(dir, operands[0])) return null;
   return { unknown: true };
+}
+
+/** Whether `name` is a revision git would check out in `dir` (branch, tag, commit) or a remote branch it would follow. */
+function namesRef(dir, name) {
+  const run = args => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 });
+  const rev = run(['rev-parse', '--verify', '--quiet', '--end-of-options', `${name}^{commit}`]);
+  if (rev.status === 0 || rev.error) return true;
+  const remote = run(['for-each-ref', '--count=1', '--format=%(refname)', `refs/remotes/*/${name}`]);
+  return remote.status !== 0 || Boolean(remote.stdout.trim());
 }
 
 /** Whether a path is a folder that exists. */
@@ -1279,7 +1317,7 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
   if (anchorInCommand(command)) return { decision: 'deny', reason: REASONS.anchorStore };
   const flat = flatten(command);
   const mergeApi = mergeApiInCommand(command);
-  const { segments, shadow, scripts } = tokenize(command);
+  const { segments, shadow, scripts, after } = tokenize(command);
   // Where the tool is active (docs/PLUGIN.md, « Portée des crochets »), every rule; elsewhere, the rules that protect the
   // key and the stores of every project, and the ones that held before the rules. Relaxed only for a plain command
   // (commandScope) whose repository, folders and remotes are known to be outside the tool (context.apvProject); a merge
@@ -1359,8 +1397,9 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
     const change = branchChange(cwords, dir);
     if (change !== null) {
       // The new branch is believed only when the next command runs after its success (`&&`): after `;` or `||`, a
-      // creation that failed (the branch exists) leaves the shell on the branch it was on.
-      const followedByAnd = new RegExp(`${change.created ? change.created.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '\\0'}\\s*&&`).test(flat);
+      // creation that failed (the branch exists) leaves the shell on the branch it was on. The operator is the one that
+      // follows this very command, read by the tokenizer (`git checkout -b x main && …`, never an `x &&` further on).
+      const followedByAnd = after[index] === '&&';
       if (change.created && followedByAnd) branchSet = change.created;
       else if (change.created || change.unknown) { dirKnown = false; branchSet = null; }
     }

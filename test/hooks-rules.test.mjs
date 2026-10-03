@@ -565,7 +565,7 @@ test('review of 440d57d: no false block on computed paths and quoted text; tee, 
   const lead = { ...as(null), cwd: '/r' };
   // N1, N7: commands that passed before stay free.
   for (const command of ['rm -rf "$tmp" && git clone https://github.com/o/r.git "$tmp"', 'mv "$f" dist/ && cat .git/HEAD', 'chmod +x "$script" && git commit -m "fix .git hooks"',
-    "grep -c '>' .git/apv/receipts/x.json", 'python3 tools/inspect.py .git/apv/receipts', 'rm -rf "$HOME/apps/x"']) {
+    "grep -c '>' .git/apv/receipts/x.json", 'rm -rf "$HOME/apps/x"']) {
     assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
   }
   // N6: writes by other commands, and a path made of several pieces set by the line.
@@ -747,4 +747,35 @@ test('review of 7e28f63: options of any interpreter, receipts globbed by a loop,
     "git commit -m \"$(cat <<'EOF'\nretour : git checkout et git switch cités\nEOF\n)\" && git push"]) {
     assert.equal(evaluateCommand(command, {}, fromFeat).decision, 'allow', command);
   }
+});
+
+test('review of c65f8c5: the operator after the creation itself, files from a commit, a folder named as a branch, rg and tree, a glob that climbs', async t => {
+  const { hookContext } = await import('../hooks/scripts/harness-guard.mjs');
+  const lead = { ...as(null), cwd: '/r' };
+  // Any program the guard does not know to only read, handed a path in a store, may write it (review of c65f8c5, high).
+  for (const command of ['python3 -m json.tool /tmp/forged.json .git/apv/receipts/run/01-tests.json', 'python3 -m compileall .git/apv/receipts',
+    'python3 tools/inspect.py .git/apv/receipts', 'python3.12 -m gzip .git/apv/receipts/run/x.json', 'node --loader x .git/apv/receipts/x', 'deno run s.ts .git/apv/receipts/x',
+    'uv run x.py .git/apv/receipts/r.json', 'bash script.sh .git/apv/receipts', './tools/fix .git/apv/receipts/r.json', 'sed -n p .git/apv/receipts/r.json']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ["rg --pre rm '' .git/apv", 'rg --pre=sh x .', 'rg --hostname-bin=./x foo', 'rg x .git/apv/receipts/*', 'tree -o .git/apv/receipts/r.json .git/apv/receipts',
+    'tree .git/apv/receipts/*', 'cat .git/apv/receipts/.?/o*/m*', 'cat .git/apv/receipts/..*/operator/x']) {
+    assert.deepEqual(evaluateCommand(command, {}, lead), { decision: 'deny', reason: REASONS.anchorStore }, command);
+  }
+  for (const command of ['rg -n TODO src', 'ls .git/apv/receipts/*', 'cat .git/apv/receipts/*/summary.json']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  const root = mkdtempSync(join(tmpdir(), 'apv3-fin4-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=T', '-c', 'user.email=t@l', ...args], { cwd, stdio: 'pipe' });
+  const main = join(root, 'principal'); mkdirSync(main); git(main, 'init', '-q', '-b', 'main');
+  mkdirSync(join(main, '.apv')); writeFileSync(join(main, '.apv', 'config.json'), '{}'); writeFileSync(join(main, 'package-lock.json'), '{}'); git(main, 'add', '-A'); git(main, 'commit', '-qm', 'x');
+  const feat = join(root, 'copie'); git(main, 'worktree', 'add', '-q', '-b', 'feat', feat);
+  mkdirSync(join(feat, 'main'));
+  const fromMain = hookContext({ cwd: main }, { HOME: root }); const fromFeat = hookContext({ cwd: feat }, { HOME: root });
+  // A failed creation (`feat` exists) leaves the shell on main, even with `feat &&` further on the line.
+  assert.equal(evaluateCommand('git checkout -b feat; git commit -am "wip feat" && git push origin HEAD', {}, fromMain).decision, 'deny');
+  for (const command of ['git switch -c fix origin/main && git push -u origin HEAD', 'git checkout -b fix main && git push -u origin HEAD',
+    'git checkout HEAD package-lock.json && git push', 'git checkout main package-lock.json && git push']) {
+    assert.equal(evaluateCommand(command, {}, fromFeat).decision, 'allow', command);
+  }
+  assert.equal(evaluateCommand('git checkout main && git push', {}, fromFeat).decision, 'deny', 'a folder named as a branch');
 });

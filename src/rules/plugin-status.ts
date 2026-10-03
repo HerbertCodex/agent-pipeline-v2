@@ -137,13 +137,15 @@ export function claudeDir(env: NodeJS.ProcessEnv): string {
 
 /**
  * The settings files that apply in `repo`, in order of precedence (the last wins), as Claude Code ranks them: account,
- * then the project files (of the main checkout when `repo` is one of its worktrees, then of `repo`), then the local
- * files in the same order.
+ * the project file of `repo` (read in the folder of the session), then the local file. In a worktree, Claude Code keeps
+ * and reads the local file at the root of the main checkout, never the worktree's own (code.claude.com/docs/en/settings,
+ * « Where Claude Code keeps the local file in a git repository »).
  */
 const settingsFiles = (dir: string, repo: string | null): string[] => {
-  const main = repo ? mainCheckout(repo) : null;
-  const roots = [...(main && repo && main !== resolve(repo) ? [main] : []), ...(repo ? [repo] : [])];
-  return [join(dir, 'settings.json'), ...roots.map(r => join(r, '.claude', 'settings.json')), ...roots.map(r => join(r, '.claude', 'settings.local.json'))];
+  if (!repo) return [join(dir, 'settings.json')];
+  const main = mainCheckout(repo);
+  const local = main && main !== resolve(repo) ? main : repo;
+  return [join(dir, 'settings.json'), join(repo, '.claude', 'settings.json'), join(local, '.claude', 'settings.local.json')];
 };
 
 /**

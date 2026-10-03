@@ -12,6 +12,8 @@ import type { MergeRule } from './config.js';
 export declare const OPERATOR_JOURNAL: readonly ["apv", "operator", "messages.jsonl"];
 /** Written by the hook when it refuses a prompt (source absent or not the operator's): its date and reason, never the text. */
 export declare const OPERATOR_REFUSED: readonly ["apv", "operator", "refused.json"];
+/** Written by the seal hook, one file per review it could not seal (`<id>.json`), removed once that domain is sealed. */
+export declare const OPERATOR_SEAL_NOTES: readonly ["apv", "operator", "sceau"];
 /** Days a line of the journal is kept by default (`rules.journalDays`). */
 export declare const DEFAULT_JOURNAL_DAYS = 90;
 /** In-process tests only: the anchor key file. No option nor variable of the tool changes it. */
@@ -95,10 +97,14 @@ export interface JournalState {
 }
 export declare function journalState(common: string): JournalState;
 /**
- * Forgets the note of the seal hook about the review `id` once that review is sealed: the note no longer holds. A note
- * about another review, or a refused message, stays.
+ * Forgets the notes of the seal hook once the review `id` of `domain` is sealed: the note about that review, and those
+ * about earlier reviews of the same domain, which this one replaces (each record gets a new id, so a note kept for its
+ * own id only would stay for good; the unsealed record itself is still said by `apv review show`). A note about another
+ * domain, or a refused message, stays. A note of the former single file (`refused.json`) is forgotten the same way.
  */
-export declare function clearSealRefusal(common: string, id: string): void;
+export declare function clearSealRefusal(common: string, id: string, domain?: string | null): void;
+/** Notes, for `apv status`, that the seal hook could not seal the review `id` of `domain`: date, id, domain and reason. */
+export declare function recordSealRefusal(common: string, id: string, domain: string, reason: string, now?: Date): void;
 /** Notes, for `apv status`, that the hook refused a prompt: date and reason, never the text. */
 export declare function recordRefusal(common: string, reason: string, now?: Date): void;
 /**

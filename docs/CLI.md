@@ -784,7 +784,7 @@ Résumé de l'état du projet : fichier de configuration (et format V2 le cas é
 - les règles de fusion que l'outil applique et que le plugin installé ne connaît pas (catalogue `docs/merge-rules.json` de chacun, lu au commit d'installation, sinon par la version qui les apporte), avec ce qu'elles exigent et la commande de mise à jour ;
 - « Mise à jour à venir » : les règles qu'ajoute la branche suivie par la copie de l'outil, telle que récupérée (`git fetch`), pour réunir ce qu'elles exigent avant de mettre à jour l'outil et le plugin ensemble (« règles non lues » quand le catalogue de cette version manque à la copie). Lancé depuis la copie installée, l'outil lit la prochaine version dans le dossier de la marketplace locale.
 
-Sous le journal de l'opérateur, `apv status` dit aussi qu'une relecture n'a pas pu être scellée par le crochet du sceau (date, identifiant). Cette note s'efface quand cette même relecture est scellée.
+Sous le journal de l'opérateur, `apv status` dit aussi qu'une relecture n'a pas pu être scellée par le crochet du sceau (date, identifiant, domaine). Cette note s'efface dès qu'une relecture du même domaine est scellée ensuite, celle-ci ou celle qui la remplace (une nouvelle relecture reçoit toujours un nouvel identifiant) ; la relecture non scellée reste signalée par `apv review show`.
 
 En JSON, `runs` liste les exécutions lues, terminées comprises, et `runsUnread` le nombre de fichiers d'état laissés de côté (50 fichiers et 16 Mio au plus, les plus récents d'abord). Les noms de fichiers, titres et erreurs affichés sont nettoyés (une ligne, sans séquence d'échappement ni caractère de contrôle). La commande ne modifie rien et sort toujours avec `0`, sauf appel incorrect.
 

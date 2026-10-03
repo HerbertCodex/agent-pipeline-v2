@@ -6,7 +6,8 @@
   - **Crochet de poussée.**
     - Un `cd` n'est suivi que vers un dossier qui existe et où l'on peut entrer.
     - Le dossier devient inconnu, donc compté comme la branche par défaut, dans ces cas : `cd` vers un dossier absent ou fermé, dossier créé par la ligne, substitution dans les mots du `cd`, `git switch` ou `git checkout` (sauf de fichiers), ou `git symbolic-ref`, plus tôt dans la ligne ou dans un script qu'elle lance, les options globales de git passées (`git -C . switch main`). Un message de commit qui cite `git checkout` ne compte pas.
-    - Après `git checkout -b x` ou `git switch -c x` suivi de `&&`, la branche est `x` ; après `;` ou `||`, elle est inconnue (une création ratée laisse la branche de départ). `git checkout -- f` et le checkout de fichiers qui existent ne changent rien.
+    - Quand la commande même de création, `git checkout -b x` ou `git switch -c x` (point de départ compris), est suivie de `&&`, la branche est `x` ; suivie de `;` ou `||`, elle est inconnue (une création ratée laisse la branche de départ). L'opérateur est lu par le découpage de la ligne, jamais un `x &&` plus loin.
+    - Ne changent rien : `git checkout -- f`, `git checkout <commit> <chemins>`, et le checkout d'un seul chemin qui existe sans nommer de branche, d'étiquette ni de branche distante.
     - Une substitution est jugée dans le dossier où elle tourne.
     - Sont aussi refusés `heads/main`, `@`, les motifs `refs/*:refs/*` et `r*:r*`, et `:`.
     - `HOME` ou `XDG_CONFIG_HOME` posées par `read` ou `printf -v` gardent l'outil actif.
@@ -14,14 +15,15 @@
   - **Crochet des magasins.**
     - Seules les vraies affectations sont lues, plus celles d'`export`, `declare`, `local`, `env` et `sudo`, et une affectation seule exportée ensuite, posée sous `set -a` ou propre à git. Ainsi `dd if=`, `echo key=…` et `f=…; jq . "$f"` passent, mais `export GIT_TRACE=<magasin>` est refusé.
     - Une variable bâtie sur un morceau (`e=${d}t`) reste suivie.
-    - Un interpréteur qui reçoit un script en ligne, quelles que soient ses options (`perl -MFile::Path -le`, `ruby -x -e`, `awk -v p=… '…'`, `python3 -c"…"`), est refusé dès que sa ligne nomme `.git/apv` ou lui passe un opérande qui y mène, même pour lire : dans le doute, le crochet refuse.
+    - Un interpréteur qui reçoit un script en ligne, quelles que soient ses options (`perl -MFile::Path -le`, `ruby -x -e`, `awk -v p=… '…'`, `python3 -c"…"`), est refusé dès que sa ligne nomme `.git/apv`, même pour lire : dans le doute, le crochet refuse.
+    - Tout programme qui n'est pas un simple lecteur (`cat`, `head`, `jq`, `grep`, `ls`, `stat`, `sha256sum`...) et reçoit un chemin dans les magasins est refusé comme un écrivain, même pour lire : `python3 -m json.tool f .git/apv/receipts/r.json` écrivait un reçu forgé, comme `deno run`, `node --loader` ou un script du projet. Ce qu'il lit par `<` ne compte pas. `rg --pre`, `--pre-glob`, `--hostname-bin` et `tree -o` sont refusés.
     - Un interpréteur sans fichier de script n'est jugé que sur son propre heredoc ou sur ce qui lui arrive par un tube : `node --version` après un heredoc passe. `gawk -i inplace` compte comme une écriture.
     - `rm -rf .git/$(…)`, `-->`, `=>` et les substitutions entre guillemets sont jugés, ainsi qu'un argument relatif `apv` après un `cd` calculé, et une variable exportée dont la valeur calculée mène aux magasins.
-    - Un motif qui ne peut atteindre que les reçus (`cat .git/apv/receipts/*.json`) se lit librement, mais seulement par une commande de lecture seule sur sa ligne, sans redirection ; les chemins sont normalisés (`..`, `.`) avant le contrôle. Une boucle, `set --`, un éditeur ou un écrivain sur la ligne referment cette exception.
+    - Un motif qui ne peut atteindre que les reçus (`cat .git/apv/receipts/*.json`) se lit librement, mais seulement par un simple lecteur (ni `rg` ni `tree`) seul sur la ligne, sans tube, enchaînement ni redirection ; les chemins sont normalisés (`..`, `.`) avant le contrôle, et un segment de motif qui peut valoir `..` (`.?`, `..*`) compte comme une remontée.
     - Un script ou une substitution lancés par la ligne sont jugés dans le dossier où ils tournent.
     - Le répertoire Git d'un dépôt nu (`proj.git`) est reconnu ; un worktree qu'il contient ne l'est pas.
-  - **Verrou compagnon.** Un repli n'est retenu que s'il est un vrai dossier de ce compte, fermé aux autres. Les tests ne laissent plus ni verrou compagnon ni clé de test dans HOME ou /tmp, même arrêtés par un signal (les dossiers jetables des tests restent dans le dossier temporaire du système, comme avant).
-  - **Sceau.** Sceller une relecture efface la note qui disait que cette même relecture n'avait pas pu être scellée ; la note d'une autre relecture reste. La note porte toujours l'identifiant de la relecture.
+  - **Verrou compagnon.** Un repli n'est retenu que s'il est un vrai dossier de ce compte, fermé aux autres. Les tests ne laissent plus de verrou compagnon dans HOME. La clé de test est retirée à la fin des tests, même arrêtés par SIGINT, SIGTERM ou SIGHUP (pas SIGKILL, qui ne s'intercepte pas) ; les dossiers jetables des tests, verrous compagnons compris, restent dans le dossier temporaire du système quand le processus est tué, comme avant.
+  - **Sceau.** Une note par relecture que le crochet n'a pas pu sceller (`apv/operator/sceau/<id>.json`, écrite d'un bloc : plusieurs relecteurs tournent en même temps), avec son identifiant et son domaine. Sceller une relecture du même domaine l'efface, celle-ci ou celle qui la remplace (chaque enregistrement a un nouvel identifiant) ; la note d'un autre domaine et le message refusé restent. `apv status` montre la plus récente.
   - **`apv status`.**
     - Il compare aussi `dist/`.
     - Il dit si le plugin est plus récent que l'outil ou d'une autre branche.
@@ -30,7 +32,7 @@
     - L'entrée de format ancien sans portée est reconnue, et l'installation pour le projet aussi depuis un worktree.
     - « Règles non lues » remplace « aucune nouvelle règle » quand le catalogue manque.
     - Le commit d'installation est validé avant tout appel à git, et une clé de plugin qui n'est pas un nom simple est écartée ; seule, elle est dite (« nom de plugin apv invalide »).
-    - Les réglages du checkout principal comptent depuis un de ses worktrees, dans l'ordre de Claude Code (projet puis local).
+    - Depuis un worktree, les réglages sont lus comme Claude Code les lit : le `settings.json` du worktree, puis le `settings.local.json` du checkout principal seul (documentation des réglages de Claude Code, « Where Claude Code keeps the local file in a git repository »).
     - Seuls les fichiers ordinaires sont lus (un FIFO ne bloque plus).
     - Un refus du sceau est affiché sous son propre libellé.
   - **README.** Restauration de la clé sous `umask 077`, sans écho, dossier remis en 0700 ; vérification de `~` face au dossier du compte ; le dernier recours n'archive que les relectures et les traces de fusion ; badge à jour.
