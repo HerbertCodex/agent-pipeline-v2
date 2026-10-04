@@ -143,6 +143,12 @@ export interface GateRunResult {
      * ports it checks, and whose place it holds in the queue. Empty outside a full suite.
      */
     stacksUsed: string[];
+    /**
+     * The declared stacks whose lock and ports the suite really checks: those it uses, or every one when a check has a
+     * lock of no declared stack (`stacksUnmapped`, those checks). Empty outside a full suite.
+     */
+    stacksChecked: string[];
+    stacksUnmapped: string[];
     /** The preparation of the copy of the suite (`batch.setup`, a package-lock.json without node_modules); null when none was needed. */
     setup: MainSetup | null;
     /**

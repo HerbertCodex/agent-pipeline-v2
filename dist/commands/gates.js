@@ -524,7 +524,7 @@ export async function run(args, io) {
                 stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
                 reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
                 sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
-                suite: result.suite, notRequired: result.notRequired, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, stacksUsed: result.stacksUsed, setup: result.setup, interruptedStacks: result.interruptedStacks, infrastructure: result.infrastructure, interrupted: received,
+                suite: result.suite, notRequired: result.notRequired, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, stacksUsed: result.stacksUsed, stacksChecked: result.stacksChecked, stacksUnmapped: result.stacksUnmapped, setup: result.setup, interruptedStacks: result.interruptedStacks, infrastructure: result.infrastructure, interrupted: received,
                 rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
                     level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
         }
@@ -540,8 +540,13 @@ export async function run(args, io) {
                 const places = q.places && (q.places.length > 1 || q.slots !== 1) ? ` ; places tenues : ${q.places.join(', ')} (slots ${q.slots})` : '';
                 lines.push(`File des suites complètes : ${q.waitedMs >= 1000 ? `attendu ${Math.round(q.waitedMs / 1000)} s${q.heldBy ? ` (tenue par ${q.heldBy})` : ''}` : 'libre'}${places}${load}.`);
             }
-            if (result.suite && result.stacksUsed.length)
-                lines.push(`Piles utilisées par la suite (seules vérifiées : verrous et ports) : ${result.stacksUsed.join(', ')}.`);
+            if (result.suite && result.stacksUnmapped.length && result.stacksChecked.length) {
+                lines.push(`Piles vérifiées par la suite (verrous et ports) : toutes (${result.stacksChecked.join(', ')}), un verrou n'est celui d'aucune pile déclarée (${result.stacksUnmapped.join(', ')}).`);
+            }
+            else if (result.suite && result.stacksChecked.length)
+                lines.push(`Piles vérifiées par la suite (verrous et ports) : ${result.stacksChecked.join(', ')} (celles qu'elle utilise).`);
+            else if (result.suite && (loaded.config.stacks ?? []).length)
+                lines.push('Piles vérifiées par la suite : aucune (aucun contrôle ne verrouille une pile déclarée).');
             if (result.setup)
                 lines.push(result.setup.status === 'done' ? `Copie de la suite préparée (${result.setup.reason}) : ${result.setup.command.join(' ')}, ${Math.round(result.setup.durationMs / 1000)} s.`
                     : `ATTENTION : copie de la suite non préparée (${result.setup.reason}), aucun batch.setup déclaré.`);

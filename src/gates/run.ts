@@ -140,6 +140,12 @@ export interface GateRunResult {
    * ports it checks, and whose place it holds in the queue. Empty outside a full suite.
    */
   stacksUsed: string[];
+  /**
+   * The declared stacks whose lock and ports the suite really checks: those it uses, or every one when a check has a
+   * lock of no declared stack (`stacksUnmapped`, those checks). Empty outside a full suite.
+   */
+  stacksChecked: string[];
+  stacksUnmapped: string[];
   /** The preparation of the copy of the suite (`batch.setup`, a package-lock.json without node_modules); null when none was needed. */
   setup: MainSetup | null;
   /**
@@ -437,6 +443,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const checkedStacks = usage.unmapped.length ? stacks : stacks.filter(s => usage.used.includes(s.id));
   const portList = suitePorts(settings.ports, stacks, checkedStacks.map(s => s.id));
   if (suite && usage.unmapped.length && stacks.length) log(`${usage.unmapped.join(', ')} : verrou qui n'est celui d'aucune pile déclarée ; la suite vérifie et tient toutes les piles (${stacks.map(s => s.id).join(', ')}).`);
+  if (suite && stacks.length && !checkedStacks.length) log(`Aucun contrôle de la suite ne verrouille une pile déclarée (${stacks.map(s => s.id).join(', ')}) : aucune pile vérifiée, ni son verrou ni ses ports.`);
   let setup: MainSetup | null = null;
   // The queue of the full suites, then the load: every timeout of a check starts after them.
   let queue: QueueHandle | null = null;
@@ -819,11 +826,11 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     const result: GateRunResult = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
       reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, shared: null, suite, notRequired: [...notRequired.keys()], scope: [...scopeDecisions.values()],
       queue: queue?.record ?? null, ports, flaky, cleanup, stoppedStacks, infrastructure: classifyFailures(list, missingEnv), spread: spreadRecord,
-      stacksUsed: suite ? usage.used : [], setup, interruptedStacks,
+      stacksUsed: suite ? usage.used : [], stacksChecked: suite ? checkedStacks.map(s => s.id) : [], stacksUnmapped: suite ? usage.unmapped : [], setup, interruptedStacks,
       ok: list.every(r => success(r) || r.status === 'not_required') };
     writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
       reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}), ...(options.since ? { since: options.since } : {}),
-      ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup, stacksUsed: result.stacksUsed } : {}), ...(setup ? { setup } : {}),
+      ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup, stacksUsed: result.stacksUsed, stacksChecked: result.stacksChecked } : {}), ...(setup ? { setup } : {}),
       ...(interruptedStacks.length ? { interruptedStacks } : {}), ...(spreadRecord ? { spread: spreadRecord } : {}), ...(stoppedStacks.length ? { stoppedStacks } : {}),
       ...(result.infrastructure.causes.length ? { infrastructure: result.infrastructure } : {}),
       receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),
