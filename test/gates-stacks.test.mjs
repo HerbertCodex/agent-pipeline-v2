@@ -26,7 +26,7 @@ setTimeout(() => { fs.writeFileSync(${JSON.stringify(out)} + "/${name}.json", JS
   const stackGate = name => ({ id: name, stage: 'full', command: record(name), timeoutMs: 60_000, passEnv: ['STACK', 'STACK_URL', 'LOCK_FILE', 'IGNORED'],
     resources: ['project-checks'], lock: { file: lock1, fileEnv: 'LOCK_FILE' } });
   write(f.repo, '.apv/config.json', {
-    gates: [{ id: 'unit', command: [process.execPath, '-e', '0'], resources: ['project-checks'] }, stackGate('integration'), stackGate('browser')],
+    gates: [{ id: 'unit', command: [process.execPath, '-e', 'setTimeout(() => {}, Number(process.env.UNIT_MS ?? 0))'], passEnv: ['UNIT_MS'], resources: ['project-checks'] }, stackGate('integration'), stackGate('browser')],
     stacks: [
       { id: '1', lockFile: lock1, env: { STACK: '1', STACK_URL: 'http://127.0.0.1:55321' } },
       { id: '2', lockFile: lock2, env: { STACK: '2' }, envFile: join(f.root, 'stack2.env') },
@@ -42,7 +42,9 @@ setTimeout(() => { fs.writeFileSync(${JSON.stringify(out)} + "/${name}.json", JS
 
 test('--stacks 1,2: the checks of a stack are dealt to the stacks, in parallel, each with its variables, lock and copy', { skip: !hasFlock && 'flock(1) missing' }, async t => {
   const p = project(t);
-  const r = await p.run('--stacks', '1,2', '--json');
+  // UNIT_MS: the check unit holds project-checks in the copy of the suite longer than a check of a stack lasts, as a
+  // loaded machine does; integration starts late there, browser does not wait for it in its own copy.
+  const r = await apv(p.repo, ['gates', 'run', '--stacks', '1,2', '--json'], { ...p.env, UNIT_MS: '2000' });
   assert.equal(r.code, 0, r.stdout + r.stderr);
   const result = r.json();
   assert.deepEqual(result.spread.map(a => [a.gate, a.stack, a.workspace === realpathSync(p.repo)]), [['integration', '1', true], ['browser', '2', false]]);
