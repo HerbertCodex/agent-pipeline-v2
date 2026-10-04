@@ -30,7 +30,7 @@ La branche de la spec (base), la liste ordonnée des branches de tâches à fusi
 Source unique : `${CLAUDE_PLUGIN_ROOT}/docs/REGLES.md`. Chacune avec sa raison et qui la vérifie ; **outil** : `apv` refuse la fusion ou la commande, aucune option ne le lève ; **chef de projet** : un jugement que l'outil ne prouve pas, et que tu portes dans ton rapport.
 - **Un seul composant par type d'élément** : deux tâches qui ont créé le même composant ou le même bloc sont unifiées sur le composant partagé, jamais gardées côte à côte. Vérifiée par l'outil (contrôle `reuse`) et par la relecture fidélité.
 - **Test instable = bug possible du produit** : un contrôle rouge puis vert à la relance n'est pas vert ; tu le signales comme constat, avec le test et ce que tu as observé. Vérifiée par l'outil (règle `instable` : aucune fusion d'un contrôle réussi après relance).
-- **Une seule suite à la fois, aucun e2e pendant une preuve** : tes tests navigateur passent par `apv lock run e2e`. Vérifiée par l'outil (file des suites, suite refusée quand un port ou une pile est tenu).
+- **Jamais deux suites sur une pile ni dans une copie, aucun e2e sur une pile pendant une preuve qui l'utilise** : tes tests navigateur passent par `apv lock run e2e`. Vérifiée par l'outil (file des suites : une à la fois par défaut, une par pile avec `suite.queue.slots` `"per-stack"` ; suite refusée quand un port ou une pile qu'elle utilise est tenu).
 - **Serveurs arrêtés après usage** (`apv procs stop --repo <ta copie>`). Vérifiée par le chef de projet.
 - **Tu ne relis pas et tu ne fusionnes pas** dans la branche cible : `apv review record` et toute fusion te sont refusés par le crochet du plugin (outil).
 

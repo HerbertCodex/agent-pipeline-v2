@@ -6,7 +6,7 @@ import { VERSION } from '../domain/contracts.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { runProcess } from '../execution/process.js';
 import { assertProcSupported, listProcesses, protectedTool, sessionPids, stopProcesses } from '../execution/procs.js';
-import { enterQueue, markedProcesses, waitForLoad } from '../gates/suite.js';
+import { enterQueue, markedProcesses, queuePlaces, waitForLoad } from '../gates/suite.js';
 import { gitRead } from '../run/git-probe.js';
 import { findBrowser, lighthouseCommand } from './chrome.js';
 import { defaultMaxLoad } from './config.js';
@@ -242,7 +242,9 @@ function queueFile(repo, lockFile) {
 /**
  * The queue of the full suites around a measure (`suite.queue`), taken by the caller before anything else (before the
  * preview lock and its build): no suite runs while Lighthouse measures. Inside a full suite (`APV_SUITE_RUN`), the suite
- * already holds it: never taken twice. `web.queue` false or the queue disabled: none.
+ * already holds every place (a suite with a check that runs `apv web audit` takes them all, src/gates/run.ts): never
+ * taken twice. Every place is taken (the whole queue, each numbered place of
+ * `suite.queue.slots`, each declared stack), so that no suite runs beside the measure whatever `slots` says. `web.queue` false or the queue disabled: none.
  */
 export async function enterAuditQueue(options) {
     if (options.env['APV_SUITE_RUN'])
@@ -254,7 +256,9 @@ export async function enterAuditQueue(options) {
     mkdirSync(join(lockFile, '..'), { recursive: true });
     // The load is waited for run by run (runAudit): the queue alone here.
     const handle = await enterQueue({ lockFile, settings: { ...options.suiteQueue, maxLoad: undefined }, repo: options.repo, log: options.log, signal: options.signal,
-        hooks: options.hooks, label: `apv web audit (${options.repo})`, purpose: 'mesure Lighthouse' });
+        hooks: options.hooks, label: `apv web audit (${options.repo})`, purpose: 'mesure Lighthouse',
+        // Every place of the queue: the whole queue, each numbered place, each stack (suite.queue.slots lets suites run side by side).
+        places: queuePlaces(options.suiteQueue.slots, { used: [], declared: options.stackIds ?? [], all: true }) });
     return { handle, record: { held: true, waitedMs: handle.record.waitedMs, reason: `file des suites complètes (${lockFile})` } };
 }
 /** Name of an audit folder: only folders with such a name (and a summary) are ever removed by the retention. */

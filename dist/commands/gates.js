@@ -75,8 +75,17 @@ dans l'état de l'exécution et écrite dans les reçus (override).
 Suite complète (au moins un contrôle de stage full exécuté en entier) : refusée sur un arbre modifié
 (fichiers suivis modifiés ou non suivis hors ignorés, listés) sauf --allow-dirty (reçus non prouvants) ;
 puis file des suites complètes (section suite.queue, active par défaut : un verrou à bail commun aux
-worktrees, et si suite.queue.maxLoad est posé, attente d'une charge sur 1 min sous ce seuil) ; puis arrêt
-des orphelins de cette copie sur suite.ports (jamais une autre copie ni le checkout principal). Les
+worktrees ; la suite tient la place de sa copie (jamais deux suites dans la même copie), puis celle de
+chaque pile qu'elle utilise, et avec slots 1 (défaut) la file entière, avec slots per-stack une suite
+par pile en même temps, avec slots N une des N places ; un contrôle qui lance apv web audit lui fait
+tenir toutes les places ; et si suite.queue.maxLoad est posé, attente d'une charge sur 1 min sous ce
+seuil) ; puis arrêt des orphelins de cette copie sur suite.ports (jamais une autre copie ni le
+checkout principal) ; puis, une copie avec package-lock.json sans node_modules, batch.setup (échec :
+refus GATE_SETUP ; jamais dans le checkout principal). Seules les piles utilisées (celles de
+--stacks, sinon celles que verrouillent les contrôles ; toutes pour un verrou hors pile) et leurs
+ports sont vérifiés : --stacks 2 ne refuse pas pour un verrou ou un port de la pile 1. Un contrôle arrêté
+(annulation, délai) sous le verrou d'une pile fait relire la pile après l'arrêt (conteneurs de
+dockerProject comparés au départ) : un conteneur disparu ou arrêté est signalé. Les
 délais des contrôles ne commencent qu'après. Un contrôle avec lock attend son verrou (bail apv lock ou
 flock) avant que son délai commence ; un contrôle avec retryFailed qui échoue relance une fois ses tests
 en échec, même commit et même arbre : « réussi après relance » (instable), compté comme réussi et
@@ -517,7 +526,7 @@ export async function run(args, io) {
                 stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
                 reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
                 sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
-                suite: result.suite, notRequired: result.notRequired, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, infrastructure: result.infrastructure, interrupted: received,
+                suite: result.suite, notRequired: result.notRequired, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, stacksUsed: result.stacksUsed, stacksChecked: result.stacksChecked, stacksUnmapped: result.stacksUnmapped, setup: result.setup, interruptedStacks: result.interruptedStacks, infrastructure: result.infrastructure, interrupted: received,
                 rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
                     level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
         }
@@ -530,8 +539,19 @@ export async function run(args, io) {
             const q = result.queue;
             if (q) {
                 const load = q.load ? ` ; charge sur 1 min au démarrage ${q.load.atStart.toFixed(2)} (seuil ${q.load.max}${q.load.waitedMs >= 1000 ? `, attendu ${Math.round(q.load.waitedMs / 1000)} s` : ''}${q.load.exceeded ? ', délai d\'attente de la charge dépassé : démarrée quand même' : ''})` : '';
-                lines.push(`File des suites complètes : ${q.waitedMs >= 1000 ? `attendu ${Math.round(q.waitedMs / 1000)} s${q.heldBy ? ` (tenue par ${q.heldBy})` : ''}` : 'libre'}${load}.`);
+                const places = q.places && (q.places.length > 1 || q.slots !== 1) ? ` ; places tenues : ${q.places.join(', ')} (slots ${q.slots})` : '';
+                lines.push(`File des suites complètes : ${q.waitedMs >= 1000 ? `attendu ${Math.round(q.waitedMs / 1000)} s${q.heldBy ? ` (tenue par ${q.heldBy})` : ''}` : 'libre'}${places}${load}.`);
             }
+            if (result.suite && result.stacksUnmapped.length && result.stacksChecked.length) {
+                lines.push(`Piles vérifiées par la suite (verrous et ports) : toutes (${result.stacksChecked.join(', ')}), un verrou n'est celui d'aucune pile déclarée (${result.stacksUnmapped.join(', ')}).`);
+            }
+            else if (result.suite && result.stacksChecked.length)
+                lines.push(`Piles vérifiées par la suite (verrous et ports) : ${result.stacksChecked.join(', ')} (celles qu'elle utilise).`);
+            else if (result.suite && (loaded.config.stacks ?? []).length)
+                lines.push('Piles vérifiées par la suite : aucune (aucun contrôle ne verrouille une pile déclarée).');
+            if (result.setup)
+                lines.push(result.setup.status === 'done' ? `Copie de la suite préparée (${result.setup.reason}) : ${result.setup.command.join(' ')}, ${Math.round(result.setup.durationMs / 1000)} s.`
+                    : `ATTENTION : copie de la suite non préparée (${result.setup.reason}), aucun batch.setup déclaré.`);
             if (result.ports?.stopped.length)
                 lines.push(`Orphelins de cette copie arrêtés sur les ports de la suite : ${result.ports.stopped.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}.`);
             if (result.ports?.wait)
@@ -549,6 +569,8 @@ export async function run(args, io) {
                 lines.push(`Fin de suite : orphelins de cette copie arrêtés sur les ports de la suite : ${end.ports.stopped.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}.`);
             if (received)
                 lines.push(`Interrompu par ${received} : contrôles annulés.`);
+            for (const x of result.interruptedStacks)
+                lines.push(`ATTENTION : pile ${x.stack} : ${x.gates.join(', ')} interrompu(s) sous son verrou, une remise à zéro a pu être coupée ; état relu : ${x.health.state} (${x.health.detail})${x.health.state === 'running' ? '' : ` ; avant la prochaine suite : apv stacks status, au besoin apv stacks start ${x.stack}`}.`);
             lines.push('', table(['contrôle', 'statut', 'code', 'durée'], [
                 ...rows.map(r => [name(r), STATUS[r.status] ?? r.status, r.exitCode === null ? '-' : String(r.exitCode), `${(r.durationMs / 1000).toFixed(1)} s`]),
                 ...result.reserved.map(id => [id, RESERVED, '-', '-'])
