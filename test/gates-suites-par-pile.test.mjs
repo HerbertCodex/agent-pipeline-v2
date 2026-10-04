@@ -419,3 +419,16 @@ test('a suite whose checks lock no declared stack checks none, and says so in it
   assert.match(r.stderr, /Aucun contrôle de la suite ne verrouille une pile déclarée \(1\) : aucune pile vérifiée, ni son verrou ni ses ports\./);
   assert.match(r.stdout, /Piles vérifiées par la suite : aucune \(aucun contrôle ne verrouille une pile déclarée\)\./);
 });
+
+test('a suite that runs apv web audit takes every place of the queue: no suite runs beside its measure, whatever slots', async t => {
+  const p = await project(t, { queue: { slots: 2 }, ports: false, gates: [{ id: 'web', stage: 'full', command: [process.execPath, '-e', '0', 'apv', 'web', 'audit', '--preview'] }] });
+  const r = await p.run(['--stacks', '2']);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.deepEqual(r.json().queue.places, [copyPlace('full-suite', p.repo), 'full-suite', 'full-suite-slot-1', 'full-suite-slot-2', 'full-suite-stack-1', 'full-suite-stack-2']);
+  assert.match(r.stderr, /web : lance apv web audit ; la suite tient toutes les places de la file \(aucune suite ne tourne pendant la mesure\)\./);
+  // Another suite, on the other stack, waits for it then: one numbered place held is enough to refuse it here.
+  await holdPlace(t, p.locks, 'full-suite-slot-1');
+  const refused = await p.run(['--stacks', '2']);
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /SUITE_QUEUE.*full-suite-slot-1/);
+});
