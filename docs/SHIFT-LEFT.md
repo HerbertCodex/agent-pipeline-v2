@@ -681,3 +681,11 @@ Scénarios de la personne cible (chef de projet APV et opérateur) :
 | Q11 | Mode d'isolation par défaut des piles Supabase : `prefix` ? | Oui : seul mode compatible avec l'API et l'authentification de Supabase, et il s'appuie sur une règle déjà exigée des tests. |
 | Q12 | Combien de suites complètes simultanées par défaut ? | Une par pile (`per-stack`), soit deux sur le pilote ; plus seulement en mode `database` et sous `maxLoad`. |
 | Q13 | Faut-il une troisième pile Docker ? | Non : l'isolation donne le même gain sans 2 à 3 Go de plus. À revoir si la mesure montre encore des attentes. |
+
+## 25. Décisions de l'opérateur (2026-10-04)
+
+Réponse de l'opérateur : « je suis tes recos a tes questions ».
+
+- Q1 à Q12 : recommandations retenues telles qu'écrites dans la section 24.
+- Q13 : une troisième pile Docker est ajoutée tout de suite, à titre provisoire, avec l'arrêt automatique après 20 minutes sans usage (`apv stacks idle-stop --watch`), en attendant l'isolation par worktree de la phase 0 bis. Elle sera retirée si la mesure montre que l'isolation suffit. Contrainte de l'opérateur : ne rien laisser tourner quand rien n'est en cours.
+- Spec validée : les phases de la section 22 se livrent dans l'ordre, une PR par phase.
