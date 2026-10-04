@@ -15,7 +15,7 @@ import { schedule, success } from '../engine/scheduler.js';
 import { suiteSettings, type ApvConfig } from '../config/load.js';
 import type { ProcessResult } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
-import { WEB_RECORD } from '../web/impact.js';
+import { WEB_RECORD, runsWebAudit } from '../web/impact.js';
 import { publishRun, pruneStore, receiptRetention, sharedStore, type PruneResult } from './store.js';
 import { readPreviewState } from '../preview/state.js';
 import { repositoryWorktrees } from '../execution/procs.js';
@@ -443,6 +443,10 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const checkedStacks = usage.unmapped.length ? stacks : stacks.filter(s => usage.used.includes(s.id));
   const portList = suitePorts(settings.ports, stacks, checkedStacks.map(s => s.id));
   if (suite && usage.unmapped.length && stacks.length) log(`${usage.unmapped.join(', ')} : verrou qui n'est celui d'aucune pile déclarée ; la suite vérifie et tient toutes les piles (${stacks.map(s => s.id).join(', ')}).`);
+  // A check that runs `apv web audit`: inside the suite the audit takes no place (APV_SUITE_RUN), so the suite takes
+  // every place for it, as the audit does alone: no suite runs while Lighthouse measures, whatever suite.queue.slots.
+  const measuring = suite ? runnable.filter(g => runsWebAudit(commands.get(g.id) ?? g.command)).map(g => g.id) : [];
+  if (measuring.length && settings.queue.enabled) log(`${measuring.join(', ')} : lance apv web audit ; la suite tient toutes les places de la file (aucune suite ne tourne pendant la mesure).`);
   if (suite && stacks.length && !checkedStacks.length) log(`Aucun contrôle de la suite ne verrouille une pile déclarée (${stacks.map(s => s.id).join(', ')}) : aucune pile vérifiée, ni son verrou ni ses ports.`);
   let setup: MainSetup | null = null;
   // The queue of the full suites, then the load: every timeout of a check starts after them.
@@ -460,7 +464,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   };
   if (suite && settings.queue.enabled) {
     queue = await enterQueue({ lockFile: await commonPath(git, repo, settings.queue.lockFile), settings: settings.queue, repo, log, signal: options.signal, hooks: options.hooks,
-      copy: repo, places: queuePlaces(settings.queue.slots, { used: usage.used, declared: stacks.map(s => s.id), unmapped: usage.unmapped.length > 0 }) });
+      copy: repo, places: queuePlaces(settings.queue.slots, { used: usage.used, declared: stacks.map(s => s.id), unmapped: usage.unmapped.length > 0, all: measuring.length > 0 }) });
   }
   // The containers of the stacks the suite checks, read before its checks: compared after a check interrupted under their lock.
   const containersBefore = new Map<string, StackContainer[]>();

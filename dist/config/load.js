@@ -14,6 +14,7 @@ import { gitRead } from '../run/git-probe.js';
 import { reviewAlwaysSchema, reviewPathsSchema, reviewTermsSchema } from '../review/config.js';
 import { stackIssues, stacksSchema } from '../stacks/config.js';
 import { webIssues, webSchema } from '../web/config.js';
+import { runsWebAudit } from '../web/impact.js';
 import { mapSchema, mapSettings, reuseSchema, reuseSettings } from '../reuse/config.js';
 import { rulesSchema, rulesSettings } from '../rules/config.js';
 import { testsCheckSchema } from '../testcheck/check.js';
@@ -308,7 +309,7 @@ export function configIssues(raw) {
         if (!scope)
             continue;
         // `apv web audit` decides its own scope (web paths, recomputed by verify): never mixed with skipWhenOnly.
-        const webAudit = [gate.command, gate.affected ?? []].some(argv => argv.some((x, i) => x === 'web' && argv[i + 1] === 'audit'));
+        const webAudit = [gate.command, gate.affected ?? []].some(runsWebAudit);
         list.check(!webAudit, 'CONFIG', `Gate ${gate.id}: skipWhenOnly cannot be declared on a check that runs apv web audit (the audit decides whether it is required from web.paths)`);
         for (const [field, globs] of [['paths', scope.paths], ['except', scope.except ?? []]]) {
             for (const glob of globs)
