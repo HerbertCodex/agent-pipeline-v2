@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ApvConfig } from '../config/load.js';
-import type { Gate } from '../domain/contracts.js';
+import type { Gate, ProcessResult } from '../domain/contracts.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import type { Git } from '../execution/git.js';
-import { environment, runProcess } from '../execution/process.js';
+import { environment, redact, runProcess } from '../execution/process.js';
 import { canonicalPath } from '../domain/paths.js';
 import { repositoryWorktrees } from '../execution/procs.js';
 import { readEnvFile } from '../stacks/config.js';
@@ -75,6 +75,17 @@ export async function planSpread(options: { git: Git; repo: string; common: stri
 }
 
 /**
+ * Runs `batch.setup` at the root of `dir` (HOME and `batch.passEnv` passed), bounded by `batch.setupTimeoutMs`: the
+ * result, and the tail of its output with the secrets of the environment redacted, ready to be said.
+ */
+async function runSetup(setup: readonly string[], dir: string, options: { config: ApvConfig; env: NodeJS.ProcessEnv; signal?: AbortSignal | undefined }): Promise<{ result: ProcessResult; output: string }> {
+  const env = environment([...options.config.environment.passEnv, 'HOME', ...(options.config.batch?.passEnv ?? [])], options.env);
+  const result = await runProcess({ command: [...setup], cwd: dir, env, timeoutMs: options.config.batch!.setupTimeoutMs, maxOutputBytes: 256 * 1024,
+    ...(options.signal ? { signal: options.signal } : {}) });
+  return { result, output: redact(`${result.stdout}\n${result.stderr}`.trim(), { ...env, ...options.env }).slice(-800) };
+}
+
+/**
  * Makes each copy: a detached worktree of `sha`, `batch.setup` run at its root (HOME passed), then a clean tree
  * required. A copy that cannot be made keeps the reason: its checks are not run and their receipts say why.
  */
@@ -86,10 +97,8 @@ export async function prepareCopies(plan: SpreadPlan, options: { git: Git; repo:
       const setup = options.config.batch?.setup;
       if (setup) {
         options.log(`Pile ${copy.stack.id} : préparation de la copie ${copy.dir} (${setup.join(' ')}).`);
-        const env = environment([...options.config.environment.passEnv, 'HOME', ...(options.config.batch?.passEnv ?? [])], options.env);
-        const r = await runProcess({ command: setup, cwd: copy.dir, env, timeoutMs: options.config.batch!.setupTimeoutMs, maxOutputBytes: 256 * 1024,
-          ...(options.signal ? { signal: options.signal } : {}) });
-        if (r.status !== 'passed') throw new Error(`batch.setup en échec (${r.status}, code ${r.exitCode ?? '-'}) : ${`${r.stdout}\n${r.stderr}`.trim().slice(-800)}`);
+        const { result: r, output } = await runSetup(setup, copy.dir, options);
+        if (r.status !== 'passed') throw new Error(`batch.setup en échec (${r.status}, code ${r.exitCode ?? '-'}) : ${output}`);
       }
       const status = await options.git.exec(copy.dir, ['status', '--porcelain=v1', '--untracked-files=all']);
       if (status.trim() !== '') throw new Error(`copie modifiée après sa préparation (fichiers non ignorés) : ${status.trim().split('\n').slice(0, 5).join(', ')}`);
@@ -133,13 +142,11 @@ export async function prepareMainCopy(options: { repo: string; config: ApvConfig
     return { status: 'missing', command: null, durationMs: 0, reason };
   }
   options.log(`Copie de la suite non préparée (${reason}) : préparation par batch.setup (${setup.join(' ')}).`);
-  const env = environment([...options.config.environment.passEnv, 'HOME', ...(options.config.batch?.passEnv ?? [])], options.env);
-  const r = await runProcess({ command: setup, cwd: options.repo, env, timeoutMs: options.config.batch!.setupTimeoutMs, maxOutputBytes: 256 * 1024,
-    ...(options.signal ? { signal: options.signal } : {}) });
+  const { result: r, output } = await runSetup(setup, options.repo, options);
   if (r.status === 'cancelled') throw new PipelineError('CANCELLED', 'Préparation de la copie de la suite (batch.setup) annulée : rien n\'a été exécuté.');
   if (r.status !== 'passed') {
     throw new PipelineError('GATE_SETUP', `Suite complète refusée, rien n'a été exécuté : préparation de la copie de la suite (batch.setup : ${setup.join(' ')}) en échec (${r.status}, code ${r.exitCode ?? '-'}) : ` +
-      `${`${r.stdout}\n${r.stderr}`.trim().slice(-800)}`);
+      `${output}`);
   }
   options.log(`Copie de la suite préparée en ${Math.round(r.durationMs / 1000)} s.`);
   return { status: 'done', command: [...setup], durationMs: Math.round(r.durationMs), reason };
