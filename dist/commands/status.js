@@ -12,6 +12,8 @@ import { anchorLines, anchorStatus } from '../rules/anchor-status.js';
 import { pluginLines, pluginStatus } from '../rules/plugin-status.js';
 import { processGh } from '../stack/github.js';
 import { freshnessLines, freshnessReport } from '../freshness/check.js';
+import { duration } from '../metrics/run.js';
+import { recentMeasures } from '../metrics/sources.js';
 export const usage = `Utilisation :
   apv status [--repo <chemin>] [--json]
 
@@ -21,7 +23,8 @@ de Claude Code (installé, activé, sa version face à celle de l'outil), les r�
 ne connaît pas encore et celles qu'apporte la prochaine version de l'outil (branche suivie, telle que récupérée) ;
 puis les ancrages des règles avant fusion : journal de l'opérateur (messages reçus, ou pourquoi aucun), protection
 de la branche par défaut sur GitHub (gh api ; indisponible en plan gratuit pour un dépôt privé, dit une fois),
-audit des fusions faites hors de apv stack merge (apv audit merges).
+audit des fusions faites hors de apv stack merge (apv audit merges). Ligne « Mesure » : temps de bout en bout et
+chemin critique des trois dernières exécutions (apv metrics run, sans appel gh).
 
 Section « Fichiers d'état périmés » (lecture seule, rien n'est déplacé ni supprimé) : .apv/state/resume.md, les
 .apv/state/*.md et les chemins de freshness.paths (~/ accepté) modifiés il y a plus de freshness.maxAgeDays jours
@@ -87,7 +90,23 @@ export function apvStatus(repo, options = {}) {
     const state = files(join(repo, '.apv', 'state')).map(f => { const st = statSync(f); return { file: relative(repo, f), bytes: st.size, modifiedAt: st.mtime.toISOString() }; });
     const runs = readRunSummaries(repo);
     return { repo, config: cfg, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)),
-        freshness: freshnessReport(repo, freshnessSettings, options) };
+        freshness: freshnessReport(repo, freshnessSettings, options), metrics: measures(repo) };
+}
+/** The last three measures, reduced to what the line shows; a repository the measure cannot read gives none. */
+function measures(repo) {
+    try {
+        return recentMeasures(repo).map(m => ({ specId: m.specId, totalMs: m.totalMs, end: m.end, criticalPath: m.criticalPath, finished: m.finished }));
+    }
+    catch {
+        return [];
+    }
+}
+const END_SHORT = { merge: 'jusqu\'à la fusion', delivery: 'jusqu\'à la livraison', 'last-event': 'en cours' };
+/** « Mesure (apv metrics run) : a 7 h 59 min jusqu'à la fusion, chemin critique 1 h 59 min ; … ». */
+export function metricsLine(list) {
+    if (!list.length)
+        return null;
+    return cleanLine(`Mesure (apv metrics run) : ${list.map(m => `${m.specId} ${duration(m.totalMs)} ${END_SHORT[m.end.kind]}, chemin critique ${duration(m.criticalPath.workMs)}`).join(' ; ')}`, 600);
 }
 export async function run(args, io) {
     return guard(io, usage, async () => {
@@ -127,6 +146,7 @@ export async function run(args, io) {
             ...active.map(r => `- ${runSummaryLine(r)}`),
             ...(status.runsUnread ? [`- ${unreadRunsLine(status.runsUnread)}`] : []),
             `Quota : ${q ? `${localTime(q.at)} ; session ${q.session ? `${q.session.percent} %` : '?'} ; semaine ${q.week ? `${q.week.percent} %` : '?'} ; niveau ${q.level}` : 'aucun relevé'}`,
+            ...(metricsLine(status.metrics) ? [metricsLine(status.metrics)] : []),
             ...freshnessLines(status.freshness, value => cleanLine(value, 400), localTime),
         ];
         if (plugin)
