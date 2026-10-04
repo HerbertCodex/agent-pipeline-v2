@@ -34,6 +34,19 @@ async function freePort() {
 }
 
 /**
+ * A barrier between two checks meant to run at the same time (`BARRIER`, a folder): each writes that it has started,
+ * then waits for the other, at most 30 s, and records whether it saw it (`met`). Both met: they overlapped, whatever
+ * the load of the machine; a fixed window of time would not prove it.
+ */
+const barrier = (self, other) => `let met = null;
+if (process.env.BARRIER) {
+  fs.mkdirSync(process.env.BARRIER, { recursive: true }); fs.writeFileSync(process.env.BARRIER + "/" + ${self}, "");
+  const until = Date.now() + 30000; const pause = new Int32Array(new SharedArrayBuffer(4));
+  while (!fs.existsSync(process.env.BARRIER + "/" + ${other}) && Date.now() < until) Atomics.wait(pause, 0, 0, 20);
+  met = fs.existsSync(process.env.BARRIER + "/" + ${other});
+}`;
+
+/**
  * Two stacks (lock files, a variable each, their ports in suite.ports), one check of a stack that records where it ran
  * and holds `holdMs`; `queue` merged into suite.queue, `gates` added after it (or a function of `{ lock1 }` that returns them).
  */
@@ -46,11 +59,12 @@ async function project(t, { queue = {}, holdMs = 50, gates = [], ports = true, s
   const p1 = await freePort(); const p2 = await freePort();
   // `serve`: the check also listens on p0, a port of suite.ports that is no stack's (a server of the suite).
   const p0 = serve ? await freePort() : null;
-  const e2e = { id: 'e2e', stage: 'full', timeoutMs: 60_000, passEnv: ['STACK', 'LOCK_FILE'], lock: { file: lock1, fileEnv: 'LOCK_FILE' },
+  const e2e = { id: 'e2e', stage: 'full', timeoutMs: 60_000, passEnv: ['STACK', 'LOCK_FILE', 'BARRIER'], lock: { file: lock1, fileEnv: 'LOCK_FILE' },
     command: node(`const fs = require("fs"); fs.mkdirSync(${JSON.stringify(out)}, { recursive: true }); fs.mkdirSync(${JSON.stringify(started)}, { recursive: true }); const start = Date.now();
 ${p0 ? `require("net").createServer().listen(${p0}, "127.0.0.1"); process.on("SIGTERM", () => process.exit(143));` : ''}
 fs.writeFileSync(${JSON.stringify(started)} + "/" + (process.env.STACK ?? "x") + "-" + start, "");
-setTimeout(() => { fs.writeFileSync(${JSON.stringify(out)} + "/e2e-" + (process.env.STACK ?? "x") + "-" + start + ".json", JSON.stringify({ stack: process.env.STACK ?? null, cwd: process.cwd(), start, end: Date.now() })); process.exit(0); }, ${holdMs});`) };
+${barrier('process.env.STACK', '(process.env.STACK === "1" ? "2" : "1")')}
+setTimeout(() => { fs.writeFileSync(${JSON.stringify(out)} + "/e2e-" + (process.env.STACK ?? "x") + "-" + start + ".json", JSON.stringify({ stack: process.env.STACK ?? null, cwd: process.cwd(), met, start, end: Date.now() })); process.exit(0); }, ${holdMs});`) };
   write(f.repo, '.apv/config.json', {
     gates: [e2e, ...(typeof gates === 'function' ? gates({ lock1 }) : gates)],
     stacks: [{ id: '1', lockFile: lock1, env: { STACK: '1' }, ports: [p1] }, { id: '2', lockFile: lock2, env: { STACK: '2' }, ports: [p2] }],
@@ -191,11 +205,14 @@ test('two suites run at the same time on two stacks (per-stack); two suites on t
   const p = await project(t, { queue: { slots: 'per-stack', waitMs: 60_000 }, holdMs: 1200, ports: false });
   const copy = join(p.root, 'copy');
   git(p.repo, 'worktree', 'add', '-q', '--detach', copy, 'HEAD');
-  // The second suite starts late, as on a loaded machine: later than the check of the first lasts.
-  const [a, b] = await Promise.all([p.run(['--stacks', '1']), sleep(1700).then(() => p.run(['--stacks', '2'], copy))]);
+  // The second suite starts late, as on a loaded machine: later than the check of the first lasts. The barrier proves
+  // the overlap all the same: each check waits for the other to have started.
+  const barrierEnv = { BARRIER: join(p.root, 'barrier') };
+  const [a, b] = await Promise.all([p.run(['--stacks', '1'], p.repo, barrierEnv), sleep(1700).then(() => p.run(['--stacks', '2'], copy, barrierEnv))]);
   assert.equal(a.code, 0, a.stderr); assert.equal(b.code, 0, b.stderr);
   const [x, y] = p.ran().sort((m, n) => m.stack.localeCompare(n.stack));
   assert.deepEqual([x.stack, y.stack], ['1', '2']);
+  assert.deepEqual([x.met, y.met], [true, true], `each saw the other started: in parallel: ${JSON.stringify([x, y])}`);
   assert.ok(x.start < y.end && y.start < x.end, `in parallel: ${JSON.stringify([x, y])}`);
   rmSync(p.out, { recursive: true, force: true });
   // Same stack, two copies: the second waits for the place of the stack, the checks never overlap.

@@ -11,6 +11,19 @@ import { apv, write } from './cli-helpers.mjs';
 const hasFlock = spawnSync('flock', ['--version']).status === 0;
 
 /**
+ * A barrier between two checks meant to run at the same time (`BARRIER`, a folder): each writes that it has started,
+ * then waits for the other, at most 30 s, and records whether it saw it (`met`). Both met: they overlapped, whatever
+ * the load of the machine; a fixed window of time would not prove it.
+ */
+const barrier = (self, other) => `let met = null;
+if (process.env.BARRIER) {
+  fs.mkdirSync(process.env.BARRIER, { recursive: true }); fs.writeFileSync(process.env.BARRIER + "/" + ${self}, "");
+  const until = Date.now() + 30000; const pause = new Int32Array(new SharedArrayBuffer(4));
+  while (!fs.existsSync(process.env.BARRIER + "/" + ${other}) && Date.now() < until) Atomics.wait(pause, 0, 0, 20);
+  met = fs.existsSync(process.env.BARRIER + "/" + ${other});
+}`;
+
+/**
  * Two stacks (lock files, variables, an env file for the second), two checks of a stack that record where and with
  * what they ran and take `holdMs` each, a task check, and a setup that installs into an ignored folder.
  */
@@ -21,9 +34,10 @@ function project(t, { setup = null, holdMs = 1500 } = {}) {
   writeFileSync(join(f.root, 'stack2.env'), '# pile 2\nexport STACK_URL="http://127.0.0.1:57521"\nIGNORED=1\n');
   const record = name => [process.execPath, '-e', `const fs = require("fs"); fs.mkdirSync(${JSON.stringify(out)}, { recursive: true });
 const start = Date.now();
+${barrier(JSON.stringify(name), JSON.stringify(name === 'integration' ? 'browser' : 'integration'))}
 setTimeout(() => { fs.writeFileSync(${JSON.stringify(out)} + "/${name}.json", JSON.stringify({ cwd: process.cwd(), stack: process.env.STACK ?? null, url: process.env.STACK_URL ?? null,
-  lockFile: process.env.LOCK_FILE ?? null, ignored: process.env.IGNORED ?? null, installed: fs.existsSync("node_modules/.installed"), start, end: Date.now() })); }, ${holdMs});`];
-  const stackGate = name => ({ id: name, stage: 'full', command: record(name), timeoutMs: 60_000, passEnv: ['STACK', 'STACK_URL', 'LOCK_FILE', 'IGNORED'],
+  lockFile: process.env.LOCK_FILE ?? null, ignored: process.env.IGNORED ?? null, installed: fs.existsSync("node_modules/.installed"), met, start, end: Date.now() })); }, ${holdMs});`];
+  const stackGate = name => ({ id: name, stage: 'full', command: record(name), timeoutMs: 60_000, passEnv: ['STACK', 'STACK_URL', 'LOCK_FILE', 'IGNORED', 'BARRIER'],
     resources: ['project-checks'], lock: { file: lock1, fileEnv: 'LOCK_FILE' } });
   write(f.repo, '.apv/config.json', {
     gates: [{ id: 'unit', command: [process.execPath, '-e', 'setTimeout(() => {}, Number(process.env.UNIT_MS ?? 0))'], passEnv: ['UNIT_MS'], resources: ['project-checks'] }, stackGate('integration'), stackGate('browser')],
@@ -41,10 +55,10 @@ setTimeout(() => { fs.writeFileSync(${JSON.stringify(out)} + "/${name}.json", JS
 }
 
 test('--stacks 1,2: the checks of a stack are dealt to the stacks, in parallel, each with its variables, lock and copy', { skip: !hasFlock && 'flock(1) missing' }, async t => {
-  const p = project(t);
+  const p = project(t, { holdMs: 50 });
   // UNIT_MS: the check unit holds project-checks in the copy of the suite longer than a check of a stack lasts, as a
-  // loaded machine does; integration starts late there, browser does not wait for it in its own copy.
-  const r = await apv(p.repo, ['gates', 'run', '--stacks', '1,2', '--json'], { ...p.env, UNIT_MS: '2000' });
+  // loaded machine does; integration starts late there. The barrier proves the overlap all the same.
+  const r = await apv(p.repo, ['gates', 'run', '--stacks', '1,2', '--json'], { ...p.env, UNIT_MS: '2000', BARRIER: join(p.root, 'barrier') });
   assert.equal(r.code, 0, r.stdout + r.stderr);
   const result = r.json();
   assert.deepEqual(result.spread.map(a => [a.gate, a.stack, a.workspace === realpathSync(p.repo)]), [['integration', '1', true], ['browser', '2', false]]);
@@ -54,6 +68,7 @@ test('--stacks 1,2: the checks of a stack are dealt to the stacks, in parallel, 
   assert.match(browser.cwd, new RegExp(`${p.common.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}/apv/copies/[^/]+-2$`));
   assert.deepEqual([browser.stack, browser.url, browser.lockFile, browser.ignored, browser.installed], ['2', 'http://127.0.0.1:57521', p.lock2, '1', true]);
   // Both ran at the same time, although they share the resource project-checks: each copy has its own scheduler.
+  assert.deepEqual([integration.met, browser.met], [true, true], 'each saw the other started: in parallel');
   assert.ok(browser.start < integration.end && integration.start < browser.end, 'in parallel');
   const receipts = Object.fromEntries(result.gates.map(g => [g.gate, g]));
   assert.equal(receipts.integration.status, 'passed');
