@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -37,19 +37,24 @@ async function freePort() {
  * Two stacks (lock files, a variable each, their ports in suite.ports), one check of a stack that records where it ran
  * and holds `holdMs`; `queue` merged into suite.queue, `gates` added after it.
  */
-async function project(t, { queue = {}, holdMs = 50, gates = [], ports = true } = {}) {
+async function project(t, { queue = {}, holdMs = 50, gates = [], ports = true, serve = false } = {}) {
   const f = fixture(t);
   const out = join(f.root, 'out');
+  const started = join(f.root, 'started');
   const lock1 = join(f.root, 's1.lock'); const lock2 = join(f.root, 's2.lock');
   writeFileSync(lock1, ''); writeFileSync(lock2, '');
   const p1 = await freePort(); const p2 = await freePort();
+  // `serve`: the check also listens on p0, a port of suite.ports that is no stack's (a server of the suite).
+  const p0 = serve ? await freePort() : null;
   const e2e = { id: 'e2e', stage: 'full', timeoutMs: 60_000, passEnv: ['STACK', 'LOCK_FILE'], lock: { file: lock1, fileEnv: 'LOCK_FILE' },
-    command: node(`const fs = require("fs"); fs.mkdirSync(${JSON.stringify(out)}, { recursive: true }); const start = Date.now();
-setTimeout(() => fs.writeFileSync(${JSON.stringify(out)} + "/e2e-" + (process.env.STACK ?? "x") + "-" + start + ".json", JSON.stringify({ stack: process.env.STACK ?? null, cwd: process.cwd(), start, end: Date.now() })), ${holdMs});`) };
+    command: node(`const fs = require("fs"); fs.mkdirSync(${JSON.stringify(out)}, { recursive: true }); fs.mkdirSync(${JSON.stringify(started)}, { recursive: true }); const start = Date.now();
+${p0 ? `require("net").createServer().listen(${p0}, "127.0.0.1"); process.on("SIGTERM", () => process.exit(143));` : ''}
+fs.writeFileSync(${JSON.stringify(started)} + "/" + (process.env.STACK ?? "x") + "-" + start, "");
+setTimeout(() => { fs.writeFileSync(${JSON.stringify(out)} + "/e2e-" + (process.env.STACK ?? "x") + "-" + start + ".json", JSON.stringify({ stack: process.env.STACK ?? null, cwd: process.cwd(), start, end: Date.now() })); process.exit(0); }, ${holdMs});`) };
   write(f.repo, '.apv/config.json', {
     gates: [e2e, ...gates],
     stacks: [{ id: '1', lockFile: lock1, env: { STACK: '1' }, ports: [p1] }, { id: '2', lockFile: lock2, env: { STACK: '2' }, ports: [p2] }],
-    suite: { queue: { waitMs: 300, ...queue }, ports: ports ? [p1, p2] : [] },
+    suite: { queue: { waitMs: 300, ...queue }, ports: [...(ports ? [p1, p2] : []), ...(p0 ? [p0] : [])] },
   });
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'config');
   const common = realpathSync(resolve(f.repo, git(f.repo, 'rev-parse', '--git-common-dir')));
@@ -59,7 +64,9 @@ setTimeout(() => fs.writeFileSync(${JSON.stringify(out)} + "/e2e-" + (process.en
     catch { return []; }
   };
   const run = (args, cwd = f.repo, extra = {}) => apv(cwd, ['gates', 'run', ...args, '--json'], env, extra);
-  return { ...f, out, lock1, lock2, p1, p2, common, env, ran, run, locks: join(common, 'apv', 'locks') };
+  /** Resolves once a check has started (its marker written), `count` of them in all. */
+  const hasStarted = async (count = 1) => { while ((existsSync(started) ? readdirSync(started).length : 0) < count) await sleep(20); };
+  return { ...f, out, started, hasStarted, lock1, lock2, p0, p1, p2, common, env, ran, run, locks: join(common, 'apv', 'locks') };
 }
 
 /** Holds the flock of `file` from another process (its own group, killed at the end of the test), once it is held. */
@@ -341,4 +348,21 @@ test('stackContainers and judgeStack: the containers of a project, gone, stopped
   assert.match(judgeStack({ containers: [{ ...db, state: 'exited' }] }, [db]).detail, /hors marche : supabase_db_proj \(exited\)/);
   assert.deepEqual([judgeStack({ containers: [] }, [db]).state, judgeStack({ containers: [] }, [db]).detail], ['absent', 'aucun conteneur (1 au départ de la suite)']);
   assert.deepEqual(judgeStack({ error: 'docker ps illisible' }, [db]), { state: 'unknown', detail: 'docker ps illisible', containers: [], missing: [] });
+});
+
+test('two suites in the same copy never run side by side (per-stack): the second waits for the place of the copy, the server of the first is never stopped as an orphan', async t => {
+  const p = await project(t, { queue: { slots: 'per-stack', waitMs: 60_000 }, holdMs: 1500, ports: false, serve: true });
+  const copy = join(p.root, 'copy');
+  git(p.repo, 'worktree', 'add', '-q', '--detach', copy, 'HEAD');
+  const first = p.run(['--stacks', '1'], copy);
+  await p.hasStarted();
+  const second = await p.run(['--stacks', '2'], copy);
+  const a = await first;
+  assert.equal(a.code, 0, a.stderr);
+  assert.equal(second.code, 0, second.stderr);
+  assert.doesNotMatch(second.stderr, /orphelin de cette copie arrêté/);
+  assert.match(second.stderr, /Attente du verrou « full-suite-copy-[0-9a-f]{16} »/);
+  assert.match(a.json().queue.places[0], /^full-suite-copy-[0-9a-f]{16}$/);
+  const [u, v] = p.ran().sort((m, n) => m.start - n.start);
+  assert.ok(u && v && u.end <= v.start, `one after the other: ${JSON.stringify(p.ran())}`);
 });
