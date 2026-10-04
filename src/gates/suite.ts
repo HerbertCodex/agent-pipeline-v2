@@ -205,8 +205,12 @@ export async function enterQueue(options: { lockFile: string; settings: SuiteQue
   const releaseAll = async (): Promise<void> => { for (const lease of [...held].reverse()) await lease.release(); };
   for (const step of steps) {
     const leaseOptions = { label, waitMs: Math.max(0, settings.waitMs - (Date.now() - started)), purpose, signal: options.signal, log };
-    const lease = step.length === 1 ? await holdLease(store, step[0]!, leaseOptions)
-      : await holdAnyLease(store, step, { ...leaseOptions, pollMs: options.hooks?.lockPollMs ?? 500 });
+    let lease: Lease;
+    // An unexpected error (the store unreadable, a folder in the way): the places already taken are released, then it is thrown again.
+    try {
+      lease = step.length === 1 ? await holdLease(store, step[0]!, leaseOptions)
+        : await holdAnyLease(store, step, { ...leaseOptions, pollMs: options.hooks?.lockPollMs ?? 500 });
+    } catch (error) { await releaseAll(); throw error; }
     if (!lease.ok) {
       await releaseAll();
       if (lease.aborted) throw new PipelineError('CANCELLED', `File des suites complètes : ${lease.reason}`);
