@@ -392,3 +392,30 @@ test('the preparation never runs in the main checkout: refused, and said', async
   assert.ok(!existsSync(join(p.main, 'node_modules')), 'batch.setup did not run');
   assert.ok(!existsSync(p.ranFile), 'nothing ran');
 });
+
+test('the summary names the stacks really checked: all of them when a lock is no declared stack\'s', async t => {
+  const f0 = fixture(t);
+  const other = join(f0.root, 'other.lock');
+  writeFileSync(other, '');
+  const p = await project(t, { ports: false, gates: [{ id: 'other', stage: 'full', command: node('0'), lock: { file: other } }] });
+  const r = await apv(p.repo, ['gates', 'run'], p.env);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /Piles vérifiées par la suite \(verrous et ports\) : toutes \(1, 2\), un verrou n'est celui d'aucune pile déclarée \(other\)\./);
+  assert.doesNotMatch(r.stdout, /Piles utilisées par la suite/);
+  const json = await p.run([]);
+  assert.deepEqual([json.json().stacksUsed, json.json().stacksChecked], [['1'], ['1', '2']]);
+  const two = await apv(p.repo, ['gates', 'run', '--only', 'e2e'], p.env);
+  assert.equal(two.code, 0, two.stderr);
+  assert.match(two.stdout, /Piles vérifiées par la suite \(verrous et ports\) : 1 \(celles qu'elle utilise\)\./);
+});
+
+test('a suite whose checks lock no declared stack checks none, and says so in its journal', async t => {
+  const f = fixture(t);
+  write(f.repo, '.apv/config.json', { gates: [{ id: 'unit', stage: 'full', command: node('0') }],
+    stacks: [{ id: '1', lockFile: join(f.root, 's1.lock') }] });
+  git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'config');
+  const r = await apv(f.repo, ['gates', 'run'], { APV_LOCK_DIR: join(f.root, 'locks') });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stderr, /Aucun contrôle de la suite ne verrouille une pile déclarée \(1\) : aucune pile vérifiée, ni son verrou ni ses ports\./);
+  assert.match(r.stdout, /Piles vérifiées par la suite : aucune \(aucun contrôle ne verrouille une pile déclarée\)\./);
+});
