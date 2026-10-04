@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 import { runGates, suitePorts } from '../dist/gates/run.js';
-import { copyPlace, queuePlaces } from '../dist/gates/suite.js';
+import { copyPlace, enterQueue, queuePlaces } from '../dist/gates/suite.js';
 import { loadConfig, configIssues } from '../dist/config/load.js';
 import { LockStore } from '../dist/lock/store.js';
 import { flockFree, judgeStack, probe, resolveStacks, stackContainers, underStackLock } from '../dist/stacks/idle.js';
@@ -446,4 +446,16 @@ test('the output of a failed batch.setup is redacted, in the copy of the suite a
   const spread = await apv(p.repo, ['gates', 'run', '--stacks', '1,2', '--json'], { ...p.env, APV_TEST_TOKEN: secret });
   assert.match(spread.stderr, /Pile 2 : copie non préparée \(batch\.setup en échec .*jeton \[REDACTED\]/s);
   assert.ok(!spread.stderr.includes(secret) && !spread.stdout.includes(secret), 'the secret never reaches the output');
+});
+
+test('enterQueue: an unexpected error while taking a place releases the places already taken, then is thrown again', async t => {
+  const f = fixture(t);
+  const dir = join(f.root, 'queue');
+  mkdirSync(dir, { recursive: true });
+  // The waiting room of the place of stack 1 is a file: taking that place fails (not a refusal, an error).
+  writeFileSync(join(dir, 'full-suite-stack-1.queue'), '');
+  const settings = { enabled: true, lockFile: 'x', waitMs: 1000, loadWaitMs: 0, slots: 1 };
+  await assert.rejects(enterQueue({ lockFile: join(dir, 'full-suite.lock'), settings, repo: f.repo, log: () => {}, hooks: { lockPollMs: 20 },
+    places: { whole: true, slots: 'none', stacks: ['1'] } }), error => !/SUITE_QUEUE/.test(String(error)));
+  assert.equal(new LockStore(dir).read('full-suite').exists, false, 'the whole queue taken first is released');
 });
