@@ -35,9 +35,9 @@ async function freePort() {
 
 /**
  * Two stacks (lock files, a variable each, their ports in suite.ports), one check of a stack that records where it ran
- * and holds `holdMs`; `queue` merged into suite.queue, `gates` added after it.
+ * and holds `holdMs`; `queue` merged into suite.queue, `gates` added after it (or a function of `{ lock1 }` that returns them).
  */
-async function project(t, { queue = {}, holdMs = 50, gates = [], ports = true, serve = false } = {}) {
+async function project(t, { queue = {}, holdMs = 50, gates = [], ports = true, serve = false, batch = null } = {}) {
   const f = fixture(t);
   const out = join(f.root, 'out');
   const started = join(f.root, 'started');
@@ -52,9 +52,10 @@ ${p0 ? `require("net").createServer().listen(${p0}, "127.0.0.1"); process.on("SI
 fs.writeFileSync(${JSON.stringify(started)} + "/" + (process.env.STACK ?? "x") + "-" + start, "");
 setTimeout(() => { fs.writeFileSync(${JSON.stringify(out)} + "/e2e-" + (process.env.STACK ?? "x") + "-" + start + ".json", JSON.stringify({ stack: process.env.STACK ?? null, cwd: process.cwd(), start, end: Date.now() })); process.exit(0); }, ${holdMs});`) };
   write(f.repo, '.apv/config.json', {
-    gates: [e2e, ...gates],
+    gates: [e2e, ...(typeof gates === 'function' ? gates({ lock1 }) : gates)],
     stacks: [{ id: '1', lockFile: lock1, env: { STACK: '1' }, ports: [p1] }, { id: '2', lockFile: lock2, env: { STACK: '2' }, ports: [p2] }],
     suite: { queue: { waitMs: 300, ...queue }, ports: [...(ports ? [p1, p2] : []), ...(p0 ? [p0] : [])] },
+    ...(batch ? { batch } : {}),
   });
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'config');
   const common = realpathSync(resolve(f.repo, git(f.repo, 'rev-parse', '--git-common-dir')));
@@ -431,4 +432,18 @@ test('a suite that runs apv web audit takes every place of the queue: no suite r
   const refused = await p.run(['--stacks', '2']);
   assert.equal(refused.code, 1);
   assert.match(refused.stderr, /SUITE_QUEUE.*full-suite-slot-1/);
+});
+
+test('the output of a failed batch.setup is redacted, in the copy of the suite and in the copy of another stack', async t => {
+  const secret = 's3cr3t-setup-value';
+  const leak = { setup: node('console.error("jeton " + process.env.APV_TEST_TOKEN); process.exit(4)'), passEnv: ['APV_TEST_TOKEN'] };
+  const main = lockProject(t, leak);
+  const r = await apv(main.repo, ['gates', 'run', '--json'], { APV_TEST_TOKEN: secret });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /GATE_SETUP.*jeton \[REDACTED\]/s);
+  assert.ok(!r.stderr.includes(secret) && !r.stdout.includes(secret), 'the secret never reaches the output');
+  const p = await project(t, { ports: false, batch: leak, gates: ({ lock1 }) => [{ id: 'e2e-b', stage: 'full', timeoutMs: 60_000, passEnv: ['STACK', 'LOCK_FILE'], lock: { file: lock1, fileEnv: 'LOCK_FILE' }, command: node('0') }] });
+  const spread = await apv(p.repo, ['gates', 'run', '--stacks', '1,2', '--json'], { ...p.env, APV_TEST_TOKEN: secret });
+  assert.match(spread.stderr, /Pile 2 : copie non préparée \(batch\.setup en échec .*jeton \[REDACTED\]/s);
+  assert.ok(!spread.stderr.includes(secret) && !spread.stdout.includes(secret), 'the secret never reaches the output');
 });
