@@ -234,15 +234,21 @@ test('apv stacks sees the place of a stack held by a suite: busy, and never stop
   assert.equal((await underStackLock(s2, context, node('0'), 'stop')).ok, true);
 });
 
-/** A project whose copy has a package-lock.json, and a full check that needs node_modules/.installed. */
-function lockProject(t, batch) {
+/**
+ * A project whose copy (a linked worktree, `repo`; the main checkout is `main`) has a package-lock.json, and a full
+ * check that needs node_modules/.installed; `suite` is the suite section.
+ */
+function lockProject(t, batch, { suite = null } = {}) {
   const f = fixture(t);
   const ranFile = join(f.root, 'ran');
   write(f.repo, 'package-lock.json', { name: 'x', lockfileVersion: 3, packages: {} });
   write(f.repo, '.apv/config.json', { gates: [{ id: 'unit', stage: 'full', command: node(`require("fs").writeFileSync(${JSON.stringify(ranFile)}, ""); if (!require("fs").existsSync("node_modules/.installed")) process.exit(3)`) }],
-    ...(batch ? { batch } : {}) });
+    ...(batch ? { batch } : {}), ...(suite ? { suite } : {}) });
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'lock');
-  return { ...f, ranFile, run: () => apv(f.repo, ['gates', 'run', '--json']) };
+  const copy = join(f.root, 'copy');
+  git(f.repo, 'worktree', 'add', '-q', '--detach', copy, 'HEAD');
+  const locks = join(realpathSync(resolve(f.repo, git(f.repo, 'rev-parse', '--git-common-dir'))), 'apv', 'locks');
+  return { ...f, main: f.repo, repo: copy, locks, ranFile, run: (cwd = copy) => apv(cwd, ['gates', 'run', '--json']) };
 }
 const install = node('require("fs").mkdirSync("node_modules", { recursive: true }); require("fs").writeFileSync("node_modules/.installed", "")');
 
@@ -365,4 +371,24 @@ test('two suites in the same copy never run side by side (per-stack): the second
   assert.match(a.json().queue.places[0], /^full-suite-copy-[0-9a-f]{16}$/);
   const [u, v] = p.ran().sort((m, n) => m.start - n.start);
   assert.ok(u && v && u.end <= v.start, `one after the other: ${JSON.stringify(p.ran())}`);
+});
+
+test('the preparation of the copy runs under the queue: a suite refused by the queue has prepared nothing', async t => {
+  const p = lockProject(t, { setup: install }, { suite: { queue: { waitMs: 300 } } });
+  await holdPlace(t, p.locks, 'full-suite');
+  const r = await p.run();
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /SUITE_QUEUE.*Rien n'a été exécuté/);
+  assert.doesNotMatch(r.stderr, /préparation par batch\.setup/);
+  assert.ok(!existsSync(join(p.repo, 'node_modules')), 'batch.setup did not run');
+  assert.ok(!existsSync(p.ranFile), 'nothing ran');
+});
+
+test('the preparation never runs in the main checkout: refused, and said', async t => {
+  const p = lockProject(t, { setup: install });
+  const r = await p.run(p.main);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /GATE_SETUP.*checkout principal.*batch\.setup ne s'y lance jamais/s);
+  assert.ok(!existsSync(join(p.main, 'node_modules')), 'batch.setup did not run');
+  assert.ok(!existsSync(p.ranFile), 'nothing ran');
 });
