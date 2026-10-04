@@ -5,6 +5,8 @@ import type { Gate } from '../domain/contracts.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import type { Git } from '../execution/git.js';
 import { environment, runProcess } from '../execution/process.js';
+import { canonicalPath } from '../domain/paths.js';
+import { repositoryWorktrees } from '../execution/procs.js';
 import { readEnvFile } from '../stacks/config.js';
 import { resolveStacks, type ResolvedStack } from '../stacks/idle.js';
 import { commonPath, type GateLock } from './suite.js';
@@ -113,12 +115,19 @@ export function setupNeeded(repo: string): string | null {
  * Prepares the copy a full suite runs in, as its copies on other stacks are (prepareCopies) and as `apv dast run`
  * prepares its own: with a `package-lock.json` and no `node_modules`, `batch.setup` at its root (HOME passed), bounded
  * by `batch.setupTimeoutMs`. Nothing needed: null. A setup that fails refuses the suite (`GATE_SETUP`) before anything
- * of it runs; the caller then checks the tree is as clean as before.
+ * of it runs; the caller then checks the tree is as clean as before. Never in the main checkout (the folder open in
+ * the editor): refused (`GATE_SETUP`). The caller runs it under the place of the copy in the queue, after every refusal.
  */
 export async function prepareMainCopy(options: { repo: string; config: ApvConfig; env: NodeJS.ProcessEnv; signal?: AbortSignal | undefined; log: (line: string) => void }): Promise<MainSetup | null> {
   const reason = setupNeeded(options.repo);
   if (!reason) return null;
   const setup = options.config.batch?.setup;
+  // Never in the main checkout (the folder open in the editor, the operator's own): a linked worktree only.
+  const main = repositoryWorktrees(options.repo)[0];
+  if (setup && main !== undefined && main === canonicalPath(options.repo)) {
+    throw new PipelineError('GATE_SETUP', `Suite complète refusée, rien n'a été exécuté : copie non préparée (${reason}) et la suite tourne dans le checkout principal (${main}) : ` +
+      'batch.setup ne s\'y lance jamais. Installer les dépendances (par exemple npm ci) puis relancer, ou lancer la suite depuis un worktree lié.');
+  }
   if (!setup) {
     options.log(`ATTENTION : copie de la suite non préparée (${reason}) et aucun batch.setup déclaré : les contrôles qui lancent les outils du projet échoueront probablement. Déclarer batch.setup (par exemple npm ci) ou installer les dépendances, puis relancer.`);
     return { status: 'missing', command: null, durationMs: 0, reason };

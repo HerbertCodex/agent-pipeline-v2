@@ -65,7 +65,8 @@ export declare function setupNeeded(repo: string): string | null;
  * Prepares the copy a full suite runs in, as its copies on other stacks are (prepareCopies) and as `apv dast run`
  * prepares its own: with a `package-lock.json` and no `node_modules`, `batch.setup` at its root (HOME passed), bounded
  * by `batch.setupTimeoutMs`. Nothing needed: null. A setup that fails refuses the suite (`GATE_SETUP`) before anything
- * of it runs; the caller then checks the tree is as clean as before.
+ * of it runs; the caller then checks the tree is as clean as before. Never in the main checkout (the folder open in
+ * the editor): refused (`GATE_SETUP`). The caller runs it under the place of the copy in the queue, after every refusal.
  */
 export declare function prepareMainCopy(options: {
     repo: string;

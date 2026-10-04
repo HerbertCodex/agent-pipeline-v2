@@ -333,20 +333,7 @@ export async function runGates(options) {
     const portList = suitePorts(settings.ports, stacks, checkedStacks.map(s => s.id));
     if (suite && usage.unmapped.length && stacks.length)
         log(`${usage.unmapped.join(', ')} : verrou qui n'est celui d'aucune pile déclarée ; la suite vérifie et tient toutes les piles (${stacks.map(s => s.id).join(', ')}).`);
-    // The copy of the suite prepared like its copies on other stacks: a package-lock.json without node_modules runs batch.setup.
     let setup = null;
-    if (suite) {
-        setup = await prepareMainCopy({ repo, config: options.config, env: source, signal: options.signal, log });
-        if (setup?.status === 'done') {
-            const now = await treeStatus();
-            if (now !== status) {
-                const was = new Set(statusLines(status));
-                const added = statusLines(now).filter(l => !was.has(l));
-                throw new PipelineError('GATE_SETUP', `Suite complète refusée, rien n'a été exécuté : batch.setup a modifié l'arbre de la copie (fichiers non ignorés : ${added.slice(0, 10).join(', ') || 'changement de git status'}). ` +
-                    'Ignorer ce que la préparation écrit (.gitignore), puis relancer.');
-            }
-        }
-    }
     // The queue of the full suites, then the load: every timeout of a check starts after them.
     let queue = null;
     // Set once the run has an id: the end of a full suite stops what it started, even when it is interrupted.
@@ -451,6 +438,18 @@ export async function runGates(options) {
                         throw dirtyRefusal(now, ' (arbre modifié pendant l\'attente)');
                     status = now;
                     dirty = now !== '';
+                }
+            }
+            // The copy of the suite prepared like its copies on other stacks (a package-lock.json without node_modules runs
+            // batch.setup): under its place in the queue and after every refusal, so that a refused suite has run nothing.
+            setup = await prepareMainCopy({ repo, config: options.config, env: source, signal: options.signal, log });
+            if (setup?.status === 'done') {
+                const now = await treeStatus();
+                if (now !== status) {
+                    const was = new Set(statusLines(status));
+                    const added = statusLines(now).filter(l => !was.has(l));
+                    throw new PipelineError('GATE_SETUP', `Suite complète refusée, rien n'a été exécuté : batch.setup a modifié l'arbre de la copie (fichiers non ignorés : ${added.slice(0, 10).join(', ') || 'changement de git status'}). ` +
+                        'Ignorer ce que la préparation écrit (.gitignore), puis relancer.');
                 }
             }
         }
