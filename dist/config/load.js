@@ -115,6 +115,12 @@ export const suiteQueueSchema = s.object({
     waitMs: s.default(s.number(0, 86_400_000), DEFAULT_SUITE_QUEUE.waitMs),
     maxLoad: s.optional(s.finite(0.1, 10_000)),
     loadWaitMs: s.default(s.number(0, 86_400_000), DEFAULT_SUITE_QUEUE.loadWaitMs),
+    /**
+     * Full suites at the same time on the machine (docs/CONFIGURATION.md, « Suite complète »): `1` (default) one at a time,
+     * whatever its stacks; `per-stack` one per test stack, each suite holding the place of every stack it uses; a number
+     * N, at most N at once, each holding the place of its stacks too. Two suites never share a stack.
+     */
+    slots: s.default(s.union(s.number(1, 64), s.literal('per-stack')), 1),
 });
 export const suiteSettingsSchema = s.object({
     queue: s.optional(suiteQueueSchema),

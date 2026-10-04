@@ -1,9 +1,11 @@
 import { type Gate, type GateReceipt, type GateStage } from '../domain/contracts.js';
+import { Git } from '../execution/git.js';
 import { type ApvConfig } from '../config/load.js';
 import { PipelineError } from '../domain/errors.js';
 import { type PruneResult } from './store.js';
-import { type ResolvedStack } from '../stacks/idle.js';
+import { type ResolvedStack, type StackHealth } from '../stacks/idle.js';
 import { type InfrastructureCause } from './infrastructure.js';
+import { type MainSetup } from './spread.js';
 import { type ScopeDecision } from './proof-scope.js';
 import { type CleanupRecord, type PortsRecord, type QueueRecord, type SuiteHooks } from './suite.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
@@ -136,6 +138,22 @@ export interface GateRunResult {
         notPassed: string[];
         error: string | null;
     }[] | null;
+    /**
+     * The declared stacks a full suite uses (those of `--stacks`, else those its checks lock): the only ones whose lock and
+     * ports it checks, and whose place it holds in the queue. Empty outside a full suite.
+     */
+    stacksUsed: string[];
+    /** The preparation of the copy of the suite (`batch.setup`, a package-lock.json without node_modules); null when none was needed. */
+    setup: MainSetup | null;
+    /**
+     * Stacks under whose lock a check was interrupted (cancelled, or past its delay: a reset of the stack may have been cut),
+     * with the state read after the stop. Empty when none.
+     */
+    interruptedStacks: {
+        stack: string;
+        gates: string[];
+        health: StackHealth;
+    }[];
     ok: boolean;
 }
 /**
@@ -183,6 +201,28 @@ export declare function busyReasons(ports: PortsRecord | null, stacks: readonly 
 export declare function heldByCopies(ports: PortsRecord | null): boolean;
 /** How long a suite waits for its ports: the longest `lock.waitMs` of the checks that lock, else the default lock delay. */
 export declare function portsWaitMs(gates: readonly Gate[]): number;
+/**
+ * The ports of `suite.ports` a suite checks and frees: all but those of a declared stack it does not use (a port of
+ * no stack, or also of a stack it uses, is kept).
+ */
+export declare function suitePorts(ports: readonly number[], declared: readonly ResolvedStack[], used: readonly string[]): number[];
+/**
+ * The declared stacks a full suite uses: those of `--stacks`, else those the locks of its checks designate (their
+ * variables resolved as at run time). `unmapped`: checks whose lock is no declared stack (the tool cannot say which
+ * stack they use; the suite then checks and holds every declared stack, as before).
+ */
+export declare function suiteStacks(options: {
+    git: Git;
+    repo: string;
+    config: ApvConfig;
+    gates: readonly Gate[];
+    declared: readonly ResolvedStack[];
+    ids?: readonly string[] | undefined;
+    source: NodeJS.ProcessEnv;
+}): Promise<{
+    used: string[];
+    unmapped: string[];
+}>;
 /** Share of its timeout beyond which a receipt warns (`nearTimeout`): 85 %. */
 export declare const NEAR_TIMEOUT = 0.85;
 /**

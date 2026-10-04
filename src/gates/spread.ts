@@ -98,6 +98,44 @@ export async function prepareCopies(plan: SpreadPlan, options: { git: Git; repo:
   }
 }
 
+/**
+ * The preparation of the copy of the suite itself (`batch.setup`): `done` when it ran and passed, `missing` when the
+ * copy needed it and no `batch.setup` is declared (said, the suite goes on: its checks will likely fail).
+ */
+export interface MainSetup { status: 'done' | 'missing'; command: string[] | null; durationMs: number; reason: string }
+
+/** Why the copy of a suite needs its preparation: a `package-lock.json` without `node_modules`, else null. */
+export function setupNeeded(repo: string): string | null {
+  return existsSync(join(repo, 'package-lock.json')) && !existsSync(join(repo, 'node_modules')) ? 'package-lock.json sans node_modules' : null;
+}
+
+/**
+ * Prepares the copy a full suite runs in, as its copies on other stacks are (prepareCopies) and as `apv dast run`
+ * prepares its own: with a `package-lock.json` and no `node_modules`, `batch.setup` at its root (HOME passed), bounded
+ * by `batch.setupTimeoutMs`. Nothing needed: null. A setup that fails refuses the suite (`GATE_SETUP`) before anything
+ * of it runs; the caller then checks the tree is as clean as before.
+ */
+export async function prepareMainCopy(options: { repo: string; config: ApvConfig; env: NodeJS.ProcessEnv; signal?: AbortSignal | undefined; log: (line: string) => void }): Promise<MainSetup | null> {
+  const reason = setupNeeded(options.repo);
+  if (!reason) return null;
+  const setup = options.config.batch?.setup;
+  if (!setup) {
+    options.log(`ATTENTION : copie de la suite non préparée (${reason}) et aucun batch.setup déclaré : les contrôles qui lancent les outils du projet échoueront probablement. Déclarer batch.setup (par exemple npm ci) ou installer les dépendances, puis relancer.`);
+    return { status: 'missing', command: null, durationMs: 0, reason };
+  }
+  options.log(`Copie de la suite non préparée (${reason}) : préparation par batch.setup (${setup.join(' ')}).`);
+  const env = environment([...options.config.environment.passEnv, 'HOME', ...(options.config.batch?.passEnv ?? [])], options.env);
+  const r = await runProcess({ command: setup, cwd: options.repo, env, timeoutMs: options.config.batch!.setupTimeoutMs, maxOutputBytes: 256 * 1024,
+    ...(options.signal ? { signal: options.signal } : {}) });
+  if (r.status === 'cancelled') throw new PipelineError('CANCELLED', 'Préparation de la copie de la suite (batch.setup) annulée : rien n\'a été exécuté.');
+  if (r.status !== 'passed') {
+    throw new PipelineError('GATE_SETUP', `Suite complète refusée, rien n'a été exécuté : préparation de la copie de la suite (batch.setup : ${setup.join(' ')}) en échec (${r.status}, code ${r.exitCode ?? '-'}) : ` +
+      `${`${r.stdout}\n${r.stderr}`.trim().slice(-800)}`);
+  }
+  options.log(`Copie de la suite préparée en ${Math.round(r.durationMs / 1000)} s.`);
+  return { status: 'done', command: [...setup], durationMs: Math.round(r.durationMs), reason };
+}
+
 export async function removeCopies(plan: SpreadPlan, git: Git, repo: string, log: (line: string) => void): Promise<void> {
   for (const copy of plan.copies) {
     if (!existsSync(copy.dir)) continue;

@@ -2,7 +2,7 @@
 
 Générée par `apv map` à partir des fichiers du dépôt, sans modèle. À lire avant de créer un composant, un module ou une route : réutiliser une entrée existante, ou l'étendre de façon générique (paramètre, variante) ; un élément utilisé par deux fonctionnalités devient partagé. Ne pas modifier à la main : l'intégration la régénère (`apv map`), et le contrôle `apv map --check` de la suite complète échoue quand elle ne correspond plus au code.
 
-Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 161. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 83 test(s), 304 fichier(s) ignoré(s), 5 module(s) sans export ni import.
+Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 161. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 84 test(s), 304 fichier(s) ignoré(s), 5 module(s) sans export ni import.
 
 ## Dossiers
 
@@ -130,11 +130,11 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `infrastructure.ts` : A check that failed because of its infrastructure, not of the code it tests: a variable… Exporte : InfrastructureCause, InfrastructureKind, classifyFailures(), infrastructureAdvice(), infrastructureCause(), infrastructureText(). Utilisé par 3 fichiers (src/commands/gates.ts, …).
 - `proof-scope.ts` : Scope of the proof of a check ('skipWhenOnly', docs/APV3-SPEC.md, section 21): a change… Exporte : ALWAYS_REQUIRED, ChangedFile, NOT_SEARCHED, ScopeDecision, ScopeInput, commandPaths(), et 8 autre(s). Utilisé par 3 fichiers (src/commands/gates.ts, …).
 - `repeat.ts` : Repetition of the changed test files ('repeatChanged' of a check, docs/APV3-SPEC.md,… Exporte : FixedWait, REPEAT_PLACEHOLDER, Rename, RenamedPaths, RepeatPlan, RepeatSettings, et 23 autre(s). Utilisé par 7 fichiers (src/commands/gates.ts, …).
-- `run.ts` : Receipts of 'apv gates run', one directory per execution. Exporte : ENVIRONMENT_ID, GateRunOptions, GateRunResult, NEAR_TIMEOUT, RECEIPTS_DIR, SharedCopy, et 13 autre(s). Utilisé par 3 fichiers (src/commands/gates.ts, …).
+- `run.ts` : Receipts of 'apv gates run', one directory per execution. Exporte : ENVIRONMENT_ID, GateRunOptions, GateRunResult, NEAR_TIMEOUT, RECEIPTS_DIR, SharedCopy, et 15 autre(s). Utilisé par 3 fichiers (src/commands/gates.ts, …).
 - `since.ts` : Incremental proof after corrections ('apv gates run --stage task --since <commit… Exporte : SinceCheck, checkSince(). Utilisé par 1 fichier (src/commands/gates.ts).
-- `spread.ts` : A full suite spread over several declared test stacks (docs/APV3-SPEC.md, section… Exporte : SpreadAssignment, SpreadCopy, SpreadPlan, planSpread(), prepareCopies(), removeCopies(), et 2 autre(s). Utilisé par 1 fichier (src/gates/run.ts).
+- `spread.ts` : A full suite spread over several declared test stacks (docs/APV3-SPEC.md, section… Exporte : MainSetup, SpreadAssignment, SpreadCopy, SpreadPlan, planSpread(), prepareCopies(), et 5 autre(s). Utilisé par 1 fichier (src/gates/run.ts).
 - `store.ts` : Shared receipt store of a repository: '<git common dir>/apv/receipts/<run>/', common to… Exporte : DEFAULT_RECEIPT_RETENTION, ExportResult, MANIFEST, Manifest, PruneResult, RUN_DIR, et 15 autre(s). Utilisé par 4 fichiers (src/commands/gates.ts, …).
-- `suite.ts` : The full suite of 'apv gates run' (docs/APV3-SPEC.md, section 17): the machine queue… Exporte : CleanupRecord, FLOCK_TIMEOUT_EXIT, GateLock, LEASE_TTL_SECONDS, PortProcess, PortsRecord, et 13 autre(s). Utilisé par 3 fichiers (src/gates/run.ts, …).
+- `suite.ts` : The full suite of 'apv gates run' (docs/APV3-SPEC.md, section 17): the machine queue… Exporte : CleanupRecord, FLOCK_TIMEOUT_EXIT, GateLock, LEASE_TTL_SECONDS, PortProcess, PortsRecord, et 17 autre(s). Utilisé par 4 fichiers (src/gates/run.ts, …).
 - `verify.ts` : Commit to verify: any revision Git resolves to a commit, compared by its full SHA. Exporte : AlteredRun, EvidenceState, GateEvidence, ReceiptSource, VerifyOptions, VerifyResult, et 1 autre(s). Utilisé par 4 fichiers (src/commands/gates.ts, …).
 
 ### src/knowledge
