@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 import { runGates, suitePorts } from '../dist/gates/run.js';
-import { queuePlaces } from '../dist/gates/suite.js';
+import { copyPlace, queuePlaces } from '../dist/gates/suite.js';
 import { loadConfig, configIssues } from '../dist/config/load.js';
 import { LockStore } from '../dist/lock/store.js';
 import { flockFree, judgeStack, probe, resolveStacks, stackContainers, underStackLock } from '../dist/stacks/idle.js';
@@ -147,7 +147,7 @@ test('suite.queue.slots per-stack: a suite holds the place of its stacks only; t
   await holdPlace(t, p.locks, 'full-suite');
   const two = await p.run(['--stacks', '2']);
   assert.equal(two.code, 0, two.stdout + two.stderr);
-  assert.deepEqual(two.json().queue.places, ['full-suite-stack-2']);
+  assert.deepEqual(two.json().queue.places, [copyPlace('full-suite', p.repo), 'full-suite-stack-2']);
   assert.equal(two.json().queue.slots, 'per-stack');
   assert.ok(two.json().queue.waitedMs < 1000, `waited ${two.json().queue.waitedMs} ms`);
   const one = await p.run(['--stacks', '1']);
@@ -164,7 +164,7 @@ test('suite.queue.slots 1 (default): the whole queue and the place of each stack
   const p = await project(t, { ports: false });
   const r = await p.run(['--stacks', '2']);
   assert.equal(r.code, 0, r.stderr);
-  assert.deepEqual(r.json().queue.places, ['full-suite', 'full-suite-stack-2']);
+  assert.deepEqual(r.json().queue.places, [copyPlace('full-suite', p.repo), 'full-suite', 'full-suite-stack-2']);
   await holdPlace(t, p.locks, 'full-suite');
   const refused = await p.run(['--stacks', '2']);
   assert.equal(refused.code, 1);
@@ -183,7 +183,7 @@ test('suite.queue.slots N: one of N numbered places, then those of its stacks; a
   await second();
   const ok = await p.run(['--stacks', '2']);
   assert.equal(ok.code, 0, ok.stderr);
-  assert.deepEqual(ok.json().queue.places, ['full-suite-slot-2', 'full-suite-stack-2']);
+  assert.deepEqual(ok.json().queue.places, [copyPlace('full-suite', p.repo), 'full-suite-slot-2', 'full-suite-stack-2']);
 });
 
 test('two suites run at the same time on two stacks (per-stack); two suites on the same stack never do', { skip: !hasFlock && 'flock(1) missing' }, async t => {

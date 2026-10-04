@@ -466,7 +466,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   };
   if (suite && settings.queue.enabled) {
     queue = await enterQueue({ lockFile: await commonPath(git, repo, settings.queue.lockFile), settings: settings.queue, repo, log, signal: options.signal, hooks: options.hooks,
-      places: queuePlaces(settings.queue.slots, { used: usage.used, declared: stacks.map(s => s.id), unmapped: usage.unmapped.length > 0 }) });
+      copy: repo, places: queuePlaces(settings.queue.slots, { used: usage.used, declared: stacks.map(s => s.id), unmapped: usage.unmapped.length > 0 }) });
   }
   // The containers of the stacks the suite checks, read before its checks: compared after a check interrupted under their lock.
   const containersBefore = new Map<string, StackContainer[]>();

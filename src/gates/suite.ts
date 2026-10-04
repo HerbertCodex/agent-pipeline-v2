@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -67,13 +68,19 @@ export async function commonPath(git: Git, repo: string, path: string): Promise<
 
 /** The place of a test stack in the queue `resource`: held by every full suite that uses the stack. */
 export const stackPlace = (resource: string, stack: string): string => `${resource}-stack-${stack.replace(/[^A-Za-z0-9._-]/g, '_')}`;
+/**
+ * The place of a copy (a worktree, by its canonical path) in the queue `resource`: held by every full suite run there,
+ * before any other place, so that two suites never run in the same copy (they would share node_modules and the build
+ * folders, and each would stop the servers of the other as orphans of the copy), whatever `slots`.
+ */
+export const copyPlace = (resource: string, copy: string): string => `${resource}-copy-${createHash('sha256').update(canonicalPath(copy)).digest('hex').slice(0, 16)}`;
 /** The numbered place `k` (1 to N) of the queue `resource` with `slots: N`. */
 export const slotPlace = (resource: string, k: number): string => `${resource}-slot-${k}`;
 
 /**
  * What a run takes in the queue (docs/SHIFT-LEFT.md, section 13), always in this order so that two runs never wait for
- * each other in a cycle: the whole queue, then a numbered place (or every one, `all`), then the place of each stack,
- * sorted. Every full suite holds the place of each stack it uses: two suites never share a stack, whatever `slots`.
+ * each other in a cycle: the place of its copy (a full suite, `enterQueue` `copy`), the whole queue, then a numbered
+ * place (or every one, `all`), then the place of each stack, sorted. Every full suite holds the place of each stack it uses: two suites never share a stack, whatever `slots`.
  * - `slots: 1` (default): the whole queue too, one suite at a time as before;
  * - `per-stack`: the places of its stacks only; a suite that uses no declared stack takes the whole queue;
  * - a number N: one of N numbered places, then those of its stacks.
@@ -174,7 +181,9 @@ export async function enterQueue(options: { lockFile: string; settings: SuiteQue
   /** Who waits (`apv gates run` by default) and why: shown to the other runs of the queue. */
   label?: string; purpose?: string;
   /** The places to take; absent: the whole queue alone. */
-  places?: QueuePlaces }): Promise<QueueHandle> {
+  places?: QueuePlaces;
+  /** The copy the run works in (a full suite): its place (`copyPlace`) is taken first. */
+  copy?: string }): Promise<QueueHandle> {
   const { settings, log } = options;
   const dir = dirname(options.lockFile);
   const resource = basename(options.lockFile).replace(/\.lock$/, '');
@@ -183,6 +192,7 @@ export async function enterQueue(options: { lockFile: string; settings: SuiteQue
   const n = typeof settings.slots === 'number' ? settings.slots : 1;
   const numbered = Array.from({ length: n }, (_, i) => slotPlace(resource, i + 1));
   const steps: string[][] = [
+    ...(options.copy !== undefined ? [[copyPlace(resource, options.copy)]] : []),
     ...(places.whole ? [[resource]] : []),
     ...(places.slots === 'one' ? [numbered] : places.slots === 'all' ? numbered.map(r => [r]) : []),
     ...places.stacks.map(id => [stackPlace(resource, id)]),

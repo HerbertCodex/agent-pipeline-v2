@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -25,6 +26,12 @@ export async function commonPath(git, repo, path) {
 }
 /** The place of a test stack in the queue `resource`: held by every full suite that uses the stack. */
 export const stackPlace = (resource, stack) => `${resource}-stack-${stack.replace(/[^A-Za-z0-9._-]/g, '_')}`;
+/**
+ * The place of a copy (a worktree, by its canonical path) in the queue `resource`: held by every full suite run there,
+ * before any other place, so that two suites never run in the same copy (they would share node_modules and the build
+ * folders, and each would stop the servers of the other as orphans of the copy), whatever `slots`.
+ */
+export const copyPlace = (resource, copy) => `${resource}-copy-${createHash('sha256').update(canonicalPath(copy)).digest('hex').slice(0, 16)}`;
 /** The numbered place `k` (1 to N) of the queue `resource` with `slots: N`. */
 export const slotPlace = (resource, k) => `${resource}-slot-${k}`;
 export function queuePlaces(slots, options) {
@@ -133,6 +140,7 @@ export async function enterQueue(options) {
     const n = typeof settings.slots === 'number' ? settings.slots : 1;
     const numbered = Array.from({ length: n }, (_, i) => slotPlace(resource, i + 1));
     const steps = [
+        ...(options.copy !== undefined ? [[copyPlace(resource, options.copy)]] : []),
         ...(places.whole ? [[resource]] : []),
         ...(places.slots === 'one' ? [numbered] : places.slots === 'all' ? numbered.map(r => [r]) : []),
         ...places.stacks.map(id => [stackPlace(resource, id)]),

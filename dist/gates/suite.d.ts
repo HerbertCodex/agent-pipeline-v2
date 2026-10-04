@@ -55,12 +55,18 @@ export interface QueueHandle {
 export declare function commonPath(git: Git, repo: string, path: string): Promise<string>;
 /** The place of a test stack in the queue `resource`: held by every full suite that uses the stack. */
 export declare const stackPlace: (resource: string, stack: string) => string;
+/**
+ * The place of a copy (a worktree, by its canonical path) in the queue `resource`: held by every full suite run there,
+ * before any other place, so that two suites never run in the same copy (they would share node_modules and the build
+ * folders, and each would stop the servers of the other as orphans of the copy), whatever `slots`.
+ */
+export declare const copyPlace: (resource: string, copy: string) => string;
 /** The numbered place `k` (1 to N) of the queue `resource` with `slots: N`. */
 export declare const slotPlace: (resource: string, k: number) => string;
 /**
  * What a run takes in the queue (docs/SHIFT-LEFT.md, section 13), always in this order so that two runs never wait for
- * each other in a cycle: the whole queue, then a numbered place (or every one, `all`), then the place of each stack,
- * sorted. Every full suite holds the place of each stack it uses: two suites never share a stack, whatever `slots`.
+ * each other in a cycle: the place of its copy (a full suite, `enterQueue` `copy`), the whole queue, then a numbered
+ * place (or every one, `all`), then the place of each stack, sorted. Every full suite holds the place of each stack it uses: two suites never share a stack, whatever `slots`.
  * - `slots: 1` (default): the whole queue too, one suite at a time as before;
  * - `per-stack`: the places of its stacks only; a suite that uses no declared stack takes the whole queue;
  * - a number N: one of N numbered places, then those of its stacks.
@@ -97,6 +103,8 @@ export declare function enterQueue(options: {
     purpose?: string;
     /** The places to take; absent: the whole queue alone. */
     places?: QueuePlaces;
+    /** The copy the run works in (a full suite): its place (`copyPlace`) is taken first. */
+    copy?: string;
 }): Promise<QueueHandle>;
 /** Waits for the 1-minute load average to drop under `max`, at most `limitMs`; journaled at most every minute. */
 export declare function waitForLoad(max: number, limitMs: number, log: (line: string) => void, signal?: AbortSignal, hooks?: SuiteHooks, 
