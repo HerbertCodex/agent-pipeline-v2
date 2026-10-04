@@ -76,14 +76,16 @@ sinon le checkout principal, sinon refus qui liste les emplacements) ; aucune : 
 dans l'état de l'exécution et écrite dans les reçus (override).
 Suite complète (au moins un contrôle de stage full exécuté en entier) : refusée sur un arbre modifié
 (fichiers suivis modifiés ou non suivis hors ignorés, listés) sauf --allow-dirty (reçus non prouvants) ;
-puis, une copie avec package-lock.json sans node_modules, batch.setup (échec : refus GATE_SETUP) ; puis
-file des suites complètes (section suite.queue, active par défaut : un verrou à bail commun aux
-worktrees ; la suite tient la place de chaque pile qu'elle utilise, et avec slots 1 (défaut) la file
-entière, avec slots per-stack une suite par pile en même temps, avec slots N une des N places ; et si
-suite.queue.maxLoad est posé, attente d'une charge sur 1 min sous ce seuil) ; puis arrêt des orphelins
-de cette copie sur suite.ports (jamais une autre copie ni le checkout principal). Seules les piles
-utilisées (celles de --stacks, sinon celles que verrouillent les contrôles) et leurs ports sont
-vérifiés : --stacks 2 ne refuse pas pour un verrou ou un port de la pile 1. Un contrôle arrêté
+puis file des suites complètes (section suite.queue, active par défaut : un verrou à bail commun aux
+worktrees ; la suite tient la place de sa copie (jamais deux suites dans la même copie), puis celle de
+chaque pile qu'elle utilise, et avec slots 1 (défaut) la file entière, avec slots per-stack une suite
+par pile en même temps, avec slots N une des N places ; un contrôle qui lance apv web audit lui fait
+tenir toutes les places ; et si suite.queue.maxLoad est posé, attente d'une charge sur 1 min sous ce
+seuil) ; puis arrêt des orphelins de cette copie sur suite.ports (jamais une autre copie ni le
+checkout principal) ; puis, une copie avec package-lock.json sans node_modules, batch.setup (échec :
+refus GATE_SETUP ; jamais dans le checkout principal). Seules les piles utilisées (celles de
+--stacks, sinon celles que verrouillent les contrôles ; toutes pour un verrou hors pile) et leurs
+ports sont vérifiés : --stacks 2 ne refuse pas pour un verrou ou un port de la pile 1. Un contrôle arrêté
 (annulation, délai) sous le verrou d'une pile fait relire la pile après l'arrêt (conteneurs de
 dockerProject comparés au départ) : un conteneur disparu ou arrêté est signalé. Les
 délais des contrôles ne commencent qu'après. Un contrôle avec lock attend son verrou (bail apv lock ou
