@@ -482,7 +482,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly screens: string[] | undefined;
         readonly docsOnly: {
             readonly enabled: boolean | undefined;
-            readonly kinds: ("state" | "decisions" | "mockups" | "drafts" | "specs" | "journal" | "docs")[] | undefined;
+            readonly kinds: ("decisions" | "mockups" | "drafts" | "specs" | "journal" | "docs")[] | undefined;
             readonly exclude: string[] | undefined;
         } | undefined;
     } | undefined;

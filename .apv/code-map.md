@@ -215,7 +215,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `anchor-status.ts` : What 'apv status' says of the anchors: the operator journal, the branch protection, the… Exporte : AnchorStatus, anchorLines(), anchorStatus(), journalLines(). Utilisé par 1 fichier (src/commands/status.ts).
 - `check.ts` : What was checked, in one sentence. Exporte : RuleOutcome, RuleStatus, RulesInput, RulesReport, checkMergeRules(), isWebAt(), et 1 autre(s). Utilisé par 2 fichiers (src/commands/rules.ts, …).
 - `config.ts` : The rules the tool enforces before a merge ('apv rules check', 'apv stack merge', 'apv… Exporte : CAPTURE_THEMES, CAPTURE_VIEWPORTS, CaptureTheme, CaptureViewport, DEFAULT_CAPTURE_THEMES, DEFAULT_CAPTURE_VIEWPORTS, et 10 autre(s). Utilisé par 7 fichiers (src/commands/review.ts, …).
-- `docs-only.ts` : The lane without code (« voie sans code », docs/REGLES.md). Exporte : DocsOnlyLane, KIND_LABEL, LANE_NAME, LaneFile, LaneInput, docsOnlyLane(), et 2 autre(s). Utilisé par 2 fichiers (src/commands/review.ts, …).
+- `docs-only.ts` : sans description. Exporte : DocsOnlyLane, KIND_LABEL, LANE_NAME, LaneFile, LaneInput, docsOnlyLane(), et 2 autre(s). Utilisé par 2 fichiers (src/commands/review.ts, …).
 - `merges.ts` : Merge traces: 'apv stack merge' and 'apv stack batch --merge' write one per merge,… Exporte : DEFAULT_AUDIT_DAYS, MERGES_DIR, MergeAudit, MergeTrace, MergeTraceBody, UnaccountedCommit, et 4 autre(s). Utilisé par 4 fichiers (src/commands/audit.ts, …).
 - et 6 autres entrées dans ce dossier (liste complète : apv map --json).
 

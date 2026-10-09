@@ -11,19 +11,25 @@ import { type OperatorMessage } from './operator.js';
  *
  * The lane is decided by the tool, from the diff since the merge base with the target, never by an agent: EVERY changed
  * file (both sides of a rename, deletions included) is a regular file (mode 100644, never a link, a submodule or an
- * executable), outside `rules.docsOnly.exclude`, outside the sensitive paths, the instructions of the agents and the
- * configuration files, and of one of these kinds (a closed list, that a project can only narrow):
- * - `decisions`: `.apv/DECISIONS.json` (valid at the head) and `.apv/DECISIONS.md`, never deleted;
+ * executable), outside `rules.docsOnly.exclude`, outside the sensitive paths, the instructions of the agents (compared
+ * without case, and the files the root CLAUDE.md, CLAUDE.local.md, AGENTS.md or GEMINI.md import by `@path`) and the
+ * configuration files, and of one of these kinds (a closed list, that a project can only narrow), with an extension of
+ * its kind (never a script, a file without extension nor a dotfile such as `.gitattributes`):
+ * - `decisions`: `.apv/DECISIONS.json` (valid at the head) and `.apv/DECISIONS.md` (exactly the rendering of the JSON
+ *   at the head, as `apv ledger apply` writes it), never deleted;
  * - `mockups`: a validated mockup under `design.dir` (drafts apart), added or modified, whose sha256 at the head is the
  *   one its decision records (the check of `apv design check`), never deleted;
  * - `drafts`: the drafts of the mockup loop, `<design.dir>/brouillons/**`;
- * - `specs`: `.apv/specs/**`; `journal`: `.apv/journal-pipeline.md`;
- * - `state`: `.apv/state/**`, never a script (`.sh`, `.js`, `.ts`, `.py`...);
+ * - `specs`: `.apv/specs/**.json`; `journal`: `.apv/journal-pipeline.md`;
  * - `docs`: Markdown the review plan reads as documentation (`*.md` of the neutral class, outside the served and
  *   routing folders, without a word of data or GDPR nor a real e-mail address in its changed lines), outside `.apv/`.
- * And every mockup decision the change adds or modifies in the ledger (confirmed, from the operator) has its quote
- * among the messages the operator typed (src/rules/operator.ts): a validation written by an agent alone never enters
- * the lane, since a decision merged becomes the base the rule `maquette` trusts. Anything else, anything unreadable,
+ * `.apv/state/**` is never in the lane: the session hook injects it into every session (security review of PR #121).
+ *
+ * The ledger only GROWS in the lane: a merged decision is the base the agents and the rule `maquette` trust (« merged,
+ * so reviewed »). A decision deleted or changed in any field (status, value, scope, quote...), and a decision added
+ * that replaces others (`supersedes`), keep the normal rules. A decision added confirmed comes from the operator, with
+ * its quote among the messages he typed (src/rules/operator.ts) and not already the quote of a decision of the base; a
+ * mockup decision added has its file at the head at the fingerprint it records. Anything else, anything unreadable,
  * and the normal rules apply.
  */
 export interface LaneFile {

@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { posix } from 'node:path';
 import { errorMessage } from '../domain/errors.js';
 import { RESERVED_GROUP } from '../design/config.js';
 import { mockupDecision } from '../design/registry.js';
 import { modeChange, parseRawDiff } from '../gates/proof-scope.js';
-import { LEDGER_FILE, loadDecisionLedger, type Decision } from '../lifecycle/decisions.js';
+import { decisionLedgerMarkdown, LEDGER_FILE, loadDecisionLedger, type Decision, type DecisionLedger } from '../lifecycle/decisions.js';
 import { matches } from '../policy/policy.js';
 import type { ReviewDomainName } from '../review/config.js';
 import type { ReviewPlan } from '../review/plan.js';
@@ -21,19 +22,25 @@ import { anchoredQuote, type OperatorMessage } from './operator.js';
  *
  * The lane is decided by the tool, from the diff since the merge base with the target, never by an agent: EVERY changed
  * file (both sides of a rename, deletions included) is a regular file (mode 100644, never a link, a submodule or an
- * executable), outside `rules.docsOnly.exclude`, outside the sensitive paths, the instructions of the agents and the
- * configuration files, and of one of these kinds (a closed list, that a project can only narrow):
- * - `decisions`: `.apv/DECISIONS.json` (valid at the head) and `.apv/DECISIONS.md`, never deleted;
+ * executable), outside `rules.docsOnly.exclude`, outside the sensitive paths, the instructions of the agents (compared
+ * without case, and the files the root CLAUDE.md, CLAUDE.local.md, AGENTS.md or GEMINI.md import by `@path`) and the
+ * configuration files, and of one of these kinds (a closed list, that a project can only narrow), with an extension of
+ * its kind (never a script, a file without extension nor a dotfile such as `.gitattributes`):
+ * - `decisions`: `.apv/DECISIONS.json` (valid at the head) and `.apv/DECISIONS.md` (exactly the rendering of the JSON
+ *   at the head, as `apv ledger apply` writes it), never deleted;
  * - `mockups`: a validated mockup under `design.dir` (drafts apart), added or modified, whose sha256 at the head is the
  *   one its decision records (the check of `apv design check`), never deleted;
  * - `drafts`: the drafts of the mockup loop, `<design.dir>/brouillons/**`;
- * - `specs`: `.apv/specs/**`; `journal`: `.apv/journal-pipeline.md`;
- * - `state`: `.apv/state/**`, never a script (`.sh`, `.js`, `.ts`, `.py`...);
+ * - `specs`: `.apv/specs/**.json`; `journal`: `.apv/journal-pipeline.md`;
  * - `docs`: Markdown the review plan reads as documentation (`*.md` of the neutral class, outside the served and
  *   routing folders, without a word of data or GDPR nor a real e-mail address in its changed lines), outside `.apv/`.
- * And every mockup decision the change adds or modifies in the ledger (confirmed, from the operator) has its quote
- * among the messages the operator typed (src/rules/operator.ts): a validation written by an agent alone never enters
- * the lane, since a decision merged becomes the base the rule `maquette` trusts. Anything else, anything unreadable,
+ * `.apv/state/**` is never in the lane: the session hook injects it into every session (security review of PR #121).
+ *
+ * The ledger only GROWS in the lane: a merged decision is the base the agents and the rule `maquette` trust (« merged,
+ * so reviewed »). A decision deleted or changed in any field (status, value, scope, quote...), and a decision added
+ * that replaces others (`supersedes`), keep the normal rules. A decision added confirmed comes from the operator, with
+ * its quote among the messages he typed (src/rules/operator.ts) and not already the quote of a decision of the base; a
+ * mockup decision added has its file at the head at the fingerprint it records. Anything else, anything unreadable,
  * and the normal rules apply.
  */
 
@@ -53,12 +60,18 @@ export interface DocsOnlyLane {
 export const LANE_NAME = 'voie sans code';
 export const KIND_LABEL: Readonly<Record<DocsOnlyKind, string>> = {
   decisions: 'registre des décisions', mockups: 'maquette validée', drafts: 'brouillon de maquette', specs: 'spec',
-  journal: 'journal du pipeline', state: 'fichier d\'état', docs: 'documentation',
+  journal: 'journal du pipeline', docs: 'documentation',
 };
 const JOURNAL = '.apv/journal-pipeline.md';
 const LEDGER_TEXT = '.apv/DECISIONS.md';
-/** Files of `.apv/state/` that could be run: never state. */
-const SCRIPT = /\.(?:sh|bash|zsh|fish|ps1|bat|cmd|js|mjs|cjs|ts|mts|cts|jsx|tsx|py|rb|pl|php|exe)$/i;
+/** Extensions a file of each kind may have (the ledger and the journal are fixed paths). */
+const MOCKUP_EXTENSIONS = ['.html', '.png', '.jpg', '.jpeg', '.webp', '.svg', '.css'] as const;
+const EXTENSIONS: Readonly<Partial<Record<DocsOnlyKind, readonly string[]>>> = {
+  specs: ['.json'], mockups: MOCKUP_EXTENSIONS, drafts: MOCKUP_EXTENSIONS, docs: ['.md'],
+};
+/** Files at the root whose `@path` imports are instructions too (Claude Code reads them at the start of every session). */
+const IMPORTERS = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'GEMINI.md', '.claude/CLAUDE.md'] as const;
+const IMPORT = /(?:^|[\s([])@((?:\.{1,2}\/)?[^\s`'"()<>[\]]+)/g;
 const SHOWN = 50;
 
 export interface LaneInput {
@@ -77,13 +90,24 @@ export interface LaneInput {
 }
 
 const safe = (path: string, glob: string): boolean => { try { return matches(path, glob); } catch { return false; } };
+/** Whether a glob matches the path, case ignored: `Docs/Claude.md` is `docs/CLAUDE.md` on a file system without case. */
+const anyCase = (path: string, globs: readonly string[]): boolean => globs.some(g => safe(path.toLowerCase(), g.toLowerCase()));
 const under = (path: string, dir: string): boolean => path.startsWith(`${dir}/`);
+/** `.json` of `a/b.json`; null for a dotfile (`.gitattributes`) or a name without extension. */
+function extensionOf(path: string): string | null {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  return name.startsWith('.') || dot <= 0 ? null : name.slice(dot).toLowerCase();
+}
 
-function blobHash(repo: string, sha: string, path: string): string | null {
+function gitShow(repo: string, sha: string, path: string): Buffer | null {
   try {
-    const data = execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'cat-file', 'blob', `${sha}:${path}`], { cwd: repo, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024, timeout: 60_000 });
-    return createHash('sha256').update(data).digest('hex');
+    return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'cat-file', 'blob', `${sha}:${path}`], { cwd: repo, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024, timeout: 60_000 });
   } catch { return null; }
+}
+function blobHash(repo: string, sha: string, path: string): string | null {
+  const data = gitShow(repo, sha, path);
+  return data ? createHash('sha256').update(data).digest('hex') : null;
 }
 
 function rawFiles(repo: string, base: string, head: string): ReturnType<typeof parseRawDiff> | null {
@@ -93,28 +117,85 @@ function rawFiles(repo: string, base: string, head: string): ReturnType<typeof p
   } catch { return null; }
 }
 
+/** The files the root instructions import by `@path` (at the base and at the head), lower case, with the importer. */
+function importedInstructions(repo: string, shas: readonly string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const sha of shas) for (const file of IMPORTERS) {
+    const text = gitShow(repo, sha, file)?.toString('utf8');
+    if (!text) continue;
+    for (const m of text.matchAll(IMPORT)) {
+      const target = m[1]!.replace(/[.,;:!?]+$/, '');
+      if (!target || target.startsWith('~') || target.startsWith('/')) continue;
+      const path = posix.normalize(posix.join(posix.dirname(file), target));
+      if (!path.startsWith('..')) out.set(path.toLowerCase(), file);
+    }
+  }
+  return out;
+}
+
 /** The kind of one side of a changed file, or why it keeps the normal rules. */
-function kindOf(path: string, deleted: boolean, documentation: boolean, input: LaneInput): { kind: DocsOnlyKind } | { why: string } {
+function kindOf(path: string, deleted: boolean, documentation: boolean, input: LaneInput, imports: ReadonlyMap<string, string>): { kind: DocsOnlyKind } | { why: string } {
   const { settings } = input;
-  if (settings.exclude.some(g => safe(path, g))) return { why: 'exclu par rules.docsOnly.exclude' };
-  if (CONFIG_FILES.some(g => safe(path, g))) return { why: 'configuration (outil, tests, dépendances, CI)' };
-  if (input.sensitive.some(g => safe(path, g)) || AGENT_INSTRUCTIONS.some(g => safe(path, g))) return { why: 'chemin sensible ou instructions des agents' };
+  if (anyCase(path, settings.exclude)) return { why: 'exclu par rules.docsOnly.exclude' };
+  if (anyCase(path, CONFIG_FILES)) return { why: 'configuration (outil, tests, dépendances, CI)' };
+  if (anyCase(path, input.sensitive) || anyCase(path, AGENT_INSTRUCTIONS)) return { why: 'chemin sensible ou instructions des agents' };
+  const importer = imports.get(path.toLowerCase());
+  if (importer) return { why: `importé par ${importer} (instructions des agents)` };
   const drafts = `${input.designDir}/${RESERVED_GROUP}`;
   let kind: DocsOnlyKind | null = null;
   if (path === LEDGER_FILE || path === LEDGER_TEXT) kind = 'decisions';
   else if (path === JOURNAL) kind = 'journal';
   else if (under(path, '.apv/specs')) kind = 'specs';
-  else if (under(path, '.apv/state')) { if (SCRIPT.test(path)) return { why: 'script sous .apv/state (jamais un fichier d\'état)' }; kind = 'state'; }
   else if (under(path, drafts)) kind = 'drafts';
   else if (under(path, input.designDir)) kind = 'mockups';
   else if (documentation && path.endsWith('.md') && !under(path, '.apv')) kind = 'docs';
-  if (!kind) return { why: 'hors de la liste de la voie sans code (code, interface, configuration ou fichier non classé)' };
+  if (!kind) return { why: 'hors de la liste de la voie sans code (code, interface, configuration, état ou fichier non classé)' };
+  const allowed = EXTENSIONS[kind];
+  if (allowed && !allowed.includes(extensionOf(path) ?? '')) return { why: `${KIND_LABEL[kind]} : extension hors de la liste (${allowed.join(', ')}), jamais un script ni un fichier sans extension` };
   if (!settings.kinds.includes(kind)) return { why: `${KIND_LABEL[kind]} : type retiré de la voie par rules.docsOnly.kinds` };
   if (deleted && (kind === 'decisions' || kind === 'mockups')) return { why: `${KIND_LABEL[kind]} supprimé(e)` };
   return { kind };
 }
 
 const sameDecision = (a: Decision, b: Decision): boolean => JSON.stringify(a) === JSON.stringify(b);
+const quoteKey = (quote: string): string => quote.normalize('NFC').toLowerCase().replace(/[\s.,;:!?«»"']+/g, ' ').trim();
+
+/** Why the ledger at the head is more than an anchored growth of the ledger at the base (see above); empty when it is. */
+function ledgerBlocking(atBase: readonly Decision[], atHead: readonly Decision[], input: LaneInput): DocsOnlyLane['blocking'] {
+  const out: DocsOnlyLane['blocking'] = [];
+  const at = (why: string, path: string = LEDGER_FILE): void => { out.push({ path, why }); };
+  const headIds = new Set(atHead.map(d => d.id));
+  const baseById = new Map(atBase.map(d => [d.id, d]));
+  const baseQuotes = new Map(atBase.filter(d => quoteKey(d.sourceQuote)).map(d => [quoteKey(d.sourceQuote), d.id]));
+  for (const d of atBase) if (!headIds.has(d.id)) at(`décision ${d.id} supprimée : une décision fusionnée ne se retire que relue`);
+  for (const d of atHead) {
+    const before = baseById.get(d.id);
+    if (before) {
+      if (!sameDecision(before, d)) {
+        const fields = Object.keys({ ...before, ...d }).filter(k => JSON.stringify((before as Record<string, unknown>)[k]) !== JSON.stringify((d as Record<string, unknown>)[k]));
+        at(`décision ${d.id} modifiée (${fields.join(', ')}) : une décision fusionnée ne change que relue`);
+      }
+      continue;
+    }
+    if (d.supersedes.length) at(`décision ${d.id} ajoutée : elle en remplace d'autres (${d.supersedes.join(', ')}) : relue`);
+    if (d.status === 'confirmed' && d.source !== 'operator') at(`décision ${d.id} ajoutée confirmée sans source opérateur`);
+    if (d.source === 'operator') {
+      if (!anchoredQuote(input.messages, d.sourceQuote, input.key)) at(`décision ${d.id} ajoutée : sa citation n'est pas dans les messages de l'opérateur`);
+      else {
+        const spent = baseQuotes.get(quoteKey(d.sourceQuote));
+        if (spent) at(`décision ${d.id} ajoutée : sa citation est déjà celle de ${spent} (registre de la base)`);
+      }
+    }
+    const mockup = mockupDecision(d);
+    if (mockup) {
+      const actual = mockup.file && mockup.sha256 ? blobHash(input.repo, input.head, mockup.file) : null;
+      if (!mockup.file || !mockup.sha256 || actual !== mockup.sha256) {
+        at(`décision ${d.id} : la maquette ${mockup.file ?? '(sans fichier)'} n'est pas à la tête avec l'empreinte enregistrée`, mockup.file ?? LEDGER_FILE);
+      }
+    }
+  }
+  return out;
+}
 
 /** The lane of a change (see above). Pure reading of the commits, the plan and the operator's journal. */
 export async function docsOnlyLane(input: LaneInput): Promise<DocsOnlyLane> {
@@ -129,39 +210,35 @@ export async function docsOnlyLane(input: LaneInput): Promise<DocsOnlyLane> {
     const mode = modeChange(f);
     if (mode) blocking.push({ path: f.path, why: `${mode} (lien symbolique, sous-module ou exécutable)` });
   }
+  const imports = importedInstructions(input.repo, [input.mergeBase, input.head]);
   for (const file of input.plan.files) {
     // Documentation as the plan reads it: neutral Markdown outside the served folders, without a word of data or GDPR.
     const documentation = file.risk === 'faible' && file.riskWhy === 'documentation';
     const sides = [{ path: file.path, deleted: file.status.startsWith('D') }, ...(file.from !== undefined ? [{ path: file.from, deleted: true }] : [])];
     for (const side of sides) {
-      const k = kindOf(side.path, side.deleted, documentation, input);
+      const k = kindOf(side.path, side.deleted, documentation, input, imports);
       if ('why' in k) blocking.push({ path: side.path, why: k.why });
       else if (!side.deleted || !files.has(side.path)) files.set(side.path, k.kind);
     }
   }
   const touched = [...files].filter(([, k]) => k === 'mockups' || k === 'decisions');
   if (!blocking.length && touched.length) {
-    // The ledger at the head and at the base: every mockup decision the change brings is anchored in the operator's words.
-    let atHead: Decision[]; let atBase: Decision[];
+    let atHead: DecisionLedger; let atBase: DecisionLedger;
     try {
-      atHead = (await loadDecisionLedger(input.repo, input.head, LEDGER_FILE)).decisions;
-      atBase = (await loadDecisionLedger(input.repo, input.mergeBase, LEDGER_FILE)).decisions;
+      atHead = await loadDecisionLedger(input.repo, input.head, LEDGER_FILE);
+      atBase = await loadDecisionLedger(input.repo, input.mergeBase, LEDGER_FILE);
     } catch (error) {
       return no(`registre des décisions illisible ou invalide : ${errorMessage(error).slice(0, 200)}`, [{ path: LEDGER_FILE, why: 'registre illisible ou invalide' }]);
     }
-    const baseById = new Map(atBase.map(d => [d.id, d]));
-    for (const d of atHead) {
-      if (!mockupDecision(d)) continue;
-      const before = baseById.get(d.id);
-      if (before && sameDecision(before, d)) continue;
-      if (d.source !== 'operator') { blocking.push({ path: LEDGER_FILE, why: `décision de maquette ${d.id} ajoutée ou modifiée sans source opérateur` }); continue; }
-      if (!anchoredQuote(input.messages, d.sourceQuote, input.key)) {
-        blocking.push({ path: LEDGER_FILE, why: `décision de maquette ${d.id} ajoutée ou modifiée : sa citation n'est pas dans les messages de l'opérateur` });
-      }
+    blocking.push(...ledgerBlocking(atBase.decisions, atHead.decisions, input));
+    // The readable version is what the agents read: the exact rendering of the ledger at the head, or nothing.
+    const text = gitShow(input.repo, input.head, LEDGER_TEXT);
+    if (text && text.toString('utf8') !== decisionLedgerMarkdown(atHead)) {
+      blocking.push({ path: LEDGER_TEXT, why: `différent du rendu de ${LEDGER_FILE} à la tête (apv ledger apply l'écrit) : le texte que lisent les agents contredirait le registre` });
     }
     for (const [path, kind] of touched) {
       if (kind !== 'mockups') continue;
-      const decision = atHead.find(d => d.source === 'operator' && mockupDecision(d)?.file === path);
+      const decision = atHead.decisions.find(d => d.source === 'operator' && mockupDecision(d)?.file === path);
       const recorded = decision ? mockupDecision(decision)!.sha256 : null;
       if (!recorded) { blocking.push({ path, why: 'aucune décision de maquette validée (source opérateur) ne porte ce fichier et son empreinte' }); continue; }
       const actual = blobHash(input.repo, input.head, path);

@@ -32,8 +32,10 @@ const gateId = s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
 /**
  * Kinds of files of the lane without code (`voie sans code`, src/rules/docs-only.ts): a closed list, fixed by the tool. A
  * project can only narrow it (`rules.docsOnly.kinds`, `exclude`) or switch the lane off (`enabled: false`): never widen it.
+ * `.apv/state/**` is not a kind: the session hook injects it into the context of every session (`resume.md`, the runs),
+ * so it is read as instructions (security review of PR #121).
  */
-export const DOCS_ONLY_KINDS = ['decisions', 'mockups', 'drafts', 'specs', 'journal', 'state', 'docs'] as const;
+export const DOCS_ONLY_KINDS = ['decisions', 'mockups', 'drafts', 'specs', 'journal', 'docs'] as const;
 export type DocsOnlyKind = typeof DOCS_ONLY_KINDS[number];
 
 export const rulesSchema = s.object({

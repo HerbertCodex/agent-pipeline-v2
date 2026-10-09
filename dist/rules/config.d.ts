@@ -18,8 +18,10 @@ export declare const DEFAULT_CAPTURE_THEMES: readonly CaptureTheme[];
 /**
  * Kinds of files of the lane without code (`voie sans code`, src/rules/docs-only.ts): a closed list, fixed by the tool. A
  * project can only narrow it (`rules.docsOnly.kinds`, `exclude`) or switch the lane off (`enabled: false`): never widen it.
+ * `.apv/state/**` is not a kind: the session hook injects it into the context of every session (`resume.md`, the runs),
+ * so it is read as instructions (security review of PR #121).
  */
-export declare const DOCS_ONLY_KINDS: readonly ["decisions", "mockups", "drafts", "specs", "journal", "state", "docs"];
+export declare const DOCS_ONLY_KINDS: readonly ["decisions", "mockups", "drafts", "specs", "journal", "docs"];
 export type DocsOnlyKind = typeof DOCS_ONLY_KINDS[number];
 export declare const rulesSchema: import("../domain/schema.js").Schema<{
     readonly captures: {
@@ -34,7 +36,7 @@ export declare const rulesSchema: import("../domain/schema.js").Schema<{
     readonly screens: string[] | undefined;
     readonly docsOnly: {
         readonly enabled: boolean | undefined;
-        readonly kinds: ("state" | "decisions" | "mockups" | "drafts" | "specs" | "journal" | "docs")[] | undefined;
+        readonly kinds: ("decisions" | "mockups" | "drafts" | "specs" | "journal" | "docs")[] | undefined;
         readonly exclude: string[] | undefined;
     } | undefined;
 }>;
