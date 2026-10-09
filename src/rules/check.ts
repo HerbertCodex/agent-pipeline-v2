@@ -238,6 +238,11 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   // style, a message shown, a configuration of the styles change what a screen shows). Not applicable only to a project
   // without screens at the base (not a web project, no route the tool knows, nothing in rules.screens, no interface
   // file) that adds none: a command-line tool has nothing to capture, a first page or template added asks for them.
+  // The fidelity review lifted by the operator (« dérogation relecture:fidelite » or the whole rule « dérogation relecture »)
+  // and not recorded: its captures have no object. Recorded without captures, they stay required.
+  const fidelity = domainStates.find(d => d.domain === 'fidelite');
+  const fidelityWaiver = !fidelity || fidelity.status === 'recorded' ? null
+    : fidelity.status === 'waived' ? fidelity.waiver!.reason : waiverFor(messages, 'relecture', sha)?.reason ?? null;
   const screenMatch = screenMatchers(settings.screens);
   const changed = changedFiles(repo, mergeBase, sha);
   const screens = changed.filter(f => isScreen(f, screenMatch));
@@ -245,6 +250,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   if (!addedScreens.length && !hasScreensAt(repo, mergeBase, screenMatch)) rules.push(outcome('captures', 'not_applicable', 'projet sans écran à la base (pas un projet web, aucune route reconnue ni rules.screens, aucun fichier d\'interface) et aucun écran ajouté : rien à capturer'));
   else if (lane.eligible && !retained.includes('fidelite')) rules.push(outcome('captures', 'not_applicable', `${LANE_NAME} : aucun écran ni fichier d'interface, relecture de fidélité non exigée`));
   else if (!retained.includes('fidelite')) rules.push(outcome('captures', 'not_applicable', 'relecture de fidélité non retenue par le plan des revues'));
+  else if (fidelityWaiver) rules.push(outcome('captures', 'not_applicable', `fidélité levée par dérogation (${fidelityWaiver})`));
   else {
     const record = reviews.get('fidelite')?.record ?? null;
     const needed = settings.captures.viewports.flatMap(v => settings.captures.themes.map(t => `${v}:${t}`));

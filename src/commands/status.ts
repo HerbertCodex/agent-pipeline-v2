@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { errorMessage } from '../domain/errors.js';
 import { configFile, loadConfig } from '../config/load.js';
+import { modelSettings, modelsLine, type ModelSettings } from '../config/models.js';
 import { decisionLedgerIssues, decisionLedgerSchema, ledgerHash, LEDGER_FILE, LEGACY_LEDGER_FILE } from '../lifecycle/decisions.js';
 import { lastQuotaReading, QUOTA_LOG } from '../quota/usage.js';
 import { parseSpecDocument } from '../spec/check.js';
@@ -51,6 +52,8 @@ function files(dir: string): string[] {
 export interface ApvStatus {
   repo: string;
   config: { file: string | null; legacy: boolean; gates: string[]; ignored: string[]; error: string | null };
+  /** Model of each role and the effort (`models`, docs/CONFIGURATION.md): the defaults when the section is absent or the configuration invalid. */
+  models: ModelSettings;
   ledger: { file: string | null; decisions: number | null; hash: string | null; issues: number };
   specs: { file: string; title: string | null; error: string | null }[];
   state: { file: string; bytes: number; modifiedAt: string }[];
@@ -69,9 +72,11 @@ export function apvStatus(repo: string, options: FreshnessOptions = {}): ApvStat
   const cfg: ApvStatus['config'] = { file: null, legacy: false, gates: [], ignored: [], error: null };
   // An invalid configuration leaves the defaults: the default living files are still watched.
   let freshnessSettings: FreshnessSettings | undefined;
+  let models = modelSettings(undefined);
   try {
     const loaded = loadConfig(repo);
     freshnessSettings = loaded.config.freshness;
+    models = modelSettings(loaded.config.models);
     Object.assign(cfg, { file: loaded.file && relative(repo, loaded.file), legacy: loaded.legacy, gates: loaded.config.gates.map(g => g.id), ignored: loaded.ignored });
   } catch (error) {
     const found = configFile(repo).file;
@@ -96,7 +101,7 @@ export function apvStatus(repo: string, options: FreshnessOptions = {}): ApvStat
   });
   const state = files(join(repo, '.apv', 'state')).map(f => { const st = statSync(f); return { file: relative(repo, f), bytes: st.size, modifiedAt: st.mtime.toISOString() }; });
   const runs = readRunSummaries(repo);
-  return { repo, config: cfg, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)),
+  return { repo, config: cfg, models, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)),
     freshness: freshnessReport(repo, freshnessSettings, options), metrics: measures(repo) };
 }
 
@@ -130,6 +135,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const lines = [
       `Projet : ${status.repo}`,
       `Configuration : ${c.file ? `${c.file}${c.legacy ? ' (format V2)' : ''}` : 'aucune'}${c.error ? ` ; invalide : ${c.error.split('\n')[0]}` : c.file ? ` ; contrôles : ${c.gates.join(', ') || 'aucun'}` : ''}`,
+      modelsLine(status.models),
       `Registre : ${status.ledger.file ? `${status.ledger.file} ; ${status.ledger.issues ? `invalide (${status.ledger.issues} erreur(s), voir apv ledger validate)` : `${status.ledger.decisions} décision(s), empreinte ${status.ledger.hash}`}` : 'aucun'}`,
       `Specs (.apv/specs) : ${status.specs.length ? '' : 'aucune'}`,
       // File names, titles and parse errors come from files any agent or commit can write: one cleaned line each.

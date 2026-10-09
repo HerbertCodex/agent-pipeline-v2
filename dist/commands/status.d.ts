@@ -1,3 +1,4 @@
+import { type ModelSettings } from '../config/models.js';
 import { lastQuotaReading } from '../quota/usage.js';
 import { type RunSummaryEntry } from '../run/summary.js';
 import type { CommandIO } from './io.js';
@@ -13,6 +14,8 @@ export interface ApvStatus {
         ignored: string[];
         error: string | null;
     };
+    /** Model of each role and the effort (`models`, docs/CONFIGURATION.md): the defaults when the section is absent or the configuration invalid. */
+    models: ModelSettings;
     ledger: {
         file: string | null;
         decisions: number | null;

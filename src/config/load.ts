@@ -20,6 +20,7 @@ import { mapSchema, mapSettings, reuseSchema, reuseSettings } from '../reuse/con
 import { rulesSchema, rulesSettings } from '../rules/config.js';
 import { testsCheckSchema } from '../testcheck/check.js';
 import { freshnessIssues, freshnessSchema } from '../freshness/config.js';
+import { modelsSchema } from './models.js';
 
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
@@ -29,7 +30,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'stack', 'web', 'reuse', 'map', 'rules', 'testsCheck', 'freshness'] as const;
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'stack', 'web', 'reuse', 'map', 'rules', 'testsCheck', 'freshness', 'models'] as const;
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'] as const;
 
@@ -216,6 +217,8 @@ export const apvConfigSchema = s.object({
   rules: s.optional(rulesSchema),
   /** Freshness of the living state and resume files reported by `apv status` (docs/CONFIGURATION.md, « Fraîcheur de l'état »); absent: defaults. */
   freshness: s.optional(freshnessSchema),
+  /** Model and effort of each role, passed to the Agent tool by the project lead and shown by `apv status` (docs/CONFIGURATION.md, « Modèles par rôle »); absent: defaults. */
+  models: s.optional(modelsSchema),
 });
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export const specLimits = (config: { spec?: Partial<SpecLimits> | undefined }): SpecLimits => ({ ...DEFAULT_SPEC_LIMITS, ...config.spec });

@@ -112,3 +112,16 @@ test('second review of PR #128: the ad names are read in a class or id context o
   assert.deepEqual(adBlockedNames(script, 'src/R.svelte').map(h => [h.line, h.kind, h.name]), [[4, 'classe', 'ad-box'], [5, 'identifiant', 'sponsor-zone']]);
   assert.deepEqual(adBlockedNames('<iframe sandbox="ad-x"></iframe>\n<a href="#ad-top">x</a>\n', 'src/R.svelte'), []);
 });
+
+test('9 October 2026: spaces around « = » in a tag, and a value on the next line, are read; a script assignment is not', () => {
+  const names = (text, path = 'src/S.svelte') => adBlockedNames(text, path).map(h => [h.line, h.kind, h.name]);
+  assert.deepEqual(names('<div class = "ad-x">a</div>\n<p id ="ad-y">b</p>\n<p class= "ad-z" id= \'sponsor-a\'>c</p>\n<b className = {"ad-j"}>d</b>\n', 'src/S.tsx'),
+    [[1, 'classe', 'ad-x'], [2, 'identifiant', 'ad-y'], [3, 'classe', 'ad-z'], [3, 'identifiant', 'sponsor-a'], [4, 'classe', 'ad-j']]);
+  // A value on the line after `class=`, in a tag that stays open.
+  assert.deepEqual(names('<div\n  class=\n    "card ad-next"\n  id =\n  "adv-top"\n>x</div>\n'), [[3, 'classe', 'ad-next'], [5, 'identifiant', 'adv-top']]);
+  assert.deepEqual(names('<div class=\n  "card">x</div>\n'), []);
+  // The spaced form is a markup attribute only: assignments of a script, text and unrelated attributes stay accepted.
+  const script = ['<script>', "  let id = 'ad-hoc-report';", "  className = 'sponsor-text';", "  if (a < b) { id = 'ad-two'; }", '</script>', '<p>texte id = "ad-text" et class = "ad-prose"</p>', '<a href="x" data-id = "ad-data">y</a>', ''].join('\n');
+  assert.deepEqual(names(script), []);
+  assert.deepEqual(names('<script>\n  const n = a<b ? 1 : 2;\n</script>\n<div class = "ad-after">x</div>\n'), [[4, 'classe', 'ad-after']]);
+});

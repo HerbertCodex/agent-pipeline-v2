@@ -81,6 +81,7 @@ export interface ReviewPlan {
         content: number;
         neutral: number;
         notes: number;
+        ledger: number;
         locks: number;
         unclassified: number;
     };

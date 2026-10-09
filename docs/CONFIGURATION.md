@@ -1,6 +1,6 @@
 # Configuration et politique
 
-> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts`, `resources`, `suite`, `stacks`, `batch`, `stack`, `web`, `reuse` et `map` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
+> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts`, `resources`, `suite`, `stacks`, `batch`, `stack`, `web`, `reuse`, `map`, `freshness` et `models` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
 
 La configuration est un JSON déclaratif lu avant l'agent et conservé avec la tentative. La tâche ne peut pas fournir une commande à la place d'un contrôle, changer un verdict ni s'accorder une exemption. Les champs inconnus sont refusés.
 
@@ -705,3 +705,27 @@ Section APV3, facultative, validée par le chargeur commun : les fichiers vivant
 - Secrets : seules la date, la taille et le nombre de lignes d'un fichier sont lus, jamais son contenu au-delà du comptage des fins de ligne. Un chemin qui ressemble à un secret, jugé sur son nom **et** sur sa cible réelle, n'est jamais ouvert : seule sa date est lue (`lines` à `null`, `secret` à `true`). Sont des secrets : les noms `.env*`, `id_*` (clés SSH), `*key*`, `*secret*`, `*token*`, `*credential*`, `*password*`, `*passwd*`, `.npmrc`, `.netrc`, `.pgpass`, `.git-credentials`, `hosts.yml`, `.pypirc`, `.htpasswd`, les extensions `.pem`, `.p12`, `.pfx`, `.kdbx`, `.keystore`, `.jks`, `.asc`, `.gpg`, et tout ce qui est sous un dossier `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker` ou `.password-store`.
 - Noms affichés : `apv status` affiche le chemin de chaque fichier signalé (dans le terminal de l'opérateur, et dans sa sortie JSON). Le crochet de début de session verse la ligne « Fichiers d'état à rafraîchir » au **contexte de chaque session** : il y nomme les fichiers du dépôt (8 au plus) et ne donne, pour les fichiers hors du dépôt, que leur nombre.
 - Configuration invalide : refusée par le chargeur ; `apv status` et le crochet surveillent alors les fichiers par défaut avec les seuils par défaut.
+
+## Modèles par rôle : `models`
+
+Section APV3, facultative (3.0.0-alpha.22), validée par le chargeur commun. Elle dit quel modèle et quel effort chaque rôle reçoit ; `apv status` l'affiche (ligne « Modèles par rôle », champ `models` en JSON). L'outil ne lance aucun agent : le chef de projet passe `model` à l'outil Agent d'après cette section quand il lance un rôle, c'est un jugement qu'il porte dans son rapport ([REGLES.md](REGLES.md), section 4).
+
+```json
+{
+  "models": {
+    "chef": "fable",
+    "conception": "opus",
+    "implementer": "sonnet",
+    "fondations": "opus",
+    "integrateur": "opus",
+    "relecture": "sonnet",
+    "relecture-securite-regles": "opus",
+    "recherche": "haiku",
+    "effort": "high"
+  }
+}
+```
+
+- Valeurs : `fable`, `opus`, `sonnet` ou `haiku` ; `effort` : `low`, `medium`, `high` ou `xhigh`. Une autre valeur est refusée par le chargeur, avec la clé en cause.
+- Clés (liste fermée, une autre est refusée) : les rôles du plugin (`chef`, `product`, `architecte`, `architecte-donnees`, `designer`, `critique-design`, `dpo`, `implementer`, `fondations`, `integrateur`, `qa-securite`, `qa-fidelite`, `auditeur-web`, `relecture`, `recherche`) et les trois groupes des défauts : `conception` (`product`, `architecte`, `architecte-donnees`, `designer`, `critique-design`), `relecture` (`qa-fidelite`, `auditeur-web` et toute relecture sans clé propre) et `relecture-securite-regles` (`qa-securite`, `dpo`). La clé d'un rôle l'emporte sur celle de son groupe. `fondations` désigne la tâche de fondations d'une spec, confiée à un `implementer`.
+- Défauts, section absente ou clé non donnée : les valeurs de l'exemple ci-dessus, effort `high`. `apv status` ajoute « (défauts) » quand la section est absente, et garde les défauts quand la configuration est invalide.

@@ -175,6 +175,55 @@ test('notes of the pipeline (.apv/state, journal, specs) are never configuration
   assert.match(await p.text(), /notes de pilotage/);
 });
 
+test('a package name with its version in a note is no e-mail address: the security review alone (9 October 2026)', async t => {
+  const p = project(t);
+  p.edit('.apv/state/resume.md', '# Reprise\n\n- `npx -y supabase@2.117.0 db push` ; voir @chemin et @securite\n');
+  p.commit();
+  const plan = await p.plan();
+  assert.deepEqual(plan.retained, ['securite'], JSON.stringify(plan.domains));
+  assert.match(plan.files[0].riskWhy, /^notes de pilotage/);
+  const real = project(t);
+  real.edit('.apv/state/resume.md', '# Reprise\n\n- contact : marie.durand@societe.fr\n');
+  real.commit();
+  assert.deepEqual((await real.plan()).retained, ['securite', 'rgpd']);
+});
+
+test('the decision ledger is its own class: the security review always, data and GDPR only on their terms (9 October 2026)', async t => {
+  const ledger = text => JSON.stringify({ schemaVersion: 1, decisions: [{ id: 'D-9', statement: text }] }, null, 2);
+  const p = project(t);
+  p.edit('.apv/DECISIONS.json', `${ledger('Les relectures de sécurité restent obligatoires')}\n`);
+  p.edit('.apv/DECISIONS.md', '# Décisions\n\n- D-9 : Les relectures de sécurité restent obligatoires\n');
+  p.commit();
+  const plan = await p.plan();
+  assert.deepEqual(plan.retained, ['securite'], JSON.stringify(plan.domains));
+  assert.equal(decision(plan, 'securite').basis, 'diff');
+  for (const f of plan.files) {
+    assert.match(f.riskWhy, /^registre des décisions/, f.path);
+    assert.deepEqual(f.keeps, [], f.path);
+  }
+  assert.match(await p.text(), /registre des décisions/);
+  // A RGPD term in the added lines of the ledger keeps the GDPR review, on the diff; the Markdown rendering says nothing more.
+  const q = project(t);
+  q.edit('.apv/DECISIONS.json', `${ledger('Les e-mails des lecteurs sont supprimés après un an')}\n`);
+  q.edit('.apv/DECISIONS.md', '# Décisions\n\n- D-9 : Les e-mails des lecteurs sont supprimés après un an\n');
+  q.commit();
+  const withTerm = await q.plan();
+  assert.deepEqual(withTerm.retained, ['securite', 'rgpd'], JSON.stringify(withTerm.domains));
+  assert.equal(decision(withTerm, 'rgpd').basis, 'diff');
+  assert.match(decision(withTerm, 'rgpd').reason, /terme RGPD/);
+  // A term of data (a statement of SQL) keeps the data review.
+  const s = project(t);
+  s.edit('.apv/DECISIONS.json', `${ledger('La purge lance truncate sessions chaque nuit')}\n`);
+  s.commit();
+  assert.deepEqual((await s.plan()).retained, ['securite', 'donnees']);
+  // A ledger changed beside a note keeps the same reading.
+  const r = project(t);
+  r.edit('.apv/DECISIONS.json', `${ledger('Un autre choix de pilotage')}\n`);
+  r.edit('.apv/state/resume.md', '# Reprise\n\nÉtat court\n');
+  r.commit();
+  assert.deepEqual((await r.plan()).retained, ['securite']);
+});
+
 test('the lane without code stays first when it applies: no domain at all', async t => {
   const p = project(t);
   p.edit('.apv/journal-pipeline.md', '# Journal\n\n- une PR sans code\n');

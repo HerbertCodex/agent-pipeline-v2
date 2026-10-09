@@ -5,7 +5,7 @@ import { matches } from '../policy/policy.js';
 import { resolveCommit } from '../run/git-probe.js';
 import { ALWAYS_REVIEWED, PATH_CLASSES, REVIEW_DOMAINS } from './config.js';
 import { pureRename, renameKind, renamedNames } from './rename.js';
-import { AGENT_INSTRUCTIONS, CONFIG_FILES, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, PILOT_NOTE_EXTENSIONS, ROUTING_DIR, ROUTING_TEST_DIR, SERVED_DIR, SPEC_NOTES, TEST_DIRS, TEST_NAME, diffRisk, realAddress, } from './risk.js';
+import { AGENT_INSTRUCTIONS, CONFIG_FILES, LEDGER_FILES, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, PILOT_NOTE_EXTENSIONS, ROUTING_DIR, ROUTING_TEST_DIR, SERVED_DIR, SPEC_NOTES, TEST_DIRS, TEST_NAME, diffRisk, realAddress, } from './risk.js';
 const FILES_SHOWN = 50;
 const MAX_DIFF_BYTES = 512 * 1024 * 1024;
 function git(repo, args) {
@@ -338,6 +338,8 @@ const DATA_ATTRIBUTE = /(?<![\w-])data-[\w-]+/gi;
  * spec was read by the security review alone).
  */
 const pilotNote = (file) => sides(file).every(p => PILOT_NOTE_EXTENSIONS.test(p) && PILOT_NOTES.some(g => matches(p, g)) && (!matches(p, SPEC_NOTES) || file.status.startsWith('A')));
+/** The registry of the decisions (`.apv/DECISIONS.json` or `.md`) on every side, unless the project declares it a sensitive path. */
+const ledgerFile = (file, input) => sides(file).every(p => LEDGER_FILES.includes(p)) && !isSensitive(file, input) && !isConfig(file);
 /** A lockfile of npm, pnpm or Yarn on every side. */
 const lockFile = (file) => sides(file).every(p => LOCK_FILES.some(g => matches(p, g)));
 /** The host of a download URL in a lockfile line (`"resolved": "https://…"`, `resolved "https://…"`, `tarball: https://…`). */
@@ -388,6 +390,11 @@ function fileKeeps(file, patch, input, context) {
         address();
     };
     if (!meaningful.length && !inDesign) {
+        // The registry of the decisions: the security review, data and GDPR on their terms only (the Markdown rendering holds none).
+        if (ledgerFile(file, input)) {
+            terms(false);
+            return keeps;
+        }
         // Notes of the pipeline: never a configuration; the security review reads them, a real address still counts.
         if (pilotNote(file) && !isSensitive(file, input) && !isConfig(file)) {
             address();
@@ -424,6 +431,7 @@ function fileKeeps(file, patch, input, context) {
     return keeps;
 }
 const SENSITIVE_WHY = 'chemin sensible (authentification, session, permissions, dépendances, configuration de sécurité, CI ou instructions des agents)';
+const LEDGER_WHY = 'registre des décisions : la relecture sécurité lit chaque décision, données et RGPD seulement sur leurs termes';
 const NOTES_WHY = 'notes de pilotage (.apv/state, journal du pipeline, specs) : jamais une configuration';
 const LOCK_WHY = 'verrou de dépendances sans son package.json : audit des dépendances par la relecture sécurité';
 /**
@@ -447,6 +455,8 @@ function fileRisk(file, input, context) {
         return high(SENSITIVE_WHY);
     if (plain && pilotNote(file))
         return high(NOTES_WHY);
+    if (plain && ledgerFile(file, input))
+        return high(LEDGER_WHY);
     if (!named && classes.has('server'))
         return high('code serveur ou configuration');
     // A word of data or GDPR, or a real address, in the changed lines: stronger than a test or a document.
@@ -488,6 +498,7 @@ function skipReason(domain, counts) {
         counts.names ? count(counts.names, 'fichier aux seuls noms de classes ou d\'identifiants renommés', 'fichiers aux seuls noms de classes ou d\'identifiants renommés') : '',
         counts.neutral ? count(counts.neutral, 'fichier de tests, documentation ou outillage', 'fichiers de tests, documentation ou outillage') : '',
         counts.notes ? count(counts.notes, 'note de pilotage', 'notes de pilotage') : '',
+        counts.ledger ? count(counts.ledger, 'fichier du registre des décisions', 'fichiers du registre des décisions') : '',
         counts.locks ? count(counts.locks, 'verrou de dépendances', 'verrous de dépendances') : '',
     ].filter(Boolean).join(', ');
     if (!counts.files)
@@ -554,8 +565,9 @@ export function planReviews(input) {
         names: files.filter(f => f.change === 'names').length,
         content: files.filter(f => f.change === 'content').length,
         neutral: files.filter(f => f.change === 'content' && f.classes.every(c => NO_DOMAIN.includes(c)) && (f.classes.includes('neutral') || f.classes.includes('tooling'))
-            && !f.keeps.some(k => k.why === WHY.strong) && f.riskWhy !== NOTES_WHY && f.riskWhy !== LOCK_WHY).length,
+            && !f.keeps.some(k => k.why === WHY.strong) && f.riskWhy !== NOTES_WHY && f.riskWhy !== LEDGER_WHY && f.riskWhy !== LOCK_WHY).length,
         notes: files.filter(f => f.change === 'content' && f.riskWhy === NOTES_WHY).length,
+        ledger: files.filter(f => f.change === 'content' && f.riskWhy === LEDGER_WHY).length,
         locks: files.filter(f => f.change === 'content' && f.riskWhy === LOCK_WHY).length,
         unclassified: files.filter(f => f.change === 'content' && f.keeps.some(k => k.why === WHY.unclassified || k.why === WHY.strong)).length,
     };
