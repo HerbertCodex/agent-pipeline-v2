@@ -11,37 +11,12 @@ import type { ReviewDomainName } from '../review/config.js';
 import type { ReviewPlan } from '../review/plan.js';
 import { AGENT_INSTRUCTIONS, CONFIG_FILES } from '../review/risk.js';
 import type { DocsOnlyKind, RulesSettings } from './config.js';
-import { anchoredQuote, type OperatorMessage } from './operator.js';
+import { anchoredQuote, sentences, VALIDATES, type OperatorMessage } from './operator.js';
 
 /**
- * The lane without code (« voie sans code », docs/REGLES.md). Pilot project, 4 October 2026: a pull request of the
- * decision ledger, four mockups already validated by the operator and registered with their fingerprint, and the
- * pipeline journal was refused by `apv rules check` until a full suite and four reviews (security, fidelity with
- * captures, data, GDPR) were done. The operator: « pourquoi il faut tout ça pour une petite PR pareille ? », then
- * « Oui, PR à part » for a generic lane.
- *
- * The lane is decided by the tool, from the diff since the merge base with the target, never by an agent: EVERY changed
- * file (both sides of a rename, deletions included) is a regular file (mode 100644, never a link, a submodule or an
- * executable), outside `rules.docsOnly.exclude`, outside the sensitive paths, the instructions of the agents (compared
- * without case, and the files the root CLAUDE.md, CLAUDE.local.md, AGENTS.md or GEMINI.md import by `@path`) and the
- * configuration files, and of one of these kinds (a closed list, that a project can only narrow), with an extension of
- * its kind (never a script, a file without extension nor a dotfile such as `.gitattributes`):
- * - `decisions`: `.apv/DECISIONS.json` (valid at the head) and `.apv/DECISIONS.md` (exactly the rendering of the JSON
- *   at the head, as `apv ledger apply` writes it), never deleted;
- * - `mockups`: a validated mockup under `design.dir` (drafts apart), added or modified, whose sha256 at the head is the
- *   one its decision records (the check of `apv design check`), never deleted;
- * - `drafts`: the drafts of the mockup loop, `<design.dir>/brouillons/**`;
- * - `specs`: `.apv/specs/**.json`; `journal`: `.apv/journal-pipeline.md`;
- * - `docs`: Markdown the review plan reads as documentation (`*.md` of the neutral class, outside the served and
- *   routing folders, without a word of data or GDPR nor a real e-mail address in its changed lines), outside `.apv/`.
- * `.apv/state/**` is never in the lane: the session hook injects it into every session (security review of PR #121).
- *
- * The ledger only GROWS in the lane: a merged decision is the base the agents and the rule `maquette` trust (« merged,
- * so reviewed »). A decision deleted or changed in any field (status, value, scope, quote...), and a decision added
- * that replaces others (`supersedes`), keep the normal rules. A decision added confirmed comes from the operator, with
- * its quote among the messages he typed (src/rules/operator.ts) and not already the quote of a decision of the base; a
- * mockup decision added has its file at the head at the fingerprint it records. Anything else, anything unreadable,
- * and the normal rules apply.
+ * The lane without code (« voie sans code », docs/REGLES.md): a pull request of the ledger, registered mockups, specs,
+ * the journal or documentation needs no review. Pilot project, 4 October 2026: such a pull request was asked for a
+ * full suite and four reviews; the operator: « pourquoi il faut tout ça pour une petite PR pareille ? ».
  */
 
 export interface LaneFile { path: string; kind: DocsOnlyKind }
@@ -69,9 +44,13 @@ const MOCKUP_EXTENSIONS = ['.html', '.png', '.jpg', '.jpeg', '.webp', '.svg', '.
 const EXTENSIONS: Readonly<Partial<Record<DocsOnlyKind, readonly string[]>>> = {
   specs: ['.json'], mockups: MOCKUP_EXTENSIONS, drafts: MOCKUP_EXTENSIONS, docs: ['.md'],
 };
-/** Files at the root whose `@path` imports are instructions too (Claude Code reads them at the start of every session). */
-const IMPORTERS = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'GEMINI.md', '.claude/CLAUDE.md'] as const;
+/** Files whose `@path` imports Claude Code reads as instructions, at any depth of the tree (names compared without case). */
+const IMPORTERS = new Set(['claude.md', 'claude.local.md', 'agents.md', 'gemini.md']);
 const IMPORT = /(?:^|[\s([])@((?:\.{1,2}\/)?[^\s`'"()<>[\]]+)/g;
+/** Hops of imports Claude Code follows from a file of instructions. */
+const IMPORT_DEPTH = 5;
+/** Files read to follow the imports, at most: past it, every Markdown file is held as imported (normal rules). */
+const IMPORT_READS = 2000;
 const SHOWN = 50;
 
 export interface LaneInput {
@@ -109,6 +88,11 @@ function blobHash(repo: string, sha: string, path: string): string | null {
   const data = gitShow(repo, sha, path);
   return data ? createHash('sha256').update(data).digest('hex') : null;
 }
+function treeFiles(repo: string, sha: string): string[] | null {
+  try {
+    return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'ls-tree', '-r', '-z', '--name-only', sha], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024, timeout: 60_000 }).split('\0').filter(Boolean);
+  } catch { return null; }
+}
 
 function rawFiles(repo: string, base: string, head: string): ReturnType<typeof parseRawDiff> | null {
   try {
@@ -117,29 +101,54 @@ function rawFiles(repo: string, base: string, head: string): ReturnType<typeof p
   } catch { return null; }
 }
 
-/** The files the root instructions import by `@path` (at the base and at the head), lower case, with the importer. */
-function importedInstructions(repo: string, shas: readonly string[]): Map<string, string> {
+/**
+ * The files imported by `@path` from every CLAUDE.md, CLAUDE.local.md, AGENTS.md and GEMINI.md of the tree, through
+ * `IMPORT_DEPTH` hops as Claude Code follows them, relative paths resolved from the importing file, at the base and at
+ * the head: lower-case path, with the file of instructions it comes from. Null when the trees cannot be read or the
+ * reads pass `IMPORT_READS`: the caller then keeps every Markdown file out of the lane.
+ */
+function importedInstructions(repo: string, shas: readonly string[]): Map<string, string> | null {
   const out = new Map<string, string>();
-  for (const sha of shas) for (const file of IMPORTERS) {
-    const text = gitShow(repo, sha, file)?.toString('utf8');
-    if (!text) continue;
-    for (const m of text.matchAll(IMPORT)) {
-      const target = m[1]!.replace(/[.,;:!?]+$/, '');
-      if (!target || target.startsWith('~') || target.startsWith('/')) continue;
-      const path = posix.normalize(posix.join(posix.dirname(file), target));
-      if (!path.startsWith('..')) out.set(path.toLowerCase(), file);
+  let reads = 0;
+  for (const sha of shas) {
+    const tree = treeFiles(repo, sha);
+    if (!tree) return null;
+    const byLower = new Map(tree.map(f => [f.toLowerCase(), f]));
+    for (const root of tree.filter(f => IMPORTERS.has(posix.basename(f).toLowerCase()))) {
+      let level = [root];
+      const seen = new Set([root]);
+      for (let hop = 1; hop <= IMPORT_DEPTH && level.length; hop++) {
+        const next: string[] = [];
+        for (const file of level) {
+          if (++reads > IMPORT_READS) return null;
+          const text = gitShow(repo, sha, file)?.toString('utf8') ?? '';
+          for (const m of text.matchAll(IMPORT)) {
+            const target = m[1]!.replace(/[.,;:!?]+$/, '');
+            if (!target || target.startsWith('~') || target.startsWith('/')) continue;
+            // From the importing file (Claude Code), and from the root of the repository (a reading an agent can make).
+            for (const path of new Set([posix.normalize(posix.join(posix.dirname(file), target)), posix.normalize(target)])) {
+              if (path.startsWith('..')) continue;
+              if (!out.has(path.toLowerCase())) out.set(path.toLowerCase(), root);
+              const real = byLower.get(path.toLowerCase());
+              if (real && !seen.has(real)) { seen.add(real); next.push(real); }
+            }
+          }
+        }
+        level = next;
+      }
     }
   }
   return out;
 }
 
 /** The kind of one side of a changed file, or why it keeps the normal rules. */
-function kindOf(path: string, deleted: boolean, documentation: boolean, input: LaneInput, imports: ReadonlyMap<string, string>): { kind: DocsOnlyKind } | { why: string } {
+function kindOf(path: string, side: { added: boolean; deleted: boolean }, documentation: boolean, input: LaneInput, imports: ReadonlyMap<string, string> | null): { kind: DocsOnlyKind } | { why: string } {
   const { settings } = input;
   if (anyCase(path, settings.exclude)) return { why: 'exclu par rules.docsOnly.exclude' };
   if (anyCase(path, CONFIG_FILES)) return { why: 'configuration (outil, tests, dépendances, CI)' };
   if (anyCase(path, input.sensitive) || anyCase(path, AGENT_INSTRUCTIONS)) return { why: 'chemin sensible ou instructions des agents' };
-  const importer = imports.get(path.toLowerCase());
+  if (!imports && path.toLowerCase().endsWith('.md')) return { why: 'imports des instructions des agents illisibles : chaque Markdown garde les règles normales' };
+  const importer = imports?.get(path.toLowerCase());
   if (importer) return { why: `importé par ${importer} (instructions des agents)` };
   const drafts = `${input.designDir}/${RESERVED_GROUP}`;
   let kind: DocsOnlyKind | null = null;
@@ -153,21 +162,31 @@ function kindOf(path: string, deleted: boolean, documentation: boolean, input: L
   const allowed = EXTENSIONS[kind];
   if (allowed && !allowed.includes(extensionOf(path) ?? '')) return { why: `${KIND_LABEL[kind]} : extension hors de la liste (${allowed.join(', ')}), jamais un script ni un fichier sans extension` };
   if (!settings.kinds.includes(kind)) return { why: `${KIND_LABEL[kind]} : type retiré de la voie par rules.docsOnly.kinds` };
-  if (deleted && (kind === 'decisions' || kind === 'mockups')) return { why: `${KIND_LABEL[kind]} supprimé(e)` };
+  if (side.deleted && (kind === 'decisions' || kind === 'mockups')) return { why: `${KIND_LABEL[kind]} supprimé(e)` };
+  // A spec of the base sets the minimum of security of its next run and carries its resolutions: it changes only reviewed.
+  if (kind === 'specs' && !side.added) return { why: 'spec existante modifiée ou supprimée : seul l\'ajout d\'une spec prend la voie' };
   return { kind };
 }
 
 const sameDecision = (a: Decision, b: Decision): boolean => JSON.stringify(a) === JSON.stringify(b);
-const quoteKey = (quote: string): string => quote.normalize('NFC').toLowerCase().replace(/[\s.,;:!?«»"']+/g, ' ').trim();
 
-/** Why the ledger at the head is more than an anchored growth of the ledger at the base (see above); empty when it is. */
+/**
+ * Why the ledger at the head is more than the ledger at the base plus mockups registered by `apv design register`;
+ * empty when it is. A decision deleted or changed, any other decision added: out of the lane (second security review
+ * of PR #121: any sentence of 12 characters the operator typed in 90 days anchored a decision without relation). A
+ * mockup decision added is the one register writes (from the operator, product, replacing nothing, an HTML file of
+ * `design.dir` outside the drafts, at the head at its fingerprint), its quote typed by the operator, saying a
+ * validation, and none of its sentences already the quote of a decision of the base or of another one of the change.
+ */
 function ledgerBlocking(atBase: readonly Decision[], atHead: readonly Decision[], input: LaneInput): DocsOnlyLane['blocking'] {
   const out: DocsOnlyLane['blocking'] = [];
   const at = (why: string, path: string = LEDGER_FILE): void => { out.push({ path, why }); };
   const headIds = new Set(atHead.map(d => d.id));
   const baseById = new Map(atBase.map(d => [d.id, d]));
-  const baseQuotes = new Map(atBase.filter(d => quoteKey(d.sourceQuote)).map(d => [quoteKey(d.sourceQuote), d.id]));
+  const spent = new Map<string, string>();
+  for (const d of atBase) for (const s of sentences(d.sourceQuote)) if (!spent.has(s)) spent.set(s, d.id);
   for (const d of atBase) if (!headIds.has(d.id)) at(`décision ${d.id} supprimée : une décision fusionnée ne se retire que relue`);
+  const drafts = `${input.designDir}/${RESERVED_GROUP}`;
   for (const d of atHead) {
     const before = baseById.get(d.id);
     if (before) {
@@ -177,27 +196,39 @@ function ledgerBlocking(atBase: readonly Decision[], atHead: readonly Decision[]
       }
       continue;
     }
-    if (d.supersedes.length) at(`décision ${d.id} ajoutée : elle en remplace d'autres (${d.supersedes.join(', ')}) : relue`);
-    if (d.status === 'confirmed' && d.source !== 'operator') at(`décision ${d.id} ajoutée confirmée sans source opérateur`);
-    if (d.source === 'operator') {
-      if (!anchoredQuote(input.messages, d.sourceQuote, input.key)) at(`décision ${d.id} ajoutée : sa citation n'est pas dans les messages de l'opérateur`);
-      else {
-        const spent = baseQuotes.get(quoteKey(d.sourceQuote));
-        if (spent) at(`décision ${d.id} ajoutée : sa citation est déjà celle de ${spent} (registre de la base)`);
-      }
-    }
     const mockup = mockupDecision(d);
-    if (mockup) {
-      const actual = mockup.file && mockup.sha256 ? blobHash(input.repo, input.head, mockup.file) : null;
-      if (!mockup.file || !mockup.sha256 || actual !== mockup.sha256) {
-        at(`décision ${d.id} : la maquette ${mockup.file ?? '(sans fichier)'} n'est pas à la tête avec l'empreinte enregistrée`, mockup.file ?? LEDGER_FILE);
-      }
+    if (!mockup) { at(`décision ${d.id} ajoutée : seule une maquette versée par apv design register ajoute une décision dans la voie`); continue; }
+    if (d.supersedes.length) { at(`décision ${d.id} ajoutée : elle en remplace d'autres (${d.supersedes.join(', ')}) : relue`); continue; }
+    if (d.source !== 'operator' || d.enforcement !== 'product') { at(`décision ${d.id} ajoutée : une maquette versée vient de l'opérateur, en décision produit`); continue; }
+    if (!anchoredQuote(input.messages, d.sourceQuote, input.key)) { at(`décision ${d.id} ajoutée : sa citation n'est pas dans les messages de l'opérateur`); continue; }
+    if (!sentences(d.sourceQuote).some(s => VALIDATES.test(s))) { at(`décision ${d.id} ajoutée : sa citation ne dit aucune validation`); continue; }
+    const reused = sentences(d.sourceQuote).map(s => spent.get(s)).find(Boolean);
+    if (reused) { at(`décision ${d.id} ajoutée : sa citation reprend une phrase de ${reused} (une validation ne sert qu'une fois)`); continue; }
+    for (const s of sentences(d.sourceQuote)) spent.set(s, d.id);
+    const file = mockup.file;
+    if (!file || !mockup.sha256 || !under(file, input.designDir) || under(file, drafts) || !['.html', '.htm'].includes(extensionOf(file) ?? '')
+      || blobHash(input.repo, input.head, file) !== mockup.sha256) {
+      at(`décision ${d.id} : la maquette ${file ?? '(sans fichier)'} n'est pas à la tête avec l'empreinte enregistrée (fichier HTML de ${input.designDir}, hors brouillons)`, file ?? LEDGER_FILE);
     }
   }
   return out;
 }
 
-/** The lane of a change (see above). Pure reading of the commits, the plan and the operator's journal. */
+/**
+ * The lane of a change. Decided by the tool, from the diff since the merge base with the target, never by an agent:
+ * EVERY changed file (both sides of a rename, deletions included) is a regular file (mode 100644, never a link, a
+ * submodule or an executable), outside `rules.docsOnly.exclude`, the sensitive paths, the instructions of the agents
+ * (compared without case, and what they import by `@path`) and the configuration files, and of one of these kinds (a
+ * closed list, that a project can only narrow), with an extension of its kind:
+ * - `decisions`: `.apv/DECISIONS.json` (valid at the head, see `ledgerBlocking`) and `.apv/DECISIONS.md` (exactly the
+ *   rendering of the JSON at the head), never deleted;
+ * - `mockups`: a validated mockup under `design.dir` (drafts apart) at the sha256 its decision records, never deleted;
+ * - `drafts`: `<design.dir>/brouillons/**`; `journal`: `.apv/journal-pipeline.md`;
+ * - `specs`: a spec ADDED under `.apv/specs/` (`.json`);
+ * - `docs`: Markdown the review plan reads as documentation, outside `.apv/`.
+ * `.apv/state/**` is never in the lane: the session hook injects it into every session. Anything else, anything
+ * unreadable, and the normal rules apply. Pure reading of the commits, the plan and the operator's journal.
+ */
 export async function docsOnlyLane(input: LaneInput): Promise<DocsOnlyLane> {
   const no = (reason: string, blocking: DocsOnlyLane['blocking'] = []): DocsOnlyLane => ({ eligible: false, reason, files: [], blocking: blocking.slice(0, SHOWN) });
   if (!input.settings.enabled) return no('voie sans code désactivée par rules.docsOnly.enabled');
@@ -214,9 +245,9 @@ export async function docsOnlyLane(input: LaneInput): Promise<DocsOnlyLane> {
   for (const file of input.plan.files) {
     // Documentation as the plan reads it: neutral Markdown outside the served folders, without a word of data or GDPR.
     const documentation = file.risk === 'faible' && file.riskWhy === 'documentation';
-    const sides = [{ path: file.path, deleted: file.status.startsWith('D') }, ...(file.from !== undefined ? [{ path: file.from, deleted: true }] : [])];
+    const sides = [{ path: file.path, added: file.status.startsWith('A'), deleted: file.status.startsWith('D') }, ...(file.from !== undefined ? [{ path: file.from, added: false, deleted: true }] : [])];
     for (const side of sides) {
-      const k = kindOf(side.path, side.deleted, documentation, input, imports);
+      const k = kindOf(side.path, side, documentation, input, imports);
       if ('why' in k) blocking.push({ path: side.path, why: k.why });
       else if (!side.deleted || !files.has(side.path)) files.set(side.path, k.kind);
     }

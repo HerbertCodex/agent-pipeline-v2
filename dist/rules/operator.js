@@ -172,7 +172,7 @@ export function sentences(text) {
 /** Shortest quote that can anchor a validation: « ok » or « oui » alone never does. */
 export const MIN_QUOTE = 12;
 /** Words that make a sentence a validation, whose first words are kept for the reader. */
-const VALIDATES = /valid|approuv|accord|d[ée]rogation|go pour|on part/i;
+export const VALIDATES = /valid|approuv|accord|d[ée]rogation|go pour|on part/i;
 /** Shortest prefix of the commit a waiver must name. */
 export const WAIVER_SHA = 12;
 /** Shortest reason after the commit, in characters. */
