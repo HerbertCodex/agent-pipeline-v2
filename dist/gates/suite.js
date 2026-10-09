@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -23,6 +24,46 @@ export async function commonPath(git, repo, path) {
     invariant(out.length > 0, 'GIT', 'git rev-parse --git-common-dir returned nothing');
     return resolve(isAbsolute(out) ? out : resolve(repo, out), path);
 }
+/** The place of a test stack in the queue `resource`: held by every full suite that uses the stack. */
+export const stackPlace = (resource, stack) => `${resource}-stack-${stack.replace(/[^A-Za-z0-9._-]/g, '_')}`;
+/**
+ * The place of a copy (a worktree, by its canonical path) in the queue `resource`: held by every full suite run there,
+ * before any other place, so that two suites never run in the same copy (they would share node_modules and the build
+ * folders, and each would stop the servers of the other as orphans of the copy), whatever `slots`.
+ */
+export const copyPlace = (resource, copy) => `${resource}-copy-${createHash('sha256').update(canonicalPath(copy)).digest('hex').slice(0, 16)}`;
+/** The numbered place `k` (1 to N) of the queue `resource` with `slots: N`. */
+export const slotPlace = (resource, k) => `${resource}-slot-${k}`;
+export function queuePlaces(slots, options) {
+    const sorted = (ids) => [...new Set(ids)].sort();
+    const numbered = typeof slots === 'number' && slots > 1;
+    if (options.all)
+        return { whole: true, slots: numbered ? 'all' : 'none', stacks: sorted(options.declared) };
+    if (options.unmapped)
+        return { whole: true, slots: numbered ? 'one' : 'none', stacks: sorted(options.declared) };
+    return { whole: slots === 1 || (slots === 'per-stack' && options.used.length === 0), slots: numbered ? 'one' : 'none', stacks: sorted(options.used) };
+}
+/** Keeps a lease held by apv until the returned release: renewed every third of its life, released once. */
+function keepLease(store, resource, token, log) {
+    const heartbeat = setInterval(() => {
+        store.renew(resource, token, LEASE_TTL_SECONDS).then(ok => { if (!ok)
+            log(`Attention : le verrou « ${resource} » n'est plus à nous (repris ou libéré de force).`); }, (error) => log(`Renouvellement du verrou « ${resource} » en échec : ${errorMessage(error)}`));
+    }, (LEASE_TTL_SECONDS * 1000) / 3);
+    heartbeat.unref();
+    let released = false;
+    return async () => {
+        if (released)
+            return;
+        released = true;
+        clearInterval(heartbeat);
+        try {
+            await store.release(resource, { token });
+        }
+        catch (error) {
+            log(`Libération du verrou « ${resource} » en échec : ${errorMessage(error)}`);
+        }
+    };
+}
 /** A lease of the `apv lock` store held until `release`, renewed meanwhile. */
 async function holdLease(store, resource, options) {
     const started = Date.now();
@@ -40,55 +81,112 @@ async function holdLease(store, resource, options) {
     }
     if (result.takeover)
         options.log(`Verrou « ${resource} » repris (${result.takeover.reason}) à ${describeHolder(result.takeover.previous)}.`);
-    const token = result.record.token;
-    const heartbeat = setInterval(() => {
-        store.renew(resource, token, LEASE_TTL_SECONDS).then(ok => { if (!ok)
-            options.log(`Attention : le verrou « ${resource} » n'est plus à nous (repris ou libéré de force).`); }, (error) => options.log(`Renouvellement du verrou « ${resource} » en échec : ${errorMessage(error)}`));
-    }, (LEASE_TTL_SECONDS * 1000) / 3);
-    heartbeat.unref();
-    let released = false;
-    return { ok: true, waitedMs, heldBy: waitedMs > 1000 ? before : null, release: async () => {
-            if (released)
-                return;
-            released = true;
-            clearInterval(heartbeat);
-            try {
-                await store.release(resource, { token });
-            }
-            catch (error) {
-                options.log(`Libération du verrou « ${resource} » en échec : ${errorMessage(error)}`);
-            }
-        } };
+    return { ok: true, resource, waitedMs, heldBy: waitedMs > 1000 ? before : null, release: keepLease(store, resource, result.record.token, options.log) };
 }
 /**
- * Enters the queue of the full suites: the lease `settings.lockFile` (FIFO of `apv lock`, the same store format), then,
- * lock held, the wait for the 1-minute load to drop under `maxLoad` (at most `loadWaitMs`, then the suite starts anyway,
- * noted). A lock not obtained within `waitMs` is a refusal (`SUITE_QUEUE`), nothing has run.
+ * The first free of the numbered places `resources`, read again every `pollMs` until one is free or `waitMs` elapses
+ * (no order among the runs that wait: each takes the first place it finds free).
+ */
+async function holdAnyLease(store, resources, options) {
+    const started = Date.now();
+    const owner = { pid: process.pid, host: store.host, label: options.label };
+    const cancelled = () => ({ ok: false, waitedMs: Date.now() - started, aborted: true, reason: 'attente d\'une place de la file annulée' });
+    let first = null;
+    let said = 0;
+    for (;;) {
+        if (options.signal?.aborted)
+            return cancelled();
+        const holders = [];
+        for (const resource of resources) {
+            const r = await store.tryAcquire(resource, owner, LEASE_TTL_SECONDS, options.purpose);
+            if (r.ok) {
+                if (r.takeover)
+                    options.log(`Verrou « ${resource} » repris (${r.takeover.reason}) à ${describeHolder(r.takeover.previous)}.`);
+                const waitedMs = Date.now() - started;
+                return { ok: true, resource, waitedMs, heldBy: waitedMs > 1000 ? first : null, release: keepLease(store, resource, r.record.token, options.log) };
+            }
+            holders.push(r.holder);
+        }
+        first ??= holders[0] ?? null;
+        const waited = Date.now() - started;
+        const who = holders.map(h => describeHolder(h)).join(' ; ');
+        if (waited >= options.waitMs)
+            return { ok: false, waitedMs: waited, aborted: false, reason: `aucune des ${resources.length} places de la file libre après ${seconds(waited)} : tenues par ${who}` };
+        if (said === 0 || Date.now() - said >= 60_000) {
+            options.log(`Les ${resources.length} places de la file des suites complètes sont prises (${who}) : attente d'une place libre, au plus ${seconds(options.waitMs - waited)}.`);
+            said = Date.now();
+        }
+        try {
+            await sleep(Math.min(options.pollMs, Math.max(1, options.waitMs - waited)), undefined, options.signal ? { signal: options.signal } : {});
+        }
+        catch {
+            return cancelled();
+        }
+    }
+}
+/**
+ * Enters the queue of the full suites: its places (`queuePlaces`, leases of the `apv lock` store format beside
+ * `settings.lockFile`: FIFO for the whole queue and each stack, the first free for a numbered place), within `waitMs` in
+ * all; then, places held, the wait for the 1-minute load to drop under `maxLoad` (at most `loadWaitMs`, then the suite
+ * starts anyway, noted). A place not obtained in time is a refusal (`SUITE_QUEUE`): the places taken are released,
+ * nothing has run.
  */
 export async function enterQueue(options) {
     const { settings, log } = options;
     const dir = dirname(options.lockFile);
     const resource = basename(options.lockFile).replace(/\.lock$/, '');
     const store = new LockStore(dir, options.hooks?.lockPollMs !== undefined ? { pollMs: options.hooks.lockPollMs } : {});
-    const lease = await holdLease(store, resource, { label: options.label ?? `apv gates run (${options.repo})`, waitMs: settings.waitMs, purpose: options.purpose ?? 'suite complète', signal: options.signal, log });
-    if (!lease.ok) {
-        if (lease.aborted)
-            throw new PipelineError('CANCELLED', `File des suites complètes : ${lease.reason}`);
-        throw new PipelineError('SUITE_QUEUE', `File des suites complètes (${options.lockFile}) : ${lease.reason}. Rien n'a été exécuté. ` +
-            'Relancer plus tard, ou voir le détenteur : apv lock status --dir ' + dir);
+    const places = options.places ?? { whole: true, slots: 'none', stacks: [] };
+    const n = typeof settings.slots === 'number' ? settings.slots : 1;
+    const numbered = Array.from({ length: n }, (_, i) => slotPlace(resource, i + 1));
+    const steps = [
+        ...(options.copy !== undefined ? [[copyPlace(resource, options.copy)]] : []),
+        ...(places.whole ? [[resource]] : []),
+        ...(places.slots === 'one' ? [numbered] : places.slots === 'all' ? numbered.map(r => [r]) : []),
+        ...places.stacks.map(id => [stackPlace(resource, id)]),
+    ];
+    const label = options.label ?? `apv gates run (${options.repo})`;
+    const purpose = options.purpose ?? 'suite complète';
+    const started = Date.now();
+    const held = [];
+    let heldBy = null;
+    const releaseAll = async () => { for (const lease of [...held].reverse())
+        await lease.release(); };
+    for (const step of steps) {
+        const leaseOptions = { label, waitMs: Math.max(0, settings.waitMs - (Date.now() - started)), purpose, signal: options.signal, log };
+        let lease;
+        // An unexpected error (the store unreadable, a folder in the way): the places already taken are released, then it is thrown again.
+        try {
+            lease = step.length === 1 ? await holdLease(store, step[0], leaseOptions)
+                : await holdAnyLease(store, step, { ...leaseOptions, pollMs: options.hooks?.lockPollMs ?? 500 });
+        }
+        catch (error) {
+            await releaseAll();
+            throw error;
+        }
+        if (!lease.ok) {
+            await releaseAll();
+            if (lease.aborted)
+                throw new PipelineError('CANCELLED', `File des suites complètes : ${lease.reason}`);
+            throw new PipelineError('SUITE_QUEUE', `File des suites complètes (${options.lockFile}) : ${lease.reason}. Rien n'a été exécuté. ` +
+                'Relancer plus tard, ou voir le détenteur : apv lock status --dir ' + dir);
+        }
+        heldBy ??= lease.heldBy;
+        held.push(lease);
     }
-    if (lease.waitedMs > 1000)
-        log(`File des suites complètes : verrou obtenu après ${seconds(lease.waitedMs)}.`);
-    const record = { lockFile: options.lockFile, waitedMs: lease.waitedMs, heldBy: lease.heldBy ? describeHolder(lease.heldBy) : null, load: null };
+    const waitedMs = Date.now() - started;
+    if (waitedMs > 1000)
+        log(`File des suites complètes : ${held.length > 1 ? `places obtenues (${held.map(h => h.resource).join(', ')})` : 'verrou obtenu'} après ${seconds(waitedMs)}.`);
+    const record = { lockFile: options.lockFile, waitedMs, heldBy: heldBy ? describeHolder(heldBy) : null, load: null, slots: settings.slots, places: held.map(h => h.resource) };
     try {
         if (settings.maxLoad !== undefined)
             record.load = await waitForLoad(settings.maxLoad, settings.loadWaitMs, log, options.signal, options.hooks);
     }
     catch (error) {
-        await lease.release();
+        await releaseAll();
         throw error;
     }
-    return { record, release: lease.release };
+    return { record, release: releaseAll };
 }
 /** Waits for the 1-minute load average to drop under `max`, at most `limitMs`; journaled at most every minute. */
 export async function waitForLoad(max, limitMs, log, signal, hooks, 

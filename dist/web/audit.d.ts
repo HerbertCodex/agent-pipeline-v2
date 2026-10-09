@@ -94,6 +94,8 @@ export interface AuditOptions {
     repo: string;
     settings: WebSettings;
     suiteQueue: SuiteQueueSettings;
+    /** Ids of the declared test stacks: a measure holds the place of each in the queue (no suite runs beside it, whatever suite.queue.slots). */
+    stackIds?: readonly string[] | undefined;
     suiteMaxLoad: number | undefined;
     origin: string;
     source: 'url' | 'preview';
@@ -124,9 +126,11 @@ export type QueueRecord = NonNullable<AuditSummary['queue']>;
 /**
  * The queue of the full suites around a measure (`suite.queue`), taken by the caller before anything else (before the
  * preview lock and its build): no suite runs while Lighthouse measures. Inside a full suite (`APV_SUITE_RUN`), the suite
- * already holds it: never taken twice. `web.queue` false or the queue disabled: none.
+ * already holds every place (a suite with a check that runs `apv web audit` takes them all, src/gates/run.ts): never
+ * taken twice. Every place is taken (the whole queue, each numbered place of
+ * `suite.queue.slots`, each declared stack), so that no suite runs beside the measure whatever `slots` says. `web.queue` false or the queue disabled: none.
  */
-export declare function enterAuditQueue(options: Pick<AuditOptions, 'repo' | 'settings' | 'suiteQueue' | 'env' | 'log' | 'signal' | 'hooks'>): Promise<{
+export declare function enterAuditQueue(options: Pick<AuditOptions, 'repo' | 'settings' | 'suiteQueue' | 'stackIds' | 'env' | 'log' | 'signal' | 'hooks'>): Promise<{
     handle: QueueHandle | null;
     record: QueueRecord;
 }>;

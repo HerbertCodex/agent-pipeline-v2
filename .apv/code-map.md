@@ -2,7 +2,7 @@
 
 Générée par `apv map` à partir des fichiers du dépôt, sans modèle. À lire avant de créer un composant, un module ou une route : réutiliser une entrée existante, ou l'étendre de façon générique (paramètre, variante) ; un élément utilisé par deux fonctionnalités devient partagé. Ne pas modifier à la main : l'intégration la régénère (`apv map`), et le contrôle `apv map --check` de la suite complète échoue quand elle ne correspond plus au code.
 
-Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 165. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 84 test(s), 312 fichier(s) ignoré(s), 5 module(s) sans export ni import.
+Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 165. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 85 test(s), 312 fichier(s) ignoré(s), 5 module(s) sans export ni import.
 
 ## Dossiers
 
@@ -100,7 +100,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `hash.ts` : Hash raw bytes, distinct from the canonical-JSON identity helper. Exporte : canonical(), hash(), hashFile(), sha256(). Utilisé par 9 fichiers (src/commands/run.ts, …).
 - `issues.ts` : One validation problem. Exporte : Issue, IssueList, jsonSchemaIssues(), schemaIssues(). Utilisé par 4 fichiers (src/config/load.ts, …).
 - `knowledge.ts` : Old configurations opt into no new skills. Exporte : KnowledgeConfig, LanguageProfile, RoleName, SkillsConfig, exportRules, knowledgeSchema, et 5 autre(s). Utilisé par 3 fichiers (src/config/load.ts, …).
-- `paths.ts` : Absolute path with every symlink of its longest existing ancestor resolved, the missing… Exporte : canonicalPath(). Utilisé par 9 fichiers (src/commands/common.ts, …).
+- `paths.ts` : Absolute path with every symlink of its longest existing ancestor resolved, the missing… Exporte : canonicalPath(). Utilisé par 10 fichiers (src/commands/common.ts, …).
 - `schema.ts` : A deliberately small schema vocabulary: runtime parsing and JSON Schema share the same… Exporte : Infer, JsonSchema, Schema, parseJson(), s. Utilisé par 23 fichiers (src/config/load.ts, …).
 - `time.ts` : Times shown to a human, in the local time zone of the machine (Intl, the zone of the… Exporte : LocalTimeOptions, localTime(), localTimeZone, parseUntil(). Utilisé par 7 fichiers (src/commands/lock.ts, …).
 
@@ -117,7 +117,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 
 - `git.ts` : The tool command that created the commit, written as the 'Generated-by' trailer. Exporte : CommitMessage, Git, GitIdentity, candidateSubject(), isInside(). Utilisé par 23 fichiers (src/commands/design.ts, …).
 - `process.ts` : The command signals on file descriptor 3 (a pipe) when its real work starts, for… Exporte : PIPE_GRACE_MS, ProcessHooks, ProcessOptions, environment(), expandCommand(), redact(), et 1 autre(s). Utilisé par 13 fichiers (src/commands/stack.ts, …).
-- `procs.ts` : Processes of a repository, read from '/proc' (Linux): the working directory of each… Exporte : PROC_ROOT, PROTECTED_TOOLS, ProcessInfo, StopOutcome, StopRefusal, assertProcSupported(), et 12 autre(s). Utilisé par 5 fichiers (src/commands/procs.ts, …).
+- `procs.ts` : Processes of a repository, read from '/proc' (Linux): the working directory of each… Exporte : PROC_ROOT, PROTECTED_TOOLS, ProcessInfo, StopOutcome, StopRefusal, assertProcSupported(), et 12 autre(s). Utilisé par 6 fichiers (src/commands/procs.ts, …).
 - `wait.ts` : Bounded waits for a session that may not sleep ('apv wait'). Exporte : DEFAULT_POLL_MS, FileWatch, MAX_WAIT_SECONDS, WaitCondition, WaitOptions, WaitResult, et 2 autre(s). Utilisé par 1 fichier (src/commands/wait.ts).
 
 ### src/freshness
@@ -131,11 +131,11 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `infrastructure.ts` : A check that failed because of its infrastructure, not of the code it tests: a variable… Exporte : InfrastructureCause, InfrastructureKind, classifyFailures(), infrastructureAdvice(), infrastructureCause(), infrastructureText(). Utilisé par 3 fichiers (src/commands/gates.ts, …).
 - `proof-scope.ts` : Scope of the proof of a check ('skipWhenOnly', docs/APV3-SPEC.md, section 21): a change… Exporte : ALWAYS_REQUIRED, ChangedFile, NOT_SEARCHED, ScopeDecision, ScopeInput, commandPaths(), et 8 autre(s). Utilisé par 3 fichiers (src/commands/gates.ts, …).
 - `repeat.ts` : Repetition of the changed test files ('repeatChanged' of a check, docs/APV3-SPEC.md,… Exporte : FixedWait, REPEAT_PLACEHOLDER, Rename, RenamedPaths, RepeatPlan, RepeatSettings, et 23 autre(s). Utilisé par 7 fichiers (src/commands/gates.ts, …).
-- `run.ts` : Receipts of 'apv gates run', one directory per execution. Exporte : ENVIRONMENT_ID, GateRunOptions, GateRunResult, NEAR_TIMEOUT, RECEIPTS_DIR, SharedCopy, et 13 autre(s). Utilisé par 3 fichiers (src/commands/gates.ts, …).
+- `run.ts` : Receipts of 'apv gates run', one directory per execution. Exporte : ENVIRONMENT_ID, GateRunOptions, GateRunResult, NEAR_TIMEOUT, RECEIPTS_DIR, SharedCopy, et 15 autre(s). Utilisé par 3 fichiers (src/commands/gates.ts, …).
 - `since.ts` : Incremental proof after corrections ('apv gates run --stage task --since <commit… Exporte : SinceCheck, checkSince(). Utilisé par 1 fichier (src/commands/gates.ts).
-- `spread.ts` : A full suite spread over several declared test stacks (docs/APV3-SPEC.md, section… Exporte : SpreadAssignment, SpreadCopy, SpreadPlan, planSpread(), prepareCopies(), removeCopies(), et 2 autre(s). Utilisé par 1 fichier (src/gates/run.ts).
+- `spread.ts` : A full suite spread over several declared test stacks (docs/APV3-SPEC.md, section… Exporte : MainSetup, SpreadAssignment, SpreadCopy, SpreadPlan, planSpread(), prepareCopies(), et 5 autre(s). Utilisé par 1 fichier (src/gates/run.ts).
 - `store.ts` : Shared receipt store of a repository: '<git common dir>/apv/receipts/<run>/', common to… Exporte : DEFAULT_RECEIPT_RETENTION, ExportResult, MANIFEST, Manifest, PruneResult, RUN_DIR, et 15 autre(s). Utilisé par 5 fichiers (src/commands/gates.ts, …).
-- `suite.ts` : The full suite of 'apv gates run' (docs/APV3-SPEC.md, section 17): the machine queue… Exporte : CleanupRecord, FLOCK_TIMEOUT_EXIT, GateLock, LEASE_TTL_SECONDS, PortProcess, PortsRecord, et 13 autre(s). Utilisé par 3 fichiers (src/gates/run.ts, …).
+- `suite.ts` : The full suite of 'apv gates run' (docs/APV3-SPEC.md, section 17): the machine queue… Exporte : CleanupRecord, FLOCK_TIMEOUT_EXIT, GateLock, LEASE_TTL_SECONDS, PortProcess, PortsRecord, et 18 autre(s). Utilisé par 4 fichiers (src/gates/run.ts, …).
 - `verify.ts` : Commit to verify: any revision Git resolves to a commit, compared by its full SHA. Exporte : AlteredRun, EvidenceState, GateEvidence, ReceiptSource, VerifyOptions, VerifyResult, et 1 autre(s). Utilisé par 4 fichiers (src/commands/gates.ts, …).
 
 ### src/knowledge
@@ -160,9 +160,9 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 
 ### src/metrics
 
-- `pr.ts` : sans description. Exporte : BASELINE_PRS, PrBaseline, PrCommit, PrData, PrKind, PrMetrics, et 8 autre(s). Utilisé par 2 fichiers (src/commands/metrics.ts, …).
-- `run.ts` : sans description. Exporte : BASELINE_RUNS, CriticalPath, MeasureInput, PHASES, PHASE_LABEL, PhaseMeasure, et 17 autre(s). Utilisé par 4 fichiers (src/commands/metrics.ts, …).
-- `sources.ts` : sans description. Exporte : FoundState, PR_FIELDS, STATUS_RUNS, StoredRun, commonDirOf(), findRunStates(), et 14 autre(s). Utilisé par 2 fichiers (src/commands/metrics.ts, …).
+- `pr.ts` : Time measure of one pull request (docs/SHIFT-LEFT.md, section 11): opened, ready, first… Exporte : BASELINE_PRS, PrBaseline, PrCommit, PrData, PrKind, PrMetrics, et 8 autre(s). Utilisé par 2 fichiers (src/commands/metrics.ts, …).
+- `run.ts` : Time measure of one spec execution (docs/SHIFT-LEFT.md, section 11), computed from what… Exporte : BASELINE_RUNS, CriticalPath, MeasureInput, PHASES, PHASE_LABEL, PhaseMeasure, et 17 autre(s). Utilisé par 4 fichiers (src/commands/metrics.ts, …).
+- `sources.ts` : Sources of 'apv metrics', read only: nothing is written, fetched or locked. Exporte : FoundState, PR_FIELDS, STATUS_RUNS, StoredRun, commonDirOf(), findRunStates(), et 14 autre(s). Utilisé par 2 fichiers (src/commands/metrics.ts, …).
 
 ### src/onboard
 
@@ -217,8 +217,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `config.ts` : The rules the tool enforces before a merge ('apv rules check', 'apv stack merge', 'apv… Exporte : CAPTURE_THEMES, CAPTURE_VIEWPORTS, CaptureTheme, CaptureViewport, DEFAULT_CAPTURE_THEMES, DEFAULT_CAPTURE_VIEWPORTS, et 8 autre(s). Utilisé par 5 fichiers (src/config/load.ts, …).
 - `merges.ts` : Merge traces: 'apv stack merge' and 'apv stack batch --merge' write one per merge,… Exporte : DEFAULT_AUDIT_DAYS, MERGES_DIR, MergeAudit, MergeTrace, MergeTraceBody, UnaccountedCommit, et 4 autre(s). Utilisé par 4 fichiers (src/commands/audit.ts, …).
 - `operator.ts` : The operator journal: what the operator typed himself in the session, kept by the… Exporte : ANCHOR_DIR, ANCHOR_FILE, AnchorKey, DEFAULT_JOURNAL_DAYS, JournalEntry, JournalState, et 29 autre(s). Utilisé par 6 fichiers (src/commands/stack.ts, …).
-- `plugin-status.ts` : What 'apv status' says of the plugin (projet pilote, 3 octobre 2026) : a project under… Exporte : Catalog, CatalogRule, PluginInstall, PluginStatus, TOOL_ROOT, claudeDir(), et 7 autre(s). Utilisé par 1 fichier (src/commands/status.ts).
-- et 4 autres entrées dans ce dossier (liste complète : apv map --json).
+- et 5 autres entrées dans ce dossier (liste complète : apv map --json).
 
 Dossiers non listés, au-delà de la taille de la carte : src/run (6), src/security (2), src/spec (1), src/stack (5), src/stacks (2), src/structure (8), src/testcheck (1), src/web (6), workflows (2) (liste complète : apv map --json).
 

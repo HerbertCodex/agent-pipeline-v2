@@ -7,7 +7,7 @@ import { VERSION } from '../domain/contracts.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { runProcess } from '../execution/process.js';
 import { assertProcSupported, listProcesses, protectedTool, sessionPids, stopProcesses } from '../execution/procs.js';
-import { enterQueue, markedProcesses, waitForLoad, type QueueHandle, type SuiteHooks } from '../gates/suite.js';
+import { enterQueue, markedProcesses, queuePlaces, waitForLoad, type QueueHandle, type SuiteHooks } from '../gates/suite.js';
 import { gitRead } from '../run/git-probe.js';
 import { findBrowser, lighthouseCommand, type Browser, type LighthouseCommand } from './chrome.js';
 import { defaultMaxLoad, type FormFactor, type WebSettings } from './config.js';
@@ -70,6 +70,8 @@ export interface AuditOptions {
   repo: string;
   settings: WebSettings;
   suiteQueue: SuiteQueueSettings;
+  /** Ids of the declared test stacks: a measure holds the place of each in the queue (no suite runs beside it, whatever suite.queue.slots). */
+  stackIds?: readonly string[] | undefined;
   suiteMaxLoad: number | undefined;
   origin: string;
   source: 'url' | 'preview';
@@ -281,9 +283,11 @@ export type QueueRecord = NonNullable<AuditSummary['queue']>;
 /**
  * The queue of the full suites around a measure (`suite.queue`), taken by the caller before anything else (before the
  * preview lock and its build): no suite runs while Lighthouse measures. Inside a full suite (`APV_SUITE_RUN`), the suite
- * already holds it: never taken twice. `web.queue` false or the queue disabled: none.
+ * already holds every place (a suite with a check that runs `apv web audit` takes them all, src/gates/run.ts): never
+ * taken twice. Every place is taken (the whole queue, each numbered place of
+ * `suite.queue.slots`, each declared stack), so that no suite runs beside the measure whatever `slots` says. `web.queue` false or the queue disabled: none.
  */
-export async function enterAuditQueue(options: Pick<AuditOptions, 'repo' | 'settings' | 'suiteQueue' | 'env' | 'log' | 'signal' | 'hooks'>): Promise<{ handle: QueueHandle | null; record: QueueRecord }> {
+export async function enterAuditQueue(options: Pick<AuditOptions, 'repo' | 'settings' | 'suiteQueue' | 'stackIds' | 'env' | 'log' | 'signal' | 'hooks'>): Promise<{ handle: QueueHandle | null; record: QueueRecord }> {
   if (options.env['APV_SUITE_RUN']) return { handle: null, record: { held: false, waitedMs: 0, reason: 'file tenue par la suite complète en cours (APV_SUITE_RUN)' } };
   if (!options.settings.queue || !options.suiteQueue.enabled) {
     return { handle: null, record: { held: false, waitedMs: 0, reason: options.settings.queue ? 'file des suites désactivée (suite.queue.enabled)' : 'web.queue désactivé' } };
@@ -292,7 +296,9 @@ export async function enterAuditQueue(options: Pick<AuditOptions, 'repo' | 'sett
   mkdirSync(join(lockFile, '..'), { recursive: true });
   // The load is waited for run by run (runAudit): the queue alone here.
   const handle = await enterQueue({ lockFile, settings: { ...options.suiteQueue, maxLoad: undefined }, repo: options.repo, log: options.log, signal: options.signal,
-    hooks: options.hooks, label: `apv web audit (${options.repo})`, purpose: 'mesure Lighthouse' });
+    hooks: options.hooks, label: `apv web audit (${options.repo})`, purpose: 'mesure Lighthouse',
+    // Every place of the queue: the whole queue, each numbered place, each stack (suite.queue.slots lets suites run side by side).
+    places: queuePlaces(options.suiteQueue.slots, { used: [], declared: options.stackIds ?? [], all: true }) });
   return { handle, record: { held: true, waitedMs: handle.record.waitedMs, reason: `file des suites complètes (${lockFile})` } };
 }
 

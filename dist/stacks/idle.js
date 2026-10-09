@@ -8,6 +8,7 @@ import { listeningInodes, protectedPids } from '../execution/procs.js';
 import { runProcess } from '../execution/process.js';
 import { LockStore, defaultLockDir } from '../lock/store.js';
 import { gitRead } from '../run/git-probe.js';
+import { stackPlace } from '../gates/suite.js';
 import { DEFAULT_IDLE_AFTER_MS, stackPath } from './config.js';
 /**
  * Idle test stacks (docs/APV3-SPEC.md, section 18.4): a stack is stopped only on the evidence of a continuous series
@@ -213,6 +214,8 @@ export function probe(stack, context) {
     const queue = suiteQueue(context);
     if (queue && leaseHeld(queue.store, queue.resource))
         busy.push('suite complète en cours (file suite.queue tenue)');
+    if (queue && leaseHeld(queue.store, stackPlace(queue.resource, stack.id)))
+        busy.push(`suite complète en cours sur cette pile (place ${stackPlace(queue.resource, stack.id)} de la file tenue)`);
     const ports = stack.config.ports ?? [];
     if (ports.length) {
         try {
@@ -271,6 +274,12 @@ export async function underStackLock(stack, context, argv, label) {
             if (!q.ok)
                 return null;
             held.push(() => queue.store.release(queue.resource, { token: q.record.token }));
+            // A suite that uses this stack holds its place in the queue (suite.queue.slots), even when it is not the whole queue.
+            const place = stackPlace(queue.resource, stack.id);
+            const p = await queue.store.tryAcquire(place, owner, 3600, `apv stacks ${label}`);
+            if (!p.ok)
+                return null;
+            held.push(() => queue.store.release(place, { token: p.record.token }));
         }
         if (stack.resource) {
             const store = new LockStore(defaultLockDir(context.env));
@@ -362,5 +371,41 @@ export function stoppedSince(common, id) {
     const stopped = Date.parse(r.stoppedAt);
     const up = Math.max(r.startedAt ? Date.parse(r.startedAt) : 0, r.upAt ? Date.parse(r.upAt) : 0);
     return stopped > up ? r.stoppedAt : null;
+}
+/** The line format of `docker ps` read for a stack: name, state, then the two project labels. */
+export const DOCKER_PS_FORMAT = '{{.Names}}\t{{.State}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.supabase.cli.project"}}';
+/** The containers of `project` in a `docker ps -a --format DOCKER_PS_FORMAT` output: a project label equal to it, or a name ending in `_<project>`. */
+export function stackContainers(output, project) {
+    return output.split('\n').map(line => line.split('\t')).filter(([name, , compose, supabase]) => name && (compose === project || supabase === project || name.endsWith(`_${project}`)))
+        .map(([name, state]) => ({ name: name, state: (state ?? '').trim() || 'inconnu' }));
+}
+/** The containers of the stack now (`docker ps -a`, bounded, never changed), or why they cannot be read. */
+export async function readStackContainers(stack, repo, env, timeoutMs = 15_000) {
+    const project = stack.config.dockerProject;
+    if (!project)
+        return { error: `pas de dockerProject déclaré pour la pile ${stack.id} : état non lu par l'outil` };
+    const r = await runProcess({ command: ['docker', 'ps', '-a', '--format', DOCKER_PS_FORMAT], cwd: repo, env, timeoutMs, maxOutputBytes: 256 * 1024 });
+    if (r.status !== 'passed')
+        return { error: `docker ps illisible (${r.status}, code ${r.exitCode ?? '-'}) : ${r.stderr.trim().slice(0, 200) || 'sans sortie'}` };
+    return { containers: stackContainers(r.stdout, project) };
+}
+/**
+ * The state of a stack after a check was interrupted under its lock (a cancelled suite, a timeout: a reset of its
+ * database may have been cut halfway), from its containers now and, when read at the start of the suite, then: a
+ * container gone since (a reset removes and recreates the database container) or not running is said.
+ */
+export function judgeStack(now, before) {
+    if ('error' in now)
+        return { state: 'unknown', detail: now.error, containers: [], missing: [] };
+    const { containers } = now;
+    const missing = (before ?? []).map(c => c.name).filter(name => !containers.some(c => c.name === name));
+    const stopped = containers.filter(c => c.state !== 'running');
+    if (!containers.length)
+        return { state: 'absent', detail: `aucun conteneur${before?.length ? ` (${before.length} au départ de la suite)` : ''}`, containers, missing };
+    if (!stopped.length && !missing.length)
+        return { state: 'running', detail: `${containers.length} conteneur(s), tous en marche${before ? ', les mêmes qu\'au départ de la suite' : ''}`, containers, missing };
+    const parts = [...(missing.length ? [`disparu(s) depuis le départ de la suite : ${missing.join(', ')}`] : []),
+        ...(stopped.length ? [`hors marche : ${stopped.map(c => `${c.name} (${c.state})`).join(', ')}`] : [])];
+    return { state: 'degraded', detail: parts.join(' ; '), containers, missing };
 }
 //# sourceMappingURL=idle.js.map
