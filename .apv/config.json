@@ -56,5 +56,14 @@
       "staging",
       "hotfix/*"
     ]
+  },
+  "rules": {
+    "docsOnly": {
+      "exclude": [
+        "docs/**",
+        "README.md",
+        "examples/**"
+      ]
+    }
   }
 }

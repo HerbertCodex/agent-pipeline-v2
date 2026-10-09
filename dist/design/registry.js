@@ -14,7 +14,7 @@ export { DEFAULT_DESIGN_DIR } from './config.js';
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SLUG_MAX = 50;
 /** Decision ids of a registration: `maquette-<slug>-validee`, then `-v2`, `-v3`... for each re-registration. */
-const DECISION_ID = /^maquette-([a-z0-9]+(?:-[a-z0-9]+)*?)-validee(?:-v([0-9]+))?$/;
+export const DECISION_ID = /^maquette-([a-z0-9]+(?:-[a-z0-9]+)*?)-validee(?:-v([0-9]+))?$/;
 /** Machine-readable part of the decision value written by `register`: the file and its fingerprint. */
 const VALUE_FILE = /fichier (\S+?),? sha256 ([0-9a-f]{64})/;
 const FILE_PREFIX = 'fichier ';
@@ -69,7 +69,7 @@ export function mockupDecision(decision) {
     if (!id || decision.status !== 'confirmed')
         return null;
     const parts = valueParts(decision.value);
-    return { slug: id[1], version: id[2] ? Number(id[2]) : 1, screens: parts.screens, group: parts.group, file: parts.file };
+    return { slug: id[1], version: id[2] ? Number(id[2]) : 1, screens: parts.screens, group: parts.group, file: parts.file, sha256: parts.sha256 };
 }
 function parseMockup(repo, decision) {
     const id = DECISION_ID.exec(decision.id);

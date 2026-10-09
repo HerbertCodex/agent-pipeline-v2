@@ -4,6 +4,9 @@ import { loadDbConfigAtCommit } from '../db/config.js';
 import { designDir } from '../design/config.js';
 import { applyBaseGates, type BaseGates, type RemoteCheck } from '../gates/base-gates.js';
 import { verifyGates, type VerifyResult } from '../gates/verify.js';
+import { planScope } from '../gates/proof-scope.js';
+import { stageGates } from '../gates/run.js';
+import { Git } from '../execution/git.js';
 import { loadDecisionLedger } from '../lifecycle/decisions.js';
 import { sensitivePaths } from '../policy/policy.js';
 import { reviewPlanSettings } from '../review/config.js';
@@ -16,6 +19,7 @@ import { MERGE_RULES, RULE_TITLES, rulesSettings, type MergeRule } from './confi
 import { anchorKey, readOperatorMessages, waiverFor, waiverSentence, type OperatorMessage } from './operator.js';
 import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
+import { LANE_NAME, docsOnlyLane, laneLines, type DocsOnlyLane } from './docs-only.js';
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
 
 export type RuleStatus = 'ok' | 'refused' | 'waived' | 'not_applicable';
@@ -38,6 +42,8 @@ export interface RulesReport {
   mergeBase: string | null;
   ok: boolean;
   rules: RuleOutcome[];
+  /** The lane without code (src/rules/docs-only.ts): whether the change takes it, why, and the files that allowed it. */
+  lane: DocsOnlyLane;
   /** What could not be verified about the target (remote unreadable...), from the base of the checks. */
   warnings: string[];
 }
@@ -127,10 +133,34 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   const messages = readOperatorMessages(common, anchor.key);
   const rules: RuleOutcome[] = [];
 
-  // preuve, instable: the full suite at this exact commit, with the checks of the base kept.
+  // The plan of the reviews, and the lane without code (docs/REGLES.md): both read at the base, from the diff since it.
+  // The migrations as the base declares them, and as the change declares them: a change that moves db.migrations
+  // never takes its migrations out of the data review (both sets of paths count, never the working tree).
+  const migrations = [...new Set([...loadDbConfigAtCommit(repo, mergeBase).config.migrations, ...loadDbConfigAtCommit(repo, sha).config.migrations])];
+  const reviewSettings = reviewPlanSettings(atBase.review);
+  const sensitive = [...sensitivePaths, ...atBase.risk.highPaths];
+  const baseDesign = designDir(atBase.design);
+  const plan = planReviews({ repo, base: mergeBase, head: sha, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [] });
+  const lane = await docsOnlyLane({ repo, mergeBase, head: sha, plan, settings: settings.docsOnly, designDir: baseDesign, sensitive, messages, key: anchor.key });
+  // In the lane, only the domains the configuration forces (review.always) are required.
+  const retained = lane.eligible ? plan.retained.filter(d => reviewSettings.always.includes(d)) : plan.retained;
+
+  // preuve, instable: the full suite at this exact commit, with the checks of the base kept. In the lane without code,
+  // when every check of the full suite declares skipWhenOnly and none is required by its scope (recomputed here from the
+  // commit, the base and the reference, as apv gates verify does), there is nothing to prove: no receipt is asked for.
+  let unscoped: string | null = null;
+  if (lane.eligible && (!skip.has('preuve') || !skip.has('instable'))) {
+    try {
+      const full = stageGates(effective.gates, 'full').run;
+      if (full.length && full.every(g => g.skipWhenOnly)) {
+        const decisions = await planScope(new Git(), repo, effective, { base: mergeBase, head: sha });
+        if (full.every(g => decisions.get(g.id)?.required === false)) unscoped = full.map(g => g.id).join(', ');
+      }
+    } catch { unscoped = null; }
+  }
   let proof: VerifyResult | null = null;
   let proofError: string | null = null;
-  if (!skip.has('preuve') || !skip.has('instable')) {
+  if (!unscoped && (!skip.has('preuve') || !skip.has('instable'))) {
     try { proof = await verifyGates({ repo, config: effective, commit: sha, stage: 'full', configFile: null }); }
     catch (error) { proofError = errorMessage(error); }
   }
@@ -139,6 +169,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     `puis apv gates verify --commit ${short(sha)} --against ${input.target} doit sortir en 0.`,
   ];
   if (skip.has('preuve')) rules.push(outcome('preuve', 'not_applicable', 'prouvée par le lot (une suite complète sur la tête du lot)'));
+  else if (unscoped) rules.push(outcome('preuve', 'not_applicable', `${LANE_NAME} : aucun contrôle ne s'applique, chacun non requis par sa portée (skipWhenOnly, recalculée depuis le commit) : ${unscoped}`));
   else if (proofError) rules.push(outcome('preuve', 'refused', 'suite complète au commit exact', [proofError], proveTodo));
   else if (proof!.ok) rules.push(outcome('preuve', 'ok', `${proof!.required.length} contrôle(s) prouvé(s) à ${short(sha)}, contrôles de la base compris`));
   else {
@@ -146,6 +177,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     rules.push(outcome('preuve', 'refused', 'suite complète au commit exact', [`contrôle(s) non prouvé(s) à ${short(sha)} : ${missing.join(', ')}`], proveTodo));
   }
   if (skip.has('instable')) rules.push(outcome('instable', 'not_applicable', 'jugée sur la suite du lot'));
+  else if (unscoped) rules.push(outcome('instable', 'not_applicable', `${LANE_NAME} : aucun contrôle à lancer`));
   else if (!proof) rules.push(outcome('instable', 'refused', 'contrôles réussis au premier passage', ['preuve illisible : rien ne montre que les contrôles ont réussi sans relance'], proveTodo));
   else if (proof.flaky.length) {
     rules.push(outcome('instable', 'refused', 'contrôles réussis au premier passage', [`réussi(s) seulement après relance : ${proof.flaky.join(', ')}`], [
@@ -155,15 +187,10 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   } else rules.push(outcome('instable', 'ok', 'aucun contrôle réussi seulement après relance'));
 
   // relecture, captures: the domains `apv review plan` retains for the change, each recorded at this commit.
-  // The migrations as the base declares them, and as the change declares them: a change that moves db.migrations
-  // never takes its migrations out of the data review (both sets of paths count, never the working tree).
-  const migrations = [...new Set([...loadDbConfigAtCommit(repo, mergeBase).config.migrations, ...loadDbConfigAtCommit(repo, sha).config.migrations])];
-  const plan = planReviews({ repo, base: mergeBase, head: sha, settings: reviewPlanSettings(atBase.review), migrations,
-    designDir: designDir(atBase.design), sensitive: [...sensitivePaths, ...atBase.risk.highPaths], force: [] });
   const reviews = latestReviews(common, sha);
   const reviewProblems: string[] = [];
   const reviewTodo: string[] = [];
-  for (const domain of plan.retained) {
+  for (const domain of retained) {
     const agent = `apv:${DOMAIN_REVIEWERS[domain]}`;
     const found = reviews.get(domain);
     const ask = `Relecture ${domain} par ${agent} sur une copie détachée à ${short(sha)} ; l'agent l'enregistre lui-même (apv review record --commit ${short(sha)} --domain ${domain} ...).`;
@@ -175,9 +202,11 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
       reviewTodo.push(`Corrige chaque constat critique ou haut de la relecture ${domain}, avec le test qui le prouve, puis fais relire le nouveau commit (${agent}).`);
     }
   }
-  rules.push(reviewProblems.length
-    ? outcome('relecture', 'refused', `relectures demandées par le diff : ${plan.retained.join(', ')}`, reviewProblems, reviewTodo)
-    : outcome('relecture', 'ok', `relectures enregistrées à ${short(sha)} sans constat critique ni haut : ${plan.retained.join(', ')} (risque ${plan.risk.level === 'faible' ? 'faible' : 'élevé'} : ${plan.risk.reason.slice(0, 200)})`));
+  const forcedNote = lane.eligible ? ` (${LANE_NAME}, domaines forcés par review.always)` : '';
+  if (lane.eligible && !retained.length) rules.push(outcome('relecture', 'not_applicable', `${LANE_NAME} : ${lane.reason} ; aucune relecture d'agent exigée`));
+  else rules.push(reviewProblems.length
+    ? outcome('relecture', 'refused', `relectures demandées par le diff${forcedNote} : ${retained.join(', ')}`, reviewProblems, reviewTodo)
+    : outcome('relecture', 'ok', `relectures enregistrées à ${short(sha)} sans constat critique ni haut${forcedNote} : ${retained.join(', ')} (risque ${plan.risk.level === 'faible' ? 'faible' : 'élevé'} : ${plan.risk.reason.slice(0, 200)})`));
 
   // captures: in a project with screens at the base, required as soon as the plan retains fidelite (a component, a
   // style, a message shown, a configuration of the styles change what a screen shows). Not applicable only to a project
@@ -188,7 +217,8 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   const screens = changed.filter(f => isScreen(f, screenMatch));
   const addedScreens = changed.filter(f => screenLike(f, screenMatch));
   if (!addedScreens.length && !hasScreensAt(repo, mergeBase, screenMatch)) rules.push(outcome('captures', 'not_applicable', 'projet sans écran à la base (pas un projet web, aucune route reconnue ni rules.screens, aucun fichier d\'interface) et aucun écran ajouté : rien à capturer'));
-  else if (!plan.retained.includes('fidelite')) rules.push(outcome('captures', 'not_applicable', 'relecture de fidélité non retenue par le plan des revues'));
+  else if (lane.eligible && !retained.includes('fidelite')) rules.push(outcome('captures', 'not_applicable', `${LANE_NAME} : aucun écran ni fichier d'interface, relecture de fidélité non exigée`));
+  else if (!retained.includes('fidelite')) rules.push(outcome('captures', 'not_applicable', 'relecture de fidélité non retenue par le plan des revues'));
   else {
     const record = reviews.get('fidelite')?.record ?? null;
     const needed = settings.captures.viewports.flatMap(v => settings.captures.themes.map(t => `${v}:${t}`));
@@ -237,13 +267,14 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   }
   const order = new Map(MERGE_RULES.map((r, i) => [r, i]));
   rules.sort((a, b) => order.get(a.rule)! - order.get(b.rule)!);
-  return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, warnings: [...base.warnings, ...(anchor.problem ? [anchor.problem] : [])] };
+  return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, lane, warnings: [...base.warnings, ...(anchor.problem ? [anchor.problem] : [])] };
 }
 
 /** Lines of a report, for the text output of `apv rules check` and of the stack commands. */
 export function rulesLines(report: RulesReport, indent = ''): string[] {
   const label: Record<RuleStatus, string> = { ok: 'ok', refused: 'REFUSÉ', waived: 'DÉROGATION', not_applicable: 'sans objet' };
-  const lines = [`${indent}Règles avant fusion à ${short(report.commit)} (cible ${report.target}, base commune ${report.mergeBase ? short(report.mergeBase) : '?'}) :`];
+  const lines = [`${indent}Règles avant fusion à ${short(report.commit)} (cible ${report.target}, base commune ${report.mergeBase ? short(report.mergeBase) : '?'}) :`,
+    ...laneLines(report.lane, indent)];
   for (const r of report.rules) {
     lines.push(`${indent}- ${r.rule} (${r.title}) : ${label[r.status]} : ${r.detail}`);
     for (const p of r.problems) lines.push(`${indent}    ${p}`);

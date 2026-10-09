@@ -187,6 +187,8 @@ test('review risk: tooling outside a test folder, and tests under a routing fold
 test('review risk: --force and review.always stay above the level', async t => {
   const p = project(t, { review: { always: ['rgpd'] } });
   p.edit('docs/guide.md', '# Guide\n\nAutre.\n');
+  // A test with it: outside the lane without code (documentation alone takes it, test/docs-only-lane.test.mjs).
+  p.edit('tests/e2e/auth.spec.ts', "import { test } from '@playwright/test';\ntest('z', async () => {});\n");
   p.commit();
   const plan = await p.plan('--force', 'donnees');
   assert.equal(plan.risk.level, 'faible');

@@ -148,7 +148,7 @@ Une tâche sans champ `tdd` est en `red-first` dès que le projet l'active. Exce
 | Mode | Pour | Exigé à la place |
 |---|---|---|
 | `characterization` | refactorisation pure | des tests couvrent les fichiers touchés, passent à la base et à la tête (reçu `tdd-characterization`) ; aucun critère nouveau |
-| `none`, `kind` `docs`, `config`, `content` | documentation, configuration, contenu | chaque fichier changé est admis par la voie sans code de la PR #121 (`docsOnlyLane`, sortes `decisions`, `mockups`, `drafts`, `specs`, `journal`, `state`, `docs`) ou par la voie des réglages (section 10.2) ; un seul fichier de code fait refuser (`TDD_EXCEPTION`) |
+| `none`, `kind` `docs`, `config`, `content` | documentation, configuration, contenu | chaque fichier changé est admis par la voie sans code de la PR #121 (`docsOnlyLane`, sortes `decisions`, `mockups`, `drafts`, `specs`, `journal`, `docs`) ou par la voie des réglages (section 10.2) ; un seul fichier de code fait refuser (`TDD_EXCEPTION`) |
 | `none`, `kind` `spike` | exploration jetée | jamais intégrée : `apv run set ... done` la refuse en intégration |
 
 Chaque exception porte `kind` et `reason` (20 caractères au moins). `apv spec validate` refuse une exception sans raison, un `kind` contraire au mode, ou un `none` dont les `allowedPaths` couvrent du code. La voie sans code vit sur la branche `apv3-voie-legere-sans-code`, pas encore fusionnée : la phase 2 en dépend.
@@ -312,7 +312,7 @@ La règle `preuve` ne change pas : la suite complète au commit exact fusionné.
 
 ### 10.1 Voie sans code (PR #121, à compléter)
 
-La voie de la PR #121 (`docsOnlyLane`, `rules.docsOnly`) admet registre, maquettes validées, brouillons, specs, journal, état et documentation. Dans cette voie : pas de suite complète (si les contrôles `full` déclarent `skipWhenOnly`), relecture `securite` seule, plus `fidelite` pour une maquette, fusion directe par `apv stack merge`. Compléments :
+La voie de la PR #121 (`docsOnlyLane`, `rules.docsOnly`) admet registre, maquettes validées, brouillons, specs, journal et documentation (l'état `.apv/state/**` en est retiré par la relecture de sécurité). Dans cette voie : pas de suite complète (si les contrôles `full` déclarent `skipWhenOnly`), relecture `securite` seule, plus `fidelite` pour une maquette, fusion directe par `apv stack merge`. Compléments :
 - relecture `securite` **légère** dans cette voie : liste fixe (secret, donnée personnelle, adresse réelle, instruction d'agent glissée dans un texte), 5 à 10 minutes ;
 - la ligne « voie sans code » dans la sortie de `apv review plan`, `apv rules check` et le corps de la PR ;
 - `apv:product` découpe une spec pour que décisions et maquettes partent en PR à part, dans cette voie.

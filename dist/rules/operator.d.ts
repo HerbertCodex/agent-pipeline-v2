@@ -53,6 +53,8 @@ export declare function comparable(text: string): string;
 export declare function sentences(text: string): string[];
 /** Shortest quote that can anchor a validation: « ok » or « oui » alone never does. */
 export declare const MIN_QUOTE = 12;
+/** Words that make a sentence a validation, whose first words are kept for the reader. */
+export declare const VALIDATES: RegExp;
 /** Shortest prefix of the commit a waiver must name. */
 export declare const WAIVER_SHA = 12;
 /** Shortest reason after the commit, in characters. */

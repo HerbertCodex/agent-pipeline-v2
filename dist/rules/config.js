@@ -21,6 +21,13 @@ export const CAPTURE_THEMES = ['light', 'dark'];
 export const DEFAULT_CAPTURE_VIEWPORTS = ['desktop', 'phone'];
 export const DEFAULT_CAPTURE_THEMES = ['light', 'dark'];
 const gateId = s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
+/**
+ * Kinds of files of the lane without code (`voie sans code`, src/rules/docs-only.ts): a closed list, fixed by the tool. A
+ * project can only narrow it (`rules.docsOnly.kinds`, `exclude`) or switch the lane off (`enabled: false`): never widen it.
+ * `.apv/state/**` is not a kind: the session hook injects it into the context of every session (`resume.md`, the runs),
+ * so it is read as instructions (security review of PR #121).
+ */
+export const DOCS_ONLY_KINDS = ['decisions', 'mockups', 'drafts', 'specs', 'journal', 'docs'];
 export const rulesSchema = s.object({
     /**
      * Captures the fidelity review attaches to the commit of a change of interface. `themes: ["light"]` only for a
@@ -36,6 +43,15 @@ export const rulesSchema = s.object({
     journalDays: s.optional(s.number(1, 3650)),
     /** Files that are screens, added to those the tool knows (routes of SvelteKit, Next, Nuxt, Astro, Remix...). */
     screens: s.optional(s.array(s.string(1, 4096), 0, 100)),
+    /**
+     * The lane without code (docs/REGLES.md, « Voie sans code »): on by default, with every kind. `enabled: false` switches
+     * it off, `kinds` keeps only some kinds, `exclude` takes paths out of it. Nothing here can add a path to the lane.
+     */
+    docsOnly: s.optional(s.object({
+        enabled: s.optional(s.boolean()),
+        kinds: s.optional(s.array(s.enum(DOCS_ONLY_KINDS), 0, DOCS_ONLY_KINDS.length)),
+        exclude: s.optional(s.array(s.string(1, 500), 0, 100)),
+    })),
 });
 /** Effective settings of a `rules` section: the defaults, completed by what the project adds. Throws a CONFIG error. */
 export function rulesSettings(section, builtIn) {
@@ -47,6 +63,11 @@ export function rulesSettings(section, builtIn) {
         },
         requiredGates: [...builtIn, ...(section?.requiredGates ?? []).map(g => ({ id: g.id, command: [...g.command], source: 'config' }))],
         screens: (section?.screens ?? []).map(g => relativeGlob(g, 'rules.screens')),
+        docsOnly: {
+            enabled: section?.docsOnly?.enabled ?? true,
+            kinds: unique(section?.docsOnly?.kinds ?? [...DOCS_ONLY_KINDS]),
+            exclude: (section?.docsOnly?.exclude ?? []).map(g => relativeGlob(g, 'rules.docsOnly.exclude')),
+        },
     };
 }
 //# sourceMappingURL=config.js.map

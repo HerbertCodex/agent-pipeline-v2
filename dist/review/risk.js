@@ -24,10 +24,13 @@ export const ROUTING_DIR = /(?:^|\/)(?:routes|pages|app)\//;
 export const ROUTING_TEST_DIR = /(?:^|\/)(?:routes|pages|app)\/(?:.*\/)?tests?\//;
 /**
  * The instructions of the agents (the plugin's own and the project's): what they say changes what the agents do. Of
- * high risk, like the sensitive paths of the high lane, whatever the classes say.
+ * high risk, like the sensitive paths of the high lane, whatever the classes say. The lane without code compares them
+ * without case (`docs/claude.md`, `Start-Here.md`): a file system that ignores the case reads them all the same.
  */
 export const AGENT_INSTRUCTIONS = [
-    'agents/**', 'workflows/**', 'skills/**', '**/SKILL.md', '.apv/brief.md', '**/CLAUDE.md', '**/AGENTS.md', '.claude/**', '.agents/**',
+    'agents/**', 'workflows/**', 'skills/**', 'hooks/**', 'commands/**', 'output-styles/**', '**/SKILL.md', '.apv/brief.md',
+    '**/CLAUDE.md', '**/CLAUDE.local.md', '**/AGENTS.md', '**/GEMINI.md', 'START-HERE.md', 'docs/REGLES.md',
+    '.claude/**', '.agents/**', '.cursor/**',
 ];
 /** Folders whose Markdown is served or compiled by the application, never documentation. */
 export const SERVED_DIR = /(?:^|\/)(?:src|static|public|content|app|pages)\//;
