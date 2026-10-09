@@ -45,6 +45,13 @@ export declare const CONFIG_FILES: readonly [".apv/config.json", "pipeline.v2.js
  * reads them: the session hook injects `.apv/state/` into every session. A real e-mail address in them still counts.
  */
 export declare const PILOT_NOTES: readonly [".apv/state/**", ".apv/journal-pipeline.md", ".apv/specs/**"];
+/**
+ * The registry of the decisions (`.apv/DECISIONS.json` and its Markdown rendering): a class of its own, neither a
+ * configuration nor a note of the pipeline (pilot project, 9 October 2026: a pull request adding one decision kept
+ * every review as a « configuration »). The security review always reads it (a decision sets requirements); data and
+ * GDPR only on their terms, never by prudence for the sole reason that it is the registry. A real e-mail address counts.
+ */
+export declare const LEDGER_FILES: readonly [".apv/DECISIONS.json", ".apv/DECISIONS.md"];
 /** The specs: a note of the pipeline only when added; a spec of the base modified keeps the classification of alpha.20. */
 export declare const SPEC_NOTES = ".apv/specs/**";
 export declare const PILOT_NOTE_EXTENSIONS: RegExp;
@@ -55,7 +62,7 @@ export declare const PILOT_NOTE_EXTENSIONS: RegExp;
  */
 export declare const LOCK_FILES: readonly ["**/package-lock.json", "**/npm-shrinkwrap.json", "**/pnpm-lock.yaml", "**/yarn.lock"];
 export declare const MANIFEST_FILES: readonly ["**/package.json"];
-/** A real e-mail address (not on a reserved domain) in the lines, or null. */
+/** A real e-mail address (not on a reserved domain, not a package with a version) in the lines, or null. */
 export declare function realAddress(lines: readonly string[]): string | null;
 export interface DiffRisk {
     level: RiskLevel;

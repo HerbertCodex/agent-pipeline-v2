@@ -81,9 +81,12 @@ export interface ReviewPlan {
         content: number;
         neutral: number;
         notes: number;
+        ledger: number;
         locks: number;
         unclassified: number;
     };
+    /** Ids of the mockup decisions (or decisions with a perimeter) the registry adds, changes or removes; `(registre illisible)` when a side cannot be read. */
+    ledgerMockups: string[];
     /** Risk level of the diff: `faible` keeps at most securite and fidelite (plus what is forced); `eleve` is the plan as before. */
     risk: DiffRisk;
     domains: DomainDecision[];

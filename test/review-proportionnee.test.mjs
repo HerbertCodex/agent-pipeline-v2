@@ -39,8 +39,8 @@ const FILES = {
   '.apv/state/resume.md': '# Reprise\n',
 };
 
-function project(t) {
-  const f = fixture(t, { files: FILES });
+function project(t, extra = {}) {
+  const f = fixture(t, { files: { ...FILES, ...extra } });
   git(f.repo, 'switch', '-q', '-c', 'work');
   const file = p => join(f.repo, p);
   return {
@@ -173,6 +173,96 @@ test('notes of the pipeline (.apv/state, journal, specs) are never configuration
   }
   for (const d of plan.skipped) assert.doesNotMatch(d.reason, /configuration/, d.domain);
   assert.match(await p.text(), /notes de pilotage/);
+});
+
+test('a package name with its version in a note is no e-mail address: the security review alone (9 October 2026)', async t => {
+  const p = project(t);
+  p.edit('.apv/state/resume.md', '# Reprise\n\n- `npx -y supabase@2.117.0 db push` ; voir @chemin et @securite\n');
+  p.commit();
+  const plan = await p.plan();
+  assert.deepEqual(plan.retained, ['securite'], JSON.stringify(plan.domains));
+  assert.match(plan.files[0].riskWhy, /^notes de pilotage/);
+  const real = project(t);
+  real.edit('.apv/state/resume.md', '# Reprise\n\n- contact : marie.durand@societe.fr\n');
+  real.commit();
+  assert.deepEqual((await real.plan()).retained, ['securite', 'rgpd']);
+});
+
+test('the decision ledger is its own class: the security review always, data and GDPR only on their terms (9 October 2026)', async t => {
+  const ledger = text => JSON.stringify({ schemaVersion: 1, decisions: [{ id: 'D-9', subject: 'Pilotage', value: text, enforcement: 'product', status: 'confirmed', source: 'operator', sourceQuote: 'ok', rationale: 'choix', supersedes: [], clarificationQuestion: '', interpretations: [] }] }, null, 2);
+  const p = project(t);
+  p.edit('.apv/DECISIONS.json', `${ledger('Les relectures de sécurité restent obligatoires')}\n`);
+  p.edit('.apv/DECISIONS.md', '# Décisions\n\n- D-9 : Les relectures de sécurité restent obligatoires\n');
+  p.commit();
+  const plan = await p.plan();
+  assert.deepEqual(plan.retained, ['securite'], JSON.stringify(plan.domains));
+  assert.equal(decision(plan, 'securite').basis, 'diff');
+  for (const f of plan.files) {
+    assert.match(f.riskWhy, /^registre des décisions/, f.path);
+    assert.deepEqual(f.keeps, [], f.path);
+  }
+  assert.match(await p.text(), /registre des décisions/);
+  // A RGPD term in the added lines of the ledger keeps the GDPR review, on the diff; the Markdown rendering says nothing more.
+  const q = project(t);
+  q.edit('.apv/DECISIONS.json', `${ledger('Les e-mails des lecteurs sont supprimés après un an')}\n`);
+  q.edit('.apv/DECISIONS.md', '# Décisions\n\n- D-9 : Les e-mails des lecteurs sont supprimés après un an\n');
+  q.commit();
+  const withTerm = await q.plan();
+  assert.deepEqual(withTerm.retained, ['securite', 'rgpd'], JSON.stringify(withTerm.domains));
+  assert.equal(decision(withTerm, 'rgpd').basis, 'diff');
+  assert.match(decision(withTerm, 'rgpd').reason, /terme RGPD/);
+  // A term of data (a statement of SQL) keeps the data review.
+  const s = project(t);
+  s.edit('.apv/DECISIONS.json', `${ledger('La purge lance truncate sessions chaque nuit')}\n`);
+  s.commit();
+  assert.deepEqual((await s.plan()).retained, ['securite', 'donnees']);
+  // A ledger changed beside a note keeps the same reading.
+  const r = project(t);
+  r.edit('.apv/DECISIONS.json', `${ledger('Un autre choix de pilotage')}\n`);
+  r.edit('.apv/state/resume.md', '# Reprise\n\nÉtat court\n');
+  r.commit();
+  assert.deepEqual((await r.plan()).retained, ['securite']);
+});
+
+test('review of PR #129, H1: a mockup decision added or changed in the ledger keeps the fidelity review, on the diff', async t => {
+  const decisionOf = (id, value, extra = {}) => ({ id, subject: `Maquette ${id}`, value, enforcement: 'product', status: 'confirmed', source: 'operator', sourceQuote: 'je valide la maquette',
+    rationale: 'validée', supersedes: [], clarificationQuestion: '', interpretations: [], ...extra });
+  const accueil = decisionOf('maquette-accueil-validee', `Référence : fichier docs/design/accueil.html, sha256 ${'a'.repeat(64)}. Écrans : accueil.`);
+  const base = { '.apv/DECISIONS.json': `${JSON.stringify({ schemaVersion: 1, decisions: [decisionOf('D-1', 'Choix de pilotage', { subject: 'Pilotage' }), accueil] }, null, 2)}\n` };
+  const withLedger = (decisions) => `${JSON.stringify({ schemaVersion: 1, decisions }, null, 2)}\n`;
+  const d1 = JSON.parse(base['.apv/DECISIONS.json']).decisions[0];
+  // A screen added to the screens of a validated mockup (the registry alone changes).
+  const retarget = project(t, base);
+  retarget.edit('.apv/DECISIONS.json', withLedger([d1, { ...accueil, value: accueil.value.replace('Écrans : accueil.', 'Écrans : accueil, carte.') }]));
+  retarget.commit();
+  const plan = await retarget.plan();
+  assert.deepEqual(plan.retained, ['securite', 'fidelite'], JSON.stringify(plan.domains));
+  assert.equal(decision(plan, 'fidelite').basis, 'diff');
+  assert.match(decision(plan, 'fidelite').reason, /décision de maquette ajoutée ou modifiée au registre/);
+  // Not anchored in the operator's messages: said in the plan.
+  assert.match(plan.unanchored.join('\n'), /maquette-accueil-validee modifiée/);
+  assert.match(await retarget.text(), /maquette non ancrée : décision maquette-accueil-validee modifiée/);
+  // A mockup decision added, a decision with a perimeter changed, the status of a mockup changed, a mockup removed.
+  for (const [name, decisions] of [
+    ['added', [d1, accueil, decisionOf('maquette-carte-validee', `Référence : fichier docs/design/carte.html, sha256 ${'b'.repeat(64)}. Écrans : carte.`)]],
+    ['scope', [{ ...d1, scope: { paths: ['src/routes/**'] } }, accueil]],
+    ['status', [d1, { ...accueil, status: 'proposed' }]],
+    ['removed', [d1]],
+  ]) {
+    const p = project(t, base);
+    p.edit('.apv/DECISIONS.json', withLedger(decisions));
+    p.commit();
+    const got = await p.plan();
+    assert.ok(got.retained.includes('fidelite'), `${name}: ${JSON.stringify(got.domains)}`);
+    assert.equal(decision(got, 'fidelite').basis, 'diff', name);
+  }
+  // A decision that is no mockup and has no perimeter: the security review alone, nothing to anchor.
+  const plain = project(t, base);
+  plain.edit('.apv/DECISIONS.json', withLedger([d1, accueil, decisionOf('D-2', 'Un autre choix de pilotage', { subject: 'Pilotage 2' })]));
+  plain.commit();
+  const only = await plain.plan();
+  assert.deepEqual(only.retained, ['securite'], JSON.stringify(only.domains));
+  assert.deepEqual(only.unanchored, []);
 });
 
 test('the lane without code stays first when it applies: no domain at all', async t => {

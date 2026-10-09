@@ -2,7 +2,7 @@
 
 Générée par `apv map` à partir des fichiers du dépôt, sans modèle. À lire avant de créer un composant, un module ou une route : réutiliser une entrée existante, ou l'étendre de façon générique (paramètre, variante) ; un élément utilisé par deux fonctionnalités devient partagé. Ne pas modifier à la main : l'intégration la régénère (`apv map`), et le contrôle `apv map --check` de la suite complète échoue quand elle ne correspond plus au code.
 
-Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 168. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 89 test(s), 318 fichier(s) ignoré(s), 5 module(s) sans export ni import.
+Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 169. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 90 test(s), 320 fichier(s) ignoré(s), 5 module(s) sans export ni import.
 
 ## Dossiers
 
@@ -71,6 +71,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 
 - `apv-files.ts` : The project directory of APV3: configuration, ledger, specs and state, versioned with… Exporte : APV_DIR, APV_IGNORED, apvGitignoreMissing(), ensureApvGitignore(). Utilisé par 5 fichiers (src/commands/init.ts, …).
 - `load.ts` : V3 project configuration, versioned with the project. Exporte : ApvConfig, CONFIG_FILE, DAST_PLACEHOLDERS, DEFAULT_DAST_RESOURCE, DEFAULT_DAST_TIMEOUT_MS, DEFAULT_FULL_SUITE, et 35 autre(s). Utilisé par 38 fichiers (src/commands/dast.ts, …).
+- `models.ts` : Model of each role ('models' of .apv/config.json, docs/CONFIGURATION.md). Exporte : DEFAULT_MODELS, EFFORT_LEVELS, EffortLevel, MODEL_KEYS, MODEL_NAMES, ModelName, et 5 autre(s). Utilisé par 2 fichiers (src/commands/status.ts, …).
 
 ### src/db
 
@@ -101,7 +102,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `issues.ts` : One validation problem. Exporte : Issue, IssueList, jsonSchemaIssues(), schemaIssues(). Utilisé par 4 fichiers (src/config/load.ts, …).
 - `knowledge.ts` : Old configurations opt into no new skills. Exporte : KnowledgeConfig, LanguageProfile, RoleName, SkillsConfig, exportRules, knowledgeSchema, et 5 autre(s). Utilisé par 3 fichiers (src/config/load.ts, …).
 - `paths.ts` : Absolute path with every symlink of its longest existing ancestor resolved, the missing… Exporte : canonicalPath(). Utilisé par 10 fichiers (src/commands/common.ts, …).
-- `schema.ts` : A deliberately small schema vocabulary: runtime parsing and JSON Schema share the same… Exporte : Infer, JsonSchema, Schema, parseJson(), s. Utilisé par 23 fichiers (src/config/load.ts, …).
+- `schema.ts` : A deliberately small schema vocabulary: runtime parsing and JSON Schema share the same… Exporte : Infer, JsonSchema, Schema, parseJson(), s. Utilisé par 25 fichiers (src/config/load.ts, …).
 - `time.ts` : Times shown to a human, in the local time zone of the machine (Intl, the zone of the… Exporte : LocalTimeOptions, localTime(), localTimeZone, parseUntil(). Utilisé par 7 fichiers (src/commands/lock.ts, …).
 
 ### src/engine
@@ -149,7 +150,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 ### src/lifecycle
 
 - `contracts.ts` : sans description. Exporte : CriterionAmendment, DesignProposal, DesignRecord, PlanRevision, Publication, QaRecord, et 27 autre(s). Utilisé par 5 fichiers (src/commands/run.ts, …).
-- `decisions.ts` : Kebab-case spec id, as in '.apv/specs/<id>.json'. Exporte : Decision, DecisionCoverage, DecisionLedger, DecisionScope, DecisionTarget, LEDGER_FILE, et 25 autre(s). Utilisé par 14 fichiers (src/commands/init.ts, …).
+- `decisions.ts` : Kebab-case spec id, as in '.apv/specs/<id>.json'. Exporte : Decision, DecisionCoverage, DecisionLedger, DecisionScope, DecisionTarget, LEDGER_FILE, et 25 autre(s). Utilisé par 15 fichiers (src/commands/init.ts, …).
 - `ledger-update.ts` : Operator-authored change to the Decision Ledger after bootstrap. Exporte : LedgerUpdate, LedgerUpdatePlan, applyLedgerUpdate(), ledgerUpdateSchema, planLedgerUpdate(). Utilisé par 2 fichiers (src/commands/ledger.ts, …).
 - `pathways.ts` : A bounded Product transport. Exporte : Architecture, ExecutionPath, adaptiveConfig(), architectureSchema, briefSpecSchema, expandBrief(), et 5 autre(s). Utilisé par 1 fichier (src/lifecycle/contracts.ts).
 
@@ -209,15 +210,14 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `dast.ts` : 'apv dast run': the dynamic security scan (ZAP or another) that the project declares in… Exporte : DAST_INSTALL, DAST_INSTALL_MARKER, DAST_LOG, DAST_SUMMARY, DastInstall, DastRunOptions, et 11 autre(s). Utilisé par 2 fichiers (src/commands/dast.ts, …).
 - `plan.ts` : 'apv review plan': the review domains proposed from the nature of a diff. Exporte : ChangeKind, DomainDecision, Hunk, PlanInput, PlannedFile, ReferenceSide, et 7 autre(s). Utilisé par 4 fichiers (src/commands/review.ts, …).
 - `rename.ts` : Pure renames of class and id names, for 'apv review plan' (docs/REGLES.md, « Renommage… Exporte : HunkPlace, RenameInput, RenamePair, neutralizeLine(), pureRename(), renameKind, et 2 autre(s). Utilisé par 1 fichier (src/review/plan.ts).
-- `risk.ts` : Risk level of a diff ('apv review plan', 'apv gates run --since'). Exporte : AGENT_INSTRUCTIONS, CONFIG_FILES, DiffRisk, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, et 12 autre(s). Utilisé par 4 fichiers (src/commands/review.ts, …).
+- `risk.ts` : Risk level of a diff ('apv review plan', 'apv gates run --since'). Exporte : AGENT_INSTRUCTIONS, CONFIG_FILES, DiffRisk, LEDGER_FILES, LOCK_FILES, MANIFEST_FILES, et 13 autre(s). Utilisé par 4 fichiers (src/commands/review.ts, …).
 
 ### src/rules
 
 - `anchor-status.ts` : What 'apv status' says of the anchors: the operator journal, the branch protection, the… Exporte : AnchorStatus, anchorLines(), anchorStatus(), journalLines(). Utilisé par 1 fichier (src/commands/status.ts).
 - `check.ts` : What was checked, in one sentence. Exporte : DomainReview, RuleOutcome, RuleStatus, RulesInput, RulesReport, checkMergeRules(), et 2 autre(s). Utilisé par 2 fichiers (src/commands/rules.ts, …).
 - `config.ts` : The rules the tool enforces before a merge ('apv rules check', 'apv stack merge', 'apv… Exporte : CAPTURE_THEMES, CAPTURE_VIEWPORTS, CaptureTheme, CaptureViewport, DEFAULT_CAPTURE_THEMES, DEFAULT_CAPTURE_VIEWPORTS, et 10 autre(s). Utilisé par 7 fichiers (src/commands/review.ts, …).
-- `docs-only.ts` : The lane without code (« voie sans code », docs/REGLES.md): a pull request of the… Exporte : DocsOnlyLane, KIND_LABEL, LANE_NAME, LaneFile, LaneInput, docsOnlyLane(), et 2 autre(s). Utilisé par 2 fichiers (src/commands/review.ts, …).
-- et 7 autres entrées dans ce dossier (liste complète : apv map --json).
+- et 8 autres entrées dans ce dossier (liste complète : apv map --json).
 
 Dossiers non listés, au-delà de la taille de la carte : src/run (6), src/security (2), src/spec (1), src/stack (5), src/stacks (2), src/structure (9), src/testcheck (1), src/web (6), workflows (2) (liste complète : apv map --json).
 

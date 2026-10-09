@@ -69,7 +69,7 @@ Règle unique : une tâche se lance **dès qu'elle est prête**, pas vague par v
 1. **Tâches prêtes** : `apv run next <id>`. Lance toutes celles qu'il donne prêtes, quelle que soit leur vague : les fondations prêtes à un seul agent, les autres en parallèle. Celles « en attente d'intégration » attendent que tu intègres la dépendance nommée (section 5). `apv run set … running` refuse une tâche dont une dépendance n'est pas intégrée ; `--force-unintegrated --note "<raison>"` seulement sur une décision écrite (fichiers disjoints, point d'accroche minimal), que l'outil journalise.
 2. **Quota** : `apv quota`, puis dose (section 8). Avec moins d'agents que de tâches prêtes, lance les plus utiles d'abord (ordre du plan).
 3. **Base exacte** : `git rev-parse apv/<id>` (le commit que tu donnes aux agents).
-4. **Branche de chaque tâche** : celle que `apv run next` indique, sinon `apv/<id>-<tâche>`.
+4. **Branche de chaque tâche** : celle que `apv run next` indique, sinon `apv/<id>-<tâche>`. **Modèle** : celui de la section `models` de la configuration, affichée par `apv status` (`implementer` pour une tâche, `fondations` pour les fondations) ; passé en `model` à l'outil Agent.
 5. **Lancement** :
    - **Une seule tâche** (les fondations prêtes, confiées à un seul agent ; une correction isolée) : outil Agent, `subagent_type: "apv:implementer"`, en arrière-plan en session interactive, au premier plan sinon (voir les règles en tête), avec le message de lancement ci-dessous.
    - **Plusieurs tâches, session interactive** : le workflow du plugin `apv:vague` (outil Workflow, `name: "apv:vague"`, ou `scriptPath` = chemin absolu de `workflows/vague.js` du plugin si le nom n'est pas trouvé) avec `args` en objet JSON :

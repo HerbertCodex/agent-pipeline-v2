@@ -26,8 +26,13 @@ export const ADBLOCK_MESSAGE = 'masqué par les filtres anti-pub du poste de l\'
 export interface AdBlockedName { line: number; kind: 'classe' | 'identifiant'; name: string }
 /** Not preceded by a letter, `-` or `.`, `=` right after the name: `data-id` is no `id`, `const id = …` no attribute. */
 const NAME = /-?[A-Za-z_][\w-]*/g;
-/** Not preceded by a letter, `-` or `.`: `data-id` is no `id`, `el.className =` is read as a script. */
-const ATTRIBUTE = /(?<![\w.-])(class|className|id)=(?:"([^"]*)"|'([^']*)'|\{([^}]*)\}|([^\s"'{>/]+))/g;
+/**
+ * Not preceded by a letter, `-` or `.`: `data-id` is no `id`, `el.className =` is read as a script. Spaces around the `=`
+ * (groups 2 and 3) are read inside a tag only (`tagMask`): `let id = 'ad-hoc'` of a script is no attribute.
+ */
+const ATTRIBUTE = /(?<![\w.-])(class|className|id)(\s*)=(\s*)(?:"([^"]*)"|'([^']*)'|\{([^}]*)\}|([^\s"'{>/]+))/g;
+/** An attribute whose value starts on the next line: `class=` or `id =` ending a line. */
+const ATTRIBUTE_OPEN = /(?<![\w.-])(class|className|id)\s*=\s*$/;
 const DIRECTIVE = /(?<![\w-])class:(-?[A-Za-z_][\w-]*)/g;
 const SCRIPT = /(?:\b(?:classList\.(?:add|remove|toggle|replace|contains)|getElementById)\s*\(([^)]*)\)|\.(className|id)\s*\+?=\s*(["'`][^"'`]*["'`]))/g;
 /** Calls that take a selector, read when it starts with `.` or `#` (`querySelector('.ad-box')`, the `locator` of Playwright). */
@@ -43,13 +48,57 @@ function selectors(line: string): string | null {
   return part;
 }
 
+/**
+ * Per character: whether it lies in the opening tag of an element (`<div` up to its `>`, quotes and `{...}` skipped), not
+ * in the text of the page nor in the content of `<script>` and `<style>`. A light reading, enough to tell an attribute
+ * written with spaces (`class = "x"`) from an assignment of a script.
+ */
+function tagMask(text: string): Uint8Array {
+  const mask = new Uint8Array(text.length);
+  let name: string | null = null;
+  let quote = '';
+  let braces = 0;
+  let rawEnd: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (rawEnd !== null) {
+      if (text.slice(i, i + rawEnd.length).toLowerCase() !== rawEnd) continue;
+      rawEnd = null;
+    }
+    if (name === null) {
+      if (c === '<') name = /^[A-Za-z][\w:.-]*/.exec(text.slice(i + 1, i + 40))?.[0].toLowerCase() ?? null;
+      if (name !== null) mask[i] = 1;
+      continue;
+    }
+    mask[i] = 1;
+    if (quote) { if (c === quote) quote = ''; continue; }
+    if (c === '"' || c === '\'' || c === '`') quote = c;
+    else if (c === '{') braces += 1;
+    else if (c === '}') braces = Math.max(0, braces - 1);
+    else if (c === '>' && braces === 0) {
+      if (name === 'script' || name === 'style') rawEnd = `</${name}`;
+      name = null;
+    }
+  }
+  return mask;
+}
+
 /** Every class and id name of a file of interface hidden by the generic ad filters, with its line, in order. */
 export function adBlockedNames(text: string, path: string): AdBlockedName[] {
   if (!ADBLOCK_FILES.test(path)) return [];
   const style = STYLE_FILE.test(path);
   const out: { line: number; column: number; kind: AdBlockedName['kind']; name: string }[] = [];
   let inStyle = false;
+  const inTag = style ? null : tagMask(text);
+  let offset = 0;
+  let pending: string | null = null;
   text.split('\n').forEach((raw, index) => {
+    const lineStart = offset;
+    offset += raw.length + 1;
+    const indent = raw.length - raw.trimStart().length;
+    // The value of `class=` or `id =` that ended the previous line, in a tag, is read as if both were on one line.
+    const joined = pending !== null && /^["'{]/.test(raw.trimStart()) && inTag![lineStart + indent] === 1 ? `${pending}${raw.trimStart()}` : null;
+    pending = null;
     const line = index + 1;
     const found = (column: number, kind: AdBlockedName['kind'], name: string): void => { if (ADBLOCK_NAME.test(name)) out.push({ line, column, kind, name }); };
     const names = (segment: string, offset: number, kind: AdBlockedName['kind']): void => { for (const n of segment.matchAll(NAME)) found(offset + n.index!, kind, n[0]); };
@@ -60,11 +109,14 @@ export function adBlockedNames(text: string, path: string): AdBlockedName[] {
     let css: string | null = null;
     if (style) css = raw;
     else {
-      for (const m of raw.matchAll(ATTRIBUTE)) {
+      const opener = ATTRIBUTE_OPEN.exec(raw);
+      if (opener && inTag![lineStart + opener.index] === 1) pending = `${opener[1]}=`;
+      for (const m of (joined ?? raw).matchAll(ATTRIBUTE)) {
+        if ((m[2] || m[3]) && joined === null && inTag![lineStart + m.index!] !== 1) continue;
         const kind = m[1] === 'id' ? 'identifiant' : 'classe';
-        const value = m[2] ?? m[3] ?? m[4] ?? m[5] ?? '';
+        const value = m[4] ?? m[5] ?? m[6] ?? m[7] ?? '';
         const start = m.index! + m[0].lastIndexOf(value);
-        if (m[4] !== undefined) { strings(value, start, kind); continue; }
+        if (m[6] !== undefined) { strings(value, start, kind); continue; }
         // Names outside the `{...}` expressions of the value; inside them, the strings (`{on ? 'ad-x' : ''}`).
         names(value.replace(/\{[^}]*\}/g, match => ' '.repeat(match.length)), start, kind);
         for (const e of value.matchAll(/\{[^}]*\}/g)) strings(e[0], start + e.index!, kind);

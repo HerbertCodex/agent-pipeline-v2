@@ -57,6 +57,13 @@ export const CONFIG_FILES = [
  * reads them: the session hook injects `.apv/state/` into every session. A real e-mail address in them still counts.
  */
 export const PILOT_NOTES = ['.apv/state/**', '.apv/journal-pipeline.md', '.apv/specs/**'] as const;
+/**
+ * The registry of the decisions (`.apv/DECISIONS.json` and its Markdown rendering): a class of its own, neither a
+ * configuration nor a note of the pipeline (pilot project, 9 October 2026: a pull request adding one decision kept
+ * every review as a « configuration »). The security review always reads it (a decision sets requirements); data and
+ * GDPR only on their terms, never by prudence for the sole reason that it is the registry. A real e-mail address counts.
+ */
+export const LEDGER_FILES = ['.apv/DECISIONS.json', '.apv/DECISIONS.md'] as const;
 /** The specs: a note of the pipeline only when added; a spec of the base modified keeps the classification of alpha.20. */
 export const SPEC_NOTES = '.apv/specs/**';
 export const PILOT_NOTE_EXTENSIONS = /\.(?:md|json|jsonl|log|txt)$/;
@@ -69,14 +76,34 @@ export const LOCK_FILES = ['**/package-lock.json', '**/npm-shrinkwrap.json', '**
 export const MANIFEST_FILES = ['**/package.json'] as const;
 
 /**
- * E-mail domains reserved for examples and tests (RFC 2606, RFC 6761): an address there is not a real person. Any other
- * address in a changed line keeps the GDPR review (a fixture with a real address is personal data).
+ * E-mail domains reserved for examples and tests (RFC 2606, RFC 6761), and `exemple.fr`, a convention of the pilot
+ * project for its French texts (not reserved by an RFC): an address there is not a real person. Any other address in a
+ * changed line keeps the GDPR review (a fixture with a real address is personal data).
  */
-const RESERVED_MAIL = /@(?:[\w-]+\.)*(?:example\.(?:com|org|net)|example|test|invalid|localhost)$/i;
+const RESERVED_MAIL = /@(?:[\w-]+\.)*(?:example\.(?:com|org|net)|exemple\.fr|example|test|invalid|localhost)$/i;
 const MAIL = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/gu;
-/** A real e-mail address (not on a reserved domain) in the lines, or null. */
+/** Extensions of images that follow an `@` in a file name (`logo@2x.png`): a density suffix, never a domain. */
+const IMAGE_EXTENSIONS = /^(?:png|jpe?g|gif|webp|avif|svg|ico)$/i;
+const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/;
+/** A version: numbers separated by dots, then an optional pre-release or build suffix (`2.117.0`, `1.2.3-rc`, `1.0.0-beta.2`). */
+const VERSION = /^\d+(?:\.\d+)+(?:[-+].*)?$/;
+/**
+ * Whether the part after the `@` can be an Internet domain. Not: a version (`supabase@2.117.0`, `@scope/nom@1.2.3-rc`), a
+ * name ending in a single letter or a number (`nom@x.y.z`), a file name (`logo@2x.png`). Yes: an IPv4 address
+ * (`bob@192.168.1.10`), and a name that ends with a top-level domain of letters (two at least, or the `xn--` form), even
+ * when it starts with a number (`li.wei@163.com`).
+ */
+function domainLike(host: string): boolean {
+  if (IPV4.test(host)) return true;
+  if (VERSION.test(host)) return false;
+  const labels = host.split('.');
+  const tld = labels.at(-1)!;
+  if (IMAGE_EXTENSIONS.test(tld) && /^\d+x$/i.test(labels[0]!)) return false;
+  return /^\p{L}{2,}$/u.test(tld) || /^xn--[a-z0-9-]+$/i.test(tld);
+}
+/** A real e-mail address (not on a reserved domain, not a package with a version) in the lines, or null. */
 export function realAddress(lines: readonly string[]): string | null {
-  for (const line of lines) for (const m of line.matchAll(MAIL)) if (!RESERVED_MAIL.test(m[0])) return m[0];
+  for (const line of lines) for (const m of line.matchAll(MAIL)) if (!RESERVED_MAIL.test(m[0]) && domainLike(m[0].slice(m[0].lastIndexOf('@') + 1))) return m[0];
   return null;
 }
 

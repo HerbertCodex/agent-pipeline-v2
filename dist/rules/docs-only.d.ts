@@ -42,6 +42,12 @@ export interface LaneInput {
     key?: Buffer | null;
 }
 /**
+ * Outside the lane too, a mockup decision the change adds or alters must hold what the lane asks of it: the quote typed
+ * by the operator, the mockup at the head with its fingerprint, a decision of the base left unchanged. Returns one
+ * sentence per decision of `ids` that does not (empty when all hold), for the review plan: « maquette non ancrée ».
+ */
+export declare function unanchoredMockups(ids: readonly string[], input: LaneInput): Promise<string[]>;
+/**
  * The lane of a change. Decided by the tool, from the diff since the merge base with the target, never by an agent:
  * EVERY changed file (both sides of a rename, deletions included) is a regular file (mode 100644, never a link, a
  * submodule or an executable), outside `rules.docsOnly.exclude`, the sensitive paths, the instructions of the agents

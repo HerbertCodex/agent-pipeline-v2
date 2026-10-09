@@ -122,7 +122,7 @@ test('the apv binary runs as a separate process', () => {
   const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
   const r = spawnSync(process.execPath, [cli, '--version'], { encoding: 'utf8' });
   assert.equal(r.status, 0); assert.equal(r.stdout, `${VERSION}\n`);
-  assert.equal(VERSION, '3.0.0-alpha.21');
+  assert.equal(VERSION, '3.0.0-alpha.22');
   // One version everywhere: tool, package and plugin manifest.
   const read = path => JSON.parse(readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8'));
   assert.deepEqual([read('../package.json').version, read('../.claude-plugin/plugin.json').version], [VERSION, VERSION]);
