@@ -69,23 +69,31 @@ export const PILOT_NOTE_EXTENSIONS = /\.(?:md|json|jsonl|log|txt)$/;
 export const LOCK_FILES = ['**/package-lock.json', '**/npm-shrinkwrap.json', '**/pnpm-lock.yaml', '**/yarn.lock'];
 export const MANIFEST_FILES = ['**/package.json'];
 /**
- * E-mail domains reserved for examples and tests (RFC 2606, RFC 6761, and `exemple.fr` for the French texts of the
- * projects): an address there is not a real person. Any other address in a changed line keeps the GDPR review (a
- * fixture with a real address is personal data).
+ * E-mail domains reserved for examples and tests (RFC 2606, RFC 6761), and `exemple.fr`, a convention of the pilot
+ * project for its French texts (not reserved by an RFC): an address there is not a real person. Any other address in a
+ * changed line keeps the GDPR review (a fixture with a real address is personal data).
  */
 const RESERVED_MAIL = /@(?:[\w-]+\.)*(?:example\.(?:com|org|net)|exemple\.fr|example|test|invalid|localhost)$/i;
 const MAIL = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/gu;
 /** Extensions of images that follow an `@` in a file name (`logo@2x.png`): a density suffix, never a domain. */
 const IMAGE_EXTENSIONS = /^(?:png|jpe?g|gif|webp|avif|svg|ico)$/i;
+const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/;
+/** A version: numbers separated by dots, then an optional pre-release or build suffix (`2.117.0`, `1.2.3-rc`, `1.0.0-beta.2`). */
+const VERSION = /^\d+(?:\.\d+)+(?:[-+].*)?$/;
 /**
- * Whether the part after the `@` can be an Internet domain: a name with a version (`supabase@2.117.0`,
- * `@scope/nom@1.2.3-rc`, `nom@x.y.z`) or a file name (`logo@2x.png`) is not. A domain ends with a top-level domain of
- * letters (two at least, or the `xn--` form) and does not start with a number alone.
+ * Whether the part after the `@` can be an Internet domain. Not: a version (`supabase@2.117.0`, `@scope/nom@1.2.3-rc`), a
+ * name ending in a single letter or a number (`nom@x.y.z`), a file name (`logo@2x.png`). Yes: an IPv4 address
+ * (`bob@192.168.1.10`), and a name that ends with a top-level domain of letters (two at least, or the `xn--` form), even
+ * when it starts with a number (`li.wei@163.com`).
  */
 function domainLike(host) {
+    if (IPV4.test(host))
+        return true;
+    if (VERSION.test(host))
+        return false;
     const labels = host.split('.');
     const tld = labels.at(-1);
-    if (/^\d+$/.test(labels[0]) || IMAGE_EXTENSIONS.test(tld) && /^\d+x$/i.test(labels[0]))
+    if (IMAGE_EXTENSIONS.test(tld) && /^\d+x$/i.test(labels[0]))
         return false;
     return /^\p{L}{2,}$/u.test(tld) || /^xn--[a-z0-9-]+$/i.test(tld);
 }

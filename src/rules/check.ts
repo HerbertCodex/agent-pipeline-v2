@@ -239,9 +239,10 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   // without screens at the base (not a web project, no route the tool knows, nothing in rules.screens, no interface
   // file) that adds none: a command-line tool has nothing to capture, a first page or template added asks for them.
   // The fidelity review lifted by the operator (« dérogation relecture:fidelite » or the whole rule « dérogation relecture »)
-  // and not recorded: its captures have no object. Recorded without captures, they stay required.
+  // with no fidelity review stored at this commit: its captures have no object. Any stored review (even with a high finding,
+  // or unsealed) keeps them required: someone looked, and the captures are what proves it.
   const fidelity = domainStates.find(d => d.domain === 'fidelite');
-  const fidelityWaiver = !fidelity || fidelity.status === 'recorded' ? null
+  const fidelityWaiver = !fidelity || fidelity.status === 'recorded' || reviews.has('fidelite') ? null
     : fidelity.status === 'waived' ? fidelity.waiver!.reason : waiverFor(messages, 'relecture', sha)?.reason ?? null;
   const screenMatch = screenMatchers(settings.screens);
   const changed = changedFiles(repo, mergeBase, sha);

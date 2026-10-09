@@ -210,6 +210,17 @@ test('captures: without object once the fidelity review is lifted by a waiver; s
   const noCaptures = rule((await recorded.check()).report, 'captures');
   assert.equal(noCaptures.status, 'refused');
   assert.match(noCaptures.problems[0], /capture\(s\) absente\(s\) de la relecture fidelite/);
+  // Review of PR #129, F1: any fidelity review stored at this commit keeps the captures required, even with a high finding
+  // or without the seal of the hook, whatever the waiver.
+  for (const [name, options] of [['high finding', { high: 1, captures: [] }], ['unsealed', { captures: [], seal: false }]]) {
+    const weak = project(t, { change: screen });
+    seedReview(weak.repo, weak.head, 'securite');
+    seedReview(weak.repo, weak.head, 'fidelite', options);
+    operatorSays(weak.repo, `dérogation relecture:fidelite ${weak.head.slice(0, 12)} : relue par l'opérateur à l'œil`);
+    const got = (await weak.check()).report;
+    assert.equal(rule(got, 'relecture').status, 'waived', name);
+    assert.equal(rule(got, 'captures').status, 'refused', `${name}: ${JSON.stringify(rule(got, 'captures'))}`);
+  }
   const wholeRecorded = project(t, { change: screen });
   seedReview(wholeRecorded.repo, wholeRecorded.head, 'securite');
   seedReview(wholeRecorded.repo, wholeRecorded.head, 'fidelite', { captures: [] });

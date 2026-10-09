@@ -27,7 +27,10 @@ test('a valid models section is accepted, every role of the closed list included
 test('an unknown model, effort or key is refused with a message that names it', () => {
   for (const [models, pattern] of [
     [{ chef: 'gpt-5' }, /models\.chef: expected fable\|opus\|sonnet\|haiku/],
-    [{ effort: 'max' }, /models\.effort: expected low\|medium\|high\|xhigh/],
+    [{ effort: 'max' }, /models\.effort: expected high\|xhigh/],
+    // Review of PR #129, F2: the operator's rule is high at the least, never low nor medium.
+    [{ effort: 'low' }, /models\.effort: expected high\|xhigh/],
+    [{ effort: 'medium' }, /models\.effort: expected high\|xhigh/],
     [{ chef: 7 }, /models\.chef/],
     [{ cuisinier: 'opus' }, /unknown property cuisinier/],
   ]) {

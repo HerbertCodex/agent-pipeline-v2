@@ -8,7 +8,8 @@ import { s, type Schema } from '../domain/schema.js';
  * `relecture-securite-regles` covers qa-securite and dpo). A key of a role wins over the key of its group.
  */
 export const MODEL_NAMES = ['fable', 'opus', 'sonnet', 'haiku'] as const;
-export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
+/** High at the least (rule of the operator): neither low nor medium is accepted. */
+export const EFFORT_LEVELS = ['high', 'xhigh'] as const;
 export type ModelName = typeof MODEL_NAMES[number];
 export type EffortLevel = typeof EFFORT_LEVELS[number];
 

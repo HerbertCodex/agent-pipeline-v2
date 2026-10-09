@@ -726,6 +726,6 @@ Section APV3, facultative (3.0.0-alpha.22), validée par le chargeur commun. Ell
 }
 ```
 
-- Valeurs : `fable`, `opus`, `sonnet` ou `haiku` ; `effort` : `low`, `medium`, `high` ou `xhigh`. Une autre valeur est refusée par le chargeur, avec la clé en cause.
+- Valeurs : `fable`, `opus`, `sonnet` ou `haiku` ; `effort` : `high` ou `xhigh` (élevé au minimum, règle de l'opérateur : `low` et `medium` sont refusés). Une autre valeur est refusée par le chargeur, avec la clé en cause.
 - Clés (liste fermée, une autre est refusée) : les rôles du plugin (`chef`, `product`, `architecte`, `architecte-donnees`, `designer`, `critique-design`, `dpo`, `implementer`, `fondations`, `integrateur`, `qa-securite`, `qa-fidelite`, `auditeur-web`, `relecture`, `recherche`) et les trois groupes des défauts : `conception` (`product`, `architecte`, `architecte-donnees`, `designer`, `critique-design`), `relecture` (`qa-fidelite`, `auditeur-web` et toute relecture sans clé propre) et `relecture-securite-regles` (`qa-securite`, `dpo`). La clé d'un rôle l'emporte sur celle de son groupe. `fondations` désigne la tâche de fondations d'une spec, confiée à un `implementer`.
 - Défauts, section absente ou clé non donnée : les valeurs de l'exemple ci-dessus, effort `high`. `apv status` ajoute « (défauts) » quand la section est absente, et garde les défauts quand la configuration est invalide.

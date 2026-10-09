@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { posix } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
+import { parseJson } from '../domain/schema.js';
+import { decisionLedgerSchema, LEDGER_FILE } from '../lifecycle/decisions.js';
 import { matches } from '../policy/policy.js';
 import { resolveCommit } from '../run/git-probe.js';
 import { ALWAYS_REVIEWED, PATH_CLASSES, REVIEW_DOMAINS } from './config.js';
@@ -274,6 +276,7 @@ const WHY = {
     personal: 'données personnelles, export ou traceurs au contenu changé',
     legal: 'texte légal au contenu changé',
     unclassified: 'fichier non classé au contenu changé (prudence)',
+    ledgerMockup: 'décision de maquette ajoutée ou modifiée au registre',
     strong: 'code serveur, chemin sensible ou configuration au contenu changé (prudence, plus fort que tests et outillage)',
 };
 /** Classes that keep no domain of their own: a file matching only these is not described by a domain class. */
@@ -392,6 +395,8 @@ function fileKeeps(file, patch, input, context) {
     if (!meaningful.length && !inDesign) {
         // The registry of the decisions: the security review, data and GDPR on their terms only (the Markdown rendering holds none).
         if (ledgerFile(file, input)) {
+            if (context.ledgerMockups.length)
+                add('fidelite', WHY.ledgerMockup);
             terms(false);
             return keeps;
         }
@@ -429,6 +434,50 @@ function fileKeeps(file, patch, input, context) {
         add('rgpd', WHY.legal);
     terms(false);
     return keeps;
+}
+/**
+ * A decision that tells what a screen must look like: a registered mockup (`maquette-<nom>-validee`), a decision naming
+ * screens (`Écrans :`) or a perimeter of paths, or one that names the folder of the mockups.
+ */
+function mockupLike(decision, designDir) {
+    const text = `${decision.subject}\n${decision.value}`;
+    return /^maquette-/.test(decision.id) || /Écrans\s*:/.test(text) || (decision.scope?.paths?.length ?? 0) > 0 || text.includes(`${designDir}/`);
+}
+/**
+ * Ids of the mockup decisions the change adds, removes or alters (a screen added to a validated mockup, a status, a
+ * perimeter): read from the registry at both sides of the diff, never from its words. A registry that cannot be read is
+ * said as such: the fidelity review is kept (review of PR #129: a registry alone retargeting a mockup kept security only).
+ */
+function ledgerMockupChanges(repo, mergeBase, head, designDir) {
+    const read = (sha) => {
+        let text;
+        try {
+            text = git(repo, ['show', `${sha}:${LEDGER_FILE}`]);
+        }
+        catch {
+            return new Map();
+        }
+        try {
+            return new Map(decisionLedgerSchema.parse(parseJson(text)).decisions.map(d => [d.id, d]));
+        }
+        catch {
+            return null;
+        }
+    };
+    const before = read(mergeBase);
+    const after = read(head);
+    if (!before || !after)
+        return ['(registre illisible)'];
+    const changed = [];
+    for (const id of new Set([...before.keys(), ...after.keys()])) {
+        const a = before.get(id);
+        const b = after.get(id);
+        if (JSON.stringify(a) === JSON.stringify(b))
+            continue;
+        if ((a && mockupLike(a, designDir)) || (b && mockupLike(b, designDir)))
+            changed.push(id);
+    }
+    return changed;
 }
 const SENSITIVE_WHY = 'chemin sensible (authentification, session, permissions, dépendances, configuration de sécurité, CI ou instructions des agents)';
 const LEDGER_WHY = 'registre des décisions : la relecture sécurité lit chaque décision, données et RGPD seulement sur leurs termes';
@@ -552,7 +601,11 @@ export function planReviews(input) {
         candidates.forEach((c, i) => { if (c)
             changes[i].change = 'names'; });
     }
-    const context = { manifest: statuses.some(s => sides(s).some(p => MANIFEST_FILES.some(g => matches(p, g)))) };
+    const ledgerTouched = statuses.some(s => s.path === LEDGER_FILE || s.from === LEDGER_FILE);
+    const context = {
+        manifest: statuses.some(s => sides(s).some(p => MANIFEST_FILES.some(g => matches(p, g)))),
+        ledgerMockups: ledgerTouched ? ledgerMockupChanges(repo, mergeBase, headSha, input.designDir) : [],
+    };
     const files = changes.map(({ entry, patch, change, classes }) => {
         const base = { path: entry.path, ...(entry.from !== undefined ? { from: entry.from } : {}), status: entry.status, change, classes };
         const keeping = { ...base, keeps: fileKeeps(base, patch, input, context) };
@@ -620,7 +673,7 @@ export function planReviews(input) {
             throw new PipelineError('REVIEW_RISK', `risque faible incohérent : ${extra.map(d => d.domain).join(', ')} retenu(s) (${extra.map(d => d.reason).join(' ; ')})`);
     }
     return {
-        tool: 'apv review plan', base: { ref: input.base, sha: baseSha }, head: { ref: input.head, sha: headSha }, mergeBase, counts, risk, domains,
+        tool: 'apv review plan', base: { ref: input.base, sha: baseSha }, head: { ref: input.head, sha: headSha }, mergeBase, counts, ledgerMockups: context.ledgerMockups, risk, domains,
         retained: domains.filter(d => d.decision === 'retained').map(d => d.domain),
         skipped: domains.filter(d => d.decision === 'skipped').map(d => ({ domain: d.domain, reason: d.reason })),
         files,

@@ -71,7 +71,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 
 - `apv-files.ts` : The project directory of APV3: configuration, ledger, specs and state, versioned with… Exporte : APV_DIR, APV_IGNORED, apvGitignoreMissing(), ensureApvGitignore(). Utilisé par 5 fichiers (src/commands/init.ts, …).
 - `load.ts` : V3 project configuration, versioned with the project. Exporte : ApvConfig, CONFIG_FILE, DAST_PLACEHOLDERS, DEFAULT_DAST_RESOURCE, DEFAULT_DAST_TIMEOUT_MS, DEFAULT_FULL_SUITE, et 35 autre(s). Utilisé par 38 fichiers (src/commands/dast.ts, …).
-- `models.ts` : sans description. Exporte : DEFAULT_MODELS, EFFORT_LEVELS, EffortLevel, MODEL_KEYS, MODEL_NAMES, ModelName, et 5 autre(s). Utilisé par 2 fichiers (src/commands/status.ts, …).
+- `models.ts` : Model of each role ('models' of .apv/config.json, docs/CONFIGURATION.md). Exporte : DEFAULT_MODELS, EFFORT_LEVELS, EffortLevel, MODEL_KEYS, MODEL_NAMES, ModelName, et 5 autre(s). Utilisé par 2 fichiers (src/commands/status.ts, …).
 
 ### src/db
 
@@ -102,7 +102,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `issues.ts` : One validation problem. Exporte : Issue, IssueList, jsonSchemaIssues(), schemaIssues(). Utilisé par 4 fichiers (src/config/load.ts, …).
 - `knowledge.ts` : Old configurations opt into no new skills. Exporte : KnowledgeConfig, LanguageProfile, RoleName, SkillsConfig, exportRules, knowledgeSchema, et 5 autre(s). Utilisé par 3 fichiers (src/config/load.ts, …).
 - `paths.ts` : Absolute path with every symlink of its longest existing ancestor resolved, the missing… Exporte : canonicalPath(). Utilisé par 10 fichiers (src/commands/common.ts, …).
-- `schema.ts` : A deliberately small schema vocabulary: runtime parsing and JSON Schema share the same… Exporte : Infer, JsonSchema, Schema, parseJson(), s. Utilisé par 24 fichiers (src/config/load.ts, …).
+- `schema.ts` : A deliberately small schema vocabulary: runtime parsing and JSON Schema share the same… Exporte : Infer, JsonSchema, Schema, parseJson(), s. Utilisé par 25 fichiers (src/config/load.ts, …).
 - `time.ts` : Times shown to a human, in the local time zone of the machine (Intl, the zone of the… Exporte : LocalTimeOptions, localTime(), localTimeZone, parseUntil(). Utilisé par 7 fichiers (src/commands/lock.ts, …).
 
 ### src/engine
@@ -150,7 +150,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 ### src/lifecycle
 
 - `contracts.ts` : sans description. Exporte : CriterionAmendment, DesignProposal, DesignRecord, PlanRevision, Publication, QaRecord, et 27 autre(s). Utilisé par 5 fichiers (src/commands/run.ts, …).
-- `decisions.ts` : Kebab-case spec id, as in '.apv/specs/<id>.json'. Exporte : Decision, DecisionCoverage, DecisionLedger, DecisionScope, DecisionTarget, LEDGER_FILE, et 25 autre(s). Utilisé par 14 fichiers (src/commands/init.ts, …).
+- `decisions.ts` : Kebab-case spec id, as in '.apv/specs/<id>.json'. Exporte : Decision, DecisionCoverage, DecisionLedger, DecisionScope, DecisionTarget, LEDGER_FILE, et 25 autre(s). Utilisé par 15 fichiers (src/commands/init.ts, …).
 - `ledger-update.ts` : Operator-authored change to the Decision Ledger after bootstrap. Exporte : LedgerUpdate, LedgerUpdatePlan, applyLedgerUpdate(), ledgerUpdateSchema, planLedgerUpdate(). Utilisé par 2 fichiers (src/commands/ledger.ts, …).
 - `pathways.ts` : A bounded Product transport. Exporte : Architecture, ExecutionPath, adaptiveConfig(), architectureSchema, briefSpecSchema, expandBrief(), et 5 autre(s). Utilisé par 1 fichier (src/lifecycle/contracts.ts).
 

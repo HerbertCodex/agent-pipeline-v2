@@ -209,6 +209,9 @@ test('review risk: a package with a version, an import path or a mention is no e
   for (const [line, address] of [
     ['écrire à prenom@domaine.tld', 'prenom@domaine.tld'], ['mail: jean.dupont@gmail.com.', 'jean.dupont@gmail.com'],
     ['npx supabase@2.117.0 puis marie@societe.fr', 'marie@societe.fr'], ['contact+x@un-site.co.uk', 'contact+x@un-site.co.uk'],
+    // Review of PR #129, M1: a domain may start with a number (large providers), a host may be an IPv4 address.
+    ['li.wei@163.com', 'li.wei@163.com'], ['zhang@126.com', 'zhang@126.com'], ['a@139.com', 'a@139.com'], ['bob@192.168.1.10', 'bob@192.168.1.10'],
+    ['jean@4x.com', 'jean@4x.com'], ['npx outil@1.2.3 et jean@laposte.net', 'jean@laposte.net'], ['user@host.com@1.2.3', 'user@host.com'],
   ]) assert.equal(realAddress([line]), address, line);
   // Reserved domains of examples stay out.
   for (const line of ['a@example.test', 'a@exemple.fr', 'a@example.com', 'a@example.org']) assert.equal(realAddress([line]), null, line);

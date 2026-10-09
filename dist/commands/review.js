@@ -9,7 +9,7 @@ import { gitRoot, resolveCommit } from '../run/git-probe.js';
 import { PipelineError } from '../domain/errors.js';
 import { DOMAIN_REVIEWERS, latestReviews, parseCapture, recordReview } from '../rules/reviews.js';
 import { commonDir } from '../stacks/idle.js';
-import { docsOnlyLane, laneLines, planInLane } from '../rules/docs-only.js';
+import { docsOnlyLane, laneLines, planInLane, unanchoredMockups } from '../rules/docs-only.js';
 import { rulesSettings } from '../rules/config.js';
 import { REQUIRED_WEB_GATES } from '../rules/required.js';
 import { anchorKey, readOperatorMessages } from '../rules/operator.js';
@@ -115,6 +115,7 @@ function text(plan) {
         `Plan des revues : ${plan.base.ref} (${plan.mergeBase.slice(0, 12)}, base commune) à ${plan.head.ref} (${plan.head.sha.slice(0, 12)})`,
         ...laneLines(plan.lane),
         `${c.files} fichier(s) : ${c.renames} renommage(s) pur(s), ${c.paths} aux seuls chemins réécrits (imports, références, mise en forme), ${c.names} aux seuls noms de classes ou d'identifiants renommés, ${c.content} au contenu changé (dont ${c.neutral} tests, documentation ou outillage, ${c.notes} notes de pilotage, ${c.ledger} du registre des décisions, ${c.locks} verrou(s) de dépendances, ${c.unclassified} non classé(s) ou plus fort(s) que tests et outillage)`,
+        ...plan.unanchored.map(w => `Attention, maquette non ancrée : ${w}`),
         `Risque : ${RISK_LABEL[plan.risk.level]} : ${plan.risk.reason}`,
         ...plan.risk.files.slice(0, 10).map(f => `    ${f.path} : ${f.why}`),
         ...(plan.risk.fileCount > 10 ? [`    (et ${plan.risk.fileCount - 10} autres)`] : []),
@@ -217,9 +218,10 @@ export async function run(args, io) {
         });
         const common = commonDir(repo);
         const anchor = anchorKey(common);
-        const lane = await docsOnlyLane({ repo, mergeBase: raw.mergeBase, head: raw.head.sha, plan: raw, designDir: dir, sensitive,
-            settings: rulesSettings(config.rules, REQUIRED_WEB_GATES).docsOnly, messages: readOperatorMessages(common, anchor.key), key: anchor.key });
-        const plan = { ...planInLane(raw, lane, { always: settings.always, operator: force }), quota: planQuota(repo, common) };
+        const laneInput = { repo, mergeBase: raw.mergeBase, head: raw.head.sha, plan: raw, designDir: dir, sensitive,
+            settings: rulesSettings(config.rules, REQUIRED_WEB_GATES).docsOnly, messages: readOperatorMessages(common, anchor.key), key: anchor.key };
+        const lane = await docsOnlyLane(laneInput);
+        const plan = { ...planInLane(raw, lane, { always: settings.always, operator: force }), quota: planQuota(repo, common), unanchored: await unanchoredMockups(raw.ledgerMockups, laneInput) };
         if (values.json)
             json(io, plan);
         else
