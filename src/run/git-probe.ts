@@ -4,11 +4,15 @@ import { resolve } from 'node:path';
 import { PipelineError } from '../domain/errors.js';
 import type { GitProbe } from './state.js';
 
-/** Read-only Git call; null when Git refuses (unknown ref, not a repository). */
+/**
+ * Read-only Git call; null when Git refuses (unknown ref, not a repository). `GIT_NO_LAZY_FETCH` keeps a partial clone from
+ * fetching a missing object from its remote: a read never touches the network nor writes into the repository, the object
+ * is then simply unreadable.
+ */
 export function gitRead(cwd: string, args: string[]): string | null {
   try {
     return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args],
-      { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }).trim();
+      { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1' } }).trim();
   } catch { return null; }
 }
 
