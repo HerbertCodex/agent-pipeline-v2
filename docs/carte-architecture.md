@@ -60,7 +60,7 @@ flowchart LR
   - `skills/ui-design/` : une compétence : sa procédure (`SKILL.md`) et ses références.
   - `skills/web-qualite/` : une compétence : sa procédure (`SKILL.md`) et ses références.
 - `src/` : sources du projet. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
-  - `src/commands/` : une commande `apv` par fichier (analyse des options, sortie texte et JSON). Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)). Dossier à plat (29 fichiers de code, seuil 12) : ne pas y ajouter de fichier.
+  - `src/commands/` : une commande `apv` par fichier (analyse des options, sortie texte et JSON). Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)). Dossier à plat (30 fichiers de code, seuil 12) : ne pas y ajouter de fichier.
   - `src/config/` : chargement et validation de `.apv/config.json`. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/db/` : `apv db check`, contrôle du modèle de données. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/design/` : maquettes validées (versement, empreinte, dérive). Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
@@ -73,6 +73,7 @@ flowchart LR
   - `src/knowledge/` : inventaire du dépôt. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/lifecycle/` : cycle de vie hérité de la V2. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/lock/` : verrous à bail. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
+  - `src/metrics/` : `apv metrics` : temps de bout en bout d'une exécution et des PR, chemin critique de la phase de code, base de comparaison (lecture seule). Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/onboard/` : reprise d'un projet existant (`apv onboard`). Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/policy/` : voies de risque, chemins sensibles, motifs de chemins. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/preview/` : aperçu vivant d'une branche. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
@@ -178,6 +179,7 @@ Une ligne par dossier, route principale et point d'entrée, de la forme « - `ch
 - `src/knowledge/` : inventaire du dépôt
 - `src/lifecycle/` : cycle de vie hérité de la V2
 - `src/lock/` : verrous à bail
+- `src/metrics/` : `apv metrics` : temps de bout en bout d'une exécution et des PR, chemin critique de la phase de code, base de comparaison (lecture seule)
 - `src/onboard/` : reprise d'un projet existant (`apv onboard`)
 - `src/policy/` : voies de risque, chemins sensibles, motifs de chemins
 - `src/preview/` : aperçu vivant d'une branche

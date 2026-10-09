@@ -1212,7 +1212,7 @@ const TEXT_COMMANDS = new Set(['echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg',
  * command that is not a text command (`TEXT_COMMANDS`) is taken as run, so a guard never lets a wrapper hide it.
  */
 /** Commands of the tool (src/commands/index.ts): what follows `apv` behind an unknown prefix. */
-const APV_COMMANDS = new Set(['init', 'onboard', 'spec', 'run', 'stack', 'rules', 'audit', 'ledger', 'scope', 'gates', 'lock', 'wait', 'procs', 'stacks',
+const APV_COMMANDS = new Set(['init', 'onboard', 'spec', 'run', 'stack', 'rules', 'audit', 'metrics', 'ledger', 'scope', 'gates', 'lock', 'wait', 'procs', 'stacks',
   'review', 'dast', 'db', 'design', 'structure', 'reuse', 'tests', 'map', 'quota', 'preview', 'web', 'status', 'help']);
 
 export function apvCall(words) {

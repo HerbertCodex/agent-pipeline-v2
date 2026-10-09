@@ -14,6 +14,8 @@ import { pluginLines, pluginStatus } from '../rules/plugin-status.js';
 import { processGh } from '../stack/github.js';
 import { freshnessLines, freshnessReport, type FreshnessOptions, type FreshnessReport } from '../freshness/check.js';
 import type { FreshnessSettings } from '../freshness/config.js';
+import { duration, type RunMetrics } from '../metrics/run.js';
+import { recentMeasures } from '../metrics/sources.js';
 
 export const usage = `Utilisation :
   apv status [--repo <chemin>] [--json]
@@ -24,7 +26,8 @@ de Claude Code (installé, activé, sa version face à celle de l'outil), les r�
 ne connaît pas encore et celles qu'apporte la prochaine version de l'outil (branche suivie, telle que récupérée) ;
 puis les ancrages des règles avant fusion : journal de l'opérateur (messages reçus, ou pourquoi aucun), protection
 de la branche par défaut sur GitHub (gh api ; indisponible en plan gratuit pour un dépôt privé, dit une fois),
-audit des fusions faites hors de apv stack merge (apv audit merges).
+audit des fusions faites hors de apv stack merge (apv audit merges). Ligne « Mesure » : temps de bout en bout et
+chemin critique des trois dernières exécutions (apv metrics run, sans appel gh).
 
 Section « Fichiers d'état périmés » (lecture seule, rien n'est déplacé ni supprimé) : .apv/state/resume.md, les
 .apv/state/*.md et les chemins de freshness.paths (~/ accepté) modifiés il y a plus de freshness.maxAgeDays jours
@@ -58,6 +61,8 @@ export interface ApvStatus {
   quota: ReturnType<typeof lastQuotaReading>;
   /** Living state files not rewritten for too long or too long themselves (`freshness`, src/freshness/check.ts). */
   freshness: FreshnessReport;
+  /** Time measure of the last three executions (apv metrics run, offline), most recent first; empty outside a repository. */
+  metrics: Pick<RunMetrics, 'specId' | 'totalMs' | 'end' | 'criticalPath' | 'finished'>[];
 }
 
 export function apvStatus(repo: string, options: FreshnessOptions = {}): ApvStatus {
@@ -92,7 +97,21 @@ export function apvStatus(repo: string, options: FreshnessOptions = {}): ApvStat
   const state = files(join(repo, '.apv', 'state')).map(f => { const st = statSync(f); return { file: relative(repo, f), bytes: st.size, modifiedAt: st.mtime.toISOString() }; });
   const runs = readRunSummaries(repo);
   return { repo, config: cfg, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)),
-    freshness: freshnessReport(repo, freshnessSettings, options) };
+    freshness: freshnessReport(repo, freshnessSettings, options), metrics: measures(repo) };
+}
+
+/** The last three measures, reduced to what the line shows; a repository the measure cannot read gives none. */
+function measures(repo: string): ApvStatus['metrics'] {
+  try { return recentMeasures(repo).map(m => ({ specId: m.specId, totalMs: m.totalMs, end: m.end, criticalPath: m.criticalPath, finished: m.finished })); }
+  catch { return []; }
+}
+
+const END_SHORT: Record<RunMetrics['end']['kind'], string> = { merge: 'jusqu\'à la fusion', delivery: 'jusqu\'à la livraison', 'last-event': 'en cours' };
+
+/** « Mesure (apv metrics run) : a 7 h 59 min jusqu'à la fusion, chemin critique 1 h 59 min ; … ». */
+export function metricsLine(list: ApvStatus['metrics']): string | null {
+  if (!list.length) return null;
+  return cleanLine(`Mesure (apv metrics run) : ${list.map(m => `${m.specId} ${duration(m.totalMs)} ${END_SHORT[m.end.kind]}, chemin critique ${duration(m.criticalPath.workMs)}`).join(' ; ')}`, 600);
 }
 
 export async function run(args: string[], io: CommandIO): Promise<number> {
@@ -121,6 +140,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       ...active.map(r => `- ${runSummaryLine(r)}`),
       ...(status.runsUnread ? [`- ${unreadRunsLine(status.runsUnread)}`] : []),
       `Quota : ${q ? `${localTime(q.at)} ; session ${q.session ? `${q.session.percent} %` : '?'} ; semaine ${q.week ? `${q.week.percent} %` : '?'} ; niveau ${q.level}` : 'aucun relevé'}`,
+      ...(metricsLine(status.metrics) ? [metricsLine(status.metrics)!] : []),
       ...freshnessLines(status.freshness, value => cleanLine(value, 400), localTime),
     ];
     if (plugin) lines.push(...pluginLines(plugin));
