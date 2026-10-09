@@ -2,7 +2,7 @@
 
 Générée par `apv map` à partir des fichiers du dépôt, sans modèle. À lire avant de créer un composant, un module ou une route : réutiliser une entrée existante, ou l'étendre de façon générique (paramètre, variante) ; un élément utilisé par deux fonctionnalités devient partagé. Ne pas modifier à la main : l'intégration la régénère (`apv map`), et le contrôle `apv map --check` de la suite complète échoue quand elle ne correspond plus au code.
 
-Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 168. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 88 test(s), 318 fichier(s) ignoré(s), 5 module(s) sans export ni import.
+Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 168. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 89 test(s), 318 fichier(s) ignoré(s), 5 module(s) sans export ni import.
 
 ## Dossiers
 
@@ -207,9 +207,9 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 
 - `config.ts` : Settings of 'apv review plan' in the 'review' section of '.apv/config.json'… Exporte : ALWAYS_REVIEWED, DEFAULT_REVIEW_PATHS, DEFAULT_REVIEW_TERMS, PATH_CLASSES, PathClass, REVIEW_DOMAINS, et 8 autre(s). Utilisé par 8 fichiers (src/commands/review.ts, …).
 - `dast.ts` : 'apv dast run': the dynamic security scan (ZAP or another) that the project declares in… Exporte : DAST_INSTALL, DAST_INSTALL_MARKER, DAST_LOG, DAST_SUMMARY, DastInstall, DastRunOptions, et 11 autre(s). Utilisé par 2 fichiers (src/commands/dast.ts, …).
-- `plan.ts` : 'apv review plan': the review domains proposed from the nature of a diff. Exporte : ChangeKind, DomainDecision, PlanInput, PlannedFile, ReferenceSide, Rename, et 6 autre(s). Utilisé par 4 fichiers (src/commands/review.ts, …).
-- `rename.ts` : sans description. Exporte : RenameInput, RenamePair, neutralizeLine(), pureRename(), renamedNames(), selectorPart(). Utilisé par 1 fichier (src/review/plan.ts).
-- `risk.ts` : Risk level of a diff ('apv review plan', 'apv gates run --since'). Exporte : AGENT_INSTRUCTIONS, CONFIG_FILES, DiffRisk, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, et 11 autre(s). Utilisé par 4 fichiers (src/commands/review.ts, …).
+- `plan.ts` : 'apv review plan': the review domains proposed from the nature of a diff. Exporte : ChangeKind, DomainDecision, Hunk, PlanInput, PlannedFile, ReferenceSide, et 7 autre(s). Utilisé par 4 fichiers (src/commands/review.ts, …).
+- `rename.ts` : Pure renames of class and id names, for 'apv review plan' (docs/REGLES.md, « Renommage… Exporte : HunkPlace, RenameInput, RenamePair, neutralizeLine(), pureRename(), renameKind, et 2 autre(s). Utilisé par 1 fichier (src/review/plan.ts).
+- `risk.ts` : Risk level of a diff ('apv review plan', 'apv gates run --since'). Exporte : AGENT_INSTRUCTIONS, CONFIG_FILES, DiffRisk, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, et 12 autre(s). Utilisé par 4 fichiers (src/commands/review.ts, …).
 
 ### src/rules
 

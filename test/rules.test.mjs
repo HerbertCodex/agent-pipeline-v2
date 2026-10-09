@@ -301,6 +301,24 @@ test('waiver by domain: the journal keeps the line with its domain, never an unk
   assert.equal(waiverFor([entry], 'relecture:fidelite', sha), null);
 });
 
+test('review of PR #128, F3: the template of the tool quoted by the operator is no waiver: « raison à écrire en clair »', async t => {
+  const sha = 'abcdef0123456789'.repeat(3).slice(0, 40);
+  const said = text => journalEntry(text, { at: 't', session: 's' }, TEST_KEY);
+  for (const line of [
+    `l'outil m'affiche « dérogation relecture:securite ${sha.slice(0, 12)} : <ta raison> », c'est quoi ?`,
+    `dérogation relecture:securite ${sha.slice(0, 12)} : <ta raison>`,
+    `dérogation relecture:securite ${sha.slice(0, 12)} : ta raison.`,
+    `dérogation relecture:securite ${sha.slice(0, 12)} : Raison`,
+  ]) assert.equal(waiverFor([said(line)], 'relecture:securite', sha), null, line);
+  // In the rules: the refusal stays, and says why the line did not count.
+  const p = project(t, { change: { 'notes.txt': 'x\n' } });
+  await p.prove();
+  operatorSays(p.repo, `dérogation relecture ${p.head.slice(0, 12)} : <ta raison>`);
+  const r = rule((await p.check()).report, 'relecture');
+  assert.equal(r.status, 'refused');
+  assert.match(r.todo.join('\n'), /dérogation tapée avec le gabarit de l'outil, ignorée : raison à écrire en clair/);
+});
+
 test('operator journal: quotes and waivers are compared without typography, never a short quote', () => {
   const said = text => journalEntry(text, { at: 't', session: 's' }, TEST_KEY);
   const messages = [said('Je valide la maquette\u00a0: on part là-dessus'), said('ok')];

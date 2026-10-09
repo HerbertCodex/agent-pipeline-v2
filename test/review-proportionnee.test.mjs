@@ -153,7 +153,8 @@ test('notes of the pipeline (.apv/state, journal, specs) are never configuration
   p.edit('.apv/state/run-articles.json', '{ "id": "articles", "note": "set phone and e-mail", "status": "merged" }\n');
   p.edit('.apv/state/resume.md', '# Reprise\n\nLes données de test sont supprimées.\n');
   p.edit('.apv/journal-pipeline.md', '# Journal\n\n- update du set de données\n');
-  p.edit('.apv/specs/articles.json', '{ "id": "articles", "title": "Supprimer un compte" }\n');
+  // A spec added (a spec of the base modified keeps the classification of alpha.20: test/review-relecture-128.test.mjs).
+  p.edit('.apv/specs/comptes.json', '{ "id": "comptes", "title": "Supprimer un compte" }\n');
   p.commit();
   const plan = await p.plan();
   assert.deepEqual(plan.retained, ['securite'], JSON.stringify(plan.domains));

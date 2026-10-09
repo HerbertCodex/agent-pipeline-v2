@@ -57,6 +57,8 @@ export const CONFIG_FILES = [
  * reads them: the session hook injects `.apv/state/` into every session. A real e-mail address in them still counts.
  */
 export const PILOT_NOTES = ['.apv/state/**', '.apv/journal-pipeline.md', '.apv/specs/**'] as const;
+/** The specs: a note of the pipeline only when added; a spec of the base modified keeps the classification of alpha.20. */
+export const SPEC_NOTES = '.apv/specs/**';
 export const PILOT_NOTE_EXTENSIONS = /\.(?:md|json|jsonl|log|txt)$/;
 /**
  * Lockfiles of npm, pnpm and Yarn: changed without their `package.json`, the dependencies move inside the ranges already

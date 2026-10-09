@@ -24,8 +24,8 @@ Chaque constat a sa proposition ; le plan de rangement (ancien -> nouveau) n'est
 de la base : un fichier de code ajouté à un dossier à plat (ou qui en fait un) bloque (flat-growth), avec le
 sous-dossier où le mettre ; un dossier de premier ou deuxième niveau, une route principale ou un point
 d'entrée ajouté sans rôle dans la carte de l'architecture, ou un lien de la carte cassé, bloque
-(architecture-map). Dans un fichier d'interface, une classe ou un identifiant ajouté qui commence par ad-, ads-,
-adv-, advert, banner-ad ou sponsor bloque, avec fichier et ligne (adblock : masqué par les filtres anti-pub du
+(architecture-map). Dans un fichier d'interface, une classe ou un identifiant ajouté nommé ad, ads, adsbygoogle,
+ou qui commence par ad-, ads-, adv-, ad_, advert, banner-ad ou sponsor bloque, avec fichier et ligne (adblock : masqué par les filtres anti-pub du
 poste de l'opérateur). L'existant est signalé sans bloquer ; un déplacement qui vide un dossier à plat dans ses
 sous-dossiers est accepté. Sans --base, rien n'est comparé : fichiers suivis seulement, carte signalée sans
 bloquer. --path limite l'analyse à un dossier et à ses sous-dossiers ; répétable. --all liste tous les

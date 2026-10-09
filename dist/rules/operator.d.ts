@@ -138,5 +138,9 @@ export declare function waiverFor(messages: readonly OperatorMessage[], rule: Wa
     message: OperatorMessage;
     reason: string;
 } | null;
+/** Whether the operator typed a waiver of `rule` for `sha` whose reason is the template of the tool: ignored, said. */
+export declare function templateWaiver(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): boolean;
+/** What a refusal says when the operator quoted the template of the tool instead of a reason. */
+export declare const TEMPLATE_WAIVER_NOTE = "Une d\u00E9rogation tap\u00E9e avec le gabarit de l'outil, ignor\u00E9e : raison \u00E0 \u00E9crire en clair (les mots de l'op\u00E9rateur, pas \u00AB <ta raison> \u00BB).";
 /** Whether the key file exists with no access for group and others. */
 export declare function anchorKeyPrivate(file?: string): boolean;

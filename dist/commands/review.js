@@ -40,9 +40,10 @@ validée à l'empreinte de sa décision, un brouillon de maquette, une spec (.ap
 un fichier d'état non exécutable (.apv/state) ou de la documentation *.md hors dossiers servis, aucun domaine
 n'est retenu (securite comprise), sauf ceux que forcent review.always ou --force ; le plan le dit et liste
 les fichiers qui l'ont permise (lane en JSON). Liste fermée, réduite seulement par rules.docsOnly.
-Relectures proportionnées (docs/REGLES.md) : un renommage pur de classes et d'identifiants (diff normalisé
-vide, noms renommés un à un avec leurs sélecteurs) ne garde pas fidelite ; les notes de pilotage (.apv/state,
-journal, specs) et un verrou de dépendances sans son package.json gardent securite seule ; les attributs data-*
+Relectures proportionnées (docs/REGLES.md) : un renommage pur de classes et d'identifiants (fichiers d'interface,
+de style et de tests seulement, lignes gardées en place, noms renommés un à un avec leurs sélecteurs) ne garde
+pas fidelite ; les notes de pilotage (.apv/state, journal, spec ajoutée) et un verrou de dépendances sans son
+package.json gardent securite seule (un hôte de téléchargement nouveau du verrou est cité) ; les attributs data-*
 et le Markdown de .apv/ ne sont pas lus pour les termes. Chaque domaine retenu dit s'il est exigé par le diff
 ou retenu par prudence (basis) ; au niveau de quota finish_only, le plan le rappelle en tête.
 --base    la branche de départ (la base de la PR) ; --head : la tête revue (défaut HEAD).

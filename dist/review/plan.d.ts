@@ -101,10 +101,18 @@ interface NameStatus {
 }
 /** `git diff --name-status -z -M`: one entry per changed file, the former path of a rename kept. */
 export declare function parseNameStatus(raw: string): NameStatus[];
+/** A hunk header of a `--unified=0` patch: where its lines start and how many, on each side. */
+export interface Hunk {
+    oldStart: number;
+    oldCount: number;
+    newStart: number;
+    newCount: number;
+}
 interface FilePatch {
     binary: boolean;
     removed: string[];
     added: string[];
+    hunks: Hunk[];
 }
 /** Changed lines of each file of a `--unified=0` patch, keyed by the new path (the old one for a deletion). */
 export declare function parsePatch(raw: string): Map<string, FilePatch>;

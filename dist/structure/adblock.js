@@ -4,21 +4,26 @@
  * an extension applied the generic hiding filters of EasyList to these names (`position: absolute` injected). Invisible
  * in the tests and in the captures of fidelity, which run without an extension; two hours of diagnosis.
  *
- * Refused names: those starting with `ad-`, `ads-`, `adv-`, `banner-ad` (then `-`, `s` or the end), `advert` or
- * `sponsor` (the prefixes of the generic filters). `add-on`, `advanced`, `adresse`, `badge` stay accepted. Read in the
- * `class`, `className` and `id` attributes (outside `{...}` expressions), the Svelte `class:` directives and the
- * selectors of the style sheets and of the `<style>` blocks; never in the text of a page, a script or a `data-*`.
+ * Refused names (case ignored): `ad`, `ads`, `adsbygoogle`, those starting with `ad-`, `ads-`, `adv-` or the same with
+ * `_`, `banner-ad` or `banner_ad` (then `-`, `_`, `s` or the end), `advert` or `sponsor` (the generic filters).
+ * `add-on`, `advanced`, `adresse`, `badge` stay accepted. Read in the `class`, `className` and `id` attributes (quoted:
+ * the names of the value and the strings of its `{...}` expressions, a ternary included; unquoted; `class={'…'}`), the
+ * Svelte `class:` directives, the strings of `classList.add|remove|toggle|replace(…)` and of `.className =` or `.id =`,
+ * and the selectors of the style sheets and of the `<style>` blocks; never in the text of a page or a `data-*`
+ * (security review of PR #128: every form but the first ones passed).
  */
 /** Files of interface where the names are read. */
 export const ADBLOCK_FILES = /\.(?:svelte|vue|astro|tsx|jsx|html|htm|css|scss|sass|less)$/i;
 const STYLE_FILE = /\.(?:css|scss|sass|less)$/i;
 /** A name the generic filters hide. */
-export const ADBLOCK_NAME = /^(?:(?:ad|ads|adv)-|banner-ads?(?:-|$)|advert|sponsor)/i;
-export const ADBLOCK_MESSAGE = 'masqué par les filtres anti-pub du poste de l\'opérateur (préfixes des filtres génériques EasyList : ad-, ads-, adv-, advert, banner-ad, sponsor) ; le renommer (par exemple art-, item-)';
+export const ADBLOCK_NAME = /^(?:(?:ad|ads|adv)[-_]|ads?$|adsbygoogle|banner[-_]ads?(?:[-_]|$)|advert|sponsor)/i;
+export const ADBLOCK_MESSAGE = 'masqué par les filtres anti-pub du poste de l\'opérateur (filtres génériques EasyList : ad, ads, ad-, ads-, adv-, ad_, advert, banner-ad, sponsor) ; le renommer (par exemple art-, item-)';
 const NAME = /-?[A-Za-z_][\w-]*/g;
-/** Not preceded by a letter or `-`: `data-id` and `data-class` are no `id` nor `class`. */
-const ATTRIBUTE = /(?<![\w-])(class|className|id)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+/** Not preceded by a letter, `-` or `.`: `data-id` is no `id`, `el.className =` is read as a script. */
+const ATTRIBUTE = /(?<![\w.-])(class|className|id)\s*=\s*(?:"([^"]*)"|'([^']*)'|\{([^}]*)\}|([^\s"'{>/]+))/g;
 const DIRECTIVE = /(?<![\w-])class:(-?[A-Za-z_][\w-]*)/g;
+const SCRIPT = /(?:\bclassList\.(?:add|remove|toggle|replace)\s*\(([^)]*)\)|\.(className|id)\s*\+?=\s*(["'`][^"'`]*["'`]))/g;
+const STRING = /(["'`])((?:\\.|(?!\1)[^\\\n])*)\1/g;
 const SELECTOR = /([.#])(-?[A-Za-z_][\w-]*)/g;
 /** The part of a line of CSS that holds selectors: before `{`, or a whole line ending with `,`, without a declaration. */
 function selectors(line) {
@@ -39,20 +44,36 @@ export function adBlockedNames(text, path) {
         const line = index + 1;
         const found = (column, kind, name) => { if (ADBLOCK_NAME.test(name))
             out.push({ line, column, kind, name }); };
+        const names = (segment, offset, kind) => { for (const n of segment.matchAll(NAME))
+            found(offset + n.index, kind, n[0]); };
+        // The names of the string literals of a piece of code (an expression, the arguments of a call).
+        const strings = (code, offset, kind) => {
+            for (const s of code.matchAll(STRING))
+                names(s[2], offset + s.index + 1, kind);
+        };
         let css = null;
         if (style)
             css = raw;
         else {
             for (const m of raw.matchAll(ATTRIBUTE)) {
-                const value = m[2] ?? m[3] ?? '';
-                const start = m.index + m[0].indexOf(value);
-                // Names outside the `{...}` expressions of the value.
-                const plain = value.replace(/\{[^}]*\}/g, match => ' '.repeat(match.length));
-                for (const n of plain.matchAll(NAME))
-                    found(start + n.index, m[1] === 'id' ? 'identifiant' : 'classe', n[0]);
+                const kind = m[1] === 'id' ? 'identifiant' : 'classe';
+                const value = m[2] ?? m[3] ?? m[4] ?? m[5] ?? '';
+                const start = m.index + m[0].lastIndexOf(value);
+                if (m[4] !== undefined) {
+                    strings(value, start, kind);
+                    continue;
+                }
+                // Names outside the `{...}` expressions of the value; inside them, the strings (`{on ? 'ad-x' : ''}`).
+                names(value.replace(/\{[^}]*\}/g, match => ' '.repeat(match.length)), start, kind);
+                for (const e of value.matchAll(/\{[^}]*\}/g))
+                    strings(e[0], start + e.index, kind);
             }
             for (const m of raw.matchAll(DIRECTIVE))
                 found(m.index, 'classe', m[1]);
+            for (const m of raw.matchAll(SCRIPT)) {
+                const code = m[1] ?? m[3] ?? '';
+                strings(code, m.index + m[0].lastIndexOf(code), m[2] === 'id' ? 'identifiant' : 'classe');
+            }
             // A `<style>` block of a component or a page: its lines are CSS.
             const open = raw.search(/<style\b[^>]*>/i);
             const close = raw.search(/<\/style>/i);

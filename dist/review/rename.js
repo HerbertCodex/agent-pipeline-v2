@@ -4,6 +4,9 @@ import { execFileSync } from 'node:child_process';
  * 2026: a strict rename of CSS classes (`ad-*` to `art-*`) was asked for a fidelity review with captures, although its
  * diff was empty once the names were neutralized.
  *
+ * Only files of interface, of style and of tests are read (`renameKind`), and only in a diff where no other file but
+ * documentation changes: a string of server code, of data or of configuration is never « a name » (security review of
+ * PR #128: a cipher downgraded in server code, its name renamed in a style sheet, skipped the data and GDPR reviews).
  * A changed file is a candidate when its removed and added lines are the same line for line once every class and id
  * name is neutralized: in `class`, `className` and `id` attributes (outside `{...}` expressions), in the references to an
  * id (`for`, `htmlFor`, `aria-labelledby`, `aria-describedby`, `aria-controls`, `aria-owns`), in a Svelte `class:` directive,
@@ -12,8 +15,9 @@ import { execFileSync } from 'node:child_process';
  * - each old name has one new name and each new name one old name (no merge, no split);
  * - each renamed name is renamed in a selector too (a style the project defines, renamed with its definition: a utility
  *   class of a framework, defined nowhere in the project, is never « renamed »);
- * - no old name is left at the head and no new name was at the base, in the interface and code files outside the folder
- *   of the mockups (a rename to a name that already has a style changes the screen).
+ * - each file keeps its lines in place: hunks of as many lines on each side, at the same line (no line moved);
+ * - no old name is left at the head and no new name was at the base, in any text file outside `node_modules` and the
+ *   folder of the mockups (a rename to a name that already has a style changes the screen).
  * Anything else, anything unreadable: a content change. Limit: a new name styled by a sheet outside the repository
  * (a library under `node_modules`) is not seen.
  */
@@ -21,7 +25,12 @@ const NAME = '-?[A-Za-z_][\\w-]*';
 /** What stands for a neutralized name in a compared line. */
 const MARK = '\u0005';
 const STYLE_FILE = /\.(?:css|scss|sass|less|styl)$/i;
-const COMPONENT_FILE = /\.(?:svelte|vue|astro|html|htm|jsx|tsx)$/i;
+const COMPONENT_FILE = /\.(?:svelte|vue|astro|html|htm|jsx|tsx|md|svx|mdx)$/i;
+/** Files of interface and of style a rename may touch; Markdown only as a page of a router (mdsvex, MDX). */
+const INTERFACE_FILE = /\.(?:svelte|vue|astro|html|htm|jsx|tsx|css|scss|sass|less|styl)$/i;
+const PAGE_MARKDOWN = /(?:^|\/)(?:routes|pages)\/(?:.*\/)?[^/]+\.(?:md|svx|mdx)$/i;
+/** A path a pure rename may touch: interface, style, or a page in Markdown (tests are judged by the caller). */
+export const renameKind = (path) => INTERFACE_FILE.test(path) || PAGE_MARKDOWN.test(path);
 /** Not preceded by a letter or `-`: `data-id` and `data-class` are no `id` nor `class`. */
 const ATTRIBUTE = /((?<![\w-])(?:class|className|id|for|htmlFor|aria-labelledby|aria-describedby|aria-controls|aria-owns)\s*=\s*)(?:"([^"]*)"|'([^']*)')/g;
 const DIRECTIVE = new RegExp(`((?<![\\w-])class:)(${NAME})`, 'g');
@@ -92,10 +101,14 @@ export function neutralizeLine(line, path) {
 }
 /**
  * The pairs of names of a file whose changed lines differ only by class and id names, or null when anything else
- * changes (a text, a structure, a declaration, a line added or removed).
+ * changes (a text, a structure, a declaration, a line added, removed or moved). Each hunk replaces its lines in place,
+ * as many on each side and at the same line (security review of PR #128: a rule moved after another and renamed
+ * changes the cascade). Without `hunks`, the lines are taken as one hunk replaced in place.
  */
 export function renamedNames(patch, path) {
     if (!patch.removed.length || patch.removed.length !== patch.added.length)
+        return null;
+    if (patch.hunks && (!patch.hunks.length || patch.hunks.some(h => h.oldCount !== h.newCount || h.oldStart !== h.newStart)))
         return null;
     const pairs = [];
     for (let i = 0; i < patch.removed.length; i++) {
@@ -111,16 +124,18 @@ export function renamedNames(patch, path) {
     // Lines that changed nothing but their trailing spaces: not a rename, a content change.
     return pairs.some(p => p.from !== p.to) ? pairs : null;
 }
-/** Files searched for a name left behind or already there: interface and code, at any depth. */
-const SEARCHED = ['*.svelte', '*.vue', '*.astro', '*.html', '*.htm', '*.jsx', '*.tsx', '*.css', '*.scss', '*.sass', '*.less', '*.styl',
-    '*.ts', '*.js', '*.mjs', '*.cjs', '*.mts', '*.cts'];
+/**
+ * Files searched for a name left behind or already there: every text file of the repository (Markdown pages of mdsvex,
+ * SQL, configuration...), binaries apart, outside `node_modules` (and the mockups, excluded by the caller).
+ */
+const SEARCHED = ['.', ':(exclude,glob)**/node_modules/**'];
 /** The names found at a commit (word boundaries: letters, digits, `_` and `-`), or null when Git cannot say. */
 function namesAt(repo, sha, names, designDir) {
     if (!names.length)
         return new Set();
     const pattern = `(^|[^A-Za-z0-9_-])(${names.join('|')})($|[^A-Za-z0-9_-])`;
     try {
-        const out = execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'grep', '-h', '-o', '-I', '-E', '-e', pattern, sha, '--', ...SEARCHED, `:(exclude)${designDir}/**`], {
+        const out = execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'grep', '-h', '-o', '-I', '-E', '-e', pattern, sha, '--', ...SEARCHED, `:(exclude,glob)${designDir}/**`], {
             cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024, timeout: 120_000,
         });
         return new Set(out.split('\n').map(l => l.replace(/^[^A-Za-z0-9_-]+|[^A-Za-z0-9_-]+$/g, '')).filter(Boolean));

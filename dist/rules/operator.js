@@ -395,19 +395,35 @@ export function waiverSentence(rule, sha) {
  * `relecture:<domaine>` is the waiver of that review only: it never waives the rule `relecture` whole, nor another domain.
  */
 export function waiverFor(messages, rule, sha) {
+    return waiverLines(messages, rule, sha).find(w => !w.template && w.reason.length >= MIN_WAIVER_REASON) ?? null;
+}
+/**
+ * A reason that is the template of the tool, quoted rather than written: `<ta raison>` (any `<…>`), « ta raison »,
+ * « raison ». Security review of PR #128: the operator asking « l'outil m'affiche « dérogation … : <ta raison> », c'est
+ * quoi ? » waived the rule.
+ */
+const TEMPLATE_REASON = /<[^>]*>|^\W*(?:ta |votre |une )?raison\W*$/i;
+/** Whether the operator typed a waiver of `rule` for `sha` whose reason is the template of the tool: ignored, said. */
+export function templateWaiver(messages, rule, sha) {
+    return waiverLines(messages, rule, sha).some(w => w.template);
+}
+/** The waiver lines of `rule` for `sha`, newest first, with their reason and whether it is the template of the tool. */
+function waiverLines(messages, rule, sha) {
     const pattern = new RegExp(`d[ée]rogation\\s+${rule}\\s+(?:pour\\s+)?([0-9a-f]{${WAIVER_SHA},64})\\s*[:,-]?\\s*(.*)`, 'i');
+    const out = [];
     for (const message of [...messages].reverse()) {
         for (const line of message.waivers) {
             const m = pattern.exec(line.normalize('NFC'));
-            if (!m)
+            if (!m || !sha.toLowerCase().startsWith(m[1].toLowerCase()))
                 continue;
             const reason = m[2].trim();
-            if (sha.toLowerCase().startsWith(m[1].toLowerCase()) && reason.length >= MIN_WAIVER_REASON)
-                return { message, reason };
+            out.push({ message, reason, template: TEMPLATE_REASON.test(reason) });
         }
     }
-    return null;
+    return out;
 }
+/** What a refusal says when the operator quoted the template of the tool instead of a reason. */
+export const TEMPLATE_WAIVER_NOTE = 'Une dérogation tapée avec le gabarit de l\'outil, ignorée : raison à écrire en clair (les mots de l\'opérateur, pas « <ta raison> »).';
 /** Whether the key file exists with no access for group and others. */
 export function anchorKeyPrivate(file = anchorKeyFile()) {
     try {

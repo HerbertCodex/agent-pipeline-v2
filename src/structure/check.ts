@@ -233,11 +233,11 @@ export async function checkStructure(repo: string, config: StructureConfig, opti
     }
   }
 
-  // Names hidden by the generic ad filters (src/structure/adblock.ts), in the files of interface: with a base, in each
-  // file the change touches, a name on a line it adds blocks and one the base had is said; without base, said only.
-  const touched = (path: string): boolean => !changes || changes.all || changes.created.has(path) || changes.renamed.has(path) || (changes.added.get(path)?.size ?? 0) > 0;
+  // Names hidden by the generic ad filters (src/structure/adblock.ts), in every file of interface of the tree: with a
+  // base, a name on a line the change adds blocks, any other (a file the change does not touch included) is said;
+  // without base, every name is said, nothing blocks.
   for (const path of files) {
-    if (!ADBLOCK_FILES.test(path) || !touched(path) || settings.ignore.some(re => re.test(path)) || !(!options.paths?.length || options.paths.some(p => inside(path, p)))) continue;
+    if (!ADBLOCK_FILES.test(path) || settings.ignore.some(re => re.test(path)) || !(!options.paths?.length || options.paths.some(p => inside(path, p)))) continue;
     const text = readWorktree(repo, path);
     if (text === null) continue;
     for (const hit of adBlockedNames(text, path)) {

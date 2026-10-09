@@ -16,7 +16,7 @@ import { WEB_DEPENDENCIES } from '../reuse/detect.js';
 import { gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
 import { commonDir } from '../stacks/idle.js';
 import { MERGE_RULES, RULE_TITLES, rulesSettings } from './config.js';
-import { anchorKey, readOperatorMessages, waiverFor, waiverSentence } from './operator.js';
+import { TEMPLATE_WAIVER_NOTE, anchorKey, readOperatorMessages, templateWaiver, waiverFor, waiverSentence } from './operator.js';
 import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
 import { LANE_NAME, docsOnlyLane, laneLines } from './docs-only.js';
@@ -189,6 +189,8 @@ export async function checkMergeRules(input) {
         domainStates.push({ domain, status: 'missing', detail: problem, waiver: null });
         reviewProblems.push(`${domain} : ${problem}`);
         reviewTodo.push(found && !found.problem && found.record ? `Corrige chaque constat critique ou haut de la relecture ${domain}, avec le test qui le prouve, puis fais relire le nouveau commit (${agent}).` : ask);
+        if (templateWaiver(messages, `relecture:${domain}`, sha))
+            reviewTodo.push(`${domain} : ${TEMPLATE_WAIVER_NOTE}`);
         reviewTodo.push(`Ou, pour ce domaine seul, l'opérateur tape lui-même : « ${waiverSentence(`relecture:${domain}`, sha)} »${domain === ALWAYS_REVIEWED ? ' (dérogation sur la sécurité)' : ''}.`);
     }
     const forcedNote = lane.eligible ? ` (${LANE_NAME}, domaines forcés par review.always)` : '';
@@ -269,8 +271,11 @@ export async function checkMergeRules(input) {
             r.status = 'waived';
             r.waiver = { at: waiver.message.at, reason: waiver.reason };
         }
-        else
+        else {
+            if (templateWaiver(messages, r.rule, sha))
+                r.todo.push(TEMPLATE_WAIVER_NOTE);
             r.todo.push(`Sans correction, seul l'opérateur peut lever ce refus, en tapant lui-même dans la session : « ${waiverSentence(r.rule, sha)} ».`);
+        }
     }
     const order = new Map(MERGE_RULES.map((r, i) => [r, i]));
     rules.sort((a, b) => order.get(a.rule) - order.get(b.rule));

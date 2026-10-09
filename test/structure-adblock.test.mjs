@@ -46,7 +46,7 @@ test('apv structure check: a class of the generic ad filters added by the change
   const r = await apv(f.repo, ['structure', 'check', '--base', 'main', '--json']);
   assert.equal(r.code, 1, r.stdout);
   const found = adblock(r.json());
-  assert.deepEqual(found.map(c => [c.path, c.blocking]), [['src/lib/components/Card.svelte:2', true]]);
+  assert.deepEqual(found.map(c => [c.path, c.blocking]), [['src/lib/components/Card.svelte:2', true], ['src/lib/components/Old.svelte:1', false]]);
   assert.match(found[0].message, /classe « ad-grid » : masqué par les filtres anti-pub du poste de l'opérateur/);
   const text = await apv(f.repo, ['structure', 'check', '--base', 'main']);
   assert.match(text.stdout, /\[bloquant\] nom masqué par les anti-pub : src\/lib\/components\/Card\.svelte:2 : classe « ad-grid »/);
@@ -54,7 +54,7 @@ test('apv structure check: a class of the generic ad filters added by the change
   write(f.repo, 'src/lib/components/Card.svelte', '<p class="card">Carte</p>\n<div class="art-grid">x</div>\n');
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'renommage');
   const ok = await apv(f.repo, ['structure', 'check', '--base', 'main', '--json']);
-  assert.deepEqual(adblock(ok.json()), []);
+  assert.deepEqual(adblock(ok.json()).filter(c => c.blocking), []);
   const full = (await apv(f.repo, ['structure', 'check', '--json'])).json();
   assert.deepEqual(adblock(full).map(c => [c.path, c.blocking]), [['src/lib/components/Old.svelte:1', false]]);
 });
@@ -79,4 +79,30 @@ test('the fidelity review checks the rendering with a generic ad filter injected
   const { readFileSync } = await import('node:fs');
   const grid = readFileSync(new URL('../agents/qa-fidelite.md', import.meta.url), 'utf8');
   assert.match(grid, /rendu identique avec un filtre anti-pub générique injecté/);
+});
+
+/** The component of the security review of PR #128 (make-adblock.sh): every form an ad filter reads. */
+const EVERY_FORM = [
+  '<p>base</p>', '<div class="ad-grid">1</div>', '<div class="add-on adresse advanced badge">2</div>', '<div class="sponsored">3</div>',
+  '<div class="ad">4</div>', '<div class="ads">5</div>', '<div class="ad_slot">6</div>', '<div class="adsbygoogle">7</div>',
+  '<div class="AD-grid">8</div>', '<div class:ad-flag={on}>9</div>', "<div class={'ad-expr'}>10</div>", "<div class=\"x {on ? 'ad-tern' : ''}\">11</div>",
+  '<div id="ad-bar">12</div>', '<script>', "  el.classList.add('ad-js');", "  el.className = 'ad-js2';", '</script>',
+  '<div className="banner-ad">13</div>', '<div class="banner_ad">14</div>', '<div class=ad-unquoted>15</div>',
+  '<style>', '  .ad-style { color: red; }', '  :global(.ad-global) { color: red; }', '  @apply ad-apply;', '</style>', '',
+].join('\n');
+
+test('review of PR #128, F4: exact names, underscores, scripts, expressions, ternaries and unquoted attributes are read', () => {
+  assert.deepEqual(adBlockedNames(EVERY_FORM, 'src/lib/components/New.svelte').map(h => h.name), [
+    'ad-grid', 'sponsored', 'ad', 'ads', 'ad_slot', 'adsbygoogle', 'AD-grid', 'ad-flag', 'ad-expr', 'ad-tern', 'ad-bar', 'ad-js', 'ad-js2',
+    'banner-ad', 'banner_ad', 'ad-unquoted', 'ad-style', 'ad-global',
+  ]);
+  assert.deepEqual(adBlockedNames('.ad-css,\n.ok {\n  color: red;\n}\n[class^="ad-"] { color: blue; }\n', 'src/x.css').map(h => h.name), ['ad-css']);
+});
+
+test('review of PR #128, F4: with --base, a file the change does not touch is said, without blocking', async t => {
+  const f = project(t);
+  write(f.repo, 'src/lib/components/Card.svelte', '<p class="card">Carte modifiée</p>\n');
+  git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'change');
+  const report = (await apv(f.repo, ['structure', 'check', '--base', 'main', '--json'])).json();
+  assert.deepEqual(adblock(report).map(c => [c.path, c.blocking]), [['src/lib/components/Old.svelte:1', false]]);
 });
