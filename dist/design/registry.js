@@ -9,6 +9,7 @@ import { ambiguousApprovalFragments, loadDecisionLedger, readWorkingDecisionLedg
 import { applyLedgerUpdate, planLedgerUpdate } from '../lifecycle/ledger-update.js';
 import { ensureDesignAttribute } from './attributes.js';
 import { assertNoLink, assertRealFolder, realInside } from './links.js';
+import { ADBLOCK_MESSAGE, adBlockedNames } from '../structure/adblock.js';
 export { DEFAULT_DESIGN_DIR } from './config.js';
 /** Lowercase words joined by single dashes; short enough for the decision id (80 characters at most). */
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -141,6 +142,10 @@ export async function registerMockup(repoPath, input) {
     invariant(!lstatSync(source).isSymbolicLink(), 'DESIGN_LINK', `La maquette ${input.file} est un lien symbolique : versez le fichier lui-même`);
     invariant(['.html', '.htm'].includes(extname(source).toLowerCase()), 'DESIGN_FILE', `La maquette doit être un fichier HTML : ${input.file}`);
     invariant(statSync(source).size > 0, 'DESIGN_FILE', `Fichier vide : ${input.file}`);
+    // The reference of the screens never teaches a name the operator's ad blocker hides (src/structure/adblock.ts).
+    const hidden = adBlockedNames(readFileSync(source, 'utf8'), source);
+    invariant(hidden.length === 0, 'DESIGN_ADBLOCK', `Maquette refusée : ${hidden.slice(0, 10).map(h => `ligne ${h.line} : ${h.kind} « ${h.name} »`).join(', ')}`
+        + `${hidden.length > 10 ? ` (et ${hidden.length - 10} autres)` : ''} : ${ADBLOCK_MESSAGE}. Renommez ces classes dans la maquette, puis versez-la.`);
     const settings = loadDesignConfig(repo);
     const { dir } = settings;
     const groups = declaredGroups(settings);

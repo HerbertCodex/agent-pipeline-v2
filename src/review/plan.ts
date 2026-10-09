@@ -4,7 +4,11 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { matches } from '../policy/policy.js';
 import { resolveCommit } from '../run/git-probe.js';
 import { ALWAYS_REVIEWED, PATH_CLASSES, REVIEW_DOMAINS, type PathClass, type ReviewDomainName, type ReviewPlanSettings } from './config.js';
-import { AGENT_INSTRUCTIONS, CONFIG_FILES, ROUTING_DIR, ROUTING_TEST_DIR, SERVED_DIR, TEST_DIRS, TEST_NAME, diffRisk, realAddress, type DiffRisk, type RiskLevel } from './risk.js';
+import { pureRename, renameKind, renamedNames, type RenamePair } from './rename.js';
+import {
+  AGENT_INSTRUCTIONS, CONFIG_FILES, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, PILOT_NOTE_EXTENSIONS, ROUTING_DIR, ROUTING_TEST_DIR, SERVED_DIR, SPEC_NOTES, TEST_DIRS,
+  TEST_NAME, diffRisk, realAddress, type DiffRisk, type RiskLevel,
+} from './risk.js';
 
 /**
  * `apv review plan`: the review domains proposed from the nature of a diff. Pilot project, 25 September 2026: a
@@ -20,15 +24,22 @@ import { AGENT_INSTRUCTIONS, CONFIG_FILES, ROUTING_DIR, ROUTING_TEST_DIR, SERVED
  *   tooling classes (a file named as a test excepted): such a file keeps every domain like an unclassified one;
  * - the risk level of the diff (src/review/risk.ts) is decided by the path only: `faible` when every file is a test,
  *   documentation or a mockup without a term of data or GDPR; the content is never read as « text ».
+ * Reviews in proportion to the risk (issue #126, pilot project, 8 October 2026): a pure rename of class and id names
+ * (src/review/rename.ts) changes no content; the notes of the pipeline and a lockfile without its `package.json` keep the
+ * security review alone; `data-*` attribute names and the Markdown under `.apv/` hold no word of data or GDPR; each
+ * retained domain says whether the diff requires it or prudence keeps it (`basis`).
  */
 
 /** How the content of a changed file changed. */
 /**
  * - `none`: pure rename (similarity 100 %) or mode change;
  * - `paths`: only references to moved files rewritten (imports, paths in comments), imports reordered or rewrapped;
+ * - `names`: only class and id names renamed, in a pure rename of the whole diff (src/review/rename.ts);
  * - `content`: anything else (added, deleted, binary, any other changed line).
  */
-export type ChangeKind = 'none' | 'paths' | 'content';
+export type ChangeKind = 'none' | 'paths' | 'names' | 'content';
+/** Why a domain is kept: the diff requires it, or prudence keeps it (an unclassified file, a configuration, a term isolated). */
+export type ReviewBasis = 'diff' | 'prudence';
 
 export interface PlannedFile {
   path: string;
@@ -38,8 +49,8 @@ export interface PlannedFile {
   status: string;
   change: ChangeKind;
   classes: PathClass[];
-  /** Domains this file keeps, with the reason. */
-  keeps: { domain: ReviewDomainName; why: string }[];
+  /** Domains this file keeps, with the reason and whether the diff requires them or prudence keeps them. */
+  keeps: { domain: ReviewDomainName; why: string; basis: ReviewBasis }[];
   /** Risk of this file, and why (src/review/risk.ts). */
   risk: RiskLevel;
   riskWhy: string;
@@ -54,6 +65,11 @@ export interface DomainDecision {
   files: string[];
   fileCount: number;
   forced: 'config' | 'operator' | null;
+  /**
+   * A retained domain: `diff` when a file requires it (and for securite, and a domain forced by the configuration or the
+   * operator), `prudence` when only prudence keeps it; null for a skipped domain.
+   */
+  basis: ReviewBasis | null;
 }
 
 export interface ReviewPlan {
@@ -61,7 +77,7 @@ export interface ReviewPlan {
   base: { ref: string; sha: string };
   head: { ref: string; sha: string };
   mergeBase: string;
-  counts: { files: number; renames: number; paths: number; content: number; neutral: number; unclassified: number };
+  counts: { files: number; renames: number; paths: number; names: number; content: number; neutral: number; notes: number; locks: number; unclassified: number };
   /** Risk level of the diff: `faible` keeps at most securite and fidelite (plus what is forced); `eleve` is the plan as before. */
   risk: DiffRisk;
   domains: DomainDecision[];
@@ -102,7 +118,14 @@ export function parseNameStatus(raw: string): NameStatus[] {
   return out;
 }
 
-interface FilePatch { binary: boolean; removed: string[]; added: string[] }
+/** A hunk header of a `--unified=0` patch: where its lines start and how many, on each side. */
+export interface Hunk { oldStart: number; oldCount: number; newStart: number; newCount: number }
+const HUNK = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+const hunkOf = (line: string): Hunk | null => {
+  const m = HUNK.exec(line);
+  return m ? { oldStart: Number(m[1]), oldCount: m[2] === undefined ? 1 : Number(m[2]), newStart: Number(m[3]), newCount: m[4] === undefined ? 1 : Number(m[4]) } : null;
+};
+interface FilePatch { binary: boolean; removed: string[]; added: string[]; hunks: Hunk[] }
 
 /** Unquotes a path that Git wrote in C style (`"a\tb"`); a plain path is returned as is. */
 function unquote(text: string): string {
@@ -127,7 +150,7 @@ export function parsePatch(raw: string): Map<string, FilePatch> {
     const lines = block.split('\n');
     let oldPath: string | null = null; let newPath: string | null = null;
     let renameFrom: string | null = null; let renameTo: string | null = null;
-    const patch: FilePatch = { binary: false, removed: [], added: [] };
+    const patch: FilePatch = { binary: false, removed: [], added: [], hunks: [] };
     let inHunk = false;
     for (const line of lines.slice(1)) {
       if (!inHunk) {
@@ -136,10 +159,10 @@ export function parsePatch(raw: string): Map<string, FilePatch> {
         else if (line.startsWith('--- ')) oldPath = line.slice(4) === '/dev/null' ? null : unquote(line.slice(4)).replace(/^a\//, '');
         else if (line.startsWith('+++ ')) newPath = line.slice(4) === '/dev/null' ? null : unquote(line.slice(4)).replace(/^b\//, '');
         else if (line.startsWith('Binary files ') || line.startsWith('GIT binary patch')) patch.binary = true;
-        else if (line.startsWith('@@')) inHunk = true;
+        else if (line.startsWith('@@')) { inHunk = true; const h = hunkOf(line); if (h) patch.hunks.push(h); }
         continue;
       }
-      if (line.startsWith('@@')) continue;
+      if (line.startsWith('@@')) { const h = hunkOf(line); if (h) patch.hunks.push(h); continue; }
       if (line.startsWith('+')) patch.added.push(line.slice(1));
       else if (line.startsWith('-')) patch.removed.push(line.slice(1));
     }
@@ -337,18 +360,42 @@ function classify(path: string, input: PlanInput): PathClass[] {
   return found;
 }
 
-function termIn(lines: string[], terms: string[]): string | null {
+/** The first term of the list found in the lines, and how many lines hold a term of the list. */
+function termIn(lines: string[], terms: string[]): { term: string; lines: number } | null {
+  let first: string | null = null;
+  let count = 0;
   for (const line of lines) {
     const low = line.toLowerCase();
     const term = terms.find(t => low.includes(t));
-    if (term) return term;
+    if (!term) continue;
+    first ??= term;
+    count += 1;
   }
-  return null;
+  return first === null ? null : { term: first, lines: count };
 }
 
-function fileKeeps(file: Omit<PlannedFile, 'keeps' | 'risk' | 'riskWhy'>, patch: FilePatch | undefined, input: PlanInput): PlannedFile['keeps'] {
+/** The names of `data-*` attributes (`data-tab`, `data-phone`): names of the markup, never a word of data or GDPR. */
+const DATA_ATTRIBUTE = /(?<![\w-])data-[\w-]+/gi;
+
+/**
+ * Every side a note of the pipeline (the state, the journal, a spec ADDED; text or JSON). A spec of the base modified or
+ * renamed keeps the classification of 3.0.0-alpha.20 (security review of PR #128: a security requirement removed from a
+ * spec was read by the security review alone).
+ */
+const pilotNote = (file: { path: string; from?: string | undefined; status: string }): boolean =>
+  sides(file).every(p => PILOT_NOTE_EXTENSIONS.test(p) && PILOT_NOTES.some(g => matches(p, g)) && (!matches(p, SPEC_NOTES) || file.status.startsWith('A')));
+/** A lockfile of npm, pnpm or Yarn on every side. */
+const lockFile = (file: { path: string; from?: string | undefined }): boolean => sides(file).every(p => LOCK_FILES.some(g => matches(p, g)));
+
+/** The host of a download URL in a lockfile line (`"resolved": "https://…"`, `resolved "https://…"`, `tarball: https://…`). */
+const DOWNLOAD_HOST = /(?:resolved|tarball)\W+(?:https?:\/\/)([^/"'\s:]+)/gi;
+
+/** What the whole diff says to each file: whether it changes a `package.json` (a lockfile is then a configuration). */
+interface DiffContext { manifest: boolean }
+
+function fileKeeps(file: Omit<PlannedFile, 'keeps' | 'risk' | 'riskWhy'>, patch: FilePatch | undefined, input: PlanInput, context: DiffContext): PlannedFile['keeps'] {
   const keeps: PlannedFile['keeps'] = [];
-  const add = (domain: ReviewDomainName, why: string): void => { if (!keeps.some(k => k.domain === domain)) keeps.push({ domain, why }); };
+  const add = (domain: ReviewDomainName, why: string, basis: ReviewBasis = 'diff'): void => { if (!keeps.some(k => k.domain === domain)) keeps.push({ domain, why, basis }); };
   const classes = new Set(file.classes);
   const inDesign = [file.path, file.from].some(p => p !== undefined && (p === input.designDir || p.startsWith(`${input.designDir}/`)));
   if (classes.has('migrations')) {
@@ -359,48 +406,73 @@ function fileKeeps(file: Omit<PlannedFile, 'keeps' | 'risk' | 'riskWhy'>, patch:
   if (inDesign) add('fidelite', WHY.design);
   if (file.change !== 'content') return keeps;
   const meaningful = file.classes.filter(c => !NO_DOMAIN.includes(c));
-  const lines = patch && !patch.binary ? [...patch.added, ...patch.removed] : [];
+  const lines = patch && !patch.binary ? [...patch.added, ...patch.removed].map(l => l.replace(DATA_ATTRIBUTE, '')) : [];
+  const address = (): void => {
+    if (realAddress(patch?.added ?? [])) add('rgpd', 'adresse e-mail réelle (domaine non réservé aux exemples) dans les lignes ajoutées');
+  };
   // The words of the changed lines: a query written in a page, a tracker, a personal field, a real address in a fixture.
-  const terms = (): void => {
-    const data = termIn(lines, input.settings.terms.data);
-    if (data) add('donnees', `terme de données « ${data} » dans les lignes changées`);
-    const personal = termIn(lines, input.settings.terms.personal);
-    if (personal) add('rgpd', `terme RGPD « ${personal} » dans les lignes changées`);
-    const address = realAddress(patch?.added ?? []);
-    if (address) add('rgpd', 'adresse e-mail réelle (domaine non réservé aux exemples) dans les lignes ajoutées');
+  // In server, data or interface code, one line is enough: required by the diff (security review of PR #128: a query
+  // deleting every profile, on one line, said « par prudence »). Only in a test, a document or tooling is a term on one
+  // line alone isolated: prudence. The Markdown under `.apv/` is prose of the pipeline: its words never count.
+  const terms = (isolated: boolean): void => {
+    if (!sides(file).every(p => p.startsWith('.apv/') && p.endsWith('.md'))) {
+      const data = termIn(lines, input.settings.terms.data);
+      if (data) {
+        if (data.lines > 1 || !isolated) add('donnees', `terme de données « ${data.term} » dans les lignes changées`);
+        else add('donnees', `terme de données « ${data.term} » isolé (une seule ligne changée : par prudence)`, 'prudence');
+      }
+      const personal = termIn(lines, input.settings.terms.personal);
+      if (personal) {
+        if (personal.lines > 1 || !isolated) add('rgpd', `terme RGPD « ${personal.term} » dans les lignes changées`);
+        else add('rgpd', `terme RGPD « ${personal.term} » isolé (une seule ligne changée : par prudence)`, 'prudence');
+      }
+    }
+    address();
   };
   if (!meaningful.length && !inDesign) {
+    // Notes of the pipeline: never a configuration; the security review reads them, a real address still counts.
+    if (pilotNote(file) && !isSensitive(file, input) && !isConfig(file)) { address(); return keeps; }
+    // A lockfile without its package.json: the security review alone, with the audit of the dependencies.
+    if (lockFile(file) && !context.manifest) return keeps;
     if (strongPath(file, input)) {
-      for (const domain of ['fidelite', 'donnees', 'rgpd'] as const) add(domain, WHY.strong);
+      // Its words first (a query in server code is required by the diff), then prudence for the rest.
+      terms(false);
+      for (const domain of ['fidelite', 'donnees', 'rgpd'] as const) add(domain, WHY.strong, 'prudence');
       return keeps;
     }
     // Tests, documentation, tooling: no domain of their own, but their words still count (a fixture with personal data).
-    if (classes.has('neutral') || classes.has('tooling')) { terms(); return keeps; }
-    for (const domain of ['fidelite', 'donnees', 'rgpd'] as const) add(domain, WHY.unclassified);
+    if (classes.has('neutral') || classes.has('tooling')) { terms(true); return keeps; }
+    for (const domain of ['fidelite', 'donnees', 'rgpd'] as const) add(domain, WHY.unclassified, 'prudence');
     return keeps;
   }
   if (classes.has('ui')) add('fidelite', WHY.ui);
   if (classes.has('data')) add('donnees', WHY.data);
   if (classes.has('personal')) add('rgpd', WHY.personal);
   if (classes.has('legal')) add('rgpd', WHY.legal);
-  terms();
+  terms(false);
   return keeps;
 }
 
 const SENSITIVE_WHY = 'chemin sensible (authentification, session, permissions, dépendances, configuration de sécurité, CI ou instructions des agents)';
+const NOTES_WHY = 'notes de pilotage (.apv/state, journal du pipeline, specs) : jamais une configuration';
+const LOCK_WHY = 'verrou de dépendances sans son package.json : audit des dépendances par la relecture sécurité';
 
 /**
  * The risk of one changed file (src/review/risk.ts), by its path only: low for a test, documentation or a mockup
- * without a word of data or GDPR; high for everything else (the plan of 3.0.0-alpha.14).
+ * without a word of data or GDPR; high for everything else (the plan of 3.0.0-alpha.14). The notes of the pipeline and a
+ * lockfile without its package.json stay of high risk (a lockfile can break the build), under their own name.
  */
-function fileRisk(file: Omit<PlannedFile, 'risk' | 'riskWhy'>, input: PlanInput): { risk: RiskLevel; riskWhy: string } {
+function fileRisk(file: Omit<PlannedFile, 'risk' | 'riskWhy'>, input: PlanInput, context: DiffContext): { risk: RiskLevel; riskWhy: string } {
   const high = (riskWhy: string): { risk: RiskLevel; riskWhy: string } => ({ risk: 'eleve', riskWhy });
   const low = (riskWhy: string): { risk: RiskLevel; riskWhy: string } => ({ risk: 'faible', riskWhy });
   const classes = new Set(file.classes);
   if (classes.has('migrations')) return high('migration ou schéma');
+  const plain = !file.classes.some(c => !NO_DOMAIN.includes(c));
+  if (plain && lockFile(file) && !context.manifest) return high(LOCK_WHY);
   if (isConfig(file)) return high('configuration (outil, exécuteurs de tests, lint, format, dépendances, CI)');
   const named = testNamed(file);
   if (!named && isSensitive(file, input)) return high(SENSITIVE_WHY);
+  if (plain && pilotNote(file)) return high(NOTES_WHY);
   if (!named && classes.has('server')) return high('code serveur ou configuration');
   // A word of data or GDPR, or a real address, in the changed lines: stronger than a test or a document.
   const word = file.keeps.find(k => (k.domain === 'donnees' || k.domain === 'rgpd') && (k.why.startsWith('terme ') || k.why.startsWith('adresse ')));
@@ -435,10 +507,14 @@ function skipReason(domain: ReviewDomainName, counts: ReviewPlan['counts']): str
   const detail = [
     counts.renames ? count(counts.renames, 'renommage pur', 'renommages purs') : '',
     counts.paths ? count(counts.paths, 'fichier aux seuls chemins réécrits', 'fichiers aux seuls chemins réécrits') : '',
+    counts.names ? count(counts.names, 'fichier aux seuls noms de classes ou d\'identifiants renommés', 'fichiers aux seuls noms de classes ou d\'identifiants renommés') : '',
     counts.neutral ? count(counts.neutral, 'fichier de tests, documentation ou outillage', 'fichiers de tests, documentation ou outillage') : '',
+    counts.notes ? count(counts.notes, 'note de pilotage', 'notes de pilotage') : '',
+    counts.locks ? count(counts.locks, 'verrou de dépendances', 'verrous de dépendances') : '',
   ].filter(Boolean).join(', ');
   if (!counts.files) return 'rien à relire : diff vide';
-  return `rien à relire : ${scope}, aucun fichier non classé au contenu changé (${count(counts.files, 'fichier', 'fichiers')}${detail ? ` : ${detail}` : ''})`;
+  const rename = domain === 'fidelite' && counts.names ? 'renommage pur : diff normalisé vide (noms de classes et d\'identifiants renommés partout, styles compris) ; ' : '';
+  return `${rename || 'rien à relire : '}${scope}, aucun fichier non classé au contenu changé (${count(counts.files, 'fichier', 'fichiers')}${detail ? ` : ${detail}` : ''})`;
 }
 
 export function planReviews(input: PlanInput): ReviewPlan {
@@ -453,7 +529,7 @@ export function planReviews(input: PlanInput): ReviewPlan {
   const statuses = parseNameStatus(git(repo, ['diff', ...common, '--name-status', '-z', mergeBase, headSha]));
   const patches = parsePatch(git(repo, ['diff', ...common, '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', mergeBase, headSha]));
   const renames = statuses.filter(s => s.from !== undefined).map(s => ({ from: s.from!, path: s.path }));
-  const files: PlannedFile[] = statuses.map(entry => {
+  const changes = statuses.map((entry): { entry: NameStatus; patch: FilePatch | undefined; change: ChangeKind; classes: PathClass[] } => {
     const patch = patches.get(entry.path);
     let change: ChangeKind;
     if (/^R100$/.test(entry.status)) change = 'none';
@@ -464,40 +540,74 @@ export function planReviews(input: PlanInput): ReviewPlan {
     else change = referencesOnly(patch, entry, renames) ? 'paths' : 'content';
     const classes = [...new Set([...classify(entry.path, input), ...(entry.from ? classify(entry.from, input) : [])])]
       .sort((a, b) => PATH_CLASSES.indexOf(a) - PATH_CLASSES.indexOf(b));
+    return { entry, patch, change, classes };
+  });
+  // Class and id names renamed: a pure rename only when the whole diff renames them one to one (src/review/rename.ts),
+  // in files of interface, style or tests, and when nothing but documentation and notes of the pipeline changes beside.
+  const shapes = changes.map(c => ({ path: c.entry.path, ...(c.entry.from !== undefined ? { from: c.entry.from } : {}), status: c.entry.status, change: c.change, classes: c.classes }));
+  const renameable = shapes.map(f => sides(f).every(p => renameKind(p) || TEST_NAME.test(p) || inTestDir(p))
+    && !isConfig(f) && !isSensitive(f, input) && !f.classes.some(c => c !== 'ui' && c !== 'neutral' && c !== 'tooling'));
+  const harmless = (f: typeof shapes[number], i: number): boolean => f.change === 'none' || renameable[i]!
+    || (pilotNote(f) && !isSensitive(f, input) && !isConfig(f))
+    || (f.classes.length > 0 && f.classes.every(c => c === 'neutral' || c === 'tooling') && !strongPath(f, input));
+  const candidates = changes.map((c, i) => (renameable[i] && c.change === 'content' && c.patch && !c.patch.binary && /^[MR]/.test(c.entry.status) ? renamedNames(c.patch, c.entry.path) : null));
+  const named = candidates.filter((c): c is RenamePair[] => c !== null);
+  if (named.length && shapes.every(harmless) && pureRename(named, { repo, base: mergeBase, head: headSha, designDir: input.designDir })) {
+    candidates.forEach((c, i) => { if (c) changes[i]!.change = 'names'; });
+  }
+  const context: DiffContext = { manifest: statuses.some(s => sides(s).some(p => MANIFEST_FILES.some(g => matches(p, g)))) };
+  const files: PlannedFile[] = changes.map(({ entry, patch, change, classes }) => {
     const base = { path: entry.path, ...(entry.from !== undefined ? { from: entry.from } : {}), status: entry.status, change, classes };
-    const keeping = { ...base, keeps: fileKeeps(base, patch, input) };
-    return { ...keeping, ...fileRisk(keeping, input) };
+    const keeping = { ...base, keeps: fileKeeps(base, patch, input, context) };
+    return { ...keeping, ...fileRisk(keeping, input, context) };
   });
   const counts = {
     files: files.length,
     renames: files.filter(f => f.change === 'none' && f.from !== undefined).length,
     paths: files.filter(f => f.change === 'paths').length,
+    names: files.filter(f => f.change === 'names').length,
     content: files.filter(f => f.change === 'content').length,
     neutral: files.filter(f => f.change === 'content' && f.classes.every(c => NO_DOMAIN.includes(c)) && (f.classes.includes('neutral') || f.classes.includes('tooling'))
-      && !f.keeps.some(k => k.why === WHY.strong)).length,
+      && !f.keeps.some(k => k.why === WHY.strong) && f.riskWhy !== NOTES_WHY && f.riskWhy !== LOCK_WHY).length,
+    notes: files.filter(f => f.change === 'content' && f.riskWhy === NOTES_WHY).length,
+    locks: files.filter(f => f.change === 'content' && f.riskWhy === LOCK_WHY).length,
     unclassified: files.filter(f => f.change === 'content' && f.keeps.some(k => k.why === WHY.unclassified || k.why === WHY.strong)).length,
   };
   const risk = diffRisk(files, FILES_SHOWN);
   const sensitive = files.filter(f => [f.path, f.from].some(p => p !== undefined && input.sensitive.some(g => matches(p, g)))).map(f => f.path);
+  const locks = files.filter(f => f.riskWhy === LOCK_WHY).map(f => f.path);
+  // A download host that a lockfile names now and did not name at the base (security review of PR #128: a lockfile alone
+  // whose `resolved` points elsewhere). Said to the security review; nothing is skipped or kept for it.
+  const hostsOf = (lines: readonly string[]): Set<string> => new Set(lines.flatMap(l => [...l.matchAll(DOWNLOAD_HOST)].map(m => m[1]!.toLowerCase())));
+  const newHosts = [...new Set(files.filter(f => lockFile(f) && f.change === 'content').flatMap(f => {
+    let before: string[] = [];
+    try { before = git(repo, ['show', `${mergeBase}:${f.from ?? f.path}`]).split('\n'); } catch { before = []; }
+    const known = hostsOf(before);
+    return [...hostsOf(patches.get(f.path)?.added ?? [])].filter(h => !known.has(h));
+  }))];
   const domains: DomainDecision[] = REVIEW_DOMAINS.map(domain => {
     if (domain === ALWAYS_REVIEWED) {
-      return { domain, decision: 'retained', forced: null, fileCount: sensitive.length, files: sensitive.slice(0, FILES_SHOWN),
-        reason: `toujours relue, sans exception${sensitive.length ? ` ; ${count(sensitive.length, 'fichier sensible', 'fichiers sensibles')} (chemins de la voie high)` : ''}` };
+      return { domain, decision: 'retained', forced: null, basis: 'diff', fileCount: sensitive.length, files: sensitive.slice(0, FILES_SHOWN),
+        reason: `toujours relue, sans exception${sensitive.length ? ` ; ${count(sensitive.length, 'fichier sensible', 'fichiers sensibles')} (chemins de la voie high)` : ''}`
+          + `${locks.length ? ` ; verrou de dépendances sans son package.json (${locks.slice(0, 3).join(', ')}) : audit des dépendances (npm audit ou équivalent)` : ''}`
+          + `${newHosts.length ? ` ; hôte de téléchargement nouveau dans le verrou : ${newHosts.slice(0, 5).join(', ')} (vérifier la provenance)` : ''}` };
     }
     const deciding = files.filter(f => f.keeps.some(k => k.domain === domain));
     const forced = input.force.includes(domain) ? 'operator' as const : input.settings.always.includes(domain) ? 'config' as const : null;
     if (deciding.length) {
       const whys = new Map<string, number>();
-      for (const f of deciding) { const why = f.keeps.find(k => k.domain === domain)!.why; whys.set(why, (whys.get(why) ?? 0) + 1); }
+      const kept = deciding.map(f => f.keeps.find(k => k.domain === domain)!);
+      for (const k of kept) whys.set(k.why, (whys.get(k.why) ?? 0) + 1);
       const reason = [...whys].map(([why, n]) => `${why} (${n})`).join(' ; ');
-      return { domain, decision: 'retained', forced, reason: forced ? `${reason} ; forcée aussi par ${forced === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'}` : reason,
+      return { domain, decision: 'retained', forced, basis: forced || kept.some(k => k.basis === 'diff') ? 'diff' : 'prudence',
+        reason: forced ? `${reason} ; forcée aussi par ${forced === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'}` : reason,
         fileCount: deciding.length, files: deciding.slice(0, FILES_SHOWN).map(f => f.path) };
     }
     if (forced) {
-      return { domain, decision: 'retained', forced, fileCount: 0, files: [],
+      return { domain, decision: 'retained', forced, basis: 'diff', fileCount: 0, files: [],
         reason: `forcée par ${forced === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'} ; le diff seul ne la demandait pas` };
     }
-    return { domain, decision: 'skipped', forced: null, fileCount: 0, files: [], reason: skipReason(domain, counts) };
+    return { domain, decision: 'skipped', forced: null, basis: null, fileCount: 0, files: [], reason: skipReason(domain, counts) };
   });
   // A low risk keeps at most the security and fidelity reviews, besides what is forced: never a weaker plan elsewhere.
   if (risk.level === 'faible') {

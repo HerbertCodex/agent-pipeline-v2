@@ -51,6 +51,24 @@ export const CONFIG_FILES = [
 ] as const;
 
 /**
+ * Notes of the pipeline (`notes de pilotage`): the state of the runs, the journal and the specs, in text or JSON. Never a
+ * configuration, whatever their extension says: no domain of their own, their words not read (pilot project, 8 October
+ * 2026: « phone », « e-mail », « supprim » in the prose of a journal kept the data and GDPR reviews). The security review
+ * reads them: the session hook injects `.apv/state/` into every session. A real e-mail address in them still counts.
+ */
+export const PILOT_NOTES = ['.apv/state/**', '.apv/journal-pipeline.md', '.apv/specs/**'] as const;
+/** The specs: a note of the pipeline only when added; a spec of the base modified keeps the classification of alpha.20. */
+export const SPEC_NOTES = '.apv/specs/**';
+export const PILOT_NOTE_EXTENSIONS = /\.(?:md|json|jsonl|log|txt)$/;
+/**
+ * Lockfiles of npm, pnpm and Yarn: changed without their `package.json`, the dependencies move inside the ranges already
+ * reviewed. The security review alone, with the audit of the dependencies (pilot project, 8 October 2026: two tools of
+ * development updated in a lockfile were read by the four reviews, captures included).
+ */
+export const LOCK_FILES = ['**/package-lock.json', '**/npm-shrinkwrap.json', '**/pnpm-lock.yaml', '**/yarn.lock'] as const;
+export const MANIFEST_FILES = ['**/package.json'] as const;
+
+/**
  * E-mail domains reserved for examples and tests (RFC 2606, RFC 6761): an address there is not a real person. Any other
  * address in a changed line keeps the GDPR review (a fixture with a real address is personal data).
  */

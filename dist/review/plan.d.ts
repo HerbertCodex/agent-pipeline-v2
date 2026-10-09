@@ -14,14 +14,21 @@ import { type DiffRisk, type RiskLevel } from './risk.js';
  *   tooling classes (a file named as a test excepted): such a file keeps every domain like an unclassified one;
  * - the risk level of the diff (src/review/risk.ts) is decided by the path only: `faible` when every file is a test,
  *   documentation or a mockup without a term of data or GDPR; the content is never read as « text ».
+ * Reviews in proportion to the risk (issue #126, pilot project, 8 October 2026): a pure rename of class and id names
+ * (src/review/rename.ts) changes no content; the notes of the pipeline and a lockfile without its `package.json` keep the
+ * security review alone; `data-*` attribute names and the Markdown under `.apv/` hold no word of data or GDPR; each
+ * retained domain says whether the diff requires it or prudence keeps it (`basis`).
  */
 /** How the content of a changed file changed. */
 /**
  * - `none`: pure rename (similarity 100 %) or mode change;
  * - `paths`: only references to moved files rewritten (imports, paths in comments), imports reordered or rewrapped;
+ * - `names`: only class and id names renamed, in a pure rename of the whole diff (src/review/rename.ts);
  * - `content`: anything else (added, deleted, binary, any other changed line).
  */
-export type ChangeKind = 'none' | 'paths' | 'content';
+export type ChangeKind = 'none' | 'paths' | 'names' | 'content';
+/** Why a domain is kept: the diff requires it, or prudence keeps it (an unclassified file, a configuration, a term isolated). */
+export type ReviewBasis = 'diff' | 'prudence';
 export interface PlannedFile {
     path: string;
     /** Former path of a renamed file. */
@@ -30,10 +37,11 @@ export interface PlannedFile {
     status: string;
     change: ChangeKind;
     classes: PathClass[];
-    /** Domains this file keeps, with the reason. */
+    /** Domains this file keeps, with the reason and whether the diff requires them or prudence keeps them. */
     keeps: {
         domain: ReviewDomainName;
         why: string;
+        basis: ReviewBasis;
     }[];
     /** Risk of this file, and why (src/review/risk.ts). */
     risk: RiskLevel;
@@ -48,6 +56,11 @@ export interface DomainDecision {
     files: string[];
     fileCount: number;
     forced: 'config' | 'operator' | null;
+    /**
+     * A retained domain: `diff` when a file requires it (and for securite, and a domain forced by the configuration or the
+     * operator), `prudence` when only prudence keeps it; null for a skipped domain.
+     */
+    basis: ReviewBasis | null;
 }
 export interface ReviewPlan {
     tool: 'apv review plan';
@@ -64,8 +77,11 @@ export interface ReviewPlan {
         files: number;
         renames: number;
         paths: number;
+        names: number;
         content: number;
         neutral: number;
+        notes: number;
+        locks: number;
         unclassified: number;
     };
     /** Risk level of the diff: `faible` keeps at most securite and fidelite (plus what is forced); `eleve` is the plan as before. */
@@ -85,10 +101,18 @@ interface NameStatus {
 }
 /** `git diff --name-status -z -M`: one entry per changed file, the former path of a rename kept. */
 export declare function parseNameStatus(raw: string): NameStatus[];
+/** A hunk header of a `--unified=0` patch: where its lines start and how many, on each side. */
+export interface Hunk {
+    oldStart: number;
+    oldCount: number;
+    newStart: number;
+    newCount: number;
+}
 interface FilePatch {
     binary: boolean;
     removed: string[];
     added: string[];
+    hunks: Hunk[];
 }
 /** Changed lines of each file of a `--unified=0` patch, keyed by the new path (the old one for a deletion). */
 export declare function parsePatch(raw: string): Map<string, FilePatch>;

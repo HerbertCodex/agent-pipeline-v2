@@ -7,7 +7,7 @@ import { type StackProfile } from './profiles.js';
 import { type UsageGraph } from './split.js';
 /** A finding of the comparison with the base (`--base`), or about the architecture map. */
 export interface ChangeFinding {
-    code: 'flat-growth' | 'architecture-map' | 'configuration' | 'coverage';
+    code: 'flat-growth' | 'architecture-map' | 'configuration' | 'coverage' | 'adblock';
     severity: Severity;
     /** Added by the change (never true without base). */
     isNew: boolean;

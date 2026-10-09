@@ -1,3 +1,4 @@
+import { type ReviewDomainName } from '../review/config.js';
 import type { MergeRule } from './config.js';
 /**
  * The operator journal: what the operator typed himself in the session, kept by the UserPromptSubmit hook of the plugin
@@ -59,6 +60,8 @@ export declare const VALIDATES: RegExp;
 export declare const WAIVER_SHA = 12;
 /** Shortest reason after the commit, in characters. */
 export declare const MIN_WAIVER_REASON = 10;
+/** What a waiver names: a rule, or the rule `relecture` for one domain. */
+export type WaiverTarget = MergeRule | `relecture:${ReviewDomainName}`;
 /** One line of the journal: hashes, a few words, waiver lines; never the whole message. */
 export interface JournalEntry {
     v: 2;
@@ -124,15 +127,20 @@ export declare function recordRefusal(common: string, reason: string, now?: Date
  * their hashes, never the text, so a quote cut in the middle of a sentence is not recognised.
  */
 export declare function anchoredQuote(messages: readonly OperatorMessage[], quote: string, key?: Buffer | null): OperatorMessage | null;
-/** The sentence the operator types himself to waive `rule` for `sha` (shown in every refusal). */
-export declare function waiverSentence(rule: MergeRule, sha: string): string;
+/** The sentence the operator types himself to waive `rule` (or the review of one domain) for `sha` (shown in every refusal). */
+export declare function waiverSentence(rule: WaiverTarget, sha: string): string;
 /**
  * The waiver of `rule` for the commit `sha` the operator typed himself, or null: a line « dérogation <règle> <12 premiers
  * caractères du commit au moins> : <raison> ». Never for another commit, never « dérogation » alone, never without a reason.
+ * `relecture:<domaine>` is the waiver of that review only: it never waives the rule `relecture` whole, nor another domain.
  */
-export declare function waiverFor(messages: readonly OperatorMessage[], rule: MergeRule, sha: string): {
+export declare function waiverFor(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): {
     message: OperatorMessage;
     reason: string;
 } | null;
+/** Whether the operator typed a waiver of `rule` for `sha` whose reason is the template of the tool: ignored, said. */
+export declare function templateWaiver(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): boolean;
+/** What a refusal says when the operator quoted the template of the tool instead of a reason. */
+export declare const TEMPLATE_WAIVER_NOTE = "Une d\u00E9rogation tap\u00E9e avec le gabarit de l'outil, ignor\u00E9e : raison \u00E0 \u00E9crire en clair (les mots de l'op\u00E9rateur, pas \u00AB <ta raison> \u00BB).";
 /** Whether the key file exists with no access for group and others. */
 export declare function anchorKeyPrivate(file?: string): boolean;

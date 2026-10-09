@@ -38,6 +38,23 @@ export declare const SERVED_DIR: RegExp;
  * says. Not configurable: a project cannot make its own configuration of low risk.
  */
 export declare const CONFIG_FILES: readonly [".apv/config.json", "pipeline.v2.json", "**/*.config.*", "**/*.conf", "**/.eslintrc*", "**/eslint.config.*", "**/.prettierrc*", "**/prettier.config.*", "**/package.json", "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/tsconfig*.json", "**/.env*", "**/.npmrc", "**/.nvmrc", "**/.node-version", "**/Dockerfile*", "**/docker-compose*", ".github/**"];
+/**
+ * Notes of the pipeline (`notes de pilotage`): the state of the runs, the journal and the specs, in text or JSON. Never a
+ * configuration, whatever their extension says: no domain of their own, their words not read (pilot project, 8 October
+ * 2026: « phone », « e-mail », « supprim » in the prose of a journal kept the data and GDPR reviews). The security review
+ * reads them: the session hook injects `.apv/state/` into every session. A real e-mail address in them still counts.
+ */
+export declare const PILOT_NOTES: readonly [".apv/state/**", ".apv/journal-pipeline.md", ".apv/specs/**"];
+/** The specs: a note of the pipeline only when added; a spec of the base modified keeps the classification of alpha.20. */
+export declare const SPEC_NOTES = ".apv/specs/**";
+export declare const PILOT_NOTE_EXTENSIONS: RegExp;
+/**
+ * Lockfiles of npm, pnpm and Yarn: changed without their `package.json`, the dependencies move inside the ranges already
+ * reviewed. The security review alone, with the audit of the dependencies (pilot project, 8 October 2026: two tools of
+ * development updated in a lockfile were read by the four reviews, captures included).
+ */
+export declare const LOCK_FILES: readonly ["**/package-lock.json", "**/npm-shrinkwrap.json", "**/pnpm-lock.yaml", "**/yarn.lock"];
+export declare const MANIFEST_FILES: readonly ["**/package.json"];
 /** A real e-mail address (not on a reserved domain) in the lines, or null. */
 export declare function realAddress(lines: readonly string[]): string | null;
 export interface DiffRisk {

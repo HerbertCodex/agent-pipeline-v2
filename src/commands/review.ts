@@ -13,7 +13,8 @@ import { docsOnlyLane, laneLines, planInLane, type DocsOnlyLane } from '../rules
 import { rulesSettings } from '../rules/config.js';
 import { REQUIRED_WEB_GATES } from '../rules/required.js';
 import { anchorKey, readOperatorMessages } from '../rules/operator.js';
-import { resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import { lastQuotaReading, QUOTA_LOG, type QuotaLevel, type QuotaReading } from '../quota/usage.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
 
@@ -41,7 +42,13 @@ validée à l'empreinte de sa décision, un brouillon de maquette, une spec (.ap
 un fichier d'état non exécutable (.apv/state) ou de la documentation *.md hors dossiers servis, aucun domaine
 n'est retenu (securite comprise), sauf ceux que forcent review.always ou --force ; le plan le dit et liste
 les fichiers qui l'ont permise (lane en JSON). Liste fermée, réduite seulement par rules.docsOnly.
---base     la branche de départ (la base de la PR) ; --head : la tête revue (défaut HEAD).
+Relectures proportionnées (docs/REGLES.md) : un renommage pur de classes et d'identifiants (fichiers d'interface,
+de style et de tests seulement, lignes gardées en place, noms renommés un à un avec leurs sélecteurs) ne garde
+pas fidelite ; les notes de pilotage (.apv/state, journal, spec ajoutée) et un verrou de dépendances sans son
+package.json gardent securite seule (un hôte de téléchargement nouveau du verrou est cité) ; les attributs data-*
+et le Markdown de .apv/ ne sont pas lus pour les termes. Chaque domaine retenu dit s'il est exigé par le diff
+ou retenu par prudence (basis) ; au niveau de quota finish_only, le plan le rappelle en tête.
+--base    la branche de départ (la base de la PR) ; --head : la tête revue (défaut HEAD).
 --force    garde un domaine quoi que dise le diff (répétable, ou liste séparée par des virgules).
 --repo     le dépôt (défaut : le dossier courant) ; la configuration (review de .apv/config.json) y est lue.
 Chemins et termes : review.paths (ui, data, migrations, personal, legal, neutral, tooling, server), review.terms (data,
@@ -86,12 +93,36 @@ function forced(values: string[] | undefined): ReviewDomainName[] {
   return out;
 }
 
-function text(plan: ReviewPlan & { lane: DocsOnlyLane }): string {
+/** What the plan says of the quota: the last reading of `apv quota`, and the notice at the levels finish only and save now. */
+export interface PlanQuota { level: QuotaLevel; at: string; percent: number | null; notice: string | null }
+
+const QUOTA_NOTICE: Partial<Record<QuotaLevel, string>> = {
+  finish_only: 'Quota au niveau finir seulement : les relectures par prudence attendent l\'accord de l\'opérateur',
+  save_now: 'Quota au niveau sauvegarder maintenant : les relectures par prudence attendent l\'accord de l\'opérateur',
+};
+
+/**
+ * The latest reading of `apv quota` (`.apv/state/quota.log`) in the checkout and in the main checkout of the repository
+ * (the journal is not versioned: a worktree has its own, or none), or null when none was taken.
+ */
+function planQuota(repo: string, common: string): PlanQuota | null {
+  const places = [repo, ...(basename(common) === '.git' ? [dirname(common)] : [])];
+  const readings = places.map(p => lastQuotaReading(join(p, QUOTA_LOG))).filter((r): r is QuotaReading => r !== null);
+  const last = readings.sort((a, b) => b.at.localeCompare(a.at))[0];
+  if (!last) return null;
+  const notice = QUOTA_NOTICE[last.level];
+  return { level: last.level, at: last.at, percent: last.percent, notice: notice ? `${notice} (relevé du ${last.at.slice(0, 16).replace('T', ' ')}, ${last.percent ?? '?'} %).` : null };
+}
+
+const BASIS_LABEL = { diff: 'exigée par le diff', prudence: 'par prudence' } as const;
+
+function text(plan: ReviewPlan & { lane: DocsOnlyLane; quota: PlanQuota | null }): string {
   const c = plan.counts;
   const lines = [
+    ...(plan.quota?.notice ? [plan.quota.notice] : []),
     `Plan des revues : ${plan.base.ref} (${plan.mergeBase.slice(0, 12)}, base commune) à ${plan.head.ref} (${plan.head.sha.slice(0, 12)})`,
     ...laneLines(plan.lane),
-    `${c.files} fichier(s) : ${c.renames} renommage(s) pur(s), ${c.paths} aux seuls chemins réécrits (imports, références, mise en forme), ${c.content} au contenu changé (dont ${c.neutral} tests, documentation ou outillage, ${c.unclassified} non classé(s) ou plus fort(s) que tests et outillage)`,
+    `${c.files} fichier(s) : ${c.renames} renommage(s) pur(s), ${c.paths} aux seuls chemins réécrits (imports, références, mise en forme), ${c.names} aux seuls noms de classes ou d'identifiants renommés, ${c.content} au contenu changé (dont ${c.neutral} tests, documentation ou outillage, ${c.notes} notes de pilotage, ${c.locks} verrou(s) de dépendances, ${c.unclassified} non classé(s) ou plus fort(s) que tests et outillage)`,
     `Risque : ${RISK_LABEL[plan.risk.level]} : ${plan.risk.reason}`,
     ...plan.risk.files.slice(0, 10).map(f => `    ${f.path} : ${f.why}`),
     ...(plan.risk.fileCount > 10 ? [`    (et ${plan.risk.fileCount - 10} autres)`] : []),
@@ -99,7 +130,10 @@ function text(plan: ReviewPlan & { lane: DocsOnlyLane }): string {
     'Domaines retenus :',
   ];
   const files = (d: ReviewPlan['domains'][number]): string => d.files.length ? `\n    ${d.files.join(', ')}${d.fileCount > d.files.length ? ` (et ${d.fileCount - d.files.length} autres)` : ''}` : '';
-  for (const d of plan.domains.filter(x => x.decision === 'retained')) lines.push(`  ${d.domain} : ${d.reason}${files(d)}`);
+  // The security review is always kept: no basis said for it.
+  for (const d of plan.domains.filter(x => x.decision === 'retained')) {
+    lines.push(`  ${d.domain}${d.domain === ALWAYS_REVIEWED || !d.basis ? '' : ` (${BASIS_LABEL[d.basis]})`} : ${d.reason}${files(d)}`);
+  }
   const skipped = plan.domains.filter(x => x.decision === 'skipped');
   lines.push('', skipped.length ? 'Domaines sautés :' : 'Domaines sautés : aucun');
   for (const d of skipped) lines.push(`  ${d.domain} : ${d.reason}`);
@@ -170,7 +204,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const anchor = anchorKey(common);
     const lane = await docsOnlyLane({ repo, mergeBase: raw.mergeBase, head: raw.head.sha, plan: raw, designDir: dir, sensitive,
       settings: rulesSettings(config.rules, REQUIRED_WEB_GATES).docsOnly, messages: readOperatorMessages(common, anchor.key), key: anchor.key });
-    const plan = planInLane(raw, lane, { always: settings.always, operator: force });
+    const plan = { ...planInLane(raw, lane, { always: settings.always, operator: force }), quota: planQuota(repo, common) };
     if (values.json) json(io, plan);
     else io.stdout(text(plan));
     return EXIT.ok;

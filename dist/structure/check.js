@@ -5,7 +5,8 @@ import { Git } from '../execution/git.js';
 import { loadConfigAtCommit } from '../config/load.js';
 import { buildCodeMap } from '../knowledge/code-map.js';
 import { GENERATED_PATHS, globMatcher, mapSettings, reuseSettings } from '../reuse/config.js';
-import { collectChanges, readWorktree, resolveBase } from '../reuse/changes.js';
+import { collectChanges, isAdded, readWorktree, resolveBase } from '../reuse/changes.js';
+import { ADBLOCK_FILES, ADBLOCK_MESSAGE, adBlockedNames } from './adblock.js';
 import { designDir } from '../design/config.js';
 import { environment } from '../execution/process.js';
 import { analyzeStructure } from './analyze.js';
@@ -209,6 +210,20 @@ export async function checkStructure(repo, config, options = {}) {
                         : core ? 'fichier que le dossier importe beaucoup : le ranger d\'abord avec l\'opérateur (apv structure check --path) plutôt que d\'alourdir la racine'
                             : `aucun groupe nommé ne s'impose : le placer dans un sous-dossier de fonctionnalité (apv structure check --path ${dir} donne le découpage proposé), décidé avec l'opérateur`;
             out.push({ code: 'flat-growth', severity, isNew: true, blocking: severity === 'error', path, message: `fichier de code ajouté à un dossier à plat : ${size} ; ${where}.` });
+        }
+    }
+    // Names hidden by the generic ad filters (src/structure/adblock.ts), in every file of interface of the tree: with a
+    // base, a name on a line the change adds blocks, any other (a file the change does not touch included) is said;
+    // without base, every name is said, nothing blocks.
+    for (const path of files) {
+        if (!ADBLOCK_FILES.test(path) || settings.ignore.some(re => re.test(path)) || !(!options.paths?.length || options.paths.some(p => inside(path, p))))
+            continue;
+        const text = readWorktree(repo, path);
+        if (text === null)
+            continue;
+        for (const hit of adBlockedNames(text, path)) {
+            const isNew = !!changes && isAdded(changes, path, hit.line);
+            out.push({ code: 'adblock', severity: isNew ? 'error' : 'warning', isNew, blocking: isNew, path: `${path}:${hit.line}`, message: `${hit.kind} « ${hit.name} » : ${ADBLOCK_MESSAGE}.` });
         }
     }
     // Architecture map.

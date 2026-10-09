@@ -248,6 +248,81 @@ test('waiver: only the operator lifts a refusal, in his own words, for this comm
   assert.match(human.stdout, /Règles respectées\./);
 });
 
+test('waiver by domain: « dérogation relecture:<domaine> » lifts the rule for that domain only, the others recorded', async t => {
+  // Server code: the plan keeps every domain. Security recorded, the three others waived one by one by the operator.
+  const p = project(t, { change: { 'src/server/api.ts': 'export const x = 1;\n' } });
+  await p.prove();
+  seedReview(p.repo, p.head, 'securite');
+  const sha = p.head.slice(0, 12);
+  operatorSays(p.repo, [`dérogation relecture:fidelite ${sha} : aucun écran dans ce dépôt`, `dérogation relecture:donnees ${sha} : aucune requête ni migration`].join('\n'));
+  // A domain waiver for another commit, or without reason, counts for nothing.
+  operatorSays(p.repo, `dérogation relecture:rgpd ${'0'.repeat(12)} : aucune donnée personnelle`);
+  operatorSays(p.repo, `dérogation relecture:rgpd ${sha}`);
+  let report = (await p.check()).report;
+  let r = rule(report, 'relecture');
+  assert.equal(r.status, 'refused', JSON.stringify(r));
+  assert.deepEqual(r.problems, [`rgpd : aucune relecture enregistrée à ${sha}`]);
+  assert.match(r.todo.join('\n'), new RegExp(`dérogation relecture:rgpd ${sha} : <ta raison>`));
+  assert.deepEqual(r.domains.map(d => [d.domain, d.status]), [['securite', 'recorded'], ['fidelite', 'waived'], ['donnees', 'waived'], ['rgpd', 'missing']]);
+  let human = (await apv(p.repo, ['rules', 'check', '--commit', p.head, '--target', 'origin/main'])).stdout;
+  assert.match(human, / {4}securite : relecture enregistrée/);
+  assert.match(human, / {4}fidelite : dérogation \(aucun écran dans ce dépôt\)/);
+  assert.match(human, / {4}rgpd : manquante/);
+  operatorSays(p.repo, `dérogation relecture:rgpd ${sha} : aucune donnée personnelle touchée`);
+  const ok = await p.check();
+  r = rule(ok.report, 'relecture');
+  assert.equal(ok.code, 0, JSON.stringify(ok.report.rules, null, 1));
+  assert.equal(r.status, 'waived');
+  assert.deepEqual(r.domains.map(d => [d.domain, d.status]), [['securite', 'recorded'], ['fidelite', 'waived'], ['donnees', 'waived'], ['rgpd', 'waived']]);
+  assert.match(r.waiver.reason, /rgpd : aucune donnée personnelle touchée/);
+  // A domain waiver never lifts the rule for another domain, nor the whole rule: without the security record, refused.
+  const q = project(t, { change: { 'src/server/api.ts': 'export const y = 2;\n' } });
+  await q.prove();
+  const qsha = q.head.slice(0, 12);
+  operatorSays(q.repo, ['fidelite', 'donnees', 'rgpd'].map(d => `dérogation relecture:${d} ${qsha} : relu par l'opérateur lui-même`).join('\n'));
+  report = (await q.check()).report;
+  assert.equal(rule(report, 'relecture').status, 'refused');
+  assert.deepEqual(rule(report, 'relecture').problems, [`securite : aucune relecture enregistrée à ${qsha}`]);
+  // The security review waived by its domain: accepted, and said in clear.
+  operatorSays(q.repo, `dérogation relecture:securite ${qsha} : correctif urgent relu par l'opérateur`);
+  const waived = await q.check();
+  assert.equal(waived.code, 0, JSON.stringify(waived.report.rules, null, 1));
+  assert.equal(rule(waived.report, 'relecture').domains[0].status, 'waived');
+  human = (await apv(q.repo, ['rules', 'check', '--commit', q.head, '--target', 'origin/main'])).stdout;
+  assert.match(human, / {4}securite : dérogation sur la sécurité \(correctif urgent relu par l'opérateur\)/);
+});
+
+test('waiver by domain: the journal keeps the line with its domain, never an unknown domain', () => {
+  const sha = 'abcdef0123456789'.repeat(3).slice(0, 40);
+  const entry = journalEntry(`Bonjour\ndérogation relecture:rgpd ${sha.slice(0, 12)} : aucune donnée personnelle\ndérogation relecture:perf ${sha.slice(0, 12)} : rien du tout ici`, { at: 't', session: 's' }, TEST_KEY);
+  assert.deepEqual(entry.waivers, [`dérogation relecture:rgpd ${sha.slice(0, 12)} : aucune donnée personnelle`]);
+  assert.ok(waiverFor([entry], 'relecture:rgpd', sha));
+  assert.equal(waiverFor([entry], 'relecture', sha), null, 'a domain waiver is not a waiver of the rule');
+  assert.equal(waiverFor([entry], 'relecture:fidelite', sha), null);
+});
+
+test('review of PR #128, F3: the template of the tool quoted by the operator is no waiver: « raison à écrire en clair »', async t => {
+  const sha = 'abcdef0123456789'.repeat(3).slice(0, 40);
+  const said = text => journalEntry(text, { at: 't', session: 's' }, TEST_KEY);
+  for (const line of [
+    `l'outil m'affiche « dérogation relecture:securite ${sha.slice(0, 12)} : <ta raison> », c'est quoi ?`,
+    `dérogation relecture:securite ${sha.slice(0, 12)} : <ta raison>`,
+    `dérogation relecture:securite ${sha.slice(0, 12)} : ta raison.`,
+    `dérogation relecture:securite ${sha.slice(0, 12)} : Raison`,
+    // Variants of the template (second review of PR #128).
+    ...['< ta raison >', '« ta raison »', '"ta raison"', '[ta raison]', '‹ta raison›', 'TA RAISON', '<votre raison ici>']
+      .map(reason => `dérogation relecture:securite ${sha.slice(0, 12)} : ${reason}`),
+  ]) assert.equal(waiverFor([said(line)], 'relecture:securite', sha), null, line);
+  assert.ok(waiverFor([said(`dérogation relecture:securite ${sha.slice(0, 12)} : correctif relu par l'opérateur lui-même`)], 'relecture:securite', sha), 'a reason written in clear counts');
+  // In the rules: the refusal stays, and says why the line did not count.
+  const p = project(t, { change: { 'notes.txt': 'x\n' } });
+  await p.prove();
+  operatorSays(p.repo, `dérogation relecture ${p.head.slice(0, 12)} : <ta raison>`);
+  const r = rule((await p.check()).report, 'relecture');
+  assert.equal(r.status, 'refused');
+  assert.match(r.todo.join('\n'), /dérogation tapée avec le gabarit de l'outil, ignorée : raison à écrire en clair/);
+});
+
 test('operator journal: quotes and waivers are compared without typography, never a short quote', () => {
   const said = text => journalEntry(text, { at: 't', session: 's' }, TEST_KEY);
   const messages = [said('Je valide la maquette\u00a0: on part là-dessus'), said('ok')];

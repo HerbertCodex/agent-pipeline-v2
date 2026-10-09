@@ -24,7 +24,9 @@ Chaque constat a sa proposition ; le plan de rangement (ancien -> nouveau) n'est
 de la base : un fichier de code ajouté à un dossier à plat (ou qui en fait un) bloque (flat-growth), avec le
 sous-dossier où le mettre ; un dossier de premier ou deuxième niveau, une route principale ou un point
 d'entrée ajouté sans rôle dans la carte de l'architecture, ou un lien de la carte cassé, bloque
-(architecture-map). L'existant est signalé sans bloquer ; un déplacement qui vide un dossier à plat dans ses
+(architecture-map). Dans un fichier d'interface, une classe ou un identifiant ajouté nommé ad, ads, adsbygoogle,
+ou qui commence par ad-, ads-, adv-, ad_, advert, banner-ad ou sponsor bloque, avec fichier et ligne (adblock : masqué par les filtres anti-pub du
+poste de l'opérateur). L'existant est signalé sans bloquer ; un déplacement qui vide un dossier à plat dans ses
 sous-dossiers est accepté. Sans --base, rien n'est comparé : fichiers suivis seulement, carte signalée sans
 bloquer. --path limite l'analyse à un dossier et à ses sous-dossiers ; répétable. --all liste tous les
 constats existants de la carte (par défaut : 10).
@@ -41,7 +43,7 @@ const short = (dir, path) => (dir === '.' ? path : path.slice(dir.length + 1));
 export async function trackedFiles(git, repo) {
     return (await git.exec(repo, ['ls-files', '--cached', '--deduplicate', '-z'])).split('\0').filter(Boolean);
 }
-const CODE_LABEL = { 'flat-growth': 'dossier à plat alourdi', 'architecture-map': 'carte de l\'architecture', configuration: 'configuration', coverage: 'hors du contrôle' };
+const CODE_LABEL = { 'flat-growth': 'dossier à plat alourdi', 'architecture-map': 'carte de l\'architecture', configuration: 'configuration', coverage: 'hors du contrôle', adblock: 'nom masqué par les anti-pub' };
 const EXISTING_SHOWN = 10;
 /** Labels of the conventions a group follows, with their documentation. */
 function conventions(profile, ids) {
@@ -111,7 +113,7 @@ export function formatReport(report, scope, all = false) {
             lines.push(`  ${c.blocking ? '[bloquant] ' : ''}${CODE_LABEL[c.code]} : ${c.path} : ${c.message}`);
         const existing = report.changes.filter(x => !x.isNew);
         for (const c of all ? existing : existing.slice(0, EXISTING_SHOWN))
-            lines.push(`  [existant] ${CODE_LABEL[c.code]} : ${c.message}`);
+            lines.push(`  [existant] ${CODE_LABEL[c.code]} : ${c.code === 'adblock' ? `${c.path} : ` : ''}${c.message}`);
         if (!all && existing.length > EXISTING_SHOWN)
             lines.push(`  et ${existing.length - EXISTING_SHOWN} autre(s) existant(s) (--all pour tout lister).`);
     }
@@ -122,6 +124,8 @@ export function formatReport(report, scope, all = false) {
             advice.push('placer chaque fichier dans le sous-dossier proposé (ou ranger le dossier d\'abord, avec l\'opérateur)');
         if (report.changes?.some(c => c.blocking && c.code === 'architecture-map'))
             advice.push('décrire chaque nouveau dossier, route principale ou point d\'entrée dans le bloc « Rôles » de la carte de l\'architecture, et réparer ses liens');
+        if (report.changes?.some(c => c.blocking && c.code === 'adblock'))
+            advice.push('renommer chaque classe ou identifiant masqué par les filtres anti-pub (art-, item-...)');
         if (report.findings.some(f => f.blocking))
             advice.push('suivre la proposition des constats de gravité error');
         lines.push('', `Résultat : ÉCHEC, ${blocking} constat(s) bloquant(s) : ${[...advice, 'jamais relever le seuil ni baisser la gravité dans le changement'].join(' ; ')}.`);
