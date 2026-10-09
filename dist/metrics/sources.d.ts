@@ -13,13 +13,17 @@ export interface FoundState {
     state: RunState;
     source: string;
 }
+/** Most execution states read and kept (the most recent ones): a branch fetched from elsewhere cannot make the measure unbounded. */
+export declare const MAX_RUN_STATES = 50;
 /**
  * Every execution state the repository holds, one per spec id, the most recent copy of each: the `.apv/state/run-*.json`
- * of each worktree, then the versions committed on any branch. An unreadable copy is skipped and named in `skipped`.
+ * of each worktree, then the versions committed on any branch. An unreadable copy is skipped and named in `skipped`; the
+ * cap of MAX_RUN_STATES states and a copy dated in the future are named in `warnings`.
  */
 export declare function findRunStates(repo: string, only?: string): {
     states: Map<string, FoundState>;
     skipped: string[];
+    warnings: string[];
 };
 /** The Git common directory of `repo`, absolute; null outside a repository. */
 export declare function commonDirOf(repo: string): string | null;

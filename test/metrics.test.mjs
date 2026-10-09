@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
@@ -283,4 +284,117 @@ test('metrics: apv status shows the last three measures', async t => {
   assert.match(r.stdout, /^Mesure \(apv metrics run\) : demo 4 h 00 min jusqu'à la livraison, chemin critique 1 h 30 min$/m);
   const j = await apv(p.repo, ['status', '--json'], { APV_GH: join(p.root, 'pas-de-gh') });
   assert.equal(j.json().metrics[0].specId, 'demo');
+});
+
+// Review of pull request #123 (security): reads fetch nothing, states and calls are bounded, errors are cleaned, a future date is ignored.
+
+/** Objects the repository knows by name but does not hold (what a partial clone leaves to a later fetch). */
+const missingObjects = repo => execFileSync('git', ['rev-list', '--objects', '--all', '--missing=print'],
+  { cwd: repo, encoding: 'utf8', env: { ...process.env, GIT_NO_LAZY_FETCH: '1' } }).split('\n').filter(l => l.startsWith('?')).length;
+
+test('metrics: a partial clone gets nothing fetched and nothing written, by apv metrics run --offline and by apv status', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'apv3-metrics-partial-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const origin = join(root, 'origin');
+  mkdirSync(origin);
+  git(origin, 'init', '-q', '-b', 'main');
+  git(origin, 'config', 'uploadpack.allowFilter', 'true');
+  let s = demoState('demo', sha(9));
+  for (const [step, status, minute] of [['data-model', 'running', 1], ['data-model', 'done', 10], ['plan', 'running', 11]]) {
+    s = set(s, step, status, minute);
+    writeRunState(join(origin, '.apv/state/run-demo.json'), s);
+    git(origin, 'add', '.'); git(origin, 'commit', '-qm', `état ${step} ${status}`);
+  }
+  const clone = join(root, 'clone');
+  git(root, 'clone', '-q', '--no-local', '--filter=blob:none', `file://${origin}`, clone);
+  const before = missingObjects(clone);
+  assert.ok(before >= 2, `the older states are missing from the partial clone (${before})`);
+  const run = await apv(clone, ['metrics', 'run', '--offline']);
+  assert.equal(run.code, 0, run.stderr);
+  assert.equal(missingObjects(clone), before, 'apv metrics run --offline fetched objects');
+  const status = await apv(clone, ['status']);
+  assert.equal(status.code, 0, status.stderr);
+  assert.equal(missingObjects(clone), before, 'apv status fetched objects');
+});
+
+/** A repository whose branch `forged` holds `older` states in a first commit and `newer` in a second; the work tree stays on main. */
+function manyStates(t, older, newer) {
+  const root = mkdtempSync(join(tmpdir(), 'apv3-metrics-many-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const repo = join(root, 'repo');
+  mkdirSync(repo);
+  git(repo, 'init', '-q', '-b', 'main');
+  writeFileSync(join(repo, 'README.md'), '# Démo\n');
+  git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'base');
+  git(repo, 'switch', '-q', '-c', 'forged');
+  const put = (prefix, count, from) => {
+    for (let i = 0; i < count; i++) {
+      const state = createRunState({ specId: `${prefix}${i}`, specFile: `.apv/specs/${prefix}${i}.json`, specSha256: 'a'.repeat(64), base: 'main', baseSha: sha(9),
+        tasks: [{ id: 'F', title: 'F', dependsOn: [] }], now: at(from + i) });
+      writeRunState(join(repo, `.apv/state/run-${prefix}${i}.json`), state);
+    }
+    git(repo, 'add', '.'); git(repo, 'commit', '-qm', `états ${prefix}`);
+  };
+  put('old', older, 0);
+  put('new', newer, 1000);
+  git(repo, 'switch', '-q', 'main');
+  return { root, repo };
+}
+
+/** A `gh` that answers an empty list after a pause and logs how many `gh` run at that moment. */
+function slowGh(root) {
+  const file = join(root, 'gh-slow.mjs');
+  const running = join(root, 'gh-running');
+  const log = join(root, 'gh-log.txt');
+  mkdirSync(running);
+  writeFileSync(file, `#!/usr/bin/env node
+import { appendFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
+const mark = ${JSON.stringify(running)} + '/' + process.pid;
+writeFileSync(mark, '');
+appendFileSync(${JSON.stringify(log)}, readdirSync(${JSON.stringify(running)}).length + '\\n');
+setTimeout(() => { unlinkSync(mark); process.stdout.write('[]'); }, 150);
+`);
+  chmodSync(file, 0o755);
+  return { file, calls: () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map(Number) : []) };
+}
+
+test('metrics: 120 states in the history keep the 50 most recent, say so, and gh runs at most 4 at a time', async t => {
+  const { root, repo } = manyStates(t, 70, 50);
+  const gh = slowGh(root);
+  const r = await apv(repo, ['metrics', 'run', '--json'], { APV_GH: gh.file });
+  assert.equal(r.code, 0, r.stderr);
+  const ids = r.json().runs.map(m => m.specId);
+  assert.equal(ids.length, 50, 'capped at 50 states');
+  assert.ok(ids.every(id => id.startsWith('new')), 'the most recent states are the ones kept');
+  assert.ok(r.json().warnings.some(w => /plafond de 50 /.test(w)), JSON.stringify(r.json().warnings));
+  const seen = gh.calls();
+  assert.ok(seen.length >= 50, `gh was called ${seen.length} times`);
+  assert.ok(Math.max(...seen) <= 4, `at most 4 gh at a time, saw ${Math.max(...seen)}`);
+  assert.ok(Math.max(...seen) > 1, 'the calls still overlap');
+  const text = await apv(repo, ['metrics', 'run', '--offline']);
+  assert.match(text.stdout, /Attention : .*plafond de 50 /);
+});
+
+test('metrics: the name of an unreadable state file leaves no escape sequence in the error', async t => {
+  const p = pilot(t);
+  mkdirSync(join(p.repo, '.apv/state'), { recursive: true });
+  writeFileSync(join(p.repo, '.apv/state/run-x\u001b]0;PWNED\u0007\u001b[31mRED.json'), '{');
+  const r = await apv(p.repo, ['metrics', 'run', 'absente', '--offline']);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /METRICS_RUN_MISSING/);
+  assert.match(r.stderr, /illisibles/, 'the unreadable file is still named');
+  assert.doesNotMatch(r.stderr, /[\u0000-\u0008\u000b-\u001f\u007f]/);
+});
+
+test('metrics: a state dated far in the future does not replace the real one', async t => {
+  const p = pilot(t);
+  git(p.repo, 'switch', '-q', '-c', 'forged', 'apv/demo');
+  writeRunState(join(p.repo, '.apv/state/run-demo.json'), { ...demoState('demo', p.base), updatedAt: '2999-01-01T00:00:00.000Z' });
+  git(p.repo, 'add', '.'); git(p.repo, 'commit', '-qm', 'état daté de 2999');
+  git(p.repo, 'switch', '-q', 'main');
+  const r = await apv(p.repo, ['metrics', 'run', 'demo', '--offline', '--json']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.json().run.source, /run-demo\/\.apv\/state\/run-demo\.json$/, 'the copy of the worktree still wins');
+  assert.equal(r.json().run.end.kind, 'delivery');
+  assert.ok(r.json().warnings.some(w => /futur/.test(w)), JSON.stringify(r.json().warnings));
 });

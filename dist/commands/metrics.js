@@ -25,6 +25,7 @@ exécutions fusionnées avant celle-ci. Sans <id> : toutes les exécutions trouv
 La PR vient de la note de livraison (adresse .../pull/<n> ou « PR #<n> »), sinon de la branche de la spec (gh pr list) ;
 sa fusion de gh pr view, sinon de la trace signée de apv stack merge, sinon de .apv/state/stack.log.
 --offline : aucun appel gh (traces de fusion et stack.log seulement).
+Bornes : 50 états au plus (les plus récents, plafond signalé), 4 appels gh à la fois ; un état daté du futur est ignoré.
 
 prs [<n>...] : chaque PR (défaut : celles fusionnées depuis --since, 30 jours par défaut) : ouverte, prête (la plus
 tardive de son ouverture et de son dernier commit), première tentative de fusion (stack.log), fusionnée ; prête à
@@ -34,6 +35,19 @@ Les objectifs de la section 11 (30 min, 40 min) sont à vérifier sur ces chiffr
 Sortie : 0 mesuré, 1 exécution ou PR introuvable ou illisible, 2 appel incorrect.`;
 const when = (iso) => iso ? localTime(iso) : '?';
 const END_LABEL = { merge: "jusqu'à la fusion", delivery: "jusqu'à la livraison (fusion inconnue)", 'last-event': "jusqu'au dernier événement (pas encore livrée)" };
+/** Executions measured at once, hence `gh` calls at once (each measure makes its calls one after the other). */
+const MEASURE_CONCURRENCY = 4;
+/** `fn` over `items`, at most `limit` at a time, results in the order of `items`. */
+async function mapLimit(items, limit, fn) {
+    const out = new Array(items.length);
+    let next = 0;
+    const slot = async () => { while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i]);
+    } };
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, slot));
+    return out;
+}
 async function measure(ctx, found) {
     const commits = runCommits(ctx.repo, found.state);
     const pr = await pullRequestEnd({ gh: ctx.gh, common: ctx.common, state: found.state, named: deliveredPullRequest(found.state), stack: ctx.stack });
@@ -79,19 +93,22 @@ async function runCommand(io, repo, id, offline, asJson) {
     if (id !== undefined && !RUN_ID.test(id))
         throw new UsageError(`identifiant d'exécution invalide : ${id}`);
     const common = commonDirOf(repo);
-    const { states, skipped } = findRunStates(repo);
+    const { states, skipped, warnings } = findRunStates(repo);
     if (id !== undefined && !states.has(id)) {
-        throw new PipelineError('METRICS_RUN_MISSING', `Aucun état d'exécution ${id} dans les worktrees ni dans l'historique du dépôt${skipped.length ? ` (illisibles : ${skipped.join(' ; ')})` : ''}`);
+        const details = [...(skipped.length ? [`illisibles : ${skipped.join(' ; ')}`] : []), ...warnings];
+        // Names of files and branches come from the repository: no control character reaches the terminal.
+        throw new PipelineError('METRICS_RUN_MISSING', cleanLine(`Aucun état d'exécution ${id} dans les worktrees ni dans l'historique du dépôt${details.length ? ` (${details.join(' ; ')})` : ''}`, 1000));
     }
     const ctx = { repo, common, gh: offline ? null : processGh(io.env['APV_GH'] || 'gh', io.env, repo), stack: stackEvents(repo), runs: storedRuns(common) };
-    const all = (await Promise.all([...states.values()].map(f => measure(ctx, f)))).sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+    const all = (await mapLimit([...states.values()], MEASURE_CONCURRENCY, f => measure(ctx, f))).sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
     const target = id !== undefined ? all.find(m => m.specId === id) : undefined;
     const base = runBaseline(all, target);
     if (asJson) {
-        json(io, target ? { run: target, baseline: base, skipped } : { runs: all, baseline: base, skipped });
+        json(io, target ? { run: target, baseline: base, skipped, warnings } : { runs: all, baseline: base, skipped, warnings });
         return EXIT.ok;
     }
     const lines = target ? runLines(target, base) : listLines(all, base);
+    lines.push(...warnings.map(w => cleanLine(`Attention : ${w}`, 400)));
     if (skipped.length)
         lines.push(...skipped.map(s => cleanLine(`Copie illisible ignorée : ${s}`, 400)));
     io.stdout(`${lines.join('\n')}\n`);

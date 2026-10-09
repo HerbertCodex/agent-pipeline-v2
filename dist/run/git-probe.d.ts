@@ -1,5 +1,9 @@
 import type { GitProbe } from './state.js';
-/** Read-only Git call; null when Git refuses (unknown ref, not a repository). */
+/**
+ * Read-only Git call; null when Git refuses (unknown ref, not a repository). `GIT_NO_LAZY_FETCH` keeps a partial clone from
+ * fetching a missing object from its remote: a read never touches the network nor writes into the repository, the object
+ * is then simply unreadable.
+ */
 export declare function gitRead(cwd: string, args: string[]): string | null;
 /** Root of the working tree that contains `path`; refuses outside a Git repository (exit 1). */
 export declare function gitRoot(path: string): string;

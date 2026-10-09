@@ -35,14 +35,23 @@ const newer = (a: FoundState, b: FoundState): FoundState => {
 /** Most commits read from the history for one state file: its last versions are enough. */
 const HISTORY_VERSIONS = 3;
 
+/** Most execution states read and kept (the most recent ones): a branch fetched from elsewhere cannot make the measure unbounded. */
+export const MAX_RUN_STATES = 50;
+
+/** A state updated later than now plus this is a forged or misdated copy: it is ignored. */
+const FUTURE_SLACK_MS = 5 * 60_000;
+
 /**
  * Every execution state the repository holds, one per spec id, the most recent copy of each: the `.apv/state/run-*.json`
- * of each worktree, then the versions committed on any branch. An unreadable copy is skipped and named in `skipped`.
+ * of each worktree, then the versions committed on any branch. An unreadable copy is skipped and named in `skipped`; the
+ * cap of MAX_RUN_STATES states and a copy dated in the future are named in `warnings`.
  */
-export function findRunStates(repo: string, only?: string): { states: Map<string, FoundState>; skipped: string[] } {
+export function findRunStates(repo: string, only?: string): { states: Map<string, FoundState>; skipped: string[]; warnings: string[] } {
   const states = new Map<string, FoundState>();
   const skipped: string[] = [];
+  const warnings: string[] = [];
   const keep = (found: FoundState): void => {
+    if (Date.parse(found.state.updatedAt) > Date.now() + FUTURE_SLACK_MS) { warnings.push(`${found.source} : date de mise à jour dans le futur, copie ignorée`); return; }
     const current = states.get(found.state.specId);
     states.set(found.state.specId, current ? newer(current, found) : found);
   };
@@ -57,11 +66,14 @@ export function findRunStates(repo: string, only?: string): { states: Map<string
   const pattern = only ? `${RUN_STATE_DIR}/run-${only}.json` : `${RUN_STATE_DIR}/run-*.json`;
   const log = gitRead(repo, ['log', '--all', '--format=%x1e%H', '--name-only', '--diff-filter=AM', '--', pattern]) ?? '';
   const versions = new Map<string, string[]>();
+  const beyondCap = new Set<string>();
   for (const block of log.split('\x1e').slice(1)) {
     const [sha, ...names] = block.trim().split('\n');
     for (const name of names.map(n => n.trim()).filter(Boolean)) {
       const id = /^\.apv\/state\/run-(.+)\.json$/.exec(name)?.[1];
       if (!id || !RUN_ID.test(id)) continue;
+      // The log lists the most recent commits first: the states past the cap are the oldest ones.
+      if (!versions.has(id) && versions.size >= MAX_RUN_STATES) { beyondCap.add(id); continue; }
       const list = versions.get(id) ?? [];
       if (list.length < HISTORY_VERSIONS) versions.set(id, [...list, sha!]);
     }
@@ -76,7 +88,14 @@ export function findRunStates(repo: string, only?: string): { states: Map<string
       catch (error) { skipped.push(`${shown} : ${errorMessage(error).split('\n')[0]}`); }
     }
   }
-  return { states, skipped };
+  let dropped = beyondCap.size;
+  if (states.size > MAX_RUN_STATES) {
+    const oldest = [...states.values()].sort((a, b) => Date.parse(b.state.updatedAt) - Date.parse(a.state.updatedAt)).slice(MAX_RUN_STATES);
+    for (const f of oldest) states.delete(f.state.specId);
+    dropped += oldest.length;
+  }
+  if (dropped) warnings.push(`plafond de ${MAX_RUN_STATES} états atteint : ${dropped} état(s) plus ancien(s) non pris en compte`);
+  return { states, skipped, warnings };
 }
 
 /** The Git common directory of `repo`, absolute; null outside a repository. */

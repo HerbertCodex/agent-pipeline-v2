@@ -162,7 +162,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 
 - `pr.ts` : Time measure of one pull request (docs/SHIFT-LEFT.md, section 11): opened, ready, first… Exporte : BASELINE_PRS, PrBaseline, PrCommit, PrData, PrKind, PrMetrics, et 8 autre(s). Utilisé par 2 fichiers (src/commands/metrics.ts, …).
 - `run.ts` : Time measure of one spec execution (docs/SHIFT-LEFT.md, section 11), computed from what… Exporte : BASELINE_RUNS, CriticalPath, MeasureInput, PHASES, PHASE_LABEL, PhaseMeasure, et 17 autre(s). Utilisé par 4 fichiers (src/commands/metrics.ts, …).
-- `sources.ts` : Sources of 'apv metrics', read only: nothing is written, fetched or locked. Exporte : FoundState, PR_FIELDS, STATUS_RUNS, StoredRun, commonDirOf(), findRunStates(), et 14 autre(s). Utilisé par 2 fichiers (src/commands/metrics.ts, …).
+- `sources.ts` : Sources of 'apv metrics', read only: nothing is written, fetched or locked. Exporte : FoundState, MAX_RUN_STATES, PR_FIELDS, STATUS_RUNS, StoredRun, commonDirOf(), et 15 autre(s). Utilisé par 2 fichiers (src/commands/metrics.ts, …).
 
 ### src/onboard
 
