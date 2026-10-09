@@ -132,6 +132,7 @@ export declare const suiteQueueSchema: import("../domain/schema.js").Schema<{
     readonly waitMs: number;
     readonly maxLoad: number | undefined;
     readonly loadWaitMs: number;
+    readonly slots: number | "per-stack";
 }>;
 export type SuiteQueueSettings = Infer<typeof suiteQueueSchema>;
 export declare const suiteSettingsSchema: import("../domain/schema.js").Schema<{
@@ -141,6 +142,7 @@ export declare const suiteSettingsSchema: import("../domain/schema.js").Schema<{
         readonly waitMs: number;
         readonly maxLoad: number | undefined;
         readonly loadWaitMs: number;
+        readonly slots: number | "per-stack";
     } | undefined;
     readonly ports: number[];
 }>;
@@ -338,6 +340,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly waitMs: number;
             readonly maxLoad: number | undefined;
             readonly loadWaitMs: number;
+            readonly slots: number | "per-stack";
         } | undefined;
         readonly ports: number[];
     } | undefined;

@@ -1,6 +1,7 @@
 import type { SuiteQueueSettings } from '../config/load.js';
 import type { Gate } from '../domain/contracts.js';
 import type { Git } from '../execution/git.js';
+import type { ResolvedStack, StackContainer } from '../stacks/idle.js';
 import { type ProcessInfo, type StopOutcome, type StopRefusal } from '../execution/procs.js';
 /**
  * The full suite of `apv gates run` (docs/APV3-SPEC.md, section 17): the machine queue taken before its first check,
@@ -21,12 +22,18 @@ export interface SuiteHooks {
     portsPollMs?: number;
     /** Tests only: the duration the near-timeout warning reads for a check, in place of the measured one (the receipt keeps the measure). */
     durationOf?: (gateId: string, measuredMs: number) => number;
+    /** Tests only: the containers of a stack, in place of `docker ps -a` (read before the checks, and after a check interrupted under its lock). */
+    stackContainers?: (stack: ResolvedStack) => Promise<{
+        containers: StackContainer[];
+    } | {
+        error: string;
+    }>;
 }
 export interface QueueRecord {
     lockFile: string;
-    /** Time spent in the queue before holding its lock. */
+    /** Time spent in the queue before holding its places. */
     waitedMs: number;
-    /** Who held the lock when the run arrived, when it had to wait. */
+    /** Who held a place when the run arrived, when it had to wait. */
     heldBy: string | null;
     /** The load threshold, when `maxLoad` is set. */
     load: {
@@ -35,6 +42,10 @@ export interface QueueRecord {
         waitedMs: number;
         exceeded: boolean;
     } | null;
+    /** `suite.queue.slots` of the run. */
+    slots?: SuiteQueueSettings['slots'];
+    /** The places of the queue held, in the order they were taken: the whole queue, a numbered place, the place of each stack. */
+    places?: string[];
 }
 export interface QueueHandle {
     record: QueueRecord;
@@ -42,10 +53,43 @@ export interface QueueHandle {
 }
 /** A path of the configuration: absolute as is, else relative to the Git common directory of `repo`. */
 export declare function commonPath(git: Git, repo: string, path: string): Promise<string>;
+/** The place of a test stack in the queue `resource`: held by every full suite that uses the stack. */
+export declare const stackPlace: (resource: string, stack: string) => string;
 /**
- * Enters the queue of the full suites: the lease `settings.lockFile` (FIFO of `apv lock`, the same store format), then,
- * lock held, the wait for the 1-minute load to drop under `maxLoad` (at most `loadWaitMs`, then the suite starts anyway,
- * noted). A lock not obtained within `waitMs` is a refusal (`SUITE_QUEUE`), nothing has run.
+ * The place of a copy (a worktree, by its canonical path) in the queue `resource`: held by every full suite run there,
+ * before any other place, so that two suites never run in the same copy (they would share node_modules and the build
+ * folders, and each would stop the servers of the other as orphans of the copy), whatever `slots`.
+ */
+export declare const copyPlace: (resource: string, copy: string) => string;
+/** The numbered place `k` (1 to N) of the queue `resource` with `slots: N`. */
+export declare const slotPlace: (resource: string, k: number) => string;
+/**
+ * What a run takes in the queue (docs/SHIFT-LEFT.md, section 13), always in this order so that two runs never wait for
+ * each other in a cycle: the place of its copy (a full suite, `enterQueue` `copy`), the whole queue, then a numbered
+ * place (or every one, `all`), then the place of each stack, sorted. Every full suite holds the place of each stack it uses: two suites never share a stack, whatever `slots`.
+ * - `slots: 1` (default): the whole queue too, one suite at a time as before;
+ * - `per-stack`: the places of its stacks only; a suite that uses no declared stack takes the whole queue;
+ * - a number N: one of N numbered places, then those of its stacks.
+ * A check whose lock is no declared stack (`unmapped`) might share a stack the tool cannot name: the whole queue and the
+ * place of every declared stack. `all` (a Lighthouse measure, which no suite may run beside): every place.
+ */
+export interface QueuePlaces {
+    whole: boolean;
+    slots: 'none' | 'one' | 'all';
+    stacks: string[];
+}
+export declare function queuePlaces(slots: SuiteQueueSettings['slots'], options: {
+    used: readonly string[];
+    declared: readonly string[];
+    unmapped?: boolean;
+    all?: boolean;
+}): QueuePlaces;
+/**
+ * Enters the queue of the full suites: its places (`queuePlaces`, leases of the `apv lock` store format beside
+ * `settings.lockFile`: FIFO for the whole queue and each stack, the first free for a numbered place), within `waitMs` in
+ * all; then, places held, the wait for the 1-minute load to drop under `maxLoad` (at most `loadWaitMs`, then the suite
+ * starts anyway, noted). A place not obtained in time is a refusal (`SUITE_QUEUE`): the places taken are released,
+ * nothing has run.
  */
 export declare function enterQueue(options: {
     lockFile: string;
@@ -57,6 +101,10 @@ export declare function enterQueue(options: {
     /** Who waits (`apv gates run` by default) and why: shown to the other runs of the queue. */
     label?: string;
     purpose?: string;
+    /** The places to take; absent: the whole queue alone. */
+    places?: QueuePlaces;
+    /** The copy the run works in (a full suite): its place (`copyPlace`) is taken first. */
+    copy?: string;
 }): Promise<QueueHandle>;
 /** Waits for the 1-minute load average to drop under `max`, at most `limitMs`; journaled at most every minute. */
 export declare function waitForLoad(max: number, limitMs: number, log: (line: string) => void, signal?: AbortSignal, hooks?: SuiteHooks, 

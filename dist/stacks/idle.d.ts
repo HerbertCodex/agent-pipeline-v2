@@ -124,3 +124,34 @@ export declare function idlePass(stacks: readonly ResolvedStack[], context: Prob
  * the last check that passed under its lock. Null when the stack is not known to be stopped.
  */
 export declare function stoppedSince(common: string, id: string): string | null;
+/** What `stackHealth` found: every container running, some stopped or gone, none, or nothing readable. */
+export interface StackHealth {
+    state: 'running' | 'degraded' | 'absent' | 'unknown';
+    detail: string;
+    containers: StackContainer[];
+    missing: string[];
+}
+export interface StackContainer {
+    name: string;
+    state: string;
+}
+/** The line format of `docker ps` read for a stack: name, state, then the two project labels. */
+export declare const DOCKER_PS_FORMAT = "{{.Names}}\t{{.State}}\t{{.Label \"com.docker.compose.project\"}}\t{{.Label \"com.supabase.cli.project\"}}";
+/** The containers of `project` in a `docker ps -a --format DOCKER_PS_FORMAT` output: a project label equal to it, or a name ending in `_<project>`. */
+export declare function stackContainers(output: string, project: string): StackContainer[];
+/** The containers of the stack now (`docker ps -a`, bounded, never changed), or why they cannot be read. */
+export declare function readStackContainers(stack: ResolvedStack, repo: string, env: NodeJS.ProcessEnv, timeoutMs?: number): Promise<{
+    containers: StackContainer[];
+} | {
+    error: string;
+}>;
+/**
+ * The state of a stack after a check was interrupted under its lock (a cancelled suite, a timeout: a reset of its
+ * database may have been cut halfway), from its containers now and, when read at the start of the suite, then: a
+ * container gone since (a reset removes and recreates the database container) or not running is said.
+ */
+export declare function judgeStack(now: {
+    containers: StackContainer[];
+} | {
+    error: string;
+}, before: StackContainer[] | null): StackHealth;

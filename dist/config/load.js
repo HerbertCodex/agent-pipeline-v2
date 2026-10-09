@@ -14,6 +14,7 @@ import { gitRead } from '../run/git-probe.js';
 import { reviewAlwaysSchema, reviewPathsSchema, reviewTermsSchema } from '../review/config.js';
 import { stackIssues, stacksSchema } from '../stacks/config.js';
 import { webIssues, webSchema } from '../web/config.js';
+import { runsWebAudit } from '../web/impact.js';
 import { mapSchema, mapSettings, reuseSchema, reuseSettings } from '../reuse/config.js';
 import { rulesSchema, rulesSettings } from '../rules/config.js';
 import { testsCheckSchema } from '../testcheck/check.js';
@@ -115,6 +116,12 @@ export const suiteQueueSchema = s.object({
     waitMs: s.default(s.number(0, 86_400_000), DEFAULT_SUITE_QUEUE.waitMs),
     maxLoad: s.optional(s.finite(0.1, 10_000)),
     loadWaitMs: s.default(s.number(0, 86_400_000), DEFAULT_SUITE_QUEUE.loadWaitMs),
+    /**
+     * Full suites at the same time on the machine (docs/CONFIGURATION.md, « Suite complète »): `1` (default) one at a time,
+     * whatever its stacks; `per-stack` one per test stack, each suite holding the place of every stack it uses; a number
+     * N, at most N at once, each holding the place of its stacks too. Two suites never share a stack.
+     */
+    slots: s.default(s.union(s.number(1, 64), s.literal('per-stack')), 1),
 });
 export const suiteSettingsSchema = s.object({
     queue: s.optional(suiteQueueSchema),
@@ -302,7 +309,7 @@ export function configIssues(raw) {
         if (!scope)
             continue;
         // `apv web audit` decides its own scope (web paths, recomputed by verify): never mixed with skipWhenOnly.
-        const webAudit = [gate.command, gate.affected ?? []].some(argv => argv.some((x, i) => x === 'web' && argv[i + 1] === 'audit'));
+        const webAudit = [gate.command, gate.affected ?? []].some(runsWebAudit);
         list.check(!webAudit, 'CONFIG', `Gate ${gate.id}: skipWhenOnly cannot be declared on a check that runs apv web audit (the audit decides whether it is required from web.paths)`);
         for (const [field, globs] of [['paths', scope.paths], ['except', scope.except ?? []]]) {
             for (const glob of globs)

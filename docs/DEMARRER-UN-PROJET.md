@@ -97,7 +97,7 @@ Source unique, avec la raison de chacune : [REGLES.md](REGLES.md).
 | Captures ordinateur et téléphone, clair et sombre, pour un changement d'interface | vérifiée par l'outil (existence) ; à faire par le chef de projet (les regarder) |
 | Contrôles de base d'un projet web : réutilisation, carte du code, arborescence | vérifiée par l'outil |
 | Maquette validée par l'opérateur avant tout écran nouveau ou changé | vérifiée par l'outil (couverture) ; la validation est à toi |
-| Une seule suite complète à la fois, aucun e2e d'agent pendant une preuve | vérifiée par l'outil |
+| Jamais deux suites complètes sur une même pile ni dans une même copie (une seule à la fois par défaut, `suite.queue.slots`), aucun e2e d'agent sur une pile pendant une preuve qui l'utilise | vérifiée par l'outil (file des suites active) |
 | Alerte quand un contrôle approche de son délai | vérifiée par l'outil |
 | Une validation humaine se lit dans une trace que l'agent ne peut pas écrire | vérifiée par l'outil pour APV ; à faire par le chef de projet pour les fonctionnalités du projet |
 | Toute fusion passe par `apv stack merge` ; aucune poussée directe sur la branche principale | vérifiée par l'outil (crochets, audit des fusions) ; protection de branche sur GitHub à régler par l'opérateur quand son plan l'offre |
