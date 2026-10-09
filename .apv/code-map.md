@@ -2,7 +2,7 @@
 
 Générée par `apv map` à partir des fichiers du dépôt, sans modèle. À lire avant de créer un composant, un module ou une route : réutiliser une entrée existante, ou l'étendre de façon générique (paramètre, variante) ; un élément utilisé par deux fonctionnalités devient partagé. Ne pas modifier à la main : l'intégration la régénère (`apv map`), et le contrôle `apv map --check` de la suite complète échoue quand elle ne correspond plus au code.
 
-Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 166. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 86 test(s), 314 fichier(s) ignoré(s), 5 module(s) sans export ni import.
+Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 168. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 88 test(s), 318 fichier(s) ignoré(s), 5 module(s) sans export ni import.
 
 ## Dossiers
 
@@ -54,7 +54,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `procs.ts` : sans description. Exporte : DEFAULT_GRACE_SECONDS, MAX_GRACE_SECONDS, run(), usage. Utilisé par 1 fichier (src/commands/index.ts).
 - `quota.ts` : How many executions ('/apv:run') may run side by side at each level: as many as free… Exporte : levelText, run(), runQuota(), runsText, usage. Utilisé par 1 fichier (src/commands/index.ts).
 - `reuse.ts` : sans description. Exporte : formatReuse(), run(), usage. Utilisé par 1 fichier (src/commands/index.ts).
-- `review.ts` : sans description. Exporte : run(), usage. Utilisé par 1 fichier (src/commands/index.ts).
+- `review.ts` : sans description. Exporte : PlanQuota, run(), usage. Utilisé par 1 fichier (src/commands/index.ts).
 - `rules.ts` : sans description. Exporte : run(), usage. Utilisé par 1 fichier (src/commands/index.ts).
 - `run.ts` : sans description. Exporte : run(), usage. Utilisé par 1 fichier (src/commands/index.ts).
 - `scope.ts` : Paths of 'git status --porcelain=v1 -z'; a rename or copy entry is followed by its… Exporte : porcelainPaths(), run(), usage. Utilisé par 1 fichier (src/commands/index.ts).
@@ -189,7 +189,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 
 ### src/quota
 
-- `usage.ts` : Journal of readings, one JSON object per line, read back by 'apv status' and the… Exporte : CommandOutcome, QUOTA_COMMAND, QUOTA_LOG, QUOTA_THRESHOLDS, QUOTA_TIMEOUT_MS, QuotaLevel, et 12 autre(s). Utilisé par 2 fichiers (src/commands/quota.ts, …).
+- `usage.ts` : Journal of readings, one JSON object per line, read back by 'apv status' and the… Exporte : CommandOutcome, QUOTA_COMMAND, QUOTA_LOG, QUOTA_THRESHOLDS, QUOTA_TIMEOUT_MS, QuotaLevel, et 12 autre(s). Utilisé par 3 fichiers (src/commands/quota.ts, …).
 
 ### src/reuse
 
@@ -205,21 +205,21 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 
 ### src/review
 
-- `config.ts` : Settings of 'apv review plan' in the 'review' section of '.apv/config.json'… Exporte : ALWAYS_REVIEWED, DEFAULT_REVIEW_PATHS, DEFAULT_REVIEW_TERMS, PATH_CLASSES, PathClass, REVIEW_DOMAINS, et 8 autre(s). Utilisé par 7 fichiers (src/commands/review.ts, …).
+- `config.ts` : Settings of 'apv review plan' in the 'review' section of '.apv/config.json'… Exporte : ALWAYS_REVIEWED, DEFAULT_REVIEW_PATHS, DEFAULT_REVIEW_TERMS, PATH_CLASSES, PathClass, REVIEW_DOMAINS, et 8 autre(s). Utilisé par 8 fichiers (src/commands/review.ts, …).
 - `dast.ts` : 'apv dast run': the dynamic security scan (ZAP or another) that the project declares in… Exporte : DAST_INSTALL, DAST_INSTALL_MARKER, DAST_LOG, DAST_SUMMARY, DastInstall, DastRunOptions, et 11 autre(s). Utilisé par 2 fichiers (src/commands/dast.ts, …).
-- `plan.ts` : 'apv review plan': the review domains proposed from the nature of a diff. Exporte : ChangeKind, DomainDecision, PlanInput, PlannedFile, ReferenceSide, Rename, et 5 autre(s). Utilisé par 4 fichiers (src/commands/review.ts, …).
-- `risk.ts` : Risk level of a diff ('apv review plan', 'apv gates run --since'). Exporte : AGENT_INSTRUCTIONS, CONFIG_FILES, DiffRisk, RISK_LABEL, RISK_LEVELS, ROUTING_DIR, et 7 autre(s). Utilisé par 4 fichiers (src/commands/review.ts, …).
+- `plan.ts` : 'apv review plan': the review domains proposed from the nature of a diff. Exporte : ChangeKind, DomainDecision, PlanInput, PlannedFile, ReferenceSide, Rename, et 6 autre(s). Utilisé par 4 fichiers (src/commands/review.ts, …).
+- `rename.ts` : sans description. Exporte : RenameInput, RenamePair, neutralizeLine(), pureRename(), renamedNames(), selectorPart(). Utilisé par 1 fichier (src/review/plan.ts).
+- `risk.ts` : Risk level of a diff ('apv review plan', 'apv gates run --since'). Exporte : AGENT_INSTRUCTIONS, CONFIG_FILES, DiffRisk, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, et 11 autre(s). Utilisé par 4 fichiers (src/commands/review.ts, …).
 
 ### src/rules
 
 - `anchor-status.ts` : What 'apv status' says of the anchors: the operator journal, the branch protection, the… Exporte : AnchorStatus, anchorLines(), anchorStatus(), journalLines(). Utilisé par 1 fichier (src/commands/status.ts).
-- `check.ts` : What was checked, in one sentence. Exporte : RuleOutcome, RuleStatus, RulesInput, RulesReport, checkMergeRules(), isWebAt(), et 1 autre(s). Utilisé par 2 fichiers (src/commands/rules.ts, …).
+- `check.ts` : What was checked, in one sentence. Exporte : DomainReview, RuleOutcome, RuleStatus, RulesInput, RulesReport, checkMergeRules(), et 2 autre(s). Utilisé par 2 fichiers (src/commands/rules.ts, …).
 - `config.ts` : The rules the tool enforces before a merge ('apv rules check', 'apv stack merge', 'apv… Exporte : CAPTURE_THEMES, CAPTURE_VIEWPORTS, CaptureTheme, CaptureViewport, DEFAULT_CAPTURE_THEMES, DEFAULT_CAPTURE_VIEWPORTS, et 10 autre(s). Utilisé par 7 fichiers (src/commands/review.ts, …).
 - `docs-only.ts` : The lane without code (« voie sans code », docs/REGLES.md): a pull request of the… Exporte : DocsOnlyLane, KIND_LABEL, LANE_NAME, LaneFile, LaneInput, docsOnlyLane(), et 2 autre(s). Utilisé par 2 fichiers (src/commands/review.ts, …).
-- `merges.ts` : Merge traces: 'apv stack merge' and 'apv stack batch --merge' write one per merge,… Exporte : DEFAULT_AUDIT_DAYS, MERGES_DIR, MergeAudit, MergeTrace, MergeTraceBody, UnaccountedCommit, et 4 autre(s). Utilisé par 4 fichiers (src/commands/audit.ts, …).
-- et 6 autres entrées dans ce dossier (liste complète : apv map --json).
+- et 7 autres entrées dans ce dossier (liste complète : apv map --json).
 
-Dossiers non listés, au-delà de la taille de la carte : src/run (6), src/security (2), src/spec (1), src/stack (5), src/stacks (2), src/structure (8), src/testcheck (1), src/web (6), workflows (2) (liste complète : apv map --json).
+Dossiers non listés, au-delà de la taille de la carte : src/run (6), src/security (2), src/spec (1), src/stack (5), src/stacks (2), src/structure (9), src/testcheck (1), src/web (6), workflows (2) (liste complète : apv map --json).
 
 ## Routes
 

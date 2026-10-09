@@ -4,7 +4,8 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { matches } from '../policy/policy.js';
 import { resolveCommit } from '../run/git-probe.js';
 import { ALWAYS_REVIEWED, PATH_CLASSES, REVIEW_DOMAINS } from './config.js';
-import { AGENT_INSTRUCTIONS, CONFIG_FILES, ROUTING_DIR, ROUTING_TEST_DIR, SERVED_DIR, TEST_DIRS, TEST_NAME, diffRisk, realAddress } from './risk.js';
+import { pureRename, renamedNames } from './rename.js';
+import { AGENT_INSTRUCTIONS, CONFIG_FILES, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, PILOT_NOTE_EXTENSIONS, ROUTING_DIR, ROUTING_TEST_DIR, SERVED_DIR, TEST_DIRS, TEST_NAME, diffRisk, realAddress, } from './risk.js';
 const FILES_SHOWN = 50;
 const MAX_DIFF_BYTES = 512 * 1024 * 1024;
 function git(repo, args) {
@@ -302,19 +303,30 @@ function classify(path, input) {
     const found = PATH_CLASSES.filter(c => paths[c].some(p => matches(path, p)) || (c === 'migrations' && input.migrations.some(p => matches(path, p))));
     return found;
 }
+/** The first term of the list found in the lines, and how many lines hold a term of the list. */
 function termIn(lines, terms) {
+    let first = null;
+    let count = 0;
     for (const line of lines) {
         const low = line.toLowerCase();
         const term = terms.find(t => low.includes(t));
-        if (term)
-            return term;
+        if (!term)
+            continue;
+        first ??= term;
+        count += 1;
     }
-    return null;
+    return first === null ? null : { term: first, lines: count };
 }
-function fileKeeps(file, patch, input) {
+/** The names of `data-*` attributes (`data-tab`, `data-phone`): names of the markup, never a word of data or GDPR. */
+const DATA_ATTRIBUTE = /(?<![\w-])data-[\w-]+/gi;
+/** Every side a note of the pipeline (`.apv/state/`, the journal, the specs; text or JSON). */
+const pilotNote = (file) => sides(file).every(p => PILOT_NOTE_EXTENSIONS.test(p) && PILOT_NOTES.some(g => matches(p, g)));
+/** A lockfile of npm, pnpm or Yarn on every side. */
+const lockFile = (file) => sides(file).every(p => LOCK_FILES.some(g => matches(p, g)));
+function fileKeeps(file, patch, input, context) {
     const keeps = [];
-    const add = (domain, why) => { if (!keeps.some(k => k.domain === domain))
-        keeps.push({ domain, why }); };
+    const add = (domain, why, basis = 'diff') => { if (!keeps.some(k => k.domain === domain))
+        keeps.push({ domain, why, basis }); };
     const classes = new Set(file.classes);
     const inDesign = [file.path, file.from].some(p => p !== undefined && (p === input.designDir || p.startsWith(`${input.designDir}/`)));
     if (classes.has('migrations')) {
@@ -328,23 +340,46 @@ function fileKeeps(file, patch, input) {
     if (file.change !== 'content')
         return keeps;
     const meaningful = file.classes.filter(c => !NO_DOMAIN.includes(c));
-    const lines = patch && !patch.binary ? [...patch.added, ...patch.removed] : [];
-    // The words of the changed lines: a query written in a page, a tracker, a personal field, a real address in a fixture.
-    const terms = () => {
-        const data = termIn(lines, input.settings.terms.data);
-        if (data)
-            add('donnees', `terme de données « ${data} » dans les lignes changées`);
-        const personal = termIn(lines, input.settings.terms.personal);
-        if (personal)
-            add('rgpd', `terme RGPD « ${personal} » dans les lignes changées`);
-        const address = realAddress(patch?.added ?? []);
-        if (address)
+    const lines = patch && !patch.binary ? [...patch.added, ...patch.removed].map(l => l.replace(DATA_ATTRIBUTE, '')) : [];
+    const address = () => {
+        if (realAddress(patch?.added ?? []))
             add('rgpd', 'adresse e-mail réelle (domaine non réservé aux exemples) dans les lignes ajoutées');
     };
+    // The words of the changed lines: a query written in a page, a tracker, a personal field, a real address in a fixture.
+    // One line alone is a term isolated: prudence. The Markdown under `.apv/` is prose of the pipeline: its words never count.
+    const terms = () => {
+        if (!sides(file).every(p => p.startsWith('.apv/') && p.endsWith('.md'))) {
+            const data = termIn(lines, input.settings.terms.data);
+            if (data) {
+                if (data.lines > 1)
+                    add('donnees', `terme de données « ${data.term} » dans les lignes changées`);
+                else
+                    add('donnees', `terme de données « ${data.term} » isolé (une seule ligne changée : par prudence)`, 'prudence');
+            }
+            const personal = termIn(lines, input.settings.terms.personal);
+            if (personal) {
+                if (personal.lines > 1)
+                    add('rgpd', `terme RGPD « ${personal.term} » dans les lignes changées`);
+                else
+                    add('rgpd', `terme RGPD « ${personal.term} » isolé (une seule ligne changée : par prudence)`, 'prudence');
+            }
+        }
+        address();
+    };
     if (!meaningful.length && !inDesign) {
+        // Notes of the pipeline: never a configuration; the security review reads them, a real address still counts.
+        if (pilotNote(file) && !isSensitive(file, input) && !isConfig(file)) {
+            address();
+            return keeps;
+        }
+        // A lockfile without its package.json: the security review alone, with the audit of the dependencies.
+        if (lockFile(file) && !context.manifest)
+            return keeps;
         if (strongPath(file, input)) {
+            // Its words first (a query in server code is required by the diff), then prudence for the rest.
+            terms();
             for (const domain of ['fidelite', 'donnees', 'rgpd'])
-                add(domain, WHY.strong);
+                add(domain, WHY.strong, 'prudence');
             return keeps;
         }
         // Tests, documentation, tooling: no domain of their own, but their words still count (a fixture with personal data).
@@ -353,7 +388,7 @@ function fileKeeps(file, patch, input) {
             return keeps;
         }
         for (const domain of ['fidelite', 'donnees', 'rgpd'])
-            add(domain, WHY.unclassified);
+            add(domain, WHY.unclassified, 'prudence');
         return keeps;
     }
     if (classes.has('ui'))
@@ -368,21 +403,29 @@ function fileKeeps(file, patch, input) {
     return keeps;
 }
 const SENSITIVE_WHY = 'chemin sensible (authentification, session, permissions, dépendances, configuration de sécurité, CI ou instructions des agents)';
+const NOTES_WHY = 'notes de pilotage (.apv/state, journal du pipeline, specs) : jamais une configuration';
+const LOCK_WHY = 'verrou de dépendances sans son package.json : audit des dépendances par la relecture sécurité';
 /**
  * The risk of one changed file (src/review/risk.ts), by its path only: low for a test, documentation or a mockup
- * without a word of data or GDPR; high for everything else (the plan of 3.0.0-alpha.14).
+ * without a word of data or GDPR; high for everything else (the plan of 3.0.0-alpha.14). The notes of the pipeline and a
+ * lockfile without its package.json stay of high risk (a lockfile can break the build), under their own name.
  */
-function fileRisk(file, input) {
+function fileRisk(file, input, context) {
     const high = (riskWhy) => ({ risk: 'eleve', riskWhy });
     const low = (riskWhy) => ({ risk: 'faible', riskWhy });
     const classes = new Set(file.classes);
     if (classes.has('migrations'))
         return high('migration ou schéma');
+    const plain = !file.classes.some(c => !NO_DOMAIN.includes(c));
+    if (plain && lockFile(file) && !context.manifest)
+        return high(LOCK_WHY);
     if (isConfig(file))
         return high('configuration (outil, exécuteurs de tests, lint, format, dépendances, CI)');
     const named = testNamed(file);
     if (!named && isSensitive(file, input))
         return high(SENSITIVE_WHY);
+    if (plain && pilotNote(file))
+        return high(NOTES_WHY);
     if (!named && classes.has('server'))
         return high('code serveur ou configuration');
     // A word of data or GDPR, or a real address, in the changed lines: stronger than a test or a document.
@@ -421,11 +464,15 @@ function skipReason(domain, counts) {
     const detail = [
         counts.renames ? count(counts.renames, 'renommage pur', 'renommages purs') : '',
         counts.paths ? count(counts.paths, 'fichier aux seuls chemins réécrits', 'fichiers aux seuls chemins réécrits') : '',
+        counts.names ? count(counts.names, 'fichier aux seuls noms de classes ou d\'identifiants renommés', 'fichiers aux seuls noms de classes ou d\'identifiants renommés') : '',
         counts.neutral ? count(counts.neutral, 'fichier de tests, documentation ou outillage', 'fichiers de tests, documentation ou outillage') : '',
+        counts.notes ? count(counts.notes, 'note de pilotage', 'notes de pilotage') : '',
+        counts.locks ? count(counts.locks, 'verrou de dépendances', 'verrous de dépendances') : '',
     ].filter(Boolean).join(', ');
     if (!counts.files)
         return 'rien à relire : diff vide';
-    return `rien à relire : ${scope}, aucun fichier non classé au contenu changé (${count(counts.files, 'fichier', 'fichiers')}${detail ? ` : ${detail}` : ''})`;
+    const rename = domain === 'fidelite' && counts.names ? 'renommage pur : diff normalisé vide (noms de classes et d\'identifiants renommés partout, styles compris) ; ' : '';
+    return `${rename || 'rien à relire : '}${scope}, aucun fichier non classé au contenu changé (${count(counts.files, 'fichier', 'fichiers')}${detail ? ` : ${detail}` : ''})`;
 }
 export function planReviews(input) {
     const { repo } = input;
@@ -441,7 +488,7 @@ export function planReviews(input) {
     const statuses = parseNameStatus(git(repo, ['diff', ...common, '--name-status', '-z', mergeBase, headSha]));
     const patches = parsePatch(git(repo, ['diff', ...common, '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', mergeBase, headSha]));
     const renames = statuses.filter(s => s.from !== undefined).map(s => ({ from: s.from, path: s.path }));
-    const files = statuses.map(entry => {
+    const changes = statuses.map((entry) => {
         const patch = patches.get(entry.path);
         let change;
         if (/^R100$/.test(entry.status))
@@ -455,45 +502,61 @@ export function planReviews(input) {
             change = /^[MT]/.test(entry.status) || /^R/.test(entry.status) ? 'none' : 'content';
         else
             change = referencesOnly(patch, entry, renames) ? 'paths' : 'content';
+        return { entry, patch, change };
+    });
+    // Class and id names renamed: a pure rename only when the whole diff renames them one to one (src/review/rename.ts).
+    const candidates = changes.map(c => (c.change === 'content' && c.patch && !c.patch.binary && /^[MR]/.test(c.entry.status) ? renamedNames(c.patch, c.entry.path) : null));
+    const named = candidates.filter((c) => c !== null);
+    if (named.length && pureRename(named, { repo, base: mergeBase, head: headSha, designDir: input.designDir })) {
+        candidates.forEach((c, i) => { if (c)
+            changes[i].change = 'names'; });
+    }
+    const context = { manifest: statuses.some(s => sides(s).some(p => MANIFEST_FILES.some(g => matches(p, g)))) };
+    const files = changes.map(({ entry, patch, change }) => {
         const classes = [...new Set([...classify(entry.path, input), ...(entry.from ? classify(entry.from, input) : [])])]
             .sort((a, b) => PATH_CLASSES.indexOf(a) - PATH_CLASSES.indexOf(b));
         const base = { path: entry.path, ...(entry.from !== undefined ? { from: entry.from } : {}), status: entry.status, change, classes };
-        const keeping = { ...base, keeps: fileKeeps(base, patch, input) };
-        return { ...keeping, ...fileRisk(keeping, input) };
+        const keeping = { ...base, keeps: fileKeeps(base, patch, input, context) };
+        return { ...keeping, ...fileRisk(keeping, input, context) };
     });
     const counts = {
         files: files.length,
         renames: files.filter(f => f.change === 'none' && f.from !== undefined).length,
         paths: files.filter(f => f.change === 'paths').length,
+        names: files.filter(f => f.change === 'names').length,
         content: files.filter(f => f.change === 'content').length,
         neutral: files.filter(f => f.change === 'content' && f.classes.every(c => NO_DOMAIN.includes(c)) && (f.classes.includes('neutral') || f.classes.includes('tooling'))
-            && !f.keeps.some(k => k.why === WHY.strong)).length,
+            && !f.keeps.some(k => k.why === WHY.strong) && f.riskWhy !== NOTES_WHY && f.riskWhy !== LOCK_WHY).length,
+        notes: files.filter(f => f.change === 'content' && f.riskWhy === NOTES_WHY).length,
+        locks: files.filter(f => f.change === 'content' && f.riskWhy === LOCK_WHY).length,
         unclassified: files.filter(f => f.change === 'content' && f.keeps.some(k => k.why === WHY.unclassified || k.why === WHY.strong)).length,
     };
     const risk = diffRisk(files, FILES_SHOWN);
     const sensitive = files.filter(f => [f.path, f.from].some(p => p !== undefined && input.sensitive.some(g => matches(p, g)))).map(f => f.path);
+    const locks = files.filter(f => f.riskWhy === LOCK_WHY).map(f => f.path);
     const domains = REVIEW_DOMAINS.map(domain => {
         if (domain === ALWAYS_REVIEWED) {
-            return { domain, decision: 'retained', forced: null, fileCount: sensitive.length, files: sensitive.slice(0, FILES_SHOWN),
-                reason: `toujours relue, sans exception${sensitive.length ? ` ; ${count(sensitive.length, 'fichier sensible', 'fichiers sensibles')} (chemins de la voie high)` : ''}` };
+            return { domain, decision: 'retained', forced: null, basis: 'diff', fileCount: sensitive.length, files: sensitive.slice(0, FILES_SHOWN),
+                reason: `toujours relue, sans exception${sensitive.length ? ` ; ${count(sensitive.length, 'fichier sensible', 'fichiers sensibles')} (chemins de la voie high)` : ''}`
+                    + `${locks.length ? ` ; verrou de dépendances sans son package.json (${locks.slice(0, 3).join(', ')}) : audit des dépendances (npm audit ou équivalent)` : ''}` };
         }
         const deciding = files.filter(f => f.keeps.some(k => k.domain === domain));
         const forced = input.force.includes(domain) ? 'operator' : input.settings.always.includes(domain) ? 'config' : null;
         if (deciding.length) {
             const whys = new Map();
-            for (const f of deciding) {
-                const why = f.keeps.find(k => k.domain === domain).why;
-                whys.set(why, (whys.get(why) ?? 0) + 1);
-            }
+            const kept = deciding.map(f => f.keeps.find(k => k.domain === domain));
+            for (const k of kept)
+                whys.set(k.why, (whys.get(k.why) ?? 0) + 1);
             const reason = [...whys].map(([why, n]) => `${why} (${n})`).join(' ; ');
-            return { domain, decision: 'retained', forced, reason: forced ? `${reason} ; forcée aussi par ${forced === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'}` : reason,
+            return { domain, decision: 'retained', forced, basis: forced || kept.some(k => k.basis === 'diff') ? 'diff' : 'prudence',
+                reason: forced ? `${reason} ; forcée aussi par ${forced === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'}` : reason,
                 fileCount: deciding.length, files: deciding.slice(0, FILES_SHOWN).map(f => f.path) };
         }
         if (forced) {
-            return { domain, decision: 'retained', forced, fileCount: 0, files: [],
+            return { domain, decision: 'retained', forced, basis: 'diff', fileCount: 0, files: [],
                 reason: `forcée par ${forced === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'} ; le diff seul ne la demandait pas` };
         }
-        return { domain, decision: 'skipped', forced: null, fileCount: 0, files: [], reason: skipReason(domain, counts) };
+        return { domain, decision: 'skipped', forced: null, basis: null, fileCount: 0, files: [], reason: skipReason(domain, counts) };
     });
     // A low risk keeps at most the security and fidelity reviews, besides what is forced: never a weaker plan elsewhere.
     if (risk.level === 'faible') {

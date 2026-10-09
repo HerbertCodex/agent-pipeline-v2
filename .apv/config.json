@@ -46,6 +46,14 @@
       ]
     }
   ],
+  "batch": {
+    "setup": [
+      "npm",
+      "ci",
+      "--no-audit",
+      "--no-fund"
+    ]
+  },
   "stack": {
     "keepBranches": [
       "apv3",

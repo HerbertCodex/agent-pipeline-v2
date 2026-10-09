@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync
 import { userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import { maskSecrets } from '../knowledge/code-map.js';
+import { REVIEW_DOMAINS, type ReviewDomainName } from '../review/config.js';
 import type { MergeRule } from './config.js';
 
 /**
@@ -168,7 +169,13 @@ export const VALIDATES = /valid|approuv|accord|d[ée]rogation|go pour|on part/i;
 export const WAIVER_SHA = 12;
 /** Shortest reason after the commit, in characters. */
 export const MIN_WAIVER_REASON = 10;
-const WAIVER_LINE = new RegExp(`d[ée]rogation\\s+[a-z]+\\s+(?:pour\\s+)?[0-9a-f]{${WAIVER_SHA},64}`, 'i');
+/**
+ * A waiver line: a rule, or the rule `relecture` for one review domain (`relecture:rgpd`, issue #126), then the commit.
+ * The domains are those of `apv review plan`, written out: any other word after `:` is no waiver.
+ */
+const WAIVER_LINE = new RegExp(`d[ée]rogation\\s+[a-z]+(?::(?:${REVIEW_DOMAINS.join('|')}))?\\s+(?:pour\\s+)?[0-9a-f]{${WAIVER_SHA},64}`, 'i');
+/** What a waiver names: a rule, or the rule `relecture` for one domain. */
+export type WaiverTarget = MergeRule | `relecture:${ReviewDomainName}`;
 
 /** One line of the journal: hashes, a few words, waiver lines; never the whole message. */
 export interface JournalEntry {
@@ -354,16 +361,17 @@ export function anchoredQuote(messages: readonly OperatorMessage[], quote: strin
   return messages.find(m => hashes.every(h => m.sentences.includes(h))) ?? null;
 }
 
-/** The sentence the operator types himself to waive `rule` for `sha` (shown in every refusal). */
-export function waiverSentence(rule: MergeRule, sha: string): string {
+/** The sentence the operator types himself to waive `rule` (or the review of one domain) for `sha` (shown in every refusal). */
+export function waiverSentence(rule: WaiverTarget, sha: string): string {
   return `dérogation ${rule} ${sha.slice(0, WAIVER_SHA)} : <ta raison>`;
 }
 
 /**
  * The waiver of `rule` for the commit `sha` the operator typed himself, or null: a line « dérogation <règle> <12 premiers
  * caractères du commit au moins> : <raison> ». Never for another commit, never « dérogation » alone, never without a reason.
+ * `relecture:<domaine>` is the waiver of that review only: it never waives the rule `relecture` whole, nor another domain.
  */
-export function waiverFor(messages: readonly OperatorMessage[], rule: MergeRule, sha: string): { message: OperatorMessage; reason: string } | null {
+export function waiverFor(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): { message: OperatorMessage; reason: string } | null {
   const pattern = new RegExp(`d[ée]rogation\\s+${rule}\\s+(?:pour\\s+)?([0-9a-f]{${WAIVER_SHA},64})\\s*[:,-]?\\s*(.*)`, 'i');
   for (const message of [...messages].reverse()) {
     for (const line of message.waivers) {

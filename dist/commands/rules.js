@@ -24,7 +24,10 @@ apv stack batch --merge, qui refusent de fusionner sans elles :
 Tout se lit à la base commune avec la cible : une PR ne change pas ses propres règles.
 Aucune option ne lève un refus. Sans correction, seul l'opérateur le peut, en tapant lui-même dans la session
 « dérogation <règle> <12 premiers caractères du commit> : <raison> » (journal de l'opérateur, écrit par le
-crochet du plugin, que les agents ne peuvent pas écrire).
+crochet du plugin, que les agents ne peuvent pas écrire), ou pour la relecture d'un seul domaine
+« dérogation relecture:<securite|fidelite|donnees|rgpd> <commit> : <raison> » (les autres domaines restent exigés ;
+sur securite, la sortie dit « dérogation sur la sécurité »). Sous relecture, chaque domaine retenu est listé :
+relecture enregistrée, dérogation (raison) ou manquante.
 --target   branche où va le changement (défaut : la branche distante par défaut, origin/HEAD).
 --offline  cible non vérifiée contre le dépôt distant (avec un avertissement), comme apv gates verify --offline.
 Protection de la branche par défaut sur GitHub (gh api) : dite en une ligne, jamais un refus ; indisponible pour un

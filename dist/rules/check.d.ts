@@ -1,4 +1,5 @@
 import { type RemoteCheck } from '../gates/base-gates.js';
+import { type ReviewDomainName } from '../review/config.js';
 import { type MergeRule } from './config.js';
 import { type DocsOnlyLane } from './docs-only.js';
 export type RuleStatus = 'ok' | 'refused' | 'waived' | 'not_applicable';
@@ -13,6 +14,21 @@ export interface RuleOutcome {
     /** What to do to pass, in order; the last line is the only waiver there is. */
     todo: string[];
     /** The operator's own waiver, when there is one: when he typed it and his reason. */
+    waiver: {
+        at: string;
+        reason: string;
+    } | null;
+    /** The rule `relecture` only: each domain the plan retains, recorded, waived for that domain alone, or missing. */
+    domains?: DomainReview[];
+}
+/**
+ * The review of one retained domain: `recorded` at the commit without a critical or high finding; `waived` by the
+ * operator for that domain (`dérogation relecture:<domaine>`); `missing` (absent, unusable, or a critical or high finding).
+ */
+export interface DomainReview {
+    domain: ReviewDomainName;
+    status: 'recorded' | 'waived' | 'missing';
+    detail: string;
     waiver: {
         at: string;
         reason: string;

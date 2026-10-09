@@ -9,7 +9,7 @@ import { stageGates } from '../gates/run.js';
 import { Git } from '../execution/git.js';
 import { loadDecisionLedger } from '../lifecycle/decisions.js';
 import { sensitivePaths } from '../policy/policy.js';
-import { reviewPlanSettings } from '../review/config.js';
+import { ALWAYS_REVIEWED, reviewPlanSettings, type ReviewDomainName } from '../review/config.js';
 import { planReviews } from '../review/plan.js';
 import { DEFAULT_REUSE_IGNORE, UI_EXTENSIONS, extensionOf, globMatcher } from '../reuse/config.js';
 import { WEB_DEPENDENCIES } from '../reuse/detect.js';
@@ -34,6 +34,18 @@ export interface RuleOutcome {
   /** What to do to pass, in order; the last line is the only waiver there is. */
   todo: string[];
   /** The operator's own waiver, when there is one: when he typed it and his reason. */
+  waiver: { at: string; reason: string } | null;
+  /** The rule `relecture` only: each domain the plan retains, recorded, waived for that domain alone, or missing. */
+  domains?: DomainReview[];
+}
+/**
+ * The review of one retained domain: `recorded` at the commit without a critical or high finding; `waived` by the
+ * operator for that domain (`dérogation relecture:<domaine>`); `missing` (absent, unusable, or a critical or high finding).
+ */
+export interface DomainReview {
+  domain: ReviewDomainName;
+  status: 'recorded' | 'waived' | 'missing';
+  detail: string;
   waiver: { at: string; reason: string } | null;
 }
 export interface RulesReport {
@@ -186,27 +198,40 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     ]));
   } else rules.push(outcome('instable', 'ok', 'aucun contrôle réussi seulement après relance'));
 
-  // relecture, captures: the domains `apv review plan` retains for the change, each recorded at this commit.
+  // relecture, captures: the domains `apv review plan` retains for the change, each recorded at this commit, or waived
+  // for that domain alone by the operator (« dérogation relecture:<domaine> <commit> : <raison> », issue #126).
   const reviews = latestReviews(common, sha);
   const reviewProblems: string[] = [];
   const reviewTodo: string[] = [];
+  const domainStates: DomainReview[] = [];
   for (const domain of retained) {
     const agent = `apv:${DOMAIN_REVIEWERS[domain]}`;
     const found = reviews.get(domain);
     const ask = `Relecture ${domain} par ${agent} sur une copie détachée à ${short(sha)} ; l'agent l'enregistre lui-même (apv review record --commit ${short(sha)} --domain ${domain} ...).`;
-    if (!found) { reviewProblems.push(`${domain} : aucune relecture enregistrée à ${short(sha)}`); reviewTodo.push(ask); continue; }
-    if (found.problem || !found.record) { reviewProblems.push(`${domain} : relecture inutilisable (${found.problem ?? 'illisible'})`); reviewTodo.push(ask); continue; }
-    const f = found.record.findings;
-    if (f.critical > 0 || f.high > 0) {
-      reviewProblems.push(`${domain} : ${f.critical} constat(s) critique(s) et ${f.high} haut(s) à ${short(sha)}`);
-      reviewTodo.push(`Corrige chaque constat critique ou haut de la relecture ${domain}, avec le test qui le prouve, puis fais relire le nouveau commit (${agent}).`);
-    }
+    const f = found?.record?.findings;
+    const problem = !found ? `aucune relecture enregistrée à ${short(sha)}`
+      : found.problem || !found.record ? `relecture inutilisable (${found.problem ?? 'illisible'})`
+      : f!.critical > 0 || f!.high > 0 ? `${f!.critical} constat(s) critique(s) et ${f!.high} haut(s) à ${short(sha)}` : null;
+    if (!problem) { domainStates.push({ domain, status: 'recorded', detail: `${found!.record!.reviewer}, critique 0, haut 0, moyen ${f!.medium}, bas ${f!.low}`, waiver: null }); continue; }
+    const waiver = waiverFor(messages, `relecture:${domain}`, sha);
+    if (waiver) { domainStates.push({ domain, status: 'waived', detail: problem, waiver: { at: waiver.message.at, reason: waiver.reason } }); continue; }
+    domainStates.push({ domain, status: 'missing', detail: problem, waiver: null });
+    reviewProblems.push(`${domain} : ${problem}`);
+    reviewTodo.push(found && !found.problem && found.record ? `Corrige chaque constat critique ou haut de la relecture ${domain}, avec le test qui le prouve, puis fais relire le nouveau commit (${agent}).` : ask);
+    reviewTodo.push(`Ou, pour ce domaine seul, l'opérateur tape lui-même : « ${waiverSentence(`relecture:${domain}`, sha)} »${domain === ALWAYS_REVIEWED ? ' (dérogation sur la sécurité)' : ''}.`);
   }
   const forcedNote = lane.eligible ? ` (${LANE_NAME}, domaines forcés par review.always)` : '';
+  const waivedDomains = domainStates.filter(d => d.status === 'waived');
   if (lane.eligible && !retained.length) rules.push(outcome('relecture', 'not_applicable', `${LANE_NAME} : ${lane.reason} ; aucune relecture d'agent exigée`));
-  else rules.push(reviewProblems.length
-    ? outcome('relecture', 'refused', `relectures demandées par le diff${forcedNote} : ${retained.join(', ')}`, reviewProblems, reviewTodo)
-    : outcome('relecture', 'ok', `relectures enregistrées à ${short(sha)} sans constat critique ni haut${forcedNote} : ${retained.join(', ')} (risque ${plan.risk.level === 'faible' ? 'faible' : 'élevé'} : ${plan.risk.reason.slice(0, 200)})`));
+  else if (reviewProblems.length) rules.push(outcome('relecture', 'refused', `relectures demandées par le diff${forcedNote} : ${retained.join(', ')}`, reviewProblems, reviewTodo));
+  else if (waivedDomains.length) {
+    const r = outcome('relecture', 'waived', `relectures enregistrées ou levées domaine par domaine par l'opérateur à ${short(sha)}${forcedNote} : ${retained.join(', ')}`
+      + `${waivedDomains.some(d => d.domain === ALWAYS_REVIEWED) ? ' ; dérogation sur la sécurité' : ''}`);
+    const latest = waivedDomains.map(d => d.waiver!.at).sort().at(-1)!;
+    r.waiver = { at: latest, reason: waivedDomains.map(d => `${d.domain} : ${d.waiver!.reason}`).join(' ; ') };
+    rules.push(r);
+  } else rules.push(outcome('relecture', 'ok', `relectures enregistrées à ${short(sha)} sans constat critique ni haut${forcedNote} : ${retained.join(', ')} (risque ${plan.risk.level === 'faible' ? 'faible' : 'élevé'} : ${plan.risk.reason.slice(0, 200)})`));
+  rules.at(-1)!.domains = domainStates;
 
   // captures: in a project with screens at the base, required as soon as the plan retains fidelite (a component, a
   // style, a message shown, a configuration of the styles change what a screen shows). Not applicable only to a project
@@ -277,7 +302,14 @@ export function rulesLines(report: RulesReport, indent = ''): string[] {
     ...laneLines(report.lane, indent)];
   for (const r of report.rules) {
     lines.push(`${indent}- ${r.rule} (${r.title}) : ${label[r.status]} : ${r.detail}`);
-    for (const p of r.problems) lines.push(`${indent}    ${p}`);
+    for (const d of r.domains ?? []) {
+      const said = d.status === 'recorded' ? `relecture enregistrée (${d.detail})`
+        : d.status === 'waived' ? `${d.domain === ALWAYS_REVIEWED ? 'dérogation sur la sécurité' : 'dérogation'} (${d.waiver!.reason}) ; ${d.detail}`
+        : `manquante : ${d.detail}`;
+      lines.push(`${indent}    ${d.domain} : ${said}`);
+    }
+    // The domains already say the problems of the rule relecture.
+    if (!r.domains?.length) for (const p of r.problems) lines.push(`${indent}    ${p}`);
     if (r.waiver) lines.push(`${indent}    dérogation de l'opérateur (${r.waiver.at}) : ${r.waiver.reason}`);
     if (r.status === 'refused') for (const t of r.todo) lines.push(`${indent}    à faire : ${t}`);
   }

@@ -547,6 +547,7 @@ Section APV3, facultative (3.0.0-alpha.5, spécification sections 18.5 et 18.6) 
 - `setup` (facultatif, sans shell, lancé à la racine de la copie) : typiquement l'installation des dépendances. Elle reçoit `environment.passEnv`, `HOME` et `passEnv`. Après elle, la copie doit être propre (fichiers créés ignorés par Git), sinon la copie est refusée.
 - `setupTimeoutMs` (défaut 15 min, jusqu'à 1 h).
 - Absente : rien n'est préparé (projet sans dépendances à installer).
+- Le dépôt d'APV la déclare depuis 3.0.0-alpha.21 (`["npm", "ci", "--no-audit", "--no-fund"]`) : le 9 octobre 2026, ses lots tournaient sans `node_modules` et le contrôle `typecheck` y échouait. Un projet Node qui lance `apv stack batch` ou des suites dans des worktrees neufs la déclare de même.
 
 ## Pile de PR : `stack`
 

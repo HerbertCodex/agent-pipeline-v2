@@ -5,7 +5,8 @@ import { Git } from '../execution/git.js';
 import { loadConfigAtCommit, type ApvConfig } from '../config/load.js';
 import { buildCodeMap } from '../knowledge/code-map.js';
 import { GENERATED_PATHS, globMatcher, mapSettings, reuseSettings } from '../reuse/config.js';
-import { collectChanges, readWorktree, resolveBase, type ChangeBase, type Changes } from '../reuse/changes.js';
+import { collectChanges, isAdded, readWorktree, resolveBase, type ChangeBase, type Changes } from '../reuse/changes.js';
+import { ADBLOCK_FILES, ADBLOCK_MESSAGE, adBlockedNames } from './adblock.js';
 import { designDir } from '../design/config.js';
 import { environment } from '../execution/process.js';
 import { analyzeStructure, type StructureReport } from './analyze.js';
@@ -17,7 +18,7 @@ import { usageFromMap, type UsageGraph } from './split.js';
 
 /** A finding of the comparison with the base (`--base`), or about the architecture map. */
 export interface ChangeFinding {
-  code: 'flat-growth' | 'architecture-map' | 'configuration' | 'coverage';
+  code: 'flat-growth' | 'architecture-map' | 'configuration' | 'coverage' | 'adblock';
   severity: Severity;
   /** Added by the change (never true without base). */
   isNew: boolean;
@@ -229,6 +230,19 @@ export async function checkStructure(repo: string, config: StructureConfig, opti
         : core ? 'fichier que le dossier importe beaucoup : le ranger d\'abord avec l\'opérateur (apv structure check --path) plutôt que d\'alourdir la racine'
           : `aucun groupe nommé ne s'impose : le placer dans un sous-dossier de fonctionnalité (apv structure check --path ${dir} donne le découpage proposé), décidé avec l'opérateur`;
       out.push({ code: 'flat-growth', severity, isNew: true, blocking: severity === 'error', path, message: `fichier de code ajouté à un dossier à plat : ${size} ; ${where}.` });
+    }
+  }
+
+  // Names hidden by the generic ad filters (src/structure/adblock.ts), in the files of interface: with a base, in each
+  // file the change touches, a name on a line it adds blocks and one the base had is said; without base, said only.
+  const touched = (path: string): boolean => !changes || changes.all || changes.created.has(path) || changes.renamed.has(path) || (changes.added.get(path)?.size ?? 0) > 0;
+  for (const path of files) {
+    if (!ADBLOCK_FILES.test(path) || !touched(path) || settings.ignore.some(re => re.test(path)) || !(!options.paths?.length || options.paths.some(p => inside(path, p)))) continue;
+    const text = readWorktree(repo, path);
+    if (text === null) continue;
+    for (const hit of adBlockedNames(text, path)) {
+      const isNew = !!changes && isAdded(changes, path, hit.line);
+      out.push({ code: 'adblock', severity: isNew ? 'error' : 'warning', isNew, blocking: isNew, path: `${path}:${hit.line}`, message: `${hit.kind} « ${hit.name} » : ${ADBLOCK_MESSAGE}.` });
     }
   }
 

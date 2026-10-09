@@ -327,8 +327,8 @@ export function planInLane(plan, lane, forced) {
     const domains = plan.domains.map(d => {
         const by = forced.operator.includes(d.domain) ? 'operator' : forced.always.includes(d.domain) ? 'config' : null;
         if (by)
-            return { ...d, decision: 'retained', forced: by, reason: `${LANE_NAME}, mais forcée par ${by === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'}` };
-        return { ...d, decision: 'skipped', forced: null, files: [], fileCount: 0, reason: `${LANE_NAME} : ${lane.reason} ; aucune relecture d'agent exigée (docs/REGLES.md)` };
+            return { ...d, decision: 'retained', forced: by, basis: 'diff', reason: `${LANE_NAME}, mais forcée par ${by === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'}` };
+        return { ...d, decision: 'skipped', forced: null, basis: null, files: [], fileCount: 0, reason: `${LANE_NAME} : ${lane.reason} ; aucune relecture d'agent exigée (docs/REGLES.md)` };
     });
     return { ...plan, domains, lane,
         retained: domains.filter(d => d.decision === 'retained').map(d => d.domain),
