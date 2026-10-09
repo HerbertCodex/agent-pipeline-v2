@@ -85,3 +85,36 @@ test('A7: a lockfile whose download host changes says the new host in the securi
   assert.deepEqual(a7.retained, ['securite']);
   assert.match(a7.domains[0].reason, /hôte de téléchargement nouveau dans le verrou : evil\.example/);
 });
+
+const CARD = { 'src/lib/Card.svelte': '<p class="ad-card">x</p>\n<style>\n  .ad-card {\n    color: red;\n  }\n</style>\n', 'tests/card.test.ts': "expect(q('.ad-card')).toBeTruthy();\n" };
+const renameCard = get => ({ 'src/lib/Card.svelte': get('src/lib/Card.svelte').replaceAll('ad-card', 'art-card'), 'tests/card.test.ts': get('tests/card.test.ts').replaceAll('ad-card', 'art-card') });
+
+test('second review of PR #128, M1-bis: a string outside a class or id context is never a name (A1d, A1e)', async t => {
+  // A1d: the column of a query in a component, the same name renamed in a style sheet: alpha.20 kept data.
+  const a1d = await plan(t, {
+    'src/lib/Notes.svelte': "<script>\n  const load = () => supabase.from('notes').select('*').eq('owner_id', me);\n</script>\n<p class=\"x\">n</p>\n",
+    'src/app.css': '.owner_id {\n  color: red;\n}\n',
+  }, get => ({ 'src/lib/Notes.svelte': get('src/lib/Notes.svelte').replace("'owner_id'", "'editor_id'"), 'src/app.css': get('src/app.css').replace('owner_id', 'editor_id') }));
+  assert.deepEqual(a1d.retained, ['securite', 'fidelite', 'donnees'], JSON.stringify(a1d.files));
+  assert.equal(a1d.files.find(f => f.path === 'src/lib/Notes.svelte').change, 'content');
+  // A1e: the sandbox of an iframe loosened: alpha.20 kept GDPR.
+  const a1e = await plan(t, { 'src/lib/Embed.svelte': '<iframe title="t" src="/x" sandbox="allow-forms"></iframe>\n', 'src/app.css': '.allow-forms {\n  color: red;\n}\n' },
+    get => ({ 'src/lib/Embed.svelte': get('src/lib/Embed.svelte').replace('allow-forms', 'allow-same-origin'), 'src/app.css': get('src/app.css').replace('allow-forms', 'allow-same-origin') }));
+  assert.deepEqual(a1e.retained, ['securite', 'fidelite', 'rgpd'], JSON.stringify(a1e.files));
+});
+
+test('second review of PR #128: two names swapped in place keep fidelity (A4b); a real rename stays pure (R0)', async t => {
+  const a4b = await plan(t, { 'src/lib/Btn.svelte': '<button class="btn-x">a</button>\n<button class="btn-z">b</button>\n', 'src/app.css': '.btn-x { color: red; }\n.btn-z { color: blue; }\n' },
+    { 'src/lib/Btn.svelte': '<button class="btn-z">a</button>\n<button class="btn-x">b</button>\n', 'src/app.css': '.btn-z { color: red; }\n.btn-x { color: blue; }\n' });
+  assert.deepEqual(a4b.retained, ['securite', 'fidelite']);
+  const r0 = await plan(t, CARD, renameCard);
+  assert.deepEqual(r0.retained, ['securite']);
+  // The test calls its own helper q(): no class context, a content change of a test, which keeps no domain.
+  assert.deepEqual(r0.files.map(f => [f.path, f.change]), [['src/lib/Card.svelte', 'names'], ['tests/card.test.ts', 'content']]);
+});
+
+test('second review of PR #128, R8: a journal of the pipeline that cites the old name refuses the pure rename (prudence, wanted)', async t => {
+  const r8 = await plan(t, { ...CARD, '.apv/journal-pipeline.md': '# j\n' }, get => ({ ...renameCard(get), '.apv/journal-pipeline.md': '# j\nrenommer ad-card en art-card\n' }));
+  assert.ok(r8.retained.includes('fidelite'));
+  assert.ok(r8.files.every(f => f.change !== 'names'));
+});

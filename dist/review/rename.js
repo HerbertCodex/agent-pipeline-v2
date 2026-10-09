@@ -31,13 +31,26 @@ const INTERFACE_FILE = /\.(?:svelte|vue|astro|html|htm|jsx|tsx|css|scss|sass|les
 const PAGE_MARKDOWN = /(?:^|\/)(?:routes|pages)\/(?:.*\/)?[^/]+\.(?:md|svx|mdx)$/i;
 /** A path a pure rename may touch: interface, style, or a page in Markdown (tests are judged by the caller). */
 export const renameKind = (path) => INTERFACE_FILE.test(path) || PAGE_MARKDOWN.test(path);
-/** Not preceded by a letter or `-`: `data-id` and `data-class` are no `id` nor `class`. */
-const ATTRIBUTE = /((?<![\w-])(?:class|className|id|for|htmlFor|aria-labelledby|aria-describedby|aria-controls|aria-owns)\s*=\s*)(?:"([^"]*)"|'([^']*)')/g;
+/**
+ * The contexts of a class or id name, and only them (second security review of PR #128: a column of a query, a token of
+ * `sandbox`, read as « names » in a component, skipped the data and GDPR reviews). Not preceded by a letter, `-` or `.`,
+ * and `=` right after the name, as markup writes it: `data-id` is no `id`, `el.className =` and `const id = '…'` are no
+ * attribute.
+ */
+const ATTRIBUTE = /((?<![\w.-])(class|className|id|for|htmlFor|aria-labelledby|aria-describedby|aria-controls)=)(?:"([^"]*)"|'([^']*)')/g;
+/** `class={…}` and `className={…}`: the strings of the expression. */
+const CLASS_EXPRESSION = /((?<![\w.-])(?:class|className)=)(\{[^}]*\})/g;
 const DIRECTIVE = new RegExp(`((?<![\\w-])class:)(${NAME})`, 'g');
+/**
+ * Calls that take class or id names (`classList.add('art-grid')`, `getElementById('art-bar')`), and calls that take a
+ * selector, read only when it starts with `.` or `#` (`querySelector('.art-grid')`, the `locator` of Playwright).
+ */
+const NAME_CALL = /(\b(?:classList\.(?:add|remove|toggle|contains|replace)|getElementById)\s*\()([^)]*)\)/g;
+const SELECTOR_CALL = /(\b(?:querySelector|querySelectorAll|closest|matches|locator)\s*\()([^)]*)\)/g;
 const STRING = /(["'`])((?:\\.|(?!\1)[^\\\n])*)\1/g;
-/** A string that only repeats selectors (`'.art-grid'`, `'#art-bar .art-head'`) or one class-like name (`'art-grid'`). */
-const SELECTOR_STRING = new RegExp(`^\\s*(?:[.#]${NAME}|${NAME}[.#]${NAME})(?:(?:\\s*[\\s,>+~]\\s*|(?=[.#]))[.#]?${NAME})*\\s*$`);
-const CLASS_LIKE = /^-?[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)+$/;
+/** A string of names only (`'art-grid art-wide'`), and a selector that starts with `.` or `#`. */
+const NAMES_STRING = new RegExp(`^\\s*${NAME}(?:\\s+${NAME})*\\s*$`);
+const SELECTOR_STRING = /^\s*[.#]/;
 /** A name alone (not the end of a longer word), and a name after the `.` or `#` of a selector. */
 const WORD = new RegExp(`(?<![\\w-])()(${NAME})`, 'g');
 const SELECTED = new RegExp(`([.#])(${NAME})`, 'g');
@@ -71,31 +84,30 @@ export function neutralizeLine(line, path) {
     const names = [];
     const style = STYLE_FILE.test(path);
     let text = line;
+    // The strings of a piece of code that `accepts` takes: names (`'art-grid'`) or a selector (`'.art-grid'`).
+    const strings = (code, kind) => code.replace(STRING, (whole, quote, body) => {
+        if (kind === 'names' ? !NAMES_STRING.test(body) : !SELECTOR_STRING.test(body))
+            return whole;
+        return `${quote}${neutralizeNames(body, kind === 'names' ? WORD : SELECTED, names, false)}${quote}`;
+    });
     if (!style) {
-        // Attribute values: names outside `{...}`; what an expression holds is read by the string rule below.
-        text = text.replace(ATTRIBUTE, (_whole, head, double, single) => {
+        // Attribute values: names outside `{...}`; in the expressions of a class value (`{on ? 'art-x' : ''}`), the strings.
+        text = text.replace(ATTRIBUTE, (_whole, head, attribute, double, single) => {
             const value = double ?? single ?? '';
             const quote = double !== undefined ? '"' : '\'';
-            const parts = value.split(/(\{[^}]*\})/);
-            const kept = parts.map(p => (p.startsWith('{') ? p : neutralizeNames(p, WORD, names, false))).join('');
+            const classes = attribute === 'class' || attribute === 'className';
+            const kept = value.split(/(\{[^}]*\})/).map(p => (p.startsWith('{') ? (classes ? strings(p, 'names') : p) : neutralizeNames(p, WORD, names, false))).join('');
             return `${head}${quote}${kept}${quote}`;
         });
+        text = text.replace(CLASS_EXPRESSION, (_whole, head, expression) => `${head}${strings(expression, 'names')}`);
         text = text.replace(DIRECTIVE, (_whole, head, name) => { names.push({ name, selector: false }); return `${head}${MARK}`; });
+        text = text.replace(NAME_CALL, (_whole, head, args) => `${head}${strings(args, 'names')})`);
+        text = text.replace(SELECTOR_CALL, (_whole, head, args) => `${head}${strings(args, 'selector')})`);
     }
     if (style || COMPONENT_FILE.test(path)) {
         const part = selectorPart(text, style);
         if (part !== null)
             text = neutralizeNames(part, SELECTED, names, true) + text.slice(part.length);
-    }
-    if (!style) {
-        text = text.replace(STRING, (whole, quote, body) => {
-            if (!(SELECTOR_STRING.test(body) || CLASS_LIKE.test(body.trim())))
-                return whole;
-            const found = [];
-            const inner = neutralizeNames(body, WORD, found, false);
-            names.push(...found);
-            return `${quote}${inner}${quote}`;
-        });
     }
     return { line: text.trimEnd(), names };
 }

@@ -8,9 +8,11 @@
  * `_`, `banner-ad` or `banner_ad` (then `-`, `_`, `s` or the end), `advert` or `sponsor` (the generic filters).
  * `add-on`, `advanced`, `adresse`, `badge` stay accepted. Read in the `class`, `className` and `id` attributes (quoted:
  * the names of the value and the strings of its `{...}` expressions, a ternary included; unquoted; `class={'…'}`), the
- * Svelte `class:` directives, the strings of `classList.add|remove|toggle|replace(…)` and of `.className =` or `.id =`,
- * and the selectors of the style sheets and of the `<style>` blocks; never in the text of a page or a `data-*`
- * (security review of PR #128: every form but the first ones passed).
+ * Svelte `class:` directives, the strings of `classList.add|remove|toggle|replace|contains(…)`, `getElementById(…)`,
+ * `.className =` and `.id =`, the selector strings starting with `.` or `#` of `querySelector`, `querySelectorAll`,
+ * `closest`, `matches` and `locator`, and the selectors of the style sheets and of the `<style>` blocks; never in the
+ * text of a page, a `data-*`, another attribute or a string of a script outside these calls (security review of PR #128:
+ * every form but the first ones passed; its second review: `const id = 'ad-hoc-report'` was refused).
  */
 
 /** Files of interface where the names are read. */
@@ -22,12 +24,14 @@ export const ADBLOCK_NAME = /^(?:(?:ad|ads|adv)[-_]|ads?$|adsbygoogle|banner[-_]
 export const ADBLOCK_MESSAGE = 'masqué par les filtres anti-pub du poste de l\'opérateur (filtres génériques EasyList : ad, ads, ad-, ads-, adv-, ad_, advert, banner-ad, sponsor) ; le renommer (par exemple art-, item-)';
 
 export interface AdBlockedName { line: number; kind: 'classe' | 'identifiant'; name: string }
-
+/** Not preceded by a letter, `-` or `.`, `=` right after the name: `data-id` is no `id`, `const id = …` no attribute. */
 const NAME = /-?[A-Za-z_][\w-]*/g;
 /** Not preceded by a letter, `-` or `.`: `data-id` is no `id`, `el.className =` is read as a script. */
-const ATTRIBUTE = /(?<![\w.-])(class|className|id)\s*=\s*(?:"([^"]*)"|'([^']*)'|\{([^}]*)\}|([^\s"'{>/]+))/g;
+const ATTRIBUTE = /(?<![\w.-])(class|className|id)=(?:"([^"]*)"|'([^']*)'|\{([^}]*)\}|([^\s"'{>/]+))/g;
 const DIRECTIVE = /(?<![\w-])class:(-?[A-Za-z_][\w-]*)/g;
-const SCRIPT = /(?:\bclassList\.(?:add|remove|toggle|replace)\s*\(([^)]*)\)|\.(className|id)\s*\+?=\s*(["'`][^"'`]*["'`]))/g;
+const SCRIPT = /(?:\b(?:classList\.(?:add|remove|toggle|replace|contains)|getElementById)\s*\(([^)]*)\)|\.(className|id)\s*\+?=\s*(["'`][^"'`]*["'`]))/g;
+/** Calls that take a selector, read when it starts with `.` or `#` (`querySelector('.ad-box')`, the `locator` of Playwright). */
+const SELECTOR_CALL = /\b(?:querySelector|querySelectorAll|closest|matches|locator)\s*\(([^)]*)\)/g;
 const STRING = /(["'`])((?:\\.|(?!\1)[^\\\n])*)\1/g;
 const SELECTOR = /([.#])(-?[A-Za-z_][\w-]*)/g;
 
@@ -68,7 +72,14 @@ export function adBlockedNames(text: string, path: string): AdBlockedName[] {
       for (const m of raw.matchAll(DIRECTIVE)) found(m.index!, 'classe', m[1]!);
       for (const m of raw.matchAll(SCRIPT)) {
         const code = m[1] ?? m[3] ?? '';
-        strings(code, m.index! + m[0].lastIndexOf(code), m[2] === 'id' ? 'identifiant' : 'classe');
+        strings(code, m.index! + m[0].lastIndexOf(code), m[2] === 'id' || m[0].startsWith('getElementById') ? 'identifiant' : 'classe');
+      }
+      for (const m of raw.matchAll(SELECTOR_CALL)) {
+        const start = m.index! + m[0].lastIndexOf(m[1]!);
+        for (const s of m[1]!.matchAll(STRING)) {
+          if (!/^\s*[.#]/.test(s[2]!)) continue;
+          for (const n of s[2]!.matchAll(SELECTOR)) found(start + s.index! + 1 + n.index!, n[1] === '#' ? 'identifiant' : 'classe', n[2]!);
+        }
       }
       // A `<style>` block of a component or a page: its lines are CSS.
       const open = raw.search(/<style\b[^>]*>/i);

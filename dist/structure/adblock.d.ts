@@ -8,9 +8,11 @@
  * `_`, `banner-ad` or `banner_ad` (then `-`, `_`, `s` or the end), `advert` or `sponsor` (the generic filters).
  * `add-on`, `advanced`, `adresse`, `badge` stay accepted. Read in the `class`, `className` and `id` attributes (quoted:
  * the names of the value and the strings of its `{...}` expressions, a ternary included; unquoted; `class={'…'}`), the
- * Svelte `class:` directives, the strings of `classList.add|remove|toggle|replace(…)` and of `.className =` or `.id =`,
- * and the selectors of the style sheets and of the `<style>` blocks; never in the text of a page or a `data-*`
- * (security review of PR #128: every form but the first ones passed).
+ * Svelte `class:` directives, the strings of `classList.add|remove|toggle|replace|contains(…)`, `getElementById(…)`,
+ * `.className =` and `.id =`, the selector strings starting with `.` or `#` of `querySelector`, `querySelectorAll`,
+ * `closest`, `matches` and `locator`, and the selectors of the style sheets and of the `<style>` blocks; never in the
+ * text of a page, a `data-*`, another attribute or a string of a script outside these calls (security review of PR #128:
+ * every form but the first ones passed; its second review: `const id = 'ad-hoc-report'` was refused).
  */
 /** Files of interface where the names are read. */
 export declare const ADBLOCK_FILES: RegExp;

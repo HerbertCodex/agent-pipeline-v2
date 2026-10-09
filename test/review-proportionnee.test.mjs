@@ -126,7 +126,16 @@ test('pure rename, unit: a declaration, a script or a text is never a name', () 
     ["  const label = 'Bonjour';", "  const label = 'Salut';", 'C.svelte'],
     ['<p>carte</p>', '<p>fiche</p>', 'C.svelte'],
     ['<p class="a">x</p>', '<p class="a">x</p>  ', 'C.svelte'],
+    // Second review of PR #128: strings outside a class or id context.
+    ["  const id = 'ad-hoc';", "  const id = 'art-hoc';", 'C.svelte'],
+    ["  db.eq('owner_id', me);", "  db.eq('editor_id', me);", 'C.svelte'],
+    ['<iframe sandbox="allow-forms"></iframe>', '<iframe sandbox="allow-same-origin"></iframe>', 'C.svelte'],
+    ['<a href="#top-bar">x</a>', '<a href="#top-nav">x</a>', 'C.svelte'],
+    ['<div data-state="is-open">x</div>', '<div data-state="is-shut">x</div>', 'C.svelte'],
+    ["  document.querySelector('ad-x');", "  document.querySelector('art-x');", 'C.svelte'],
   ]) assert.equal(one(a, b, path), null, `${path} : ${a}`);
+  assert.deepEqual(one("  el.closest('.ad-x > span');", "  el.closest('.art-x > span');", 'C.svelte'), [{ from: 'ad-x', to: 'art-x', selector: false }]);
+  assert.deepEqual(one('<div class="z {on ? \'ad-x\' : \'\'}">', '<div class="z {on ? \'art-x\' : \'\'}">', 'C.svelte'), [{ from: 'z', to: 'z', selector: false }, { from: 'ad-x', to: 'art-x', selector: false }]);
   assert.equal(selectorPart('  .then(() => {', false), null);
   assert.equal(selectorPart('  div.card {', false), null, 'a component starts its selectors with a class, an id or :global(');
   assert.equal(selectorPart('  div.card {', true), '  div.card ');

@@ -309,7 +309,11 @@ test('review of PR #128, F3: the template of the tool quoted by the operator is 
     `dérogation relecture:securite ${sha.slice(0, 12)} : <ta raison>`,
     `dérogation relecture:securite ${sha.slice(0, 12)} : ta raison.`,
     `dérogation relecture:securite ${sha.slice(0, 12)} : Raison`,
+    // Variants of the template (second review of PR #128).
+    ...['< ta raison >', '« ta raison »', '"ta raison"', '[ta raison]', '‹ta raison›', 'TA RAISON', '<votre raison ici>']
+      .map(reason => `dérogation relecture:securite ${sha.slice(0, 12)} : ${reason}`),
   ]) assert.equal(waiverFor([said(line)], 'relecture:securite', sha), null, line);
+  assert.ok(waiverFor([said(`dérogation relecture:securite ${sha.slice(0, 12)} : correctif relu par l'opérateur lui-même`)], 'relecture:securite', sha), 'a reason written in clear counts');
   // In the rules: the refusal stays, and says why the line did not count.
   const p = project(t, { change: { 'notes.txt': 'x\n' } });
   await p.prove();

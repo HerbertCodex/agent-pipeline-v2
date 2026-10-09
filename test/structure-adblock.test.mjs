@@ -106,3 +106,9 @@ test('review of PR #128, F4: with --base, a file the change does not touch is sa
   const report = (await apv(f.repo, ['structure', 'check', '--base', 'main', '--json'])).json();
   assert.deepEqual(adblock(report).map(c => [c.path, c.blocking]), [['src/lib/components/Old.svelte:1', false]]);
 });
+
+test('second review of PR #128: the ad names are read in a class or id context only, and in selector strings', () => {
+  const script = ['<script>', "  const id = 'ad-hoc-report';", "  const label = 'sponsor-text';", "  document.querySelector('.ad-box');", "  el.closest('#sponsor-zone');", '</script>', ''].join('\n');
+  assert.deepEqual(adBlockedNames(script, 'src/R.svelte').map(h => [h.line, h.kind, h.name]), [[4, 'classe', 'ad-box'], [5, 'identifiant', 'sponsor-zone']]);
+  assert.deepEqual(adBlockedNames('<iframe sandbox="ad-x"></iframe>\n<a href="#ad-top">x</a>\n', 'src/R.svelte'), []);
+});
