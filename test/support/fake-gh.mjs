@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Fake `gh` for the `apv stack` tests (APV_GH). State in the JSON file named by FAKE_GH_STATE:
+// Fake `gh` for the `apv stack` tests (APV_GH). State in the JSON file named by FAKE_GH_STATE (`comments`: bodies of the
+// comments of each pull request, read by the merge on order):
 // { prs: { "<n>": { ...gh pr view fields } }, behavior: { retargetIgnored: [n], retargetFail: [n], mergeFail: [n],
 //   headMovesAtMerge: [n], unknownViews: { "<n>": count }, afterMerge: { "<n>": { "<m>": { ...fields } } },
 //   behind: { "<n>": { "<base>": { ahead_by, files, listed, merges } } }, compareFail: [n],
@@ -79,6 +80,12 @@ if (group === 'api' && compare) {
     const answer = { ahead_by: found.ahead_by, merge_base: 'b'.repeat(40), listed: found.listed ?? found.ahead_by, merges: found.merges ?? 0, files: found.files };
     process.stdout.write(`${JSON.stringify(answer)}\n`);
   }
+} else if (group === 'api' && /^repos\/o\/r\/issues\/\d+\/comments$/.test(restPath) && method === 'GET') {
+  // Comments of a pull request (merge on order): `comments: { "<n>": [body...] }`, one JSON string per line, as
+  // `gh api --paginate ... --jq '.[] | .body | @json'` writes them.
+  const n = restPath.split('/')[4];
+  if (!args.includes('--paginate') || option('--jq') !== '.[] | .body | @json') { process.stderr.write('fake gh: comments read without --paginate or the expected --jq\n'); code = 1; }
+  else for (const body of state.comments?.[n] ?? []) process.stdout.write(`${JSON.stringify(body)}\n`);
 } else if (group === 'api' && restPath === 'repos/o/r' && method === 'GET') {
   if (state.behavior.repoFail) { process.stderr.write('gh: Server Error (HTTP 500)\n'); code = 1; }
   else {

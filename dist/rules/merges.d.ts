@@ -22,11 +22,21 @@ export interface MergeTrace extends MergeTraceBody {
 export declare function writeMergeTrace(common: string, body: Omit<MergeTraceBody, 'v'>, key: Buffer): string;
 /** The signed traces; unsigned, altered or unreadable files are ignored. */
 export declare function readMergeTraces(common: string, key?: Buffer<ArrayBufferLike> | null): MergeTrace[];
+/**
+ * A commit on the audited branch that no signed trace accounts for. `order`: it carries the trailer of a merge on order
+ * (`Apv-Order`, src/orders/merge.ts) whose merged head is its second parent. The trailer is not signed and the audit does
+ * not match it with its signed order (keys at its first parent, comments of the pull request, digest of the order): it
+ * stays unaccounted, said « pied Apv-Order non vérifié », never laundered by a well-formed trailer.
+ */
 export interface UnaccountedCommit {
     sha: string;
     date: string;
     subject: string;
     merge: boolean;
+    order?: {
+        nonce: string;
+        step: string;
+    };
 }
 export interface MergeAudit {
     /** The branch audited (`origin/main`), and the commit it pointed to; null when it does not resolve. */

@@ -20,6 +20,7 @@ import { rulesSchema, rulesSettings } from '../rules/config.js';
 import { testsCheckSchema } from '../testcheck/check.js';
 import { freshnessIssues, freshnessSchema } from '../freshness/config.js';
 import { modelsSchema } from './models.js';
+import { operatorOrdersIssues } from '../orders/config.js';
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
 /** V2 configuration, read as is for projects not yet migrated. */
@@ -354,6 +355,9 @@ export function configIssues(raw) {
         list.attempt('CONFIG', () => mapSettings(value.map));
     if (value.rules)
         list.attempt('CONFIG', () => rulesSettings(value.rules, []));
+    if (value.rules?.operatorOrders)
+        for (const message of operatorOrdersIssues(value.rules.operatorOrders))
+            list.check(false, 'CONFIG', message);
     for (const arg of value.review?.dast?.command ?? []) {
         if (!arg.includes('{{'))
             continue;

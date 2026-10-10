@@ -1,5 +1,6 @@
 import { s, type Infer } from '../domain/schema.js';
 import { relativeGlob } from '../reuse/config.js';
+import { operatorOrdersSchema } from '../orders/config.js';
 
 /**
  * The rules the tool enforces before a merge (`apv rules check`, `apv stack merge`, `apv stack batch --merge`), docs/REGLES.md.
@@ -39,6 +40,8 @@ export const DOCS_ONLY_KINDS = ['decisions', 'mockups', 'drafts', 'specs', 'jour
 export type DocsOnlyKind = typeof DOCS_ONLY_KINDS[number];
 
 export const rulesSchema = s.object({
+  /** Merges on a signed order of the operator (docs/REGLES.md, « Fusion sur ordre signé », src/orders/config.ts); absent: none. */
+  operatorOrders: s.optional(operatorOrdersSchema),
   /**
    * Captures the fidelity review attaches to the commit of a change of interface. `themes: ["light"]` only for a
    * project without a dark theme; the tablet may be added, never less than one width.
