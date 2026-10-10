@@ -13,10 +13,11 @@ const FOREIGN = ['method', 'target', 'ready', 'allow-behind', 'reason', 'keep-br
 type OrderValues = { order?: string | undefined; json?: boolean | undefined } & Partial<Record<typeof FOREIGN[number], unknown>>;
 
 export const ORDER_USAGE = `--order <référence>  (merge) fusion sur ordre signé de l'opérateur, sans session de l'opérateur : exactement deux PR,
-       la PR de publication puis la PR d'article qui porte l'ordre. Lit rules.operatorOrders à la base : ordre authentifié
+       la PR de publication puis la PR d'article qui porte l'ordre. Lit rules.operatorOrders à la base de confiance (la cible avant
+       toute fusion sur cet ordre, fixée pour tout le lancement) : ordre authentifié
        par une clé déclarée, non échu, lié à la décision signée de plus grand numéro, non consommé (pied Apv-Order de
        l'histoire de la cible) ; tête de publication descendante de la cible ; commande de vérification du projet lancée
-       depuis une copie propre de la base ; règles de apv rules check à la tête fusionnée ; attestation fraîche de la
+       depuis une copie propre de la base de confiance ; règles de apv rules check à la tête fusionnée ; attestation fraîche de la
        production liée à un défi tiré par APV ; commit de fusion de parents (cible, tête) avec le pied Apv-Order, poussé
        sans force dans les maxAgeSeconds de l'attestation. Une étape à la fois, publication puis article ; déjà faites :
        already_done (sortie 0). Jamais l'API de fusion de GitHub, jamais de poussée forcée. Refus : code et raison.`;

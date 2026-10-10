@@ -8,9 +8,10 @@ import type { OrderStep, VerifiedOrder } from './order.js';
 
 /**
  * The verification command of the project (`rules.operatorOrders.verify.publication`), run by APV from a clean copy of
- * the base: a detached worktree of the base commit, prepared by `batch.setup` of the base when it declares one (the
- * dependencies of the base, never those of the pull request), then the command with `{{base}}`, `{{head}}` and
- * `{{step}}` replaced, the verified order as JSON on its input. Nothing of the head is executed by APV: the command reads
+ * the trusted base of the run (`source`: the target as it was before any merge on this order, never a commit a pull
+ * request wrote): a detached worktree of it, prepared by `batch.setup` of that same base when it declares one, then the
+ * command with `{{base}}` (the current target, an argument only), `{{head}}` and `{{step}}` replaced, the verified
+ * order as JSON on its input. Nothing of the head is executed by APV: the command reads
  * it through Git. Exit 0: the content is the one the order signed; any other exit refuses, with the code the command
  * wrote (`{ "ok": false, "code": "content" }` on its last line) when it is a short word.
  */
@@ -22,7 +23,7 @@ export interface VerifyCommand {
   /** Variables given to the setup and the command: `environment.passEnv` of the base, and HOME. */
   passEnv: readonly string[];
 }
-export interface VerifyInput { repo: string; git: LotGit; base: string; head: string; step: OrderStep; order: VerifiedOrder; settings: VerifyCommand; env: NodeJS.ProcessEnv; signal?: AbortSignal }
+export interface VerifyInput { repo: string; git: LotGit; source: string; base: string; head: string; step: OrderStep; order: VerifiedOrder; settings: VerifyCommand; env: NodeJS.ProcessEnv; signal?: AbortSignal }
 /** `projectCode`: the code the command of the project gave (`content`, `files`...), null when it gave none or did not run. */
 export type VerifyResult = { ok: true } | { ok: false; projectCode: string | null; detail: string };
 
@@ -43,7 +44,7 @@ export async function runVerifyCommand(input: VerifyInput): Promise<VerifyResult
   const copy = join(folder, 'base');
   const env = environment([...input.settings.passEnv, 'HOME'], input.env);
   try {
-    const added = await input.git.run(input.repo, ['worktree', 'add', '--detach', '--quiet', copy, input.base]);
+    const added = await input.git.run(input.repo, ['worktree', 'add', '--detach', '--quiet', copy, input.source]);
     if (!added.ok) return { ok: false, projectCode: null, detail: `copie propre de la base impossible : ${tail(added.stderr)}` };
     if (input.settings.setup) {
       const prepared = await runProcess({ command: input.settings.setup.command, cwd: copy, env, timeoutMs: input.settings.setup.timeoutMs, maxOutputBytes: 256 * 1024,

@@ -143,8 +143,15 @@ export function checkAttestation(domain: string, keys: readonly PublicKey[], sig
   return same ? { ok: true } : { ok: false, code: 'order' };
 }
 
-/** The trailer of a merge on order: written by APV in the message of its merge commit, it consumes the step. */
-export interface OrderTrailer { nonce: string; step: OrderStep }
+/**
+ * A merge commit made by APV on order, read on the first-parent history of the target: two parents, the trailer
+ * `Apv-Order`, `Apv-Order-Step`, `Apv-Order-Sha256` and `Apv-Merged-Head` read by Git as trailers (the last paragraph of
+ * the message), the merged head being the second parent. A trailer copied into an ordinary commit (a squash) is not one.
+ */
+export interface OrderMergeCommit { sha: string; firstParent: string; nonce: string; step: OrderStep; digest: string; head: string }
+
+/** The format of `git log` that `orderMergeCommits` reads. */
+export const ORDER_LOG_FORMAT = '--format=%H%x1f%P%x1f%(trailers:key=Apv-Order,key=Apv-Order-Step,key=Apv-Order-Sha256,key=Apv-Merged-Head,unfold)%x1e';
 
 /** The message of the merge commit of a step: a title, then the trailer (nonce, step, digest of the order, merged head). */
 export function mergeMessage(input: { pr: number; step: OrderStep; nonce: string; digest: string; head: string }): string {
@@ -152,13 +159,22 @@ export function mergeMessage(input: { pr: number; step: OrderStep; nonce: string
     `Apv-Order: ${input.nonce}`, `Apv-Order-Step: ${input.step}`, `Apv-Order-Sha256: ${input.digest}`, `Apv-Merged-Head: ${input.head}`, ''].join('\n');
 }
 
-/** The trailers `Apv-Order` (nonce and step) of commit messages. */
-export function orderTrailers(messages: readonly string[]): OrderTrailer[] {
-  const out: OrderTrailer[] = [];
-  for (const message of messages) {
-    const nonce = /^Apv-Order: ([0-9a-f-]{36})$/m.exec(message)?.[1];
-    const step = /^Apv-Order-Step: (publication|article)$/m.exec(message)?.[1] as OrderStep | undefined;
-    if (nonce && UUID.test(nonce) && step) out.push({ nonce, step });
+/** The merge commits on order of a `git log --first-parent ORDER_LOG_FORMAT` output, newest first. */
+export function orderMergeCommits(log: string): OrderMergeCommit[] {
+  const out: OrderMergeCommit[] = [];
+  for (const record of log.split('\x1e').map(r => r.trim()).filter(Boolean)) {
+    const [sha, parents, trailers = ''] = record.split('\x1f');
+    const list = (parents ?? '').split(' ').filter(Boolean);
+    if (!sha || list.length !== 2) continue;
+    const one = (key: string, pattern: string): string | null => {
+      const found = [...trailers.matchAll(new RegExp(`^${key}: (${pattern})$`, 'gm'))];
+      return found.length === 1 ? found[0]![1]! : null;
+    };
+    const nonce = one('Apv-Order', '[0-9a-f-]{36}');
+    const step = one('Apv-Order-Step', 'publication|article') as OrderStep | null;
+    const digest = one('Apv-Order-Sha256', '[0-9a-f]{64}');
+    const head = one('Apv-Merged-Head', '[0-9a-f]{40}');
+    if (nonce && UUID.test(nonce) && step && digest && head && head === list[1]) out.push({ sha, firstParent: list[0]!, nonce, step, digest, head });
   }
   return out;
 }

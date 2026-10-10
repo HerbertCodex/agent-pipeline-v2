@@ -1,34 +1,45 @@
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { loadConfigAtCommit, type ApvConfig } from '../config/load.js';
+import { hash } from '../domain/hash.js';
 import { errorMessage } from '../domain/errors.js';
+import { runProcess } from '../execution/process.js';
 import type { LotGit } from '../stack/batch.js';
 import { VIEW_FIELDS, hostname, parsePullRequest, pullRequestPath, type GhCall, type GhRunner, type PullRequest } from '../stack/github.js';
 import { requestAttestation, type Fetcher } from './attestation.js';
-import type { OperatorOrdersSettings } from './config.js';
+import { publicationBranchOf, type OperatorOrdersSettings } from './config.js';
 import { publicKeys } from './envelope.js';
-import { UUID, mergeMessage, orderTrailers, verifyOrder, type OrderRefusal, type OrderStep, type VerifiedOrder } from './order.js';
+import { COMMIT, ORDER_LOG_FORMAT, UUID, mergeMessage, orderMergeCommits, verifyOrder, type OrderMergeCommit, type OrderRefusal, type OrderStep, type VerifiedOrder } from './order.js';
 import { runVerifyCommand, type VerifyInput, type VerifyResult } from './verify-command.js';
 
 /**
- * `apv stack merge <publication> <article> --order <nonce>` (docs/REGLES.md, « Fusion sur ordre signé »): the merge of
- * the two pull requests of an operator order, with no session of the operator, each step once.
+ * `apv stack merge <publication> <article> --order <nonce>` (docs/REGLES.md, section 3 ter): the merge of the two pull
+ * requests of an operator order, with no session of the operator, each step once.
+ *
+ * Trusted base `T`, fixed for the whole run before anything is merged: the target as it was before any merge on this
+ * order (its head at the start, or the first parent of the publication merge APV already made for this order). The keys,
+ * the domain, the attestation address, the verification command, `batch.setup` and the variables are read at `T` only,
+ * and the verification command always runs from a clean copy of `T`: nothing a pull request wrote (the publication head
+ * merged at the first step included) is ever read as configuration or executed by the tool.
  *
  * For each step (publication, then article), in this order, `M` being the head of the target read at that moment:
- * 1. the order `nonce`, signed on the article pull request, verified offline with the keys of `M` (signature, repository,
- *    pull request, expiry, last signed decision by sequence number, head of the article pull request);
- * 2. not consumed: no commit of the first-parent history of `M` carries its trailer for this step (`nonce_used`;
- *    both steps there: `already_done`, nothing to do);
+ * 1. the order `nonce`, signed on the article pull request, verified offline with the keys of `T` (signature,
+ *    repository, pull request, expiry, last signed decision by sequence number, head of the article pull request);
+ * 2. not consumed: only merge commits APV made count (two parents, second parent equal to `Apv-Merged-Head`, trailer
+ *    read by Git, `Apv-Order-Sha256` equal to the digest of this order); both steps there: `already_done`;
  * 3. the publication head `H` (read once, at the start) descends from `M` (`base`); the verification command of the
- *    project, from a clean copy of `M`, finds the content of the step to be the one the order signed (`verify`);
+ *    project, from a clean copy of `T`, finds the content of the step to be the one the order signed (`verify`);
  * 4. the rules checked before any merge (`apv rules check`) at the merged head (`rules`);
- * 5. a fresh attestation of the production bound to a challenge drawn here (`attestation`);
- * 6. the merge commit of parents (`M`, head), with the trailer `Apv-Order`, pushed on the target without force within
- *    `maxAgeSeconds` of the attestation (a new attestation otherwise). A push refused because the target moved starts the
- *    step again on the new `M` (twice at most, then `main_moved`). Never the merge API of GitHub, never a forced push.
+ * 5. the tree of the merge is the tree verified: the one of `H` (publication), or only the files of the article pull
+ *    request with their content at the signed commit (article);
+ * 6. a fresh attestation of the production bound to a challenge drawn here (`attestation`);
+ * 7. the merge commit of parents (`M`, head), with the trailer `Apv-Order`, pushed on the target without force within
+ *    `maxAgeSeconds` of the attestation (a new attestation otherwise), the push bounded in time. A push refused because
+ *    the target moved starts the step again on the new `M`, whose declaration must be the one of `T` (twice at most, then
+ *    `main_moved`). Never the merge API of GitHub, never a forced push.
  */
 
-export type OrderMergeCode = OrderRefusal | 'config' | 'github' | 'git' | 'nonce_used' | 'base' | 'verify' | 'rules' | 'attestation' | 'merge_conflict' | 'main_moved';
+export type OrderMergeCode = OrderRefusal | 'config' | 'github' | 'git' | 'nonce_used' | 'base' | 'verify' | 'rules' | 'attestation' | 'merge_conflict' | 'main_moved' | 'push';
 
 export interface OrderMergeStep { step: OrderStep; pr: number; head: string; base: string; mergeCommit: string }
 export interface OrderMergeReport {
@@ -38,6 +49,8 @@ export interface OrderMergeReport {
   reason: string | null;
   projectCode: string | null;
   target: string | null;
+  /** The trusted base of the run: the configuration was read there and the verification command ran from it. */
+  trustedBase: string | null;
   /** Steps merged by this run, in order; the steps found already consumed are in `consumed`. */
   merged: OrderMergeStep[];
   consumed: OrderStep[];
@@ -65,16 +78,18 @@ export interface OrderMergeOptions {
   now?: () => number;
   monotonic?: () => number;
   challenge?: () => string;
+  /** Longest push (the attestation window is checked just before it). */
+  pushTimeoutMs?: number;
   /** Called just before each push (tests: another run, or someone else, moves the target there). */
   beforePush?: (step: OrderStep, commit: string) => Promise<void>;
 }
 
 /** Pushes refused because the target moved, after which the run stops (`main_moved`). */
 export const MAX_PUSH_RETRIES = 2;
+export const DEFAULT_PUSH_TIMEOUT_MS = 60_000;
 /** New attestations asked when the push comes later than `maxAgeSeconds` after one. */
 const MAX_STALE_ATTESTATIONS = 2;
 const COMMENTS_MAX_BYTES = 8 * 1024 * 1024;
-const BRANCH = /^(?!-)[A-Za-z0-9._/-]{1,250}$/;
 
 class Refusal extends Error {
   constructor(readonly code: OrderMergeCode, readonly reason: string, readonly projectCode: string | null = null) { super(reason); }
@@ -82,32 +97,59 @@ class Refusal extends Error {
 
 const short = (sha: string): string => sha.slice(0, 12);
 
+/** A branch name read from GitHub that may be fetched: never `HEAD`, an option, a range or a reflog form. */
+export function safeBranch(name: string): boolean {
+  return /^[A-Za-z0-9._/-]{1,250}$/.test(name) && name !== 'HEAD' && !/^[-/.]/.test(name) && !name.endsWith('/') && !name.endsWith('.lock')
+    && !name.includes('..') && !name.includes('//') && !name.split('/').some(part => part.startsWith('.'));
+}
+
+/** What a run fixes at its trusted base: the declaration of the orders, the setup of a copy and the variables given. */
+function fingerprint(config: ApvConfig): string {
+  return hash({ orders: config.rules?.operatorOrders ?? null, setup: config.batch?.setup ?? null, setupTimeoutMs: config.batch?.setupTimeoutMs ?? null,
+    batchEnv: config.batch?.passEnv ?? null, passEnv: config.environment.passEnv });
+}
+
 export async function mergeOnOrder(options: OrderMergeOptions): Promise<OrderMergeReport> {
-  const report: OrderMergeReport = { status: 'refused', code: null, reason: null, projectCode: null, target: null, merged: [], consumed: [], attestations: 0, traceErrors: [] };
+  const report: OrderMergeReport = { status: 'refused', code: null, reason: null, projectCode: null, target: null, trustedBase: null, merged: [], consumed: [], attestations: 0, traceErrors: [] };
   const log = options.log ?? (() => undefined);
   const now = options.now ?? Date.now;
   const monotonic = options.monotonic ?? (() => performance.now());
   const challenge = options.challenge ?? randomUUID;
   const verify = options.verify ?? runVerifyCommand;
-  const { repo, remote, git } = options;
+  const { repo, remote } = options;
+  const run = (args: string[]): ReturnType<LotGit['run']> => options.git.run(repo, ['-c', 'core.fsmonitor=false', ...args]);
+  /** Private refs of this run, never a branch nor a remote-tracking ref a user works with; removed at the end. */
+  const privateRef = (name: string): string => `refs/apv/orders/${options.nonce}/${name}`;
 
   const gh = async (args: string[]): Promise<GhCall> => { const call = await options.gh(args); options.onCall?.(call); return call; };
   const mustGit = async (args: string[], what: string): Promise<string> => {
-    const r = await git.run(repo, args);
+    const r = await run(args);
     if (!r.ok) throw new Refusal('git', `${what} : ${r.stderr.trim().slice(-400) || 'git en échec'}`);
     return r.stdout.trim();
   };
   const readPr = async (n: number): Promise<PullRequest> => {
     const call = await gh(['pr', 'view', String(n), '--json', VIEW_FIELDS]);
     if (call.status !== 0 || call.error) throw new Refusal('github', `PR #${n} illisible (gh pr view)`);
-    try { return parsePullRequest(call.stdout); } catch (error) { throw new Refusal('github', `PR #${n} illisible : ${errorMessage(error)}`); }
+    let pr: PullRequest;
+    try { pr = parsePullRequest(call.stdout); } catch (error) { throw new Refusal('github', `PR #${n} illisible : ${errorMessage(error)}`); }
+    if (!COMMIT.test(pr.headRefOid)) throw new Refusal('pr', `PR #${n} : tête rendue par GitHub qui n'est pas un commit de 40 caractères hexadécimaux`);
+    if (!safeBranch(pr.headRefName) || !safeBranch(pr.baseRefName)) throw new Refusal('pr', `PR #${n} : nom de branche refusé (${pr.headRefName.slice(0, 80)})`);
+    return pr;
   };
-  const fetchBranch = async (branch: string): Promise<string> => {
-    if (!BRANCH.test(branch)) throw new Refusal('github', `nom de branche refusé : ${branch.slice(0, 80)}`);
-    await mustGit(['fetch', '--no-tags', '--quiet', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`], `récupération de ${branch}`);
-    return mustGit(['rev-parse', '--verify', `refs/remotes/${remote}/${branch}^{commit}`], `tête de ${remote}/${branch}`);
+  const fetchInto = async (branch: string, name: string): Promise<string> => {
+    await mustGit(['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--no-auto-gc', '--end-of-options', remote, `+refs/heads/${branch}:${privateRef(name)}`], `récupération de ${branch}`);
+    return mustGit(['rev-parse', '--verify', '--end-of-options', `${privateRef(name)}^{commit}`], `tête récupérée de ${branch}`);
   };
-  const hasCommit = async (sha: string): Promise<boolean> => (await git.run(repo, ['cat-file', '-e', `${sha}^{commit}`])).ok;
+  const hasCommit = async (sha: string): Promise<boolean> => (await run(['cat-file', '-e', `${sha}^{commit}`])).ok;
+  const configAt = (commit: string): ApvConfig => {
+    try { return loadConfigAtCommit(repo, commit).config; }
+    catch (error) { throw new Refusal('config', `configuration illisible à ${short(commit)} : ${errorMessage(error).split('\n')[0]}`); }
+  };
+  const ordersAt = (config: ApvConfig, commit: string): OperatorOrdersSettings => {
+    const settings = config.rules?.operatorOrders;
+    if (!settings) throw new Refusal('config', `rules.operatorOrders non déclaré à ${short(commit)} : aucune fusion sur ordre`);
+    return settings;
+  };
 
   try {
     if (!UUID.test(options.nonce)) throw new Refusal('malformed', 'référence d\'ordre : UUID attendu');
@@ -121,64 +163,91 @@ export async function mergeOnOrder(options: OrderMergeOptions): Promise<OrderMer
     }
     const target = article.baseRefName;
     report.target = target;
-    if (!BRANCH.test(target) || publication.baseRefName !== target) throw new Refusal('pr', `les deux PR doivent viser la même branche (${publication.baseRefName} et ${target})`);
+    if (publication.baseRefName !== target) throw new Refusal('pr', `les deux PR doivent viser la même branche (${publication.baseRefName} et ${target})`);
     if (publication.headRefName === target || article.headRefName === target) throw new Refusal('pr', `une PR part de la branche cible ${target}`);
     const repoName = where.repo.slice('repos/'.length);
     const commentsArgs = ['api', ...hostname(where), '--paginate', `${where.repo}/issues/${options.articlePr}/comments`, '--jq', '.[] | .body | @json'];
-    // H: the head of the publication pull request read once, at the start; a commit pushed later is never merged.
-    const publicationHead = publication.headRefOid;
-
-    let retries = 0;
-    for (;;) {
-      const base = await fetchBranch(target);
-      // The configuration of the base, never the one of a pull request: keys, attestation, verification, setup, variables.
-      let config: ApvConfig;
-      try { config = loadConfigAtCommit(repo, base).config; }
-      catch (error) { throw new Refusal('config', `configuration illisible à la base ${short(base)} : ${errorMessage(error).split('\n')[0]}`); }
-      const settings = config.rules?.operatorOrders;
-      if (!settings) throw new Refusal('config', `rules.operatorOrders non déclaré à la base ${short(base)} : aucune fusion sur ordre`);
-
-      // 1. The order, read again at each step: a decision taken in between supersedes it.
+    const readOrder = async (settings: OperatorOrdersSettings) => {
       const comments = await gh(commentsArgs);
       if (comments.status !== 0 || comments.error) throw new Refusal('github', `commentaires de la PR #${options.articlePr} illisibles`);
       const bodies = readBodies(comments.stdout);
       if (!bodies) throw new Refusal('github', `commentaires de la PR #${options.articlePr} illisibles (format, ou plus de ${COMMENTS_MAX_BYTES} octets)`);
       article = await readPr(options.articlePr);
-      const keys = publicKeys(settings.publicKeys);
-      const verdict = verifyOrder({ domain: settings.domain, keys, bodies, repo: repoName, pr: options.articlePr, head: article.headRefOid, nonce: options.nonce, now: now() });
+      return verifyOrder({ domain: settings.domain, keys: publicKeys(settings.publicKeys), bodies, repo: repoName, pr: options.articlePr,
+        head: article.headRefOid, nonce: options.nonce, now: now() });
+    };
+    const mergesOf = async (base: string): Promise<OrderMergeCommit[]> =>
+      orderMergeCommits(await mustGit(['log', '--first-parent', ORDER_LOG_FORMAT, '--end-of-options', base], 'histoire de la cible')).filter(c => c.nonce === options.nonce);
+    // H: the head of the publication pull request read once, at the start; a commit pushed later is never merged.
+    const publicationHead = publication.headRefOid;
+
+    // The trusted base: the target before any merge on this order. A publication merge already made for it (a resume)
+    // counts only when it carries the digest of the order authenticated with the keys of its own first parent.
+    const start = await fetchInto(target, 'cible');
+    let trusted = start;
+    for (const merge of (await mergesOf(start)).filter(c => c.step === 'publication')) {
+      let settings: OperatorOrdersSettings | undefined;
+      try { settings = configAt(merge.firstParent).rules?.operatorOrders; } catch { settings = undefined; }
+      if (!settings) continue;
+      const verdict = await readOrder(settings);
+      if (verdict.ok && verdict.digest === merge.digest) { trusted = merge.firstParent; break; }
+    }
+    report.trustedBase = trusted;
+    const trustedConfig = configAt(trusted);
+    const settings = ordersAt(trustedConfig, trusted);
+    const trustedPrint = fingerprint(trustedConfig);
+
+    let retries = 0;
+    let base = start;
+    for (;;) {
+      // 1. The order, read again at each step with the keys of the trusted base: a decision taken in between supersedes it.
+      const verdict = await readOrder(settings);
       if (!verdict.ok) throw new Refusal(verdict.code, ORDER_TEXT[verdict.code]);
 
-      // 2. Consumption: the trailers of the first-parent history of the base.
-      const history = await mustGit(['log', '--first-parent', '--format=%B%x1e', base], 'histoire de la base');
-      const done = new Set(orderTrailers(history.split('\x1e')).filter(t => t.nonce === options.nonce).map(t => t.step));
+      // 2. Consumption: the merge commits APV made for this order, of this digest, on the first-parent history.
+      const merges = (await mergesOf(base)).filter(c => c.digest === verdict.digest);
+      const done = new Set(merges.filter(c => c.step === 'publication' || c.head === verdict.order.articleSha).map(c => c.step));
       report.consumed = (['publication', 'article'] as const).filter(s => done.has(s) && !report.merged.some(m => m.step === s));
       if (done.has('publication') && done.has('article')) { report.status = 'already_done'; return report; }
       if (done.has('article')) throw new Refusal('nonce_used', 'étape article déjà consommée sans l\'étape publication : ordre inutilisable');
       const step: OrderStep = done.has('publication') ? 'article' : 'publication';
+      if (step === 'article' && merges.find(c => c.step === 'publication')!.firstParent !== trusted) {
+        throw new Refusal('config', 'la fusion de publication de cet ordre ne part pas de la base de confiance de ce lancement : relancer');
+      }
       const pr = step === 'publication' ? options.publicationPr : options.articlePr;
       const head = step === 'publication' ? publicationHead : verdict.order.articleSha;
 
-      // 3. The content: the head descends from the base (publication), the command of the project from a clean copy.
-      await fetchBranch(step === 'publication' ? publication.headRefName : article.headRefName);
+      // 3. The pull request of the step, its head, the content checked by the project from the trusted base.
+      if (step === 'publication' && settings.publicationBranch !== undefined) {
+        const expected = publicationBranchOf(settings.publicationBranch, verdict.order.payload['slug']);
+        if (expected === null || publication.headRefName !== expected) {
+          throw new Refusal('pr', `PR #${pr} : branche ${publication.headRefName.slice(0, 80)}, l'ordre désigne ${expected ?? 'un slug illisible'} (rules.operatorOrders.publicationBranch)`);
+        }
+      }
+      await fetchInto(step === 'publication' ? publication.headRefName : article.headRefName, step);
       if (!(await hasCommit(head))) throw new Refusal('git', `commit ${short(head)} introuvable après récupération`);
-      if (step === 'publication' && !(await git.run(repo, ['merge-base', '--is-ancestor', base, head])).ok) {
+      if (step === 'publication' && !(await run(['merge-base', '--is-ancestor', base, head])).ok) {
         throw new Refusal('base', `la tête ${short(head)} de la PR #${pr} ne descend pas de ${target} (${short(base)}) : fusionner ${target} dans la branche, nouvelle preuve`);
       }
-      log(`Ordre ${options.nonce} : étape ${step}, PR #${pr} à ${short(head)} sur ${target} à ${short(base)} ; vérification du projet depuis une copie propre de la base.`);
-      const checked = await verify({ repo, git, base, head, step, order: verdict, env: options.env,
-        settings: { command: settings.verify.publication, timeoutMs: settings.verify.timeoutMs, passEnv: config.environment.passEnv,
-          ...(config.batch?.setup ? { setup: { command: config.batch.setup, timeoutMs: config.batch.setupTimeoutMs } } : {}) } });
+      log(`Ordre ${options.nonce} : étape ${step}, PR #${pr} à ${short(head)} sur ${target} à ${short(base)} ; vérification du projet depuis une copie propre de la base de confiance ${short(trusted)}.`);
+      const checked = await verify({ repo, git: options.git, source: trusted, base, head, step, order: verdict, env: options.env,
+        settings: { command: settings.verify.publication, timeoutMs: settings.verify.timeoutMs, passEnv: trustedConfig.environment.passEnv,
+          ...(trustedConfig.batch?.setup ? { setup: { command: trustedConfig.batch.setup, timeoutMs: trustedConfig.batch.setupTimeoutMs } } : {}) } });
       if (!checked.ok) throw new Refusal('verify', `vérification du projet refusée : ${checked.detail}`, checked.projectCode);
 
       // 4. The rules checked before any merge, at the merged head.
       const problems = await options.rules(head, target);
       if (problems.length) throw new Refusal('rules', `règles avant fusion refusées à ${short(head)} :\n${problems.join('\n')}`);
 
-      // 5. and 6. The attestation, then the merge commit pushed within its window.
-      const tree = await git.run(repo, ['merge-tree', '--write-tree', base, head]);
-      if (!tree.ok) throw new Refusal('merge_conflict', `fusion de ${short(head)} sur ${short(base)} en conflit`);
+      // 5. The merge, whose tree must be the one verified.
+      const merged = await run(['merge-tree', '--write-tree', base, head]);
+      if (!merged.ok) throw new Refusal('merge_conflict', `fusion de ${short(head)} sur ${short(base)} en conflit`);
+      const tree = merged.stdout.trim().split('\n')[0]!;
+      await checkTree(step, tree, base, head);
       const message = mergeMessage({ pr, step, nonce: options.nonce, digest: verdict.digest, head });
-      const commit = await mustGit(['commit-tree', tree.stdout.trim().split('\n')[0]!, '-p', base, '-p', head, '-m', message], 'commit de fusion');
+      const commit = await mustGit(['commit-tree', tree, '-p', base, '-p', head, '-m', message], 'commit de fusion');
+
+      // 6. and 7. The attestation, then the push within its window, bounded in time.
       await attest(settings, verdict, report, challenge, options.fetch);
       let attestedAt = monotonic();
       await options.beforePush?.(step, commit);
@@ -188,11 +257,18 @@ export async function mergeOnOrder(options: OrderMergeOptions): Promise<OrderMer
         await attest(settings, verdict, report, challenge, options.fetch);
         attestedAt = monotonic();
       }
-      const pushed = await git.run(repo, ['push', '--porcelain', remote, `${commit}:refs/heads/${target}`]);
-      if (!pushed.ok) {
+      const pushed = await runProcess({
+        command: ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'push', '--porcelain', '--no-verify', '--end-of-options', remote, `${commit}:refs/heads/${target}`],
+        cwd: repo, env: { ...options.env, GIT_TERMINAL_PROMPT: '0' }, timeoutMs: options.pushTimeoutMs ?? DEFAULT_PUSH_TIMEOUT_MS, maxOutputBytes: 64 * 1024,
+      });
+      if (pushed.status === 'timed_out') throw new Refusal('push', `poussée arrêtée au délai : issue inconnue ; relancer la même commande, le pied dira si l'étape ${step} est faite`);
+      if (pushed.status !== 'passed') {
         retries += 1;
         log(`Poussée sans force refusée (${target} a bougé ?) : ${pushed.stderr.trim().split('\n').pop()?.slice(0, 200) ?? ''} ; nouvelle vérification.`);
         if (retries > MAX_PUSH_RETRIES) throw new Refusal('main_moved', `${target} a bougé à chaque poussée (${retries} fois) : rien n'est fusionné de plus`);
+        base = await fetchInto(target, 'cible');
+        // The target moved: its declaration must still be the one of the trusted base (keys, setup, variables).
+        if (fingerprint(configAt(base)) !== trustedPrint) throw new Refusal('config', `${target} a bougé et sa configuration (rules.operatorOrders, batch.setup ou variables) diffère de la base de confiance ${short(trusted)} : relancer`);
         continue;
       }
       report.merged.push({ step, pr, head, base, mergeCommit: commit });
@@ -201,11 +277,40 @@ export async function mergeOnOrder(options: OrderMergeOptions): Promise<OrderMer
       if (traced) report.traceErrors.push(`trace de fusion de la PR #${pr} non écrite : ${traced}`);
       if (step === 'article') { report.status = 'merged'; return report; }
       retries = 0;
+      base = await fetchInto(target, 'cible');
     }
   } catch (error) {
     if (!(error instanceof Refusal)) throw error;
     Object.assign(report, { status: 'refused', code: error.code, reason: error.reason, projectCode: error.projectCode });
     return report;
+  } finally {
+    if (UUID.test(options.nonce)) {
+      const refs = await run(['for-each-ref', '--format=%(refname)', `refs/apv/orders/${options.nonce}/`]);
+      for (const ref of refs.ok ? refs.stdout.split('\n').filter(Boolean) : []) await run(['update-ref', '-d', ref]);
+    }
+  }
+
+  /**
+   * The tree pushed is the tree verified. Publication: the tree of `H` itself (`H` descends from the target). Article:
+   * every path the merge changes on the target is a path the article pull request changes since its fork, with the
+   * content it has at the signed commit.
+   */
+  async function checkTree(step: OrderStep, tree: string, base: string, head: string): Promise<void> {
+    if (step === 'publication') {
+      if (tree !== await mustGit(['rev-parse', '--verify', '--end-of-options', `${head}^{tree}`], 'arbre de la tête')) {
+        throw new Refusal('merge_conflict', `l'arbre de la fusion n'est pas celui de la tête vérifiée ${short(head)}`);
+      }
+      return;
+    }
+    const fork = await mustGit(['merge-base', base, head], 'base commune de la PR d\'article');
+    const names = async (from: string, to: string): Promise<string[]> => (await mustGit(['diff', '--name-only', '--no-renames', '-z', from, to], 'fichiers changés')).split('\0').filter(Boolean);
+    const allowed = new Set(await names(fork, head));
+    const blob = async (rev: string, path: string): Promise<string | null> => { const r = await run(['rev-parse', '--verify', '--quiet', `${rev}:${path}`]); return r.ok ? r.stdout.trim() : null; };
+    for (const path of await names(base, tree)) {
+      if (!allowed.has(path) || (await blob(tree, path)) !== (await blob(head, path))) {
+        throw new Refusal('merge_conflict', `la fusion de l'étape article change ${path.slice(0, 200)} autrement que le commit signé ${short(head)}`);
+      }
+    }
   }
 }
 
@@ -233,7 +338,7 @@ export function readBodies(stdout: string): string[] | null {
 const ORDER_TEXT: Record<OrderRefusal, string> = {
   malformed: 'aucun ordre lisible de cette référence sur la PR d\'article (ligne signée absente ou malformée)',
   kind: 'la ligne signée n\'est pas un ordre de publication',
-  key: 'ordre signé par une clé que la base ne déclare pas (rules.operatorOrders.publicKeys)',
+  key: 'ordre signé par une clé que la base de confiance ne déclare pas (rules.operatorOrders.publicKeys)',
   signature: 'signature de l\'ordre fausse (charge modifiée, ou autre domaine)',
   repo: 'ordre d\'un autre dépôt',
   pr: 'ordre d\'une autre PR d\'article',
