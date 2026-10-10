@@ -205,6 +205,11 @@ test('ciProof: a manual launch counts only when the workflow takes no input (inp
   assert.match(text(r1), /workflow_dispatch : le workflow déclare des entrées \(inputs\)/);
   const without = project(t, { base: { [WORKFLOW]: workflowText('  workflow_dispatch:\n') } });
   assert.equal(rule(await check(without, { gh: github(without.head, dispatch).gh, repository: 'acme/site' }), 'preuve').status, 'ok');
+  // A manual launch on another commit than the one checked is refused, and one after the change touched the workflow leaves the lane.
+  const elsewhere = github(without.head, s => ({ ...s, runs: { 77: { ...s.runs[77], event: 'workflow_dispatch', head_sha: 'c'.repeat(40) } } }));
+  assert.match(text(rule(await check(without, { gh: elsewhere.gh, repository: 'acme/site' }), 'preuve')), /exécution 9001 d'un autre commit \(cccccccccccc\)/);
+  const edited = project(t, { base: { [WORKFLOW]: workflowText('  workflow_dispatch:\n') }, change: { [WORKFLOW]: workflowText('  workflow_dispatch:\n').replace('npm run test:integration', 'true') } });
+  assert.equal((await check(edited, { gh: github(edited.head, dispatch).gh, repository: 'acme/site' })).ci.state, 'out_of_lane');
   // Any other event (pull_request_target, schedule...) is refused.
   const target = github(without.head, s => ({ ...s, runs: { 77: { ...s.runs[77], event: 'pull_request_target' } } }));
   assert.match(text(rule(await check(without, { gh: target.gh, repository: 'acme/site' }), 'preuve')), /évènement pull_request_target refusé/);

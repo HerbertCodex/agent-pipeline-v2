@@ -88,7 +88,7 @@ function laneProblems(repo, mergeBase, head, settings) {
         const scripts = changedScripts(repo, mergeBase, head);
         if (scripts === 'invalid')
             problems.push('package.json illisible (JSON) à la base ou au commit : ses scripts ne se comparent pas');
-        else if (false)
+        else if (scripts.length)
             problems.push(`package.json : script(s) modifié(s) : ${scripts.slice(0, 10).join(', ')}${scripts.length > 10 ? ', ...' : ''}`);
     }
     // Same blob at the base and at the commit: the workflow that ran is the one of the base (also covered by the diff).
@@ -244,7 +244,7 @@ async function judge(input, c, id, run, gates, excluded, ignored, result, get) {
         return result('refused', [...ignored, `exécution ${runId} d'un autre commit (${runSha ? short(runSha) : 'inconnu'}) que ${short(head)}`], { gates, excluded, checkRun });
     if (event === DISPATCH) {
         const text = gitRead(input.repo, ['show', `${input.mergeBase}:${settings.workflow}`]) ?? '';
-        if (/\binputs\b/.test(text))
+        if (/^[ \t]*inputs[ \t]*:/m.test(text))
             return refuse(`évènement ${DISPATCH} : le workflow déclare des entrées (inputs), qui peuvent tester un autre commit que celui de l'exécution et que l'API ne rend pas`);
     }
     else if (!EVENTS.has(event))

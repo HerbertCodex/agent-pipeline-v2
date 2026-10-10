@@ -242,7 +242,7 @@ async function judge(input: CiProofInput, c: Record<string, unknown>, id: number
   if (runSha !== head) return result('refused', [...ignored, `exécution ${runId} d'un autre commit (${runSha ? short(runSha) : 'inconnu'}) que ${short(head)}`], { gates, excluded, checkRun });
   if (event === DISPATCH) {
     const text = gitRead(input.repo, ['show', `${input.mergeBase}:${settings.workflow}`]) ?? '';
-    if (/\binputs\b/.test(text)) return refuse(`évènement ${DISPATCH} : le workflow déclare des entrées (inputs), qui peuvent tester un autre commit que celui de l'exécution et que l'API ne rend pas`);
+    if (/^[ \t]*inputs[ \t]*:/m.test(text)) return refuse(`évènement ${DISPATCH} : le workflow déclare des entrées (inputs), qui peuvent tester un autre commit que celui de l'exécution et que l'API ne rend pas`);
   } else if (!EVENTS.has(event)) return refuse(`évènement ${event} refusé (acceptés : ${[...EVENTS].join(', ')}, ${DISPATCH} sans entrée)`);
   if (checkRun.runAttempt < 1) return refuse('tentative de l\'exécution inconnue');
   // The check run is a job of that run: a check run created through the API with the token of a job is not.
