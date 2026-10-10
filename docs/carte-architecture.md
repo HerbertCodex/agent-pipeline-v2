@@ -60,7 +60,7 @@ flowchart LR
   - `skills/ui-design/` : une compétence : sa procédure (`SKILL.md`) et ses références.
   - `skills/web-qualite/` : une compétence : sa procédure (`SKILL.md`) et ses références.
 - `src/` : sources du projet. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
-  - `src/commands/` : une commande `apv` par fichier (analyse des options, sortie texte et JSON). Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)). Dossier à plat (30 fichiers de code, seuil 12) : ne pas y ajouter de fichier.
+  - `src/commands/` : une commande `apv` par fichier (analyse des options, sortie texte et JSON). Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)). Dossier à plat (31 fichiers de code, seuil 12) : ne pas y ajouter de fichier.
   - `src/config/` : chargement et validation de `.apv/config.json`. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/db/` : `apv db check`, contrôle du modèle de données. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/design/` : maquettes validées (versement, empreinte, dérive). Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
@@ -75,6 +75,7 @@ flowchart LR
   - `src/lock/` : verrous à bail. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/metrics/` : `apv metrics` : temps de bout en bout d'une exécution et des PR, chemin critique de la phase de code, base de comparaison (lecture seule). Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/onboard/` : reprise d'un projet existant (`apv onboard`). Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
+  - `src/orders/` : fusion sur ordre signé de l'opérateur (enveloppe Ed25519, ordre, attestation, fusion poussée sans force). Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/policy/` : voies de risque, chemins sensibles, motifs de chemins. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/preview/` : aperçu vivant d'une branche. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
   - `src/quality/` : axes de la revue de qualité. Convention : dossiers par fonctionnalité ([documentation](https://legacy.reactjs.org/docs/faq-structure.html)).
@@ -187,6 +188,7 @@ Une ligne par dossier, route principale et point d'entrée, de la forme « - `ch
 - `src/quota/` : relevé du quota d'usage
 - `src/reuse/` : `apv reuse check` et carte du code
 - `src/review/` : `apv review plan` (domaines et niveau de risque du diff) et `apv dast run`
+- `src/orders/` : fusion sur ordre signé de l'opérateur (enveloppe Ed25519, ordre, attestation, fusion poussée sans force)
 - `src/rules/` : `apv rules check` : règles avant fusion, relectures scellées, journal de l'opérateur, ancrage
 - `src/run/` : état et rythme d'une exécution de spec
 - `src/security/` : signaux de sécurité et grille OWASP

@@ -678,6 +678,16 @@ Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR 
 - `requiredGates` : contrôles qu'un projet exige en plus de `reuse`, `code-map` et `structure` (projet web) : un identifiant et le début de la commande, reconnue enveloppée ou non (`node <plugin>/dist/cli.js`, `npx apv`) ; ils valent aussi pour un projet sans interface web.
 - `screens` : motifs des fichiers d'écran que l'outil ne reconnaît pas seul (il connaît les pages, mises en page et pages d'erreur de SvelteKit, Next, Remix, Nuxt, Astro et `pages/`).
 - `docsOnly` : la **voie sans code** ([REGLES.md](REGLES.md), « Voie sans code »), active par défaut avec toutes ses sortes. Elle ne peut que se réduire : `enabled: false` la coupe (toute PR suit les règles normales), `kinds` garde seulement certaines sortes (`decisions`, `mockups`, `drafts`, `specs`, `journal`, `docs` ; `.apv/state/**` n'en est pas une depuis la relecture de sécurité de la PR #121), `exclude` (motifs relatifs, comparés sans tenir compte de la casse) en retire des chemins : un projet y met les documents que ses agents lisent comme consigne sans les importer par `@chemin` (un fichier cité en clair par `CLAUDE.md` ou une compétence n'est pas détecté par l'outil ; au projet pilote, `docs/architecture.md` ; le dépôt d'APV : `docs/**`, `README.md`, `examples/**`). Aucune clé n'ajoute un chemin à la voie. Lue à la base commune par `apv rules check` et les commandes `stack` ; `apv review plan` la lit dans le dépôt, comme le reste de sa configuration.
+- `operatorOrders` : la **fusion sur ordre signé de l'opérateur** ([REGLES.md](REGLES.md), section 3 ter), lue à la base par `apv stack merge --order`, affichée par `apv status`. `domain` : domaine des messages signés du projet (minuscules, chiffres, tirets) ; `publicKeys` : une ou deux clés publiques Ed25519 (PEM SPKI ou sa ligne base64), jamais une clé privée (refusée par le chargeur, jamais recopiée dans l'erreur) ; `attestation.url` : adresse de la production avec `{nonce}` et `{challenge}` une fois chacun, en HTTPS (HTTP seulement sur la boucle locale, pour les tests), sans identifiant ; `attestation.maxAgeSeconds` (10 à 600, défaut 120) et `attestation.timeoutMs` (défaut 15 000) ; `verify.publication` : commande du projet, sans shell, `{{base}}`, `{{head}}`, `{{step}}` remplacés comme arguments entiers, lancée depuis une copie propre de la base, l'ordre vérifié sur son entrée ; `verify.timeoutMs` (défaut 900 000).
+
+```json
+"operatorOrders": {
+  "domain": "mon-projet",
+  "publicKeys": ["-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA...\n-----END PUBLIC KEY-----\n"],
+  "attestation": { "url": "https://exemple.fr/api/articles/attestation?nonce={nonce}&challenge={challenge}", "maxAgeSeconds": 120 },
+  "verify": { "publication": ["npm", "run", "article:order", "--", "publication", "--base", "{{base}}", "--tete", "{{head}}", "--etape", "{{step}}"] }
+}
+```
 
 ## Fraîcheur de l'état : `freshness`
 
