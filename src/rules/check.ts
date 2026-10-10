@@ -196,7 +196,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   const ciNotes: string[] = [];
   if (!skip.has('preuve') && !unscoped && proof && !proof.ok) {
     const pending = proof.gates.filter(g => g.state === 'missing' || g.state === 'dirty').map(g => g.gateId);
-    const headCi = rulesSettings(candidate.rules, []).ciProof; if (headCi && pending.length) { settings.ciProof = headCi;
+    if (settings.ciProof && pending.length) {
       const offline = input.remote?.offline === true;
       ci = await verifyCiProof({ repo, mergeBase, head: sha, settings: settings.ciProof, pending, config: effective,
         gh: offline ? null : input.ci?.gh ?? null,
