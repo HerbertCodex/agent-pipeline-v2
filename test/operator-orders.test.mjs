@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { apv } from './cli-helpers.mjs';
@@ -10,7 +11,7 @@ import { waive } from './support/rules.mjs';
 import { ARTICLE, DOMAIN, IDENTITY, NONCE, PUBLICATION, REPO, comment, fakeGh, fakeProduction, git, orderConfig, orderObjects, orderRepo, pullRequests, signer } from './support/orders.mjs';
 import { configIssues } from '../dist/config/load.js';
 import { readPublicKey, signedLines, verifySigned, publicKeys } from '../dist/orders/envelope.js';
-import { verifyOrder, checkAttestation, mergeMessage, orderMergeCommits } from '../dist/orders/order.js';
+import { verifyOrder, checkAttestation, mergeMessage, orderMergeCommits, readHistory } from '../dist/orders/order.js';
 import { mergeOnOrder, readBodies } from '../dist/orders/merge.js';
 import { refusalCode } from '../dist/orders/verify-command.js';
 import { processGit } from '../dist/stack/batch.js';
@@ -157,11 +158,14 @@ test('attestation : défi différent, autre clé, décision rejouée comme attes
 
 test('pied de fusion et lectures : le pied se relit, les commentaires se lisent ligne à ligne, un code court se reprend', () => {
   const message = mergeMessage({ pr: 21, step: 'publication', nonce: NONCE, digest: 'f'.repeat(64), head: 'a'.repeat(40) });
-  // Read as git log --first-parent ORDER_LOG_FORMAT writes it: only a commit of two parents whose second is the merged head.
-  const trailers = `Apv-Order: ${NONCE}\nApv-Order-Step: publication\nApv-Order-Sha256: ${'f'.repeat(64)}\nApv-Merged-Head: ${'a'.repeat(40)}`;
-  const log = [`${'1'.repeat(40)}\x1f${'b'.repeat(40)} ${'a'.repeat(40)}\x1f${trailers}\x1e`, `${'2'.repeat(40)}\x1f${'b'.repeat(40)}\x1f${trailers}\x1e`,
-    `${'3'.repeat(40)}\x1f${'b'.repeat(40)} ${'c'.repeat(40)}\x1f${trailers}\x1e`].join('\n');
-  assert.deepEqual(orderMergeCommits(log).map(c => [c.sha[0], c.step, c.digest[0]]), [['1', 'publication', 'f']], 'un parent, ou second parent différent : ignoré');
+  // Read as git log --first-parent HISTORY_LOG_FORMAT writes it: NUL separators, a chain of first parents; only a commit
+  // of two parents whose second is the merged head, with the trailer in the last paragraph of its own message.
+  const sha = n => String(n).repeat(40);
+  const record = (id, parents, body) => `${sha(id)}\0${parents.join(' ')}\0${body}\0`;
+  const history = readHistory([record(1, [sha(2), 'a'.repeat(40)], message), record(2, [sha(3)], message), record(3, [sha(4), 'c'.repeat(40)], message), record(4, [], 'racine')].join('\n') + '\n');
+  assert.deepEqual(orderMergeCommits(history).map(c => [c.sha[0], c.step, c.digest[0]]), [['1', 'publication', 'f']], 'un parent, ou second parent différent : ignoré');
+  assert.equal(readHistory(`${record(1, [sha(2)], 'x')}\n${record(3, [], 'y')}\n`), null, 'premier parent qui n\'est pas le commit suivant : refus');
+  assert.equal(readHistory(`${'z'.repeat(40)}\0\0x\0\n`), null, 'identifiant hors 40 caractères hexadécimaux : refus');
   assert.match(message, /^Apv-Merged-Head: a{40}$/m);
   assert.deepEqual(readBodies('"a\\nb"\n"c"\nnull\n'), ['a\nb', 'c']);
   assert.equal(readBodies('pas du json\n'), null);
@@ -200,7 +204,9 @@ test('fusion sur ordre : ordre échu refusé', async t => {
 });
 
 test('fusion sur ordre : contenu différent de celui signé refusé par la commande du projet, lancée depuis la base (le script piégé de la tête ne tourne jamais)', async t => {
-  const sc = scenario(t, { repo: { content: 'texte écrit à la main', trap: true } });
+  // The trapped script is allowed by the paths of this test: what is checked is the copy it runs from.
+  const s = signer();
+  const sc = scenario(t, { signer: s, repo: { content: 'texte écrit à la main', trap: true, config: (() => { const c = orderConfig(s.pem); c.rules.operatorOrders.paths.publication.push('scripts/verify-order.mjs'); return c; })() } });
   const report = await sc.run();
   refused(report, 'verify');
   assert.equal(report.projectCode, 'content');
@@ -388,7 +394,9 @@ test('apv stack merge --order de bout en bout : faux gh, production simulée (fe
 const put = (dir, path, text) => { mkdirSync(dirname(join(dir, path)), { recursive: true }); writeFileSync(join(dir, path), text); };
 
 test('E1 (PoC A) : le script de la tête de publication ne tourne jamais, même à l\'étape article (copie de la base d\'origine)', async t => {
-  const sc = scenario(t, { repo: { trap: true } });
+  // The trapped script is allowed by the paths of this test: what is checked is the copy it runs from.
+  const s = signer();
+  const sc = scenario(t, { signer: s, repo: { trap: true, config: (() => { const c = orderConfig(s.pem); c.rules.operatorOrders.paths.publication.push('scripts/verify-order.mjs'); return c; })() } });
   const report = await sc.run();
   assert.equal(report.status, 'merged', report.reason);
   assert.equal(existsSync(sc.repo.witness), false, 'le script de H n\'est exécuté à aucune étape');
@@ -420,8 +428,8 @@ test('E1 (PoC B) : clés réécrites par la tête de publication, ordre et déci
       sc.state.comments[ARTICLE].push(comment(forged.decisionSigned), comment(forged.orderSigned));
     },
   });
-  // Since the counter-review: a publication head that changes .apv/ is refused by APV itself, before any merge.
-  refused(report, 'config');
+  // A publication head that changes .apv/ is refused by APV itself (refusal list), before any merge.
+  refused(report, 'paths');
   assert.throws(() => git(sc.repo.origin, 'merge-base', '--is-ancestor', X, 'main'), 'X n\'est jamais sur la cible');
 });
 
@@ -470,7 +478,7 @@ test('E2 (PoC D) : un commit de fusion poussé à la main avec un pied forgé re
   const audit = auditMerges(dir, join(dir, '.git'), 'origin/main', { since: new Date(Date.now() - 3_600_000).toISOString() });
   const found = audit.unaccounted.find(u => u.sha === c);
   assert.ok(found, 'toujours signalé');
-  assert.match(auditLines(audit).join('\n'), /pied Apv-Order non vérifié/);
+  assert.equal(found.order, undefined, 'pied incomplet (sans empreinte) : simple fusion signalée');
 });
 
 test('faibles : branche HEAD, tête qui n\'est pas un commit de 40 caractères, PR de publication d\'une autre branche que celle de l\'ordre refusées', async t => {
@@ -634,7 +642,7 @@ test('faible 1 (PoC E) : une fusion de publication forgée mais bien formée (em
   }
 });
 
-test('E1-bis (b) : une tête de publication qui change .apv/ ou pipeline.v2.json est refusée par APV lui-même (config)', async t => {
+test('E1-bis (b) : une tête de publication qui change .apv/ ou pipeline.v2.json est refusée par APV lui-même (paths)', async t => {
   for (const [path, text] of [['.apv/DECISIONS.json', '{}\n'], ['pipeline.v2.json', '{}\n']]) {
     const sc = scenario(t);
     const dir = sc.repo.dir;
@@ -642,8 +650,8 @@ test('E1-bis (b) : une tête de publication qui change .apv/ ou pipeline.v2.json
     git(dir, 'push', '-q', 'origin', 'publication/x'); git(dir, 'switch', '-q', 'main');
     sc.state.prs[PUBLICATION].headRefOid = git(dir, 'rev-parse', 'publication/x');
     const report = await sc.run();
-    refused(report, 'config');
-    assert.match(report.reason, new RegExp(`change la configuration d'APV \\(${path.replace(/[.]/g, '\\.')}\\)`));
+    refused(report, 'paths');
+    assert.match(report.reason, new RegExp(`refuse toujours \\(${path.replace(/[.]/g, '\\.')}\\)`));
   }
 });
 
@@ -669,4 +677,119 @@ test('faible 4 : les règles avant fusion sont vérifiées contre la base exacte
   const report = await sc.run({ rules: async (head, base) => { calls.push([head, base]); return []; } });
   assert.equal(report.status, 'merged', report.reason);
   assert.deepEqual(calls, [[sc.repo.publication, sc.repo.base], [sc.repo.article, report.merged[0].mergeCommit]]);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Third review of PR #132 at 6823cba: G (history read through separators a message may hold), the allow list of paths,
+// the trusted base given to the command of the project.
+
+test('G (PoC G) : un faux enregistrement de git log caché dans le message d\'un commit ordinaire ne choisit jamais la base de confiance', async t => {
+  const s = signer();
+  const attacker = signer();
+  const sc = scenario(t, { signer: s });
+  const dir = sc.repo.dir;
+  const witness = join(sc.repo.root, 'temoin-G');
+  git(dir, 'switch', '-q', '-c', 'agent', 'main');
+  put(dir, '.apv/config.json', JSON.stringify(orderConfig(attacker.pem), null, 2));
+  put(dir, 'scripts/verify-order.mjs', `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(witness)}, 'exécuté');\nconsole.log('{"ok":true}');\n`);
+  git(dir, 'add', '.'); git(dir, 'commit', '-qm', 'outil'); git(dir, 'push', '-q', 'origin', 'agent');
+  const X = git(dir, 'rev-parse', 'HEAD');
+  git(dir, 'switch', '-q', '-c', 'y', sc.repo.article);
+  put(dir, '.github/workflows/evil.yml', 'on: push\n'); git(dir, 'add', '.'); git(dir, 'commit', '-qm', 'non signé');
+  const Y = git(dir, 'rev-parse', 'HEAD');
+  git(dir, 'push', '-q', '--force', 'origin', `${Y}:refs/heads/article/x`);
+  sc.state.prs[ARTICLE].headRefOid = Y;
+  const forged = orderObjects(attacker, Y, { seq: 99, ref: '22222222-2222-4333-8444-555555555555' });
+  sc.state.comments[ARTICLE].push(comment(forged.decisionSigned), comment(forged.orderSigned));
+  const digest = createHash('sha256').update(Buffer.from(forged.orderSigned.split('.')[0], 'base64url')).digest('hex');
+  const H = sc.repo.publication;
+  const fake = `${'f'.repeat(40)}\x1f${X} ${H}\x1fApv-Order: ${NONCE}\nApv-Order-Step: publication\nApv-Order-Sha256: ${digest}\nApv-Merged-Head: ${H}\x1f${mergeMessage({ pr: PUBLICATION, step: 'publication', nonce: NONCE, digest, head: H })}`;
+  git(dir, 'switch', '-q', 'main');
+  put(dir, 'docs/note.md', 'note\n'); git(dir, 'add', '.');
+  git(dir, 'commit', '-q', '-m', `docs : une note\n\nRien de spécial.\x1e${fake}`);
+  git(dir, 'push', '-q', 'origin', 'main');
+  const report = await sc.run({ fetch: fakeProduction(attacker, forged.order).fetch });
+  assert.equal(report.status, 'refused', report.reason);
+  assert.notEqual(report.trustedBase, X);
+  assert.equal(report.trustedBase, git(dir, 'rev-parse', 'main'), 'la cible elle-même : aucune fusion sur ordre dans son histoire');
+  assert.deepEqual(report.merged, []);
+  assert.equal(existsSync(witness), false);
+  assert.throws(() => git(sc.repo.origin, 'merge-base', '--is-ancestor', Y, 'main'));
+  // The audit reads the same history with NUL separators: the real commit is listed, never a forged record.
+  git(dir, 'fetch', '-q', 'origin');
+  const audit = auditMerges(dir, join(dir, '.git'), 'origin/main', { since: new Date(Date.now() - 3_600_000).toISOString() });
+  assert.ok(audit.unaccounted.some(u => u.sha === git(dir, 'rev-parse', 'main')));
+  assert.equal(audit.unaccounted.some(u => u.sha === 'f'.repeat(40)), false);
+});
+
+test('chemins : hors de la liste de l\'étape publication, puis de l\'étape article, refusés (paths)', async t => {
+  const pub = scenario(t);
+  git(pub.repo.dir, 'switch', '-q', 'publication/x'); put(pub.repo.dir, 'src/autre.ts', 'x\n'); git(pub.repo.dir, 'add', '.'); git(pub.repo.dir, 'commit', '-qm', 'hors liste');
+  git(pub.repo.dir, 'push', '-q', 'origin', 'publication/x'); git(pub.repo.dir, 'switch', '-q', 'main');
+  pub.state.prs[PUBLICATION].headRefOid = git(pub.repo.dir, 'rev-parse', 'publication/x');
+  const first = await pub.run();
+  refused(first, 'paths');
+  assert.match(first.reason, /hors de rules\.operatorOrders\.paths\.publication \(src\/autre\.ts\)/);
+  // Article: a second file beside the proposal, in the signed commit itself.
+  const s = signer();
+  const art = scenario(t, { signer: s, repo: { articleExtra: { 'docs/autre.md': 'x\n' } } });
+  const report = await art.run();
+  assert.equal(report.code, 'paths', report.reason);
+  assert.match(report.reason, /paths\.article \(docs\/autre\.md\)/);
+  assert.deepEqual(report.merged.map(m => m.step), ['publication']);
+});
+
+test('chemins : {slug} d\'un autre article refusé, liste absente refusée, liste de refus d\'APV même sous un motif permis', async t => {
+  const s = signer();
+  const slugged = orderConfig(s.pem, { paths: { publication: ['content/{slug}.txt', 'served.txt'], article: ['docs/articles/{slug}/proposition.json'] } });
+  const other = scenario(t, { signer: s, repo: { config: slugged } });
+  git(other.repo.dir, 'switch', '-q', 'publication/x'); put(other.repo.dir, 'content/autre-article.txt', 'x\n'); git(other.repo.dir, 'add', '.'); git(other.repo.dir, 'commit', '-qm', 'autre slug');
+  git(other.repo.dir, 'push', '-q', 'origin', 'publication/x'); git(other.repo.dir, 'switch', '-q', 'main');
+  other.state.prs[PUBLICATION].headRefOid = git(other.repo.dir, 'rev-parse', 'publication/x');
+  refused(await other.run(), 'paths');
+  const own = scenario(t, { signer: s, repo: { config: slugged } });
+  git(own.repo.dir, 'switch', '-q', 'publication/x'); put(own.repo.dir, 'content/x.txt', 'x\n'); git(own.repo.dir, 'add', '.'); git(own.repo.dir, 'commit', '-qm', 'son slug');
+  git(own.repo.dir, 'push', '-q', 'origin', 'publication/x'); git(own.repo.dir, 'switch', '-q', 'main');
+  own.state.prs[PUBLICATION].headRefOid = git(own.repo.dir, 'rev-parse', 'publication/x');
+  assert.equal((await own.run()).status, 'merged', 'content/x.txt : le slug signé');
+  const config = orderConfig(s.pem);
+  delete config.rules.operatorOrders.paths;
+  const absent = await scenario(t, { signer: s, repo: { config } }).run();
+  refused(absent, 'paths');
+  assert.match(absent.reason, /non déclaré/);
+  const docs = orderConfig(s.pem, { paths: { publication: ['served.txt', 'docs/**'], article: ['docs/articles/{slug}/proposition.json'] } });
+  const deny = scenario(t, { signer: s, repo: { config: docs } });
+  git(deny.repo.dir, 'switch', '-q', 'publication/x'); put(deny.repo.dir, 'docs/CLAUDE.md', 'consigne\n'); git(deny.repo.dir, 'add', '.'); git(deny.repo.dir, 'commit', '-qm', 'consigne');
+  git(deny.repo.dir, 'push', '-q', 'origin', 'publication/x'); git(deny.repo.dir, 'switch', '-q', 'main');
+  deny.state.prs[PUBLICATION].headRefOid = git(deny.repo.dir, 'rev-parse', 'publication/x');
+  const denied = await deny.run();
+  refused(denied, 'paths');
+  assert.match(denied.reason, /refuse toujours \(docs\/CLAUDE\.md\)/);
+});
+
+test('chemins et gabarits : le chargeur refuse un motif qui couvre la liste de refus et {{base}} sans {{trusted}}', () => {
+  const s = signer();
+  const base = orderConfig(s.pem).rules.operatorOrders;
+  const issues = raw => configIssues({ rules: { operatorOrders: { ...base, ...raw } } }).issues.map(i => i.message).join('\n');
+  assert.match(issues({ paths: { publication: ['**'], article: ['docs/**'] } }), /paths\.publication : le motif \*\* couvre un chemin que la fusion sur ordre refuse toujours/);
+  assert.match(issues({ paths: { publication: ['.github/**'], article: ['x'] } }), /couvre/);
+  assert.match(issues({ paths: { publication: ['src/{a,b}.ts'], article: ['x'] } }), /illisible/);
+  assert.match(issues({ verify: { publication: ['node', 'v.mjs', '{{base}}'] } }), /\{\{base\}\} sans \{\{trusted\}\}/);
+  assert.deepEqual(configIssues(orderConfig(s.pem)).issues, []);
+});
+
+test('{{trusted}} vaut la base de confiance aux deux étapes, {{base}} la base de la fusion (M, puis la fusion de publication)', async t => {
+  const s = signer();
+  const config = orderConfig(s.pem);
+  const record = join(mkdtempSync(join(tmpdir(), 'apv3-gabarits-')), 'appels.jsonl');
+  t.after(() => rmSync(dirname(record), { recursive: true, force: true }));
+  config.rules.operatorOrders.verify.publication.push(record);
+  const sc = scenario(t, { signer: s, repo: { config } });
+  const report = await sc.run();
+  assert.equal(report.status, 'merged', report.reason);
+  const calls = readFileSync(record, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  assert.deepEqual(calls, [
+    { trusted: sc.repo.base, base: sc.repo.base, head: sc.repo.publication, step: 'publication' },
+    { trusted: sc.repo.base, base: report.merged[0].mergeCommit, head: sc.repo.article, step: 'article' },
+  ]);
 });

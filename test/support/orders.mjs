@@ -41,11 +41,13 @@ export { git };
 /**
  * The verification command of the project, committed at the base: for the publication step, the served file of the head
  * must be the `content` the order signed (else `content`); for the article step, the head must be the signed commit.
- * It reads the head through Git only. `{{base}} {{head}} {{step}}` are its arguments, the verified order its input.
+ * It reads the head through Git only. `{{trusted}} {{base}} {{head}} {{step}}` are its arguments, the verified order its
+ * input; a sixth argument, when given, is a file where it records its arguments (tests of the placeholders).
  */
 const VERIFY = `import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-const [, , base, head, step] = process.argv;
+import { appendFileSync, readFileSync } from 'node:fs';
+const [, , trusted, base, head, step, record] = process.argv;
+if (record) appendFileSync(record, JSON.stringify({ trusted, base, head, step }) + '\\n');
 const input = JSON.parse(readFileSync(0, 'utf8'));
 const answer = (ok, code) => { console.log(JSON.stringify(ok ? { ok, step } : { ok, code })); process.exit(ok ? 0 : 1); };
 if (!/^[0-9a-f]{40}$/.test(base)) answer(false, 'base');
@@ -56,7 +58,8 @@ answer(served === input.order.content, 'content');
 
 export function orderConfig(pem, overrides = {}) {
   return { rules: { operatorOrders: { domain: DOMAIN, publicKeys: [pem], attestation: { url: 'https://production.test/api/attestation?nonce={nonce}&challenge={challenge}' },
-    verify: { publication: [process.execPath, 'scripts/verify-order.mjs', '{{base}}', '{{head}}', '{{step}}'], timeoutMs: 60_000 }, ...overrides } } };
+    paths: { publication: ['served.txt'], article: ['docs/articles/{slug}/proposition.json'] },
+    verify: { publication: [process.execPath, 'scripts/verify-order.mjs', '{{trusted}}', '{{base}}', '{{head}}', '{{step}}'], timeoutMs: 60_000 }, ...overrides } } };
 }
 
 /**
@@ -64,7 +67,7 @@ export function orderConfig(pem, overrides = {}) {
  * the proposal (the article pull request, #20), publication/x adds the served file (#21, `content` given). Returns the
  * heads and a remover.
  */
-export function orderRepo(t, pem, { content = 'bonjour', config = orderConfig(pem), trap = false } = {}) {
+export function orderRepo(t, pem, { content = 'bonjour', config = orderConfig(pem), trap = false, articleExtra = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'apv3-ordre-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const origin = join(root, 'origin.git');
@@ -79,6 +82,7 @@ export function orderRepo(t, pem, { content = 'bonjour', config = orderConfig(pe
   const base = git(dir, 'rev-parse', 'HEAD');
   git(dir, 'switch', '-q', '-c', 'article/x', base);
   put('docs/articles/x/proposition.json', '{"sujet":"x"}\n');
+  for (const [path, text] of Object.entries(articleExtra)) put(path, text);
   git(dir, 'add', '.'); git(dir, 'commit', '-qm', 'article'); git(dir, 'push', '-q', 'origin', 'article/x');
   const article = git(dir, 'rev-parse', 'HEAD');
   git(dir, 'switch', '-q', '-c', 'publication/x', base);
