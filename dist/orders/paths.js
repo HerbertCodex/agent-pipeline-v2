@@ -20,7 +20,8 @@ const REFUSED_FILE_PATTERNS = [/^\.env\..+$/, /^svelte\.config\..+$/, /^vite\.co
  * pull request merged on order, whatever the lists say.
  */
 function foldableSegment(segment) {
-    return !/^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/.test(segment) || segment.endsWith('.') || /~\d/.test(segment);
+    // `\` and `:` too: a separator and a data stream under Windows (`.claude\x.ts`, `CLAUDE.md::$DATA`).
+    return !/^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/.test(segment) || segment.endsWith('.') || /~\d/.test(segment) || /[\\:]/.test(segment);
 }
 /** True when `path` is on the fixed refusal list of APV, compared without case (a checkout on a case-insensitive disk). */
 export function refusedPath(path) {
