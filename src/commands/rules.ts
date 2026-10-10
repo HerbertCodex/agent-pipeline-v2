@@ -11,7 +11,10 @@ export const usage = `Utilisation :
 
 Règles vérifiées par l'outil avant toute fusion (docs/REGLES.md), les mêmes que celles de apv stack merge et
 apv stack batch --merge, qui refusent de fusionner sans elles :
-  preuve     la suite complète prouvée au commit exact (apv gates verify), contrôles de la base compris ;
+  preuve     la suite complète prouvée au commit exact (apv gates verify), contrôles de la base compris ; pour
+             les contrôles que déclare rules.ciProof (lue à la base) sans reçu local propre, le check run du
+             job de GitHub Actions au commit exact, conclu en succès, lu par gh api, quand la PR ne change ni
+             le workflow ni les fichiers qui produisent la preuve (sinon, preuve locale exigée) ;
   instable   aucun contrôle réussi seulement après relance (retryFailed) : un test instable s'examine
              comme un bug possible du produit, il ne se relance pas jusqu'au vert ;
   relecture  chaque domaine que apv review plan retient pour le diff a sa relecture enregistrée à ce commit
@@ -31,7 +34,8 @@ crochet du plugin, que les agents ne peuvent pas écrire), ou pour la relecture 
 sur securite, la sortie dit « dérogation sur la sécurité »). Sous relecture, chaque domaine retenu est listé :
 relecture enregistrée, dérogation (raison) ou manquante.
 --target   branche où va le changement (défaut : la branche distante par défaut, origin/HEAD).
---offline  cible non vérifiée contre le dépôt distant (avec un avertissement), comme apv gates verify --offline.
+--offline  cible non vérifiée contre le dépôt distant (avec un avertissement), comme apv gates verify --offline ;
+           la preuve CI n'est pas lue (preuve locale exigée).
 Protection de la branche par défaut sur GitHub (gh api) : dite en une ligne, jamais un refus ; indisponible pour un
 dépôt privé en plan gratuit, où les garde-fous et apv audit merges en tiennent lieu.
 Sortie : 0 règles respectées, 1 au moins un refus, 2 appel incorrect.`;
@@ -51,7 +55,9 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const repo = gitRoot(repoPath(io, values.repo));
     const target = values.target ?? detectReference(repo);
     if (!target) throw new UsageError('--target manquant : aucune branche distante par défaut (origin/HEAD, origin/main, origin/master)');
-    const report = await checkMergeRules({ repo, commit: values.commit, target, remote: { strict: true, offline: values.offline === true } });
+    // The proof by the CI is read with `gh` itself: APV_GH (a test double of the stack commands) never decides a proof.
+    const report = await checkMergeRules({ repo, commit: values.commit, target, remote: { strict: true, offline: values.offline === true },
+      ci: { gh: values.offline ? null : processGh('gh', io.env, repo) } });
     // Never a refusal: the only barrier outside the machine, said once (docs/REGLES.md).
     const protection = values.offline ? null : await branchProtection(repo, processGh(io.env['APV_GH'] || 'gh', io.env, repo));
     if (values.json) json(io, { ...report, protection });

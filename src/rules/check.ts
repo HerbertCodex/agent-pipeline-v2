@@ -21,6 +21,9 @@ import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
 import { LANE_NAME, docsOnlyLane, laneLines, type DocsOnlyLane } from './docs-only.js';
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
+import { ciProofLines, verifyCiProof, type CiProofOutcome } from './ci-proof.js';
+import { githubRepository } from './protection.js';
+import type { GhRunner } from '../stack/github.js';
 
 export type RuleStatus = 'ok' | 'refused' | 'waived' | 'not_applicable';
 export interface RuleOutcome {
@@ -58,6 +61,8 @@ export interface RulesReport {
   lane: DocsOnlyLane;
   /** What could not be verified about the target (remote unreadable...), from the base of the checks. */
   warnings: string[];
+  /** The proof by the CI (rules.ciProof of the base), when the local receipts left checks unproven; null otherwise. */
+  ci: CiProofOutcome | null;
 }
 
 export interface RulesInput {
@@ -69,6 +74,11 @@ export interface RulesInput {
   skip?: readonly MergeRule[];
   /** How the target is checked against the remote (`apv gates verify`: strict; tests inject `lsRemote`). */
   remote?: RemoteCheck;
+  /**
+   * The API GitHub reads the proof by the CI with (rules.ciProof): `gh` itself, never APV_GH; null or absent, nothing is
+   * read and the rule asks for the local proof. `repository` (owner/name) defaults to the origin on github.com.
+   */
+  ci?: { gh: GhRunner | null; repository?: string | null };
 }
 
 /** Whether the commit is a web interface: web dependencies in its package.json, or tracked interface files. */
@@ -180,23 +190,54 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     `Dans une copie à ${short(sha)} : apv gates run --stage full --base ${input.target}`,
     `puis apv gates verify --commit ${short(sha)} --against ${input.target} doit sortir en 0.`,
   ];
+  // The proof by the CI, declared at the base (never by the change), for the checks without a clean local receipt: the
+  // local receipts stay first, the API is read only when they leave a check unproven.
+  let ci: CiProofOutcome | null = null;
+  const ciNotes: string[] = [];
+  if (!skip.has('preuve') && !unscoped && proof && !proof.ok) {
+    const pending = proof.gates.filter(g => g.state === 'missing' || g.state === 'dirty').map(g => g.gateId);
+    const headCi = rulesSettings(candidate.rules, []).ciProof; if (headCi && pending.length) { settings.ciProof = headCi;
+      const offline = input.remote?.offline === true;
+      ci = await verifyCiProof({ repo, mergeBase, head: sha, settings: settings.ciProof, pending, config: effective,
+        gh: offline ? null : input.ci?.gh ?? null,
+        repository: input.ci && input.ci.repository !== undefined ? input.ci.repository : githubRepository(repo) });
+    } else if (!settings.ciProof && candidate.rules?.ciProof) {
+      ciNotes.push(`rules.ciProof déclarée par la PR, ignorée : seule la base commune compte (${short(mergeBase)}) ; la preuve CI vaudra après la fusion de cette déclaration`);
+    }
+  }
+  const viaCi = new Set(ci?.state === 'accepted' ? ci.gates : []);
+  const provenByCi = proof ? proof.gates.filter(g => viaCi.has(g.gateId) && (g.state === 'missing' || g.state === 'dirty')).map(g => g.gateId) : [];
   if (skip.has('preuve')) rules.push(outcome('preuve', 'not_applicable', 'prouvée par le lot (une suite complète sur la tête du lot)'));
   else if (unscoped) rules.push(outcome('preuve', 'not_applicable', `${LANE_NAME} : aucun contrôle ne s'applique, chacun non requis par sa portée (skipWhenOnly, recalculée depuis le commit) : ${unscoped}`));
   else if (proofError) rules.push(outcome('preuve', 'refused', 'suite complète au commit exact', [proofError], proveTodo));
   else if (proof!.ok) rules.push(outcome('preuve', 'ok', `${proof!.required.length} contrôle(s) prouvé(s) à ${short(sha)}, contrôles de la base compris`));
   else {
-    const missing = proof!.gates.filter(g => g.state !== 'passed').map(g => `${g.gateId} (${g.state})`);
-    rules.push(outcome('preuve', 'refused', 'suite complète au commit exact', [`contrôle(s) non prouvé(s) à ${short(sha)} : ${missing.join(', ')}`], proveTodo));
+    const missing = proof!.gates.filter(g => g.state !== 'passed' && !provenByCi.includes(g.gateId)).map(g => `${g.gateId} (${g.state})`);
+    if (!missing.length) {
+      const run = ci!.checkRun!;
+      rules.push(outcome('preuve', 'ok', `${proof!.required.length} contrôle(s) prouvé(s) à ${short(sha)}, contrôles de la base compris : `
+        + `${proof!.required.length - provenByCi.length} par les reçus locaux, ${provenByCi.length} par la CI (${provenByCi.join(', ')}) : `
+        + `check run « ${ci!.name} » ${run.id} de GitHub Actions, workflow ${run.workflow} inchangé depuis la base, exécution ${run.runId} (${run.event}), conclusion success`
+        + `${ci!.artifact ? ` ; reçus de l'artefact ${ci!.artifact} : mesure seulement` : ''}`));
+    } else {
+      rules.push(outcome('preuve', 'refused', 'suite complète au commit exact', [`contrôle(s) non prouvé(s) à ${short(sha)} : ${missing.join(', ')}`, ...(ci ? ciProofLines(ci) : []), ...ciNotes],
+        ci && ci.state !== 'out_of_lane' && ci.gates.length && ci.state !== 'accepted'
+          ? [...proveTodo, `Ou, pour ${ci.gates.join(', ')}, le check run « ${ci.name} » de GitHub Actions conclu en succès à ${short(sha)} (workflow ${ci.workflow}), puis relancer apv rules check.`]
+          : proveTodo));
+    }
   }
+  // A job of the CI relaunched (run_attempt above 1) passed only after a relaunch, as a receipt passed_after_retry.
+  const ciRelaunched = provenByCi.length > 0 && (ci?.checkRun?.runAttempt ?? 0) > 1;
   if (skip.has('instable')) rules.push(outcome('instable', 'not_applicable', 'jugée sur la suite du lot'));
   else if (unscoped) rules.push(outcome('instable', 'not_applicable', `${LANE_NAME} : aucun contrôle à lancer`));
   else if (!proof) rules.push(outcome('instable', 'refused', 'contrôles réussis au premier passage', ['preuve illisible : rien ne montre que les contrôles ont réussi sans relance'], proveTodo));
-  else if (proof.flaky.length) {
-    rules.push(outcome('instable', 'refused', 'contrôles réussis au premier passage', [`réussi(s) seulement après relance : ${proof.flaky.join(', ')}`], [
+  else if (proof.flaky.length || ciRelaunched) {
+    const flaky = [...proof.flaky, ...(ciRelaunched ? [`${provenByCi.join(', ')} (job de la CI relancé : tentative ${ci!.checkRun!.runAttempt} de l'exécution ${ci!.checkRun!.runId})`] : [])];
+    rules.push(outcome('instable', 'refused', 'contrôles réussis au premier passage', [`réussi(s) seulement après relance : ${flaky.join(', ')}`], [
       'Examine chaque test instable comme un bug possible du produit (course, attente d\'un fait non observé, données partagées entre tests), pas seulement du test.',
       'Corrige la cause, pousse, puis relance la suite complète sur le nouveau commit : aucune fusion sur un vert obtenu par relance.',
     ]));
-  } else rules.push(outcome('instable', 'ok', 'aucun contrôle réussi seulement après relance'));
+  } else rules.push(outcome('instable', 'ok', `aucun contrôle réussi seulement après relance${provenByCi.length ? ` ; ${provenByCi.join(', ')} prouvé(s) par la CI à la première tentative du job (relances des tests réglées par les fichiers protégés de la base)` : ''}`));
 
   // relecture, captures: the domains `apv review plan` retains for the change, each recorded at this commit, or waived
   // for that domain alone by the operator (« dérogation relecture:<domaine> <commit> : <raison> », issue #126).
@@ -303,7 +344,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   }
   const order = new Map(MERGE_RULES.map((r, i) => [r, i]));
   rules.sort((a, b) => order.get(a.rule)! - order.get(b.rule)!);
-  return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, lane, warnings: [...base.warnings, ...(anchor.problem ? [anchor.problem] : [])] };
+  return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, lane, warnings: [...base.warnings, ...(anchor.problem ? [anchor.problem] : [])], ci };
 }
 
 /** Lines of a report, for the text output of `apv rules check` and of the stack commands. */

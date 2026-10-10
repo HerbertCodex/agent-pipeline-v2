@@ -12,6 +12,7 @@ import type { CommandIO } from './io.js';
 import { localTime } from '../domain/time.js';
 import { anchorLines, anchorStatus } from '../rules/anchor-status.js';
 import { pluginLines, pluginStatus } from '../rules/plugin-status.js';
+import { CI_PROTECTED_SCRIPTS, rulesSettings, type CiProofSettings } from '../rules/config.js';
 import { processGh } from '../stack/github.js';
 import { freshnessLines, freshnessReport, type FreshnessOptions, type FreshnessReport } from '../freshness/check.js';
 import type { FreshnessSettings } from '../freshness/config.js';
@@ -54,6 +55,11 @@ export interface ApvStatus {
   config: { file: string | null; legacy: boolean; gates: string[]; ignored: string[]; error: string | null };
   /** Model of each role and the effort (`models`, docs/CONFIGURATION.md): the defaults when the section is absent or the configuration invalid. */
   models: ModelSettings;
+  /**
+   * The proof by the CI as this working tree declares it (`rules.ciProof`; apv rules check reads it at the merge base):
+   * null when undeclared or the configuration invalid.
+   */
+  ciProof: { settings: CiProofSettings | null };
   ledger: { file: string | null; decisions: number | null; hash: string | null; issues: number };
   specs: { file: string; title: string | null; error: string | null }[];
   state: { file: string; bytes: number; modifiedAt: string }[];
@@ -73,10 +79,12 @@ export function apvStatus(repo: string, options: FreshnessOptions = {}): ApvStat
   // An invalid configuration leaves the defaults: the default living files are still watched.
   let freshnessSettings: FreshnessSettings | undefined;
   let models = modelSettings(undefined);
+  let ciProof: CiProofSettings | null = null;
   try {
     const loaded = loadConfig(repo);
     freshnessSettings = loaded.config.freshness;
     models = modelSettings(loaded.config.models);
+    ciProof = rulesSettings(loaded.config.rules, []).ciProof;
     Object.assign(cfg, { file: loaded.file && relative(repo, loaded.file), legacy: loaded.legacy, gates: loaded.config.gates.map(g => g.id), ignored: loaded.ignored });
   } catch (error) {
     const found = configFile(repo).file;
@@ -101,7 +109,7 @@ export function apvStatus(repo: string, options: FreshnessOptions = {}): ApvStat
   });
   const state = files(join(repo, '.apv', 'state')).map(f => { const st = statSync(f); return { file: relative(repo, f), bytes: st.size, modifiedAt: st.mtime.toISOString() }; });
   const runs = readRunSummaries(repo);
-  return { repo, config: cfg, models, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)),
+  return { repo, config: cfg, models, ciProof: { settings: ciProof }, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)),
     freshness: freshnessReport(repo, freshnessSettings, options), metrics: measures(repo) };
 }
 
@@ -136,6 +144,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       `Projet : ${status.repo}`,
       `Configuration : ${c.file ? `${c.file}${c.legacy ? ' (format V2)' : ''}` : 'aucune'}${c.error ? ` ; invalide : ${c.error.split('\n')[0]}` : c.file ? ` ; contrôles : ${c.gates.join(', ') || 'aucun'}` : ''}`,
       modelsLine(status.models),
+      ciProofLine(status.ciProof.settings),
       `Registre : ${status.ledger.file ? `${status.ledger.file} ; ${status.ledger.issues ? `invalide (${status.ledger.issues} erreur(s), voir apv ledger validate)` : `${status.ledger.decisions} décision(s), empreinte ${status.ledger.hash}`}` : 'aucun'}`,
       `Specs (.apv/specs) : ${status.specs.length ? '' : 'aucune'}`,
       // File names, titles and parse errors come from files any agent or commit can write: one cleaned line each.
@@ -154,4 +163,12 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     io.stdout(`${lines.map(l => l.trimEnd()).join('\n')}\n`);
     return EXIT.ok;
   });
+}
+
+/** The line « Preuve CI » of apv status: the declaration of the working tree, as apv rules check would read it at the base. */
+export function ciProofLine(ci: CiProofSettings | null): string {
+  if (!ci) return 'Preuve CI (rules.ciProof) : non déclarée (preuve locale seule)';
+  return cleanLine(`Preuve CI (rules.ciProof) : ${ci.workflow}, job ${ci.job}, check run « ${ci.name} », contrôles ${ci.gates.join(', ')}`
+    + `${ci.artifact ? `, reçus en artefact ${ci.artifact} (mesure seulement)` : ''} ; fichiers protégés : ${[...ci.protectedPaths, CI_PROTECTED_SCRIPTS].join(', ')}`
+    + ' (lue à la base commune par apv rules check)', 2000);
 }

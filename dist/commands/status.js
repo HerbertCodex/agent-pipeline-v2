@@ -11,6 +11,7 @@ import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import { localTime } from '../domain/time.js';
 import { anchorLines, anchorStatus } from '../rules/anchor-status.js';
 import { pluginLines, pluginStatus } from '../rules/plugin-status.js';
+import { CI_PROTECTED_SCRIPTS, rulesSettings } from '../rules/config.js';
 import { processGh } from '../stack/github.js';
 import { freshnessLines, freshnessReport } from '../freshness/check.js';
 import { duration } from '../metrics/run.js';
@@ -53,10 +54,12 @@ export function apvStatus(repo, options = {}) {
     // An invalid configuration leaves the defaults: the default living files are still watched.
     let freshnessSettings;
     let models = modelSettings(undefined);
+    let ciProof = null;
     try {
         const loaded = loadConfig(repo);
         freshnessSettings = loaded.config.freshness;
         models = modelSettings(loaded.config.models);
+        ciProof = rulesSettings(loaded.config.rules, []).ciProof;
         Object.assign(cfg, { file: loaded.file && relative(repo, loaded.file), legacy: loaded.legacy, gates: loaded.config.gates.map(g => g.id), ignored: loaded.ignored });
     }
     catch (error) {
@@ -92,7 +95,7 @@ export function apvStatus(repo, options = {}) {
     });
     const state = files(join(repo, '.apv', 'state')).map(f => { const st = statSync(f); return { file: relative(repo, f), bytes: st.size, modifiedAt: st.mtime.toISOString() }; });
     const runs = readRunSummaries(repo);
-    return { repo, config: cfg, models, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)),
+    return { repo, config: cfg, models, ciProof: { settings: ciProof }, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)),
         freshness: freshnessReport(repo, freshnessSettings, options), metrics: measures(repo) };
 }
 /** The last three measures, reduced to what the line shows; a repository the measure cannot read gives none. */
@@ -140,6 +143,7 @@ export async function run(args, io) {
             `Projet : ${status.repo}`,
             `Configuration : ${c.file ? `${c.file}${c.legacy ? ' (format V2)' : ''}` : 'aucune'}${c.error ? ` ; invalide : ${c.error.split('\n')[0]}` : c.file ? ` ; contrôles : ${c.gates.join(', ') || 'aucun'}` : ''}`,
             modelsLine(status.models),
+            ciProofLine(status.ciProof.settings),
             `Registre : ${status.ledger.file ? `${status.ledger.file} ; ${status.ledger.issues ? `invalide (${status.ledger.issues} erreur(s), voir apv ledger validate)` : `${status.ledger.decisions} décision(s), empreinte ${status.ledger.hash}`}` : 'aucun'}`,
             `Specs (.apv/specs) : ${status.specs.length ? '' : 'aucune'}`,
             // File names, titles and parse errors come from files any agent or commit can write: one cleaned line each.
@@ -160,5 +164,13 @@ export async function run(args, io) {
         io.stdout(`${lines.map(l => l.trimEnd()).join('\n')}\n`);
         return EXIT.ok;
     });
+}
+/** The line « Preuve CI » of apv status: the declaration of the working tree, as apv rules check would read it at the base. */
+export function ciProofLine(ci) {
+    if (!ci)
+        return 'Preuve CI (rules.ciProof) : non déclarée (preuve locale seule)';
+    return cleanLine(`Preuve CI (rules.ciProof) : ${ci.workflow}, job ${ci.job}, check run « ${ci.name} », contrôles ${ci.gates.join(', ')}`
+        + `${ci.artifact ? `, reçus en artefact ${ci.artifact} (mesure seulement)` : ''} ; fichiers protégés : ${[...ci.protectedPaths, CI_PROTECTED_SCRIPTS].join(', ')}`
+        + ' (lue à la base commune par apv rules check)', 2000);
 }
 //# sourceMappingURL=status.js.map

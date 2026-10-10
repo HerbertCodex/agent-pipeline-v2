@@ -39,6 +39,14 @@ export declare const rulesSchema: import("../domain/schema.js").Schema<{
         readonly kinds: ("decisions" | "mockups" | "drafts" | "specs" | "journal" | "docs")[] | undefined;
         readonly exclude: string[] | undefined;
     } | undefined;
+    readonly ciProof: {
+        readonly workflow: string;
+        readonly job: string;
+        readonly name: string;
+        readonly gates: string[];
+        readonly protectedPaths: string[] | undefined;
+        readonly artifact: string | undefined;
+    } | undefined;
 }>;
 export type RulesSection = Infer<typeof rulesSchema>;
 export interface RequiredGate {
@@ -59,6 +67,29 @@ export interface RulesSettings {
         kinds: DocsOnlyKind[];
         exclude: string[];
     };
+    /** The proof by the CI, or null when the project does not declare it (local proof only). */
+    ciProof: CiProofSettings | null;
+}
+/**
+ * Files that produce the proof of the CI, always protected besides the declared workflow: the workflows and local actions
+ * (a reusable workflow or a composite action runs in the job), the scripts of the end-to-end and dynamic tests, the
+ * configuration of Playwright and of npm (`script-shell` replaces the shell of every script). The scripts of the root
+ * package.json are compared one by one (CI_PROTECTED_SCRIPTS), not the whole file.
+ */
+export declare const CI_PROTECTED_DEFAULTS: readonly string[];
+/**
+ * Every script of the root package.json: a script `test:*` calls others (`npm run e2e:integration`), npm runs `pre` and
+ * `post` scripts and the scripts of the installation (`postinstall`, `prepare`) by itself.
+ */
+export declare const CI_PROTECTED_SCRIPTS = "package.json#scripts";
+export interface CiProofSettings {
+    workflow: string;
+    job: string;
+    name: string;
+    gates: string[];
+    /** The workflow, the defaults and what the project adds, deduplicated. */
+    protectedPaths: string[];
+    artifact: string | null;
 }
 /** Effective settings of a `rules` section: the defaults, completed by what the project adds. Throws a CONFIG error. */
 export declare function rulesSettings(section: RulesSection | undefined, builtIn: readonly RequiredGate[]): RulesSettings;
