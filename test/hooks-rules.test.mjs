@@ -216,7 +216,7 @@ test('review of 7e27b88: every way found to forge a waiver is closed', async t =
   // 3. Running the plugin's code other than through apv: a script that imports dist/rules signs without reading the key.
   const pluginRoot = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
   for (const command of ['node -e "import(\'/p/dist/rules/operator.js\').then(m => m.sign(k))"', `node ${pluginRoot}/hooks/scripts/review-seal.mjs`, `node --input-type=module -e "import '${pluginRoot}/dist/stack/github.js'"`,
-    'python3 -c "open(\'/p/dist/review/plan.js\')"', 'APV_ENTRY=cli node x.js', 'APV_ANCHOR_KEY_FILE=/tmp/k apv stack merge 1']) assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
+    'python3 -c "open(\'/p/dist/review/plan.js\')"', 'APV_ENTRY=cli node x.js', 'APV_ANCHOR_KEY_FILE=/tmp/k apv stack merge 1', 'APV_ATTESTATION_LOOPBACK=1 apv stack merge 21 20 --order x']) assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
   for (const command of [`node ${pluginRoot}/dist/cli.js status`, 'node build/index.js', 'node --test test/a.test.mjs']) assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
   // The module itself refuses to sign when it is not the apv command or a hook.
   const direct = spawnSync(process.execPath, ['--input-type=module', '-e', `import { sign } from ${JSON.stringify(new URL('../dist/rules/operator.js', import.meta.url).href)}; sign(Buffer.alloc(32), 'operator', 'x');`],

@@ -1,15 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { apv } from './cli-helpers.mjs';
 import { waive } from './support/rules.mjs';
 import { ARTICLE, DOMAIN, IDENTITY, NONCE, PUBLICATION, REPO, comment, fakeGh, fakeProduction, git, orderConfig, orderObjects, orderRepo, pullRequests, signer } from './support/orders.mjs';
 import { configIssues } from '../dist/config/load.js';
 import { readPublicKey, signedLines, verifySigned, publicKeys } from '../dist/orders/envelope.js';
-import { verifyOrder, checkAttestation, mergeMessage, orderTrailers } from '../dist/orders/order.js';
+import { verifyOrder, checkAttestation, mergeMessage, orderMergeCommits } from '../dist/orders/order.js';
 import { mergeOnOrder, readBodies } from '../dist/orders/merge.js';
 import { refusalCode } from '../dist/orders/verify-command.js';
 import { processGit } from '../dist/stack/batch.js';
@@ -66,7 +67,9 @@ test('configuration : clé privée, adresse en clair hors boucle locale, marque 
   const ok = configIssues(orderConfig(s.pem));
   assert.deepEqual(ok.issues, []);
   assert.equal(ok.config.rules.operatorOrders.attestation.maxAgeSeconds, 120, '120 s par défaut');
-  assert.equal(configIssues({ rules: { operatorOrders: { ...base, attestation: { url: 'http://127.0.0.1:8080/a?nonce={nonce}&challenge={challenge}' } } } }).issues.length, 0, 'HTTP sur la boucle locale (tests)');
+  process.env.APV_ATTESTATION_LOOPBACK = '1';
+  try { assert.equal(configIssues({ rules: { operatorOrders: { ...base, attestation: { url: 'http://127.0.0.1:8080/a?nonce={nonce}&challenge={challenge}' } } } }).issues.length, 0, 'HTTP sur la boucle locale en mode de test explicite'); }
+  finally { delete process.env.APV_ATTESTATION_LOOPBACK; }
 });
 
 test('apv status affiche la déclaration des ordres signés, ou leur absence', async t => {
@@ -156,7 +159,11 @@ test('attestation : défi différent, autre clé, décision rejouée comme attes
 
 test('pied de fusion et lectures : le pied se relit, les commentaires se lisent ligne à ligne, un code court se reprend', () => {
   const message = mergeMessage({ pr: 21, step: 'publication', nonce: NONCE, digest: 'f'.repeat(64), head: 'a'.repeat(40) });
-  assert.deepEqual(orderTrailers([message, 'autre commit']), [{ nonce: NONCE, step: 'publication' }]);
+  // Read as git log --first-parent ORDER_LOG_FORMAT writes it: only a commit of two parents whose second is the merged head.
+  const trailers = `Apv-Order: ${NONCE}\nApv-Order-Step: publication\nApv-Order-Sha256: ${'f'.repeat(64)}\nApv-Merged-Head: ${'a'.repeat(40)}`;
+  const log = [`${'1'.repeat(40)}\x1f${'b'.repeat(40)} ${'a'.repeat(40)}\x1f${trailers}\x1e`, `${'2'.repeat(40)}\x1f${'b'.repeat(40)}\x1f${trailers}\x1e`,
+    `${'3'.repeat(40)}\x1f${'b'.repeat(40)} ${'c'.repeat(40)}\x1f${trailers}\x1e`].join('\n');
+  assert.deepEqual(orderMergeCommits(log).map(c => [c.sha[0], c.step, c.digest[0]]), [['1', 'publication', 'f']], 'un parent, ou second parent différent : ignoré');
   assert.match(message, /^Apv-Merged-Head: a{40}$/m);
   assert.deepEqual(readBodies('"a\\nb"\n"c"\nnull\n'), ['a\nb', 'c']);
   assert.equal(readBodies('pas du json\n'), null);
@@ -315,22 +322,24 @@ test('fusion sur ordre : les deux étapes fusionnent exactement les têtes véri
   assert.equal(again.status, 'already_done');
   assert.deepEqual(again.consumed, ['publication', 'article']);
   assert.equal(sc.main(), article.mergeCommit);
-  // apv audit merges recognises both merges on order (structural check, listed with their reference).
+  // apv audit merges does not launder them: no signed trace here, both stay unaccounted, said with their unverified trailer.
   git(sc.repo.dir, 'fetch', '-q', 'origin');
   const common = git(sc.repo.dir, 'rev-parse', '--path-format=absolute', '--git-common-dir');
   const audit = auditMerges(sc.repo.dir, common, 'origin/main', { since: new Date(Date.now() - 3_600_000).toISOString() });
-  assert.deepEqual(audit.orderMerges.map(o => o.step), ['article', 'publication']);
-  assert.match(auditLines(audit).join('\n'), /2 fusion\(s\) sur ordre signé/);
+  assert.deepEqual(audit.unaccounted.filter(u => u.order).map(u => u.order.step), ['article', 'publication']);
+  assert.match(auditLines(audit).join('\n'), /pied Apv-Order non vérifié : ordre /);
 });
 
-test('fusion sur ordre : un pied de l\'étape article sans l\'étape publication rend l\'ordre inutilisable (nonce_used)', async t => {
+test('fusion sur ordre : une fusion de l\'étape article faite par APV sans l\'étape publication rend l\'ordre inutilisable (nonce_used)', async t => {
   const sc = scenario(t);
-  git(sc.repo.dir, 'commit', '-q', '--allow-empty', '-m', `forgé\n\nApv-Order: ${NONCE}\nApv-Order-Step: article`);
-  git(sc.repo.dir, 'push', '-q', 'origin', 'main');
-  git(sc.repo.dir, 'switch', '-q', 'publication/x');
-  git(sc.repo.dir, 'merge', '-q', '--no-edit', 'main');
-  git(sc.repo.dir, 'push', '-q', 'origin', 'publication/x');
-  git(sc.repo.dir, 'switch', '-q', 'main');
+  const dir = sc.repo.dir;
+  const M = git(dir, 'rev-parse', 'main');
+  const digest = createHash('sha256').update(Buffer.from(sc.objects.orderSigned.split('.')[0], 'base64url')).digest('hex');
+  const tree = git(dir, 'merge-tree', '--write-tree', M, sc.repo.article).split('\n')[0];
+  const c = git(dir, 'commit-tree', tree, '-p', M, '-p', sc.repo.article, '-m', mergeMessage({ pr: ARTICLE, step: 'article', nonce: NONCE, digest, head: sc.repo.article }));
+  git(dir, 'push', '-q', 'origin', `${c}:refs/heads/main`);
+  git(dir, 'switch', '-q', 'publication/x'); git(dir, 'merge', '-q', '--no-edit', c); git(dir, 'push', '-q', 'origin', 'publication/x'); git(dir, 'switch', '-q', 'main');
+  sc.state.prs[PUBLICATION].headRefOid = git(dir, 'rev-parse', 'publication/x');
   refused(await sc.run(), 'nonce_used');
 });
 
@@ -372,6 +381,9 @@ test('apv stack merge --order de bout en bout : faux gh, production locale en HT
   const file = join(repo.root, 'gh.json');
   writeFileSync(file, JSON.stringify({ prs: pullRequests(repo), comments: { [ARTICLE]: [comment(objects.decisionSigned), comment(objects.orderSigned)] }, behavior: {}, calls: [] }));
   const env = { APV_GH: fakeGhBin, FAKE_GH_STATE: file, APV_ALLOW_MERGE: '1', ...IDENTITY };
+  // Explicit test mode: the attestation of this test is served in plain HTTP on the loopback.
+  process.env.APV_ATTESTATION_LOOPBACK = '1';
+  t.after(() => { delete process.env.APV_ATTESTATION_LOOPBACK; });
   const r = await apv(repo.dir, ['stack', 'merge', String(PUBLICATION), String(ARTICLE), '--order', NONCE], env);
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /étape publication : PR #21 fusionnée/);
@@ -382,4 +394,132 @@ test('apv stack merge --order de bout en bout : faux gh, production locale en HT
   const again = await apv(repo.dir, ['stack', 'merge', String(PUBLICATION), String(ARTICLE), '--order', NONCE, '--json'], env);
   assert.equal(again.code, 0);
   assert.equal(again.json().status, 'already_done');
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Security review of PR #132 (c49686f): each proof of attack, inverted, must end in a refusal.
+
+const put = (dir, path, text) => { mkdirSync(dirname(join(dir, path)), { recursive: true }); writeFileSync(join(dir, path), text); };
+
+test('E1 (PoC A) : le script de la tête de publication ne tourne jamais, même à l\'étape article (copie de la base d\'origine)', async t => {
+  const sc = scenario(t, { repo: { trap: true } });
+  const report = await sc.run();
+  assert.equal(report.status, 'merged', report.reason);
+  assert.equal(existsSync(sc.repo.witness), false, 'le script de H n\'est exécuté à aucune étape');
+});
+
+test('E1 (PoC B) : clés réécrites par la tête de publication, ordre et décision forgés : l\'étape article est refusée, le commit non signé jamais fusionné', async t => {
+  const attacker = signer();
+  const sc = scenario(t);
+  const dir = sc.repo.dir;
+  git(dir, 'switch', '-q', 'publication/x');
+  put(dir, '.apv/config.json', JSON.stringify(orderConfig(attacker.pem), null, 2));
+  git(dir, 'commit', '-qam', 'config'); git(dir, 'push', '-q', 'origin', 'publication/x');
+  sc.state.prs[PUBLICATION].headRefOid = git(dir, 'rev-parse', 'HEAD');
+  git(dir, 'switch', '-q', 'article/x');
+  put(dir, '.github/workflows/evil.yml', 'on: push\n');
+  git(dir, 'add', '.'); git(dir, 'commit', '-qm', 'non signé');
+  const X = git(dir, 'rev-parse', 'HEAD');
+  git(dir, 'switch', '-q', 'main');
+  const forged = orderObjects(attacker, X);
+  const fakeProd = fakeProduction(attacker, forged.order, { mode: 'open' });
+  let stepNow = 'publication';
+  const report = await sc.run({
+    fetch: (url, init) => (stepNow === 'publication' ? sc.production.fetch(url, init) : fakeProd.fetch(url, init)),
+    beforePush: async step => {
+      if (step !== 'publication') return;
+      stepNow = 'article';
+      git(dir, 'push', '-q', 'origin', 'article/x');
+      sc.state.prs[ARTICLE].headRefOid = X;
+      sc.state.comments[ARTICLE].push(comment(forged.decisionSigned), comment(forged.orderSigned));
+    },
+  });
+  assert.equal(report.status, 'refused');
+  // The forged lines (same nonce, key unknown at the base of origin) are ignored, never a nonce_conflict: the real order
+  // is read, and its article head moved.
+  assert.equal(report.code, 'head_moved', report.reason);
+  assert.deepEqual(report.merged.map(m => m.step), ['publication']);
+  assert.throws(() => git(sc.repo.origin, 'merge-base', '--is-ancestor', X, 'main'), 'X n\'est jamais sur la cible');
+});
+
+test('M1 (PoC C) : un pied recopié dans un commit ordinaire de la cible ne consomme rien, les deux étapes sont fusionnées', async t => {
+  const sc = scenario(t);
+  const dir = sc.repo.dir;
+  git(dir, 'commit', '-q', '--allow-empty', '-m', `Squash de la PR #99 (#99)\n\n* fix\n\nApv-Order: ${NONCE}\nApv-Order-Step: publication\n`);
+  git(dir, 'push', '-q', 'origin', 'main');
+  git(dir, 'switch', '-q', 'publication/x'); git(dir, 'merge', '-q', '--no-edit', 'main'); git(dir, 'push', '-q', 'origin', 'publication/x'); git(dir, 'switch', '-q', 'main');
+  sc.state.prs[PUBLICATION].headRefOid = git(dir, 'rev-parse', 'publication/x');
+  const report = await sc.run();
+  assert.equal(report.status, 'merged', report.reason);
+  assert.deepEqual(report.consumed, []);
+  assert.deepEqual(report.merged.map(m => m.step), ['publication', 'article']);
+  assert.equal(git(sc.repo.origin, 'ls-tree', '--name-only', 'main').split('\n').includes('served.txt'), true);
+});
+
+test('M1 : un commit de fusion au pied bien formé mais d\'une autre empreinte d\'ordre ne consomme rien', async t => {
+  const sc = scenario(t);
+  const dir = sc.repo.dir;
+  const M = git(dir, 'rev-parse', 'main');
+  git(dir, 'switch', '-q', '-c', 'autre', M); put(dir, 'autre.txt', 'x\n'); git(dir, 'add', '.'); git(dir, 'commit', '-qm', 'autre');
+  const E = git(dir, 'rev-parse', 'HEAD'); git(dir, 'switch', '-q', 'main');
+  const tree = git(dir, 'merge-tree', '--write-tree', M, E).split('\n')[0];
+  const c = git(dir, 'commit-tree', tree, '-p', M, '-p', E, '-m', mergeMessage({ pr: 21, step: 'publication', nonce: NONCE, digest: '0'.repeat(64), head: E }));
+  git(dir, 'push', '-q', 'origin', `${c}:refs/heads/main`);
+  git(dir, 'switch', '-q', 'publication/x'); git(dir, 'merge', '-q', '--no-edit', 'origin/main'); git(dir, 'push', '-q', 'origin', 'publication/x'); git(dir, 'switch', '-q', 'main');
+  sc.state.prs[PUBLICATION].headRefOid = git(dir, 'rev-parse', 'publication/x');
+  const report = await sc.run();
+  assert.equal(report.status, 'merged', report.reason);
+  assert.deepEqual(report.merged.map(m => m.step), ['publication', 'article']);
+});
+
+test('E2 (PoC D) : un commit de fusion poussé à la main avec un pied forgé reste signalé par apv audit merges', async t => {
+  const sc = scenario(t);
+  const dir = sc.repo.dir;
+  const M = git(dir, 'rev-parse', 'main');
+  git(dir, 'switch', '-q', '-c', 'evil', M);
+  put(dir, 'evil.txt', 'non relu\n'); git(dir, 'add', '.'); git(dir, 'commit', '-qm', 'evil');
+  const E = git(dir, 'rev-parse', 'HEAD');
+  git(dir, 'switch', '-q', 'main');
+  const tree = git(dir, 'merge-tree', '--write-tree', M, E).split('\n')[0];
+  const c = git(dir, 'commit-tree', tree, '-p', M, '-p', E, '-m', `Merge\n\nApv-Order: 12345678-1234-4234-8234-123456789abc\nApv-Order-Step: publication\nApv-Merged-Head: ${E}\n`);
+  git(dir, 'push', '-q', 'origin', `${c}:refs/heads/main`);
+  git(dir, 'fetch', '-q', 'origin');
+  const audit = auditMerges(dir, join(dir, '.git'), 'origin/main', { since: new Date(Date.now() - 3_600_000).toISOString() });
+  const found = audit.unaccounted.find(u => u.sha === c);
+  assert.ok(found, 'toujours signalé');
+  assert.match(auditLines(audit).join('\n'), /pied Apv-Order non vérifié/);
+});
+
+test('faibles : branche HEAD, tête qui n\'est pas un commit de 40 caractères, PR de publication d\'une autre branche que celle de l\'ordre refusées', async t => {
+  refused(await scenario(t, { prs: { [PUBLICATION]: { headRefName: 'HEAD' } } }).run(), 'pr');
+  refused(await scenario(t, { prs: { [PUBLICATION]: { headRefOid: 'main' } } }).run(), 'pr');
+  const s = signer();
+  const config = orderConfig(s.pem, { publicationBranch: 'publication/{slug}' });
+  const other = scenario(t, { signer: s, repo: { config }, prs: { [PUBLICATION]: { headRefName: 'publication/y' } } });
+  refused(await other.run(), 'pr');
+  const right = scenario(t, { signer: s, repo: { config } });
+  assert.equal((await right.run()).status, 'merged');
+});
+
+test('faible : la cible rafraîchie après une poussée refusée qui change rules.operatorOrders ou batch.setup est refusée (config)', async t => {
+  const sc = scenario(t);
+  const dir = sc.repo.dir;
+  let done = false;
+  const report = await sc.run({ beforePush: async () => {
+    if (done) return; done = true;
+    const config = orderConfig(signer().pem);
+    put(dir, '.apv/config.json', JSON.stringify(config, null, 2));
+    git(dir, 'commit', '-qam', 'clés changées'); git(dir, 'push', '-q', 'origin', 'main');
+    git(dir, 'switch', '-q', 'publication/x'); git(dir, 'merge', '-q', '--no-edit', 'main'); git(dir, 'push', '-q', 'origin', 'publication/x'); git(dir, 'switch', '-q', 'main');
+  } });
+  refused(report, 'config');
+});
+
+test('faible : attestation en HTTP sur la boucle locale refusée hors du mode de test explicite', () => {
+  const s = signer();
+  const raw = { rules: { operatorOrders: { ...orderConfig(s.pem).rules.operatorOrders, attestation: { url: 'http://127.0.0.1:8080/a?nonce={nonce}&challenge={challenge}' } } } };
+  const saved = process.env.APV_ATTESTATION_LOOPBACK;
+  delete process.env.APV_ATTESTATION_LOOPBACK;
+  try { assert.match(configIssues(raw).issues.map(i => i.message).join('\n'), /HTTPS attendu/); }
+  finally { if (saved !== undefined) process.env.APV_ATTESTATION_LOOPBACK = saved; }
 });
