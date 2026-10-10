@@ -42,6 +42,17 @@ Demande de l'opérateur (projet pilote, 4 octobre 2026), après le refus d'une P
 
 Les domaines de `relecture` sont exactement ceux du plan au commit, recalculés par l'outil à chaque vérification (configuration lue à la base commune) : le **niveau de risque** du diff (3.0.0-alpha.15) en fait partie, décidé par le chemin seul, jamais en lisant le contenu comme du texte. À risque faible (tests nommés comme tels ou sous `test/` et `tests/`, documentation `*.md` classée neutre (`docs/`, `README`, `CHANGELOG`) hors dossiers servis, maquettes ; aucun terme de données ni RGPD, aucune adresse e-mail réelle), le plan retient `securite` et, pour une maquette, `fidelite` ; à risque élevé (tout le reste : interface, code, configuration, chemin sensible, code serveur, migration, données, données personnelles, texte légal, terme de données ou RGPD, fichier non classé), le plan de 3.0.0-alpha.14. Code serveur, chemins sensibles et configuration l'emportent sur tests et outillage (sauf un fichier nommé comme un test, jamais une configuration). `securite` reste exigée pour toute PR, quel que soit le niveau. Les instructions des agents (`agents/**`, `workflows/**`, `skills/**`, `SKILL.md`, `.apv/brief.md`, `CLAUDE.md`, `AGENTS.md`, `.claude/**`) sont des chemins sensibles, de risque élevé ; un `.md` non classé (`articles/`) aussi. L'outillage (`fixtures/`, `__mocks__/`) hors d'un dossier `test/` ou `tests/` garde tous les domaines (`src/lib/fixtures/demo.ts`), et un dossier `tests/` sous un dossier de routage (`routes/`, `pages/`, `app/`) n'est jamais un dossier de tests (`src/routes/tests/+page.svelte`).
 
+### Preuve par la CI
+
+Un projet déclare à la base `rules.ciProof` (`workflow`, `job`, `name` du check run, `gates` couverts, `protectedPaths` en plus des défauts, `artifact` pour la mesure). Pour les contrôles de `gates` sans reçu local propre, `apv rules check --commit <sha>` accepte le check run du job seulement si :
+
+- il vient de l'application GitHub Actions (slug `github-actions`), au commit exact, conclu en `success`, lu par l'API des check runs avec `gh` lui-même (jamais `APV_GH`), jamais depuis l'artefact ; un statut de commit posé par un jeton, ou un check run d'un autre commit, ne compte pas ;
+- son exécution est du workflow déclaré, au même commit, pour un évènement `pull_request` ou `push` (ou `workflow_dispatch` si le workflow de la base ne déclare aucune entrée `inputs`), et le check run est un job de cette exécution ;
+- la PR laisse inchangés depuis la base commune le workflow et les chemins protégés (par défaut : workflows et actions locales, `scripts/e2e/**`, `scripts/dast/**`, `playwright.config.*`, `.npmrc`, et chaque script de `package.json` comparé un par un) ; sinon la PR sort de la voie CI et la preuve locale est exigée ;
+- le job n'a pas réussi après relance (`run_attempt` supérieur à 1 : règle `instable`).
+
+Hors réseau, API illisible ou origine hors de github.com : rien n'est accepté, la preuve locale reste exigée. La déclaration ajoutée par la PR elle-même est ignorée. Les reçus de l'artefact servent à la mesure, jamais à la décision.
+
 ### Relectures proportionnées au risque
 
 Projet pilote, 8 octobre 2026 : trois PR sans risque produit ont coûté environ 250 k jetons de relectures sans un seul constat, à 85 % du quota hebdomadaire (issue #126). `securite` reste exigée dans chaque cas ; la voie sans code, quand elle s'applique, passe avant (aucun domaine).
