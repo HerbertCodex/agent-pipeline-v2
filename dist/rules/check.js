@@ -21,7 +21,7 @@ import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
 import { LANE_NAME, docsOnlyLane, laneLines } from './docs-only.js';
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
-import { ciProofLines, targetBranchOf, verifyCiProof } from './ci-proof.js';
+import { ciProofLines, verifyCiProof } from './ci-proof.js';
 import { githubRepository } from './protection.js';
 /** Whether the commit is a web interface: web dependencies in its package.json, or tracked interface files. */
 export function isWebAt(repo, sha) {
@@ -147,7 +147,7 @@ export async function checkMergeRules(input) {
         const pending = proof.gates.filter(g => g.state === 'missing' || g.state === 'dirty').map(g => g.gateId);
         if (settings.ciProof && pending.length) {
             const offline = input.remote?.offline === true;
-            ci = await verifyCiProof({ repo, mergeBase, head: sha, targetBranch: targetBranchOf(repo, input.target), settings: settings.ciProof, pending, config: effective,
+            ci = await verifyCiProof({ repo, mergeBase, head: sha, settings: settings.ciProof, pending, config: effective,
                 gh: offline ? null : input.ci?.gh ?? null,
                 repository: input.ci && input.ci.repository !== undefined ? input.ci.repository : githubRepository(repo) });
         }

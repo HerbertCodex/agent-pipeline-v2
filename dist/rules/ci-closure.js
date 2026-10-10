@@ -44,10 +44,14 @@ export function namedFiles(text, files) {
 export function resolutionCandidates(from, spec) {
     if (!spec.startsWith('.'))
         return [];
-    const target = posix.normalize(posix.join(posix.dirname(from), spec)).replace(/\/$/, '');
+    return candidatesOf(posix.normalize(posix.join(posix.dirname(from), spec)));
+}
+/** The paths a module path (without extension or with one, or a directory) may designate. */
+export function candidatesOf(path) {
+    const target = posix.normalize(path).replace(/\/$/, '');
     const stem = target.replace(/\.[cm]?[jt]sx?$/, '');
     return [...new Set([target, ...SCRIPT_EXTENSIONS.map(e => target + e), ...SCRIPT_EXTENSIONS.map(e => stem + e),
-            ...SCRIPT_EXTENSIONS.map(e => posix.join(target, `index${e}`))])];
+            ...SCRIPT_EXTENSIONS.map(e => posix.join(target, `index${e}`)), posix.join(target, 'package.json')])];
 }
 /** Config files of the tools that load the tests (tsconfig `extends` chains, followed at the base): their relative targets. */
 export function extendedConfigs(repo, base, configs, files) {
@@ -76,9 +80,10 @@ export function extendedConfigs(repo, base, configs, files) {
  * path those specifiers could designate (`shadows`, existing or not). `complete` is
  * false when a file could not be read or the closure is too large: the caller does not trust it.
  */
-export function importClosure(repo, base, roots, files) {
+export function importClosure(repo, base, roots, files, aliases) {
     const reached = new Set();
     const shadows = new Set();
+    const unresolved = [];
     const queue = [...roots];
     let complete = true;
     while (queue.length) {
@@ -87,7 +92,7 @@ export function importClosure(repo, base, roots, files) {
             continue;
         reached.add(file);
         if (reached.size > MAX_FILES)
-            return { reached, shadows, complete: false };
+            return { reached, shadows, unresolved, complete: false };
         if (!PARSED.test(file))
             continue;
         const text = gitRead(repo, ['show', `${base}:${file}`]);
@@ -97,7 +102,14 @@ export function importClosure(repo, base, roots, files) {
         }
         for (const re of IMPORT_PATTERNS) {
             for (const m of text.matchAll(re)) {
-                for (const candidate of resolutionCandidates(file, m[1])) {
+                const spec = m[1];
+                // An alias is followed to what it designates; a specifier that is neither relative, alias, Node module nor declared
+                // package cannot be followed: the caller leaves the lane.
+                const aliased = spec.startsWith('.') ? null : aliases.targets(file, spec);
+                if (!spec.startsWith('.') && !aliased && !aliases.isKnownPackage(spec))
+                    unresolved.push(`${file} : ${spec}`);
+                const designated = spec.startsWith('.') ? resolutionCandidates(file, spec) : (aliased ?? []).flatMap(candidatesOf);
+                for (const candidate of designated) {
                     shadows.add(candidate);
                     if (files.has(candidate) && !reached.has(candidate))
                         queue.push(candidate);
@@ -105,6 +117,6 @@ export function importClosure(repo, base, roots, files) {
             }
         }
     }
-    return { reached, shadows, complete };
+    return { reached, shadows, unresolved, complete };
 }
 //# sourceMappingURL=ci-closure.js.map

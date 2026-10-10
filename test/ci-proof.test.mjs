@@ -30,7 +30,7 @@ const CI_PROOF = { workflow: WORKFLOW, job: 'preuve-complete', name: NAME, gates
 const GATES = [{ id: 'integration', stage: 'full', command: node('0') }, { id: 'browser', stage: 'full', command: node('0') }];
 const BASE_FILES = {
   [WORKFLOW]: workflowText(),
-  'package.json': { name: 'site', private: true, scripts: { 'test:integration': 'node scripts/e2e/lock.mjs npm run e2e:integration', 'e2e:integration': 'playwright test', build: 'vite build' } },
+  'package.json': { name: 'site', private: true, devDependencies: { '@playwright/test': '1.0.0' }, scripts: { 'test:integration': 'node scripts/e2e/lock.mjs npm run e2e:integration', 'e2e:integration': 'playwright test', build: 'vite build' } },
   'scripts/e2e/ci-stack.mjs': 'process.exit(0);\n',
 };
 
@@ -57,17 +57,16 @@ function project(t, { change = {}, gates = GATES, ciProof = CI_PROOF, headConfig
 
 /**
  * The GitHub API as `gh api` answers it, for the repository acme/site: by default, one check run « Preuve complète » of
- * GitHub Actions at `sha`, concluded in success, job 501 of run 9001 of the workflow preuve.yml (id 33), event pull_request.
+ * GitHub Actions at `sha`, concluded in success, job 501 of run 9001 of the workflow preuve.yml (id 33), event push.
  * `edit` changes the scenario; every call is recorded.
  */
 function github(sha, edit = s => s) {
   const scenario = edit({
     checkRuns: [{ id: 501, name: NAME, head_sha: sha, status: 'completed', conclusion: 'success', started_at: '2026-10-09T10:00:00Z',
       app: { id: 15368, slug: 'github-actions', owner: { login: 'github' } }, check_suite: { id: 77 }, html_url: 'https://github.com/acme/site/runs/501' }],
-    runs: { 77: { id: 9001, head_sha: sha, event: 'pull_request', head_branch: 'feat', head_repository: { full_name: 'acme/site' }, pull_requests: [{ number: 7, base: { ref: 'main', sha: 'a'.repeat(40), repo: { url: 'https://api.github.com/repos/acme/site' } } }], path: WORKFLOW, workflow_id: 33, run_attempt: 1, check_suite_id: 77, status: 'completed', conclusion: 'success' } },
+    runs: { 77: { id: 9001, head_sha: sha, event: 'push', path: WORKFLOW, workflow_id: 33, run_attempt: 1, check_suite_id: 77, status: 'completed', conclusion: 'success' } },
     workflows: { 33: { id: 33, path: WORKFLOW }, 44: { id: 44, path: '.github/workflows/ci.yml' } },
     jobs: { 9001: [{ id: 501, run_id: 9001, name: NAME, head_sha: sha, status: 'completed', conclusion: 'success', check_run_url: 'https://api.github.com/repos/acme/site/check-runs/501' }] },
-    pulls: [{ number: 7, state: 'open', base: { ref: 'main', repo: { full_name: 'acme/site' } } }],
     statuses: [],
     fail: null,
   });
@@ -81,10 +80,6 @@ function github(sha, edit = s => s) {
     if ((m = /^repos\/acme\/site\/commits\/([0-9a-f]{40})\/check-runs\?/.exec(path))) {
       const runs = scenario.checkRuns.filter(c => new URL(`https://x/${path}`).searchParams.get('check_name') === c.name);
       return { ...reply(0, { total_count: runs.length, check_runs: runs }), args };
-    }
-    if (/^repos\/acme\/site\/pulls\?head=acme%3A([^&]+)&state=all&per_page=100&page=(\d+)$/.test(path)) {
-      const page = Number(/page=(\d+)$/.exec(path)[1]);
-      return { ...reply(0, scenario.pulls.slice((page - 1) * 100, page * 100)), args };
     }
     if ((m = /^repos\/acme\/site\/commits\/([0-9a-f]{40})\/statuses/.exec(path))) return { ...reply(0, scenario.statuses), args };
     if ((m = /^repos\/acme\/site\/actions\/runs\?check_suite_id=(\d+)$/.exec(path))) {
@@ -217,7 +212,7 @@ test('ciProof: a manual launch counts only when the workflow takes no input (inp
   assert.equal((await check(edited, { gh: github(edited.head, dispatch).gh, repository: 'acme/site' })).ci.state, 'out_of_lane');
   // Any other event (pull_request_target, schedule...) is refused.
   const target = github(without.head, s => ({ ...s, runs: { 77: { ...s.runs[77], event: 'pull_request_target' } } }));
-  assert.match(text(rule(await check(without, { gh: target.gh, repository: 'acme/site' }), 'preuve')), /évènement pull_request_target refusé/);
+  assert.match(text(rule(await check(without, { gh: target.gh, repository: 'acme/site' }), 'preuve')), /évènement pull_request_target non admis/);
 });
 
 test('ciProof: the workflow changed by the change takes it out of the CI lane: local proof required, the file named, the API never called', async t => {
@@ -353,36 +348,19 @@ const verdict = async (p, edit) => { const r = await check(p, { gh: github(p.hea
 const withRun = patch => s => ({ ...s, runs: { 77: { ...s.runs[77], ...patch } } });
 const extraRun = (id, patch) => ({ id, name: NAME, head_sha: null, status: 'completed', conclusion: 'success', started_at: '2026-10-09T09:00:00Z', app: { id: 15368, slug: 'github-actions' }, check_suite: { id: 77 }, ...patch });
 
-const pr = (number, ref, repo = 'acme/site', state = 'open') => ({ number, state, base: { ref, repo: { full_name: repo } } });
-const withPulls = pulls => s => ({ ...s, pulls });
-
-test('ciProof E1: every pull request that left the branch of the run, open or closed, must aim at the target of this repository', async t => {
+test('ciProof E1 ter: no pull_request event counts (the base of a pull request can change after its run); the refusal says to launch workflow_dispatch', async t => {
   const p = project(t);
-  const cases = [
-    [[pr(7, 'main'), pr(9, 'evil-base', 'acme/site', 'closed')], /autre base que main \(#9 vers evil-base\)/],
-    [[pr(9, 'evil-base')], /autre base que main/],
-    [[pr(7, 'main', 'mallory/site')], /autre base que main/],
-    [[], /aucune pull request de la branche feat n'est listée/],
-  ];
-  for (const [pulls, expected] of cases) {
-    const { preuve } = await verdict(p, withPulls(pulls));
-    assert.equal(preuve.status, 'refused', JSON.stringify(pulls));
-    assert.match(text(preuve), expected);
+  for (const event of ['pull_request', 'pull_request_target', 'pull_request_review', 'schedule']) {
+    // A run made with the workflow of another base, whose pull request was then moved to the target (PATCH base, event edited): same answer.
+    const { preuve } = await verdict(p, withRun({ event, pull_requests: [{ number: 9, base: { ref: 'main', repo: { url: 'https://api.github.com/repos/acme/site' } } }] }));
+    assert.equal(preuve.status, 'refused', event);
+    assert.match(text(preuve), new RegExp(`évènement ${event} non admis`));
+    assert.match(text(preuve), /lancer la preuve par workflow_dispatch \(gh workflow run preuve\.yml --ref <branche>\)/);
   }
-  // The list of the run, recomputed at the read (empty once merged), decides nothing.
-  assert.equal((await verdict(p, s => withPulls([pr(7, 'main'), pr(9, 'evil-base', 'acme/site', 'closed')])(withRun({ pull_requests: [] })(s)))).preuve.status, 'refused');
-  assert.equal((await verdict(p, s => withPulls([pr(7, 'main', 'acme/site', 'closed')])(withRun({ pull_requests: [] })(s)))).preuve.status, 'ok');
-  // A run of a fork, a read that fails and a long list (second page) are read to the end.
-  assert.equal((await verdict(p, withRun({ head_repository: { full_name: 'mallory/site' } }))).preuve.status, 'refused');
-  const many = [...Array(100).fill(0).map((_, i) => pr(100 + i, 'main')), pr(300, 'evil-base')];
-  assert.match(text((await verdict(p, withPulls(many))).preuve), /#300 vers evil-base/);
-  const down = github(p.head, withPulls([pr(7, 'main')]));
-  const failing = async args => args.at(-1).includes('/pulls?') ? { status: 1, stdout: '', stderr: 'HTTP 502', error: null, args } : down.gh(args);
-  const r = await check(p, { gh: failing, repository: 'acme/site' });
-  assert.equal(rule(r, 'preuve').status, 'refused');
-  assert.equal(r.ci.state, 'unavailable');
-  // A push on the target, and a pull request of a target with a slash in its name.
+  // push and workflow_dispatch without input stay accepted, the workflow being the one of the commit itself.
   assert.equal((await verdict(p, withRun({ event: 'push' }))).preuve.status, 'ok');
+  const manual = project(t, { base: { [WORKFLOW]: workflowText('  workflow_dispatch:\n') } });
+  assert.equal((await verdict(manual, withRun({ event: 'workflow_dispatch' }))).preuve.status, 'ok');
 });
 
 test('ciProof E2: a file the base workflow or scripts name, or that a protected file imports by a relative path, takes the change out of the lane', async t => {
@@ -517,13 +495,49 @@ test('ciProof weak 1: an earlier cancelled run at the same commit blocks, even w
   assert.match(text(preuve), /check run 400 .*conclusion cancelled/);
 });
 
-test('ciProof weak 2: the target branch keeps its slashes (origin/rel/x is rel/x), only the remote is removed', async t => {
-  const p = project(t);
-  git(p.repo, 'branch', 'rel/x', 'main'); git(p.repo, 'push', '-q', 'origin', 'rel/x');
-  const api = github(p.head, withPulls([pr(7, 'rel/x')]));
-  const r = await checkMergeRules({ repo: p.repo, commit: p.head, target: 'origin/rel/x', remote: { strict: true }, ci: { gh: api.gh, repository: 'acme/site' } });
-  assert.equal(rule(r, 'preuve').status, 'ok', text(rule(r, 'preuve')));
-  const wrong = github(p.head, withPulls([pr(7, 'x')]));
-  const r2 = await checkMergeRules({ repo: p.repo, commit: p.head, target: 'origin/rel/x', remote: { strict: true }, ci: { gh: wrong.gh, repository: 'acme/site' } });
-  assert.equal(rule(r2, 'preuve').status, 'refused');
+const aliasBase = extra => ({ 'playwright.config.ts': "import { defineConfig } from '@playwright/test';\nimport { env } from 'ALIAS';\nexport default defineConfig({});\n", 'tests/support/env.ts': 'export const env = 1;\n', ...extra });
+const withAlias = (alias, extra = {}) => { const files = aliasBase(extra); files['playwright.config.ts'] = files['playwright.config.ts'].replace('ALIAS', alias); return files; };
+const pkgWith = extra => ({ ...BASE_FILES['package.json'], ...extra });
+const touch = 'export const env = 1;\nprocess.exit(0);\n';
+
+test('ciProof E2 quater: package.json imports (#support/*) are followed to their target', async t => {
+  const base = withAlias('#support/env', { 'package.json': pkgWith({ imports: { '#support/*': './tests/support/*.ts' } }) });
+  const p = project(t, { base, change: { 'tests/support/env.ts': touch } });
+  const r = await check(p, { gh: github(p.head).gh, repository: 'acme/site' });
+  assert.equal(r.ci.state, 'out_of_lane');
+  assert.match(text(rule(r, 'preuve')), /: tests\/support\/env\.ts/);
+  // Conditional targets are followed too.
+  const cond = withAlias('#env', { 'package.json': pkgWith({ imports: { '#env': { node: './tests/support/env.ts', default: './tests/support/other.ts' } } }), 'tests/support/other.ts': 'export {};\n' });
+  const q = project(t, { base: cond, change: { 'tests/support/other.ts': touch } });
+  assert.equal((await check(q, { gh: github(q.head).gh, repository: 'acme/site' })).ci.state, 'out_of_lane');
+});
+
+test('ciProof E2 quinquies: tsconfig paths ($support/*), baseUrl and SvelteKit $lib / kit.alias are followed to their target', async t => {
+  const paths = project(t, { base: withAlias('$support/env', { 'tsconfig.json': '{ // commentaire\n "compilerOptions": { "baseUrl": ".", "paths": { "$support/*": ["tests/support/*"], }, }, }\n' }), change: { 'tests/support/env.ts': touch } });
+  assert.equal((await check(paths, { gh: github(paths.head).gh, repository: 'acme/site' })).ci.state, 'out_of_lane');
+  const lib = project(t, { base: withAlias('$lib/env', { 'src/lib/env.ts': 'export const env = 1;\n' }), change: { 'src/lib/env.ts': touch } });
+  assert.equal((await check(lib, { gh: github(lib.head).gh, repository: 'acme/site' })).ci.state, 'out_of_lane');
+  const kit = project(t, { base: withAlias('$tools/env', { 'svelte.config.js': "export default { kit: { alias: { '$tools': 'tests/support' } } };\n" }), change: { 'tests/support/env.ts': touch } });
+  assert.equal((await check(kit, { gh: github(kit.head).gh, repository: 'acme/site' })).ci.state, 'out_of_lane');
+  const baseUrl = project(t, { base: withAlias('tests/support/env', { 'tsconfig.json': '{ "compilerOptions": { "baseUrl": "." } }\n' }), change: { 'tests/support/env.ts': touch } });
+  assert.equal((await check(baseUrl, { gh: github(baseUrl.head).gh, repository: 'acme/site' })).ci.state, 'out_of_lane');
+});
+
+test('ciProof E2 defense: a bare specifier that is no alias, Node module or declared package leaves the lane; known ones do not', async t => {
+  for (const spec of ['#inconnu/env', '$inconnu/env', '@evil/support', 'evil-pkg']) {
+    const p = project(t, { base: withAlias(spec), change: { 'README.md': 'autre\n' } });
+    const r = await check(p, { gh: github(p.head).gh, repository: 'acme/site' });
+    assert.equal(r.ci.state, 'out_of_lane', spec);
+    assert.match(text(rule(r, 'preuve')), new RegExp(`import non suivi .*playwright\\.config\\.ts : ${spec.replace(/[$#/.@-]/g, '\\$&')}`));
+  }
+  const known = project(t, { base: withAlias('node:fs'), change: { 'README.md': 'autre\n' } });
+  assert.equal(rule(await check(known, { gh: github(known.head).gh, repository: 'acme/site' }), 'preuve').status, 'ok');
+  const declared = project(t, { base: withAlias('@playwright/test/lib'), change: { 'README.md': 'autre\n' } });
+  assert.equal(rule(await check(declared, { gh: github(declared.head).gh, repository: 'acme/site' }), 'preuve').status, 'ok');
+});
+
+test('ciProof E2 sexies: a package.json added in a directory the base imports (main redirect) leaves the lane', async t => {
+  const base = { 'playwright.config.ts': "import { env } from './tests/sup';\n", 'tests/sup/index.ts': 'export const env = 1;\n' };
+  const p = project(t, { base, change: { 'tests/sup/package.json': { main: '../../src/evil.js' } } });
+  assert.equal((await check(p, { gh: github(p.head).gh, repository: 'acme/site' })).ci.state, 'out_of_lane');
 });

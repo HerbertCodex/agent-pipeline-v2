@@ -1,5 +1,6 @@
 import { posix } from 'node:path';
 import { gitRead } from '../run/git-probe.js';
+import type { Aliases } from './ci-aliases.js';
 
 /**
  * What runs inside the proof without being listed as protected (issue #130, security review): the files the workflow and the
@@ -45,10 +46,15 @@ export function namedFiles(text: string, files: ReadonlySet<string>): string[] {
  */
 export function resolutionCandidates(from: string, spec: string): string[] {
   if (!spec.startsWith('.')) return [];
-  const target = posix.normalize(posix.join(posix.dirname(from), spec)).replace(/\/$/, '');
+  return candidatesOf(posix.normalize(posix.join(posix.dirname(from), spec)));
+}
+
+/** The paths a module path (without extension or with one, or a directory) may designate. */
+export function candidatesOf(path: string): string[] {
+  const target = posix.normalize(path).replace(/\/$/, '');
   const stem = target.replace(/\.[cm]?[jt]sx?$/, '');
   return [...new Set([target, ...SCRIPT_EXTENSIONS.map(e => target + e), ...SCRIPT_EXTENSIONS.map(e => stem + e),
-    ...SCRIPT_EXTENSIONS.map(e => posix.join(target, `index${e}`))])];
+    ...SCRIPT_EXTENSIONS.map(e => posix.join(target, `index${e}`)), posix.join(target, 'package.json')])];
 }
 
 /** Config files of the tools that load the tests (tsconfig `extends` chains, followed at the base): their relative targets. */
@@ -75,27 +81,34 @@ export function extendedConfigs(repo: string, base: string, configs: readonly st
  * path those specifiers could designate (`shadows`, existing or not). `complete` is
  * false when a file could not be read or the closure is too large: the caller does not trust it.
  */
-export function importClosure(repo: string, base: string, roots: readonly string[], files: ReadonlySet<string>): { reached: Set<string>; shadows: Set<string>; complete: boolean } {
+export function importClosure(repo: string, base: string, roots: readonly string[], files: ReadonlySet<string>, aliases: Aliases): { reached: Set<string>; shadows: Set<string>; unresolved: string[]; complete: boolean } {
   const reached = new Set<string>();
   const shadows = new Set<string>();
+  const unresolved: string[] = [];
   const queue = [...roots];
   let complete = true;
   while (queue.length) {
     const file = queue.pop()!;
     if (reached.has(file)) continue;
     reached.add(file);
-    if (reached.size > MAX_FILES) return { reached, shadows, complete: false };
+    if (reached.size > MAX_FILES) return { reached, shadows, unresolved, complete: false };
     if (!PARSED.test(file)) continue;
     const text = gitRead(repo, ['show', `${base}:${file}`]);
     if (text === null) { complete = false; continue; }
     for (const re of IMPORT_PATTERNS) {
       for (const m of text.matchAll(re)) {
-        for (const candidate of resolutionCandidates(file, m[1]!)) {
+        const spec = m[1]!;
+        // An alias is followed to what it designates; a specifier that is neither relative, alias, Node module nor declared
+        // package cannot be followed: the caller leaves the lane.
+        const aliased = spec.startsWith('.') ? null : aliases.targets(file, spec);
+        if (!spec.startsWith('.') && !aliased && !aliases.isKnownPackage(spec)) unresolved.push(`${file} : ${spec}`);
+        const designated = spec.startsWith('.') ? resolutionCandidates(file, spec) : (aliased ?? []).flatMap(candidatesOf);
+        for (const candidate of designated) {
           shadows.add(candidate);
           if (files.has(candidate) && !reached.has(candidate)) queue.push(candidate);
         }
       }
     }
   }
-  return { reached, shadows, complete };
+  return { reached, shadows, unresolved, complete };
 }

@@ -51,8 +51,6 @@ export interface CiProofInput {
     repo: string;
     mergeBase: string;
     head: string;
-    /** Name of the branch the change merges into (`main` for `origin/main`): the base a pull_request run must have had. */
-    targetBranch: string;
     settings: CiProofSettings;
     /** Checks of the full suite without a clean local receipt at the commit (state missing or dirty). */
     pending: readonly string[];
@@ -75,5 +73,3 @@ export declare function declaresJob(text: string, job: string, name: string): bo
 export declare function verifyCiProof(input: CiProofInput): Promise<CiProofOutcome>;
 /** Lines that say why the CI does not prove the checks, for the refusal of the rule preuve. */
 export declare function ciProofLines(ci: CiProofOutcome): string[];
-/** The branch a `--target` designates: `origin/main` gives `main`, `origin/feat/x` gives `feat/x`, a name without remote is kept. */
-export declare function targetBranchOf(repo: string, target: string): string;
