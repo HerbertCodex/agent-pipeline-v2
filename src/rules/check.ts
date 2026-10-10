@@ -21,7 +21,7 @@ import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
 import { LANE_NAME, docsOnlyLane, laneLines, type DocsOnlyLane } from './docs-only.js';
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
-import { ciProofLines, verifyCiProof, type CiProofOutcome } from './ci-proof.js';
+import { ciProofLines, targetBranchOf, verifyCiProof, type CiProofOutcome } from './ci-proof.js';
 import { githubRepository } from './protection.js';
 import type { GhRunner } from '../stack/github.js';
 
@@ -198,7 +198,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     const pending = proof.gates.filter(g => g.state === 'missing' || g.state === 'dirty').map(g => g.gateId);
     if (settings.ciProof && pending.length) {
       const offline = input.remote?.offline === true;
-      ci = await verifyCiProof({ repo, mergeBase, head: sha, targetBranch: input.target.replace(/^(?:refs\/remotes\/)?[^/]+\//, ''), settings: settings.ciProof, pending, config: effective,
+      ci = await verifyCiProof({ repo, mergeBase, head: sha, targetBranch: targetBranchOf(repo, input.target), settings: settings.ciProof, pending, config: effective,
         gh: offline ? null : input.ci?.gh ?? null,
         repository: input.ci && input.ci.repository !== undefined ? input.ci.repository : githubRepository(repo) });
     } else if (!settings.ciProof && candidate.rules?.ciProof) {

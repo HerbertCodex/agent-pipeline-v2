@@ -5,7 +5,7 @@ import { Git } from '../execution/git.js';
 import { planRepeat } from '../gates/repeat.js';
 import { gitRead } from '../run/git-probe.js';
 import type { GhRunner } from '../stack/github.js';
-import { importClosure, namedFiles, treeFiles } from './ci-closure.js';
+import { extendedConfigs, importClosure, namedFiles, treeFiles } from './ci-closure.js';
 import type { CiProofSettings } from './config.js';
 
 /**
@@ -134,10 +134,11 @@ function laneProblems(repo: string, mergeBase: string, head: string, settings: C
   if (hits.length > 10) problems.push(`et ${hits.length - 10} autre(s) fichier(s) protégé(s)`);
   // What the workflow and the scripts of the base name, and what all of it imports: executed by the proof, so protected.
   const named = namedFiles([workflow ?? '', gitRead(repo, ['show', `${mergeBase}:package.json`]) ?? ''].join('\n'), treeSet);
+  const configs = extendedConfigs(repo, mergeBase, tree.filter(f => /(?:^|\/)[tj]sconfig[^/]*\.json$/.test(f)), treeSet);
   const roots = [...new Set([...named, ...tree.filter(isProtected)])];
-  const { reached, complete } = importClosure(repo, mergeBase, roots, treeSet);
-  const executed = files.filter(f => reached.has(f) && !hits.includes(f));
-  for (const f of executed.slice(0, 10)) problems.push(`fichier exécuté par la preuve modifié depuis la base (nommé ou importé par le workflow, les scripts ou un fichier protégé) : ${f}`);
+  const { reached, shadows, complete } = importClosure(repo, mergeBase, roots, treeSet);
+  const executed = files.filter(f => (reached.has(f) || shadows.has(f) || configs.includes(f)) && !hits.includes(f));
+  for (const f of executed.slice(0, 10)) problems.push(`fichier exécuté ou pouvant remplacer un fichier exécuté par la preuve, modifié depuis la base (nommé, importé ou hérité par le workflow, les scripts, la configuration ou un fichier protégé) : ${f}`);
   if (executed.length > 10) problems.push(`et ${executed.length - 10} autre(s) fichier(s) exécuté(s) par la preuve`);
   if (!complete) problems.push('fichiers importés par la preuve non tous lisibles ou trop nombreux : leur liste n\'est pas fiable');
   // Same blob at the base and at the commit: the workflow that ran is the one of the base (also covered by the diff).
@@ -147,14 +148,13 @@ function laneProblems(repo: string, mergeBase: string, head: string, settings: C
 }
 
 /** One call to the API, its JSON object, or the reason it is unusable. */
-async function api(gh: GhRunner, path: string): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; why: string }> {
+async function api(gh: GhRunner, path: string): Promise<{ ok: true; value: unknown } | { ok: false; why: string }> {
   let call;
   try { call = await gh(['api', '-H', 'Accept: application/vnd.github+json', path]); }
   catch (error) { return { ok: false, why: errorMessage(error) }; }
   if (call.status !== 0 || call.error) return { ok: false, why: (call.error ?? call.stderr ?? '').trim().split('\n')[0]!.slice(0, 160) || `code ${call.status}` };
   try {
-    const value = record(JSON.parse(call.stdout));
-    return value ? { ok: true, value } : { ok: false, why: `réponse inattendue de ${path.split('?')[0]}` };
+    return { ok: true, value: JSON.parse(call.stdout) };
   } catch { return { ok: false, why: `réponse illisible de ${path.split('?')[0]} (pas du JSON)` }; }
 }
 
@@ -204,7 +204,21 @@ async function readCheckRuns(input: CiProofInput & { gh: GhRunner; repository: s
   const get = async (path: string): Promise<Record<string, unknown>> => {
     const r = await api(gh, `repos/${repository}/${path}`);
     if (!r.ok) throw new Unavailable(r.why);
-    return r.value;
+    const value = record(r.value);
+    if (!value) throw new Unavailable(`réponse inattendue de ${path.split('?')[0]}`);
+    return value;
+  };
+  // A list answered as a JSON array, every page (100 by page, 20 pages at most): a list cut short is never trusted.
+  const getAll = async (path: string): Promise<Record<string, unknown>[]> => {
+    const all: Record<string, unknown>[] = [];
+    for (let page = 1; page <= 20; page++) {
+      const r = await api(gh, `repos/${repository}/${path}&per_page=100&page=${page}`);
+      if (!r.ok) throw new Unavailable(r.why);
+      if (!Array.isArray(r.value)) throw new Unavailable(`réponse inattendue de ${path.split('?')[0]}`);
+      all.push(...r.value.map(record).filter((v): v is Record<string, unknown> => v !== null));
+      if (r.value.length < 100) return all;
+    }
+    throw new Unavailable(`plus de 2000 éléments pour ${path.split('?')[0]}`);
   };
   const list = await get(`commits/${head}/check-runs?check_name=${encodeURIComponent(settings.name)}&filter=all&per_page=${MAX_CHECK_RUNS}`);
   const runs = list['check_runs'];
@@ -242,15 +256,17 @@ async function readCheckRuns(input: CiProofInput & { gh: GhRunner; repository: s
     if (path !== settings.workflow) { ignored.push(`check run ${id} ignoré : workflow ${path ?? 'inconnu'}, pas ${settings.workflow}`); continue; }
     eligible.push({ c, id, run });
   }
-  // A failure of the declared job at this commit is never hidden by a later green run: the commit is not proven (rule instable).
-  const failed = eligible.find(e => ['failure', 'timed_out'].includes(str(e.c['conclusion']) ?? '') || str(e.c['status']) !== 'completed');
+  // A failure, cancellation (a cancellation by a concurrency group is not told apart by the API) or unfinished run of the declared
+  // job at this commit is never hidden by a later green run: the commit is not proven (rule instable).
+  const failed = eligible.find(e => ['failure', 'timed_out', 'cancelled', 'action_required'].includes(str(e.c['conclusion']) ?? '') || str(e.c['status']) !== 'completed');
   const decisive = failed ?? eligible[0];
   if (!decisive) return result('refused', [...ignored, `aucun check run « ${settings.name} » de GitHub Actions au commit ${short(head)} du workflow ${settings.workflow}`], { gates, excluded });
-  return judge(input, decisive.c, decisive.id, decisive.run, gates, excluded, ignored, result, get);
+  return judge(input, decisive.c, decisive.id, decisive.run, gates, excluded, ignored, result, get, getAll);
 }
 
 async function judge(input: CiProofInput, c: Record<string, unknown>, id: number, run: Record<string, unknown>, gates: string[], excluded: CiProofOutcome['excluded'],
-  ignored: string[], result: Result, get: (path: string) => Promise<Record<string, unknown>>): Promise<CiProofOutcome> {
+  ignored: string[], result: Result, get: (path: string) => Promise<Record<string, unknown>>,
+  getAll: (path: string) => Promise<Record<string, unknown>[]>): Promise<CiProofOutcome> {
   const { settings, head } = input;
   const runId = int(run['id']);
   const event = str(run['event']) ?? 'inconnu';
@@ -265,14 +281,20 @@ async function judge(input: CiProofInput, c: Record<string, unknown>, id: number
   const runSha = str(run['head_sha']);
   if (runSha !== head) return result('refused', [...ignored, `exécution ${runId} d'un autre commit (${runSha ? short(runSha) : 'inconnu'}) que ${short(head)}`], { gates, excluded, checkRun });
   if (event === 'pull_request') {
-    // The workflow of a pull_request run is read at the merge commit with the base of THAT pull request: only a pull request
-    // of this repository into the target counts (a fork, or another base branch, would run another workflow).
-    const pulls = Array.isArray(run['pull_requests']) ? run['pull_requests'].map(record) : [];
-    const intoTarget = pulls.some(p => {
-      const base = record(p?.['base']);
-      return str(base?.['ref']) === input.targetBranch && (str(record(base?.['repo'])?.['url']) ?? '').toLowerCase().endsWith(`/repos/${input.repository ?? ''}`.toLowerCase());
+    // The workflow of a pull_request run is read at the merge commit with the base of THAT pull request, and the list of
+    // `run.pull_requests` is recomputed at each read (empty once merged). So every pull request, open or closed, that left
+    // the branch of the run must aim at the target of this repository: one aiming elsewhere, or a fork, refuses the run.
+    const headRepo = str(record(run['head_repository'])?.['full_name']);
+    const branch = str(run['head_branch']);
+    if (!branch || headRepo?.toLowerCase() !== (input.repository ?? '').toLowerCase()) return refuse(`évènement pull_request : branche ${branch ?? 'inconnue'} du dépôt ${headRepo ?? 'inconnu'}, pas de ce dépôt (fork ou branche inconnue)`);
+    const owner = (input.repository ?? '').split('/')[0]!;
+    const pulls = await getAll(`pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=all`);
+    if (!pulls.length) return refuse(`évènement pull_request : aucune pull request de la branche ${branch} n'est listée par l'API`);
+    const away = pulls.filter(p => {
+      const base = record(p['base']);
+      return str(base?.['ref']) !== input.targetBranch || (str(record(base?.['repo'])?.['full_name']) ?? '').toLowerCase() !== (input.repository ?? '').toLowerCase();
     });
-    if (!intoTarget) return refuse(`évènement pull_request : aucune pull request de ce dépôt vers ${input.targetBranch} pour l'exécution (fork, autre branche de base ou liste vide) ; son workflow n'est pas celui de la base`);
+    if (away.length) return refuse(`évènement pull_request : la branche ${branch} a aussi une pull request vers une autre base que ${input.targetBranch} (${away.slice(0, 5).map(p => `#${int(p['number']) ?? '?'} vers ${str(record(p['base'])?.['ref']) ?? '?'}`).join(', ')}) ; le workflow d'un run pull_request se lit avec la base de sa pull request`);
   } else if (event === DISPATCH) {
     const text = gitRead(input.repo, ['show', `${input.mergeBase}:${settings.workflow}`]) ?? '';
     if (/^[ \t]*inputs[ \t]*:/m.test(text) || /workflow_dispatch[ \t]*:[ \t]*\{[^}]*\binputs\b/.test(text)) return refuse(`évènement ${DISPATCH} : le workflow déclare des entrées (inputs), qui peuvent tester un autre commit que celui de l'exécution et que l'API ne rend pas`);
@@ -300,4 +322,11 @@ export function ciProofLines(ci: CiProofOutcome): string[] {
   if (ci.state === 'accepted') return [`prouvé(s) par la CI : ${ci.gates.join(', ')}`, ...ci.excluded.map(e => `${e.gate} : ${e.reason}`)];
   const tail = ci.state === 'unavailable' ? ' ; preuve locale exigée' : '';
   return [...ci.reasons.map(r => `${label[ci.state]} : ${r}${tail}`), ...(ci.state === 'out_of_lane' ? [] : ci.excluded.map(e => `${e.gate} : ${e.reason}`))];
+}
+
+/** The branch a `--target` designates: `origin/main` gives `main`, `origin/feat/x` gives `feat/x`, a name without remote is kept. */
+export function targetBranchOf(repo: string, target: string): string {
+  const name = target.replace(/^refs\/remotes\//, '');
+  const remote = (gitRead(repo, ['remote']) ?? '').split('\n').map(r => r.trim()).filter(Boolean).find(r => name.startsWith(`${r}/`));
+  return remote ? name.slice(remote.length + 1) : name;
 }

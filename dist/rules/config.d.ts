@@ -75,7 +75,8 @@ export interface RulesSettings {
  * (a reusable workflow or a composite action runs in the job), the scripts of the end-to-end and dynamic tests, the
  * configuration of Playwright and of npm (`script-shell` replaces the shell of every script), the whole package.json (a
  * script `test:*` calls others, npm runs `pre`/`post` and installation scripts by itself) and the lock files, the
- * configuration of the build tools (executed by `prepare` and the tests). The files these name or import are added by the rule.
+ * configuration of the build tools (executed by `prepare` and the tests), the configuration of the TypeScript and Babel loaders
+ * (`paths` redirects an import; the `extends` chain is added by the rule), any tracked file under node_modules. The files these name or import are added by the rule.
  */
 export declare const CI_PROTECTED_DEFAULTS: readonly string[];
 export interface CiProofSettings {

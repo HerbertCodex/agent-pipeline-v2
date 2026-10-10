@@ -64,9 +64,10 @@ function github(sha, edit = s => s) {
   const scenario = edit({
     checkRuns: [{ id: 501, name: NAME, head_sha: sha, status: 'completed', conclusion: 'success', started_at: '2026-10-09T10:00:00Z',
       app: { id: 15368, slug: 'github-actions', owner: { login: 'github' } }, check_suite: { id: 77 }, html_url: 'https://github.com/acme/site/runs/501' }],
-    runs: { 77: { id: 9001, head_sha: sha, event: 'pull_request', pull_requests: [{ number: 7, base: { ref: 'main', sha: 'a'.repeat(40), repo: { url: 'https://api.github.com/repos/acme/site' } } }], path: WORKFLOW, workflow_id: 33, run_attempt: 1, check_suite_id: 77, status: 'completed', conclusion: 'success' } },
+    runs: { 77: { id: 9001, head_sha: sha, event: 'pull_request', head_branch: 'feat', head_repository: { full_name: 'acme/site' }, pull_requests: [{ number: 7, base: { ref: 'main', sha: 'a'.repeat(40), repo: { url: 'https://api.github.com/repos/acme/site' } } }], path: WORKFLOW, workflow_id: 33, run_attempt: 1, check_suite_id: 77, status: 'completed', conclusion: 'success' } },
     workflows: { 33: { id: 33, path: WORKFLOW }, 44: { id: 44, path: '.github/workflows/ci.yml' } },
     jobs: { 9001: [{ id: 501, run_id: 9001, name: NAME, head_sha: sha, status: 'completed', conclusion: 'success', check_run_url: 'https://api.github.com/repos/acme/site/check-runs/501' }] },
+    pulls: [{ number: 7, state: 'open', base: { ref: 'main', repo: { full_name: 'acme/site' } } }],
     statuses: [],
     fail: null,
   });
@@ -80,6 +81,10 @@ function github(sha, edit = s => s) {
     if ((m = /^repos\/acme\/site\/commits\/([0-9a-f]{40})\/check-runs\?/.exec(path))) {
       const runs = scenario.checkRuns.filter(c => new URL(`https://x/${path}`).searchParams.get('check_name') === c.name);
       return { ...reply(0, { total_count: runs.length, check_runs: runs }), args };
+    }
+    if (/^repos\/acme\/site\/pulls\?head=acme%3A([^&]+)&state=all&per_page=100&page=(\d+)$/.test(path)) {
+      const page = Number(/page=(\d+)$/.exec(path)[1]);
+      return { ...reply(0, scenario.pulls.slice((page - 1) * 100, page * 100)), args };
     }
     if ((m = /^repos\/acme\/site\/commits\/([0-9a-f]{40})\/statuses/.exec(path))) return { ...reply(0, scenario.statuses), args };
     if ((m = /^repos\/acme\/site\/actions\/runs\?check_suite_id=(\d+)$/.exec(path))) {
@@ -348,17 +353,36 @@ const verdict = async (p, edit) => { const r = await check(p, { gh: github(p.hea
 const withRun = patch => s => ({ ...s, runs: { 77: { ...s.runs[77], ...patch } } });
 const extraRun = (id, patch) => ({ id, name: NAME, head_sha: null, status: 'completed', conclusion: 'success', started_at: '2026-10-09T09:00:00Z', app: { id: 15368, slug: 'github-actions' }, check_suite: { id: 77 }, ...patch });
 
-test('ciProof E1: a pull_request run counts only for a pull request of this repository into the target (evil-base, fork, empty list refused)', async t => {
+const pr = (number, ref, repo = 'acme/site', state = 'open') => ({ number, state, base: { ref, repo: { full_name: repo } } });
+const withPulls = pulls => s => ({ ...s, pulls });
+
+test('ciProof E1: every pull request that left the branch of the run, open or closed, must aim at the target of this repository', async t => {
   const p = project(t);
-  const pull = (ref, url = 'https://api.github.com/repos/acme/site') => withRun({ pull_requests: [{ number: 9, base: { ref, sha: 'a'.repeat(40), repo: { url } } }] });
-  for (const edit of [pull('evil-base'), pull('main', 'https://api.github.com/repos/mallory/site'), withRun({ pull_requests: [] }), withRun({ pull_requests: undefined })]) {
-    const { preuve } = await verdict(p, edit);
-    assert.equal(preuve.status, 'refused');
-    assert.match(text(preuve), /aucune pull request de ce dépôt vers main/);
+  const cases = [
+    [[pr(7, 'main'), pr(9, 'evil-base', 'acme/site', 'closed')], /autre base que main \(#9 vers evil-base\)/],
+    [[pr(9, 'evil-base')], /autre base que main/],
+    [[pr(7, 'main', 'mallory/site')], /autre base que main/],
+    [[], /aucune pull request de la branche feat n'est listée/],
+  ];
+  for (const [pulls, expected] of cases) {
+    const { preuve } = await verdict(p, withPulls(pulls));
+    assert.equal(preuve.status, 'refused', JSON.stringify(pulls));
+    assert.match(text(preuve), expected);
   }
-  assert.equal((await verdict(p, pull('main'))).preuve.status, 'ok');
-  // A push run on the target, with the workflow of the head identical to the base, stays accepted.
-  assert.equal((await verdict(p, withRun({ event: 'push', pull_requests: [] }))).preuve.status, 'ok');
+  // The list of the run, recomputed at the read (empty once merged), decides nothing.
+  assert.equal((await verdict(p, s => withPulls([pr(7, 'main'), pr(9, 'evil-base', 'acme/site', 'closed')])(withRun({ pull_requests: [] })(s)))).preuve.status, 'refused');
+  assert.equal((await verdict(p, s => withPulls([pr(7, 'main', 'acme/site', 'closed')])(withRun({ pull_requests: [] })(s)))).preuve.status, 'ok');
+  // A run of a fork, a read that fails and a long list (second page) are read to the end.
+  assert.equal((await verdict(p, withRun({ head_repository: { full_name: 'mallory/site' } }))).preuve.status, 'refused');
+  const many = [...Array(100).fill(0).map((_, i) => pr(100 + i, 'main')), pr(300, 'evil-base')];
+  assert.match(text((await verdict(p, withPulls(many))).preuve), /#300 vers evil-base/);
+  const down = github(p.head, withPulls([pr(7, 'main')]));
+  const failing = async args => args.at(-1).includes('/pulls?') ? { status: 1, stdout: '', stderr: 'HTTP 502', error: null, args } : down.gh(args);
+  const r = await check(p, { gh: failing, repository: 'acme/site' });
+  assert.equal(rule(r, 'preuve').status, 'refused');
+  assert.equal(r.ci.state, 'unavailable');
+  // A push on the target, and a pull request of a target with a slash in its name.
+  assert.equal((await verdict(p, withRun({ event: 'push' }))).preuve.status, 'ok');
 });
 
 test('ciProof E2: a file the base workflow or scripts name, or that a protected file imports by a relative path, takes the change out of the lane', async t => {
@@ -380,7 +404,7 @@ test('ciProof E2: a file the base workflow or scripts name, or that a protected 
     const api = github(p.head);
     const r = await check(p, { gh: api.gh, repository: 'acme/site' });
     assert.equal(r.ci.state, 'out_of_lane', file);
-    assert.match(text(rule(r, 'preuve')), new RegExp(`exécuté par la preuve modifié depuis la base .*: ${file.replace(/[.]/g, '\\.')}`));
+    assert.match(text(rule(r, 'preuve')), new RegExp(`modifié depuis la base .*: ${file.replace(/[.]/g, '\\.')}`));
     assert.equal(api.calls.length, 0);
   }
   // A file nothing reaches stays in the lane.
@@ -449,4 +473,57 @@ test('ciProof F4: the declared job key must be the job whose name is the check r
   const comment = workflowText().replace('jobs:\n  preuve-complete:', 'jobs:\n  # preuve-complete:\n  autre:');
   const q = project(t, { base: { [WORKFLOW]: comment } });
   assert.equal((await check(q, { gh: github(q.head).gh, repository: 'acme/site' })).ci.state, 'out_of_lane');
+});
+
+const PW_BASE = {
+  'playwright.config.ts': "import { defineConfig } from '@playwright/test';\nimport { env } from './tests/support/live-env';\nexport default defineConfig({});\n",
+  'tests/support/live-env.ts': 'export const env = 1;\n',
+};
+
+test('ciProof E2 bis: a file added next to the one the base resolves (live-env.js beside live-env.ts) leaves the lane, whatever the loader order', async t => {
+  const shadows = ['tests/support/live-env.js', 'tests/support/live-env.mjs', 'tests/support/live-env.tsx', 'tests/support/live-env/index.js'];
+  for (const file of shadows) {
+    const p = project(t, { base: PW_BASE, change: { [file]: 'process.exit(0);\n' } });
+    const r = await check(p, { gh: github(p.head).gh, repository: 'acme/site' });
+    assert.equal(r.ci.state, 'out_of_lane', file);
+    assert.match(text(rule(r, 'preuve')), new RegExp(`pouvant remplacer un fichier exécuté.*: ${file.replace(/[.]/g, '\\.')}`));
+  }
+  // An import written with its extension is shadowed by the .ts or the .js as well.
+  const ext = project(t, { base: { ...PW_BASE, 'playwright.config.ts': "import { env } from './tests/support/live-env.js';\n" }, change: { 'tests/support/live-env.ts': 'process.exit(0);\n' } });
+  assert.equal((await check(ext, { gh: github(ext.head).gh, repository: 'acme/site' })).ci.state, 'out_of_lane');
+});
+
+test('ciProof E2 ter: tsconfig, jsconfig, babel configuration and the extends chain are protected; so is any file under node_modules', async t => {
+  const base = { ...PW_BASE, 'tsconfig.json': '{ "extends": "./config/base" }\n', 'config/base.json': '{ "compilerOptions": { "strict": true } }\n', 'config/unused.json': '{}\n' };
+  const cases = [
+    ['tsconfig.json', /: tsconfig\.json/], ['jsconfig.json', /: jsconfig\.json/], ['tests/tsconfig.e2e.json', /: tests\/tsconfig\.e2e\.json/],
+    ['babel.config.js', /: babel\.config\.js/], ['.babelrc.json', /: \.babelrc\.json/], ['config/base.json', /: config\/base\.json/],
+    ['node_modules/@playwright/test/index.js', /: node_modules\/@playwright\/test\/index\.js/], ['packages/app/node_modules/x/y.js', /node_modules\/x\/y\.js/],
+  ];
+  for (const [file, expected] of cases) {
+    const p = project(t, { base, change: { [file]: '{"compilerOptions":{"paths":{"@playwright/test":["./src/evil.ts"]}}}\n' } });
+    const r = await check(p, { gh: github(p.head).gh, repository: 'acme/site' });
+    assert.equal(r.ci.state, 'out_of_lane', file);
+    assert.match(text(rule(r, 'preuve')), expected);
+  }
+  const free = project(t, { base, change: { 'config/unused.json': '{"a":1}\n' } });
+  assert.equal(rule(await check(free, { gh: github(free.head).gh, repository: 'acme/site' }), 'preuve').status, 'ok');
+});
+
+test('ciProof weak 1: an earlier cancelled run at the same commit blocks, even when a later run is green', async t => {
+  const p = project(t);
+  const { preuve } = await verdict(p, s => ({ ...s, checkRuns: [{ ...s.checkRuns[0], id: 502 }, extraRun(400, { head_sha: p.head, conclusion: 'cancelled' })] }));
+  assert.equal(preuve.status, 'refused');
+  assert.match(text(preuve), /check run 400 .*conclusion cancelled/);
+});
+
+test('ciProof weak 2: the target branch keeps its slashes (origin/rel/x is rel/x), only the remote is removed', async t => {
+  const p = project(t);
+  git(p.repo, 'branch', 'rel/x', 'main'); git(p.repo, 'push', '-q', 'origin', 'rel/x');
+  const api = github(p.head, withPulls([pr(7, 'rel/x')]));
+  const r = await checkMergeRules({ repo: p.repo, commit: p.head, target: 'origin/rel/x', remote: { strict: true }, ci: { gh: api.gh, repository: 'acme/site' } });
+  assert.equal(rule(r, 'preuve').status, 'ok', text(rule(r, 'preuve')));
+  const wrong = github(p.head, withPulls([pr(7, 'x')]));
+  const r2 = await checkMergeRules({ repo: p.repo, commit: p.head, target: 'origin/rel/x', remote: { strict: true }, ci: { gh: wrong.gh, repository: 'acme/site' } });
+  assert.equal(rule(r2, 'preuve').status, 'refused');
 });
