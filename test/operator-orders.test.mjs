@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -757,7 +757,7 @@ test('chemins : {slug} d\'un autre article refusé, liste absente refusée, list
   const absent = await scenario(t, { signer: s, repo: { config } }).run();
   refused(absent, 'paths');
   assert.match(absent.reason, /non déclaré/);
-  const docs = orderConfig(s.pem, { paths: { publication: ['served.txt', 'docs/**'], article: ['docs/articles/{slug}/proposition.json'] } });
+  const docs = orderConfig(s.pem, { paths: { publication: ['served.txt', 'docs/*'], article: ['docs/articles/{slug}/proposition.json'] } });
   const deny = scenario(t, { signer: s, repo: { config: docs } });
   git(deny.repo.dir, 'switch', '-q', 'publication/x'); put(deny.repo.dir, 'docs/CLAUDE.md', 'consigne\n'); git(deny.repo.dir, 'add', '.'); git(deny.repo.dir, 'commit', '-qm', 'consigne');
   git(deny.repo.dir, 'push', '-q', 'origin', 'publication/x'); git(deny.repo.dir, 'switch', '-q', 'main');
@@ -771,8 +771,8 @@ test('chemins et gabarits : le chargeur refuse un motif qui couvre la liste de r
   const s = signer();
   const base = orderConfig(s.pem).rules.operatorOrders;
   const issues = raw => configIssues({ rules: { operatorOrders: { ...base, ...raw } } }).issues.map(i => i.message).join('\n');
-  assert.match(issues({ paths: { publication: ['**'], article: ['docs/**'] } }), /paths\.publication : le motif \*\* couvre un chemin que la fusion sur ordre refuse toujours/);
-  assert.match(issues({ paths: { publication: ['.github/**'], article: ['x'] } }), /couvre/);
+  assert.match(issues({ paths: { publication: ['*'], article: ['docs/articles/{slug}/proposition.json'] } }), /paths\.publication : le motif \* couvre un chemin que la fusion sur ordre refuse toujours/);
+  assert.match(issues({ paths: { publication: ['.github/*'], article: ['x'] } }), /couvre/);
   assert.match(issues({ paths: { publication: ['src/{a,b}.ts'], article: ['x'] } }), /illisible/);
   assert.match(issues({ verify: { publication: ['node', 'v.mjs', '{{base}}'] } }), /\{\{base\}\} sans \{\{trusted\}\}/);
   assert.deepEqual(configIssues(orderConfig(s.pem)).issues, []);
@@ -792,4 +792,70 @@ test('{{trusted}} vaut la base de confiance aux deux étapes, {{base}} la base d
     { trusted: sc.repo.base, base: sc.repo.base, head: sc.repo.publication, step: 'publication' },
     { trusted: sc.repo.base, base: report.merged[0].mergeCommit, head: sc.repo.article, step: 'article' },
   ]);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Fourth review of PR #132 at 34c87f0: names a case- or dot-insensitive disk folds, broad globs, file modes.
+
+/** A publication head with `edit(dir)` applied on top of the publication branch; the pull request points to it. */
+function publicationEdit(sc, edit) {
+  const dir = sc.repo.dir;
+  git(dir, 'switch', '-q', 'publication/x'); edit(dir); git(dir, 'commit', '-q', '-m', 'modification');
+  git(dir, 'push', '-q', 'origin', 'publication/x'); git(dir, 'switch', '-q', 'main');
+  sc.state.prs[PUBLICATION].headRefOid = git(dir, 'rev-parse', 'publication/x');
+}
+
+test('faible 1 : noms que Windows ou macOS replient (point ou espace final, caractère invisible, nom court 8.3) refusés', async t => {
+  const { refusedPath } = await import('../dist/orders/paths.js');
+  for (const path of ['.claude./settings.json', '.github /workflows/x.yml', '.c‌laude/settings.json', 'PROGRA~1/x.txt', 'docs/note.md.', 'é/x.txt', 'a\tb/x']) {
+    assert.equal(refusedPath(path), true, JSON.stringify(path));
+  }
+  assert.equal(refusedPath('src/lib/server/guides/content/mon-article.ts'), false);
+  const s = signer();
+  const config = orderConfig(s.pem, { paths: { publication: ['served.txt', '*/settings.json'], article: ['docs/articles/{slug}/proposition.json'] } });
+  const sc = scenario(t, { signer: s, repo: { config } });
+  publicationEdit(sc, dir => { put(dir, '.claude./settings.json', '{"hooks":{}}\n'); git(dir, 'add', '.'); });
+  const report = await sc.run();
+  refused(report, 'paths');
+  assert.match(report.reason, /refuse toujours \(\.claude\.\/settings\.json\)/);
+});
+
+test('faible 2 : ** refusé par le chargeur, liste de refus complétée (paquets, déploiement, environnement, configuration de la pile, éditeur)', async () => {
+  const { refusedPath } = await import('../dist/orders/paths.js');
+  for (const path of ['.npmrc', '.yarnrc', '.yarnrc.yml', '.pnpmfile.cjs', 'vercel.json', '.env', '.env.production', 'svelte.config.js', 'vite.config.ts',
+    'tsconfig.json', 'jsconfig.json', 'src/hooks.server.ts', 'src/hooks.client.js', '.vscode/settings.json', '.devcontainer/devcontainer.json', '.envrc', 'app/.npmrc']) {
+    assert.equal(refusedPath(path), true, path);
+  }
+  const s = signer();
+  const base = orderConfig(s.pem).rules.operatorOrders;
+  const issues = raw => configIssues({ rules: { operatorOrders: { ...base, ...raw } } }).issues.map(i => i.message).join('\n');
+  assert.match(issues({ paths: { publication: ['src/**/x.ts'], article: ['docs/articles/{slug}/proposition.json'] } }), /paths\.publication : \*\* refusé/);
+  assert.match(issues({ paths: { publication: ['served.txt'], article: ['docs/**'] } }), /paths\.article : \*\* refusé/);
+  assert.match(issues({ paths: { publication: ['*.json'], article: ['x'] } }), /couvre/, 'un * qui couvre vercel.json ou tsconfig.json');
+  assert.deepEqual(issues({ paths: { publication: ['src/lib/server/guides/content/{slug}.ts', 'src/*/types.ts'], article: ['docs/articles/{slug}/proposition.json'] } }), '');
+});
+
+test('faible 3 : seul le mode 100644 passe ; exécutable, lien symbolique et sous-module refusés ; suppression acceptée seulement si la liste la permet', async t => {
+  const s = signer();
+  const config = orderConfig(s.pem, { paths: { publication: ['served.txt', 'lien.txt', 'module', 'README.md'], article: ['docs/articles/{slug}/proposition.json'] } });
+  const cases = [
+    ['exécutable', dir => { chmodSync(join(dir, 'served.txt'), 0o755); git(dir, 'add', 'served.txt'); }, /served\.txt \(100755\)/],
+    ['lien symbolique', dir => { symlinkSync('served.txt', join(dir, 'lien.txt')); git(dir, 'add', 'lien.txt'); }, /lien\.txt \(120000\)/],
+    ['sous-module', dir => { git(dir, 'update-index', '--add', '--cacheinfo', `160000,${sc0Base},module`); }, /module \(160000\)/],
+  ];
+  let sc0Base = null;
+  for (const [name, edit, reason] of cases) {
+    const sc = scenario(t, { signer: s, repo: { config } });
+    sc0Base = sc.repo.base;
+    publicationEdit(sc, edit);
+    const report = await sc.run();
+    refused(report, 'paths');
+    assert.match(report.reason, reason, name);
+  }
+  const deleted = scenario(t, { signer: s, repo: { config } });
+  publicationEdit(deleted, dir => git(dir, 'rm', '-q', 'README.md'));
+  assert.equal((await deleted.run()).status, 'merged', 'suppression d\'un chemin que la liste permet');
+  const outside = scenario(t, { signer: s });
+  publicationEdit(outside, dir => git(dir, 'rm', '-q', 'README.md'));
+  refused(await outside.run(), 'paths');
 });
