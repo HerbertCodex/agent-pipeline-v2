@@ -11,7 +11,7 @@ import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import { localTime } from '../domain/time.js';
 import { anchorLines, anchorStatus } from '../rules/anchor-status.js';
 import { pluginLines, pluginStatus } from '../rules/plugin-status.js';
-import { CI_PROTECTED_SCRIPTS, rulesSettings } from '../rules/config.js';
+import { rulesSettings } from '../rules/config.js';
 import { processGh } from '../stack/github.js';
 import { freshnessLines, freshnessReport } from '../freshness/check.js';
 import { duration } from '../metrics/run.js';
@@ -170,7 +170,7 @@ export function ciProofLine(ci) {
     if (!ci)
         return 'Preuve CI (rules.ciProof) : non déclarée (preuve locale seule)';
     return cleanLine(`Preuve CI (rules.ciProof) : ${ci.workflow}, job ${ci.job}, check run « ${ci.name} », contrôles ${ci.gates.join(', ')}`
-        + `${ci.artifact ? `, reçus en artefact ${ci.artifact} (mesure seulement)` : ''} ; fichiers protégés : ${[...ci.protectedPaths, CI_PROTECTED_SCRIPTS].join(', ')}`
+        + `${ci.artifact ? `, reçus en artefact ${ci.artifact} (mesure seulement)` : ''} ; fichiers protégés : ${ci.protectedPaths.join(', ')}`
         + ' (lue à la base commune par apv rules check)', 2000);
 }
 //# sourceMappingURL=status.js.map

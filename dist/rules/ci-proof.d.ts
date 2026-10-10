@@ -14,6 +14,8 @@ import type { CiProofSettings } from './config.js';
  */
 /** The only application whose check runs count: GitHub Actions. */
 export declare const GITHUB_ACTIONS_APP = "github-actions";
+/** Its identifier (the slug alone could be taken by another application of that name). */
+export declare const GITHUB_ACTIONS_APP_ID = 15368;
 export type CiProofState = 'accepted' | 'refused' | 'out_of_lane' | 'unavailable';
 export interface CiCheckRun {
     id: number;
@@ -49,6 +51,8 @@ export interface CiProofInput {
     repo: string;
     mergeBase: string;
     head: string;
+    /** Name of the branch the change merges into (`main` for `origin/main`): the base a pull_request run must have had. */
+    targetBranch: string;
     settings: CiProofSettings;
     /** Checks of the full suite without a clean local receipt at the commit (state missing or dirty). */
     pending: readonly string[];
@@ -59,6 +63,11 @@ export interface CiProofInput {
     /** `owner/name` of the repository on github.com, or null. */
     repository: string | null;
 }
+/**
+ * Whether the workflow text declares, under `jobs:`, the job `job` whose name (`name:`, else its key) is `name`: the check run
+ * of the API names a job, and the declared key must be the one that produces it.
+ */
+export declare function declaresJob(text: string, job: string, name: string): boolean;
 /**
  * Whether the CI proves, at `head`, the checks of `pending` that `rules.ciProof` covers. Never throws: an error of the API
  * is `unavailable`, and nothing is accepted then.

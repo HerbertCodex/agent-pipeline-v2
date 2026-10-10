@@ -75,15 +75,12 @@ export const rulesSchema = s.object({
 /**
  * Files that produce the proof of the CI, always protected besides the declared workflow: the workflows and local actions
  * (a reusable workflow or a composite action runs in the job), the scripts of the end-to-end and dynamic tests, the
- * configuration of Playwright and of npm (`script-shell` replaces the shell of every script). The scripts of the root
- * package.json are compared one by one (CI_PROTECTED_SCRIPTS), not the whole file.
+ * configuration of Playwright and of npm (`script-shell` replaces the shell of every script), the whole package.json (a
+ * script `test:*` calls others, npm runs `pre`/`post` and installation scripts by itself) and the lock files, the
+ * configuration of the build tools (executed by `prepare` and the tests). The files these name or import are added by the rule.
  */
-export const CI_PROTECTED_DEFAULTS = ['.github/workflows/**', '.github/actions/**', 'scripts/e2e/**', 'scripts/dast/**', 'playwright.config.*', '.npmrc'];
-/**
- * Every script of the root package.json: a script `test:*` calls others (`npm run e2e:integration`), npm runs `pre` and
- * `post` scripts and the scripts of the installation (`postinstall`, `prepare`) by itself.
- */
-export const CI_PROTECTED_SCRIPTS = 'package.json#scripts';
+export const CI_PROTECTED_DEFAULTS = ['.github/workflows/**', '.github/actions/**', 'scripts/e2e/**', 'scripts/dast/**', 'playwright.config.*', '.npmrc',
+    'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'svelte.config.*', 'vite.config.*'];
 /** Effective settings of a `rules` section: the defaults, completed by what the project adds. Throws a CONFIG error. */
 export function rulesSettings(section, builtIn) {
     const unique = (values) => [...new Set(values)];

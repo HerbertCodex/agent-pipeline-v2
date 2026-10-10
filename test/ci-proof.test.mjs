@@ -63,8 +63,8 @@ function project(t, { change = {}, gates = GATES, ciProof = CI_PROOF, headConfig
 function github(sha, edit = s => s) {
   const scenario = edit({
     checkRuns: [{ id: 501, name: NAME, head_sha: sha, status: 'completed', conclusion: 'success', started_at: '2026-10-09T10:00:00Z',
-      app: { slug: 'github-actions', owner: { login: 'github' } }, check_suite: { id: 77 }, html_url: 'https://github.com/acme/site/runs/501' }],
-    runs: { 77: { id: 9001, head_sha: sha, event: 'pull_request', path: WORKFLOW, workflow_id: 33, run_attempt: 1, check_suite_id: 77, status: 'completed', conclusion: 'success' } },
+      app: { id: 15368, slug: 'github-actions', owner: { login: 'github' } }, check_suite: { id: 77 }, html_url: 'https://github.com/acme/site/runs/501' }],
+    runs: { 77: { id: 9001, head_sha: sha, event: 'pull_request', pull_requests: [{ number: 7, base: { ref: 'main', sha: 'a'.repeat(40), repo: { url: 'https://api.github.com/repos/acme/site' } } }], path: WORKFLOW, workflow_id: 33, run_attempt: 1, check_suite_id: 77, status: 'completed', conclusion: 'success' } },
     workflows: { 33: { id: 33, path: WORKFLOW }, 44: { id: 44, path: '.github/workflows/ci.yml' } },
     jobs: { 9001: [{ id: 501, run_id: 9001, name: NAME, head_sha: sha, status: 'completed', conclusion: 'success', check_run_url: 'https://api.github.com/repos/acme/site/check-runs/501' }] },
     statuses: [],
@@ -161,7 +161,7 @@ test('ciProof: a check run of another application is refused', async t => {
   const api = github(p.head, s => ({ ...s, checkRuns: s.checkRuns.map(c => ({ ...c, app: { slug: 'ci-forge', owner: { login: 'acme' } } })) }));
   const preuve = rule(await check(p, { gh: api.gh, repository: 'acme/site' }), 'preuve');
   assert.equal(preuve.status, 'refused');
-  assert.match(text(preuve), /check run 501 ignoré : application ci-forge, pas github-actions/);
+  assert.match(text(preuve), /check run 501 ignoré : application ci-forge \(\?\), pas github-actions/);
 });
 
 test('ciProof: a check run concluded otherwise than success is refused, and a later failure overrides an earlier success', async t => {
@@ -229,15 +229,21 @@ test('ciProof: the workflow changed by the change takes it out of the CI lane: l
 
 test('ciProof: a protected file of the proof changed (script test:* replaced by true, scripts/e2e, playwright.config) takes the change out of the CI lane', async t => {
   const cases = [
-    [{ 'package.json': { ...BASE_FILES['package.json'], scripts: { ...BASE_FILES['package.json'].scripts, 'test:integration': 'true' } } }, /package\.json : script\(s\) modifié\(s\) : test:integration/],
+    [{ 'package.json': { ...BASE_FILES['package.json'], scripts: { ...BASE_FILES['package.json'].scripts, 'test:integration': 'true' } } }, /fichier protégé modifié depuis la base : package\.json/],
     // A script the test scripts call, or an npm lifecycle script, counts as much.
-    [{ 'package.json': { ...BASE_FILES['package.json'], scripts: { ...BASE_FILES['package.json'].scripts, 'e2e:integration': 'true' } } }, /package\.json : script\(s\) modifié\(s\) : e2e:integration/],
-    [{ 'package.json': { ...BASE_FILES['package.json'], scripts: { ...BASE_FILES['package.json'].scripts, postinstall: 'node x.js' } } }, /package\.json : script\(s\) modifié\(s\) : postinstall/],
+    [{ 'package.json': { ...BASE_FILES['package.json'], scripts: { ...BASE_FILES['package.json'].scripts, 'e2e:integration': 'true' } } }, /fichier protégé modifié depuis la base : package\.json/],
+    [{ 'package.json': { ...BASE_FILES['package.json'], scripts: { ...BASE_FILES['package.json'].scripts, postinstall: 'node x.js' } } }, /fichier protégé modifié depuis la base : package\.json/],
     [{ 'scripts/e2e/ci-stack.mjs': 'process.exitCode = 0;\n' }, /fichier protégé modifié depuis la base : scripts\/e2e\/ci-stack\.mjs/],
     [{ 'playwright.config.ts': 'export default {};\n' }, /fichier protégé modifié depuis la base : playwright\.config\.ts/],
     [{ '.npmrc': 'script-shell=/bin/true\n' }, /fichier protégé modifié depuis la base : \.npmrc/],
     [{ 'tests/support/runner.mjs': 'export {};\n' }, /fichier protégé modifié depuis la base : tests\/support\/runner\.mjs/],
   ];
+  cases.push(
+    [{ 'package.json': { ...BASE_FILES['package.json'], dependencies: { zod: '3.0.0' } } }, /fichier protégé modifié depuis la base : package\.json/],
+    [{ 'package-lock.json': '{}\n' }, /fichier protégé modifié depuis la base : package-lock\.json/],
+    [{ 'svelte.config.js': 'export default {};\n' }, /fichier protégé modifié depuis la base : svelte\.config\.js/],
+    [{ 'vite.config.ts': 'export default {};\n' }, /fichier protégé modifié depuis la base : vite\.config\.ts/],
+  );
   for (const [change, expected] of cases) {
     const p = project(t, { change, ciProof: { ...CI_PROOF, protectedPaths: ['tests/support/**'] } });
     const api = github(p.head);
@@ -247,9 +253,6 @@ test('ciProof: a protected file of the proof changed (script test:* replaced by 
     assert.match(text(rule(report, 'preuve')), expected);
     assert.equal(api.calls.length, 0);
   }
-  // package.json changed outside its scripts (a dependency): still in the lane.
-  const deps = project(t, { change: { 'package.json': { ...BASE_FILES['package.json'], dependencies: { zod: '3.0.0' } } } });
-  assert.equal(rule(await check(deps, { gh: github(deps.head).gh, repository: 'acme/site' }), 'preuve').status, 'ok');
 });
 
 test('ciProof: read at the base, never in the change: a declaration the change adds is ignored, and said', async t => {
@@ -339,4 +342,111 @@ test('ciProof: the configuration key is validated by the loader and shown by apv
     put(none.repo, '.apv/config.json', { name: 'essai', gates: GATES, rules: { ciProof: bad } });
     assert.throws(() => loadConfig(none.repo), /ciProof/);
   }
+});
+
+const verdict = async (p, edit) => { const r = await check(p, { gh: github(p.head, edit).gh, repository: 'acme/site' }); return { preuve: rule(r, 'preuve'), ci: r.ci }; };
+const withRun = patch => s => ({ ...s, runs: { 77: { ...s.runs[77], ...patch } } });
+const extraRun = (id, patch) => ({ id, name: NAME, head_sha: null, status: 'completed', conclusion: 'success', started_at: '2026-10-09T09:00:00Z', app: { id: 15368, slug: 'github-actions' }, check_suite: { id: 77 }, ...patch });
+
+test('ciProof E1: a pull_request run counts only for a pull request of this repository into the target (evil-base, fork, empty list refused)', async t => {
+  const p = project(t);
+  const pull = (ref, url = 'https://api.github.com/repos/acme/site') => withRun({ pull_requests: [{ number: 9, base: { ref, sha: 'a'.repeat(40), repo: { url } } }] });
+  for (const edit of [pull('evil-base'), pull('main', 'https://api.github.com/repos/mallory/site'), withRun({ pull_requests: [] }), withRun({ pull_requests: undefined })]) {
+    const { preuve } = await verdict(p, edit);
+    assert.equal(preuve.status, 'refused');
+    assert.match(text(preuve), /aucune pull request de ce dépôt vers main/);
+  }
+  assert.equal((await verdict(p, pull('main'))).preuve.status, 'ok');
+  // A push run on the target, with the workflow of the head identical to the base, stays accepted.
+  assert.equal((await verdict(p, withRun({ event: 'push', pull_requests: [] }))).preuve.status, 'ok');
+});
+
+test('ciProof E2: a file the base workflow or scripts name, or that a protected file imports by a relative path, takes the change out of the lane', async t => {
+  const base = {
+    'package.json': { ...BASE_FILES['package.json'], scripts: { ...BASE_FILES['package.json'].scripts, 'test:stack': 'node scripts/test-stack.mjs' } },
+    'scripts/test-stack.mjs': "import { reset } from './lib/db-reset.mjs';\nconst stack = await import('./lib/stack-ready.mjs');\nconst { x } = require('../tests/support/shared.cjs');\n",
+    'scripts/lib/db-reset.mjs': "export * from './deep.mjs';\n",
+    'scripts/lib/deep.mjs': 'export const reset = 1;\n',
+    'scripts/lib/stack-ready.mjs': 'export {};\n',
+    'tests/support/shared.cjs': 'module.exports = {};\n',
+    'tools/act/action.yml': 'runs:\n  using: node20\n  main: main.js\n',
+    'tools/act/main.js': 'process.exit(0);\n',
+    'tools/check.mjs': 'export {};\n',
+    'unrelated/readme.js': 'export {};\n',
+    [WORKFLOW]: workflowText().replace('      - run: npm run test:integration\n', '      - uses: ./tools/act\n      - run: node tools/check.mjs\n'),
+  };
+  for (const file of ['scripts/test-stack.mjs', 'scripts/lib/db-reset.mjs', 'scripts/lib/deep.mjs', 'scripts/lib/stack-ready.mjs', 'tests/support/shared.cjs', 'tools/act/main.js', 'tools/act/action.yml', 'tools/check.mjs']) {
+    const p = project(t, { base, change: { [file]: '// changed\n' } });
+    const api = github(p.head);
+    const r = await check(p, { gh: api.gh, repository: 'acme/site' });
+    assert.equal(r.ci.state, 'out_of_lane', file);
+    assert.match(text(rule(r, 'preuve')), new RegExp(`exécuté par la preuve modifié depuis la base .*: ${file.replace(/[.]/g, '\\.')}`));
+    assert.equal(api.calls.length, 0);
+  }
+  // A file nothing reaches stays in the lane.
+  const free = project(t, { base, change: { 'unrelated/readme.js': '// changed\n' } });
+  assert.equal(rule(await check(free, { gh: github(free.head).gh, repository: 'acme/site' }), 'preuve').status, 'ok');
+});
+
+test('ciProof M1: a skipped or neutral check run, even the latest, never hides the real run', async t => {
+  const p = project(t);
+  for (const conclusion of ['skipped', 'neutral']) {
+    const { preuve } = await verdict(p, s => ({ ...s, checkRuns: [extraRun(900, { head_sha: p.head, conclusion, started_at: '2026-10-09T12:00:00Z' }), ...s.checkRuns] }));
+    assert.equal(preuve.status, 'ok', conclusion);
+  }
+  // Cancelled, action_required, timed out and failure stay blocking.
+  for (const conclusion of ['cancelled', 'action_required', 'timed_out', 'failure']) {
+    const { preuve } = await verdict(p, s => ({ ...s, checkRuns: [extraRun(900, { head_sha: p.head, conclusion }), ...s.checkRuns] }));
+    assert.equal(preuve.status, 'refused', conclusion);
+  }
+});
+
+test('ciProof M2: a failure of the declared job at the same commit refuses, even when a later run is green', async t => {
+  const p = project(t);
+  const { preuve } = await verdict(p, s => ({ ...s, checkRuns: [{ ...s.checkRuns[0], id: 502 }, extraRun(400, { head_sha: p.head, conclusion: 'failure' })] }));
+  assert.equal(preuve.status, 'refused');
+  assert.match(text(preuve), /check run 400 .*conclusion failure/);
+  const older = await verdict(p, s => ({ ...s, checkRuns: [{ ...s.checkRuns[0], id: 502 }, extraRun(400, { head_sha: p.head, conclusion: 'timed_out' })] }));
+  assert.equal(older.preuve.status, 'refused');
+});
+
+test('ciProof M3 and F2: the run of the workflow must be completed and successful; an unfinished check run refuses', async t => {
+  const p = project(t);
+  for (const patch of [{ conclusion: 'failure' }, { conclusion: null }, { status: 'in_progress' }, { status: 'queued', conclusion: null }]) {
+    const { preuve } = await verdict(p, withRun(patch));
+    assert.equal(preuve.status, 'refused', JSON.stringify(patch));
+    assert.match(text(preuve), /pas completed et success/);
+  }
+  const waiting = await verdict(p, s => ({ ...s, checkRuns: [{ ...s.checkRuns[0], status: 'in_progress', conclusion: null }] }));
+  assert.equal(waiting.preuve.status, 'refused');
+  // Order by identifier, not by start date: the highest id decides although it started first.
+  const byId = await verdict(p, s => ({ ...s, checkRuns: [{ ...s.checkRuns[0], id: 501, started_at: '2026-10-09T20:00:00Z' }, extraRun(502, { head_sha: p.head, conclusion: 'cancelled', started_at: '2026-10-09T08:00:00Z' })] }));
+  assert.equal(byId.preuve.status, 'refused');
+  assert.match(text(byId.preuve), /check run 502 .*conclusion cancelled/);
+});
+
+test('ciProof F1: the application is GitHub Actions by identifier as well as by slug', async t => {
+  const p = project(t);
+  const { preuve } = await verdict(p, s => ({ ...s, checkRuns: s.checkRuns.map(c => ({ ...c, app: { ...c.app, id: 999 } })) }));
+  assert.equal(preuve.status, 'refused');
+  assert.match(text(preuve), /check run 501 ignoré : application github-actions \(999\)/);
+});
+
+test('ciProof F3: workflow_dispatch with inputs written in flow style is refused too', async t => {
+  const p = project(t, { base: { [WORKFLOW]: workflowText('  workflow_dispatch: { inputs: { pr: { type: string } } }\n') } });
+  const { preuve } = await verdict(p, withRun({ event: 'workflow_dispatch' }));
+  assert.equal(preuve.status, 'refused');
+  assert.match(text(preuve), /le workflow déclare des entrées/);
+});
+
+test('ciProof F4: the declared job key must be the job whose name is the check run name', async t => {
+  const other = workflowText().replace('  preuve-complete:\n    name: Preuve complète', '  preuve-complete:\n    name: Autre\n    runs-on: ubuntu-latest\n    steps: []\n  lint:\n    name: Preuve complète');
+  const p = project(t, { base: { [WORKFLOW]: other } });
+  const r = await check(p, { gh: github(p.head).gh, repository: 'acme/site' });
+  assert.equal(r.ci.state, 'out_of_lane');
+  assert.match(text(rule(r, 'preuve')), /job preuve-complete de nom « Preuve complète » absent/);
+  // A job key written in a comment or under steps does not count.
+  const comment = workflowText().replace('jobs:\n  preuve-complete:', 'jobs:\n  # preuve-complete:\n  autre:');
+  const q = project(t, { base: { [WORKFLOW]: comment } });
+  assert.equal((await check(q, { gh: github(q.head).gh, repository: 'acme/site' })).ci.state, 'out_of_lane');
 });

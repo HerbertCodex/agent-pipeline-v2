@@ -12,7 +12,7 @@ import type { CommandIO } from './io.js';
 import { localTime } from '../domain/time.js';
 import { anchorLines, anchorStatus } from '../rules/anchor-status.js';
 import { pluginLines, pluginStatus } from '../rules/plugin-status.js';
-import { CI_PROTECTED_SCRIPTS, rulesSettings, type CiProofSettings } from '../rules/config.js';
+import { rulesSettings, type CiProofSettings } from '../rules/config.js';
 import { processGh } from '../stack/github.js';
 import { freshnessLines, freshnessReport, type FreshnessOptions, type FreshnessReport } from '../freshness/check.js';
 import type { FreshnessSettings } from '../freshness/config.js';
@@ -169,6 +169,6 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
 export function ciProofLine(ci: CiProofSettings | null): string {
   if (!ci) return 'Preuve CI (rules.ciProof) : non déclarée (preuve locale seule)';
   return cleanLine(`Preuve CI (rules.ciProof) : ${ci.workflow}, job ${ci.job}, check run « ${ci.name} », contrôles ${ci.gates.join(', ')}`
-    + `${ci.artifact ? `, reçus en artefact ${ci.artifact} (mesure seulement)` : ''} ; fichiers protégés : ${[...ci.protectedPaths, CI_PROTECTED_SCRIPTS].join(', ')}`
+    + `${ci.artifact ? `, reçus en artefact ${ci.artifact} (mesure seulement)` : ''} ; fichiers protégés : ${ci.protectedPaths.join(', ')}`
     + ' (lue à la base commune par apv rules check)', 2000);
 }

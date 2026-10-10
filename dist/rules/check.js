@@ -147,7 +147,7 @@ export async function checkMergeRules(input) {
         const pending = proof.gates.filter(g => g.state === 'missing' || g.state === 'dirty').map(g => g.gateId);
         if (settings.ciProof && pending.length) {
             const offline = input.remote?.offline === true;
-            ci = await verifyCiProof({ repo, mergeBase, head: sha, settings: settings.ciProof, pending, config: effective,
+            ci = await verifyCiProof({ repo, mergeBase, head: sha, targetBranch: input.target.replace(/^(?:refs\/remotes\/)?[^/]+\//, ''), settings: settings.ciProof, pending, config: effective,
                 gh: offline ? null : input.ci?.gh ?? null,
                 repository: input.ci && input.ci.repository !== undefined ? input.ci.repository : githubRepository(repo) });
         }

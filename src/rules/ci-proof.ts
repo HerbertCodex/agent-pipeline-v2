@@ -5,6 +5,7 @@ import { Git } from '../execution/git.js';
 import { planRepeat } from '../gates/repeat.js';
 import { gitRead } from '../run/git-probe.js';
 import type { GhRunner } from '../stack/github.js';
+import { importClosure, namedFiles, treeFiles } from './ci-closure.js';
 import type { CiProofSettings } from './config.js';
 
 /**
@@ -21,11 +22,13 @@ import type { CiProofSettings } from './config.js';
 
 /** The only application whose check runs count: GitHub Actions. */
 export const GITHUB_ACTIONS_APP = 'github-actions';
+/** Its identifier (the slug alone could be taken by another application of that name). */
+export const GITHUB_ACTIONS_APP_ID = 15368;
 /**
  * Events whose run tests the commit of the run. `workflow_dispatch` only for a workflow without any input: an input
  * (`inputs.pr`) can check out another commit, and the API of the runs does not return the inputs.
  */
-const EVENTS = new Set(['pull_request', 'push']);
+const EVENTS = new Set(['push']);
 const DISPATCH = 'workflow_dispatch';
 /** Check runs compared at most (the latest first): beyond, the proof is not read. */
 const MAX_CHECK_RUNS = 100;
@@ -56,6 +59,8 @@ export interface CiProofInput {
   repo: string;
   mergeBase: string;
   head: string;
+  /** Name of the branch the change merges into (`main` for `origin/main`): the base a pull_request run must have had. */
+  targetBranch: string;
   settings: CiProofSettings;
   /** Checks of the full suite without a clean local receipt at the commit (state missing or dirty). */
   pending: readonly string[];
@@ -78,53 +83,63 @@ function touched(repo: string, base: string, head: string): string[] | null {
   return raw === null ? null : raw.split('\0').filter(Boolean);
 }
 
-/** The scripts of a package.json (null when absent; `invalid` when the file is not a JSON object). */
-function scriptsAt(repo: string, sha: string): Record<string, unknown> | null | 'invalid' {
-  const text = gitRead(repo, ['show', `${sha}:package.json`]);
-  if (text === null) return null;
-  try {
-    const value = record(JSON.parse(text));
-    if (!value) return 'invalid';
-    const scripts = value['scripts'];
-    return scripts === undefined ? {} : record(scripts) ?? 'invalid';
-  } catch { return 'invalid'; }
-}
-
-/** Names of the scripts of the root package.json added, removed or changed between the base and the head. */
-function changedScripts(repo: string, base: string, head: string): string[] | 'invalid' {
-  const before = scriptsAt(repo, base);
-  const after = scriptsAt(repo, head);
-  if (before === 'invalid' || after === 'invalid') return 'invalid';
-  const a = before ?? {}; const b = after ?? {};
-  return [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => !Object.hasOwn(a, k) || !Object.hasOwn(b, k) || JSON.stringify(a[k]) !== JSON.stringify(b[k])).sort();
-}
-
-/** Whether the workflow text declares the job `job` (a key of its own line, quoted or not). */
-function declaresJob(text: string, job: string): boolean {
-  return new RegExp(`^[ \\t]+(["']?)${job.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}\\1[ \\t]*:`, 'm').test(text);
+/**
+ * Whether the workflow text declares, under `jobs:`, the job `job` whose name (`name:`, else its key) is `name`: the check run
+ * of the API names a job, and the declared key must be the one that produces it.
+ */
+export function declaresJob(text: string, job: string, name: string): boolean {
+  const lines = text.split('\n');
+  const indentOf = (l: string): number => l.length - l.trimStart().length;
+  const unquote = (v: string): string => v.trim().replace(/\s+#.*$/, '').replace(/^(["'])(.*)\1$/, '$2');
+  const jobsAt = lines.findIndex(l => /^jobs[ \t]*:[ \t]*(?:#.*)?$/.test(l));
+  if (jobsAt < 0) return false;
+  let keyIndent = -1; let block: string[] | null = null;
+  for (const line of lines.slice(jobsAt + 1)) {
+    if (!line.trim() || line.trimStart().startsWith('#')) { block?.push(line); continue; }
+    const indent = indentOf(line);
+    if (indent === 0) break;
+    if (keyIndent < 0) keyIndent = indent;
+    if (indent === keyIndent) {
+      if (block) break;
+      const key = /^\s*(?:"([^"]+)"|'([^']+)'|([^\s:#]+))\s*:/.exec(line);
+      if ((key?.[1] ?? key?.[2] ?? key?.[3]) === job) block = [];
+    } else block?.push(line);
+  }
+  if (!block) return false;
+  const direct = block.filter(l => l.trim() && indentOf(l) === Math.min(...block.filter(x => x.trim()).map(indentOf)));
+  const named = direct.map(l => /^\s*name\s*:(.*)$/.exec(l)).find(m => m);
+  return (named ? unquote(named[1]!) : job) === name;
 }
 
 /**
  * What keeps the change out of the CI lane, from Git alone (no network): the declaration that does not match the workflow
- * of the base, a protected file changed since the base, a script of package.json changed.
+ * of the base, a protected file changed since the base, a file the proof executes changed (named by the workflow or the
+ * scripts of the base, or imported by a relative path from those and from the protected files, read at the base).
  */
 function laneProblems(repo: string, mergeBase: string, head: string, settings: CiProofSettings): string[] {
   const problems: string[] = [];
   const workflow = gitRead(repo, ['show', `${mergeBase}:${settings.workflow}`]);
   if (workflow === null) problems.push(`workflow déclaré absent de la base commune ${short(mergeBase)} : ${settings.workflow} (rules.ciProof.workflow)`);
-  else if (!declaresJob(workflow, settings.job)) problems.push(`job ${settings.job} absent de ${settings.workflow} à la base commune (rules.ciProof.job)`);
+  else if (!declaresJob(workflow, settings.job, settings.name)) problems.push(`job ${settings.job} de nom « ${settings.name} » absent de ${settings.workflow} à la base commune (rules.ciProof.job, rules.ciProof.name)`);
   const files = touched(repo, mergeBase, head);
   if (files === null) return [...problems, `diff illisible entre ${short(mergeBase)} et ${short(head)}`];
+  const tree = treeFiles(repo, mergeBase);
+  if (tree === null) return [...problems, `arbre illisible à la base commune ${short(mergeBase)}`];
+  const treeSet = new Set(tree);
   // Compared without case: a file renamed by its case alone stays protected.
   const protectedMatch = settings.protectedPaths.map(g => globToRegExp(g.toLowerCase()));
-  const hits = files.filter(f => protectedMatch.some(re => re.test(f.toLowerCase())));
+  const isProtected = (f: string): boolean => protectedMatch.some(re => re.test(f.toLowerCase()));
+  const hits = files.filter(isProtected);
   for (const f of hits.slice(0, 10)) problems.push(`fichier protégé modifié depuis la base : ${f}`);
   if (hits.length > 10) problems.push(`et ${hits.length - 10} autre(s) fichier(s) protégé(s)`);
-  if (files.includes('package.json')) {
-    const scripts = changedScripts(repo, mergeBase, head);
-    if (scripts === 'invalid') problems.push('package.json illisible (JSON) à la base ou au commit : ses scripts ne se comparent pas');
-    else if (scripts.length) problems.push(`package.json : script(s) modifié(s) : ${scripts.slice(0, 10).join(', ')}${scripts.length > 10 ? ', ...' : ''}`);
-  }
+  // What the workflow and the scripts of the base name, and what all of it imports: executed by the proof, so protected.
+  const named = namedFiles([workflow ?? '', gitRead(repo, ['show', `${mergeBase}:package.json`]) ?? ''].join('\n'), treeSet);
+  const roots = [...new Set([...named, ...tree.filter(isProtected)])];
+  const { reached, complete } = importClosure(repo, mergeBase, roots, treeSet);
+  const executed = files.filter(f => reached.has(f) && !hits.includes(f));
+  for (const f of executed.slice(0, 10)) problems.push(`fichier exécuté par la preuve modifié depuis la base (nommé ou importé par le workflow, les scripts ou un fichier protégé) : ${f}`);
+  if (executed.length > 10) problems.push(`et ${executed.length - 10} autre(s) fichier(s) exécuté(s) par la preuve`);
+  if (!complete) problems.push('fichiers importés par la preuve non tous lisibles ou trop nombreux : leur liste n\'est pas fiable');
   // Same blob at the base and at the commit: the workflow that ran is the one of the base (also covered by the diff).
   if (workflow !== null && gitRead(repo, ['rev-parse', `${mergeBase}:${settings.workflow}`]) !== gitRead(repo, ['rev-parse', `${head}:${settings.workflow}`])
     && !hits.includes(settings.workflow)) problems.push(`workflow ${settings.workflow} différent à ${short(head)} de celui de la base`);
@@ -197,21 +212,26 @@ async function readCheckRuns(input: CiProofInput & { gh: GhRunner; repository: s
   if (!Array.isArray(runs) || total === null) throw new Unavailable('liste des check runs inattendue');
   if (total > runs.length) throw new Unavailable(`plus de ${MAX_CHECK_RUNS} check runs « ${settings.name} » au commit : non comparés`);
   const ignored: string[] = [];
-  // The check runs of this name, the latest first (start, then id): the latest of the declared workflow decides.
+  // The check runs of this name, the latest first (identifier): the latest of the declared workflow decides, and none may have failed.
   const named = runs.map(record).filter((c): c is Record<string, unknown> => c !== null && str(c['name']) === settings.name)
-    .sort((a, b) => (str(b['started_at']) ?? '').localeCompare(str(a['started_at']) ?? '') || (int(b['id']) ?? 0) - (int(a['id']) ?? 0));
+    .sort((a, b) => (int(b['id']) ?? 0) - (int(a['id']) ?? 0));
   const workflowPaths = new Map<number, string | null>();
   const workflowPath = async (id: number): Promise<string | null> => {
     if (!workflowPaths.has(id)) workflowPaths.set(id, str((await get(`actions/workflows/${id}`))['path']));
     return workflowPaths.get(id)!;
   };
+  const eligible: { c: Record<string, unknown>; id: number; run: Record<string, unknown> }[] = [];
   for (const c of named) {
     const id = int(c['id']);
     if (id === null) { ignored.push('check run sans identifiant ignoré'); continue; }
-    const slug = str(record(c['app'])?.['slug']);
-    if (slug !== GITHUB_ACTIONS_APP) { ignored.push(`check run ${id} ignoré : application ${slug ?? 'inconnue'}, pas ${GITHUB_ACTIONS_APP}`); continue; }
+    const app = record(c['app']);
+    const slug = str(app?.['slug']);
+    if (slug !== GITHUB_ACTIONS_APP || int(app?.['id']) !== GITHUB_ACTIONS_APP_ID) { ignored.push(`check run ${id} ignoré : application ${slug ?? 'inconnue'} (${int(app?.['id']) ?? '?'}), pas ${GITHUB_ACTIONS_APP} (${GITHUB_ACTIONS_APP_ID})`); continue; }
     const sha = str(c['head_sha']);
     if (sha !== head) { ignored.push(`check run ${id} ignoré : commit ${sha ? short(sha) : 'inconnu'}, pas ${short(head)}`); continue; }
+    // A job skipped (draft pull request, condition) proves nothing and says nothing against: it never hides a real run.
+    const conclusion = str(c['conclusion']);
+    if (conclusion === 'skipped' || conclusion === 'neutral') { ignored.push(`check run ${id} ignoré : conclusion ${conclusion}`); continue; }
     const suite = int(record(c['check_suite'])?.['id']);
     if (suite === null) { ignored.push(`check run ${id} ignoré : sans suite de checks`); continue; }
     const found = (await get(`actions/runs?check_suite_id=${suite}`))['workflow_runs'];
@@ -220,10 +240,13 @@ async function readCheckRuns(input: CiProofInput & { gh: GhRunner; repository: s
     const workflowId = int(run['workflow_id']);
     const path = workflowId === null ? null : await workflowPath(workflowId);
     if (path !== settings.workflow) { ignored.push(`check run ${id} ignoré : workflow ${path ?? 'inconnu'}, pas ${settings.workflow}`); continue; }
-    // The latest check run of the declared workflow decides: a later failure is never hidden by an earlier success.
-    return judge(input, c, id, run, gates, excluded, ignored, result, get);
+    eligible.push({ c, id, run });
   }
-  return result('refused', [...ignored, `aucun check run « ${settings.name} » de GitHub Actions au commit ${short(head)} du workflow ${settings.workflow}`], { gates, excluded });
+  // A failure of the declared job at this commit is never hidden by a later green run: the commit is not proven (rule instable).
+  const failed = eligible.find(e => ['failure', 'timed_out'].includes(str(e.c['conclusion']) ?? '') || str(e.c['status']) !== 'completed');
+  const decisive = failed ?? eligible[0];
+  if (!decisive) return result('refused', [...ignored, `aucun check run « ${settings.name} » de GitHub Actions au commit ${short(head)} du workflow ${settings.workflow}`], { gates, excluded });
+  return judge(input, decisive.c, decisive.id, decisive.run, gates, excluded, ignored, result, get);
 }
 
 async function judge(input: CiProofInput, c: Record<string, unknown>, id: number, run: Record<string, unknown>, gates: string[], excluded: CiProofOutcome['excluded'],
@@ -238,12 +261,22 @@ async function judge(input: CiProofInput, c: Record<string, unknown>, id: number
   const conclusion = str(c['conclusion']);
   if (conclusion !== 'success') return refuse(`conclusion ${conclusion ?? 'inconnue'}, pas success`);
   if (runId === null) return refuse('exécution sans identifiant');
+  if (str(run['status']) !== 'completed' || str(run['conclusion']) !== 'success') return refuse(`exécution du workflow ${runId} : statut ${str(run['status']) ?? 'inconnu'}, conclusion ${str(run['conclusion']) ?? 'inconnue'}, pas completed et success`);
   const runSha = str(run['head_sha']);
   if (runSha !== head) return result('refused', [...ignored, `exécution ${runId} d'un autre commit (${runSha ? short(runSha) : 'inconnu'}) que ${short(head)}`], { gates, excluded, checkRun });
-  if (event === DISPATCH) {
+  if (event === 'pull_request') {
+    // The workflow of a pull_request run is read at the merge commit with the base of THAT pull request: only a pull request
+    // of this repository into the target counts (a fork, or another base branch, would run another workflow).
+    const pulls = Array.isArray(run['pull_requests']) ? run['pull_requests'].map(record) : [];
+    const intoTarget = pulls.some(p => {
+      const base = record(p?.['base']);
+      return str(base?.['ref']) === input.targetBranch && (str(record(base?.['repo'])?.['url']) ?? '').toLowerCase().endsWith(`/repos/${input.repository ?? ''}`.toLowerCase());
+    });
+    if (!intoTarget) return refuse(`évènement pull_request : aucune pull request de ce dépôt vers ${input.targetBranch} pour l'exécution (fork, autre branche de base ou liste vide) ; son workflow n'est pas celui de la base`);
+  } else if (event === DISPATCH) {
     const text = gitRead(input.repo, ['show', `${input.mergeBase}:${settings.workflow}`]) ?? '';
-    if (/^[ \t]*inputs[ \t]*:/m.test(text)) return refuse(`évènement ${DISPATCH} : le workflow déclare des entrées (inputs), qui peuvent tester un autre commit que celui de l'exécution et que l'API ne rend pas`);
-  } else if (!EVENTS.has(event)) return refuse(`évènement ${event} refusé (acceptés : ${[...EVENTS].join(', ')}, ${DISPATCH} sans entrée)`);
+    if (/^[ \t]*inputs[ \t]*:/m.test(text) || /workflow_dispatch[ \t]*:[ \t]*\{[^}]*\binputs\b/.test(text)) return refuse(`évènement ${DISPATCH} : le workflow déclare des entrées (inputs), qui peuvent tester un autre commit que celui de l'exécution et que l'API ne rend pas`);
+  } else if (!EVENTS.has(event)) return refuse(`évènement ${event} refusé (acceptés : pull_request vers la cible, ${[...EVENTS].join(', ')}, ${DISPATCH} sans entrée)`);
   if (checkRun.runAttempt < 1) return refuse('tentative de l\'exécution inconnue');
   // The check run is a job of that run: a check run created through the API with the token of a job is not.
   const jobs = (await get(`actions/runs/${runId}/jobs?filter=all&per_page=100`))['jobs'];
