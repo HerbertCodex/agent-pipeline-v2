@@ -91,9 +91,11 @@ export interface OrderMergeCommit {
     step: OrderStep;
     digest: string;
     head: string;
+    /** The whole message, trimmed: a merge APV made has exactly the message of `mergeMessage`. */
+    message: string;
 }
 /** The format of `git log` that `orderMergeCommits` reads. */
-export declare const ORDER_LOG_FORMAT = "--format=%H%x1f%P%x1f%(trailers:key=Apv-Order,key=Apv-Order-Step,key=Apv-Order-Sha256,key=Apv-Merged-Head,unfold)%x1e";
+export declare const ORDER_LOG_FORMAT = "--format=%H%x1f%P%x1f%(trailers:key=Apv-Order,key=Apv-Order-Step,key=Apv-Order-Sha256,key=Apv-Merged-Head,unfold)%x1f%B%x1e";
 /** The message of the merge commit of a step: a title, then the trailer (nonce, step, digest of the order, merged head). */
 export declare function mergeMessage(input: {
     pr: number;

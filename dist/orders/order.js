@@ -126,7 +126,7 @@ export function checkAttestation(domain, keys, signed, order, challenge) {
     return same ? { ok: true } : { ok: false, code: 'order' };
 }
 /** The format of `git log` that `orderMergeCommits` reads. */
-export const ORDER_LOG_FORMAT = '--format=%H%x1f%P%x1f%(trailers:key=Apv-Order,key=Apv-Order-Step,key=Apv-Order-Sha256,key=Apv-Merged-Head,unfold)%x1e';
+export const ORDER_LOG_FORMAT = '--format=%H%x1f%P%x1f%(trailers:key=Apv-Order,key=Apv-Order-Step,key=Apv-Order-Sha256,key=Apv-Merged-Head,unfold)%x1f%B%x1e';
 /** The message of the merge commit of a step: a title, then the trailer (nonce, step, digest of the order, merged head). */
 export function mergeMessage(input) {
     return [`Fusion sur ordre de l'opérateur : PR #${input.pr} (étape ${input.step})`, '',
@@ -136,7 +136,7 @@ export function mergeMessage(input) {
 export function orderMergeCommits(log) {
     const out = [];
     for (const record of log.split('\x1e').map(r => r.trim()).filter(Boolean)) {
-        const [sha, parents, trailers = ''] = record.split('\x1f');
+        const [sha, parents, trailers = '', message = ''] = record.split('\x1f');
         const list = (parents ?? '').split(' ').filter(Boolean);
         if (!sha || list.length !== 2)
             continue;
@@ -149,7 +149,7 @@ export function orderMergeCommits(log) {
         const digest = one('Apv-Order-Sha256', '[0-9a-f]{64}');
         const head = one('Apv-Merged-Head', '[0-9a-f]{40}');
         if (nonce && UUID.test(nonce) && step && digest && head && head === list[1])
-            out.push({ sha, firstParent: list[0], nonce, step, digest, head });
+            out.push({ sha, firstParent: list[0], nonce, step, digest, head, message: message.trim() });
     }
     return out;
 }

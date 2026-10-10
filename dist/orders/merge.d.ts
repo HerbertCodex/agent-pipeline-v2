@@ -61,8 +61,11 @@ export interface OrderMergeOptions {
     gh: GhRunner;
     git: LotGit;
     env: NodeJS.ProcessEnv;
-    /** The rules checked before a merge at `head` against `<remote>/<target>`: the problems, empty when respected. */
-    rules: (head: string, target: string) => Promise<string[]>;
+    /**
+     * The rules checked before a merge at `head` against `base`, the exact commit of the target APV read and merges on
+     * (never a remote-tracking ref that may be stale): the problems, empty when respected.
+     */
+    rules: (head: string, base: string) => Promise<string[]>;
     log?: (line: string) => void;
     onCall?: (call: GhCall) => void;
     /** The signed trace of a merge (`apv audit merges`); returns the error when it could not be written. */
@@ -89,5 +92,10 @@ export declare const DEFAULT_PUSH_TIMEOUT_MS = 60000;
 /** A branch name read from GitHub that may be fetched: never `HEAD`, an option, a range or a reflog form. */
 export declare function safeBranch(name: string): boolean;
 export declare function mergeOnOrder(options: OrderMergeOptions): Promise<OrderMergeReport>;
+/**
+ * Paths APV reads as its own configuration: never changed by a pull request merged on order (the trusted base is read
+ * before it, this refuses it in depth). `.apv/**` (configuration, decisions, specs, brief) and the V2 configuration file.
+ */
+export declare function isApvConfigPath(path: string): boolean;
 /** The bodies of `gh api --paginate .../comments --jq '.[] | .body | @json'`: one JSON string per line; null when unreadable. */
 export declare function readBodies(stdout: string): string[] | null;
