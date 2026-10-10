@@ -807,7 +807,8 @@ function publicationEdit(sc, edit) {
 
 test('faible 1 : noms que Windows ou macOS replient (point ou espace final, caractère invisible, nom court 8.3) refusés', async t => {
   const { refusedPath } = await import('../dist/orders/paths.js');
-  for (const path of ['.claude./settings.json', '.github /workflows/x.yml', '.c‌laude/settings.json', 'PROGRA~1/x.txt', 'docs/note.md.', 'é/x.txt', 'a\tb/x']) {
+  for (const path of ['.claude./settings.json', '.github /workflows/x.yml', '.c‌laude/settings.json', 'PROGRA~1/x.txt', 'docs/note.md.', 'é/x.txt', 'a\tb/x',
+    '.claude\\x.ts', 'CLAUDE.md::$DATA', 'docs/x:y.md']) {
     assert.equal(refusedPath(path), true, JSON.stringify(path));
   }
   assert.equal(refusedPath('src/lib/server/guides/content/mon-article.ts'), false);
