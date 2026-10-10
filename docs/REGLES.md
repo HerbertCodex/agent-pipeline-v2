@@ -46,12 +46,16 @@ Les domaines de `relecture` sont exactement ceux du plan au commit, recalculés 
 
 Un projet déclare à la base `rules.ciProof` (`workflow`, `job`, `name` du check run, `gates` couverts, `protectedPaths` en plus des défauts, `artifact` pour la mesure). Pour les contrôles de `gates` sans reçu local propre, `apv rules check --commit <sha>` accepte le check run du job seulement si :
 
-- il vient de l'application GitHub Actions (slug `github-actions`), au commit exact, conclu en `success`, lu par l'API des check runs avec `gh` lui-même (jamais `APV_GH`), jamais depuis l'artefact ; un statut de commit posé par un jeton, ou un check run d'un autre commit, ne compte pas ;
-- son exécution est du workflow déclaré, au même commit, pour un évènement `pull_request` ou `push` (ou `workflow_dispatch` si le workflow de la base ne déclare aucune entrée `inputs`), et le check run est un job de cette exécution ;
-- la PR laisse inchangés depuis la base commune le workflow et les chemins protégés (par défaut : workflows et actions locales, `scripts/e2e/**`, `scripts/dast/**`, `playwright.config.*`, `.npmrc`, et chaque script de `package.json` comparé un par un) ; sinon la PR sort de la voie CI et la preuve locale est exigée ;
+- il vient de l'application GitHub Actions (slug `github-actions` et identifiant 15368), au commit exact, conclu en `success`, lu par l'API des check runs avec `gh` lui-même (jamais `APV_GH`), jamais depuis l'artefact ; un statut de commit posé par un jeton, ou un check run d'un autre commit, ne compte pas ;
+- son exécution est du workflow déclaré, au même commit, terminée (`completed`) et réussie (`success`), et le check run est un job de cette exécution ; la clé de job déclarée doit être celle dont le `name` est le nom du check run ;
+- l'évènement est `pull_request` avec une pull request de ce dépôt vers la branche cible de `--target` (une exécution pour un fork, une autre branche de base ou sans pull request liée est refusée : son workflow est lu avec une autre base), `push`, ou `workflow_dispatch` si le workflow de la base ne déclare aucune entrée `inputs` ;
+- aucun check run du job déclaré n'a échoué (`failure`, `timed_out`) ou n'est inachevé au même commit, même si une exécution plus récente est verte ; les check runs `skipped` et `neutral` sont ignorés ; les plus récents (par identifiant) décident ;
+- la PR laisse inchangés depuis la base commune le workflow, les chemins protégés (par défaut : workflows et actions locales, `scripts/e2e/**`, `scripts/dast/**`, `playwright.config.*`, `.npmrc`, `package.json` entier, fichiers de verrou, `svelte.config.*`, `vite.config.*`) et tout fichier que le workflow ou les scripts de la base nomment (`uses: ./action`, `node chemin`) ou que ces fichiers et les fichiers protégés importent par un chemin relatif (`import`, `export from`, `import()`, `require`, fermeture calculée à la base) ; sinon la PR sort de la voie CI et la preuve locale est exigée ;
 - le job n'a pas réussi après relance (`run_attempt` supérieur à 1 : règle `instable`).
 
 Hors réseau, API illisible ou origine hors de github.com : rien n'est accepté, la preuve locale reste exigée. La déclaration ajoutée par la PR elle-même est ignorée. Les reçus de l'artefact servent à la mesure, jamais à la décision.
+
+**Risque restant.** Le code de la PR que la suite exécute (le code de l'application, les tests ajoutés) peut encore fausser le résultat d'un job inchangé : sortie anticipée (`process.exit`), `syncBuiltinESMExports`, écriture dans `scripts/`, `node_modules` ou `$RUNNER_TEMP`, imports dynamiques calculés que la fermeture ne voit pas. La fermeture ne suit que les chemins relatifs écrits en clair. La relecture sécurité cherche ces motifs dans le diff ; l'outil ne les empêche pas. Aucune dérogation explicite à l'échec d'un check run n'est prévue : un job en échec se corrige par un nouveau commit.
 
 ### Relectures proportionnées au risque
 
