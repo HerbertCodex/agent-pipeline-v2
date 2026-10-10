@@ -148,10 +148,14 @@ export function checkAttestation(domain: string, keys: readonly PublicKey[], sig
  * `Apv-Order`, `Apv-Order-Step`, `Apv-Order-Sha256` and `Apv-Merged-Head` read by Git as trailers (the last paragraph of
  * the message), the merged head being the second parent. A trailer copied into an ordinary commit (a squash) is not one.
  */
-export interface OrderMergeCommit { sha: string; firstParent: string; nonce: string; step: OrderStep; digest: string; head: string }
+export interface OrderMergeCommit {
+  sha: string; firstParent: string; nonce: string; step: OrderStep; digest: string; head: string;
+  /** The whole message, trimmed: a merge APV made has exactly the message of `mergeMessage`. */
+  message: string;
+}
 
 /** The format of `git log` that `orderMergeCommits` reads. */
-export const ORDER_LOG_FORMAT = '--format=%H%x1f%P%x1f%(trailers:key=Apv-Order,key=Apv-Order-Step,key=Apv-Order-Sha256,key=Apv-Merged-Head,unfold)%x1e';
+export const ORDER_LOG_FORMAT = '--format=%H%x1f%P%x1f%(trailers:key=Apv-Order,key=Apv-Order-Step,key=Apv-Order-Sha256,key=Apv-Merged-Head,unfold)%x1f%B%x1e';
 
 /** The message of the merge commit of a step: a title, then the trailer (nonce, step, digest of the order, merged head). */
 export function mergeMessage(input: { pr: number; step: OrderStep; nonce: string; digest: string; head: string }): string {
@@ -163,7 +167,7 @@ export function mergeMessage(input: { pr: number; step: OrderStep; nonce: string
 export function orderMergeCommits(log: string): OrderMergeCommit[] {
   const out: OrderMergeCommit[] = [];
   for (const record of log.split('\x1e').map(r => r.trim()).filter(Boolean)) {
-    const [sha, parents, trailers = ''] = record.split('\x1f');
+    const [sha, parents, trailers = '', message = ''] = record.split('\x1f');
     const list = (parents ?? '').split(' ').filter(Boolean);
     if (!sha || list.length !== 2) continue;
     const one = (key: string, pattern: string): string | null => {
@@ -174,7 +178,7 @@ export function orderMergeCommits(log: string): OrderMergeCommit[] {
     const step = one('Apv-Order-Step', 'publication|article') as OrderStep | null;
     const digest = one('Apv-Order-Sha256', '[0-9a-f]{64}');
     const head = one('Apv-Merged-Head', '[0-9a-f]{40}');
-    if (nonce && UUID.test(nonce) && step && digest && head && head === list[1]) out.push({ sha, firstParent: list[0]!, nonce, step, digest, head });
+    if (nonce && UUID.test(nonce) && step && digest && head && head === list[1]) out.push({ sha, firstParent: list[0]!, nonce, step, digest, head, message: message.trim() });
   }
   return out;
 }

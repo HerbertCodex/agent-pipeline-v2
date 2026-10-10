@@ -51,9 +51,10 @@ export async function stackMergeOnOrder(prs: number[], values: OrderValues, io: 
     log: line => io.stderr(`${line}\n`),
     onCall: call => { calls.push(call); (values.json ? io.stderr : io.stdout)(transcript(bin, call)); },
     onMerged: merge => traceMerge(repo, merge),
-    rules: async (head, target) => {
+    // The rules at the exact commit of the target APV read and merges on: never a remote-tracking ref left stale.
+    rules: async (head, base) => {
       try {
-        const r = await checkMergeRules({ repo, commit: head, target: `origin/${target}` });
+        const r = await checkMergeRules({ repo, commit: head, target: base });
         return r.ok ? [] : rulesLines(r, '  ').slice(1, -1);
       } catch (error) { return [`règles avant fusion non vérifiables à ${head.slice(0, 12)} : ${errorMessage(error)}`]; }
     },

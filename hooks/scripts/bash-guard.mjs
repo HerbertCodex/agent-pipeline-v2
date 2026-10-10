@@ -1349,7 +1349,7 @@ export const REASONS = {
   homeFolder: 'APV : commande refusée, elle parcourt ou copie le dossier personnel entier, ou vise par un motif ses dossiers cachés, où se trouve la clé d\'ancrage du plugin (~/.apv-ancrage). ' +
     'Nomme le dossier précis dont tu as besoin.',
   encodedPath: 'APV : chemin décodé (base64) puis utilisé dans la même commande : refusé, les garde-fous doivent pouvoir lire ce que la commande touche.',
-  toolVariable: 'APV : les variables internes de l\'outil (APV_ENTRY, APV_ANCHOR_KEY_FILE, APV_ATTESTATION_LOOPBACK) ne se posent pas à la main.',
+  toolVariable: 'APV : les variables internes de l\'outil (APV_ENTRY, APV_ANCHOR_KEY_FILE) ne se posent pas à la main.',
   nestedClaude: 'APV : lancer claude depuis une session gérée par APV est refusé (sauf claude --version et claude -p /usage) : une session imbriquée échappe aux garde-fous des sous-agents ' +
     '(fusion, relecture). Les agents se lancent par l\'outil Agent du chef de projet. Une commande `claude plugin …` (installation, mise à jour) se tape dans un terminal, hors de Claude Code.',
   mergeBySubagent: 'APV : fusion refusée dans un sous-agent. Seul le chef de projet (session principale) fusionne, par apv stack merge, ' +
@@ -1420,7 +1420,7 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
   }
   if (active && /--git-common-dir/.test(flat) && !/^\s*git\s+rev-parse(\s+--path-format=(absolute|relative))?\s+--git-common-dir\s*$/.test(flat)) return { decision: 'deny', reason: REASONS.commonDir };
   if (active && /(^|[\s;&|(])eval\b/.test(flat) && /\bapv\b|cli\.js/.test(flat)) return { decision: 'deny', reason: REASONS.computedApv };
-  if (/\bAPV_ENTRY\b|\bAPV_ANCHOR_KEY_FILE\b|\bAPV_ATTESTATION_LOOPBACK\b/.test(flat)) return { decision: 'deny', reason: REASONS.toolVariable };
+  if (/\bAPV_ENTRY\b|\bAPV_ANCHOR_KEY_FILE\b/.test(flat)) return { decision: 'deny', reason: REASONS.toolVariable };
   if (decodedAndUsed(command) || decodedAndUsed(flat)) return { decision: 'deny', reason: REASONS.encodedPath };
   // A script or substitution run by a command of the line is judged in the folder where that command runs.
   const store = storeProblem(segments, start && start.known ? start.dir : context.cwd ?? null, context.home ?? null, command, shadow, scripts);
