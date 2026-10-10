@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -522,4 +523,68 @@ test('faible : attestation en HTTP sur la boucle locale refusée hors du mode de
   delete process.env.APV_ATTESTATION_LOOPBACK;
   try { assert.match(configIssues(raw).issues.map(i => i.message).join('\n'), /HTTPS attendu/); }
   finally { if (saved !== undefined) process.env.APV_ATTESTATION_LOOPBACK = saved; }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The tree pushed is the tree verified (faible 3), and a push bounded in time (faible 4), through a fake git.
+
+/** processGit whose `merge-tree` answers `forge(tree, args)` instead of the real tree (a git that lies about the merge). */
+function lyingGit(forge) {
+  const real = processGit({ ...process.env, ...IDENTITY });
+  return { run: async (cwd, args) => {
+    const r = await real.run(cwd, args);
+    if (!args.includes('merge-tree') || !r.ok) return r;
+    const tree = r.stdout.trim().split('\n')[0];
+    return { ...r, stdout: `${forge(tree, args, cwd) ?? tree}\n` };
+  } };
+}
+/** A tree: `tree` with `path` (nested or not) set to a blob of `text`, written through a temporary index. */
+function treeWith(cwd, tree, path, text) {
+  const env = { ...process.env, GIT_INDEX_FILE: join(cwd, '.git', `index-faux-${process.pid}`) };
+  const run = (args, input) => execFileSync('git', args, { cwd, env, input, encoding: 'utf8' }).trim();
+  const blob = run(['hash-object', '-w', '--stdin'], text);
+  run(['read-tree', tree]);
+  run(['update-index', '--add', '--cacheinfo', `100644,${blob},${path}`]);
+  return run(['write-tree']);
+}
+
+test('faible 3 : étape publication, un arbre de fusion différent de l\'arbre de H est refusé (merge_conflict), rien n\'est poussé', async t => {
+  const sc = scenario(t);
+  const before = sc.main();
+  const report = await sc.run({ git: lyingGit((tree, _args, cwd) => treeWith(cwd, tree, 'ajout.txt', 'hors de H\n')) });
+  refused(report, 'merge_conflict');
+  assert.match(report.reason, /n'est pas celui de la tête vérifiée/);
+  assert.equal(sc.main(), before);
+  assert.equal(sc.production.challenges.length, 0, 'refusé avant l\'attestation');
+});
+
+test('faible 3 : étape article, un chemin que la PR ne change pas, ou un blob différent du commit signé, est refusé (merge_conflict)', async t => {
+  for (const [path, text] of [['hors-pr.txt', 'jamais dans la PR\n'], ['docs/articles/x/proposition.json', '{"sujet":"autre"}\n']]) {
+    const sc = scenario(t);
+    const report = await sc.run({ git: lyingGit((tree, args, cwd) => (args.includes(sc.repo.article) ? treeWith(cwd, tree, path, text) : null)) });
+    assert.equal(report.status, 'refused', path);
+    assert.equal(report.code, 'merge_conflict', report.reason);
+    assert.match(report.reason, new RegExp(`change ${path.replace(/[.]/g, '\\.')} autrement que le commit signé`));
+    assert.deepEqual(report.merged.map(m => m.step), ['publication'], 'seule l\'étape publication, vérifiée, est poussée');
+  }
+});
+
+test('faible 4 : poussée qui dépasse le délai, refus push « issue inconnue » ; la relance lit le pied et ne refait pas l\'étape', async t => {
+  const sc = scenario(t);
+  // A fake git first in PATH: the push lands, then the process hangs past the limit (the worst case: done but unknown).
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  const bin = join(sc.repo.root, 'faux-git');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'git'), `#!/bin/sh\nfor a in "$@"; do if [ "$a" = push ]; then ${realGit} "$@"; s=$?; sleep 5; exit $s; fi; done\nexec ${realGit} "$@"\n`, { mode: 0o755 });
+  const slow = await sc.run({ env: { ...process.env, ...IDENTITY, PATH: `${bin}:${process.env.PATH}` }, pushTimeoutMs: 1000 });
+  refused(slow, 'push');
+  assert.match(slow.reason, /issue inconnue/);
+  const landed = sc.main();
+  assert.match(git(sc.repo.origin, 'log', '-1', '--format=%B', landed), /^Apv-Order-Step: publication$/m, 'la poussée a bien eu lieu');
+  const again = await sc.run();
+  assert.equal(again.status, 'merged', again.reason);
+  assert.deepEqual(again.consumed, ['publication']);
+  assert.deepEqual(again.merged.map(m => m.step), ['article']);
+  assert.equal(git(sc.repo.origin, 'rev-parse', `${again.merged[0].mergeCommit}^1`), landed, 'l\'étape article part de la fusion de publication poussée');
+  assert.equal(git(sc.repo.origin, 'log', '--first-parent', '--format=%B', 'main').match(/^Apv-Order-Step: publication$/gm).length, 1, 'une seule fusion de publication');
 });
