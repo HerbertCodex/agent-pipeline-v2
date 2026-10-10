@@ -17,6 +17,7 @@ import { freshnessLines, freshnessReport, type FreshnessOptions, type FreshnessR
 import type { FreshnessSettings } from '../freshness/config.js';
 import { duration, type RunMetrics } from '../metrics/run.js';
 import { recentMeasures } from '../metrics/sources.js';
+import { operatorOrdersStatus } from '../orders/status.js';
 
 export const usage = `Utilisation :
   apv status [--repo <chemin>] [--json]
@@ -128,7 +129,8 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const anchor = await anchorStatus(status.repo, processGh(io.env['APV_GH'] || 'gh', io.env, status.repo)).catch(() => null);
     let plugin: ReturnType<typeof pluginStatus> | null = null;
     try { plugin = pluginStatus(status.repo, io.env); } catch { plugin = null; }
-    if (values.json) { json(io, { ...status, plugin, anchor }); return EXIT.ok; }
+    const operatorOrders = operatorOrdersStatus(status.repo);
+    if (values.json) { json(io, { ...status, plugin, anchor, operatorOrders }); return EXIT.ok; }
     const c = status.config;
     const q = status.quota;
     const active = status.runs.filter(isActiveRun);
@@ -147,6 +149,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       ...(status.runsUnread ? [`- ${unreadRunsLine(status.runsUnread)}`] : []),
       `Quota : ${q ? `${localTime(q.at)} ; session ${q.session ? `${q.session.percent} %` : '?'} ; semaine ${q.week ? `${q.week.percent} %` : '?'} ; niveau ${q.level}` : 'aucun relevé'}`,
       ...(metricsLine(status.metrics) ? [metricsLine(status.metrics)!] : []),
+      cleanLine(operatorOrders.line, 2000),
       ...freshnessLines(status.freshness, value => cleanLine(value, 400), localTime),
     ];
     if (plugin) lines.push(...pluginLines(plugin));
