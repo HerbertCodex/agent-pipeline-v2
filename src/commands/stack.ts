@@ -29,12 +29,14 @@ import { commonDir } from '../stacks/idle.js';
 import { signalExitCode } from '../lock/run.js';
 import { resolve } from 'node:path';
 import { EXIT, UsageError, guard, json, list, parse } from './common.js';
+import { ORDER_USAGE, stackMergeOnOrder } from './stack-order.js';
 import type { CommandIO } from './io.js';
 
 export const usage = `Utilisation :
   apv stack plan <pr...> [--target <branche>] [--ready] [--allow-behind --reason <texte>] [--json]
   APV_ALLOW_MERGE=1 apv stack merge <pr...> [--method merge|squash|rebase] [--target <branche>] [--ready]
                                    [--allow-behind --reason <texte>] [--keep-branches] [--wait-ci <minutes>] [--json]
+  APV_ALLOW_MERGE=1 apv stack merge <publication> <article> --order <référence> [--json]
   apv stack batch <pr...> [--target <branche>] [--dir <dossier>] [--bisect] [--dast] [--keep] [--stacks <pile>,<pile>]
                           [--wait-ci <minutes>] [--json]
   APV_ALLOW_MERGE=1 apv stack batch <pr...> --merge [--ready] [--target <branche>] [--dir <dossier>] [--bisect] [--dast]
@@ -128,6 +130,7 @@ Branches fusionnées (merge, batch --merge) : après les fusions, la branche de 
        Un échec de suppression est un avertissement : la fusion reste acquise, le code de sortie ne change
        pas. Une ligne par branche ; si delete_branch_on_merge est faux, la commande qui l'active est donnée
        (gh api -X PATCH repos/<propriétaire>/<dépôt> -F delete_branch_on_merge=true), jamais lancée.
+${ORDER_USAGE}
 La variable APV_GH remplace l'exécutable gh (tests). Sortie : 0 pile cohérente ou fusionnée (lot prouvé,
 et fusionné avec --merge), 1 anomalie (rien d'autre n'est fusionné), 2 appel incorrect ou APV_ALLOW_MERGE absent.`;
 
@@ -273,7 +276,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       method: { type: 'string' }, target: { type: 'string' }, ready: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
       'allow-behind': { type: 'boolean' }, reason: { type: 'string' },
       dir: { type: 'string' }, bisect: { type: 'boolean' }, merge: { type: 'boolean' }, keep: { type: 'boolean' }, 'keep-branches': { type: 'boolean' },
-      stacks: { type: 'string' }, 'wait-ci': { type: 'string' }, dast: { type: 'boolean' },
+      stacks: { type: 'string' }, 'wait-ci': { type: 'string' }, dast: { type: 'boolean' }, order: { type: 'string' },
     });
     if (values.help) { io.stdout(`${usage}\n`); return EXIT.ok; }
     const [action, ...rest] = positionals;
@@ -283,6 +286,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     if (action !== 'batch' && batchOnly.length) throw new UsageError(`--${batchOnly.join(', --')} : réservé(s) à stack batch`);
     if (action === 'plan' && values['keep-branches'] !== undefined) throw new UsageError('--keep-branches : réservé à stack merge et stack batch --merge');
     if (action === 'plan' && values['wait-ci'] !== undefined) throw new UsageError('--wait-ci : réservé à stack merge et stack batch');
+    if (values.order !== undefined && action !== 'merge') throw new UsageError('--order : réservé à stack merge');
     const ciWaitMs = waitCi(values['wait-ci']);
     const ciPollMs = positiveInt(io.env['APV_STACK_CI_POLL_MS'], CI_POLL_MS) || CI_POLL_MS;
     if (action === 'batch') return batch(prs, values, io, { ciWaitMs, ciPollMs });
@@ -296,6 +300,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       throw new UsageError(`--allow-behind exige --reason "<raison>" (1 à ${MAX_OVERRIDE_REASON} caractères), journalisée`);
     }
     if (action === 'merge' && io.env['APV_ALLOW_MERGE'] !== '1') { io.stderr(`${MERGE_REFUSED}\n`); return EXIT.usage; }
+    if (values.order !== undefined) return stackMergeOnOrder(prs, values, io, transcript, traceMerge);
     const bin = io.env['APV_GH'] || 'gh';
     const calls: GhCall[] = [];
     const options: StackOptions = {
