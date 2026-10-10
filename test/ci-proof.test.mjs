@@ -541,3 +541,20 @@ test('ciProof E2 sexies: a package.json added in a directory the base imports (m
   const p = project(t, { base, change: { 'tests/sup/package.json': { main: '../../src/evil.js' } } });
   assert.equal((await check(p, { gh: github(p.head).gh, repository: 'acme/site' })).ci.state, 'out_of_lane');
 });
+
+test('ciProof E2 septies: with a baseUrl at the base, a file under it shadows even a declared package (@playwright/test.ts, zz/index.ts); the extends chain gives the baseUrl', async t => {
+  const base = { 'tsconfig.json': { compilerOptions: { baseUrl: '.' } }, 'playwright.config.ts': "import { defineConfig } from '@playwright/test';\nimport { env } from './tests/support/live-env';\nexport default defineConfig({});\n", 'tests/support/live-env.ts': 'export const env = 1;\n' };
+  for (const file of ['@playwright/test.ts', '@playwright/test/index.ts']) {
+    const p = project(t, { base, change: { [file]: 'process.exit(0);\nexport const defineConfig = c => c;\n' } });
+    const r = await check(p, { gh: github(p.head).gh, repository: 'acme/site' });
+    assert.equal(r.ci.state, 'out_of_lane', file);
+    assert.match(text(rule(r, 'preuve')), new RegExp(`: ${file.replace(/[.@/]/g, '\\$&')}`));
+  }
+  // Control: an unrelated file under the same baseUrl stays in the lane.
+  const control = project(t, { base, change: { 'zz/other.ts': 'export {};\n' } });
+  assert.equal(rule(await check(control, { gh: github(control.head).gh, repository: 'acme/site' }), 'preuve').status, 'ok');
+  // baseUrl inherited through extends, relative to the parent.
+  const chain = { ...base, 'tsconfig.json': { extends: './config/base.json' }, 'config/base.json': { compilerOptions: { baseUrl: '..' } } };
+  const q = project(t, { base: chain, change: { '@playwright/test.ts': 'process.exit(0);\n' } });
+  assert.equal((await check(q, { gh: github(q.head).gh, repository: 'acme/site' })).ci.state, 'out_of_lane');
+});

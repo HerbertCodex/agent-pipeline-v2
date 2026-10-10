@@ -58,16 +58,33 @@ export function readAliases(repo: string, base: string, tree: readonly string[])
   const importRules = Object.entries(obj(pkg['imports']) ?? {}).map(([k, v]) => toRule(k, strings(v).map(t => posix.normalize(t))));
   // `paths` of every tsconfig and jsconfig, applied to the whole repository (wider than needed, never narrower).
   const pathRules: Rule[] = [];
+  // The baseUrl of a config: its own, else the one of the config it extends (relative to the file that declares it).
+  const parsed = (file: string): Record<string, unknown> | null => parseLoose(read(file) ?? '');
+  const baseUrlOf = (file: string, seen: Set<string>): string | null => {
+    if (seen.has(file)) return null;
+    seen.add(file);
+    const config = parsed(file);
+    const options = obj(config?.['compilerOptions']);
+    if (typeof options?.['baseUrl'] === 'string') return posix.join(posix.dirname(file), options['baseUrl']);
+    const parents = typeof config?.['extends'] === 'string' ? [config['extends']] : Array.isArray(config?.['extends']) ? config['extends'].filter((e): e is string => typeof e === 'string') : [];
+    for (const parent of parents.reverse()) {
+      if (!parent.startsWith('.')) continue;
+      const target = posix.join(posix.dirname(file), parent);
+      const found = [target, `${target}.json`].find(c => tree.includes(c));
+      const url = found ? baseUrlOf(found, seen) : null;
+      if (url !== null) return url;
+    }
+    return null;
+  };
   const baseUrls: string[] = [];
   for (const file of tree.filter(f => /(?:^|\/)[tj]sconfig[^/]*\.json$/.test(f))) {
     const config = parseLoose(read(file) ?? '');
     if (!config) { unreadable.push(file); continue; }
     const options = obj(config['compilerOptions']);
     const dir = posix.dirname(file);
-    const baseUrl = typeof options?.['baseUrl'] === 'string' ? posix.join(dir, options['baseUrl']) : dir;
-    for (const [k, v] of Object.entries(obj(options?.['paths']) ?? {})) pathRules.push(toRule(k, strings(v).map(t => posix.join(baseUrl, t))));
-    // A bare specifier that is no known package is resolved from baseUrl.
-    if (typeof options?.['baseUrl'] === 'string') baseUrls.push(baseUrl);
+    const baseUrl = baseUrlOf(file, new Set());
+    for (const [k, v] of Object.entries(obj(options?.['paths']) ?? {})) pathRules.push(toRule(k, strings(v).map(t => posix.join(baseUrl ?? dir, t))));
+    if (baseUrl !== null) baseUrls.push(baseUrl);
   }
   // SvelteKit: `$lib` is `src/lib` unless `kit.alias` says otherwise; its other aliases come from the same configuration.
   const kitRules: Rule[] = [toRule('$lib', ['src/lib']), toRule('$lib/*', ['src/lib/*'])];
@@ -89,8 +106,10 @@ export function readAliases(repo: string, base: string, tree: readonly string[])
     targets: (_from, spec) => {
       if (spec.startsWith('#')) return expand(importRules, spec);
       const found = expand([...kitRules, ...pathRules], spec);
-      if (found || isKnownPackage(spec) || !baseUrls.length || spec.startsWith('/')) return found;
-      return baseUrls.map(b => posix.join(b, spec));
+      // With a baseUrl, the loader tries a bare specifier under it first: a file there shadows even a declared package.
+      if (spec.startsWith('/')) return found;
+      const underBase = baseUrls.map(b => posix.join(b, spec));
+      return found || underBase.length ? [...(found ?? []), ...underBase] : null;
     },
     isKnownPackage,
     unreadable,
