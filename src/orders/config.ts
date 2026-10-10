@@ -1,5 +1,7 @@
 import { s, type Infer } from '../domain/schema.js';
+import { matches } from '../policy/policy.js';
 import { DOMAIN_PATTERN, readPublicKey } from './envelope.js';
+import { PROBE_SLUG, REFUSED_PROBES } from './paths.js';
 
 /**
  * `rules.operatorOrders` of `.apv/config.json` (docs/REGLES.md, « Fusion sur ordre signé »), always read at the base of
@@ -13,14 +15,18 @@ import { DOMAIN_PATTERN, readPublicKey } from './envelope.js';
  * - `publicationBranch` (optional): the branch the publication pull request must come from, `{slug}` replaced by the
  *   `slug` the order signed (`publication/{slug}`); absent, only the command of the project binds that pull request to
  *   the order (closed list of files, content regenerated from the signed proposal);
+ * - `paths.publication` and `paths.article`: the globs each pull request of an order may change (`{slug}` replaced by
+ *   the slug the order signed); required for a merge on order, never covering a path of the refusal list of APV;
  * - `verify.publication`: the command of the project that checks the content of a step, run by APV from a clean copy
- *   of the base (`{{base}}`, `{{head}}`, `{{step}}` replaced as whole arguments, the verified order on its input).
+ *   of the trusted base, the verified order on its input, with whole arguments replaced: `{{trusted}}` the trusted base
+ *   (where the keys and the configuration are read: the project reads its keys there too), `{{base}}` the commit the
+ *   step merges on (the target at that moment, which may already contain the publication head), `{{head}}`, `{{step}}`.
  */
 export const DEFAULT_ATTESTATION_MAX_AGE_SECONDS = 120;
 export const DEFAULT_ATTESTATION_TIMEOUT_MS = 15_000;
 export const DEFAULT_VERIFY_TIMEOUT_MS = 900_000;
 /** Placeholders of `verify.publication`, replaced as whole arguments. */
-export const VERIFY_PLACEHOLDERS = ['base', 'head', 'step'] as const;
+export const VERIFY_PLACEHOLDERS = ['trusted', 'base', 'head', 'step'] as const;
 
 export const operatorOrdersSchema = s.object({
   domain: s.string(1, 63, DOMAIN_PATTERN),
@@ -31,6 +37,10 @@ export const operatorOrdersSchema = s.object({
     timeoutMs: s.default(s.number(1000, 120_000), DEFAULT_ATTESTATION_TIMEOUT_MS),
   }),
   publicationBranch: s.optional(s.string(1, 200, /^[A-Za-z0-9._/{}-]+$/)),
+  paths: s.optional(s.object({
+    publication: s.array(s.string(1, 500), 1, 100),
+    article: s.array(s.string(1, 500), 1, 100),
+  })),
   verify: s.object({
     publication: s.array(s.string(1, 4000), 1, 100),
     timeoutMs: s.default(s.number(1000, 3_600_000), DEFAULT_VERIFY_TIMEOUT_MS),
@@ -83,6 +93,19 @@ export function operatorOrdersIssues(settings: OperatorOrdersSettings): string[]
     || /^[/-]/.test(branch) || branch.endsWith('/') || branch.endsWith('.lock'))) {
     issues.push('rules.operatorOrders.publicationBranch : {slug} attendu une fois, aucune autre accolade, ni « .. », ni « / » ou « - » en tête');
   }
+  for (const [step, globs] of Object.entries(settings.paths ?? {})) {
+    for (const glob of globs) {
+      const probe = glob.replaceAll('{slug}', PROBE_SLUG);
+      let covered: string | undefined;
+      try { covered = REFUSED_PROBES.find(path => matches(path, probe)); }
+      catch { issues.push(`rules.operatorOrders.paths.${step} : motif ${glob} illisible (*, ** et ? seulement, {slug} pour le slug signé)`); continue; }
+      if (covered) issues.push(`rules.operatorOrders.paths.${step} : le motif ${glob} couvre un chemin que la fusion sur ordre refuse toujours (${covered})`);
+    }
+  }
+  const uses = (key: string): boolean => settings.verify.publication.includes(`{{${key}}}`);
+  if (uses('base') && !uses('trusted')) {
+    issues.push('rules.operatorOrders.verify.publication : {{base}} sans {{trusted}} ; les clés et la configuration se lisent à {{trusted}}, la base de confiance ({{base}} peut contenir la tête de publication)');
+  }
   for (const arg of settings.verify.publication) {
     if (!arg.includes('{{')) continue;
     const key = /^\{\{([A-Za-z]+)\}\}$/.exec(arg)?.[1];
@@ -101,6 +124,7 @@ export function operatorOrdersLine(settings: OperatorOrdersSettings | null, erro
   let host = 'adresse illisible';
   try { host = new URL(attestationUrl(settings.attestation.url, 'n', 'c')).host; } catch { /* said as unreadable */ }
   return `Ordres signés (rules.operatorOrders) : domaine ${settings.domain}, clé(s) ${keys} ; attestation par ${host}, `
-    + `${settings.attestation.maxAgeSeconds} s au plus avant la poussée ; vérification du projet : ${settings.verify.publication.join(' ')} `
+    + `${settings.attestation.maxAgeSeconds} s au plus avant la poussée ; chemins permis : ${settings.paths ? `publication ${settings.paths.publication.join(', ')} ; article ${settings.paths.article.join(', ')}` : 'non déclarés (aucune fusion sur ordre)'} ; `
+    + `vérification du projet : ${settings.verify.publication.join(' ')} `
     + '(lue à la base par apv stack merge --order)';
 }

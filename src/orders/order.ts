@@ -143,10 +143,39 @@ export function checkAttestation(domain: string, keys: readonly PublicKey[], sig
   return same ? { ok: true } : { ok: false, code: 'order' };
 }
 
+/** One commit of a first-parent history, read without any separator a message could forge. */
+export interface HistoryCommit { sha: string; parents: string[]; message: string }
+
 /**
- * A merge commit made by APV on order, read on the first-parent history of the target: two parents, the trailer
- * `Apv-Order`, `Apv-Order-Step`, `Apv-Order-Sha256` and `Apv-Merged-Head` read by Git as trailers (the last paragraph of
- * the message), the merged head being the second parent. A trailer copied into an ordinary commit (a squash) is not one.
+ * The format of `git log` that `readHistory` reads: fields and commits separated by NUL, the one byte a commit message
+ * can never contain (Git refuses it), never a printable or control character an author could put in a message.
+ */
+export const HISTORY_LOG_FORMAT = '--format=%H%x00%P%x00%B%x00';
+
+/**
+ * The commits of `git log --first-parent HISTORY_LOG_FORMAT <base>`, newest first; null when the output is not exactly
+ * a chain of first parents (an id that is not 40 hexadecimal characters, a first parent that is not the next commit):
+ * the caller then refuses, it never guesses.
+ */
+export function readHistory(log: string): HistoryCommit[] | null {
+  const fields = log.split('\0');
+  // Each commit gives three fields, the format then a line feed before the next one; the last field is that line feed.
+  if (fields.length % 3 !== 1 || fields[fields.length - 1]!.trim() !== '') return null;
+  const out: HistoryCommit[] = [];
+  for (let index = 0; index + 2 < fields.length; index += 3) {
+    const sha = fields[index]!.replace(/^\n/, '');
+    const parents = fields[index + 1]!.split(' ').filter(Boolean);
+    if (!COMMIT.test(sha) || !parents.every(p => COMMIT.test(p))) return null;
+    out.push({ sha, parents, message: fields[index + 2]!.trim() });
+  }
+  for (let index = 0; index + 1 < out.length; index += 1) if (out[index]!.parents[0] !== out[index + 1]!.sha) return null;
+  return out;
+}
+
+/**
+ * A merge commit made by APV on order, on the first-parent history of the target: two parents, the trailer `Apv-Order`,
+ * `Apv-Order-Step`, `Apv-Order-Sha256` and `Apv-Merged-Head` once each in the last paragraph of its own message, the
+ * merged head being the second parent. A trailer copied into an ordinary commit (a squash) is not one.
  */
 export interface OrderMergeCommit {
   sha: string; firstParent: string; nonce: string; step: OrderStep; digest: string; head: string;
@@ -154,31 +183,33 @@ export interface OrderMergeCommit {
   message: string;
 }
 
-/** The format of `git log` that `orderMergeCommits` reads. */
-export const ORDER_LOG_FORMAT = '--format=%H%x1f%P%x1f%(trailers:key=Apv-Order,key=Apv-Order-Step,key=Apv-Order-Sha256,key=Apv-Merged-Head,unfold)%x1f%B%x1e';
-
 /** The message of the merge commit of a step: a title, then the trailer (nonce, step, digest of the order, merged head). */
 export function mergeMessage(input: { pr: number; step: OrderStep; nonce: string; digest: string; head: string }): string {
   return [`Fusion sur ordre de l'opérateur : PR #${input.pr} (étape ${input.step})`, '',
     `Apv-Order: ${input.nonce}`, `Apv-Order-Step: ${input.step}`, `Apv-Order-Sha256: ${input.digest}`, `Apv-Merged-Head: ${input.head}`, ''].join('\n');
 }
 
-/** The merge commits on order of a `git log --first-parent ORDER_LOG_FORMAT` output, newest first. */
-export function orderMergeCommits(log: string): OrderMergeCommit[] {
+/** The trailer of an order in the last paragraph of `message`, each key exactly once; null otherwise. */
+export function orderTrailer(message: string): { nonce: string; step: OrderStep; digest: string; head: string } | null {
+  const last = message.trim().split(/\n[ \t]*\n/).pop() ?? '';
+  const one = (key: string, pattern: string): string | null => {
+    const found = [...last.matchAll(new RegExp(`^${key}: (${pattern})$`, 'gm'))];
+    return found.length === 1 ? found[0]![1]! : null;
+  };
+  const nonce = one('Apv-Order', '[0-9a-f-]{36}');
+  const step = one('Apv-Order-Step', 'publication|article') as OrderStep | null;
+  const digest = one('Apv-Order-Sha256', '[0-9a-f]{64}');
+  const head = one('Apv-Merged-Head', '[0-9a-f]{40}');
+  return nonce && UUID.test(nonce) && step && digest && head ? { nonce, step, digest, head } : null;
+}
+
+/** The merge commits on order of a first-parent history, newest first. */
+export function orderMergeCommits(history: readonly HistoryCommit[]): OrderMergeCommit[] {
   const out: OrderMergeCommit[] = [];
-  for (const record of log.split('\x1e').map(r => r.trim()).filter(Boolean)) {
-    const [sha, parents, trailers = '', message = ''] = record.split('\x1f');
-    const list = (parents ?? '').split(' ').filter(Boolean);
-    if (!sha || list.length !== 2) continue;
-    const one = (key: string, pattern: string): string | null => {
-      const found = [...trailers.matchAll(new RegExp(`^${key}: (${pattern})$`, 'gm'))];
-      return found.length === 1 ? found[0]![1]! : null;
-    };
-    const nonce = one('Apv-Order', '[0-9a-f-]{36}');
-    const step = one('Apv-Order-Step', 'publication|article') as OrderStep | null;
-    const digest = one('Apv-Order-Sha256', '[0-9a-f]{64}');
-    const head = one('Apv-Merged-Head', '[0-9a-f]{40}');
-    if (nonce && UUID.test(nonce) && step && digest && head && head === list[1]) out.push({ sha, firstParent: list[0]!, nonce, step, digest, head, message: message.trim() });
+  for (const commit of history) {
+    if (commit.parents.length !== 2) continue;
+    const trailer = orderTrailer(commit.message);
+    if (trailer && trailer.head === commit.parents[1]) out.push({ sha: commit.sha, firstParent: commit.parents[0]!, ...trailer, message: commit.message });
   }
   return out;
 }

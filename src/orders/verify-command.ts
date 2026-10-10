@@ -10,7 +10,8 @@ import type { OrderStep, VerifiedOrder } from './order.js';
  * The verification command of the project (`rules.operatorOrders.verify.publication`), run by APV from a clean copy of
  * the trusted base of the run (`source`: the target as it was before any merge on this order, never a commit a pull
  * request wrote): a detached worktree of it, prepared by `batch.setup` of that same base when it declares one, then the
- * command with `{{base}}` (the current target, an argument only), `{{head}}` and `{{step}}` replaced, the verified
+ * command with `{{trusted}}` (that base: where the project reads its keys), `{{base}}` (the commit the step merges on,
+ * an argument only), `{{head}}` and `{{step}}` replaced, the verified
  * order as JSON on its input. Nothing of the head is executed by APV: the command reads
  * it through Git. Exit 0: the content is the one the order signed; any other exit refuses, with the code the command
  * wrote (`{ "ok": false, "code": "content" }` on its last line) when it is a short word.
@@ -51,7 +52,7 @@ export async function runVerifyCommand(input: VerifyInput): Promise<VerifyResult
         ...(input.signal ? { signal: input.signal } : {}) });
       if (prepared.status !== 'passed') return { ok: false, projectCode: null, detail: `préparation batch.setup en échec (${prepared.status}) : ${tail(`${prepared.stdout}\n${prepared.stderr}`)}` };
     }
-    const command = expandCommand(input.settings.command, { base: input.base, head: input.head, step: input.step });
+    const command = expandCommand(input.settings.command, { trusted: input.source, base: input.base, head: input.head, step: input.step });
     const order = { ok: true, order: input.order.order.payload, payload: input.order.payload, signature: input.order.signature, digest: input.order.digest };
     const result = await runProcess({ command, cwd: copy, env, timeoutMs: input.settings.timeoutMs, input: `${JSON.stringify(order)}\n`, maxOutputBytes: 256 * 1024,
       ...(input.signal ? { signal: input.signal } : {}) });

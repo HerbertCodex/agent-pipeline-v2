@@ -2,6 +2,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gitRead } from '../run/git-probe.js';
 import { anchorKey, sign, signatureValid } from './operator.js';
+import { orderTrailer } from '../orders/order.js';
 
 /**
  * Merge traces: `apv stack merge` and `apv stack batch --merge` write one per merge, signed with the anchor key kept
@@ -79,7 +80,7 @@ export function auditMerges(repo: string, common: string, ref: string, options: 
   const head = gitRead(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
   const empty = { ref, head: head || null, since, sinceReason, commits: 0, traces: traces.length, unaccounted: [] };
   if (!head) return empty;
-  const raw = gitRead(repo, ['log', '--first-parent', `--since=${since}`, '--format=%H%x1f%P%x1f%cI%x1f%s%x1f%(trailers:key=Apv-Order,key=Apv-Order-Step,key=Apv-Merged-Head,unfold)%x1e', head]);
+  const raw = gitRead(repo, ['log', '--first-parent', `--since=${since}`, '--format=%H%x00%P%x00%cI%x00%s%x00', head]);
   if (!raw) return empty;
   const merged = new Set(traces.map(t => t.mergeCommit).filter((x): x is string => typeof x === 'string'));
   // A rebase merge landed `commits` commits, the last one being its merge commit: the ones before it on the first parent
@@ -92,24 +93,25 @@ export function auditMerges(repo: string, common: string, ref: string, options: 
   const heads = new Set(traces.map(t => t.head));
   const unaccounted: UnaccountedCommit[] = [];
   let commits = 0;
-  for (const record of raw.split('\x1e').map(r => r.trim()).filter(Boolean)) {
-    const [sha, parents, date, subject, trailers] = record.split('\x1f');
-    if (!sha) continue;
+  // NUL separators only: a commit message can never contain one, so no subject can forge or hide a record.
+  const fields = raw.split('\0');
+  for (let index = 0; index + 3 < fields.length; index += 4) {
+    const sha = fields[index]!.trim();
+    const [parents, date, subject] = [fields[index + 1]!, fields[index + 2]!, fields[index + 3]!];
+    if (!/^[0-9a-f]{40}$/.test(sha)) continue;
     commits += 1;
-    const list = (parents ?? '').split(' ').filter(Boolean);
+    const list = parents.split(' ').filter(Boolean);
     if (merged.has(sha) || (list.length > 1 && heads.has(list[1]!))) continue;
-    const order = list.length === 2 ? orderTrailer(trailers ?? '', list[1]!) : null;
+    const order = list.length === 2 ? orderOf(repo, sha, list[1]!) : null;
     unaccounted.push({ sha, date: date ?? '', subject: (subject ?? '').slice(0, 120), merge: list.length > 1, ...(order ? { order } : {}) });
   }
   return { ...empty, commits, unaccounted };
 }
 
-/** The trailer of a merge on order whose merged head is `secondParent`, or null. */
-function orderTrailer(trailers: string, secondParent: string): { nonce: string; step: string } | null {
-  const nonce = /^Apv-Order: ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/m.exec(trailers)?.[1];
-  const step = /^Apv-Order-Step: (publication|article)$/m.exec(trailers)?.[1];
-  const head = /^Apv-Merged-Head: ([0-9a-f]{40})$/m.exec(trailers)?.[1];
-  return nonce && step && head === secondParent ? { nonce, step } : null;
+/** The trailer of a merge on order in the own message of `sha` whose merged head is `secondParent`, or null. */
+function orderOf(repo: string, sha: string, secondParent: string): { nonce: string; step: string } | null {
+  const trailer = orderTrailer(gitRead(repo, ['log', '-1', '--format=%B', sha]) ?? '');
+  return trailer && trailer.head === secondParent ? { nonce: trailer.nonce, step: trailer.step } : null;
 }
 
 /** Lines of an audit, for `apv status`, `apv audit merges` and the head of the report of `apv stack merge`. */
