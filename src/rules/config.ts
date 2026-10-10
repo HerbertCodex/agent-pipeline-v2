@@ -62,6 +62,25 @@ export const rulesSchema = s.object({
     kinds: s.optional(s.array(s.enum(DOCS_ONLY_KINDS), 0, DOCS_ONLY_KINDS.length)),
     exclude: s.optional(s.array(s.string(1, 500), 0, 100)),
   })),
+  /**
+   * The proof by the CI (docs/REGLES.md, « Preuve par la CI »): the check run of a job of the GitHub Actions workflow
+   * declared here, at the exact commit, stands in for the local receipts of the checks it covers, as long as the change
+   * leaves the workflow and every file that produces the proof unchanged. Read at the base only.
+   */
+  ciProof: s.optional(s.object({
+    /** The workflow file, under `.github/workflows/`. */
+    workflow: s.string(1, 200, /^\.github\/workflows\/[A-Za-z0-9][A-Za-z0-9._-]*\.ya?ml$/),
+    /** The key of the job in the workflow (`jobs.<job>`). */
+    job: s.string(1, 100, /^[A-Za-z_][A-Za-z0-9_-]*$/),
+    /** The name of its check run, the `name:` of the job (« Preuve complète »). */
+    name: s.string(1, 200, /^[^\u0000-\u001f\u007f]+$/),
+    /** The checks of the configuration the job proves. */
+    gates: s.array(gateId, 1, 50),
+    /** Files that produce the proof, added to the defaults (CI_PROTECTED_DEFAULTS); never fewer. */
+    protectedPaths: s.optional(s.array(s.string(1, 500), 0, 100)),
+    /** The artifact where the job leaves its receipts: for the measure only, never read by the rule. */
+    artifact: s.optional(s.string(1, 100, /^[A-Za-z0-9][A-Za-z0-9._-]*$/)),
+  })),
 });
 export type RulesSection = Infer<typeof rulesSchema>;
 
@@ -72,6 +91,29 @@ export interface RulesSettings {
   screens: string[];
   /** The lane without code: off, or the kinds it accepts and the paths it excludes. */
   docsOnly: { enabled: boolean; kinds: DocsOnlyKind[]; exclude: string[] };
+  /** The proof by the CI, or null when the project does not declare it (local proof only). */
+  ciProof: CiProofSettings | null;
+}
+
+/**
+ * Files that produce the proof of the CI, always protected besides the declared workflow: the workflows and local actions
+ * (a reusable workflow or a composite action runs in the job), the scripts of the end-to-end and dynamic tests, the
+ * configuration of Playwright and of npm (`script-shell` replaces the shell of every script), the whole package.json (a
+ * script `test:*` calls others, npm runs `pre`/`post` and installation scripts by itself) and the lock files, the
+ * configuration of the build tools (executed by `prepare` and the tests), the configuration of the TypeScript and Babel loaders
+ * (`paths` redirects an import; the `extends` chain is added by the rule), any tracked file under node_modules. The files these name or import are added by the rule.
+ */
+export const CI_PROTECTED_DEFAULTS: readonly string[] = ['.github/workflows/**', '.github/actions/**', 'scripts/e2e/**', 'scripts/dast/**', 'playwright.config.*', '.npmrc',
+  'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'svelte.config.*', 'vite.config.*',
+  '**/tsconfig*.json', '**/jsconfig*.json', 'babel.config.*', '.babelrc*', '**/node_modules/**'];
+export interface CiProofSettings {
+  workflow: string;
+  job: string;
+  name: string;
+  gates: string[];
+  /** The workflow, the defaults and what the project adds, deduplicated. */
+  protectedPaths: string[];
+  artifact: string | null;
 }
 
 /** Effective settings of a `rules` section: the defaults, completed by what the project adds. Throws a CONFIG error. */
@@ -89,5 +131,13 @@ export function rulesSettings(section: RulesSection | undefined, builtIn: readon
       kinds: unique(section?.docsOnly?.kinds ?? [...DOCS_ONLY_KINDS]),
       exclude: (section?.docsOnly?.exclude ?? []).map(g => relativeGlob(g, 'rules.docsOnly.exclude')),
     },
+    ciProof: section?.ciProof ? {
+      workflow: section.ciProof.workflow,
+      job: section.ciProof.job,
+      name: section.ciProof.name,
+      gates: unique(section.ciProof.gates),
+      protectedPaths: unique([section.ciProof.workflow, ...CI_PROTECTED_DEFAULTS, ...(section.ciProof.protectedPaths ?? []).map(g => relativeGlob(g, 'rules.ciProof.protectedPaths'))]),
+      artifact: section.ciProof.artifact ?? null,
+    } : null,
   };
 }
