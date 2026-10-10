@@ -30,7 +30,7 @@ export async function runVerifyCommand(input) {
             if (prepared.status !== 'passed')
                 return { ok: false, projectCode: null, detail: `préparation batch.setup en échec (${prepared.status}) : ${tail(`${prepared.stdout}\n${prepared.stderr}`)}` };
         }
-        const command = expandCommand(input.settings.command, { base: input.base, head: input.head, step: input.step });
+        const command = expandCommand(input.settings.command, { trusted: input.source, base: input.base, head: input.head, step: input.step });
         const order = { ok: true, order: input.order.order.payload, payload: input.order.payload, signature: input.order.signature, digest: input.order.digest };
         const result = await runProcess({ command, cwd: copy, env, timeoutMs: input.settings.timeoutMs, input: `${JSON.stringify(order)}\n`, maxOutputBytes: 256 * 1024,
             ...(input.signal ? { signal: input.signal } : {}) });

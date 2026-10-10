@@ -2,7 +2,7 @@
 
 Générée par `apv map` à partir des fichiers du dépôt, sans modèle. À lire avant de créer un composant, un module ou une route : réutiliser une entrée existante, ou l'étendre de façon générique (paramètre, variante) ; un élément utilisé par deux fonctionnalités devient partagé. Ne pas modifier à la main : l'intégration la régénère (`apv map`), et le contrôle `apv map --check` de la suite complète échoue quand elle ne correspond plus au code.
 
-Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 177. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 92 test(s), 336 fichier(s) ignoré(s), 5 module(s) sans export ni import.
+Composants génériques : 0. Autres composants partagés : 0. Modules partagés : 178. Routes : 0. Propres à une fonctionnalité : 0 composant(s), 0 module(s). Laissés de côté : 92 test(s), 338 fichier(s) ignoré(s), 5 module(s) sans export ni import.
 
 ## Dossiers
 
@@ -176,8 +176,9 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `attestation.ts` : The attestation of the production (docs/REGLES.md, « Fusion sur ordre signé »): just… Exporte : ATTESTATION_MAX_BYTES, AttestationRequest, AttestationResult, Fetcher, requestAttestation(). Utilisé par 1 fichier (src/orders/merge.ts).
 - `config.ts` : 'rules.operatorOrders' of '.apv/config.json' (docs/REGLES.md, « Fusion sur ordre signé… Exporte : DEFAULT_ATTESTATION_MAX_AGE_SECONDS, DEFAULT_ATTESTATION_TIMEOUT_MS, DEFAULT_VERIFY_TIMEOUT_MS, OperatorOrdersSettings, VERIFY_PLACEHOLDERS, attestationUrl(), et 4 autre(s). Utilisé par 5 fichiers (src/config/load.ts, …).
 - `envelope.ts` : Signed envelope of the operator orders (docs/REGLES.md, « Fusion sur ordre signé »):… Exporte : DOMAIN_PATTERN, JsonObject, JsonValue, KEY_ID_PATTERN, PAYLOAD_MAX_BYTES, PublicKey, et 14 autre(s). Utilisé par 4 fichiers (src/orders/attestation.ts, …).
-- `merge.ts` : 'apv stack merge <publication> <article> --order <nonce>' (docs/REGLES.md, section 3… Exporte : DEFAULT_PUSH_TIMEOUT_MS, MAX_PUSH_RETRIES, OrderMergeCode, OrderMergeOptions, OrderMergeReport, OrderMergeStep, et 4 autre(s). Utilisé par 1 fichier (src/commands/stack-order.ts).
-- `order.ts` : The operator order of format 1 (docs/REGLES.md, « Fusion sur ordre signé »): what APV… Exporte : AttestationRefusal, COMMIT, ORDER_LOG_FORMAT, ORDER_MAX_TTL_MS, ORDER_STEPS, OrderInput, et 12 autre(s). Utilisé par 4 fichiers (src/commands/stack-order.ts, …).
+- `merge.ts` : sans description. Exporte : DEFAULT_PUSH_TIMEOUT_MS, MAX_PUSH_RETRIES, NONCE_USED_EXIT, OrderMergeCode, OrderMergeOptions, OrderMergeReport, et 5 autre(s). Utilisé par 1 fichier (src/commands/stack-order.ts).
+- `order.ts` : The operator order of format 1 (docs/REGLES.md, « Fusion sur ordre signé »): what APV… Exporte : AttestationRefusal, COMMIT, HISTORY_LOG_FORMAT, HistoryCommit, ORDER_MAX_TTL_MS, ORDER_STEPS, et 15 autre(s). Utilisé par 6 fichiers (src/commands/stack-order.ts, …).
+- `paths.ts` : sans description. Exporte : PROBE_SLUG, REFUSED_PROBES, SLUG, StepPaths, forbiddenPaths(), refusedPath(), et 1 autre(s). Utilisé par 2 fichiers (src/orders/config.ts, …).
 - `status.ts` : The operator orders as the working tree declares them ('apv status'); the merge on… Exporte : OperatorOrdersStatus, operatorOrdersStatus(). Utilisé par 1 fichier (src/commands/status.ts).
 - `verify-command.ts` : The verification command of the project ('rules.operatorOrders.verify.publication'),… Exporte : VerifyCommand, VerifyInput, VerifyResult, refusalCode(), runVerifyCommand(). Utilisé par 1 fichier (src/orders/merge.ts).
 
@@ -185,7 +186,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 
 - `decision.ts` : Clock-free audit identity. Exporte : decisionRecord(). Utilisé par 1 fichier (src/lifecycle/pathways.ts).
 - `overlap.ts` : Whether two portable globs (the syntax of 'allowedPaths': '*', '**', '?', everything… Exporte : globsOverlap(). Utilisé par 1 fichier (src/lifecycle/decisions.ts).
-- `policy.ts` : Restricted portable globs: *, **, ?. Exporte : PolicyConfig, ReviewMode, ScopeReport, ScopeTask, ValidationRequirement, assertScope(), et 12 autre(s). Utilisé par 24 fichiers (src/commands/review.ts, …).
+- `policy.ts` : Restricted portable globs: *, **, ?. Exporte : PolicyConfig, ReviewMode, ScopeReport, ScopeTask, ValidationRequirement, assertScope(), et 12 autre(s). Utilisé par 26 fichiers (src/commands/review.ts, …).
 
 ### src/preview
 
@@ -213,7 +214,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `markup.ts` : Readers of interface files shared by the reuse rules: comments blanked (lines kept),… Exporte : Block, ElementHit, ElementRule, blankComments(), blocks(), elementRule(), et 6 autre(s). Utilisé par 3 fichiers (src/reuse/check.ts, …).
 - `names.ts` : Words that say where a component sits, not what it does: dropped from the end of a name… Exporte : COMPOSITE_FAMILIES, Clash, ClashReason, ComponentName, clashOf(), componentName(), et 2 autre(s). Utilisé par 3 fichiers (src/knowledge/code-map.ts, …).
 - `styles.ts` : A style rule, its selector resolved against the enclosing rules (CSS nesting, '&'), and… Exporte : Primitives, StyleHit, StyleRule, classesOf(), compounds(), isLayoutOnly, et 4 autre(s). Utilisé par 1 fichier (src/reuse/check.ts).
-- `typography.ts` : Comments and drawings left out: '<!-- 14 h -->', an '<svg>' and geometry attributes… Exporte : TYPOGRAPHY_PATTERNS, TypographyHit, TypographyPattern, breakableValues(), typographyPatterns(). Utilisé par 1 fichier (src/reuse/check.ts).
+- et 1 autre entrée dans ce dossier (liste complète : apv map --json).
 
 Dossiers non listés, au-delà de la taille de la carte : src/review (5), src/rules (11), src/run (6), src/security (2), src/spec (1), src/stack (5), src/stacks (2), src/structure (9), src/testcheck (1), src/web (6), workflows (2) (liste complète : apv map --json).
 

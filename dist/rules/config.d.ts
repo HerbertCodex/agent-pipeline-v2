@@ -33,6 +33,10 @@ export declare const rulesSchema: import("../domain/schema.js").Schema<{
             readonly timeoutMs: number;
         };
         readonly publicationBranch: string | undefined;
+        readonly paths: {
+            readonly publication: string[];
+            readonly article: string[];
+        } | undefined;
         readonly verify: {
             readonly publication: string[];
             readonly timeoutMs: number;

@@ -29,7 +29,7 @@ import { type VerifyInput, type VerifyResult } from './verify-command.js';
  *    the target moved starts the step again on the new `M`, whose declaration must be the one of `T` (twice at most, then
  *    `main_moved`). Never the merge API of GitHub, never a forced push.
  */
-export type OrderMergeCode = OrderRefusal | 'config' | 'github' | 'git' | 'nonce_used' | 'base' | 'verify' | 'rules' | 'attestation' | 'merge_conflict' | 'main_moved' | 'push';
+export type OrderMergeCode = OrderRefusal | 'config' | 'github' | 'git' | 'nonce_used' | 'base' | 'verify' | 'rules' | 'attestation' | 'merge_conflict' | 'main_moved' | 'push' | 'paths';
 export interface OrderMergeStep {
     step: OrderStep;
     pr: number;
@@ -89,12 +89,12 @@ export interface OrderMergeOptions {
 /** Pushes refused because the target moved, after which the run stops (`main_moved`). */
 export declare const MAX_PUSH_RETRIES = 2;
 export declare const DEFAULT_PUSH_TIMEOUT_MS = 60000;
+/** What the operator does when an order ends in `nonce_used` (docs/REGLES.md, section 3 ter). */
+export declare const NONCE_USED_EXIT: string;
 /** A branch name read from GitHub that may be fetched: never `HEAD`, an option, a range or a reflog form. */
 export declare function safeBranch(name: string): boolean;
 export declare function mergeOnOrder(options: OrderMergeOptions): Promise<OrderMergeReport>;
-/**
- * Paths APV reads as its own configuration: never changed by a pull request merged on order (the trusted base is read
- * before it, this refuses it in depth). `.apv/**` (configuration, decisions, specs, brief) and the V2 configuration file.
+/**` (configuration, decisions, specs, brief) and the V2 configuration file.
  */
 export declare function isApvConfigPath(path: string): boolean;
 /** The bodies of `gh api --paginate .../comments --jq '.[] | .body | @json'`: one JSON string per line; null when unreadable. */

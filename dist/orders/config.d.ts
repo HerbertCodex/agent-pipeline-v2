@@ -11,14 +11,18 @@ import { type Infer } from '../domain/schema.js';
  * - `publicationBranch` (optional): the branch the publication pull request must come from, `{slug}` replaced by the
  *   `slug` the order signed (`publication/{slug}`); absent, only the command of the project binds that pull request to
  *   the order (closed list of files, content regenerated from the signed proposal);
+ * - `paths.publication` and `paths.article`: the globs each pull request of an order may change (`{slug}` replaced by
+ *   the slug the order signed); required for a merge on order, never covering a path of the refusal list of APV;
  * - `verify.publication`: the command of the project that checks the content of a step, run by APV from a clean copy
- *   of the base (`{{base}}`, `{{head}}`, `{{step}}` replaced as whole arguments, the verified order on its input).
+ *   of the trusted base, the verified order on its input, with whole arguments replaced: `{{trusted}}` the trusted base
+ *   (where the keys and the configuration are read: the project reads its keys there too), `{{base}}` the commit the
+ *   step merges on (the target at that moment, which may already contain the publication head), `{{head}}`, `{{step}}`.
  */
 export declare const DEFAULT_ATTESTATION_MAX_AGE_SECONDS = 120;
 export declare const DEFAULT_ATTESTATION_TIMEOUT_MS = 15000;
 export declare const DEFAULT_VERIFY_TIMEOUT_MS = 900000;
 /** Placeholders of `verify.publication`, replaced as whole arguments. */
-export declare const VERIFY_PLACEHOLDERS: readonly ["base", "head", "step"];
+export declare const VERIFY_PLACEHOLDERS: readonly ["trusted", "base", "head", "step"];
 export declare const operatorOrdersSchema: import("../domain/schema.js").Schema<{
     readonly domain: string;
     readonly publicKeys: string[];
@@ -28,6 +32,10 @@ export declare const operatorOrdersSchema: import("../domain/schema.js").Schema<
         readonly timeoutMs: number;
     };
     readonly publicationBranch: string | undefined;
+    readonly paths: {
+        readonly publication: string[];
+        readonly article: string[];
+    } | undefined;
     readonly verify: {
         readonly publication: string[];
         readonly timeoutMs: number;

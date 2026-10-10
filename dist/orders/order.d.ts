@@ -79,10 +79,27 @@ export declare function checkAttestation(domain: string, keys: readonly PublicKe
     ok: false;
     code: AttestationRefusal;
 };
+/** One commit of a first-parent history, read without any separator a message could forge. */
+export interface HistoryCommit {
+    sha: string;
+    parents: string[];
+    message: string;
+}
 /**
- * A merge commit made by APV on order, read on the first-parent history of the target: two parents, the trailer
- * `Apv-Order`, `Apv-Order-Step`, `Apv-Order-Sha256` and `Apv-Merged-Head` read by Git as trailers (the last paragraph of
- * the message), the merged head being the second parent. A trailer copied into an ordinary commit (a squash) is not one.
+ * The format of `git log` that `readHistory` reads: fields and commits separated by NUL, the one byte a commit message
+ * can never contain (Git refuses it), never a printable or control character an author could put in a message.
+ */
+export declare const HISTORY_LOG_FORMAT = "--format=%H%x00%P%x00%B%x00";
+/**
+ * The commits of `git log --first-parent HISTORY_LOG_FORMAT <base>`, newest first; null when the output is not exactly
+ * a chain of first parents (an id that is not 40 hexadecimal characters, a first parent that is not the next commit):
+ * the caller then refuses, it never guesses.
+ */
+export declare function readHistory(log: string): HistoryCommit[] | null;
+/**
+ * A merge commit made by APV on order, on the first-parent history of the target: two parents, the trailer `Apv-Order`,
+ * `Apv-Order-Step`, `Apv-Order-Sha256` and `Apv-Merged-Head` once each in the last paragraph of its own message, the
+ * merged head being the second parent. A trailer copied into an ordinary commit (a squash) is not one.
  */
 export interface OrderMergeCommit {
     sha: string;
@@ -94,8 +111,6 @@ export interface OrderMergeCommit {
     /** The whole message, trimmed: a merge APV made has exactly the message of `mergeMessage`. */
     message: string;
 }
-/** The format of `git log` that `orderMergeCommits` reads. */
-export declare const ORDER_LOG_FORMAT = "--format=%H%x1f%P%x1f%(trailers:key=Apv-Order,key=Apv-Order-Step,key=Apv-Order-Sha256,key=Apv-Merged-Head,unfold)%x1f%B%x1e";
 /** The message of the merge commit of a step: a title, then the trailer (nonce, step, digest of the order, merged head). */
 export declare function mergeMessage(input: {
     pr: number;
@@ -104,5 +119,12 @@ export declare function mergeMessage(input: {
     digest: string;
     head: string;
 }): string;
-/** The merge commits on order of a `git log --first-parent ORDER_LOG_FORMAT` output, newest first. */
-export declare function orderMergeCommits(log: string): OrderMergeCommit[];
+/** The trailer of an order in the last paragraph of `message`, each key exactly once; null otherwise. */
+export declare function orderTrailer(message: string): {
+    nonce: string;
+    step: OrderStep;
+    digest: string;
+    head: string;
+} | null;
+/** The merge commits on order of a first-parent history, newest first. */
+export declare function orderMergeCommits(history: readonly HistoryCommit[]): OrderMergeCommit[];

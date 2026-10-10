@@ -8,7 +8,8 @@ import { VIEW_FIELDS, hostname, parsePullRequest, pullRequestPath } from '../sta
 import { requestAttestation } from './attestation.js';
 import { publicationBranchOf } from './config.js';
 import { publicKeys } from './envelope.js';
-import { COMMIT, ORDER_LOG_FORMAT, UUID, mergeMessage, orderMergeCommits, verifyOrder } from './order.js';
+import { COMMIT, HISTORY_LOG_FORMAT, UUID, mergeMessage, orderMergeCommits, readHistory, verifyOrder } from './order.js';
+import { forbiddenPaths, stepGlobs } from './paths.js';
 import { runVerifyCommand } from './verify-command.js';
 /** Pushes refused because the target moved, after which the run stops (`main_moved`). */
 export const MAX_PUSH_RETRIES = 2;
@@ -28,6 +29,9 @@ class Refusal extends Error {
     }
 }
 const short = (sha) => sha.slice(0, 12);
+/** What the operator does when an order ends in `nonce_used` (docs/REGLES.md, section 3 ter). */
+export const NONCE_USED_EXIT = 'Sortie : si l\'étape publication n\'est pas faite, une nouvelle décision de l\'opérateur dans l\'admin, donc un nouvel ordre (nouvelle référence) ; '
+    + 'si elle est faite, la fusion de la PR d\'article à la main par le chef de projet, sur ordre tapé de l\'opérateur (cas limite 4 de la conception), que apv audit merges signale.';
 /** A branch name read from GitHub that may be fetched: never `HEAD`, an option, a range or a reflog form. */
 export function safeBranch(name) {
     return /^[A-Za-z0-9._/-]{1,250}$/.test(name) && name !== 'HEAD' && !/^[-/.]/.test(name) && !name.endsWith('/') && !name.endsWith('.lock')
@@ -126,15 +130,26 @@ export async function mergeOnOrder(options) {
             return verifyOrder({ domain: settings.domain, keys: publicKeys(settings.publicKeys), bodies, repo: repoName, pr: options.articlePr,
                 head: article.headRefOid, nonce: options.nonce, now: now() });
         };
-        const mergesOf = async (base) => orderMergeCommits(await mustGit(['log', '--first-parent', ORDER_LOG_FORMAT, '--end-of-options', base], 'histoire de la cible')).filter(c => c.nonce === options.nonce);
+        // The first-parent history of the target, read with NUL separators only (never a character a message may hold).
+        const historyOf = async (base) => {
+            const history = readHistory(await mustGit(['log', '--first-parent', HISTORY_LOG_FORMAT, '--end-of-options', base], 'histoire de la cible'));
+            if (!history || history[0]?.sha !== base)
+                throw new Refusal('git', `histoire de la cible illisible à ${short(base)} (chaîne de premiers parents attendue)`);
+            return history;
+        };
+        const mergesOf = async (base) => orderMergeCommits(await historyOf(base)).filter(c => c.nonce === options.nonce);
         // H: the head of the publication pull request read once, at the start; a commit pushed later is never merged.
         const publicationHead = publication.headRefOid;
         // The trusted base: the target before any merge on this order. As soon as a well-formed publication merge of this
         // nonce is on the history (two parents, merged head as second parent), the base is the first parent of the oldest
         // one, whatever happens next: never a fall back on the current target, which may contain the publication head.
         const start = await fetchInto(target, 'cible');
-        const publicationMerges = (await mergesOf(start)).filter(c => c.step === 'publication');
+        const startHistory = await historyOf(start);
+        const publicationMerges = orderMergeCommits(startHistory).filter(c => c.nonce === options.nonce && c.step === 'publication');
         const trusted = publicationMerges.length ? publicationMerges[publicationMerges.length - 1].firstParent : start;
+        // The trusted base is a commit of the first-parent chain of the target, never a commit named by a message.
+        if (!startHistory.some(c => c.sha === trusted))
+            throw new Refusal('git', `base de confiance ${short(trusted)} hors de la chaîne de premiers parents de ${target}`);
         report.trustedBase = trusted;
         const trustedConfig = configAt(trusted);
         const settings = ordersAt(trustedConfig, trusted);
@@ -156,7 +171,7 @@ export async function mergeOnOrder(options) {
                 return report;
             }
             if (done.has('article'))
-                throw new Refusal('nonce_used', 'étape article déjà consommée sans l\'étape publication : ordre inutilisable');
+                throw new Refusal('nonce_used', `étape article déjà consommée sans l'étape publication : ordre inutilisable. ${NONCE_USED_EXIT}`);
             const step = done.has('publication') ? 'article' : 'publication';
             const pr = step === 'publication' ? options.publicationPr : options.articlePr;
             const head = step === 'publication' ? publicationHead : verdict.order.articleSha;
@@ -173,11 +188,20 @@ export async function mergeOnOrder(options) {
             if (step === 'publication' && !(await run(['merge-base', '--is-ancestor', base, head])).ok) {
                 throw new Refusal('base', `la tête ${short(head)} de la PR #${pr} ne descend pas de ${target} (${short(base)}) : fusionner ${target} dans la branche, nouvelle preuve`);
             }
-            // Defence in depth, whatever the command of the project says: a pull request never changes what APV reads.
+            // The paths of the step, whatever the command of the project says: the allow list of the trusted base, and never
+            // the refusal list of APV (configuration of APV, of the agents, of the CI, of Git, packages).
+            if (!settings.paths)
+                throw new Refusal('paths', 'rules.operatorOrders.paths non déclaré à la base de confiance : aucune fusion sur ordre sans liste des chemins permis');
+            const globs = stepGlobs(settings.paths[step], verdict.order.payload['slug']);
+            if (!globs)
+                throw new Refusal('paths', `rules.operatorOrders.paths.${step} nomme {slug} et l'ordre ne signe aucun slug lisible`);
             const from = step === 'publication' ? base : await mustGit(['merge-base', base, head], 'base commune de la PR d\'article');
-            const touched = (await mustGit(['diff', '--name-only', '--no-renames', '-z', from, head], 'fichiers changés')).split('\0').filter(isApvConfigPath);
-            if (touched.length)
-                throw new Refusal('config', `la PR #${pr} change la configuration d'APV (${touched.slice(0, 5).join(', ')}) : jamais dans une fusion sur ordre`);
+            const changed = (await mustGit(['diff', '--name-only', '--no-renames', '-z', from, head], 'fichiers changés')).split('\0').filter(Boolean);
+            const forbidden = forbiddenPaths(changed, globs);
+            if (forbidden.refused.length)
+                throw new Refusal('paths', `la PR #${pr} change des chemins que la fusion sur ordre refuse toujours (${forbidden.refused.slice(0, 5).join(', ')})`);
+            if (forbidden.outside.length)
+                throw new Refusal('paths', `la PR #${pr} change des chemins hors de rules.operatorOrders.paths.${step} (${forbidden.outside.slice(0, 5).join(', ')})`);
             log(`Ordre ${options.nonce} : étape ${step}, PR #${pr} à ${short(head)} sur ${target} à ${short(base)} ; vérification du projet depuis une copie propre de la base de confiance ${short(trusted)}.`);
             const checked = await verify({ repo, git: options.git, source: trusted, base, head, step, order: verdict, env: options.env,
                 settings: { command: settings.verify.publication, timeoutMs: settings.verify.timeoutMs, passEnv: trustedConfig.environment.passEnv,
@@ -273,9 +297,7 @@ export async function mergeOnOrder(options) {
         }
     }
 }
-/**
- * Paths APV reads as its own configuration: never changed by a pull request merged on order (the trusted base is read
- * before it, this refuses it in depth). `.apv/**` (configuration, decisions, specs, brief) and the V2 configuration file.
+/**` (configuration, decisions, specs, brief) and the V2 configuration file.
  */
 export function isApvConfigPath(path) {
     return path === '.apv' || path.startsWith('.apv/') || path === 'pipeline.v2.json';
@@ -291,7 +313,7 @@ function consumedSteps(merges, verdict, ctx) {
         const genuine = all.filter(c => c.digest === verdict.digest && c.head === head && (step === 'article' || c.firstParent === ctx.trusted || ctx.mergedHere.has(c.sha))
             && c.message === mergeMessage({ pr, step, nonce: verdict.order.nonce, digest: verdict.digest, head }).trim());
         if (genuine.length !== 1 || all.length !== 1) {
-            throw new Refusal('nonce_used', `fusion d'étape ${step} de cet ordre non reconnue sur la cible (${all.map(c => short(c.sha)).join(', ')}) : pied forgé, autre tête ou fusion en double ; à examiner avec l'opérateur`);
+            throw new Refusal('nonce_used', `fusion d'étape ${step} de cet ordre non reconnue sur la cible (${all.map(c => short(c.sha)).join(', ')}) : pied forgé, autre tête ou fusion en double ; à examiner avec l'opérateur. ${NONCE_USED_EXIT}`);
         }
         done.add(step);
     }
