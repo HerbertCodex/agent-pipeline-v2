@@ -59,7 +59,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `run.ts` : sans description. Exporte : run(), usage. Utilisé par 1 fichier (src/commands/index.ts).
 - `scope.ts` : Paths of 'git status --porcelain=v1 -z'; a rename or copy entry is followed by its… Exporte : porcelainPaths(), run(), usage. Utilisé par 1 fichier (src/commands/index.ts).
 - `spec.ts` : Kebab-case spec id: lower-case letters and digits separated by single hyphens. Exporte : SPEC_ID, run(), specTemplate(), usage. Utilisé par 1 fichier (src/commands/index.ts).
-- `stack-order.ts` : sans description. Exporte : ORDER_USAGE, orderLines(), stackMergeOnOrder(). Utilisé par 1 fichier (src/commands/stack.ts).
+- `stack-order.ts` : Options of 'apv stack merge' that a merge on order never takes: its method, target and… Exporte : ORDER_USAGE, orderLines(), stackMergeOnOrder(). Utilisé par 1 fichier (src/commands/stack.ts).
 - `stack.ts` : sans description. Exporte : STACK_LOG, freshnessText(), run(), stackRules(), transcript(), usage. Utilisé par 1 fichier (src/commands/index.ts).
 - `stacks.ts` : sans description. Exporte : run(), usage. Utilisé par 1 fichier (src/commands/index.ts).
 - `status.ts` : sans description. Exporte : ApvStatus, apvStatus(), metricsLine(), run(), usage. Utilisé par 1 fichier (src/commands/index.ts).
@@ -99,7 +99,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 
 - `contracts.ts` : When a check runs: 'task' after every task (fast feedback), 'full' only in the complete… Exporte : AgentConfig, ChangeSet, CommandSpec, Config, DEFAULT_GENERATED_PATHS, DEFAULT_LIMITS, et 35 autre(s). Utilisé par 22 fichiers (src/commands/gates.ts, …).
 - `errors.ts` : sans description. Exporte : PipelineError, errorMessage(), invariant(). Utilisé par 85 fichiers (src/commands/common.ts, …).
-- `hash.ts` : Hash raw bytes, distinct from the canonical-JSON identity helper. Exporte : canonical(), hash(), hashFile(), sha256(). Utilisé par 9 fichiers (src/commands/run.ts, …).
+- `hash.ts` : Hash raw bytes, distinct from the canonical-JSON identity helper. Exporte : canonical(), hash(), hashFile(), sha256(). Utilisé par 10 fichiers (src/commands/run.ts, …).
 - `issues.ts` : One validation problem. Exporte : Issue, IssueList, jsonSchemaIssues(), schemaIssues(). Utilisé par 4 fichiers (src/config/load.ts, …).
 - `knowledge.ts` : Old configurations opt into no new skills. Exporte : KnowledgeConfig, LanguageProfile, RoleName, SkillsConfig, exportRules, knowledgeSchema, et 5 autre(s). Utilisé par 3 fichiers (src/config/load.ts, …).
 - `paths.ts` : Absolute path with every symlink of its longest existing ancestor resolved, the missing… Exporte : canonicalPath(). Utilisé par 10 fichiers (src/commands/common.ts, …).
@@ -118,7 +118,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 ### src/execution
 
 - `git.ts` : The tool command that created the commit, written as the 'Generated-by' trailer. Exporte : CommitMessage, Git, GitIdentity, candidateSubject(), isInside(). Utilisé par 24 fichiers (src/commands/design.ts, …).
-- `process.ts` : The command signals on file descriptor 3 (a pipe) when its real work starts, for… Exporte : PIPE_GRACE_MS, ProcessHooks, ProcessOptions, environment(), expandCommand(), redact(), et 1 autre(s). Utilisé par 14 fichiers (src/commands/stack.ts, …).
+- `process.ts` : The command signals on file descriptor 3 (a pipe) when its real work starts, for… Exporte : PIPE_GRACE_MS, ProcessHooks, ProcessOptions, environment(), expandCommand(), redact(), et 1 autre(s). Utilisé par 15 fichiers (src/commands/stack.ts, …).
 - `procs.ts` : Processes of a repository, read from '/proc' (Linux): the working directory of each… Exporte : PROC_ROOT, PROTECTED_TOOLS, ProcessInfo, StopOutcome, StopRefusal, assertProcSupported(), et 12 autre(s). Utilisé par 6 fichiers (src/commands/procs.ts, …).
 - `wait.ts` : Bounded waits for a session that may not sleep ('apv wait'). Exporte : DEFAULT_POLL_MS, FileWatch, MAX_WAIT_SECONDS, WaitCondition, WaitOptions, WaitResult, et 2 autre(s). Utilisé par 1 fichier (src/commands/wait.ts).
 
@@ -173,13 +173,13 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 
 ### src/orders
 
-- `attestation.ts` : sans description. Exporte : ATTESTATION_MAX_BYTES, AttestationRequest, AttestationResult, Fetcher, requestAttestation(). Utilisé par 1 fichier (src/orders/merge.ts).
-- `config.ts` : sans description. Exporte : DEFAULT_ATTESTATION_MAX_AGE_SECONDS, DEFAULT_ATTESTATION_TIMEOUT_MS, DEFAULT_VERIFY_TIMEOUT_MS, OperatorOrdersSettings, VERIFY_PLACEHOLDERS, attestationUrl(), et 3 autre(s). Utilisé par 5 fichiers (src/config/load.ts, …).
-- `envelope.ts` : sans description. Exporte : DOMAIN_PATTERN, JsonObject, JsonValue, KEY_ID_PATTERN, PAYLOAD_MAX_BYTES, PublicKey, et 14 autre(s). Utilisé par 4 fichiers (src/orders/attestation.ts, …).
-- `merge.ts` : sans description. Exporte : MAX_PUSH_RETRIES, OrderMergeCode, OrderMergeOptions, OrderMergeReport, OrderMergeStep, mergeOnOrder(), et 1 autre(s). Utilisé par 1 fichier (src/commands/stack-order.ts).
-- `order.ts` : sans description. Exporte : AttestationRefusal, COMMIT, ORDER_MAX_TTL_MS, ORDER_STEPS, OrderInput, OrderRefusal, et 11 autre(s). Utilisé par 4 fichiers (src/commands/stack-order.ts, …).
-- `status.ts` : sans description. Exporte : OperatorOrdersStatus, operatorOrdersStatus(). Utilisé par 1 fichier (src/commands/status.ts).
-- `verify-command.ts` : sans description. Exporte : VerifyCommand, VerifyInput, VerifyResult, refusalCode(), runVerifyCommand(). Utilisé par 1 fichier (src/orders/merge.ts).
+- `attestation.ts` : The attestation of the production (docs/REGLES.md, « Fusion sur ordre signé »): just… Exporte : ATTESTATION_MAX_BYTES, AttestationRequest, AttestationResult, Fetcher, requestAttestation(). Utilisé par 1 fichier (src/orders/merge.ts).
+- `config.ts` : 'rules.operatorOrders' of '.apv/config.json' (docs/REGLES.md, « Fusion sur ordre signé… Exporte : DEFAULT_ATTESTATION_MAX_AGE_SECONDS, DEFAULT_ATTESTATION_TIMEOUT_MS, DEFAULT_VERIFY_TIMEOUT_MS, LOOPBACK_TEST_MODE, OperatorOrdersSettings, VERIFY_PLACEHOLDERS, et 5 autre(s). Utilisé par 5 fichiers (src/config/load.ts, …).
+- `envelope.ts` : Signed envelope of the operator orders (docs/REGLES.md, « Fusion sur ordre signé »):… Exporte : DOMAIN_PATTERN, JsonObject, JsonValue, KEY_ID_PATTERN, PAYLOAD_MAX_BYTES, PublicKey, et 14 autre(s). Utilisé par 4 fichiers (src/orders/attestation.ts, …).
+- `merge.ts` : 'apv stack merge <publication> <article> --order <nonce>' (docs/REGLES.md, section 3… Exporte : DEFAULT_PUSH_TIMEOUT_MS, MAX_PUSH_RETRIES, OrderMergeCode, OrderMergeOptions, OrderMergeReport, OrderMergeStep, et 3 autre(s). Utilisé par 1 fichier (src/commands/stack-order.ts).
+- `order.ts` : The operator order of format 1 (docs/REGLES.md, « Fusion sur ordre signé »): what APV… Exporte : AttestationRefusal, COMMIT, ORDER_LOG_FORMAT, ORDER_MAX_TTL_MS, ORDER_STEPS, OrderInput, et 12 autre(s). Utilisé par 4 fichiers (src/commands/stack-order.ts, …).
+- `status.ts` : The operator orders as the working tree declares them ('apv status'); the merge on… Exporte : OperatorOrdersStatus, operatorOrdersStatus(). Utilisé par 1 fichier (src/commands/status.ts).
+- `verify-command.ts` : The verification command of the project ('rules.operatorOrders.verify.publication'),… Exporte : VerifyCommand, VerifyInput, VerifyResult, refusalCode(), runVerifyCommand(). Utilisé par 1 fichier (src/orders/merge.ts).
 
 ### src/policy
 
@@ -215,13 +215,7 @@ Aucun autre composant partagé (dossiers de `reuse.shared`).
 - `styles.ts` : A style rule, its selector resolved against the enclosing rules (CSS nesting, '&'), and… Exporte : Primitives, StyleHit, StyleRule, classesOf(), compounds(), isLayoutOnly, et 4 autre(s). Utilisé par 1 fichier (src/reuse/check.ts).
 - `typography.ts` : Comments and drawings left out: '<!-- 14 h -->', an '<svg>' and geometry attributes… Exporte : TYPOGRAPHY_PATTERNS, TypographyHit, TypographyPattern, breakableValues(), typographyPatterns(). Utilisé par 1 fichier (src/reuse/check.ts).
 
-### src/review
-
-- `config.ts` : Settings of 'apv review plan' in the 'review' section of '.apv/config.json'… Exporte : ALWAYS_REVIEWED, DEFAULT_REVIEW_PATHS, DEFAULT_REVIEW_TERMS, PATH_CLASSES, PathClass, REVIEW_DOMAINS, et 8 autre(s). Utilisé par 8 fichiers (src/commands/review.ts, …).
-- `dast.ts` : 'apv dast run': the dynamic security scan (ZAP or another) that the project declares in… Exporte : DAST_INSTALL, DAST_INSTALL_MARKER, DAST_LOG, DAST_SUMMARY, DastInstall, DastRunOptions, et 11 autre(s). Utilisé par 2 fichiers (src/commands/dast.ts, …).
-- et 3 autres entrées dans ce dossier (liste complète : apv map --json).
-
-Dossiers non listés, au-delà de la taille de la carte : src/rules (11), src/run (6), src/security (2), src/spec (1), src/stack (5), src/stacks (2), src/structure (9), src/testcheck (1), src/web (6), workflows (2) (liste complète : apv map --json).
+Dossiers non listés, au-delà de la taille de la carte : src/review (5), src/rules (11), src/run (6), src/security (2), src/spec (1), src/stack (5), src/stacks (2), src/structure (9), src/testcheck (1), src/web (6), workflows (2) (liste complète : apv map --json).
 
 ## Routes
 

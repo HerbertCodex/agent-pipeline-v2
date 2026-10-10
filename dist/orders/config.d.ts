@@ -6,8 +6,12 @@ import { type Infer } from '../domain/schema.js';
  * - `publicKeys`: the Ed25519 public keys of the signer (PEM SPKI or its base64 line), two during a rotation; never a
  *   private key (refused by the loader, never echoed);
  * - `attestation`: the address of the production that attests an order is open, with `{nonce}` and `{challenge}`
- *   replaced by APV (HTTPS; plain HTTP on the loopback only, for the tests), and `maxAgeSeconds`, the longest time
- *   between the attestation and the push of the merge (120 by default);
+ *   replaced by APV (HTTPS only; plain HTTP on the loopback only in the explicit test mode of the tool, a variable of
+ *   the process the Bash hook refuses to set), and `maxAgeSeconds`, the longest time between the attestation and the
+ *   push of the merge (120 by default);
+ * - `publicationBranch` (optional): the branch the publication pull request must come from, `{slug}` replaced by the
+ *   `slug` the order signed (`publication/{slug}`); absent, only the command of the project binds that pull request to
+ *   the order (closed list of files, content regenerated from the signed proposal);
  * - `verify.publication`: the command of the project that checks the content of a step, run by APV from a clean copy
  *   of the base (`{{base}}`, `{{head}}`, `{{step}}` replaced as whole arguments, the verified order on its input).
  */
@@ -24,6 +28,7 @@ export declare const operatorOrdersSchema: import("../domain/schema.js").Schema<
         readonly maxAgeSeconds: number;
         readonly timeoutMs: number;
     };
+    readonly publicationBranch: string | undefined;
     readonly verify: {
         readonly publication: string[];
         readonly timeoutMs: number;
@@ -32,7 +37,11 @@ export declare const operatorOrdersSchema: import("../domain/schema.js").Schema<
 export type OperatorOrdersSettings = Infer<typeof operatorOrdersSchema>;
 /** The attestation address with its placeholders replaced (values already checked as UUID). */
 export declare function attestationUrl(template: string, nonce: string, challenge: string): string;
+/** Explicit test mode: the attestation may be asked in plain HTTP on the loopback (tests of the tool only). */
+export declare const LOOPBACK_TEST_MODE = "APV_ATTESTATION_LOOPBACK";
+/** The branch of the publication pull request an order names (`publicationBranch` with its slug), or null when undeclared or unreadable. */
+export declare function publicationBranchOf(template: string | undefined, slug: unknown): string | null;
 /** Every problem of a declaration that the schema cannot see: keys, address, placeholders. Never echoes a key. */
-export declare function operatorOrdersIssues(settings: OperatorOrdersSettings): string[];
+export declare function operatorOrdersIssues(settings: OperatorOrdersSettings, env?: NodeJS.ProcessEnv): string[];
 /** One line of `apv status`: the declaration of the working tree, as the merge on order reads it at the base. */
 export declare function operatorOrdersLine(settings: OperatorOrdersSettings | null, error?: string | null): string;

@@ -478,6 +478,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
                 readonly maxAgeSeconds: number;
                 readonly timeoutMs: number;
             };
+            readonly publicationBranch: string | undefined;
             readonly verify: {
                 readonly publication: string[];
                 readonly timeoutMs: number;

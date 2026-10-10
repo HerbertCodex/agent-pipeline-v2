@@ -54,7 +54,7 @@ export function auditMerges(repo, common, ref, options = {}) {
     const since = options.since ?? traces[0]?.at ?? new Date(now.getTime() - DEFAULT_AUDIT_DAYS * 86_400_000).toISOString();
     const sinceReason = options.since ? 'date demandée' : traces.length ? 'première fusion enregistrée par apv stack merge' : `aucune fusion enregistrée : ${DEFAULT_AUDIT_DAYS} derniers jours`;
     const head = gitRead(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
-    const empty = { ref, head: head || null, since, sinceReason, commits: 0, traces: traces.length, unaccounted: [], orderMerges: [] };
+    const empty = { ref, head: head || null, since, sinceReason, commits: 0, traces: traces.length, unaccounted: [] };
     if (!head)
         return empty;
     const raw = gitRead(repo, ['log', '--first-parent', `--since=${since}`, '--format=%H%x1f%P%x1f%cI%x1f%s%x1f%(trailers:key=Apv-Order,key=Apv-Order-Step,key=Apv-Merged-Head,unfold)%x1e', head]);
@@ -72,7 +72,6 @@ export function auditMerges(repo, common, ref, options = {}) {
     }
     const heads = new Set(traces.map(t => t.head));
     const unaccounted = [];
-    const orderMerges = [];
     let commits = 0;
     for (const record of raw.split('\x1e').map(r => r.trim()).filter(Boolean)) {
         const [sha, parents, date, subject, trailers] = record.split('\x1f');
@@ -83,33 +82,28 @@ export function auditMerges(repo, common, ref, options = {}) {
         if (merged.has(sha) || (list.length > 1 && heads.has(list[1])))
             continue;
         const order = list.length === 2 ? orderTrailer(trailers ?? '', list[1]) : null;
-        if (order) {
-            orderMerges.push({ sha, date: date ?? '', ...order });
-            continue;
-        }
-        unaccounted.push({ sha, date: date ?? '', subject: (subject ?? '').slice(0, 120), merge: list.length > 1 });
+        unaccounted.push({ sha, date: date ?? '', subject: (subject ?? '').slice(0, 120), merge: list.length > 1, ...(order ? { order } : {}) });
     }
-    return { ...empty, commits, unaccounted, orderMerges };
+    return { ...empty, commits, unaccounted };
 }
 /** The trailer of a merge on order whose merged head is `secondParent`, or null. */
 function orderTrailer(trailers, secondParent) {
     const nonce = /^Apv-Order: ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/m.exec(trailers)?.[1];
     const step = /^Apv-Order-Step: (publication|article)$/m.exec(trailers)?.[1];
     const head = /^Apv-Merged-Head: ([0-9a-f]{40})$/m.exec(trailers)?.[1];
-    return nonce && step && head === secondParent ? { nonce, step, head } : null;
+    return nonce && step && head === secondParent ? { nonce, step } : null;
 }
 /** Lines of an audit, for `apv status`, `apv audit merges` and the head of the report of `apv stack merge`. */
 export function auditLines(audit) {
     if (!audit.head)
         return [`Audit des fusions : ${audit.ref} introuvable (git fetch), rien n'est vérifié.`];
     const head = `Audit des fusions sur ${audit.ref} depuis ${audit.since.slice(0, 10)} (${audit.sinceReason}) : ${audit.commits} commit(s), ${audit.traces} fusion(s) enregistrée(s) par apv`;
-    const orders = audit.orderMerges.length ? [`  ${audit.orderMerges.length} fusion(s) sur ordre signé (pied Apv-Order, contrôle de forme seulement : rapprocher chaque référence de son ordre signé sur la PR) :`,
-        ...audit.orderMerges.slice(0, 20).map(o => `  ${o.sha.slice(0, 12)} ${o.date.slice(0, 10)} ordre ${o.nonce}, étape ${o.step}, tête ${o.head.slice(0, 12)}`)] : [];
     if (!audit.unaccounted.length)
-        return [`${head}, aucun commit hors de apv stack merge.`, ...orders];
+        return [`${head}, aucun commit hors de apv stack merge.`];
     return [`${head}. ATTENTION : ${audit.unaccounted.length} commit(s) arrivé(s) sans apv stack merge (fusion à la main ou poussée directe : les règles n'ont pas été vérifiées) :`,
-        ...audit.unaccounted.slice(0, 20).map(c => `  ${c.sha.slice(0, 12)} ${c.date.slice(0, 10)} ${c.merge ? 'fusion' : 'commit'} : ${c.subject}`),
+        ...audit.unaccounted.slice(0, 20).map(c => `  ${c.sha.slice(0, 12)} ${c.date.slice(0, 10)} ${c.merge ? 'fusion' : 'commit'} : ${c.subject}`
+            + (c.order ? ` (pied Apv-Order non vérifié : ordre ${c.order.nonce}, étape ${c.order.step} ; à rapprocher de l'ordre signé de la PR)` : '')),
         ...(audit.unaccounted.length > 20 ? [`  et ${audit.unaccounted.length - 20} autre(s) (apv audit merges --json)`] : []),
-        '  À examiner avec l\'opérateur ; si c\'est lui qui a fusionné sur GitHub, le noter au journal du pipeline.', ...orders];
+        '  À examiner avec l\'opérateur ; si c\'est lui qui a fusionné sur GitHub, le noter au journal du pipeline.'];
 }
 //# sourceMappingURL=merges.js.map

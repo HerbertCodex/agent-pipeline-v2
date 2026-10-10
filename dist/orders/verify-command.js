@@ -21,7 +21,7 @@ export async function runVerifyCommand(input) {
     const copy = join(folder, 'base');
     const env = environment([...input.settings.passEnv, 'HOME'], input.env);
     try {
-        const added = await input.git.run(input.repo, ['worktree', 'add', '--detach', '--quiet', copy, input.base]);
+        const added = await input.git.run(input.repo, ['worktree', 'add', '--detach', '--quiet', copy, input.source]);
         if (!added.ok)
             return { ok: false, projectCode: null, detail: `copie propre de la base impossible : ${tail(added.stderr)}` };
         if (input.settings.setup) {
