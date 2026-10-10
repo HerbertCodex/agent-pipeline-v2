@@ -196,12 +196,19 @@ export async function mergeOnOrder(options) {
             if (!globs)
                 throw new Refusal('paths', `rules.operatorOrders.paths.${step} nomme {slug} et l'ordre ne signe aucun slug lisible`);
             const from = step === 'publication' ? base : await mustGit(['merge-base', base, head], 'base commune de la PR d\'article');
-            const changed = (await mustGit(['diff', '--name-only', '--no-renames', '-z', from, head], 'fichiers changés')).split('\0').filter(Boolean);
-            const forbidden = forbiddenPaths(changed, globs);
+            const entries = rawDiff(await mustGit(['diff', '--raw', '--no-renames', '--no-abbrev', '-z', from, head], 'fichiers changés'));
+            if (!entries)
+                throw new Refusal('git', `diff de la PR #${pr} illisible`);
+            const forbidden = forbiddenPaths(entries.map(e => e.path), globs);
             if (forbidden.refused.length)
                 throw new Refusal('paths', `la PR #${pr} change des chemins que la fusion sur ordre refuse toujours (${forbidden.refused.slice(0, 5).join(', ')})`);
             if (forbidden.outside.length)
                 throw new Refusal('paths', `la PR #${pr} change des chemins hors de rules.operatorOrders.paths.${step} (${forbidden.outside.slice(0, 5).join(', ')})`);
+            // Regular files only: added or modified in mode 100644, or deleted (the allow list decides); never an executable,
+            // a symbolic link, a submodule or a change of type.
+            const modes = entries.filter(e => !((e.status === 'A' || e.status === 'M') && e.mode === '100644') && !(e.status === 'D' && e.mode === '000000'));
+            if (modes.length)
+                throw new Refusal('paths', `la PR #${pr} change des fichiers qui ne sont pas des fichiers ordinaires de mode 100644 (${modes.slice(0, 5).map(e => `${e.path} (${e.mode}${e.status === 'T' ? ', type changé' : ''})`).join(', ')})`);
             log(`Ordre ${options.nonce} : étape ${step}, PR #${pr} à ${short(head)} sur ${target} à ${short(base)} ; vérification du projet depuis une copie propre de la base de confiance ${short(trusted)}.`);
             const checked = await verify({ repo, git: options.git, source: trusted, base, head, step, order: verdict, env: options.env,
                 settings: { command: settings.verify.publication, timeoutMs: settings.verify.timeoutMs, passEnv: trustedConfig.environment.passEnv,
@@ -318,6 +325,22 @@ function consumedSteps(merges, verdict, ctx) {
         done.add(step);
     }
     return done;
+}
+/** The entries of a raw diff read with NUL separators; null when the output is not one. */
+export function rawDiff(output) {
+    const parts = output.split('\0');
+    if (parts[parts.length - 1] === '')
+        parts.pop();
+    if (parts.length % 2 !== 0)
+        return null;
+    const entries = [];
+    for (let index = 0; index < parts.length; index += 2) {
+        const meta = /^:(\d{6}) (\d{6}) [0-9a-f]{40} [0-9a-f]{40} ([A-Z])$/.exec(parts[index].replace(/^\n/, ''));
+        if (!meta || !parts[index + 1])
+            return null;
+        entries.push({ mode: meta[2], status: meta[3], path: parts[index + 1] });
+    }
+    return entries;
 }
 async function attest(settings, verdict, report, challenge, fetcher) {
     report.attestations += 1;

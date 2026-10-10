@@ -100,6 +100,10 @@ export function operatorOrdersIssues(settings) {
     }
     for (const [step, globs] of Object.entries(settings.paths ?? {})) {
         for (const glob of globs) {
+            if (glob.includes('**')) {
+                issues.push(`rules.operatorOrders.paths.${step} : ** refusé dans ${glob} (chemins littéraux, * dans un seul segment, {slug} pour le slug signé)`);
+                continue;
+            }
             const probe = glob.replaceAll('{slug}', PROBE_SLUG);
             let covered;
             try {
