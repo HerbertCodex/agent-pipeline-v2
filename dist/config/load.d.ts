@@ -470,6 +470,19 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly maxBytes: number | undefined;
     } | undefined;
     readonly rules: {
+        readonly operatorOrders: {
+            readonly domain: string;
+            readonly publicKeys: string[];
+            readonly attestation: {
+                readonly url: string;
+                readonly maxAgeSeconds: number;
+                readonly timeoutMs: number;
+            };
+            readonly verify: {
+                readonly publication: string[];
+                readonly timeoutMs: number;
+            };
+        } | undefined;
         readonly captures: {
             readonly viewports: ("phone" | "desktop" | "tablet")[] | undefined;
             readonly themes: ("light" | "dark")[] | undefined;

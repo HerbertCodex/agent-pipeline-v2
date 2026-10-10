@@ -15,6 +15,7 @@ import { processGh } from '../stack/github.js';
 import { freshnessLines, freshnessReport } from '../freshness/check.js';
 import { duration } from '../metrics/run.js';
 import { recentMeasures } from '../metrics/sources.js';
+import { operatorOrdersStatus } from '../orders/status.js';
 export const usage = `Utilisation :
   apv status [--repo <chemin>] [--json]
 
@@ -129,8 +130,9 @@ export async function run(args, io) {
         catch {
             plugin = null;
         }
+        const operatorOrders = operatorOrdersStatus(status.repo);
         if (values.json) {
-            json(io, { ...status, plugin, anchor });
+            json(io, { ...status, plugin, anchor, operatorOrders });
             return EXIT.ok;
         }
         const c = status.config;
@@ -151,6 +153,7 @@ export async function run(args, io) {
             ...(status.runsUnread ? [`- ${unreadRunsLine(status.runsUnread)}`] : []),
             `Quota : ${q ? `${localTime(q.at)} ; session ${q.session ? `${q.session.percent} %` : '?'} ; semaine ${q.week ? `${q.week.percent} %` : '?'} ; niveau ${q.level}` : 'aucun relevé'}`,
             ...(metricsLine(status.metrics) ? [metricsLine(status.metrics)] : []),
+            cleanLine(operatorOrders.line, 2000),
             ...freshnessLines(status.freshness, value => cleanLine(value, 400), localTime),
         ];
         if (plugin)

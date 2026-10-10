@@ -28,6 +28,18 @@ export interface UnaccountedCommit {
     subject: string;
     merge: boolean;
 }
+/**
+ * A merge commit made by `apv stack merge --order` (src/orders/merge.ts), possibly on another machine (the cloud routine):
+ * recognised by its trailer, whose merged head is its second parent. A structural check only: the trailer is not signed,
+ * so each one is listed with its order reference, to be matched with the signed order of its pull request.
+ */
+export interface OrderMerge {
+    sha: string;
+    date: string;
+    nonce: string;
+    step: string;
+    head: string;
+}
 export interface MergeAudit {
     /** The branch audited (`origin/main`), and the commit it pointed to; null when it does not resolve. */
     ref: string;
@@ -38,6 +50,7 @@ export interface MergeAudit {
     commits: number;
     traces: number;
     unaccounted: UnaccountedCommit[];
+    orderMerges: OrderMerge[];
 }
 /** Default window when no trace exists yet: 30 days. */
 export declare const DEFAULT_AUDIT_DAYS = 30;

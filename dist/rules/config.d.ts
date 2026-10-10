@@ -24,6 +24,19 @@ export declare const DEFAULT_CAPTURE_THEMES: readonly CaptureTheme[];
 export declare const DOCS_ONLY_KINDS: readonly ["decisions", "mockups", "drafts", "specs", "journal", "docs"];
 export type DocsOnlyKind = typeof DOCS_ONLY_KINDS[number];
 export declare const rulesSchema: import("../domain/schema.js").Schema<{
+    readonly operatorOrders: {
+        readonly domain: string;
+        readonly publicKeys: string[];
+        readonly attestation: {
+            readonly url: string;
+            readonly maxAgeSeconds: number;
+            readonly timeoutMs: number;
+        };
+        readonly verify: {
+            readonly publication: string[];
+            readonly timeoutMs: number;
+        };
+    } | undefined;
     readonly captures: {
         readonly viewports: ("phone" | "desktop" | "tablet")[] | undefined;
         readonly themes: ("light" | "dark")[] | undefined;
