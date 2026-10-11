@@ -140,8 +140,57 @@ function screenReasonByPath(path, docsSite, screens) {
 const HASH_COMMENTS = /\.(?:ya?ml|sh|bash|zsh|py|rb|toml|conf|ini)$/;
 const SLASH_COMMENTS = /\.(?:[cm]?[jt]sx?|svelte|vue|astro)$/;
 const MARKUP_COMMENTS = /\.(?:html?|svelte|vue|astro|xml|svg)$/;
-/** Whether a line of `path` is only a comment: a reference in a comment loads nothing. Never for a style sheet or a text. */
-function commentLine(path, line) {
+/**
+ * The lines (numbered from 1) that start inside a block comment (slash-star to star-slash) of a script, strings and line comments followed
+ * from the start of the file. A text the scan cannot follow leaves a line outside: in doubt, not a comment.
+ */
+export function blockCommentLines(text) {
+    const inside = new Set();
+    let state = 'code';
+    let line = 1;
+    for (let k = 0; k < text.length; k += 1) {
+        const c = text[k];
+        if (c === '\n') {
+            line += 1;
+            if (state === 'line')
+                state = 'code';
+            if (state === 'block')
+                inside.add(line);
+            continue;
+        }
+        if (state === 'code') {
+            if (c === '/' && text[k + 1] === '/') {
+                state = 'line';
+                k += 1;
+            }
+            else if (c === '/' && text[k + 1] === '*') {
+                state = 'block';
+                k += 1;
+            }
+            else if (c === '"' || c === "'" || c === '`')
+                state = c;
+        }
+        else if (state === 'block') {
+            if (c === '*' && text[k + 1] === '/') {
+                state = 'code';
+                k += 1;
+            }
+        }
+        else if (state === '"' || state === "'" || state === '`') {
+            if (c === '\\')
+                k += 1;
+            else if (c === state)
+                state = 'code';
+        }
+    }
+    return inside;
+}
+/**
+ * Whether a line of `path` is only a comment: a reference in a comment loads nothing. Never for a style sheet or a text.
+ * A line that starts with `*` counts only inside a block comment opened above (`inBlock`, review of #135): elsewhere it
+ * may continue an expression (`  * (await import(…))`).
+ */
+function commentLine(path, line, inBlock) {
     const l = line.trim();
     if (HASH_COMMENTS.test(path) && l.startsWith('#'))
         return true;
@@ -151,8 +200,10 @@ function commentLine(path, line) {
         return false;
     if (l.startsWith('//'))
         return true;
-    if (l.startsWith('/*') || (l.startsWith('*') && !l.startsWith('*/')))
+    if (l.startsWith('/*'))
         return !/\*\/\s*\S/.test(l);
+    if (l.startsWith('*') && !l.startsWith('*/'))
+        return inBlock() && !/\*\/\s*\S/.test(l);
     return false;
 }
 /**
@@ -280,15 +331,23 @@ export function touchesNoScreen(repo, base, head, screens) {
             reasons.push('recherche des fichiers qui les nomment illisible : impossible de juger');
             return verdict();
         }
+        const blocks = new Map();
+        const inBlock = (path, line) => {
+            if (!blocks.has(path)) {
+                const text = gitRead(repo, ['show', `${head}:${path}`]);
+                blocks.set(path, text === null ? null : blockCommentLines(text));
+            }
+            return blocks.get(path)?.has(line) ?? false;
+        };
         for (const hit of found.status === 0 ? found.stdout.split('\n').filter(Boolean) : []) {
             // `<head>:<path>\0<line>\0<text>`; anything else (a binary file that matches) is not read: it may show the file.
-            const [where = '', , text = ''] = hit.split('\0');
+            const [where = '', lineNumber = '', text = ''] = hit.split('\0');
             if (!where.startsWith(`${head}:`)) {
                 reasons.push(`${where.slice(0, 120)} : fichier binaire qui nomme un fichier du changement`);
                 continue;
             }
             const path = where.slice(head.length + 1);
-            if (!referencerMayShow(path, docsSite, screens) || commentLine(path, text))
+            if (!referencerMayShow(path, docsSite, screens) || commentLine(path, text, () => inBlock(path, Number(lineNumber))))
                 continue;
             for (const [token, named] of byToken)
                 if (text.includes(token))
@@ -447,15 +506,19 @@ export async function checkMergeRules(input) {
     // reviews of the head before, said domain by domain (carry.ts, pilot project #230); its own reviews come first.
     const carried = carriedHeads(repo, sha, resolveCommit(repo, input.target)).map(head => ({ head, reviews: latestReviews(common, head) }));
     const usable = (r) => !!r && !r.problem && !!r.record && r.record.findings.critical === 0 && r.record.findings.high === 0;
+    const blocking = (r) => !!r?.record && (r.record.findings.critical > 0 || r.record.findings.high > 0);
+    // The review of the head always decides, even blocking (review of #135); a review is carried over only when the head
+    // has none of the domain, and a critical or high finding at any head of the chain (its latest review) blocks.
     const pick = (domain) => {
         const own = reviews.get(domain);
-        if (!usable(own))
-            for (const c of carried) {
-                const r = c.reviews.get(domain);
-                if (usable(r))
-                    return { found: r, from: c.head };
-            }
-        return { found: own, from: null };
+        if (own || !carried.length)
+            return { found: own, from: null };
+        const chain = carried.map(c => ({ head: c.head, r: c.reviews.get(domain) })).filter(x => x.r);
+        const stop = chain.find(x => blocking(x.r));
+        if (stop)
+            return { found: stop.r, from: stop.head };
+        const clean = chain.find(x => usable(x.r));
+        return clean ? { found: clean.r, from: clean.head } : { found: undefined, from: null };
     };
     const carriedNote = (from) => (from ? `relecture reportée de ${short(from)} (diff identique)` : '');
     const reviewProblems = [];
@@ -468,7 +531,7 @@ export async function checkMergeRules(input) {
         const f = found?.record?.findings;
         const problem = !found ? `aucune relecture enregistrée à ${short(sha)}`
             : found.problem || !found.record ? `relecture inutilisable (${found.problem ?? 'illisible'})`
-                : f.critical > 0 || f.high > 0 ? `${f.critical} constat(s) critique(s) et ${f.high} haut(s) à ${short(sha)}` : null;
+                : f.critical > 0 || f.high > 0 ? `${f.critical} constat(s) critique(s) et ${f.high} haut(s) à ${short(from ?? sha)}` : null;
         if (!problem) {
             domainStates.push({ domain, status: 'recorded', detail: `${found.record.reviewer}, critique 0, haut 0, moyen ${f.medium}, bas ${f.low}${from ? `, ${carriedNote(from)}` : ''}`, waiver: null });
             continue;

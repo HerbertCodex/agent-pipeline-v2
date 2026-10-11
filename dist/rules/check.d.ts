@@ -69,6 +69,11 @@ export interface RulesInput {
 }
 /** Whether the commit is a web interface: web dependencies in its package.json, or tracked interface files. */
 export declare function isWebAt(repo: string, sha: string): boolean;
+/**
+ * The lines (numbered from 1) that start inside a block comment (slash-star to star-slash) of a script, strings and line comments followed
+ * from the start of the file. A text the scan cannot follow leaves a line outside: in doubt, not a comment.
+ */
+export declare function blockCommentLines(text: string): Set<number>;
 export interface ScreenVerdict {
     /** Files of the change. */
     files: number;

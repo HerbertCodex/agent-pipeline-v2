@@ -423,6 +423,41 @@ test('relecture (#230): two updates with the base in a row keep the reviews of t
   assert.match(relecture.domains.map(d => d.detail).join('\n'), new RegExp(`reportée de ${t1.slice(0, 12)}`));
 });
 
+test('review of #135, high: a blocking review at the head always wins, and a critical or high finding anywhere in the chain blocks', async t => {
+  // A security review at T2 with a high finding, newer than the clean one of T1: refused, never carried over.
+  {
+    const { p, t2, at } = await updatedWithBase(t);
+    seedReview(p.repo, t2, 'securite', { high: 1, at: '2026-10-01T10:00:00.000Z' });
+    const relecture = rule(await at(t2), 'relecture');
+    assert.equal(relecture.status, 'refused', JSON.stringify(relecture));
+    assert.match(relecture.problems.join('\n'), /securite : 0 constat\(s\) critique\(s\) et 1 haut\(s\)/);
+  }
+  // A chain T1 → T2 → T3, a high finding at the middle head T2: refused at T3.
+  {
+    const { p, t2, at } = await updatedWithBase(t);
+    seedReview(p.repo, t2, 'securite', { high: 1, at: '2026-10-01T10:00:00.000Z' });
+    git(p.repo, 'switch', '-q', 'main'); put(p.repo, 'src/encore.ts', 'export const encore = 1;\n');
+    git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'la cible avance encore'); git(p.repo, 'push', '-q', 'origin', 'main');
+    git(p.repo, 'switch', '-q', 'feat'); git(p.repo, 'merge', '-q', '--no-edit', 'origin/main'); git(p.repo, 'push', '-q', 'origin', 'feat');
+    const relecture = rule(await at(git(p.repo, 'rev-parse', 'HEAD')), 'relecture');
+    assert.equal(relecture.status, 'refused', JSON.stringify(relecture));
+    assert.match(relecture.problems.join('\n'), new RegExp(`securite : 0 constat\\(s\\) critique\\(s\\) et 1 haut\\(s\\) à ${t2.slice(0, 12)}`));
+  }
+});
+
+test('review of #135, low: a line that starts with * counts as a comment only inside a block comment opened above', async t => {
+  const config = { review: { always: ['fidelite'] } };
+  const page = { ...SITE, 'src/lib/taux.test.ts': 'export default 2;\n',
+    'src/routes/compte/+page.ts': 'export const load = async () => ({ t: 1\n  * (await import("$lib/taux.test")).default });\nconst glob = "src/**/*.ts";\n' };
+  const r = rule((await project(t, { base: page, config, change: { 'src/lib/taux.test.ts': 'export default 3;\n' } }).check()).report, 'captures');
+  assert.equal(r.status, 'refused', JSON.stringify(r));
+  assert.match(r.detail, /src\/lib\/taux\.test\.ts : nommé par src\/routes\/compte\/\+page\.ts/);
+  // A real block comment still hides its mention.
+  const commented = { ...SITE, 'src/lib/taux.test.ts': 'export default 2;\n', 'src/lib/notes.ts': '/**\n * Voir $lib/taux.test pour les cas.\n */\nexport const n = 1;\n' };
+  const ok = rule((await project(t, { base: commented, config, change: { 'src/lib/taux.test.ts': 'export default 3;\n' } }).check()).report, 'captures');
+  assert.equal(ok.status, 'not_applicable', JSON.stringify(ok));
+});
+
 test('captures: without object once the fidelity review is lifted by a waiver; still required when a fidelity review is recorded (9 October 2026)', async t => {
   const screen = { 'src/routes/carte/+page.svelte': '<div class="carte">x</div>\n' };
   // By domain: « dérogation relecture:fidelite ».
