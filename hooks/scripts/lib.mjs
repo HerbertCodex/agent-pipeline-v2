@@ -1,7 +1,7 @@
 // Shared helpers for the APV plugin hooks. Node built-ins only: hooks run
 // before any dependency install and must never fail because of a package.
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** Reads the whole hook payload from stdin; resolves to null when it is not a JSON object. */
@@ -114,15 +114,27 @@ export const agentName = value => String(value ?? '').trim().replace(/^apv:/, ''
 
 /**
  * Files that set the environment of the session and of every hook at its next start: the settings of Claude Code (their
- * `env` block) and the profiles of the shells. An APV variable written there would reach the hooks without a command
- * (an authorisation such as APV_ALLOW_MERGE, a folder of locks...): the guards refuse it (docs/REGLES.md, « Ancrage »).
+ * `env` block, the hooks and plugins they switch off) and the profiles of the shells. What is written there reaches the
+ * hooks without a command (an authorisation such as APV_ALLOW_MERGE, code loaded by NODE_OPTIONS...): the guards refuse
+ * it (docs/REGLES.md, « Ancrage »).
  */
 const SHELL_PROFILES = new Set(['.bashrc', '.bash_profile', '.bash_login', '.bash_aliases', '.profile', '.zshrc', '.zshenv', '.zprofile',
   '.zlogin', '.kshrc', '.mkshrc', '.cshrc', '.tcshrc', '.login', '.envrc', '.pam_environment']);
 
-/** 'settings', 'profile' or null for a path. */
-export function environmentFile(path) {
-  const p = String(path ?? '').replace(/\\/g, '/');
+/**
+ * A path as the system reaches it: backslashes read as separators, `~` as the home, a relative path from `cwd`, then
+ * `.`, `..` and repeated separators collapsed (`.claude/./settings.json`, `.claude//x/../settings.json`).
+ */
+export function canonicalPath(path, { cwd = null, home = null } = {}) {
+  let p = String(path ?? '').replace(/\\/g, '/');
+  if (home && (p === '~' || p.startsWith('~/'))) p = `${home}${p.slice(1)}`;
+  if (!p.startsWith('/') && cwd) p = `${cwd}/${p}`;
+  return posix.normalize(p);
+}
+
+/** 'settings', 'profile' or null for a canonical path, by its name alone, case ignored (case-insensitive file systems). */
+function environmentFileByName(path) {
+  const p = path.toLowerCase();
   const base = p.split('/').pop() ?? '';
   if (/(?:^|\/)\.claude\/settings(?:\.local)?\.json$/.test(p) || base === 'settings.local.json' || base === 'managed-settings.json') return 'settings';
   if (SHELL_PROFILES.has(base) || p === '/etc/environment' || /(?:^|\/)(?:\.bashrc\.d|\.zshrc\.d|profile\.d|environment\.d)\/[^/]+$/.test(p)
@@ -130,9 +142,44 @@ export function environmentFile(path) {
   return null;
 }
 
-/** The same files named in a command, read flattened (`.ba""shrc`). */
-export const ENVIRONMENT_FILE_IN_TEXT = new RegExp('(?:^|[^\\w.-])(?:' + [...SHELL_PROFILES].map(n => n.replace(/\./g, '\\.')).join('|') +
-  '|settings\\.local\\.json|managed-settings\\.json|config\\.fish)(?![\\w.-])|\\.claude/+settings[\\w.-]*\\.json|/etc/environment\\b|(?:\\.bashrc\\.d|\\.zshrc\\.d|profile\\.d|environment\\.d|fish/conf\\.d)/');
+/**
+ * 'settings', 'profile' or null for a path, the one function both guards use: its canonical form (canonicalPath), then
+ * the file a symbolic link leads to (the path itself, or its folder when the file does not exist yet).
+ */
+export function environmentFile(path, where = {}) {
+  const p = canonicalPath(path, where);
+  const byName = environmentFileByName(p);
+  if (byName) return byName;
+  try { return environmentFileByName(realpathSync(p).replace(/\\/g, '/')); } catch { /* not there: its folder */ }
+  try { return environmentFileByName(posix.join(realpathSync(posix.dirname(p)).replace(/\\/g, '/'), posix.basename(p))); } catch { return null; }
+}
+
+/** The same files named in a text, read flattened and collapsed (`.ba""shrc`, `.claude/./settings.json`), case ignored. */
+const ENVIRONMENT_FILE_IN_TEXT = new RegExp('(?:^|[^\\w.-])(?:' + [...SHELL_PROFILES].map(n => n.replace(/\./g, '\\.')).join('|') +
+  '|settings\\.local\\.json|managed-settings\\.json|config\\.fish)(?![\\w.-])|\\.claude/settings[\\w.-]*\\.json|/etc/environment\\b|(?:\\.bashrc\\.d|\\.zshrc\\.d|profile\\.d|environment\\.d|fish/conf\\.d)/', 'i');
+
+function collapsePaths(text) {
+  let t = String(text).replace(/\/{2,}/g, '/');
+  for (let before = ''; before !== t;) { before = t; t = t.replace(/\/\.(?=\/)/g, '').replace(/[^/\s]+\/\.\.\//g, ''); }
+  return t;
+}
+
+/**
+ * The kinds of environment files a command names: in its text (flattened, collapsed), and each word that looks like a
+ * path judged by environmentFile from where the command runs (a link to a profile, a relative path).
+ */
+export function environmentFilesIn(command, where = {}) {
+  const kinds = new Set();
+  const flat = flatten(command);
+  const collapsed = collapsePaths(flat);
+  for (const m of collapsed.matchAll(new RegExp(ENVIRONMENT_FILE_IN_TEXT.source, 'gi'))) kinds.add(/settings|\.json/i.test(m[0]) ? 'settings' : 'profile');
+  for (const word of flat.split(/[\s;&|()<>=,`]+/)) {
+    if (!word || !/[/~.]/.test(word)) continue;
+    const kind = environmentFile(word, where);
+    if (kind) kinds.add(kind);
+  }
+  return kinds;
+}
 
 /** Escapes a shell or a JSON file turns into characters (`\x41`, `\101`, `A`), decoded. */
 export function decodeEscapes(text) {
@@ -141,42 +188,97 @@ export function decodeEscapes(text) {
   });
 }
 
+/** A text with escapes decoded, quotes and backslashes removed, then the formats of printf (`%s`) and every blank. */
+const compact = text => flatten(decodeEscapes(text)).replace(/%[-#0 +]*\d*(?:\.\d+)?[a-zA-Z]/g, '').replace(/\s+/g, '');
+
 /**
- * Whether a text names an APV variable, even rebuilt: escapes decoded, quotes and backslashes removed, then the formats
- * of printf (`%s`) and every blank, so that pieces put side by side (`'AP' 'V_X'`, `AP""V_X`, `A P V_X`) meet again.
+ * Whether a text names an APV variable, even rebuilt: pieces put side by side (`'AP' 'V_X'`, `AP""V_X`, `A P V_X`) meet
+ * again once compacted.
  */
 export function namesApvVariable(text) {
-  const compact = flatten(decodeEscapes(text)).replace(/%[-#0 +]*\d*(?:\.\d+)?[a-zA-Z]/g, '').replace(/\s+/g, '');
-  return /APV_/i.test(compact);
+  return /APV_/i.test(compact(text));
 }
 
 /**
- * Whether settings of Claude Code set an APV variable: their JSON read (escapes decoded), every key of `env`; a file
- * that is not JSON, by its text.
+ * Variables that make a program run other code (Node, the dynamic linker, a non-interactive shell): long names, found
+ * even rebuilt. ENV and PATH, short, count by their exact name only.
  */
-export function settingsSetApv(text) {
+const CODE_VARIABLES = /NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|BASH_ENV|DYLD_[A-Z_]+/i;
+const CODE_VARIABLE_NAME = /^(?:NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|BASH_ENV|DYLD_[A-Z_]+|ENV)$/i;
+
+/** Whether a text names a variable that makes a program run other code, even rebuilt. */
+export function namesCodeVariable(text) {
+  return CODE_VARIABLES.test(compact(text));
+}
+
+/**
+ * What settings of Claude Code hold that a guard watches, one entry per value: an APV variable, a variable that runs
+ * code or PATH in `env`; `disableAllHooks` set; the plugin apv not enabled in `enabledPlugins`. A text that is not JSON
+ * (Claude Code would not read it), by the names it holds.
+ */
+export function settingsGuarded(text) {
+  const out = new Set();
   let value;
-  try { value = JSON.parse(String(text ?? '')); } catch { return namesApvVariable(text); }
-  const env = value && typeof value === 'object' ? value.env : null;
-  if (env && typeof env === 'object') for (const key of Object.keys(env)) if (namesApvVariable(key)) return true;
-  return false;
+  try { value = JSON.parse(String(text ?? '')); } catch {
+    const words = compact(text).match(/APV_\w*|NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|BASH_ENV|DYLD_\w*|disableAllHooks|enabledPlugins|"(?:PATH|ENV)"/gi) ?? [];
+    for (const w of words) out.add(`texte:${w.toUpperCase()}`);
+    return out;
+  }
+  if (!value || typeof value !== 'object') return out;
+  const env = value.env;
+  if (env && typeof env === 'object') {
+    for (const [key, v] of Object.entries(env)) {
+      if (namesApvVariable(key) || CODE_VARIABLE_NAME.test(key) || /^PATH$/i.test(key)) out.add(`env:${key}=${JSON.stringify(v)}`);
+    }
+  }
+  if (value.disableAllHooks !== undefined && value.disableAllHooks !== false) out.add(`disableAllHooks=${JSON.stringify(value.disableAllHooks)}`);
+  const plugins = value.enabledPlugins;
+  if (plugins && typeof plugins === 'object') {
+    for (const [key, v] of Object.entries(plugins)) if (/^apv(?:@|$)/i.test(key) && v !== true) out.add(`enabledPlugins:${key}=${JSON.stringify(v)}`);
+  }
+  return out;
+}
+
+/** Whether settings once written hold a watched value (settingsGuarded) the settings before did not: an ordinary change passes. */
+export function settingsAddGuarded(after, before = '') {
+  const had = settingsGuarded(before);
+  return [...settingsGuarded(after)].some(entry => !had.has(entry));
+}
+
+/** The names a line of shell sets: `NAME=`, `export NAME=`, `setenv NAME`, `set -gx NAME` (fish). */
+function namesSet(line) {
+  const names = [...line.matchAll(/(?:^|[\s;&|(])([A-Za-z_]\w*)\+?=/g)].map(m => m[1]);
+  for (const m of line.matchAll(/(?:^|[\s;&|(])(?:setenv|set\s+-\w*[xgU]\w*)\s+([A-Za-z_]\w*)/g)) names.push(m[1]);
+  return names;
 }
 
 /**
- * Whether text added to a shell profile sets an APV variable, or may: the name literal or rebuilt (namesApvVariable), a
- * variable set or exported under a computed name (`export "${x}V_X"`, `printf -v`, `declare -n`, ANSI-C quoting `$'…'`),
- * or a text the shell runs without showing it (`eval`, `source`, `.`).
+ * Whether text added to a shell profile sets, or may set, what the guards watch: an APV variable or a variable that runs
+ * code (the name literal or rebuilt, or ENV by its exact name), a variable under a computed name (`export "${x}V_X"`,
+ * `printf -v`, `declare -n`, ANSI-C quoting `$'…'`), or a text the shell runs without showing it (`eval`, `source`, `.`).
+ * PATH is left to the profiles (`export PATH=$PATH:~/bin`), refused only in the settings.
  */
-export function profileMaySetApv(text) {
-  if (namesApvVariable(text)) return true;
+export function profileMaySetGuarded(text) {
+  if (namesApvVariable(text) || namesCodeVariable(text)) return true;
   for (const raw of String(text ?? '').split('\n')) {
     const line = raw.trim();
     if (!line || line.startsWith('#')) continue;
     if (/(?:^|[;&|(]\s*)(?:eval|source|\.)\s/.test(line)) return true;
     if (/\$'/.test(line) || /\bprintf\s+-v\b|\bdeclare\s+-\w*n|\btypeset\s+-\w*n/.test(line)) return true;
+    if (namesSet(flatten(line)).some(n => CODE_VARIABLE_NAME.test(n))) return true;
     // A name set by export, declare, setenv, set -x (fish)... that holds an expansion, a quote or a backslash.
     const setter = /(?:^|[;&|(]\s*)(?:export|declare|typeset|local|readonly|setenv|set\s+-\w*[xgU]\w*|env)\s+((?:-\w+\s+)*)([^\s=]+)/.exec(line);
     if (setter && /[$`\\'"{}]/.test(setter[2])) return true;
   }
   return false;
+}
+
+/** Whether a command's text sets a variable that runs code by its exact name (`ENV=`), or names one even rebuilt. */
+export function commandSetsCodeVariable(command) {
+  return namesCodeVariable(command) || flatten(command).split('\n').some(line => namesSet(line).some(n => CODE_VARIABLE_NAME.test(n)));
+}
+
+/** Whether a command's text puts in settings what they must not hold: env, a switched-off hook or plugin, PATH or ENV. */
+export function commandTouchesGuardedSettings(command) {
+  return /disableAllHooks|enabledPlugins|"?\b(?:PATH|ENV)\b"?\s*:/i.test(flatten(decodeEscapes(command)));
 }

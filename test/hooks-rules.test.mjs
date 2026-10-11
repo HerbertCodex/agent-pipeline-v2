@@ -963,3 +963,64 @@ test('M2: Bash never writes an APV variable into the settings of Claude Code or 
     assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
   }
 });
+
+test('review of #134, high: a settings file or a profile is recognised whatever the path that names it (., .., //, case, relative, symbolic link)', async t => {
+  const { symlinkSync } = await import('node:fs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-134-path-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, '.claude', 'sub'), { recursive: true });
+  writeFileSync(join(root, '.claude', 'settings.json'), '{}\n');
+  writeFileSync(join(root, '.bashrc'), 'alias ll="ls -l"\n');
+  symlinkSync(join(root, '.claude', 'settings.json'), join(root, 'lien.json'));
+  symlinkSync(join(root, '.bashrc'), join(root, 'notes.txt'));
+  const name = ['APV', 'ALLOW', 'MERGE'].join('_');
+  const json = `{"env":{"${name}":"1"}}`;
+  const write = (file_path, content, cwd = root) => evaluateWrite({ tool_name: 'Write', cwd, tool_input: { file_path, content } }).decision;
+  for (const path of [`${root}/.claude/./settings.json`, `${root}/.claude//settings.json`, `${root}/.claude/sub/../settings.json`, `${root}/.CLAUDE/Settings.JSON`, '.claude/./settings.local.json', `${root}/lien.json`]) {
+    assert.equal(write(path, json), 'deny', path);
+  }
+  assert.equal(write(`${root}/notes.txt`, `alias ll="ls -l"\nexport ${name}=1\n`), 'deny', 'a link to a profile');
+  assert.equal(write(`${root}/.claude/./autre.json`, json), 'allow', 'not a settings file');
+  const context = { ...as(null), cwd: root, home: root };
+  for (const command of [
+    `echo '${json}' > .claude/./settings.json`,
+    `echo '${json}' > .claude/sub/../settings.json`,
+    `echo '${json}' > ${root}/.claude//settings.local.json`,
+    `echo 'export ${name}=1' >> ~/./.bashrc`,
+    `echo 'export ${name}=1' >> ${root}/notes.txt`,
+    `echo '${json}' > ${root}/lien.json`,
+  ]) assert.equal(evaluateCommand(command, {}, context).decision, 'deny', command);
+  assert.equal(evaluateCommand(`echo '${json}' > ${root}/.claude/./autre.json`, {}, context).decision, 'allow', 'not a settings file');
+});
+
+test('review of #134, medium: the settings and the profiles never receive what runs code or switches the guards off', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'apv3-134-env-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const settings = join(root, '.claude', 'settings.json'); mkdirSync(dirname(settings));
+  writeFileSync(settings, '{\n  "env": { "PATH": "/usr/bin:/bin" },\n  "permissions": { "allow": [] }\n}\n');
+  const profile = join(root, '.bashrc'); writeFileSync(profile, 'alias ll="ls -l"\n');
+  const write = (file_path, content) => evaluateWrite({ tool_name: 'Write', tool_input: { file_path, content } }).decision;
+  const edit = (file_path, old_string, new_string) => evaluateWrite({ tool_name: 'Edit', tool_input: { file_path, old_string, new_string } }).decision;
+  const fresh = join(root, '.claude', 'settings.local.json');
+  for (const key of ['NODE_OPTIONS', 'NODE_PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'BASH_ENV', 'ENV', 'PATH', 'DYLD_INSERT_LIBRARIES']) {
+    assert.equal(write(fresh, `{"env":{"${key}":"/tmp/x"}}`), 'deny', `env ${key}`);
+  }
+  assert.equal(write(fresh, '{"disableAllHooks":true}'), 'deny', 'disableAllHooks');
+  assert.equal(write(fresh, '{"enabledPlugins":{"apv@apv-marketplace":false}}'), 'deny', 'apv disabled');
+  assert.equal(edit(settings, '"PATH": "/usr/bin:/bin"', '"PATH": "/tmp/piege:/usr/bin:/bin"'), 'deny', 'PATH changed');
+  // Ordinary changes stay allowed, an entry already there included.
+  assert.equal(edit(settings, '"allow": []', '"allow": ["Bash(npm test)"]'), 'allow', 'a permission added beside an existing PATH');
+  assert.equal(write(fresh, '{"skillOverrides":{"x":{"enabled":false}},"enabledPlugins":{"autre@m":false,"apv@apv-marketplace":true},"env":{"EDITOR":"vim"}}'), 'allow');
+  for (const added of ['export NODE_OPTIONS=--require=/tmp/x.js', 'LD_PRELOAD=/tmp/x.so', 'export BASH_ENV=/tmp/x', 'export ENV=/tmp/x', 'export NODE_PATH=/tmp', 'export LD_LIBRARY_PATH=/tmp', 'export NODE_""OPTIONS=x', 'setenv LD_PRELOAD /tmp/x.so']) {
+    assert.equal(edit(profile, 'alias ll="ls -l"', `alias ll="ls -l"\n${added}`), 'deny', added);
+  }
+  for (const added of ['export PATH="$PATH:$HOME/bin"', 'export EDITOR=vim', 'export ENVIRONMENT=prod']) {
+    assert.equal(edit(profile, 'alias ll="ls -l"', `alias ll="ls -l"\n${added}`), 'allow', added);
+  }
+  const lead = as(null);
+  for (const command of ["echo 'export NODE_OPTIONS=--require=/tmp/x.js' >> ~/.bashrc", "echo 'export ENV=/tmp/x' >> ~/.profile", `echo '{"disableAllHooks":true}' > .claude/settings.local.json`,
+    `echo '{"enabledPlugins":{"apv@m":false}}' > .claude/settings.json`, `echo '{"env":{"PATH":"/tmp"}}' > .claude/settings.json`]) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
+  }
+  assert.equal(evaluateCommand("echo 'export EDITOR=vim' >> ~/.bashrc", {}, lead).decision, 'allow');
+});

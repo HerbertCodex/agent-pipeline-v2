@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { accessSync, constants as fsConstants, existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DOMAIN_REVIEWERS, ENVIRONMENT_FILE_IN_TEXT, agentName, flatten, isMainModule, namesAnchor, namesApvVariable, readHookInput } from './lib.mjs';
+import { DOMAIN_REVIEWERS, agentName, commandSetsCodeVariable, commandTouchesGuardedSettings, environmentFilesIn, flatten, isMainModule, namesAnchor, namesApvVariable, readHookInput } from './lib.mjs';
 import { EMPTY_CONTEXT, HARNESS_REASONS, cdTarget, commandWords, hookContext, installProblem, killProblem, lockWrapper, mergeHeld, remoteWriteProblem, stackProblem } from './harness-guard.mjs';
 
 export { HARNESS_REASONS };
@@ -1350,10 +1350,10 @@ export const REASONS = {
     'Nomme le dossier précis dont tu as besoin.',
   encodedPath: 'APV : chemin décodé (base64) puis utilisé dans la même commande : refusé, les garde-fous doivent pouvoir lire ce que la commande touche.',
   toolVariable: 'APV : les variables internes de l\'outil (APV_ENTRY, APV_ANCHOR_KEY_FILE) ne se posent pas à la main.',
-  environmentFile: 'APV : commande refusée : elle peut mettre une variable APV_ (nom écrit ou reconstruit, contenu calculé ou copié) dans les réglages ' +
-    'de Claude Code (.claude/settings*.json) ou dans un profil du shell (~/.bashrc, ~/.profile, ~/.zshrc...). Ces fichiers fixent l\'environnement de la session ' +
-    'et de ses crochets au prochain lancement : une variable APV_ y lèverait un garde-fou sans commande. On les lit librement ; un texte littéral sans variable APV_ ' +
-    's\'y ajoute par echo ou printf ; le reste, l\'opérateur l\'écrit lui-même, dans son terminal.',
+  environmentFile: 'APV : commande refusée : elle peut mettre dans les réglages de Claude Code (.claude/settings*.json) ou un profil du shell (~/.bashrc, ~/.profile, ' +
+    '~/.zshrc..., par tout chemin équivalent ou un lien) une variable APV_ ou qui fait exécuter du code (NODE_OPTIONS, LD_PRELOAD, BASH_ENV, ENV..., nom écrit ou reconstruit), ' +
+    'ou, dans les réglages, PATH, disableAllHooks ou enabledPlugins, ou un contenu calculé ou copié. Ces fichiers fixent l\'environnement de la session et de ses ' +
+    'crochets au prochain lancement. On les lit librement ; un texte littéral sans rien de cela s\'y ajoute par echo ou printf ; le reste, l\'opérateur l\'écrit lui-même, dans son terminal.',
   nestedClaude: 'APV : lancer claude depuis une session gérée par APV est refusé (sauf claude --version et claude -p /usage) : une session imbriquée échappe aux garde-fous des sous-agents ' +
     '(fusion, relecture). Les agents se lancent par l\'outil Agent du chef de projet. Une commande `claude plugin …` (installation, mise à jour) se tape dans un terminal, hors de Claude Code.',
   mergeBySubagent: 'APV : fusion refusée dans un sous-agent. Seul le chef de projet (session principale) fusionne, par apv stack merge, ' +
@@ -1396,25 +1396,28 @@ const ENV_READERS = new Set(['cat', 'less', 'more', 'head', 'tail', 'grep', 'egr
 const ENV_LITERAL_WRITERS = new Set(['echo', 'printf', 'tee', 'true', ':', 'touch']);
 
 /**
- * Whether a command may put an APV variable in a file that sets the environment of the session and of its hooks (the
- * settings of Claude Code, a shell profile; lib.mjs, environmentFile). Such a file named, the line is refused when its
- * text names an APV variable even rebuilt (namesApvVariable: escapes, quotes, pieces side by side, printf formats), and,
- * unless it only reads, when what it writes is not the text it shows: an expansion (`$`, a backquote), a program that
- * computes or copies (sed, tr, jq, cp, mv, an interpreter...), `cat` of a file. A line that writes an APV variable
- * through a redirection or tee to a computed target (`>> ~/$f`) is refused too.
+ * Whether a command may put in a file that sets the environment of the session and of its hooks (the settings of Claude
+ * Code, a shell profile, named by any equivalent path or a link: lib.mjs, environmentFilesIn) what the guards watch. Such
+ * a file named, the line is refused when its text names an APV variable or a variable that runs code, even rebuilt
+ * (escapes, quotes, pieces side by side, printf formats), or sets ENV; unless it only reads, when it writes into settings
+ * an env block value, PATH, disableAllHooks or enabledPlugins, and when what it writes is not the text it shows: an
+ * expansion (`$`, a backquote), a program that computes or copies (sed, tr, jq, cp, mv, an interpreter...), `cat` of a
+ * file. A line that writes such a variable through a redirection or tee to a computed target (`>> ~/$f`) is refused too.
  */
-export function environmentCommandProblem(command, segments, shadow) {
+export function environmentCommandProblem(command, segments, shadow, where = {}) {
   const flat = flatten(String(command));
-  const apv = namesApvVariable(command);
+  const guarded = namesApvVariable(command) || commandSetsCodeVariable(command);
   const words = segments.map(w => commandWords(w)?.words ?? w).filter(w => w.length);
   const outputs = [...String(command).matchAll(/(?:^|[^<&\d])\d?>{1,2}\|?\s*([^\s;&|<>()]+)/g)].map(m => m[1])
     .concat(words.filter(w => basename(w[0]) === 'tee').flatMap(w => w.slice(1).filter(a => !a.startsWith('-'))));
   const redirects = /(?:^|[^<&\d-])\d?>{1,2}(?!&)/.test(String(shadow ?? command));
-  if (!ENVIRONMENT_FILE_IN_TEXT.test(flat)) {
-    return apv && outputs.some(target => /[$`*?[~]/.test(target) && !/^\/dev\/(?:null|stdout|stderr)$/.test(target));
+  const kinds = environmentFilesIn(command, where);
+  if (!kinds.size) {
+    return guarded && outputs.some(target => /[$`*?[~]/.test(target) && !/^\/dev\/(?:null|stdout|stderr)$/.test(target));
   }
-  if (apv) return true;
+  if (guarded) return true;
   if (!redirects && words.every(w => ENV_READERS.has(basename(w[0])) && !(basename(w[0]) === 'jq' && w.includes('--in-place')))) return false;
+  if (kinds.has('settings') && commandTouchesGuardedSettings(command)) return true;
   if (/[$`]/.test(flat)) return true;
   return !words.every(w => {
     const name = basename(w[0]);
@@ -1459,7 +1462,7 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
   if (active && /--git-common-dir/.test(flat) && !/^\s*git\s+rev-parse(\s+--path-format=(absolute|relative))?\s+--git-common-dir\s*$/.test(flat)) return { decision: 'deny', reason: REASONS.commonDir };
   if (active && /(^|[\s;&|(])eval\b/.test(flat) && /\bapv\b|cli\.js/.test(flat)) return { decision: 'deny', reason: REASONS.computedApv };
   if (/\bAPV_ENTRY\b|\bAPV_ANCHOR_KEY_FILE\b/.test(flat)) return { decision: 'deny', reason: REASONS.toolVariable };
-  if (environmentCommandProblem(command, segments, shadow)) return { decision: 'deny', reason: REASONS.environmentFile };
+  if (environmentCommandProblem(command, segments, shadow, { cwd: start && start.known ? start.dir : context.cwd ?? null, home: context.home ?? null })) return { decision: 'deny', reason: REASONS.environmentFile };
   if (decodedAndUsed(command) || decodedAndUsed(flat)) return { decision: 'deny', reason: REASONS.encodedPath };
   // A script or substitution run by a command of the line is judged in the folder where that command runs.
   const store = storeProblem(segments, start && start.known ? start.dir : context.cwd ?? null, context.home ?? null, command, shadow, scripts);
