@@ -525,6 +525,36 @@ test('faible (confirmation de #132) : la cible rafraîchie après une poussée r
   assert.match(report.reason, /rules\.ciProof/);
 });
 
+test('attestation (review of #226): a 429 of the production is tried again after its wait, bounded; a wait too long or 429 every time refuses', async t => {
+  // A first 429 (Retry-After: 2), then the production answers: merged, after one wait of 2 s.
+  {
+    const sc = scenario(t);
+    let calls = 0; const waits = [];
+    const fetch = async (url, init) => (calls += 1) === 1 ? new Response('{}', { status: 429, headers: { 'retry-after': '2' } }) : sc.production.fetch(url, init);
+    const report = await sc.run({ fetch, sleep: async ms => { waits.push(ms); } });
+    assert.equal(report.status, 'merged', report.reason);
+    assert.deepEqual(waits, [2000]);
+  }
+  // 429 at every try: refused (attestation) after a bounded number of tries, nothing pushed.
+  {
+    const sc = scenario(t);
+    let calls = 0;
+    const report = await sc.run({ fetch: async () => { calls += 1; return new Response('{}', { status: 429 }); }, sleep: async () => {} });
+    refused(report, 'attestation');
+    assert.match(report.reason, /429/);
+    assert.equal(calls, 3);
+  }
+  // A wait longer than the bound: refused at once, the wait said.
+  {
+    const sc = scenario(t);
+    let calls = 0;
+    const report = await sc.run({ fetch: async () => { calls += 1; return new Response('{}', { status: 429, headers: { 'retry-after': '3600' } }); }, sleep: async () => {} });
+    refused(report, 'attestation');
+    assert.match(report.reason, /3600/);
+    assert.equal(calls, 1);
+  }
+});
+
 test('faible : attestation en HTTP refusée, boucle locale comprise, sans aucun mode qui la permette', () => {
   const s = signer();
   const raw = { rules: { operatorOrders: { ...orderConfig(s.pem).rules.operatorOrders, attestation: { url: 'http://127.0.0.1:8080/a?nonce={nonce}&challenge={challenge}' } } } };
