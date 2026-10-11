@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import { maskSecrets } from '../knowledge/code-map.js';
@@ -34,25 +34,41 @@ export const ANCHOR_FILE = 'cle-ancrage';
 export function anchorKeyFile() {
     return keyFileOverride ?? join(userInfo().homedir, ANCHOR_DIR, ANCHOR_FILE);
 }
-export function readAnchorKey(file = anchorKeyFile()) {
+function readKeyFile(file) {
+    let text;
     try {
-        const text = readFileSync(file, 'utf8').trim();
-        return /^[0-9a-f]{64}$/.test(text) ? Buffer.from(text, 'hex') : null;
+        text = readFileSync(file, 'utf8').trim();
     }
-    catch {
-        return null;
+    catch (error) {
+        return error.code === 'ENOENT' ? { state: 'absent' } : { state: 'incomplete' };
     }
+    return /^[0-9a-f]{64}$/.test(text) ? { state: 'key', key: Buffer.from(text, 'hex') } : { state: 'incomplete' };
+}
+export function readAnchorKey(file = anchorKeyFile()) {
+    const read = readKeyFile(file);
+    return read.state === 'key' ? read.key : null;
 }
 /** Fingerprint of the key in the Git common directory of each project: a replaced key is detected, never trusted. */
 export const KEY_FINGERPRINT = ['apv', 'operator', 'cle.empreinte'];
 const fingerprintOf = (key) => createHash('sha256').update(Buffer.concat([Buffer.from('apv-anchor-fingerprint\n'), key])).digest('hex');
+/**
+ * The fingerprint the project recorded: null only when there is no file. A file that cannot be read whole (half written,
+ * damaged) is `'unreadable'`, never taken for an absent fingerprint, which would let any key through and be recorded anew.
+ */
 function readFingerprint(common) {
+    let text;
     try {
-        const v = JSON.parse(readFileSync(join(common, ...KEY_FINGERPRINT), 'utf8'));
-        return typeof v.sha256 === 'string' && typeof v.createdAt === 'string' ? { sha256: v.sha256, createdAt: v.createdAt } : null;
+        text = readFileSync(join(common, ...KEY_FINGERPRINT), 'utf8');
+    }
+    catch (error) {
+        return error.code === 'ENOENT' ? null : 'unreadable';
+    }
+    try {
+        const v = JSON.parse(text);
+        return typeof v.sha256 === 'string' && /^[0-9a-f]{64}$/.test(v.sha256) && typeof v.createdAt === 'string' ? { sha256: v.sha256, createdAt: v.createdAt } : 'unreadable';
     }
     catch {
-        return null;
+        return 'unreadable';
     }
 }
 /** Whether the project already holds something signed (journal, review seals, merge traces): its key cannot be made anew. */
@@ -79,69 +95,125 @@ function signedArtifacts(common) {
 }
 /**
  * The key as the tool may trust it for a project: present, and the one whose fingerprint the project recorded. A missing
- * key, or another one (deleted then made anew), gives no key and the problem: nothing signed is then accepted.
+ * key, or another one (deleted then made anew), or a fingerprint that cannot be read gives no key and the problem: nothing
+ * signed is then accepted.
  */
 export function anchorKey(common, file = anchorKeyFile()) {
     const key = readAnchorKey(file);
     const fp = readFingerprint(common);
+    if (fp === 'unreadable')
+        return { key: null, problem: `empreinte de la clé d'ancrage illisible (${join(common, ...KEY_FINGERPRINT)}) : l'opérateur la vérifie ; rien de signé n'est accepté tant qu'elle ne se lit pas`, createdAt: null };
     if (!key)
         return { key: null, problem: `clé d'ancrage absente (${file}) : l'opérateur la restaure depuis sa sauvegarde ; rien de signé n'est accepté sans elle`, createdAt: fp?.createdAt ?? null };
     if (fp && fp.sha256 !== fingerprintOf(key))
         return { key: null, problem: `clé d'ancrage remplacée (empreinte différente de celle du projet) : l'opérateur restaure l'ancienne depuis sa sauvegarde ; rien de signé n'est accepté`, createdAt: fp.createdAt };
     return { key, problem: null, createdAt: fp?.createdAt ?? null };
 }
+/** How long a hook waits for a key file another hook is writing: 100 readings, 20 ms apart. */
+const KEY_WAIT_TURNS = 100;
+const KEY_WAIT_MS = 20;
 /**
  * The key, for the hooks only. Created (32 random bytes, file 0400 in a folder 0700) only when absent and the project holds
  * nothing signed yet; never made anew in silence once something was signed (a deleted key would otherwise let anyone sign).
  * Records the fingerprint of the key in the project on first use.
+ *
+ * Hooks run together (four reviewers sealing at once): the key appears whole in one step (written aside, then linked under
+ * its name, which fails when it exists), always before its fingerprint; a key file seen incomplete is waited for, a bounded
+ * time, never taken for absent; nothing is accepted by default.
  */
 export function ensureAnchorKey(common, file = anchorKeyFile()) {
     const found = anchorKey(common, file);
-    if (found.key) {
-        if (!readFingerprint(common))
-            writeFingerprint(common, found.key, new Date().toISOString());
-        return found.key;
-    }
-    if (readAnchorKey(file)) {
-        // Written by another hook since the first reading (four reviewers sealing together): read again.
-        const again = anchorKey(common, file);
-        if (again.key) {
-            if (!readFingerprint(common))
-                writeFingerprint(common, again.key, new Date().toISOString());
-            return again.key;
+    if (found.key)
+        return withFingerprint(common, found.key);
+    if (readFingerprint(common) === 'unreadable')
+        throw new Error(found.problem ?? 'empreinte de la clé d\'ancrage illisible');
+    if (readKeyFile(file).state === 'absent') {
+        // What the project holds is read before the key is looked for again: a hook that creates the key links it, whole,
+        // before it records the fingerprint, so a key another hook made in between is seen by this second look.
+        const signed = readFingerprint(common) !== null || signedArtifacts(common);
+        if (readKeyFile(file).state === 'absent') {
+            if (signed)
+                throw new Error(found.problem ?? 'clé d\'ancrage absente');
+            mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+            const key = randomBytes(32);
+            // Another hook may create it at the same instant: the one that links first wins, the others read its key.
+            if (createExclusive(file, `${key.toString('hex')}\n`, 0o400))
+                return withFingerprint(common, key);
         }
-        throw new Error(again.problem ?? 'clé d\'ancrage inutilisable');
     }
-    if (readFingerprint(common) || signedArtifacts(common))
-        throw new Error(found.problem ?? 'clé d\'ancrage inutilisable');
-    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-    const key = randomBytes(32);
-    try {
-        writeFileSync(file, `${key.toString('hex')}\n`, { mode: 0o400, flag: 'wx' });
-    }
-    catch (error) {
-        // Another hook created it at the same instant (four reviewers sealing together): use that key, once it is written.
-        if (error.code !== 'EEXIST')
-            throw error;
-        for (let attempt = 0; attempt < 50; attempt += 1) {
-            const other = anchorKey(common, file);
-            if (other.key) {
-                if (!readFingerprint(common))
-                    writeFingerprint(common, other.key, new Date().toISOString());
-                return other.key;
-            }
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-        }
-        throw error;
-    }
-    chmodSync(file, 0o400);
-    writeFingerprint(common, key, new Date().toISOString());
-    return key;
+    return awaitKey(common, file);
 }
-function writeFingerprint(common, key, createdAt) {
+/** The key another hook created or is writing: read until it is whole, a bounded time; refused if it never is. */
+function awaitKey(common, file) {
+    for (let turn = 0; turn < KEY_WAIT_TURNS; turn += 1) {
+        const found = anchorKey(common, file);
+        if (found.key)
+            return withFingerprint(common, found.key);
+        // A whole key that is refused (replaced, fingerprint unreadable) does not get better by waiting.
+        if (readKeyFile(file).state === 'key')
+            throw new Error(found.problem ?? 'clé d\'ancrage inutilisable');
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, KEY_WAIT_MS);
+    }
+    throw new Error(`clé d'ancrage illisible (${file}) : le fichier existe mais ne contient pas une clé entière ; l'opérateur la restaure depuis sa sauvegarde ; rien de signé n'est accepté`);
+}
+/** The key, its fingerprint recorded in the project when it has none yet. */
+function withFingerprint(common, key) {
+    if (readFingerprint(common) !== null)
+        return key;
     const f = join(common, ...KEY_FINGERPRINT);
     mkdirSync(dirname(f), { recursive: true, mode: 0o700 });
-    writeFileSync(f, `${JSON.stringify({ sha256: fingerprintOf(key), createdAt })}\n`, { mode: 0o600 });
+    // Recorded once: another hook recording the same key at the same instant keeps its line.
+    createExclusive(f, `${JSON.stringify({ sha256: fingerprintOf(key), createdAt: new Date().toISOString() })}\n`, 0o600);
+    return key;
+}
+/** Codes of a file system that cannot make a hard link. */
+const NO_LINK = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV']);
+/**
+ * Creates `path` with `content`, whole, only if it does not exist: written and synced aside, then linked under its name
+ * (link fails when the name exists), so a reader sees no file or the whole file. True when created, false when it existed.
+ * On a file system without hard links, an exclusive creation (open O_EXCL), whose readers wait for the content.
+ */
+function createExclusive(path, content, mode) {
+    const aside = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    const fd = openSync(aside, 'wx', mode);
+    try {
+        try {
+            writeFileSync(fd, content);
+            fsyncSync(fd);
+        }
+        finally {
+            closeSync(fd);
+        }
+        chmodSync(aside, mode);
+    }
+    catch (error) {
+        rmSync(aside, { force: true });
+        throw error;
+    }
+    try {
+        linkSync(aside, path);
+        return true;
+    }
+    catch (error) {
+        const code = error.code ?? '';
+        if (code === 'EEXIST')
+            return false;
+        if (!NO_LINK.has(code))
+            throw error;
+        try {
+            writeFileSync(path, content, { mode, flag: 'wx' });
+        }
+        catch (e) {
+            if (e.code === 'EEXIST')
+                return false;
+            throw e;
+        }
+        chmodSync(path, mode);
+        return true;
+    }
+    finally {
+        rmSync(aside, { force: true });
+    }
 }
 /**
  * Signing is for the tool run as a command (`bin/apv`, `dist/cli.js`, which set APV_ENTRY) and for the hooks: a script

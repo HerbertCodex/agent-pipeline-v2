@@ -37,13 +37,18 @@ export interface AnchorKey {
 }
 /**
  * The key as the tool may trust it for a project: present, and the one whose fingerprint the project recorded. A missing
- * key, or another one (deleted then made anew), gives no key and the problem: nothing signed is then accepted.
+ * key, or another one (deleted then made anew), or a fingerprint that cannot be read gives no key and the problem: nothing
+ * signed is then accepted.
  */
 export declare function anchorKey(common: string, file?: string): AnchorKey;
 /**
  * The key, for the hooks only. Created (32 random bytes, file 0400 in a folder 0700) only when absent and the project holds
  * nothing signed yet; never made anew in silence once something was signed (a deleted key would otherwise let anyone sign).
  * Records the fingerprint of the key in the project on first use.
+ *
+ * Hooks run together (four reviewers sealing at once): the key appears whole in one step (written aside, then linked under
+ * its name, which fails when it exists), always before its fingerprint; a key file seen incomplete is waited for, a bounded
+ * time, never taken for absent; nothing is accepted by default.
  */
 export declare function ensureAnchorKey(common: string, file?: string): Buffer;
 export declare function sign(key: Buffer, kind: string, payload: string): string;

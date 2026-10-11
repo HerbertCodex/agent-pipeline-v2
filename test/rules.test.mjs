@@ -729,6 +729,84 @@ test('review of 440d57d, N5: hooks creating the anchor key at the same instant a
   }
 });
 
+/**
+ * Runs `body` while the reads of `file` (readFileSync, as the module reads it) go through `onRead(text, count)`: the
+ * window of another process, replayed at a chosen read. The original function is put back whatever happens.
+ */
+async function withReadsOf(file, onRead, body) {
+  const fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const original = fs.readFileSync;
+  let count = 0;
+  fs.readFileSync = function (path, ...rest) {
+    const text = original.call(this, path, ...rest);
+    return path === file ? onRead(text, (count += 1)) : text;
+  };
+  syncBuiltinESMExports();
+  try { return await body(); } finally { fs.readFileSync = original; syncBuiltinESMExports(); }
+}
+
+const fingerprintLine = async key => {
+  const { createHash } = await import('node:crypto');
+  const sha256 = createHash('sha256').update(Buffer.concat([Buffer.from('apv-anchor-fingerprint\n'), key])).digest('hex');
+  return `${JSON.stringify({ sha256, createdAt: new Date().toISOString() })}\n`;
+};
+
+test('N5, the window: a key another hook is still writing (file created empty, then filled with its fingerprint) is waited for, never taken for absent nor made anew', async t => {
+  const { ensureAnchorKey, KEY_FINGERPRINT } = await import('../dist/rules/operator.js');
+  const { randomBytes } = await import('node:crypto');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-key-window-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const common = join(root, 'commun'); mkdirSync(common);
+  const keyFile = join(root, 'cle', 'cle-ancrage'); mkdirSync(dirname(keyFile));
+  // The other hook has opened the file (exclusive creation) but not written it yet.
+  writeFileSync(keyFile, '');
+  const theirs = randomBytes(32);
+  const fingerprint = join(common, ...KEY_FINGERPRINT);
+  const line = await fingerprintLine(theirs);
+  // It finishes right after the second reading of the empty file: the key, then its fingerprint in the project.
+  const got = await withReadsOf(keyFile, (text, count) => {
+    if (count === 2) {
+      writeFileSync(keyFile, `${theirs.toString('hex')}\n`);
+      mkdirSync(dirname(fingerprint), { recursive: true }); writeFileSync(fingerprint, line);
+    }
+    return text;
+  }, () => ensureAnchorKey(common, keyFile));
+  assert.equal(got.toString('hex'), theirs.toString('hex'), 'the key of the other hook, once complete');
+  assert.equal(readFileSync(keyFile, 'utf8'), `${theirs.toString('hex')}\n`, 'never made anew');
+  assert.equal(readFileSync(fingerprint, 'utf8'), line, 'its fingerprint kept');
+});
+
+test('N5, the window: a key file that stays incomplete is refused after a bounded wait, never replaced', async t => {
+  const { ensureAnchorKey } = await import('../dist/rules/operator.js');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-key-partial-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const common = join(root, 'commun'); mkdirSync(common);
+  const keyFile = join(root, 'cle', 'cle-ancrage'); mkdirSync(dirname(keyFile));
+  writeFileSync(keyFile, 'ab'.repeat(10));
+  assert.throws(() => ensureAnchorKey(common, keyFile), /clé d'ancrage illisible/);
+  assert.equal(readFileSync(keyFile, 'utf8'), 'ab'.repeat(10));
+  assert.equal(existsSync(join(common, 'apv')), false, 'no fingerprint recorded');
+});
+
+test('N5, the window: a fingerprint read half written (or damaged) is no absent fingerprint: the key is refused, the fingerprint never rewritten', async t => {
+  const { anchorKey, ensureAnchorKey, KEY_FINGERPRINT } = await import('../dist/rules/operator.js');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-key-fp-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const common = join(root, 'commun');
+  const fingerprint = join(common, ...KEY_FINGERPRINT); mkdirSync(dirname(fingerprint), { recursive: true });
+  // The project recorded the fingerprint of key A; the file is read while being written: only its first bytes.
+  const recorded = await fingerprintLine(Buffer.from('cd'.repeat(32), 'hex'));
+  writeFileSync(fingerprint, recorded.slice(0, 20));
+  // Another key B sits in the key file.
+  const keyFile = join(root, 'cle-ancrage'); writeFileSync(keyFile, `${'ab'.repeat(32)}\n`);
+  const found = anchorKey(common, keyFile);
+  assert.equal(found.key, null, 'key B is not accepted when the fingerprint cannot be read');
+  assert.match(found.problem, /empreinte de la clé d'ancrage illisible/);
+  assert.throws(() => ensureAnchorKey(common, keyFile), /empreinte de la clé d'ancrage illisible/);
+  assert.equal(readFileSync(fingerprint, 'utf8'), recorded.slice(0, 20), 'never rewritten with the fingerprint of B');
+});
+
 test('review of #105, D1 and D2: under the lock of an ancestor, the turn is bounded by lock.waitMs and shared across processes', { skip: spawnSyncOk('flock', ['--version']) ? false : 'flock(1) missing' }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'apv3-held-under-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
