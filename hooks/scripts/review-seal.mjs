@@ -7,7 +7,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { isMainModule, readHookInput } from './lib.mjs';
+import { isMainModule, readHookInput, testKeyFile } from './lib.mjs';
 import { apvArguments, reviewRecordCall, reviewRecordProblem, tokenize } from './bash-guard.mjs';
 import { cdTarget } from './harness-guard.mjs';
 
@@ -60,6 +60,8 @@ export function recordCommit(common, id, domain) {
 }
 
 async function main() {
+  // The key file of a test, read in the test mode the hook inherits, before it sets its own entry.
+  const keyOverride = testKeyFile(process.env);
   process.env.APV_ENTRY = 'hook';
   const input = await readHookInput();
   const request = sealRequest(input);
@@ -67,7 +69,7 @@ async function main() {
   const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
   const operator = await import(OPERATOR_MODULE.href);
   const reviews = await import(REVIEWS_MODULE.href);
-  const keyFile = typeof process.env.APV_ANCHOR_KEY_FILE === 'string' && process.env.APV_ANCHOR_KEY_FILE ? process.env.APV_ANCHOR_KEY_FILE : operator.anchorKeyFile();
+  const keyFile = keyOverride ?? operator.anchorKeyFile();
   // Sealed in the repository where the record was written: the session may sit in another one (a reviewer launched from
   // the session of an application, on a copy of the tool).
   for (const dir of recordDirectories(input.tool_input?.command, cwd, process.env.HOME ?? null)) {

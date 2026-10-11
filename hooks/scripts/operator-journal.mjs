@@ -14,7 +14,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { findApvDir, isMainModule, readHookInput } from './lib.mjs';
+import { findApvDir, isMainModule, readHookInput, testKeyFile } from './lib.mjs';
 
 const OPERATOR_MODULE = new URL('../../dist/rules/operator.js', import.meta.url);
 /** Sources of the operator's own typing. */
@@ -91,11 +91,6 @@ export function sessionOrigin(read = procProcess, start = process.ppid) {
     : { interactive: false, reason: 'aucune session Claude Code parmi les processus parents du crochet' };
 }
 
-/** The key file: `APV_ANCHOR_KEY_FILE` (set for the hook by its launcher, tests only), else the account's configuration folder. */
-export function hookKeyFile(operator, env = process.env) {
-  return typeof env.APV_ANCHOR_KEY_FILE === 'string' && env.APV_ANCHOR_KEY_FILE ? env.APV_ANCHOR_KEY_FILE : operator.anchorKeyFile();
-}
-
 function commonDir(cwd) {
   const r = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
   return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : null;
@@ -109,6 +104,8 @@ function journalDays(apvDir, fallback) {
 }
 
 async function main() {
+  // The key file of a test, read in the test mode the hook inherits, before it sets its own entry.
+  const keyOverride = testKeyFile(process.env);
   process.env.APV_ENTRY = 'hook';
   const input = await readHookInput();
   const decision = operatorEntry(input, input && !input.source ? sessionOrigin() : null);
@@ -120,7 +117,7 @@ async function main() {
   const operator = await import(OPERATOR_MODULE.href);
   if (decision.refuse) { operator.recordRefusal(common, decision.refuse); return 0; }
   let key;
-  try { key = operator.ensureAnchorKey(common, hookKeyFile(operator)); }
+  try { key = operator.ensureAnchorKey(common, keyOverride ?? operator.anchorKeyFile()); }
   catch (error) { operator.recordRefusal(common, error?.message ?? String(error)); return 0; }
   const entry = operator.journalEntry(decision.keep.text, { at: new Date().toISOString(), session: decision.keep.session }, key);
   if (entry) operator.appendJournal(common, entry, journalDays(apvDir, operator.DEFAULT_JOURNAL_DAYS));

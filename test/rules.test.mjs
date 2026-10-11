@@ -376,9 +376,9 @@ test('review of PR #128, F3: the template of the tool quoted by the operator is 
 test('operator journal: quotes and waivers are compared without typography, never a short quote', () => {
   const said = text => journalEntry(text, { at: 't', session: 's' }, TEST_KEY);
   const messages = [said('Je valide la maquette\u00a0: on part là-dessus'), said('ok')];
-  assert.ok(anchoredQuote(messages, 'je valide la maquette : on part là-dessus'));
-  assert.equal(anchoredQuote(messages, 'ok'), null, 'too short to anchor anything');
-  assert.equal(anchoredQuote(messages, 'Je valide la maquette : on part ailleurs'), null);
+  assert.ok(anchoredQuote(messages, 'je valide la maquette : on part là-dessus', TEST_KEY));
+  assert.equal(anchoredQuote(messages, 'ok', TEST_KEY), null, 'too short to anchor anything');
+  assert.equal(anchoredQuote(messages, 'Je valide la maquette : on part ailleurs', TEST_KEY), null);
   const sha = 'abcdef0123456789'.repeat(3).slice(0, 40);
   assert.equal(waiverFor([said(`derogation maquette ${sha.slice(0, 11)} : trop court comme préfixe`)], 'maquette', sha), null);
   assert.ok(waiverFor([said(`Bonjour\ndérogation maquette pour ${sha} : écran déjà validé à l'oral`)], 'maquette', sha));
@@ -727,6 +727,244 @@ test('review of 440d57d, N5: hooks creating the anchor key at the same instant a
     assert.equal(new Set(outputs).size, 1, JSON.stringify(outputs));
     assert.match(outputs[0], /^[0-9a-f]{64}$/);
   }
+});
+
+/**
+ * Runs `body` while the reads of `file` (readFileSync, as the module reads it) go through `onRead(text, count)`: the
+ * window of another process, replayed at a chosen read. The original function is put back whatever happens.
+ */
+async function withReadsOf(file, onRead, body) {
+  const fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const [original, originalOpen] = [fs.readFileSync, fs.openSync];
+  // The module may read the file by its path or by a descriptor it opened on it.
+  const opened = new Set();
+  let count = 0;
+  fs.openSync = function (path, ...rest) {
+    const fd = originalOpen.call(this, path, ...rest);
+    if (path === file) opened.add(fd); else opened.delete(fd);
+    return fd;
+  };
+  fs.readFileSync = function (path, ...rest) {
+    const text = original.call(this, path, ...rest);
+    return path === file || opened.has(path) ? onRead(text, (count += 1)) : text;
+  };
+  syncBuiltinESMExports();
+  try { return await body(); } finally { fs.readFileSync = original; fs.openSync = originalOpen; syncBuiltinESMExports(); }
+}
+
+const fingerprintLine = async key => {
+  const { createHash } = await import('node:crypto');
+  const sha256 = createHash('sha256').update(Buffer.concat([Buffer.from('apv-anchor-fingerprint\n'), key])).digest('hex');
+  return `${JSON.stringify({ sha256, createdAt: new Date().toISOString() })}\n`;
+};
+
+test('N5, the window: a key another hook is still writing (file created empty, then filled with its fingerprint) is waited for, never taken for absent nor made anew', async t => {
+  const { ensureAnchorKey, KEY_FINGERPRINT } = await import('../dist/rules/operator.js');
+  const { randomBytes } = await import('node:crypto');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-key-window-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const common = join(root, 'commun'); mkdirSync(common);
+  const keyFile = join(root, 'cle', 'cle-ancrage'); mkdirSync(dirname(keyFile));
+  // The other hook has opened the file (exclusive creation) but not written it yet.
+  writeFileSync(keyFile, '');
+  const theirs = randomBytes(32);
+  const fingerprint = join(common, ...KEY_FINGERPRINT);
+  const line = await fingerprintLine(theirs);
+  // It finishes right after the second reading of the empty file: the key, then its fingerprint in the project.
+  const got = await withReadsOf(keyFile, (text, count) => {
+    if (count === 2) {
+      writeFileSync(keyFile, `${theirs.toString('hex')}\n`);
+      mkdirSync(dirname(fingerprint), { recursive: true }); writeFileSync(fingerprint, line);
+    }
+    return text;
+  }, () => ensureAnchorKey(common, keyFile));
+  assert.equal(got.toString('hex'), theirs.toString('hex'), 'the key of the other hook, once complete');
+  assert.equal(readFileSync(keyFile, 'utf8'), `${theirs.toString('hex')}\n`, 'never made anew');
+  assert.equal(readFileSync(fingerprint, 'utf8'), line, 'its fingerprint kept');
+});
+
+test('N5, the window: a key file that stays incomplete is refused after a bounded wait, never replaced', async t => {
+  const { ensureAnchorKey } = await import('../dist/rules/operator.js');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-key-partial-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const common = join(root, 'commun'); mkdirSync(common);
+  const keyFile = join(root, 'cle', 'cle-ancrage'); mkdirSync(dirname(keyFile));
+  writeFileSync(keyFile, 'ab'.repeat(10));
+  assert.throws(() => ensureAnchorKey(common, keyFile), /clé d'ancrage illisible/);
+  assert.equal(readFileSync(keyFile, 'utf8'), 'ab'.repeat(10));
+  assert.equal(existsSync(join(common, 'apv')), false, 'no fingerprint recorded');
+});
+
+test('N5, the window: a fingerprint read half written (or damaged) is no absent fingerprint: the key is refused, the fingerprint never rewritten', async t => {
+  const { anchorKey, ensureAnchorKey, KEY_FINGERPRINT } = await import('../dist/rules/operator.js');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-key-fp-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const common = join(root, 'commun');
+  const fingerprint = join(common, ...KEY_FINGERPRINT); mkdirSync(dirname(fingerprint), { recursive: true });
+  // The project recorded the fingerprint of key A; the file is read while being written: only its first bytes.
+  const recorded = await fingerprintLine(Buffer.from('cd'.repeat(32), 'hex'));
+  writeFileSync(fingerprint, recorded.slice(0, 20));
+  // Another key B sits in the key file.
+  const keyFile = join(root, 'cle-ancrage'); writeFileSync(keyFile, `${'ab'.repeat(32)}\n`);
+  const found = anchorKey(common, keyFile);
+  assert.equal(found.key, null, 'key B is not accepted when the fingerprint cannot be read');
+  assert.match(found.problem, /empreinte de la clé d'ancrage illisible/);
+  assert.throws(() => ensureAnchorKey(common, keyFile), /empreinte de la clé d'ancrage illisible/);
+  assert.equal(readFileSync(fingerprint, 'utf8'), recorded.slice(0, 20), 'never rewritten with the fingerprint of B');
+});
+
+/** A project whose fingerprint was recorded for key A, with one trace signed by A of `kind` (journal, review seal, merge). */
+async function signedProject(root, kind) {
+  const { ensureAnchorKey, journalEntry, appendJournal, sign } = await import('../dist/rules/operator.js');
+  const { writeMergeTrace } = await import('../dist/rules/merges.js');
+  const { createHash, randomBytes } = await import('node:crypto');
+  const common = join(root, `commun-${kind}`); mkdirSync(common);
+  const keyA = join(root, `a-${kind}`, 'cle-ancrage'); mkdirSync(dirname(keyA), { mode: 0o700 });
+  const a = randomBytes(32); writeFileSync(keyA, `${a.toString('hex')}\n`, { mode: 0o400 });
+  ensureAnchorKey(common, keyA);
+  if (kind === 'journal') appendJournal(common, journalEntry('Je valide la maquette des articles.', { at: new Date().toISOString(), session: 's' }, a));
+  if (kind === 'fusion') writeMergeTrace(common, { pr: 12, head: 'ab'.repeat(20), target: 'main', method: 'merge', mergeCommit: null, at: new Date().toISOString() }, a);
+  if (kind === 'relecture') {
+    const dir = join(common, 'apv', 'reviews', 'cd'.repeat(20), 'securite'); mkdirSync(dir, { recursive: true });
+    const record = Buffer.from('{"id":"20261011-x"}\n'); writeFileSync(join(dir, '20261011-x.json'), record);
+    writeFileSync(join(dir, '20261011-x.sig'), sign(a, 'review', createHash('sha256').update(record).digest('hex')));
+  }
+  const keyB = join(root, `b-${kind}`, 'cle-ancrage'); mkdirSync(dirname(keyB), { mode: 0o700 });
+  writeFileSync(keyB, `${randomBytes(32).toString('hex')}\n`, { mode: 0o400 });
+  return { common, keyA, keyB, a };
+}
+
+test('M1: fingerprint deleted while the project holds signed traces: another key is refused, the right one is accepted and only then recorded again', async t => {
+  const { anchorKey, ensureAnchorKey, KEY_FINGERPRINT } = await import('../dist/rules/operator.js');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-key-nofp-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const kind of ['journal', 'relecture', 'fusion']) {
+    const { common, keyA, keyB, a } = await signedProject(root, kind);
+    const fingerprint = join(common, ...KEY_FINGERPRINT);
+    rmSync(fingerprint);
+    const b = anchorKey(common, keyB);
+    assert.equal(b.key, null, `${kind}: key B verifies no trace of the project`);
+    assert.match(b.problem, /empreinte absente alors que le projet a des traces signées/, kind);
+    assert.throws(() => ensureAnchorKey(common, keyB), /empreinte absente alors que le projet a des traces signées/, kind);
+    assert.equal(existsSync(fingerprint), false, `${kind}: nothing recorded for B`);
+    assert.equal(anchorKey(common, keyA).key?.toString('hex'), a.toString('hex'), `${kind}: key A verifies a trace`);
+    assert.equal(ensureAnchorKey(common, keyA).toString('hex'), a.toString('hex'), kind);
+    assert.equal(existsSync(fingerprint), true, `${kind}: the fingerprint of A recorded again`);
+    assert.equal(anchorKey(common, keyB).key, null, `${kind}: B now refused as replaced`);
+  }
+});
+
+test('F1 and F5: an incomplete file that no longer changes (abrupt stop) is refused at once, saying what to do', async t => {
+  const { ensureAnchorKey, anchorKey } = await import('../dist/rules/operator.js');
+  const { utimesSync } = await import('node:fs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-key-stale-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const common = join(root, 'commun'); mkdirSync(common);
+  const keyFile = join(root, 'cle', 'cle-ancrage'); mkdirSync(dirname(keyFile), { mode: 0o700 });
+  writeFileSync(keyFile, '');
+  const old = new Date(Date.now() - 3_600_000); utimesSync(keyFile, old, old);
+  const started = Date.now();
+  assert.throws(() => ensureAnchorKey(common, keyFile), /clé d'ancrage illisible[\s\S]*arrêt brutal[\s\S]*supprime/);
+  assert.ok(Date.now() - started < 1000, `refused without waiting (${Date.now() - started} ms)`);
+  assert.match(anchorKey(common, keyFile).problem, /clé d'ancrage illisible/);
+  assert.equal(readFileSync(keyFile, 'utf8'), '');
+});
+
+test('F1: on a file system without hard links, a fingerprint another hook is still writing (empty, then filled) is waited for', async t => {
+  const { ensureAnchorKey, KEY_FINGERPRINT } = await import('../dist/rules/operator.js');
+  const { randomBytes } = await import('node:crypto');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-fp-window-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const common = join(root, 'commun');
+  const keyFile = join(root, 'cle', 'cle-ancrage'); mkdirSync(dirname(keyFile), { mode: 0o700 });
+  const key = randomBytes(32); writeFileSync(keyFile, `${key.toString('hex')}\n`, { mode: 0o400 });
+  const fingerprint = join(common, ...KEY_FINGERPRINT); mkdirSync(dirname(fingerprint), { recursive: true });
+  writeFileSync(fingerprint, '');
+  const line = await fingerprintLine(key);
+  const got = await withReadsOf(fingerprint, (text, count) => { if (count === 2) writeFileSync(fingerprint, line); return text; }, () => ensureAnchorKey(common, keyFile));
+  assert.equal(got.toString('hex'), key.toString('hex'));
+  assert.equal(readFileSync(fingerprint, 'utf8'), line);
+});
+
+test('F2: the files a stopped hook left aside next to the key are removed after a minute, never a recent one', async t => {
+  const { ensureAnchorKey } = await import('../dist/rules/operator.js');
+  const { utimesSync } = await import('node:fs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-key-aside-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const common = join(root, 'commun'); mkdirSync(common);
+  const keyFile = join(root, 'cle', 'cle-ancrage'); mkdirSync(dirname(keyFile), { mode: 0o700 });
+  const stale = `${keyFile}.4242.0123456789ab.tmp`; const fresh = `${keyFile}.4243.0123456789ac.tmp`; const other = join(dirname(keyFile), 'autre.tmp');
+  for (const f of [stale, fresh, other]) writeFileSync(f, 'x');
+  const old = new Date(Date.now() - 120_000); utimesSync(stale, old, old); utimesSync(other, old, old);
+  ensureAnchorKey(common, keyFile);
+  assert.equal(existsSync(stale), false, 'older than a minute: removed');
+  assert.equal(existsSync(fresh), true, 'recent: maybe another hook writing it');
+  assert.equal(existsSync(other), true, 'not a file of the key');
+});
+
+test('F3: the key and its fingerprint are read only from a regular file of the account, of bounded size, never through a link', async t => {
+  const { anchorKey, ensureAnchorKey, KEY_FINGERPRINT } = await import('../dist/rules/operator.js');
+  const { symlinkSync, statSync: stat, chmodSync } = await import('node:fs');
+  const { randomBytes } = await import('node:crypto');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-key-kind-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const real = join(root, 'vraie'); writeFileSync(real, `${randomBytes(32).toString('hex')}\n`, { mode: 0o400 });
+  // A link to a valid key.
+  const linked = join(root, 'lien', 'cle-ancrage'); mkdirSync(dirname(linked), { mode: 0o700 }); symlinkSync(real, linked);
+  const c1 = join(root, 'c1'); mkdirSync(c1);
+  assert.equal(anchorKey(c1, linked).key, null);
+  assert.match(anchorKey(c1, linked).problem, /lien symbolique/);
+  assert.throws(() => ensureAnchorKey(c1, linked), /lien symbolique/);
+  assert.equal(existsSync(join(c1, 'apv')), false);
+  // A key followed by padding: too big, refused.
+  const big = join(root, 'gros', 'cle-ancrage'); mkdirSync(dirname(big), { mode: 0o700 });
+  writeFileSync(big, `${randomBytes(32).toString('hex')}\n${' '.repeat(5000)}`, { mode: 0o400 });
+  const c2 = join(root, 'c2'); mkdirSync(c2);
+  assert.equal(anchorKey(c2, big).key, null);
+  assert.match(anchorKey(c2, big).problem, /trop grand/);
+  // A FIFO never blocks the reader: refused at once (in a child, bounded, so that a hang is a failure).
+  const fifo = join(root, 'fifo', 'cle-ancrage'); mkdirSync(dirname(fifo), { mode: 0o700 });
+  if (spawnSync('mkfifo', [fifo]).status === 0) {
+    const operator = fileURLToPath(new URL('../dist/rules/operator.js', import.meta.url));
+    const c3 = join(root, 'c3'); mkdirSync(c3);
+    const r = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(operator)}).then(m => process.stdout.write(String(m.anchorKey(${JSON.stringify(c3)}, ${JSON.stringify(fifo)}).problem)))`], { encoding: 'utf8', timeout: 5000 });
+    assert.equal(r.error, undefined, 'the reader returns');
+    assert.match(r.stdout, /pas un fichier ordinaire/);
+  }
+  // A fingerprint that is a link: refused, never followed.
+  const c4 = join(root, 'c4'); const fp = join(c4, ...KEY_FINGERPRINT); mkdirSync(dirname(fp), { recursive: true });
+  const fpReal = join(root, 'empreinte'); writeFileSync(fpReal, await fingerprintLine(Buffer.from(readFileSync(real, 'utf8').trim(), 'hex')));
+  symlinkSync(fpReal, fp);
+  assert.equal(anchorKey(c4, real).key, null);
+  assert.match(anchorKey(c4, real).problem, /empreinte de la clé d'ancrage illisible[\s\S]*lien symbolique/);
+  // The folder of the key: a link refused; a folder open to others tightened to 0700.
+  const folder = join(root, 'dossier-lien'); symlinkSync(dirname(big), folder);
+  assert.throws(() => ensureAnchorKey(join(root, 'c5'), join(folder, 'cle-ancrage')), /dossier de la clé d'ancrage refusé/);
+  const open = join(root, 'ouvert'); mkdirSync(open); chmodSync(open, 0o755);
+  const c6 = join(root, 'c6'); mkdirSync(c6);
+  ensureAnchorKey(c6, join(open, 'cle-ancrage'));
+  assert.equal(stat(open).mode & 0o777, 0o700);
+});
+
+test('F6: a hook takes the key file of a test only in the test mode the test support sets, and only an absolute path', async () => {
+  const { testKeyFile } = await import('../hooks/scripts/lib.mjs');
+  const name = ['APV', 'ANCHOR', 'KEY', 'FILE'].join('_');
+  assert.equal(testKeyFile({ [name]: '/tmp/k/cle' }), null, 'without the test mode: the key of the account');
+  assert.equal(testKeyFile({ [name]: '/tmp/k/cle', APV_ENTRY: 'hook' }), null);
+  assert.equal(testKeyFile({ [name]: '/tmp/k/cle', APV_ENTRY: 'test' }), '/tmp/k/cle');
+  assert.equal(testKeyFile({ [name]: 'k/cle', APV_ENTRY: 'test' }), null, 'a relative path never');
+  for (const hook of ['operator-journal.mjs', 'review-seal.mjs']) {
+    const text = readFileSync(fileURLToPath(new URL(`../hooks/scripts/${hook}`, import.meta.url)), 'utf8');
+    assert.ok(!text.includes(`env.${name}`) && !text.includes(`env['${name}']`), `${hook} reads the key file only through testKeyFile`);
+  }
+});
+
+test('anchoredQuote takes the key it is given, never one read by default', () => {
+  const said = text => journalEntry(text, { at: 't', session: 's' }, TEST_KEY);
+  const messages = [said('Je valide la maquette des articles.')];
+  assert.ok(anchoredQuote(messages, 'Je valide la maquette des articles.', TEST_KEY));
+  assert.equal(anchoredQuote(messages, 'Je valide la maquette des articles.'), null, 'no key given: nothing anchored');
 });
 
 test('review of #105, D1 and D2: under the lock of an ancestor, the turn is bounded by lock.waitMs and shared across processes', { skip: spawnSyncOk('flock', ['--version']) ? false : 'flock(1) missing' }, async t => {
