@@ -2,6 +2,12 @@
 
 ## Non publié
 
+- **Seconde relecture sécurité de la PR #134** (1 élevé, 2 moyens, 2 faibles ; décision du chef de projet : trois couches qui ne dépendent pas de la façon dont un fichier est écrit ; tests rouges d'abord) :
+  - A : `APV_ALLOW_MERGE` et `APV_ALLOW_DEPLOY` ne valent qu'en préfixe littéral de la commande ; l'environnement du crochet n'autorise plus rien.
+  - B : à chaque appel d'outil (Bash et outils de fichiers) et au démarrage, les vrais réglages (compte, projet et parents, gérés) et profils sont relus. Une clé interdite refuse l'outil avec le fichier et la clé, sans rien réparer : `env` APV_, GIT_, LD_, DYLD_, NODE_OPTIONS, NODE_PATH, BASH_ENV, ENV, ZDOTDIR, PATH, HOME, XDG_CONFIG_HOME, CLAUDE_PROJECT_DIR, CLAUDE_PLUGIN_ROOT, CLAUDE_CONFIG_DIR ; `disableAllHooks` ; apv désactivé ; réglages ni JSON ni JSONC ; affectation de APV_ ou d'une variable de code dans un profil.
+  - Premier filet : `cd` de la ligne suivi (cdTarget), cible calculée refusée aussi pour les valeurs propres aux réglages, `ln` sans `-s` à nom calculé refusé, Write sur un lien matériel vers un fichier chargé refusé, liste du bloc `env` étendue.
+  - Captures : dès qu'un fichier de l'application charge par motif ou chemin calculé, aucun test ni document n'est « sans écran », où qu'il soit (racine, `apps/*/src`). Même chose dès qu'un alias Vite, SvelteKit ou tsconfig pointe vers un dossier du changement.
+
 - **Relecture sécurité de la PR #134** (1 élevé, 1 moyen, 2 faibles ; chaque point avec son test rouge d'abord dans `test/hooks-rules.test.mjs` et `test/rules.test.mjs`) :
   - Élevé : réglages et profils reconnus par une seule fonction pour Write, Edit et Bash, le chemin canonique (`.`, `..`, `//`, `~`, relatif depuis le dossier du crochet), la casse ignorée, un lien symbolique suivi.
   - Moyen : refusés aussi `NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `BASH_ENV`, `ENV`, `DYLD_*` (réglages et profils), `PATH` dans le bloc `env`, `disableAllHooks` et le greffon apv désactivé (réglages) ; les réglages jugés sur ce qu'ils ajoutent, une modification ordinaire passe.
