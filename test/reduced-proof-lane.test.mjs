@@ -266,7 +266,7 @@ test('M1 (relecture) : chaque forme refusée du texte du workflow lu à T', () =
     ['    with:\n      "repository": acme/autre\n', /clé ref ou repository/],
     ['    continue-on-error: true\n', /continue-on-error/],
     ['      - run: npm test || true\n', /\|\| true/],
-    ['      - run: npm test || exit 0\n', /\|\| true/],
+    ['      - run: npm test || exit 0\n', /\|\|/],
   ];
   for (const [extra, reason] of cases) assert.match(workflowTextProblems(`${ok}${extra}`).join('\n'), reason, extra);
   // F5: no cancellation by the concurrency group.
@@ -274,6 +274,40 @@ test('M1 (relecture) : chaque forme refusée du texte du workflow lu à T', () =
   assert.match(workflowTextProblems(ok.replace('  cancel-in-progress: false\n', '')).join('\n'), /concurrency sans cancel-in-progress: false/);
   assert.match(workflowTextProblems(ok.replace('cancel-in-progress: false', 'cancel-in-progress: ${{ true }}')).join('\n'), /cancel-in-progress: false exigé/);
   assert.deepEqual(workflowTextProblems(ok.replace(/concurrency:\n.*\n.*\n/, '')), [], 'sans groupe de concurrence, rien ne s\'annule');
+});
+
+test('F-A3 (relecture du code) : liste d\'autorisations du workflow réduit, chaque forme du rapport refusée', () => {
+  const ok = rpWorkflow();
+  const step = extra => ok.replace('      - run: node scripts/check-links.mjs\n', `      - run: node scripts/check-links.mjs\n${extra}`);
+  const cases = [
+    // The forms of the review of the code.
+    [step("      - run: echo ${{ github.event[format('in{0}','puts')] }}\n"), /github\.event/],
+    [step("      - run: echo ${{ github.event[format('in{0}','puts')] }}\n"), /format\(/],
+    [step("      - run: echo ${{ vars['REF'] }}\n"), /vars/],
+    [ok.replace('      - uses: actions/checkout@', '      - "r\\x65f": main\n        uses: actions/checkout@'), /clé entre guillemets ou avec une barre oblique inverse/],
+    [step('      - run: npm test\n        "continue-on-\\x65rror": true\n'), /clé entre guillemets ou avec une barre oblique inverse/],
+    [step('      - run: git fetch origin autre && git checkout FETCH_HEAD\n'), /git fetch, git checkout/],
+    [step('      - run: npm test || /bin/true\n'), /\|\|/],
+    [step('      - run: set +e; npm test; exit 0\n'), /set \+e/],
+    [step('      - run: set +e; npm test; exit 0\n'), /exit 0/],
+    // The allowlist: actions pinned by a commit, checkout without `with`, no local action nor reusable workflow.
+    [ok.replace('actions/checkout@0000000000000000000000000000000000000000', 'actions/checkout@v4'), /action non épinglée par un commit de 40 caractères : actions\/checkout@v4/],
+    [step('        with:\n          fetch-depth: 0\n').replace('      - run: node scripts/check-links.mjs\n        with', '      - run: node scripts/check-links.mjs\n      - uses: actions/checkout@0000000000000000000000000000000000000000\n        with'), /actions\/checkout avec with/],
+    [ok.replace('      - uses: actions/checkout@0000000000000000000000000000000000000000\n', '      - name: récupération\n        uses: actions/checkout@0000000000000000000000000000000000000000\n        with:\n          fetch-depth: 0\n'), /actions\/checkout avec with/],
+    [step('      - uses: ./.github/actions/preuve\n'), /action non épinglée/],
+    [step('      - uses: docker://alpine:3\n'), /action non épinglée/],
+    [step('      - uses: acme/outils/.github/workflows/preuve.yml@0000000000000000000000000000000000000000\n'), /workflow réutilisable/],
+    // YAML forms that could hide a key: explicit key, flow mapping, merge key, anchor, alias, tag.
+    [step('      - ? run\n        : npm test\n'), /clé explicite/],
+    [step('      - { run: npm test }\n'), /tableau ou dictionnaire en ligne/],
+    [step('      - <<: *base\n'), /fusion, ancre, alias ou étiquette YAML/],
+    [step('      - &base\n        run: npm test\n'), /fusion, ancre, alias ou étiquette YAML/],
+    [step('      - run: !!str npm test\n'), /fusion, ancre, alias ou étiquette YAML/],
+  ];
+  for (const [text, reason] of cases) assert.match(workflowTextProblems(text).join('\n'), reason, text);
+  // Allowed: pinned actions with their inputs (setup), run steps, the expressions of the concurrency group.
+  const allowed = step('      - uses: actions/setup-node@1111111111111111111111111111111111111111\n        with:\n          node-version: 22\n      - run: npm ci && npm test\n');
+  assert.deepEqual(workflowTextProblems(allowed), []);
 });
 
 test('M1 (relecture) et F5 : un workflow de T avec inputs ou cancel-in-progress: true écarte la voie', async t => {

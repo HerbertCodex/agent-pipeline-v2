@@ -5,21 +5,81 @@ import { gitRead } from '../run/git-probe.js';
 import { checkRunsNamed, redCheckRun, verifyCiProof } from './ci-proof.js';
 import { CI_PROTECTED_DEFAULTS } from './config.js';
 import { anchoredQuoteOutside, sentences } from './operator.js';
-/** Words of the text of the reduced workflow that let it test another commit or hide a failure (M1 of the review). */
+/**
+ * What the text of the reduced workflow may not hold, anywhere (M1 of the review of the spec, F-A3 of the review of the
+ * code): what lets it test another commit than the one of its run (an input, a variable of the repository, a computed
+ * context, a ref, a fetch or a checkout), or hide a failure (continue-on-error, `||`, `set +e`, `exit 0`), or hide a
+ * key from these checks (a quoted or escaped key, an explicit key, a flow mapping, a merge key, an anchor, an alias, a
+ * tag). Strict on purpose: the reduced workflow is a short list of `run` steps and pinned actions.
+ */
 const WORKFLOW_REFUSED = [
     [/\binputs\b/, 'le mot inputs (entrées de workflow_dispatch, github.event.inputs, inputs.x : une entrée peut faire tester un autre commit)'],
-    [/\bvars\s*\./, 'vars. (variables du dépôt, modifiables hors du dépôt)'],
+    [/\bvars\b/, 'vars. ou vars[...] (variables du dépôt, modifiables hors du dépôt)'],
+    [/\bgithub\s*\.\s*event\b(?!_)|\bgithub\s*\[/, 'github.event ou github[...] (contexte de l\'évènement, ou calculé ; seuls github.ref_name et github.event_name servent au groupe de concurrence)'],
+    [/\bformat\s*\(/, 'format( (nom de contexte calculé)'],
     [/(?:^|[\s{,?-])["']?(?:ref|repository)["']?\s*:/m, 'une clé ref ou repository (sous actions/checkout ou ailleurs : un autre commit ou un autre dépôt)'],
+    [/\bgit\s+(?:fetch|checkout|switch|reset|pull)\b|FETCH_HEAD/, 'git fetch, git checkout, git switch, git reset, git pull ou FETCH_HEAD (un autre commit que celui de l\'exécution)'],
     [/continue-on-error/, 'continue-on-error (un échec masqué)'],
-    [/\|\|\s*(?:true\b|:|exit\s+0\b)/, '|| true, || : ou || exit 0 (un échec masqué)'],
+    [/\|\|/, '|| (un échec masqué : || true, || /bin/true, || :, || exit 0)'],
+    [/\bset\s+\+[a-z]*e/, 'set +e (un échec masqué)'],
+    [/\bexit\s+0\b/, 'exit 0 (une sortie anticipée en succès)'],
+    [/^\s*(?:-\s+)?(["'])(?:(?!\1).)*\1\s*:(?:\s|$)|^\s*(?:-\s+)?[^\s#:'"][^:\n]*\\[^:\n]*:(?:\s|$)/m, 'clé entre guillemets ou avec une barre oblique inverse (une clé échappée échappe à ces contrôles)'],
+    [/^\s*(?:-\s+)?\?(?:\s|$)/m, 'clé explicite « ? »'],
+    [/(?<![$\{])\{(?!\{)/, 'tableau ou dictionnaire en ligne « { » (hors des expressions ${{ }})'],
+    [/<<\s*:|(?:^|[\s:\[,-])[&*][A-Za-z0-9_]|!!/m, 'fusion, ancre, alias ou étiquette YAML (<<:, &x, *x, !!type)'],
 ];
+/** An action of a repository pinned by a full commit (`owner/repo@<40 hexadecimal>`, or a sub-folder of it). */
+const PINNED_ACTION = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.\/-]+)?@[0-9a-f]{40}$/;
+/**
+ * The steps of the reduced workflow (F-A3 of the review of the code): every `uses` is an action of a repository pinned by
+ * a commit of 40 characters (never a local action, a Docker image or a reusable workflow), and `actions/checkout` takes no
+ * `with` (it checks out the commit of the run, nothing else).
+ */
+function stepProblems(text) {
+    const problems = [];
+    const lines = text.split('\n');
+    const indentOf = (l) => l.length - l.trimStart().length;
+    lines.forEach((line, index) => {
+        const m = /^(\s*)(-\s+)?uses\s*:\s*["']?([^\s"'#]+)/.exec(line);
+        if (!m)
+            return;
+        const target = m[3];
+        if (/\.ya?ml@/.test(target)) {
+            problems.push(`workflow réduit : workflow réutilisable ${target} (son texte n'est pas vérifié ici)`);
+            return;
+        }
+        if (!PINNED_ACTION.test(target)) {
+            problems.push(`workflow réduit : action non épinglée par un commit de 40 caractères : ${target} (ni action locale, ni image Docker)`);
+            return;
+        }
+        if (!/^actions\/checkout@/.test(target))
+            return;
+        // The step that holds this `uses`: from the line of its dash to the next line indented as much or less.
+        let dash = index;
+        if (!m[2])
+            while (dash > 0 && !(/^\s*-\s/.test(lines[dash]) && indentOf(lines[dash]) < indentOf(line)))
+                dash -= 1;
+        const level = indentOf(lines[dash]);
+        for (let k = dash; k < lines.length; k += 1) {
+            const l = lines[k];
+            if (k > dash && l.trim() && !l.trimStart().startsWith('#') && indentOf(l) <= level)
+                break;
+            if (/^\s*(?:-\s+)?with\s*:/.test(l)) {
+                problems.push(`workflow réduit : actions/checkout avec with (il récupère le commit de l'exécution, sans aucune entrée)`);
+                break;
+            }
+        }
+    });
+    return problems;
+}
 /**
  * Why the text of the reduced workflow, read at T, may test another commit than the one of its run, hide a failure, or
- * be cancelled by its concurrency group (docs/PREUVE-REDUITE.md 5.5, M1 and F5): empty when it may not. Whatever the
- * YAML form (quoted keys, explicit keys, flow mappings): the words are refused anywhere.
+ * be cancelled by its concurrency group (docs/PREUVE-REDUITE.md 5.5: M1, F5 and F-A3): empty when it may not. The words of
+ * WORKFLOW_REFUSED are refused anywhere in the text, the steps are those of the allowlist (stepProblems).
  */
 export function workflowTextProblems(text) {
     const problems = WORKFLOW_REFUSED.filter(([pattern]) => pattern.test(text)).map(([, why]) => `workflow réduit : ${why}`);
+    problems.push(...stepProblems(text));
     for (const m of text.matchAll(/cancel-in-progress["']?\s*:\s*([^\s#]+)/g)) {
         const value = m[1].replace(/^["']|["']$/g, '');
         if (value !== 'false') {

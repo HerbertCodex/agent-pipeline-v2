@@ -63,8 +63,8 @@ export interface ReducedLane {
 }
 /**
  * Why the text of the reduced workflow, read at T, may test another commit than the one of its run, hide a failure, or
- * be cancelled by its concurrency group (docs/PREUVE-REDUITE.md 5.5, M1 and F5): empty when it may not. Whatever the
- * YAML form (quoted keys, explicit keys, flow mappings): the words are refused anywhere.
+ * be cancelled by its concurrency group (docs/PREUVE-REDUITE.md 5.5: M1, F5 and F-A3): empty when it may not. The words of
+ * WORKFLOW_REFUSED are refused anywhere in the text, the steps are those of the allowlist (stepProblems).
  */
 export declare function workflowTextProblems(text: string): string[];
 export interface LaneInput {
