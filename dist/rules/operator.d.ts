@@ -134,6 +134,14 @@ export declare function recordRefusal(common: string, reason: string, now?: Date
  * their hashes, never the text, so a quote cut in the middle of a sentence is not recognised.
  */
 export declare function anchoredQuote(messages: readonly OperatorMessage[], quote: string, key: Buffer | null): OperatorMessage | null;
+/**
+ * The message of the operator that holds every sentence of `quote` and no sentence of `refused`, or null. `refused`: the
+ * text of the tool around what he must type (a refusal, its advice); pasted in his message, it makes no validation, the
+ * same family as TEMPLATE_REASON (security review of PR #128, review of the code of #136). The journal keeps hashes of
+ * whole sentences only, so the texts are compared sentence by sentence; the sentences of `quote` itself never count
+ * against it.
+ */
+export declare function anchoredQuoteOutside(messages: readonly OperatorMessage[], quote: string, refused: readonly string[], key: Buffer | null): OperatorMessage | null;
 /** The sentence the operator types himself to waive `rule` (or the review of one domain) for `sha` (shown in every refusal). */
 export declare function waiverSentence(rule: WaiverTarget, sha: string): string;
 /**

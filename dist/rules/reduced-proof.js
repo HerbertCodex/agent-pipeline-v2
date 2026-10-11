@@ -4,7 +4,7 @@ import { matches } from '../policy/policy.js';
 import { gitRead } from '../run/git-probe.js';
 import { checkRunsNamed, redCheckRun, verifyCiProof } from './ci-proof.js';
 import { CI_PROTECTED_DEFAULTS } from './config.js';
-import { anchoredQuote } from './operator.js';
+import { anchoredQuoteOutside, sentences } from './operator.js';
 /** Words of the text of the reduced workflow that let it test another commit or hide a failure (M1 of the review). */
 const WORKFLOW_REFUSED = [
     [/\binputs\b/, 'le mot inputs (entrées de workflow_dispatch, github.event.inputs, inputs.x : une entrée peut faire tester un autre commit)'],
@@ -171,17 +171,23 @@ export function laneWouldFit(decl, files) {
 export function reducedProofSentence(print) {
     return `Je valide la preuve réduite ${print} pour les fusions sur ordre.`;
 }
+/** Where the refusal of the tool puts its advice in the output of `apv rules check` (pasted, it counts against). */
+const ADVICE_PREFIX = 'à faire : ';
 /**
  * The decision of the operator that validates a declaration of fingerprint `print` (section 4.3, finding E1), or null:
- * a decision of the ledger of the head absent from the base, of source `operator`, confirmed, whose quote holds the
- * fingerprint and is found word for word among the messages the operator typed (anchor key `key`, checked by the
- * caller). A decision an agent wrote alone, or an old sentence without the fingerprint, never counts.
+ * a decision of the ledger of the head absent from the base, of source `operator`, confirmed, whose quote is exactly
+ * the sentence of `reducedProofSentence(print)` (compared as the journal compares) and is found in a message the
+ * operator typed that holds no sentence of the refusal of the tool (`refusal`: pasted, it is no validation; finding
+ * M-A1 of the review of the code). A decision an agent wrote alone, an old sentence, a pasted output never count.
  */
-export function anchoredDecision(atBase, atHead, messages, key, print) {
+export function anchoredDecision(atBase, atHead, messages, key, print, refusal = []) {
     const before = new Set(atBase.map(d => d.id));
+    const sentence = sentences(reducedProofSentence(print));
+    const refused = refusal.flatMap(text => [text, `${ADVICE_PREFIX}${text}`]);
     return atHead.find(d => !before.has(d.id) && d.source === 'operator' && d.status === 'confirmed'
-        && d.sourceQuote.toLowerCase().includes(print) && anchoredQuote(messages, d.sourceQuote, key) !== null) ?? null;
+        && sameSentences(sentences(d.sourceQuote), sentence) && anchoredQuoteOutside(messages, d.sourceQuote, refused, key) !== null) ?? null;
 }
+const sameSentences = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 /**
  * The declaration of the head against the one of the base, with the blobs of the workflow of each (section 4.3):
  * widened without the anchored decision, the rule
@@ -200,17 +206,20 @@ export async function declarationVerdict(base, head, workflow, decisions, messag
     catch {
         read = { atBase: [], atHead: [] };
     }
-    const found = anchoredDecision(read.atBase, read.atHead, messages, key, print);
     const why = widening.join(' ; ');
-    if (found)
-        return { kind: 'anchored', note: `preuve réduite élargie (${why}), décision ${found.id} de l'opérateur ancrée (empreinte ${print})` };
-    return {
+    // The sentence is never printed filled in: the template, and the fingerprint apart (the operator composes it himself;
+    // a pasted output, however the terminal wraps it, never holds it).
+    const refusal = {
         kind: 'refused',
         problem: `déclaration de preuve réduite élargie sans décision de l'opérateur ancrée (${why}) ; empreinte ${print} (rules.operatorOrders.reducedProof lève des contrôles : docs/PREUVE-REDUITE.md, section 4.3)`,
         todo: [
-            `L'opérateur tape lui-même dans la session : « ${reducedProofSentence(print)} »`,
-            `Puis verse la décision dans .apv/DECISIONS.json : source operator, statut confirmed, cette phrase mot pour mot en sourceQuote (sujet rules.operatorOrders.reducedProof), commite et relance apv rules check.`,
+            `L'opérateur compose et tape lui-même dans la session la phrase « ${reducedProofSentence('<empreinte>')} », où <empreinte> vaut ${print} (une sortie de l'outil collée dans le message ne compte pas).`,
+            `Puis verse la décision dans .apv/DECISIONS.json : source operator, statut confirmed, cette phrase exacte en sourceQuote (sujet rules.operatorOrders.reducedProof), commite et relance apv rules check.`,
         ],
     };
+    const found = anchoredDecision(read.atBase, read.atHead, messages, key, print, [refusal.problem, ...refusal.todo]);
+    if (found)
+        return { kind: 'anchored', note: `preuve réduite élargie (${why}), décision ${found.id} de l'opérateur ancrée (empreinte ${print})` };
+    return refusal;
 }
 //# sourceMappingURL=reduced-proof.js.map

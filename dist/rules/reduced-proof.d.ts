@@ -93,11 +93,12 @@ export declare function laneWouldFit(decl: ReducedProofDeclaration, files: reado
 export declare function reducedProofSentence(print: string): string;
 /**
  * The decision of the operator that validates a declaration of fingerprint `print` (section 4.3, finding E1), or null:
- * a decision of the ledger of the head absent from the base, of source `operator`, confirmed, whose quote holds the
- * fingerprint and is found word for word among the messages the operator typed (anchor key `key`, checked by the
- * caller). A decision an agent wrote alone, or an old sentence without the fingerprint, never counts.
+ * a decision of the ledger of the head absent from the base, of source `operator`, confirmed, whose quote is exactly
+ * the sentence of `reducedProofSentence(print)` (compared as the journal compares) and is found in a message the
+ * operator typed that holds no sentence of the refusal of the tool (`refusal`: pasted, it is no validation; finding
+ * M-A1 of the review of the code). A decision an agent wrote alone, an old sentence, a pasted output never count.
  */
-export declare function anchoredDecision(atBase: readonly Decision[], atHead: readonly Decision[], messages: readonly OperatorMessage[], key: Buffer | null, print: string): Decision | null;
+export declare function anchoredDecision(atBase: readonly Decision[], atHead: readonly Decision[], messages: readonly OperatorMessage[], key: Buffer | null, print: string, refusal?: readonly string[]): Decision | null;
 /** What the rule preuve says of the declaration a change brings: nothing, a note (anchored), or a refusal with what to do. */
 export type DeclarationVerdict = {
     kind: 'unchanged';

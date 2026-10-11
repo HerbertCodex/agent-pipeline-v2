@@ -156,7 +156,9 @@ test('E1 : une PR qui ajoute reducedProof sans décision de l\'opérateur ancré
   const print = reducedProofPrint(configIssues(localConfig(s.pem, declaration())).config.rules.operatorOrders.reducedProof, null);
   assert.match(print, /^[0-9a-f]{12}$/);
   assert.match(text(preuve), new RegExp(`déclaration de preuve réduite élargie sans décision de l'opérateur ancrée \\(déclaration ajoutée\\) ; empreinte ${print}`));
-  assert.match(text(preuve), new RegExp(`Je valide la preuve réduite ${print} pour les fusions sur ordre\\.`));
+  // M-A1: the sentence is never printed filled in (a pasted output never holds it): the template, and the fingerprint apart.
+  assert.match(text(preuve), new RegExp(`« Je valide la preuve réduite <empreinte> pour les fusions sur ordre\\. », où <empreinte> vaut ${print}`));
+  assert.doesNotMatch(text(preuve), new RegExp(`Je valide la preuve réduite ${print}`));
 });
 
 test('E1 : une décision écrite par l\'agent seul, ou une citation ancrée sans l\'empreinte, ne comptent pas ; une citation ancrée qui la porte, oui', async t => {
@@ -247,4 +249,34 @@ test('F-A2 : l\'empreinte porte le blob du workflow réduit à la tête ; une PR
   const untouched = configProject(t, { ...same, headFiles: { 'README.md': 'autre\n' } });
   await proven(untouched);
   assert.equal((await preuveOf(untouched)).status, 'ok');
+});
+
+test('M-A1 : la citation est exactement la phrase ; un message qui colle la sortie de l\'outil (consigne, ligne du problème, les deux) ne l\'ancre pas', async t => {
+  const s = signer();
+  const decl = declaration();
+  const print = reducedProofPrint(configIssues(localConfig(s.pem, decl)).config.rules.operatorOrders.reducedProof, null);
+  const sentence = `Je valide la preuve réduite ${print} pour les fusions sur ordre.`;
+  // The refusal as the tool writes it (apv rules check), to paste.
+  const probe = configProject(t, { baseConfig: localConfig(s.pem, null), headConfig: localConfig(s.pem, decl) });
+  await proven(probe);
+  const refusal = await preuveOf(probe);
+  const problem = refusal.problems[0];
+  const advice = refusal.todo.slice(0, 2).map(line => `    à faire : ${line}`).join('\n');
+  assert.match(problem, new RegExp(print));
+  const attempt = async (typed, quote = sentence) => {
+    const p = configProject(t, { baseConfig: localConfig(s.pem, null), headConfig: localConfig(s.pem, decl), ledger: [decision(quote)] });
+    operatorSays(p.repo, typed);
+    await proven(p);
+    return (await preuveOf(p)).status;
+  };
+  assert.equal(await attempt(`c'est quoi ?\n${advice}`, advice.split('\n')[0].replace('    à faire : ', '')), 'refused', 'consigne collée, citée telle quelle');
+  assert.equal(await attempt(`c'est quoi ?\n${problem}`, problem), 'refused', 'ligne du problème collée, citée telle quelle');
+  // The exact sentence typed in the same message as the pasted output: not a validation either.
+  assert.equal(await attempt(`${advice}\n${sentence}`), 'refused', 'consigne collée avec la phrase');
+  assert.equal(await attempt(`${problem}\n${sentence}`), 'refused', 'ligne du problème collée avec la phrase');
+  assert.equal(await attempt(`${problem}\n${advice}\n${sentence}`), 'refused', 'les deux collées avec la phrase');
+  // A quote that holds the fingerprint but is not the sentence.
+  assert.equal(await attempt(`Oui. ${sentence}`, `Oui. ${sentence}`), 'refused', 'citation plus longue que la phrase');
+  // The sentence alone, typed by the operator: accepted.
+  assert.equal(await attempt(sentence), 'ok');
 });
