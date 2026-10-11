@@ -21,6 +21,7 @@ import { MERGE_RULES, RULE_TITLES, rulesSettings } from './config.js';
 import { TEMPLATE_WAIVER_NOTE, anchorKey, readOperatorMessages, templateWaiver, waiverFor, waiverSentence } from './operator.js';
 import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
+import { carriedHeads } from './carry.js';
 import { LANE_NAME, docsOnlyLane, laneLines } from './docs-only.js';
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
 import { ciProofLines, verifyCiProof } from './ci-proof.js';
@@ -442,19 +443,34 @@ export async function checkMergeRules(input) {
     // relecture, captures: the domains `apv review plan` retains for the change, each recorded at this commit, or waived
     // for that domain alone by the operator (« dérogation relecture:<domaine> <commit> : <raison> », issue #126).
     const reviews = latestReviews(common, sha);
+    // A head that only brings its base up to date (a merge of the target, the diff identical byte for byte) keeps the
+    // reviews of the head before, said domain by domain (carry.ts, pilot project #230); its own reviews come first.
+    const carried = carriedHeads(repo, sha, resolveCommit(repo, input.target)).map(head => ({ head, reviews: latestReviews(common, head) }));
+    const usable = (r) => !!r && !r.problem && !!r.record && r.record.findings.critical === 0 && r.record.findings.high === 0;
+    const pick = (domain) => {
+        const own = reviews.get(domain);
+        if (!usable(own))
+            for (const c of carried) {
+                const r = c.reviews.get(domain);
+                if (usable(r))
+                    return { found: r, from: c.head };
+            }
+        return { found: own, from: null };
+    };
+    const carriedNote = (from) => (from ? `relecture reportée de ${short(from)} (diff identique)` : '');
     const reviewProblems = [];
     const reviewTodo = [];
     const domainStates = [];
     for (const domain of retained) {
         const agent = `apv:${DOMAIN_REVIEWERS[domain]}`;
-        const found = reviews.get(domain);
+        const { found, from } = pick(domain);
         const ask = `Relecture ${domain} par ${agent} sur une copie détachée à ${short(sha)} ; l'agent l'enregistre lui-même (apv review record --commit ${short(sha)} --domain ${domain} ...).`;
         const f = found?.record?.findings;
         const problem = !found ? `aucune relecture enregistrée à ${short(sha)}`
             : found.problem || !found.record ? `relecture inutilisable (${found.problem ?? 'illisible'})`
                 : f.critical > 0 || f.high > 0 ? `${f.critical} constat(s) critique(s) et ${f.high} haut(s) à ${short(sha)}` : null;
         if (!problem) {
-            domainStates.push({ domain, status: 'recorded', detail: `${found.record.reviewer}, critique 0, haut 0, moyen ${f.medium}, bas ${f.low}`, waiver: null });
+            domainStates.push({ domain, status: 'recorded', detail: `${found.record.reviewer}, critique 0, haut 0, moyen ${f.medium}, bas ${f.low}${from ? `, ${carriedNote(from)}` : ''}`, waiver: null });
             continue;
         }
         const waiver = waiverFor(messages, `relecture:${domain}`, sha);
@@ -513,15 +529,16 @@ export async function checkMergeRules(input) {
     else if (fidelityWaiver)
         rules.push(outcome('captures', 'not_applicable', `fidélité levée par dérogation (${fidelityWaiver})`));
     else {
-        const record = reviews.get('fidelite')?.record ?? null;
+        const fidelity = pick('fidelite');
+        const record = fidelity.found?.record ?? null;
         const needed = settings.captures.viewports.flatMap(v => settings.captures.themes.map(t => `${v}:${t}`));
-        const have = new Set((reviews.get('fidelite')?.problem ? [] : record?.captures ?? []).map(c => `${c.viewport}:${c.theme}`));
+        const have = new Set((fidelity.found?.problem ? [] : record?.captures ?? []).map(c => `${c.viewport}:${c.theme}`));
         const missing = needed.filter(n => !have.has(n));
         rules.push(missing.length
             ? outcome('captures', 'refused', `relecture de fidélité retenue${addedScreens.length ? ` (écran(s) ou fichier(s) d'interface : ${addedScreens.slice(0, 5).join(', ')}${addedScreens.length > 5 ? ', ...' : ''})` : ''}${screenVerdict?.reasons.length ? ` ; captures nécessaires : ${screenVerdict.reasons.slice(0, 5).join(' ; ')}${screenVerdict.reasons.length > 5 ? ' ; ...' : ''}` : ''}, captures attendues : ${needed.join(', ')}`, [`capture(s) absente(s) de la relecture fidelite à ${short(sha)} : ${missing.join(', ')}`], [
                 `apv:qa-fidelite capture chaque écran changé ou qui utilise un fichier changé (${missing.join(', ')}), les regarde à côté de la maquette validée et les joint à sa relecture : apv review record --commit ${short(sha)} --domain fidelite --capture <largeur>:<thème>:<fichier> ...`,
             ])
-            : outcome('captures', 'ok', `captures jointes à ${short(sha)} : ${needed.join(', ')}`));
+            : outcome('captures', 'ok', `captures jointes à ${short(fidelity.from ?? sha)}${fidelity.from ? ` (${carriedNote(fidelity.from)})` : ''} : ${needed.join(', ')}`));
     }
     // controles: the base checks of a web project, in the configuration the proof uses (the base's, kept, and the change's).
     const required = isWebAt(repo, sha) ? settings.requiredGates : settings.requiredGates.filter(g => g.source === 'config');

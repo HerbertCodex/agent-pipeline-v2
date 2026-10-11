@@ -350,6 +350,79 @@ test('captures: when they stay required, the output names each file that makes t
   assert.match(await reasons(glob, { 'tests/a.test.ts': 'test\n' }), /tests\/a\.test\.ts : chargement par motif ou chemin calculé dans src\/routes\/compte\/\+page\.ts/);
 });
 
+/**
+ * A pull request updated with its base (#230 of the pilot project): the head T1 reviewed (every domain of the plan, the
+ * captures), then the target moves (`mainChange`), then the branch merges it (T2). Returns the project, T1 and a helper
+ * that runs rules check at a commit.
+ */
+async function updatedWithBase(t, { base = SITE, mainChange = { 'src/autre.ts': 'export const autre = 1;\n' }, change = { 'src/routes/carte/+page.svelte': '<div class="carte">x</div>\n' } } = {}) {
+  const p = project(t, { base, change });
+  const at = async sha => (await apv(p.repo, ['rules', 'check', '--commit', sha, '--target', 'origin/main', '--json'])).json();
+  const first = await at(p.head);
+  const retained = rule(first, 'relecture').detail.replace(/^.*: /, '').split(', ');
+  for (const d of retained) seedReview(p.repo, p.head, d, { captures: d === 'fidelite' ? ALL_CAPTURES : [] });
+  assert.equal(rule(await at(p.head), 'relecture').status, 'ok');
+  git(p.repo, 'switch', '-q', 'main');
+  for (const [path, value] of Object.entries(mainChange)) put(p.repo, path, value);
+  git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'la cible avance'); git(p.repo, 'push', '-q', 'origin', 'main');
+  git(p.repo, 'switch', '-q', 'feat');
+  git(p.repo, 'merge', '-q', '--no-edit', 'origin/main'); git(p.repo, 'push', '-q', 'origin', 'feat');
+  return { p, t1: p.head, t2: git(p.repo, 'rev-parse', 'HEAD'), at, retained };
+}
+
+test('relecture and captures (#230): a head that only merges its base, the diff identical byte for byte, keeps the reviews of the head before, said', async t => {
+  const { t1, t2, at } = await updatedWithBase(t);
+  const report = await at(t2);
+  const relecture = rule(report, 'relecture');
+  assert.equal(relecture.status, 'ok', JSON.stringify(relecture));
+  assert.match(relecture.domains.map(d => d.detail).join('\n'), new RegExp(`relecture reportée de ${t1.slice(0, 12)} \\(diff identique\\)`));
+  const captures = rule(report, 'captures');
+  assert.equal(captures.status, 'ok', JSON.stringify(captures));
+  assert.match(captures.detail, new RegExp(`reportée de ${t1.slice(0, 12)} \\(diff identique\\)`));
+  // The proof stays required at the exact commit: nothing proves T2.
+  assert.equal(rule(report, 'preuve').status, 'refused');
+});
+
+test('relecture (#230): nothing is carried when the merge changes the diff, the base touched a file of the diff, the head is no merge, or the other parent is not on the target', async t => {
+  // The base changed a file of the diff (another line of the same page): the diff differs.
+  {
+    const page = 'src/routes/carte/+page.svelte';
+    const { t2, at } = await updatedWithBase(t, { base: { ...SITE, [page]: 'a\nb\nc\nd\ne\nf\n' }, change: { [page]: 'A\nb\nc\nd\ne\nf\n' }, mainChange: { [page]: 'a\nb\nc\nd\ne\nF\n' } });
+    assert.equal(rule(await at(t2), 'relecture').status, 'refused', 'a file of the diff changed in the base');
+  }
+  // The merge commit brings a change of its own (amended).
+  {
+    const { p, at } = await updatedWithBase(t);
+    put(p.repo, 'src/lib/server/acces.ts', 'export const ouvert = true;\n');
+    git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-q', '--amend', '--no-edit'); git(p.repo, 'push', '-q', '-f', 'origin', 'feat');
+    assert.equal(rule(await at(git(p.repo, 'rev-parse', 'HEAD')), 'relecture').status, 'refused', 'a merge with a change of its own');
+  }
+  // A plain commit with the same diff (a rebase): not carried.
+  {
+    const { p, t1, at } = await updatedWithBase(t);
+    git(p.repo, 'reset', '-q', '--hard', 'origin/main'); git(p.repo, 'cherry-pick', t1); git(p.repo, 'push', '-q', '-f', 'origin', 'feat');
+    assert.equal(rule(await at(git(p.repo, 'rev-parse', 'HEAD')), 'relecture').status, 'refused', 'a rebase');
+  }
+  // The other parent is another branch, not on the target.
+  {
+    const { p, t1, at } = await updatedWithBase(t);
+    git(p.repo, 'reset', '-q', '--hard', t1);
+    git(p.repo, 'switch', '-q', '-c', 'autre', 'origin/main'); put(p.repo, 'src/autre-branche.ts', 'export const b = 1;\n'); git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'autre');
+    git(p.repo, 'switch', '-q', 'feat'); git(p.repo, 'merge', '-q', '--no-edit', 'autre'); git(p.repo, 'push', '-q', '-f', 'origin', 'feat');
+    assert.equal(rule(await at(git(p.repo, 'rev-parse', 'HEAD')), 'relecture').status, 'refused', 'the other parent is not on the target');
+  }
+});
+
+test('relecture (#230): two updates with the base in a row keep the reviews of the first head', async t => {
+  const { p, t1, at } = await updatedWithBase(t);
+  git(p.repo, 'switch', '-q', 'main'); put(p.repo, 'src/encore.ts', 'export const encore = 1;\n');
+  git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'la cible avance encore'); git(p.repo, 'push', '-q', 'origin', 'main');
+  git(p.repo, 'switch', '-q', 'feat'); git(p.repo, 'merge', '-q', '--no-edit', 'origin/main'); git(p.repo, 'push', '-q', 'origin', 'feat');
+  const relecture = rule(await at(git(p.repo, 'rev-parse', 'HEAD')), 'relecture');
+  assert.equal(relecture.status, 'ok', JSON.stringify(relecture));
+  assert.match(relecture.domains.map(d => d.detail).join('\n'), new RegExp(`reportée de ${t1.slice(0, 12)}`));
+});
+
 test('captures: without object once the fidelity review is lifted by a waiver; still required when a fidelity review is recorded (9 October 2026)', async t => {
   const screen = { 'src/routes/carte/+page.svelte': '<div class="carte">x</div>\n' };
   // By domain: « dérogation relecture:fidelite ».
