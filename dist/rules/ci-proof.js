@@ -26,6 +26,8 @@ export const GITHUB_ACTIONS_APP_ID = 15368;
  */
 const EVENTS = new Set(['push']);
 const DISPATCH = 'workflow_dispatch';
+/** Conclusions of a check run that say the commit is not proven (a red one is never hidden, docs/PREUVE-REDUITE.md 5.4). */
+const RED = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale']);
 /** Check runs compared at most (the latest first): beyond, the proof is not read. */
 const MAX_CHECK_RUNS = 100;
 const short = (sha) => sha.slice(0, 12);
@@ -320,7 +322,7 @@ async function readCheckRuns(input, gates, excluded, result) {
     }
     // A failure, cancellation (a cancellation by a concurrency group is not told apart by the API) or unfinished run of the declared
     // job at this commit is never hidden by a later green run: the commit is not proven (rule instable).
-    const failed = eligible.find(e => ['failure', 'timed_out', 'cancelled', 'action_required'].includes(str(e.c['conclusion']) ?? '') || str(e.c['status']) !== 'completed');
+    const failed = eligible.find(e => RED.has(str(e.c['conclusion']) ?? '') || str(e.c['status']) !== 'completed');
     const decisive = failed ?? eligible[0];
     if (!decisive)
         return result('refused', [...ignored, `aucun check run « ${settings.name} » de GitHub Actions au commit ${short(head)} du workflow ${settings.workflow}`], { gates, excluded });
@@ -380,8 +382,6 @@ export function ciProofLines(ci) {
     const tail = ci.state === 'unavailable' ? ' ; preuve locale exigée' : '';
     return [...ci.reasons.map(r => `${label[ci.state]} : ${r}${tail}`), ...(ci.state === 'out_of_lane' ? [] : ci.excluded.map(e => `${e.gate} : ${e.reason}`))];
 }
-/** Conclusions of a check run that say the commit is not proven (a red one is never hidden, docs/PREUVE-REDUITE.md 5.4). */
-const RED = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale']);
 /**
  * The check runs named `name` at `head` (any application, the latest first), or why the API could not be read: what
  * the reduced lane reads to never hide a red full proof (M2), and the audit of a merge without a local trace (F6).

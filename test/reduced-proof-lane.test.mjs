@@ -363,3 +363,13 @@ test('5.6 : un fichier que le workflow nomme (le script du job), même déclaré
   await runLocal(p, 'lint');
   await notRetained(p, { orderLane: lane(p, { slug: 'check-links' }) }, /fichier exécuté ou pouvant remplacer un fichier exécuté par la preuve, modifié depuis la base .*: scripts\/check-links\.mjs/);
 });
+
+test('F-A4 : un check run réduit antérieur stale ou startup_failure écarte un vert plus récent au même commit', async t => {
+  const p = project(t);
+  await runLocal(p, 'lint');
+  for (const conclusion of ['stale', 'startup_failure']) {
+    const gh = github(p.head, s => ({ ...s, checkRuns: [...s.checkRuns, { ...s.checkRuns[0], id: 700, conclusion, check_suite: { id: 87 } }],
+      runs: { ...s.runs, 87: { ...s.runs[88], id: 9100, conclusion } } })).gh;
+    await notRetained(p, { gh }, new RegExp(`check run 700 .*conclusion ${conclusion}`));
+  }
+});
