@@ -67,9 +67,10 @@ export interface ScreenCoverage {
 /**
  * For each screen the change adds or modifies, the validated mockup that covers it. A mockup counts when it is in the
  * ledger of the base (merged, so reviewed), or when the change brings it and its quote is found word for word among the
- * messages the operator typed (src/rules/operator.ts): a validation an agent wrote in the ledger alone never counts.
+ * messages the operator typed (src/rules/operator.ts), compared with the anchor key `key` the caller checked: a validation an agent wrote in the
+ * ledger alone never counts.
  */
-export function screenCoverage(files: readonly string[], atBase: readonly Decision[], atHead: readonly Decision[], messages: readonly OperatorMessage[]): ScreenCoverage[] {
+export function screenCoverage(files: readonly string[], atBase: readonly Decision[], atHead: readonly Decision[], messages: readonly OperatorMessage[], key: Buffer | null): ScreenCoverage[] {
   const base = mockupsOf(atBase);
   const baseIds = new Set(base.map(m => m.id));
   const added = mockupsOf(atHead).filter(m => !baseIds.has(m.id));
@@ -77,7 +78,7 @@ export function screenCoverage(files: readonly string[], atBase: readonly Decisi
     const fromBase = base.find(m => covers(m, file));
     if (fromBase) return { file, mockup: { id: fromBase.id, anchor: 'base' }, unanchored: [] };
     const candidates = added.filter(m => covers(m, file));
-    const anchored = candidates.find(m => anchoredQuote(messages, m.sourceQuote) !== null);
+    const anchored = candidates.find(m => anchoredQuote(messages, m.sourceQuote, key) !== null);
     if (anchored) return { file, mockup: { id: anchored.id, anchor: 'operator' }, unanchored: [] };
     return { file, mockup: null, unanchored: candidates.map(m => m.id) };
   });

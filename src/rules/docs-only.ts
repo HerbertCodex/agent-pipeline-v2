@@ -64,8 +64,8 @@ export interface LaneInput {
   /** Sensitive paths of the high lane (`sensitivePaths` and `risk.highPaths`). */
   sensitive: readonly string[];
   messages: readonly OperatorMessage[];
-  /** The anchor key (tests); default: the key of the account. */
-  key?: Buffer | null;
+  /** The anchor key the caller checked (`anchorKey(common).key`): never read by default. */
+  key: Buffer | null;
 }
 
 const safe = (path: string, glob: string): boolean => { try { return matches(path, glob); } catch { return false; } };

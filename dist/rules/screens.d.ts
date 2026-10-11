@@ -33,7 +33,8 @@ export interface ScreenCoverage {
 /**
  * For each screen the change adds or modifies, the validated mockup that covers it. A mockup counts when it is in the
  * ledger of the base (merged, so reviewed), or when the change brings it and its quote is found word for word among the
- * messages the operator typed (src/rules/operator.ts): a validation an agent wrote in the ledger alone never counts.
+ * messages the operator typed (src/rules/operator.ts), compared with the anchor key `key` the caller checked: a validation an agent wrote in the
+ * ledger alone never counts.
  */
-export declare function screenCoverage(files: readonly string[], atBase: readonly Decision[], atHead: readonly Decision[], messages: readonly OperatorMessage[]): ScreenCoverage[];
+export declare function screenCoverage(files: readonly string[], atBase: readonly Decision[], atHead: readonly Decision[], messages: readonly OperatorMessage[], key: Buffer | null): ScreenCoverage[];
 export declare function screenMatchers(globs: readonly string[]): RegExp[];

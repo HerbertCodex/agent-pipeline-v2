@@ -1,7 +1,7 @@
 // Shared helpers for the APV plugin hooks. Node built-ins only: hooks run
 // before any dependency install and must never fail because of a package.
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** Reads the whole hook payload from stdin; resolves to null when it is not a JSON object. */
@@ -81,6 +81,16 @@ export function isMainModule(moduleUrl, argv1 = process.argv[1]) {
   if (!argv1) return false;
   try { return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(argv1); }
   catch { return false; }
+}
+
+/**
+ * The anchor key file a test gives a hook (`APV_ANCHOR_KEY_FILE`), or null: the hook then uses the key of the account.
+ * Taken only in the test mode the test support sets for the processes it starts (`APV_ENTRY=test`, inherited: read it
+ * before the hook sets its own value), and only as an absolute path. The Bash guard refuses both variables set by hand.
+ */
+export function testKeyFile(env = process.env) {
+  const file = env.APV_ANCHOR_KEY_FILE;
+  return env.APV_ENTRY === 'test' && typeof file === 'string' && isAbsolute(file) ? file : null;
 }
 
 /**
