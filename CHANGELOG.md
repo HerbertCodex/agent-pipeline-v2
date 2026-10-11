@@ -2,6 +2,22 @@
 
 ## Non publié
 
+- **Relecture sécurité de la PR #135** (1 élevé, 1 moyen, 2 faibles ; tests rouges d'abord) :
+  - Élevé : une relecture bloquante à la tête était écartée au profit d'une relecture propre reportée. Désormais, la relecture de la tête l'emporte toujours ; le report ne vaut que si la tête n'a aucune relecture du domaine ; un constat critique ou haut à n'importe quelle tête de la chaîne bloque.
+  - Moyen : `--openssl-legacy-provider` et `--force-fips` retirés des options sûres de `NODE_OPTIONS` ; `OPENSSL_*` et `NODE_EXTRA_CA_CERTS` refusés dans les réglages et les profils.
+  - Faible : une ligne qui commence par `*` n'est un commentaire que dans un bloc ouvert plus haut (chaînes et commentaires suivis depuis le début du fichier).
+  - Faible : le message d'un `git commit` (`-m`, `--message`, `-F`) n'est plus une écriture vers les fichiers qu'il nomme ; une substitution dedans compte toujours. Faux positifs vus en route : une redirection vers `/dev/null` et un `echo` sans redirection ne sont plus des écritures.
+
+- **Relecture reportée sur une mise à jour avec la base** (projet pilote, #230 : une PR mise à jour par `git merge origin/main`, son diff identique octet par octet, devait refaire ses quatre relectures). Une relecture à T1 vaut pour T2, captures comprises, quand T2 est une fusion de T1 et d'un commit de la cible postérieur à la base de T1, avec un diff identique octet par octet (`--full-index --binary`) et aucun fichier du diff changé par la base. La sortie dit « relecture reportée de T1 (diff identique) » ; la preuve reste exigée à T2. Tests rouges d'abord, cas refusés compris : fichier du diff changé par la base, fusion avec un changement à elle, rebase, autre parent hors de la cible.
+
+- **Captures : raison dite, faux positif du projet pilote, suivi de la 3e relecture de #134** (tests rouges d'abord) :
+  - Projet pilote (11 octobre) : une PR de `.apv/config.json` et d'un `*.test.ts` gardait les captures exigées. Le nom `/config.json` apparaissait dans un commentaire de workflow, un commentaire de script et un plan HTML sous `docs/`. Une mention dans un commentaire, ou par la documentation sous `docs/` (toute extension, sans site), ne compte plus ; un test, sa configuration et la carte du code ne comptaient déjà pas.
+  - Quand les captures restent exigées, la sortie nomme chaque fichier et la raison (fichier d'interface, dossier servi, nommé par…, visé par l'alias de…, chargement par motif dans…, lien symbolique, impossible de juger).
+  - Contrôle des fichiers chargés : relit aussi `.zlogin`, fish, `environment.d`, `.pam_environment`, les `.envrc`, `/etc/environment` et les réglages de `CLAUDE_CONFIG_DIR`. `NODE_OPTIONS` sans option qui charge du code et `LD_LIBRARY_PATH` dans un profil sont signalés au démarrage, sans bloquer.
+  - Lecture d'un réglage ou d'un profil par un tube de filtres (`cut`, `sort`, `tr`...) : plus prise pour une écriture.
+  - `apv stack merge --order` : un 429 de l'attestation est réessayé après l'attente demandée (trois essais, 10 s au plus) ; constat de la relecture sécurité de #226.
+  - `apv stack merge` lit encore `APV_ALLOW_MERGE` dans son environnement, sans savoir d'où il vient : documenté (la porte est le crochet).
+
 - **Seconde relecture sécurité de la PR #134** (1 élevé, 2 moyens, 2 faibles ; décision du chef de projet : trois couches qui ne dépendent pas de la façon dont un fichier est écrit ; tests rouges d'abord) :
   - A : `APV_ALLOW_MERGE` et `APV_ALLOW_DEPLOY` ne valent qu'en préfixe littéral de la commande ; l'environnement du crochet n'autorise plus rien.
   - B : à chaque appel d'outil (Bash et outils de fichiers) et au démarrage, les vrais réglages (compte, projet et parents, gérés) et profils sont relus. Une clé interdite refuse l'outil avec le fichier et la clé, sans rien réparer : `env` APV_, GIT_, LD_, DYLD_, NODE_OPTIONS, NODE_PATH, BASH_ENV, ENV, ZDOTDIR, PATH, HOME, XDG_CONFIG_HOME, CLAUDE_PROJECT_DIR, CLAUDE_PLUGIN_ROOT, CLAUDE_CONFIG_DIR ; `disableAllHooks` ; apv désactivé ; réglages ni JSON ni JSONC ; affectation de APV_ ou d'une variable de code dans un profil.

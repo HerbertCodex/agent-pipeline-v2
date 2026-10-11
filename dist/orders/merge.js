@@ -231,14 +231,14 @@ export async function mergeOnOrder(options) {
             const message = mergeMessage({ pr, step, nonce: options.nonce, digest: verdict.digest, head });
             const commit = await mustGit(['commit-tree', tree, '-p', base, '-p', head, '-m', message], 'commit de fusion');
             // 6. and 7. The attestation, then the push within its window, bounded in time.
-            await attest(settings, verdict, report, challenge, options.fetch);
+            await attest(settings, verdict, report, challenge, options.fetch, options.sleep);
             let attestedAt = monotonic();
             await options.beforePush?.(step, commit);
             for (let stale = 0; monotonic() - attestedAt > settings.attestation.maxAgeSeconds * 1000; stale += 1) {
                 if (stale >= MAX_STALE_ATTESTATIONS)
                     throw new Refusal('attestation', 'attestation trop ancienne au moment de la poussée, plusieurs fois : rien n\'est poussé');
                 log(`Attestation de plus de ${settings.attestation.maxAgeSeconds} s : nouvelle demande, nouveau défi.`);
-                await attest(settings, verdict, report, challenge, options.fetch);
+                await attest(settings, verdict, report, challenge, options.fetch, options.sleep);
                 attestedAt = monotonic();
             }
             const pushed = await runProcess({
@@ -345,10 +345,10 @@ export function rawDiff(output) {
     }
     return entries;
 }
-async function attest(settings, verdict, report, challenge, fetcher) {
+async function attest(settings, verdict, report, challenge, fetcher, sleep) {
     report.attestations += 1;
     const result = await requestAttestation({ template: settings.attestation.url, timeoutMs: settings.attestation.timeoutMs, domain: settings.domain,
-        keys: publicKeys(settings.publicKeys), order: verdict.order, challenge: challenge(), ...(fetcher ? { fetch: fetcher } : {}) });
+        keys: publicKeys(settings.publicKeys), order: verdict.order, challenge: challenge(), ...(fetcher ? { fetch: fetcher } : {}), ...(sleep ? { sleep } : {}) });
     if (!result.ok)
         throw new Refusal('attestation', `attestation de la production refusée : ${result.reason}`);
 }

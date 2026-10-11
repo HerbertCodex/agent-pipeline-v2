@@ -70,16 +70,26 @@ export interface RulesInput {
 /** Whether the commit is a web interface: web dependencies in its package.json, or tracked interface files. */
 export declare function isWebAt(repo: string, sha: string): boolean;
 /**
- * Whether a change touches no screen, for the rule captures: every file it adds, modifies, removes or renames (a rename is
- * a removal and an addition: both sides judged) is, by its path, outside the interface (withoutScreenByPath); no other
- * file of the head names it (referenceTokens: a page that imports a file under a test or document name makes it an
- * interface file); no symbolic link of the head leads to it or to one of its folders (a served folder linked to a test
- * folder). The number of files, or null when one of them may change a screen or when the tool cannot tell (diff, tree
- * or search unreadable, a link that leaves the repository, too many files): captures are then required.
+ * The lines (numbered from 1) that start inside a block comment (slash-star to star-slash) of a script, strings and line comments followed
+ * from the start of the file. A text the scan cannot follow leaves a line outside: in doubt, not a comment.
  */
-export declare function touchesNoScreen(repo: string, base: string, head: string, screens: readonly RegExp[]): {
+export declare function blockCommentLines(text: string): Set<number>;
+export interface ScreenVerdict {
+    /** Files of the change. */
     files: number;
-} | null;
+    /** Why captures are needed, one line per file and cause (« <fichier> : <raison> »); empty when no screen is touched. */
+    reasons: string[];
+}
+/**
+ * Whether a change touches no screen, for the rule captures. Every file it adds, modifies, removes or renames (a rename is
+ * a removal and an addition: both sides judged) must be, by its path, outside the interface (withoutScreenByPath), and
+ * none may be brought to a screen another way: named by a file of the head that may show it (referenceTokens, a mention
+ * in a comment, a test, the documentation or the code map aside), reached by a symbolic link, loaded by a pattern or a
+ * computed path (a test or a document, when the application loads that way), or aimed at by an alias. Every cause found is
+ * said, file by file; the tool also says when it cannot tell (diff, tree or search unreadable, a link that leaves the
+ * repository, too many files): captures are then required.
+ */
+export declare function touchesNoScreen(repo: string, base: string, head: string, screens: readonly RegExp[]): ScreenVerdict;
 /**
  * The rules checked before any merge (docs/REGLES.md). Each one says what it checked, why it refuses and what to do. A
  * refusal is lifted by the correction it asks for, or by the operator himself: « dérogation <règle> <commit> : <raison> »

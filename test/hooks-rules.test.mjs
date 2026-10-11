@@ -1127,3 +1127,94 @@ test('second review of #134, B: the start of the session says what the loaded se
   assert.match(out.systemMessage, /settings\.local\.json : disableAllHooks/);
   assert.match(out.hookSpecificOutput.additionalContext, /retire lui-même/);
 });
+
+test('third review of #134: B reads the other files that set the environment, and does not block values that load no code', async t => {
+  const { environmentIntegrity, environmentReview } = await import('../hooks/scripts/lib.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-134c-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, 'home'); const project = join(root, 'projet'); const configDir = join(root, 'config-claude'); const etc = join(root, 'etc-environment');
+  for (const d of [home, project, configDir]) mkdirSync(d, { recursive: true });
+  const put = (file, text) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text); };
+  const review = () => environmentReview({ home, projectDirs: [project], configDir, systemFiles: [etc] });
+  const reset = () => { rmSync(home, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true }); rmSync(configDir, { recursive: true, force: true }); rmSync(etc, { force: true }); for (const d of [home, project, configDir]) mkdirSync(d, { recursive: true }); };
+  const name = ['APV', 'ALLOW', 'MERGE'].join('_');
+  for (const [what, file, text, expected] of [
+    ['.zlogin', join(home, '.zlogin'), `export ${name}=1\n`, /\.zlogin : APV_ALLOW_MERGE/],
+    ['fish', join(home, '.config', 'fish', 'config.fish'), `set -gx ${name} 1\n`, /config\.fish : APV_ALLOW_MERGE/],
+    ['fish conf.d', join(home, '.config', 'fish', 'conf.d', 'x.fish'), 'set -x LD_PRELOAD /tmp/x.so\n', /x\.fish : LD_PRELOAD/],
+    ['environment.d', join(home, '.config', 'environment.d', '50-x.conf'), 'NODE_OPTIONS=--require=/tmp/x.js\n', /50-x\.conf : NODE_OPTIONS/],
+    ['.pam_environment', join(home, '.pam_environment'), 'LD_PRELOAD DEFAULT=/tmp/x.so\n', /\.pam_environment : LD_PRELOAD/],
+    ['.envrc of the project', join(project, '.envrc'), `export ${name}=1\n`, /\.envrc : APV_ALLOW_MERGE/],
+    ['/etc/environment', etc, 'BASH_ENV=/tmp/x\n', /etc-environment : BASH_ENV/],
+    ['CLAUDE_CONFIG_DIR', join(configDir, 'settings.json'), '{"disableAllHooks":true}', /config-claude\/settings\.json : disableAllHooks/],
+  ]) {
+    reset(); put(file, text);
+    assert.match(environmentIntegrity({ home, projectDirs: [project], configDir, systemFiles: [etc] }).join('\n'), expected, what);
+  }
+  // Values that load no code: no refusal; ambiguous ones: a warning, never a refusal of every tool.
+  reset();
+  put(join(home, '.bashrc'), 'export NODE_OPTIONS=--max-old-space-size=4096\nexport LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH\nexport NODE_OPTIONS="$NODE_OPTIONS --inspect"\n');
+  const soft = review();
+  assert.deepEqual(soft.problems, [], JSON.stringify(soft));
+  assert.match(soft.warnings.join('\n'), /LD_LIBRARY_PATH/);
+  assert.match(soft.warnings.join('\n'), /NODE_OPTIONS/);
+  for (const value of ['--max-old-space-size=4096 --require /tmp/x.js', '-r /tmp/x.js', '--import=data:text/javascript,1', '--loader ./x.mjs', '--experimental-loader=./x.mjs']) {
+    reset(); put(join(home, '.bashrc'), `export NODE_OPTIONS="${value}"\n`);
+    assert.match(review().problems.join('\n'), /NODE_OPTIONS/, value);
+  }
+  // In the settings (an agent can write them in a project): only values known to load no code pass.
+  reset(); put(join(project, '.claude', 'settings.json'), '{"env":{"NODE_OPTIONS":"--max-old-space-size=8192"}}');
+  assert.deepEqual(review().problems, []);
+  for (const env of ['{"NODE_OPTIONS":"--inspect"}', '{"NODE_OPTIONS":"--import=x"}', '{"LD_LIBRARY_PATH":"/usr/local/cuda/lib64"}']) {
+    reset(); put(join(project, '.claude', 'settings.json'), `{"env":${env}}`);
+    assert.ok(review().problems.length, env);
+  }
+});
+
+test('a read of a settings file or a profile through a pipe of filters is no write (false positive seen after #134)', () => {
+  const lead = as(null);
+  for (const command of ["grep -n 'x$' ~/.bashrc | cut -c1-80 | head -5", 'cat ~/.zshrc | sort | uniq -c', 'grep -c "`" .claude/settings.json | tr -d " "']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  for (const command of ["echo 'export X=1' | tr X Y >> ~/.bashrc", 'cat ~/.bashrc | sort -o ~/.bashrc']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
+  }
+});
+
+test('review of #135, medium: OpenSSL options and variables are no safe value, in the settings nor in the profiles', async t => {
+  const { environmentReview, nodeOptionsKind } = await import('../hooks/scripts/lib.mjs');
+  assert.notEqual(nodeOptionsKind('--openssl-legacy-provider'), 'safe');
+  assert.notEqual(nodeOptionsKind('--force-fips'), 'safe');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-135-ssl-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, 'home'); const project = join(root, 'projet');
+  for (const key of ['OPENSSL_CONF', 'OPENSSL_MODULES', 'OPENSSL_ENGINES', 'NODE_EXTRA_CA_CERTS']) {
+    rmSync(home, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true });
+    mkdirSync(join(project, '.claude'), { recursive: true }); mkdirSync(home, { recursive: true });
+    writeFileSync(join(project, '.claude', 'settings.json'), `{"env":{"${key}":"/tmp/x"}}`);
+    assert.match(environmentReview({ home, projectDirs: [project], systemFiles: [] }).problems.join('\n'), new RegExp(`env\\.${key}`), `settings ${key}`);
+    rmSync(join(project, '.claude', 'settings.json'));
+    writeFileSync(join(home, '.bashrc'), `export ${key}=/tmp/x\n`);
+    assert.match(environmentReview({ home, projectDirs: [project], systemFiles: [] }).problems.join('\n'), new RegExp(`\\.bashrc : ${key}`), `profile ${key}`);
+  }
+  assert.equal(evaluateWrite({ tool_name: 'Write', tool_input: { file_path: join(project, '.claude', 'settings.local.json'), content: '{"env":{"NODE_OPTIONS":"--openssl-legacy-provider"}}' } }).decision, 'deny');
+});
+
+test('review of #135, low: the message of a git commit is no write to a profile; a real write in the same line still is', () => {
+  const lead = as(null);
+  const code = ['NODE', 'OPTIONS'].join('_');
+  for (const command of [`git commit -q -m "fix(hooks) : relit ~/.bashrc, ~/.zlogin et ${code}"`, `git commit --message="docs : ~/.profile et ${code}"`, 'git commit -F ~/.bashrc', `git tag -a v1 -m "~/.bashrc ${code}"`]) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  for (const command of [`git commit -m "x" && echo 'export ${code}=-r/tmp/x.js' >> ~/.bashrc`, `git commit -m "$(echo 'export ${code}=-r/tmp/x.js' >> ~/.bashrc)"`]) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
+  }
+});
+
+test('a read of a profile with a redirection to /dev/null, or an echo without redirection, is no write (false positives seen after #134)', () => {
+  const lead = as(null);
+  for (const command of ['grep -ls x ~/.bashrc ~/.zshrc 2>/dev/null', 'ls ~/.config/fish 2>&1 | head -3', 'grep -c x ~/.bashrc; echo "exit=$?"']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  for (const command of ['echo "$X" > ~/.bashrc', 'grep x ~/.bashrc > "$OUT"']) assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
+});

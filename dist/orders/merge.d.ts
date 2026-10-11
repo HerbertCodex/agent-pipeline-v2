@@ -81,6 +81,8 @@ export interface OrderMergeOptions {
     now?: () => number;
     monotonic?: () => number;
     challenge?: () => string;
+    /** Waits between tries of the attestation after a 429 (tests: no real wait). */
+    sleep?: (ms: number) => Promise<void>;
     /** Longest push (the attestation window is checked just before it). */
     pushTimeoutMs?: number;
     /** Called just before each push (tests: another run, or someone else, moves the target there). */

@@ -259,7 +259,7 @@ test('captures: required as soon as a file may change a screen, or when the tool
   assert.equal(renamed.status, 'refused', JSON.stringify(renamed));
   // A diff the tool cannot read (base unknown): never without object.
   const { touchesNoScreen } = await import('../dist/rules/check.js');
-  assert.equal(touchesNoScreen(p.repo, 'f'.repeat(40), head, []), null);
+  assert.match(touchesNoScreen(p.repo, 'f'.repeat(40), head, []).reasons.join('\n'), /diff illisible/);
 });
 
 test('review of #134, low: a test file under the code of the application loaded by import.meta.glob or a computed import, and a workflow, need the captures', async t => {
@@ -309,6 +309,153 @@ test('second review of #134, low: a pattern load anywhere, a monorepo and an ali
   const plain = { ...SITE, 'vite.config.ts': 'export default { test: { include: ["src/**/*.test.ts", "tests/**/*.spec.ts"] } };\n' };
   const ok = project(t, { base: plain, config, change: { 'src/lib/date.test.ts': 'test\n', 'tests/e2e/compte.spec.ts': 'test\n' } });
   assert.equal(rule((await ok.check()).report, 'captures').status, 'not_applicable');
+});
+
+test('captures (suivie, 11 October): a config and a test named only by a workflow comment, a script comment, the docs, the test configuration or the code map need none', async t => {
+  const config = { review: { always: ['fidelite'] } };
+  const unit = [{ id: 'unit', stage: 'full', command: node('0') }];
+  const base = { ...SITE,
+    'src/lib/admin/typography-guard.test.ts': 'test("x", () => {});\n',
+    '.github/workflows/ci.yml': 'name: ci\n# Contrôles de .apv/config.json, dans son ordre\n',
+    'scripts/dast/zap-scan.mjs': '/* lit .apv/config.json ou à la main */\nexport {};\n',
+    'docs/plans/rangement.html': '<p>.apv/config.json et src/lib/admin/typography-guard.test.ts</p>\n',
+    'docs/tests.md': 'Voir src/lib/admin/typography-guard.test.ts\n',
+    'vitest.config.ts': 'export default { test: { include: ["src/lib/admin/typography-guard.test.ts"] } };\n',
+    '.apv/code-map.md': '- src/lib/admin/typography-guard.test.ts\n',
+  };
+  const p = project(t, { base, config, change: { '.apv/config.json': { name: 'essai-2', gates: unit, ...config }, 'src/lib/admin/typography-guard.test.ts': 'test("y", () => {});\n' } });
+  const r = rule((await p.check()).report, 'captures');
+  assert.equal(r.status, 'not_applicable', JSON.stringify(r));
+  assert.match(r.detail, /^aucun écran touché : 2 fichiers/);
+});
+
+test('captures: when they stay required, the output names each file that makes them necessary, and why', async t => {
+  const config = { review: { always: ['fidelite'] } };
+  const reasons = async (base, change) => {
+    const r = rule((await project(t, { base, config, change }).check()).report, 'captures');
+    assert.equal(r.status, 'refused', JSON.stringify(r));
+    return r.detail;
+  };
+  // A page that imports the test file: named, with the page.
+  const imported = { ...SITE, 'src/lib/format.test.ts': 'export const f = x => x;\n', 'src/routes/compte/+page.ts': 'import { f } from "$lib/format.test";\nexport const load = () => ({ t: f("x") });\n' };
+  assert.match(await reasons(imported, { 'src/lib/format.test.ts': 'export const f = () => "y";\n' }), /src\/lib\/format\.test\.ts : nommé par src\/routes\/compte\/\+page\.ts/);
+  // A script the build runs names it: it counts.
+  const built = { ...SITE, 'package.json': { ...SITE['package.json'], scripts: { build: 'node scripts/gen.mjs && vite build' } }, 'scripts/gen.mjs': 'import "../tests/fixtures/pages.ts";\n', 'tests/fixtures/pages.ts': 'export default [];\n' };
+  assert.match(await reasons(built, { 'tests/fixtures/pages.ts': 'export default ["x"];\n' }), /tests\/fixtures\/pages\.ts : nommé par scripts\/gen\.mjs/);
+  assert.match(await reasons(SITE, { 'src/app.css': 'body { color: red; }\n' }), /src\/app\.css : peut changer un écran/);
+  assert.match(await reasons(SITE, { 'static/x.test.js': '1\n' }), /static\/x\.test\.js : dossier servi/);
+  const vite = { ...SITE, 'tests/fx/index.ts': 'export default 1;\n', 'vite.config.ts': 'export default { resolve: { alias: { "@fx": "./tests/fx" } } };\n' };
+  assert.match(await reasons(vite, { 'tests/fx/index.ts': 'export default 2;\n' }), /tests\/fx\/index\.ts : visé par l'alias de vite\.config\.ts/);
+  const glob = { ...SITE, 'src/routes/compte/+page.ts': 'const t = import.meta.glob("/tests/*.ts");\nexport const load = () => ({ t });\n' };
+  assert.match(await reasons(glob, { 'tests/a.test.ts': 'test\n' }), /tests\/a\.test\.ts : chargement par motif ou chemin calculé dans src\/routes\/compte\/\+page\.ts/);
+});
+
+/**
+ * A pull request updated with its base (#230 of the pilot project): the head T1 reviewed (every domain of the plan, the
+ * captures), then the target moves (`mainChange`), then the branch merges it (T2). Returns the project, T1 and a helper
+ * that runs rules check at a commit.
+ */
+async function updatedWithBase(t, { base = SITE, mainChange = { 'src/autre.ts': 'export const autre = 1;\n' }, change = { 'src/routes/carte/+page.svelte': '<div class="carte">x</div>\n' } } = {}) {
+  const p = project(t, { base, change });
+  const at = async sha => (await apv(p.repo, ['rules', 'check', '--commit', sha, '--target', 'origin/main', '--json'])).json();
+  const first = await at(p.head);
+  const retained = rule(first, 'relecture').detail.replace(/^.*: /, '').split(', ');
+  for (const d of retained) seedReview(p.repo, p.head, d, { captures: d === 'fidelite' ? ALL_CAPTURES : [] });
+  assert.equal(rule(await at(p.head), 'relecture').status, 'ok');
+  git(p.repo, 'switch', '-q', 'main');
+  for (const [path, value] of Object.entries(mainChange)) put(p.repo, path, value);
+  git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'la cible avance'); git(p.repo, 'push', '-q', 'origin', 'main');
+  git(p.repo, 'switch', '-q', 'feat');
+  git(p.repo, 'merge', '-q', '--no-edit', 'origin/main'); git(p.repo, 'push', '-q', 'origin', 'feat');
+  return { p, t1: p.head, t2: git(p.repo, 'rev-parse', 'HEAD'), at, retained };
+}
+
+test('relecture and captures (#230): a head that only merges its base, the diff identical byte for byte, keeps the reviews of the head before, said', async t => {
+  const { t1, t2, at } = await updatedWithBase(t);
+  const report = await at(t2);
+  const relecture = rule(report, 'relecture');
+  assert.equal(relecture.status, 'ok', JSON.stringify(relecture));
+  assert.match(relecture.domains.map(d => d.detail).join('\n'), new RegExp(`relecture reportée de ${t1.slice(0, 12)} \\(diff identique\\)`));
+  const captures = rule(report, 'captures');
+  assert.equal(captures.status, 'ok', JSON.stringify(captures));
+  assert.match(captures.detail, new RegExp(`reportée de ${t1.slice(0, 12)} \\(diff identique\\)`));
+  // The proof stays required at the exact commit: nothing proves T2.
+  assert.equal(rule(report, 'preuve').status, 'refused');
+});
+
+test('relecture (#230): nothing is carried when the merge changes the diff, the base touched a file of the diff, the head is no merge, or the other parent is not on the target', async t => {
+  // The base changed a file of the diff (another line of the same page): the diff differs.
+  {
+    const page = 'src/routes/carte/+page.svelte';
+    const { t2, at } = await updatedWithBase(t, { base: { ...SITE, [page]: 'a\nb\nc\nd\ne\nf\n' }, change: { [page]: 'A\nb\nc\nd\ne\nf\n' }, mainChange: { [page]: 'a\nb\nc\nd\ne\nF\n' } });
+    assert.equal(rule(await at(t2), 'relecture').status, 'refused', 'a file of the diff changed in the base');
+  }
+  // The merge commit brings a change of its own (amended).
+  {
+    const { p, at } = await updatedWithBase(t);
+    put(p.repo, 'src/lib/server/acces.ts', 'export const ouvert = true;\n');
+    git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-q', '--amend', '--no-edit'); git(p.repo, 'push', '-q', '-f', 'origin', 'feat');
+    assert.equal(rule(await at(git(p.repo, 'rev-parse', 'HEAD')), 'relecture').status, 'refused', 'a merge with a change of its own');
+  }
+  // A plain commit with the same diff (a rebase): not carried.
+  {
+    const { p, t1, at } = await updatedWithBase(t);
+    git(p.repo, 'reset', '-q', '--hard', 'origin/main'); git(p.repo, 'cherry-pick', t1); git(p.repo, 'push', '-q', '-f', 'origin', 'feat');
+    assert.equal(rule(await at(git(p.repo, 'rev-parse', 'HEAD')), 'relecture').status, 'refused', 'a rebase');
+  }
+  // The other parent is another branch, not on the target.
+  {
+    const { p, t1, at } = await updatedWithBase(t);
+    git(p.repo, 'reset', '-q', '--hard', t1);
+    git(p.repo, 'switch', '-q', '-c', 'autre', 'origin/main'); put(p.repo, 'src/autre-branche.ts', 'export const b = 1;\n'); git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'autre');
+    git(p.repo, 'switch', '-q', 'feat'); git(p.repo, 'merge', '-q', '--no-edit', 'autre'); git(p.repo, 'push', '-q', '-f', 'origin', 'feat');
+    assert.equal(rule(await at(git(p.repo, 'rev-parse', 'HEAD')), 'relecture').status, 'refused', 'the other parent is not on the target');
+  }
+});
+
+test('relecture (#230): two updates with the base in a row keep the reviews of the first head', async t => {
+  const { p, t1, at } = await updatedWithBase(t);
+  git(p.repo, 'switch', '-q', 'main'); put(p.repo, 'src/encore.ts', 'export const encore = 1;\n');
+  git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'la cible avance encore'); git(p.repo, 'push', '-q', 'origin', 'main');
+  git(p.repo, 'switch', '-q', 'feat'); git(p.repo, 'merge', '-q', '--no-edit', 'origin/main'); git(p.repo, 'push', '-q', 'origin', 'feat');
+  const relecture = rule(await at(git(p.repo, 'rev-parse', 'HEAD')), 'relecture');
+  assert.equal(relecture.status, 'ok', JSON.stringify(relecture));
+  assert.match(relecture.domains.map(d => d.detail).join('\n'), new RegExp(`reportée de ${t1.slice(0, 12)}`));
+});
+
+test('review of #135, high: a blocking review at the head always wins, and a critical or high finding anywhere in the chain blocks', async t => {
+  // A security review at T2 with a high finding, newer than the clean one of T1: refused, never carried over.
+  {
+    const { p, t2, at } = await updatedWithBase(t);
+    seedReview(p.repo, t2, 'securite', { high: 1, at: '2026-10-01T10:00:00.000Z' });
+    const relecture = rule(await at(t2), 'relecture');
+    assert.equal(relecture.status, 'refused', JSON.stringify(relecture));
+    assert.match(relecture.problems.join('\n'), /securite : 0 constat\(s\) critique\(s\) et 1 haut\(s\)/);
+  }
+  // A chain T1 → T2 → T3, a high finding at the middle head T2: refused at T3.
+  {
+    const { p, t2, at } = await updatedWithBase(t);
+    seedReview(p.repo, t2, 'securite', { high: 1, at: '2026-10-01T10:00:00.000Z' });
+    git(p.repo, 'switch', '-q', 'main'); put(p.repo, 'src/encore.ts', 'export const encore = 1;\n');
+    git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'la cible avance encore'); git(p.repo, 'push', '-q', 'origin', 'main');
+    git(p.repo, 'switch', '-q', 'feat'); git(p.repo, 'merge', '-q', '--no-edit', 'origin/main'); git(p.repo, 'push', '-q', 'origin', 'feat');
+    const relecture = rule(await at(git(p.repo, 'rev-parse', 'HEAD')), 'relecture');
+    assert.equal(relecture.status, 'refused', JSON.stringify(relecture));
+    assert.match(relecture.problems.join('\n'), new RegExp(`securite : 0 constat\\(s\\) critique\\(s\\) et 1 haut\\(s\\) à ${t2.slice(0, 12)}`));
+  }
+});
+
+test('review of #135, low: a line that starts with * counts as a comment only inside a block comment opened above', async t => {
+  const config = { review: { always: ['fidelite'] } };
+  const page = { ...SITE, 'src/lib/taux.test.ts': 'export default 2;\n',
+    'src/routes/compte/+page.ts': 'export const load = async () => ({ t: 1\n  * (await import("$lib/taux.test")).default });\nconst glob = "src/**/*.ts";\n' };
+  const r = rule((await project(t, { base: page, config, change: { 'src/lib/taux.test.ts': 'export default 3;\n' } }).check()).report, 'captures');
+  assert.equal(r.status, 'refused', JSON.stringify(r));
+  assert.match(r.detail, /src\/lib\/taux\.test\.ts : nommé par src\/routes\/compte\/\+page\.ts/);
+  // A real block comment still hides its mention.
+  const commented = { ...SITE, 'src/lib/taux.test.ts': 'export default 2;\n', 'src/lib/notes.ts': '/**\n * Voir $lib/taux.test pour les cas.\n */\nexport const n = 1;\n' };
+  const ok = rule((await project(t, { base: commented, config, change: { 'src/lib/taux.test.ts': 'export default 3;\n' } }).check()).report, 'captures');
+  assert.equal(ok.status, 'not_applicable', JSON.stringify(ok));
 });
 
 test('captures: without object once the fidelity review is lifted by a waiver; still required when a fidelity review is recorded (9 October 2026)', async t => {

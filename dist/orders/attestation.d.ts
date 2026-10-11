@@ -22,7 +22,12 @@ export interface AttestationRequest {
     order: PublishOrder;
     challenge: string;
     fetch?: Fetcher;
+    /** Waits between tries after a 429 (tests: no real wait). */
+    sleep?: (ms: number) => Promise<void>;
 }
+/** Tries of one attestation when the production answers 429 (too many requests), and the longest wait accepted. */
+export declare const ATTESTATION_TRIES = 3;
+export declare const ATTESTATION_MAX_WAIT_MS = 10000;
 /** `reason`: what the production answered, or why it could not be read (`unavailable`, `signature`, `challenge`...). */
 export type AttestationResult = {
     ok: true;

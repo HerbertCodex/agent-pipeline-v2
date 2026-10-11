@@ -68,7 +68,7 @@ export function evaluateWrite(input) {
 async function main() {
   const input = await readHookInput();
   // What the files the session loads hold, read at every call whatever wrote them (the home of the account, never HOME).
-  const integrity = environmentIntegrity({ home: userInfo().homedir, projectDirs: projectDirsOf(input) });
+  const integrity = environmentIntegrity({ home: userInfo().homedir, projectDirs: projectDirsOf(input), configDir: process.env.CLAUDE_CONFIG_DIR ?? null });
   const result = integrity.length ? { decision: 'deny', reason: integrityReason(integrity) } : evaluateWrite(input);
   if (result.decision === 'allow') return 0;
   process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: result.reason } })}\n`);

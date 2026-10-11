@@ -21,6 +21,23 @@ export type Fetcher = (url: string, init: { signal: AbortSignal; redirect: 'erro
 export interface AttestationRequest {
   template: string; timeoutMs: number; domain: string; keys: readonly PublicKey[]; order: PublishOrder; challenge: string;
   fetch?: Fetcher;
+  /** Waits between tries after a 429 (tests: no real wait). */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** Tries of one attestation when the production answers 429 (too many requests), and the longest wait accepted. */
+export const ATTESTATION_TRIES = 3;
+export const ATTESTATION_MAX_WAIT_MS = 10_000;
+/** Wait after a 429 without Retry-After: 1 s, then 2 s. */
+const BACKOFF_MS = [1_000, 2_000];
+
+/** The wait a 429 asks for (Retry-After in seconds or as a date), in ms; null when absent or unreadable. */
+function retryAfter(response: Response, now = Date.now()): number | null {
+  const value = response.headers.get('retry-after');
+  if (!value) return null;
+  if (/^\d+$/.test(value.trim())) return Number(value.trim()) * 1000;
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? null : Math.max(0, at - now);
 }
 /** `reason`: what the production answered, or why it could not be read (`unavailable`, `signature`, `challenge`...). */
 export type AttestationResult = { ok: true } | { ok: false; reason: string };
@@ -52,14 +69,24 @@ function field(text: string | null, name: string): unknown {
 /** Asks the production for an attestation of `order` bound to `challenge`, and checks it. Never throws. */
 export async function requestAttestation(request: AttestationRequest): Promise<AttestationResult> {
   const fetcher: Fetcher = request.fetch ?? ((url, init) => fetch(url, init));
+  const sleep = request.sleep ?? (ms => new Promise<void>(done => setTimeout(done, ms)));
   const url = attestationUrl(request.template, request.order.nonce, request.challenge);
   let response: Response;
   let body: string | null;
-  try {
-    response = await fetcher(url, { signal: AbortSignal.timeout(request.timeoutMs), redirect: 'error', headers: { accept: 'application/json' } });
-    body = await boundedText(response, ATTESTATION_MAX_BYTES);
-  } catch (error) {
-    return { ok: false, reason: `unavailable (${errorMessage(error).replace(/\s+/g, ' ').slice(0, 200)})` };
+  // A 429 (the production limits its requests) is tried again after the wait it asks for, a few times and never longer
+  // than ATTESTATION_MAX_WAIT_MS: same challenge, no attestation was given (review of #226).
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      response = await fetcher(url, { signal: AbortSignal.timeout(request.timeoutMs), redirect: 'error', headers: { accept: 'application/json' } });
+      body = await boundedText(response, ATTESTATION_MAX_BYTES);
+    } catch (error) {
+      return { ok: false, reason: `unavailable (${errorMessage(error).replace(/\s+/g, ' ').slice(0, 200)})` };
+    }
+    if (response.status !== 429) break;
+    const asked = retryAfter(response);
+    if (asked !== null && asked > ATTESTATION_MAX_WAIT_MS) return { ok: false, reason: `unavailable (HTTP 429, nouvel essai demandé dans ${Math.ceil(asked / 1000)} s : au-delà de ${ATTESTATION_MAX_WAIT_MS / 1000} s, relancer plus tard)` };
+    if (attempt >= ATTESTATION_TRIES) return { ok: false, reason: `unavailable (HTTP 429 à ${ATTESTATION_TRIES} essais : relancer plus tard)` };
+    await sleep(asked ?? BACKOFF_MS[attempt - 1] ?? BACKOFF_MS.at(-1)!);
   }
   if (response.status === 404) {
     const code = field(body, 'code');
