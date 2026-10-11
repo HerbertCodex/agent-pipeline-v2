@@ -2,6 +2,8 @@ import { type RemoteCheck } from '../gates/base-gates.js';
 import { type ReviewDomainName } from '../review/config.js';
 import { type MergeRule } from './config.js';
 import { type DocsOnlyLane } from './docs-only.js';
+import { type CiProofOutcome } from './ci-proof.js';
+import type { GhRunner } from '../stack/github.js';
 export type RuleStatus = 'ok' | 'refused' | 'waived' | 'not_applicable';
 export interface RuleOutcome {
     rule: MergeRule;
@@ -44,6 +46,8 @@ export interface RulesReport {
     lane: DocsOnlyLane;
     /** What could not be verified about the target (remote unreadable...), from the base of the checks. */
     warnings: string[];
+    /** The proof by the CI (rules.ciProof of the base), when the local receipts left checks unproven; null otherwise. */
+    ci: CiProofOutcome | null;
 }
 export interface RulesInput {
     repo: string;
@@ -54,6 +58,14 @@ export interface RulesInput {
     skip?: readonly MergeRule[];
     /** How the target is checked against the remote (`apv gates verify`: strict; tests inject `lsRemote`). */
     remote?: RemoteCheck;
+    /**
+     * The API GitHub reads the proof by the CI with (rules.ciProof): `gh` itself, never APV_GH; null or absent, nothing is
+     * read and the rule asks for the local proof. `repository` (owner/name) defaults to the origin on github.com.
+     */
+    ci?: {
+        gh: GhRunner | null;
+        repository?: string | null;
+    };
 }
 /** Whether the commit is a web interface: web dependencies in its package.json, or tracked interface files. */
 export declare function isWebAt(repo: string, sha: string): boolean;
