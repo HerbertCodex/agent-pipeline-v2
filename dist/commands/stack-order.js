@@ -17,6 +17,22 @@ export const ORDER_USAGE = `--order <référence>  (merge) fusion sur ordre sign
        production liée à un défi tiré par APV ; commit de fusion de parents (cible, tête) avec le pied Apv-Order, poussé
        sans force dans les maxAgeSeconds de l'attestation. Une étape à la fois, publication puis article ; déjà faites :
        already_done (sortie 0). Jamais l'API de fusion de GitHub, jamais de poussée forcée. Refus : code et raison.`;
+/**
+ * The rules checked before a merge on order (src/rules/check.ts) at `head`, against the exact commit of the target APV
+ * read and merges on (never a remote-tracking ref left stale), the proof by the CI (rules.ciProof of the base) read
+ * through `ci.gh`: the problems, empty when respected.
+ */
+export function orderRules(repo, ci) {
+    return async (head, base) => {
+        try {
+            const r = await checkMergeRules({ repo, commit: head, target: base, ci });
+            return r.ok ? [] : rulesLines(r, '  ').slice(1, -1);
+        }
+        catch (error) {
+            return [`règles avant fusion non vérifiables à ${head.slice(0, 12)} : ${errorMessage(error)}`];
+        }
+    };
+}
 /** Lines of the report of a merge on order. */
 export function orderLines(report, nonce) {
     const lines = [`Fusion sur ordre ${nonce}${report.target ? ` vers ${report.target}` : ''} :`];
@@ -54,16 +70,8 @@ export async function stackMergeOnOrder(prs, values, io, transcript, traceMerge)
         log: line => io.stderr(`${line}\n`),
         onCall: call => { calls.push(call); (values.json ? io.stderr : io.stdout)(transcript(bin, call)); },
         onMerged: merge => traceMerge(repo, merge),
-        // The rules at the exact commit of the target APV read and merges on: never a remote-tracking ref left stale.
-        rules: async (head, base) => {
-            try {
-                const r = await checkMergeRules({ repo, commit: head, target: base });
-                return r.ok ? [] : rulesLines(r, '  ').slice(1, -1);
-            }
-            catch (error) {
-                return [`règles avant fusion non vérifiables à ${head.slice(0, 12)} : ${errorMessage(error)}`];
-            }
-        },
+        // The proof by the CI is read with `gh` itself, never APV_GH (src/commands/rules.ts).
+        rules: orderRules(repo, { gh: processGh('gh', io.env, repo) }),
     });
     if (values.json)
         json(io, { ...report, nonce, calls });
