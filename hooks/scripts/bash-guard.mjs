@@ -1397,7 +1397,8 @@ const ENV_READERS = new Set(['cat', 'less', 'more', 'head', 'tail', 'grep', 'egr
 const ENV_FILTERS = new Set(['cut', 'sort', 'uniq', 'tr', 'nl', 'column', 'fold', 'fmt', 'rev', 'tac']);
 const writesAFile = w => {
   const name = basename(w[0]);
-  if (ENV_READERS.has(name)) return false;
+  // echo, printf, true and : write only to their output: a file only through a redirection or tee.
+  if (ENV_READERS.has(name) || ['echo', 'printf', 'true', ':'].includes(name)) return false;
   if (ENV_FILTERS.has(name)) return name === 'sort' && w.slice(1).some(a => /^-[a-zA-Z]*o|^--output/.test(a));
   return true;
 };
@@ -1416,20 +1417,51 @@ const ENV_LITERAL_WRITERS = new Set(['echo', 'printf', 'tee', 'true', ':', 'touc
  * guard cannot follow, a hard link with a computed name. The first net only: the files themselves are read at every
  * tool call (environmentIntegrity).
  */
-export function environmentCommandProblem(command, segments, shadow, where = {}) {
-  const flat = flatten(String(command));
-  const guarded = namesApvVariable(command) || commandSetsCodeVariable(command);
-  const settingsValue = commandTouchesGuardedSettings(command);
+/** Subcommands of git that take a message (`-m`, `--message`) or a file read as one (`-F`, `--file`). */
+const GIT_MESSAGE_COMMANDS = new Set(['commit', 'tag', 'merge', 'notes', 'revert', 'stash']);
+const GIT_MESSAGE_OPTIONS = new Set(['-m', '--message', '-F', '--file']);
+
+/**
+ * The words of a line without the messages of git (review of #135): the text of `-m`, `--message`, and the file `-F`,
+ * `--file` reads as a message, are no write to the files they name. What runs inside them (`$(…)`, backquotes) stays.
+ */
+export function withoutGitMessages(segments) {
+  return segments.map(words => {
+    const cw = commandWords(words)?.words ?? words;
+    if (basename(cw[0] ?? '') !== 'git' || !GIT_MESSAGE_COMMANDS.has(cw.slice(1).find(w => !w.startsWith('-')) ?? '')) return words;
+    const out = [];
+    for (let k = 0; k < words.length; k += 1) {
+      const word = words[k];
+      if (GIT_MESSAGE_OPTIONS.has(word) && k + 1 < words.length) { out.push(...substitutions(words[k + 1])); k += 1; continue; }
+      const attached = /^(?:--message=|--file=|-m|-F)(.+)$/.exec(word);
+      if (attached) { out.push(...substitutions(attached[1])); continue; }
+      out.push(word);
+    }
+    return out;
+  });
+}
+
+export function environmentCommandProblem(command, rawSegments, shadow, where = {}) {
+  // The messages of git name files without writing them: judged without them, what runs inside them kept.
+  const segments = withoutGitMessages(rawSegments);
+  // The text of the line, the values of the git messages blanked unless something runs inside them (`$(…)`, backquotes);
+  // read raw, since the words of the tokenizer drop the `$` of an expansion.
+  const messages = segments.some((w, k) => w.length !== rawSegments[k].length);
+  const text = messages ? String(command).replace(/(^|\s)(?:-m|--message|-F|--file)(?:=|\s+)("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|]+)/g, (m, lead, v) => (/\$\(|`/.test(v) ? m : `${lead} `)) : String(command);
+  const flat = flatten(text);
+  const guarded = namesApvVariable(text) || commandSetsCodeVariable(text);
+  const settingsValue = commandTouchesGuardedSettings(text);
   // A change of folder is no reader nor writer: judged by where it leads.
   const words = segments.map(w => commandWords(w)?.words ?? w).filter(w => w.length && !['cd', 'pushd', 'popd'].includes(basename(w[0])));
   const outputs = [...String(command).matchAll(/(?:^|[^<&\d])\d?>{1,2}\|?\s*([^\s;&|<>()]+)/g)].map(m => m[1])
     .concat(words.filter(w => basename(w[0]) === 'tee').flatMap(w => w.slice(1).filter(a => !a.startsWith('-'))));
-  const redirects = /(?:^|[^<&\d-])\d?>{1,2}(?!&)/.test(String(shadow ?? command));
+  // A redirection to /dev/null, /dev/stdout or /dev/stderr writes no file; a target the shadow blanks (quoted) may.
+  const redirects = [...String(shadow ?? command).matchAll(/(?:^|[^<&\d-])\d?>{1,2}\|?(?!&)\s*([^\s;&|<>()]*)/g)].some(m => !/^\/dev\/(?:null|stdout|stderr)$/.test(m[1]));
   const writes = redirects || words.some(writesAFile);
   // A hard link under a computed name may give a neutral name to a settings file or a profile.
   if (words.some(w => basename(w[0]) === 'ln' && !w.slice(1).some(a => /^-[a-zA-Z]*s|^--symbolic$/.test(a)) && w.slice(1).some(a => /[$`*?[]/.test(a)))) return true;
   // Each simple command judged from the folder it runs in: a cd of the line leads there (cdTarget, as the stores).
-  const kinds = environmentFilesIn(command, where);
+  const kinds = environmentFilesIn(text, where);
   let dir = where.cwd ?? null;
   let lost = false;
   for (const segment of segments) {

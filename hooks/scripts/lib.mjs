@@ -212,14 +212,16 @@ export function namesApvVariable(text) {
  * Variables that make a program run other code (Node, the dynamic linker, a non-interactive shell): long names, found
  * even rebuilt. ENV and PATH, short, count by their exact name only.
  */
-const CODE_VARIABLES = /NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|BASH_ENV|DYLD_[A-Z_]+/i;
-const CODE_VARIABLE_NAME = /^(?:NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|BASH_ENV|DYLD_[A-Z_]+|ENV)$/i;
+// OpenSSL reads its configuration (which may load an engine or a provider, a library) and its modules from OPENSSL_*;
+// NODE_EXTRA_CA_CERTS adds trusted authorities (the attestation of the production goes over HTTPS): review of #135.
+const CODE_VARIABLES = /NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|BASH_ENV|DYLD_[A-Z_]+|OPENSSL_[A-Z_]+|NODE_EXTRA_CA_CERTS/i;
+const CODE_VARIABLE_NAME = /^(?:NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|BASH_ENV|DYLD_[A-Z_]+|OPENSSL_\w+|NODE_EXTRA_CA_CERTS|ENV)$/i;
 /**
  * Names refused in the env block of the settings: the variables of the tool, those that run code, and those the hooks or
  * git read to decide (PATH, HOME, the folders of Claude Code and of the project, git's own, the configuration folder, zsh's).
  * A list of refusals, not of permissions: Claude Code documents many variables of its own, and the operator his.
  */
-const SETTINGS_ENV_REFUSED = /^(?:APV_\w*|GIT_\w*|LD_\w*|DYLD_\w*|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|ZDOTDIR|PATH|HOME|XDG_CONFIG_HOME|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_ROOT|CLAUDE_CONFIG_DIR)$/i;
+const SETTINGS_ENV_REFUSED = /^(?:APV_\w*|GIT_\w*|LD_\w*|DYLD_\w*|OPENSSL_\w*|NODE_EXTRA_CA_CERTS|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|ZDOTDIR|PATH|HOME|XDG_CONFIG_HOME|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_ROOT|CLAUDE_CONFIG_DIR)$/i;
 
 /**
  * Settings read as Claude Code may read them: JSON, or JSON with comments and trailing commas (JSONC); null when neither.
@@ -373,7 +375,7 @@ const LIBRARY_PATHS = /^(?:LD_LIBRARY_PATH|DYLD_LIBRARY_PATH|DYLD_FALLBACK_LIBRA
 /** Options of Node that load or run code (a module, a loader, a file of variables, a text). */
 const NODE_LOADING = /^(?:-r|--require|--import|--loader|--experimental-loader|--env-file|--env-file-if-exists|-e|--eval|-p|--print|--experimental-policy|--experimental-default-type|--experimental-specifier-resolution)(?:=|$)/;
 /** Options of Node known to load no code (memory, traces, warnings, network defaults). */
-const NODE_SAFE = /^--(?:(?:max-old-space-size|max-semi-space-size|stack-size|stack-trace-limit|max-http-header-size)=\d+|enable-source-maps|no-warnings|no-deprecation|trace-warnings|trace-deprecation|trace-uncaught|unhandled-rejections=[a-z-]+|dns-result-order=[a-z]+|use-openssl-ca|use-system-ca|use-bundled-ca|openssl-legacy-provider|force-fips|tls-min-v1\.[0-3]|tls-max-v1\.[23])$/;
+const NODE_SAFE = /^--(?:(?:max-old-space-size|max-semi-space-size|stack-size|stack-trace-limit|max-http-header-size)=\d+|enable-source-maps|no-warnings|no-deprecation|trace-warnings|trace-deprecation|trace-uncaught|unhandled-rejections=[a-z-]+|dns-result-order=[a-z]+|use-openssl-ca|use-system-ca|use-bundled-ca|tls-min-v1\.[0-3]|tls-max-v1\.[23])$/;
 
 /**
  * What a value of NODE_OPTIONS does: 'safe' (only options known to load no code, its own former value kept), 'loads' (an

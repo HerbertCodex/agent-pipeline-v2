@@ -1180,3 +1180,41 @@ test('a read of a settings file or a profile through a pipe of filters is no wri
     assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
   }
 });
+
+test('review of #135, medium: OpenSSL options and variables are no safe value, in the settings nor in the profiles', async t => {
+  const { environmentReview, nodeOptionsKind } = await import('../hooks/scripts/lib.mjs');
+  assert.notEqual(nodeOptionsKind('--openssl-legacy-provider'), 'safe');
+  assert.notEqual(nodeOptionsKind('--force-fips'), 'safe');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-135-ssl-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, 'home'); const project = join(root, 'projet');
+  for (const key of ['OPENSSL_CONF', 'OPENSSL_MODULES', 'OPENSSL_ENGINES', 'NODE_EXTRA_CA_CERTS']) {
+    rmSync(home, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true });
+    mkdirSync(join(project, '.claude'), { recursive: true }); mkdirSync(home, { recursive: true });
+    writeFileSync(join(project, '.claude', 'settings.json'), `{"env":{"${key}":"/tmp/x"}}`);
+    assert.match(environmentReview({ home, projectDirs: [project], systemFiles: [] }).problems.join('\n'), new RegExp(`env\\.${key}`), `settings ${key}`);
+    rmSync(join(project, '.claude', 'settings.json'));
+    writeFileSync(join(home, '.bashrc'), `export ${key}=/tmp/x\n`);
+    assert.match(environmentReview({ home, projectDirs: [project], systemFiles: [] }).problems.join('\n'), new RegExp(`\\.bashrc : ${key}`), `profile ${key}`);
+  }
+  assert.equal(evaluateWrite({ tool_name: 'Write', tool_input: { file_path: join(project, '.claude', 'settings.local.json'), content: '{"env":{"NODE_OPTIONS":"--openssl-legacy-provider"}}' } }).decision, 'deny');
+});
+
+test('review of #135, low: the message of a git commit is no write to a profile; a real write in the same line still is', () => {
+  const lead = as(null);
+  const code = ['NODE', 'OPTIONS'].join('_');
+  for (const command of [`git commit -q -m "fix(hooks) : relit ~/.bashrc, ~/.zlogin et ${code}"`, `git commit --message="docs : ~/.profile et ${code}"`, 'git commit -F ~/.bashrc', `git tag -a v1 -m "~/.bashrc ${code}"`]) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  for (const command of [`git commit -m "x" && echo 'export ${code}=-r/tmp/x.js' >> ~/.bashrc`, `git commit -m "$(echo 'export ${code}=-r/tmp/x.js' >> ~/.bashrc)"`]) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
+  }
+});
+
+test('a read of a profile with a redirection to /dev/null, or an echo without redirection, is no write (false positives seen after #134)', () => {
+  const lead = as(null);
+  for (const command of ['grep -ls x ~/.bashrc ~/.zshrc 2>/dev/null', 'ls ~/.config/fish 2>&1 | head -3', 'grep -c x ~/.bashrc; echo "exit=$?"']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  for (const command of ['echo "$X" > ~/.bashrc', 'grep x ~/.bashrc > "$OUT"']) assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
+});
