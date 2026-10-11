@@ -178,6 +178,90 @@ test('captures: in a project with screens, whatever changes what a screen shows 
   }
 });
 
+/** A SvelteKit site: a page, a component it uses, the global styles and the page template. */
+const SITE = {
+  'package.json': { name: 'site', devDependencies: { '@sveltejs/kit': '2.0.0', svelte: '5.0.0' } },
+  'src/routes/compte/+page.svelte': '<script>import Header from "$lib/components/Header.svelte";</script>\n<Header />\n',
+  'src/lib/components/Header.svelte': '<header>Compte</header>\n',
+  'src/app.css': 'body { color: #111; }\n',
+  'src/app.html': '<!doctype html><html><body>%sveltekit.body%</body></html>\n',
+};
+test('captures: without object when the change touches no screen, even when fidelite is retained (#228: a change of .apv/config.json alone)', async t => {
+  const config = { review: { always: ['fidelite'] } };
+  const unit = [{ id: 'unit', stage: 'full', command: node('0') }];
+  for (const change of [
+    { '.apv/config.json': { name: 'essai-2', gates: unit, ...config } },
+    { 'src/lib/date.test.ts': 'import { test } from "vitest";\ntest("x", () => {});\n', 'tests/e2e/compte.spec.ts': 'import { test } from "@playwright/test";\n' },
+    { 'docs/guide.md': '# Guide\n', 'CHANGELOG.md': '# Journal\n', '.github/workflows/ci.yml': 'name: ci\n' },
+  ]) {
+    const p = project(t, { base: SITE, config, change });
+    const report = (await p.check()).report;
+    assert.match(rule(report, 'relecture').detail, /fidelite/, 'the plan retains fidelite');
+    const r = rule(report, 'captures');
+    assert.equal(r.status, 'not_applicable', `${Object.keys(change).join(', ')} : ${JSON.stringify(r)}`);
+    assert.match(r.detail, new RegExp(`^aucun écran touché : ${Object.keys(change).length} fichiers?, aucun d'interface`));
+    const human = (await apv(p.repo, ['rules', 'check', '--commit', p.head, '--target', 'origin/main'])).stdout;
+    assert.match(human, /captures \(.*\) : sans objet : aucun écran touché/);
+  }
+});
+
+test('captures: required as soon as a file may change a screen, or when the tool cannot tell', async t => {
+  const config = { review: { always: ['fidelite'] } };
+  const required = async (p, what) => {
+    const r = rule((await p.check()).report, 'captures');
+    assert.equal(r.status, 'refused', `${what} : ${JSON.stringify(r)}`);
+    assert.match(r.detail, /captures attendues/, what);
+  };
+  for (const change of [
+    { 'src/routes/compte/+page.svelte': '<h1>Compte</h1>\n' },
+    { 'src/routes/compte/+page.server.ts': 'export const load = () => ({ titre: "Compte" });\n' },
+    { 'src/app.css': 'body { color: #fff; }\n' },
+    { 'src/lib/messages.ts': 'export const bienvenue = "Bonjour";\n' },
+    { 'src/lib/i18n/fr.json': '{ "titre": "Compte" }\n' },
+    { 'static/logo.svg': '<svg xmlns="http://www.w3.org/2000/svg"/>\n' },
+    { 'src/lib/components/Carte.inhabituel': 'texte affiché\n' },
+    { 'src/content/blog/premier.md': '# Premier article\n' },
+    { 'src/lib/date.test.ts': 'test\n', 'src/lib/components/Header.svelte': '<header>Autre</header>\n' },
+  ]) await required(project(t, { base: SITE, config, change }), Object.keys(change).join(', '));
+  // A file under a test name, or a document, that a page imports: an interface file.
+  const imported = { ...SITE, 'src/lib/format.test.ts': 'export const f = x => x;\n', 'src/routes/compte/+page.ts': 'import { f } from "$lib/format.test";\nexport const load = () => ({ t: f("x") });\n' };
+  await required(project(t, { base: imported, config, change: { 'src/lib/format.test.ts': 'export const f = () => "piégé";\n' } }), 'a test-named file a page imports');
+  const readme = { ...SITE, 'src/routes/aide/+page.ts': 'import texte from "../../../README.md?raw";\nexport const load = () => ({ texte });\n' };
+  await required(project(t, { base: readme, config, change: { 'README.md': '# Autre texte\n' } }), 'a document a page imports');
+  // Documentation served by a documentation site.
+  await required(project(t, { base: { ...SITE, 'mkdocs.yml': 'site_name: x\n' }, config, change: { 'docs/guide.md': '# Guide\n' } }), 'docs of a documentation site');
+  // A test-named file under a served folder; a test folder inside the routes.
+  await required(project(t, { base: SITE, config, change: { 'static/tests/donnees.test.js': 'export default 1;\n' } }), 'a served folder');
+  await required(project(t, { base: SITE, config, change: { 'src/routes/tests/donnees.json': '{}\n' } }), 'a test folder inside the routes');
+  // Documents read by a path built in code: by their folder, or by their bare name.
+  const reader = { ...SITE, 'src/routes/doc/[slug]/+page.server.ts': 'import { readFileSync } from "node:fs";\nexport const load = ({ params }) => ({ texte: readFileSync("docs/" + params.slug + ".md", "utf8") });\n' };
+  await required(project(t, { base: reader, config, change: { 'docs/guide.md': '# Autre guide\n' } }), 'docs read by a built path');
+  const notes = { ...SITE, 'src/routes/notes/+page.server.ts': 'import { readFileSync } from "node:fs";\nexport const load = () => ({ texte: readFileSync("CHANGELOG.md", "utf8") });\n' };
+  await required(project(t, { base: notes, config, change: { 'CHANGELOG.md': '# Autre\n' } }), 'a root document read by its bare name');
+  // A served folder linked to a test folder: a fixture changed there is served.
+  const { symlinkSync } = await import('node:fs');
+  const linked = project(t, { base: { ...SITE, 'tests/fixtures/logo.svg': '<svg xmlns="http://www.w3.org/2000/svg"/>\n' }, config });
+  mkdirSync(join(linked.repo, 'static')); symlinkSync('../tests/fixtures', join(linked.repo, 'static', 'images'));
+  git(linked.repo, 'add', '-A'); git(linked.repo, 'commit', '-qm', 'lien'); git(linked.repo, 'push', '-q', 'origin', 'feat');
+  git(linked.repo, 'switch', '-q', 'main'); git(linked.repo, 'merge', '-q', '--ff-only', 'feat'); git(linked.repo, 'push', '-q', 'origin', 'main'); git(linked.repo, 'switch', '-q', 'feat');
+  writeFileSync(join(linked.repo, 'tests', 'fixtures', 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><text>piégé</text></svg>\n');
+  git(linked.repo, 'commit', '-qam', 'fixture'); git(linked.repo, 'push', '-q', 'origin', 'feat');
+  const linkedHead = git(linked.repo, 'rev-parse', 'HEAD');
+  const viaLink = rule((await apv(linked.repo, ['rules', 'check', '--commit', linkedHead, '--target', 'origin/main', '--json'])).json(), 'captures');
+  assert.equal(viaLink.status, 'refused', `a test folder served through a link : ${JSON.stringify(viaLink)}`);
+  // A component renamed under a test name: its removal is a change of the screens.
+  const p = project(t, { base: SITE, config });
+  mkdirSync(join(p.repo, 'tests'));
+  git(p.repo, 'mv', 'src/lib/components/Header.svelte', 'tests/Header.test.ts');
+  git(p.repo, 'commit', '-qm', 'renommage'); git(p.repo, 'push', '-q', 'origin', 'feat');
+  const head = git(p.repo, 'rev-parse', 'HEAD');
+  const renamed = rule((await apv(p.repo, ['rules', 'check', '--commit', head, '--target', 'origin/main', '--json'])).json(), 'captures');
+  assert.equal(renamed.status, 'refused', JSON.stringify(renamed));
+  // A diff the tool cannot read (base unknown): never without object.
+  const { touchesNoScreen } = await import('../dist/rules/check.js');
+  assert.equal(touchesNoScreen(p.repo, 'f'.repeat(40), head, []), null);
+});
+
 test('captures: without object once the fidelity review is lifted by a waiver; still required when a fidelity review is recorded (9 October 2026)', async t => {
   const screen = { 'src/routes/carte/+page.svelte': '<div class="carte">x</div>\n' };
   // By domain: « dérogation relecture:fidelite ».
