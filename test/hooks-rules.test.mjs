@@ -1127,3 +1127,56 @@ test('second review of #134, B: the start of the session says what the loaded se
   assert.match(out.systemMessage, /settings\.local\.json : disableAllHooks/);
   assert.match(out.hookSpecificOutput.additionalContext, /retire lui-même/);
 });
+
+test('third review of #134: B reads the other files that set the environment, and does not block values that load no code', async t => {
+  const { environmentIntegrity, environmentReview } = await import('../hooks/scripts/lib.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-134c-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, 'home'); const project = join(root, 'projet'); const configDir = join(root, 'config-claude'); const etc = join(root, 'etc-environment');
+  for (const d of [home, project, configDir]) mkdirSync(d, { recursive: true });
+  const put = (file, text) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text); };
+  const review = () => environmentReview({ home, projectDirs: [project], configDir, systemFiles: [etc] });
+  const reset = () => { rmSync(home, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true }); rmSync(configDir, { recursive: true, force: true }); rmSync(etc, { force: true }); for (const d of [home, project, configDir]) mkdirSync(d, { recursive: true }); };
+  const name = ['APV', 'ALLOW', 'MERGE'].join('_');
+  for (const [what, file, text, expected] of [
+    ['.zlogin', join(home, '.zlogin'), `export ${name}=1\n`, /\.zlogin : APV_ALLOW_MERGE/],
+    ['fish', join(home, '.config', 'fish', 'config.fish'), `set -gx ${name} 1\n`, /config\.fish : APV_ALLOW_MERGE/],
+    ['fish conf.d', join(home, '.config', 'fish', 'conf.d', 'x.fish'), 'set -x LD_PRELOAD /tmp/x.so\n', /x\.fish : LD_PRELOAD/],
+    ['environment.d', join(home, '.config', 'environment.d', '50-x.conf'), 'NODE_OPTIONS=--require=/tmp/x.js\n', /50-x\.conf : NODE_OPTIONS/],
+    ['.pam_environment', join(home, '.pam_environment'), 'LD_PRELOAD DEFAULT=/tmp/x.so\n', /\.pam_environment : LD_PRELOAD/],
+    ['.envrc of the project', join(project, '.envrc'), `export ${name}=1\n`, /\.envrc : APV_ALLOW_MERGE/],
+    ['/etc/environment', etc, 'BASH_ENV=/tmp/x\n', /etc-environment : BASH_ENV/],
+    ['CLAUDE_CONFIG_DIR', join(configDir, 'settings.json'), '{"disableAllHooks":true}', /config-claude\/settings\.json : disableAllHooks/],
+  ]) {
+    reset(); put(file, text);
+    assert.match(environmentIntegrity({ home, projectDirs: [project], configDir, systemFiles: [etc] }).join('\n'), expected, what);
+  }
+  // Values that load no code: no refusal; ambiguous ones: a warning, never a refusal of every tool.
+  reset();
+  put(join(home, '.bashrc'), 'export NODE_OPTIONS=--max-old-space-size=4096\nexport LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH\nexport NODE_OPTIONS="$NODE_OPTIONS --inspect"\n');
+  const soft = review();
+  assert.deepEqual(soft.problems, [], JSON.stringify(soft));
+  assert.match(soft.warnings.join('\n'), /LD_LIBRARY_PATH/);
+  assert.match(soft.warnings.join('\n'), /NODE_OPTIONS/);
+  for (const value of ['--max-old-space-size=4096 --require /tmp/x.js', '-r /tmp/x.js', '--import=data:text/javascript,1', '--loader ./x.mjs', '--experimental-loader=./x.mjs']) {
+    reset(); put(join(home, '.bashrc'), `export NODE_OPTIONS="${value}"\n`);
+    assert.match(review().problems.join('\n'), /NODE_OPTIONS/, value);
+  }
+  // In the settings (an agent can write them in a project): only values known to load no code pass.
+  reset(); put(join(project, '.claude', 'settings.json'), '{"env":{"NODE_OPTIONS":"--max-old-space-size=8192"}}');
+  assert.deepEqual(review().problems, []);
+  for (const env of ['{"NODE_OPTIONS":"--inspect"}', '{"NODE_OPTIONS":"--import=x"}', '{"LD_LIBRARY_PATH":"/usr/local/cuda/lib64"}']) {
+    reset(); put(join(project, '.claude', 'settings.json'), `{"env":${env}}`);
+    assert.ok(review().problems.length, env);
+  }
+});
+
+test('a read of a settings file or a profile through a pipe of filters is no write (false positive seen after #134)', () => {
+  const lead = as(null);
+  for (const command of ["grep -n 'x$' ~/.bashrc | cut -c1-80 | head -5", 'cat ~/.zshrc | sort | uniq -c', 'grep -c "`" .claude/settings.json | tr -d " "']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+  for (const command of ["echo 'export X=1' | tr X Y >> ~/.bashrc", 'cat ~/.bashrc | sort -o ~/.bashrc']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
+  }
+});

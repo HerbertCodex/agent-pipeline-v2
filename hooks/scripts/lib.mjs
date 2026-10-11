@@ -1,6 +1,6 @@
 // Shared helpers for the APV plugin hooks. Node built-ins only: hooks run
 // before any dependency install and must never fail because of a package.
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -248,7 +248,10 @@ function refusedSettings(value) {
   if (!value || typeof value !== 'object') return out;
   const env = value.env;
   if (env && typeof env === 'object') {
-    for (const [key, v] of Object.entries(env)) if (SETTINGS_ENV_REFUSED.test(key) || namesApvVariable(key) || CODE_VARIABLE_NAME.test(key)) out.push([`env.${key}`, v]);
+    for (const [key, v] of Object.entries(env)) {
+      if (/^NODE_OPTIONS$/i.test(key) && nodeOptionsKind(v) === 'safe') continue;
+      if (SETTINGS_ENV_REFUSED.test(key) || namesApvVariable(key) || CODE_VARIABLE_NAME.test(key) || /^NODE_OPTIONS$/i.test(key)) out.push([`env.${key}`, v]);
+    }
   }
   if (value.disableAllHooks !== undefined && value.disableAllHooks !== false) out.push(['disableAllHooks', value.disableAllHooks]);
   const plugins = value.enabledPlugins;
@@ -322,15 +325,22 @@ export function commandTouchesGuardedSettings(command) {
 }
 
 /** The profiles of the shells the session may load at its start, under the home of the account. */
-const LOADED_PROFILES = ['.bashrc', '.profile', '.bash_profile', '.bash_login', '.bash_aliases', '.zshrc', '.zshenv', '.zprofile'];
+const LOADED_PROFILES = ['.bashrc', '.profile', '.bash_profile', '.bash_login', '.bash_aliases', '.zshrc', '.zshenv', '.zprofile', '.zlogin',
+  '.envrc', '.pam_environment', '.config/fish/config.fish'];
+/** Folders whose every file sets the environment: fish's conf.d, systemd's environment.d. */
+const LOADED_FOLDERS = ['.config/fish/conf.d', '.config/environment.d'];
 /** Settings Claude Code manages for the whole machine. */
 const MANAGED_SETTINGS = ['/etc/claude-code/managed-settings.json', '/Library/Application Support/ClaudeCode/managed-settings.json'];
+/** Files of the system that set the environment of every session. */
+const SYSTEM_ENVIRONMENT = ['/etc/environment'];
 
 /**
- * The files that set the environment of the session at its start: the settings of the account, of each project folder
- * (the folder of the session and its parents, the project folder Claude Code gives), the managed settings, the profiles.
+ * The files that set the environment of the session at its start: the settings of the account, of the folder
+ * CLAUDE_CONFIG_DIR names (`configDir`), of each project folder (the folder of the session and its parents, the project
+ * folder Claude Code gives), the managed settings; the profiles of the shells, fish and systemd's environment, the .envrc
+ * of direnv (home and project folders), the files of the system (`systemFiles`).
  */
-export function knownEnvironmentFiles({ home, projectDirs = [] }) {
+export function knownEnvironmentFiles({ home, projectDirs = [], configDir = null, systemFiles = SYSTEM_ENVIRONMENT }) {
   const settings = [...MANAGED_SETTINGS];
   const dirs = new Set();
   for (const start of [home, ...projectDirs]) {
@@ -341,8 +351,16 @@ export function knownEnvironmentFiles({ home, projectDirs = [] }) {
     }
   }
   for (const dir of dirs) settings.push(posix.join(dir, '.claude', 'settings.json'), posix.join(dir, '.claude', 'settings.local.json'));
-  return [...new Set(settings)].map(path => ({ path, kind: 'settings' }))
-    .concat(home ? LOADED_PROFILES.map(name => ({ path: posix.join(home, name), kind: 'profile' })) : []);
+  if (typeof configDir === 'string' && configDir.startsWith('/')) settings.push(posix.join(configDir, 'settings.json'), posix.join(configDir, 'settings.local.json'));
+  const profiles = [...systemFiles];
+  if (home) {
+    profiles.push(...LOADED_PROFILES.map(name => posix.join(home, name)));
+    for (const folder of LOADED_FOLDERS) {
+      try { for (const name of readdirSync(posix.join(home, folder))) profiles.push(posix.join(home, folder, name)); } catch { /* none */ }
+    }
+  }
+  for (const dir of projectDirs) if (typeof dir === 'string' && dir) profiles.push(posix.join(dir, '.envrc'));
+  return [...new Set(settings)].map(path => ({ path, kind: 'settings' })).concat([...new Set(profiles)].map(path => ({ path, kind: 'profile' })));
 }
 
 /** The folders of the project of a hook call: its working folder, and the project folder Claude Code gives. */
@@ -350,25 +368,77 @@ export function projectDirsOf(input, env = process.env) {
   return [typeof input?.cwd === 'string' ? input.cwd : null, typeof env.CLAUDE_PROJECT_DIR === 'string' ? env.CLAUDE_PROJECT_DIR : null, process.cwd()].filter(Boolean);
 }
 
-/** The names a profile sets that the guards refuse: an APV variable or a variable that runs code (comments skipped). */
-function refusedInProfile(text) {
+/** Variables whose value tells the dynamic linker where to look, without loading anything by themselves: said, not refused, in a profile. */
+const LIBRARY_PATHS = /^(?:LD_LIBRARY_PATH|DYLD_LIBRARY_PATH|DYLD_FALLBACK_LIBRARY_PATH|DYLD_FRAMEWORK_PATH|DYLD_FALLBACK_FRAMEWORK_PATH)$/i;
+/** Options of Node that load or run code (a module, a loader, a file of variables, a text). */
+const NODE_LOADING = /^(?:-r|--require|--import|--loader|--experimental-loader|--env-file|--env-file-if-exists|-e|--eval|-p|--print|--experimental-policy|--experimental-default-type|--experimental-specifier-resolution)(?:=|$)/;
+/** Options of Node known to load no code (memory, traces, warnings, network defaults). */
+const NODE_SAFE = /^--(?:(?:max-old-space-size|max-semi-space-size|stack-size|stack-trace-limit|max-http-header-size)=\d+|enable-source-maps|no-warnings|no-deprecation|trace-warnings|trace-deprecation|trace-uncaught|unhandled-rejections=[a-z-]+|dns-result-order=[a-z]+|use-openssl-ca|use-system-ca|use-bundled-ca|openssl-legacy-provider|force-fips|tls-min-v1\.[0-3]|tls-max-v1\.[23])$/;
+
+/**
+ * What a value of NODE_OPTIONS does: 'safe' (only options known to load no code, its own former value kept), 'loads' (an
+ * option that loads or runs code), 'unknown' (anything else: another option, a computed value).
+ */
+export function nodeOptionsKind(value) {
+  const words = flatten(String(value ?? '')).split(/\s+/).filter(w => w && !/^\$\{?NODE_OPTIONS\}?$/.test(w));
+  if (words.some(w => NODE_LOADING.test(w))) return 'loads';
+  return words.every(w => NODE_SAFE.test(w)) ? 'safe' : 'unknown';
+}
+
+/**
+ * The values a line of shell or of an environment file gives to `name`, read from the line as written (quotes kept, so
+ * that `"$NODE_OPTIONS --inspect"` stays whole): `NAME=value`, `export NAME=value`, `setenv NAME value`, `set -gx NAME
+ * value` (fish), `NAME DEFAULT=value` (.pam_environment).
+ */
+function valuesOf(line, name) {
   const out = [];
-  for (const raw of String(text ?? '').split('\n')) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    for (const name of namesSet(flatten(line))) if (/^APV_/i.test(name) || CODE_VARIABLE_NAME.test(name)) out.push(name);
-  }
+  for (const m of line.matchAll(/(?:^|[\s;&|(])([A-Za-z_]\w*)\+?=("[^"]*"|'[^']*'|\S*)/g)) if (m[1] === name) out.push(m[2]);
+  for (const m of line.matchAll(/(?:^|[\s;&|(])(?:setenv|set\s+-\w*[xgU]\w*)\s+([A-Za-z_]\w*)\s*(.*)$/g)) if (m[1] === name) out.push(m[2]);
+  const pam = /^([A-Za-z_]\w*)\s+(?:DEFAULT|OVERRIDE)=(.*)$/.exec(line);
+  if (pam && pam[1] === name) out.push(pam[2]);
   return out;
 }
 
 /**
- * What the files the session loads hold that the guards refuse, read from the files themselves whatever wrote them (a
- * cd, a computed path, a hard link, an interpreter): one line « <file> : <key> » per finding, empty when none. Settings
- * that are neither JSON nor JSONC are refused as unreadable. Nothing is repaired: the operator removes the line himself.
+ * What a profile sets that the guards watch (comments skipped), the names read even rebuilt (quotes removed): refused,
+ * an APV variable, a variable that loads code, NODE_OPTIONS with an option that loads one or under a rebuilt name; said
+ * only, a library path (LD_LIBRARY_PATH...) or NODE_OPTIONS with an option the tool does not know: a session is never
+ * blocked for a value that loads no code.
  */
-export function environmentIntegrity({ home, projectDirs = [] }) {
+function profileFindings(text) {
   const problems = [];
-  for (const { path, kind } of knownEnvironmentFiles({ home, projectDirs })) {
+  const warnings = [];
+  for (const raw of String(text ?? '').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const flat = flatten(line);
+    const names = namesSet(flat);
+    const pam = /^([A-Za-z_]\w*)\s+(?:DEFAULT|OVERRIDE)=/.exec(flat);
+    if (pam) names.push(pam[1]);
+    for (const name of names) {
+      if (/^APV_/i.test(name)) problems.push(name);
+      else if (/^NODE_OPTIONS$/i.test(name)) {
+        const values = valuesOf(line, name);
+        const kinds = values.map(nodeOptionsKind);
+        if (!values.length || kinds.includes('loads')) problems.push(name);
+        else if (kinds.includes('unknown')) warnings.push(`${name} (option inconnue de l'outil : vérifier qu'elle ne charge pas de code)`);
+      } else if (LIBRARY_PATHS.test(name)) warnings.push(`${name} (chemin de bibliothèques : vérifier qu'il ne mène qu'à des bibliothèques de confiance)`);
+      else if (CODE_VARIABLE_NAME.test(name)) problems.push(name);
+    }
+  }
+  return { problems: [...new Set(problems)], warnings: [...new Set(warnings)] };
+}
+
+/**
+ * What the files the session loads hold that the guards watch, read from the files themselves whatever wrote them (a
+ * cd, a computed path, a hard link, an interpreter): `problems` refuse every tool call, `warnings` are said at the start
+ * of the session; one line « <file> : <key> » each. Settings that are neither JSON nor JSONC are refused as unreadable.
+ * Nothing is repaired: the operator removes the line himself.
+ */
+export function environmentReview({ home, projectDirs = [], configDir = null, systemFiles = SYSTEM_ENVIRONMENT }) {
+  const problems = [];
+  const warnings = [];
+  for (const { path, kind } of knownEnvironmentFiles({ home, projectDirs, configDir, systemFiles })) {
     let text;
     try { text = readFileSync(path, 'utf8'); } catch { continue; }
     if (kind === 'settings') {
@@ -376,10 +446,17 @@ export function environmentIntegrity({ home, projectDirs = [] }) {
       if (value === null) { problems.push(`${path} : réglages illisibles (ni JSON ni JSONC)`); continue; }
       for (const [key] of refusedSettings(value)) problems.push(`${path} : ${key}`);
     } else {
-      for (const name of refusedInProfile(text)) problems.push(`${path} : ${name}`);
+      const found = profileFindings(text);
+      for (const name of found.problems) problems.push(`${path} : ${name}`);
+      for (const note of found.warnings) warnings.push(`${path} : ${note}`);
     }
   }
-  return [...new Set(problems)];
+  return { problems: [...new Set(problems)], warnings: [...new Set(warnings)] };
+}
+
+/** The findings that refuse every tool call (environmentReview). */
+export function environmentIntegrity(where) {
+  return environmentReview(where).problems;
 }
 
 /** The refusal of a tool call while the files the session loads hold what the guards refuse. */

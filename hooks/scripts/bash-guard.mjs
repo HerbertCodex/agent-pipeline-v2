@@ -1393,6 +1393,14 @@ export function nestedScript(words) {
 
 /** Commands that only read the files they are given. */
 const ENV_READERS = new Set(['cat', 'less', 'more', 'head', 'tail', 'grep', 'egrep', 'fgrep', 'rg', 'wc', 'ls', 'stat', 'file', 'diff', 'cmp', 'test', '[', 'jq', 'md5sum', 'sha256sum', 'shasum']);
+/** Filters of a pipe: they write only to their output (sort only without -o); with no redirection, the line writes no file. */
+const ENV_FILTERS = new Set(['cut', 'sort', 'uniq', 'tr', 'nl', 'column', 'fold', 'fmt', 'rev', 'tac']);
+const writesAFile = w => {
+  const name = basename(w[0]);
+  if (ENV_READERS.has(name)) return false;
+  if (ENV_FILTERS.has(name)) return name === 'sort' && w.slice(1).some(a => /^-[a-zA-Z]*o|^--output/.test(a));
+  return true;
+};
 /** Commands whose output is the text the command line shows (nothing computed from a file or by a program). */
 const ENV_LITERAL_WRITERS = new Set(['echo', 'printf', 'tee', 'true', ':', 'touch']);
 
@@ -1417,7 +1425,7 @@ export function environmentCommandProblem(command, segments, shadow, where = {})
   const outputs = [...String(command).matchAll(/(?:^|[^<&\d])\d?>{1,2}\|?\s*([^\s;&|<>()]+)/g)].map(m => m[1])
     .concat(words.filter(w => basename(w[0]) === 'tee').flatMap(w => w.slice(1).filter(a => !a.startsWith('-'))));
   const redirects = /(?:^|[^<&\d-])\d?>{1,2}(?!&)/.test(String(shadow ?? command));
-  const writes = redirects || words.some(w => !ENV_READERS.has(basename(w[0])));
+  const writes = redirects || words.some(writesAFile);
   // A hard link under a computed name may give a neutral name to a settings file or a profile.
   if (words.some(w => basename(w[0]) === 'ln' && !w.slice(1).some(a => /^-[a-zA-Z]*s|^--symbolic$/.test(a)) && w.slice(1).some(a => /[$`*?[]/.test(a)))) return true;
   // Each simple command judged from the folder it runs in: a cd of the line leads there (cdTarget, as the stores).
@@ -1596,7 +1604,7 @@ async function main() {
   const input = await readHookInput();
   if (!input || input.tool_name !== 'Bash') return 0;
   // What the files the session loads hold, read at every call whatever wrote them (the home of the account, never HOME).
-  const integrity = environmentIntegrity({ home: userInfo().homedir, projectDirs: projectDirsOf(input) });
+  const integrity = environmentIntegrity({ home: userInfo().homedir, projectDirs: projectDirsOf(input), configDir: process.env.CLAUDE_CONFIG_DIR ?? null });
   const result = integrity.length ? { decision: 'deny', reason: integrityReason(integrity) }
     : evaluateCommand(input.tool_input?.command, process.env, hookContext(input, process.env));
   if (result.decision === 'allow') return 0;
