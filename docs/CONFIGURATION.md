@@ -691,6 +691,18 @@ Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR 
 }
 ```
 
+- `operatorOrders.reducedProof` (facultatif) : la **preuve réduite** ([PREUVE-REDUITE.md](PREUVE-REDUITE.md)), acceptée à la place de la suite complète par `apv stack merge --order` seulement, quand le diff de l'étape tient dans sa liste de contenu régénéré. `workflow` (sous `.github/workflows/`), `job` et `name` du check run, chacun différent de ceux de `rules.ciProof` ; `gates` : contrôles que le job lance en entier (le check run en tient lieu de reçu) ; `waives` : contrôles de la suite complète que la voie ne lance pas, jamais un contrôle exigé par APV (`reuse`, `code-map`, `structure`, ceux de `rules.requiredGates`), reconnu par son identifiant ou par sa commande ; `gates` et `waives` disjoints et déclarés dans `gates` de la configuration ; `covers` : phrase de ce que le job prouve en plus, recopiée dans la sortie ; `paths.publication` et `paths.article` (une étape au moins) : chemins littéraux recopiés de `rules.operatorOrders.paths` de la même étape, sans `*`, `?` ni `**`, `{slug}` seul remplacé ; `protectedPaths` : fichiers qui produisent la preuve réduite, ajoutés aux défauts de la preuve CI, jamais un chemin de contenu ; `artifact` : pour la mesure. **C'est la seule déclaration de `rules` qui retire des contrôles** : la PR qui l'ajoute ou l'élargit (workflow, job ou nom changé, contrôle de `gates` ou de `waives` ajouté, chemin ajouté, chemin protégé retiré) n'est acceptée par `apv rules check` qu'avec une décision de l'opérateur ancrée dont la citation porte l'empreinte de la déclaration ([REGLES.md](REGLES.md), section 5). La commande `verify.publication` du projet rend, en cas de succès, sur sa dernière ligne `{"ok": true, "regenerated": [{"path": "...", "blob": "..."}], "shape": "literal"}` : sans elle, la voie réduite n'est pas retenue à l'étape publication (la fusion sur ordre reste possible avec la suite complète).
+
+```json
+"reducedProof": {
+  "workflow": ".github/workflows/preuve-publication.yml", "job": "preuve-publication", "name": "Preuve de publication",
+  "gates": ["check", "lint", "test", "build"], "waives": ["integration", "browser"],
+  "covers": "typecheck, lint, tests unitaires, build, tests de bout en bout des guides contre un aperçu du commit, captures du guide",
+  "paths": { "publication": ["src/lib/server/guides/content/{slug}.ts", "src/lib/server/guides/catalog.ts"], "article": ["docs/articles/{slug}/proposition.json"] },
+  "protectedPaths": ["tests/e2e/browser/guides.e2e.ts"]
+}
+```
+
 ## Fraîcheur de l'état : `freshness`
 
 Section APV3, facultative, validée par le chargeur commun : les fichiers vivants d'état et de reprise que `apv status` (section « Fichiers d'état périmés », `freshness` en JSON) et le crochet de début de session surveillent. Un état de reprise se réécrit court à chaque étape et ce qui est terminé part en archive : un fichier qui n'a pas bougé depuis plus de `maxAgeDays` jours, ou un journal qui dépasse `maxLines` lignes, est signalé avec la proposition « couper : état court + archive ». Lecture seule : rien n'est déplacé ni supprimé.

@@ -487,6 +487,20 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
                 readonly publication: string[];
                 readonly timeoutMs: number;
             };
+            readonly reducedProof: {
+                readonly workflow: string;
+                readonly job: string;
+                readonly name: string;
+                readonly gates: string[];
+                readonly waives: string[];
+                readonly covers: string;
+                readonly paths: {
+                    readonly publication: string[] | undefined;
+                    readonly article: string[] | undefined;
+                };
+                readonly protectedPaths: string[] | undefined;
+                readonly artifact: string | undefined;
+            } | undefined;
         } | undefined;
         readonly captures: {
             readonly viewports: ("phone" | "desktop" | "tablet")[] | undefined;

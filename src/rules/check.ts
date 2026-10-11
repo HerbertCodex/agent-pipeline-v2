@@ -26,6 +26,7 @@ import { LANE_NAME, docsOnlyLane, laneLines, type DocsOnlyLane } from './docs-on
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
 import { ciProofLines, verifyCiProof, type CiProofOutcome } from './ci-proof.js';
 import { githubRepository } from './protection.js';
+import { declarationVerdict } from './reduced-proof.js';
 import type { GhRunner } from '../stack/github.js';
 
 export type RuleStatus = 'ok' | 'refused' | 'waived' | 'not_applicable';
@@ -387,6 +388,10 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   const anchor = anchorKey(common);
   const messages = readOperatorMessages(common, anchor.key);
   const rules: RuleOutcome[] = [];
+  // The reduced proof lifts checks (docs/PREUVE-REDUITE.md, 4.3): added or widened by the change, the rule preuve
+  // refuses without an anchored decision of the operator, whatever proves the checks (a batch too).
+  const declaration = await declarationVerdict(atBase.rules?.operatorOrders?.reducedProof, candidate.rules?.operatorOrders?.reducedProof,
+    async () => ({ atBase: (await loadDecisionLedger(repo, mergeBase)).decisions, atHead: (await loadDecisionLedger(repo, sha)).decisions }), messages, anchor.key);
 
   // The plan of the reviews, and the lane without code (docs/REGLES.md): both read at the base, from the diff since it.
   // The migrations as the base declares them, and as the change declares them: a change that moves db.migrations
@@ -457,6 +462,15 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
         ci && ci.state !== 'out_of_lane' && ci.gates.length && ci.state !== 'accepted'
           ? [...proveTodo, `Ou, pour ${ci.gates.join(', ')}, le check run « ${ci.name} » de GitHub Actions conclu en succès à ${short(sha)} (workflow ${ci.workflow}), puis relancer apv rules check.`]
           : proveTodo));
+    }
+  }
+  if (declaration.kind !== 'unchanged') {
+    const preuve = rules.find(r => r.rule === 'preuve')!;
+    if (declaration.kind === 'anchored') preuve.detail += ` ; ${declaration.note}`;
+    else {
+      preuve.status = 'refused';
+      preuve.problems.unshift(declaration.problem);
+      preuve.todo = [...declaration.todo, ...preuve.todo];
     }
   }
   // A job of the CI relaunched (run_attempt above 1) passed only after a relaunch, as a receipt passed_after_retry.

@@ -26,6 +26,7 @@ import { LANE_NAME, docsOnlyLane, laneLines } from './docs-only.js';
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
 import { ciProofLines, verifyCiProof } from './ci-proof.js';
 import { githubRepository } from './protection.js';
+import { declarationVerdict } from './reduced-proof.js';
 /** Whether the commit is a web interface: web dependencies in its package.json, or tracked interface files. */
 export function isWebAt(repo, sha) {
     const pkg = gitRead(repo, ['show', `${sha}:package.json`]);
@@ -399,6 +400,9 @@ export async function checkMergeRules(input) {
     const anchor = anchorKey(common);
     const messages = readOperatorMessages(common, anchor.key);
     const rules = [];
+    // The reduced proof lifts checks (docs/PREUVE-REDUITE.md, 4.3): added or widened by the change, the rule preuve
+    // refuses without an anchored decision of the operator, whatever proves the checks (a batch too).
+    const declaration = await declarationVerdict(atBase.rules?.operatorOrders?.reducedProof, candidate.rules?.operatorOrders?.reducedProof, async () => ({ atBase: (await loadDecisionLedger(repo, mergeBase)).decisions, atHead: (await loadDecisionLedger(repo, sha)).decisions }), messages, anchor.key);
     // The plan of the reviews, and the lane without code (docs/REGLES.md): both read at the base, from the diff since it.
     // The migrations as the base declares them, and as the change declares them: a change that moves db.migrations
     // never takes its migrations out of the data review (both sets of paths count, never the working tree).
@@ -480,6 +484,16 @@ export async function checkMergeRules(input) {
             rules.push(outcome('preuve', 'refused', 'suite complète au commit exact', [`contrôle(s) non prouvé(s) à ${short(sha)} : ${missing.join(', ')}`, ...(ci ? ciProofLines(ci) : []), ...ciNotes], ci && ci.state !== 'out_of_lane' && ci.gates.length && ci.state !== 'accepted'
                 ? [...proveTodo, `Ou, pour ${ci.gates.join(', ')}, le check run « ${ci.name} » de GitHub Actions conclu en succès à ${short(sha)} (workflow ${ci.workflow}), puis relancer apv rules check.`]
                 : proveTodo));
+        }
+    }
+    if (declaration.kind !== 'unchanged') {
+        const preuve = rules.find(r => r.rule === 'preuve');
+        if (declaration.kind === 'anchored')
+            preuve.detail += ` ; ${declaration.note}`;
+        else {
+            preuve.status = 'refused';
+            preuve.problems.unshift(declaration.problem);
+            preuve.todo = [...declaration.todo, ...preuve.todo];
         }
     }
     // A job of the CI relaunched (run_attempt above 1) passed only after a relaunch, as a receipt passed_after_retry.
