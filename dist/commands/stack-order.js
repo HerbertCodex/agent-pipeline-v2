@@ -20,18 +20,26 @@ export const ORDER_USAGE = `--order <référence>  (merge) fusion sur ordre sign
 /**
  * The rules checked before a merge on order (src/rules/check.ts) at `head`, against the exact commit of the target APV
  * read and merges on (never a remote-tracking ref left stale), the proof by the CI (rules.ciProof of the base) read
- * through `ci.gh`: the problems, empty when respected.
+ * through `ci.gh`, with the context of the reduced lane mergeOnOrder built for this try (docs/PREUVE-REDUITE.md): the
+ * problems, empty when respected, and the proof taken (`reduced` only when the rule preuve accepted the reduced lane).
  */
 export function orderRules(repo, ci) {
-    return async (head, base) => {
+    return async (head, base, lane) => {
         try {
-            const r = await checkMergeRules({ repo, commit: head, target: base, ci });
-            return r.ok ? [] : rulesLines(r, '  ').slice(1, -1);
+            const r = await checkMergeRules({ repo, commit: head, target: base, ci, ...(lane ? { orderLane: lane } : {}) });
+            const run = r.reduced?.retained ? r.reduced.outcome?.checkRun ?? null : null;
+            const proof = run && r.rules.find(x => x.rule === 'preuve')?.status === 'ok'
+                ? { mode: 'reduced', checkRun: run.id, run: run.runId, name: r.reduced.outcome.name } : { mode: 'full' };
+            return { problems: r.ok ? [] : rulesLines(r, '  ').slice(1, -1), proof };
         }
         catch (error) {
-            return [`règles avant fusion non vérifiables à ${head.slice(0, 12)} : ${errorMessage(error)}`];
+            return { problems: [`règles avant fusion non vérifiables à ${head.slice(0, 12)} : ${errorMessage(error)}`], proof: { mode: 'full' } };
         }
     };
+}
+/** The proof of a step, in the report. */
+function proofText(proof) {
+    return proof?.mode === 'reduced' ? `preuve réduite : check run « ${proof.name} » ${proof.checkRun} (exécution ${proof.run})` : 'preuve : suite complète';
 }
 /** Lines of the report of a merge on order. */
 export function orderLines(report, nonce) {
@@ -39,7 +47,7 @@ export function orderLines(report, nonce) {
     for (const step of report.consumed)
         lines.push(`- étape ${step} : déjà faite (pied Apv-Order présent)`);
     for (const m of report.merged)
-        lines.push(`- étape ${m.step} : PR #${m.pr} fusionnée à ${m.head.slice(0, 12)}, commit ${m.mergeCommit.slice(0, 12)} (parents ${m.base.slice(0, 12)}, ${m.head.slice(0, 12)})`);
+        lines.push(`- étape ${m.step} : PR #${m.pr} fusionnée à ${m.head.slice(0, 12)}, commit ${m.mergeCommit.slice(0, 12)} (parents ${m.base.slice(0, 12)}, ${m.head.slice(0, 12)}) ; ${proofText(m.proof)}`);
     lines.push(`Attestations demandées : ${report.attestations}.`, ...report.traceErrors.map(e => `ATTENTION : ${e}`));
     if (report.status === 'already_done')
         lines.push('Ordre déjà exécuté : rien à faire (already_done).');

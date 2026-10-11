@@ -223,7 +223,8 @@ function traceMerge(cwd, merge) {
         const anchor = anchorKey(common);
         if (!anchor.key)
             return anchor.problem ?? 'clé d\'ancrage absente';
-        writeMergeTrace(common, { ...merge, at: new Date().toISOString() }, anchor.key);
+        const { proof, ...rest } = merge;
+        writeMergeTrace(common, { ...rest, ...(proof ? { proof } : {}), at: new Date().toISOString() }, anchor.key);
         return null;
     }
     catch (error) {

@@ -14,7 +14,9 @@ import type { OrderStep, VerifiedOrder } from './order.js';
  * an argument only), `{{head}}` and `{{step}}` replaced, the verified
  * order as JSON on its input. Nothing of the head is executed by APV: the command reads
  * it through Git. Exit 0: the content is the one the order signed; any other exit refuses, with the code the command
- * wrote (`{ "ok": false, "code": "content" }` on its last line) when it is a short word.
+ * wrote (`{ "ok": false, "code": "content" }` on its last line) when it is a short word. On success, its last line may
+ * say what it regenerated and the shape it checked (`{ "ok": true, "regenerated": [{ "path", "blob" }], "shape":
+ * "literal" }`, docs/PREUVE-REDUITE.md 5.3): read for the reduced lane only, never required otherwise.
  */
 
 export interface VerifyCommand {
@@ -25,8 +27,13 @@ export interface VerifyCommand {
   passEnv: readonly string[];
 }
 export interface VerifyInput { repo: string; git: LotGit; source: string; base: string; head: string; step: OrderStep; order: VerifiedOrder; settings: VerifyCommand; env: NodeJS.ProcessEnv; signal?: AbortSignal }
-/** `projectCode`: the code the command of the project gave (`content`, `files`...), null when it gave none or did not run. */
-export type VerifyResult = { ok: true } | { ok: false; projectCode: string | null; detail: string };
+/** A file the command regenerated, with the id of the blob it produced. */
+export interface RegeneratedFile { path: string; blob: string }
+/**
+ * `projectCode`: the code the command of the project gave (`content`, `files`...), null when it gave none or did not run.
+ * `regenerated` and `shape`: what a succeeding command said on its last line (null when it said nothing readable).
+ */
+export type VerifyResult = { ok: true; regenerated?: RegeneratedFile[] | null; shape?: string | null } | { ok: false; projectCode: string | null; detail: string };
 
 const CODE = /^[a-z][a-z_]{0,39}$/;
 const tail = (text: string): string => text.trim().split('\n').slice(-5).join(' | ').replace(/\s+/g, ' ').slice(-600);
@@ -38,6 +45,32 @@ export function refusalCode(stdout: string): string | null {
     const code = (JSON.parse(last) as Record<string, unknown>)?.['code'];
     return typeof code === 'string' && CODE.test(code) ? code : null;
   } catch { return null; }
+}
+
+const BLOB = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+/** Entries of `regenerated` read at most: beyond, the list is not read. */
+const MAX_REGENERATED = 200;
+
+/**
+ * What a succeeding command said on its last JSON line (E2 and M4 of the review): the files it regenerated with their
+ * blob, and the shape it checked. A list with one unreadable entry (path outside the repository, blob that is not an
+ * object id), more than 200 entries, or a line that does not say `ok: true`, is no list.
+ */
+export function successReport(stdout: string): { regenerated: RegeneratedFile[] | null; shape: string | null } {
+  const last = stdout.trim().split('\n').pop() ?? '';
+  let value: Record<string, unknown> | null = null;
+  try { const parsed: unknown = JSON.parse(last); value = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null; } catch { value = null; }
+  if (!value || value['ok'] !== true) return { regenerated: null, shape: null };
+  const shape = typeof value['shape'] === 'string' && CODE.test(value['shape']) ? value['shape'] : null;
+  const list = value['regenerated'];
+  const path = (p: unknown): p is string => typeof p === 'string' && p.length > 0 && p.length <= 500 && !p.startsWith('/') && !p.split('/').some(x => x === '..' || x === '.' || x === '');
+  const entry = (e: unknown): RegeneratedFile | null => {
+    const r = e !== null && typeof e === 'object' && !Array.isArray(e) ? e as Record<string, unknown> : null;
+    return r && path(r['path']) && typeof r['blob'] === 'string' && BLOB.test(r['blob']) ? { path: r['path'], blob: r['blob'] } : null;
+  };
+  if (!Array.isArray(list) || list.length > MAX_REGENERATED) return { regenerated: null, shape };
+  const read = list.map(entry);
+  return { regenerated: read.every((e): e is RegeneratedFile => e !== null) ? read : null, shape };
 }
 
 export async function runVerifyCommand(input: VerifyInput): Promise<VerifyResult> {
@@ -56,7 +89,7 @@ export async function runVerifyCommand(input: VerifyInput): Promise<VerifyResult
     const order = { ok: true, order: input.order.order.payload, payload: input.order.payload, signature: input.order.signature, digest: input.order.digest };
     const result = await runProcess({ command, cwd: copy, env, timeoutMs: input.settings.timeoutMs, input: `${JSON.stringify(order)}\n`, maxOutputBytes: 256 * 1024,
       ...(input.signal ? { signal: input.signal } : {}) });
-    if (result.status === 'passed') return { ok: true };
+    if (result.status === 'passed') return { ok: true, ...successReport(result.stdout) };
     const code = refusalCode(result.stdout);
     return { ok: false, projectCode: code, detail: code ? `commande du projet : ${code}` : `commande du projet en échec (${result.status}, code ${result.exitCode ?? '-'}) : ${tail(`${result.stdout}\n${result.stderr}`)}` };
   } catch (error) {

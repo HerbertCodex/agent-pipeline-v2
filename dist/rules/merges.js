@@ -1,6 +1,9 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { loadConfigAtCommit } from '../config/load.js';
+import { errorMessage } from '../domain/errors.js';
 import { gitRead } from '../run/git-probe.js';
+import { checkRunsNamed } from './ci-proof.js';
 import { anchorKey, sign, signatureValid } from './operator.js';
 import { orderTrailer } from '../orders/order.js';
 /**
@@ -95,6 +98,53 @@ function orderOf(repo, sha, secondParent) {
     const trailer = orderTrailer(gitRead(repo, ['log', '-1', '--format=%B', sha]) ?? '');
     return trailer && trailer.head === secondParent ? { nonce: trailer.nonce, step: trailer.step } : null;
 }
+/**
+ * For each merge on order no trace accounts for (a merge made in another environment, the cloud routine), the check
+ * runs read at its merged head (second parent): the reduced proof and the proof by the CI its first parent declares
+ * (docs/PREUVE-REDUITE.md 5.8, F6). Informative: the commit stays unaccounted, never laundered by a green check run.
+ */
+export async function readOrderProofs(repo, audit, gh, repository) {
+    if (!audit.unaccounted.some(c => c.order))
+        return audit;
+    if (!gh)
+        return { ...audit, proofsNote: 'preuves CI non relues (hors réseau)' };
+    if (!repository)
+        return { ...audit, proofsNote: 'preuves CI non relues (dépôt distant hors de github.com)' };
+    const unaccounted = [];
+    for (const c of audit.unaccounted) {
+        if (!c.order) {
+            unaccounted.push(c);
+            continue;
+        }
+        const [, first, second] = (gitRead(repo, ['rev-list', '--parents', '-n', '1', c.sha]) ?? '').trim().split(' ');
+        if (!first || !second) {
+            unaccounted.push({ ...c, proofs: ['parents illisibles : preuve non relue'] });
+            continue;
+        }
+        let names;
+        try {
+            const rules = loadConfigAtCommit(repo, first).config.rules;
+            names = [rules?.operatorOrders?.reducedProof?.name, rules?.ciProof?.name].filter((n) => typeof n === 'string');
+        }
+        catch (error) {
+            unaccounted.push({ ...c, proofs: [`configuration illisible au premier parent ${first.slice(0, 12)} : ${errorMessage(error).split('\n')[0]}`] });
+            continue;
+        }
+        if (!names.length) {
+            unaccounted.push({ ...c, proofs: [`aucune preuve CI déclarée au premier parent ${first.slice(0, 12)}`] });
+            continue;
+        }
+        const proofs = [];
+        for (const name of names) {
+            const read = await checkRunsNamed(gh, repository, second, name);
+            const said = !read.ok ? `illisible (${read.why})` : !read.runs.length ? 'aucun check run'
+                : read.runs.slice(0, 3).map(r => `check run ${r.id} ${r.status === 'completed' ? r.conclusion ?? 'sans conclusion' : r.status} (${r.app ?? 'application inconnue'})`).join(', ');
+            proofs.push(`preuve lue sur GitHub à la tête fusionnée ${second.slice(0, 12)} : « ${name} » : ${said}`);
+        }
+        unaccounted.push({ ...c, proofs });
+    }
+    return { ...audit, unaccounted };
+}
 /** Lines of an audit, for `apv status`, `apv audit merges` and the head of the report of `apv stack merge`. */
 export function auditLines(audit) {
     if (!audit.head)
@@ -103,8 +153,10 @@ export function auditLines(audit) {
     if (!audit.unaccounted.length)
         return [`${head}, aucun commit hors de apv stack merge.`];
     return [`${head}. ATTENTION : ${audit.unaccounted.length} commit(s) arrivé(s) sans apv stack merge (fusion à la main ou poussée directe : les règles n'ont pas été vérifiées) :`,
-        ...audit.unaccounted.slice(0, 20).map(c => `  ${c.sha.slice(0, 12)} ${c.date.slice(0, 10)} ${c.merge ? 'fusion' : 'commit'} : ${c.subject}`
-            + (c.order ? ` (pied Apv-Order non vérifié : ordre ${c.order.nonce}, étape ${c.order.step} ; à rapprocher de l'ordre signé de la PR)` : '')),
+        ...audit.unaccounted.slice(0, 20).flatMap(c => [`  ${c.sha.slice(0, 12)} ${c.date.slice(0, 10)} ${c.merge ? 'fusion' : 'commit'} : ${c.subject}`
+                + (c.order ? ` (pied Apv-Order non vérifié : ordre ${c.order.nonce}, étape ${c.order.step} ; à rapprocher de l'ordre signé de la PR)` : ''),
+            ...(c.proofs ?? []).map(p => `    ${p}`)]),
+        ...(audit.proofsNote ? [`  Fusions sur ordre : ${audit.proofsNote}.`] : []),
         ...(audit.unaccounted.length > 20 ? [`  et ${audit.unaccounted.length - 20} autre(s) (apv audit merges --json)`] : []),
         '  À examiner avec l\'opérateur ; si c\'est lui qui a fusionné sur GitHub, le noter au journal du pipeline.'];
 }

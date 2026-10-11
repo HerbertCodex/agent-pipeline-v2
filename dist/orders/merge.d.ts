@@ -3,6 +3,7 @@ import { type GhCall, type GhRunner } from '../stack/github.js';
 import { type Fetcher } from './attestation.js';
 import { type OrderRefusal, type OrderStep } from './order.js';
 import { type VerifyInput, type VerifyResult } from './verify-command.js';
+import type { OrderLane } from '../rules/reduced-proof.js';
 /**
  * `apv stack merge <publication> <article> --order <nonce>` (docs/REGLES.md, section 3 ter): the merge of the two pull
  * requests of an operator order, with no session of the operator, each step once.
@@ -20,7 +21,8 @@ import { type VerifyInput, type VerifyResult } from './verify-command.js';
  *    read by Git, `Apv-Order-Sha256` equal to the digest of this order); both steps there: `already_done`;
  * 3. the publication head `H` (read once, at the start) descends from `M` (`base`); the verification command of the
  *    project, from a clean copy of `T`, finds the content of the step to be the one the order signed (`verify`);
- * 4. the rules checked before any merge (`apv rules check`) at the merged head (`rules`);
+ * 4. the rules checked before any merge (`apv rules check`) at the merged head (`rules`), with the context of the reduced
+ *    lane of this try (docs/PREUVE-REDUITE.md): T, M, H, the declaration of T, the verification of the project just made;
  * 5. the tree of the merge is the tree verified: the one of `H` (publication), or only the files of the article pull
  *    request with their content at the signed commit (article);
  * 6. a fresh attestation of the production bound to a challenge drawn here (`attestation`);
@@ -31,12 +33,27 @@ import { type VerifyInput, type VerifyResult } from './verify-command.js';
  */
 export { rawDiff } from './paths.js';
 export type OrderMergeCode = OrderRefusal | 'config' | 'github' | 'git' | 'nonce_used' | 'base' | 'verify' | 'rules' | 'attestation' | 'merge_conflict' | 'main_moved' | 'push' | 'paths';
+/** The proof the rules took for a step: the full suite, or the check run of the reduced job (docs/PREUVE-REDUITE.md, 5.8). */
+export type StepProof = {
+    mode: 'full';
+} | {
+    mode: 'reduced';
+    checkRun: number;
+    run: number;
+    name: string;
+};
+/** What the rules say of a step: their problems (empty when respected) and the proof they took. */
+export interface RulesVerdict {
+    problems: string[];
+    proof: StepProof;
+}
 export interface OrderMergeStep {
     step: OrderStep;
     pr: number;
     head: string;
     base: string;
     mergeCommit: string;
+    proof: StepProof;
 }
 export interface OrderMergeReport {
     status: 'merged' | 'already_done' | 'refused';
@@ -64,9 +81,10 @@ export interface OrderMergeOptions {
     env: NodeJS.ProcessEnv;
     /**
      * The rules checked before a merge at `head` against `base`, the exact commit of the target APV read and merges on
-     * (never a remote-tracking ref that may be stale): the problems, empty when respected.
+     * (never a remote-tracking ref that may be stale), with the context of the reduced lane of this try: the problems,
+     * empty when respected, and the proof taken (a plain list: the full suite).
      */
-    rules: (head: string, base: string) => Promise<string[]>;
+    rules: (head: string, base: string, lane: OrderLane) => Promise<string[] | RulesVerdict>;
     log?: (line: string) => void;
     onCall?: (call: GhCall) => void;
     /** The signed trace of a merge (`apv audit merges`); returns the error when it could not be written. */
@@ -76,6 +94,7 @@ export interface OrderMergeOptions {
         target: string;
         method: string;
         mergeCommit: string;
+        proof: StepProof;
     }) => string | null;
     fetch?: Fetcher;
     verify?: (input: VerifyInput) => Promise<VerifyResult>;

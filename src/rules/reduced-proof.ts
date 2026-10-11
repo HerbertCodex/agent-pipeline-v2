@@ -4,6 +4,7 @@ import type { Decision } from '../lifecycle/decisions.js';
 import { reducedProofPrint, reducedProofWidening, type ReducedProofDeclaration } from '../orders/config.js';
 import type { OrderStep } from '../orders/order.js';
 import { rawDiff, stepGlobs } from '../orders/paths.js';
+import type { RegeneratedFile } from '../orders/verify-command.js';
 import { matches } from '../policy/policy.js';
 import { gitRead } from '../run/git-probe.js';
 import type { GhRunner } from '../stack/github.js';
@@ -11,13 +12,12 @@ import { checkRunsNamed, redCheckRun, verifyCiProof, type CiProofOutcome } from 
 import { CI_PROTECTED_DEFAULTS, type CiProofSettings } from './config.js';
 import { anchoredQuote, type OperatorMessage } from './operator.js';
 
+export type { RegeneratedFile };
+
 /**
  * The reduced proof (docs/PREUVE-REDUITE.md): the check run of the job `rules.operatorOrders.reducedProof` declares, in
  * place of the full suite, for a merge on a signed order only.
  */
-
-/** A file the verification command of the project regenerated, with the id of the blob it produced. */
-export interface RegeneratedFile { path: string; blob: string }
 
 /**
  * The context of the reduced lane (docs/PREUVE-REDUITE.md, 5.1): built by mergeOnOrder alone, after the verification of

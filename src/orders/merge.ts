@@ -12,6 +12,7 @@ import { publicKeys } from './envelope.js';
 import { COMMIT, HISTORY_LOG_FORMAT, UUID, mergeMessage, orderMergeCommits, readHistory, verifyOrder, type HistoryCommit, type OrderMergeCommit, type OrderRefusal, type OrderStep, type VerifiedOrder } from './order.js';
 import { forbiddenPaths, rawDiff, stepGlobs } from './paths.js';
 import { runVerifyCommand, type VerifyInput, type VerifyResult } from './verify-command.js';
+import type { OrderLane } from '../rules/reduced-proof.js';
 
 /**
  * `apv stack merge <publication> <article> --order <nonce>` (docs/REGLES.md, section 3 ter): the merge of the two pull
@@ -30,7 +31,8 @@ import { runVerifyCommand, type VerifyInput, type VerifyResult } from './verify-
  *    read by Git, `Apv-Order-Sha256` equal to the digest of this order); both steps there: `already_done`;
  * 3. the publication head `H` (read once, at the start) descends from `M` (`base`); the verification command of the
  *    project, from a clean copy of `T`, finds the content of the step to be the one the order signed (`verify`);
- * 4. the rules checked before any merge (`apv rules check`) at the merged head (`rules`);
+ * 4. the rules checked before any merge (`apv rules check`) at the merged head (`rules`), with the context of the reduced
+ *    lane of this try (docs/PREUVE-REDUITE.md): T, M, H, the declaration of T, the verification of the project just made;
  * 5. the tree of the merge is the tree verified: the one of `H` (publication), or only the files of the article pull
  *    request with their content at the signed commit (article);
  * 6. a fresh attestation of the production bound to a challenge drawn here (`attestation`);
@@ -44,7 +46,11 @@ export { rawDiff } from './paths.js';
 
 export type OrderMergeCode = OrderRefusal | 'config' | 'github' | 'git' | 'nonce_used' | 'base' | 'verify' | 'rules' | 'attestation' | 'merge_conflict' | 'main_moved' | 'push' | 'paths';
 
-export interface OrderMergeStep { step: OrderStep; pr: number; head: string; base: string; mergeCommit: string }
+/** The proof the rules took for a step: the full suite, or the check run of the reduced job (docs/PREUVE-REDUITE.md, 5.8). */
+export type StepProof = { mode: 'full' } | { mode: 'reduced'; checkRun: number; run: number; name: string };
+/** What the rules say of a step: their problems (empty when respected) and the proof they took. */
+export interface RulesVerdict { problems: string[]; proof: StepProof }
+export interface OrderMergeStep { step: OrderStep; pr: number; head: string; base: string; mergeCommit: string; proof: StepProof }
 export interface OrderMergeReport {
   status: 'merged' | 'already_done' | 'refused';
   code: OrderMergeCode | null;
@@ -72,13 +78,14 @@ export interface OrderMergeOptions {
   env: NodeJS.ProcessEnv;
   /**
    * The rules checked before a merge at `head` against `base`, the exact commit of the target APV read and merges on
-   * (never a remote-tracking ref that may be stale): the problems, empty when respected.
+   * (never a remote-tracking ref that may be stale), with the context of the reduced lane of this try: the problems,
+   * empty when respected, and the proof taken (a plain list: the full suite).
    */
-  rules: (head: string, base: string) => Promise<string[]>;
+  rules: (head: string, base: string, lane: OrderLane) => Promise<string[] | RulesVerdict>;
   log?: (line: string) => void;
   onCall?: (call: GhCall) => void;
   /** The signed trace of a merge (`apv audit merges`); returns the error when it could not be written. */
-  onMerged?: (merge: { pr: number; head: string; target: string; method: string; mergeCommit: string }) => string | null;
+  onMerged?: (merge: { pr: number; head: string; target: string; method: string; mergeCommit: string; proof: StepProof }) => string | null;
   fetch?: Fetcher;
   verify?: (input: VerifyInput) => Promise<VerifyResult>;
   now?: () => number;
@@ -267,8 +274,16 @@ export async function mergeOnOrder(options: OrderMergeOptions): Promise<OrderMer
           ...(trustedConfig.batch?.setup ? { setup: { command: trustedConfig.batch.setup, timeoutMs: trustedConfig.batch.setupTimeoutMs } } : {}) } });
       if (!checked.ok) throw new Refusal('verify', `vérification du projet refusée : ${checked.detail}`, checked.projectCode);
 
-      // 4. The rules checked before any merge, at the merged head.
-      const problems = await options.rules(head, base);
+      // 4. The rules checked before any merge, at the merged head, with the context of the reduced lane of this very try
+      // (docs/PREUVE-REDUITE.md, 5.1): built here only, after the verification of the project, never read elsewhere.
+      let sameConfig = base === trusted;
+      if (!sameConfig) { try { sameConfig = fingerprint(configAt(base)) === trustedPrint; } catch { sameConfig = false; } }
+      const lane: OrderLane = { nonce: options.nonce, step, trusted, target: base, head, slug: verdict.order.payload['slug'], declaration: settings.reducedProof ?? null,
+        ciProof: trustedConfig.rules?.ciProof ? { workflow: trustedConfig.rules.ciProof.workflow, name: trustedConfig.rules.ciProof.name } : null,
+        sameConfigAsTrusted: sameConfig, verified: { head, base, regenerated: checked.regenerated ?? null, shape: checked.shape ?? null } };
+      const said = await options.rules(head, base, lane);
+      const problems = Array.isArray(said) ? said : said.problems;
+      const proof: StepProof = Array.isArray(said) ? { mode: 'full' } : said.proof;
       if (problems.length) throw new Refusal('rules', `règles avant fusion refusées à ${short(head)} :\n${problems.join('\n')}`);
 
       // 5. The merge, whose tree must be the one verified.
@@ -303,9 +318,9 @@ export async function mergeOnOrder(options: OrderMergeOptions): Promise<OrderMer
         if (fingerprint(configAt(base)) !== trustedPrint) throw new Refusal('config', `${target} a bougé et sa configuration (rules.operatorOrders, rules.ciProof, batch.setup ou variables) diffère de la base de confiance ${short(trusted)} : relancer`);
         continue;
       }
-      report.merged.push({ step, pr, head, base, mergeCommit: commit });
+      report.merged.push({ step, pr, head, base, mergeCommit: commit, proof });
       log(`Étape ${step} fusionnée : ${short(commit)} (parents ${short(base)}, ${short(head)}), poussée sans force sur ${target}.`);
-      const traced = options.onMerged?.({ pr, head, target, method: 'merge', mergeCommit: commit });
+      const traced = options.onMerged?.({ pr, head, target, method: 'merge', mergeCommit: commit, proof });
       if (traced) report.traceErrors.push(`trace de fusion de la PR #${pr} non écrite : ${traced}`);
       if (step === 'article') { report.status = 'merged'; return report; }
       retries = 0;

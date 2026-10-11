@@ -28,7 +28,8 @@ import { runVerifyCommand } from './verify-command.js';
  *    read by Git, `Apv-Order-Sha256` equal to the digest of this order); both steps there: `already_done`;
  * 3. the publication head `H` (read once, at the start) descends from `M` (`base`); the verification command of the
  *    project, from a clean copy of `T`, finds the content of the step to be the one the order signed (`verify`);
- * 4. the rules checked before any merge (`apv rules check`) at the merged head (`rules`);
+ * 4. the rules checked before any merge (`apv rules check`) at the merged head (`rules`), with the context of the reduced
+ *    lane of this try (docs/PREUVE-REDUITE.md): T, M, H, the declaration of T, the verification of the project just made;
  * 5. the tree of the merge is the tree verified: the one of `H` (publication), or only the files of the article pull
  *    request with their content at the signed commit (article);
  * 6. a fresh attestation of the production bound to a challenge drawn here (`attestation`);
@@ -245,8 +246,23 @@ export async function mergeOnOrder(options) {
                     ...(trustedConfig.batch?.setup ? { setup: { command: trustedConfig.batch.setup, timeoutMs: trustedConfig.batch.setupTimeoutMs } } : {}) } });
             if (!checked.ok)
                 throw new Refusal('verify', `vérification du projet refusée : ${checked.detail}`, checked.projectCode);
-            // 4. The rules checked before any merge, at the merged head.
-            const problems = await options.rules(head, base);
+            // 4. The rules checked before any merge, at the merged head, with the context of the reduced lane of this very try
+            // (docs/PREUVE-REDUITE.md, 5.1): built here only, after the verification of the project, never read elsewhere.
+            let sameConfig = base === trusted;
+            if (!sameConfig) {
+                try {
+                    sameConfig = fingerprint(configAt(base)) === trustedPrint;
+                }
+                catch {
+                    sameConfig = false;
+                }
+            }
+            const lane = { nonce: options.nonce, step, trusted, target: base, head, slug: verdict.order.payload['slug'], declaration: settings.reducedProof ?? null,
+                ciProof: trustedConfig.rules?.ciProof ? { workflow: trustedConfig.rules.ciProof.workflow, name: trustedConfig.rules.ciProof.name } : null,
+                sameConfigAsTrusted: sameConfig, verified: { head, base, regenerated: checked.regenerated ?? null, shape: checked.shape ?? null } };
+            const said = await options.rules(head, base, lane);
+            const problems = Array.isArray(said) ? said : said.problems;
+            const proof = Array.isArray(said) ? { mode: 'full' } : said.proof;
             if (problems.length)
                 throw new Refusal('rules', `règles avant fusion refusées à ${short(head)} :\n${problems.join('\n')}`);
             // 5. The merge, whose tree must be the one verified.
@@ -285,9 +301,9 @@ export async function mergeOnOrder(options) {
                     throw new Refusal('config', `${target} a bougé et sa configuration (rules.operatorOrders, rules.ciProof, batch.setup ou variables) diffère de la base de confiance ${short(trusted)} : relancer`);
                 continue;
             }
-            report.merged.push({ step, pr, head, base, mergeCommit: commit });
+            report.merged.push({ step, pr, head, base, mergeCommit: commit, proof });
             log(`Étape ${step} fusionnée : ${short(commit)} (parents ${short(base)}, ${short(head)}), poussée sans force sur ${target}.`);
-            const traced = options.onMerged?.({ pr, head, target, method: 'merge', mergeCommit: commit });
+            const traced = options.onMerged?.({ pr, head, target, method: 'merge', mergeCommit: commit, proof });
             if (traced)
                 report.traceErrors.push(`trace de fusion de la PR #${pr} non écrite : ${traced}`);
             if (step === 'article') {

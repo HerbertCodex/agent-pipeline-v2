@@ -7,7 +7,7 @@ import { MAX_OVERRIDE_REASON } from '../run/state.js';
 import { cleanLine } from '../run/summary.js';
 import { CI_POLL_MS, MERGE_REFUSED, mergeStack, planStack, processGh, type Derogation, type Freshness, type GhCall, type GhRunner, type PullRequest, type RulesVerdict, type StackOptions, type StackPlan } from '../stack/github.js';
 import { checkMergeRules, rulesLines } from '../rules/check.js';
-import { auditLines, auditMerges, writeMergeTrace } from '../rules/merges.js';
+import { auditLines, auditMerges, writeMergeTrace, type MergeTraceBody } from '../rules/merges.js';
 import { anchorKey } from '../rules/operator.js';
 import { branchProtection } from '../rules/protection.js';
 import { batchMerge, processGit, type BatchReport, type DastOutcome, type Proof } from '../stack/batch.js';
@@ -216,14 +216,15 @@ function positiveInt(value: string | undefined, fallback: number): number {
 }
 
 /** Writes the signed trace of a merge (`apv audit merges`); returns the error when it could not. */
-function traceMerge(cwd: string, merge: { pr: number; head: string; target: string; method: string; mergeCommit: string | null; commits?: number }): string | null {
+function traceMerge(cwd: string, merge: { pr: number; head: string; target: string; method: string; mergeCommit: string | null; commits?: number; proof?: MergeTraceBody['proof'] }): string | null {
   try {
     const root = gitRead(cwd, ['rev-parse', '--show-toplevel']);
     if (!root) return 'pas un dépôt Git';
     const common = commonDir(root);
     const anchor = anchorKey(common);
     if (!anchor.key) return anchor.problem ?? 'clé d\'ancrage absente';
-    writeMergeTrace(common, { ...merge, at: new Date().toISOString() }, anchor.key);
+    const { proof, ...rest } = merge;
+    writeMergeTrace(common, { ...rest, ...(proof ? { proof } : {}), at: new Date().toISOString() }, anchor.key);
     return null;
   } catch (error) { return errorMessage(error); }
 }

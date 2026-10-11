@@ -16,6 +16,38 @@ export function refusalCode(stdout) {
         return null;
     }
 }
+const BLOB = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+/** Entries of `regenerated` read at most: beyond, the list is not read. */
+const MAX_REGENERATED = 200;
+/**
+ * What a succeeding command said on its last JSON line (E2 and M4 of the review): the files it regenerated with their
+ * blob, and the shape it checked. A list with one unreadable entry (path outside the repository, blob that is not an
+ * object id), more than 200 entries, or a line that does not say `ok: true`, is no list.
+ */
+export function successReport(stdout) {
+    const last = stdout.trim().split('\n').pop() ?? '';
+    let value = null;
+    try {
+        const parsed = JSON.parse(last);
+        value = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    }
+    catch {
+        value = null;
+    }
+    if (!value || value['ok'] !== true)
+        return { regenerated: null, shape: null };
+    const shape = typeof value['shape'] === 'string' && CODE.test(value['shape']) ? value['shape'] : null;
+    const list = value['regenerated'];
+    const path = (p) => typeof p === 'string' && p.length > 0 && p.length <= 500 && !p.startsWith('/') && !p.split('/').some(x => x === '..' || x === '.' || x === '');
+    const entry = (e) => {
+        const r = e !== null && typeof e === 'object' && !Array.isArray(e) ? e : null;
+        return r && path(r['path']) && typeof r['blob'] === 'string' && BLOB.test(r['blob']) ? { path: r['path'], blob: r['blob'] } : null;
+    };
+    if (!Array.isArray(list) || list.length > MAX_REGENERATED)
+        return { regenerated: null, shape };
+    const read = list.map(entry);
+    return { regenerated: read.every((e) => e !== null) ? read : null, shape };
+}
 export async function runVerifyCommand(input) {
     const folder = mkdtempSync(join(tmpdir(), 'apv-ordre-'));
     const copy = join(folder, 'base');
@@ -35,7 +67,7 @@ export async function runVerifyCommand(input) {
         const result = await runProcess({ command, cwd: copy, env, timeoutMs: input.settings.timeoutMs, input: `${JSON.stringify(order)}\n`, maxOutputBytes: 256 * 1024,
             ...(input.signal ? { signal: input.signal } : {}) });
         if (result.status === 'passed')
-            return { ok: true };
+            return { ok: true, ...successReport(result.stdout) };
         const code = refusalCode(result.stdout);
         return { ok: false, projectCode: code, detail: code ? `commande du projet : ${code}` : `commande du projet en échec (${result.status}, code ${result.exitCode ?? '-'}) : ${tail(`${result.stdout}\n${result.stderr}`)}` };
     }
