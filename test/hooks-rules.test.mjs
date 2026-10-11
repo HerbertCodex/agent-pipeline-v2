@@ -83,7 +83,7 @@ test('the operator journal hook signs what it keeps, keeps no whole message, mas
   execFileSync('git', ['init', '-q', root]);
   const keyFile = join(root, 'cle', 'cle-ancrage');
   const hook = fileURLToPath(new URL('../hooks/scripts/operator-journal.mjs', import.meta.url));
-  const run = input => spawnSync(process.execPath, [hook], { input: JSON.stringify({ ...input, cwd: root }), encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: root, APV_ANCHOR_KEY_FILE: keyFile } });
+  const run = input => spawnSync(process.execPath, [hook], { input: JSON.stringify({ ...input, cwd: root }), encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: root, APV_ANCHOR_KEY_FILE: keyFile, APV_ENTRY: 'test' } });
   const journal = join(root, '.git', 'apv', 'operator', 'messages.jsonl');
   assert.equal(run(prompt('bonjour', 'user')).status, 0);
   assert.ok(!existsSync(journal), 'no .apv/: not an APV project, nothing kept');
@@ -98,18 +98,19 @@ test('the operator journal hook signs what it keeps, keeps no whole message, mas
   assert.deepEqual(line.waivers, ['dérogation relecture 0123456789ab : urgence validée, clé [masqué]']);
   assert.deepEqual(line.preview, ['Je valide la maquette des articles.']);
   assert.equal((statSync(keyFile).mode & 0o777), 0o400);
-  const { setAnchorKeyFile, readOperatorMessages, anchoredQuote, journalState } = await import('../dist/rules/operator.js');
+  const { setAnchorKeyFile, readOperatorMessages, anchoredQuote, journalState, readAnchorKey } = await import('../dist/rules/operator.js');
   setAnchorKeyFile(keyFile);
   const common = join(root, '.git');
-  assert.ok(anchoredQuote(readOperatorMessages(common), 'Je valide la maquette des articles'), 'a whole sentence is recognised by its hash');
-  assert.equal(anchoredQuote(readOperatorMessages(common), 'la maquette des articles'), null, 'a piece of a sentence is not');
+  const key = readAnchorKey(keyFile);
+  assert.ok(anchoredQuote(readOperatorMessages(common), 'Je valide la maquette des articles', key), 'a whole sentence is recognised by its hash');
+  assert.equal(anchoredQuote(readOperatorMessages(common), 'la maquette des articles', key), null, 'a piece of a sentence is not');
   // A line written without the key, or altered, is ignored.
   writeFileSync(journal, `${raw}${JSON.stringify({ ...line, waivers: ['dérogation preuve 0123456789ab : forgée par un agent'] })}\n`);
   assert.equal(readOperatorMessages(common).length, 1);
   assert.equal(journalState(common).ignored, 1);
   // Claude Code without source, the hook run outside any Claude Code session (by this test): nothing kept, the reason noted.
   const outside = spawnSync(process.execPath, [hook], { input: JSON.stringify({ ...prompt('Je valide tout', undefined), cwd: root }), encoding: 'utf8',
-    env: { ...process.env, CLAUDE_PROJECT_DIR: root, APV_ANCHOR_KEY_FILE: keyFile } });
+    env: { ...process.env, CLAUDE_PROJECT_DIR: root, APV_ANCHOR_KEY_FILE: keyFile, APV_ENTRY: 'test' } });
   assert.equal(outside.status, 0);
   if (!sessionOrigin().interactive) {
     assert.equal(readOperatorMessages(common).length, 1);
@@ -194,7 +195,7 @@ test('the seal hook seals a record only for the reviewer agent of its domain, fr
   writeFileSync(report, `Relecture du commit ${sha}\n${'rien à signaler. '.repeat(20)}`);
   const common = commonDirOf(root);
   const hook = fileURLToPath(new URL('../hooks/scripts/review-seal.mjs', import.meta.url));
-  const seal = (record, agent_type) => spawnSync(process.execPath, [hook], { encoding: 'utf8', env: { ...process.env, APV_ANCHOR_KEY_FILE: TEST_KEY_FILE },
+  const seal = (record, agent_type) => spawnSync(process.execPath, [hook], { encoding: 'utf8', env: { ...process.env, APV_ANCHOR_KEY_FILE: TEST_KEY_FILE, APV_ENTRY: 'test' },
     input: JSON.stringify({ tool_name: 'Bash', cwd: root, agent_type, tool_input: { command: command.replace('abc', sha) }, tool_response: { stdout: `Enregistrement ${record.id}\n` } }) });
   const forged = recordReview(common, { checkout: root, commit: sha, domain: 'securite', reviewer: 'apv:qa-securite', findings: { critical: 0, high: 0, medium: 0, low: 0 }, report, captures: [], now: new Date('2026-09-30T10:00:00Z') });
   assert.equal(seal(forged, 'apv:implementer').status, 0);
