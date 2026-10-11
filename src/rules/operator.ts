@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants as fsConstants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { maskSecrets } from '../knowledge/code-map.js';
 import { REVIEW_DOMAINS, type ReviewDomainName } from '../review/config.js';
 import type { MergeRule } from './config.js';
@@ -40,19 +40,52 @@ export function anchorKeyFile(): string {
   return keyFileOverride ?? join(userInfo().homedir, ANCHOR_DIR, ANCHOR_FILE);
 }
 
+/** Largest key file and fingerprint read: a key is 65 bytes, a fingerprint about 120. */
+const KEY_MAX_BYTES = 256;
+const FINGERPRINT_MAX_BYTES = 4096;
+
+type OwnFile = { state: 'absent' } | { state: 'refused'; why: string } | { state: 'read'; text: string; size: number; mtimeMs: number };
+
 /**
- * The key file as read: absent (no file), incomplete (empty, partial or unreadable: another hook may still be writing it,
- * or it is damaged) or a key. Only a missing file is absent: an incomplete one is never taken for absent, since a missing
- * key may be made anew.
+ * A small file of the account, as the anchor reads it: a regular file (never a symbolic link, a FIFO or a device), owned
+ * by the account, of at most `max` bytes. Opened without following a link and without blocking, checked on the open
+ * file (no change between the check and the reading).
  */
-type KeyFileState = { state: 'absent' } | { state: 'incomplete' } | { state: 'key'; key: Buffer };
+function readOwnFile(file: string, max: number): OwnFile {
+  let fd: number;
+  try { fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)); } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? 'erreur';
+    if (code === 'ENOENT') return { state: 'absent' };
+    // O_NOFOLLOW on a link: ELOOP (Linux, macOS), EMLINK (FreeBSD).
+    if (code === 'ELOOP' || code === 'EMLINK') return { state: 'refused', why: 'lien symbolique' };
+    return { state: 'refused', why: `illisible (${code})` };
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { state: 'refused', why: 'pas un fichier ordinaire' };
+    const uid = process.getuid?.();
+    if (uid !== undefined && st.uid !== uid) return { state: 'refused', why: `propriétaire ${st.uid}, pas le compte ${uid}` };
+    if (st.size > max) return { state: 'refused', why: `trop grand (${st.size} octets)` };
+    const text = readFileSync(fd, 'utf8');
+    if (Buffer.byteLength(text) > max) return { state: 'refused', why: 'trop grand' };
+    return { state: 'read', text, size: st.size, mtimeMs: st.mtimeMs };
+  } catch (error) {
+    return { state: 'refused', why: `illisible (${(error as NodeJS.ErrnoException).code ?? 'erreur'})` };
+  } finally { closeSync(fd); }
+}
+
+/**
+ * The key file as read: absent (no file), refused (a link, not a regular file, another owner, too big), incomplete (empty
+ * or partial: another hook may still be writing it, or it was left so by a stop) or a key. Only a missing file is absent:
+ * an incomplete one is never taken for absent, since a missing key may be made anew.
+ */
+type KeyFileState = { state: 'absent' } | { state: 'refused'; why: string } | { state: 'incomplete'; size: number; mtimeMs: number } | { state: 'key'; key: Buffer };
 
 function readKeyFile(file: string): KeyFileState {
-  let text: string;
-  try { text = readFileSync(file, 'utf8').trim(); } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { state: 'absent' } : { state: 'incomplete' };
-  }
-  return /^[0-9a-f]{64}$/.test(text) ? { state: 'key', key: Buffer.from(text, 'hex') } : { state: 'incomplete' };
+  const read = readOwnFile(file, KEY_MAX_BYTES);
+  if (read.state !== 'read') return read;
+  const text = read.text.trim();
+  return /^[0-9a-f]{64}$/.test(text) ? { state: 'key', key: Buffer.from(text, 'hex') } : { state: 'incomplete', size: read.size, mtimeMs: read.mtimeMs };
 }
 
 export function readAnchorKey(file = anchorKeyFile()): Buffer | null {
@@ -65,18 +98,20 @@ export const KEY_FINGERPRINT = ['apv', 'operator', 'cle.empreinte'] as const;
 const fingerprintOf = (key: Buffer): string => createHash('sha256').update(Buffer.concat([Buffer.from('apv-anchor-fingerprint\n'), key])).digest('hex');
 
 /**
- * The fingerprint the project recorded: null only when there is no file. A file that cannot be read whole (half written,
- * damaged) is `'unreadable'`, never taken for an absent fingerprint, which would let any key through and be recorded anew.
+ * The fingerprint the project recorded: absent only when there is no file. A file that cannot be read whole (half
+ * written, damaged, a link, another owner) is unreadable, never taken for an absent fingerprint.
  */
-function readFingerprint(common: string): { sha256: string; createdAt: string } | 'unreadable' | null {
-  let text: string;
-  try { text = readFileSync(join(common, ...KEY_FINGERPRINT), 'utf8'); } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? null : 'unreadable';
-  }
+type FingerprintState = { state: 'absent' } | { state: 'unreadable'; why: string; size: number | null; mtimeMs: number | null } | { state: 'recorded'; sha256: string; createdAt: string };
+
+function readFingerprint(common: string): FingerprintState {
+  const read = readOwnFile(join(common, ...KEY_FINGERPRINT), FINGERPRINT_MAX_BYTES);
+  if (read.state === 'absent') return read;
+  if (read.state === 'refused') return { state: 'unreadable', why: read.why, size: null, mtimeMs: null };
+  const unreadable = { state: 'unreadable' as const, why: 'incomplète ou abîmée', size: read.size, mtimeMs: read.mtimeMs };
   try {
-    const v = JSON.parse(text) as { sha256?: unknown; createdAt?: unknown };
-    return typeof v.sha256 === 'string' && /^[0-9a-f]{64}$/.test(v.sha256) && typeof v.createdAt === 'string' ? { sha256: v.sha256, createdAt: v.createdAt } : 'unreadable';
-  } catch { return 'unreadable'; }
+    const v = JSON.parse(read.text) as { sha256?: unknown; createdAt?: unknown };
+    return typeof v.sha256 === 'string' && /^[0-9a-f]{64}$/.test(v.sha256) && typeof v.createdAt === 'string' ? { state: 'recorded', sha256: v.sha256, createdAt: v.createdAt } : unreadable;
+  } catch { return unreadable; }
 }
 
 /** Whether the project already holds something signed (journal, review seals, merge traces): its key cannot be made anew. */
@@ -90,25 +125,76 @@ function signedArtifacts(common: string): boolean {
   return false;
 }
 
-export interface AnchorKey { key: Buffer | null; problem: string | null; createdAt: string | null }
-
 /**
- * The key as the tool may trust it for a project: present, and the one whose fingerprint the project recorded. A missing
- * key, or another one (deleted then made anew), or a fingerprint that cannot be read gives no key and the problem: nothing
- * signed is then accepted.
+ * Whether `key` verifies at least one signed trace of the project: a line of the operator journal, a review seal, a
+ * merge trace. Without a fingerprint, the only proof that a key is the one the project signed with.
  */
-export function anchorKey(common: string, file = anchorKeyFile()): AnchorKey {
-  const key = readAnchorKey(file);
-  const fp = readFingerprint(common);
-  if (fp === 'unreadable') return { key: null, problem: `empreinte de la clé d'ancrage illisible (${join(common, ...KEY_FINGERPRINT)}) : l'opérateur la vérifie ; rien de signé n'est accepté tant qu'elle ne se lit pas`, createdAt: null };
-  if (!key) return { key: null, problem: `clé d'ancrage absente (${file}) : l'opérateur la restaure depuis sa sauvegarde ; rien de signé n'est accepté sans elle`, createdAt: fp?.createdAt ?? null };
-  if (fp && fp.sha256 !== fingerprintOf(key)) return { key: null, problem: `clé d'ancrage remplacée (empreinte différente de celle du projet) : l'opérateur restaure l'ancienne depuis sa sauvegarde ; rien de signé n'est accepté`, createdAt: fp.createdAt };
-  return { key, problem: null, createdAt: fp?.createdAt ?? null };
+function signsATrace(common: string, key: Buffer): boolean {
+  try {
+    if (readFileSync(operatorJournalPath(common), 'utf8').split('\n').some(line => line.trim() && verified(line, key))) return true;
+  } catch { /* none */ }
+  try {
+    const dir = join(common, 'apv', 'merges');
+    for (const name of readdirSync(dir).filter(n => n.endsWith('.json'))) {
+      try {
+        const { sig, ...body } = JSON.parse(readFileSync(join(dir, name), 'utf8')) as Record<string, unknown>;
+        if (signatureValid(key, 'merge', JSON.stringify(body), sig)) return true;
+      } catch { /* not this one */ }
+    }
+  } catch { /* none */ }
+  try {
+    const root = join(common, 'apv', 'reviews');
+    for (const commit of readdirSync(root)) for (const domain of readdirSync(join(root, commit))) {
+      const dir = join(root, commit, domain);
+      for (const seal of readdirSync(dir).filter(n => /^[\w-]+\.sig$/.test(n))) {
+        try {
+          const record = readFileSync(join(dir, seal.replace(/\.sig$/, '.json')));
+          if (signatureValid(key, 'review', createHash('sha256').update(record).digest('hex'), readFileSync(join(dir, seal), 'utf8').trim())) return true;
+        } catch { /* not this one */ }
+      }
+    }
+  } catch { /* none */ }
+  return false;
 }
 
-/** How long a hook waits for a key file another hook is writing: 100 readings, 20 ms apart. */
+export interface AnchorKey { key: Buffer | null; problem: string | null; createdAt: string | null }
+
+const fingerprintProblem = (common: string, why: string): string =>
+  `empreinte de la clé d'ancrage illisible (${join(common, ...KEY_FINGERPRINT)} : ${why}) : l'opérateur la vérifie ; s'il est sûr de sa clé, il supprime ce fichier et l'empreinte est réenregistrée seulement si la clé vérifie une trace signée du projet ; rien de signé n'est accepté d'ici là`;
+
+function keyProblem(file: string, read: KeyFileState): string {
+  if (read.state === 'refused') return `clé d'ancrage refusée (${file} : ${read.why}) : seul un fichier ordinaire du compte est lu ; l'opérateur la restaure depuis sa sauvegarde ; rien de signé n'est accepté`;
+  if (read.state === 'incomplete') return `clé d'ancrage illisible (${file}) : le fichier existe mais ne contient pas une clé entière (arrêt brutal pendant sa création ?) ; si le projet n'a encore rien de signé, l'opérateur supprime ce fichier et la clé est recréée, sinon il la restaure depuis sa sauvegarde ; rien de signé n'est accepté`;
+  return `clé d'ancrage absente (${file}) : l'opérateur la restaure depuis sa sauvegarde ; rien de signé n'est accepté sans elle`;
+}
+
+/**
+ * The key as the tool may trust it for a project: a regular file of the account holding a whole key, the one whose
+ * fingerprint the project recorded; without a fingerprint, a project that holds signed traces accepts only a key that
+ * verifies one of them. Otherwise no key and the problem: nothing signed is then accepted.
+ */
+export function anchorKey(common: string, file = anchorKeyFile()): AnchorKey {
+  return judgeKey(common, file, readKeyFile(file), readFingerprint(common));
+}
+
+/** The judgement of `anchorKey` on a key file and a fingerprint already read. */
+function judgeKey(common: string, file: string, read: KeyFileState, fp: FingerprintState): AnchorKey {
+  if (fp.state === 'unreadable') return { key: null, problem: fingerprintProblem(common, fp.why), createdAt: null };
+  const createdAt = fp.state === 'recorded' ? fp.createdAt : null;
+  if (read.state !== 'key') return { key: null, problem: keyProblem(file, read), createdAt };
+  if (fp.state === 'recorded' && fp.sha256 !== fingerprintOf(read.key)) return { key: null, problem: `clé d'ancrage remplacée (empreinte différente de celle du projet) : l'opérateur restaure l'ancienne depuis sa sauvegarde ; rien de signé n'est accepté`, createdAt };
+  if (fp.state === 'absent' && signedArtifacts(common) && !signsATrace(common, read.key)) {
+    return { key: null, problem: `empreinte absente alors que le projet a des traces signées (${join(common, ...KEY_FINGERPRINT)}) et la clé n'en vérifie aucune : l'opérateur restaure la clé et l'empreinte depuis sa sauvegarde ; rien de signé n'est accepté`, createdAt: null };
+  }
+  return { key: read.key, problem: null, createdAt };
+}
+
+/** How long a hook waits for a key file or a fingerprint another hook is writing: 100 readings, 20 ms apart. */
 const KEY_WAIT_TURNS = 100;
 const KEY_WAIT_MS = 20;
+const KEY_WAIT_TOTAL_MS = KEY_WAIT_TURNS * KEY_WAIT_MS;
+/** Age after which a file left aside by a stopped hook is removed. */
+const ASIDE_MAX_AGE_MS = 60_000;
 
 /**
  * The key, for the hooks only. Created (32 random bytes, file 0400 in a folder 0700) only when absent and the project holds
@@ -116,20 +202,23 @@ const KEY_WAIT_MS = 20;
  * Records the fingerprint of the key in the project on first use.
  *
  * Hooks run together (four reviewers sealing at once): the key appears whole in one step (written aside, then linked under
- * its name, which fails when it exists), always before its fingerprint; a key file seen incomplete is waited for, a bounded
- * time, never taken for absent; nothing is accepted by default.
+ * its name, which fails when it exists), always before its fingerprint; a key file or a fingerprint seen incomplete is
+ * waited for while it may still be written (recent, or changing), a bounded time, never taken for absent; nothing is
+ * accepted by default.
  */
 export function ensureAnchorKey(common: string, file = anchorKeyFile()): Buffer {
+  checkKeyFolder(dirname(file));
+  sweepAside(file);
   const found = anchorKey(common, file);
   if (found.key) return withFingerprint(common, found.key);
-  if (readFingerprint(common) === 'unreadable') throw new Error(found.problem ?? 'empreinte de la clé d\'ancrage illisible');
-  if (readKeyFile(file).state === 'absent') {
+  if (readKeyFile(file).state === 'absent' && readFingerprint(common).state !== 'unreadable') {
     // What the project holds is read before the key is looked for again: a hook that creates the key links it, whole,
     // before it records the fingerprint, so a key another hook made in between is seen by this second look.
-    const signed = readFingerprint(common) !== null || signedArtifacts(common);
+    const signed = readFingerprint(common).state !== 'absent' || signedArtifacts(common);
     if (readKeyFile(file).state === 'absent') {
-      if (signed) throw new Error(found.problem ?? 'clé d\'ancrage absente');
+      if (signed) throw new Error(found.problem ?? keyProblem(file, { state: 'absent' }));
       mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+      checkKeyFolder(dirname(file));
       const key = randomBytes(32);
       // Another hook may create it at the same instant: the one that links first wins, the others read its key.
       if (createExclusive(file, `${key.toString('hex')}\n`, 0o400)) return withFingerprint(common, key);
@@ -138,35 +227,86 @@ export function ensureAnchorKey(common: string, file = anchorKeyFile()): Buffer 
   return awaitKey(common, file);
 }
 
-/** The key another hook created or is writing: read until it is whole, a bounded time; refused if it never is. */
+/**
+ * The key another hook created or is writing: read until it is whole and accepted. Waited for only while the key file or
+ * the fingerprint is incomplete and may still be written (younger than the wait, or changing between two readings), a
+ * bounded time; anything else is refused at once with its problem.
+ */
 function awaitKey(common: string, file: string): Buffer {
-  for (let turn = 0; turn < KEY_WAIT_TURNS; turn += 1) {
-    const found = anchorKey(common, file);
+  let last = '';
+  for (let turn = 0; ; turn += 1) {
+    // One reading of each file per turn: the judgement and the wait see the same state.
+    const key = readKeyFile(file);
+    const fp = readFingerprint(common);
+    const found = judgeKey(common, file, key, fp);
     if (found.key) return withFingerprint(common, found.key);
-    // A whole key that is refused (replaced, fingerprint unreadable) does not get better by waiting.
-    if (readKeyFile(file).state === 'key') throw new Error(found.problem ?? 'clé d\'ancrage inutilisable');
+    const pending = key.state === 'incomplete' ? key : fp.state === 'unreadable' && fp.size !== null && fp.mtimeMs !== null ? { size: fp.size, mtimeMs: fp.mtimeMs } : null;
+    const seen = pending ? `${key.state}:${pending.size}:${pending.mtimeMs}` : '';
+    const writing = pending !== null && (Date.now() - pending.mtimeMs < KEY_WAIT_TOTAL_MS || (turn > 0 && seen !== last));
+    last = seen;
+    if (!writing || turn >= KEY_WAIT_TURNS) throw new Error(found.problem ?? keyProblem(file, key));
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, KEY_WAIT_MS);
   }
-  throw new Error(`clé d'ancrage illisible (${file}) : le fichier existe mais ne contient pas une clé entière ; l'opérateur la restaure depuis sa sauvegarde ; rien de signé n'est accepté`);
 }
 
 /** The key, its fingerprint recorded in the project when it has none yet. */
 function withFingerprint(common: string, key: Buffer): Buffer {
-  if (readFingerprint(common) !== null) return key;
+  if (readFingerprint(common).state !== 'absent') return key;
   const f = join(common, ...KEY_FINGERPRINT);
   mkdirSync(dirname(f), { recursive: true, mode: 0o700 });
+  sweepAside(f);
   // Recorded once: another hook recording the same key at the same instant keeps its line.
   createExclusive(f, `${JSON.stringify({ sha256: fingerprintOf(key), createdAt: new Date().toISOString() })}\n`, 0o600);
   return key;
 }
 
+/**
+ * The folder of the key, when it exists: a real folder (never a link) of the account, closed to others (0700, tightened
+ * when it is not). Anything else is refused.
+ */
+function checkKeyFolder(dir: string): void {
+  let st;
+  try { st = lstatSync(dir); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw new Error(`dossier de la clé d'ancrage refusé (${dir} : illisible) ; rien de signé n'est accepté`);
+  }
+  if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`dossier de la clé d'ancrage refusé (${dir} : ${st.isSymbolicLink() ? 'lien symbolique' : 'pas un dossier'}) ; rien de signé n'est accepté`);
+  const uid = process.getuid?.();
+  if (uid !== undefined && st.uid !== uid) throw new Error(`dossier de la clé d'ancrage refusé (${dir} : propriétaire ${st.uid}, pas le compte ${uid}) ; rien de signé n'est accepté`);
+  if ((st.mode & 0o077) !== 0) chmodSync(dir, 0o700);
+}
+
+/** Removes the files a stopped hook left aside next to `path` (`<name>.<pid>.<hex>.tmp`) once older than a minute. */
+function sweepAside(path: string): void {
+  const dir = dirname(path);
+  const prefix = `${basename(path)}.`;
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return; }
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !/^\d+\.[0-9a-f]+\.tmp$/.test(name.slice(prefix.length))) continue;
+    try {
+      const st = lstatSync(join(dir, name));
+      if (st.isFile() && Date.now() - st.mtimeMs > ASIDE_MAX_AGE_MS) rmSync(join(dir, name), { force: true });
+    } catch { /* gone */ }
+  }
+}
+
 /** Codes of a file system that cannot make a hard link. */
 const NO_LINK = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV']);
 
+/** Syncs a folder, so that a name just linked in it survives a crash; a system that cannot sync a folder is left as is. */
+function syncFolder(dir: string): void {
+  try {
+    const fd = openSync(dir, fsConstants.O_RDONLY);
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+  } catch { /* not supported here */ }
+}
+
 /**
  * Creates `path` with `content`, whole, only if it does not exist: written and synced aside, then linked under its name
- * (link fails when the name exists), so a reader sees no file or the whole file. True when created, false when it existed.
- * On a file system without hard links, an exclusive creation (open O_EXCL), whose readers wait for the content.
+ * (link fails when the name exists) and the folder synced, so a reader sees no file or the whole file. True when created,
+ * false when it existed. On a file system without hard links, an exclusive creation (open O_EXCL), whose readers wait
+ * for the content while it may still be written.
  */
 function createExclusive(path: string, content: string, mode: number): boolean {
   const aside = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
@@ -177,6 +317,7 @@ function createExclusive(path: string, content: string, mode: number): boolean {
   } catch (error) { rmSync(aside, { force: true }); throw error; }
   try {
     linkSync(aside, path);
+    syncFolder(dirname(path));
     return true;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code ?? '';
@@ -187,6 +328,7 @@ function createExclusive(path: string, content: string, mode: number): boolean {
       throw e;
     }
     chmodSync(path, mode);
+    syncFolder(dirname(path));
     return true;
   } finally { rmSync(aside, { force: true }); }
 }
@@ -414,7 +556,7 @@ export function recordRefusal(common: string, reason: string, now = new Date()):
  * The message of the operator that holds every sentence of `quote`, or null. Whole sentences only: the journal keeps
  * their hashes, never the text, so a quote cut in the middle of a sentence is not recognised.
  */
-export function anchoredQuote(messages: readonly OperatorMessage[], quote: string, key: Buffer | null = readAnchorKey()): OperatorMessage | null {
+export function anchoredQuote(messages: readonly OperatorMessage[], quote: string, key: Buffer | null): OperatorMessage | null {
   const wanted = sentences(quote);
   if (!key || !wanted.length || comparable(quote).length < MIN_QUOTE) return null;
   const hashes = wanted.map(s => keyed(key, s));

@@ -38,8 +38,8 @@ export interface LaneInput {
     /** Sensitive paths of the high lane (`sensitivePaths` and `risk.highPaths`). */
     sensitive: readonly string[];
     messages: readonly OperatorMessage[];
-    /** The anchor key (tests); default: the key of the account. */
-    key?: Buffer | null;
+    /** The anchor key the caller checked (`anchorKey(common).key`): never read by default. */
+    key: Buffer | null;
 }
 /**
  * Outside the lane too, a mockup decision the change adds or alters must hold what the lane asks of it: the quote typed

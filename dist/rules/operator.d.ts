@@ -36,9 +36,9 @@ export interface AnchorKey {
     createdAt: string | null;
 }
 /**
- * The key as the tool may trust it for a project: present, and the one whose fingerprint the project recorded. A missing
- * key, or another one (deleted then made anew), or a fingerprint that cannot be read gives no key and the problem: nothing
- * signed is then accepted.
+ * The key as the tool may trust it for a project: a regular file of the account holding a whole key, the one whose
+ * fingerprint the project recorded; without a fingerprint, a project that holds signed traces accepts only a key that
+ * verifies one of them. Otherwise no key and the problem: nothing signed is then accepted.
  */
 export declare function anchorKey(common: string, file?: string): AnchorKey;
 /**
@@ -47,8 +47,9 @@ export declare function anchorKey(common: string, file?: string): AnchorKey;
  * Records the fingerprint of the key in the project on first use.
  *
  * Hooks run together (four reviewers sealing at once): the key appears whole in one step (written aside, then linked under
- * its name, which fails when it exists), always before its fingerprint; a key file seen incomplete is waited for, a bounded
- * time, never taken for absent; nothing is accepted by default.
+ * its name, which fails when it exists), always before its fingerprint; a key file or a fingerprint seen incomplete is
+ * waited for while it may still be written (recent, or changing), a bounded time, never taken for absent; nothing is
+ * accepted by default.
  */
 export declare function ensureAnchorKey(common: string, file?: string): Buffer;
 export declare function sign(key: Buffer, kind: string, payload: string): string;
@@ -131,7 +132,7 @@ export declare function recordRefusal(common: string, reason: string, now?: Date
  * The message of the operator that holds every sentence of `quote`, or null. Whole sentences only: the journal keeps
  * their hashes, never the text, so a quote cut in the middle of a sentence is not recognised.
  */
-export declare function anchoredQuote(messages: readonly OperatorMessage[], quote: string, key?: Buffer | null): OperatorMessage | null;
+export declare function anchoredQuote(messages: readonly OperatorMessage[], quote: string, key: Buffer | null): OperatorMessage | null;
 /** The sentence the operator types himself to waive `rule` (or the review of one domain) for `sha` (shown in every refusal). */
 export declare function waiverSentence(rule: WaiverTarget, sha: string): string;
 /**

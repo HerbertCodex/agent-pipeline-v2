@@ -293,7 +293,7 @@ export async function checkMergeRules(input) {
     if (!screens.length)
         rules.push(outcome('maquette', 'not_applicable', 'aucun écran ajouté ni modifié'));
     else {
-        const coverage = screenCoverage(screens, (await loadDecisionLedger(repo, mergeBase)).decisions, (await loadDecisionLedger(repo, sha)).decisions, messages);
+        const coverage = screenCoverage(screens, (await loadDecisionLedger(repo, mergeBase)).decisions, (await loadDecisionLedger(repo, sha)).decisions, messages, anchor.key);
         const uncovered = coverage.filter(c => !c.mockup);
         rules.push(uncovered.length
             ? outcome('maquette', 'refused', `${screens.length} écran(s) ajouté(s) ou modifié(s)`, uncovered.map(c => c.unanchored.length
