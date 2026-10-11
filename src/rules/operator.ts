@@ -575,6 +575,21 @@ export function anchoredQuote(messages: readonly OperatorMessage[], quote: strin
   return messages.find(m => hashes.every(h => m.sentences.includes(h))) ?? null;
 }
 
+/**
+ * The message of the operator that holds every sentence of `quote` and no sentence of `refused`, or null. `refused`: the
+ * text of the tool around what he must type (a refusal, its advice); pasted in his message, it makes no validation, the
+ * same family as TEMPLATE_REASON (security review of PR #128, review of the code of #136). The journal keeps hashes of
+ * whole sentences only, so the texts are compared sentence by sentence; the sentences of `quote` itself never count
+ * against it.
+ */
+export function anchoredQuoteOutside(messages: readonly OperatorMessage[], quote: string, refused: readonly string[], key: Buffer | null): OperatorMessage | null {
+  const wanted = sentences(quote);
+  if (!key || !wanted.length || comparable(quote).length < MIN_QUOTE) return null;
+  const hashes = wanted.map(s => keyed(key, s));
+  const banned = new Set(refused.flatMap(sentences).filter(s => !wanted.includes(s)).map(s => keyed(key, s)));
+  return messages.find(m => hashes.every(h => m.sentences.includes(h)) && !m.sentences.some(h => banned.has(h))) ?? null;
+}
+
 /** The sentence the operator types himself to waive `rule` (or the review of one domain) for `sha` (shown in every refusal). */
 export function waiverSentence(rule: WaiverTarget, sha: string): string {
   return `dérogation ${rule} ${sha.slice(0, WAIVER_SHA)} : <ta raison>`;

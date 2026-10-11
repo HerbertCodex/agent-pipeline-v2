@@ -58,4 +58,20 @@ export function forbiddenPaths(changed, allowed) {
     const outside = changed.filter(path => !refusedPath(path) && !allowed.some(glob => matches(path, glob)));
     return { refused, outside };
 }
+/** The entries of a raw diff read with NUL separators; null when the output is not one. */
+export function rawDiff(output) {
+    const parts = output.split('\0');
+    if (parts[parts.length - 1] === '')
+        parts.pop();
+    if (parts.length % 2 !== 0)
+        return null;
+    const entries = [];
+    for (let index = 0; index < parts.length; index += 2) {
+        const meta = /^:(\d{6}) (\d{6}) [0-9a-f]{40} ([0-9a-f]{40}) ([A-Z])$/.exec(parts[index].replace(/^\n/, ''));
+        if (!meta || !parts[index + 1])
+            return null;
+        entries.push({ mode: meta[2], blob: meta[3], status: meta[4], path: parts[index + 1] });
+    }
+    return entries;
+}
 //# sourceMappingURL=paths.js.map

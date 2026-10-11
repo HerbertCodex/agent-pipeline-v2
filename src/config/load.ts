@@ -332,7 +332,10 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
   if (value.reuse) list.attempt('CONFIG', () => reuseSettings(value.reuse));
   if (value.map) list.attempt('CONFIG', () => mapSettings(value.map));
   if (value.rules) list.attempt('CONFIG', () => rulesSettings(value.rules, []));
-  if (value.rules?.operatorOrders) for (const message of operatorOrdersIssues(value.rules.operatorOrders)) list.check(false, 'CONFIG', message);
+  if (value.rules?.operatorOrders) {
+    const context = { gates: value.gates, ciProof: value.rules.ciProof, requiredGates: value.rules.requiredGates };
+    for (const message of operatorOrdersIssues(value.rules.operatorOrders, context)) list.check(false, 'CONFIG', message);
+  }
   for (const arg of value.review?.dast?.command ?? []) {
     if (!arg.includes('{{')) continue;
     const key = /^\{\{([A-Za-z]+)\}\}$/.exec(arg)?.[1];

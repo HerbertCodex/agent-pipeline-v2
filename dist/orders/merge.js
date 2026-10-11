@@ -9,8 +9,36 @@ import { requestAttestation } from './attestation.js';
 import { publicationBranchOf } from './config.js';
 import { publicKeys } from './envelope.js';
 import { COMMIT, HISTORY_LOG_FORMAT, UUID, mergeMessage, orderMergeCommits, readHistory, verifyOrder } from './order.js';
-import { forbiddenPaths, stepGlobs } from './paths.js';
+import { forbiddenPaths, rawDiff, stepGlobs } from './paths.js';
 import { runVerifyCommand } from './verify-command.js';
+/**
+ * `apv stack merge <publication> <article> --order <nonce>` (docs/REGLES.md, section 3 ter): the merge of the two pull
+ * requests of an operator order, with no session of the operator, each step once.
+ *
+ * Trusted base `T`, fixed for the whole run before anything is merged: the target as it was before any merge on this
+ * order (its head at the start, or the first parent of the publication merge APV already made for this order). The keys,
+ * the domain, the attestation address, the verification command, `batch.setup` and the variables are read at `T` only,
+ * and the verification command always runs from a clean copy of `T`: nothing a pull request wrote (the publication head
+ * merged at the first step included) is ever read as configuration or executed by the tool.
+ *
+ * For each step (publication, then article), in this order, `M` being the head of the target read at that moment:
+ * 1. the order `nonce`, signed on the article pull request, verified offline with the keys of `T` (signature,
+ *    repository, pull request, expiry, last signed decision by sequence number, head of the article pull request);
+ * 2. not consumed: only merge commits APV made count (two parents, second parent equal to `Apv-Merged-Head`, trailer
+ *    read by Git, `Apv-Order-Sha256` equal to the digest of this order); both steps there: `already_done`;
+ * 3. the publication head `H` (read once, at the start) descends from `M` (`base`); the verification command of the
+ *    project, from a clean copy of `T`, finds the content of the step to be the one the order signed (`verify`);
+ * 4. the rules checked before any merge (`apv rules check`) at the merged head (`rules`), with the context of the reduced
+ *    lane of this try (docs/PREUVE-REDUITE.md): T, M, H, the declaration of T, the verification of the project just made;
+ * 5. the tree of the merge is the tree verified: the one of `H` (publication), or only the files of the article pull
+ *    request with their content at the signed commit (article);
+ * 6. a fresh attestation of the production bound to a challenge drawn here (`attestation`);
+ * 7. the merge commit of parents (`M`, head), with the trailer `Apv-Order`, pushed on the target without force within
+ *    `maxAgeSeconds` of the attestation (a new attestation otherwise), the push bounded in time. A push refused because
+ *    the target moved starts the step again on the new `M`, whose declaration must be the one of `T` (twice at most, then
+ *    `main_moved`). Never the merge API of GitHub, never a forced push.
+ */
+export { rawDiff } from './paths.js';
 /** Pushes refused because the target moved, after which the run stops (`main_moved`). */
 export const MAX_PUSH_RETRIES = 2;
 export const DEFAULT_PUSH_TIMEOUT_MS = 60_000;
@@ -218,8 +246,23 @@ export async function mergeOnOrder(options) {
                     ...(trustedConfig.batch?.setup ? { setup: { command: trustedConfig.batch.setup, timeoutMs: trustedConfig.batch.setupTimeoutMs } } : {}) } });
             if (!checked.ok)
                 throw new Refusal('verify', `vérification du projet refusée : ${checked.detail}`, checked.projectCode);
-            // 4. The rules checked before any merge, at the merged head.
-            const problems = await options.rules(head, base);
+            // 4. The rules checked before any merge, at the merged head, with the context of the reduced lane of this very try
+            // (docs/PREUVE-REDUITE.md, 5.1): built here only, after the verification of the project, never read elsewhere.
+            let sameConfig = base === trusted;
+            if (!sameConfig) {
+                try {
+                    sameConfig = fingerprint(configAt(base)) === trustedPrint;
+                }
+                catch {
+                    sameConfig = false;
+                }
+            }
+            const lane = { nonce: options.nonce, step, trusted, target: base, head, slug: verdict.order.payload['slug'], declaration: settings.reducedProof ?? null,
+                ciProof: trustedConfig.rules?.ciProof ? { workflow: trustedConfig.rules.ciProof.workflow, name: trustedConfig.rules.ciProof.name } : null,
+                sameConfigAsTrusted: sameConfig, verified: { head, base, regenerated: checked.regenerated ?? null, shape: checked.shape ?? null } };
+            const said = await options.rules(head, base, lane);
+            const problems = Array.isArray(said) ? said : said.problems;
+            const proof = Array.isArray(said) ? { mode: 'full' } : said.proof;
             if (problems.length)
                 throw new Refusal('rules', `règles avant fusion refusées à ${short(head)} :\n${problems.join('\n')}`);
             // 5. The merge, whose tree must be the one verified.
@@ -258,9 +301,9 @@ export async function mergeOnOrder(options) {
                     throw new Refusal('config', `${target} a bougé et sa configuration (rules.operatorOrders, rules.ciProof, batch.setup ou variables) diffère de la base de confiance ${short(trusted)} : relancer`);
                 continue;
             }
-            report.merged.push({ step, pr, head, base, mergeCommit: commit });
+            report.merged.push({ step, pr, head, base, mergeCommit: commit, proof });
             log(`Étape ${step} fusionnée : ${short(commit)} (parents ${short(base)}, ${short(head)}), poussée sans force sur ${target}.`);
-            const traced = options.onMerged?.({ pr, head, target, method: 'merge', mergeCommit: commit });
+            const traced = options.onMerged?.({ pr, head, target, method: 'merge', mergeCommit: commit, proof });
             if (traced)
                 report.traceErrors.push(`trace de fusion de la PR #${pr} non écrite : ${traced}`);
             if (step === 'article') {
@@ -328,22 +371,6 @@ function consumedSteps(merges, verdict, ctx) {
         done.add(step);
     }
     return done;
-}
-/** The entries of a raw diff read with NUL separators; null when the output is not one. */
-export function rawDiff(output) {
-    const parts = output.split('\0');
-    if (parts[parts.length - 1] === '')
-        parts.pop();
-    if (parts.length % 2 !== 0)
-        return null;
-    const entries = [];
-    for (let index = 0; index < parts.length; index += 2) {
-        const meta = /^:(\d{6}) (\d{6}) [0-9a-f]{40} [0-9a-f]{40} ([A-Z])$/.exec(parts[index].replace(/^\n/, ''));
-        if (!meta || !parts[index + 1])
-            return null;
-        entries.push({ mode: meta[2], status: meta[3], path: parts[index + 1] });
-    }
-    return entries;
 }
 async function attest(settings, verdict, report, challenge, fetcher, sleep) {
     report.attestations += 1;

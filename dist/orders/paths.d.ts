@@ -14,3 +14,12 @@ export declare function forbiddenPaths(changed: readonly string[], allowed: read
     outside: string[];
 };
 export type StepPaths = Record<OrderStep, string[]>;
+/** One entry of `git diff --raw -z --no-renames --no-abbrev`: the new mode, the new blob, the status letter and the path. */
+export interface RawEntry {
+    mode: string;
+    blob: string;
+    status: string;
+    path: string;
+}
+/** The entries of a raw diff read with NUL separators; null when the output is not one. */
+export declare function rawDiff(output: string): RawEntry[] | null;

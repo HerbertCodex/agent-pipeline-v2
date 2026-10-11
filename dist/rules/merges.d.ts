@@ -1,3 +1,4 @@
+import type { GhRunner } from '../stack/github.js';
 /**
  * Merge traces: `apv stack merge` and `apv stack batch --merge` write one per merge, signed with the anchor key kept
  * outside the repository, in `<git common dir>/apv/merges/`. `apv audit merges` walks the default branch and names every
@@ -15,6 +16,15 @@ export interface MergeTraceBody {
     at: string;
     /** A rebase merge: the number of commits it landed, `mergeCommit` the last one (absent: one commit). */
     commits?: number;
+    /** A merge on order: the proof the rules took (docs/PREUVE-REDUITE.md, 5.8); absent for any other merge. */
+    proof?: {
+        mode: 'full';
+    } | {
+        mode: 'reduced';
+        checkRun: number;
+        run: number;
+        name: string;
+    };
 }
 export interface MergeTrace extends MergeTraceBody {
     sig: string;
@@ -37,6 +47,8 @@ export interface UnaccountedCommit {
         nonce: string;
         step: string;
     };
+    /** A merge on order: the check runs read at its merged head (`readOrderProofs`, F6), informative only. */
+    proofs?: string[];
 }
 export interface MergeAudit {
     /** The branch audited (`origin/main`), and the commit it pointed to; null when it does not resolve. */
@@ -48,6 +60,8 @@ export interface MergeAudit {
     commits: number;
     traces: number;
     unaccounted: UnaccountedCommit[];
+    /** Why the check runs of the merges on order were not read (offline, remote outside github.com). */
+    proofsNote?: string;
 }
 /** Default window when no trace exists yet: 30 days. */
 export declare const DEFAULT_AUDIT_DAYS = 30;
@@ -61,5 +75,11 @@ export declare function auditMerges(repo: string, common: string, ref: string, o
     since?: string;
     now?: Date;
 }): MergeAudit;
+/**
+ * For each merge on order no trace accounts for (a merge made in another environment, the cloud routine), the check
+ * runs read at its merged head (second parent): the reduced proof and the proof by the CI its first parent declares
+ * (docs/PREUVE-REDUITE.md 5.8, F6). Informative: the commit stays unaccounted, never laundered by a green check run.
+ */
+export declare function readOrderProofs(repo: string, audit: MergeAudit, gh: GhRunner | null, repository: string | null): Promise<MergeAudit>;
 /** Lines of an audit, for `apv status`, `apv audit merges` and the head of the report of `apv stack merge`. */
 export declare function auditLines(audit: MergeAudit): string[];

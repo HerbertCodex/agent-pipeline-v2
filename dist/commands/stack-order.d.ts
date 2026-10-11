@@ -1,6 +1,7 @@
 import { type RulesInput } from '../rules/check.js';
 import { type GhCall } from '../stack/github.js';
-import { type OrderMergeReport } from '../orders/merge.js';
+import { type OrderMergeReport, type RulesVerdict, type StepProof } from '../orders/merge.js';
+import type { OrderLane } from '../rules/reduced-proof.js';
 import type { CommandIO } from './io.js';
 /** Options of `apv stack merge` that a merge on order never takes: its method, target and checks are fixed. */
 declare const FOREIGN: readonly ["method", "target", "ready", "allow-behind", "reason", "keep-branches", "wait-ci"];
@@ -12,9 +13,10 @@ export declare const ORDER_USAGE = "--order <r\u00E9f\u00E9rence>  (merge) fusio
 /**
  * The rules checked before a merge on order (src/rules/check.ts) at `head`, against the exact commit of the target APV
  * read and merges on (never a remote-tracking ref left stale), the proof by the CI (rules.ciProof of the base) read
- * through `ci.gh`: the problems, empty when respected.
+ * through `ci.gh`, with the context of the reduced lane mergeOnOrder built for this try (docs/PREUVE-REDUITE.md): the
+ * problems, empty when respected, and the proof taken (`reduced` only when the rule preuve accepted the reduced lane).
  */
-export declare function orderRules(repo: string, ci: NonNullable<RulesInput['ci']>): (head: string, base: string) => Promise<string[]>;
+export declare function orderRules(repo: string, ci: NonNullable<RulesInput['ci']>): (head: string, base: string, lane?: OrderLane) => Promise<RulesVerdict>;
 /** Lines of the report of a merge on order. */
 export declare function orderLines(report: OrderMergeReport, nonce: string): string[];
 /** `APV_ALLOW_MERGE=1 apv stack merge <publication> <article> --order <nonce>`. */
@@ -24,5 +26,6 @@ export declare function stackMergeOnOrder(prs: number[], values: OrderValues, io
     target: string;
     method: string;
     mergeCommit: string | null;
+    proof?: StepProof;
 }) => string | null): Promise<number>;
 export {};

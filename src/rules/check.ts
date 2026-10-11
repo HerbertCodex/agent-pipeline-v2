@@ -26,6 +26,7 @@ import { LANE_NAME, docsOnlyLane, laneLines, type DocsOnlyLane } from './docs-on
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
 import { ciProofLines, verifyCiProof, type CiProofOutcome } from './ci-proof.js';
 import { githubRepository } from './protection.js';
+import { declarationVerdict, laneWouldFit, reducedLane, type OrderLane, type ReducedLane } from './reduced-proof.js';
 import type { GhRunner } from '../stack/github.js';
 
 export type RuleStatus = 'ok' | 'refused' | 'waived' | 'not_applicable';
@@ -66,6 +67,8 @@ export interface RulesReport {
   warnings: string[];
   /** The proof by the CI (rules.ciProof of the base), when the local receipts left checks unproven; null otherwise. */
   ci: CiProofOutcome | null;
+  /** The reduced lane (docs/PREUVE-REDUITE.md), only when a merge on order gave its context and the receipts left checks unproven. */
+  reduced?: ReducedLane;
 }
 
 export interface RulesInput {
@@ -82,6 +85,11 @@ export interface RulesInput {
    * read and the rule asks for the local proof. `repository` (owner/name) defaults to the origin on github.com.
    */
   ci?: { gh: GhRunner | null; repository?: string | null };
+  /**
+   * The context of the reduced lane (docs/PREUVE-REDUITE.md, 5.1): built by mergeOnOrder alone, after the verification
+   * of the project, for this commit and this target; no command line builds it.
+   */
+  orderLane?: OrderLane;
 }
 
 /** Whether the commit is a web interface: web dependencies in its package.json, or tracked interface files. */
@@ -360,6 +368,11 @@ function changedFiles(repo: string, base: string, head: string): string[] {
 
 const short = (sha: string): string => sha.slice(0, 12);
 
+/** Every file the change adds, modifies or removes since the base (both sides of a rename); empty when unreadable. */
+function touchedFiles(repo: string, base: string, head: string): string[] {
+  return (gitRead(repo, ['diff', '--name-only', '--no-renames', '-z', base, head, '--']) ?? '').split('\0').filter(Boolean);
+}
+
 function outcome(rule: MergeRule, status: RuleStatus, detail: string, problems: string[] = [], todo: string[] = []): RuleOutcome {
   return { rule, title: RULE_TITLES[rule], status, detail, problems, todo, waiver: null };
 }
@@ -387,6 +400,13 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   const anchor = anchorKey(common);
   const messages = readOperatorMessages(common, anchor.key);
   const rules: RuleOutcome[] = [];
+  // The reduced proof lifts checks (docs/PREUVE-REDUITE.md, 4.3): added or widened by the change, the rule preuve
+  // refuses without an anchored decision of the operator, whatever proves the checks (a batch too).
+  const baseRp = atBase.rules?.operatorOrders?.reducedProof;
+  const headRp = candidate.rules?.operatorOrders?.reducedProof;
+  const workflowBlob = (at: string, path: string | undefined): string | null => path ? gitRead(repo, ['rev-parse', '--verify', '--quiet', `${at}:${path}`]) : null;
+  const declaration = await declarationVerdict(baseRp, headRp, { base: workflowBlob(mergeBase, baseRp?.workflow), head: workflowBlob(sha, headRp?.workflow) },
+    async () => ({ atBase: (await loadDecisionLedger(repo, mergeBase)).decisions, atHead: (await loadDecisionLedger(repo, sha)).decisions }), messages, anchor.key);
 
   // The plan of the reviews, and the lane without code (docs/REGLES.md): both read at the base, from the diff since it.
   // The migrations as the base declares them, and as the change declares them: a change that moves db.migrations
@@ -427,45 +447,84 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   // local receipts stay first, the API is read only when they leave a check unproven.
   let ci: CiProofOutcome | null = null;
   const ciNotes: string[] = [];
+  const offline = input.remote?.offline === true;
+  const ciGh = offline ? null : input.ci?.gh ?? null;
+  const ciRepository = input.ci && input.ci.repository !== undefined ? input.ci.repository : githubRepository(repo);
+  // The reduced proof (docs/PREUVE-REDUITE.md): only in the context mergeOnOrder builds, only for the checks the local
+  // receipts leave unproven. Retained, it lifts `waives` and proves the pending checks of `gates`; the others stay
+  // required as before (local receipts, then rules.ciProof).
+  let reduced: ReducedLane | null = null;
+  if (input.orderLane && !skip.has('preuve') && !unscoped && proof && !proof.ok) {
+    reduced = await reducedLane({ repo, commit: sha, target: resolveCommit(repo, input.target) ?? input.target, mergeBase, lane: input.orderLane, proof, config: effective, gh: ciGh, repository: ciRepository });
+  }
+  const waived = new Set(reduced?.retained ? reduced.waived : []);
+  const provenByReduced = reduced?.retained ? reduced.proven : [];
   if (!skip.has('preuve') && !unscoped && proof && !proof.ok) {
-    const pending = proof.gates.filter(g => g.state === 'missing' || g.state === 'dirty').map(g => g.gateId);
+    const pending = proof.gates.filter(g => (g.state === 'missing' || g.state === 'dirty') && !waived.has(g.gateId) && !provenByReduced.includes(g.gateId)).map(g => g.gateId);
     if (settings.ciProof && pending.length) {
-      const offline = input.remote?.offline === true;
-      ci = await verifyCiProof({ repo, mergeBase, head: sha, settings: settings.ciProof, pending, config: effective,
-        gh: offline ? null : input.ci?.gh ?? null,
-        repository: input.ci && input.ci.repository !== undefined ? input.ci.repository : githubRepository(repo) });
+      ci = await verifyCiProof({ repo, mergeBase, head: sha, settings: settings.ciProof, pending, config: effective, gh: ciGh, repository: ciRepository });
     } else if (!settings.ciProof && candidate.rules?.ciProof) {
       ciNotes.push(`rules.ciProof déclarée par la PR, ignorée : seule la base commune compte (${short(mergeBase)}) ; la preuve CI vaudra après la fusion de cette déclaration`);
     }
   }
   const viaCi = new Set(ci?.state === 'accepted' ? ci.gates : []);
   const provenByCi = proof ? proof.gates.filter(g => viaCi.has(g.gateId) && (g.state === 'missing' || g.state === 'dirty')).map(g => g.gateId) : [];
+  const laneNotes = reduced && !reduced.retained ? [...reduced.reasons.slice(0, 10).map(r => `voie réduite non retenue : ${r}`),
+    ...(reduced.reasons.length > 10 ? [`voie réduite non retenue : et ${reduced.reasons.length - 10} autre(s) raison(s)`] : [])] : [];
   if (skip.has('preuve')) rules.push(outcome('preuve', 'not_applicable', 'prouvée par le lot (une suite complète sur la tête du lot)'));
   else if (unscoped) rules.push(outcome('preuve', 'not_applicable', `${LANE_NAME} : aucun contrôle ne s'applique, chacun non requis par sa portée (skipWhenOnly, recalculée depuis le commit) : ${unscoped}`));
   else if (proofError) rules.push(outcome('preuve', 'refused', 'suite complète au commit exact', [proofError], proveTodo));
   else if (proof!.ok) rules.push(outcome('preuve', 'ok', `${proof!.required.length} contrôle(s) prouvé(s) à ${short(sha)}, contrôles de la base compris`));
   else {
-    const missing = proof!.gates.filter(g => g.state !== 'passed' && !provenByCi.includes(g.gateId)).map(g => `${g.gateId} (${g.state})`);
-    if (!missing.length) {
+    const missing = proof!.gates.filter(g => g.state !== 'passed' && !provenByCi.includes(g.gateId) && !provenByReduced.includes(g.gateId) && !waived.has(g.gateId)).map(g => `${g.gateId} (${g.state})`);
+    if (!missing.length && reduced?.retained) {
+      const run = reduced.outcome!.checkRun!;
+      const required = proof!.required.filter(g => !waived.has(g)).length;
+      rules.push(outcome('preuve', 'ok', `voie réduite sur ordre ${reduced.nonce}, étape ${reduced.step} : ${required} contrôle(s) prouvé(s) à ${short(sha)} `
+        + `(${required - provenByReduced.length - provenByCi.length} par reçus locaux, ${provenByReduced.length} par le check run « ${reduced.outcome!.name} » ${run.id}, exécution ${run.runId} (${run.event})`
+        + `${provenByCi.length ? `, ${provenByCi.length} par la CI (${provenByCi.join(', ')})` : ''}) ; levés : ${reduced.waived.join(', ')} ; couvert : ${reduced.covers}`
+        + `${reduced.content.length ? ` ; contenu régénéré exécuté par la preuve réduite : ${reduced.content.join(', ')}` : ''}`));
+    } else if (!missing.length) {
       const run = ci!.checkRun!;
       rules.push(outcome('preuve', 'ok', `${proof!.required.length} contrôle(s) prouvé(s) à ${short(sha)}, contrôles de la base compris : `
         + `${proof!.required.length - provenByCi.length} par les reçus locaux, ${provenByCi.length} par la CI (${provenByCi.join(', ')}) : `
         + `check run « ${ci!.name} » ${run.id} de GitHub Actions, workflow ${run.workflow} inchangé depuis la base, exécution ${run.runId} (${run.event}), conclusion success`
         + `${ci!.artifact ? ` ; reçus de l'artefact ${ci!.artifact} : mesure seulement` : ''}`));
     } else {
-      rules.push(outcome('preuve', 'refused', 'suite complète au commit exact', [`contrôle(s) non prouvé(s) à ${short(sha)} : ${missing.join(', ')}`, ...(ci ? ciProofLines(ci) : []), ...ciNotes],
+      const laneSaid = reduced?.retained ? [`voie réduite sur ordre ${reduced.nonce} retenue : levés ${reduced.waived.join(', ')}${provenByReduced.length ? ` ; prouvés par le check run « ${reduced.outcome!.name} » : ${provenByReduced.join(', ')}` : ''}`] : [];
+      rules.push(outcome('preuve', 'refused', 'suite complète au commit exact', [`contrôle(s) non prouvé(s) à ${short(sha)} : ${missing.join(', ')}`, ...(ci ? ciProofLines(ci) : []), ...ciNotes, ...laneSaid, ...laneNotes],
         ci && ci.state !== 'out_of_lane' && ci.gates.length && ci.state !== 'accepted'
           ? [...proveTodo, `Ou, pour ${ci.gates.join(', ')}, le check run « ${ci.name} » de GitHub Actions conclu en succès à ${short(sha)} (workflow ${ci.workflow}), puis relancer apv rules check.`]
           : proveTodo));
     }
   }
+  const preuveOutcome = rules.find(r => r.rule === 'preuve')!;
+  if (preuveOutcome.status === 'ok' && laneNotes.length) preuveOutcome.detail += ` ; ${laneNotes[0]}`;
+  // Outside the merge on order (5.1): the reduced lane is only said possible, never taken.
+  const baseDeclaration = atBase.rules?.operatorOrders?.reducedProof;
+  if (!input.orderLane && baseDeclaration && preuveOutcome.status === 'refused') {
+    const fits = laneWouldFit(baseDeclaration, touchedFiles(repo, mergeBase, sha));
+    if (fits) preuveOutcome.problems.push(`information : voie réduite possible sur ordre signé seulement (apv stack merge --order) : le diff tient dans rules.operatorOrders.reducedProof.paths.${fits}`);
+  }
+  if (declaration.kind !== 'unchanged') {
+    const preuve = rules.find(r => r.rule === 'preuve')!;
+    if (declaration.kind === 'anchored') preuve.detail += ` ; ${declaration.note}`;
+    else {
+      preuve.status = 'refused';
+      preuve.problems.unshift(declaration.problem);
+      preuve.todo = [...declaration.todo, ...preuve.todo];
+    }
+  }
   // A job of the CI relaunched (run_attempt above 1) passed only after a relaunch, as a receipt passed_after_retry.
   const ciRelaunched = provenByCi.length > 0 && (ci?.checkRun?.runAttempt ?? 0) > 1;
+  const reducedRun = reduced?.retained ? reduced.outcome?.checkRun ?? null : null;
+  const reducedRelaunched = reducedRun !== null && reducedRun.runAttempt > 1;
   if (skip.has('instable')) rules.push(outcome('instable', 'not_applicable', 'jugée sur la suite du lot'));
   else if (unscoped) rules.push(outcome('instable', 'not_applicable', `${LANE_NAME} : aucun contrôle à lancer`));
   else if (!proof) rules.push(outcome('instable', 'refused', 'contrôles réussis au premier passage', ['preuve illisible : rien ne montre que les contrôles ont réussi sans relance'], proveTodo));
-  else if (proof.flaky.length || ciRelaunched) {
-    const flaky = [...proof.flaky, ...(ciRelaunched ? [`${provenByCi.join(', ')} (job de la CI relancé : tentative ${ci!.checkRun!.runAttempt} de l'exécution ${ci!.checkRun!.runId})`] : [])];
+  else if (proof.flaky.length || ciRelaunched || reducedRelaunched) {
+    const flaky = [...proof.flaky, ...(ciRelaunched ? [`${provenByCi.join(', ')} (job de la CI relancé : tentative ${ci!.checkRun!.runAttempt} de l'exécution ${ci!.checkRun!.runId})`] : []),
+      ...(reducedRelaunched ? [`${[...provenByReduced, ...waived].join(', ')} (job de la preuve réduite relancé : tentative ${reducedRun!.runAttempt} de l'exécution ${reducedRun!.runId})`] : [])];
     rules.push(outcome('instable', 'refused', 'contrôles réussis au premier passage', [`réussi(s) seulement après relance : ${flaky.join(', ')}`], [
       'Examine chaque test instable comme un bug possible du produit (course, attente d\'un fait non observé, données partagées entre tests), pas seulement du test.',
       'Corrige la cause, pousse, puis relance la suite complète sur le nouveau commit : aucune fusion sur un vert obtenu par relance.',
@@ -599,7 +658,8 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   }
   const order = new Map(MERGE_RULES.map((r, i) => [r, i]));
   rules.sort((a, b) => order.get(a.rule)! - order.get(b.rule)!);
-  return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, lane, warnings: [...base.warnings, ...(anchor.problem ? [anchor.problem] : [])], ci };
+  return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, lane, warnings: [...base.warnings, ...(anchor.problem ? [anchor.problem] : [])], ci,
+    ...(reduced ? { reduced } : {}) };
 }
 
 /** Lines of a report, for the text output of `apv rules check` and of the stack commands. */

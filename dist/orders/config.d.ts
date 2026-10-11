@@ -16,13 +16,33 @@ import { type Infer } from '../domain/schema.js';
  * - `verify.publication`: the command of the project that checks the content of a step, run by APV from a clean copy
  *   of the trusted base, the verified order on its input, with whole arguments replaced: `{{trusted}}` the trusted base
  *   (where the keys and the configuration are read: the project reads its keys there too), `{{base}}` the commit the
- *   step merges on (the target at that moment, which may already contain the publication head), `{{head}}`, `{{step}}`.
+ *   step merges on (the target at that moment, which may already contain the publication head), `{{head}}`, `{{step}}`;
+ * - `reducedProof` (optional, docs/PREUVE-REDUITE.md): the check run of a job that stands in for the full suite in a
+ *   merge on order only, when the diff of the step holds in a closed list of regenerated content; `gates` it runs whole,
+ *   `waives` it does not run (the only declaration of `rules` that lifts checks: its addition or widening needs an
+ *   anchored decision of the operator, checked by `apv rules check`).
  */
 export declare const DEFAULT_ATTESTATION_MAX_AGE_SECONDS = 120;
 export declare const DEFAULT_ATTESTATION_TIMEOUT_MS = 15000;
 export declare const DEFAULT_VERIFY_TIMEOUT_MS = 900000;
 /** Placeholders of `verify.publication`, replaced as whole arguments. */
 export declare const VERIFY_PLACEHOLDERS: readonly ["trusted", "base", "head", "step"];
+/** `rules.operatorOrders.reducedProof` (docs/PREUVE-REDUITE.md, section 4). */
+export declare const reducedProofSchema: import("../domain/schema.js").Schema<{
+    readonly workflow: string;
+    readonly job: string;
+    readonly name: string;
+    readonly gates: string[];
+    readonly waives: string[];
+    readonly covers: string;
+    readonly paths: {
+        readonly publication: string[] | undefined;
+        readonly article: string[] | undefined;
+    };
+    readonly protectedPaths: string[] | undefined;
+    readonly artifact: string | undefined;
+}>;
+export type ReducedProofDeclaration = Infer<typeof reducedProofSchema>;
 export declare const operatorOrdersSchema: import("../domain/schema.js").Schema<{
     readonly domain: string;
     readonly publicKeys: string[];
@@ -40,13 +60,57 @@ export declare const operatorOrdersSchema: import("../domain/schema.js").Schema<
         readonly publication: string[];
         readonly timeoutMs: number;
     };
+    readonly reducedProof: {
+        readonly workflow: string;
+        readonly job: string;
+        readonly name: string;
+        readonly gates: string[];
+        readonly waives: string[];
+        readonly covers: string;
+        readonly paths: {
+            readonly publication: string[] | undefined;
+            readonly article: string[] | undefined;
+        };
+        readonly protectedPaths: string[] | undefined;
+        readonly artifact: string | undefined;
+    } | undefined;
 }>;
 export type OperatorOrdersSettings = Infer<typeof operatorOrdersSchema>;
 /** The attestation address with its placeholders replaced (values already checked as UUID). */
 export declare function attestationUrl(template: string, nonce: string, challenge: string): string;
 /** The branch of the publication pull request an order names (`publicationBranch` with its slug), or null when undeclared or unreadable. */
 export declare function publicationBranchOf(template: string | undefined, slug: unknown): string | null;
+/** What the loader reads besides `rules.operatorOrders` to check `reducedProof`: the checks and the other rules. */
+export interface OrdersContext {
+    gates: readonly {
+        id: string;
+        command: readonly string[];
+    }[];
+    ciProof?: {
+        workflow: string;
+        name: string;
+    } | undefined;
+    requiredGates?: readonly {
+        id: string;
+        command: readonly string[];
+    }[] | undefined;
+}
 /** Every problem of a declaration that the schema cannot see: keys, address, placeholders. Never echoes a key. */
-export declare function operatorOrdersIssues(settings: OperatorOrdersSettings): string[];
+export declare function operatorOrdersIssues(settings: OperatorOrdersSettings, context?: OrdersContext): string[];
+/**
+ * The fingerprint of a declaration (docs/PREUVE-REDUITE.md, 4.3): the first 12 characters of the SHA-256 of its canonical
+ * form and of the blob of its workflow at the head (F-A2 of the review of the code: the text of the job is what stands in
+ * for the lifted checks), null when the workflow is absent.
+ */
+export declare function reducedProofPrint(rp: ReducedProofDeclaration, workflowBlob: string | null): string;
+/**
+ * Why the declaration of the head widens the one of the base (docs/PREUVE-REDUITE.md, 4.3), empty when it does not:
+ * added; workflow, job or name changed; the workflow file itself changed (its blob, F-A2); a check of `gates` or
+ * `waives`, a motif of `paths` added; a protected path removed. Removing the declaration, a check, a motif, or adding a protected path never widens it.
+ */
+export declare function reducedProofWidening(base: ReducedProofDeclaration | undefined, head: ReducedProofDeclaration | undefined, workflow?: {
+    base: string | null;
+    head: string | null;
+}): string[];
 /** One line of `apv status`: the declaration of the working tree, as the merge on order reads it at the base. */
 export declare function operatorOrdersLine(settings: OperatorOrdersSettings | null, error?: string | null): string;

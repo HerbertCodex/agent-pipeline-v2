@@ -26,6 +26,8 @@ export const GITHUB_ACTIONS_APP_ID = 15368;
  */
 const EVENTS = new Set(['push']);
 const DISPATCH = 'workflow_dispatch';
+/** Conclusions of a check run that say the commit is not proven (a red one is never hidden, docs/PREUVE-REDUITE.md 5.4). */
+const RED = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale']);
 /** Check runs compared at most (the latest first): beyond, the proof is not read. */
 const MAX_CHECK_RUNS = 100;
 const short = (sha) => sha.slice(0, 12);
@@ -81,19 +83,21 @@ export function declaresJob(text, job, name) {
  * of the base, a protected file changed since the base, a file the proof executes changed (named by the workflow or the
  * scripts of the base, or imported by a relative path from those and from the protected files, read at the base).
  */
-function laneProblems(repo, mergeBase, head, settings) {
+function laneProblems(repo, mergeBase, head, settings, options = {}) {
     const problems = [];
+    const content = [];
+    const field = options.field ?? 'rules.ciProof';
     const workflow = gitRead(repo, ['show', `${mergeBase}:${settings.workflow}`]);
     if (workflow === null)
-        problems.push(`workflow déclaré absent de la base commune ${short(mergeBase)} : ${settings.workflow} (rules.ciProof.workflow)`);
+        problems.push(`workflow déclaré absent de la base commune ${short(mergeBase)} : ${settings.workflow} (${field}.workflow)`);
     else if (!declaresJob(workflow, settings.job, settings.name))
-        problems.push(`job ${settings.job} de nom « ${settings.name} » absent de ${settings.workflow} à la base commune (rules.ciProof.job, rules.ciProof.name)`);
+        problems.push(`job ${settings.job} de nom « ${settings.name} » absent de ${settings.workflow} à la base commune (${field}.job, ${field}.name)`);
     const files = touched(repo, mergeBase, head);
     if (files === null)
-        return [...problems, `diff illisible entre ${short(mergeBase)} et ${short(head)}`];
+        return { problems: [...problems, `diff illisible entre ${short(mergeBase)} et ${short(head)}`], content };
     const tree = treeFiles(repo, mergeBase);
     if (tree === null)
-        return [...problems, `arbre illisible à la base commune ${short(mergeBase)}`];
+        return { problems: [...problems, `arbre illisible à la base commune ${short(mergeBase)}`], content };
     const treeSet = new Set(tree);
     // Compared without case: a file renamed by its case alone stays protected.
     const protectedMatch = settings.protectedPaths.map(g => globToRegExp(g.toLowerCase()));
@@ -109,7 +113,26 @@ function laneProblems(repo, mergeBase, head, settings) {
     const roots = [...new Set([...named, ...tree.filter(isProtected)])];
     const aliases = readAliases(repo, mergeBase, tree);
     const { reached, shadows, unresolved, complete } = importClosure(repo, mergeBase, roots, treeSet, aliases);
-    const executed = files.filter(f => (reached.has(f) || shadows.has(f) || configs.includes(f)) && !hits.includes(f));
+    const exempt = options.exempt ?? new Set();
+    const shadowing = [];
+    const executed = files.filter(f => (reached.has(f) || shadows.has(f) || configs.includes(f)) && !hits.includes(f)).filter(f => {
+        // Regenerated content (reduced proof only): a modified file reached by an import, never a configuration nor a file
+        // the workflow, the scripts or the protected paths name (what the job runs itself); an added file that a specifier
+        // of the closure may designate shadows a resolution and is never exempted.
+        if (!exempt.has(f) || configs.includes(f) || roots.includes(f))
+            return true;
+        if (!treeSet.has(f)) {
+            shadowing.push(f);
+            return false;
+        }
+        if (reached.has(f)) {
+            content.push(f);
+            return false;
+        }
+        return true;
+    });
+    for (const f of shadowing.slice(0, 10))
+        problems.push(`fichier ajouté qui masque une résolution d'un import de la preuve : ${f}`);
     for (const f of executed.slice(0, 10))
         problems.push(`fichier exécuté ou pouvant remplacer un fichier exécuté par la preuve, modifié depuis la base (nommé, importé ou hérité par le workflow, les scripts, la configuration ou un fichier protégé) : ${f}`);
     if (executed.length > 10)
@@ -122,10 +145,40 @@ function laneProblems(repo, mergeBase, head, settings) {
         problems.push(`configuration d'alias illisible (JSON) : ${aliases.unreadable.slice(0, 5).join(', ')}`);
     if (!complete)
         problems.push('fichiers importés par la preuve non tous lisibles ou trop nombreux : leur liste n\'est pas fiable');
+    if (content.length)
+        problems.push(...headImports(repo, head, content, files, exempt, aliases, content));
     // Same blob at the base and at the commit: the workflow that ran is the one of the base (also covered by the diff).
     if (workflow !== null && gitRead(repo, ['rev-parse', `${mergeBase}:${settings.workflow}`]) !== gitRead(repo, ['rev-parse', `${head}:${settings.workflow}`])
         && !hits.includes(settings.workflow))
         problems.push(`workflow ${settings.workflow} différent à ${short(head)} de celui de la base`);
+    return { problems, content };
+}
+/**
+ * The imports of the exempted content followed again at the head (docs/PREUVE-REDUITE.md, 5.6, F3): their text of the
+ * head, the aliases of the base. A specifier that cannot be followed, a closure not complete, a file reached that the
+ * change modifies without being regenerated content: problems. Regenerated content the head adds and reaches is named
+ * with the content (`named`).
+ */
+function headImports(repo, head, roots, changed, exempt, aliases, named) {
+    const problems = [];
+    const tree = treeFiles(repo, head);
+    if (tree === null)
+        return [`arbre illisible à la tête ${short(head)}`];
+    const { reached, unresolved, complete } = importClosure(repo, head, roots, new Set(tree), aliases);
+    for (const f of reached) {
+        if (!changed.includes(f))
+            continue;
+        if (!exempt.has(f))
+            problems.push(`fichier atteint à la tête par le contenu régénéré, changé sans être régénéré : ${f}`);
+        else if (!named.includes(f))
+            named.push(f);
+    }
+    for (const u of unresolved.slice(0, 5))
+        problems.push(`import non suivi (ni relatif, ni alias connu, ni module Node, ni paquet déclaré par package.json) à la tête : ${u}`);
+    if (unresolved.length > 5)
+        problems.push(`et ${unresolved.length - 5} autre(s) import(s) non suivi(s) à la tête`);
+    if (!complete)
+        problems.push('fichiers importés à la tête par le contenu régénéré non tous lisibles ou trop nombreux');
     return problems;
 }
 /** One call to the API, its JSON object, or the reason it is unusable. */
@@ -154,13 +207,17 @@ class Unavailable extends Error {
  */
 export async function verifyCiProof(input) {
     const { settings, head } = input;
-    const result = (state, reasons, extra = {}) => ({ state, gates: [], excluded: [], reasons, checkRun: null, workflow: settings.workflow, name: settings.name, artifact: settings.artifact, ...extra });
+    const options = input.options ?? {};
+    let content;
+    const result = (state, reasons, extra = {}) => ({ state, gates: [], excluded: [], reasons, checkRun: null, workflow: settings.workflow, name: settings.name, artifact: settings.artifact, ...(content ? { content } : {}), ...extra });
     const covered = settings.gates.filter(g => input.pending.includes(g));
-    if (!covered.length)
-        return result('refused', [`aucun contrôle non prouvé n'est couvert par rules.ciProof.gates (${settings.gates.join(', ')})`]);
-    const lane = laneProblems(input.repo, input.mergeBase, head, settings);
-    if (lane.length)
-        return result('out_of_lane', lane);
+    if (!covered.length && !options.requireRun)
+        return result('refused', [`aucun contrôle non prouvé n'est couvert par ${options.field ?? 'rules.ciProof'}.gates (${settings.gates.join(', ')})`]);
+    const lane = laneProblems(input.repo, input.mergeBase, head, settings, options);
+    if (options.exempt)
+        content = lane.content;
+    if (lane.problems.length)
+        return result('out_of_lane', lane.problems);
     // A check that repeats the test files a change adds or modifies (repeatChanged): the CI does not repeat them.
     const excluded = [];
     for (const id of covered) {
@@ -177,7 +234,7 @@ export async function verifyCiProof(input) {
         }
     }
     const gates = covered.filter(g => !excluded.some(e => e.gate === g));
-    if (!gates.length)
+    if (!gates.length && !options.requireRun)
         return result('out_of_lane', excluded.map(e => `${e.gate} : ${e.reason}`), { excluded });
     if (!input.gh)
         return result('unavailable', ['hors réseau (--offline) : l\'API GitHub n\'est pas lue'], { gates, excluded });
@@ -265,7 +322,7 @@ async function readCheckRuns(input, gates, excluded, result) {
     }
     // A failure, cancellation (a cancellation by a concurrency group is not told apart by the API) or unfinished run of the declared
     // job at this commit is never hidden by a later green run: the commit is not proven (rule instable).
-    const failed = eligible.find(e => ['failure', 'timed_out', 'cancelled', 'action_required'].includes(str(e.c['conclusion']) ?? '') || str(e.c['status']) !== 'completed');
+    const failed = eligible.find(e => RED.has(str(e.c['conclusion']) ?? '') || str(e.c['status']) !== 'completed');
     const decisive = failed ?? eligible[0];
     if (!decisive)
         return result('refused', [...ignored, `aucun check run « ${settings.name} » de GitHub Actions au commit ${short(head)} du workflow ${settings.workflow}`], { gates, excluded });
@@ -290,13 +347,14 @@ async function judge(input, c, id, run, gates, excluded, ignored, result, get) {
     const runSha = str(run['head_sha']);
     if (runSha !== head)
         return result('refused', [...ignored, `exécution ${runId} d'un autre commit (${runSha ? short(runSha) : 'inconnu'}) que ${short(head)}`], { gates, excluded, checkRun });
+    const events = input.options?.events ?? EVENTS;
     if (event === DISPATCH) {
         const text = gitRead(input.repo, ['show', `${input.mergeBase}:${settings.workflow}`]) ?? '';
         if (/^[ \t]*inputs[ \t]*:/m.test(text) || /workflow_dispatch[ \t]*:[ \t]*\{[^}]*\binputs\b/.test(text))
             return refuse(`évènement ${DISPATCH} : le workflow déclare des entrées (inputs), qui peuvent tester un autre commit que celui de l'exécution et que l'API ne rend pas`);
     }
-    else if (!EVENTS.has(event))
-        return refuse(`évènement ${event} non admis (admis : ${[...EVENTS].join(', ')}, ${DISPATCH} sans entrée) : l'API ne permet pas d'identifier sûrement la pull request qui a déclenché une exécution, et sa base peut changer après coup ; lancer la preuve par workflow_dispatch (gh workflow run ${settings.workflow.split('/').pop()} --ref <branche>) sur le commit exact`);
+    else if (!events.has(event))
+        return refuse(`évènement ${event} non admis (admis : ${[...events, `${DISPATCH} sans entrée`].join(', ')}) : l'API ne permet pas d'identifier sûrement la pull request qui a déclenché une exécution, et sa base peut changer après coup ; lancer la preuve par workflow_dispatch (gh workflow run ${settings.workflow.split('/').pop()} --ref <branche>) sur le commit exact`);
     if (checkRun.runAttempt < 1)
         return refuse('tentative de l\'exécution inconnue');
     // The check run is a job of that run: a check run created through the API with the token of a job is not.
@@ -323,5 +381,32 @@ export function ciProofLines(ci) {
         return [`prouvé(s) par la CI : ${ci.gates.join(', ')}`, ...ci.excluded.map(e => `${e.gate} : ${e.reason}`)];
     const tail = ci.state === 'unavailable' ? ' ; preuve locale exigée' : '';
     return [...ci.reasons.map(r => `${label[ci.state]} : ${r}${tail}`), ...(ci.state === 'out_of_lane' ? [] : ci.excluded.map(e => `${e.gate} : ${e.reason}`))];
+}
+/**
+ * The check runs named `name` at `head` (any application, the latest first), or why the API could not be read: what
+ * the reduced lane reads to never hide a red full proof (M2), and the audit of a merge without a local trace (F6).
+ */
+export async function checkRunsNamed(gh, repository, head, name) {
+    const r = await api(gh, `repos/${repository}/commits/${head}/check-runs?check_name=${encodeURIComponent(name)}&filter=all&per_page=${MAX_CHECK_RUNS}`);
+    if (!r.ok)
+        return { ok: false, why: r.why };
+    const list = record(r.value);
+    const runs = list?.['check_runs'];
+    const total = int(list?.['total_count']);
+    if (!Array.isArray(runs) || total === null)
+        return { ok: false, why: 'liste des check runs inattendue' };
+    if (total > runs.length)
+        return { ok: false, why: `plus de ${MAX_CHECK_RUNS} check runs « ${name} » au commit` };
+    const out = [];
+    for (const c of runs.map(record)) {
+        if (!c || str(c['name']) !== name || int(c['id']) === null)
+            continue;
+        out.push({ id: int(c['id']), status: str(c['status']) ?? 'inconnu', conclusion: str(c['conclusion']), app: str(record(c['app'])?.['slug']), url: str(c['html_url']) });
+    }
+    return { ok: true, runs: out.sort((a, b) => b.id - a.id) };
+}
+/** Whether a check run is red: failed, cancelled, waiting for an action, or not finished. Skipped and neutral are not. */
+export function redCheckRun(run) {
+    return run.status !== 'completed' || RED.has(run.conclusion ?? '');
 }
 //# sourceMappingURL=ci-proof.js.map

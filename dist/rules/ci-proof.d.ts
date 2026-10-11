@@ -46,6 +46,29 @@ export interface CiProofOutcome {
     workflow: string;
     name: string;
     artifact: string | null;
+    /**
+     * The reduced proof only (`exempt` given): the changed files of regenerated content the job executes (named by the
+     * output), exempted from the closure (docs/PREUVE-REDUITE.md, 5.6).
+     */
+    content?: string[];
+}
+/**
+ * How a declaration other than rules.ciProof reads its check run (the reduced proof, docs/PREUVE-REDUITE.md); absent,
+ * rules.ciProof as before.
+ */
+export interface CiProofOptions {
+    /** The field the declaration comes from, said in the messages (default rules.ciProof). */
+    field?: string;
+    /** Events besides workflow_dispatch without input whose run tests the commit of the run (default: push). */
+    events?: ReadonlySet<string>;
+    /** The check run is read and required even when no pending check is covered (it proves `covers` too). */
+    requireRun?: boolean;
+    /**
+     * Changed files of regenerated content, checked by the tool, that a file of the job may import: exempted from the
+     * closure when they exist at the base and are reached; an added one that shadows a resolution never is; their own
+     * imports are followed again at the head.
+     */
+    exempt?: ReadonlySet<string>;
 }
 export interface CiProofInput {
     repo: string;
@@ -60,6 +83,7 @@ export interface CiProofInput {
     gh: GhRunner | null;
     /** `owner/name` of the repository on github.com, or null. */
     repository: string | null;
+    options?: CiProofOptions;
 }
 /**
  * Whether the workflow text declares, under `jobs:`, the job `job` whose name (`name:`, else its key) is `name`: the check run
@@ -73,3 +97,24 @@ export declare function declaresJob(text: string, job: string, name: string): bo
 export declare function verifyCiProof(input: CiProofInput): Promise<CiProofOutcome>;
 /** Lines that say why the CI does not prove the checks, for the refusal of the rule preuve. */
 export declare function ciProofLines(ci: CiProofOutcome): string[];
+/** One check run of a name at a commit, as the API gives it (any application). */
+export interface NamedCheckRun {
+    id: number;
+    status: string;
+    conclusion: string | null;
+    app: string | null;
+    url: string | null;
+}
+/**
+ * The check runs named `name` at `head` (any application, the latest first), or why the API could not be read: what
+ * the reduced lane reads to never hide a red full proof (M2), and the audit of a merge without a local trace (F6).
+ */
+export declare function checkRunsNamed(gh: GhRunner, repository: string, head: string, name: string): Promise<{
+    ok: true;
+    runs: NamedCheckRun[];
+} | {
+    ok: false;
+    why: string;
+}>;
+/** Whether a check run is red: failed, cancelled, waiting for an action, or not finished. Skipped and neutral are not. */
+export declare function redCheckRun(run: NamedCheckRun): boolean;

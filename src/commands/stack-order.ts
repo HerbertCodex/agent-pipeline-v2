@@ -3,7 +3,8 @@ import { gitRead } from '../run/git-probe.js';
 import { checkMergeRules, rulesLines, type RulesInput } from '../rules/check.js';
 import { processGit } from '../stack/batch.js';
 import { processGh, type GhCall } from '../stack/github.js';
-import { mergeOnOrder, type OrderMergeReport } from '../orders/merge.js';
+import { mergeOnOrder, type OrderMergeReport, type RulesVerdict, type StepProof } from '../orders/merge.js';
+import type { OrderLane } from '../rules/reduced-proof.js';
 import { UUID } from '../orders/order.js';
 import { EXIT, UsageError, json } from './common.js';
 import type { CommandIO } from './io.js';
@@ -25,22 +26,31 @@ export const ORDER_USAGE = `--order <référence>  (merge) fusion sur ordre sign
 /**
  * The rules checked before a merge on order (src/rules/check.ts) at `head`, against the exact commit of the target APV
  * read and merges on (never a remote-tracking ref left stale), the proof by the CI (rules.ciProof of the base) read
- * through `ci.gh`: the problems, empty when respected.
+ * through `ci.gh`, with the context of the reduced lane mergeOnOrder built for this try (docs/PREUVE-REDUITE.md): the
+ * problems, empty when respected, and the proof taken (`reduced` only when the rule preuve accepted the reduced lane).
  */
-export function orderRules(repo: string, ci: NonNullable<RulesInput['ci']>): (head: string, base: string) => Promise<string[]> {
-  return async (head, base) => {
+export function orderRules(repo: string, ci: NonNullable<RulesInput['ci']>): (head: string, base: string, lane?: OrderLane) => Promise<RulesVerdict> {
+  return async (head, base, lane) => {
     try {
-      const r = await checkMergeRules({ repo, commit: head, target: base, ci });
-      return r.ok ? [] : rulesLines(r, '  ').slice(1, -1);
-    } catch (error) { return [`règles avant fusion non vérifiables à ${head.slice(0, 12)} : ${errorMessage(error)}`]; }
+      const r = await checkMergeRules({ repo, commit: head, target: base, ci, ...(lane ? { orderLane: lane } : {}) });
+      const run = r.reduced?.retained ? r.reduced.outcome?.checkRun ?? null : null;
+      const proof: StepProof = run && r.rules.find(x => x.rule === 'preuve')?.status === 'ok'
+        ? { mode: 'reduced', checkRun: run.id, run: run.runId, name: r.reduced!.outcome!.name } : { mode: 'full' };
+      return { problems: r.ok ? [] : rulesLines(r, '  ').slice(1, -1), proof };
+    } catch (error) { return { problems: [`règles avant fusion non vérifiables à ${head.slice(0, 12)} : ${errorMessage(error)}`], proof: { mode: 'full' } }; }
   };
+}
+
+/** The proof of a step, in the report. */
+function proofText(proof: StepProof | undefined): string {
+  return proof?.mode === 'reduced' ? `preuve réduite : check run « ${proof.name} » ${proof.checkRun} (exécution ${proof.run})` : 'preuve : suite complète';
 }
 
 /** Lines of the report of a merge on order. */
 export function orderLines(report: OrderMergeReport, nonce: string): string[] {
   const lines = [`Fusion sur ordre ${nonce}${report.target ? ` vers ${report.target}` : ''} :`];
   for (const step of report.consumed) lines.push(`- étape ${step} : déjà faite (pied Apv-Order présent)`);
-  for (const m of report.merged) lines.push(`- étape ${m.step} : PR #${m.pr} fusionnée à ${m.head.slice(0, 12)}, commit ${m.mergeCommit.slice(0, 12)} (parents ${m.base.slice(0, 12)}, ${m.head.slice(0, 12)})`);
+  for (const m of report.merged) lines.push(`- étape ${m.step} : PR #${m.pr} fusionnée à ${m.head.slice(0, 12)}, commit ${m.mergeCommit.slice(0, 12)} (parents ${m.base.slice(0, 12)}, ${m.head.slice(0, 12)}) ; ${proofText(m.proof)}`);
   lines.push(`Attestations demandées : ${report.attestations}.`, ...report.traceErrors.map(e => `ATTENTION : ${e}`));
   if (report.status === 'already_done') lines.push('Ordre déjà exécuté : rien à faire (already_done).');
   else if (report.status === 'merged') lines.push('Ordre exécuté : les deux étapes sont fusionnées.');
@@ -49,7 +59,7 @@ export function orderLines(report: OrderMergeReport, nonce: string): string[] {
 }
 
 /** `APV_ALLOW_MERGE=1 apv stack merge <publication> <article> --order <nonce>`. */
-export async function stackMergeOnOrder(prs: number[], values: OrderValues, io: CommandIO, transcript: (bin: string, call: GhCall) => string, traceMerge: (cwd: string, merge: { pr: number; head: string; target: string; method: string; mergeCommit: string | null }) => string | null): Promise<number> {
+export async function stackMergeOnOrder(prs: number[], values: OrderValues, io: CommandIO, transcript: (bin: string, call: GhCall) => string, traceMerge: (cwd: string, merge: { pr: number; head: string; target: string; method: string; mergeCommit: string | null; proof?: StepProof }) => string | null): Promise<number> {
   const nonce = values.order ?? '';
   const foreign = FOREIGN.filter(k => values[k] !== undefined && values[k] !== false);
   if (foreign.length) throw new UsageError(`--${foreign.join(', --')} : sans objet avec --order (méthode, cible et contrôles fixés par l'ordre)`);
