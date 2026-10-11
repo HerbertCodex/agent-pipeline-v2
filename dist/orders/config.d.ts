@@ -97,13 +97,20 @@ export interface OrdersContext {
 }
 /** Every problem of a declaration that the schema cannot see: keys, address, placeholders. Never echoes a key. */
 export declare function operatorOrdersIssues(settings: OperatorOrdersSettings, context?: OrdersContext): string[];
-/** The fingerprint of a declaration: the first 12 characters of the SHA-256 of its canonical form (docs/PREUVE-REDUITE.md, 4.3). */
-export declare function reducedProofPrint(rp: ReducedProofDeclaration): string;
+/**
+ * The fingerprint of a declaration (docs/PREUVE-REDUITE.md, 4.3): the first 12 characters of the SHA-256 of its canonical
+ * form and of the blob of its workflow at the head (F-A2 of the review of the code: the text of the job is what stands in
+ * for the lifted checks), null when the workflow is absent.
+ */
+export declare function reducedProofPrint(rp: ReducedProofDeclaration, workflowBlob: string | null): string;
 /**
  * Why the declaration of the head widens the one of the base (docs/PREUVE-REDUITE.md, 4.3), empty when it does not:
- * added; workflow, job or name changed; a check of `gates` or `waives`, a motif of `paths` added; a protected path
- * removed. Removing the declaration, a check, a motif, or adding a protected path never widens it.
+ * added; workflow, job or name changed; the workflow file itself changed (its blob, F-A2); a check of `gates` or
+ * `waives`, a motif of `paths` added; a protected path removed. Removing the declaration, a check, a motif, or adding a protected path never widens it.
  */
-export declare function reducedProofWidening(base: ReducedProofDeclaration | undefined, head: ReducedProofDeclaration | undefined): string[];
+export declare function reducedProofWidening(base: ReducedProofDeclaration | undefined, head: ReducedProofDeclaration | undefined, workflow?: {
+    base: string | null;
+    head: string | null;
+}): string[];
 /** One line of `apv status`: the declaration of the working tree, as the merge on order reads it at the base. */
 export declare function operatorOrdersLine(settings: OperatorOrdersSettings | null, error?: string | null): string;

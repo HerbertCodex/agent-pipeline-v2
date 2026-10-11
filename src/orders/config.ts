@@ -200,22 +200,28 @@ function reducedProofIssues(settings: OperatorOrdersSettings, rp: ReducedProofDe
   return issues;
 }
 
-/** The fingerprint of a declaration: the first 12 characters of the SHA-256 of its canonical form (docs/PREUVE-REDUITE.md, 4.3). */
-export function reducedProofPrint(rp: ReducedProofDeclaration): string {
-  return hash(rp).slice(0, 12);
+/**
+ * The fingerprint of a declaration (docs/PREUVE-REDUITE.md, 4.3): the first 12 characters of the SHA-256 of its canonical
+ * form and of the blob of its workflow at the head (F-A2 of the review of the code: the text of the job is what stands in
+ * for the lifted checks), null when the workflow is absent.
+ */
+export function reducedProofPrint(rp: ReducedProofDeclaration, workflowBlob: string | null): string {
+  return hash({ declaration: rp, workflow: workflowBlob }).slice(0, 12);
 }
 
 /**
  * Why the declaration of the head widens the one of the base (docs/PREUVE-REDUITE.md, 4.3), empty when it does not:
- * added; workflow, job or name changed; a check of `gates` or `waives`, a motif of `paths` added; a protected path
- * removed. Removing the declaration, a check, a motif, or adding a protected path never widens it.
+ * added; workflow, job or name changed; the workflow file itself changed (its blob, F-A2); a check of `gates` or
+ * `waives`, a motif of `paths` added; a protected path removed. Removing the declaration, a check, a motif, or adding a protected path never widens it.
  */
-export function reducedProofWidening(base: ReducedProofDeclaration | undefined, head: ReducedProofDeclaration | undefined): string[] {
+export function reducedProofWidening(base: ReducedProofDeclaration | undefined, head: ReducedProofDeclaration | undefined,
+  workflow: { base: string | null; head: string | null } = { base: null, head: null }): string[] {
   if (!head) return [];
   if (!base) return ['déclaration ajoutée'];
   const added = (before: readonly string[], after: readonly string[]): string[] => after.filter(x => !before.includes(x));
   const out: string[] = [];
   if (base.workflow !== head.workflow || base.job !== head.job || base.name !== head.name) out.push(`workflow, job ou nom changé (${head.workflow}, ${head.job}, « ${head.name} »)`);
+  else if (workflow.base !== workflow.head) out.push(`workflow réduit ${head.workflow} modifié`);
   for (const field of ['gates', 'waives'] as const) {
     const plus = added(base[field], head[field]);
     if (plus.length) out.push(`${field} : + ${plus.join(', ')}`);

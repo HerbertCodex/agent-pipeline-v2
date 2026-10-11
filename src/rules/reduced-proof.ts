@@ -227,15 +227,17 @@ export function anchoredDecision(atBase: readonly Decision[], atHead: readonly D
 export type DeclarationVerdict = { kind: 'unchanged' } | { kind: 'anchored'; note: string } | { kind: 'refused'; problem: string; todo: string[] };
 
 /**
- * The declaration of the head against the one of the base (section 4.3): widened without the anchored decision, the rule
+ * The declaration of the head against the one of the base, with the blobs of the workflow of each (section 4.3):
+ * widened without the anchored decision, the rule
  * preuve refuses, whatever proves the checks (a batch too). `decisions` reads the ledgers; an unreadable ledger holds no
  * decision.
  */
 export async function declarationVerdict(base: ReducedProofDeclaration | undefined, head: ReducedProofDeclaration | undefined,
+  workflow: { base: string | null; head: string | null },
   decisions: () => Promise<{ atBase: readonly Decision[]; atHead: readonly Decision[] }>, messages: readonly OperatorMessage[], key: Buffer | null): Promise<DeclarationVerdict> {
-  const widening = reducedProofWidening(base, head);
+  const widening = reducedProofWidening(base, head, workflow);
   if (!widening.length || !head) return { kind: 'unchanged' };
-  const print = reducedProofPrint(head);
+  const print = reducedProofPrint(head, workflow.head);
   let read: { atBase: readonly Decision[]; atHead: readonly Decision[] };
   try { read = await decisions(); } catch { read = { atBase: [], atHead: [] }; }
   const found = anchoredDecision(read.atBase, read.atHead, messages, key, print);

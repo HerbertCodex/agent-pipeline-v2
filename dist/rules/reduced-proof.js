@@ -183,15 +183,16 @@ export function anchoredDecision(atBase, atHead, messages, key, print) {
         && d.sourceQuote.toLowerCase().includes(print) && anchoredQuote(messages, d.sourceQuote, key) !== null) ?? null;
 }
 /**
- * The declaration of the head against the one of the base (section 4.3): widened without the anchored decision, the rule
+ * The declaration of the head against the one of the base, with the blobs of the workflow of each (section 4.3):
+ * widened without the anchored decision, the rule
  * preuve refuses, whatever proves the checks (a batch too). `decisions` reads the ledgers; an unreadable ledger holds no
  * decision.
  */
-export async function declarationVerdict(base, head, decisions, messages, key) {
-    const widening = reducedProofWidening(base, head);
+export async function declarationVerdict(base, head, workflow, decisions, messages, key) {
+    const widening = reducedProofWidening(base, head, workflow);
     if (!widening.length || !head)
         return { kind: 'unchanged' };
-    const print = reducedProofPrint(head);
+    const print = reducedProofPrint(head, workflow.head);
     let read;
     try {
         read = await decisions();

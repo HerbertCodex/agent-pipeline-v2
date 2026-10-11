@@ -406,7 +406,10 @@ export async function checkMergeRules(input) {
     const rules = [];
     // The reduced proof lifts checks (docs/PREUVE-REDUITE.md, 4.3): added or widened by the change, the rule preuve
     // refuses without an anchored decision of the operator, whatever proves the checks (a batch too).
-    const declaration = await declarationVerdict(atBase.rules?.operatorOrders?.reducedProof, candidate.rules?.operatorOrders?.reducedProof, async () => ({ atBase: (await loadDecisionLedger(repo, mergeBase)).decisions, atHead: (await loadDecisionLedger(repo, sha)).decisions }), messages, anchor.key);
+    const baseRp = atBase.rules?.operatorOrders?.reducedProof;
+    const headRp = candidate.rules?.operatorOrders?.reducedProof;
+    const workflowBlob = (at, path) => path ? gitRead(repo, ['rev-parse', '--verify', '--quiet', `${at}:${path}`]) : null;
+    const declaration = await declarationVerdict(baseRp, headRp, { base: workflowBlob(mergeBase, baseRp?.workflow), head: workflowBlob(sha, headRp?.workflow) }, async () => ({ atBase: (await loadDecisionLedger(repo, mergeBase)).decisions, atHead: (await loadDecisionLedger(repo, sha)).decisions }), messages, anchor.key);
     // The plan of the reviews, and the lane without code (docs/REGLES.md): both read at the base, from the diff since it.
     // The migrations as the base declares them, and as the change declares them: a change that moves db.migrations
     // never takes its migrations out of the data review (both sets of paths count, never the working tree).

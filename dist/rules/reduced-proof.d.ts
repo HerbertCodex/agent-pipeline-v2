@@ -110,11 +110,15 @@ export type DeclarationVerdict = {
     todo: string[];
 };
 /**
- * The declaration of the head against the one of the base (section 4.3): widened without the anchored decision, the rule
+ * The declaration of the head against the one of the base, with the blobs of the workflow of each (section 4.3):
+ * widened without the anchored decision, the rule
  * preuve refuses, whatever proves the checks (a batch too). `decisions` reads the ledgers; an unreadable ledger holds no
  * decision.
  */
-export declare function declarationVerdict(base: ReducedProofDeclaration | undefined, head: ReducedProofDeclaration | undefined, decisions: () => Promise<{
+export declare function declarationVerdict(base: ReducedProofDeclaration | undefined, head: ReducedProofDeclaration | undefined, workflow: {
+    base: string | null;
+    head: string | null;
+}, decisions: () => Promise<{
     atBase: readonly Decision[];
     atHead: readonly Decision[];
 }>, messages: readonly OperatorMessage[], key: Buffer | null): Promise<DeclarationVerdict>;

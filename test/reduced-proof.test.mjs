@@ -120,7 +120,7 @@ test('apv status : la ligne des ordres signés dit la preuve réduite ; sans ell
 const put = (root, path, value) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), typeof value === 'string' ? value : `${JSON.stringify(value, null, 2)}\n`); };
 
 /** An origin and a clone: main holds `baseConfig`, the branch feat changes `.apv/config.json` to `headConfig` and the ledger to `ledger`. */
-function configProject(t, { baseConfig, headConfig, ledger = null }) {
+function configProject(t, { baseConfig, headConfig, ledger = null, baseFiles = {}, headFiles = {} }) {
   const root = mkdtempSync(join(tmpdir(), 'apv3-preuve-reduite-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const origin = join(root, 'origin.git');
@@ -130,10 +130,12 @@ function configProject(t, { baseConfig, headConfig, ledger = null }) {
   git(repo, 'switch', '-q', '-c', 'main');
   put(repo, '.apv/config.json', baseConfig);
   put(repo, 'README.md', 'projet\n');
+  for (const [path, text] of Object.entries(baseFiles)) put(repo, path, text);
   git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'base'); git(repo, 'push', '-q', 'origin', 'main');
   git(repo, 'switch', '-q', '-c', 'feat');
   put(repo, '.apv/config.json', headConfig);
   if (ledger) put(repo, '.apv/DECISIONS.json', { schemaVersion: 1, decisions: ledger });
+  for (const [path, text] of Object.entries(headFiles)) put(repo, path, text);
   git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'déclaration'); git(repo, 'push', '-q', 'origin', 'feat');
   return { repo, head: git(repo, 'rev-parse', 'HEAD') };
 }
@@ -151,7 +153,7 @@ test('E1 : une PR qui ajoute reducedProof sans décision de l\'opérateur ancré
   await proven(p);
   const preuve = await preuveOf(p);
   assert.equal(preuve.status, 'refused', text(preuve));
-  const print = reducedProofPrint(configIssues(localConfig(s.pem, declaration())).config.rules.operatorOrders.reducedProof);
+  const print = reducedProofPrint(configIssues(localConfig(s.pem, declaration())).config.rules.operatorOrders.reducedProof, null);
   assert.match(print, /^[0-9a-f]{12}$/);
   assert.match(text(preuve), new RegExp(`déclaration de preuve réduite élargie sans décision de l'opérateur ancrée \\(déclaration ajoutée\\) ; empreinte ${print}`));
   assert.match(text(preuve), new RegExp(`Je valide la preuve réduite ${print} pour les fusions sur ordre\\.`));
@@ -160,7 +162,7 @@ test('E1 : une PR qui ajoute reducedProof sans décision de l\'opérateur ancré
 test('E1 : une décision écrite par l\'agent seul, ou une citation ancrée sans l\'empreinte, ne comptent pas ; une citation ancrée qui la porte, oui', async t => {
   const s = signer();
   const decl = declaration();
-  const print = reducedProofPrint(configIssues(localConfig(s.pem, decl)).config.rules.operatorOrders.reducedProof);
+  const print = reducedProofPrint(configIssues(localConfig(s.pem, decl)).config.rules.operatorOrders.reducedProof, null);
   const quote = `Je valide la preuve réduite ${print} pour les fusions sur ordre.`;
   // Written in the ledger by the agent: the operator never typed it.
   const agent = configProject(t, { baseConfig: localConfig(s.pem, null), headConfig: localConfig(s.pem, decl), ledger: [decision(quote)] });
@@ -220,4 +222,29 @@ test('E1 : le refus tient même quand la règle preuve est jugée sur un lot (ap
   // Without any change of the declaration, the batch keeps judging preuve on itself.
   const same = configProject(t, { baseConfig: localConfig(s.pem, declaration()), headConfig: { ...localConfig(s.pem, declaration()), name: 'essai-2' } });
   assert.equal((await preuveOf(same, { skip: ['preuve', 'instable'] })).status, 'not_applicable');
+});
+
+test('F-A2 : l\'empreinte porte le blob du workflow réduit à la tête ; une PR qui ne change que ce workflow (le vider) exige une nouvelle décision', async t => {
+  const s = signer();
+  const decl = configIssues(localConfig(s.pem, declaration())).config.rules.operatorOrders.reducedProof;
+  assert.notEqual(reducedProofPrint(decl, 'a'.repeat(40)), reducedProofPrint(decl, 'b'.repeat(40)), 'un autre workflow, une autre empreinte');
+  const full = 'name: Preuve de publication\non:\n  workflow_dispatch:\njobs:\n  preuve-publication:\n    name: Preuve de publication\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n';
+  const emptied = full.replace('npm test', 'echo ok');
+  const same = { baseConfig: localConfig(s.pem, declaration()), headConfig: localConfig(s.pem, declaration()), baseFiles: { [WORKFLOW]: full } };
+  const p = configProject(t, { ...same, headFiles: { [WORKFLOW]: emptied } });
+  await proven(p);
+  const preuve = await preuveOf(p);
+  assert.equal(preuve.status, 'refused', text(preuve));
+  const blob = git(p.repo, 'rev-parse', `${p.head}:${WORKFLOW}`);
+  const print = reducedProofPrint(decl, blob);
+  assert.match(text(preuve), new RegExp(`élargie sans décision de l'opérateur ancrée \\(workflow réduit \\.github/workflows/preuve-publication\\.yml modifié\\) ; empreinte ${print}`));
+  // Anchored with that fingerprint, the change is accepted; a workflow left as it was asks for nothing.
+  const quote = `Je valide la preuve réduite ${print} pour les fusions sur ordre.`;
+  const anchored = configProject(t, { ...same, headFiles: { [WORKFLOW]: emptied }, ledger: [decision(quote)] });
+  operatorSays(anchored.repo, quote);
+  await proven(anchored);
+  assert.equal((await preuveOf(anchored)).status, 'ok');
+  const untouched = configProject(t, { ...same, headFiles: { 'README.md': 'autre\n' } });
+  await proven(untouched);
+  assert.equal((await preuveOf(untouched)).status, 'ok');
 });
