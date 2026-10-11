@@ -124,7 +124,12 @@ function hasScreensAt(repo: string, sha: string, screens: readonly RegExp[]): bo
  * Never a file under a served folder (static, public, assets...) nor an interface file. Everything else counts as an
  * interface file: in doubt, captures are required.
  */
-const TOOLING_PATH = /^(?:\.apv|\.github|\.claude|\.vscode|\.husky)\//;
+// The workflows and actions of .github may change what is deployed: interface files (review of #134).
+const TOOLING_PATH = /^(?:\.apv|\.github(?!\/(?:workflows|actions)\/)|\.claude|\.vscode|\.husky)\//;
+/** Folders of the code of an application: a file there may be loaded by a pattern (import.meta.glob) or a computed import. */
+const APP_CODE_PATH = /^(?:src|app|lib|pages|components|routes|resources|templates)\//;
+/** A loading by pattern or by a computed path: import.meta.glob, import(`…${x}…`), import(x), require(x). */
+const COMPUTED_LOAD = 'import\\.meta\\.glob|import\\([[:space:]]*`[^`]*\\$\\{|import\\([[:space:]]*[^\'"`[:space:])]|require\\([[:space:]]*`[^`]*\\$\\{|require\\([[:space:]]*[^\'"`[:space:])]';
 const TOOLING_FILE = /^(?:\.gitignore|\.gitattributes|\.editorconfig|\.nvmrc|\.node-version)$/;
 const TEST_PATH = /^(?:tests?|e2e)\/|(?:^|\/)(?:__tests__|__snapshots__)\/|\.(?:test|spec)\.[cm]?[jt]s$|^(?:playwright|vitest)\.config\.[cm]?[jt]s$/;
 const DOC_PATH = /^(?:docs\/.+|[^/]+)\.md$/;
@@ -194,6 +199,14 @@ export function touchesNoScreen(repo: string, base: string, head: string, screen
       if (resolved.startsWith('..')) return null;
       if (files.some(f => f === resolved || f.startsWith(`${resolved}/`))) return null;
     }
+  }
+  // A file under the code of the application, when a file there loads by a pattern or a computed path: what it loads
+  // cannot be read from the text (review of #134).
+  if (files.some(f => APP_CODE_PATH.test(f))) {
+    const loads = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'grep', '-l', '-z', '-E', '-e', COMPUTED_LOAD, head, '--'],
+      { cwd: repo, encoding: 'utf8', timeout: 30_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    if (loads.error || (loads.status !== 0 && loads.status !== 1)) return null;
+    if (loads.status === 0 && loads.stdout.split('\0').filter(Boolean).some(where => !withoutScreenByPath(where.slice(head.length + 1), docsSite, screens))) return null;
   }
   const tokens = [...new Set(files.flatMap(referenceTokens))];
   if (!tokens.length) return { files: files.length };

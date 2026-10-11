@@ -192,7 +192,7 @@ test('captures: without object when the change touches no screen, even when fide
   for (const change of [
     { '.apv/config.json': { name: 'essai-2', gates: unit, ...config } },
     { 'src/lib/date.test.ts': 'import { test } from "vitest";\ntest("x", () => {});\n', 'tests/e2e/compte.spec.ts': 'import { test } from "@playwright/test";\n' },
-    { 'docs/guide.md': '# Guide\n', 'CHANGELOG.md': '# Journal\n', '.github/workflows/ci.yml': 'name: ci\n' },
+    { 'docs/guide.md': '# Guide\n', 'CHANGELOG.md': '# Journal\n', '.github/ISSUE_TEMPLATE/bug.md': '# Bogue\n' },
   ]) {
     const p = project(t, { base: SITE, config, change });
     const report = (await p.check()).report;
@@ -260,6 +260,28 @@ test('captures: required as soon as a file may change a screen, or when the tool
   // A diff the tool cannot read (base unknown): never without object.
   const { touchesNoScreen } = await import('../dist/rules/check.js');
   assert.equal(touchesNoScreen(p.repo, 'f'.repeat(40), head, []), null);
+});
+
+test('review of #134, low: a test file under the code of the application loaded by import.meta.glob or a computed import, and a workflow, need the captures', async t => {
+  const config = { review: { always: ['fidelite'] } };
+  const required = async (p, what) => {
+    const r = rule((await p.check()).report, 'captures');
+    assert.equal(r.status, 'refused', `${what} : ${JSON.stringify(r)}`);
+  };
+  const glob = { ...SITE, 'src/lib/strings.test.ts': 'export default "Bonjour";\n',
+    'src/routes/compte/+page.ts': 'const textes = import.meta.glob("../../lib/*.ts", { eager: true });\nexport const load = () => ({ textes });\n' };
+  await required(project(t, { base: glob, config, change: { 'src/lib/strings.test.ts': 'export default "Texte piégé";\n' } }), 'import.meta.glob');
+  const computed = { ...SITE, 'src/lib/strings.test.ts': 'export default "Bonjour";\n',
+    'src/routes/compte/+page.ts': 'export const load = async ({ url }) => ({ t: (await import(`../../lib/${url.searchParams.get("f")}.ts`)).default });\n' };
+  await required(project(t, { base: computed, config, change: { 'src/lib/strings.test.ts': 'export default "Texte piégé";\n' } }), 'computed import');
+  // A test outside the code of the application stays without screen, the glob present or not.
+  const outside = project(t, { base: glob, config, change: { 'tests/e2e/compte.spec.ts': 'import { test } from "@playwright/test";\n' } });
+  assert.equal(rule((await outside.check()).report, 'captures').status, 'not_applicable');
+  // A workflow may change what is deployed; an issue template may not.
+  await required(project(t, { base: SITE, config, change: { '.github/workflows/deploy.yml': 'name: deploy\n' } }), 'workflow');
+  await required(project(t, { base: SITE, config, change: { '.github/actions/build/action.yml': 'name: build\n' } }), 'composite action');
+  const template = project(t, { base: SITE, config, change: { '.github/ISSUE_TEMPLATE/bug.md': '# Bogue\n', '.github/CODEOWNERS': '* @x\n' } });
+  assert.equal(rule((await template.check()).report, 'captures').status, 'not_applicable');
 });
 
 test('captures: without object once the fidelity review is lifted by a waiver; still required when a fidelity review is recorded (9 October 2026)', async t => {
