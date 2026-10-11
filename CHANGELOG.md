@@ -2,6 +2,8 @@
 
 ## Non publié
 
+- **Relecture reportée sur une mise à jour avec la base** (projet pilote, #230 : une PR mise à jour par `git merge origin/main`, son diff identique octet par octet, devait refaire ses quatre relectures). Une relecture à T1 vaut pour T2, captures comprises, quand T2 est une fusion de T1 et d'un commit de la cible postérieur à la base de T1, avec un diff identique octet par octet (`--full-index --binary`) et aucun fichier du diff changé par la base. La sortie dit « relecture reportée de T1 (diff identique) » ; la preuve reste exigée à T2. Tests rouges d'abord, cas refusés compris : fichier du diff changé par la base, fusion avec un changement à elle, rebase, autre parent hors de la cible.
+
 - **Captures : raison dite, faux positif du projet pilote, suivi de la 3e relecture de #134** (tests rouges d'abord) :
   - Projet pilote (11 octobre) : une PR de `.apv/config.json` et d'un `*.test.ts` gardait les captures exigées. Le nom `/config.json` apparaissait dans un commentaire de workflow, un commentaire de script et un plan HTML sous `docs/`. Une mention dans un commentaire, ou par la documentation sous `docs/` (toute extension, sans site), ne compte plus ; un test, sa configuration et la carte du code ne comptaient déjà pas.
   - Quand les captures restent exigées, la sortie nomme chaque fichier et la raison (fichier d'interface, dossier servi, nommé par…, visé par l'alias de…, chargement par motif dans…, lien symbolique, impossible de juger).

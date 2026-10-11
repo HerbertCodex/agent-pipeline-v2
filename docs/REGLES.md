@@ -96,6 +96,20 @@ apv review show --commit <sha>
 
 L'agent relecteur l'appelle lui-même à la fin de sa relecture, depuis sa copie détachée : la tête de la copie doit être le commit, ses fichiers suivis inchangés ; le rapport complet (200 octets au moins) cite le commit ; chaque capture est une vraie image (PNG, JPEG ou WebP, 1 Ko au moins), jamais la même image deux fois. Rapport et captures sont copiés sous leur empreinte dans `<répertoire git commun>/apv/reviews/<commit>/<domaine>/`, jamais versionnés ; le crochet du plugin scelle la relecture quand la commande vient de l'agent relecteur du domaine (section 3) ; une relecture non scellée, ou un fichier modifié après coup, la rend inutilisable. La dernière relecture d'un domaine à un commit fait foi. Un nouveau commit (une correction) demande une nouvelle relecture : c'est voulu.
 
+**Relecture reportée sur une mise à jour avec la base** (projet pilote, #230). Une relecture enregistrée à la tête T1 vaut aussi pour la tête T2, captures comprises, quand toutes ces conditions tiennent :
+- T2 est un commit de fusion à deux parents : T1, et B2, un commit de la cible (ancêtre de la cible, donc déjà fusionné sous les règles) qui descend de B1, le point de départ de T1 ;
+- le diff B2..T2 est le diff B1..T1, octet par octet (`git diff --full-index --binary` : les blobs avant et après chaque fichier y sont, donc un fichier du diff changé par la base, ou un changement apporté par la fusion elle-même, le casse) ;
+- aucun fichier du diff ne diffère entre B1 et B2 (déjà impliqué, vérifié à part).
+
+La sortie dit « relecture reportée de T1 (diff identique) », domaine par domaine. Une chaîne de telles mises à jour est suivie (cinq au plus). Une relecture enregistrée à T2 passe toujours avant. La preuve, la suite complète au commit exact, n'est jamais reportée. Un rebase ne reporte rien (ce n'est pas une fusion), une dérogation non plus (elle vaut pour son commit).
+
+Pourquoi ce report n'ouvre pas de contournement :
+- l'arbre de T2 est alors l'arbre de B2 plus le changement relu, exactement ce que donne la fusion de T1 dans une cible arrivée à B2 ;
+- l'outil laisse déjà fusionner T1 dans une cible qui a avancé depuis ses relectures (elles sont liées à la tête, pas à la cible) ;
+- une base qui change le sens du code sans toucher les fichiers du diff a été fusionnée elle-même sous les règles, et elle entre dans T1 de la même façon dans les deux cas.
+
+Le report vaut donc pour tous les domaines, sécurité comprise.
+
 | Domaine | Seul agent qui l'enregistre |
 |---|---|
 | `securite` | `apv:qa-securite` |
