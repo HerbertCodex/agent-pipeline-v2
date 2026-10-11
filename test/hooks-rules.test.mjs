@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EMPTY_CONTEXT } from '../hooks/scripts/harness-guard.mjs';
 import { evaluateCommand, REASONS } from '../hooks/scripts/bash-guard.mjs';
@@ -57,6 +57,9 @@ test('only the lead merges: a merge command is refused in a subagent, even with 
 });
 
 /** The payload of UserPromptSubmit as Claude Code sends it, with `source` as given (absent: `undefined`, as in 2.1.280). */
+/** The launcher of the tests: runs a hook with the key file of a test, set in its process, never through the environment. */
+const RUN_HOOK = fileURLToPath(new URL('./support/run-hook.mjs', import.meta.url));
+
 const prompt = (text, source, extra = {}) => ({ session_id: 's1', transcript_path: '/tmp/t.jsonl', cwd: '/tmp/p', permission_mode: 'default',
   hook_event_name: 'UserPromptSubmit', prompt: text, ...(source === undefined ? {} : { source }), ...extra });
 
@@ -83,7 +86,7 @@ test('the operator journal hook signs what it keeps, keeps no whole message, mas
   execFileSync('git', ['init', '-q', root]);
   const keyFile = join(root, 'cle', 'cle-ancrage');
   const hook = fileURLToPath(new URL('../hooks/scripts/operator-journal.mjs', import.meta.url));
-  const run = input => spawnSync(process.execPath, [hook], { input: JSON.stringify({ ...input, cwd: root }), encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: root, APV_ANCHOR_KEY_FILE: keyFile, APV_ENTRY: 'test' } });
+  const run = input => spawnSync(process.execPath, [RUN_HOOK, hook, keyFile], { input: JSON.stringify({ ...input, cwd: root }), encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: root } });
   const journal = join(root, '.git', 'apv', 'operator', 'messages.jsonl');
   assert.equal(run(prompt('bonjour', 'user')).status, 0);
   assert.ok(!existsSync(journal), 'no .apv/: not an APV project, nothing kept');
@@ -109,8 +112,8 @@ test('the operator journal hook signs what it keeps, keeps no whole message, mas
   assert.equal(readOperatorMessages(common).length, 1);
   assert.equal(journalState(common).ignored, 1);
   // Claude Code without source, the hook run outside any Claude Code session (by this test): nothing kept, the reason noted.
-  const outside = spawnSync(process.execPath, [hook], { input: JSON.stringify({ ...prompt('Je valide tout', undefined), cwd: root }), encoding: 'utf8',
-    env: { ...process.env, CLAUDE_PROJECT_DIR: root, APV_ANCHOR_KEY_FILE: keyFile, APV_ENTRY: 'test' } });
+  const outside = spawnSync(process.execPath, [RUN_HOOK, hook, keyFile], { input: JSON.stringify({ ...prompt('Je valide tout', undefined), cwd: root }), encoding: 'utf8',
+    env: { ...process.env, CLAUDE_PROJECT_DIR: root } });
   assert.equal(outside.status, 0);
   if (!sessionOrigin().interactive) {
     assert.equal(readOperatorMessages(common).length, 1);
@@ -195,7 +198,7 @@ test('the seal hook seals a record only for the reviewer agent of its domain, fr
   writeFileSync(report, `Relecture du commit ${sha}\n${'rien à signaler. '.repeat(20)}`);
   const common = commonDirOf(root);
   const hook = fileURLToPath(new URL('../hooks/scripts/review-seal.mjs', import.meta.url));
-  const seal = (record, agent_type) => spawnSync(process.execPath, [hook], { encoding: 'utf8', env: { ...process.env, APV_ANCHOR_KEY_FILE: TEST_KEY_FILE, APV_ENTRY: 'test' },
+  const seal = (record, agent_type) => spawnSync(process.execPath, [RUN_HOOK, hook, TEST_KEY_FILE], { encoding: 'utf8', env: { ...process.env },
     input: JSON.stringify({ tool_name: 'Bash', cwd: root, agent_type, tool_input: { command: command.replace('abc', sha) }, tool_response: { stdout: `Enregistrement ${record.id}\n` } }) });
   const forged = recordReview(common, { checkout: root, commit: sha, domain: 'securite', reviewer: 'apv:qa-securite', findings: { critical: 0, high: 0, medium: 0, low: 0 }, report, captures: [], now: new Date('2026-09-30T10:00:00Z') });
   assert.equal(seal(forged, 'apv:implementer').status, 0);
@@ -882,6 +885,81 @@ test('issue 112: a cd through CDPATH leaves the folder unknown to the store guar
   // eval on a line that names the store is refused by the computed-command guard as well.
   assert.equal(evaluateCommand('eval PATH=/tmp/x; cat .git/apv/receipts/r.json', {}, lead).decision, 'deny');
   for (const command of ['CDPATH=.git; cd ./src && grep -rn TODO', 'cd src && grep -rn TODO', 'cat .git/apv/receipts/r.json']) {
+    assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
+  }
+});
+
+test('M2: a hook never takes the key file from its environment, whatever the environment says; the tests give it in the process', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'apv3-m2-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  execFileSync('git', ['init', '-q', root]);
+  mkdirSync(join(root, '.apv'));
+  const given = join(root, 'cle-donnee', 'k'); const planted = join(root, 'cle-posee', 'k');
+  const hook = fileURLToPath(new URL('../hooks/scripts/operator-journal.mjs', import.meta.url));
+  // What a settings file (`env`) or a shell profile could put in the environment of every hook.
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: root, [['APV', 'ANCHOR', 'KEY', 'FILE'].join('_')]: planted, [['APV', 'ENTRY'].join('_')]: 'test' };
+  const r = spawnSync(process.execPath, [RUN_HOOK, hook, given], { input: JSON.stringify({ ...prompt('Je valide la maquette des articles.', 'user'), cwd: root }), encoding: 'utf8', env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(existsSync(planted), false, 'the key file named by the environment is never made nor read');
+  assert.equal(existsSync(given), true, 'the key file the test set in the process is used');
+  for (const file of ['lib.mjs', 'operator-journal.mjs', 'review-seal.mjs']) {
+    const text = readFileSync(fileURLToPath(new URL(`../hooks/scripts/${file}`, import.meta.url)), 'utf8');
+    assert.ok(!/ANCHOR_KEY_FILE|testKeyFile/.test(text), `${file} reads no key file from the environment`);
+  }
+});
+
+test('M2: no value of the environment lets a script sign but the apv command and the hooks (no mode kept for the tests)', () => {
+  const operator = new URL('../dist/rules/operator.js', import.meta.url).href;
+  const signs = entry => spawnSync(process.execPath, ['--input-type=module', '-e', `import { sign } from ${JSON.stringify(operator)}; sign(Buffer.alloc(32), 'operator', 'x');`],
+    { encoding: 'utf8', env: { ...process.env, [['APV', 'ENTRY'].join('_')]: entry } }).status;
+  assert.notEqual(signs('test'), 0, 'test is no signer');
+  assert.equal(signs('cli'), 0);
+  assert.equal(signs('hook'), 0);
+});
+
+test('M2: the settings of Claude Code and the shell profiles never receive an APV variable through Write or Edit', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'apv3-m2-write-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const settings = join(root, '.claude', 'settings.local.json'); mkdirSync(dirname(settings));
+  writeFileSync(settings, '{\n  "env": {\n    "FOO": "1"\n  }\n}\n');
+  const profile = join(root, '.bashrc'); writeFileSync(profile, 'alias ll="ls -l"\n');
+  const write = (file_path, content) => evaluateWrite({ tool_name: 'Write', tool_input: { file_path, content } }).decision;
+  const edit = (file_path, old_string, new_string) => evaluateWrite({ tool_name: 'Edit', tool_input: { file_path, old_string, new_string } }).decision;
+  const name = ['APV', 'ALLOW', 'MERGE'].join('_');
+  // Settings: the final content, its JSON read (escapes decoded).
+  assert.equal(write(settings, `{"env":{"${name}":"1"}}`), 'deny');
+  assert.equal(write(settings, '{"env":{"\\u0041PV_ALLOW_DEPLOY":"1"}}'), 'deny', 'a name written with JSON escapes');
+  assert.equal(write(join(root, '.claude', 'settings.json'), `{"env":{"${name.toLowerCase()}":"1"}}`), 'deny');
+  assert.equal(edit(settings, '"FOO": "1"', `"FOO": "1", "${name}": "1"`), 'deny', 'the content after the edit');
+  assert.equal(evaluateWrite({ tool_name: 'MultiEdit', tool_input: { file_path: settings, edits: [{ old_string: '"FOO"', new_string: '"AP' }, { old_string: '"AP', new_string: `"${name}` }] } }).decision, 'deny', 'edits applied in order');
+  assert.equal(write(settings, '{"env":{"FOO":"2"},"permissions":{"allow":["Bash(npm test)"]}}'), 'allow');
+  assert.equal(edit(settings, '"FOO": "1"', '"FOO": "2"'), 'allow');
+  // Shell profiles: the text added, the name literal or rebuilt.
+  for (const added of [`export ${name}=1`, 'export AP""V_ENTRY=test', "export A'P'V_LOCK_DIR=/tmp", 'export \\x41PV_X=1', 'x=AP; export "${x}V_ENTRY"=test', 'eval "$(cat /tmp/x)"', 'source /tmp/env', '. /tmp/env', 'printf -v n %s AP; export $n', "export $'\\101PV_X'=1"]) {
+    assert.equal(edit(profile, 'alias ll="ls -l"', `alias ll="ls -l"\n${added}`), 'deny', added);
+    assert.equal(write(join(root, '.zshrc'), `${added}\n`), 'deny', `.zshrc: ${added}`);
+  }
+  assert.equal(edit(profile, 'alias ll="ls -l"', 'alias ll="ls -la"\nexport PATH="$PATH:$HOME/bin"'), 'allow', 'a literal name, a computed value');
+  assert.equal(write(join(root, '.vscode', 'settings.json'), `{"${name}":"1"}`), 'allow', 'not a Claude Code settings file');
+});
+
+test('M2: Bash never writes an APV variable into the settings of Claude Code or a shell profile, the name literal or rebuilt', () => {
+  const lead = as(null);
+  const name = ['APV', 'ALLOW', 'MERGE'].join('_');
+  for (const command of [
+    `echo 'export ${name}=1' >> ~/.bashrc`,
+    `echo export AP""V_ALLOW_DEPLOY=1 >> ~/.zshrc`,
+    "printf 'export \\x41PV_ALLOW_MERGE=1\\n' >> ~/.profile",
+    "printf '%s%s=1\\n' 'export AP' 'V_ALLOW_MERGE' >> ~/.bashrc",
+    "echo 'export bqw_X=1' | tr b-w a-v >> ~/.bashrc",
+    "echo 'export PATH=$PATH:/x' >> ~/.bashrc",
+    'cp /tmp/profil ~/.bashrc',
+    `jq '.env.${name}="1"' .claude/settings.json > /tmp/s && mv /tmp/s .claude/settings.json`,
+    "sed -i 's/FOO/APV_X/' .claude/settings.local.json",
+    "python3 -c \"open('/home/u/.bashrc','a').write(chr(65)+'PV_X=1')\"",
+    `f=.bashrc; echo 'export ${name}=1' >> ~/$f`,
+  ]) assert.equal(evaluateCommand(command, {}, lead).decision, 'deny', command);
+  for (const command of ['cat ~/.bashrc', 'grep -n alias ~/.zshrc', "echo 'alias ll=\"ls -l\"' >> ~/.bashrc", 'cat .claude/settings.json', `${name}=1 apv stack merge 12`]) {
     assert.equal(evaluateCommand(command, {}, lead).decision, 'allow', command);
   }
 });

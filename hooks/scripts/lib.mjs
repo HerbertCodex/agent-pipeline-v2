@@ -1,7 +1,7 @@
 // Shared helpers for the APV plugin hooks. Node built-ins only: hooks run
 // before any dependency install and must never fail because of a package.
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** Reads the whole hook payload from stdin; resolves to null when it is not a JSON object. */
@@ -84,16 +84,6 @@ export function isMainModule(moduleUrl, argv1 = process.argv[1]) {
 }
 
 /**
- * The anchor key file a test gives a hook (`APV_ANCHOR_KEY_FILE`), or null: the hook then uses the key of the account.
- * Taken only in the test mode the test support sets for the processes it starts (`APV_ENTRY=test`, inherited: read it
- * before the hook sets its own value), and only as an absolute path. The Bash guard refuses both variables set by hand.
- */
-export function testKeyFile(env = process.env) {
-  const file = env.APV_ANCHOR_KEY_FILE;
-  return env.APV_ENTRY === 'test' && typeof file === 'string' && isAbsolute(file) ? file : null;
-}
-
-/**
  * Stores of the Git common directory that only the tool writes (docs/REGLES.md, « Ancrage »): the operator journal
  * (`apv/operator/`, written by the UserPromptSubmit hook) and the review records (`apv/reviews/`, written by
  * `apv review record`). A command or a write that names them is refused by the guards.
@@ -121,3 +111,72 @@ export const DOMAIN_REVIEWERS = { securite: 'qa-securite', fidelite: 'qa-fidelit
 
 /** `apv:qa-securite` and `qa-securite` name the same agent. */
 export const agentName = value => String(value ?? '').trim().replace(/^apv:/, '');
+
+/**
+ * Files that set the environment of the session and of every hook at its next start: the settings of Claude Code (their
+ * `env` block) and the profiles of the shells. An APV variable written there would reach the hooks without a command
+ * (an authorisation such as APV_ALLOW_MERGE, a folder of locks...): the guards refuse it (docs/REGLES.md, « Ancrage »).
+ */
+const SHELL_PROFILES = new Set(['.bashrc', '.bash_profile', '.bash_login', '.bash_aliases', '.profile', '.zshrc', '.zshenv', '.zprofile',
+  '.zlogin', '.kshrc', '.mkshrc', '.cshrc', '.tcshrc', '.login', '.envrc', '.pam_environment']);
+
+/** 'settings', 'profile' or null for a path. */
+export function environmentFile(path) {
+  const p = String(path ?? '').replace(/\\/g, '/');
+  const base = p.split('/').pop() ?? '';
+  if (/(?:^|\/)\.claude\/settings(?:\.local)?\.json$/.test(p) || base === 'settings.local.json' || base === 'managed-settings.json') return 'settings';
+  if (SHELL_PROFILES.has(base) || p === '/etc/environment' || /(?:^|\/)(?:\.bashrc\.d|\.zshrc\.d|profile\.d|environment\.d)\/[^/]+$/.test(p)
+    || /(?:^|\/)fish\/(?:config\.fish|conf\.d\/[^/]+)$/.test(p)) return 'profile';
+  return null;
+}
+
+/** The same files named in a command, read flattened (`.ba""shrc`). */
+export const ENVIRONMENT_FILE_IN_TEXT = new RegExp('(?:^|[^\\w.-])(?:' + [...SHELL_PROFILES].map(n => n.replace(/\./g, '\\.')).join('|') +
+  '|settings\\.local\\.json|managed-settings\\.json|config\\.fish)(?![\\w.-])|\\.claude/+settings[\\w.-]*\\.json|/etc/environment\\b|(?:\\.bashrc\\.d|\\.zshrc\\.d|profile\\.d|environment\\.d|fish/conf\\.d)/');
+
+/** Escapes a shell or a JSON file turns into characters (`\x41`, `\101`, `A`), decoded. */
+export function decodeEscapes(text) {
+  return String(text ?? '').replace(/\\x([0-9a-fA-F]{1,2})|\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})|\\0?([0-7]{1,3})/g, (m, x, u, U, o) => {
+    try { return String.fromCodePoint(x ? parseInt(x, 16) : u ? parseInt(u, 16) : U ? parseInt(U, 16) : parseInt(o, 8)); } catch { return m; }
+  });
+}
+
+/**
+ * Whether a text names an APV variable, even rebuilt: escapes decoded, quotes and backslashes removed, then the formats
+ * of printf (`%s`) and every blank, so that pieces put side by side (`'AP' 'V_X'`, `AP""V_X`, `A P V_X`) meet again.
+ */
+export function namesApvVariable(text) {
+  const compact = flatten(decodeEscapes(text)).replace(/%[-#0 +]*\d*(?:\.\d+)?[a-zA-Z]/g, '').replace(/\s+/g, '');
+  return /APV_/i.test(compact);
+}
+
+/**
+ * Whether settings of Claude Code set an APV variable: their JSON read (escapes decoded), every key of `env`; a file
+ * that is not JSON, by its text.
+ */
+export function settingsSetApv(text) {
+  let value;
+  try { value = JSON.parse(String(text ?? '')); } catch { return namesApvVariable(text); }
+  const env = value && typeof value === 'object' ? value.env : null;
+  if (env && typeof env === 'object') for (const key of Object.keys(env)) if (namesApvVariable(key)) return true;
+  return false;
+}
+
+/**
+ * Whether text added to a shell profile sets an APV variable, or may: the name literal or rebuilt (namesApvVariable), a
+ * variable set or exported under a computed name (`export "${x}V_X"`, `printf -v`, `declare -n`, ANSI-C quoting `$'…'`),
+ * or a text the shell runs without showing it (`eval`, `source`, `.`).
+ */
+export function profileMaySetApv(text) {
+  if (namesApvVariable(text)) return true;
+  for (const raw of String(text ?? '').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (/(?:^|[;&|(]\s*)(?:eval|source|\.)\s/.test(line)) return true;
+    if (/\$'/.test(line) || /\bprintf\s+-v\b|\bdeclare\s+-\w*n|\btypeset\s+-\w*n/.test(line)) return true;
+    // A name set by export, declare, setenv, set -x (fish)... that holds an expansion, a quote or a backslash.
+    const setter = /(?:^|[;&|(]\s*)(?:export|declare|typeset|local|readonly|setenv|set\s+-\w*[xgU]\w*|env)\s+((?:-\w+\s+)*)([^\s=]+)/.exec(line);
+    if (setter && /[$`\\'"{}]/.test(setter[2])) return true;
+  }
+  return false;
+}

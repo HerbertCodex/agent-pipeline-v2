@@ -177,11 +177,15 @@ function keyProblem(file, read) {
     return `clé d'ancrage absente (${file}) : l'opérateur la restaure depuis sa sauvegarde ; rien de signé n'est accepté sans elle`;
 }
 /**
- * The key as the tool may trust it for a project: a regular file of the account holding a whole key, the one whose
- * fingerprint the project recorded; without a fingerprint, a project that holds signed traces accepts only a key that
- * verifies one of them. Otherwise no key and the problem: nothing signed is then accepted.
+ * The key as the tool may trust it for a project: a regular file of the account, in a real folder of the account,
+ * holding a whole key, the one whose fingerprint the project recorded; without a fingerprint, a project that holds
+ * signed traces accepts only a key that verifies one of them. Otherwise no key and the problem: nothing signed is then
+ * accepted.
  */
 export function anchorKey(common, file = anchorKeyFile()) {
+    const folder = keyFolderProblem(dirname(file));
+    if (folder)
+        return { key: null, problem: folder, createdAt: null };
     return judgeKey(common, file, readKeyFile(file), readFingerprint(common));
 }
 /** The judgement of `anchorKey` on a key file and a fingerprint already read. */
@@ -272,26 +276,39 @@ function withFingerprint(common, key) {
     return key;
 }
 /**
- * The folder of the key, when it exists: a real folder (never a link) of the account, closed to others (0700, tightened
- * when it is not). Anything else is refused.
+ * What is wrong with the folder of the key, or null: when it exists, it must be a real folder (never a link) of the
+ * account. Read only: the apv side says it, the hooks refuse it (checkKeyFolder).
  */
-function checkKeyFolder(dir) {
+function keyFolderProblem(dir) {
     let st;
     try {
         st = lstatSync(dir);
     }
     catch (error) {
         if (error.code === 'ENOENT')
-            return;
-        throw new Error(`dossier de la clé d'ancrage refusé (${dir} : illisible) ; rien de signé n'est accepté`);
+            return null;
+        return `dossier de la clé d'ancrage refusé (${dir} : illisible) ; rien de signé n'est accepté`;
     }
     if (st.isSymbolicLink() || !st.isDirectory())
-        throw new Error(`dossier de la clé d'ancrage refusé (${dir} : ${st.isSymbolicLink() ? 'lien symbolique' : 'pas un dossier'}) ; rien de signé n'est accepté`);
+        return `dossier de la clé d'ancrage refusé (${dir} : ${st.isSymbolicLink() ? 'lien symbolique' : 'pas un dossier'}) ; rien de signé n'est accepté`;
     const uid = process.getuid?.();
     if (uid !== undefined && st.uid !== uid)
-        throw new Error(`dossier de la clé d'ancrage refusé (${dir} : propriétaire ${st.uid}, pas le compte ${uid}) ; rien de signé n'est accepté`);
-    if ((st.mode & 0o077) !== 0)
-        chmodSync(dir, 0o700);
+        return `dossier de la clé d'ancrage refusé (${dir} : propriétaire ${st.uid}, pas le compte ${uid}) ; rien de signé n'est accepté`;
+    return null;
+}
+/** For the hooks: the folder of the key refused as keyFolderProblem says, and closed to others (0700, tightened when it is not). */
+function checkKeyFolder(dir) {
+    const problem = keyFolderProblem(dir);
+    if (problem)
+        throw new Error(problem);
+    try {
+        if ((lstatSync(dir).mode & 0o077) !== 0)
+            chmodSync(dir, 0o700);
+    }
+    catch (error) {
+        if (error.code !== 'ENOENT')
+            throw error;
+    }
 }
 /** Removes the files a stopped hook left aside next to `path` (`<name>.<pid>.<hex>.tmp`) once older than a minute. */
 function sweepAside(path) {
@@ -384,7 +401,7 @@ function createExclusive(path, content, mode) {
  * Signing is for the tool run as a command (`bin/apv`, `dist/cli.js`, which set APV_ENTRY) and for the hooks: a script
  * that imports the module directly cannot sign (the Bash guard also refuses such scripts). A guard rail, not a secret.
  */
-const SIGNERS = new Set(['cli', 'hook', 'test']);
+const SIGNERS = new Set(['cli', 'hook']);
 export function sign(key, kind, payload) {
     if (!SIGNERS.has(process.env['APV_ENTRY'] ?? ''))
         throw new Error('signature refusée hors de la commande apv et des crochets du plugin');

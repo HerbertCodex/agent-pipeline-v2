@@ -36,9 +36,10 @@ export interface AnchorKey {
     createdAt: string | null;
 }
 /**
- * The key as the tool may trust it for a project: a regular file of the account holding a whole key, the one whose
- * fingerprint the project recorded; without a fingerprint, a project that holds signed traces accepts only a key that
- * verifies one of them. Otherwise no key and the problem: nothing signed is then accepted.
+ * The key as the tool may trust it for a project: a regular file of the account, in a real folder of the account,
+ * holding a whole key, the one whose fingerprint the project recorded; without a fingerprint, a project that holds
+ * signed traces accepts only a key that verifies one of them. Otherwise no key and the problem: nothing signed is then
+ * accepted.
  */
 export declare function anchorKey(common: string, file?: string): AnchorKey;
 /**

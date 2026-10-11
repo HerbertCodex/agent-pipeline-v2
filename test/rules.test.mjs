@@ -947,17 +947,24 @@ test('F3: the key and its fingerprint are read only from a regular file of the a
   assert.equal(stat(open).mode & 0o777, 0o700);
 });
 
-test('F6: a hook takes the key file of a test only in the test mode the test support sets, and only an absolute path', async () => {
-  const { testKeyFile } = await import('../hooks/scripts/lib.mjs');
-  const name = ['APV', 'ANCHOR', 'KEY', 'FILE'].join('_');
-  assert.equal(testKeyFile({ [name]: '/tmp/k/cle' }), null, 'without the test mode: the key of the account');
-  assert.equal(testKeyFile({ [name]: '/tmp/k/cle', APV_ENTRY: 'hook' }), null);
-  assert.equal(testKeyFile({ [name]: '/tmp/k/cle', APV_ENTRY: 'test' }), '/tmp/k/cle');
-  assert.equal(testKeyFile({ [name]: 'k/cle', APV_ENTRY: 'test' }), null, 'a relative path never');
-  for (const hook of ['operator-journal.mjs', 'review-seal.mjs']) {
-    const text = readFileSync(fileURLToPath(new URL(`../hooks/scripts/${hook}`, import.meta.url)), 'utf8');
-    assert.ok(!text.includes(`env.${name}`) && !text.includes(`env['${name}']`), `${hook} reads the key file only through testKeyFile`);
-  }
+test('F8: the apv side refuses a key whose folder is a link or belongs to another account, without changing anything', async t => {
+  const { anchorKey } = await import('../dist/rules/operator.js');
+  const { symlinkSync, chmodSync, statSync: stat } = await import('node:fs');
+  const { randomBytes } = await import('node:crypto');
+  const root = mkdtempSync(join(tmpdir(), 'apv3-key-folder-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const real = join(root, 'vrai'); mkdirSync(real, { mode: 0o700 });
+  writeFileSync(join(real, 'cle-ancrage'), `${randomBytes(32).toString('hex')}\n`, { mode: 0o400 });
+  const linked = join(root, 'lien'); symlinkSync(real, linked);
+  const common = join(root, 'commun'); mkdirSync(common);
+  const found = anchorKey(common, join(linked, 'cle-ancrage'));
+  assert.equal(found.key, null);
+  assert.match(found.problem, /dossier de la clé d'ancrage refusé[\s\S]*lien symbolique/);
+  // Read only: a folder open to others is said by the hooks (which tighten it), never changed by a reading.
+  const open = join(root, 'ouvert'); mkdirSync(open); chmodSync(open, 0o755);
+  writeFileSync(join(open, 'cle-ancrage'), `${randomBytes(32).toString('hex')}\n`, { mode: 0o400 });
+  assert.ok(anchorKey(common, join(open, 'cle-ancrage')).key, 'a folder open to others is no reason to refuse a reading');
+  assert.equal(stat(open).mode & 0o777, 0o755, 'nothing changed by apv');
 });
 
 test('anchoredQuote takes the key it is given, never one read by default', () => {
