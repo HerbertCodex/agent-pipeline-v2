@@ -114,9 +114,10 @@ function laneProblems(repo, mergeBase, head, settings, options = {}) {
     const exempt = options.exempt ?? new Set();
     const shadowing = [];
     const executed = files.filter(f => (reached.has(f) || shadows.has(f) || configs.includes(f)) && !hits.includes(f)).filter(f => {
-        // Regenerated content (reduced proof only): a modified file reached by an import, never a configuration; an added
-        // file that a specifier of the closure may designate shadows a resolution and is never exempted.
-        if (!exempt.has(f) || configs.includes(f))
+        // Regenerated content (reduced proof only): a modified file reached by an import, never a configuration nor a file
+        // the workflow, the scripts or the protected paths name (what the job runs itself); an added file that a specifier
+        // of the closure may designate shadows a resolution and is never exempted.
+        if (!exempt.has(f) || configs.includes(f) || roots.includes(f))
             return true;
         if (!treeSet.has(f)) {
             shadowing.push(f);

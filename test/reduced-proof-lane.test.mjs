@@ -356,3 +356,10 @@ test('F3 : les imports des fichiers exemptés sont recalculés à H (un paquet n
   await runLocal(p, 'lint');
   await notRetained(p, {}, /import non suivi .* à la tête : content\/catalog\.ts : paquet-inconnu/);
 });
+
+test('5.6 : un fichier que le workflow nomme (le script du job), même déclaré comme contenu et régénéré, n\'est jamais exempté', async t => {
+  const decl = declaration({ paths: { publication: [...PUBLICATION_PATHS, 'scripts/{slug}.mjs'], article: ['docs/articles/{slug}/proposition.json'] } });
+  const p = project(t, { decl, extraPaths: ['scripts/{slug}.mjs'], publication: { 'scripts/check-links.mjs': 'console.log("remplacé");\n' } });
+  await runLocal(p, 'lint');
+  await notRetained(p, { orderLane: lane(p, { slug: 'check-links' }) }, /fichier exécuté ou pouvant remplacer un fichier exécuté par la preuve, modifié depuis la base .*: scripts\/check-links\.mjs/);
+});
