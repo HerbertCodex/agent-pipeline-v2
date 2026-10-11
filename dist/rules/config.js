@@ -1,5 +1,6 @@
 import { s } from '../domain/schema.js';
 import { relativeGlob } from '../reuse/config.js';
+import { operatorOrdersSchema } from '../orders/config.js';
 /**
  * The rules the tool enforces before a merge (`apv rules check`, `apv stack merge`, `apv stack batch --merge`), docs/REGLES.md.
  * Every rule applies to every project: none can be switched off by the configuration. The only way past a refusal is
@@ -29,6 +30,8 @@ const gateId = s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
  */
 export const DOCS_ONLY_KINDS = ['decisions', 'mockups', 'drafts', 'specs', 'journal', 'docs'];
 export const rulesSchema = s.object({
+    /** Merges on a signed order of the operator (docs/REGLES.md, « Fusion sur ordre signé », src/orders/config.ts); absent: none. */
+    operatorOrders: s.optional(operatorOrdersSchema),
     /**
      * Captures the fidelity review attaches to the commit of a change of interface. `themes: ["light"]` only for a
      * project without a dark theme; the tablet may be added, never less than one width.

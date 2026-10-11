@@ -21,6 +21,7 @@ import { rulesSchema, rulesSettings } from '../rules/config.js';
 import { testsCheckSchema } from '../testcheck/check.js';
 import { freshnessIssues, freshnessSchema } from '../freshness/config.js';
 import { modelsSchema } from './models.js';
+import { operatorOrdersIssues } from '../orders/config.js';
 
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
@@ -331,6 +332,7 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
   if (value.reuse) list.attempt('CONFIG', () => reuseSettings(value.reuse));
   if (value.map) list.attempt('CONFIG', () => mapSettings(value.map));
   if (value.rules) list.attempt('CONFIG', () => rulesSettings(value.rules, []));
+  if (value.rules?.operatorOrders) for (const message of operatorOrdersIssues(value.rules.operatorOrders)) list.check(false, 'CONFIG', message);
   for (const arg of value.review?.dast?.command ?? []) {
     if (!arg.includes('{{')) continue;
     const key = /^\{\{([A-Za-z]+)\}\}$/.exec(arg)?.[1];
