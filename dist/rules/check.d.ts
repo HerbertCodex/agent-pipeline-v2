@@ -3,6 +3,7 @@ import { type ReviewDomainName } from '../review/config.js';
 import { type MergeRule } from './config.js';
 import { type DocsOnlyLane } from './docs-only.js';
 import { type CiProofOutcome } from './ci-proof.js';
+import { type OrderLane, type ReducedLane } from './reduced-proof.js';
 import type { GhRunner } from '../stack/github.js';
 export type RuleStatus = 'ok' | 'refused' | 'waived' | 'not_applicable';
 export interface RuleOutcome {
@@ -48,6 +49,8 @@ export interface RulesReport {
     warnings: string[];
     /** The proof by the CI (rules.ciProof of the base), when the local receipts left checks unproven; null otherwise. */
     ci: CiProofOutcome | null;
+    /** The reduced lane (docs/PREUVE-REDUITE.md), only when a merge on order gave its context and the receipts left checks unproven. */
+    reduced?: ReducedLane;
 }
 export interface RulesInput {
     repo: string;
@@ -66,6 +69,11 @@ export interface RulesInput {
         gh: GhRunner | null;
         repository?: string | null;
     };
+    /**
+     * The context of the reduced lane (docs/PREUVE-REDUITE.md, 5.1): built by mergeOnOrder alone, after the verification
+     * of the project, for this commit and this target; no command line builds it.
+     */
+    orderLane?: OrderLane;
 }
 /** Whether the commit is a web interface: web dependencies in its package.json, or tracked interface files. */
 export declare function isWebAt(repo: string, sha: string): boolean;

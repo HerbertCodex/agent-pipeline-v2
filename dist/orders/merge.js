@@ -9,8 +9,35 @@ import { requestAttestation } from './attestation.js';
 import { publicationBranchOf } from './config.js';
 import { publicKeys } from './envelope.js';
 import { COMMIT, HISTORY_LOG_FORMAT, UUID, mergeMessage, orderMergeCommits, readHistory, verifyOrder } from './order.js';
-import { forbiddenPaths, stepGlobs } from './paths.js';
+import { forbiddenPaths, rawDiff, stepGlobs } from './paths.js';
 import { runVerifyCommand } from './verify-command.js';
+/**
+ * `apv stack merge <publication> <article> --order <nonce>` (docs/REGLES.md, section 3 ter): the merge of the two pull
+ * requests of an operator order, with no session of the operator, each step once.
+ *
+ * Trusted base `T`, fixed for the whole run before anything is merged: the target as it was before any merge on this
+ * order (its head at the start, or the first parent of the publication merge APV already made for this order). The keys,
+ * the domain, the attestation address, the verification command, `batch.setup` and the variables are read at `T` only,
+ * and the verification command always runs from a clean copy of `T`: nothing a pull request wrote (the publication head
+ * merged at the first step included) is ever read as configuration or executed by the tool.
+ *
+ * For each step (publication, then article), in this order, `M` being the head of the target read at that moment:
+ * 1. the order `nonce`, signed on the article pull request, verified offline with the keys of `T` (signature,
+ *    repository, pull request, expiry, last signed decision by sequence number, head of the article pull request);
+ * 2. not consumed: only merge commits APV made count (two parents, second parent equal to `Apv-Merged-Head`, trailer
+ *    read by Git, `Apv-Order-Sha256` equal to the digest of this order); both steps there: `already_done`;
+ * 3. the publication head `H` (read once, at the start) descends from `M` (`base`); the verification command of the
+ *    project, from a clean copy of `T`, finds the content of the step to be the one the order signed (`verify`);
+ * 4. the rules checked before any merge (`apv rules check`) at the merged head (`rules`);
+ * 5. the tree of the merge is the tree verified: the one of `H` (publication), or only the files of the article pull
+ *    request with their content at the signed commit (article);
+ * 6. a fresh attestation of the production bound to a challenge drawn here (`attestation`);
+ * 7. the merge commit of parents (`M`, head), with the trailer `Apv-Order`, pushed on the target without force within
+ *    `maxAgeSeconds` of the attestation (a new attestation otherwise), the push bounded in time. A push refused because
+ *    the target moved starts the step again on the new `M`, whose declaration must be the one of `T` (twice at most, then
+ *    `main_moved`). Never the merge API of GitHub, never a forced push.
+ */
+export { rawDiff } from './paths.js';
 /** Pushes refused because the target moved, after which the run stops (`main_moved`). */
 export const MAX_PUSH_RETRIES = 2;
 export const DEFAULT_PUSH_TIMEOUT_MS = 60_000;
@@ -328,22 +355,6 @@ function consumedSteps(merges, verdict, ctx) {
         done.add(step);
     }
     return done;
-}
-/** The entries of a raw diff read with NUL separators; null when the output is not one. */
-export function rawDiff(output) {
-    const parts = output.split('\0');
-    if (parts[parts.length - 1] === '')
-        parts.pop();
-    if (parts.length % 2 !== 0)
-        return null;
-    const entries = [];
-    for (let index = 0; index < parts.length; index += 2) {
-        const meta = /^:(\d{6}) (\d{6}) [0-9a-f]{40} [0-9a-f]{40} ([A-Z])$/.exec(parts[index].replace(/^\n/, ''));
-        if (!meta || !parts[index + 1])
-            return null;
-        entries.push({ mode: meta[2], status: meta[3], path: parts[index + 1] });
-    }
-    return entries;
 }
 async function attest(settings, verdict, report, challenge, fetcher, sleep) {
     report.attestations += 1;

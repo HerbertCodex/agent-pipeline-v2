@@ -29,6 +29,7 @@ import { type VerifyInput, type VerifyResult } from './verify-command.js';
  *    the target moved starts the step again on the new `M`, whose declaration must be the one of `T` (twice at most, then
  *    `main_moved`). Never the merge API of GitHub, never a forced push.
  */
+export { rawDiff } from './paths.js';
 export type OrderMergeCode = OrderRefusal | 'config' | 'github' | 'git' | 'nonce_used' | 'base' | 'verify' | 'rules' | 'attestation' | 'merge_conflict' | 'main_moved' | 'push' | 'paths';
 export interface OrderMergeStep {
     step: OrderStep;
@@ -99,14 +100,5 @@ export declare function mergeOnOrder(options: OrderMergeOptions): Promise<OrderM
 /**` (configuration, decisions, specs, brief) and the V2 configuration file.
  */
 export declare function isApvConfigPath(path: string): boolean;
-/** One entry of `git diff --raw -z --no-renames`: the new mode, the status letter and the path. */
-interface RawEntry {
-    mode: string;
-    status: string;
-    path: string;
-}
-/** The entries of a raw diff read with NUL separators; null when the output is not one. */
-export declare function rawDiff(output: string): RawEntry[] | null;
 /** The bodies of `gh api --paginate .../comments --jq '.[] | .body | @json'`: one JSON string per line; null when unreadable. */
 export declare function readBodies(stdout: string): string[] | null;
-export {};

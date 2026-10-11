@@ -10,7 +10,7 @@ import { requestAttestation, type Fetcher } from './attestation.js';
 import { publicationBranchOf, type OperatorOrdersSettings } from './config.js';
 import { publicKeys } from './envelope.js';
 import { COMMIT, HISTORY_LOG_FORMAT, UUID, mergeMessage, orderMergeCommits, readHistory, verifyOrder, type HistoryCommit, type OrderMergeCommit, type OrderRefusal, type OrderStep, type VerifiedOrder } from './order.js';
-import { forbiddenPaths, stepGlobs } from './paths.js';
+import { forbiddenPaths, rawDiff, stepGlobs } from './paths.js';
 import { runVerifyCommand, type VerifyInput, type VerifyResult } from './verify-command.js';
 
 /**
@@ -39,6 +39,8 @@ import { runVerifyCommand, type VerifyInput, type VerifyResult } from './verify-
  *    the target moved starts the step again on the new `M`, whose declaration must be the one of `T` (twice at most, then
  *    `main_moved`). Never the merge API of GitHub, never a forced push.
  */
+
+export { rawDiff } from './paths.js';
 
 export type OrderMergeCode = OrderRefusal | 'config' | 'github' | 'git' | 'nonce_used' | 'base' | 'verify' | 'rules' | 'attestation' | 'merge_conflict' | 'main_moved' | 'push' | 'paths';
 
@@ -372,22 +374,6 @@ function consumedSteps(merges: readonly OrderMergeCommit[], verdict: VerifiedOrd
     done.add(step);
   }
   return done;
-}
-
-/** One entry of `git diff --raw -z --no-renames`: the new mode, the status letter and the path. */
-interface RawEntry { mode: string; status: string; path: string }
-/** The entries of a raw diff read with NUL separators; null when the output is not one. */
-export function rawDiff(output: string): RawEntry[] | null {
-  const parts = output.split('\0');
-  if (parts[parts.length - 1] === '') parts.pop();
-  if (parts.length % 2 !== 0) return null;
-  const entries: RawEntry[] = [];
-  for (let index = 0; index < parts.length; index += 2) {
-    const meta = /^:(\d{6}) (\d{6}) [0-9a-f]{40} [0-9a-f]{40} ([A-Z])$/.exec(parts[index]!.replace(/^\n/, ''));
-    if (!meta || !parts[index + 1]) return null;
-    entries.push({ mode: meta[2]!, status: meta[3]!, path: parts[index + 1]! });
-  }
-  return entries;
 }
 
 async function attest(settings: OperatorOrdersSettings, verdict: VerifiedOrder, report: OrderMergeReport, challenge: () => string, fetcher?: Fetcher, sleep?: (ms: number) => Promise<void>): Promise<void> {
