@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
@@ -37,7 +37,7 @@ const put = (root, path, text) => { mkdirSync(dirname(join(root, path)), { recur
  * reduced job that imports the catalog, and the catalog. publication/x regenerates the catalog and adds the guide;
  * article/x adds the proposal. `publication` and `base` change what the branches and main hold.
  */
-function project(t, { decl = declaration(), workflowExtra = '', extraPaths = [], base = {}, publication = { 'content/catalog.ts': 'export const catalog = ["x"];\n', 'content/guides/x.ts': 'export const guide = { slug: "x" };\n' }, removed = [] } = {}) {
+function project(t, { decl = declaration(), workflowExtra = '', extraPaths = [], base = {}, publication = { 'content/catalog.ts': 'export const catalog = ["x"];\n', 'content/guides/x.ts': 'export const guide = { slug: "x" };\n' }, removed = [], onPublication = null } = {}) {
   const s = signer();
   const root = mkdtempSync(join(tmpdir(), 'apv3-voie-reduite-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -64,6 +64,7 @@ function project(t, { decl = declaration(), workflowExtra = '', extraPaths = [],
   git(repo, 'switch', '-q', '-c', 'publication/x', baseSha);
   for (const [path, text] of Object.entries(publication)) put(repo, path, text);
   for (const path of removed) git(repo, 'rm', '-q', path);
+  onPublication?.(repo);
   git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'publication'); git(repo, 'push', '-q', 'origin', 'publication/x');
   const head = git(repo, 'rev-parse', 'HEAD');
   return { repo, base: baseSha, head, article, decl };
@@ -372,4 +373,17 @@ test('F-A4 : un check run réduit antérieur stale ou startup_failure écarte un
       runs: { ...s.runs, 87: { ...s.runs[88], id: 9100, conclusion } } })).gh;
     await notRetained(p, { gh }, new RegExp(`check run 700 .*conclusion ${conclusion}`));
   }
+});
+
+test('I-A6 : un fichier exécutable (100755), un lien symbolique ou un renommage, même dans la liste, font sortir de la voie', async t => {
+  const exe = project(t, { onPublication: repo => chmodSync(join(repo, 'content/catalog.ts'), 0o755) });
+  await runLocal(exe, 'lint');
+  await notRetained(exe, {}, /fichier de mode 100755 hors de la voie réduite : content\/catalog\.ts/);
+  const link = project(t, { publication: { 'content/catalog.ts': 'export const catalog = ["x"];\n' }, onPublication: repo => { mkdirSync(join(repo, 'content/guides'), { recursive: true }); symlinkSync('../catalog.ts', join(repo, 'content/guides/x.ts')); } });
+  await runLocal(link, 'lint');
+  await notRetained(link, {}, /fichier de mode 120000 hors de la voie réduite : content\/guides\/x\.ts/);
+  // A rename (read as a removal and an addition, --no-renames): content/guides/y.ts becomes content/guides/x.ts.
+  const moved = project(t, { base: { 'content/guides/y.ts': 'export const guide = { slug: "x" };\n' }, publication: {}, onPublication: repo => git(repo, 'mv', 'content/guides/y.ts', 'content/guides/x.ts') });
+  await runLocal(moved, 'lint');
+  await notRetained(moved, {}, /suppression, renommage ou changement de type hors de la voie réduite : content\/guides\/y\.ts/);
 });
