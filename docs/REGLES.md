@@ -243,7 +243,7 @@ Pour chaque étape, dans cet ordre, `M` étant la tête de la cible à ce moment
 
 ## 5. Configuration : section `rules`
 
-Facultative, lue à la base. Elle ajoute, elle ne retire jamais une règle :
+Facultative, lue à la base. Elle ajoute, elle ne retire jamais une règle, à une exception près, dite plus bas (`rules.operatorOrders.reducedProof`) :
 
 ```json
 "rules": {
@@ -255,6 +255,8 @@ Facultative, lue à la base. Elle ajoute, elle ne retire jamais une règle :
 ```
 
 `captures.themes: ["light"]` seulement pour un projet sans thème sombre ; `tablet` s'ajoute aux largeurs. `requiredGates` : contrôles qu'un projet exige en plus de `reuse`, `code-map` et `structure` (reconnus par le début de leur commande). `screens` : fichiers d'écran que l'outil ne reconnaît pas seul. `journalDays` : durée de conservation du journal de l'opérateur (1 à 3650 jours, 90 par défaut). Une nouvelle capacité d'APV (par exemple une carte d'architecture vérifiée) s'ajoute à la liste des contrôles requis dans `src/rules/required.ts`.
+
+**Seule déclaration qui retire : `rules.operatorOrders.reducedProof`** ([PREUVE-REDUITE.md](PREUVE-REDUITE.md)). Ses `waives` lèvent des contrôles de la suite complète, dans la seule fusion sur ordre signé (section 3 ter), quand le diff tient dans une liste fermée de contenu régénéré. Parce qu'elle retire, la règle de la section 3 s'applique : **tout ajout ou élargissement de cette déclaration exige une décision de l'opérateur ancrée**, que `apv rules check` vérifie sur la PR qui la change (règle `preuve`, même dans un lot) : une décision nouvelle de `.apv/DECISIONS.json`, de source `operator`, confirmée, dont la citation figure mot pour mot dans les messages qu'il a tapés et porte l'empreinte de la déclaration que le refus affiche. Une décision écrite par un agent seul ne compte pas ; sinon, seule la dérogation tapée sur la règle `preuve` de ce commit lève le refus.
 
 `apv init` et `apv onboard` déclarent `reuse`, `structure` et `code-map` pour un projet web ; sur une configuration existante, ils listent les contrôles requis qui manquent, sans la modifier.
 
