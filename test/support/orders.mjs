@@ -67,7 +67,7 @@ export function orderConfig(pem, overrides = {}) {
  * the proposal (the article pull request, #20), publication/x adds the served file (#21, `content` given). Returns the
  * heads and a remover.
  */
-export function orderRepo(t, pem, { content = 'bonjour', config = orderConfig(pem), trap = false, articleExtra = {} } = {}) {
+export function orderRepo(t, pem, { content = 'bonjour', config = orderConfig(pem), trap = false, articleExtra = {}, baseFiles = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'apv3-ordre-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const origin = join(root, 'origin.git');
@@ -78,6 +78,7 @@ export function orderRepo(t, pem, { content = 'bonjour', config = orderConfig(pe
   put('.apv/config.json', `${JSON.stringify(config, null, 2)}\n`);
   put('scripts/verify-order.mjs', VERIFY);
   put('README.md', 'Projet\n');
+  for (const [path, text] of Object.entries(baseFiles)) put(path, text);
   git(dir, 'add', '.'); git(dir, 'commit', '-qm', 'base'); git(dir, 'push', '-q', 'origin', 'main');
   const base = git(dir, 'rev-parse', 'HEAD');
   git(dir, 'switch', '-q', '-c', 'article/x', base);

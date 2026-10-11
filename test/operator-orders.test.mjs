@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { apv } from './cli-helpers.mjs';
-import { waive } from './support/rules.mjs';
+import { RULES, waive } from './support/rules.mjs';
+import { orderRules } from '../dist/commands/stack-order.js';
 import { ARTICLE, DOMAIN, IDENTITY, NONCE, PUBLICATION, REPO, comment, fakeGh, fakeProduction, git, orderConfig, orderObjects, orderRepo, pullRequests, signer } from './support/orders.mjs';
 import { configIssues } from '../dist/config/load.js';
 import { readPublicKey, signedLines, verifySigned, publicKeys } from '../dist/orders/envelope.js';
@@ -859,4 +860,55 @@ test('faible 3 : seul le mode 100644 passe ; exécutable, lien symbolique et sou
   const outside = scenario(t, { signer: s });
   publicationEdit(outside, dir => git(dir, 'rm', '-q', 'README.md'));
   refused(await outside.run(), 'paths');
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// After #131: the rules of a merge on order read the proof by the CI (rules.ciProof of the base) with `gh` itself.
+
+const CI_WORKFLOW = '.github/workflows/preuve.yml';
+const CI_NAME = 'Preuve complète';
+/** The check runs API of acme/site: one check run « Preuve complète » of GitHub Actions concluded in success at `sha`. */
+function ciApi(sha) {
+  const runs = { 77: { id: 9001, head_sha: sha, event: 'push', path: CI_WORKFLOW, workflow_id: 33, run_attempt: 1, check_suite_id: 77, status: 'completed', conclusion: 'success' } };
+  const checkRuns = [{ id: 501, name: CI_NAME, head_sha: sha, status: 'completed', conclusion: 'success', started_at: '2026-10-09T10:00:00Z',
+    app: { id: 15368, slug: 'github-actions', owner: { login: 'github' } }, check_suite: { id: 77 }, html_url: 'https://github.com/acme/site/runs/501' }];
+  const jobs = { 9001: [{ id: 501, run_id: 9001, name: CI_NAME, head_sha: sha, status: 'completed', conclusion: 'success', check_run_url: 'https://api.github.com/repos/acme/site/check-runs/501' }] };
+  const reply = (args, status, body) => ({ args, status, stdout: typeof body === 'string' ? body : JSON.stringify(body), stderr: status ? 'HTTP 404: Not Found' : '', error: null });
+  return async args => {
+    const path = args.at(-1);
+    let m;
+    if (/^repos\/acme\/site\/commits\/[0-9a-f]{40}\/check-runs\?/.test(path)) {
+      const name = new URL(`https://x/${path}`).searchParams.get('check_name');
+      const found = checkRuns.filter(c => c.name === name && path.includes(`/commits/${c.head_sha}/`));
+      return reply(args, 0, { total_count: found.length, check_runs: found });
+    }
+    if (/^repos\/acme\/site\/commits\/[0-9a-f]{40}\/statuses/.test(path)) return reply(args, 0, []);
+    if ((m = /^repos\/acme\/site\/actions\/runs\?check_suite_id=(\d+)$/.exec(path))) return reply(args, 0, { total_count: runs[m[1]] ? 1 : 0, workflow_runs: runs[m[1]] ? [runs[m[1]]] : [] });
+    if ((m = /^repos\/acme\/site\/actions\/workflows\/(\d+)$/.exec(path))) return m[1] === '33' ? reply(args, 0, { id: 33, path: CI_WORKFLOW }) : reply(args, 1, '');
+    if ((m = /^repos\/acme\/site\/actions\/runs\/(\d+)\/jobs\?/.exec(path))) return reply(args, 0, { total_count: (jobs[m[1]] ?? []).length, jobs: jobs[m[1]] ?? [] });
+    return reply(args, 1, '');
+  };
+}
+
+test('preuve CI (#131) : la fusion sur ordre accepte la preuve CI de la tête exacte et refuse celle d\'un autre commit', async t => {
+  const s = signer();
+  const config = orderConfig(s.pem);
+  config.gates = [{ id: 'integration', stage: 'full', command: [process.execPath, '-e', '0'] }, { id: 'browser', stage: 'full', command: [process.execPath, '-e', '0'] }];
+  config.rules.ciProof = { workflow: CI_WORKFLOW, job: 'preuve-complete', name: CI_NAME, gates: ['integration', 'browser'], artifact: 'apv-recus' };
+  const baseFiles = { [CI_WORKFLOW]: `name: ${CI_NAME}\non:\n  pull_request:\n    types: [ready_for_review, synchronize]\npermissions:\n  contents: read\njobs:\n  preuve-complete:\n    name: ${CI_NAME}\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n` };
+  // `sans CI`: the same exact head, the API not read (what the merge on order did before #131): no proof, refused.
+  for (const [proven, expected] of [['tête', 'merged'], ['autre', 'refused'], ['sans CI', 'refused']]) {
+    const sc = scenario(t, { signer: s, repo: { config, baseFiles } });
+    // Every other rule waived by the operator: only the proof is judged at the publication step.
+    waive(sc.repo.dir, sc.repo.publication, RULES.filter(r => r !== 'preuve' && r !== 'instable'));
+    waive(sc.repo.dir, sc.repo.article);
+    const sha = proven === 'autre' ? sc.repo.base : sc.repo.publication;
+    const report = await sc.run({ rules: orderRules(sc.repo.dir, { gh: proven === 'sans CI' ? null : ciApi(sha), repository: 'acme/site' }) });
+    assert.equal(report.status, expected, `${proven} : ${report.reason}`);
+    if (expected === 'refused') {
+      assert.equal(report.code, 'rules');
+      assert.match(report.reason, /preuve/);
+      assert.deepEqual(report.merged, []);
+    }
+  }
 });
