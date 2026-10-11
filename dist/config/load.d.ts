@@ -485,6 +485,14 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly kinds: ("decisions" | "mockups" | "drafts" | "specs" | "journal" | "docs")[] | undefined;
             readonly exclude: string[] | undefined;
         } | undefined;
+        readonly ciProof: {
+            readonly workflow: string;
+            readonly job: string;
+            readonly name: string;
+            readonly gates: string[];
+            readonly protectedPaths: string[] | undefined;
+            readonly artifact: string | undefined;
+        } | undefined;
     } | undefined;
     readonly freshness: {
         readonly maxAgeDays: number;

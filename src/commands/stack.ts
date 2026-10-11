@@ -5,7 +5,7 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { gitRead } from '../run/git-probe.js';
 import { MAX_OVERRIDE_REASON } from '../run/state.js';
 import { cleanLine } from '../run/summary.js';
-import { CI_POLL_MS, MERGE_REFUSED, mergeStack, planStack, processGh, type Derogation, type Freshness, type GhCall, type PullRequest, type RulesVerdict, type StackOptions, type StackPlan } from '../stack/github.js';
+import { CI_POLL_MS, MERGE_REFUSED, mergeStack, planStack, processGh, type Derogation, type Freshness, type GhCall, type GhRunner, type PullRequest, type RulesVerdict, type StackOptions, type StackPlan } from '../stack/github.js';
 import { checkMergeRules, rulesLines } from '../rules/check.js';
 import { auditLines, auditMerges, writeMergeTrace } from '../rules/merges.js';
 import { anchorKey } from '../rules/operator.js';
@@ -169,7 +169,7 @@ function planLines(plan: StackPlan): string[] {
  * in the repository the command runs in: its receipts, its review records, the operator's journal. Outside a repository,
  * nothing can be verified: refused.
  */
-export function stackRules(cwd: string, remote = 'origin'): (pr: PullRequest, target: string) => Promise<RulesVerdict> {
+export function stackRules(cwd: string, remote = 'origin', ciGh: GhRunner | null = null): (pr: PullRequest, target: string) => Promise<RulesVerdict> {
   return async (pr, target) => {
     const repo = gitRead(cwd, ['rev-parse', '--show-toplevel']);
     const head = pr.headRefOid.slice(0, 12);
@@ -179,7 +179,7 @@ export function stackRules(cwd: string, remote = 'origin'): (pr: PullRequest, ta
       gitRead(repo, ['fetch', '--no-tags', remote, `+refs/heads/${target}:refs/remotes/${remote}/${target}`]);
     }
     try {
-      const report = await checkMergeRules({ repo, commit: pr.headRefOid, target: `${remote}/${target}` });
+      const report = await checkMergeRules({ repo, commit: pr.headRefOid, target: `${remote}/${target}`, ci: { gh: ciGh } });
       const notes = report.rules.filter(r => r.status === 'waived').map(r => `dérogation de l'opérateur à la règle ${r.rule} (${r.waiver!.at}) : ${r.waiver!.reason}`);
       return { problems: report.ok ? [] : [`PR #${pr.number} : règles avant fusion refusées à ${head} (apv rules check --commit ${head} --target ${remote}/${target}) :`, ...rulesLines(report, '  ').slice(1, -1)], notes };
     } catch (error) {
@@ -310,7 +310,8 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       ...(values['allow-behind'] ? { allowBehind: { reason } } : {}),
       onDerogation: derogation => journal(io, prs, method, derogation),
       ciWaitMs, ciPollMs, log: line => io.stderr(`${line}\n`),
-      rules: stackRules(io.cwd),
+      // The proof by the CI is read with `gh` itself, never APV_GH (src/commands/rules.ts).
+      rules: stackRules(io.cwd, 'origin', processGh('gh', io.env, io.cwd)),
       onMerged: merge => traceMerge(io.cwd, merge),
     };
     if (action === 'plan') {
