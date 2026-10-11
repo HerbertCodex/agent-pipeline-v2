@@ -111,10 +111,13 @@ export function safeBranch(name: string): boolean {
     && !name.includes('..') && !name.includes('//') && !name.split('/').some(part => part.startsWith('.'));
 }
 
-/** What a run fixes at its trusted base: the declaration of the orders, the setup of a copy and the variables given. */
+/**
+ * What a run fixes at its trusted base: the declaration of the orders, the proof by the CI the rules read at the base
+ * (rules.ciProof), the setup of a copy and the variables given.
+ */
 function fingerprint(config: ApvConfig): string {
-  return hash({ orders: config.rules?.operatorOrders ?? null, setup: config.batch?.setup ?? null, setupTimeoutMs: config.batch?.setupTimeoutMs ?? null,
-    batchEnv: config.batch?.passEnv ?? null, passEnv: config.environment.passEnv });
+  return hash({ orders: config.rules?.operatorOrders ?? null, ciProof: config.rules?.ciProof ?? null, setup: config.batch?.setup ?? null,
+    setupTimeoutMs: config.batch?.setupTimeoutMs ?? null, batchEnv: config.batch?.passEnv ?? null, passEnv: config.environment.passEnv });
 }
 
 export async function mergeOnOrder(options: OrderMergeOptions): Promise<OrderMergeReport> {
@@ -293,7 +296,7 @@ export async function mergeOnOrder(options: OrderMergeOptions): Promise<OrderMer
         if (retries > MAX_PUSH_RETRIES) throw new Refusal('main_moved', `${target} a bougé à chaque poussée (${retries} fois) : rien n'est fusionné de plus`);
         base = await fetchInto(target, 'cible');
         // The target moved: its declaration must still be the one of the trusted base (keys, setup, variables).
-        if (fingerprint(configAt(base)) !== trustedPrint) throw new Refusal('config', `${target} a bougé et sa configuration (rules.operatorOrders, batch.setup ou variables) diffère de la base de confiance ${short(trusted)} : relancer`);
+        if (fingerprint(configAt(base)) !== trustedPrint) throw new Refusal('config', `${target} a bougé et sa configuration (rules.operatorOrders, rules.ciProof, batch.setup ou variables) diffère de la base de confiance ${short(trusted)} : relancer`);
         continue;
       }
       report.merged.push({ step, pr, head, base, mergeCommit: commit });

@@ -1,6 +1,6 @@
 // Helpers of the tests for the rules checked before a merge (src/rules): the operator journal the UserPromptSubmit hook
 // writes, and review records written and sealed as `apv review record` and its PostToolUse hook do. The anchor key of the
-// tests lives in a temporary folder, set in this process (setAnchorKeyFile) and given to spawned hooks (APV_ANCHOR_KEY_FILE).
+// tests lives in a temporary folder, set in this process (setAnchorKeyFile) and given to the hooks a test runs through test/support/run-hook.mjs.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -9,8 +9,9 @@ import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { appendJournal, journalEntry, readAnchorKey, setAnchorKeyFile, sign } from '../../dist/rules/operator.js';
 
-// The tests sign as the tool and the hooks do (src/rules/operator.ts: signing needs APV_ENTRY).
-process.env.APV_ENTRY = 'test';
+// The tests sign as the apv command does (src/rules/operator.ts: signing needs APV_ENTRY set to cli or hook; no value
+// is kept for the tests alone, which the environment of a session could carry).
+process.env.APV_ENTRY = 'cli';
 
 export const RULES = ['preuve', 'instable', 'relecture', 'captures', 'controles', 'maquette'];
 

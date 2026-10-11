@@ -14,7 +14,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { findApvDir, isMainModule, readHookInput, testKeyFile } from './lib.mjs';
+import { findApvDir, isMainModule, readHookInput } from './lib.mjs';
 
 const OPERATOR_MODULE = new URL('../../dist/rules/operator.js', import.meta.url);
 /** Sources of the operator's own typing. */
@@ -103,9 +103,7 @@ function journalDays(apvDir, fallback) {
   } catch { return fallback; }
 }
 
-async function main() {
-  // The key file of a test, read in the test mode the hook inherits, before it sets its own entry.
-  const keyOverride = testKeyFile(process.env);
+export async function main() {
   process.env.APV_ENTRY = 'hook';
   const input = await readHookInput();
   const decision = operatorEntry(input, input && !input.source ? sessionOrigin() : null);
@@ -117,7 +115,7 @@ async function main() {
   const operator = await import(OPERATOR_MODULE.href);
   if (decision.refuse) { operator.recordRefusal(common, decision.refuse); return 0; }
   let key;
-  try { key = operator.ensureAnchorKey(common, keyOverride ?? operator.anchorKeyFile()); }
+  try { key = operator.ensureAnchorKey(common, operator.anchorKeyFile()); }
   catch (error) { operator.recordRefusal(common, error?.message ?? String(error)); return 0; }
   const entry = operator.journalEntry(decision.keep.text, { at: new Date().toISOString(), session: decision.keep.session }, key);
   if (entry) operator.appendJournal(common, entry, journalDays(apvDir, operator.DEFAULT_JOURNAL_DAYS));

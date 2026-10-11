@@ -169,11 +169,14 @@ function keyProblem(file: string, read: KeyFileState): string {
 }
 
 /**
- * The key as the tool may trust it for a project: a regular file of the account holding a whole key, the one whose
- * fingerprint the project recorded; without a fingerprint, a project that holds signed traces accepts only a key that
- * verifies one of them. Otherwise no key and the problem: nothing signed is then accepted.
+ * The key as the tool may trust it for a project: a regular file of the account, in a real folder of the account,
+ * holding a whole key, the one whose fingerprint the project recorded; without a fingerprint, a project that holds
+ * signed traces accepts only a key that verifies one of them. Otherwise no key and the problem: nothing signed is then
+ * accepted.
  */
 export function anchorKey(common: string, file = anchorKeyFile()): AnchorKey {
+  const folder = keyFolderProblem(dirname(file));
+  if (folder) return { key: null, problem: folder, createdAt: null };
   return judgeKey(common, file, readKeyFile(file), readFingerprint(common));
 }
 
@@ -261,19 +264,28 @@ function withFingerprint(common: string, key: Buffer): Buffer {
 }
 
 /**
- * The folder of the key, when it exists: a real folder (never a link) of the account, closed to others (0700, tightened
- * when it is not). Anything else is refused.
+ * What is wrong with the folder of the key, or null: when it exists, it must be a real folder (never a link) of the
+ * account. Read only: the apv side says it, the hooks refuse it (checkKeyFolder).
  */
-function checkKeyFolder(dir: string): void {
+function keyFolderProblem(dir: string): string | null {
   let st;
   try { st = lstatSync(dir); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw new Error(`dossier de la clé d'ancrage refusé (${dir} : illisible) ; rien de signé n'est accepté`);
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    return `dossier de la clé d'ancrage refusé (${dir} : illisible) ; rien de signé n'est accepté`;
   }
-  if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`dossier de la clé d'ancrage refusé (${dir} : ${st.isSymbolicLink() ? 'lien symbolique' : 'pas un dossier'}) ; rien de signé n'est accepté`);
+  if (st.isSymbolicLink() || !st.isDirectory()) return `dossier de la clé d'ancrage refusé (${dir} : ${st.isSymbolicLink() ? 'lien symbolique' : 'pas un dossier'}) ; rien de signé n'est accepté`;
   const uid = process.getuid?.();
-  if (uid !== undefined && st.uid !== uid) throw new Error(`dossier de la clé d'ancrage refusé (${dir} : propriétaire ${st.uid}, pas le compte ${uid}) ; rien de signé n'est accepté`);
-  if ((st.mode & 0o077) !== 0) chmodSync(dir, 0o700);
+  if (uid !== undefined && st.uid !== uid) return `dossier de la clé d'ancrage refusé (${dir} : propriétaire ${st.uid}, pas le compte ${uid}) ; rien de signé n'est accepté`;
+  return null;
+}
+
+/** For the hooks: the folder of the key refused as keyFolderProblem says, and closed to others (0700, tightened when it is not). */
+function checkKeyFolder(dir: string): void {
+  const problem = keyFolderProblem(dir);
+  if (problem) throw new Error(problem);
+  try { if ((lstatSync(dir).mode & 0o077) !== 0) chmodSync(dir, 0o700); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
 }
 
 /** Removes the files a stopped hook left aside next to `path` (`<name>.<pid>.<hex>.tmp`) once older than a minute. */
@@ -337,7 +349,7 @@ function createExclusive(path: string, content: string, mode: number): boolean {
  * Signing is for the tool run as a command (`bin/apv`, `dist/cli.js`, which set APV_ENTRY) and for the hooks: a script
  * that imports the module directly cannot sign (the Bash guard also refuses such scripts). A guard rail, not a secret.
  */
-const SIGNERS = new Set(['cli', 'hook', 'test']);
+const SIGNERS = new Set(['cli', 'hook']);
 export function sign(key: Buffer, kind: string, payload: string): string {
   if (!SIGNERS.has(process.env['APV_ENTRY'] ?? '')) throw new Error('signature refusée hors de la commande apv et des crochets du plugin');
   return createHmac('sha256', key).update(`${kind}\n${payload}`).digest('hex');

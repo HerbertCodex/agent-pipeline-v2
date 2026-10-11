@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+import { posix } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { loadConfigAtCommit } from '../config/load.js';
 import { loadDbConfigAtCommit } from '../db/config.js';
@@ -55,6 +57,165 @@ function hasScreensAt(repo, sha, screens) {
     const ignored = globMatcher([...DEFAULT_REUSE_IGNORE]);
     const files = gitRead(repo, ['ls-tree', '-r', '-z', '--name-only', sha])?.split('\0').filter(Boolean) ?? [];
     return files.some(f => !ignored(f) && screenLike(f, screens));
+}
+/**
+ * Files that cannot change what a screen shows, by their path alone: the configuration of the tools (.apv, the CI, the
+ * agents, the editor), the tests (a test folder at the root, a folder of the test runners, a file named as a test) and
+ * their configuration, the documentation (Markdown under docs/ or at the root, when no documentation site serves it).
+ * Never a file under a served folder (static, public, assets...) nor an interface file. Everything else counts as an
+ * interface file: in doubt, captures are required.
+ */
+// The workflows and actions of .github may change what is deployed: interface files (review of #134).
+const TOOLING_PATH = /^(?:\.apv|\.github(?!\/(?:workflows|actions)\/)|\.claude|\.vscode|\.husky)\//;
+/** Configuration files that may declare aliases (Vite, SvelteKit, Astro, Nuxt, Next, webpack, TypeScript, JavaScript). */
+const ALIAS_CONFIG = /(?:^|\/)(?:(?:vite|vitest|svelte|astro|nuxt|next|webpack|rollup)\.config\.[cm]?[jt]s|[jt]sconfig[\w.-]*\.json)$/;
+/** A loading by pattern or by a computed path: import.meta.glob, import(`…${x}…`), import(x), require(x). */
+const COMPUTED_LOAD = 'import\\.meta\\.glob|import\\([[:space:]]*`[^`]*\\$\\{|import\\([[:space:]]*[^\'"`[:space:])]|require\\([[:space:]]*`[^`]*\\$\\{|require\\([[:space:]]*[^\'"`[:space:])]';
+const TOOLING_FILE = /^(?:\.gitignore|\.gitattributes|\.editorconfig|\.nvmrc|\.node-version)$/;
+const TEST_PATH = /^(?:tests?|e2e)\/|(?:^|\/)(?:__tests__|__snapshots__)\/|\.(?:test|spec)\.[cm]?[jt]s$|^(?:playwright|vitest)\.config\.[cm]?[jt]s$/;
+const DOC_PATH = /^(?:docs\/.+|[^/]+)\.md$/;
+const SERVED_PATH = /(?:^|\/)(?:static|public|assets|www|dist|build|out)\//;
+/** A documentation site: its pages are served screens. */
+const DOCS_SITE = /^(?:mkdocs\.ya?ml|book\.toml|docusaurus\.config\.[cm]?[jt]s|docs\/\.vitepress\/|docs\/package\.json|docs\/astro\.config\.)/;
+/** Beyond this number of files, the tool does not judge: captures required. */
+const MAX_FILES_WITHOUT_SCREEN = 500;
+function withoutScreenByPath(path, docsSite, screens) {
+    if (screenLike(path, screens) || SERVED_PATH.test(path))
+        return false;
+    return TOOLING_PATH.test(path) || TOOLING_FILE.test(path) || TEST_PATH.test(path) || (!docsSite && DOC_PATH.test(path));
+}
+/**
+ * What another file of the head would hold if it used `file`: an import path (`/<name>`, `/<name without its script
+ * extension>`); for a document, its bare name (read by a path built in code) and its folder (`docs/`).
+ */
+function referenceTokens(file) {
+    const name = file.split('/').pop() ?? file;
+    const stem = name.replace(/\.[cm]?[jt]s$/, '');
+    const tokens = [`/${name}`, ...(stem !== name && stem ? [`/${stem}`] : [])];
+    if (DOC_PATH.test(file))
+        tokens.push(name, ...(file.startsWith('docs/') ? ['docs/'] : []));
+    return tokens;
+}
+/**
+ * The paths the alias sections of a configuration point to: the strings inside `alias: {...}`, `alias: [...]` (Vite,
+ * SvelteKit `kit.alias`) and `"paths": {...}` (TypeScript), `./` and trailing `/*` removed. Keys come out too; they name no
+ * folder of the change.
+ */
+function aliasTargets(text) {
+    const out = [];
+    for (const m of text.matchAll(/\b(?:alias|paths)["']?\s*:\s*([[{])/g)) {
+        const open = m[1];
+        const close = open === '{' ? '}' : ']';
+        let depth = 0;
+        let end = m.index + m[0].length - 1;
+        for (; end < text.length; end += 1) {
+            if (text[end] === open)
+                depth += 1;
+            else if (text[end] === close && (depth -= 1) === 0)
+                break;
+        }
+        for (const literal of text.slice(m.index, end + 1).matchAll(/(['"`])((?:(?!\1).)+)\1/g)) {
+            const value = literal[2].replace(/^\.\//, '').replace(/\/\*+$/, '').replace(/\/$/, '');
+            out.push(value === '' ? '.' : value);
+        }
+    }
+    return out;
+}
+/**
+ * Whether a change touches no screen, for the rule captures: every file it adds, modifies, removes or renames (a rename is
+ * a removal and an addition: both sides judged) is, by its path, outside the interface (withoutScreenByPath); no other
+ * file of the head names it (referenceTokens: a page that imports a file under a test or document name makes it an
+ * interface file); no symbolic link of the head leads to it or to one of its folders (a served folder linked to a test
+ * folder). The number of files, or null when one of them may change a screen or when the tool cannot tell (diff, tree
+ * or search unreadable, a link that leaves the repository, too many files): captures are then required.
+ */
+export function touchesNoScreen(repo, base, head, screens) {
+    const raw = gitRead(repo, ['diff', '--name-status', '-z', '--no-renames', base, head]);
+    if (raw === null)
+        return null;
+    const parts = raw.split('\0').filter(Boolean);
+    if (parts.length % 2 !== 0)
+        return null;
+    const files = [];
+    for (let i = 0; i + 1 < parts.length; i += 2)
+        files.push(parts[i + 1]);
+    if (files.length > MAX_FILES_WITHOUT_SCREEN)
+        return null;
+    const tree = gitRead(repo, ['ls-tree', '-r', '-z', '--full-tree', head]);
+    if (tree === null)
+        return null;
+    const entries = tree.split('\0').filter(Boolean).map(e => {
+        const tab = e.indexOf('\t');
+        const [mode, , sha] = e.slice(0, tab).split(' ');
+        return { mode: mode ?? '', sha: sha ?? '', path: e.slice(tab + 1) };
+    });
+    const docsSite = entries.some(e => DOCS_SITE.test(e.path));
+    if (!files.every(f => withoutScreenByPath(f, docsSite, screens)))
+        return null;
+    // Symbolic links of the head: one that leads to a file of the change or to a folder that holds one.
+    const links = entries.filter(e => e.mode === '120000');
+    if (links.length) {
+        const read = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', 'cat-file', '--batch'], { cwd: repo, input: `${links.map(l => l.sha).join('\n')}\n`, encoding: 'utf8', timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
+        if (read.status !== 0 || read.error)
+            return null;
+        const out = read.stdout;
+        let at = 0;
+        for (const link of links) {
+            const header = /^([0-9a-f]+) blob (\d+)\n/.exec(out.slice(at));
+            if (!header)
+                return null;
+            const start = at + header[0].length;
+            const target = out.slice(start, start + Number(header[2]));
+            at = start + Number(header[2]) + 1;
+            if (target.startsWith('/'))
+                return null;
+            const resolved = posix.normalize(posix.join(posix.dirname(link.path), target)).replace(/\/$/, '');
+            if (resolved.startsWith('..'))
+                return null;
+            if (files.some(f => f === resolved || f.startsWith(`${resolved}/`)))
+                return null;
+        }
+    }
+    // A test or a document, when a file of the application loads by a pattern or a computed path: what it loads cannot be
+    // read from the text, wherever the file lies (second review of #134: tests/fixtures at the root, apps/*/src).
+    if (files.some(f => TEST_PATH.test(f) || DOC_PATH.test(f))) {
+        const loads = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'grep', '-l', '-z', '-E', '-e', COMPUTED_LOAD, head, '--'], { cwd: repo, encoding: 'utf8', timeout: 30_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+        if (loads.error || (loads.status !== 0 && loads.status !== 1))
+            return null;
+        if (loads.status === 0 && loads.stdout.split('\0').filter(Boolean).some(where => !withoutScreenByPath(where.slice(head.length + 1), docsSite, screens)))
+            return null;
+    }
+    // An alias toward a folder of the change (Vite, SvelteKit, tsconfig paths...): a page imports it by a name the text of
+    // the file does not hold (second review of #134).
+    for (const config of entries.filter(e => ALIAS_CONFIG.test(e.path))) {
+        const text = gitRead(repo, ['show', `${head}:${config.path}`]);
+        if (text === null)
+            return null;
+        for (const target of aliasTargets(text)) {
+            const resolved = posix.normalize(posix.join(posix.dirname(config.path), target)).replace(/\/$/, '');
+            if (resolved.startsWith('..'))
+                continue;
+            if (resolved === '.' || files.some(f => f === resolved || f.startsWith(`${resolved}/`)))
+                return null;
+        }
+    }
+    const tokens = [...new Set(files.flatMap(referenceTokens))];
+    if (!tokens.length)
+        return { files: files.length };
+    const found = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'grep', '-z', '-o', '-F', ...tokens.flatMap(t => ['-e', t]), head, '--'], { cwd: repo, encoding: 'utf8', timeout: 30_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    if (found.status === 1 && !found.error)
+        return { files: files.length };
+    if (found.status !== 0 || found.error)
+        return null;
+    for (const line of found.stdout.split('\n').filter(Boolean)) {
+        const where = line.split('\0')[0] ?? '';
+        // `<head>:<path>`; anything else (a binary file that matches) is not read: an interface file.
+        if (!where.startsWith(`${head}:`))
+            return null;
+        if (!withoutScreenByPath(where.slice(head.length + 1), docsSite, screens))
+            return null;
+    }
+    return { files: files.length };
 }
 /** Files the change adds or modifies since the base (renames counted as an addition: a moved screen is a new address). */
 function changedFiles(repo, base, head) {
@@ -257,12 +418,16 @@ export async function checkMergeRules(input) {
     const changed = changedFiles(repo, mergeBase, sha);
     const screens = changed.filter(f => isScreen(f, screenMatch));
     const addedScreens = changed.filter(f => screenLike(f, screenMatch));
+    // Read only when the plan retains fidelite: a change that touches no screen has nothing to capture (#228).
+    const noScreen = retained.includes('fidelite') ? touchesNoScreen(repo, mergeBase, sha, screenMatch) : null;
     if (!addedScreens.length && !hasScreensAt(repo, mergeBase, screenMatch))
         rules.push(outcome('captures', 'not_applicable', 'projet sans écran à la base (pas un projet web, aucune route reconnue ni rules.screens, aucun fichier d\'interface) et aucun écran ajouté : rien à capturer'));
     else if (lane.eligible && !retained.includes('fidelite'))
         rules.push(outcome('captures', 'not_applicable', `${LANE_NAME} : aucun écran ni fichier d'interface, relecture de fidélité non exigée`));
     else if (!retained.includes('fidelite'))
         rules.push(outcome('captures', 'not_applicable', 'relecture de fidélité non retenue par le plan des revues'));
+    else if (noScreen)
+        rules.push(outcome('captures', 'not_applicable', `aucun écran touché : ${noScreen.files} fichier${noScreen.files > 1 ? 's' : ''}, aucun d'interface (configuration des outils, tests, documentation non servie, aucun importé par le code)`));
     else if (fidelityWaiver)
         rules.push(outcome('captures', 'not_applicable', `fidélité levée par dérogation (${fidelityWaiver})`));
     else {

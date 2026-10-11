@@ -70,6 +70,17 @@ export interface RulesInput {
 /** Whether the commit is a web interface: web dependencies in its package.json, or tracked interface files. */
 export declare function isWebAt(repo: string, sha: string): boolean;
 /**
+ * Whether a change touches no screen, for the rule captures: every file it adds, modifies, removes or renames (a rename is
+ * a removal and an addition: both sides judged) is, by its path, outside the interface (withoutScreenByPath); no other
+ * file of the head names it (referenceTokens: a page that imports a file under a test or document name makes it an
+ * interface file); no symbolic link of the head leads to it or to one of its folders (a served folder linked to a test
+ * folder). The number of files, or null when one of them may change a screen or when the tool cannot tell (diff, tree
+ * or search unreadable, a link that leaves the repository, too many files): captures are then required.
+ */
+export declare function touchesNoScreen(repo: string, base: string, head: string, screens: readonly RegExp[]): {
+    files: number;
+} | null;
+/**
  * The rules checked before any merge (docs/REGLES.md). Each one says what it checked, why it refuses and what to do. A
  * refusal is lifted by the correction it asks for, or by the operator himself: « dérogation <règle> <commit> : <raison> »
  * typed in the session (operator journal); no option of the tool lifts it.
