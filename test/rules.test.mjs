@@ -259,7 +259,7 @@ test('captures: required as soon as a file may change a screen, or when the tool
   assert.equal(renamed.status, 'refused', JSON.stringify(renamed));
   // A diff the tool cannot read (base unknown): never without object.
   const { touchesNoScreen } = await import('../dist/rules/check.js');
-  assert.equal(touchesNoScreen(p.repo, 'f'.repeat(40), head, []), null);
+  assert.match(touchesNoScreen(p.repo, 'f'.repeat(40), head, []).reasons.join('\n'), /diff illisible/);
 });
 
 test('review of #134, low: a test file under the code of the application loaded by import.meta.glob or a computed import, and a workflow, need the captures', async t => {
@@ -309,6 +309,45 @@ test('second review of #134, low: a pattern load anywhere, a monorepo and an ali
   const plain = { ...SITE, 'vite.config.ts': 'export default { test: { include: ["src/**/*.test.ts", "tests/**/*.spec.ts"] } };\n' };
   const ok = project(t, { base: plain, config, change: { 'src/lib/date.test.ts': 'test\n', 'tests/e2e/compte.spec.ts': 'test\n' } });
   assert.equal(rule((await ok.check()).report, 'captures').status, 'not_applicable');
+});
+
+test('captures (suivie, 11 October): a config and a test named only by a workflow comment, a script comment, the docs, the test configuration or the code map need none', async t => {
+  const config = { review: { always: ['fidelite'] } };
+  const unit = [{ id: 'unit', stage: 'full', command: node('0') }];
+  const base = { ...SITE,
+    'src/lib/admin/typography-guard.test.ts': 'test("x", () => {});\n',
+    '.github/workflows/ci.yml': 'name: ci\n# Contrôles de .apv/config.json, dans son ordre\n',
+    'scripts/dast/zap-scan.mjs': '/* lit .apv/config.json ou à la main */\nexport {};\n',
+    'docs/plans/rangement.html': '<p>.apv/config.json et src/lib/admin/typography-guard.test.ts</p>\n',
+    'docs/tests.md': 'Voir src/lib/admin/typography-guard.test.ts\n',
+    'vitest.config.ts': 'export default { test: { include: ["src/lib/admin/typography-guard.test.ts"] } };\n',
+    '.apv/code-map.md': '- src/lib/admin/typography-guard.test.ts\n',
+  };
+  const p = project(t, { base, config, change: { '.apv/config.json': { name: 'essai-2', gates: unit, ...config }, 'src/lib/admin/typography-guard.test.ts': 'test("y", () => {});\n' } });
+  const r = rule((await p.check()).report, 'captures');
+  assert.equal(r.status, 'not_applicable', JSON.stringify(r));
+  assert.match(r.detail, /^aucun écran touché : 2 fichiers/);
+});
+
+test('captures: when they stay required, the output names each file that makes them necessary, and why', async t => {
+  const config = { review: { always: ['fidelite'] } };
+  const reasons = async (base, change) => {
+    const r = rule((await project(t, { base, config, change }).check()).report, 'captures');
+    assert.equal(r.status, 'refused', JSON.stringify(r));
+    return r.detail;
+  };
+  // A page that imports the test file: named, with the page.
+  const imported = { ...SITE, 'src/lib/format.test.ts': 'export const f = x => x;\n', 'src/routes/compte/+page.ts': 'import { f } from "$lib/format.test";\nexport const load = () => ({ t: f("x") });\n' };
+  assert.match(await reasons(imported, { 'src/lib/format.test.ts': 'export const f = () => "y";\n' }), /src\/lib\/format\.test\.ts : nommé par src\/routes\/compte\/\+page\.ts/);
+  // A script the build runs names it: it counts.
+  const built = { ...SITE, 'package.json': { ...SITE['package.json'], scripts: { build: 'node scripts/gen.mjs && vite build' } }, 'scripts/gen.mjs': 'import "../tests/fixtures/pages.ts";\n', 'tests/fixtures/pages.ts': 'export default [];\n' };
+  assert.match(await reasons(built, { 'tests/fixtures/pages.ts': 'export default ["x"];\n' }), /tests\/fixtures\/pages\.ts : nommé par scripts\/gen\.mjs/);
+  assert.match(await reasons(SITE, { 'src/app.css': 'body { color: red; }\n' }), /src\/app\.css : peut changer un écran/);
+  assert.match(await reasons(SITE, { 'static/x.test.js': '1\n' }), /static\/x\.test\.js : dossier servi/);
+  const vite = { ...SITE, 'tests/fx/index.ts': 'export default 1;\n', 'vite.config.ts': 'export default { resolve: { alias: { "@fx": "./tests/fx" } } };\n' };
+  assert.match(await reasons(vite, { 'tests/fx/index.ts': 'export default 2;\n' }), /tests\/fx\/index\.ts : visé par l'alias de vite\.config\.ts/);
+  const glob = { ...SITE, 'src/routes/compte/+page.ts': 'const t = import.meta.glob("/tests/*.ts");\nexport const load = () => ({ t });\n' };
+  assert.match(await reasons(glob, { 'tests/a.test.ts': 'test\n' }), /tests\/a\.test\.ts : chargement par motif ou chemin calculé dans src\/routes\/compte\/\+page\.ts/);
 });
 
 test('captures: without object once the fidelity review is lifted by a waiver; still required when a fidelity review is recorded (9 October 2026)', async t => {

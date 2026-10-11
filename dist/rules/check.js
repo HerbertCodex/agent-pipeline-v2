@@ -121,101 +121,182 @@ function aliasTargets(text) {
     }
     return out;
 }
+/** Why a file of the change may change a screen, by its path alone; null when it cannot. */
+function screenReasonByPath(path, docsSite, screens) {
+    if (screenLike(path, screens))
+        return 'fichier d\'interface (écran, composant, page, gabarit)';
+    if (SERVED_PATH.test(path))
+        return 'dossier servi';
+    if (docsSite && DOC_PATH.test(path))
+        return 'documentation servie par un site de documentation';
+    if (withoutScreenByPath(path, docsSite, screens))
+        return null;
+    if (/^\.github\//.test(path))
+        return 'workflow ou action : peut changer ce qui est déployé';
+    return 'peut changer un écran (ni configuration des outils, ni test, ni documentation non servie)';
+}
+/** Extensions whose lines a comment marker opens: `#` (YAML, shell, Python, Ruby, TOML), `//` `/*` `*` (scripts), `<!--` (pages). */
+const HASH_COMMENTS = /\.(?:ya?ml|sh|bash|zsh|py|rb|toml|conf|ini)$/;
+const SLASH_COMMENTS = /\.(?:[cm]?[jt]sx?|svelte|vue|astro)$/;
+const MARKUP_COMMENTS = /\.(?:html?|svelte|vue|astro|xml|svg)$/;
+/** Whether a line of `path` is only a comment: a reference in a comment loads nothing. Never for a style sheet or a text. */
+function commentLine(path, line) {
+    const l = line.trim();
+    if (HASH_COMMENTS.test(path) && l.startsWith('#'))
+        return true;
+    if (MARKUP_COMMENTS.test(path) && l.startsWith('<!--') && !/-->\s*\S/.test(l))
+        return true;
+    if (!SLASH_COMMENTS.test(path))
+        return false;
+    if (l.startsWith('//'))
+        return true;
+    if (l.startsWith('/*') || (l.startsWith('*') && !l.startsWith('*/')))
+        return !/\*\/\s*\S/.test(l);
+    return false;
+}
 /**
- * Whether a change touches no screen, for the rule captures: every file it adds, modifies, removes or renames (a rename is
- * a removal and an addition: both sides judged) is, by its path, outside the interface (withoutScreenByPath); no other
- * file of the head names it (referenceTokens: a page that imports a file under a test or document name makes it an
- * interface file); no symbolic link of the head leads to it or to one of its folders (a served folder linked to a test
- * folder). The number of files, or null when one of them may change a screen or when the tool cannot tell (diff, tree
- * or search unreadable, a link that leaves the repository, too many files): captures are then required.
+ * Whether a file of the head that names a file of the change may bring it to a screen: not when it is itself outside the
+ * interface (a test, its configuration, the code map, the documentation...), nor a document under docs/ without a
+ * documentation site, whatever its extension (a plan in HTML is not served).
+ */
+function referencerMayShow(path, docsSite, screens) {
+    if (withoutScreenByPath(path, docsSite, screens))
+        return false;
+    return docsSite || !path.startsWith('docs/');
+}
+const MAX_REASONS = 20;
+/**
+ * Whether a change touches no screen, for the rule captures. Every file it adds, modifies, removes or renames (a rename is
+ * a removal and an addition: both sides judged) must be, by its path, outside the interface (withoutScreenByPath), and
+ * none may be brought to a screen another way: named by a file of the head that may show it (referenceTokens, a mention
+ * in a comment, a test, the documentation or the code map aside), reached by a symbolic link, loaded by a pattern or a
+ * computed path (a test or a document, when the application loads that way), or aimed at by an alias. Every cause found is
+ * said, file by file; the tool also says when it cannot tell (diff, tree or search unreadable, a link that leaves the
+ * repository, too many files): captures are then required.
  */
 export function touchesNoScreen(repo, base, head, screens) {
+    const reasons = [];
     const raw = gitRead(repo, ['diff', '--name-status', '-z', '--no-renames', base, head]);
     if (raw === null)
-        return null;
+        return { files: 0, reasons: [`diff illisible entre ${short(base)} et ${short(head)} : impossible de juger`] };
     const parts = raw.split('\0').filter(Boolean);
     if (parts.length % 2 !== 0)
-        return null;
+        return { files: 0, reasons: ['diff illisible : impossible de juger'] };
     const files = [];
     for (let i = 0; i + 1 < parts.length; i += 2)
         files.push(parts[i + 1]);
-    if (files.length > MAX_FILES_WITHOUT_SCREEN)
-        return null;
+    const verdict = () => ({ files: files.length, reasons: [...new Set(reasons)].slice(0, MAX_REASONS) });
+    if (files.length > MAX_FILES_WITHOUT_SCREEN) {
+        reasons.push(`${files.length} fichiers, plus de ${MAX_FILES_WITHOUT_SCREEN} : impossible de juger`);
+        return verdict();
+    }
     const tree = gitRead(repo, ['ls-tree', '-r', '-z', '--full-tree', head]);
-    if (tree === null)
-        return null;
+    if (tree === null) {
+        reasons.push(`arbre de ${short(head)} illisible : impossible de juger`);
+        return verdict();
+    }
     const entries = tree.split('\0').filter(Boolean).map(e => {
         const tab = e.indexOf('\t');
         const [mode, , sha] = e.slice(0, tab).split(' ');
         return { mode: mode ?? '', sha: sha ?? '', path: e.slice(tab + 1) };
     });
     const docsSite = entries.some(e => DOCS_SITE.test(e.path));
-    if (!files.every(f => withoutScreenByPath(f, docsSite, screens)))
-        return null;
+    for (const f of files) {
+        const why = screenReasonByPath(f, docsSite, screens);
+        if (why)
+            reasons.push(`${f} : ${why}`);
+    }
+    if (reasons.length)
+        return verdict();
     // Symbolic links of the head: one that leads to a file of the change or to a folder that holds one.
     const links = entries.filter(e => e.mode === '120000');
     if (links.length) {
         const read = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', 'cat-file', '--batch'], { cwd: repo, input: `${links.map(l => l.sha).join('\n')}\n`, encoding: 'utf8', timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
-        if (read.status !== 0 || read.error)
-            return null;
+        if (read.status !== 0 || read.error) {
+            reasons.push('liens symboliques illisibles : impossible de juger');
+            return verdict();
+        }
         const out = read.stdout;
         let at = 0;
         for (const link of links) {
             const header = /^([0-9a-f]+) blob (\d+)\n/.exec(out.slice(at));
-            if (!header)
-                return null;
+            if (!header) {
+                reasons.push('liens symboliques illisibles : impossible de juger');
+                return verdict();
+            }
             const start = at + header[0].length;
             const target = out.slice(start, start + Number(header[2]));
             at = start + Number(header[2]) + 1;
-            if (target.startsWith('/'))
-                return null;
             const resolved = posix.normalize(posix.join(posix.dirname(link.path), target)).replace(/\/$/, '');
-            if (resolved.startsWith('..'))
-                return null;
-            if (files.some(f => f === resolved || f.startsWith(`${resolved}/`)))
-                return null;
+            if (target.startsWith('/') || resolved.startsWith('..')) {
+                reasons.push(`${link.path} : lien symbolique hors du dépôt, impossible de juger`);
+                continue;
+            }
+            for (const f of files)
+                if (f === resolved || f.startsWith(`${resolved}/`))
+                    reasons.push(`${f} : atteint par le lien symbolique ${link.path}`);
         }
     }
     // A test or a document, when a file of the application loads by a pattern or a computed path: what it loads cannot be
     // read from the text, wherever the file lies (second review of #134: tests/fixtures at the root, apps/*/src).
-    if (files.some(f => TEST_PATH.test(f) || DOC_PATH.test(f))) {
+    const loaded = files.filter(f => TEST_PATH.test(f) || DOC_PATH.test(f));
+    if (loaded.length) {
         const loads = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'grep', '-l', '-z', '-E', '-e', COMPUTED_LOAD, head, '--'], { cwd: repo, encoding: 'utf8', timeout: 30_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
-        if (loads.error || (loads.status !== 0 && loads.status !== 1))
-            return null;
-        if (loads.status === 0 && loads.stdout.split('\0').filter(Boolean).some(where => !withoutScreenByPath(where.slice(head.length + 1), docsSite, screens)))
-            return null;
+        if (loads.error || (loads.status !== 0 && loads.status !== 1)) {
+            reasons.push('recherche des chargements par motif illisible : impossible de juger');
+            return verdict();
+        }
+        const loaders = loads.status === 0 ? loads.stdout.split('\0').filter(Boolean).map(w => w.slice(head.length + 1)).filter(w => !withoutScreenByPath(w, docsSite, screens)) : [];
+        if (loaders.length)
+            for (const f of loaded)
+                reasons.push(`${f} : chargement par motif ou chemin calculé dans ${loaders.slice(0, 3).join(', ')}`);
     }
     // An alias toward a folder of the change (Vite, SvelteKit, tsconfig paths...): a page imports it by a name the text of
     // the file does not hold (second review of #134).
     for (const config of entries.filter(e => ALIAS_CONFIG.test(e.path))) {
         const text = gitRead(repo, ['show', `${head}:${config.path}`]);
-        if (text === null)
-            return null;
+        if (text === null) {
+            reasons.push(`${config.path} illisible : impossible de juger ses alias`);
+            continue;
+        }
         for (const target of aliasTargets(text)) {
             const resolved = posix.normalize(posix.join(posix.dirname(config.path), target)).replace(/\/$/, '');
             if (resolved.startsWith('..'))
                 continue;
-            if (resolved === '.' || files.some(f => f === resolved || f.startsWith(`${resolved}/`)))
-                return null;
+            for (const f of files)
+                if (resolved === '.' || f === resolved || f.startsWith(`${resolved}/`))
+                    reasons.push(`${f} : visé par l'alias de ${config.path}`);
         }
     }
-    const tokens = [...new Set(files.flatMap(referenceTokens))];
-    if (!tokens.length)
-        return { files: files.length };
-    const found = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'grep', '-z', '-o', '-F', ...tokens.flatMap(t => ['-e', t]), head, '--'], { cwd: repo, encoding: 'utf8', timeout: 30_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
-    if (found.status === 1 && !found.error)
-        return { files: files.length };
-    if (found.status !== 0 || found.error)
-        return null;
-    for (const line of found.stdout.split('\n').filter(Boolean)) {
-        const where = line.split('\0')[0] ?? '';
-        // `<head>:<path>`; anything else (a binary file that matches) is not read: an interface file.
-        if (!where.startsWith(`${head}:`))
-            return null;
-        if (!withoutScreenByPath(where.slice(head.length + 1), docsSite, screens))
-            return null;
+    // Named by another file of the head that may show it (a mention in a comment loads nothing).
+    const byToken = new Map();
+    for (const f of files)
+        for (const t of referenceTokens(f))
+            byToken.set(t, [...(byToken.get(t) ?? []), f]);
+    if (byToken.size) {
+        const found = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'grep', '-z', '-n', '-F', ...[...byToken.keys()].flatMap(t => ['-e', t]), head, '--'], { cwd: repo, encoding: 'utf8', timeout: 30_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+        if (found.error || (found.status !== 0 && found.status !== 1)) {
+            reasons.push('recherche des fichiers qui les nomment illisible : impossible de juger');
+            return verdict();
+        }
+        for (const hit of found.status === 0 ? found.stdout.split('\n').filter(Boolean) : []) {
+            // `<head>:<path>\0<line>\0<text>`; anything else (a binary file that matches) is not read: it may show the file.
+            const [where = '', , text = ''] = hit.split('\0');
+            if (!where.startsWith(`${head}:`)) {
+                reasons.push(`${where.slice(0, 120)} : fichier binaire qui nomme un fichier du changement`);
+                continue;
+            }
+            const path = where.slice(head.length + 1);
+            if (!referencerMayShow(path, docsSite, screens) || commentLine(path, text))
+                continue;
+            for (const [token, named] of byToken)
+                if (text.includes(token))
+                    for (const f of named)
+                        if (f !== path)
+                            reasons.push(`${f} : nommé par ${path}`);
+        }
     }
-    return { files: files.length };
+    return verdict();
 }
 /** Files the change adds or modifies since the base (renames counted as an addition: a moved screen is a new address). */
 function changedFiles(repo, base, head) {
@@ -419,7 +500,8 @@ export async function checkMergeRules(input) {
     const screens = changed.filter(f => isScreen(f, screenMatch));
     const addedScreens = changed.filter(f => screenLike(f, screenMatch));
     // Read only when the plan retains fidelite: a change that touches no screen has nothing to capture (#228).
-    const noScreen = retained.includes('fidelite') ? touchesNoScreen(repo, mergeBase, sha, screenMatch) : null;
+    const screenVerdict = retained.includes('fidelite') ? touchesNoScreen(repo, mergeBase, sha, screenMatch) : null;
+    const noScreen = screenVerdict && !screenVerdict.reasons.length ? screenVerdict : null;
     if (!addedScreens.length && !hasScreensAt(repo, mergeBase, screenMatch))
         rules.push(outcome('captures', 'not_applicable', 'projet sans écran à la base (pas un projet web, aucune route reconnue ni rules.screens, aucun fichier d\'interface) et aucun écran ajouté : rien à capturer'));
     else if (lane.eligible && !retained.includes('fidelite'))
@@ -436,7 +518,7 @@ export async function checkMergeRules(input) {
         const have = new Set((reviews.get('fidelite')?.problem ? [] : record?.captures ?? []).map(c => `${c.viewport}:${c.theme}`));
         const missing = needed.filter(n => !have.has(n));
         rules.push(missing.length
-            ? outcome('captures', 'refused', `relecture de fidélité retenue${addedScreens.length ? ` (écran(s) ou fichier(s) d'interface : ${addedScreens.slice(0, 5).join(', ')}${addedScreens.length > 5 ? ', ...' : ''})` : ''}, captures attendues : ${needed.join(', ')}`, [`capture(s) absente(s) de la relecture fidelite à ${short(sha)} : ${missing.join(', ')}`], [
+            ? outcome('captures', 'refused', `relecture de fidélité retenue${addedScreens.length ? ` (écran(s) ou fichier(s) d'interface : ${addedScreens.slice(0, 5).join(', ')}${addedScreens.length > 5 ? ', ...' : ''})` : ''}${screenVerdict?.reasons.length ? ` ; captures nécessaires : ${screenVerdict.reasons.slice(0, 5).join(' ; ')}${screenVerdict.reasons.length > 5 ? ' ; ...' : ''}` : ''}, captures attendues : ${needed.join(', ')}`, [`capture(s) absente(s) de la relecture fidelite à ${short(sha)} : ${missing.join(', ')}`], [
                 `apv:qa-fidelite capture chaque écran changé ou qui utilise un fichier changé (${missing.join(', ')}), les regarde à côté de la maquette validée et les joint à sa relecture : apv review record --commit ${short(sha)} --domain fidelite --capture <largeur>:<thème>:<fichier> ...`,
             ])
             : outcome('captures', 'ok', `captures jointes à ${short(sha)} : ${needed.join(', ')}`));
