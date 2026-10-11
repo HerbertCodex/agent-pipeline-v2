@@ -67,8 +67,8 @@ function hasScreensAt(repo, sha, screens) {
  */
 // The workflows and actions of .github may change what is deployed: interface files (review of #134).
 const TOOLING_PATH = /^(?:\.apv|\.github(?!\/(?:workflows|actions)\/)|\.claude|\.vscode|\.husky)\//;
-/** Folders of the code of an application: a file there may be loaded by a pattern (import.meta.glob) or a computed import. */
-const APP_CODE_PATH = /^(?:src|app|lib|pages|components|routes|resources|templates)\//;
+/** Configuration files that may declare aliases (Vite, SvelteKit, Astro, Nuxt, Next, webpack, TypeScript, JavaScript). */
+const ALIAS_CONFIG = /(?:^|\/)(?:(?:vite|vitest|svelte|astro|nuxt|next|webpack|rollup)\.config\.[cm]?[jt]s|[jt]sconfig[\w.-]*\.json)$/;
 /** A loading by pattern or by a computed path: import.meta.glob, import(`…${x}…`), import(x), require(x). */
 const COMPUTED_LOAD = 'import\\.meta\\.glob|import\\([[:space:]]*`[^`]*\\$\\{|import\\([[:space:]]*[^\'"`[:space:])]|require\\([[:space:]]*`[^`]*\\$\\{|require\\([[:space:]]*[^\'"`[:space:])]';
 const TOOLING_FILE = /^(?:\.gitignore|\.gitattributes|\.editorconfig|\.nvmrc|\.node-version)$/;
@@ -95,6 +95,31 @@ function referenceTokens(file) {
     if (DOC_PATH.test(file))
         tokens.push(name, ...(file.startsWith('docs/') ? ['docs/'] : []));
     return tokens;
+}
+/**
+ * The paths the alias sections of a configuration point to: the strings inside `alias: {...}`, `alias: [...]` (Vite,
+ * SvelteKit `kit.alias`) and `"paths": {...}` (TypeScript), `./` and trailing `/*` removed. Keys come out too; they name no
+ * folder of the change.
+ */
+function aliasTargets(text) {
+    const out = [];
+    for (const m of text.matchAll(/\b(?:alias|paths)["']?\s*:\s*([[{])/g)) {
+        const open = m[1];
+        const close = open === '{' ? '}' : ']';
+        let depth = 0;
+        let end = m.index + m[0].length - 1;
+        for (; end < text.length; end += 1) {
+            if (text[end] === open)
+                depth += 1;
+            else if (text[end] === close && (depth -= 1) === 0)
+                break;
+        }
+        for (const literal of text.slice(m.index, end + 1).matchAll(/(['"`])((?:(?!\1).)+)\1/g)) {
+            const value = literal[2].replace(/^\.\//, '').replace(/\/\*+$/, '').replace(/\/$/, '');
+            out.push(value === '' ? '.' : value);
+        }
+    }
+    return out;
 }
 /**
  * Whether a change touches no screen, for the rule captures: every file it adds, modifies, removes or renames (a rename is
@@ -151,14 +176,28 @@ export function touchesNoScreen(repo, base, head, screens) {
                 return null;
         }
     }
-    // A file under the code of the application, when a file there loads by a pattern or a computed path: what it loads
-    // cannot be read from the text (review of #134).
-    if (files.some(f => APP_CODE_PATH.test(f))) {
+    // A test or a document, when a file of the application loads by a pattern or a computed path: what it loads cannot be
+    // read from the text, wherever the file lies (second review of #134: tests/fixtures at the root, apps/*/src).
+    if (files.some(f => TEST_PATH.test(f) || DOC_PATH.test(f))) {
         const loads = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'grep', '-l', '-z', '-E', '-e', COMPUTED_LOAD, head, '--'], { cwd: repo, encoding: 'utf8', timeout: 30_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
         if (loads.error || (loads.status !== 0 && loads.status !== 1))
             return null;
         if (loads.status === 0 && loads.stdout.split('\0').filter(Boolean).some(where => !withoutScreenByPath(where.slice(head.length + 1), docsSite, screens)))
             return null;
+    }
+    // An alias toward a folder of the change (Vite, SvelteKit, tsconfig paths...): a page imports it by a name the text of
+    // the file does not hold (second review of #134).
+    for (const config of entries.filter(e => ALIAS_CONFIG.test(e.path))) {
+        const text = gitRead(repo, ['show', `${head}:${config.path}`]);
+        if (text === null)
+            return null;
+        for (const target of aliasTargets(text)) {
+            const resolved = posix.normalize(posix.join(posix.dirname(config.path), target)).replace(/\/$/, '');
+            if (resolved.startsWith('..'))
+                continue;
+            if (resolved === '.' || files.some(f => f === resolved || f.startsWith(`${resolved}/`)))
+                return null;
+        }
     }
     const tokens = [...new Set(files.flatMap(referenceTokens))];
     if (!tokens.length)

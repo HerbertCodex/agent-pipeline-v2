@@ -274,14 +274,41 @@ test('review of #134, low: a test file under the code of the application loaded 
   const computed = { ...SITE, 'src/lib/strings.test.ts': 'export default "Bonjour";\n',
     'src/routes/compte/+page.ts': 'export const load = async ({ url }) => ({ t: (await import(`../../lib/${url.searchParams.get("f")}.ts`)).default });\n' };
   await required(project(t, { base: computed, config, change: { 'src/lib/strings.test.ts': 'export default "Texte piégé";\n' } }), 'computed import');
-  // A test outside the code of the application stays without screen, the glob present or not.
-  const outside = project(t, { base: glob, config, change: { 'tests/e2e/compte.spec.ts': 'import { test } from "@playwright/test";\n' } });
-  assert.equal(rule((await outside.check()).report, 'captures').status, 'not_applicable');
+  // Second review of #134: once the application loads by a pattern, no test nor document is without screen, wherever it lies.
+  await required(project(t, { base: glob, config, change: { 'tests/e2e/compte.spec.ts': 'import { test } from "@playwright/test";\n' } }), 'a test outside src, a glob present');
   // A workflow may change what is deployed; an issue template may not.
   await required(project(t, { base: SITE, config, change: { '.github/workflows/deploy.yml': 'name: deploy\n' } }), 'workflow');
   await required(project(t, { base: SITE, config, change: { '.github/actions/build/action.yml': 'name: build\n' } }), 'composite action');
   const template = project(t, { base: SITE, config, change: { '.github/ISSUE_TEMPLATE/bug.md': '# Bogue\n', '.github/CODEOWNERS': '* @x\n' } });
   assert.equal(rule((await template.check()).report, 'captures').status, 'not_applicable');
+});
+
+test('second review of #134, low: a pattern load anywhere, a monorepo and an alias toward a test folder need the captures', async t => {
+  const config = { review: { always: ['fidelite'] } };
+  const required = async (p, what) => {
+    const r = rule((await p.check()).report, 'captures');
+    assert.equal(r.status, 'refused', `${what} : ${JSON.stringify(r)}`);
+  };
+  // A glob from the application toward tests/fixtures at the root.
+  const fixtures = { ...SITE, 'tests/fixtures/strings.ts': 'export default "Bonjour";\n',
+    'src/routes/compte/+page.ts': 'const t = import.meta.glob("/tests/fixtures/*.ts", { eager: true });\nexport const load = () => ({ t });\n' };
+  await required(project(t, { base: fixtures, config, change: { 'tests/fixtures/strings.ts': 'export default "Texte piégé";\n' } }), 'glob toward tests/fixtures');
+  // A monorepo: apps/site/src.
+  const mono = { 'package.json': { name: 'mono', private: true, workspaces: ['apps/*'] }, 'apps/site/package.json': { name: 'site', devDependencies: { '@sveltejs/kit': '2.0.0', svelte: '5.0.0' } },
+    'apps/site/src/routes/+page.svelte': '<h1>Accueil</h1>\n', 'apps/site/src/lib/strings.test.ts': 'export default "Bonjour";\n',
+    'apps/site/src/routes/+page.ts': 'const t = import.meta.glob("../lib/*.ts", { eager: true });\nexport const load = () => ({ t });\n' };
+  await required(project(t, { base: mono, config, change: { 'apps/site/src/lib/strings.test.ts': 'export default "Texte piégé";\n' } }), 'monorepo');
+  // An alias (Vite, then tsconfig) toward a test folder.
+  const vite = { ...SITE, 'tests/fx/index.ts': 'export default "Bonjour";\n', 'src/routes/compte/+page.ts': 'import t from "@fx";\nexport const load = () => ({ t });\n',
+    'vite.config.ts': 'import { defineConfig } from "vite";\nexport default defineConfig({ resolve: { alias: { "@fx": "./tests/fx" } } });\n' };
+  await required(project(t, { base: vite, config, change: { 'tests/fx/index.ts': 'export default "Texte piégé";\n' } }), 'vite alias');
+  const ts = { ...SITE, 'tests/fx/index.ts': 'export default "Bonjour";\n', 'src/routes/compte/+page.ts': 'import t from "#fx";\nexport const load = () => ({ t });\n',
+    'tsconfig.json': { compilerOptions: { paths: { '#fx': ['./tests/fx/index.ts'], '#fx/*': ['tests/fx/*'] } } } };
+  await required(project(t, { base: ts, config, change: { 'tests/fx/index.ts': 'export default "Texte piégé";\n' } }), 'tsconfig paths');
+  // Control: a Vite configuration that only says where the tests are, no alias, no pattern load: still without object.
+  const plain = { ...SITE, 'vite.config.ts': 'export default { test: { include: ["src/**/*.test.ts", "tests/**/*.spec.ts"] } };\n' };
+  const ok = project(t, { base: plain, config, change: { 'src/lib/date.test.ts': 'test\n', 'tests/e2e/compte.spec.ts': 'test\n' } });
+  assert.equal(rule((await ok.check()).report, 'captures').status, 'not_applicable');
 });
 
 test('captures: without object once the fidelity review is lifted by a waiver; still required when a fidelity review is recorded (9 October 2026)', async t => {
