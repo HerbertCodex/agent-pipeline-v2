@@ -2,6 +2,12 @@
 
 ## Non publié
 
+- **Relecture sécurité de la PR #134** (1 élevé, 1 moyen, 2 faibles ; chaque point avec son test rouge d'abord dans `test/hooks-rules.test.mjs` et `test/rules.test.mjs`) :
+  - Élevé : réglages et profils reconnus par une seule fonction pour Write, Edit et Bash, le chemin canonique (`.`, `..`, `//`, `~`, relatif depuis le dossier du crochet), la casse ignorée, un lien symbolique suivi.
+  - Moyen : refusés aussi `NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `BASH_ENV`, `ENV`, `DYLD_*` (réglages et profils), `PATH` dans le bloc `env`, `disableAllHooks` et le greffon apv désactivé (réglages) ; les réglages jugés sur ce qu'ils ajoutent, une modification ordinaire passe.
+  - Faible : un test ou un document sous un dossier de code de l'application ne compte plus « sans écran » quand l'application charge par `import.meta.glob` ou un chemin calculé.
+  - Faible : `.github/workflows/` et `.github/actions/` comptent comme interface (un workflow peut changer ce qui est déployé).
+
 - **Captures sans objet quand aucun écran n'est touché** (projet pilote, #228 : une dérogation captures tapée pour une PR qui ne changeait que `.apv/config.json`). Même fidélité retenue, `captures` est « sans objet : aucun écran touché : N fichiers, aucun d'interface » quand chaque fichier du diff (suppressions et deux côtés d'un renommage compris) est de la configuration des outils, un test ou de la documentation non servie, hors d'un dossier servi, qu'aucun autre fichier ne le nomme et qu'aucun lien symbolique ne l'atteigne. Dans le doute (styles, composants, routes, textes, traductions, fichiers servis, extension inconnue, diff ou recherche illisibles), captures exigées. Tests rouges d'abord dans `test/rules.test.mjs`, attaques comprises (renommage, import d'un fichier nommé comme un test, document lu par le code, dossier servi, lien symbolique).
 
 - **Fusion sur ordre : `rules.ciProof` dans l'empreinte de la base de confiance** (constat faible de la confirmation de #132). Après une poussée refusée parce que la cible a bougé, la nouvelle base est relue et la preuve CI y est lue : un `rules.ciProof` différent de celui de la base de confiance est désormais refusé (`config`), comme `rules.operatorOrders`, `batch.setup` et les variables. Test rouge d'abord dans `test/operator-orders.test.mjs`.
