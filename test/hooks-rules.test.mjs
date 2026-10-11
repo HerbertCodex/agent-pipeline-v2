@@ -1024,3 +1024,106 @@ test('review of #134, medium: the settings and the profiles never receive what r
   }
   assert.equal(evaluateCommand("echo 'export EDITOR=vim' >> ~/.bashrc", {}, lead).decision, 'allow');
 });
+
+test('second review of #134: a cd in the line, a computed target, a computed hard link and the variables the hooks read are refused when written', async t => {
+  const { linkSync } = await import('node:fs');
+  const home = mkdtempSync(join(tmpdir(), 'apv3-134b-home-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  mkdirSync(join(home, '.claude'));
+  writeFileSync(join(home, '.claude', 'settings.json'), '{}\n');
+  const context = { ...as(null), cwd: join(home, 'projet'), home };
+  const name = ['APV', 'ALLOW', 'MERGE'].join('_');
+  for (const command of [
+    `cd ~/.claude && echo '{"env":{"${name}":"1"}}' > settings.json`,
+    `cd ~/.claude && echo '{"env":{"NODE_OPTIONS":"--require=/tmp/x.js"}}' > settings.json`,
+    `cd ${home}/.claude; printf '{"disableAllHooks":true}' > settings.local.json`,
+    `d=cla; echo '{"disableAllHooks":true}' > ~/.\${d}ude/settings.json`,
+    `d=cla; echo '{"enabledPlugins":{"apv@m":false}}' > ~/.\${d}ude/settings.json`,
+    'd=cla; ln ~/.${d}ude/settings.json notes.json',
+    'cd "$X" && echo \'{"env":{"EDITOR":"vim"}}\' > settings.json',
+  ]) assert.equal(evaluateCommand(command, {}, context).decision, 'deny', command);
+  assert.equal(evaluateCommand('ln -s /tmp/a /tmp/b', {}, context).decision, 'allow', 'a symbolic link with plain names');
+  // The variables the hooks read (HOME, CLAUDE_PROJECT_DIR) or that git honours (GIT_*), refused in the env block.
+  const settings = join(home, '.claude', 'settings.local.json');
+  for (const key of ['HOME', 'CLAUDE_PROJECT_DIR', 'CLAUDE_PLUGIN_ROOT', 'CLAUDE_CONFIG_DIR', 'GIT_DIR', 'GIT_CONFIG_GLOBAL', 'XDG_CONFIG_HOME', 'ZDOTDIR']) {
+    assert.equal(evaluateWrite({ tool_name: 'Write', tool_input: { file_path: settings, content: `{"env":{"${key}":"/tmp/x"}}` } }).decision, 'deny', key);
+  }
+  // A Write on a neutral name that is a hard link to a settings file of the project.
+  const project = join(home, 'projet'); mkdirSync(join(project, '.claude'), { recursive: true });
+  writeFileSync(join(project, '.claude', 'settings.json'), '{}\n');
+  linkSync(join(project, '.claude', 'settings.json'), join(project, 'notes.json'));
+  assert.equal(evaluateWrite({ tool_name: 'Write', cwd: project, tool_input: { file_path: join(project, 'notes.json'), content: '{"disableAllHooks":true}' } }).decision, 'deny', 'hard link');
+});
+
+test('second review of #134, A: an authorisation is read in the command alone, never in the environment of the hook', () => {
+  const name = ['APV', 'ALLOW', 'MERGE'].join('_');
+  const outside = { ...as(null), apvProject: () => false };
+  assert.equal(evaluateCommand('gh pr merge 12 --squash', { [name]: '1' }, outside).decision, 'deny', 'the environment authorises nothing');
+  assert.equal(evaluateCommand(`${name}=1 gh pr merge 12 --squash`, {}, outside).decision, 'allow', 'the prefix of the command does');
+  assert.equal(evaluateCommand('apv stack merge 12', { [name]: '1' }, as(null)).decision, 'deny');
+  assert.equal(evaluateCommand(`${name}=1 apv stack merge 12`, {}, as(null)).decision, 'allow');
+});
+
+test('second review of #134, B: what the real settings and profiles hold is checked at every tool call, whatever wrote it', async t => {
+  const { environmentIntegrity } = await import('../hooks/scripts/lib.mjs');
+  const home = mkdtempSync(join(tmpdir(), 'apv3-134b-int-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const project = join(home, 'projet'); mkdirSync(join(project, '.claude'), { recursive: true }); mkdirSync(join(home, '.claude'));
+  const clean = () => {
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ env: { EDITOR: 'vim' }, enabledPlugins: { 'apv@m': true, 'autre@m': false }, permissions: { allow: ['Bash(npm test)'] } }));
+    writeFileSync(join(project, '.claude', 'settings.json'), '{}\n');
+    rmSync(join(project, '.claude', 'settings.local.json'), { force: true }); rmSync(join(project, 'notes.json'), { force: true });
+    writeFileSync(join(home, '.bashrc'), '# APV_ALLOW_MERGE=1 en commentaire\nalias ll="ls -l"\nexport PATH="$PATH:$HOME/bin"\nexport NODE_ENV=development\n');
+    for (const f of ['.profile', '.zshrc']) rmSync(join(home, f), { force: true });
+  };
+  const check = () => environmentIntegrity({ home, projectDirs: [project] });
+  clean();
+  assert.deepEqual(check(), [], 'ordinary settings and profiles');
+  const name = ['APV', 'ALLOW', 'MERGE'].join('_');
+  const sh = command => { const r = spawnSync('bash', ['-c', command], { cwd: project, encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); };
+  const attacks = [
+    ['cd then a bare name', () => sh(`cd .claude && echo '{"env":{"${name}":"1"}}' > settings.json`), /settings\.json.*env\.APV_ALLOW_MERGE/],
+    ['computed target', () => sh('d=cla; echo \'{"disableAllHooks":true}\' > ./.${d}ude/settings.local.json'), /settings\.local\.json.*disableAllHooks/],
+    ['hard link then a neutral name', () => { sh('d=cla; ln ./.${d}ude/settings.json notes.json'); writeFileSync(join(project, 'notes.json'), '{"env":{"NODE_OPTIONS":"--require=/tmp/x.js"}}'); }, /settings\.json.*env\.NODE_OPTIONS/],
+    ['two edits', () => { writeFileSync(join(project, '.claude', 'settings.json'), '{"env":{"AP":"1"}}'); writeFileSync(join(project, '.claude', 'settings.json'), '{"env":{"APV_X":"1"}}'); }, /env\.APV_X/],
+    ['apv switched off', () => writeFileSync(join(project, '.claude', 'settings.local.json'), '{"enabledPlugins":{"apv@herbertcodex-apv":false}}'), /enabledPlugins\.apv@herbertcodex-apv/],
+    ['GIT_DIR', () => writeFileSync(join(home, '.claude', 'settings.json'), '{"env":{"GIT_DIR":"/tmp/x"}}'), /env\.GIT_DIR/],
+    ['JSONC with the key', () => writeFileSync(join(project, '.claude', 'settings.json'), '{\n  // commentaire\n  "env": { "PATH": "/tmp" },\n}\n'), /env\.PATH/],
+    ['neither JSON nor JSONC', () => writeFileSync(join(project, '.claude', 'settings.json'), '{ env: '), /illisible/],
+    ['profile export', () => writeFileSync(join(home, '.zshrc'), `export ${name}=1\n`), /\.zshrc.*APV_ALLOW_MERGE/],
+    ['profile rebuilt name', () => writeFileSync(join(home, '.profile'), 'export AP""V_ALLOW_DEPLOY=1\n'), /\.profile.*APV_ALLOW_DEPLOY/],
+    ['profile code variable', () => writeFileSync(join(home, '.bashrc'), 'LD_PRELOAD=/tmp/x.so\n'), /\.bashrc.*LD_PRELOAD/],
+  ];
+  for (const [what, attack, expected] of attacks) {
+    clean(); attack();
+    const problems = check();
+    assert.ok(problems.length, what);
+    assert.match(problems.join('\n'), expected, what);
+  }
+  // The real hooks refuse the next tool call, Bash and file tools alike, with the file and the key; nothing repaired.
+  clean(); sh(`cd .claude && echo '{"env":{"${name}":"1"}}' > settings.json`);
+  const run = (hook, input) => spawnSync(process.execPath, [fileURLToPath(new URL(`../hooks/scripts/${hook}`, import.meta.url))], { input: JSON.stringify({ ...input, cwd: project }), encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: project } });
+  for (const [hook, input] of [['bash-guard.mjs', { tool_name: 'Bash', tool_input: { command: 'ls' } }], ['write-guard.mjs', { tool_name: 'Read', tool_input: { file_path: join(project, 'README.md') } }]]) {
+    const r = run(hook, input);
+    assert.equal(r.status, 2, `${hook} : ${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /settings\.json/);
+    assert.match(r.stdout, /env\.APV_ALLOW_MERGE/);
+    assert.match(r.stdout, /retire/);
+  }
+  assert.match(readFileSync(join(project, '.claude', 'settings.json'), 'utf8'), /APV_ALLOW_MERGE/, 'nothing repaired by the hook');
+  clean();
+  assert.equal(run('bash-guard.mjs', { tool_name: 'Bash', tool_input: { command: 'ls' } }).status, 0, 'clean: allowed');
+});
+
+test('second review of #134, B: the start of the session says what the loaded settings hold that the guards refuse', async t => {
+  const project = mkdtempSync(join(tmpdir(), 'apv3-134b-start-'));
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  mkdirSync(join(project, '.claude'));
+  writeFileSync(join(project, '.claude', 'settings.local.json'), '{"disableAllHooks":true}');
+  const hook = fileURLToPath(new URL('../hooks/scripts/session-start.mjs', import.meta.url));
+  const r = spawnSync(process.execPath, [hook], { input: JSON.stringify({ hook_event_name: 'SessionStart', cwd: project }), encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: project } });
+  assert.equal(r.status, 0);
+  const out = JSON.parse(r.stdout);
+  assert.match(out.systemMessage, /settings\.local\.json : disableAllHooks/);
+  assert.match(out.hookSpecificOutput.additionalContext, /retire lui-même/);
+});

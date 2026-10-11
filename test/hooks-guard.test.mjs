@@ -83,7 +83,9 @@ test('apv stack merge needs the same explicit authorisation as gh pr merge', () 
     'git commit -m "apv stack merge 11"',
     'apv run next merge',
   ]) assert.equal(decision(command, {}), 'allow', command);
-  assert.equal(decision('apv stack merge 11', { APV_ALLOW_MERGE: '1' }), 'allow');
+  // The authorisation is read in the command alone, never in the environment of the hook (review of #134).
+  assert.equal(decision('apv stack merge 11', { APV_ALLOW_MERGE: '1' }), 'deny', 'set in the environment only');
+  assert.equal(decision('APV_ALLOW_MERGE=1 apv stack merge 11', {}), 'allow');
   // It writes to GitHub: its output must stay visible, even when authorised.
   assert.deepEqual(evaluateCommand('APV_ALLOW_MERGE=1 apv stack merge 11 > /dev/null', {}), { decision: 'deny', reason: REASONS.hiddenOutput });
   assert.equal(isStackMerge(['apv', 'stack', 'merge']), true);
@@ -99,7 +101,7 @@ test('production deploys are blocked unless explicitly authorised', () => {
   assert.equal(decision('vercel deploy', {}), 'allow');
   assert.equal(decision('vercel env ls', {}), 'allow');
   assert.equal(decision('APV_ALLOW_DEPLOY=1 vercel deploy --prod', {}), 'allow');
-  assert.equal(decision('vercel deploy --prod', { APV_ALLOW_DEPLOY: '1' }), 'allow');
+  assert.equal(decision('vercel deploy --prod', { APV_ALLOW_DEPLOY: '1' }), 'deny', 'set in the environment only (review of #134)');
 });
 
 test('GitHub writes with hidden output are blocked, even when authorised (incident 30)', () => {
@@ -148,7 +150,7 @@ test('the hook script denies with the documented PreToolUse output and exit code
   assert.match(result.stderr, /force-push interdit/);
 });
 
-test('the hook script allows silently, and honours the environment authorisation', () => {
+test('the hook script allows silently; an authorisation counts only written before the command, never in the environment', () => {
   for (const payload of [bash('npm test'), bash('gh pr view 3'), { tool_name: 'Edit', tool_input: { file_path: 'x' } }, 'pas du JSON', '']) {
     const result = runHook(payload);
     assert.equal(result.status, 0, JSON.stringify(payload));
@@ -156,7 +158,8 @@ test('the hook script allows silently, and honours the environment authorisation
   }
   assert.equal(runHook(bash('apv stack merge 3')).status, 2);
   assert.equal(runHook(bash('gh pr merge 3 --merge'), { APV_ALLOW_MERGE: '1' }).status, 2, 'never through gh');
-  const allowed = runHook(bash('apv stack merge 3'), { APV_ALLOW_MERGE: '1' });
+  assert.equal(runHook(bash('apv stack merge 3'), { APV_ALLOW_MERGE: '1' }).status, 2, 'the environment of the hook authorises nothing');
+  const allowed = runHook(bash('APV_ALLOW_MERGE=1 apv stack merge 3'));
   assert.equal(allowed.status, 0);
   assert.equal(allowed.stdout, '');
 });

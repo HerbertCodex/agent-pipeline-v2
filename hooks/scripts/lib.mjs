@@ -1,6 +1,6 @@
 // Shared helpers for the APV plugin hooks. Node built-ins only: hooks run
 // before any dependency install and must never fail because of a package.
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -143,13 +143,22 @@ function environmentFileByName(path) {
 }
 
 /**
- * 'settings', 'profile' or null for a path, the one function both guards use: its canonical form (canonicalPath), then
- * the file a symbolic link leads to (the path itself, or its folder when the file does not exist yet).
+ * 'settings', 'profile' or null for a path, the one function both guards use: its canonical form (canonicalPath), the
+ * file a symbolic link leads to (the path itself, or its folder when the file does not exist yet), and a hard link to one
+ * of the files the session loads (`where.places`, knownEnvironmentFiles: same device and inode).
  */
 export function environmentFile(path, where = {}) {
   const p = canonicalPath(path, where);
   const byName = environmentFileByName(p);
   if (byName) return byName;
+  try {
+    const st = lstatSync(p);
+    if (st.isFile() && st.nlink > 1) {
+      for (const place of where.places ?? []) {
+        try { const o = statSync(place.path); if (o.dev === st.dev && o.ino === st.ino) return place.kind; } catch { /* absent */ }
+      }
+    }
+  } catch { /* not there */ }
   try { return environmentFileByName(realpathSync(p).replace(/\\/g, '/')); } catch { /* not there: its folder */ }
   try { return environmentFileByName(posix.join(realpathSync(posix.dirname(p)).replace(/\\/g, '/'), posix.basename(p))); } catch { return null; }
 }
@@ -205,6 +214,47 @@ export function namesApvVariable(text) {
  */
 const CODE_VARIABLES = /NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|BASH_ENV|DYLD_[A-Z_]+/i;
 const CODE_VARIABLE_NAME = /^(?:NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|BASH_ENV|DYLD_[A-Z_]+|ENV)$/i;
+/**
+ * Names refused in the env block of the settings: the variables of the tool, those that run code, and those the hooks or
+ * git read to decide (PATH, HOME, the folders of Claude Code and of the project, git's own, the configuration folder, zsh's).
+ * A list of refusals, not of permissions: Claude Code documents many variables of its own, and the operator his.
+ */
+const SETTINGS_ENV_REFUSED = /^(?:APV_\w*|GIT_\w*|LD_\w*|DYLD_\w*|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|ZDOTDIR|PATH|HOME|XDG_CONFIG_HOME|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_ROOT|CLAUDE_CONFIG_DIR)$/i;
+
+/**
+ * Settings read as Claude Code may read them: JSON, or JSON with comments and trailing commas (JSONC); null when neither.
+ */
+export function parseSettings(text) {
+  const raw = String(text ?? '');
+  try { return JSON.parse(raw); } catch { /* JSONC? */ }
+  let out = '';
+  for (let k = 0; k < raw.length; k += 1) {
+    const c = raw[k];
+    if (c === '"') {
+      let e = k + 1;
+      while (e < raw.length && raw[e] !== '"') e += raw[e] === '\\' ? 2 : 1;
+      out += raw.slice(k, e + 1); k = e; continue;
+    }
+    if (c === '/' && raw[k + 1] === '/') { while (k < raw.length && raw[k] !== '\n') k += 1; out += '\n'; continue; }
+    if (c === '/' && raw[k + 1] === '*') { const end = raw.indexOf('*/', k + 2); if (end < 0) return null; k = end + 1; continue; }
+    out += c;
+  }
+  try { return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1')); } catch { return null; }
+}
+
+/** What settings hold that the guards refuse, one entry per key with its value: `env.<NAME>`, `disableAllHooks`, `enabledPlugins.<apv>`. */
+function refusedSettings(value) {
+  const out = [];
+  if (!value || typeof value !== 'object') return out;
+  const env = value.env;
+  if (env && typeof env === 'object') {
+    for (const [key, v] of Object.entries(env)) if (SETTINGS_ENV_REFUSED.test(key) || namesApvVariable(key) || CODE_VARIABLE_NAME.test(key)) out.push([`env.${key}`, v]);
+  }
+  if (value.disableAllHooks !== undefined && value.disableAllHooks !== false) out.push(['disableAllHooks', value.disableAllHooks]);
+  const plugins = value.enabledPlugins;
+  if (plugins && typeof plugins === 'object') for (const [key, v] of Object.entries(plugins)) if (/^apv(?:@|$)/i.test(key) && v !== true) out.push([`enabledPlugins.${key}`, v]);
+  return out;
+}
 
 /** Whether a text names a variable that makes a program run other code, even rebuilt. */
 export function namesCodeVariable(text) {
@@ -212,30 +262,18 @@ export function namesCodeVariable(text) {
 }
 
 /**
- * What settings of Claude Code hold that a guard watches, one entry per value: an APV variable, a variable that runs
- * code or PATH in `env`; `disableAllHooks` set; the plugin apv not enabled in `enabledPlugins`. A text that is not JSON
- * (Claude Code would not read it), by the names it holds.
+ * What settings of Claude Code hold that a guard watches, one entry per value (refusedSettings). A text that is neither
+ * JSON nor JSONC (Claude Code would not read it), by the names it holds.
  */
 export function settingsGuarded(text) {
   const out = new Set();
-  let value;
-  try { value = JSON.parse(String(text ?? '')); } catch {
-    const words = compact(text).match(/APV_\w*|NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|BASH_ENV|DYLD_\w*|disableAllHooks|enabledPlugins|"(?:PATH|ENV)"/gi) ?? [];
+  const value = parseSettings(text);
+  if (value === null) {
+    const words = compact(text).match(/APV_\w*|GIT_\w*|NODE_OPTIONS|NODE_PATH|LD_\w*|DYLD_\w*|BASH_ENV|disableAllHooks|enabledPlugins|"(?:PATH|ENV|HOME|ZDOTDIR|XDG_CONFIG_HOME|CLAUDE_\w+)"/gi) ?? [];
     for (const w of words) out.add(`texte:${w.toUpperCase()}`);
     return out;
   }
-  if (!value || typeof value !== 'object') return out;
-  const env = value.env;
-  if (env && typeof env === 'object') {
-    for (const [key, v] of Object.entries(env)) {
-      if (namesApvVariable(key) || CODE_VARIABLE_NAME.test(key) || /^PATH$/i.test(key)) out.add(`env:${key}=${JSON.stringify(v)}`);
-    }
-  }
-  if (value.disableAllHooks !== undefined && value.disableAllHooks !== false) out.add(`disableAllHooks=${JSON.stringify(value.disableAllHooks)}`);
-  const plugins = value.enabledPlugins;
-  if (plugins && typeof plugins === 'object') {
-    for (const [key, v] of Object.entries(plugins)) if (/^apv(?:@|$)/i.test(key) && v !== true) out.add(`enabledPlugins:${key}=${JSON.stringify(v)}`);
-  }
+  for (const [key, v] of refusedSettings(value)) out.add(`${key}=${JSON.stringify(v)}`);
   return out;
 }
 
@@ -280,5 +318,73 @@ export function commandSetsCodeVariable(command) {
 
 /** Whether a command's text puts in settings what they must not hold: env, a switched-off hook or plugin, PATH or ENV. */
 export function commandTouchesGuardedSettings(command) {
-  return /disableAllHooks|enabledPlugins|"?\b(?:PATH|ENV)\b"?\s*:/i.test(flatten(decodeEscapes(command)));
+  return /disableAllHooks|enabledPlugins|"?\b(?:PATH|ENV|HOME|ZDOTDIR|XDG_CONFIG_HOME|CLAUDE_\w+|GIT_\w+)\b"?\s*:/i.test(flatten(decodeEscapes(command)));
+}
+
+/** The profiles of the shells the session may load at its start, under the home of the account. */
+const LOADED_PROFILES = ['.bashrc', '.profile', '.bash_profile', '.bash_login', '.bash_aliases', '.zshrc', '.zshenv', '.zprofile'];
+/** Settings Claude Code manages for the whole machine. */
+const MANAGED_SETTINGS = ['/etc/claude-code/managed-settings.json', '/Library/Application Support/ClaudeCode/managed-settings.json'];
+
+/**
+ * The files that set the environment of the session at its start: the settings of the account, of each project folder
+ * (the folder of the session and its parents, the project folder Claude Code gives), the managed settings, the profiles.
+ */
+export function knownEnvironmentFiles({ home, projectDirs = [] }) {
+  const settings = [...MANAGED_SETTINGS];
+  const dirs = new Set();
+  for (const start of [home, ...projectDirs]) {
+    if (typeof start !== 'string' || !start) continue;
+    for (let dir = posix.normalize(start.replace(/\\/g, '/')); ; dir = posix.dirname(dir)) {
+      dirs.add(dir);
+      if (dir === '/' || dir === '.' || posix.dirname(dir) === dir) break;
+    }
+  }
+  for (const dir of dirs) settings.push(posix.join(dir, '.claude', 'settings.json'), posix.join(dir, '.claude', 'settings.local.json'));
+  return [...new Set(settings)].map(path => ({ path, kind: 'settings' }))
+    .concat(home ? LOADED_PROFILES.map(name => ({ path: posix.join(home, name), kind: 'profile' })) : []);
+}
+
+/** The folders of the project of a hook call: its working folder, and the project folder Claude Code gives. */
+export function projectDirsOf(input, env = process.env) {
+  return [typeof input?.cwd === 'string' ? input.cwd : null, typeof env.CLAUDE_PROJECT_DIR === 'string' ? env.CLAUDE_PROJECT_DIR : null, process.cwd()].filter(Boolean);
+}
+
+/** The names a profile sets that the guards refuse: an APV variable or a variable that runs code (comments skipped). */
+function refusedInProfile(text) {
+  const out = [];
+  for (const raw of String(text ?? '').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    for (const name of namesSet(flatten(line))) if (/^APV_/i.test(name) || CODE_VARIABLE_NAME.test(name)) out.push(name);
+  }
+  return out;
+}
+
+/**
+ * What the files the session loads hold that the guards refuse, read from the files themselves whatever wrote them (a
+ * cd, a computed path, a hard link, an interpreter): one line « <file> : <key> » per finding, empty when none. Settings
+ * that are neither JSON nor JSONC are refused as unreadable. Nothing is repaired: the operator removes the line himself.
+ */
+export function environmentIntegrity({ home, projectDirs = [] }) {
+  const problems = [];
+  for (const { path, kind } of knownEnvironmentFiles({ home, projectDirs })) {
+    let text;
+    try { text = readFileSync(path, 'utf8'); } catch { continue; }
+    if (kind === 'settings') {
+      const value = parseSettings(text);
+      if (value === null) { problems.push(`${path} : réglages illisibles (ni JSON ni JSONC)`); continue; }
+      for (const [key] of refusedSettings(value)) problems.push(`${path} : ${key}`);
+    } else {
+      for (const name of refusedInProfile(text)) problems.push(`${path} : ${name}`);
+    }
+  }
+  return [...new Set(problems)];
+}
+
+/** The refusal of a tool call while the files the session loads hold what the guards refuse. */
+export function integrityReason(problems) {
+  return `APV : outil refusé. Les fichiers que la session charge au lancement contiennent ce que les garde-fous interdisent : ${problems.slice(0, 10).join(' ; ')}${problems.length > 10 ? ' ; ...' : ''}. `
+    + "Ces valeurs lèveraient ou contourneraient un garde-fou (fusion, déploiement, crochets) sans commande. L'opérateur retire lui-même ces lignes, dans son terminal, "
+    + 'puis relance la session si une variable a déjà été chargée ; rien n\'est réparé automatiquement. Docs : docs/REGLES.md, « Ancrage ».';
 }

@@ -10,7 +10,8 @@ import { spawnSync } from 'node:child_process';
 import { accessSync, constants as fsConstants, existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DOMAIN_REVIEWERS, agentName, commandSetsCodeVariable, commandTouchesGuardedSettings, environmentFilesIn, flatten, isMainModule, namesAnchor, namesApvVariable, readHookInput } from './lib.mjs';
+import { userInfo } from 'node:os';
+import { DOMAIN_REVIEWERS, agentName, commandSetsCodeVariable, commandTouchesGuardedSettings, environmentFilesIn, environmentIntegrity, flatten, integrityReason, isMainModule, knownEnvironmentFiles, namesAnchor, namesApvVariable, projectDirsOf, readHookInput } from './lib.mjs';
 import { EMPTY_CONTEXT, HARNESS_REASONS, cdTarget, commandWords, hookContext, installProblem, killProblem, lockWrapper, mergeHeld, remoteWriteProblem, stackProblem } from './harness-guard.mjs';
 
 export { HARNESS_REASONS };
@@ -1301,11 +1302,11 @@ export function isProductionDeploy(words) {
 }
 
 /**
- * An explicit authorisation: set in the hook environment, or as an assignment set for the command itself (before it,
- * or after a prefix such as `env` or `timeout`, as `commandWords` reads them).
+ * An explicit authorisation: an assignment written for the command itself (before it, or after a prefix such as `env`
+ * or `timeout`, as `commandWords` reads them). Never the environment of the hook: settings or a shell profile could put
+ * it there for every command, without one being typed (review of #134).
  */
-function authorised(words, variable, env) {
-  if (env[variable] === '1') return true;
+function authorised(words, variable) {
   const assignments = apvCall(words)?.assignments ?? commandWords(words)?.assignments ?? [];
   return assignments.includes(`${variable}=1`);
 }
@@ -1397,27 +1398,44 @@ const ENV_LITERAL_WRITERS = new Set(['echo', 'printf', 'tee', 'true', ':', 'touc
 
 /**
  * Whether a command may put in a file that sets the environment of the session and of its hooks (the settings of Claude
- * Code, a shell profile, named by any equivalent path or a link: lib.mjs, environmentFilesIn) what the guards watch. Such
- * a file named, the line is refused when its text names an APV variable or a variable that runs code, even rebuilt
- * (escapes, quotes, pieces side by side, printf formats), or sets ENV; unless it only reads, when it writes into settings
- * an env block value, PATH, disableAllHooks or enabledPlugins, and when what it writes is not the text it shows: an
- * expansion (`$`, a backquote), a program that computes or copies (sed, tr, jq, cp, mv, an interpreter...), `cat` of a
- * file. A line that writes such a variable through a redirection or tee to a computed target (`>> ~/$f`) is refused too.
+ * Code, a shell profile, named by any equivalent path, a link, or a bare name from the folder a cd of the line leads to:
+ * lib.mjs, environmentFilesIn) what the guards watch. Such a file named, the line is refused when its text names an APV
+ * variable or a variable that runs code, even rebuilt (escapes, quotes, pieces side by side, printf formats), or sets
+ * ENV; unless it only reads, when it writes into settings PATH, HOME, a variable of git or of Claude Code,
+ * disableAllHooks or enabledPlugins, and when what it writes is not the text it shows: an expansion (`$`, a backquote),
+ * a program that computes or copies (sed, tr, jq, cp, mv, ln, an interpreter...), `cat` of a file. Refused too: such a
+ * value written through a redirection or tee to a computed target (`>> ~/$f`), a settings file written after a cd the
+ * guard cannot follow, a hard link with a computed name. The first net only: the files themselves are read at every
+ * tool call (environmentIntegrity).
  */
 export function environmentCommandProblem(command, segments, shadow, where = {}) {
   const flat = flatten(String(command));
   const guarded = namesApvVariable(command) || commandSetsCodeVariable(command);
-  const words = segments.map(w => commandWords(w)?.words ?? w).filter(w => w.length);
+  const settingsValue = commandTouchesGuardedSettings(command);
+  // A change of folder is no reader nor writer: judged by where it leads.
+  const words = segments.map(w => commandWords(w)?.words ?? w).filter(w => w.length && !['cd', 'pushd', 'popd'].includes(basename(w[0])));
   const outputs = [...String(command).matchAll(/(?:^|[^<&\d])\d?>{1,2}\|?\s*([^\s;&|<>()]+)/g)].map(m => m[1])
     .concat(words.filter(w => basename(w[0]) === 'tee').flatMap(w => w.slice(1).filter(a => !a.startsWith('-'))));
   const redirects = /(?:^|[^<&\d-])\d?>{1,2}(?!&)/.test(String(shadow ?? command));
+  const writes = redirects || words.some(w => !ENV_READERS.has(basename(w[0])));
+  // A hard link under a computed name may give a neutral name to a settings file or a profile.
+  if (words.some(w => basename(w[0]) === 'ln' && !w.slice(1).some(a => /^-[a-zA-Z]*s|^--symbolic$/.test(a)) && w.slice(1).some(a => /[$`*?[]/.test(a)))) return true;
+  // Each simple command judged from the folder it runs in: a cd of the line leads there (cdTarget, as the stores).
   const kinds = environmentFilesIn(command, where);
+  let dir = where.cwd ?? null;
+  let lost = false;
+  for (const segment of segments) {
+    const moved = cdTarget(segment, dir, where.home ?? null);
+    if (moved !== undefined) { if (moved === null) lost = true; else dir = moved; continue; }
+    for (const kind of environmentFilesIn(segment.join(' '), { ...where, cwd: dir })) kinds.add(kind);
+  }
+  if (lost && writes && /settings[\w.-]*\.json|managed-settings/i.test(flat)) return true;
   if (!kinds.size) {
-    return guarded && outputs.some(target => /[$`*?[~]/.test(target) && !/^\/dev\/(?:null|stdout|stderr)$/.test(target));
+    return (guarded || settingsValue) && outputs.some(target => /[$`*?[~]/.test(target) && !/^\/dev\/(?:null|stdout|stderr)$/.test(target));
   }
   if (guarded) return true;
-  if (!redirects && words.every(w => ENV_READERS.has(basename(w[0])) && !(basename(w[0]) === 'jq' && w.includes('--in-place')))) return false;
-  if (kinds.has('settings') && commandTouchesGuardedSettings(command)) return true;
+  if (!writes) return false;
+  if (kinds.has('settings') && settingsValue) return true;
   if (/[$`]/.test(flat)) return true;
   return !words.every(w => {
     const name = basename(w[0]);
@@ -1455,14 +1473,18 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
   if (mergeApi) {
     if (context.agentId) return { decision: 'deny', reason: REASONS.mergeBySubagent };
     if (active) return { decision: 'deny', reason: explain(REASONS.rawMerge) };
-    // The authorisation is set for the command that merges (or in the environment), never elsewhere in the line.
+    // The authorisation is set for the command that merges, never elsewhere in the line nor in the environment.
     const merging = segments.filter(w => MERGE_API.test(flatten(w.join(' '))));
-    if (env.APV_ALLOW_MERGE !== '1' && !merging.some(w => authorised(w, 'APV_ALLOW_MERGE', env))) return { decision: 'deny', reason: REASONS.mergeOutside };
+    if (!merging.some(w => authorised(w, 'APV_ALLOW_MERGE'))) return { decision: 'deny', reason: REASONS.mergeOutside };
   }
   if (active && /--git-common-dir/.test(flat) && !/^\s*git\s+rev-parse(\s+--path-format=(absolute|relative))?\s+--git-common-dir\s*$/.test(flat)) return { decision: 'deny', reason: REASONS.commonDir };
   if (active && /(^|[\s;&|(])eval\b/.test(flat) && /\bapv\b|cli\.js/.test(flat)) return { decision: 'deny', reason: REASONS.computedApv };
   if (/\bAPV_ENTRY\b|\bAPV_ANCHOR_KEY_FILE\b/.test(flat)) return { decision: 'deny', reason: REASONS.toolVariable };
-  if (environmentCommandProblem(command, segments, shadow, { cwd: start && start.known ? start.dir : context.cwd ?? null, home: context.home ?? null })) return { decision: 'deny', reason: REASONS.environmentFile };
+  {
+    const where = { cwd: start && start.known ? start.dir : context.cwd ?? null, home: context.home ?? null };
+    where.places = knownEnvironmentFiles({ home: where.home, projectDirs: [where.cwd].filter(Boolean) });
+    if (environmentCommandProblem(command, segments, shadow, where)) return { decision: 'deny', reason: REASONS.environmentFile };
+  }
   if (decodedAndUsed(command) || decodedAndUsed(flat)) return { decision: 'deny', reason: REASONS.encodedPath };
   // A script or substitution run by a command of the line is judged in the folder where that command runs.
   const store = storeProblem(segments, start && start.known ? start.dir : context.cwd ?? null, context.home ?? null, command, shadow, scripts);
@@ -1560,9 +1582,9 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
       // A merge through gh skips the rules the tool checks before any merge: only apv stack merge merges (where the tool
       // is active; elsewhere, gh pr merge needs APV_ALLOW_MERGE=1, as before the rules).
       if (raw?.merge && active) return { decision: 'deny', reason: explain(REASONS.rawMerge) };
-      if (write.merge && !authorised(words, 'APV_ALLOW_MERGE', env)) return { decision: 'deny', reason: raw?.merge && !active ? REASONS.mergeOutside : REASONS.merge };
+      if (write.merge && !authorised(words, 'APV_ALLOW_MERGE')) return { decision: 'deny', reason: raw?.merge && !active ? REASONS.mergeOutside : REASONS.merge };
     }
-    if (isProductionDeploy(words) && !authorised(words, 'APV_ALLOW_DEPLOY', env)) {
+    if (isProductionDeploy(words) && !authorised(words, 'APV_ALLOW_DEPLOY')) {
       return { decision: 'deny', reason: REASONS.deploy };
     }
   }
@@ -1573,7 +1595,10 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
 async function main() {
   const input = await readHookInput();
   if (!input || input.tool_name !== 'Bash') return 0;
-  const result = evaluateCommand(input.tool_input?.command, process.env, hookContext(input, process.env));
+  // What the files the session loads hold, read at every call whatever wrote them (the home of the account, never HOME).
+  const integrity = environmentIntegrity({ home: userInfo().homedir, projectDirs: projectDirsOf(input) });
+  const result = integrity.length ? { decision: 'deny', reason: integrityReason(integrity) }
+    : evaluateCommand(input.tool_input?.command, process.env, hookContext(input, process.env));
   if (result.decision === 'allow') return 0;
   process.stdout.write(`${JSON.stringify({
     hookSpecificOutput: {

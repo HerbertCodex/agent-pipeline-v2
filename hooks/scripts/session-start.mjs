@@ -3,7 +3,8 @@
 // (APV3 spec, section 11). Read-only, bounded output, silent when there is no `.apv/`.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { findApvDir, isMainModule, oneLine, readHookInput } from './lib.mjs';
+import { userInfo } from 'node:os';
+import { environmentIntegrity, findApvDir, integrityReason, isMainModule, oneLine, projectDirsOf, readHookInput } from './lib.mjs';
 
 const MAX_CONTEXT = 4000;
 const MAX_NOTES_LINES = 40;
@@ -178,11 +179,14 @@ export function buildResumeContext(apvDir, summary = null, freshness = null, fre
 
 async function main() {
   const input = await readHookInput();
+  // What the files the session loaded hold: said at the start (every tool call is then refused by the guards).
+  const integrity = environmentIntegrity({ home: userInfo().homedir, projectDirs: projectDirsOf(input) });
   const apvDir = findApvDir(input);
-  if (!apvDir) return 0;
+  if (!apvDir && !integrity.length) return 0;
+  const context = [integrity.length ? integrityReason(integrity) : null, apvDir ? buildResumeContext(apvDir, await loadRunSummary(), await loadFreshness()) : null].filter(Boolean).join('\n\n');
   process.stdout.write(`${JSON.stringify({
-    systemMessage: 'APV : contexte de reprise chargé depuis .apv/state.',
-    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: buildResumeContext(apvDir, await loadRunSummary(), await loadFreshness()) },
+    systemMessage: integrity.length ? `APV : réglages ou profils à corriger par l'opérateur : ${integrity.slice(0, 5).join(' ; ')}` : 'APV : contexte de reprise chargé depuis .apv/state.',
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context },
   })}\n`);
   return 0;
 }

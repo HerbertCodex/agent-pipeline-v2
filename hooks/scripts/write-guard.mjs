@@ -4,8 +4,8 @@
 // `apv/reviews/`, merge traces `apv/merges/`) and the anchor key (`~/.apv-ancrage/cle-ancrage`) that signs them
 // (docs/REGLES.md, « Ancrage »). A guard rail, not a sandbox: a script written elsewhere and run later escapes it.
 import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { canonicalPath, environmentFile, isMainModule, namesAnchor, profileMaySetGuarded, readHookInput, settingsAddGuarded } from './lib.mjs';
+import { userInfo } from 'node:os';
+import { canonicalPath, environmentFile, environmentIntegrity, integrityReason, isMainModule, knownEnvironmentFiles, namesAnchor, profileMaySetGuarded, projectDirsOf, readHookInput, settingsAddGuarded } from './lib.mjs';
 
 export const WRITE_REASON = 'APV : accès refusé à un magasin que seuls l\'outil et ses crochets écrivent (apv/operator : les mots tapés par l\'opérateur ; ' +
   'apv/reviews : les relectures ; apv/merges : les fusions) ou à la clé d\'ancrage qui les signe. Une validation ne s\'écrit pas à la main : l\'opérateur la tape dans la session, ' +
@@ -33,7 +33,8 @@ function editedContent(text, edits) {
 export function environmentWriteProblem(input) {
   const tool = input?.tool_input ?? {};
   if (typeof tool.file_path !== 'string') return false;
-  const where = { cwd: typeof input?.cwd === 'string' ? input.cwd : null, home: homedir() };
+  const where = { cwd: typeof input?.cwd === 'string' ? input.cwd : null, home: userInfo().homedir };
+  where.places = knownEnvironmentFiles({ home: where.home, projectDirs: projectDirsOf(input, {}) });
   const kind = environmentFile(tool.file_path, where);
   if (!kind) return false;
   const file = canonicalPath(tool.file_path, where);
@@ -66,7 +67,9 @@ export function evaluateWrite(input) {
 
 async function main() {
   const input = await readHookInput();
-  const result = evaluateWrite(input);
+  // What the files the session loads hold, read at every call whatever wrote them (the home of the account, never HOME).
+  const integrity = environmentIntegrity({ home: userInfo().homedir, projectDirs: projectDirsOf(input) });
+  const result = integrity.length ? { decision: 'deny', reason: integrityReason(integrity) } : evaluateWrite(input);
   if (result.decision === 'allow') return 0;
   process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: result.reason } })}\n`);
   process.stderr.write(`${result.reason}\n`);
