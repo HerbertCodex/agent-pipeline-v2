@@ -507,6 +507,24 @@ test('faible : la cible rafraîchie après une poussée refusée qui change rule
   refused(report, 'config');
 });
 
+test('faible (confirmation de #132) : la cible rafraîchie après une poussée refusée qui change rules.ciProof est refusée (config)', async t => {
+  const sc = scenario(t);
+  const dir = sc.repo.dir;
+  let done = false;
+  const report = await sc.run({ beforePush: async () => {
+    if (done) return; done = true;
+    // Same keys, same setup, same variables: only the proof by the CI the merge reads at the new base changes.
+    const config = orderConfig(sc.s.pem);
+    config.gates = [{ id: 'integration', stage: 'full', command: [process.execPath, '-e', '0'] }];
+    config.rules.ciProof = { workflow: CI_WORKFLOW, job: 'preuve-complete', name: CI_NAME, gates: ['integration'], artifact: 'apv-recus' };
+    put(dir, '.apv/config.json', JSON.stringify(config, null, 2));
+    git(dir, 'commit', '-qam', 'preuve CI déclarée'); git(dir, 'push', '-q', 'origin', 'main');
+    git(dir, 'switch', '-q', 'publication/x'); git(dir, 'merge', '-q', '--no-edit', 'main'); git(dir, 'push', '-q', 'origin', 'publication/x'); git(dir, 'switch', '-q', 'main');
+  } });
+  refused(report, 'config');
+  assert.match(report.reason, /rules\.ciProof/);
+});
+
 test('faible : attestation en HTTP refusée, boucle locale comprise, sans aucun mode qui la permette', () => {
   const s = signer();
   const raw = { rules: { operatorOrders: { ...orderConfig(s.pem).rules.operatorOrders, attestation: { url: 'http://127.0.0.1:8080/a?nonce={nonce}&challenge={challenge}' } } } };
