@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APV_DIR, apvGitignoreMissing, ensureApvGitignore } from '../config/apv-files.js';
+import { NEW_PROJECT_MODELS } from '../config/models.js';
 import { CONFIG_FILE, configIssues, loadConfig } from '../config/load.js';
 import { worktreeFiles } from '../knowledge/inventory.js';
 import { apvOnPath, detectReuse, MAP_GATE, REUSE_GATE, STRUCTURE_GATE } from '../reuse/detect.js';
@@ -27,7 +28,9 @@ des implementers, depuis le modèle de la compétence chef-de-projet), specs/, s
 contrôles code-map (apv map --check) et, pour un projet web, reuse (apv reuse check) avec la section reuse
 détectée (dossiers partagés, composant qui remplace chaque élément natif réservé, langue, branche de référence)
 et structure (apv structure check) : les contrôles qu'exigent les règles avant fusion (docs/REGLES.md). Une
-configuration existante n'est jamais modifiée : les contrôles requis qui lui manquent sont listés.
+configuration existante n'est jamais modifiée : les contrôles requis qui lui manquent sont listés. La configuration
+créée porte aussi la section models d'un nouveau projet (Sonnet partout, Opus pour l'architecte des données et
+la relecture sécurité et règles, Haiku pour la recherche, effort high ; docs/CONFIGURATION.md).
 Si la configuration déclare le dossier des maquettes validées (design.dir) ou si ce
 dossier existe, ajoute à .gitattributes « <dossier>/*.html -whitespace » quand Git ne l'applique pas déjà. Liste ce qui est créé et ce qui existait déjà. Refuse hors d'un dépôt Git.
 Dépôt GitHub (adresse de origin) : lit son réglage delete_branch_on_merge (gh api repos/<propriétaire>/<dépôt>) et,
@@ -193,7 +196,9 @@ export async function initProject(repo, name, pluginRoot = PLUGIN_ROOT) {
     const template = readBriefTemplate(pluginRoot);
     const proposal = detectReuse(repo, await worktreeFiles(repo));
     const configExists = existsSync(join(repo, CONFIG_FILE));
-    const { document, gates } = reuseConfig(name, proposal);
+    const { document: base, gates } = reuseConfig(name, proposal);
+    // A new project gets the economical models of the operator (src/config/models.ts); an existing configuration is never touched.
+    const document = { ...base, models: NEW_PROJECT_MODELS };
     const { issues } = configIssues(document);
     if (!configExists && issues.length)
         throw new PipelineError('INIT', `Configuration détectée refusée par le schéma : ${issues.map(i => i.message).join(' ; ')}`);

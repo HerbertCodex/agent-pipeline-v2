@@ -24,4 +24,5 @@ allowed-tools: Read Glob Grep Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js status
    - ce qui bloque et pourquoi ; décisions qui l'attendent ;
    - quota (dernier relevé, heure du relevé) et verrous tenus ou expirés ;
    - prochaine action recommandée.
+   - **À la question « je dois faire quoi ? »** la liste est COMPLÈTE, jamais seulement ce que `apv status` affiche : (1) les notes de reprise (`.apv/state/resume.md` et les fichiers de pilotage déclarés dans `freshness.paths`) ; (2) les actions ouvertes de la page de suivi du projet (le fichier ou l'artefact que le projet tient à jour, nommé dans `.apv/brief.md` ou `resume.md`) ; (3) les questions ouvertes de chaque spec en brouillon (`questions` de `.apv/specs/*.json`). Chaque ligne dit ce qui est attendu de l'opérateur et ce qui est à toi.
 4. N'invente rien : une source illisible ou absente est signalée comme telle. Aucun tiret cadratin ni demi-cadratin dans ta réponse.

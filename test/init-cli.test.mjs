@@ -1,3 +1,4 @@
+import { NEW_PROJECT_MODELS } from '../dist/config/models.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -19,7 +20,7 @@ test('apv init creates .apv/ with a valid ledger, a named configuration and the 
   assert.deepEqual(out.created, ['.apv/', '.apv/config.json', '.apv/DECISIONS.json', '.apv/brief.md', '.apv/specs/', '.apv/state/', '.apv/.gitignore', '.apv/code-map.md', 'docs/carte-architecture.md']);
   assert.deepEqual([out.existing, out.completed], [[], []]);
   // Not a web project: the tree and the code map checks, no reuse section.
-  assert.deepEqual(JSON.parse(read(f.repo, '.apv/config.json')), { name: 'Toujours rien', gates: [
+  assert.deepEqual(JSON.parse(read(f.repo, '.apv/config.json')), { name: 'Toujours rien', models: NEW_PROJECT_MODELS, gates: [
     { id: 'structure', command: ['apv', 'structure', 'check', '--base', '{{baseSha}}'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true },
     { id: 'code-map', command: ['apv', 'map', '--check'], covers: ['architecture'], stage: 'task', readOnly: true, mandatory: true },
   ] });
