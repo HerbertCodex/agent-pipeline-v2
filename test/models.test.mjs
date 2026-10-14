@@ -2,8 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { modelSettings } from '../dist/config/models.js';
 import { configIssues } from '../dist/config/load.js';
-import { DEFAULT_MODELS, MODEL_KEYS } from '../dist/config/models.js';
+import { DEFAULT_MODELS, MODEL_KEYS, NEW_PROJECT_MODELS } from '../dist/config/models.js';
 
 test('the models section is optional: absent, the defaults of the pilot project apply', () => {
   const { config, issues } = configIssues({});
@@ -71,4 +74,25 @@ test('apv status keeps the defaults when the configuration is invalid', async t 
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /Configuration : \.apv\/config\.json ; invalide/);
   assert.match(r.stdout, /Modèles par rôle : chef fable .*\(effort high\) \(défauts\)/);
+});
+
+test('the models of a NEW project are valid, economical and written by apv init; an existing configuration is left alone', async t => {
+  const { config, issues } = configIssues({ models: NEW_PROJECT_MODELS });
+  assert.deepEqual(issues, []);
+  assert.deepEqual(config.models, NEW_PROJECT_MODELS);
+  const { roles, effort } = modelSettings(NEW_PROJECT_MODELS);
+  assert.equal(effort, 'high');
+  // Opus only for the data architect and the security and rules key; Sonnet for every other role the plugin has.
+  assert.deepEqual(Object.entries(roles).filter(([, m]) => m === 'opus').map(([r]) => r).sort(), ['architecte-donnees', 'relecture-securite-regles']);
+  assert.equal(roles.recherche, 'haiku');
+  for (const role of ['conception', 'implementer', 'fondations', 'integrateur', 'relecture', 'dpo', 'qa-securite']) assert.equal(roles[role], 'sonnet', role);
+  // The existing projects keep the historical defaults.
+  assert.equal(DEFAULT_MODELS.roles.conception, 'opus');
+  const fresh = fixture(t);
+  assert.equal((await apv(fresh.repo, ['init', '--name', 'neuf'])).code, 0);
+  assert.deepEqual(JSON.parse(readFileSync(join(fresh.repo, '.apv/config.json'), 'utf8')).models, NEW_PROJECT_MODELS);
+  const existing = fixture(t);
+  write(existing.repo, '.apv/config.json', { name: 'ancien', gates: [] });
+  assert.equal((await apv(existing.repo, ['init', '--name', 'ancien'])).code, 0);
+  assert.equal(JSON.parse(readFileSync(join(existing.repo, '.apv/config.json'), 'utf8')).models, undefined);
 });

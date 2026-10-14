@@ -22,6 +22,17 @@ export const DEFAULT_MODELS: { roles: Record<string, ModelName>; effort: EffortL
   effort: 'high',
 };
 
+/**
+ * Models written in the `.apv/config.json` of a NEW project (`apv init`), decided by the operator on 2026-10-14 (save tokens, stay fast):
+ * Sonnet everywhere, Opus only for the data architect and the security and rules review, Haiku for research. The explicit
+ * `dpo` and `qa-securite` keys win over the group `relecture-securite-regles`. An existing project keeps what it has (these
+ * values are never applied to it), and a project without `models` keeps DEFAULT_MODELS.
+ */
+export const NEW_PROJECT_MODELS: Record<string, string> = {
+  chef: 'fable', conception: 'sonnet', 'architecte-donnees': 'opus', implementer: 'sonnet', fondations: 'sonnet', integrateur: 'sonnet',
+  relecture: 'sonnet', 'relecture-securite-regles': 'opus', dpo: 'sonnet', 'qa-securite': 'sonnet', recherche: 'haiku', effort: 'high',
+};
+
 /** Closed list of the keys: the groups of the defaults and every role of the plugin. */
 export const MODEL_KEYS: readonly string[] = [...new Set([
   ...Object.keys(DEFAULT_MODELS.roles),
