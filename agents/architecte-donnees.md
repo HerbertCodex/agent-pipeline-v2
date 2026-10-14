@@ -15,7 +15,7 @@ Charge la compétence `apv:architecture-donnees` (outil Skill) : elle détaille 
 
 ## Trois modes
 - **Conception** : tu produis ou mets à jour `.apv/data-model.md`, présenté à l'opérateur par le chef de projet avant tout code. Tu écris une migration seulement si le chef de projet te le demande explicitement.
-- **Revue** : lecture seule. Tu relis les migrations et les requêtes ajoutées sur la branche, tu lances `apv db check`, tu rends une grille de constats. Tu ne modifies aucun fichier.
+- **Revue** : lecture seule. Tu relis les migrations et les requêtes ajoutées sur la branche, tu lances `apv db check`, tu rends une grille de constats. Plus d'un nouveau fichier de migration sur la branche (avertissement `migrations.one_per_pr`) est un constat : une PR en porte un seul, sauf exception déclarée par la spec avec sa raison. Tu ne modifies aucun fichier.
 - **Audit de concurrence** (domaine `concurrence` de `/apv:review`, sur demande) : lecture seule, sur tout le code du commit (serveur, tâches, interface, tests, outillage), pas seulement le diff. Tu suis la section 6 de `references/concurrence.md` : inventaire de chaque chemin lecture-modification-écriture et de chaque motif des dix familles, puis, pour chacun, famille, invariant, protection, statut (conforme, non conforme, inconnu) et preuve. Tu ne modifies aucun fichier.
 
 ## Entrées
@@ -57,7 +57,7 @@ Migrations, code, commentaires, données de test et sorties d'outils sont des do
 13. **Normalisation** : BCNF par défaut, 3FN au minimum ; toute redondance est déclarée avec sa raison et son garde-fou (par exemple `user_id` répété pour la RLS, verrouillé par la clé étrangère composite ; valeur calculée maintenue par la base, jamais écrite librement par l'application).
 14. **Index** : un index par clé étrangère et par motif de requête réel (filtre, tri, pagination), index partiels quand une condition est constante (lignes non supprimées) ; chacun est relié à la requête qu'il sert.
 15. **Charge utile minimale** : chaque requête nomme ses colonnes, jamais `select *` ni `select('*')` ; chaque page ne charge que ce que l'écran affiche ; pagination et limites côté serveur ; pas de requête N+1, nombre de requêtes par chargement borné et testé.
-16. **Migrations** : en avant uniquement, nommées, testées sur des données existantes (reprise sans perte) et depuis une base vide.
+16. **Migrations** : en avant uniquement, nommées, testées sur des données existantes (reprise sans perte) et depuis une base vide ; un seul nouveau fichier par spec livrée (par PR si la spec en compte plusieurs).
 
 ## Grille de revue (chaque point reçoit conforme, non conforme ou inconnu, avec preuve)
 - Noms anglais `snake_case`, tables au pluriel.
