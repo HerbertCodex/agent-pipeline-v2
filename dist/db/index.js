@@ -6,6 +6,23 @@ import { loadDbConfig } from './config.js';
 import { expandGlobs } from './glob.js';
 import { LIVE_RULES, runLiveChecks } from './live.js';
 import { parseMigrations } from './parser.js';
+import { gitRead } from '../run/git-probe.js';
+export const ONE_MIGRATION_RULE = 'migrations.one_per_pr';
+/** Migration files this branch adds against its base (committed, staged or untracked), sorted; null when there is no base to compare. */
+export function addedMigrations(root, migrations, base) {
+    const candidates = base ? [base] : ['origin/main', 'main', 'origin/master', 'master'];
+    const ref = candidates.find((c) => gitRead(root, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${c}^{commit}`]) !== null);
+    if (!ref)
+        return null;
+    const top = gitRead(root, ['rev-parse', '--show-toplevel']);
+    const mergeBase = gitRead(root, ['merge-base', ref, 'HEAD']);
+    if (!top || !mergeBase)
+        return null;
+    const diff = gitRead(root, ['diff', '--name-only', '--diff-filter=A', '--relative', mergeBase, '--', '.']) ?? '';
+    const untracked = gitRead(root, ['ls-files', '--others', '--exclude-standard', '--', '.']) ?? '';
+    const changed = new Set([...diff.split('\n'), ...untracked.split('\n')].filter(Boolean));
+    return { base: ref, added: migrations.filter((m) => changed.has(m)).sort() };
+}
 const severityOrder = (f) => (f.severity === 'error' ? 0 : 1);
 export function runDbCheck(options) {
     const { config, path, problems } = loadDbConfig(options.root, options.configPath);
@@ -20,6 +37,15 @@ export function runDbCheck(options) {
     const files = migrations
         .sort((a, b) => (a.split('/').pop() ?? a).localeCompare(b.split('/').pop() ?? b))
         .map((file) => ({ path: file, sql: readFileSync(join(options.root, file), 'utf8') }));
+    const added = addedMigrations(options.root, migrations, options.base);
+    if (added && added.added.length > 1) {
+        findings.push({
+            rule: ONE_MIGRATION_RULE, severity: 'warning', file: added.added[0], line: 0, target: 'migrations',
+            message: `${added.added.length} nouveaux fichiers de migration contre ${added.base} (${added.added.join(', ')}) : une PR en production en porte au plus un, appliqué à la main. `
+                + 'Fusionner en un seul fichier (dans l\'ordre, horodatage de la première ou d\'une nouvelle après la base), rejouer depuis une base vide et relancer les tests d\'intégration ; ne jamais toucher une migration déjà sur la base ou en production. '
+                + 'Exception (donnée de semence volumineuse, changement à appliquer avant un déploiement) : la déclarer dans db.exceptions avec la raison.',
+        });
+    }
     const model = parseMigrations(files, { supabaseDefaults: config.supabaseDefaults });
     findings.push(...checkModel(model, config));
     const code = scanCode(options.root, config.codeGlobs, config.codeExclude);

@@ -596,3 +596,54 @@ test('splitCommand splits like a shell without expanding anything', () => {
   assert.deepEqual(splitCommand(''), []);
   assert.throws(() => splitCommand("psql 'x"), /guillemet ' non fermé/);
 });
+
+// ------------------------------------------------------------------ une migration par PR
+
+import { execFileSync } from 'node:child_process';
+
+function repoWithBase(t) {
+  const root = project(t, { 'supabase/migrations/20260101000000_init.sql': GOOD_TABLE });
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd: root, stdio: 'pipe' });
+  git('init', '-q', '-b', 'main');
+  git('add', '.');
+  git('commit', '-q', '-m', 'base');
+  git('checkout', '-q', '-b', 'feat');
+  return { root, git };
+}
+
+test('migrations.one_per_pr: deux nouveaux fichiers de migration donnent un avertissement avec la marche à suivre', (t) => {
+  const { root, git } = repoWithBase(t);
+  writeFileSync(join(root, 'supabase/migrations/20260102000000_a.sql'), 'alter table public.projects add column note text;\n');
+  writeFileSync(join(root, 'supabase/migrations/20260103000000_b.sql'), 'alter table public.projects add column memo text;\n');
+  git('add', '.');
+  git('commit', '-q', '-m', 'deux');
+  const found = byRule(check(root), 'migrations.one_per_pr');
+  assert.equal(found.length, 1);
+  assert.equal(found[0].severity, 'warning');
+  assert.match(found[0].message, /20260102000000_a\.sql, supabase\/migrations\/20260103000000_b\.sql/);
+  assert.match(found[0].message, /Fusionner en un seul fichier/);
+  assert.doesNotMatch(found[0].message, /20260101000000_init/);
+  const { out, io } = captureIO(root);
+  return run(['check'], io).then((code) => { assert.equal(code, 0, out.stdout); });
+});
+
+test('migrations.one_per_pr: un seul nouveau fichier, ou aucun, ne dit rien ; l\'exception déclarée le retire', (t) => {
+  const { root, git } = repoWithBase(t);
+  assert.equal(byRule(check(root), 'migrations.one_per_pr').length, 0);
+  writeFileSync(join(root, 'supabase/migrations/20260102000000_a.sql'), 'alter table public.projects add column note text;\n');
+  git('add', '.');
+  git('commit', '-q', '-m', 'un');
+  assert.equal(byRule(check(root), 'migrations.one_per_pr').length, 0);
+  writeFileSync(join(root, 'supabase/migrations/20260103000000_b.sql'), 'alter table public.projects add column memo text;\n');
+  assert.equal(byRule(check(root), 'migrations.one_per_pr').length, 1, 'un fichier non suivi compte aussi');
+  mkdirSync(join(root, '.apv'), { recursive: true });
+  writeFileSync(join(root, '.apv/config.json'), JSON.stringify({ db: { exceptions: [{ rule: 'migrations.one_per_pr', target: 'migrations', reason: 'donnée de semence appliquée à part' }] } }));
+  const report = check(root);
+  assert.equal(byRule(report, 'migrations.one_per_pr').length, 0);
+  assert.equal(report.suppressed.filter((s) => s.rule === 'migrations.one_per_pr').length, 1);
+});
+
+test('migrations.one_per_pr: sans dépôt Git ni base, aucun avertissement', (t) => {
+  const root = project(t, { 'supabase/migrations/1_a.sql': GOOD_TABLE, 'supabase/migrations/2_b.sql': 'select 1;' });
+  assert.equal(byRule(check(root), 'migrations.one_per_pr').length, 0);
+});
