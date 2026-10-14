@@ -50,8 +50,11 @@ export const s = {
             return value;
         });
     },
-    array(item, min = 0, max = 1000) {
+    /** `tooMany` words the refusal when the list is longer than `max` (default: the generic message). */
+    array(item, min = 0, max = 1000, tooMany) {
         return make({ type: 'array', items: item.json, minItems: min, maxItems: max }, (v, p) => {
+            if (tooMany && Array.isArray(v) && v.length > max)
+                invariant(false, 'SCHEMA', `${p}: ${tooMany(v.length, max)}`);
             invariant(Array.isArray(v) && v.length >= min && v.length <= max, 'SCHEMA', `${p}: invalid array`);
             return v.map((x, i) => item.parse(x, `${p}[${i}]`));
         });
