@@ -53,8 +53,10 @@ export const s = {
       invariant(v === value, 'SCHEMA', `${p}: expected ${value}`); return value;
     });
   },
-  array<T>(item: Schema<T>, min = 0, max = 1000): Schema<T[]> {
+  /** `tooMany` words the refusal when the list is longer than `max` (default: the generic message). */
+  array<T>(item: Schema<T>, min = 0, max = 1000, tooMany?: (count: number, max: number) => string): Schema<T[]> {
     return make({ type: 'array', items: item.json, minItems: min, maxItems: max }, (v, p) => {
+      if (tooMany && Array.isArray(v) && v.length > max) invariant(false, 'SCHEMA', `${p}: ${tooMany(v.length, max)}`);
       invariant(Array.isArray(v) && v.length >= min && v.length <= max, 'SCHEMA', `${p}: invalid array`);
       return (v as unknown[]).map((x, i) => item.parse(x, `${p}[${i}]`));
     });
