@@ -154,6 +154,12 @@ export interface PlanInput {
     sensitive: string[];
     /** Domains the operator forces (`--force`). */
     force: ReviewDomainName[];
+    /**
+     * Whether renames are detected (`-M`, the default: a pure rename is a change without content). False for the delta of a
+     * report (docs/ACCELERATION-LOTS.md, 4: « sans renommages »): a rename is a removal and an addition, so it touches the
+     * perimeter of both paths (security review of #141, A4).
+     */
+    renames?: boolean;
 }
 export declare function planReviews(input: PlanInput): ReviewPlan;
 export {};

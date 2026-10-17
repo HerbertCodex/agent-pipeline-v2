@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { gitRead } from '../run/git-probe.js';
+import { DELTA_DIFF, DELTA_GIT, gitRead } from '../run/git-probe.js';
 /**
  * Reviews carried over a head that only brings its base up to date (pilot project, #230: a pull request updated by
  * `git merge origin/main`, its diff unchanged byte for byte, asked again for its four reviews).
@@ -26,12 +26,53 @@ export function isAncestor(repo, ancestor, of) {
 }
 /** The diff between two commits as git writes it, byte for byte, with full blob ids; null when unreadable. */
 function diffBytes(repo, from, to) {
-    const r = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.quotePath=true', '-c', 'diff.noprefix=false', 'diff', '--full-index', '--binary', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', from, to], { cwd: repo, timeout: 60_000, maxBuffer: 256 * 1024 * 1024 });
+    const r = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.quotePath=true', '-c', 'diff.noprefix=false', ...DELTA_GIT, 'diff', ...DELTA_DIFF, '--full-index', '--binary', '--no-color', from, to], { cwd: repo, timeout: 60_000, maxBuffer: 256 * 1024 * 1024 });
     return r.status === 0 && !r.error ? r.stdout : null;
 }
-/** The files of a diff between two commits; null when unreadable. */
-export function diffFiles(repo, from, to) {
-    const raw = gitRead(repo, ['diff', '--name-only', '-z', '--no-renames', from, to]);
+const SUBMODULE_MODE = '160000';
+/**
+ * The files of the delta between two commits, both sides of a rename, every submodule seen. Refused (security review
+ * of #141, A1) when Git cannot read it, when a submodule link (mode 160000) changes in it (what the link brings is
+ * another repository the tool does not read), or when the two trees differ and no file is listed: a delta that hides
+ * what it changes carries no review, no captures and no waiver.
+ */
+export function deltaFiles(repo, from, to) {
+    const refused = (cause) => ({ files: null, problem: `delta illisible : ${cause} ; relecture complète exigée`, cause });
+    const span = `${from.slice(0, 12)}..${to.slice(0, 12)}`;
+    const raw = gitRead(repo, [...DELTA_GIT, 'diff', ...DELTA_DIFF, '--raw', '-z', '--no-abbrev', from, to, '--']);
+    if (raw === null)
+        return refused(`git diff ${span} a échoué`);
+    // `:<old mode> <new mode> <old blob> <new blob> <status>\0<path>\0`, one entry per file (no rename: one path).
+    const parts = raw.split('\0');
+    if (parts.at(-1) === '')
+        parts.pop();
+    if (parts.length % 2 !== 0)
+        return refused(`sortie de git diff ${span} illisible`);
+    const files = [];
+    const links = [];
+    for (let k = 0; k < parts.length; k += 2) {
+        const head = /^:(\d{6}) (\d{6}) [0-9a-f]+ [0-9a-f]+ [A-Z]\d*$/.exec(parts[k]);
+        if (!head)
+            return refused(`sortie de git diff ${span} illisible`);
+        const path = parts[k + 1];
+        if (head[1] === SUBMODULE_MODE || head[2] === SUBMODULE_MODE)
+            links.push(path);
+        files.push(path);
+    }
+    if (links.length)
+        return refused(`lien de sous-module changé (${links.slice(0, 3).join(', ')}${links.length > 3 ? ', ...' : ''}), son contenu n'est pas lu`);
+    if (!files.length) {
+        const trees = [from, to].map(c => gitRead(repo, ['rev-parse', '--verify', '--quiet', `${c}^{tree}`]));
+        if (!trees[0] || !trees[1])
+            return refused(`arbres de ${span} illisibles`);
+        if (trees[0] !== trees[1])
+            return refused(`arbres différents entre ${from.slice(0, 12)} et ${to.slice(0, 12)} mais aucun fichier listé`);
+    }
+    return { files, problem: null, cause: null };
+}
+/** The files of a diff between two commits, every submodule seen; null when unreadable. */
+function diffFiles(repo, from, to) {
+    const raw = gitRead(repo, [...DELTA_GIT, 'diff', ...DELTA_DIFF, '--name-only', '-z', from, to, '--']);
     return raw === null ? null : raw.split('\0').filter(Boolean);
 }
 /** The head T1 whose reviews count for `head` (one update with the base), with the commit of the target merged; or null. */
@@ -52,7 +93,7 @@ export function carriedHeadOnce(repo, head, target) {
         const files = diffFiles(repo, b1, t1);
         if (!files || !files.length)
             continue;
-        const moved = gitRead(repo, ['diff', '--name-only', '-z', '--no-renames', b1, b2, '--', ...files.map(f => `:(literal)${f}`)]);
+        const moved = gitRead(repo, [...DELTA_GIT, 'diff', ...DELTA_DIFF, '--name-only', '-z', b1, b2, '--', ...files.map(f => `:(literal)${f}`)]);
         if (moved === null || moved.length)
             continue;
         return { from: t1, base: b2 };

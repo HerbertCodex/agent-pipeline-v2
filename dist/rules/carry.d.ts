@@ -1,7 +1,22 @@
 /** Whether `ancestor` is an ancestor of `of` (or the same commit). */
 export declare function isAncestor(repo: string, ancestor: string, of: string): boolean;
-/** The files of a diff between two commits; null when unreadable. */
-export declare function diffFiles(repo: string, from: string, to: string): string[] | null;
+/** The files of a delta, or why it cannot be read: `problem` says it in full (« delta illisible : … ; relecture complète exigée »). */
+export type DeltaFiles = {
+    files: string[];
+    problem: null;
+    cause: null;
+} | {
+    files: null;
+    problem: string;
+    cause: string;
+};
+/**
+ * The files of the delta between two commits, both sides of a rename, every submodule seen. Refused (security review
+ * of #141, A1) when Git cannot read it, when a submodule link (mode 160000) changes in it (what the link brings is
+ * another repository the tool does not read), or when the two trees differ and no file is listed: a delta that hides
+ * what it changes carries no review, no captures and no waiver.
+ */
+export declare function deltaFiles(repo: string, from: string, to: string): DeltaFiles;
 /** The head T1 whose reviews count for `head` (one update with the base), with the commit of the target merged; or null. */
 export declare function carriedHeadOnce(repo: string, head: string, target: string): {
     from: string;

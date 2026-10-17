@@ -1,5 +1,5 @@
 import { ALWAYS_REVIEWED, type ReviewDomainName } from '../review/config.js';
-import { carriedHeads, chainSpans, diffFiles, isAncestor, prChain, type ChainLink, type ChainNode } from './carry.js';
+import { carriedHeads, chainSpans, deltaFiles, isAncestor, prChain, type ChainLink, type ChainNode } from './carry.js';
 import { latestReviews, type ReadRecord } from './reviews.js';
 
 /**
@@ -101,9 +101,9 @@ export function reviewChain(ctx: DeltaContext, head: string): ReviewChain {
     if (depth + 1 > MAX_DELTA_CHAIN) return `plus de ${MAX_DELTA_CHAIN} relectures de delta à la suite : une relecture complète est demandée`;
     if (delta.from === record.commit || !isAncestor(ctx.repo, delta.from, record.commit)) return `${short(delta.from)} n'est pas un ancêtre de ${short(record.commit)} (un rebase ne reporte rien)`;
     if (ctx.target && isAncestor(ctx.repo, delta.from, ctx.target)) return `${short(delta.from)} est un commit de la cible, pas de la branche`;
-    const files = diffFiles(ctx.repo, delta.from, record.commit);
-    if (files === null) return `delta ${short(delta.from)}..${short(record.commit)} illisible`;
-    const recomputed = [...files].sort();
+    const span = deltaFiles(ctx.repo, delta.from, record.commit);
+    if (span.problem !== null) return span.problem;
+    const recomputed = [...span.files].sort();
     const recorded = [...delta.files].sort();
     if (recomputed.length !== recorded.length || recomputed.some((f, k) => f !== recorded[k])) {
       return `fichiers enregistrés (${recorded.length}) différents du delta recalculé ${short(delta.from)}..${short(record.commit)} (${recomputed.length})`;
@@ -116,12 +116,20 @@ export function reviewChain(ctx: DeltaContext, head: string): ReviewChain {
     return null;
   };
 
-  /** Why the steps from the node to the head touch the perimeter: each run of links, then each link; empty when none. */
+  /**
+   * Why the steps from the node to the head touch the perimeter: each run of links, then each link; empty when none. A
+   * step whose delta cannot be read as a list of files (a submodule link, trees that differ with no file listed) touches
+   * every perimeter (deltaFiles, security review of #141, A1).
+   */
   const reasonsFor = (domain: ReviewDomainName, node: ChainNode): string[] => {
     for (const span of [...chainSpans(node.links), ...node.links]) {
       const key = `${domain}|${span.from}..${span.to}`;
       let why = touched.get(key);
-      if (!why) { why = ctx.touches(domain, span); touched.set(key, why); }
+      if (!why) {
+        const read = deltaFiles(ctx.repo, span.from, span.to);
+        why = read.problem !== null ? [read.problem] : ctx.touches(domain, span);
+        touched.set(key, why);
+      }
       if (why.length) return why.slice(0, MAX_REASONS).map(w => `${short(span.from)}..${short(span.to)} : ${w}`);
     }
     return [];
@@ -137,7 +145,7 @@ export function reviewChain(ctx: DeltaContext, head: string): ReviewChain {
       if (!usableReview(picked.found)) continue;
       const reasons = reasonsFor(domain, node);
       if (reasons.length) return { found: undefined, from: null, how: null, broken: { from, reasons } };
-      const files = [...new Set(chainSpans(node.links).flatMap(s => diffFiles(ctx.repo, s.from, s.to) ?? []))].sort();
+      const files = [...new Set(chainSpans(node.links).flatMap(s => deltaFiles(ctx.repo, s.from, s.to).files ?? []))].sort();
       return { ...picked, from, how: 'reported', reported: { files } };
     }
     return null;

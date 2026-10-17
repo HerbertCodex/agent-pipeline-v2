@@ -15,6 +15,14 @@ export function gitRead(cwd, args) {
         return null;
     }
 }
+/**
+ * Git options in front of every diff that computes a delta or the files a change touches: a submodule is never ignored,
+ * whatever the configuration or `.gitmodules` say (`ignore = all` emptied the delta, security review of #141, A1), and
+ * no command recurses into one. Put before the subcommand; DELTA_DIFF goes after it.
+ */
+export const DELTA_GIT = ['-c', 'diff.ignoreSubmodules=none', '-c', 'submodule.recurse=false'];
+/** Options of `git diff` for a delta: every submodule seen, no rename detection (a rename is a removal and an addition), no external tool. */
+export const DELTA_DIFF = ['--ignore-submodules=none', '--no-renames', '--no-ext-diff', '--no-textconv'];
 /** Root of the working tree that contains `path`; refuses outside a Git repository (exit 1). */
 export function gitRoot(path) {
     const dir = resolve(path);

@@ -4,7 +4,7 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { parseJson } from '../domain/schema.js';
 import { decisionLedgerSchema, LEDGER_FILE, type Decision } from '../lifecycle/decisions.js';
 import { matches } from '../policy/policy.js';
-import { resolveCommit } from '../run/git-probe.js';
+import { DELTA_GIT, resolveCommit } from '../run/git-probe.js';
 import { ALWAYS_REVIEWED, PATH_CLASSES, REVIEW_DOMAINS, type PathClass, type ReviewDomainName, type ReviewPlanSettings } from './config.js';
 import { pureRename, renameKind, renamedNames, type RenamePair } from './rename.js';
 import {
@@ -311,6 +311,12 @@ export interface PlanInput {
   sensitive: string[];
   /** Domains the operator forces (`--force`). */
   force: ReviewDomainName[];
+  /**
+   * Whether renames are detected (`-M`, the default: a pure rename is a change without content). False for the delta of a
+   * report (docs/ACCELERATION-LOTS.md, 4: « sans renommages »): a rename is a removal and an addition, so it touches the
+   * perimeter of both paths (security review of #141, A4).
+   */
+  renames?: boolean;
 }
 
 const WHY = {
@@ -569,10 +575,12 @@ export function planReviews(input: PlanInput): ReviewPlan {
   const headSha = resolveCommit(repo, input.head);
   if (!headSha) throw new PipelineError('REVIEW_REF', `--head : commit introuvable dans ${repo} : ${input.head}`);
   const mergeBase = git(repo, ['merge-base', baseSha, headSha]).trim();
-  // Explicit options: a user's diff settings (no prefix, relative paths, colors, external tools) never change the reading.
-  const common = ['-M', '--no-relative', '--no-ext-diff', '--no-textconv', '--no-color'];
-  const statuses = parseNameStatus(git(repo, ['diff', ...common, '--name-status', '-z', mergeBase, headSha]));
-  const patches = parsePatch(git(repo, ['diff', ...common, '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', mergeBase, headSha]));
+  // Explicit options: a user's diff settings (no prefix, relative paths, colors, external tools) never change the reading;
+  // every submodule is seen, whatever .gitmodules says (security review of #141, A1). The patch is read as text: an
+  // attribute `-diff` (or `binary`) of the tree never hides the words of a file (A10).
+  const common = [input.renames === false ? '--no-renames' : '-M', '--ignore-submodules=none', '--no-relative', '--no-ext-diff', '--no-textconv', '--no-color'];
+  const statuses = parseNameStatus(git(repo, [...DELTA_GIT, 'diff', ...common, '--name-status', '-z', mergeBase, headSha]));
+  const patches = parsePatch(git(repo, [...DELTA_GIT, '-c', 'core.attributesFile=/dev/null', 'diff', ...common, '--text', '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', mergeBase, headSha]));
   const renames = statuses.filter(s => s.from !== undefined).map(s => ({ from: s.from!, path: s.path }));
   const changes = statuses.map((entry): { entry: NameStatus; patch: FilePatch | undefined; change: ChangeKind; classes: PathClass[] } => {
     const patch = patches.get(entry.path);

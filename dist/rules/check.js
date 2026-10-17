@@ -15,13 +15,14 @@ import { ALWAYS_REVIEWED, reviewPlanSettings } from '../review/config.js';
 import { planReviews } from '../review/plan.js';
 import { DEFAULT_REUSE_IGNORE, UI_EXTENSIONS, extensionOf, globMatcher } from '../reuse/config.js';
 import { WEB_DEPENDENCIES } from '../reuse/detect.js';
-import { gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
+import { DELTA_DIFF, DELTA_GIT, gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
 import { commonDir } from '../stacks/idle.js';
 import { MERGE_RULES, RULE_TITLES, rulesSettings } from './config.js';
 import { TEMPLATE_WAIVER_NOTE, anchorKey, readOperatorMessages, templateWaiver, waiverFor, waiverSentence } from './operator.js';
 import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
 import { reviewChain } from './delta.js';
+import { deltaFiles } from './carry.js';
 import { LANE_NAME, docsOnlyLane, laneLines } from './docs-only.js';
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
 import { ciProofLines, verifyCiProof } from './ci-proof.js';
@@ -231,15 +232,11 @@ const MAX_REASONS = 20;
  */
 export function touchesNoScreen(repo, base, head, screens) {
     const reasons = [];
-    const raw = gitRead(repo, ['diff', '--name-status', '-z', '--no-renames', base, head]);
-    if (raw === null)
-        return { files: 0, reasons: [`diff illisible entre ${short(base)} et ${short(head)} : impossible de juger`] };
-    const parts = raw.split('\0').filter(Boolean);
-    if (parts.length % 2 !== 0)
-        return { files: 0, reasons: ['diff illisible : impossible de juger'] };
-    const files = [];
-    for (let i = 0; i + 1 < parts.length; i += 2)
-        files.push(parts[i + 1]);
+    // Every submodule seen, a changed link or trees that differ with no file listed refused (deltaFiles, review of #141, A1).
+    const read = deltaFiles(repo, base, head);
+    if (read.cause !== null)
+        return { files: 0, reasons: [`diff illisible : ${read.cause} : impossible de juger`] };
+    const files = read.files;
     const verdict = () => ({ files: files.length, reasons: [...new Set(reasons)].slice(0, MAX_REASONS) });
     if (files.length > MAX_FILES_WITHOUT_SCREEN) {
         reasons.push(`${files.length} fichiers, plus de ${MAX_FILES_WITHOUT_SCREEN} : impossible de juger`);
@@ -363,7 +360,7 @@ export function touchesNoScreen(repo, base, head, screens) {
 }
 /** Files the change adds or modifies since the base (renames counted as an addition: a moved screen is a new address). */
 function changedFiles(repo, base, head) {
-    const raw = gitRead(repo, ['diff', '--name-status', '-z', '--no-renames', base, head]);
+    const raw = gitRead(repo, [...DELTA_GIT, 'diff', ...DELTA_DIFF, '--name-status', '-z', base, head]);
     if (raw === null)
         throw new PipelineError('RULES', `diff illisible entre ${base.slice(0, 12)} et ${head.slice(0, 12)}`);
     const parts = raw.split('\0').filter(Boolean);
@@ -376,7 +373,7 @@ function changedFiles(repo, base, head) {
 const short = (sha) => sha.slice(0, 12);
 /** Every file the change adds, modifies or removes since the base (both sides of a rename); empty when unreadable. */
 function touchedFiles(repo, base, head) {
-    return (gitRead(repo, ['diff', '--name-only', '--no-renames', '-z', base, head, '--']) ?? '').split('\0').filter(Boolean);
+    return (gitRead(repo, [...DELTA_GIT, 'diff', ...DELTA_DIFF, '--name-only', '-z', base, head, '--']) ?? '').split('\0').filter(Boolean);
 }
 function outcome(rule, status, detail, problems = [], todo = []) {
     return { rule, title: RULE_TITLES[rule], status, detail, problems, todo, waiver: null };
@@ -570,7 +567,7 @@ export async function checkMergeRules(input) {
         const key = `${span.from}..${span.to}`;
         if (!deltaPlans.has(key)) {
             try {
-                deltaPlans.set(key, planReviews({ repo, base: span.from, head: span.to, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [] }));
+                deltaPlans.set(key, planReviews({ repo, base: span.from, head: span.to, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [], renames: false }));
             }
             catch (error) {
                 deltaPlans.set(key, errorMessage(error));

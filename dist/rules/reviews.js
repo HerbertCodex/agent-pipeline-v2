@@ -6,7 +6,7 @@ import { REVIEW_DOMAINS } from '../review/config.js';
 import { gitRead, resolveCommit } from '../run/git-probe.js';
 import { CAPTURE_THEMES, CAPTURE_VIEWPORTS } from './config.js';
 import { anchorKey, sign, signatureValid } from './operator.js';
-import { diffFiles, isAncestor } from './carry.js';
+import { deltaFiles, isAncestor } from './carry.js';
 /**
  * Review records: what a reviewer agent found at one exact commit, kept in the Git common directory
  * (`<git common dir>/apv/reviews/<commit>/<domaine>/`), outside every worktree and never versioned, with a copy of its
@@ -132,10 +132,10 @@ function deltaOf(checkout, value, commit, report) {
     invariant(from !== commit, 'REVIEW_RECORD', `--delta-from ${from.slice(0, 12)} : c'est le commit relu ; une relecture de delta part d'un commit antérieur de la branche`);
     invariant(isAncestor(checkout, from, commit), 'REVIEW_RECORD', `--delta-from ${from.slice(0, 12)} n'est pas un ancêtre de ${commit.slice(0, 12)} : une relecture de delta part d'un commit de la même branche (un rebase ne reporte rien)`);
     invariant(report.includes(from.slice(0, REPORT_SHA)), 'REVIEW_RECORD', `le rapport ne cite pas le commit de départ du delta (${from.slice(0, REPORT_SHA)}) : il nomme les deux commits`);
-    const files = diffFiles(checkout, from, commit);
-    if (files === null)
-        throw new PipelineError('REVIEW_RECORD', `delta illisible entre ${from.slice(0, 12)} et ${commit.slice(0, 12)}`);
-    return { from, files: [...files].sort() };
+    const read = deltaFiles(checkout, from, commit);
+    if (read.problem !== null)
+        throw new PipelineError('REVIEW_RECORD', `--delta-from ${from.slice(0, 12)} : ${read.problem}`);
+    return { from, files: [...read.files].sort() };
 }
 /** The seal of a record: HMAC of its file with the anchor key, written by the PostToolUse hook, never by the tool. */
 const sealOf = (key, content) => sign(key, 'review', sha256(content));

@@ -15,13 +15,14 @@ import { ALWAYS_REVIEWED, reviewPlanSettings, type ReviewDomainName } from '../r
 import { planReviews } from '../review/plan.js';
 import { DEFAULT_REUSE_IGNORE, UI_EXTENSIONS, extensionOf, globMatcher } from '../reuse/config.js';
 import { WEB_DEPENDENCIES } from '../reuse/detect.js';
-import { gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
+import { DELTA_DIFF, DELTA_GIT, gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
 import { commonDir } from '../stacks/idle.js';
 import { MERGE_RULES, RULE_TITLES, rulesSettings, type MergeRule } from './config.js';
 import { TEMPLATE_WAIVER_NOTE, anchorKey, readOperatorMessages, templateWaiver, waiverFor, waiverSentence, type OperatorMessage } from './operator.js';
 import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
 import { reviewChain, type Picked } from './delta.js';
+import { deltaFiles } from './carry.js';
 import { LANE_NAME, docsOnlyLane, laneLines, type DocsOnlyLane } from './docs-only.js';
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
 import { ciProofLines, verifyCiProof, type CiProofOutcome } from './ci-proof.js';
@@ -277,12 +278,10 @@ const MAX_REASONS = 20;
  */
 export function touchesNoScreen(repo: string, base: string, head: string, screens: readonly RegExp[]): ScreenVerdict {
   const reasons: string[] = [];
-  const raw = gitRead(repo, ['diff', '--name-status', '-z', '--no-renames', base, head]);
-  if (raw === null) return { files: 0, reasons: [`diff illisible entre ${short(base)} et ${short(head)} : impossible de juger`] };
-  const parts = raw.split('\0').filter(Boolean);
-  if (parts.length % 2 !== 0) return { files: 0, reasons: ['diff illisible : impossible de juger'] };
-  const files: string[] = [];
-  for (let i = 0; i + 1 < parts.length; i += 2) files.push(parts[i + 1]!);
+  // Every submodule seen, a changed link or trees that differ with no file listed refused (deltaFiles, review of #141, A1).
+  const read = deltaFiles(repo, base, head);
+  if (read.cause !== null) return { files: 0, reasons: [`diff illisible : ${read.cause} : impossible de juger`] };
+  const files = read.files;
   const verdict = (): ScreenVerdict => ({ files: files.length, reasons: [...new Set(reasons)].slice(0, MAX_REASONS) });
   if (files.length > MAX_FILES_WITHOUT_SCREEN) { reasons.push(`${files.length} fichiers, plus de ${MAX_FILES_WITHOUT_SCREEN} : impossible de juger`); return verdict(); }
   const tree = gitRead(repo, ['ls-tree', '-r', '-z', '--full-tree', head]);
@@ -360,7 +359,7 @@ export function touchesNoScreen(repo: string, base: string, head: string, screen
 
 /** Files the change adds or modifies since the base (renames counted as an addition: a moved screen is a new address). */
 function changedFiles(repo: string, base: string, head: string): string[] {
-  const raw = gitRead(repo, ['diff', '--name-status', '-z', '--no-renames', base, head]);
+  const raw = gitRead(repo, [...DELTA_GIT, 'diff', ...DELTA_DIFF, '--name-status', '-z', base, head]);
   if (raw === null) throw new PipelineError('RULES', `diff illisible entre ${base.slice(0, 12)} et ${head.slice(0, 12)}`);
   const parts = raw.split('\0').filter(Boolean);
   const out: string[] = [];
@@ -372,7 +371,7 @@ const short = (sha: string): string => sha.slice(0, 12);
 
 /** Every file the change adds, modifies or removes since the base (both sides of a rename); empty when unreadable. */
 function touchedFiles(repo: string, base: string, head: string): string[] {
-  return (gitRead(repo, ['diff', '--name-only', '--no-renames', '-z', base, head, '--']) ?? '').split('\0').filter(Boolean);
+  return (gitRead(repo, [...DELTA_GIT, 'diff', ...DELTA_DIFF, '--name-only', '-z', base, head, '--']) ?? '').split('\0').filter(Boolean);
 }
 
 function outcome(rule: MergeRule, status: RuleStatus, detail: string, problems: string[] = [], todo: string[] = []): RuleOutcome {
@@ -547,7 +546,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   const touches = (domain: ReviewDomainName, span: { from: string; to: string }): string[] => {
     const key = `${span.from}..${span.to}`;
     if (!deltaPlans.has(key)) {
-      try { deltaPlans.set(key, planReviews({ repo, base: span.from, head: span.to, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [] })); }
+      try { deltaPlans.set(key, planReviews({ repo, base: span.from, head: span.to, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [], renames: false })); }
       catch (error) { deltaPlans.set(key, errorMessage(error)); }
     }
     const delta = deltaPlans.get(key)!;

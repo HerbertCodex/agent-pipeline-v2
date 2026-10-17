@@ -306,3 +306,22 @@ test('review plan: the written extension of a reference is part of its name; use
   assert.deepEqual(plan.files.map(f => [f.path, f.change]), [['src/lib/components/Card.svelte', 'paths'], ['src/lib/shared/format.ts', 'none']]);
   assert.deepEqual(retained(plan), ['securite']);
 });
+
+test('review plan (security review of #141, A1, A10): a submodule ignored by .gitmodules is still in the plan; a -diff attribute hides no term', async t => {
+  const p = project(t);
+  // On main: a submodule link Git is told to ignore (ignore = all), and components marked -diff.
+  git(p.repo, 'switch', '-q', 'main');
+  p.edit('.gitmodules', '[submodule "vendor"]\n\tpath = src/lib/vendor\n\turl = ./vendor\n\tignore = all\n');
+  p.edit('.gitattributes', '*.svelte -diff\n');
+  mkdirSync(join(p.repo, 'src/lib/vendor'), { recursive: true });
+  git(p.repo, 'add', '-A');
+  git(p.repo, 'update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},src/lib/vendor`);
+  git(p.repo, 'commit', '-qm', 'vendor');
+  git(p.repo, 'switch', '-q', '-C', 'work');
+  git(p.repo, 'update-index', '--cacheinfo', `160000,${'2'.repeat(40)},src/lib/vendor`);
+  p.edit('src/lib/components/Card.svelte', "<script lang=\"ts\">\n  import { money } from '$lib/format';\n  let { value }: { value: number } = $props();\n</script>\n\n<p class=\"card\">{money(value)}</p>\n<input name=\"email\" />\n");
+  p.commit();
+  const plan = await p.plan();
+  assert.ok(plan.files.some(f => f.path === 'src/lib/vendor'), JSON.stringify(plan.files.map(f => f.path)));
+  assert.match(decision(plan, 'rgpd').reason, /email/, JSON.stringify(decision(plan, 'rgpd')));
+});

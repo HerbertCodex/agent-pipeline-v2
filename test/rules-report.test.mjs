@@ -36,7 +36,7 @@ const TEST_ONLY = (n = 1) => ({
 });
 
 /** main holds SITE; feat adds PAGE at C, reviewed in every domain of its plan (four captures for fidelite). */
-async function reviewed(t, { change = PAGE } = {}) {
+async function reviewed(t, { change = PAGE, links = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'apv3-report-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const origin = join(root, 'origin.git');
@@ -49,12 +49,15 @@ async function reviewed(t, { change = PAGE } = {}) {
   for (const [path, value] of Object.entries(SITE)) put(repo, path, value);
   git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'base'); git(repo, 'push', '-q', 'origin', 'main');
   git(repo, 'switch', '-q', '-c', 'feat');
-  const commit = (files, message = 'suite') => {
+  /** `links`: submodule links (mode 160000) set to a commit id, `{ path: sha }`; the folder stays empty (not checked out). */
+  const commit = (files, message = 'suite', links = {}) => {
     for (const [path, value] of Object.entries(files)) put(repo, path, value);
-    git(repo, 'add', '-A'); git(repo, 'commit', '-q', '--allow-empty', '-m', message);
+    git(repo, 'add', '-A');
+    for (const [path, sha] of Object.entries(links)) { mkdirSync(join(repo, path), { recursive: true }); git(repo, 'update-index', '--add', '--cacheinfo', `160000,${sha},${path}`); }
+    git(repo, 'commit', '-q', '--allow-empty', '-m', message);
     return git(repo, 'rev-parse', 'HEAD');
   };
-  const c = commit(change, 'change');
+  const c = commit(change, 'change', links);
   const check = async sha => {
     const r = await apv(repo, ['rules', 'check', '--commit', sha, '--target', 'origin/main', '--json']);
     return r.json();
@@ -257,4 +260,57 @@ test('apv review record --delta-from: an ancestor of the commit, cited by the re
   assert.match(shown.stdout, new RegExp(`relecture du delta depuis ${short(p.c)} \\(3 fichier\\(s\\)\\)`));
   const bad = await apv(p.repo, ['review', 'plan', '--base', 'origin/main', '--delta-from', p.c]);
   assert.equal(bad.code, 2);
+});
+
+/** A submodule that .gitmodules tells Git to ignore (security review of #141, A1). */
+const IGNORED_SUBMODULE = { '.gitmodules': '[submodule "vendor"]\n\tpath = src/lib/vendor\n\turl = ./vendor\n\tignore = all\n' };
+const SUB = n => String(n).repeat(40);
+
+test('report (review of #141, A1): a submodule link that changes, even ignored by .gitmodules, makes the delta unreadable: nothing reported, no review of the delta', async t => {
+  const p = await reviewed(t, { change: { ...PAGE, ...IGNORED_SUBMODULE }, links: { 'src/lib/vendor': SUB(1) } });
+  // Only the link changes: Git, reading .gitmodules, would list no file at all.
+  const c2 = p.commit({}, 'vendor', { 'src/lib/vendor': SUB(2) });
+  const report = await p.check(c2);
+  for (const d of p.retained.filter(d => d !== 'securite')) {
+    assert.equal(domain(report, d).status, 'missing', `${d} ${JSON.stringify(domain(report, d))}`);
+    assert.match(domain(report, d).detail, /delta illisible : lien de sous-module changé \(src\/lib\/vendor\).*relecture complète exigée/, d);
+  }
+  assert.equal(rule(report, 'captures').status, 'refused', JSON.stringify(rule(report, 'captures')));
+  // A review of the delta of no file proves nothing, and apv review record refuses to write one.
+  seedReview(p.repo, c2, 'securite', { delta: { from: p.c, files: [] } });
+  const sec = domain(await p.check(c2), 'securite');
+  assert.equal(sec.status, 'missing', JSON.stringify(sec));
+  assert.match(sec.detail, /relecture de delta non prouvante : delta illisible : lien de sous-module changé \(src\/lib\/vendor\).*relecture complète exigée/);
+  const dir = mkdtempSync(join(tmpdir(), 'apv3-report-rapport-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'rapport.md');
+  writeFileSync(file, `Delta ${short(p.c)}..${short(c2)}\n${'constat détaillé du delta. '.repeat(12)}\n`);
+  assert.throws(() => recordReview(commonDirOf(p.repo), { checkout: p.repo, commit: c2, domain: 'securite', reviewer: 'apv:qa-securite',
+    findings: { critical: 0, high: 0, medium: 0, low: 0 }, captures: [], report: file, deltaFrom: p.c }), /delta illisible : lien de sous-module changé \(src\/lib\/vendor\).*relecture complète exigée/);
+  // The link changed beside a test and its images: refused the same way, the test alone would have been carried.
+  const q = await reviewed(t, { change: { ...PAGE, ...IGNORED_SUBMODULE }, links: { 'src/lib/vendor': SUB(1) } });
+  const q2 = q.commit(TEST_ONLY(), 'tests et vendor', { 'src/lib/vendor': SUB(3) });
+  const fid = domain(await q.check(q2), 'fidelite');
+  assert.equal(fid.status, 'missing', JSON.stringify(fid));
+  assert.match(fid.detail, /delta illisible : lien de sous-module changé \(src\/lib\/vendor\)/);
+});
+
+test('report (review of #141, A4): the delta is read without renames: a file moved out of a folder keeps the review of both paths', async t => {
+  const p = await reviewed(t, { change: { ...PAGE, 'src/routes/(admin)/export/+server.ts': 'export const GET = () => new Response("ok");\n' } });
+  assert.ok(p.retained.includes('rgpd'), p.retained.join(', '));
+  mkdirSync(join(p.repo, 'src/routes/export'), { recursive: true });
+  git(p.repo, 'mv', 'src/routes/(admin)/export/+server.ts', 'src/routes/export/+server.ts');
+  const c2 = p.commit({}, 'déplacement hors du groupe admin');
+  const rgpd = domain(await p.check(c2), 'rgpd');
+  assert.equal(rgpd.status, 'missing', JSON.stringify(rgpd));
+  assert.match(rgpd.detail, /n'est pas reportée, le delta touche son périmètre : .*rgpd retenue/);
+});
+
+test('report (review of #141, A10): a -diff attribute hides no term of the delta: the lines are read as text', async t => {
+  // The attribute is in C (reviewed); the delta only changes a component, whose plan alone would keep fidelite.
+  const p = await reviewed(t, { change: { ...PAGE, '.gitattributes': '*.svelte -diff\n' } });
+  const c2 = p.commit({ 'src/lib/components/Header.svelte': '<header>Compte</header>\n<script src="https://www.googletagmanager.com/gtag/js"></script>\n<input name="email" />\n' });
+  const rgpd = domain(await p.check(c2), 'rgpd');
+  assert.equal(rgpd.status, 'missing', JSON.stringify(rgpd));
+  assert.match(rgpd.detail, /n'est pas reportée, le delta touche son périmètre : .*rgpd retenue/);
 });

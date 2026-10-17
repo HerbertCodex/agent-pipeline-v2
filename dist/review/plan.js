@@ -4,7 +4,7 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { parseJson } from '../domain/schema.js';
 import { decisionLedgerSchema, LEDGER_FILE } from '../lifecycle/decisions.js';
 import { matches } from '../policy/policy.js';
-import { resolveCommit } from '../run/git-probe.js';
+import { DELTA_GIT, resolveCommit } from '../run/git-probe.js';
 import { ALWAYS_REVIEWED, PATH_CLASSES, REVIEW_DOMAINS } from './config.js';
 import { pureRename, renameKind, renamedNames } from './rename.js';
 import { AGENT_INSTRUCTIONS, CONFIG_FILES, LEDGER_FILES, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, PILOT_NOTE_EXTENSIONS, ROUTING_DIR, ROUTING_TEST_DIR, SERVED_DIR, SPEC_NOTES, TEST_DIRS, TEST_NAME, diffRisk, realAddress, } from './risk.js';
@@ -564,10 +564,12 @@ export function planReviews(input) {
     if (!headSha)
         throw new PipelineError('REVIEW_REF', `--head : commit introuvable dans ${repo} : ${input.head}`);
     const mergeBase = git(repo, ['merge-base', baseSha, headSha]).trim();
-    // Explicit options: a user's diff settings (no prefix, relative paths, colors, external tools) never change the reading.
-    const common = ['-M', '--no-relative', '--no-ext-diff', '--no-textconv', '--no-color'];
-    const statuses = parseNameStatus(git(repo, ['diff', ...common, '--name-status', '-z', mergeBase, headSha]));
-    const patches = parsePatch(git(repo, ['diff', ...common, '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', mergeBase, headSha]));
+    // Explicit options: a user's diff settings (no prefix, relative paths, colors, external tools) never change the reading;
+    // every submodule is seen, whatever .gitmodules says (security review of #141, A1). The patch is read as text: an
+    // attribute `-diff` (or `binary`) of the tree never hides the words of a file (A10).
+    const common = [input.renames === false ? '--no-renames' : '-M', '--ignore-submodules=none', '--no-relative', '--no-ext-diff', '--no-textconv', '--no-color'];
+    const statuses = parseNameStatus(git(repo, [...DELTA_GIT, 'diff', ...common, '--name-status', '-z', mergeBase, headSha]));
+    const patches = parsePatch(git(repo, [...DELTA_GIT, '-c', 'core.attributesFile=/dev/null', 'diff', ...common, '--text', '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', mergeBase, headSha]));
     const renames = statuses.filter(s => s.from !== undefined).map(s => ({ from: s.from, path: s.path }));
     const changes = statuses.map((entry) => {
         const patch = patches.get(entry.path);
