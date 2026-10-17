@@ -537,3 +537,33 @@ test('report (second review of #141, M2): beyond the bound of the search for loa
   assert.match(fid.detail, /recherche des chargements par motif : .*impossible de juger/);
 });
 
+test('AC-CARRY-WAIVER (second review of #141 and #143, M1, M2): no waiver relecture:fidelite or captures over a fixture, none of relecture:rgpd over a name with a space', async t => {
+  const fixture = { ...PAGE, 'tests/fixtures/pages.ts': 'export default [];\n' };
+  // relecture:fidelite waived at C (no fidelity review): not carried over a fixture changed, carried over a test proper.
+  const p = await reviewed(t, { change: fixture, skip: ['fidelite'] });
+  says(p, 'relecture:fidelite', p.c);
+  const c2 = p.commit({ 'tests/fixtures/pages.ts': 'export default ["contenu affiché changé"];\n' });
+  const report = await p.check(c2);
+  assert.equal(domain(report, 'fidelite').status, 'missing', JSON.stringify(domain(report, 'fidelite')));
+  assert.match(rule(report, 'relecture').todo.join('\n'), new RegExp(`la dérogation relecture:fidelite de ${short(p.c)} n'est pas reportée, le delta touche son périmètre : .*tests/fixtures/pages\\.ts : module de tests chargeable par l'application`));
+  git(p.repo, 'switch', '-q', '--detach', p.c);
+  const c3 = p.commit(TEST_ONLY());
+  assert.equal(domain(await p.check(c3), 'fidelite').status, 'waived');
+  // captures waived at C (a fidelity review without its captures): not carried over a fixture, nor over a test proper
+  // that the application loads by a computed path; carried over a test alone.
+  for (const [dir, change, carried] of [['tests/fixtures', { 'tests/fixtures/pages.ts': 'export default ["x"];\n' }, false], ['tests/e2e', TEST_ONLY(), false], [null, TEST_ONLY(), true]]) {
+    const loader = dir ? { 'src/routes/compte/+page.server.ts': LOADERS(dir)['import/**/(x)'] } : {};
+    const q = await reviewed(t, { change: { ...fixture, ...loader }, fidelityCaptures: [] });
+    says(q, 'captures', q.c);
+    const q2 = q.commit(change);
+    const captures = rule(await q.check(q2), 'captures');
+    assert.equal(captures.status, carried ? 'waived' : 'refused', `${dir} : ${JSON.stringify(captures)}`);
+  }
+  // relecture:rgpd waived at C; C' adds a tracker and an e-mail field to a component whose name has a space.
+  const name = 'src/lib/components/Mon composant.svelte';
+  const r = await reviewed(t, { change: { ...PAGE, [name]: '<p>bloc</p>\n' }, skip: ['rgpd'] });
+  says(r, 'relecture:rgpd', r.c, 'texte de la carte relu à l\'oral');
+  const r2 = r.commit({ [name]: TERMS });
+  const rgpd = domain(await r.check(r2), 'rgpd');
+  assert.equal(rgpd.status, 'missing', JSON.stringify(rgpd));
+});
