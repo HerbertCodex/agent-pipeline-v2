@@ -1,5 +1,6 @@
 import { ALWAYS_REVIEWED, type ReviewDomainName } from '../review/config.js';
 import { carriedHeads, chainSpans, deltaFiles, isAncestor, prChain, type ChainLink, type ChainNode } from './carry.js';
+import type { WaiverTarget } from './operator.js';
 import { latestReviews, type ReadRecord } from './reviews.js';
 
 /**
@@ -19,10 +20,38 @@ import { latestReviews, type ReadRecord } from './reviews.js';
  * most). Every domain has the same review of the delta, for a delta that touches its perimeter.
  *
  * The review of the head always decides; this only applies when the head has none of the domain.
+ *
+ * A waiver the operator typed for C counts at C' the same way (6.4, decision of the operator of 17 October 2026), for the
+ * closed list WAIVER_PERIMETERS only: maquette (no screen, no mockup, no decision ledger touched), captures and the review
+ * fidelite (the conditions of fidelite), the reviews donnees and rgpd (the plan does not retain them), controles (the
+ * configuration of the checks and package.json untouched). Never securite, the rule relecture whole, preuve nor instable.
+ * The waiver is still read from the journal of the operator by waiverFor, for its own commit C: nothing else creates one.
  */
 
 /** Reviews of the delta in a row, each starting from the one before, until a review of the whole change. */
 export const MAX_DELTA_CHAIN = 5;
+/**
+ * What a delta must leave untouched: a review domain (planReviews, and touchesNoScreen for fidelite), or the paths of a
+ * rule: `maquette` (screens, the mockups folder, the decision ledger), `controles` (the configuration of the checks,
+ * package.json).
+ */
+export type Perimeter = Exclude<ReviewDomainName, 'securite'> | 'maquette' | 'controles';
+
+/**
+ * The waivers carried over a delta outside their perimeter, and that perimeter: a closed list. Absent, never carried:
+ * `relecture:securite`, `relecture` whole, `preuve`, `instable` (decision of the operator of 17 October 2026).
+ */
+export const WAIVER_PERIMETERS: Readonly<Partial<Record<WaiverTarget, Perimeter>>> = {
+  maquette: 'maquette',
+  captures: 'fidelite',
+  controles: 'controles',
+  'relecture:fidelite': 'fidelite',
+  'relecture:donnees': 'donnees',
+  'relecture:rgpd': 'rgpd',
+};
+/** Perimeters judged by the paths alone: the whole diff C..C' is read too, a merge of the target included. */
+const PATH_PERIMETERS: readonly Perimeter[] = ['maquette', 'controles'];
+
 /** Causes shown when a step of the chain touches the perimeter. */
 const MAX_REASONS = 5;
 
@@ -33,8 +62,8 @@ export interface DeltaContext {
   common: string;
   /** The target, resolved; null: nothing is carried. */
   target: string | null;
-  /** Why the change of a span touches the perimeter of the domain, one line per cause; empty when it touches nothing. */
-  touches(domain: ReviewDomainName, span: ChainLink): string[];
+  /** Why the change of a span touches the perimeter, one line per cause; empty when it touches nothing. */
+  touches(perimeter: Perimeter, span: ChainLink): string[];
   /** The anchor key the seals of the reviews are checked with (tests); the key of the machine by default. */
   key?: Buffer | null;
 }
@@ -64,9 +93,17 @@ export interface ReviewChain {
   reported(domain: ReviewDomainName): Picked | null;
   /** The nearest commit of the branch below the head with a usable review of the domain: where a review of the delta starts. */
   deltaStart(domain: ReviewDomainName): string | null;
+  /**
+   * The waiver of `rule` typed for an earlier commit of the branch, carried to the head over a delta outside its
+   * perimeter; `find` reads the waiver of a commit (waiverFor). Null for a rule outside WAIVER_PERIMETERS, or no waiver.
+   */
+  carriedWaiver<W>(rule: WaiverTarget, find: (commit: string) => W | null): CarriedWaiver<W> | null;
   /** The commits of the branch walked from the head (carry.ts, prChain). */
   chain(): ChainNode[];
 }
+
+/** A waiver of an earlier commit: carried (`files`: the delta), or not, with the step that touches the perimeter. */
+export type CarriedWaiver<W> = { waiver: W; from: string; files: string[] } | { waiver: null; from: string; reasons: string[] };
 
 export function reviewChain(ctx: DeltaContext, head: string): ReviewChain {
   const records = new Map<string, Map<ReviewDomainName, ReadRecord>>();
@@ -117,17 +154,19 @@ export function reviewChain(ctx: DeltaContext, head: string): ReviewChain {
   };
 
   /**
-   * Why the steps from the node to the head touch the perimeter: each run of links, then each link; empty when none. A
-   * step whose delta cannot be read as a list of files (a submodule link, trees that differ with no file listed) touches
-   * every perimeter (deltaFiles, security review of #141, A1).
+   * Why the steps from the node to the head touch the perimeter: each run of links, then each link, and for a perimeter
+   * of paths the whole diff from the node to the head; empty when none. A step whose delta cannot be read as a list of
+   * files (a submodule link, trees that differ with no file listed) touches every perimeter (deltaFiles, security
+   * review of #141, A1).
    */
-  const reasonsFor = (domain: ReviewDomainName, node: ChainNode): string[] => {
-    for (const span of [...chainSpans(node.links), ...node.links]) {
-      const key = `${domain}|${span.from}..${span.to}`;
+  const reasonsFor = (perimeter: Perimeter, node: ChainNode): string[] => {
+    const whole = PATH_PERIMETERS.includes(perimeter) ? [{ from: node.commit, to: head }] : [];
+    for (const span of [...chainSpans(node.links), ...node.links, ...whole]) {
+      const key = `${perimeter}|${span.from}..${span.to}`;
       let why = touched.get(key);
       if (!why) {
         const read = deltaFiles(ctx.repo, span.from, span.to);
-        why = read.problem !== null ? [read.problem] : ctx.touches(domain, span);
+        why = read.problem !== null ? [read.problem] : ctx.touches(perimeter, span);
         touched.set(key, why);
       }
       if (why.length) return why.slice(0, MAX_REASONS).map(w => `${short(span.from)}..${short(span.to)} : ${w}`);
@@ -143,10 +182,9 @@ export function reviewChain(ctx: DeltaContext, head: string): ReviewChain {
       const from = picked.from ?? node.commit;
       if (blockingReview(picked.found)) return { found: picked.found, from, how: 'reported' };
       if (!usableReview(picked.found)) continue;
-      const reasons = reasonsFor(domain, node);
+      const reasons = reasonsFor(domain as Perimeter, node);
       if (reasons.length) return { found: undefined, from: null, how: null, broken: { from, reasons } };
-      const files = [...new Set(chainSpans(node.links).flatMap(s => deltaFiles(ctx.repo, s.from, s.to).files ?? []))].sort();
-      return { ...picked, from, how: 'reported', reported: { files } };
+      return { ...picked, from, how: 'reported', reported: { files: deltaFilesOf(node) } };
     }
     return null;
   };
@@ -160,5 +198,19 @@ export function reviewChain(ctx: DeltaContext, head: string): ReviewChain {
     return null;
   };
 
-  return { resolve: (commit, domain) => resolve(commit, domain, 0), reported, deltaStart, chain };
+  const deltaFilesOf = (node: ChainNode): string[] => [...new Set(chainSpans(node.links).flatMap(s => deltaFiles(ctx.repo, s.from, s.to).files ?? []))].sort();
+
+  const carriedWaiver = <W>(rule: WaiverTarget, find: (commit: string) => W | null): CarriedWaiver<W> | null => {
+    const perimeter = WAIVER_PERIMETERS[rule];
+    if (!perimeter) return null;
+    for (const node of chain()) {
+      const waiver = find(node.commit);
+      if (!waiver) continue;
+      const reasons = reasonsFor(perimeter, node);
+      return reasons.length ? { waiver: null, from: node.commit, reasons } : { waiver, from: node.commit, files: deltaFilesOf(node) };
+    }
+    return null;
+  };
+
+  return { resolve: (commit, domain) => resolve(commit, domain, 0), reported, deltaStart, carriedWaiver, chain };
 }

@@ -152,6 +152,7 @@ export declare function waiverSentence(rule: WaiverTarget, sha: string): string;
 export declare function waiverFor(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): {
     message: OperatorMessage;
     reason: string;
+    line: string;
 } | null;
 /** Whether the operator typed a waiver of `rule` for `sha` whose reason is the template of the tool: ignored, said. */
 export declare function templateWaiver(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): boolean;
