@@ -227,7 +227,7 @@ export async function mergeOnOrder(options) {
             if (!globs)
                 throw new Refusal('paths', `rules.operatorOrders.paths.${step} nomme {slug} et l'ordre ne signe aucun slug lisible`);
             const from = step === 'publication' ? base : await mustGit(['merge-base', base, head], 'base commune de la PR d\'article');
-            const entries = rawDiff(await mustGit(['diff', '--raw', '--no-renames', '--no-abbrev', '-z', from, head], 'fichiers changés'));
+            const entries = rawDiff(await mustGit(['diff', '--ignore-submodules=none', '--raw', '--no-renames', '--no-abbrev', '-z', from, head], 'fichiers changés'));
             if (!entries)
                 throw new Refusal('git', `diff de la PR #${pr} illisible`);
             const forbidden = forbiddenPaths(entries.map(e => e.path), globs);
@@ -340,7 +340,7 @@ export async function mergeOnOrder(options) {
             return;
         }
         const fork = await mustGit(['merge-base', base, head], 'base commune de la PR d\'article');
-        const names = async (from, to) => (await mustGit(['diff', '--name-only', '--no-renames', '-z', from, to], 'fichiers changés')).split('\0').filter(Boolean);
+        const names = async (from, to) => (await mustGit(['diff', '--ignore-submodules=none', '--name-only', '--no-renames', '-z', from, to], 'fichiers changés')).split('\0').filter(Boolean);
         const allowed = new Set(await names(fork, head));
         const blob = async (rev, path) => { const r = await run(['rev-parse', '--verify', '--quiet', `${rev}:${path}`]); return r.ok ? r.stdout.trim() : null; };
         for (const path of await names(base, tree)) {

@@ -44,7 +44,7 @@ export function addedMigrations(root: string, migrations: string[], base?: strin
   const top = gitRead(root, ['rev-parse', '--show-toplevel']);
   const mergeBase = gitRead(root, ['merge-base', ref, 'HEAD']);
   if (!top || !mergeBase) return null;
-  const diff = gitRead(root, ['diff', '--name-only', '--diff-filter=A', '--relative', mergeBase, '--', '.']) ?? '';
+  const diff = gitRead(root, ['diff', '--ignore-submodules=none', '--name-only', '--diff-filter=A', '--relative', mergeBase, '--', '.']) ?? '';
   const untracked = gitRead(root, ['ls-files', '--others', '--exclude-standard', '--', '.']) ?? '';
   const changed = new Set([...diff.split('\n'), ...untracked.split('\n')].filter(Boolean));
   return { base: ref, added: migrations.filter((m) => changed.has(m)).sort() };

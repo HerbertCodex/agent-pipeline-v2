@@ -78,7 +78,7 @@ const EMAIL = /['"`]([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})['"`]/g;
  * included (a task run may check uncommitted tests), with the lines it adds.
  */
 function changedTests(repo: string, mergeBase: string, wanted: (path: string) => boolean): { file: string; lines: { line: number; text: string }[] }[] {
-  const tracked = git(repo, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--diff-filter=AM', '--name-only', '-z', mergeBase, '--']).split('\0').filter(Boolean);
+  const tracked = git(repo, ['diff', '--ignore-submodules=none', '--no-ext-diff', '--no-textconv', '--no-renames', '--diff-filter=AM', '--name-only', '-z', mergeBase, '--']).split('\0').filter(Boolean);
   const untracked = git(repo, ['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean);
   const out: { file: string; lines: { line: number; text: string }[] }[] = [];
   for (const file of [...new Set([...tracked, ...untracked])].filter(wanted).sort()) {

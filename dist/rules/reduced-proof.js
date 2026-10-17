@@ -123,7 +123,7 @@ export async function reducedLane(input) {
         reasons.push(`rules.operatorOrders.reducedProof.paths.${lane.step} non déclaré : aucune voie réduite à cette étape`);
     else if (!globs)
         reasons.push(`rules.operatorOrders.reducedProof.paths.${lane.step} nomme {slug} et l'ordre ne signe aucun slug lisible`);
-    const raw = gitRead(repo, ['diff', '--raw', '--no-renames', '--no-abbrev', '-z', mergeBase, commit]);
+    const raw = gitRead(repo, ['diff', '--ignore-submodules=none', '--raw', '--no-renames', '--no-abbrev', '-z', mergeBase, commit]);
     const entries = raw === null ? null : rawDiff(raw);
     if (!entries)
         reasons.push(`diff illisible entre ${short(mergeBase)} et ${short(commit)}`);
