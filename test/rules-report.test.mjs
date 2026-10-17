@@ -35,8 +35,8 @@ const TEST_ONLY = (n = 1) => ({
   'tests/e2e/carte.e2e.ts-snapshots/carte-390.png': png(40 + n),
 });
 
-/** main holds SITE; feat adds PAGE at C, reviewed in every domain of its plan (four captures for fidelite). */
-async function reviewed(t, { change = PAGE, skip = [], fidelityCaptures = ALL_CAPTURES, links = {}, site = SITE, config = {} } = {}) {
+/** main holds `site` (SITE) and `base`; feat adds PAGE at C, reviewed in every domain of its plan (four captures for fidelite). */
+async function reviewed(t, { change = PAGE, skip = [], fidelityCaptures = ALL_CAPTURES, links = {}, site = SITE, config = {}, base = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'apv3-report-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const origin = join(root, 'origin.git');
@@ -46,7 +46,7 @@ async function reviewed(t, { change = PAGE, skip = [], fidelityCaptures = ALL_CA
   git(repo, 'switch', '-q', '-c', 'main');
   put(repo, '.apv/config.json', { name: 'essai', gates: [{ id: 'unit', stage: 'full', command: [process.execPath, '-e', '0'] }], ...config });
   put(repo, 'README.md', 'projet\n');
-  for (const [path, value] of Object.entries(site)) put(repo, path, value);
+  for (const [path, value] of Object.entries({ ...site, ...base })) put(repo, path, value);
   git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'base'); git(repo, 'push', '-q', 'origin', 'main');
   git(repo, 'switch', '-q', '-c', 'feat');
   /** `links`: submodule links (mode 160000) set to a commit id, `{ path: sha }`; the folder stays empty (not checked out). */
@@ -433,3 +433,107 @@ test('AC-CARRY-WAIVER (review of #142, A2): controles is carried only when the c
   assert.ok(atC3.problems.length > 1, JSON.stringify(atC3.problems));
   assert.match(atC3.todo.join('\n'), new RegExp(`la dérogation controles de ${short(p.c)} n'est pas reportée.*projet web à ${short(c3)}, pas à ${short(p.c)}`));
 });
+
+/** A tracker, an e-mail field, personal fields and a query, on several lines (second review of #141, M1). */
+const TERMS = '<p>bloc</p>\n<script src="https://www.googletagmanager.com/gtag/js"></script>\n<input name="email" autocomplete="email" />\n<p>{user.phone} {profile.birthdate}</p>\n{#await supabase.from(\'profiles\').select(\'email\') then rows}{rows.length}{/await}\n';
+
+test('report (second review of #141, M1): a file name with a space hides no term: rgpd is not reported, donnees asked', async t => {
+  for (const name of ['src/lib/components/Mon composant.svelte', 'tests/e2e/mon test.e2e.ts']) {
+    const p = await reviewed(t, { change: { ...PAGE, [name]: '<p>bloc</p>\n' } });
+    const c2 = p.commit({ [name]: TERMS });
+    const report = await p.check(c2);
+    const rgpd = domain(report, 'rgpd');
+    assert.equal(rgpd.status, 'missing', `${name} : ${JSON.stringify(rgpd)}`);
+    assert.match(rgpd.detail, /n'est pas reportée, le delta touche son périmètre : .*rgpd retenue/, name);
+    assert.equal(domain(report, 'donnees')?.status, 'missing', `${name} : ${JSON.stringify(domain(report, 'donnees'))}`);
+  }
+});
+
+/** Loaders of src/routes/compte/+page.server.ts that build their path (second review of #141, M2), `dir` the folder they aim at. */
+const LOADERS = dir => ({
+  "import('…' + n)": `export const load = async ({ params }) => ({ f: (await import('../../../${dir}/' + params.n + '.ts')).default });\n`,
+  'import(`…` + n)': `export const load = async ({ params }) => ({ f: (await import(\`../../../${dir}/\` + params.n)).default });\n`,
+  'import⏎(x)': `export const load = async ({ params }) => ({ f: (await import\n(\`../../../${dir}/\${params.n}.ts\`)).default });\n`,
+  'import/**/(x)': `export const load = async ({ params }) => ({ f: (await import/**/(\`../../../${dir}/\${params.n}.ts\`)).default });\n`,
+  'import // ⏎(x)': `export const load = async ({ params }) => ({ f: (await import // chargé à la demande\n(\`../../../${dir}/\${params.n}.ts\`)).default });\n`,
+  'gabarit \\⏎': `export const load = async ({ params }) => ({ f: (await import(\`../../../${dir}/\\\n\${params.n}.ts\`)).default });\n`,
+  "require('…' + n)": `export const load = ({ params }) => ({ f: require('../../../${dir}/' + params.n) });\n`,
+  "readFileSync('…' + n)": `import { readFileSync } from 'node:fs';\nexport const load = ({ params }) => ({ f: readFileSync('${dir}/' + params.n + '.ts', 'utf8') });\n`,
+  'createReadStream(x)': `import { createReadStream } from 'node:fs';\nexport const load = ({ params }) => ({ f: createReadStream(\n  params.n) });\n`,
+});
+
+test('report (second review of #141, M2): a fixture or a support module of the tests breaks the report of fidelite and captures, whatever loads it', async t => {
+  const loaders = LOADERS('tests/fixtures');
+  for (const [name, loader] of Object.entries(loaders)) {
+    const p = await reviewed(t, { change: { ...PAGE, 'src/routes/compte/+page.server.ts': loader, 'tests/fixtures/pages.ts': 'export default [];\n' } });
+    const c2 = p.commit({ 'tests/fixtures/pages.ts': 'export default ["contenu affiché changé"];\n' });
+    const report = await p.check(c2);
+    const fid = domain(report, 'fidelite');
+    assert.equal(fid.status, 'missing', `${name} : ${JSON.stringify(fid)}`);
+    assert.match(fid.detail, /tests\/fixtures\/pages\.ts : module de tests chargeable par l'application, relecture de fidélité exigée/, name);
+    assert.equal(rule(report, 'captures').status, 'refused', `${name} : ${JSON.stringify(rule(report, 'captures'))}`);
+  }
+  // No loader at all: a support module (tests/support/), a fixture beside a test, are still no test proper.
+  for (const file of ['tests/support/page.ts', 'tests/e2e/fixtures/carte.ts', 'tests/e2e/helpers.ts']) {
+    const p = await reviewed(t);
+    const c2 = p.commit({ [file]: 'export default 1;\n' });
+    const fid = domain(await p.check(c2), 'fidelite');
+    assert.equal(fid.status, 'missing', `${file} : ${JSON.stringify(fid)}`);
+    assert.match(fid.detail, new RegExp(`${file.replace(/[./]/g, '\\$&')} : module de tests chargeable par l'application, relecture de fidélité exigée`));
+  }
+  // Any other file outside the screens (a note of the pipeline): no test, no image, no document.
+  const p = await reviewed(t);
+  const c2 = p.commit({ '.apv/state/notes.md': '# Notes\n' });
+  const fid = domain(await p.check(c2), 'fidelite');
+  assert.equal(fid.status, 'missing', JSON.stringify(fid));
+  assert.match(fid.detail, /\.apv\/state\/notes\.md : ni fichier de test, ni image de référence, ni documentation non servie/);
+});
+
+test('report (second review of #141, M2): every computed load of the application is seen, over lines and comments, for a test proper', async t => {
+  for (const [name, loader] of Object.entries(LOADERS('tests/e2e'))) {
+    const p = await reviewed(t, { change: { ...PAGE, 'src/routes/compte/+page.server.ts': loader } });
+    const c2 = p.commit(TEST_ONLY());
+    const report = await p.check(c2);
+    const fid = domain(report, 'fidelite');
+    assert.equal(fid.status, 'missing', `${name} : ${JSON.stringify(fid)}`);
+    assert.match(fid.detail, /tests\/e2e\/carte\.e2e\.ts : chargement par motif ou chemin calculé dans src\/routes\/compte\/\+page\.server\.ts/, name);
+    assert.equal(rule(report, 'captures').status, 'refused', name);
+  }
+  // A JavaScript loader named .sql (any case) is read as JavaScript.
+  for (const file of ['src/lib/loader.sql', 'src/lib/LOADER.SQL']) {
+    const p = await reviewed(t, { change: { ...PAGE, [file]: 'export default (n) => import(n);\n' } });
+    const c2 = p.commit(TEST_ONLY());
+    const fid = domain(await p.check(c2), 'fidelite');
+    assert.equal(fid.status, 'missing', `${file} : ${JSON.stringify(fid)}`);
+    assert.match(fid.detail, new RegExp(`chargement par motif ou chemin calculé dans ${file.replace(/[./]/g, '\\$&')}`));
+  }
+});
+
+test('report (second review of #141, M2): the pilot project, a SQL function named *_import( and loads that only comments or literals hold, keeps the report', async t => {
+  const quiet = {
+    ...PAGE,
+    'supabase/migrations/20261001000000_import.sql': 'create function public.confirm_application_import(p_id uuid) returns void language sql as $$ select 1 $$;\nselect confirm_application_import(p_id);\n',
+    'src/lib/home/motion.ts': '/*\n * anime.js et three ne sont importés qu\'à la demande (import() dynamique).\n */\n// require(x) jamais ici, readFileSync(chemin) non plus\nexport const motion = async () => (await import(\'./anime\')).default;\n',
+    'src/lib/server/fonts.ts': "import { readFileSync } from 'node:fs';\nexport const font = () => readFileSync('static/fonts/a.woff2');\nexport const json = async () => (await import('./data.json', { with: { type: 'json' } })).default;\nconst url = 'http://exemple.test/'; // import(url) en commentaire\n",
+    'src/lib/server/data.json': '{"a":1}\n',
+  };
+  const p = await reviewed(t, { change: quiet });
+  const c2 = p.commit(TEST_ONLY());
+  const report = await p.check(c2);
+  const fid = domain(report, 'fidelite');
+  assert.equal(fid.status, 'recorded', JSON.stringify(fid));
+  assert.match(fid.detail, new RegExp(`relecture fidelite reportée de ${short(p.c)}`));
+  const captures = rule(report, 'captures');
+  assert.equal(captures.status, 'ok', JSON.stringify(captures));
+  assert.match(captures.detail, new RegExp(`captures jointes à ${short(p.c)}, reportées : delta sans écran, 3 fichiers`));
+});
+
+test('report (second review of #141, M2): beyond the bound of the search for loads, nothing is judged: captures required', async t => {
+  // In the base (17 Mio of text the application holds); the plan of C does not read it.
+  const p = await reviewed(t, { base: { 'src/lib/server/grand.txt': 'ligne de texte de l\'application\n'.repeat(560_000) } });
+  const c2 = p.commit(TEST_ONLY());
+  const fid = domain(await p.check(c2), 'fidelite');
+  assert.equal(fid.status, 'missing', JSON.stringify(fid));
+  assert.match(fid.detail, /recherche des chargements par motif : .*impossible de juger/);
+});
+
