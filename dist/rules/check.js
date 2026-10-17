@@ -21,7 +21,7 @@ import { MERGE_RULES, RULE_TITLES, rulesSettings } from './config.js';
 import { TEMPLATE_WAIVER_NOTE, anchorKey, readOperatorMessages, templateWaiver, waiverFor, waiverSentence } from './operator.js';
 import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
-import { carriedHeads } from './carry.js';
+import { reviewChain } from './delta.js';
 import { LANE_NAME, docsOnlyLane, laneLines } from './docs-only.js';
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
 import { ciProofLines, verifyCiProof } from './ci-proof.js';
@@ -556,38 +556,60 @@ export async function checkMergeRules(input) {
     // relecture, captures: the domains `apv review plan` retains for the change, each recorded at this commit, or waived
     // for that domain alone by the operator (« dérogation relecture:<domaine> <commit> : <raison> », issue #126).
     const reviews = latestReviews(common, sha);
+    const screenMatch = screenMatchers(settings.screens);
     // A head that only brings its base up to date (a merge of the target, the diff identical byte for byte) keeps the
-    // reviews of the head before, said domain by domain (carry.ts, pilot project #230); its own reviews come first.
-    const carried = carriedHeads(repo, sha, resolveCommit(repo, input.target)).map(head => ({ head, reviews: latestReviews(common, head) }));
-    const usable = (r) => !!r && !r.problem && !!r.record && r.record.findings.critical === 0 && r.record.findings.high === 0;
-    const blocking = (r) => !!r?.record && (r.record.findings.critical > 0 || r.record.findings.high > 0);
-    // The review of the head always decides, even blocking (review of #135); a review is carried over only when the head
-    // has none of the domain, and a critical or high finding at any head of the chain (its latest review) blocks.
+    // reviews of the head before, said domain by domain (carry.ts, pilot project #230); its own reviews come first. A head
+    // without a review of a domain other than securite keeps the review of an earlier commit of the branch when the delta
+    // since it leaves the perimeter of the domain, and a review of the delta counts on a usable review where it starts
+    // (delta.ts, docs/ACCELERATION-LOTS.md, part B). The perimeter is the plan of the reviews of each step, read with the
+    // settings of the base, as for the change itself.
+    const deltaPlans = new Map();
+    const touches = (domain, span) => {
+        const key = `${span.from}..${span.to}`;
+        if (!deltaPlans.has(key)) {
+            try {
+                deltaPlans.set(key, planReviews({ repo, base: span.from, head: span.to, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [] }));
+            }
+            catch (error) {
+                deltaPlans.set(key, errorMessage(error));
+            }
+        }
+        const delta = deltaPlans.get(key);
+        if (typeof delta === 'string')
+            return [`plan des revues du delta illisible (${delta.slice(0, 160)})`];
+        const decision = delta.domains.find(d => d.domain === domain);
+        if (decision?.decision === 'retained')
+            return [`${domain} retenue par le plan des revues : ${decision.reason.slice(0, 160)}${decision.files.length ? ` (${decision.files.slice(0, 3).join(', ')}${decision.fileCount > 3 ? ', ...' : ''})` : ''}`];
+        return domain === 'fidelite' ? touchesNoScreen(repo, span.from, span.to, screenMatch).reasons : [];
+    };
+    const chainReviews = reviewChain({ repo, common, target: resolveCommit(repo, input.target), touches }, sha);
     const pick = (domain) => {
-        const own = reviews.get(domain);
-        if (own || !carried.length)
-            return { found: own, from: null };
-        const chain = carried.map(c => ({ head: c.head, r: c.reviews.get(domain) })).filter(x => x.r);
-        const stop = chain.find(x => blocking(x.r));
-        if (stop)
-            return { found: stop.r, from: stop.head };
-        const clean = chain.find(x => usable(x.r));
-        return clean ? { found: clean.r, from: clean.head } : { found: undefined, from: null };
+        const own = chainReviews.resolve(sha, domain);
+        return own.found ? own : chainReviews.reported(domain) ?? own;
     };
     const carriedNote = (from) => (from ? `relecture reportée de ${short(from)} (diff identique)` : '');
+    const fileList = (files) => `${files.length} fichier${files.length > 1 ? 's' : ''}${files.length ? ` : ${files.slice(0, 5).join(', ')}${files.length > 5 ? ', ...' : ''}` : ''}`;
+    const howNote = (domain, p) => [
+        p.how === 'carried' ? carriedNote(p.from) : '',
+        p.how === 'reported' && p.reported ? `relecture ${domain} reportée de ${short(p.from)} (delta sans fichier de son périmètre : ${fileList(p.reported.files)})` : '',
+        p.delta ? `relecture du delta depuis ${short(p.delta.from)} (${p.delta.files} fichier${p.delta.files > 1 ? 's' : ''})` : '',
+    ].filter(Boolean).join(', ');
     const reviewProblems = [];
     const reviewTodo = [];
     const domainStates = [];
     for (const domain of retained) {
         const agent = `apv:${DOMAIN_REVIEWERS[domain]}`;
-        const { found, from } = pick(domain);
+        const picked = pick(domain);
+        const { found, from } = picked;
         const ask = `Relecture ${domain} par ${agent} sur une copie détachée à ${short(sha)} ; l'agent l'enregistre lui-même (apv review record --commit ${short(sha)} --domain ${domain} ...).`;
         const f = found?.record?.findings;
-        const problem = !found ? `aucune relecture enregistrée à ${short(sha)}`
+        const broken = picked.broken ? ` ; celle de ${short(picked.broken.from)} n'est pas reportée, le delta touche son périmètre : ${picked.broken.reasons.slice(0, 3).join(' ; ')}` : '';
+        const problem = !found ? `aucune relecture enregistrée à ${short(sha)}${broken}`
             : found.problem || !found.record ? `relecture inutilisable (${found.problem ?? 'illisible'})`
                 : f.critical > 0 || f.high > 0 ? `${f.critical} constat(s) critique(s) et ${f.high} haut(s) à ${short(from ?? sha)}` : null;
         if (!problem) {
-            domainStates.push({ domain, status: 'recorded', detail: `${found.record.reviewer}, critique 0, haut 0, moyen ${f.medium}, bas ${f.low}${from ? `, ${carriedNote(from)}` : ''}`, waiver: null });
+            const note = howNote(domain, picked);
+            domainStates.push({ domain, status: 'recorded', detail: `${found.record.reviewer}, critique 0, haut 0, moyen ${f.medium}, bas ${f.low}${note ? `, ${note}` : ''}`, waiver: null });
             continue;
         }
         const waiver = waiverFor(messages, `relecture:${domain}`, sha);
@@ -597,7 +619,13 @@ export async function checkMergeRules(input) {
         }
         domainStates.push({ domain, status: 'missing', detail: problem, waiver: null });
         reviewProblems.push(`${domain} : ${problem}`);
-        reviewTodo.push(found && !found.problem && found.record ? `Corrige chaque constat critique ou haut de la relecture ${domain}, avec le test qui le prouve, puis fais relire le nouveau commit (${agent}).` : ask);
+        // Where a review of the delta alone may start: the review not reported, or the nearest usable one of the branch.
+        const start = found && !found.problem && found.record ? null : picked.broken?.from ?? chainReviews.deltaStart(domain);
+        if (start) {
+            const files = touchedFiles(repo, start, sha);
+            reviewTodo.push(`Relecture du delta seul ${short(start)}..${short(sha)} (${fileList(files)}) par ${agent} sur une copie détachée à ${short(sha)} : apv review record --commit ${short(sha)} --domain ${domain} --delta-from ${short(start)} ... (le rapport cite les deux commits${domain === 'fidelite' ? ` ; captures à ${short(sha)} des écrans touchés` : ''}).`);
+        }
+        reviewTodo.push(found && !found.problem && found.record ? `Corrige chaque constat critique ou haut de la relecture ${domain}, avec le test qui le prouve, puis fais relire le nouveau commit (${agent}).` : start ? `Ou ${ask[0].toLowerCase()}${ask.slice(1)}` : ask);
         if (templateWaiver(messages, `relecture:${domain}`, sha))
             reviewTodo.push(`${domain} : ${TEMPLATE_WAIVER_NOTE}`);
         reviewTodo.push(`Ou, pour ce domaine seul, l'opérateur tape lui-même : « ${waiverSentence(`relecture:${domain}`, sha)} »${domain === ALWAYS_REVIEWED ? ' (dérogation sur la sécurité)' : ''}.`);
@@ -628,7 +656,6 @@ export async function checkMergeRules(input) {
     const fidelity = domainStates.find(d => d.domain === 'fidelite');
     const fidelityWaiver = !fidelity || fidelity.status === 'recorded' || reviews.has('fidelite') ? null
         : fidelity.status === 'waived' ? fidelity.waiver.reason : waiverFor(messages, 'relecture', sha)?.reason ?? null;
-    const screenMatch = screenMatchers(settings.screens);
     const changed = changedFiles(repo, mergeBase, sha);
     const screens = changed.filter(f => isScreen(f, screenMatch));
     const addedScreens = changed.filter(f => screenLike(f, screenMatch));
@@ -655,7 +682,9 @@ export async function checkMergeRules(input) {
             ? outcome('captures', 'refused', `relecture de fidélité retenue${addedScreens.length ? ` (écran(s) ou fichier(s) d'interface : ${addedScreens.slice(0, 5).join(', ')}${addedScreens.length > 5 ? ', ...' : ''})` : ''}${screenVerdict?.reasons.length ? ` ; captures nécessaires : ${screenVerdict.reasons.slice(0, 5).join(' ; ')}${screenVerdict.reasons.length > 5 ? ' ; ...' : ''}` : ''}, captures attendues : ${needed.join(', ')}`, [`capture(s) absente(s) de la relecture fidelite à ${short(sha)} : ${missing.join(', ')}`], [
                 `apv:qa-fidelite capture chaque écran changé ou qui utilise un fichier changé (${missing.join(', ')}), les regarde à côté de la maquette validée et les joint à sa relecture : apv review record --commit ${short(sha)} --domain fidelite --capture <largeur>:<thème>:<fichier> ...`,
             ])
-            : outcome('captures', 'ok', `captures jointes à ${short(fidelity.from ?? sha)}${fidelity.from ? ` (${carriedNote(fidelity.from)})` : ''} : ${needed.join(', ')}`));
+            : outcome('captures', 'ok', fidelity.how === 'reported' && fidelity.reported
+                ? `captures jointes à ${short(fidelity.from)}, reportées : delta sans écran, ${fileList(fidelity.reported.files)} ; ${needed.join(', ')}`
+                : `captures jointes à ${short(fidelity.from ?? sha)}${fidelity.from ? ` (${carriedNote(fidelity.from)})` : ''} : ${needed.join(', ')}`));
     }
     // controles: the base checks of a web project, in the configuration the proof uses (the base's, kept, and the change's).
     const required = isWebAt(repo, sha) ? settings.requiredGates : settings.requiredGates.filter(g => g.source === 'config');

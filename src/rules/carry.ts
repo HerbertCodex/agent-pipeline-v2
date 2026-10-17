@@ -23,7 +23,8 @@ import { gitRead } from '../run/git-probe.js';
 
 const MAX_CHAIN = 5;
 
-function isAncestor(repo: string, ancestor: string, of: string): boolean {
+/** Whether `ancestor` is an ancestor of `of` (or the same commit). */
+export function isAncestor(repo: string, ancestor: string, of: string): boolean {
   return spawnSync('git', ['-c', 'core.hooksPath=/dev/null', 'merge-base', '--is-ancestor', ancestor, of], { cwd: repo, stdio: 'ignore', timeout: 30_000 }).status === 0;
 }
 
@@ -35,7 +36,7 @@ function diffBytes(repo: string, from: string, to: string): Buffer | null {
 }
 
 /** The files of a diff between two commits; null when unreadable. */
-function diffFiles(repo: string, from: string, to: string): string[] | null {
+export function diffFiles(repo: string, from: string, to: string): string[] | null {
   const raw = gitRead(repo, ['diff', '--name-only', '-z', '--no-renames', from, to]);
   return raw === null ? null : raw.split('\0').filter(Boolean);
 }
@@ -72,4 +73,57 @@ export function carriedHeads(repo: string, head: string, target: string | null):
     at = step.from;
   }
   return out;
+}
+
+/** Commits of the pull request walked back from its head to find an earlier review or waiver (docs/ACCELERATION-LOTS.md, 6.2). */
+export const MAX_REPORT_WALK = 10;
+
+/** One step of the change between two commits of the pull request: `to` has `from` as its first parent. */
+export interface ChainLink { from: string; to: string }
+/**
+ * A commit C of the pull request below the head, with the links that lead from it to the head: the first-parent steps,
+ * walked one by one. A merge of the target that carry.ts carries (diff identical byte for byte) adds no link: what it
+ * brings is the target's, merged under the rules, and the diff of the pull request stays the same over it.
+ */
+export interface ChainNode { commit: string; links: ChainLink[] }
+
+/**
+ * The commits of the pull request below `head`, nearest first: first parent after first parent, a merge of the target
+ * carried by carry.ts followed to the head it carries, MAX_REPORT_WALK steps at most, never a commit of the target (an
+ * ancestor of it holds the reviews of another change). Empty without a target. A commit that is not an ancestor of the
+ * head (a rebase) is never in it: nothing is carried to a rewritten history.
+ */
+export function prChain(repo: string, head: string, target: string | null, max = MAX_REPORT_WALK): ChainNode[] {
+  if (!target) return [];
+  const out: ChainNode[] = [];
+  let at = head;
+  let links: ChainLink[] = [];
+  for (let k = 0; k < max; k += 1) {
+    const step = carriedHeadOnce(repo, at, target);
+    if (step) {
+      at = step.from;
+      out.push({ commit: at, links: [...links] });
+      continue;
+    }
+    const parent = gitRead(repo, ['rev-list', '--parents', '-n', '1', at])?.split(/\s+/)[1];
+    if (!parent || isAncestor(repo, parent, target)) break;
+    links = [...links, { from: parent, to: at }];
+    out.push({ commit: parent, links });
+    at = parent;
+  }
+  return out;
+}
+
+/**
+ * The spans of a chain node: each run of links that follow one another (a carried merge cuts the run), as one change from
+ * the bottom of the run to its top. Without a carried merge, the one span is C..head.
+ */
+export function chainSpans(links: readonly ChainLink[]): ChainLink[] {
+  const spans: ChainLink[] = [];
+  for (const link of links) {
+    const last = spans.at(-1);
+    if (last && last.from === link.to) last.from = link.from;
+    else spans.push({ ...link });
+  }
+  return spans;
 }

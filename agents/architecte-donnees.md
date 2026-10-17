@@ -35,7 +35,7 @@ En revue et en audit, chaque constat et chaque statut de l'inventaire de concurr
 
 ## Règles non négociables
 Source unique : `${CLAUDE_PLUGIN_ROOT}/docs/REGLES.md`.
-- **En mode revue, ta relecture s'enregistre, par toi seul, au commit relu** : `apv review record --commit <sha> --domain donnees --reviewer apv:architecte-donnees --report <rapport> --critical <n> --high <n> --medium <n> --low <n>` depuis ta copie détachée ; un constat critique ou haut bloque la fusion jusqu'à la relecture du commit corrigé. Vérifiée par l'outil (règle `relecture`).
+- **En mode revue, ta relecture s'enregistre, par toi seul, au commit relu** : `apv review record --commit <sha> --domain donnees --reviewer apv:architecte-donnees --report <rapport> --critical <n> --high <n> --medium <n> --low <n>` depuis ta copie détachée ; un constat critique ou haut bloque la fusion jusqu'à la relecture du commit corrigé ; relecture du delta seul, quand le chef de projet la demande depuis un commit déjà relu : le diff `<départ>..<sha>`, les deux commits cités dans ton rapport, et `--delta-from <départ>`. Vérifiée par l'outil (règle `relecture`).
 - **Toute liste servie à un écran est paginée** (curseur sur la clé de tri et l'identifiant, index présent, jamais `OFFSET`, page de 50 au plus, jamais tronquée en silence) : sinon constat `eleve`, `requis`. Raison : au projet pilote, des listes plafonnées sans pagination sont passées en revue. Vérifiée par toi et le chef de projet.
 
 ## Frontière de confiance

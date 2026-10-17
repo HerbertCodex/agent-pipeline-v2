@@ -55,6 +55,7 @@ Sortie : 0 plan établi, 1 référence introuvable ou configuration invalide, 2 
 
   apv review record --commit <sha> --domain <domaine> --reviewer <agent> --report <fichier>
                     --critical <n> --high <n> --medium <n> --low <n> [--capture <largeur>:<thème>:<fichier>]...
+                    [--delta-from <sha>]
   apv review show --commit <sha> [--json]
 
 record  enregistre une relecture au commit exact, lancée depuis la copie relue (HEAD à ce commit, fichiers
@@ -64,6 +65,11 @@ record  enregistre une relecture au commit exact, lancée depuis la copie relue 
         ou dark ; PNG, JPEG ou WebP, une image différente par capture). Copie le tout dans le magasin du dépôt
         (<répertoire git commun>/apv/reviews/<commit>/), jamais versionné. Le crochet Bash du plugin ne laisse
         lancer record qu'à l'agent relecteur du domaine : ni l'implementer, ni l'intégrateur, ni le chef de projet.
+--delta-from  relecture du delta seul (docs/ACCELERATION-LOTS.md, partie B) : le relecteur a lu le diff de ce commit,
+        ancêtre du commit relu sur la même branche, au commit relu, et rien d'autre ; le rapport cite les deux commits,
+        la liste des fichiers du delta est enregistrée. apv rules check la compte quand une relecture utilisable du
+        domaine existe au commit de départ (ou une chaîne de relectures de delta qui y remonte, cinq au plus) et que
+        les fichiers enregistrés sont ceux du delta recalculé. Pour fidelite, avec les captures des écrans touchés.
 show    affiche la dernière relecture de chaque domaine à ce commit (lue par apv rules check avant une fusion).
 Sortie de record et show : 0 fait, 1 refusé (copie à un autre commit, relecteur ou fichiers invalides), 2 appel incorrect.`;
 const options = {
@@ -71,8 +77,9 @@ const options = {
     json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
     commit: { type: 'string' }, domain: { type: 'string' }, reviewer: { type: 'string' }, report: { type: 'string' },
     critical: { type: 'string' }, high: { type: 'string' }, medium: { type: 'string' }, low: { type: 'string' }, capture: { type: 'string', multiple: true },
+    'delta-from': { type: 'string' },
 };
-const RECORD_ONLY = ['domain', 'reviewer', 'report', 'critical', 'high', 'medium', 'low', 'capture'];
+const RECORD_ONLY = ['domain', 'reviewer', 'report', 'critical', 'high', 'medium', 'low', 'capture', 'delta-from'];
 function count(value, name) {
     if (value === undefined)
         throw new UsageError(`--${name} manquant (nombre de constats ${name}, 0 s'il n'y en a pas)`);
@@ -176,7 +183,7 @@ export async function run(args, io) {
                     lines.push('  aucune');
                 for (const [domain, r] of found) {
                     const f = r.record?.findings;
-                    lines.push(`  ${domain} : ${r.record ? `${r.record.reviewer}, ${r.record.at}, critique ${f.critical}, haut ${f.high}, moyen ${f.medium}, bas ${f.low}, ${r.record.captures.length} capture(s)` : 'illisible'}${r.problem ? ` ; INUTILISABLE : ${r.problem}` : ''}`);
+                    lines.push(`  ${domain} : ${r.record ? `${r.record.reviewer}, ${r.record.at}, critique ${f.critical}, haut ${f.high}, moyen ${f.medium}, bas ${f.low}, ${r.record.captures.length} capture(s)${r.record.delta ? `, relecture du delta depuis ${r.record.delta.from.slice(0, 12)} (${r.record.delta.files.length} fichier(s))` : ''}` : 'illisible'}${r.problem ? ` ; INUTILISABLE : ${r.problem}` : ''}`);
                 }
                 io.stdout(`${lines.join('\n')}\n`);
                 return EXIT.ok;
@@ -189,13 +196,15 @@ export async function run(args, io) {
                 throw new UsageError('--report <fichier> manquant (le rapport complet de la relecture)');
             const findings = { critical: count(values.critical, 'critical'), high: count(values.high, 'high'), medium: count(values.medium, 'medium'), low: count(values.low, 'low') };
             const captures = (values.capture ?? []).map(c => { const parsed = parseCapture(c); return { ...parsed, path: resolve(io.cwd, parsed.path) }; });
-            const record = recordReview(common, { checkout, commit: values.commit, domain: values.domain, reviewer: values.reviewer, findings, report: resolve(io.cwd, values.report), captures });
+            const record = recordReview(common, { checkout, commit: values.commit, domain: values.domain, reviewer: values.reviewer, findings, report: resolve(io.cwd, values.report), captures,
+                ...(values['delta-from'] !== undefined ? { deltaFrom: values['delta-from'] } : {}) });
             if (values.json) {
                 json(io, record);
                 return EXIT.ok;
             }
             io.stdout(`Enregistrement ${record.id}\nRelecture ${record.domain} enregistrée à ${record.commit.slice(0, 12)} par ${record.reviewer} : critique ${findings.critical}, haut ${findings.high}, moyen ${findings.medium}, bas ${findings.low}` +
-                `${record.captures.length ? ` ; captures ${record.captures.map(c => `${c.viewport}:${c.theme}`).join(', ')}` : ''}.\n` +
+                `${record.captures.length ? ` ; captures ${record.captures.map(c => `${c.viewport}:${c.theme}`).join(', ')}` : ''}` +
+                `${record.delta ? ` ; relecture du delta depuis ${record.delta.from.slice(0, 12)} (${record.delta.files.length} fichier(s))` : ''}.\n` +
                 'Le crochet du plugin la scelle si tu es l\'agent relecteur du domaine ; sans ce sceau, apv rules check ne la compte pas.\n' +
                 `${findings.critical || findings.high ? 'Constats critiques ou hauts : la fusion de ce commit sera refusée (apv rules check) tant qu\'un nouveau commit corrigé n\'est pas relu.\n' : ''}`);
             return EXIT.ok;

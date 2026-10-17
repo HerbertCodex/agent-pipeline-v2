@@ -37,6 +37,15 @@ export interface ReviewRecord {
     findings: Findings;
     report: StoredFile;
     captures: StoredCapture[];
+    /**
+     * A review of the delta only (docs/ACCELERATION-LOTS.md, 6.3): the reviewer read the change from `from`, an ancestor of
+     * the commit, to the commit, and nothing else; `files` is that diff (`git diff --name-only --no-renames`), sorted. It
+     * counts only on a usable review of the domain at `from` (apv rules check). Absent: a review of the whole change.
+     */
+    delta?: {
+        from: string;
+        files: string[];
+    };
 }
 export interface CaptureInput {
     viewport: CaptureViewport;
@@ -52,6 +61,8 @@ export interface RecordInput {
     findings: Findings;
     report: string;
     captures: CaptureInput[];
+    /** A review of the delta from this commit (`--delta-from`), an ancestor of the commit; absent: the whole change. */
+    deltaFrom?: string;
     now?: Date;
 }
 /** Smallest capture accepted, in bytes: an empty or placeholder image proves nothing. */
