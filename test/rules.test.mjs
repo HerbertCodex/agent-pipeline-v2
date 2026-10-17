@@ -348,6 +348,13 @@ test('captures: when they stay required, the output names each file that makes t
   assert.match(await reasons(vite, { 'tests/fx/index.ts': 'export default 2;\n' }), /tests\/fx\/index\.ts : visé par l'alias de vite\.config\.ts/);
   const glob = { ...SITE, 'src/routes/compte/+page.ts': 'const t = import.meta.glob("/tests/*.ts");\nexport const load = () => ({ t });\n' };
   assert.match(await reasons(glob, { 'tests/a.test.ts': 'test\n' }), /tests\/a\.test\.ts : chargement par motif ou chemin calculé dans src\/routes\/compte\/\+page\.ts/);
+  // #262 of the pilot project: a name that ends in « import » (here a SQL function) is not a dynamic import; a call of
+  // import itself, even after an operator, still is.
+  const sql = { ...SITE, 'supabase/migrations/1_import.sql': 'select confirm_application_import(p_id);\n' };
+  const fromSql = rule((await project(t, { base: sql, config, change: { 'tests/a.test.ts': 'test\n' } }).check()).report, 'captures');
+  assert.equal(fromSql.status, 'not_applicable', JSON.stringify(fromSql));
+  const dynamic = { ...SITE, 'src/routes/compte/+page.ts': 'export const load = async ({ url }) => ({ t: (await import(url.pathname)).default });\n' };
+  assert.match(await reasons(dynamic, { 'tests/a.test.ts': 'test\n' }), /tests\/a\.test\.ts : chargement par motif ou chemin calculé dans src\/routes\/compte\/\+page\.ts/);
 });
 
 /**

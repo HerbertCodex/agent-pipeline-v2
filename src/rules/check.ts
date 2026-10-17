@@ -138,7 +138,9 @@ const TOOLING_PATH = /^(?:\.apv|\.github(?!\/(?:workflows|actions)\/)|\.claude|\
 /** Configuration files that may declare aliases (Vite, SvelteKit, Astro, Nuxt, Next, webpack, TypeScript, JavaScript). */
 const ALIAS_CONFIG = /(?:^|\/)(?:(?:vite|vitest|svelte|astro|nuxt|next|webpack|rollup)\.config\.[cm]?[jt]s|[jt]sconfig[\w.-]*\.json)$/;
 /** A loading by pattern or by a computed path: import.meta.glob, import(`…${x}…`), import(x), require(x). */
-const COMPUTED_LOAD = 'import\\.meta\\.glob|import\\([[:space:]]*`[^`]*\\$\\{|import\\([[:space:]]*[^\'"`[:space:])]|require\\([[:space:]]*`[^`]*\\$\\{|require\\([[:space:]]*[^\'"`[:space:])]';
+// A name that ends in « import » (confirm_application_import( of a SQL migration, #262 of the pilot project) is not the
+// dynamic import; `require(` keeps no such bound, a wrapper (myrequire) may load a module.
+const COMPUTED_LOAD = 'import\\.meta\\.glob|(^|[^[:alnum:]_$])import\\([[:space:]]*`[^`]*\\$\\{|(^|[^[:alnum:]_$])import\\([[:space:]]*[^\'"`[:space:])]|require\\([[:space:]]*`[^`]*\\$\\{|require\\([[:space:]]*[^\'"`[:space:])]';
 const TOOLING_FILE = /^(?:\.gitignore|\.gitattributes|\.editorconfig|\.nvmrc|\.node-version)$/;
 const TEST_PATH = /^(?:tests?|e2e)\/|(?:^|\/)(?:__tests__|__snapshots__)\/|\.(?:test|spec)\.[cm]?[jt]s$|^(?:playwright|vitest)\.config\.[cm]?[jt]s$/;
 const DOC_PATH = /^(?:docs\/.+|[^/]+)\.md$/;
