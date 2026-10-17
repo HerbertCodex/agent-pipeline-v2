@@ -315,7 +315,8 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
   const gates: GateEvidence[] = [];
   const near: VerifyResult['nearTimeout'] = [];
   for (const gateId of required) {
-    const all = atCommit.filter(f => f.receipt.gateId === gateId);
+    // A receipt of an early check (`early`) is feedback of the task stage, never proof of any check, whatever its id.
+    const all = atCommit.filter(f => f.receipt.gateId === gateId && !f.receipt.early);
     const targetedOnes = all.filter(f => f.receipt.targeted === true);
     const targeted = targetedOnes.length;
     const via = viaTargeted.has(gateId);

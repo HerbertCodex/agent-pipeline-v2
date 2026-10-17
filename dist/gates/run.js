@@ -3,7 +3,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { DEFAULT_LOCK_WAIT_MS, gateStage, validateReceipt, webRecordSchema } from '../domain/contracts.js';
+import { DEFAULT_LOCK_WAIT_MS, gateSchema, gateStage, validateReceipt, webRecordSchema } from '../domain/contracts.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { errorMessage, invariant } from '../domain/errors.js';
 import { hash } from '../domain/hash.js';
@@ -14,6 +14,7 @@ import { failureExcerpt, MAX_DIAGNOSTIC_CHARS } from '../engine/diagnostic.js';
 import { schedule, success } from '../engine/scheduler.js';
 import { suiteSettings } from '../config/load.js';
 import { PipelineError } from '../domain/errors.js';
+import { matches } from '../policy/policy.js';
 import { WEB_RECORD, runsWebAudit } from '../web/impact.js';
 import { publishRun, pruneStore, receiptRetention, sharedStore } from './store.js';
 import { readPreviewState } from '../preview/state.js';
@@ -121,6 +122,46 @@ export function stageGates(gates, stage) {
     const full = gates.filter(g => gateStage(g) === 'full');
     return { run: gates.filter(g => gateStage(g) === 'task'), targeted: full.filter(g => g.affected), reserved: full.filter(g => !g.affected) };
 }
+/** Longest duration of an early check before it is said too slow for the task stage: 5 minutes. */
+export const EARLY_SLOW_MS = 300_000;
+/** The early checks of the full checks among `gates`, in configuration order. Nothing is inherited from the full check. */
+export function earlyGates(gates) {
+    // Parsed as a declared check: the defaults of every other field, the optional ones left out.
+    return gates.filter(g => gateStage(g) === 'full').flatMap(g => (g.early ?? []).map(early => ({ parent: g.id, early, gate: gateSchema.parse({
+            id: early.id, command: early.command, timeoutMs: early.timeoutMs, passEnv: early.passEnv, dependsOn: early.dependsOn, resources: early.resources,
+            stage: 'task', ...(early.lock ? { lock: early.lock } : {})
+        }) })));
+}
+/**
+ * Files changed since `base` in the working tree: committed, staged or not (both sides of a rename), and untracked files
+ * outside those Git ignores. An uncommitted change counts: an early check is feedback on what is there.
+ */
+export async function changedSince(git, repo, base) {
+    const split = (out) => out.split('\0').filter(Boolean);
+    const tracked = split(await git.exec(repo, ['diff', '--name-only', '--no-renames', '-z', base, '--']));
+    const untracked = split(await git.exec(repo, ['ls-files', '--others', '--exclude-standard', '-z']));
+    return [...new Set([...tracked, ...untracked])].sort();
+}
+/**
+ * Whether an early check runs. Without `when`: always. Without a base, `when` cannot be evaluated: it runs (an early check
+ * only adds). Otherwise it runs when a file changed since the base matches one of its globs, else it is not required.
+ */
+export function earlyDecision(e, base, changed) {
+    const of = { id: e.gate.id, gate: e.parent };
+    const when = e.early.when;
+    if (!when)
+        return { ...of, required: true, reason: 'toujours (sans when)', files: [] };
+    if (!base || !changed)
+        return { ...of, required: true, reason: 'sans --base : when non évalué, lancé', files: [] };
+    const matched = changed.filter(f => when.some(glob => matches(f, glob)));
+    // The receipt bounds its reason (2000 characters) and its files (4096 characters each).
+    const bounded = (text) => text.length > 2000 ? `${text.slice(0, 1996)} ...` : text;
+    if (matched.length) {
+        return { ...of, required: true, files: matched.filter(f => f.length <= 4096).slice(0, 50),
+            reason: bounded(`${matched.length} fichier(s) changé(s) depuis ${base.slice(0, 12)} répond(ent) à when : ${matched.slice(0, 5).join(', ')}${matched.length > 5 ? ' ...' : ''}`) };
+    }
+    return { ...of, required: false, files: [], reason: bounded(`aucun des ${changed.length} fichier(s) changé(s) depuis ${base.slice(0, 12)} ne répond à when (${when.join(', ')})`) };
+}
 /** Identity of the declared checks and passed variables, recorded in every receipt and compared by `apv gates verify`. */
 export function gatesConfigHash(config) {
     return hash({ gates: config.gates, passEnv: config.environment.passEnv });
@@ -223,15 +264,29 @@ export async function runGates(options) {
     let dirty = status !== '';
     const stage = options.stage ?? 'full';
     const log = options.log ?? (() => { });
-    const selection = selectGates(options.config.gates, options.only);
+    let selection = selectGates(options.config.gates, options.only);
     invariant(selection.gates.length > 0, 'NO_GATES', 'No checks configured; declare gates in .apv/config.json');
+    // The task stage runs the early checks of the full checks selected, with the checks of stage task they depend on.
+    const earlyOf = (selected) => stage === 'task' ? earlyGates(selected) : [];
+    const earlyNeeds = [...new Set(earlyOf(selection.gates).flatMap(e => e.gate.dependsOn))].filter(d => !selection.gates.some(g => g.id === d));
+    if (earlyNeeds.length) {
+        const only = options.only ?? [];
+        const wider = selectGates(options.config.gates, [...only, ...earlyNeeds]);
+        selection = { gates: wider.gates, added: wider.gates.map(g => g.id).filter(id => !only.includes(id)) };
+    }
     const { added } = selection;
     const staged = stageGates(selection.gates, stage);
     const { reserved } = staged;
     const targeted = new Set(staged.targeted.map(g => g.id));
-    // Configuration order; a targeted check keeps its id, dependencies and resources, with its targeted command.
-    const gates = selection.gates.filter(g => staged.run.includes(g) || targeted.has(g.id))
-        .map(g => targeted.has(g.id) ? { ...g, command: g.affected } : g);
+    const early = earlyOf(selection.gates);
+    // Configuration order; a targeted check keeps its id, dependencies and resources, with its targeted command; each early
+    // check right after its full check.
+    const gates = selection.gates.flatMap(g => [
+        ...(staged.run.includes(g) || targeted.has(g.id) ? [targeted.has(g.id) ? { ...g, command: g.affected } : g] : []),
+        ...early.filter(e => e.parent === g.id).map(e => e.gate)
+    ]);
+    const duplicates = gates.map(g => g.id).filter((id, i, all) => all.indexOf(id) !== i);
+    invariant(!duplicates.length, 'CONFIG', `Identifiant de contrôle en double (contrôle et contrôle tôt) : ${[...new Set(duplicates)].join(', ')}`);
     const asked = isFullSuite(gates, stage);
     if (options.stacks) {
         invariant(asked, 'GATE_STACKS', '--stacks répartit une suite complète : aucun contrôle de stage full à exécuter en entier ici');
@@ -261,9 +316,14 @@ export async function runGates(options) {
             if (all.has(g.id))
                 scopeDecisions.set(g.id, all.get(g.id));
     }
-    const skipped = new Set([...scopeDecisions.values()].filter(d => !d.required).map(d => d.gateId));
+    // The early checks a task run selected: run when their `when` (read at the base by the base checks) matches a changed file.
+    const changed = baseSha && early.some(e => e.early.when) ? await changedSince(git, repo, baseSha) : null;
+    const earlyDecisions = new Map(early.map(e => [e.gate.id, earlyDecision(e, baseSha, changed)]));
+    const skipped = new Set([...[...scopeDecisions.values()].filter(d => !d.required).map(d => d.gateId), ...[...earlyDecisions.values()].filter(d => !d.required).map(d => d.id)]);
     for (const d of scopeDecisions.values())
         log(`${d.gateId} : ${d.required ? 'requis' : 'non requis'} (portée, skipWhenOnly) : ${d.reason}.`);
+    for (const d of earlyDecisions.values())
+        log(`${d.id} (contrôle tôt de ${d.gate}) : ${d.required ? 'lancé' : 'non requis'} : ${d.reason}.`);
     // What actually runs: a check not required is never started (its dependents are not required either).
     const runnable = gates.filter(g => !skipped.has(g.id));
     const suite = isFullSuite(runnable, stage);
@@ -517,11 +577,13 @@ export async function runGates(options) {
         const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
         const write = (receipt) => {
             const decision = scopeDecisions.get(receipt.gateId);
+            const earlyRun = earlyDecisions.get(receipt.gateId);
             const durationOf = options.hooks?.durationOf;
             const near = nearTimeout(durationOf ? { ...receipt, durationMs: durationOf(receipt.gateId, receipt.durationMs) } : receipt, gates.find(g => g.id === receipt.gateId)?.timeoutMs);
             if (near)
                 log(`ATTENTION : ${receipt.gateId} a pris ${near.percent} % de son délai (${Math.round(near.timeoutMs / 1000)} s) : augmenter timeoutMs de ce contrôle avant qu'il ne casse une preuve.`);
-            const valid = validateReceipt({ ...receipt, stage, dirty, ...(targeted.has(receipt.gateId) ? { targeted: true } : {}), ...(override ? { override } : {}),
+            const valid = validateReceipt({ ...receipt, stage, dirty, ...(targeted.has(receipt.gateId) || earlyRun ? { targeted: true } : {}), ...(override ? { override } : {}),
+                ...(earlyRun ? { early: { gate: earlyRun.gate, id: earlyRun.id, required: earlyRun.required, reason: earlyRun.reason, files: earlyRun.files } } : {}),
                 ...(decision ? { scope: scopeRecord(decision) } : {}), ...(near ? { nearTimeout: near } : {}) });
             writeFileSync(join(directory, `${valid.gateId}.json`), JSON.stringify(valid, null, 2) + '\n');
             return valid;
@@ -733,6 +795,12 @@ export async function runGates(options) {
         const failFast = options.failFast ?? true;
         // The checks not required: a receipt that says so, with the scope, and nothing run.
         const notRequired = new Map(gates.filter(g => skipped.has(g.id)).map(g => {
+            const e = earlyDecisions.get(g.id);
+            if (e) {
+                return [g.id, write({ id: randomUUID(), runId, gateId: g.id, key: hash({ notRequired: g.id, early: e.gate, candidateSha, configHash, base: baseSha }),
+                        candidateSha, configHash, environmentHash: hash('not-executed'), status: 'not_required', startedAt: Date.now(), durationMs: 0, exitCode: null,
+                        stdoutHash: '', stderrHash: '', diagnostic: `Non requis (contrôle tôt de ${e.gate}, hors when) : ${e.reason}.`.slice(0, MAX_DIAGNOSTIC_CHARS), reusedFrom: null })];
+            }
             const d = scopeDecisions.get(g.id);
             return [g.id, write({ id: randomUUID(), runId, gateId: g.id, key: hash({ notRequired: g.id, candidateSha, configHash, base: d.base, reference: d.reference, referenceSha: d.referenceSha }),
                     candidateSha, configHash, environmentHash: hash('not-executed'), status: 'not_required', startedAt: Date.now(), durationMs: 0, exitCode: null,
@@ -761,6 +829,11 @@ export async function runGates(options) {
         const ran = new Map(list.map(r => [r.gateId, r]));
         list = gates.map(g => notRequired.get(g.id) ?? ran.get(g.id));
         const flaky = list.filter(r => r.status === 'passed_after_retry').map(r => r.gateId);
+        // An early check is fast feedback: one that takes longer than EARLY_SLOW_MS is said, to be narrowed or left to the full suite.
+        const measured = (r) => options.hooks?.durationOf ? options.hooks.durationOf(r.gateId, r.durationMs) : r.durationMs;
+        const slowEarly = list.filter(r => r.early && r.status !== 'not_required' && r.status !== 'blocked' && measured(r) > EARLY_SLOW_MS).map(r => r.gateId);
+        for (const id of slowEarly)
+            log(`ATTENTION : ${id} (contrôle tôt de ${earlyDecisions.get(id).gate}) : plus de ${EARLY_SLOW_MS / 60_000} min, trop lent pour le stage task ; le resserrer (when, fichiers lancés) ou le laisser à la suite complète.`);
         await endSuite(runId);
         const interruptedStacks = [];
         for (const [id, ids] of interrupted) {
@@ -780,16 +853,17 @@ export async function runGates(options) {
         const spreadRecord = spread ? [...spread.assignments.values()].map(a => ({ gate: a.gateId, stack: a.stack.id, workspace: a.workspace, notPassed: a.notPassed,
             error: spread.copies.find(c => c.dir === a.workspace)?.error ?? null })) : null;
         const result = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
-            reserved: reserved.map(g => g.id), targeted: [...targeted], receipts: list, directory, shared: null, suite, notRequired: [...notRequired.keys()], scope: [...scopeDecisions.values()],
+            reserved: reserved.map(g => g.id), targeted: [...targeted], early: [...earlyDecisions.values()], slowEarly, receipts: list, directory, shared: null, suite, notRequired: [...notRequired.keys()], scope: [...scopeDecisions.values()],
             queue: queue?.record ?? null, ports, flaky, cleanup, stoppedStacks, infrastructure: classifyFailures(list, missingEnv), spread: spreadRecord,
             stacksUsed: suite ? usage.used : [], stacksChecked: suite ? checkedStacks.map(s => s.id) : [], stacksUnmapped: suite ? usage.unmapped : [], setup, interruptedStacks,
             ok: list.every(r => success(r) || r.status === 'not_required') };
         writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
-            reserved: result.reserved, targeted: result.targeted, ...(override ? { override } : {}), ...(options.since ? { since: options.since } : {}),
+            reserved: result.reserved, targeted: result.targeted, ...(result.early.length ? { early: result.early } : {}), ...(slowEarly.length ? { slowEarly } : {}),
+            ...(override ? { override } : {}), ...(options.since ? { since: options.since } : {}),
             ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup, stacksUsed: result.stacksUsed, stacksChecked: result.stacksChecked } : {}), ...(setup ? { setup } : {}),
             ...(interruptedStacks.length ? { interruptedStacks } : {}), ...(spreadRecord ? { spread: spreadRecord } : {}), ...(stoppedStacks.length ? { stoppedStacks } : {}),
             ...(result.infrastructure.causes.length ? { infrastructure: result.infrastructure } : {}),
-            receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),
+            receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), ...(r.early ? { early: r.early.gate } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),
                 ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}), ...(r.stack ? { stack: r.stack } : {}),
                 ...(r.nearTimeout ? { nearTimeout: r.nearTimeout } : {}),
                 ...(r.repeat ? { repeat: { status: r.repeat.status, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures } } : {}),

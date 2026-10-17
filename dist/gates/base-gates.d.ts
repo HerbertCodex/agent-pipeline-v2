@@ -8,7 +8,7 @@ import { type ApvConfig } from '../config/load.js';
  * new check, a check made mandatory, nothing else changed). A change of these checks goes through a pull request of configuration alone, proven by the
  * checks of its base, then merged by the operator.
  */
-export type GateDifferenceKind = 'removed' | 'optional' | 'changed' | 'dependency';
+export type GateDifferenceKind = 'removed' | 'optional' | 'changed' | 'dependency' | 'early';
 export interface GateDifference {
     id: string;
     kind: GateDifferenceKind;
@@ -24,6 +24,19 @@ export interface BaseGates {
     /** What could not be verified about the reference (the remote could not be read, a local ref behind it). */
     warnings: string[];
 }
+type Gate = ApvConfig['gates'][number];
+type EarlyCheck = NonNullable<Gate['early']>[number];
+/**
+ * The early checks of a full check whose definition is otherwise unchanged (docs/ACCELERATION-LOTS.md, part C): every
+ * early check of the base is kept. One the candidate removed or changed (command, delay, variables, lock...) runs as the
+ * base defined it; its `when` is the union of both (`when` absent on either side: always), so that a candidate never
+ * narrows the scope it is checked on. The candidate's own early checks are added. `restored`: the base ids kept against
+ * the candidate (said as differences).
+ */
+export declare function mergeEarly(base: EarlyCheck[] | undefined, candidate: EarlyCheck[] | undefined): {
+    early: EarlyCheck[] | undefined;
+    restored: string[];
+};
 /** The checks of `candidate` with every mandatory check of `base` kept in its base definition (and what it depends on). */
 export declare function enforceBaseGates(candidate: ApvConfig, base: ApvConfig): {
     config: ApvConfig;
@@ -53,3 +66,4 @@ export interface RemoteCheck {
 export declare function baseGatesLines(base: BaseGates): string[];
 /** One line for the text output, or none when the candidate keeps every check of its base. */
 export declare function baseGatesLine(base: BaseGates): string | null;
+export {};

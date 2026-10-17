@@ -4,7 +4,7 @@ import { APV_DIR } from '../config/apv-files.js';
 import { CONFIG_FILE, configIssues, LEGACY_CONFIG_FILE, loadConfig } from '../config/load.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { LEDGER_FILE, LEGACY_LEDGER_FILE } from '../lifecycle/decisions.js';
-import { detectGates, previewHints, type DetectedGate } from '../onboard/detect.js';
+import { detectGates, previewHints, targetedHints, type DetectedGate } from '../onboard/detect.js';
 import { findSpecCandidates, importV2Config, importV2Ledger, specFileName, V2_SPEC_DIRS, v2FilesNotImported, type SpecCandidate } from '../onboard/v2.js';
 import { gitRoot } from '../run/git-probe.js';
 import { checkSpec, parseSpecDocument } from '../spec/check.js';
@@ -28,6 +28,8 @@ environment.passEnv, et ignore le reste (agents, budgets, délais, modèles, ré
 les specs V2 de .agent-pipeline/specs, specs, docs/specs (et --specs) sont copiées dans .apv/specs/ si
 apv spec validate --draft les accepte, sinon listées avec la raison.
 Projet sans V2 : contrôles détectés (package.json, Makefile, pyproject.toml) proposés avec mandatory: false.
+Un script de tests ciblés (test:e2e:changed, --only-changed) est signalé : à déclarer en affected d'un
+contrôle de stage full, avec ses contrôles tôt (early) ; rien n'est écrit pour lui.
 Dans les deux cas, les contrôles code-map (apv map --check) et, pour un projet web, reuse (apv reuse check)
 sont ajoutés avec la section reuse détectée (dossiers de composants partagés, composant qui remplace chaque
 élément natif réservé, langue, branche de référence) ; la carte du code est écrite, et le rapport liste ce qui
@@ -51,6 +53,8 @@ export interface OnboardResult {
   ledger: { file: string; status: 'imported' | 'created' | 'existing'; source: string | null; decisions: number | null; hash: string | null };
   specs: SpecReport & { searched: string[] };
   previewHints: string[];
+  /** Scripts of changed tests: the targeted variant (`affected`) of a full check, and the early checks to declare with it. */
+  targetedHints: string[];
   created: string[];
   completed: string[];
   existing: string[];
@@ -155,7 +159,7 @@ export async function onboardProject(repo: string, options: { dryRun: boolean; s
   return {
     repo, name, dryRun: options.dryRun,
     v2: { config: hasV2Config ? LEGACY_CONFIG_FILE : null, ledger: hasV2Ledger ? LEGACY_LEDGER_FILE : null, notImported: v2FilesNotImported(repo) },
-    config, ledger, specs, previewHints: previewHints(repo),
+    config, ledger, specs, previewHints: previewHints(repo), targetedHints: targetedHints(repo),
     reuse: { web: proposal.web, signals: proposal.signals, gates: added, section: configText !== undefined && proposal.web ? proposal.section : null, ...mapFields(map), existing: existingReuse, architecture,
       missingRequired: configExists ? missingRequired(repo, proposal.web) : [] },
     structure: { crowded: map?.crowded ?? [] },
@@ -246,6 +250,10 @@ function text(result: OnboardResult): string {
     if (crowded.length > 10) lines.push(`    et ${crowded.length - 10} autre(s) : apv structure check.`);
   }
   if (result.previewHints.length) lines.push('', `Aperçu : indices trouvés, à décrire dans la section preview (docs/PREVIEW.md) : ${result.previewHints.join(' ; ')}`);
+  for (const hint of result.targetedHints) {
+    lines.push('', `Tests ciblés : ${hint} : à déclarer en affected d'un contrôle de stage full, avec {{baseSha}} (docs/CONFIGURATION.md, « Graphe de contrôles ») ; ` +
+      'déclarer aussi en early les commandes rapides qui échouent en fin de suite (budget de taille, captures) : elles tournent au stage task quand le diff touche leur when.');
+  }
   lines.push('');
   lines.push(result.created.length ? `${result.dryRun ? 'Serait créé' : 'Créé'} : ${result.created.join(', ')}` : 'Rien à créer : .apv/ est complet.');
   if (result.completed.length) lines.push(`${result.dryRun ? 'Serait complété' : 'Complété'} : ${result.completed.join(', ')}`);

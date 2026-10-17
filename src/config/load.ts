@@ -280,6 +280,22 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
       }
     }
   }
+  // Early checks (`early`): fast commands of a full check run at the task stage, each with an id of its own (its receipt),
+  // after checks of stage task only, with portable globs (a brace would silently match nothing and never run it).
+  const used = new Set(ids);
+  for (const gate of value.gates) {
+    if (!gate.early) continue;
+    list.check(gateStage(gate) === 'full', 'CONFIG', `Gate ${gate.id}: early checks run at the task stage for a full check; declare "stage": "full"`);
+    for (const early of gate.early) {
+      list.check(!used.has(early.id), 'CONFIG', `Gate ${gate.id}: early check id ${early.id} is already used by a check or another early check`);
+      used.add(early.id);
+      for (const dep of early.dependsOn) {
+        const target = value.gates.find(g => g.id === dep);
+        list.check(!!target && gateStage(target) === 'task', 'CONFIG', `Gate ${gate.id}: early check ${early.id} depends on ${dep}, which is not a check of stage task (an early check runs at the task stage)`);
+      }
+      for (const glob of early.when ?? []) list.attempt('CONFIG', () => { try { matches('probe', glob); } catch (error) { throw new PipelineError('CONFIG', `Gate ${gate.id}: early check ${early.id}: when: ${errorMessage(error)}`); } });
+    }
+  }
   for (const [resource, { ports }] of Object.entries(value.resources ?? {})) {
     list.check(new Set(ports).size === ports.length, 'CONFIG', `resources.${resource}.ports: duplicate port`);
   }
