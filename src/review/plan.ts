@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { posix } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { parseJson } from '../domain/schema.js';
@@ -130,6 +130,8 @@ const hunkOf = (line: string): Hunk | null => {
   return m ? { oldStart: Number(m[1]), oldCount: m[2] === undefined ? 1 : Number(m[2]), newStart: Number(m[3]), newCount: m[4] === undefined ? 1 : Number(m[4]) } : null;
 };
 interface FilePatch { binary: boolean; removed: string[]; added: string[]; hunks: Hunk[] }
+/** Names of images: a NUL in their first bytes makes them binary, whatever the attributes of the tree say. */
+const IMAGE_NAME = /\.(?:png|jpe?g|gif|webp|avif|ico|bmp)$/i;
 
 /** Unquotes a path that Git wrote in C style (`"a\tb"`); a plain path is returned as is. */
 function unquote(text: string): string {
@@ -611,6 +613,16 @@ export function planReviews(input: PlanInput): ReviewPlan {
   const common = [input.renames === false ? '--no-renames' : '-M', '--ignore-submodules=none', '--no-relative', '--no-ext-diff', '--no-textconv', '--no-color'];
   const statuses = parseNameStatus(git(repo, [...DELTA_GIT, 'diff', ...common, '--name-status', '-z', mergeBase, headSha]));
   const patches = parsePatch(git(repo, [...DELTA_GIT, '-c', 'core.attributesFile=/dev/null', 'diff', ...common, '--text', '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', mergeBase, headSha]));
+  // A real image (its name says image and its first bytes hold a NUL, read from the blob, never from an attribute) is not
+  // searched for terms: read as text since A10, the bytes of a reference PNG held « data » by chance (#262 of the pilot
+  // project). A binary under any other name keeps its lines read, then the prudence of an unread file.
+  for (const entry of statuses) {
+    const patch = patches.get(entry.path);
+    if (!patch || patch.binary || !IMAGE_NAME.test(entry.path)) continue;
+    const head = entry.status.startsWith('D') ? mergeBase : headSha;
+    const bytes = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', 'cat-file', 'blob', `${head}:${entry.path}`], { cwd: repo, maxBuffer: 64 * 1024 * 1024 });
+    if (bytes.status === 0 && bytes.stdout.subarray(0, 8000).includes(0)) patches.set(entry.path, { ...patch, added: [], removed: [], hunks: [], binary: true });
+  }
   const renames = statuses.filter(s => s.from !== undefined).map(s => ({ from: s.from!, path: s.path }));
   const changes = statuses.map((entry): { entry: NameStatus; patch: FilePatch | undefined; change: ChangeKind; classes: PathClass[] } => {
     const patch = patches.get(entry.path);
