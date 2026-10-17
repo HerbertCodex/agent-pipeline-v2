@@ -125,4 +125,16 @@ export function previewHints(repo) {
     catch { /* unreadable folder: no hint */ }
     return hints;
 }
+/**
+ * Scripts of changed or affected tests (`test:e2e:changed`, `e2e:affected`, a script that runs `--only-changed`): the
+ * targeted variant (`affected`) of a full check, to declare by the operator. Shown, never written: the full check, its
+ * base placeholder and the early checks (`early`) that go with it are the operator's to describe.
+ */
+export function targetedHints(repo) {
+    const pkg = packageScripts(repo);
+    if (!pkg)
+        return [];
+    return Object.entries(pkg.scripts).filter(([name, command]) => /(?:^|[:_-])(?:changed|affected)$/i.test(name) || /--only-changed\b/.test(command))
+        .map(([name, command]) => `package.json, script « ${name} » (${command})`);
+}
 //# sourceMappingURL=detect.js.map

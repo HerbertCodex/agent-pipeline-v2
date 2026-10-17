@@ -308,6 +308,10 @@ C'est la liste `ALWAYS_REQUIRED` de `skipWhenOnly` (section 21 de APV3-SPEC.md),
 
 La règle `preuve` ne change pas : la suite complète au commit exact fusionné. `apv stack batch` la fait déjà sur la tête du lot. Une PR prouvée par sa suite d'impact se fusionne donc **par le lot**, même seule (lot d'une PR) : une suite complète par fusion, au lieu de deux par spec plus celle du lot. `apv stack merge` d'une PR seule exige toujours la suite complète à sa tête, comme aujourd'hui.
 
+### 9.4 Contrôles tôt (`early`), codé
+
+Complément de la suite d'impact, livré à part ([ACCELERATION-LOTS.md](ACCELERATION-LOTS.md), partie C, PR C1) : un contrôle `full` déclare des commandes rapides (`early`) que le stage task lance quand le diff touche leur portée (`when`, lu à la base), pour qu'un échec qui n'apparaîtrait qu'au bout de la suite complète (budget de taille du JavaScript servi, captures d'un écran qu'aucun test n'importe, test instable répété) se voie en quelques minutes chez l'implementer. `affected` suit le graphe d'imports des tests ; `early` couvre ce que ce graphe ne voit pas. Un contrôle tôt ajoute un contrôle et n'en retire aucun : son reçu est ciblé, jamais une preuve du contrôle `full`, et la règle `preuve` exige toujours la suite complète au commit exact fusionné (section 9.3). Champs et exemple : [CONFIGURATION.md](CONFIGURATION.md#graphe-de-contrôles).
+
 ## 10. Petites PR sans code ou à faible risque
 
 ### 10.1 Voie sans code (PR #121, à compléter)
@@ -555,6 +559,7 @@ Spec :
 - `runners` : un lanceur par famille de fichiers ; `lock` comme le champ `lock` d'un contrôle ; `redArgs` au seul rouge.
 - `causes` : motifs ajoutés aux défauts, jamais retirés.
 - `review.perTask`, `design.captureBy`, `proof.impact` et `rules.settingsLane` : section 7 à 10. `rules.settingsLane.keys` ne peut que restreindre la liste fermée de la section 10.2.
+- `gates[].early` (codé, section 9.4) : contrôles tôt d'un contrôle `full`, lancés au stage task quand le diff répond à leur `when` ; ceux de la base restent lancés, leur `when` uni à celui du candidat.
 - `stacks[].isolation`, `suite.queue.slots` (`1`, un nombre, ou `per-stack`), `resources.portRange`, `resources.portBlock`, `e2e.maxShared` : sections 12 et 13. Sans `isolation`, une pile garde son verrou exclusif actuel.
 
 ## 19. Changements aux agents, compétences et workflows

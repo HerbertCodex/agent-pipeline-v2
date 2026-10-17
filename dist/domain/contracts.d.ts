@@ -53,6 +53,40 @@ export declare const skipWhenOnlySchema: import("./schema.js").Schema<{
     readonly except: string[] | undefined;
     readonly reference: string;
 }>;
+/** The lock of a check (`lock`): a lease of `apv lock` (`resource`) or a kernel `flock` on a file (`file`). */
+export declare const lockSchema: import("./schema.js").Schema<{
+    readonly resource: string;
+    readonly waitMs: number;
+} | {
+    readonly file: string;
+    readonly fileEnv: string | undefined;
+    readonly waitMs: number;
+}>;
+/**
+ * An early check of a full check (`early`, docs/ACCELERATION-LOTS.md, part C): a fast command the project declares so that
+ * what would fail at the end of the full suite (a size budget, captures of a screen no test imports) fails at the task
+ * stage. `when` (globs read at the base): it runs when a file changed since `{{baseSha}}` matches one, always without
+ * `when`. `dependsOn`: checks of stage task it needs (`build`). Nothing is inherited from the full check: its variables,
+ * lock and resources are its own. Its receipt is targeted, never proof of the full check.
+ */
+export declare const earlyCheckSchema: import("./schema.js").Schema<{
+    readonly id: string;
+    readonly command: string[];
+    readonly when: string[] | undefined;
+    readonly dependsOn: string[];
+    readonly timeoutMs: number;
+    readonly passEnv: string[];
+    readonly resources: string[];
+    readonly lock: {
+        readonly resource: string;
+        readonly waitMs: number;
+    } | {
+        readonly file: string;
+        readonly fileEnv: string | undefined;
+        readonly waitMs: number;
+    } | undefined;
+}>;
+export type EarlyCheck = Infer<typeof earlyCheckSchema>;
 export declare const gateSchema: import("./schema.js").Schema<{
     readonly id: string;
     readonly command: string[];
@@ -98,6 +132,23 @@ export declare const gateSchema: import("./schema.js").Schema<{
         readonly except: string[] | undefined;
         readonly reference: string;
     } | undefined;
+    readonly early: {
+        readonly id: string;
+        readonly command: string[];
+        readonly when: string[] | undefined;
+        readonly dependsOn: string[];
+        readonly timeoutMs: number;
+        readonly passEnv: string[];
+        readonly resources: string[];
+        readonly lock: {
+            readonly resource: string;
+            readonly waitMs: number;
+        } | {
+            readonly file: string;
+            readonly fileEnv: string | undefined;
+            readonly waitMs: number;
+        } | undefined;
+    }[] | undefined;
 }>;
 /** Stage of a check; absent means `task`. */
 export declare const gateStage: (gate: {
@@ -312,6 +363,23 @@ export declare const configSchema: import("./schema.js").Schema<{
             readonly except: string[] | undefined;
             readonly reference: string;
         } | undefined;
+        readonly early: {
+            readonly id: string;
+            readonly command: string[];
+            readonly when: string[] | undefined;
+            readonly dependsOn: string[];
+            readonly timeoutMs: number;
+            readonly passEnv: string[];
+            readonly resources: string[];
+            readonly lock: {
+                readonly resource: string;
+                readonly waitMs: number;
+            } | {
+                readonly file: string;
+                readonly fileEnv: string | undefined;
+                readonly waitMs: number;
+            } | undefined;
+        }[] | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;
@@ -464,6 +532,13 @@ export declare const receiptSchema: import("./schema.js").Schema<{
         readonly fileCount: number;
         readonly files: string[];
         readonly blocking: string[];
+    } | undefined;
+    readonly early: {
+        readonly gate: string;
+        readonly id: string;
+        readonly required: boolean;
+        readonly reason: string;
+        readonly files: string[];
     } | undefined;
 }>;
 export type GateReceipt = Infer<typeof receiptSchema>;
