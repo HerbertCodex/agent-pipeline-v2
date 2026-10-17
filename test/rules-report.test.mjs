@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
-import { ALL_CAPTURES, commonDirOf, png, seedReview } from './support/rules.mjs';
+import { ALL_CAPTURES, commonDirOf, operatorSays, png, seedReview } from './support/rules.mjs';
 import { latestReviews, recordReview } from '../dist/rules/reviews.js';
 
 /**
@@ -36,7 +36,7 @@ const TEST_ONLY = (n = 1) => ({
 });
 
 /** main holds SITE; feat adds PAGE at C, reviewed in every domain of its plan (four captures for fidelite). */
-async function reviewed(t, { change = PAGE } = {}) {
+async function reviewed(t, { change = PAGE, skip = [], fidelityCaptures = ALL_CAPTURES } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'apv3-report-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const origin = join(root, 'origin.git');
@@ -61,8 +61,8 @@ async function reviewed(t, { change = PAGE } = {}) {
   };
   const text = async sha => (await apv(repo, ['rules', 'check', '--commit', sha, '--target', 'origin/main'])).stdout;
   const retained = rule(await check(c), 'relecture').detail.replace(/^.*: /, '').split(', ');
-  for (const d of retained) seedReview(repo, c, d, { captures: d === 'fidelite' ? ALL_CAPTURES : [] });
-  assert.equal(rule(await check(c), 'relecture').status, 'ok');
+  for (const d of retained.filter(x => !skip.includes(x))) seedReview(repo, c, d, { captures: d === 'fidelite' ? fidelityCaptures : [] });
+  if (!skip.length) assert.equal(rule(await check(c), 'relecture').status, 'ok');
   return { repo, c, commit, check, text, retained };
 }
 const rule = (report, id) => report.rules.find(r => r.rule === id);
@@ -257,4 +257,103 @@ test('apv review record --delta-from: an ancestor of the commit, cited by the re
   assert.match(shown.stdout, new RegExp(`relecture du delta depuis ${short(p.c)} \\(3 fichier\\(s\\)\\)`));
   const bad = await apv(p.repo, ['review', 'plan', '--base', 'origin/main', '--delta-from', p.c]);
   assert.equal(bad.code, 2);
+});
+
+/**
+ * B2, AC-CARRY-WAIVER (decision of the operator of 17 October 2026): a waiver typed for C counts at C' when the delta
+ * leaves its perimeter, for maquette, captures, controles and the reviews fidelite, donnees, rgpd; never securite, the
+ * rule relecture whole, preuve nor instable. Its words, date, commit and why are said.
+ */
+const AT = '2026-10-17T18:00:00.000Z';
+const says = (p, rule, sha, reason = 'validée à l\'oral, versée demain') => operatorSays(p.repo, `dérogation ${rule} ${short(sha)} : ${reason}`, AT);
+
+test('AC-CARRY-WAIVER, AC-USER-3: the waiver maquette of C counts for a delta without screen, said with his words, their date and commit; a page or a mockup touched refuses it', async t => {
+  const p = await reviewed(t);
+  assert.equal(rule(await p.check(p.c), 'maquette').status, 'refused');
+  says(p, 'maquette', p.c);
+  assert.equal(rule(await p.check(p.c), 'maquette').status, 'waived');
+  const c2 = p.commit(TEST_ONLY());
+  const maquette = rule(await p.check(c2), 'maquette');
+  assert.equal(maquette.status, 'waived', JSON.stringify(maquette));
+  assert.deepEqual(maquette.waiver.carried.from, p.c);
+  assert.match(maquette.detail, new RegExp(`dérogation maquette reportée de ${short(p.c)} : « dérogation maquette ${short(p.c)} : validée à l'oral, versée demain » \\(${AT.replace(/\./g, '\\.')}, delta sans fichier de son périmètre : 3 fichiers`));
+  assert.match(await p.text(c2), new RegExp(`dérogation de l'opérateur \\(${AT.replace(/\./g, '\\.')}\\) : validée à l'oral, versée demain ; dérogation maquette reportée de ${short(p.c)}`));
+  // A page touched since C: refused, and the refusal says why the waiver of C is not carried.
+  const c3 = p.commit({ 'src/routes/autre/+page.svelte': '<p>autre</p>\n' });
+  const refused = rule(await p.check(c3), 'maquette');
+  assert.equal(refused.status, 'refused');
+  assert.match(refused.todo.join('\n'), new RegExp(`la dérogation maquette de ${short(p.c)} n'est pas reportée, le delta touche son périmètre : .*src/routes/autre/\\+page\\.svelte : écran`));
+  // A mockup added since C (not a screen of the rule): refused too.
+  git(p.repo, 'switch', '-q', '--detach', c2);
+  const c4 = p.commit({ 'docs/design/carte.html': '<!doctype html><p>maquette</p>\n' });
+  const mockup = rule(await p.check(c4), 'maquette');
+  assert.equal(mockup.status, 'refused', JSON.stringify(mockup));
+  assert.match(mockup.todo.join('\n'), /docs\/design\/carte\.html : dossier des maquettes/);
+  // The decision ledger touched since C: refused.
+  git(p.repo, 'switch', '-q', '--detach', c2);
+  const c5 = p.commit({ '.apv/DECISIONS.md': '# Décisions\n' });
+  assert.match(rule(await p.check(c5), 'maquette').todo.join('\n'), /\.apv\/DECISIONS\.md : registre des décisions/);
+});
+
+test('AC-CARRY-WAIVER: preuve, instable, relecture:securite and the rule relecture whole are never carried, whatever the delta', async t => {
+  const p = await reviewed(t, { skip: ['securite'] });
+  for (const r of ['preuve', 'instable', 'relecture:securite', 'relecture']) says(p, r, p.c, 'sans objet ici, voir la PR');
+  const atC = await p.check(p.c);
+  assert.equal(rule(atC, 'preuve').status, 'waived');
+  assert.equal(domain(atC, 'securite').status, 'waived');
+  const c2 = p.commit(TEST_ONLY());
+  const report = await p.check(c2);
+  assert.equal(rule(report, 'preuve').status, 'refused', JSON.stringify(rule(report, 'preuve')));
+  assert.equal(rule(report, 'preuve').waiver, null);
+  assert.equal(domain(report, 'securite').status, 'missing');
+  assert.equal(rule(report, 'relecture').status, 'refused');
+  assert.doesNotMatch(JSON.stringify(report.rules), /reportée de [0-9a-f]{12} : « dérogation (preuve|instable|relecture)/);
+});
+
+test('AC-CARRY-WAIVER: relecture:fidelite and captures carried over a delta without screen; relecture:rgpd not over a GDPR term', async t => {
+  // relecture:fidelite (no fidelity review at C): carried, captures without object.
+  const p = await reviewed(t, { skip: ['fidelite', 'rgpd'] });
+  says(p, 'relecture:fidelite', p.c);
+  says(p, 'relecture:rgpd', p.c);
+  const c2 = p.commit(TEST_ONLY());
+  const report = await p.check(c2);
+  assert.equal(domain(report, 'fidelite').status, 'waived', JSON.stringify(domain(report, 'fidelite')));
+  assert.match(domain(report, 'fidelite').detail, new RegExp(`dérogation relecture:fidelite reportée de ${short(p.c)}`));
+  assert.equal(rule(report, 'captures').status, 'not_applicable');
+  assert.equal(domain(report, 'rgpd').status, 'waived');
+  const c3 = p.commit({ 'tests/e2e/carte.e2e.ts': 'import { test } from "@playwright/test";\ntest("email du contact", async () => {});\n' });
+  const gdpr = await p.check(c3);
+  assert.equal(domain(gdpr, 'rgpd').status, 'missing', JSON.stringify(domain(gdpr, 'rgpd')));
+  assert.match(rule(gdpr, 'relecture').todo.join('\n'), new RegExp(`rgpd : la dérogation relecture:rgpd de ${short(p.c)} n'est pas reportée, le delta touche son périmètre : .*rgpd retenue`));
+  assert.equal(domain(gdpr, 'fidelite').status, 'waived');
+  // captures waived at C (a fidelity review without its captures): carried over a delta without screen.
+  const q = await reviewed(t, { fidelityCaptures: [] });
+  assert.equal(rule(await q.check(q.c), 'captures').status, 'refused');
+  says(q, 'captures', q.c);
+  const q2 = q.commit(TEST_ONLY());
+  const captures = rule(await q.check(q2), 'captures');
+  assert.equal(captures.status, 'waived', JSON.stringify(captures));
+  assert.match(captures.detail, new RegExp(`dérogation captures reportée de ${short(q.c)}`));
+  const q3 = q.commit({ 'src/lib/components/Header.svelte': '<header>Compte modifié</header>\n' });
+  assert.equal(rule(await q.check(q3), 'captures').status, 'refused');
+});
+
+test('AC-CARRY-WAIVER: controles carried while the configuration of the checks is untouched; a template reason is never carried; a rebase carries nothing', async t => {
+  const p = await reviewed(t);
+  assert.equal(rule(await p.check(p.c), 'controles').status, 'refused');
+  says(p, 'controles', p.c);
+  says(p, 'maquette', p.c, '<ta raison>');
+  const c2 = p.commit(TEST_ONLY());
+  const report = await p.check(c2);
+  assert.equal(rule(report, 'controles').status, 'waived', JSON.stringify(rule(report, 'controles')));
+  assert.match(rule(report, 'controles').detail, new RegExp(`dérogation controles reportée de ${short(p.c)}`));
+  assert.equal(rule(report, 'maquette').status, 'refused', 'a waiver with the template of the tool is not carried');
+  const c3 = p.commit({ '.apv/config.json': { name: 'essai', gates: [{ id: 'unit', stage: 'full', command: [process.execPath, '-e', '0;'] }] } });
+  const changed = rule(await p.check(c3), 'controles');
+  assert.equal(changed.status, 'refused');
+  assert.match(changed.todo.join('\n'), /\.apv\/config\.json : configuration des contrôles/);
+  // A rebase: the waiver of C is for a commit that is no ancestor.
+  git(p.repo, 'reset', '-q', '--hard', 'origin/main');
+  git(p.repo, 'cherry-pick', '-x', p.c, c2);
+  assert.equal(rule(await p.check(git(p.repo, 'rev-parse', 'HEAD')), 'controles').status, 'refused');
 });

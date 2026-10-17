@@ -18,9 +18,29 @@ import { latestReviews } from './reviews.js';
  * most). Every domain has the same review of the delta, for a delta that touches its perimeter.
  *
  * The review of the head always decides; this only applies when the head has none of the domain.
+ *
+ * A waiver the operator typed for C counts at C' the same way (6.4, decision of the operator of 17 October 2026), for the
+ * closed list WAIVER_PERIMETERS only: maquette (no screen, no mockup, no decision ledger touched), captures and the review
+ * fidelite (the conditions of fidelite), the reviews donnees and rgpd (the plan does not retain them), controles (the
+ * configuration of the checks and package.json untouched). Never securite, the rule relecture whole, preuve nor instable.
+ * The waiver is still read from the journal of the operator by waiverFor, for its own commit C: nothing else creates one.
  */
 /** Reviews of the delta in a row, each starting from the one before, until a review of the whole change. */
 export const MAX_DELTA_CHAIN = 5;
+/**
+ * The waivers carried over a delta outside their perimeter, and that perimeter: a closed list. Absent, never carried:
+ * `relecture:securite`, `relecture` whole, `preuve`, `instable` (decision of the operator of 17 October 2026).
+ */
+export const WAIVER_PERIMETERS = {
+    maquette: 'maquette',
+    captures: 'fidelite',
+    controles: 'controles',
+    'relecture:fidelite': 'fidelite',
+    'relecture:donnees': 'donnees',
+    'relecture:rgpd': 'rgpd',
+};
+/** Perimeters judged by the paths alone: the whole diff C..C' is read too, a merge of the target included. */
+const PATH_PERIMETERS = ['maquette', 'controles'];
 /** Causes shown when a step of the chain touches the perimeter. */
 const MAX_REASONS = 5;
 const short = (sha) => sha.slice(0, 12);
@@ -84,13 +104,17 @@ export function reviewChain(ctx, head) {
             return `relecture ${domain} de départ inutilisable à ${where} (${start.found.problem ?? 'illisible'})`;
         return null;
     };
-    /** Why the steps from the node to the head touch the perimeter: each run of links, then each link; empty when none. */
-    const reasonsFor = (domain, node) => {
-        for (const span of [...chainSpans(node.links), ...node.links]) {
-            const key = `${domain}|${span.from}..${span.to}`;
+    /**
+     * Why the steps from the node to the head touch the perimeter: each run of links, then each link, and for a perimeter
+     * of paths the whole diff from the node to the head; empty when none.
+     */
+    const reasonsFor = (perimeter, node) => {
+        const whole = PATH_PERIMETERS.includes(perimeter) ? [{ from: node.commit, to: head }] : [];
+        for (const span of [...chainSpans(node.links), ...node.links, ...whole]) {
+            const key = `${perimeter}|${span.from}..${span.to}`;
             let why = touched.get(key);
             if (!why) {
-                why = ctx.touches(domain, span);
+                why = ctx.touches(perimeter, span);
                 touched.set(key, why);
             }
             if (why.length)
@@ -113,8 +137,7 @@ export function reviewChain(ctx, head) {
             const reasons = reasonsFor(domain, node);
             if (reasons.length)
                 return { found: undefined, from: null, how: null, broken: { from, reasons } };
-            const files = [...new Set(chainSpans(node.links).flatMap(s => diffFiles(ctx.repo, s.from, s.to) ?? []))].sort();
-            return { ...picked, from, how: 'reported', reported: { files } };
+            return { ...picked, from, how: 'reported', reported: { files: deltaFilesOf(node) } };
         }
         return null;
     };
@@ -128,6 +151,20 @@ export function reviewChain(ctx, head) {
         }
         return null;
     };
-    return { resolve: (commit, domain) => resolve(commit, domain, 0), reported, deltaStart, chain };
+    const deltaFilesOf = (node) => [...new Set(chainSpans(node.links).flatMap(s => diffFiles(ctx.repo, s.from, s.to) ?? []))].sort();
+    const carriedWaiver = (rule, find) => {
+        const perimeter = WAIVER_PERIMETERS[rule];
+        if (!perimeter)
+            return null;
+        for (const node of chain()) {
+            const waiver = find(node.commit);
+            if (!waiver)
+                continue;
+            const reasons = reasonsFor(perimeter, node);
+            return reasons.length ? { waiver: null, from: node.commit, reasons } : { waiver, from: node.commit, files: deltaFilesOf(node) };
+        }
+        return null;
+    };
+    return { resolve: (commit, domain) => resolve(commit, domain, 0), reported, deltaStart, carriedWaiver, chain };
 }
 //# sourceMappingURL=delta.js.map
