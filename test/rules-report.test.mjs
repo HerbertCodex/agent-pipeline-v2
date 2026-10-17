@@ -353,9 +353,12 @@ test('report (review of #141, A10): a -diff attribute hides no term of the delta
 
 /**
  * B2, AC-CARRY-WAIVER (decision of the operator of 17 October 2026): a waiver typed for C counts at C' when the delta
- * leaves its perimeter, for maquette, captures, controles and the reviews fidelite, donnees, rgpd; never securite, the
- * rule relecture whole, preuve nor instable. Its words, date, commit and why are said.
+ * leaves its perimeter, for maquette, controles and the reviews donnees, rgpd; never securite, the rule relecture whole,
+ * preuve nor instable, and never captures nor relecture:fidelite either (decision of the lead on the third security
+ * review of #141: back with the fingerprint of the build output). Its words, date, commit and why are said.
  */
+/** What the refusal says of a waiver captures or relecture:fidelite typed for an earlier commit. */
+const WAIVER_NEVER = (rule, from) => `la dérogation ${rule} de ${short(from)} n'est jamais reportée (elle reviendra avec l'empreinte du build)`;
 const AT = '2026-10-17T18:00:00.000Z';
 const says = (p, rule, sha, reason = 'validée à l\'oral, versée demain') => operatorSays(p.repo, `dérogation ${rule} ${short(sha)} : ${reason}`, AT);
 
@@ -402,34 +405,43 @@ test('AC-CARRY-WAIVER: preuve, instable, relecture:securite and the rule relectu
   assert.doesNotMatch(JSON.stringify(report.rules), /reportée de [0-9a-f]{12} : « dérogation (preuve|instable|relecture)/);
 });
 
-test('AC-CARRY-WAIVER: relecture:fidelite and captures carried over a delta without screen; relecture:rgpd not over a GDPR term', async t => {
-  // relecture:fidelite (no fidelity review at C): carried, captures without object.
+test('AC-CARRY-WAIVER: relecture:fidelite and captures never carried, even over a delta without screen, said; relecture:rgpd carried, not over a GDPR term', async t => {
+  // relecture:fidelite (no fidelity review at C): not carried, captures required at C'.
   const p = await reviewed(t, { skip: ['fidelite', 'rgpd'] });
   says(p, 'relecture:fidelite', p.c);
   says(p, 'relecture:rgpd', p.c);
+  const atC = await p.check(p.c);
+  assert.equal(domain(atC, 'fidelite').status, 'waived');
+  assert.equal(rule(atC, 'captures').status, 'not_applicable');
   const c2 = p.commit(TEST_ONLY());
   const report = await p.check(c2);
-  assert.equal(domain(report, 'fidelite').status, 'waived', JSON.stringify(domain(report, 'fidelite')));
-  assert.match(domain(report, 'fidelite').detail, new RegExp(`dérogation relecture:fidelite reportée de ${short(p.c)}`));
-  assert.equal(rule(report, 'captures').status, 'not_applicable');
+  assert.equal(domain(report, 'fidelite').status, 'missing', JSON.stringify(domain(report, 'fidelite')));
+  assert.equal(domain(report, 'fidelite').waiver, null);
+  assert.ok(rule(report, 'relecture').todo.includes(`fidelite : ${WAIVER_NEVER('relecture:fidelite', p.c)}.`), rule(report, 'relecture').todo.join('\n'));
+  assert.equal(rule(report, 'captures').status, 'refused', JSON.stringify(rule(report, 'captures')));
   assert.equal(domain(report, 'rgpd').status, 'waived');
+  assert.match(domain(report, 'rgpd').detail, new RegExp(`dérogation relecture:rgpd reportée de ${short(p.c)}`));
   const c3 = p.commit({ 'tests/e2e/carte.e2e.ts': 'import { test } from "@playwright/test";\ntest("email du contact", async () => {});\n' });
   const gdpr = await p.check(c3);
   assert.equal(domain(gdpr, 'rgpd').status, 'missing', JSON.stringify(domain(gdpr, 'rgpd')));
   assert.match(rule(gdpr, 'relecture').todo.join('\n'), new RegExp(`rgpd : la dérogation relecture:rgpd de ${short(p.c)} n'est pas reportée, le delta touche son périmètre : .*rgpd retenue`));
-  assert.equal(domain(gdpr, 'fidelite').status, 'waived');
-  // captures waived at C (a fidelity review without its captures): carried over a delta without screen.
+  assert.equal(domain(gdpr, 'fidelite').status, 'missing');
+  // captures waived at C (a fidelity review without its captures): not carried over a delta without screen.
   const q = await reviewed(t, { fidelityCaptures: [] });
   assert.equal(rule(await q.check(q.c), 'captures').status, 'refused');
   says(q, 'captures', q.c);
+  assert.equal(rule(await q.check(q.c), 'captures').status, 'waived');
   const q2 = q.commit(TEST_ONLY());
   const captures = rule(await q.check(q2), 'captures');
-  assert.equal(captures.status, 'waived', JSON.stringify(captures));
-  assert.match(captures.detail, new RegExp(`dérogation captures reportée de ${short(q.c)}`));
-  const q3 = q.commit({ 'src/lib/components/Header.svelte': '<header>Compte modifié</header>\n' });
-  assert.equal(rule(await q.check(q3), 'captures').status, 'refused');
+  assert.equal(captures.status, 'refused', JSON.stringify(captures));
+  assert.equal(captures.waiver, null);
+  assert.ok(captures.todo.includes(`${WAIVER_NEVER('captures', q.c)}.`), captures.todo.join('\n'));
+  // The review of the delta of fidelite with its captures at C' passes both.
+  seedReview(q.repo, q2, 'fidelite', { captures: ALL_CAPTURES, delta: { from: q.c, files: diffFiles(q.repo, q.c, q2) } });
+  const reviewedDelta = await q.check(q2);
+  assert.equal(rule(reviewedDelta, 'captures').status, 'ok', JSON.stringify(rule(reviewedDelta, 'captures')));
+  assert.equal(domain(reviewedDelta, 'fidelite').status, 'recorded');
 });
-
 test('AC-CARRY-WAIVER: controles carried while the configuration of the checks is untouched; a template reason is never carried; a rebase carries nothing', async t => {
   const p = await reviewed(t);
   assert.equal(rule(await p.check(p.c), 'controles').status, 'refused');
@@ -580,28 +592,37 @@ test('report (third review of #141, M3): a loader in src/routes/build/+page.ts t
   assert.equal(output.status, 'not_applicable', JSON.stringify(output));
 });
 
-test('AC-CARRY-WAIVER (second review of #141 and #143, M1, M2): no waiver relecture:fidelite or captures over a fixture, none of relecture:rgpd over a name with a space', async t => {
+test('AC-CARRY-WAIVER (reviews of #141 and #143, M1, M2, M3): no waiver relecture:fidelite or captures over any delta, none of relecture:rgpd over a name with a space', async t => {
   const fixture = { ...PAGE, 'tests/fixtures/pages.ts': 'export default [];\n' };
-  // relecture:fidelite waived at C (no fidelity review): not carried over a fixture changed, carried over a test proper.
+  // relecture:fidelite waived at C (no fidelity review): carried neither over a fixture changed nor over a test proper.
   const p = await reviewed(t, { change: fixture, skip: ['fidelite'] });
   says(p, 'relecture:fidelite', p.c);
   const c2 = p.commit({ 'tests/fixtures/pages.ts': 'export default ["contenu affiché changé"];\n' });
   const report = await p.check(c2);
   assert.equal(domain(report, 'fidelite').status, 'missing', JSON.stringify(domain(report, 'fidelite')));
-  assert.match(rule(report, 'relecture').todo.join('\n'), new RegExp(`la dérogation relecture:fidelite de ${short(p.c)} n'est pas reportée, le delta touche son périmètre : .*tests/fixtures/pages\\.ts : module de tests chargeable par l'application`));
+  assert.ok(rule(report, 'relecture').todo.includes(`fidelite : ${WAIVER_NEVER('relecture:fidelite', p.c)}.`), rule(report, 'relecture').todo.join('\n'));
   git(p.repo, 'switch', '-q', '--detach', p.c);
   const c3 = p.commit(TEST_ONLY());
-  assert.equal(domain(await p.check(c3), 'fidelite').status, 'waived');
-  // captures waived at C (a fidelity review without its captures): not carried over a fixture, nor over a test proper
-  // that the application loads by a computed path; carried over a test alone.
-  for (const [dir, change, carried] of [['tests/fixtures', { 'tests/fixtures/pages.ts': 'export default ["x"];\n' }, false], ['tests/e2e', TEST_ONLY(), false], [null, TEST_ONLY(), true]]) {
+  assert.equal(domain(await p.check(c3), 'fidelite').status, 'missing');
+  // captures waived at C (a fidelity review without its captures): carried over nothing, a loader or not.
+  for (const [dir, change] of [['tests/fixtures', { 'tests/fixtures/pages.ts': 'export default ["x"];\n' }], ['tests/e2e', TEST_ONLY()], [null, TEST_ONLY()]]) {
     const loader = dir ? { 'src/routes/compte/+page.server.ts': LOADERS(dir)['import/**/(x)'] } : {};
     const q = await reviewed(t, { change: { ...fixture, ...loader }, fidelityCaptures: [] });
     says(q, 'captures', q.c);
     const q2 = q.commit(change);
     const captures = rule(await q.check(q2), 'captures');
-    assert.equal(captures.status, carried ? 'waived' : 'refused', `${dir} : ${JSON.stringify(captures)}`);
+    assert.equal(captures.status, 'refused', `${dir} : ${JSON.stringify(captures)}`);
   }
+  // M3 of #143: a loader in src/routes/build/+page.ts at C, both waivers typed for C; C' only changes the test it loads.
+  const build = { ...PAGE, 'src/routes/build/+page.ts': "export const load = async ({ params }) => ({ f: (await import('../../../tests/e2e/' + params.n)).default });\n" };
+  const m = await reviewed(t, { change: build, skip: ['fidelite'] });
+  says(m, 'relecture:fidelite', m.c);
+  says(m, 'captures', m.c);
+  const m2 = m.commit({ 'tests/e2e/carte.e2e.ts': 'import { test } from "@playwright/test";\ntest("carte changée", async () => {});\n' });
+  const atM2 = await m.check(m2);
+  assert.equal(domain(atM2, 'fidelite').status, 'missing', JSON.stringify(domain(atM2, 'fidelite')));
+  assert.equal(rule(atM2, 'captures').status, 'refused', JSON.stringify(rule(atM2, 'captures')));
+  assert.ok(rule(atM2, 'captures').todo.includes(`${WAIVER_NEVER('captures', m.c)}.`), rule(atM2, 'captures').todo.join('\n'));
   // relecture:rgpd waived at C; C' adds a tracker and an e-mail field to a component whose name has a space.
   const name = 'src/lib/components/Mon composant.svelte';
   const r = await reviewed(t, { change: { ...PAGE, [name]: '<p>bloc</p>\n' }, skip: ['rgpd'] });

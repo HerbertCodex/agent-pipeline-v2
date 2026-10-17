@@ -25,24 +25,33 @@ import { type ReadRecord } from './reviews.js';
  * The review of the head always decides; this only applies when the head has none of the domain.
  *
  * A waiver the operator typed for C counts at C' the same way (6.4, decision of the operator of 17 October 2026), for the
- * closed list WAIVER_PERIMETERS only: maquette (no screen, no mockup, no decision ledger touched), captures and the review
- * fidelite (the conditions of fidelite), the reviews donnees and rgpd (the plan does not retain them), controles (the
- * configuration of the checks and package.json untouched). Never securite, the rule relecture whole, preuve nor instable.
- * The waiver is still read from the journal of the operator by waiverFor, for its own commit C: nothing else creates one.
+ * closed list WAIVER_PERIMETERS only: maquette (no screen, no mockup, no decision ledger touched), the reviews donnees and
+ * rgpd (the plan does not retain them), controles (the configuration of the checks and package.json untouched). Never
+ * securite, the rule relecture whole, preuve nor instable; never captures nor relecture:fidelite either (NEVER_CARRIED,
+ * decision of the lead on the third security review of #141: their perimeter was the textual detection of the loaders,
+ * they come back with the fingerprint of the build output). The waiver is still read from the journal of the operator by
+ * waiverFor, for its own commit C: nothing else creates one.
  */
 /** Reviews of the delta in a row, each starting from the one before, until a review of the whole change. */
 export declare const MAX_DELTA_CHAIN = 5;
 /**
- * What a delta must leave untouched: a review domain (planReviews, and touchesNoScreen for fidelite), or the paths of a
- * rule: `maquette` (screens, the mockups folder, the decision ledger), `controles` (the configuration of the checks,
+ * What a delta must leave untouched: a review domain carried (planReviews: donnees, rgpd), or the paths of a rule:
+ * `maquette` (screens, the mockups folder, the decision ledger), `controles` (the configuration of the checks,
  * package.json).
  */
-export type Perimeter = Exclude<ReviewDomainName, 'securite'> | 'maquette' | 'controles';
+export type Perimeter = Exclude<ReviewDomainName, 'securite' | 'fidelite'> | 'maquette' | 'controles';
 /**
  * The waivers carried over a delta outside their perimeter, and that perimeter: a closed list. Absent, never carried:
- * `relecture:securite`, `relecture` whole, `preuve`, `instable` (decision of the operator of 17 October 2026).
+ * `relecture:securite`, `relecture` whole, `preuve`, `instable` (decision of the operator of 17 October 2026), and the
+ * waivers of NEVER_CARRIED.
  */
 export declare const WAIVER_PERIMETERS: Readonly<Partial<Record<WaiverTarget, Perimeter>>>;
+/**
+ * Waivers never carried, said as such when one was typed for an earlier commit of the branch: `captures` and
+ * `relecture:fidelite` (decision of the lead on the third security review of #141, M3, M4: back with the fingerprint of
+ * the build output, part A of docs/ACCELERATION-LOTS.md, not with a textual detection of the loaders).
+ */
+export declare const NEVER_CARRIED: readonly WaiverTarget[];
 /**
  * The domains never carried over a delta without a review: securite (decision of the operator of 17 October 2026), and
  * fidelite (decision of the lead on the third security review of #141: back with the fingerprint of the build output).

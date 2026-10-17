@@ -22,7 +22,7 @@ import { MERGE_RULES, RULE_TITLES, rulesSettings, type MergeRule } from './confi
 import { TEMPLATE_WAIVER_NOTE, anchorKey, readOperatorMessages, templateWaiver, waiverFor, waiverSentence, type WaiverTarget } from './operator.js';
 import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
-import { reviewChain, type Perimeter, type Picked } from './delta.js';
+import { NEVER_CARRIED, reviewChain, type Perimeter, type Picked } from './delta.js';
 import { computedLoads } from './loads.js';
 import { deltaFiles } from './carry.js';
 import { LANE_NAME, docsOnlyLane, laneLines, type DocsOnlyLane } from './docs-only.js';
@@ -626,12 +626,19 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     p.delta ? `relecture du delta depuis ${short(p.delta.from)} (${p.delta.files} fichier${p.delta.files > 1 ? 's' : ''})` : '',
   ].filter(Boolean).join(', ');
   // A waiver of the operator for this commit, or one he typed for an earlier commit of the branch, carried over a delta
-  // outside its perimeter (closed list: never securite, the whole rule relecture, preuve, instable). His words, their
+  // outside its perimeter (closed list: never securite, the whole rule relecture, preuve, instable, captures nor
+  // relecture:fidelite). His words, their
   // date, their commit and why are said. `notCarried` keeps why one was not carried, for the refusal.
   const notCarried = new Map<WaiverTarget, string>();
   const waiverOf = (rule: WaiverTarget): Waiver | null => {
     const own = waiverFor(messages, rule, sha);
     if (own) return { at: own.message.at, reason: own.reason };
+    if (NEVER_CARRIED.includes(rule)) {
+      // captures, relecture:fidelite (third security review of #141): the waiver of an earlier commit is said, never carried.
+      const earlier = chainReviews.chain().find(node => waiverFor(messages, rule, node.commit));
+      if (earlier) notCarried.set(rule, `la dérogation ${rule} de ${short(earlier.commit)} n'est jamais reportée (elle reviendra avec l'empreinte du build)`);
+      return null;
+    }
     const carried = chainReviews.carriedWaiver(rule, commit => waiverFor(messages, rule, commit));
     if (!carried) return null;
     if (!carried.waiver) { notCarried.set(rule, `la dérogation ${rule} de ${short(carried.from)} n'est pas reportée, le delta touche son périmètre : ${carried.reasons.slice(0, 3).join(' ; ')}`); return null; }
