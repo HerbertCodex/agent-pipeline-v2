@@ -138,10 +138,20 @@ function hasScreensAt(repo: string, sha: string, screens: readonly RegExp[]): bo
 const TOOLING_PATH = /^(?:\.apv|\.github(?!\/(?:workflows|actions)\/)|\.claude|\.vscode|\.husky)\//;
 /** Configuration files that may declare aliases (Vite, SvelteKit, Astro, Nuxt, Next, webpack, TypeScript, JavaScript). */
 const ALIAS_CONFIG = /(?:^|\/)(?:(?:vite|vitest|svelte|astro|nuxt|next|webpack|rollup)\.config\.[cm]?[jt]s|[jt]sconfig[\w.-]*\.json)$/;
-/** A loading by pattern or by a computed path: import.meta.glob, import(`…${x}…`), import(x), require(x). */
-// A name that ends in « import » (confirm_application_import( of a SQL migration, #262 of the pilot project) is not the
-// dynamic import; `require(` keeps no such bound, a wrapper (myrequire) may load a module.
-const COMPUTED_LOAD = 'import\\.meta\\.glob|(^|[^[:alnum:]_$])import\\([[:space:]]*`[^`]*\\$\\{|(^|[^[:alnum:]_$])import\\([[:space:]]*[^\'"`[:space:])]|require\\([[:space:]]*`[^`]*\\$\\{|require\\([[:space:]]*[^\'"`[:space:])]';
+/**
+ * A loading by pattern or by a computed path: import.meta.glob, import(`…${x}…`), import(x), require(x), spaces allowed
+ * before the parenthesis (`import (x)`), and a parenthesis that ends the line (the path on the next one is not read:
+ * counted). No bound before the name: a wrapper (`_import(`, `$import(`, `myrequire(`) may load a module (security
+ * review of #141, A9). SQL files are left out of the search (SEARCHED_FOR_LOADS): a migration never loads JavaScript
+ * (confirm_application_import( of the pilot project, #262).
+ */
+const COMPUTED_LOAD = ['import\\.meta\\.glob', ...['import', 'require'].flatMap(name => [
+  `${name}[[:space:]]*\\([[:space:]]*\`[^\`]*\\$\\{`,
+  `${name}[[:space:]]*\\([[:space:]]*[^'"\`[:space:])]`,
+  `${name}[[:space:]]*\\([[:space:]]*$`,
+])].join('|');
+/** Pathspec of the search for loads: every tracked file but SQL. */
+const SEARCHED_FOR_LOADS = ['.', ':(exclude)*.sql'];
 const TOOLING_FILE = /^(?:\.gitignore|\.gitattributes|\.editorconfig|\.nvmrc|\.node-version)$/;
 const TEST_PATH = /^(?:tests?|e2e)\/|(?:^|\/)(?:__tests__|__snapshots__)\/|\.(?:test|spec)\.[cm]?[jt]s$|^(?:playwright|vitest)\.config\.[cm]?[jt]s$/;
 const DOC_PATH = /^(?:docs\/.+|[^/]+)\.md$/;
@@ -316,7 +326,7 @@ export function touchesNoScreen(repo: string, base: string, head: string, screen
   // read from the text, wherever the file lies (second review of #134: tests/fixtures at the root, apps/*/src).
   const loaded = files.filter(f => TEST_PATH.test(f) || DOC_PATH.test(f));
   if (loaded.length) {
-    const loads = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'grep', '-l', '-z', '-E', '-e', COMPUTED_LOAD, head, '--'],
+    const loads = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'grep', '-l', '-z', '-E', '-e', COMPUTED_LOAD, head, '--', ...SEARCHED_FOR_LOADS],
       { cwd: repo, encoding: 'utf8', timeout: 30_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
     if (loads.error || (loads.status !== 0 && loads.status !== 1)) { reasons.push('recherche des chargements par motif illisible : impossible de juger'); return verdict(); }
     const loaders = loads.status === 0 ? loads.stdout.split('\0').filter(Boolean).map(w => w.slice(head.length + 1)).filter(w => !withoutScreenByPath(w, docsSite, screens)) : [];

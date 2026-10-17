@@ -348,13 +348,27 @@ test('captures: when they stay required, the output names each file that makes t
   assert.match(await reasons(vite, { 'tests/fx/index.ts': 'export default 2;\n' }), /tests\/fx\/index\.ts : visé par l'alias de vite\.config\.ts/);
   const glob = { ...SITE, 'src/routes/compte/+page.ts': 'const t = import.meta.glob("/tests/*.ts");\nexport const load = () => ({ t });\n' };
   assert.match(await reasons(glob, { 'tests/a.test.ts': 'test\n' }), /tests\/a\.test\.ts : chargement par motif ou chemin calculé dans src\/routes\/compte\/\+page\.ts/);
-  // #262 of the pilot project: a name that ends in « import » (here a SQL function) is not a dynamic import; a call of
-  // import itself, even after an operator, still is.
+  // #262 of the pilot project: a SQL migration never loads JavaScript, its function confirm_application_import( is no
+  // dynamic import (*.sql left out of the search). Any other file keeps the strict reading (security review of #141, A9):
+  // a call of import itself, after an operator, with a space before the parenthesis, with the path on the next line
+  // (unreadable, so counted), or a name that ends in « import » (_import(, $import(: a wrapper of a dependency may load a module).
   const sql = { ...SITE, 'supabase/migrations/1_import.sql': 'select confirm_application_import(p_id);\n' };
   const fromSql = rule((await project(t, { base: sql, config, change: { 'tests/a.test.ts': 'test\n' } }).check()).report, 'captures');
   assert.equal(fromSql.status, 'not_applicable', JSON.stringify(fromSql));
-  const dynamic = { ...SITE, 'src/routes/compte/+page.ts': 'export const load = async ({ url }) => ({ t: (await import(url.pathname)).default });\n' };
-  assert.match(await reasons(dynamic, { 'tests/a.test.ts': 'test\n' }), /tests\/a\.test\.ts : chargement par motif ou chemin calculé dans src\/routes\/compte\/\+page\.ts/);
+  const loads = [
+    'export const load = async ({ url }) => ({ t: (await import(url.pathname)).default });\n',
+    'export const load = async ({ params }) => ({ t: (await import (`../../../tests/fixtures/${params.n}.ts`)).default });\n',
+    'export const load = async ({ params }) => ({ t: (await import (params.n)).default });\n',
+    'export const load = async ({ params }) => ({ t: (await import(\n  `../../../tests/fixtures/${params.n}.ts`\n)).default });\n',
+    'export const load = async ({ params }) => ({ t: (await import(   \n  params.n\n)).default });\n',
+    'import { _import } from "./loader";\nexport const load = async ({ params }) => ({ t: await _import(params.n) });\n',
+    'import { $import } from "./loader";\nexport const load = async ({ params }) => ({ t: await $import(params.n) });\n',
+    'export const load = async ({ params }) => ({ t: require (params.n) });\n',
+  ];
+  for (const text of loads) {
+    const dynamic = { ...SITE, 'src/routes/compte/+page.ts': text };
+    assert.match(await reasons(dynamic, { 'tests/a.test.ts': 'test\n' }), /tests\/a\.test\.ts : chargement par motif ou chemin calculé dans src\/routes\/compte\/\+page\.ts/, text);
+  }
 });
 
 /**
