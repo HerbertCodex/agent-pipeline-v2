@@ -9,9 +9,11 @@ import { ALL_CAPTURES, commonDirOf, operatorSays, png, seedReview } from './supp
 import { latestReviews, recordReview } from '../dist/rules/reviews.js';
 
 /**
- * Part B of docs/ACCELERATION-LOTS.md: a review recorded at C counts at C' for fidelite, donnees and rgpd when the delta
- * C..C' leaves the perimeter of the domain (and touches no screen for fidelite); securite never, a review of the delta
- * (`--delta-from`) instead. Each criterion AC-CARRY-* has its refusal and its acceptance.
+ * Part B of docs/ACCELERATION-LOTS.md: a review recorded at C counts at C' for donnees and rgpd when the delta C..C'
+ * leaves the perimeter of the domain; securite and fidelite never (decision of the lead on the third security review of
+ * #141, M3 and M4: the report of fidelite and of the captures comes back with the fingerprint of the build output, part A),
+ * a review of the delta (`--delta-from`) instead, its captures joined for fidelite. Each criterion AC-CARRY-* has its
+ * refusal and its acceptance.
  */
 
 const identity = { GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@localhost', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@localhost' };
@@ -35,8 +37,8 @@ const TEST_ONLY = (n = 1) => ({
   'tests/e2e/carte.e2e.ts-snapshots/carte-390.png': png(40 + n),
 });
 
-/** main holds `site` (SITE) and `base`; feat adds PAGE at C, reviewed in every domain of its plan (four captures for fidelite). */
-async function reviewed(t, { change = PAGE, skip = [], fidelityCaptures = ALL_CAPTURES, links = {}, site = SITE, config = {}, base = {} } = {}) {
+/** main holds `files` (SITE) and `base`, `config` merged into .apv/config.json; feat, created, has no commit yet. */
+function site(t, { base = {}, config = {}, files = SITE } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'apv3-report-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const origin = join(root, 'origin.git');
@@ -46,7 +48,7 @@ async function reviewed(t, { change = PAGE, skip = [], fidelityCaptures = ALL_CA
   git(repo, 'switch', '-q', '-c', 'main');
   put(repo, '.apv/config.json', { name: 'essai', gates: [{ id: 'unit', stage: 'full', command: [process.execPath, '-e', '0'] }], ...config });
   put(repo, 'README.md', 'projet\n');
-  for (const [path, value] of Object.entries({ ...site, ...base })) put(repo, path, value);
+  for (const [path, value] of Object.entries({ ...files, ...base })) put(repo, path, value);
   git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'base'); git(repo, 'push', '-q', 'origin', 'main');
   git(repo, 'switch', '-q', '-c', 'feat');
   /** `links`: submodule links (mode 160000) set to a commit id, `{ path: sha }`; the folder stays empty (not checked out). */
@@ -57,55 +59,90 @@ async function reviewed(t, { change = PAGE, skip = [], fidelityCaptures = ALL_CA
     git(repo, 'commit', '-q', '--allow-empty', '-m', message);
     return git(repo, 'rev-parse', 'HEAD');
   };
-  const c = commit(change, 'change', links);
   const check = async sha => {
     const r = await apv(repo, ['rules', 'check', '--commit', sha, '--target', 'origin/main', '--json']);
     return r.json();
   };
   const text = async sha => (await apv(repo, ['rules', 'check', '--commit', sha, '--target', 'origin/main'])).stdout;
-  const retained = rule(await check(c), 'relecture').detail.replace(/^.*: /, '').split(', ');
-  for (const d of retained.filter(x => !skip.includes(x))) seedReview(repo, c, d, { captures: d === 'fidelite' ? fidelityCaptures : [] });
-  if (!skip.length) assert.equal(rule(await check(c), 'relecture').status, 'ok');
-  return { repo, c, commit, check, text, retained };
+  return { repo, commit, check, text };
+}
+
+/** main holds `site` (SITE) and `base`; feat adds PAGE at C, reviewed in every domain of its plan but `skip` (four captures for fidelite). */
+async function reviewed(t, { change = PAGE, skip = [], fidelityCaptures = ALL_CAPTURES, links = {}, site: files = SITE, config = {}, base = {} } = {}) {
+  const s = site(t, { base, config, files });
+  const c = s.commit(change, 'change', links);
+  const retained = rule(await s.check(c), 'relecture').detail.replace(/^.*: /, '').split(', ');
+  for (const d of retained.filter(x => !skip.includes(x))) seedReview(s.repo, c, d, { captures: d === 'fidelite' ? fidelityCaptures : [] });
+  if (!skip.length) assert.equal(rule(await s.check(c), 'relecture').status, 'ok');
+  return { ...s, c, retained };
 }
 const rule = (report, id) => report.rules.find(r => r.rule === id);
 const domain = (report, d) => rule(report, 'relecture').domains.find(x => x.domain === d);
 const diffFiles = (repo, from, to) => git(repo, 'diff', '--name-only', '--no-renames', from, to).split('\n').filter(Boolean).sort();
+/** What a head without a fidelity review says, when a usable one at `from` lies below it on the branch. */
+const FID_NEVER = from => `relecture fidelite : jamais reportée sans relire (elle reviendra avec l'empreinte du build) ; relecture du delta possible : apv review record --delta-from ${short(from)}`;
+/** fidelite at `head`: missing, never reported, a review of the delta from `from` offered. */
+function fidelityNeverReported(report, head, from, label = '') {
+  const fid = domain(report, 'fidelite');
+  assert.equal(fid.status, 'missing', `${label} ${JSON.stringify(fid)}`);
+  assert.equal(fid.detail, `aucune relecture enregistrée à ${short(head)} ; ${FID_NEVER(from)}`, label);
+}
 
-test('AC-CARRY-FID, AC-USER-2: a delta of a test and two images keeps fidelite and rgpd of C, said, captures of C; securite is asked as a review of the delta', async t => {
+test('AC-CARRY-FID, AC-USER-2: a delta of a test and two images keeps rgpd of C, said; fidelite and securite are never reported, each asked as a review of the delta', async t => {
   const p = await reviewed(t);
   assert.deepEqual(p.retained.sort(), ['fidelite', 'rgpd', 'securite']);
   const c2 = p.commit(TEST_ONLY());
   const report = await p.check(c2);
-  for (const d of ['fidelite', 'rgpd']) {
-    assert.equal(domain(report, d).status, 'recorded', JSON.stringify(domain(report, d)));
-    assert.match(domain(report, d).detail, new RegExp(`relecture ${d} reportée de ${short(p.c)} \\(delta sans fichier de son périmètre : 3 fichiers`));
-  }
+  assert.equal(domain(report, 'rgpd').status, 'recorded', JSON.stringify(domain(report, 'rgpd')));
+  assert.match(domain(report, 'rgpd').detail, new RegExp(`relecture rgpd reportée de ${short(p.c)} \\(delta sans fichier de son périmètre : 3 fichiers`));
+  // fidelite: never reported without a review (third security review of #141, M3, M4), its captures required at C'.
+  fidelityNeverReported(report, c2, p.c);
   const captures = rule(report, 'captures');
-  assert.equal(captures.status, 'ok', JSON.stringify(captures));
-  assert.match(captures.detail, new RegExp(`captures jointes à ${short(p.c)}, reportées : delta sans écran, 3 fichiers`));
+  assert.equal(captures.status, 'refused', JSON.stringify(captures));
+  assert.deepEqual(captures.problems, [`capture(s) absente(s) de la relecture fidelite à ${short(c2)} : ${ALL_CAPTURES.map(c => c.join(":")).join(', ')}`]);
   // securite: refused even for a delta of tests alone (AC-CARRY-SEC), with the review of the delta it can take.
   const relecture = rule(report, 'relecture');
   assert.equal(relecture.status, 'refused');
   assert.equal(domain(report, 'securite').status, 'missing');
-  assert.deepEqual(relecture.problems, [`securite : aucune relecture enregistrée à ${short(c2)}`]);
-  assert.match(relecture.todo.join('\n'), new RegExp(`Relecture du delta seul ${short(p.c)}\\.\\.${short(c2)} \\(3 fichiers : .*\\) par apv:qa-securite .*--delta-from ${short(p.c)}`));
+  assert.deepEqual([...relecture.problems].sort(), [`fidelite : aucune relecture enregistrée à ${short(c2)} ; ${FID_NEVER(p.c)}`, `securite : aucune relecture enregistrée à ${short(c2)}`]);
+  for (const [d, agent] of [['securite', 'qa-securite'], ['fidelite', 'qa-fidelite']]) {
+    assert.match(relecture.todo.join('\n'), new RegExp(`Relecture du delta seul ${short(p.c)}\\.\\.${short(c2)} \\(3 fichiers : .*\\) par apv:${agent} .*--domain ${d} --delta-from ${short(p.c)}`), d);
+  }
   // The text output says it, domain by domain.
-  assert.match(await p.text(c2), new RegExp(`fidelite : relecture enregistrée \\(.*relecture fidelite reportée de ${short(p.c)} \\(delta sans fichier de son périmètre`));
-  // The review of the delta recorded by apv:qa-securite: accepted, said.
+  const out = await p.text(c2);
+  assert.match(out, new RegExp(`rgpd : relecture enregistrée \\(.*relecture rgpd reportée de ${short(p.c)} \\(delta sans fichier de son périmètre`));
+  assert.ok(out.includes(FID_NEVER(p.c)), out);
+  // The reviews of the delta recorded by apv:qa-securite and apv:qa-fidelite, with its four captures at C': accepted, said.
   seedReview(p.repo, c2, 'securite', { delta: { from: p.c, files: diffFiles(p.repo, p.c, c2) } });
+  seedReview(p.repo, c2, 'fidelite', { captures: ALL_CAPTURES, delta: { from: p.c, files: diffFiles(p.repo, p.c, c2) } });
   const ok = await p.check(c2);
   assert.equal(rule(ok, 'relecture').status, 'ok', JSON.stringify(rule(ok, 'relecture')));
   assert.match(domain(ok, 'securite').detail, new RegExp(`relecture du delta depuis ${short(p.c)} \\(3 fichiers\\)`));
+  assert.match(domain(ok, 'fidelite').detail, new RegExp(`relecture du delta depuis ${short(p.c)} \\(3 fichiers\\)`));
+  assert.equal(rule(ok, 'captures').status, 'ok', JSON.stringify(rule(ok, 'captures')));
+  assert.equal(rule(ok, 'captures').detail, `captures jointes à ${short(c2)} : ${ALL_CAPTURES.map(c => c.join(":")).join(', ')}`);
 });
 
+test('AC-CARRY-FID: a review of the delta of fidelite without its captures counts as a review, the captures stay required at the commit', async t => {
+  const p = await reviewed(t);
+  const c2 = p.commit(TEST_ONLY());
+  seedReview(p.repo, c2, 'fidelite', { delta: { from: p.c, files: diffFiles(p.repo, p.c, c2) } });
+  const report = await p.check(c2);
+  assert.equal(domain(report, 'fidelite').status, 'recorded', JSON.stringify(domain(report, 'fidelite')));
+  const captures = rule(report, 'captures');
+  assert.equal(captures.status, 'refused', JSON.stringify(captures));
+  assert.match(captures.problems[0], new RegExp(`capture\\(s\\) absente\\(s\\) de la relecture fidelite à ${short(c2)}`));
+  // Two of the four captures: the two others are still missing; those of C never count at C'.
+  seedReview(p.repo, c2, 'fidelite', { at: '2026-09-30T11:00:00.000Z', captures: ALL_CAPTURES.slice(0, 2), delta: { from: p.c, files: diffFiles(p.repo, p.c, c2) } });
+  const half = rule(await p.check(c2), 'captures');
+  assert.equal(half.status, 'refused', JSON.stringify(half));
+  assert.deepEqual(half.problems, [`capture(s) absente(s) de la relecture fidelite à ${short(c2)} : ${ALL_CAPTURES.slice(2).map(c => c.join(":")).join(', ')}`]);
+});
 test('AC-CARRY-FID: a delta that touches a component is refused for fidelite, a review of the delta asked; with its captures it is accepted', async t => {
   const p = await reviewed(t);
   const c2 = p.commit({ 'src/lib/components/Composant.svelte': '<p>nouveau</p>\n' });
   const report = await p.check(c2);
-  const fid = domain(report, 'fidelite');
-  assert.equal(fid.status, 'missing', JSON.stringify(fid));
-  assert.match(fid.detail, new RegExp(`celle de ${short(p.c)} n'est pas reportée, le delta touche son périmètre : ${short(p.c)}\\.\\.${short(c2)} : fidelite retenue`));
+  fidelityNeverReported(report, c2, p.c);
   const relecture = rule(report, 'relecture');
   assert.match(relecture.todo.join('\n'), new RegExp(`apv review record --commit ${short(c2)} --domain fidelite --delta-from ${short(p.c)} .*captures à ${short(c2)} des écrans touchés`));
   assert.equal(rule(report, 'captures').status, 'refused');
@@ -116,24 +153,21 @@ test('AC-CARRY-FID: a delta that touches a component is refused for fidelite, a 
   assert.equal(rule(after, 'captures').status, 'ok', JSON.stringify(rule(after, 'captures')));
   assert.match(rule(after, 'captures').detail, new RegExp(`captures jointes à ${short(c2)} :`));
 });
-
-test('AC-CARRY-FID: a test file the application names keeps fidelite (touchesNoScreen), even when the plan would skip it', async t => {
+test('AC-CARRY-FID: a test file the application names: fidelite not reported either', async t => {
   const p = await reviewed(t, { change: { ...PAGE, 'src/routes/compte/+page.ts': 'import f from "../../../tests/fixtures/pages.ts";\nexport const load = () => ({ f });\n', 'tests/fixtures/pages.ts': 'export default [];\n' } });
   const c2 = p.commit({ 'tests/fixtures/pages.ts': 'export default ["autre"];\n' });
-  const fid = domain(await p.check(c2), 'fidelite');
-  assert.equal(fid.status, 'missing', JSON.stringify(fid));
-  assert.match(fid.detail, /tests\/fixtures\/pages\.ts : nommé par src\/routes\/compte\/\+page\.ts/);
+  const report = await p.check(c2);
+  fidelityNeverReported(report, c2, p.c);
+  assert.equal(rule(report, 'captures').status, 'refused');
 });
-
-test('AC-CARRY-RGPD: a line of a test that names a term of the GDPR keeps rgpd; fidelite is still carried', async t => {
+test('AC-CARRY-RGPD: a line of a test that names a term of the GDPR keeps rgpd; fidelite is not reported', async t => {
   const p = await reviewed(t);
   const c2 = p.commit({ 'tests/e2e/carte.e2e.ts': 'import { test } from "@playwright/test";\ntest("email du contact", async () => {});\n' });
   const report = await p.check(c2);
   assert.equal(domain(report, 'rgpd').status, 'missing', JSON.stringify(domain(report, 'rgpd')));
   assert.match(domain(report, 'rgpd').detail, /n'est pas reportée, le delta touche son périmètre : .*rgpd retenue/);
-  assert.equal(domain(report, 'fidelite').status, 'recorded');
+  fidelityNeverReported(report, c2, p.c);
 });
-
 test('AC-CARRY-SEC: a review of the delta whose files differ from the delta recomputed, or that starts from no usable review, proves nothing', async t => {
   const p = await reviewed(t);
   const c2 = p.commit(TEST_ONLY());
@@ -183,16 +217,18 @@ test('AC-CARRY-SEC: reviews of the delta in a chain count back to a usable revie
 test('AC-CARRY-BLOCK: a blocking review at a commit between C and the head refuses the report', async t => {
   const p = await reviewed(t);
   const c1 = p.commit(TEST_ONLY(1));
-  seedReview(p.repo, c1, 'fidelite', { high: 1, captures: ALL_CAPTURES });
+  seedReview(p.repo, c1, 'rgpd', { high: 1 });
   const c2 = p.commit(TEST_ONLY(2));
   const report = await p.check(c2);
-  const fid = domain(report, 'fidelite');
+  const rgpd = domain(report, 'rgpd');
+  assert.equal(rgpd.status, 'missing', JSON.stringify(rgpd));
+  assert.match(rgpd.detail, new RegExp(`0 constat\\(s\\) critique\\(s\\) et 1 haut\\(s\\) à ${short(c1)}`));
+  // A blocking fidelity review between: no review of the delta from below it is offered.
+  seedReview(p.repo, c1, 'fidelite', { high: 1, captures: ALL_CAPTURES });
+  const fid = domain(await p.check(c2), 'fidelite');
   assert.equal(fid.status, 'missing', JSON.stringify(fid));
-  assert.match(fid.detail, new RegExp(`0 constat\\(s\\) critique\\(s\\) et 1 haut\\(s\\) à ${short(c1)}`));
-  // rgpd, without a blocking review in between, is still carried.
-  assert.equal(domain(report, 'rgpd').status, 'recorded');
+  assert.equal(fid.detail, `aucune relecture enregistrée à ${short(c2)}`);
 });
-
 test('AC-CARRY-REBASE: C not an ancestor of the head carries nothing; a review of the delta from it is refused', async t => {
   const p = await reviewed(t);
   const c2 = p.commit(TEST_ONLY());
@@ -207,26 +243,28 @@ test('AC-CARRY-REBASE: C not an ancestor of the head carries nothing; a review o
   assert.match(domain(await p.check(rebased), 'securite').detail, new RegExp(`${short(p.c)} n'est pas un ancêtre de ${short(rebased)}`));
 });
 
-test('report: the walk is bounded (ten commits), follows a merge of the target carried by carry.ts, and never reports securite', async t => {
+test('report: the walk is bounded (ten commits), follows a merge of the target carried by carry.ts, and never reports securite nor fidelite', async t => {
   const p = await reviewed(t);
-  // A merge of the target (diff identical) after a commit of tests: fidelite of C reported over both.
+  // A merge of the target (diff identical) after a commit of tests: rgpd of C reported over both.
   p.commit(TEST_ONLY(1));
   git(p.repo, 'switch', '-q', 'main'); put(p.repo, 'src/autre.ts', 'export const autre = 1;\n');
   git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'la cible avance'); git(p.repo, 'push', '-q', 'origin', 'main');
   git(p.repo, 'switch', '-q', 'feat'); git(p.repo, 'merge', '-q', '--no-edit', 'origin/main');
   const merged = git(p.repo, 'rev-parse', 'HEAD');
   const atMerge = await p.check(merged);
-  assert.equal(domain(atMerge, 'fidelite').status, 'recorded', JSON.stringify(domain(atMerge, 'fidelite')));
-  assert.match(domain(atMerge, 'fidelite').detail, new RegExp(`reportée de ${short(p.c)}`));
+  assert.equal(domain(atMerge, 'rgpd').status, 'recorded', JSON.stringify(domain(atMerge, 'rgpd')));
+  assert.match(domain(atMerge, 'rgpd').detail, new RegExp(`reportée de ${short(p.c)}`));
   assert.equal(domain(atMerge, 'securite').status, 'missing');
-  // Ten more commits of tests: C is out of the walk, nothing reported.
+  fidelityNeverReported(atMerge, merged, p.c);
+  // Ten more commits of tests: C is out of the walk, nothing reported, no review of the delta offered.
   let head = merged;
   for (let k = 2; k <= 11; k += 1) head = p.commit(TEST_ONLY(k));
   const far = await p.check(head);
-  assert.equal(domain(far, 'fidelite').status, 'missing', JSON.stringify(domain(far, 'fidelite')));
-  assert.equal(domain(far, 'fidelite').detail, `aucune relecture enregistrée à ${short(head)}`);
+  for (const d of ['fidelite', 'rgpd']) {
+    assert.equal(domain(far, d).status, 'missing', JSON.stringify(domain(far, d)));
+    assert.equal(domain(far, d).detail, `aucune relecture enregistrée à ${short(head)}`);
+  }
 });
-
 test('report: the review of the head always decides, even when an earlier review would be carried', async t => {
   const p = await reviewed(t);
   const c2 = p.commit(TEST_ONLY());
@@ -271,10 +309,9 @@ test('report (review of #141, A1): a submodule link that changes, even ignored b
   // Only the link changes: Git, reading .gitmodules, would list no file at all.
   const c2 = p.commit({}, 'vendor', { 'src/lib/vendor': SUB(2) });
   const report = await p.check(c2);
-  for (const d of p.retained.filter(d => d !== 'securite')) {
-    assert.equal(domain(report, d).status, 'missing', `${d} ${JSON.stringify(domain(report, d))}`);
-    assert.match(domain(report, d).detail, /delta illisible : lien de sous-module changé \(src\/lib\/vendor\).*relecture complète exigée/, d);
-  }
+  assert.equal(domain(report, 'rgpd').status, 'missing', JSON.stringify(domain(report, 'rgpd')));
+  assert.match(domain(report, 'rgpd').detail, /delta illisible : lien de sous-module changé \(src\/lib\/vendor\).*relecture complète exigée/);
+  fidelityNeverReported(report, c2, p.c);
   assert.equal(rule(report, 'captures').status, 'refused', JSON.stringify(rule(report, 'captures')));
   // A review of the delta of no file proves nothing, and apv review record refuses to write one.
   seedReview(p.repo, c2, 'securite', { delta: { from: p.c, files: [] } });
@@ -290,11 +327,10 @@ test('report (review of #141, A1): a submodule link that changes, even ignored b
   // The link changed beside a test and its images: refused the same way, the test alone would have been carried.
   const q = await reviewed(t, { change: { ...PAGE, ...IGNORED_SUBMODULE }, links: { 'src/lib/vendor': SUB(1) } });
   const q2 = q.commit(TEST_ONLY(), 'tests et vendor', { 'src/lib/vendor': SUB(3) });
-  const fid = domain(await q.check(q2), 'fidelite');
-  assert.equal(fid.status, 'missing', JSON.stringify(fid));
-  assert.match(fid.detail, /delta illisible : lien de sous-module changé \(src\/lib\/vendor\)/);
+  const rgpd = domain(await q.check(q2), 'rgpd');
+  assert.equal(rgpd.status, 'missing', JSON.stringify(rgpd));
+  assert.match(rgpd.detail, /delta illisible : lien de sous-module changé \(src\/lib\/vendor\)/);
 });
-
 test('report (review of #141, A4): the delta is read without renames: a file moved out of a folder keeps the review of both paths', async t => {
   const p = await reviewed(t, { change: { ...PAGE, 'src/routes/(admin)/export/+server.ts': 'export const GET = () => new Response("ok");\n' } });
   assert.ok(p.retained.includes('rgpd'), p.retained.join(', '));
@@ -462,79 +498,86 @@ const LOADERS = dir => ({
   'createReadStream(x)': `import { createReadStream } from 'node:fs';\nexport const load = ({ params }) => ({ f: createReadStream(\n  params.n) });\n`,
 });
 
-test('report (second review of #141, M2): a fixture or a support module of the tests breaks the report of fidelite and captures, whatever loads it', async t => {
-  const loaders = LOADERS('tests/fixtures');
-  for (const [name, loader] of Object.entries(loaders)) {
-    const p = await reviewed(t, { change: { ...PAGE, 'src/routes/compte/+page.server.ts': loader, 'tests/fixtures/pages.ts': 'export default [];\n' } });
-    const c2 = p.commit({ 'tests/fixtures/pages.ts': 'export default ["contenu affiché changé"];\n' });
-    const report = await p.check(c2);
-    const fid = domain(report, 'fidelite');
-    assert.equal(fid.status, 'missing', `${name} : ${JSON.stringify(fid)}`);
-    assert.match(fid.detail, /tests\/fixtures\/pages\.ts : module de tests chargeable par l'application, relecture de fidélité exigée/, name);
-    assert.equal(rule(report, 'captures').status, 'refused', `${name} : ${JSON.stringify(rule(report, 'captures'))}`);
-  }
-  // No loader at all: a support module (tests/support/), a fixture beside a test, are still no test proper.
-  for (const file of ['tests/support/page.ts', 'tests/e2e/fixtures/carte.ts', 'tests/e2e/helpers.ts']) {
+test('report (second review of #141, M2): whatever the delta (fixture, support module, test proper, note), fidelite is never reported, its captures required', async t => {
+  const cases = [
+    { 'tests/fixtures/pages.ts': 'export default ["contenu affiché changé"];\n' },
+    { 'tests/support/page.ts': 'export default 1;\n' },
+    { 'tests/e2e/helpers.ts': 'export default 1;\n' },
+    TEST_ONLY(),
+    { '.apv/state/notes.md': '# Notes\n' },
+  ];
+  for (const files of cases) {
     const p = await reviewed(t);
-    const c2 = p.commit({ [file]: 'export default 1;\n' });
-    const fid = domain(await p.check(c2), 'fidelite');
-    assert.equal(fid.status, 'missing', `${file} : ${JSON.stringify(fid)}`);
-    assert.match(fid.detail, new RegExp(`${file.replace(/[./]/g, '\\$&')} : module de tests chargeable par l'application, relecture de fidélité exigée`));
+    const c2 = p.commit(files);
+    const report = await p.check(c2);
+    fidelityNeverReported(report, c2, p.c, Object.keys(files).join(', '));
+    assert.equal(rule(report, 'captures').status, 'refused', `${Object.keys(files).join(', ')} : ${JSON.stringify(rule(report, 'captures'))}`);
   }
-  // Any other file outside the screens (a note of the pipeline): no test, no image, no document.
-  const p = await reviewed(t);
-  const c2 = p.commit({ '.apv/state/notes.md': '# Notes\n' });
-  const fid = domain(await p.check(c2), 'fidelite');
-  assert.equal(fid.status, 'missing', JSON.stringify(fid));
-  assert.match(fid.detail, /\.apv\/state\/notes\.md : ni fichier de test, ni image de référence, ni documentation non servie/);
 });
 
-test('report (second review of #141, M2): every computed load of the application is seen, over lines and comments, for a test proper', async t => {
+/** A change made of tests only, fidelite always reviewed: the rule captures reads the loads of the application (loads.ts). */
+async function capturesOfTests(t, base) {
+  const s = site(t, { base, config: { review: { always: ['fidelite'] } } });
+  const c = s.commit(TEST_ONLY());
+  return rule(await s.check(c), 'captures');
+}
+
+test('captures (second review of #141, M2): every computed load of the application is seen, over lines and comments, for a change of tests', async t => {
   for (const [name, loader] of Object.entries(LOADERS('tests/e2e'))) {
-    const p = await reviewed(t, { change: { ...PAGE, 'src/routes/compte/+page.server.ts': loader } });
-    const c2 = p.commit(TEST_ONLY());
-    const report = await p.check(c2);
-    const fid = domain(report, 'fidelite');
-    assert.equal(fid.status, 'missing', `${name} : ${JSON.stringify(fid)}`);
-    assert.match(fid.detail, /tests\/e2e\/carte\.e2e\.ts : chargement par motif ou chemin calculé dans src\/routes\/compte\/\+page\.server\.ts/, name);
-    assert.equal(rule(report, 'captures').status, 'refused', name);
+    const captures = await capturesOfTests(t, { 'src/routes/compte/+page.server.ts': loader });
+    assert.equal(captures.status, 'refused', `${name} : ${JSON.stringify(captures)}`);
+    assert.match(captures.detail, /tests\/e2e\/carte\.e2e\.ts : chargement par motif ou chemin calculé dans src\/routes\/compte\/\+page\.server\.ts/, name);
   }
+  // A NUL byte in a comment (third review of #141, M4): the file is still read (Node and esbuild run it).
+  const nul = await capturesOfTests(t, { 'src/routes/compte/+page.server.ts': `// \u0000\n${LOADERS('tests/e2e')["import('…' + n)"]}` });
+  assert.equal(nul.status, 'refused', JSON.stringify(nul));
+  assert.match(nul.detail, /chargement par motif ou chemin calculé dans src\/routes\/compte\/\+page\.server\.ts/);
   // A JavaScript loader named .sql (any case) is read as JavaScript.
   for (const file of ['src/lib/loader.sql', 'src/lib/LOADER.SQL']) {
-    const p = await reviewed(t, { change: { ...PAGE, [file]: 'export default (n) => import(n);\n' } });
-    const c2 = p.commit(TEST_ONLY());
-    const fid = domain(await p.check(c2), 'fidelite');
-    assert.equal(fid.status, 'missing', `${file} : ${JSON.stringify(fid)}`);
-    assert.match(fid.detail, new RegExp(`chargement par motif ou chemin calculé dans ${file.replace(/[./]/g, '\\$&')}`));
+    const captures = await capturesOfTests(t, { [file]: 'export default (n) => import(n);\n' });
+    assert.equal(captures.status, 'refused', `${file} : ${JSON.stringify(captures)}`);
+    assert.match(captures.detail, new RegExp(`chargement par motif ou chemin calculé dans ${file.replace(/[./]/g, '\\$&')}`));
   }
 });
 
-test('report (second review of #141, M2): the pilot project, a SQL function named *_import( and loads that only comments or literals hold, keeps the report', async t => {
+test('captures (second review of #141, M2): the pilot project, a SQL function named *_import( and loads that only comments or literals hold, need none', async t => {
   const quiet = {
-    ...PAGE,
     'supabase/migrations/20261001000000_import.sql': 'create function public.confirm_application_import(p_id uuid) returns void language sql as $$ select 1 $$;\nselect confirm_application_import(p_id);\n',
     'src/lib/home/motion.ts': '/*\n * anime.js et three ne sont importés qu\'à la demande (import() dynamique).\n */\n// require(x) jamais ici, readFileSync(chemin) non plus\nexport const motion = async () => (await import(\'./anime\')).default;\n',
     'src/lib/server/fonts.ts': "import { readFileSync } from 'node:fs';\nexport const font = () => readFileSync('static/fonts/a.woff2');\nexport const json = async () => (await import('./data.json', { with: { type: 'json' } })).default;\nconst url = 'http://exemple.test/'; // import(url) en commentaire\n",
     'src/lib/server/data.json': '{"a":1}\n',
   };
-  const p = await reviewed(t, { change: quiet });
-  const c2 = p.commit(TEST_ONLY());
-  const report = await p.check(c2);
-  const fid = domain(report, 'fidelite');
-  assert.equal(fid.status, 'recorded', JSON.stringify(fid));
-  assert.match(fid.detail, new RegExp(`relecture fidelite reportée de ${short(p.c)}`));
-  const captures = rule(report, 'captures');
-  assert.equal(captures.status, 'ok', JSON.stringify(captures));
-  assert.match(captures.detail, new RegExp(`captures jointes à ${short(p.c)}, reportées : delta sans écran, 3 fichiers`));
+  const captures = await capturesOfTests(t, quiet);
+  assert.equal(captures.status, 'not_applicable', JSON.stringify(captures));
+  assert.match(captures.detail, /^aucun écran touché : 3 fichiers/);
 });
 
-test('report (second review of #141, M2): beyond the bound of the search for loads, nothing is judged: captures required', async t => {
-  // In the base (17 Mio of text the application holds); the plan of C does not read it.
-  const p = await reviewed(t, { base: { 'src/lib/server/grand.txt': 'ligne de texte de l\'application\n'.repeat(560_000) } });
-  const c2 = p.commit(TEST_ONLY());
-  const fid = domain(await p.check(c2), 'fidelite');
-  assert.equal(fid.status, 'missing', JSON.stringify(fid));
-  assert.match(fid.detail, /recherche des chargements par motif : .*impossible de juger/);
+test('captures (second review of #141, M2): beyond the bound of the search for loads, nothing is judged: captures required', async t => {
+  // In the base, 17 Mio of text the application holds.
+  const captures = await capturesOfTests(t, { 'src/lib/server/grand.txt': 'ligne de texte de l\'application\n'.repeat(560_000) });
+  assert.equal(captures.status, 'refused', JSON.stringify(captures));
+  assert.match(captures.detail, /recherche des chargements par motif : .*impossible de juger/);
+});
+
+test('report (third review of #141, M3): a loader in src/routes/build/+page.ts toward the tests: fidelite and captures of C are not reported, and the rule captures sees it', async t => {
+  const loader = "export const load = async ({ params }) => ({ f: (await import('../../../tests/e2e/' + params.n + '.ts')).default });\n";
+  const p = await reviewed(t, { change: { ...PAGE, 'src/routes/build/+page.ts': loader } });
+  // C' only changes the test that the served route /build loads.
+  const c2 = p.commit({ 'tests/e2e/carte.e2e.ts': 'import { test } from "@playwright/test";\ntest("carte changée", async () => {});\n' });
+  const report = await p.check(c2);
+  fidelityNeverReported(report, c2, p.c);
+  const captures = rule(report, 'captures');
+  assert.equal(captures.status, 'refused', JSON.stringify(captures));
+  assert.match(captures.problems[0], new RegExp(`capture\\(s\\) absente\\(s\\) de la relecture fidelite à ${short(c2)}`));
+  // The rule captures alone, for a change of tests: a folder named build or dist below the root is the application.
+  for (const file of ['src/routes/build/+page.ts', 'src/lib/dist/charge.ts']) {
+    const alone = await capturesOfTests(t, { [file]: loader });
+    assert.equal(alone.status, 'refused', `${file} : ${JSON.stringify(alone)}`);
+    assert.match(alone.detail, new RegExp(`chargement par motif ou chemin calculé dans ${file.replace(/[./+]/g, '\\$&')}`), file);
+  }
+  // At the root, a build output is still no source of the application.
+  const output = await capturesOfTests(t, { 'build/charge.js': loader, 'dist/charge.js': loader });
+  assert.equal(output.status, 'not_applicable', JSON.stringify(output));
 });
 
 test('AC-CARRY-WAIVER (second review of #141 and #143, M1, M2): no waiver relecture:fidelite or captures over a fixture, none of relecture:rgpd over a name with a space', async t => {

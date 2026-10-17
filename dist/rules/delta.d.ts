@@ -5,18 +5,22 @@ import { type ReadRecord } from './reviews.js';
 /**
  * Reviews carried over a delta that leaves their perimeter, and reviews of the delta (docs/ACCELERATION-LOTS.md, part B).
  *
- * A review recorded at C, a commit of the pull request below the head C', counts at C' for a domain other than securite
- * when every step of the change from C to C' (each first-parent link, and each run of links as one change) is outside
- * the perimeter of the domain: the plan of the reviews (planReviews, settings read at the base of the pull request)
- * does not retain the domain for it, and, for fidelite, it touches no screen (touchesNoScreen). The chain is walked from
- * the head, nearest first, MAX_REPORT_WALK commits at most (carry.ts); a blocking review (a critical or high finding) of
- * the domain at any commit of the walk blocks, and the first step that touches the perimeter breaks the report: a new
- * review is asked for, of the whole change or of the delta.
+ * A review recorded at C, a commit of the pull request below the head C', counts at C' for donnees and rgpd when every
+ * step of the change from C to C' (each first-parent link, and each run of links as one change) is outside the perimeter
+ * of the domain: the plan of the reviews (planReviews, settings read at the base of the pull request) does not retain the
+ * domain for it. The chain is walked from the head, nearest first, MAX_REPORT_WALK commits at most (carry.ts); a blocking
+ * review (a critical or high finding) of the domain at any commit of the walk blocks, and the first step that touches the
+ * perimeter breaks the report: a new review is asked for, of the whole change or of the delta.
  *
- * securite is never carried that way: a review of the delta (`apv review record --delta-from C`) is recorded at C' by
- * its reviewer, and counts when C is an ancestor of C' on the branch, the files it recorded are the diff C..C'
- * recomputed, and the review it starts from is usable at C (itself a review of a delta, MAX_DELTA_CHAIN in a row at
- * most). Every domain has the same review of the delta, for a delta that touches its perimeter.
+ * securite and fidelite are never carried that way (NEVER_REPORTED). fidelite, and its captures with it, was carried
+ * while its perimeter was read from the text of the application (touchesNoScreen, the loads by a computed path); the
+ * third security review of #141 (M3, M4) showed that reading can be fooled, and the lead turned it off: it comes back
+ * founded on the fingerprint of the build output (part A of docs/ACCELERATION-LOTS.md), not on a textual detection.
+ *
+ * Every domain has a review of the delta (`apv review record --delta-from C`), recorded at C' by its reviewer (with the
+ * captures at C' for fidelite): it counts when C is an ancestor of C' on the branch, the files it recorded are the diff
+ * C..C' recomputed, and the review it starts from is usable at C (itself a review of a delta, MAX_DELTA_CHAIN in a row at
+ * most).
  *
  * The review of the head always decides; this only applies when the head has none of the domain.
  *
@@ -39,6 +43,12 @@ export type Perimeter = Exclude<ReviewDomainName, 'securite'> | 'maquette' | 'co
  * `relecture:securite`, `relecture` whole, `preuve`, `instable` (decision of the operator of 17 October 2026).
  */
 export declare const WAIVER_PERIMETERS: Readonly<Partial<Record<WaiverTarget, Perimeter>>>;
+/**
+ * The domains never carried over a delta without a review: securite (decision of the operator of 17 October 2026), and
+ * fidelite (decision of the lead on the third security review of #141: back with the fingerprint of the build output).
+ * A review of the delta (`--delta-from`) stays open to both.
+ */
+export declare const NEVER_REPORTED: readonly ReviewDomainName[];
 export interface DeltaContext {
     repo: string;
     common: string;
@@ -76,7 +86,7 @@ export declare const blockingReview: (r: ReadRecord | undefined) => boolean;
 export interface ReviewChain {
     /** The review of the domain at `commit`: its own, or carried over merges of the target; a review of the delta verified. */
     resolve(commit: string, domain: ReviewDomainName): Picked;
-    /** A review of an earlier commit of the branch carried to the head over a delta outside the perimeter; never securite. */
+    /** A review of an earlier commit of the branch carried to the head over a delta outside the perimeter; never NEVER_REPORTED. */
     reported(domain: ReviewDomainName): Picked | null;
     /** The nearest commit of the branch below the head with a usable review of the domain: where a review of the delta starts. */
     deltaStart(domain: ReviewDomainName): string | null;
