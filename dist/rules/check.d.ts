@@ -95,9 +95,12 @@ export interface ScreenVerdict {
  * in a comment, a test, the documentation or the code map aside), reached by a symbolic link, loaded by a pattern or a
  * computed path (a test or a document, when the application loads that way), or aimed at by an alias. Every cause found is
  * said, file by file; the tool also says when it cannot tell (diff, tree or search unreadable, a link that leaves the
- * repository, too many files): captures are then required.
+ * repository, too many files or too much to read): captures are then required. For the report of a review or of a
+ * waiver (`report`), every file must also be a test proper, an image of reference or a document not served.
  */
-export declare function touchesNoScreen(repo: string, base: string, head: string, screens: readonly RegExp[]): ScreenVerdict;
+export declare function touchesNoScreen(repo: string, base: string, head: string, screens: readonly RegExp[], options?: {
+    report?: boolean;
+}): ScreenVerdict;
 /**
  * The rules checked before any merge (docs/REGLES.md). Each one says what it checked, why it refuses and what to do. A
  * refusal is lifted by the correction it asks for, or by the operator himself: « dérogation <règle> <commit> : <raison> »

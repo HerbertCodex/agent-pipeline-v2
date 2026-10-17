@@ -22,6 +22,8 @@ import { TEMPLATE_WAIVER_NOTE, anchorKey, readOperatorMessages, templateWaiver, 
 import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
 import { reviewChain, type Picked } from './delta.js';
+import { computedLoads } from './loads.js';
+import { TEST_NAME } from '../review/risk.js';
 import { deltaFiles } from './carry.js';
 import { LANE_NAME, docsOnlyLane, laneLines, type DocsOnlyLane } from './docs-only.js';
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
@@ -139,19 +141,21 @@ const TOOLING_PATH = /^(?:\.apv|\.github(?!\/(?:workflows|actions)\/)|\.claude|\
 /** Configuration files that may declare aliases (Vite, SvelteKit, Astro, Nuxt, Next, webpack, TypeScript, JavaScript). */
 const ALIAS_CONFIG = /(?:^|\/)(?:(?:vite|vitest|svelte|astro|nuxt|next|webpack|rollup)\.config\.[cm]?[jt]s|[jt]sconfig[\w.-]*\.json)$/;
 /**
- * A loading by pattern or by a computed path: import.meta.glob, import(`…${x}…`), import(x), require(x), spaces allowed
- * before the parenthesis (`import (x)`), and a parenthesis that ends the line (the path on the next one is not read:
- * counted). No bound before the name: a wrapper (`_import(`, `$import(`, `myrequire(`) may load a module (security
- * review of #141, A9). SQL files are left out of the search (SEARCHED_FOR_LOADS): a migration never loads JavaScript
- * (confirm_application_import( of the pilot project, #262).
+ * The search for loads by a pattern or a computed path (src/rules/loads.ts) reads the tracked files of the application:
+ * neither node_modules nor a build output (dist, build), nor a binary file, nor a file outside the interface (tests,
+ * tooling, documentation). Beyond MAX_LOAD_BYTES to read, the tool does not judge: captures required.
  */
-const COMPUTED_LOAD = ['import\\.meta\\.glob', ...['import', 'require'].flatMap(name => [
-  `${name}[[:space:]]*\\([[:space:]]*\`[^\`]*\\$\\{`,
-  `${name}[[:space:]]*\\([[:space:]]*[^'"\`[:space:])]`,
-  `${name}[[:space:]]*\\([[:space:]]*$`,
-])].join('|');
-/** Pathspec of the search for loads: every tracked file but SQL. */
-const SEARCHED_FOR_LOADS = ['.', ':(exclude)*.sql'];
+const NOT_APPLICATION = /(?:^|\/)(?:node_modules|dist|build)\//;
+const BINARY_FILE = /\.(?:png|jpe?g|gif|webp|avif|ico|bmp|tiff?|psd|heic|woff2?|ttf|otf|eot|pdf|zip|gz|tgz|bz2|xz|7z|rar|jar|mp[34]|m4a|aac|flac|wav|ogg|oga|webm|mov|avi|mkv|wasm|node|so|dylib|dll|exe|bin|sqlite3?|db)$/i;
+const MAX_LOAD_BYTES = 16 * 1024 * 1024;
+/**
+ * A file read by a computed path (readFile, readFileSync, createReadStream) in a tooling script (`scripts/`) or a module
+ * of the tests named as such (`*.fixture.*`, `*.mock.*`, `__mocks__/`) is no load of the application: such scripts read
+ * the files they are given. Their computed import or require still counts.
+ */
+const READS_OUTSIDE_APPLICATION = /^scripts\/|(?:^|\/)__mocks__\/|(?:^|\/)[^/]+\.(?:fixtures?|mocks?)\.[^/]+$/;
+/** Images of reference of the screenshots (Playwright `*-snapshots/`, Jest and Vitest `__snapshots__/`). */
+const SNAPSHOT_DIR = /(?:^|\/)(?:[^/]+-snapshots|__snapshots__)\//;
 const TOOLING_FILE = /^(?:\.gitignore|\.gitattributes|\.editorconfig|\.nvmrc|\.node-version)$/;
 const TEST_PATH = /^(?:tests?|e2e)\/|(?:^|\/)(?:__tests__|__snapshots__)\/|\.(?:test|spec)\.[cm]?[jt]s$|^(?:playwright|vitest)\.config\.[cm]?[jt]s$/;
 const DOC_PATH = /^(?:docs\/.+|[^/]+)\.md$/;
@@ -268,6 +272,45 @@ function referencerMayShow(path: string, docsSite: boolean, screens: readonly Re
   return docsSite || !path.startsWith('docs/');
 }
 
+/** Why a file of a delta cannot carry the fidelity review and its captures (touchesNoScreen, report); null when it can. */
+function notReportable(path: string, docsSite: boolean): string | null {
+  if (TEST_NAME.test(path) || SNAPSHOT_DIR.test(path) || (!docsSite && DOC_PATH.test(path))) return null;
+  if (TEST_PATH.test(path)) return 'module de tests chargeable par l\'application, relecture de fidélité exigée';
+  return 'ni fichier de test, ni image de référence, ni documentation non servie : relecture de fidélité exigée';
+}
+
+interface TreeEntry { mode: string; sha: string; size: number; path: string }
+
+/**
+ * The files of the application at a commit that load by a pattern or a computed path (src/rules/loads.ts); a sentence
+ * when the tool cannot tell (too much to read, objects unreadable).
+ */
+function loadersAt(repo: string, entries: readonly TreeEntry[], docsSite: boolean, screens: readonly RegExp[]): string[] | string {
+  const read = entries.filter(e => (e.mode === '100644' || e.mode === '100755') && !NOT_APPLICATION.test(e.path) && !BINARY_FILE.test(e.path)
+    && !withoutScreenByPath(e.path, docsSite, screens));
+  const bytes = read.reduce((n, e) => n + e.size, 0);
+  const mib = (n: number): string => `${Math.ceil(n / (1024 * 1024))} Mio`;
+  if (bytes > MAX_LOAD_BYTES) return `recherche des chargements par motif : ${mib(bytes)} de fichiers de l'application à lire, plus de ${mib(MAX_LOAD_BYTES)} : impossible de juger`;
+  if (!read.length) return [];
+  const batch = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', 'cat-file', '--batch'],
+    { cwd: repo, input: `${read.map(e => e.sha).join('\n')}\n`, timeout: 60_000, maxBuffer: MAX_LOAD_BYTES + read.length * 128 + 1024 });
+  if (batch.status !== 0 || batch.error) return 'recherche des chargements par motif illisible : impossible de juger';
+  const out: string[] = [];
+  let at = 0;
+  for (const entry of read) {
+    const end = batch.stdout.indexOf(10, at);
+    const header = end < 0 ? null : /^[0-9a-f]+ blob (\d+)$/.exec(batch.stdout.subarray(at, end).toString('latin1'));
+    if (!header) return 'recherche des chargements par motif illisible : impossible de juger';
+    const size = Number(header[1]);
+    const body = batch.stdout.subarray(end + 1, end + 1 + size);
+    at = end + 1 + size + 1;
+    if (body.includes(0)) continue;
+    const kinds = computedLoads(entry.path, body.toString('utf8'));
+    if (kinds.has('load') || (kinds.has('read') && !READS_OUTSIDE_APPLICATION.test(entry.path))) out.push(entry.path);
+  }
+  return out;
+}
+
 export interface ScreenVerdict {
   /** Files of the change. */
   files: number;
@@ -284,9 +327,10 @@ const MAX_REASONS = 20;
  * in a comment, a test, the documentation or the code map aside), reached by a symbolic link, loaded by a pattern or a
  * computed path (a test or a document, when the application loads that way), or aimed at by an alias. Every cause found is
  * said, file by file; the tool also says when it cannot tell (diff, tree or search unreadable, a link that leaves the
- * repository, too many files): captures are then required.
+ * repository, too many files or too much to read): captures are then required. For the report of a review or of a
+ * waiver (`report`), every file must also be a test proper, an image of reference or a document not served.
  */
-export function touchesNoScreen(repo: string, base: string, head: string, screens: readonly RegExp[]): ScreenVerdict {
+export function touchesNoScreen(repo: string, base: string, head: string, screens: readonly RegExp[], options: { report?: boolean } = {}): ScreenVerdict {
   const reasons: string[] = [];
   // Every submodule seen, a changed link or trees that differ with no file listed refused (deltaFiles, review of #141, A1).
   const read = deltaFiles(repo, base, head);
@@ -294,16 +338,19 @@ export function touchesNoScreen(repo: string, base: string, head: string, screen
   const files = read.files;
   const verdict = (): ScreenVerdict => ({ files: files.length, reasons: [...new Set(reasons)].slice(0, MAX_REASONS) });
   if (files.length > MAX_FILES_WITHOUT_SCREEN) { reasons.push(`${files.length} fichiers, plus de ${MAX_FILES_WITHOUT_SCREEN} : impossible de juger`); return verdict(); }
-  const tree = gitRead(repo, ['ls-tree', '-r', '-z', '--full-tree', head]);
+  const tree = gitRead(repo, ['ls-tree', '-r', '-l', '-z', '--full-tree', head]);
   if (tree === null) { reasons.push(`arbre de ${short(head)} illisible : impossible de juger`); return verdict(); }
   const entries = tree.split('\0').filter(Boolean).map(e => {
     const tab = e.indexOf('\t');
-    const [mode, , sha] = e.slice(0, tab).split(' ');
-    return { mode: mode ?? '', sha: sha ?? '', path: e.slice(tab + 1) };
+    const [mode, , sha, size] = e.slice(0, tab).split(/ +/);
+    return { mode: mode ?? '', sha: sha ?? '', size: Number(size) || 0, path: e.slice(tab + 1) };
   });
   const docsSite = entries.some(e => DOCS_SITE.test(e.path));
   for (const f of files) { const why = screenReasonByPath(f, docsSite, screens); if (why) reasons.push(`${f} : ${why}`); }
   if (reasons.length) return verdict();
+  // A report (decision of the operator on the second security review of #141, M2): only a test proper, an image of
+  // reference or a document not served; a fixture or a support module of the tests may be loaded by the application.
+  if (options.report) for (const f of files) { const why = notReportable(f, docsSite); if (why) reasons.push(`${f} : ${why}`); }
   // Symbolic links of the head: one that leads to a file of the change or to a folder that holds one.
   const links = entries.filter(e => e.mode === '120000');
   if (links.length) {
@@ -326,10 +373,8 @@ export function touchesNoScreen(repo: string, base: string, head: string, screen
   // read from the text, wherever the file lies (second review of #134: tests/fixtures at the root, apps/*/src).
   const loaded = files.filter(f => TEST_PATH.test(f) || DOC_PATH.test(f));
   if (loaded.length) {
-    const loads = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'grep', '-l', '-z', '-E', '-e', COMPUTED_LOAD, head, '--', ...SEARCHED_FOR_LOADS],
-      { cwd: repo, encoding: 'utf8', timeout: 30_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
-    if (loads.error || (loads.status !== 0 && loads.status !== 1)) { reasons.push('recherche des chargements par motif illisible : impossible de juger'); return verdict(); }
-    const loaders = loads.status === 0 ? loads.stdout.split('\0').filter(Boolean).map(w => w.slice(head.length + 1)).filter(w => !withoutScreenByPath(w, docsSite, screens)) : [];
+    const loaders = loadersAt(repo, entries, docsSite, screens);
+    if (typeof loaders === 'string') { reasons.push(loaders); return verdict(); }
     if (loaders.length) for (const f of loaded) reasons.push(`${f} : chargement par motif ou chemin calculé dans ${loaders.slice(0, 3).join(', ')}`);
   }
   // An alias toward a folder of the change (Vite, SvelteKit, tsconfig paths...): a page imports it by a name the text of
@@ -563,7 +608,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     if (typeof delta === 'string') return [`plan des revues du delta illisible (${delta.slice(0, 160)})`];
     const decision = delta.domains.find(d => d.domain === domain);
     if (decision?.decision === 'retained') return [`${domain} retenue par le plan des revues : ${decision.reason.slice(0, 160)}${decision.files.length ? ` (${decision.files.slice(0, 3).join(', ')}${decision.fileCount > 3 ? ', ...' : ''})` : ''}`];
-    return domain === 'fidelite' ? touchesNoScreen(repo, span.from, span.to, screenMatch).reasons : [];
+    return domain === 'fidelite' ? touchesNoScreen(repo, span.from, span.to, screenMatch, { report: true }).reasons : [];
   };
   const chainReviews = reviewChain({ repo, common, target: resolveCommit(repo, input.target), touches }, sha);
   const pick = (domain: ReviewDomainName): Picked => {
