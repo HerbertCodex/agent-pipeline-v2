@@ -1,6 +1,6 @@
 # Accélérer les lots sans affaiblir la preuve
 
-Statut : **brouillon de spec, à valider par l'opérateur**. Aucune ligne de code avant sa validation. Écrit sur la branche `apv3` (après la PR #139), non commité.
+Statut : **validée par l'opérateur le 17 octobre 2026** (quatre décisions en fin de document). Livrée par petites PR, dans l'ordre du découpage ; C1 (contrôles tôt) est la première.
 Méthode du dépôt : spec d'abord, validée, puis phases de code en petites PR (section 11), chacune avec ses tests qui refusent et ses tests qui acceptent ([REGLES.md](REGLES.md), section 6).
 
 Le document a quatre parties de fond, indépendantes et livrables séparément :
