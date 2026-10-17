@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
@@ -324,4 +325,42 @@ test('review plan (security review of #141, A1, A10): a submodule ignored by .gi
   const plan = await p.plan();
   assert.ok(plan.files.some(f => f.path === 'src/lib/vendor'), JSON.stringify(plan.files.map(f => f.path)));
   assert.match(decision(plan, 'rgpd').reason, /email/, JSON.stringify(decision(plan, 'rgpd')));
+});
+
+/** Terms of data and of the GDPR on several lines: a tracker, an e-mail field, personal fields, a query (second review of #141, M1). */
+const SPACED_TERMS = '<p>bloc</p>\n<script src="https://www.googletagmanager.com/gtag/js"></script>\n<input name="email" autocomplete="email" />\n<p>{user.phone} {profile.birthdate}</p>\n{#await supabase.from(\'profiles\').select(\'email\') then rows}{rows.length}{/await}\n';
+
+test('review plan (second review of #141, M1): a file name with a space, or quoted by Git, keeps the terms of its lines', async t => {
+  // Git writes `--- a/<name>\t` when the name holds a space, `"a/..."` when it quotes it (a quote, a backslash), both at once too.
+  const names = ['src/lib/components/Mon composant.svelte', 'src/lib/components/Mon café.svelte', 'src/lib/components/Mon "x".svelte',
+    'src/lib/components/Mon\\x.svelte', 'src/lib/components/Mon"x".svelte', 'tests/e2e/mon test.e2e.ts'];
+  for (const name of [...names, 'src/lib/components/MonComposant.svelte']) {
+    const p = project(t);
+    p.edit(name, SPACED_TERMS);
+    p.commit();
+    const plan = await p.plan();
+    for (const d of ['rgpd', 'donnees']) assert.equal(decision(plan, d).decision, 'retained', `${name} : ${JSON.stringify(decision(plan, d))}`);
+    assert.match(decision(plan, 'rgpd').reason, /terme RGPD|adresse/, name);
+  }
+});
+
+test('review plan (second review of #141, M1): a file whose content changed and whose patch is not found keeps every domain', async t => {
+  // A git that answers every command but the patch (`--unified=0`): the files are listed, their lines never found.
+  const p = project(t);
+  p.edit('tests/e2e/carte.e2e.ts', SPACED_TERMS);
+  p.commit();
+  const shim = join(p.root, 'shim');
+  mkdirSync(shim);
+  const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  writeFileSync(join(shim, 'git'), `#!/bin/sh\nfor a in "$@"; do [ "$a" = "--unified=0" ] && exit 0; done\nexec ${real} "$@"\n`);
+  chmodSync(join(shim, 'git'), 0o755);
+  const r = spawnSync(process.execPath, [join(process.cwd(), 'bin/apv'), 'review', 'plan', '--base', 'main', '--head', 'work', '--json'],
+    { cwd: p.repo, encoding: 'utf8', env: { ...process.env, PATH: `${shim}:${process.env.PATH}` } });
+  assert.equal(r.status, 0, r.stderr);
+  const plan = JSON.parse(r.stdout);
+  for (const d of ['fidelite', 'donnees', 'rgpd']) {
+    assert.equal(decision(plan, d).decision, 'retained', JSON.stringify(decision(plan, d)));
+    assert.match(decision(plan, d).reason, /patch introuvable/);
+  }
+  assert.equal(plan.risk.level, 'eleve');
 });

@@ -314,3 +314,18 @@ test('report (review of #141, A10): a -diff attribute hides no term of the delta
   assert.equal(rgpd.status, 'missing', JSON.stringify(rgpd));
   assert.match(rgpd.detail, /n'est pas reportée, le delta touche son périmètre : .*rgpd retenue/);
 });
+
+/** A tracker, an e-mail field, personal fields and a query, on several lines (second review of #141, M1). */
+const TERMS = '<p>bloc</p>\n<script src="https://www.googletagmanager.com/gtag/js"></script>\n<input name="email" autocomplete="email" />\n<p>{user.phone} {profile.birthdate}</p>\n{#await supabase.from(\'profiles\').select(\'email\') then rows}{rows.length}{/await}\n';
+
+test('report (second review of #141, M1): a file name with a space hides no term: rgpd is not reported, donnees asked', async t => {
+  for (const name of ['src/lib/components/Mon composant.svelte', 'tests/e2e/mon test.e2e.ts']) {
+    const p = await reviewed(t, { change: { ...PAGE, [name]: '<p>bloc</p>\n' } });
+    const c2 = p.commit({ [name]: TERMS });
+    const report = await p.check(c2);
+    const rgpd = domain(report, 'rgpd');
+    assert.equal(rgpd.status, 'missing', `${name} : ${JSON.stringify(rgpd)}`);
+    assert.match(rgpd.detail, /n'est pas reportée, le delta touche son périmètre : .*rgpd retenue/, name);
+    assert.equal(domain(report, 'donnees')?.status, 'missing', `${name} : ${JSON.stringify(domain(report, 'donnees'))}`);
+  }
+});

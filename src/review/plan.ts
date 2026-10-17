@@ -19,7 +19,7 @@ import {
  * - `securite` is always kept, without exception (no diff, key or option skips it);
  * - another domain is skipped only on a positive proof that it has nothing to read: every changed file is
  *   classified, and none of them touches the domain; a file that no class describes, with a changed content,
- *   keeps every domain (prudence);
+ *   keeps every domain (prudence), as does a file whose content changed and whose patch is not found;
  * - a pure rename (similarity 100 %) or a change that only rewrites import paths does not change content, except
  *   for a migration, whose name is what the migration tool records;
  * - the server code, the sensitive paths of the high lane and the configuration are stronger than the neutral and
@@ -147,6 +147,34 @@ function unquote(text: string): string {
   return Buffer.from(bytes).toString('utf8');
 }
 
+/**
+ * The path of a `--- ` or `+++ ` line: Git ends it with a tab when the name holds a space (second security review of
+ * #141, M1: the tab left in the key hid every line of the file), and quotes it in C style when it holds a quote, a
+ * backslash or a control character (`"a/x \"y\""`), both at once too. A name never ends with a tab of its own: Git
+ * quotes it (`\t`).
+ */
+function patchPath(text: string, prefix: 'a/' | 'b/'): string | null {
+  const raw = text.replace(/\t$/, '');
+  if (raw === '/dev/null') return null;
+  const path = unquote(raw);
+  return path.startsWith(prefix) ? path.slice(2) : path;
+}
+
+/** The two paths of a `diff --git a/<p> b/<p>` header, each plain or quoted; null when they cannot be told apart. */
+function headerPaths(header: string): [string, string] | null {
+  // Both quoted, or one of them: a quoted path is a whole `"..."` (escapes inside), the other side the rest of the line.
+  const both = /^("(?:[^"\\]|\\.)*") ("(?:[^"\\]|\\.)*")$/.exec(header)
+    ?? /^("(?:[^"\\]|\\.)*") (.+)$/.exec(header)
+    ?? /^(.+) ("(?:[^"\\]|\\.)*")$/.exec(header);
+  if (both) return [unquote(both[1]!), unquote(both[2]!)];
+  // Both plain: the same path twice, `a/<p> b/<p>` (a mode change, an empty file).
+  const half = (header.length - 1) / 2;
+  if (Number.isInteger(half) && header.startsWith('a/') && header.slice(half + 1).startsWith('b/') && header.slice(2, half) === header.slice(half + 3)) {
+    return [header.slice(0, half), header.slice(half + 1)];
+  }
+  return null;
+}
+
 /** Changed lines of each file of a `--unified=0` patch, keyed by the new path (the old one for a deletion). */
 export function parsePatch(raw: string): Map<string, FilePatch> {
   const files = new Map<string, FilePatch>();
@@ -160,8 +188,8 @@ export function parsePatch(raw: string): Map<string, FilePatch> {
       if (!inHunk) {
         if (line.startsWith('rename from ')) renameFrom = unquote(line.slice(12));
         else if (line.startsWith('rename to ')) renameTo = unquote(line.slice(10));
-        else if (line.startsWith('--- ')) oldPath = line.slice(4) === '/dev/null' ? null : unquote(line.slice(4)).replace(/^a\//, '');
-        else if (line.startsWith('+++ ')) newPath = line.slice(4) === '/dev/null' ? null : unquote(line.slice(4)).replace(/^b\//, '');
+        else if (line.startsWith('--- ')) oldPath = patchPath(line.slice(4), 'a/');
+        else if (line.startsWith('+++ ')) newPath = patchPath(line.slice(4), 'b/');
         else if (line.startsWith('Binary files ') || line.startsWith('GIT binary patch')) patch.binary = true;
         else if (line.startsWith('@@')) { inHunk = true; const h = hunkOf(line); if (h) patch.hunks.push(h); }
         continue;
@@ -172,10 +200,9 @@ export function parsePatch(raw: string): Map<string, FilePatch> {
     }
     let key = renameTo ?? newPath ?? oldPath ?? renameFrom;
     if (!key) {
-      // No ---/+++ lines (binary file, mode change): the header names the same path twice, `a/<p> b/<p>`.
-      const header = unquote(lines[0] ?? '');
-      const half = (header.length - 1) / 2;
-      if (Number.isInteger(half) && header.startsWith('a/') && header.slice(half + 1).startsWith('b/') && header.slice(2, half) === header.slice(half + 3)) key = header.slice(2, half);
+      // No ---/+++ lines (binary file, mode change, empty file): the header names the path on both sides.
+      const both = headerPaths(lines[0] ?? '');
+      if (both && both[0].startsWith('a/') && both[1].startsWith('b/') && both[0].slice(2) === both[1].slice(2)) key = both[1].slice(2);
     }
     if (key) files.set(key, patch);
   }
@@ -330,6 +357,7 @@ const WHY = {
   unclassified: 'fichier non classé au contenu changé (prudence)',
   ledgerMockup: 'décision de maquette ajoutée ou modifiée au registre',
   strong: 'code serveur, chemin sensible ou configuration au contenu changé (prudence, plus fort que tests et outillage)',
+  unread: 'contenu changé, patch introuvable : lignes non lues (prudence)',
 } as const;
 
 /** Classes that keep no domain of their own: a file matching only these is not described by a domain class. */
@@ -419,6 +447,8 @@ function fileKeeps(file: Omit<PlannedFile, 'keeps' | 'risk' | 'riskWhy'>, patch:
   // A mockup is the reference of the fidelity review: a renamed one is touched too.
   if (inDesign) add('fidelite', WHY.design);
   if (file.change !== 'content') return keeps;
+  // A changed content whose patch is not found: its lines were not read, never « no line » (second review of #141, M1).
+  if (!patch) { for (const domain of ['fidelite', 'donnees', 'rgpd'] as const) add(domain, WHY.unread, 'prudence'); return keeps; }
   const meaningful = file.classes.filter(c => !NO_DOMAIN.includes(c));
   const lines = patch && !patch.binary ? [...patch.added, ...patch.removed].map(l => l.replace(DATA_ATTRIBUTE, '')) : [];
   const address = (): void => {
