@@ -36,7 +36,7 @@ const TEST_ONLY = (n = 1) => ({
 });
 
 /** main holds SITE; feat adds PAGE at C, reviewed in every domain of its plan (four captures for fidelite). */
-async function reviewed(t, { change = PAGE, skip = [], fidelityCaptures = ALL_CAPTURES, links = {} } = {}) {
+async function reviewed(t, { change = PAGE, skip = [], fidelityCaptures = ALL_CAPTURES, links = {}, site = SITE, config = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'apv3-report-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const origin = join(root, 'origin.git');
@@ -44,9 +44,9 @@ async function reviewed(t, { change = PAGE, skip = [], fidelityCaptures = ALL_CA
   const repo = join(root, 'repo');
   git(root, 'clone', '-q', origin, repo);
   git(repo, 'switch', '-q', '-c', 'main');
-  put(repo, '.apv/config.json', { name: 'essai', gates: [{ id: 'unit', stage: 'full', command: [process.execPath, '-e', '0'] }] });
+  put(repo, '.apv/config.json', { name: 'essai', gates: [{ id: 'unit', stage: 'full', command: [process.execPath, '-e', '0'] }], ...config });
   put(repo, 'README.md', 'projet\n');
-  for (const [path, value] of Object.entries(SITE)) put(repo, path, value);
+  for (const [path, value] of Object.entries(site)) put(repo, path, value);
   git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'base'); git(repo, 'push', '-q', 'origin', 'main');
   git(repo, 'switch', '-q', '-c', 'feat');
   /** `links`: submodule links (mode 160000) set to a commit id, `{ path: sha }`; the folder stays empty (not checked out). */
@@ -412,4 +412,24 @@ test('AC-CARRY-WAIVER: controles carried while the configuration of the checks i
   git(p.repo, 'reset', '-q', '--hard', 'origin/main');
   git(p.repo, 'cherry-pick', '-x', p.c, c2);
   assert.equal(rule(await p.check(git(p.repo, 'rev-parse', 'HEAD')), 'controles').status, 'refused');
+});
+
+test('AC-CARRY-WAIVER (review of #142, A2): controles is carried only when the checks refused at the head are among those refused at C, the web detection included', async t => {
+  // A command-line tool (not a web project) whose configuration asks for lint, absent: refused at C for lint alone.
+  const p = await reviewed(t, { site: { 'src/cli.mjs': 'export const run = () => 1;\n' }, change: { 'src/cli.mjs': 'export const run = () => 2;\n' },
+    config: { rules: { requiredGates: [{ id: 'lint', command: ['npm', 'run', 'lint'] }] } } });
+  const atC = rule(await p.check(p.c), 'controles');
+  assert.equal(atC.status, 'refused', JSON.stringify(atC));
+  assert.deepEqual(atC.problems.map(x => x.split(' ')[0]), ['lint']);
+  says(p, 'controles', p.c, 'lint pas encore prêt');
+  // A delta of a test: the same refusal, the waiver of C carried.
+  const c2 = p.commit({ 'tests/cli.test.mjs': 'import "../src/cli.mjs";\n' });
+  assert.equal(rule(await p.check(c2), 'controles').status, 'waived', JSON.stringify(rule(await p.check(c2), 'controles')));
+  // A page of interface added under the tests: the project is now a web project, the web checks are required too,
+  // which the operator never saw: not carried, said.
+  const c3 = p.commit({ 'tests/e2e/fixture.html': '<!doctype html><p>fixture</p>\n' });
+  const atC3 = rule(await p.check(c3), 'controles');
+  assert.equal(atC3.status, 'refused', JSON.stringify(atC3));
+  assert.ok(atC3.problems.length > 1, JSON.stringify(atC3.problems));
+  assert.match(atC3.todo.join('\n'), new RegExp(`la dérogation controles de ${short(p.c)} n'est pas reportée.*projet web à ${short(c3)}, pas à ${short(p.c)}`));
 });

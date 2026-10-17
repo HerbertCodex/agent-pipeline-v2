@@ -4,7 +4,7 @@ import { PipelineError, errorMessage } from '../domain/errors.js';
 import { CONFIG_FILE, LEGACY_CONFIG_FILE, loadConfigAtCommit } from '../config/load.js';
 import { loadDbConfigAtCommit } from '../db/config.js';
 import { designDir } from '../design/config.js';
-import { applyBaseGates, type BaseGates, type RemoteCheck } from '../gates/base-gates.js';
+import { applyBaseGates, enforceBaseGates, type BaseGates, type RemoteCheck } from '../gates/base-gates.js';
 import { verifyGates, type VerifyResult } from '../gates/verify.js';
 import { planScope } from '../gates/proof-scope.js';
 import { stageGates } from '../gates/run.js';
@@ -579,7 +579,8 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     if (f === baseDesign || f.startsWith(`${baseDesign}/`)) return [`${f} : dossier des maquettes`];
     return (LEDGER_FILES as readonly string[]).includes(f) ? [`${f} : registre des décisions`] : [];
   });
-  const chainReviews = reviewChain({ repo, common, target: resolveCommit(repo, input.target), touches }, sha);
+  const targetSha = resolveCommit(repo, input.target);
+  const chainReviews = reviewChain({ repo, common, target: targetSha, touches }, sha);
   const pick = (domain: ReviewDomainName): Picked => {
     const own = chainReviews.resolve(sha, domain);
     return own.found ? own : chainReviews.reported(domain) ?? own;
@@ -601,8 +602,37 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     const carried = chainReviews.carriedWaiver(rule, commit => waiverFor(messages, rule, commit));
     if (!carried) return null;
     if (!carried.waiver) { notCarried.set(rule, `la dérogation ${rule} de ${short(carried.from)} n'est pas reportée, le delta touche son périmètre : ${carried.reasons.slice(0, 3).join(' ; ')}`); return null; }
+    const differ = rule === 'controles' ? refusedGatesDiffer(carried.from) : null;
+    if (differ) { notCarried.set(rule, `la dérogation controles de ${short(carried.from)} n'est pas reportée, les contrôles refusés ne sont pas ceux qu'elle levait : ${differ}`); return null; }
     return { at: carried.waiver.message.at, reason: carried.waiver.reason,
       carried: { from: carried.from, words: carried.waiver.line, why: `delta sans fichier de son périmètre : ${fileList(carried.files)}` } };
+  };
+  // controles is carried only when the checks refused at the head are among those refused at C, with the same web
+  // detection (security review of #142, A2): the rule reads isWebAt (an interface file anywhere, a web dependency) and
+  // the configuration of the checks at each commit, not only the paths of its perimeter. C is read as the rule reads the
+  // head: its own configuration with the mandatory checks of its base kept (enforceBaseGates), the settings of the base.
+  const refusedGatesAt = (commit: string): { web: boolean; missing: Set<string> } => {
+    const web = isWebAt(repo, commit);
+    const needed = web ? settings.requiredGates : settings.requiredGates.filter(g => g.source === 'config');
+    let config = effective;
+    if (commit !== sha) {
+      const own = loadConfigAtCommit(repo, commit).config;
+      const fork = targetSha ? gitRead(repo, ['merge-base', targetSha, commit]) : null;
+      const atFork = fork ? loadConfigAtCommit(repo, fork) : null;
+      config = atFork?.file ? enforceBaseGates(own, atFork.config).config : own;
+    }
+    return { web, missing: new Set(missingRequiredGates(config, needed).map(m => `${m.id} (${m.problem === 'absent' ? 'absent' : 'non obligatoire'})`)) };
+  };
+  const refusedGatesDiffer = (from: string): string | null => {
+    let atC: ReturnType<typeof refusedGatesAt>;
+    let atHead: ReturnType<typeof refusedGatesAt>;
+    try { atC = refusedGatesAt(from); atHead = refusedGatesAt(sha); }
+    catch (error) { return `configuration des contrôles illisible (${errorMessage(error).slice(0, 160)})`; }
+    const causes: string[] = [];
+    if (atC.web !== atHead.web) causes.push(atHead.web ? `projet web à ${short(sha)}, pas à ${short(from)}` : `projet web à ${short(from)}, plus à ${short(sha)}`);
+    const added = [...atHead.missing].filter(m => !atC.missing.has(m));
+    if (added.length) causes.push(`refusés à ${short(sha)} et pas à ${short(from)} : ${added.join(', ')}`);
+    return causes.length ? causes.join(' ; ') : null;
   };
   const carriedSaid = (rule: WaiverTarget, w: Waiver): string => (w.carried ? ` ; dérogation ${rule} reportée de ${short(w.carried.from)} : « ${w.carried.words} » (${w.at}, ${w.carried.why})` : '');
   const reviewProblems: string[] = [];
