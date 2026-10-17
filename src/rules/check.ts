@@ -23,7 +23,6 @@ import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
 import { reviewChain, type Picked } from './delta.js';
 import { computedLoads } from './loads.js';
-import { TEST_NAME } from '../review/risk.js';
 import { deltaFiles } from './carry.js';
 import { LANE_NAME, docsOnlyLane, laneLines, type DocsOnlyLane } from './docs-only.js';
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
@@ -142,10 +141,12 @@ const TOOLING_PATH = /^(?:\.apv|\.github(?!\/(?:workflows|actions)\/)|\.claude|\
 const ALIAS_CONFIG = /(?:^|\/)(?:(?:vite|vitest|svelte|astro|nuxt|next|webpack|rollup)\.config\.[cm]?[jt]s|[jt]sconfig[\w.-]*\.json)$/;
 /**
  * The search for loads by a pattern or a computed path (src/rules/loads.ts) reads the tracked files of the application:
- * neither node_modules nor a build output (dist, build), nor a binary file, nor a file outside the interface (tests,
- * tooling, documentation). Beyond MAX_LOAD_BYTES to read, the tool does not judge: captures required.
+ * neither node_modules nor a build output (dist/, build/ at the root only: `src/routes/build/` is a route served,
+ * `src/lib/dist/` a module, third security review of #141, M3), nor a binary file by its extension, nor a file outside
+ * the interface (tests, tooling, documentation). A file with a NUL byte is read all the same (Node and esbuild run a
+ * script with one in a comment, M4). Beyond MAX_LOAD_BYTES to read, the tool does not judge: captures required.
  */
-const NOT_APPLICATION = /(?:^|\/)(?:node_modules|dist|build)\//;
+const NOT_APPLICATION = /^(?:dist|build)\/|(?:^|\/)node_modules\//;
 const BINARY_FILE = /\.(?:png|jpe?g|gif|webp|avif|ico|bmp|tiff?|psd|heic|woff2?|ttf|otf|eot|pdf|zip|gz|tgz|bz2|xz|7z|rar|jar|mp[34]|m4a|aac|flac|wav|ogg|oga|webm|mov|avi|mkv|wasm|node|so|dylib|dll|exe|bin|sqlite3?|db)$/i;
 const MAX_LOAD_BYTES = 16 * 1024 * 1024;
 /**
@@ -154,8 +155,6 @@ const MAX_LOAD_BYTES = 16 * 1024 * 1024;
  * the files they are given. Their computed import or require still counts.
  */
 const READS_OUTSIDE_APPLICATION = /^scripts\/|(?:^|\/)__mocks__\/|(?:^|\/)[^/]+\.(?:fixtures?|mocks?)\.[^/]+$/;
-/** Images of reference of the screenshots (Playwright `*-snapshots/`, Jest and Vitest `__snapshots__/`). */
-const SNAPSHOT_DIR = /(?:^|\/)(?:[^/]+-snapshots|__snapshots__)\//;
 const TOOLING_FILE = /^(?:\.gitignore|\.gitattributes|\.editorconfig|\.nvmrc|\.node-version)$/;
 const TEST_PATH = /^(?:tests?|e2e)\/|(?:^|\/)(?:__tests__|__snapshots__)\/|\.(?:test|spec)\.[cm]?[jt]s$|^(?:playwright|vitest)\.config\.[cm]?[jt]s$/;
 const DOC_PATH = /^(?:docs\/.+|[^/]+)\.md$/;
@@ -272,13 +271,6 @@ function referencerMayShow(path: string, docsSite: boolean, screens: readonly Re
   return docsSite || !path.startsWith('docs/');
 }
 
-/** Why a file of a delta cannot carry the fidelity review and its captures (touchesNoScreen, report); null when it can. */
-function notReportable(path: string, docsSite: boolean): string | null {
-  if (TEST_NAME.test(path) || SNAPSHOT_DIR.test(path) || (!docsSite && DOC_PATH.test(path))) return null;
-  if (TEST_PATH.test(path)) return 'module de tests chargeable par l\'application, relecture de fidélité exigée';
-  return 'ni fichier de test, ni image de référence, ni documentation non servie : relecture de fidélité exigée';
-}
-
 interface TreeEntry { mode: string; sha: string; size: number; path: string }
 
 /**
@@ -304,7 +296,6 @@ function loadersAt(repo: string, entries: readonly TreeEntry[], docsSite: boolea
     const size = Number(header[1]);
     const body = batch.stdout.subarray(end + 1, end + 1 + size);
     at = end + 1 + size + 1;
-    if (body.includes(0)) continue;
     const kinds = computedLoads(entry.path, body.toString('utf8'));
     if (kinds.has('load') || (kinds.has('read') && !READS_OUTSIDE_APPLICATION.test(entry.path))) out.push(entry.path);
   }
@@ -327,10 +318,9 @@ const MAX_REASONS = 20;
  * in a comment, a test, the documentation or the code map aside), reached by a symbolic link, loaded by a pattern or a
  * computed path (a test or a document, when the application loads that way), or aimed at by an alias. Every cause found is
  * said, file by file; the tool also says when it cannot tell (diff, tree or search unreadable, a link that leaves the
- * repository, too many files or too much to read): captures are then required. For the report of a review or of a
- * waiver (`report`), every file must also be a test proper, an image of reference or a document not served.
+ * repository, too many files or too much to read): captures are then required.
  */
-export function touchesNoScreen(repo: string, base: string, head: string, screens: readonly RegExp[], options: { report?: boolean } = {}): ScreenVerdict {
+export function touchesNoScreen(repo: string, base: string, head: string, screens: readonly RegExp[]): ScreenVerdict {
   const reasons: string[] = [];
   // Every submodule seen, a changed link or trees that differ with no file listed refused (deltaFiles, review of #141, A1).
   const read = deltaFiles(repo, base, head);
@@ -348,9 +338,6 @@ export function touchesNoScreen(repo: string, base: string, head: string, screen
   const docsSite = entries.some(e => DOCS_SITE.test(e.path));
   for (const f of files) { const why = screenReasonByPath(f, docsSite, screens); if (why) reasons.push(`${f} : ${why}`); }
   if (reasons.length) return verdict();
-  // A report (decision of the operator on the second security review of #141, M2): only a test proper, an image of
-  // reference or a document not served; a fixture or a support module of the tests may be loaded by the application.
-  if (options.report) for (const f of files) { const why = notReportable(f, docsSite); if (why) reasons.push(`${f} : ${why}`); }
   // Symbolic links of the head: one that leads to a file of the change or to a folder that holds one.
   const links = entries.filter(e => e.mode === '120000');
   if (links.length) {
@@ -593,8 +580,9 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   const screenMatch = screenMatchers(settings.screens);
   // A head that only brings its base up to date (a merge of the target, the diff identical byte for byte) keeps the
   // reviews of the head before, said domain by domain (carry.ts, pilot project #230); its own reviews come first. A head
-  // without a review of a domain other than securite keeps the review of an earlier commit of the branch when the delta
-  // since it leaves the perimeter of the domain, and a review of the delta counts on a usable review where it starts
+  // without a review of donnees or rgpd keeps the review of an earlier commit of the branch when the delta since it
+  // leaves the perimeter of the domain (never securite nor fidelite, NEVER_REPORTED; fidelite comes back with the
+  // fingerprint of the build output), and a review of the delta counts on a usable review where it starts
   // (delta.ts, docs/ACCELERATION-LOTS.md, part B). The perimeter is the plan of the reviews of each step, read with the
   // settings of the base, as for the change itself.
   const deltaPlans = new Map<string, ReturnType<typeof planReviews> | string>();
@@ -608,7 +596,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     if (typeof delta === 'string') return [`plan des revues du delta illisible (${delta.slice(0, 160)})`];
     const decision = delta.domains.find(d => d.domain === domain);
     if (decision?.decision === 'retained') return [`${domain} retenue par le plan des revues : ${decision.reason.slice(0, 160)}${decision.files.length ? ` (${decision.files.slice(0, 3).join(', ')}${decision.fileCount > 3 ? ', ...' : ''})` : ''}`];
-    return domain === 'fidelite' ? touchesNoScreen(repo, span.from, span.to, screenMatch, { report: true }).reasons : [];
+    return [];
   };
   const chainReviews = reviewChain({ repo, common, target: resolveCommit(repo, input.target), touches }, sha);
   const pick = (domain: ReviewDomainName): Picked => {
@@ -632,7 +620,10 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     const ask = `Relecture ${domain} par ${agent} sur une copie détachée à ${short(sha)} ; l'agent l'enregistre lui-même (apv review record --commit ${short(sha)} --domain ${domain} ...).`;
     const f = found?.record?.findings;
     const broken = picked.broken ? ` ; celle de ${short(picked.broken.from)} n'est pas reportée, le delta touche son périmètre : ${picked.broken.reasons.slice(0, 3).join(' ; ')}` : '';
-    const problem = !found ? `aucune relecture enregistrée à ${short(sha)}${broken}`
+    // fidelite below the head: said never reported (third security review of #141, M3, M4), the review of the delta offered.
+    const never = !found && domain === 'fidelite' ? chainReviews.deltaStart(domain) : null;
+    const neverNote = never ? ` ; relecture ${domain} : jamais reportée sans relire (elle reviendra avec l'empreinte du build) ; relecture du delta possible : apv review record --delta-from ${short(never)}` : '';
+    const problem = !found ? `aucune relecture enregistrée à ${short(sha)}${broken}${neverNote}`
       : found.problem || !found.record ? `relecture inutilisable (${found.problem ?? 'illisible'})`
       : f!.critical > 0 || f!.high > 0 ? `${f!.critical} constat(s) critique(s) et ${f!.high} haut(s) à ${short(from ?? sha)}` : null;
     if (!problem) { const note = howNote(domain, picked); domainStates.push({ domain, status: 'recorded', detail: `${found!.record!.reviewer}, critique 0, haut 0, moyen ${f!.medium}, bas ${f!.low}${note ? `, ${note}` : ''}`, waiver: null }); continue; }
@@ -669,7 +660,9 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   // file) that adds none: a command-line tool has nothing to capture, a first page or template added asks for them.
   // The fidelity review lifted by the operator (« dérogation relecture:fidelite » or the whole rule « dérogation relecture »)
   // with no fidelity review stored at this commit: its captures have no object. Any stored review (even with a high finding,
-  // or unsealed) keeps them required: someone looked, and the captures are what proves it.
+  // or unsealed) keeps them required: someone looked, and the captures are what proves it. They are those of the fidelity
+  // review at this commit (its own, a review of the delta recorded here, or carried over a merge of the target with an
+  // identical diff), never those of an earlier commit of the branch (third security review of #141, M3, M4).
   const fidelity = domainStates.find(d => d.domain === 'fidelite');
   const fidelityWaiver = !fidelity || fidelity.status === 'recorded' || reviews.has('fidelite') ? null
     : fidelity.status === 'waived' ? fidelity.waiver!.reason : waiverFor(messages, 'relecture', sha)?.reason ?? null;
@@ -694,9 +687,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
       ? outcome('captures', 'refused', `relecture de fidélité retenue${addedScreens.length ? ` (écran(s) ou fichier(s) d'interface : ${addedScreens.slice(0, 5).join(', ')}${addedScreens.length > 5 ? ', ...' : ''})` : ''}${screenVerdict?.reasons.length ? ` ; captures nécessaires : ${screenVerdict.reasons.slice(0, 5).join(' ; ')}${screenVerdict.reasons.length > 5 ? ' ; ...' : ''}` : ''}, captures attendues : ${needed.join(', ')}`, [`capture(s) absente(s) de la relecture fidelite à ${short(sha)} : ${missing.join(', ')}`], [
         `apv:qa-fidelite capture chaque écran changé ou qui utilise un fichier changé (${missing.join(', ')}), les regarde à côté de la maquette validée et les joint à sa relecture : apv review record --commit ${short(sha)} --domain fidelite --capture <largeur>:<thème>:<fichier> ...`,
       ])
-      : outcome('captures', 'ok', fidelity.how === 'reported' && fidelity.reported
-        ? `captures jointes à ${short(fidelity.from!)}, reportées : delta sans écran, ${fileList(fidelity.reported.files)} ; ${needed.join(', ')}`
-        : `captures jointes à ${short(fidelity.from ?? sha)}${fidelity.from ? ` (${carriedNote(fidelity.from)})` : ''} : ${needed.join(', ')}`));
+      : outcome('captures', 'ok', `captures jointes à ${short(fidelity.from ?? sha)}${fidelity.from ? ` (${carriedNote(fidelity.from)})` : ''} : ${needed.join(', ')}`));
   }
 
   // controles: the base checks of a web project, in the configuration the proof uses (the base's, kept, and the change's).
