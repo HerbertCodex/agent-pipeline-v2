@@ -1,16 +1,14 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { isAbsolute, join, relative } from 'node:path';
+import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { MAX_SCOPE_FILES, validateReceipt } from '../domain/contracts.js';
+import { validateReceipt } from '../domain/contracts.js';
 import { errorMessage } from '../domain/errors.js';
-import { CONFIG_FILE, LEGACY_CONFIG_FILE, loadConfigAtCommit } from '../config/load.js';
-import { designDir } from '../design/config.js';
+import { loadConfigAtCommit } from '../config/load.js';
 import { detectReference } from '../reuse/detect.js';
 import { runsWebAudit } from '../web/impact.js';
-import { commandPaths } from './proof-scope.js';
 import { resolveReference } from './repeat.js';
 import { MANIFEST, RECEIPTS_DIR, RUN_DIR, manifestCommit, readSharedRun, sharedRunIds } from './store.js';
-import { DEFAULT_REUSE_MAX_AGE_MS, NEVER_IGNORED, REUSE_AGE_MARGIN_MS, changedInputs, compareInputs, ignoreDigest, inputsCache, inputsDigest, treesOf } from './reuse.js';
+import { DEFAULT_REUSE_MAX_AGE_MS, REUSE_AGE_MARGIN_MS, ignoreDigest, inputsCache, inputsDigest, treesOf } from './reuse.js';
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 /** Tree state and base of a run, from its summary (null when unknown). */
 function summaryOf(text) {
@@ -141,72 +139,129 @@ export function runsNetworkAudit(argv) {
 }
 /**
  * Git: the subcommands that read the history, the objects or the references (they differ between two commits of the same
- * tree, or read a commit by its name): the history (F-D2), and the objects and references themselves (relecture sécurité de
- * A2, F2: `cat-file -p HEAD` reads the message and the signature, `rev-parse HEAD` the commit, `branch --contains` the
- * references), or what moves the copy to another commit.
+ * tree, or read a commit by its name), or move the copy to another commit. No longer the rule (relecture sécurité du delta de
+ * A2, F2-bis: an alias, `git -c alias.h=diff h HEAD~1`, escaped any list of what is refused): only the safety net of the text
+ * of a script (TEXT_RULES). What decides is the closed list of what is reused (GIT_REUSABLE).
  */
 const GIT = /(?:^|[\\/])git(?:\.exe)?$/;
 const GIT_HISTORY = new Set(['log', 'shortlog', 'show', 'rev-list', 'describe', 'reflog', 'whatchanged', 'blame', 'merge-base', 'cherry', 'notes', 'name-rev', 'for-each-ref', 'show-branch',
     'cat-file', 'rev-parse', 'show-ref', 'symbolic-ref', 'ls-tree', 'diff-tree', 'diff-index', 'range-diff', 'format-patch', 'archive', 'bundle', 'fast-export', 'verify-commit',
     'verify-tag', 'branch', 'tag', 'worktree', 'ls-remote', 'fetch', 'pull', 'request-pull', 'replace', 'fsck', 'count-objects', 'stash', 'checkout', 'switch', 'restore', 'reset',
     'bisect', 'cherry-pick', 'revert', 'rebase', 'merge', 'annotate', 'get-tar-commit-id', 'pack-objects']);
-/** Global options of git that take the next argument as their value (`git -C dir log`, `git -c k=v log`). */
-const GIT_OPTION_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix', '--exec-path', '--list-cmds', '--attr-source']);
+/** Global options of git a reused command may carry: none changes what git reads or runs (`-C` and `-c` are judged apart). */
+const GIT_SAFE_OPTIONS = new Set(['--no-pager', '-P', '--no-optional-locks', '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs',
+    '--no-advice', '--version', '-v', '--help', '-h']);
+/**
+ * Keys of `git -c <key>=<value>` a reused command may carry: display only (colors, pager, quoting of paths, advice), and
+ * `core.fsmonitor=false`. Never an alias (`alias.*`: the command it names is not the one written), never a key that runs a
+ * program or points git elsewhere (`diff.external`, `core.fsmonitor=<program>`, `core.hooksPath`...): all left out.
+ */
+const GIT_SAFE_CONFIG = /^(?:color\.[a-z0-9.-]+|core\.pager|core\.quotepath|advice\.[a-z0-9]+)(?:=|$)|^core\.fsmonitor=false$/i;
 /** Options of `git grep` that take the next argument as their value (`-e <pattern>`, `-m <n>`...). */
 const GREP_OPTION_VALUE = new Set(['-e', '-f', '-m', '--max-count', '-A', '-B', '-C', '--context', '--after-context', '--before-context', '--max-depth', '--threads']);
-/**
- * Whether a subcommand of git and its arguments read the history, an object or a reference (F2): a subcommand of GIT_HISTORY;
- * `diff` or `difftool` with any argument that is not an option before `--` (a revision: `diff HEAD~1`, `diff main`; a path
- * named without `--` counts too, by prudence); `grep` with a revision after its pattern; `status` with the branch and its
- * distance to its upstream (`-b`, `--branch`, `-sb`, `--ahead-behind`).
- */
-function gitReadsHistory(sub, args) {
-    if (GIT_HISTORY.has(sub))
-        return true;
-    const end = args.indexOf('--');
-    const before = end < 0 ? args : args.slice(0, end);
-    if (sub === 'diff' || sub === 'difftool')
-        return before.some(a => !a.startsWith('-'));
-    if (sub === 'status')
-        return before.some(a => a === '--branch' || a === '--ahead-behind' || /^-[A-Za-z]*b[A-Za-z]*$/.test(a));
-    if (sub === 'grep') {
-        const positional = [];
-        let pattern = false;
-        for (let i = 0; i < before.length; i++) {
-            const a = before[i];
-            if (GREP_OPTION_VALUE.has(a)) {
-                if (a === '-e' || a === '-f')
-                    pattern = true;
-                i += 1;
-                continue;
-            }
-            if (a.startsWith('-')) {
-                if (/^(?:-e.|-f.|--regexp=|--file=)/.test(a))
-                    pattern = true;
-                continue;
-            }
-            positional.push(a);
+/** Whether `git grep` names a revision (a positional argument after its pattern, before `--`) or opens a program (`-O`). */
+function grepNamesRevision(before) {
+    const positional = [];
+    let pattern = false;
+    for (let i = 0; i < before.length; i++) {
+        const a = before[i];
+        if (a.startsWith('-O') || a.startsWith('--open-files-in-pager'))
+            return true;
+        if (GREP_OPTION_VALUE.has(a)) {
+            if (a === '-e' || a === '-f')
+                pattern = true;
+            i += 1;
+            continue;
         }
-        return (pattern ? positional : positional.slice(1)).length > 0;
+        if (a.startsWith('-')) {
+            if (/^(?:-e.|-f.|--regexp=|--file=)/.test(a))
+                pattern = true;
+            continue;
+        }
+        positional.push(a);
     }
-    return false;
+    return (pattern ? positional : positional.slice(1)).length > 0;
+}
+/** Arguments of `diff` (and `diff-files`) before `--` that are all options: no revision (a path written without `--` neither, by prudence). */
+const optionsOnly = (before) => before.every(a => a.startsWith('-'));
+/**
+ * The closed list of the subcommands of git a check is reused with (relecture sécurité du delta de A2, F2-bis), each with what
+ * its arguments may say (`before`: those before `--`): they read the tree and the working copy only, never the history, an
+ * object named by a revision, a reference or the branch. `diff` and `diff-files` with options only before `--` (`diff --check`,
+ * `diff --exit-code -- dist`); `grep` without a revision nor `-O`; `status` without the branch nor its upstream (`-b`, `-sb`,
+ * `--branch`, `--ahead-behind`) nor the stash; `ls-files` without `--with-tree`; `check-attr` without `--source`;
+ * `check-ignore`, `check-ref-format`, `hash-object`, `stripspace`, `version`. Any other subcommand, an alias (global, local
+ * or `-c alias.*`) included, is never reused.
+ */
+const GIT_REUSABLE = new Map([
+    ['diff', optionsOnly],
+    ['diff-files', optionsOnly],
+    ['grep', before => !grepNamesRevision(before)],
+    ['status', before => !before.some(a => a === '--branch' || a === '--ahead-behind' || a === '--show-stash' || /^-[A-Za-z]*b[A-Za-z]*$/.test(a))],
+    ['ls-files', before => !before.some(a => a.startsWith('--with-tree'))],
+    ['check-attr', before => !before.some(a => a.startsWith('--source'))],
+    ['check-ignore', () => true],
+    ['check-ref-format', () => true],
+    ['hash-object', () => true],
+    ['stripspace', () => true],
+    ['version', () => true],
+]);
+/** Whether the folder of `git -C <dir>` stays inside the copy: relative, without `..`, not the home folder nor a drive. */
+const insideCopy = (dir) => dir !== '' && !/^(?:[\\/~]|[A-Za-z]:)/.test(dir) && !dir.split(/[\\/]/).includes('..');
+/**
+ * Why one call of git (`args`: what follows `git`) is never reused, or null: a global option outside GIT_SAFE_OPTIONS
+ * (`--git-dir`, `--work-tree`, `--exec-path`, `--namespace`, `--config-env`...), `-C` toward a folder outside the copy, `-c`
+ * with a key outside GIT_SAFE_CONFIG (an alias first of all); then a subcommand outside GIT_REUSABLE, or one whose arguments
+ * name a revision, the branch or a program.
+ */
+function gitRefusal(args) {
+    let j = 0;
+    while (j < args.length && args[j].startsWith('-')) {
+        const a = args[j];
+        const value = args[j + 1] ?? '';
+        if (a === '-C') {
+            if (!insideCopy(value))
+                return `git -C ${value || '(absent)'}, un dossier hors de la copie`;
+            j += 2;
+            continue;
+        }
+        if (a === '-c') {
+            const key = value.split('=')[0] || '(absent)';
+            if (/^alias\./i.test(value))
+                return `git -c ${key}, un alias dont la commande n'est pas celle écrite`;
+            if (!GIT_SAFE_CONFIG.test(value))
+                return `git -c ${key}, un réglage hors de la liste fermée`;
+            j += 2;
+            continue;
+        }
+        if (!GIT_SAFE_OPTIONS.has(a))
+            return `git ${a.split('=')[0]}, une option globale hors de la liste fermée`;
+        j += 1;
+    }
+    if (j >= args.length)
+        return null;
+    const sub = args[j];
+    const accepts = GIT_REUSABLE.get(sub);
+    if (!accepts)
+        return `git ${sub}, hors des sous-commandes reprenables (un alias, ou ce qui peut lire l'historique, les objets ou les références)`;
+    const rest = args.slice(j + 1);
+    const end = rest.indexOf('--');
+    return accepts(end < 0 ? rest : rest.slice(0, end)) ? null : `git ${sub} avec une révision, la branche ou un programme`;
 }
 /**
- * Whether an argv asks git for the history, an object or a reference: the first argument after `git` that is not one of its
- * global options (`--no-pager`, `-P`, `--bare`, `-C <dir>`, `-c <k=v>`, `--git-dir <dir>`...) is a subcommand that reads them,
- * with its arguments (gitReadsHistory; F-D2, and F2 of the relecture of A2).
+ * Why an argv runs git in a way that is never reused, or null: gitRefusal on each call of git it holds (F-D2, F2 and F2-bis
+ * of the relecture of A2). Only the closed list GIT_REUSABLE is reused: whatever else git does may read the history, an
+ * object or a reference, which differ between two commits of the same tree.
  */
-export function runsGitHistory(argv) {
+export function gitNeverReused(argv) {
     for (let i = 0; i < argv.length; i++) {
         if (!GIT.test(argv[i]))
             continue;
-        let j = i + 1;
-        while (j < argv.length && argv[j].startsWith('-'))
-            j += GIT_OPTION_VALUE.has(argv[j]) ? 2 : 1;
-        if (j < argv.length && gitReadsHistory(argv[j], argv.slice(j + 1)))
-            return true;
+        const refusal = gitRefusal(argv.slice(i + 1));
+        if (refusal)
+            return refusal;
     }
-    return false;
+    return null;
 }
 /**
  * The same states outside the tree, found in the text of a script (an inline script `node -e`, `sh -c`, or a script of
@@ -222,7 +277,6 @@ const TEXT_RULES = [
     [new RegExp(`\\bgit(?:\\.exe)?['"\`]?[\\s,]*\\[?[\\s'"\`]*(?:${[...GIT_HISTORY].sort((a, b) => b.length - a.length).map(sub => sub.replace(/-/g, '\\-')).join('|')})(?![\\w-])`),
         'git sur l\'historique, les objets ou les références (log, show, rev-parse, cat-file, branch...), qui diffère entre deux commits du même arbre'],
 ];
-const GIT_HISTORY_TEXT = 'git sur l\'historique, les objets ou les références (log, show, rev-parse, cat-file, branch...), qui diffère entre deux commits du même arbre';
 const RUN_SUBCOMMANDS = new Set(['run', 'run-script', 'rum', 'urn']);
 const LIFECYCLE = new Map([['test', 'test'], ['t', 'test'], ['tst', 'test'], ['start', 'start'], ['stop', 'stop'], ['restart', 'restart']]);
 /**
@@ -296,8 +350,9 @@ function externalState(argvs, scripts) {
         const where = via ? ` (par le script npm « ${via} »)` : '';
         if (runsNetworkAudit(argv))
             return `il lance un audit des dépendances qui lit le réseau (npm audit ou équivalent)${where}, dont la base d'avis change avec le temps`;
-        if (runsGitHistory(argv))
-            return `il lance ${GIT_HISTORY_TEXT}${where}`;
+        const git = gitNeverReused(argv);
+        if (git)
+            return `il lance ${git}${where}`;
         if (via && runsWebAudit(argv))
             return `il lance apv web audit${where}, qui mesure un état extérieur au dépôt`;
         if (via && runsDast(argv))
@@ -413,14 +468,16 @@ export const reuseSettingsOf = (gate) => gate && typeof gate.reuse === 'object' 
 export function reuseContext(input) {
     return { ...input, scans: new Map(), inputs: inputsCache() };
 }
-/** The cache of the trees and matches of a context (created on first use for a context built by hand). */
+/** The cache of the trees of a context (created on first use for a context built by hand). */
 const cacheOf = (ctx) => (ctx.inputs ??= inputsCache());
 /**
- * Most origins a reuse by inputs examines for one check (relecture sécurité de A2, F4): the most recent eligible receipts,
- * each compared to the commit by one walk of two trees read once. Beyond, an older origin is never looked for: the check runs.
+ * Why a receipt `cached` by inputs (`basis: inputs`) never proves anything (decision of the project lead, 18 October, evening,
+ * bis: M1 of the delta review of A2). `reuse.ignore` is a declaration nothing proves: wrong already at the base (a merged PR made
+ * the check read a file it declares ignored), it would make a false proof. `apv gates run` never writes one, `verify` refuses
+ * it, until a PR A2b proves the declaration (the check replayed in a copy without its ignored files, its receipt required).
  */
-export const MAX_INPUT_CANDIDATES = 50;
-/** The scripts of the package.json files of the commit judged, read once per context (the origin's are compared through the inputs). */
+export const INPUTS_REUSE_DISABLED = 'reprise par entrées désactivée tant que la déclaration reuse.ignore n\'est pas prouvée (seule la reprise à arbre identique vaut)';
+/** The scripts of the package.json files of the commit judged, read once per context. */
 function scriptsOf(ctx) {
     ctx.scripts ??= projectScripts(ctx.git, ctx.repo, ctx.commit);
     return ctx.scripts;
@@ -462,96 +519,6 @@ export async function maxAgeOf(ctx, gate) {
     const base = await reuseBase(ctx);
     const atBase = 'reason' in base || !gate?.id ? undefined : reuseSettingsOf(base.config?.gates.find(g => g.id === gate.id))?.maxAgeMs;
     return Math.min(current, atBase ?? DEFAULT_REUSE_MAX_AGE_MS);
-}
-/** JSON with sorted keys and without absent values: two definitions compare by content, whatever the order of their fields. */
-function stable(value) {
-    if (Array.isArray(value))
-        return `[${value.map(stable).join(',')}]`;
-    if (value && typeof value === 'object') {
-        return `{${Object.keys(value).filter(k => value[k] !== undefined).sort()
-            .map(k => `${JSON.stringify(k)}:${stable(value[k])}`).join(',')}}`;
-    }
-    return JSON.stringify(value) ?? 'null';
-}
-/** What a check reads and runs, without what never changes its result (`mandatory`, its early checks). */
-const definition = (gate) => stable({ ...gate, mandatory: undefined, early: undefined });
-/** The configuration file, relative to the repository, when it is inside it. */
-function configPath(ctx) {
-    const file = ctx.configFile;
-    if (!file)
-        return null;
-    const committed = /^[a-f0-9]{40,64}:(.+)$/.exec(file);
-    if (committed)
-        return committed[1];
-    if (!isAbsolute(file))
-        return file;
-    const rel = relative(ctx.repo, file).replace(/\\/g, '/');
-    return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : null;
-}
-/**
- * The files a check does not read, as the merge base with the target declares them (5.2 A2, 5.5.2): the check must declare
- * `reuse.ignore` there, with the very definition judged (command, test paths, reuse...: a PR that changes it, widens its
- * globs or adds the check never uses them for its own proof). Kept inputs whatever the globs: NEVER_IGNORED, the configuration
- * file read, the design folders, the test paths, `repeatChanged.paths` and the files the commands name, at the base and now.
- */
-export async function inputsRuleOf(ctx, gate) {
-    if (!gate?.id)
-        return { reason: 'contrôle absent de la configuration : sa déclaration reuse.ignore ne se lit pas' };
-    const base = await reuseBase(ctx);
-    if ('reason' in base)
-        return { reason: `reuse.ignore se lit à la base commune avec la cible : ${base.reason}` };
-    const atBase = base.config?.gates.find(g => g.id === gate.id);
-    const ignore = reuseSettingsOf(atBase)?.ignore;
-    if (!atBase || !ignore?.length) {
-        return { reason: `${gate.id} ne déclare pas reuse.ignore à la base ${base.mergeBase.slice(0, 12)} (${base.reference}) : un reuse.ignore ajouté ou élargi par la PR ne sert jamais à sa propre preuve` };
-    }
-    if (definition(atBase) !== definition(gate)) {
-        return { reason: `définition de ${gate.id} changée depuis la base ${base.mergeBase.slice(0, 12)} (${base.reference}) : la reprise par entrées vaut pour la définition lue à la base` };
-    }
-    let baseDesign = 'docs/design';
-    try {
-        baseDesign = designDir(base.config?.design);
-    }
-    catch { /* The default folder stays an input. */ }
-    const config = configPath(ctx);
-    const keep = [...NEVER_IGNORED, CONFIG_FILE, LEGACY_CONFIG_FILE, ...(config ? [config] : []), ...new Set([baseDesign, 'docs/design', ...(ctx.design ? [ctx.design] : [])].map(d => `${d}/**`)),
-        ...[atBase, gate].flatMap(g => [...(g.testPaths ?? []), ...(g.repeatChanged?.paths ?? []), ...commandPaths(g, ctx.repo)])];
-    return { rule: { ignore: [...ignore], keep: [...new Set(keep)] }, mergeBase: base.mergeBase, reference: base.reference };
-}
-/**
- * The inputs of a check under `rule` that differ between two commits (none: the same inputs), from the trees read once per
- * context (F4); null when either commit is not in the repository (or is not a full SHA).
- */
-async function inputsChanged(ctx, rule, from, to) {
-    if (!SHA.test(from) || !SHA.test(to))
-        return null;
-    try {
-        return await changedInputs(ctx.repo, from, to, rule, cacheOf(ctx));
-    }
-    catch {
-        return null;
-    }
-}
-const sameInputs = async (ctx, rule, from, to) => (await inputsChanged(ctx, rule, from, to))?.length === 0;
-/**
- * Why a reuse by inputs cannot hold at `commit`, from the merge base with the target (decision of the project lead, 18 October,
- * evening: relecture sécurité de A2, E1), or null. `reuse.ignore` is read at the base, and it holds for the code of the base:
- * a PR that changes an input (its source, a test, a configuration: every file the rule does not ignore, NEVER_IGNORED and the
- * check's own paths included) may make the check read a file the base declares unread (an import, a fixture). The reuse by
- * inputs is accepted only when no input of the check differs between the base and the commit; otherwise only the reuse at an
- * identical tree (A1) remains.
- */
-async function baseInputsMoved(ctx, ruled, commit, what) {
-    const moved = await inputsChanged(ctx, ruled.rule, ruled.mergeBase, commit);
-    // The target as given (`main`), or a commit (`apv gates run` resolves it): short, and left out when it is the base itself.
-    const target = !SHA.test(ruled.reference) ? ` (${ruled.reference})` : ruled.reference === ruled.mergeBase ? '' : ` (cible ${ruled.reference.slice(0, 12)})`;
-    const base = `${ruled.mergeBase.slice(0, 12)}${target}`;
-    if (moved === null)
-        return `commit ${commit.slice(0, 12)} ou base commune ${base} introuvable dans le dépôt`;
-    if (!moved.length)
-        return null;
-    return `${moved.length} entrée(s) du contrôle changée(s) entre la base commune ${base} et ${what} ${commit.slice(0, 12)} (${moved.slice(0, 5).join(', ')}${moved.length > 5 ? '...' : ''}) : ` +
-        'reuse.ignore lu à la base ne vaut que pour le code de la base, la reprise par entrées exige une PR qui ne change que des fichiers ignorés ; seule la reprise à arbre identique reste possible';
 }
 /** Trees of the merge bases of `base` and `commit` (`git merge-base --all`), sorted; none when they have none or Git fails. */
 async function forkTrees(ctx, base, commit) {
@@ -643,72 +610,8 @@ export function treeScan(ctx, tree) {
         ctx.scans.set(tree, scanTree(ctx, tree));
     return ctx.scans.get(tree);
 }
-function readAll(ctx) {
-    ctx.all ??= (async () => {
-        const started = performance.now();
-        const found = [...ctx.local.found];
-        const doubtful = [];
-        let runs = 0;
-        let files = 0;
-        const done = (block) => ({ found, doubtful, block, runs, files, ms: Math.round(performance.now() - started) });
-        for (const runId of sharedRunIds(ctx.store)) {
-            if (ctx.local.runs.has(runId))
-                continue;
-            runs += 1;
-            const dir = join(ctx.store, runId);
-            const named = manifestCommit(dir);
-            if (!named)
-                return done(`exécution ${runId} du magasin partagé au manifeste absent ou illisible : son commit est inconnu, un échec plus récent sur les mêmes entrées ne peut pas être exclu`);
-            const claimed = new Set();
-            for (const name of receiptFiles(dir)) {
-                files += 1;
-                const sha = claimedCommit(join(dir, name));
-                if (sha)
-                    claimed.add(sha);
-            }
-            const read = sharedRunReceipts(ctx.store, runId);
-            if ('reason' in read || [...claimed].some(c => c !== named)) {
-                doubtful.push({ runId, commits: [...new Set([named, ...claimed])] });
-                continue;
-            }
-            found.push(...read.found);
-        }
-        return done(null);
-    })();
-    return ctx.all;
-}
 const hours = (ms) => String(Math.round(ms / 360_000) / 10);
 const FAILING = (status) => !['passed', 'cached', 'not_required'].includes(status);
-/**
- * Why a reuse by inputs cannot exclude a failure of the check later than its origin on the same inputs (5.5.4), or null: a
- * receipt of the check, of its targeted variant or of one of its early checks (M1), on a clean tree, at the configuration
- * judged, later than the origin, not a success, at a commit whose inputs have the same digest; or a run of the store that
- * cannot be trusted while it names a commit of the same inputs.
- */
-async function laterInputsFailure(ctx, gateId, from, rule) {
-    const all = await readAll(ctx);
-    if (all.block)
-        return { reason: all.block };
-    // The same inputs as the commit judged (whose inputs are those of the origin): one walk of two trees read once (F4).
-    const same = (commit) => sameInputs(ctx, rule, commit, ctx.commit);
-    for (const run of all.doubtful) {
-        for (const commit of run.commits) {
-            if (await same(commit))
-                return { reason: `exécution ${run.runId} du magasin partagé altérée ou contradictoire, au commit ${commit.slice(0, 12)} des mêmes entrées : un échec plus récent ne peut pas être exclu` };
-        }
-    }
-    const o = from.receipt;
-    const later = all.found.filter(f => (f.receipt.gateId === gateId || f.receipt.early?.gate === gateId) && f.dirty === false && f.receipt.configHash === ctx.configHash
-        && f.receipt !== o && f.receipt.id !== o.id && latest(from, f) === f && FAILING(f.receipt.status)).sort((a, b) => (latest(a, b) === a ? -1 : 1));
-    for (const f of later) {
-        if (!(await same(f.receipt.candidateSha)))
-            continue;
-        const fail = f.receipt;
-        const kind = fail.early ? `, contrôle tôt ${fail.gateId}` : fail.targeted === true ? ', ciblé' : '';
-        return { reason: `échec plus récent sur les mêmes entrées : ${fail.runId}/${fail.gateId}.json au commit ${fail.candidateSha.slice(0, 12)} (${fail.status}${fail.status === 'passed_after_retry' ? ', test instable' : ''}${kind}) l'emporte` };
-    }
-    return { cost: all };
-}
 /** The reason `verify` and `apv gates run` give for a proven reuse. */
 export const reuseReason = (proof) => proof.basis === 'tree' ? 'arbre identique' : `entrées identiques : ${proof.changed} fichier(s) changé(s), tous ignorés par ce contrôle`;
 /**
@@ -718,14 +621,10 @@ export const reuseReason = (proof) => proof.basis === 'tree' ? 'arbre identique'
  * (never `cached`: no chain), complete, on a clean tree, of the current configuration, of the same reuse identity of the
  * environment, younger than the maximum age (`reuse.maxAgeMs` read at the base, maxAgeOf), with the same output digests,
  * without a record of `apv web audit`; a command that reads `{{baseSha}}` needs the same base and a merge base of the same
- * tree on both sides. `basis: tree`: the trees of both commits are recomputed and so is the digest of the inputs; the store
- * is scanned for the tree (TreeScan). `basis: inputs` (A2): the check declares `reuse.ignore` at the merge base with the
- * target, with the definition judged (inputsRuleOf); the inputs of both commits, recomputed with those globs, are equal and
- * equal to `inputsDigest`, no symbolic link is among them, the files changed are those declared, and no input differs between
- * the merge base and either commit (E1 of the relecture of A2: the declaration of the base holds for the code of the base, so
- * the PR and the origin changed ignored files only); the whole store is read.
- * Either way, no receipt of the check later than the origin on the same tree or inputs failed: complete, targeted or of one of
- * its early checks. The environment compared includes the local state of the copy (localStateDigest, copyStateDigest).
+ * tree on both sides. Only `basis: tree` proves anything: the trees of both commits are recomputed and so is the digest of
+ * the inputs; the store is scanned for the tree (TreeScan); no receipt of the check later than the origin on the same tree
+ * failed: complete, targeted or of one of its early checks. A receipt `basis: inputs` is refused whatever it says
+ * (INPUTS_REUSE_DISABLED). The environment compared includes the local state of the copy (localStateDigest, copyStateDigest).
  * Returns the proof, or why the receipt proves nothing.
  */
 export async function checkReuse(ctx, gate, cached) {
@@ -734,6 +633,8 @@ export async function checkReuse(ctx, gate, cached) {
     const refuse = (reason) => ({ reason });
     if (!reuse)
         return refuse('reçu sans relevé reuse (exécution, commit et empreintes de l\'origine) : rien à vérifier');
+    if (reuse.basis !== 'tree')
+        return refuse(INPUTS_REUSE_DISABLED);
     if (r.targeted === true)
         return refuse('un reçu réutilisé n\'est jamais ciblé');
     const never = gate ? neverReused(gate, await scriptsOf(ctx)) : null;
@@ -795,8 +696,6 @@ export async function checkReuse(ctx, gate, cached) {
                 `${here.length && atOrigin.length ? 'n\'a pas l\'arbre de celle avec l\'origine' : 'est introuvable'} ; ce que le contrôle compare depuis elle a changé`);
         }
     }
-    if (reuse.basis === 'inputs')
-        return checkInputs(ctx, gate, cached, from);
     const known = await treesOf(ctx.git, ctx.repo, [reuse.fromCommit, ctx.commit]);
     const tree = known.get(ctx.commit);
     const fromTree = known.get(reuse.fromCommit);
@@ -808,7 +707,7 @@ export async function checkReuse(ctx, gate, cached) {
         return refuse('reprise à arbre identique qui déclare des fichiers changés');
     if (reuse.ignoreDigest !== ignoreDigest([]))
         return refuse('reprise à arbre identique qui déclare des fichiers ignorés');
-    if (reuse.inputsDigest !== (await inputsDigest(ctx.git, ctx.repo, ctx.commit, null, cacheOf(ctx))).digest)
+    if (reuse.inputsDigest !== (await inputsDigest(ctx.git, ctx.repo, ctx.commit, cacheOf(ctx))).digest)
         return refuse('empreinte des entrées différente de celle recalculée au commit');
     // A later failure on the same tree wins, as in `verify`: receipts of the worktree (every commit) and of the runs of the
     // store that may hold one of this tree (TreeScan: a run that cannot be read, or whose manifest contradicts it, blocks).
@@ -827,63 +726,14 @@ export async function checkReuse(ctx, gate, cached) {
     }
     return { origin: from, basis: 'tree', changed: 0, scan };
 }
-/** The part of checkReuse proper to a reuse by inputs (5.5.2 and 5.5.4 for `basis: inputs`). */
-async function checkInputs(ctx, gate, cached, from) {
-    const reuse = cached.receipt.reuse;
-    const refuse = (reason) => ({ reason: `reprise par entrées identiques (basis inputs) : ${reason}` });
-    const ruled = await inputsRuleOf(ctx, gate);
-    if ('reason' in ruled)
-        return refuse(ruled.reason);
-    const { rule } = ruled;
-    if (reuse.ignoreDigest !== ignoreDigest(rule.ignore))
-        return refuse('globs ignorés du reçu différents de reuse.ignore lu à la base');
-    let compared;
-    try {
-        compared = await compareInputs(ctx.repo, reuse.fromCommit, ctx.commit, rule, cacheOf(ctx));
-    }
-    catch {
-        return refuse(`commit d'origine ${reuse.fromCommit.slice(0, 12)} introuvable dans le dépôt`);
-    }
-    if (compared.links.length) {
-        return refuse(`lien(s) symbolique(s) parmi les entrées (${compared.links.slice(0, 3).join(', ')}) : sa cible peut être un fichier ignoré ; seule la reprise à arbre identique vaut`);
-    }
-    if (compared.from !== compared.to) {
-        return refuse(`${compared.inputs.length} fichier(s) lu(s) par le contrôle changé(s) depuis ${reuse.fromCommit.slice(0, 12)} (${compared.inputs.slice(0, 5).join(', ')}${compared.inputs.length > 5 ? '...' : ''})`);
-    }
-    if (reuse.inputsDigest !== compared.to)
-        return refuse('empreinte des entrées différente de celle recalculée au commit');
-    if (reuse.changed !== compared.changed.length || stable(reuse.files) !== stable(compared.changed.slice(0, MAX_SCOPE_FILES))) {
-        return refuse('fichiers changés déclarés différents de ceux recalculés depuis Git');
-    }
-    // E1 (relecture sécurité de A2): the declaration of the base holds for the code of the base only. Neither the origin nor the
-    // commit may differ from the base by an input of the check: the PR (and the origin) changed ignored files only.
-    for (const [commit, what] of [[ctx.commit, 'le commit'], [reuse.fromCommit, 'l\'origine']]) {
-        const moved = await baseInputsMoved(ctx, ruled, commit, what);
-        if (moved)
-            return refuse(moved);
-    }
-    const later = await laterInputsFailure(ctx, cached.receipt.gateId, from, rule);
-    if ('reason' in later)
-        return refuse(later.reason);
-    return { origin: from, basis: 'inputs', changed: compared.changed.length, scan: { runs: later.cost.runs, files: later.cost.files, ms: later.cost.ms } };
-}
-/** Whether a found receipt may be the origin of a reuse in `environments` at the configuration judged (status, tree state, age, identity, base). */
-function eligible(ctx, gate, f, limit, identities, base) {
-    const r = f.receipt;
-    return r.gateId === gate.id && r.status === 'passed' && !r.early && r.targeted !== true && f.dirty === false && r.configHash === ctx.configHash && !r.web
-        && r.startedAt <= ctx.now && ctx.now - r.startedAt <= limit && identities.has(reuseIdentityOf(r))
-        && (!readsBase(gate) || (f.baseSha !== null && f.baseSha === base));
-}
 /**
- * The origin `apv gates run` may reuse for `gate` at `ctx.commit` (docs/ACCELERATION-LOTS.md, A1 and A2), or why none. First
- * at an identical tree (A1): the latest receipt of the check on an identical tree (worktree, then shared store, intact), at
- * the same configuration, in one of the environments the check would run in now (`environments`: its variables, executable,
- * stack, compared by their reuse identity), `passed` at first pass, clean, complete, younger than the maximum age minus
- * REUSE_AGE_MARGIN_MS, without a record of `apv web audit`. Then, for a check that declares `reuse.ignore` at the base
- * (A2) and whose inputs did not change since the merge base with the target (E1), the latest such receipt, among the
- * MAX_INPUT_CANDIDATES most recent (F4), at a commit whose inputs are the same. The receipt about to be written is checked
- * by `checkReuse`, the very check `apv gates verify` runs: a receipt it would refuse is never written. `candidate`: false
- * when no receipt was even considered (nothing to say).
+ * The origin `apv gates run` may reuse for `gate` at `ctx.commit` (docs/ACCELERATION-LOTS.md, A1), or why none: the latest
+ * receipt of the check on an identical tree (worktree, then shared store, intact), at the same configuration, in one of the
+ * environments the check would run in now (`environments`: its variables, executable, stack, compared by their reuse
+ * identity), `passed` at first pass, clean, complete, younger than the maximum age minus REUSE_AGE_MARGIN_MS, without a
+ * record of `apv web audit`. Never by inputs (INPUTS_REUSE_DISABLED), whatever `reuse.ignore` says. The receipt about to be
+ * written is checked by `checkReuse`, the very check `apv gates verify` runs: a receipt it would refuse is never written.
+ * `candidate`: false when no receipt was even considered (nothing to say).
  */
 export async function findOrigin(ctx, gate, environments, base) {
     const never = neverReused(gate, await scriptsOf(ctx));
@@ -896,75 +746,35 @@ export async function findOrigin(ctx, gate, environments, base) {
     const limit = (await maxAgeOf(ctx, gate)) - REUSE_AGE_MARGIN_MS;
     const byIdentity = new Map(environments.map(e => [e.identity, e]));
     const identities = new Set(byIdentity.keys());
-    const probeOf = async (origin, reuse, changed) => {
-        const probe = { receipt: { ...origin.receipt, candidateSha: ctx.commit, status: 'cached', reusedFrom: origin.receipt.id, startedAt: ctx.now, durationMs: 0, reuse },
-            dirty: false, baseSha: base, source: 'local' };
-        const checked = await checkReuse(ctx, gate, probe);
-        if ('reason' in checked)
-            return { reason: checked.reason, candidate: true };
-        const identity = reuseIdentityOf(origin.receipt);
-        return { origin, reuse, stack: byIdentity.get(identity).stack, identity, changed };
-    };
-    // A1: an identical tree.
+    // A check that declares reuse.ignore is always told why it is not reused by inputs (INPUTS_REUSE_DISABLED): at an identical tree only.
+    const declares = (reuseSettingsOf(gate)?.ignore?.length ?? 0) > 0;
+    const why = (reason, candidate) => (declares ? { reason: `${reason} ; ${INPUTS_REUSE_DISABLED}`, candidate: true } : { reason, candidate });
+    if (scan.block)
+        return why(scan.block, true);
     const sameTree = scan.found.filter(f => f.receipt.gateId === gate.id && f.receipt.status === 'passed' && !f.receipt.early && f.receipt.targeted !== true
         && f.dirty === false && f.receipt.configHash === ctx.configHash && scan.trees.get(f.receipt.candidateSha) === tree && !f.receipt.web);
-    let treeReason = null;
-    if (scan.block)
-        treeReason = { reason: scan.block, candidate: true };
-    else if (!sameTree.length)
-        treeReason = { reason: 'aucun reçu réussi au premier passage sur un arbre identique avec cette configuration', candidate: false };
-    else {
-        const young = sameTree.filter(f => f.receipt.startedAt <= ctx.now && ctx.now - f.receipt.startedAt <= limit);
-        const sameEnv = young.filter(f => identities.has(reuseIdentityOf(f.receipt)));
-        const sameBase = readsBase(gate) ? sameEnv.filter(f => f.baseSha !== null && f.baseSha === base) : sameEnv;
-        if (!young.length)
-            treeReason = { reason: `reçu(s) réussi(s) sur un arbre identique, mais de plus de ${hours(limit)} h (la reprise doit rester vérifiable ${hours(REUSE_AGE_MARGIN_MS)} h)`, candidate: true };
-        else if (!sameEnv.length)
-            treeReason = { reason: 'reçu(s) réussi(s) sur un arbre identique, mais dans un autre environnement (variables transmises, exécutable, pile, Node, système, version de l\'outil, ou état local ignoré par Git : node_modules, fichiers générés, fichiers .env*)', candidate: true };
-        else if (!sameBase.length)
-            treeReason = { reason: `reçu(s) réussi(s) sur un arbre identique, mais depuis une autre base ({{baseSha}} dans la commande : ${base?.slice(0, 12) ?? "aucune"} ici)`, candidate: true };
-        else {
-            const origin = sameBase.reduce(latest);
-            const reuse = { fromRun: origin.receipt.runId, fromCommit: origin.receipt.candidateSha, basis: 'tree',
-                inputsDigest: (await inputsDigest(ctx.git, ctx.repo, ctx.commit, null, cacheOf(ctx))).digest, ignoreDigest: ignoreDigest([]), environment: reuseIdentityOf(origin.receipt),
-                changed: 0, files: [] };
-            const chosen = await probeOf(origin, reuse, 0);
-            if (!('reason' in chosen))
-                return chosen;
-            treeReason = chosen;
-        }
-    }
-    // A2: identical inputs, for a check that declares reuse.ignore (in the configuration judged and, verified below, at the base).
-    if (!reuseSettingsOf(gate)?.ignore?.length || scan.block)
-        return treeReason;
-    const ruled = await inputsRuleOf(ctx, gate);
-    if ('reason' in ruled)
-        return { reason: `${treeReason.reason} ; entrées : ${ruled.reason}`, candidate: true };
-    // E1: a PR that changes an input of the check since the base never reuses it by inputs (checked first: no origin is looked for).
-    const moved = await baseInputsMoved(ctx, ruled, ctx.commit, 'le commit');
-    if (moved)
-        return { reason: `${treeReason.reason} ; entrées : ${moved}`, candidate: true };
-    const all = await readAll(ctx);
-    // The most recent eligible origins only (F4), each tested by one walk of two trees read once per context.
-    const candidates = all.found.filter(f => eligible(ctx, gate, f, limit, identities, base) && scan.trees.get(f.receipt.candidateSha) !== tree)
-        .sort((a, b) => (latest(a, b) === a ? -1 : 1)).slice(0, MAX_INPUT_CANDIDATES);
-    for (const origin of candidates) {
-        if (!(await sameInputs(ctx, ruled.rule, origin.receipt.candidateSha, ctx.commit)))
-            continue;
-        let compared;
-        try {
-            compared = await compareInputs(ctx.repo, origin.receipt.candidateSha, ctx.commit, ruled.rule, cacheOf(ctx));
-        }
-        catch {
-            continue;
-        }
-        const reuse = { fromRun: origin.receipt.runId, fromCommit: origin.receipt.candidateSha, basis: 'inputs',
-            inputsDigest: compared.to, ignoreDigest: ignoreDigest(ruled.rule.ignore), environment: reuseIdentityOf(origin.receipt),
-            changed: compared.changed.length, files: compared.changed.slice(0, MAX_SCOPE_FILES) };
-        // The latest origin of the same inputs decides, as for a tree: refused, the reuse is refused (a later failure wins).
-        return probeOf(origin, reuse, compared.changed.length);
-    }
-    return { reason: `${treeReason.reason} ; aucun reçu réussi sur les mêmes entrées parmi les ${MAX_INPUT_CANDIDATES} plus récents (reuse.ignore lu à la base ${ruled.mergeBase.slice(0, 12)})`,
-        candidate: treeReason.candidate };
+    if (!sameTree.length)
+        return why('aucun reçu réussi au premier passage sur un arbre identique avec cette configuration', false);
+    const young = sameTree.filter(f => f.receipt.startedAt <= ctx.now && ctx.now - f.receipt.startedAt <= limit);
+    const sameEnv = young.filter(f => identities.has(reuseIdentityOf(f.receipt)));
+    const sameBase = readsBase(gate) ? sameEnv.filter(f => f.baseSha !== null && f.baseSha === base) : sameEnv;
+    if (!young.length)
+        return why(`reçu(s) réussi(s) sur un arbre identique, mais de plus de ${hours(limit)} h (la reprise doit rester vérifiable ${hours(REUSE_AGE_MARGIN_MS)} h)`, true);
+    if (!sameEnv.length)
+        return why('reçu(s) réussi(s) sur un arbre identique, mais dans un autre environnement (variables transmises, exécutable, pile, Node, système, version de l\'outil, ou état local ignoré par Git : node_modules, fichiers générés, fichiers .env*, worktrees et sous-modules de la copie)', true);
+    if (!sameBase.length)
+        return why(`reçu(s) réussi(s) sur un arbre identique, mais depuis une autre base ({{baseSha}} dans la commande : ${base?.slice(0, 12) ?? 'aucune'} ici)`, true);
+    const origin = sameBase.reduce(latest);
+    const reuse = { fromRun: origin.receipt.runId, fromCommit: origin.receipt.candidateSha, basis: 'tree',
+        inputsDigest: (await inputsDigest(ctx.git, ctx.repo, ctx.commit, cacheOf(ctx))).digest, ignoreDigest: ignoreDigest([]), environment: reuseIdentityOf(origin.receipt),
+        changed: 0, files: [] };
+    // The receipt about to be written is checked as `apv gates verify` will check it.
+    const probe = { receipt: { ...origin.receipt, candidateSha: ctx.commit, status: 'cached', reusedFrom: origin.receipt.id, startedAt: ctx.now, durationMs: 0, reuse },
+        dirty: false, baseSha: base, source: 'local' };
+    const checked = await checkReuse(ctx, gate, probe);
+    if ('reason' in checked)
+        return why(checked.reason, true);
+    const identity = reuseIdentityOf(origin.receipt);
+    return { origin, reuse, stack: byIdentity.get(identity).stack, identity, changed: 0 };
 }
 //# sourceMappingURL=reuse-proof.js.map

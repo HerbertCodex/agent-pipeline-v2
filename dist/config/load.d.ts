@@ -615,7 +615,8 @@ export declare function configIssues(raw: unknown): {
  * Files that `reuse.ignore` never covers (docs/ACCELERATION-LOTS.md, 5.2 A2): a probe of each kind of file of the list
  * ALWAYS_REQUIRED of src/gates/proof-scope.ts without the test folders (the configuration of the checks, the manifests and
  * lock files of the dependencies, the build, test and run settings, the CI, the migrations, scripts/**, .env*). A glob that
- * matches one of them is refused (case ignored). The run and verify keep every such file an input whatever the glob.
+ * matches one of them is refused (case ignored). Nothing is ignored for now: the reuse by inputs is disabled until the
+ * declaration is proven (INPUTS_REUSE_DISABLED, src/gates/reuse-proof.ts).
  */
 export declare const NEVER_IGNORE_PROBES: readonly (readonly [string, string])[];
 /** Configuration file of a project: `--config` when given, then `.apv/config.json`, then `pipeline.v2.json`. */

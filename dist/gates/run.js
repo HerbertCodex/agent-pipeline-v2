@@ -19,7 +19,6 @@ import { WEB_RECORD, runsWebAudit } from '../web/impact.js';
 import { RECEIPTS_DIR, pruneStore, receiptRetention, sharedStore, syncRun } from './store.js';
 import { copyStateDigest, localStateDigest } from './reuse.js';
 import { readEnvFile } from '../stacks/config.js';
-import { designDir } from '../design/config.js';
 import { readPreviewState } from '../preview/state.js';
 import { repositoryWorktrees } from '../execution/procs.js';
 import { flockFree, flockHeldByAncestor, judgeStack, markStacksUsed, readStackContainers, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
@@ -34,28 +33,28 @@ import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue,
 export { RECEIPTS_DIR } from './store.js';
 /** Environment identity of a V3 local run; V2 read it from `environment.id`, a field V3 no longer reads. */
 export const ENVIRONMENT_ID = 'apv3-local';
-/** A variable whose name says it holds a port (`PORT`, `DB_PORT`, `SUPABASE_PORTS`...). */
-const PORT_NAME = /(?:^|_)PORTS?(?:_|$)/i;
 /** The port of a URL (`scheme://[user[:password]@]host:port[/...]`), the host kept. */
 const URL_PORT = /^([a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?(?:\[[^\]/?#]*\]|[^:/?#@]*)):(\d{1,5})(?=[/?#]|$)/i;
 /** The port of `host:port` (an IPv6 host between brackets). */
 const HOST_PORT = /^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9][A-Za-z0-9.-]*):(\d{1,5})$/;
 /**
  * The value of a variable of a stack as its identity of reuse records it, with a fingerprint (5.4, relecture sécurité de A2,
- * F3): an address proper to the stack is normalized, its port (a whole value that is a declared port of the stack or that a
- * variable named after a port holds, the port of a URL, of `host:port`) and its lock file; the rest of the value stays (the
- * host, the user, the database of a URL), and so does any other value (`STACK=2`, a flag, a project name).
+ * F3, and of its delta): an address proper to the stack is normalized, its lock file and a port it declares in `ports` (a
+ * whole value, the port of a URL, of `host:port`); the rest of the value stays (the host, the user, the database of a URL),
+ * and so does any other value (`STACK=2`, a flag, a project name, `postgres:15` against `postgres:16`, a port the stack
+ * does not declare, whatever the name of the variable).
  */
-export function stackAddress(name, value, stack) {
+export function stackAddress(_name, value, stack) {
     if (stack.lockFile && value === stack.lockFile)
         return '{{verrou de la pile}}';
-    if (/^\d{1,5}$/.test(value) && (PORT_NAME.test(name) || (stack.config.ports ?? []).includes(Number(value))))
+    const declared = (port) => (stack.config.ports ?? []).includes(Number(port));
+    if (/^\d{1,5}$/.test(value) && declared(value))
         return '{{port}}';
     const url = URL_PORT.exec(value);
-    if (url)
+    if (url && declared(url[2]))
         return `${url[1]}:{{port}}${value.slice(url[0].length)}`;
     const host = HOST_PORT.exec(value);
-    if (host)
+    if (host && declared(host[2]))
         return `${host[1]}:{{port}}`;
     return value;
 }
@@ -64,7 +63,7 @@ export function stackAddress(name, value, stack) {
  * Without a stack: its `environmentHash`, unchanged. On a stack without `stacks[].fingerprint`: the same environment (the
  * values of the variables of the stack included) plus the id of the stack and its declaration without its envFile, never
  * equal from one stack to another. With a fingerprint: the addresses proper to the stack among the variables it gives the
- * check normalized (stackAddress: its ports, the port of a URL or of `host:port`, its lock file), every other value kept as
+ * check normalized (stackAddress: the ports it declares in `ports`, whole or in a URL or a `host:port`, its lock file), every other value kept as
  * is (relecture sécurité de A2, F3: `STACK=2` and `STACK=3`, a flag, a project name stay apart), plus the fingerprint
  * command and the digest of its output: equal for two stacks that print the same and differ by their addresses only. A
  * fingerprint that failed or printed nothing: an identity no other ever equals.
@@ -310,8 +309,8 @@ export async function runGates(options) {
         throw new PipelineError('GATE_SINCE', `--since refusé : HEAD a changé depuis le classement du diff (${options.since.head.slice(0, 12)} classé, ${candidateSha.slice(0, 12)} maintenant). Relancer la même commande.`);
     }
     const baseSha = options.base ? await git.sha(repo, options.base) : null;
-    const treeStatus = () => git.exec(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
-    const treeOf = (dir) => dir === repo ? treeStatus() : git.exec(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+    const treeStatus = () => git.exec(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
+    const treeOf = (dir) => dir === repo ? treeStatus() : git.exec(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
     let status = await treeStatus();
     let dirty = status !== '';
     const stage = options.stage ?? 'full';
@@ -506,22 +505,17 @@ export async function runGates(options) {
     const reuse = new Map();
     let reuseScan = null;
     const newReuseContext = async () => {
-        let design = null;
-        try {
-            design = designDir(options.config.design);
-        }
-        catch { /* The default design folder stays an input anyway. */ }
         return reuseContext({ git, repo, commit: candidateSha, configHash, now: Date.now(), store: await sharedStore(git, repo), local: readLocal(repo),
-            reference: options.reuseReference ?? options.reference ?? options.base ?? null, configFile: options.configFile ?? null, design });
+            reference: options.reuseReference ?? options.reference ?? options.base ?? null });
     };
     if (!dirty && replay !== 'all') {
         const ctx = await newReuseContext();
         // The executable of each command, hashed once for the whole decision (relecture sécurité de A2, F4: the Node binary of ten
-        // checks was hashed ten times), and again whenever the file changes (path, size, date, inode). A check that runs hashes it again.
+        // checks was hashed ten times), and again whenever the file changes (path, size, modification and change dates, inode; F4 of the delta review: ctime too). A check that runs hashes it again.
         const executables = new Map();
         const statOf = (path) => { try {
             const s = lstatSync(path, { bigint: true });
-            return `${s.size}:${s.mtimeNs}:${s.ino}:${s.dev}`;
+            return `${s.size}:${s.mtimeNs}:${s.ctimeNs}:${s.ino}:${s.dev}`;
         }
         catch {
             return 'illisible';
@@ -950,7 +944,7 @@ export async function runGates(options) {
                 const firstPass = { status: 'failed', exitCode: exitOf(r1), durationMs: first.commandMs, stdoutHash: r1.stdoutHash, stderrHash: r1.stderrHash, diagnostic: excerpt(r1, 8000) };
                 // Same commit, same tree: otherwise the relaunch would prove other code.
                 const head = await git.sha(workspace);
-                const now = workspace === repo ? await treeStatus() : await git.exec(workspace, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+                const now = workspace === repo ? await treeStatus() : await git.exec(workspace, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
                 if (head !== candidateSha || now !== (workspace === repo ? status : '')) {
                     return ({ ...base, status: 'failed', durationMs: first.commandMs, exitCode: exitOf(r1), stdoutHash: r1.stdoutHash, stderrHash: r1.stderrHash,
                         diagnostic: `Relance refusée : ${head !== candidateSha ? 'HEAD a changé' : 'l\'arbre de travail a changé'} pendant la première passe (la relance ne prouverait pas le même code).\n${excerpt(r1, MAX_DIAGNOSTIC_CHARS - 300)}`,

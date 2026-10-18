@@ -21,17 +21,18 @@ export interface IdentityStack {
 }
 /**
  * The value of a variable of a stack as its identity of reuse records it, with a fingerprint (5.4, relecture sécurité de A2,
- * F3): an address proper to the stack is normalized, its port (a whole value that is a declared port of the stack or that a
- * variable named after a port holds, the port of a URL, of `host:port`) and its lock file; the rest of the value stays (the
- * host, the user, the database of a URL), and so does any other value (`STACK=2`, a flag, a project name).
+ * F3, and of its delta): an address proper to the stack is normalized, its lock file and a port it declares in `ports` (a
+ * whole value, the port of a URL, of `host:port`); the rest of the value stays (the host, the user, the database of a URL),
+ * and so does any other value (`STACK=2`, a flag, a project name, `postgres:15` against `postgres:16`, a port the stack
+ * does not declare, whatever the name of the variable).
  */
-export declare function stackAddress(name: string, value: string, stack: Pick<ResolvedStack, 'config' | 'lockFile'>): string;
+export declare function stackAddress(_name: string, value: string, stack: Pick<ResolvedStack, 'config' | 'lockFile'>): string;
 /**
  * The identity of the environment for a reuse (docs/ACCELERATION-LOTS.md, 5.4), recorded in each receipt (`reuseIdentity`).
  * Without a stack: its `environmentHash`, unchanged. On a stack without `stacks[].fingerprint`: the same environment (the
  * values of the variables of the stack included) plus the id of the stack and its declaration without its envFile, never
  * equal from one stack to another. With a fingerprint: the addresses proper to the stack among the variables it gives the
- * check normalized (stackAddress: its ports, the port of a URL or of `host:port`, its lock file), every other value kept as
+ * check normalized (stackAddress: the ports it declares in `ports`, whole or in a URL or a `host:port`, its lock file), every other value kept as
  * is (relecture sécurité de A2, F3: `STACK=2` and `STACK=3`, a flag, a project name stay apart), plus the fingerprint
  * command and the digest of its output: equal for two stacks that print the same and differ by their addresses only. A
  * fingerprint that failed or printed nothing: an identity no other ever equals.
@@ -109,9 +110,9 @@ export interface GateRunOptions {
      */
     replay?: 'all' | readonly string[];
     /**
-     * The branch the change goes to (or a commit of it) whose merge base with the commit gives `reuse.ignore` and
-     * `reuse.maxAgeMs` (docs/ACCELERATION-LOTS.md, 5.5.2): `apv gates run` passes the base of its checks (`--against`, else
-     * `--base`). Absent: `reference`, then `base`, then the default branch of the remote.
+     * The branch the change goes to (or a commit of it) whose merge base with the commit gives `reuse.maxAgeMs`
+     * (docs/ACCELERATION-LOTS.md, 5.5.1): `apv gates run` passes the base of its checks (`--against`, else `--base`). Absent:
+     * `reference`, then `base`, then the default branch of the remote.
      */
     reuseReference?: string | null;
     /**
@@ -120,7 +121,7 @@ export interface GateRunOptions {
      */
     batchSetup?: boolean;
 }
-/** A check reused at an identical tree or with identical inputs: the receipt `cached` written, its origin and why. */
+/** A check reused at an identical tree: the receipt `cached` written, its origin and why. */
 export interface ReusedCheck {
     gateId: string;
     /** Identifier of the receipt `cached` written in this run. */
@@ -129,9 +130,9 @@ export interface ReusedCheck {
     fromCommit: string;
     /** Identifier of the origin receipt (`reusedFrom`). */
     origin: string;
-    /** `tree`: identical trees (A1); `inputs`: every file changed is one the check ignores (`reuse.ignore` read at the base, A2). */
+    /** Always `tree` (identical trees, A1): the reuse by inputs (`inputs`) is disabled until its declaration is proven. */
     basis: 'tree' | 'inputs';
-    /** Files changed since the origin (all ignored by the check); 0 for `tree`. */
+    /** Files changed since the origin: 0 at an identical tree. */
     changed: number;
     /** The stack of the environment it is reused for (`--stacks`; the origin may have run on another one with the same fingerprint), or null. */
     stack: string | null;

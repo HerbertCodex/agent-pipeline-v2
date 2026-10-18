@@ -6,7 +6,6 @@ import { mergeBase, repeatProofGap, resolveReference } from './repeat.js';
 import { planScope } from './proof-scope.js';
 import { sharedStore } from './store.js';
 import { checkReuse, latest, readLocal, readShared, reuseContext, reuseReason } from './reuse-proof.js';
-import { designDir } from '../design/config.js';
 import { auditBase, changedBetween, webAuditGate, webImpact } from '../web/impact.js';
 /**
  * Whether the receipts prove that every required check passed on this exact commit, on a clean tree and with
@@ -125,13 +124,7 @@ export async function verifyGates(options) {
     };
     const now = options.now ?? Date.now();
     // The check of a receipt `cached`: the very one `apv gates run` passes before writing one (src/gates/reuse-proof.ts).
-    let design = null;
-    try {
-        design = designDir(options.config.design);
-    }
-    catch { /* The default design folder stays an input anyway. */ }
-    const reuseCheck = reuseContext({ git, repo, commit, configHash, now, store, local, reference: options.reuseReference ?? options.reference ?? null,
-        configFile: options.configFile ?? null, design });
+    const reuseCheck = reuseContext({ git, repo, commit, configHash, now, store, local, reference: options.reuseReference ?? options.reference ?? null });
     const gates = [];
     const near = [];
     for (const gateId of required) {

@@ -254,7 +254,7 @@ async function provenFull(repo, config, configFile) {
     try {
         const git = new Git();
         const root = await git.root(repo);
-        if ((await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])) !== '')
+        if ((await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none'])) !== '')
             return null;
         const result = await verifyGates({ repo: root, config, commit: 'HEAD', stage: 'full', configFile });
         return result.ok ? result : null;
@@ -377,7 +377,7 @@ export async function run(args, io) {
                 throw new PipelineError('SHA', `Commit introuvable : ${values.commit}`);
             const kept = applyBaseGates(verifyRoot, loaded.config, verified, againstOf(values.against) ?? values.base ?? null, { strict: true, offline: values.offline === true });
             loaded = { ...loaded, config: kept.config };
-            // A reuse by inputs is proven with the reuse.ignore of the base of the checks (the merge base read just above).
+            // reuse.maxAgeMs is read at the base of the checks (the merge base read just above).
             const result = await verifyGates({ repo, config: loaded.config, commit: values.commit, ...(stage ? { stage } : {}), ...(values.base ? { base: values.base } : {}),
                 configFile: values['commit-config'] ? null : loaded.file, reuseReference: kept.base.mergeBase ?? kept.base.reference });
             if (values.json) {
@@ -479,7 +479,7 @@ export async function run(args, io) {
             treeChecked = true;
             const git = new Git();
             const root = await git.root(repo);
-            const status = await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+            const status = await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
             if (status !== '')
                 throw dirtyRefusal(status);
             // The override is journaled in the state of the execution: in this very copy, it would dirty the tree of the suite.
@@ -538,7 +538,7 @@ export async function run(args, io) {
                 ...(values.base ? { base: values.base } : {}), ...(since ? { base: since.commit, since: { commit: since.commit, head: since.head, risk: since.risk.level, reason: since.risk.reason } } : {}),
                 ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
                 ...(spreadOver ? { stacks: spreadOver } : {}), ...(replay !== undefined ? { replay } : {}), configFile: loaded.file,
-                // reuse.ignore of the base of the checks (the merge base read by applyBaseGates), never of the candidate.
+                // reuse.maxAgeMs of the base of the checks (the merge base read by applyBaseGates), never of the candidate.
                 reuseReference: kept?.base.mergeBase ?? kept?.base.reference ?? null });
         }
         catch (error) {
@@ -642,7 +642,7 @@ export async function run(args, io) {
             if (waited.length)
                 lines.push('', `Attente de verrou avant le délai des contrôles : ${waited.map(r => `${name(r)} ${Math.round(r.lockWaitMs / 1000)} s`).join(', ')}.`);
             if (result.reused.length)
-                lines.push('', `Réutilisés (${result.reused.length}), non relancés : reçu vert d'un arbre identique ou des mêmes entrées (reuse.ignore lu à la base), même configuration et même environnement, vérifié comme le fera apv gates verify :`, ...result.reused.map(r => `- ${r.gateId} : réutilisé de ${r.fromCommit.slice(0, 12)} (exécution ${r.fromRun}${r.stack ? `, pile ${r.stack}` : ''}) : ${r.reason}`));
+                lines.push('', `Réutilisés (${result.reused.length}), non relancés : reçu vert d'un arbre identique, même configuration et même environnement, vérifié comme le fera apv gates verify :`, ...result.reused.map(r => `- ${r.gateId} : réutilisé de ${r.fromCommit.slice(0, 12)} (exécution ${r.fromRun}${r.stack ? `, pile ${r.stack}` : ''}) : ${r.reason}`));
             if (result.replay)
                 lines.push('', `Rejeu demandé (--replay) : ${result.replay === 'all' ? 'tous les contrôles' : result.replay.join(', ')}, exécuté(s) même si une reprise était possible.`);
             if (result.reuseStale.length)
@@ -663,9 +663,7 @@ export async function run(args, io) {
                 ? ` ${result.reserved.length} contrôle(s) ${RESERVED}, non exécuté(s) : la suite complète (apv gates run --stage full) les vérifie.` : '';
             const targeted = result.targeted.length
                 ? ` ${result.targeted.length} contrôle(s) ${TARGETED}(s) (${result.targeted.join(', ')}) : seuls les tests concernés par les changements ont tourné ; la suite complète (apv gates run --stage full) les exécute en entier.` : '';
-            const bases = new Set(result.reused.map(r => r.basis));
-            const from = bases.size > 1 ? 'd\'un arbre identique ou des mêmes entrées' : bases.has('inputs') ? 'des mêmes entrées' : 'd\'un arbre identique';
-            const reusedText = result.ok && result.reused.length ? ` Dont ${result.reused.length} réutilisé(s) ${from}, non relancé(s) : ${result.reused.map(r => r.gateId).join(', ')}.` : '';
+            const reusedText = result.ok && result.reused.length ? ` Dont ${result.reused.length} réutilisé(s) d'un arbre identique, non relancé(s) : ${result.reused.map(r => r.gateId).join(', ')}.` : '';
             lines.push('', `${verdict}${reusedText}${targeted}${reserved} Reçus : ${relative(io.cwd, result.directory) || result.directory}` +
                 (result.shared?.directory ? ` ; copie partagée : ${result.shared.directory} (exécution ${result.runId})` : ''));
             if (result.shared?.error)
