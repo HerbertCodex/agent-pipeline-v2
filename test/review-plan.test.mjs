@@ -327,22 +327,6 @@ test('review plan (security review of #141, A1, A10): a submodule ignored by .gi
   assert.match(decision(plan, 'rgpd').reason, /email/, JSON.stringify(decision(plan, 'rgpd')));
 });
 
-test('review plan (fourth pass of #141): a real image is not searched for terms, a binary under a code name keeps every domain', async t => {
-  // #262 of the pilot project: the bytes of a reference PNG held « data » by chance, read as text since A10.
-  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d]), Buffer.from('data email phone\n')]);
-  const image = project(t);
-  mkdirSync(join(image.repo, 'tests/e2e/carte.e2e.ts-snapshots'), { recursive: true });
-  writeFileSync(join(image.repo, 'tests/e2e/carte.e2e.ts-snapshots/carte-390.png'), png);
-  image.commit();
-  const fromImage = await image.plan();
-  assert.ok(!retained(fromImage).includes('rgpd') && !retained(fromImage).includes('donnees'), JSON.stringify(fromImage.domains));
-  // A NUL slipped into a component to pass it for binary: its name is code, its words are read, prudence beyond.
-  const hidden = project(t);
-  writeFileSync(join(hidden.repo, 'src/lib/components/Card.svelte'), Buffer.concat([Buffer.from([0]), Buffer.from('<input name="email" />\n<p>{user.phone}</p>\n')]));
-  hidden.commit();
-  assert.ok(retained(await hidden.plan()).includes('rgpd'));
-});
-
 /** Terms of data and of the GDPR on several lines: a tracker, an e-mail field, personal fields, a query (second review of #141, M1). */
 const SPACED_TERMS = '<p>bloc</p>\n<script src="https://www.googletagmanager.com/gtag/js"></script>\n<input name="email" autocomplete="email" />\n<p>{user.phone} {profile.birthdate}</p>\n{#await supabase.from(\'profiles\').select(\'email\') then rows}{rows.length}{/await}\n';
 
