@@ -4,7 +4,7 @@ import { loadConfig, loadConfigAtCommit } from '../config/load.js';
 import { applyBaseGates, baseGatesLines } from '../gates/base-gates.js';
 import { gateStages, type GateStage } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
-import { RECEIPTS_DIR, dirtyRefusal, isFullSuite, runGates, selectGates, stageGates } from '../gates/run.js';
+import { EARLY_SLOW_MS, RECEIPTS_DIR, dirtyRefusal, isFullSuite, runGates, selectGates, stageGates } from '../gates/run.js';
 import { exportRun, listRuns, pruneStore, receiptRetention, sharedStore } from '../gates/store.js';
 import { expectedLevel, findRun, type ExpectedLevel, type RunContext } from '../run/rhythm.js';
 import { resolveCommit, gitRoot } from '../run/git-probe.js';
@@ -50,7 +50,12 @@ survit au retrait du worktree, puis y applique la rétention (section receipts d
 de stage full qui déclare affected y lance cette commande ciblée à sa place (tests concernés
 par les changements, marqués « ciblé », jamais une preuve du contrôle complet) ; les autres
 contrôles de stage full sont listés comme réservés à la suite complète, jamais comptés comme
-réussis. --stage full (défaut) exécute tout, jamais en ciblé ; si la suite complète est déjà
+réussis. Les contrôles tôt (early) d'un contrôle de stage full y tournent aussi, après leurs dépendances
+de stage task, quand un fichier changé depuis --base (commits, modifications non commitées, fichiers
+non suivis hors ignorés) répond à leur when (lu à la base), toujours sans when ou sans --base ;
+sinon reçu « non requis (hors when) ». Leur reçu est ciblé (early dans le reçu) et ne prouve jamais
+le contrôle complet ; un échec rend le stage task rouge (« échec tôt de <contrôle> ») ; plus de 5 min :
+signalé trop lent. --stage full (défaut) exécute tout, jamais en ciblé ni en tôt ; si la suite complète est déjà
 prouvée sur ce commit exact (apv gates verify à 0, arbre propre), elle le signale avant de la
 relancer ; avec --skip-proven, elle ne relance rien dans ce cas et sort en 0 (la preuve reste
 celle que vérifie apv gates verify).
@@ -153,6 +158,7 @@ const STATUS: Record<string, string> = { passed: 'réussi', failed: 'échec', ti
 const FLAKY = 'instable';
 const RESERVED = 'réservé à la suite complète';
 const TARGETED = 'ciblé';
+const EARLY = 'tôt';
 const SHARED = 'magasin partagé';
 const EVIDENCE: Record<EvidenceState, string> = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu', unrepeated: 'tests modifiés non répétés',
   unaudited: 'audit web non prouvé', required: 'requis (dispense non prouvée)' };
@@ -462,17 +468,17 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     } finally {
       for (const [signal, handler] of handlers) process.off(signal, handler);
     }
-    const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, status: r.status, exitCode: r.exitCode,
+    const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, ...(r.early ? { early: r.early.gate } : {}), status: r.status, exitCode: r.exitCode,
       durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic,
       ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}),
       ...(r.repeat ? { repeat: { status: r.repeat.status, base: r.repeat.base, files: r.repeat.files, importsOnly: r.repeat.importsOnly, movedPathsOnly: r.repeat.movedPathsOnly, times: r.repeat.times, failures: r.repeat.failures, fixedWaits: r.repeat.fixedWaits } } : {}),
       ...(r.scope ? { scope: r.scope } : {}), ...(r.nearTimeout ? { nearTimeout: r.nearTimeout } : {}) }));
-    const name = (r: { gate: string; targeted: boolean }): string => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
+    const name = (r: { gate: string; targeted: boolean; early?: string }): string => r.early ? `${r.gate} (${EARLY} : ${r.early})` : r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
     if (values.json) {
       json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null, baseGates: kept?.base ?? null,
         since: since ? { commit: since.commit, head: since.head, proven: since.proven, risk: since.risk } : null,
         stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
-        reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
+        reserved: result.reserved, targeted: result.targeted, early: result.early, slowEarly: result.slowEarly, receiptsDirectory: result.directory,
         sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
         suite: result.suite, notRequired: result.notRequired, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, stacksUsed: result.stacksUsed, stacksChecked: result.stacksChecked, stacksUnmapped: result.stacksUnmapped, setup: result.setup, interruptedStacks: result.interruptedStacks, infrastructure: result.infrastructure, interrupted: received,
         rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
@@ -504,8 +510,14 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       if (received) lines.push(`Interrompu par ${received} : contrôles annulés.`);
       for (const x of result.interruptedStacks) lines.push(`ATTENTION : pile ${x.stack} : ${x.gates.join(', ')} interrompu(s) sous son verrou, une remise à zéro a pu être coupée ; état relu : ${x.health.state} (${x.health.detail})${x.health.state === 'running' ? '' : ` ; avant la prochaine suite : apv stacks status, au besoin apv stacks start ${x.stack}`}.`);
       lines.push('', table(['contrôle', 'statut', 'code', 'durée'], [
-        ...rows.map(r => [name(r), STATUS[r.status] ?? r.status, r.exitCode === null ? '-' : String(r.exitCode), `${(r.durationMs / 1000).toFixed(1)} s`]),
+        ...rows.map(r => [name(r), r.early && r.status === 'not_required' ? 'non requis (hors when)' : STATUS[r.status] ?? r.status, r.exitCode === null ? '-' : String(r.exitCode), `${(r.durationMs / 1000).toFixed(1)} s`]),
         ...result.reserved.map(id => [id, RESERVED, '-', '-'])]));
+      if (result.early.length) lines.push('', `Contrôles tôt (early), jamais une preuve de leur contrôle complet : ${result.early.map(e => `${e.id} (${e.gate}) ${e.required ? 'lancé' : 'non requis'} : ${e.reason}`).join(' ; ')}.`);
+      // Its own failure only: an early check cancelled by another failure (failFast) or blocked by a dependency says nothing.
+      for (const r of rows.filter(r => r.early && ['failed', 'timed_out', 'spawn_error'].includes(r.status))) {
+        lines.push(`Échec tôt de ${r.early} (${r.gate}) : la suite complète échouerait sur ce contrôle ; corriger avant de la lancer.`);
+      }
+      if (result.slowEarly.length) lines.push(`ATTENTION, contrôle(s) tôt trop lent(s) pour le stage task (plus de ${EARLY_SLOW_MS / 60_000} min) : ${result.slowEarly.join(', ')} ; les resserrer (when, fichiers lancés) ou les laisser à la suite complète.`);
       const flaky = rows.filter(r => r.status === 'passed_after_retry');
       if (flaky.length) lines.push('', `Instables (${flaky.length}) : réussis seulement après la relance unique de leurs tests en échec, même commit et même arbre ; comptés comme réussis, à traiter comme un constat :`,
         ...flaky.map(r => `- ${name(r)}${r.retriedTests?.length ? ` : ${r.retriedTests.join(' ; ')}` : ' (tests concernés non relevés : retryFailed.testPattern)'}`));

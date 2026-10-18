@@ -15,7 +15,7 @@ import { detectReference } from '../reuse/detect.js';
  * new check, a check made mandatory, nothing else changed). A change of these checks goes through a pull request of configuration alone, proven by the
  * checks of its base, then merged by the operator.
  */
-export type GateDifferenceKind = 'removed' | 'optional' | 'changed' | 'dependency';
+export type GateDifferenceKind = 'removed' | 'optional' | 'changed' | 'dependency' | 'early';
 export interface GateDifference { id: string; kind: GateDifferenceKind }
 
 export interface BaseGates {
@@ -31,12 +31,38 @@ export interface BaseGates {
 }
 
 type Gate = ApvConfig['gates'][number];
+type EarlyCheck = NonNullable<Gate['early']>[number];
 
 /** JSON with sorted keys: two definitions compare by content, whatever the order of their fields. */
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stable((value as Record<string, unknown>)[k])}`).join(',')}}`;
   return JSON.stringify(value) ?? 'null';
+}
+
+/**
+ * The early checks of a full check whose definition is otherwise unchanged (docs/ACCELERATION-LOTS.md, part C): every
+ * early check of the base is kept. One the candidate removed or changed (command, delay, variables, lock...) runs as the
+ * base defined it; its `when` is the union of both (`when` absent on either side: always), so that a candidate never
+ * narrows the scope it is checked on. The candidate's own early checks are added. `restored`: the base ids kept against
+ * the candidate (said as differences).
+ */
+export function mergeEarly(base: EarlyCheck[] | undefined, candidate: EarlyCheck[] | undefined): { early: EarlyCheck[] | undefined; restored: string[] } {
+  const restored: string[] = [];
+  const withoutWhen = (e: EarlyCheck): string => stable({ ...e, when: null });
+  const merged = (base ?? []).map(b => {
+    const c = candidate?.find(x => x.id === b.id);
+    if (!c || withoutWhen(c) !== withoutWhen(b)) { restored.push(b.id); return structuredClone(b); }
+    if (!b.when || !c.when) {
+      if (!b.when && c.when) restored.push(b.id);
+      return structuredClone(c.when ? b : c);
+    }
+    const when = [...new Set([...b.when, ...c.when])];
+    if (b.when.some(glob => !c.when!.includes(glob))) restored.push(b.id);
+    return { ...structuredClone(c), when };
+  });
+  for (const c of candidate ?? []) if (!merged.some(e => e.id === c.id)) merged.push(structuredClone(c));
+  return { early: merged.length ? merged : undefined, restored };
 }
 
 /** The checks of `candidate` with every mandatory check of `base` kept in its base definition (and what it depends on). */
@@ -52,14 +78,21 @@ export function enforceBaseGates(candidate: ApvConfig, base: ApvConfig): { confi
     const now = gates.find(g => g.id === gate.id);
     if (!now) keep(gate, 'removed');
     else if (gate.mandatory && !now.mandatory) keep(gate, 'optional');
-    // Hardening only: the same definition, made mandatory. Any other difference runs the base definition.
-    else if (stable({ ...now, mandatory: gate.mandatory }) !== stable(gate)) keep(gate, 'changed');
+    // Hardening only: the same definition, made mandatory, or early checks added. Any other difference runs the base definition.
+    else if (stable({ ...now, mandatory: gate.mandatory, early: null }) !== stable({ ...gate, early: null })) keep(gate, 'changed');
+    else if (stable(now.early ?? null) !== stable(gate.early ?? null)) {
+      const { early, restored } = mergeEarly(gate.early, now.early);
+      const index = gates.findIndex(g => g.id === gate.id);
+      const others = Object.fromEntries(Object.entries(gates[index]!).filter(([key]) => key !== 'early')) as Gate;
+      gates[index] = early ? { ...others, early } : others;
+      for (const id of restored) differences.push({ id, kind: 'early' });
+    }
   }
   // A kept check runs with what it depends on at the base.
   for (let added = true; added;) {
     added = false;
     for (const gate of [...gates]) {
-      for (const dep of gate.dependsOn) {
+      for (const dep of [...gate.dependsOn, ...(gate.early ?? []).flatMap(e => e.dependsOn)]) {
         if (gates.some(g => g.id === dep)) continue;
         const atBase = base.gates.find(g => g.id === dep);
         if (atBase) { keep(atBase, 'dependency'); added = true; }
@@ -182,6 +215,7 @@ const KIND: Readonly<Record<GateDifferenceKind, string>> = {
   optional: 'rendu facultatif par le candidat',
   changed: 'modifié par le candidat',
   dependency: 'dépendance d\'un contrôle maintenu',
+  early: 'contrôle tôt de la base maintenu (retiré, modifié ou when réduit par le candidat)',
 };
 
 /** Lines for the text output: the warnings on the reference, and the checks kept, if any. */

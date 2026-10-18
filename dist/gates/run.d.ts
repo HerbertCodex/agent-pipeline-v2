@@ -1,4 +1,4 @@
-import { type Gate, type GateReceipt, type GateStage } from '../domain/contracts.js';
+import { type EarlyCheck, type Gate, type GateReceipt, type GateStage } from '../domain/contracts.js';
 import { Git } from '../execution/git.js';
 import { type ApvConfig } from '../config/load.js';
 import { PipelineError } from '../domain/errors.js';
@@ -19,7 +19,8 @@ export interface GateRunOptions {
     only?: readonly string[];
     /**
      * `task`: the checks of stage task run, a full check with an `affected` command runs that targeted command instead,
-     * the other full checks are reported as reserved. `full` (default): every check, never targeted.
+     * the other full checks are reported as reserved; the early checks of the full checks (`early`) run too, when their
+     * `when` matches a file changed since the base. `full` (default): every check, never targeted, never an early check.
      */
     stage?: GateStage;
     /** Commit the `{{baseSha}}` placeholder stands for. */
@@ -98,6 +99,10 @@ export interface GateRunResult {
     reserved: string[];
     /** Full checks a task run executed through their `affected` command (receipts marked `targeted`). */
     targeted: string[];
+    /** Early checks of the full checks a task run selected (`early`): run or not required by their `when`, never proof of the full check. */
+    early: EarlyDecision[];
+    /** Early checks that took more than `EARLY_SLOW_MS`: too slow for the task stage. */
+    slowEarly: string[];
     receipts: GateReceipt[];
     directory: string;
     /** Copy in the shared store (`<git common dir>/apv/receipts/<run>/`), null when not asked. */
@@ -193,6 +198,34 @@ export declare function stageGates(gates: readonly Gate[], stage: GateStage): {
     targeted: Gate[];
     reserved: Gate[];
 };
+/** Longest duration of an early check before it is said too slow for the task stage: 5 minutes. */
+export declare const EARLY_SLOW_MS = 300000;
+/** An early check (`early` of a full check) as a check of stage task: its own id, command, delay, variables, lock and resources. */
+export interface EarlyGate {
+    gate: Gate;
+    parent: string;
+    early: EarlyCheck;
+}
+/** The early checks of the full checks among `gates`, in configuration order. Nothing is inherited from the full check. */
+export declare function earlyGates(gates: readonly Gate[]): EarlyGate[];
+/** Whether an early check runs: `required`, why, the full check it stands for and the changed files its `when` matched (50 at most). */
+export interface EarlyDecision {
+    id: string;
+    gate: string;
+    required: boolean;
+    reason: string;
+    files: string[];
+}
+/**
+ * Files changed since `base` in the working tree: committed, staged or not (both sides of a rename), and untracked files
+ * outside those Git ignores. An uncommitted change counts: an early check is feedback on what is there.
+ */
+export declare function changedSince(git: Git, repo: string, base: string): Promise<string[]>;
+/**
+ * Whether an early check runs. Without `when`: always. Without a base, `when` cannot be evaluated: it runs (an early check
+ * only adds). Otherwise it runs when a file changed since the base matches one of its globs, else it is not required.
+ */
+export declare function earlyDecision(e: EarlyGate, base: string | null, changed: readonly string[] | null): EarlyDecision;
 /** Identity of the declared checks and passed variables, recorded in every receipt and compared by `apv gates verify`. */
 export declare function gatesConfigHash(config: ApvConfig): string;
 /** Why a full suite cannot start: ports of the suite held by others, declared stacks whose lock is held. */

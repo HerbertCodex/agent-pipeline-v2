@@ -58,6 +58,24 @@ export const skipWhenOnlySchema = s.object({
     except: s.optional(s.array(s.string(1, 500), 1, 100)),
     reference: s.string(1, 200, /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/),
 });
+/** The lock of a check (`lock`): a lease of `apv lock` (`resource`) or a kernel `flock` on a file (`file`). */
+export const lockSchema = s.union(s.object({ resource: id, waitMs: s.default(s.number(0, 86_400_000), DEFAULT_LOCK_WAIT_MS) }), s.object({ file: s.string(1, 4000), fileEnv: s.optional(s.string(1, 100, /^[a-zA-Z_][a-zA-Z0-9_]*$/)), waitMs: s.default(s.number(0, 86_400_000), DEFAULT_LOCK_WAIT_MS) }));
+/**
+ * An early check of a full check (`early`, docs/ACCELERATION-LOTS.md, part C): a fast command the project declares so that
+ * what would fail at the end of the full suite (a size budget, captures of a screen no test imports) fails at the task
+ * stage. `when` (globs read at the base): it runs when a file changed since `{{baseSha}}` matches one, always without
+ * `when`. `dependsOn`: checks of stage task it needs (`build`). Nothing is inherited from the full check: its variables,
+ * lock and resources are its own. Its receipt is targeted, never proof of the full check.
+ */
+export const earlyCheckSchema = s.object({
+    id, command: argv,
+    when: s.optional(s.array(s.string(1, 500), 1, 100)),
+    dependsOn: s.default(s.array(id), []),
+    timeoutMs: s.default(s.number(10, 3600000), 120000),
+    passEnv: s.default(envNamesSchema, []),
+    resources: s.default(s.array(id), []),
+    lock: s.optional(lockSchema),
+});
 export const gateSchema = s.object({
     id, command: argv,
     // Reviewed coverage labels, never inferred from a successful exit code or a gate name.
@@ -86,7 +104,7 @@ export const gateSchema = s.object({
     // Resource the check shares with other copies of the repository (a test stack): held around its command, whose
     // timeout starts once it is held. A lease of `apv lock` (`resource`) or a kernel `flock` on a file (`file`).
     // Optional, never defaulted: absent, parsing and hashing are unchanged.
-    lock: s.optional(s.union(s.object({ resource: id, waitMs: s.default(s.number(0, 86_400_000), DEFAULT_LOCK_WAIT_MS) }), s.object({ file: s.string(1, 4000), fileEnv: s.optional(s.string(1, 100, /^[a-zA-Z_][a-zA-Z0-9_]*$/)), waitMs: s.default(s.number(0, 86_400_000), DEFAULT_LOCK_WAIT_MS) }))),
+    lock: s.optional(lockSchema),
     // Relaunch of the failed tests only (argv, same placeholders), run once when the command fails by itself, on the
     // same commit and tree: success gives `passed_after_retry`. `testPattern`: regular expression whose matches in the
     // output of the first pass name the tests concerned (capture group 1 when present). Optional, never defaulted.
@@ -98,6 +116,9 @@ export const gateSchema = s.object({
     // Scope of the proof: a full run whose changes only touch these paths records the check as not required (never run,
     // never proven by the command) after recomputing it from the commit. Optional, never defaulted.
     skipWhenOnly: s.optional(skipWhenOnlySchema),
+    // Early checks of a full check, run by the task stage when the change touches their scope: they add a check, never
+    // remove one; the full suite stays required. Optional, never defaulted: absent, parsing and hashing are unchanged.
+    early: s.optional(s.array(earlyCheckSchema, 1, 20)),
 });
 /** Stage of a check; absent means `task`. */
 export const gateStage = (gate) => gate.stage ?? 'task';
@@ -315,6 +336,15 @@ export const receiptSchema = s.object({
         files: s.array(s.string(1, 4096), 0, MAX_SCOPE_FILES),
         blocking: s.default(s.array(s.string(1, 4096), 0, 50), []),
     })),
+    // An early check (`early` of a full check) run or skipped by the task stage: the full check it stands for (`gate`), its
+    // id, whether its `when` required it and why, and the changed files that matched (50 at most). Always targeted: never
+    // proof of the full check. Absent otherwise.
+    early: s.optional(s.object({
+        gate: id, id,
+        required: s.boolean(),
+        reason: s.string(1, 2000),
+        files: s.default(s.array(s.string(1, 4096), 0, 50), []),
+    })),
 });
 export function validateReceipt(value) {
     const r = receiptSchema.parse(value);
@@ -324,8 +354,9 @@ export function validateReceipt(value) {
             r.stderrHash.length === 64, 'RECEIPT', 'Successful receipt requires exit 0 and both stream digests');
     invariant((r.status === 'cached') === (r.reusedFrom !== null), 'RECEIPT', 'Only cache hits may reference an earlier receipt');
     invariant(!r.repeat || !['failed', 'timed_out', 'cancelled', 'spawn_error'].includes(r.repeat.status) || (r.status !== 'passed' && r.status !== 'cached' && r.status !== 'passed_after_retry'), 'RECEIPT', 'A receipt whose repetition of the changed tests failed is never a success');
-    invariant((r.status === 'not_required') === (r.scope?.required === false), 'RECEIPT', 'A receipt is not_required exactly when its scope says the check is not required');
-    invariant(r.status !== 'not_required' || (r.exitCode === null && r.scope.base !== null && r.scope.reference !== null && r.scope.referenceSha !== null &&
+    invariant(!r.early || (r.targeted === true && r.stage === 'task' && !r.scope && !r.repeat), 'RECEIPT', 'An early receipt is a targeted receipt of the task stage, never proof of its full check');
+    invariant((r.status === 'not_required') === (r.scope?.required === false || r.early?.required === false), 'RECEIPT', 'A receipt is not_required exactly when its scope (or the when of its early check) says the check is not required');
+    invariant(r.status !== 'not_required' || (r.early ? r.exitCode === null : r.exitCode === null && r.scope.base !== null && r.scope.reference !== null && r.scope.referenceSha !== null &&
         r.scope.files.length === r.scope.fileCount), 'RECEIPT', 'A not_required receipt runs nothing and lists every changed file with its bases');
     return r;
 }
