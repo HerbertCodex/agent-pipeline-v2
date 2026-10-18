@@ -1,13 +1,11 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { sha256 } from '../domain/hash.js';
 import type { Git } from '../execution/git.js';
 import { environment } from '../execution/process.js';
-import { matches } from '../policy/policy.js';
-import { ALWAYS_REQUIRED } from './proof-scope.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -86,9 +84,10 @@ const realOf = (path: string): string => { try { return realpathSync(path); } ca
 
 /**
  * The worktrees Git has registered for the repository of `dir` (`git worktree list --porcelain -z`), real paths, `dir` itself
- * left out: the only folders of a copy that are another copy and never part of its state (relecture sécurité de A2, F1). A
- * folder that merely holds an entry named `.git` (a file or a folder written by a check, a generator, a stray clone) is
- * walked like any other. None when Git cannot list them: every folder is then walked.
+ * left out: the only folders of a copy that are another copy (relecture sécurité de A2, F1). Their `.env*` files are not
+ * those of this copy (envFiles); the state of the copy measures them by their HEAD, their status and their files
+ * (copyStateDigest, F1-bis). A folder that merely holds an entry named `.git` (a file or a folder written by a check, a
+ * generator, a stray clone) is no worktree. None when Git cannot list them.
  */
 export function registeredWorktrees(dir: string): Set<string> {
   let out: string;
@@ -153,11 +152,13 @@ const outOfCopyState = (path: string): boolean => path === '.apv/receipts/' || p
 
 /**
  * Digest of what Git ignores in a copy when a run starts there (att8 of the relecture of A1: a generated folder such as
- * `.svelte-kit`, a build left by an earlier run): every ignored file outside `node_modules` (LOCAL_STATE_FILES), `.git`, the
- * worktrees Git has registered (registeredWorktrees) and `.apv/receipts/`, by its path and the sha256 of its content (a symbolic link by its target; beyond
- * 64 MiB, or 1 GiB hashed in all, by its size and date). Measured once per copy, before the first check runs there: an origin
- * is reused only by a copy that starts from the same ignored state (a fresh copy of a batch, prepared by the same
- * batch.setup, does). Not comparable (never equal) when Git cannot list it or the copy holds more than MAX_WALKED entries.
+ * `.svelte-kit`, a build left by an earlier run): every ignored file outside `node_modules` (LOCAL_STATE_FILES), `.git` and
+ * `.apv/receipts/`, by its path and the sha256 of its content (a symbolic link by its target; beyond 64 MiB, or 1 GiB hashed
+ * in all, by its size and date); each worktree Git has registered inside the copy, by its HEAD and its status too, its files
+ * walked like the others (F1-bis); each submodule by its HEAD and its status (D2). Measured once per copy, before the first
+ * check runs there: an origin is reused only by a copy that starts from the same ignored state (a fresh copy of a batch,
+ * prepared by the same batch.setup, does). Not comparable (never equal) when Git cannot list it or the copy holds more than
+ * MAX_WALKED entries.
  */
 export async function copyStateDigest(dir: string): Promise<string> {
   let listed: string[];
@@ -186,16 +187,43 @@ export async function copyStateDigest(dir: string): Promise<string> {
     if (!rel.endsWith('/')) { entries.push([rel, fileState(join(dir, rel))]); continue; }
     let children;
     try { children = readdirSync(join(dir, rel), { withFileTypes: true }); } catch { entries.push([rel, 'dossier illisible']); continue; }
-    // A worktree Git has registered (`.worktrees/x`): another copy, never part of this one. Any other folder that holds a
-    // `.git` is walked, that entry included (relecture sécurité de A2, F1).
-    if (worktrees.size && children.some(e => e.name === '.git') && worktrees.has(realOf(join(dir, rel)))) continue;
+    // A worktree Git has registered inside the copy (`.worktrees/x`, or `.svelte-kit` made one by `git worktree add`): its HEAD
+    // and its status count too (relecture sécurité du delta de A2, F1-bis), and its files are walked like those of any other
+    // folder, its `.git` entry included (F1): it is never left out without being measured.
+    if (worktrees.size && children.some(e => e.name === '.git') && worktrees.has(realOf(join(dir, rel)))) entries.push([`${rel}(worktree)`, checkoutState(join(dir, rel))]);
     for (const child of children.sort((a, b) => (a.name < b.name ? 1 : a.name > b.name ? -1 : 0))) {
       const path = `${rel}${child.name}${child.isDirectory() ? '/' : ''}`;
       if (!outOfCopyState(path)) stack.push(path);
     }
   }
+  // Each submodule of the copy (D2 of the delta review of A2): its HEAD and its status, whatever `.gitmodules` says (`ignore = all`).
+  for (const path of submodulePaths(dir)) entries.push([`${path}(sous-module)`, existsSync(join(dir, path, '.git')) ? checkoutState(join(dir, path)) : 'non extrait']);
   entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-  return sha256(JSON.stringify({ version: 1, entries }));
+  return sha256(JSON.stringify({ version: 2, entries }));
+}
+
+/** Runs git in `dir` (hooks and the file system monitor off), its output as bytes; throws when it fails. */
+const gitIn = (dir: string, args: readonly string[]): Buffer => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args],
+  { cwd: dir, maxBuffer: 256 * 1024 * 1024, timeout: 120_000, env: GIT_ENV(), stdio: ['ignore', 'pipe', 'ignore'] });
+
+/**
+ * The state of a checkout inside a copy, a worktree Git has registered or a submodule: its HEAD and the sha256 of its
+ * `git status --porcelain=v1 -z --untracked-files=all --ignore-submodules=none` (never the content of a file: the walk of the
+ * copy reads those). Not comparable (never equal) when Git cannot read it.
+ */
+export function checkoutState(dir: string): string {
+  try {
+    const head = gitIn(dir, ['rev-parse', '--verify', '-q', 'HEAD']).toString('utf8').trim();
+    const status = gitIn(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
+    return `${head}:${sha256(status)}`;
+  } catch { return unique('extraction illisible'); }
+}
+
+/** The paths of the submodules of a copy (`git ls-files --stage`, mode 160000), sorted; none when Git cannot list them. */
+function submodulePaths(dir: string): string[] {
+  let out: string;
+  try { out = gitIn(dir, ['ls-files', '--stage', '-z']).toString('utf8'); } catch { return []; }
+  return [...new Set(out.split('\0').filter(line => line.startsWith('160000 ')).map(line => line.slice(line.indexOf('\t') + 1)))].sort();
 }
 
 /** Digest of a list of ignore globs (`reuse.ignoreDigest`): sorted and deduplicated, so their order never matters. */
@@ -203,27 +231,15 @@ export function ignoreDigest(globs: readonly string[]): string {
   return sha256(JSON.stringify([...new Set(globs)].sort()));
 }
 
-/** Globs of ALWAYS_REQUIRED that only name tests: a check may ignore the tests of another check (docs/ACCELERATION-LOTS.md, 5.2 A2). */
-export const TEST_GLOBS: readonly string[] = ['test/**', 'tests/**', 'e2e/**', '**/__tests__/**', '**/*.test.*', '**/*.spec.*', '**/*.e2e.*'];
-/**
- * What `reuse.ignore` never takes out of the inputs of a check, whatever it says (docs/ACCELERATION-LOTS.md, 5.2 A2): the list
- * ALWAYS_REQUIRED of src/gates/proof-scope.ts without the test folders (configuration of the checks, manifests and lock files,
- * build, test and run settings, CI, migrations, scripts/**, .env*, content the application compiles or serves). The run and
- * verify add the check's own test paths, the files its commands name, the design folder and the configuration file read.
- */
-export const NEVER_IGNORED: readonly string[] = ALWAYS_REQUIRED.filter(glob => !TEST_GLOBS.includes(glob));
-
 /** One file of the tree of a commit: its raw path, its mode and its object. */
 interface TreeEntry { path: Buffer; mode: string; blob: string }
 
 /**
- * What the inputs of the checks read from Git, kept for one decision of reuse (relecture sécurité de A2, F4): the files of the
- * tree of each commit (one `git ls-tree` per commit, whatever the number of checks and rules), the files that differ between
- * two commits (one walk per pair, whatever the rule), and which paths match the ignored globs of a rule (one match per path and
- * per list of globs, whatever the number of commits).
+ * The trees read from Git, kept for one decision of reuse (relecture sécurité de A2, F4): the files of the tree of each commit,
+ * one `git ls-tree` per commit whatever the number of checks.
  */
-export interface InputsCache { entries: Map<string, Promise<TreeEntry[]>>; diffs: Map<string, Promise<TreeEntry[]>>; hits: Map<string, Map<string, boolean>> }
-export const inputsCache = (): InputsCache => ({ entries: new Map(), diffs: new Map(), hits: new Map() });
+export interface InputsCache { entries: Map<string, Promise<TreeEntry[]>> }
+export const inputsCache = (): InputsCache => ({ entries: new Map() });
 
 /** `git ls-tree` output as raw bytes: a path that is not valid UTF-8 is never decoded with loss. */
 async function lsTreeBytes(repo: string, commit: string): Promise<Buffer> {
@@ -261,112 +277,14 @@ function treeEntries(repo: string, commit: string, cache?: InputsCache): Promise
 const digestOf = (entries: readonly TreeEntry[]): string => sha256(JSON.stringify(entries.map(e => [e.path.toString('hex'), e.mode, e.blob])));
 
 /**
- * The rule that takes files out of the inputs of a check (A2): `ignore` (globs read at the base), `keep` (globs never
- * ignorable, NEVER_IGNORED and the check's own, compared case ignored). A path is ignored only when it is valid UTF-8 without
- * a line terminator (the matcher never crosses one), matches a glob of `ignore`, and none of `keep`.
- */
-export interface InputsRule { ignore: readonly string[]; keep: readonly string[] }
-
-function ignoredBy(rule: InputsRule | null, cache?: InputsCache): (path: Buffer) => boolean {
-  if (!rule || !rule.ignore.length) return () => false;
-  const keep = rule.keep.map(g => g.toLowerCase());
-  const safe = (path: string, glob: string): boolean => { try { return matches(path, glob); } catch { return false; } };
-  // Whether a path matches the ignored globs, once per list of globs (most paths match none: `keep` is then never read).
-  const hitKey = JSON.stringify(rule.ignore);
-  let hits = cache?.hits.get(hitKey);
-  if (!hits) { hits = new Map(); cache?.hits.set(hitKey, hits); }
-  const memo = hits;
-  return raw => {
-    const key = raw.toString('latin1');
-    let hit = memo.get(key);
-    if (hit === undefined) {
-      const path = raw.toString('utf8');
-      hit = Buffer.from(path, 'utf8').equals(raw) && !/[\n\r\u2028\u2029]/.test(path) && rule.ignore.some(glob => safe(path, glob));
-      memo.set(key, hit);
-    }
-    if (!hit) return false;
-    const lower = raw.toString('utf8').toLowerCase();
-    return !keep.some(glob => safe(lower, glob));
-  };
-}
-
-/**
  * Digest of the inputs of a check at `commit` (`reuse.inputsDigest`): sha256 of the JSON of the list of `[path, mode, blob]`
- * of the tracked files of its tree (submodules included), sorted by the bytes of the path, minus those `rule` ignores. The
- * path enters the digest as the hexadecimal of its raw bytes, read from Git without any decoding: two different paths (a
- * line feed or a tab in a name, or bytes that are not UTF-8, such as `f` followed by 0xff or by 0xfe) never share an
- * encoding. Without a rule, two commits have the same digest exactly when they have the same tree content. Fails when the
- * commit is not in the repository. The `ignore` of a former signature is a rule without any glob kept.
+ * of the tracked files of its tree (submodules included), sorted by the bytes of the path. The path enters the digest as the
+ * hexadecimal of its raw bytes, read from Git without any decoding: two different paths (a line feed or a tab in a name, or
+ * bytes that are not UTF-8, such as `f` followed by 0xff or by 0xfe) never share an encoding. Two commits have the same digest
+ * exactly when they have the same tree content. Fails when the commit is not in the repository. Nothing is ignored: the reuse
+ * by inputs (`reuse.ignore`) is disabled until its declaration is proven (INPUTS_REUSE_DISABLED, src/gates/reuse-proof.ts).
  */
-export async function inputsDigest(_git: Git, repo: string, commit: string, rule: InputsRule | readonly string[] | null = null, cache?: InputsCache):
-  Promise<{ digest: string; files: number }> {
-  const ignored = ignoredBy(Array.isArray(rule) ? { ignore: rule, keep: [] } : rule as InputsRule | null, cache);
-  const inputs = (await treeEntries(repo, commit, cache)).filter(e => !ignored(e.path));
+export async function inputsDigest(_git: Git, repo: string, commit: string, cache?: InputsCache): Promise<{ digest: string; files: number }> {
+  const inputs = await treeEntries(repo, commit, cache);
   return { digest: digestOf(inputs), files: inputs.length };
-}
-
-/** The entries that differ between two lists sorted by path (added, removed, or another mode or object): one walk of both. */
-function differing(a: readonly TreeEntry[], b: readonly TreeEntry[]): TreeEntry[] {
-  const out: TreeEntry[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < a.length || j < b.length) {
-    const x = a[i];
-    const y = b[j];
-    const order = !x ? 1 : !y ? -1 : Buffer.compare(x.path, y.path);
-    if (order < 0) { out.push(x!); i += 1; continue; }
-    if (order > 0) { out.push(y!); j += 1; continue; }
-    if (x!.mode !== y!.mode || x!.blob !== y!.blob) out.push(x!);
-    i += 1;
-    j += 1;
-  }
-  return out;
-}
-
-/** The files that differ between the trees of two commits, once per pair and cache (they do not depend on any rule). */
-function differences(repo: string, from: string, to: string, cache?: InputsCache): Promise<TreeEntry[]> {
-  const walk = async (): Promise<TreeEntry[]> => {
-    const [a, b] = await Promise.all([treeEntries(repo, from, cache), treeEntries(repo, to, cache)]);
-    return differing(a, b);
-  };
-  if (!cache) return walk();
-  const key = `${from}\0${to}`;
-  if (!cache.diffs.has(key)) cache.diffs.set(key, walk());
-  return cache.diffs.get(key)!;
-}
-
-/**
- * The inputs of a check that differ between two commits under `rule` (none: the same digest of inputs on both sides), decoded
- * as UTF-8 and sorted. One walk of the two trees per pair, read once per cache: the cheap test of a candidate origin, and of
- * the base. Fails when either commit is not in the repository.
- */
-export async function changedInputs(repo: string, from: string, to: string, rule: InputsRule, cache?: InputsCache): Promise<string[]> {
-  const ignored = ignoredBy(rule, cache);
-  return (await differences(repo, from, to, cache)).filter(e => !ignored(e.path)).map(e => e.path.toString('utf8')).sort();
-}
-
-/** What two commits differ by, for a check that ignores some files (A2): digests of its inputs, files changed, links among its inputs. */
-export interface InputsComparison {
-  from: string;
-  to: string;
-  /** Paths (decoded as UTF-8) that differ between the two trees: added, removed, or another mode or object. */
-  changed: string[];
-  /** Those of them that are inputs of the check (none when the digests are equal). */
-  inputs: string[];
-  /** Symbolic links among the inputs of either commit (their target may be an ignored file: a reuse by inputs never trusts them). */
-  links: string[];
-}
-
-/** Compares the inputs of a check at two commits with `rule` (verify recomputes this from Git, never from the receipt). */
-export async function compareInputs(repo: string, from: string, to: string, rule: InputsRule, cache?: InputsCache): Promise<InputsComparison> {
-  const ignored = ignoredBy(rule, cache);
-  const [a, b] = await Promise.all([treeEntries(repo, from, cache), treeEntries(repo, to, cache)]);
-  const changed: string[] = [];
-  const inputs: string[] = [];
-  for (const e of await differences(repo, from, to, cache)) {
-    changed.push(e.path.toString('utf8'));
-    if (!ignored(e.path)) inputs.push(e.path.toString('utf8'));
-  }
-  const links = [...new Set([...a, ...b].filter(e => e.mode === '120000' && !ignored(e.path)).map(e => e.path.toString('utf8')))].sort();
-  return { from: digestOf(a.filter(e => !ignored(e.path))), to: digestOf(b.filter(e => !ignored(e.path))), changed: changed.sort(), inputs: inputs.sort(), links };
 }

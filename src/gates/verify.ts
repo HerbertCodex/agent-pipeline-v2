@@ -8,7 +8,6 @@ import { mergeBase, repeatProofGap, resolveReference } from './repeat.js';
 import { planScope } from './proof-scope.js';
 import { sharedStore } from './store.js';
 import { checkReuse, latest, readLocal, readShared, reuseContext, reuseReason, type AlteredRun, type Found, type ReceiptSource } from './reuse-proof.js';
-import { designDir } from '../design/config.js';
 import { auditBase, changedBetween, webAuditGate, webImpact } from '../web/impact.js';
 
 export type { AlteredRun, ReceiptSource } from './reuse-proof.js';
@@ -39,8 +38,8 @@ export interface VerifyOptions {
   /** Clock of the age check of reused receipts, in milliseconds (`Date.now()` when absent; tests pass a fixed one). */
   now?: number;
   /**
-   * The branch the commit goes to (or a commit of it, such as the merge base of the checks of the base): a reuse by inputs is
-   * proven only with the `reuse.ignore` and `reuse.maxAgeMs` read at its merge base with the commit (5.5.2). Absent:
+   * The branch the commit goes to (or a commit of it, such as the merge base of the checks of the base): the `reuse.maxAgeMs`
+   * of a reused check is read at its merge base with the commit (5.5.1). A receipt reused by inputs is refused. Absent:
    * `reference`, then the default branch of the remote.
    */
   reuseReference?: string | null;
@@ -250,10 +249,7 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
   };
   const now = options.now ?? Date.now();
   // The check of a receipt `cached`: the very one `apv gates run` passes before writing one (src/gates/reuse-proof.ts).
-  let design: string | null = null;
-  try { design = designDir(options.config.design); } catch { /* The default design folder stays an input anyway. */ }
-  const reuseCheck = reuseContext({ git, repo, commit, configHash, now, store, local, reference: options.reuseReference ?? options.reference ?? null,
-    configFile: options.configFile ?? null, design });
+  const reuseCheck = reuseContext({ git, repo, commit, configHash, now, store, local, reference: options.reuseReference ?? options.reference ?? null });
   const gates: GateEvidence[] = [];
   const near: VerifyResult['nearTimeout'] = [];
   for (const gateId of required) {

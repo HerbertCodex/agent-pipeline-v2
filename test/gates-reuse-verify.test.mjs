@@ -265,7 +265,7 @@ test('AC-REUSE-A0 refused: another environment, other output digests, inputs dig
     [r => ({ ...r, reuse: { ...r.reuse, inputsDigest: 'a'.repeat(64) } }), /empreinte des entrées différente de celle recalculée au commit/],
     [r => ({ ...r, reuse: { ...r.reuse, changed: 1, files: ['README.md'] } }), /reprise à arbre identique qui déclare des fichiers changés/],
     [r => ({ ...r, reuse: { ...r.reuse, ignoreDigest: sha256(JSON.stringify(['docs/**'])) } }), /reprise à arbre identique qui déclare des fichiers ignorés/],
-    [r => ({ ...r, reuse: { ...r.reuse, basis: 'inputs' } }), /reprise par entrées identiques \(basis inputs\) : reuse\.ignore se lit à la base commune avec la cible : aucune cible/],
+    [r => ({ ...r, reuse: { ...r.reuse, basis: 'inputs' } }), /reprise par entrées désactivée tant que la déclaration reuse\.ignore n'est pas prouvée/],
   ];
   for (const [change, reason] of cases) {
     const p = await proven(t);

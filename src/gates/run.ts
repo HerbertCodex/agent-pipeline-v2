@@ -20,7 +20,6 @@ import { WEB_RECORD, runsWebAudit } from '../web/impact.js';
 import { RECEIPTS_DIR, pruneStore, receiptRetention, sharedStore, syncRun, type PruneResult } from './store.js';
 import { copyStateDigest, localStateDigest } from './reuse.js';
 import { readEnvFile } from '../stacks/config.js';
-import { designDir } from '../design/config.js';
 import { readPreviewState } from '../preview/state.js';
 import { repositoryWorktrees } from '../execution/procs.js';
 import { flockFree, flockHeldByAncestor, judgeStack, markStacksUsed, readStackContainers, resolveStacks, stacksOfLock, stoppedSince, type ResolvedStack, type StackContainer, type StackHealth } from '../stacks/idle.js';
@@ -47,8 +46,6 @@ export interface IdentityStack {
   fingerprint: string | null | undefined;
 }
 
-/** A variable whose name says it holds a port (`PORT`, `DB_PORT`, `SUPABASE_PORTS`...). */
-const PORT_NAME = /(?:^|_)PORTS?(?:_|$)/i;
 /** The port of a URL (`scheme://[user[:password]@]host:port[/...]`), the host kept. */
 const URL_PORT = /^([a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?(?:\[[^\]/?#]*\]|[^:/?#@]*)):(\d{1,5})(?=[/?#]|$)/i;
 /** The port of `host:port` (an IPv6 host between brackets). */
@@ -56,17 +53,19 @@ const HOST_PORT = /^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9][A-Za-z0-9.-]*):(\d{1,5})$/;
 
 /**
  * The value of a variable of a stack as its identity of reuse records it, with a fingerprint (5.4, relecture sécurité de A2,
- * F3): an address proper to the stack is normalized, its port (a whole value that is a declared port of the stack or that a
- * variable named after a port holds, the port of a URL, of `host:port`) and its lock file; the rest of the value stays (the
- * host, the user, the database of a URL), and so does any other value (`STACK=2`, a flag, a project name).
+ * F3, and of its delta): an address proper to the stack is normalized, its lock file and a port it declares in `ports` (a
+ * whole value, the port of a URL, of `host:port`); the rest of the value stays (the host, the user, the database of a URL),
+ * and so does any other value (`STACK=2`, a flag, a project name, `postgres:15` against `postgres:16`, a port the stack
+ * does not declare, whatever the name of the variable).
  */
-export function stackAddress(name: string, value: string, stack: Pick<ResolvedStack, 'config' | 'lockFile'>): string {
+export function stackAddress(_name: string, value: string, stack: Pick<ResolvedStack, 'config' | 'lockFile'>): string {
   if (stack.lockFile && value === stack.lockFile) return '{{verrou de la pile}}';
-  if (/^\d{1,5}$/.test(value) && (PORT_NAME.test(name) || (stack.config.ports ?? []).includes(Number(value)))) return '{{port}}';
+  const declared = (port: string): boolean => (stack.config.ports ?? []).includes(Number(port));
+  if (/^\d{1,5}$/.test(value) && declared(value)) return '{{port}}';
   const url = URL_PORT.exec(value);
-  if (url) return `${url[1]}:{{port}}${value.slice(url[0].length)}`;
+  if (url && declared(url[2]!)) return `${url[1]}:{{port}}${value.slice(url[0].length)}`;
   const host = HOST_PORT.exec(value);
-  if (host) return `${host[1]}:{{port}}`;
+  if (host && declared(host[2]!)) return `${host[1]}:{{port}}`;
   return value;
 }
 
@@ -75,7 +74,7 @@ export function stackAddress(name: string, value: string, stack: Pick<ResolvedSt
  * Without a stack: its `environmentHash`, unchanged. On a stack without `stacks[].fingerprint`: the same environment (the
  * values of the variables of the stack included) plus the id of the stack and its declaration without its envFile, never
  * equal from one stack to another. With a fingerprint: the addresses proper to the stack among the variables it gives the
- * check normalized (stackAddress: its ports, the port of a URL or of `host:port`, its lock file), every other value kept as
+ * check normalized (stackAddress: the ports it declares in `ports`, whole or in a URL or a `host:port`, its lock file), every other value kept as
  * is (relecture sécurité de A2, F3: `STACK=2` and `STACK=3`, a flag, a project name stay apart), plus the fingerprint
  * command and the digest of its output: equal for two stacks that print the same and differ by their addresses only. A
  * fingerprint that failed or printed nothing: an identity no other ever equals.
@@ -157,9 +156,9 @@ export interface GateRunOptions {
    */
   replay?: 'all' | readonly string[];
   /**
-   * The branch the change goes to (or a commit of it) whose merge base with the commit gives `reuse.ignore` and
-   * `reuse.maxAgeMs` (docs/ACCELERATION-LOTS.md, 5.5.2): `apv gates run` passes the base of its checks (`--against`, else
-   * `--base`). Absent: `reference`, then `base`, then the default branch of the remote.
+   * The branch the change goes to (or a commit of it) whose merge base with the commit gives `reuse.maxAgeMs`
+   * (docs/ACCELERATION-LOTS.md, 5.5.1): `apv gates run` passes the base of its checks (`--against`, else `--base`). Absent:
+   * `reference`, then `base`, then the default branch of the remote.
    */
   reuseReference?: string | null;
   /**
@@ -168,7 +167,7 @@ export interface GateRunOptions {
    */
   batchSetup?: boolean;
 }
-/** A check reused at an identical tree or with identical inputs: the receipt `cached` written, its origin and why. */
+/** A check reused at an identical tree: the receipt `cached` written, its origin and why. */
 export interface ReusedCheck {
   gateId: string;
   /** Identifier of the receipt `cached` written in this run. */
@@ -177,9 +176,9 @@ export interface ReusedCheck {
   fromCommit: string;
   /** Identifier of the origin receipt (`reusedFrom`). */
   origin: string;
-  /** `tree`: identical trees (A1); `inputs`: every file changed is one the check ignores (`reuse.ignore` read at the base, A2). */
+  /** Always `tree` (identical trees, A1): the reuse by inputs (`inputs`) is disabled until its declaration is proven. */
   basis: 'tree' | 'inputs';
-  /** Files changed since the origin (all ignored by the check); 0 for `tree`. */
+  /** Files changed since the origin: 0 at an identical tree. */
   changed: number;
   /** The stack of the environment it is reused for (`--stacks`; the origin may have run on another one with the same fingerprint), or null. */
   stack: string | null;
@@ -495,8 +494,8 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     throw new PipelineError('GATE_SINCE', `--since refusé : HEAD a changé depuis le classement du diff (${options.since.head.slice(0, 12)} classé, ${candidateSha.slice(0, 12)} maintenant). Relancer la même commande.`);
   }
   const baseSha = options.base ? await git.sha(repo, options.base) : null;
-  const treeStatus = (): Promise<string> => git.exec(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
-  const treeOf = (dir: string): Promise<string> => dir === repo ? treeStatus() : git.exec(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const treeStatus = (): Promise<string> => git.exec(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
+  const treeOf = (dir: string): Promise<string> => dir === repo ? treeStatus() : git.exec(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
   let status = await treeStatus();
   let dirty = status !== '';
   const stage = options.stage ?? 'full';
@@ -670,17 +669,15 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const reuse = new Map<string, ReuseChoice & { environment: ReuseEnvironment & { executable: { path: string; sha256: string } } }>();
   let reuseScan: GateRunResult['reuseScan'] = null;
   const newReuseContext = async (): Promise<ReturnType<typeof reuseContext>> => {
-    let design: string | null = null;
-    try { design = designDir(options.config.design); } catch { /* The default design folder stays an input anyway. */ }
     return reuseContext({ git, repo, commit: candidateSha, configHash, now: Date.now(), store: await sharedStore(git, repo), local: readLocal(repo),
-      reference: options.reuseReference ?? options.reference ?? options.base ?? null, configFile: options.configFile ?? null, design });
+      reference: options.reuseReference ?? options.reference ?? options.base ?? null });
   };
   if (!dirty && replay !== 'all') {
     const ctx = await newReuseContext();
     // The executable of each command, hashed once for the whole decision (relecture sécurité de A2, F4: the Node binary of ten
-    // checks was hashed ten times), and again whenever the file changes (path, size, date, inode). A check that runs hashes it again.
+    // checks was hashed ten times), and again whenever the file changes (path, size, modification and change dates, inode; F4 of the delta review: ctime too). A check that runs hashes it again.
     const executables = new Map<string, { identity: { path: string; sha256: string }; stat: string }>();
-    const statOf = (path: string): string => { try { const s = lstatSync(path, { bigint: true }); return `${s.size}:${s.mtimeNs}:${s.ino}:${s.dev}`; } catch { return 'illisible'; } };
+    const statOf = (path: string): string => { try { const s = lstatSync(path, { bigint: true }); return `${s.size}:${s.mtimeNs}:${s.ctimeNs}:${s.ino}:${s.dev}`; } catch { return 'illisible'; } };
     const executableOf = async (command: string, env: NodeJS.ProcessEnv): Promise<{ path: string; sha256: string }> => {
       const key = JSON.stringify([command, env['PATH'] ?? null]);
       const known = executables.get(key);
@@ -1029,7 +1026,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         const firstPass = { status: 'failed' as const, exitCode: exitOf(r1), durationMs: first.commandMs, stdoutHash: r1.stdoutHash, stderrHash: r1.stderrHash, diagnostic: excerpt(r1, 8000) };
         // Same commit, same tree: otherwise the relaunch would prove other code.
         const head = await git.sha(workspace);
-        const now = workspace === repo ? await treeStatus() : await git.exec(workspace, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+        const now = workspace === repo ? await treeStatus() : await git.exec(workspace, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
         if (head !== candidateSha || now !== (workspace === repo ? status : '')) {
           return ({ ...base, status: 'failed', durationMs: first.commandMs, exitCode: exitOf(r1), stdoutHash: r1.stdoutHash, stderrHash: r1.stderrHash,
             diagnostic: `Relance refusée : ${head !== candidateSha ? 'HEAD a changé' : 'l\'arbre de travail a changé'} pendant la première passe (la relance ne prouverait pas le même code).\n${excerpt(r1, MAX_DIAGNOSTIC_CHARS - 300)}`,
