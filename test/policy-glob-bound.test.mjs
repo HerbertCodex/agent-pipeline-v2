@@ -4,7 +4,7 @@ import fc from 'fast-check';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 import { matches } from '../dist/policy/policy.js';
-import { configIssues } from '../dist/config/load.js';
+import { MAX_WHEN_LENGTH, MAX_WHEN_WILDCARDS, configIssues } from '../dist/config/load.js';
 
 /**
  * Addition of 17 October to docs/ACCELERATION-LOTS.md (security review of #140): `matches` compiled each glob into a
@@ -96,4 +96,24 @@ test('a trap `when` chosen by a PR no longer stalls the task stage', async t => 
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.deepEqual(r.json().early.map(e => [e.id, e.required]), [['budget-js', false]]);
   assert.ok(elapsed < 30_000, `the task stage ends: ${Math.round(elapsed)} ms`);
+});
+
+test('the loader bounds each `when` pattern: 200 characters and 16 wildcards (* or **) at most, refused beyond', () => {
+  const config = when => ({ gates: [
+    { id: 'build', command: [process.execPath, '-e', 'process.exit(0)'] },
+    { id: 'integration', stage: 'full', command: [process.execPath, '-e', 'process.exit(0)'], early: [{ id: 'budget-js', when, command: [process.execPath, '-e', 'process.exit(0)'] }] },
+  ] });
+  const sixteen = Array(16).fill('**a').join('');
+  const longest = 'src/' + 'x'.repeat(196);
+  assert.equal(MAX_WHEN_WILDCARDS, 16); assert.equal(MAX_WHEN_LENGTH, 200);
+  assert.deepEqual(configIssues(config([sixteen, longest, 'src/**', '**/*.svelte'])).issues, []);
+  const seventeen = configIssues(config(['src/**', sixteen + '*'])).issues;
+  assert.equal(seventeen.length, 1);
+  assert.match(seventeen[0].message, /early check budget-js: when: .* 49 characters and 17 wildcards \(\* or \*\*\); at most 200 characters and 16 wildcards per pattern/);
+  const tooLong = configIssues(config([longest + 'x'])).issues;
+  assert.equal(tooLong.length, 1);
+  assert.match(tooLong[0].message, /201 characters and 0 wildcards/);
+  // `***` is two wildcards (`**` then `*`), as the matcher reads it.
+  assert.deepEqual(configIssues(config([Array(8).fill('***').join('/') + '/x'])).issues, []);
+  assert.match(configIssues(config([Array(9).fill('***').join('/') + '/x'])).issues[0].message, /18 wildcards/);
 });
