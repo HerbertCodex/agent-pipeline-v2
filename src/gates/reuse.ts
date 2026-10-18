@@ -1,7 +1,7 @@
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { lstatSync, readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { sha256 } from '../domain/hash.js';
 import type { Git } from '../execution/git.js';
@@ -56,7 +56,7 @@ export async function treesOf(git: Git, repo: string, commits: Iterable<string>)
  * What Git ignores in a copy and a check still runs with (relecture sécurité de A1, M2, and of its delta, F-D1): the installed
  * dependencies, seen through the folder `node_modules` and the record each package manager writes there at every install
  * (npm, pnpm and its lock of the virtual store, Yarn Berry, Yarn 1), and every `.env*` file of the copy, at any depth (outside
- * `node_modules`, `.git` and the nested repositories, such as the worktrees of `.worktrees/`). Two copies of the same tree
+ * `node_modules`, the `.git` of the copy and the worktrees Git has registered, such as those of `.worktrees/`). Two copies of the same tree
  * with other dependencies installed, or another `apps/web/.env.local`, are not the same environment. A `node_modules` with
  * none of these records (installed by another tool, or by hand) cannot be compared: never the same state as any other.
  */
@@ -81,11 +81,31 @@ function stateOf(path: string): string {
 /** A value no other measure ever equals: a state that cannot be compared is never the state of an origin. */
 const unique = (why: string): string => `${why}:${randomUUID()}`;
 
+/** A path as the file system resolves it (symbolic links followed), or the path itself when it cannot be resolved. */
+const realOf = (path: string): string => { try { return realpathSync(path); } catch { return resolve(path); } };
+
 /**
- * The `.env*` files of a copy at any depth, relative paths sorted, outside `node_modules`, `.git` and the folders that are
- * another repository or worktree (they hold a `.git`); symbolic links to folders are not followed. Null beyond MAX_WALKED.
+ * The worktrees Git has registered for the repository of `dir` (`git worktree list --porcelain -z`), real paths, `dir` itself
+ * left out: the only folders of a copy that are another copy and never part of its state (relecture sécurité de A2, F1). A
+ * folder that merely holds an entry named `.git` (a file or a folder written by a check, a generator, a stray clone) is
+ * walked like any other. None when Git cannot list them: every folder is then walked.
+ */
+export function registeredWorktrees(dir: string): Set<string> {
+  let out: string;
+  try {
+    out = execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'worktree', 'list', '--porcelain', '-z'],
+      { cwd: dir, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 60_000, env: GIT_ENV(), stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch { return new Set(); }
+  const self = realOf(dir);
+  return new Set(out.split('\0').filter(line => line.startsWith('worktree ')).map(line => realOf(line.slice('worktree '.length))).filter(path => path !== self));
+}
+
+/**
+ * The `.env*` files of a copy at any depth, relative paths sorted, outside `node_modules`, the `.git` of the copy and the
+ * worktrees Git has registered (registeredWorktrees); symbolic links to folders are not followed. Null beyond MAX_WALKED.
  */
 function envFiles(dir: string): string[] | null {
+  const worktrees = registeredWorktrees(dir);
   const found: string[] = [];
   const stack: string[] = [''];
   let walked = 0;
@@ -93,12 +113,12 @@ function envFiles(dir: string): string[] | null {
     const rel = stack.pop()!;
     let entries;
     try { entries = readdirSync(join(dir, rel), { withFileTypes: true }); } catch { found.push(`${rel}(dossier illisible)`); continue; }
-    if (rel && entries.some(e => e.name === '.git')) continue;
+    if (rel && worktrees.size && entries.some(e => e.name === '.git') && worktrees.has(realOf(join(dir, rel)))) continue;
     for (const entry of entries) {
       if ((walked += 1) > MAX_WALKED) return null;
       const path = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.name.startsWith('.env')) found.push(path);
-      if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') stack.push(path);
+      if (entry.isDirectory() && entry.name !== 'node_modules' && path !== '.git') stack.push(path);
     }
   }
   return found.sort();
@@ -129,12 +149,12 @@ async function ignoredEntries(dir: string): Promise<string[]> {
 }
 
 /** Ignored paths left out of the state of a copy: the receipts of APV (written by the run itself), and `node_modules` (LOCAL_STATE_FILES). */
-const outOfCopyState = (path: string): boolean => path === '.apv/receipts/' || path.startsWith('.apv/receipts/') || path.split('/').includes('node_modules') || path.split('/').includes('.git');
+const outOfCopyState = (path: string): boolean => path === '.apv/receipts/' || path.startsWith('.apv/receipts/') || path.split('/').includes('node_modules') || path === '.git' || path.startsWith('.git/');
 
 /**
  * Digest of what Git ignores in a copy when a run starts there (att8 of the relecture of A1: a generated folder such as
  * `.svelte-kit`, a build left by an earlier run): every ignored file outside `node_modules` (LOCAL_STATE_FILES), `.git`, the
- * nested repositories and `.apv/receipts/`, by its path and the sha256 of its content (a symbolic link by its target; beyond
+ * worktrees Git has registered (registeredWorktrees) and `.apv/receipts/`, by its path and the sha256 of its content (a symbolic link by its target; beyond
  * 64 MiB, or 1 GiB hashed in all, by its size and date). Measured once per copy, before the first check runs there: an origin
  * is reused only by a copy that starts from the same ignored state (a fresh copy of a batch, prepared by the same
  * batch.setup, does). Not comparable (never equal) when Git cannot list it or the copy holds more than MAX_WALKED entries.
@@ -142,6 +162,7 @@ const outOfCopyState = (path: string): boolean => path === '.apv/receipts/' || p
 export async function copyStateDigest(dir: string): Promise<string> {
   let listed: string[];
   try { listed = await ignoredEntries(dir); } catch (error) { return sha256(unique(`git ls-files : ${(error as Error).message}`)); }
+  const worktrees = registeredWorktrees(dir);
   const entries: [string, string][] = [];
   let walked = 0;
   let hashed = 0;
@@ -165,8 +186,9 @@ export async function copyStateDigest(dir: string): Promise<string> {
     if (!rel.endsWith('/')) { entries.push([rel, fileState(join(dir, rel))]); continue; }
     let children;
     try { children = readdirSync(join(dir, rel), { withFileTypes: true }); } catch { entries.push([rel, 'dossier illisible']); continue; }
-    // Another repository or worktree (`.worktrees/x`): another copy, never part of this one.
-    if (children.some(e => e.name === '.git')) continue;
+    // A worktree Git has registered (`.worktrees/x`): another copy, never part of this one. Any other folder that holds a
+    // `.git` is walked, that entry included (relecture sécurité de A2, F1).
+    if (worktrees.size && children.some(e => e.name === '.git') && worktrees.has(realOf(join(dir, rel)))) continue;
     for (const child of children.sort((a, b) => (a.name < b.name ? 1 : a.name > b.name ? -1 : 0))) {
       const path = `${rel}${child.name}${child.isDirectory() ? '/' : ''}`;
       if (!outOfCopyState(path)) stack.push(path);
@@ -194,6 +216,15 @@ export const NEVER_IGNORED: readonly string[] = ALWAYS_REQUIRED.filter(glob => !
 /** One file of the tree of a commit: its raw path, its mode and its object. */
 interface TreeEntry { path: Buffer; mode: string; blob: string }
 
+/**
+ * What the inputs of the checks read from Git, kept for one decision of reuse (relecture sécurité de A2, F4): the files of the
+ * tree of each commit (one `git ls-tree` per commit, whatever the number of checks and rules), the files that differ between
+ * two commits (one walk per pair, whatever the rule), and which paths match the ignored globs of a rule (one match per path and
+ * per list of globs, whatever the number of commits).
+ */
+export interface InputsCache { entries: Map<string, Promise<TreeEntry[]>>; diffs: Map<string, Promise<TreeEntry[]>>; hits: Map<string, Map<string, boolean>> }
+export const inputsCache = (): InputsCache => ({ entries: new Map(), diffs: new Map(), hits: new Map() });
+
 /** `git ls-tree` output as raw bytes: a path that is not valid UTF-8 is never decoded with loss. */
 async function lsTreeBytes(repo: string, commit: string): Promise<Buffer> {
   const { stdout } = await execFileAsync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'ls-tree', '-r', '-z', '--full-tree', '--end-of-options', `${commit}^{tree}`],
@@ -202,7 +233,7 @@ async function lsTreeBytes(repo: string, commit: string): Promise<Buffer> {
 }
 
 /** Every file of the tree of `commit` (submodules included), sorted by the bytes of its path. Fails when the commit is not in the repository. */
-async function treeEntries(repo: string, commit: string): Promise<TreeEntry[]> {
+async function readTreeEntries(repo: string, commit: string): Promise<TreeEntry[]> {
   const out = await lsTreeBytes(repo, commit);
   const entries: TreeEntry[] = [];
   let start = 0;
@@ -219,6 +250,13 @@ async function treeEntries(repo: string, commit: string): Promise<TreeEntry[]> {
   return entries.sort((a, b) => Buffer.compare(a.path, b.path));
 }
 
+/** The files of the tree of `commit`, read once per cache (a failure is kept too: the commit stays unreadable). */
+function treeEntries(repo: string, commit: string, cache?: InputsCache): Promise<TreeEntry[]> {
+  if (!cache) return readTreeEntries(repo, commit);
+  if (!cache.entries.has(commit)) cache.entries.set(commit, readTreeEntries(repo, commit));
+  return cache.entries.get(commit)!;
+}
+
 /** The digest of a list of entries: sha256 of the JSON of `[hex of the path, mode, object]`. */
 const digestOf = (entries: readonly TreeEntry[]): string => sha256(JSON.stringify(entries.map(e => [e.path.toString('hex'), e.mode, e.blob])));
 
@@ -229,15 +267,25 @@ const digestOf = (entries: readonly TreeEntry[]): string => sha256(JSON.stringif
  */
 export interface InputsRule { ignore: readonly string[]; keep: readonly string[] }
 
-function ignoredBy(rule: InputsRule | null): (path: Buffer) => boolean {
+function ignoredBy(rule: InputsRule | null, cache?: InputsCache): (path: Buffer) => boolean {
   if (!rule || !rule.ignore.length) return () => false;
   const keep = rule.keep.map(g => g.toLowerCase());
   const safe = (path: string, glob: string): boolean => { try { return matches(path, glob); } catch { return false; } };
+  // Whether a path matches the ignored globs, once per list of globs (most paths match none: `keep` is then never read).
+  const hitKey = JSON.stringify(rule.ignore);
+  let hits = cache?.hits.get(hitKey);
+  if (!hits) { hits = new Map(); cache?.hits.set(hitKey, hits); }
+  const memo = hits;
   return raw => {
-    const path = raw.toString('utf8');
-    if (!Buffer.from(path, 'utf8').equals(raw) || /[\n\r\u2028\u2029]/.test(path)) return false;
-    if (!rule.ignore.some(glob => safe(path, glob))) return false;
-    const lower = path.toLowerCase();
+    const key = raw.toString('latin1');
+    let hit = memo.get(key);
+    if (hit === undefined) {
+      const path = raw.toString('utf8');
+      hit = Buffer.from(path, 'utf8').equals(raw) && !/[\n\r\u2028\u2029]/.test(path) && rule.ignore.some(glob => safe(path, glob));
+      memo.set(key, hit);
+    }
+    if (!hit) return false;
+    const lower = raw.toString('utf8').toLowerCase();
     return !keep.some(glob => safe(lower, glob));
   };
 }
@@ -250,10 +298,51 @@ function ignoredBy(rule: InputsRule | null): (path: Buffer) => boolean {
  * encoding. Without a rule, two commits have the same digest exactly when they have the same tree content. Fails when the
  * commit is not in the repository. The `ignore` of a former signature is a rule without any glob kept.
  */
-export async function inputsDigest(_git: Git, repo: string, commit: string, rule: InputsRule | readonly string[] | null = null): Promise<{ digest: string; files: number }> {
-  const ignored = ignoredBy(Array.isArray(rule) ? { ignore: rule, keep: [] } : rule as InputsRule | null);
-  const inputs = (await treeEntries(repo, commit)).filter(e => !ignored(e.path));
+export async function inputsDigest(_git: Git, repo: string, commit: string, rule: InputsRule | readonly string[] | null = null, cache?: InputsCache):
+  Promise<{ digest: string; files: number }> {
+  const ignored = ignoredBy(Array.isArray(rule) ? { ignore: rule, keep: [] } : rule as InputsRule | null, cache);
+  const inputs = (await treeEntries(repo, commit, cache)).filter(e => !ignored(e.path));
   return { digest: digestOf(inputs), files: inputs.length };
+}
+
+/** The entries that differ between two lists sorted by path (added, removed, or another mode or object): one walk of both. */
+function differing(a: readonly TreeEntry[], b: readonly TreeEntry[]): TreeEntry[] {
+  const out: TreeEntry[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    const x = a[i];
+    const y = b[j];
+    const order = !x ? 1 : !y ? -1 : Buffer.compare(x.path, y.path);
+    if (order < 0) { out.push(x!); i += 1; continue; }
+    if (order > 0) { out.push(y!); j += 1; continue; }
+    if (x!.mode !== y!.mode || x!.blob !== y!.blob) out.push(x!);
+    i += 1;
+    j += 1;
+  }
+  return out;
+}
+
+/** The files that differ between the trees of two commits, once per pair and cache (they do not depend on any rule). */
+function differences(repo: string, from: string, to: string, cache?: InputsCache): Promise<TreeEntry[]> {
+  const walk = async (): Promise<TreeEntry[]> => {
+    const [a, b] = await Promise.all([treeEntries(repo, from, cache), treeEntries(repo, to, cache)]);
+    return differing(a, b);
+  };
+  if (!cache) return walk();
+  const key = `${from}\0${to}`;
+  if (!cache.diffs.has(key)) cache.diffs.set(key, walk());
+  return cache.diffs.get(key)!;
+}
+
+/**
+ * The inputs of a check that differ between two commits under `rule` (none: the same digest of inputs on both sides), decoded
+ * as UTF-8 and sorted. One walk of the two trees per pair, read once per cache: the cheap test of a candidate origin, and of
+ * the base. Fails when either commit is not in the repository.
+ */
+export async function changedInputs(repo: string, from: string, to: string, rule: InputsRule, cache?: InputsCache): Promise<string[]> {
+  const ignored = ignoredBy(rule, cache);
+  return (await differences(repo, from, to, cache)).filter(e => !ignored(e.path)).map(e => e.path.toString('utf8')).sort();
 }
 
 /** What two commits differ by, for a check that ignores some files (A2): digests of its inputs, files changed, links among its inputs. */
@@ -269,21 +358,14 @@ export interface InputsComparison {
 }
 
 /** Compares the inputs of a check at two commits with `rule` (verify recomputes this from Git, never from the receipt). */
-export async function compareInputs(repo: string, from: string, to: string, rule: InputsRule): Promise<InputsComparison> {
-  const ignored = ignoredBy(rule);
-  const [a, b] = await Promise.all([treeEntries(repo, from), treeEntries(repo, to)]);
-  const key = (e: TreeEntry): string => e.path.toString('hex');
-  const at = new Map(a.map(e => [key(e), e]));
-  const bt = new Map(b.map(e => [key(e), e]));
+export async function compareInputs(repo: string, from: string, to: string, rule: InputsRule, cache?: InputsCache): Promise<InputsComparison> {
+  const ignored = ignoredBy(rule, cache);
+  const [a, b] = await Promise.all([treeEntries(repo, from, cache), treeEntries(repo, to, cache)]);
   const changed: string[] = [];
   const inputs: string[] = [];
-  for (const k of new Set([...at.keys(), ...bt.keys()])) {
-    const x = at.get(k);
-    const y = bt.get(k);
-    if (x && y && x.mode === y.mode && x.blob === y.blob) continue;
-    const path = (x ?? y)!.path;
-    changed.push(path.toString('utf8'));
-    if (!ignored(path)) inputs.push(path.toString('utf8'));
+  for (const e of await differences(repo, from, to, cache)) {
+    changed.push(e.path.toString('utf8'));
+    if (!ignored(e.path)) inputs.push(e.path.toString('utf8'));
   }
   const links = [...new Set([...a, ...b].filter(e => e.mode === '120000' && !ignored(e.path)).map(e => e.path.toString('utf8')))].sort();
   return { from: digestOf(a.filter(e => !ignored(e.path))), to: digestOf(b.filter(e => !ignored(e.path))), changed: changed.sort(), inputs: inputs.sort(), links };

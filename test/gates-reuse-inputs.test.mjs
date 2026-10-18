@@ -34,7 +34,7 @@ const SPEC_IGNORE = ['tests/e2e/browser/**', 'tests/e2e/**/*-snapshots/**', 'doc
  * A project on `main` whose integration check ignores the browser tests, their images and the documentation, then a feature
  * branch; `run` is `apv gates run --stage full --base main` (the checks and their reuse.ignore read at the merge base).
  */
-function inputsProject(t, { reuse = { ignore: SPEC_IGNORE, maxAgeMs: 172_800_000 }, files = {}, config = null } = {}) {
+function inputsProject(t, { reuse = { ignore: SPEC_IGNORE, maxAgeMs: 172_800_000 }, files = {}, config = null, setup = null } = {}) {
   const f = fixture(t, { files: {
     'src/lib/x.ts': 'export const x = 1;\n', 'src/routes/page.md': '# Page\n', 'tests/integration/a.test.ts': 'integration 1\n',
     'tests/e2e/browser/x.e2e.ts': 'e2e 1\n', 'tests/e2e/browser/x.e2e.ts-snapshots/a.png': 'png a1', 'tests/e2e/browser/x.e2e.ts-snapshots/b.png': 'png b1',
@@ -44,6 +44,7 @@ function inputsProject(t, { reuse = { ignore: SPEC_IGNORE, maxAgeMs: 172_800_000
   write(f.repo, '.apv/config.json', config ?? { gates: [
     { id: 'integration', stage: 'full', command: logged(log, 'integration', flag), testPaths: ['tests/integration/**'], ...(reuse ? { reuse } : {}) },
     { id: 'browser', stage: 'full', command: logged(log, 'browser'), testPaths: ['tests/e2e/browser/**'] }] });
+  if (setup) setup(f.repo);
   git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'config');
   git(f.repo, 'checkout', '-q', '-b', 'feature');
   const ran = () => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : [];
@@ -66,7 +67,8 @@ const found = receipt => ({ receipt, dirty: false, baseSha: null, source: 'local
 
 test('AC-REUSE-INPUTS: only a browser test and two of its images changed: integration reused (basis inputs), browser run; with a source file too, both run', async t => {
   const p = inputsProject(t);
-  const a = p.commit({ 'src/lib/x.ts': 'export const x = 2;\n' });
+  // The origin, like the commit reused, differs from the base by ignored files only (E1 of the relecture of A2).
+  const a = p.commit({ 'docs/notes.md': 'notes 1b\n' });
   const first = await p.run(['--json']);
   assert.equal(first.code, 0, first.stdout + first.stderr);
   assert.deepEqual(p.ran(), ['integration', 'browser']);
@@ -98,7 +100,7 @@ test('AC-REUSE-INPUTS: only a browser test and two of its images changed: integr
 
 test('AC-REUSE-INPUTS: verify proves a reuse by inputs only against a target; without one (no --against, no remote), it proves nothing', async t => {
   const p = inputsProject(t);
-  p.commit({ 'src/lib/x.ts': 'export const x = 2;\n' });
+  p.commit({ 'docs/notes.md': 'notes 1b\n' });
   assert.equal((await p.run()).code, 0);
   const b = p.commit({ 'docs/notes.md': 'notes 2\n' });
   assert.deepEqual(statuses((await p.run(['--json'])).json()), { integration: 'cached', browser: 'passed' });
@@ -110,7 +112,7 @@ test('AC-REUSE-INPUTS: verify proves a reuse by inputs only against a target; wi
 
 test('AC-REUSE-INPUTS: a forged or stale receipt cached by inputs proves nothing (digest, files, globs, an input changed); the real one does', async t => {
   const p = inputsProject(t);
-  const a = p.commit({ 'src/lib/x.ts': 'export const x = 2;\n' });
+  const a = p.commit({ 'docs/notes.md': 'notes 1b\n' });
   assert.equal((await p.run()).code, 0);
   const b = p.commit({ 'tests/e2e/browser/x.e2e.ts': 'e2e 2\n' });
   const second = (await p.run(['--json'])).json();
@@ -159,13 +161,14 @@ test('AC-REUSE-NEVER-IGNORE: the loader refuses a reuse.ignore that covers a fil
 
 test('AC-REUSE-NEVER-IGNORE at run: **/*.md never takes content the application serves out of the inputs; documentation stays ignored', async t => {
   const p = inputsProject(t);
-  p.commit({ 'src/lib/x.ts': 'export const x = 2;\n' });
+  p.commit({ 'docs/notes.md': 'notes 1b\n' });
   assert.equal((await p.run()).code, 0);
+  p.commit({ 'docs/notes.md': 'notes 2\n', 'README.md': '# Autre\n' });
+  assert.deepEqual(statuses((await p.run(['--json'])).json()), { integration: 'cached', browser: 'passed' });
   p.commit({ 'src/routes/page.md': '# Page servie modifiée\n' });
   const served = await p.run(['--json']);
   assert.deepEqual(statuses(served.json()), { integration: 'passed', browser: 'passed' }, 'src/routes/page.md is an input whatever **/*.md says');
-  p.commit({ 'docs/notes.md': 'notes 2\n', 'README.md': '# Autre\n' });
-  assert.deepEqual(statuses((await p.run(['--json'])).json()), { integration: 'cached', browser: 'passed' });
+  assert.match(served.stderr, /integration : non repris \(.*1 entrée\(s\) du contrôle changée\(s\) entre la base commune [0-9a-f]{12} et le commit [0-9a-f]{12} \(src\/routes\/page\.md\)/);
 });
 
 test('AC-REUSE-BASE: a PR that widens reuse.ignore never uses it for its own proof; the globs of the base serve', async t => {
@@ -179,7 +182,11 @@ test('AC-REUSE-BASE: a PR that widens reuse.ignore never uses it for its own pro
   p.commit({ 'tests/e2e/browser/x.e2e.ts': 'e2e 2\n' });
   assert.deepEqual(statuses((await p.run(['--json'])).json()), { integration: 'passed', browser: 'passed' }, 'tests/e2e is not ignored at the base');
   p.commit({ 'docs/notes.md': 'notes 2\n' });
-  assert.deepEqual(statuses((await p.run(['--json'])).json()), { integration: 'cached', browser: 'passed' }, 'docs/** is, at the base');
+  // docs/** is ignored at the base, but this PR changes inputs of the check since the base (its configuration, a source): the
+  // declaration of the base holds for the code of the base only (E1), so nothing is reused by inputs in this PR.
+  const changedInputs = await p.run(['--json']);
+  assert.deepEqual(statuses(changedInputs.json()), { integration: 'passed', browser: 'passed' });
+  assert.match(changedInputs.stderr, /integration : non repris \(.*entrée\(s\) du contrôle changée\(s\) entre la base commune .*\(\.apv\/config\.json, src\/lib\/x\.ts, tests\/e2e\/browser\/x\.e2e\.ts\)/);
   // The very check through the API, with the configuration of the PR (never enforced to the base): refused.
   const pr = loadConfig(p.repo).config;
   const origin = await runGates({ repo: p.repo, config: pr, stage: 'full', base: 'main', log: () => {} });
@@ -202,7 +209,7 @@ test('AC-REUSE-BASE: a PR that widens reuse.ignore never uses it for its own pro
 
 test('AC-REUSE-LATEST-FAIL by inputs: a failure later than the origin on the same inputs makes the check run again; a later green origin is reused', async t => {
   const p = inputsProject(t);
-  p.commit({ 'src/lib/x.ts': 'export const x = 2;\n' });
+  p.commit({ 'docs/notes.md': 'notes 1b\n' });
   assert.equal((await p.run()).code, 0);
   p.commit({ 'docs/notes.md': 'notes 2\n' });
   writeFileSync(p.flag, '');
@@ -218,9 +225,9 @@ test('AC-REUSE-LATEST-FAIL by inputs: a failure later than the origin on the sam
 });
 
 test('a symbolic link among the inputs: no reuse by inputs (its target may be ignored); the reuse at an identical tree stays', async t => {
-  const p = inputsProject(t);
-  symlinkSync('../../docs/notes.md', join(p.repo, 'src/lib/notes.md'));
-  p.commit({ 'src/lib/x.ts': 'export const x = 2;\n' });
+  // The link is on the base: the PR changes ignored files only (E1), the link alone refuses.
+  const p = inputsProject(t, { setup: repo => symlinkSync('../../docs/notes.md', join(repo, 'src/lib/notes.md')) });
+  p.commit({ 'docs/notes.md': 'notes 1b\n' });
   assert.equal((await p.run()).code, 0);
   p.commit({ 'docs/notes.md': 'notes 2\n' });
   const linked = await p.run(['--json']);
@@ -253,13 +260,15 @@ test('AC-REUSE-STACK: without stacks[].fingerprint, an origin on stack 2 is not 
   const f = fixture(t);
   const out = join(f.root, 'stacks.log');
   const lock2 = join(f.root, 'stack2.lock'); const lock3 = join(f.root, 'stack3.lock');
-  const gate = { id: 'integration', stage: 'full', passEnv: ['STACK', 'DB_PORT', 'LOCK_FILE'], lock: { file: lock2, fileEnv: 'LOCK_FILE' },
-    command: [process.execPath, '-e', `require("fs").appendFileSync(${JSON.stringify(out)}, process.env.STACK + ":" + process.env.DB_PORT + "\\n")`] };
+  const gate = { id: 'integration', stage: 'full', passEnv: ['MODE', 'DB_PORT', 'DB_URL', 'API', 'LOCK_FILE'], lock: { file: lock2, fileEnv: 'LOCK_FILE' },
+    command: [process.execPath, '-e', `require("fs").appendFileSync(${JSON.stringify(out)}, process.env.MODE + ":" + process.env.DB_PORT + "\\n")`] };
   const printer = text => [process.execPath, '-e', `process.stdout.write(${text})`];
-  const configure = fingerprints => {
+  // The addresses of each stack differ (ports, URLs, host:port, lock file); MODE says how the check runs, not where.
+  const address = port => ({ DB_PORT: String(port), DB_URL: `postgresql://postgres:postgres@127.0.0.1:${port}/postgres`, API: `127.0.0.1:${port + 1}` });
+  const configure = (fingerprints, modes = ['ci', 'ci']) => {
     write(f.repo, '.apv/config.json', { gates: [gate], stacks: [
-      { id: '2', lockFile: lock2, env: { STACK: '2', DB_PORT: '57322' }, ...(fingerprints ? { fingerprint: fingerprints[0] } : {}) },
-      { id: '3', lockFile: lock3, env: { STACK: '3', DB_PORT: '57422' }, ...(fingerprints ? { fingerprint: fingerprints[1] } : {}) }] });
+      { id: '2', lockFile: lock2, env: { MODE: modes[0], ...address(57322) }, ...(fingerprints ? { fingerprint: fingerprints[0] } : {}) },
+      { id: '3', lockFile: lock3, env: { MODE: modes[1], ...address(57422) }, ...(fingerprints ? { fingerprint: fingerprints[1] } : {}) }] });
     git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'piles');
   };
   const env = { APV_LOCK_DIR: join(f.root, 'locks'), APV_LOCK_POLL_MS: '20' };
@@ -270,7 +279,7 @@ test('AC-REUSE-STACK: without stacks[].fingerprint, an origin on stack 2 is not 
   configure(null);
   await run('2'); same();
   assert.deepEqual(statuses((await run('3')).json()), { integration: 'passed' });
-  assert.deepEqual(ran(), ['2:57322', '3:57422']);
+  assert.deepEqual(ran(), ['ci:57322', 'ci:57422']);
   same();
   assert.deepEqual(statuses((await run('3')).json()), { integration: 'cached' }, 'the same stack again: reused');
   // The same fingerprint on both stacks (the same images, the same CLI): reused from stack 2 for stack 3.
@@ -281,6 +290,10 @@ test('AC-REUSE-STACK: without stacks[].fingerprint, an origin on stack 2 is not 
   assert.equal(reused.json().reused[0].stack, '3', 'the stack it is reused for');
   assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD'])).code, 0);
   assert.equal(ran().length, 3);
+  // The same fingerprint, but a variable of the stack that is not an address differs (F3 of the relecture of A2): run again.
+  configure([printer('"supabase 2.117.0 postgres@sha256:aaa"'), printer('"supabase 2.117.0 postgres@sha256:aaa"')], ['ci', 'ci-lent']);
+  await run('2'); same();
+  assert.deepEqual(statuses((await run('3')).json()), { integration: 'passed' }, 'MODE=ci and MODE=ci-lent stay apart');
   // Another output (another image on stack 3): run again; a fingerprint that fails or prints nothing: never reused.
   configure([printer('"supabase 2.117.0 postgres@sha256:aaa"'), printer('"supabase 2.117.0 postgres@sha256:bbb"')]);
   await run('2'); same();
@@ -302,10 +315,19 @@ test('F-D1: the local state follows the .env* files at any depth (outside node_m
   assert.notEqual(localStateDigest(f.repo), ok);
   write(f.repo, 'apps/web/.env.local', 'OK\n');
   assert.equal(localStateDigest(f.repo), ok, 'content, not date');
-  // A nested worktree (.worktrees/x holds a .git file), node_modules and .git: never walked.
-  write(f.repo, '.worktrees/x/.git', 'gitdir: ailleurs\n');
+  // A worktree Git has registered (.worktrees/x), node_modules and .git: never walked.
+  git(f.repo, 'worktree', 'add', '-q', '--detach', join(f.repo, '.worktrees', 'x'), 'HEAD');
   write(f.repo, '.worktrees/x/.env', 'AUTRE=1\n');
   write(f.repo, 'apps/web/node_modules/pkg/.env', 'X=1\n');
+  assert.equal(localStateDigest(f.repo), ok);
+  // A folder that merely holds an entry named .git (F1 of the relecture of A2): walked like any other.
+  write(f.repo, 'gen/.git', '');
+  write(f.repo, 'gen/.env', 'AUTRE=1\n');
+  const fake = localStateDigest(f.repo);
+  assert.notEqual(fake, ok, 'gen/.env is seen whatever gen/.git says');
+  write(f.repo, 'gen/.env', 'AUTRE=2\n');
+  assert.notEqual(localStateDigest(f.repo), fake);
+  rmSync(join(f.repo, 'gen'), { recursive: true });
   assert.equal(localStateDigest(f.repo), ok);
   // node_modules with a record of npm, then the lock of the virtual store of pnpm.
   write(f.repo, 'node_modules/.package-lock.json', '{}');
@@ -336,6 +358,24 @@ test('F-D1 (att8): the files Git ignores in a copy (a generated folder) are part
   // A tracked file is never part of it: the tree is.
   write(f.repo, 'src/math.mjs', 'export const add = (a, b) => a + b;\n');
   assert.equal(await copyStateDigest(f.repo), v1);
+  // An entry named .git in the ignored folder (b5d of the relecture of A2, F1): the folder stays part of the state.
+  write(f.repo, '.svelte-kit/.git', '');
+  const marked = await copyStateDigest(f.repo);
+  write(f.repo, '.svelte-kit/types.txt', 'v2\n');
+  assert.notEqual(await copyStateDigest(f.repo), marked, '.svelte-kit/types.txt is seen whatever .svelte-kit/.git says');
+  write(f.repo, '.svelte-kit/types.txt', 'v1\n');
+  assert.equal(await copyStateDigest(f.repo), marked);
+  rmSync(join(f.repo, '.svelte-kit/.git'));
+  // A worktree Git has registered, under an ignored folder: another copy, never part of this one.
+  write(f.repo, '.gitignore', 'node_modules/\ndist/\n.svelte-kit/\n.worktrees/\n');
+  git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'ignore worktrees');
+  const before2 = await copyStateDigest(f.repo);
+  git(f.repo, 'worktree', 'add', '-q', '--detach', join(f.repo, '.worktrees', 'w'), 'HEAD');
+  write(f.repo, '.worktrees/w/.svelte-kit/types.txt', 'v9\n');
+  assert.equal(await copyStateDigest(f.repo), before2);
+  // A folder of .worktrees that is no registered worktree, even with a .git file: part of the state.
+  write(f.repo, '.worktrees/faux/.git', 'gitdir: ailleurs\n');
+  assert.notEqual(await copyStateDigest(f.repo), before2);
 });
 
 test('F-D1 (att8) through apv gates run: another generated folder, or dependencies without record, in a copy of the same tree: run again', async t => {
@@ -384,4 +424,82 @@ test('F-D2: a network audit or the history of Git behind sh -c "npm run x", --pr
   assert.deepEqual(read.test, ['vitest run', 'vitest']);
   assert.match(neverReused({ command: ['pnpm', '--filter', 'web', 'run', 'audit:deps'] }, read), /audit des dépendances qui lit le réseau .*« audit:deps »/);
   assert.equal(neverReused({ command: ['pnpm', '--filter', 'web', 'test'] }, read), null);
+});
+
+test('E1 (relecture sécurité de A2): a PR makes the check read a file the base declares ignored, then changes only that file: never reused by inputs, by run or by verify; a PR that changes ignored files only is', async t => {
+  const f = fixture(t, { files: { 'src/check.js': 'require("./lib.js");\n', 'src/lib.js': 'console.log("ok");\n', 'docs/data.json': '{"ok":true}\n' } });
+  write(f.repo, '.apv/config.json', { gates: [{ id: 'unit', command: [process.execPath, 'src/check.js'], reuse: { ignore: ['docs/**'] } }] });
+  git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'main : unit ignore docs');
+  const run = async () => { const r = await apv(f.repo, ['gates', 'run', '--against', 'main', '--json']); return { r, s: statuses(r.json()) }; };
+  // b1/b1r: commit C makes src/lib.js (not named by the command) read docs/data.json, and passes.
+  git(f.repo, 'checkout', '-q', '-b', 'feat');
+  write(f.repo, 'src/lib.js', 'const d = require("../docs/data.json"); if (!d.ok) { console.error("KO"); process.exit(1); } console.log("ok");\n');
+  git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'C : lit docs/data.json');
+  const first = await run();
+  assert.deepEqual(first.s, { unit: 'passed' });
+  const origin = JSON.parse(readFileSync(join(f.repo, '.apv', 'receipts', first.r.json().runId, 'unit.json'), 'utf8'));
+  // C2 changes docs/data.json only, and the check really fails there: run runs it.
+  write(f.repo, 'docs/data.json', '{"ok":false}\n');
+  git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'C2 : seul docs/data.json change');
+  const c2 = git(f.repo, 'rev-parse', 'HEAD');
+  const second = await run();
+  assert.deepEqual(second.s, { unit: 'failed' });
+  assert.match(second.r.stderr, /unit : non repris \(.*1 entrée\(s\) du contrôle changée\(s\) entre la base commune [0-9a-f]{12} et le commit [0-9a-f]{12} \(src\/lib\.js\)/);
+  assert.equal((await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--against', 'main'])).code, 1);
+  // A receipt cached by inputs at C2 from C, true to Git in every other respect (digests, files, globs), proves nothing: the
+  // very check verify runs refuses it.
+  const config = loadConfig(f.repo).config;
+  const ctx = reuseContext({ git: new Git(), repo: f.repo, commit: c2, configHash: gatesConfigHash(config), now: Date.now(), store: join(f.repo, '.git', 'apv', 'receipts'),
+    local: readLocal(f.repo), reference: 'main' });
+  const { inputsRuleOf } = await import('../dist/gates/reuse-proof.js');
+  const { compareInputs } = await import('../dist/gates/reuse.js');
+  const { rule } = await inputsRuleOf(ctx, config.gates[0]);
+  const compared = await compareInputs(f.repo, origin.candidateSha, c2, rule);
+  assert.equal(compared.from, compared.to, 'the inputs of C and C2 are the same under the globs of the base');
+  const cached = { ...origin, id: randomUUID(), candidateSha: c2, status: 'cached', reusedFrom: origin.id, startedAt: Date.now(), durationMs: 0,
+    reuse: { fromRun: origin.runId, fromCommit: origin.candidateSha, basis: 'inputs', inputsDigest: compared.to, ignoreDigest: sha256(JSON.stringify(['docs/**'])),
+      environment: origin.reuseIdentity, changed: compared.changed.length, files: compared.changed } };
+  assert.match((await checkReuse(ctx, config.gates[0], found(cached))).reason,
+    /reprise par entrées identiques \(basis inputs\) : 1 entrée\(s\) du contrôle changée\(s\) entre la base commune [0-9a-f]{12} \(main\) et le commit [0-9a-f]{12} \(src\/lib\.js\) : reuse\.ignore lu à la base ne vaut que pour le code de la base/);
+  // Accepted: a PR from main that changes ignored files only (the check of the base never reads them).
+  git(f.repo, 'checkout', '-q', '-b', 'docs-seuls', 'main');
+  write(f.repo, 'docs/data.json', '{"ok":"doc 1"}\n');
+  git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'docs 1');
+  assert.deepEqual((await run()).s, { unit: 'passed' });
+  write(f.repo, 'docs/data.json', '{"ok":"doc 2"}\n');
+  write(f.repo, 'docs/autre.md', 'autre\n');
+  git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'docs 2');
+  const docs = await run();
+  assert.deepEqual(docs.s, { unit: 'cached' });
+  assert.deepEqual(docs.r.json().reused.map(r => [r.basis, r.changed]), [['inputs', 2]]);
+  const verified = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--against', 'main']);
+  assert.equal(verified.code, 0, verified.stdout);
+});
+
+test('F2 (relecture sécurité de A2): git cat-file, rev-parse, diff <rev>, branch --contains and what reads objects or references are never reused; git on the tree alone is', () => {
+  for (const argv of [['sh', '-c', 'git rev-parse HEAD >/dev/null'], ['sh', '-c', 'git diff --quiet HEAD~1 HEAD'], ['sh', '-c', 'git cat-file -p HEAD | grep -q Signed-off-by'],
+    ['git', 'branch', '--contains', 'HEAD'], ['env', 'LC_ALL=C', 'git', 'log', '-1'], ['git', 'diff', 'main'], ['git', '-C', '.', 'diff', '--stat', 'origin/main...'],
+    ['git', 'show-ref'], ['git', 'tag', '--points-at', 'HEAD'], ['git', 'ls-tree', 'HEAD~1'], ['git', 'diff-tree', '-r', 'HEAD'], ['git', 'archive', 'HEAD'],
+    ['git', 'grep', '-n', 'TODO', 'HEAD~1'], ['git', 'grep', '-e', 'TODO', 'main'], ['git', 'status', '-sb'], ['git', 'status', '--branch', '--porcelain=v2'],
+    ['git', 'verify-commit', 'HEAD'], ['git', 'symbolic-ref', 'HEAD'], [process.execPath, '-e', 'require("child_process").execFileSync("git", ["rev-parse", "HEAD"])'],
+    ['sh', '-c', 'test "$(git cat-file -t HEAD)" = commit']]) {
+    assert.match(neverReused({ command: argv }) ?? '', /git sur l'historique, les objets ou les références/, argv.join(' '));
+  }
+  for (const argv of [['git', 'diff', '--check'], ['git', 'diff', '--exit-code', '--', 'dist'], ['git', '--no-pager', 'diff', '--quiet'], ['git', 'grep', '-n', 'TODO'],
+    ['git', 'grep', '-e', 'TODO', '--', 'src'], ['git', 'status', '--porcelain'], ['git', 'ls-files', '--others', '--exclude-standard'], ['sh', '-c', 'git diff --exit-code && npm test']]) {
+    assert.equal(neverReused({ command: argv }), null, argv.join(' '));
+  }
+});
+
+test('F3 (relecture sécurité de A2): with a fingerprint, only the addresses proper to a stack are normalized; any other value stays in the identity', async () => {
+  const { stackAddress } = await import('../dist/gates/run.js');
+  const stack = { config: { id: '2', lockFile: '/x/2.lock', ports: [54321] }, lockFile: '/x/2.lock' };
+  for (const [name, value, expected] of [
+    ['DB_PORT', '57322', '{{port}}'], ['PORTS', '3000', '{{port}}'], ['SUPA', '54321', '{{port}}'], ['LOCK_FILE', '/x/2.lock', '{{verrou de la pile}}'],
+    ['DB_URL', 'postgresql://postgres:pw@127.0.0.1:57322/postgres?ssl=0', 'postgresql://postgres:pw@127.0.0.1:{{port}}/postgres?ssl=0'],
+    ['API_URL', 'http://[::1]:54321', 'http://[::1]:{{port}}'], ['API', 'localhost:54331', 'localhost:{{port}}'],
+    ['STACK', '2', '2'], ['MODE', 'ci', 'ci'], ['PROJECT', 'suivie-2', 'suivie-2'], ['DB_URL2', 'postgresql://postgres@127.0.0.1/db2', 'postgresql://postgres@127.0.0.1/db2'],
+    ['FLAG', 'true', 'true'], ['N', '57322', '57322']]) {
+    assert.equal(stackAddress(name, value, stack), expected, `${name}=${value}`);
+  }
 });
