@@ -16,11 +16,11 @@ export interface RuleOutcome {
     problems: string[];
     /** What to do to pass, in order; the last line is the only waiver there is. */
     todo: string[];
-    /** The operator's own waiver, when there is one: when he typed it and his reason. */
-    waiver: {
-        at: string;
-        reason: string;
-    } | null;
+    /**
+     * The operator's own waiver, when there is one: when he typed it and his reason; `carried`, a waiver typed for an
+     * earlier commit of the branch and carried over a delta outside its perimeter (delta.ts): that commit, his words, why.
+     */
+    waiver: Waiver | null;
     /** The rule `relecture` only: each domain the plan retains, recorded, waived for that domain alone, or missing. */
     domains?: DomainReview[];
 }
@@ -32,10 +32,16 @@ export interface DomainReview {
     domain: ReviewDomainName;
     status: 'recorded' | 'waived' | 'missing';
     detail: string;
-    waiver: {
-        at: string;
-        reason: string;
-    } | null;
+    waiver: Waiver | null;
+}
+export interface Waiver {
+    at: string;
+    reason: string;
+    carried?: {
+        from: string;
+        words: string;
+        why: string;
+    };
 }
 export interface RulesReport {
     commit: string;

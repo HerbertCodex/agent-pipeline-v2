@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import { posix } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
-import { loadConfigAtCommit } from '../config/load.js';
+import { CONFIG_FILE, LEGACY_CONFIG_FILE, loadConfigAtCommit } from '../config/load.js';
 import { loadDbConfigAtCommit } from '../db/config.js';
 import { designDir } from '../design/config.js';
-import { applyBaseGates } from '../gates/base-gates.js';
+import { applyBaseGates, enforceBaseGates } from '../gates/base-gates.js';
 import { verifyGates } from '../gates/verify.js';
 import { planScope } from '../gates/proof-scope.js';
 import { stageGates } from '../gates/run.js';
@@ -13,6 +13,7 @@ import { loadDecisionLedger } from '../lifecycle/decisions.js';
 import { sensitivePaths } from '../policy/policy.js';
 import { ALWAYS_REVIEWED, reviewPlanSettings } from '../review/config.js';
 import { planReviews } from '../review/plan.js';
+import { LEDGER_FILES } from '../review/risk.js';
 import { DEFAULT_REUSE_IGNORE, UI_EXTENSIONS, extensionOf, globMatcher } from '../reuse/config.js';
 import { WEB_DEPENDENCIES } from '../reuse/detect.js';
 import { DELTA_DIFF, DELTA_GIT, gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
@@ -21,7 +22,7 @@ import { MERGE_RULES, RULE_TITLES, rulesSettings } from './config.js';
 import { TEMPLATE_WAIVER_NOTE, anchorKey, readOperatorMessages, templateWaiver, waiverFor, waiverSentence } from './operator.js';
 import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
-import { reviewChain } from './delta.js';
+import { NEVER_CARRIED, reviewChain } from './delta.js';
 import { computedLoads } from './loads.js';
 import { deltaFiles } from './carry.js';
 import { LANE_NAME, docsOnlyLane, laneLines } from './docs-only.js';
@@ -608,7 +609,10 @@ export async function checkMergeRules(input) {
     // (delta.ts, docs/ACCELERATION-LOTS.md, part B). The perimeter is the plan of the reviews of each step, read with the
     // settings of the base, as for the change itself.
     const deltaPlans = new Map();
-    const touches = (domain, span) => {
+    const touches = (perimeter, span) => {
+        if (perimeter === 'maquette' || perimeter === 'controles')
+            return pathReasons(perimeter, touchedFiles(repo, span.from, span.to));
+        const domain = perimeter;
         const key = `${span.from}..${span.to}`;
         if (!deltaPlans.has(key)) {
             try {
@@ -626,7 +630,18 @@ export async function checkMergeRules(input) {
             return [`${domain} retenue par le plan des revues : ${decision.reason.slice(0, 160)}${decision.files.length ? ` (${decision.files.slice(0, 3).join(', ')}${decision.fileCount > 3 ? ', ...' : ''})` : ''}`];
         return [];
     };
-    const chainReviews = reviewChain({ repo, common, target: resolveCommit(repo, input.target), touches }, sha);
+    // The perimeters of paths of the waivers carried (delta.ts, WAIVER_PERIMETERS), read with the settings of the base.
+    const pathReasons = (perimeter, files) => files.flatMap(f => {
+        if (perimeter === 'controles')
+            return f === CONFIG_FILE || f === LEGACY_CONFIG_FILE || f === 'package.json' ? [`${f} : configuration des contrôles ou dépendances du projet`] : [];
+        if (isScreen(f, screenMatch))
+            return [`${f} : écran`];
+        if (f === baseDesign || f.startsWith(`${baseDesign}/`))
+            return [`${f} : dossier des maquettes`];
+        return LEDGER_FILES.includes(f) ? [`${f} : registre des décisions`] : [];
+    });
+    const targetSha = resolveCommit(repo, input.target);
+    const chainReviews = reviewChain({ repo, common, target: targetSha, touches }, sha);
     const pick = (domain) => {
         const own = chainReviews.resolve(sha, domain);
         return own.found ? own : chainReviews.reported(domain) ?? own;
@@ -638,6 +653,72 @@ export async function checkMergeRules(input) {
         p.how === 'reported' && p.reported ? `relecture ${domain} reportée de ${short(p.from)} (delta sans fichier de son périmètre : ${fileList(p.reported.files)})` : '',
         p.delta ? `relecture du delta depuis ${short(p.delta.from)} (${p.delta.files} fichier${p.delta.files > 1 ? 's' : ''})` : '',
     ].filter(Boolean).join(', ');
+    // A waiver of the operator for this commit, or one he typed for an earlier commit of the branch, carried over a delta
+    // outside its perimeter (closed list: never securite, the whole rule relecture, preuve, instable, captures nor
+    // relecture:fidelite). His words, their
+    // date, their commit and why are said. `notCarried` keeps why one was not carried, for the refusal.
+    const notCarried = new Map();
+    const waiverOf = (rule) => {
+        const own = waiverFor(messages, rule, sha);
+        if (own)
+            return { at: own.message.at, reason: own.reason };
+        if (NEVER_CARRIED.includes(rule)) {
+            // captures, relecture:fidelite (third security review of #141): the waiver of an earlier commit is said, never carried.
+            const earlier = chainReviews.chain().find(node => waiverFor(messages, rule, node.commit));
+            if (earlier)
+                notCarried.set(rule, `la dérogation ${rule} de ${short(earlier.commit)} n'est jamais reportée (elle reviendra avec l'empreinte du build)`);
+            return null;
+        }
+        const carried = chainReviews.carriedWaiver(rule, commit => waiverFor(messages, rule, commit));
+        if (!carried)
+            return null;
+        if (!carried.waiver) {
+            notCarried.set(rule, `la dérogation ${rule} de ${short(carried.from)} n'est pas reportée, le delta touche son périmètre : ${carried.reasons.slice(0, 3).join(' ; ')}`);
+            return null;
+        }
+        const differ = rule === 'controles' ? refusedGatesDiffer(carried.from) : null;
+        if (differ) {
+            notCarried.set(rule, `la dérogation controles de ${short(carried.from)} n'est pas reportée, les contrôles refusés ne sont pas ceux qu'elle levait : ${differ}`);
+            return null;
+        }
+        return { at: carried.waiver.message.at, reason: carried.waiver.reason,
+            carried: { from: carried.from, words: carried.waiver.line, why: `delta sans fichier de son périmètre : ${fileList(carried.files)}` } };
+    };
+    // controles is carried only when the checks refused at the head are among those refused at C, with the same web
+    // detection (security review of #142, A2): the rule reads isWebAt (an interface file anywhere, a web dependency) and
+    // the configuration of the checks at each commit, not only the paths of its perimeter. C is read as the rule reads the
+    // head: its own configuration with the mandatory checks of its base kept (enforceBaseGates), the settings of the base.
+    const refusedGatesAt = (commit) => {
+        const web = isWebAt(repo, commit);
+        const needed = web ? settings.requiredGates : settings.requiredGates.filter(g => g.source === 'config');
+        let config = effective;
+        if (commit !== sha) {
+            const own = loadConfigAtCommit(repo, commit).config;
+            const fork = targetSha ? gitRead(repo, ['merge-base', targetSha, commit]) : null;
+            const atFork = fork ? loadConfigAtCommit(repo, fork) : null;
+            config = atFork?.file ? enforceBaseGates(own, atFork.config).config : own;
+        }
+        return { web, missing: new Set(missingRequiredGates(config, needed).map(m => `${m.id} (${m.problem === 'absent' ? 'absent' : 'non obligatoire'})`)) };
+    };
+    const refusedGatesDiffer = (from) => {
+        let atC;
+        let atHead;
+        try {
+            atC = refusedGatesAt(from);
+            atHead = refusedGatesAt(sha);
+        }
+        catch (error) {
+            return `configuration des contrôles illisible (${errorMessage(error).slice(0, 160)})`;
+        }
+        const causes = [];
+        if (atC.web !== atHead.web)
+            causes.push(atHead.web ? `projet web à ${short(sha)}, pas à ${short(from)}` : `projet web à ${short(from)}, plus à ${short(sha)}`);
+        const added = [...atHead.missing].filter(m => !atC.missing.has(m));
+        if (added.length)
+            causes.push(`refusés à ${short(sha)} et pas à ${short(from)} : ${added.join(', ')}`);
+        return causes.length ? causes.join(' ; ') : null;
+    };
+    const carriedSaid = (rule, w) => (w.carried ? ` ; dérogation ${rule} reportée de ${short(w.carried.from)} : « ${w.carried.words} » (${w.at}, ${w.carried.why})` : '');
     const reviewProblems = [];
     const reviewTodo = [];
     const domainStates = [];
@@ -659,11 +740,14 @@ export async function checkMergeRules(input) {
             domainStates.push({ domain, status: 'recorded', detail: `${found.record.reviewer}, critique 0, haut 0, moyen ${f.medium}, bas ${f.low}${note ? `, ${note}` : ''}`, waiver: null });
             continue;
         }
-        const waiver = waiverFor(messages, `relecture:${domain}`, sha);
+        const waiver = waiverOf(`relecture:${domain}`);
         if (waiver) {
-            domainStates.push({ domain, status: 'waived', detail: problem, waiver: { at: waiver.message.at, reason: waiver.reason } });
+            domainStates.push({ domain, status: 'waived', detail: `${problem}${carriedSaid(`relecture:${domain}`, waiver)}`, waiver });
             continue;
         }
+        const kept = notCarried.get(`relecture:${domain}`);
+        if (kept)
+            reviewTodo.push(`${domain} : ${kept}.`);
         domainStates.push({ domain, status: 'missing', detail: problem, waiver: null });
         reviewProblems.push(`${domain} : ${problem}`);
         // Where a review of the delta alone may start: the review not reported, or the nearest usable one of the branch.
@@ -765,12 +849,16 @@ export async function checkMergeRules(input) {
     for (const r of rules) {
         if (r.status !== 'refused')
             continue;
-        const waiver = waiverFor(messages, r.rule, sha);
+        const waiver = waiverOf(r.rule);
         if (waiver) {
             r.status = 'waived';
-            r.waiver = { at: waiver.message.at, reason: waiver.reason };
+            r.waiver = waiver;
+            r.detail += carriedSaid(r.rule, waiver);
         }
         else {
+            const kept = notCarried.get(r.rule);
+            if (kept)
+                r.todo.push(`${kept}.`);
             if (templateWaiver(messages, r.rule, sha))
                 r.todo.push(TEMPLATE_WAIVER_NOTE);
             r.todo.push(`Sans correction, seul l'opérateur peut lever ce refus, en tapant lui-même dans la session : « ${waiverSentence(r.rule, sha)} ».`);
@@ -799,7 +887,7 @@ export function rulesLines(report, indent = '') {
             for (const p of r.problems)
                 lines.push(`${indent}    ${p}`);
         if (r.waiver)
-            lines.push(`${indent}    dérogation de l'opérateur (${r.waiver.at}) : ${r.waiver.reason}`);
+            lines.push(`${indent}    dérogation de l'opérateur (${r.waiver.at}) : ${r.waiver.reason}${r.waiver.carried ? ` ; dérogation ${r.rule} reportée de ${short(r.waiver.carried.from)} (${r.waiver.carried.why})` : ''}`);
         if (r.status === 'refused')
             for (const t of r.todo)
                 lines.push(`${indent}    à faire : ${t}`);

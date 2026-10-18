@@ -600,7 +600,7 @@ export function waiverSentence(rule: WaiverTarget, sha: string): string {
  * caractères du commit au moins> : <raison> ». Never for another commit, never « dérogation » alone, never without a reason.
  * `relecture:<domaine>` is the waiver of that review only: it never waives the rule `relecture` whole, nor another domain.
  */
-export function waiverFor(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): { message: OperatorMessage; reason: string } | null {
+export function waiverFor(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): { message: OperatorMessage; reason: string; line: string } | null {
   return waiverLines(messages, rule, sha).find(w => !w.template && w.reason.length >= MIN_WAIVER_REASON) ?? null;
 }
 
@@ -617,15 +617,15 @@ export function templateWaiver(messages: readonly OperatorMessage[], rule: Waive
 }
 
 /** The waiver lines of `rule` for `sha`, newest first, with their reason and whether it is the template of the tool. */
-function waiverLines(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): { message: OperatorMessage; reason: string; template: boolean }[] {
+function waiverLines(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): { message: OperatorMessage; reason: string; template: boolean; line: string }[] {
   const pattern = new RegExp(`d[ée]rogation\\s+${rule}\\s+(?:pour\\s+)?([0-9a-f]{${WAIVER_SHA},64})\\s*[:,-]?\\s*(.*)`, 'i');
-  const out: { message: OperatorMessage; reason: string; template: boolean }[] = [];
+  const out: { message: OperatorMessage; reason: string; template: boolean; line: string }[] = [];
   for (const message of [...messages].reverse()) {
     for (const line of message.waivers) {
       const m = pattern.exec(line.normalize('NFC'));
       if (!m || !sha.toLowerCase().startsWith(m[1]!.toLowerCase())) continue;
       const reason = m[2]!.trim();
-      out.push({ message, reason, template: TEMPLATE_REASON.test(reason) });
+      out.push({ message, reason, template: TEMPLATE_REASON.test(reason), line: line.normalize('NFC').trim() });
     }
   }
   return out;
