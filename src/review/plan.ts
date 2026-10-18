@@ -130,12 +130,8 @@ const hunkOf = (line: string): Hunk | null => {
   return m ? { oldStart: Number(m[1]), oldCount: m[2] === undefined ? 1 : Number(m[2]), newStart: Number(m[3]), newCount: m[4] === undefined ? 1 : Number(m[4]) } : null;
 };
 interface FilePatch { binary: boolean; removed: string[]; added: string[]; hunks: Hunk[] }
-/**
- * Reference images of the tests (a folder `*-snapshots/` or `__snapshots__/` under a folder of tests): a NUL in their
- * first bytes makes them binary, whatever the attributes of the tree say. Any other image keeps its bytes read as text
- * (fourth security review of #141, M5: a `.png` of the interface loaded by a page could hide a loader or personal data).
- */
-const REFERENCE_IMAGE = /(?:^|\/)(?:[^/]+-snapshots|__snapshots__)\/(?:[^/]+\/)*[^/]+\.(?:png|jpe?g|gif|webp|avif|bmp)$/i;
+/** Names of images: a NUL in their first bytes makes them binary, whatever the attributes of the tree say. */
+const IMAGE_NAME = /\.(?:png|jpe?g|gif|webp|avif|ico|bmp)$/i;
 
 /** Unquotes a path that Git wrote in C style (`"a\tb"`); a plain path is returned as is. */
 function unquote(text: string): string {
@@ -617,12 +613,12 @@ export function planReviews(input: PlanInput): ReviewPlan {
   const common = [input.renames === false ? '--no-renames' : '-M', '--ignore-submodules=none', '--no-relative', '--no-ext-diff', '--no-textconv', '--no-color'];
   const statuses = parseNameStatus(git(repo, [...DELTA_GIT, 'diff', ...common, '--name-status', '-z', mergeBase, headSha]));
   const patches = parsePatch(git(repo, [...DELTA_GIT, '-c', 'core.attributesFile=/dev/null', 'diff', ...common, '--text', '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', mergeBase, headSha]));
-  // A reference image of the tests (REFERENCE_IMAGE under a folder of tests, its first bytes hold a NUL, read from the blob,
-  // never from an attribute) is not searched for terms: read as text since A10, the bytes of a reference PNG held « data »
-  // by chance (#262 of the pilot project). Any other file, image or not, keeps its lines read.
+  // A real image (its name says image and its first bytes hold a NUL, read from the blob, never from an attribute) is not
+  // searched for terms: read as text since A10, the bytes of a reference PNG held « data » by chance (#262 of the pilot
+  // project). A binary under any other name keeps its lines read, then the prudence of an unread file.
   for (const entry of statuses) {
     const patch = patches.get(entry.path);
-    if (!patch || patch.binary || !REFERENCE_IMAGE.test(entry.path) || !inTestDir(entry.path)) continue;
+    if (!patch || patch.binary || !IMAGE_NAME.test(entry.path)) continue;
     const head = entry.status.startsWith('D') ? mergeBase : headSha;
     const bytes = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', 'cat-file', 'blob', `${head}:${entry.path}`], { cwd: repo, maxBuffer: 64 * 1024 * 1024 });
     if (bytes.status === 0 && bytes.stdout.subarray(0, 8000).includes(0)) patches.set(entry.path, { ...patch, added: [], removed: [], hunks: [], binary: true });

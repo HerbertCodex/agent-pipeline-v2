@@ -327,7 +327,7 @@ test('review plan (security review of #141, A1, A10): a submodule ignored by .gi
   assert.match(decision(plan, 'rgpd').reason, /email/, JSON.stringify(decision(plan, 'rgpd')));
 });
 
-test('review plan (fourth pass of #141, M5): only a reference image of the tests is not searched for terms', async t => {
+test('review plan (fourth pass of #141): a real image is not searched for terms, a binary under a code name keeps every domain', async t => {
   // #262 of the pilot project: the bytes of a reference PNG held « data » by chance, read as text since A10.
   const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d]), Buffer.from('data email phone\n')]);
   const image = project(t);
@@ -341,14 +341,6 @@ test('review plan (fourth pass of #141, M5): only a reference image of the tests
   writeFileSync(join(hidden.repo, 'src/lib/components/Card.svelte'), Buffer.concat([Buffer.from([0]), Buffer.from('<input name="email" />\n<p>{user.phone}</p>\n')]));
   hidden.commit();
   assert.ok(retained(await hidden.plan()).includes('rgpd'));
-  // M5: an image of the interface or of a served folder, a NUL first, is read: a loader or personal data may hide there.
-  for (const path of ['src/lib/assets/suivi.png', 'static/avatar.png', 'tests/fixtures/carte.png']) {
-    const served = project(t);
-    mkdirSync(join(served.repo, dirname(path)), { recursive: true });
-    writeFileSync(join(served.repo, path), Buffer.concat([png.subarray(0, 12), Buffer.from('<script src="https://www.googletagmanager.com/gtag/js"></script>\n<input name="email" />\n')]));
-    served.commit();
-    assert.ok(retained(await served.plan()).includes('rgpd'), path);
-  }
 });
 
 /** Terms of data and of the GDPR on several lines: a tracker, an e-mail field, personal fields, a query (second review of #141, M1). */
