@@ -16,7 +16,8 @@ import { suiteSettings } from '../config/load.js';
 import { PipelineError } from '../domain/errors.js';
 import { matches } from '../policy/policy.js';
 import { WEB_RECORD, runsWebAudit } from '../web/impact.js';
-import { RECEIPTS_DIR, publishRun, pruneStore, receiptRetention, sharedStore } from './store.js';
+import { RECEIPTS_DIR, pruneStore, receiptRetention, sharedStore, syncRun } from './store.js';
+import { localStateDigest } from './reuse.js';
 import { readPreviewState } from '../preview/state.js';
 import { repositoryWorktrees } from '../execution/procs.js';
 import { flockFree, flockHeldByAncestor, judgeStack, markStacksUsed, readStackContainers, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
@@ -403,6 +404,29 @@ export async function runGates(options) {
     // the ports and the preparations.
     const environmentOf = (gate, stack) => ({ ...environment([...options.config.environment.passEnv, ...gate.passEnv], source),
         ...(stack ? stackVariables(stack, gate, options.config.environment.passEnv) : {}) });
+    /** batch.setup must leave the tree of the copy as it was: what it writes is ignored by Git, or the suite is refused. */
+    const setupKeptTree = async () => {
+        const now = await treeStatus();
+        if (now === status)
+            return;
+        const was = new Set(statusLines(status));
+        const added = statusLines(now).filter(l => !was.has(l));
+        throw new PipelineError('GATE_SETUP', `Suite complète refusée, rien n'a été exécuté : batch.setup a modifié l'arbre de la copie (fichiers non ignorés : ${added.slice(0, 10).join(', ') || 'changement de git status'}). ` +
+            'Ignorer ce que la préparation écrit (.gitignore), puis relancer.');
+    };
+    // `apv stack batch`: its copy is a fresh worktree, prepared by batch.setup BEFORE any reuse is decided (relecture sécurité
+    // de A1, M2), so that the local state below is the one of the prepared copy: a copy never prepared never reuses an origin
+    // that ran with dependencies installed, and an origin whose dependencies were stale is not the state a fresh install gives.
+    let setup = null;
+    const preparedFirst = options.batchSetup === true && options.config.batch?.setup !== undefined && options.config.batch.setup.length > 0;
+    if (preparedFirst) {
+        setup = await prepareMainCopy({ repo, config: options.config, env: source, signal: options.signal, log, always: 'copie neuve du lot' });
+        if (setup?.status === 'done')
+            await setupKeptTree();
+    }
+    // What Git ignores and the checks still run with in this copy (node_modules, .env*): part of the identity of the environment
+    // of each receipt, so a check is reused only from an origin that ran with the same local state (src/gates/reuse.ts).
+    const localState = localStateDigest(repo);
     const reuse = new Map();
     let reuseScan = null;
     if (!dirty && replay !== 'all') {
@@ -421,7 +445,7 @@ export async function runGates(options) {
                 try {
                     const env = environmentOf(gate, stack);
                     const executable = await executableIdentity(commands.get(gate.id)[0], repo, env);
-                    environments.push({ hash: environmentIdentity(ENVIRONMENT_ID, env, { executable }), stack: stack?.id ?? null, executable });
+                    environments.push({ hash: environmentIdentity(ENVIRONMENT_ID, env, { executable, local: localState }), stack: stack?.id ?? null, executable });
                 }
                 catch { /* No environment to compare (executable or env file unreadable): it runs, and says why. */ }
             }
@@ -483,7 +507,6 @@ export async function runGates(options) {
         log(`${measuring.join(', ')} : lance apv web audit ; la suite tient toutes les places de la file (aucune suite ne tourne pendant la mesure).`);
     if (suite && stacks.length && !checkedStacks.length)
         log(`Aucun contrôle de la suite ne verrouille une pile déclarée (${stacks.map(s => s.id).join(', ')}) : aucune pile vérifiée, ni son verrou ni ses ports.`);
-    let setup = null;
     // The queue of the full suites, then the load: every timeout of a check starts after them.
     let queue = null;
     // Set once the run has an id: the end of a full suite stops what it started, even when it is interrupted.
@@ -595,22 +618,12 @@ export async function runGates(options) {
             }
         }
         // The copy of the suite prepared like its copies on other stacks (a package-lock.json without node_modules runs
-        // batch.setup; `apv stack batch`: always, its copy is a fresh worktree): under its place in the queue and after every
-        // refusal, so that a refused suite has run nothing; never when no check runs (every one reused).
-        if (suite || (options.batchSetup && executing.length > 0)) {
+        // batch.setup): under its place in the queue and after every refusal, so that a refused suite has run nothing; never
+        // when no check runs (every one reused). The copy of a batch with a batch.setup was prepared above, before the reuses.
+        if (!preparedFirst && (suite || (options.batchSetup && executing.length > 0))) {
             setup = await prepareMainCopy({ repo, config: options.config, env: source, signal: options.signal, log, ...(options.batchSetup ? { always: 'copie neuve du lot' } : {}) });
-            if (setup?.status === 'done') {
-                const now = await treeStatus();
-                if (now !== status) {
-                    const was = new Set(statusLines(status));
-                    const added = statusLines(now).filter(l => !was.has(l));
-                    throw new PipelineError('GATE_SETUP', `Suite complète refusée, rien n'a été exécuté : batch.setup a modifié l'arbre de la copie (fichiers non ignorés : ${added.slice(0, 10).join(', ') || 'changement de git status'}). ` +
-                        'Ignorer ce que la préparation écrit (.gitignore), puis relancer.');
-                }
-            }
-        }
-        else if (options.batchSetup && options.config.batch?.setup && reuse.size) {
-            log(`Copie du lot non préparée (batch.setup sauté) : aucun contrôle à exécuter, tous réutilisés d'un arbre identique.`);
+            if (setup?.status === 'done')
+                await setupKeptTree();
         }
         const runId = `${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}-${randomUUID().slice(0, 8)}`;
         started = runId;
@@ -623,6 +636,25 @@ export async function runGates(options) {
         const ignore = join(repo, RECEIPTS_DIR, '.gitignore');
         if (!existsSync(ignore))
             writeFileSync(ignore, '*\n');
+        // Each receipt visible in the shared store as soon as it is written (relecture sécurité de A1, F2): the run first, with a
+        // provisional summary (commit, base, tree state), then every receipt, a failure in progress included, so that a reuse in
+        // another copy of the same tree sees it. The full summary replaces it at the end (shareRun). A failure to publish is said
+        // once, never fatal: shareRun publishes again at the end and reports.
+        const store = options.share === false ? null : await sharedStore(git, repo).catch(() => null);
+        let publishFailed = false;
+        const publish = () => {
+            if (!store || publishFailed)
+                return;
+            try {
+                syncRun(store, directory, runId, candidateSha, repo);
+            }
+            catch (error) {
+                publishFailed = true;
+                log(`Publication en cours d'exécution dans le magasin partagé en échec (${errorMessage(error)}) : reprise à la fin de l'exécution.`);
+            }
+        };
+        writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: null, inProgress: true }, null, 2) + '\n');
+        publish();
         // The declared test stacks: a check under the lock of one of them notes its use (apv stacks idle-stop reads it).
         // A suite spread over stacks: checks dealt to the stacks, the copies of the other stacks made now.
         if (options.stacks && common) {
@@ -677,6 +709,7 @@ export async function runGates(options) {
                 ...(earlyRun ? { early: { gate: earlyRun.gate, id: earlyRun.id, required: earlyRun.required, reason: earlyRun.reason, files: earlyRun.files } } : {}),
                 ...(decision ? { scope: scopeRecord(decision) } : {}), ...(near ? { nearTimeout: near } : {}) });
             writeFileSync(join(directory, `${valid.gateId}.json`), JSON.stringify(valid, null, 2) + '\n');
+            publish();
             return valid;
         };
         // The receipts `cached` this run wrote after checking their reuse (findOrigin, checkReuse): the only ones counted as passed.
@@ -716,7 +749,8 @@ export async function runGates(options) {
                 executable = await executableIdentity(command[0], workspace, env);
             }
             catch { /* reported as spawn_error below */ }
-            const environmentHash = environmentIdentity(ENVIRONMENT_ID, env, { executable });
+            // The local state of the copy it runs in (this one, or the copy of its stack), measured as it starts.
+            const environmentHash = environmentIdentity(ENVIRONMENT_ID, env, { executable, local: localStateDigest(workspace) });
             const key = proofKey({ repository: repo, baseSha: baseSha ?? candidateSha, candidateSha, taskHash: hash(null), configHash, environmentHash,
                 workspace, gate: { ...gate, command }, dependencyKeys: gate.dependsOn.map(d => keys.get(d) ?? hash(null)),
                 executable: executable ?? { path: command[0], sha256: hash('unresolved') } });
@@ -1014,15 +1048,16 @@ export async function runGates(options) {
     }
 }
 /**
- * Copies a finished run into the shared store of the repository, so that it survives its worktree, then applies
- * the retention of the store. A failure is reported, never fatal: the run and its local receipts stand.
+ * Brings the copy of a finished run in the shared store of the repository up to date (its full summary, every receipt;
+ * published as it went, syncRun), so that it survives its worktree, then applies the retention of the store. A failure
+ * is reported, never fatal: the run and its local receipts stand.
  */
 async function shareRun(git, repo, directory, runId, candidateSha, config) {
     let target;
     let store;
     try {
         store = await sharedStore(git, repo);
-        target = publishRun(store, directory, runId, candidateSha, repo);
+        target = syncRun(store, directory, runId, candidateSha, repo);
     }
     catch (error) {
         return { directory: null, error: errorMessage(error), pruned: null };

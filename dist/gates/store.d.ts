@@ -48,6 +48,15 @@ export declare function manifestOf(dir: string, runId: string, candidateSha: str
  * Returns the directory of the copy.
  */
 export declare function publishRun(store: string, local: string, runId: string, candidateSha: string, worktree: string): string;
+/**
+ * Brings the copy of a run in the shared store up to date with its directory `local` while the run goes on (relecture
+ * sécurité de A1, F2): each receipt is visible to the other copies of the repository as soon as it is written, a failure
+ * in progress included. The first call publishes the run whole (publishRun); each later one writes the new or changed
+ * files (temporary file renamed over its name), then the manifest (same), last. Between the two a reader finds the run
+ * not intact (files and manifest disagree) and refuses it, never a receipt half written: a reuse is then refused, not
+ * granted. Files are only added or replaced, never removed. Returns the directory of the copy.
+ */
+export declare function syncRun(store: string, local: string, runId: string, candidateSha: string, worktree: string): string;
 export type SharedRun = {
     runId: string;
     dir: string;

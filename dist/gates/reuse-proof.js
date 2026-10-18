@@ -117,13 +117,106 @@ export const latest = (a, b) => b.receipt.startedAt > a.receipt.startedAt || (b.
 export function runsDast(argv) {
     return argv.some((a, i) => a === 'dast' && (argv[i + 1] === 'run' || /(?:^|[\\/])(?:apv|cli\.m?js)$/.test(argv[i - 1] ?? '')));
 }
+/** A package manager: its `audit` and `outdated` read the advisories and the versions of the registry, which change with time. */
+const PACKAGE_MANAGER = /(?:^|[\\/])(?:npm|pnpm|yarn|bun|cnpm)(?:\.(?:c?js|cmd|exe))?$/;
+const NETWORK_SUBCOMMANDS = new Set(['audit', 'outdated']);
+/** Tools that read an advisory database over the network. */
+const NETWORK_TOOL = /(?:^|[\\/])(?:audit-ci|better-npm-audit|osv-scanner|snyk)(?:\.(?:c?js|cmd|exe))?$/;
+/**
+ * Whether an argv runs a dependency audit that reads the network (`npm audit`, `pnpm audit`, `yarn audit`, `yarn npm audit`,
+ * `bun audit`, `outdated`, or `audit-ci`, `better-npm-audit`, `osv-scanner`, `snyk`): its result changes with the advisory
+ * database, never with the tree alone (relecture sécurité de A1, M3).
+ */
+export function runsNetworkAudit(argv) {
+    return argv.some((a, i) => NETWORK_TOOL.test(a) || (PACKAGE_MANAGER.test(a) && argv.slice(i + 1).some(b => NETWORK_SUBCOMMANDS.has(b))));
+}
+/**
+ * The same states outside the tree, found in the text of a script (an inline script `node -e`, `sh -c`, or a script of
+ * package.json): a network audit, `apv dast`, `apv web audit`, or Git asked for the history (log, show, describe...), which
+ * differs between two commits of the same tree. A safety net, never exhaustive: a script file that reads them is not seen,
+ * the project declares such a check `reuse: false`.
+ */
+const TEXT_RULES = [
+    [/\b(?:npm|pnpm|yarn|bun|cnpm)\b[^;&|\n]*?\s(?:audit|outdated)(?![\w:.-])/, 'un audit des dépendances qui lit le réseau (npm audit ou équivalent), dont la base d\'avis change avec le temps'],
+    [/\b(?:audit-ci|better-npm-audit|osv-scanner|snyk)\b/, 'un audit des dépendances qui lit le réseau (npm audit ou équivalent), dont la base d\'avis change avec le temps'],
+    [/\bapv\b[^;&|\n]*?\sdast\b/, 'apv dast, qui scanne un état extérieur au dépôt'],
+    [/\bapv\b[^;&|\n]*?\sweb\s+audit\b/, 'apv web audit, qui mesure un état extérieur au dépôt'],
+    [/\bgit(?:\.exe)?['"`]?[\s,]*\[?[\s'"`]*(?:log|shortlog|show|rev-list|describe|reflog|whatchanged|blame|merge-base|cherry|notes)\b/,
+        'git sur l\'historique (log, show, describe...), qui diffère entre deux commits du même arbre'],
+];
+const RUN_SUBCOMMANDS = new Set(['run', 'run-script', 'rum', 'urn']);
+const LIFECYCLE = new Map([['test', 'test'], ['t', 'test'], ['tst', 'test'], ['start', 'start'], ['stop', 'stop'], ['restart', 'restart']]);
+/** Depth of the scripts of package.json followed from a command (a script that runs another one...). */
+const SCRIPT_DEPTH = 6;
+/** The scripts of package.json an argv runs through its package manager (`npm run x`, `npm test`, `pnpm x`, `yarn x`), pre and post included. */
+function scriptsRun(argv, scripts) {
+    const at = argv.findIndex(a => PACKAGE_MANAGER.test(a));
+    if (at < 0)
+        return [];
+    const npm = /(?:^|[\\/])npm(?:\.(?:c?js|cmd|exe))?$/.test(argv[at]);
+    const rest = argv.slice(at + 1).filter(a => !a.startsWith('-'));
+    let name;
+    if (rest[0] !== undefined && RUN_SUBCOMMANDS.has(rest[0]))
+        name = rest[1];
+    else if (rest[0] !== undefined && LIFECYCLE.has(rest[0]))
+        name = LIFECYCLE.get(rest[0]);
+    else if (!npm && rest[0] !== undefined && Object.hasOwn(scripts, rest[0]))
+        name = rest[0];
+    if (name === undefined)
+        return [];
+    return [`pre${name}`, name, `post${name}`].filter(n => Object.hasOwn(scripts, n));
+}
+/** The simple commands of a script text, each as a rough argv (quotes dropped). */
+const simpleCommands = (text) => text.split(/&&|\|\||[;|&\n]/)
+    .map(part => part.trim().split(/\s+/).map(t => t.replace(/^['"]+|['"]+$/g, '')).filter(Boolean)).filter(argv => argv.length > 0);
+/**
+ * Why the commands of a check read a state outside the tree, through their argv, their inline scripts or the scripts of
+ * package.json they run (`scripts`, read at the commit judged), or null.
+ */
+function externalState(argvs, scripts) {
+    const seen = new Set();
+    const visit = (argv, via, depth) => {
+        const where = via ? ` (par le script npm « ${via} »)` : '';
+        if (runsNetworkAudit(argv))
+            return `il lance un audit des dépendances qui lit le réseau (npm audit ou équivalent)${where}, dont la base d'avis change avec le temps`;
+        if (via && runsWebAudit(argv))
+            return `il lance apv web audit${where}, qui mesure un état extérieur au dépôt`;
+        if (via && runsDast(argv))
+            return `il lance apv dast${where}, qui scanne un état extérieur au dépôt`;
+        const text = argv.join(' ');
+        for (const [rule, what] of TEXT_RULES)
+            if (rule.test(text))
+                return `il lance ${what}${where}`;
+        if (depth >= SCRIPT_DEPTH)
+            return null;
+        for (const name of scriptsRun(argv, scripts)) {
+            if (seen.has(name))
+                continue;
+            seen.add(name);
+            for (const sub of simpleCommands(scripts[name])) {
+                const found = visit(sub, name, depth + 1);
+                if (found)
+                    return found;
+            }
+        }
+        return null;
+    };
+    for (const argv of argvs) {
+        const found = visit(argv, null, 0);
+        if (found)
+            return found;
+    }
+    return null;
+}
 /**
  * Why a check is never reused, whatever its receipts say (docs/ACCELERATION-LOTS.md, 5.2 A3), or null: declared
  * `reuse: false` by the project, or a command that runs `apv web audit` or `apv dast` (they measure a state outside the
  * repository: the preview served, the network, the time), or a command (or its relaunch) that reads the commit itself
- * through `{{candidateSha}}`: two commits of the same tree are still two commits for it.
+ * through `{{candidateSha}}`: two commits of the same tree are still two commits for it. Also, directly, in an inline
+ * script or in a script of package.json it runs (`scripts`, read at the commit): a dependency audit that reads the network
+ * (`npm audit` and equivalents), `apv dast`, `apv web audit`, Git asked for the history (externalState, a safety net).
  */
-export function neverReused(gate) {
+export function neverReused(gate, scripts = {}) {
     if (gate.reuse === false)
         return 'reuse: false, le projet le déclare toujours rejoué';
     if (runsWebAudit(gate.command))
@@ -132,13 +225,56 @@ export function neverReused(gate) {
         return 'il lance apv dast, qui scanne un état extérieur au dépôt';
     if (commandsOf(gate).some(a => a.includes('{{candidateSha}}')))
         return 'sa commande lit le commit lui-même ({{candidateSha}}), pas seulement son arbre';
-    return null;
+    return externalState([gate.command, ...(gate.retryFailed ? [gate.retryFailed.command] : [])], scripts);
+}
+/** The scripts of the package.json of `commit` (root of the tree), only the string ones; none when absent or unreadable. */
+export async function projectScripts(git, repo, commit) {
+    if (!SHA.test(commit))
+        return {};
+    let text;
+    try {
+        text = await git.exec(repo, ['cat-file', 'blob', `${commit}:package.json`]);
+    }
+    catch {
+        return {};
+    }
+    try {
+        const value = JSON.parse(text);
+        if (!value || typeof value !== 'object' || !value.scripts || typeof value.scripts !== 'object' || Array.isArray(value.scripts))
+            return {};
+        const scripts = {};
+        for (const [name, body] of Object.entries(value.scripts))
+            if (typeof body === 'string' && name.length <= 200)
+                scripts[name] = body.slice(0, 20_000);
+        return scripts;
+    }
+    catch {
+        return {};
+    }
 }
 const commandsOf = (gate) => [...gate.command, ...(gate.retryFailed?.command ?? [])];
 /** Whether the commands of a check read the base of their run (`{{baseSha}}`): its result then depends on that base too. */
 export const readsBase = (gate) => commandsOf(gate).some(a => a.includes('{{baseSha}}'));
 export function reuseContext(input) {
     return { ...input, scans: new Map() };
+}
+/** The scripts of the package.json of the commit judged, read once per context (the tree is the origin's: same scripts). */
+function scriptsOf(ctx) {
+    ctx.scripts ??= projectScripts(ctx.git, ctx.repo, ctx.commit);
+    return ctx.scripts;
+}
+/** Trees of the merge bases of `base` and `commit` (`git merge-base --all`), sorted; none when they have none or Git fails. */
+async function forkTrees(ctx, base, commit) {
+    let out;
+    try {
+        out = await ctx.git.exec(ctx.repo, ['merge-base', '--all', base, commit]);
+    }
+    catch {
+        return [];
+    }
+    const forks = out.split('\n').map(line => line.trim()).filter(line => SHA.test(line));
+    const trees = await treesOf(ctx.git, ctx.repo, forks);
+    return [...new Set(forks.map(f => trees.get(f)).filter((t) => t !== undefined))].sort();
 }
 /** Receipt files of a run directory of the store (summary and manifest left out); none when it cannot be listed. */
 function receiptFiles(dir) {
@@ -224,8 +360,10 @@ const hours = (ms) => String(Math.round(ms / 360_000) / 10);
  * worktree when it has the run, else the run of the shared store, intact), must be the same check, `passed` at first pass
  * (never `cached`: no chain), complete, on a clean tree, of the current configuration, of the same environment, younger
  * than the maximum age, with the same output digests, without a record of `apv web audit`; the trees of both commits are
- * recomputed (`basis: tree`) and so is the digest of the inputs; the store is scanned for the tree (TreeScan), and no
- * receipt of the check on the same tree, later than the origin, failed. Returns the origin, or why the receipt proves nothing.
+ * recomputed (`basis: tree`) and so is the digest of the inputs; a command that reads `{{baseSha}}` needs the same base and
+ * a merge base of the same tree on both sides; the store is scanned for the tree (TreeScan), and no receipt of the check on
+ * the same tree, later than the origin, failed: complete, targeted or of one of its early checks. The environment compared
+ * includes the local state of the copy (localStateDigest: node_modules, .env*). Returns the origin, or why the receipt proves nothing.
  */
 export async function checkReuse(ctx, gate, cached) {
     const r = cached.receipt;
@@ -235,7 +373,7 @@ export async function checkReuse(ctx, gate, cached) {
         return refuse('reçu sans relevé reuse (exécution, commit et empreintes de l\'origine) : rien à vérifier');
     if (r.targeted === true)
         return refuse('un reçu réutilisé n\'est jamais ciblé');
-    const never = gate ? neverReused(gate) : null;
+    const never = gate ? neverReused(gate, await scriptsOf(ctx)) : null;
     if (never)
         return refuse(`contrôle jamais repris (${never})`);
     let origin;
@@ -284,6 +422,15 @@ export async function checkReuse(ctx, gate, cached) {
     if (gate && readsBase(gate) && (from.baseSha === null || cached.baseSha !== from.baseSha)) {
         return refuse(`commande qui lit la base de son exécution ({{baseSha}}) : base ${cached.baseSha?.slice(0, 12) ?? 'inconnue'} à la reprise, ${from.baseSha?.slice(0, 12) ?? 'inconnue'} à l'origine`);
     }
+    // The same base is not enough (relecture sécurité de A1, F1): the tools that read it (apv tests check, apv reuse check, a
+    // diff since the fork) compare from the merge base of the base and the commit, which must have the same tree on both sides.
+    if (gate && readsBase(gate)) {
+        const [atOrigin, here] = await Promise.all([forkTrees(ctx, from.baseSha, reuse.fromCommit), forkTrees(ctx, from.baseSha, ctx.commit)]);
+        if (!atOrigin.length || !here.length || atOrigin.join(',') !== here.join(',')) {
+            return refuse(`commande qui lit la base de son exécution ({{baseSha}}) : la base commune (merge-base) de ${from.baseSha.slice(0, 12)} avec ce commit ` +
+                `${here.length && atOrigin.length ? 'n\'a pas l\'arbre de celle avec l\'origine' : 'est introuvable'} ; ce que le contrôle compare depuis elle a changé`);
+        }
+    }
     if (reuse.basis !== 'tree')
         return refuse('reprise par entrées identiques (basis inputs) : le contrôle ne déclare pas reuse.ignore à la base, seule la reprise à arbre identique se vérifie');
     const known = await treesOf(ctx.git, ctx.repo, [reuse.fromCommit, ctx.commit]);
@@ -304,12 +451,15 @@ export async function checkReuse(ctx, gate, cached) {
     const scan = await treeScan(ctx, tree);
     if (scan.block)
         return refuse(scan.block);
-    const later = scan.found.filter(f => f.receipt.gateId === r.gateId && !f.receipt.early && f.receipt.targeted !== true && f.dirty === false
+    // A targeted receipt (its `affected` command) or one of its early checks (`early.gate`) that failed counts too (relecture
+    // sécurité de A1, M1): it ran part of the check on this very tree, and failed; never proof of a pass, always of a failure.
+    const later = scan.found.filter(f => (f.receipt.gateId === r.gateId || f.receipt.early?.gate === r.gateId) && f.dirty === false
         && f.receipt.configHash === ctx.configHash && scan.trees.get(f.receipt.candidateSha) === tree && f.receipt !== o && latest(from, f) === f
         && !['passed', 'cached', 'not_required'].includes(f.receipt.status));
     if (later.length) {
         const fail = later.reduce(latest).receipt;
-        return refuse(`échec plus récent sur le même arbre : ${fail.runId}/${fail.gateId}.json (${fail.status}${fail.status === 'passed_after_retry' ? ', test instable' : ''}) l'emporte`);
+        const kind = fail.early ? `, contrôle tôt ${fail.gateId}` : fail.targeted === true ? ', ciblé' : '';
+        return refuse(`échec plus récent sur le même arbre : ${fail.runId}/${fail.gateId}.json (${fail.status}${fail.status === 'passed_after_retry' ? ', test instable' : ''}${kind}) l'emporte`);
     }
     return { origin: from, scan };
 }
@@ -322,7 +472,7 @@ export async function checkReuse(ctx, gate, cached) {
  * would refuse is never written. `candidate`: false when no receipt of an identical tree was even considered (nothing to say).
  */
 export async function findOrigin(ctx, gate, environments, base) {
-    const never = neverReused(gate);
+    const never = neverReused(gate, await scriptsOf(ctx));
     if (never)
         return { reason: `jamais repris : ${never}`, candidate: false };
     const tree = (await treesOf(ctx.git, ctx.repo, [ctx.commit])).get(ctx.commit);
@@ -342,7 +492,7 @@ export async function findOrigin(ctx, gate, environments, base) {
     const byHash = new Map(environments.map(e => [e.hash, e]));
     const sameEnv = young.filter(f => byHash.has(f.receipt.environmentHash));
     if (!sameEnv.length)
-        return { reason: 'reçu(s) réussi(s) sur un arbre identique, mais dans un autre environnement (variables transmises, exécutable, pile, Node, système ou version de l\'outil)', candidate: true };
+        return { reason: 'reçu(s) réussi(s) sur un arbre identique, mais dans un autre environnement (variables transmises, exécutable, pile, Node, système, version de l\'outil, ou état local ignoré par Git : node_modules, fichiers .env*)', candidate: true };
     // A command that reads the base of its run: only an origin run from the same base.
     const sameBase = readsBase(gate) ? sameEnv.filter(f => f.baseSha !== null && f.baseSha === base) : sameEnv;
     if (!sameBase.length)

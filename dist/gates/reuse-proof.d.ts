@@ -53,12 +53,22 @@ export declare const latest: (a: Found, b: Found) => Found;
 /** Whether an argv runs `apv dast` (`dast run`, or `dast` right after the executable of the tool). */
 export declare function runsDast(argv: readonly string[]): boolean;
 /**
+ * Whether an argv runs a dependency audit that reads the network (`npm audit`, `pnpm audit`, `yarn audit`, `yarn npm audit`,
+ * `bun audit`, `outdated`, or `audit-ci`, `better-npm-audit`, `osv-scanner`, `snyk`): its result changes with the advisory
+ * database, never with the tree alone (relecture sécurité de A1, M3).
+ */
+export declare function runsNetworkAudit(argv: readonly string[]): boolean;
+/**
  * Why a check is never reused, whatever its receipts say (docs/ACCELERATION-LOTS.md, 5.2 A3), or null: declared
  * `reuse: false` by the project, or a command that runs `apv web audit` or `apv dast` (they measure a state outside the
  * repository: the preview served, the network, the time), or a command (or its relaunch) that reads the commit itself
- * through `{{candidateSha}}`: two commits of the same tree are still two commits for it.
+ * through `{{candidateSha}}`: two commits of the same tree are still two commits for it. Also, directly, in an inline
+ * script or in a script of package.json it runs (`scripts`, read at the commit): a dependency audit that reads the network
+ * (`npm audit` and equivalents), `apv dast`, `apv web audit`, Git asked for the history (externalState, a safety net).
  */
-export declare function neverReused(gate: ReusableGate): string | null;
+export declare function neverReused(gate: ReusableGate, scripts?: Readonly<Record<string, string>>): string | null;
+/** The scripts of the package.json of `commit` (root of the tree), only the string ones; none when absent or unreadable. */
+export declare function projectScripts(git: Git, repo: string, commit: string): Promise<Record<string, string>>;
 /** What the reuse reads of a declared check: its id, its commands, its `reuse` field. */
 export interface ReusableGate {
     id?: string;
@@ -99,8 +109,10 @@ export interface ReuseContext {
     local: LocalReceipts;
     /** Scans of the store by tree, made once per context. */
     scans: Map<string, Promise<TreeScan>>;
+    /** Scripts of the package.json of the commit judged (neverReused), read once per context. */
+    scripts?: Promise<Record<string, string>>;
 }
-export declare function reuseContext(input: Omit<ReuseContext, 'scans'>): ReuseContext;
+export declare function reuseContext(input: Omit<ReuseContext, 'scans' | 'scripts'>): ReuseContext;
 /** The scan of the store for `tree`, made once per context. */
 export declare function treeScan(ctx: ReuseContext, tree: string): Promise<TreeScan>;
 /**
@@ -109,8 +121,10 @@ export declare function treeScan(ctx: ReuseContext, tree: string): Promise<TreeS
  * worktree when it has the run, else the run of the shared store, intact), must be the same check, `passed` at first pass
  * (never `cached`: no chain), complete, on a clean tree, of the current configuration, of the same environment, younger
  * than the maximum age, with the same output digests, without a record of `apv web audit`; the trees of both commits are
- * recomputed (`basis: tree`) and so is the digest of the inputs; the store is scanned for the tree (TreeScan), and no
- * receipt of the check on the same tree, later than the origin, failed. Returns the origin, or why the receipt proves nothing.
+ * recomputed (`basis: tree`) and so is the digest of the inputs; a command that reads `{{baseSha}}` needs the same base and
+ * a merge base of the same tree on both sides; the store is scanned for the tree (TreeScan), and no receipt of the check on
+ * the same tree, later than the origin, failed: complete, targeted or of one of its early checks. The environment compared
+ * includes the local state of the copy (localStateDigest: node_modules, .env*). Returns the origin, or why the receipt proves nothing.
  */
 export declare function checkReuse(ctx: ReuseContext, gate: ReusableGate | undefined, cached: Found): Promise<{
     origin: Found;

@@ -16,6 +16,19 @@ export declare const REUSE_AGE_MARGIN_MS: number;
  * asked (anything else is left out, never passed to Git).
  */
 export declare function treesOf(git: Git, repo: string, commits: Iterable<string>): Promise<Map<string, string>>;
+/**
+ * What Git ignores in a copy and a check still runs with (relecture sécurité de A1, M2): the installed dependencies, seen
+ * through the folder `node_modules` and the record each package manager writes there at every install (npm, pnpm, Yarn
+ * Berry, Yarn 1), and the `.env*` files at the root of the copy. Two copies of the same tree with other dependencies
+ * installed, or another `.env.local`, are not the same environment.
+ */
+export declare const LOCAL_STATE_FILES: readonly ["node_modules/.package-lock.json", "node_modules/.modules.yaml", "node_modules/.yarn-state.yml", "node_modules/.yarn-integrity"];
+/**
+ * Digest of the local state of a copy (LOCAL_STATE_FILES, `node_modules` present or not, each `.env*` at its root), part of
+ * the identity of the environment of every receipt: a check is reused only from an origin that ran with the same local
+ * state. Contents are hashed, one digest for all: no value of a `.env*` file is ever written, in a receipt or an output.
+ */
+export declare function localStateDigest(dir: string): string;
 /** Digest of a list of ignore globs (`reuse.ignoreDigest`): sorted and deduplicated, so their order never matters. */
 export declare function ignoreDigest(globs: readonly string[]): string;
 /**
