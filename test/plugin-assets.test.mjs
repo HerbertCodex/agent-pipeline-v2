@@ -591,6 +591,24 @@ test('acceleration: the rhythm held by the tool, small specs with short chains, 
   }
 });
 
+test('user scenarios: product and the spec skill write them, the fidelity review plays them as the target person, the docs name the check', () => {
+  const product = read('agents/product.md');
+  for (const rule of [/\*\*Scénarios utilisateur d'abord\.\*\*/, /3 à 5 scénarios utilisateur/, /`AC-USER-1`/, /« Étant donné <sa situation>, quand <ce qu'elle fait>, alors <ce qu'elle voit> »/,
+    /jamais le code/, /\*\*test navigateur\*\*/, /parcours joué par la personne cible/, /pas de nouvelle suite lourde/, /fusionne des critères techniques plutôt que d'en ajouter/, /SPEC_USER_SCENARIOS/,
+    /ISO\/IEC\/IEEE 29148/, /\*\*nécessaire\*\*/, /\*\*non ambigu\*\*/, /\*\*vérifiable\*\*/, /\*\*une exigence par critère\*\*/, /\*\*traçable\*\*/]) assert.match(product, rule);
+  const spec = frontmatter('skills/spec/SKILL.md').body;
+  for (const rule of [/\*\*scénarios utilisateur\*\*/, /`SPEC_USER_SCENARIOS`/, /"userScenarios": "error"/, /ISO\/IEC\/IEEE 29148/, /scénarios utilisateur `AC-USER-<n>` \(un par ligne/]) assert.match(spec, rule);
+  const fidelity = frontmatter('agents/qa-fidelite.md').body;
+  assert.match(fidelity, /\*\*Parcours joué par la personne cible\*\*[^\n]*\*\*téléphone 390 px d'abord\*\*[^\n]*\*\*hésiterait\*\*[^\n]*\*\*se tromperait\*\*[^\n]*\*\*bloquant\*\*/);
+  assert.match(fidelity, /pour chaque `AC-USER-<n>` le parcours rejoué/);
+  assert.match(frontmatter('skills/review/SKILL.md').body, /\*\*Parcours joué par la personne cible\*\*[^\n]*390 px d'abord/);
+  assert.match(read('workflows/revues.js'), /Parcours joué par la personne cible[^\n]*AC-USER-<n>[^\n]*390 px d\\'abord/);
+  assert.match(read('docs/CLI.md'), /\*\*Scénarios utilisateur\*\* \(`SPEC_USER_SCENARIOS`, hors `--draft`\)/);
+  assert.match(read('docs/CONFIGURATION.md'), /`minUserScenarios` \(défaut `3`, de 1 à 5\) et `userScenarios` \(`warning` par défaut, ou `error`\)/);
+  for (const file of ['agents/product.md', 'agents/qa-fidelite.md', 'skills/spec/SKILL.md', 'skills/review/SKILL.md', 'workflows/revues.js', 'src/spec/scenarios.ts'])
+    assert.ok(!/[\u2013\u2014]/.test(read(file)), `${file}: no em or en dash`);
+});
+
 test('pilot journal: commits read by git, waits through apv wait, copies outside the repository, scan by the lead, confidence in the state', () => {
   const tool = 'Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js';
   const run = frontmatter('skills/run/SKILL.md');

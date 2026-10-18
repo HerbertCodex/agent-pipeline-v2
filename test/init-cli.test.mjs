@@ -100,6 +100,9 @@ test('apv spec new writes a draft-valid skeleton that launch mode refuses', asyn
   const spec = JSON.parse(read(f.repo, '.apv/specs/export-csv.json'));
   assert.equal(spec.title, 'Export CSV');
   assert.equal(spec.tasks.length, 1);
+  // A spec that touches an interface opens its criteria with user scenarios (SPEC_USER_SCENARIOS): the skeleton shows the form.
+  assert.deepEqual(spec.acceptance.map(c => c.id), ['AC-USER-1', 'AC-1']);
+  assert.match(spec.acceptance[0].description, /Étant donné .*, quand .*, alors /);
   const draft = await apv(f.repo, ['spec', 'validate', '.apv/specs/export-csv.json', '--draft', '--json']);
   assert.equal(draft.code, 0, draft.stdout);
   assert.equal(draft.json().security.minimumLane, 'fast', 'the skeleton names nothing security-sensitive');
