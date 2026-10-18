@@ -260,6 +260,42 @@ test('the setup of the batch comes from the target, not from the pull requests',
   assert.ok(existsSync(marker), 'the setup of the target ran');
 });
 
+test('AC-REUSE-TREE: a second batch of the same pull requests on the same target reuses the suite, its copy prepared first, and verify proves it (A1, A4, M2)', async t => {
+  const p = batchProject(t);
+  const setups = join(p.root, 'setups');
+  const count = () => existsSync(setups) ? readFileSync(setups, 'utf8').length : 0;
+  git(p.repo, 'switch', '-q', 'main');
+  writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({
+    gates: [{ id: 'suite', stage: 'full', command: [process.execPath, '-e', 'process.exit(require("fs").existsSync("BAD") ? 1 : 0)'] }],
+    batch: { setup: [process.execPath, '-e', `require("fs").appendFileSync(${JSON.stringify(setups)}, "x")`] } }));
+  git(p.repo, 'commit', '-qam', 'setup'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const first = await p.run(['11', '12', '--target', 'main', '--json']);
+  assert.equal(first.code, 0, first.stdout + first.stderr);
+  assert.match(first.json().lots[0].proof.summary, /^1\/1 contrôle\(s\) réussi\(s\) ; apv gates verify à 0/);
+  assert.equal(count(), 1, 'the copy of the first batch was prepared');
+  // Same pull requests, same target: a new head (a new merge commit), the same tree.
+  const second = await p.run(['11', '12', '--target', 'main', '--json']);
+  assert.equal(second.code, 0, second.stdout + second.stderr);
+  const [a, b] = [first.json().proven, second.json().proven];
+  assert.notEqual(a.head, b.head);
+  assert.equal(git(p.repo, 'rev-parse', `${a.head}^{tree}`), git(p.repo, 'rev-parse', `${b.head}^{tree}`));
+  assert.match(second.json().lots[0].proof.summary, new RegExp(`^1/1 contrôle\\(s\\) réussi\\(s\\) \\(dont 1 réutilisé\\(s\\) d'un arbre identique : suite de ${a.head.slice(0, 12)}\\) ; apv gates verify à 0`));
+  // Relecture sécurité de A1, M2: the fresh copy of the batch is prepared by batch.setup before any reuse is decided, so that
+  // its local state (node_modules, .env*) is the one compared with the origin's; the suite itself is reused.
+  assert.equal(count(), 2, 'batch.setup ran in the copy of the second batch, before its reuse');
+  assert.match(second.stderr, /Copie de la suite non préparée \(copie neuve du lot\) : préparation par batch\.setup/);
+  assert.doesNotMatch(second.stderr, /batch\.setup sauté/);
+  // The receipt cached proves the head of the second batch from the store, its worktree gone.
+  assert.equal((await apv(p.repo, ['gates', 'verify', '--commit', b.head])).code, 0);
+  // --replay: run anyway, the copy prepared again.
+  const replayed = await p.run(['11', '12', '--target', 'main', '--replay', 'suite', '--json']);
+  assert.equal(replayed.code, 0, replayed.stdout + replayed.stderr);
+  assert.match(replayed.json().lots[0].proof.summary, /^1\/1 contrôle\(s\) réussi\(s\) ; apv gates verify à 0/);
+  assert.equal(count(), 3);
+  assert.equal((await apv(p.repo, ['stack', 'plan', '11', '--replay', 'suite'])).code, 2, '--replay is for stack batch');
+  assert.equal((await p.run(['11', '--replay', 'all,suite'])).code, 2);
+});
+
 test('a signal between the proof and a merge stops the batch before it: interrupted, nothing merged', async t => {
   const p = batchProject(t);
   const env = { ...process.env, ...p.env };

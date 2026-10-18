@@ -6,6 +6,8 @@ import type { Git } from '../execution/git.js';
  * `apv gates verify --commit <sha>` proves the commit from any checkout of the repository.
  */
 export declare const SHARED_RECEIPTS_DIR: string;
+/** Receipts of `apv gates run` in a worktree, one directory per execution. Machine evidence, not versioned. */
+export declare const RECEIPTS_DIR = ".apv/receipts";
 /** Digests of the files of a run in the shared store (or an export), written last. */
 export declare const MANIFEST = "manifest.json";
 /** Retention of the shared store (`receipts` of `.apv/config.json`): runs younger than `keepDays`, `keepRuns` at most. */
@@ -46,6 +48,15 @@ export declare function manifestOf(dir: string, runId: string, candidateSha: str
  * Returns the directory of the copy.
  */
 export declare function publishRun(store: string, local: string, runId: string, candidateSha: string, worktree: string): string;
+/**
+ * Brings the copy of a run in the shared store up to date with its directory `local` while the run goes on (relecture
+ * sécurité de A1, F2): each receipt is visible to the other copies of the repository as soon as it is written, a failure
+ * in progress included. The first call publishes the run whole (publishRun); each later one writes the new or changed
+ * files (temporary file renamed over its name), then the manifest (same), last. Between the two a reader finds the run
+ * not intact (files and manifest disagree) and refuses it, never a receipt half written: a reuse is then refused, not
+ * granted. Files are only added or replaced, never removed. Returns the directory of the copy.
+ */
+export declare function syncRun(store: string, local: string, runId: string, candidateSha: string, worktree: string): string;
 export type SharedRun = {
     runId: string;
     dir: string;

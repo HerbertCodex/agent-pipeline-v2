@@ -120,7 +120,8 @@ test('the queue of the full suites: the first check starts only once the lock is
   assert.ok(Number(readFileSync(join(f0(t), 'started'), 'utf8')) >= releasedAt, 'started after the release');
   assert.equal(json.gates[0].status, 'passed');
   // The lock is released at the end: a second suite starts at once.
-  const again = (await apv(f.repo, ['gates', 'run', '--json'])).json();
+  // --replay all: a suite that runs (the same tree would otherwise be reused, without entering the queue: A1).
+  const again = (await apv(f.repo, ['gates', 'run', '--replay', 'all', '--json'])).json();
   assert.ok(again.queue.waitedMs < 1000, `second run waited ${again.queue.waitedMs} ms`);
   // A task run never enters the queue; a queue disabled by the configuration neither.
   const task = project(t, { gates: [{ id: 'lint', command: node('0') }] });

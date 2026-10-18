@@ -461,3 +461,26 @@ export function repeatDiagnostic(input: { files: readonly string[]; times: numbe
     : input.status === 'failed' ? [`- nombre d'échecs par test non relevé${input.hasPattern ? ' (aucune ligne ne répond à repeatChanged.testPattern)' : ' (repeatChanged.testPattern absent)'} : échoue au moins 1 fois sur ${input.times}`] : [];
   return [head, ...tests, `Fichiers répétés : ${input.files.join(', ')}`, input.excerpt].filter(Boolean).join('\n');
 }
+
+/**
+ * Why a successful receipt of a check that declares `repeatChanged` does not prove the repetition of the changed test files
+ * at `commit`, or null when it does (`apv gates verify`, and `apv gates run` before it reuses a receipt). The files are
+ * recomputed from the commit, against the base the run recorded and, with `reference` (a complete receipt at stage full),
+ * against the reference resolved now: a run without a base, with a base equal to the commit, or with a base too close to
+ * leave out some changed tests never proves the check.
+ */
+export async function repeatProofGap(git: Git, repo: string, commit: string, settings: RepeatSettings,
+  r: { base: string | null; status: string; files: readonly string[] } | undefined, reference: { name: string; sha: string | null; reason: string } | null): Promise<{ missing: string[]; reason: string } | null> {
+  if (!r || r.status === 'no_base' || !r.base) return { missing: [], reason: 'exécution sans --base : aucun test modifié répété' };
+  if (r.status !== 'passed' && r.status !== 'none') return { missing: [], reason: `répétition ${r.status}` };
+  if (r.base === commit) return { missing: [], reason: 'base égale au commit : aucun test modifié ne pouvait être répété' };
+  if (reference && !reference.sha) return { missing: [], reason: `référence ${reference.name} ${reference.reason} (repeatChanged.reference) : les tests modifiés depuis la branche où va le changement ne peuvent pas être recomptés` };
+  const expected = await planRepeat(git, repo, { base: r.base, reference: reference?.sha ?? null }, { ...settings, fixedWaits: settings.fixedWaits === 'refuse' ? 'refuse' : 'off' }, commit);
+  const done = new Set(r.files);
+  const missing = expected.files.filter(f => !done.has(f));
+  if (missing.length) return { missing, reason: `${missing.length} fichier(s) de test ajouté(s) ou modifié(s) non répété(s) (depuis ${(reference ? expected.reference! : expected.base).slice(0, 12)})` };
+  if (settings.fixedWaits === 'refuse' && expected.fixedWaits.length) {
+    return { missing: [], reason: `attente(s) à durée fixe refusée(s) : ${expected.fixedWaits.slice(0, 5).map(w => `${w.file}:${w.line}`).join(', ')}` };
+  }
+  return null;
+}

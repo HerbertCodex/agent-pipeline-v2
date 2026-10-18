@@ -270,6 +270,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
                 readonly waitMs: number;
             } | undefined;
         }[] | undefined;
+        readonly reuse: boolean | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;

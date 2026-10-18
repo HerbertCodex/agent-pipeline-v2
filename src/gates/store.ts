@@ -12,6 +12,8 @@ import type { Git } from '../execution/git.js';
  * `apv gates verify --commit <sha>` proves the commit from any checkout of the repository.
  */
 export const SHARED_RECEIPTS_DIR = join('apv', 'receipts');
+/** Receipts of `apv gates run` in a worktree, one directory per execution. Machine evidence, not versioned. */
+export const RECEIPTS_DIR = '.apv/receipts';
 /** Digests of the files of a run in the shared store (or an export), written last. */
 export const MANIFEST = 'manifest.json';
 /** Retention of the shared store (`receipts` of `.apv/config.json`): runs younger than `keepDays`, `keepRuns` at most. */
@@ -98,6 +100,46 @@ export function publishRun(store: string, local: string, runId: string, candidat
   return target;
 }
 
+/**
+ * Brings the copy of a run in the shared store up to date with its directory `local` while the run goes on (relecture
+ * sécurité de A1, F2): each receipt is visible to the other copies of the repository as soon as it is written, a failure
+ * in progress included. The first call publishes the run whole (publishRun); each later one writes the new or changed
+ * files (temporary file renamed over its name), then the manifest (same), last. Between the two a reader finds the run
+ * not intact (files and manifest disagree) and refuses it, never a receipt half written: a reuse is then refused, not
+ * granted. Files are only added or replaced, never removed. Returns the directory of the copy.
+ */
+export function syncRun(store: string, local: string, runId: string, candidateSha: string, worktree: string): string {
+  invariant(RUN_DIR.test(runId), 'RECEIPT_STORE', `Invalid run identifier: ${runId}`);
+  const target = join(store, runId);
+  if (!existsSync(target)) return publishRun(store, local, runId, candidateSha, worktree);
+  // Each file read once: its digest is the one of the bytes copied.
+  const files = new Map<string, Buffer>();
+  for (const name of runFiles(local)) if (name !== MANIFEST && RUN_FILE.test(name)) files.set(name, readFileSync(join(local, name)));
+  const digests: Record<string, string> = {};
+  for (const [name, bytes] of files) digests[name] = sha256(bytes);
+  let before: Record<string, unknown> = {};
+  try {
+    const current = JSON.parse(readFileSync(join(target, MANIFEST), 'utf8')) as { files?: unknown };
+    if (current.files && typeof current.files === 'object' && !Array.isArray(current.files)) before = current.files as Record<string, unknown>;
+  } catch { /* No readable manifest: every file is written again, then the manifest. */ }
+  const replace = (name: string, bytes: Buffer | string): void => {
+    const temp = join(target, `.tmp-${randomUUID().slice(0, 8)}-${name}`);
+    try { writeFileSync(temp, bytes, { mode: 0o600 }); renameSync(temp, join(target, name)); }
+    catch (error) { rmSync(temp, { force: true }); throw error; }
+  };
+  let changed = Object.keys(before).length !== files.size;
+  for (const [name, bytes] of files) {
+    if (before[name] === digests[name] && existsSync(join(target, name))) continue;
+    replace(name, bytes);
+    changed = true;
+  }
+  if (!changed) return target;
+  const manifest: Manifest = { version: 1, runId, candidateSha, worktree, copiedAt: new Date().toISOString(),
+    files: Object.fromEntries(Object.keys(digests).sort().map(name => [name, digests[name]!])) };
+  replace(MANIFEST, JSON.stringify(manifest, null, 2) + '\n');
+  return target;
+}
+
 export type SharedRun =
   | { runId: string; dir: string; intact: true; manifest: Manifest; files: Map<string, Buffer> }
   | { runId: string; dir: string; intact: false; reason: string };
@@ -177,6 +219,18 @@ export function pruneStore(store: string, retention: ReceiptRetention, now = Dat
       rmSync(join(store, entry.name), { recursive: true, force: true });
       temporary += 1;
     } catch { /* Removed by a concurrent prune. */ }
+  }
+  // A file left by a syncRun interrupted between its write and its rename (the run then stays not intact until removed).
+  for (const run of sharedRunIds(store)) {
+    let names: string[];
+    try { names = readdirSync(join(store, run)).filter(name => name.startsWith('.tmp-')); } catch { continue; }
+    for (const name of names) {
+      try {
+        if (now - statSync(join(store, run, name)).mtimeMs < STALE_TEMP_MS) continue;
+        rmSync(join(store, run, name), { force: true });
+        temporary += 1;
+      } catch { /* Renamed or removed meanwhile. */ }
+    }
   }
   return { removed: removed.sort(), kept, temporary };
 }

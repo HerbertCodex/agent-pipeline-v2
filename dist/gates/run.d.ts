@@ -9,7 +9,7 @@ import { type MainSetup } from './spread.js';
 import { type ScopeDecision } from './proof-scope.js';
 import { type CleanupRecord, type PortsRecord, type QueueRecord, type SuiteHooks } from './suite.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
-export declare const RECEIPTS_DIR = ".apv/receipts";
+export { RECEIPTS_DIR } from './store.js';
 /** Environment identity of a V3 local run; V2 read it from `environment.id`, a field V3 no longer reads. */
 export declare const ENVIRONMENT_ID = "apv3-local";
 export interface GateRunOptions {
@@ -78,6 +78,30 @@ export interface GateRunOptions {
         risk: string;
         reason: string;
     };
+    /**
+     * Checks run even when a green receipt of an identical tree could be reused (`--replay <id>,<id>` or `--replay all`,
+     * docs/ACCELERATION-LOTS.md, A3): their receipt is an execution. Absent: every check that may be reused is.
+     */
+    replay?: 'all' | readonly string[];
+    /**
+     * `apv stack batch`: the copy of the suite is a fresh worktree, prepared by `batch.setup` whenever a check runs there (not
+     * only for a package-lock.json without node_modules), and never when every check is reused (A4).
+     */
+    batchSetup?: boolean;
+}
+/** A check reused at an identical tree: the receipt `cached` written, its origin and why. */
+export interface ReusedCheck {
+    gateId: string;
+    /** Identifier of the receipt `cached` written in this run. */
+    receipt: string;
+    fromRun: string;
+    fromCommit: string;
+    /** Identifier of the origin receipt (`reusedFrom`). */
+    origin: string;
+    basis: 'tree';
+    /** The stack of the environment the origin ran in (`--stacks`), or null. */
+    stack: string | null;
+    reason: string;
 }
 /** The copy of a run in the shared store: its directory, or why it could not be made (the run itself stands). */
 export interface SharedCopy {
@@ -165,6 +189,24 @@ export interface GateRunResult {
         gates: string[];
         health: StackHealth;
     }[];
+    /** Checks reused at an identical tree (receipts `cached`, never run), each checked as `apv gates verify` checks it. */
+    reused: ReusedCheck[];
+    /** The checks run on demand even when a reuse was possible (`--replay`), `all`, or null. */
+    replay: 'all' | string[] | null;
+    /**
+     * Receipts `cached` of this run checked again at its end, with a fresh read of the store, and that no longer check out (a
+     * later failure on the same tree written meanwhile by another copy, an origin removed): the run is not ok.
+     */
+    reuseStale: {
+        gateId: string;
+        reason: string;
+    }[];
+    /** Cost of the reading of the store for the reuse (runs looked at, receipt files read, milliseconds), or null when none was looked for. */
+    reuseScan: {
+        runs: number;
+        files: number;
+        ms: number;
+    } | null;
     ok: boolean;
 }
 /**

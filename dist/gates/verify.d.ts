@@ -1,5 +1,7 @@
-import { type GateReceipt, type GateStage } from '../domain/contracts.js';
+import type { GateReceipt, GateStage } from '../domain/contracts.js';
 import type { ApvConfig } from '../config/load.js';
+import { type AlteredRun, type ReceiptSource } from './reuse-proof.js';
+export type { AlteredRun, ReceiptSource } from './reuse-proof.js';
 export interface VerifyOptions {
     repo: string;
     config: ApvConfig;
@@ -42,8 +44,10 @@ export interface VerifyOptions {
  *   recomputed from the commit requires it (a file with an effect, a base equal to the commit, a reference unresolved);
  * - `reuse`: that latest receipt is `cached` (reused from another commit) and its reuse does not check out against Git
  *   and the store (docs/ACCELERATION-LOTS.md, 5.5): no `reuse` record, origin absent, altered, not `passed` at first pass,
- *   dirty, targeted, of another configuration or environment, too old, another tree, or a later failure on the same
- *   tree. It refuses like `missing`, and neither the CI proof nor the reduced lane stands in for it.
+ *   dirty, targeted, of another configuration or environment, too old, another tree, another base for a command that reads
+ *   `{{baseSha}}`, a check that is never reused, or a later failure on the same tree that cannot be excluded (checkReuse,
+ *   src/gates/reuse-proof.ts, the check `apv gates run` passes before writing one). It refuses like `missing`, and neither
+ *   the CI proof nor the reduced lane stands in for it.
  */
 export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'unaudited' | 'required' | 'reuse';
 /** A receipt `cached` retained for a check: where it says it comes from, and whether `verify` proved its reuse. */
@@ -139,13 +143,6 @@ export interface VerifyResult {
     /** Required checks proven by a receipt `cached` whose reuse `verify` proved (origin, tree, digests, age). */
     reused: string[];
     ok: boolean;
-}
-/** Where a receipt was read: the `.apv/receipts/` of the worktree, or the shared store of the repository. */
-export type ReceiptSource = 'local' | 'shared';
-/** A run of the shared store refused as a whole: its files no longer match its manifest, or contradict it. */
-export interface AlteredRun {
-    runId: string;
-    reason: string;
 }
 /**
  * Whether the receipts prove that every required check passed on this exact commit, on a clean tree and with

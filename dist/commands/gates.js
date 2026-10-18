@@ -17,11 +17,12 @@ import { scopeReferenceMissing } from '../gates/proof-scope.js';
 import { Git } from '../execution/git.js';
 import { signalExitCode } from '../lock/run.js';
 import { infrastructureAdvice, infrastructureText } from '../gates/infrastructure.js';
-import { EXIT, UsageError, guard, json, list, parse, repoPath, table } from './common.js';
+import { EXIT, UsageError, guard, json, list, parse, replayOf, repoPath, table } from './common.js';
 export const usage = `Utilisation :
   apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>] [--against <ref>]
                 [--concurrency N] [--keep-going] [--skip-proven] [--run <spec-id>]
-                [--reason <texte>] [--allow-dirty] [--stacks <pile>,<pile>] [--repo <chemin>] [--json]
+                [--reason <texte>] [--allow-dirty] [--stacks <pile>,<pile>] [--replay <id>,<id>|all]
+                [--repo <chemin>] [--json]
   apv gates run --stage task --since <commit prouvé> [--only a,b] [--repo <chemin>] [--json]
   apv gates verify --commit <sha> [--stage full|task] [--base <ref>] [--against <ref>] [--offline]
                    [--config <fichier> | --commit-config] [--repo <chemin>] [--json]
@@ -114,6 +115,16 @@ configuration ; sur la première dans cette copie, sur une autre dans une copie 
 contrôle qui a des dépendances, ou dont d'autres dépendent, reste dans cette copie. Une seule pile
 (--stacks 2) : tous les contrôles de pile tournent sur elle, dans cette copie, avec ses variables et sous
 son verrou.
+Reprise à arbre identique (docs/ACCELERATION-LOTS.md, A1) : avant toute attente, un contrôle dont le reçu
+le plus récent sur un commit au même arbre (worktree, puis magasin partagé intact) a réussi au premier
+passage, arbre propre, non ciblé, avec la même configuration des contrôles et le même environnement
+(variables transmises, exécutable, pile de --stacks, Node, système, version de l'outil), de moins de 20 h,
+sans échec plus récent sur le même arbre, n'est pas relancé : reçu « réutilisé » (cached) qui cite son
+origine, vérifié avant d'être écrit par la vérification même de apv gates verify, puis relu à la fin de
+l'exécution. Jamais repris : arbre modifié, contrôle ciblé ou tôt, reuse: false, commande qui lance apv
+web audit ou apv dast, origine réussie après relance, réutilisée, sur arbre modifié ou ciblée. Un
+contrôle dont dépend un contrôle exécuté est exécuté aussi. File, piles, ports et préparation ne
+concernent que les contrôles exécutés. --replay <id>,<id> ou --replay all les exécute quand même.
 Panne d'infrastructure : un contrôle en échec dont la sortie nomme une variable de son passEnv absente,
 ou une pile injoignable (connexion refusée, conteneur arrêté), est signalé à part, avec la marche ; son
 reçu reste en échec.
@@ -139,6 +150,12 @@ Les reçus sont lus dans .apv/receipts/ du worktree, puis dans le magasin partag
 exécutions que le worktree n'a pas : la preuve d'un commit se vérifie depuis n'importe quel
 checkout du dépôt, avec les mêmes exigences. Une exécution du magasin partagé dont un fichier ne
 correspond plus à son manifeste (empreintes) est refusée en entier et signalée.
+Un reçu « réutilisé » (cached) ne prouve que si sa reprise se vérifie depuis Git et le magasin : origine
+présente et intacte, même contrôle, réussie au premier passage, arbre propre, même configuration et même
+environnement, moins de 24 h, arbres identiques recalculés, contrôle jamais déclaré reuse: false ni lanceur
+de apv web audit ou apv dast, aucun échec plus récent sur le même arbre ; le magasin entier est relu pour
+cela, et une exécution dont le manifeste nomme un autre commit que ses reçus, quand l'un des deux est de
+cet arbre, bloque la reprise. Sinon « reçu réutilisé non prouvant » avec la raison.
 --commit-config lit la configuration des contrôles au commit vérifié (git show <commit>:.apv/config.json)
 plutôt que dans le checkout : utile depuis un checkout dont la configuration diffère de celle du commit.
 Sortie : 0 preuve complète, 1 sinon (ce qui manque est listé), 2 appel incorrect.
@@ -316,7 +333,7 @@ export async function run(args, io) {
             stage: { type: 'string' }, commit: { type: 'string' }, 'skip-proven': { type: 'boolean' }, run: { type: 'string' }, reason: { type: 'string' },
             'keep-going': { type: 'boolean' }, 'allow-dirty': { type: 'boolean' }, repo: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
             'commit-config': { type: 'boolean' }, against: { type: 'string' }, offline: { type: 'boolean' }, limit: { type: 'string' }, out: { type: 'string' }, 'keep-days': { type: 'string' }, 'keep-runs': { type: 'string' },
-            stacks: { type: 'string' }, since: { type: 'string' },
+            stacks: { type: 'string' }, since: { type: 'string' }, replay: { type: 'string' },
         });
         if (values.help) {
             io.stdout(`${usage}\n`);
@@ -334,7 +351,7 @@ export async function run(args, io) {
             throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
         const stage = stageOf(values.stage);
         if (action === 'verify') {
-            const extra = ['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason', 'allow-dirty', 'stacks', 'since'].filter(k => values[k] !== undefined);
+            const extra = ['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason', 'allow-dirty', 'stacks', 'since', 'replay'].filter(k => values[k] !== undefined);
             if (extra.length)
                 throw new UsageError(`option de gates run seulement : --${extra.join(', --')}`);
             if (!values.commit)
@@ -394,6 +411,9 @@ export async function run(args, io) {
         const skipProven = values['skip-proven'] === true;
         if (skipProven && (stage === 'task' || values.only !== undefined))
             throw new UsageError('--skip-proven va avec la suite complète entière (--stage full, sans --only)');
+        const replay = replayOf(values.replay);
+        if (replay !== undefined && skipProven)
+            throw new UsageError('--replay et --skip-proven s\'excluent : --replay exige l\'exécution, --skip-proven n\'exécute rien quand le commit est prouvé');
         if (values.run !== undefined && (!RUN_ID.test(values.run) || values.run.length > 80))
             throw new UsageError(`--run : identifiant de spec invalide : ${values.run}`);
         const reason = values.reason?.trim();
@@ -418,6 +438,10 @@ export async function run(args, io) {
         // A check that repeats its changed test files needs the base they changed from: refused as an incorrect call, before
         // the proof lookup (--skip-proven) and any wait, so that a red repetition is never replaced by a run that repeats nothing.
         const selected = selectGates(loaded.config.gates, list(values.only)).gates;
+        // --replay: checks of the configuration, before any wait (runGates checks them against the checks of the run too).
+        const unknownReplay = Array.isArray(replay) ? replay.filter(id => !loaded.config.gates.some(g => g.id === id)) : [];
+        if (unknownReplay.length)
+            throw new UsageError(`--replay : contrôle inconnu ${unknownReplay.join(', ')} (déclarés : ${loaded.config.gates.map(g => g.id).join(', ')})`);
         const staged = stageGates(selected, stage ?? 'full');
         const repeating = [...staged.run, ...staged.targeted].filter(g => g.repeatChanged).map(g => g.id);
         if (repeating.length && values.base === undefined && values.since === undefined) {
@@ -512,7 +536,7 @@ export async function run(args, io) {
                     } } : {}),
                 ...(values.base ? { base: values.base } : {}), ...(since ? { base: since.commit, since: { commit: since.commit, head: since.head, risk: since.risk.level, reason: since.risk.reason } } : {}),
                 ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
-                ...(spreadOver ? { stacks: spreadOver } : {}), configFile: loaded.file });
+                ...(spreadOver ? { stacks: spreadOver } : {}), ...(replay !== undefined ? { replay } : {}), configFile: loaded.file });
         }
         catch (error) {
             if (received) {
@@ -537,6 +561,7 @@ export async function run(args, io) {
                 stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
                 reserved: result.reserved, targeted: result.targeted, early: result.early, slowEarly: result.slowEarly, receiptsDirectory: result.directory,
                 sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
+                reused: result.reused, replay: result.replay, reuseStale: result.reuseStale, reuseScan: result.reuseScan,
                 suite: result.suite, notRequired: result.notRequired, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, stacksUsed: result.stacksUsed, stacksChecked: result.stacksChecked, stacksUnmapped: result.stacksUnmapped, setup: result.setup, interruptedStacks: result.interruptedStacks, infrastructure: result.infrastructure, interrupted: received,
                 rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
                     level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
@@ -613,22 +638,30 @@ export async function run(args, io) {
             const waited = rows.filter(r => (r.lockWaitMs ?? 0) >= 1000);
             if (waited.length)
                 lines.push('', `Attente de verrou avant le délai des contrôles : ${waited.map(r => `${name(r)} ${Math.round(r.lockWaitMs / 1000)} s`).join(', ')}.`);
-            for (const r of rows.filter(r => r.diagnostic && r.status !== 'blocked' && r.status !== 'not_required'))
+            if (result.reused.length)
+                lines.push('', `Réutilisés (${result.reused.length}), non relancés : reçu vert d'un arbre identique, même configuration et même environnement, vérifié comme le fera apv gates verify :`, ...result.reused.map(r => `- ${r.gateId} : réutilisé de ${r.fromCommit.slice(0, 12)} (exécution ${r.fromRun}${r.stack ? `, pile ${r.stack}` : ''}) : ${r.reason}`));
+            if (result.replay)
+                lines.push('', `Rejeu demandé (--replay) : ${result.replay === 'all' ? 'tous les contrôles' : result.replay.join(', ')}, exécuté(s) même si une reprise était possible.`);
+            if (result.reuseStale.length)
+                lines.push('', 'Reprises devenues invérifiables pendant l\'exécution (apv gates verify les refusera) :', ...result.reuseStale.map(s => `- ${s.gateId} : ${s.reason} ; relancer avec --replay ${s.gateId}`));
+            for (const r of rows.filter(r => r.diagnostic && r.status !== 'blocked' && r.status !== 'not_required' && r.status !== 'cached'))
                 lines.push('', `--- ${name(r)} (${STATUS[r.status] ?? r.status}) ---`, r.diagnostic.trimEnd());
             const infra = result.infrastructure;
             if (infra.causes.length) {
                 lines.push('', `Panne d'infrastructure probable (${infra.all ? 'tous les échecs' : `${infra.causes.length} échec(s) sur les contrôles en échec`}) : lecture de la sortie, le statut des reçus ne change pas :`, ...infra.causes.map(c => `- ${infrastructureText(c)}`), `Marche : ${infrastructureAdvice(infra.causes, (loaded.config.stacks ?? []).map(x => x.id))}.`);
             }
-            const verdict = !result.ok ? 'Des contrôles échouent.'
-                : result.stage === 'task' && !rows.length ? 'Aucun contrôle de tâche à exécuter.'
-                    : result.stage === 'task' ? 'Tous les contrôles de tâche passent.'
-                        : result.notRequired.length ? `Tous les contrôles requis passent ; ${result.notRequired.length} non requis par leur portée (${result.notRequired.join(', ')}), non lancé(s) : apv gates verify recalcule leur portée depuis le commit.`
-                            : 'Tous les contrôles passent.';
+            const verdict = !result.ok && result.reuseStale.length && result.receipts.every(r => ['passed', 'passed_after_retry', 'cached', 'not_required'].includes(r.status)) ? `Reprise(s) devenue(s) invérifiable(s) : ${result.reuseStale.map(s => s.gateId).join(', ')} ; relancer avec --replay.`
+                : !result.ok ? 'Des contrôles échouent.'
+                    : result.stage === 'task' && !rows.length ? 'Aucun contrôle de tâche à exécuter.'
+                        : result.stage === 'task' ? 'Tous les contrôles de tâche passent.'
+                            : result.notRequired.length ? `Tous les contrôles requis passent ; ${result.notRequired.length} non requis par leur portée (${result.notRequired.join(', ')}), non lancé(s) : apv gates verify recalcule leur portée depuis le commit.`
+                                : 'Tous les contrôles passent.';
             const reserved = result.reserved.length
                 ? ` ${result.reserved.length} contrôle(s) ${RESERVED}, non exécuté(s) : la suite complète (apv gates run --stage full) les vérifie.` : '';
             const targeted = result.targeted.length
                 ? ` ${result.targeted.length} contrôle(s) ${TARGETED}(s) (${result.targeted.join(', ')}) : seuls les tests concernés par les changements ont tourné ; la suite complète (apv gates run --stage full) les exécute en entier.` : '';
-            lines.push('', `${verdict}${targeted}${reserved} Reçus : ${relative(io.cwd, result.directory) || result.directory}` +
+            const reusedText = result.ok && result.reused.length ? ` Dont ${result.reused.length} réutilisé(s) d'un arbre identique, non relancé(s) : ${result.reused.map(r => r.gateId).join(', ')}.` : '';
+            lines.push('', `${verdict}${reusedText}${targeted}${reserved} Reçus : ${relative(io.cwd, result.directory) || result.directory}` +
                 (result.shared?.directory ? ` ; copie partagée : ${result.shared.directory} (exécution ${result.runId})` : ''));
             if (result.shared?.error)
                 lines.push(`Attention : copie dans le magasin partagé impossible (${cleanLine(result.shared.error, 300)}) ; ces reçus disparaîtront avec ce worktree.`);
@@ -653,7 +686,7 @@ async function receipts(args, values, io) {
     if (sub !== 'list' && sub !== 'export' && sub !== 'prune')
         throw new UsageError(sub ? `sous-commande inconnue : gates receipts ${sub}` : 'sous-commande manquante (list, export, prune)');
     const allowed = { list: ['commit', 'limit'], export: ['out'], prune: ['keep-days', 'keep-runs', 'config'] };
-    const foreign = ['only', 'config', 'base', 'concurrency', 'stage', 'commit', 'skip-proven', 'run', 'reason', 'keep-going', 'allow-dirty', 'commit-config', 'limit', 'out', 'keep-days', 'keep-runs', 'stacks', 'since']
+    const foreign = ['only', 'config', 'base', 'concurrency', 'stage', 'commit', 'skip-proven', 'run', 'reason', 'keep-going', 'allow-dirty', 'commit-config', 'limit', 'out', 'keep-days', 'keep-runs', 'stacks', 'since', 'replay']
         .filter(k => values[k] !== undefined && !allowed[sub].includes(k));
     if (foreign.length)
         throw new UsageError(`option inattendue pour gates receipts ${sub} : --${foreign.join(', --')}`);

@@ -328,6 +328,10 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
       }
     }
   }
+  // `reuse`: only `false` (never reused); absent is the default (reuse at an identical tree), `true` says nothing more.
+  for (const gate of value.gates) {
+    list.check(gate.reuse !== true, 'CONFIG', `Gate ${gate.id}: reuse accepts only false (never reused, always run); leave it out to allow the reuse of a green receipt of an identical tree`);
+  }
   for (const [resource, { ports }] of Object.entries(value.resources ?? {})) {
     list.check(new Set(ports).size === ports.length, 'CONFIG', `resources.${resource}.ports: duplicate port`);
   }

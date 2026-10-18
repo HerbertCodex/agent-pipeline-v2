@@ -225,7 +225,8 @@ test('AC-REUSE-A0 refused: another tree, another declared commit, an unknown com
 test('AC-REUSE-A0 refused: a run of the same tree altered in the shared store could hide a later failure', async t => {
   const p = await proven(t);
   // A second run, at C' (same tree), whose shared copy is then altered and whose worktree copy is gone.
-  const again = await apv(p.repo, ['gates', 'run', '--stage', 'full', '--json']);
+  // --replay all: a second run that executes on the same tree (A1 would reuse the first).
+  const again = await apv(p.repo, ['gates', 'run', '--stage', 'full', '--replay', 'all', '--json']);
   assert.equal(again.code, 0, again.stdout);
   const second = again.json().runId;
   rmSync(join(p.local, second), { recursive: true });
@@ -240,7 +241,8 @@ test('AC-REUSE-A0 refused: a run of the same tree altered in the shared store co
 
 test('AC-REUSE-A0 refused: a later failed run of the same tree whose manifest is made unreadable (« { ») still blocks the reuse', async t => {
   const p = await proven(t);
-  const again = await apv(p.repo, ['gates', 'run', '--stage', 'full', '--json']);
+  // --replay all: a second run that executes on the same tree (A1 would reuse the first).
+  const again = await apv(p.repo, ['gates', 'run', '--stage', 'full', '--replay', 'all', '--json']);
   assert.equal(again.code, 0, again.stdout);
   const second = again.json().runId;
   rmSync(join(p.local, second), { recursive: true });

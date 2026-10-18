@@ -59,14 +59,16 @@ async function project(t, { queue = {}, holdMs = 50, gates = [], ports = true, s
   const p1 = await freePort(); const p2 = await freePort();
   // `serve`: the check also listens on p0, a port of suite.ports that is no stack's (a server of the suite).
   const p0 = serve ? await freePort() : null;
-  const e2e = { id: 'e2e', stage: 'full', timeoutMs: 60_000, passEnv: ['STACK', 'LOCK_FILE', 'BARRIER'], lock: { file: lock1, fileEnv: 'LOCK_FILE' },
+  // reuse: false (here and on the checks given): these tests are about the queue, the stacks and the ports of a suite that
+  // runs; a second run on the same tree would reuse its receipts and take none of them (A1).
+  const e2e = { id: 'e2e', stage: 'full', timeoutMs: 60_000, reuse: false, passEnv: ['STACK', 'LOCK_FILE', 'BARRIER'], lock: { file: lock1, fileEnv: 'LOCK_FILE' },
     command: node(`const fs = require("fs"); fs.mkdirSync(${JSON.stringify(out)}, { recursive: true }); fs.mkdirSync(${JSON.stringify(started)}, { recursive: true }); const start = Date.now();
 ${p0 ? `require("net").createServer().listen(${p0}, "127.0.0.1"); process.on("SIGTERM", () => process.exit(143));` : ''}
 fs.writeFileSync(${JSON.stringify(started)} + "/" + (process.env.STACK ?? "x") + "-" + start, "");
 ${barrier('process.env.STACK', '(process.env.STACK === "1" ? "2" : "1")')}
 setTimeout(() => { fs.writeFileSync(${JSON.stringify(out)} + "/e2e-" + (process.env.STACK ?? "x") + "-" + start + ".json", JSON.stringify({ stack: process.env.STACK ?? null, cwd: process.cwd(), met, start, end: Date.now() })); process.exit(0); }, ${holdMs});`) };
   write(f.repo, '.apv/config.json', {
-    gates: [e2e, ...(typeof gates === 'function' ? gates({ lock1 }) : gates)],
+    gates: [e2e, ...(typeof gates === 'function' ? gates({ lock1 }) : gates).map(g => ({ reuse: false, ...g }))],
     stacks: [{ id: '1', lockFile: lock1, env: { STACK: '1' }, ports: [p1] }, { id: '2', lockFile: lock2, env: { STACK: '2' }, ports: [p2] }],
     suite: { queue: { waitMs: 300, ...queue }, ports: [...(ports ? [p1, p2] : []), ...(p0 ? [p0] : [])] },
     ...(batch ? { batch } : {}),

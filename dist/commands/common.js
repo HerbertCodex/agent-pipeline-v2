@@ -23,6 +23,23 @@ export function repoPath(io, value) {
 export function list(value) {
     return typeof value === 'string' ? value.split(',').map(x => x.trim()).filter(Boolean) : [];
 }
+/**
+ * `--replay <id>,<id>` or `--replay all` (apv gates run, apv stack batch): the checks run even when a green receipt of an
+ * identical tree could be reused. Absent: undefined. Empty, or `all` mixed with identifiers: an incorrect call.
+ */
+export function replayOf(value) {
+    if (value === undefined)
+        return undefined;
+    const ids = list(value);
+    if (!ids.length || ids.some(id => id.startsWith('-')))
+        throw new UsageError('--replay attend des contrôles séparés par des virgules (--replay browser,integration) ou all');
+    if (ids.includes('all')) {
+        if (ids.length > 1)
+            throw new UsageError('--replay all rejoue tout : sans autre contrôle');
+        return 'all';
+    }
+    return ids;
+}
 export function json(io, value) { io.stdout(`${JSON.stringify(value, null, 2)}\n`); }
 /**
  * Runs a command body and turns errors into an exit code: a usage error prints the usage (exit 2), a known
