@@ -1,12 +1,17 @@
 import { invariant } from '../domain/errors.js';
 import { validateDag } from '../policy/policy.js';
-/** A receipt that counts as passed: `passed_after_retry` too (every test passed on the exact code; shown apart as unstable). */
-export const success = (r) => r.status === 'passed' || r.status === 'cached' || r.status === 'passed_after_retry';
+/**
+ * A receipt that counts as passed: executed and passed, `passed_after_retry` too (every test passed on the exact code; shown
+ * apart as unstable). A receipt `cached` never counts by itself: it proves nothing until its reuse is checked against Git and
+ * the store (checkReuse, src/gates/reuse-proof.ts), and only the caller that checked it counts it (`succeeded`).
+ */
+export const success = (r) => r.status === 'passed' || r.status === 'passed_after_retry';
 /** Ready queue with dependencies, named resources and shared-workspace read/write exclusion.
  * Only explicitly read-only gates overlap; a writer excludes readers too. An error never
  * leaves sibling processes running: all active promises are drained before throw. */
 export async function schedule(gates, options) {
     validateDag(gates);
+    const passed = options.succeeded ?? success;
     invariant(Number.isInteger(options.concurrency) && options.concurrency > 0, 'DAG', 'Invalid concurrency');
     const controller = new AbortController();
     const signal = AbortSignal.any([options.signal, controller.signal]);
@@ -19,7 +24,7 @@ export async function schedule(gates, options) {
     try {
         while (pending.size || running.size) {
             for (const [id, gate] of pending) {
-                const failedDependency = gate.dependsOn.some(d => done.has(d) && !success(done.get(d)));
+                const failedDependency = gate.dependsOn.some(d => done.has(d) && !passed(done.get(d)));
                 if (signal.aborted || failedDependency) {
                     done.set(id, options.blocked(gate, signal.aborted ? 'Execution cancelled' : 'Dependency failed'));
                     pending.delete(id);
@@ -33,7 +38,7 @@ export async function schedule(gates, options) {
                     writer = true;
                 const promise = Promise.resolve().then(() => options.execute(gate, signal)).then(receipt => {
                     done.set(id, receipt);
-                    if (!success(receipt) && options.failFast)
+                    if (!passed(receipt) && options.failFast)
                         controller.abort();
                 }).catch((error) => { fatal ??= error; controller.abort(); }).finally(() => {
                     running.delete(id);

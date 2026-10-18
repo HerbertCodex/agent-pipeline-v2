@@ -27,6 +27,8 @@ export interface SpreadPlan {
     assignments: Map<string, SpreadAssignment>;
     copies: SpreadCopy[];
 }
+/** Whether the lock of `gate`, as configured (its file relative to the Git common directory, or its lease), is the lock of a declared stack. */
+export declare function usesStack(git: Git, repo: string, gate: Gate, stacks: readonly ResolvedStack[]): Promise<boolean>;
 export declare function planSpread(options: {
     git: Git;
     repo: string;
@@ -74,6 +76,7 @@ export declare function prepareMainCopy(options: {
     env: NodeJS.ProcessEnv;
     signal?: AbortSignal | undefined;
     log: (line: string) => void;
+    always?: string;
 }): Promise<MainSetup | null>;
 export declare function removeCopies(plan: SpreadPlan, git: Git, repo: string, log: (line: string) => void): Promise<void>;
 /**

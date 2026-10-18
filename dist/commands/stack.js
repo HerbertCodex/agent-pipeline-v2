@@ -24,11 +24,10 @@ import { verifyGates } from '../gates/verify.js';
 import { planRepeat } from '../gates/repeat.js';
 import { Git } from '../execution/git.js';
 import { success } from '../engine/scheduler.js';
-import { environment, runProcess } from '../execution/process.js';
 import { commonDir } from '../stacks/idle.js';
 import { signalExitCode } from '../lock/run.js';
 import { resolve } from 'node:path';
-import { EXIT, UsageError, guard, json, list, parse } from './common.js';
+import { EXIT, UsageError, guard, json, list, parse, replayOf } from './common.js';
 import { ORDER_USAGE, stackMergeOnOrder } from './stack-order.js';
 export const usage = `Utilisation :
   apv stack plan <pr...> [--target <branche>] [--ready] [--allow-behind --reason <texte>] [--json]
@@ -36,9 +35,10 @@ export const usage = `Utilisation :
                                    [--allow-behind --reason <texte>] [--keep-branches] [--wait-ci <minutes>] [--json]
   APV_ALLOW_MERGE=1 apv stack merge <publication> <article> --order <référence> [--json]
   apv stack batch <pr...> [--target <branche>] [--dir <dossier>] [--bisect] [--dast] [--keep] [--stacks <pile>,<pile>]
+                          [--replay <id>,<id>|all]
                           [--wait-ci <minutes>] [--json]
   APV_ALLOW_MERGE=1 apv stack batch <pr...> --merge [--ready] [--target <branche>] [--dir <dossier>] [--bisect] [--dast]
-                                   [--keep-branches] [--stacks <pile>,<pile>] [--wait-ci <minutes>]
+                                   [--keep-branches] [--stacks <pile>,<pile>] [--replay <id>,<id>|all] [--wait-ci <minutes>]
 
 Pile de PR, de la base vers le sommet (numéros de PR dans l'ordre de fusion).
 plan   lit chaque PR (gh pr view) et vérifie la pile : chaque PR ouverte, la base de la PR n+1 est la
@@ -80,10 +80,14 @@ Base à jour : une PR dont la tête ne contient pas la tête actuelle de sa base
 batch  fusion par lot de PR indépendantes, chacune vers la cible : lit chaque PR (ouverte, fusionnable,
        contrôles au vert ; brouillon admis), crée la branche apv/lot-<date> depuis origin/<cible> dans un
        worktree (--dir, défaut <répertoire git commun>/apv/lots/), y fusionne la tête de chaque PR dans
-       l'ordre (git merge --no-ff, jamais de rebase ; une PR en conflit reste hors du lot), lance batch.setup
-       de .apv/config.json (facultatif), UNE suite complète (apv gates run --stage full) puis apv gates verify
-       à la tête du lot. C'est la voie normale de fusion dès que deux PR indépendantes sont prêtes (D5, revue du
-       pipeline du 2026-10-03 validée par l'opérateur, projet pilote).
+       l'ordre (git merge --no-ff, jamais de rebase ; une PR en conflit reste hors du lot), puis UNE suite
+       complète (apv gates run --stage full) et apv gates verify à la tête du lot. C'est la voie normale de fusion
+       dès que deux PR indépendantes sont prêtes (D5, revue du pipeline du 2026-10-03 validée par l'opérateur,
+       projet pilote). Reprise à arbre identique (comme apv gates run) : un lot relancé sur les mêmes PR et la
+       même cible, ou dont l'arbre est celui d'une suite déjà verte, reprend les reçus verts de cet arbre
+       (« réutilisé de <commit> », vérifiés par apv gates verify) au lieu de rejouer les contrôles ; batch.setup
+       de la cible (facultatif) ne prépare la copie du lot, et chaque copie de pile, que si un contrôle y est
+       exécuté : rien quand tout est repris. --replay <id>,<id> ou --replay all exécute ces contrôles quand même.
        Fichiers générés : un conflit qui ne touche que la carte du code (map.file), .apv/DECISIONS.json ou
        .apv/DECISIONS.md n'exclut pas la PR : le registre est fusionné par union de ses décisions (une décision
        modifiée des deux côtés reste un conflit), le Markdown rendu depuis le registre, la carte régénérée
@@ -290,7 +294,7 @@ export async function run(args, io) {
             method: { type: 'string' }, target: { type: 'string' }, ready: { type: 'boolean' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
             'allow-behind': { type: 'boolean' }, reason: { type: 'string' },
             dir: { type: 'string' }, bisect: { type: 'boolean' }, merge: { type: 'boolean' }, keep: { type: 'boolean' }, 'keep-branches': { type: 'boolean' },
-            stacks: { type: 'string' }, 'wait-ci': { type: 'string' }, dast: { type: 'boolean' }, order: { type: 'string' },
+            stacks: { type: 'string' }, 'wait-ci': { type: 'string' }, dast: { type: 'boolean' }, order: { type: 'string' }, replay: { type: 'string' },
         });
         if (values.help) {
             io.stdout(`${usage}\n`);
@@ -300,7 +304,7 @@ export async function run(args, io) {
         if (action !== 'plan' && action !== 'merge' && action !== 'batch')
             throw new UsageError(action ? `sous-commande inconnue : stack ${action}` : 'sous-commande manquante (plan, merge ou batch)');
         const prs = numbers(rest);
-        const batchOnly = ['dir', 'bisect', 'merge', 'keep', 'stacks', 'dast'].filter(k => values[k] !== undefined);
+        const batchOnly = ['dir', 'bisect', 'merge', 'keep', 'stacks', 'dast', 'replay'].filter(k => values[k] !== undefined);
         if (action !== 'batch' && batchOnly.length)
             throw new UsageError(`--${batchOnly.join(', --')} : réservé(s) à stack batch`);
         if (action === 'plan' && values['keep-branches'] !== undefined)
@@ -442,6 +446,8 @@ async function batch(prs, values, io, ci) {
     if (!repo)
         throw new PipelineError('NOT_A_REPOSITORY', `Pas un dépôt Git : ${io.cwd}`);
     // The test stacks of the suite: checked against the stacks the checkout declares before anything is built.
+    // --replay: the checks run even when a green receipt of an identical tree could be reused (checked against the target at the proof).
+    const replay = replayOf(values.replay);
     const stacks = values.stacks === undefined ? undefined : list(values.stacks);
     if (stacks !== undefined) {
         if (!stacks.length || new Set(stacks).size !== stacks.length)
@@ -529,20 +535,15 @@ async function batch(prs, values, io, ci) {
     const prove = async (worktree, head, base) => {
         // The checks, the setup and the verification come from the target, never from the batch they prove.
         const loaded = atCommit(base);
-        const settings = loaded.config.batch;
-        if (settings?.setup) {
-            log(`Lot : préparation de la copie (${settings.setup.join(' ')}).`);
-            const env = environment([...loaded.config.environment.passEnv, 'HOME', ...settings.passEnv], io.env);
-            const r = await runProcess({ command: settings.setup, cwd: worktree, env, timeoutMs: settings.setupTimeoutMs, signal: abort.signal, maxOutputBytes: 256 * 1024 });
-            if (r.status !== 'passed')
-                return { ok: false, runId: null, summary: `préparation batch.setup en échec (${r.status}, code ${r.exitCode ?? '-'}) : ${`${r.stdout}\n${r.stderr}`.trim().slice(-800)}` };
-        }
         // The target as base and reference: the checks that repeat their changed test files (repeatChanged) repeat those the
         // batch brings; their ceiling of files was applied pull request by pull request (repeatRefusal), never to the sum.
+        // batch.setup of the target prepares the copy of the batch inside the suite (batchSetup), only when a check runs there:
+        // a batch whose checks are all reused from an identical tree prepares nothing (docs/ACCELERATION-LOTS.md, A4).
         let result;
         try {
             // The target is also the reference of the scope of the proof (skipWhenOnly): its paths, its merge base with the batch.
             result = await runGates({ repo: worktree, config: loaded.config, stage: 'full', base, repeatReference: base, reference: base, repeatCeiling: false, env: io.env, log, signal: abort.signal,
+                batchSetup: true, ...(replay !== undefined ? { replay } : {}),
                 ...(stacks ? { stacks } : {}), ...(io.env['APV_LOCK_POLL_MS'] || io.env['APV_PORTS_POLL_MS'] ? { hooks: {
                         ...(io.env['APV_LOCK_POLL_MS'] ? { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } : {}), ...(io.env['APV_PORTS_POLL_MS'] ? { portsPollMs: Number(io.env['APV_PORTS_POLL_MS']) } : {})
                     } } : {}) });
@@ -552,12 +553,20 @@ async function batch(prs, values, io, ci) {
             if (error instanceof PipelineError && ['GATE_REPEAT', 'GATE_STACKS', 'STACK_UNKNOWN'].includes(error.code)) {
                 return { ok: false, runId: null, summary: `suite refusée : ${cleanLine(error.message, 600)}`, refused: cleanLine(error.message, 600) };
             }
+            // batch.setup in the copy of the batch failed (or wrote outside what Git ignores): run on the tree the pull requests
+            // bring (a package.json that breaks npm ci), so it is a failure of the batch, as before, never a refusal.
+            if (error instanceof PipelineError && error.code === 'GATE_SETUP')
+                return { ok: false, runId: null, summary: `préparation batch.setup en échec : ${cleanLine(error.message, 800)}` };
             throw error;
         }
         const verified = await verifyGates({ repo: worktree, config: loaded.config, commit: head, stage: 'full', repeatReference: base, reference: base });
-        const passed = result.receipts.filter(success).length;
+        // A receipt `cached` counts as passed only because this run checked its reuse (result.reused), as verify does again.
+        const reusedIds = new Set(result.reused.map(r => r.receipt));
+        const succeeded = (r) => success(r) || (r.status === 'cached' && reusedIds.has(r.id));
+        const passed = result.receipts.filter(succeeded).length;
+        const reusedText = result.reused.length ? ` (dont ${result.reused.length} réutilisé(s) d'un arbre identique : ${result.reused.map(r => `${r.gateId} de ${r.fromCommit.slice(0, 12)}`).join(', ')})` : '';
         const notRequired = result.receipts.filter(r => r.status === 'not_required').map(r => r.gateId);
-        const failed = result.receipts.filter(r => !success(r) && r.status !== 'not_required').map(r => `${r.gateId} (${r.status})`);
+        const failed = result.receipts.filter(r => !succeeded(r) && r.status !== 'not_required').map(r => `${r.gateId} (${r.status})`);
         // A check passed only after the relaunch of its failed tests proves nothing for a merge (rule instable).
         if (verified.flaky.length || result.flaky.length) {
             const flaky = [...new Set([...verified.flaky, ...result.flaky])];
@@ -568,7 +577,7 @@ async function batch(prs, values, io, ci) {
         const infraText = infra.causes.length ? ` ; panne d'infrastructure probable : ${infra.causes.map(infrastructureText).join(' ; ')}` : '';
         const ok = result.ok && verified.ok;
         return { ok, runId: result.runId,
-            summary: `${passed}/${result.receipts.length} contrôle(s) réussi(s)${notRequired.length ? `, non requis par leur portée : ${notRequired.join(', ')}` : ''}${failed.length ? `, en échec : ${failed.join(', ')}` : ''}${infraText} ; apv gates verify ${verified.ok ? 'à 0' : 'en échec'} ; exécution ${result.runId}`,
+            summary: `${passed}/${result.receipts.length} contrôle(s) réussi(s)${reusedText}${notRequired.length ? `, non requis par leur portée : ${notRequired.join(', ')}` : ''}${failed.length ? `, en échec : ${failed.join(', ')}` : ''}${infraText} ; apv gates verify ${verified.ok ? 'à 0' : 'en échec'} ; exécution ${result.runId}`,
             ...(!ok && infra.all ? { infrastructure: `${infra.causes.map(infrastructureText).join(' ; ')} ; ${infrastructureAdvice(infra.causes, stacks ? [] : (loaded.config.stacks ?? []).map(x => x.id))}` } : {}) };
     };
     /** `--dast`: `apv dast run` on the worktree of the proven batch, with the scan the target declares, under its lease. */

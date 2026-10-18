@@ -177,3 +177,22 @@ export declare function repeatDiagnostic(input: {
     excerpt: string;
     hasPattern: boolean;
 }): string;
+/**
+ * Why a successful receipt of a check that declares `repeatChanged` does not prove the repetition of the changed test files
+ * at `commit`, or null when it does (`apv gates verify`, and `apv gates run` before it reuses a receipt). The files are
+ * recomputed from the commit, against the base the run recorded and, with `reference` (a complete receipt at stage full),
+ * against the reference resolved now: a run without a base, with a base equal to the commit, or with a base too close to
+ * leave out some changed tests never proves the check.
+ */
+export declare function repeatProofGap(git: Git, repo: string, commit: string, settings: RepeatSettings, r: {
+    base: string | null;
+    status: string;
+    files: readonly string[];
+} | undefined, reference: {
+    name: string;
+    sha: string | null;
+    reason: string;
+} | null): Promise<{
+    missing: string[];
+    reason: string;
+} | null>;

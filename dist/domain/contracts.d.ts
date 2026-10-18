@@ -1,5 +1,5 @@
 import { type Infer } from './schema.js';
-export declare const VERSION = "3.0.0-alpha.25";
+export declare const VERSION = "3.0.0-alpha.26";
 export declare const lanes: readonly ["fast", "standard", "high"];
 export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];
@@ -149,6 +149,7 @@ export declare const gateSchema: import("./schema.js").Schema<{
             readonly waitMs: number;
         } | undefined;
     }[] | undefined;
+    readonly reuse: boolean | undefined;
 }>;
 /** Stage of a check; absent means `task`. */
 export declare const gateStage: (gate: {
@@ -380,6 +381,7 @@ export declare const configSchema: import("./schema.js").Schema<{
                 readonly waitMs: number;
             } | undefined;
         }[] | undefined;
+        readonly reuse: boolean | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;

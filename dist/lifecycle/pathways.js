@@ -64,7 +64,9 @@ export function requiresQa(record, run, spec) {
 export function targetedQaContext(context) {
     const { problem: _problem, questions: _questions, tasks, ...obligations } = context.spec;
     return { ...context, spec: { ...obligations, tasks: tasks.map(({ description: _description, ...task }) => task) },
-        receipts: context.receipts.map(({ diagnostic, ...receipt }) => ({ ...receipt, diagnostic: ['passed', 'cached'].includes(receipt.status) ? '' : diagnostic })),
+        // Only the log of an executed success is omitted: a receipt `cached` keeps its diagnostic (where it was reused from),
+        // so that QA never reads a reuse as an execution.
+        receipts: context.receipts.map(({ diagnostic, ...receipt }) => ({ ...receipt, diagnostic: receipt.status === 'passed' ? '' : diagnostic })),
         qaScope: { mode: 'targeted', completeDiff: true, acceptanceIds: context.spec.acceptance.map(a => a.id),
             instruction: 'Review every listed criterion, decision and security requirement against the complete diff and receipts. Read candidate files when needed. Planning prose and successful command logs were omitted, never code changes or acceptance obligations.' } };
 }

@@ -8,7 +8,7 @@ import { readEnvFile } from '../stacks/config.js';
 import { resolveStacks } from '../stacks/idle.js';
 import { commonPath } from './suite.js';
 /** Whether the lock of `gate`, as configured (its file relative to the Git common directory, or its lease), is the lock of a declared stack. */
-async function usesStack(git, repo, gate, stacks) {
+export async function usesStack(git, repo, gate, stacks) {
     if (!gate.lock)
         return false;
     if ('resource' in gate.lock) {
@@ -113,7 +113,10 @@ export function setupNeeded(repo) {
  * the editor): refused (`GATE_SETUP`). The caller runs it under the place of the copy in the queue, after every refusal.
  */
 export async function prepareMainCopy(options) {
-    const reason = setupNeeded(options.repo);
+    // `always` (apv stack batch): a fresh copy, prepared by batch.setup whenever one is declared, whatever it holds.
+    if (options.always !== undefined && !options.config.batch?.setup)
+        return null;
+    const reason = options.always ?? setupNeeded(options.repo);
     if (!reason)
         return null;
     const setup = options.config.batch?.setup;
