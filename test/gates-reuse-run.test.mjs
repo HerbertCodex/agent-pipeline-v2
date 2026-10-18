@@ -11,7 +11,7 @@ import { Git } from '../dist/execution/git.js';
 import { verifyGates } from '../dist/gates/verify.js';
 import { inputsDigest } from '../dist/gates/reuse.js';
 import { checkReuse, neverReused, readLocal, reuseContext, runsDast } from '../dist/gates/reuse-proof.js';
-import { gatesConfigHash } from '../dist/gates/run.js';
+import { gatesConfigHash, runGates } from '../dist/gates/run.js';
 import { schedule, success } from '../dist/engine/scheduler.js';
 import { targetedQaContext } from '../dist/lifecycle/pathways.js';
 
@@ -399,32 +399,60 @@ fs.appendFileSync(${JSON.stringify(out)} + "/${name}.log", JSON.stringify({ cwd:
   const setups = () => existsSync(setupLog) ? readFileSync(setupLog, 'utf8').trim().split('\n').filter(Boolean) : [];
   const env = { APV_LOCK_DIR: join(f.root, 'locks'), APV_LOCK_POLL_MS: '20' };
   const common = realpathSync(resolve(f.repo, git(f.repo, 'rev-parse', '--git-common-dir')));
-  return { ...f, runs, setups, common, run: (...args) => apv(f.repo, ['gates', 'run', ...args], env), same: () => { git(f.repo, 'commit', '-q', '--allow-empty', '-m', 'même arbre'); return git(f.repo, 'rev-parse', 'HEAD'); } };
+  return { ...f, runs, setups, common, env, run: (...args) => apv(f.repo, ['gates', 'run', ...args], env), same: () => { git(f.repo, 'commit', '-q', '--allow-empty', '-m', 'même arbre'); return git(f.repo, 'rev-parse', 'HEAD'); } };
 }
 
-test('A4: --stacks with every check reused prepares no copy of a stack; a check replayed runs on the first stack, in this copy', { skip: !hasFlock && 'flock(1) missing' }, async t => {
+test('A4 (lot): --stacks with every check reused prepares no copy of a stack; a check replayed runs on the first stack, in the copy of the batch', { skip: !hasFlock && 'flock(1) missing' }, async t => {
   const p = stacksProject(t);
-  const first = await p.run('--stacks', '1,2', '--json');
-  assert.equal(first.code, 0, first.stdout + first.stderr);
-  assert.deepEqual(first.json().spread.map(a => [a.gate, a.stack]), [['integration', '1'], ['browser', '2']]);
-  assert.equal(p.setups().length, 1, 'the copy of stack 2 was prepared once');
-  const head = p.same();
-  const again = await p.run('--stacks', '1,2', '--json');
-  assert.equal(again.code, 0, again.stdout + again.stderr);
-  const result = again.json();
-  assert.deepEqual(statuses(result), { unit: 'cached', integration: 'cached', browser: 'cached' });
-  assert.deepEqual(result.spread, [], 'no check dealt to a stack');
-  assert.equal(p.setups().length, 1, 'no batch.setup in any copy');
+  const config = loadConfig(p.repo).config;
+  // apv stack batch: its copy is a linked worktree, prepared by batch.setup before any reuse, its stack copies by the same.
+  const dir = join(p.root, 'lot');
+  git(p.repo, 'worktree', 'add', '-q', '--detach', dir, 'HEAD');
+  const lot = (extra = {}) => runGates({ repo: dir, config, stage: 'full', batchSetup: true, stacks: ['1', '2'], env: { ...process.env, ...p.env }, log: () => {}, ...extra });
+  const first = await lot();
+  assert.equal(first.ok, true);
+  assert.deepEqual(first.spread.map(a => [a.gate, a.stack]), [['integration', '1'], ['browser', '2']]);
+  assert.equal(p.setups().length, 2, 'the copy of the batch, then the copy of stack 2');
+  git(dir, 'commit', '-q', '--allow-empty', '-m', 'même arbre');
+  const head = git(dir, 'rev-parse', 'HEAD');
+  const again = await lot();
+  assert.equal(again.ok, true);
+  assert.deepEqual(Object.fromEntries(again.receipts.map(r => [r.gateId, r.status])), { unit: 'cached', integration: 'cached', browser: 'cached' });
+  assert.deepEqual(again.spread, [], 'no check dealt to a stack');
+  assert.equal(p.setups().length, 3, 'only the copy of the batch prepared, before the reuses; no copy of a stack');
   assert.equal(p.runs('browser').length, 1);
-  assert.equal(JSON.parse(readFileSync(join(result.receiptsDirectory, 'browser.json'), 'utf8')).stack, '2', 'the stack of the environment reused');
-  assert.equal((await apv(p.repo, ['gates', 'verify', '--commit', head])).code, 0);
+  assert.equal(again.receipts.find(r => r.gateId === 'browser').stack, '2', 'the stack of the environment reused');
+  assert.equal((await apv(dir, ['gates', 'verify', '--commit', head])).code, 0);
   assert.deepEqual(readdirSync(join(p.common, 'apv', 'copies')), []);
-  // Only browser runs: dealt to the first stack, in this copy; the copy of stack 2 is never made nor prepared.
-  const replayed = await p.run('--stacks', '1,2', '--replay', 'browser', '--json');
-  assert.equal(replayed.code, 0, replayed.stdout + replayed.stderr);
-  assert.deepEqual(replayed.json().spread.map(a => [a.gate, a.stack, a.workspace === realpathSync(p.repo)]), [['browser', '1', true]]);
-  assert.equal(p.setups().length, 1);
+  // Only browser runs: dealt to the first stack, in the copy of the batch; the copy of stack 2 is never made nor prepared.
+  const replayed = await lot({ replay: ['browser'] });
+  assert.equal(replayed.ok, true);
+  assert.deepEqual(replayed.spread.map(a => [a.gate, a.stack, realpathSync(a.workspace) === realpathSync(dir)]), [['browser', '1', true]]);
+  assert.equal(p.setups().length, 4);
   assert.equal(p.runs('browser').at(-1).stack, '1');
+});
+
+test('relecture sécurité de A1 (M2) : hors lot, --stacks à plusieurs piles ne reprend jamais un contrôle de pile que la répartition peut envoyer dans une autre copie ; à une seule pile, il tourne ici et reste repris', { skip: !hasFlock && 'flock(1) missing' }, async t => {
+  const p = stacksProject(t);
+  // Origin in the main copy: --stacks 1, every check of a stack runs here.
+  const first = await p.run('--stacks', '1', '--json');
+  assert.equal(first.code, 0, first.stdout + first.stderr);
+  assert.deepEqual(first.json().spread.map(a => [a.gate, a.stack, a.workspace === realpathSync(p.repo)]), [['integration', '1', true], ['browser', '1', true]]);
+  p.same();
+  // Refused: --stacks 1,2 outside a batch; the local state of the copy of stack 2 is not measured before the decision.
+  const spread = await p.run('--stacks', '1,2', '--json');
+  assert.equal(spread.code, 0, spread.stdout + spread.stderr);
+  assert.deepEqual(statuses(spread.json()), { unit: 'cached', integration: 'passed', browser: 'passed' });
+  for (const gate of ['integration', 'browser']) assert.match(spread.stderr, new RegExp(`${gate} : non repris : copie de pile hors lot \\(--stacks 1,2 peut le répartir dans la copie d'une autre pile`));
+  assert.deepEqual(spread.json().spread.map(a => [a.gate, a.stack]), [['integration', '1'], ['browser', '2']]);
+  assert.equal(p.runs('browser').at(-1).stack, '2');
+  // Accepted: --stacks 1 alone, every check of a stack runs in this copy, whose local state is the one measured.
+  const head = p.same();
+  const single = await p.run('--stacks', '1', '--json');
+  assert.equal(single.code, 0, single.stdout + single.stderr);
+  assert.deepEqual(statuses(single.json()), { unit: 'cached', integration: 'cached', browser: 'cached' });
+  assert.doesNotMatch(single.stderr, /copie de pile hors lot/);
+  assert.equal((await apv(p.repo, ['gates', 'verify', '--commit', head])).code, 0);
 });
 
 test('the inputs digest hashes the raw bytes of the paths: f\\xff and f\\xfe differ (relecture du delta A0, faible 1)', async t => {

@@ -587,8 +587,18 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     for (const gate of runnable) {
       if (targeted.has(gate.id) || earlyDecisions.has(gate.id)) continue;
       if (replay?.includes(gate.id)) { log(`${gate.id} : rejoué sur demande (--replay), même si une reprise était possible.`); continue; }
+      const ofStack = options.stacks !== undefined && common !== null && await usesStack(git, repo, gate, stacks);
+      // Outside a batch, a check of a stack that --stacks may deal to the copy of another stack (several stacks given, no
+      // dependency that keeps it in this copy, planSpread) would run in a copy made after this decision: the local state
+      // measured here is the one of this copy, never the one of that copy (relecture sécurité de A1, M2). It runs. A batch
+      // prepares all its copies by the same batch.setup of the target, this one before any reuse.
+      if (ofStack && options.batchSetup !== true && options.stacks!.length > 1 && gate.dependsOn.length === 0) {
+        log(`${gate.id} : non repris : copie de pile hors lot (--stacks ${options.stacks!.join(',')} peut le répartir dans la copie d'une autre pile, ` +
+          `dont l'état local n'est pas mesuré avant son exécution) : exécuté.`);
+        continue;
+      }
       // The environments it would run in now: its variables, its executable, and under --stacks those of each stack given.
-      const onStacks = options.stacks && common && await usesStack(git, repo, gate, stacks) ? options.stacks.map(id => stacks.find(s => s.id === id)!) : [null];
+      const onStacks = ofStack ? options.stacks!.map(id => stacks.find(s => s.id === id)!) : [null];
       const environments: (ReuseEnvironment & { executable: { path: string; sha256: string } })[] = [];
       for (const stack of onStacks) {
         try {
