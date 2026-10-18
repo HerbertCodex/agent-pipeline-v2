@@ -238,6 +238,24 @@ test('AC-REUSE-A0 refused: a run of the same tree altered in the shared store co
   assert.match(unitOf(result).reuse.reason, new RegExp(`exécution ${second} du même arbre altérée dans le magasin partagé : un échec plus récent ne peut pas être exclu`));
 });
 
+test('AC-REUSE-A0 refused: a later failed run of the same tree whose manifest is made unreadable (« { ») still blocks the reuse', async t => {
+  const p = await proven(t);
+  const again = await apv(p.repo, ['gates', 'run', '--stage', 'full', '--json']);
+  assert.equal(again.code, 0, again.stdout);
+  const second = again.json().runId;
+  rmSync(join(p.local, second), { recursive: true });
+  const file = join(p.store, second, 'unit.json');
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), status: 'failed', exitCode: 1 }));
+  // Without its manifest the run names no commit: the scan of the same tree used to skip it, and the failure was hidden.
+  writeFileSync(join(p.store, second, 'manifest.json'), '{');
+  await reuseAll(p);
+  const result = await verify(p);
+  assert.equal(result.ok, false);
+  assert.ok(result.altered.some(a => a.runId === second), 'reported as altered, never counted');
+  assert.equal(unitOf(result).state, 'reuse');
+  assert.match(unitOf(result).reuse.reason, new RegExp(`exécution ${second} du magasin partagé au manifeste absent ou illisible : son commit est inconnu, un échec plus récent sur le même arbre ne peut pas être exclu`));
+});
+
 test('AC-REUSE-A0 refused: another environment, other output digests, inputs digest or files declared, basis inputs', async t => {
   const cases = [
     [r => ({ ...r, reuse: { ...r.reuse, environment: 'e'.repeat(64) } }), /identité d'environnement différente de celle de l'origine/],
@@ -293,4 +311,44 @@ test('AC-REUSE-A0: the receipt contract keeps reuse to receipts cached, and veri
   assert.equal(atFrom.ok, true);
   assert.deepEqual(atFrom.reused, []);
   assert.ok(readdirSync(p.local).length >= 2);
+});
+
+test('the inputs digest is unambiguous: a file name with a line feed and a tab never imitates two files (relecture sécurité de A0)', async t => {
+  const f = fixture(t);
+  // Tree 1: files a and b. Tree 2: a single file whose name carries, after a line feed, the line of b in the former
+  // encoding (`mode blob<TAB>path` joined by line feeds): both trees gave the same digest.
+  writeFileSync(join(f.repo, 'a'), 'A\n'); writeFileSync(join(f.repo, 'b'), 'B\n');
+  git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'a et b');
+  const one = git(f.repo, 'rev-parse', 'HEAD');
+  const blobB = git(f.repo, 'rev-parse', `${one}:b`);
+  git(f.repo, 'rm', '-q', 'a', 'b');
+  for (const p of ['README.md', 'docs/guide.md', 'src/math.mjs', 'test/math.test.mjs', '.gitignore']) git(f.repo, 'rm', '-q', p);
+  writeFileSync(join(f.repo, `a\n100644 ${blobB}\tb`), 'A\n');
+  git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', 'un seul fichier au nom piège');
+  const two = git(f.repo, 'rev-parse', 'HEAD');
+  const entries = commit => git(f.repo, 'ls-tree', '-r', '-z', '--full-tree', commit).split('\0').filter(Boolean)
+    .filter(e => ['a', 'b'].includes(e.slice(e.indexOf('\t') + 1)) || e.includes('\n'));
+  // The former encoding, on the files of both trees that matter here: the same text, hence the same digest.
+  const former = commit => entries(commit).map(e => { const tab = e.indexOf('\t'); const [mode, , blob] = e.slice(0, tab).split(' '); return `${mode} ${blob}\t${e.slice(tab + 1)}`; })
+    .sort((x, y) => { const px = x.slice(x.indexOf('\t') + 1); const py = y.slice(y.indexOf('\t') + 1); return px < py ? -1 : px > py ? 1 : 0; }).join('\n');
+  assert.equal(former(two), former(one), 'the trap does collide under the former encoding');
+  // The digest of the whole trees now differs.
+  const g = new Git();
+  git(f.repo, 'checkout', '-q', one);
+  const d1 = await inputsDigest(g, f.repo, one);
+  const d2 = await inputsDigest(g, f.repo, two);
+  assert.notEqual(d1.digest, d2.digest);
+  // On trees reduced to exactly those files, too (the former encoding of the whole trees was then equal).
+  const only = async (from, keep) => {
+    git(f.repo, 'checkout', '-q', '--detach', from);
+    for (const e of git(f.repo, 'ls-files', '-z').split('\0').filter(Boolean)) if (!keep.includes(e)) git(f.repo, 'rm', '-q', '--', e);
+    git(f.repo, 'commit', '-qm', 'réduit');
+    return git(f.repo, 'rev-parse', 'HEAD');
+  };
+  const small1 = await only(one, ['a', 'b']);
+  // `two` already holds only the trap file: its whole tree read in the former encoding was the text of `small1`.
+  const small2 = two;
+  assert.deepEqual(git(f.repo, 'ls-tree', '-r', '-z', '--name-only', two).split('\0').filter(Boolean), [`a\n100644 ${blobB}\tb`]);
+  assert.notEqual((await inputsDigest(g, f.repo, small1)).digest, (await inputsDigest(g, f.repo, small2)).digest);
+  assert.equal((await inputsDigest(g, f.repo, small2)).files, 1);
 });

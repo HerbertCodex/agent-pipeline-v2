@@ -398,12 +398,14 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     if (reuse.ignoreDigest !== ignoreDigest([])) return refuse('reprise à arbre identique qui déclare des fichiers ignorés');
     if (reuse.inputsDigest !== (await inputsDigest(git, repo, commit)).digest) return refuse('empreinte des entrées différente de celle recalculée au commit');
     // A later failure on the same tree wins, as in `verify`: receipts of the worktree (every commit) and runs of the shared
-    // store whose manifest names a commit of this tree. A run of such a commit refused as altered could hide one: refused too.
+    // store whose manifest names a commit of this tree. A run of such a commit refused as altered could hide one, and so could
+    // a run whose manifest no longer says its commit (absent, unreadable, invalid): both refuse the reuse.
     const commits = new Set(local.found.map(f => f.receipt.candidateSha));
     for (const runId of sharedRunIds(store)) {
       if (local.runs.has(runId)) continue;
       const named = manifestCommit(join(store, runId));
-      if (named) commits.add(named);
+      if (!named) return refuse(`exécution ${runId} du magasin partagé au manifeste absent ou illisible : son commit est inconnu, un échec plus récent sur le même arbre ne peut pas être exclu`);
+      commits.add(named);
     }
     const trees = await treesOf(git, repo, commits);
     const same = readShared(store, local.runs, named => named !== null && trees.get(named) === tree);
