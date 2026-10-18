@@ -14,9 +14,11 @@ export declare function treesOf(git: Git, repo: string, commits: Iterable<string
 /** Digest of a list of ignore globs (`reuse.ignoreDigest`): sorted and deduplicated, so their order never matters. */
 export declare function ignoreDigest(globs: readonly string[]): string;
 /**
- * Digest of the inputs of a check at `commit` (`reuse.inputsDigest`): sha256 of the sorted list `mode blob<TAB>path` of the
- * tracked files of its tree (submodules included), minus those matching `ignore`. With no glob, two commits have the same
- * digest exactly when they have the same tree content. Fails when the commit is not in the repository.
+ * Digest of the inputs of a check at `commit` (`reuse.inputsDigest`): sha256 of the JSON of the list of `[path, mode, blob]`
+ * of the tracked files of its tree (submodules included), sorted by path, minus those matching `ignore`. JSON encodes every
+ * character of a path (a line feed or a tab in a file name included): two different lists never share an encoding. With no
+ * glob, two commits have the same digest exactly when they have the same tree content. Fails when the commit is not in the
+ * repository.
  */
 export declare function inputsDigest(git: Git, repo: string, commit: string, ignore?: readonly string[]): Promise<{
     digest: string;

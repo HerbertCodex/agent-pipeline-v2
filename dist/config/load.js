@@ -249,6 +249,9 @@ export function readSections(raw) {
     const known = [...READ_SECTIONS, ...OWN_SECTIONS];
     return { picked, ignored: Object.keys(input).filter(k => !known.includes(k)).sort() };
 }
+/** Longest pattern of `early.when` (characters), and most wildcards (`*` or `**`) in one: the cost of a match stays small. */
+export const MAX_WHEN_LENGTH = 200;
+export const MAX_WHEN_WILDCARDS = 16;
 /** Every problem of a configuration document: schema, duplicate ids, unknown dependencies, cycles. */
 export function configIssues(raw) {
     let sections;
@@ -305,6 +308,12 @@ export function configIssues(raw) {
                 catch (error) {
                     throw new PipelineError('CONFIG', `Gate ${gate.id}: early check ${early.id}: when: ${errorMessage(error)}`);
                 } });
+            // `when` is read from the candidate too (union with the base): a bounded pattern bounds the cost of each comparison
+            // with a changed file (matching is linear, src/policy/policy.ts), whatever the PR writes.
+            for (const glob of early.when ?? []) {
+                const wildcards = glob.match(/\*\*|\*/g)?.length ?? 0;
+                list.check(glob.length <= MAX_WHEN_LENGTH && wildcards <= MAX_WHEN_WILDCARDS, 'CONFIG', `Gate ${gate.id}: early check ${early.id}: when: ${glob.slice(0, 80)}${glob.length > 80 ? '...' : ''} : ${glob.length} characters and ${wildcards} wildcards (* or **); at most ${MAX_WHEN_LENGTH} characters and ${MAX_WHEN_WILDCARDS} wildcards per pattern`);
+            }
         }
     }
     for (const [resource, { ports }] of Object.entries(value.resources ?? {})) {

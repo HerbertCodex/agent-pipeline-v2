@@ -44,13 +44,15 @@ export function ignoreDigest(globs) {
     return sha256(JSON.stringify([...new Set(globs)].sort()));
 }
 /**
- * Digest of the inputs of a check at `commit` (`reuse.inputsDigest`): sha256 of the sorted list `mode blob<TAB>path` of the
- * tracked files of its tree (submodules included), minus those matching `ignore`. With no glob, two commits have the same
- * digest exactly when they have the same tree content. Fails when the commit is not in the repository.
+ * Digest of the inputs of a check at `commit` (`reuse.inputsDigest`): sha256 of the JSON of the list of `[path, mode, blob]`
+ * of the tracked files of its tree (submodules included), sorted by path, minus those matching `ignore`. JSON encodes every
+ * character of a path (a line feed or a tab in a file name included): two different lists never share an encoding. With no
+ * glob, two commits have the same digest exactly when they have the same tree content. Fails when the commit is not in the
+ * repository.
  */
 export async function inputsDigest(git, repo, commit, ignore = []) {
     const out = await git.exec(repo, ['ls-tree', '-r', '-z', '--full-tree', '--end-of-options', `${commit}^{tree}`]);
-    const lines = [];
+    const entries = [];
     for (const entry of out.split('\0')) {
         if (!entry)
             continue;
@@ -59,13 +61,9 @@ export async function inputsDigest(git, repo, commit, ignore = []) {
         const path = entry.slice(tab + 1);
         if (ignore.some(glob => matches(path, glob)))
             continue;
-        lines.push(`${mode} ${blob}\t${path}`);
+        entries.push([path, mode, blob]);
     }
-    lines.sort((a, b) => {
-        const pa = a.slice(a.indexOf('\t') + 1);
-        const pb = b.slice(b.indexOf('\t') + 1);
-        return pa < pb ? -1 : pa > pb ? 1 : 0;
-    });
-    return { digest: sha256(lines.join('\n')), files: lines.length };
+    entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    return { digest: sha256(JSON.stringify(entries)), files: entries.length };
 }
 //# sourceMappingURL=reuse.js.map
