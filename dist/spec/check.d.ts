@@ -2,7 +2,7 @@ import type { Issue } from '../domain/issues.js';
 import { type Spec } from '../lifecycle/contracts.js';
 import { type DecisionLedger } from '../lifecycle/decisions.js';
 import { type SecurityContext } from '../security/owasp.js';
-import { type SpecLimits } from '../config/load.js';
+import { type SpecLimits, type UserScenarioSettings } from '../config/load.js';
 /**
  * A spec file is either the spec itself, or `{ "request": "...", "spec": { ... } }` when the author keeps the
  * operator request next to it. The request drives the security minimum and must contain resolution quotes.
@@ -48,6 +48,8 @@ export interface SpecCheckResult {
     warnings: Issue[];
     /** Thresholds the warnings were measured against. */
     limits: SpecLimits;
+    /** User scenario settings: SPEC_USER_SCENARIOS goes to `warnings` (level `warning`) or to `issues` (level `error`). */
+    userScenarios: UserScenarioSettings;
 }
 /**
  * Warnings of a well-formed spec: more tasks or criteria than the thresholds (split it into independent specs

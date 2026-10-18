@@ -230,6 +230,135 @@ test('the spec section of the configuration is validated by the schema', async (
   assert.match(configIssues({ spec: { maxTasks: 0 } }).issues[0].message, /maxTasks: expected a value in \[1, 100\]/);
   assert.match(configIssues({ spec: { maxAcceptance: 'many' } }).issues[0].message, /maxAcceptance: expected/);
   assert.match(configIssues({ spec: { maxDepth: 3, depth: 2 } }).issues[0].message, /unknown property depth/);
+  const { userScenarioSettings } = await import('../dist/config/load.js');
+  assert.deepEqual(userScenarioSettings(configIssues({}).config), { minUserScenarios: 3, userScenarios: 'warning' });
+  assert.deepEqual(userScenarioSettings(configIssues({ spec: { minUserScenarios: 4, userScenarios: 'error' } }).config), { minUserScenarios: 4, userScenarios: 'error' });
+  assert.deepEqual(specLimits(configIssues({ spec: { minUserScenarios: 4 } }).config), { maxTasks: 6, maxAcceptance: 30, maxDepth: 3 }, 'limits keep their own keys');
+  assert.match(configIssues({ spec: { minUserScenarios: 6 } }).issues[0].message, /minUserScenarios: expected a value in \[1, 5\]/);
+  assert.match(configIssues({ spec: { userScenarios: 'block' } }).issues[0].message, /userScenarios: expected warning\|error/);
+});
+
+/** A spec of one screen: `count` user scenarios AC-USER-<n>, written Étant donné/quand/alors and replayed by a browser test. */
+function screenSpec(count, overrides = {}) {
+  const spec = demoSpec();
+  const user = Array.from({ length: count }, (_, i) => ({ id: `AC-USER-${i + 1}`,
+    description: `Étant donné une personne sur son téléphone, quand elle ouvre la liste ${i + 1}, alors elle voit ses courses du jour.`,
+    verification: `Test navigateur e2e/liste.test.ts à 390 px, parcours ${i + 1}.` }));
+  spec.acceptance = [...user, ...spec.acceptance];
+  spec.tasks[0].acceptanceIds = [...user.map(a => a.id), ...spec.tasks[0].acceptanceIds];
+  return Object.assign(spec, overrides);
+}
+const screen = { experience: { uiImpact: 'minor', surfaces: ['liste'], rationale: 'Un écran de liste de courses.' } };
+
+test('SPEC_USER_SCENARIOS: a spec that touches an interface without user scenarios is told what to add; never in draft, never without interface', async t => {
+  const f = fixture(t);
+  // demoSpec touches no interface: no scenario is asked.
+  const plain = (await apv(f.repo, ['spec', 'validate', write(f.root, 'plain.json', demoSpec()), '--json'])).json();
+  assert.deepEqual(plain.warnings, []);
+  assert.deepEqual(plain.userScenarios, { minUserScenarios: 3, userScenarios: 'warning' });
+
+  // Declared UI impact, no scenario: a warning that names the reason, the threshold and what to add; the spec stays valid.
+  const file = write(f.root, 'ui.json', screenSpec(0, screen));
+  const human = await apv(f.repo, ['spec', 'validate', file]);
+  assert.equal(human.code, 0, human.stdout);
+  assert.match(human.stdout, /1 avertissement\(s\)/);
+  assert.match(human.stdout, /- \[SPEC_USER_SCENARIOS\] La spec touche une interface \(experience\.uiImpact vaut minor\) et compte 0 scénario utilisateur AC-USER-<n> sur 3 attendus \(spec\.minUserScenarios\)/);
+  assert.match(human.stdout, /ajoute en tête de acceptance de 3 à 5 critères AC-USER-1, AC-USER-2…/);
+  assert.match(human.stdout, /« Étant donné <sa situation>, quand <ce qu'elle fait>, alors <ce qu'elle voit> »/);
+  assert.match(human.stdout, /rattache chacun à la tâche de l'écran \(acceptanceIds\)/);
+  // Draft mode: the spec is still being written.
+  assert.deepEqual((await apv(f.repo, ['spec', 'validate', file, '--draft', '--json'])).json().warnings, []);
+
+  // A spec without `experience` (the default says « none » for it): a task path in the `ui` class of the reviews,
+  // or a validated mockup cited, counts as an interface too.
+  const component = screenSpec(2); component.tasks[0].allowedPaths.push('src/lib/components/Liste.svelte');
+  const byPath = (await apv(f.repo, ['spec', 'validate', write(f.root, 'path.json', component), '--json'])).json();
+  assert.equal(byPath.valid, true, JSON.stringify(byPath.issues));
+  assert.equal(byPath.warnings.length, 1);
+  assert.match(byPath.warnings[0].message, /la tâche MATH touche src\/lib\/components\/Liste\.svelte, chemin d'interface \*\*\/\*\.svelte\) et compte 2 scénarios/);
+  const mockup = screenSpec(1); mockup.scope.push('Reprendre la maquette docs/design/liste.html.');
+  assert.match((await apv(f.repo, ['spec', 'validate', write(f.root, 'mockup.json', mockup), '--json'])).json().warnings[0].message, /la spec cite une maquette validée \(docs\/design\/\)/);
+  // An explicit « none », with its rationale, is the author's word (pilot project: components moved without a visible
+  // change, mockups named to be kept out of the diff): no scenario is asked, even at level error.
+  write(f.repo, '.apv/config.json', { spec: { userScenarios: 'error' } });
+  const none = { uiImpact: 'none', surfaces: [], rationale: 'Aucun écran ne change : des composants changent de dossier.' };
+  const moved = { ...demoSpec(), experience: none }; moved.tasks[0].allowedPaths.push('src/lib/components/**');
+  moved.scope.push('Garder intacts docs/design/** (maquettes validées) et les textes affichés.');
+  const declaredNone = (await apv(f.repo, ['spec', 'validate', write(f.root, 'moved.json', moved), '--json'])).json();
+  assert.equal(declaredNone.valid, true, JSON.stringify(declaredNone.issues));
+  assert.deepEqual(declaredNone.warnings, []);
+  write(f.repo, '.apv/config.json', {});
+  // The project's own interface paths and mockup folder replace the defaults.
+  write(f.repo, '.apv/config.json', { review: { paths: { ui: ['src/math.mjs'] } } });
+  assert.match((await apv(f.repo, ['spec', 'validate', write(f.root, 'own.json', demoSpec()), '--json'])).json().warnings[0].message, /chemin d'interface src\/math\.mjs/);
+  write(f.repo, '.apv/config.json', { design: { dir: 'maquettes' } });
+  const ownMockup = demoSpec(); ownMockup.scope.push('Reprendre maquettes/liste.html.');
+  assert.match((await apv(f.repo, ['spec', 'validate', write(f.root, 'own-mockup.json', ownMockup), '--json'])).json().warnings[0].message, /cite une maquette validée \(maquettes\/\)/);
+  const elsewhere = demoSpec(); elsewhere.scope.push('Reprendre docs/design/liste.html.');
+  assert.deepEqual((await apv(f.repo, ['spec', 'validate', write(f.root, 'elsewhere.json', elsewhere), '--json'])).json().warnings, [], 'docs/design/ is no longer the mockup folder');
+  write(f.repo, '.apv/config.json', {});
+
+  // Three to five well-formed scenarios: no warning.
+  for (const count of [3, 5]) {
+    const ok = (await apv(f.repo, ['spec', 'validate', write(f.root, `ok-${count}.json`, screenSpec(count, screen)), '--json'])).json();
+    assert.equal(ok.valid, true, JSON.stringify(ok.issues));
+    assert.deepEqual(ok.warnings, [], `${count} scenarios`);
+  }
+  // More than five: keep the main journeys.
+  const many = (await apv(f.repo, ['spec', 'validate', write(f.root, 'many.json', screenSpec(6, screen)), '--json'])).json();
+  assert.deepEqual(many.warnings.map(w => w.code), ['SPEC_USER_SCENARIOS']);
+  assert.match(many.warnings[0].message, /compte 6 scénarios utilisateur AC-USER-<n> : 5 au plus/);
+});
+
+test('SPEC_USER_SCENARIOS: a scenario without Étant donné/quand/alors or without a replayed journey is reported; level error refuses the spec, at launch too', async t => {
+  const f = fixture(t);
+  const spec = screenSpec(3, screen);
+  spec.acceptance[0].description = 'La liste affiche les courses via le composant ListeCourses.';
+  spec.acceptance[1].verification = 'Test unitaire de la fonction listCourses.';
+  spec.acceptance[2].description = 'Given an empty list on a small screen, When the person opens it, Then she sees a welcome message.';
+  spec.acceptance[2].verification = 'Parcours joué par la personne cible sur l\'aperçu, au téléphone, avant la fusion.';
+  const file = write(f.repo, '.apv/specs/liste.json', spec);
+  const warned = (await apv(f.repo, ['spec', 'validate', file, '--json'])).json();
+  assert.equal(warned.valid, true, JSON.stringify(warned.issues));
+  assert.deepEqual(warned.warnings.map(w => w.message.split(' ')[0]), ['AC-USER-1', 'AC-USER-2']);
+  assert.match(warned.warnings[0].message, /n'est pas écrit « Étant donné … quand … alors … »/);
+  assert.match(warned.warnings[1].message, /la vérification ne nomme ni test navigateur ni parcours joué par la personne cible/);
+
+  write(f.repo, '.apv/config.json', { spec: { userScenarios: 'error', minUserScenarios: 4 } });
+  const refused = await apv(f.repo, ['spec', 'validate', file, '--json']);
+  assert.equal(refused.code, 1);
+  assert.deepEqual(refused.json().issues.map(i => i.code), ['SPEC_USER_SCENARIOS', 'SPEC_USER_SCENARIOS', 'SPEC_USER_SCENARIOS']);
+  assert.match(refused.json().issues[0].message, /compte 3 scénarios utilisateur AC-USER-<n> sur 4 attendus/);
+  assert.deepEqual(refused.json().warnings, []);
+  assert.deepEqual(refused.json().userScenarios, { minUserScenarios: 4, userScenarios: 'error' });
+  // The draft is never refused for its scenarios.
+  assert.equal((await apv(f.repo, ['spec', 'validate', file, '--draft'])).code, 0);
+  // apv run start applies the same rule.
+  git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'scenarios as errors');
+  const launched = await apv(f.repo, ['run', 'start', 'liste'], { APV_LOCK_DIR: join(f.root, 'locks') });
+  assert.equal(launched.code, 1, launched.stdout + launched.stderr);
+  assert.match(launched.stdout + launched.stderr, /SPEC_USER_SCENARIOS/);
+});
+
+test('the user scenario grammar accepts French and English, in order, and nothing else', async () => {
+  const { userScenarioIssues } = await import('../dist/spec/scenarios.js');
+  const { specSchema } = await import('../dist/lifecycle/contracts.js');
+  const settings = { minUserScenarios: 1, userScenarios: 'warning' };
+  const signals = { uiPaths: [], designDir: 'docs/design' };
+  const check = (description, verification = 'Playwright e2e/x.spec.ts') => userScenarioIssues(specSchema.parse(screenSpec(1, { ...screen,
+    acceptance: [{ id: 'AC-USER-1', description, verification }], tasks: [{ ...demoSpec().tasks[0], acceptanceIds: ['AC-USER-1'] }] })), settings, signals).length;
+  assert.equal(check('Étant donnée une liste vide, lorsque la personne arrive, alors elle voit un message d\'accueil.'), 0);
+  assert.equal(check('Scénario de l\'opérateur. Étant donné que j\'ai noté une candidature, quand je colle le même lien, alors je vois « Déjà notée ».'), 0);
+  assert.equal(check('GIVEN a list, WHEN the person scrolls, THEN more items load.'), 0);
+  assert.equal(check('Alors elle voit, quand elle clique, étant donné un compte.'), 1, 'out of order');
+  assert.equal(check('Étant donné un compte, quand elle clique, alors'), 1, 'no outcome');
+  assert.equal(check('Quandary given whenever thenceforth'), 1, 'words, not substrings');
+  const gwt = 'Étant donné un compte, quand elle clique, alors elle voit le résultat.';
+  assert.equal(check(gwt, 'Test navigateur tests/e2e/liste.e2e.ts à 390 px'), 0);
+  assert.equal(check(gwt, 'Parcours joué par l\'opérateur sur l\'aperçu vivant avant la fusion.'), 0);
+  assert.equal(check(gwt, 'Test unitaire de la fonction.'), 1);
+  // A spec without interface asks nothing.
+  assert.deepEqual(userScenarioIssues(specSchema.parse(demoSpec()), { minUserScenarios: 5, userScenarios: 'error' }, signals), []);
 });
 
 test('decision scope: a product decision of another perimeter is not required; one that overlaps, names the spec or has no scope is', async t => {
