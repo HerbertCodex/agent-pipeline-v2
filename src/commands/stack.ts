@@ -88,8 +88,9 @@ batch  fusion par lot de PR indépendantes, chacune vers la cible : lit chaque P
        projet pilote). Reprise à arbre identique (comme apv gates run) : un lot relancé sur les mêmes PR et la
        même cible, ou dont l'arbre est celui d'une suite déjà verte, reprend les reçus verts de cet arbre
        (« réutilisé de <commit> », vérifiés par apv gates verify) au lieu de rejouer les contrôles ; batch.setup
-       de la cible (facultatif) ne prépare la copie du lot, et chaque copie de pile, que si un contrôle y est
-       exécuté : rien quand tout est repris. --replay <id>,<id> ou --replay all exécute ces contrôles quand même.
+       de la cible (facultatif) prépare la copie du lot avant toute reprise (son état local, node_modules et
+       .env*, entre dans l'identité de reprise), et chaque copie de pile seulement si un contrôle y est exécuté.
+       --replay <id>,<id> ou --replay all exécute ces contrôles quand même.
        Fichiers générés : un conflit qui ne touche que la carte du code (map.file), .apv/DECISIONS.json ou
        .apv/DECISIONS.md n'exclut pas la PR : le registre est fusionné par union de ses décisions (une décision
        modifiée des deux côtés reste un conflit), le Markdown rendu depuis le registre, la carte régénérée
