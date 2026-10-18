@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { sha256 } from '../domain/hash.js';
 import type { Git } from '../execution/git.js';
@@ -45,6 +47,40 @@ export async function treesOf(git: Git, repo: string, commits: Iterable<string>)
     for (const commit of asked) { try { parse(await log([commit])); } catch { /* Not a commit of this repository. */ } }
   }
   return trees;
+}
+
+/**
+ * What Git ignores in a copy and a check still runs with (relecture sécurité de A1, M2): the installed dependencies, seen
+ * through the folder `node_modules` and the record each package manager writes there at every install (npm, pnpm, Yarn
+ * Berry, Yarn 1), and the `.env*` files at the root of the copy. Two copies of the same tree with other dependencies
+ * installed, or another `.env.local`, are not the same environment.
+ */
+export const LOCAL_STATE_FILES = ['node_modules/.package-lock.json', 'node_modules/.modules.yaml', 'node_modules/.yarn-state.yml', 'node_modules/.yarn-integrity'] as const;
+/** Largest file of the local state read for its digest (64 MiB): beyond, its size and date stand for its content. */
+const LOCAL_STATE_MAX_BYTES = 64 * 1024 * 1024;
+
+/** What a path of the local state is: absent, a folder, unreadable, or the sha256 of its content (never the content). */
+function stateOf(path: string): string {
+  let info;
+  try { info = statSync(path); } catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'illisible'; }
+  if (info.isDirectory()) return 'dossier';
+  if (!info.isFile()) return 'autre';
+  if (info.size > LOCAL_STATE_MAX_BYTES) return `taille:${info.size}:${Math.round(info.mtimeMs)}`;
+  try { return sha256(readFileSync(path)); } catch { return 'illisible'; }
+}
+
+/**
+ * Digest of the local state of a copy (LOCAL_STATE_FILES, `node_modules` present or not, each `.env*` at its root), part of
+ * the identity of the environment of every receipt: a check is reused only from an origin that ran with the same local
+ * state. Contents are hashed, one digest for all: no value of a `.env*` file is ever written, in a receipt or an output.
+ */
+export function localStateDigest(dir: string): string {
+  const entries: [string, string][] = [['node_modules', stateOf(join(dir, 'node_modules'))]];
+  for (const file of LOCAL_STATE_FILES) entries.push([file, stateOf(join(dir, file))]);
+  let names: string[] = [];
+  try { names = readdirSync(dir).filter(name => name.startsWith('.env')).sort(); } catch { names = ['(racine illisible)']; }
+  for (const name of names) entries.push([name, stateOf(join(dir, name))]);
+  return sha256(JSON.stringify({ version: 1, entries }));
 }
 
 /** Digest of a list of ignore globs (`reuse.ignoreDigest`): sorted and deduplicated, so their order never matters. */
