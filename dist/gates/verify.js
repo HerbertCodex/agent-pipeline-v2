@@ -7,7 +7,8 @@ import { success } from '../engine/scheduler.js';
 import { RECEIPTS_DIR, gatesConfigHash, stageGates } from './run.js';
 import { mergeBase, planRepeat, resolveReference } from './repeat.js';
 import { planScope } from './proof-scope.js';
-import { manifestCommit, readSharedRun, sharedRunIds, sharedStore } from './store.js';
+import { RUN_DIR, manifestCommit, readSharedRun, sharedRunIds, sharedStore } from './store.js';
+import { DEFAULT_REUSE_MAX_AGE_MS, ignoreDigest, inputsDigest, treesOf } from './reuse.js';
 import { auditBase, changedBetween, webAuditGate, webImpact } from '../web/impact.js';
 /** Tree state and base of a run, from its summary (null when unknown). */
 function summaryOf(text) {
@@ -63,8 +64,9 @@ function readLocal(repo) {
  * worktree, as before the store existed). A run counts only when intact: its manifest names it and lists exactly
  * its files with their digests, its summary is there, and each receipt belongs to it (same run, same commit as
  * the manifest, file named after its check). Otherwise none of its receipts count, and the run is reported.
+ * `keep` says which runs to read from the commit their manifest names (null: no readable manifest, always read).
  */
-function readShared(store, local, commit) {
+function readShared(store, local, keep) {
     const found = [];
     const altered = [];
     for (const runId of sharedRunIds(store)) {
@@ -72,45 +74,46 @@ function readShared(store, local, commit) {
             continue;
         // Runs of another commit cannot prove this one: their files are not read (a thousand runs stay cheap). A
         // manifest that names another commit while its receipts claim this one would be refused below anyway.
-        const named = manifestCommit(join(store, runId));
-        if (named !== null && named !== commit)
+        if (!keep(manifestCommit(join(store, runId))))
             continue;
-        const run = readSharedRun(join(store, runId));
-        if (!run.intact) {
+        const run = sharedRunReceipts(store, runId);
+        if ('reason' in run)
             altered.push({ runId, reason: run.reason });
-            continue;
-        }
-        const summaryBytes = run.files.get('summary.json');
-        if (!summaryBytes) {
-            altered.push({ runId, reason: 'summary.json absent' });
-            continue;
-        }
-        const summary = summaryOf(summaryBytes.toString('utf8'));
-        const receipts = [];
-        let reason = null;
-        for (const [name, bytes] of run.files) {
-            if (name === 'summary.json')
-                continue;
-            let receipt;
-            try {
-                receipt = validateReceipt(JSON.parse(bytes.toString('utf8')));
-            }
-            catch {
-                reason = `${name} n'est pas un reçu valide`;
-                break;
-            }
-            if (receipt.runId !== runId || `${receipt.gateId}.json` !== name || receipt.candidateSha !== run.manifest.candidateSha) {
-                reason = `${name} contredit son exécution (exécution, contrôle ou commit)`;
-                break;
-            }
-            receipts.push({ receipt, dirty: receipt.dirty ?? summary.dirty, baseSha: summary.baseSha, source: 'shared' });
-        }
-        if (reason)
-            altered.push({ runId, reason });
         else
-            found.push(...receipts);
+            found.push(...run.found);
     }
     return { found, altered };
+}
+/**
+ * The receipts of one run of the shared store, when the run is intact: its manifest names it and lists exactly its files
+ * with their digests, its summary is there, and each receipt belongs to it (same run, same commit as the manifest, file
+ * named after its check). Otherwise the reason, and none of its receipts count.
+ */
+function sharedRunReceipts(store, runId) {
+    const run = readSharedRun(join(store, runId));
+    if (!run.intact)
+        return { reason: run.reason };
+    const summaryBytes = run.files.get('summary.json');
+    if (!summaryBytes)
+        return { reason: 'summary.json absent' };
+    const summary = summaryOf(summaryBytes.toString('utf8'));
+    const found = [];
+    for (const [name, bytes] of run.files) {
+        if (name === 'summary.json')
+            continue;
+        let receipt;
+        try {
+            receipt = validateReceipt(JSON.parse(bytes.toString('utf8')));
+        }
+        catch {
+            return { reason: `${name} n'est pas un reçu valide` };
+        }
+        if (receipt.runId !== runId || `${receipt.gateId}.json` !== name || receipt.candidateSha !== run.manifest.candidateSha) {
+            return { reason: `${name} contredit son exécution (exécution, contrôle ou commit)` };
+        }
+        found.push({ receipt, dirty: receipt.dirty ?? summary.dirty, baseSha: summary.baseSha, source: 'shared' });
+    }
+    return { found };
 }
 const latest = (a, b) => b.receipt.startedAt > a.receipt.startedAt || (b.receipt.startedAt === a.receipt.startedAt && b.receipt.runId > a.receipt.runId) ? b : a;
 /**
@@ -140,7 +143,7 @@ export async function verifyGates(options) {
     const configHash = gatesConfigHash(options.config);
     const local = readLocal(repo);
     const store = await sharedStore(git, repo);
-    const shared = readShared(store, local.runs, commit);
+    const shared = readShared(store, local.runs, named => named === null || named === commit);
     const found = [...local.found, ...shared.found];
     const { unreadable } = local;
     const atCommit = found.filter(f => f.receipt.candidateSha === commit);
@@ -245,6 +248,102 @@ export async function verifyGates(options) {
         const impact = webImpact([...changed].sort(), options.config.web);
         return impact.required ? { files: impact.files, reason: `audit requis au commit (${impact.files.length} fichier(s) à effet web modifié(s) depuis ${bases[0].slice(0, 12)}), reçu « non requis »` } : null;
     };
+    const now = options.now ?? Date.now();
+    const hours = (ms) => String(Math.round(ms / 360_000) / 10);
+    /**
+     * Whether a receipt `cached` proves its check at this commit (docs/ACCELERATION-LOTS.md, 5.5). Nothing of it is trusted:
+     * its origin is read again (the worktree when it has the run, else the run of the shared store, intact), must be the
+     * same check, `passed` at first pass (never `cached`: no chain), complete, on a clean tree, of the current configuration,
+     * of the same environment, younger than the maximum age, with the same output digests; the trees of both commits are
+     * recomputed (`basis: tree`) and so is the digest of the inputs; and no receipt of the check on the same tree, later than
+     * the origin, failed. Returns the origin, or why the receipt proves nothing.
+     */
+    const reuseGap = async (gateId, cached) => {
+        const r = cached.receipt;
+        const reuse = r.reuse;
+        const refuse = (reason) => ({ reason });
+        if (!reuse)
+            return refuse('reçu sans relevé reuse (exécution, commit et empreintes de l\'origine) : rien à vérifier');
+        if (r.targeted === true)
+            return refuse('un reçu réutilisé n\'est jamais ciblé');
+        let origin;
+        if (local.runs.has(reuse.fromRun)) {
+            origin = local.found.find(f => f.receipt.runId === reuse.fromRun && f.receipt.id === r.reusedFrom);
+            if (!origin)
+                return refuse(`reçu d'origine ${r.reusedFrom} absent de l'exécution ${reuse.fromRun} du worktree`);
+        }
+        else {
+            if (!RUN_DIR.test(reuse.fromRun) || !existsSync(join(store, reuse.fromRun))) {
+                return refuse(`exécution d'origine ${reuse.fromRun} absente du worktree et du magasin partagé (retirée par la rétention ?)`);
+            }
+            const run = sharedRunReceipts(store, reuse.fromRun);
+            if ('reason' in run)
+                return refuse(`exécution d'origine ${reuse.fromRun} refusée, altérée dans le magasin partagé : ${run.reason}`);
+            origin = run.found.find(f => f.receipt.id === r.reusedFrom);
+            if (!origin)
+                return refuse(`reçu d'origine ${r.reusedFrom} absent de l'exécution ${reuse.fromRun} du magasin partagé`);
+        }
+        const from = origin;
+        const o = from.receipt;
+        if (o.gateId !== gateId)
+            return refuse(`reçu d'origine d'un autre contrôle (${o.gateId})`);
+        if (o.candidateSha !== reuse.fromCommit)
+            return refuse(`reçu d'origine au commit ${o.candidateSha.slice(0, 12)}, pas au commit déclaré ${reuse.fromCommit.slice(0, 12)}`);
+        if (o.status !== 'passed')
+            return refuse(`origine ${o.status} : seul un reçu exécuté et réussi au premier passage se réutilise`);
+        if (o.early || o.targeted === true)
+            return refuse('origine ciblée (affected ou contrôle tôt) : jamais la preuve du contrôle entier');
+        if (origin.dirty !== false)
+            return refuse(origin.dirty ? 'origine écrite sur un arbre modifié' : 'origine d\'état d\'arbre inconnu');
+        if (o.configHash !== configHash)
+            return refuse('origine écrite pour une autre configuration des contrôles');
+        if (o.startedAt > r.startedAt || o.startedAt > now)
+            return refuse('origine datée après sa reprise ou dans le futur');
+        if (now - o.startedAt > DEFAULT_REUSE_MAX_AGE_MS) {
+            return refuse(`origine trop vieille (${hours(now - o.startedAt)} h, au plus ${hours(DEFAULT_REUSE_MAX_AGE_MS)} h) : l'âge ne se renouvelle jamais par une reprise`);
+        }
+        if (r.stdoutHash !== o.stdoutHash || r.stderrHash !== o.stderrHash)
+            return refuse('empreintes de sortie différentes de celles de l\'origine');
+        if (reuse.environment !== o.environmentHash)
+            return refuse('identité d\'environnement différente de celle de l\'origine');
+        if (reuse.basis !== 'tree')
+            return refuse('reprise par entrées identiques (basis inputs) : le contrôle ne déclare pas reuse.ignore à la base, seule la reprise à arbre identique se vérifie');
+        const known = await treesOf(git, repo, [reuse.fromCommit, commit]);
+        const tree = known.get(commit);
+        const fromTree = known.get(reuse.fromCommit);
+        if (!fromTree || !tree)
+            return refuse(`commit d'origine ${reuse.fromCommit.slice(0, 12)} introuvable dans le dépôt`);
+        if (fromTree !== tree)
+            return refuse(`arbre de ${reuse.fromCommit.slice(0, 12)} différent de celui de ${commit.slice(0, 12)} (basis tree)`);
+        if (reuse.changed !== 0 || reuse.files.length)
+            return refuse('reprise à arbre identique qui déclare des fichiers changés');
+        if (reuse.ignoreDigest !== ignoreDigest([]))
+            return refuse('reprise à arbre identique qui déclare des fichiers ignorés');
+        if (reuse.inputsDigest !== (await inputsDigest(git, repo, commit)).digest)
+            return refuse('empreinte des entrées différente de celle recalculée au commit');
+        // A later failure on the same tree wins, as in `verify`: receipts of the worktree (every commit) and runs of the shared
+        // store whose manifest names a commit of this tree. A run of such a commit refused as altered could hide one: refused too.
+        const commits = new Set(local.found.map(f => f.receipt.candidateSha));
+        for (const runId of sharedRunIds(store)) {
+            if (local.runs.has(runId))
+                continue;
+            const named = manifestCommit(join(store, runId));
+            if (named)
+                commits.add(named);
+        }
+        const trees = await treesOf(git, repo, commits);
+        const same = readShared(store, local.runs, named => named !== null && trees.get(named) === tree);
+        if (same.altered.length)
+            return refuse(`exécution ${same.altered[0].runId} du même arbre altérée dans le magasin partagé : un échec plus récent ne peut pas être exclu`);
+        const later = [...local.found, ...same.found].filter(f => f.receipt.gateId === gateId && !f.receipt.early && f.receipt.targeted !== true && f.dirty === false
+            && f.receipt.configHash === configHash && trees.get(f.receipt.candidateSha) === tree && f.receipt !== o && latest(from, f) === f
+            && !['passed', 'cached', 'not_required'].includes(f.receipt.status));
+        if (later.length) {
+            const fail = later.reduce(latest).receipt;
+            return refuse(`échec plus récent sur le même arbre : ${fail.runId}/${fail.gateId}.json (${fail.status}${fail.status === 'passed_after_retry' ? ', test instable' : ''}) l'emporte`);
+        }
+        return { origin: from };
+    };
     const gates = [];
     const near = [];
     for (const gateId of required) {
@@ -269,7 +368,7 @@ export async function verifyGates(options) {
         const clean = current.filter(f => f.dirty === false);
         if (!clean.length) {
             const state = current.length ? 'dirty' : 'missing';
-            gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null, repeat: null, scope: null, web: null });
+            gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null, repeat: null, scope: null, web: null, reuse: null });
             continue;
         }
         const last = clean.reduce(latest);
@@ -280,13 +379,28 @@ export async function verifyGates(options) {
         const common = { status: last.receipt.status, receipt: last.receipt.id, runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof, otherBase, source: last.source };
         if (last.receipt.status === 'not_required') {
             const scope = await scopeGap(gate, last.receipt);
-            gates.push({ gateId, state: scope.required ? 'required' : 'passed', ...common, repeat: null, scope, web: null });
+            gates.push({ gateId, state: scope.required ? 'required' : 'passed', ...common, repeat: null, scope, web: null, reuse: null });
             continue;
         }
-        const repeat = success(last.receipt) && gate.repeatChanged ? await repeatGap(gate.repeatChanged, last.receipt, stage === 'full' && proof === 'full') : null;
+        // A receipt `cached` proves nothing by itself: its reuse is checked, then the repetition and the web audit are judged on
+        // what its origin recorded (the copy in the receipt `cached` is never read), recomputed at this commit as for any receipt.
+        let proven = last;
+        let reuse = null;
+        if (last.receipt.status === 'cached') {
+            const declared = last.receipt.reuse;
+            const about = { fromRun: declared?.fromRun ?? null, fromCommit: declared?.fromCommit ?? null, basis: declared?.basis ?? null, origin: last.receipt.reusedFrom };
+            const checked = await reuseGap(gateId, last);
+            if ('reason' in checked) {
+                gates.push({ gateId, state: 'reuse', ...common, repeat: null, scope: null, web: null, reuse: { proven: false, reason: checked.reason, ...about } });
+                continue;
+            }
+            proven = checked.origin;
+            reuse = { proven: true, reason: 'arbre identique', ...about };
+        }
+        const repeat = success(last.receipt) && gate.repeatChanged ? await repeatGap(gate.repeatChanged, proven.receipt, stage === 'full' && proof === 'full') : null;
         const audit = webAuditGate(proof === 'targeted' ? gate.affected ?? gate.command : gate.command);
-        const web = success(last.receipt) ? webGap(last.receipt, audit) : null;
-        gates.push({ gateId, state: !success(last.receipt) ? 'failed' : repeat ? 'unrepeated' : web ? 'unaudited' : 'passed', ...common, repeat, scope: null, web });
+        const web = success(last.receipt) ? webGap(proven.receipt, audit) : null;
+        gates.push({ gateId, state: !success(last.receipt) ? 'failed' : repeat ? 'unrepeated' : web ? 'unaudited' : 'passed', ...common, repeat, scope: null, web, reuse });
     }
     return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered,
         flaky: gates.filter(g => g.state === 'passed' && g.status === 'passed_after_retry').map(g => g.gateId), nearTimeout: near,
@@ -294,6 +408,7 @@ export async function verifyGates(options) {
         notRequired: gates.filter(g => g.state === 'passed' && g.status === 'not_required').map(g => g.gateId),
         scoped: required.filter(id => options.config.gates.some(g => g.id === id && g.skipWhenOnly)),
         auditing: [...new Set([...required.filter(id => options.config.gates.some(g => g.id === id && webAuditGate(g.command)?.base)),
-                ...gates.filter(g => g.state === 'unaudited' || (g.web === null && atCommit.some(f => f.receipt.gateId === g.gateId && f.receipt.web))).map(g => g.gateId)])], ok: gates.every(g => g.state === 'passed') };
+                ...gates.filter(g => g.state === 'unaudited' || (g.web === null && atCommit.some(f => f.receipt.gateId === g.gateId && f.receipt.web))).map(g => g.gateId)])],
+        reused: gates.filter(g => g.state === 'passed' && g.reuse?.proven === true).map(g => g.gateId), ok: gates.every(g => g.state === 'passed') };
 }
 //# sourceMappingURL=verify.js.map

@@ -1,5 +1,5 @@
 import { type Infer } from './schema.js';
-export declare const VERSION = "3.0.0-alpha.24";
+export declare const VERSION = "3.0.0-alpha.25";
 export declare const lanes: readonly ["fast", "standard", "high"];
 export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];
@@ -436,6 +436,8 @@ export declare const repeatStatuses: readonly ["passed", "failed", "timed_out", 
  * scope (`scope` of the receipt); never a success by itself, `apv gates verify` recomputes the scope from the commit.
  */
 export declare const receiptStatuses: readonly ["passed", "failed", "timed_out", "cancelled", "spawn_error", "blocked", "cached", "passed_after_retry", "not_required"];
+/** How a receipt `cached` was reused (`reuse.basis`): identical trees, or identical inputs of the check. */
+export declare const reuseBases: readonly ["tree", "inputs"];
 /** Most changed files a receipt lists in `scope.files`; beyond, a check is always required. */
 export declare const MAX_SCOPE_FILES = 2000;
 /** What `apv web audit` records for the receipt of the check that runs it (`APV_WEB_RECORD`). */
@@ -538,6 +540,16 @@ export declare const receiptSchema: import("./schema.js").Schema<{
         readonly id: string;
         readonly required: boolean;
         readonly reason: string;
+        readonly files: string[];
+    } | undefined;
+    readonly reuse: {
+        readonly fromRun: string;
+        readonly fromCommit: string;
+        readonly basis: "tree" | "inputs";
+        readonly inputsDigest: string;
+        readonly ignoreDigest: string;
+        readonly environment: string;
+        readonly changed: number;
         readonly files: string[];
     } | undefined;
 }>;

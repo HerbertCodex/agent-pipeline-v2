@@ -339,6 +339,16 @@ export declare function targetedQaContext(context: {
             readonly reason: string;
             readonly files: string[];
         } | undefined;
+        reuse: {
+            readonly fromRun: string;
+            readonly fromCommit: string;
+            readonly basis: "tree" | "inputs";
+            readonly inputsDigest: string;
+            readonly ignoreDigest: string;
+            readonly environment: string;
+            readonly changed: number;
+            readonly files: string[];
+        } | undefined;
     }[];
     qaScope: {
         mode: string;
