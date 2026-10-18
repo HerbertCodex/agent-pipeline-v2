@@ -27,7 +27,7 @@ export interface SpreadCopy { stack: ResolvedStack; dir: string; gates: string[]
 export interface SpreadPlan { assignments: Map<string, SpreadAssignment>; copies: SpreadCopy[] }
 
 /** Whether the lock of `gate`, as configured (its file relative to the Git common directory, or its lease), is the lock of a declared stack. */
-async function usesStack(git: Git, repo: string, gate: Gate, stacks: readonly ResolvedStack[]): Promise<boolean> {
+export async function usesStack(git: Git, repo: string, gate: Gate, stacks: readonly ResolvedStack[]): Promise<boolean> {
   if (!gate.lock) return false;
   if ('resource' in gate.lock) { const resource = gate.lock.resource; return stacks.some(s => s.resource === resource); }
   const file = await commonPath(git, repo, gate.lock.file);
@@ -127,8 +127,10 @@ export function setupNeeded(repo: string): string | null {
  * of it runs; the caller then checks the tree is as clean as before. Never in the main checkout (the folder open in
  * the editor): refused (`GATE_SETUP`). The caller runs it under the place of the copy in the queue, after every refusal.
  */
-export async function prepareMainCopy(options: { repo: string; config: ApvConfig; env: NodeJS.ProcessEnv; signal?: AbortSignal | undefined; log: (line: string) => void }): Promise<MainSetup | null> {
-  const reason = setupNeeded(options.repo);
+export async function prepareMainCopy(options: { repo: string; config: ApvConfig; env: NodeJS.ProcessEnv; signal?: AbortSignal | undefined; log: (line: string) => void; always?: string }): Promise<MainSetup | null> {
+  // `always` (apv stack batch): a fresh copy, prepared by batch.setup whenever one is declared, whatever it holds.
+  if (options.always !== undefined && !options.config.batch?.setup) return null;
+  const reason = options.always ?? setupNeeded(options.repo);
   if (!reason) return null;
   const setup = options.config.batch?.setup;
   // Never in the main checkout (the folder open in the editor, the operator's own): a linked worktree only.

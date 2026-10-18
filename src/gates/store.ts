@@ -12,6 +12,8 @@ import type { Git } from '../execution/git.js';
  * `apv gates verify --commit <sha>` proves the commit from any checkout of the repository.
  */
 export const SHARED_RECEIPTS_DIR = join('apv', 'receipts');
+/** Receipts of `apv gates run` in a worktree, one directory per execution. Machine evidence, not versioned. */
+export const RECEIPTS_DIR = '.apv/receipts';
 /** Digests of the files of a run in the shared store (or an export), written last. */
 export const MANIFEST = 'manifest.json';
 /** Retention of the shared store (`receipts` of `.apv/config.json`): runs younger than `keepDays`, `keepRuns` at most. */

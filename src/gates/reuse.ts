@@ -1,6 +1,11 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { sha256 } from '../domain/hash.js';
 import type { Git } from '../execution/git.js';
+import { environment } from '../execution/process.js';
 import { matches } from '../policy/policy.js';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Reuse of a successful check from one commit to another (docs/ACCELERATION-LOTS.md, part A): what a receipt `cached`
@@ -9,6 +14,11 @@ import { matches } from '../policy/policy.js';
 
 /** Oldest an origin receipt may be when its reuse is verified (`reuse.maxAgeMs`, 24 h when the check declares nothing). */
 export const DEFAULT_REUSE_MAX_AGE_MS = 86_400_000;
+/**
+ * `apv gates run` reuses an origin only when it is younger than the maximum age minus this margin (4 h): the receipt
+ * `cached` must still check out when `apv gates verify` reads it at the end of the suite, of the batch and of its merge.
+ */
+export const REUSE_AGE_MARGIN_MS = 4 * 3_600_000;
 
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 
@@ -21,10 +31,11 @@ export async function treesOf(git: Git, repo: string, commits: Iterable<string>)
   const asked = [...new Set([...commits].filter(c => SHA.test(c)))];
   const trees = new Map<string, string>();
   if (!asked.length) return trees;
+  const wanted = new Set(asked);
   const parse = (out: string): void => {
     for (const line of out.split('\n')) {
       const [commit, tree] = line.trim().split(' ');
-      if (commit && tree && SHA.test(commit) && SHA.test(tree) && asked.includes(commit)) trees.set(commit, tree);
+      if (commit && tree && SHA.test(commit) && SHA.test(tree) && wanted.has(commit)) trees.set(commit, tree);
     }
   };
   const log = (list: string[]): Promise<string> => git.exec(repo, ['log', '--no-walk=unsorted', '--ignore-missing', '--format=%H %T', ...list]);
@@ -41,24 +52,38 @@ export function ignoreDigest(globs: readonly string[]): string {
   return sha256(JSON.stringify([...new Set(globs)].sort()));
 }
 
+/** `git ls-tree` output as raw bytes: a path that is not valid UTF-8 is never decoded with loss. */
+async function lsTreeBytes(repo: string, commit: string): Promise<Buffer> {
+  const { stdout } = await execFileAsync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'ls-tree', '-r', '-z', '--full-tree', '--end-of-options', `${commit}^{tree}`],
+    { cwd: repo, encoding: 'buffer', maxBuffer: 256 * 1024 * 1024, timeout: 120_000,
+      env: { ...environment(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'LANG']), GIT_TERMINAL_PROMPT: '0' } });
+  return stdout;
+}
+
 /**
  * Digest of the inputs of a check at `commit` (`reuse.inputsDigest`): sha256 of the JSON of the list of `[path, mode, blob]`
- * of the tracked files of its tree (submodules included), sorted by path, minus those matching `ignore`. JSON encodes every
- * character of a path (a line feed or a tab in a file name included): two different lists never share an encoding. With no
- * glob, two commits have the same digest exactly when they have the same tree content. Fails when the commit is not in the
- * repository.
+ * of the tracked files of its tree (submodules included), sorted by the bytes of the path, minus those matching `ignore`.
+ * The path enters the digest as the hexadecimal of its raw bytes, read from Git without any decoding: two different paths
+ * (a line feed or a tab in a name, or bytes that are not UTF-8, such as `f` followed by 0xff or by 0xfe) never share an
+ * encoding. Globs are compared to the path decoded as UTF-8. With no glob, two commits have the same digest exactly when
+ * they have the same tree content. Fails when the commit is not in the repository.
  */
-export async function inputsDigest(git: Git, repo: string, commit: string, ignore: readonly string[] = []): Promise<{ digest: string; files: number }> {
-  const out = await git.exec(repo, ['ls-tree', '-r', '-z', '--full-tree', '--end-of-options', `${commit}^{tree}`]);
-  const entries: [string, string, string][] = [];
-  for (const entry of out.split('\0')) {
-    if (!entry) continue;
-    const tab = entry.indexOf('\t');
-    const [mode, , blob] = entry.slice(0, tab).split(' ');
-    const path = entry.slice(tab + 1);
-    if (ignore.some(glob => matches(path, glob))) continue;
-    entries.push([path, mode!, blob!]);
+export async function inputsDigest(_git: Git, repo: string, commit: string, ignore: readonly string[] = []): Promise<{ digest: string; files: number }> {
+  const out = await lsTreeBytes(repo, commit);
+  const entries: { path: Buffer; mode: string; blob: string }[] = [];
+  let start = 0;
+  while (start < out.length) {
+    let end = out.indexOf(0, start);
+    if (end < 0) end = out.length;
+    const entry = out.subarray(start, end);
+    start = end + 1;
+    if (!entry.length) continue;
+    const tab = entry.indexOf(0x09);
+    const [mode, , blob] = entry.subarray(0, tab).toString('latin1').split(' ');
+    const path = entry.subarray(tab + 1);
+    if (ignore.length && ignore.some(glob => matches(path.toString('utf8'), glob))) continue;
+    entries.push({ path, mode: mode!, blob: blob! });
   }
-  entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-  return { digest: sha256(JSON.stringify(entries)), files: entries.length };
+  entries.sort((a, b) => Buffer.compare(a.path, b.path));
+  return { digest: sha256(JSON.stringify(entries.map(e => [e.path.toString('hex'), e.mode, e.blob]))), files: entries.length };
 }

@@ -17,21 +17,22 @@ import type { ProcessResult } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
 import { matches } from '../policy/policy.js';
 import { WEB_RECORD, runsWebAudit } from '../web/impact.js';
-import { publishRun, pruneStore, receiptRetention, sharedStore, type PruneResult } from './store.js';
+import { RECEIPTS_DIR, publishRun, pruneStore, receiptRetention, sharedStore, type PruneResult } from './store.js';
 import { readPreviewState } from '../preview/state.js';
 import { repositoryWorktrees } from '../execution/procs.js';
 import { flockFree, flockHeldByAncestor, judgeStack, markStacksUsed, readStackContainers, resolveStacks, stacksOfLock, stoppedSince, type ResolvedStack, type StackContainer, type StackHealth } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
 import { classifyFailures, type InfrastructureCause } from './infrastructure.js';
-import { planSpread, prepareCopies, prepareMainCopy, removeCopies, stackLock, stackVariables, type MainSetup, type SpreadPlan } from './spread.js';
-import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, resolveReference, tooManyFiles,
+import { planSpread, prepareCopies, prepareMainCopy, removeCopies, stackLock, stackVariables, usesStack, type MainSetup, type SpreadPlan } from './spread.js';
+import { checkReuse, findOrigin, readLocal, reuseContext, type ReuseChoice, type ReuseEnvironment } from './reuse-proof.js';
+import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, repeatProofGap, resolveReference, tooManyFiles,
   type RepeatPlan } from './repeat.js';
 import { planScope, scopeRecord, scopeReferenceMissing, type ScopeDecision } from './proof-scope.js';
 import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, flockCommand, freePorts, queuePlaces, resolveGateLock, withGateLease,
   type CleanupRecord, type PortProcess, type PortsRecord, type QueueHandle, type QueueRecord, type SuiteHooks } from './suite.js';
 
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
-export const RECEIPTS_DIR = '.apv/receipts';
+export { RECEIPTS_DIR } from './store.js';
 /** Environment identity of a V3 local run; V2 read it from `environment.id`, a field V3 no longer reads. */
 export const ENVIRONMENT_ID = 'apv3-local';
 
@@ -93,6 +94,30 @@ export interface GateRunOptions {
    * and the risk of the diff, written in the summary. A task run: never a proof of the full suite.
    */
   since?: { commit: string; head: string; risk: string; reason: string };
+  /**
+   * Checks run even when a green receipt of an identical tree could be reused (`--replay <id>,<id>` or `--replay all`,
+   * docs/ACCELERATION-LOTS.md, A3): their receipt is an execution. Absent: every check that may be reused is.
+   */
+  replay?: 'all' | readonly string[];
+  /**
+   * `apv stack batch`: the copy of the suite is a fresh worktree, prepared by `batch.setup` whenever a check runs there (not
+   * only for a package-lock.json without node_modules), and never when every check is reused (A4).
+   */
+  batchSetup?: boolean;
+}
+/** A check reused at an identical tree: the receipt `cached` written, its origin and why. */
+export interface ReusedCheck {
+  gateId: string;
+  /** Identifier of the receipt `cached` written in this run. */
+  receipt: string;
+  fromRun: string;
+  fromCommit: string;
+  /** Identifier of the origin receipt (`reusedFrom`). */
+  origin: string;
+  basis: 'tree';
+  /** The stack of the environment the origin ran in (`--stacks`), or null. */
+  stack: string | null;
+  reason: string;
 }
 /** The copy of a run in the shared store: its directory, or why it could not be made (the run itself stands). */
 export interface SharedCopy { directory: string | null; error: string | null; pruned: PruneResult | null }
@@ -159,6 +184,17 @@ export interface GateRunResult {
    * with the state read after the stop. Empty when none.
    */
   interruptedStacks: { stack: string; gates: string[]; health: StackHealth }[];
+  /** Checks reused at an identical tree (receipts `cached`, never run), each checked as `apv gates verify` checks it. */
+  reused: ReusedCheck[];
+  /** The checks run on demand even when a reuse was possible (`--replay`), `all`, or null. */
+  replay: 'all' | string[] | null;
+  /**
+   * Receipts `cached` of this run checked again at its end, with a fresh read of the store, and that no longer check out (a
+   * later failure on the same tree written meanwhile by another copy, an origin removed): the run is not ok.
+   */
+  reuseStale: { gateId: string; reason: string }[];
+  /** Cost of the reading of the store for the reuse (runs looked at, receipt files read, milliseconds), or null when none was looked for. */
+  reuseScan: { runs: number; files: number; ms: number } | null;
   ok: boolean;
 }
 
@@ -455,7 +491,15 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   for (const d of earlyDecisions.values()) log(`${d.id} (contrôle tôt de ${d.gate}) : ${d.required ? 'lancé' : 'non requis'} : ${d.reason}.`);
   // What actually runs: a check not required is never started (its dependents are not required either).
   const runnable = gates.filter(g => !skipped.has(g.id));
-  const suite = isFullSuite(runnable, stage);
+  // `--replay`: known checks of this run only, said before anything else.
+  const replay = options.replay === undefined ? null : options.replay === 'all' ? 'all' as const : [...new Set(options.replay)];
+  if (Array.isArray(replay)) {
+    const unknown = replay.filter(id => !options.config.gates.some(g => g.id === id));
+    invariant(!unknown.length, 'GATE_UNKNOWN', `--replay : contrôle inconnu ${unknown.join(', ')} (déclarés : ${options.config.gates.map(g => g.id).join(', ')})`);
+    const outside = replay.filter(id => !gates.some(g => g.id === id));
+    invariant(!outside.length, 'GATE_UNKNOWN', `--replay : ${outside.join(', ')} ne fait pas partie des contrôles de cette exécution (${gates.map(g => g.id).join(', ')})`);
+  }
+  const configHash = gatesConfigHash(options.config);
   const context: Record<string, string> = { workspace: repo, candidateSha, ...(baseSha ? { baseSha } : {}) };
   // Placeholders are resolved before anything runs: a missing --base never fails halfway through a batch.
   const expand = (g: Gate, argv: readonly string[]): string[] => {
@@ -507,14 +551,70 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     const unknown = options.stacks.filter(id => !stacks.some(s => s.id === id));
     if (unknown.length) throw new PipelineError('STACK_UNKNOWN', `--stacks : pile inconnue ${unknown.join(', ')} (déclarées : ${stacks.map(s => s.id).join(', ') || 'aucune'}, section stacks de .apv/config.json)`);
   }
-  const usage = suite ? await suiteStacks({ git, repo, config: options.config, gates: runnable, declared: stacks, ids: options.stacks, source }) : { used: [], unmapped: [] };
+  // Reuse at an identical tree (docs/ACCELERATION-LOTS.md, A1), decided before any wait: a check whose latest green receipt
+  // of an identical tree checks out exactly as `apv gates verify` will check it (findOrigin, then checkReuse) gets a receipt
+  // `cached` instead of running. Never on a dirty tree, never a targeted or early check, never one asked by --replay, never one
+  // declared reuse: false or that runs apv web audit or apv dast. Only the checks that run count for the queue, the stacks,
+  // the ports and the preparations.
+  const environmentOf = (gate: Gate, stack: ResolvedStack | null): NodeJS.ProcessEnv => ({ ...environment([...options.config.environment.passEnv, ...gate.passEnv], source),
+    ...(stack ? stackVariables(stack, gate, options.config.environment.passEnv) : {}) });
+  const reuse = new Map<string, ReuseChoice & { environment: ReuseEnvironment & { executable: { path: string; sha256: string } } }>();
+  let reuseScan: GateRunResult['reuseScan'] = null;
+  if (!dirty && replay !== 'all') {
+    const ctx = reuseContext({ git, repo, commit: candidateSha, configHash, now: Date.now(), store: await sharedStore(git, repo), local: readLocal(repo) });
+    for (const gate of runnable) {
+      if (targeted.has(gate.id) || earlyDecisions.has(gate.id)) continue;
+      if (replay?.includes(gate.id)) { log(`${gate.id} : rejoué sur demande (--replay), même si une reprise était possible.`); continue; }
+      // The environments it would run in now: its variables, its executable, and under --stacks those of each stack given.
+      const onStacks = options.stacks && common && await usesStack(git, repo, gate, stacks) ? options.stacks.map(id => stacks.find(s => s.id === id)!) : [null];
+      const environments: (ReuseEnvironment & { executable: { path: string; sha256: string } })[] = [];
+      for (const stack of onStacks) {
+        try {
+          const env = environmentOf(gate, stack);
+          const executable = await executableIdentity(commands.get(gate.id)![0]!, repo, env);
+          environments.push({ hash: environmentIdentity(ENVIRONMENT_ID, env, { executable }), stack: stack?.id ?? null, executable });
+        } catch { /* No environment to compare (executable or env file unreadable): it runs, and says why. */ }
+      }
+      const found = await findOrigin(ctx, gate, environments, baseSha);
+      if ('reason' in found) {
+        if (found.candidate || found.reason.startsWith('jamais repris')) log(`${gate.id} : ${found.reason.startsWith('jamais repris') ? found.reason : `non repris (${found.reason})`} : exécuté.`);
+        continue;
+      }
+      // The repetition of the changed test files is judged on the origin, recomputed at this commit, as `verify` judges it.
+      if (gate.repeatChanged) {
+        let reference: { name: string; sha: string | null; reason: string } | null = null;
+        if (stage === 'full') { const name = options.repeatReference ?? gate.repeatChanged.reference; reference = { name, ...await resolveReference(git, repo, name) }; }
+        const gap = await repeatProofGap(git, repo, candidateSha, gate.repeatChanged, found.origin.receipt.repeat, reference);
+        if (gap) { log(`${gate.id} : non repris (répétition des tests modifiés non prouvée par l'origine : ${gap.reason}) : exécuté.`); continue; }
+      }
+      reuse.set(gate.id, { ...found, environment: environments.find(e => e.hash === found.origin.receipt.environmentHash)! });
+    }
+    // A check that runs reads what its dependencies wrote (build output...): a dependency of a check that runs runs too.
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const gate of runnable) {
+        if (reuse.has(gate.id)) continue;
+        for (const dep of gate.dependsOn) {
+          if (!reuse.delete(dep)) continue;
+          changed = true;
+          log(`${dep} : exécuté quand même : ${gate.id}, qui en dépend, est exécuté et lit ce que ${dep} produit.`);
+        }
+      }
+    }
+    const scans = [...ctx.scans.values()];
+    if (scans.length) { const scan = await scans[0]!; reuseScan = { runs: scan.runs, files: scan.files, ms: scan.ms }; }
+    for (const [id, r] of reuse) log(`${id} : réutilisé de ${r.origin.receipt.candidateSha.slice(0, 12)} (exécution ${r.origin.receipt.runId}, arbre identique) : non relancé.`);
+  }
+  const executing = runnable.filter(g => !reuse.has(g.id));
+  const suite = isFullSuite(executing, stage);
+  const usage = suite ? await suiteStacks({ git, repo, config: options.config, gates: executing, declared: stacks, ids: options.stacks, source }) : { used: [], unmapped: [] };
   // A check whose lock is no declared stack: every declared stack is checked and held, as before.
   const checkedStacks = usage.unmapped.length ? stacks : stacks.filter(s => usage.used.includes(s.id));
   const portList = suitePorts(settings.ports, stacks, checkedStacks.map(s => s.id));
   if (suite && usage.unmapped.length && stacks.length) log(`${usage.unmapped.join(', ')} : verrou qui n'est celui d'aucune pile déclarée ; la suite vérifie et tient toutes les piles (${stacks.map(s => s.id).join(', ')}).`);
   // A check that runs `apv web audit`: inside the suite the audit takes no place (APV_SUITE_RUN), so the suite takes
   // every place for it, as the audit does alone: no suite runs while Lighthouse measures, whatever suite.queue.slots.
-  const measuring = suite ? runnable.filter(g => runsWebAudit(commands.get(g.id) ?? g.command)).map(g => g.id) : [];
+  const measuring = suite ? executing.filter(g => runsWebAudit(commands.get(g.id) ?? g.command)).map(g => g.id) : [];
   if (measuring.length && settings.queue.enabled) log(`${measuring.join(', ')} : lance apv web audit ; la suite tient toutes les places de la file (aucune suite ne tourne pendant la mesure).`);
   if (suite && stacks.length && !checkedStacks.length) log(`Aucun contrôle de la suite ne verrouille une pile déclarée (${stacks.map(s => s.id).join(', ')}) : aucune pile vérifiée, ni son verrou ni ses ports.`);
   let setup: MainSetup | null = null;
@@ -554,7 +654,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         'Attendre sa fin (apv lock status, apv stacks status), ou l\'arrêter s\'il est orphelin (apv procs list, puis apv procs stop --port <p>), puis relancer.');
       let portsWaited = 0;
       if (ports && heldByCopies(ports) && !busyReasons(null, checkedStacks, flockFree, previews, heldByUs).length) {
-        const limit = portsWaitMs(runnable);
+        const limit = portsWaitMs(executing);
         const pollMs = options.hooks?.portsPollMs ?? 5000;
         const holders = ports.left.map(({ pid, ports: held, command, worktree }) => ({ pid, ports: held, command, worktree }));
         const started = Date.now();
@@ -591,12 +691,17 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         const now = await treeStatus();
         if (now !== status) {
           if (now !== '' && !options.allowDirty) throw dirtyRefusal(now, ' (arbre modifié pendant l\'attente)');
+          // The reuses were decided on the clean tree of the commit: a tree changed meanwhile would make them prove other code.
+          if (reuse.size) throw new PipelineError('GATE_DIRTY', `Suite complète refusée : l'arbre a changé pendant l'attente de la file ou des ports, alors que ${[...reuse.keys()].join(', ')} devai(en)t être réutilisé(s) d'un arbre identique. Relancer sur un arbre propre.`);
           status = now; dirty = now !== '';
         }
       }
-      // The copy of the suite prepared like its copies on other stacks (a package-lock.json without node_modules runs
-      // batch.setup): under its place in the queue and after every refusal, so that a refused suite has run nothing.
-      setup = await prepareMainCopy({ repo, config: options.config, env: source, signal: options.signal, log });
+    }
+    // The copy of the suite prepared like its copies on other stacks (a package-lock.json without node_modules runs
+    // batch.setup; `apv stack batch`: always, its copy is a fresh worktree): under its place in the queue and after every
+    // refusal, so that a refused suite has run nothing; never when no check runs (every one reused).
+    if (suite || (options.batchSetup && executing.length > 0)) {
+      setup = await prepareMainCopy({ repo, config: options.config, env: source, signal: options.signal, log, ...(options.batchSetup ? { always: 'copie neuve du lot' } : {}) });
       if (setup?.status === 'done') {
         const now = await treeStatus();
         if (now !== status) {
@@ -606,6 +711,8 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
             'Ignorer ce que la préparation écrit (.gitignore), puis relancer.');
         }
       }
+    } else if (options.batchSetup && options.config.batch?.setup && reuse.size) {
+      log(`Copie du lot non préparée (batch.setup sauté) : aucun contrôle à exécuter, tous réutilisés d'un arbre identique.`);
     }
     const runId = `${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}-${randomUUID().slice(0, 8)}`;
     started = runId;
@@ -617,11 +724,10 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     // (a gate that checks the working tree is clean must not see the receipts of its siblings).
     const ignore = join(repo, RECEIPTS_DIR, '.gitignore');
     if (!existsSync(ignore)) writeFileSync(ignore, '*\n');
-    const configHash = gatesConfigHash(options.config);
     // The declared test stacks: a check under the lock of one of them notes its use (apv stacks idle-stop reads it).
     // A suite spread over stacks: checks dealt to the stacks, the copies of the other stacks made now.
     if (options.stacks && common) {
-      spread = await planSpread({ git, repo, common, config: options.config, gates: runnable, ids: options.stacks, runId });
+      spread = await planSpread({ git, repo, common, config: options.config, gates: executing, ids: options.stacks, runId });
       log(`Répartition sur les piles : ${[...spread.assignments.values()].map(a => `${a.gateId} sur la pile ${a.stack.id}${a.workspace === repo ? '' : ` (copie ${a.workspace})`}`).join(', ') || 'aucun contrôle de pile'}.`);
       for (const a of spread.assignments.values()) if (a.notPassed.length) log(`Note : ${a.gateId} ne reçoit pas ${a.notPassed.join(', ')} du fichier d'environnement de la pile ${a.stack.id} (absents de son passEnv).`);
       await prepareCopies(spread, { git, repo, sha: candidateSha, config: options.config, env: source, signal: options.signal, log });
@@ -629,7 +735,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     // A stack stopped by idle-stop and not restarted: said before the checks, not discovered as a refused connection.
     const stoppedStacks: GateRunResult['stoppedStacks'] = [];
     if (common) {
-      for (const gate of runnable) {
+      for (const gate of executing) {
         const assignedStack = spread?.assignments.get(gate.id)?.stack.id;
         if (!gate.lock && !assignedStack) continue;
         const ids = assignedStack ? [assignedStack]
@@ -657,7 +763,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
     type Repeat = NonNullable<GateReceipt['repeat']>;
     type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'>>;
-    type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat' | 'web' | 'scope' | 'nearTimeout' | 'early' | 'reuse'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack'>> & { repeat?: RepeatFields; web?: NonNullable<GateReceipt['web']> };
+    type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat' | 'web' | 'scope' | 'nearTimeout' | 'early' | 'reuse'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack' | 'reuse'>> & { repeat?: RepeatFields; web?: NonNullable<GateReceipt['web']> };
     const write = (receipt: Fields): GateReceipt => {
       const decision = scopeDecisions.get(receipt.gateId);
       const earlyRun = earlyDecisions.get(receipt.gateId);
@@ -670,7 +776,26 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       writeFileSync(join(directory, `${valid.gateId}.json`), JSON.stringify(valid, null, 2) + '\n');
       return valid;
     };
+    // The receipts `cached` this run wrote after checking their reuse (findOrigin, checkReuse): the only ones counted as passed.
+    const reusedIds = new Set<string>();
+    const succeeded = (r: GateReceipt): boolean => success(r) || (r.status === 'cached' && reusedIds.has(r.id));
+    /** A check reused at an identical tree: a receipt `cached` that cites its origin, written once its dependencies passed, nothing run. */
+    const writeReused = (gate: Gate, chosen: NonNullable<ReturnType<typeof reuse.get>>): GateReceipt => {
+      const o = chosen.origin.receipt;
+      const command = commands.get(gate.id)!;
+      const key = proofKey({ repository: repo, baseSha: baseSha ?? candidateSha, candidateSha, taskHash: hash(null), configHash, environmentHash: o.environmentHash,
+        workspace: repo, gate: { ...gate, command }, dependencyKeys: gate.dependsOn.map(d => keys.get(d) ?? hash(null)), executable: chosen.environment.executable });
+      keys.set(gate.id, key);
+      const receipt = write({ id: randomUUID(), runId, gateId: gate.id, key, candidateSha, configHash, environmentHash: o.environmentHash, startedAt: Date.now(),
+        status: 'cached', durationMs: 0, exitCode: 0, stdoutHash: o.stdoutHash, stderrHash: o.stderrHash, reusedFrom: o.id, reuse: chosen.reuse,
+        diagnostic: `Réutilisé de ${o.candidateSha.slice(0, 12)} (exécution ${o.runId}, reçu ${o.id}) : arbre identique, même configuration, même environnement ; non relancé.`,
+        ...(chosen.stack ? { stack: chosen.stack } : {}) });
+      reusedIds.add(receipt.id);
+      return receipt;
+    };
     const execute = async (gate: Gate, signal: AbortSignal): Promise<GateReceipt> => {
+      const chosen = reuse.get(gate.id);
+      if (chosen) return writeReused(gate, chosen);
       const startedAt = Date.now();
       const webRecord = join(webRecords!, `${gate.id}.json`);
       const elapsedStart = performance.now();
@@ -871,7 +996,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     }));
     let list: GateReceipt[];
     if (!spread?.copies.length) {
-      list = await schedule(runnable, { concurrency: options.concurrency ?? 3, failFast, signal: options.signal ?? new AbortController().signal, execute, blocked });
+      list = await schedule(runnable, { concurrency: options.concurrency ?? 3, failFast, signal: options.signal ?? new AbortController().signal, execute, blocked, succeeded });
     } else {
       // One scheduler per copy (each has its own workspace), run together; a failure stops them all under failFast.
       const stop = new AbortController();
@@ -880,10 +1005,10 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       const groups = [runnable.filter(g => !inCopy.has(g.id)), ...spread.copies.map(c => runnable.filter(g => c.gates.includes(g.id)))].filter(g => g.length);
       const run = async (gate: Gate, s: AbortSignal): Promise<GateReceipt> => {
         const receipt = await execute(gate, s);
-        if (failFast && !success(receipt)) stop.abort();
+        if (failFast && !succeeded(receipt)) stop.abort();
         return receipt;
       };
-      const results = await Promise.all(groups.map(group => schedule(group, { concurrency: options.concurrency ?? 3, failFast, signal, execute: run, blocked })));
+      const results = await Promise.all(groups.map(group => schedule(group, { concurrency: options.concurrency ?? 3, failFast, signal, execute: run, blocked, succeeded })));
       const byId = new Map(results.flat().map(r => [r.gateId, r]));
       list = runnable.map(g => byId.get(g.id)!);
     }
@@ -908,17 +1033,35 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     }
     const spreadRecord = spread ? [...spread.assignments.values()].map(a => ({ gate: a.gateId, stack: a.stack.id, workspace: a.workspace, notPassed: a.notPassed,
       error: spread!.copies.find(c => c.dir === a.workspace)?.error ?? null })) : null;
+    // Each receipt `cached` checked again, with a fresh read of the store, exactly as `apv gates verify` will: a later failure of
+    // the same tree written meanwhile by another copy, or an origin removed, and the run says so instead of passing.
+    const written = list.filter(r => r.status === 'cached' && reusedIds.has(r.id));
+    const reuseStale: GateRunResult['reuseStale'] = [];
+    if (written.length) {
+      const again = reuseContext({ git, repo, commit: candidateSha, configHash, now: Date.now(), store: await sharedStore(git, repo), local: readLocal(repo) });
+      for (const r of written) {
+        const checked = await checkReuse(again, gates.find(g => g.id === r.gateId), { receipt: r, dirty: r.dirty ?? null, baseSha, source: 'local' });
+        if (!('reason' in checked)) continue;
+        reuseStale.push({ gateId: r.gateId, reason: checked.reason });
+        log(`ATTENTION : ${r.gateId} : reprise devenue invérifiable pendant l'exécution (${checked.reason}) ; relancer avec --replay ${r.gateId}.`);
+      }
+    }
+    const reused: ReusedCheck[] = written.map(r => ({ gateId: r.gateId, receipt: r.id, fromRun: r.reuse!.fromRun, fromCommit: r.reuse!.fromCommit, origin: r.reusedFrom!, basis: 'tree',
+      stack: r.stack ?? null, reason: 'arbre identique' }));
     const result: GateRunResult = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
       reserved: reserved.map(g => g.id), targeted: [...targeted], early: [...earlyDecisions.values()], slowEarly, receipts: list, directory, shared: null, suite, notRequired: [...notRequired.keys()], scope: [...scopeDecisions.values()],
       queue: queue?.record ?? null, ports, flaky, cleanup, stoppedStacks, infrastructure: classifyFailures(list, missingEnv), spread: spreadRecord,
       stacksUsed: suite ? usage.used : [], stacksChecked: suite ? checkedStacks.map(s => s.id) : [], stacksUnmapped: suite ? usage.unmapped : [], setup, interruptedStacks,
-      ok: list.every(r => success(r) || r.status === 'not_required') };
+      reused, replay, reuseStale, reuseScan,
+      ok: list.every(r => succeeded(r) || r.status === 'not_required') && !reuseStale.length };
     writeFileSync(join(directory, 'summary.json'), JSON.stringify({ runId, candidateSha, baseSha, dirty, stage, ok: result.ok, selected: result.selected, added,
       reserved: result.reserved, targeted: result.targeted, ...(result.early.length ? { early: result.early } : {}), ...(slowEarly.length ? { slowEarly } : {}),
       ...(override ? { override } : {}), ...(options.since ? { since: options.since } : {}),
       ...(suite ? { suite: true, queue: result.queue, ports, flaky, cleanup, stacksUsed: result.stacksUsed, stacksChecked: result.stacksChecked } : {}), ...(setup ? { setup } : {}),
       ...(interruptedStacks.length ? { interruptedStacks } : {}), ...(spreadRecord ? { spread: spreadRecord } : {}), ...(stoppedStacks.length ? { stoppedStacks } : {}),
       ...(result.infrastructure.causes.length ? { infrastructure: result.infrastructure } : {}),
+      ...(reused.length ? { reused: reused.map(r => ({ gateId: r.gateId, fromRun: r.fromRun, fromCommit: r.fromCommit, origin: r.origin, basis: r.basis })) } : {}),
+      ...(replay ? { replay } : {}), ...(reuseStale.length ? { reuseStale } : {}),
       receipts: list.map(r => ({ gateId: r.gateId, id: r.id, status: r.status, ...(r.targeted ? { targeted: true } : {}), ...(r.early ? { early: r.early.gate } : {}), exitCode: r.exitCode, durationMs: Math.round(r.durationMs),
         ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}), ...(r.stack ? { stack: r.stack } : {}),
         ...(r.nearTimeout ? { nearTimeout: r.nearTimeout } : {}),

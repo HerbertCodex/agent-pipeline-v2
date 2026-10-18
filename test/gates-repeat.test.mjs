@@ -57,7 +57,8 @@ test('no changed test file: the check passes, nothing is repeated, the receipt s
   assert.equal(row.status, 'passed');
   assert.deepEqual(row.repeat, { status: 'none', base: f.base, files: [], importsOnly: [], movedPathsOnly: [], times: 5, failures: [], fixedWaits: [] });
   assert.equal(f.calls().length, 1, 'only the command of the check ran');
-  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
+  // --replay all: the output of an execution (the same tree would otherwise be reused, A1).
+  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--replay', 'all']);
   assert.match(human.stdout, /Tests modifiés répétés \(repeatChanged\) :\n- browser : aucun fichier de test ajouté ou modifié depuis/);
 });
 
@@ -295,7 +296,8 @@ test('fixed waits in the lines a change adds: warned by default, refused with fi
     { file: 'tests/e2e/new.e2e.ts', line: 3, text: 'await new Promise(r => setTimeout(r, 50));' },
   ], 'the untouched waitForTimeout of old.e2e.ts and the comment are not reported');
   assert.match(r.stderr, /browser : attente à durée fixe dans un test modifié, tests\/e2e\/new\.e2e\.ts:2 : await sleep\(200\);/);
-  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
+  // --replay all: the output of an execution (the same tree would otherwise be reused, A1).
+  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--replay', 'all']);
   assert.match(human.stdout, /Attentes à durée fixe dans les tests modifiés \(2\)[^\n]*\n- browser : tests\/e2e\/new\.e2e\.ts:2 : await sleep\(200\);/);
   write(f.repo, '.apv/config.json', { gates: [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ fixedWaits: 'refuse' }) }] });
   commit(f.repo, 'refuse');
@@ -516,7 +518,8 @@ test('moved paths only, end to end: tests citing files renamed without change ar
   assert.deepEqual(row.repeat.movedPathsOnly, ['tests/e2e/mixed.e2e.ts', ...Array.from({ length: 12 }, (_, i) => `tests/e2e/p${i}.e2e.ts`), 'tests/e2e/two.e2e.ts'].sort());
   assert.deepEqual(receipt(join(f.repo, '.apv/receipts', run.runId), 'browser').repeat.movedPathsOnly, row.repeat.movedPathsOnly);
   assert.deepEqual(f.calls().at(-1).slice(-4), repeated, 'only the really changed tests are repeated');
-  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
+  // --replay all: the output of an execution (the same tree would otherwise be reused, A1).
+  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--replay', 'all']);
   assert.match(human.stdout, /tests dont seuls des chemins de fichiers déplacés changent : non répétés \(tests\/e2e\/mixed\.e2e\.ts, .* \.\.\. \(14\)\)/);
   assert.match(human.stderr + human.stdout, /browser : tests dont seuls des chemins de fichiers déplacés changent : non répétés \(le contrôle les exécute comme les autres\)/);
   const v = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--against', 'HEAD']);
@@ -541,7 +544,8 @@ test('imports only, end to end: moved and renamed tests are listed in the output
   assert.deepEqual(row.repeat.importsOnly, ['tests/e2e/moved/a.e2e.ts', ...Array.from({ length: 11 }, (_, i) => `tests/e2e/m${i + 1}.e2e.ts`)].sort());
   assert.deepEqual(receipt(join(f.repo, '.apv/receipts', r.json().runId), 'browser').repeat.importsOnly, row.repeat.importsOnly);
   assert.deepEqual(f.calls().at(-1).slice(-1), ['tests/e2e/m0.e2e.ts'], 'only the really changed test is repeated');
-  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
+  // --replay all: the output of an execution (the same tree would otherwise be reused, A1).
+  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--replay', 'all']);
   assert.match(human.stdout, /tests dont seuls les imports changent : non répétés \(tests\/e2e\/m1\.e2e\.ts, /);
   assert.match(human.stderr + human.stdout, /browser : tests dont seuls les imports changent : non répétés \(le contrôle les exécute comme les autres\)/);
   const v = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--against', 'HEAD']);

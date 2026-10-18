@@ -251,7 +251,8 @@ test('apv init on a new web project declares both checks, and apv gates run prov
   assert.deepEqual(green.json().reserved, []);
   const full = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/main', '--json'], env);
   assert.equal(full.code, 0, full.stdout + full.stderr);
-  assert.deepEqual(full.json().gates.map(g => [g.gate, g.status]).sort(), [['code-map', 'passed'], ['reuse', 'passed'], ['structure', 'passed']]);
+  // Same tree, same base ({{baseSha}} in their commands): the full stage reuses the green receipts of the task stage (A1).
+  assert.deepEqual(full.json().gates.map(g => [g.gate, g.status]).sort(), [['code-map', 'cached'], ['reuse', 'cached'], ['structure', 'cached']]);
   git(f.repo, 'switch', '-q', '-c', 'feature/admin');
   badAdmin(f.repo);
   commit(f.repo, 'admin');

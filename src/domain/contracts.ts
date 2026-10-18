@@ -125,6 +125,11 @@ export const gateSchema = s.object({
   // Early checks of a full check, run by the task stage when the change touches their scope: they add a check, never
   // remove one; the full suite stays required. Optional, never defaulted: absent, parsing and hashing are unchanged.
   early: s.optional(s.array(earlyCheckSchema, 1, 20)),
+  // Reuse of a green receipt of an identical tree (docs/ACCELERATION-LOTS.md, part A): `false` = never reused, always run
+  // (a check that reads a state outside the repository: an advisory database, the network, the time). Absent: reused
+  // at an identical tree when its receipt checks out, except a command that runs `apv web audit` or `apv dast`.
+  // Only `false` is accepted for now (the loader refuses `true`). Optional, never defaulted: absent, hashing is unchanged.
+  reuse: s.optional(s.boolean()),
 });
 /** Stage of a check; absent means `task`. */
 export const gateStage = (gate: { stage?: GateStage | undefined }): GateStage => gate.stage ?? 'task';
