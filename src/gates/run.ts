@@ -657,7 +657,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
     type Repeat = NonNullable<GateReceipt['repeat']>;
     type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'>>;
-    type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat' | 'web' | 'scope' | 'nearTimeout' | 'early'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack'>> & { repeat?: RepeatFields; web?: NonNullable<GateReceipt['web']> };
+    type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat' | 'web' | 'scope' | 'nearTimeout' | 'early' | 'reuse'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack'>> & { repeat?: RepeatFields; web?: NonNullable<GateReceipt['web']> };
     const write = (receipt: Fields): GateReceipt => {
       const decision = scopeDecisions.get(receipt.gateId);
       const earlyRun = earlyDecisions.get(receipt.gateId);
