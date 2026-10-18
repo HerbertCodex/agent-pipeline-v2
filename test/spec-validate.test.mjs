@@ -357,6 +357,16 @@ test('the user scenario grammar accepts French and English, in order, and nothin
   assert.equal(check(gwt, 'Test navigateur tests/e2e/liste.e2e.ts à 390 px'), 0);
   assert.equal(check(gwt, 'Parcours joué par l\'opérateur sur l\'aperçu vivant avant la fusion.'), 0);
   assert.equal(check(gwt, 'Test unitaire de la fonction.'), 1);
+  // Security review of #145: a negated verification replays nothing; a sentence that also names a real replay counts.
+  assert.equal(check(gwt, 'Aucun test navigateur ; relu dans le code.'), 1, 'negated');
+  assert.equal(check(gwt, 'Jamais joué par personne.'), 1, 'never played');
+  assert.equal(check(gwt, 'No browser test, checked by reading.'), 1, 'negated in English');
+  assert.equal(check(gwt, 'Sans maquette ; test navigateur tests/e2e/liste.e2e.ts à 390 px.'), 0, 'a negation elsewhere');
+  // Security review of #145: the grammar reads a long hostile text in linear time.
+  const hostile = `${'given '.repeat(150)}${'when '.repeat(150)}then ${'!'.repeat(1340)}`;
+  const started = performance.now();
+  for (let i = 0; i < 20; i += 1) check(hostile);
+  assert.ok(performance.now() - started < 200, `20 hostile scenarios read in ${Math.round(performance.now() - started)} ms`);
   // A spec without interface asks nothing.
   assert.deepEqual(userScenarioIssues(specSchema.parse(demoSpec()), { minUserScenarios: 5, userScenarios: 'error' }, signals), []);
 });

@@ -8,12 +8,36 @@ export const USER_SCENARIO_ID = /^AC-USER-\d+$/;
 /** Upper bound of the rule validated by the operator (3 to 5 scenarios): beyond it, the main journeys are diluted. */
 export const MAX_USER_SCENARIOS = 5;
 
-const word = (alternatives: string) => `(?<![\\p{L}\\p{N}])(?:${alternatives})(?![\\p{L}\\p{N}])`;
-/** « Étant donné … quand … alors … » or « Given … When … Then … », in this order, with an outcome after « alors ». */
-const GIVEN_WHEN_THEN = new RegExp(
-  `${word('étant données?|étant donnés?|etant donnee?s?|given')}[\\s\\S]+?${word('quand|lorsque|lorsqu|when')}[\\s\\S]+?${word('alors|then')}[\\s\\S]*[\\p{L}\\p{N}]`, 'iu');
+const word = (alternatives: string) => new RegExp(`(?<![\\p{L}\\p{N}])(?:${alternatives})(?![\\p{L}\\p{N}])`, 'giu');
+const GIVEN = word('étant données?|étant donnés?|etant donnee?s?|given');
+const WHEN = word('quand|lorsque|lorsqu|when');
+const THEN = word('alors|then');
+const OUTCOME = /[\p{L}\p{N}]/u;
+/**
+ * « Étant donné … quand … alors … » or « Given … When … Then … », in this order, with an outcome after « alors ». Read
+ * by successive searches from the end of the previous word, never by one pattern with lazy gaps: linear on a long
+ * hostile text (security review of #145).
+ */
+function givenWhenThen(text: string): boolean {
+  let from = 0;
+  for (const keyword of [GIVEN, WHEN, THEN]) {
+    keyword.lastIndex = from;
+    const found = keyword.exec(text);
+    if (!found) return false;
+    from = found.index + found[0].length + 1;
+  }
+  return OUTCOME.test(text.slice(from - 1));
+}
 /** A verification that replays the journey: a browser test, or the journey played by the target person before the merge. */
-const REPLAYED_JOURNEY = /navigateur|browser|playwright|cypress|webdriver|puppeteer|e2e|end-to-end|bout en bout|parcours (?:re)?jou[ée]|jou[ée] par|played by/i;
+const REPLAY = '(?:navigateur|browser|playwright|cypress|webdriver|puppeteer|e2e|end-to-end|bout en bout|parcours (?:re)?jou[ée]|jou[ée] par|played by)';
+const REPLAYED_JOURNEY = new RegExp(REPLAY, 'iu');
+/**
+ * The same words under a negation in the same clause (« Aucun test navigateur », « jamais joué par », « no browser
+ * test »): they replay nothing (security review of #145). A clause stops at . ; : or a line break.
+ */
+const NEGATED_REPLAY = new RegExp(`(?<![\\p{L}])(?:aucune?|sans|pas|jamais|ni|non|no|not|never|without)(?![\\p{L}])[^.;:\\n]{0,40}?${REPLAY}`, 'iu');
+const replaysJourney = (verification: string): boolean =>
+  verification.split(/[.;:\n]/).some(clause => REPLAYED_JOURNEY.test(clause) && !NEGATED_REPLAY.test(clause));
 
 /** What the project already knows of its interface: the `ui` paths of the reviews and the validated mockup folder. */
 export interface InterfaceSignals { uiPaths: readonly string[]; designDir: string }
@@ -67,11 +91,11 @@ export function userScenarioIssues(spec: Spec, settings: UserScenarioSettings, s
       'Garde les parcours principaux de la personne cible et range les autres comportements dans des critères ordinaires.' });
   }
   for (const scenario of scenarios) {
-    if (!GIVEN_WHEN_THEN.test(scenario.description)) {
+    if (!givenWhenThen(scenario.description)) {
       issues.push({ code: 'SPEC_USER_SCENARIOS', message: `${scenario.id} n'est pas écrit « Étant donné … quand … alors … » (ou Given … When … Then …) : ` +
         'réécris-le avec la situation de la personne, ce qu\'elle fait, puis ce qu\'elle voit.' });
     }
-    if (!REPLAYED_JOURNEY.test(scenario.verification)) {
+    if (!replaysJourney(scenario.verification)) {
       issues.push({ code: 'SPEC_USER_SCENARIOS', message: `${scenario.id} : la vérification ne nomme ni test navigateur ni parcours joué par la personne cible ` +
         '(par exemple « test navigateur tests/e2e/<fichier> à 390 px », ou « parcours joué par l\'opérateur sur l\'aperçu avant la fusion »).' });
     }
