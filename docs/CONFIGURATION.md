@@ -95,6 +95,45 @@ Par défaut, un contrôle a un accès exclusif au répertoire de validation, y c
 
 `apv lock run e2e` sérialise le navigateur de test entre agents (voir [LOCKS.md](LOCKS.md)) ; le verrou ne dure que le temps des tests ciblés. `--base <ref>` est obligatoire à l'étape de tâche (`apv gates run --stage task --base <base>`). Limite : `--only-changed` suit les imports des fichiers de tests, pas le navigateur ; une modification de l'application seule ne sélectionne pas les tests e2e qui la parcourent. L'implementer ajoute ou modifie donc le test du comportement qu'il change, et la suite complète reste le filet à la dernière intégration et à la livraison. Pour une interface, faites tourner les tests navigateur en mouvement réduit par défaut (Playwright : `use: { reducedMotion: 'reduce' }` dans la configuration, et des animations CSS qui respectent `prefers-reduced-motion`) : un clic pendant une animation est la première cause d'instabilité ; seuls les tests qui vérifient une animation remettent `reducedMotion: 'no-preference'`.
 
+`early` (facultatif, contrôle de stage `full` seulement ; [ACCELERATION-LOTS.md](ACCELERATION-LOTS.md), partie C) : les **contrôles tôt**, commandes rapides que le projet déclare pour qu'un échec qui n'apparaîtrait qu'en fin de suite complète (un budget de taille du JavaScript servi, les captures d'un écran qu'aucun test n'importe, un test instable) se voie au stage task en quelques minutes. Un contrôle tôt **ajoute** un contrôle, il n'en retire aucun : le contrôle `full` reste exigé en entier par la suite complète et par `apv gates verify` au commit exact. Tableau de 1 à 20 objets :
+- `id` (obligatoire) : identifiant propre, distinct de tout contrôle et de tout autre contrôle tôt ; c'est le nom de son reçu (`<id>.json`) ;
+- `command` (obligatoire) : tableau d'arguments, mêmes substitutions que `command` (`{{baseSha}}` exige `--base`) ;
+- `when` (facultatif) : motifs (`*`, `**`, `?`, sans accolades ni `!`) ; le contrôle tôt tourne si un fichier changé depuis la base (`--base`, ou le commit de `--since`) y répond : commits, modifications non commitées et fichiers non suivis hors ignorés, les deux côtés d'un renommage. Sans `when`, il tourne toujours ; sans `--base`, `when` ne peut pas s'évaluer et il tourne aussi. Hors `when` : reçu `not_required` du stage task (« non requis (hors when) »), jamais un reçu de la suite complète ;
+- `dependsOn` (facultatif) : contrôles de stage `task` dont il a besoin (par exemple `build`, dont il lit la sortie) ; un contrôle `full` ou inconnu est refusé ;
+- `timeoutMs` (120000 par défaut), `passEnv`, `lock`, `resources` : comme pour un contrôle ; **rien n'est hérité du contrôle `full`** (ni ses variables, ni son verrou), un contrôle tôt qui lance la pile de test les déclare lui-même.
+
+`apv gates run --stage task` (et `--since`) lance les contrôles tôt des contrôles `full` retenus, chacun juste après son contrôle dans l'ordre de la configuration, après ses dépendances (`--only <contrôle full>` les amène, avec leurs dépendances). La suite complète (`--stage full`) ne les lance jamais. Leur reçu est ciblé (`targeted: true`) et porte `early` (contrôle `full`, identifiant, requis ou non, raison, fichiers qui répondent à `when`, 50 au plus) : **jamais une preuve du contrôle `full`**, ni au niveau complet ni au niveau tâche de `apv gates verify`, qui ne les compte pour aucun contrôle. Un échec rend le stage task rouge : « Échec tôt de integration (budget-js) : la suite complète échouerait sur ce contrôle ». Un contrôle tôt qui prend plus de 5 minutes est signalé « trop lent pour le stage task ». La sortie les nomme `budget-js (tôt : integration)`, le JSON et `summary.json` les listent dans `early`.
+
+**Lu à la base.** Comme les autres contrôles de la base (section précédente et [CLI.md](CLI.md#apv-gates-run)), les contrôles tôt de la base restent lancés : un candidat qui en retire un, ou change sa commande, son délai, ses variables ou son verrou, le voit tourner avec sa définition de base ; son `when` est l'union de celui de la base et de celui du candidat (absent d'un côté : toujours). Une PR ne réduit donc jamais le `when` qui la juge ; elle peut ajouter des contrôles tôt ou élargir un `when`, sans que le contrôle `full` soit tenu pour « modifié ». Sans `early`, rien ne change (lecture et empreinte de configuration comprises) ; l'ajouter change l'empreinte, comme tout champ d'un contrôle.
+
+Exemple (projet pilote) : le budget JavaScript des pages, extrait du test complet en un script qui lit `.svelte-kit/output` après le `build` du stage task, et les captures de l'accueil répétées trois fois quand l'accueil change :
+
+```json
+{
+  "id": "integration",
+  "stage": "full",
+  "command": ["npm", "run", "test:integration"],
+  "affected": ["npm", "run", "test:e2e:changed", "--", "{{baseSha}}", "--project=integration"],
+  "early": [
+    { "id": "budget-js", "when": ["src/**", "static/**", "package.json", "package-lock.json", "vite.config.*", "svelte.config.*"],
+      "dependsOn": ["build"], "command": ["node", "scripts/e2e/bundle-budget.mjs"], "timeoutMs": 120000 }
+  ]
+},
+{
+  "id": "browser",
+  "stage": "full",
+  "command": ["npm", "run", "test:browser"],
+  "affected": ["npm", "run", "test:e2e:changed", "--", "{{baseSha}}", "--project=browser"],
+  "early": [
+    { "id": "captures-accueil", "when": ["src/routes/(public)/+page.svelte", "src/lib/home/**"],
+      "command": ["npx", "playwright", "test", "tests/e2e/browser/accueil-captures.e2e.ts", "--repeat-each=3", "--retries=0"],
+      "lock": { "resource": "e2e" }, "timeoutMs": 300000 }
+  ]
+}
+```
+
+`affected` et `early` se complètent : `affected` lance les tests que le graphe d'imports des tests relie au changement ; `early` couvre ce que ce graphe ne voit pas (un budget de taille, une capture d'un écran qu'aucun test n'importe). `--repeat-each` (sans relance, `--retries=0`) dans la commande tôt attrape une instabilité avant la suite complète.
+
 `lock` (facultatif, 3.0.0-alpha.4) : la ressource que le contrôle partage avec d'autres copies du dépôt (une pile de test), tenue autour de sa commande ; son délai (`timeoutMs`) ne commence qu'une fois le verrou obtenu, l'attente est notée dans le reçu (`lockWaitMs`). Deux formes :
 - `{ "resource": "e2e", "waitMs": 1800000 }` : bail de `apv lock` ([LOCKS.md](LOCKS.md)), dans le même dossier (`APV_LOCK_DIR` compris), visible par `apv lock status` ; la commande reçoit `APV_LOCK_HELD` (un `apv lock run e2e` à l'intérieur ne s'attend pas lui-même) ; déjà tenu par l'appelant, il n'est pas repris ;
 - `{ "file": "../../pilotage/.e2e.lock", "fileEnv": "E2E_LOCK_FILE", "waitMs": 1800000 }` : `flock` du noyau sur ce fichier (relatif au répertoire Git commun, ou absolu ; créé au besoin), pris par `flock(1)` (util-linux) dont la commande du contrôle est un descendant : un script de projet qui prouve le verrou par un ancêtre détenteur (`/proc/locks`) le voit tenu. Une suite lancée sous ce verrou (`flock <verrou> apv gates run`) n'est pas refusée : ses contrôles qui le demandent ne le reprennent pas et passent un à la fois par un verrou compagnon, dans leur `waitMs` : un fichier vide par fichier de verrou réel (deux chemins vers le même fichier partagent le sien), dans `<APV_LOCK_DIR, sinon ${XDG_STATE_HOME:-~/.local/state}/apv/locks>/under/`, laissé en place. Si ce dossier ne peut pas servir, le compagnon va dans `<dossier temporaire>/apv-under-<uid>/`, puis dans `<verrou>.under` à côté du verrou. Un dossier n'est retenu que s'il est un vrai dossier de ce compte, fermé aux autres. Le partage entre suites suppose le même APV_LOCK_DIR (ou XDG_STATE_HOME, HOME). Une suite lancée par un tel contrôle ne reprend pas le compagnon. `fileEnv` : variable qui, transmise au contrôle (`passEnv`) et non vide, remplace le chemin (relatif au dépôt).

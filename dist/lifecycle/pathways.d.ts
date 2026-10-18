@@ -332,6 +332,13 @@ export declare function targetedQaContext(context: {
             readonly files: string[];
             readonly blocking: string[];
         } | undefined;
+        early: {
+            readonly gate: string;
+            readonly id: string;
+            readonly required: boolean;
+            readonly reason: string;
+            readonly files: string[];
+        } | undefined;
     }[];
     qaScope: {
         mode: string;

@@ -248,7 +248,8 @@ export async function verifyGates(options) {
     const gates = [];
     const near = [];
     for (const gateId of required) {
-        const all = atCommit.filter(f => f.receipt.gateId === gateId);
+        // A receipt of an early check (`early`) is feedback of the task stage, never proof of any check, whatever its id.
+        const all = atCommit.filter(f => f.receipt.gateId === gateId && !f.receipt.early);
         const targetedOnes = all.filter(f => f.receipt.targeted === true);
         const targeted = targetedOnes.length;
         const via = viaTargeted.has(gateId);
