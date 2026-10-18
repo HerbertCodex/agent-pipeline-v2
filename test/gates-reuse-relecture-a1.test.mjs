@@ -111,7 +111,7 @@ test('M2: a .env* file at the root that changed, the tree unchanged, is another 
   const head = p.same();
   const changed = await p.run(['--json']);
   assert.deepEqual(statuses(changed.json()), { 'env-check': 'failed' });
-  assert.match(changed.stderr, /env-check : non repris \(.*autre environnement .*état local ignoré par Git : node_modules, fichiers \.env\*\)/);
+  assert.match(changed.stderr, /env-check : non repris \(.*autre environnement .*état local ignoré par Git : node_modules, fichiers générés, fichiers \.env\*, worktrees et sous-modules de la copie\)/);
   assert.equal((await apv(p.repo, ['gates', 'verify', '--commit', head])).code, 1);
   // A new .env file appears: another environment too.
   writeFileSync(join(p.repo, '.env.local'), 'OK\nSECRET_TOKEN=s3cr3t-valeur-locale\n');
@@ -223,7 +223,7 @@ test('M3: a command that runs npm audit or an equivalent that reads the network 
   assert.match(neverReused({ command: ['yarn', 'run', 'web'] }, scripts), /apv web audit/);
   assert.match(neverReused({ command: ['sh', '-c', 'npm ci && npm audit'] }), /audit des dépendances/);
   assert.match(neverReused({ command: node('require("child_process").execFileSync("git", ["log", "-1", "--format=%B"])') }), /git sur l'historique/);
-  assert.match(neverReused({ command: ['git', 'describe', '--tags'] }), /git sur l'historique/);
+  assert.match(neverReused({ command: ['git', 'describe', '--tags'] }), /git describe, hors des sous-commandes reprenables/);
   // Accepted: what reads the tree only.
   for (const [argv, extra] of [[['npm', 'run', 'audit:ci'], {}], [['npm', 'test'], scripts], [['npm', 'run', 'loop'], scripts], [['npx', 'vitest', 'run', 'tests/git-log.test.ts'], {}],
     [['npm', 'run', 'types'], scripts], [node('0'), {}], [['git', 'diff', '--check'], {}], [['apv', 'tests', 'check', '--base', '{{baseSha}}'], {}]]) {

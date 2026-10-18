@@ -12,6 +12,32 @@ import { type CleanupRecord, type PortsRecord, type QueueRecord, type SuiteHooks
 export { RECEIPTS_DIR } from './store.js';
 /** Environment identity of a V3 local run; V2 read it from `environment.id`, a field V3 no longer reads. */
 export declare const ENVIRONMENT_ID = "apv3-local";
+/** The stack a check runs on, for its identity of reuse: its declaration, the names of the variables it gives the check, its fingerprint. */
+export interface IdentityStack {
+    resolved: ResolvedStack;
+    variables: readonly string[];
+    /** sha256 of the output of `stacks[].fingerprint`; undefined when the stack declares none, null when it failed or printed nothing. */
+    fingerprint: string | null | undefined;
+}
+/**
+ * The value of a variable of a stack as its identity of reuse records it, with a fingerprint (5.4, relecture sécurité de A2,
+ * F3, and of its delta): an address proper to the stack is normalized, its lock file and a port it declares in `ports` (a
+ * whole value, the port of a URL, of `host:port`); the rest of the value stays (the host, the user, the database of a URL),
+ * and so does any other value (`STACK=2`, a flag, a project name, `postgres:15` against `postgres:16`, a port the stack
+ * does not declare, whatever the name of the variable).
+ */
+export declare function stackAddress(_name: string, value: string, stack: Pick<ResolvedStack, 'config' | 'lockFile'>): string;
+/**
+ * The identity of the environment for a reuse (docs/ACCELERATION-LOTS.md, 5.4), recorded in each receipt (`reuseIdentity`).
+ * Without a stack: its `environmentHash`, unchanged. On a stack without `stacks[].fingerprint`: the same environment (the
+ * values of the variables of the stack included) plus the id of the stack and its declaration without its envFile, never
+ * equal from one stack to another. With a fingerprint: the addresses proper to the stack among the variables it gives the
+ * check normalized (stackAddress: the ports it declares in `ports`, whole or in a URL or a `host:port`, its lock file), every other value kept as
+ * is (relecture sécurité de A2, F3: `STACK=2` and `STACK=3`, a flag, a project name stay apart), plus the fingerprint
+ * command and the digest of its output: equal for two stacks that print the same and differ by their addresses only. A
+ * fingerprint that failed or printed nothing: an identity no other ever equals.
+ */
+export declare function reuseIdentityFor(env: NodeJS.ProcessEnv, extra: Record<string, unknown>, environmentHash: string, stack: IdentityStack | null): string;
 export interface GateRunOptions {
     repo: string;
     config: ApvConfig;
@@ -84,6 +110,12 @@ export interface GateRunOptions {
      */
     replay?: 'all' | readonly string[];
     /**
+     * The branch the change goes to (or a commit of it) whose merge base with the commit gives `reuse.maxAgeMs`
+     * (docs/ACCELERATION-LOTS.md, 5.5.1): `apv gates run` passes the base of its checks (`--against`, else `--base`). Absent:
+     * `reference`, then `base`, then the default branch of the remote.
+     */
+    reuseReference?: string | null;
+    /**
      * `apv stack batch`: the copy of the suite is a fresh worktree, prepared by `batch.setup` whenever a check runs there (not
      * only for a package-lock.json without node_modules), and never when every check is reused (A4).
      */
@@ -98,8 +130,11 @@ export interface ReusedCheck {
     fromCommit: string;
     /** Identifier of the origin receipt (`reusedFrom`). */
     origin: string;
-    basis: 'tree';
-    /** The stack of the environment the origin ran in (`--stacks`), or null. */
+    /** Always `tree` (identical trees, A1): the reuse by inputs (`inputs`) is disabled until its declaration is proven. */
+    basis: 'tree' | 'inputs';
+    /** Files changed since the origin: 0 at an identical tree. */
+    changed: number;
+    /** The stack of the environment it is reused for (`--stacks`; the origin may have run on another one with the same fingerprint), or null. */
     stack: string | null;
     reason: string;
 }

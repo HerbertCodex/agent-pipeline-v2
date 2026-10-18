@@ -17,14 +17,15 @@ import { PipelineError } from '../domain/errors.js';
 import { matches } from '../policy/policy.js';
 import { WEB_RECORD, runsWebAudit } from '../web/impact.js';
 import { RECEIPTS_DIR, pruneStore, receiptRetention, sharedStore, syncRun } from './store.js';
-import { localStateDigest } from './reuse.js';
+import { copyStateDigest, localStateDigest } from './reuse.js';
+import { readEnvFile } from '../stacks/config.js';
 import { readPreviewState } from '../preview/state.js';
 import { repositoryWorktrees } from '../execution/procs.js';
 import { flockFree, flockHeldByAncestor, judgeStack, markStacksUsed, readStackContainers, resolveStacks, stacksOfLock, stoppedSince } from '../stacks/idle.js';
 import { defaultLockDir } from '../lock/store.js';
 import { classifyFailures } from './infrastructure.js';
 import { planSpread, prepareCopies, prepareMainCopy, removeCopies, stackLock, stackVariables, usesStack } from './spread.js';
-import { checkReuse, findOrigin, readLocal, reuseContext } from './reuse-proof.js';
+import { checkReuse, findOrigin, readLocal, reuseContext, reuseReason } from './reuse-proof.js';
 import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, repeatProofGap, resolveReference, tooManyFiles } from './repeat.js';
 import { planScope, scopeRecord, scopeReferenceMissing } from './proof-scope.js';
 import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, flockCommand, freePorts, queuePlaces, resolveGateLock, withGateLease } from './suite.js';
@@ -32,6 +33,54 @@ import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue,
 export { RECEIPTS_DIR } from './store.js';
 /** Environment identity of a V3 local run; V2 read it from `environment.id`, a field V3 no longer reads. */
 export const ENVIRONMENT_ID = 'apv3-local';
+/** The port of a URL (`scheme://[user[:password]@]host:port[/...]`), the host kept. */
+const URL_PORT = /^([a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?(?:\[[^\]/?#]*\]|[^:/?#@]*)):(\d{1,5})(?=[/?#]|$)/i;
+/** The port of `host:port` (an IPv6 host between brackets). */
+const HOST_PORT = /^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9][A-Za-z0-9.-]*):(\d{1,5})$/;
+/**
+ * The value of a variable of a stack as its identity of reuse records it, with a fingerprint (5.4, relecture sécurité de A2,
+ * F3, and of its delta): an address proper to the stack is normalized, its lock file and a port it declares in `ports` (a
+ * whole value, the port of a URL, of `host:port`); the rest of the value stays (the host, the user, the database of a URL),
+ * and so does any other value (`STACK=2`, a flag, a project name, `postgres:15` against `postgres:16`, a port the stack
+ * does not declare, whatever the name of the variable).
+ */
+export function stackAddress(_name, value, stack) {
+    if (stack.lockFile && value === stack.lockFile)
+        return '{{verrou de la pile}}';
+    const declared = (port) => (stack.config.ports ?? []).includes(Number(port));
+    if (/^\d{1,5}$/.test(value) && declared(value))
+        return '{{port}}';
+    const url = URL_PORT.exec(value);
+    if (url && declared(url[2]))
+        return `${url[1]}:{{port}}${value.slice(url[0].length)}`;
+    const host = HOST_PORT.exec(value);
+    if (host && declared(host[2]))
+        return `${host[1]}:{{port}}`;
+    return value;
+}
+/**
+ * The identity of the environment for a reuse (docs/ACCELERATION-LOTS.md, 5.4), recorded in each receipt (`reuseIdentity`).
+ * Without a stack: its `environmentHash`, unchanged. On a stack without `stacks[].fingerprint`: the same environment (the
+ * values of the variables of the stack included) plus the id of the stack and its declaration without its envFile, never
+ * equal from one stack to another. With a fingerprint: the addresses proper to the stack among the variables it gives the
+ * check normalized (stackAddress: the ports it declares in `ports`, whole or in a URL or a `host:port`, its lock file), every other value kept as
+ * is (relecture sécurité de A2, F3: `STACK=2` and `STACK=3`, a flag, a project name stay apart), plus the fingerprint
+ * command and the digest of its output: equal for two stacks that print the same and differ by their addresses only. A
+ * fingerprint that failed or printed nothing: an identity no other ever equals.
+ */
+export function reuseIdentityFor(env, extra, environmentHash, stack) {
+    if (!stack)
+        return environmentHash;
+    const declaration = stack.resolved.config;
+    if (!declaration.fingerprint) {
+        const { envFile: _envFile, ...rest } = declaration;
+        return environmentIdentity(ENVIRONMENT_ID, env, { ...extra, stack: { id: declaration.id, declaration: rest } });
+    }
+    if (!stack.fingerprint)
+        return hash({ notComparable: randomUUID() });
+    const replaced = Object.fromEntries(Object.entries(env).map(([name, value]) => [name, stack.variables.includes(name) && value !== undefined ? stackAddress(name, value, stack.resolved) : value]));
+    return environmentIdentity(ENVIRONMENT_ID, replaced, { ...extra, stack: { fingerprint: declaration.fingerprint, output: stack.fingerprint, variables: [...stack.variables].sort() } });
+}
 /**
  * The companion of a kernel lock held by an ancestor of the suite: the lock its checks take turns on. One per real lock
  * file (two paths to the same file share it), in the lock folder of the account (`apv lock`, writable even when the
@@ -260,8 +309,8 @@ export async function runGates(options) {
         throw new PipelineError('GATE_SINCE', `--since refusé : HEAD a changé depuis le classement du diff (${options.since.head.slice(0, 12)} classé, ${candidateSha.slice(0, 12)} maintenant). Relancer la même commande.`);
     }
     const baseSha = options.base ? await git.sha(repo, options.base) : null;
-    const treeStatus = () => git.exec(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
-    const treeOf = (dir) => dir === repo ? treeStatus() : git.exec(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+    const treeStatus = () => git.exec(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
+    const treeOf = (dir) => dir === repo ? treeStatus() : git.exec(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
     let status = await treeStatus();
     let dirty = status !== '';
     const stage = options.stage ?? 'full';
@@ -424,13 +473,62 @@ export async function runGates(options) {
         if (setup?.status === 'done')
             await setupKeptTree();
     }
-    // What Git ignores and the checks still run with in this copy (node_modules, .env*): part of the identity of the environment
-    // of each receipt, so a check is reused only from an origin that ran with the same local state (src/gates/reuse.ts).
+    // What Git ignores and the checks still run with in this copy (node_modules, .env* at any depth, every other ignored file):
+    // part of the identity of the environment of each receipt, so a check is reused only from an origin that ran with the same
+    // local state (src/gates/reuse.ts). The ignored files are measured once per copy, before anything runs there (copyStateOf).
     const localState = localStateDigest(repo);
+    const copyStates = new Map();
+    const copyStateOf = (workspace) => {
+        if (!copyStates.has(workspace))
+            copyStates.set(workspace, copyStateDigest(workspace));
+        return copyStates.get(workspace);
+    };
+    const copyState = await copyStateDigest(repo);
+    // The fingerprint of each stack a check is dealt to (stacks[].fingerprint, docs/ACCELERATION-LOTS.md, 5.4), once per run:
+    // undefined when the stack declares none, null when it failed or printed nothing (no reuse from another run on it).
+    const fingerprints = new Map();
+    const fingerprintOf = (stack) => {
+        const argv = stack.config.fingerprint;
+        if (!argv)
+            return undefined;
+        if (!fingerprints.has(stack.id))
+            fingerprints.set(stack.id, (async () => {
+                const env = { ...environment(options.config.environment.passEnv, source), ...(stack.envFile ? readEnvFile(stack.envFile) : {}), ...(stack.config.env ?? {}) };
+                const r = await runProcess({ command: argv, cwd: repo, env, timeoutMs: Math.min(stack.config.commandTimeoutMs, 120_000), maxOutputBytes: 64 * 1024, ...(options.signal ? { signal: options.signal } : {}) });
+                if (r.status === 'passed' && r.stdout.trim() !== '')
+                    return r.stdoutHash;
+                log(`Pile ${stack.id} : empreinte (stacks[].fingerprint) ${r.status === 'passed' ? 'vide' : `en échec (${r.status}, code ${r.exitCode ?? '-'})`} : aucun contrôle de cette pile n'est repris d'une autre exécution, ni ne le sera de celle-ci.`);
+                return null;
+            })().catch(() => null));
+        return fingerprints.get(stack.id);
+    };
     const reuse = new Map();
     let reuseScan = null;
+    const newReuseContext = async () => {
+        return reuseContext({ git, repo, commit: candidateSha, configHash, now: Date.now(), store: await sharedStore(git, repo), local: readLocal(repo),
+            reference: options.reuseReference ?? options.reference ?? options.base ?? null });
+    };
     if (!dirty && replay !== 'all') {
-        const ctx = reuseContext({ git, repo, commit: candidateSha, configHash, now: Date.now(), store: await sharedStore(git, repo), local: readLocal(repo) });
+        const ctx = await newReuseContext();
+        // The executable of each command, hashed once for the whole decision (relecture sécurité de A2, F4: the Node binary of ten
+        // checks was hashed ten times), and again whenever the file changes (path, size, modification and change dates, inode; F4 of the delta review: ctime too). A check that runs hashes it again.
+        const executables = new Map();
+        const statOf = (path) => { try {
+            const s = lstatSync(path, { bigint: true });
+            return `${s.size}:${s.mtimeNs}:${s.ctimeNs}:${s.ino}:${s.dev}`;
+        }
+        catch {
+            return 'illisible';
+        } };
+        const executableOf = async (command, env) => {
+            const key = JSON.stringify([command, env['PATH'] ?? null]);
+            const known = executables.get(key);
+            if (known && statOf(known.identity.path) === known.stat)
+                return known.identity;
+            const identity = await executableIdentity(command, repo, env);
+            executables.set(key, { identity, stat: statOf(identity.path) });
+            return identity;
+        };
         for (const gate of runnable) {
             if (targeted.has(gate.id) || earlyDecisions.has(gate.id))
                 continue;
@@ -454,8 +552,11 @@ export async function runGates(options) {
             for (const stack of onStacks) {
                 try {
                     const env = environmentOf(gate, stack);
-                    const executable = await executableIdentity(commands.get(gate.id)[0], repo, env);
-                    environments.push({ hash: environmentIdentity(ENVIRONMENT_ID, env, { executable, local: localState }), stack: stack?.id ?? null, executable });
+                    const executable = await executableOf(commands.get(gate.id)[0], env);
+                    const extra = { executable, local: localState, copy: copyState };
+                    const environmentHash = environmentIdentity(ENVIRONMENT_ID, env, extra);
+                    const identity = reuseIdentityFor(env, extra, environmentHash, stack ? { resolved: stack, variables: Object.keys(stackVariables(stack, gate, options.config.environment.passEnv)), fingerprint: await fingerprintOf(stack) } : null);
+                    environments.push({ hash: environmentHash, identity, stack: stack?.id ?? null, executable });
                 }
                 catch { /* No environment to compare (executable or env file unreadable): it runs, and says why. */ }
             }
@@ -478,7 +579,7 @@ export async function runGates(options) {
                     continue;
                 }
             }
-            reuse.set(gate.id, { ...found, environment: environments.find(e => e.hash === found.origin.receipt.environmentHash) });
+            reuse.set(gate.id, { ...found, environment: environments.find(e => e.identity === found.identity) });
         }
         // A check that runs reads what its dependencies wrote (build output...): a dependency of a check that runs runs too.
         for (let changed = true; changed;) {
@@ -500,7 +601,7 @@ export async function runGates(options) {
             reuseScan = { runs: scan.runs, files: scan.files, ms: scan.ms };
         }
         for (const [id, r] of reuse)
-            log(`${id} : réutilisé de ${r.origin.receipt.candidateSha.slice(0, 12)} (exécution ${r.origin.receipt.runId}, arbre identique) : non relancé.`);
+            log(`${id} : réutilisé de ${r.origin.receipt.candidateSha.slice(0, 12)} (exécution ${r.origin.receipt.runId}, ${reuseReason({ basis: r.reuse.basis, changed: r.changed })}) : non relancé.`);
     }
     const executing = runnable.filter(g => !reuse.has(g.id));
     const suite = isFullSuite(executing, stage);
@@ -734,7 +835,7 @@ export async function runGates(options) {
             keys.set(gate.id, key);
             const receipt = write({ id: randomUUID(), runId, gateId: gate.id, key, candidateSha, configHash, environmentHash: o.environmentHash, startedAt: Date.now(),
                 status: 'cached', durationMs: 0, exitCode: 0, stdoutHash: o.stdoutHash, stderrHash: o.stderrHash, reusedFrom: o.id, reuse: chosen.reuse,
-                diagnostic: `Réutilisé de ${o.candidateSha.slice(0, 12)} (exécution ${o.runId}, reçu ${o.id}) : arbre identique, même configuration, même environnement ; non relancé.`,
+                diagnostic: `Réutilisé de ${o.candidateSha.slice(0, 12)} (exécution ${o.runId}, reçu ${o.id}) : ${reuseReason({ basis: chosen.reuse.basis, changed: chosen.changed })}, même configuration, même environnement ; non relancé.`,
                 ...(chosen.stack ? { stack: chosen.stack } : {}) });
             reusedIds.add(receipt.id);
             return receipt;
@@ -759,13 +860,16 @@ export async function runGates(options) {
                 executable = await executableIdentity(command[0], workspace, env);
             }
             catch { /* reported as spawn_error below */ }
-            // The local state of the copy it runs in (this one, or the copy of its stack), measured as it starts.
-            const environmentHash = environmentIdentity(ENVIRONMENT_ID, env, { executable, local: localStateDigest(workspace) });
+            // The local state of the copy it runs in (this one, or the copy of its stack), measured as it starts, and the files Git
+            // ignores there, measured once before the first check of that copy; on a stack, its identity for a reuse (5.4).
+            const extra = { executable, local: localStateDigest(workspace), copy: await copyStateOf(workspace) };
+            const environmentHash = environmentIdentity(ENVIRONMENT_ID, env, extra);
+            const reuseIdentity = reuseIdentityFor(env, extra, environmentHash, assigned ? { resolved: assigned.stack, variables: Object.keys(stackVariables(assigned.stack, gate, options.config.environment.passEnv)), fingerprint: await fingerprintOf(assigned.stack) } : null);
             const key = proofKey({ repository: repo, baseSha: baseSha ?? candidateSha, candidateSha, taskHash: hash(null), configHash, environmentHash,
                 workspace, gate: { ...gate, command }, dependencyKeys: gate.dependsOn.map(d => keys.get(d) ?? hash(null)),
                 executable: executable ?? { path: command[0], sha256: hash('unresolved') } });
             keys.set(gate.id, key);
-            const base = { id: randomUUID(), runId, gateId: gate.id, key, candidateSha, configHash, environmentHash, startedAt, reusedFrom: null,
+            const base = { id: randomUUID(), runId, gateId: gate.id, key, candidateSha, configHash, environmentHash, reuseIdentity, startedAt, reusedFrom: null,
                 ...(assigned ? { stack: assigned.stack.id } : {}) };
             const copyError = assigned ? spread.copies.find(c => c.dir === workspace)?.error ?? null : null;
             if (copyError)
@@ -840,7 +944,7 @@ export async function runGates(options) {
                 const firstPass = { status: 'failed', exitCode: exitOf(r1), durationMs: first.commandMs, stdoutHash: r1.stdoutHash, stderrHash: r1.stderrHash, diagnostic: excerpt(r1, 8000) };
                 // Same commit, same tree: otherwise the relaunch would prove other code.
                 const head = await git.sha(workspace);
-                const now = workspace === repo ? await treeStatus() : await git.exec(workspace, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+                const now = workspace === repo ? await treeStatus() : await git.exec(workspace, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
                 if (head !== candidateSha || now !== (workspace === repo ? status : '')) {
                     return ({ ...base, status: 'failed', durationMs: first.commandMs, exitCode: exitOf(r1), stdoutHash: r1.stdoutHash, stderrHash: r1.stderrHash,
                         diagnostic: `Relance refusée : ${head !== candidateSha ? 'HEAD a changé' : 'l\'arbre de travail a changé'} pendant la première passe (la relance ne prouverait pas le même code).\n${excerpt(r1, MAX_DIAGNOSTIC_CHARS - 300)}`,
@@ -1012,7 +1116,7 @@ export async function runGates(options) {
         const written = list.filter(r => r.status === 'cached' && reusedIds.has(r.id));
         const reuseStale = [];
         if (written.length) {
-            const again = reuseContext({ git, repo, commit: candidateSha, configHash, now: Date.now(), store: await sharedStore(git, repo), local: readLocal(repo) });
+            const again = await newReuseContext();
             for (const r of written) {
                 const checked = await checkReuse(again, gates.find(g => g.id === r.gateId), { receipt: r, dirty: r.dirty ?? null, baseSha, source: 'local' });
                 if (!('reason' in checked))
@@ -1021,8 +1125,8 @@ export async function runGates(options) {
                 log(`ATTENTION : ${r.gateId} : reprise devenue invérifiable pendant l'exécution (${checked.reason}) ; relancer avec --replay ${r.gateId}.`);
             }
         }
-        const reused = written.map(r => ({ gateId: r.gateId, receipt: r.id, fromRun: r.reuse.fromRun, fromCommit: r.reuse.fromCommit, origin: r.reusedFrom, basis: 'tree',
-            stack: r.stack ?? null, reason: 'arbre identique' }));
+        const reused = written.map(r => ({ gateId: r.gateId, receipt: r.id, fromRun: r.reuse.fromRun, fromCommit: r.reuse.fromCommit, origin: r.reusedFrom, basis: r.reuse.basis,
+            changed: r.reuse.changed, stack: r.stack ?? null, reason: reuseReason({ basis: r.reuse.basis, changed: r.reuse.changed }) }));
         const result = { runId, repo, candidateSha, baseSha, dirty, stage, selected: gates.map(g => g.id), added,
             reserved: reserved.map(g => g.id), targeted: [...targeted], early: [...earlyDecisions.values()], slowEarly, receipts: list, directory, shared: null, suite, notRequired: [...notRequired.keys()], scope: [...scopeDecisions.values()],
             queue: queue?.record ?? null, ports, flaky, cleanup, stoppedStacks, infrastructure: classifyFailures(list, missingEnv), spread: spreadRecord,

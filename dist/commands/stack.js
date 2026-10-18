@@ -565,7 +565,8 @@ async function batch(prs, values, io, ci) {
         const reusedIds = new Set(result.reused.map(r => r.receipt));
         const succeeded = (r) => success(r) || (r.status === 'cached' && reusedIds.has(r.id));
         const passed = result.receipts.filter(succeeded).length;
-        const reusedText = result.reused.length ? ` (dont ${result.reused.length} réutilisé(s) d'un arbre identique : ${result.reused.map(r => `${r.gateId} de ${r.fromCommit.slice(0, 12)}`).join(', ')})` : '';
+        const reusedText = !result.reused.length ? ''
+            : ` (dont ${result.reused.length} réutilisé(s) d'un arbre identique : ${result.reused.map(r => `${r.gateId} de ${r.fromCommit.slice(0, 12)}`).join(', ')})`;
         const notRequired = result.receipts.filter(r => r.status === 'not_required').map(r => r.gateId);
         const failed = result.receipts.filter(r => !succeeded(r) && r.status !== 'not_required').map(r => `${r.gateId} (${r.status})`);
         // A check passed only after the relaunch of its failed tests proves nothing for a merge (rule instable).

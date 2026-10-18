@@ -31,7 +31,7 @@ export async function checkSince(repo, config, configFile, since) {
     if (!sha)
         refuse('commit introuvable', 'Donner le commit où la suite complète a passé (colonne « reçu » de apv gates verify, ou git log).');
     const head = await git.sha(root);
-    if ((await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])) !== '') {
+    if ((await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none'])) !== '') {
         refuse('l\'arbre de travail a des modifications non commitées (le diff classé est celui des commits)', 'Commiter les corrections (ou retirer ces fichiers), puis relancer la même commande.');
     }
     if (sha === head)

@@ -33,6 +33,13 @@ export const stackSchema = s.object({
   /** Commands (no shell, run from the root of the repository) that stop and restart the stack. */
   stop: s.optional(argv),
   start: s.optional(argv),
+  /**
+   * Command (no shell, run from the root of the repository with the variables of the stack, bounded by commandTimeoutMs)
+   * whose output says what the checks run against on this stack (docs/ACCELERATION-LOTS.md, 5.4): digests of the Docker
+   * images, version of the CLI... Declared, a check is reused from another stack whose fingerprint printed the same output;
+   * absent, never from another stack.
+   */
+  fingerprint: s.optional(argv),
   idleAfterMs: s.optional(s.number(60_000, 604_800_000)),
   commandTimeoutMs: s.default(s.number(1000, 3_600_000), DEFAULT_STACK_COMMAND_TIMEOUT_MS),
   description: s.optional(s.string(1, 500)),

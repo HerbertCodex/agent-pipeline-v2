@@ -1,5 +1,5 @@
 import { type Infer } from './schema.js';
-export declare const VERSION = "3.0.0-alpha.26";
+export declare const VERSION = "3.0.0-alpha.27";
 export declare const lanes: readonly ["fast", "standard", "high"];
 export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];
@@ -87,6 +87,19 @@ export declare const earlyCheckSchema: import("./schema.js").Schema<{
     } | undefined;
 }>;
 export type EarlyCheck = Infer<typeof earlyCheckSchema>;
+/** Most globs of `reuse.ignore`, longest glob and most wildcards (`*` or `**`) in one: each path of two trees is compared to them. */
+export declare const MAX_REUSE_IGNORE = 100;
+export declare const MAX_REUSE_GLOB_LENGTH = 200;
+export declare const MAX_REUSE_GLOB_WILDCARDS = 16;
+/** Bounds of `reuse.maxAgeMs`: 6 h (a reuse must stay verifiable 4 h after it is written) to 7 days. */
+export declare const MIN_REUSE_MAX_AGE_MS = 21600000;
+export declare const MAX_REUSE_MAX_AGE_MS = 604800000;
+/** `reuse` of a check as an object (docs/ACCELERATION-LOTS.md, 5.2 A2): the files it never reads, the oldest origin it reuses. */
+export declare const reuseSettingsSchema: import("./schema.js").Schema<{
+    readonly ignore: string[] | undefined;
+    readonly maxAgeMs: number | undefined;
+}>;
+export type ReuseSettings = Infer<typeof reuseSettingsSchema>;
 export declare const gateSchema: import("./schema.js").Schema<{
     readonly id: string;
     readonly command: string[];
@@ -149,7 +162,10 @@ export declare const gateSchema: import("./schema.js").Schema<{
             readonly waitMs: number;
         } | undefined;
     }[] | undefined;
-    readonly reuse: boolean | undefined;
+    readonly reuse: boolean | {
+        readonly ignore: string[] | undefined;
+        readonly maxAgeMs: number | undefined;
+    } | undefined;
 }>;
 /** Stage of a check; absent means `task`. */
 export declare const gateStage: (gate: {
@@ -381,7 +397,10 @@ export declare const configSchema: import("./schema.js").Schema<{
                 readonly waitMs: number;
             } | undefined;
         }[] | undefined;
-        readonly reuse: boolean | undefined;
+        readonly reuse: boolean | {
+            readonly ignore: string[] | undefined;
+            readonly maxAgeMs: number | undefined;
+        } | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;
@@ -544,6 +563,7 @@ export declare const receiptSchema: import("./schema.js").Schema<{
         readonly reason: string;
         readonly files: string[];
     } | undefined;
+    readonly reuseIdentity: string | undefined;
     readonly reuse: {
         readonly fromRun: string;
         readonly fromCommit: string;

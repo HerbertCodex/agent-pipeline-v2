@@ -486,7 +486,7 @@ export async function checkMergeRules(input) {
     let proofError = null;
     if (!unscoped && (!skip.has('preuve') || !skip.has('instable'))) {
         try {
-            proof = await verifyGates({ repo, config: effective, commit: sha, stage: 'full', configFile: null });
+            proof = await verifyGates({ repo, config: effective, commit: sha, stage: 'full', configFile: null, reuseReference: mergeBase });
         }
         catch (error) {
             proofError = errorMessage(error);

@@ -27,6 +27,12 @@ export interface VerifyOptions {
     configFile?: string | null;
     /** Clock of the age check of reused receipts, in milliseconds (`Date.now()` when absent; tests pass a fixed one). */
     now?: number;
+    /**
+     * The branch the commit goes to (or a commit of it, such as the merge base of the checks of the base): the `reuse.maxAgeMs`
+     * of a reused check is read at its merge base with the commit (5.5.1). A receipt reused by inputs is refused. Absent:
+     * `reference`, then the default branch of the remote.
+     */
+    reuseReference?: string | null;
 }
 /**
  * State of one required check at the commit:

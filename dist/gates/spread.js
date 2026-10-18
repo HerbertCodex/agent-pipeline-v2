@@ -91,7 +91,7 @@ export async function prepareCopies(plan, options) {
                 if (r.status !== 'passed')
                     throw new Error(`batch.setup en échec (${r.status}, code ${r.exitCode ?? '-'}) : ${output}`);
             }
-            const status = await options.git.exec(copy.dir, ['status', '--porcelain=v1', '--untracked-files=all']);
+            const status = await options.git.exec(copy.dir, ['status', '--porcelain=v1', '--untracked-files=all', '--ignore-submodules=none']);
             if (status.trim() !== '')
                 throw new Error(`copie modifiée après sa préparation (fichiers non ignorés) : ${status.trim().split('\n').slice(0, 5).join(', ')}`);
         }

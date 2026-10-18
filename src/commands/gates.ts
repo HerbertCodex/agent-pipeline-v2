@@ -250,7 +250,7 @@ async function provenFull(repo: string, config: Parameters<typeof verifyGates>[0
   try {
     const git = new Git();
     const root = await git.root(repo);
-    if ((await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])) !== '') return null;
+    if ((await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none'])) !== '') return null;
     const result = await verifyGates({ repo: root, config, commit: 'HEAD', stage: 'full', configFile });
     return result.ok ? result : null;
   } catch { return null; }
@@ -358,8 +358,9 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       if (!verified) throw new PipelineError('SHA', `Commit introuvable : ${values.commit}`);
       const kept = applyBaseGates(verifyRoot, loaded.config, verified, againstOf(values.against) ?? values.base ?? null, { strict: true, offline: values.offline === true });
       loaded = { ...loaded, config: kept.config };
+      // reuse.maxAgeMs is read at the base of the checks (the merge base read just above).
       const result = await verifyGates({ repo, config: loaded.config, commit: values.commit, ...(stage ? { stage } : {}), ...(values.base ? { base: values.base } : {}),
-        configFile: values['commit-config'] ? null : loaded.file });
+        configFile: values['commit-config'] ? null : loaded.file, reuseReference: kept.base.mergeBase ?? kept.base.reference });
       if (values.json) {
         json(io, { ok: result.ok, commit: result.commit, stage: result.stage, base: result.base, config: loaded.file, configHash: result.configHash, baseGates: kept.base,
           required: result.required, targeted: result.targeted, reserved: result.reserved, gates: result.gates, unreadable: result.unreadable,
@@ -438,7 +439,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       treeChecked = true;
       const git = new Git();
       const root = await git.root(repo);
-      const status = await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+      const status = await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
       if (status !== '') throw dirtyRefusal(status);
       // The override is journaled in the state of the execution: in this very copy, it would dirty the tree of the suite.
       if (stateCheckout !== undefined && realpathSync(stateCheckout) === root) {
@@ -488,7 +489,9 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
           ...(io.env['APV_LOCK_POLL_MS'] ? { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } : {}), ...(io.env['APV_PORTS_POLL_MS'] ? { portsPollMs: Number(io.env['APV_PORTS_POLL_MS']) } : {}) } } : {}),
         ...(values.base ? { base: values.base } : {}), ...(since ? { base: since.commit, since: { commit: since.commit, head: since.head, risk: since.risk.level, reason: since.risk.reason } } : {}),
         ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
-        ...(spreadOver ? { stacks: spreadOver } : {}), ...(replay !== undefined ? { replay } : {}), configFile: loaded.file });
+        ...(spreadOver ? { stacks: spreadOver } : {}), ...(replay !== undefined ? { replay } : {}), configFile: loaded.file,
+        // reuse.maxAgeMs of the base of the checks (the merge base read by applyBaseGates), never of the candidate.
+        reuseReference: kept?.base.mergeBase ?? kept?.base.reference ?? null });
     } catch (error) {
       if (received) { io.stderr(`Interrompu (${received}) : ${error instanceof Error ? error.message : String(error)}\n`); return signalExitCode(received); }
       throw error;

@@ -270,7 +270,10 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
                 readonly waitMs: number;
             } | undefined;
         }[] | undefined;
-        readonly reuse: boolean | undefined;
+        readonly reuse: boolean | {
+            readonly ignore: string[] | undefined;
+            readonly maxAgeMs: number | undefined;
+        } | undefined;
     }[];
     readonly validationRules: {
         readonly id: string;
@@ -390,6 +393,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly ports: number[] | undefined;
         readonly stop: string[] | undefined;
         readonly start: string[] | undefined;
+        readonly fingerprint: string[] | undefined;
         readonly idleAfterMs: number | undefined;
         readonly commandTimeoutMs: number;
         readonly description: string | undefined;
@@ -607,6 +611,14 @@ export declare function configIssues(raw: unknown): {
     ignored: string[];
     issues: Issue[];
 };
+/**
+ * Files that `reuse.ignore` never covers (docs/ACCELERATION-LOTS.md, 5.2 A2): a probe of each kind of file of the list
+ * ALWAYS_REQUIRED of src/gates/proof-scope.ts without the test folders (the configuration of the checks, the manifests and
+ * lock files of the dependencies, the build, test and run settings, the CI, the migrations, scripts/**, .env*). A glob that
+ * matches one of them is refused (case ignored). Nothing is ignored for now: the reuse by inputs is disabled until the
+ * declaration is proven (INPUTS_REUSE_DISABLED, src/gates/reuse-proof.ts).
+ */
+export declare const NEVER_IGNORE_PROBES: readonly (readonly [string, string])[];
 /** Configuration file of a project: `--config` when given, then `.apv/config.json`, then `pipeline.v2.json`. */
 export declare function configFile(repo: string, explicit?: string): {
     file: string | null;
