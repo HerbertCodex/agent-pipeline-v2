@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { s, type Infer } from '../domain/schema.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { IssueList, schemaIssues, type Issue } from '../domain/issues.js';
-import { DEFAULT_PASS_ENV, envNamesSchema, gateSchema, gateStage, riskSchema, validationRulesSchema } from '../domain/contracts.js';
+import { DEFAULT_PASS_ENV, MAX_REUSE_GLOB_WILDCARDS, envNamesSchema, gateSchema, gateStage, riskSchema, validationRulesSchema } from '../domain/contracts.js';
 import { skillsSchema } from '../domain/knowledge.js';
 import { previewSchema } from '../preview/config.js';
 import { designSchema, designSettings } from '../design/config.js';
@@ -328,9 +328,25 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
       }
     }
   }
-  // `reuse`: only `false` (never reused); absent is the default (reuse at an identical tree), `true` says nothing more.
+  // `reuse`: `false` (never reused), or an object (A2: `ignore`, `maxAgeMs`); absent is the default (reuse at an identical
+  // tree), `true` says nothing more. `ignore` (form by exclusion): portable bounded globs, none covering a file never
+  // ignorable (docs/ACCELERATION-LOTS.md, 5.2 A2), whatever the configuration says: the run and verify keep those files
+  // inputs anyway (src/gates/reuse.ts, NEVER_IGNORED), the loader says it first.
   for (const gate of value.gates) {
-    list.check(gate.reuse !== true, 'CONFIG', `Gate ${gate.id}: reuse accepts only false (never reused, always run); leave it out to allow the reuse of a green receipt of an identical tree`);
+    list.check(gate.reuse !== true, 'CONFIG', `Gate ${gate.id}: reuse accepts false (never reused, always run) or { ignore, maxAgeMs }; leave it out to allow the reuse of a green receipt of an identical tree`);
+    if (!gate.reuse || gate.reuse === true) continue;
+    const settings = gate.reuse;
+    list.check(settings.ignore !== undefined || settings.maxAgeMs !== undefined, 'CONFIG', `Gate ${gate.id}: reuse {} says nothing; declare reuse.ignore (files the check never reads) or reuse.maxAgeMs, or leave reuse out`);
+    for (const glob of settings.ignore ?? []) {
+      let valid = true;
+      list.attempt('CONFIG', () => { try { matches('probe', glob); } catch (error) { valid = false; throw new PipelineError('CONFIG', `Gate ${gate.id}: reuse.ignore: ${errorMessage(error)}`); } });
+      const wildcards = glob.match(/\*\*|\*/g)?.length ?? 0;
+      list.check(wildcards <= MAX_REUSE_GLOB_WILDCARDS, 'CONFIG', `Gate ${gate.id}: reuse.ignore: ${glob.slice(0, 80)} : ${wildcards} wildcards (* or **); at most ${MAX_REUSE_GLOB_WILDCARDS} per pattern`);
+      if (!valid) continue;
+      const own = [...gate.testPaths, ...(gate.repeatChanged?.paths ?? [])].flatMap(globProbes).map(path => [path, 'un chemin de test du contrôle (testPaths ou repeatChanged.paths)'] as const);
+      const covered = [...NEVER_IGNORE_PROBES, ...own].find(([path]) => { try { return matches(path.toLowerCase(), glob.toLowerCase()); } catch { return false; } });
+      list.check(!covered, 'CONFIG', `Gate ${gate.id}: reuse.ignore « ${glob} » covers ${covered?.[0]} (${covered?.[1]}), never ignorable: list only files the check never reads (tests of other checks, documentation...)`);
+    }
   }
   for (const [resource, { ports }] of Object.entries(value.resources ?? {})) {
     list.check(new Set(ports).size === ports.length, 'CONFIG', `resources.${resource}.ports: duplicate port`);
@@ -405,6 +421,34 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
   if (value.freshness) for (const message of freshnessIssues(value.freshness)) list.check(false, 'CONFIG', message);
   if (list.empty) list.attempt('DAG', () => validateDag(value.gates));
   return { config: list.empty ? value : undefined, ignored: sections.ignored, issues: list.items };
+}
+
+/**
+ * Files that `reuse.ignore` never covers (docs/ACCELERATION-LOTS.md, 5.2 A2): a probe of each kind of file of the list
+ * ALWAYS_REQUIRED of src/gates/proof-scope.ts without the test folders (the configuration of the checks, the manifests and
+ * lock files of the dependencies, the build, test and run settings, the CI, the migrations, scripts/**, .env*). A glob that
+ * matches one of them is refused (case ignored). The run and verify keep every such file an input whatever the glob.
+ */
+export const NEVER_IGNORE_PROBES: readonly (readonly [string, string])[] = [
+  ...['.apv/config.json', 'pipeline.v2.json'].map(p => [p, 'configuration des contrôles'] as const),
+  ...['package.json', 'apps/web/package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', 'apps/web/package-lock.json',
+    '.npmrc', '.yarnrc.yml', 'pnpm-workspace.yaml', '.nvmrc', '.node-version', '.tool-versions', 'requirements.txt', 'pyproject.toml', 'poetry.lock', 'uv.lock',
+    'Cargo.toml', 'Cargo.lock', 'go.mod', 'go.sum', 'Gemfile', 'Gemfile.lock', 'composer.json', 'composer.lock', 'deno.json', 'flake.nix', 'flake.lock']
+    .map(p => [p, 'manifeste ou verrou des dépendances'] as const),
+  ...['vite.config.ts', 'svelte.config.js', 'playwright.config.ts', 'vitest.config.ts', 'eslint.config.js', 'apps/web/vite.config.ts', 'tsconfig.json', 'tsconfig.app.json',
+    'jsconfig.json', '.babelrc', 'Dockerfile', 'docker-compose.yml', 'compose.yaml', 'Makefile', 'justfile', 'vercel.json', 'netlify.toml', 'supabase/config.toml']
+    .map(p => [p, 'configuration de build, de test ou d\'exécution'] as const),
+  ...['.github/workflows/ci.yml', '.gitlab-ci.yml', '.husky/pre-commit', '.gitattributes', '.gitmodules'].map(p => [p, 'CI ou machinerie du dépôt'] as const),
+  ...['supabase/migrations/20260101000000_init.sql', 'db/migrations/001_init.sql', 'migrations/001.sql', 'prisma/migrations/1/migration.sql', 'schema.sql']
+    .map(p => [p, 'migration'] as const),
+  ...['scripts/check.mjs', 'scripts/e2e/lock.mjs', 'run.sh'].map(p => [p, 'script'] as const),
+  ...['.env', '.env.local', '.env.test', 'apps/web/.env.local'].map(p => [p, 'fichier .env*'] as const),
+];
+
+/** Concrete paths a glob of the check matches (`**` as nothing and as one folder, `*` and `?` as one character). */
+function globProbes(glob: string): string[] {
+  const fill = (dirs: string): string => glob.replace(/\*\*\//g, dirs).replace(/\*\*/g, 'x').replace(/[*?]/g, 'x');
+  return [...new Set([fill(''), fill('a/')])];
 }
 
 /** Source files of common stacks: a `skipWhenOnly.paths` glob that matches one of them is too broad (refused). */

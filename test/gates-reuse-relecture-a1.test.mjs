@@ -111,7 +111,7 @@ test('M2: a .env* file at the root that changed, the tree unchanged, is another 
   const head = p.same();
   const changed = await p.run(['--json']);
   assert.deepEqual(statuses(changed.json()), { 'env-check': 'failed' });
-  assert.match(changed.stderr, /env-check : non repris \(.*autre environnement .*état local ignoré par Git : node_modules, fichiers \.env\*\)/);
+  assert.match(changed.stderr, /env-check : non repris \(.*autre environnement .*état local ignoré par Git : node_modules, fichiers générés, fichiers \.env\*\)/);
   assert.equal((await apv(p.repo, ['gates', 'verify', '--commit', head])).code, 1);
   // A new .env file appears: another environment too.
   writeFileSync(join(p.repo, '.env.local'), 'OK\nSECRET_TOKEN=s3cr3t-valeur-locale\n');

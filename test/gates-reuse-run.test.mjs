@@ -195,7 +195,7 @@ test('A3: reuse: false, and a command that runs apv web audit or apv dast, are n
   write(bad.repo, '.apv/config.json', { gates: [{ id: 'lint', command: ['true'], reuse: true }] });
   const refused = await apv(bad.repo, ['gates', 'run']);
   assert.notEqual(refused.code, 0);
-  assert.match(refused.stdout + refused.stderr, /Gate lint: reuse accepts only false/);
+  assert.match(refused.stdout + refused.stderr, /Gate lint: reuse accepts false \(never reused, always run\) or \{ ignore, maxAgeMs \}/);
 });
 
 test('A3: verify refuses a receipt cached of a check that is never reused, even with a valid origin (the converse of A1)', async t => {

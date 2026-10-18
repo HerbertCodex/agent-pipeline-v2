@@ -484,7 +484,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   let proof: VerifyResult | null = null;
   let proofError: string | null = null;
   if (!unscoped && (!skip.has('preuve') || !skip.has('instable'))) {
-    try { proof = await verifyGates({ repo, config: effective, commit: sha, stage: 'full', configFile: null }); }
+    try { proof = await verifyGates({ repo, config: effective, commit: sha, stage: 'full', configFile: null, reuseReference: mergeBase }); }
     catch (error) { proofError = errorMessage(error); }
   }
   const proveTodo = [

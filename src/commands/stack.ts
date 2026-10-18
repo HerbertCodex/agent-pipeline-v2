@@ -486,7 +486,10 @@ async function batch(prs: number[], values: BatchValues, io: CommandIO, ci: { ci
     const reusedIds = new Set(result.reused.map(r => r.receipt));
     const succeeded = (r: (typeof result.receipts)[number]): boolean => success(r) || (r.status === 'cached' && reusedIds.has(r.id));
     const passed = result.receipts.filter(succeeded).length;
-    const reusedText = result.reused.length ? ` (dont ${result.reused.length} réutilisé(s) d'un arbre identique : ${result.reused.map(r => `${r.gateId} de ${r.fromCommit.slice(0, 12)}`).join(', ')})` : '';
+    const byInputs = result.reused.some(r => r.basis === 'inputs');
+    const reusedText = !result.reused.length ? ''
+      : !byInputs ? ` (dont ${result.reused.length} réutilisé(s) d'un arbre identique : ${result.reused.map(r => `${r.gateId} de ${r.fromCommit.slice(0, 12)}`).join(', ')})`
+      : ` (dont ${result.reused.length} réutilisé(s) : ${result.reused.map(r => `${r.gateId} de ${r.fromCommit.slice(0, 12)}${r.basis === 'inputs' ? ` par entrées identiques (${r.changed} fichier(s) ignoré(s) changé(s))` : ' à arbre identique'}`).join(', ')})`;
     const notRequired = result.receipts.filter(r => r.status === 'not_required').map(r => r.gateId);
     const failed = result.receipts.filter(r => !succeeded(r) && r.status !== 'not_required').map(r => `${r.gateId} (${r.status})`);
     // A check passed only after the relaunch of its failed tests proves nothing for a merge (rule instable).

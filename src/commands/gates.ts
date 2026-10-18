@@ -358,8 +358,9 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       if (!verified) throw new PipelineError('SHA', `Commit introuvable : ${values.commit}`);
       const kept = applyBaseGates(verifyRoot, loaded.config, verified, againstOf(values.against) ?? values.base ?? null, { strict: true, offline: values.offline === true });
       loaded = { ...loaded, config: kept.config };
+      // A reuse by inputs is proven with the reuse.ignore of the base of the checks (the merge base read just above).
       const result = await verifyGates({ repo, config: loaded.config, commit: values.commit, ...(stage ? { stage } : {}), ...(values.base ? { base: values.base } : {}),
-        configFile: values['commit-config'] ? null : loaded.file });
+        configFile: values['commit-config'] ? null : loaded.file, reuseReference: kept.base.mergeBase ?? kept.base.reference });
       if (values.json) {
         json(io, { ok: result.ok, commit: result.commit, stage: result.stage, base: result.base, config: loaded.file, configHash: result.configHash, baseGates: kept.base,
           required: result.required, targeted: result.targeted, reserved: result.reserved, gates: result.gates, unreadable: result.unreadable,
@@ -488,7 +489,9 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
           ...(io.env['APV_LOCK_POLL_MS'] ? { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } : {}), ...(io.env['APV_PORTS_POLL_MS'] ? { portsPollMs: Number(io.env['APV_PORTS_POLL_MS']) } : {}) } } : {}),
         ...(values.base ? { base: values.base } : {}), ...(since ? { base: since.commit, since: { commit: since.commit, head: since.head, risk: since.risk.level, reason: since.risk.reason } } : {}),
         ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
-        ...(spreadOver ? { stacks: spreadOver } : {}), ...(replay !== undefined ? { replay } : {}), configFile: loaded.file });
+        ...(spreadOver ? { stacks: spreadOver } : {}), ...(replay !== undefined ? { replay } : {}), configFile: loaded.file,
+        // reuse.ignore of the base of the checks (the merge base read by applyBaseGates), never of the candidate.
+        reuseReference: kept?.base.mergeBase ?? kept?.base.reference ?? null });
     } catch (error) {
       if (received) { io.stderr(`Interrompu (${received}) : ${error instanceof Error ? error.message : String(error)}\n`); return signalExitCode(received); }
       throw error;
@@ -560,7 +563,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
         `${r.scope!.required && r.scope!.blocking.length ? ` ; fichiers qui le requièrent : ${r.scope!.blocking.slice(0, 10).join(', ')}${r.scope!.blocking.length > 10 ? ' ...' : ''}` : ''}`));
       const waited = rows.filter(r => (r.lockWaitMs ?? 0) >= 1000);
       if (waited.length) lines.push('', `Attente de verrou avant le délai des contrôles : ${waited.map(r => `${name(r)} ${Math.round(r.lockWaitMs! / 1000)} s`).join(', ')}.`);
-      if (result.reused.length) lines.push('', `Réutilisés (${result.reused.length}), non relancés : reçu vert d'un arbre identique, même configuration et même environnement, vérifié comme le fera apv gates verify :`,
+      if (result.reused.length) lines.push('', `Réutilisés (${result.reused.length}), non relancés : reçu vert d'un arbre identique ou des mêmes entrées (reuse.ignore lu à la base), même configuration et même environnement, vérifié comme le fera apv gates verify :`,
         ...result.reused.map(r => `- ${r.gateId} : réutilisé de ${r.fromCommit.slice(0, 12)} (exécution ${r.fromRun}${r.stack ? `, pile ${r.stack}` : ''}) : ${r.reason}`));
       if (result.replay) lines.push('', `Rejeu demandé (--replay) : ${result.replay === 'all' ? 'tous les contrôles' : result.replay.join(', ')}, exécuté(s) même si une reprise était possible.`);
       if (result.reuseStale.length) lines.push('', 'Reprises devenues invérifiables pendant l\'exécution (apv gates verify les refusera) :', ...result.reuseStale.map(s => `- ${s.gateId} : ${s.reason} ; relancer avec --replay ${s.gateId}`));
@@ -581,7 +584,9 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
         ? ` ${result.reserved.length} contrôle(s) ${RESERVED}, non exécuté(s) : la suite complète (apv gates run --stage full) les vérifie.` : '';
       const targeted = result.targeted.length
         ? ` ${result.targeted.length} contrôle(s) ${TARGETED}(s) (${result.targeted.join(', ')}) : seuls les tests concernés par les changements ont tourné ; la suite complète (apv gates run --stage full) les exécute en entier.` : '';
-      const reusedText = result.ok && result.reused.length ? ` Dont ${result.reused.length} réutilisé(s) d'un arbre identique, non relancé(s) : ${result.reused.map(r => r.gateId).join(', ')}.` : '';
+      const bases = new Set(result.reused.map(r => r.basis));
+      const from = bases.size > 1 ? 'd\'un arbre identique ou des mêmes entrées' : bases.has('inputs') ? 'des mêmes entrées' : 'd\'un arbre identique';
+      const reusedText = result.ok && result.reused.length ? ` Dont ${result.reused.length} réutilisé(s) ${from}, non relancé(s) : ${result.reused.map(r => r.gateId).join(', ')}.` : '';
       lines.push('', `${verdict}${reusedText}${targeted}${reserved} Reçus : ${relative(io.cwd, result.directory) || result.directory}` +
         (result.shared?.directory ? ` ; copie partagée : ${result.shared.directory} (exécution ${result.runId})` : ''));
       if (result.shared?.error) lines.push(`Attention : copie dans le magasin partagé impossible (${cleanLine(result.shared.error, 300)}) ; ces reçus disparaîtront avec ce worktree.`);
