@@ -34,13 +34,40 @@ import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue,
 export { RECEIPTS_DIR } from './store.js';
 /** Environment identity of a V3 local run; V2 read it from `environment.id`, a field V3 no longer reads. */
 export const ENVIRONMENT_ID = 'apv3-local';
+/** A variable whose name says it holds a port (`PORT`, `DB_PORT`, `SUPABASE_PORTS`...). */
+const PORT_NAME = /(?:^|_)PORTS?(?:_|$)/i;
+/** The port of a URL (`scheme://[user[:password]@]host:port[/...]`), the host kept. */
+const URL_PORT = /^([a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?(?:\[[^\]/?#]*\]|[^:/?#@]*)):(\d{1,5})(?=[/?#]|$)/i;
+/** The port of `host:port` (an IPv6 host between brackets). */
+const HOST_PORT = /^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9][A-Za-z0-9.-]*):(\d{1,5})$/;
+/**
+ * The value of a variable of a stack as its identity of reuse records it, with a fingerprint (5.4, relecture sécurité de A2,
+ * F3): an address proper to the stack is normalized, its port (a whole value that is a declared port of the stack or that a
+ * variable named after a port holds, the port of a URL, of `host:port`) and its lock file; the rest of the value stays (the
+ * host, the user, the database of a URL), and so does any other value (`STACK=2`, a flag, a project name).
+ */
+export function stackAddress(name, value, stack) {
+    if (stack.lockFile && value === stack.lockFile)
+        return '{{verrou de la pile}}';
+    if (/^\d{1,5}$/.test(value) && (PORT_NAME.test(name) || (stack.config.ports ?? []).includes(Number(value))))
+        return '{{port}}';
+    const url = URL_PORT.exec(value);
+    if (url)
+        return `${url[1]}:{{port}}${value.slice(url[0].length)}`;
+    const host = HOST_PORT.exec(value);
+    if (host)
+        return `${host[1]}:{{port}}`;
+    return value;
+}
 /**
  * The identity of the environment for a reuse (docs/ACCELERATION-LOTS.md, 5.4), recorded in each receipt (`reuseIdentity`).
  * Without a stack: its `environmentHash`, unchanged. On a stack without `stacks[].fingerprint`: the same environment (the
  * values of the variables of the stack included) plus the id of the stack and its declaration without its envFile, never
- * equal from one stack to another. With a fingerprint: the variables the stack gives the check replaced by their names, plus
- * the fingerprint command and the digest of its output: equal for two stacks that print the same. A fingerprint that failed
- * or printed nothing: an identity no other ever equals.
+ * equal from one stack to another. With a fingerprint: the addresses proper to the stack among the variables it gives the
+ * check normalized (stackAddress: its ports, the port of a URL or of `host:port`, its lock file), every other value kept as
+ * is (relecture sécurité de A2, F3: `STACK=2` and `STACK=3`, a flag, a project name stay apart), plus the fingerprint
+ * command and the digest of its output: equal for two stacks that print the same and differ by their addresses only. A
+ * fingerprint that failed or printed nothing: an identity no other ever equals.
  */
 export function reuseIdentityFor(env, extra, environmentHash, stack) {
     if (!stack)
@@ -52,7 +79,7 @@ export function reuseIdentityFor(env, extra, environmentHash, stack) {
     }
     if (!stack.fingerprint)
         return hash({ notComparable: randomUUID() });
-    const replaced = Object.fromEntries(Object.entries(env).map(([name, value]) => [name, stack.variables.includes(name) ? '{{pile}}' : value]));
+    const replaced = Object.fromEntries(Object.entries(env).map(([name, value]) => [name, stack.variables.includes(name) && value !== undefined ? stackAddress(name, value, stack.resolved) : value]));
     return environmentIdentity(ENVIRONMENT_ID, replaced, { ...extra, stack: { fingerprint: declaration.fingerprint, output: stack.fingerprint, variables: [...stack.variables].sort() } });
 }
 /**
@@ -489,6 +516,25 @@ export async function runGates(options) {
     };
     if (!dirty && replay !== 'all') {
         const ctx = await newReuseContext();
+        // The executable of each command, hashed once for the whole decision (relecture sécurité de A2, F4: the Node binary of ten
+        // checks was hashed ten times), and again whenever the file changes (path, size, date, inode). A check that runs hashes it again.
+        const executables = new Map();
+        const statOf = (path) => { try {
+            const s = lstatSync(path, { bigint: true });
+            return `${s.size}:${s.mtimeNs}:${s.ino}:${s.dev}`;
+        }
+        catch {
+            return 'illisible';
+        } };
+        const executableOf = async (command, env) => {
+            const key = JSON.stringify([command, env['PATH'] ?? null]);
+            const known = executables.get(key);
+            if (known && statOf(known.identity.path) === known.stat)
+                return known.identity;
+            const identity = await executableIdentity(command, repo, env);
+            executables.set(key, { identity, stat: statOf(identity.path) });
+            return identity;
+        };
         for (const gate of runnable) {
             if (targeted.has(gate.id) || earlyDecisions.has(gate.id))
                 continue;
@@ -512,7 +558,7 @@ export async function runGates(options) {
             for (const stack of onStacks) {
                 try {
                     const env = environmentOf(gate, stack);
-                    const executable = await executableIdentity(commands.get(gate.id)[0], repo, env);
+                    const executable = await executableOf(commands.get(gate.id)[0], env);
                     const extra = { executable, local: localState, copy: copyState };
                     const environmentHash = environmentIdentity(ENVIRONMENT_ID, env, extra);
                     const identity = reuseIdentityFor(env, extra, environmentHash, stack ? { resolved: stack, variables: Object.keys(stackVariables(stack, gate, options.config.environment.passEnv)), fingerprint: await fingerprintOf(stack) } : null);

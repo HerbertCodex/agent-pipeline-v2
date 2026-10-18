@@ -20,12 +20,21 @@ export interface IdentityStack {
     fingerprint: string | null | undefined;
 }
 /**
+ * The value of a variable of a stack as its identity of reuse records it, with a fingerprint (5.4, relecture sécurité de A2,
+ * F3): an address proper to the stack is normalized, its port (a whole value that is a declared port of the stack or that a
+ * variable named after a port holds, the port of a URL, of `host:port`) and its lock file; the rest of the value stays (the
+ * host, the user, the database of a URL), and so does any other value (`STACK=2`, a flag, a project name).
+ */
+export declare function stackAddress(name: string, value: string, stack: Pick<ResolvedStack, 'config' | 'lockFile'>): string;
+/**
  * The identity of the environment for a reuse (docs/ACCELERATION-LOTS.md, 5.4), recorded in each receipt (`reuseIdentity`).
  * Without a stack: its `environmentHash`, unchanged. On a stack without `stacks[].fingerprint`: the same environment (the
  * values of the variables of the stack included) plus the id of the stack and its declaration without its envFile, never
- * equal from one stack to another. With a fingerprint: the variables the stack gives the check replaced by their names, plus
- * the fingerprint command and the digest of its output: equal for two stacks that print the same. A fingerprint that failed
- * or printed nothing: an identity no other ever equals.
+ * equal from one stack to another. With a fingerprint: the addresses proper to the stack among the variables it gives the
+ * check normalized (stackAddress: its ports, the port of a URL or of `host:port`, its lock file), every other value kept as
+ * is (relecture sécurité de A2, F3: `STACK=2` and `STACK=3`, a flag, a project name stay apart), plus the fingerprint
+ * command and the digest of its output: equal for two stacks that print the same and differ by their addresses only. A
+ * fingerprint that failed or printed nothing: an identity no other ever equals.
  */
 export declare function reuseIdentityFor(env: NodeJS.ProcessEnv, extra: Record<string, unknown>, environmentHash: string, stack: IdentityStack | null): string;
 export interface GateRunOptions {

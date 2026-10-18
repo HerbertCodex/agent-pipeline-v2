@@ -20,11 +20,18 @@ export declare function treesOf(git: Git, repo: string, commits: Iterable<string
  * What Git ignores in a copy and a check still runs with (relecture sécurité de A1, M2, and of its delta, F-D1): the installed
  * dependencies, seen through the folder `node_modules` and the record each package manager writes there at every install
  * (npm, pnpm and its lock of the virtual store, Yarn Berry, Yarn 1), and every `.env*` file of the copy, at any depth (outside
- * `node_modules`, `.git` and the nested repositories, such as the worktrees of `.worktrees/`). Two copies of the same tree
+ * `node_modules`, the `.git` of the copy and the worktrees Git has registered, such as those of `.worktrees/`). Two copies of the same tree
  * with other dependencies installed, or another `apps/web/.env.local`, are not the same environment. A `node_modules` with
  * none of these records (installed by another tool, or by hand) cannot be compared: never the same state as any other.
  */
 export declare const LOCAL_STATE_FILES: readonly ["node_modules/.package-lock.json", "node_modules/.modules.yaml", "node_modules/.pnpm/lock.yaml", "node_modules/.yarn-state.yml", "node_modules/.yarn-integrity"];
+/**
+ * The worktrees Git has registered for the repository of `dir` (`git worktree list --porcelain -z`), real paths, `dir` itself
+ * left out: the only folders of a copy that are another copy and never part of its state (relecture sécurité de A2, F1). A
+ * folder that merely holds an entry named `.git` (a file or a folder written by a check, a generator, a stray clone) is
+ * walked like any other. None when Git cannot list them: every folder is then walked.
+ */
+export declare function registeredWorktrees(dir: string): Set<string>;
 /**
  * Digest of the local state of a copy (LOCAL_STATE_FILES, `node_modules` present or not, each `.env*` at any depth), part
  * of the identity of the environment of every receipt: a check is reused only from an origin that ran with the same local
@@ -34,7 +41,7 @@ export declare function localStateDigest(dir: string): string;
 /**
  * Digest of what Git ignores in a copy when a run starts there (att8 of the relecture of A1: a generated folder such as
  * `.svelte-kit`, a build left by an earlier run): every ignored file outside `node_modules` (LOCAL_STATE_FILES), `.git`, the
- * nested repositories and `.apv/receipts/`, by its path and the sha256 of its content (a symbolic link by its target; beyond
+ * worktrees Git has registered (registeredWorktrees) and `.apv/receipts/`, by its path and the sha256 of its content (a symbolic link by its target; beyond
  * 64 MiB, or 1 GiB hashed in all, by its size and date). Measured once per copy, before the first check runs there: an origin
  * is reused only by a copy that starts from the same ignored state (a fresh copy of a batch, prepared by the same
  * batch.setup, does). Not comparable (never equal) when Git cannot list it or the copy holds more than MAX_WALKED entries.
@@ -51,6 +58,24 @@ export declare const TEST_GLOBS: readonly string[];
  * verify add the check's own test paths, the files its commands name, the design folder and the configuration file read.
  */
 export declare const NEVER_IGNORED: readonly string[];
+/** One file of the tree of a commit: its raw path, its mode and its object. */
+interface TreeEntry {
+    path: Buffer;
+    mode: string;
+    blob: string;
+}
+/**
+ * What the inputs of the checks read from Git, kept for one decision of reuse (relecture sécurité de A2, F4): the files of the
+ * tree of each commit (one `git ls-tree` per commit, whatever the number of checks and rules), the files that differ between
+ * two commits (one walk per pair, whatever the rule), and which paths match the ignored globs of a rule (one match per path and
+ * per list of globs, whatever the number of commits).
+ */
+export interface InputsCache {
+    entries: Map<string, Promise<TreeEntry[]>>;
+    diffs: Map<string, Promise<TreeEntry[]>>;
+    hits: Map<string, Map<string, boolean>>;
+}
+export declare const inputsCache: () => InputsCache;
 /**
  * The rule that takes files out of the inputs of a check (A2): `ignore` (globs read at the base), `keep` (globs never
  * ignorable, NEVER_IGNORED and the check's own, compared case ignored). A path is ignored only when it is valid UTF-8 without
@@ -68,10 +93,16 @@ export interface InputsRule {
  * encoding. Without a rule, two commits have the same digest exactly when they have the same tree content. Fails when the
  * commit is not in the repository. The `ignore` of a former signature is a rule without any glob kept.
  */
-export declare function inputsDigest(_git: Git, repo: string, commit: string, rule?: InputsRule | readonly string[] | null): Promise<{
+export declare function inputsDigest(_git: Git, repo: string, commit: string, rule?: InputsRule | readonly string[] | null, cache?: InputsCache): Promise<{
     digest: string;
     files: number;
 }>;
+/**
+ * The inputs of a check that differ between two commits under `rule` (none: the same digest of inputs on both sides), decoded
+ * as UTF-8 and sorted. One walk of the two trees per pair, read once per cache: the cheap test of a candidate origin, and of
+ * the base. Fails when either commit is not in the repository.
+ */
+export declare function changedInputs(repo: string, from: string, to: string, rule: InputsRule, cache?: InputsCache): Promise<string[]>;
 /** What two commits differ by, for a check that ignores some files (A2): digests of its inputs, files changed, links among its inputs. */
 export interface InputsComparison {
     from: string;
@@ -84,4 +115,5 @@ export interface InputsComparison {
     links: string[];
 }
 /** Compares the inputs of a check at two commits with `rule` (verify recomputes this from Git, never from the receipt). */
-export declare function compareInputs(repo: string, from: string, to: string, rule: InputsRule): Promise<InputsComparison>;
+export declare function compareInputs(repo: string, from: string, to: string, rule: InputsRule, cache?: InputsCache): Promise<InputsComparison>;
+export {};
