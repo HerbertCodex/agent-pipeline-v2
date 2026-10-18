@@ -686,7 +686,7 @@ function waiverLines(messages, rule, sha) {
             if (!m || !sha.toLowerCase().startsWith(m[1].toLowerCase()))
                 continue;
             const reason = m[2].trim();
-            out.push({ message, reason, template: TEMPLATE_REASON.test(reason) });
+            out.push({ message, reason, template: TEMPLATE_REASON.test(reason), line: line.normalize('NFC').trim() });
         }
     }
     return out;

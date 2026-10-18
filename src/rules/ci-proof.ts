@@ -105,7 +105,7 @@ const int = (v: unknown): number | null => typeof v === 'number' && Number.isSaf
 
 /** The files the change adds, modifies, deletes or renames (both sides) since the merge base, or null when unreadable. */
 function touched(repo: string, base: string, head: string): string[] | null {
-  const raw = gitRead(repo, ['diff', '--name-only', '--no-renames', '-z', base, head, '--']);
+  const raw = gitRead(repo, ['diff', '--ignore-submodules=none', '--name-only', '--no-renames', '-z', base, head, '--']);
   return raw === null ? null : raw.split('\0').filter(Boolean);
 }
 

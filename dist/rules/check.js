@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import { posix } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
-import { loadConfigAtCommit } from '../config/load.js';
+import { CONFIG_FILE, LEGACY_CONFIG_FILE, loadConfigAtCommit } from '../config/load.js';
 import { loadDbConfigAtCommit } from '../db/config.js';
 import { designDir } from '../design/config.js';
-import { applyBaseGates } from '../gates/base-gates.js';
+import { applyBaseGates, enforceBaseGates } from '../gates/base-gates.js';
 import { verifyGates } from '../gates/verify.js';
 import { planScope } from '../gates/proof-scope.js';
 import { stageGates } from '../gates/run.js';
@@ -13,15 +13,18 @@ import { loadDecisionLedger } from '../lifecycle/decisions.js';
 import { sensitivePaths } from '../policy/policy.js';
 import { ALWAYS_REVIEWED, reviewPlanSettings } from '../review/config.js';
 import { planReviews } from '../review/plan.js';
+import { LEDGER_FILES } from '../review/risk.js';
 import { DEFAULT_REUSE_IGNORE, UI_EXTENSIONS, extensionOf, globMatcher } from '../reuse/config.js';
 import { WEB_DEPENDENCIES } from '../reuse/detect.js';
-import { gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
+import { DELTA_DIFF, DELTA_GIT, gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
 import { commonDir } from '../stacks/idle.js';
 import { MERGE_RULES, RULE_TITLES, rulesSettings } from './config.js';
 import { TEMPLATE_WAIVER_NOTE, anchorKey, readOperatorMessages, templateWaiver, waiverFor, waiverSentence } from './operator.js';
 import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
-import { carriedHeads } from './carry.js';
+import { NEVER_CARRIED, reviewChain } from './delta.js';
+import { computedLoads } from './loads.js';
+import { deltaFiles } from './carry.js';
 import { LANE_NAME, docsOnlyLane, laneLines } from './docs-only.js';
 import { isScreen, screenCoverage, screenMatchers } from './screens.js';
 import { ciProofLines, verifyCiProof } from './ci-proof.js';
@@ -71,8 +74,22 @@ function hasScreensAt(repo, sha, screens) {
 const TOOLING_PATH = /^(?:\.apv|\.github(?!\/(?:workflows|actions)\/)|\.claude|\.vscode|\.husky)\//;
 /** Configuration files that may declare aliases (Vite, SvelteKit, Astro, Nuxt, Next, webpack, TypeScript, JavaScript). */
 const ALIAS_CONFIG = /(?:^|\/)(?:(?:vite|vitest|svelte|astro|nuxt|next|webpack|rollup)\.config\.[cm]?[jt]s|[jt]sconfig[\w.-]*\.json)$/;
-/** A loading by pattern or by a computed path: import.meta.glob, import(`…${x}…`), import(x), require(x). */
-const COMPUTED_LOAD = 'import\\.meta\\.glob|import\\([[:space:]]*`[^`]*\\$\\{|import\\([[:space:]]*[^\'"`[:space:])]|require\\([[:space:]]*`[^`]*\\$\\{|require\\([[:space:]]*[^\'"`[:space:])]';
+/**
+ * The search for loads by a pattern or a computed path (src/rules/loads.ts) reads the tracked files of the application:
+ * neither node_modules nor a build output (dist/, build/ at the root only: `src/routes/build/` is a route served,
+ * `src/lib/dist/` a module, third security review of #141, M3), nor a binary file by its extension, nor a file outside
+ * the interface (tests, tooling, documentation). A file with a NUL byte is read all the same (Node and esbuild run a
+ * script with one in a comment, M4). Beyond MAX_LOAD_BYTES to read, the tool does not judge: captures required.
+ */
+const NOT_APPLICATION = /^(?:dist|build)\/|(?:^|\/)node_modules\//;
+const BINARY_FILE = /\.(?:png|jpe?g|gif|webp|avif|ico|bmp|tiff?|psd|heic|woff2?|ttf|otf|eot|pdf|zip|gz|tgz|bz2|xz|7z|rar|jar|mp[34]|m4a|aac|flac|wav|ogg|oga|webm|mov|avi|mkv|wasm|node|so|dylib|dll|exe|bin|sqlite3?|db)$/i;
+const MAX_LOAD_BYTES = 16 * 1024 * 1024;
+/**
+ * A file read by a computed path (readFile, readFileSync, createReadStream) in a tooling script (`scripts/`) or a module
+ * of the tests named as such (`*.fixture.*`, `*.mock.*`, `__mocks__/`) is no load of the application: such scripts read
+ * the files they are given. Their computed import or require still counts.
+ */
+const READS_OUTSIDE_APPLICATION = /^scripts\/|(?:^|\/)__mocks__\/|(?:^|\/)[^/]+\.(?:fixtures?|mocks?)\.[^/]+$/;
 const TOOLING_FILE = /^(?:\.gitignore|\.gitattributes|\.editorconfig|\.nvmrc|\.node-version)$/;
 const TEST_PATH = /^(?:tests?|e2e)\/|(?:^|\/)(?:__tests__|__snapshots__)\/|\.(?:test|spec)\.[cm]?[jt]s$|^(?:playwright|vitest)\.config\.[cm]?[jt]s$/;
 const DOC_PATH = /^(?:docs\/.+|[^/]+)\.md$/;
@@ -217,6 +234,38 @@ function referencerMayShow(path, docsSite, screens) {
         return false;
     return docsSite || !path.startsWith('docs/');
 }
+/**
+ * The files of the application at a commit that load by a pattern or a computed path (src/rules/loads.ts); a sentence
+ * when the tool cannot tell (too much to read, objects unreadable).
+ */
+function loadersAt(repo, entries, docsSite, screens) {
+    const read = entries.filter(e => (e.mode === '100644' || e.mode === '100755') && !NOT_APPLICATION.test(e.path) && !BINARY_FILE.test(e.path)
+        && !withoutScreenByPath(e.path, docsSite, screens));
+    const bytes = read.reduce((n, e) => n + e.size, 0);
+    const mib = (n) => `${Math.ceil(n / (1024 * 1024))} Mio`;
+    if (bytes > MAX_LOAD_BYTES)
+        return `recherche des chargements par motif : ${mib(bytes)} de fichiers de l'application à lire, plus de ${mib(MAX_LOAD_BYTES)} : impossible de juger`;
+    if (!read.length)
+        return [];
+    const batch = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', 'cat-file', '--batch'], { cwd: repo, input: `${read.map(e => e.sha).join('\n')}\n`, timeout: 60_000, maxBuffer: MAX_LOAD_BYTES + read.length * 128 + 1024 });
+    if (batch.status !== 0 || batch.error)
+        return 'recherche des chargements par motif illisible : impossible de juger';
+    const out = [];
+    let at = 0;
+    for (const entry of read) {
+        const end = batch.stdout.indexOf(10, at);
+        const header = end < 0 ? null : /^[0-9a-f]+ blob (\d+)$/.exec(batch.stdout.subarray(at, end).toString('latin1'));
+        if (!header)
+            return 'recherche des chargements par motif illisible : impossible de juger';
+        const size = Number(header[1]);
+        const body = batch.stdout.subarray(end + 1, end + 1 + size);
+        at = end + 1 + size + 1;
+        const kinds = computedLoads(entry.path, body.toString('utf8'));
+        if (kinds.has('load') || (kinds.has('read') && !READS_OUTSIDE_APPLICATION.test(entry.path)))
+            out.push(entry.path);
+    }
+    return out;
+}
 const MAX_REASONS = 20;
 /**
  * Whether a change touches no screen, for the rule captures. Every file it adds, modifies, removes or renames (a rename is
@@ -225,33 +274,29 @@ const MAX_REASONS = 20;
  * in a comment, a test, the documentation or the code map aside), reached by a symbolic link, loaded by a pattern or a
  * computed path (a test or a document, when the application loads that way), or aimed at by an alias. Every cause found is
  * said, file by file; the tool also says when it cannot tell (diff, tree or search unreadable, a link that leaves the
- * repository, too many files): captures are then required.
+ * repository, too many files or too much to read): captures are then required.
  */
 export function touchesNoScreen(repo, base, head, screens) {
     const reasons = [];
-    const raw = gitRead(repo, ['diff', '--name-status', '-z', '--no-renames', base, head]);
-    if (raw === null)
-        return { files: 0, reasons: [`diff illisible entre ${short(base)} et ${short(head)} : impossible de juger`] };
-    const parts = raw.split('\0').filter(Boolean);
-    if (parts.length % 2 !== 0)
-        return { files: 0, reasons: ['diff illisible : impossible de juger'] };
-    const files = [];
-    for (let i = 0; i + 1 < parts.length; i += 2)
-        files.push(parts[i + 1]);
+    // Every submodule seen, a changed link or trees that differ with no file listed refused (deltaFiles, review of #141, A1).
+    const read = deltaFiles(repo, base, head);
+    if (read.cause !== null)
+        return { files: 0, reasons: [`diff illisible : ${read.cause} : impossible de juger`] };
+    const files = read.files;
     const verdict = () => ({ files: files.length, reasons: [...new Set(reasons)].slice(0, MAX_REASONS) });
     if (files.length > MAX_FILES_WITHOUT_SCREEN) {
         reasons.push(`${files.length} fichiers, plus de ${MAX_FILES_WITHOUT_SCREEN} : impossible de juger`);
         return verdict();
     }
-    const tree = gitRead(repo, ['ls-tree', '-r', '-z', '--full-tree', head]);
+    const tree = gitRead(repo, ['ls-tree', '-r', '-l', '-z', '--full-tree', head]);
     if (tree === null) {
         reasons.push(`arbre de ${short(head)} illisible : impossible de juger`);
         return verdict();
     }
     const entries = tree.split('\0').filter(Boolean).map(e => {
         const tab = e.indexOf('\t');
-        const [mode, , sha] = e.slice(0, tab).split(' ');
-        return { mode: mode ?? '', sha: sha ?? '', path: e.slice(tab + 1) };
+        const [mode, , sha, size] = e.slice(0, tab).split(/ +/);
+        return { mode: mode ?? '', sha: sha ?? '', size: Number(size) || 0, path: e.slice(tab + 1) };
     });
     const docsSite = entries.some(e => DOCS_SITE.test(e.path));
     for (const f of files) {
@@ -294,12 +339,11 @@ export function touchesNoScreen(repo, base, head, screens) {
     // read from the text, wherever the file lies (second review of #134: tests/fixtures at the root, apps/*/src).
     const loaded = files.filter(f => TEST_PATH.test(f) || DOC_PATH.test(f));
     if (loaded.length) {
-        const loads = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', 'grep', '-l', '-z', '-E', '-e', COMPUTED_LOAD, head, '--'], { cwd: repo, encoding: 'utf8', timeout: 30_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
-        if (loads.error || (loads.status !== 0 && loads.status !== 1)) {
-            reasons.push('recherche des chargements par motif illisible : impossible de juger');
+        const loaders = loadersAt(repo, entries, docsSite, screens);
+        if (typeof loaders === 'string') {
+            reasons.push(loaders);
             return verdict();
         }
-        const loaders = loads.status === 0 ? loads.stdout.split('\0').filter(Boolean).map(w => w.slice(head.length + 1)).filter(w => !withoutScreenByPath(w, docsSite, screens)) : [];
         if (loaders.length)
             for (const f of loaded)
                 reasons.push(`${f} : chargement par motif ou chemin calculé dans ${loaders.slice(0, 3).join(', ')}`);
@@ -361,7 +405,7 @@ export function touchesNoScreen(repo, base, head, screens) {
 }
 /** Files the change adds or modifies since the base (renames counted as an addition: a moved screen is a new address). */
 function changedFiles(repo, base, head) {
-    const raw = gitRead(repo, ['diff', '--name-status', '-z', '--no-renames', base, head]);
+    const raw = gitRead(repo, [...DELTA_GIT, 'diff', ...DELTA_DIFF, '--name-status', '-z', base, head]);
     if (raw === null)
         throw new PipelineError('RULES', `diff illisible entre ${base.slice(0, 12)} et ${head.slice(0, 12)}`);
     const parts = raw.split('\0').filter(Boolean);
@@ -374,7 +418,7 @@ function changedFiles(repo, base, head) {
 const short = (sha) => sha.slice(0, 12);
 /** Every file the change adds, modifies or removes since the base (both sides of a rename); empty when unreadable. */
 function touchedFiles(repo, base, head) {
-    return (gitRead(repo, ['diff', '--name-only', '--no-renames', '-z', base, head, '--']) ?? '').split('\0').filter(Boolean);
+    return (gitRead(repo, [...DELTA_GIT, 'diff', ...DELTA_DIFF, '--name-only', '-z', base, head, '--']) ?? '').split('\0').filter(Boolean);
 }
 function outcome(rule, status, detail, problems = [], todo = []) {
     return { rule, title: RULE_TITLES[rule], status, detail, problems, todo, waiver: null };
@@ -556,48 +600,163 @@ export async function checkMergeRules(input) {
     // relecture, captures: the domains `apv review plan` retains for the change, each recorded at this commit, or waived
     // for that domain alone by the operator (« dérogation relecture:<domaine> <commit> : <raison> », issue #126).
     const reviews = latestReviews(common, sha);
+    const screenMatch = screenMatchers(settings.screens);
     // A head that only brings its base up to date (a merge of the target, the diff identical byte for byte) keeps the
-    // reviews of the head before, said domain by domain (carry.ts, pilot project #230); its own reviews come first.
-    const carried = carriedHeads(repo, sha, resolveCommit(repo, input.target)).map(head => ({ head, reviews: latestReviews(common, head) }));
-    const usable = (r) => !!r && !r.problem && !!r.record && r.record.findings.critical === 0 && r.record.findings.high === 0;
-    const blocking = (r) => !!r?.record && (r.record.findings.critical > 0 || r.record.findings.high > 0);
-    // The review of the head always decides, even blocking (review of #135); a review is carried over only when the head
-    // has none of the domain, and a critical or high finding at any head of the chain (its latest review) blocks.
+    // reviews of the head before, said domain by domain (carry.ts, pilot project #230); its own reviews come first. A head
+    // without a review of donnees or rgpd keeps the review of an earlier commit of the branch when the delta since it
+    // leaves the perimeter of the domain (never securite nor fidelite, NEVER_REPORTED; fidelite comes back with the
+    // fingerprint of the build output), and a review of the delta counts on a usable review where it starts
+    // (delta.ts, docs/ACCELERATION-LOTS.md, part B). The perimeter is the plan of the reviews of each step, read with the
+    // settings of the base, as for the change itself.
+    const deltaPlans = new Map();
+    const touches = (perimeter, span) => {
+        if (perimeter === 'maquette' || perimeter === 'controles')
+            return pathReasons(perimeter, touchedFiles(repo, span.from, span.to));
+        const domain = perimeter;
+        const key = `${span.from}..${span.to}`;
+        if (!deltaPlans.has(key)) {
+            try {
+                deltaPlans.set(key, planReviews({ repo, base: span.from, head: span.to, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [], renames: false }));
+            }
+            catch (error) {
+                deltaPlans.set(key, errorMessage(error));
+            }
+        }
+        const delta = deltaPlans.get(key);
+        if (typeof delta === 'string')
+            return [`plan des revues du delta illisible (${delta.slice(0, 160)})`];
+        const decision = delta.domains.find(d => d.domain === domain);
+        if (decision?.decision === 'retained')
+            return [`${domain} retenue par le plan des revues : ${decision.reason.slice(0, 160)}${decision.files.length ? ` (${decision.files.slice(0, 3).join(', ')}${decision.fileCount > 3 ? ', ...' : ''})` : ''}`];
+        return [];
+    };
+    // The perimeters of paths of the waivers carried (delta.ts, WAIVER_PERIMETERS), read with the settings of the base.
+    const pathReasons = (perimeter, files) => files.flatMap(f => {
+        if (perimeter === 'controles')
+            return f === CONFIG_FILE || f === LEGACY_CONFIG_FILE || f === 'package.json' ? [`${f} : configuration des contrôles ou dépendances du projet`] : [];
+        if (isScreen(f, screenMatch))
+            return [`${f} : écran`];
+        if (f === baseDesign || f.startsWith(`${baseDesign}/`))
+            return [`${f} : dossier des maquettes`];
+        return LEDGER_FILES.includes(f) ? [`${f} : registre des décisions`] : [];
+    });
+    const targetSha = resolveCommit(repo, input.target);
+    const chainReviews = reviewChain({ repo, common, target: targetSha, touches }, sha);
     const pick = (domain) => {
-        const own = reviews.get(domain);
-        if (own || !carried.length)
-            return { found: own, from: null };
-        const chain = carried.map(c => ({ head: c.head, r: c.reviews.get(domain) })).filter(x => x.r);
-        const stop = chain.find(x => blocking(x.r));
-        if (stop)
-            return { found: stop.r, from: stop.head };
-        const clean = chain.find(x => usable(x.r));
-        return clean ? { found: clean.r, from: clean.head } : { found: undefined, from: null };
+        const own = chainReviews.resolve(sha, domain);
+        return own.found ? own : chainReviews.reported(domain) ?? own;
     };
     const carriedNote = (from) => (from ? `relecture reportée de ${short(from)} (diff identique)` : '');
+    const fileList = (files) => `${files.length} fichier${files.length > 1 ? 's' : ''}${files.length ? ` : ${files.slice(0, 5).join(', ')}${files.length > 5 ? ', ...' : ''}` : ''}`;
+    const howNote = (domain, p) => [
+        p.how === 'carried' ? carriedNote(p.from) : '',
+        p.how === 'reported' && p.reported ? `relecture ${domain} reportée de ${short(p.from)} (delta sans fichier de son périmètre : ${fileList(p.reported.files)})` : '',
+        p.delta ? `relecture du delta depuis ${short(p.delta.from)} (${p.delta.files} fichier${p.delta.files > 1 ? 's' : ''})` : '',
+    ].filter(Boolean).join(', ');
+    // A waiver of the operator for this commit, or one he typed for an earlier commit of the branch, carried over a delta
+    // outside its perimeter (closed list: never securite, the whole rule relecture, preuve, instable, captures nor
+    // relecture:fidelite). His words, their
+    // date, their commit and why are said. `notCarried` keeps why one was not carried, for the refusal.
+    const notCarried = new Map();
+    const waiverOf = (rule) => {
+        const own = waiverFor(messages, rule, sha);
+        if (own)
+            return { at: own.message.at, reason: own.reason };
+        if (NEVER_CARRIED.includes(rule)) {
+            // captures, relecture:fidelite (third security review of #141): the waiver of an earlier commit is said, never carried.
+            const earlier = chainReviews.chain().find(node => waiverFor(messages, rule, node.commit));
+            if (earlier)
+                notCarried.set(rule, `la dérogation ${rule} de ${short(earlier.commit)} n'est jamais reportée (elle reviendra avec l'empreinte du build)`);
+            return null;
+        }
+        const carried = chainReviews.carriedWaiver(rule, commit => waiverFor(messages, rule, commit));
+        if (!carried)
+            return null;
+        if (!carried.waiver) {
+            notCarried.set(rule, `la dérogation ${rule} de ${short(carried.from)} n'est pas reportée, le delta touche son périmètre : ${carried.reasons.slice(0, 3).join(' ; ')}`);
+            return null;
+        }
+        const differ = rule === 'controles' ? refusedGatesDiffer(carried.from) : null;
+        if (differ) {
+            notCarried.set(rule, `la dérogation controles de ${short(carried.from)} n'est pas reportée, les contrôles refusés ne sont pas ceux qu'elle levait : ${differ}`);
+            return null;
+        }
+        return { at: carried.waiver.message.at, reason: carried.waiver.reason,
+            carried: { from: carried.from, words: carried.waiver.line, why: `delta sans fichier de son périmètre : ${fileList(carried.files)}` } };
+    };
+    // controles is carried only when the checks refused at the head are among those refused at C, with the same web
+    // detection (security review of #142, A2): the rule reads isWebAt (an interface file anywhere, a web dependency) and
+    // the configuration of the checks at each commit, not only the paths of its perimeter. C is read as the rule reads the
+    // head: its own configuration with the mandatory checks of its base kept (enforceBaseGates), the settings of the base.
+    const refusedGatesAt = (commit) => {
+        const web = isWebAt(repo, commit);
+        const needed = web ? settings.requiredGates : settings.requiredGates.filter(g => g.source === 'config');
+        let config = effective;
+        if (commit !== sha) {
+            const own = loadConfigAtCommit(repo, commit).config;
+            const fork = targetSha ? gitRead(repo, ['merge-base', targetSha, commit]) : null;
+            const atFork = fork ? loadConfigAtCommit(repo, fork) : null;
+            config = atFork?.file ? enforceBaseGates(own, atFork.config).config : own;
+        }
+        return { web, missing: new Set(missingRequiredGates(config, needed).map(m => `${m.id} (${m.problem === 'absent' ? 'absent' : 'non obligatoire'})`)) };
+    };
+    const refusedGatesDiffer = (from) => {
+        let atC;
+        let atHead;
+        try {
+            atC = refusedGatesAt(from);
+            atHead = refusedGatesAt(sha);
+        }
+        catch (error) {
+            return `configuration des contrôles illisible (${errorMessage(error).slice(0, 160)})`;
+        }
+        const causes = [];
+        if (atC.web !== atHead.web)
+            causes.push(atHead.web ? `projet web à ${short(sha)}, pas à ${short(from)}` : `projet web à ${short(from)}, plus à ${short(sha)}`);
+        const added = [...atHead.missing].filter(m => !atC.missing.has(m));
+        if (added.length)
+            causes.push(`refusés à ${short(sha)} et pas à ${short(from)} : ${added.join(', ')}`);
+        return causes.length ? causes.join(' ; ') : null;
+    };
+    const carriedSaid = (rule, w) => (w.carried ? ` ; dérogation ${rule} reportée de ${short(w.carried.from)} : « ${w.carried.words} » (${w.at}, ${w.carried.why})` : '');
     const reviewProblems = [];
     const reviewTodo = [];
     const domainStates = [];
     for (const domain of retained) {
         const agent = `apv:${DOMAIN_REVIEWERS[domain]}`;
-        const { found, from } = pick(domain);
+        const picked = pick(domain);
+        const { found, from } = picked;
         const ask = `Relecture ${domain} par ${agent} sur une copie détachée à ${short(sha)} ; l'agent l'enregistre lui-même (apv review record --commit ${short(sha)} --domain ${domain} ...).`;
         const f = found?.record?.findings;
-        const problem = !found ? `aucune relecture enregistrée à ${short(sha)}`
+        const broken = picked.broken ? ` ; celle de ${short(picked.broken.from)} n'est pas reportée, le delta touche son périmètre : ${picked.broken.reasons.slice(0, 3).join(' ; ')}` : '';
+        // fidelite below the head: said never reported (third security review of #141, M3, M4), the review of the delta offered.
+        const never = !found && domain === 'fidelite' ? chainReviews.deltaStart(domain) : null;
+        const neverNote = never ? ` ; relecture ${domain} : jamais reportée sans relire (elle reviendra avec l'empreinte du build) ; relecture du delta possible : apv review record --delta-from ${short(never)}` : '';
+        const problem = !found ? `aucune relecture enregistrée à ${short(sha)}${broken}${neverNote}`
             : found.problem || !found.record ? `relecture inutilisable (${found.problem ?? 'illisible'})`
                 : f.critical > 0 || f.high > 0 ? `${f.critical} constat(s) critique(s) et ${f.high} haut(s) à ${short(from ?? sha)}` : null;
         if (!problem) {
-            domainStates.push({ domain, status: 'recorded', detail: `${found.record.reviewer}, critique 0, haut 0, moyen ${f.medium}, bas ${f.low}${from ? `, ${carriedNote(from)}` : ''}`, waiver: null });
+            const note = howNote(domain, picked);
+            domainStates.push({ domain, status: 'recorded', detail: `${found.record.reviewer}, critique 0, haut 0, moyen ${f.medium}, bas ${f.low}${note ? `, ${note}` : ''}`, waiver: null });
             continue;
         }
-        const waiver = waiverFor(messages, `relecture:${domain}`, sha);
+        const waiver = waiverOf(`relecture:${domain}`);
         if (waiver) {
-            domainStates.push({ domain, status: 'waived', detail: problem, waiver: { at: waiver.message.at, reason: waiver.reason } });
+            domainStates.push({ domain, status: 'waived', detail: `${problem}${carriedSaid(`relecture:${domain}`, waiver)}`, waiver });
             continue;
         }
+        const kept = notCarried.get(`relecture:${domain}`);
+        if (kept)
+            reviewTodo.push(`${domain} : ${kept}.`);
         domainStates.push({ domain, status: 'missing', detail: problem, waiver: null });
         reviewProblems.push(`${domain} : ${problem}`);
-        reviewTodo.push(found && !found.problem && found.record ? `Corrige chaque constat critique ou haut de la relecture ${domain}, avec le test qui le prouve, puis fais relire le nouveau commit (${agent}).` : ask);
+        // Where a review of the delta alone may start: the review not reported, or the nearest usable one of the branch.
+        const start = found && !found.problem && found.record ? null : picked.broken?.from ?? chainReviews.deltaStart(domain);
+        if (start) {
+            const files = touchedFiles(repo, start, sha);
+            reviewTodo.push(`Relecture du delta seul ${short(start)}..${short(sha)} (${fileList(files)}) par ${agent} sur une copie détachée à ${short(sha)} : apv review record --commit ${short(sha)} --domain ${domain} --delta-from ${short(start)} ... (le rapport cite les deux commits${domain === 'fidelite' ? ` ; captures à ${short(sha)} des écrans touchés` : ''}).`);
+        }
+        reviewTodo.push(found && !found.problem && found.record ? `Corrige chaque constat critique ou haut de la relecture ${domain}, avec le test qui le prouve, puis fais relire le nouveau commit (${agent}).` : start ? `Ou ${ask[0].toLowerCase()}${ask.slice(1)}` : ask);
         if (templateWaiver(messages, `relecture:${domain}`, sha))
             reviewTodo.push(`${domain} : ${TEMPLATE_WAIVER_NOTE}`);
         reviewTodo.push(`Ou, pour ce domaine seul, l'opérateur tape lui-même : « ${waiverSentence(`relecture:${domain}`, sha)} »${domain === ALWAYS_REVIEWED ? ' (dérogation sur la sécurité)' : ''}.`);
@@ -624,11 +783,12 @@ export async function checkMergeRules(input) {
     // file) that adds none: a command-line tool has nothing to capture, a first page or template added asks for them.
     // The fidelity review lifted by the operator (« dérogation relecture:fidelite » or the whole rule « dérogation relecture »)
     // with no fidelity review stored at this commit: its captures have no object. Any stored review (even with a high finding,
-    // or unsealed) keeps them required: someone looked, and the captures are what proves it.
+    // or unsealed) keeps them required: someone looked, and the captures are what proves it. They are those of the fidelity
+    // review at this commit (its own, a review of the delta recorded here, or carried over a merge of the target with an
+    // identical diff), never those of an earlier commit of the branch (third security review of #141, M3, M4).
     const fidelity = domainStates.find(d => d.domain === 'fidelite');
     const fidelityWaiver = !fidelity || fidelity.status === 'recorded' || reviews.has('fidelite') ? null
         : fidelity.status === 'waived' ? fidelity.waiver.reason : waiverFor(messages, 'relecture', sha)?.reason ?? null;
-    const screenMatch = screenMatchers(settings.screens);
     const changed = changedFiles(repo, mergeBase, sha);
     const screens = changed.filter(f => isScreen(f, screenMatch));
     const addedScreens = changed.filter(f => screenLike(f, screenMatch));
@@ -689,12 +849,16 @@ export async function checkMergeRules(input) {
     for (const r of rules) {
         if (r.status !== 'refused')
             continue;
-        const waiver = waiverFor(messages, r.rule, sha);
+        const waiver = waiverOf(r.rule);
         if (waiver) {
             r.status = 'waived';
-            r.waiver = { at: waiver.message.at, reason: waiver.reason };
+            r.waiver = waiver;
+            r.detail += carriedSaid(r.rule, waiver);
         }
         else {
+            const kept = notCarried.get(r.rule);
+            if (kept)
+                r.todo.push(`${kept}.`);
             if (templateWaiver(messages, r.rule, sha))
                 r.todo.push(TEMPLATE_WAIVER_NOTE);
             r.todo.push(`Sans correction, seul l'opérateur peut lever ce refus, en tapant lui-même dans la session : « ${waiverSentence(r.rule, sha)} ».`);
@@ -723,7 +887,7 @@ export function rulesLines(report, indent = '') {
             for (const p of r.problems)
                 lines.push(`${indent}    ${p}`);
         if (r.waiver)
-            lines.push(`${indent}    dérogation de l'opérateur (${r.waiver.at}) : ${r.waiver.reason}`);
+            lines.push(`${indent}    dérogation de l'opérateur (${r.waiver.at}) : ${r.waiver.reason}${r.waiver.carried ? ` ; dérogation ${r.rule} reportée de ${short(r.waiver.carried.from)} (${r.waiver.carried.why})` : ''}`);
         if (r.status === 'refused')
             for (const t of r.todo)
                 lines.push(`${indent}    à faire : ${t}`);

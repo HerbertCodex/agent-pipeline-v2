@@ -114,8 +114,8 @@ export async function collectChanges(repo: string, base: { source: BaseSource; r
   if (!/^[0-9a-f]{40,64}$/.test(mergeBase)) {
     throw new PipelineError('REUSE_BASE', `aucune base commune entre ${base.ref} et HEAD : clone superficiel (git fetch --unshallow, ou un clone avec l'historique) ou historiques sans lien. Sans elle, le contrôle ne sait pas ce que le changement ajoute.`);
   }
-  const diff = await git.exec(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', '-M', '--src-prefix=a/', '--dst-prefix=b/', mergeBase, '--']);
-  const status = (await git.exec(repo, ['diff', '--name-status', '-z', '-M', mergeBase, '--'])).split('\0');
+  const diff = await git.exec(repo, ['diff', '--ignore-submodules=none', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', '-M', '--src-prefix=a/', '--dst-prefix=b/', mergeBase, '--']);
+  const status = (await git.exec(repo, ['diff', '--ignore-submodules=none', '--name-status', '-z', '-M', mergeBase, '--'])).split('\0');
   const created = new Set<string>();
   const renamed = new Map<string, string>();
   for (let i = 0; i < status.length;) {
@@ -137,7 +137,7 @@ export async function collectChanges(repo: string, base: { source: BaseSource; r
   const special: Changes['special'] = [];
   // Against the working tree and against the index (a submodule not checked out is only in the index).
   for (const scope of [[], ['--cached']]) {
-    const raw = (await git.exec(repo, ['diff', '--raw', '-z', '--no-renames', ...scope, mergeBase, '--'])).split('\0');
+    const raw = (await git.exec(repo, ['diff', '--ignore-submodules=none', '--raw', '-z', '--no-renames', ...scope, mergeBase, '--'])).split('\0');
     for (let i = 0; i + 1 < raw.length; i += 2) {
       const m = /^:\d{6} (\d{6}) \S+ \S+ ([A-Z])/.exec(raw[i] ?? '');
       const path = raw[i + 1];

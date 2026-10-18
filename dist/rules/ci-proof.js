@@ -36,7 +36,7 @@ const str = (v) => typeof v === 'string' ? v : null;
 const int = (v) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null;
 /** The files the change adds, modifies, deletes or renames (both sides) since the merge base, or null when unreadable. */
 function touched(repo, base, head) {
-    const raw = gitRead(repo, ['diff', '--name-only', '--no-renames', '-z', base, head, '--']);
+    const raw = gitRead(repo, ['diff', '--ignore-submodules=none', '--name-only', '--no-renames', '-z', base, head, '--']);
     return raw === null ? null : raw.split('\0').filter(Boolean);
 }
 /**

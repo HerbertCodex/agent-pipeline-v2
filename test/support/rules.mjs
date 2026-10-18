@@ -48,8 +48,11 @@ export function png(seed, size = 2048) {
   return data;
 }
 
-/** A review record in the store, as `apv review record` writes it, sealed as the hook does (`seal: false`: not sealed). */
-export function seedReview(repo, sha, domain, { critical = 0, high = 0, reviewer = null, captures = [], at = '2026-09-30T10:00:00.000Z', seal = true } = {}) {
+/**
+ * A review record in the store, as `apv review record` writes it, sealed as the hook does (`seal: false`: not sealed).
+ * `delta`: a review of the delta only, `{ from, files }` as `--delta-from` records it.
+ */
+export function seedReview(repo, sha, domain, { critical = 0, high = 0, reviewer = null, captures = [], at = '2026-09-30T10:00:00.000Z', seal = true, delta = null } = {}) {
   const roles = { securite: 'qa-securite', fidelite: 'qa-fidelite', donnees: 'architecte-donnees', rgpd: 'dpo' };
   const dir = join(commonDirOf(repo), 'apv', 'reviews', sha, domain);
   mkdirSync(dir, { recursive: true });
@@ -63,7 +66,7 @@ export function seedReview(repo, sha, domain, { critical = 0, high = 0, reviewer
     return { viewport, theme, file, sha256: digest(data), bytes: data.length };
   });
   const record = { version: 1, id, commit: sha, domain, reviewer: reviewer ?? `apv:${roles[domain]}`, at, findings: { critical, high, medium: 0, low: 0 },
-    report: { file: `${id}-rapport.md`, sha256: digest(report), bytes: report.length }, captures: stored };
+    report: { file: `${id}-rapport.md`, sha256: digest(report), bytes: report.length }, captures: stored, ...(delta ? { delta } : {}) };
   const content = Buffer.from(JSON.stringify(record, null, 2));
   writeFileSync(join(dir, `${id}.json`), content);
   if (seal) writeFileSync(join(dir, `${id}.sig`), `${sign(TEST_KEY, 'review', digest(content))}\n`);

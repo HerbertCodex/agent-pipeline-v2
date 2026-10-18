@@ -7,7 +7,7 @@ import { type DiffRisk, type RiskLevel } from './risk.js';
  * - `securite` is always kept, without exception (no diff, key or option skips it);
  * - another domain is skipped only on a positive proof that it has nothing to read: every changed file is
  *   classified, and none of them touches the domain; a file that no class describes, with a changed content,
- *   keeps every domain (prudence);
+ *   keeps every domain (prudence), as does a file whose content changed and whose patch is not found;
  * - a pure rename (similarity 100 %) or a change that only rewrites import paths does not change content, except
  *   for a migration, whose name is what the migration tool records;
  * - the server code, the sensitive paths of the high lane and the configuration are stronger than the neutral and
@@ -154,6 +154,12 @@ export interface PlanInput {
     sensitive: string[];
     /** Domains the operator forces (`--force`). */
     force: ReviewDomainName[];
+    /**
+     * Whether renames are detected (`-M`, the default: a pure rename is a change without content). False for the delta of a
+     * report (docs/ACCELERATION-LOTS.md, 4: « sans renommages »): a rename is a removal and an addition, so it touches the
+     * perimeter of both paths (security review of #141, A4).
+     */
+    renames?: boolean;
 }
 export declare function planReviews(input: PlanInput): ReviewPlan;
 export {};

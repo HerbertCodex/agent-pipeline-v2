@@ -131,3 +131,19 @@ test('the architecture map: a task may write its « Rôles » block only', async
   assert.equal(out.code, 1);
   assert.deepEqual([out.json().outOfScope, out.json().architectureMap], [['docs/carte-architecture.md'], 'other']);
 });
+
+test('changes of a task (security review of #141, A1): a submodule link ignored by .gitmodules is still a changed file', async t => {
+  const { Git } = await import('../dist/execution/git.js');
+  const { writeFileSync, mkdirSync } = await import('node:fs');
+  const f = fixture(t);
+  writeFileSync(join(f.repo, '.gitmodules'), '[submodule "vendor"]\n\tpath = vendor\n\turl = ./vendor\n\tignore = all\n');
+  mkdirSync(join(f.repo, 'vendor'));
+  git(f.repo, 'add', '-A');
+  git(f.repo, 'update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},vendor`);
+  git(f.repo, 'commit', '-qm', 'vendor');
+  const base = git(f.repo, 'rev-parse', 'HEAD').trim();
+  git(f.repo, 'update-index', '--cacheinfo', `160000,${'2'.repeat(40)},vendor`);
+  git(f.repo, 'commit', '-qm', 'vendor 2');
+  const changes = await new Git().changes(f.repo, base, 'HEAD');
+  assert.deepEqual(changes.files, ['vendor']);
+});

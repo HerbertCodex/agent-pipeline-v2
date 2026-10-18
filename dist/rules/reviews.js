@@ -6,6 +6,7 @@ import { REVIEW_DOMAINS } from '../review/config.js';
 import { gitRead, resolveCommit } from '../run/git-probe.js';
 import { CAPTURE_THEMES, CAPTURE_VIEWPORTS } from './config.js';
 import { anchorKey, sign, signatureValid } from './operator.js';
+import { deltaFiles, isAncestor } from './carry.js';
 /**
  * Review records: what a reviewer agent found at one exact commit, kept in the Git common directory
  * (`<git common dir>/apv/reviews/<commit>/<domaine>/`), outside every worktree and never versioned, with a copy of its
@@ -80,6 +81,7 @@ export function recordReview(common, input) {
     }
     invariant(report.length >= MIN_REPORT_BYTES, 'REVIEW_RECORD', `rapport trop court (${report.length} octets, ${MIN_REPORT_BYTES} au moins) : le rapport complet de la relecture, avec ses constats`);
     invariant(report.toString('utf8').includes(commit.slice(0, REPORT_SHA)), 'REVIEW_RECORD', `le rapport ne cite pas le commit relu (${commit.slice(0, REPORT_SHA)}) : il doit le nommer`);
+    const delta = input.deltaFrom === undefined ? undefined : deltaOf(input.checkout, input.deltaFrom, commit, report.toString('utf8'));
     const images = [];
     for (const c of input.captures) {
         let data;
@@ -115,9 +117,25 @@ export function recordReview(common, input) {
         return { viewport: img.input.viewport, theme: img.input.theme, file, sha256: sha256(img.data), bytes: img.data.length };
     });
     const record = { version: 1, id, commit, domain, reviewer: `apv:${reviewer}`, at: now.toISOString(), findings: { ...input.findings },
-        report: { file: reportFile, sha256: sha256(report), bytes: report.length }, captures };
+        report: { file: reportFile, sha256: sha256(report), bytes: report.length }, captures, ...(delta ? { delta } : {}) };
     writeFileSync(join(dir, `${id}.json`), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
     return record;
+}
+/**
+ * The delta of a review of the delta: `from` resolved, an ancestor of the commit and not the commit (a rebase carries
+ * nothing), cited by the report as the commit is, and the files of the diff between them, sorted.
+ */
+function deltaOf(checkout, value, commit, report) {
+    const from = resolveCommit(checkout, value);
+    if (!from)
+        throw new PipelineError('REVIEW_RECORD', `--delta-from : commit introuvable : ${value}`);
+    invariant(from !== commit, 'REVIEW_RECORD', `--delta-from ${from.slice(0, 12)} : c'est le commit relu ; une relecture de delta part d'un commit antérieur de la branche`);
+    invariant(isAncestor(checkout, from, commit), 'REVIEW_RECORD', `--delta-from ${from.slice(0, 12)} n'est pas un ancêtre de ${commit.slice(0, 12)} : une relecture de delta part d'un commit de la même branche (un rebase ne reporte rien)`);
+    invariant(report.includes(from.slice(0, REPORT_SHA)), 'REVIEW_RECORD', `le rapport ne cite pas le commit de départ du delta (${from.slice(0, REPORT_SHA)}) : il nomme les deux commits`);
+    const read = deltaFiles(checkout, from, commit);
+    if (read.problem !== null)
+        throw new PipelineError('REVIEW_RECORD', `--delta-from ${from.slice(0, 12)} : ${read.problem}`);
+    return { from, files: [...read.files].sort() };
 }
 /** The seal of a record: HMAC of its file with the anchor key, written by the PostToolUse hook, never by the tool. */
 const sealOf = (key, content) => sign(key, 'review', sha256(content));
@@ -186,6 +204,9 @@ function parseRecord(value, commit, domain) {
     if (!r.findings || !count(r.findings.critical) || !count(r.findings.high) || !count(r.findings.medium) || !count(r.findings.low))
         return null;
     if (!r.report || typeof r.report.file !== 'string' || typeof r.report.sha256 !== 'string' || !Array.isArray(r.captures))
+        return null;
+    if (r.delta !== undefined && (!r.delta || typeof r.delta !== 'object' || typeof r.delta.from !== 'string' || !/^[0-9a-f]{40,64}$/.test(r.delta.from)
+        || r.delta.from === commit || !Array.isArray(r.delta.files) || !r.delta.files.every(f => typeof f === 'string')))
         return null;
     return r;
 }

@@ -319,7 +319,7 @@ export async function planRepeat(git: Git, repo: string, bases: { base: string; 
   const base = await mergeBase(git, repo, bases.base, tip);
   const reference = bases.reference ? await mergeBase(git, repo, bases.reference, tip) : null;
   const from = [...new Set([base, ...(reference ? [reference] : [])])];
-  const diffArgs = (mb: string): string[] => ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', mb, ...(head ? [head] : [])];
+  const diffArgs = (mb: string): string[] => ['diff', '--ignore-submodules=none', '--no-ext-diff', '--no-textconv', '--no-renames', mb, ...(head ? [head] : [])];
   // File -> the merge bases it changed from, and where it was at each (a rename or a move by Git keeps its old path).
   const changedFrom = new Map<string, Map<string, string>>();
   // Merge base -> the files renamed since it without any change (same blob, same mode): the paths a test may cite.
@@ -328,7 +328,7 @@ export async function planRepeat(git: Git, repo: string, bases: { base: string; 
     const renames = new Map<string, string>();
     const identical: Rename[] = [];
     // `--raw`: modes and blobs of both sides (a new side read from the working tree has no blob: hashed below).
-    const raw = (await git.exec(repo, ['diff', '--no-ext-diff', '--no-textconv', '-M', '--raw', '--no-abbrev', '-z', mb, ...(head ? [head] : []), '--'])).split('\0');
+    const raw = (await git.exec(repo, ['diff', '--ignore-submodules=none', '--no-ext-diff', '--no-textconv', '-M', '--raw', '--no-abbrev', '-z', mb, ...(head ? [head] : []), '--'])).split('\0');
     for (let i = 0; i < raw.length;) {
       const meta = /^:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) ([A-Z])(\d*)$/.exec(raw[i] ?? '');
       if (!meta) { i++; continue; }

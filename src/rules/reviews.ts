@@ -6,6 +6,7 @@ import { REVIEW_DOMAINS, type ReviewDomainName } from '../review/config.js';
 import { gitRead, resolveCommit } from '../run/git-probe.js';
 import { CAPTURE_THEMES, CAPTURE_VIEWPORTS, type CaptureTheme, type CaptureViewport } from './config.js';
 import { anchorKey, sign, signatureValid } from './operator.js';
+import { deltaFiles, isAncestor } from './carry.js';
 
 /**
  * Review records: what a reviewer agent found at one exact commit, kept in the Git common directory
@@ -40,6 +41,12 @@ export interface ReviewRecord {
   findings: Findings;
   report: StoredFile;
   captures: StoredCapture[];
+  /**
+   * A review of the delta only (docs/ACCELERATION-LOTS.md, 6.3): the reviewer read the change from `from`, an ancestor of
+   * the commit, to the commit, and nothing else; `files` is that diff (`git diff --name-only --no-renames`), sorted. It
+   * counts only on a usable review of the domain at `from` (apv rules check). Absent: a review of the whole change.
+   */
+  delta?: { from: string; files: string[] };
 }
 
 export interface CaptureInput { viewport: CaptureViewport; theme: CaptureTheme; path: string }
@@ -52,6 +59,8 @@ export interface RecordInput {
   findings: Findings;
   report: string;
   captures: CaptureInput[];
+  /** A review of the delta from this commit (`--delta-from`), an ancestor of the commit; absent: the whole change. */
+  deltaFrom?: string;
   now?: Date;
 }
 
@@ -107,6 +116,7 @@ export function recordReview(common: string, input: RecordInput): ReviewRecord {
   try { report = readFileSync(input.report); } catch (error) { throw new PipelineError('REVIEW_RECORD', `rapport illisible (${input.report}) : ${(error as Error).message}`); }
   invariant(report.length >= MIN_REPORT_BYTES, 'REVIEW_RECORD', `rapport trop court (${report.length} octets, ${MIN_REPORT_BYTES} au moins) : le rapport complet de la relecture, avec ses constats`);
   invariant(report.toString('utf8').includes(commit.slice(0, REPORT_SHA)), 'REVIEW_RECORD', `le rapport ne cite pas le commit relu (${commit.slice(0, REPORT_SHA)}) : il doit le nommer`);
+  const delta = input.deltaFrom === undefined ? undefined : deltaOf(input.checkout, input.deltaFrom, commit, report.toString('utf8'));
   const images: { input: CaptureInput; data: Buffer; format: string }[] = [];
   for (const c of input.captures) {
     let data: Buffer;
@@ -137,9 +147,24 @@ export function recordReview(common: string, input: RecordInput): ReviewRecord {
     return { viewport: img.input.viewport, theme: img.input.theme, file, sha256: sha256(img.data), bytes: img.data.length };
   });
   const record: ReviewRecord = { version: 1, id, commit, domain, reviewer: `apv:${reviewer}`, at: now.toISOString(), findings: { ...input.findings },
-    report: { file: reportFile, sha256: sha256(report), bytes: report.length }, captures };
+    report: { file: reportFile, sha256: sha256(report), bytes: report.length }, captures, ...(delta ? { delta } : {}) };
   writeFileSync(join(dir, `${id}.json`), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
   return record;
+}
+
+/**
+ * The delta of a review of the delta: `from` resolved, an ancestor of the commit and not the commit (a rebase carries
+ * nothing), cited by the report as the commit is, and the files of the diff between them, sorted.
+ */
+function deltaOf(checkout: string, value: string, commit: string, report: string): { from: string; files: string[] } {
+  const from = resolveCommit(checkout, value);
+  if (!from) throw new PipelineError('REVIEW_RECORD', `--delta-from : commit introuvable : ${value}`);
+  invariant(from !== commit, 'REVIEW_RECORD', `--delta-from ${from.slice(0, 12)} : c'est le commit relu ; une relecture de delta part d'un commit antérieur de la branche`);
+  invariant(isAncestor(checkout, from, commit), 'REVIEW_RECORD', `--delta-from ${from.slice(0, 12)} n'est pas un ancêtre de ${commit.slice(0, 12)} : une relecture de delta part d'un commit de la même branche (un rebase ne reporte rien)`);
+  invariant(report.includes(from.slice(0, REPORT_SHA)), 'REVIEW_RECORD', `le rapport ne cite pas le commit de départ du delta (${from.slice(0, REPORT_SHA)}) : il nomme les deux commits`);
+  const read = deltaFiles(checkout, from, commit);
+  if (read.problem !== null) throw new PipelineError('REVIEW_RECORD', `--delta-from ${from.slice(0, 12)} : ${read.problem}`);
+  return { from, files: [...read.files].sort() };
 }
 
 /** The seal of a record: HMAC of its file with the anchor key, written by the PostToolUse hook, never by the tool. */
@@ -192,6 +217,8 @@ function parseRecord(value: unknown, commit: string, domain: string): ReviewReco
   if (r.version !== 1 || r.commit !== commit || r.domain !== domain || typeof r.reviewer !== 'string' || typeof r.at !== 'string' || typeof r.id !== 'string') return null;
   if (!r.findings || !count(r.findings.critical) || !count(r.findings.high) || !count(r.findings.medium) || !count(r.findings.low)) return null;
   if (!r.report || typeof r.report.file !== 'string' || typeof r.report.sha256 !== 'string' || !Array.isArray(r.captures)) return null;
+  if (r.delta !== undefined && (!r.delta || typeof r.delta !== 'object' || typeof r.delta.from !== 'string' || !/^[0-9a-f]{40,64}$/.test(r.delta.from)
+    || r.delta.from === commit || !Array.isArray(r.delta.files) || !r.delta.files.every(f => typeof f === 'string'))) return null;
   return r;
 }
 
