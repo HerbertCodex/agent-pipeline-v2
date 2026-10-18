@@ -1,7 +1,7 @@
 import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s, type Infer } from './schema.js';
 import { invariant } from './errors.js';
-export const VERSION = '3.0.0-alpha.24';
+export const VERSION = '3.0.0-alpha.25';
 export const lanes = ['fast', 'standard', 'high'] as const;
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'] as const;
 export type Lane = typeof lanes[number];
@@ -272,6 +272,8 @@ export const repeatStatuses = ['passed', 'failed', 'timed_out', 'cancelled', 'sp
  * scope (`scope` of the receipt); never a success by itself, `apv gates verify` recomputes the scope from the commit.
  */
 export const receiptStatuses = ['passed','failed','timed_out','cancelled','spawn_error','blocked','cached','passed_after_retry','not_required'] as const;
+/** How a receipt `cached` was reused (`reuse.basis`): identical trees, or identical inputs of the check. */
+export const reuseBases = ['tree', 'inputs'] as const;
 /** Most changed files a receipt lists in `scope.files`; beyond, a check is always required. */
 export const MAX_SCOPE_FILES = 2000;
 const digest = s.string(64,64,/^[a-f0-9]{64}$/);
@@ -367,6 +369,22 @@ export const receiptSchema = s.object({
     reason: s.string(1, 2000),
     files: s.default(s.array(s.string(1, 4096), 0, 50), []),
   })),
+  // A receipt `cached` (docs/ACCELERATION-LOTS.md, 5.3): the check was not run at this commit, its success is the one of
+  // the receipt `reusedFrom` (run `fromRun`, commit `fromCommit`), reused because the trees are identical (`basis: tree`)
+  // or because every file the check reads is (`basis: inputs`, digest `inputsDigest`, files ignored by the globs whose
+  // digest is `ignoreDigest`). `environment`: the reuse identity of the environment. `changed`, `files`: the files that
+  // differ between the two commits (none for `tree`). Never trusted: `apv gates verify` recomputes all of it from Git and
+  // the store. Only on a receipt `cached`; a receipt `cached` without it proves nothing.
+  reuse: s.optional(s.object({
+    fromRun: id,
+    fromCommit: sha,
+    basis: s.enum(reuseBases),
+    inputsDigest: digest,
+    ignoreDigest: digest,
+    environment: digest,
+    changed: s.number(0, 10_000_000),
+    files: s.array(s.string(1, 4096), 0, MAX_SCOPE_FILES),
+  })),
 });
 export type GateReceipt = Infer<typeof receiptSchema>;
 export function validateReceipt(value: unknown): GateReceipt {
@@ -375,6 +393,7 @@ export function validateReceipt(value: unknown): GateReceipt {
   if (r.status === 'passed' || r.status === 'cached' || r.status === 'passed_after_retry') invariant(r.exitCode === 0 && r.stdoutHash.length === 64 &&
     r.stderrHash.length === 64,'RECEIPT','Successful receipt requires exit 0 and both stream digests');
   invariant((r.status === 'cached') === (r.reusedFrom !== null),'RECEIPT','Only cache hits may reference an earlier receipt');
+  invariant(!r.reuse || r.status === 'cached', 'RECEIPT', 'Only a cached receipt records a reuse');
   invariant(!r.repeat || !['failed', 'timed_out', 'cancelled', 'spawn_error'].includes(r.repeat.status) || (r.status !== 'passed' && r.status !== 'cached' && r.status !== 'passed_after_retry'),
     'RECEIPT', 'A receipt whose repetition of the changed tests failed is never a success');
   invariant(!r.early || (r.targeted === true && r.stage === 'task' && !r.scope && !r.repeat), 'RECEIPT', 'An early receipt is a targeted receipt of the task stage, never proof of its full check');

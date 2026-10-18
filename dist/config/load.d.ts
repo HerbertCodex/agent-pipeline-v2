@@ -597,6 +597,9 @@ export declare function readSections(raw: unknown): {
     picked: Record<string, unknown>;
     ignored: string[];
 };
+/** Longest pattern of `early.when` (characters), and most wildcards (`*` or `**`) in one: the cost of a match stays small. */
+export declare const MAX_WHEN_LENGTH = 200;
+export declare const MAX_WHEN_WILDCARDS = 16;
 /** Every problem of a configuration document: schema, duplicate ids, unknown dependencies, cycles. */
 export declare function configIssues(raw: unknown): {
     config: ApvConfig | undefined;

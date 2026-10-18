@@ -23,6 +23,8 @@ export interface VerifyOptions {
     reference?: string;
     /** The configuration file read (`--config`), always required by the scope of a check when inside the repository. */
     configFile?: string | null;
+    /** Clock of the age check of reused receipts, in milliseconds (`Date.now()` when absent; tests pass a fixed one). */
+    now?: number;
 }
 /**
  * State of one required check at the commit:
@@ -37,9 +39,26 @@ export interface VerifyOptions {
  *   the command that ran it) and the recomputation from the commit says required; or the command shows such an audit
  *   and the receipt records nothing;
  * - `required`: that latest receipt says the check was not required (`not_required`, scope `skipWhenOnly`), but the scope
- *   recomputed from the commit requires it (a file with an effect, a base equal to the commit, a reference unresolved).
+ *   recomputed from the commit requires it (a file with an effect, a base equal to the commit, a reference unresolved);
+ * - `reuse`: that latest receipt is `cached` (reused from another commit) and its reuse does not check out against Git
+ *   and the store (docs/ACCELERATION-LOTS.md, 5.5): no `reuse` record, origin absent, altered, not `passed` at first pass,
+ *   dirty, targeted, of another configuration or environment, too old, another tree, or a later failure on the same
+ *   tree. It refuses like `missing`, and neither the CI proof nor the reduced lane stands in for it.
  */
-export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'unaudited' | 'required';
+export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'unaudited' | 'required' | 'reuse';
+/** A receipt `cached` retained for a check: where it says it comes from, and whether `verify` proved its reuse. */
+export interface ReuseEvidence {
+    /** True: the reuse is proven (origin read again, trees and digests recomputed); false: state `reuse`, see `reason`. */
+    proven: boolean;
+    /** Why it proves nothing, or how it was proven (« arbre identique »). */
+    reason: string;
+    /** Origin as the receipt declares it (null when the receipt has no `reuse` record). */
+    fromRun: string | null;
+    fromCommit: string | null;
+    basis: 'tree' | 'inputs' | null;
+    /** Identifier of the origin receipt (`reusedFrom`). */
+    origin: string | null;
+}
 export interface GateEvidence {
     gateId: string;
     state: EvidenceState;
@@ -79,6 +98,8 @@ export interface GateEvidence {
         files: string[];
         reason: string;
     } | null;
+    /** The receipt retained is `cached`: its origin and the outcome of its verification; null for any other receipt. */
+    reuse: ReuseEvidence | null;
 }
 export interface VerifyResult {
     repo: string;
@@ -115,6 +136,8 @@ export interface VerifyResult {
     scoped: string[];
     /** Required checks that run `apv web audit --preview --base`: « not required » is recomputed from the commit. */
     auditing: string[];
+    /** Required checks proven by a receipt `cached` whose reuse `verify` proved (origin, tree, digests, age). */
+    reused: string[];
     ok: boolean;
 }
 /** Where a receipt was read: the `.apv/receipts/` of the worktree, or the shared store of the repository. */

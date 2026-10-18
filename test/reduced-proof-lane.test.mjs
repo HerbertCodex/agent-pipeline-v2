@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
@@ -133,7 +134,7 @@ const notRetained = async (p, options, reason) => {
   assert.match(text(preuve), /voie réduite non retenue/);
   assert.match(text(preuve), reason);
   // The full suite is required: the waived checks are named as missing.
-  assert.match(text(preuve), /integration \((?:missing|failed)\)/);
+  assert.match(text(preuve), /integration \((?:missing|failed|reuse)\)/);
   return report;
 };
 
@@ -373,6 +374,49 @@ test('M2 (relecture) : un rouge de rules.ciProof à H, ou un reçu local en éch
   const failed = await runLocal(p, 'integration', { FAIL_GATE: 'integration' });
   assert.notEqual(failed.code, 0);
   await notRetained(p, {}, /reçu local en échec d'un contrôle levé : integration/);
+});
+
+/**
+ * A receipt `cached` at the head for `gate`, later than the receipt `passed` of `run`, without the record of its reuse:
+ * `apv gates verify` says state `reuse` (docs/ACCELERATION-LOTS.md, PR A0).
+ */
+function forgeCached(p, run, gate) {
+  const receipt = JSON.parse(readFileSync(join(run.receiptsDirectory, `${gate}.json`), 'utf8'));
+  const runId = `20261018T120000Z-${randomUUID().slice(0, 8)}`;
+  const dir = join(p.repo, '.apv', 'receipts', runId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'summary.json'), JSON.stringify({ runId, candidateSha: p.head, baseSha: null, dirty: false, stage: 'full', ok: true }));
+  writeFileSync(join(dir, `${gate}.json`), JSON.stringify({ ...receipt, id: randomUUID(), runId, status: 'cached', reusedFrom: receipt.id, startedAt: receipt.startedAt + 1000 }));
+}
+
+test('A0 (relecture sécurité) : un reçu réutilisé non prouvant (état reuse) d\'un contrôle levé n\'est jamais levé par la voie réduite', async t => {
+  const p = project(t);
+  await runLocal(p, 'lint');
+  const run = await runLocal(p, 'integration');
+  assert.equal(run.code, 0, run.stdout);
+  // Control: with its receipt passed, the lane is retained.
+  assert.equal(rule(await rules(p), 'preuve').status, 'ok');
+  forgeCached(p, run.json(), 'integration');
+  const report = await notRetained(p, {}, /reçu local réutilisé non prouvant d'un contrôle levé : integration \(jamais levé par la voie réduite : relancer le contrôle au commit\)/);
+  assert.match(text(rule(report, 'preuve')), /integration \(reuse\)/);
+});
+
+test('A0 (relecture sécurité) : la preuve CI ne remplace jamais un reçu réutilisé non prouvant (état reuse)', async t => {
+  const p = project(t);
+  for (const id of ['check', 'test', 'lint']) assert.equal((await runLocal(p, id)).code, 0);
+  const ci = github(p.head, s => ({ ...s,
+    checkRuns: [...s.checkRuns, { id: 801, name: CI_NAME, head_sha: p.head, status: 'completed', conclusion: 'success', app: { id: 15368, slug: 'github-actions' }, check_suite: { id: 90 } }],
+    runs: { ...s.runs, 90: { id: 9102, head_sha: p.head, head_branch: 'routine/preuve', event: 'workflow_dispatch', workflow_id: 33, run_attempt: 1, status: 'completed', conclusion: 'success' } },
+    jobs: { ...s.jobs, 9102: [{ id: 801, name: CI_NAME, head_sha: p.head, status: 'completed', conclusion: 'success' }] } })).gh;
+  // Control: integration and browser without local receipt, both proven by the CI.
+  const before = rule(await rules(p, { gh: ci, orderLane: null }), 'preuve');
+  assert.equal(before.status, 'ok', text(before));
+  const run = await runLocal(p, 'integration');
+  assert.equal(run.code, 0, run.stdout);
+  forgeCached(p, run.json(), 'integration');
+  const after = rule(await rules(p, { gh: ci, orderLane: null }), 'preuve');
+  assert.equal(after.status, 'refused', text(after));
+  assert.match(text(after), /integration \(reuse\)/);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------

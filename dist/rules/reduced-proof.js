@@ -157,6 +157,11 @@ export async function reducedLane(input) {
     const failed = input.proof.gates.filter(g => g.state === 'failed' && decl.waives.includes(g.gateId)).map(g => g.gateId);
     if (failed.length)
         reasons.push(`reçu local en échec d'un contrôle levé : ${failed.join(', ')} (un rouge observé n'est jamais levé par la voie réduite)`);
+    // Same for a reused receipt that does not check out (state `reuse`, docs/ACCELERATION-LOTS.md 5.5): it blocks like a failure,
+    // never lifted by `waives`; the check is to be run again at the commit.
+    const reused = input.proof.gates.filter(g => g.state === 'reuse' && decl.waives.includes(g.gateId)).map(g => g.gateId);
+    if (reused.length)
+        reasons.push(`reçu local réutilisé non prouvant d'un contrôle levé : ${reused.join(', ')} (jamais levé par la voie réduite : relancer le contrôle au commit)`);
     if (reasons.length)
         return out(reasons);
     // 5.4 (M2): a red check run of rules.ciProof at H is never hidden either.

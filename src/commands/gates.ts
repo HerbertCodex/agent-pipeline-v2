@@ -161,7 +161,7 @@ const TARGETED = 'ciblé';
 const EARLY = 'tôt';
 const SHARED = 'magasin partagé';
 const EVIDENCE: Record<EvidenceState, string> = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu', unrepeated: 'tests modifiés non répétés',
-  unaudited: 'audit web non prouvé', required: 'requis (dispense non prouvée)' };
+  unaudited: 'audit web non prouvé', required: 'requis (dispense non prouvée)', reuse: 'reçu réutilisé non prouvant' };
 
 /** The repetition of a check as shown: the receipt's `repeat`, or the row of `--json`. */
 type RepeatRow = { status: string; base: string | null; files: string[]; importsOnly?: string[]; movedPathsOnly?: string[]; times: number; failures: { test: string; count: number }[] };
@@ -186,7 +186,8 @@ function verifyLines(result: VerifyResult): string[] {
   const state = (g: VerifyResult['gates'][number]): string => {
     const text = g.state === 'failed' ? `${EVIDENCE.failed} (${STATUS[g.status!] ?? g.status})`
       : g.state === 'passed' && g.status === 'passed_after_retry' ? `${STATUS['passed_after_retry']} (${FLAKY})`
-      : g.state === 'passed' && g.status === 'not_required' ? 'non requis (portée recalculée)' : EVIDENCE[g.state];
+      : g.state === 'passed' && g.status === 'not_required' ? 'non requis (portée recalculée)'
+      : g.state === 'passed' && g.reuse?.proven ? `${STATUS['cached']} de ${g.reuse.fromCommit!.slice(0, 12)} (${g.reuse.reason})` : EVIDENCE[g.state];
     return g.proof === 'targeted' ? `${text} (${TARGETED})` : text;
   };
   const lines = [`Vérification (${what}) au commit ${result.commit.slice(0, 12)}${result.base ? ` ; tests ciblés depuis ${result.base.slice(0, 12)}` : ''}`, '',
@@ -207,6 +208,10 @@ function verifyLines(result: VerifyResult): string[] {
   const unaudited = result.gates.filter(g => g.state === 'unaudited');
   if (unaudited.length) lines.push('', 'Audit web non prouvé (apv web audit --preview --base) : le reçu dit « non requis », le recalcul depuis ce commit dit requis :',
     ...unaudited.map(g => `- ${g.gateId} : ${g.web!.reason}${g.web!.files.length ? ` : ${g.web!.files.slice(0, 10).join(', ')}${g.web!.files.length > 10 ? ' ...' : ''}` : ''}`));
+  const reusedRows = result.gates.filter(g => g.reuse);
+  if (reusedRows.length) lines.push('', 'Reçus réutilisés (cached), recontrôlés depuis Git et le magasin (origine, arbre, empreintes, âge) :',
+    ...reusedRows.map(g => `- ${g.gateId} : ${g.reuse!.proven ? 'prouvé' : 'NE PROUVE RIEN'} : ${g.reuse!.reason}` +
+      `${g.reuse!.fromRun ? ` (origine ${g.reuse!.fromRun}/${g.gateId}.json au commit ${g.reuse!.fromCommit!.slice(0, 12)})` : ''}`));
   const scoped = result.gates.filter(g => g.scope);
   if (scoped.length) lines.push('', 'Portée de la preuve (skipWhenOnly), recalculée depuis le commit :',
     ...scoped.map(g => `- ${g.gateId} : ${g.scope!.required ? 'REQUIS, le reçu « non requis » ne prouve rien' : 'non requis'} : ${g.scope!.reason}` +
