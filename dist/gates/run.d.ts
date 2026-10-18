@@ -12,6 +12,22 @@ import { type CleanupRecord, type PortsRecord, type QueueRecord, type SuiteHooks
 export { RECEIPTS_DIR } from './store.js';
 /** Environment identity of a V3 local run; V2 read it from `environment.id`, a field V3 no longer reads. */
 export declare const ENVIRONMENT_ID = "apv3-local";
+/** The stack a check runs on, for its identity of reuse: its declaration, the names of the variables it gives the check, its fingerprint. */
+export interface IdentityStack {
+    resolved: ResolvedStack;
+    variables: readonly string[];
+    /** sha256 of the output of `stacks[].fingerprint`; undefined when the stack declares none, null when it failed or printed nothing. */
+    fingerprint: string | null | undefined;
+}
+/**
+ * The identity of the environment for a reuse (docs/ACCELERATION-LOTS.md, 5.4), recorded in each receipt (`reuseIdentity`).
+ * Without a stack: its `environmentHash`, unchanged. On a stack without `stacks[].fingerprint`: the same environment (the
+ * values of the variables of the stack included) plus the id of the stack and its declaration without its envFile, never
+ * equal from one stack to another. With a fingerprint: the variables the stack gives the check replaced by their names, plus
+ * the fingerprint command and the digest of its output: equal for two stacks that print the same. A fingerprint that failed
+ * or printed nothing: an identity no other ever equals.
+ */
+export declare function reuseIdentityFor(env: NodeJS.ProcessEnv, extra: Record<string, unknown>, environmentHash: string, stack: IdentityStack | null): string;
 export interface GateRunOptions {
     repo: string;
     config: ApvConfig;
@@ -84,12 +100,18 @@ export interface GateRunOptions {
      */
     replay?: 'all' | readonly string[];
     /**
+     * The branch the change goes to (or a commit of it) whose merge base with the commit gives `reuse.ignore` and
+     * `reuse.maxAgeMs` (docs/ACCELERATION-LOTS.md, 5.5.2): `apv gates run` passes the base of its checks (`--against`, else
+     * `--base`). Absent: `reference`, then `base`, then the default branch of the remote.
+     */
+    reuseReference?: string | null;
+    /**
      * `apv stack batch`: the copy of the suite is a fresh worktree, prepared by `batch.setup` whenever a check runs there (not
      * only for a package-lock.json without node_modules), and never when every check is reused (A4).
      */
     batchSetup?: boolean;
 }
-/** A check reused at an identical tree: the receipt `cached` written, its origin and why. */
+/** A check reused at an identical tree or with identical inputs: the receipt `cached` written, its origin and why. */
 export interface ReusedCheck {
     gateId: string;
     /** Identifier of the receipt `cached` written in this run. */
@@ -98,8 +120,11 @@ export interface ReusedCheck {
     fromCommit: string;
     /** Identifier of the origin receipt (`reusedFrom`). */
     origin: string;
-    basis: 'tree';
-    /** The stack of the environment the origin ran in (`--stacks`), or null. */
+    /** `tree`: identical trees (A1); `inputs`: every file changed is one the check ignores (`reuse.ignore` read at the base, A2). */
+    basis: 'tree' | 'inputs';
+    /** Files changed since the origin (all ignored by the check); 0 for `tree`. */
+    changed: number;
+    /** The stack of the environment it is reused for (`--stacks`; the origin may have run on another one with the same fingerprint), or null. */
     stack: string | null;
     reason: string;
 }

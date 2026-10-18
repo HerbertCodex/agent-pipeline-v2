@@ -5,7 +5,8 @@ import { gatesConfigHash, stageGates } from './run.js';
 import { mergeBase, repeatProofGap, resolveReference } from './repeat.js';
 import { planScope } from './proof-scope.js';
 import { sharedStore } from './store.js';
-import { checkReuse, latest, readLocal, readShared, reuseContext } from './reuse-proof.js';
+import { checkReuse, latest, readLocal, readShared, reuseContext, reuseReason } from './reuse-proof.js';
+import { designDir } from '../design/config.js';
 import { auditBase, changedBetween, webAuditGate, webImpact } from '../web/impact.js';
 /**
  * Whether the receipts prove that every required check passed on this exact commit, on a clean tree and with
@@ -124,7 +125,13 @@ export async function verifyGates(options) {
     };
     const now = options.now ?? Date.now();
     // The check of a receipt `cached`: the very one `apv gates run` passes before writing one (src/gates/reuse-proof.ts).
-    const reuseCheck = reuseContext({ git, repo, commit, configHash, now, store, local });
+    let design = null;
+    try {
+        design = designDir(options.config.design);
+    }
+    catch { /* The default design folder stays an input anyway. */ }
+    const reuseCheck = reuseContext({ git, repo, commit, configHash, now, store, local, reference: options.reuseReference ?? options.reference ?? null,
+        configFile: options.configFile ?? null, design });
     const gates = [];
     const near = [];
     for (const gateId of required) {
@@ -176,7 +183,7 @@ export async function verifyGates(options) {
                 continue;
             }
             proven = checked.origin;
-            reuse = { proven: true, reason: 'arbre identique', ...about };
+            reuse = { proven: true, reason: reuseReason(checked), ...about };
         }
         // `success` never counts a receipt `cached` by itself: here it counts once its reuse is proven just above.
         const succeeded = reuse?.proven === true || success(last.receipt);

@@ -339,6 +339,7 @@ export declare function targetedQaContext(context: {
             readonly reason: string;
             readonly files: string[];
         } | undefined;
+        reuseIdentity: string | undefined;
         reuse: {
             readonly fromRun: string;
             readonly fromCommit: string;

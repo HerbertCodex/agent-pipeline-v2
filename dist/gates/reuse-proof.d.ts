@@ -1,5 +1,7 @@
-import { type GateReceipt } from '../domain/contracts.js';
+import { type GateReceipt, type ReuseSettings } from '../domain/contracts.js';
 import type { Git } from '../execution/git.js';
+import { type ApvConfig } from '../config/load.js';
+import { type InputsRule } from './reuse.js';
 /**
  * What proves the reuse of a green receipt at another commit (docs/ACCELERATION-LOTS.md, 5.2 and 5.5), in one place for
  * the two sides: `apv gates run`, which writes a receipt `cached` only when this check accepts it, and `apv gates verify`,
@@ -50,14 +52,24 @@ export declare function sharedRunReceipts(store: string, runId: string): {
 };
 /** The later of two receipts: by start, then by run identifier. */
 export declare const latest: (a: Found, b: Found) => Found;
+/** The identity of the environment a receipt records for a reuse (5.4): `reuseIdentity`, or `environmentHash` on older ones. */
+export declare const reuseIdentityOf: (receipt: GateReceipt) => string;
 /** Whether an argv runs `apv dast` (`dast run`, or `dast` right after the executable of the tool). */
 export declare function runsDast(argv: readonly string[]): boolean;
 /**
  * Whether an argv runs a dependency audit that reads the network (`npm audit`, `pnpm audit`, `yarn audit`, `yarn npm audit`,
- * `bun audit`, `outdated`, or `audit-ci`, `better-npm-audit`, `osv-scanner`, `snyk`): its result changes with the advisory
- * database, never with the tree alone (relecture sécurité de A1, M3).
+ * `bun audit`, `outdated`, or `audit-ci`, `better-npm-audit`, `osv-scanner`, `snyk`, `npm-check-updates` and `ncu`,
+ * `npm-check`): its result changes with the advisory database or the registry, never with the tree alone (relecture
+ * sécurité de A1, M3, and of its delta, F-D2).
  */
 export declare function runsNetworkAudit(argv: readonly string[]): boolean;
+/**
+ * Whether an argv asks git for the history: the first argument after `git` that is not one of its global options
+ * (`--no-pager`, `-P`, `--bare`, `-C <dir>`, `-c <k=v>`, `--git-dir <dir>`...) is a subcommand of GIT_HISTORY (F-D2).
+ */
+export declare function runsGitHistory(argv: readonly string[]): boolean;
+/** The scripts of the package.json files of a commit, by name: every body of that name (root first), as `projectScripts` reads them. */
+export type ProjectScripts = Readonly<Record<string, string | readonly string[]>>;
 /**
  * Why a check is never reused, whatever its receipts say (docs/ACCELERATION-LOTS.md, 5.2 A3), or null: declared
  * `reuse: false` by the project, or a command that runs `apv web audit` or `apv dast` (they measure a state outside the
@@ -66,20 +78,30 @@ export declare function runsNetworkAudit(argv: readonly string[]): boolean;
  * script or in a script of package.json it runs (`scripts`, read at the commit): a dependency audit that reads the network
  * (`npm audit` and equivalents), `apv dast`, `apv web audit`, Git asked for the history (externalState, a safety net).
  */
-export declare function neverReused(gate: ReusableGate, scripts?: Readonly<Record<string, string>>): string | null;
-/** The scripts of the package.json of `commit` (root of the tree), only the string ones; none when absent or unreadable. */
-export declare function projectScripts(git: Git, repo: string, commit: string): Promise<Record<string, string>>;
-/** What the reuse reads of a declared check: its id, its commands, its `reuse` field. */
+export declare function neverReused(gate: ReusableGate, scripts?: ProjectScripts): string | null;
+/**
+ * The scripts of every package.json of the tree of `commit` (the root first, then each workspace or sub-package, at most
+ * MAX_PACKAGES), only the string ones, by name; none when absent or unreadable. A command that runs a script of another
+ * package (`npm --prefix dir`, `pnpm -C dir`, `--filter`, `-w`) finds it among them (F-D2).
+ */
+export declare function projectScripts(git: Git, repo: string, commit: string): Promise<Record<string, string[]>>;
+/** What the reuse reads of a declared check: its id, its commands, its `reuse` field, its test paths and early checks. */
 export interface ReusableGate {
     id?: string;
     command: readonly string[];
-    reuse?: boolean | undefined;
+    reuse?: boolean | ReuseSettings | undefined;
     retryFailed?: {
         command: readonly string[];
+    } | undefined;
+    testPaths?: readonly string[];
+    repeatChanged?: {
+        paths: readonly string[];
     } | undefined;
 }
 /** Whether the commands of a check read the base of their run (`{{baseSha}}`): its result then depends on that base too. */
 export declare const readsBase: (gate: ReusableGate) => boolean;
+/** `reuse` of a check as an object (A2), or null (`false`, absent). */
+export declare const reuseSettingsOf: (gate: ReusableGate | undefined) => ReuseSettings | null;
 /**
  * Every run of the shared store that can say something about one tree, read once for all the checks of a verification or
  * of a run of the checks. `block`: why a later failure on this tree cannot be excluded (null: it can).
@@ -96,6 +118,14 @@ export interface TreeScan {
     files: number;
     ms: number;
 }
+/** Where the files a check ignores are read (A2): the merge base of the commit and its target, and its configuration. */
+export type ReuseBase = {
+    mergeBase: string;
+    reference: string;
+    config: ApvConfig | null;
+} | {
+    reason: string;
+};
 /** What a check of reuse reads: the commit judged, the configuration of the checks, the clock, the receipts. */
 export interface ReuseContext {
     git: Git;
@@ -107,34 +137,105 @@ export interface ReuseContext {
     /** Shared store of the repository (`<git common dir>/apv/receipts`). */
     store: string;
     local: LocalReceipts;
+    /**
+     * The branch the change goes to, or a commit of it (`apv stack batch`: its target; `apv gates run` and `verify`: `--against`,
+     * else `--base`): `reuse.ignore` and `reuse.maxAgeMs` are read at its merge base with the commit. Absent or null: the
+     * default branch of the remote (origin/HEAD, origin/main, origin/master); none, and no reuse by inputs is proven.
+     */
+    reference?: string | null;
+    /** The configuration file read (absolute, `<sha>:<path>`, or relative to the repository): always an input of every check. */
+    configFile?: string | null;
+    /** The design folder of the configuration judged: always an input of every check. */
+    design?: string | null;
     /** Scans of the store by tree, made once per context. */
     scans: Map<string, Promise<TreeScan>>;
-    /** Scripts of the package.json of the commit judged (neverReused), read once per context. */
-    scripts?: Promise<Record<string, string>>;
+    /** Scripts of the package.json files of the commit judged (neverReused), read once per context. */
+    scripts?: Promise<Record<string, string[]>>;
+    /** The base where `reuse.ignore` is read, once per context. */
+    base?: Promise<ReuseBase>;
+    /** Digests of the inputs of a check by rule and tree, once per context. */
+    digests?: Map<string, Promise<string | null>>;
+    /** Every receipt of the store and of the worktree, read once per context for the reuses by inputs. */
+    all?: Promise<StoreRead>;
 }
-export declare function reuseContext(input: Omit<ReuseContext, 'scans' | 'scripts'>): ReuseContext;
+export declare function reuseContext(input: Omit<ReuseContext, 'scans' | 'scripts' | 'base' | 'digests' | 'all'>): ReuseContext;
+/** The merge base of the commit with its target (ReuseContext.reference) and the configuration there, once per context. */
+export declare function reuseBase(ctx: ReuseContext): Promise<ReuseBase>;
+/**
+ * The oldest origin a check reuses (5.5.1: `reuse.maxAgeMs` read at the base): 24 h, or less when the check declares less;
+ * more only when the check declares it both at the base and in the configuration judged (the smaller of the two).
+ */
+export declare function maxAgeOf(ctx: ReuseContext, gate: ReusableGate | undefined): Promise<number>;
+/**
+ * The files a check does not read, as the merge base with the target declares them (5.2 A2, 5.5.2): the check must declare
+ * `reuse.ignore` there, with the very definition judged (command, test paths, reuse...: a PR that changes it, widens its
+ * globs or adds the check never uses them for its own proof). Kept inputs whatever the globs: NEVER_IGNORED, the configuration
+ * file read, the design folders, the test paths, `repeatChanged.paths` and the files the commands name, at the base and now.
+ */
+export declare function inputsRuleOf(ctx: ReuseContext, gate: ReusableGate | undefined): Promise<{
+    rule: InputsRule;
+    mergeBase: string;
+} | {
+    reason: string;
+}>;
 /** The scan of the store for `tree`, made once per context. */
 export declare function treeScan(ctx: ReuseContext, tree: string): Promise<TreeScan>;
+/**
+ * Every receipt of the worktree and of the shared store, for the reuses by inputs (A2): the intact runs read in full; the runs
+ * that cannot be trusted (manifest unreadable: `block`; altered, or whose receipts claim another commit than their manifest:
+ * `doubtful`, with every commit they name) kept apart, because a failure on the same inputs could hide there.
+ */
+export interface StoreRead {
+    found: Found[];
+    doubtful: {
+        runId: string;
+        commits: string[];
+    }[];
+    block: string | null;
+    runs: number;
+    files: number;
+    ms: number;
+}
+/** How a receipt `cached` was proven: its basis and, for a reuse by inputs, the files changed (all ignored by the check). */
+export interface ReuseProof {
+    origin: Found;
+    basis: 'tree' | 'inputs';
+    changed: number;
+    scan: {
+        runs: number;
+        files: number;
+        ms: number;
+    };
+}
+/** The reason `verify` and `apv gates run` give for a proven reuse. */
+export declare const reuseReason: (proof: {
+    basis: "tree" | "inputs";
+    changed: number;
+}) => string;
 /**
  * Whether a receipt `cached` proves its check at `ctx.commit` (docs/ACCELERATION-LOTS.md, 5.5). Nothing of it is trusted:
  * the check must not be one that is never reused (`gate`, from the configuration judged); its origin is read again (the
  * worktree when it has the run, else the run of the shared store, intact), must be the same check, `passed` at first pass
- * (never `cached`: no chain), complete, on a clean tree, of the current configuration, of the same environment, younger
- * than the maximum age, with the same output digests, without a record of `apv web audit`; the trees of both commits are
- * recomputed (`basis: tree`) and so is the digest of the inputs; a command that reads `{{baseSha}}` needs the same base and
- * a merge base of the same tree on both sides; the store is scanned for the tree (TreeScan), and no receipt of the check on
- * the same tree, later than the origin, failed: complete, targeted or of one of its early checks. The environment compared
- * includes the local state of the copy (localStateDigest: node_modules, .env*). Returns the origin, or why the receipt proves nothing.
+ * (never `cached`: no chain), complete, on a clean tree, of the current configuration, of the same reuse identity of the
+ * environment, younger than the maximum age (`reuse.maxAgeMs` read at the base, maxAgeOf), with the same output digests,
+ * without a record of `apv web audit`; a command that reads `{{baseSha}}` needs the same base and a merge base of the same
+ * tree on both sides. `basis: tree`: the trees of both commits are recomputed and so is the digest of the inputs; the store
+ * is scanned for the tree (TreeScan). `basis: inputs` (A2): the check declares `reuse.ignore` at the merge base with the
+ * target, with the definition judged (inputsRuleOf); the inputs of both commits, recomputed with those globs, are equal and
+ * equal to `inputsDigest`, no symbolic link is among them, the files changed are those declared; the whole store is read.
+ * Either way, no receipt of the check later than the origin on the same tree or inputs failed: complete, targeted or of one of
+ * its early checks. The environment compared includes the local state of the copy (localStateDigest, copyStateDigest).
+ * Returns the proof, or why the receipt proves nothing.
  */
-export declare function checkReuse(ctx: ReuseContext, gate: ReusableGate | undefined, cached: Found): Promise<{
-    origin: Found;
-    scan: TreeScan;
-} | {
+export declare function checkReuse(ctx: ReuseContext, gate: ReusableGate | undefined, cached: Found): Promise<ReuseProof | {
     reason: string;
 }>;
 /** The environment a check would run in now, for one stack (null: none), as its receipt would record it. */
 export interface ReuseEnvironment {
+    /** `environmentHash` the receipt would carry. */
     hash: string;
+    /** `reuseIdentity` the receipt would carry (5.4): compared to the origin's. */
+    identity: string;
     stack: string | null;
 }
 /** The receipt `cached` a run may write for a check: its origin, the record of the reuse, the stack of its environment. */
@@ -142,15 +243,18 @@ export interface ReuseChoice {
     origin: Found;
     reuse: NonNullable<GateReceipt['reuse']>;
     stack: string | null;
-    scan: TreeScan;
+    identity: string;
+    changed: number;
 }
 /**
- * The origin `apv gates run` may reuse for `gate` at `ctx.commit` (docs/ACCELERATION-LOTS.md, A1), or why none:
- * the latest receipt of the check on an identical tree (worktree, then shared store, intact), at the same configuration,
- * in one of the environments the check would run in now (`environments`: its variables, executable, stack), `passed` at
- * first pass, clean, complete, younger than the maximum age minus REUSE_AGE_MARGIN_MS, without a record of `apv web audit`.
- * The receipt about to be written is then checked by `checkReuse`, the very check `apv gates verify` runs: a receipt it
- * would refuse is never written. `candidate`: false when no receipt of an identical tree was even considered (nothing to say).
+ * The origin `apv gates run` may reuse for `gate` at `ctx.commit` (docs/ACCELERATION-LOTS.md, A1 and A2), or why none. First
+ * at an identical tree (A1): the latest receipt of the check on an identical tree (worktree, then shared store, intact), at
+ * the same configuration, in one of the environments the check would run in now (`environments`: its variables, executable,
+ * stack, compared by their reuse identity), `passed` at first pass, clean, complete, younger than the maximum age minus
+ * REUSE_AGE_MARGIN_MS, without a record of `apv web audit`. Then, for a check that declares `reuse.ignore` at the base
+ * (A2), the latest such receipt at a commit whose inputs have the same digest. The receipt about to be written is checked
+ * by `checkReuse`, the very check `apv gates verify` runs: a receipt it would refuse is never written. `candidate`: false
+ * when no receipt was even considered (nothing to say).
  */
 export declare function findOrigin(ctx: ReuseContext, gate: ReusableGate & {
     id: string;

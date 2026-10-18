@@ -1,7 +1,7 @@
 import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s } from './schema.js';
 import { invariant } from './errors.js';
-export const VERSION = '3.0.0-alpha.26';
+export const VERSION = '3.0.0-alpha.27';
 export const lanes = ['fast', 'standard', 'high'];
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'];
 /**
@@ -76,6 +76,18 @@ export const earlyCheckSchema = s.object({
     resources: s.default(s.array(id), []),
     lock: s.optional(lockSchema),
 });
+/** Most globs of `reuse.ignore`, longest glob and most wildcards (`*` or `**`) in one: each path of two trees is compared to them. */
+export const MAX_REUSE_IGNORE = 100;
+export const MAX_REUSE_GLOB_LENGTH = 200;
+export const MAX_REUSE_GLOB_WILDCARDS = 16;
+/** Bounds of `reuse.maxAgeMs`: 6 h (a reuse must stay verifiable 4 h after it is written) to 7 days. */
+export const MIN_REUSE_MAX_AGE_MS = 21_600_000;
+export const MAX_REUSE_MAX_AGE_MS = 604_800_000;
+/** `reuse` of a check as an object (docs/ACCELERATION-LOTS.md, 5.2 A2): the files it never reads, the oldest origin it reuses. */
+export const reuseSettingsSchema = s.object({
+    ignore: s.optional(s.array(s.string(1, MAX_REUSE_GLOB_LENGTH), 1, MAX_REUSE_IGNORE)),
+    maxAgeMs: s.optional(s.number(MIN_REUSE_MAX_AGE_MS, MAX_REUSE_MAX_AGE_MS)),
+});
 export const gateSchema = s.object({
     id, command: argv,
     // Reviewed coverage labels, never inferred from a successful exit code or a gate name.
@@ -119,11 +131,15 @@ export const gateSchema = s.object({
     // Early checks of a full check, run by the task stage when the change touches their scope: they add a check, never
     // remove one; the full suite stays required. Optional, never defaulted: absent, parsing and hashing are unchanged.
     early: s.optional(s.array(earlyCheckSchema, 1, 20)),
-    // Reuse of a green receipt of an identical tree (docs/ACCELERATION-LOTS.md, part A): `false` = never reused, always run
-    // (a check that reads a state outside the repository: an advisory database, the network, the time). Absent: reused
-    // at an identical tree when its receipt checks out, except a command that runs `apv web audit` or `apv dast`.
-    // Only `false` is accepted for now (the loader refuses `true`). Optional, never defaulted: absent, hashing is unchanged.
-    reuse: s.optional(s.boolean()),
+    // Reuse of a green receipt (docs/ACCELERATION-LOTS.md, part A): `false` = never reused, always run (a check that reads a
+    // state outside the repository: an advisory database, the network, the time, an ignored file it does not regenerate).
+    // Absent: reused at an identical tree when its receipt checks out, except a command that runs `apv web audit` or `apv dast`.
+    // An object (A2): `ignore`, the files the check never reads (form by exclusion: every other file, a new one included, is an
+    // input), read at the merge base with the target, never from the change; `maxAgeMs`, the oldest origin reused (24 h when
+    // absent), read at the base too. The loader refuses `true`, an empty object, and a glob that covers a file never ignorable
+    // (configuration, dependencies, build, test and run settings, CI, migrations, scripts, .env*, the check's own test paths).
+    // Optional, never defaulted: absent, hashing is unchanged.
+    reuse: s.optional(s.union(s.boolean(), reuseSettingsSchema)),
 });
 /** Stage of a check; absent means `task`. */
 export const gateStage = (gate) => gate.stage ?? 'task';
@@ -358,6 +374,11 @@ export const receiptSchema = s.object({
     // digest is `ignoreDigest`). `environment`: the reuse identity of the environment. `changed`, `files`: the files that
     // differ between the two commits (none for `tree`). Never trusted: `apv gates verify` recomputes all of it from Git and
     // the store. Only on a receipt `cached`; a receipt `cached` without it proves nothing.
+    // The identity of the environment for a reuse (docs/ACCELERATION-LOTS.md, 5.4), recorded by the run that executed the
+    // check: `environmentHash` without a stack; on a stack, its id and declaration (without its envFile) join the identity,
+    // and with `stacks[].fingerprint`, the variables of the stack are replaced by its fingerprint. Absent on older receipts:
+    // `environmentHash` stands for it.
+    reuseIdentity: s.optional(digest),
     reuse: s.optional(s.object({
         fromRun: id,
         fromCommit: sha,
