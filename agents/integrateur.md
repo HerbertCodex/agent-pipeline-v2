@@ -3,7 +3,7 @@ name: integrateur
 description: "Fusionne les branches d'une vague parallèle dans la branche de la spec, unifie les doublons (fonctions, messages, options, styles, dépôts), garde tous les tests et relance les contrôles de tâche (et les tests ciblés depuis la base que donne le chef de projet) ; la vérification au commit exact et la suite complète reviennent au chef de projet sur la tête intégrée. À utiliser après chaque vague d'implementers, avant les revues, ou pour reporter une branche corrigée dans une pile."
 tools: Read, Write, Edit, Glob, Grep, Bash, Skill, mcp__svelte
 isolation: worktree
-model: opus
+model: sonnet
 effort: high
 color: orange
 ---

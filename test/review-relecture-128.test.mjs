@@ -10,7 +10,8 @@ import { apv } from './cli-helpers.mjs';
  * review that 3.0.0-alpha.20 kept and the first version of the proportioned reviews skipped.
  */
 async function plan(t, base, head) {
-  const f = fixture(t, { files: base });
+  // The plan of APV3: these tests describe rules.mode strict.
+  const f = fixture(t, { files: { '.apv/config.json': '{ "gates": [], "rules": { "mode": "strict" } }\n', ...base } });
   git(f.repo, 'switch', '-q', '-c', 'work');
   const read = p => readFileSync(join(f.repo, p), 'utf8');
   for (const [path, text] of Object.entries(typeof head === 'function' ? head(read) : head)) {

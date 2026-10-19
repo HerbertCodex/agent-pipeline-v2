@@ -27,7 +27,7 @@ const FILES = {
   'src/routes/tests/+server.ts': 'export const GET = () => new Response("ok");\n',
   'vitest.config.ts': "export default { test: { exclude: [] } };\n",
   'eslint.config.js': 'export default [];\n',
-  '.apv/config.json': '{ "gates": [] }\n',
+  '.apv/config.json': '{ "gates": [], "rules": { "mode": "strict" } }\n',
   'fixtures/users.ts': 'export const users = [];\n',
   'tests/e2e/auth.spec.ts': "import { test } from '@playwright/test';\ntest('x', async () => {});\n",
   'src/lib/server/auth/session.test.ts': "import { test } from 'vitest';\ntest('s', () => {});\n",
@@ -37,7 +37,7 @@ const FILES = {
 
 function project(t, config) {
   const f = fixture(t, { files: FILES });
-  if (config !== undefined) { write(f.repo, '.apv/config.json', config); git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'config'); }
+  if (config !== undefined) { write(f.repo, '.apv/config.json', { ...config, rules: { mode: 'strict', ...config.rules } }); git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'config'); }
   git(f.repo, 'switch', '-q', '-c', 'work');
   const file = p => join(f.repo, p);
   return {

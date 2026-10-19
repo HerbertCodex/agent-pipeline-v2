@@ -49,7 +49,7 @@ const METHOD_SKILLS = ['architecture-donnees', 'chef-de-projet', 'design-artefac
 test('manifests parse and describe the apv plugin', () => {
   const plugin = JSON.parse(read('.claude-plugin/plugin.json'));
   assert.equal(plugin.name, 'apv');
-  assert.equal(plugin.version, '3.0.0-alpha.27');
+  assert.equal(plugin.version, '4.0.0-alpha.1');
   assert.equal(plugin.license, 'MIT');
   assert.match(read('LICENSE'), /^MIT License/);
   assert.equal(plugin.repository, 'https://github.com/HerbertCodex/agent-pipeline-v2');
@@ -67,7 +67,7 @@ test('the eleven agents have a valid frontmatter and least-privilege tools', () 
     assert.equal(fields.name, name);
     assert.ok(fields.description.length >= 80 && fields.description.length <= 1024, `${name}: description`);
     assert.equal(fields.effort, 'high', `${name}: effort`);
-    assert.equal(fields.model, 'opus', `${name}: model`);
+    assert.equal(fields.model, name === 'architecte-donnees' ? 'opus' : 'sonnet', `${name}: model`);
     assert.ok(!('permissionMode' in fields) && !('hooks' in fields) && !('mcpServers' in fields), `${name}: fields ignored for plugin agents`);
     const tools = list(fields.tools);
     assert.ok(tools.includes('Read'), `${name}: tools`);

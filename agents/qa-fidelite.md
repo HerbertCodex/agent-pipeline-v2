@@ -2,7 +2,7 @@
 name: qa-fidelite
 description: "Revue de fidélité indépendante et en lecture seule d'une branche à livrer, sur une copie isolée (captures à 390 et 1280 px en thèmes clair et sombre comparées à la maquette validée, comparaison programmatique des textes, grille d'accessibilité, états, animations et mouvement réduit, test des 5 secondes avec la personne cible, bonnes pratiques du framework). À utiliser après intégration et avant chaque PR qui touche l'interface, en parallèle des autres revues ; ne corrige rien."
 tools: Read, Grep, Glob, Bash, Skill, mcp__svelte
-model: opus
+model: sonnet
 effort: high
 color: yellow
 ---

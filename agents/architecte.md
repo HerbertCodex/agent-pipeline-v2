@@ -2,7 +2,7 @@
 name: architecte
 description: "Transforme une spec validée en plan d'exécution (graphe de dépendances, vague « fondations » pour les modules partagés, vagues parallèles, fichiers possédés par tâche et placés selon les conventions du projet, points d'extension, ressources partagées et verrous). À utiliser après la validation d'une spec et avant de lancer les implementers, ou quand une vague doit être re-découpée ; ne code pas l'application."
 tools: Read, Grep, Glob, Bash, Write, Edit, Skill
-model: opus
+model: sonnet
 effort: high
 color: purple
 ---

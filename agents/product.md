@@ -2,7 +2,7 @@
 name: product
 description: "Rédige ou met à jour la spec APV d'une fonctionnalité (tâches, chemins autorisés, critères d'acceptation, plan de sécurité) à partir de la demande de l'opérateur, du registre des décisions, de la maquette validée et du dépôt. À utiliser par le chef de projet une seule fois par spec, avant tout code ; ne code pas l'application."
 tools: Read, Grep, Glob, Bash, Write, Edit, WebFetch, Skill
-model: opus
+model: sonnet
 effort: high
 color: blue
 ---

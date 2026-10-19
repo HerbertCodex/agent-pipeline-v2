@@ -4,12 +4,12 @@
     "name": "Herbert Codex",
     "url": "https://github.com/HerbertCodex"
   },
-  "description": "Catalogue du plugin Agent Pipeline V3 (apv).",
+  "description": "Catalogue du plugin Agent Pipeline V4 (apv).",
   "plugins": [
     {
       "name": "apv",
       "source": "./",
-      "description": "Agent Pipeline V3 : chef de projet, sous-agents spécialisés, vagues parallèles, revues indépendantes et garde-fous.",
+      "description": "Agent Pipeline V4 : chef de projet, sous-agents spécialisés, vagues parallèles, revues indépendantes et garde-fous.",
       "author": {
         "name": "Herbert Codex",
         "url": "https://github.com/HerbertCodex"

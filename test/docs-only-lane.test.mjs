@@ -51,7 +51,7 @@ function project(t, { base = {}, change = {}, executable = [], remove = [], gitl
   const repo = join(root, 'repo');
   git(root, 'clone', '-q', origin, repo);
   git(repo, 'switch', '-q', '-c', 'main');
-  put(repo, '.apv/config.json', { name: 'essai', gates, ...config });
+  put(repo, '.apv/config.json', { name: 'essai', gates, ...config, rules: { mode: 'strict', ...config.rules } });
   put(repo, 'README.md', 'projet\n');
   for (const [path, value] of Object.entries(base)) put(repo, path, value);
   git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'base'); git(repo, 'push', '-q', 'origin', 'main');

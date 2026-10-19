@@ -413,7 +413,7 @@ test('revues: copies are absolute paths; the security review reads the scan repo
   assert.match(noScan, /Scan dynamique : scan non déclaré par le projet \(review\.dast\)\. Ne lance pas Docker et ne cherche aucun détour : note le scan dynamique « non vérifié »/);
 });
 
-test('revues: the domains skipped on the plan of apv review plan come back with their reason; securite is never skipped', async () => {
+test('revues: the domains skipped on the plan of apv review plan come back with their reason, securite too (light mode)', async () => {
   const { run } = load('revues.js');
   const plain = runtime((prompt, opts) => ({ domain: opts.label, commit: 'x', findings: [], notVerified: [], cleanup: 'fait', summary: 'ok' }));
   const skipped = [{ domain: 'fidelite', reason: 'rien à relire : aucun fichier d\'interface' }, { domain: 'rgpd', reason: 'rien à relire : aucune migration' }];
@@ -424,8 +424,7 @@ test('revues: the domains skipped on the plan of apv review plan come back with 
   assert.deepEqual((await run(...runtime(() => null).hooks, REVIEW_ARGS)).skipped, [], 'no plan: nothing skipped');
   const hooks = () => runtime(() => null).hooks;
   const only = REVIEW_ARGS.reviews.slice(1);
-  await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, reviews: only, skipped: [{ domain: 'securite', reason: 'rien' }] }), /jamais sautée/);
-  await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, reviews: REVIEW_ARGS.reviews.slice(1, 2), skipped: [{ domain: 'rgpd', reason: 'rien' }] }), /securite manque/);
+  assert.deepEqual((await run(...hooks(), { ...REVIEW_ARGS, reviews: only, skipped: [{ domain: 'securite', reason: 'niveau 1 : code applicatif' }] })).skipped.map(s => s.domain), ['securite']);
   await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, skipped: [{ domain: 'rgpd', reason: 'rien' }] }), /à la fois revu et sauté/);
   await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, reviews: REVIEW_ARGS.reviews.slice(0, 1), skipped: [{ domain: 'rgpd' }] }), /raison/);
   await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, reviews: REVIEW_ARGS.reviews.slice(0, 1), skipped: [{ domain: 'concurrence', reason: 'x' }] }), /inconnu/);

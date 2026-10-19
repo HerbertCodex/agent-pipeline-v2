@@ -56,18 +56,15 @@ for (const review of input.reviews) {
   seen.add(review.domain)
 }
 
-// Domains the lead skipped on the plan of `apv review plan` (securite never): kept with their reason in the result.
+// Domains the lead skipped on the plan of `apv review plan` (securite too, at the levels 0 and 1 of the light mode): kept with their reason.
 const SKIPPED = Array.isArray(input.skipped) ? input.skipped : []
 const DEFAULTS = ['securite', 'fidelite', 'donnees', 'rgpd']
 for (const skip of SKIPPED) {
-  if (!skip || !DEFAULTS.includes(skip.domain)) throw new Error('Domaine sauté inconnu : ' + (skip && skip.domain) + ' (fidelite, donnees, rgpd).')
-  if (skip.domain === 'securite') throw new Error('La revue securite n\'est jamais sautée : retire-la de skipped.')
+  if (!skip || !DEFAULTS.includes(skip.domain)) throw new Error('Domaine sauté inconnu : ' + (skip && skip.domain) + ' (securite, fidelite, donnees, rgpd).')
   if (typeof skip.reason !== 'string' || !skip.reason.trim()) throw new Error('Le domaine sauté ' + skip.domain + ' a besoin de sa raison (reason, celle de apv review plan).')
   if (seen.has(skip.domain)) throw new Error('Domaine à la fois revu et sauté : ' + skip.domain)
   seen.add(skip.domain)
 }
-// A plan that skips domains never skips the security review: it runs in the same launch.
-if (SKIPPED.length && !input.reviews.some(r => r.domain === 'securite')) throw new Error('Des domaines sont sautés mais la revue securite manque : elle est toujours lancée.')
 
 const APV = typeof input.apv === 'string' && input.apv ? input.apv : 'node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"'
 // The dynamic scan (`apv dast run`), run by the lead before the reviews: its report folder, or the reason there is none.

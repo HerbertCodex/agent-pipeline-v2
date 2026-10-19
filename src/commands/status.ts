@@ -12,7 +12,7 @@ import type { CommandIO } from './io.js';
 import { localTime } from '../domain/time.js';
 import { anchorLines, anchorStatus } from '../rules/anchor-status.js';
 import { pluginLines, pluginStatus } from '../rules/plugin-status.js';
-import { rulesSettings, type CiProofSettings } from '../rules/config.js';
+import { rulesSettings, type CiProofSettings, type RulesMode } from '../rules/config.js';
 import { processGh } from '../stack/github.js';
 import { freshnessLines, freshnessReport, type FreshnessOptions, type FreshnessReport } from '../freshness/check.js';
 import type { FreshnessSettings } from '../freshness/config.js';
@@ -61,6 +61,8 @@ export interface ApvStatus {
    * null when undeclared or the configuration invalid.
    */
   ciProof: { settings: CiProofSettings | null };
+  /** rules.mode of this working tree (apv rules check reads it at the merge base). */
+  rulesMode: RulesMode;
   ledger: { file: string | null; decisions: number | null; hash: string | null; issues: number };
   specs: { file: string; title: string | null; error: string | null }[];
   state: { file: string; bytes: number; modifiedAt: string }[];
@@ -81,11 +83,12 @@ export function apvStatus(repo: string, options: FreshnessOptions = {}): ApvStat
   let freshnessSettings: FreshnessSettings | undefined;
   let models = modelSettings(undefined);
   let ciProof: CiProofSettings | null = null;
+  let rulesMode: RulesMode = 'leger';
   try {
     const loaded = loadConfig(repo);
     freshnessSettings = loaded.config.freshness;
     models = modelSettings(loaded.config.models);
-    ciProof = rulesSettings(loaded.config.rules, []).ciProof;
+    ({ ciProof, mode: rulesMode } = rulesSettings(loaded.config.rules, []));
     Object.assign(cfg, { file: loaded.file && relative(repo, loaded.file), legacy: loaded.legacy, gates: loaded.config.gates.map(g => g.id), ignored: loaded.ignored });
   } catch (error) {
     const found = configFile(repo).file;
@@ -110,7 +113,7 @@ export function apvStatus(repo: string, options: FreshnessOptions = {}): ApvStat
   });
   const state = files(join(repo, '.apv', 'state')).map(f => { const st = statSync(f); return { file: relative(repo, f), bytes: st.size, modifiedAt: st.mtime.toISOString() }; });
   const runs = readRunSummaries(repo);
-  return { repo, config: cfg, models, ciProof: { settings: ciProof }, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)),
+  return { repo, config: cfg, models, ciProof: { settings: ciProof }, rulesMode, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)),
     freshness: freshnessReport(repo, freshnessSettings, options), metrics: measures(repo) };
 }
 
@@ -147,6 +150,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       `Configuration : ${c.file ? `${c.file}${c.legacy ? ' (format V2)' : ''}` : 'aucune'}${c.error ? ` ; invalide : ${c.error.split('\n')[0]}` : c.file ? ` ; contrôles : ${c.gates.join(', ') || 'aucun'}` : ''}`,
       modelsLine(status.models),
       ciProofLine(status.ciProof.settings),
+      cleanLine(`Règles de fusion (rules.mode) : ${status.rulesMode === 'leger' ? 'léger' : 'strict'}${plugin?.modes[status.rulesMode] ? ` : ${plugin.modes[status.rulesMode]!.summary}` : ''}`, 600),
       `Registre : ${status.ledger.file ? `${status.ledger.file} ; ${status.ledger.issues ? `invalide (${status.ledger.issues} erreur(s), voir apv ledger validate)` : `${status.ledger.decisions} décision(s), empreinte ${status.ledger.hash}`}` : 'aucun'}`,
       `Specs (.apv/specs) : ${status.specs.length ? '' : 'aucune'}`,
       // File names, titles and parse errors come from files any agent or commit can write: one cleaned line each.

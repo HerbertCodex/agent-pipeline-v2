@@ -29,9 +29,10 @@ const FILES = {
   'test/format.test.ts': "import { money } from '../src/lib/format';\n",
 };
 
-function project(t, config) {
+/** The plan of APV3: these tests describe rules.mode strict (the light mode: test/niveaux-risque.test.mjs). */
+function project(t, config = {}) {
   const f = fixture(t, { files: FILES });
-  if (config !== undefined) { write(f.repo, '.apv/config.json', config); git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'config'); }
+  write(f.repo, '.apv/config.json', { ...config, rules: { mode: 'strict', ...config.rules } }); git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'config');
   git(f.repo, 'switch', '-q', '-c', 'work');
   const file = p => join(f.repo, p);
   return {
@@ -248,7 +249,7 @@ test('review plan: text output, and refusals', async t => {
   assert.match(unknown.stderr, /REVIEW_REF/);
 });
 
-test('review plan: a skipped review is recorded with its reason; the security review can never be recorded skipped', async t => {
+test('review plan: a skipped review is recorded with its reason, the security review too (levels 0 and 1 of the light mode)', async t => {
   const f = fixture(t);
   const task = { id: 'A', title: 'Tâche A', description: 'Écrire docs/a.md.', acceptanceIds: ['AC-A'], allowedPaths: ['docs/a.md'], dependsOn: [], minimumLane: 'standard' };
   write(f.repo, '.apv/specs/rangement.json', { title: 'Rangement', problem: 'Les fichiers sont mal rangés dans le dépôt.', scope: ['Rangement'], outOfScope: [],
@@ -261,12 +262,10 @@ test('review plan: a skipped review is recorded with its reason; the security re
   assert.equal(noNote.code, 1);
   assert.match(noNote.stderr, /exige --note/);
   assert.equal((await run('set', 'rangement', 'review:fidelite', 'skipped', '--note', 'rien à relire : aucun fichier d\'interface')).code, 0);
-  const security = await run('set', 'rangement', 'review:securite', 'skipped', '--note', 'rien');
-  assert.equal(security.code, 1);
-  assert.match(security.stderr, /la revue sécurité n'est jamais sautée/);
+  assert.equal((await run('set', 'rangement', 'review:securite', 'skipped', '--note', 'niveau 0 : documentation')).code, 0);
   const state = JSON.parse(readFileSync(join(f.repo, '.apv/state/run-rangement.json'), 'utf8'));
   assert.deepEqual([state.reviews.fidelite.status, state.reviews.fidelite.note], ['skipped', 'rien à relire : aucun fichier d\'interface']);
-  assert.equal(state.reviews.securite.status, 'pending');
+  assert.equal(state.reviews.securite.status, 'skipped');
 });
 
 test('review plan: the skills run it before the reviews, the documentation describes it', () => {
