@@ -577,6 +577,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
     readonly release: {
         readonly branch: string;
         readonly from: string;
+        readonly migrations: string[] | undefined;
     } | undefined;
 }>;
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */

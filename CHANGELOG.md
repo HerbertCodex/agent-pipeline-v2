@@ -2,6 +2,11 @@
 
 ## Non publié
 
+- **4.0.0-alpha.3 : la mise en ligne attend les migrations appliquées (incident du 19 octobre : code publié avant sa migration, réception en 503).** `release.migrations` (motifs) : chaque migration ajoutée depuis la production attend « migration <version> appliquée » tapé par l'opérateur (journal signé, comme les dérogations), une migration publiée modifiée est refusée.
+  - `apv release` : refus `1` ; `apv release auto` : `0` « en attente », sans lancer la suite complète ; sortie, `--dry-run` et `--json` (`migrations`) listent les migrations en attente et confirmées.
+  - Relecture sécurité de 7fe8210 : motifs de la production, du commit et de `from` réunis ; une question ou une citation ne vaut jamais confirmation ni dérogation (`sentences`, `waiverFor`) ; `./` en tête ignoré ; version partagée par deux migrations : nom exigé ; migration en lien symbolique refusée.
+  - Tests : `test/release.test.mjs` (douze cas : sans migration, en attente, confirmée, autre version, modifiée, confirmation écrite par un agent ou refus collé, motifs vidés, questions et citations, `./`, version partagée, lien symbolique).
+
 - **4.0.0-alpha.2 : mise en ligne découplée de la fusion.** Section facultative `release` (`branch`, `from`) : en mode léger, une PR vers `from` se fusionne sur la preuve de tâche (contrôles de tâche et tests ciblés au commit exact, `instable` gardée).
   - `apv release [<sha>] [--dry-run]` : avance rapide de la production vers un commit de `from` dont la suite complète est prouvée, contrôles de la production gardés ; poussée affichée et relue, historique dans `stack.log`.
   - `apv release auto` : une passe pour un cron, suite complète toujours relancée dans une copie sans attendre la file ; `APV_ALLOW_MERGE=1` exigé par l'outil hors `--dry-run`, `git push` vers la production refusé par le garde-fou, PR qui vise la production refusée par `apv stack`.
