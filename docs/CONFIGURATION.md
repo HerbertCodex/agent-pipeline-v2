@@ -765,7 +765,7 @@ Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR 
 
 ## Mise en ligne : `release`
 
-Section APV4 facultative (4.0.0-alpha.2) : `{ "release": { "branch": "production", "from": "main" } }`, deux noms de branche différents. En mode léger, une PR vers `from` se fusionne sur la preuve de tâche (section lue à la base commune, comme `rules`) ; `branch` n'avance que par `apv release`, en avance rapide, vers un commit de `from` dont la suite complète est prouvée ([CLI.md](CLI.md#apv-release)). Le garde-fou refuse tout `git push` qui l'écrit (configuration illisible : `production`). Absente : rien ne change, la suite complète reste exigée avant chaque fusion.
+Section APV4 facultative (4.0.0-alpha.2) : `{ "release": { "branch": "production", "from": "main" } }`, deux noms de branche différents. En mode léger, une PR vers `from` se fusionne sur la preuve de tâche (section lue à la base commune, comme `rules`), seulement si la base déclare au moins un contrôle de stage `task` (sinon la suite complète, dit en une ligne) ; `branch` n'avance que par `apv release`, en avance rapide, vers un commit de `from` dont la suite complète est prouvée ([CLI.md](CLI.md#apv-release)). Le garde-fou refuse tout `git push` qui l'écrit (configuration illisible : `production`). Absente : rien ne change, la suite complète reste exigée avant chaque fusion.
 
 ## Fraîcheur de l'état : `freshness`
 

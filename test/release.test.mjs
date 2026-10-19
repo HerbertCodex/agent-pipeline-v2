@@ -50,6 +50,7 @@ test('rules check, light mode: with release the task proof suffices on main, wit
     if (release) {
       assert.equal(preuve.status, 'ok', JSON.stringify(preuve));
       assert.match(preuve.detail, /de tâche prouvé/);
+      assert.equal(r.json().release.taskProof, true);
       const text = await apv(p.repo, ['rules', 'check', '--commit', head, '--target', 'origin/main', '--offline']);
       assert.match(text.stdout, /Preuve de tâche suffit : la suite complète est exigée à la mise en ligne/);
     } else {
@@ -57,6 +58,21 @@ test('rules check, light mode: with release the task proof suffices on main, wit
       assert.match(preuve.problems[0], /unit \(missing\)/);
     }
   }
+});
+
+test('rules check, light mode with release: without any check of stage task at the base, the full suite is asked as before', async t => {
+  const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node('0') }] });
+  git(p.repo, 'switch', '-q', '-c', 'feat');
+  const head = p.commit('notes.txt', 'x\n');
+  const before = (await apv(p.repo, ['rules', 'check', '--commit', head, '--target', 'origin/main', '--offline', '--json'])).json();
+  assert.equal(rule(before, 'preuve').status, 'refused');
+  assert.match(rule(before, 'preuve').problems[0], /unit \(missing\)/);
+  assert.deepEqual(before.release, { branch: 'production', from: 'main', taskProof: false });
+  const text = await apv(p.repo, ['rules', 'check', '--commit', head, '--target', 'origin/main', '--offline']);
+  assert.match(text.stdout, /Suite complète exigée avant fusion malgré release : la base ne déclare aucun contrôle de stage task/);
+  assert.equal((await apv(p.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/main'])).code, 0);
+  const after = (await apv(p.repo, ['rules', 'check', '--commit', head, '--target', 'origin/main', '--offline', '--json'])).json();
+  assert.equal(rule(after, 'preuve').status, 'ok');
 });
 
 test('rules check, light mode with release: a task check passed only after a relaunch still refuses (instable)', async t => {

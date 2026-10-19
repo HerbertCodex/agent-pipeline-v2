@@ -60,10 +60,14 @@ export interface RulesReport {
     reduced?: ReducedLane;
     /** rules.mode of the base, and the level of the change (apv review plan). */
     mode: RulesMode;
-    /** Light mode with `release` declared at the base and the target its branch `from`: the proof of the task suffices. */
-    taskProof?: {
+    /**
+     * Light mode with `release` declared at the base and the target its branch `from`: the proof of the task suffices
+     * (`taskProof`) when the base declares at least one check of stage task; otherwise the full suite, as before.
+     */
+    release?: {
         branch: string;
         from: string;
+        taskProof: boolean;
     };
     level: ReviewLevel;
     levelReason: string;

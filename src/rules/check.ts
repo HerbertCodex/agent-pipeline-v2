@@ -31,6 +31,7 @@ import { isScreen, mockupsOf, screenCoverage, screenMatchers } from './screens.j
 import { ciProofLines, verifyCiProof, type CiProofOutcome } from './ci-proof.js';
 import { githubRepository } from './protection.js';
 import { targetsBranch } from '../release/config.js';
+import { gateStage } from '../domain/contracts.js';
 import { declarationVerdict, laneWouldFit, reducedLane, type OrderLane, type ReducedLane } from './reduced-proof.js';
 import type { GhRunner } from '../stack/github.js';
 
@@ -80,8 +81,11 @@ export interface RulesReport {
   reduced?: ReducedLane;
   /** rules.mode of the base, and the level of the change (apv review plan). */
   mode: RulesMode;
-  /** Light mode with `release` declared at the base and the target its branch `from`: the proof of the task suffices. */
-  taskProof?: { branch: string; from: string };
+  /**
+   * Light mode with `release` declared at the base and the target its branch `from`: the proof of the task suffices
+   * (`taskProof`) when the base declares at least one check of stage task; otherwise the full suite, as before.
+   */
+  release?: { branch: string; from: string; taskProof: boolean };
   level: ReviewLevel;
   levelReason: string;
 }
@@ -473,7 +477,8 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   const baseDesign = designDir(atBase.design);
   const light = settings.mode === 'leger';
   // Release decoupled from the merge (`release` at the base): the full suite is asked at `apv release`, not here.
-  const taskProof = light && atBase.release && targetsBranch(input.target, atBase.release.from) ? atBase.release : null;
+  const releaseLane = light && atBase.release && targetsBranch(input.target, atBase.release.from) ? atBase.release : null;
+  const taskProof = releaseLane && atBase.gates.some(g => gateStage(g) === 'task') ? releaseLane : null;
   const plan = planReviews({ repo, base: mergeBase, head: sha, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [], mode: settings.mode });
   const lane = await docsOnlyLane({ repo, mergeBase, head: sha, plan, settings: settings.docsOnly, designDir: baseDesign, sensitive, messages, key: anchor.key });
   // In the lane, only the domains the configuration forces (review.always) are required.
@@ -818,7 +823,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   const order = new Map(MERGE_RULES.map((r, i) => [r, i]));
   rules.sort((a, b) => order.get(a.rule)! - order.get(b.rule)!);
   return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, lane, mode: settings.mode, level: plan.level, levelReason: plan.levelReason, warnings: [...base.warnings, ...(anchor.problem ? [anchor.problem] : [])], ci,
-    ...(reduced ? { reduced } : {}), ...(taskProof && !skip.has('preuve') ? { taskProof: { branch: taskProof.branch, from: taskProof.from } } : {}) };
+    ...(reduced ? { reduced } : {}), ...(releaseLane && !skip.has('preuve') ? { release: { branch: releaseLane.branch, from: releaseLane.from, taskProof: taskProof !== null } } : {}) };
 }
 
 /** Lines of a report, for the text output of `apv rules check` and of the stack commands. */
@@ -829,7 +834,9 @@ export function rulesLines(report: RulesReport, indent = ''): string[] {
   const lines = [`${indent}Règles avant fusion à ${short(report.commit)} (cible ${report.target}, base commune ${report.mergeBase ? short(report.mergeBase) : '?'}) :`,
     `${indent}Mode ${report.mode === 'leger' ? 'léger' : 'strict'}, niveau ${report.level} : ${report.levelReason}`,
     ...laneLines(report.lane, indent),
-    ...(report.taskProof ? [`${indent}Preuve de tâche suffit : la suite complète est exigée à la mise en ligne (apv release, ${report.taskProof.from} vers ${report.taskProof.branch}).`] : [])];
+    ...(!report.release ? [] : report.release.taskProof
+      ? [`${indent}Preuve de tâche suffit : la suite complète est exigée à la mise en ligne (apv release, ${report.release.from} vers ${report.release.branch}).`]
+      : [`${indent}Suite complète exigée avant fusion malgré release : la base ne déclare aucun contrôle de stage task (la preuve de tâche ne prouverait rien).`])];
   for (const r of report.rules) {
     lines.push(`${indent}- ${r.rule} (${r.title}) : ${label[r.status]} : ${r.detail}`);
     for (const d of r.domains ?? []) {

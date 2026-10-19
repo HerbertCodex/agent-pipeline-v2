@@ -30,6 +30,7 @@ import { isScreen, mockupsOf, screenCoverage, screenMatchers } from './screens.j
 import { ciProofLines, verifyCiProof } from './ci-proof.js';
 import { githubRepository } from './protection.js';
 import { targetsBranch } from '../release/config.js';
+import { gateStage } from '../domain/contracts.js';
 import { declarationVerdict, laneWouldFit, reducedLane } from './reduced-proof.js';
 /** Whether the commit is a web interface: web dependencies in its package.json, or tracked interface files. */
 export function isWebAt(repo, sha) {
@@ -464,7 +465,8 @@ export async function checkMergeRules(input) {
     const baseDesign = designDir(atBase.design);
     const light = settings.mode === 'leger';
     // Release decoupled from the merge (`release` at the base): the full suite is asked at `apv release`, not here.
-    const taskProof = light && atBase.release && targetsBranch(input.target, atBase.release.from) ? atBase.release : null;
+    const releaseLane = light && atBase.release && targetsBranch(input.target, atBase.release.from) ? atBase.release : null;
+    const taskProof = releaseLane && atBase.gates.some(g => gateStage(g) === 'task') ? releaseLane : null;
     const plan = planReviews({ repo, base: mergeBase, head: sha, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [], mode: settings.mode });
     const lane = await docsOnlyLane({ repo, mergeBase, head: sha, plan, settings: settings.docsOnly, designDir: baseDesign, sensitive, messages, key: anchor.key });
     // In the lane, only the domains the configuration forces (review.always) are required.
@@ -881,7 +883,7 @@ export async function checkMergeRules(input) {
     const order = new Map(MERGE_RULES.map((r, i) => [r, i]));
     rules.sort((a, b) => order.get(a.rule) - order.get(b.rule));
     return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, lane, mode: settings.mode, level: plan.level, levelReason: plan.levelReason, warnings: [...base.warnings, ...(anchor.problem ? [anchor.problem] : [])], ci,
-        ...(reduced ? { reduced } : {}), ...(taskProof && !skip.has('preuve') ? { taskProof: { branch: taskProof.branch, from: taskProof.from } } : {}) };
+        ...(reduced ? { reduced } : {}), ...(releaseLane && !skip.has('preuve') ? { release: { branch: releaseLane.branch, from: releaseLane.from, taskProof: taskProof !== null } } : {}) };
 }
 /** Lines of a report, for the text output of `apv rules check` and of the stack commands. */
 export function rulesLines(report, indent = '') {
@@ -891,7 +893,9 @@ export function rulesLines(report, indent = '') {
     const lines = [`${indent}Règles avant fusion à ${short(report.commit)} (cible ${report.target}, base commune ${report.mergeBase ? short(report.mergeBase) : '?'}) :`,
         `${indent}Mode ${report.mode === 'leger' ? 'léger' : 'strict'}, niveau ${report.level} : ${report.levelReason}`,
         ...laneLines(report.lane, indent),
-        ...(report.taskProof ? [`${indent}Preuve de tâche suffit : la suite complète est exigée à la mise en ligne (apv release, ${report.taskProof.from} vers ${report.taskProof.branch}).`] : [])];
+        ...(!report.release ? [] : report.release.taskProof
+            ? [`${indent}Preuve de tâche suffit : la suite complète est exigée à la mise en ligne (apv release, ${report.release.from} vers ${report.release.branch}).`]
+            : [`${indent}Suite complète exigée avant fusion malgré release : la base ne déclare aucun contrôle de stage task (la preuve de tâche ne prouverait rien).`])];
     for (const r of report.rules) {
         lines.push(`${indent}- ${r.rule} (${r.title}) : ${label[r.status]} : ${r.detail}`);
         for (const d of r.domains ?? []) {
