@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -24,7 +24,7 @@ const RELEASE = { branch: 'production', from: 'main' };
 const rule = (report, id) => report.rules.find(r => r.rule === id);
 
 /** An origin and a clone with main (and production at the same commit when `release`), checked out on main. */
-function project(t, { release = RELEASE, gates = [{ id: 'lint', stage: 'task', command: node('0') }, { id: 'unit', stage: 'full', command: node('0') }] } = {}) {
+function project(t, { release = RELEASE, extra = {}, gates = [{ id: 'lint', stage: 'task', command: node('0') }, { id: 'unit', stage: 'full', command: node('0') }] } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'apv4-release-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const origin = join(root, 'origin.git');
@@ -32,7 +32,7 @@ function project(t, { release = RELEASE, gates = [{ id: 'lint', stage: 'task', c
   const repo = join(root, 'repo');
   git(root, 'clone', '-q', origin, repo);
   git(repo, 'switch', '-q', '-c', 'main');
-  put(repo, '.apv/config.json', { name: 'essai', gates, ...(release ? { release } : {}) });
+  put(repo, '.apv/config.json', { name: 'essai', gates, ...extra, ...(release ? { release } : {}) });
   put(repo, '.gitignore', '.apv/receipts/\n.apv/state/\n');
   put(repo, 'README.md', 'projet\n');
   git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'base'); git(repo, 'push', '-q', 'origin', 'main');
@@ -184,8 +184,8 @@ test('apv release auto: nothing to publish, proven head published, red suite nev
   assert.match(red.stdout, /rouge ou instable .*unit \(failed\).*rien n'est publié/);
   assert.equal(p.remote('production'), fresh);
   const next = await apv(p.repo, ['release', 'auto'], ALLOW);
-  assert.equal(next.code, 1);
-  assert.match(next.stdout, /déjà passée .*ni relancé/);
+  assert.equal(next.code, 0);
+  assert.match(next.stdout, /Suite rouge à .*exécution .*nouveau commit sur main/);
 });
 
 test('apv release auto: a green receipt already there never suffices, the suite runs again in its copy', async t => {
@@ -480,4 +480,111 @@ test('apv release, migrations: a migration that is a symbolic link is refused (r
   assert.equal(r.code, 1, r.stdout);
   assert.deepEqual(r.json().migrations.links, [MIGRATION]);
   assert.match(r.json().lines[0], /refusée : migration\(s\) en lien symbolique : supabase\/migrations\/20261019120000_ajout\.sql \(le contenu de sa cible change/);
+});
+
+/** A stack declared with a lock file and an env file; the check of the stack fails unless STACK_URL reaches it. */
+function stackProject(t, { envLine = 'STACK_URL=http://127.0.0.1:55321\n', second = false } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'apv4-release-stacks-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const lock1 = join(dir, 'stack1.lock'); const lock2 = join(dir, 'stack2.lock');
+  writeFileSync(join(dir, 'stack1.env'), envLine); writeFileSync(join(dir, 'stack2.env'), envLine.replace('55321', '55322'));
+  const check = 'if (!process.env.STACK_URL) { console.error("Error: Variable STACK_URL absente"); process.exit(1); } require("fs").writeFileSync(process.env.SEEN, process.env.STACK_URL + " " + process.env.LOCK_FILE);';
+  const stacks = [{ id: '1', lockFile: lock1, envFile: join(dir, 'stack1.env') }, ...(second ? [{ id: '2', lockFile: lock2, envFile: join(dir, 'stack2.env') }] : [])];
+  const p = project(t, { extra: { stacks }, gates: [{ id: 'integration', stage: 'full', command: node(check), passEnv: ['STACK_URL', 'SEEN'], lock: { file: lock1, fileEnv: 'LOCK_FILE' } }] });
+  p.commit('a.txt', 'a\n'); git(p.repo, 'push', '-q', 'origin', 'main');
+  return { ...p, dir, lock1, lock2, seen: join(dir, 'seen'), env: { ...ALLOW, SEEN: join(dir, 'seen') } };
+}
+const hasFlock = spawnSync('flock', ['--version']).status === 0;
+/** Holds a flock on `file` until the returned function is called. */
+async function hold(file) {
+  const child = spawn('flock', [file, 'sleep', '60'], { stdio: 'ignore' });
+  await new Promise(r => setTimeout(r, 400));
+  return () => child.kill();
+}
+
+test('apv release auto, stacks declared: the suite receives the first free stack and publishes', { skip: !hasFlock && 'flock(1) missing' }, async t => {
+  const p = stackProject(t);
+  const r = await apv(p.repo, ['release', 'auto'], p.env);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(readFileSync(p.seen, 'utf8'), /^http:\/\/127\.0\.0\.1:55321 /);
+  assert.equal(p.remote('production'), p.remote('main'));
+});
+
+test('apv release auto, stacks declared: every lock held, later and nothing run; the second stack is taken when only the first is held', { skip: !hasFlock && 'flock(1) missing' }, async t => {
+  const p = stackProject(t, { second: true });
+  const free1 = await hold(p.lock1); const free2 = await hold(p.lock2);
+  try {
+    const busy = await apv(p.repo, ['release', 'auto'], p.env);
+    assert.equal(busy.code, 0, busy.stdout + busy.stderr);
+    assert.match(busy.stdout, /Piles occupées .*plus tard/);
+    assert.equal(existsSync(p.seen), false, 'nothing ran');
+    assert.notEqual(p.remote('production'), p.remote('main'));
+  } finally { free2(); }
+  try {
+    const one = await apv(p.repo, ['release', 'auto', '--stacks', '1'], p.env);
+    assert.equal(one.code, 0, one.stdout + one.stderr); assert.match(one.stdout, /occupée/, 'forced on a held stack: the suite itself says busy');
+    assert.notEqual(p.remote('production'), p.remote('main'));
+  } finally { free1(); }
+});
+
+test('apv release auto --stacks forces the stack; an unknown one is a usage error', { skip: !hasFlock && 'flock(1) missing' }, async t => {
+  const p = stackProject(t, { second: true });
+  const r = await apv(p.repo, ['release', 'auto', '--stacks', '2'], p.env);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(readFileSync(p.seen, 'utf8'), /^http:\/\/127\.0\.0\.1:55322 /, 'the variables of stack 2, not of the first free one');
+  p.commit('b.txt', 'b\n'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const bad = await apv(p.repo, ['release', 'auto', '--stacks', '9'], p.env);
+  assert.equal(bad.code, 2, bad.stdout + bad.stderr);
+  assert.match(bad.stderr, /pile inconnue 9/);
+});
+
+test('apv release auto: a failure of the infrastructure is said so, exit 1, nothing published', { skip: !hasFlock && 'flock(1) missing' }, async t => {
+  const p = stackProject(t, { envLine: '# aucune variable\n' });
+  const r = await apv(p.repo, ['release', 'auto'], p.env);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /panne d'infrastructure : integration : variable d'environnement absente.*rien n'est publié/);
+  assert.notEqual(p.remote('production'), p.remote('main'));
+});
+
+test('apv release auto, without stacks: a red check stays a red suite, not an infrastructure failure', async t => {
+  const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node('console.error("expected 1 received 2"); process.exit(1)') }] });
+  p.commit('a.txt', 'a\n'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(r.code, 1);
+  assert.match(r.stdout, /rouge ou instable/);
+  assert.doesNotMatch(r.stdout, /panne d'infrastructure/);
+});
+
+test('apv release auto: a red suite at the same commit is not run again (0); infrastructure retries after 30 minutes only', { skip: !hasFlock && 'flock(1) missing' }, async t => {
+  const p = stackProject(t, { envLine: '# aucune variable\n' });
+  const file = join(commonDirOf(p.repo), 'apv', 'release', 'last-auto.json');
+  const first = await apv(p.repo, ['release', 'auto'], p.env);
+  assert.equal(first.code, 1, first.stdout + first.stderr);
+  const rec = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(rec.kind, 'infrastructure');
+  const soon = await apv(p.repo, ['release', 'auto'], p.env);
+  assert.equal(soon.code, 0, soon.stdout + soon.stderr);
+  assert.match(soon.stdout, /Panne d'infrastructure .*nouvel essai après 30 min/);
+  // Past 30 minutes, the stack repaired: the pass runs again and publishes.
+  writeFileSync(file, JSON.stringify({ ...rec, at: Date.now() - 31 * 60_000 }));
+  writeFileSync(join(p.dir, 'stack1.env'), 'STACK_URL=http://127.0.0.1:55321\n');
+  const later = await apv(p.repo, ['release', 'auto'], p.env);
+  assert.equal(later.code, 0, later.stdout + later.stderr);
+  assert.equal(p.remote('production'), p.remote('main'));
+});
+
+test('apv release auto: --force-retry runs a suite that was red at the same commit', async t => {
+  const marker = join(mkdtempSync(join(tmpdir(), 'apv4-release-retry-')), 'ok');
+  t.after(() => rmSync(dirname(marker), { recursive: true, force: true }));
+  const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node(`process.exit(require("fs").existsSync(${JSON.stringify(marker)}) ? 0 : 1)`) }] });
+  p.commit('a.txt', 'a\n'); git(p.repo, 'push', '-q', 'origin', 'main');
+  assert.equal((await apv(p.repo, ['release', 'auto'], ALLOW)).code, 1);
+  writeFileSync(marker, '');
+  const waiting = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(waiting.code, 0);
+  assert.match(waiting.stdout, /Suite rouge à/);
+  assert.notEqual(p.remote('production'), p.remote('main'));
+  const forced = await apv(p.repo, ['release', 'auto', '--force-retry'], ALLOW);
+  assert.equal(forced.code, 0, forced.stdout + forced.stderr);
+  assert.equal(p.remote('production'), p.remote('main'));
 });

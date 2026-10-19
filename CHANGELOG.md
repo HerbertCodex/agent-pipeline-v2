@@ -2,6 +2,9 @@
 
 ## Non publié
 
+- **4.0.0-alpha.4 : `apv release auto` donne une pile de test à la suite complète (panne du 20 octobre : integration rouge partout, variable de pile absente).** Section `stacks` déclarée : la suite reçoit la première pile au verrou libre comme `--stacks`, `--stacks <id>[,<id>]` force ; aucune libre : `0` « piles occupées, plus tard ».
+  - Panne d'infrastructure dite comme telle (« panne d'infrastructure : <cause> ; rien n'est publié », `1`). Même commit déjà tenté : suite rouge `0` sans relance jusqu'à un nouveau commit, panne d'infrastructure réessayée après 30 min, `--force-retry` pour relancer. Tests : `test/release.test.mjs`.
+
 - **4.0.0-alpha.3 : la mise en ligne attend les migrations appliquées (incident du 19 octobre : code publié avant sa migration, réception en 503).** `release.migrations` (motifs) : chaque migration ajoutée depuis la production attend « migration <version> appliquée » tapé par l'opérateur (journal signé, comme les dérogations), une migration publiée modifiée est refusée.
   - `apv release` : refus `1` ; `apv release auto` : `0` « en attente », sans lancer la suite complète ; sortie, `--dry-run` et `--json` (`migrations`) listent les migrations en attente et confirmées.
   - Relecture sécurité de 7fe8210 : motifs de la production, du commit et de `from` réunis ; une question ou une citation ne vaut jamais confirmation ni dérogation (`sentences`, `waiverFor`) ; `./` en tête ignoré ; version partagée par deux migrations : nom exigé ; migration en lien symbolique refusée.
