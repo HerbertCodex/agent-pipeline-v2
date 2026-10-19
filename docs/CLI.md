@@ -435,6 +435,16 @@ apv lock acquire|release|status <ressource>
 
 Verrous à bail sur les ressources partagées (base de test, ports, navigateur) : propriétaire vérifié, expiration, renouvellement pendant `run`, file d'attente visible (spécification, section 10). `run` est la forme à préférer : une commande par bail, libéré à la sortie quoi qu'il arrive. Détails, options et codes de sortie : [LOCKS.md](LOCKS.md).
 
+## `apv suite share`
+
+```
+apv suite share [--wait-ms <n>] -- <commande> [args...]
+```
+
+Part **partagée** de la file des suites complètes (`suite.queue`) pour une charge lourde lancée hors suite : tests navigateur d'un script de projet, e2e d'un agent, Playwright d'un relecteur. Elle attend tant qu'une suite complète tient la file ou l'attend (« Suite complète en cours (exécution X), attente... »), puis lance la commande et rend son code de sortie. Plusieurs `share` tournent ensemble ; une suite complète avec `slots: 1` attend qu'ils aient fini avant ses contrôles, et les nouveaux attendent derrière elle (avec `per-stack` ou N places, la suite ne les attend pas, mais eux attendent toute suite). `--wait-ms` (défaut `suite.queue.waitMs`) dépassé : sortie `75`, rien n'est lancé. Sans effet dans une suite complète (`APV_SUITE_RUN`) ou dans un autre `share` ; file désactivée ou hors dépôt : commande lancée telle quelle.
+
+Dans un script e2e de projet : `apv suite share -- npm run test:e2e ...`. `apv gates run --stage task` (contrôles à verrou de pile ou à commande `affected`) et `apv lock run <ressource d'une pile déclarée>` prennent la part d'eux-mêmes.
+
 ## `apv wait`
 
 ```

@@ -2,6 +2,10 @@
 
 ## Non publié
 
+- **4.0.0-alpha.4 : une charge lourde hors suite complète ne tourne plus en même temps qu'une suite (deux charges saturaient la machine de 22 Go).** Part partagée de la file des suites : `apv suite share [--wait-ms <n>] -- <commande>` attend toute suite complète en cours, plusieurs `share` tournent ensemble ; une suite avec `suite.queue.slots` à `1` attend la fin des parts en cours avant ses contrôles, les nouvelles attendent derrière elle.
+  - Automatique : `apv gates run --stage task` (contrôles à verrou de pile ou commande ciblée `affected`) et `apv lock run <ressource d'une pile>` prennent la part ; sans effet dans une suite (`APV_SUITE_RUN`) ou dans un autre `share` (`APV_SUITE_SHARE`).
+  - Tests : `test/suite-share.test.mjs` (neuf cas : attente d'une suite, délai, deux parts ensemble, suite qui attend une part, `per-stack`, `gates run`, `lock run`, dans une suite).
+
 - **4.0.0-alpha.3 : la mise en ligne attend les migrations appliquées (incident du 19 octobre : code publié avant sa migration, réception en 503).** `release.migrations` (motifs) : chaque migration ajoutée depuis la production attend « migration <version> appliquée » tapé par l'opérateur (journal signé, comme les dérogations), une migration publiée modifiée est refusée.
   - `apv release` : refus `1` ; `apv release auto` : `0` « en attente », sans lancer la suite complète ; sortie, `--dry-run` et `--json` (`migrations`) listent les migrations en attente et confirmées.
   - Relecture sécurité de 7fe8210 : motifs de la production, du commit et de `from` réunis ; une question ou une citation ne vaut jamais confirmation ni dérogation (`sentences`, `waiverFor`) ; `./` en tête ignoré ; version partagée par deux migrations : nom exigé ; migration en lien symbolique refusée.

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -124,6 +124,69 @@ async function holdAnyLease(store, resources, options) {
         }
     }
 }
+/** Variable set around a command run by `withShare`: a suite or a share started inside it does not wait for the share it belongs to. */
+export const SHARE_MARKER = 'APV_SUITE_SHARE';
+const sharePrefix = (resource) => `${resource}-share-`;
+/** Live (not stale) leases of the queue folder whose resource satisfies `match`. */
+function liveLeases(store, match) {
+    return store.list().filter(r => r.snapshot.exists && !r.stale && r.snapshot.record && match(r.resource)).map(r => r.snapshot.record);
+}
+/** Full suites (and measures) that hold or wait for the queue: the copy places (taken first by every suite) and the whole queue. */
+const suiteHolders = (store, resource) => liveLeases(store, r => r === resource || r.startsWith(`${resource}-copy-`));
+const shareHolders = (store, resource) => liveLeases(store, r => r.startsWith(sharePrefix(resource)));
+const queueStore = (lockFile, hooks) => ({
+    store: new LockStore(dirname(lockFile), hooks?.lockPollMs !== undefined ? { pollMs: hooks.lockPollMs } : {}),
+    resource: basename(lockFile).replace(/\.lock$/, ''),
+});
+/**
+ * Holds a SHARED part of the queue around `run`: any number of shares at once, none while a full suite holds or waits for
+ * the queue (it waits behind it, at most `waitMs`), and a suite with `slots: 1` waits for the shares to finish before
+ * its checks. The share is registered first and withdrawn when a suite shows up, so that the suite and a share never
+ * both start. Without effect inside a full suite (`APV_SUITE_RUN`) or inside another share (`APV_SUITE_SHARE`).
+ */
+export async function withShare(options, run, refused) {
+    if (options.source[SUITE_MARKER] || options.source[SHARE_MARKER])
+        return run(options.env);
+    mkdirSync(dirname(options.lockFile), { recursive: true });
+    const { store, resource } = queueStore(options.lockFile, options.hooks);
+    const owner = { pid: process.pid, host: store.host, label: options.label };
+    const pollMs = options.hooks?.lockPollMs ?? 500;
+    const started = Date.now();
+    let said = 0;
+    for (;;) {
+        const name = `${sharePrefix(resource)}${process.pid}-${randomUUID().slice(0, 8)}`;
+        const taken = await store.tryAcquire(name, owner, LEASE_TTL_SECONDS, options.purpose ?? 'charge partagée');
+        if (!taken.ok)
+            continue;
+        const release = keepLease(store, name, taken.record.token, options.log);
+        const suites = suiteHolders(store, resource);
+        if (!suites.length) {
+            const waited = Date.now() - started;
+            if (waited > 1000)
+                options.log(`File des suites complètes : part partagée obtenue après ${seconds(waited)}.`);
+            try {
+                return await run({ ...options.env, [SHARE_MARKER]: resource });
+            }
+            finally {
+                await release();
+            }
+        }
+        await release();
+        const waited = Date.now() - started;
+        if (waited >= options.waitMs)
+            return refused(`suite complète en cours (${suites.map(h => describeHolder(h)).join(' ; ')}) : aucune part partagée après ${seconds(waited)}`, waited);
+        if (said === 0 || Date.now() - said >= 30_000) {
+            options.log(`Suite complète en cours (exécution ${describeHolder(suites[0])}), attente...`);
+            said = Date.now();
+        }
+        try {
+            await sleep(Math.min(pollMs, Math.max(1, options.waitMs - waited)), undefined, options.signal ? { signal: options.signal } : {});
+        }
+        catch {
+            return refused('attente annulée', Date.now() - started);
+        }
+    }
+}
 /**
  * Enters the queue of the full suites: its places (`queuePlaces`, leases of the `apv lock` store format beside
  * `settings.lockFile`: FIFO for the whole queue and each stack, the first free for a numbered place), within `waitMs` in
@@ -173,6 +236,39 @@ export async function enterQueue(options) {
         }
         heldBy ??= lease.heldBy;
         held.push(lease);
+    }
+    // `slots: 1` (the whole machine): the shared loads running finish first; the new ones wait behind the suite (withShare).
+    if (settings.slots === 1 && !(options.env ?? process.env)[SHARE_MARKER]) {
+        const pollMs = options.hooks?.lockPollMs ?? 500;
+        let said = 0;
+        for (;;) {
+            let shares = [];
+            try {
+                shares = shareHolders(store, resource);
+            }
+            catch (error) {
+                await releaseAll();
+                throw error;
+            }
+            if (!shares.length)
+                break;
+            const waited = Date.now() - started;
+            if (waited >= settings.waitMs) {
+                await releaseAll();
+                throw new PipelineError('SUITE_QUEUE', `File des suites complètes (${options.lockFile}) : ${shares.length} charge(s) partagée(s) encore en cours après ${seconds(waited)} : ${shares.map(h => describeHolder(h)).join(' ; ')}. Rien n'a été exécuté.`);
+            }
+            if (said === 0 || Date.now() - said >= 30_000) {
+                log(`Charges partagées en cours (${shares.map(h => describeHolder(h)).join(' ; ')}) : attente de leur fin avant de démarrer.`);
+                said = Date.now();
+            }
+            try {
+                await sleep(Math.min(pollMs, Math.max(1, settings.waitMs - waited)), undefined, options.signal ? { signal: options.signal } : {});
+            }
+            catch {
+                await releaseAll();
+                throw new PipelineError('CANCELLED', 'File des suites complètes : attente des charges partagées annulée');
+            }
+        }
     }
     const waitedMs = Date.now() - started;
     if (waitedMs > 1000)

@@ -28,7 +28,7 @@ import { planSpread, prepareCopies, prepareMainCopy, removeCopies, stackLock, st
 import { checkReuse, findOrigin, readLocal, reuseContext, reuseReason } from './reuse-proof.js';
 import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, repeatProofGap, resolveReference, tooManyFiles } from './repeat.js';
 import { planScope, scopeRecord, scopeReferenceMissing } from './proof-scope.js';
-import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, flockCommand, freePorts, queuePlaces, resolveGateLock, withGateLease } from './suite.js';
+import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, withShare, flockCommand, freePorts, queuePlaces, resolveGateLock, withGateLease } from './suite.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
 export { RECEIPTS_DIR } from './store.js';
 /** Environment identity of a V3 local run; V2 read it from `environment.id`, a field V3 no longer reads. */
@@ -638,7 +638,7 @@ export async function runGates(options) {
     };
     if (suite && settings.queue.enabled) {
         queue = await enterQueue({ lockFile: await commonPath(git, repo, settings.queue.lockFile), settings: settings.queue, repo, log, signal: options.signal, hooks: options.hooks,
-            copy: repo, places: queuePlaces(settings.queue.slots, { used: usage.used, declared: stacks.map(s => s.id), unmapped: usage.unmapped.length > 0, all: measuring.length > 0 }) });
+            copy: repo, env: source, places: queuePlaces(settings.queue.slots, { used: usage.used, declared: stacks.map(s => s.id), unmapped: usage.unmapped.length > 0, all: measuring.length > 0 }) });
     }
     // The containers of the stacks the suite checks, read before its checks: compared after a check interrupted under their lock.
     const containersBefore = new Map();
@@ -1029,12 +1029,16 @@ export async function runGates(options) {
             };
             const used = lock && common ? stacksOfLock(stacks, lock) : [];
             let outcome = null;
+            // A browser or stack check outside the full suite (a stack lock, or the targeted command) takes a shared part of the queue.
+            const sharing = !suite && settings.queue.enabled && (targeted.has(gate.id) || used.length > 0);
+            const execute = async (checkEnv) => lock?.kind === 'lease'
+                ? withGateLease(lock, { label: `apv gates run ${gate.id} (${workspace})`, env: checkEnv, source, signal, log, hooks: options.hooks }, body, lockRefused)
+                : body(checkEnv, 0);
             try {
-                if (lock?.kind === 'lease') {
-                    outcome = await withGateLease(lock, { label: `apv gates run ${gate.id} (${workspace})`, env, source, signal, log, hooks: options.hooks }, body, lockRefused);
-                    return outcome;
-                }
-                outcome = await body(env, 0);
+                outcome = sharing
+                    ? await withShare({ lockFile: await commonPath(git, repo, settings.queue.lockFile), waitMs: settings.queue.waitMs, label: `apv gates run ${gate.id} (${workspace})`, purpose: `contrôle ${gate.id}`,
+                        env, source, signal, log, hooks: options.hooks }, execute, lockRefused)
+                    : await execute(env);
                 return outcome;
             }
             finally {

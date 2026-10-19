@@ -256,7 +256,7 @@ export async function enterAuditQueue(options) {
     mkdirSync(join(lockFile, '..'), { recursive: true });
     // The load is waited for run by run (runAudit): the queue alone here.
     const handle = await enterQueue({ lockFile, settings: { ...options.suiteQueue, maxLoad: undefined }, repo: options.repo, log: options.log, signal: options.signal,
-        hooks: options.hooks, label: `apv web audit (${options.repo})`, purpose: 'mesure Lighthouse',
+        hooks: options.hooks, env: options.env, label: `apv web audit (${options.repo})`, purpose: 'mesure Lighthouse',
         // Every place of the queue: the whole queue, each numbered place, each stack (suite.queue.slots lets suites run side by side).
         places: queuePlaces(options.suiteQueue.slots, { used: [], declared: options.stackIds ?? [], all: true }) });
     return { handle, record: { held: true, waitedMs: handle.record.waitedMs, reason: `file des suites complètes (${lockFile})` } };

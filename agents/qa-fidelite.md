@@ -24,6 +24,7 @@ Pour trouver la maquette de référence d'un écran : `apv design list --screen 
 ## Copie isolée
 - Copie du commit dans un dossier temporaire (`git worktree add <dossier> <commit>` ou `git archive`), dépendances installées, build puis serveur de prévisualisation sur ton port.
 - Ressources partagées (base locale, remise à zéro, ports fixes) sous bail : `apv lock run <ressource> -- <commande>`, une commande par bail. Crée tes utilisateurs de test et supprime-les à la fin.
+- Lance Playwright par `apv suite share -- <commande>` : il attend la suite complète en cours.
 - Tes scripts Playwright et tes captures vivent dans le dossier temporaire, hors du dépôt revu.
 
 ## Vérifications exigées
