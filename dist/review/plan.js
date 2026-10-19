@@ -7,7 +7,8 @@ import { matches } from '../policy/policy.js';
 import { DELTA_GIT, resolveCommit } from '../run/git-probe.js';
 import { ALWAYS_REVIEWED, PATH_CLASSES, REVIEW_DOMAINS } from './config.js';
 import { pureRename, renameKind, renamedNames } from './rename.js';
-import { AGENT_INSTRUCTIONS, CONFIG_FILES, LEDGER_FILES, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, PILOT_NOTE_EXTENSIONS, ROUTING_DIR, ROUTING_TEST_DIR, SERVED_DIR, SPEC_NOTES, TEST_DIRS, TEST_NAME, diffRisk, realAddress, } from './risk.js';
+import { covers, isScreen, mockupsOf } from '../rules/screens.js';
+import { AGENT_INSTRUCTIONS, CONFIG_FILES, GUARD_FILES, LEDGER_FILES, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, PILOT_NOTE_EXTENSIONS, ROUTING_DIR, ROUTING_TEST_DIR, SERVED_DIR, SERVER_GENERIC, SPEC_NOTES, TEST_DIRS, TEST_NAME, diffRisk, realAddress, } from './risk.js';
 const FILES_SHOWN = 50;
 const MAX_DIFF_BYTES = 512 * 1024 * 1024;
 function git(repo, args) {
@@ -407,7 +408,9 @@ function fileKeeps(file, patch, input, context) {
     // In server, data or interface code, one line is enough: required by the diff (security review of PR #128: a query
     // deleting every profile, on one line, said « par prudence »). Only in a test, a document or tooling is a term on one
     // line alone isolated: prudence. The Markdown under `.apv/` is prose of the pipeline: its words never count.
-    const terms = (isolated) => {
+    const terms = (alone) => {
+        // Mode leger: one line alone is isolated anywhere, and prudence keeps nothing.
+        const isolated = alone || input.mode === 'leger';
         if (!sides(file).every(p => p.startsWith('.apv/') && p.endsWith('.md'))) {
             const data = termIn(lines, input.settings.terms.data);
             if (data) {
@@ -482,24 +485,25 @@ function mockupLike(decision, designDir) {
  * perimeter): read from the registry at both sides of the diff, never from its words. A registry that cannot be read is
  * said as such: the fidelity review is kept (review of PR #129: a registry alone retargeting a mockup kept security only).
  */
+/** The decisions of the registry at a commit by id (empty without registry), or null when it cannot be read. */
+function ledgerAt(repo, sha) {
+    let text;
+    try {
+        text = git(repo, ['show', `${sha}:${LEDGER_FILE}`]);
+    }
+    catch {
+        return new Map();
+    }
+    try {
+        return new Map(decisionLedgerSchema.parse(parseJson(text)).decisions.map(d => [d.id, d]));
+    }
+    catch {
+        return null;
+    }
+}
 function ledgerMockupChanges(repo, mergeBase, head, designDir) {
-    const read = (sha) => {
-        let text;
-        try {
-            text = git(repo, ['show', `${sha}:${LEDGER_FILE}`]);
-        }
-        catch {
-            return new Map();
-        }
-        try {
-            return new Map(decisionLedgerSchema.parse(parseJson(text)).decisions.map(d => [d.id, d]));
-        }
-        catch {
-            return null;
-        }
-    };
-    const before = read(mergeBase);
-    const after = read(head);
+    const before = ledgerAt(repo, mergeBase);
+    const after = ledgerAt(repo, head);
     if (!before || !after)
         return ['(registre illisible)'];
     const changed = [];
@@ -566,6 +570,41 @@ function fileRisk(file, input, context) {
     return high(classes.has('tooling') || classes.has('neutral')
         ? 'outillage ou fichier neutre hors tests nommés, dossiers de tests, documentation et maquettes'
         : 'fichier non classé (prudence)');
+}
+const level = (n, levelWhy) => ({ level: n, levelWhy });
+/** The level of a file by its path alone: 0, 1 or 2 (src/review/risk.ts). */
+function pathLevel(file, input) {
+    const any = (globs) => sides(file).some(p => globs.some(g => matches(p, g)));
+    if (testLike(file))
+        return level(0, 'tests');
+    if (any(input.sensitive.filter(g => !g.startsWith('.github/'))) || any(AGENT_INSTRUCTIONS) || any(GUARD_FILES))
+        return level(2, SENSITIVE_WHY);
+    if (sides(file).every(p => p.startsWith('.github/')))
+        return level(0, 'CI');
+    if (isConfig(file))
+        return level(0, 'configuration d\'outillage');
+    if (any(input.settings.paths.server.filter(g => !SERVER_GENERIC.includes(g))))
+        return level(2, 'code serveur, route ou point d\'entrée');
+    if (pilotNote(file) || ledgerFile(file, input) || sides(file).every(p => p.startsWith('.apv/')))
+        return level(0, 'notes et état du pipeline');
+    if ((file.classes.includes('neutral') || file.classes.includes('tooling')) && !sides(file).some(p => ROUTING_DIR.test(p)))
+        return level(0, 'documentation, tests ou outillage');
+    return level(1, 'code applicatif');
+}
+/** The level of a file: a migration, a real address or a domain the diff requires (donnees, rgpd) make it 3. */
+function fileLevel(file, own) {
+    const migration = file.classes.includes('migrations');
+    if (file.change !== 'content')
+        return migration ? level(3, WHY.migrationRename) : level(0, 'renommage pur ou chemins seuls réécrits');
+    const address = file.keeps.find(k => k.why.startsWith('adresse '));
+    if (address)
+        return level(3, address.why);
+    if (testLike(file))
+        return own;
+    if (migration)
+        return level(3, WHY.migration);
+    const data = file.keeps.find(k => (k.domain === 'donnees' || k.domain === 'rgpd') && k.basis === 'diff' && (own.level > 0 || !k.why.startsWith('terme ')));
+    return data ? level(3, data.why) : own;
 }
 const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 function skipReason(domain, counts) {
@@ -642,11 +681,29 @@ export function planReviews(input) {
         manifest: statuses.some(s => sides(s).some(p => MANIFEST_FILES.some(g => matches(p, g)))),
         ledgerMockups: ledgerTouched ? ledgerMockupChanges(repo, mergeBase, headSha, input.designDir) : [],
     };
+    // Mode leger: no prudence, a term only in code (level 1 and above), fidelite only for a screen a validated mockup covers.
+    const leger = input.mode === 'leger';
+    const mockups = leger ? mockupsOf([...(ledgerAt(repo, mergeBase)?.values() ?? []), ...(ledgerAt(repo, headSha)?.values() ?? [])]) : [];
     const files = changes.map(({ entry, patch, change, classes }) => {
         const base = { path: entry.path, ...(entry.from !== undefined ? { from: entry.from } : {}), status: entry.status, change, classes };
         const keeping = { ...base, keeps: fileKeeps(base, patch, input, context) };
-        return { ...keeping, ...fileRisk(keeping, input, context) };
+        const risk = fileRisk(keeping, input, context);
+        const own = pathLevel(base, input);
+        if (leger) {
+            // A migration is for donnees; rgpd only on the words of its lines.
+            const migrationOnly = (k) => k.domain === 'rgpd' && (k.why === WHY.migration || k.why === WHY.migrationRename);
+            keeping.keeps = keeping.keeps.filter(k => k.basis === 'diff' && k.domain !== 'fidelite' && !migrationOnly(k) && (own.level > 0 || !k.why.startsWith('terme ')));
+            const mockup = change === 'content' && (classes.includes('ui') || isScreen(entry.path)) ? mockups.find(m => covers(m, entry.path)) : undefined;
+            if (mockup)
+                keeping.keeps.push({ domain: 'fidelite', why: `écran couvert par la maquette validée ${mockup.id}`, basis: 'diff' });
+        }
+        return { ...keeping, ...risk, ...fileLevel(keeping, own) };
     });
+    const top = Math.max(0, ...files.map(f => f.level));
+    const whys = new Map();
+    for (const f of files.filter(x => x.level === top))
+        whys.set(f.levelWhy, (whys.get(f.levelWhy) ?? 0) + 1);
+    const levelReason = files.length ? [...whys].map(([why, n]) => `${why} (${n})`).join(' ; ') : 'diff vide';
     const counts = {
         files: files.length,
         renames: files.filter(f => f.change === 'none' && f.from !== undefined).length,
@@ -678,6 +735,15 @@ export function planReviews(input) {
             return [...hostsOf(patches.get(f.path)?.added ?? [])].filter(h => !known.has(h));
         }))];
     const domains = REVIEW_DOMAINS.map(domain => {
+        if (domain === ALWAYS_REVIEWED && leger) {
+            const forcedBy = input.force.includes(domain) ? 'operator' : input.settings.always.includes(domain) ? 'config' : null;
+            const deciding = files.filter(f => f.level >= 2);
+            if (top >= 2)
+                return { domain, decision: 'retained', forced: forcedBy, basis: 'diff', fileCount: deciding.length, files: deciding.slice(0, FILES_SHOWN).map(f => f.path), reason: `niveau ${top} : ${levelReason}` };
+            return forcedBy
+                ? { domain, decision: 'retained', forced: forcedBy, basis: 'diff', fileCount: 0, files: [], reason: `niveau ${top}, forcée par ${forcedBy === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'}` }
+                : { domain, decision: 'skipped', forced: null, basis: null, fileCount: 0, files: [], reason: `niveau ${top} : ${levelReason} ; aucune relecture d'agent` };
+        }
         if (domain === ALWAYS_REVIEWED) {
             return { domain, decision: 'retained', forced: null, basis: 'diff', fileCount: sensitive.length, files: sensitive.slice(0, FILES_SHOWN),
                 reason: `toujours relue, sans exception${sensitive.length ? ` ; ${count(sensitive.length, 'fichier sensible', 'fichiers sensibles')} (chemins de la voie high)` : ''}`
@@ -700,7 +766,9 @@ export function planReviews(input) {
             return { domain, decision: 'retained', forced, basis: 'diff', fileCount: 0, files: [],
                 reason: `forcée par ${forced === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'} ; le diff seul ne la demandait pas` };
         }
-        return { domain, decision: 'skipped', forced: null, basis: null, fileCount: 0, files: [], reason: skipReason(domain, counts) };
+        const reason = !leger ? skipReason(domain, counts) : domain === 'fidelite' ? `niveau ${top} : aucun écran couvert par une maquette validée au contenu changé`
+            : `niveau ${top} : aucune migration, aucun code de données, données personnelles ni texte légal au contenu changé`;
+        return { domain, decision: 'skipped', forced: null, basis: null, fileCount: 0, files: [], reason };
     });
     // A low risk keeps at most the security and fidelity reviews, besides what is forced: never a weaker plan elsewhere.
     if (risk.level === 'faible') {
@@ -709,7 +777,7 @@ export function planReviews(input) {
             throw new PipelineError('REVIEW_RISK', `risque faible incohérent : ${extra.map(d => d.domain).join(', ')} retenu(s) (${extra.map(d => d.reason).join(' ; ')})`);
     }
     return {
-        tool: 'apv review plan', base: { ref: input.base, sha: baseSha }, head: { ref: input.head, sha: headSha }, mergeBase, counts, ledgerMockups: context.ledgerMockups, risk, domains,
+        tool: 'apv review plan', mode: input.mode ?? 'strict', level: top, levelReason, base: { ref: input.base, sha: baseSha }, head: { ref: input.head, sha: headSha }, mergeBase, counts, ledgerMockups: context.ledgerMockups, risk, domains,
         retained: domains.filter(d => d.decision === 'retained').map(d => d.domain),
         skipped: domains.filter(d => d.decision === 'skipped').map(d => ({ domain: d.domain, reason: d.reason })),
         files,

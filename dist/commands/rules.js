@@ -25,6 +25,11 @@ apv stack batch --merge, qui refusent de fusionner sans elles :
   maquette   chaque écran ajouté ou modifié est couvert par une maquette validée par l'opérateur : déjà sur la
              branche cible, ou apportée par la PR avec des mots que l'opérateur a tapés lui-même dans la session.
 Tout se lit à la base commune avec la cible : une PR ne change pas ses propres règles.
+Mode léger (rules.mode, défaut ; « strict » garde ce qui est décrit ci-dessus) : relecture seulement pour les
+domaines du niveau du diff (apv review plan : 0 et 1 aucune, 2 securite, 3 securite et donnees ou rgpd, fidelite
+pour un écran couvert par une maquette validée), sceau facultatif, report de tout domaine sur un delta hors de
+son périmètre ; captures seulement avec fidelite ; maquette seulement si le projet a des maquettes validées, une
+maquette versée suffisant. Un constat critique ou haut ouvert refuse toujours.
 Aucune option ne lève un refus. Sans correction, seul l'opérateur le peut, en tapant lui-même dans la session
 « dérogation <règle> <12 premiers caractères du commit> : <raison> » (journal de l'opérateur, écrit par le
 crochet du plugin, que les agents ne peuvent pas écrire), ou pour la relecture d'un seul domaine

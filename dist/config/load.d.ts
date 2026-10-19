@@ -509,6 +509,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly maxBytes: number | undefined;
     } | undefined;
     readonly rules: {
+        readonly mode: "leger" | "strict" | undefined;
         readonly operatorOrders: {
             readonly domain: string;
             readonly publicKeys: string[];

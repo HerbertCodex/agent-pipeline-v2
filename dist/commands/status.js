@@ -56,11 +56,12 @@ export function apvStatus(repo, options = {}) {
     let freshnessSettings;
     let models = modelSettings(undefined);
     let ciProof = null;
+    let rulesMode = 'leger';
     try {
         const loaded = loadConfig(repo);
         freshnessSettings = loaded.config.freshness;
         models = modelSettings(loaded.config.models);
-        ciProof = rulesSettings(loaded.config.rules, []).ciProof;
+        ({ ciProof, mode: rulesMode } = rulesSettings(loaded.config.rules, []));
         Object.assign(cfg, { file: loaded.file && relative(repo, loaded.file), legacy: loaded.legacy, gates: loaded.config.gates.map(g => g.id), ignored: loaded.ignored });
     }
     catch (error) {
@@ -96,7 +97,7 @@ export function apvStatus(repo, options = {}) {
     });
     const state = files(join(repo, '.apv', 'state')).map(f => { const st = statSync(f); return { file: relative(repo, f), bytes: st.size, modifiedAt: st.mtime.toISOString() }; });
     const runs = readRunSummaries(repo);
-    return { repo, config: cfg, models, ciProof: { settings: ciProof }, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)),
+    return { repo, config: cfg, models, ciProof: { settings: ciProof }, rulesMode, ledger, specs, state, runs: runs.entries, runsUnread: runs.unread, quota: lastQuotaReading(join(repo, QUOTA_LOG)),
         freshness: freshnessReport(repo, freshnessSettings, options), metrics: measures(repo) };
 }
 /** The last three measures, reduced to what the line shows; a repository the measure cannot read gives none. */
@@ -146,6 +147,7 @@ export async function run(args, io) {
             `Configuration : ${c.file ? `${c.file}${c.legacy ? ' (format V2)' : ''}` : 'aucune'}${c.error ? ` ; invalide : ${c.error.split('\n')[0]}` : c.file ? ` ; contrôles : ${c.gates.join(', ') || 'aucun'}` : ''}`,
             modelsLine(status.models),
             ciProofLine(status.ciProof.settings),
+            cleanLine(`Règles de fusion (rules.mode) : ${status.rulesMode === 'leger' ? 'léger' : 'strict'}${plugin?.modes[status.rulesMode] ? ` : ${plugin.modes[status.rulesMode].summary}` : ''}`, 600),
             `Registre : ${status.ledger.file ? `${status.ledger.file} ; ${status.ledger.issues ? `invalide (${status.ledger.issues} erreur(s), voir apv ledger validate)` : `${status.ledger.decisions} décision(s), empreinte ${status.ledger.hash}`}` : 'aucun'}`,
             `Specs (.apv/specs) : ${status.specs.length ? '' : 'aucune'}`,
             // File names, titles and parse errors come from files any agent or commit can write: one cleaned line each.

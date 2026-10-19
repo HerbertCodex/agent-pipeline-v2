@@ -1,5 +1,6 @@
 import { type PathClass, type ReviewDomainName, type ReviewPlanSettings } from './config.js';
-import { type DiffRisk, type RiskLevel } from './risk.js';
+import type { RulesMode } from '../rules/config.js';
+import { type DiffRisk, type ReviewLevel, type RiskLevel } from './risk.js';
 /**
  * `apv review plan`: the review domains proposed from the nature of a diff. Pilot project, 25 September 2026: a
  * spec of pure tidying (77 renames, rewritten imports, no behavior change, no migration, no screen) went through the
@@ -46,6 +47,9 @@ export interface PlannedFile {
     /** Risk of this file, and why (src/review/risk.ts). */
     risk: RiskLevel;
     riskWhy: string;
+    /** Level of this file (src/review/risk.ts, ReviewLevel), and why. */
+    level: ReviewLevel;
+    levelWhy: string;
 }
 export interface DomainDecision {
     domain: ReviewDomainName;
@@ -64,6 +68,11 @@ export interface DomainDecision {
 }
 export interface ReviewPlan {
     tool: 'apv review plan';
+    /** `leger`: the domains are those of the level; `strict`: the plan of APV3. */
+    mode: RulesMode;
+    /** The highest level of the files, and why. */
+    level: ReviewLevel;
+    levelReason: string;
     base: {
         ref: string;
         sha: string;
@@ -160,6 +169,8 @@ export interface PlanInput {
      * perimeter of both paths (security review of #141, A4).
      */
     renames?: boolean;
+    /** `leger` keeps only the domains of the level (no prudence); `strict` (default of this function) the plan of APV3. */
+    mode?: RulesMode;
 }
 export declare function planReviews(input: PlanInput): ReviewPlan;
 export {};

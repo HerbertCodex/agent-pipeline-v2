@@ -120,4 +120,17 @@ export function diffRisk(files, shown = 50) {
         return { level: 'faible', reason: `seulement ${tally(files)}`, files: [], fileCount: 0 };
     return { level: 'eleve', reason: tally(high), files: high.slice(0, shown).map(f => ({ path: f.path, why: f.riskWhy })), fileCount: high.length };
 }
+/**
+ * Patterns of the `server` class that only name a language or a format: alone, they make a file application code (level 1),
+ * never server code, so that a library or a command-line tool in Python, Go or Rust is not level 2 by its extension.
+ */
+export const SERVER_GENERIC = [
+    'index.*', 'main.*', '**/*.config.*', '**/*.conf', '**/*.toml', '**/*.yaml', '**/*.yml', '**/*.json', '**/*.ini',
+    '**/*.sh', '**/*.py', '**/*.rb', '**/*.go', '**/*.rs', '**/*.java', '**/*.kt', '**/*.php', '**/*.cs',
+];
+/** Guards and server configuration of level 2 besides the sensitive paths: security headers, deployment, the pipeline's own. */
+export const GUARD_FILES = [
+    '.apv/config.json', '**/.npmrc', '**/docker-compose*', '**/svelte.config.*', '**/vite.config.*', '**/next.config.*', '**/nuxt.config.*',
+    '**/astro.config.*', '**/remix.config.*', '**/vercel.json', '**/netlify.toml', '**/_headers', '**/wrangler.*',
+];
 //# sourceMappingURL=risk.js.map
