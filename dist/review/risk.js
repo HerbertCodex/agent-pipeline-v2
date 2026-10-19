@@ -128,6 +128,11 @@ export const SERVER_GENERIC = [
     'index.*', 'main.*', '**/*.config.*', '**/*.conf', '**/*.toml', '**/*.yaml', '**/*.yml', '**/*.json', '**/*.ini',
     '**/*.sh', '**/*.py', '**/*.rb', '**/*.go', '**/*.rs', '**/*.java', '**/*.kt', '**/*.php', '**/*.cs',
 ];
+/** CI workflows of the forges (level 2: a workflow can read the secrets); the rest of the CI stays level 0. */
+export const CI_WORKFLOWS = [
+    '.github/workflows/**', '.github/actions/**', '.gitlab-ci.yml', '.circleci/**', '.buildkite/**', '.woodpecker/**', '.woodpecker.yml', '.drone.yml',
+    '.travis.yml', 'azure-pipelines*.yml', 'bitbucket-pipelines.yml', '**/Jenkinsfile',
+];
 /** Guards and server configuration of level 2 besides the sensitive paths: security headers, deployment, the pipeline's own. */
 export const GUARD_FILES = [
     '.apv/config.json', '**/.npmrc', '**/docker-compose*', '**/svelte.config.*', '**/vite.config.*', '**/next.config.*', '**/nuxt.config.*',

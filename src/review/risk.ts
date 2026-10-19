@@ -130,9 +130,9 @@ export function diffRisk(files: readonly { path: string; risk: RiskLevel; riskWh
 }
 
 /**
- * Risk levels of APV4 (`apv review plan`, `rules.mode` leger): 0 trivial (tests, documentation, notes of the pipeline, CI,
+ * Risk levels of APV4 (`apv review plan`, `rules.mode` leger): 0 trivial (tests, documentation, notes of the pipeline, CI outside the workflows,
  * tooling configuration, pure renames), no review; 1 application code, no review; 2 sensitive (server code, routes,
- * authentication, secrets, security headers, dependencies, hooks and guards), securite; 3 critical (migrations, data code,
+ * authentication, secrets, security headers, dependencies, hooks and guards, CI workflows), securite; 3 critical (migrations, data code,
  * personal data, legal texts), securite with donnees and rgpd as the files require.
  */
 export type ReviewLevel = 0 | 1 | 2 | 3;
@@ -143,6 +143,11 @@ export type ReviewLevel = 0 | 1 | 2 | 3;
 export const SERVER_GENERIC: readonly string[] = [
   'index.*', 'main.*', '**/*.config.*', '**/*.conf', '**/*.toml', '**/*.yaml', '**/*.yml', '**/*.json', '**/*.ini',
   '**/*.sh', '**/*.py', '**/*.rb', '**/*.go', '**/*.rs', '**/*.java', '**/*.kt', '**/*.php', '**/*.cs',
+];
+/** CI workflows of the forges (level 2: a workflow can read the secrets); the rest of the CI stays level 0. */
+export const CI_WORKFLOWS: readonly string[] = [
+  '.github/workflows/**', '.github/actions/**', '.gitlab-ci.yml', '.circleci/**', '.buildkite/**', '.woodpecker/**', '.woodpecker.yml', '.drone.yml',
+  '.travis.yml', 'azure-pipelines*.yml', 'bitbucket-pipelines.yml', '**/Jenkinsfile',
 ];
 /** Guards and server configuration of level 2 besides the sensitive paths: security headers, deployment, the pipeline's own. */
 export const GUARD_FILES: readonly string[] = [

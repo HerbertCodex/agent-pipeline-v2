@@ -33,8 +33,8 @@ Code serveur, chemin sensible et configuration l'emportent sur tests et outillag
 comme un test) : ils gardent tous les domaines ; les lignes des tests et de l'outillage restent lues
 pour les termes de données et RGPD (adresse e-mail réelle comprise).
 Mode des règles (rules.mode, défaut leger) et niveau du diff, en tête : 0 trivial (tests, documentation,
-notes et état .apv, CI, configuration d'outillage, renommages purs) et 1 code applicatif : aucune relecture ;
-2 sensible (code serveur, routes, authentification, secrets, en-têtes, dépendances, crochets) : securite ;
+notes et état .apv, CI hors workflows, configuration d'outillage, renommages purs) et 1 code applicatif : aucune relecture ;
+2 sensible (code serveur, routes, authentification, secrets, en-têtes, dépendances, crochets, workflows de CI) : securite ;
 3 critique (migration, schéma, code de données, données personnelles, prestataire, texte légal) : securite
 et donnees ou rgpd selon les fichiers. En mode léger, rien n'est retenu par prudence et fidelite ne l'est
 que pour un écran couvert par une maquette validée ; les règles ci-dessus décrivent le mode strict.

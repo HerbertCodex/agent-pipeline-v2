@@ -49,9 +49,18 @@ function project(t, { base = {}, mode } = {}) {
 }
 const rule = (report, id) => report.rules.find(r => r.rule === id);
 
-test('level 0: a one-line change of the CI asks for no review, and rules check accepts it once proven', async t => {
+test('level 2: a one-line change of a CI workflow asks for the security review alone (a workflow can read the secrets)', async t => {
   const p = project(t);
-  const sha = p.commit({ '.github/workflows/ci.yml': 'name: ci\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n' });
+  p.commit({ '.github/workflows/ci.yml': 'name: ci\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n' });
+  const plan = await p.plan();
+  assert.equal(plan.level, 2);
+  assert.match(plan.levelReason, /workflow de CI/);
+  assert.deepEqual(plan.retained, ['securite']);
+});
+
+test('level 0: a one-line change of the CI outside the workflows asks for no review, and rules check accepts it once proven', async t => {
+  const p = project(t);
+  const sha = p.commit({ '.github/CODEOWNERS': '* @equipe\n' });
   const plan = await p.plan();
   assert.equal(plan.mode, 'leger');
   assert.equal(plan.level, 0);

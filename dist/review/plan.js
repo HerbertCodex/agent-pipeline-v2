@@ -8,7 +8,7 @@ import { DELTA_GIT, resolveCommit } from '../run/git-probe.js';
 import { ALWAYS_REVIEWED, PATH_CLASSES, REVIEW_DOMAINS } from './config.js';
 import { pureRename, renameKind, renamedNames } from './rename.js';
 import { covers, isScreen, mockupsOf } from '../rules/screens.js';
-import { AGENT_INSTRUCTIONS, CONFIG_FILES, GUARD_FILES, LEDGER_FILES, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, PILOT_NOTE_EXTENSIONS, ROUTING_DIR, ROUTING_TEST_DIR, SERVED_DIR, SERVER_GENERIC, SPEC_NOTES, TEST_DIRS, TEST_NAME, diffRisk, realAddress, } from './risk.js';
+import { AGENT_INSTRUCTIONS, CI_WORKFLOWS, CONFIG_FILES, GUARD_FILES, LEDGER_FILES, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, PILOT_NOTE_EXTENSIONS, ROUTING_DIR, ROUTING_TEST_DIR, SERVED_DIR, SERVER_GENERIC, SPEC_NOTES, TEST_DIRS, TEST_NAME, diffRisk, realAddress, } from './risk.js';
 const FILES_SHOWN = 50;
 const MAX_DIFF_BYTES = 512 * 1024 * 1024;
 function git(repo, args) {
@@ -577,6 +577,8 @@ function pathLevel(file, input) {
     const any = (globs) => sides(file).some(p => globs.some(g => matches(p, g)));
     if (testLike(file))
         return level(0, 'tests');
+    if (any(CI_WORKFLOWS))
+        return level(2, 'workflow de CI (peut lire les secrets)');
     if (any(input.sensitive.filter(g => !g.startsWith('.github/'))) || any(AGENT_INSTRUCTIONS) || any(GUARD_FILES))
         return level(2, SENSITIVE_WHY);
     if (sides(file).every(p => p.startsWith('.github/')))
