@@ -7,7 +7,7 @@ Pour un nouveau projet, le guide à donner à la session, avec ce que fait l'op�
 ## 1. Installer le plugin
 
 ```
-/plugin marketplace add HerbertCodex/agent-pipeline-v2@apv3
+/plugin marketplace add HerbertCodex/agent-pipeline-v2@apv4
 /plugin install apv@herbertcodex-apv
 ```
 

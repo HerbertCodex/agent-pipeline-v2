@@ -38,10 +38,10 @@ Prérequis : Claude Code, Git, Node.js 22.16 ou plus récent, `gh` connecté à 
 
 1. **Le plugin**, dans Claude Code :
    ```
-   /plugin marketplace add HerbertCodex/agent-pipeline-v2@apv3
+   /plugin marketplace add HerbertCodex/agent-pipeline-v2@apv4
    /plugin install apv@herbertcodex-apv
    ```
-   ou dans un terminal : `claude plugin marketplace add HerbertCodex/agent-pipeline-v2@apv3`, puis `claude plugin install apv@herbertcodex-apv`. Dans Claude Code, `apv` est alors sur le PATH des commandes Bash.
+   ou dans un terminal : `claude plugin marketplace add HerbertCodex/agent-pipeline-v2@apv4`, puis `claude plugin install apv@herbertcodex-apv`. Dans Claude Code, `apv` est alors sur le PATH des commandes Bash.
 2. **`apv` dans ton terminal** (facultatif, pour lancer les contrôles toi-même) : un lien vers l'exécutable du plugin, par exemple `ln -s "<dossier du plugin>/bin/apv" ~/.local/bin/apv`, où le dossier du plugin est le `installPath` de `apv@herbertcodex-apv` dans `~/.claude/plugins/installed_plugins.json`. Vérifie : `apv --version`.
 3. **Le projet**, depuis sa racine (un dépôt Git, avec son dépôt distant `origin` sur GitHub) :
    - projet neuf : `apv init` (ou `/apv:init`) ;

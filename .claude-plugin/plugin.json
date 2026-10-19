@@ -8,7 +8,7 @@
     "name": "Herbert Codex",
     "url": "https://github.com/HerbertCodex"
   },
-  "homepage": "https://github.com/HerbertCodex/agent-pipeline-v2/blob/apv3/docs/PLUGIN.md",
+  "homepage": "https://github.com/HerbertCodex/agent-pipeline-v2/blob/apv4/docs/PLUGIN.md",
   "repository": "https://github.com/HerbertCodex/agent-pipeline-v2",
   "license": "MIT",
   "keywords": ["pipeline", "agents", "sous-agents", "worktree", "revue", "securite", "rgpd", "chef-de-projet"]

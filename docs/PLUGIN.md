@@ -11,14 +11,14 @@ Prérequis : Claude Code, Git, Node.js 22.16 ou plus récent ; `gh` pour les PR 
 Depuis GitHub, dans Claude Code :
 
 ```
-/plugin marketplace add HerbertCodex/agent-pipeline-v2@apv3
+/plugin marketplace add HerbertCodex/agent-pipeline-v2@apv4
 /plugin install apv@herbertcodex-apv
 ```
 
 ou dans un terminal :
 
 ```bash
-claude plugin marketplace add HerbertCodex/agent-pipeline-v2@apv3
+claude plugin marketplace add HerbertCodex/agent-pipeline-v2@apv4
 claude plugin install apv@herbertcodex-apv
 ```
 
