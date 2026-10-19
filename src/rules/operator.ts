@@ -370,9 +370,20 @@ export function comparable(text: string): string {
 }
 
 const EDGE = /^[\s.!?…,;:"'()-]+|[\s.!?…,;:"'()-]+$/g;
-/** The sentences of a text (split on line breaks and on . ! ? followed by a space), each made comparable, empty ones dropped. */
+/**
+ * Whether a sentence (or a line) asserts nothing: a question (ends with « ? ») or a quote (between « », "" or '').
+ * « migration X appliquée ? Non, pas encore » and « « migration X appliquée » » never validate, confirm nor waive.
+ */
+export function unasserted(text: string): boolean {
+  const c = comparable(text);
+  return /\?[\s"')!.…]*$/.test(c) || /^"[^]*"[\s.!…]*$/.test(c) || /^'[^]*'[\s.!…]*$/.test(c);
+}
+/**
+ * The sentences of a text (split on line breaks and on . ! ? followed by a space), each made comparable, empty ones,
+ * questions and quotes dropped (`unasserted`).
+ */
 export function sentences(text: string): string[] {
-  return text.split(/\n+|(?<=[.!?…])\s+/).map(s => comparable(s).replace(EDGE, '')).filter(s => s.length > 0);
+  return text.split(/\n+|(?<=[.!?…])\s+/).filter(s => !unasserted(s)).map(s => comparable(s).replace(EDGE, '')).filter(s => s.length > 0);
 }
 
 /** Shortest quote that can anchor a validation: « ok » or « oui » alone never does. */
@@ -406,10 +417,11 @@ export interface JournalEntry {
 }
 export type OperatorMessage = Omit<JournalEntry, 'sig' | 'v'>;
 
-/** The signed entry of a message the operator typed; null when it has no sentence. */
+/** The signed entry of a message the operator typed; null when it is empty. */
 export function journalEntry(text: string, meta: { at: string; session: string }, key: Buffer): JournalEntry | null {
   const list = sentences(text);
-  if (!list.length) return null;
+  // A message of questions or quotes only is kept (its date), with no sentence that could anchor anything.
+  if (!comparable(text).replace(EDGE, '')) return null;
   const preview = text.split(/\n+|(?<=[.!?…])\s+/).filter(s => VALIDATES.test(s) && !WAIVER_LINE.test(s)).map(s => maskSecrets(s.trim().split(/\s+/).slice(0, 8).join(' '))).slice(0, 10);
   // The rule and the commit are kept as typed (a full commit id looks like a secret to the mask), the reason masked.
   const waivers = text.split('\n').filter(l => WAIVER_LINE.test(l)).map(l => {
@@ -622,6 +634,7 @@ function waiverLines(messages: readonly OperatorMessage[], rule: WaiverTarget, s
   const out: { message: OperatorMessage; reason: string; template: boolean; line: string }[] = [];
   for (const message of [...messages].reverse()) {
     for (const line of message.waivers) {
+      if (unasserted(line)) continue;
       const m = pattern.exec(line.normalize('NFC'));
       if (!m || !sha.toLowerCase().startsWith(m[1]!.toLowerCase())) continue;
       const reason = m[2]!.trim();

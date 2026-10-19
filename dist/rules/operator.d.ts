@@ -57,7 +57,15 @@ export declare function sign(key: Buffer, kind: string, payload: string): string
 export declare function signatureValid(key: Buffer, kind: string, payload: string, signature: unknown): boolean;
 /** Text compared without its typography: spaces collapsed, apostrophes and quotes unified, case ignored. */
 export declare function comparable(text: string): string;
-/** The sentences of a text (split on line breaks and on . ! ? followed by a space), each made comparable, empty ones dropped. */
+/**
+ * Whether a sentence (or a line) asserts nothing: a question (ends with « ? ») or a quote (between « », "" or '').
+ * « migration X appliquée ? Non, pas encore » and « « migration X appliquée » » never validate, confirm nor waive.
+ */
+export declare function unasserted(text: string): boolean;
+/**
+ * The sentences of a text (split on line breaks and on . ! ? followed by a space), each made comparable, empty ones,
+ * questions and quotes dropped (`unasserted`).
+ */
 export declare function sentences(text: string): string[];
 /** Shortest quote that can anchor a validation: « ok » or « oui » alone never does. */
 export declare const MIN_QUOTE = 12;
@@ -83,7 +91,7 @@ export interface JournalEntry {
     sig: string;
 }
 export type OperatorMessage = Omit<JournalEntry, 'sig' | 'v'>;
-/** The signed entry of a message the operator typed; null when it has no sentence. */
+/** The signed entry of a message the operator typed; null when it is empty. */
 export declare function journalEntry(text: string, meta: {
     at: string;
     session: string;

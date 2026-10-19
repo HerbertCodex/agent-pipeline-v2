@@ -7,7 +7,7 @@ import { enforceBaseGates } from '../gates/base-gates.js';
 import { runGates } from '../gates/run.js';
 import { verifyGates } from '../gates/verify.js';
 import { LockStore } from '../lock/store.js';
-import { migrationLines, modifiedReason, pendingReason, releaseMigrations } from '../release/migrations.js';
+import { migrationLines, pendingReason, refusedReason, releaseMigrations } from '../release/migrations.js';
 import { gitRoot, resolveCommit } from '../run/git-probe.js';
 import { commonDir } from '../stacks/idle.js';
 import { journalEntry } from './stack.js';
@@ -24,6 +24,7 @@ de <sha> (jamais de retour en arrière, jamais de force). Puis git push origin <
 affichée, branche distante relue. --dry-run vérifie tout et ne pousse rien.
 release.migrations (motifs) : chaque migration ajoutée depuis la production attend « migration <version> appliquée » tapé
 par l'opérateur dans une session Claude Code (journal de l'opérateur) ; une migration publiée modifiée est refusée.
+Motifs : ceux de la production, de <sha> et de from réunis (un commit qui les vide ou les change n'en retire aucun).
 auto : pour un lancement périodique (cron) ; rien à publier : 0 ; reçus rouges ou instables à ce commit : 1 sans
 relancer ; migration en attente : 0, rien lancé ; sinon suite complète relancée en entier (aucun reçu repris) dans une copie détachée (batch.setup), sans
 attendre la file des suites (occupée : 0, plus tard), puis publie si elle est verte au premier passage.
@@ -66,8 +67,21 @@ async function fullProof(repo, sha, from, production) {
     return verifyGates({ repo, config: proofConfig(repo, sha, production), commit: sha, stage: 'full', configFile: null, reuseReference: `refs/remotes/${REMOTE}/${from}` });
 }
 const proofLines = (proof) => proof.gates.filter(g => g.state !== 'passed').map(g => `${g.gateId} (${g.state})`);
-/** The migrations between production and `sha` (null when `release.migrations` declares none). */
-const migrationsOf = (repo, settings, production, sha) => settings.migrations?.length ? releaseMigrations(repo, commonDir(repo), settings.migrations, production, sha) : null;
+/**
+ * The migrations between production and `sha` (null when no `release.migrations` declares any). The patterns of production,
+ * of `sha` and of `from` together, as the checks of production are kept: a commit that empties or changes them removes none.
+ */
+function migrationsOf(repo, settings, production, sha) {
+    const patterns = [...new Set([settings, loadConfigAtCommit(repo, production).config.release, loadConfigAtCommit(repo, sha).config.release].flatMap(r => r?.migrations ?? []))];
+    return patterns.length ? releaseMigrations(repo, commonDir(repo), patterns, production, sha) : null;
+}
+/** Why the migrations stop a release: refused (`refusal`) or waiting for the operator (`wait`); null when they do not. */
+function migrationStop(m) {
+    const refused = m ? refusedReason(m) : null;
+    if (refused)
+        return { refusal: refused };
+    return m?.pending.length ? { wait: pendingReason(m) } : null;
+}
 /** Checks a release of `sha` and, unless `dryRun`, pushes it fast-forward. */
 async function release(repo, state, sha, dryRun) {
     const { settings, settings: { branch, from }, fromHead, production } = state;
@@ -83,10 +97,9 @@ async function release(repo, state, sha, dryRun) {
     if (production === sha)
         return { ...base, ok: true, lines: [`${REMOTE}/${branch} est déjà à ${short(sha)} : rien à publier.`] };
     // Before the suite: a migration not applied in production would put online code that calls what the base lacks.
-    if (migrations?.modified.length)
-        return refuse(modifiedReason(migrations.modified));
-    if (migrations?.pending.length)
-        return refuse(pendingReason(migrations.pending));
+    const stop = migrationStop(migrations);
+    if (stop)
+        return refuse('refusal' in stop ? stop.refusal : stop.wait);
     const applied = migrations ? migrationLines(migrations) : [];
     const proof = await fullProof(repo, sha, from, production);
     if (!proof.ok)
@@ -137,10 +150,11 @@ async function auto(io, repo, dryRun, asJson) {
             return report(io, asJson, await release(repo, state, fromHead, true), !dryRun, 'auto');
         // Migrations first: one waiting for the operator never costs a full suite.
         const migrations = migrationsOf(repo, settings, production, fromHead);
-        if (migrations?.modified.length)
-            return report(io, asJson, { ...base, ok: false, migrations, lines: [`Mise en ligne refusée : ${modifiedReason(migrations.modified)}.`] }, !dryRun, 'auto');
-        if (migrations?.pending.length)
-            return report(io, asJson, { ...base, migrations, lines: [`En attente : ${pendingReason(migrations.pending)} ; rien n'est publié ni lancé.`, ...migrationLines({ ...migrations, pending: [] })] }, false, 'auto');
+        const stop = migrationStop(migrations);
+        if (stop && 'refusal' in stop)
+            return report(io, asJson, { ...base, ok: false, migrations, lines: [`Mise en ligne refusée : ${stop.refusal}.`] }, !dryRun, 'auto');
+        if (stop)
+            return report(io, asJson, { ...base, migrations, lines: [`En attente : ${stop.wait} ; rien n'est publié ni lancé.`, ...migrationLines({ ...migrations, pending: [] })] }, false, 'auto');
         // A red or unstable suite already recorded at this commit is never run again by the cron; a green one never suffices.
         const proof = await fullProof(repo, fromHead, from, production);
         if (proof.gates.some(g => g.state === 'failed') || proof.flaky.length) {
