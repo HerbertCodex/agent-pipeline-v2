@@ -7,6 +7,7 @@ import { enforceBaseGates } from '../gates/base-gates.js';
 import { runGates } from '../gates/run.js';
 import { verifyGates } from '../gates/verify.js';
 import { LockStore } from '../lock/store.js';
+import { migrationLines, modifiedReason, pendingReason, releaseMigrations } from '../release/migrations.js';
 import { gitRoot, resolveCommit } from '../run/git-probe.js';
 import { commonDir } from '../stacks/idle.js';
 import { journalEntry } from './stack.js';
@@ -21,8 +22,10 @@ suite complète est prouvée au commit exact (apv gates verify --commit <sha>, i
 <sha> (défaut : tête distante de from) doit être un ancêtre de cette tête, et la production distante un ancêtre
 de <sha> (jamais de retour en arrière, jamais de force). Puis git push origin <sha>:refs/heads/<branch>, sortie
 affichée, branche distante relue. --dry-run vérifie tout et ne pousse rien.
+release.migrations (motifs) : chaque migration ajoutée depuis la production attend « migration <version> appliquée » tapé
+par l'opérateur dans une session Claude Code (journal de l'opérateur) ; une migration publiée modifiée est refusée.
 auto : pour un lancement périodique (cron) ; rien à publier : 0 ; reçus rouges ou instables à ce commit : 1 sans
-relancer ; sinon suite complète relancée en entier (aucun reçu repris) dans une copie détachée (batch.setup), sans
+relancer ; migration en attente : 0, rien lancé ; sinon suite complète relancée en entier (aucun reçu repris) dans une copie détachée (batch.setup), sans
 attendre la file des suites (occupée : 0, plus tard), puis publie si elle est verte au premier passage.
 Hors --dry-run : APV_ALLOW_MERGE=1 devant la commande (ordre de l'opérateur, ou son cron).
 Les contrôles de la branche de production sont toujours gardés (comme les contrôles de la base à la fusion).
@@ -63,10 +66,13 @@ async function fullProof(repo, sha, from, production) {
     return verifyGates({ repo, config: proofConfig(repo, sha, production), commit: sha, stage: 'full', configFile: null, reuseReference: `refs/remotes/${REMOTE}/${from}` });
 }
 const proofLines = (proof) => proof.gates.filter(g => g.state !== 'passed').map(g => `${g.gateId} (${g.state})`);
+/** The migrations between production and `sha` (null when `release.migrations` declares none). */
+const migrationsOf = (repo, settings, production, sha) => settings.migrations?.length ? releaseMigrations(repo, commonDir(repo), settings.migrations, production, sha) : null;
 /** Checks a release of `sha` and, unless `dryRun`, pushes it fast-forward. */
 async function release(repo, state, sha, dryRun) {
-    const { settings: { branch, from }, fromHead, production } = state;
-    const base = { ok: false, published: false, sha, branch, from, previous: production, lines: [] };
+    const { settings, settings: { branch, from }, fromHead, production } = state;
+    const migrations = production ? migrationsOf(repo, settings, production, sha) : null;
+    const base = { ok: false, published: false, sha, branch, from, previous: production, migrations, lines: [] };
     const refuse = (line) => ({ ...base, lines: [`Mise en ligne refusée : ${line}`] });
     if (!production)
         return refuse(`branche distante ${REMOTE}/${branch} absente : l'opérateur la crée une première fois`);
@@ -76,6 +82,12 @@ async function release(repo, state, sha, dryRun) {
         return refuse(`${REMOTE}/${branch} (${short(production)}) n'est pas un ancêtre de ${short(sha)} : avance rapide seulement, jamais de retour en arrière`);
     if (production === sha)
         return { ...base, ok: true, lines: [`${REMOTE}/${branch} est déjà à ${short(sha)} : rien à publier.`] };
+    // Before the suite: a migration not applied in production would put online code that calls what the base lacks.
+    if (migrations?.modified.length)
+        return refuse(modifiedReason(migrations.modified));
+    if (migrations?.pending.length)
+        return refuse(pendingReason(migrations.pending));
+    const applied = migrations ? migrationLines(migrations) : [];
     const proof = await fullProof(repo, sha, from, production);
     if (!proof.ok)
         return refuse(`suite complète non prouvée à ${short(sha)}, contrôles de ${REMOTE}/${branch} compris : ${proofLines(proof).join(', ')} (apv gates run --stage full --base ${REMOTE}/${branch} dans une copie à ce commit)`);
@@ -83,13 +95,13 @@ async function release(repo, state, sha, dryRun) {
         return refuse(`réussi(s) seulement après relance à ${short(sha)} : ${proof.flaky.join(', ')} (règle instable)`);
     const said = `suite complète prouvée à ${short(sha)} (${proof.required.length} contrôle(s), aucun instable) ; ${REMOTE}/${branch} ${short(production)} vers ${short(sha)} en avance rapide`;
     if (dryRun)
-        return { ...base, ok: true, lines: [`Mise en ligne possible : ${said}. --dry-run : rien n'est poussé.`] };
+        return { ...base, ok: true, lines: [`Mise en ligne possible : ${said}. --dry-run : rien n'est poussé.`, ...applied] };
     const push = git(repo, ['push', REMOTE, `${sha}:refs/heads/${branch}`]);
     const after = git(repo, ['ls-remote', REMOTE, `refs/heads/${branch}`]).stdout.split('\t')[0]?.trim() ?? '';
     git(repo, ['fetch', '--no-tags', REMOTE, `+refs/heads/${branch}:refs/remotes/${REMOTE}/${branch}`]);
     const done = push.status === 0 && after === sha;
     return { ...base, ok: done, published: done, push,
-        lines: [done ? `Mis en ligne : ${said}. ${REMOTE}/${branch} relue à ${short(after)}.` : `Mise en ligne en échec : git push sorti en ${push.status}, ${REMOTE}/${branch} relue à ${short(after || null)}.`] };
+        lines: [done ? `Mis en ligne : ${said}. ${REMOTE}/${branch} relue à ${short(after)}.` : `Mise en ligne en échec : git push sorti en ${push.status}, ${REMOTE}/${branch} relue à ${short(after || null)}.`, ...applied] };
 }
 function report(io, asJson, outcome, history, mode) {
     if (history) {
@@ -117,12 +129,18 @@ async function auto(io, repo, dryRun, asJson) {
     }
     try {
         const state = remoteState(repo);
-        const { settings: { branch, from }, fromHead, production } = state;
-        const base = { ok: true, published: false, sha: fromHead, branch, from, previous: production };
+        const { settings, settings: { branch, from }, fromHead, production } = state;
+        const base = { ok: true, published: false, sha: fromHead, branch, from, previous: production, migrations: null, lines: [] };
         if (production === fromHead)
             return report(io, asJson, { ...base, lines: [`Rien à publier : ${REMOTE}/${branch} est à la tête de ${from} (${short(fromHead)}).`] }, false, 'auto');
         if (!production || !isAncestor(repo, production, fromHead))
             return report(io, asJson, await release(repo, state, fromHead, true), !dryRun, 'auto');
+        // Migrations first: one waiting for the operator never costs a full suite.
+        const migrations = migrationsOf(repo, settings, production, fromHead);
+        if (migrations?.modified.length)
+            return report(io, asJson, { ...base, ok: false, migrations, lines: [`Mise en ligne refusée : ${modifiedReason(migrations.modified)}.`] }, !dryRun, 'auto');
+        if (migrations?.pending.length)
+            return report(io, asJson, { ...base, migrations, lines: [`En attente : ${pendingReason(migrations.pending)} ; rien n'est publié ni lancé.`, ...migrationLines({ ...migrations, pending: [] })] }, false, 'auto');
         // A red or unstable suite already recorded at this commit is never run again by the cron; a green one never suffices.
         const proof = await fullProof(repo, fromHead, from, production);
         if (proof.gates.some(g => g.state === 'failed') || proof.flaky.length) {
@@ -130,7 +148,7 @@ async function auto(io, repo, dryRun, asJson) {
             return report(io, asJson, { ...base, ok: false, lines: [`Suite complète déjà passée à ${short(fromHead)}, ${what} : rien n'est publié ni relancé (corriger sur ${from}).`] }, !dryRun, 'auto');
         }
         if (dryRun)
-            return report(io, asJson, { ...base, lines: [`Suite complète à relancer à ${short(fromHead)} dans une copie détachée, puis mise en ligne. --dry-run : rien n'est lancé.`] }, false, 'auto');
+            return report(io, asJson, { ...base, migrations, lines: [`Suite complète à relancer à ${short(fromHead)} dans une copie détachée, puis mise en ligne. --dry-run : rien n'est lancé.`, ...(migrations ? migrationLines(migrations) : [])] }, false, 'auto');
         const suite = await runCopy(io, repo, common, fromHead, production);
         if (suite.busy)
             return report(io, asJson, { ...base, lines: [`Machine occupée (${suite.busy}) : plus tard.`] }, false, 'auto');

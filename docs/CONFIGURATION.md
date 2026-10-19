@@ -767,6 +767,13 @@ Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR 
 
 Section APV4 facultative (4.0.0-alpha.2) : `{ "release": { "branch": "production", "from": "main" } }`, deux noms de branche différents. En mode léger, une PR vers `from` se fusionne sur la preuve de tâche (section lue à la base commune, comme `rules`), seulement si la base déclare au moins un contrôle de stage `task` (sinon la suite complète, dit en une ligne) ; `branch` n'avance que par `apv release`, en avance rapide, vers un commit de `from` dont la suite complète est prouvée ([CLI.md](CLI.md#apv-release)). Le garde-fou refuse tout `git push` qui l'écrit (configuration illisible : `production`). Absente : rien ne change, la suite complète reste exigée avant chaque fusion.
 
+`release.migrations` (4.0.0-alpha.3, facultatif) : motifs de chemins des fichiers de migration (`*` dans un segment, `**` à travers les `/`, `?`, `{a,b}` ; 100 au plus), lus sur `from` comme le reste de la section.
+- Chaque migration **ajoutée** depuis la production distante attend « migration <version> appliquée » tapé par l'opérateur dans une session Claude Code (journal de l'opérateur, comme les dérogations) : sans elle, rien n'est publié ([CLI.md](CLI.md#apv-release)).
+- Une migration **modifiée**, supprimée ou renommée depuis la production est refusée : une migration publiée ne change pas.
+- Aucune valeur implicite. Suggestion pour Supabase : `{ "release": { "branch": "production", "from": "main", "migrations": ["supabase/migrations/*.sql"] } }`, les motifs de `db.migrations` (`apv db check`).
+- Absente ou `[]` : aucune vérification des migrations à la mise en ligne.
+- Le journal est celui du dépôt Git (dossier commun) : le cron `apv release auto` doit tourner dans le même dépôt que les sessions de l'opérateur.
+
 ## Fraîcheur de l'état : `freshness`
 
 Section APV3, facultative, validée par le chargeur commun : les fichiers vivants d'état et de reprise que `apv status` (section « Fichiers d'état périmés », `freshness` en JSON) et le crochet de début de session surveillent. Un état de reprise se réécrit court à chaque étape et ce qui est terminé part en archive : un fichier qui n'a pas bougé depuis plus de `maxAgeDays` jours, ou un journal qui dépasse `maxLines` lignes, est signalé avec la proposition « couper : état court + archive ». Lecture seule : rien n'est déplacé ni supprimé.

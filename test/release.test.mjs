@@ -9,6 +9,8 @@ import { evaluateCommand, REASONS } from '../hooks/scripts/bash-guard.mjs';
 import { hookContext } from '../hooks/scripts/harness-guard.mjs';
 import { LockStore } from '../dist/lock/store.js';
 import { releaseTarget, stackRules } from '../dist/commands/stack.js';
+import { journalEntry, operatorJournalPath } from '../dist/rules/operator.js';
+import { commonDirOf, operatorSays } from './support/rules.mjs';
 
 /** Release decoupled from the merge: the task proof at the merge (light mode), the full suite at `apv release`. */
 
@@ -294,4 +296,105 @@ test('guard: a decoy repository whose configuration declares nothing opens neith
   assert.equal(evaluateCommand('git push origin HEAD:en-ligne', {}, inDecoy).decision, 'deny');
   assert.equal(evaluateCommand('git push origin HEAD:production', {}, inDecoy).decision, 'deny');
   assert.equal(evaluateCommand('git push origin HEAD:feat', {}, inDecoy).decision, 'allow');
+});
+
+// Incident of 19 October: code calling the functions of a migration not applied in production was put online (503).
+const MIGRATING = { ...RELEASE, migrations: ['supabase/migrations/*.sql'] };
+const MIGRATION = 'supabase/migrations/20261019120000_ajout.sql';
+
+/** A project whose main holds `files` pushed past production, its full suite proven; `marker`: written by the full suite. */
+async function migrating(t, files, marker = null) {
+  const unit = marker ? node(`require("fs").writeFileSync(${JSON.stringify(marker)}, "")`) : node('0');
+  const p = project(t, { release: MIGRATING, gates: [{ id: 'lint', stage: 'task', command: node('0') }, { id: 'unit', stage: 'full', command: unit }] });
+  for (const [path, text] of Object.entries(files)) p.commit(path, text);
+  git(p.repo, 'push', '-q', 'origin', 'main');
+  if (!marker) assert.equal((await apv(p.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/production'])).code, 0);
+  return p;
+}
+
+test('apv release, migrations: none added, the release goes on and says so in --json', async t => {
+  const p = await migrating(t, { 'a.txt': 'a\n', 'supabase/seed.sql': 'select 1;\n' });
+  const done = await apv(p.repo, ['release', '--json'], ALLOW);
+  assert.equal(done.code, 0, done.stdout + done.stderr);
+  assert.deepEqual(done.json().migrations, { pending: [], confirmed: [], modified: [] });
+  assert.equal(p.remote('production'), p.remote('main'));
+});
+
+test('apv release, migrations: an added one waits for the operator (manual 1, auto 0 without running the suite)', async t => {
+  const marker = join(mkdtempSync(join(tmpdir(), 'apv4-release-suite-')), 'ran');
+  t.after(() => rmSync(dirname(marker), { recursive: true, force: true }));
+  const p = await migrating(t, { [MIGRATION]: 'create function f() returns int as $$ select 1 $$ language sql;\n', 'app.js': 'f()\n' }, marker);
+  const before = p.remote('production');
+  const dry = await apv(p.repo, ['release', '--dry-run', '--json']);
+  assert.equal(dry.code, 1);
+  assert.deepEqual(dry.json().migrations, { pending: [MIGRATION], confirmed: [], modified: [] });
+  const manual = await apv(p.repo, ['release'], ALLOW);
+  assert.equal(manual.code, 1, manual.stdout + manual.stderr);
+  assert.match(manual.stdout, /refusée : migration\(s\) supabase\/migrations\/20261019120000_ajout\.sql à appliquer en production puis taper .*« migration 20261019120000 appliquée »/);
+  const auto = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(auto.code, 0, auto.stdout + auto.stderr);
+  assert.match(auto.stdout, /^En attente : migration\(s\) .*20261019120000_ajout\.sql à appliquer en production puis taper .*« migration 20261019120000 appliquée » ; rien n'est publié ni lancé/);
+  assert.equal(existsSync(marker), false, 'the full suite is not run for nothing');
+  assert.equal(p.remote('production'), before);
+});
+
+test('apv release, migrations: the confirmation typed by the operator (case and spaces ignored) releases; another version does not', async t => {
+  const p = await migrating(t, { [MIGRATION]: 'select 1;\n' });
+  const before = p.remote('production');
+  operatorSays(p.repo, 'Bien reçu.\nmigration 20261019120001 appliquée');
+  const other = await apv(p.repo, ['release'], ALLOW);
+  assert.equal(other.code, 1, other.stdout);
+  assert.match(other.stdout, /migration 20261019120000 appliquée/);
+  assert.equal(p.remote('production'), before);
+  operatorSays(p.repo, 'C\'est fait.\n  Migration   20261019120000_AJOUT.sql  APPLIQUÉE.');
+  const dry = await apv(p.repo, ['release', '--dry-run']);
+  assert.equal(dry.code, 0, dry.stdout);
+  assert.match(dry.stdout, /Migration\(s\) confirmée\(s\) appliquée\(s\) par l'opérateur : supabase\/migrations\/20261019120000_ajout\.sql/);
+  const done = await apv(p.repo, ['release', '--json'], ALLOW);
+  assert.equal(done.code, 0, done.stdout + done.stderr);
+  assert.deepEqual(done.json().migrations.confirmed, [MIGRATION]);
+  assert.equal(p.remote('production'), p.remote('main'));
+});
+
+test('apv release, migrations: the version alone confirms, and auto then runs the suite and releases', async t => {
+  const p = await migrating(t, { [MIGRATION]: 'select 1;\n' });
+  operatorSays(p.repo, 'migration 20261019120000 appliquée');
+  const auto = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(auto.code, 0, auto.stdout + auto.stderr);
+  assert.equal(p.remote('production'), p.remote('main'));
+});
+
+test('apv release, migrations: one already published and then changed is refused (manual and auto)', async t => {
+  const p = await migrating(t, { [MIGRATION]: 'select 1;\n' });
+  operatorSays(p.repo, 'migration 20261019120000 appliquée');
+  assert.equal((await apv(p.repo, ['release'], ALLOW)).code, 0);
+  const published = p.remote('production');
+  p.commit(MIGRATION, 'select 2;\n');
+  git(p.repo, 'push', '-q', 'origin', 'main');
+  assert.equal((await apv(p.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/production'])).code, 0);
+  for (const args of [['release'], ['release', 'auto']]) {
+    const r = await apv(p.repo, args, ALLOW);
+    assert.equal(r.code, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, /migration\(s\) déjà publiée\(s\) modifiée\(s\).*20261019120000_ajout\.sql \(une migration publiée ne change pas/);
+  }
+  assert.equal(p.remote('production'), published);
+});
+
+test('apv release, migrations: a confirmation an agent writes (unsigned journal line, other key, commit, pasted refusal) is never accepted', async t => {
+  const p = await migrating(t, { [MIGRATION]: 'select 1;\n' });
+  const journal = operatorJournalPath(commonDirOf(p.repo));
+  const forged = journalEntry('migration 20261019120000 appliquée', { at: new Date().toISOString(), session: 'agent' }, Buffer.alloc(32, 7));
+  mkdirSync(dirname(journal), { recursive: true });
+  writeFileSync(journal, `${JSON.stringify(forged)}\n${JSON.stringify({ ...forged, sig: '00'.repeat(32) })}\n`);
+  p.commit('NOTES.md', 'migration 20261019120000 appliquée\n');
+  git(p.repo, 'commit', '-q', '--allow-empty', '-m', 'migration 20261019120000 appliquée');
+  git(p.repo, 'push', '-q', 'origin', 'main');
+  assert.equal((await apv(p.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/production'])).code, 0);
+  // The refusal of the tool pasted back by the operator is no confirmation either (the sentence is never alone there).
+  const refusal = (await apv(p.repo, ['release'], ALLOW)).stdout;
+  operatorSays(p.repo, refusal);
+  const r = await apv(p.repo, ['release', '--json'], ALLOW);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.deepEqual(r.json().migrations.pending, [MIGRATION]);
+  assert.notEqual(p.remote('production'), p.remote('main'));
 });

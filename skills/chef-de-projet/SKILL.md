@@ -47,7 +47,7 @@ Les consignes de l'opérateur (mémoire, `CLAUDE.md`, `.apv/brief.md`, registre 
 ## 5. Modules : seulement s'ils existent dans le projet
 `apv status` dit lesquels sont actifs. Un module absent ne coûte rien.
 - **design** (projet avec écrans et maquettes dans `docs/design/`) : `apv design list --screen <écran>` avant de coder un écran ; écran absent : `/apv:design` avec l'opérateur. `apv design check` avant la PR.
-- **données** (projet avec base et migrations) : au plus une nouvelle migration par PR ; `apv db check` avant la PR ; l'opérateur applique les migrations en production lui-même.
+- **données** (projet avec base et migrations) : au plus une nouvelle migration par PR ; `apv db check` avant la PR ; l'opérateur applique les migrations en production lui-même ; avec `release.migrations`, la mise en ligne attend « migration <version> appliquée » tapé par l'opérateur (jamais par toi).
 - **rgpd** (données personnelles, prestataires, pages légales) : `apv:dpo` seulement quand un traitement, un prestataire ou une page légale change.
 - **web** (site public) : `apv web audit` sur les PR qui touchent les pages publiques, et après déploiement.
 - **dast** (scan ZAP déclaré dans `review.dast`) : lancé par toi, sous son verrou, au niveau 2 et plus.

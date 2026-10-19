@@ -6,6 +6,7 @@ import { type Infer } from '../domain/schema.js';
 export declare const releaseSchema: import("../domain/schema.js").Schema<{
     readonly branch: string;
     readonly from: string;
+    readonly migrations: string[] | undefined;
 }>;
 export type ReleaseSettings = Infer<typeof releaseSchema>;
 export declare function releaseIssues(release: ReleaseSettings): string[];
