@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
@@ -9,6 +9,7 @@ import { evaluateCommand, REASONS } from '../hooks/scripts/bash-guard.mjs';
 import { hookContext } from '../hooks/scripts/harness-guard.mjs';
 import { LockStore } from '../dist/lock/store.js';
 import { releaseTarget, stackRules } from '../dist/commands/stack.js';
+import { retryDecision } from '../dist/commands/release.js';
 import { journalEntry, operatorJournalPath, sentences, waiverFor } from '../dist/rules/operator.js';
 import { TEST_KEY, commonDirOf, operatorSays } from './support/rules.mjs';
 
@@ -184,8 +185,8 @@ test('apv release auto: nothing to publish, proven head published, red suite nev
   assert.match(red.stdout, /rouge ou instable .*unit \(failed\).*rien n'est publié/);
   assert.equal(p.remote('production'), fresh);
   const next = await apv(p.repo, ['release', 'auto'], ALLOW);
-  assert.equal(next.code, 0);
-  assert.match(next.stdout, /Suite rouge à .*exécution .*nouveau commit sur main/);
+  assert.equal(next.code, 1);
+  assert.match(next.stdout, /Suite rouge à .*exécution .*jamais relancée au même commit .*nouveau commit sur main/);
 });
 
 test('apv release auto: a green receipt already there never suffices, the suite runs again in its copy', async t => {
@@ -555,42 +556,49 @@ test('apv release auto, without stacks: a red check stays a red suite, not an in
   assert.doesNotMatch(r.stdout, /panne d'infrastructure/);
 });
 
-test('apv release auto: a red suite at the same commit is not run again (0); infrastructure retries after 30 minutes only', { skip: !hasFlock && 'flock(1) missing' }, async t => {
+test('apv release auto: a real infrastructure failure is run again 30 minutes after its receipts, or at once with --force-retry', { skip: !hasFlock && 'flock(1) missing' }, async t => {
   const p = stackProject(t, { envLine: '# aucune variable\n' });
-  const file = join(commonDirOf(p.repo), 'apv', 'release', 'last-auto.json');
   const first = await apv(p.repo, ['release', 'auto'], p.env);
   assert.equal(first.code, 1, first.stdout + first.stderr);
-  const rec = JSON.parse(readFileSync(file, 'utf8'));
-  assert.equal(rec.kind, 'infrastructure');
+  assert.match(first.stdout, /panne d'infrastructure/);
   const soon = await apv(p.repo, ['release', 'auto'], p.env);
   assert.equal(soon.code, 0, soon.stdout + soon.stderr);
-  assert.match(soon.stdout, /Panne d'infrastructure .*nouvel essai après 30 min/);
-  // Past 30 minutes, the stack repaired: the pass runs again and publishes.
-  writeFileSync(file, JSON.stringify({ ...rec, at: Date.now() - 31 * 60_000 }));
-  writeFileSync(join(p.dir, 'stack1.env'), 'STACK_URL=http://127.0.0.1:55321\n');
-  const later = await apv(p.repo, ['release', 'auto'], p.env);
-  assert.equal(later.code, 0, later.stdout + later.stderr);
-  assert.equal(p.remote('production'), p.remote('main'));
-});
-
-test('apv release auto: --force-retry runs a suite that was red at the same commit', async t => {
-  const marker = join(mkdtempSync(join(tmpdir(), 'apv4-release-retry-')), 'ok');
-  t.after(() => rmSync(dirname(marker), { recursive: true, force: true }));
-  const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node(`process.exit(require("fs").existsSync(${JSON.stringify(marker)}) ? 0 : 1)`) }] });
-  p.commit('a.txt', 'a\n'); git(p.repo, 'push', '-q', 'origin', 'main');
-  assert.equal((await apv(p.repo, ['release', 'auto'], ALLOW)).code, 1);
-  writeFileSync(marker, '');
-  const waiting = await apv(p.repo, ['release', 'auto'], ALLOW);
-  assert.equal(waiting.code, 0);
-  assert.match(waiting.stdout, /Suite rouge à/);
+  assert.match(soon.stdout, /Panne d'infrastructure à .* le \d{4}-\d\d-\d\d \d\d:\d\d UTC, il y a 0 min \(exécution .*\) : integration : variable d'environnement absente .*nouvel essai après 30 min/);
   assert.notEqual(p.remote('production'), p.remote('main'));
-  const forced = await apv(p.repo, ['release', 'auto', '--force-retry'], ALLOW);
+  // Past 30 minutes after its receipts (their date, never a file), the same proof lets the suite run again.
+  const proof = { gates: [{ gateId: 'integration', state: 'failed', status: 'failed', runId: 'r1', failure: { infrastructure: { gateId: 'integration', kind: 'environment', detail: 'x' }, endedAt: 1_000_000 } }] };
+  assert.equal(retryDecision(proof, 1_000_000 + 29 * 60_000, false).kind, 'wait');
+  assert.equal(retryDecision(proof, 1_000_000 + 31 * 60_000, false).kind, 'run');
+  assert.equal(retryDecision(proof, 1_000_000 + 60_000, true).kind, 'run');
+  const code = { gates: [...proof.gates, { gateId: 'unit', state: 'failed', status: 'failed', runId: 'r1', failure: { infrastructure: null, endedAt: 1_000_000 } }] };
+  assert.equal(retryDecision(code, 1_000_000 + 31 * 60_000, true).kind, 'code', 'one failure of the code: never, --force-retry included');
+  // The stack repaired, --force-retry on the real receipts of the infrastructure failure: run again and published.
+  writeFileSync(join(p.dir, 'stack1.env'), 'STACK_URL=http://127.0.0.1:55321\n');
+  const forcedFirst = await apv(p.repo, ['release', 'auto', '--force-retry'], p.env);
+  assert.equal(forcedFirst.code, 0, forcedFirst.stdout + forcedFirst.stderr);
+  assert.equal(p.remote('production'), p.remote('main'));
+  // Another commit, the stack broken again: --force-retry runs it again within the 30 minutes.
+  writeFileSync(join(p.dir, 'stack1.env'), '# aucune variable\n');
+  p.commit('b.txt', 'b\n'); git(p.repo, 'push', '-q', 'origin', 'main');
+  assert.equal((await apv(p.repo, ['release', 'auto'], p.env)).code, 1);
+  writeFileSync(join(p.dir, 'stack1.env'), 'STACK_URL=http://127.0.0.1:55321\n');
+  const forced = await apv(p.repo, ['release', 'auto', '--force-retry'], p.env);
   assert.equal(forced.code, 0, forced.stdout + forced.stderr);
   assert.equal(p.remote('production'), p.remote('main'));
 });
 
-// Security review of 1786b40: the receipts are always verified (M1), the record written without following a link (L1),
-// the wait after a red suite said in full (L3).
+/** A commit whose check fails in its code until `ok` exists; `runs` counts the passes of its command. */
+function codeFailure(t) {
+  const dir = mkdtempSync(join(tmpdir(), 'apv4-release-code-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const ok = join(dir, 'ok'); const runs = join(dir, 'runs');
+  const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node(`const fs = require("fs"); fs.appendFileSync(${JSON.stringify(runs)}, "x"); if (!fs.existsSync(${JSON.stringify(ok)})) { console.error("expected 1 received 2"); process.exit(1); }`) }] });
+  const sha = p.commit('a.txt', 'a\n'); git(p.repo, 'push', '-q', 'origin', 'main');
+  return { ...p, sha, ok, count: () => (existsSync(runs) ? readFileSync(runs, 'utf8').length : 0), record: join(commonDirOf(p.repo), 'apv', 'release', 'last-auto.json') };
+}
+
+// Security review of 1786b40: the receipts are always verified and alone decide a new run (M1), no record of the last pass
+// any more (L1), the wait after a red suite said with the date and run of its receipts (L3).
 
 /** A commit whose full suite passed only after the relaunch of a failed test (unstable), proven by `apv gates run`. */
 async function flakyCommit(t) {
@@ -619,50 +627,54 @@ test('apv release auto: unstable receipts never publish, whatever the record of 
   }
 });
 
-test('apv release auto: a red receipt the cron did not write refuses even with --force-retry or a forged record (review 1786b40, M1)', async t => {
-  const marker = join(mkdtempSync(join(tmpdir(), 'apv4-release-red-')), 'ok');
-  t.after(() => rmSync(dirname(marker), { recursive: true, force: true }));
-  const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node(`process.exit(require("fs").existsSync(${JSON.stringify(marker)}) ? 0 : 1)`) }] });
-  const sha = p.commit('a.txt', 'a\n'); git(p.repo, 'push', '-q', 'origin', 'main');
-  assert.equal((await apv(p.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/production'])).code, 1);
-  writeFileSync(marker, '');
-  const record = join(commonDirOf(p.repo), 'apv', 'release', 'last-auto.json');
-  mkdirSync(dirname(record), { recursive: true });
-  writeFileSync(record, JSON.stringify({ sha, kind: 'infrastructure', at: 0, runId: 'forge' }));
+
+test('apv release auto: a failure of the code is never run again at the same commit, --force-retry and a forged record included (review 1786b40, M1)', async t => {
+  const p = codeFailure(t);
+  const first = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(first.code, 1, first.stdout + first.stderr);
+  assert.equal(p.count(), 1);
+  writeFileSync(p.ok, '');
+  // A record an agent writes (an infrastructure failure long ago) is never read.
+  mkdirSync(dirname(p.record), { recursive: true });
+  writeFileSync(p.record, JSON.stringify({ sha: p.sha, kind: 'infrastructure', at: 0, runId: 'forge' }));
   for (const args of [['release', 'auto'], ['release', 'auto', '--force-retry']]) {
     const r = await apv(p.repo, args, ALLOW);
-    assert.equal(r.code, 1, r.stdout + r.stderr);
-    assert.match(r.stdout, /en échec : unit \(failed\) : rien n'est publié ni relancé/);
-    assert.notEqual(p.remote('production'), sha);
+    assert.equal(r.code, 1, `${args.join(' ')}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /en échec : unit \(failed\) : jamais relancée au même commit \(--force-retry compris\) ; en attente d'un nouveau commit sur main ; rien n'est publié ni lancé/);
+    assert.equal(p.count(), 1, `${args.join(' ')}: nothing run again`);
+    assert.notEqual(p.remote('production'), p.sha);
   }
+  // A new commit unblocks it.
+  p.commit('b.txt', 'b\n'); git(p.repo, 'push', '-q', 'origin', 'main');
+  assert.equal((await apv(p.repo, ['release', 'auto'], ALLOW)).code, 0);
+  assert.equal(p.remote('production'), p.remote('main'));
 });
 
-test('apv release auto: a red suite of the cron is not run again, said with its date and run (review 1786b40, L3)', async t => {
-  const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node('process.exit(1)') }] });
-  const sha = p.commit('a.txt', 'a\n'); git(p.repo, 'push', '-q', 'origin', 'main');
-  assert.equal((await apv(p.repo, ['release', 'auto'], ALLOW)).code, 1);
-  const rec = JSON.parse(readFileSync(join(commonDirOf(p.repo), 'apv', 'release', 'last-auto.json'), 'utf8'));
-  assert.equal(rec.kind, 'red');
+test('apv release auto: a red receipt written by hand (not by the cron) refuses the same way (review 1786b40, M1)', async t => {
+  const p = codeFailure(t);
+  assert.equal((await apv(p.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/production'])).code, 1);
+  writeFileSync(p.ok, '');
+  const r = await apv(p.repo, ['release', 'auto', '--force-retry'], ALLOW);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.equal(p.count(), 1);
+  assert.notEqual(p.remote('production'), p.sha);
+});
+
+test('apv release auto: the wait after a red suite is said with the date and the run of its receipts (review 1786b40, L3)', async t => {
+  const p = codeFailure(t);
+  const first = await apv(p.repo, ['release', 'auto', '--json'], ALLOW);
+  assert.equal(first.code, 1);
   const r = await apv(p.repo, ['release', 'auto'], ALLOW);
-  assert.equal(r.code, 0, r.stdout + r.stderr);
-  const day = new Date(rec.at).toISOString().slice(0, 10);
-  assert.match(r.stdout, new RegExp(`Suite rouge à ${sha.slice(0, 12)} le ${day} \\d\\d:\\d\\d UTC \\(exécution ${rec.runId}\\) : pas de relance, en attente d'un nouveau commit sur main ou de --force-retry`));
+  const day = new Date().toISOString().slice(0, 10);
+  assert.match(r.stdout, new RegExp(`Suite rouge à ${p.sha.slice(0, 12)} le ${day} \\d\\d:\\d\\d UTC \\(exécution \\d{8}T\\d{6}Z-[0-9a-f]+\\), en échec : unit \\(failed\\)`));
 });
 
-test('apv release auto: the record of the last pass is never written through a symbolic link (review 1786b40, L1)', async t => {
+test('apv release auto: no record of the last pass is written any more, so none through a symbolic link (review 1786b40, L1)', async t => {
   const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node('process.exit(1)') }] });
   p.commit('a.txt', 'a\n'); git(p.repo, 'push', '-q', 'origin', 'main');
   const victim = join(p.root, 'victim.txt'); writeFileSync(victim, 'ORIGINAL');
   const record = join(commonDirOf(p.repo), 'apv', 'release', 'last-auto.json');
   mkdirSync(dirname(record), { recursive: true }); symlinkSync(victim, record);
-  const r = await apv(p.repo, ['release', 'auto'], ALLOW);
-  assert.equal(r.code, 1, r.stdout + r.stderr);
-  assert.equal(readFileSync(victim, 'utf8'), 'ORIGINAL');
-  assert.match(r.stderr, /Dernier passage non enregistré .*lien symbolique : refusé/);
-  // A plain record is replaced whole (temporary file renamed): no temporary left beside it.
-  rmSync(record);
-  p.commit('b.txt', 'b\n'); git(p.repo, 'push', '-q', 'origin', 'main');
   assert.equal((await apv(p.repo, ['release', 'auto'], ALLOW)).code, 1);
-  assert.equal(JSON.parse(readFileSync(record, 'utf8')).kind, 'red');
-  assert.deepEqual(readdirSync(dirname(record)).filter(f => f.endsWith('.tmp')), []);
+  assert.equal(readFileSync(victim, 'utf8'), 'ORIGINAL');
 });
