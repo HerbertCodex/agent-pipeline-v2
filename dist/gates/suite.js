@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { DEFAULT_SHARE_MAX_MS } from '../config/load.js';
 import { canonicalPath } from '../domain/paths.js';
 import { PipelineError, errorMessage, invariant } from '../domain/errors.js';
 import { describeHolder, waitReporter } from '../lock/run.js';
@@ -44,8 +45,15 @@ export function queuePlaces(slots, options) {
     return { whole: slots === 1 || (slots === 'per-stack' && options.used.length === 0), slots: numbered ? 'one' : 'none', stacks: sorted(options.used) };
 }
 /** Keeps a lease held by apv until the returned release: renewed every third of its life, released once. */
-function keepLease(store, resource, token, log) {
+function keepLease(store, resource, token, log, 
+/** Past this instant (ms since the epoch), the lease is no longer renewed: it lapses within its TTL (a share past its longest). */
+untilMs, overdue) {
     const heartbeat = setInterval(() => {
+        if (untilMs !== undefined && Date.now() >= untilMs) {
+            clearInterval(heartbeat);
+            log(overdue ?? `Verrou « ${resource} » au-delà de sa durée maximale : bail non renouvelé.`);
+            return;
+        }
         store.renew(resource, token, LEASE_TTL_SECONDS).then(ok => { if (!ok)
             log(`Attention : le verrou « ${resource} » n'est plus à nous (repris ou libéré de force).`); }, (error) => log(`Renouvellement du verrou « ${resource} » en échec : ${errorMessage(error)}`));
     }, (LEASE_TTL_SECONDS * 1000) / 3);
@@ -134,6 +142,12 @@ function liveLeases(store, match) {
 /** Full suites (and measures) that hold or wait for the queue: the copy places (taken first by every suite) and the whole queue. */
 const suiteHolders = (store, resource) => liveLeases(store, r => r === resource || r.startsWith(`${resource}-copy-`));
 const shareHolders = (store, resource) => liveLeases(store, r => r.startsWith(sharePrefix(resource)));
+/** Whether a share has held the queue for `maxMs` or more (from its `acquiredAt`): a full suite no longer waits for it. */
+const shareOverdue = (record, maxMs, now = Date.now()) => {
+    const at = Date.parse(record.acquiredAt);
+    return Number.isFinite(at) && now - at >= maxMs;
+};
+const hours = (ms) => ms < 1000 ? `${ms} ms` : ms >= 3_600_000 && ms % 3_600_000 === 0 ? `${ms / 3_600_000} h` : seconds(ms);
 const queueStore = (lockFile, hooks) => ({
     store: new LockStore(dirname(lockFile), hooks?.lockPollMs !== undefined ? { pollMs: hooks.lockPollMs } : {}),
     resource: basename(lockFile).replace(/\.lock$/, ''),
@@ -158,7 +172,8 @@ export async function withShare(options, run, refused) {
         const taken = await store.tryAcquire(name, owner, LEASE_TTL_SECONDS, options.purpose ?? 'charge partagée');
         if (!taken.ok)
             continue;
-        const release = keepLease(store, name, taken.record.token, options.log);
+        const maxMs = options.maxMs ?? DEFAULT_SHARE_MAX_MS;
+        const release = keepLease(store, name, taken.record.token, options.log, Date.now() + maxMs, `Part partagée de la file au-delà de sa durée maximale (${hours(maxMs)}, suite.queue.shareMaxMs) : bail non renouvelé, les suites complètes ne l'attendent plus.`);
         const suites = suiteHolders(store, resource);
         if (!suites.length) {
             const waited = Date.now() - started;
@@ -241,6 +256,8 @@ export async function enterQueue(options) {
     if (settings.slots === 1 && !(options.env ?? process.env)[SHARE_MARKER]) {
         const pollMs = options.hooks?.lockPollMs ?? 500;
         let said = 0;
+        const maxMs = settings.shareMaxMs ?? DEFAULT_SHARE_MAX_MS;
+        const ignored = new Set();
         for (;;) {
             let shares = [];
             try {
@@ -250,6 +267,12 @@ export async function enterQueue(options) {
                 await releaseAll();
                 throw error;
             }
+            // A share held past its longest (stuck, or longer than declared) is no longer waited for: said once per share.
+            for (const share of shares.filter(h => shareOverdue(h, maxMs) && !ignored.has(h.token))) {
+                ignored.add(share.token);
+                log(`Charge partagée ${describeHolder(share)} au-delà de sa durée maximale (${hours(maxMs)}, suite.queue.shareMaxMs) : la suite complète ne l'attend plus.`);
+            }
+            shares = shares.filter(h => !shareOverdue(h, maxMs));
             if (!shares.length)
                 break;
             const waited = Date.now() - started;

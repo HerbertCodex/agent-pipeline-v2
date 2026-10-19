@@ -98,7 +98,7 @@ async function runCommand(rest, io) {
     const queue = await queueOf(io.cwd);
     if (!queue || !queue.stacks.some((stack) => stack.resource === resource))
         return locked(io.env);
-    return withShare({ lockFile: queue.lockFile, waitMs: queue.waitMs, label: owner.label, purpose: `apv lock run ${resource}`, env: io.env, source: io.env, log: (line) => io.stderr(`${line}\n`) }, locked, (reason) => { io.stderr(`Part partagée de la file non obtenue : ${reason}. La commande n'a pas été lancée.\n`); return LOCK_WAIT_TIMEOUT_EXIT; });
+    return withShare({ lockFile: queue.lockFile, waitMs: queue.waitMs, maxMs: queue.shareMaxMs, label: owner.label, purpose: `apv lock run ${resource}`, env: io.env, source: io.env, log: (line) => io.stderr(`${line}\n`) }, locked, (reason) => { io.stderr(`Part partagée de la file non obtenue : ${reason}. La commande n'a pas été lancée.\n`); return LOCK_WAIT_TIMEOUT_EXIT; });
 }
 async function runUnlocked(command, io) {
     const [file, ...args] = command;

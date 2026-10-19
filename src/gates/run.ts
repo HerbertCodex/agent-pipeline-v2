@@ -1114,7 +1114,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         : body(checkEnv, 0);
       try {
         outcome = sharing
-          ? await withShare({ lockFile: await commonPath(git, repo, settings.queue.lockFile), waitMs: settings.queue.waitMs, label: `apv gates run ${gate.id} (${workspace})`, purpose: `contrôle ${gate.id}`,
+          ? await withShare({ lockFile: await commonPath(git, repo, settings.queue.lockFile), waitMs: settings.queue.waitMs, maxMs: settings.queue.shareMaxMs, label: `apv gates run ${gate.id} (${workspace})`, purpose: `contrôle ${gate.id}`,
             env, source, signal, log, hooks: options.hooks }, execute, lockRefused)
           : await execute(env);
         return outcome;

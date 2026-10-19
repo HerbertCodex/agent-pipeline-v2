@@ -15,6 +15,8 @@ apv suite share [--wait-ms <n>] -- <commande> [args...]
     fini avant de démarrer ses contrôles, les nouveaux attendent derrière elle. Sans effet dans une suite
     complète (APV_SUITE_RUN) ou dans un autre « share ». File désactivée ou hors dépôt : commande lancée telle quelle.
     --wait-ms : attente maximale (défaut : suite.queue.waitMs) ; dépassée : code ${LOCK_WAIT_TIMEOUT_EXIT}, rien n'est lancé.
+    Durée maximale d'une part : suite.queue.shareMaxMs (défaut 2 h) ; au-delà, son bail n'est plus renouvelé et les
+    suites complètes ne l'attendent plus (la commande continue).
     Usage dans un script e2e de projet : apv suite share -- npm run test:e2e ...
 `;
 /** The queue of the repository around `cwd`: its file, the wait, the declared stacks; null outside a repository or with the queue disabled. */
@@ -25,7 +27,7 @@ export async function queueOf(cwd) {
         const { queue } = suiteSettings(config);
         if (!queue.enabled)
             return null;
-        return { lockFile: await commonPath(new Git(), repo, queue.lockFile), waitMs: queue.waitMs, stacks: resolveStacks(config, commonDir(repo)) };
+        return { lockFile: await commonPath(new Git(), repo, queue.lockFile), waitMs: queue.waitMs, shareMaxMs: queue.shareMaxMs, stacks: resolveStacks(config, commonDir(repo)) };
     }
     catch {
         return null;
@@ -56,7 +58,7 @@ export async function runShared(command, io, label, waitMs) {
     for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'])
         process.once(signal, stop);
     try {
-        return await withShare({ lockFile: queue.lockFile, waitMs: waitMs ?? queue.waitMs, label, purpose: command.join(' ').slice(0, 200), env: io.env, source: io.env,
+        return await withShare({ lockFile: queue.lockFile, waitMs: waitMs ?? queue.waitMs, maxMs: queue.shareMaxMs, label, purpose: command.join(' ').slice(0, 200), env: io.env, source: io.env,
             signal: abort.signal, log: line => io.stderr(`${line}\n`) }, env => runChild(command, io, env), reason => { io.stderr(`Part partagée de la file non obtenue : ${reason}. La commande n'a pas été lancée.\n`); return LOCK_WAIT_TIMEOUT_EXIT; });
     }
     finally {

@@ -401,7 +401,8 @@ export function supabaseProjectId(dir) {
 
 /**
  * The lock wrapper a simple command starts with, and the command it runs: `flock [options] <file> <command...>`,
- * `apv lock run <resource> [options] -- <command...>` (also `node …/cli.js lock run`), or the `lockCommand` of a
+ * `apv lock run <resource> [options] -- <command...>` (also `node …/cli.js lock run`), `apv suite share [options] --
+ * <command...>` (no lock held), or the `lockCommand` of a
  * stack. Returns `{ held: { files, resources, stacks }, words }`: the locks taken and the remaining words.
  */
 export function lockWrapper(words, stacks, cwd) {
@@ -422,6 +423,12 @@ export function lockWrapper(words, stacks, cwd) {
   if (apvAt !== -1 && w[apvAt + 1] === 'lock' && w[apvAt + 2] === 'run' && w[apvAt + 3]) {
     held.resources.push(w[apvAt + 3]);
     const dash = w.indexOf('--', apvAt + 4);
+    return { held, words: dash === -1 ? [] : w.slice(dash + 1) };
+  }
+  // `apv suite share [--wait-ms n] -- <command...>` runs its command as `lock run` does, holding no lock: the command it
+  // runs is what is examined (review of 1786b40, C1).
+  if (apvAt !== -1 && w[apvAt + 1] === 'suite' && w[apvAt + 2] === 'share') {
+    const dash = w.indexOf('--', apvAt + 3);
     return { held, words: dash === -1 ? [] : w.slice(dash + 1) };
   }
   // The lock command of a stack takes the lock of the stack its variables select: the command it runs is examined

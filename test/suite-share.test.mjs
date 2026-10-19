@@ -160,3 +160,32 @@ test('inside a full suite (APV_SUITE_RUN) or another share, share does not wait'
   const inShare = await apv(p.repo, ['suite', 'share', '--', ...node('process.exit(0)')], { ...p.env, APV_SUITE_SHARE: 'full-suite' });
   assert.equal(inShare.code, 0);
 });
+
+test('a share held past suite.queue.shareMaxMs is no longer waited for by a full suite, said so (review 1786b40, M2)', async t => {
+  const p = project(t, { queue: { shareMaxMs: 400 } });
+  const go = join(p.root, 'go'); const started = join(p.root, 'started');
+  const share = apv(p.repo, ['suite', 'share', '--', ...node(`const fs = require("fs"); fs.writeFileSync(${JSON.stringify(started)}, "");
+while (!fs.existsSync(${JSON.stringify(go)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)`)], p.env);
+  t.after(() => { try { writeFileSync(go, ''); } catch { /* already removed */ } });
+  await until(() => existsSync(started));
+  const lines = [];
+  const begun = Date.now();
+  const handle = await enterQueue({ lockFile: p.lockFile, settings: p.settings, repo: p.repo, copy: p.repo, env: {}, log: l => lines.push(l), hooks: { lockPollMs: 20 } });
+  assert.ok(Date.now() - begun < 10_000, 'entered well before waitMs (15 s)');
+  assert.ok(lines.some(l => /Charge partagée [\s\S]* au-delà de sa durée maximale \(400 ms, suite\.queue\.shareMaxMs\) : la suite complète ne l'attend plus/.test(l)), lines.join('\n'));
+  assert.equal(existsSync(go), false, 'the share still runs: the suite no longer waits for it');
+  await handle.release();
+  writeFileSync(go, '');
+  assert.equal((await share).code, 0);
+  // Within its longest, the share is waited for (the default 2 h).
+  const q = project(t);
+  const go2 = join(q.root, 'go'); const started2 = join(q.root, 'started');
+  const held = apv(q.repo, ['suite', 'share', '--', ...node(`const fs = require("fs"); fs.writeFileSync(${JSON.stringify(started2)}, "");
+while (!fs.existsSync(${JSON.stringify(go2)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)`)], q.env);
+  t.after(() => { try { writeFileSync(go2, ''); } catch { /* already removed */ } });
+  await until(() => existsSync(started2));
+  await assert.rejects(enterQueue({ lockFile: q.lockFile, settings: { ...q.settings, waitMs: 600 }, repo: q.repo, copy: q.repo, env: {}, log: () => {}, hooks: { lockPollMs: 20 } }),
+    /charge\(s\) partagée\(s\) encore en cours/);
+  writeFileSync(go2, '');
+  assert.equal((await held).code, 0);
+});

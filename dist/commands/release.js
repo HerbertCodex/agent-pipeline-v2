@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { loadConfig, loadConfigAtCommit, suiteSettings } from '../config/load.js';
@@ -32,7 +32,8 @@ attendre la file des suites (occupée : 0, plus tard), puis publie si elle est v
 Section stacks déclarée : la suite reçoit une pile comme apv gates run --stacks (la première dont le verrou est libre, ou --stacks pour
 forcer) ; aucune libre : 0, piles occupées, plus tard. Panne d'infrastructure (variable absente, pile injoignable) : dite comme telle, 1.
 Même commit déjà tenté : suite rouge ou instable (code) : 0, plus de relance jusqu'à un nouveau commit ; panne d'infrastructure : nouvel essai
-au plus toutes les 30 min ; --force-retry relance quand même.
+au plus toutes les 30 min ; --force-retry relance quand même. Les reçus du commit sont toujours vérifiés avant : un contrôle
+instable, ou un reçu rouge que le cron n'a pas écrit lui-même, refuse (1) quoi que disent le dernier passage ou --force-retry.
 Hors --dry-run : APV_ALLOW_MERGE=1 devant la commande (ordre de l'opérateur, ou son cron).
 Les contrôles de la branche de production sont toujours gardés (comme les contrôles de la base à la fusion).
 Historique : .apv/state/stack.log (event release). Sortie : 0 publié ou rien à faire, 1 refus, 2 appel incorrect.`;
@@ -141,20 +142,46 @@ const attemptFile = (common) => join(common, 'apv', 'release', 'last-auto.json')
 /** The failed pass of `release auto` at `sha`, if it was the last one; null otherwise (unreadable too). */
 function lastAttempt(common, sha) {
     try {
+        if (lstatSync(attemptFile(common)).isSymbolicLink())
+            return null;
         const a = JSON.parse(readFileSync(attemptFile(common), 'utf8'));
-        return a.sha === sha && (a.kind === 'red' || a.kind === 'infrastructure') && typeof a.at === 'number' ? a : null;
+        return a.sha === sha && (a.kind === 'red' || a.kind === 'infrastructure') && typeof a.at === 'number' && typeof a.runId === 'string' ? a : null;
     }
     catch {
         return null;
     }
 }
-function writeAttempt(common, a) {
+/**
+ * Records the failed pass through a temporary file renamed over the record (never written through a link); a record that
+ * is a symbolic link is refused and left as it is (review of 1786b40, L1). Returns why it was not written, or null.
+ */
+export function writeAttempt(common, a) {
+    const file = attemptFile(common);
     try {
         mkdirSync(join(common, 'apv', 'release'), { recursive: true });
-        writeFileSync(attemptFile(common), JSON.stringify(a));
+        let link = false;
+        try {
+            link = lstatSync(file).isSymbolicLink();
+        }
+        catch { /* absent */ }
+        if (link)
+            return `${file} est un lien symbolique : refusé, rien n'est écrit (retirer le lien)`;
+        const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+        try {
+            writeFileSync(temp, JSON.stringify(a), { flag: 'wx' });
+            renameSync(temp, file);
+        }
+        catch (error) {
+            rmSync(temp, { force: true });
+            throw error;
+        }
+        return null;
     }
-    catch { /* the next pass then runs again */ }
+    catch (error) {
+        return `${file} non écrit : ${errorMessage(error)}`;
+    }
 }
+const when = (at) => new Date(at).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
 /** `apv release auto`: one pass, never waiting; a lock of the repository keeps two passes apart. */
 async function auto(io, repo, dryRun, asJson, forced, forceRetry) {
     const common = commonDir(repo);
@@ -179,18 +206,23 @@ async function auto(io, repo, dryRun, asJson, forced, forceRetry) {
             return report(io, asJson, { ...base, ok: false, migrations, lines: [`Mise en ligne refusée : ${stop.refusal}.`] }, !dryRun, 'auto');
         if (stop)
             return report(io, asJson, { ...base, migrations, lines: [`En attente : ${stop.wait} ; rien n'est publié ni lancé.`, ...migrationLines({ ...migrations, pending: [] })] }, false, 'auto');
-        // The last pass of this cron at this very commit: a red suite waits for a new commit, an infrastructure failure for 30 minutes.
-        const last = forceRetry ? null : lastAttempt(common, fromHead);
-        if (last?.kind === 'red')
-            return report(io, asJson, { ...base, lines: [`Suite rouge à ${short(fromHead)} (exécution ${last.runId}) : en attente d'un nouveau commit sur ${from} ; rien n'est lancé (--force-retry pour relancer).`] }, false, 'auto');
-        if (last?.kind === 'infrastructure' && Date.now() - last.at < RETRY_INFRA_MS) {
-            return report(io, asJson, { ...base, lines: [`Panne d'infrastructure à ${short(fromHead)} il y a ${Math.round((Date.now() - last.at) / 60000)} min (exécution ${last.runId}) : nouvel essai après ${RETRY_INFRA_MS / 60000} min ; rien n'est lancé (--force-retry pour relancer).`] }, false, 'auto');
-        }
-        // A red or unstable suite already recorded at this commit is never run again by the cron; a green one never suffices.
-        const proof = (last || forceRetry) ? null : await fullProof(repo, fromHead, from, production);
-        if (proof && (proof.gates.some(g => g.state === 'failed') || proof.flaky.length)) {
+        // The receipts at this commit are always read (review of 1786b40, M1): an unstable check never publishes, nor does a red
+        // receipt the cron did not write itself. The record of the last pass and --force-retry only decide whether the cron
+        // runs its suite again; they never skip this proof. A green proof never suffices: the suite is run again in full.
+        const last = lastAttempt(common, fromHead);
+        const proof = await fullProof(repo, fromHead, from, production);
+        const failed = proof.gates.filter(g => g.state === 'failed');
+        const ownFailure = last !== null && failed.length > 0 && failed.every(g => g.runId === last.runId);
+        if (proof.flaky.length || (failed.length && !ownFailure)) {
             const what = proof.flaky.length ? `instable(s) : ${proof.flaky.join(', ')}` : `en échec : ${proofLines(proof).join(', ')}`;
             return report(io, asJson, { ...base, ok: false, lines: [`Suite complète déjà passée à ${short(fromHead)}, ${what} : rien n'est publié ni relancé (corriger sur ${from}).`] }, !dryRun, 'auto');
+        }
+        // The last pass of this cron at this very commit: a red suite waits for a new commit, an infrastructure failure for 30 minutes.
+        if (!forceRetry && last?.kind === 'red') {
+            return report(io, asJson, { ...base, lines: [`Suite rouge à ${short(fromHead)} le ${when(last.at)} (exécution ${last.runId}) : pas de relance, en attente d'un nouveau commit sur ${from} ou de --force-retry ; rien n'est lancé.`] }, false, 'auto');
+        }
+        if (!forceRetry && last?.kind === 'infrastructure' && Date.now() - last.at < RETRY_INFRA_MS) {
+            return report(io, asJson, { ...base, lines: [`Panne d'infrastructure à ${short(fromHead)} le ${when(last.at)}, il y a ${Math.round((Date.now() - last.at) / 60000)} min (exécution ${last.runId}) : nouvel essai après ${RETRY_INFRA_MS / 60000} min ; rien n'est lancé (--force-retry pour relancer).`] }, false, 'auto');
         }
         if (dryRun)
             return report(io, asJson, { ...base, migrations, lines: [`Suite complète à relancer à ${short(fromHead)} dans une copie détachée, puis mise en ligne. --dry-run : rien n'est lancé.`, ...(migrations ? migrationLines(migrations) : [])] }, false, 'auto');
@@ -200,8 +232,9 @@ async function auto(io, repo, dryRun, asJson, forced, forceRetry) {
         const suite = await runCopy(io, repo, common, fromHead, production, piles.ids);
         if (suite.busy)
             return report(io, asJson, { ...base, lines: [`Machine occupée (${suite.busy}) : plus tard.`] }, false, 'auto');
-        if (suite.infrastructure || !suite.ok)
-            writeAttempt(common, { sha: fromHead, kind: suite.infrastructure ? 'infrastructure' : 'red', at: Date.now(), runId: suite.runId ?? '?' });
+        const unwritten = suite.infrastructure || !suite.ok ? writeAttempt(common, { sha: fromHead, kind: suite.infrastructure ? 'infrastructure' : 'red', at: Date.now(), runId: suite.runId ?? '?' }) : null;
+        if (unwritten)
+            io.stderr(`Dernier passage non enregistré (le prochain relancera la suite) : ${unwritten}\n`);
         if (suite.infrastructure)
             return report(io, asJson, { ...base, ok: false, lines: [`Suite complète à ${short(fromHead)} : panne d'infrastructure : ${suite.infrastructure} ; rien n'est publié.`] }, true, 'auto');
         if (!suite.ok)

@@ -1,4 +1,4 @@
-import type { SuiteQueueSettings } from '../config/load.js';
+import { type SuiteQueueSettings } from '../config/load.js';
 import type { Gate } from '../domain/contracts.js';
 import type { Git } from '../execution/git.js';
 import type { ResolvedStack, StackContainer } from '../stacks/idle.js';
@@ -102,6 +102,8 @@ export declare function withShare<T>(options: {
     signal?: AbortSignal | undefined;
     log: (line: string) => void;
     hooks?: SuiteHooks | undefined;
+    /** Longest the part is held (`suite.queue.shareMaxMs`, default 2 h): past it, its lease is no longer renewed (review of 1786b40, M2). */
+    maxMs?: number | undefined;
 }, run: (env: NodeJS.ProcessEnv) => Promise<T>, refused: (reason: string, waitedMs: number) => T): Promise<T>;
 /**
  * Enters the queue of the full suites: its places (`queuePlaces`, leases of the `apv lock` store format beside

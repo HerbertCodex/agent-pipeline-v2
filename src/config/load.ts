@@ -146,7 +146,14 @@ export const suiteQueueSchema = s.object({
    * N, at most N at once, each holding the place of its stacks too. Two suites never share a stack.
    */
   slots: s.default(s.union(s.number(1, 64), s.literal('per-stack')), 1),
+  /**
+   * Longest a shared part (`apv suite share`, the automatic part of a targeted check or of `apv lock run` of a stack) holds
+   * the queue: past it, its lease is no longer renewed and a full suite no longer waits for it (default 2 h).
+   */
+  shareMaxMs: s.optional(s.number(1, 86_400_000)),
 });
+/** `suite.queue.shareMaxMs` by default: 2 h. */
+export const DEFAULT_SHARE_MAX_MS = 7_200_000;
 export type SuiteQueueSettings = Infer<typeof suiteQueueSchema>;
 export const suiteSettingsSchema = s.object({
   queue: s.optional(suiteQueueSchema),

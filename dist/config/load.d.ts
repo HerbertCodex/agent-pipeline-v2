@@ -148,7 +148,10 @@ export declare const suiteQueueSchema: import("../domain/schema.js").Schema<{
     readonly maxLoad: number | undefined;
     readonly loadWaitMs: number;
     readonly slots: number | "per-stack";
+    readonly shareMaxMs: number | undefined;
 }>;
+/** `suite.queue.shareMaxMs` by default: 2 h. */
+export declare const DEFAULT_SHARE_MAX_MS = 7200000;
 export type SuiteQueueSettings = Infer<typeof suiteQueueSchema>;
 export declare const suiteSettingsSchema: import("../domain/schema.js").Schema<{
     readonly queue: {
@@ -158,6 +161,7 @@ export declare const suiteSettingsSchema: import("../domain/schema.js").Schema<{
         readonly maxLoad: number | undefined;
         readonly loadWaitMs: number;
         readonly slots: number | "per-stack";
+        readonly shareMaxMs: number | undefined;
     } | undefined;
     readonly ports: number[];
 }>;
@@ -379,6 +383,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly maxLoad: number | undefined;
             readonly loadWaitMs: number;
             readonly slots: number | "per-stack";
+            readonly shareMaxMs: number | undefined;
         } | undefined;
         readonly ports: number[];
     } | undefined;
