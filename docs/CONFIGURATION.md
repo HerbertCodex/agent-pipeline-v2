@@ -763,6 +763,10 @@ Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR 
 }
 ```
 
+## Mise en ligne : `release`
+
+Section APV4 facultative (4.0.0-alpha.2) : `{ "release": { "branch": "production", "from": "main" } }`, deux noms de branche différents. En mode léger, une PR vers `from` se fusionne sur la preuve de tâche (section lue à la base commune, comme `rules`) ; `branch` n'avance que par `apv release`, en avance rapide, vers un commit de `from` dont la suite complète est prouvée ([CLI.md](CLI.md#apv-release)). Le garde-fou refuse tout `git push` qui l'écrit (configuration illisible : `production`). Absente : rien ne change, la suite complète reste exigée avant chaque fusion.
+
 ## Fraîcheur de l'état : `freshness`
 
 Section APV3, facultative, validée par le chargeur commun : les fichiers vivants d'état et de reprise que `apv status` (section « Fichiers d'état périmés », `freshness` en JSON) et le crochet de début de session surveillent. Un état de reprise se réécrit court à chaque étape et ce qui est terminé part en archive : un fichier qui n'a pas bougé depuis plus de `maxAgeDays` jours, ou un journal qui dépasse `maxLines` lignes, est signalé avec la proposition « couper : état court + archive ». Lecture seule : rien n'est déplacé ni supprimé.

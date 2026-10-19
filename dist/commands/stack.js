@@ -246,7 +246,7 @@ function journal(io, stack, method, derogation) {
     return journalEntry(io, { event: 'allow-behind', stack, method, ...derogation });
 }
 /** Appends one JSON line to `.apv/state/stack.log`; returns the error when it could not write. */
-function journalEntry(io, entry) {
+export function journalEntry(io, entry) {
     try {
         const root = gitRead(io.cwd, ['rev-parse', '--show-toplevel']) || io.cwd;
         ensureApvGitignore(root);

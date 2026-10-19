@@ -60,6 +60,11 @@ export interface RulesReport {
     reduced?: ReducedLane;
     /** rules.mode of the base, and the level of the change (apv review plan). */
     mode: RulesMode;
+    /** Light mode with `release` declared at the base and the target its branch `from`: the proof of the task suffices. */
+    taskProof?: {
+        branch: string;
+        from: string;
+    };
     level: ReviewLevel;
     levelReason: string;
 }

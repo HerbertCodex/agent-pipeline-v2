@@ -12,6 +12,7 @@ export const commands = {
     run: { summary: 'run start|set|next|status : état de reprise d\'une exécution de spec (vagues, tâches, revues)', load: () => import('./run.js') },
     stack: { summary: 'stack plan|merge <pr...> : vérifie puis fusionne une pile de PR dans l\'ordre (fusion : APV_ALLOW_MERGE=1)', load: () => import('./stack.js') },
     rules: { summary: 'rules check --commit <sha> [--target <branche>] : règles vérifiées avant toute fusion (preuve, test instable, relecture, captures, contrôles de base, maquette) ; refus levé par la correction ou par l\'opérateur seul', load: () => import('./rules.js') },
+    release: { summary: 'release [<sha>] | auto [--dry-run] : mise en ligne découplée (section release) : la branche de production avance en avance rapide vers un commit de from dont la suite complète est prouvée', load: () => import('./release.js') },
     audit: { summary: 'audit merges [--since <date>] : commits de la branche par défaut arrivés sans apv stack merge (fusion à la main, poussée directe), d\'après les traces signées des fusions', load: () => import('./audit.js') },
     metrics: { summary: 'metrics run [<id>] | prs [<n>...] [--since <date>] : temps de bout en bout d\'une exécution (phases, chemin critique de la phase de code, suites, relectures) et des PR (prête à fusionnée), avec la base de comparaison ; lecture seule, sans saisie', load: () => import('./metrics.js') },
     ledger: { summary: 'ledger validate|plan|apply : registre des décisions', load: () => import('./ledger.js') },

@@ -13,4 +13,6 @@ export declare function freshnessText(f: Freshness | null): string;
 export declare function stackRules(cwd: string, remote?: string, ciGh?: GhRunner | null): (pr: PullRequest, target: string) => Promise<RulesVerdict>;
 /** Journal of the waivers of `apv stack merge`, relative to the root of the repository (never versioned). */
 export declare const STACK_LOG = ".apv/state/stack.log";
+/** Appends one JSON line to `.apv/state/stack.log`; returns the error when it could not write. */
+export declare function journalEntry(io: CommandIO, entry: Record<string, unknown>): string | null;
 export declare function run(args: string[], io: CommandIO): Promise<number>;

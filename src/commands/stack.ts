@@ -246,7 +246,7 @@ function journal(io: CommandIO, stack: number[], method: string, derogation: Der
 }
 
 /** Appends one JSON line to `.apv/state/stack.log`; returns the error when it could not write. */
-function journalEntry(io: CommandIO, entry: Record<string, unknown>): string | null {
+export function journalEntry(io: CommandIO, entry: Record<string, unknown>): string | null {
   try {
     const root = gitRead(io.cwd, ['rev-parse', '--show-toplevel']) || io.cwd;
     ensureApvGitignore(root);

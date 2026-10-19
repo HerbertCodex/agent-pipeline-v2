@@ -623,6 +623,19 @@ export function hookContext(input, env = process.env) {
       const head = git(dir, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
       return [...new Set([...(head && head.startsWith('origin/') ? [head.slice('origin/'.length)] : []), 'main', 'master'])];
     },
+    // The production branch (`release.branch`) of the configuration in the copy and on the default branch: never pushed to
+    // directly (apv release). A configuration present but unreadable, or none at all: `production`.
+    releaseBranches: (dir = cwd) => {
+      const root = git(dir, ['rev-parse', '--show-toplevel']);
+      let local = null;
+      try { local = root ? readFileSync(join(root, '.apv', 'config.json'), 'utf8') : null; } catch { local = null; }
+      const texts = [local, git(dir, ['show', 'refs/remotes/origin/HEAD:.apv/config.json'])].filter(x => x !== null);
+      const out = new Set(texts.length ? [] : ['production']);
+      for (const text of texts) {
+        try { const branch = JSON.parse(text)?.release?.branch; if (typeof branch === 'string' && branch) out.add(branch); } catch { out.add('production'); }
+      }
+      return [...out];
+    },
     // The branch checked out in `dir` (the folder a literal cd or git -C of the command leads to; by default the working directory).
     currentBranch: (dir = cwd) => git(dir, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
     // Whether the tool is active for a command (docs/PLUGIN.md, « Portée des crochets »): the repository of the working
@@ -661,4 +674,4 @@ export function hookContext(input, env = process.env) {
 
 /** A context where nothing is known: no ancestors, no stacks, no directory (the pure calls of the tests). */
 export const EMPTY_CONTEXT = { cwd: null, home: null, agentType: null, agentId: null, ancestors: () => [], stacks: () => [], flockHeldByAncestor: () => false, leaseHeld: () => [],
-  defaultBranches: () => ['main', 'master'], currentBranch: () => null, apvProject: () => true };
+  defaultBranches: () => ['main', 'master'], releaseBranches: () => ['production'], currentBranch: () => null, apvProject: () => true };

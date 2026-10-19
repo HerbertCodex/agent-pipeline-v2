@@ -44,7 +44,7 @@ Tu es le chef de projet. Tu mènes la spec `$ARGUMENTS` jusqu'à une PR brouillo
 - Relecture du delta seul par les domaines concernés. Un deuxième tour seulement pour un critique ou un haut encore ouvert.
 
 ## 6. Livraison
-1. Suite complète **une fois**, sur la tête finale : `apv gates run --stage full --base <base>` en arrière-plan, puis `apv gates verify --commit <tête>` à `0`. Rouge : corrige et relance ; un test instable est un constat, jamais relancé jusqu'au vert.
+1. Suite complète **une fois**, sur la tête finale : `apv gates run --stage full --base <base>` en arrière-plan, puis `apv gates verify --commit <tête>` à `0`. Rouge : corrige et relance ; un test instable est un constat, jamais relancé jusqu'au vert. **Projet avec `release`** (mode léger, cible `release.from`) : pas de suite complète ici ; `apv gates verify --commit <tête> --stage task --base <base>` à `0` suffit, la suite complète se fait sur `main` avant `apv release`.
 2. Selon les modules du projet : `apv db check`, `apv design check`, `apv web audit`.
 3. `apv rules check --commit <tête> --target origin/<cible>` à `0`.
 4. `git push -u origin apv/<id>`, puis `gh pr create --draft` : ce qui change pour l'utilisateur, niveau de risque, relectures faites, preuves chiffrées, ce qui attend l'opérateur (migration, comptes, publication).

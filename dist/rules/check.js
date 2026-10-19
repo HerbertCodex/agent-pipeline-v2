@@ -29,6 +29,7 @@ import { LANE_NAME, docsOnlyLane, laneLines } from './docs-only.js';
 import { isScreen, mockupsOf, screenCoverage, screenMatchers } from './screens.js';
 import { ciProofLines, verifyCiProof } from './ci-proof.js';
 import { githubRepository } from './protection.js';
+import { targetsBranch } from '../release/config.js';
 import { declarationVerdict, laneWouldFit, reducedLane } from './reduced-proof.js';
 /** Whether the commit is a web interface: web dependencies in its package.json, or tracked interface files. */
 export function isWebAt(repo, sha) {
@@ -462,6 +463,8 @@ export async function checkMergeRules(input) {
     const sensitive = [...sensitivePaths, ...atBase.risk.highPaths];
     const baseDesign = designDir(atBase.design);
     const light = settings.mode === 'leger';
+    // Release decoupled from the merge (`release` at the base): the full suite is asked at `apv release`, not here.
+    const taskProof = light && atBase.release && targetsBranch(input.target, atBase.release.from) ? atBase.release : null;
     const plan = planReviews({ repo, base: mergeBase, head: sha, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [], mode: settings.mode });
     const lane = await docsOnlyLane({ repo, mergeBase, head: sha, plan, settings: settings.docsOnly, designDir: baseDesign, sensitive, messages, key: anchor.key });
     // In the lane, only the domains the configuration forces (review.always) are required.
@@ -487,16 +490,20 @@ export async function checkMergeRules(input) {
     let proofError = null;
     if (!unscoped && (!skip.has('preuve') || !skip.has('instable'))) {
         try {
-            proof = await verifyGates({ repo, config: effective, commit: sha, stage: 'full', configFile: null, reuseReference: mergeBase });
+            proof = await verifyGates({ repo, config: effective, commit: sha, stage: taskProof ? 'task' : 'full', ...(taskProof ? { base: mergeBase } : {}), configFile: null, reuseReference: mergeBase });
         }
         catch (error) {
             proofError = errorMessage(error);
         }
     }
-    const proveTodo = [
+    const proveTodo = taskProof ? [
+        `Dans une copie à ${short(sha)} : apv gates run --stage task --base ${short(mergeBase)}`,
+        `puis apv gates verify --commit ${short(sha)} --stage task --base ${short(mergeBase)} doit sortir en 0.`,
+    ] : [
         `Dans une copie à ${short(sha)} : apv gates run --stage full --base ${input.target}`,
         `puis apv gates verify --commit ${short(sha)} --against ${input.target} doit sortir en 0.`,
     ];
+    const proofWhat = taskProof ? 'contrôles de tâche et tests ciblés au commit exact' : 'suite complète au commit exact';
     // The proof by the CI, declared at the base (never by the change), for the checks without a clean local receipt: the
     // local receipts stay first, the API is read only when they leave a check unproven.
     let ci = null;
@@ -531,9 +538,9 @@ export async function checkMergeRules(input) {
     else if (unscoped)
         rules.push(outcome('preuve', 'not_applicable', `${LANE_NAME} : aucun contrôle ne s'applique, chacun non requis par sa portée (skipWhenOnly, recalculée depuis le commit) : ${unscoped}`));
     else if (proofError)
-        rules.push(outcome('preuve', 'refused', 'suite complète au commit exact', [proofError], proveTodo));
+        rules.push(outcome('preuve', 'refused', proofWhat, [proofError], proveTodo));
     else if (proof.ok)
-        rules.push(outcome('preuve', 'ok', `${proof.required.length} contrôle(s) prouvé(s) à ${short(sha)}, contrôles de la base compris`));
+        rules.push(outcome('preuve', 'ok', `${proof.required.length} contrôle(s)${taskProof ? ' de tâche' : ''} prouvé(s) à ${short(sha)}, contrôles de la base compris`));
     else {
         const missing = proof.gates.filter(g => g.state !== 'passed' && !provenByCi.includes(g.gateId) && !provenByReduced.includes(g.gateId) && !waived.has(g.gateId)).map(g => `${g.gateId} (${g.state})`);
         if (!missing.length && reduced?.retained) {
@@ -553,7 +560,7 @@ export async function checkMergeRules(input) {
         }
         else {
             const laneSaid = reduced?.retained ? [`voie réduite sur ordre ${reduced.nonce} retenue : levés ${reduced.waived.join(', ')}${provenByReduced.length ? ` ; prouvés par le check run « ${reduced.outcome.name} » : ${provenByReduced.join(', ')}` : ''}`] : [];
-            rules.push(outcome('preuve', 'refused', 'suite complète au commit exact', [`contrôle(s) non prouvé(s) à ${short(sha)} : ${missing.join(', ')}`, ...(ci ? ciProofLines(ci) : []), ...ciNotes, ...laneSaid, ...laneNotes], ci && ci.state !== 'out_of_lane' && ci.gates.length && ci.state !== 'accepted'
+            rules.push(outcome('preuve', 'refused', proofWhat, [`contrôle(s) non prouvé(s) à ${short(sha)} : ${missing.join(', ')}`, ...(ci ? ciProofLines(ci) : []), ...ciNotes, ...laneSaid, ...laneNotes], ci && ci.state !== 'out_of_lane' && ci.gates.length && ci.state !== 'accepted'
                 ? [...proveTodo, `Ou, pour ${ci.gates.join(', ')}, le check run « ${ci.name} » de GitHub Actions conclu en succès à ${short(sha)} (workflow ${ci.workflow}), puis relancer apv rules check.`]
                 : proveTodo));
         }
@@ -874,7 +881,7 @@ export async function checkMergeRules(input) {
     const order = new Map(MERGE_RULES.map((r, i) => [r, i]));
     rules.sort((a, b) => order.get(a.rule) - order.get(b.rule));
     return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, lane, mode: settings.mode, level: plan.level, levelReason: plan.levelReason, warnings: [...base.warnings, ...(anchor.problem ? [anchor.problem] : [])], ci,
-        ...(reduced ? { reduced } : {}) };
+        ...(reduced ? { reduced } : {}), ...(taskProof && !skip.has('preuve') ? { taskProof: { branch: taskProof.branch, from: taskProof.from } } : {}) };
 }
 /** Lines of a report, for the text output of `apv rules check` and of the stack commands. */
 export function rulesLines(report, indent = '') {
@@ -883,7 +890,8 @@ export function rulesLines(report, indent = '') {
         : { ok: 'ok', refused: 'REFUSÉ', waived: 'DÉROGATION', not_applicable: 'sans objet' };
     const lines = [`${indent}Règles avant fusion à ${short(report.commit)} (cible ${report.target}, base commune ${report.mergeBase ? short(report.mergeBase) : '?'}) :`,
         `${indent}Mode ${report.mode === 'leger' ? 'léger' : 'strict'}, niveau ${report.level} : ${report.levelReason}`,
-        ...laneLines(report.lane, indent)];
+        ...laneLines(report.lane, indent),
+        ...(report.taskProof ? [`${indent}Preuve de tâche suffit : la suite complète est exigée à la mise en ligne (apv release, ${report.taskProof.from} vers ${report.taskProof.branch}).`] : [])];
     for (const r of report.rules) {
         lines.push(`${indent}- ${r.rule} (${r.title}) : ${label[r.status]} : ${r.detail}`);
         for (const d of r.domains ?? []) {

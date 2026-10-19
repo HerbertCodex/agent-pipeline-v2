@@ -2,6 +2,10 @@
 
 ## Non publié
 
+- **4.0.0-alpha.2 : mise en ligne découplée de la fusion.** Section facultative `release` (`branch`, `from`) : en mode léger, une PR vers `from` se fusionne sur la preuve de tâche (contrôles de tâche et tests ciblés au commit exact, `instable` gardée).
+  - `apv release [<sha>] [--dry-run]` : avance rapide de la production vers un commit de `from` dont la suite complète est prouvée, poussée affichée et relue, historique dans `stack.log`.
+  - `apv release auto` : une passe pour un cron (rien à publier, publication d'une tête prouvée, sinon suite complète dans une copie sans attendre la file) ; garde-fou : `git push` vers la production refusé, `apv release` avec `APV_ALLOW_MERGE=1` seulement.
+
 - **4.0.0-alpha.1 : niveaux de risque et mode léger des règles (APV4, « enlever plutôt qu'ajouter »).** `apv review plan` calcule un niveau (`level` 0 à 3, avec sa raison) : 0 trivial et 1 code sans relecture, 2 sensible `securite`, 3 critique `securite` avec `donnees` ou `rgpd` ; plus rien n'est retenu par prudence, `fidelite` seulement pour un écran couvert par une maquette validée.
   - `rules.mode` (`leger` par défaut, `strict` = APV3) : en léger, `apv rules check` n'exige que les relectures du niveau, accepte une relecture non scellée, la reporte pour tout domaine sur un delta hors de son périmètre ; `captures` seulement avec `fidelite`, `maquette` seulement avec des maquettes validées (versée suffit). Constat critique ou haut ouvert : toujours refusé.
   - `apv status` dit le mode (`docs/merge-rules.json`, clé `modes`) ; agents en `sonnet`, sauf `architecte-donnees` (`opus`) ; plugin « Agent Pipeline V4 ». Tests : `test/niveaux-risque.test.mjs` ; les anciens tests du plan et des règles passent en `strict`.
