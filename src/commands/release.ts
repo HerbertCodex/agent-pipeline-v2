@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { loadConfig, loadConfigAtCommit, suiteSettings, type ApvConfig } from '../config/load.js';
@@ -10,14 +10,15 @@ import { LockStore } from '../lock/store.js';
 import type { ReleaseSettings } from '../release/config.js';
 import { migrationLines, pendingReason, refusedReason, releaseMigrations, type Migrations } from '../release/migrations.js';
 import { gitRoot, resolveCommit } from '../run/git-probe.js';
-import { commonDir } from '../stacks/idle.js';
+import { infrastructureAdvice, infrastructureText } from '../gates/infrastructure.js';
+import { commonDir, flockFree, resolveStacks } from '../stacks/idle.js';
 import { journalEntry } from './stack.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 import type { CommandIO } from './io.js';
 
 export const usage = `Utilisation :
   apv release [<sha>] [--dry-run] [--json] [--repo <chemin>]
-  apv release auto [--dry-run] [--json] [--repo <chemin>]
+  apv release auto [--stacks <pile>[,<pile>]] [--force-retry] [--dry-run] [--json] [--repo <chemin>]
 
 Mise en ligne découplée de la fusion (section release de .apv/config.json, lue sur la branche from distante) :
 la branche de production (release.branch) n'avance qu'en avance rapide vers un commit de release.from dont la
@@ -31,6 +32,10 @@ Motifs : ceux de la production, de <sha> et de from réunis (un commit qui les v
 auto : pour un lancement périodique (cron) ; rien à publier : 0 ; reçus rouges ou instables à ce commit : 1 sans
 relancer ; migration en attente : 0, rien lancé ; sinon suite complète relancée en entier (aucun reçu repris) dans une copie détachée (batch.setup), sans
 attendre la file des suites (occupée : 0, plus tard), puis publie si elle est verte au premier passage.
+Section stacks déclarée : la suite reçoit une pile comme apv gates run --stacks (la première dont le verrou est libre, ou --stacks pour
+forcer) ; aucune libre : 0, piles occupées, plus tard. Panne d'infrastructure (variable absente, pile injoignable) : dite comme telle, 1.
+Même commit déjà tenté : suite rouge ou instable (code) : 0, plus de relance jusqu'à un nouveau commit ; panne d'infrastructure : nouvel essai
+au plus toutes les 30 min ; --force-retry relance quand même.
 Hors --dry-run : APV_ALLOW_MERGE=1 devant la commande (ordre de l'opérateur, ou son cron).
 Les contrôles de la branche de production sont toujours gardés (comme les contrôles de la base à la fusion).
 Historique : .apv/state/stack.log (event release). Sortie : 0 publié ou rien à faire, 1 refus, 2 appel incorrect.`;
@@ -131,8 +136,22 @@ function report(io: CommandIO, asJson: boolean, outcome: Outcome, history: boole
   return outcome.ok ? EXIT.ok : EXIT.failed;
 }
 
+const RETRY_INFRA_MS = 30 * 60_000;
+interface Attempt { sha: string; kind: 'red' | 'infrastructure'; at: number; runId: string }
+const attemptFile = (common: string): string => join(common, 'apv', 'release', 'last-auto.json');
+/** The failed pass of `release auto` at `sha`, if it was the last one; null otherwise (unreadable too). */
+function lastAttempt(common: string, sha: string): Attempt | null {
+  try {
+    const a = JSON.parse(readFileSync(attemptFile(common), 'utf8')) as Attempt;
+    return a.sha === sha && (a.kind === 'red' || a.kind === 'infrastructure') && typeof a.at === 'number' ? a : null;
+  } catch { return null; }
+}
+function writeAttempt(common: string, a: Attempt): void {
+  try { mkdirSync(join(common, 'apv', 'release'), { recursive: true }); writeFileSync(attemptFile(common), JSON.stringify(a)); } catch { /* the next pass then runs again */ }
+}
+
 /** `apv release auto`: one pass, never waiting; a lock of the repository keeps two passes apart. */
-async function auto(io: CommandIO, repo: string, dryRun: boolean, asJson: boolean): Promise<number> {
+async function auto(io: CommandIO, repo: string, dryRun: boolean, asJson: boolean, forced: string[] | undefined, forceRetry: boolean): Promise<number> {
   const common = commonDir(repo);
   const store = new LockStore(join(common, 'apv', 'locks'));
   const lock = await store.tryAcquire('release-auto', { pid: process.pid, host: store.host, label: `apv release auto (${repo})` }, 6 * 3600, 'apv release auto');
@@ -148,15 +167,25 @@ async function auto(io: CommandIO, repo: string, dryRun: boolean, asJson: boolea
     const stop = migrationStop(migrations);
     if (stop && 'refusal' in stop) return report(io, asJson, { ...base, ok: false, migrations, lines: [`Mise en ligne refusée : ${stop.refusal}.`] }, !dryRun, 'auto');
     if (stop) return report(io, asJson, { ...base, migrations, lines: [`En attente : ${stop.wait} ; rien n'est publié ni lancé.`, ...migrationLines({ ...migrations!, pending: [] })] }, false, 'auto');
+    // The last pass of this cron at this very commit: a red suite waits for a new commit, an infrastructure failure for 30 minutes.
+    const last = forceRetry ? null : lastAttempt(common, fromHead);
+    if (last?.kind === 'red') return report(io, asJson, { ...base, lines: [`Suite rouge à ${short(fromHead)} (exécution ${last.runId}) : en attente d'un nouveau commit sur ${from} ; rien n'est lancé (--force-retry pour relancer).`] }, false, 'auto');
+    if (last?.kind === 'infrastructure' && Date.now() - last.at < RETRY_INFRA_MS) {
+      return report(io, asJson, { ...base, lines: [`Panne d'infrastructure à ${short(fromHead)} il y a ${Math.round((Date.now() - last.at) / 60000)} min (exécution ${last.runId}) : nouvel essai après ${RETRY_INFRA_MS / 60000} min ; rien n'est lancé (--force-retry pour relancer).`] }, false, 'auto');
+    }
     // A red or unstable suite already recorded at this commit is never run again by the cron; a green one never suffices.
-    const proof = await fullProof(repo, fromHead, from, production);
-    if (proof.gates.some(g => g.state === 'failed') || proof.flaky.length) {
+    const proof = (last || forceRetry) ? null : await fullProof(repo, fromHead, from, production);
+    if (proof && (proof.gates.some(g => g.state === 'failed') || proof.flaky.length)) {
       const what = proof.flaky.length ? `instable(s) : ${proof.flaky.join(', ')}` : `en échec : ${proofLines(proof).join(', ')}`;
       return report(io, asJson, { ...base, ok: false, lines: [`Suite complète déjà passée à ${short(fromHead)}, ${what} : rien n'est publié ni relancé (corriger sur ${from}).`] }, !dryRun, 'auto');
     }
     if (dryRun) return report(io, asJson, { ...base, migrations, lines: [`Suite complète à relancer à ${short(fromHead)} dans une copie détachée, puis mise en ligne. --dry-run : rien n'est lancé.`, ...(migrations ? migrationLines(migrations) : [])] }, false, 'auto');
-    const suite = await runCopy(io, repo, common, fromHead, production);
+    const piles = pickStacks(proofConfig(repo, fromHead, production), common, forced);
+    if ('busy' in piles) return report(io, asJson, { ...base, lines: [`Piles occupées (${piles.busy}) : plus tard ; rien n'est lancé.`] }, false, 'auto');
+    const suite = await runCopy(io, repo, common, fromHead, production, piles.ids);
     if (suite.busy) return report(io, asJson, { ...base, lines: [`Machine occupée (${suite.busy}) : plus tard.`] }, false, 'auto');
+    if (suite.infrastructure || !suite.ok) writeAttempt(common, { sha: fromHead, kind: suite.infrastructure ? 'infrastructure' : 'red', at: Date.now(), runId: suite.runId ?? '?' });
+    if (suite.infrastructure) return report(io, asJson, { ...base, ok: false, lines: [`Suite complète à ${short(fromHead)} : panne d'infrastructure : ${suite.infrastructure} ; rien n'est publié.`] }, true, 'auto');
     if (!suite.ok) return report(io, asJson, { ...base, ok: false, lines: [`Suite complète rouge ou instable à ${short(fromHead)} : ${suite.summary} ; rien n'est publié.`] }, true, 'auto');
     return report(io, asJson, await release(repo, state, fromHead, false), true, 'auto');
   } finally {
@@ -164,8 +193,27 @@ async function auto(io: CommandIO, repo: string, dryRun: boolean, asJson: boolea
   }
 }
 
+/**
+ * The stacks the full suite is given, as `apv gates run --stacks`: those forced, else the first declared whose lock is free
+ * (a lock file held by someone else is busy); none declared: none given (`ids` undefined); all busy: `busy`.
+ */
+function pickStacks(config: ApvConfig, common: string, forced: string[] | undefined): { ids: string[] | undefined } | { busy: string } {
+  const declared = resolveStacks(config, common);
+  if (!declared.length) {
+    if (forced) throw new UsageError('--stacks : aucune pile déclarée (section stacks de .apv/config.json)');
+    return { ids: undefined };
+  }
+  if (forced) {
+    const unknown = forced.filter(id => !declared.some(s => s.id === id));
+    if (unknown.length) throw new UsageError(`--stacks : pile inconnue ${unknown.join(', ')} (déclarées : ${declared.map(s => s.id).join(', ')})`);
+    return { ids: forced };
+  }
+  const free = declared.find(s => !s.lockFile || flockFree(s.lockFile) !== false);
+  return free ? { ids: [free.id] } : { busy: declared.map(s => `${s.id} : verrou ${s.lockFile} tenu`).join(' ; ') };
+}
+
 /** The full suite of `sha` in a detached copy under the Git common directory, prepared by batch.setup, then removed. */
-async function runCopy(io: CommandIO, repo: string, common: string, sha: string, production: string): Promise<{ ok: boolean; busy?: string; summary: string }> {
+async function runCopy(io: CommandIO, repo: string, common: string, sha: string, production: string, stacks?: string[]): Promise<{ ok: boolean; busy?: string; infrastructure?: string; runId?: string; summary: string }> {
   const dir = join(common, 'apv', 'release', sha.slice(0, 12));
   mkdirSync(join(common, 'apv', 'release'), { recursive: true });
   if (existsSync(dir)) git(repo, ['worktree', 'remove', '--force', dir]);
@@ -177,9 +225,11 @@ async function runCopy(io: CommandIO, repo: string, common: string, sha: string,
     const noWait: ApvConfig = { ...config, suite: { ports: suite.ports, queue: { ...suite.queue, waitMs: 0 } } };
     // Every check run again (no receipt reused): the cron publishes only what it has just seen pass.
     const result = await runGates({ repo: dir, config: noWait, stage: 'full', base: production, repeatReference: production, reference: production, repeatCeiling: false,
-      batchSetup: true, replay: 'all', env: io.env, log: line => io.stderr(`${line}\n`) });
+      batchSetup: true, replay: 'all', ...(stacks ? { stacks } : {}), env: io.env, log: line => io.stderr(`${line}\n`) });
     const failed = result.receipts.filter(r => !['passed', 'passed_after_retry', 'cached', 'not_required'].includes(r.status)).map(r => `${r.gateId} (${r.status})`);
-    return { ok: result.ok && !result.flaky.length, summary: `${failed.length ? `en échec : ${failed.join(', ')}` : ''}${result.flaky.length ? ` instable(s) : ${result.flaky.join(', ')}` : ''} ; exécution ${result.runId}` };
+    const infra = result.infrastructure;
+    if (!result.ok && infra.all) return { ok: false, infrastructure: `${infra.causes.map(infrastructureText).join(' ; ')} ; ${infrastructureAdvice(infra.causes, stacks ? [] : (config.stacks ?? []).map(x => x.id))} (exécution ${result.runId})`, runId: result.runId, summary: '' };
+    return { ok: result.ok && !result.flaky.length, runId: result.runId, summary: `${failed.length ? `en échec : ${failed.join(', ')}` : ''}${result.flaky.length ? ` instable(s) : ${result.flaky.join(', ')}` : ''} ; exécution ${result.runId}` };
   } catch (error) {
     if (error instanceof PipelineError && ['SUITE_QUEUE', 'GATE_BUSY'].includes(error.code)) return { ok: false, busy: error.message.slice(0, 300), summary: '' };
     throw error;
@@ -192,14 +242,17 @@ async function runCopy(io: CommandIO, repo: string, common: string, sha: string,
 export async function run(args: string[], io: CommandIO): Promise<number> {
   return guard(io, usage, async () => {
     const { values, positionals } = parse(args, {
-      'dry-run': { type: 'boolean' }, json: { type: 'boolean' }, repo: { type: 'string' }, help: { type: 'boolean', short: 'h' },
+      'dry-run': { type: 'boolean' }, stacks: { type: 'string' }, 'force-retry': { type: 'boolean' }, json: { type: 'boolean' }, repo: { type: 'string' }, help: { type: 'boolean', short: 'h' },
     });
     if (values.help) { io.stdout(`${usage}\n`); return EXIT.ok; }
     if (positionals.length > 1) throw new UsageError(`argument inattendu : ${positionals.slice(1).join(' ')}`);
     const repo = gitRoot(repoPath(io, values.repo));
     const dryRun = values['dry-run'] === true;
     if (!dryRun && io.env['APV_ALLOW_MERGE'] !== '1') { io.stderr(`${RELEASE_REFUSED}\n`); return EXIT.usage; }
-    if (positionals[0] === 'auto') return auto(io, repo, dryRun, values.json === true);
+    const forced = values.stacks === undefined ? undefined : values.stacks.split(',').map(x => x.trim()).filter(Boolean);
+    if (forced && (!forced.length || new Set(forced).size !== forced.length)) throw new UsageError('--stacks attend une ou plusieurs piles différentes, par exemple --stacks 2 ou --stacks 1,2');
+    if (forced && positionals[0] !== 'auto') throw new UsageError('--stacks ne vaut que pour apv release auto');
+    if (positionals[0] === 'auto') return auto(io, repo, dryRun, values.json === true, forced, values['force-retry'] === true);
     const state = remoteState(repo);
     const sha = positionals[0] === undefined ? state.fromHead : resolveCommit(repo, positionals[0]);
     if (!sha) throw new UsageError(`commit inconnu : ${positionals[0]}`);
