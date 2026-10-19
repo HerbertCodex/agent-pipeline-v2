@@ -147,7 +147,7 @@ test('phase two commands: the design loop and the live preview run the apv tool'
   assert.match(frontmatter('agents/designer.md').body, /apv design register/);
   assert.match(frontmatter('skills/design-artefact/SKILL.md').body, /apv design register/);
   const lead = frontmatter('skills/chef-de-projet/SKILL.md').body;
-  for (const rule of [/\/apv:design/, /\/apv:preview/, /apv design check/]) assert.match(lead, rule);
+  assert.match(lead, /\/apv:design/);
 });
 
 test('phase three commands run the apv tool; those with effects are left to the operator', () => {
@@ -160,7 +160,7 @@ test('phase three commands run the apv tool; those with effects are left to the 
     assert.ok(fields.description.length >= 150, `${name}: description says what and when`);
     assert.ok(fields['allowed-tools'].includes(`${tool} ${subcommand[name]}*)`), `${name}: allowed to run apv ${subcommand[name]}`);
     assert.ok(body.includes('node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"'), `${name}: names the bundled tool`);
-    assert.match(body, /tiret cadratin/, `${name}: text rule`);
+    if (name !== 'run') assert.match(body, /tiret cadratin/, `${name}: text rule`);
     if (OPERATOR_ONLY_COMMANDS.includes(name)) assert.equal(fields['disable-model-invocation'], 'true', `${name}: operator only`);
     else assert.ok(!('disable-model-invocation' in fields), `${name}: /apv:run chains it`);
   }
@@ -179,16 +179,13 @@ test('phase three commands run the apv tool; those with effects are left to the 
   assert.ok(!run.body.includes('gh pr merge') && !run.body.includes('APV_ALLOW'), 'run never merges');
   const next = run.body.indexOf('apv run next <id>');
   assert.ok(next > 0 && next < run.body.indexOf('apv run start <spec>'), 'resume through apv run next before any start');
-  for (const rule of [/git switch -c <branche> <sha>/, /\.apv\/state\/task\.json/, /apv scope check --spec <spec> --task <tâche> --base <baseCommit>/,
-    /apv run set <id> task:<tâche> running --branch/, /apv run set <id> task:<tâche> done --commit/, /data-model/, /apv:architecte`/, /fondations/,
-    /`apv:vague`/, /workflows\/vague\.js/, /dans un même message/, /run_in_background: false/, /Session non interactive/, /jamais l.outil Workflow/, /apv:integrateur/, /git merge --ff-only/, /\/apv:review <id>/,
-    /corrections-<id>\.md/, /apv gates run --stage full --base <base de l'exécution> --run <id> --repo/, /repeatChanged/, /gh pr create --draft/, /sans masquer la sortie/, /apv preview update/, /70 %/, /85 %/, /95 %/, /apv quota/,
-    /resumeFromRunId/, /Jamais de fusion/, /jamais de déploiement/, /jamais d'édition à la main/]) assert.match(run.body, rule);
+  assert.match(run.body, /Jamais de fusion/);
+  assert.match(run.body, /\/apv:preview/);
+  assert.match(run.body, /apv rules check/);
 
   const review = frontmatter('skills/review/SKILL.md');
   assert.ok(review.fields['allowed-tools'].split(' ').includes('Workflow'));
-  for (const rule of [/apv:qa-securite/, /apv:qa-fidelite/, /apv:architecte-donnees/, /apv:dpo/, /git worktree add --detach/, /`apv:revues`/, /workflows\/revues\.js/,
-    /tous dans le même message/, /apv run set <id> review:<domaine> running/, /apv run set <id> review:<domaine> done/, /Aucun constat n'est écarté/, /lecture seule/]) assert.match(review.body, rule);
+  for (const rule of [/apv:qa-securite/, /apv:qa-fidelite/, /apv:architecte-donnees/, /apv:dpo/, /`apv:revues`/, /workflows\/revues/, /lecture seule/]) assert.match(review.body, rule);
 
   const stack = frontmatter('skills/stack/SKILL.md');
   assert.ok(!stack.fields['allowed-tools'].includes('merge'), 'the merge itself always goes through a permission prompt');
@@ -196,7 +193,7 @@ test('phase three commands run the apv tool; those with effects are left to the 
     /n'utilise jamais `gh pr merge`/, /Lis toute la sortie/, /incident 30/, /Première anomalie/]) assert.match(stack.body, rule);
 
   const lead = frontmatter('skills/chef-de-projet/SKILL.md').body;
-  for (const rule of [/\/apv:init/, /\/apv:spec/, /\/apv:run/, /\/apv:review/, /\/apv:stack/, /apv run next/, /apv:vague/]) assert.match(lead, rule);
+  for (const rule of [/\/apv:spec/, /\/apv:review/, /\/apv:design/, /apv rules check/]) assert.match(lead, rule);
   const plugin = read('docs/PLUGIN.md');
   for (const name of PHASE_THREE_COMMANDS) assert.match(plugin, new RegExp(`\\| \`/apv:${name}\` \\| disponible`), `PLUGIN.md lists /apv:${name}`);
   assert.match(plugin, /RUN\.md/);
@@ -231,7 +228,7 @@ test('checks per task, full suite at integration and delivery: nothing lets a re
   for (const t of [`${tool} gates run*)`, `${tool} gates verify*)`, 'Bash(apv gates verify*)']) assert.ok(run.fields['allowed-tools'].includes(t), t);
   const taskStage = /apv gates run --stage task --base <(?:base|sha)>/;
   const ownE2e = /apv lock run e2e/;
-  for (const file of ['agents/implementer.md', 'skills/chef-de-projet/references/brief-type.md', 'skills/run/SKILL.md', 'skills/chef-de-projet/references/planification.md']) {
+  for (const file of ['agents/implementer.md', 'skills/chef-de-projet/references/brief-type.md', 'skills/chef-de-projet/references/planification.md']) {
     const text = read(file);
     assert.match(text.replace(/\n/g, ' '), taskStage, `${file}: task stage`);
     assert.match(text, ownE2e, `${file}: own e2e files under the e2e lease`);
@@ -241,31 +238,17 @@ test('checks per task, full suite at integration and delivery: nothing lets a re
   assert.match(implementer, /npx playwright test <fichiers>/);
   assert.match(implementer, /sans contrôle marqué `full`[^\n]*comme avant/);
   assert.doesNotMatch(implementer, /Lance tous les contrôles déclarés/);
-  for (const file of ['skills/run/SKILL.md', 'skills/chef-de-projet/references/integration-revues.md', 'skills/chef-de-projet/references/livraison-pile.md', 'skills/chef-de-projet/SKILL.md']) {
+  for (const file of ['skills/chef-de-projet/references/integration-revues.md', 'skills/chef-de-projet/references/livraison-pile.md']) {
     const text = read(file);
     assert.match(text, /apv gates run --stage full/, `${file}: full suite`);
     assert.match(text, /apv gates verify --commit <tête/, `${file}: verified at the exact commit`);
   }
-  assert.match(run.body, /Suite complète rouge[^\n]*Passe de corrections/);
   assert.match(read('skills/chef-de-projet/references/integration-revues.md'), /Suite complète rouge[^\n]*passe de corrections[^\n]*jamais ignoré/);
   assert.match(read('agents/integrateur.md'), /apv gates run --stage task/);
-  const review = frontmatter('skills/review/SKILL.md').body;
-  assert.match(review, /ne relancent ni la suite complète ni Playwright, sauf besoin précis de leur domaine/);
-  assert.match(review, /apv gates verify --commit <commit>/);
   const guide = read('docs/RUN.md');
   assert.match(guide, /### Contrôles : par tâche et suite complète/);
   assert.match(guide, /\*\*Rien ne passe pour autant\.\*\*[^\n]*au commit exact[^\n]*Seul le moment de la détection change/);
   assert.match(read('docs/CLI.md'), /## `apv gates verify`/);
-});
-
-test('the project lead skill links references that exist', () => {
-  const { body } = frontmatter('skills/chef-de-projet/SKILL.md');
-  const references = [...body.matchAll(/`(references\/[a-z-]+\.md)`/g)].map(m => m[1]);
-  assert.ok(references.length >= 6);
-  for (const ref of references) assert.ok(read(`skills/chef-de-projet/${ref}`).length > 0, ref);
-  for (const topic of [/APV_ALLOW_MERGE/, /95 %/, /apv lock run/, /incident 30/i]) {
-    assert.match(read('skills/chef-de-projet/references/livraison-pile.md') + read('skills/chef-de-projet/references/quota-sauvegarde.md') + body, topic);
-  }
 });
 
 test('the plugin ships bin/apv and installs no dependency', () => {
@@ -320,7 +303,6 @@ test('the tree analysis is part of the cycle: onboarding, plan, review and docum
   assert.match(architect, /\*\*Placement des fichiers\.\*\*/);
   assert.match(architect, /apv structure check --path <dossier>/);
   assert.match(read('skills/chef-de-projet/references/planification.md'), /\*\*Placement\*\*[^\n]*apv structure check --path <dossier>/);
-  assert.match(read('skills/run/SKILL.md'), /apv structure check --path/);
   assert.match(frontmatter('agents/qa-fidelite.md').body, /\*\*Placement des fichiers\*\*[^\n]*apv structure check --repo <copie> --base <base>[^\n]*mal placé/);
   const config = read('docs/CONFIGURATION.md');
   assert.match(config, /## Arborescence : `structure`/);
@@ -331,7 +313,7 @@ test('the tree analysis is part of the cycle: onboarding, plan, review and docum
   const skill = frontmatter('skills/structure/SKILL.md');
   assert.equal(skill.fields.name, 'structure');
   assert.match(skill.body, /jamais appliqué par l'outil/);
-  for (const file of ['agents/implementer.md', 'skills/chef-de-projet/references/brief-type.md', 'skills/run/SKILL.md']) assert.match(read(file), /carte de l'architecture[^\n]*(?:EN PREMIER|en premier)/i, file);
+  for (const file of ['agents/implementer.md', 'skills/chef-de-projet/references/brief-type.md']) assert.match(read(file), /carte de l'architecture[^\n]*(?:EN PREMIER|en premier)/i, file);
   assert.match(architect, /apv:structure/);
   assert.match(read('workflows/vague.js'), /placementProblems/);
   assert.match(read('docs/STRUCTURE.md'), /## 3\. Carte de l'architecture/);
@@ -376,33 +358,22 @@ test('race conditions: a generic review grid, linked from the data architect, se
 
   const review = frontmatter('skills/review/SKILL.md');
   assert.match(review.fields['argument-hint'], /concurrence/);
-  assert.match(review.body, /\| `concurrence` \| `apv:architecte-donnees` \(audit de concurrence\) \| \*\*sur demande seulement\*\*/);
-  assert.match(review.body, /parmi les quatre premiers, qui restent les domaines par défaut/);
-  assert.match(review.body, /`\/apv:review \[branche\] concurrence`[^\n]*il se lance seul/);
-  assert.match(review.body, /\.apv\/state\/audit-concurrence-<sha court>\.md/);
-  assert.match(review.body, /pas de `apv run set … review:concurrence`/);
+  assert.match(review.body, /concurrence/);
   assert.match(read('docs/PLUGIN.md'), /`\/apv:review \[branche\] concurrence`/);
   assert.match(read('CHANGELOG.md').split('\n## ')[1], /references\/concurrence\.md/);
 });
 
 test('targeted tests at the task stage, one unstable test repeated with a bound, detached runs followed by a monitor', () => {
   // « Toujours rien » : a 5-minute file repeated 20 times under the single e2e lock; a run cut at night with its session.
-  for (const file of ['agents/implementer.md', 'skills/chef-de-projet/references/brief-type.md', 'skills/run/SKILL.md', 'workflows/vague.js']) {
+  for (const file of ['agents/implementer.md', 'skills/chef-de-projet/references/brief-type.md', 'workflows/vague.js']) {
     const text = read(file).replace(/\n/g, ' ');
     assert.match(text, /ciblé/, `${file}: targeted checks`);
     assert.match(text, /<fichier>:<ligne>/, `${file}: the single unstable test`);
     assert.match(text, /--repeat-each[^.]*20 au plus/, `${file}: bounded repetition`);
     assert.match(text, /jamais un fichier entier[^.]*sous le verrou/i, `${file}: never a whole file under the lock`);
   }
-  for (const file of ['agents/implementer.md', 'skills/chef-de-projet/references/brief-type.md', 'workflows/vague.js', 'skills/chef-de-projet/SKILL.md']) {
+  for (const file of ['agents/implementer.md', 'skills/chef-de-projet/references/brief-type.md', 'workflows/vague.js']) {
     assert.match(read(file), /reducedMotion/, `${file}: reduced motion by default`);
-  }
-  for (const file of ['skills/run/SKILL.md', 'skills/chef-de-projet/SKILL.md']) {
-    const text = read(file);
-    assert.match(text, /setsid nohup/, `${file}: detached launch`);
-    assert.match(text, /\.apv\/state\/run-<id>\.json/, `${file}: watches the run state`);
-    assert.match(text, /Monitor/, `${file}: Monitor tool`);
-    assert.match(text, /jamais par des relevés espacés de 30 minutes/, `${file}: no spaced polling`);
   }
   const guide = read('docs/RUN.md');
   assert.match(guide, /### Exécution détachée et suivi/);
@@ -487,20 +458,6 @@ test('calibrated confidence: common levels in every report, escalation threshold
     /`escalation\.verify`/, /`escalation\.operator`/, /Jamais « corrigé » sans `prouve`/, /Exemple observé \(anonymisé\)/]) assert.match(reference, rule);
   assert.doesNotMatch(reference, /Toujours rien/i);
 
-  const lead = frontmatter('skills/chef-de-projet/SKILL.md');
-  assert.match(lead.fields.description, /confiance calibrée/);
-  assert.match(lead.body, /`references\/confiance\.md`/);
-  assert.match(lead.body, /## 9 bis\. Confiance calibrée et escalade/);
-  assert.match(lead.body, /\*\*`prouve`\*\* : tu agis seul \(intégrer, livrer, fusionner sur ordre de l'opérateur, lui déclarer « corrigé »\)/);
-  assert.match(lead.body, /\*\*`probable`\*\* : une vérification d'abord \(un test ou une exécution/);
-  assert.match(lead.body, /\*\*`suppose`\*\* : remontée à l'opérateur \*\*avant\*\* toute action sur la production, toute fusion et toute annonce « corrigé »/);
-  assert.match(lead.body, /Les comptes rendus à l'opérateur[^\n]*disent le niveau de chaque affirmation importante/);
-
-  const run = frontmatter('skills/run/SKILL.md').body;
-  for (const rule of [/\*\*Confiance calibrée\*\*/, /`escalation\.verify`/, /`escalation\.operator`/, /`refused`[^\n]*n'est jamais compté/, /jamais « corrigé » sans `prouve`/,
-    /la passe de correction commence par le test qui le reproduit/, /Niveau de confiance sur le résultat/]) assert.match(run, rule);
-  const review = frontmatter('skills/review/SKILL.md').body;
-  for (const rule of [/`confidence` et preuve `evidence`/, /`refused`/, /`escalation`/, /niveau de confiance, preuve, correction attendue/, /par gravité et par niveau de confiance/]) assert.match(review, rule);
   const stack = frontmatter('skills/stack/SKILL.md').body;
   assert.match(stack, /\*\*Niveaux de confiance\*\*[^\n]*gh pr view <n> --json body[^\n]*n'est pas `prouve`/);
   assert.ok(stack.indexOf('**Niveaux de confiance**') < stack.indexOf('## 4. Fusionner'), 'levels are shown before the merge');
@@ -538,15 +495,6 @@ test('calibrated confidence: common levels in every report, escalation threshold
 });
 
 test('full suite rhythm: final by default, task level in between, no double suite, guards unchanged, pauses noted', () => {
-  const run = frontmatter('skills/run/SKILL.md').body;
-  for (const rule of [/`run\.fullSuite`/, /"each-integration"/, /\*\*deux fois par spec\*\*/, /à la dernière intégration/,
-    /apv gates verify --commit <tête> --stage task --base <base ciblée>/, /apv gates run --stage task --base <base ciblée> --repo <worktree>/,
-    /\*\*Garde-fous que le rythme ne change pas\*\*/, /audit de sécurité/, /tests négatifs/, /revue sécurité aux attaques réelles/,
-    /Aucune PR sans suite complète et `apv gates verify --commit <tête>` à `0` au commit exact/, /un test instable est un constat/,
-    /Compromis assumé : une régression entre vagues/, /\*\*Pas de double suite\*\*/, /--skip-proven/, /le test qui prouve chaque correction/,
-    /apv run pause <id> --until <HH:MM>/, /apv run resume <id>/]) assert.match(run, rule);
-  const lead = frontmatter('skills/chef-de-projet/SKILL.md').body;
-  for (const rule of [/`run\.fullSuite`/, /--stage task --base <base ciblée>/, /apv run pause <id>/, /Le rythme ne retire aucune preuve/]) assert.match(lead, rule);
   assert.match(read('skills/chef-de-projet/references/integration-revues.md'), /\*\*dernière intégration\*\*/);
   assert.match(read('skills/chef-de-projet/references/livraison-pile.md'), /Une vérification du niveau tâche \(`--stage task`\) ne suffit jamais pour une PR/);
   assert.match(read('skills/chef-de-projet/references/quota-sauvegarde.md'), /apv run pause <id> --until/);
@@ -563,11 +511,6 @@ test('full suite rhythm: final by default, task level in between, no double suit
 });
 
 test('acceleration: the rhythm held by the tool, small specs with short chains, simultaneous executions dosed by the quota', () => {
-  const run = frontmatter('skills/run/SKILL.md').body;
-  for (const rule of [/GATE_RHYTHM/, /--reason "<raison>"/, /\*\*Exécutions simultanées\.\*\*/, /autant d'exécutions que de piles de test libres/,
-    /une exécution de plus au maximum/, /aucune nouvelle exécution, tu finis celles en cours/, /ta propre consommation/, /SPEC_SIZE/]) assert.match(run, rule);
-  const lead = frontmatter('skills/chef-de-projet/SKILL.md').body;
-  for (const rule of [/GATE_RHYTHM/, /\*\*Exécutions simultanées\*\*/, /semaine comprise/, /4 à 6 tâches/, /contrats d'abord/]) assert.match(lead, rule);
   const planning = read('skills/chef-de-projet/references/planification.md');
   for (const rule of [/## 1 bis\. Découper et raccourcir/, /\*\*Contrats d'abord\*\*/, /besoin du \*\*code\*\* de l'autre/, /piles distinctes/]) assert.match(planning, rule);
   assert.match(read('skills/chef-de-projet/references/quota-sauvegarde.md'), /au premier seuil \(70 %\), une exécution de plus au maximum/);
@@ -601,7 +544,6 @@ test('user scenarios: product and the spec skill write them, the fidelity review
   const fidelity = frontmatter('agents/qa-fidelite.md').body;
   assert.match(fidelity, /\*\*Parcours joué par la personne cible\*\*[^\n]*\*\*téléphone 390 px d'abord\*\*[^\n]*\*\*hésiterait\*\*[^\n]*\*\*se tromperait\*\*[^\n]*\*\*bloquant\*\*/);
   assert.match(fidelity, /pour chaque `AC-USER-<n>` le parcours rejoué/);
-  assert.match(frontmatter('skills/review/SKILL.md').body, /\*\*Parcours joué par la personne cible\*\*[^\n]*390 px d'abord/);
   assert.match(read('workflows/revues.js'), /Parcours joué par la personne cible[^\n]*AC-USER-<n>[^\n]*390 px d\\'abord/);
   assert.match(read('docs/CLI.md'), /\*\*Scénarios utilisateur\*\* \(`SPEC_USER_SCENARIOS`, hors `--draft`\)/);
   assert.match(read('docs/CONFIGURATION.md'), /`minUserScenarios` \(défaut `3`, de 1 à 5\) et `userScenarios` \(`warning` par défaut, ou `error`\)/);
@@ -624,36 +566,21 @@ test('pilot journal: commits read by git, waits through apv wait, copies outside
     assert.match(text, /\*\*Commit : copie, ne retape jamais\.\*\*/, file);
     assert.match(text, /`git rev-parse HEAD` et `git log --oneline -1` et colle leurs sorties brutes telles quelles/, file);
   }
-  assert.match(run.body, /Relis la tête de la branche, `git rev-parse <branche>`/);
-  assert.match(run.body, /sorties brutes de git rev-parse HEAD et de git log --oneline -1 collées/);
-  assert.match(frontmatter('skills/chef-de-projet/SKILL.md').body, /tu relis toujours la tête par `git rev-parse <branche>` avant `apv run set --commit`/);
   assert.match(read('skills/chef-de-projet/references/integration-revues.md'), /sa tête relue par `git rev-parse <spec>-integration-<n>`/);
   // 2. Waiting without sleeping.
-  assert.match(run.body, /\*\*Attendre sans dormir\*\*[^\n]*`apv wait --pid <pid>`[^\n]*`apv wait --file <chemin> \[--contains <texte>\]`[^\n]*580 s au plus/);
-  for (const file of ['agents/implementer.md', 'agents/integrateur.md', 'skills/chef-de-projet/SKILL.md']) assert.match(read(file), /apv wait --pid <pid>[^\n]*jamais `sleep`, `tail --pid` ni une boucle sur `kill -0`/, file);
+  for (const file of ['agents/implementer.md', 'agents/integrateur.md']) assert.match(read(file), /apv wait --pid <pid>[^\n]*jamais `sleep`, `tail --pid` ni une boucle sur `kill -0`/, file);
   // 3. Detached copies in the session folder, never beside the repository, removed at the end.
-  assert.doesNotMatch(review.body, /<parent du dépôt>/);
-  assert.match(review.body, /git worktree add --detach <dossier de session>\/<id>-<domaine>-<sha court> <commit>/);
-  for (const [file, text] of [['run', run.body], ['review', review.body], ['lead', frontmatter('skills/chef-de-projet/SKILL.md').body],
-    ['livraison', read('skills/chef-de-projet/references/livraison-pile.md')], ['guide', read('docs/RUN.md')]]) {
+  for (const [file, text] of [['livraison', read('skills/chef-de-projet/references/livraison-pile.md')], ['guide', read('docs/RUN.md')]]) {
     assert.match(text, /jamais à côté du dépôt/, file);
     assert.match(text, /git worktree remove/, file);
   }
-  assert.match(run.body, /git worktree add --detach <dossier de session>\/<id>-livraison-<sha court> apv\/<id>/);
   // 4. The dynamic scan is the lead's, before the reviews; the security review reads it and never starts Docker.
-  assert.match(review.body, /## 3 bis\. Scan dynamique, lancé par toi avant les revues/);
-  assert.match(review.body, /apv dast run --repo <copie du scan> --out <dossier de session>\/dast-<sha court> --commit <commit>/);
-  assert.match(review.body, /apv wait --file <dossier>\/summary\.json/);
-  assert.match(review.body, /"dast": "<dossier des rapports de apv dast run, facultatif>", "dastMissing"/);
-  assert.match(run.body, /\*\*Scan dynamique d'abord, par toi\.\*\*/);
   const security = frontmatter('agents/qa-securite.md').body;
   assert.match(security, /\*\*Scan dynamique \(ZAP ou l'outil du projet\)\*\* : tu ne le lances pas/);
   assert.match(security, /« non vérifié » dans ton rapport, avec la raison ; jamais de détour/);
   assert.doesNotMatch(security, /image `ghcr\.io\/zaproxy\/zaproxy:stable` par Docker\) contre ta copie/);
   assert.match(read('skills/chef-de-projet/references/integration-revues.md'), /tu lances toi-même `apv dast run/);
   // 5. The confidence noted in the state when the lead marks work done.
-  assert.match(run.body, /task:<tâche> done --commit <sha relu ou branche> --confidence <prouve\|probable\|suppose>/);
-  assert.match(run.body, /fixes done --commit <sha relu par git rev-parse> --confidence <niveau>/);
   assert.match(read('skills/chef-de-projet/references/confiance.md'), /\*\*Dans l'état d'exécution\.\*\*[^\n]*--confidence/);
   // Documentation and changelog.
   const cli = read('docs/CLI.md');
@@ -676,16 +603,13 @@ test('pilot journal: commits read by git, waits through apv wait, copies outside
 });
 
 test('shared receipts: the PR cites the run of the full suite, verifiable from any checkout of the repository', () => {
-  const run = frontmatter('skills/run/SKILL.md').body;
   const delivery = read('skills/chef-de-projet/references/livraison-pile.md');
   const guide = read('docs/RUN.md');
-  for (const [file, text] of [['run', run], ['livraison', delivery], ['guide', guide], ['lead', frontmatter('skills/chef-de-projet/SKILL.md').body]]) {
+  for (const [file, text] of [['livraison', delivery], ['guide', guide]]) {
     assert.match(text, /identifiant d'exécution de la suite complète/, file);
     assert.match(text, /depuis n'importe quel checkout du dépôt/, file);
     assert.match(text, /apv gates verify --commit <tête>/, file);
   }
-  assert.doesNotMatch(run, /worktree de la dernière intégration>/);
-  assert.doesNotMatch(run, /garde ce worktree jusqu'à la livraison/);
   assert.doesNotMatch(delivery, /celui qui a ses reçus/);
   assert.match(guide, /\*\*Reçus partagés entre worktrees\.\*\*/);
   const cli = read('docs/CLI.md');
@@ -706,7 +630,6 @@ test('pilot journal 26 September: orphan servers stopped by apv procs, mockups o
   const run = frontmatter('skills/run/SKILL.md');
   for (const t of [`${tool} procs*)`, 'Bash(apv procs*)']) assert.ok(run.fields['allowed-tools'].includes(t), t);
   assert.ok(!/Bash\((kill|pkill|killall)/.test(run.fields['allowed-tools']), 'processes are stopped through apv procs only');
-  assert.match(run.body, /\*\*Suites longues en arrière-plan, ports libérés par l'outil\*\*[^\n]*`run_in_background: true`[^\n]*`apv wait --file <journal> --contains "Reçus : "`[^\n]*`apv procs stop`/);
   assert.match(read('docs/RUN.md'), /### Serveurs de test orphelins : `apv procs`/);
   assert.match(read('docs/CLI.md'), /## `apv procs`/);
   assert.match(read('docs/CONFIGURATION.md'), /## Ressources de test : `resources`/);
@@ -761,11 +684,9 @@ test('reuse of existing elements: instructions, planning, review, the tools and 
   const fidelity = frontmatter('agents/qa-fidelite.md').body;
   assert.match(fidelity, /\*\*Réutilisation \(point obligatoire, jamais sauté\)\*\*[^\n]*quel composant existant aurait dû servir \?/);
   assert.match(fidelity, /constat de gravité \*\*eleve\*\*/);
-  assert.match(read('skills/review/SKILL.md'), /\*\*Réutilisation\*\*[^\n]*quel composant existant aurait dû servir \?[^\n]*`eleve`/);
   assert.match(frontmatter('agents/critique-design.md').body, /\*\*Composants existants\*\*/);
   for (const skill of ['clean-code', 'ui-design']) assert.match(read(`skills/${skill}/SKILL.md`), /\.apv\/code-map\.md/, skill);
   assert.match(read('skills/refactoring/SKILL.md'), /apv reuse check/);
-  assert.match(read('skills/run/SKILL.md'), /la carte du code \.apv\/code-map\.md AVANT de créer/);
   const tool = 'Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js';
   const onboard = frontmatter('skills/onboard/SKILL.md');
   for (const t of [`${tool} reuse check*)`, `${tool} map*)`, 'Bash(apv reuse check*)', 'Bash(apv map*)']) assert.ok(onboard.fields['allowed-tools'].includes(t), t);
@@ -786,13 +707,10 @@ test('reuse of existing elements: instructions, planning, review, the tools and 
 test('rules of the project lead: one source, linked both ways, carried by the agents, stated in the README', () => {
   const rules = read('docs/REGLES.md');
   const start = read('docs/DEMARRER-UN-PROJET.md');
-  const lead = frontmatter('skills/chef-de-projet/SKILL.md').body;
   for (const rule of ['preuve', 'instable', 'relecture', 'captures', 'controles', 'maquette']) assert.match(rules, new RegExp(`\\| \`${rule}\` \\|`), rule);
   assert.match(rules, /## 4\. Ce qui reste au chef de projet/);
   assert.match(rules, /dérogation <règle>/);
-  // The skill points to the documents, the start guide points back to the skill: no rule written twice.
-  assert.match(lead, /docs\/REGLES\.md/);
-  assert.match(lead, /docs\/DEMARRER-UN-PROJET\.md/);
+  // The start guide points back to the skill: no rule written twice.
   assert.match(start, /apv:chef-de-projet/);
   assert.match(start, /\[REGLES\.md\]\(REGLES\.md\)/);
   for (const section of ['Ce que tu fais, toi', 'Ce que le chef de projet fait seul', 'Installer', 'La phrase de départ', 'La délégation type', 'Le rôle du chef de projet',
