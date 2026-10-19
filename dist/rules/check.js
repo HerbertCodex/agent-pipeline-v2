@@ -568,6 +568,8 @@ export async function checkMergeRules(input) {
         }
     }
     const preuveOutcome = rules.find(r => r.rule === 'preuve');
+    if (taskProof && !skip.has('preuve'))
+        preuveOutcome.title = 'preuve de tâche au commit exact (suite complète à la mise en ligne)';
     if (preuveOutcome.status === 'ok' && laneNotes.length)
         preuveOutcome.detail += ` ; ${laneNotes[0]}`;
     // Outside the merge on order (5.1): the reduced lane is only said possible, never taken.

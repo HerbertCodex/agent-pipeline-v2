@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { loadConfig, loadConfigAtCommit, suiteSettings } from '../config/load.js';
+import { enforceBaseGates } from '../gates/base-gates.js';
 import { runGates } from '../gates/run.js';
 import { verifyGates } from '../gates/verify.js';
 import { LockStore } from '../lock/store.js';
@@ -20,11 +21,15 @@ suite complète est prouvée au commit exact (apv gates verify --commit <sha>, i
 <sha> (défaut : tête distante de from) doit être un ancêtre de cette tête, et la production distante un ancêtre
 de <sha> (jamais de retour en arrière, jamais de force). Puis git push origin <sha>:refs/heads/<branch>, sortie
 affichée, branche distante relue. --dry-run vérifie tout et ne pousse rien.
-auto : pour un lancement périodique (cron) ; rien à publier : 0 ; suite déjà prouvée à la tête de from : publie ;
-reçus rouges ou instables à ce commit : 1 sans relancer ; sinon suite complète dans une copie détachée (batch.setup),
-sans attendre la file des suites (occupée : 0, plus tard), puis publie si elle est verte au premier passage.
+auto : pour un lancement périodique (cron) ; rien à publier : 0 ; reçus rouges ou instables à ce commit : 1 sans
+relancer ; sinon suite complète relancée en entier (aucun reçu repris) dans une copie détachée (batch.setup), sans
+attendre la file des suites (occupée : 0, plus tard), puis publie si elle est verte au premier passage.
+Hors --dry-run : APV_ALLOW_MERGE=1 devant la commande (ordre de l'opérateur, ou son cron).
+Les contrôles de la branche de production sont toujours gardés (comme les contrôles de la base à la fusion).
 Historique : .apv/state/stack.log (event release). Sortie : 0 publié ou rien à faire, 1 refus, 2 appel incorrect.`;
 const REMOTE = 'origin';
+export const RELEASE_REFUSED = "APV : mise en ligne refusée sans APV_ALLOW_MERGE=1 devant la commande. Elle se fait seulement sur ordre " +
+    "de l'opérateur ou délégation écrite (APV_ALLOW_MERGE=1 apv release <sha>), ou par son cron (APV_ALLOW_MERGE=1 apv release auto) ; --dry-run reste libre.";
 const short = (sha) => sha ? sha.slice(0, 12) : 'absente';
 function git(repo, args) {
     const r = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], { cwd: repo, encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, timeout: 300_000 });
@@ -52,8 +57,10 @@ function remoteState(repo) {
     }
     return { settings: published, fromHead, production: heads.get(`refs/heads/${local.branch}`) ?? null };
 }
-async function fullProof(repo, sha, from) {
-    return verifyGates({ repo, config: loadConfigAtCommit(repo, sha).config, commit: sha, stage: 'full', configFile: null, reuseReference: `refs/remotes/${REMOTE}/${from}` });
+/** The checks of `sha` with those of the production kept (a change never weakens what production was proven with). */
+const proofConfig = (repo, sha, production) => enforceBaseGates(loadConfigAtCommit(repo, sha).config, loadConfigAtCommit(repo, production).config).config;
+async function fullProof(repo, sha, from, production) {
+    return verifyGates({ repo, config: proofConfig(repo, sha, production), commit: sha, stage: 'full', configFile: null, reuseReference: `refs/remotes/${REMOTE}/${from}` });
 }
 const proofLines = (proof) => proof.gates.filter(g => g.state !== 'passed').map(g => `${g.gateId} (${g.state})`);
 /** Checks a release of `sha` and, unless `dryRun`, pushes it fast-forward. */
@@ -69,9 +76,9 @@ async function release(repo, state, sha, dryRun) {
         return refuse(`${REMOTE}/${branch} (${short(production)}) n'est pas un ancêtre de ${short(sha)} : avance rapide seulement, jamais de retour en arrière`);
     if (production === sha)
         return { ...base, ok: true, lines: [`${REMOTE}/${branch} est déjà à ${short(sha)} : rien à publier.`] };
-    const proof = await fullProof(repo, sha, from);
+    const proof = await fullProof(repo, sha, from, production);
     if (!proof.ok)
-        return refuse(`suite complète non prouvée à ${short(sha)} : ${proofLines(proof).join(', ')} (apv gates run --stage full dans une copie à ce commit)`);
+        return refuse(`suite complète non prouvée à ${short(sha)}, contrôles de ${REMOTE}/${branch} compris : ${proofLines(proof).join(', ')} (apv gates run --stage full --base ${REMOTE}/${branch} dans une copie à ce commit)`);
     if (proof.flaky.length)
         return refuse(`réussi(s) seulement après relance à ${short(sha)} : ${proof.flaky.join(', ')} (règle instable)`);
     const said = `suite complète prouvée à ${short(sha)} (${proof.required.length} contrôle(s), aucun instable) ; ${REMOTE}/${branch} ${short(production)} vers ${short(sha)} en avance rapide`;
@@ -114,23 +121,22 @@ async function auto(io, repo, dryRun, asJson) {
         const base = { ok: true, published: false, sha: fromHead, branch, from, previous: production };
         if (production === fromHead)
             return report(io, asJson, { ...base, lines: [`Rien à publier : ${REMOTE}/${branch} est à la tête de ${from} (${short(fromHead)}).`] }, false, 'auto');
-        const proof = await fullProof(repo, fromHead, from);
-        if ((!proof.ok && proof.gates.some(g => g.state === 'failed')) || (proof.ok && proof.flaky.length)) {
+        if (!production || !isAncestor(repo, production, fromHead))
+            return report(io, asJson, await release(repo, state, fromHead, true), !dryRun, 'auto');
+        // A red or unstable suite already recorded at this commit is never run again by the cron; a green one never suffices.
+        const proof = await fullProof(repo, fromHead, from, production);
+        if (proof.gates.some(g => g.state === 'failed') || proof.flaky.length) {
             const what = proof.flaky.length ? `instable(s) : ${proof.flaky.join(', ')}` : `en échec : ${proofLines(proof).join(', ')}`;
             return report(io, asJson, { ...base, ok: false, lines: [`Suite complète déjà passée à ${short(fromHead)}, ${what} : rien n'est publié ni relancé (corriger sur ${from}).`] }, !dryRun, 'auto');
         }
-        if (!proof.ok) {
-            if (!production || !isAncestor(repo, production, fromHead))
-                return report(io, asJson, await release(repo, state, fromHead, true), !dryRun, 'auto');
-            if (dryRun)
-                return report(io, asJson, { ...base, lines: [`Suite complète à lancer à ${short(fromHead)} (${proofLines(proof).join(', ')}), puis mise en ligne. --dry-run : rien n'est lancé.`] }, false, 'auto');
-            const suite = await runCopy(io, repo, common, fromHead, production);
-            if (suite.busy)
-                return report(io, asJson, { ...base, lines: [`Machine occupée (${suite.busy}) : plus tard.`] }, false, 'auto');
-            if (!suite.ok)
-                return report(io, asJson, { ...base, ok: false, lines: [`Suite complète rouge ou instable à ${short(fromHead)} : ${suite.summary} ; rien n'est publié.`] }, true, 'auto');
-        }
-        return report(io, asJson, await release(repo, state, fromHead, dryRun), !dryRun, 'auto');
+        if (dryRun)
+            return report(io, asJson, { ...base, lines: [`Suite complète à relancer à ${short(fromHead)} dans une copie détachée, puis mise en ligne. --dry-run : rien n'est lancé.`] }, false, 'auto');
+        const suite = await runCopy(io, repo, common, fromHead, production);
+        if (suite.busy)
+            return report(io, asJson, { ...base, lines: [`Machine occupée (${suite.busy}) : plus tard.`] }, false, 'auto');
+        if (!suite.ok)
+            return report(io, asJson, { ...base, ok: false, lines: [`Suite complète rouge ou instable à ${short(fromHead)} : ${suite.summary} ; rien n'est publié.`] }, true, 'auto');
+        return report(io, asJson, await release(repo, state, fromHead, false), true, 'auto');
     }
     finally {
         await store.release('release-auto', { token: lock.record.token }).catch(() => undefined);
@@ -146,11 +152,12 @@ async function runCopy(io, repo, common, sha, production) {
     if (added.status !== 0)
         throw new PipelineError('RELEASE', `copie ${dir} non créée : ${added.stderr.trim()}`);
     try {
-        const config = loadConfigAtCommit(repo, sha).config;
+        const config = proofConfig(repo, sha, production);
         const suite = suiteSettings(config);
         const noWait = { ...config, suite: { ports: suite.ports, queue: { ...suite.queue, waitMs: 0 } } };
+        // Every check run again (no receipt reused): the cron publishes only what it has just seen pass.
         const result = await runGates({ repo: dir, config: noWait, stage: 'full', base: production, repeatReference: production, reference: production, repeatCeiling: false,
-            batchSetup: true, env: io.env, log: line => io.stderr(`${line}\n`) });
+            batchSetup: true, replay: 'all', env: io.env, log: line => io.stderr(`${line}\n`) });
         const failed = result.receipts.filter(r => !['passed', 'passed_after_retry', 'cached', 'not_required'].includes(r.status)).map(r => `${r.gateId} (${r.status})`);
         return { ok: result.ok && !result.flaky.length, summary: `${failed.length ? `en échec : ${failed.join(', ')}` : ''}${result.flaky.length ? ` instable(s) : ${result.flaky.join(', ')}` : ''} ; exécution ${result.runId}` };
     }
@@ -178,6 +185,10 @@ export async function run(args, io) {
             throw new UsageError(`argument inattendu : ${positionals.slice(1).join(' ')}`);
         const repo = gitRoot(repoPath(io, values.repo));
         const dryRun = values['dry-run'] === true;
+        if (!dryRun && io.env['APV_ALLOW_MERGE'] !== '1') {
+            io.stderr(`${RELEASE_REFUSED}\n`);
+            return EXIT.usage;
+        }
         if (positionals[0] === 'auto')
             return auto(io, repo, dryRun, values.json === true);
         const state = remoteState(repo);

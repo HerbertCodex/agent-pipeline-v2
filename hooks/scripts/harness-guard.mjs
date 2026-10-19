@@ -623,16 +623,19 @@ export function hookContext(input, env = process.env) {
       const head = git(dir, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
       return [...new Set([...(head && head.startsWith('origin/') ? [head.slice('origin/'.length)] : []), 'main', 'master'])];
     },
-    // The production branch (`release.branch`) of the configuration in the copy and on the default branch: never pushed to
-    // directly (apv release). A configuration present but unreadable, or none at all: `production`.
+    // The production branches, never pushed to directly (apv release): `production` always, and the `release.branch` of the
+    // configuration (in the copy and on the default branch) of the folder the push runs in, of the working directory and
+    // of the project of the session (a decoy repository without the section opens nothing).
     releaseBranches: (dir = cwd) => {
-      const root = git(dir, ['rev-parse', '--show-toplevel']);
-      let local = null;
-      try { local = root ? readFileSync(join(root, '.apv', 'config.json'), 'utf8') : null; } catch { local = null; }
-      const texts = [local, git(dir, ['show', 'refs/remotes/origin/HEAD:.apv/config.json'])].filter(x => x !== null);
-      const out = new Set(texts.length ? [] : ['production']);
-      for (const text of texts) {
-        try { const branch = JSON.parse(text)?.release?.branch; if (typeof branch === 'string' && branch) out.add(branch); } catch { out.add('production'); }
+      const out = new Set(['production']);
+      const project = typeof env.CLAUDE_PROJECT_DIR === 'string' && env.CLAUDE_PROJECT_DIR ? env.CLAUDE_PROJECT_DIR : null;
+      for (const place of new Set([dir, cwd, project].filter(Boolean))) {
+        const root = git(place, ['rev-parse', '--show-toplevel']);
+        let local = null;
+        try { local = root ? readFileSync(join(root, '.apv', 'config.json'), 'utf8') : null; } catch { local = null; }
+        for (const text of [local, git(place, ['show', 'refs/remotes/origin/HEAD:.apv/config.json'])]) {
+          try { const branch = text === null ? null : JSON.parse(text)?.release?.branch; if (typeof branch === 'string' && branch) out.add(branch); } catch { /* production stays */ }
+        }
       }
       return [...out];
     },

@@ -8,6 +8,7 @@ import { apv } from './cli-helpers.mjs';
 import { evaluateCommand, REASONS } from '../hooks/scripts/bash-guard.mjs';
 import { hookContext } from '../hooks/scripts/harness-guard.mjs';
 import { LockStore } from '../dist/lock/store.js';
+import { releaseTarget, stackRules } from '../dist/commands/stack.js';
 
 /** Release decoupled from the merge: the task proof at the merge (light mode), the full suite at `apv release`. */
 
@@ -16,6 +17,7 @@ const git = (cwd, ...args) => execFileSync('git', ['-c', 'core.hooksPath=/dev/nu
   { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...identity } }).trim();
 const put = (root, path, value) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), typeof value === 'string' ? value : `${JSON.stringify(value, null, 2)}\n`); };
 const node = code => [process.execPath, '-e', code];
+const ALLOW = { APV_ALLOW_MERGE: '1' };
 const RELEASE = { branch: 'production', from: 'main' };
 const rule = (report, id) => report.rules.find(r => r.rule === id);
 
@@ -51,6 +53,7 @@ test('rules check, light mode: with release the task proof suffices on main, wit
       assert.equal(preuve.status, 'ok', JSON.stringify(preuve));
       assert.match(preuve.detail, /de tâche prouvé/);
       assert.equal(r.json().release.taskProof, true);
+      assert.match(preuve.title, /^preuve de tâche au commit exact/);
       const text = await apv(p.repo, ['rules', 'check', '--commit', head, '--target', 'origin/main', '--offline']);
       assert.match(text.stdout, /Preuve de tâche suffit : la suite complète est exigée à la mise en ligne/);
     } else {
@@ -125,7 +128,7 @@ test('apv release: refuses a flaky full suite', async t => {
   p.commit('a.txt', 'a\n');
   git(p.repo, 'push', '-q', 'origin', 'main');
   assert.equal((await apv(p.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/production'])).code, 0);
-  const r = await apv(p.repo, ['release']);
+  const r = await apv(p.repo, ['release'], ALLOW);
   assert.equal(r.code, 1);
   assert.match(r.stdout, /réussi\(s\) seulement après relance .*browser/);
 });
@@ -140,48 +143,105 @@ test('apv release: --dry-run pushes nothing; then a fast-forward push, read back
   assert.equal(dry.code, 0, dry.stdout + dry.stderr);
   assert.match(dry.stdout, /--dry-run : rien n'est poussé/);
   assert.equal(p.remote('production'), before);
-  const done = await apv(p.repo, ['release', '--json']);
+  const done = await apv(p.repo, ['release', '--json'], ALLOW);
   assert.equal(done.code, 0, done.stdout + done.stderr);
   assert.equal(done.json().published, true);
   assert.equal(p.remote('production'), sha);
   const log = readFileSync(join(p.repo, '.apv/state/stack.log'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
   assert.deepEqual(log.map(l => [l.event, l.commit, l.published]), [['release', sha, true]]);
-  const again = await apv(p.repo, ['release']);
+  const again = await apv(p.repo, ['release'], ALLOW);
   assert.equal(again.code, 0);
   assert.match(again.stdout, /déjà à .* rien à publier/);
 });
 
 test('apv release auto: nothing to publish, proven head published, red suite never published', async t => {
-  const p = project(t);
-  const idle = await apv(p.repo, ['release', 'auto']);
+  const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node('process.exit(require("fs").existsSync("rouge.txt") ? 1 : 0)') }] });
+  const idle = await apv(p.repo, ['release', 'auto'], ALLOW);
   assert.equal(idle.code, 0, idle.stdout + idle.stderr);
   assert.match(idle.stdout, /Rien à publier/);
 
   const proven = p.commit('a.txt', 'a\n');
   git(p.repo, 'push', '-q', 'origin', 'main');
   assert.equal((await apv(p.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/production'])).code, 0);
-  const published = await apv(p.repo, ['release', 'auto']);
+  const published = await apv(p.repo, ['release', 'auto'], ALLOW);
   assert.equal(published.code, 0, published.stdout + published.stderr);
   assert.equal(p.remote('production'), proven);
 
   // Not proven yet: the suite runs in a detached copy (green here), then the head is published.
   const fresh = p.commit('b.txt', 'b\n');
   git(p.repo, 'push', '-q', 'origin', 'main');
-  const ran = await apv(p.repo, ['release', 'auto']);
+  const ran = await apv(p.repo, ['release', 'auto'], ALLOW);
   assert.equal(ran.code, 0, ran.stdout + ran.stderr);
   assert.equal(p.remote('production'), fresh);
   assert.equal(existsSync(join(git(p.repo, 'rev-parse', '--path-format=absolute', '--git-common-dir'), 'apv', 'release', fresh.slice(0, 12))), false, 'copy removed');
 
   // A check that fails: the suite runs red, nothing is published, and the next pass does not run it again.
-  put(p.repo, '.apv/config.json', { name: 'essai', gates: [{ id: 'unit', stage: 'full', command: node('process.exit(1)') }], release: RELEASE });
-  git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'rouge'); git(p.repo, 'push', '-q', 'origin', 'main');
-  const red = await apv(p.repo, ['release', 'auto']);
+  p.commit('rouge.txt', 'rouge\n'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const red = await apv(p.repo, ['release', 'auto'], ALLOW);
   assert.equal(red.code, 1, red.stdout + red.stderr);
   assert.match(red.stdout, /rouge ou instable .*unit \(failed\).*rien n'est publié/);
   assert.equal(p.remote('production'), fresh);
-  const next = await apv(p.repo, ['release', 'auto']);
+  const next = await apv(p.repo, ['release', 'auto'], ALLOW);
   assert.equal(next.code, 1);
   assert.match(next.stdout, /déjà passée .*ni relancé/);
+});
+
+test('apv release auto: a green receipt already there never suffices, the suite runs again in its copy', async t => {
+  // The check passes once (the receipt of the operator's run), then fails: the cron must see it fail.
+  const marker = join(mkdtempSync(join(tmpdir(), 'apv4-release-once-')), 'ran');
+  t.after(() => rmSync(dirname(marker), { recursive: true, force: true }));
+  const once = `const fs=require("fs"); if (fs.existsSync(${JSON.stringify(marker)})) process.exit(1); fs.writeFileSync(${JSON.stringify(marker)}, "");`;
+  const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node(once) }] });
+  const before = p.remote('production');
+  p.commit('a.txt', 'a\n');
+  git(p.repo, 'push', '-q', 'origin', 'main');
+  assert.equal((await apv(p.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/production'])).code, 0);
+  assert.equal((await apv(p.repo, ['release', '--dry-run'])).code, 0, 'the receipt proves the commit for the manual release');
+  const auto = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(auto.code, 1, auto.stdout + auto.stderr);
+  assert.match(auto.stdout, /rouge ou instable .*unit \(failed\)/);
+  assert.equal(p.remote('production'), before);
+});
+
+test('apv release: the checks of production are kept, a weakened check is never released (weaken.sh)', async t => {
+  const p = project(t, { gates: [{ id: 'lint', stage: 'task', command: node('0') }, { id: 'unit', stage: 'full', command: node('process.exit(1)') }] });
+  const before = p.remote('production');
+  git(p.repo, 'switch', '-q', '-c', 'feat');
+  put(p.repo, '.apv/config.json', { name: 'essai', gates: [{ id: 'lint', stage: 'task', command: node('0') }, { id: 'unit', stage: 'full', command: node('0') }], release: RELEASE });
+  git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'weaken unit');
+  git(p.repo, 'push', '-q', 'origin', 'feat:main');
+  git(p.repo, 'switch', '-q', 'main'); git(p.repo, 'merge', '-q', '--ff-only', 'origin/main');
+  assert.equal((await apv(p.repo, ['gates', 'run', '--stage', 'full'])).code, 0, 'the weakened suite passes');
+  const dry = await apv(p.repo, ['release', '--dry-run']);
+  assert.equal(dry.code, 1, dry.stdout + dry.stderr);
+  assert.match(dry.stdout, /contrôles de origin\/production compris : .*unit \(missing\)/);
+  const auto = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(auto.code, 1, auto.stdout + auto.stderr);
+  assert.match(auto.stdout, /unit \(failed\)/);
+  assert.equal(p.remote('production'), before);
+});
+
+test('apv release: without APV_ALLOW_MERGE=1 the tool itself refuses (auto too), --dry-run stays free', async t => {
+  const p = project(t);
+  const before = p.remote('production');
+  p.commit('a.txt', 'a\n');
+  git(p.repo, 'push', '-q', 'origin', 'main');
+  assert.equal((await apv(p.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/production'])).code, 0);
+  for (const args of [['release'], ['release', 'auto']]) {
+    const r = await apv(p.repo, args, { APV_ALLOW_MERGE: '' });
+    assert.equal(r.code, 2);
+    assert.match(r.stderr, /mise en ligne refusée sans APV_ALLOW_MERGE=1/);
+  }
+  assert.equal((await apv(p.repo, ['release', '--dry-run'], { APV_ALLOW_MERGE: '' })).code, 0);
+  assert.equal(p.remote('production'), before);
+});
+
+test('apv stack: a pull request whose target is the production branch is refused', async t => {
+  const p = project(t);
+  assert.match(releaseTarget(p.repo, 'origin', 'production'), /branche de production \(release\.branch\), elle n'avance que par apv release/);
+  assert.equal(releaseTarget(p.repo, 'origin', 'main'), null);
+  const verdict = await stackRules(p.repo)({ number: 7, headRefOid: git(p.repo, 'rev-parse', 'HEAD') }, 'production');
+  assert.match(verdict.problems[0], /^PR #7 : cible production : branche de production/);
 });
 
 test('apv release auto: the queue of the full suites held, it does not wait and publishes nothing', async t => {
@@ -192,7 +252,7 @@ test('apv release auto: the queue of the full suites held, it does not wait and 
   const store = new LockStore(join(common, 'apv', 'locks'));
   const held = await store.tryAcquire('full-suite', { pid: process.pid, host: store.host, label: 'autre suite' }, 600, 'suite complète');
   assert.equal(held.ok, true);
-  const busy = await apv(p.repo, ['release', 'auto']);
+  const busy = await apv(p.repo, ['release', 'auto'], ALLOW);
   await store.release('full-suite', { token: held.record.token });
   assert.equal(busy.code, 0, busy.stdout + busy.stderr);
   assert.match(busy.stdout, /Machine occupée/);
@@ -219,4 +279,19 @@ test('guard: the production branch is read from the configuration; unreadable, p
   assert.equal(evaluateCommand('git push origin main:feat', {}, context).decision, 'allow');
   put(p.repo, '.apv/config.json', '{ illisible');
   assert.equal(evaluateCommand('git push origin main:production', {}, hookContext({ cwd: p.repo })).decision, 'deny');
+});
+
+test('guard: a decoy repository whose configuration declares nothing opens neither production nor the branch of the session project', t => {
+  const p = project(t, { release: { branch: 'en-ligne', from: 'main' } });
+  const decoy = join(p.root, 'leurre');
+  mkdirSync(decoy);
+  git(decoy, 'init', '-q', '-b', 'main');
+  put(decoy, '.apv/config.json', {});
+  const fromProject = hookContext({ cwd: p.repo });
+  assert.equal(evaluateCommand(`cd ${decoy} && git push ${p.origin} HEAD:production`, {}, fromProject).decision, 'deny');
+  assert.equal(evaluateCommand(`cd ${decoy} && git push ${p.origin} HEAD:en-ligne`, {}, fromProject).decision, 'deny');
+  const inDecoy = hookContext({ cwd: decoy }, { ...process.env, CLAUDE_PROJECT_DIR: p.repo });
+  assert.equal(evaluateCommand('git push origin HEAD:en-ligne', {}, inDecoy).decision, 'deny');
+  assert.equal(evaluateCommand('git push origin HEAD:production', {}, inDecoy).decision, 'deny');
+  assert.equal(evaluateCommand('git push origin HEAD:feat', {}, inDecoy).decision, 'allow');
 });
