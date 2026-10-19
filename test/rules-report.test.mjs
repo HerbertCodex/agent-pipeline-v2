@@ -46,7 +46,7 @@ function site(t, { base = {}, config = {}, files = SITE } = {}) {
   const repo = join(root, 'repo');
   git(root, 'clone', '-q', origin, repo);
   git(repo, 'switch', '-q', '-c', 'main');
-  put(repo, '.apv/config.json', { name: 'essai', gates: [{ id: 'unit', stage: 'full', command: [process.execPath, '-e', '0'] }], ...config });
+  put(repo, '.apv/config.json', { name: 'essai', gates: [{ id: 'unit', stage: 'full', command: [process.execPath, '-e', '0'] }], ...config, rules: { mode: 'strict', ...config.rules } });
   put(repo, 'README.md', 'projet\n');
   for (const [path, value] of Object.entries({ ...files, ...base })) put(repo, path, value);
   git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'base'); git(repo, 'push', '-q', 'origin', 'main');

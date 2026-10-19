@@ -30,6 +30,12 @@ contenu changé garde tous les domaines (prudence) : un domaine n'est sauté que
 Code serveur, chemin sensible et configuration l'emportent sur tests et outillage (sauf un fichier nommé
 comme un test) : ils gardent tous les domaines ; les lignes des tests et de l'outillage restent lues
 pour les termes de données et RGPD (adresse e-mail réelle comprise).
+Mode des règles (rules.mode, défaut leger) et niveau du diff, en tête : 0 trivial (tests, documentation,
+notes et état .apv, CI hors workflows, configuration d'outillage, renommages purs) et 1 code applicatif : aucune relecture ;
+2 sensible (code serveur, routes, authentification, secrets, en-têtes, dépendances, crochets, workflows de CI) : securite ;
+3 critique (migration, schéma, code de données, données personnelles, prestataire, texte légal) : securite
+et donnees ou rgpd selon les fichiers. En mode léger, rien n'est retenu par prudence et fidelite ne l'est
+que pour un écran couvert par une maquette validée ; les règles ci-dessus décrivent le mode strict.
 Niveau de risque du diff, avec sa raison, décidé par le chemin seul : faible quand chaque fichier est un
 test (*.test.*, *.spec.*, *.e2e.*, dossiers test/ et tests/), de la documentation (*.md hors dossiers
 servis) ou une maquette, sans terme de données ni RGPD (securite, plus fidelite pour une maquette) ;
@@ -120,6 +126,7 @@ function text(plan) {
     const lines = [
         ...(plan.quota?.notice ? [plan.quota.notice] : []),
         `Plan des revues : ${plan.base.ref} (${plan.mergeBase.slice(0, 12)}, base commune) à ${plan.head.ref} (${plan.head.sha.slice(0, 12)})`,
+        `Mode ${plan.mode === 'leger' ? 'léger' : 'strict'}, niveau ${plan.level} : ${plan.levelReason}`,
         ...laneLines(plan.lane),
         `${c.files} fichier(s) : ${c.renames} renommage(s) pur(s), ${c.paths} aux seuls chemins réécrits (imports, références, mise en forme), ${c.names} aux seuls noms de classes ou d'identifiants renommés, ${c.content} au contenu changé (dont ${c.neutral} tests, documentation ou outillage, ${c.notes} notes de pilotage, ${c.ledger} du registre des décisions, ${c.locks} verrou(s) de dépendances, ${c.unclassified} non classé(s) ou plus fort(s) que tests et outillage)`,
         ...plan.unanchored.map(w => `Attention, maquette non ancrée : ${w}`),
@@ -217,18 +224,19 @@ export async function run(args, io) {
         const repo = gitRoot(repoPath(io, values.repo));
         const { config } = loadConfig(repo);
         const settings = reviewPlanSettings(config.review);
+        const rules = rulesSettings(config.rules, REQUIRED_WEB_GATES);
         // `securite` in review.always or --force changes nothing: it is kept anyway (but in the lane without code, it keeps it).
         const sensitive = [...sensitivePaths, ...config.risk.highPaths];
         const dir = designDir(config.design);
         const raw = planReviews({
             repo, base: values.base, head: values.head ?? 'HEAD', settings,
             migrations: loadDbConfig(repo).config.migrations, designDir: dir,
-            sensitive, force: force.filter(d => d !== ALWAYS_REVIEWED),
+            sensitive, force: rules.mode === 'leger' ? force : force.filter(d => d !== ALWAYS_REVIEWED), mode: rules.mode,
         });
         const common = commonDir(repo);
         const anchor = anchorKey(common);
         const laneInput = { repo, mergeBase: raw.mergeBase, head: raw.head.sha, plan: raw, designDir: dir, sensitive,
-            settings: rulesSettings(config.rules, REQUIRED_WEB_GATES).docsOnly, messages: readOperatorMessages(common, anchor.key), key: anchor.key };
+            settings: rules.docsOnly, messages: readOperatorMessages(common, anchor.key), key: anchor.key };
         const lane = await docsOnlyLane(laneInput);
         const plan = { ...planInLane(raw, lane, { always: settings.always, operator: force }), quota: planQuota(repo, common), unanchored: await unanchoredMockups(raw.ledgerMockups, laneInput) };
         if (values.json)

@@ -36,10 +36,18 @@ const gateId = s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
  * `.apv/state/**` is not a kind: the session hook injects it into the context of every session (`resume.md`, the runs),
  * so it is read as instructions (security review of PR #121).
  */
+/**
+ * How the rules read a change (APV4): `leger` (default) asks only for the reviews of its risk level (apv review plan),
+ * accepts an unsealed review and a mockup registered in the repository; `strict` is the behavior of APV3.
+ */
+export const RULES_MODES = ['leger', 'strict'] as const;
+export type RulesMode = typeof RULES_MODES[number];
+
 export const DOCS_ONLY_KINDS = ['decisions', 'mockups', 'drafts', 'specs', 'journal', 'docs'] as const;
 export type DocsOnlyKind = typeof DOCS_ONLY_KINDS[number];
 
 export const rulesSchema = s.object({
+  mode: s.optional(s.enum(RULES_MODES)),
   /** Merges on a signed order of the operator (docs/REGLES.md, « Fusion sur ordre signé », src/orders/config.ts); absent: none. */
   operatorOrders: s.optional(operatorOrdersSchema),
   /**
@@ -89,6 +97,7 @@ export type RulesSection = Infer<typeof rulesSchema>;
 
 export interface RequiredGate { id: string; command: string[]; source: 'apv' | 'config' }
 export interface RulesSettings {
+  mode: RulesMode;
   captures: { viewports: CaptureViewport[]; themes: CaptureTheme[] };
   requiredGates: RequiredGate[];
   screens: string[];
@@ -123,6 +132,7 @@ export interface CiProofSettings {
 export function rulesSettings(section: RulesSection | undefined, builtIn: readonly RequiredGate[]): RulesSettings {
   const unique = <T>(values: readonly T[]): T[] => [...new Set(values)];
   return {
+    mode: section?.mode ?? 'leger',
     captures: {
       viewports: unique(section?.captures?.viewports ?? [...DEFAULT_CAPTURE_VIEWPORTS]),
       themes: unique(section?.captures?.themes ?? [...DEFAULT_CAPTURE_THEMES]),

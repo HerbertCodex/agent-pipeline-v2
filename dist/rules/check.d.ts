@@ -1,6 +1,7 @@
 import { type RemoteCheck } from '../gates/base-gates.js';
 import { type ReviewDomainName } from '../review/config.js';
-import { type MergeRule } from './config.js';
+import { type MergeRule, type RulesMode } from './config.js';
+import type { ReviewLevel } from '../review/risk.js';
 import { type DocsOnlyLane } from './docs-only.js';
 import { type CiProofOutcome } from './ci-proof.js';
 import { type OrderLane, type ReducedLane } from './reduced-proof.js';
@@ -57,6 +58,10 @@ export interface RulesReport {
     ci: CiProofOutcome | null;
     /** The reduced lane (docs/PREUVE-REDUITE.md), only when a merge on order gave its context and the receipts left checks unproven. */
     reduced?: ReducedLane;
+    /** rules.mode of the base, and the level of the change (apv review plan). */
+    mode: RulesMode;
+    level: ReviewLevel;
+    levelReason: string;
 }
 export interface RulesInput {
     repo: string;

@@ -227,7 +227,7 @@ function parseRecord(value: unknown, commit: string, domain: string): ReviewReco
  * A record that does not match (another commit, another domain, a reviewer that is not the agent of the domain, a file
  * changed) is returned with its problem: it proves nothing.
  */
-export function latestReviews(common: string, commit: string, key = anchorKey(common).key): Map<ReviewDomainName, ReadRecord> {
+export function latestReviews(common: string, commit: string, key = anchorKey(common).key, sealed = true): Map<ReviewDomainName, ReadRecord> {
   const out = new Map<ReviewDomainName, ReadRecord>();
   for (const domain of REVIEW_DOMAINS) {
     const dir = join(reviewsDir(common, commit), domain);
@@ -243,7 +243,8 @@ export function latestReviews(common: string, commit: string, key = anchorKey(co
     if (agentName(record.reviewer) !== DOMAIN_REVIEWERS[domain]) { out.set(domain, { record, file, problem: `relecteur ${record.reviewer}, pas apv:${DOMAIN_REVIEWERS[domain]}` }); continue; }
     let seal = '';
     try { seal = readFileSync(join(dir, `${record.id}.sig`), 'utf8').trim(); } catch { seal = ''; }
-    if (!key || !signatureValid(key, 'review', sha256(readFileSync(file)), seal)) {
+    // Mode leger (rules.mode): a review without a seal, or without an anchor key, still counts.
+    if (sealed && (!key || !signatureValid(key, 'review', sha256(readFileSync(file)), seal))) {
       out.set(domain, { record, file, problem: key ? 'relecture non scellée par le crochet du plugin (écrite hors de l\'agent relecteur, ou modifiée depuis)' : 'clé d\'ancrage absente : aucune relecture ne peut être vérifiée' });
       continue;
     }

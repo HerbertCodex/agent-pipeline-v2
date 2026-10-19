@@ -67,6 +67,8 @@ export interface DeltaContext {
     touches(perimeter: Perimeter, span: ChainLink): string[];
     /** The anchor key the seals of the reviews are checked with (tests); the key of the machine by default. */
     key?: Buffer | null;
+    /** Mode leger (rules.mode): reviews counted without a seal, and every domain carried over a delta outside its perimeter. */
+    light?: boolean;
 }
 /** What counts for one domain at a commit. */
 export interface Picked {

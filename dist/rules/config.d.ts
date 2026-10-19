@@ -21,9 +21,16 @@ export declare const DEFAULT_CAPTURE_THEMES: readonly CaptureTheme[];
  * `.apv/state/**` is not a kind: the session hook injects it into the context of every session (`resume.md`, the runs),
  * so it is read as instructions (security review of PR #121).
  */
+/**
+ * How the rules read a change (APV4): `leger` (default) asks only for the reviews of its risk level (apv review plan),
+ * accepts an unsealed review and a mockup registered in the repository; `strict` is the behavior of APV3.
+ */
+export declare const RULES_MODES: readonly ["leger", "strict"];
+export type RulesMode = typeof RULES_MODES[number];
 export declare const DOCS_ONLY_KINDS: readonly ["decisions", "mockups", "drafts", "specs", "journal", "docs"];
 export type DocsOnlyKind = typeof DOCS_ONLY_KINDS[number];
 export declare const rulesSchema: import("../domain/schema.js").Schema<{
+    readonly mode: "leger" | "strict" | undefined;
     readonly operatorOrders: {
         readonly domain: string;
         readonly publicKeys: string[];
@@ -87,6 +94,7 @@ export interface RequiredGate {
     source: 'apv' | 'config';
 }
 export interface RulesSettings {
+    mode: RulesMode;
     captures: {
         viewports: CaptureViewport[];
         themes: CaptureTheme[];

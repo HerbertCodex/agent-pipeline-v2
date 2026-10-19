@@ -68,7 +68,7 @@ export function reviewChain(ctx, head) {
     const at = (commit) => {
         let found = records.get(commit);
         if (!found) {
-            found = ctx.key === undefined ? latestReviews(ctx.common, commit) : latestReviews(ctx.common, commit, ctx.key);
+            found = latestReviews(ctx.common, commit, ctx.key === undefined ? undefined : ctx.key, !ctx.light);
             records.set(commit, found);
         }
         return found;
@@ -143,7 +143,7 @@ export function reviewChain(ctx, head) {
         return [];
     };
     const reported = (domain) => {
-        if (NEVER_REPORTED.includes(domain))
+        if (!ctx.light && NEVER_REPORTED.includes(domain))
             return null;
         for (const node of chain()) {
             const picked = resolve(node.commit, domain, 0);

@@ -13,7 +13,9 @@ import { fileURLToPath } from 'node:url';
 
 /** A merge rule of the catalog `docs/merge-rules.json`: its id, the version that brings it, what it needs. */
 export interface CatalogRule { id: string; since: string; needs: string[]; summary: string }
-export interface Catalog { needs: Record<string, string>; rules: CatalogRule[] }
+/** A mode of the rules (`rules.mode`): the version that brings it and what it asks for. */
+export interface CatalogMode { since: string; summary: string }
+export interface Catalog { needs: Record<string, string>; rules: CatalogRule[]; modes: Record<string, CatalogMode> }
 
 /** The plugin as Claude Code installed it for this account: `~/.claude/plugins/installed_plugins.json` and `settings.json`. */
 export interface PluginInstall { key: string; version: string | null; sha: string | null; installPath: string | null; enabled: boolean }
@@ -43,6 +45,8 @@ export interface PluginStatus {
    */
   upcoming: { ref: string; behind: number; rules: CatalogRule[] | null } | null;
   needs: Record<string, string>;
+  /** The modes of the rules the running tool knows (`rules.mode`), from its catalog. */
+  modes: Record<string, CatalogMode>;
 }
 
 const PLUGIN_NAME = 'apv';
@@ -76,7 +80,7 @@ const RULE_ID = /^[a-z0-9-]{1,40}$/;
 export function parseCatalog(text: string | null): Catalog | null {
   if (text === null || text.length > MAX_BYTES) return null;
   try {
-    const raw = JSON.parse(text) as { needs?: unknown; rules?: unknown };
+    const raw = JSON.parse(text) as { needs?: unknown; rules?: unknown; modes?: unknown };
     if (!Array.isArray(raw.rules)) return null;
     const rules = raw.rules.filter((r): r is CatalogRule => !!r && typeof r === 'object' && typeof (r as CatalogRule).id === 'string' && RULE_ID.test((r as CatalogRule).id)
       && typeof (r as CatalogRule).since === 'string' && /^v?\d+\.\d+\.\d+(?:-[\w.]+)?$/.test((r as CatalogRule).since))
@@ -84,7 +88,10 @@ export function parseCatalog(text: string | null): Catalog | null {
         summary: typeof r.summary === 'string' ? clean(r.summary) : '' }));
     const needs = raw.needs && typeof raw.needs === 'object' ? Object.fromEntries(Object.entries(raw.needs as Record<string, unknown>)
       .filter((e): e is [string, string] => RULE_ID.test(e[0]) && typeof e[1] === 'string').map(([k, v]) => [k, clean(v)])) : {};
-    return { needs, rules: rules.filter((r, k) => rules.findIndex(o => o.id === r.id) === k) };
+    const modes = raw.modes && typeof raw.modes === 'object' ? Object.fromEntries(Object.entries(raw.modes as Record<string, unknown>)
+      .filter((e): e is [string, CatalogMode] => RULE_ID.test(e[0]) && !!e[1] && typeof (e[1] as CatalogMode).summary === 'string' && typeof (e[1] as CatalogMode).since === 'string')
+      .map(([k, v]) => [k, { since: clean(v.since, 40), summary: clean(v.summary, 400) }])) : {};
+    return { needs, rules: rules.filter((r, k) => rules.findIndex(o => o.id === r.id) === k), modes };
   } catch { return null; }
 }
 
@@ -257,7 +264,7 @@ export function pluginStatus(repo: string, env: NodeJS.ProcessEnv, toolRoot = TO
       upcoming = { ref: clean(`${ref} de ${source}`, 300), behind, rules: behind ? nextRules(source, ref) : [] };
     }
   }
-  return { project, install, unreadable, hooksDisabled, tool, unknownToPlugin, pluginBehind, upcoming, needs: own?.needs ?? {} };
+  return { project, install, unreadable, hooksDisabled, tool, unknownToPlugin, pluginBehind, upcoming, needs: own?.needs ?? {}, modes: own?.modes ?? {} };
 }
 
 const short = (sha: string | null): string => (sha ? clean(sha).slice(0, 7) : '?');

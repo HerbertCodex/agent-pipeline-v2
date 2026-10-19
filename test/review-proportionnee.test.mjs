@@ -37,6 +37,8 @@ const FILES = {
   '.apv/journal-pipeline.md': '# Journal\n',
   '.apv/specs/articles.json': '{ "id": "articles" }\n',
   '.apv/state/resume.md': '# Reprise\n',
+  // The plan of APV3: these tests describe rules.mode strict.
+  '.apv/config.json': '{ "gates": [], "rules": { "mode": "strict" } }\n',
 };
 
 function project(t, extra = {}) {

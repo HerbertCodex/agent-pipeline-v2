@@ -83,6 +83,8 @@ export interface DeltaContext {
   touches(perimeter: Perimeter, span: ChainLink): string[];
   /** The anchor key the seals of the reviews are checked with (tests); the key of the machine by default. */
   key?: Buffer | null;
+  /** Mode leger (rules.mode): reviews counted without a seal, and every domain carried over a delta outside its perimeter. */
+  light?: boolean;
 }
 
 /** What counts for one domain at a commit. */
@@ -126,7 +128,7 @@ export function reviewChain(ctx: DeltaContext, head: string): ReviewChain {
   const records = new Map<string, Map<ReviewDomainName, ReadRecord>>();
   const at = (commit: string): Map<ReviewDomainName, ReadRecord> => {
     let found = records.get(commit);
-    if (!found) { found = ctx.key === undefined ? latestReviews(ctx.common, commit) : latestReviews(ctx.common, commit, ctx.key); records.set(commit, found); }
+    if (!found) { found = latestReviews(ctx.common, commit, ctx.key === undefined ? undefined : ctx.key, !ctx.light); records.set(commit, found); }
     return found;
   };
   let nodes: ChainNode[] | null = null;
@@ -192,7 +194,7 @@ export function reviewChain(ctx: DeltaContext, head: string): ReviewChain {
   };
 
   const reported = (domain: ReviewDomainName): Picked | null => {
-    if (NEVER_REPORTED.includes(domain)) return null;
+    if (!ctx.light && NEVER_REPORTED.includes(domain)) return null;
     for (const node of chain()) {
       const picked = resolve(node.commit, domain, 0);
       if (!picked.found) continue;

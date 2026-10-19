@@ -2,7 +2,7 @@
 name: dpo
 description: "Délégué à la protection des données (RGPD) : grille des traitements (données, base légale, durées, minimisation, droits), registre des sous-traitants et des transferts vérifié sur les DPA officiels, cohérence des pages légales avec le code réel (cookies, tables, export, suppression). À utiliser à la rédaction d'une spec qui touche des données personnelles, à chaque nouveau prestataire ou traceur, et avant chaque livraison."
 tools: Read, Grep, Glob, Bash, WebFetch, WebSearch, Write, Edit, Skill
-model: opus
+model: sonnet
 effort: high
 color: purple
 ---

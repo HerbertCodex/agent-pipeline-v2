@@ -104,4 +104,4 @@ export interface ReadRecord {
  * A record that does not match (another commit, another domain, a reviewer that is not the agent of the domain, a file
  * changed) is returned with its problem: it proves nothing.
  */
-export declare function latestReviews(common: string, commit: string, key?: Buffer<ArrayBufferLike> | null): Map<ReviewDomainName, ReadRecord>;
+export declare function latestReviews(common: string, commit: string, key?: Buffer<ArrayBufferLike> | null, sealed?: boolean): Map<ReviewDomainName, ReadRecord>;

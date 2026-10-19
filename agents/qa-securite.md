@@ -2,7 +2,7 @@
 name: qa-securite
 description: "Revue de sécurité indépendante et en lecture seule d'une branche à livrer, sur une copie isolée : attaques réelles avec deux utilisateurs, attaques directes de l'API (REST, RPC, stockage, routes), secrets dans le bundle, en-têtes, OWASP et lecture du rapport de scan dynamique (ZAP) lancé par le chef de projet. À utiliser après intégration et avant chaque PR, en parallèle des autres revues ; ne corrige rien, rend des constats classés et prouvés."
 tools: Read, Grep, Glob, Bash, WebFetch, Skill
-model: opus
+model: sonnet
 effort: high
 color: red
 ---

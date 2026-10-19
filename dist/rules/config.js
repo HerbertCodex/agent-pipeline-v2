@@ -28,8 +28,14 @@ const gateId = s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
  * `.apv/state/**` is not a kind: the session hook injects it into the context of every session (`resume.md`, the runs),
  * so it is read as instructions (security review of PR #121).
  */
+/**
+ * How the rules read a change (APV4): `leger` (default) asks only for the reviews of its risk level (apv review plan),
+ * accepts an unsealed review and a mockup registered in the repository; `strict` is the behavior of APV3.
+ */
+export const RULES_MODES = ['leger', 'strict'];
 export const DOCS_ONLY_KINDS = ['decisions', 'mockups', 'drafts', 'specs', 'journal', 'docs'];
 export const rulesSchema = s.object({
+    mode: s.optional(s.enum(RULES_MODES)),
     /** Merges on a signed order of the operator (docs/REGLES.md, « Fusion sur ordre signé », src/orders/config.ts); absent: none. */
     operatorOrders: s.optional(operatorOrdersSchema),
     /**
@@ -90,6 +96,7 @@ export const CI_PROTECTED_DEFAULTS = ['.github/workflows/**', '.github/actions/*
 export function rulesSettings(section, builtIn) {
     const unique = (values) => [...new Set(values)];
     return {
+        mode: section?.mode ?? 'leger',
         captures: {
             viewports: unique(section?.captures?.viewports ?? [...DEFAULT_CAPTURE_VIEWPORTS]),
             themes: unique(section?.captures?.themes ?? [...DEFAULT_CAPTURE_THEMES]),

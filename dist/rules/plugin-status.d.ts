@@ -11,9 +11,15 @@ export interface CatalogRule {
     needs: string[];
     summary: string;
 }
+/** A mode of the rules (`rules.mode`): the version that brings it and what it asks for. */
+export interface CatalogMode {
+    since: string;
+    summary: string;
+}
 export interface Catalog {
     needs: Record<string, string>;
     rules: CatalogRule[];
+    modes: Record<string, CatalogMode>;
 }
 /** The plugin as Claude Code installed it for this account: `~/.claude/plugins/installed_plugins.json` and `settings.json`. */
 export interface PluginInstall {
@@ -56,6 +62,8 @@ export interface PluginStatus {
         rules: CatalogRule[] | null;
     } | null;
     needs: Record<string, string>;
+    /** The modes of the rules the running tool knows (`rules.mode`), from its catalog. */
+    modes: Record<string, CatalogMode>;
 }
 /** The root of the running tool: `dist/rules/plugin-status.js`, two folders up. */
 export declare const TOOL_ROOT: string;

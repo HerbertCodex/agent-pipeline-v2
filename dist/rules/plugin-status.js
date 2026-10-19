@@ -44,7 +44,10 @@ export function parseCatalog(text) {
             summary: typeof r.summary === 'string' ? clean(r.summary) : '' }));
         const needs = raw.needs && typeof raw.needs === 'object' ? Object.fromEntries(Object.entries(raw.needs)
             .filter((e) => RULE_ID.test(e[0]) && typeof e[1] === 'string').map(([k, v]) => [k, clean(v)])) : {};
-        return { needs, rules: rules.filter((r, k) => rules.findIndex(o => o.id === r.id) === k) };
+        const modes = raw.modes && typeof raw.modes === 'object' ? Object.fromEntries(Object.entries(raw.modes)
+            .filter((e) => RULE_ID.test(e[0]) && !!e[1] && typeof e[1].summary === 'string' && typeof e[1].since === 'string')
+            .map(([k, v]) => [k, { since: clean(v.since, 40), summary: clean(v.summary, 400) }])) : {};
+        return { needs, rules: rules.filter((r, k) => rules.findIndex(o => o.id === r.id) === k), modes };
     }
     catch {
         return null;
@@ -247,7 +250,7 @@ export function pluginStatus(repo, env, toolRoot = TOOL_ROOT) {
             upcoming = { ref: clean(`${ref} de ${source}`, 300), behind, rules: behind ? nextRules(source, ref) : [] };
         }
     }
-    return { project, install, unreadable, hooksDisabled, tool, unknownToPlugin, pluginBehind, upcoming, needs: own?.needs ?? {} };
+    return { project, install, unreadable, hooksDisabled, tool, unknownToPlugin, pluginBehind, upcoming, needs: own?.needs ?? {}, modes: own?.modes ?? {} };
 }
 const short = (sha) => (sha ? clean(sha).slice(0, 7) : '?');
 const TERMINAL = 'dans un terminal, hors de Claude Code (l\'extension VS Code n\'a pas /plugin)';

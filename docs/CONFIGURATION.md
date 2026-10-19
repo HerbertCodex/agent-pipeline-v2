@@ -725,6 +725,7 @@ Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR 
 
 ```json
 "rules": {
+  "mode": "leger",
   "captures": { "viewports": ["desktop", "phone"], "themes": ["light", "dark"] },
   "requiredGates": [{ "id": "a11y", "command": ["npm", "run", "check:a11y"] }],
   "screens": ["src/views/**/*.vue"],
@@ -732,6 +733,7 @@ Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR 
 }
 ```
 
+- `mode` (4.0.0-alpha.1, défaut `leger`) : `leger` n'exige que les relectures du niveau du diff (`apv review plan` : 0 et 1 aucune, 2 `securite`, 3 `securite` avec `donnees` ou `rgpd` ; `fidelite` seulement pour un écran couvert par une maquette validée), accepte une relecture non scellée, reporte une relecture de tout domaine sur un delta hors de son périmètre, n'exige `captures` qu'avec `fidelite` et `maquette` que dans un projet qui a des maquettes validées (une maquette versée suffit) ; `strict` garde le comportement d'APV3. `preuve`, `instable`, `controles` et les dérogations ne changent pas.
 - `captures.viewports` (`desktop`, `phone`, `tablet` ; défaut `desktop` et `phone`) et `captures.themes` (`light`, `dark` ; défaut les deux) : captures qu'exige la relecture de fidélité quand le plan des revues la retient, sauf dans un projet sans écran qui n'en ajoute pas (règle `captures`, REGLES.md). `["light"]` seulement pour un projet sans thème sombre.
 - `requiredGates` : contrôles qu'un projet exige en plus de `reuse`, `code-map` et `structure` (projet web) : un identifiant et le début de la commande, reconnue enveloppée ou non (`node <plugin>/dist/cli.js`, `npx apv`) ; ils valent aussi pour un projet sans interface web.
 - `screens` : motifs des fichiers d'écran que l'outil ne reconnaît pas seul (il connaît les pages, mises en page et pages d'erreur de SvelteKit, Next, Remix, Nuxt, Astro et `pages/`).

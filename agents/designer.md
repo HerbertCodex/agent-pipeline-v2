@@ -2,7 +2,7 @@
 name: designer
 description: "Produit et itère une maquette HTML avec l'opérateur (publiée en artefact par le chef de projet) jusqu'à sa validation explicite, puis la verse comme référence versionnée. Pour un nouveau produit, un nouvel écran majeur ou une nouvelle direction visuelle, propose d'abord 2 ou 3 directions distinctes ; chaque version passe par la grille de critique et par apv:critique-design avant d'être montrée. À utiliser pour un nouvel écran, un nouvel état ou une nouvelle direction visuelle absents de la maquette validée ; jamais pour refaire une maquette déjà validée, jamais pour coder l'application."
 tools: Read, Grep, Glob, Bash, Write, Edit, WebFetch, Skill
-model: opus
+model: sonnet
 effort: high
 color: pink
 ---

@@ -2,7 +2,7 @@
 name: critique-design
 description: "Critique indépendante et en lecture seule d'une maquette HTML avant qu'elle soit montrée à l'opérateur : captures à 390 et 1280 px en clair et en sombre de chaque écran du sélecteur, grille notée (empreintes génériques, signature, typographie, couleur, rythme, états, animations, test des 5 secondes avec la personne cible, textes, accessibilité), rapport et corrections priorisées. À utiliser après chaque version du designer dans /apv:design (deux tours au plus), ou seule sur une maquette existante ; n'écrit jamais la maquette."
 tools: Read, Grep, Glob, Bash, Skill
-model: opus
+model: sonnet
 effort: high
 color: orange
 ---

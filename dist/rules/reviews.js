@@ -215,7 +215,7 @@ function parseRecord(value, commit, domain) {
  * A record that does not match (another commit, another domain, a reviewer that is not the agent of the domain, a file
  * changed) is returned with its problem: it proves nothing.
  */
-export function latestReviews(common, commit, key = anchorKey(common).key) {
+export function latestReviews(common, commit, key = anchorKey(common).key, sealed = true) {
     const out = new Map();
     for (const domain of REVIEW_DOMAINS) {
         const dir = join(reviewsDir(common, commit), domain);
@@ -253,7 +253,8 @@ export function latestReviews(common, commit, key = anchorKey(common).key) {
         catch {
             seal = '';
         }
-        if (!key || !signatureValid(key, 'review', sha256(readFileSync(file)), seal)) {
+        // Mode leger (rules.mode): a review without a seal, or without an anchor key, still counts.
+        if (sealed && (!key || !signatureValid(key, 'review', sha256(readFileSync(file)), seal))) {
             out.set(domain, { record, file, problem: key ? 'relecture non scellée par le crochet du plugin (écrite hors de l\'agent relecteur, ou modifiée depuis)' : 'clé d\'ancrage absente : aucune relecture ne peut être vérifiée' });
             continue;
         }

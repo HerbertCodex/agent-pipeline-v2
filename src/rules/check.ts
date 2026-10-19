@@ -18,7 +18,8 @@ import { DEFAULT_REUSE_IGNORE, UI_EXTENSIONS, extensionOf, globMatcher } from '.
 import { WEB_DEPENDENCIES } from '../reuse/detect.js';
 import { DELTA_DIFF, DELTA_GIT, gitRead, gitRoot, resolveCommit } from '../run/git-probe.js';
 import { commonDir } from '../stacks/idle.js';
-import { MERGE_RULES, RULE_TITLES, rulesSettings, type MergeRule } from './config.js';
+import { MERGE_RULES, RULE_TITLES, rulesSettings, type MergeRule, type RulesMode } from './config.js';
+import type { ReviewLevel } from '../review/risk.js';
 import { TEMPLATE_WAIVER_NOTE, anchorKey, readOperatorMessages, templateWaiver, waiverFor, waiverSentence, type WaiverTarget } from './operator.js';
 import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
@@ -26,7 +27,7 @@ import { NEVER_CARRIED, reviewChain, type Perimeter, type Picked } from './delta
 import { computedLoads } from './loads.js';
 import { deltaFiles } from './carry.js';
 import { LANE_NAME, docsOnlyLane, laneLines, type DocsOnlyLane } from './docs-only.js';
-import { isScreen, screenCoverage, screenMatchers } from './screens.js';
+import { isScreen, mockupsOf, screenCoverage, screenMatchers } from './screens.js';
 import { ciProofLines, verifyCiProof, type CiProofOutcome } from './ci-proof.js';
 import { githubRepository } from './protection.js';
 import { declarationVerdict, laneWouldFit, reducedLane, type OrderLane, type ReducedLane } from './reduced-proof.js';
@@ -76,6 +77,10 @@ export interface RulesReport {
   ci: CiProofOutcome | null;
   /** The reduced lane (docs/PREUVE-REDUITE.md), only when a merge on order gave its context and the receipts left checks unproven. */
   reduced?: ReducedLane;
+  /** rules.mode of the base, and the level of the change (apv review plan). */
+  mode: RulesMode;
+  level: ReviewLevel;
+  levelReason: string;
 }
 
 export interface RulesInput {
@@ -463,7 +468,8 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   const reviewSettings = reviewPlanSettings(atBase.review);
   const sensitive = [...sensitivePaths, ...atBase.risk.highPaths];
   const baseDesign = designDir(atBase.design);
-  const plan = planReviews({ repo, base: mergeBase, head: sha, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [] });
+  const light = settings.mode === 'leger';
+  const plan = planReviews({ repo, base: mergeBase, head: sha, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [], mode: settings.mode });
   const lane = await docsOnlyLane({ repo, mergeBase, head: sha, plan, settings: settings.docsOnly, designDir: baseDesign, sensitive, messages, key: anchor.key });
   // In the lane, only the domains the configuration forces (review.always) are required.
   const retained = lane.eligible ? plan.retained.filter(d => reviewSettings.always.includes(d)) : plan.retained;
@@ -581,7 +587,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
 
   // relecture, captures: the domains `apv review plan` retains for the change, each recorded at this commit, or waived
   // for that domain alone by the operator (« dérogation relecture:<domaine> <commit> : <raison> », issue #126).
-  const reviews = latestReviews(common, sha);
+  const reviews = latestReviews(common, sha, undefined, !light);
   const screenMatch = screenMatchers(settings.screens);
   // A head that only brings its base up to date (a merge of the target, the diff identical byte for byte) keeps the
   // reviews of the head before, said domain by domain (carry.ts, pilot project #230); its own reviews come first. A head
@@ -596,7 +602,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     const domain = perimeter;
     const key = `${span.from}..${span.to}`;
     if (!deltaPlans.has(key)) {
-      try { deltaPlans.set(key, planReviews({ repo, base: span.from, head: span.to, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [], renames: false })); }
+      try { deltaPlans.set(key, planReviews({ repo, base: span.from, head: span.to, settings: reviewSettings, migrations, designDir: baseDesign, sensitive, force: [], renames: false, mode: settings.mode })); }
       catch (error) { deltaPlans.set(key, errorMessage(error)); }
     }
     const delta = deltaPlans.get(key)!;
@@ -613,7 +619,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     return (LEDGER_FILES as readonly string[]).includes(f) ? [`${f} : registre des décisions`] : [];
   });
   const targetSha = resolveCommit(repo, input.target);
-  const chainReviews = reviewChain({ repo, common, target: targetSha, touches }, sha);
+  const chainReviews = reviewChain({ repo, common, target: targetSha, touches, light }, sha);
   const pick = (domain: ReviewDomainName): Picked => {
     const own = chainReviews.resolve(sha, domain);
     return own.found ? own : chainReviews.reported(domain) ?? own;
@@ -686,7 +692,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     const f = found?.record?.findings;
     const broken = picked.broken ? ` ; celle de ${short(picked.broken.from)} n'est pas reportée, le delta touche son périmètre : ${picked.broken.reasons.slice(0, 3).join(' ; ')}` : '';
     // fidelite below the head: said never reported (third security review of #141, M3, M4), the review of the delta offered.
-    const never = !found && domain === 'fidelite' ? chainReviews.deltaStart(domain) : null;
+    const never = !found && !light && domain === 'fidelite' ? chainReviews.deltaStart(domain) : null;
     const neverNote = never ? ` ; relecture ${domain} : jamais reportée sans relire (elle reviendra avec l'empreinte du build) ; relecture du delta possible : apv review record --delta-from ${short(never)}` : '';
     const problem = !found ? `aucune relecture enregistrée à ${short(sha)}${broken}${neverNote}`
       : found.problem || !found.record ? `relecture inutilisable (${found.problem ?? 'illisible'})`
@@ -711,6 +717,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   const forcedNote = lane.eligible ? ` (${LANE_NAME}, domaines forcés par review.always)` : '';
   const waivedDomains = domainStates.filter(d => d.status === 'waived');
   if (lane.eligible && !retained.length) rules.push(outcome('relecture', 'not_applicable', `${LANE_NAME} : ${lane.reason} ; aucune relecture d'agent exigée`));
+  else if (light && !retained.length) rules.push(outcome('relecture', 'not_applicable', `niveau ${plan.level} : ${plan.levelReason} ; aucune relecture d'agent exigée`));
   else if (reviewProblems.length) rules.push(outcome('relecture', 'refused', `relectures demandées par le diff${forcedNote} : ${retained.join(', ')}`, reviewProblems, reviewTodo));
   else if (waivedDomains.length) {
     const r = outcome('relecture', 'waived', `relectures enregistrées ou levées domaine par domaine par l'opérateur à ${short(sha)}${forcedNote} : ${retained.join(', ')}`
@@ -718,7 +725,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     const latest = waivedDomains.map(d => d.waiver!.at).sort().at(-1)!;
     r.waiver = { at: latest, reason: waivedDomains.map(d => `${d.domain} : ${d.waiver!.reason}`).join(' ; ') };
     rules.push(r);
-  } else rules.push(outcome('relecture', 'ok', `relectures enregistrées à ${short(sha)} sans constat critique ni haut${forcedNote} : ${retained.join(', ')} (risque ${plan.risk.level === 'faible' ? 'faible' : 'élevé'} : ${plan.risk.reason.slice(0, 200)})`));
+  } else rules.push(outcome('relecture', 'ok', `relectures enregistrées à ${short(sha)} sans constat critique ni haut${forcedNote} : ${retained.join(', ')} (${light ? `niveau ${plan.level} : ${plan.levelReason.slice(0, 200)}` : `risque ${plan.risk.level === 'faible' ? 'faible' : 'élevé'} : ${plan.risk.reason.slice(0, 200)}`})`));
   rules.at(-1)!.domains = domainStates;
 
   // captures: in a project with screens at the base, required as soon as the plan retains fidelite (a component, a
@@ -741,7 +748,7 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   const noScreen = screenVerdict && !screenVerdict.reasons.length ? screenVerdict : null;
   if (!addedScreens.length && !hasScreensAt(repo, mergeBase, screenMatch)) rules.push(outcome('captures', 'not_applicable', 'projet sans écran à la base (pas un projet web, aucune route reconnue ni rules.screens, aucun fichier d\'interface) et aucun écran ajouté : rien à capturer'));
   else if (lane.eligible && !retained.includes('fidelite')) rules.push(outcome('captures', 'not_applicable', `${LANE_NAME} : aucun écran ni fichier d'interface, relecture de fidélité non exigée`));
-  else if (!retained.includes('fidelite')) rules.push(outcome('captures', 'not_applicable', 'relecture de fidélité non retenue par le plan des revues'));
+  else if (!retained.includes('fidelite')) rules.push(outcome('captures', 'not_applicable', light ? 'fidelite non exigée : aucun écran couvert par une maquette validée' : 'relecture de fidélité non retenue par le plan des revues'));
   else if (noScreen) rules.push(outcome('captures', 'not_applicable', `aucun écran touché : ${noScreen.files} fichier${noScreen.files > 1 ? 's' : ''}, aucun d'interface (configuration des outils, tests, documentation non servie, aucun importé par le code)`));
   else if (fidelityWaiver) rules.push(outcome('captures', 'not_applicable', `fidélité levée par dérogation (${fidelityWaiver})`));
   else {
@@ -770,9 +777,12 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   } else rules.push(outcome('controles', 'ok', `contrôles requis présents et obligatoires : ${required.map(g => g.id).join(', ')}`));
 
   // maquette: every screen added or changed is covered by a mockup the operator validated.
-  if (!screens.length) rules.push(outcome('maquette', 'not_applicable', 'aucun écran ajouté ni modifié'));
+  // Mode leger: only in a project with validated mockups, and a mockup registered in the repository counts without the journal.
+  const ledgers = screens.length ? [(await loadDecisionLedger(repo, mergeBase)).decisions, (await loadDecisionLedger(repo, sha)).decisions] as const : null;
+  if (!ledgers) rules.push(outcome('maquette', 'not_applicable', 'aucun écran ajouté ni modifié'));
+  else if (light && !mockupsOf([...ledgers[0], ...ledgers[1]]).length) rules.push(outcome('maquette', 'not_applicable', 'projet sans maquette validée'));
   else {
-    const coverage = screenCoverage(screens, (await loadDecisionLedger(repo, mergeBase)).decisions, (await loadDecisionLedger(repo, sha)).decisions, messages, anchor.key);
+    const coverage = light ? screenCoverage(screens, [...ledgers[0], ...ledgers[1]], [], messages, anchor.key) : screenCoverage(screens, ledgers[0], ledgers[1], messages, anchor.key);
     const uncovered = coverage.filter(c => !c.mockup);
     rules.push(uncovered.length
       ? outcome('maquette', 'refused', `${screens.length} écran(s) ajouté(s) ou modifié(s)`, uncovered.map(c => c.unanchored.length
@@ -798,14 +808,17 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
   }
   const order = new Map(MERGE_RULES.map((r, i) => [r, i]));
   rules.sort((a, b) => order.get(a.rule)! - order.get(b.rule)!);
-  return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, lane, warnings: [...base.warnings, ...(anchor.problem ? [anchor.problem] : [])], ci,
+  return { commit: sha, target: input.target, mergeBase, ok: rules.every(r => r.status !== 'refused'), rules, lane, mode: settings.mode, level: plan.level, levelReason: plan.levelReason, warnings: [...base.warnings, ...(anchor.problem ? [anchor.problem] : [])], ci,
     ...(reduced ? { reduced } : {}) };
 }
 
 /** Lines of a report, for the text output of `apv rules check` and of the stack commands. */
 export function rulesLines(report: RulesReport, indent = ''): string[] {
-  const label: Record<RuleStatus, string> = { ok: 'ok', refused: 'REFUSÉ', waived: 'DÉROGATION', not_applicable: 'sans objet' };
+  const label: Record<RuleStatus, string> = report.mode === 'leger'
+    ? { ok: 'exigée, ok', refused: 'exigée, REFUSÉ', waived: 'exigée, DÉROGATION', not_applicable: 'non exigée' }
+    : { ok: 'ok', refused: 'REFUSÉ', waived: 'DÉROGATION', not_applicable: 'sans objet' };
   const lines = [`${indent}Règles avant fusion à ${short(report.commit)} (cible ${report.target}, base commune ${report.mergeBase ? short(report.mergeBase) : '?'}) :`,
+    `${indent}Mode ${report.mode === 'leger' ? 'léger' : 'strict'}, niveau ${report.level} : ${report.levelReason}`,
     ...laneLines(report.lane, indent)];
   for (const r of report.rules) {
     lines.push(`${indent}- ${r.rule} (${r.title}) : ${label[r.status]} : ${r.detail}`);

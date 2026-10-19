@@ -3,7 +3,7 @@ name: implementer
 description: "Code UNE tâche d'une spec validée dans son worktree isolé, avec ses tests, lance les contrôles rapides de la tâche (apv gates run --stage task, tests navigateur ciblés compris) et ses propres tests navigateur jusqu'au vert, et commite. À utiliser pour chaque tâche d'une vague (vague « fondations » comprise), avec la consigne commune du projet, la tâche, la branche de base et les notes de vague."
 tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch, Skill, mcp__svelte
 isolation: worktree
-model: opus
+model: sonnet
 effort: high
 color: green
 ---
