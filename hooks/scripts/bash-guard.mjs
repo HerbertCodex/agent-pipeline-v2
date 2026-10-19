@@ -1213,7 +1213,7 @@ const TEXT_COMMANDS = new Set(['echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg',
  * command that is not a text command (`TEXT_COMMANDS`) is taken as run, so a guard never lets a wrapper hide it.
  */
 /** Commands of the tool (src/commands/index.ts): what follows `apv` behind an unknown prefix. */
-const APV_COMMANDS = new Set(['init', 'onboard', 'spec', 'run', 'stack', 'rules', 'audit', 'metrics', 'ledger', 'scope', 'gates', 'lock', 'wait', 'procs', 'stacks',
+const APV_COMMANDS = new Set(['init', 'onboard', 'spec', 'run', 'stack', 'rules', 'release', 'audit', 'metrics', 'ledger', 'scope', 'gates', 'lock', 'wait', 'procs', 'stacks',
   'review', 'dast', 'db', 'design', 'structure', 'reuse', 'tests', 'map', 'quota', 'preview', 'web', 'status', 'help']);
 
 export function apvCall(words) {
@@ -1232,6 +1232,12 @@ export function apvCall(words) {
     if (name === 'apv' && APV_COMMANDS.has(positional(w.slice(k + 1))[0] ?? '')) return { args: w.slice(k + 1), assignments: cw.assignments };
   }
   return null;
+}
+
+/** True for `apv release` that may push (`--dry-run` absent): a merge into production, on the operator's order. */
+export function isRelease(words) {
+  const call = apvCall(words);
+  return !!call && positional(call.args)[0] === 'release' && !call.args.includes('--dry-run');
 }
 
 export function isStackMerge(words) {
@@ -1340,6 +1346,10 @@ export const REASONS = {
   rawMerge: 'APV : fusion directe par gh refusée. Seul apv stack merge fusionne (APV_ALLOW_MERGE=1 apv stack merge <pr...>) : il vérifie juste ' +
     'avant chaque fusion les règles du chef de projet (preuve complète au commit, aucun test instable, relectures, captures, contrôles de base, ' +
     'maquettes ; docs/REGLES.md du plugin). Sans l\'outil, l\'opérateur fusionne lui-même sur GitHub.',
+  pushToRelease: branch => `APV : poussée vers la branche de production ${branch} refusée. Elle n'avance que par apv release ` +
+    '(avance rapide vers un commit dont la suite complète est prouvée), sur ordre de l\'opérateur : APV_ALLOW_MERGE=1 apv release <sha>.',
+  release: "APV : apv release refusé sans APV_ALLOW_MERGE=1 devant la commande, ou dans un sous-agent. La mise en ligne se fait seulement " +
+    "sur ordre de l'opérateur ou délégation écrite, par le chef de projet : APV_ALLOW_MERGE=1 apv release <sha> (--dry-run reste libre).",
   pushToDefault: branch => `APV : poussée directe vers ${branch} refusée. La branche par défaut ne change que par une PR fusionnée par apv stack merge, ` +
     'après les règles du chef de projet ; pousse ta branche de travail et ouvre une PR.',
   computedApv: 'APV : commande apv dont la commande ou la sous-commande est calculée (variable, substitution, eval) refusée : écris-la en clair, ' +
@@ -1610,6 +1620,15 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
       pushed = pushToDefault(words, (context.defaultBranches ?? (() => ['main', 'master']))(...(moved ? [where] : [])), current);
     }
     if (pushed) return { decision: 'deny', reason: explain(REASONS.pushToDefault(pushed)) };
+    if (active && words.some(w => w === 'push' || w === 'send-pack')) {
+      const where = gitDirectory(cwords, dir, words, env);
+      const known = dirKnown && where !== undefined;
+      const moved = known && where !== (context.cwd ?? null);
+      const current = !known ? undefined : (branchSet && where === dir ? branchSet : (context.currentBranch ?? (() => null))(...(moved ? [where] : [])));
+      const production = pushToDefault(words, (context.releaseBranches ?? (() => ['production']))(...(moved ? [where] : [])), current);
+      if (production) return { decision: 'deny', reason: explain(REASONS.pushToRelease(production)) };
+    }
+    if (isRelease(words) && (context.agentId || !authorised(words, 'APV_ALLOW_MERGE'))) return { decision: 'deny', reason: REASONS.release };
     const apvArgs = apvArguments(words);
     if (apvArgs && positional(apvArgs).slice(0, 2).some(w => /[$`]/.test(w))) return { decision: 'deny', reason: REASONS.computedApv };
     const review = reviewRecordProblem(words, context.agentType ?? null);

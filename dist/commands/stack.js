@@ -172,6 +172,18 @@ function planLines(plan) {
  * in the repository the command runs in: its receipts, its review records, the operator's journal. Outside a repository,
  * nothing can be verified: refused.
  */
+export function releaseTarget(repo, remote, target) {
+    const declared = new Set();
+    for (const read of [() => loadConfig(repo).config, () => loadConfigAtCommit(repo, `refs/remotes/${remote}/${target}`).config]) {
+        try {
+            const branch = read().release?.branch;
+            if (branch)
+                declared.add(branch);
+        }
+        catch { /* unreadable: nothing declared there */ }
+    }
+    return declared.has(target) ? `cible ${target} : branche de production (release.branch), elle n'avance que par apv release, jamais par une fusion de PR` : null;
+}
 export function stackRules(cwd, remote = 'origin', ciGh = null) {
     return async (pr, target) => {
         const repo = gitRead(cwd, ['rev-parse', '--show-toplevel']);
@@ -182,6 +194,9 @@ export function stackRules(cwd, remote = 'origin', ciGh = null) {
         if (gitRead(repo, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${target}`]) === null) {
             gitRead(repo, ['fetch', '--no-tags', remote, `+refs/heads/${target}:refs/remotes/${remote}/${target}`]);
         }
+        const production = releaseTarget(repo, remote, target);
+        if (production)
+            return { problems: [`PR #${pr.number} : ${production}`], notes: [] };
         try {
             const report = await checkMergeRules({ repo, commit: pr.headRefOid, target: `${remote}/${target}`, ci: { gh: ciGh } });
             const notes = report.rules.filter(r => r.status === 'waived').map(r => `dérogation de l'opérateur à la règle ${r.rule} (${r.waiver.at}) : ${r.waiver.reason}`);
@@ -246,7 +261,7 @@ function journal(io, stack, method, derogation) {
     return journalEntry(io, { event: 'allow-behind', stack, method, ...derogation });
 }
 /** Appends one JSON line to `.apv/state/stack.log`; returns the error when it could not write. */
-function journalEntry(io, entry) {
+export function journalEntry(io, entry) {
     try {
         const root = gitRead(io.cwd, ['rev-parse', '--show-toplevel']) || io.cwd;
         ensureApvGitignore(root);
@@ -626,6 +641,9 @@ async function batch(prs, values, io, ci) {
                 return journalEntry(io, entry);
             },
             rules: async (head, target) => {
+                const production = releaseTarget(repo, 'origin', target);
+                if (production)
+                    return [production];
                 try {
                     const r = await checkMergeRules({ repo, commit: head, target: `origin/${target}`, skip: ['preuve', 'instable'] });
                     return r.ok ? [] : rulesLines(r, '  ').slice(1, -1);

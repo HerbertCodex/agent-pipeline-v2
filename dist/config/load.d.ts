@@ -9,7 +9,7 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite", "stacks", "batch", "stack", "web", "reuse", "map", "rules", "testsCheck", "freshness", "models"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite", "stacks", "batch", "stack", "web", "reuse", "map", "rules", "testsCheck", "freshness", "models", "release"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
 /**
@@ -574,6 +574,10 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly archive: string | undefined;
     } | undefined;
     readonly models: import("./models.js").ModelsConfig | undefined;
+    readonly release: {
+        readonly branch: string;
+        readonly from: string;
+    } | undefined;
 }>;
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export declare const specLimits: (config: {

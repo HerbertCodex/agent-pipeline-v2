@@ -543,6 +543,25 @@ La protection de la branche par défaut sur GitHub (`gh api` : PR obligatoire, p
 
 Sortie : `0` règles respectées, `1` au moins un refus (ou commit, cible, configuration illisibles), `2` appel incorrect.
 
+## `apv release`
+
+```
+apv release [<sha>] [--dry-run] [--json] [--repo <chemin>]
+apv release auto [--dry-run] [--json] [--repo <chemin>]
+```
+
+**Mise en ligne découplée** (4.0.0-alpha.2, section `release` de [CONFIGURATION.md](CONFIGURATION.md#mise-en-ligne--release)). Une PR vers `release.from` (`main`) se fusionne sur la preuve de tâche : en mode léger, la règle `preuve` de `apv rules check` et `apv stack merge` vérifie les contrôles de tâche et les tests ciblés au commit exact contre la base commune (`apv gates verify --stage task --base <base>`), `instable` toujours appliquée ; la sortie dit « Preuve de tâche suffit : la suite complète est exigée à la mise en ligne ». La suite complète tourne une fois sur un commit de `main` qui contient plusieurs PR ; la branche de production (`release.branch`, publiée par l'hébergeur) n'avance que par `apv release`. `apv stack batch --merge` garde sa suite complète du lot : avec `release`, `apv stack merge` suffit. Une PR qui vise la branche de production est refusée par `apv stack merge` et `stack batch --merge`.
+
+`apv release` lit `release` sur la branche `from` distante (la copie doit dire la même chose), puis vérifie : `<sha>` (défaut : tête distante de `from`) est un ancêtre de cette tête ; la production distante est un ancêtre de `<sha>` (avance rapide seulement, jamais de retour en arrière ni de force ; absente : l'opérateur la crée) ; la suite complète est prouvée au commit exact, avec les contrôles de la production gardés comme ceux de la base à la fusion (`apv gates run --stage full --base origin/<branch>` ; instable refusé). Puis `git push origin <sha>:refs/heads/<branch>` (sortie affichée en entier), relit la branche distante et confirme. `--dry-run` vérifie tout et ne pousse rien. Ligne `event: "release"` dans `.apv/state/stack.log`. Hors `--dry-run`, l'outil exige `APV_ALLOW_MERGE=1` devant la commande (`auto` compris, sinon `2`) ; dans Claude Code, le garde-fou l'exige aussi, jamais dans un sous-agent, et refuse tout `git push` qui écrit `production` ou la branche de production déclarée (dossier visé, dossier courant, projet de la session).
+
+`apv release auto` : une passe, pour un lancement périodique hors de Claude Code, sans état caché. Production déjà à la tête de `from` : `0`, « rien à publier ». Reçus rouges ou instables à ce commit : `1`, rien relancé (corriger sur `main`). Sinon, même si des reçus verts existent : copie détachée de la tête sous `<git common dir>/apv/release/`, préparée par `batch.setup`, suite complète relancée en entier (aucun reçu repris ; base et contrôles gardés : la production distante) sans attendre la file des suites (occupée : `0`, « machine occupée, plus tard »), copie retirée, puis publication si verte au premier passage, sinon `1` avec le résumé. Un verrou `release-auto` du dépôt empêche deux passes simultanées.
+
+```
+*/10 * * * * cd /chemin/du/depot && APV_ALLOW_MERGE=1 apv release auto >> ~/.local/state/apv/release.log 2>&1
+```
+
+Sortie : `0` publié ou rien à faire, `1` refus, `2` appel incorrect.
+
 ## `apv audit merges`
 
 ```

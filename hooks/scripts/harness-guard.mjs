@@ -623,6 +623,22 @@ export function hookContext(input, env = process.env) {
       const head = git(dir, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
       return [...new Set([...(head && head.startsWith('origin/') ? [head.slice('origin/'.length)] : []), 'main', 'master'])];
     },
+    // The production branches, never pushed to directly (apv release): `production` always, and the `release.branch` of the
+    // configuration (in the copy and on the default branch) of the folder the push runs in, of the working directory and
+    // of the project of the session (a decoy repository without the section opens nothing).
+    releaseBranches: (dir = cwd) => {
+      const out = new Set(['production']);
+      const project = typeof env.CLAUDE_PROJECT_DIR === 'string' && env.CLAUDE_PROJECT_DIR ? env.CLAUDE_PROJECT_DIR : null;
+      for (const place of new Set([dir, cwd, project].filter(Boolean))) {
+        const root = git(place, ['rev-parse', '--show-toplevel']);
+        let local = null;
+        try { local = root ? readFileSync(join(root, '.apv', 'config.json'), 'utf8') : null; } catch { local = null; }
+        for (const text of [local, git(place, ['show', 'refs/remotes/origin/HEAD:.apv/config.json'])]) {
+          try { const branch = text === null ? null : JSON.parse(text)?.release?.branch; if (typeof branch === 'string' && branch) out.add(branch); } catch { /* production stays */ }
+        }
+      }
+      return [...out];
+    },
     // The branch checked out in `dir` (the folder a literal cd or git -C of the command leads to; by default the working directory).
     currentBranch: (dir = cwd) => git(dir, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
     // Whether the tool is active for a command (docs/PLUGIN.md, « Portée des crochets »): the repository of the working
@@ -661,4 +677,4 @@ export function hookContext(input, env = process.env) {
 
 /** A context where nothing is known: no ancestors, no stacks, no directory (the pure calls of the tests). */
 export const EMPTY_CONTEXT = { cwd: null, home: null, agentType: null, agentId: null, ancestors: () => [], stacks: () => [], flockHeldByAncestor: () => false, leaseHeld: () => [],
-  defaultBranches: () => ['main', 'master'], currentBranch: () => null, apvProject: () => true };
+  defaultBranches: () => ['main', 'master'], releaseBranches: () => ['production'], currentBranch: () => null, apvProject: () => true };

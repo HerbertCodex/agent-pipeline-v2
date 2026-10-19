@@ -22,6 +22,7 @@ import { testsCheckSchema } from '../testcheck/check.js';
 import { freshnessIssues, freshnessSchema } from '../freshness/config.js';
 import { modelsSchema } from './models.js';
 import { operatorOrdersIssues } from '../orders/config.js';
+import { releaseIssues, releaseSchema } from '../release/config.js';
 
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
@@ -31,7 +32,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'stack', 'web', 'reuse', 'map', 'rules', 'testsCheck', 'freshness', 'models'] as const;
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'stack', 'web', 'reuse', 'map', 'rules', 'testsCheck', 'freshness', 'models', 'release'] as const;
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'] as const;
 
@@ -232,6 +233,8 @@ export const apvConfigSchema = s.object({
   freshness: s.optional(freshnessSchema),
   /** Model and effort of each role, passed to the Agent tool by the project lead and shown by `apv status` (docs/CONFIGURATION.md, « Modèles par rôle »); absent: defaults. */
   models: s.optional(modelsSchema),
+  /** Release decoupled from the merge (`apv release`); absent: none. */
+  release: s.optional(releaseSchema),
 });
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export const specLimits = (config: { spec?: Partial<SpecLimits> | undefined }): SpecLimits => ({
@@ -419,6 +422,7 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
   }
   if (value.web) for (const message of webIssues(value.web)) list.check(false, 'CONFIG', message);
   if (value.freshness) for (const message of freshnessIssues(value.freshness)) list.check(false, 'CONFIG', message);
+  if (value.release) for (const message of releaseIssues(value.release)) list.check(false, 'CONFIG', message);
   if (list.empty) list.attempt('DAG', () => validateDag(value.gates));
   return { config: list.empty ? value : undefined, ignored: sections.ignored, issues: list.items };
 }
