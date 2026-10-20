@@ -2,7 +2,7 @@
 name: auditeur-web
 description: "Audit de qualité web en lecture seule d'un site livré par APV : lance apv web audit (Lighthouse médian mobile et bureau, seuils, préparation à la recherche et aux IA) sur l'aperçu d'une branche ou sur la production, lit les rapports JSON et HTML, puis propose des corrections concrètes classées par gain mesuré, fichier par fichier, sans modifier le code. À utiliser avant une PR qui touche l'interface publique, après un déploiement, ou quand l'opérateur cite un score obtenu à la main."
 tools: Read, Grep, Glob, Bash, Skill
-model: sonnet
+model: opus
 effort: high
 color: cyan
 ---

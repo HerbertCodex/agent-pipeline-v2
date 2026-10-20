@@ -27,8 +27,6 @@ export interface SpreadPlan {
     assignments: Map<string, SpreadAssignment>;
     copies: SpreadCopy[];
 }
-/** Whether the lock of `gate`, as configured (its file relative to the Git common directory, or its lease), is the lock of a declared stack. */
-export declare function usesStack(git: Git, repo: string, gate: Gate, stacks: readonly ResolvedStack[]): Promise<boolean>;
 export declare function planSpread(options: {
     git: Git;
     repo: string;
@@ -51,33 +49,6 @@ export declare function prepareCopies(plan: SpreadPlan, options: {
     signal?: AbortSignal | undefined;
     log: (line: string) => void;
 }): Promise<void>;
-/**
- * The preparation of the copy of the suite itself (`batch.setup`): `done` when it ran and passed, `missing` when the
- * copy needed it and no `batch.setup` is declared (said, the suite goes on: its checks will likely fail).
- */
-export interface MainSetup {
-    status: 'done' | 'missing';
-    command: string[] | null;
-    durationMs: number;
-    reason: string;
-}
-/** Why the copy of a suite needs its preparation: a `package-lock.json` without `node_modules`, else null. */
-export declare function setupNeeded(repo: string): string | null;
-/**
- * Prepares the copy a full suite runs in, as its copies on other stacks are (prepareCopies) and as `apv dast run`
- * prepares its own: with a `package-lock.json` and no `node_modules`, `batch.setup` at its root (HOME passed), bounded
- * by `batch.setupTimeoutMs`. Nothing needed: null. A setup that fails refuses the suite (`GATE_SETUP`) before anything
- * of it runs; the caller then checks the tree is as clean as before. Never in the main checkout (the folder open in
- * the editor): refused (`GATE_SETUP`). The caller runs it under the place of the copy in the queue, after every refusal.
- */
-export declare function prepareMainCopy(options: {
-    repo: string;
-    config: ApvConfig;
-    env: NodeJS.ProcessEnv;
-    signal?: AbortSignal | undefined;
-    log: (line: string) => void;
-    always?: string;
-}): Promise<MainSetup | null>;
 export declare function removeCopies(plan: SpreadPlan, git: Git, repo: string, log: (line: string) => void): Promise<void>;
 /**
  * The variables of a stack for a check: its env file, then its `env`, then the `fileEnv` variable of the lock of the

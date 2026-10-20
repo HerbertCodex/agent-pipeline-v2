@@ -47,43 +47,9 @@ function claimProblems(claim, where, evidenceKey) {
   return problems
 }
 
-// How a task treated each component, module or route it created or modified (reused, extended, added).
-const REUSE_DECISIONS = ['reused', 'extended', 'added']
-
-function reuseProblems(report, where) {
-  if (!Array.isArray(report.reuse)) return [where + ' : réutilisation absente (reuse : l\'entrée de la carte du code réutilisée ou étendue, ou l\'ajout justifié ; [] si la tâche ne crée ni ne modifie de composant, de module ou de route)']
-  const problems = []
-  report.reuse.forEach((entry, index) => {
-    const at = where + ' : reuse[' + index + ']'
-    if (!entry || typeof entry !== 'object' || typeof entry.item !== 'string' || !entry.item.trim()) return problems.push(at + ' : élément absent (item)')
-    if (!REUSE_DECISIONS.includes(entry.decision)) return problems.push(at + ' : décision inconnue « ' + String(entry.decision) + ' » (reused, extended, added)')
-    if (entry.decision !== 'added' && (typeof entry.mapEntry !== 'string' || !entry.mapEntry.trim())) problems.push(at + ' : entrée de la carte du code absente (mapEntry) pour ' + entry.item)
-    // An entry of the map is a path of the repository (`src/lib/components/ui/Select.svelte`), never a sentence.
-    else if (entry.decision !== 'added' && !/^[^\s]+\/[^\s]+$/.test(entry.mapEntry.trim())) problems.push(at + ' : mapEntry « ' + entry.mapEntry + ' » n\'est pas un chemin de la carte du code (dossier/fichier)')
-    else if (entry.decision === 'reused' && entry.mapEntry.trim() === entry.item.trim()) problems.push(at + ' : ' + entry.item + ' se réutilise lui-même (reused) : c\'est extended, ou une autre entrée de la carte')
-    if (entry.decision === 'added' && (typeof entry.justification !== 'string' || !entry.justification.trim())) problems.push(at + ' : ajout sans justification (justification) pour ' + entry.item)
-  })
-  return problems
-}
-
-// Where each code file the task created was put, and why (docs/STRUCTURE.md): a file never lands in a flat folder by default.
-function placementProblems(report, where) {
-  if (!Array.isArray(report.placement)) return [where + ' : placement absent (placement : chaque fichier de code créé, son dossier et la raison ; [] si la tâche n\'en crée aucun)']
-  const problems = []
-  report.placement.forEach((entry, index) => {
-    const at = where + ' : placement[' + index + ']'
-    if (!entry || typeof entry !== 'object' || typeof entry.file !== 'string' || !entry.file.trim()) return problems.push(at + ' : fichier absent (file)')
-    if (typeof entry.folder !== 'string' || !entry.folder.trim()) return problems.push(at + ' : dossier absent (folder) pour ' + entry.file)
-    const folder = entry.folder.trim().replace(/\/+$/, '')
-    if (!entry.file.trim().startsWith(folder + '/') || entry.file.trim().slice(folder.length + 1).includes('/')) problems.push(at + ' : ' + entry.file + ' n\'est pas directement dans ' + folder)
-    if (typeof entry.reason !== 'string' || !entry.reason.trim()) problems.push(at + ' : raison absente (reason) pour ' + entry.file)
-  })
-  return problems
-}
-
 const REPORT = {
   type: 'object',
-  required: ['taskId', 'status', 'confidence', 'evidence', 'branch', 'worktree', 'commit', 'headRevParse', 'headLog', 'checks', 'scopeCheck', 'outOfScopeFiles', 'reuse', 'placement', 'summary', 'openPoints'],
+  required: ['taskId', 'status', 'confidence', 'evidence', 'branch', 'worktree', 'commit', 'headRevParse', 'headLog', 'checks', 'scopeCheck', 'outOfScopeFiles', 'summary', 'openPoints'],
   properties: {
     taskId: { type: 'string' },
     status: { type: 'string', enum: ['done', 'failed', 'wip'] },
@@ -109,30 +75,6 @@ const REPORT = {
     },
     scopeCheck: { type: 'string', enum: ['in', 'out', 'not-run'] },
     outOfScopeFiles: { type: 'array', items: { type: 'string' } },
-    // One entry per component, module or route created or modified: the entry of the code map reused or extended, or
-    // why an addition was needed (operator rule, 30 September 2026: use what exists, share what two features use).
-    reuse: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['item', 'decision'],
-        properties: {
-          item: { type: 'string' },
-          decision: { type: 'string', enum: REUSE_DECISIONS },
-          mapEntry: { type: 'string' },
-          justification: { type: 'string' },
-        },
-      },
-    },
-    // One entry per code file created: its folder (the sub-folder of its feature, never a flat folder) and why.
-    placement: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['file', 'folder', 'reason'],
-        properties: { file: { type: 'string' }, folder: { type: 'string' }, reason: { type: 'string' } },
-      },
-    },
     summary: { type: 'string' },
     openPoints: { type: 'array', items: { type: 'string' } },
   },
@@ -160,12 +102,10 @@ function prompt(task) {
     startLines(task),
     '',
     '## Sources',
-    '- La tâche `' + task.id + '` dans la spec : description, allowedPaths, critères (acceptanceIds, acceptance[]) et section security. Ne lis pas toute la spec : seulement ce qui concerne ta tâche.',
+    '- La tâche `' + task.id + '` dans la spec : description, allowedPaths, critères (acceptanceIds, acceptance[]) et section security.',
     '- La consigne commune du projet : `' + input.brief + '` (règles de code, contrôles exacts, services, verrous, Git, ligne de co-auteur).',
     typeof input.notes === 'string' && input.notes ? '- Les notes de la vague : `' + input.notes + '` (API disponible, fichiers possédés, points d\'extension).' : '- Pas de notes de vague : c\'est la vague des fondations ou une tâche seule.',
-    '- Maquettes validées (`' + APV + ' design list`), registre des décisions et `.apv/data-model.md` quand la tâche les concerne : seulement les entités et écrans qu\'elle touche, pas tout le modèle.',
-    '- La carte de l\'architecture (`docs/carte-architecture.md`, ou `structure.architectureMap` de `.apv/config.json`) : à lire EN PREMIER (couches, arborescence et conventions de la pile, points d\'entrée). Un nouveau fichier va dans le sous-dossier de sa fonctionnalité, jamais dans un dossier à plat ; un dossier, une route principale ou un point d\'entrée que tu crées reçoit son rôle en une ligne dans le bloc « Rôles » de la carte, dans ta tâche.',
-    '- La carte du code `.apv/code-map.md` : à lire AVANT de créer un composant, un module ou une route. Réutilise une entrée, ou étends-la de façon générique (paramètre, variante) ; jamais de copie propre à une fonctionnalité ; ce qui sert à deux fonctionnalités devient partagé et paramétrable, et ce que ton changement rend inutile est retiré.',
+    '- Maquettes validées (`' + APV + ' design list`), `.apv/data-model.md` et le registre des décisions quand la tâche les concerne.',
     typeof task.extra === 'string' && task.extra ? '- Consigne propre à cette tâche : ' + task.extra : '',
     typeof input.context === 'string' && input.context ? '- Consigne de la vague : ' + input.context : '',
     '',
@@ -175,8 +115,6 @@ function prompt(task) {
     '   Sinon, tests navigateur : seulement les fichiers e2e que tu as créés ou modifiés, sous `' + APV + ' lock run e2e -- <commande du projet> <fichiers>` (par exemple `npx playwright test <fichiers>`) ; aucun fichier e2e touché, rien à lancer. Jamais la suite navigateur entière.',
     '   Test instable : répète seulement le test en cause (`<fichier>:<ligne>` ou `-g "<titre>"`), `--repeat-each` 20 au plus, sous le verrou `e2e` ; jamais un fichier entier répété sous le verrou. Cherche d\'abord un clic pendant une animation : attends l\'état stable, pas un délai fixe. Projet à interface : tests navigateur en mouvement réduit par défaut (Playwright `reducedMotion: \'reduce\'`), sauf les tests d\'animation.',
     '   Projet sans contrôle marqué `full` : `--stage task` exécute déjà tout, comme avant. Autres ressources partagées sous bail (`' + APV + ' lock run <ressource> -- <commande>`).',
-    '   La carte du code ne se commite pas dans une tâche (l\'intégration la régénère une fois par vague, `' + APV + ' map`) : ne commite jamais `.apv/code-map.md`. Un contrôle `reuse` rouge (bloc copié, élément natif réservé, primitive de style redéfinie) se corrige en réutilisant ou en factorisant, jamais en baissant sa gravité ni en élargissant `reuse.ignore`.',
-    '   Un contrôle `structure` rouge se corrige en plaçant le fichier dans le sous-dossier qu\'il nomme et en décrivant tout nouveau dossier, route principale ou point d\'entrée dans la carte de l\'architecture ; jamais en relevant le seuil ni en baissant la gravité (compétence `apv:structure`). Ne réécris pas les parties générées de la carte : l\'intégration les régénère avec `' + APV + ' map`.',
     '2. Tout est commité sur `' + task.branch + '` ; aucun fichier non commité.',
     '3. `' + APV + ' scope check --spec ' + input.specFile + ' --task ' + task.id + ' --base ' + input.baseCommit + '` : note son résultat et chaque fichier hors périmètre avec sa raison.',
     '4. Ne pousse pas, ne fusionne pas, ne réécris aucun commit.',
@@ -191,8 +129,6 @@ function prompt(task) {
     'commit : le sha complet copié de la sortie de `git rev-parse HEAD` lancée juste avant le rapport, jamais retapé, complété ni reconstitué de mémoire ;',
     'headRevParse : la sortie brute de `git rev-parse HEAD`, collée telle quelle ; headLog : la sortie brute de `git log --oneline -1`, collée telle quelle ;',
     'checks (chaque commande lancée, pass, fail ou not-run, nombre de tests) ; scopeCheck (in, out ou not-run) ; outOfScopeFiles ;',
-    'reuse : un élément par composant, module ou route créé ou modifié : item (chemin), decision (`reused` ou `extended` avec mapEntry, l\'entrée de la carte du code ; `added` avec justification, pourquoi aucune entrée ne convenait) ; [] si la tâche n\'en crée ni n\'en modifie. Sans cette liste, le rapport est refusé.',
-    'placement : un élément par fichier de code créé : file (chemin), folder (son dossier), reason (fonctionnalité, sous-dossier proposé par `' + APV + ' structure check`, convention de la pile) ; [] si la tâche n\'en crée aucun. Sans cette liste, le rapport est refusé.',
     'summary (moins de 300 mots : fichiers principaux, critères couverts et comment, écarts à la maquette ou à la spec et pourquoi) ; openPoints.',
     'N\'annonce aucun résultat que tu n\'as pas observé.',
   ].filter(line => line !== '').join('\n')
@@ -233,7 +169,7 @@ const escalation = { verify: [], operator: [] }
 input.tasks.forEach((task, index) => {
   const report = reports[index]
   if (!report) return
-  const problems = [...claimProblems(report, 'tâche ' + task.id), ...reuseProblems(report, 'tâche ' + task.id), ...placementProblems(report, 'tâche ' + task.id)]
+  const problems = claimProblems(report, 'tâche ' + task.id)
   if (problems.length) return refused.push({ taskId: task.id, problems, report })
   returned.push(report)
   if (report.confidence === 'probable') escalation.verify.push(task.id)

@@ -32,26 +32,11 @@ export const stackSchema = s.object({
     /** Commands (no shell, run from the root of the repository) that stop and restart the stack. */
     stop: s.optional(argv),
     start: s.optional(argv),
-    /**
-     * Command (no shell, run from the root of the repository with the variables of the stack, bounded by commandTimeoutMs)
-     * whose output says what the checks run against on this stack (docs/ACCELERATION-LOTS.md, 5.4): digests of the Docker
-     * images, version of the CLI... Declared, a check is reused from another stack whose fingerprint printed the same output;
-     * absent, never from another stack.
-     */
-    fingerprint: s.optional(argv),
-    /**
-     * Variables of the stack (its `env`, its `envFile`, the `fileEnv` of a lock pointed at it) whose value only says where the
-     * stack is (`E2E_STACK`, the URLs of its env file), normalized in the identity of reuse like the ports it declares
-     * (docs/UNE-SUITE-PAR-PR.md, 1.2): with `fingerprint` only, which says what runs there.
-     */
-    normalizeEnv: s.optional(s.array(s.string(1, 200, /^[A-Za-z_][A-Za-z0-9_]*$/), 1, 100)),
     idleAfterMs: s.optional(s.number(60_000, 604_800_000)),
     commandTimeoutMs: s.default(s.number(1000, 3_600_000), DEFAULT_STACK_COMMAND_TIMEOUT_MS),
     description: s.optional(s.string(1, 500)),
 });
 export const stacksSchema = s.array(stackSchema, 0, 10);
-/** Variables that change how a check runs: never normalized in the identity of reuse, whatever `normalizeEnv` says. */
-const NEVER_NORMALIZED = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP', 'NODE_OPTIONS', 'NODE_ENV', 'NODE_PATH', 'CI', 'SHELL', 'LD_PRELOAD', 'LD_LIBRARY_PATH'];
 /** Every problem of the declared stacks: duplicate ids, lock files or resources, a stack without a lock, duplicate ports. */
 export function stackIssues(stacks) {
     const out = [];
@@ -74,13 +59,6 @@ export function stackIssues(stacks) {
             out.push(`stacks.${x.id}: declare its lock, lockFile (flock) or resource (apv lock)`);
         if (x.ports && new Set(x.ports).size !== x.ports.length)
             out.push(`stacks.${x.id}.ports: duplicate port`);
-        if (x.normalizeEnv && !x.fingerprint)
-            out.push(`stacks.${x.id}.normalizeEnv: declare fingerprint too (without it, a stack is never reused from another and nothing is normalized)`);
-        if (x.normalizeEnv && new Set(x.normalizeEnv).size !== x.normalizeEnv.length)
-            out.push(`stacks.${x.id}.normalizeEnv: duplicate variable`);
-        for (const name of x.normalizeEnv ?? [])
-            if (NEVER_NORMALIZED.includes(name.toUpperCase()))
-                out.push(`stacks.${x.id}.normalizeEnv: ${name} changes how the checks run, never only where the stack is`);
     }
     return out;
 }

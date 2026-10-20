@@ -5,24 +5,14 @@ export interface ScheduleOptions {
   concurrency: number; failFast: boolean; signal: AbortSignal;
   execute: (gate: Gate, signal: AbortSignal) => Promise<GateReceipt>;
   blocked: (gate: Gate, reason: string) => GateReceipt;
-  /**
-   * Whether a receipt of this schedule counts as passed (default `success`). A caller that wrote a receipt `cached` after
-   * checking its reuse (src/gates/reuse-proof.ts) says so here; nothing else ever counts a receipt `cached` as a success.
-   */
-  succeeded?: (receipt: GateReceipt) => boolean;
 }
-/**
- * A receipt that counts as passed: executed and passed, `passed_after_retry` too (every test passed on the exact code; shown
- * apart as unstable). A receipt `cached` never counts by itself: it proves nothing until its reuse is checked against Git and
- * the store (checkReuse, src/gates/reuse-proof.ts), and only the caller that checked it counts it (`succeeded`).
- */
-export const success = (r: GateReceipt): boolean => r.status === 'passed' || r.status === 'passed_after_retry';
+/** A receipt that counts as passed: `passed_after_retry` too (every test passed on the exact code; shown apart as unstable). */
+export const success = (r: GateReceipt): boolean => r.status === 'passed' || r.status === 'cached' || r.status === 'passed_after_retry';
 /** Ready queue with dependencies, named resources and shared-workspace read/write exclusion.
  * Only explicitly read-only gates overlap; a writer excludes readers too. An error never
  * leaves sibling processes running: all active promises are drained before throw. */
 export async function schedule(gates: Gate[], options: ScheduleOptions): Promise<GateReceipt[]> {
   validateDag(gates);
-  const passed = options.succeeded ?? success;
   invariant(Number.isInteger(options.concurrency) && options.concurrency > 0, 'DAG', 'Invalid concurrency');
   const controller = new AbortController();
   const signal = AbortSignal.any([options.signal, controller.signal]);
@@ -35,7 +25,7 @@ export async function schedule(gates: Gate[], options: ScheduleOptions): Promise
   try {
   while (pending.size || running.size) {
     for (const [id, gate] of pending) {
-      const failedDependency = gate.dependsOn.some(d => done.has(d) && !passed(done.get(d)!));
+      const failedDependency = gate.dependsOn.some(d => done.has(d) && !success(done.get(d)!));
       if (signal.aborted || failedDependency) {
         done.set(id, options.blocked(gate, signal.aborted ? 'Execution cancelled' : 'Dependency failed')); pending.delete(id); continue;
       }
@@ -44,7 +34,7 @@ export async function schedule(gates: Gate[], options: ScheduleOptions): Promise
       if (!gate.readOnly) writer = true;
       const promise = Promise.resolve().then(() => options.execute(gate, signal)).then(receipt => {
         done.set(id, receipt);
-        if (!passed(receipt) && options.failFast) controller.abort();
+        if (!success(receipt) && options.failFast) controller.abort();
       }).catch((error: unknown) => { fatal ??= error; controller.abort(); }).finally(() => {
         running.delete(id); gate.resources.forEach(r => held.delete(r));
         if (!gate.readOnly) writer = false;

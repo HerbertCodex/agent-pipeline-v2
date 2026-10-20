@@ -59,14 +59,6 @@ export declare function stacksOfLock(stacks: readonly ResolvedStack[], lock: {
     kind: 'flock';
     file: string;
 }): string[];
-/**
- * Whether a kernel lock (`flock`) on `file` is held by this process or one of its ancestors (read in `/proc/locks`):
- * a suite launched under the lock of its stack (`flock <lockFile> apv gates run ...`) holds it already. The lock is the
- * same inode on the same device; some file systems print another device there than `stat` gives (btrfs subvolumes), and
- * the same inode then counts when that ancestor holds the file open. Init (pid 1) is never counted. False when
- * unreadable (another system, file absent): the lock then counts as another's.
- */
-export declare function flockHeldByAncestor(file: string, ancestors?: ReadonlySet<number>, locksPath?: string, procRoot?: string): boolean;
 /** Whether the flock of `file` is free now: taken and released at once (`flock -n`). Null when unknown. */
 export declare function flockFree(file: string): boolean | null;
 export interface ProbeContext {
@@ -124,34 +116,3 @@ export declare function idlePass(stacks: readonly ResolvedStack[], context: Prob
  * the last check that passed under its lock. Null when the stack is not known to be stopped.
  */
 export declare function stoppedSince(common: string, id: string): string | null;
-/** What `stackHealth` found: every container running, some stopped or gone, none, or nothing readable. */
-export interface StackHealth {
-    state: 'running' | 'degraded' | 'absent' | 'unknown';
-    detail: string;
-    containers: StackContainer[];
-    missing: string[];
-}
-export interface StackContainer {
-    name: string;
-    state: string;
-}
-/** The line format of `docker ps` read for a stack: name, state, then the two project labels. */
-export declare const DOCKER_PS_FORMAT = "{{.Names}}\t{{.State}}\t{{.Label \"com.docker.compose.project\"}}\t{{.Label \"com.supabase.cli.project\"}}";
-/** The containers of `project` in a `docker ps -a --format DOCKER_PS_FORMAT` output: a project label equal to it, or a name ending in `_<project>`. */
-export declare function stackContainers(output: string, project: string): StackContainer[];
-/** The containers of the stack now (`docker ps -a`, bounded, never changed), or why they cannot be read. */
-export declare function readStackContainers(stack: ResolvedStack, repo: string, env: NodeJS.ProcessEnv, timeoutMs?: number): Promise<{
-    containers: StackContainer[];
-} | {
-    error: string;
-}>;
-/**
- * The state of a stack after a check was interrupted under its lock (a cancelled suite, a timeout: a reset of its
- * database may have been cut halfway), from its containers now and, when read at the start of the suite, then: a
- * container gone since (a reset removes and recreates the database container) or not running is said.
- */
-export declare function judgeStack(now: {
-    containers: StackContainer[];
-} | {
-    error: string;
-}, before: StackContainer[] | null): StackHealth;

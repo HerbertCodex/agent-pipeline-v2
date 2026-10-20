@@ -264,20 +264,12 @@ export declare function targetedQaContext(context: {
         stdoutHash: string;
         stderrHash: string;
         reusedFrom: string | null;
-        finding: {
-            readonly kind: "setup" | "environment" | "unreachable";
-            readonly detail: string;
-        } | undefined;
         stage: "task" | "full" | undefined;
         dirty: boolean | undefined;
         targeted: boolean | undefined;
         override: {
             readonly run: string;
             readonly reason: string;
-        } | undefined;
-        nearTimeout: {
-            readonly timeoutMs: number;
-            readonly percent: number;
         } | undefined;
         lockWaitMs: number | undefined;
         stack: string | undefined;
@@ -298,8 +290,6 @@ export declare function targetedQaContext(context: {
             readonly base: string | null;
             readonly reference: string | null | undefined;
             readonly files: string[];
-            readonly importsOnly: string[];
-            readonly movedPathsOnly: string[];
             readonly times: number;
             readonly status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "none" | "no_base" | "not_run";
             readonly command: string[] | undefined;
@@ -315,13 +305,6 @@ export declare function targetedQaContext(context: {
                 readonly line: number;
                 readonly text: string;
             }[];
-            readonly credited: {
-                readonly file: string;
-                readonly blob: string;
-                readonly runId: string;
-                readonly receipt: string;
-                readonly commit: string;
-            }[] | undefined;
         } | undefined;
         web: {
             readonly required: boolean;
@@ -342,32 +325,6 @@ export declare function targetedQaContext(context: {
             readonly fileCount: number;
             readonly files: string[];
             readonly blocking: string[];
-        } | undefined;
-        early: {
-            readonly gate: string;
-            readonly id: string;
-            readonly required: boolean;
-            readonly reason: string;
-            readonly files: string[];
-        } | undefined;
-        reuseIdentity: string | undefined;
-        identityParts: {
-            readonly env: Record<string, string>;
-            readonly executable: string;
-            readonly local: string;
-            readonly copy: string;
-            readonly system: string;
-            readonly stack: string | null;
-        } | undefined;
-        reuse: {
-            readonly fromRun: string;
-            readonly fromCommit: string;
-            readonly basis: "tree" | "inputs";
-            readonly inputsDigest: string;
-            readonly ignoreDigest: string;
-            readonly environment: string;
-            readonly changed: number;
-            readonly files: string[];
         } | undefined;
     }[];
     qaScope: {

@@ -28,8 +28,7 @@ async function project(t, { lead = false } = {}) {
   const f = fixture(t);
   const log = join(f.root, 'full.log');
   const record = what => [process.execPath, '-e', `require("fs").appendFileSync(${JSON.stringify(log)}, ${JSON.stringify(what)} + "\\n")`];
-  // reuse: false: these tests count every run of the checks (the rhythm decides whether they run, never a reuse, A1).
-  write(f.repo, '.apv/config.json', { gates: [{ id: 'unit', command: record('unit'), reuse: false }, { id: 'e2e', stage: 'full', dependsOn: ['unit'], command: record('e2e'), reuse: false }] });
+  write(f.repo, '.apv/config.json', { gates: [{ id: 'unit', command: record('unit') }, { id: 'e2e', stage: 'full', dependsOn: ['unit'], command: record('e2e') }] });
   const task = (id, dependsOn) => ({ id, title: `Tâche ${id}`, description: `Écrire docs/${id}.md.`, acceptanceIds: [`AC-${id}`],
     allowedPaths: [`docs/${id.toLowerCase()}.md`], dependsOn, minimumLane: 'standard' });
   write(f.repo, '.apv/specs/rythme.json', { title: 'Rythme', problem: 'La documentation doit être écrite en deux parties.', scope: ['Documentation'], outOfScope: [],

@@ -2,12 +2,10 @@
 
 APV3 transforme votre session Claude Code en chef de projet. Vous décidez du produit, du design et des effets externes (fusion, déploiement, comptes) ; le chef de projet orchestre les sous-agents et vous rappelle à la fin.
 
-Pour un nouveau projet, le guide à donner à la session, avec ce que fait l'opérateur, la délégation type et les règles : [docs/DEMARRER-UN-PROJET.md](docs/DEMARRER-UN-PROJET.md). Règles vérifiées par l'outil avant toute fusion : [docs/REGLES.md](docs/REGLES.md).
-
 ## 1. Installer le plugin
 
 ```
-/plugin marketplace add HerbertCodex/agent-pipeline-v2@apv4
+/plugin marketplace add HerbertCodex/agent-pipeline-v2@apv3
 /plugin install apv@herbertcodex-apv
 ```
 

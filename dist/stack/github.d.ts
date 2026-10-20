@@ -12,9 +12,9 @@ export interface GhCall {
     error: string | null;
 }
 export type GhRunner = (args: string[]) => Promise<GhCall>;
-/** Runs `gh` (or `APV_GH`) without a shell, with the caller's environment; stopped after `timeoutMs`. */
-export declare function processGh(bin: string, env: NodeJS.ProcessEnv, cwd: string, timeoutMs?: number): GhRunner;
-export declare const VIEW_FIELDS = "number,state,isDraft,baseRefName,headRefName,headRefOid,isCrossRepository,mergeable,mergeStateStatus,statusCheckRollup,url";
+/** Runs `gh` (or `APV_GH`) without a shell, with the caller's environment. */
+export declare function processGh(bin: string, env: NodeJS.ProcessEnv, cwd: string): GhRunner;
+export declare const VIEW_FIELDS = "number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,url";
 export interface CheckItem {
     name: string;
     state: 'success' | 'pending' | 'failure';
@@ -29,8 +29,6 @@ export interface PullRequest {
     mergeable: string;
     mergeStateStatus: string;
     checks: CheckItem[];
-    /** Whether the head branch lives in another repository (a fork); null when GitHub did not say. */
-    crossRepository: boolean | null;
     /** Web address of the pull request: its host, owner and repository name the REST calls. */
     url: string;
 }
@@ -48,9 +46,7 @@ export interface PullRequestPath {
  * that answered the read, host included (GitHub Enterprise). Null when the address is not the one of pull
  * request `n` (another number, unexpected form, owner or name with other characters than GitHub allows).
  */
-export declare function pullRequestPath(pr: Pick<PullRequest, 'number' | 'url'>): PullRequestPath | null;
-/** `--hostname <host>` for a repository outside github.com. */
-export declare const hostname: (where: Pick<PullRequestPath, "host">) => string[];
+export declare function pullRequestPath(pr: PullRequest): PullRequestPath | null;
 /**
  * Arguments of the retarget: `gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -f base=<target>`. The REST API
  * and not `gh pr edit --base`, whose GraphQL query also reads the classic projects of the pull request and
@@ -63,8 +59,6 @@ export declare function retargetArgs(where: PullRequestPath, target: string): st
  * not list them) and the merge base itself.
  */
 export declare const FRESHNESS_JQ: string;
-/** A ref in a REST path: every character escaped but the slashes of a branch name. */
-export declare const refSegment: (ref: string) => string;
 /**
  * Arguments of the freshness read: `gh api repos/<owner>/<repo>/compare/<head sha>...<base>`. In this order,
  * GitHub's `ahead_by` counts the commits of the base the head of the pull request does not contain, and `files`
@@ -131,70 +125,12 @@ export interface StackOptions {
     };
     /** Journals a waiver before the merge it allows; returns an error message when it could not. */
     onDerogation?: (derogation: Derogation) => string | null;
-    /** `--wait-ci <minutes>`: how long a read waits for the pending checks of a pull request to end (0 or absent: no wait). */
-    ciWaitMs?: number;
-    /** Interval between two reads while waiting for the checks (default 30 s). */
-    ciPollMs?: number;
-    /** Progress lines (the wait for the checks). */
-    log?: (line: string) => void;
-    /**
-     * The rules checked before any merge (`apv rules check`, docs/REGLES.md) for the head of a pull request going to
-     * `target`: what refuses it (empty when nothing does) and what to note (waivers of the operator). `apv stack plan`
-     * lists them, `apv stack merge` stops on them right before each merge. The command always passes them.
-     */
-    rules?: (pr: PullRequest, target: string) => Promise<RulesVerdict>;
-    /** After each merge seen by a read: writes its signed trace (`apv audit merges`); returns an error message when it could not. */
-    onMerged?: (merge: {
-        pr: number;
-        head: string;
-        target: string;
-        method: string;
-        mergeCommit: string | null;
-        commits?: number;
-    }) => string | null;
-}
-/** The interval between two reads of the checks while `--wait-ci` waits: 30 seconds. */
-export declare const CI_POLL_MS = 30000;
-/** What `--wait-ci` needs: the budget, the interval and where to say it waits. */
-export interface CiWait {
-    ciWaitMs?: number | undefined;
-    ciPollMs?: number | undefined;
-    log?: ((line: string) => void) | undefined;
-}
-/**
- * `--wait-ci`: reads the pull request again while some of its checks are pending, at most `ciWaitMs` from now; returns
- * the last read (its checks finished, failed, or still pending when the time is up: the caller judges, never this wait).
- */
-export declare function waitForChecks(n: number, first: {
-    pr: PullRequest | null;
-    error: string | null;
-}, read: () => Promise<{
-    pr: PullRequest | null;
-    error: string | null;
-}>, wait: CiWait): Promise<{
-    pr: PullRequest | null;
-    error: string | null;
-}>;
-/**
- * Refusal of a pull request that has no check once retargeted onto the target, while the first pull request of the
- * stack, which aimed at the target, had some: the CI of the target runs only for pull requests opened towards it
- * (event `pull_request` with `branches`), and a retarget does not start it. Absent checks are not green.
- */
-export declare function noChecksAfterRetargetReason(n: number, pr: PullRequest, target: string, firstPr: number, firstChecks: number): string;
-/** What the rules say about the head of one pull request. */
-export interface RulesVerdict {
-    problems: string[];
-    notes: string[];
 }
 export interface PlannedPr {
     number: number;
     pr: PullRequest | null;
     expectedBase: string | null;
     anomalies: string[];
-    /** What does not stop the stack but will matter at the merge (a pull request without checks above the first one). */
-    notes: string[];
-    /** The rules before a merge at its head, against the target (null when not checked: PR unread, no target). */
-    rules: RulesVerdict | null;
     /** Whether the head contains its expected base (null when not compared: PR unread, base unknown, address unreadable). */
     freshness: Freshness | null;
 }
@@ -224,27 +160,6 @@ export interface MergeReport {
     } & Freshness>;
     /** Pull requests merged behind their base by waiver (`--allow-behind`), each journaled before its merge. */
     derogations: Derogation[];
-    /** The rules read right before each merge. */
-    rules: Array<{
-        pr: number;
-    } & RulesVerdict>;
-    /** Merges whose signed trace could not be written. */
-    traceErrors: string[];
-    /** Each pull request whose merge was seen, with the head it was merged at: what the branch cleanup works from. */
-    mergedHeads: MergedHead[];
-}
-/**
- * A pull request whose merge was seen (state `MERGED` read again), with its head branch and the head the merge carried
- * (`--match-head-commit`): its branch is deleted only while it still points there.
- */
-export interface MergedHead {
-    pr: number;
-    branch: string;
-    head: string;
-    /** From a fork (`isCrossRepository`); null when GitHub did not say. */
-    crossRepository: boolean | null;
-    /** Web address of the pull request: host, owner and repository of the branch. */
-    url: string;
 }
 /**
  * `apv stack merge`: merges the stack in order and stops at the first anomaly. Before each merge the pull
