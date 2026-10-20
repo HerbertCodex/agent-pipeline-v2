@@ -236,7 +236,7 @@ export async function run(args, io) {
         });
         const readinessOnly = values['readiness-only'] === true;
         const hooks = io.env['APV_LOCK_POLL_MS'] ? { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } : undefined;
-        const common = { repo, settings, suiteQueue: suite.queue, env: io.env, log: say, signal: abort.signal, ...(hooks ? { hooks } : {}) };
+        const common = { repo, settings, suiteQueue: suite.queue, stackIds: (loaded.config.stacks ?? []).map(s => s.id), env: io.env, log: say, signal: abort.signal, ...(hooks ? { hooks } : {}) };
         const audit = (target, source, commit, queue) => runAudit({
             ...common, suiteMaxLoad: suite.queue.maxLoad, origin: target, source, commit, pages, formFactors,
             runs: runs ?? settings.runs, readinessOnly, queue,

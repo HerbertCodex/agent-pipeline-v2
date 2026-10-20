@@ -19,7 +19,7 @@ export declare const decisionSchema: import("../domain/schema.js").Schema<{
     readonly subject: string;
     readonly value: string;
     readonly enforcement: "product" | "bootstrap" | "deferred";
-    readonly status: "deferred" | "confirmed" | "proposed" | "ambiguous";
+    readonly status: "proposed" | "deferred" | "confirmed" | "ambiguous";
     readonly source: "operator" | "derived";
     readonly sourceQuote: string;
     readonly rationale: string;
@@ -32,6 +32,14 @@ export declare const decisionSchema: import("../domain/schema.js").Schema<{
     } | undefined;
 }>;
 export type Decision = Infer<typeof decisionSchema>;
+/**
+ * Most decisions a ledger holds. Raised from 200 to 2000 on 14 October 2026 (a living project reached 200).
+ * The ceiling is not a cost bound: the ledger is read as one JSON file and hashed whole; at realistic sizes
+ * (about 1 KB per decision) 2000 entries stay around 2 MB. It only stops a runaway or corrupted file.
+ */
+export declare const MAX_LEDGER_DECISIONS = 2000;
+/** Wording of the refusal when the ledger is over the ceiling (shown instead of "invalid array"). */
+export declare const ledgerFullMessage: (count: number, max?: number) => string;
 export declare const decisionLedgerSchema: import("../domain/schema.js").Schema<{
     readonly schemaVersion: 1;
     readonly decisions: {
@@ -39,7 +47,7 @@ export declare const decisionLedgerSchema: import("../domain/schema.js").Schema<
         readonly subject: string;
         readonly value: string;
         readonly enforcement: "product" | "bootstrap" | "deferred";
-        readonly status: "deferred" | "confirmed" | "proposed" | "ambiguous";
+        readonly status: "proposed" | "deferred" | "confirmed" | "ambiguous";
         readonly source: "operator" | "derived";
         readonly sourceQuote: string;
         readonly rationale: string;

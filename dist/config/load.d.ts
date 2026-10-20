@@ -9,7 +9,7 @@ export declare const LEGACY_CONFIG_FILE = "pipeline.v2.json";
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite", "stacks", "batch", "web"];
+export declare const READ_SECTIONS: readonly ["name", "gates", "risk", "validationRules", "environment", "skills", "preview", "design", "structure", "run", "spec", "review", "receipts", "resources", "suite", "stacks", "batch", "stack", "web", "reuse", "map", "rules", "testsCheck", "freshness", "models", "release"];
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export declare const OWN_SECTIONS: readonly ["db"];
 /**
@@ -36,10 +36,25 @@ export declare const DEFAULT_SPEC_LIMITS: {
     readonly maxAcceptance: 30;
     readonly maxDepth: 3;
 };
+/**
+ * User scenarios of a spec that touches an interface (`apv spec validate`, code SPEC_USER_SCENARIOS): at least
+ * `minUserScenarios` criteria `AC-USER-<n>` written « Étant donné … quand … alors … » (or Given/When/Then), each
+ * verified by a browser test or by the journey played by the target person. `userScenarios` is the level of the
+ * finding: `warning` (default, existing specs keep validating) or `error` (refused at validation and at launch).
+ */
+export declare const USER_SCENARIO_LEVELS: readonly ["warning", "error"];
+export type UserScenarioLevel = typeof USER_SCENARIO_LEVELS[number];
+export type UserScenarioSettings = {
+    minUserScenarios: number;
+    userScenarios: UserScenarioLevel;
+};
+export declare const DEFAULT_USER_SCENARIOS: UserScenarioSettings;
 export declare const specSettingsSchema: import("../domain/schema.js").Schema<{
     readonly maxTasks: number;
     readonly maxAcceptance: number;
     readonly maxDepth: number;
+    readonly minUserScenarios: number;
+    readonly userScenarios: "warning" | "error";
 }>;
 export type SpecLimits = {
     maxTasks: number;
@@ -61,6 +76,7 @@ export declare const dastSchema: import("../domain/schema.js").Schema<{
     readonly passEnv: string[];
     readonly resource: string;
     readonly description: string | undefined;
+    readonly envFile: string | undefined;
 }>;
 export type DastSettings = Infer<typeof dastSchema>;
 /**
@@ -82,6 +98,7 @@ export declare const reviewSettingsSchema: import("../domain/schema.js").Schema<
         readonly passEnv: string[];
         readonly resource: string;
         readonly description: string | undefined;
+        readonly envFile: string | undefined;
     } | undefined;
     readonly paths: {
         readonly ui: string[] | undefined;
@@ -90,6 +107,8 @@ export declare const reviewSettingsSchema: import("../domain/schema.js").Schema<
         readonly personal: string[] | undefined;
         readonly legal: string[] | undefined;
         readonly neutral: string[] | undefined;
+        readonly tooling: string[] | undefined;
+        readonly server: string[] | undefined;
     } | undefined;
     readonly terms: {
         readonly data: string[] | undefined;
@@ -128,7 +147,11 @@ export declare const suiteQueueSchema: import("../domain/schema.js").Schema<{
     readonly waitMs: number;
     readonly maxLoad: number | undefined;
     readonly loadWaitMs: number;
+    readonly slots: number | "per-stack";
+    readonly shareMaxMs: number | undefined;
 }>;
+/** `suite.queue.shareMaxMs` by default: 2 h. */
+export declare const DEFAULT_SHARE_MAX_MS = 7200000;
 export type SuiteQueueSettings = Infer<typeof suiteQueueSchema>;
 export declare const suiteSettingsSchema: import("../domain/schema.js").Schema<{
     readonly queue: {
@@ -137,6 +160,8 @@ export declare const suiteSettingsSchema: import("../domain/schema.js").Schema<{
         readonly waitMs: number;
         readonly maxLoad: number | undefined;
         readonly loadWaitMs: number;
+        readonly slots: number | "per-stack";
+        readonly shareMaxMs: number | undefined;
     } | undefined;
     readonly ports: number[];
 }>;
@@ -159,6 +184,13 @@ export declare const batchSettingsSchema: import("../domain/schema.js").Schema<{
     readonly setup: string[] | undefined;
     readonly setupTimeoutMs: number;
     readonly passEnv: string[];
+}>;
+/**
+ * `apv stack merge` and `apv stack batch --merge`: the branches their cleanup never deletes (globs, `*` within a segment,
+ * `**` across). Absent: the usual long-lived branches (DEFAULT_KEEP_BRANCHES of src/stack/branches.ts); `[]`: none by name.
+ */
+export declare const stackSettingsSchema: import("../domain/schema.js").Schema<{
+    readonly keepBranches: string[] | undefined;
 }>;
 /** Declared test ports, sorted and without duplicates, with the resources (and stacks, `pile <id>`) that declare them. */
 export declare function declaredTestPorts(config: {
@@ -187,6 +219,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly testPaths: string[];
         readonly timeoutMs: number;
         readonly passEnv: string[];
+        readonly requiredEnv: string[] | undefined;
         readonly dependsOn: string[];
         readonly resources: string[];
         readonly readOnly: boolean;
@@ -197,6 +230,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly cacheTtlMs: number;
         readonly stage: "task" | "full" | undefined;
         readonly affected: string[] | undefined;
+        readonly affectedList: string[] | undefined;
         readonly lock: {
             readonly resource: string;
             readonly waitMs: number;
@@ -224,6 +258,27 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly paths: string[];
             readonly except: string[] | undefined;
             readonly reference: string;
+        } | undefined;
+        readonly early: {
+            readonly id: string;
+            readonly command: string[];
+            readonly when: string[] | undefined;
+            readonly dependsOn: string[];
+            readonly timeoutMs: number;
+            readonly passEnv: string[];
+            readonly resources: string[];
+            readonly lock: {
+                readonly resource: string;
+                readonly waitMs: number;
+            } | {
+                readonly file: string;
+                readonly fileEnv: string | undefined;
+                readonly waitMs: number;
+            } | undefined;
+        }[] | undefined;
+        readonly reuse: boolean | {
+            readonly ignore: string[] | undefined;
+            readonly maxAgeMs: number | undefined;
         } | undefined;
     }[];
     readonly validationRules: {
@@ -263,6 +318,11 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
     } | undefined;
     readonly design: {
         readonly dir: string | undefined;
+        readonly groups: {
+            readonly dir: string;
+            readonly match: string[];
+        }[] | undefined;
+        readonly defaultGroup: string | undefined;
     } | undefined;
     readonly structure: {
         readonly roots: string[] | undefined;
@@ -271,6 +331,8 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly domains: string[] | undefined;
         readonly ignore: string[] | undefined;
         readonly severity: "warning" | "error" | Record<string, "warning" | "error"> | undefined;
+        readonly architectureMap: string | undefined;
+        readonly profile: "sveltekit" | "nextjs" | "nuxt" | "astro" | "angular" | "vue" | "react" | "python" | "go" | "generic" | undefined;
     } | undefined;
     readonly run: {
         readonly fullSuite: "final" | "each-integration";
@@ -279,6 +341,8 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly maxTasks: number;
         readonly maxAcceptance: number;
         readonly maxDepth: number;
+        readonly minUserScenarios: number;
+        readonly userScenarios: "warning" | "error";
     } | undefined;
     readonly review: {
         readonly dast: {
@@ -287,6 +351,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly passEnv: string[];
             readonly resource: string;
             readonly description: string | undefined;
+            readonly envFile: string | undefined;
         } | undefined;
         readonly paths: {
             readonly ui: string[] | undefined;
@@ -295,6 +360,8 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly personal: string[] | undefined;
             readonly legal: string[] | undefined;
             readonly neutral: string[] | undefined;
+            readonly tooling: string[] | undefined;
+            readonly server: string[] | undefined;
         } | undefined;
         readonly terms: {
             readonly data: string[] | undefined;
@@ -317,6 +384,8 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
             readonly waitMs: number;
             readonly maxLoad: number | undefined;
             readonly loadWaitMs: number;
+            readonly slots: number | "per-stack";
+            readonly shareMaxMs: number | undefined;
         } | undefined;
         readonly ports: number[];
     } | undefined;
@@ -331,6 +400,8 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly ports: number[] | undefined;
         readonly stop: string[] | undefined;
         readonly start: string[] | undefined;
+        readonly fingerprint: string[] | undefined;
+        readonly normalizeEnv: string[] | undefined;
         readonly idleAfterMs: number | undefined;
         readonly commandTimeoutMs: number;
         readonly description: string | undefined;
@@ -339,6 +410,9 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly setup: string[] | undefined;
         readonly setupTimeoutMs: number;
         readonly passEnv: string[];
+    } | undefined;
+    readonly stack: {
+        readonly keepBranches: string[] | undefined;
     } | undefined;
     readonly web: {
         readonly pages: string[];
@@ -390,11 +464,138 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly neutralPaths: string[];
         readonly paths: string[];
     } | undefined;
+    readonly reuse: {
+        readonly reference: string | undefined;
+        readonly shared: string[] | undefined;
+        readonly generated: string[] | undefined;
+        readonly ignore: string[] | undefined;
+        readonly native: {
+            readonly elements: Record<string, string | null> | undefined;
+            readonly allowedPaths: string[] | undefined;
+        } | undefined;
+        readonly styles: {
+            readonly sources: string[] | undefined;
+            readonly selectors: string[] | undefined;
+            readonly except: string[] | undefined;
+            readonly allowedPaths: string[] | undefined;
+            readonly nested: "refuse" | "layout" | "allow" | undefined;
+        } | undefined;
+        readonly duplicates: {
+            readonly minLines: number | undefined;
+            readonly minTokens: number | undefined;
+            readonly paths: string[] | undefined;
+            readonly ignore: string[] | undefined;
+            readonly styles: "off" | "warning" | "error" | undefined;
+        } | undefined;
+        readonly names: {
+            readonly roles: Record<string, string[] | null> | undefined;
+            readonly strong: string[] | undefined;
+            readonly strongSeverity: "off" | "warning" | "error" | undefined;
+        } | undefined;
+        readonly typography: {
+            readonly locale: string;
+        } | undefined;
+        readonly severity: "off" | "warning" | "error" | Record<string, "off" | "warning" | "error"> | undefined;
+    } | undefined;
+    readonly testsCheck: {
+        readonly enabled: boolean | undefined;
+        readonly reference: string | undefined;
+        readonly e2e: string[] | undefined;
+        readonly unit: string[] | undefined;
+        readonly ignore: string[] | undefined;
+        readonly severity: {
+            readonly waitForTimeout: "off" | "warning" | "error" | undefined;
+            readonly fixedWait: "off" | "warning" | "error" | undefined;
+            readonly realClock: "off" | "warning" | "error" | undefined;
+            readonly sharedData: "off" | "warning" | "error" | undefined;
+        } | undefined;
+    } | undefined;
+    readonly map: {
+        readonly file: string | undefined;
+        readonly ignore: string[] | undefined;
+        readonly maxEntries: number | undefined;
+        readonly maxBytes: number | undefined;
+    } | undefined;
+    readonly rules: {
+        readonly mode: "leger" | "strict" | undefined;
+        readonly operatorOrders: {
+            readonly domain: string;
+            readonly publicKeys: string[];
+            readonly attestation: {
+                readonly url: string;
+                readonly maxAgeSeconds: number;
+                readonly timeoutMs: number;
+            };
+            readonly publicationBranch: string | undefined;
+            readonly paths: {
+                readonly publication: string[];
+                readonly article: string[];
+            } | undefined;
+            readonly verify: {
+                readonly publication: string[];
+                readonly timeoutMs: number;
+            };
+            readonly reducedProof: {
+                readonly workflow: string;
+                readonly job: string;
+                readonly name: string;
+                readonly gates: string[];
+                readonly waives: string[];
+                readonly covers: string;
+                readonly paths: {
+                    readonly publication: string[] | undefined;
+                    readonly article: string[] | undefined;
+                };
+                readonly protectedPaths: string[] | undefined;
+                readonly artifact: string | undefined;
+            } | undefined;
+        } | undefined;
+        readonly captures: {
+            readonly viewports: ("phone" | "desktop" | "tablet")[] | undefined;
+            readonly themes: ("light" | "dark")[] | undefined;
+        } | undefined;
+        readonly requiredGates: {
+            readonly id: string;
+            readonly command: string[];
+        }[] | undefined;
+        readonly journalDays: number | undefined;
+        readonly screens: string[] | undefined;
+        readonly docsOnly: {
+            readonly enabled: boolean | undefined;
+            readonly kinds: ("decisions" | "mockups" | "drafts" | "specs" | "journal" | "docs")[] | undefined;
+            readonly exclude: string[] | undefined;
+        } | undefined;
+        readonly ciProof: {
+            readonly workflow: string;
+            readonly job: string;
+            readonly name: string;
+            readonly gates: string[];
+            readonly protectedPaths: string[] | undefined;
+            readonly artifact: string | undefined;
+        } | undefined;
+    } | undefined;
+    readonly freshness: {
+        readonly maxAgeDays: number;
+        readonly maxLines: number;
+        readonly paths: string[];
+        readonly ignore: string[];
+        readonly archive: string | undefined;
+    } | undefined;
+    readonly models: import("./models.js").ModelsConfig | undefined;
+    readonly release: {
+        readonly branch: string;
+        readonly from: string;
+        readonly migrations: string[] | undefined;
+    } | undefined;
 }>;
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
 export declare const specLimits: (config: {
     spec?: Partial<SpecLimits> | undefined;
 }) => SpecLimits;
+/** The user scenario settings of a configuration: `spec.minUserScenarios` and `spec.userScenarios`, defaults for what is absent. */
+export declare const userScenarioSettings: (config: {
+    spec?: Partial<UserScenarioSettings> | undefined;
+}) => UserScenarioSettings;
 /** The full suite rhythm of a configuration: `run.fullSuite`, `final` when absent. */
 export declare const fullSuiteMode: (config: {
     run?: {
@@ -415,12 +616,23 @@ export declare function readSections(raw: unknown): {
     picked: Record<string, unknown>;
     ignored: string[];
 };
+/** Longest pattern of `early.when` (characters), and most wildcards (`*` or `**`) in one: the cost of a match stays small. */
+export declare const MAX_WHEN_LENGTH = 200;
+export declare const MAX_WHEN_WILDCARDS = 16;
 /** Every problem of a configuration document: schema, duplicate ids, unknown dependencies, cycles. */
 export declare function configIssues(raw: unknown): {
     config: ApvConfig | undefined;
     ignored: string[];
     issues: Issue[];
 };
+/**
+ * Files that `reuse.ignore` never covers (docs/ACCELERATION-LOTS.md, 5.2 A2): a probe of each kind of file of the list
+ * ALWAYS_REQUIRED of src/gates/proof-scope.ts without the test folders (the configuration of the checks, the manifests and
+ * lock files of the dependencies, the build, test and run settings, the CI, the migrations, scripts/**, .env*). A glob that
+ * matches one of them is refused (case ignored). Nothing is ignored for now: the reuse by inputs is disabled until the
+ * declaration is proven (INPUTS_REUSE_DISABLED, src/gates/reuse-proof.ts).
+ */
+export declare const NEVER_IGNORE_PROBES: readonly (readonly [string, string])[];
 /** Configuration file of a project: `--config` when given, then `.apv/config.json`, then `pipeline.v2.json`. */
 export declare function configFile(repo: string, explicit?: string): {
     file: string | null;

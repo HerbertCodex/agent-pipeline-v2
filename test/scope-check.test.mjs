@@ -5,6 +5,10 @@ import { demoSpec } from './lifecycle-helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 import { porcelainPaths } from '../dist/commands/scope.js';
 import { scopeReport, assertScope } from '../dist/policy/policy.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const read = (repo, path) => readFileSync(join(repo, path), 'utf8');
 
 function branch(t) {
   const f = fixture(t);
@@ -80,4 +84,66 @@ test('scope report lists every violation; assertScope keeps the V2 error', () =>
 test('porcelain status paths skip the source of a rename', () => {
   assert.deepEqual(porcelainPaths('R  new.txt\0old.txt\0?? added.txt\0 M src/a.ts\0'), ['new.txt', 'added.txt', 'src/a.ts']);
   assert.deepEqual(porcelainPaths(''), []);
+});
+
+test('the code map committed by a task is in scope (decision D1: the implementer regenerates and commits it), and said', async t => {
+  const f = branch(t);
+  f.commit('src/math.mjs', 'export const add = (a, b) => a + b;\n');
+  f.commit('.apv/code-map.md', '# Carte du code\n');
+  const r = await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH', '--json']);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.deepEqual([r.json().outOfScope, r.json().codeMap], [[], true]);
+  const human = await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH']);
+  assert.match(human.stdout, /Dans le périmètre\./);
+  assert.match(human.stdout, /Carte du code \(\.apv\/code-map\.md\) commitée avec la tâche : attendu/);
+  // Another file out of scope still fails: the map is the only one accepted.
+  f.commit('README.md', '# Changed\n');
+  const out = await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH', '--json']);
+  assert.equal(out.code, 1);
+  assert.deepEqual(out.json().outOfScope, ['README.md']);
+});
+
+test('the code map of a custom map.file is recognised too', async t => {
+  const f = branch(t);
+  f.commit('.apv/config.json', '{ "map": { "file": "docs/CODE-MAP.md" } }\n');
+  f.commit('docs/CODE-MAP.md', '# Carte du code\n');
+  const r = await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH', '--json']);
+  assert.equal(r.json().codeMap, true);
+  assert.deepEqual(r.json().outOfScope, ['.apv/config.json']);
+  assert.match((await apv(f.repo, ['scope', 'check', '--spec', f.spec, '--task', 'MATH'])).stdout, /Carte du code \(docs\/CODE-MAP\.md\) commitée avec la tâche : attendu/);
+});
+
+test('the architecture map: a task may write its « Rôles » block only', async t => {
+  const map = '# Carte\n\n<!-- apv:genere:arborescence -->\n- `src/`\n<!-- /apv:genere:arborescence -->\n\n<!-- apv:ecrit:roles -->\n- `src/` : sources\n<!-- /apv:ecrit:roles -->\n';
+  const f = fixture(t, { files: { 'docs/carte-architecture.md': map } });
+  const spec = write(f.root, 'spec.json', demoSpec());
+  git(f.repo, 'checkout', '-qb', 'feature');
+  const commit = (path, text) => { write(f.repo, path, text); git(f.repo, 'add', '-A'); git(f.repo, 'commit', '-qm', `change ${path}`); };
+  commit('src/math.mjs', 'export const add = (a, b) => a + b;\n');
+  commit('docs/carte-architecture.md', map.replace('- `src/` : sources\n', '- `src/` : sources\n- `src/relances/` : relances des candidatures\n'));
+  const ok = await apv(f.repo, ['scope', 'check', '--spec', spec, '--task', 'MATH', '--json']);
+  assert.equal(ok.code, 0, ok.stdout);
+  assert.deepEqual([ok.json().outOfScope, ok.json().architectureMap], [[], 'roles-only']);
+  assert.match((await apv(f.repo, ['scope', 'check', '--spec', spec, '--task', 'MATH'])).stdout, /seul son bloc « Rôles » change/);
+  // Anything else of the map (a generated part, the summary) stays out of scope.
+  commit('docs/carte-architecture.md', read(f.repo, 'docs/carte-architecture.md').replace('- `src/`\n<!-- /apv:genere', '- `src/` modifié à la main\n<!-- /apv:genere'));
+  const out = await apv(f.repo, ['scope', 'check', '--spec', spec, '--task', 'MATH', '--json']);
+  assert.equal(out.code, 1);
+  assert.deepEqual([out.json().outOfScope, out.json().architectureMap], [['docs/carte-architecture.md'], 'other']);
+});
+
+test('changes of a task (security review of #141, A1): a submodule link ignored by .gitmodules is still a changed file', async t => {
+  const { Git } = await import('../dist/execution/git.js');
+  const { writeFileSync, mkdirSync } = await import('node:fs');
+  const f = fixture(t);
+  writeFileSync(join(f.repo, '.gitmodules'), '[submodule "vendor"]\n\tpath = vendor\n\turl = ./vendor\n\tignore = all\n');
+  mkdirSync(join(f.repo, 'vendor'));
+  git(f.repo, 'add', '-A');
+  git(f.repo, 'update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},vendor`);
+  git(f.repo, 'commit', '-qm', 'vendor');
+  const base = git(f.repo, 'rev-parse', 'HEAD').trim();
+  git(f.repo, 'update-index', '--cacheinfo', `160000,${'2'.repeat(40)},vendor`);
+  git(f.repo, 'commit', '-qm', 'vendor 2');
+  const changes = await new Git().changes(f.repo, base, 'HEAD');
+  assert.deepEqual(changes.files, ['vendor']);
 });

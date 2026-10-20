@@ -1,5 +1,8 @@
-import { type GateReceipt, type GateStage } from '../domain/contracts.js';
+import type { GateReceipt, GateStage } from '../domain/contracts.js';
 import type { ApvConfig } from '../config/load.js';
+import { type InfrastructureCause } from './infrastructure.js';
+import { type AlteredRun, type ReceiptSource } from './reuse-proof.js';
+export type { AlteredRun, ReceiptSource } from './reuse-proof.js';
 export interface VerifyOptions {
     repo: string;
     config: ApvConfig;
@@ -23,6 +26,19 @@ export interface VerifyOptions {
     reference?: string;
     /** The configuration file read (`--config`), always required by the scope of a check when inside the repository. */
     configFile?: string | null;
+    /** Clock of the age check of reused receipts, in milliseconds (`Date.now()` when absent; tests pass a fixed one). */
+    now?: number;
+    /**
+     * The branch the commit goes to (or a commit of it, such as the merge base of the checks of the base): the `reuse.maxAgeMs`
+     * of a reused check is read at its merge base with the commit (5.5.1). A receipt reused by inputs is refused. Absent:
+     * `reference`, then the default branch of the remote.
+     */
+    reuseReference?: string | null;
+    /**
+     * The proof of a release (`apv release`, docs/UNE-SUITE-PAR-PR.md, 2.2): a changed test file a complete green receipt of the
+     * same check repeated at the same content counts as repeated (src/gates/repeat-credit.ts). Absent: every file must be.
+     */
+    repeatCredits?: boolean;
 }
 /**
  * State of one required check at the commit:
@@ -37,9 +53,28 @@ export interface VerifyOptions {
  *   the command that ran it) and the recomputation from the commit says required; or the command shows such an audit
  *   and the receipt records nothing;
  * - `required`: that latest receipt says the check was not required (`not_required`, scope `skipWhenOnly`), but the scope
- *   recomputed from the commit requires it (a file with an effect, a base equal to the commit, a reference unresolved).
+ *   recomputed from the commit requires it (a file with an effect, a base equal to the commit, a reference unresolved);
+ * - `reuse`: that latest receipt is `cached` (reused from another commit) and its reuse does not check out against Git
+ *   and the store (docs/ACCELERATION-LOTS.md, 5.5): no `reuse` record, origin absent, altered, not `passed` at first pass,
+ *   dirty, targeted, of another configuration or environment, too old, another tree, another base for a command that reads
+ *   `{{baseSha}}`, a check that is never reused, or a later failure on the same tree that cannot be excluded (checkReuse,
+ *   src/gates/reuse-proof.ts, the check `apv gates run` passes before writing one). It refuses like `missing`, and neither
+ *   the CI proof nor the reduced lane stands in for it.
  */
-export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'unaudited' | 'required';
+export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'unaudited' | 'required' | 'reuse';
+/** A receipt `cached` retained for a check: where it says it comes from, and whether `verify` proved its reuse. */
+export interface ReuseEvidence {
+    /** True: the reuse is proven (origin read again, trees and digests recomputed); false: state `reuse`, see `reason`. */
+    proven: boolean;
+    /** Why it proves nothing, or how it was proven (« arbre identique »). */
+    reason: string;
+    /** Origin as the receipt declares it (null when the receipt has no `reuse` record). */
+    fromRun: string | null;
+    fromCommit: string | null;
+    basis: 'tree' | 'inputs' | null;
+    /** Identifier of the origin receipt (`reusedFrom`). */
+    origin: string | null;
+}
 export interface GateEvidence {
     gateId: string;
     state: EvidenceState;
@@ -79,6 +114,18 @@ export interface GateEvidence {
         files: string[];
         reason: string;
     } | null;
+    /** The receipt retained is `cached`: its origin and the outcome of its verification; null for any other receipt. */
+    reuse: ReuseEvidence | null;
+    /**
+     * State `failed`: the infrastructure failure the tool itself observed and recorded in the receipt retained (`finding`:
+     * the only one that may decide anything), the one its output only suggests (`probable`, read from the diagnostic by
+     * src/gates/infrastructure.ts: shown, never acted upon), and when that receipt ended (`startedAt` plus its duration).
+     */
+    failure?: {
+        infrastructure: InfrastructureCause | null;
+        probable: InfrastructureCause | null;
+        endedAt: number;
+    };
 }
 export interface VerifyResult {
     repo: string;
@@ -101,6 +148,12 @@ export interface VerifyResult {
     altered: AlteredRun[];
     /** Required checks proven by a receipt `passed_after_retry`: passed, but only after the relaunch of their failed tests (unstable). */
     flaky: string[];
+    /** Checks whose retained receipt took at least 85 % of their timeout (`nearTimeout`): the timeout to raise before it breaks. */
+    nearTimeout: {
+        gateId: string;
+        timeoutMs: number;
+        percent: number;
+    }[];
     /** Required checks that declare `repeatChanged`: their proof needs a run with `--base`. */
     repeating: string[];
     /** Required checks proven by a receipt `not_required` whose scope the commit confirms (never run: no effect on them). */
@@ -109,14 +162,9 @@ export interface VerifyResult {
     scoped: string[];
     /** Required checks that run `apv web audit --preview --base`: « not required » is recomputed from the commit. */
     auditing: string[];
+    /** Required checks proven by a receipt `cached` whose reuse `verify` proved (origin, tree, digests, age). */
+    reused: string[];
     ok: boolean;
-}
-/** Where a receipt was read: the `.apv/receipts/` of the worktree, or the shared store of the repository. */
-export type ReceiptSource = 'local' | 'shared';
-/** A run of the shared store refused as a whole: its files no longer match its manifest, or contradict it. */
-export interface AlteredRun {
-    runId: string;
-    reason: string;
 }
 /**
  * Whether the receipts prove that every required check passed on this exact commit, on a clean tree and with

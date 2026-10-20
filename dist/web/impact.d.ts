@@ -38,6 +38,8 @@ export type BaseOutcome = {
  * itself (`head` equal to or upstream of `ref`: nothing to compare, every change would be missed).
  */
 export declare function auditBase(repo: string, ref: string, head: string): BaseOutcome;
+/** Whether an argv runs `apv web audit` (`web` followed by `audit`), whatever its options. */
+export declare function runsWebAudit(argv: readonly string[]): boolean;
 /** `--base <ref>` of an `apv web audit --preview` command (argv of a check), or undefined when the command is not one. */
 export declare function webAuditGate(argv: readonly string[]): {
     base: string | null;

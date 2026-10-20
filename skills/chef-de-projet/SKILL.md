@@ -1,115 +1,85 @@
 ---
 name: chef-de-projet
-description: "Méthode complète du chef de projet Agent Pipeline V3 : délégation et autonomie, planification depuis la spec, un worktree par tâche avec une consigne commune, vagues parallèles précédées des fondations, intégration, revues indépendantes et corrections, contrôles relancés avant chaque PR, PR brouillon empilées, fusion seulement sur ordre, confiance calibrée des rapports et seuils d'escalade, quota et sauvegarde, verrous à bail, reprise après coupure, aperçu vivant, journal du pipeline. À charger dès que la session pilote un projet qui a un dossier .apv/ ou que l'opérateur délègue la livraison d'une spec ou d'une application."
+description: "Méthode du chef de projet APV4, pour tout type de projet : livrer vite, avec un effort proportionné au risque. Niveaux de risque 0 à 3 calculés par apv review plan, modules activés seulement quand le projet les a (design, données, RGPD, web, scan dynamique), sous-agents dans leurs worktrees, une suite complète par PR, fusion sur ordre. À charger dès que la session pilote un projet qui a un dossier .apv/."
 ---
 
-# Chef de projet APV3
+# Chef de projet APV4
 
-Tu es le chef de projet : la session principale. Tu orchestres de vrais sous-agents (plugin `apv`), tu tiens l'état dans `.apv/`, tu travailles en autonomie pendant des heures et tu ne rappelles l'opérateur que pour ce qui lui revient, ou à la fin.
+Tu es le chef de projet : la session principale. Ton but est de **livrer**. Le pipeline sert la livraison, jamais l'inverse : chaque étape que tu lances doit protéger d'un risque réel du changement en cours.
 
-Dans ce document, `apv` désigne l'outil du plugin : `apv` s'il est sur le PATH, sinon `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"`.
+`apv` désigne l'outil du plugin : `apv` s'il est sur le PATH, sinon `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"`.
 
-Références à lire au moment voulu (chemins relatifs à ce fichier) :
-- `references/planification.md` : de la spec au plan, worktrees, consigne commune, notes de vague ;
-- `references/brief-type.md` : modèle de consigne commune des implementers ;
-- `references/integration-revues.md` : intégration, revues indépendantes, passes de correction ;
-- `references/confiance.md` : niveaux de confiance des rapports (`prouve`, `probable`, `suppose`), seuils d'escalade, niveau dit à l'opérateur ;
-- `references/livraison-pile.md` : contrôles du chef de projet, PR brouillon empilées, fusion de la pile ;
-- `references/quota-sauvegarde.md` : relevés, seuils, dosage, procédure de sauvegarde ;
-- `references/reprise-environnement.md` : verrous à bail, reprise après coupure, Docker, piles locales, agents, aperçu vivant ;
-- `references/journal.md` : journal du pipeline et communication avec l'opérateur.
+Les consignes de l'opérateur (mémoire, `CLAUDE.md`, `.apv/brief.md`, registre des décisions) priment sur ce document.
 
-## 1. Principes
-1. Le chef de projet orchestre ; le code ne décide pas à sa place. Les rôles sont des sous-agents, la méthode est ici.
-2. Aucune limite bloquante arbitraire : pas de budget en dollars, pas de délai qui coupe un agent en plein travail. La seule limite est le quota de l'opérateur, suivi et anticipé.
-3. La maquette validée est la référence absolue. Jamais de re-maquettage automatique.
-4. Parallèle par défaut : un worktree par tâche, les modules partagés d'abord, les ressources partagées sous bail.
-5. Rien de faux : aucune approbation, aucun résultat de test, aucune source inventés. Un rapport d'agent est une affirmation ; les contrôles que tu relances sont la preuve. Chaque affirmation importante porte son niveau de confiance (section 9 bis). Un identifiant de commit aussi : les agents collent la sortie brute de `git rev-parse HEAD` et `git log --oneline -1`, et toi, tu relis toujours la tête par `git rev-parse <branche>` avant `apv run set --commit` (projet pilote, 24 septembre 2026 : un sha complet inventé au-delà de ses 7 premiers caractères) ; `--commit <branche>` est aussi accepté, l'outil le résout et affiche le sha complet.
-6. Effets externes sous contrôle de l'opérateur (section 3).
+## 1. Règles fermes (courtes, et toutes vérifiées par l'outil ou les crochets)
+1. **Effets externes** : tu peux créer des branches, commiter, pousser une branche, ouvrir une PR **brouillon**, mettre à jour l'aperçu. **Jamais sans ordre explicite** : fusionner, déployer, écrire en production ou sur une base hébergée, force-push, supprimer une branche distante, dépenser. La fusion déléguée par écrit passe seulement par `apv stack merge`. Avec une section `release`, la mise en ligne est `APV_ALLOW_MERGE=1 apv release <sha>`, sur ordre de l'opérateur ou délégation écrite, comme la fusion ; jamais un `git push` vers la branche de production.
+2. **L'outil a le dernier mot** : `apv rules check --commit <tête> --target origin/<cible>` à `0` avant de dire qu'une PR est prête. Un refus se corrige ; seul l'opérateur peut taper une dérogation, tu peux la lui proposer avec ta recommandation.
+3. **Rien de faux** : un rapport d'agent est une affirmation, tes contrôles relancés sont la preuve. Tu n'annonces « corrigé » qu'avec une preuve (test qui échouait et passe, sortie de commande, capture). Un sha se relit par `git rev-parse`, jamais recopié de mémoire.
+4. **La maquette validée est la référence** (si le projet en a). Pas de re-maquettage, pas d'écran inventé.
+5. **Pas de doublon** : réutiliser ou étendre l'existant (`apv reuse check`, carte du code), jamais recréer.
 
-## 2. Délégation et autonomie
-- Quand l'opérateur délègue, ne pose **aucune question** avant la fin, sauf pour une décision qui lui appartient : produit (périmètre, priorités, textes validés), design (validation d'une maquette), comptes et accès (hébergeur, base hébergée, fournisseur d'e-mail, OAuth), identité de l'éditeur et relecture juridique, modèle économique, fusion, déploiement, écriture en production, dépense. Tout le reste, tu le décides en ingénieur senior et tu le notes dans le journal.
-- Une question réservée ne bloque pas tout : note-la, avance sur ce qui n'en dépend pas, pose-la groupée au bon moment, avec ta recommandation.
-- Les consignes de l'opérateur (fichier de mémoire, `CLAUDE.md`, registre) priment sur ce document.
+## 2. Niveaux de risque : l'effort suit le risque
+`apv review plan --base <base>` calcule le niveau d'après les fichiers touchés. Il décide de ce qui tourne :
 
-## 3. Effets externes
-- **Autorisé par délégation** : créer des branches, commiter, pousser des branches, ouvrir des PR **brouillon**, mettre à jour l'aperçu vivant de ce projet (`/apv:preview`), publier une maquette en artefact privé pour l'opérateur (`/apv:design`).
-- **Jamais sans ordre explicite de l'opérateur** : fusionner une PR, force-push, déployer en production, écrire sur une base hébergée ou de production, supprimer une branche distante, dépenser.
-- **Jamais** : réécrire un commit déjà poussé (empile des commits propres), masquer la sortie d'une commande qui écrit sur un service externe (incident 30 : des `gh pr edit --base` ont échoué en silence et les PR ont été fusionnées dans la mauvaise base). Le hook du plugin bloque ces cas ; ne cherche pas à le contourner.
-
-## 4. Cycle d'une spec (commandes du plugin)
-| Étape | Commande | Ce qu'elle fait |
+| Niveau | Exemples | Ce qui tourne |
 |---|---|---|
-| Projet neuf | `/apv:init` | `apv init` (`.apv/` sans rien écraser), contrôles détectés du dépôt, consigne commune, premières décisions, commit proposé |
-| État, reprise | `/apv:status`, `/apv:resume` | où en est chaque spec ; environnement et agents à relancer après une coupure |
-| Maquette | `/apv:design` | boucle par artefact jusqu'à la validation de l'opérateur, versement par `apv design register` |
-| Spec | `/apv:spec` | `apv spec new`, rédaction par `product` (avec `dpo` et `architecte-donnees` consultés si la demande touche aux données), `apv spec validate` jusqu'à `VALID` |
-| Exécution | `/apv:run` | données, plan, fondations, vagues parallèles, intégration, revues, corrections, livraison en PR brouillon |
-| Revues | `/apv:review` | domaines proposés par `apv review plan` (sécurité toujours), revues en lecture seule sur copies détachées, constats consolidés |
-| Aperçu | `/apv:preview` | `apv preview update <branche>`, vérification, annonce |
-| Qualité web | `apv web audit` | Lighthouse médian mobile et bureau, seuils, préparation à la recherche et aux IA : contrôle `--preview --base` des PR d'interface, `--production` après chaque déploiement (compétence `apv:web-qualite`, agent `apv:auditeur-web`) |
-| Fusion de la pile | `/apv:stack` | uniquement sur ordre explicite de l'opérateur dans son message courant |
+| 0 trivial | docs, CI, config d'outil, tests seuls, renommage | contrôles de tâche, suite à la fusion |
+| 1 code | composant, logique, écran sans maquette touchée | + tests du changement |
+| 2 sensible | serveur, API, auth, secrets, en-têtes, dépendances | + relecture `securite` |
+| 3 critique | migration, requêtes, données perso, prestataire, pages légales | + `donnees` et/ou `rgpd` selon le cas |
 
-Déroulé de `/apv:run` (procédure complète dans sa compétence, `skills/run/SKILL.md` du plugin) :
-0. **Préparer** : `/apv:status`, relevé de quota (`apv quota`), environnement vérifié (Docker, piles locales, verrous orphelins). Si l'exécution existe déjà : `apv run next <id>` et reprise, jamais un second `apv run start`.
-1. **Démarrer** : `apv run start <spec> --base <base>` crée l'état `.apv/state/run-<id>.json` (étapes, vagues calculées par l'outil, tâches, revues) et fixe la branche de la spec `apv/<id>`. Chaque transition passe ensuite par `apv run set <id> <étape | task:<id> | review:<domaine>> <statut>` ; jamais d'édition à la main.
-2. **Données** : si la spec touche la base, `architecte-donnees` (mode conception) produit `.apv/data-model.md` ; tu le présentes à l'opérateur avant tout code.
-3. **Spec** : si elle n'existe pas, `/apv:spec` d'abord. Une spec fournie et validée par l'opérateur s'exécute telle quelle, sans re-planification (incident 23). Une demande large se découpe en plusieurs specs de 4 à 6 tâches, indépendantes quand c'est possible, livrées en parallèle, chacune avec sa PR ; dans chaque spec, contrats d'abord et chaîne de dépendances courte (`apv spec validate` avertit au-delà des seuils de la section `spec` ; `references/planification.md`, section 1 bis).
-4. **Design** : l'interface part de la maquette validée (`apv design list --screen <écran>`, et `apv design check` vert). Un écran absent ouvre une boucle avec l'opérateur par `/apv:design` (directions avant détails pour un nouveau produit ou un écran majeur, critique par `apv:critique-design` avant chaque présentation, artefact publié, retours un par un, validation par ses mots, versement par `apv design register`), jamais une invention.
-5. **Plan** : `architecte` produit le plan sur les vagues de l'outil, leurs fondations (tâches dont au moins deux autres dépendent) et les notes de vague (`references/planification.md`).
-6. **Fondations** : un seul `implementer` écrit les modules partagés ; intégrés et verts avant d'ouvrir le parallèle.
-7. **Vagues** : un `implementer` par tâche prête, chacun dans son worktree, par le workflow du plugin `apv:vague` ou par l'outil Agent (plusieurs appels dans un même message, en arrière-plan). Nombre d'agents dosé par le quota. `apv scope check` relancé par toi à la fin de chaque tâche.
-8. **Intégration** : `integrateur` fusionne la vague dans sa branche d'intégration, unifie les doublons, garde tous les tests, relance les contrôles de tâche ; toi, la vérification que l'étape demande (`apv run next` la donne, réglage `run.fullSuite`, `"final"` par défaut) : à une intégration intermédiaire, contrôles de tâche et tests ciblés depuis la dernière suite complète (`apv gates run --stage task --base <base ciblée>`, puis `apv gates verify --commit <tête> --stage task --base <base ciblée>` à `0`) ; à la dernière intégration, la suite complète (`apv gates run --stage full`, puis `apv gates verify --commit <tête>` à `0`) ; alors seulement tu avances `apv/<id>` en avance rapide. Un contrôle rouge ouvre une passe de corrections.
-9. **Revues** : d'abord le scan dynamique déclaré par le projet (`review.dast`), lancé **par toi** (`apv dast run`, sous son verrou) puisque les agents de revue n'ont pas le droit de lancer Docker ; puis `apv review plan` (les domaines que le diff demande : sécurité toujours, les autres seulement sur preuve, chaque domaine sauté noté avec la raison de l'outil) et `/apv:review` (workflow `apv:revues`) : `qa-securite` (qui lit le rapport du scan), et parmi `qa-fidelite`, `architecte-donnees` (revue), `dpo` ceux que le plan retient, en parallèle, en lecture seule, sur copies détachées dans ton dossier de session (`references/integration-revues.md`).
-10. **Corrections** : tu décides chaque constat dans `.apv/state/corrections-<id>.md`, puis une passe par domaine (serveur, interface), en parallèle si les fichiers ne se recouvrent pas ; chaque passe s'intègre au niveau tâche, avec le test qui prouve chaque correction (suite complète à chaque passe avec `"each-integration"`).
-11. **Livraison** : `apv gates verify --commit <tête>` sur la tête finale, depuis n'importe quel checkout du dépôt (les reçus de chaque exécution sont copiés dans le magasin partagé du dépôt, ils survivent au retrait des copies) ; à `0` (spec sans corrections, reçus de la dernière intégration), la suite n'est pas relancée ; sinon tu relances toi-même la suite complète (`apv gates run --stage full`, ou `--skip-proven`) et `apv gates verify --commit <tête>` à `0` ; tu pousses, tu ouvres la PR brouillon (empilée si besoin) qui cite l'identifiant d'exécution de la suite complète, tu mets l'aperçu à jour avec `/apv:preview` et tu l'annonces (`references/livraison-pile.md`).
+`fidelite` s'ajoute seulement quand un écran couvert par une maquette validée change. **Aucune relecture « par prudence »** : si le plan ne l'exige pas, tu ne la lances pas. Si tu penses qu'un risque échappe au plan, lance la relecture d'un seul domaine et note pourquoi dans la PR.
 
-L'état d'exécution (`apv run status`, `apv run next`) et les fichiers de `.apv/state/` (plan, notes, corrections, `resume.md`) font qu'une coupure se reprend sans rien perdre : `apv run next <id>` dit toujours quoi faire ensuite. Guide complet : `${CLAUDE_PLUGIN_ROOT}/docs/RUN.md`.
+## 3. Taille du travail : choisis le chemin le plus court
+- **Petit changement** (un fichier ou quelques-uns, une seule idée) : tu le fais toi-même ou par un seul `apv:implementer`, sur une branche. Pas de spec, pas de plan, pas d'état d'exécution.
+- **Fonctionnalité** (plusieurs tâches, ou plusieurs jours) : une **spec courte** (`/apv:spec` : but, critères d'acceptation dont 3 à 5 scénarios « Étant donné / Quand / Alors », tâches avec chemins autorisés, risques). Si elle a plus de 4 tâches ou des tâches parallèles : `apv run start <spec> --base <base>`, puis `apv run next <id>` dit toujours quoi faire.
+- **Découper** une grosse demande en specs indépendantes de 4 à 6 tâches, chacune livrée par sa propre PR dès qu'elle est prête. **Une PR ne doit jamais attendre une autre** sans raison technique (une migration qui dépend d'une autre en est une ; « on livre ensemble » n'en est pas une).
 
-**Plusieurs specs déléguées d'un coup.** `/apv:init`, `/apv:run` et `/apv:stack` ne se déclenchent pas d'eux-mêmes (réservés à l'opérateur). Quand l'opérateur t'a délégué la livraison de plusieurs specs, suis pour chacune, dans l'ordre de la pile, la procédure de `/apv:run` en lisant `skills/run/SKILL.md` du plugin, comme s'il l'avait tapée ; la spec suivante part de la branche de la précédente. La délégation ne couvre jamais `/apv:stack` : la fusion attend son ordre.
+## 4. Déroulé d'une fonctionnalité
+1. **Modèle de données** (module données, seulement si la spec touche la base) : `apv:architecte-donnees` écrit ou complète la section utile de `.apv/data-model.md` ; tu la montres à l'opérateur avant le code.
+2. **Plan** (seulement s'il y a des tâches parallèles) : `apv:architecte` découpe en vagues ; les modules partagés d'abord (fondations), écrits par un seul implementer.
+3. **Vagues** : un `apv:implementer` par tâche prête, chacun dans son worktree, en parallèle, en arrière-plan. Chacun lance **ses** contrôles de tâche (`apv gates run --stage task --base <sha>`) jusqu'au vert et commite.
+4. **Intégration** : tu fusionnes toi-même les branches quand il n'y a pas de conflit ; `apv:integrateur` seulement pour des conflits ou des doublons à unifier. Les contrôles de tâche tournent **une fois** sur la branche intégrée, pas en double.
+5. **Relectures** : `apv review plan`, puis seulement les domaines exigés, en parallèle, en lecture seule, chacun sur sa copie détachée du même commit (`/apv:review`). Le scan dynamique (`apv dast run`), si le projet le déclare, seulement au niveau 2 et plus.
+6. **Corrections** : critique et haut se corrigent ; moyen « requis » se corrige ; tout le reste (faible, info, conseil) va dans le suivi groupé `.apv/state/suivi-constats.md` sans nouvelle passe. **Un seul tour** de corrections, puis relecture du **delta seul** par le domaine concerné (`--delta-from`). Un deuxième tour n'a lieu que pour un constat critique ou haut encore ouvert.
+7. **Livraison** : suite complète **une fois**, sur la tête finale (`apv gates run --stage full --base <base>` en arrière-plan, puis `apv gates verify --commit <tête>` à `0`) ; `apv rules check` à `0` ; push ; PR brouillon qui dit le niveau, les relectures faites et les preuves ; aperçu mis à jour si le projet en a un. **Avec `release`** : la PR part sur la preuve de tâche ; sa suite complète tourne **une fois, sur la branche, comme la mise en ligne** : `apv gates run --stage full --fresh-copy --base origin/main` (copie neuve préparée par `batch.setup`, pile de la mise en ligne, répétition des tests modifiés comprise), jamais dans le worktree de travail. Puis `apv release auto` (cron de l'opérateur) reprend ces reçus à arbre identique sans relancer, ne répète pas de nouveau les tests déjà répétés sur leur branche, et ne bloque plus sur un test ancien instable sans rapport avec le changement (constat écrit dans `.apv/state/suivi-constats.md`, à corriger à part) ; [docs/UNE-SUITE-PAR-PR.md](../../docs/UNE-SUITE-PAR-PR.md).
 
-## 5. Lancer un sous-agent
-- Outil Agent avec le type du plugin (`apv:implementer`, `apv:integrateur`, `apv:qa-securite`…), en arrière-plan pour tout travail long en session interactive ; tu restes disponible et tu surveilles. En session non interactive (`claude -p`), tout au premier plan et sans outil Workflow : la session s'arrête avec ton tour, et les agents avec elle.
-- Plusieurs agents à la fois : les workflows du plugin, `apv:vague` (implementers d'une vague) et `apv:revues` (revues), par l'outil Workflow ; ou plusieurs appels à l'outil Agent dans un même message, chacun en arrière-plan, quand l'outil Workflow n'est pas disponible ou que tu veux parler à chaque agent (`SendMessage`) pendant son travail.
-- Le message de lancement contient tout ce dont l'agent a besoin, car il ne voit pas ta conversation : chemin de la spec et identifiant de la tâche, branche de base (et commit), nom de la branche à créer, chemin de la consigne commune et des notes de vague, contrôles à lancer, ressources à prendre sous bail, format du rapport. Modèle : section 4 de `/apv:run`.
-- Worktree : un agent `isolation: worktree` part de la branche par défaut du dépôt. Soit la consigne lui fait créer sa branche depuis la base (`git switch -c <branche> <base>`), soit le projet règle `worktree.baseRef` à `"head"` dans `.claude/settings.json` et tu lances depuis la bonne tête.
-- Modèle : les agents sont en Opus, effort élevé. Tu peux passer un autre modèle à l'appel pour une tâche simple quand le quota est serré ; jamais pour les fondations, l'intégration ou les revues.
-- **Exécution dans une autre session** (`claude -p "/apv:run <id>"`) : lancée détachée (`setsid nohup`, journal `.apv/state/session-<id>.log`), jamais en simple tâche de fond du shell, qui meurt avec ta session. Tu la suis par un moniteur qui réagit au changement de `.apv/state/run-<id>.json` et à la fin du processus (outil Monitor, réarmé à chaque expiration, ou boucle bornée en arrière-plan), jamais par des relevés espacés de 30 minutes ; à chaque événement, `apv run next <id>`. Commandes : `docs/RUN.md`, « Exécution détachée et suivi ».
-- Un agent interrompu se reprend par `SendMessage` à son identifiant quand la session vit encore, un workflow par `resumeFromRunId` dans la même session ; sinon on relance un agent sur sa branche avec « termine <tâche> depuis le wip <hash> » (`apv run next` dit lesquels).
+## 5. Modules : seulement s'ils existent dans le projet
+`apv status` dit lesquels sont actifs. Un module absent ne coûte rien.
+- **design** (projet avec écrans et maquettes dans `docs/design/`) : `apv design list --screen <écran>` avant de coder un écran ; écran absent : `/apv:design` avec l'opérateur. `apv design check` avant la PR.
+- **données** (projet avec base et migrations) : au plus une nouvelle migration par PR ; `apv db check` avant la PR ; l'opérateur applique les migrations en production lui-même ; avec `release.migrations`, la mise en ligne attend « migration <version> appliquée » tapé par l'opérateur (jamais par toi).
+- **rgpd** (données personnelles, prestataires, pages légales) : `apv:dpo` seulement quand un traitement, un prestataire ou une page légale change.
+- **web** (site public) : `apv web audit` sur les PR qui touchent les pages publiques, et après déploiement.
+- **dast** (scan ZAP déclaré dans `review.dast`) : lancé par toi, sous son verrou, au niveau 2 et plus.
 
-## 5 bis. Copies détachées et attentes
-- Les copies détachées (revues, scan dynamique, livraison) vont dans ton dossier de session (le dossier de travail temporaire de la session Claude Code, où les permissions te laissent lancer tes commandes) ou sous un chemin que l'outil donne, jamais à côté du dépôt ; chacune est retirée par `git worktree remove` à la fin de son usage.
-- Pour attendre un processus ou un fichier (suite complète en arrière-plan, scan, exécution détachée) : `apv wait --pid <pid>` ou `apv wait --file <chemin> [--contains <texte>]`, 580 s au plus par appel, relancé au besoin ; jamais `sleep`, `tail --pid` ni une boucle sur `kill -0`, refusés en session non interactive.
-- Ports de la pile de test tenus par les serveurs d'une suite coupée : `apv procs list`, puis `apv procs stop` (ports déclarés dans `resources`), `--port <p>` ou `--repo <copie>` ; il n'arrête que des processus lancés dans un worktree lié du dépôt (checkout principal protégé, sauf `--include-main` sur un port de test déclaré ; jamais l'éditeur, un serveur de langage ou MCP), jamais `kill` à la main.
-- **Seule voie d'arrêt : `apv procs stop`.** Jamais `kill` du parent d'un processus (le parent d'une suite peut être la session elle-même : projet pilote, 28 septembre 2026, session coupée), jamais `pkill -f` ni `killall` (leur motif figure dans la ligne de commande du shell qui les lance). Le crochet Bash du plugin les refuse (section 18.2 de la spécification) ; `apv gates run` arrête d'ailleurs lui-même, à la fin d'une suite complète ou sur SIGINT, les serveurs qu'il a lancés.
-- **Installer dans une copie** : si son `node_modules` est un lien vers celui du dépôt principal, `npm ci` viderait la cible partagée (le crochet le refuse) ; `unlink node_modules` d'abord, puis `npm ci`.
-- **Docker et Supabase d'une pile de test** : jamais hors de son verrou. Quand le projet déclare ses piles (`stacks` de `.apv/config.json`), le crochet refuse `docker restart …`, `supabase db reset` et les autres commandes qui modifient une pile sans `flock <verrou>`, `apv lock run <ressource> --` ou la commande de verrou du projet devant.
-- **Piles inutilisées** : `apv stacks status` ; `apv stacks idle-stop --after 30m --watch` (en arrière-plan) arrête, sous leur verrou, les piles déclarées restées libres 30 min de suite ; `apv stacks start <id>` les redémarre avant usage.
+## 6. Sous-agents
+- Outil Agent avec le type du plugin, en arrière-plan ; plusieurs lancements indépendants dans un même message.
+- **Modèle** : celui de la section `models` de `.apv/config.json`. Par défaut Sonnet ; Opus seulement pour le modèle de données, les règles de sécurité et une nouvelle direction visuelle. **Effort** : `medium` pour le mécanique, `high` par défaut, `xhigh` pour le rare difficile, jamais `low`.
+- **Le message de lancement contient tout** (l'agent ne voit pas ta conversation) : chemin de la spec et de la tâche, branche et commit de base, branche à créer, `.apv/brief.md`, contrôles à lancer, format du rapport (commits en sortie brute, résultats chiffrés, niveau de confiance).
+- Un agent `isolation: worktree` part de la branche par défaut : fais-lui créer sa branche depuis la base (`git switch -c <branche> <base>`).
+- **Petite retouche** (une phrase, une ligne de registre, un critère) : tu la fais toi-même, tu ne réveilles pas un agent.
 
-## 6. Verrous
-Toute ressource partagée (base locale, remise à zéro, ports fixes, navigateur de test, aperçu) s'utilise sous bail : `apv lock run <ressource> -- <commande>`, une commande par bail. Le bail expire, le propriétaire est vérifié, la file d'attente est visible (`apv lock status`). Jamais de verrou tenu en attendant autre chose (incident 25), jamais de verrou sans fin (incident 28). Préfère isoler (base ou schéma par worktree, ports par agent) quand c'est possible.
+## 7. Ressources partagées
+- Base locale, ports, navigateur de test, aperçu : sous bail, `apv lock run <ressource> -- <commande>`. Jamais de verrou tenu en attendant autre chose.
+- Tests navigateur hors suite : par `apv suite share -- <commande>` ou `apv lock run`, qui attendent la suite complète.
+- Une seule suite complète à la fois sur la machine (l'outil tient la file).
+- Attendre : `apv wait --pid <pid>` ou `apv wait --file <chemin> --contains <texte>`, jamais `sleep`.
+- Arrêter des serveurs : `apv procs stop` seulement, jamais `kill` d'un parent, `pkill -f` ni `killall`.
+- Copies détachées dans ton dossier de session, retirées par `git worktree remove` après usage. Serveurs d'aperçu et piles inutiles arrêtés en fin de travail (`apv stacks idle-stop`, `apv preview stop`).
 
-## 7. Quota
-Relevé par `apv quota` avant chaque vague et toutes les 10 à 15 minutes pendant l'exécution. La consommation observée par vague est un repère pour doser le parallélisme, jamais un plafond. Seuils : **70 %** ralentir ; **85 %** finir les tâches en cours sans en lancer de nouvelles ; **95 %** sauvegarder (arrêt propre, commits « wip », push, notes de reprise) et prévenir l'opérateur. **Exécutions simultanées** : avant d'en lancer une de plus, `apv quota` et la fenêtre la plus contraignante, semaine comprise ; au niveau `ok`, autant d'exécutions que de piles de test libres ; au premier seuil (70 %), une de plus au maximum ; au-delà, aucune nouvelle, tu finis celles en cours. Ta propre consommation (vérifications, relectures, suivi) compte aussi. Toute pause pour le quota se note dans l'état, `apv run pause <id> --until <HH:MM> --note "<raison>"`, et se termine par `apv run resume <id>` : elle apparaît dans `apv run status` et `apv status`. Détails : `references/quota-sauvegarde.md`.
+## 8. Quota
+`apv quota` avant une vague. 70 % : moins d'agents en parallèle ; 85 % : finir l'engagé sans rien ouvrir ; 95 % : arrêt propre (commits, push, `resume.md`) et prévenir l'opérateur.
 
-## 8. Contrôles avant PR
-Pendant les vagues, chaque implementer ne lance que les contrôles de tâche (`apv gates run --stage task`, tests navigateur ciblés compris quand le contrôle déclare `affected`, signalés « ciblé » et jamais pris pour la suite complète) et, sans commande ciblée, ses fichiers e2e ; un test instable se répète seul (`<fichier>:<ligne>` ou `-g`, `--repeat-each` 20 au plus), jamais un fichier entier sous le verrou `e2e`. Conseille aux projets à interface des tests navigateur en mouvement réduit par défaut (Playwright : `use: { reducedMotion: 'reduce' }`), les tests d'animation gardant leur réglage : les instabilités de « Toujours rien » venaient surtout de clics pendant des animations. La suite complète est la tienne : avec `run.fullSuite` à `"final"` (défaut), à la dernière intégration de la spec et à la livraison ; les intégrations intermédiaires et les passes de corrections avancent sur les contrôles de tâche et les tests ciblés depuis la dernière suite complète, vérifiés au commit exact (`apv gates verify --commit <tête> --stage task --base <base ciblée>` à `0`) ; avec `"each-integration"`, à chaque intégration. L'outil tient ce rythme : sur une branche de l'exécution, `apv gates run --stage full` refuse (`GATE_RHYTHM`) quand `apv run next` attend le niveau tâche et donne la commande à lancer ; `--reason "<raison>"` pour une dérogation justifiée, journalisée dans l'état et les reçus. Le rythme ne retire aucune preuve : contrôles de tâche complets pour chaque implementer, tests négatifs, revues (sécurité aux attaques réelles comprise), suite rouge jamais ignorée, test instable traité comme un constat ; le compromis est qu'une régression entre vagues peut n'être vue qu'à la dernière intégration, les tests ciblés la limitant. Avant chaque push destiné à une PR, **tu** t'assures de la suite complète sur la tête exacte de la branche : `apv gates verify --commit <tête>` à `0` si elle y est déjà prouvée, sinon `apv gates run --stage full --base <base de la PR>` puis `apv gates verify --commit <tête>` qui doit sortir en `0`, `apv db check` si la base a changé, `apv design check` si le projet a des maquettes validées (une référence modifiée sans nouvelle validation bloque la PR) et, pour un projet web qui déclare la section `web`, la qualité des pages publiques mesurée par `apv web audit` (contrôle de la suite complète, sinon lancé par toi ; jamais un score relevé à la main). Un vert annoncé par un agent ne suffit pas. La suite complète exige un arbre propre (`GATE_DIRTY` sinon), attend son tour dans la file des suites de la machine (`suite.queue`) et signale à part les contrôles « réussis après relance » (`retryFailed`) : comptés comme réussis, notés comme constats d'instabilité. Avec `--base`, un contrôle qui déclare `repeatChanged` relance en plus, plusieurs fois, les seuls fichiers de test que la branche ajoute ou modifie : un échec (« test instable : échoue X fois sur N ») le rend rouge, `retryFailed` ne le rattrape jamais ; c'est un test à stabiliser (attendre un fait observable, `page.clock`, données propres au test), jamais à relancer jusqu'au vert ni à retirer. Conseille ce champ aux projets qui ont des tests navigateur (`${CLAUDE_PLUGIN_ROOT}/docs/CONFIGURATION.md`, section « Graphe de contrôles »).
+## 9. État : un seul fichier
+`.apv/state/resume.md` : ce qui est en cours, ce qui reste, la prochaine action, ce qui attend l'opérateur. **Réécrit** (jamais allongé) à la fin d'une livraison ou avant une coupure, 60 lignes au plus. Ce qui est fini part en archive. `apv run` garde l'état machine d'une fonctionnalité ; tu n'écris rien d'autre par obligation.
 
-## 9. Communication avec l'opérateur
-- Dans sa langue (celle de ses messages ; le français pour un opérateur francophone), phrases courtes, sans jargon inutile, sans tiret cadratin ni demi-cadratin.
-- Pendant la délégation : pas de questions, un court point d'étape seulement quand c'est utile (PR ouverte, aperçu mis à jour, pause de quota).
-- À la fin : liens des PR dans l'ordre de fusion, résumé par spec, preuves (contrôles avec nombres de tests, revues, ZAP), écarts assumés à valider, ce qui demande ses comptes ou son identité, adresse de l'aperçu. Chaque affirmation importante avec son niveau de confiance (section 9 bis) ; rien d'annoncé « corrigé » sans `prouve`.
-- Aucune promesse absolue ou risquée. Ce que tu n'as pas vérifié, tu le dis.
+## 10. Avec l'opérateur
+- Dans sa langue, phrases courtes, sans jargon, sans tiret cadratin.
+- Pendant le travail délégué : pas de question, sauf une décision qui lui revient (produit, maquette, comptes, identité légale, fusion, déploiement, production, dépense) ; groupe-les en un tour, avec ta recommandation, et avance sur le reste.
+- À la livraison : lien de la PR, ce qui change pour l'utilisateur, niveau de risque, preuves (tests chiffrés, relectures), ce qui attend l'opérateur.
+- Aucune promesse absolue. Ce que tu n'as pas vérifié, tu le dis.
 
-## 9 bis. Confiance calibrée et escalade
-Tous les rapports d'agents (constats de revue, causes trouvées, corrections, décisions prises seul, notes de grille) donnent pour chaque affirmation importante un niveau et ce qui le fonde : `prouve` (preuve reproductible jointe : test qui échoue puis passe, commande et sortie, capture), `probable` (lecture du code, raisonnement vérifiable, sans exécution), `suppose` (hypothèse). Sans preuve ou justification, l'affirmation est refusée. Détail et exemples : `references/confiance.md`.
+## 11. Ce qu'APV4 ne fait plus
+Relectures par prudence ; quatre domaines sur une PR d'une ligne ; contrôles relancés par l'implementer, puis l'intégrateur, puis toi ; suite complète à chaque intégration ; registres et pages de suivi retouchés à chaque étape ; spec de plusieurs centaines de lignes ; attente d'une PR prête derrière une autre sans raison technique. Si tu te surprends à en refaire un, arrête et livre.
 
-Seuils :
-- **`prouve`** : tu agis seul (intégrer, livrer, fusionner sur ordre de l'opérateur, lui déclarer « corrigé ») après avoir vérifié que la preuve porte sur l'affirmation.
-- **`probable`** : une vérification d'abord (un test ou une exécution, par toi ou par l'agent) qui la fait passer à `prouve` ; impossible à vérifier, elle est traitée comme `suppose`.
-- **`suppose`** : remontée à l'opérateur **avant** toute action sur la production, toute fusion et toute annonce « corrigé » ; le travail local et réversible continue.
-
-Le niveau retenu se note dans l'état quand tu marques une tâche ou la passe de corrections faite (`apv run set … done --confidence <niveau>`) ; `apv run next` liste ce qui reste en dessous de `prouve`. Une correction dont la cause observée n'a pas été reproduite n'est jamais annoncée « corrigée ». Les comptes rendus à l'opérateur (points d'étape, PR, remise finale) disent le niveau de chaque affirmation importante.
-
-## 10. Journal du pipeline
-Chaque incident (outil, agent, environnement, méthode) va dans `.apv/journal-pipeline.md` : date, étape, symptôme, cause, contournement, coût, amélioration proposée (`references/journal.md`). C'est la matière des améliorations d'APV.
+Le comportement APV3 complet reste disponible avec `"rules": { "mode": "strict" }` dans `.apv/config.json` ; son guide est archivé dans `docs/archive/v3/`.

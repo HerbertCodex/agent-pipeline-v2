@@ -2,15 +2,27 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { PipelineError } from '../domain/errors.js';
-/** Read-only Git call; null when Git refuses (unknown ref, not a repository). */
+/**
+ * Read-only Git call; null when Git refuses (unknown ref, not a repository). `GIT_NO_LAZY_FETCH` keeps a partial clone from
+ * fetching a missing object from its remote: a read never touches the network nor writes into the repository, the object
+ * is then simply unreadable.
+ */
 export function gitRead(cwd, args) {
     try {
-        return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }).trim();
+        return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1' } }).trim();
     }
     catch {
         return null;
     }
 }
+/**
+ * Git options in front of every diff that computes a delta or the files a change touches: a submodule is never ignored,
+ * whatever the configuration or `.gitmodules` say (`ignore = all` emptied the delta, security review of #141, A1), and
+ * no command recurses into one. Put before the subcommand; DELTA_DIFF goes after it.
+ */
+export const DELTA_GIT = ['-c', 'diff.ignoreSubmodules=none', '-c', 'submodule.recurse=false'];
+/** Options of `git diff` for a delta: every submodule seen, no rename detection (a rename is a removal and an addition), no external tool. */
+export const DELTA_DIFF = ['--ignore-submodules=none', '--no-renames', '--no-ext-diff', '--no-textconv'];
 /** Root of the working tree that contains `path`; refuses outside a Git repository (exit 1). */
 export function gitRoot(path) {
     const dir = resolve(path);

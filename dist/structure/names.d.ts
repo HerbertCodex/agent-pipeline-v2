@@ -1,5 +1,10 @@
 /** Extensions of source code files; everything else (docs, data, assets, SQL) is left out of the analysis. */
 export declare const CODE_EXTENSIONS: Set<string>;
+/**
+ * Name parts of a companion file (`x.svelte.ts`, `x.server.ts`, `x.d.ts`, `x.client.ts`): it belongs to the module `x`.
+ * Any other part makes another module (`dates.extra.ts` is not `dates.ts`).
+ */
+export declare const COMPANION_INFIXES: Set<string>;
 export interface FileName {
     /** Repository-relative path, `/` separated. */
     path: string;
@@ -18,6 +23,11 @@ export interface FileName {
     /** Lower-case words of the stem (`QuickAddDialog`: quick, add, dialog; `sign-in-origin`: sign, in, origin). */
     tokens: string[];
 }
+/**
+ * The module a file belongs to: its stem and the name parts that are neither a companion nor a test part
+ * (`x.svelte.ts`, `x.test.ts` -> `x`; `dates.extra.ts` -> `dates.extra`).
+ */
+export declare function entryKey(file: Pick<FileName, 'stem' | 'infixes'>): string;
 /** Lower-case words of a name: split on separators and on camelCase or PascalCase boundaries. */
 export declare function tokenize(stem: string): string[];
 /** A code file's name, parsed; null for anything that is not source code. */

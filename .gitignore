@@ -3,3 +3,5 @@ node_modules
 *.sqlite*
 .apv2/
 coverage/
+# Suivi groupé des constats ouverts : local, jamais publié (le dépôt est public, il décrit des faiblesses non corrigées).
+.apv/state/suivi-constats.md

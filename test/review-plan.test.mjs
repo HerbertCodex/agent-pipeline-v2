@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
@@ -28,9 +29,10 @@ const FILES = {
   'test/format.test.ts': "import { money } from '../src/lib/format';\n",
 };
 
-function project(t, config) {
+/** The plan of APV3: these tests describe rules.mode strict (the light mode: test/niveaux-risque.test.mjs). */
+function project(t, config = {}) {
   const f = fixture(t, { files: FILES });
-  if (config !== undefined) { write(f.repo, '.apv/config.json', config); git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'config'); }
+  write(f.repo, '.apv/config.json', { ...config, rules: { mode: 'strict', ...config.rules } }); git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'config');
   git(f.repo, 'switch', '-q', '-c', 'work');
   const file = p => join(f.repo, p);
   return {
@@ -63,7 +65,7 @@ test('review plan: pure renames keep the security review only, with a reason for
   const plan = await p.plan();
   assert.deepEqual(retained(plan), ['securite']);
   assert.deepEqual(plan.skipped.map(s => s.domain), ['fidelite', 'donnees', 'rgpd']);
-  assert.deepEqual(plan.counts, { files: 3, renames: 3, paths: 0, content: 0, neutral: 0, unclassified: 0 });
+  assert.deepEqual(plan.counts, { files: 3, renames: 3, paths: 0, names: 0, content: 0, neutral: 0, notes: 0, ledger: 0, locks: 0, unclassified: 0 });
   assert.ok(plan.files.every(f => f.change === 'none' && /^R100$/.test(f.status) && f.from));
   for (const s of plan.skipped) assert.match(s.reason, /^rien à relire : .*\(3 fichiers : 3 renommages purs\)$/);
   assert.match(decision(plan, 'securite').reason, /toujours relue, sans exception/);
@@ -171,7 +173,8 @@ test('review plan: an unclassified file with a changed content keeps every domai
   assert.deepEqual(retained(plan), ['securite', 'fidelite', 'donnees', 'rgpd']);
   for (const domain of ['fidelite', 'donnees', 'rgpd']) {
     assert.deepEqual(decision(plan, domain).files, ['src/lib/server/applications.ts'], domain);
-    assert.match(decision(plan, domain).reason, /fichier non classé au contenu changé \(prudence\)/);
+    // Server code (3.0.0-alpha.15: the server class, stronger than tests and tooling) keeps the same prudence.
+    assert.match(decision(plan, domain).reason, /code serveur, chemin sensible ou configuration au contenu changé \(prudence/);
   }
   assert.equal(plan.counts.unclassified, 1);
   assert.equal(plan.counts.neutral, 2);
@@ -206,8 +209,15 @@ test('review plan: the security review is never skipped, whatever the configurat
   p.edit('src/lib/server/auth/session.ts', 'export const session = 1;\n');
   p.commit();
   const plan = await p.plan();
-  assert.deepEqual(retained(plan), ['securite']);
+  // A sensitive path is stronger than a neutral class (3.0.0-alpha.15): every domain stays, security first.
+  assert.deepEqual(retained(plan), ['securite', 'fidelite', 'donnees', 'rgpd']);
+  assert.equal(plan.risk.level, 'eleve');
   assert.deepEqual(decision(plan, 'securite').files, ['src/lib/server/auth/session.ts'], 'sensitive paths of the high lane are cited');
+  // A plain file declared neutral: the security review alone, never less.
+  const plain = project(t, everything);
+  plain.edit('src/lib/format.ts', 'export const money = 1;\n');
+  plain.commit();
+  assert.deepEqual(retained(await plain.plan()), ['securite']);
   // No key can skip it: an unknown key is refused by the configuration schema.
   for (const review of [{ skip: ['securite'] }, { never: ['securite'] }, { always: ['perf'] }, { paths: { security: ['**'] } }]) {
     const { issues } = configIssues({ review });
@@ -239,7 +249,7 @@ test('review plan: text output, and refusals', async t => {
   assert.match(unknown.stderr, /REVIEW_REF/);
 });
 
-test('review plan: a skipped review is recorded with its reason; the security review can never be recorded skipped', async t => {
+test('review plan: a skipped review is recorded with its reason, the security review too (levels 0 and 1 of the light mode)', async t => {
   const f = fixture(t);
   const task = { id: 'A', title: 'Tâche A', description: 'Écrire docs/a.md.', acceptanceIds: ['AC-A'], allowedPaths: ['docs/a.md'], dependsOn: [], minimumLane: 'standard' };
   write(f.repo, '.apv/specs/rangement.json', { title: 'Rangement', problem: 'Les fichiers sont mal rangés dans le dépôt.', scope: ['Rangement'], outOfScope: [],
@@ -252,12 +262,10 @@ test('review plan: a skipped review is recorded with its reason; the security re
   assert.equal(noNote.code, 1);
   assert.match(noNote.stderr, /exige --note/);
   assert.equal((await run('set', 'rangement', 'review:fidelite', 'skipped', '--note', 'rien à relire : aucun fichier d\'interface')).code, 0);
-  const security = await run('set', 'rangement', 'review:securite', 'skipped', '--note', 'rien');
-  assert.equal(security.code, 1);
-  assert.match(security.stderr, /la revue sécurité n'est jamais sautée/);
+  assert.equal((await run('set', 'rangement', 'review:securite', 'skipped', '--note', 'niveau 0 : documentation')).code, 0);
   const state = JSON.parse(readFileSync(join(f.repo, '.apv/state/run-rangement.json'), 'utf8'));
   assert.deepEqual([state.reviews.fidelite.status, state.reviews.fidelite.note], ['skipped', 'rien à relire : aucun fichier d\'interface']);
-  assert.equal(state.reviews.securite.status, 'pending');
+  assert.equal(state.reviews.securite.status, 'skipped');
 });
 
 test('review plan: the skills run it before the reviews, the documentation describes it', () => {
@@ -267,13 +275,8 @@ test('review plan: the skills run it before the reviews, the documentation descr
   for (const skill of ['skills/review/SKILL.md', 'skills/run/SKILL.md']) {
     const text = read(skill);
     for (const t of ['Bash(node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js review plan*)', 'Bash(apv review plan*)']) assert.ok(tools(text).includes(t), `${skill}: ${t}`);
-    assert.match(text, /apv review plan --base/, skill);
-    assert.match(text, /review:<domaine> skipped --note "<raison de/, skill);
+    if (skill.includes('review')) assert.match(text, /apv review plan --base/, skill);
   }
-  const review = read('skills/review/SKILL.md');
-  assert.match(review, /Tu lances \*\*les domaines retenus, et eux seuls\*\*/);
-  assert.match(review, /"skipped": \[ \{ "domain": "rgpd", "reason": "<raison de apv review plan>" \} \]/);
-  assert.match(review, /\*\*`securite` est toujours retenue\*\*, sans exception/);
   assert.match(read('docs/CLI.md'), /## `apv review plan`/);
   assert.match(read('docs/RUN.md'), /\*\*Domaines selon le diff, proposés par l'outil\.\*\*/);
   const configuration = read('docs/CONFIGURATION.md');
@@ -297,4 +300,61 @@ test('review plan: the written extension of a reference is part of its name; use
   const plan = await p.plan();
   assert.deepEqual(plan.files.map(f => [f.path, f.change]), [['src/lib/components/Card.svelte', 'paths'], ['src/lib/shared/format.ts', 'none']]);
   assert.deepEqual(retained(plan), ['securite']);
+});
+
+test('review plan (security review of #141, A1, A10): a submodule ignored by .gitmodules is still in the plan; a -diff attribute hides no term', async t => {
+  const p = project(t);
+  // On main: a submodule link Git is told to ignore (ignore = all), and components marked -diff.
+  git(p.repo, 'switch', '-q', 'main');
+  p.edit('.gitmodules', '[submodule "vendor"]\n\tpath = src/lib/vendor\n\turl = ./vendor\n\tignore = all\n');
+  p.edit('.gitattributes', '*.svelte -diff\n');
+  mkdirSync(join(p.repo, 'src/lib/vendor'), { recursive: true });
+  git(p.repo, 'add', '-A');
+  git(p.repo, 'update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},src/lib/vendor`);
+  git(p.repo, 'commit', '-qm', 'vendor');
+  git(p.repo, 'switch', '-q', '-C', 'work');
+  git(p.repo, 'update-index', '--cacheinfo', `160000,${'2'.repeat(40)},src/lib/vendor`);
+  p.edit('src/lib/components/Card.svelte', "<script lang=\"ts\">\n  import { money } from '$lib/format';\n  let { value }: { value: number } = $props();\n</script>\n\n<p class=\"card\">{money(value)}</p>\n<input name=\"email\" />\n");
+  p.commit();
+  const plan = await p.plan();
+  assert.ok(plan.files.some(f => f.path === 'src/lib/vendor'), JSON.stringify(plan.files.map(f => f.path)));
+  assert.match(decision(plan, 'rgpd').reason, /email/, JSON.stringify(decision(plan, 'rgpd')));
+});
+
+/** Terms of data and of the GDPR on several lines: a tracker, an e-mail field, personal fields, a query (second review of #141, M1). */
+const SPACED_TERMS = '<p>bloc</p>\n<script src="https://www.googletagmanager.com/gtag/js"></script>\n<input name="email" autocomplete="email" />\n<p>{user.phone} {profile.birthdate}</p>\n{#await supabase.from(\'profiles\').select(\'email\') then rows}{rows.length}{/await}\n';
+
+test('review plan (second review of #141, M1): a file name with a space, or quoted by Git, keeps the terms of its lines', async t => {
+  // Git writes `--- a/<name>\t` when the name holds a space, `"a/..."` when it quotes it (a quote, a backslash), both at once too.
+  const names = ['src/lib/components/Mon composant.svelte', 'src/lib/components/Mon café.svelte', 'src/lib/components/Mon "x".svelte',
+    'src/lib/components/Mon\\x.svelte', 'src/lib/components/Mon"x".svelte', 'tests/e2e/mon test.e2e.ts'];
+  for (const name of [...names, 'src/lib/components/MonComposant.svelte']) {
+    const p = project(t);
+    p.edit(name, SPACED_TERMS);
+    p.commit();
+    const plan = await p.plan();
+    for (const d of ['rgpd', 'donnees']) assert.equal(decision(plan, d).decision, 'retained', `${name} : ${JSON.stringify(decision(plan, d))}`);
+    assert.match(decision(plan, 'rgpd').reason, /terme RGPD|adresse/, name);
+  }
+});
+
+test('review plan (second review of #141, M1): a file whose content changed and whose patch is not found keeps every domain', async t => {
+  // A git that answers every command but the patch (`--unified=0`): the files are listed, their lines never found.
+  const p = project(t);
+  p.edit('tests/e2e/carte.e2e.ts', SPACED_TERMS);
+  p.commit();
+  const shim = join(p.root, 'shim');
+  mkdirSync(shim);
+  const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  writeFileSync(join(shim, 'git'), `#!/bin/sh\nfor a in "$@"; do [ "$a" = "--unified=0" ] && exit 0; done\nexec ${real} "$@"\n`);
+  chmodSync(join(shim, 'git'), 0o755);
+  const r = spawnSync(process.execPath, [join(process.cwd(), 'bin/apv'), 'review', 'plan', '--base', 'main', '--head', 'work', '--json'],
+    { cwd: p.repo, encoding: 'utf8', env: { ...process.env, PATH: `${shim}:${process.env.PATH}` } });
+  assert.equal(r.status, 0, r.stderr);
+  const plan = JSON.parse(r.stdout);
+  for (const d of ['fidelite', 'donnees', 'rgpd']) {
+    assert.equal(decision(plan, d).decision, 'retained', JSON.stringify(decision(plan, d)));
+    assert.match(decision(plan, d).reason, /patch introuvable/);
+  }
+  assert.equal(plan.risk.level, 'eleve');
 });

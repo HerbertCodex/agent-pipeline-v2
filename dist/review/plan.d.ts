@@ -1,4 +1,6 @@
 import { type PathClass, type ReviewDomainName, type ReviewPlanSettings } from './config.js';
+import type { RulesMode } from '../rules/config.js';
+import { type DiffRisk, type ReviewLevel, type RiskLevel } from './risk.js';
 /**
  * `apv review plan`: the review domains proposed from the nature of a diff. Pilot project, 25 September 2026: a
  * spec of pure tidying (77 renames, rewritten imports, no behavior change, no migration, no screen) went through the
@@ -6,17 +8,28 @@ import { type PathClass, type ReviewDomainName, type ReviewPlanSettings } from '
  * - `securite` is always kept, without exception (no diff, key or option skips it);
  * - another domain is skipped only on a positive proof that it has nothing to read: every changed file is
  *   classified, and none of them touches the domain; a file that no class describes, with a changed content,
- *   keeps every domain (prudence);
+ *   keeps every domain (prudence), as does a file whose content changed and whose patch is not found;
  * - a pure rename (similarity 100 %) or a change that only rewrites import paths does not change content, except
- *   for a migration, whose name is what the migration tool records.
+ *   for a migration, whose name is what the migration tool records;
+ * - the server code, the sensitive paths of the high lane and the configuration are stronger than the neutral and
+ *   tooling classes (a file named as a test excepted): such a file keeps every domain like an unclassified one;
+ * - the risk level of the diff (src/review/risk.ts) is decided by the path only: `faible` when every file is a test,
+ *   documentation or a mockup without a term of data or GDPR; the content is never read as « text ».
+ * Reviews in proportion to the risk (issue #126, pilot project, 8 October 2026): a pure rename of class and id names
+ * (src/review/rename.ts) changes no content; the notes of the pipeline and a lockfile without its `package.json` keep the
+ * security review alone; `data-*` attribute names and the Markdown under `.apv/` hold no word of data or GDPR; each
+ * retained domain says whether the diff requires it or prudence keeps it (`basis`).
  */
 /** How the content of a changed file changed. */
 /**
  * - `none`: pure rename (similarity 100 %) or mode change;
  * - `paths`: only references to moved files rewritten (imports, paths in comments), imports reordered or rewrapped;
+ * - `names`: only class and id names renamed, in a pure rename of the whole diff (src/review/rename.ts);
  * - `content`: anything else (added, deleted, binary, any other changed line).
  */
-export type ChangeKind = 'none' | 'paths' | 'content';
+export type ChangeKind = 'none' | 'paths' | 'names' | 'content';
+/** Why a domain is kept: the diff requires it, or prudence keeps it (an unclassified file, a configuration, a term isolated). */
+export type ReviewBasis = 'diff' | 'prudence';
 export interface PlannedFile {
     path: string;
     /** Former path of a renamed file. */
@@ -25,11 +38,18 @@ export interface PlannedFile {
     status: string;
     change: ChangeKind;
     classes: PathClass[];
-    /** Domains this file keeps, with the reason. */
+    /** Domains this file keeps, with the reason and whether the diff requires them or prudence keeps them. */
     keeps: {
         domain: ReviewDomainName;
         why: string;
+        basis: ReviewBasis;
     }[];
+    /** Risk of this file, and why (src/review/risk.ts). */
+    risk: RiskLevel;
+    riskWhy: string;
+    /** Level of this file (src/review/risk.ts, ReviewLevel), and why. */
+    level: ReviewLevel;
+    levelWhy: string;
 }
 export interface DomainDecision {
     domain: ReviewDomainName;
@@ -40,9 +60,19 @@ export interface DomainDecision {
     files: string[];
     fileCount: number;
     forced: 'config' | 'operator' | null;
+    /**
+     * A retained domain: `diff` when a file requires it (and for securite, and a domain forced by the configuration or the
+     * operator), `prudence` when only prudence keeps it; null for a skipped domain.
+     */
+    basis: ReviewBasis | null;
 }
 export interface ReviewPlan {
     tool: 'apv review plan';
+    /** `leger`: the domains are those of the level; `strict`: the plan of APV3. */
+    mode: RulesMode;
+    /** The highest level of the files, and why. */
+    level: ReviewLevel;
+    levelReason: string;
     base: {
         ref: string;
         sha: string;
@@ -56,10 +86,18 @@ export interface ReviewPlan {
         files: number;
         renames: number;
         paths: number;
+        names: number;
         content: number;
         neutral: number;
+        notes: number;
+        ledger: number;
+        locks: number;
         unclassified: number;
     };
+    /** Ids of the mockup decisions (or decisions with a perimeter) the registry adds, changes or removes; `(registre illisible)` when a side cannot be read. */
+    ledgerMockups: string[];
+    /** Risk level of the diff: `faible` keeps at most securite and fidelite (plus what is forced); `eleve` is the plan as before. */
+    risk: DiffRisk;
     domains: DomainDecision[];
     retained: ReviewDomainName[];
     skipped: {
@@ -75,10 +113,18 @@ interface NameStatus {
 }
 /** `git diff --name-status -z -M`: one entry per changed file, the former path of a rename kept. */
 export declare function parseNameStatus(raw: string): NameStatus[];
+/** A hunk header of a `--unified=0` patch: where its lines start and how many, on each side. */
+export interface Hunk {
+    oldStart: number;
+    oldCount: number;
+    newStart: number;
+    newCount: number;
+}
 interface FilePatch {
     binary: boolean;
     removed: string[];
     added: string[];
+    hunks: Hunk[];
 }
 /** Changed lines of each file of a `--unified=0` patch, keyed by the new path (the old one for a deletion). */
 export declare function parsePatch(raw: string): Map<string, FilePatch>;
@@ -117,6 +163,14 @@ export interface PlanInput {
     sensitive: string[];
     /** Domains the operator forces (`--force`). */
     force: ReviewDomainName[];
+    /**
+     * Whether renames are detected (`-M`, the default: a pure rename is a change without content). False for the delta of a
+     * report (docs/ACCELERATION-LOTS.md, 4: « sans renommages »): a rename is a removal and an addition, so it touches the
+     * perimeter of both paths (security review of #141, A4).
+     */
+    renames?: boolean;
+    /** `leger` keeps only the domains of the level (no prudence); `strict` (default of this function) the plan of APV3. */
+    mode?: RulesMode;
 }
 export declare function planReviews(input: PlanInput): ReviewPlan;
 export {};

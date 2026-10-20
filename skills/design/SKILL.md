@@ -48,7 +48,7 @@ Une maquette se juge sur la grille de critique de la compétence `apv:design-art
   apv design register docs/design/brouillons/<nom>.html --name <nom> --title "<titre>" \
       --screens <écran1>,<écran2> --quote "<ses mots exacts>" --artifact <adresse de l'artefact>
   ```
-  L'outil copie le fichier vers `docs/design/<nom>-validee.html` (dossier réglable par `design.dir` dans `.apv/config.json`), calcule le sha256 et inscrit la décision `maquette-<nom>-validee` (confirmée, source opérateur, citation exacte). Il refuse une citation vide ou une validation avec réserve. Un nouveau versement d'une maquette déjà versée ajoute `maquette-<nom>-validee-v<n>`, qui remplace l'ancienne décision.
+  L'outil copie le fichier vers `docs/design/<nom>-validee.html` (dossier réglable par `design.dir` dans `.apv/config.json` ; rangé dans le sous-dossier de son groupe, `docs/design/<groupe>/<nom>-validee.html`, quand `design.groups` le déclare, ou celui donné par `--group`), calcule le sha256 et inscrit la décision `maquette-<nom>-validee` (confirmée, source opérateur, citation exacte). Il refuse une citation vide ou une validation avec réserve. Un nouveau versement d'une maquette déjà versée ajoute `maquette-<nom>-validee-v<n>`, qui remplace l'ancienne décision. Groupes ajoutés après coup : `apv design organize --dry-run`, puis `apv design organize`, range les maquettes déjà versées (`git mv`, chemin réécrit dans leur décision, fichiers qui citent l'ancien chemin listés, à mettre à jour dans le même commit).
 - Commite exactement les fichiers affichés par l'outil (maquette, registre JSON et Markdown), dans un commit dédié `design: maquette validée <nom>`. Les brouillons suivent la règle du projet (commités comme historique, ou laissés hors du dépôt).
 - `apv design check` doit sortir en `0`.
 - Annonce à l'opérateur : fichier, empreinte courte, décision, commit, et la suite (les écrans concernés seront codés depuis cette référence).
@@ -61,6 +61,8 @@ Une maquette se juge sur la grille de critique de la compétence `apv:design-art
 - **Aucune promesse risquée** : rien d'absolu sur la gratuité, les données, la publicité, les délais ou le support (« gratuit pendant la bêta », pas « gratuit pour toujours »).
 - **Noms fictifs** pour les entreprises, les personnes et les adresses de démonstration ; identité de l'éditeur jamais inventée (champ à compléter laissé visible).
 - **Mode sombre conçu, pas inversé** : surfaces en paliers, couleurs d'accent réajustées pour le contraste, ombres remplacées par des bordures ou des surfaces plus claires, illustrations vérifiées sur fond sombre.
+- **Composants existants d'abord.** Un nouvel écran d'une application qui existe reprend sa coquille, sa navigation, ses toasts, ses listes déroulantes, ses dialogues et ses icônes (carte du code `.apv/code-map.md`) ; une variante nécessaire se dessine comme variante nommée du composant existant. Projet pilote, 30 septembre 2026 : une administration codée avec sa propre coquille à côté de celle de l'application.
+- **Valeurs insécables.** Heures, dates, montants, nombres et unités ne se coupent pas en fin de ligne : en français, espaces insécables (« 14 h 47 », « 12 € »), vérifiées sur la capture à 390 px.
 - La référence est absolue : un écart nécessaire plus tard (accessibilité, contraste) est présenté à l'opérateur comme « écart assumé », et il décide.
 
 ## 6. Sans outil Artifact

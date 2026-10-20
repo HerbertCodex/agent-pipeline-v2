@@ -1,5 +1,5 @@
 import { type Infer } from './schema.js';
-export declare const VERSION = "3.0.0-alpha.8";
+export declare const VERSION = "4.0.0-alpha.5";
 export declare const lanes: readonly ["fast", "standard", "high"];
 export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];
@@ -53,6 +53,53 @@ export declare const skipWhenOnlySchema: import("./schema.js").Schema<{
     readonly except: string[] | undefined;
     readonly reference: string;
 }>;
+/** The lock of a check (`lock`): a lease of `apv lock` (`resource`) or a kernel `flock` on a file (`file`). */
+export declare const lockSchema: import("./schema.js").Schema<{
+    readonly resource: string;
+    readonly waitMs: number;
+} | {
+    readonly file: string;
+    readonly fileEnv: string | undefined;
+    readonly waitMs: number;
+}>;
+/**
+ * An early check of a full check (`early`, docs/ACCELERATION-LOTS.md, part C): a fast command the project declares so that
+ * what would fail at the end of the full suite (a size budget, captures of a screen no test imports) fails at the task
+ * stage. `when` (globs read at the base): it runs when a file changed since `{{baseSha}}` matches one, always without
+ * `when`. `dependsOn`: checks of stage task it needs (`build`). Nothing is inherited from the full check: its variables,
+ * lock and resources are its own. Its receipt is targeted, never proof of the full check.
+ */
+export declare const earlyCheckSchema: import("./schema.js").Schema<{
+    readonly id: string;
+    readonly command: string[];
+    readonly when: string[] | undefined;
+    readonly dependsOn: string[];
+    readonly timeoutMs: number;
+    readonly passEnv: string[];
+    readonly resources: string[];
+    readonly lock: {
+        readonly resource: string;
+        readonly waitMs: number;
+    } | {
+        readonly file: string;
+        readonly fileEnv: string | undefined;
+        readonly waitMs: number;
+    } | undefined;
+}>;
+export type EarlyCheck = Infer<typeof earlyCheckSchema>;
+/** Most globs of `reuse.ignore`, longest glob and most wildcards (`*` or `**`) in one: each path of two trees is compared to them. */
+export declare const MAX_REUSE_IGNORE = 100;
+export declare const MAX_REUSE_GLOB_LENGTH = 200;
+export declare const MAX_REUSE_GLOB_WILDCARDS = 16;
+/** Bounds of `reuse.maxAgeMs`: 6 h (a reuse must stay verifiable 4 h after it is written) to 7 days. */
+export declare const MIN_REUSE_MAX_AGE_MS = 21600000;
+export declare const MAX_REUSE_MAX_AGE_MS = 604800000;
+/** `reuse` of a check as an object (docs/ACCELERATION-LOTS.md, 5.2 A2): the files it never reads, the oldest origin it reuses. */
+export declare const reuseSettingsSchema: import("./schema.js").Schema<{
+    readonly ignore: string[] | undefined;
+    readonly maxAgeMs: number | undefined;
+}>;
+export type ReuseSettings = Infer<typeof reuseSettingsSchema>;
 export declare const gateSchema: import("./schema.js").Schema<{
     readonly id: string;
     readonly command: string[];
@@ -60,6 +107,7 @@ export declare const gateSchema: import("./schema.js").Schema<{
     readonly testPaths: string[];
     readonly timeoutMs: number;
     readonly passEnv: string[];
+    readonly requiredEnv: string[] | undefined;
     readonly dependsOn: string[];
     readonly resources: string[];
     readonly readOnly: boolean;
@@ -70,6 +118,7 @@ export declare const gateSchema: import("./schema.js").Schema<{
     readonly cacheTtlMs: number;
     readonly stage: "task" | "full" | undefined;
     readonly affected: string[] | undefined;
+    readonly affectedList: string[] | undefined;
     readonly lock: {
         readonly resource: string;
         readonly waitMs: number;
@@ -97,6 +146,27 @@ export declare const gateSchema: import("./schema.js").Schema<{
         readonly paths: string[];
         readonly except: string[] | undefined;
         readonly reference: string;
+    } | undefined;
+    readonly early: {
+        readonly id: string;
+        readonly command: string[];
+        readonly when: string[] | undefined;
+        readonly dependsOn: string[];
+        readonly timeoutMs: number;
+        readonly passEnv: string[];
+        readonly resources: string[];
+        readonly lock: {
+            readonly resource: string;
+            readonly waitMs: number;
+        } | {
+            readonly file: string;
+            readonly fileEnv: string | undefined;
+            readonly waitMs: number;
+        } | undefined;
+    }[] | undefined;
+    readonly reuse: boolean | {
+        readonly ignore: string[] | undefined;
+        readonly maxAgeMs: number | undefined;
     } | undefined;
 }>;
 /** Stage of a check; absent means `task`. */
@@ -274,6 +344,7 @@ export declare const configSchema: import("./schema.js").Schema<{
         readonly testPaths: string[];
         readonly timeoutMs: number;
         readonly passEnv: string[];
+        readonly requiredEnv: string[] | undefined;
         readonly dependsOn: string[];
         readonly resources: string[];
         readonly readOnly: boolean;
@@ -284,6 +355,7 @@ export declare const configSchema: import("./schema.js").Schema<{
         readonly cacheTtlMs: number;
         readonly stage: "task" | "full" | undefined;
         readonly affected: string[] | undefined;
+        readonly affectedList: string[] | undefined;
         readonly lock: {
             readonly resource: string;
             readonly waitMs: number;
@@ -311,6 +383,27 @@ export declare const configSchema: import("./schema.js").Schema<{
             readonly paths: string[];
             readonly except: string[] | undefined;
             readonly reference: string;
+        } | undefined;
+        readonly early: {
+            readonly id: string;
+            readonly command: string[];
+            readonly when: string[] | undefined;
+            readonly dependsOn: string[];
+            readonly timeoutMs: number;
+            readonly passEnv: string[];
+            readonly resources: string[];
+            readonly lock: {
+                readonly resource: string;
+                readonly waitMs: number;
+            } | {
+                readonly file: string;
+                readonly fileEnv: string | undefined;
+                readonly waitMs: number;
+            } | undefined;
+        }[] | undefined;
+        readonly reuse: boolean | {
+            readonly ignore: string[] | undefined;
+            readonly maxAgeMs: number | undefined;
         } | undefined;
     }[];
     readonly validationRules: {
@@ -368,6 +461,8 @@ export declare const repeatStatuses: readonly ["passed", "failed", "timed_out", 
  * scope (`scope` of the receipt); never a success by itself, `apv gates verify` recomputes the scope from the commit.
  */
 export declare const receiptStatuses: readonly ["passed", "failed", "timed_out", "cancelled", "spawn_error", "blocked", "cached", "passed_after_retry", "not_required"];
+/** How a receipt `cached` was reused (`reuse.basis`): identical trees, or identical inputs of the check. */
+export declare const reuseBases: readonly ["tree", "inputs"];
 /** Most changed files a receipt lists in `scope.files`; beyond, a check is always required. */
 export declare const MAX_SCOPE_FILES = 2000;
 /** What `apv web audit` records for the receipt of the check that runs it (`APV_WEB_RECORD`). */
@@ -397,12 +492,20 @@ export declare const receiptSchema: import("./schema.js").Schema<{
     readonly stderrHash: string;
     readonly diagnostic: string;
     readonly reusedFrom: string | null;
+    readonly finding: {
+        readonly kind: "setup" | "environment" | "unreachable";
+        readonly detail: string;
+    } | undefined;
     readonly stage: "task" | "full" | undefined;
     readonly dirty: boolean | undefined;
     readonly targeted: boolean | undefined;
     readonly override: {
         readonly run: string;
         readonly reason: string;
+    } | undefined;
+    readonly nearTimeout: {
+        readonly timeoutMs: number;
+        readonly percent: number;
     } | undefined;
     readonly lockWaitMs: number | undefined;
     readonly stack: string | undefined;
@@ -423,6 +526,8 @@ export declare const receiptSchema: import("./schema.js").Schema<{
         readonly base: string | null;
         readonly reference: string | null | undefined;
         readonly files: string[];
+        readonly importsOnly: string[];
+        readonly movedPathsOnly: string[];
         readonly times: number;
         readonly status: "passed" | "failed" | "timed_out" | "cancelled" | "spawn_error" | "none" | "no_base" | "not_run";
         readonly command: string[] | undefined;
@@ -438,6 +543,13 @@ export declare const receiptSchema: import("./schema.js").Schema<{
             readonly line: number;
             readonly text: string;
         }[];
+        readonly credited: {
+            readonly file: string;
+            readonly blob: string;
+            readonly runId: string;
+            readonly receipt: string;
+            readonly commit: string;
+        }[] | undefined;
     } | undefined;
     readonly web: {
         readonly required: boolean;
@@ -458,6 +570,32 @@ export declare const receiptSchema: import("./schema.js").Schema<{
         readonly fileCount: number;
         readonly files: string[];
         readonly blocking: string[];
+    } | undefined;
+    readonly early: {
+        readonly gate: string;
+        readonly id: string;
+        readonly required: boolean;
+        readonly reason: string;
+        readonly files: string[];
+    } | undefined;
+    readonly reuseIdentity: string | undefined;
+    readonly identityParts: {
+        readonly env: Record<string, string>;
+        readonly executable: string;
+        readonly local: string;
+        readonly copy: string;
+        readonly system: string;
+        readonly stack: string | null;
+    } | undefined;
+    readonly reuse: {
+        readonly fromRun: string;
+        readonly fromCommit: string;
+        readonly basis: "tree" | "inputs";
+        readonly inputsDigest: string;
+        readonly ignoreDigest: string;
+        readonly environment: string;
+        readonly changed: number;
+        readonly files: string[];
     } | undefined;
 }>;
 export type GateReceipt = Infer<typeof receiptSchema>;

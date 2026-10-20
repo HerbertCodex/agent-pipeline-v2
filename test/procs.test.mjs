@@ -18,7 +18,8 @@ const skip = linux ? false : 'apv procs lit /proc (Linux seulement)';
  * `script`, the code is written to that file and run from it (its path is then on the command line).
  */
 function server(t, cwd, { stubborn = false, listen = true, script } = {}) {
-  const code = [stubborn ? "process.on('SIGTERM', () => {});" : '',
+  // Never outlives its test, even if the test stops before its hook: five minutes at most.
+  const code = ['setTimeout(() => process.exit(0), 300000);', stubborn ? "process.on('SIGTERM', () => {});" : '',
     listen ? "require('node:net').createServer().listen(0, '127.0.0.1', function () { console.log(this.address().port); });"
       : "console.log(0); setInterval(() => {}, 1000);"].join('\n');
   if (script) { mkdirSync(dirname(script), { recursive: true }); writeFileSync(script, code); }

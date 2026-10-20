@@ -21,7 +21,7 @@ Avoid the common generic-AI look: interchangeable dashboard cards, decorative gr
 
 Cover loading, empty, error, success, focus and disabled states as relevant. Check keyboard reachability, labels, focus visibility, contrast and reduced motion with project tooling. Use responsive layouts appropriate to the agreed audience and devices; do not impose a universal pixel width. Light/dark support is required only when the approved product requires it.
 
-Prefer the existing design system over a competing token source. Do not fabricate screenshots, accessibility reports or browser results. Treat performance and layout stability as measurable requirements where the spec calls for them.
+Prefer the existing design system over a competing token source. Prefer the existing components too: the application shell, navigation, toasts, selects, dialogs and icons listed in the code map (`.apv/code-map.md`) are reused, or extended with a named variant, never redrawn for one screen; native elements the project reserves (`reuse.native`) go through their shared component, and the primitives of the global stylesheet are never redefined in a local style. Hours, dates, amounts and units never break at the end of a line (French: `14 h 47`, `12 €` with non-breaking spaces). Do not fabricate screenshots, accessibility reports or browser results. Treat performance and layout stability as measurable requirements where the spec calls for them.
 
 ## CSS convention
 

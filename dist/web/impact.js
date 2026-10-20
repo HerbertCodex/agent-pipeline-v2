@@ -50,6 +50,10 @@ export function auditBase(repo, ref, head) {
         return { ok: false, reason: 'not-behind', message: `la base commune de ${ref} et de ${head.slice(0, 12)} est ${head.slice(0, 12)} lui-même (commit égal à ${ref} ou en amont) : aucun changement à comparer, la base ne prouverait rien` };
     return { ok: true, base, reference };
 }
+/** Whether an argv runs `apv web audit` (`web` followed by `audit`), whatever its options. */
+export function runsWebAudit(argv) {
+    return argv.some((a, i) => a === 'web' && argv[i + 1] === 'audit');
+}
 /** `--base <ref>` of an `apv web audit --preview` command (argv of a check), or undefined when the command is not one. */
 export function webAuditGate(argv) {
     const at = argv.findIndex((a, i) => a === 'web' && argv[i + 1] === 'audit');

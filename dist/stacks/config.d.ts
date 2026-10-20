@@ -22,6 +22,8 @@ export declare const stackSchema: import("../domain/schema.js").Schema<{
     readonly ports: number[] | undefined;
     readonly stop: string[] | undefined;
     readonly start: string[] | undefined;
+    readonly fingerprint: string[] | undefined;
+    readonly normalizeEnv: string[] | undefined;
     readonly idleAfterMs: number | undefined;
     readonly commandTimeoutMs: number;
     readonly description: string | undefined;
@@ -38,6 +40,8 @@ export declare const stacksSchema: import("../domain/schema.js").Schema<{
     readonly ports: number[] | undefined;
     readonly stop: string[] | undefined;
     readonly start: string[] | undefined;
+    readonly fingerprint: string[] | undefined;
+    readonly normalizeEnv: string[] | undefined;
     readonly idleAfterMs: number | undefined;
     readonly commandTimeoutMs: number;
     readonly description: string | undefined;

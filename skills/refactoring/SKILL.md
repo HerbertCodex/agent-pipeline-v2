@@ -17,6 +17,8 @@ This skill provides engineering advice, not mandatory policy or execution permis
 
 Identify behavior that must remain unchanged, including errors, ordering and side effects. Preserve or add characterization coverage where control flow is poorly understood. Compiler-checked renames may require no new test, but changes in data structures and effects need regression coverage.
 
+When an element becomes used by two features, promote it: move it to the shared folders (`reuse.shared`), parameterize what differs, migrate every caller, delete the copies and anything the change leaves unused in the same change, then regenerate the code map (`apv map`). Duplicated blocks reported by `apv reuse check` (pairs `file:lines`) are the candidates; the ones already on the reference branch are resolved by a dedicated spec agreed with the operator, never silently.
+
 Make one coherent transformation at a time. Keep the approved scope; do not opportunistically redesign neighboring modules. Separate intentional feature changes from structural changes. Stop when the stated maintainability problem is resolved, not when every possible smell disappears.
 
 ## References on demand

@@ -61,6 +61,11 @@ export function auditBase(repo: string, ref: string, head: string): BaseOutcome 
   return { ok: true, base, reference };
 }
 
+/** Whether an argv runs `apv web audit` (`web` followed by `audit`), whatever its options. */
+export function runsWebAudit(argv: readonly string[]): boolean {
+  return argv.some((a, i) => a === 'web' && argv[i + 1] === 'audit');
+}
+
 /** `--base <ref>` of an `apv web audit --preview` command (argv of a check), or undefined when the command is not one. */
 export function webAuditGate(argv: readonly string[]): { base: string | null } | undefined {
   const at = argv.findIndex((a, i) => a === 'web' && argv[i + 1] === 'audit');

@@ -77,11 +77,18 @@ test('unknown quality is not a pass and cosmetic findings cannot request a repai
   assert.doesNotThrow(() => validateQualityChecks(report, context, new Set(['src/math.mjs'])));
 });
 
-test('a cached final receipt is distinct from a missing or failed check', () => {
+test('a cached final receipt is listed but never observed: the evidence of QA requires an execution (A1, point 4 of the project lead)', () => {
   const { record, run } = sample();
-  Object.assign(run.receipts[0], { status: 'cached', reusedFrom: 'OLDER' });
+  // Accepted: the receipt executed on the candidate is observed.
   let context = qualityContext(record, run);
   assert.deepEqual(context.validation.observed, ['unit']);
+  assert.equal(context.validation.gates[0].receiptId, 'R1');
+  // Refused: the same receipt reused from another commit is listed with its origin, never observed (no receipt id to cite).
+  Object.assign(run.receipts[0], { status: 'cached', reusedFrom: 'OLDER' });
+  context = qualityContext(record, run);
+  assert.deepEqual(context.validation.observed, []);
+  assert.equal(context.validation.gates[0].status, 'cached');
+  assert.equal(context.validation.gates[0].receiptId, null);
   assert.equal(context.validation.gates[0].reusedFrom, 'OLDER');
   run.receipts[0].status = 'failed'; run.receipts[0].exitCode = 1;
   context = qualityContext(record, run);

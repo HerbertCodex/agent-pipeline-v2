@@ -1,0 +1,85 @@
+import type { GhRunner } from '../stack/github.js';
+/**
+ * Merge traces: `apv stack merge` and `apv stack batch --merge` write one per merge, signed with the anchor key kept
+ * outside the repository, in `<git common dir>/apv/merges/`. `apv audit merges` walks the default branch and names every
+ * commit no trace accounts for: a merge or a push that did not go through the tool (and so skipped its rules). It is the
+ * check after the fact that makes up for a branch protection GitHub does not offer (a private repository on the free plan).
+ */
+export declare const MERGES_DIR: readonly ["apv", "merges"];
+export interface MergeTraceBody {
+    v: 1;
+    pr: number;
+    head: string;
+    target: string;
+    method: string;
+    mergeCommit: string | null;
+    at: string;
+    /** A rebase merge: the number of commits it landed, `mergeCommit` the last one (absent: one commit). */
+    commits?: number;
+    /** A merge on order: the proof the rules took (docs/PREUVE-REDUITE.md, 5.8); absent for any other merge. */
+    proof?: {
+        mode: 'full';
+    } | {
+        mode: 'reduced';
+        checkRun: number;
+        run: number;
+        name: string;
+    };
+}
+export interface MergeTrace extends MergeTraceBody {
+    sig: string;
+}
+export declare function writeMergeTrace(common: string, body: Omit<MergeTraceBody, 'v'>, key: Buffer): string;
+/** The signed traces; unsigned, altered or unreadable files are ignored. */
+export declare function readMergeTraces(common: string, key?: Buffer<ArrayBufferLike> | null): MergeTrace[];
+/**
+ * A commit on the audited branch that no signed trace accounts for. `order`: it carries the trailer of a merge on order
+ * (`Apv-Order`, src/orders/merge.ts) whose merged head is its second parent. The trailer is not signed and the audit does
+ * not match it with its signed order (keys at its first parent, comments of the pull request, digest of the order): it
+ * stays unaccounted, said « pied Apv-Order non vérifié », never laundered by a well-formed trailer.
+ */
+export interface UnaccountedCommit {
+    sha: string;
+    date: string;
+    subject: string;
+    merge: boolean;
+    order?: {
+        nonce: string;
+        step: string;
+    };
+    /** A merge on order: the check runs read at its merged head (`readOrderProofs`, F6), informative only. */
+    proofs?: string[];
+}
+export interface MergeAudit {
+    /** The branch audited (`origin/main`), and the commit it pointed to; null when it does not resolve. */
+    ref: string;
+    head: string | null;
+    since: string;
+    /** Why the audit starts there: the first trace, the option, or the default window. */
+    sinceReason: string;
+    commits: number;
+    traces: number;
+    unaccounted: UnaccountedCommit[];
+    /** Why the check runs of the merges on order were not read (offline, remote outside github.com). */
+    proofsNote?: string;
+}
+/** Default window when no trace exists yet: 30 days. */
+export declare const DEFAULT_AUDIT_DAYS = 30;
+/**
+ * Walks the first-parent history of `ref` since `since` (default: the first trace, else 30 days) and lists the commits
+ * no signed trace accounts for: a merge commit is accounted for by the trace of its merge commit or of the head it
+ * merged (second parent); a squash by the trace of its merge commit; a rebase by the trace of its last commit, which
+ * also accounts for the commits before it that the same merge landed (`commits`).
+ */
+export declare function auditMerges(repo: string, common: string, ref: string, options?: {
+    since?: string;
+    now?: Date;
+}): MergeAudit;
+/**
+ * For each merge on order no trace accounts for (a merge made in another environment, the cloud routine), the check
+ * runs read at its merged head (second parent): the reduced proof and the proof by the CI its first parent declares
+ * (docs/PREUVE-REDUITE.md 5.8, F6). Informative: the commit stays unaccounted, never laundered by a green check run.
+ */
+export declare function readOrderProofs(repo: string, audit: MergeAudit, gh: GhRunner | null, repository: string | null): Promise<MergeAudit>;
+/** Lines of an audit, for `apv status`, `apv audit merges` and the head of the report of `apv stack merge`. */
+export declare function auditLines(audit: MergeAudit): string[];

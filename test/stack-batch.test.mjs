@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { apv } from './cli-helpers.mjs';
+import { TEST_KEY_FILE, waive } from './support/rules.mjs';
 import { evaluateCommand, REASONS } from '../hooks/scripts/bash-guard.mjs';
 import { MERGE_REFUSED, processGh } from '../dist/stack/github.js';
 import { batchMerge, processGit } from '../dist/stack/batch.js';
@@ -47,6 +48,8 @@ function batchProject(t, behavior = {}) {
     git(repo, 'add', '-A'); git(repo, 'commit', '-qm', name); git(repo, 'push', '-q', 'origin', name);
     const sha = git(repo, 'rev-parse', 'HEAD');
     git(origin, 'update-ref', `refs/pull/${n}/head`, sha);
+    // The rules of each pull request (reviews, captures...) are not what these tests are about: the operator waived them.
+    waive(repo, sha, ['relecture', 'captures', 'controles', 'maquette']);
     prs[n] = { number: n, state: 'OPEN', isDraft: false, baseRefName: 'main', headRefName: name, headRefOid: sha, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN',
       statusCheckRollup: [{ __typename: 'CheckRun', name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }] };
   };
@@ -65,12 +68,14 @@ function batchProject(t, behavior = {}) {
     root, origin, repo, env,
     run: (args, extra = {}) => apv(repo, ['stack', 'batch', ...args], { ...env, ...extra }),
     main: () => git(origin, 'rev-parse', 'refs/heads/main'),
+    has: branch => { try { git(origin, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`); return true; } catch { return false; } },
     tree: ref => git(origin, 'rev-parse', `${ref}^{tree}`),
     merges: () => JSON.parse(readFileSync(file, 'utf8')).calls.filter(c => c[1] === 'merge').map(c => Number(c[2])),
     log: () => existsSync(join(repo, '.apv/state/stack.log')) ? readFileSync(join(repo, '.apv/state/stack.log'), 'utf8').trim().split('\n').map(l => JSON.parse(l)) : [],
   };
 }
 const allow = { APV_ALLOW_MERGE: '1' };
+const execFileSyncOk = (cmd, args) => { try { execFileSync(cmd, args, { stdio: 'ignore' }); return true; } catch { return false; } };
 
 test('batch: one full suite proves two pull requests together; without --merge nothing is merged', async t => {
   const p = batchProject(t);
@@ -114,6 +119,18 @@ test('batch --merge merges in order, tolerates the gap of each head, and ends on
   assert.equal(report.finalTree.identical, true);
   assert.equal(p.tree(p.main()), git(p.repo, 'rev-parse', `${report.proven.head}^{tree}`));
   assert.deepEqual(p.log().map(e => [e.event, e.pr, e.sameContent]), [['batch-merge', 11, true], ['batch-merge', 12, true]]);
+  // Then their branches are deleted on the remote, the others stay.
+  assert.deepEqual(report.cleanup.branches.map(b => [b.pr, b.branch, b.status]), [[11, 'pr-a', 'deleted'], [12, 'pr-b', 'deleted']]);
+  assert.deepEqual(['pr-a', 'pr-b', 'pr-bad', 'main'].map(b => p.has(b)), [false, false, true, true]);
+});
+
+test('batch --merge --keep-branches keeps the merged branches; --keep-branches goes with --merge', async t => {
+  const p = batchProject(t);
+  const r = await p.run(['11', '12', '--merge', '--keep-branches'], allow);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /Branche pr-a \(PR #11\) : gardée, --keep-branches\.\nBranche pr-b \(PR #12\) : gardée, --keep-branches\.\nLot fusionné\./);
+  assert.deepEqual(['pr-a', 'pr-b'].map(b => p.has(b)), [true, true]);
+  assert.equal((await p.run(['11', '12', '--keep-branches'])).code, 2);
 });
 
 test('a failed batch is not merged; --bisect isolates the faulty pull request, proves the rest and merges it', async t => {
@@ -169,6 +186,10 @@ test('the merge stops when the target changed outside the batch, or when a merge
   assert.match(s.json().stopped.reasons[0], /après la fusion de la PR #11, le contenu de main .* diffère de celui du lot prouvé/);
   assert.deepEqual(altered.merges(), [11], 'nothing else merged');
   assert.equal(altered.log().at(-1).event, 'batch-stop');
+  // Stopped on an anomaly after a merge: the branches stay for the examination, nothing is called for them.
+  assert.deepEqual(s.json().cleanup.branches.map(b => [b.branch, b.status, b.reason]), [['pr-a', 'kept', 'lot arrêté sur une anomalie : branches gardées pour l\'examen']]);
+  assert.ok(altered.has('pr-a'));
+  assert.ok(!JSON.parse(readFileSync(altered.env.FAKE_GH_STATE, 'utf8')).calls.some(c => c[0] === 'api'));
 });
 
 test('batch refuses an incoherent batch before building anything', async t => {
@@ -239,6 +260,42 @@ test('the setup of the batch comes from the target, not from the pull requests',
   assert.ok(existsSync(marker), 'the setup of the target ran');
 });
 
+test('AC-REUSE-TREE: a second batch of the same pull requests on the same target reuses the suite, its copy prepared first, and verify proves it (A1, A4, M2)', async t => {
+  const p = batchProject(t);
+  const setups = join(p.root, 'setups');
+  const count = () => existsSync(setups) ? readFileSync(setups, 'utf8').length : 0;
+  git(p.repo, 'switch', '-q', 'main');
+  writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({
+    gates: [{ id: 'suite', stage: 'full', command: [process.execPath, '-e', 'process.exit(require("fs").existsSync("BAD") ? 1 : 0)'] }],
+    batch: { setup: [process.execPath, '-e', `require("fs").appendFileSync(${JSON.stringify(setups)}, "x")`] } }));
+  git(p.repo, 'commit', '-qam', 'setup'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const first = await p.run(['11', '12', '--target', 'main', '--json']);
+  assert.equal(first.code, 0, first.stdout + first.stderr);
+  assert.match(first.json().lots[0].proof.summary, /^1\/1 contrôle\(s\) réussi\(s\) ; apv gates verify à 0/);
+  assert.equal(count(), 1, 'the copy of the first batch was prepared');
+  // Same pull requests, same target: a new head (a new merge commit), the same tree.
+  const second = await p.run(['11', '12', '--target', 'main', '--json']);
+  assert.equal(second.code, 0, second.stdout + second.stderr);
+  const [a, b] = [first.json().proven, second.json().proven];
+  assert.notEqual(a.head, b.head);
+  assert.equal(git(p.repo, 'rev-parse', `${a.head}^{tree}`), git(p.repo, 'rev-parse', `${b.head}^{tree}`));
+  assert.match(second.json().lots[0].proof.summary, new RegExp(`^1/1 contrôle\\(s\\) réussi\\(s\\) \\(dont 1 réutilisé\\(s\\) d'un arbre identique : suite de ${a.head.slice(0, 12)}\\) ; apv gates verify à 0`));
+  // Relecture sécurité de A1, M2: the fresh copy of the batch is prepared by batch.setup before any reuse is decided, so that
+  // its local state (node_modules, .env*) is the one compared with the origin's; the suite itself is reused.
+  assert.equal(count(), 2, 'batch.setup ran in the copy of the second batch, before its reuse');
+  assert.match(second.stderr, /Copie de la suite non préparée \(copie neuve du lot\) : préparation par batch\.setup/);
+  assert.doesNotMatch(second.stderr, /batch\.setup sauté/);
+  // The receipt cached proves the head of the second batch from the store, its worktree gone.
+  assert.equal((await apv(p.repo, ['gates', 'verify', '--commit', b.head])).code, 0);
+  // --replay: run anyway, the copy prepared again.
+  const replayed = await p.run(['11', '12', '--target', 'main', '--replay', 'suite', '--json']);
+  assert.equal(replayed.code, 0, replayed.stdout + replayed.stderr);
+  assert.match(replayed.json().lots[0].proof.summary, /^1\/1 contrôle\(s\) réussi\(s\) ; apv gates verify à 0/);
+  assert.equal(count(), 3);
+  assert.equal((await apv(p.repo, ['stack', 'plan', '11', '--replay', 'suite'])).code, 2, '--replay is for stack batch');
+  assert.equal((await p.run(['11', '--replay', 'all,suite'])).code, 2);
+});
+
 test('a signal between the proof and a merge stops the batch before it: interrupted, nothing merged', async t => {
   const p = batchProject(t);
   const env = { ...process.env, ...p.env };
@@ -266,8 +323,9 @@ test('Ctrl-C during the suite of a batch --merge: exit 130, "Lot interrompu", no
   writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({ gates: [{ id: 'suite', stage: 'full', timeoutMs: 60000,
     command: [process.execPath, '-e', `require("fs").writeFileSync(${JSON.stringify(started)}, ""); setTimeout(() => {}, 30000)`] }] }));
   git(p.repo, 'commit', '-qam', 'suite lente'); git(p.repo, 'push', '-q', 'origin', 'main');
-  const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
-  const child = spawn(process.execPath, [cli, 'stack', 'batch', '11', '12', '--merge', '--target', 'main'], { cwd: p.repo, env: { ...process.env, ...p.env, APV_ALLOW_MERGE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  // The rules read the operator journal signed with the key of the tests: the tool is loaded with it.
+  const cli = fileURLToPath(new URL('./support/cli-with-key.mjs', import.meta.url));
+  const child = spawn(process.execPath, [cli, TEST_KEY_FILE, 'stack', 'batch', '11', '12', '--merge', '--target', 'main'], { cwd: p.repo, env: { ...process.env, ...p.env, APV_ALLOW_MERGE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = ''; let err = '';
   child.stdout.on('data', c => { out += c; }); child.stderr.on('data', c => { err += c; });
   const exited = new Promise(done => child.once('exit', code => done(code)));
@@ -279,6 +337,21 @@ test('Ctrl-C during the suite of a batch --merge: exit 130, "Lot interrompu", no
   assert.match(out, /Lot interrompu \(SIGINT\) : rien d'autre ne sera fusionné\./);
   assert.match(out, /lot interrompu \(signal\) pendant la preuve du lot, avant toute fusion ; fusionnées : aucune/);
   assert.deepEqual(p.merges(), []);
+});
+
+test('a signal received after a merge: the batch stops, its merged branches stay, no branch call', async t => {
+  const p = batchProject(t, { signalOnMerge: [11] });
+  // The rules read the operator journal signed with the key of the tests: the tool is loaded with it.
+  const cli = fileURLToPath(new URL('./support/cli-with-key.mjs', import.meta.url));
+  const child = spawn(process.execPath, [cli, TEST_KEY_FILE, 'stack', 'batch', '11', '12', '--merge'], { cwd: p.repo, env: { ...process.env, ...p.env, APV_ALLOW_MERGE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = ''; let err = '';
+  child.stdout.on('data', c => { out += c; }); child.stderr.on('data', c => { err += c; });
+  const code = await new Promise(done => child.once('exit', c => done(c)));
+  assert.equal(code, 130, out + err);
+  assert.deepEqual(p.merges(), [11]);
+  assert.match(out, /Branche pr-a \(PR #11\) : gardée, lot interrompu \(signal\) : rien d'autre n'est fait\./);
+  assert.ok(p.has('pr-a'));
+  assert.ok(!JSON.parse(readFileSync(p.env.FAKE_GH_STATE, 'utf8')).calls.some(c => c[0] === 'api'), 'no branch call');
 });
 
 /** Target checks with repeatChanged (maxFiles 1), and PRs #16 (one test), #17 (one other test), #18 (two tests). */
@@ -366,4 +439,95 @@ test('batch: a suite refused before it ran is never bisected nor taken for a fai
   assert.deepEqual(report.culprits, []);
   assert.equal(report.proven, null);
   assert.match(report.stopped.reasons[0], /suite du lot refusée avant de tourner \(GATE_REPEAT\) : ce n'est pas un échec de suite, la bissection ne s'applique pas/);
+});
+
+test('batch: a suite failed by its infrastructure only is never bisected; --stacks gives the suite its test stacks', { skip: execFileSyncOk('flock', ['--version']) ? false : 'flock(1) missing' }, async t => {
+  const p = batchProject(t);
+  git(p.repo, 'switch', '-q', 'main');
+  const lock = join(p.root, 'stack1.lock');
+  // A check of a stack that needs the variable its stack gives; without it, it says so as a test would.
+  writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({
+    gates: [{ id: 'integration', stage: 'full', passEnv: ['STACK_URL'], lock: { file: lock },
+      command: [process.execPath, '-e', 'if (!process.env.STACK_URL) { console.error("Error: Variable STACK_URL absente"); process.exit(1); }'] }],
+    stacks: [{ id: '1', lockFile: lock, env: { STACK_URL: 'http://127.0.0.1:55321' } }, { id: '2', lockFile: join(p.root, 'stack2.lock'), env: { STACK_URL: 'http://127.0.0.1:57521' } }],
+  }));
+  git(p.repo, 'commit', '-qam', 'pile'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const failed = await p.run(['11', '12', '--bisect', '--json']);
+  assert.equal(failed.code, 1, failed.stdout + failed.stderr);
+  const report = failed.json();
+  assert.equal(report.lots.length, 1, 'no bisection');
+  assert.deepEqual(report.culprits, []);
+  assert.match(report.stopped.reasons[0], /suite du lot en échec par son infrastructure, pas par le code \(integration : variable d'environnement absente \(variable STACK_URL absente de l'environnement du contrôle\) ; panne d'infrastructure, pas un test en échec : donner l'environnement des piles de test : --stacks <pile> \(déclarées : 1, 2\)/);
+  const proven = await p.run(['11', '12', '--stacks', '2', '--json']);
+  assert.equal(proven.code, 0, proven.stdout + proven.stderr);
+  assert.deepEqual(proven.json().proven.members.map(m => m.number), [11, 12]);
+  // Wrong calls: an unknown stack, --stacks outside batch.
+  const unknown = await p.run(['11', '12', '--stacks', '9']);
+  assert.equal(unknown.code, 2);
+  assert.match(unknown.stderr, /--stacks : pile inconnue 9 \(déclarées : 1, 2/);
+  assert.equal((await p.run(['11', '12', '--stacks', '1,1'])).code, 2);
+  assert.equal((await apv(p.repo, ['stack', 'plan', '11', '--stacks', '1'], p.env)).code, 2);
+});
+
+test('batch --wait-ci: a pull request whose CI still runs is waited for; without it, the batch stops', async t => {
+  const p = batchProject(t, { pendingViews: { 11: 1 } });
+  const refused = await p.run(['11', '12', '--json']);
+  assert.equal(refused.code, 1);
+  assert.match(refused.json().stopped.reasons.join('\n'), /PR #11 : contrôle\(s\) en cours : ci/);
+  const state = JSON.parse(readFileSync(join(p.root, 'gh.json'), 'utf8'));
+  state.behavior.pendingViews = { 11: 3 };
+  writeFileSync(join(p.root, 'gh.json'), JSON.stringify(state));
+  const waited = await p.run(['11', '12', '--wait-ci', '1', '--json'], { APV_STACK_CI_POLL_MS: '5' });
+  assert.equal(waited.code, 0, waited.stdout + waited.stderr);
+  assert.match(waited.stderr, /PR #11 : contrôle\(s\) en cours \(ci\), attente de la CI \(--wait-ci, au plus 1 min\)\./);
+  assert.match(waited.stderr, /PR #11 : CI terminée \(1\/1 au vert\)\./);
+  for (const bad of ['0', '361', '1.5', 'x']) assert.equal((await p.run(['11', '12', '--wait-ci', bad])).code, 2, bad);
+});
+
+test('stack plan counts the changed test files at each stage, proposes the cut under maxFiles, and names a PR of reuse configuration', async t => {
+  const p = batchProject(t);
+  git(p.repo, 'switch', '-q', 'main');
+  const config = { gates: [{ id: 'e2e', stage: 'full', command: [process.execPath, '-e', '0'],
+    repeatChanged: { paths: ['tests/**/*.test.js'], command: [process.execPath, '-e', '0', '{{repeat}}'], maxFiles: 2, reference: 'origin/main' } }] };
+  writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify(config));
+  git(p.repo, 'commit', '-qam', 'repeat'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const state = JSON.parse(readFileSync(join(p.root, 'gh.json'), 'utf8'));
+  let base = 'main';
+  // #31 adds two tests, #32 and #33 one each, #34 changes the reuse section of the configuration.
+  for (const [n, files] of [[31, ['tests/a.test.js', 'tests/b.test.js']], [32, ['tests/c.test.js']], [33, ['tests/d.test.js']], [34, []]]) {
+    git(p.repo, 'switch', '-q', '-c', `pr-${n}`, base === 'main' ? 'main' : base);
+    mkdirSync(join(p.repo, 'tests'), { recursive: true });
+    for (const f of files) writeFileSync(join(p.repo, f), `test ${f}\n`);
+    if (n === 34) writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify({ ...config, reuse: { shared: ['src/lib/**'] } }));
+    git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', `pr ${n}`); git(p.repo, 'push', '-q', 'origin', `pr-${n}`);
+    const sha = git(p.repo, 'rev-parse', 'HEAD');
+    git(p.origin, 'update-ref', `refs/pull/${n}/head`, sha);
+    // The rules before a merge are not what this test is about: the operator waived them for each head.
+    waive(p.repo, sha);
+    state.prs[n] = { ...state.prs[11], number: n, baseRefName: base, headRefName: `pr-${n}`, headRefOid: sha };
+    base = `pr-${n}`;
+  }
+  writeFileSync(join(p.root, 'gh.json'), JSON.stringify(state));
+  git(p.repo, 'switch', '-q', 'main');
+  const r = await apv(p.repo, ['stack', 'plan', '31', '32', '33', '34', '--json'], p.env);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  const checks = r.json().checks;
+  assert.equal(checks.read, true, checks.error);
+  assert.deepEqual(checks.stages.map(s => [s.pr, s.counts[0].files, s.over]), [[31, 2, false], [32, 3, true], [33, 4, true], [34, 4, true]]);
+  assert.deepEqual(checks.parts, [[31], [32, 33, 34]]);
+  assert.deepEqual(checks.alone, []);
+  assert.deepEqual(checks.reuseConfig.map(x => x.pr), [34]);
+  const human = await apv(p.repo, ['stack', 'plan', '31', '32', '33', '34'], p.env);
+  assert.equal(human.code, 0, 'warnings never change the exit code');
+  assert.match(human.stdout, /Tests modifiés par étage \(depuis la cible ; plafond repeatChanged\.maxFiles : e2e 2\) :\n  PR #31 : e2e 2\n  PR #32 : e2e 3 : AU-DELÀ DU PLAFOND/);
+  assert.match(human.stdout, /ATTENTION : la suite complète du sommet serait refusée \(repeatChanged\.maxFiles\)\. Coupe proposée, chaque partie prouvée et fusionnée avant la suivante : #31 \| #32 #33 #34\./);
+  assert.match(human.stdout, /ATTENTION : PR #34 change la configuration surveillée par reuse : à fusionner seule d'abord/);
+  // One pull request over the ceiling on its own: to split, whatever the cut.
+  const alone = await apv(p.repo, ['stack', 'plan', '31', '--json'], p.env);
+  assert.deepEqual(alone.json().checks.alone, []);
+  config.gates[0].repeatChanged.maxFiles = 1;
+  writeFileSync(join(p.repo, '.apv', 'config.json'), JSON.stringify(config));
+  git(p.repo, 'commit', '-qam', 'plafond 1'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const over = await apv(p.repo, ['stack', 'plan', '31', '--json'], p.env);
+  assert.deepEqual(over.json().checks.alone, [{ pr: 31, gate: 'e2e', files: 2, max: 1 }]);
 });

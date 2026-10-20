@@ -1,7 +1,7 @@
 import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s } from './schema.js';
 import { invariant } from './errors.js';
-export const VERSION = '3.0.0-alpha.8';
+export const VERSION = '4.0.0-alpha.5';
 export const lanes = ['fast', 'standard', 'high'];
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'];
 /**
@@ -58,6 +58,36 @@ export const skipWhenOnlySchema = s.object({
     except: s.optional(s.array(s.string(1, 500), 1, 100)),
     reference: s.string(1, 200, /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/),
 });
+/** The lock of a check (`lock`): a lease of `apv lock` (`resource`) or a kernel `flock` on a file (`file`). */
+export const lockSchema = s.union(s.object({ resource: id, waitMs: s.default(s.number(0, 86_400_000), DEFAULT_LOCK_WAIT_MS) }), s.object({ file: s.string(1, 4000), fileEnv: s.optional(s.string(1, 100, /^[a-zA-Z_][a-zA-Z0-9_]*$/)), waitMs: s.default(s.number(0, 86_400_000), DEFAULT_LOCK_WAIT_MS) }));
+/**
+ * An early check of a full check (`early`, docs/ACCELERATION-LOTS.md, part C): a fast command the project declares so that
+ * what would fail at the end of the full suite (a size budget, captures of a screen no test imports) fails at the task
+ * stage. `when` (globs read at the base): it runs when a file changed since `{{baseSha}}` matches one, always without
+ * `when`. `dependsOn`: checks of stage task it needs (`build`). Nothing is inherited from the full check: its variables,
+ * lock and resources are its own. Its receipt is targeted, never proof of the full check.
+ */
+export const earlyCheckSchema = s.object({
+    id, command: argv,
+    when: s.optional(s.array(s.string(1, 500), 1, 100)),
+    dependsOn: s.default(s.array(id), []),
+    timeoutMs: s.default(s.number(10, 3600000), 120000),
+    passEnv: s.default(envNamesSchema, []),
+    resources: s.default(s.array(id), []),
+    lock: s.optional(lockSchema),
+});
+/** Most globs of `reuse.ignore`, longest glob and most wildcards (`*` or `**`) in one: each path of two trees is compared to them. */
+export const MAX_REUSE_IGNORE = 100;
+export const MAX_REUSE_GLOB_LENGTH = 200;
+export const MAX_REUSE_GLOB_WILDCARDS = 16;
+/** Bounds of `reuse.maxAgeMs`: 6 h (a reuse must stay verifiable 4 h after it is written) to 7 days. */
+export const MIN_REUSE_MAX_AGE_MS = 21_600_000;
+export const MAX_REUSE_MAX_AGE_MS = 604_800_000;
+/** `reuse` of a check as an object (docs/ACCELERATION-LOTS.md, 5.2 A2): the files it never reads, the oldest origin it reuses. */
+export const reuseSettingsSchema = s.object({
+    ignore: s.optional(s.array(s.string(1, MAX_REUSE_GLOB_LENGTH), 1, MAX_REUSE_IGNORE)),
+    maxAgeMs: s.optional(s.number(MIN_REUSE_MAX_AGE_MS, MAX_REUSE_MAX_AGE_MS)),
+});
 export const gateSchema = s.object({
     id, command: argv,
     // Reviewed coverage labels, never inferred from a successful exit code or a gate name.
@@ -66,6 +96,9 @@ export const gateSchema = s.object({
     testPaths: s.default(paths, []),
     timeoutMs: s.default(s.number(10, 3600000), 120000),
     passEnv: s.default(envNamesSchema, []),
+    // Variables without which the check cannot run (a test stack: its URL, its keys): absent, apv does not launch it and
+    // records the finding in the receipt (an infrastructure failure the tool observed, review of 1786b40, M3).
+    requiredEnv: s.optional(envNamesSchema),
     dependsOn: s.default(s.array(id), []),
     resources: s.default(s.array(id), []),
     // Operator assertion: neither this command nor its children writes to the shared workspace.
@@ -83,10 +116,15 @@ export const gateSchema = s.object({
     // base, for example `playwright test --only-changed={{baseSha}}`. Run by the task stage in place of the check,
     // never counted as proof of it. Optional, never defaulted: absent, parsing and hashing are unchanged.
     affected: s.optional(argv),
+    // The list of the test files `affected` would run for the changes since `{{baseSha}}`, by the same computation (for example
+    // `playwright test --only-changed={{baseSha}} --list`): every path of its output that is a file of the commit counts.
+    // Read at production by `apv release`, to tell a test that passed only after its relaunch from one the change concerns
+    // (docs/UNE-SUITE-PAR-PR.md, 3). Optional, never defaulted: absent, parsing and hashing are unchanged.
+    affectedList: s.optional(argv),
     // Resource the check shares with other copies of the repository (a test stack): held around its command, whose
     // timeout starts once it is held. A lease of `apv lock` (`resource`) or a kernel `flock` on a file (`file`).
     // Optional, never defaulted: absent, parsing and hashing are unchanged.
-    lock: s.optional(s.union(s.object({ resource: id, waitMs: s.default(s.number(0, 86_400_000), DEFAULT_LOCK_WAIT_MS) }), s.object({ file: s.string(1, 4000), fileEnv: s.optional(s.string(1, 100, /^[a-zA-Z_][a-zA-Z0-9_]*$/)), waitMs: s.default(s.number(0, 86_400_000), DEFAULT_LOCK_WAIT_MS) }))),
+    lock: s.optional(lockSchema),
     // Relaunch of the failed tests only (argv, same placeholders), run once when the command fails by itself, on the
     // same commit and tree: success gives `passed_after_retry`. `testPattern`: regular expression whose matches in the
     // output of the first pass name the tests concerned (capture group 1 when present). Optional, never defaulted.
@@ -98,6 +136,18 @@ export const gateSchema = s.object({
     // Scope of the proof: a full run whose changes only touch these paths records the check as not required (never run,
     // never proven by the command) after recomputing it from the commit. Optional, never defaulted.
     skipWhenOnly: s.optional(skipWhenOnlySchema),
+    // Early checks of a full check, run by the task stage when the change touches their scope: they add a check, never
+    // remove one; the full suite stays required. Optional, never defaulted: absent, parsing and hashing are unchanged.
+    early: s.optional(s.array(earlyCheckSchema, 1, 20)),
+    // Reuse of a green receipt (docs/ACCELERATION-LOTS.md, part A): `false` = never reused, always run (a check that reads a
+    // state outside the repository: an advisory database, the network, the time, an ignored file it does not regenerate).
+    // Absent: reused at an identical tree when its receipt checks out, except a command that runs `apv web audit` or `apv dast`.
+    // An object (A2): `ignore`, the files the check never reads (form by exclusion: every other file, a new one included, is an
+    // input), read at the merge base with the target, never from the change; `maxAgeMs`, the oldest origin reused (24 h when
+    // absent), read at the base too. The loader refuses `true`, an empty object, and a glob that covers a file never ignorable
+    // (configuration, dependencies, build, test and run settings, CI, migrations, scripts, .env*, the check's own test paths).
+    // Optional, never defaulted: absent, hashing is unchanged.
+    reuse: s.optional(s.union(s.boolean(), reuseSettingsSchema)),
 });
 /** Stage of a check; absent means `task`. */
 export const gateStage = (gate) => gate.stage ?? 'task';
@@ -230,6 +280,8 @@ export const repeatStatuses = ['passed', 'failed', 'timed_out', 'cancelled', 'sp
  * scope (`scope` of the receipt); never a success by itself, `apv gates verify` recomputes the scope from the commit.
  */
 export const receiptStatuses = ['passed', 'failed', 'timed_out', 'cancelled', 'spawn_error', 'blocked', 'cached', 'passed_after_retry', 'not_required'];
+/** How a receipt `cached` was reused (`reuse.basis`): identical trees, or identical inputs of the check. */
+export const reuseBases = ['tree', 'inputs'];
 /** Most changed files a receipt lists in `scope.files`; beyond, a check is always required. */
 export const MAX_SCOPE_FILES = 2000;
 const digest = s.string(64, 64, /^[a-f0-9]{64}$/);
@@ -251,6 +303,10 @@ export const receiptSchema = s.object({
     exitCode: s.nullable(s.number(0, 255)),
     stdoutHash: s.string(0, 64, /^(?:[a-f0-9]{64})?$/), stderrHash: s.string(0, 64, /^(?:[a-f0-9]{64})?$/),
     diagnostic: s.string(0, 16000), reusedFrom: s.nullable(id),
+    // A failure of the infrastructure the tool itself observed before or instead of running the command (a variable of passEnv
+    // absent from a stack check, a stack copy not prepared, an executable missing): never read from the output of the command.
+    // Only such a finding lets `apv release auto` run a suite again at the same commit (review of 1786b40, M3). Absent otherwise.
+    finding: s.optional(s.object({ kind: s.enum(['environment', 'unreachable', 'setup']), detail: s.string(1, 500) })),
     // Written by `apv gates run`: the stage it was asked for, and whether the working tree had uncommitted
     // changes (the receipt then describes more than `candidateSha`). Absent on older receipts.
     stage: s.optional(s.enum(gateStages)),
@@ -260,6 +316,9 @@ export const receiptSchema = s.object({
     // A full suite run while the execution `run` expected the task level at its current step (`apv gates run
     // --reason`): the reason, also journaled in the state of the execution. Absent otherwise.
     override: s.optional(s.object({ run: s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/), reason: s.string(1, 500) })),
+    // The longest pass of the command took at least 85 % of its timeout (`timeoutMs`): its share in percent. The timeout
+    // is to be raised before it breaks a proof (a timeout is not a safety guard). Absent below 85 %.
+    nearTimeout: s.optional(s.object({ timeoutMs: s.number(10, 86_400_000), percent: s.number(85, 1_000_000) })),
     // Time spent waiting for the lock of the check (`lock`) before its command started. Absent without a lock.
     lockWaitMs: s.optional(s.finite(0, 86_400_000)),
     // The declared test stack the check ran on (`apv gates run --stacks`), in its own copy when not the first. Absent otherwise.
@@ -281,6 +340,10 @@ export const receiptSchema = s.object({
         // The merge base with the reference (`repeatChanged.reference`) the files were also compared to; absent or null: none.
         reference: s.optional(s.nullable(sha)),
         files: s.array(s.string(1, 500), 0, 2000),
+        // Changed test files whose only differences with the base are the paths of their imports: listed, not repeated.
+        importsOnly: s.default(s.array(s.string(1, 500), 0, 2000), []),
+        // Changed test files whose only differing lines cite files renamed without change (old path -> new path): listed, not repeated.
+        movedPathsOnly: s.default(s.array(s.string(1, 500), 0, 2000), []),
         times: s.number(2, 100),
         status: s.enum(repeatStatuses),
         command: s.optional(argv),
@@ -289,6 +352,10 @@ export const receiptSchema = s.object({
         failures: s.default(s.array(s.object({ test: s.string(1, 500), count: s.number(1, 1_000_000) }), 0, 100), []),
         output: s.optional(s.string(0, 16000)),
         fixedWaits: s.default(s.array(s.object({ file: s.string(1, 500), line: s.number(1, 10_000_000), text: s.string(0, 300) }), 0, 100), []),
+        // The proof of the release only (docs/UNE-SUITE-PAR-PR.md, 2.2): changed test files left out of the repetition because a
+        // full receipt of the same check already repeated them, green, at the same content (`blob`). Never trusted: `apv
+        // release` finds the credit again in the store (repeatCredits). Absent elsewhere.
+        credited: s.optional(s.array(s.object({ file: s.string(1, 500), blob: s.string(40, 64, /^[a-f0-9]{40,64}$/), runId: id, receipt: id, commit: sha }), 0, 2000)),
     })),
     // What `apv web audit` run by the check recorded (`APV_WEB_RECORD`): whether the audit was required, from which base,
     // the changed files with a web effect, and the audit made (null: « not required », nothing measured). `apv gates verify`
@@ -308,6 +375,43 @@ export const receiptSchema = s.object({
         files: s.array(s.string(1, 4096), 0, MAX_SCOPE_FILES),
         blocking: s.default(s.array(s.string(1, 4096), 0, 50), []),
     })),
+    // An early check (`early` of a full check) run or skipped by the task stage: the full check it stands for (`gate`), its
+    // id, whether its `when` required it and why, and the changed files that matched (50 at most). Always targeted: never
+    // proof of the full check. Absent otherwise.
+    early: s.optional(s.object({
+        gate: id, id,
+        required: s.boolean(),
+        reason: s.string(1, 2000),
+        files: s.default(s.array(s.string(1, 4096), 0, 50), []),
+    })),
+    // A receipt `cached` (docs/ACCELERATION-LOTS.md, 5.3): the check was not run at this commit, its success is the one of
+    // the receipt `reusedFrom` (run `fromRun`, commit `fromCommit`), reused because the trees are identical (`basis: tree`)
+    // or because every file the check reads is (`basis: inputs`, digest `inputsDigest`, files ignored by the globs whose
+    // digest is `ignoreDigest`). `environment`: the reuse identity of the environment. `changed`, `files`: the files that
+    // differ between the two commits (none for `tree`). Never trusted: `apv gates verify` recomputes all of it from Git and
+    // the store. Only on a receipt `cached`; a receipt `cached` without it proves nothing.
+    // The identity of the environment for a reuse (docs/ACCELERATION-LOTS.md, 5.4), recorded by the run that executed the
+    // check: `environmentHash` without a stack; on a stack, its id and declaration (without its envFile) join the identity,
+    // and with `stacks[].fingerprint`, the variables of the stack are replaced by its fingerprint. Absent on older receipts:
+    // `environmentHash` stands for it.
+    reuseIdentity: s.optional(digest),
+    // The parts of that identity, each hashed apart (variables by name, executable, local state, ignored files of the copy,
+    // system, stack): when no origin is in the same environment, `apv gates run` names what differs. Never compared for a
+    // proof: `reuseIdentity` alone decides. Absent on older receipts and on a receipt never executed.
+    identityParts: s.optional(s.object({
+        env: s.record(/^[A-Za-z_][A-Za-z0-9_]*$/, digest, 400),
+        executable: digest, local: digest, copy: digest, system: digest, stack: s.nullable(digest),
+    })),
+    reuse: s.optional(s.object({
+        fromRun: id,
+        fromCommit: sha,
+        basis: s.enum(reuseBases),
+        inputsDigest: digest,
+        ignoreDigest: digest,
+        environment: digest,
+        changed: s.number(0, 10_000_000),
+        files: s.array(s.string(1, 4096), 0, MAX_SCOPE_FILES),
+    })),
 });
 export function validateReceipt(value) {
     const r = receiptSchema.parse(value);
@@ -316,9 +420,11 @@ export function validateReceipt(value) {
         invariant(r.exitCode === 0 && r.stdoutHash.length === 64 &&
             r.stderrHash.length === 64, 'RECEIPT', 'Successful receipt requires exit 0 and both stream digests');
     invariant((r.status === 'cached') === (r.reusedFrom !== null), 'RECEIPT', 'Only cache hits may reference an earlier receipt');
+    invariant(!r.reuse || r.status === 'cached', 'RECEIPT', 'Only a cached receipt records a reuse');
     invariant(!r.repeat || !['failed', 'timed_out', 'cancelled', 'spawn_error'].includes(r.repeat.status) || (r.status !== 'passed' && r.status !== 'cached' && r.status !== 'passed_after_retry'), 'RECEIPT', 'A receipt whose repetition of the changed tests failed is never a success');
-    invariant((r.status === 'not_required') === (r.scope?.required === false), 'RECEIPT', 'A receipt is not_required exactly when its scope says the check is not required');
-    invariant(r.status !== 'not_required' || (r.exitCode === null && r.scope.base !== null && r.scope.reference !== null && r.scope.referenceSha !== null &&
+    invariant(!r.early || (r.targeted === true && r.stage === 'task' && !r.scope && !r.repeat), 'RECEIPT', 'An early receipt is a targeted receipt of the task stage, never proof of its full check');
+    invariant((r.status === 'not_required') === (r.scope?.required === false || r.early?.required === false), 'RECEIPT', 'A receipt is not_required exactly when its scope (or the when of its early check) says the check is not required');
+    invariant(r.status !== 'not_required' || (r.early ? r.exitCode === null : r.exitCode === null && r.scope.base !== null && r.scope.reference !== null && r.scope.referenceSha !== null &&
         r.scope.files.length === r.scope.fileCount), 'RECEIPT', 'A not_required receipt runs nothing and lists every changed file with its bases');
     return r;
 }

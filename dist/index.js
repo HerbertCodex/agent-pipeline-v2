@@ -18,5 +18,6 @@ export { runGates, selectGates, RECEIPTS_DIR } from './gates/run.js';
 export { SHARED_RECEIPTS_DIR, DEFAULT_RECEIPT_RETENTION, sharedStore, publishRun, readSharedRun, pruneStore, listRuns, exportRun } from './gates/store.js';
 export { parseUsage, classifyQuota, reading as quotaReading, readQuota, QUOTA_THRESHOLDS, QUOTA_LOG } from './quota/usage.js';
 export { dispatch, commands } from './commands/index.js';
-export { registerMockup, listMockups, loadDesignConfig, sha256File, matchesScreen, DEFAULT_DESIGN_DIR } from './design/registry.js';
+export { registerMockup, listMockups, loadDesignConfig, sha256File, matchesScreen, mockupPlacement, DEFAULT_DESIGN_DIR } from './design/registry.js';
+export { organizeMockups } from './design/organize.js';
 //# sourceMappingURL=index.js.map

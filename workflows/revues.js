@@ -56,18 +56,15 @@ for (const review of input.reviews) {
   seen.add(review.domain)
 }
 
-// Domains the lead skipped on the plan of `apv review plan` (securite never): kept with their reason in the result.
+// Domains the lead skipped on the plan of `apv review plan` (securite too, at the levels 0 and 1 of the light mode): kept with their reason.
 const SKIPPED = Array.isArray(input.skipped) ? input.skipped : []
 const DEFAULTS = ['securite', 'fidelite', 'donnees', 'rgpd']
 for (const skip of SKIPPED) {
-  if (!skip || !DEFAULTS.includes(skip.domain)) throw new Error('Domaine sauté inconnu : ' + (skip && skip.domain) + ' (fidelite, donnees, rgpd).')
-  if (skip.domain === 'securite') throw new Error('La revue securite n\'est jamais sautée : retire-la de skipped.')
+  if (!skip || !DEFAULTS.includes(skip.domain)) throw new Error('Domaine sauté inconnu : ' + (skip && skip.domain) + ' (securite, fidelite, donnees, rgpd).')
   if (typeof skip.reason !== 'string' || !skip.reason.trim()) throw new Error('Le domaine sauté ' + skip.domain + ' a besoin de sa raison (reason, celle de apv review plan).')
   if (seen.has(skip.domain)) throw new Error('Domaine à la fois revu et sauté : ' + skip.domain)
   seen.add(skip.domain)
 }
-// A plan that skips domains never skips the security review: it runs in the same launch.
-if (SKIPPED.length && !input.reviews.some(r => r.domain === 'securite')) throw new Error('Des domaines sont sautés mais la revue securite manque : elle est toujours lancée.')
 
 const APV = typeof input.apv === 'string' && input.apv ? input.apv : 'node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js"'
 // The dynamic scan (`apv dast run`), run by the lead before the reviews: its report folder, or the reason there is none.
@@ -161,7 +158,10 @@ function reviewPrompt(review) {
     '`apv` désigne `' + APV + '` s\'il n\'est pas sur le PATH.',
     'Contrôles : sous /apv:run, la suite complète du projet passe sur ce commit à la dernière intégration, et la consigne commune cite ses reçus ; une revue ciblée après corrections n\'a que les reçus des contrôles de tâche et des tests ciblés, que la consigne dit comme tels (dis-le dans ton rapport). Ne relance ni la suite complète ni Playwright, sauf besoin précis de ton domaine, et alors seulement les fichiers utiles, sous `apv lock run e2e`. Sans reçus cités, le résultat des contrôles est « non vérifié » dans ton rapport, jamais « vert ».',
     typeof input.common === 'string' && input.common ? 'Consigne commune : ' + input.common : '',
+    'Lis d\'abord la carte de l\'architecture du commit (`docs/carte-architecture.md`, ou `structure.architectureMap`), puis la carte du code `.apv/code-map.md` : elles disent où va quoi et ce qui existe déjà.',
     review.domain === 'securite' ? dastLine() : '',
+    review.domain === 'fidelite' ? 'Réutilisation (point obligatoire, jamais sauté) : pour chaque nouveau composant ou bloc d\'interface, réponds à « quel composant existant aurait dû servir ? » d\'après la carte du code `.apv/code-map.md` du commit et les dossiers partagés (`reuse.shared`), et lance `' + APV + ' reuse check --repo ' + review.copy + ' --base <base de la PR>`. Un équivalent partagé existant et non utilisé (coquille, barre latérale, toast, liste déroulante refaits, élément natif réservé, primitive de style redéfinie, bloc copié) est un constat `eleve`, requis, avec le composant à utiliser et la copie à retirer. Placement : lance aussi `' + APV + ' structure check --repo ' + review.copy + ' --base <base de la PR>` ; un fichier ajouté à un dossier à plat, un dossier, une route principale ou un point d\'entrée nouveau sans rôle dans la carte de l\'architecture, un nom de dossier qui ne suit ni la convention de la pile ni le vocabulaire du projet sont des constats `moyen`, requis, avec le sous-dossier ou le rôle attendu (compétence `apv:structure`).' : '',
+    review.domain === 'fidelite' ? 'Parcours joué par la personne cible (point obligatoire, besoin précis de ton domaine) : rejoue chaque scénario utilisateur `AC-USER-<n>` de la spec sur ta copie, téléphone 390 px d\'abord puis 1280 px, par ce que la personne voit (libellés, boutons, liens), de « Étant donné » à « alors » ; note où elle hésiterait ou se tromperait. Résultat « alors » absent : constat bloquant, requis ; hésitation ou erreur plausible que rien de visible n\'exclut : constat classé selon son effet sur le parcours (section 8 de ton agent). Scénario injouable sur la copie (vrai service tiers, production) : non vérifié, laissé au parcours joué par l\'opérateur avant la fusion.' : '',
     typeof review.context === 'string' && review.context ? 'Consigne de ta revue : ' + review.context : '',
     '',
     'Rapport (sortie structurée) : domain = `' + review.domain + '` ; commit ; findings (gravité sur l\'échelle commune critique, eleve, moyen, faible, info, où « bloquant » vaut critique ou eleve selon l\'impact ;',
@@ -170,6 +170,8 @@ function reviewPrompt(review) {
     'evidence = la preuve observée pour `prouve`, la justification sinon, jamais vide (un constat sans evidence fait refuser tout le rapport) ; fix = la correction attendue) ;',
     'notVerified = ce qui n\'a pas pu être vérifié, avec la raison ; cleanup = confirmation du nettoyage (utilisateurs de test, serveurs, dossiers temporaires) ; summary = moins de 300 mots.',
     'Un écart déjà validé par l\'opérateur au registre n\'est pas un constat. Aucune attaque, capture ou mesure annoncée sans l\'avoir faite.',
+    DOMAINS[review.domain].inventory ? '' : 'Enregistrement (obligatoire : sans lui, `apv stack merge` refuse ce commit) : écris ton rapport complet, qui cite le commit `' + input.commit + '`, dans un fichier de ton dossier temporaire, puis, depuis ta copie, `' + APV + ' review record --commit ' + input.commit + ' --domain ' + review.domain + ' --reviewer apv:' + DOMAINS[review.domain].agentType.replace(/^apv:/, '') + ' --report <fichier> --critical <n> --high <n> --medium <n> --low <n>` (critique, eleve, moyen, faible de tes constats). Tu es le seul à pouvoir l\'enregistrer : le crochet du plugin le refuse à tout autre agent.',
+    review.domain === 'fidelite' ? 'Captures (obligatoires pour un changement d\'interface) : chaque écran changé capturé à 1280 et à 390 de large, en thème clair et en thème sombre, regardé à côté de la maquette validée, puis joint à l\'enregistrement : `--capture desktop:light:<fichier>`, `desktop:dark`, `phone:light`, `phone:dark` (PNG, JPEG ou WebP, une image distincte par capture ; plusieurs écrans : plusieurs captures par largeur et thème).' : '',
     domain.inventory ? 'Audit de concurrence : charge la compétence `apv:architecture-donnees` et suis la section 6 de sa référence `references/concurrence.md` sur TOUT le code du commit (serveur, tâches planifiées, interface, tests, outillage), pas seulement le diff.' : '',
     domain.inventory ? 'paths = l\'inventaire complet, chemins conformes compris : un élément par chemin lecture-modification-écriture ou motif trouvé, avec location (chemin et ligne), family (4.1 à 4.10), invariant, protection (mécanisme, ou « aucune »), status (conforme, non_conforme, inconnu), confidence (prouve, probable, suppose, comme un constat) et proof (test qui échoue sans la protection pour `prouve`, sinon ce qui a été lu et ce qui manque ; jamais vide). Chaque chemin non_conforme est aussi un constat dans findings.' : '',
   ].filter(line => line !== '').join('\n')

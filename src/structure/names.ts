@@ -12,6 +12,11 @@ const COMPONENT_EXTENSIONS = new Set(['svelte', 'vue', 'tsx', 'jsx', 'astro']);
 const TEST_INFIXES = new Set(['test', 'tests', 'spec', 'specs', 'e2e', 'bench', 'fixture', 'fixtures', 'mock', 'mocks', 'stories', 'story']);
 /** Test folders (`tests/`, `__tests__/`, `e2e/`) and test file names of other ecosystems (`test_x.py`, `x_test.go`). */
 const TEST_PATH = /(?:^|\/)(?:tests?|__tests__|__mocks__|testdata|e2e|fixtures)\/|(?:^|\/)test_[^/]+$|_test\.[a-z]+$/i;
+/**
+ * Name parts of a companion file (`x.svelte.ts`, `x.server.ts`, `x.d.ts`, `x.client.ts`): it belongs to the module `x`.
+ * Any other part makes another module (`dates.extra.ts` is not `dates.ts`).
+ */
+export const COMPANION_INFIXES = new Set(['svelte', 'server', 'client', 'd']);
 /** Entry points of a folder: never grouped nor renamed. */
 const ENTRY_STEMS = new Set(['index', 'main', 'mod', 'lib', 'init']);
 
@@ -32,6 +37,14 @@ export interface FileName {
   reserved: boolean;
   /** Lower-case words of the stem (`QuickAddDialog`: quick, add, dialog; `sign-in-origin`: sign, in, origin). */
   tokens: string[];
+}
+
+/**
+ * The module a file belongs to: its stem and the name parts that are neither a companion nor a test part
+ * (`x.svelte.ts`, `x.test.ts` -> `x`; `dates.extra.ts` -> `dates.extra`).
+ */
+export function entryKey(file: Pick<FileName, 'stem' | 'infixes'>): string {
+  return [file.stem, ...file.infixes.filter(i => !COMPANION_INFIXES.has(i) && !TEST_INFIXES.has(i))].join('.');
 }
 
 /** Lower-case words of a name: split on separators and on camelCase or PascalCase boundaries. */

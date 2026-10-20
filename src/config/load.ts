@@ -3,10 +3,10 @@ import { join, resolve } from 'node:path';
 import { s, type Infer } from '../domain/schema.js';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { IssueList, schemaIssues, type Issue } from '../domain/issues.js';
-import { DEFAULT_PASS_ENV, envNamesSchema, gateSchema, gateStage, riskSchema, validationRulesSchema } from '../domain/contracts.js';
+import { DEFAULT_PASS_ENV, MAX_REUSE_GLOB_WILDCARDS, envNamesSchema, gateSchema, gateStage, riskSchema, validationRulesSchema } from '../domain/contracts.js';
 import { skillsSchema } from '../domain/knowledge.js';
 import { previewSchema } from '../preview/config.js';
-import { designDir, designSchema } from '../design/config.js';
+import { designSchema, designSettings } from '../design/config.js';
 import { structureSchema, structureSettings } from '../structure/config.js';
 import type { PolicyConfig } from '../policy/policy.js';
 import { matches, validateDag } from '../policy/policy.js';
@@ -15,6 +15,14 @@ import { gitRead } from '../run/git-probe.js';
 import { reviewAlwaysSchema, reviewPathsSchema, reviewTermsSchema } from '../review/config.js';
 import { stackIssues, stacksSchema } from '../stacks/config.js';
 import { webIssues, webSchema } from '../web/config.js';
+import { runsWebAudit } from '../web/impact.js';
+import { mapSchema, mapSettings, reuseSchema, reuseSettings } from '../reuse/config.js';
+import { rulesSchema, rulesSettings } from '../rules/config.js';
+import { testsCheckSchema } from '../testcheck/check.js';
+import { freshnessIssues, freshnessSchema } from '../freshness/config.js';
+import { modelsSchema } from './models.js';
+import { operatorOrdersIssues } from '../orders/config.js';
+import { releaseIssues, releaseSchema } from '../release/config.js';
 
 /** V3 project configuration, versioned with the project. */
 export const CONFIG_FILE = '.apv/config.json';
@@ -24,7 +32,7 @@ export const LEGACY_CONFIG_FILE = 'pipeline.v2.json';
  * The only configuration sections the V3 tool reads. Agent, budget, timing, model and tuning fields of a
  * V2 file belong to the removed controller: they are ignored, never interpreted (spec, section 14).
  */
-export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'web'] as const;
+export const READ_SECTIONS = ['name', 'gates', 'risk', 'validationRules', 'environment', 'skills', 'preview', 'design', 'structure', 'run', 'spec', 'review', 'receipts', 'resources', 'suite', 'stacks', 'batch', 'stack', 'web', 'reuse', 'map', 'rules', 'testsCheck', 'freshness', 'models', 'release'] as const;
 /** Sections read and validated by their own command (`db`: `apv db check`, docs/DB-CHECK.md): never reported as ignored. */
 export const OWN_SECTIONS = ['db'] as const;
 
@@ -49,10 +57,22 @@ export const runSettingsSchema = s.object({
  * makes every layer wait for the integration of the previous one.
  */
 export const DEFAULT_SPEC_LIMITS = { maxTasks: 6, maxAcceptance: 30, maxDepth: 3 } as const;
+/**
+ * User scenarios of a spec that touches an interface (`apv spec validate`, code SPEC_USER_SCENARIOS): at least
+ * `minUserScenarios` criteria `AC-USER-<n>` written « Étant donné … quand … alors … » (or Given/When/Then), each
+ * verified by a browser test or by the journey played by the target person. `userScenarios` is the level of the
+ * finding: `warning` (default, existing specs keep validating) or `error` (refused at validation and at launch).
+ */
+export const USER_SCENARIO_LEVELS = ['warning', 'error'] as const;
+export type UserScenarioLevel = typeof USER_SCENARIO_LEVELS[number];
+export type UserScenarioSettings = { minUserScenarios: number; userScenarios: UserScenarioLevel };
+export const DEFAULT_USER_SCENARIOS: UserScenarioSettings = { minUserScenarios: 3, userScenarios: 'warning' };
 export const specSettingsSchema = s.object({
   maxTasks: s.default(s.number(1, 100), DEFAULT_SPEC_LIMITS.maxTasks),
   maxAcceptance: s.default(s.number(1, 1000), DEFAULT_SPEC_LIMITS.maxAcceptance),
   maxDepth: s.default(s.number(1, 100), DEFAULT_SPEC_LIMITS.maxDepth),
+  minUserScenarios: s.default(s.number(1, 5), DEFAULT_USER_SCENARIOS.minUserScenarios),
+  userScenarios: s.default(s.enum(USER_SCENARIO_LEVELS), DEFAULT_USER_SCENARIOS.userScenarios),
 });
 export type SpecLimits = { maxTasks: number; maxAcceptance: number; maxDepth: number };
 
@@ -71,6 +91,11 @@ export const dastSchema = s.object({
   passEnv: s.default(envNamesSchema, []),
   resource: s.default(s.string(1, 80, /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/), DEFAULT_DAST_RESOURCE),
   description: s.optional(s.string(1, 500)),
+  /**
+   * Environment file loaded into the command (`KEY=value`; `~` for the home folder, relative to the copy otherwise):
+   * refused when a value names an address outside the loopback (src/review/dast.ts). Never the values in the summary.
+   */
+  envFile: s.optional(s.string(1, 4096)),
 });
 export type DastSettings = Infer<typeof dastSchema>;
 /**
@@ -115,7 +140,20 @@ export const suiteQueueSchema = s.object({
   waitMs: s.default(s.number(0, 86_400_000), DEFAULT_SUITE_QUEUE.waitMs),
   maxLoad: s.optional(s.finite(0.1, 10_000)),
   loadWaitMs: s.default(s.number(0, 86_400_000), DEFAULT_SUITE_QUEUE.loadWaitMs),
+  /**
+   * Full suites at the same time on the machine (docs/CONFIGURATION.md, « Suite complète »): `1` (default) one at a time,
+   * whatever its stacks; `per-stack` one per test stack, each suite holding the place of every stack it uses; a number
+   * N, at most N at once, each holding the place of its stacks too. Two suites never share a stack.
+   */
+  slots: s.default(s.union(s.number(1, 64), s.literal('per-stack')), 1),
+  /**
+   * Longest a shared part (`apv suite share`, the automatic part of a targeted check or of `apv lock run` of a stack) holds
+   * the queue: past it, its lease is no longer renewed and a full suite no longer waits for it (default 2 h).
+   */
+  shareMaxMs: s.optional(s.number(1, 86_400_000)),
 });
+/** `suite.queue.shareMaxMs` by default: 2 h. */
+export const DEFAULT_SHARE_MAX_MS = 7_200_000;
 export type SuiteQueueSettings = Infer<typeof suiteQueueSchema>;
 export const suiteSettingsSchema = s.object({
   queue: s.optional(suiteQueueSchema),
@@ -134,6 +172,14 @@ export const batchSettingsSchema = s.object({
   setup: s.optional(s.array(s.string(1, 16000), 1, 200)),
   setupTimeoutMs: s.default(s.number(1000, 3_600_000), DEFAULT_SETUP_TIMEOUT_MS),
   passEnv: s.default(envNamesSchema, []),
+});
+
+/**
+ * `apv stack merge` and `apv stack batch --merge`: the branches their cleanup never deletes (globs, `*` within a segment,
+ * `**` across). Absent: the usual long-lived branches (DEFAULT_KEEP_BRANCHES of src/stack/branches.ts); `[]`: none by name.
+ */
+export const stackSettingsSchema = s.object({
+  keepBranches: s.optional(s.array(s.string(1, 200), 0, 100)),
 });
 
 /** Declared test ports, sorted and without duplicates, with the resources (and stacks, `pile <id>`) that declare them. */
@@ -178,11 +224,36 @@ export const apvConfigSchema = s.object({
   stacks: s.optional(stacksSchema),
   /** Preparation of a fresh copy (docs/CONFIGURATION.md, « Lot et copies »); absent: nothing is prepared. */
   batch: s.optional(batchSettingsSchema),
+  /** Pull request stacks: branches never deleted after a merge (docs/CONFIGURATION.md, « Pile de PR »); absent: the usual long-lived ones. */
+  stack: s.optional(stackSettingsSchema),
   /** Web quality of the public pages: Lighthouse and search and AI readiness (docs/CONFIGURATION.md, « Qualité web »); absent: `apv web audit` refuses. */
   web: s.optional(webSchema),
+  /** Reuse of the existing components: `apv reuse check` (docs/REUSE.md); absent: defaults. */
+  reuse: s.optional(reuseSchema),
+  /** Deterministic checks of the changed test files: `apv tests check` (docs/CONFIGURATION.md, « Tests modifiés »); absent: defaults. */
+  testsCheck: s.optional(testsCheckSchema),
+  /** The code map written by `apv map` (docs/REUSE.md); absent: `.apv/code-map.md`. */
+  map: s.optional(mapSchema),
+  /** What the rules checked before a merge add to their defaults (docs/REGLES.md); absent: defaults. No rule can be switched off. */
+  rules: s.optional(rulesSchema),
+  /** Freshness of the living state and resume files reported by `apv status` (docs/CONFIGURATION.md, « Fraîcheur de l'état »); absent: defaults. */
+  freshness: s.optional(freshnessSchema),
+  /** Model and effort of each role, passed to the Agent tool by the project lead and shown by `apv status` (docs/CONFIGURATION.md, « Modèles par rôle »); absent: defaults. */
+  models: s.optional(modelsSchema),
+  /** Release decoupled from the merge (`apv release`); absent: none. */
+  release: s.optional(releaseSchema),
 });
 /** The spec size thresholds of a configuration: `spec`, defaults for what is absent. */
-export const specLimits = (config: { spec?: Partial<SpecLimits> | undefined }): SpecLimits => ({ ...DEFAULT_SPEC_LIMITS, ...config.spec });
+export const specLimits = (config: { spec?: Partial<SpecLimits> | undefined }): SpecLimits => ({
+  maxTasks: config.spec?.maxTasks ?? DEFAULT_SPEC_LIMITS.maxTasks,
+  maxAcceptance: config.spec?.maxAcceptance ?? DEFAULT_SPEC_LIMITS.maxAcceptance,
+  maxDepth: config.spec?.maxDepth ?? DEFAULT_SPEC_LIMITS.maxDepth,
+});
+/** The user scenario settings of a configuration: `spec.minUserScenarios` and `spec.userScenarios`, defaults for what is absent. */
+export const userScenarioSettings = (config: { spec?: Partial<UserScenarioSettings> | undefined }): UserScenarioSettings => ({
+  minUserScenarios: config.spec?.minUserScenarios ?? DEFAULT_USER_SCENARIOS.minUserScenarios,
+  userScenarios: config.spec?.userScenarios ?? DEFAULT_USER_SCENARIOS.userScenarios,
+});
 /** The full suite rhythm of a configuration: `run.fullSuite`, `final` when absent. */
 export const fullSuiteMode = (config: { run?: { fullSuite: FullSuiteMode } | undefined }): FullSuiteMode => config.run?.fullSuite ?? DEFAULT_FULL_SUITE;
 export type ApvConfig = Infer<typeof apvConfigSchema>;
@@ -211,6 +282,10 @@ export function readSections(raw: unknown): { picked: Record<string, unknown>; i
   return { picked, ignored: Object.keys(input).filter(k => !known.includes(k)).sort() };
 }
 
+/** Longest pattern of `early.when` (characters), and most wildcards (`*` or `**`) in one: the cost of a match stays small. */
+export const MAX_WHEN_LENGTH = 200;
+export const MAX_WHEN_WILDCARDS = 16;
+
 /** Every problem of a configuration document: schema, duplicate ids, unknown dependencies, cycles. */
 export function configIssues(raw: unknown): { config: ApvConfig | undefined; ignored: string[]; issues: Issue[] } {
   let sections: ReturnType<typeof readSections>;
@@ -238,6 +313,54 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
         list.check(!target || gateStage(target) === 'task' || !!target.affected, 'CONFIG',
           `Gate ${gate.id} (targeted at stage task) depends on ${dep}, reserved for the full suite without a targeted variant`);
       }
+    }
+    // The list of the affected tests is counted since production: without {{baseSha}} it would say nothing about the change.
+    if (gate.affectedList) {
+      list.check(!!gate.retryFailed, 'CONFIG', `Gate ${gate.id}: affectedList tells an unstable test (passed after retryFailed) unrelated to the change; declare retryFailed too`);
+      list.check(gate.affectedList.includes('{{baseSha}}'), 'CONFIG', `Gate ${gate.id}: affectedList lists the tests concerned by the changes since {{baseSha}}; give the placeholder as a whole argument (--only-changed {{baseSha}})`);
+    }
+  }
+  // Early checks (`early`): fast commands of a full check run at the task stage, each with an id of its own (its receipt),
+  // after checks of stage task only, with portable globs (a brace would silently match nothing and never run it).
+  const used = new Set(ids);
+  for (const gate of value.gates) {
+    if (!gate.early) continue;
+    list.check(gateStage(gate) === 'full', 'CONFIG', `Gate ${gate.id}: early checks run at the task stage for a full check; declare "stage": "full"`);
+    for (const early of gate.early) {
+      list.check(!used.has(early.id), 'CONFIG', `Gate ${gate.id}: early check id ${early.id} is already used by a check or another early check`);
+      used.add(early.id);
+      for (const dep of early.dependsOn) {
+        const target = value.gates.find(g => g.id === dep);
+        list.check(!!target && gateStage(target) === 'task', 'CONFIG', `Gate ${gate.id}: early check ${early.id} depends on ${dep}, which is not a check of stage task (an early check runs at the task stage)`);
+      }
+      for (const glob of early.when ?? []) list.attempt('CONFIG', () => { try { matches('probe', glob); } catch (error) { throw new PipelineError('CONFIG', `Gate ${gate.id}: early check ${early.id}: when: ${errorMessage(error)}`); } });
+      // `when` is read from the candidate too (union with the base): a bounded pattern bounds the cost of each comparison
+      // with a changed file (matching is linear, src/policy/policy.ts), whatever the PR writes.
+      for (const glob of early.when ?? []) {
+        const wildcards = glob.match(/\*\*|\*/g)?.length ?? 0;
+        list.check(glob.length <= MAX_WHEN_LENGTH && wildcards <= MAX_WHEN_WILDCARDS, 'CONFIG',
+          `Gate ${gate.id}: early check ${early.id}: when: ${glob.slice(0, 80)}${glob.length > 80 ? '...' : ''} : ${glob.length} characters and ${wildcards} wildcards (* or **); at most ${MAX_WHEN_LENGTH} characters and ${MAX_WHEN_WILDCARDS} wildcards per pattern`);
+      }
+    }
+  }
+  // `reuse`: `false` (never reused), or an object (A2: `ignore`, `maxAgeMs`); absent is the default (reuse at an identical
+  // tree), `true` says nothing more. `ignore` (form by exclusion): portable bounded globs, none covering a file never
+  // ignorable (docs/ACCELERATION-LOTS.md, 5.2 A2), whatever the configuration says: the run and verify keep those files
+  // inputs anyway (src/gates/reuse.ts, NEVER_IGNORED), the loader says it first.
+  for (const gate of value.gates) {
+    list.check(gate.reuse !== true, 'CONFIG', `Gate ${gate.id}: reuse accepts false (never reused, always run) or { ignore, maxAgeMs }; leave it out to allow the reuse of a green receipt of an identical tree`);
+    if (!gate.reuse || gate.reuse === true) continue;
+    const settings = gate.reuse;
+    list.check(settings.ignore !== undefined || settings.maxAgeMs !== undefined, 'CONFIG', `Gate ${gate.id}: reuse {} says nothing; declare reuse.ignore (files the check never reads) or reuse.maxAgeMs, or leave reuse out`);
+    for (const glob of settings.ignore ?? []) {
+      let valid = true;
+      list.attempt('CONFIG', () => { try { matches('probe', glob); } catch (error) { valid = false; throw new PipelineError('CONFIG', `Gate ${gate.id}: reuse.ignore: ${errorMessage(error)}`); } });
+      const wildcards = glob.match(/\*\*|\*/g)?.length ?? 0;
+      list.check(wildcards <= MAX_REUSE_GLOB_WILDCARDS, 'CONFIG', `Gate ${gate.id}: reuse.ignore: ${glob.slice(0, 80)} : ${wildcards} wildcards (* or **); at most ${MAX_REUSE_GLOB_WILDCARDS} per pattern`);
+      if (!valid) continue;
+      const own = [...gate.testPaths, ...(gate.repeatChanged?.paths ?? [])].flatMap(globProbes).map(path => [path, 'un chemin de test du contrôle (testPaths ou repeatChanged.paths)'] as const);
+      const covered = [...NEVER_IGNORE_PROBES, ...own].find(([path]) => { try { return matches(path.toLowerCase(), glob.toLowerCase()); } catch { return false; } });
+      list.check(!covered, 'CONFIG', `Gate ${gate.id}: reuse.ignore « ${glob} » covers ${covered?.[0]} (${covered?.[1]}), never ignorable: list only files the check never reads (tests of other checks, documentation...)`);
     }
   }
   for (const [resource, { ports }] of Object.entries(value.resources ?? {})) {
@@ -271,7 +394,7 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
     const scope = gate.skipWhenOnly;
     if (!scope) continue;
     // `apv web audit` decides its own scope (web paths, recomputed by verify): never mixed with skipWhenOnly.
-    const webAudit = [gate.command, gate.affected ?? []].some(argv => argv.some((x, i) => x === 'web' && argv[i + 1] === 'audit'));
+    const webAudit = [gate.command, gate.affected ?? []].some(runsWebAudit);
     list.check(!webAudit, 'CONFIG', `Gate ${gate.id}: skipWhenOnly cannot be declared on a check that runs apv web audit (the audit decides whether it is required from web.paths)`);
     for (const [field, globs] of [['paths', scope.paths], ['except', scope.except ?? []]] as const) {
       for (const glob of globs) list.attempt('CONFIG', () => { try { matches('probe', glob); } catch (error) { throw new PipelineError('CONFIG', `Gate ${gate.id}: skipWhenOnly.${field}: ${errorMessage(error)}`); } });
@@ -287,8 +410,15 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
   }
   const ruleIds = value.validationRules.map(r => r.id);
   list.check(new Set(ruleIds).size === ruleIds.length, 'CONFIG', 'Duplicate validation rule id');
-  if (value.design) list.attempt('CONFIG', () => designDir(value.design));
+  if (value.design) list.attempt('CONFIG', () => designSettings(value.design));
   if (value.structure) list.attempt('CONFIG', () => structureSettings(value.structure));
+  if (value.reuse) list.attempt('CONFIG', () => reuseSettings(value.reuse));
+  if (value.map) list.attempt('CONFIG', () => mapSettings(value.map));
+  if (value.rules) list.attempt('CONFIG', () => rulesSettings(value.rules, []));
+  if (value.rules?.operatorOrders) {
+    const context = { gates: value.gates, ciProof: value.rules.ciProof, requiredGates: value.rules.requiredGates };
+    for (const message of operatorOrdersIssues(value.rules.operatorOrders, context)) list.check(false, 'CONFIG', message);
+  }
   for (const arg of value.review?.dast?.command ?? []) {
     if (!arg.includes('{{')) continue;
     const key = /^\{\{([A-Za-z]+)\}\}$/.exec(arg)?.[1];
@@ -296,12 +426,46 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
       `review.dast.command: unknown or partial placeholder ${arg} (whole arguments only: ${DAST_PLACEHOLDERS.map(k => `{{${k}}}`).join(', ')})`);
   }
   // Portable globs only (the syntax of allowedPaths): a brace or a negation would silently match nothing.
+  for (const key of ['e2e', 'unit', 'ignore'] as const) {
+    for (const glob of value.testsCheck?.[key] ?? []) list.attempt('CONFIG', () => { try { matches('probe', glob); } catch (error) { throw new PipelineError('CONFIG', `testsCheck.${key}: ${errorMessage(error)}`); } });
+  }
   for (const [key, globs] of Object.entries(value.review?.paths ?? {})) {
     for (const glob of globs ?? []) list.attempt('CONFIG', () => { try { matches('probe', glob); } catch (error) { throw new PipelineError('CONFIG', `review.paths.${key}: ${errorMessage(error)}`); } });
   }
   if (value.web) for (const message of webIssues(value.web)) list.check(false, 'CONFIG', message);
+  if (value.freshness) for (const message of freshnessIssues(value.freshness)) list.check(false, 'CONFIG', message);
+  if (value.release) for (const message of releaseIssues(value.release)) list.check(false, 'CONFIG', message);
   if (list.empty) list.attempt('DAG', () => validateDag(value.gates));
   return { config: list.empty ? value : undefined, ignored: sections.ignored, issues: list.items };
+}
+
+/**
+ * Files that `reuse.ignore` never covers (docs/ACCELERATION-LOTS.md, 5.2 A2): a probe of each kind of file of the list
+ * ALWAYS_REQUIRED of src/gates/proof-scope.ts without the test folders (the configuration of the checks, the manifests and
+ * lock files of the dependencies, the build, test and run settings, the CI, the migrations, scripts/**, .env*). A glob that
+ * matches one of them is refused (case ignored). Nothing is ignored for now: the reuse by inputs is disabled until the
+ * declaration is proven (INPUTS_REUSE_DISABLED, src/gates/reuse-proof.ts).
+ */
+export const NEVER_IGNORE_PROBES: readonly (readonly [string, string])[] = [
+  ...['.apv/config.json', 'pipeline.v2.json'].map(p => [p, 'configuration des contrôles'] as const),
+  ...['package.json', 'apps/web/package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', 'apps/web/package-lock.json',
+    '.npmrc', '.yarnrc.yml', 'pnpm-workspace.yaml', '.nvmrc', '.node-version', '.tool-versions', 'requirements.txt', 'pyproject.toml', 'poetry.lock', 'uv.lock',
+    'Cargo.toml', 'Cargo.lock', 'go.mod', 'go.sum', 'Gemfile', 'Gemfile.lock', 'composer.json', 'composer.lock', 'deno.json', 'flake.nix', 'flake.lock']
+    .map(p => [p, 'manifeste ou verrou des dépendances'] as const),
+  ...['vite.config.ts', 'svelte.config.js', 'playwright.config.ts', 'vitest.config.ts', 'eslint.config.js', 'apps/web/vite.config.ts', 'tsconfig.json', 'tsconfig.app.json',
+    'jsconfig.json', '.babelrc', 'Dockerfile', 'docker-compose.yml', 'compose.yaml', 'Makefile', 'justfile', 'vercel.json', 'netlify.toml', 'supabase/config.toml']
+    .map(p => [p, 'configuration de build, de test ou d\'exécution'] as const),
+  ...['.github/workflows/ci.yml', '.gitlab-ci.yml', '.husky/pre-commit', '.gitattributes', '.gitmodules'].map(p => [p, 'CI ou machinerie du dépôt'] as const),
+  ...['supabase/migrations/20260101000000_init.sql', 'db/migrations/001_init.sql', 'migrations/001.sql', 'prisma/migrations/1/migration.sql', 'schema.sql']
+    .map(p => [p, 'migration'] as const),
+  ...['scripts/check.mjs', 'scripts/e2e/lock.mjs', 'run.sh'].map(p => [p, 'script'] as const),
+  ...['.env', '.env.local', '.env.test', 'apps/web/.env.local'].map(p => [p, 'fichier .env*'] as const),
+];
+
+/** Concrete paths a glob of the check matches (`**` as nothing and as one folder, `*` and `?` as one character). */
+function globProbes(glob: string): string[] {
+  const fill = (dirs: string): string => glob.replace(/\*\*\//g, dirs).replace(/\*\*/g, 'x').replace(/[*?]/g, 'x');
+  return [...new Set([fill(''), fill('a/')])];
 }
 
 /** Source files of common stacks: a `skipWhenOnly.paths` glob that matches one of them is too broad (refused). */

@@ -1,9 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { posix } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
+import { parseJson } from '../domain/schema.js';
+import { decisionLedgerSchema, LEDGER_FILE } from '../lifecycle/decisions.js';
 import { matches } from '../policy/policy.js';
-import { resolveCommit } from '../run/git-probe.js';
+import { DELTA_GIT, resolveCommit } from '../run/git-probe.js';
 import { ALWAYS_REVIEWED, PATH_CLASSES, REVIEW_DOMAINS } from './config.js';
+import { pureRename, renameKind, renamedNames } from './rename.js';
+import { covers, isScreen, mockupsOf } from '../rules/screens.js';
+import { AGENT_INSTRUCTIONS, CI_WORKFLOWS, CONFIG_FILES, GUARD_FILES, LEDGER_FILES, LOCK_FILES, MANIFEST_FILES, PILOT_NOTES, PILOT_NOTE_EXTENSIONS, ROUTING_DIR, ROUTING_TEST_DIR, SERVED_DIR, SERVER_GENERIC, SPEC_NOTES, TEST_DIRS, TEST_NAME, diffRisk, realAddress, } from './risk.js';
 const FILES_SHOWN = 50;
 const MAX_DIFF_BYTES = 512 * 1024 * 1024;
 function git(repo, args) {
@@ -36,6 +41,11 @@ export function parseNameStatus(raw) {
     }
     return out;
 }
+const HUNK = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+const hunkOf = (line) => {
+    const m = HUNK.exec(line);
+    return m ? { oldStart: Number(m[1]), oldCount: m[2] === undefined ? 1 : Number(m[2]), newStart: Number(m[3]), newCount: m[4] === undefined ? 1 : Number(m[4]) } : null;
+};
 /** Unquotes a path that Git wrote in C style (`"a\tb"`); a plain path is returned as is. */
 function unquote(text) {
     if (!text.startsWith('"'))
@@ -61,6 +71,34 @@ function unquote(text) {
     }
     return Buffer.from(bytes).toString('utf8');
 }
+/**
+ * The path of a `--- ` or `+++ ` line: Git ends it with a tab when the name holds a space (second security review of
+ * #141, M1: the tab left in the key hid every line of the file), and quotes it in C style when it holds a quote, a
+ * backslash or a control character (`"a/x \"y\""`), both at once too. A name never ends with a tab of its own: Git
+ * quotes it (`\t`).
+ */
+function patchPath(text, prefix) {
+    const raw = text.replace(/\t$/, '');
+    if (raw === '/dev/null')
+        return null;
+    const path = unquote(raw);
+    return path.startsWith(prefix) ? path.slice(2) : path;
+}
+/** The two paths of a `diff --git a/<p> b/<p>` header, each plain or quoted; null when they cannot be told apart. */
+function headerPaths(header) {
+    // Both quoted, or one of them: a quoted path is a whole `"..."` (escapes inside), the other side the rest of the line.
+    const both = /^("(?:[^"\\]|\\.)*") ("(?:[^"\\]|\\.)*")$/.exec(header)
+        ?? /^("(?:[^"\\]|\\.)*") (.+)$/.exec(header)
+        ?? /^(.+) ("(?:[^"\\]|\\.)*")$/.exec(header);
+    if (both)
+        return [unquote(both[1]), unquote(both[2])];
+    // Both plain: the same path twice, `a/<p> b/<p>` (a mode change, an empty file).
+    const half = (header.length - 1) / 2;
+    if (Number.isInteger(half) && header.startsWith('a/') && header.slice(half + 1).startsWith('b/') && header.slice(2, half) === header.slice(half + 3)) {
+        return [header.slice(0, half), header.slice(half + 1)];
+    }
+    return null;
+}
 /** Changed lines of each file of a `--unified=0` patch, keyed by the new path (the old one for a deletion). */
 export function parsePatch(raw) {
     const files = new Map();
@@ -70,7 +108,7 @@ export function parsePatch(raw) {
         let newPath = null;
         let renameFrom = null;
         let renameTo = null;
-        const patch = { binary: false, removed: [], added: [] };
+        const patch = { binary: false, removed: [], added: [], hunks: [] };
         let inHunk = false;
         for (const line of lines.slice(1)) {
             if (!inHunk) {
@@ -79,17 +117,25 @@ export function parsePatch(raw) {
                 else if (line.startsWith('rename to '))
                     renameTo = unquote(line.slice(10));
                 else if (line.startsWith('--- '))
-                    oldPath = line.slice(4) === '/dev/null' ? null : unquote(line.slice(4)).replace(/^a\//, '');
+                    oldPath = patchPath(line.slice(4), 'a/');
                 else if (line.startsWith('+++ '))
-                    newPath = line.slice(4) === '/dev/null' ? null : unquote(line.slice(4)).replace(/^b\//, '');
+                    newPath = patchPath(line.slice(4), 'b/');
                 else if (line.startsWith('Binary files ') || line.startsWith('GIT binary patch'))
                     patch.binary = true;
-                else if (line.startsWith('@@'))
+                else if (line.startsWith('@@')) {
                     inHunk = true;
+                    const h = hunkOf(line);
+                    if (h)
+                        patch.hunks.push(h);
+                }
                 continue;
             }
-            if (line.startsWith('@@'))
+            if (line.startsWith('@@')) {
+                const h = hunkOf(line);
+                if (h)
+                    patch.hunks.push(h);
                 continue;
+            }
             if (line.startsWith('+'))
                 patch.added.push(line.slice(1));
             else if (line.startsWith('-'))
@@ -97,11 +143,10 @@ export function parsePatch(raw) {
         }
         let key = renameTo ?? newPath ?? oldPath ?? renameFrom;
         if (!key) {
-            // No ---/+++ lines (binary file, mode change): the header names the same path twice, `a/<p> b/<p>`.
-            const header = unquote(lines[0] ?? '');
-            const half = (header.length - 1) / 2;
-            if (Number.isInteger(half) && header.startsWith('a/') && header.slice(half + 1).startsWith('b/') && header.slice(2, half) === header.slice(half + 3))
-                key = header.slice(2, half);
+            // No ---/+++ lines (binary file, mode change, empty file): the header names the path on both sides.
+            const both = headerPaths(lines[0] ?? '');
+            if (both && both[0].startsWith('a/') && both[1].startsWith('b/') && both[0].slice(2) === both[1].slice(2))
+                key = both[1].slice(2);
         }
         if (key)
             files.set(key, patch);
@@ -259,25 +304,82 @@ const WHY = {
     personal: 'données personnelles, export ou traceurs au contenu changé',
     legal: 'texte légal au contenu changé',
     unclassified: 'fichier non classé au contenu changé (prudence)',
+    ledgerMockup: 'décision de maquette ajoutée ou modifiée au registre',
+    strong: 'code serveur, chemin sensible ou configuration au contenu changé (prudence, plus fort que tests et outillage)',
+    unread: 'contenu changé, patch introuvable : lignes non lues (prudence)',
 };
+/** Classes that keep no domain of their own: a file matching only these is not described by a domain class. */
+const NO_DOMAIN = ['neutral', 'tooling', 'server'];
+const sides = (file) => [file.path, ...(file.from !== undefined ? [file.from] : [])];
+/** Named as a test (`*.test.*`, `*.spec.*`, `*.e2e.*`) on every side of the change. */
+const testNamed = (file) => sides(file).every(p => TEST_NAME.test(p));
+const isConfig = (file) => sides(file).some(p => CONFIG_FILES.some(g => matches(p, g)));
+/** Sensitive paths of the high lane, and the instructions of the agents (`agents/**`, `workflows/**`, `.apv/brief.md`...). */
+const isSensitive = (file, input) => sides(file).some(p => input.sensitive.some(g => matches(p, g)) || AGENT_INSTRUCTIONS.some(g => matches(p, g)));
+/**
+ * Under a test folder (`test/`, `tests/`), outside a routing folder (`routes/`, `pages/`, `app/`): a `tests/` folder
+ * under `src/routes/` is a route, served, never a test.
+ */
+const inTestDir = (p) => TEST_DIRS.some(g => matches(p, g)) && !ROUTING_TEST_DIR.test(p);
+/** A test by its name, or every side under a test folder. */
+const testLike = (file) => testNamed(file) || sides(file).every(inTestDir);
+/**
+ * Server code, a sensitive path of the high lane, the instructions of the agents or a configuration: stronger than the
+ * neutral and tooling classes (`src/lib/server/fixtures/admin.ts`, `.apv/config.json`, `vitest.config.ts`,
+ * `src/routes/tests/+server.ts`). Only a file named as a test escapes the server and sensitive paths; nothing escapes
+ * the configuration. Tooling (`fixtures/`, `__mocks__/`) outside a test folder may be imported by the product: it keeps
+ * every domain too (`src/lib/fixtures/demo.ts`), and so does a neutral file under a routing folder.
+ */
+function strongPath(file, input) {
+    if (isConfig(file))
+        return true;
+    if (testNamed(file))
+        return false;
+    if (file.classes.includes('server') || isSensitive(file, input))
+        return true;
+    if (testLike(file))
+        return false;
+    if (file.classes.includes('tooling') && !file.classes.includes('neutral'))
+        return true;
+    return sides(file).some(p => ROUTING_DIR.test(p));
+}
 function classify(path, input) {
     const { paths } = input.settings;
     const found = PATH_CLASSES.filter(c => paths[c].some(p => matches(path, p)) || (c === 'migrations' && input.migrations.some(p => matches(path, p))));
     return found;
 }
+/** The first term of the list found in the lines, and how many lines hold a term of the list. */
 function termIn(lines, terms) {
+    let first = null;
+    let count = 0;
     for (const line of lines) {
         const low = line.toLowerCase();
         const term = terms.find(t => low.includes(t));
-        if (term)
-            return term;
+        if (!term)
+            continue;
+        first ??= term;
+        count += 1;
     }
-    return null;
+    return first === null ? null : { term: first, lines: count };
 }
-function fileKeeps(file, patch, input) {
+/** The names of `data-*` attributes (`data-tab`, `data-phone`): names of the markup, never a word of data or GDPR. */
+const DATA_ATTRIBUTE = /(?<![\w-])data-[\w-]+/gi;
+/**
+ * Every side a note of the pipeline (the state, the journal, a spec ADDED; text or JSON). A spec of the base modified or
+ * renamed keeps the classification of 3.0.0-alpha.20 (security review of PR #128: a security requirement removed from a
+ * spec was read by the security review alone).
+ */
+const pilotNote = (file) => sides(file).every(p => PILOT_NOTE_EXTENSIONS.test(p) && PILOT_NOTES.some(g => matches(p, g)) && (!matches(p, SPEC_NOTES) || file.status.startsWith('A')));
+/** The registry of the decisions (`.apv/DECISIONS.json` or `.md`) on every side, unless the project declares it a sensitive path. */
+const ledgerFile = (file, input) => sides(file).every(p => LEDGER_FILES.includes(p)) && !isSensitive(file, input) && !isConfig(file);
+/** A lockfile of npm, pnpm or Yarn on every side. */
+const lockFile = (file) => sides(file).every(p => LOCK_FILES.some(g => matches(p, g)));
+/** The host of a download URL in a lockfile line (`"resolved": "https://…"`, `resolved "https://…"`, `tarball: https://…`). */
+const DOWNLOAD_HOST = /(?:resolved|tarball)\W+(?:https?:\/\/)([^/"'\s:]+)/gi;
+function fileKeeps(file, patch, input, context) {
     const keeps = [];
-    const add = (domain, why) => { if (!keeps.some(k => k.domain === domain))
-        keeps.push({ domain, why }); };
+    const add = (domain, why, basis = 'diff') => { if (!keeps.some(k => k.domain === domain))
+        keeps.push({ domain, why, basis }); };
     const classes = new Set(file.classes);
     const inDesign = [file.path, file.from].some(p => p !== undefined && (p === input.designDir || p.startsWith(`${input.designDir}/`)));
     if (classes.has('migrations')) {
@@ -290,12 +392,73 @@ function fileKeeps(file, patch, input) {
         add('fidelite', WHY.design);
     if (file.change !== 'content')
         return keeps;
-    const meaningful = file.classes.filter(c => c !== 'neutral');
-    if (!meaningful.length && !inDesign) {
-        if (classes.has('neutral'))
-            return keeps;
+    // A changed content whose patch is not found: its lines were not read, never « no line » (second review of #141, M1).
+    if (!patch) {
         for (const domain of ['fidelite', 'donnees', 'rgpd'])
-            add(domain, WHY.unclassified);
+            add(domain, WHY.unread, 'prudence');
+        return keeps;
+    }
+    const meaningful = file.classes.filter(c => !NO_DOMAIN.includes(c));
+    const lines = patch && !patch.binary ? [...patch.added, ...patch.removed].map(l => l.replace(DATA_ATTRIBUTE, '')) : [];
+    const address = () => {
+        if (realAddress(patch?.added ?? []))
+            add('rgpd', 'adresse e-mail réelle (domaine non réservé aux exemples) dans les lignes ajoutées');
+    };
+    // The words of the changed lines: a query written in a page, a tracker, a personal field, a real address in a fixture.
+    // In server, data or interface code, one line is enough: required by the diff (security review of PR #128: a query
+    // deleting every profile, on one line, said « par prudence »). Only in a test, a document or tooling is a term on one
+    // line alone isolated: prudence. The Markdown under `.apv/` is prose of the pipeline: its words never count.
+    const terms = (alone) => {
+        // Mode leger: one line alone is isolated anywhere, and prudence keeps nothing.
+        const isolated = alone || input.mode === 'leger';
+        if (!sides(file).every(p => p.startsWith('.apv/') && p.endsWith('.md'))) {
+            const data = termIn(lines, input.settings.terms.data);
+            if (data) {
+                if (data.lines > 1 || !isolated)
+                    add('donnees', `terme de données « ${data.term} » dans les lignes changées`);
+                else
+                    add('donnees', `terme de données « ${data.term} » isolé (une seule ligne changée : par prudence)`, 'prudence');
+            }
+            const personal = termIn(lines, input.settings.terms.personal);
+            if (personal) {
+                if (personal.lines > 1 || !isolated)
+                    add('rgpd', `terme RGPD « ${personal.term} » dans les lignes changées`);
+                else
+                    add('rgpd', `terme RGPD « ${personal.term} » isolé (une seule ligne changée : par prudence)`, 'prudence');
+            }
+        }
+        address();
+    };
+    if (!meaningful.length && !inDesign) {
+        // The registry of the decisions: the security review, data and GDPR on their terms only (the Markdown rendering holds none).
+        if (ledgerFile(file, input)) {
+            if (context.ledgerMockups.length)
+                add('fidelite', WHY.ledgerMockup);
+            terms(false);
+            return keeps;
+        }
+        // Notes of the pipeline: never a configuration; the security review reads them, a real address still counts.
+        if (pilotNote(file) && !isSensitive(file, input) && !isConfig(file)) {
+            address();
+            return keeps;
+        }
+        // A lockfile without its package.json: the security review alone, with the audit of the dependencies.
+        if (lockFile(file) && !context.manifest)
+            return keeps;
+        if (strongPath(file, input)) {
+            // Its words first (a query in server code is required by the diff), then prudence for the rest.
+            terms(false);
+            for (const domain of ['fidelite', 'donnees', 'rgpd'])
+                add(domain, WHY.strong, 'prudence');
+            return keeps;
+        }
+        // Tests, documentation, tooling: no domain of their own, but their words still count (a fixture with personal data).
+        if (classes.has('neutral') || classes.has('tooling')) {
+            terms(true);
+            return keeps;
+        }
+        for (const domain of ['fidelite', 'donnees', 'rgpd'])
+            add(domain, WHY.unclassified, 'prudence');
         return keeps;
     }
     if (classes.has('ui'))
@@ -306,17 +469,144 @@ function fileKeeps(file, patch, input) {
         add('rgpd', WHY.personal);
     if (classes.has('legal'))
         add('rgpd', WHY.legal);
-    // The words of the changed lines: a query written in a page, a tracker or a personal field added to a component.
-    const lines = patch ? [...patch.added, ...patch.removed] : [];
-    if (patch?.binary !== true) {
-        const data = termIn(lines, input.settings.terms.data);
-        if (data)
-            add('donnees', `terme de données « ${data} » dans les lignes changées`);
-        const personal = termIn(lines, input.settings.terms.personal);
-        if (personal)
-            add('rgpd', `terme RGPD « ${personal} » dans les lignes changées`);
-    }
+    terms(false);
     return keeps;
+}
+/**
+ * A decision that tells what a screen must look like: a registered mockup (`maquette-<nom>-validee`), a decision naming
+ * screens (`Écrans :`) or a perimeter of paths, or one that names the folder of the mockups.
+ */
+function mockupLike(decision, designDir) {
+    const text = `${decision.subject}\n${decision.value}`;
+    return /^maquette-/.test(decision.id) || /Écrans\s*:/.test(text) || (decision.scope?.paths?.length ?? 0) > 0 || text.includes(`${designDir}/`);
+}
+/**
+ * Ids of the mockup decisions the change adds, removes or alters (a screen added to a validated mockup, a status, a
+ * perimeter): read from the registry at both sides of the diff, never from its words. A registry that cannot be read is
+ * said as such: the fidelity review is kept (review of PR #129: a registry alone retargeting a mockup kept security only).
+ */
+/** The decisions of the registry at a commit by id (empty without registry), or null when it cannot be read. */
+function ledgerAt(repo, sha) {
+    let text;
+    try {
+        text = git(repo, ['show', `${sha}:${LEDGER_FILE}`]);
+    }
+    catch {
+        return new Map();
+    }
+    try {
+        return new Map(decisionLedgerSchema.parse(parseJson(text)).decisions.map(d => [d.id, d]));
+    }
+    catch {
+        return null;
+    }
+}
+function ledgerMockupChanges(repo, mergeBase, head, designDir) {
+    const before = ledgerAt(repo, mergeBase);
+    const after = ledgerAt(repo, head);
+    if (!before || !after)
+        return ['(registre illisible)'];
+    const changed = [];
+    for (const id of new Set([...before.keys(), ...after.keys()])) {
+        const a = before.get(id);
+        const b = after.get(id);
+        if (JSON.stringify(a) === JSON.stringify(b))
+            continue;
+        if ((a && mockupLike(a, designDir)) || (b && mockupLike(b, designDir)))
+            changed.push(id);
+    }
+    return changed;
+}
+const SENSITIVE_WHY = 'chemin sensible (authentification, session, permissions, dépendances, configuration de sécurité, CI ou instructions des agents)';
+const LEDGER_WHY = 'registre des décisions : la relecture sécurité lit chaque décision, données et RGPD seulement sur leurs termes';
+const NOTES_WHY = 'notes de pilotage (.apv/state, journal du pipeline, specs) : jamais une configuration';
+const LOCK_WHY = 'verrou de dépendances sans son package.json : audit des dépendances par la relecture sécurité';
+/**
+ * The risk of one changed file (src/review/risk.ts), by its path only: low for a test, documentation or a mockup
+ * without a word of data or GDPR; high for everything else (the plan of 3.0.0-alpha.14). The notes of the pipeline and a
+ * lockfile without its package.json stay of high risk (a lockfile can break the build), under their own name.
+ */
+function fileRisk(file, input, context) {
+    const high = (riskWhy) => ({ risk: 'eleve', riskWhy });
+    const low = (riskWhy) => ({ risk: 'faible', riskWhy });
+    const classes = new Set(file.classes);
+    if (classes.has('migrations'))
+        return high('migration ou schéma');
+    const plain = !file.classes.some(c => !NO_DOMAIN.includes(c));
+    if (plain && lockFile(file) && !context.manifest)
+        return high(LOCK_WHY);
+    if (isConfig(file))
+        return high('configuration (outil, exécuteurs de tests, lint, format, dépendances, CI)');
+    const named = testNamed(file);
+    if (!named && isSensitive(file, input))
+        return high(SENSITIVE_WHY);
+    if (plain && pilotNote(file))
+        return high(NOTES_WHY);
+    if (plain && ledgerFile(file, input))
+        return high(LEDGER_WHY);
+    if (!named && classes.has('server'))
+        return high('code serveur ou configuration');
+    // A word of data or GDPR, or a real address, in the changed lines: stronger than a test or a document.
+    const word = file.keeps.find(k => (k.domain === 'donnees' || k.domain === 'rgpd') && (k.why.startsWith('terme ') || k.why.startsWith('adresse ')));
+    if (word)
+        return high(word.why);
+    // Every domain a low file keeps is the fidelity of a mockup: any other kept domain makes the file high, so that a
+    // plan of low risk never retains more (REVIEW_RISK can never fire on a valid diff).
+    const other = file.keeps.find(k => k.domain !== 'fidelite' || k.why !== WHY.design);
+    if (other)
+        return high(other.why);
+    if (testLike(file))
+        return low('tests');
+    // A validated mockup (never served): its fidelity review is kept by fileKeeps.
+    const design = (p) => p === input.designDir || p.startsWith(`${input.designDir}/`);
+    if (sides(file).every(design) && !classes.has('legal') && !classes.has('personal') && !classes.has('data'))
+        return low('maquette');
+    if (classes.has('legal') || classes.has('personal') || classes.has('data') || classes.has('ui')) {
+        return high(classes.has('ui') ? 'interface (le contenu n\'est jamais lu comme du texte seul)' : 'données, données personnelles ou texte légal');
+    }
+    // Documentation: Markdown the project classes neutral (docs/, README, CHANGELOG), outside the served folders.
+    if (classes.has('neutral') && sides(file).every(p => p.endsWith('.md') && !SERVED_DIR.test(p)))
+        return low('documentation');
+    return high(classes.has('tooling') || classes.has('neutral')
+        ? 'outillage ou fichier neutre hors tests nommés, dossiers de tests, documentation et maquettes'
+        : 'fichier non classé (prudence)');
+}
+const level = (n, levelWhy) => ({ level: n, levelWhy });
+/** The level of a file by its path alone: 0, 1 or 2 (src/review/risk.ts). */
+function pathLevel(file, input) {
+    const any = (globs) => sides(file).some(p => globs.some(g => matches(p, g)));
+    if (testLike(file))
+        return level(0, 'tests');
+    if (any(CI_WORKFLOWS))
+        return level(2, 'workflow de CI (peut lire les secrets)');
+    if (any(input.sensitive.filter(g => !g.startsWith('.github/'))) || any(AGENT_INSTRUCTIONS) || any(GUARD_FILES))
+        return level(2, SENSITIVE_WHY);
+    if (sides(file).every(p => p.startsWith('.github/')))
+        return level(0, 'CI');
+    if (isConfig(file))
+        return level(0, 'configuration d\'outillage');
+    if (any(input.settings.paths.server.filter(g => !SERVER_GENERIC.includes(g))))
+        return level(2, 'code serveur, route ou point d\'entrée');
+    if (pilotNote(file) || ledgerFile(file, input) || sides(file).every(p => p.startsWith('.apv/')))
+        return level(0, 'notes et état du pipeline');
+    if ((file.classes.includes('neutral') || file.classes.includes('tooling')) && !sides(file).some(p => ROUTING_DIR.test(p)))
+        return level(0, 'documentation, tests ou outillage');
+    return level(1, 'code applicatif');
+}
+/** The level of a file: a migration, a real address or a domain the diff requires (donnees, rgpd) make it 3. */
+function fileLevel(file, own) {
+    const migration = file.classes.includes('migrations');
+    if (file.change !== 'content')
+        return migration ? level(3, WHY.migrationRename) : level(0, 'renommage pur ou chemins seuls réécrits');
+    const address = file.keeps.find(k => k.why.startsWith('adresse '));
+    if (address)
+        return level(3, address.why);
+    if (testLike(file))
+        return own;
+    if (migration)
+        return level(3, WHY.migration);
+    const data = file.keeps.find(k => (k.domain === 'donnees' || k.domain === 'rgpd') && k.basis === 'diff' && (own.level > 0 || !k.why.startsWith('terme ')));
+    return data ? level(3, data.why) : own;
 }
 const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 function skipReason(domain, counts) {
@@ -329,11 +619,16 @@ function skipReason(domain, counts) {
     const detail = [
         counts.renames ? count(counts.renames, 'renommage pur', 'renommages purs') : '',
         counts.paths ? count(counts.paths, 'fichier aux seuls chemins réécrits', 'fichiers aux seuls chemins réécrits') : '',
+        counts.names ? count(counts.names, 'fichier aux seuls noms de classes ou d\'identifiants renommés', 'fichiers aux seuls noms de classes ou d\'identifiants renommés') : '',
         counts.neutral ? count(counts.neutral, 'fichier de tests, documentation ou outillage', 'fichiers de tests, documentation ou outillage') : '',
+        counts.notes ? count(counts.notes, 'note de pilotage', 'notes de pilotage') : '',
+        counts.ledger ? count(counts.ledger, 'fichier du registre des décisions', 'fichiers du registre des décisions') : '',
+        counts.locks ? count(counts.locks, 'verrou de dépendances', 'verrous de dépendances') : '',
     ].filter(Boolean).join(', ');
     if (!counts.files)
         return 'rien à relire : diff vide';
-    return `rien à relire : ${scope}, aucun fichier non classé au contenu changé (${count(counts.files, 'fichier', 'fichiers')}${detail ? ` : ${detail}` : ''})`;
+    const rename = domain === 'fidelite' && counts.names ? 'renommage pur : diff normalisé vide (noms de classes et d\'identifiants renommés partout, styles compris) ; ' : '';
+    return `${rename || 'rien à relire : '}${scope}, aucun fichier non classé au contenu changé (${count(counts.files, 'fichier', 'fichiers')}${detail ? ` : ${detail}` : ''})`;
 }
 export function planReviews(input) {
     const { repo } = input;
@@ -344,12 +639,14 @@ export function planReviews(input) {
     if (!headSha)
         throw new PipelineError('REVIEW_REF', `--head : commit introuvable dans ${repo} : ${input.head}`);
     const mergeBase = git(repo, ['merge-base', baseSha, headSha]).trim();
-    // Explicit options: a user's diff settings (no prefix, relative paths, colors, external tools) never change the reading.
-    const common = ['-M', '--no-relative', '--no-ext-diff', '--no-textconv', '--no-color'];
-    const statuses = parseNameStatus(git(repo, ['diff', ...common, '--name-status', '-z', mergeBase, headSha]));
-    const patches = parsePatch(git(repo, ['diff', ...common, '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', mergeBase, headSha]));
+    // Explicit options: a user's diff settings (no prefix, relative paths, colors, external tools) never change the reading;
+    // every submodule is seen, whatever .gitmodules says (security review of #141, A1). The patch is read as text: an
+    // attribute `-diff` (or `binary`) of the tree never hides the words of a file (A10).
+    const common = [input.renames === false ? '--no-renames' : '-M', '--ignore-submodules=none', '--no-relative', '--no-ext-diff', '--no-textconv', '--no-color'];
+    const statuses = parseNameStatus(git(repo, [...DELTA_GIT, 'diff', ...common, '--name-status', '-z', mergeBase, headSha]));
+    const patches = parsePatch(git(repo, [...DELTA_GIT, '-c', 'core.attributesFile=/dev/null', 'diff', ...common, '--text', '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', mergeBase, headSha]));
     const renames = statuses.filter(s => s.from !== undefined).map(s => ({ from: s.from, path: s.path }));
-    const files = statuses.map(entry => {
+    const changes = statuses.map((entry) => {
         const patch = patches.get(entry.path);
         let change;
         if (/^R100$/.test(entry.status))
@@ -365,43 +662,124 @@ export function planReviews(input) {
             change = referencesOnly(patch, entry, renames) ? 'paths' : 'content';
         const classes = [...new Set([...classify(entry.path, input), ...(entry.from ? classify(entry.from, input) : [])])]
             .sort((a, b) => PATH_CLASSES.indexOf(a) - PATH_CLASSES.indexOf(b));
-        const base = { path: entry.path, ...(entry.from !== undefined ? { from: entry.from } : {}), status: entry.status, change, classes };
-        return { ...base, keeps: fileKeeps(base, patch, input) };
+        return { entry, patch, change, classes };
     });
+    // Class and id names renamed: a pure rename only when the whole diff renames them one to one (src/review/rename.ts),
+    // in files of interface, style or tests, and when nothing but documentation and notes of the pipeline changes beside.
+    const shapes = changes.map(c => ({ path: c.entry.path, ...(c.entry.from !== undefined ? { from: c.entry.from } : {}), status: c.entry.status, change: c.change, classes: c.classes }));
+    const renameable = shapes.map(f => sides(f).every(p => renameKind(p) || TEST_NAME.test(p) || inTestDir(p))
+        && !isConfig(f) && !isSensitive(f, input) && !f.classes.some(c => c !== 'ui' && c !== 'neutral' && c !== 'tooling'));
+    const harmless = (f, i) => f.change === 'none' || renameable[i]
+        || (pilotNote(f) && !isSensitive(f, input) && !isConfig(f))
+        || (f.classes.length > 0 && f.classes.every(c => c === 'neutral' || c === 'tooling') && !strongPath(f, input));
+    const candidates = changes.map((c, i) => (renameable[i] && c.change === 'content' && c.patch && !c.patch.binary && /^[MR]/.test(c.entry.status) ? renamedNames(c.patch, c.entry.path) : null));
+    const named = candidates.filter((c) => c !== null);
+    if (named.length && shapes.every(harmless) && pureRename(named, { repo, base: mergeBase, head: headSha, designDir: input.designDir })) {
+        candidates.forEach((c, i) => { if (c)
+            changes[i].change = 'names'; });
+    }
+    const ledgerTouched = statuses.some(s => s.path === LEDGER_FILE || s.from === LEDGER_FILE);
+    const context = {
+        manifest: statuses.some(s => sides(s).some(p => MANIFEST_FILES.some(g => matches(p, g)))),
+        ledgerMockups: ledgerTouched ? ledgerMockupChanges(repo, mergeBase, headSha, input.designDir) : [],
+    };
+    // Mode leger: no prudence, a term only in code (level 1 and above), fidelite only for a screen a validated mockup covers.
+    const leger = input.mode === 'leger';
+    const mockups = leger ? mockupsOf([...(ledgerAt(repo, mergeBase)?.values() ?? []), ...(ledgerAt(repo, headSha)?.values() ?? [])]) : [];
+    const files = changes.map(({ entry, patch, change, classes }) => {
+        const base = { path: entry.path, ...(entry.from !== undefined ? { from: entry.from } : {}), status: entry.status, change, classes };
+        const keeping = { ...base, keeps: fileKeeps(base, patch, input, context) };
+        const risk = fileRisk(keeping, input, context);
+        const own = pathLevel(base, input);
+        if (leger) {
+            // A migration is for donnees; rgpd only on the words of its lines.
+            const migrationOnly = (k) => k.domain === 'rgpd' && (k.why === WHY.migration || k.why === WHY.migrationRename);
+            keeping.keeps = keeping.keeps.filter(k => k.basis === 'diff' && k.domain !== 'fidelite' && !migrationOnly(k) && (own.level > 0 || !k.why.startsWith('terme ')));
+            const mockup = change === 'content' && (classes.includes('ui') || isScreen(entry.path)) ? mockups.find(m => covers(m, entry.path)) : undefined;
+            if (mockup)
+                keeping.keeps.push({ domain: 'fidelite', why: `écran couvert par la maquette validée ${mockup.id}`, basis: 'diff' });
+        }
+        return { ...keeping, ...risk, ...fileLevel(keeping, own) };
+    });
+    const top = Math.max(0, ...files.map(f => f.level));
+    const whys = new Map();
+    for (const f of files.filter(x => x.level === top))
+        whys.set(f.levelWhy, (whys.get(f.levelWhy) ?? 0) + 1);
+    const levelReason = files.length ? [...whys].map(([why, n]) => `${why} (${n})`).join(' ; ') : 'diff vide';
     const counts = {
         files: files.length,
         renames: files.filter(f => f.change === 'none' && f.from !== undefined).length,
         paths: files.filter(f => f.change === 'paths').length,
+        names: files.filter(f => f.change === 'names').length,
         content: files.filter(f => f.change === 'content').length,
-        neutral: files.filter(f => f.change === 'content' && f.classes.length === 1 && f.classes[0] === 'neutral').length,
-        unclassified: files.filter(f => f.change === 'content' && !f.classes.length).length,
+        neutral: files.filter(f => f.change === 'content' && f.classes.every(c => NO_DOMAIN.includes(c)) && (f.classes.includes('neutral') || f.classes.includes('tooling'))
+            && !f.keeps.some(k => k.why === WHY.strong) && f.riskWhy !== NOTES_WHY && f.riskWhy !== LEDGER_WHY && f.riskWhy !== LOCK_WHY).length,
+        notes: files.filter(f => f.change === 'content' && f.riskWhy === NOTES_WHY).length,
+        ledger: files.filter(f => f.change === 'content' && f.riskWhy === LEDGER_WHY).length,
+        locks: files.filter(f => f.change === 'content' && f.riskWhy === LOCK_WHY).length,
+        unclassified: files.filter(f => f.change === 'content' && f.keeps.some(k => k.why === WHY.unclassified || k.why === WHY.strong)).length,
     };
+    const risk = diffRisk(files, FILES_SHOWN);
     const sensitive = files.filter(f => [f.path, f.from].some(p => p !== undefined && input.sensitive.some(g => matches(p, g)))).map(f => f.path);
+    const locks = files.filter(f => f.riskWhy === LOCK_WHY).map(f => f.path);
+    // A download host that a lockfile names now and did not name at the base (security review of PR #128: a lockfile alone
+    // whose `resolved` points elsewhere). Said to the security review; nothing is skipped or kept for it.
+    const hostsOf = (lines) => new Set(lines.flatMap(l => [...l.matchAll(DOWNLOAD_HOST)].map(m => m[1].toLowerCase())));
+    const newHosts = [...new Set(files.filter(f => lockFile(f) && f.change === 'content').flatMap(f => {
+            let before = [];
+            try {
+                before = git(repo, ['show', `${mergeBase}:${f.from ?? f.path}`]).split('\n');
+            }
+            catch {
+                before = [];
+            }
+            const known = hostsOf(before);
+            return [...hostsOf(patches.get(f.path)?.added ?? [])].filter(h => !known.has(h));
+        }))];
     const domains = REVIEW_DOMAINS.map(domain => {
+        if (domain === ALWAYS_REVIEWED && leger) {
+            const forcedBy = input.force.includes(domain) ? 'operator' : input.settings.always.includes(domain) ? 'config' : null;
+            const deciding = files.filter(f => f.level >= 2);
+            if (top >= 2)
+                return { domain, decision: 'retained', forced: forcedBy, basis: 'diff', fileCount: deciding.length, files: deciding.slice(0, FILES_SHOWN).map(f => f.path), reason: `niveau ${top} : ${levelReason}` };
+            return forcedBy
+                ? { domain, decision: 'retained', forced: forcedBy, basis: 'diff', fileCount: 0, files: [], reason: `niveau ${top}, forcée par ${forcedBy === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'}` }
+                : { domain, decision: 'skipped', forced: null, basis: null, fileCount: 0, files: [], reason: `niveau ${top} : ${levelReason} ; aucune relecture d'agent` };
+        }
         if (domain === ALWAYS_REVIEWED) {
-            return { domain, decision: 'retained', forced: null, fileCount: sensitive.length, files: sensitive.slice(0, FILES_SHOWN),
-                reason: `toujours relue, sans exception${sensitive.length ? ` ; ${count(sensitive.length, 'fichier sensible', 'fichiers sensibles')} (chemins de la voie high)` : ''}` };
+            return { domain, decision: 'retained', forced: null, basis: 'diff', fileCount: sensitive.length, files: sensitive.slice(0, FILES_SHOWN),
+                reason: `toujours relue, sans exception${sensitive.length ? ` ; ${count(sensitive.length, 'fichier sensible', 'fichiers sensibles')} (chemins de la voie high)` : ''}`
+                    + `${locks.length ? ` ; verrou de dépendances sans son package.json (${locks.slice(0, 3).join(', ')}) : audit des dépendances (npm audit ou équivalent)` : ''}`
+                    + `${newHosts.length ? ` ; hôte de téléchargement nouveau dans le verrou : ${newHosts.slice(0, 5).join(', ')} (vérifier la provenance)` : ''}` };
         }
         const deciding = files.filter(f => f.keeps.some(k => k.domain === domain));
         const forced = input.force.includes(domain) ? 'operator' : input.settings.always.includes(domain) ? 'config' : null;
         if (deciding.length) {
             const whys = new Map();
-            for (const f of deciding) {
-                const why = f.keeps.find(k => k.domain === domain).why;
-                whys.set(why, (whys.get(why) ?? 0) + 1);
-            }
+            const kept = deciding.map(f => f.keeps.find(k => k.domain === domain));
+            for (const k of kept)
+                whys.set(k.why, (whys.get(k.why) ?? 0) + 1);
             const reason = [...whys].map(([why, n]) => `${why} (${n})`).join(' ; ');
-            return { domain, decision: 'retained', forced, reason: forced ? `${reason} ; forcée aussi par ${forced === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'}` : reason,
+            return { domain, decision: 'retained', forced, basis: forced || kept.some(k => k.basis === 'diff') ? 'diff' : 'prudence',
+                reason: forced ? `${reason} ; forcée aussi par ${forced === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'}` : reason,
                 fileCount: deciding.length, files: deciding.slice(0, FILES_SHOWN).map(f => f.path) };
         }
         if (forced) {
-            return { domain, decision: 'retained', forced, fileCount: 0, files: [],
+            return { domain, decision: 'retained', forced, basis: 'diff', fileCount: 0, files: [],
                 reason: `forcée par ${forced === 'operator' ? 'l\'opérateur (--force)' : 'la configuration (review.always)'} ; le diff seul ne la demandait pas` };
         }
-        return { domain, decision: 'skipped', forced: null, fileCount: 0, files: [], reason: skipReason(domain, counts) };
+        const reason = !leger ? skipReason(domain, counts) : domain === 'fidelite' ? `niveau ${top} : aucun écran couvert par une maquette validée au contenu changé`
+            : `niveau ${top} : aucune migration, aucun code de données, données personnelles ni texte légal au contenu changé`;
+        return { domain, decision: 'skipped', forced: null, basis: null, fileCount: 0, files: [], reason };
     });
+    // A low risk keeps at most the security and fidelity reviews, besides what is forced: never a weaker plan elsewhere.
+    if (risk.level === 'faible') {
+        const extra = domains.filter(d => d.decision === 'retained' && d.domain !== ALWAYS_REVIEWED && d.domain !== 'fidelite' && !d.forced);
+        if (extra.length)
+            throw new PipelineError('REVIEW_RISK', `risque faible incohérent : ${extra.map(d => d.domain).join(', ')} retenu(s) (${extra.map(d => d.reason).join(' ; ')})`);
+    }
     return {
-        tool: 'apv review plan', base: { ref: input.base, sha: baseSha }, head: { ref: input.head, sha: headSha }, mergeBase, counts, domains,
+        tool: 'apv review plan', mode: input.mode ?? 'strict', level: top, levelReason, base: { ref: input.base, sha: baseSha }, head: { ref: input.head, sha: headSha }, mergeBase, counts, ledgerMockups: context.ledgerMockups, risk, domains,
         retained: domains.filter(d => d.decision === 'retained').map(d => d.domain),
         skipped: domains.filter(d => d.decision === 'skipped').map(d => ({ domain: d.domain, reason: d.reason })),
         files,

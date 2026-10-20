@@ -1,15 +1,18 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { validateReceipt, type GateReceipt, type GateStage } from '../domain/contracts.js';
+import type { GateReceipt, GateStage } from '../domain/contracts.js';
 import { invariant } from '../domain/errors.js';
 import { Git } from '../execution/git.js';
 import { success } from '../engine/scheduler.js';
 import type { ApvConfig } from '../config/load.js';
-import { RECEIPTS_DIR, gatesConfigHash, stageGates } from './run.js';
-import { mergeBase, planRepeat, resolveReference } from './repeat.js';
+import { gatesConfigHash, stageGates } from './run.js';
+import { mergeBase, repeatProofGap, resolveReference } from './repeat.js';
+import { repeatCredits } from './repeat-credit.js';
 import { planScope } from './proof-scope.js';
-import { manifestCommit, readSharedRun, sharedRunIds, sharedStore } from './store.js';
+import { sharedStore } from './store.js';
+import { infrastructureCause, type InfrastructureCause } from './infrastructure.js';
+import { checkReuse, latest, readLocal, readShared, reuseContext, reuseReason, type AlteredRun, type Found, type ReceiptSource } from './reuse-proof.js';
 import { auditBase, changedBetween, webAuditGate, webImpact } from '../web/impact.js';
+
+export type { AlteredRun, ReceiptSource } from './reuse-proof.js';
 
 export interface VerifyOptions {
   repo: string;
@@ -34,6 +37,19 @@ export interface VerifyOptions {
   reference?: string;
   /** The configuration file read (`--config`), always required by the scope of a check when inside the repository. */
   configFile?: string | null;
+  /** Clock of the age check of reused receipts, in milliseconds (`Date.now()` when absent; tests pass a fixed one). */
+  now?: number;
+  /**
+   * The branch the commit goes to (or a commit of it, such as the merge base of the checks of the base): the `reuse.maxAgeMs`
+   * of a reused check is read at its merge base with the commit (5.5.1). A receipt reused by inputs is refused. Absent:
+   * `reference`, then the default branch of the remote.
+   */
+  reuseReference?: string | null;
+  /**
+   * The proof of a release (`apv release`, docs/UNE-SUITE-PAR-PR.md, 2.2): a changed test file a complete green receipt of the
+   * same check repeated at the same content counts as repeated (src/gates/repeat-credit.ts). Absent: every file must be.
+   */
+  repeatCredits?: boolean;
 }
 /**
  * State of one required check at the commit:
@@ -48,9 +64,28 @@ export interface VerifyOptions {
  *   the command that ran it) and the recomputation from the commit says required; or the command shows such an audit
  *   and the receipt records nothing;
  * - `required`: that latest receipt says the check was not required (`not_required`, scope `skipWhenOnly`), but the scope
- *   recomputed from the commit requires it (a file with an effect, a base equal to the commit, a reference unresolved).
+ *   recomputed from the commit requires it (a file with an effect, a base equal to the commit, a reference unresolved);
+ * - `reuse`: that latest receipt is `cached` (reused from another commit) and its reuse does not check out against Git
+ *   and the store (docs/ACCELERATION-LOTS.md, 5.5): no `reuse` record, origin absent, altered, not `passed` at first pass,
+ *   dirty, targeted, of another configuration or environment, too old, another tree, another base for a command that reads
+ *   `{{baseSha}}`, a check that is never reused, or a later failure on the same tree that cannot be excluded (checkReuse,
+ *   src/gates/reuse-proof.ts, the check `apv gates run` passes before writing one). It refuses like `missing`, and neither
+ *   the CI proof nor the reduced lane stands in for it.
  */
-export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'unaudited' | 'required';
+export type EvidenceState = 'passed' | 'failed' | 'dirty' | 'missing' | 'unrepeated' | 'unaudited' | 'required' | 'reuse';
+/** A receipt `cached` retained for a check: where it says it comes from, and whether `verify` proved its reuse. */
+export interface ReuseEvidence {
+  /** True: the reuse is proven (origin read again, trees and digests recomputed); false: state `reuse`, see `reason`. */
+  proven: boolean;
+  /** Why it proves nothing, or how it was proven (« arbre identique »). */
+  reason: string;
+  /** Origin as the receipt declares it (null when the receipt has no `reuse` record). */
+  fromRun: string | null;
+  fromCommit: string | null;
+  basis: 'tree' | 'inputs' | null;
+  /** Identifier of the origin receipt (`reusedFrom`). */
+  origin: string | null;
+}
 export interface GateEvidence {
   gateId: string;
   state: EvidenceState;
@@ -79,6 +114,14 @@ export interface GateEvidence {
   scope: { required: boolean; reason: string; files: string[]; blocking: string[] } | null;
   /** A check that runs `apv web audit --preview --base`: why its successful receipt does not prove the audit (files with a web effect, reason); null otherwise. */
   web: { files: string[]; reason: string } | null;
+  /** The receipt retained is `cached`: its origin and the outcome of its verification; null for any other receipt. */
+  reuse: ReuseEvidence | null;
+  /**
+   * State `failed`: the infrastructure failure the tool itself observed and recorded in the receipt retained (`finding`:
+   * the only one that may decide anything), the one its output only suggests (`probable`, read from the diagnostic by
+   * src/gates/infrastructure.ts: shown, never acted upon), and when that receipt ended (`startedAt` plus its duration).
+   */
+  failure?: { infrastructure: InfrastructureCause | null; probable: InfrastructureCause | null; endedAt: number };
 }
 export interface VerifyResult {
   repo: string;
@@ -101,6 +144,8 @@ export interface VerifyResult {
   altered: AlteredRun[];
   /** Required checks proven by a receipt `passed_after_retry`: passed, but only after the relaunch of their failed tests (unstable). */
   flaky: string[];
+  /** Checks whose retained receipt took at least 85 % of their timeout (`nearTimeout`): the timeout to raise before it breaks. */
+  nearTimeout: { gateId: string; timeoutMs: number; percent: number }[];
   /** Required checks that declare `repeatChanged`: their proof needs a run with `--base`. */
   repeating: string[];
   /** Required checks proven by a receipt `not_required` whose scope the commit confirms (never run: no effect on them). */
@@ -109,93 +154,10 @@ export interface VerifyResult {
   scoped: string[];
   /** Required checks that run `apv web audit --preview --base`: « not required » is recomputed from the commit. */
   auditing: string[];
+  /** Required checks proven by a receipt `cached` whose reuse `verify` proved (origin, tree, digests, age). */
+  reused: string[];
   ok: boolean;
 }
-
-/** Where a receipt was read: the `.apv/receipts/` of the worktree, or the shared store of the repository. */
-export type ReceiptSource = 'local' | 'shared';
-interface Found { receipt: GateReceipt; dirty: boolean | null; baseSha: string | null; source: ReceiptSource }
-/** A run of the shared store refused as a whole: its files no longer match its manifest, or contradict it. */
-export interface AlteredRun { runId: string; reason: string }
-
-/** Tree state and base of a run, from its summary (null when unknown). */
-function summaryOf(text: string | null): { dirty: boolean | null; baseSha: string | null } {
-  let dirty: boolean | null = null;
-  let baseSha: string | null = null;
-  if (text === null) return { dirty, baseSha };
-  try {
-    const summary = JSON.parse(text) as { dirty?: unknown; baseSha?: unknown };
-    if (typeof summary.dirty === 'boolean') dirty = summary.dirty;
-    if (typeof summary.baseSha === 'string' && /^[a-f0-9]{40,64}$/.test(summary.baseSha)) baseSha = summary.baseSha;
-  } catch { /* No summary: the tree state comes from the receipts or stays unknown, the base stays unknown. */ }
-  return { dirty, baseSha };
-}
-
-/** Every readable receipt of `.apv/receipts/`, with the tree state from the receipt or, for older ones, its run summary. */
-function readLocal(repo: string): { found: Found[]; unreadable: string[]; runs: Set<string> } {
-  const root = join(repo, RECEIPTS_DIR);
-  const found: Found[] = [];
-  const unreadable: string[] = [];
-  const runs = new Set<string>();
-  if (!existsSync(root)) return { found, unreadable, runs };
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    runs.add(entry.name);
-    const dir = join(root, entry.name);
-    let text: string | null = null;
-    try { text = readFileSync(join(dir, 'summary.json'), 'utf8'); } catch { /* Older run without summary. */ }
-    const summary = summaryOf(text);
-    for (const file of readdirSync(dir)) {
-      if (!file.endsWith('.json') || file === 'summary.json') continue;
-      try {
-        const receipt = validateReceipt(JSON.parse(readFileSync(join(dir, file), 'utf8')));
-        found.push({ receipt, dirty: receipt.dirty ?? summary.dirty, baseSha: summary.baseSha, source: 'local' });
-      } catch { unreadable.push(join(RECEIPTS_DIR, entry.name, file)); }
-    }
-  }
-  return { found, unreadable, runs };
-}
-
-/**
- * Receipts of the shared store for the runs absent from the worktree (a run present in both is read from the
- * worktree, as before the store existed). A run counts only when intact: its manifest names it and lists exactly
- * its files with their digests, its summary is there, and each receipt belongs to it (same run, same commit as
- * the manifest, file named after its check). Otherwise none of its receipts count, and the run is reported.
- */
-function readShared(store: string, local: Set<string>, commit: string): { found: Found[]; altered: AlteredRun[] } {
-  const found: Found[] = [];
-  const altered: AlteredRun[] = [];
-  for (const runId of sharedRunIds(store)) {
-    if (local.has(runId)) continue;
-    // Runs of another commit cannot prove this one: their files are not read (a thousand runs stay cheap). A
-    // manifest that names another commit while its receipts claim this one would be refused below anyway.
-    const named = manifestCommit(join(store, runId));
-    if (named !== null && named !== commit) continue;
-    const run = readSharedRun(join(store, runId));
-    if (!run.intact) { altered.push({ runId, reason: run.reason }); continue; }
-    const summaryBytes = run.files.get('summary.json');
-    if (!summaryBytes) { altered.push({ runId, reason: 'summary.json absent' }); continue; }
-    const summary = summaryOf(summaryBytes.toString('utf8'));
-    const receipts: Found[] = [];
-    let reason: string | null = null;
-    for (const [name, bytes] of run.files) {
-      if (name === 'summary.json') continue;
-      let receipt: GateReceipt;
-      try { receipt = validateReceipt(JSON.parse(bytes.toString('utf8'))); }
-      catch { reason = `${name} n'est pas un reçu valide`; break; }
-      if (receipt.runId !== runId || `${receipt.gateId}.json` !== name || receipt.candidateSha !== run.manifest.candidateSha) {
-        reason = `${name} contredit son exécution (exécution, contrôle ou commit)`; break;
-      }
-      receipts.push({ receipt, dirty: receipt.dirty ?? summary.dirty, baseSha: summary.baseSha, source: 'shared' });
-    }
-    if (reason) altered.push({ runId, reason });
-    else found.push(...receipts);
-  }
-  return { found, altered };
-}
-
-const latest = (a: Found, b: Found): Found =>
-  b.receipt.startedAt > a.receipt.startedAt || (b.receipt.startedAt === a.receipt.startedAt && b.receipt.runId > a.receipt.runId) ? b : a;
 
 /**
  * Whether the receipts prove that every required check passed on this exact commit, on a clean tree and with
@@ -225,7 +187,7 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
   const configHash = gatesConfigHash(options.config);
   const local = readLocal(repo);
   const store = await sharedStore(git, repo);
-  const shared = readShared(store, local.runs, commit);
+  const shared = readShared(store, local.runs, named => named === null || named === commit);
   const found = [...local.found, ...shared.found];
   const { unreadable } = local;
   const atCommit = found.filter(f => f.receipt.candidateSha === commit);
@@ -244,25 +206,16 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
    */
   const references = new Map<string, { sha: string | null; reason: string }>();
   const repeatGap = async (settings: NonNullable<ApvConfig['gates'][number]['repeatChanged']>, receipt: GateReceipt, full: boolean): Promise<{ missing: string[]; reason: string } | null> => {
-    const r = receipt.repeat;
-    if (!r || r.status === 'no_base' || !r.base) return { missing: [], reason: 'exécution sans --base : aucun test modifié répété' };
-    if (r.status !== 'passed' && r.status !== 'none') return { missing: [], reason: `répétition ${r.status}` };
-    if (r.base === commit) return { missing: [], reason: 'base égale au commit : aucun test modifié ne pouvait être répété' };
-    let reference: string | null = null;
+    let reference: { name: string; sha: string | null; reason: string } | null = null;
     if (full) {
       const name = options.repeatReference ?? settings.reference;
       if (!references.has(name)) references.set(name, await resolveReference(git, repo, name));
-      reference = references.get(name)!.sha;
-      if (!reference) return { missing: [], reason: `référence ${name} ${references.get(name)!.reason} (repeatChanged.reference) : les tests modifiés depuis la branche où va le changement ne peuvent pas être recomptés` };
+      reference = { name, ...references.get(name)! };
     }
-    const expected = await planRepeat(git, repo, { base: r.base, reference }, { ...settings, fixedWaits: settings.fixedWaits === 'refuse' ? 'refuse' : 'off' }, commit);
-    const done = new Set(r.files);
-    const missing = expected.files.filter(f => !done.has(f));
-    if (missing.length) return { missing, reason: `${missing.length} fichier(s) de test ajouté(s) ou modifié(s) non répété(s) (depuis ${(reference ? expected.reference! : expected.base).slice(0, 12)})` };
-    if (settings.fixedWaits === 'refuse' && expected.fixedWaits.length) {
-      return { missing: [], reason: `attente(s) à durée fixe refusée(s) : ${expected.fixedWaits.slice(0, 5).map(w => `${w.file}:${w.line}`).join(', ')}` };
-    }
-    return null;
+    const credit = options.repeatCredits && full
+      ? async (files: string[]): Promise<ReadonlySet<string>> => new Set((await repeatCredits({ git, repo, commit, gateId: receipt.gateId, settings, files, store, local })).keys())
+      : undefined;
+    return repeatProofGap(git, repo, commit, settings, receipt.repeat, reference, credit);
   };
   /**
    * The scope of a receipt `not_required`, recomputed here from the commit: never taken from the receipt. The base the run
@@ -310,9 +263,14 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     const impact = webImpact([...changed].sort(), options.config.web);
     return impact.required ? { files: impact.files, reason: `audit requis au commit (${impact.files.length} fichier(s) à effet web modifié(s) depuis ${bases[0]!.slice(0, 12)}), reçu « non requis »` } : null;
   };
+  const now = options.now ?? Date.now();
+  // The check of a receipt `cached`: the very one `apv gates run` passes before writing one (src/gates/reuse-proof.ts).
+  const reuseCheck = reuseContext({ git, repo, commit, configHash, now, store, local, reference: options.reuseReference ?? options.reference ?? null });
   const gates: GateEvidence[] = [];
+  const near: VerifyResult['nearTimeout'] = [];
   for (const gateId of required) {
-    const all = atCommit.filter(f => f.receipt.gateId === gateId);
+    // A receipt of an early check (`early`) is feedback of the task stage, never proof of any check, whatever its id.
+    const all = atCommit.filter(f => f.receipt.gateId === gateId && !f.receipt.early);
     const targetedOnes = all.filter(f => f.receipt.targeted === true);
     const targeted = targetedOnes.length;
     const via = viaTargeted.has(gateId);
@@ -326,28 +284,50 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     const clean = current.filter(f => f.dirty === false);
     if (!clean.length) {
       const state: EvidenceState = current.length ? 'dirty' : 'missing';
-      gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null, repeat: null, scope: null, web: null });
+      gates.push({ gateId, state, status: null, receipt: null, runId: null, otherConfig, targeted, viaTargeted: via, proof: null, otherBase, source: null, repeat: null, scope: null, web: null, reuse: null });
       continue;
     }
     const last = clean.reduce(latest);
+    if (last.receipt.nearTimeout) near.push({ gateId, ...last.receipt.nearTimeout });
     const proof: 'full' | 'targeted' = last.receipt.targeted === true ? 'targeted' : 'full';
     const gate = options.config.gates.find(g => g.id === gateId)!;
     const common = { status: last.receipt.status, receipt: last.receipt.id, runId: last.receipt.runId, otherConfig, targeted, viaTargeted: via, proof, otherBase, source: last.source };
     if (last.receipt.status === 'not_required') {
       const scope = await scopeGap(gate, last.receipt);
-      gates.push({ gateId, state: scope.required ? 'required' : 'passed', ...common, repeat: null, scope, web: null });
+      gates.push({ gateId, state: scope.required ? 'required' : 'passed', ...common, repeat: null, scope, web: null, reuse: null });
       continue;
     }
-    const repeat = success(last.receipt) && gate.repeatChanged ? await repeatGap(gate.repeatChanged, last.receipt, stage === 'full' && proof === 'full') : null;
+    // A receipt `cached` proves nothing by itself: its reuse is checked, then the repetition and the web audit are judged on
+    // what its origin recorded (the copy in the receipt `cached` is never read), recomputed at this commit as for any receipt.
+    let proven = last;
+    let reuse: ReuseEvidence | null = null;
+    if (last.receipt.status === 'cached') {
+      const declared = last.receipt.reuse;
+      const about = { fromRun: declared?.fromRun ?? null, fromCommit: declared?.fromCommit ?? null, basis: declared?.basis ?? null, origin: last.receipt.reusedFrom };
+      const checked = await checkReuse(reuseCheck, gate, last);
+      if ('reason' in checked) {
+        gates.push({ gateId, state: 'reuse', ...common, repeat: null, scope: null, web: null, reuse: { proven: false, reason: checked.reason, ...about } });
+        continue;
+      }
+      proven = checked.origin;
+      reuse = { proven: true, reason: reuseReason(checked), ...about };
+    }
+    // `success` never counts a receipt `cached` by itself: here it counts once its reuse is proven just above.
+    const succeeded = reuse?.proven === true || success(last.receipt);
+    const repeat = succeeded && gate.repeatChanged ? await repeatGap(gate.repeatChanged, proven.receipt, stage === 'full' && proof === 'full') : null;
     const audit = webAuditGate(proof === 'targeted' ? gate.affected ?? gate.command : gate.command);
-    const web = success(last.receipt) ? webGap(last.receipt, audit) : null;
-    gates.push({ gateId, state: !success(last.receipt) ? 'failed' : repeat ? 'unrepeated' : web ? 'unaudited' : 'passed', ...common, repeat, scope: null, web });
+    const web = succeeded ? webGap(proven.receipt, audit) : null;
+    const found = last.receipt.finding;
+    const failure = succeeded ? {} : { failure: { infrastructure: found ? { gateId, kind: found.kind, detail: found.detail } : null,
+      probable: infrastructureCause(last.receipt), endedAt: last.receipt.startedAt + Math.round(last.receipt.durationMs) } };
+    gates.push({ gateId, state: !succeeded ? 'failed' : repeat ? 'unrepeated' : web ? 'unaudited' : 'passed', ...common, repeat, scope: null, web, reuse, ...failure });
   }
   return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered,
-    flaky: gates.filter(g => g.state === 'passed' && g.status === 'passed_after_retry').map(g => g.gateId),
+    flaky: gates.filter(g => g.state === 'passed' && g.status === 'passed_after_retry').map(g => g.gateId), nearTimeout: near,
     repeating: required.filter(id => options.config.gates.some(g => g.id === id && g.repeatChanged)),
     notRequired: gates.filter(g => g.state === 'passed' && g.status === 'not_required').map(g => g.gateId),
     scoped: required.filter(id => options.config.gates.some(g => g.id === id && g.skipWhenOnly)),
     auditing: [...new Set([...required.filter(id => options.config.gates.some(g => g.id === id && webAuditGate(g.command)?.base)),
-      ...gates.filter(g => g.state === 'unaudited' || (g.web === null && atCommit.some(f => f.receipt.gateId === g.gateId && f.receipt.web))).map(g => g.gateId)])], ok: gates.every(g => g.state === 'passed') };
+      ...gates.filter(g => g.state === 'unaudited' || (g.web === null && atCommit.some(f => f.receipt.gateId === g.gateId && f.receipt.web))).map(g => g.gateId)])],
+    reused: gates.filter(g => g.state === 'passed' && g.reuse?.proven === true).map(g => g.gateId), ok: gates.every(g => g.state === 'passed') };
 }

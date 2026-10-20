@@ -6,6 +6,17 @@ import { globToRegExp } from '../db/glob.js';
 /** Codes of the tree findings of `apv structure check`. */
 export const FINDING_CODES = ['flat-folder', 'repeated-prefix', 'mixed-roles', 'stray-file'] as const;
 export type FindingCode = typeof FINDING_CODES[number];
+/**
+ * Codes of the findings that compare the change with its base (`--base`): a code file added to a flat folder, and the
+ * architecture map (a folder, route or entry point without description, a broken link). `error` by default: new ones block.
+ */
+export const CHANGE_CODES = ['flat-growth', 'architecture-map'] as const;
+export type ChangeCode = typeof CHANGE_CODES[number];
+
+/** Default path of the architecture map (docs/STRUCTURE.md, « Carte de l'architecture »). */
+export const DEFAULT_ARCHITECTURE_MAP = 'docs/carte-architecture.md';
+/** Stack profiles (src/structure/profiles.ts). */
+export const PROFILE_IDS = ['sveltekit', 'nextjs', 'nuxt', 'astro', 'angular', 'vue', 'react', 'python', 'go', 'generic'] as const;
 export type Severity = 'warning' | 'error';
 
 /** Default number of code files a folder may hold directly before `flat-folder`. */
@@ -32,10 +43,42 @@ export const DEFAULT_ROLES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Paths never analysed, whatever the configuration: dependencies, build outputs and tool folders
- * (a path segment that starts with a dot: `.github`, `.claude`, `.svelte-kit`).
+ * Folders left out by default (docs: « exclusions par défaut »): dependencies anywhere (`node_modules`), build outputs and
+ * tool folders (`dist`, `build`, `coverage`, `vendor`, a name that starts with a dot) only at the root of the repository
+ * or of a package (a folder with its own `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `composer.json`).
+ * A folder of that name deeper in the sources (`src/lib/x/vendor/`) is code like any other. With `--base`, what the change
+ * creates is always analysed, default exclusions or not: only `structure.ignore` (of the base) leaves it out.
  */
-export const DEFAULT_IGNORE = ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/vendor/**', '**/.*/**'] as const;
+export const DEFAULT_IGNORE = ['**/node_modules/**', 'dist/**', 'build/**', 'coverage/**', 'vendor/**', '.*/**'] as const;
+const OUTPUT_NAMES = new Set(['dist', 'build', 'coverage', 'vendor']);
+const PACKAGE_FILES = /(?:^|\/)(?:package\.json|pyproject\.toml|go\.mod|Cargo\.toml|composer\.json)$/;
+
+/** Roots of the packages of a file list (folders with a manifest), node_modules left out. */
+export function packageRoots(paths: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const p of paths) if (PACKAGE_FILES.test(p) && !p.split('/').includes('node_modules')) out.add(posix.dirname(p));
+  return out;
+}
+
+/** Left out by the default exclusions: `node_modules` anywhere, outputs and tool folders at the root of the repository or of a package. */
+export function defaultIgnored(path: string, roots: ReadonlySet<string>): boolean {
+  const parts = path.split('/');
+  if (parts.includes('node_modules')) return true;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const parent = i === 0 ? '.' : parts.slice(0, i).join('/');
+    if ((parent === '.' || roots.has(parent)) && (OUTPUT_NAMES.has(parts[i]!) || parts[i]!.startsWith('.'))) return true;
+  }
+  return false;
+}
+
+/**
+ * The exclusion test of a file list: `structure.ignore` always, the default exclusions for what is not in `always` (the
+ * files the change creates, which are always analysed).
+ */
+export function ignoreTest(settings: Pick<StructureSettings, 'ignore'>, paths: readonly string[], always: ReadonlySet<string> = new Set()): (path: string) => boolean {
+  const roots = packageRoots(paths);
+  return path => settings.ignore.some(re => re.test(path)) || (!always.has(path) && defaultIgnored(path, roots));
+}
 
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ROLE_KEY = /^-?[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -53,8 +96,15 @@ export const structureSchema = s.object({
   domains: s.optional(s.array(s.string(1, 100, NAME), 0, 500)),
   /** Globs (`*`, `**`, `?`, `{a,b}`) of paths left out of the analysis (`src/generated/**`), added to the defaults. */
   ignore: s.optional(s.array(s.string(1, 4096), 0, 200)),
-  /** Severity of every finding, or per finding code; `warning` by default (exit 0). */
-  severity: s.optional(s.union(severitySchema, s.record(/^(?:flat-folder|repeated-prefix|mixed-roles|stray-file)$/, severitySchema, 4))),
+  /**
+   * Severity of every finding, or per finding code; `warning` by default for the analysis (exit 0), `error` for the
+   * comparison with the base (`flat-growth`, `architecture-map`: only what the change adds blocks).
+   */
+  severity: s.optional(s.union(severitySchema, s.record(/^(?:flat-folder|repeated-prefix|mixed-roles|stray-file|flat-growth|architecture-map)$/, severitySchema, 6))),
+  /** The architecture map, relative to the repository root (Markdown). */
+  architectureMap: s.optional(s.string(1, 4096, /^[^\0]+\.md$/)),
+  /** The stack profile whose conventions apply; detected from the dependencies when absent. */
+  profile: s.optional(s.enum(PROFILE_IDS)),
 });
 export type StructureSection = Infer<typeof structureSchema>;
 
@@ -64,7 +114,9 @@ export interface StructureSettings {
   roles: Record<string, string>;
   domains: string[];
   ignore: RegExp[];
-  severity: Record<FindingCode, Severity>;
+  severity: Record<FindingCode | ChangeCode, Severity>;
+  architectureMap: string;
+  profile: typeof PROFILE_IDS[number] | null;
 }
 
 /** A relative folder or glob inside the repository, normalized with `/` and without trailing slash. */
@@ -82,11 +134,13 @@ export function structureSettings(section: StructureSection | undefined): Struct
     if (role === null) delete roles[key];
     else roles[key] = role;
   }
-  const severity = Object.fromEntries(FINDING_CODES.map(code => {
+  const severity = Object.fromEntries([...FINDING_CODES, ...CHANGE_CODES].map(code => {
     const value = section?.severity;
-    return [code, typeof value === 'string' ? value : value?.[code] ?? 'warning'];
-  })) as Record<FindingCode, Severity>;
-  const ignore = [...DEFAULT_IGNORE, ...(section?.ignore ?? []).map(glob => relativeInside(glob, 'ignore'))];
+    const fallback: Severity = (CHANGE_CODES as readonly string[]).includes(code) ? 'error' : 'warning';
+    return [code, typeof value === 'string' ? value : value?.[code] ?? fallback];
+  })) as Record<FindingCode | ChangeCode, Severity>;
+  // Declared exclusions only: the default ones are applied by `ignoreTest` (root and package roots, existing files).
+  const ignore = (section?.ignore ?? []).map(glob => relativeInside(glob, 'ignore'));
   return {
     roots: [...new Set((section?.roots ?? ['.']).map(root => relativeInside(root, 'roots')))],
     maxFlatFiles: section?.maxFlatFiles ?? DEFAULT_MAX_FLAT_FILES,
@@ -94,5 +148,7 @@ export function structureSettings(section: StructureSection | undefined): Struct
     domains: [...new Set(section?.domains ?? [])],
     ignore: ignore.map(glob => globToRegExp(glob)),
     severity,
+    architectureMap: relativeInside(section?.architectureMap ?? DEFAULT_ARCHITECTURE_MAP, 'architectureMap'),
+    profile: section?.profile ?? null,
   };
 }

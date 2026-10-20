@@ -61,7 +61,8 @@ test('--stage task runs the affected command of a full check in its place, marke
   assert.match(human.stdout, /Tous les contrôles de tâche passent\. 1 contrôle\(s\) ciblé\(s\) \(e2e\) : seuls les tests concernés par les changements ont tourné ; la suite complète \(apv gates run --stage full\) les exécute en entier\. 1 contrôle\(s\) réservé/);
 
   // The full stage, explicit or by default, runs the whole check, never the targeted one.
-  for (const args of [['--stage', 'full'], []]) {
+  // --replay all: run in full each time (without it the second run reuses the first, same tree: A1).
+  for (const args of [['--stage', 'full', '--replay', 'all'], ['--replay', 'all']]) {
     const full = await apv(f.repo, ['gates', 'run', ...args, '--json']);
     assert.equal(full.code, 0, full.stdout);
     assert.deepEqual(full.json().targeted, []);
@@ -201,9 +202,14 @@ test('gates run --stage full says when the full suite is already proven; --skip-
   assert.equal(r.code, 0); assert.equal(r.json().alreadyProven, false); assert.ok(r.json().runId);
   assert.deepEqual(p.log(), ['full']);
   // Proven on this exact commit, clean tree: said before any run, and nothing runs with --skip-proven.
+  // Without --replay, the same tree reuses its green receipts (A1): said, nothing run again.
   r = await apv(f.repo, ['gates', 'run', '--stage', 'full']);
   assert.equal(r.code, 0);
   assert.match(r.stdout, /^Note : la suite complète est déjà prouvée au commit [a-f0-9]{12} \(apv gates verify à 0, arbre propre\) ; --skip-proven évite de la relancer\./);
+  assert.match(r.stdout, /Dont 3 réutilisé\(s\) d'un arbre identique/);
+  assert.deepEqual(p.log(), ['full']);
+  r = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--replay', 'all']);
+  assert.equal(r.code, 0);
   assert.deepEqual(p.log(), ['full', 'full']);
   r = await apv(f.repo, ['gates', 'run', '--stage', 'full', '--skip-proven']);
   assert.equal(r.code, 0);

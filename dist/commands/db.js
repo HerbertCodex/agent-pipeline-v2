@@ -3,10 +3,11 @@ import { resolve } from 'node:path';
 import { formatHuman, formatJson, runDbCheck } from '../db/index.js';
 export const dbHelp = `apv db check : contrôle statique du modèle de données (migrations SQL et code de l'application)
 
-apv db check [--json] [--live] [--config FICHIER] [--root DOSSIER]
+apv db check [--json] [--live] [--base REF] [--config FICHIER] [--root DOSSIER]
     Règles : naming.english_snake_case, fk.index, rls.enabled_forced, policy.too_broad,
     definer.search_path, definer.execute_grant, code.select_star, redundancy.user_id_guard,
-    idempotency.create_tables. Configuration : champ « db » de .apv/config.json.
+    idempotency.create_tables, migrations.one_per_pr (avertissement : plus d'un nouveau fichier de migration
+    contre --base, par défaut origin/main ou main ; exception déclarable dans db.exceptions). Configuration : champ « db » de .apv/config.json.
     --live : lit aussi la base, en lecture seule (index des clés étrangères, RLS, EXPLAIN des
     requêtes db.explain), par la commande APV_PSQL (par exemple
     APV_PSQL="docker exec -i <conteneur> psql -U postgres -d postgres") ou par psql du PATH
@@ -27,7 +28,7 @@ export async function run(args, io) {
     try {
         ({ values } = parseArgs({
             args: rest, allowPositionals: false, strict: true,
-            options: { json: { type: 'boolean' }, live: { type: 'boolean' }, config: { type: 'string' }, root: { type: 'string' }, help: { type: 'boolean', short: 'h' } },
+            options: { json: { type: 'boolean' }, live: { type: 'boolean' }, base: { type: 'string' }, config: { type: 'string' }, root: { type: 'string' }, help: { type: 'boolean', short: 'h' } },
         }));
     }
     catch (error) {
@@ -43,6 +44,7 @@ export async function run(args, io) {
             root: values.root ? resolve(io.cwd, values.root) : io.cwd,
             ...(values.config ? { configPath: values.config } : {}),
             live: Boolean(values.live),
+            ...(values.base ? { base: values.base } : {}),
             env: io.env,
         });
         io.stdout(values.json ? formatJson(report) : formatHuman(report));
