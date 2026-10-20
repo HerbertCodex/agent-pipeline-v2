@@ -5,6 +5,7 @@ import { success } from '../engine/scheduler.js';
 import type { ApvConfig } from '../config/load.js';
 import { gatesConfigHash, stageGates } from './run.js';
 import { mergeBase, repeatProofGap, resolveReference } from './repeat.js';
+import { repeatCredits } from './repeat-credit.js';
 import { planScope } from './proof-scope.js';
 import { sharedStore } from './store.js';
 import { infrastructureCause, type InfrastructureCause } from './infrastructure.js';
@@ -44,6 +45,11 @@ export interface VerifyOptions {
    * `reference`, then the default branch of the remote.
    */
   reuseReference?: string | null;
+  /**
+   * The proof of a release (`apv release`, docs/UNE-SUITE-PAR-PR.md, 2.2): a changed test file a complete green receipt of the
+   * same check repeated at the same content counts as repeated (src/gates/repeat-credit.ts). Absent: every file must be.
+   */
+  repeatCredits?: boolean;
 }
 /**
  * State of one required check at the commit:
@@ -206,7 +212,10 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
       if (!references.has(name)) references.set(name, await resolveReference(git, repo, name));
       reference = { name, ...references.get(name)! };
     }
-    return repeatProofGap(git, repo, commit, settings, receipt.repeat, reference);
+    const credit = options.repeatCredits && full
+      ? async (files: string[]): Promise<ReadonlySet<string>> => new Set((await repeatCredits({ git, repo, commit, gateId: receipt.gateId, settings, files, store, local })).keys())
+      : undefined;
+    return repeatProofGap(git, repo, commit, settings, receipt.repeat, reference, credit);
   };
   /**
    * The scope of a receipt `not_required`, recomputed here from the commit: never taken from the receipt. The base the run

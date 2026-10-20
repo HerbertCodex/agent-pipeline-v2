@@ -209,7 +209,20 @@ export interface ReuseEnvironment {
     /** `reuseIdentity` the receipt would carry (5.4): compared to the origin's. */
     identity: string;
     stack: string | null;
+    /** The parts of that identity (`identityParts` the receipt would carry), to name what differs; null or absent: not said. */
+    parts?: IdentityParts | null;
 }
+/** What a receipt records of the parts of its identity of reuse (`identityParts`): a digest each, never a value. */
+export interface IdentityParts {
+    env: Record<string, string>;
+    executable: string;
+    local: string;
+    copy: string;
+    system: string;
+    stack: string | null;
+}
+/** The names of the parts that differ between two records of identity parts, as said to the operator (at most 10 variables named). */
+export declare function partsDiffer(a: IdentityParts, b: IdentityParts): string[];
 /** The receipt `cached` a run may write for a check: its origin, the record of the reuse, the stack of its environment. */
 export interface ReuseChoice {
     origin: Found;

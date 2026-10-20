@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { release, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { DEFAULT_LOCK_WAIT_MS, gateSchema, gateStage, validateReceipt, webRecordSchema, type EarlyCheck, type Gate, type GateReceipt, type GateStage } from '../domain/contracts.js';
+import { DEFAULT_LOCK_WAIT_MS, VERSION, gateSchema, gateStage, validateReceipt, webRecordSchema, type EarlyCheck, type Gate, type GateReceipt, type GateStage } from '../domain/contracts.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { errorMessage, invariant } from '../domain/errors.js';
 import { hash } from '../domain/hash.js';
@@ -26,9 +26,10 @@ import { flockFree, flockHeldByAncestor, judgeStack, markStacksUsed, readStackCo
 import { defaultLockDir } from '../lock/store.js';
 import { classifyFailures, type InfrastructureCause } from './infrastructure.js';
 import { planSpread, prepareCopies, prepareMainCopy, removeCopies, stackLock, stackVariables, usesStack, type MainSetup, type SpreadPlan } from './spread.js';
-import { checkReuse, findOrigin, readLocal, reuseContext, reuseReason, type ReuseChoice, type ReuseEnvironment } from './reuse-proof.js';
+import { checkReuse, findOrigin, readLocal, reuseContext, reuseReason, type IdentityParts, type ReuseChoice, type ReuseEnvironment } from './reuse-proof.js';
 import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, repeatProofGap, resolveReference, tooManyFiles,
   type RepeatPlan } from './repeat.js';
+import { repeatCredits, type RepeatCredit } from './repeat-credit.js';
 import { planScope, scopeRecord, scopeReferenceMissing, type ScopeDecision } from './proof-scope.js';
 import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, withShare, flockCommand, freePorts, queuePlaces, resolveGateLock, withGateLease,
   type CleanupRecord, type PortProcess, type PortsRecord, type QueueHandle, type QueueRecord, type SuiteHooks } from './suite.js';
@@ -81,15 +82,44 @@ export function stackAddress(_name: string, value: string, stack: Pick<ResolvedS
  */
 export function reuseIdentityFor(env: NodeJS.ProcessEnv, extra: Record<string, unknown>, environmentHash: string, stack: IdentityStack | null): string {
   if (!stack) return environmentHash;
+  const compared = identityOf(env, extra, stack);
+  return compared ? environmentIdentity(ENVIRONMENT_ID, compared.env, compared.extra) : hash({ notComparable: randomUUID() });
+}
+
+/**
+ * The variables and the extra part an identity of reuse compares on a stack (reuseIdentityFor), or null when its fingerprint
+ * failed. With a fingerprint, a variable of the stack named in `normalizeEnv` (docs/UNE-SUITE-PAR-PR.md, 1.2) is replaced
+ * whole by `{{<nom> de la pile}}`: `E2E_STACK=2` and `E2E_STACK=1`, two URLs of two env files, compare equal when the two
+ * stacks print the same fingerprint. Any other variable of the stack keeps its value but for its declared ports (stackAddress).
+ */
+function identityOf(env: NodeJS.ProcessEnv, extra: Record<string, unknown>, stack: IdentityStack): { env: NodeJS.ProcessEnv; extra: Record<string, unknown> } | null {
   const declaration = stack.resolved.config;
   if (!declaration.fingerprint) {
     const { envFile: _envFile, ...rest } = declaration;
-    return environmentIdentity(ENVIRONMENT_ID, env, { ...extra, stack: { id: declaration.id, declaration: rest } });
+    return { env, extra: { ...extra, stack: { id: declaration.id, declaration: rest } } };
   }
-  if (!stack.fingerprint) return hash({ notComparable: randomUUID() });
+  if (!stack.fingerprint) return null;
+  const normalized = declaration.normalizeEnv ?? [];
   const replaced = Object.fromEntries(Object.entries(env).map(([name, value]) =>
-    [name, stack.variables.includes(name) && value !== undefined ? stackAddress(name, value, stack.resolved) : value]));
-  return environmentIdentity(ENVIRONMENT_ID, replaced, { ...extra, stack: { fingerprint: declaration.fingerprint, output: stack.fingerprint, variables: [...stack.variables].sort() } });
+    [name, !stack.variables.includes(name) || value === undefined ? value : normalized.includes(name) ? `{{${name} de la pile}}` : stackAddress(name, value, stack.resolved)]));
+  return { env: replaced, extra: { ...extra, stack: { fingerprint: declaration.fingerprint, output: stack.fingerprint, variables: [...stack.variables].sort(),
+    ...(normalized.length ? { normalized: [...normalized].sort() } : {}) } } };
+}
+
+/**
+ * The parts of the identity of reuse, each hashed apart (docs/UNE-SUITE-PAR-PR.md, 2.3): when no origin of an identical tree
+ * is in the same environment, `apv gates run` names what differs (a variable, the executable, the ignored files of the copy,
+ * the system, the stack) instead of « another environment ». The values compared are those of the identity (normalized on a
+ * stack with a fingerprint); a part never decides anything, the identity alone does.
+ */
+export function identityPartsFor(env: NodeJS.ProcessEnv, extra: { executable: unknown; local: unknown; copy: unknown }, stack: IdentityStack | null): IdentityParts | null {
+  const compared = stack ? identityOf(env, extra, stack) : { env, extra: extra as Record<string, unknown> };
+  if (!compared) return null;
+  const { executable, local, copy, ...rest } = compared.extra;
+  return { env: Object.fromEntries(Object.entries(compared.env).filter(([, v]) => v !== undefined).map(([name, value]) => [name, hash({ name, value })])),
+    executable: hash(executable ?? null), local: hash(local ?? null), copy: hash(copy ?? null),
+    system: hash({ id: ENVIRONMENT_ID, node: process.version, platform: process.platform, arch: process.arch, kernel: release(), runner: VERSION }),
+    stack: 'stack' in rest ? hash(rest['stack']) : null };
 }
 
 export interface GateRunOptions {
@@ -166,6 +196,12 @@ export interface GateRunOptions {
    * only for a package-lock.json without node_modules), and never when every check is reused (A4).
    */
   batchSetup?: boolean;
+  /**
+   * `apv release auto` (docs/UNE-SUITE-PAR-PR.md, 2.2): the changed test files a complete green receipt of the same check already
+   * repeated at the same content (on their branch) are credited instead of repeated (src/gates/repeat-credit.ts). Absent: every
+   * changed test file is repeated.
+   */
+  repeatCredits?: boolean;
 }
 /** A check reused at an identical tree: the receipt `cached` written, its origin and why. */
 export interface ReusedCheck {
@@ -579,7 +615,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const repeats = new Map(gates.filter(g => g.repeatChanged).map(g => [g.id, expand(g, repeatArgv(g.repeatChanged!))]));
   // The changed test files each check repeats, decided before any wait: a ceiling exceeded or a refused fixed wait
   // stops the run here, explicitly, rather than after a full suite or by a silent skip. Null: no --base to compare to.
-  const repeatPlans = new Map<string, RepeatPlan>();
+  const repeatPlans = new Map<string, RepeatPlan & { credited?: RepeatCredit[] }>();
   const repeating = runnable.filter(g => g.repeatChanged);
   if (repeating.length) {
     // Without a base, or with one HEAD does not strictly descend from, nothing would be repeated: refused, never a silent pass.
@@ -597,7 +633,16 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       reference = resolved.sha;
       if (!reference) throw new PipelineError('GATE_BASE', referenceMissing(g.id, name, resolved.reason));
     }
-    const plan = await planRepeat(git, repo, { base: baseSha!, reference }, settings);
+    let plan: RepeatPlan & { credited?: RepeatCredit[] } = await planRepeat(git, repo, { base: baseSha!, reference }, settings);
+    // The release (`apv release auto`, docs/UNE-SUITE-PAR-PR.md, 2.2): a changed test file already repeated, green, at the same
+    // content by a complete receipt of the check (its branch) is credited, not repeated again; the receipt says which.
+    if (options.repeatCredits && reference && plan.files.length) {
+      const credits = await repeatCredits({ git, repo, commit: candidateSha, gateId: g.id, settings, files: plan.files, store: await sharedStore(git, repo), local: readLocal(repo) });
+      if (credits.size) {
+        plan = { ...plan, files: plan.files.filter(f => !credits.has(f)), fixedWaits: plan.fixedWaits.filter(w => !credits.has(w.file)), credited: [...credits.values()].sort((a, b) => a.file < b.file ? -1 : 1) };
+        log(`${g.id} : ${credits.size} test(s) modifié(s) déjà répété(s), verts, au même contenu (crédit de répétition) : non répétés : ${plan.credited!.map(c => `${c.file} (exécution ${c.runId})`).join(', ')}.`);
+      }
+    }
     const optionLike = plan.files.find(f => f.startsWith('-'));
     if (optionLike) throw optionLikeFile(g.id, optionLike);
     if (options.repeatCeiling !== false && plan.files.length > settings.maxFiles) throw tooManyFiles(g.id, plan, settings);
@@ -708,9 +753,9 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
           const executable = await executableOf(commands.get(gate.id)![0]!, env);
           const extra = { executable, local: localState, copy: copyState };
           const environmentHash = environmentIdentity(ENVIRONMENT_ID, env, extra);
-          const identity = reuseIdentityFor(env, extra, environmentHash,
-            stack ? { resolved: stack, variables: Object.keys(stackVariables(stack, gate, options.config.environment.passEnv)), fingerprint: await fingerprintOf(stack) } : null);
-          environments.push({ hash: environmentHash, identity, stack: stack?.id ?? null, executable });
+          const identityStack = stack ? { resolved: stack, variables: Object.keys(stackVariables(stack, gate, options.config.environment.passEnv)), fingerprint: await fingerprintOf(stack) } : null;
+          const identity = reuseIdentityFor(env, extra, environmentHash, identityStack);
+          environments.push({ hash: environmentHash, identity, stack: stack?.id ?? null, executable, parts: identityPartsFor(env, extra, identityStack) });
         } catch { /* No environment to compare (executable or env file unreadable): it runs, and says why. */ }
       }
       const found = await findOrigin(ctx, gate, environments, baseSha);
@@ -722,7 +767,9 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       if (gate.repeatChanged) {
         let reference: { name: string; sha: string | null; reason: string } | null = null;
         if (stage === 'full') { const name = options.repeatReference ?? gate.repeatChanged.reference; reference = { name, ...await resolveReference(git, repo, name) }; }
-        const gap = await repeatProofGap(git, repo, candidateSha, gate.repeatChanged, found.origin.receipt.repeat, reference);
+        const credit = options.repeatCredits && reference ? async (files: string[]): Promise<ReadonlySet<string>> =>
+          new Set((await repeatCredits({ git, repo, commit: candidateSha, gateId: gate.id, settings: gate.repeatChanged!, files, store: ctx.store, local: ctx.local })).keys()) : undefined;
+        const gap = await repeatProofGap(git, repo, candidateSha, gate.repeatChanged, found.origin.receipt.repeat, reference, credit);
         if (gap) { log(`${gate.id} : non repris (répétition des tests modifiés non prouvée par l'origine : ${gap.reason}) : exécuté.`); continue; }
       }
       reuse.set(gate.id, { ...found, environment: environments.find(e => e.identity === found.identity)! });
@@ -902,8 +949,8 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     };
     const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
     type Repeat = NonNullable<GateReceipt['repeat']>;
-    type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'>>;
-    type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat' | 'web' | 'scope' | 'nearTimeout' | 'early' | 'reuse' | 'reuseIdentity' | 'finding'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack' | 'reuse' | 'reuseIdentity' | 'finding'>> & { repeat?: RepeatFields; web?: NonNullable<GateReceipt['web']> };
+    type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output' | 'credited'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output' | 'credited'>>;
+    type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat' | 'web' | 'scope' | 'nearTimeout' | 'early' | 'reuse' | 'reuseIdentity' | 'identityParts' | 'finding'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack' | 'reuse' | 'reuseIdentity' | 'identityParts' | 'finding'>> & { repeat?: RepeatFields; web?: NonNullable<GateReceipt['web']> };
     const write = (receipt: Fields): GateReceipt => {
       const decision = scopeDecisions.get(receipt.gateId);
       const earlyRun = earlyDecisions.get(receipt.gateId);
@@ -954,14 +1001,15 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       // ignores there, measured once before the first check of that copy; on a stack, its identity for a reuse (5.4).
       const extra = { executable, local: localStateDigest(workspace), copy: await copyStateOf(workspace) };
       const environmentHash = environmentIdentity(ENVIRONMENT_ID, env, extra);
-      const reuseIdentity = reuseIdentityFor(env, extra, environmentHash,
-        assigned ? { resolved: assigned.stack, variables: Object.keys(stackVariables(assigned.stack, gate, options.config.environment.passEnv)), fingerprint: await fingerprintOf(assigned.stack) } : null);
+      const identityStack = assigned ? { resolved: assigned.stack, variables: Object.keys(stackVariables(assigned.stack, gate, options.config.environment.passEnv)), fingerprint: await fingerprintOf(assigned.stack) } : null;
+      const reuseIdentity = reuseIdentityFor(env, extra, environmentHash, identityStack);
+      const identityParts = identityPartsFor(env, extra, identityStack);
       const key = proofKey({ repository: repo, baseSha: baseSha ?? candidateSha, candidateSha, taskHash: hash(null), configHash, environmentHash,
         workspace, gate: { ...gate, command }, dependencyKeys: gate.dependsOn.map(d => keys.get(d) ?? hash(null)),
         executable: executable ?? { path: command[0]!, sha256: hash('unresolved') } });
       keys.set(gate.id, key);
       const base = { id: randomUUID(), runId, gateId: gate.id, key, candidateSha, configHash, environmentHash, reuseIdentity, startedAt, reusedFrom: null,
-        ...(assigned ? { stack: assigned.stack.id } : {}) };
+        ...(identityParts ? { identityParts } : {}), ...(assigned ? { stack: assigned.stack.id } : {}) };
       const copyError = assigned ? spread!.copies.find(c => c.dir === workspace)?.error ?? null : null;
       if (copyError) return write({ ...base, status: 'spawn_error', durationMs: 0, exitCode: null, stdoutHash: '', stderrHash: '',
         diagnostic: `Copie de la pile ${assigned!.stack.id} non préparée : ${copyError}. La commande n'a pas été lancée.`,
@@ -1071,7 +1119,8 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         const plan = repeatPlans.get(gate.id);
         if (!settings || !plan) return fields;
         const times = settings.times;
-        const record = { base: plan.base, reference: plan.reference, files: plan.files, importsOnly: plan.importsOnly, movedPathsOnly: plan.movedPathsOnly, times, fixedWaits: plan.fixedWaits };
+        const record = { base: plan.base, reference: plan.reference, files: plan.files, importsOnly: plan.importsOnly, movedPathsOnly: plan.movedPathsOnly, times, fixedWaits: plan.fixedWaits,
+          ...(plan.credited?.length ? { credited: plan.credited } : {}) };
         if (!plan.files.length) return { ...fields, repeat: { ...record, status: 'none', failures: [] } };
         const afterRetry = fields.status === 'passed_after_retry';
         if (fields.status !== 'passed' && !afterRetry) return { ...fields, repeat: { ...record, status: 'not_run', failures: [] } };

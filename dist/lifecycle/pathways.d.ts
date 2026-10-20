@@ -315,6 +315,13 @@ export declare function targetedQaContext(context: {
                 readonly line: number;
                 readonly text: string;
             }[];
+            readonly credited: {
+                readonly file: string;
+                readonly blob: string;
+                readonly runId: string;
+                readonly receipt: string;
+                readonly commit: string;
+            }[] | undefined;
         } | undefined;
         web: {
             readonly required: boolean;
@@ -344,6 +351,14 @@ export declare function targetedQaContext(context: {
             readonly files: string[];
         } | undefined;
         reuseIdentity: string | undefined;
+        identityParts: {
+            readonly env: Record<string, string>;
+            readonly executable: string;
+            readonly local: string;
+            readonly copy: string;
+            readonly system: string;
+            readonly stack: string | null;
+        } | undefined;
         reuse: {
             readonly fromRun: string;
             readonly fromCommit: string;

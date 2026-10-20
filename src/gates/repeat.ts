@@ -470,14 +470,18 @@ export function repeatDiagnostic(input: { files: readonly string[]; times: numbe
  * leave out some changed tests never proves the check.
  */
 export async function repeatProofGap(git: Git, repo: string, commit: string, settings: RepeatSettings,
-  r: { base: string | null; status: string; files: readonly string[] } | undefined, reference: { name: string; sha: string | null; reason: string } | null): Promise<{ missing: string[]; reason: string } | null> {
+  r: { base: string | null; status: string; files: readonly string[] } | undefined, reference: { name: string; sha: string | null; reason: string } | null,
+  credit?: (files: string[]) => Promise<ReadonlySet<string>>): Promise<{ missing: string[]; reason: string } | null> {
   if (!r || r.status === 'no_base' || !r.base) return { missing: [], reason: 'exécution sans --base : aucun test modifié répété' };
   if (r.status !== 'passed' && r.status !== 'none') return { missing: [], reason: `répétition ${r.status}` };
   if (r.base === commit) return { missing: [], reason: 'base égale au commit : aucun test modifié ne pouvait être répété' };
   if (reference && !reference.sha) return { missing: [], reason: `référence ${reference.name} ${reference.reason} (repeatChanged.reference) : les tests modifiés depuis la branche où va le changement ne peuvent pas être recomptés` };
   const expected = await planRepeat(git, repo, { base: r.base, reference: reference?.sha ?? null }, { ...settings, fixedWaits: settings.fixedWaits === 'refuse' ? 'refuse' : 'off' }, commit);
   const done = new Set(r.files);
-  const missing = expected.files.filter(f => !done.has(f));
+  const left = expected.files.filter(f => !done.has(f));
+  // The release only (src/gates/repeat-credit.ts): a file a complete green receipt repeated at the same content is credited.
+  const credited = left.length && credit ? await credit(left) : new Set<string>();
+  const missing = left.filter(f => !credited.has(f));
   if (missing.length) return { missing, reason: `${missing.length} fichier(s) de test ajouté(s) ou modifié(s) non répété(s) (depuis ${(reference ? expected.reference! : expected.base).slice(0, 12)})` };
   if (settings.fixedWaits === 'refuse' && expected.fixedWaits.length) {
     return { missing: [], reason: `attente(s) à durée fixe refusée(s) : ${expected.fixedWaits.slice(0, 5).map(w => `${w.file}:${w.line}`).join(', ')}` };

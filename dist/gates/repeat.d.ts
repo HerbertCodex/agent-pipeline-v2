@@ -192,7 +192,7 @@ export declare function repeatProofGap(git: Git, repo: string, commit: string, s
     name: string;
     sha: string | null;
     reason: string;
-} | null): Promise<{
+} | null, credit?: (files: string[]) => Promise<ReadonlySet<string>>): Promise<{
     missing: string[];
     reason: string;
 } | null>;

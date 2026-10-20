@@ -176,34 +176,47 @@ test('apv release auto: nothing to publish, proven head published, red suite nev
   const ran = await apv(p.repo, ['release', 'auto'], ALLOW);
   assert.equal(ran.code, 0, ran.stdout + ran.stderr);
   assert.equal(p.remote('production'), fresh);
-  assert.equal(existsSync(join(git(p.repo, 'rev-parse', '--path-format=absolute', '--git-common-dir'), 'apv', 'release', fresh.slice(0, 12))), false, 'copy removed');
+  assert.equal(existsSync(join(git(p.repo, 'rev-parse', '--path-format=absolute', '--git-common-dir'), 'apv', 'fresh', git(p.repo, 'rev-parse', `${fresh}^{tree}`).slice(0, 16))), false, 'copy removed');
 
   // A check that fails: the suite runs red, nothing is published, and the next pass does not run it again.
   p.commit('rouge.txt', 'rouge\n'); git(p.repo, 'push', '-q', 'origin', 'main');
   const red = await apv(p.repo, ['release', 'auto'], ALLOW);
   assert.equal(red.code, 1, red.stdout + red.stderr);
-  assert.match(red.stdout, /rouge ou instable .*unit \(failed\).*rien n'est publié/);
+  assert.match(red.stdout, /Suite complète rouge à .*unit \(failed\).*rien n'est publié/);
   assert.equal(p.remote('production'), fresh);
   const next = await apv(p.repo, ['release', 'auto'], ALLOW);
   assert.equal(next.code, 1);
   assert.match(next.stdout, /Suite rouge à .*exécution .*jamais relancée au même commit .*nouveau commit sur main/);
 });
 
-test('apv release auto: a green receipt already there never suffices, the suite runs again in its copy', async t => {
-  // The check passes once (the receipt of the operator's run), then fails: the cron must see it fail.
+test('apv release auto: a green receipt of the same tree in the same environment is reused and journaled; in another environment the suite runs again (AC-1)', async t => {
+  // The check passes once (the receipt of the operator's run), then fails: reused, it never runs again; run again, it fails.
   const marker = join(mkdtempSync(join(tmpdir(), 'apv4-release-once-')), 'ran');
   t.after(() => rmSync(dirname(marker), { recursive: true, force: true }));
   const once = `const fs=require("fs"); if (fs.existsSync(${JSON.stringify(marker)})) process.exit(1); fs.writeFileSync(${JSON.stringify(marker)}, "");`;
-  const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node(once) }] });
-  const before = p.remote('production');
-  p.commit('a.txt', 'a\n');
-  git(p.repo, 'push', '-q', 'origin', 'main');
-  assert.equal((await apv(p.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/production'])).code, 0);
-  assert.equal((await apv(p.repo, ['release', '--dry-run'])).code, 0, 'the receipt proves the commit for the manual release');
-  const auto = await apv(p.repo, ['release', 'auto'], ALLOW);
-  assert.equal(auto.code, 1, auto.stdout + auto.stderr);
-  assert.match(auto.stdout, /rouge ou instable .*unit \(failed\)/);
-  assert.equal(p.remote('production'), before);
+  for (const environment of ['same', 'other']) {
+    rmSync(marker, { force: true });
+    const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node(once), passEnv: ['MODE'] }] });
+    const before = p.remote('production');
+    const sha = p.commit('a.txt', 'a\n');
+    git(p.repo, 'push', '-q', 'origin', 'main');
+    assert.equal((await apv(p.repo, ['gates', 'run', '--stage', 'full', '--base', 'origin/production'], { MODE: 'ci' })).code, 0);
+    assert.equal((await apv(p.repo, ['release', '--dry-run'])).code, 0, 'the receipt proves the commit for the manual release');
+    const auto = await apv(p.repo, ['release', 'auto'], { ...ALLOW, MODE: environment === 'same' ? 'ci' : 'ci-lent' });
+    if (environment === 'same') {
+      assert.equal(auto.code, 0, auto.stdout + auto.stderr);
+      assert.match(auto.stdout, /Repris sans relancer \(arbre identique, même environnement\) : unit de /);
+      assert.equal(p.remote('production'), sha);
+      const entry = readFileSync(join(p.repo, '.apv', 'state', 'stack.log'), 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(e => e.event === 'release').pop();
+      assert.equal(entry.reused[0].gateId, 'unit');
+      assert.equal(entry.reused[0].fromCommit, sha);
+    } else {
+      assert.equal(auto.code, 1, auto.stdout + auto.stderr);
+      assert.match(auto.stdout, /Suite complète rouge à .*unit \(failed\)/);
+      assert.match(auto.stderr, /unit : non repris \(.*autre environnement.*variable\(s\) MODE/, 'what differs is named');
+      assert.equal(p.remote('production'), before);
+    }
+  }
 });
 
 test('apv release: the checks of production are kept, a weakened check is never released (weaken.sh)', async t => {
@@ -553,7 +566,7 @@ test('apv release auto, without stacks: a red check stays a red suite, not an in
   p.commit('a.txt', 'a\n'); git(p.repo, 'push', '-q', 'origin', 'main');
   const r = await apv(p.repo, ['release', 'auto'], ALLOW);
   assert.equal(r.code, 1);
-  assert.match(r.stdout, /rouge ou instable/);
+  assert.match(r.stdout, /Suite complète rouge à /);
   assert.doesNotMatch(r.stdout, /panne d'infrastructure/);
 });
 
@@ -628,7 +641,7 @@ test('apv release auto: unstable receipts never publish, whatever the record of 
     }
     const r = await apv(p.repo, ['release', 'auto', ...(variant === '--force-retry' ? ['--force-retry'] : [])], ALLOW);
     assert.equal(r.code, 1, `${variant}: ${r.stdout}${r.stderr}`);
-    assert.match(r.stdout, /instable\(s\) : browser : rien n'est publié ni relancé/, variant);
+    assert.match(r.stdout, /réussi\(s\) seulement après relance à .*browser \(règle instable\) : .*fichier du test introuvable dans son nom/, variant);
     assert.doesNotMatch(r.stdout, /aucun instable/, variant);
     assert.notEqual(p.remote('production'), p.sha, variant);
   }

@@ -6,6 +6,7 @@ import { type PruneResult } from './store.js';
 import { type ResolvedStack, type StackHealth } from '../stacks/idle.js';
 import { type InfrastructureCause } from './infrastructure.js';
 import { type MainSetup } from './spread.js';
+import { type IdentityParts } from './reuse-proof.js';
 import { type ScopeDecision } from './proof-scope.js';
 import { type CleanupRecord, type PortsRecord, type QueueRecord, type SuiteHooks } from './suite.js';
 /** Receipts of `apv gates run`, one directory per execution. Machine evidence, not versioned. */
@@ -38,6 +39,17 @@ export declare function stackAddress(_name: string, value: string, stack: Pick<R
  * fingerprint that failed or printed nothing: an identity no other ever equals.
  */
 export declare function reuseIdentityFor(env: NodeJS.ProcessEnv, extra: Record<string, unknown>, environmentHash: string, stack: IdentityStack | null): string;
+/**
+ * The parts of the identity of reuse, each hashed apart (docs/UNE-SUITE-PAR-PR.md, 2.3): when no origin of an identical tree
+ * is in the same environment, `apv gates run` names what differs (a variable, the executable, the ignored files of the copy,
+ * the system, the stack) instead of « another environment ». The values compared are those of the identity (normalized on a
+ * stack with a fingerprint); a part never decides anything, the identity alone does.
+ */
+export declare function identityPartsFor(env: NodeJS.ProcessEnv, extra: {
+    executable: unknown;
+    local: unknown;
+    copy: unknown;
+}, stack: IdentityStack | null): IdentityParts | null;
 export interface GateRunOptions {
     repo: string;
     config: ApvConfig;
@@ -120,6 +132,12 @@ export interface GateRunOptions {
      * only for a package-lock.json without node_modules), and never when every check is reused (A4).
      */
     batchSetup?: boolean;
+    /**
+     * `apv release auto` (docs/UNE-SUITE-PAR-PR.md, 2.2): the changed test files a complete green receipt of the same check already
+     * repeated at the same content (on their branch) are credited instead of repeated (src/gates/repeat-credit.ts). Absent: every
+     * changed test file is repeated.
+     */
+    repeatCredits?: boolean;
 }
 /** A check reused at an identical tree: the receipt `cached` written, its origin and why. */
 export interface ReusedCheck {

@@ -230,6 +230,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly cacheTtlMs: number;
         readonly stage: "task" | "full" | undefined;
         readonly affected: string[] | undefined;
+        readonly affectedList: string[] | undefined;
         readonly lock: {
             readonly resource: string;
             readonly waitMs: number;
@@ -400,6 +401,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly stop: string[] | undefined;
         readonly start: string[] | undefined;
         readonly fingerprint: string[] | undefined;
+        readonly normalizeEnv: string[] | undefined;
         readonly idleAfterMs: number | undefined;
         readonly commandTimeoutMs: number;
         readonly description: string | undefined;

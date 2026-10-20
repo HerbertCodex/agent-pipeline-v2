@@ -1,16 +1,18 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { loadConfig, loadConfigAtCommit, suiteSettings } from '../config/load.js';
 import { enforceBaseGates } from '../gates/base-gates.js';
 import { runGates } from '../gates/run.js';
+import { pickStacks as pickFresh, withFreshCopy } from '../gates/fresh-copy.js';
+import { prepareMainCopy } from '../gates/spread.js';
+import { classifyUnstable, writeFindings } from '../release/unstable.js';
 import { verifyGates } from '../gates/verify.js';
 import { LockStore } from '../lock/store.js';
 import { migrationLines, pendingReason, refusedReason, releaseMigrations } from '../release/migrations.js';
 import { gitRoot, resolveCommit } from '../run/git-probe.js';
 import { infrastructureAdvice, infrastructureText } from '../gates/infrastructure.js';
-import { commonDir, flockFree, resolveStacks } from '../stacks/idle.js';
+import { commonDir } from '../stacks/idle.js';
 import { journalEntry } from './stack.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 export const usage = `Utilisation :
@@ -26,13 +28,19 @@ affichée, branche distante relue. --dry-run vérifie tout et ne pousse rien.
 release.migrations (motifs) : chaque migration ajoutée depuis la production attend « migration <version> appliquée » tapé
 par l'opérateur dans une session Claude Code (journal de l'opérateur) ; une migration publiée modifiée est refusée.
 Motifs : ceux de la production, de <sha> et de from réunis (un commit qui les vide ou les change n'en retire aucun).
-auto : pour un lancement périodique (cron) ; rien à publier : 0 ; reçus rouges ou instables à ce commit : 1 sans
-relancer ; migration en attente : 0, rien lancé ; sinon suite complète relancée en entier (aucun reçu repris) dans une copie détachée (batch.setup), sans
-attendre la file des suites (occupée : 0, plus tard), puis publie si elle est verte au premier passage.
+auto : pour un lancement périodique (cron) ; rien à publier : 0 ; reçus rouges à ce commit : 1 sans relancer ; migration
+en attente : 0, rien lancé ; sinon suite complète dans la copie neuve de l'arbre (<répertoire git commun>/apv/fresh/<arbre>,
+préparée par batch.setup, la même que apv gates run --fresh-copy), sans attendre la file des suites (occupée : 0, plus tard) :
+un contrôle dont un reçu vert d'un arbre identique se vérifie (même configuration, même environnement normalisé, moins de
+20 h : la suite de la branche) est repris sans relancer, le journal dit lequel ; les tests modifiés déjà répétés au même
+contenu sur leur branche ne sont pas répétés de nouveau (crédit de répétition). Puis publie si elle est verte.
+Test instable (réussi seulement après relance) : bloquant s'il est ajouté ou modifié depuis la production, ou concerné par
+le changement (affectedList du contrôle, lu à la production) ; sinon publié quand même, et écrit comme constat (journal,
+.apv/state/suivi-constats.md) avec son nom et son taux d'échec.
 Section stacks déclarée : la suite reçoit une pile comme apv gates run --stacks (la première dont le verrou est libre, ou --stacks pour
 forcer) ; aucune libre : 0, piles occupées, plus tard. Panne d'infrastructure (variable absente, pile injoignable) : dite comme telle, 1.
-Même commit déjà tenté, lu dans ses reçus seuls (magasin vérifié comme apv gates verify) : contrôle instable ou échec de code : 1,
-jamais relancé, --force-retry compris (seul un nouveau commit débloque) ; échecs tous en panne d'infrastructure : nouvel essai
+Même commit déjà tenté, lu dans ses reçus seuls (magasin vérifié comme apv gates verify) : échec de code : 1, jamais relancé,
+--force-retry compris (seul un nouveau commit débloque) ; instable : jugé comme ci-dessus, jamais relancé ; échecs tous en panne d'infrastructure : nouvel essai
 30 min après leurs reçus au plus tôt, --force-retry relance tout de suite.
 Hors --dry-run : APV_ALLOW_MERGE=1 devant la commande (ordre de l'opérateur, ou son cron).
 Les contrôles de la branche de production sont toujours gardés (comme les contrôles de la base à la fusion).
@@ -70,9 +78,25 @@ function remoteState(repo) {
 /** The checks of `sha` with those of the production kept (a change never weakens what production was proven with). */
 const proofConfig = (repo, sha, production) => enforceBaseGates(loadConfigAtCommit(repo, sha).config, loadConfigAtCommit(repo, production).config).config;
 async function fullProof(repo, sha, from, production) {
-    return verifyGates({ repo, config: proofConfig(repo, sha, production), commit: sha, stage: 'full', configFile: null, reuseReference: `refs/remotes/${REMOTE}/${from}` });
+    return verifyGates({ repo, config: proofConfig(repo, sha, production), commit: sha, stage: 'full', configFile: null, reuseReference: `refs/remotes/${REMOTE}/${from}`, repeatCredits: true });
 }
 const proofLines = (proof) => proof.gates.filter(g => g.state !== 'passed').map(g => `${g.gateId} (${g.state})`);
+/**
+ * The verdict on the unstable checks of a proof (src/release/unstable.ts): in the copy of the suite when there is one, else in a
+ * fresh copy of the commit prepared by batch.setup (the affectedList commands run the tools of the project); busy: blocking.
+ */
+async function judgeUnstable(ctx, repo, sha, production, proof) {
+    const config = proofConfig(repo, sha, production);
+    const log = (line) => ctx.io.stderr(`${line}\n`);
+    const judge = (copy) => classifyUnstable({ repo, copy, commit: sha, production, config, proof, env: ctx.io.env, log });
+    if (ctx.copy)
+        return judge(ctx.copy);
+    const done = await withFreshCopy(repo, commonDir(repo), sha, async (dir) => {
+        await prepareMainCopy({ repo: dir, config, env: ctx.io.env, log, always: 'copie neuve de la mise en ligne' });
+        return judge(dir);
+    }, log);
+    return 'busy' in done ? { tests: [], blocking: [`${done.busy} : les tests instables se jugent plus tard`] } : done;
+}
 /**
  * The migrations between production and `sha` (null when no `release.migrations` declares any). The patterns of production,
  * of `sha` and of `from` together, as the checks of production are kept: a commit that empties or changes them removes none.
@@ -89,7 +113,7 @@ function migrationStop(m) {
     return m?.pending.length ? { wait: pendingReason(m) } : null;
 }
 /** Checks a release of `sha` and, unless `dryRun`, pushes it fast-forward. */
-async function release(repo, state, sha, dryRun) {
+async function release(repo, state, sha, dryRun, ctx) {
     const { settings, settings: { branch, from }, fromHead, production } = state;
     const migrations = production ? migrationsOf(repo, settings, production, sha) : null;
     const base = { ok: false, published: false, sha, branch, from, previous: production, migrations, lines: [] };
@@ -110,21 +134,38 @@ async function release(repo, state, sha, dryRun) {
     const proof = await fullProof(repo, sha, from, production);
     if (!proof.ok)
         return refuse(`suite complète non prouvée à ${short(sha)}, contrôles de ${REMOTE}/${branch} compris : ${proofLines(proof).join(', ')} (apv gates run --stage full --base ${REMOTE}/${branch} dans une copie à ce commit)`);
-    if (proof.flaky.length)
-        return refuse(`réussi(s) seulement après relance à ${short(sha)} : ${proof.flaky.join(', ')} (règle instable)`);
-    const said = `suite complète prouvée à ${short(sha)} (${proof.required.length} contrôle(s), aucun instable) ; ${REMOTE}/${branch} ${short(production)} vers ${short(sha)} en avance rapide`;
+    // An unstable test blocks unless it is unrelated to the change since production (docs/UNE-SUITE-PAR-PR.md, 3).
+    let unstable = [];
+    if (proof.flaky.length) {
+        const verdict = await judgeUnstable(ctx, repo, sha, production, proof);
+        unstable = verdict.tests;
+        if (verdict.blocking.length) {
+            return { ...refuse(`réussi(s) seulement après relance à ${short(sha)} : ${proof.flaky.join(', ')} (règle instable) : ${verdict.blocking.join(' ; ')}`), unstable };
+        }
+    }
+    const reused = (ctx.reused ?? []).map(r => ({ gateId: r.gateId, fromRun: r.fromRun, fromCommit: r.fromCommit, origin: r.origin }));
+    const notes = [
+        ...(reused.length ? [`Repris sans relancer (arbre identique, même environnement) : ${reused.map(r => `${r.gateId} de ${short(r.fromCommit)} (exécution ${r.fromRun}, reçu ${r.origin})`).join(' ; ')}.`] : []),
+        ...unstable.map(t => `Constat : test instable sans rapport avec le changement depuis ${short(production)} : ${t.test} (${t.gateId}) échoue ${t.failed} fois sur ${t.passes} passages (exécution ${t.runId}) ; publié quand même, à corriger à part.`)
+    ];
+    const said = `suite complète prouvée à ${short(sha)} (${proof.required.length} contrôle(s), ${proof.flaky.length ? `${proof.flaky.length} instable(s) sans rapport avec le changement` : 'aucun instable'}) ; ${REMOTE}/${branch} ${short(production)} vers ${short(sha)} en avance rapide`;
     if (dryRun)
-        return { ...base, ok: true, lines: [`Mise en ligne possible : ${said}. --dry-run : rien n'est poussé.`, ...applied] };
+        return { ...base, ok: true, reused, unstable, lines: [`Mise en ligne possible : ${said}. --dry-run : rien n'est poussé.`, ...notes, ...applied] };
     const push = git(repo, ['push', REMOTE, `${sha}:refs/heads/${branch}`]);
     const after = git(repo, ['ls-remote', REMOTE, `refs/heads/${branch}`]).stdout.split('\t')[0]?.trim() ?? '';
     git(repo, ['fetch', '--no-tags', REMOTE, `+refs/heads/${branch}:refs/remotes/${REMOTE}/${branch}`]);
     const done = push.status === 0 && after === sha;
-    return { ...base, ok: done, published: done, push,
-        lines: [done ? `Mis en ligne : ${said}. ${REMOTE}/${branch} relue à ${short(after)}.` : `Mise en ligne en échec : git push sorti en ${push.status}, ${REMOTE}/${branch} relue à ${short(after || null)}.`, ...applied] };
+    const findings = done ? writeFindings(repo, sha, unstable) : null;
+    return { ...base, ok: done, published: done, push, reused, unstable,
+        lines: [done ? `Mis en ligne : ${said}. ${REMOTE}/${branch} relue à ${short(after)}.` : `Mise en ligne en échec : git push sorti en ${push.status}, ${REMOTE}/${branch} relue à ${short(after || null)}.`, ...notes, ...applied,
+            ...(findings ? [`Constat non écrit dans .apv/state/suivi-constats.md : ${findings}`] : [])] };
 }
 function report(io, asJson, outcome, history, mode) {
     if (history) {
-        const failed = journalEntry(io, { event: 'release', mode, commit: outcome.sha, branch: outcome.branch, from: outcome.from, previous: outcome.previous, ok: outcome.ok, published: outcome.published, detail: outcome.lines.join(' ') });
+        const failed = journalEntry(io, { event: 'release', mode, commit: outcome.sha, branch: outcome.branch, from: outcome.from, previous: outcome.previous, ok: outcome.ok, published: outcome.published,
+            ...(outcome.reused?.length ? { reused: outcome.reused } : {}),
+            ...(outcome.unstable?.length ? { unstable: outcome.unstable.map(t => ({ gate: t.gateId, test: t.test, files: t.files, failed: t.failed, passes: t.passes, run: t.runId, blocking: t.blocking })) } : {}),
+            detail: outcome.lines.join(' ') });
         if (failed)
             outcome.lines.push(`Historique non écrit (.apv/state/stack.log) : ${failed}`);
     }
@@ -175,7 +216,7 @@ async function auto(io, repo, dryRun, asJson, forced, forceRetry) {
         if (production === fromHead)
             return report(io, asJson, { ...base, lines: [`Rien à publier : ${REMOTE}/${branch} est à la tête de ${from} (${short(fromHead)}).`] }, false, 'auto');
         if (!production || !isAncestor(repo, production, fromHead))
-            return report(io, asJson, await release(repo, state, fromHead, true), !dryRun, 'auto');
+            return report(io, asJson, await release(repo, state, fromHead, true, { io }), !dryRun, 'auto');
         // Migrations first: one waiting for the operator never costs a full suite.
         const migrations = migrationsOf(repo, settings, production, fromHead);
         const stop = migrationStop(migrations);
@@ -184,13 +225,17 @@ async function auto(io, repo, dryRun, asJson, forced, forceRetry) {
         if (stop)
             return report(io, asJson, { ...base, migrations, lines: [`En attente : ${stop.wait} ; rien n'est publié ni lancé.`, ...migrationLines({ ...migrations, pending: [] })] }, false, 'auto');
         // Whether to run the suite again is read from the receipts at this commit only, as `verify` reads them (integrity of the
-        // shared store included), never from a file an agent can write (review of 1786b40, M1). An unstable check never
-        // publishes. A failure of the code is never run again at the same commit, --force-retry included: only a new commit
-        // unblocks it. Only a run whose every failure is an infrastructure failure (src/gates/infrastructure.ts) is run again,
-        // 30 minutes after its receipts at the earliest (--force-retry: at once). A green proof never suffices: the suite runs in full.
+        // shared store included), never from a file an agent can write (review of 1786b40, M1). An unstable check is never run
+        // again: a complete proof with unstable checks is judged (unrelated to the change: published, a finding), else refused.
+        // A failure of the code is never run again at the same commit, --force-retry included: only a new commit unblocks it.
+        // Only a run whose every failure is an infrastructure failure (src/gates/infrastructure.ts) is run again, 30 minutes
+        // after its receipts at the earliest (--force-retry: at once). A green proof alone never suffices: the suite runs in the
+        // fresh copy, which reuses what checks out in its own environment (docs/UNE-SUITE-PAR-PR.md, 2).
         const proof = await fullProof(repo, fromHead, from, production);
         if (proof.flaky.length) {
-            return report(io, asJson, { ...base, ok: false, lines: [`Suite complète déjà passée à ${short(fromHead)}, instable(s) : ${proof.flaky.join(', ')} : rien n'est publié ni relancé (corriger sur ${from}).`] }, !dryRun, 'auto');
+            if (proof.ok)
+                return report(io, asJson, await release(repo, state, fromHead, dryRun, { io }), !dryRun, 'auto');
+            return report(io, asJson, { ...base, ok: false, lines: [`Suite complète déjà passée à ${short(fromHead)}, instable(s) : ${proof.flaky.join(', ')}, et incomplète : ${proofLines(proof).join(', ')} : rien n'est publié ni relancé (corriger sur ${from}).`] }, !dryRun, 'auto');
         }
         const decision = retryDecision(proof, Date.now(), forceRetry);
         if (decision.kind === 'code') {
@@ -200,76 +245,68 @@ async function auto(io, repo, dryRun, asJson, forced, forceRetry) {
             return report(io, asJson, { ...base, lines: [`Panne d'infrastructure à ${short(fromHead)} le ${when(decision.endedAt)}, il y a ${Math.round(decision.ageMs / 60000)} min (exécution ${decision.runs}) : ${decision.causes.map(infrastructureText).join(' ; ')} ; nouvel essai après ${RETRY_INFRA_MS / 60000} min ; rien n'est lancé (--force-retry pour relancer).`] }, false, 'auto');
         }
         if (dryRun)
-            return report(io, asJson, { ...base, migrations, lines: [`Suite complète à relancer à ${short(fromHead)} dans une copie détachée, puis mise en ligne. --dry-run : rien n'est lancé.`, ...(migrations ? migrationLines(migrations) : [])] }, false, 'auto');
+            return report(io, asJson, { ...base, migrations, lines: [`Suite complète à lancer à ${short(fromHead)} dans la copie neuve de son arbre (reçus verts d'un arbre identique repris), puis mise en ligne. --dry-run : rien n'est lancé.`, ...(migrations ? migrationLines(migrations) : [])] }, false, 'auto');
         const piles = pickStacks(proofConfig(repo, fromHead, production), common, forced);
         if ('busy' in piles)
             return report(io, asJson, { ...base, lines: [`Piles occupées (${piles.busy}) : plus tard ; rien n'est lancé.`] }, false, 'auto');
-        const suite = await runCopy(io, repo, common, fromHead, production, piles.ids);
-        if (suite.busy)
-            return report(io, asJson, { ...base, lines: [`Machine occupée (${suite.busy}) : plus tard.`] }, false, 'auto');
-        if (suite.infrastructure)
-            return report(io, asJson, { ...base, ok: false, lines: [`Suite complète à ${short(fromHead)} : panne d'infrastructure : ${suite.infrastructure} ; rien n'est publié.`] }, true, 'auto');
-        if (!suite.ok)
-            return report(io, asJson, { ...base, ok: false, lines: [`Suite complète rouge ou instable à ${short(fromHead)} : ${suite.summary} ; rien n'est publié.`] }, true, 'auto');
-        return report(io, asJson, await release(repo, state, fromHead, false), true, 'auto');
+        const outcome = await withFreshCopy(repo, common, fromHead, async (dir) => {
+            const suite = await runSuite(io, dir, fromHead, proofConfig(repo, fromHead, production), production, piles.ids);
+            if (suite.busy)
+                return { ...base, lines: [`Machine occupée (${suite.busy}) : plus tard.`] };
+            if (suite.infrastructure)
+                return { ...base, ok: false, lines: [`Suite complète à ${short(fromHead)} : panne d'infrastructure : ${suite.infrastructure} ; rien n'est publié.`] };
+            if (!suite.ok)
+                return { ...base, ok: false, lines: [`Suite complète rouge à ${short(fromHead)} : ${suite.summary} ; rien n'est publié.`] };
+            // Green, unstable checks included: the release judges them in this very copy.
+            return release(repo, state, fromHead, false, { io, copy: dir, reused: suite.reused });
+        }, line => io.stderr(`${line}\n`));
+        if ('busy' in outcome)
+            return report(io, asJson, { ...base, lines: [`Copie neuve occupée (${outcome.busy}) : plus tard ; rien n'est lancé.`] }, false, 'auto');
+        // A machine busy is a pass that did nothing: not journaled, as before.
+        return report(io, asJson, outcome, !outcome.lines[0]?.startsWith('Machine occupée'), 'auto');
     }
     finally {
         await store.release('release-auto', { token: lock.record.token }).catch(() => undefined);
     }
 }
-/**
- * The stacks the full suite is given, as `apv gates run --stacks`: those forced, else the first declared whose lock is free
- * (a lock file held by someone else is busy); none declared: none given (`ids` undefined); all busy: `busy`.
- */
+/** The stacks of the suite (src/gates/fresh-copy.ts): an unknown stack forced is an incorrect call. */
 function pickStacks(config, common, forced) {
-    const declared = resolveStacks(config, common);
-    if (!declared.length) {
-        if (forced)
-            throw new UsageError('--stacks : aucune pile déclarée (section stacks de .apv/config.json)');
-        return { ids: undefined };
-    }
-    if (forced) {
-        const unknown = forced.filter(id => !declared.some(s => s.id === id));
-        if (unknown.length)
-            throw new UsageError(`--stacks : pile inconnue ${unknown.join(', ')} (déclarées : ${declared.map(s => s.id).join(', ')})`);
-        return { ids: forced };
-    }
-    const free = declared.find(s => !s.lockFile || flockFree(s.lockFile) !== false);
-    return free ? { ids: [free.id] } : { busy: declared.map(s => `${s.id} : verrou ${s.lockFile} tenu`).join(' ; ') };
-}
-/** The full suite of `sha` in a detached copy under the Git common directory, prepared by batch.setup, then removed. */
-async function runCopy(io, repo, common, sha, production, stacks) {
-    const dir = join(common, 'apv', 'release', sha.slice(0, 12));
-    mkdirSync(join(common, 'apv', 'release'), { recursive: true });
-    if (existsSync(dir))
-        git(repo, ['worktree', 'remove', '--force', dir]);
-    const added = git(repo, ['worktree', 'add', '--detach', dir, sha]);
-    if (added.status !== 0)
-        throw new PipelineError('RELEASE', `copie ${dir} non créée : ${added.stderr.trim()}`);
     try {
-        const config = proofConfig(repo, sha, production);
+        return pickFresh(config, common, forced);
+    }
+    catch (error) {
+        if (error instanceof PipelineError && error.code === 'STACK_UNKNOWN')
+            throw new UsageError(error.message);
+        throw error;
+    }
+}
+/**
+ * The full suite of `sha` in its fresh copy `dir`, without waiting for the queue. A check whose green receipt of an identical
+ * tree checks out in this environment is reused (the suite of the branch, docs/UNE-SUITE-PAR-PR.md, 2.1); the changed test
+ * files already repeated at the same content are credited (2.2). `ok`: every check passed, some perhaps only after a relaunch
+ * (judged by the release).
+ */
+async function runSuite(io, dir, sha, config, production, stacks) {
+    try {
         const suite = suiteSettings(config);
         const noWait = { ...config, suite: { ports: suite.ports, queue: { ...suite.queue, waitMs: 0 } } };
-        // Every check run again (no receipt reused): the cron publishes only what it has just seen pass.
         const result = await runGates({ repo: dir, config: noWait, stage: 'full', base: production, repeatReference: production, reference: production, repeatCeiling: false,
-            batchSetup: true, replay: 'all', ...(stacks ? { stacks } : {}), env: io.env, log: line => io.stderr(`${line}\n`) });
+            batchSetup: true, repeatCredits: true, ...(stacks ? { stacks } : {}), env: io.env, log: line => io.stderr(`${line}\n`) });
+        if (result.candidateSha !== sha)
+            throw new PipelineError('RELEASE', `copie à ${short(result.candidateSha)}, attendu ${short(sha)}`);
         const failed = result.receipts.filter(r => !['passed', 'passed_after_retry', 'cached', 'not_required'].includes(r.status)).map(r => `${r.gateId} (${r.status})`);
         const infra = result.infrastructure;
         // Said as observed only when the tool recorded the finding itself; read from the output only, it stays probable (M3).
         const observed = result.receipts.filter(r => ['failed', 'timed_out', 'spawn_error'].includes(r.status)).every(r => r.finding);
         if (!result.ok && infra.all)
-            return { ok: false, infrastructure: `${observed ? '' : 'probable, lue dans la sortie, non constatée par apv : '}${infra.causes.map(infrastructureText).join(' ; ')} ; ${infrastructureAdvice(infra.causes, stacks ? [] : (config.stacks ?? []).map(x => x.id))} (exécution ${result.runId})`, runId: result.runId, summary: '' };
-        return { ok: result.ok && !result.flaky.length, runId: result.runId, summary: `${failed.length ? `en échec : ${failed.join(', ')}` : ''}${result.flaky.length ? ` instable(s) : ${result.flaky.join(', ')}` : ''} ; exécution ${result.runId}` };
+            return { ok: false, infrastructure: `${observed ? '' : 'probable, lue dans la sortie, non constatée par apv : '}${infra.causes.map(infrastructureText).join(' ; ')} ; ${infrastructureAdvice(infra.causes, stacks ? [] : (config.stacks ?? []).map(x => x.id))} (exécution ${result.runId})`, runId: result.runId, summary: '', reused: result.reused };
+        return { ok: result.ok, runId: result.runId, reused: result.reused,
+            summary: `${failed.length ? `en échec : ${failed.join(', ')}` : ''}${result.reuseStale.length ? ` reprise devenue invérifiable : ${result.reuseStale.map(x => x.gateId).join(', ')}` : ''} ; exécution ${result.runId}` };
     }
     catch (error) {
         if (error instanceof PipelineError && ['SUITE_QUEUE', 'GATE_BUSY'].includes(error.code))
-            return { ok: false, busy: error.message.slice(0, 300), summary: '' };
+            return { ok: false, busy: error.message.slice(0, 300), summary: '', reused: [] };
         throw error;
-    }
-    finally {
-        const removed = git(repo, ['worktree', 'remove', '--force', dir]);
-        if (removed.status !== 0)
-            io.stderr(`Copie ${dir} non retirée : ${removed.stderr.trim()}\n`);
     }
 }
 export async function run(args, io) {
@@ -300,7 +337,7 @@ export async function run(args, io) {
         const sha = positionals[0] === undefined ? state.fromHead : resolveCommit(repo, positionals[0]);
         if (!sha)
             throw new UsageError(`commit inconnu : ${positionals[0]}`);
-        return report(io, values.json === true, await release(repo, state, sha, dryRun), !dryRun, 'manuel');
+        return report(io, values.json === true, await release(repo, state, sha, dryRun, { io }), !dryRun, 'manuel');
     });
 }
 //# sourceMappingURL=release.js.map

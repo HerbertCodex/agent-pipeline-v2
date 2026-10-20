@@ -1,7 +1,7 @@
 import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s } from './schema.js';
 import { invariant } from './errors.js';
-export const VERSION = '4.0.0-alpha.4';
+export const VERSION = '4.0.0-alpha.5';
 export const lanes = ['fast', 'standard', 'high'];
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'];
 /**
@@ -116,6 +116,11 @@ export const gateSchema = s.object({
     // base, for example `playwright test --only-changed={{baseSha}}`. Run by the task stage in place of the check,
     // never counted as proof of it. Optional, never defaulted: absent, parsing and hashing are unchanged.
     affected: s.optional(argv),
+    // The list of the test files `affected` would run for the changes since `{{baseSha}}`, by the same computation (for example
+    // `playwright test --only-changed={{baseSha}} --list`): every path of its output that is a file of the commit counts.
+    // Read at production by `apv release`, to tell a test that passed only after its relaunch from one the change concerns
+    // (docs/UNE-SUITE-PAR-PR.md, 3). Optional, never defaulted: absent, parsing and hashing are unchanged.
+    affectedList: s.optional(argv),
     // Resource the check shares with other copies of the repository (a test stack): held around its command, whose
     // timeout starts once it is held. A lease of `apv lock` (`resource`) or a kernel `flock` on a file (`file`).
     // Optional, never defaulted: absent, parsing and hashing are unchanged.
@@ -347,6 +352,10 @@ export const receiptSchema = s.object({
         failures: s.default(s.array(s.object({ test: s.string(1, 500), count: s.number(1, 1_000_000) }), 0, 100), []),
         output: s.optional(s.string(0, 16000)),
         fixedWaits: s.default(s.array(s.object({ file: s.string(1, 500), line: s.number(1, 10_000_000), text: s.string(0, 300) }), 0, 100), []),
+        // The proof of the release only (docs/UNE-SUITE-PAR-PR.md, 2.2): changed test files left out of the repetition because a
+        // full receipt of the same check already repeated them, green, at the same content (`blob`). Never trusted: `apv
+        // release` finds the credit again in the store (repeatCredits). Absent elsewhere.
+        credited: s.optional(s.array(s.object({ file: s.string(1, 500), blob: s.string(40, 64, /^[a-f0-9]{40,64}$/), runId: id, receipt: id, commit: sha }), 0, 2000)),
     })),
     // What `apv web audit` run by the check recorded (`APV_WEB_RECORD`): whether the audit was required, from which base,
     // the changed files with a web effect, and the audit made (null: « not required », nothing measured). `apv gates verify`
@@ -386,6 +395,13 @@ export const receiptSchema = s.object({
     // and with `stacks[].fingerprint`, the variables of the stack are replaced by its fingerprint. Absent on older receipts:
     // `environmentHash` stands for it.
     reuseIdentity: s.optional(digest),
+    // The parts of that identity, each hashed apart (variables by name, executable, local state, ignored files of the copy,
+    // system, stack): when no origin is in the same environment, `apv gates run` names what differs. Never compared for a
+    // proof: `reuseIdentity` alone decides. Absent on older receipts and on a receipt never executed.
+    identityParts: s.optional(s.object({
+        env: s.record(/^[A-Za-z_][A-Za-z0-9_]*$/, digest, 400),
+        executable: digest, local: digest, copy: digest, system: digest, stack: s.nullable(digest),
+    })),
     reuse: s.optional(s.object({
         fromRun: id,
         fromCommit: sha,

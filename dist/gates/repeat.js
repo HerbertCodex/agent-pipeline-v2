@@ -576,7 +576,7 @@ export function repeatDiagnostic(input) {
  * against the reference resolved now: a run without a base, with a base equal to the commit, or with a base too close to
  * leave out some changed tests never proves the check.
  */
-export async function repeatProofGap(git, repo, commit, settings, r, reference) {
+export async function repeatProofGap(git, repo, commit, settings, r, reference, credit) {
     if (!r || r.status === 'no_base' || !r.base)
         return { missing: [], reason: 'exécution sans --base : aucun test modifié répété' };
     if (r.status !== 'passed' && r.status !== 'none')
@@ -587,7 +587,10 @@ export async function repeatProofGap(git, repo, commit, settings, r, reference) 
         return { missing: [], reason: `référence ${reference.name} ${reference.reason} (repeatChanged.reference) : les tests modifiés depuis la branche où va le changement ne peuvent pas être recomptés` };
     const expected = await planRepeat(git, repo, { base: r.base, reference: reference?.sha ?? null }, { ...settings, fixedWaits: settings.fixedWaits === 'refuse' ? 'refuse' : 'off' }, commit);
     const done = new Set(r.files);
-    const missing = expected.files.filter(f => !done.has(f));
+    const left = expected.files.filter(f => !done.has(f));
+    // The release only (src/gates/repeat-credit.ts): a file a complete green receipt repeated at the same content is credited.
+    const credited = left.length && credit ? await credit(left) : new Set();
+    const missing = left.filter(f => !credited.has(f));
     if (missing.length)
         return { missing, reason: `${missing.length} fichier(s) de test ajouté(s) ou modifié(s) non répété(s) (depuis ${(reference ? expected.reference : expected.base).slice(0, 12)})` };
     if (settings.fixedWaits === 'refuse' && expected.fixedWaits.length) {

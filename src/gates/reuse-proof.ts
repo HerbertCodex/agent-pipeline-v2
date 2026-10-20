@@ -718,7 +718,22 @@ export interface ReuseEnvironment {
   /** `reuseIdentity` the receipt would carry (5.4): compared to the origin's. */
   identity: string;
   stack: string | null;
+  /** The parts of that identity (`identityParts` the receipt would carry), to name what differs; null or absent: not said. */
+  parts?: IdentityParts | null;
 }
+
+/** What a receipt records of the parts of its identity of reuse (`identityParts`): a digest each, never a value. */
+export interface IdentityParts { env: Record<string, string>; executable: string; local: string; copy: string; system: string; stack: string | null }
+
+/** The names of the parts that differ between two records of identity parts, as said to the operator (at most 10 variables named). */
+export function partsDiffer(a: IdentityParts, b: IdentityParts): string[] {
+  const names = [...new Set([...Object.keys(a.env), ...Object.keys(b.env)])].sort().filter(n => a.env[n] !== b.env[n]);
+  return [...(names.length ? [`variable(s) ${names.slice(0, 10).join(', ')}${names.length > 10 ? ` et ${names.length - 10} autre(s)` : ''}`] : []),
+    ...(a.executable !== b.executable ? ['exécutable de la commande'] : []), ...(a.local !== b.local ? ['dépendances installées ou fichiers .env* de la copie'] : []),
+    ...(a.copy !== b.copy ? ['fichiers ignorés par Git de la copie (fichiers générés, sorties de build)'] : []),
+    ...(a.system !== b.system ? ['système (Node, noyau, version de l\'outil)'] : []), ...(a.stack !== b.stack ? ['pile (déclaration, empreinte ou variables)'] : [])];
+}
+
 
 /** The receipt `cached` a run may write for a check: its origin, the record of the reuse, the stack of its environment. */
 export interface ReuseChoice { origin: Found; reuse: NonNullable<GateReceipt['reuse']>; stack: string | null; identity: string; changed: number }
@@ -754,7 +769,13 @@ export async function findOrigin(ctx: ReuseContext, gate: ReusableGate & { id: s
   const sameEnv = young.filter(f => identities.has(reuseIdentityOf(f.receipt)));
   const sameBase = readsBase(gate) ? sameEnv.filter(f => f.baseSha !== null && f.baseSha === base) : sameEnv;
   if (!young.length) return why(`reçu(s) réussi(s) sur un arbre identique, mais de plus de ${hours(limit)} h (la reprise doit rester vérifiable ${hours(REUSE_AGE_MARGIN_MS)} h)`, true);
-  if (!sameEnv.length) return why('reçu(s) réussi(s) sur un arbre identique, mais dans un autre environnement (variables transmises, exécutable, pile, Node, système, version de l\'outil, ou état local ignoré par Git : node_modules, fichiers générés, fichiers .env*, worktrees et sous-modules de la copie)', true);
+  if (!sameEnv.length) {
+    // What differs from the latest of them, when both sides recorded their parts (docs/UNE-SUITE-PAR-PR.md, 2.3).
+    const closest = young.reduce(latest).receipt;
+    const differ = closest.identityParts ? environments.flatMap(e => e.parts ? [partsDiffer(e.parts, closest.identityParts!)] : [])[0] : undefined;
+    const said = differ?.length ? ` ; différent de ${closest.runId} (${closest.candidateSha.slice(0, 12)}) : ${differ.join(' ; ')}` : '';
+    return why(`reçu(s) réussi(s) sur un arbre identique, mais dans un autre environnement (variables transmises, exécutable, pile, Node, système, version de l'outil, ou état local ignoré par Git : node_modules, fichiers générés, fichiers .env*, worktrees et sous-modules de la copie)${said}`, true);
+  }
   if (!sameBase.length) return why(`reçu(s) réussi(s) sur un arbre identique, mais depuis une autre base ({{baseSha}} dans la commande : ${base?.slice(0, 12) ?? 'aucune'} ici)`, true);
   const origin = sameBase.reduce(latest);
   const reuse: NonNullable<GateReceipt['reuse']> = { fromRun: origin.receipt.runId, fromCommit: origin.receipt.candidateSha, basis: 'tree',

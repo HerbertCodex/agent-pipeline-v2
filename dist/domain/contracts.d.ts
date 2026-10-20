@@ -1,5 +1,5 @@
 import { type Infer } from './schema.js';
-export declare const VERSION = "4.0.0-alpha.4";
+export declare const VERSION = "4.0.0-alpha.5";
 export declare const lanes: readonly ["fast", "standard", "high"];
 export declare const validationKinds: readonly ["unit", "integration", "browser", "build", "lint", "typecheck", "security", "architecture"];
 export type Lane = typeof lanes[number];
@@ -118,6 +118,7 @@ export declare const gateSchema: import("./schema.js").Schema<{
     readonly cacheTtlMs: number;
     readonly stage: "task" | "full" | undefined;
     readonly affected: string[] | undefined;
+    readonly affectedList: string[] | undefined;
     readonly lock: {
         readonly resource: string;
         readonly waitMs: number;
@@ -354,6 +355,7 @@ export declare const configSchema: import("./schema.js").Schema<{
         readonly cacheTtlMs: number;
         readonly stage: "task" | "full" | undefined;
         readonly affected: string[] | undefined;
+        readonly affectedList: string[] | undefined;
         readonly lock: {
             readonly resource: string;
             readonly waitMs: number;
@@ -541,6 +543,13 @@ export declare const receiptSchema: import("./schema.js").Schema<{
             readonly line: number;
             readonly text: string;
         }[];
+        readonly credited: {
+            readonly file: string;
+            readonly blob: string;
+            readonly runId: string;
+            readonly receipt: string;
+            readonly commit: string;
+        }[] | undefined;
     } | undefined;
     readonly web: {
         readonly required: boolean;
@@ -570,6 +579,14 @@ export declare const receiptSchema: import("./schema.js").Schema<{
         readonly files: string[];
     } | undefined;
     readonly reuseIdentity: string | undefined;
+    readonly identityParts: {
+        readonly env: Record<string, string>;
+        readonly executable: string;
+        readonly local: string;
+        readonly copy: string;
+        readonly system: string;
+        readonly stack: string | null;
+    } | undefined;
     readonly reuse: {
         readonly fromRun: string;
         readonly fromCommit: string;

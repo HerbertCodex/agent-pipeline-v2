@@ -726,6 +726,14 @@ export async function checkReuse(ctx, gate, cached) {
     }
     return { origin: from, basis: 'tree', changed: 0, scan };
 }
+/** The names of the parts that differ between two records of identity parts, as said to the operator (at most 10 variables named). */
+export function partsDiffer(a, b) {
+    const names = [...new Set([...Object.keys(a.env), ...Object.keys(b.env)])].sort().filter(n => a.env[n] !== b.env[n]);
+    return [...(names.length ? [`variable(s) ${names.slice(0, 10).join(', ')}${names.length > 10 ? ` et ${names.length - 10} autre(s)` : ''}`] : []),
+        ...(a.executable !== b.executable ? ['exécutable de la commande'] : []), ...(a.local !== b.local ? ['dépendances installées ou fichiers .env* de la copie'] : []),
+        ...(a.copy !== b.copy ? ['fichiers ignorés par Git de la copie (fichiers générés, sorties de build)'] : []),
+        ...(a.system !== b.system ? ['système (Node, noyau, version de l\'outil)'] : []), ...(a.stack !== b.stack ? ['pile (déclaration, empreinte ou variables)'] : [])];
+}
 /**
  * The origin `apv gates run` may reuse for `gate` at `ctx.commit` (docs/ACCELERATION-LOTS.md, A1), or why none: the latest
  * receipt of the check on an identical tree (worktree, then shared store, intact), at the same configuration, in one of the
@@ -760,8 +768,13 @@ export async function findOrigin(ctx, gate, environments, base) {
     const sameBase = readsBase(gate) ? sameEnv.filter(f => f.baseSha !== null && f.baseSha === base) : sameEnv;
     if (!young.length)
         return why(`reçu(s) réussi(s) sur un arbre identique, mais de plus de ${hours(limit)} h (la reprise doit rester vérifiable ${hours(REUSE_AGE_MARGIN_MS)} h)`, true);
-    if (!sameEnv.length)
-        return why('reçu(s) réussi(s) sur un arbre identique, mais dans un autre environnement (variables transmises, exécutable, pile, Node, système, version de l\'outil, ou état local ignoré par Git : node_modules, fichiers générés, fichiers .env*, worktrees et sous-modules de la copie)', true);
+    if (!sameEnv.length) {
+        // What differs from the latest of them, when both sides recorded their parts (docs/UNE-SUITE-PAR-PR.md, 2.3).
+        const closest = young.reduce(latest).receipt;
+        const differ = closest.identityParts ? environments.flatMap(e => e.parts ? [partsDiffer(e.parts, closest.identityParts)] : [])[0] : undefined;
+        const said = differ?.length ? ` ; différent de ${closest.runId} (${closest.candidateSha.slice(0, 12)}) : ${differ.join(' ; ')}` : '';
+        return why(`reçu(s) réussi(s) sur un arbre identique, mais dans un autre environnement (variables transmises, exécutable, pile, Node, système, version de l'outil, ou état local ignoré par Git : node_modules, fichiers générés, fichiers .env*, worktrees et sous-modules de la copie)${said}`, true);
+    }
     if (!sameBase.length)
         return why(`reçu(s) réussi(s) sur un arbre identique, mais depuis une autre base ({{baseSha}} dans la commande : ${base?.slice(0, 12) ?? 'aucune'} ici)`, true);
     const origin = sameBase.reduce(latest);

@@ -314,6 +314,11 @@ export function configIssues(raw: unknown): { config: ApvConfig | undefined; ign
           `Gate ${gate.id} (targeted at stage task) depends on ${dep}, reserved for the full suite without a targeted variant`);
       }
     }
+    // The list of the affected tests is counted since production: without {{baseSha}} it would say nothing about the change.
+    if (gate.affectedList) {
+      list.check(!!gate.retryFailed, 'CONFIG', `Gate ${gate.id}: affectedList tells an unstable test (passed after retryFailed) unrelated to the change; declare retryFailed too`);
+      list.check(gate.affectedList.includes('{{baseSha}}'), 'CONFIG', `Gate ${gate.id}: affectedList lists the tests concerned by the changes since {{baseSha}}; give the placeholder as a whole argument (--only-changed {{baseSha}})`);
+    }
   }
   // Early checks (`early`): fast commands of a full check run at the task stage, each with an id of its own (its receipt),
   // after checks of stage task only, with portable globs (a brace would silently match nothing and never run it).

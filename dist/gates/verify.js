@@ -3,6 +3,7 @@ import { Git } from '../execution/git.js';
 import { success } from '../engine/scheduler.js';
 import { gatesConfigHash, stageGates } from './run.js';
 import { mergeBase, repeatProofGap, resolveReference } from './repeat.js';
+import { repeatCredits } from './repeat-credit.js';
 import { planScope } from './proof-scope.js';
 import { sharedStore } from './store.js';
 import { infrastructureCause } from './infrastructure.js';
@@ -63,7 +64,10 @@ export async function verifyGates(options) {
                 references.set(name, await resolveReference(git, repo, name));
             reference = { name, ...references.get(name) };
         }
-        return repeatProofGap(git, repo, commit, settings, receipt.repeat, reference);
+        const credit = options.repeatCredits && full
+            ? async (files) => new Set((await repeatCredits({ git, repo, commit, gateId: receipt.gateId, settings, files, store, local })).keys())
+            : undefined;
+        return repeatProofGap(git, repo, commit, settings, receipt.repeat, reference, credit);
     };
     /**
      * The scope of a receipt `not_required`, recomputed here from the commit: never taken from the receipt. The base the run
