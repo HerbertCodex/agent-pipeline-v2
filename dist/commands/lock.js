@@ -4,8 +4,6 @@ import { LockStore, defaultLockDir, parseDuration, sanitizeResource } from '../l
 import { LOCK_WAIT_TIMEOUT_EXIT, describeHolder, runLocked, signalExitCode, waitReporter } from '../lock/run.js';
 import { spawn } from 'node:child_process';
 import { localTime } from '../domain/time.js';
-import { withShare } from '../gates/suite.js';
-import { queueOf } from './suite.js';
 export const lockHelp = `apv lock : verrous à bail pour les ressources partagées (base de test, ports, navigateur)
 
 apv lock run <ressource> [--ttl 900] [--wait 1800] [--label L] [--purpose P] -- <commande...>
@@ -90,15 +88,10 @@ async function runCommand(rest, io) {
         }
         io.stderr(`APV_LOCK_HELD mentionne « ${resource} » mais le verrou n'est plus tenu : il est repris normalement.\n`);
     }
-    const locked = (env) => runLocked(locks, resource, {
+    return runLocked(locks, resource, {
         owner, ttlSeconds, waitSeconds, purpose: values.purpose ?? command.join(' ').slice(0, 200),
-        command, cwd: io.cwd, env, stderr: io.stderr,
+        command, cwd: io.cwd, env: io.env, stderr: io.stderr,
     });
-    // A test stack of the project: a shared part of the full suites' queue around the lock, waited for first (a suite waits for the shares).
-    const queue = await queueOf(io.cwd);
-    if (!queue || !queue.stacks.some((stack) => stack.resource === resource))
-        return locked(io.env);
-    return withShare({ lockFile: queue.lockFile, waitMs: queue.waitMs, maxMs: queue.shareMaxMs, label: owner.label, purpose: `apv lock run ${resource}`, env: io.env, source: io.env, log: (line) => io.stderr(`${line}\n`) }, locked, (reason) => { io.stderr(`Part partagée de la file non obtenue : ${reason}. La commande n'a pas été lancée.\n`); return LOCK_WAIT_TIMEOUT_EXIT; });
 }
 async function runUnlocked(command, io) {
     const [file, ...args] = command;

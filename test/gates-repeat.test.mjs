@@ -1,12 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture, git } from './helpers.mjs';
 import { apv, write } from './cli-helpers.mjs';
 import { gatesConfigHash } from '../dist/gates/run.js';
-import { Git } from '../dist/execution/git.js';
-import { addedLines, fixedWaitIn, fixedWaitLines, onlyImportPathsChanged, onlyRenamedPathsChanged, planRepeat, renamedPathForms, renamedPaths, repeatArgv, repeatFailures, textRegions, withRenamedPaths } from '../dist/gates/repeat.js';
+import { addedLines, fixedWaitIn, fixedWaitLines, repeatArgv, repeatFailures } from '../dist/gates/repeat.js';
 import { configIssues } from '../dist/config/load.js';
 import { validateReceipt } from '../dist/domain/contracts.js';
 
@@ -41,8 +40,6 @@ if (mode === 'fail') { console.log('  1) [chromium] › tests/e2e/a.e2e.ts:3:5 �
 }
 const script = name => [process.execPath, name];
 const repeatOf = (extra = {}) => ({ paths: ['tests/e2e/**/*.e2e.ts'], command: [...script('run-pass.mjs'), 'repeat', '--repeat-each={{repeat}}', '--retries=0'], reference: 'main', ...extra });
-// These tests configure the checks commit by commit: they are judged against the commit itself (--against HEAD), the
-// checks of the base (src/gates/base-gates.ts) being covered by test/gates-base.test.mjs.
 const receipt = (dir, gate) => validateReceipt(JSON.parse(readFileSync(join(dir, `${gate}.json`), 'utf8')));
 const commit = (repo, message) => { git(repo, 'add', '-A'); git(repo, 'commit', '-qm', message); };
 
@@ -51,18 +48,17 @@ test('no changed test file: the check passes, nothing is repeated, the receipt s
   write(f.repo, 'src/app.mjs', 'export const x = 1;\n');
   write(f.repo, 'tests/unit/x.test.ts', 'test("x")\n');
   commit(f.repo, 'app only');
-  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
+  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json']);
   assert.equal(r.code, 0, r.stdout + r.stderr);
   const row = r.json().gates[0];
   assert.equal(row.status, 'passed');
-  assert.deepEqual(row.repeat, { status: 'none', base: f.base, files: [], importsOnly: [], movedPathsOnly: [], times: 5, failures: [], fixedWaits: [] });
+  assert.deepEqual(row.repeat, { status: 'none', base: f.base, files: [], times: 5, failures: [], fixedWaits: [] });
   assert.equal(f.calls().length, 1, 'only the command of the check ran');
-  // --replay all: the output of an execution (the same tree would otherwise be reused, A1).
-  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--replay', 'all']);
+  const human = await apv(f.repo, ['gates', 'run', '--base', f.base]);
   assert.match(human.stdout, /Tests modifiés répétés \(repeatChanged\) :\n- browser : aucun fichier de test ajouté ou modifié depuis/);
 });
 
-test('changed test files: added, modified and untracked ones repeated N times after the check; renamed without change listed apart; deleted and unmatched ones ignored', async t => {
+test('changed test files: added, modified, untracked and renamed ones repeated N times after the check; deleted and unmatched ones ignored', async t => {
   const f = project(t, [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ times: 7, stressArgs: ['--workers=4'] }) }],
     { 'tests/e2e/gone.e2e.ts': 'x\n', 'tests/e2e/moved.e2e.ts': 'moved\n' });
   write(f.repo, 'tests/e2e/a.e2e.ts', 'test("a", async () => { await expect(page.getByRole("button")).toBeVisible(); });\n');
@@ -72,17 +68,15 @@ test('changed test files: added, modified and untracked ones repeated N times af
   git(f.repo, 'mv', 'tests/e2e/moved.e2e.ts', 'tests/e2e/renamed.e2e.ts');
   commit(f.repo, 'tests');
   write(f.repo, 'tests/e2e/wip.e2e.ts', 'test("wip")\n');
-  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
+  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json']);
   assert.equal(r.code, 0, r.stdout + r.stderr);
-  // A rename by Git without any other change is listed, never repeated.
-  const files = ['tests/e2e/a.e2e.ts', 'tests/e2e/new/b.e2e.ts', 'tests/e2e/wip.e2e.ts'];
+  const files = ['tests/e2e/a.e2e.ts', 'tests/e2e/new/b.e2e.ts', 'tests/e2e/renamed.e2e.ts', 'tests/e2e/wip.e2e.ts'];
   const calls = f.calls();
   assert.deepEqual(calls, [[], ['repeat', '--repeat-each=7', '--retries=0', '--workers=4', ...files]], 'the check, then the repetition of the changed files only');
   const rec = receipt(r.json().receiptsDirectory, 'browser');
   assert.equal(rec.status, 'passed');
   assert.equal(rec.repeat.status, 'passed');
   assert.deepEqual(rec.repeat.files, files);
-  assert.deepEqual(rec.repeat.importsOnly, ['tests/e2e/renamed.e2e.ts']);
   assert.equal(rec.repeat.times, 7);
   assert.equal(rec.repeat.base, f.base);
   assert.deepEqual(rec.repeat.command.slice(1), ['run-pass.mjs', 'repeat', '--repeat-each=7', '--retries=0', '--workers=4']);
@@ -96,7 +90,7 @@ test('a failed repetition turns the check red with « échoue X fois sur N »; v
     { id: 'after', stage: 'full', dependsOn: ['browser'], command: script('run-pass.mjs') }]);
   write(f.repo, 'tests/e2e/a.e2e.ts', 'changed\n');
   commit(f.repo, 'change a');
-  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--keep-going']);
+  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--keep-going']);
   assert.equal(r.code, 1, r.stdout + r.stderr);
   assert.match(r.stdout, /browser\s+échec\s+1/);
   assert.match(r.stdout, /after\s+bloqué/);
@@ -114,7 +108,7 @@ test('a failed repetition turns the check red with « échoue X fois sur N »; v
   // Without a pattern: still red, at least once out of N.
   write(f.repo, '.apv/config.json', { gates: [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ command: [...script('run-fail.mjs'), '{{repeat}}'] }) }] });
   commit(f.repo, 'no pattern');
-  const plain = (await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json'])).json().gates[0];
+  const plain = (await apv(f.repo, ['gates', 'run', '--base', f.base, '--json'])).json().gates[0];
   assert.equal(plain.status, 'failed');
   assert.match(plain.diagnostic, /nombre d'échecs par test non relevé \(repeatChanged\.testPattern absent\) : échoue au moins 1 fois sur 5/);
 });
@@ -131,7 +125,7 @@ if (!existsSync(${JSON.stringify(markerFile)})) { writeFileSync(${JSON.stringify
   write(f.repo, 'tests/e2e/a.e2e.ts', 'changed\n');
   commit(f.repo, 'change');
   f.reset();
-  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
+  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json']);
   assert.equal(r.code, 1, r.stdout + r.stderr);
   const row = r.json().gates[0];
   assert.equal(row.status, 'failed');
@@ -148,7 +142,7 @@ test('ceilings: more changed files than maxFiles is refused before anything runs
   const f = project(t, [{ id: 'browser', stage: 'full', command: script('run-pass.mjs'), repeatChanged: repeatOf({ maxFiles: 2 }) }]);
   for (const n of [1, 2, 3]) write(f.repo, `tests/e2e/n${n}.e2e.ts`, `test("${n}")\n`);
   commit(f.repo, 'three tests');
-  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
+  const r = await apv(f.repo, ['gates', 'run', '--base', f.base]);
   assert.equal(r.code, 1);
   assert.match(r.stderr, /GATE_REPEAT/);
   assert.match(r.stderr, /Répétition des tests modifiés refusée pour browser : 3 fichier\(s\) de test ajouté\(s\) ou modifié\(s\) depuis [0-9a-f]{12}, au-delà du plafond repeatChanged\.maxFiles \(2\) :\n  tests\/e2e\/n1\.e2e\.ts/);
@@ -158,7 +152,7 @@ test('ceilings: more changed files than maxFiles is refused before anything runs
   // Duration ceiling.
   write(f.repo, '.apv/config.json', { gates: [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ command: [...script('run-hang.mjs'), '{{repeat}}'], timeoutMs: 300 }) }] });
   commit(f.repo, 'hang');
-  const hang = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
+  const hang = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json']);
   assert.equal(hang.code, 1);
   const row = hang.json().gates[0];
   assert.equal(row.status, 'timed_out');
@@ -266,7 +260,7 @@ test('the repetition finds the tree as it was just before the command: a command
   commit(f.repo, 'change');
   write(f.repo, 'notes.txt', 'uncommitted before the run\n');
   f.reset();
-  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
+  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json']);
   assert.equal(r.code, 1, r.stdout + r.stderr);
   const row = r.json().gates[0];
   assert.equal(row.status, 'failed');
@@ -278,7 +272,7 @@ test('a changed test file whose path starts with - is refused: it would read as 
   const f = project(t, [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ paths: ['**/*.e2e.ts'] }) }]);
   write(f.repo, '-x.e2e.ts', 'test\n');
   commit(f.repo, 'dash');
-  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
+  const r = await apv(f.repo, ['gates', 'run', '--base', f.base]);
   assert.equal(r.code, 1);
   assert.match(r.stderr, /GATE_REPEAT[^]*le fichier -x\.e2e\.ts commence par « - »/);
   assert.deepEqual(f.calls(), []);
@@ -289,26 +283,25 @@ test('fixed waits in the lines a change adds: warned by default, refused with fi
   write(f.repo, 'tests/e2e/old.e2e.ts', 'await page.waitForTimeout(500);\nawait expect(page.getByText("ok")).toBeVisible();\n// never page.waitForTimeout(100)\n');
   write(f.repo, 'tests/e2e/new.e2e.ts', 'test("n", async () => {\n  await sleep(200);\n  await new Promise(r => setTimeout(r, 50));\n  await page.clock.fastForward(1000);\n});\n');
   commit(f.repo, 'waits');
-  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
+  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json']);
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.deepEqual(r.json().gates[0].repeat.fixedWaits, [
     { file: 'tests/e2e/new.e2e.ts', line: 2, text: 'await sleep(200);' },
     { file: 'tests/e2e/new.e2e.ts', line: 3, text: 'await new Promise(r => setTimeout(r, 50));' },
   ], 'the untouched waitForTimeout of old.e2e.ts and the comment are not reported');
   assert.match(r.stderr, /browser : attente à durée fixe dans un test modifié, tests\/e2e\/new\.e2e\.ts:2 : await sleep\(200\);/);
-  // --replay all: the output of an execution (the same tree would otherwise be reused, A1).
-  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--replay', 'all']);
+  const human = await apv(f.repo, ['gates', 'run', '--base', f.base]);
   assert.match(human.stdout, /Attentes à durée fixe dans les tests modifiés \(2\)[^\n]*\n- browser : tests\/e2e\/new\.e2e\.ts:2 : await sleep\(200\);/);
   write(f.repo, '.apv/config.json', { gates: [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ fixedWaits: 'refuse' }) }] });
   commit(f.repo, 'refuse');
   f.reset();
-  const refused = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base]);
+  const refused = await apv(f.repo, ['gates', 'run', '--base', f.base]);
   assert.equal(refused.code, 1);
   assert.match(refused.stderr, /GATE_REPEAT[^]*Attentes à durée fixe dans les tests modifiés de browser \(repeatChanged\.fixedWaits = refuse\) :\n  tests\/e2e\/new\.e2e\.ts:2 : await sleep\(200\);/);
   assert.deepEqual(f.calls(), []);
   write(f.repo, '.apv/config.json', { gates: [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ fixedWaits: 'off' }) }] });
   commit(f.repo, 'off');
-  assert.deepEqual((await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json'])).json().gates[0].repeat.fixedWaits, []);
+  assert.deepEqual((await apv(f.repo, ['gates', 'run', '--base', f.base, '--json'])).json().gates[0].repeat.fixedWaits, []);
 });
 
 test('the repetition runs under the lock of the check (APV_LOCK_HELD seen by the repeated command)', async t => {
@@ -317,7 +310,7 @@ test('the repetition runs under the lock of the check (APV_LOCK_HELD seen by the
     'held.mjs': 'process.exit(process.env.APV_LOCK_HELD === "stack" ? 0 : 9);\n' });
   write(f.repo, 'tests/e2e/a.e2e.ts', 'changed\n');
   commit(f.repo, 'change');
-  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json'], { APV_LOCK_DIR: join(f.root, 'locks') });
+  const r = await apv(f.repo, ['gates', 'run', '--base', f.base, '--json'], { APV_LOCK_DIR: join(f.root, 'locks') });
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.equal(r.json().gates[0].repeat.status, 'passed');
 });
@@ -360,233 +353,4 @@ test('helpers: repetition argv, failures counted by test, added lines, fixed wai
   assert.deepEqual(fixedWaitLines([{ line: 4, text: 'await new Promise(resolve =>' }, { line: 9, text: 'setTimeout(resolve, 100));' }]), []);
   // An added line "++i;" is "+++i;" in the diff: a line, not a header.
   assert.deepEqual(addedLines('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n+++i;\n+ok\n'), [{ line: 1, text: '++i;' }, { line: 2, text: 'ok' }]);
-});
-
-test('imports only: a test whose only changes are the paths of its imports is listed, never repeated; any other change is', () => {
-  const before = [
-    "import { expect, test } from '@playwright/test';",
-    "import { login, seed } from '../support/account';",
-    "import type { Row } from '$lib/applications/model';",
-    "export { helper } from './helpers';",
-    "vi.mock('$lib/applications/list', () => ({ list: [] }));",
-    "const lazy = await import('../support/lazy');",
-    "import '../support/setup';",
-    "test('liste', async ({ page }) => { await login(page); });",
-    '',
-  ].join('\n');
-  const moved = before.replace("'../support/account'", "'../support/auth/account'").replace("'$lib/applications/model'", "'$lib/applications/core/model'")
-    .replace("'./helpers'", "'./shared/helpers'").replace("'$lib/applications/list'", '"$lib/applications/list/list"').replace("'../support/lazy'", "'../support/x/lazy'")
-    .replace("'../support/setup'", "'../support/x/setup'");
-  assert.equal(onlyImportPathsChanged(before, moved), true, 'static, type, export-from, vi.mock, import(), side effect');
-  // Prettier rewrites a long import over several lines, trailing comma included.
-  const prettier = moved.replace("import { login, seed } from '../support/auth/account';", "import {\n  login,\n  seed,\n} from '../support/auth/account';");
-  assert.equal(onlyImportPathsChanged(before, prettier), true);
-  // A name imported, a specifier (`as`), the order, or any other line: a real change.
-  assert.equal(onlyImportPathsChanged(before, moved.replace('login, seed', 'login, seed, reset')), false);
-  assert.equal(onlyImportPathsChanged(before, moved.replace('login, seed', 'login as signIn, seed')), false);
-  assert.equal(onlyImportPathsChanged(before, moved.replace("test('liste'", "test('liste 2'")), false);
-  assert.equal(onlyImportPathsChanged(before, `${moved}// note\n`), false);
-  assert.equal(onlyImportPathsChanged(before, moved.replace("const lazy = await import('../support/x/lazy');", 'const lazy = await import(path);')), false, 'a computed import() is a change');
-  assert.equal(onlyImportPathsChanged(before, before), false, 'no difference: not a change at all');
-});
-
-test('moved paths only: a test whose only changed lines cite files renamed without change, old path to new path, is listed; anything else is a change', () => {
-  const renames = [{ from: 'docs/design/x-validee.html', to: 'docs/design/produit/x-validee.html' }];
-  const before = [
-    "import { mockupText } from '../support/mockup-text';",
-    '/**',
-    ' * Maquette docs/design/x-validee.html. Voir aussi ../docs/design/x-validee.html#planche-2.',
-    ' */',
-    "const text = mockupText('docs/design/x-validee.html');",
-    "test('x', async () => { expect(text).toContain('x'); });",
-    '',
-  ].join('\n');
-  const after = before.replaceAll('docs/design/x-validee.html', 'docs/design/produit/x-validee.html');
-  assert.equal(onlyRenamedPathsChanged(before, after, renames), true, 'comment, string, ../ prefix, anchor, end of sentence');
-  // No rename in the diff, or a rename with a change of content (not given: only R100 renames are passed): a change.
-  assert.equal(onlyRenamedPathsChanged(before, after, []), false);
-  assert.equal(onlyRenamedPathsChanged(before, before, renames), false, 'no difference: not a change at all');
-  // A line that changes anything else besides the path, a line added or removed, a line rewrapped: a change.
-  assert.equal(onlyRenamedPathsChanged(before, after.replace("toContain('x')", "toContain('y')"), renames), false, 'another line changed');
-  assert.equal(onlyRenamedPathsChanged(before, after.replace("mockupText('docs/design/produit/x-validee.html')", "mockupText('docs/design/produit/x-validee.html').trim()"), renames), false);
-  assert.equal(onlyRenamedPathsChanged(before, `${after}// note\n`, renames), false);
-  assert.equal(onlyRenamedPathsChanged(before, after.replace("mockupText('docs/design/produit/x-validee.html')", "mockupText(\n  'docs/design/produit/x-validee.html'\n)"), renames), false, 'a rewrapped line is a change');
-  // The old path replaced by another path, or kept where the new one is expected: a change.
-  assert.equal(onlyRenamedPathsChanged(before, before.replace("mockupText('docs/design/x-validee.html')", "mockupText('docs/design/autre/x-validee.html')"), renames), false);
-  // Mixed with moved imports: still only paths.
-  const mixed = after.replace("'../support/mockup-text'", "'../support/mockups/text'");
-  assert.equal(onlyImportPathsChanged(before, mixed), false);
-  assert.equal(onlyRenamedPathsChanged(before, mixed, renames), true, 'an import moved and a renamed file cited');
-  assert.equal(onlyRenamedPathsChanged(before, mixed.replace('{ mockupText }', '{ mockupText, other }'), renames), false, 'a name imported is still a change');
-});
-
-test('moved paths only: the cited forms of a renamed file are the full path and its suffixes that still name a shared folder; several renames, in one pass', () => {
-  const paths = renamedPaths([{ from: 'docs/design/x-validee.html', to: 'docs/design/produit/x-validee.html' },
-    { from: 'docs/design/accueil-maquette-validee.html', to: 'docs/design/produit/accueil-validee.html' }, { from: 'src/a.ts', to: 'lib/a.ts' }]);
-  const forms = paths.forms;
-  assert.deepEqual([...forms], [
-    ['docs/design/x-validee.html', 'docs/design/produit/x-validee.html'], ['design/x-validee.html', 'design/produit/x-validee.html'],
-    ['docs/design/accueil-maquette-validee.html', 'docs/design/produit/accueil-validee.html'], ['design/accueil-maquette-validee.html', 'design/produit/accueil-validee.html'],
-    ['src/a.ts', 'lib/a.ts'],
-  ]);
-  // A suffix that still names a shared folder is a cited path; the name alone (relative to the shared folder) never.
-  assert.equal(withRenamedPaths("read('design/x-validee.html')", paths), "read('design/produit/x-validee.html')");
-  assert.equal(withRenamedPaths("mockupSource('accueil-maquette-validee.html')", paths), "mockupSource('accueil-maquette-validee.html')");
-  assert.equal(onlyRenamedPathsChanged("mockupSource('x-validee.html');\n", "mockupSource('produit/x-validee.html');\n", [{ from: 'docs/design/x-validee.html', to: 'docs/design/produit/x-validee.html' }]), false);
-  // Never inside a longer path or name.
-  assert.equal(withRenamedPaths('mydocs/design/x-validee.html other/design/x-validee.html docs/design/x-validee.html.bak docs/design/x-validee.htmlx', paths),
-    'mydocs/design/x-validee.html other/design/x-validee.html docs/design/x-validee.html.bak docs/design/x-validee.htmlx');
-  assert.equal(withRenamedPaths('src/a.ts, ./src/a.ts et src/a.tsx', paths), 'lib/a.ts, ./lib/a.ts et src/a.tsx');
-  // Several renames on one line; a chain (a -> b, b -> c) replaced once.
-  assert.equal(onlyRenamedPathsChanged("const pages = ['docs/design/x-validee.html', 'docs/design/accueil-maquette-validee.html'];\n",
-    "const pages = ['docs/design/produit/x-validee.html', 'docs/design/produit/accueil-validee.html'];\n",
-    [{ from: 'docs/design/x-validee.html', to: 'docs/design/produit/x-validee.html' }, { from: 'docs/design/accueil-maquette-validee.html', to: 'docs/design/produit/accueil-validee.html' }]), true);
-  const chain = renamedPaths([{ from: 'p/a.html', to: 'p/b.html' }, { from: 'p/b.html', to: 'p/c.html' }]);
-  assert.equal(withRenamedPaths('p/a.html p/b.html', chain), 'p/b.html p/c.html');
-  // A form two renames would replace differently is dropped; full paths stay.
-  const clash = renamedPathForms([{ from: 'docs/x/a.html', to: 'docs/x/p/a.html' }, { from: 'src/x/a.html', to: 'src/x/q/a.html' }]);
-  assert.equal(clash.has('x/a.html'), false);
-  assert.equal(clash.get('docs/x/a.html'), 'docs/x/p/a.html');
-});
-
-test('moved paths only: a cited path is replaced only inside strings and comments, never in code; a bare root name never counts', () => {
-  // A file at the root renamed: no form without « / » (an identifier, a word).
-  assert.equal(renamedPathForms([{ from: 'VERSION', to: 'LICENSE_X' }]).size, 0);
-  assert.equal(onlyRenamedPathsChanged('expect(v).toBe(VERSION);\n', 'expect(v).toBe(LICENSE_X);\n', [{ from: 'VERSION', to: 'LICENSE_X' }]), false, 'an identifier is code');
-  assert.equal(onlyRenamedPathsChanged("read('VERSION');\n", "read('LICENSE_X');\n", [{ from: 'VERSION', to: 'LICENSE_X' }]), false, 'a bare name, even in a string');
-  // A division in code is not a path; the same text in a string or a comment is.
-  const division = [{ from: 'total/count', to: 'total/new/count' }];
-  assert.equal(onlyRenamedPathsChanged('const r = total/count;\n', 'const r = total/new/count;\n', division), false, 'a division is code');
-  assert.equal(onlyRenamedPathsChanged("const r = read('total/count');\n", "const r = read('total/new/count');\n", division), true, 'a name in a string');
-  assert.equal(onlyRenamedPathsChanged('const r = read(`${root}/total/count`);\n', 'const r = read(`${root}/total/new/count`);\n', division), false, 'after a / in a template: part of a longer path');
-  assert.equal(onlyRenamedPathsChanged('const r = read(`total/count`, x);\n', 'const r = read(`total/new/count`, x);\n', division), true, 'in a template');
-  assert.equal(onlyRenamedPathsChanged('const r = `${total/count}`;\n', 'const r = `${total/new/count}`;\n', division), false, 'the code of ${} is code');
-  assert.equal(onlyRenamedPathsChanged('/* voir\n   total/count */\nx();\n', '/* voir\n   total/new/count */\nx();\n', division), true, 'a block comment over several lines');
-  assert.equal(onlyRenamedPathsChanged('x(); // total/count\n', 'x(); // total/new/count\n', division), true, 'a line comment');
-  assert.equal(onlyRenamedPathsChanged('<!-- total/count -->\n', '<!-- total/new/count -->\n', division), true, 'an HTML comment');
-  assert.equal(onlyRenamedPathsChanged('# total/count\n', '# total/new/count\n', division), true, 'a # comment');
-  assert.equal(onlyRenamedPathsChanged("const re = /'/; const r = total/count;\n", "const re = /'/; const r = total/new/count;\n", division), false, 'a quote in a regular expression opens no string');
-  // The regions themselves.
-  const text = "a/b; 'c/d' // e/f\n`g${h/i}j`";
-  const marked = [...textRegions(text)].map((m, i) => m ? text[i] : '.').join('');
-  assert.equal(marked, "......c/d.... e/f..g......j.");
-});
-
-test('moved paths only, end to end: tests citing files renamed without change are listed and not counted in the ceiling; a rename with a change, another change or a renamed test are repeated; verify proves it', async t => {
-  const cite = (i, path) => `/** Maquette ${path}. */\nconst page = read('${path}');\ntest("p${i}", async () => { expect(page).toBeTruthy(); });\n`;
-  const tests = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`tests/e2e/p${i}.e2e.ts`, cite(i, 'docs/design/x-validee.html')]));
-  const f = project(t, [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ maxFiles: 4 }) }], {
-    ...tests,
-    'docs/design/x-validee.html': '<p>x</p>\n',
-    'docs/design/y-validee.html': '<p>y</p>\n',
-    'docs/design/z-validee.html': '<p>z</p>\n',
-    'tests/support/old.ts': 'export const go = async () => {};\n',
-    'tests/e2e/edited.e2e.ts': cite('e', 'docs/design/y-validee.html'),
-    'tests/e2e/mixed.e2e.ts': `import { go } from '../support/old';\n${cite('m', 'docs/design/x-validee.html')}`,
-    'tests/e2e/other.e2e.ts': cite('o', 'docs/design/x-validee.html'),
-    'tests/e2e/self.e2e.ts': cite('s', 'docs/design/x-validee.html'),
-    'tests/e2e/two.e2e.ts': `${cite('t', 'docs/design/x-validee.html')}const z = read('design/z-validee.html');\n`,
-    'tests/e2e/norename.e2e.ts': cite('n', 'docs/old/w.html'),
-  });
-  mkdirSync(join(f.repo, 'docs/design/produit'));
-  git(f.repo, 'mv', 'docs/design/x-validee.html', 'docs/design/produit/x-validee.html');
-  git(f.repo, 'mv', 'docs/design/z-validee.html', 'docs/design/produit/z-validee.html');
-  git(f.repo, 'mv', 'tests/support/old.ts', 'tests/support/new.ts');
-  // Renamed with a change of content: never a reason to skip the tests that cite it.
-  git(f.repo, 'mv', 'docs/design/y-validee.html', 'docs/design/produit/y-validee.html');
-  writeFileSync(join(f.repo, 'docs/design/produit/y-validee.html'), '<p>y</p>\n<p>y2</p>\n');
-  for (let i = 0; i < 12; i++) writeFileSync(join(f.repo, `tests/e2e/p${i}.e2e.ts`), cite(i, 'docs/design/produit/x-validee.html'));
-  writeFileSync(join(f.repo, 'tests/e2e/edited.e2e.ts'), cite('e', 'docs/design/produit/y-validee.html'));
-  writeFileSync(join(f.repo, 'tests/e2e/mixed.e2e.ts'), `import { go } from '../support/new';\n${cite('m', 'docs/design/produit/x-validee.html')}`);
-  // The path and something else on the same line: repeated.
-  writeFileSync(join(f.repo, 'tests/e2e/other.e2e.ts'), cite('o', 'docs/design/produit/x-validee.html').replace('toBeTruthy()', 'toBeDefined()'));
-  writeFileSync(join(f.repo, 'tests/e2e/two.e2e.ts'), `${cite('t', 'docs/design/produit/x-validee.html')}const z = read('design/produit/z-validee.html');\n`);
-  // A path changed without any rename: repeated.
-  writeFileSync(join(f.repo, 'tests/e2e/norename.e2e.ts'), cite('n', 'docs/new/w.html'));
-  // A test renamed itself, citing the new path: compared with its old path, imports only (current behavior), so repeated.
-  git(f.repo, 'mv', 'tests/e2e/self.e2e.ts', 'tests/e2e/self-moved.e2e.ts');
-  writeFileSync(join(f.repo, 'tests/e2e/self-moved.e2e.ts'), cite('s', 'docs/design/produit/x-validee.html'));
-  commit(f.repo, 'maquettes rangées');
-  // 18 changed test files, 4 really changed: under the ceiling (maxFiles 4), only those are repeated.
-  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
-  assert.equal(r.code, 0, r.stdout + r.stderr);
-  const run = r.json();
-  const row = run.gates[0];
-  const repeated = ['tests/e2e/edited.e2e.ts', 'tests/e2e/norename.e2e.ts', 'tests/e2e/other.e2e.ts', 'tests/e2e/self-moved.e2e.ts'];
-  assert.deepEqual(row.repeat.files, repeated);
-  assert.deepEqual(row.repeat.importsOnly, []);
-  assert.deepEqual(row.repeat.movedPathsOnly, ['tests/e2e/mixed.e2e.ts', ...Array.from({ length: 12 }, (_, i) => `tests/e2e/p${i}.e2e.ts`), 'tests/e2e/two.e2e.ts'].sort());
-  assert.deepEqual(receipt(join(f.repo, '.apv/receipts', run.runId), 'browser').repeat.movedPathsOnly, row.repeat.movedPathsOnly);
-  assert.deepEqual(f.calls().at(-1).slice(-4), repeated, 'only the really changed tests are repeated');
-  // --replay all: the output of an execution (the same tree would otherwise be reused, A1).
-  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--replay', 'all']);
-  assert.match(human.stdout, /tests dont seuls des chemins de fichiers déplacés changent : non répétés \(tests\/e2e\/mixed\.e2e\.ts, .* \.\.\. \(14\)\)/);
-  assert.match(human.stderr + human.stdout, /browser : tests dont seuls des chemins de fichiers déplacés changent : non répétés \(le contrôle les exécute comme les autres\)/);
-  const v = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--against', 'HEAD']);
-  assert.equal(v.code, 0, v.stdout + v.stderr);
-});
-
-test('imports only, end to end: moved and renamed tests are listed in the output and the receipt, the others repeated; the ceiling counts only them; verify proves it', async t => {
-  const tests = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`tests/e2e/m${i}.e2e.ts`, `import { go } from '../support/old';\ntest("m${i}", async () => { await go(); });\n`]));
-  const f = project(t, [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ maxFiles: 2 }) }], { ...tests, 'tests/support/old.ts': 'export const go = async () => {};\n' });
-  git(f.repo, 'mv', 'tests/support/old.ts', 'tests/support/new.ts');
-  for (let i = 0; i < 12; i++) writeFileSync(join(f.repo, `tests/e2e/m${i}.e2e.ts`), `import { go } from "../support/new";\ntest("m${i}", async () => { await go(); });\n`);
-  // Moved by Git without any other change.
-  mkdirSync(join(f.repo, 'tests/e2e/moved'));
-  git(f.repo, 'mv', 'tests/e2e/a.e2e.ts', 'tests/e2e/moved/a.e2e.ts');
-  // A real change: repeated.
-  writeFileSync(join(f.repo, 'tests/e2e/m0.e2e.ts'), 'import { go } from "../support/new";\ntest("m0 bis", async () => { await go(); });\n');
-  commit(f.repo, 'rangement');
-  const r = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--json']);
-  assert.equal(r.code, 0, r.stdout + r.stderr);
-  const row = r.json().gates[0];
-  assert.deepEqual(row.repeat.files, ['tests/e2e/m0.e2e.ts']);
-  assert.deepEqual(row.repeat.importsOnly, ['tests/e2e/moved/a.e2e.ts', ...Array.from({ length: 11 }, (_, i) => `tests/e2e/m${i + 1}.e2e.ts`)].sort());
-  assert.deepEqual(receipt(join(f.repo, '.apv/receipts', r.json().runId), 'browser').repeat.importsOnly, row.repeat.importsOnly);
-  assert.deepEqual(f.calls().at(-1).slice(-1), ['tests/e2e/m0.e2e.ts'], 'only the really changed test is repeated');
-  // --replay all: the output of an execution (the same tree would otherwise be reused, A1).
-  const human = await apv(f.repo, ['gates', 'run', '--against', 'HEAD', '--base', f.base, '--replay', 'all']);
-  assert.match(human.stdout, /tests dont seuls les imports changent : non répétés \(tests\/e2e\/m1\.e2e\.ts, /);
-  assert.match(human.stderr + human.stdout, /browser : tests dont seuls les imports changent : non répétés \(le contrôle les exécute comme les autres\)/);
-  const v = await apv(f.repo, ['gates', 'verify', '--commit', 'HEAD', '--against', 'HEAD']);
-  assert.equal(v.code, 0, v.stdout + v.stderr);
-});
-
-test('moved paths only: a rename by similarity is not « without change »: permuted lines, a changed mode, a symbolic link; the working tree is hashed', async t => {
-  const lines = Array.from({ length: 30 }, (_, i) => `<p>ligne ${i}</p>`);
-  const cite = (i, path) => `/** Maquette ${path}. */\nconst page = read('${path}');\ntest("q${i}", async () => { expect(page).toBeTruthy(); });\n`;
-  const f = project(t, [{ id: 'browser', command: script('run-pass.mjs'), repeatChanged: repeatOf({ maxFiles: 10 }) }], {
-    'docs/design/permute.html': `${lines.join('\n')}\n`,
-    'docs/design/mode.html': '<p>mode</p>\n',
-    'docs/design/same.html': '<p>same</p>\n',
-    'tests/e2e/permute.e2e.ts': cite('p', 'docs/design/permute.html'),
-    'tests/e2e/mode.e2e.ts': cite('m', 'docs/design/mode.html'),
-    'tests/e2e/link.e2e.ts': cite('l', 'docs/design/link.html'),
-    'tests/e2e/same.e2e.ts': cite('s', 'docs/design/same.html'),
-  });
-  symlinkSync('same.html', join(f.repo, 'docs/design/link.html'));
-  commit(f.repo, 'lien');
-  const base = git(f.repo, 'rev-parse', 'HEAD');
-  mkdirSync(join(f.repo, 'docs/design/produit'));
-  git(f.repo, 'mv', 'docs/design/permute.html', 'docs/design/produit/permute.html');
-  writeFileSync(join(f.repo, 'docs/design/produit/permute.html'), `${[...lines].reverse().join('\n')}\n`);
-  git(f.repo, 'mv', 'docs/design/mode.html', 'docs/design/produit/mode.html');
-  chmodSync(join(f.repo, 'docs/design/produit/mode.html'), 0o755);
-  git(f.repo, 'mv', 'docs/design/link.html', 'docs/design/produit/link.html');
-  git(f.repo, 'mv', 'docs/design/same.html', 'docs/design/produit/same.html');
-  for (const [name, i] of [['permute', 'p'], ['mode', 'm'], ['link', 'l'], ['same', 's']]) writeFileSync(join(f.repo, `tests/e2e/${name}.e2e.ts`), cite(i, `docs/design/produit/${name}.html`));
-  git(f.repo, 'add', '-A');
-  // Git calls them renames at 100 % similarity (the symbolic link aside, on some versions), yet none is the same file.
-  const status = git(f.repo, 'diff', '--cached', '-M', '--name-status', base);
-  assert.match(status, /^R100\tdocs\/design\/permute\.html\tdocs\/design\/produit\/permute\.html$/m);
-  assert.match(status, /^R100\tdocs\/design\/mode\.html\tdocs\/design\/produit\/mode\.html$/m);
-  // Working tree (no commit): the new side is hashed.
-  const plan = await planRepeat(new Git(), f.repo, { base }, repeatOf({ maxFiles: 10, fixedWaits: 'off', times: 5 }));
-  assert.deepEqual(plan.files, ['tests/e2e/link.e2e.ts', 'tests/e2e/mode.e2e.ts', 'tests/e2e/permute.e2e.ts']);
-  assert.deepEqual(plan.movedPathsOnly, ['tests/e2e/same.e2e.ts']);
-  // The same, committed.
-  commit(f.repo, 'rangement');
-  const committed = await planRepeat(new Git(), f.repo, { base }, repeatOf({ maxFiles: 10, fixedWaits: 'off', times: 5 }), 'HEAD');
-  assert.deepEqual(committed.files, plan.files);
-  assert.deepEqual(committed.movedPathsOnly, plan.movedPathsOnly);
 });

@@ -6,15 +6,12 @@ import { loadDbConfig, type DbConfig } from './config.js';
 import { expandGlobs } from './glob.js';
 import { LIVE_RULES, runLiveChecks, type LiveReport, type PsqlRunner } from './live.js';
 import { parseMigrations } from './parser.js';
-import { gitRead } from '../run/git-probe.js';
 import type { SchemaModel } from './model.js';
 
 export interface DbCheckOptions {
   root: string;
   configPath?: string;
   live?: boolean;
-  /** Branch the diff is read against for `migrations.one_per_pr` (default: first of origin/main, main, origin/master, master that exists). */
-  base?: string;
   env?: NodeJS.ProcessEnv;
   /** Test seam for `--live`. */
   psql?: PsqlRunner;
@@ -34,22 +31,6 @@ export interface DbCheckReport {
   warnings: number;
 }
 
-export const ONE_MIGRATION_RULE = 'migrations.one_per_pr';
-
-/** Migration files this branch adds against its base (committed, staged or untracked), sorted; null when there is no base to compare. */
-export function addedMigrations(root: string, migrations: string[], base?: string): { base: string; added: string[] } | null {
-  const candidates = base ? [base] : ['origin/main', 'main', 'origin/master', 'master'];
-  const ref = candidates.find((c) => gitRead(root, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${c}^{commit}`]) !== null);
-  if (!ref) return null;
-  const top = gitRead(root, ['rev-parse', '--show-toplevel']);
-  const mergeBase = gitRead(root, ['merge-base', ref, 'HEAD']);
-  if (!top || !mergeBase) return null;
-  const diff = gitRead(root, ['diff', '--ignore-submodules=none', '--name-only', '--diff-filter=A', '--relative', mergeBase, '--', '.']) ?? '';
-  const untracked = gitRead(root, ['ls-files', '--others', '--exclude-standard', '--', '.']) ?? '';
-  const changed = new Set([...diff.split('\n'), ...untracked.split('\n')].filter(Boolean));
-  return { base: ref, added: migrations.filter((m) => changed.has(m)).sort() };
-}
-
 const severityOrder = (f: Finding) => (f.severity === 'error' ? 0 : 1);
 
 export function runDbCheck(options: DbCheckOptions): DbCheckReport {
@@ -66,15 +47,6 @@ export function runDbCheck(options: DbCheckOptions): DbCheckReport {
   const files = migrations
     .sort((a, b) => (a.split('/').pop() ?? a).localeCompare(b.split('/').pop() ?? b))
     .map((file) => ({ path: file, sql: readFileSync(join(options.root, file), 'utf8') }));
-  const added = addedMigrations(options.root, migrations, options.base);
-  if (added && added.added.length > 1) {
-    findings.push({
-      rule: ONE_MIGRATION_RULE, severity: 'warning', file: added.added[0]!, line: 0, target: 'migrations',
-      message: `${added.added.length} nouveaux fichiers de migration contre ${added.base} (${added.added.join(', ')}) : une PR en production en porte au plus un, appliqué à la main. `
-        + 'Fusionner en un seul fichier (dans l\'ordre, horodatage de la première ou d\'une nouvelle après la base), rejouer depuis une base vide et relancer les tests d\'intégration ; ne jamais toucher une migration déjà sur la base ou en production. '
-        + 'Exception (donnée de semence volumineuse, changement à appliquer avant un déploiement) : la déclarer dans db.exceptions avec la raison.',
-    });
-  }
   const model = parseMigrations(files, { supabaseDefaults: config.supabaseDefaults });
   findings.push(...checkModel(model, config));
 

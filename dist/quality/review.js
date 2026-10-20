@@ -17,9 +17,7 @@ export function validationEvidence(run) {
             r.candidateSha === run.candidateSha && r.configHash === run.configHash) : [];
         const receipt = receipts.length === 1 ? receipts[0] : undefined;
         const applicable = gateApplies(g, run.changeSet?.files ?? []);
-        // Observed = executed on this candidate: a receipt `cached` (reused from another commit) is no observation of an
-        // execution, and the evidence built here (negative tests, QA_SECURITY) requires one; it is listed, never observed.
-        const observed = applicable && receipt && ['passed', 'passed_after_retry'].includes(receipt.status) && receipt.exitCode === 0;
+        const observed = applicable && receipt && ['passed', 'cached', 'passed_after_retry'].includes(receipt.status) && receipt.exitCode === 0;
         return { id: g.id, covers: g.covers ?? [], paths: g.paths, testPaths: g.testPaths ?? [], command: g.command, selected, applicable,
             status: !selected ? 'not_selected' : receipt?.status ?? 'missing',
             receiptId: observed ? receipt.id : null, reusedFrom: receipt?.reusedFrom ?? null };

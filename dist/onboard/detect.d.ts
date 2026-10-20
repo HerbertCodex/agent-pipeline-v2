@@ -15,9 +15,3 @@ export declare function detectGates(repo: string): DetectedGate[];
  * shown, never turned into a `preview` section: its build, migrations and seed are the operator's to describe.
  */
 export declare function previewHints(repo: string): string[];
-/**
- * Scripts of changed or affected tests (`test:e2e:changed`, `e2e:affected`, a script that runs `--only-changed`): the
- * targeted variant (`affected`) of a full check, to declare by the operator. Shown, never written: the full check, its
- * base placeholder and the early checks (`early`) that go with it are the operator's to describe.
- */
-export declare function targetedHints(repo: string): string[];

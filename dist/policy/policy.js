@@ -4,104 +4,31 @@ export function validRelativePath(path) {
         !path.includes('\\') && !/[\0\r\n]/.test(path) &&
         path.split('/').every(p => p !== '' && p !== '.' && p !== '..');
 }
-/** Compiled globs, by pattern (bounded: emptied when full). Only valid patterns are kept. */
-const compiledGlobs = new Map();
-const MAX_COMPILED_GLOBS = 4096;
-function compileGlob(pattern) {
-    const cached = compiledGlobs.get(pattern);
-    if (cached)
-        return cached;
+// Restricted portable globs: *, **, ?. Brackets and parentheses are literal path characters (dynamic
+// route or group directories in several stacks); character classes are not supported. Braces and a
+// leading "!" are refused so that brace expansion or negation never silently matches nothing.
+export function matches(path, pattern) {
     invariant(validRelativePath(pattern) && !/[{}]/.test(pattern) && !pattern.split('/').some(segment => segment.startsWith('!')), 'GLOB', `Unsupported glob: ${pattern}. Use only *, ** and ?; brackets and parentheses are literal characters, braces and leading ! are not supported.`);
-    const tokens = [];
+    let regex = '^';
     for (let i = 0; i < pattern.length; i++) {
         const c = pattern[i];
         if (c === '*' && pattern[i + 1] === '*') {
             i++;
             if (pattern[i + 1] === '/') {
-                tokens.push({ kind: 'dirs' });
+                regex += '(?:.*/)?';
                 i++;
             }
             else
-                tokens.push({ kind: 'globstar' });
+                regex += '.*';
         }
         else if (c === '*')
-            tokens.push({ kind: 'star' });
+            regex += '[^/]*';
         else if (c === '?')
-            tokens.push({ kind: 'one' });
+            regex += '[^/]';
         else
-            tokens.push({ kind: 'char', c });
+            regex += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
-    if (compiledGlobs.size >= MAX_COMPILED_GLOBS)
-        compiledGlobs.clear();
-    compiledGlobs.set(pattern, tokens);
-    return tokens;
-}
-const lineTerminator = (c) => c === '\n' || c === '\r' || c === ' ' || c === ' ';
-export function matches(path, pattern) {
-    const tokens = compileGlob(pattern);
-    const n = tokens.length;
-    // State 2i: before token i. State 2i+1: inside the directories of a token `dirs` (characters read, its « / » not yet).
-    let current = new Uint8Array(2 * n + 2);
-    let next = new Uint8Array(2 * n + 2);
-    // Tokens that may match nothing let the state after them be reached without reading (forward only: one pass).
-    const close = (set) => {
-        for (let i = 0; i < n; i++)
-            if (set[2 * i] && tokens[i].kind !== 'char' && tokens[i].kind !== 'one')
-                set[2 * i + 2] = 1;
-    };
-    current[0] = 1;
-    close(current);
-    for (let p = 0; p < path.length; p++) {
-        const ch = path[p];
-        next.fill(0);
-        let alive = false;
-        for (let i = 0; i < n; i++) {
-            const before = current[2 * i] === 1;
-            const inside = current[2 * i + 1] === 1;
-            if (!before && !inside)
-                continue;
-            const token = tokens[i];
-            switch (token.kind) {
-                case 'char':
-                    if (before && ch === token.c) {
-                        next[2 * i + 2] = 1;
-                        alive = true;
-                    }
-                    break;
-                case 'one':
-                    if (before && ch !== '/') {
-                        next[2 * i + 2] = 1;
-                        alive = true;
-                    }
-                    break;
-                case 'star':
-                    if (before && ch !== '/') {
-                        next[2 * i] = 1;
-                        alive = true;
-                    }
-                    break;
-                case 'globstar':
-                    if (before && !lineTerminator(ch)) {
-                        next[2 * i] = 1;
-                        alive = true;
-                    }
-                    break;
-                case 'dirs':
-                    if (lineTerminator(ch))
-                        break;
-                    next[2 * i + 1] = 1;
-                    alive = true;
-                    if (ch === '/')
-                        next[2 * i + 2] = 1;
-                    break;
-            }
-        }
-        if (!alive)
-            return false;
-        close(next);
-        [current, next] = [next, current];
-    }
-    return current[2 * n] === 1;
+    return new RegExp(`${regex}$`).test(path);
 }
 export const sensitivePaths = [
     '.agent-pipeline/**', '.github/**', '.gitmodules', '.gitattributes', '**/AGENTS.md', '**/CLAUDE.md', '.codex/**', '.claude/**', '.agents/**', '**/SKILL.md', 'roles/**', 'skills/**',

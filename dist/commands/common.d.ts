@@ -18,11 +18,6 @@ export declare function parse<T extends Options>(args: string[], options: T): {
 /** Repository path from --repo or the working directory, symlinks resolved like the roots Git reports. */
 export declare function repoPath(io: CommandIO, value: string | boolean | undefined): string;
 export declare function list(value: string | boolean | undefined): string[];
-/**
- * `--replay <id>,<id>` or `--replay all` (apv gates run, apv stack batch): the checks run even when a green receipt of an
- * identical tree could be reused. Absent: undefined. Empty, or `all` mixed with identifiers: an incorrect call.
- */
-export declare function replayOf(value: string | boolean | undefined): 'all' | string[] | undefined;
 export declare function json(io: CommandIO, value: unknown): void;
 /**
  * Runs a command body and turns errors into an exit code: a usage error prints the usage (exit 2), a known

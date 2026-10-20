@@ -52,10 +52,7 @@ export function jsonSchemaIssues(json, value, path = '$') {
         const branches = json['anyOf'].map(branch => jsonSchemaIssues(branch, value, path));
         if (branches.some(b => b.length === 0))
             return issues;
-        // The branch of the type of the value says what is wrong inside it (`reuse: { maxAgeMs: 1 }` is not « expected boolean »).
-        const anyOf = json['anyOf'];
-        const ofType = anyOf.findIndex(b => typeof b['type'] === 'string' && b['type'] !== 'null' && typeMatches(b['type'], value));
-        const typed = ofType >= 0 ? ofType : anyOf.findIndex(b => b['type'] !== 'null');
+        const typed = json['anyOf'].findIndex(b => b['type'] !== 'null');
         return branches[typed >= 0 ? typed : 0] ?? issues;
     }
     if (Object.hasOwn(json, 'const')) {

@@ -3,8 +3,7 @@
 // (APV3 spec, section 11). Read-only, bounded output, silent when there is no `.apv/`.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { userInfo } from 'node:os';
-import { environmentReview, findApvDir, integrityReason, isMainModule, oneLine, projectDirsOf, readHookInput } from './lib.mjs';
+import { findApvDir, isMainModule, oneLine, readHookInput } from './lib.mjs';
 
 const MAX_CONTEXT = 4000;
 const MAX_NOTES_LINES = 40;
@@ -13,8 +12,6 @@ const MAX_RUNS = 8;
 const MAX_RUN_LINE = 240;
 // Summary module of the compiled tool shipped with the plugin (shared with `apv status`).
 const SUMMARY_MODULE = new URL('../../dist/run/summary.js', import.meta.url);
-// Freshness module of the compiled tool (shared with `apv status`, section « Fichiers d'état périmés »).
-const FRESHNESS_MODULE = new URL('../../dist/freshness/check.js', import.meta.url);
 const RUNS_UNAVAILABLE = 'Exécutions (apv run) : résumé indisponible (dist/run/summary.js non chargé) ; voir apv status.';
 const RUNS_UNREADABLE = 'Exécutions (apv run) : résumé indisponible (erreur de lecture de .apv/state) ; voir apv status.';
 
@@ -87,30 +84,6 @@ export async function loadRunSummary(url = SUMMARY_MODULE) {
   }
 }
 
-/** The freshness module, or null when it cannot be loaded: the session then starts without the line. */
-export async function loadFreshness(url = FRESHNESS_MODULE) {
-  try {
-    const mod = await import(url.href);
-    return typeof mod.repoFreshness === 'function' && typeof mod.freshnessSummary === 'function' ? mod : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * One line naming the living state files not rewritten for too long or grown too long (read-only: dates and line
- * counts, never a secret-like file's content), or none. File names are cleaned and bounded: they come from disk.
- */
-export function freshnessLines(repo, freshness, options = {}) {
-  if (!freshness) return [];
-  try {
-    const line = freshness.freshnessSummary(freshness.repoFreshness(repo, options), value => oneLine(value, 160));
-    return line ? [oneLine(line, 1200)] : [];
-  } catch {
-    return [];
-  }
-}
-
 /** Id that `apv run next` reads (`.apv/state/run-<id>.json`), taken from the entry's file name; null if none. */
 function runFileId(file) {
   const match = /(?:^|\/)run-([^/]+)\.json$/.exec(typeof file === 'string' ? file : '');
@@ -151,10 +124,9 @@ export function runLines(repo, summary) {
  * (loadRunSummary); null means unavailable. The executions come right after the header so that the
  * size bound, applied last, cuts the free-form resume notes before them.
  */
-export function buildResumeContext(apvDir, summary = null, freshness = null, freshnessOptions = {}) {
+export function buildResumeContext(apvDir, summary = null) {
   const stateDir = join(apvDir, 'state');
-  const lines = [`[APV] Projet sous Agent Pipeline V3 (${oneLine(apvDir, 300)}).`, ...runLines(dirname(apvDir), summary),
-    ...freshnessLines(dirname(apvDir), freshness, freshnessOptions)];
+  const lines = [`[APV] Projet sous Agent Pipeline V3 (${oneLine(apvDir, 300)}).`, ...runLines(dirname(apvDir), summary)];
   const notes = readText(join(stateDir, 'resume.md'));
   if (notes) {
     const kept = notes.split(/\r?\n/).slice(0, MAX_NOTES_LINES).map(l => oneLine(l, 300));
@@ -179,16 +151,11 @@ export function buildResumeContext(apvDir, summary = null, freshness = null, fre
 
 async function main() {
   const input = await readHookInput();
-  // What the files the session loaded hold: said at the start (every tool call is then refused by the guards).
-  const { problems: integrity, warnings } = environmentReview({ home: userInfo().homedir, projectDirs: projectDirsOf(input), configDir: process.env.CLAUDE_CONFIG_DIR ?? null });
   const apvDir = findApvDir(input);
-  if (!apvDir && !integrity.length && !warnings.length) return 0;
-  // A value that loads no code but that the tool cannot vouch for (a library path, an unknown option of Node): said, never blocking.
-  const warning = warnings.length ? `APV : à vérifier par l'opérateur (aucun outil n'est refusé pour cela) : ${warnings.slice(0, 5).join(' ; ')}` : null;
-  const context = [integrity.length ? integrityReason(integrity) : null, warning, apvDir ? buildResumeContext(apvDir, await loadRunSummary(), await loadFreshness()) : null].filter(Boolean).join('\n\n');
+  if (!apvDir) return 0;
   process.stdout.write(`${JSON.stringify({
-    systemMessage: integrity.length ? `APV : réglages ou profils à corriger par l'opérateur : ${integrity.slice(0, 5).join(' ; ')}` : warning ?? 'APV : contexte de reprise chargé depuis .apv/state.',
-    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context },
+    systemMessage: 'APV : contexte de reprise chargé depuis .apv/state.',
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: buildResumeContext(apvDir, await loadRunSummary()) },
   })}\n`);
   return 0;
 }

@@ -1,10 +1,9 @@
 import { realpathSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { loadConfig, loadConfigAtCommit } from '../config/load.js';
-import { applyBaseGates, baseGatesLines } from '../gates/base-gates.js';
 import { gateStages, type GateStage } from '../domain/contracts.js';
 import { PipelineError } from '../domain/errors.js';
-import { EARLY_SLOW_MS, RECEIPTS_DIR, dirtyRefusal, isFullSuite, runGates, selectGates, stageGates } from '../gates/run.js';
+import { RECEIPTS_DIR, dirtyRefusal, isFullSuite, runGates, selectGates, stageGates } from '../gates/run.js';
 import { exportRun, listRuns, pruneStore, receiptRetention, sharedStore } from '../gates/store.js';
 import { expectedLevel, findRun, type ExpectedLevel, type RunContext } from '../run/rhythm.js';
 import { resolveCommit, gitRoot } from '../run/git-probe.js';
@@ -12,36 +11,22 @@ import { MAX_OVERRIDE_REASON, RUN_ID, applyFullSuiteOverride, readRunState, with
 import { cleanLine } from '../run/summary.js';
 import { verifyGates, type EvidenceState, type VerifyResult } from '../gates/verify.js';
 import { referenceMissing, resolveReference } from '../gates/repeat.js';
-import { checkSince } from '../gates/since.js';
 import { scopeReferenceMissing } from '../gates/proof-scope.js';
 import { Git } from '../execution/git.js';
 import { signalExitCode } from '../lock/run.js';
-import { infrastructureAdvice, infrastructureText } from '../gates/infrastructure.js';
-import { pickStacks, withFreshCopy } from '../gates/fresh-copy.js';
-import { commonDir } from '../stacks/idle.js';
-import { isInside } from '../execution/git.js';
-import { EXIT, UsageError, guard, json, list, parse, replayOf, repoPath, table } from './common.js';
+import { EXIT, UsageError, guard, json, list, parse, repoPath, table } from './common.js';
 import type { CommandIO } from './io.js';
 
 export const usage = `Utilisation :
-  apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>] [--against <ref>]
+  apv gates run [--stage task|full] [--only a,b] [--config <fichier>] [--base <ref>]
                 [--concurrency N] [--keep-going] [--skip-proven] [--run <spec-id>]
-                [--reason <texte>] [--allow-dirty] [--stacks <pile>,<pile>] [--replay <id>,<id>|all]
-                [--fresh-copy] [--repo <chemin>] [--json]
-  apv gates run --stage task --since <commit prouvé> [--only a,b] [--repo <chemin>] [--json]
-  apv gates verify --commit <sha> [--stage full|task] [--base <ref>] [--against <ref>] [--offline]
+                [--reason <texte>] [--allow-dirty] [--stacks <pile>,<pile>] [--repo <chemin>] [--json]
+  apv gates verify --commit <sha> [--stage full|task] [--base <ref>]
                    [--config <fichier> | --commit-config] [--repo <chemin>] [--json]
   apv gates receipts list [--commit <ref>] [--limit N] [--repo <chemin>] [--json]
   apv gates receipts export <exécution> --out <dossier> [--repo <chemin>] [--json]
   apv gates receipts prune [--keep-days N] [--keep-runs N] [--config <fichier>]
                          [--repo <chemin>] [--json]
-
-Contrôles de la base : run et verify lisent aussi la configuration de la base commune de --against (sinon
---base, sinon la branche par défaut du dépôt distant ; référence complète, vérifiée auprès du dépôt distant
-quand le réseau le permet) ; tout contrôle de la base, obligatoire ou non, retiré, rendu facultatif ou modifié
-par le candidat reste exigé avec sa définition de base, et la différence est dite. Le candidat peut seulement
-ajouter ou durcir des contrôles ; les changer passe par une PR de configuration seule. Dépôt distant illisible :
-run avertit, verify refuse sauf --offline (accepté avec un avertissement).
 
 run : exécute les contrôles déclarés (.apv/config.json, sinon pipeline.v2.json) dans le dépôt :
 dépendances, ressources, variables transmises, délais et masquage des secrets respectés.
@@ -54,26 +39,10 @@ survit au retrait du worktree, puis y applique la rétention (section receipts d
 de stage full qui déclare affected y lance cette commande ciblée à sa place (tests concernés
 par les changements, marqués « ciblé », jamais une preuve du contrôle complet) ; les autres
 contrôles de stage full sont listés comme réservés à la suite complète, jamais comptés comme
-réussis. Les contrôles tôt (early) d'un contrôle de stage full y tournent aussi, après leurs dépendances
-de stage task, quand un fichier changé depuis --base (commits, modifications non commitées, fichiers
-non suivis hors ignorés) répond à leur when (lu à la base), toujours sans when ou sans --base ;
-sinon reçu « non requis (hors when) ». Leur reçu est ciblé (early dans le reçu) et ne prouve jamais
-le contrôle complet ; un échec rend le stage task rouge (« échec tôt de <contrôle> ») ; plus de 5 min :
-signalé trop lent. --stage full (défaut) exécute tout, jamais en ciblé ni en tôt ; si la suite complète est déjà
+réussis. --stage full (défaut) exécute tout, jamais en ciblé ; si la suite complète est déjà
 prouvée sur ce commit exact (apv gates verify à 0, arbre propre), elle le signale avant de la
 relancer ; avec --skip-proven, elle ne relance rien dans ce cas et sort en 0 (la preuve reste
 celle que vérifie apv gates verify).
---since <commit prouvé> (avec --stage task, à la place de --base) : preuve incrémentale d'un tour de
-corrections. Refusée (sortie 1, rien n'est lancé) si l'arbre a des modifications non commitées, si HEAD
-ne descend pas strictement du commit, si la suite complète n'y est pas prouvée (apv gates verify à 0 avec
-cette configuration, aucun contrôle réussi après relance), ou si le diff depuis ce commit n'est pas de
-risque faible (classement de apv review plan par le chemin, configuration lue au commit prouvé : tests
-nommés comme tels ou sous test/ et tests/, documentation *.md classée neutral hors dossiers servis,
-maquettes ; jamais l'interface, le code, l'outillage hors dossier de tests ni une configuration), ou si
-HEAD change entre le classement et les contrôles. Sinon, contrôles de tâche, commandes
-ciblées ({{baseSha}} = le commit prouvé) et répétition des tests modifiés depuis ce commit. Jamais une
-preuve de la suite complète : la fusion l'exige toujours au commit exact, lancée une fois sur le
-commit final.
 Rythme d'une exécution (/apv:run) : dans le cadre d'une exécution, la suite complète (--stage full,
 avec au moins un contrôle de stage full) est refusée quand l'étape courante n'attend que les
 contrôles de tâche et ciblés (même calcul que apv run next : intégration intermédiaire ou
@@ -86,24 +55,14 @@ dans l'état de l'exécution et écrite dans les reçus (override).
 Suite complète (au moins un contrôle de stage full exécuté en entier) : refusée sur un arbre modifié
 (fichiers suivis modifiés ou non suivis hors ignorés, listés) sauf --allow-dirty (reçus non prouvants) ;
 puis file des suites complètes (section suite.queue, active par défaut : un verrou à bail commun aux
-worktrees ; la suite tient la place de sa copie (jamais deux suites dans la même copie), puis celle de
-chaque pile qu'elle utilise, et avec slots 1 (défaut) la file entière, avec slots per-stack une suite
-par pile en même temps, avec slots N une des N places ; un contrôle qui lance apv web audit lui fait
-tenir toutes les places ; et si suite.queue.maxLoad est posé, attente d'une charge sur 1 min sous ce
-seuil) ; puis arrêt des orphelins de cette copie sur suite.ports (jamais une autre copie ni le
-checkout principal) ; puis, une copie avec package-lock.json sans node_modules, batch.setup (échec :
-refus GATE_SETUP ; jamais dans le checkout principal). Seules les piles utilisées (celles de
---stacks, sinon celles que verrouillent les contrôles ; toutes pour un verrou hors pile) et leurs
-ports sont vérifiés : --stacks 2 ne refuse pas pour un verrou ou un port de la pile 1. Un contrôle arrêté
-(annulation, délai) sous le verrou d'une pile fait relire la pile après l'arrêt (conteneurs de
-dockerProject comparés au départ) : un conteneur disparu ou arrêté est signalé. Les
+worktrees, et si suite.queue.maxLoad est posé, attente d'une charge sur 1 min sous ce seuil) ; puis arrêt
+des orphelins de cette copie sur suite.ports (jamais une autre copie ni le checkout principal). Les
 délais des contrôles ne commencent qu'après. Un contrôle avec lock attend son verrou (bail apv lock ou
 flock) avant que son délai commence ; un contrôle avec retryFailed qui échoue relance une fois ses tests
 en échec, même commit et même arbre : « réussi après relance » (instable), compté comme réussi et
 signalé à part. Un contrôle avec repeatChanged relance ensuite, avec --base, les seuls fichiers de test
 ajoutés ou modifiés depuis la base (motifs repeatChanged.paths) repeatChanged.times fois, sous le même
-verrou (un test dont seuls les chemins d'import changent, ou renommé sans autre changement, est listé
-« tests dont seuls les imports changent : non répétés », jamais répété ni compté dans maxFiles) : tout échec le rend rouge (« échoue X fois sur N »), jamais masqué par retryFailed ; plus de
+verrou : tout échec le rend rouge (« échoue X fois sur N »), jamais masqué par retryFailed ; plus de
 fichiers que repeatChanged.maxFiles, ou une attente à durée fixe avec fixedWaits = refuse : refus avant
 toute attente. Sans --base, un tel contrôle ne se lance pas (appel incorrect) ; une suite complète compare
 aussi à repeatChanged.reference (obligatoire ; introuvable : appel incorrect).
@@ -113,26 +72,11 @@ changement), hors fichiers toujours requis (configuration, dépendances, CI, bui
 migrations, mode ou type changé), n'est pas lancé : reçu « non requis » (not_required) avec la portée. À la fin d'une suite complète (réussite, échec, ou SIGINT, SIGTERM, SIGHUP : contrôles
 annulés, sortie 128 + signal), les processus qu'elle a lancés encore vivants et les orphelins de cette
 copie sur suite.ports sont arrêtés (jamais la session, une autre copie ni le checkout principal).
---stacks 1,2 (suite complète, piles déclarées dans la section stacks) : les contrôles d'une pile
+--stacks 1,2 (suite complète, deux piles déclarées au moins, section stacks) : les contrôles d'une pile
 (lock égal au verrou d'une pile déclarée) sont répartis sur ces piles, tour à tour dans l'ordre de la
 configuration ; sur la première dans cette copie, sur une autre dans une copie détachée du même commit
 (préparée par batch.setup, retirée à la fin), avec les variables de sa pile et sous son verrou. Un
-contrôle qui a des dépendances, ou dont d'autres dépendent, reste dans cette copie. Une seule pile
-(--stacks 2) : tous les contrôles de pile tournent sur elle, dans cette copie, avec ses variables et sous
-son verrou.
-Reprise à arbre identique (docs/ACCELERATION-LOTS.md, A1) : avant toute attente, un contrôle dont le reçu
-le plus récent sur un commit au même arbre (worktree, puis magasin partagé intact) a réussi au premier
-passage, arbre propre, non ciblé, avec la même configuration des contrôles et le même environnement
-(variables transmises, exécutable, pile de --stacks, Node, système, version de l'outil), de moins de 20 h,
-sans échec plus récent sur le même arbre, n'est pas relancé : reçu « réutilisé » (cached) qui cite son
-origine, vérifié avant d'être écrit par la vérification même de apv gates verify, puis relu à la fin de
-l'exécution. Jamais repris : arbre modifié, contrôle ciblé ou tôt, reuse: false, commande qui lance apv
-web audit ou apv dast, origine réussie après relance, réutilisée, sur arbre modifié ou ciblée. Un
-contrôle dont dépend un contrôle exécuté est exécuté aussi. File, piles, ports et préparation ne
-concernent que les contrôles exécutés. --replay <id>,<id> ou --replay all les exécute quand même.
-Panne d'infrastructure : un contrôle en échec dont la sortie nomme une variable de son passEnv absente,
-ou une pile injoignable (connexion refusée, conteneur arrêté), est signalé à part, avec la marche ; son
-reçu reste en échec.
+contrôle qui a des dépendances, ou dont d'autres dépendent, reste dans cette copie.
 Sortie : 0 si tous les contrôles exécutés passent, 1 sinon (ou suite complète refusée par le
 rythme, l'arbre modifié ou la file, ou répétition refusée), 2 appel incorrect.
 
@@ -155,12 +99,6 @@ Les reçus sont lus dans .apv/receipts/ du worktree, puis dans le magasin partag
 exécutions que le worktree n'a pas : la preuve d'un commit se vérifie depuis n'importe quel
 checkout du dépôt, avec les mêmes exigences. Une exécution du magasin partagé dont un fichier ne
 correspond plus à son manifeste (empreintes) est refusée en entier et signalée.
-Un reçu « réutilisé » (cached) ne prouve que si sa reprise se vérifie depuis Git et le magasin : origine
-présente et intacte, même contrôle, réussie au premier passage, arbre propre, même configuration et même
-environnement, moins de 24 h, arbres identiques recalculés, contrôle jamais déclaré reuse: false ni lanceur
-de apv web audit ou apv dast, aucun échec plus récent sur le même arbre ; le magasin entier est relu pour
-cela, et une exécution dont le manifeste nomme un autre commit que ses reçus, quand l'un des deux est de
-cet arbre, bloque la reprise. Sinon « reçu réutilisé non prouvant » avec la raison.
 --commit-config lit la configuration des contrôles au commit vérifié (git show <commit>:.apv/config.json)
 plutôt que dans le checkout : utile depuis un checkout dont la configuration diffère de celle du commit.
 Sortie : 0 preuve complète, 1 sinon (ce qui manque est listé), 2 appel incorrect.
@@ -178,22 +116,15 @@ const STATUS: Record<string, string> = { passed: 'réussi', failed: 'échec', ti
 const FLAKY = 'instable';
 const RESERVED = 'réservé à la suite complète';
 const TARGETED = 'ciblé';
-const EARLY = 'tôt';
 const SHARED = 'magasin partagé';
 const EVIDENCE: Record<EvidenceState, string> = { passed: 'réussi', failed: 'échec', dirty: 'arbre modifié', missing: 'aucun reçu', unrepeated: 'tests modifiés non répétés',
-  unaudited: 'audit web non prouvé', required: 'requis (dispense non prouvée)', reuse: 'reçu réutilisé non prouvant' };
+  unaudited: 'audit web non prouvé', required: 'requis (dispense non prouvée)' };
 
-/** The repetition of a check as shown: the receipt's `repeat`, or the row of `--json`. */
-type RepeatRow = { status: string; base: string | null; files: string[]; importsOnly?: string[]; movedPathsOnly?: string[]; times: number; failures: { test: string; count: number }[] };
 /** One line of the repetition of the changed test files of a check. */
-function repeatLine(r: RepeatRow): string {
-  const listed = (label: string, list?: string[]): string => list?.length ? ` ; ${label} : non répétés (${list.length > 5 ? `${list.slice(0, 5).join(', ')} ... (${list.length})` : list.join(', ')})` : '';
-  return `${repeatText(r)}${listed('tests dont seuls les imports changent', r.importsOnly)}${listed('tests dont seuls des chemins de fichiers déplacés changent', r.movedPathsOnly)}`;
-}
-function repeatText(r: RepeatRow): string {
+function repeatLine(r: { status: string; base: string | null; files: string[]; times: number; failures: { test: string; count: number }[] }): string {
   const files = r.files.length > 5 ? `${r.files.slice(0, 5).join(', ')} ... (${r.files.length})` : r.files.join(', ');
   if (r.status === 'no_base') return 'non répétés : --base absent (apv gates run --base <base de la branche> les répète)';
-  if (r.status === 'none') return `aucun fichier de test ${r.importsOnly?.length || r.movedPathsOnly?.length ? 'à répéter' : 'ajouté ou modifié'} depuis ${r.base?.slice(0, 12)}`;
+  if (r.status === 'none') return `aucun fichier de test ajouté ou modifié depuis ${r.base?.slice(0, 12)}`;
   if (r.status === 'not_run') return `non répétés, la commande du contrôle n'a pas réussi (${files})`;
   if (r.status === 'passed') return `${r.files.length} fichier(s), ${r.times} fois chacun : réussi (${files})`;
   const tests = r.failures.map(f => `${f.test} échoue ${f.count} fois sur ${r.times}`).join(' ; ');
@@ -206,8 +137,7 @@ function verifyLines(result: VerifyResult): string[] {
   const state = (g: VerifyResult['gates'][number]): string => {
     const text = g.state === 'failed' ? `${EVIDENCE.failed} (${STATUS[g.status!] ?? g.status})`
       : g.state === 'passed' && g.status === 'passed_after_retry' ? `${STATUS['passed_after_retry']} (${FLAKY})`
-      : g.state === 'passed' && g.status === 'not_required' ? 'non requis (portée recalculée)'
-      : g.state === 'passed' && g.reuse?.proven ? `${STATUS['cached']} de ${g.reuse.fromCommit!.slice(0, 12)} (${g.reuse.reason})` : EVIDENCE[g.state];
+      : g.state === 'passed' && g.status === 'not_required' ? 'non requis (portée recalculée)' : EVIDENCE[g.state];
     return g.proof === 'targeted' ? `${text} (${TARGETED})` : text;
   };
   const lines = [`Vérification (${what}) au commit ${result.commit.slice(0, 12)}${result.base ? ` ; tests ciblés depuis ${result.base.slice(0, 12)}` : ''}`, '',
@@ -228,10 +158,6 @@ function verifyLines(result: VerifyResult): string[] {
   const unaudited = result.gates.filter(g => g.state === 'unaudited');
   if (unaudited.length) lines.push('', 'Audit web non prouvé (apv web audit --preview --base) : le reçu dit « non requis », le recalcul depuis ce commit dit requis :',
     ...unaudited.map(g => `- ${g.gateId} : ${g.web!.reason}${g.web!.files.length ? ` : ${g.web!.files.slice(0, 10).join(', ')}${g.web!.files.length > 10 ? ' ...' : ''}` : ''}`));
-  const reusedRows = result.gates.filter(g => g.reuse);
-  if (reusedRows.length) lines.push('', 'Reçus réutilisés (cached), recontrôlés depuis Git et le magasin (origine, arbre, empreintes, âge) :',
-    ...reusedRows.map(g => `- ${g.gateId} : ${g.reuse!.proven ? 'prouvé' : 'NE PROUVE RIEN'} : ${g.reuse!.reason}` +
-      `${g.reuse!.fromRun ? ` (origine ${g.reuse!.fromRun}/${g.gateId}.json au commit ${g.reuse!.fromCommit!.slice(0, 12)})` : ''}`));
   const scoped = result.gates.filter(g => g.scope);
   if (scoped.length) lines.push('', 'Portée de la preuve (skipWhenOnly), recalculée depuis le commit :',
     ...scoped.map(g => `- ${g.gateId} : ${g.scope!.required ? 'REQUIS, le reçu « non requis » ne prouve rien' : 'non requis'} : ${g.scope!.reason}` +
@@ -239,8 +165,7 @@ function verifyLines(result: VerifyResult): string[] {
   const missing = result.gates.filter(g => g.state !== 'passed');
   const rerun = result.stage === 'task' && result.base ? `apv gates run --stage task --base ${result.base.slice(0, 12)}`
     : `apv gates run --stage ${result.stage}${result.repeating.length || result.scoped.length ? ' --base <base de la branche>' : ''}`;
-  if (result.flaky.length) lines.push('', `Instables (réussis seulement après la relance de leurs tests en échec, même commit) : ${result.flaky.join(', ')} : à traiter comme un constat ; apv stack merge refuse ce commit (règle instable).`);
-  if (result.nearTimeout.length) lines.push('', `ATTENTION, délai presque atteint : ${result.nearTimeout.map(n => `${n.gateId} ${n.percent} % de ${Math.round(n.timeoutMs / 1000)} s`).join(', ')} : augmenter timeoutMs avant qu'un délai dépassé ne casse une preuve.`);
+  if (result.flaky.length) lines.push('', `Instables (réussis seulement après la relance de leurs tests en échec, même commit) : ${result.flaky.join(', ')} : à traiter comme un constat.`);
   lines.push('', result.ok
     ? `Preuve complète : ${result.required.length} contrôle(s) ${result.notRequired.length ? `prouvé(s) sur ce commit (dont ${result.notRequired.length} non requis par leur portée : ${result.notRequired.join(', ')})` : 'réussi(s) sur ce commit'}, arbre propre${result.flaky.length ? `, dont ${result.flaky.length} ${FLAKY}(s)` : ''}${result.stage === 'task' && (result.targeted.length || result.reserved.length) ? ' (niveau tâche : la suite complète reste à passer)' : ''}.`
     : `Preuve incomplète. Manque : ${missing.map(g => `${g.gateId} (${EVIDENCE[g.state]})`).join(', ')}. ` +
@@ -253,7 +178,7 @@ async function provenFull(repo: string, config: Parameters<typeof verifyGates>[0
   try {
     const git = new Git();
     const root = await git.root(repo);
-    if ((await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none'])) !== '') return null;
+    if ((await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])) !== '') return null;
     const result = await verifyGates({ repo: root, config, commit: 'HEAD', stage: 'full', configFile });
     return result.ok ? result : null;
   } catch { return null; }
@@ -312,13 +237,6 @@ async function rhythmCheck(repo: string, explicit: string | undefined, reason: s
   return { context, expected, override: { run: context.specId, reason }, notes };
 }
 
-/** `--against <ref>`: the branch the change goes to, whose mandatory checks are kept. */
-function againstOf(value: string | boolean | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string' || !value || value.startsWith('-')) throw new UsageError('--against attend une référence Git (la branche où va le changement, par exemple origin/main)');
-  return value;
-}
-
 function stageOf(value: string | boolean | undefined): GateStage | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || !(gateStages as readonly string[]).includes(value)) throw new UsageError(`--stage attend ${gateStages.join(' ou ')}`);
@@ -331,8 +249,8 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       only: { type: 'string' }, config: { type: 'string' }, base: { type: 'string' }, concurrency: { type: 'string' },
       stage: { type: 'string' }, commit: { type: 'string' }, 'skip-proven': { type: 'boolean' }, run: { type: 'string' }, reason: { type: 'string' },
       'keep-going': { type: 'boolean' }, 'allow-dirty': { type: 'boolean' }, repo: { type: 'string' }, json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
-      'commit-config': { type: 'boolean' }, against: { type: 'string' }, offline: { type: 'boolean' }, limit: { type: 'string' }, out: { type: 'string' }, 'keep-days': { type: 'string' }, 'keep-runs': { type: 'string' },
-      stacks: { type: 'string' }, since: { type: 'string' }, replay: { type: 'string' }, 'fresh-copy': { type: 'boolean' },
+      'commit-config': { type: 'boolean' }, limit: { type: 'string' }, out: { type: 'string' }, 'keep-days': { type: 'string' }, 'keep-runs': { type: 'string' },
+      stacks: { type: 'string' },
     });
     if (values.help) { io.stdout(`${usage}\n`); return EXIT.ok; }
     const [action, ...rest] = positionals;
@@ -343,7 +261,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     if (rest.length) throw new UsageError(`argument inattendu : ${rest.join(' ')}`);
     const stage = stageOf(values.stage);
     if (action === 'verify') {
-      const extra = (['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason', 'allow-dirty', 'stacks', 'since', 'replay', 'fresh-copy'] as const).filter(k => values[k] !== undefined);
+      const extra = (['only', 'concurrency', 'keep-going', 'skip-proven', 'run', 'reason', 'allow-dirty', 'stacks'] as const).filter(k => values[k] !== undefined);
       if (extra.length) throw new UsageError(`option de gates run seulement : --${extra.join(', --')}`);
       if (!values.commit) throw new UsageError('gates verify attend --commit <sha>');
       if (values.base !== undefined && stage !== 'task') throw new UsageError('gates verify : --base va avec --stage task (base des tests ciblés)');
@@ -356,42 +274,24 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
         if (!sha) throw new PipelineError('SHA', `Commit introuvable : ${values.commit}`);
         loaded = loadConfigAtCommit(root, sha);
       } else loaded = loadConfig(repo, values.config);
-      const verifyRoot = gitRoot(repo);
-      const verified = resolveCommit(verifyRoot, values.commit);
-      if (!verified) throw new PipelineError('SHA', `Commit introuvable : ${values.commit}`);
-      const kept = applyBaseGates(verifyRoot, loaded.config, verified, againstOf(values.against) ?? values.base ?? null, { strict: true, offline: values.offline === true });
-      loaded = { ...loaded, config: kept.config };
-      // reuse.maxAgeMs is read at the base of the checks (the merge base read just above).
       const result = await verifyGates({ repo, config: loaded.config, commit: values.commit, ...(stage ? { stage } : {}), ...(values.base ? { base: values.base } : {}),
-        configFile: values['commit-config'] ? null : loaded.file, reuseReference: kept.base.mergeBase ?? kept.base.reference });
+        configFile: values['commit-config'] ? null : loaded.file });
       if (values.json) {
-        json(io, { ok: result.ok, commit: result.commit, stage: result.stage, base: result.base, config: loaded.file, configHash: result.configHash, baseGates: kept.base,
+        json(io, { ok: result.ok, commit: result.commit, stage: result.stage, base: result.base, config: loaded.file, configHash: result.configHash,
           required: result.required, targeted: result.targeted, reserved: result.reserved, gates: result.gates, unreadable: result.unreadable,
-          store: result.store, altered: result.altered, flaky: result.flaky, nearTimeout: result.nearTimeout, repeating: result.repeating, auditing: result.auditing, notRequired: result.notRequired, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
+          store: result.store, altered: result.altered, flaky: result.flaky, repeating: result.repeating, auditing: result.auditing, notRequired: result.notRequired, missing: result.gates.filter(g => g.state !== 'passed').map(g => g.gateId) });
       } else {
-        io.stdout(`${[...baseGatesLines(kept.base), ...verifyLines(result)].join('\n')}\n`);
+        io.stdout(`${verifyLines(result).join('\n')}\n`);
       }
       return result.ok ? EXIT.ok : EXIT.failed;
     }
     if (values.commit !== undefined) throw new UsageError('--commit est une option de gates verify');
     if (values['commit-config']) throw new UsageError('--commit-config est une option de gates verify');
-    if (values.offline) throw new UsageError('--offline est une option de gates verify (gates run avertit seulement quand le dépôt distant est illisible)');
     const spreadOver = values.stacks === undefined ? undefined : list(values.stacks);
-    if (spreadOver !== undefined && (spreadOver.length < 1 || new Set(spreadOver).size !== spreadOver.length)) throw new UsageError('--stacks attend une ou plusieurs piles différentes, par exemple --stacks 2 ou --stacks 1,2');
+    if (spreadOver !== undefined && (spreadOver.length < 2 || new Set(spreadOver).size !== spreadOver.length)) throw new UsageError('--stacks attend au moins deux piles différentes, par exemple --stacks 1,2');
     if (spreadOver !== undefined && stage === 'task') throw new UsageError('--stacks répartit la suite complète (--stage full)');
-    if (values.since !== undefined) {
-      if (!values.since || values.since.startsWith('-')) throw new UsageError('--since : commit attendu (le dernier commit prouvé par la suite complète)');
-      if (stage !== 'task') throw new UsageError('--since va avec --stage task : la preuve incrémentale des corrections ne remplace jamais la suite complète');
-      if (values.base !== undefined) throw new UsageError('--since remplace --base (les tests ciblés et répétés se comptent depuis le commit prouvé) : pas les deux');
-    }
-    const fresh = values['fresh-copy'] === true;
-    if (fresh && stage === 'task') throw new UsageError('--fresh-copy lance la suite complète (--stage full) dans une copie neuve, comme la mise en ligne');
-    if (fresh && values['allow-dirty']) throw new UsageError('--fresh-copy et --allow-dirty s\'excluent : la copie neuve est celle du commit, l\'arbre de travail doit être propre');
-    if (fresh && values.since !== undefined) throw new UsageError('--fresh-copy va avec la suite complète, --since avec le stage task');
     const skipProven = values['skip-proven'] === true;
     if (skipProven && (stage === 'task' || values.only !== undefined)) throw new UsageError('--skip-proven va avec la suite complète entière (--stage full, sans --only)');
-    const replay = replayOf(values.replay);
-    if (replay !== undefined && skipProven) throw new UsageError('--replay et --skip-proven s\'excluent : --replay exige l\'exécution, --skip-proven n\'exécute rien quand le commit est prouvé');
     if (values.run !== undefined && (!RUN_ID.test(values.run) || values.run.length > 80)) throw new UsageError(`--run : identifiant de spec invalide : ${values.run}`);
     const reason = values.reason?.trim();
     if (values.reason !== undefined && (!reason || reason.length > MAX_OVERRIDE_REASON)) throw new UsageError(`--reason attend un texte de 1 à ${MAX_OVERRIDE_REASON} caractères`);
@@ -399,23 +299,13 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     const concurrency = values.concurrency === undefined ? 3 : Number(values.concurrency);
     if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) throw new UsageError('--concurrency attend un entier entre 1 et 16');
     const repo = repoPath(io, values.repo);
-    let loaded = loadConfig(repo, values.config);
-    // The mandatory checks of the base are kept, whatever the candidate's configuration says (src/gates/base-gates.ts).
-    const runRoot = gitRoot(repo);
-    const runHead = resolveCommit(runRoot, 'HEAD');
-    const kept = runHead ? applyBaseGates(runRoot, loaded.config, runHead, againstOf(values.against) ?? values.base ?? null) : null;
-    if (kept) loaded = { ...loaded, config: kept.config };
-    const keptLines = kept ? baseGatesLines(kept.base) : [];
-    if (keptLines.length && !values.json) io.stderr(`${keptLines.join('\n')}\n`);
+    const loaded = loadConfig(repo, values.config);
     // A check that repeats its changed test files needs the base they changed from: refused as an incorrect call, before
     // the proof lookup (--skip-proven) and any wait, so that a red repetition is never replaced by a run that repeats nothing.
     const selected = selectGates(loaded.config.gates, list(values.only)).gates;
-    // --replay: checks of the configuration, before any wait (runGates checks them against the checks of the run too).
-    const unknownReplay = Array.isArray(replay) ? replay.filter(id => !loaded.config.gates.some(g => g.id === id)) : [];
-    if (unknownReplay.length) throw new UsageError(`--replay : contrôle inconnu ${unknownReplay.join(', ')} (déclarés : ${loaded.config.gates.map(g => g.id).join(', ')})`);
     const staged = stageGates(selected, stage ?? 'full');
     const repeating = [...staged.run, ...staged.targeted].filter(g => g.repeatChanged).map(g => g.id);
-    if (repeating.length && values.base === undefined && values.since === undefined) {
+    if (repeating.length && values.base === undefined) {
       throw new UsageError(`${repeating.join(', ')} déclare(nt) repeatChanged : --base <base de la branche> est obligatoire (ses tests ajoutés ou modifiés depuis elle sont répétés ; sans base, rien ne le serait)`);
     }
     // The scope of the proof (skipWhenOnly) is counted at the full stage from the base and the reference: both required.
@@ -440,14 +330,13 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
     // A full suite: a check of stage full run in full. On a dirty tree it proves nothing: refused first, before the
     // proof lookup, the rhythm (which may journal an override in the state) and any wait.
     const full = isFullSuite(selectGates(loaded.config.gates, list(values.only)).gates, stage ?? 'full');
-    if (fresh && !full) throw new UsageError('--fresh-copy : aucun contrôle de stage full à exécuter en entier (suite complète seulement)');
     let treeChecked = false;
     const cleanTree = async (stateCheckout?: string): Promise<void> => {
       if (treeChecked || !full || allowDirty) return;
       treeChecked = true;
       const git = new Git();
       const root = await git.root(repo);
-      const status = await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
+      const status = await git.exec(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
       if (status !== '') throw dirtyRefusal(status);
       // The override is journaled in the state of the execution: in this very copy, it would dirty the tree of the suite.
       if (stateCheckout !== undefined && realpathSync(stateCheckout) === root) {
@@ -484,82 +373,42 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       process.on(signal, handler);
       return [signal, handler] as const;
     });
-    // Incremental proof of a round of corrections: checked before any wait, never a proof of the full suite.
-    const since = values.since !== undefined ? await checkSince(repo, loaded.config, loaded.file, values.since) : null;
-    if (since && !values.json) {
-      io.stdout(`Preuve incrémentale depuis ${since.commit.slice(0, 12)} (suite complète verte à ce commit, ${since.proven.length} contrôle(s)) : diff de risque faible (${since.risk.reason}).\n` +
-        'Contrôles de tâche, tests ciblés et tests modifiés répétés depuis ce commit. La fusion exige toujours la suite complète au commit exact : une seule fois, sur le commit final.\n');
-    }
     let result: Awaited<ReturnType<typeof runGates>>;
-    // --fresh-copy (docs/UNE-SUITE-PAR-PR.md, 1.1): the suite in a fresh copy of HEAD prepared by batch.setup, as the release runs
-    // it, on the stack the release would take (the first free one, unless --stacks); the receipts stay in the shared store.
-    let copied: { dir: string; stacks: readonly string[] | undefined } | null = null;
-    const gatesRun = (dir: string, stacks: readonly string[] | undefined): ReturnType<typeof runGates> =>
-      runGates({ repo: dir, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env, signal: abort.signal,
-        allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] || io.env['APV_PORTS_POLL_MS'] ? { hooks: {
-          ...(io.env['APV_LOCK_POLL_MS'] ? { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } : {}), ...(io.env['APV_PORTS_POLL_MS'] ? { portsPollMs: Number(io.env['APV_PORTS_POLL_MS']) } : {}) } } : {}),
-        ...(values.base ? { base: values.base } : {}), ...(since ? { base: since.commit, since: { commit: since.commit, head: since.head, risk: since.risk.level, reason: since.risk.reason } } : {}),
-        ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
-        ...(stacks ? { stacks } : {}), ...(replay !== undefined ? { replay } : {}),
-        configFile: dir === repo || !loaded.file || !isInside(runRoot, loaded.file) ? loaded.file : join(dir, relative(runRoot, loaded.file)),
-        ...(dir === repo ? {} : { batchSetup: true }),
-        // reuse.maxAgeMs of the base of the checks (the merge base read by applyBaseGates), never of the candidate.
-        reuseReference: kept?.base.mergeBase ?? kept?.base.reference ?? null });
     try {
-      if (fresh) {
-        const common = commonDir(runRoot);
-        let stacks: readonly string[] | undefined = spreadOver;
-        if (!stacks) {
-          const picked = pickStacks(loaded.config, common, undefined);
-          if ('busy' in picked) io.stderr(`Piles toutes tenues (${picked.busy}) : la suite prend la pile ${picked.first} et attend son verrou.\n`);
-          stacks = 'busy' in picked ? [picked.first] : picked.ids;
-        }
-        const ran = await withFreshCopy(runRoot, common, runHead!, async dir => { copied = { dir, stacks }; return gatesRun(dir, stacks); }, line => io.stderr(`${line}\n`));
-        if ('busy' in ran) { io.stderr(`Suite complète refusée, rien n'a été exécuté : ${ran.busy}. Attendre sa fin, puis relancer.\n`); return EXIT.failed; }
-        result = ran;
-      } else result = await gatesRun(repo, spreadOver);
+      result = await runGates({ repo, config: loaded.config, only: list(values.only), concurrency, failFast: !values['keep-going'], env: io.env, signal: abort.signal,
+        allowDirty, log: line => io.stderr(`${line}\n`), ...(io.env['APV_LOCK_POLL_MS'] ? { hooks: { lockPollMs: Number(io.env['APV_LOCK_POLL_MS']) } } : {}),
+        ...(values.base ? { base: values.base } : {}), ...(stage ? { stage } : {}), ...(rhythm.override ? { override: rhythm.override } : {}),
+        ...(spreadOver ? { stacks: spreadOver } : {}), configFile: loaded.file });
     } catch (error) {
       if (received) { io.stderr(`Interrompu (${received}) : ${error instanceof Error ? error.message : String(error)}\n`); return signalExitCode(received); }
       throw error;
     } finally {
       for (const [signal, handler] of handlers) process.off(signal, handler);
     }
-    const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, ...(r.early ? { early: r.early.gate } : {}), status: r.status, exitCode: r.exitCode,
+    const rows = result.receipts.map(r => ({ gate: r.gateId, targeted: r.targeted === true, status: r.status, exitCode: r.exitCode,
       durationMs: Math.round(r.durationMs), receipt: r.id, diagnostic: r.diagnostic,
       ...(r.lockWaitMs !== undefined ? { lockWaitMs: r.lockWaitMs } : {}), ...(r.retry ? { retriedTests: r.retry.tests } : {}),
-      ...(r.repeat ? { repeat: { status: r.repeat.status, base: r.repeat.base, files: r.repeat.files, importsOnly: r.repeat.importsOnly, movedPathsOnly: r.repeat.movedPathsOnly, times: r.repeat.times, failures: r.repeat.failures, fixedWaits: r.repeat.fixedWaits } } : {}),
-      ...(r.scope ? { scope: r.scope } : {}), ...(r.nearTimeout ? { nearTimeout: r.nearTimeout } : {}) }));
-    const name = (r: { gate: string; targeted: boolean; early?: string }): string => r.early ? `${r.gate} (${EARLY} : ${r.early})` : r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
+      ...(r.repeat ? { repeat: { status: r.repeat.status, base: r.repeat.base, files: r.repeat.files, times: r.repeat.times, failures: r.repeat.failures, fixedWaits: r.repeat.fixedWaits } } : {}),
+      ...(r.scope ? { scope: r.scope } : {}) }));
+    const name = (r: { gate: string; targeted: boolean }): string => r.targeted ? `${r.gate} (${TARGETED})` : r.gate;
     if (values.json) {
-      json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null, baseGates: kept?.base ?? null,
-        since: since ? { commit: since.commit, head: since.head, proven: since.proven, risk: since.risk } : null,
+      json(io, { ok: result.ok, runId: result.runId, candidateSha: result.candidateSha, baseSha: result.baseSha, dirty: result.dirty, alreadyProven: proven !== null,
         stage: result.stage, config: loaded.file, legacyConfig: loaded.legacy, ignoredSections: loaded.ignored, added: result.added,
-        reserved: result.reserved, targeted: result.targeted, early: result.early, slowEarly: result.slowEarly, receiptsDirectory: result.directory,
+        reserved: result.reserved, targeted: result.targeted, receiptsDirectory: result.directory,
         sharedDirectory: result.shared?.directory ?? null, sharedError: result.shared?.error ?? null, pruned: result.shared?.pruned?.removed.length ?? 0, gates: rows,
-        reused: result.reused, replay: result.replay, reuseStale: result.reuseStale, reuseScan: result.reuseScan, freshCopy: copied,
-        suite: result.suite, notRequired: result.notRequired, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, stacksUsed: result.stacksUsed, stacksChecked: result.stacksChecked, stacksUnmapped: result.stacksUnmapped, setup: result.setup, interruptedStacks: result.interruptedStacks, infrastructure: result.infrastructure, interrupted: received,
+        suite: result.suite, notRequired: result.notRequired, queue: result.queue, ports: result.ports, flaky: result.flaky, cleanup: result.cleanup, spread: result.spread, stoppedStacks: result.stoppedStacks, interrupted: received,
         rhythm: rhythm.context ? { run: rhythm.context.specId, source: rhythm.context.source, checkout: rhythm.context.checkout, step: rhythm.expected?.plan.step ?? null,
           level: rhythm.expected?.plan.suite.level ?? null, override: rhythm.override } : null, notes: rhythm.notes });
     } else {
-      const lines = [`${result.stage === 'task' ? 'Contrôles de tâche (--stage task)' : 'Contrôles'} à ${result.candidateSha.slice(0, 12)} (configuration : ${loaded.file ? relative(runRoot, loaded.file) || loaded.file : 'aucune'}${loaded.legacy ? ', format V2' : ''})`];
-      const copy = copied as { dir: string; stacks: readonly string[] | undefined } | null;
-      if (copy) lines.push(`Copie neuve, comme la mise en ligne : ${copy.dir} (préparée par batch.setup, retirée ; reçus dans le magasin partagé)${copy.stacks ? `, pile ${copy.stacks.join(', ')}` : ''}.`);
+      const lines = [`${result.stage === 'task' ? 'Contrôles de tâche (--stage task)' : 'Contrôles'} à ${result.candidateSha.slice(0, 12)} (configuration : ${loaded.file ? relative(result.repo, loaded.file) || loaded.file : 'aucune'}${loaded.legacy ? ', format V2' : ''})`];
       if (result.added.length) lines.push(`Dépendances ajoutées : ${result.added.join(', ')}`);
       if (result.dirty) lines.push(`Attention : modifications non commitées présentes ; les reçus décrivent plus que le commit${result.suite ? ' (--allow-dirty : ils ne prouvent rien)' : ''}.`);
       const q = result.queue;
       if (q) {
         const load = q.load ? ` ; charge sur 1 min au démarrage ${q.load.atStart.toFixed(2)} (seuil ${q.load.max}${q.load.waitedMs >= 1000 ? `, attendu ${Math.round(q.load.waitedMs / 1000)} s` : ''}${q.load.exceeded ? ', délai d\'attente de la charge dépassé : démarrée quand même' : ''})` : '';
-        const places = q.places && (q.places.length > 1 || q.slots !== 1) ? ` ; places tenues : ${q.places.join(', ')} (slots ${q.slots})` : '';
-        lines.push(`File des suites complètes : ${q.waitedMs >= 1000 ? `attendu ${Math.round(q.waitedMs / 1000)} s${q.heldBy ? ` (tenue par ${q.heldBy})` : ''}` : 'libre'}${places}${load}.`);
+        lines.push(`File des suites complètes : ${q.waitedMs >= 1000 ? `attendu ${Math.round(q.waitedMs / 1000)} s${q.heldBy ? ` (tenue par ${q.heldBy})` : ''}` : 'libre'}${load}.`);
       }
-      if (result.suite && result.stacksUnmapped.length && result.stacksChecked.length) {
-        lines.push(`Piles vérifiées par la suite (verrous et ports) : toutes (${result.stacksChecked.join(', ')}), un verrou n'est celui d'aucune pile déclarée (${result.stacksUnmapped.join(', ')}).`);
-      } else if (result.suite && result.stacksChecked.length) lines.push(`Piles vérifiées par la suite (verrous et ports) : ${result.stacksChecked.join(', ')} (celles qu'elle utilise).`);
-      else if (result.suite && (loaded.config.stacks ?? []).length) lines.push('Piles vérifiées par la suite : aucune (aucun contrôle ne verrouille une pile déclarée).');
-      if (result.setup) lines.push(result.setup.status === 'done' ? `Copie de la suite préparée (${result.setup.reason}) : ${result.setup.command!.join(' ')}, ${Math.round(result.setup.durationMs / 1000)} s.`
-        : `ATTENTION : copie de la suite non préparée (${result.setup.reason}), aucun batch.setup déclaré.`);
       if (result.ports?.stopped.length) lines.push(`Orphelins de cette copie arrêtés sur les ports de la suite : ${result.ports.stopped.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}.`);
-      if (result.ports?.wait) lines.push(`Ports de la suite tenus par une autre copie du dépôt au départ (${result.ports.wait.holders.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}) : attendu ${Math.round(result.ports.wait.ms / 1000)} s, puis ${result.ports.wait.outcome === 'freed' ? 'libérés' : result.ports.wait.outcome === 'timeout' ? 'toujours tenus (délai de verrou)' : 'pris par un processus étranger'}.`);
       if (result.ports?.left.length) lines.push(`Ports de la suite tenus par d'autres processus, non arrêtés : ${result.ports.left.map(p => `pid ${p.pid} (${p.ports.join(', ')}, ${p.reason})`).join(', ')}.`);
       for (const x of result.stoppedStacks) lines.push(`ATTENTION : pile ${x.stack} arrêtée par apv stacks idle-stop le ${x.since}, pas redémarrée depuis (${x.gates.join(', ')}) : apv stacks start ${x.stack}, puis relancer si ces contrôles échouent.`);
       if (result.spread) lines.push(`Répartition sur les piles : ${result.spread.map(a => `${a.gate} sur la pile ${a.stack}${a.workspace === result.repo ? '' : ' (copie détachée)'}${a.error ? ` : copie non préparée, ${a.error}` : ''}`).join(', ') || 'aucun contrôle de pile'}.`);
@@ -567,21 +416,12 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
       if (end?.stopped.length) lines.push(`Fin de suite : processus lancés par la suite encore vivants, arrêtés : ${end.stopped.map(p => `pid ${p.pid}${p.ports.length ? ` (${p.ports.join(', ')})` : ''}`).join(', ')}.`);
       if (end?.ports?.stopped.length) lines.push(`Fin de suite : orphelins de cette copie arrêtés sur les ports de la suite : ${end.ports.stopped.map(p => `pid ${p.pid} (${p.ports.join(', ')})`).join(', ')}.`);
       if (received) lines.push(`Interrompu par ${received} : contrôles annulés.`);
-      for (const x of result.interruptedStacks) lines.push(`ATTENTION : pile ${x.stack} : ${x.gates.join(', ')} interrompu(s) sous son verrou, une remise à zéro a pu être coupée ; état relu : ${x.health.state} (${x.health.detail})${x.health.state === 'running' ? '' : ` ; avant la prochaine suite : apv stacks status, au besoin apv stacks start ${x.stack}`}.`);
       lines.push('', table(['contrôle', 'statut', 'code', 'durée'], [
-        ...rows.map(r => [name(r), r.early && r.status === 'not_required' ? 'non requis (hors when)' : STATUS[r.status] ?? r.status, r.exitCode === null ? '-' : String(r.exitCode), `${(r.durationMs / 1000).toFixed(1)} s`]),
+        ...rows.map(r => [name(r), STATUS[r.status] ?? r.status, r.exitCode === null ? '-' : String(r.exitCode), `${(r.durationMs / 1000).toFixed(1)} s`]),
         ...result.reserved.map(id => [id, RESERVED, '-', '-'])]));
-      if (result.early.length) lines.push('', `Contrôles tôt (early), jamais une preuve de leur contrôle complet : ${result.early.map(e => `${e.id} (${e.gate}) ${e.required ? 'lancé' : 'non requis'} : ${e.reason}`).join(' ; ')}.`);
-      // Its own failure only: an early check cancelled by another failure (failFast) or blocked by a dependency says nothing.
-      for (const r of rows.filter(r => r.early && ['failed', 'timed_out', 'spawn_error'].includes(r.status))) {
-        lines.push(`Échec tôt de ${r.early} (${r.gate}) : la suite complète échouerait sur ce contrôle ; corriger avant de la lancer.`);
-      }
-      if (result.slowEarly.length) lines.push(`ATTENTION, contrôle(s) tôt trop lent(s) pour le stage task (plus de ${EARLY_SLOW_MS / 60_000} min) : ${result.slowEarly.join(', ')} ; les resserrer (when, fichiers lancés) ou les laisser à la suite complète.`);
       const flaky = rows.filter(r => r.status === 'passed_after_retry');
       if (flaky.length) lines.push('', `Instables (${flaky.length}) : réussis seulement après la relance unique de leurs tests en échec, même commit et même arbre ; comptés comme réussis, à traiter comme un constat :`,
         ...flaky.map(r => `- ${name(r)}${r.retriedTests?.length ? ` : ${r.retriedTests.join(' ; ')}` : ' (tests concernés non relevés : retryFailed.testPattern)'}`));
-      const near = rows.filter(r => r.nearTimeout);
-      if (near.length) lines.push('', `ATTENTION, délai presque atteint (85 % ou plus) : ${near.map(r => `${name(r)} ${r.nearTimeout!.percent} % de ${Math.round(r.nearTimeout!.timeoutMs / 1000)} s`).join(', ')} : augmenter timeoutMs de ces contrôles avant qu'un délai dépassé ne casse une preuve.`);
       const repeated = rows.filter(r => r.repeat);
       if (repeated.length) lines.push('', 'Tests modifiés répétés (repeatChanged) :', ...repeated.map(r => `- ${name(r)} : ${repeatLine(r.repeat!)}`));
       const waits = repeated.flatMap(r => r.repeat!.fixedWaits.map(w => `- ${name(r)} : ${w.file}:${w.line} : ${w.text}`));
@@ -591,19 +431,8 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
         `${r.scope!.required && r.scope!.blocking.length ? ` ; fichiers qui le requièrent : ${r.scope!.blocking.slice(0, 10).join(', ')}${r.scope!.blocking.length > 10 ? ' ...' : ''}` : ''}`));
       const waited = rows.filter(r => (r.lockWaitMs ?? 0) >= 1000);
       if (waited.length) lines.push('', `Attente de verrou avant le délai des contrôles : ${waited.map(r => `${name(r)} ${Math.round(r.lockWaitMs! / 1000)} s`).join(', ')}.`);
-      if (result.reused.length) lines.push('', `Réutilisés (${result.reused.length}), non relancés : reçu vert d'un arbre identique, même configuration et même environnement, vérifié comme le fera apv gates verify :`,
-        ...result.reused.map(r => `- ${r.gateId} : réutilisé de ${r.fromCommit.slice(0, 12)} (exécution ${r.fromRun}${r.stack ? `, pile ${r.stack}` : ''}) : ${r.reason}`));
-      if (result.replay) lines.push('', `Rejeu demandé (--replay) : ${result.replay === 'all' ? 'tous les contrôles' : result.replay.join(', ')}, exécuté(s) même si une reprise était possible.`);
-      if (result.reuseStale.length) lines.push('', 'Reprises devenues invérifiables pendant l\'exécution (apv gates verify les refusera) :', ...result.reuseStale.map(s => `- ${s.gateId} : ${s.reason} ; relancer avec --replay ${s.gateId}`));
-      for (const r of rows.filter(r => r.diagnostic && r.status !== 'blocked' && r.status !== 'not_required' && r.status !== 'cached')) lines.push('', `--- ${name(r)} (${STATUS[r.status] ?? r.status}) ---`, r.diagnostic.trimEnd());
-      const infra = result.infrastructure;
-      if (infra.causes.length) {
-        lines.push('', `Panne d'infrastructure probable (${infra.all ? 'tous les échecs' : `${infra.causes.length} échec(s) sur les contrôles en échec`}) : lecture de la sortie, le statut des reçus ne change pas :`,
-          ...infra.causes.map(c => `- ${infrastructureText(c)}`),
-          `Marche : ${infrastructureAdvice(infra.causes, (loaded.config.stacks ?? []).map(x => x.id))}.`);
-      }
-      const verdict = !result.ok && result.reuseStale.length && result.receipts.every(r => ['passed', 'passed_after_retry', 'cached', 'not_required'].includes(r.status)) ? `Reprise(s) devenue(s) invérifiable(s) : ${result.reuseStale.map(s => s.gateId).join(', ')} ; relancer avec --replay.`
-        : !result.ok ? 'Des contrôles échouent.'
+      for (const r of rows.filter(r => r.diagnostic && r.status !== 'blocked' && r.status !== 'not_required')) lines.push('', `--- ${name(r)} (${STATUS[r.status] ?? r.status}) ---`, r.diagnostic.trimEnd());
+      const verdict = !result.ok ? 'Des contrôles échouent.'
         : result.stage === 'task' && !rows.length ? 'Aucun contrôle de tâche à exécuter.'
         : result.stage === 'task' ? 'Tous les contrôles de tâche passent.'
         : result.notRequired.length ? `Tous les contrôles requis passent ; ${result.notRequired.length} non requis par leur portée (${result.notRequired.join(', ')}), non lancé(s) : apv gates verify recalcule leur portée depuis le commit.`
@@ -612,8 +441,7 @@ export async function run(args: string[], io: CommandIO): Promise<number> {
         ? ` ${result.reserved.length} contrôle(s) ${RESERVED}, non exécuté(s) : la suite complète (apv gates run --stage full) les vérifie.` : '';
       const targeted = result.targeted.length
         ? ` ${result.targeted.length} contrôle(s) ${TARGETED}(s) (${result.targeted.join(', ')}) : seuls les tests concernés par les changements ont tourné ; la suite complète (apv gates run --stage full) les exécute en entier.` : '';
-      const reusedText = result.ok && result.reused.length ? ` Dont ${result.reused.length} réutilisé(s) d'un arbre identique, non relancé(s) : ${result.reused.map(r => r.gateId).join(', ')}.` : '';
-      lines.push('', `${verdict}${reusedText}${targeted}${reserved} Reçus : ${relative(io.cwd, result.directory) || result.directory}` +
+      lines.push('', `${verdict}${targeted}${reserved} Reçus : ${relative(io.cwd, result.directory) || result.directory}` +
         (result.shared?.directory ? ` ; copie partagée : ${result.shared.directory} (exécution ${result.runId})` : ''));
       if (result.shared?.error) lines.push(`Attention : copie dans le magasin partagé impossible (${cleanLine(result.shared.error, 300)}) ; ces reçus disparaîtront avec ce worktree.`);
       io.stdout(`${lines.join('\n')}\n`);
@@ -636,7 +464,7 @@ async function receipts(args: string[], values: Values, io: CommandIO): Promise<
   const [sub, ...rest] = args;
   if (sub !== 'list' && sub !== 'export' && sub !== 'prune') throw new UsageError(sub ? `sous-commande inconnue : gates receipts ${sub}` : 'sous-commande manquante (list, export, prune)');
   const allowed: Record<string, readonly string[]> = { list: ['commit', 'limit'], export: ['out'], prune: ['keep-days', 'keep-runs', 'config'] };
-  const foreign = ['only', 'config', 'base', 'concurrency', 'stage', 'commit', 'skip-proven', 'run', 'reason', 'keep-going', 'allow-dirty', 'commit-config', 'limit', 'out', 'keep-days', 'keep-runs', 'stacks', 'since', 'replay']
+  const foreign = ['only', 'config', 'base', 'concurrency', 'stage', 'commit', 'skip-proven', 'run', 'reason', 'keep-going', 'allow-dirty', 'commit-config', 'limit', 'out', 'keep-days', 'keep-runs', 'stacks']
     .filter(k => values[k] !== undefined && !allowed[sub]!.includes(k));
   if (foreign.length) throw new UsageError(`option inattendue pour gates receipts ${sub} : --${foreign.join(', --')}`);
   const repo = gitRoot(repoPath(io, values['repo']));

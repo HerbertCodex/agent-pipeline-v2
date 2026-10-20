@@ -9,78 +9,21 @@ export function validRelativePath(path: string): boolean {
 // Restricted portable globs: *, **, ?. Brackets and parentheses are literal path characters (dynamic
 // route or group directories in several stacks); character classes are not supported. Braces and a
 // leading "!" are refused so that brace expansion or negation never silently matches nothing.
-//
-// Matching never backtracks (docs/ACCELERATION-LOTS.md, addition of 17 October): the glob is compiled into tokens and the
-// path is read once, keeping the set of tokens reachable so far (a Thompson simulation), so a match costs at most the
-// length of the path times the number of tokens, whatever the pattern. A pattern chosen by a PR (`early.when`, read from
-// the candidate as well) can no longer stall a stage on catastrophic backtracking, as the former regular expression did
-// (six `**a` before `**b` against a path of 100 « a »: 85 s). The language is exactly the one of that expression:
-// `*` any run of characters but « / », `?` one such character, `**/` zero or more whole directories, `**` elsewhere any
-// run of characters; like the « . » of the former expression, neither `**` crosses a line terminator (\n, \r, U+2028,
-// U+2029), and characters are compared one UTF-16 unit at a time.
-type GlobToken = { kind: 'char'; c: string } | { kind: 'one' | 'star' | 'globstar' | 'dirs' };
-/** Compiled globs, by pattern (bounded: emptied when full). Only valid patterns are kept. */
-const compiledGlobs = new Map<string, GlobToken[]>();
-const MAX_COMPILED_GLOBS = 4096;
-function compileGlob(pattern: string): GlobToken[] {
-  const cached = compiledGlobs.get(pattern);
-  if (cached) return cached;
+export function matches(path: string, pattern: string): boolean {
   invariant(validRelativePath(pattern) && !/[{}]/.test(pattern) && !pattern.split('/').some(segment => segment.startsWith('!')), 'GLOB',
     `Unsupported glob: ${pattern}. Use only *, ** and ?; brackets and parentheses are literal characters, braces and leading ! are not supported.`);
-  const tokens: GlobToken[] = [];
+  let regex = '^';
   for (let i = 0; i < pattern.length; i++) {
     const c = pattern[i]!;
     if (c === '*' && pattern[i + 1] === '*') {
       i++;
-      if (pattern[i + 1] === '/') { tokens.push({ kind: 'dirs' }); i++; }
-      else tokens.push({ kind: 'globstar' });
-    } else if (c === '*') tokens.push({ kind: 'star' });
-    else if (c === '?') tokens.push({ kind: 'one' });
-    else tokens.push({ kind: 'char', c });
+      if (pattern[i + 1] === '/') { regex += '(?:.*/)?'; i++; }
+      else regex += '.*';
+    } else if (c === '*') regex += '[^/]*';
+    else if (c === '?') regex += '[^/]';
+    else regex += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
-  if (compiledGlobs.size >= MAX_COMPILED_GLOBS) compiledGlobs.clear();
-  compiledGlobs.set(pattern, tokens);
-  return tokens;
-}
-const lineTerminator = (c: string): boolean => c === '\n' || c === '\r' || c === ' ' || c === ' ';
-export function matches(path: string, pattern: string): boolean {
-  const tokens = compileGlob(pattern);
-  const n = tokens.length;
-  // State 2i: before token i. State 2i+1: inside the directories of a token `dirs` (characters read, its « / » not yet).
-  let current = new Uint8Array(2 * n + 2);
-  let next = new Uint8Array(2 * n + 2);
-  // Tokens that may match nothing let the state after them be reached without reading (forward only: one pass).
-  const close = (set: Uint8Array): void => {
-    for (let i = 0; i < n; i++) if (set[2 * i] && tokens[i]!.kind !== 'char' && tokens[i]!.kind !== 'one') set[2 * i + 2] = 1;
-  };
-  current[0] = 1;
-  close(current);
-  for (let p = 0; p < path.length; p++) {
-    const ch = path[p]!;
-    next.fill(0);
-    let alive = false;
-    for (let i = 0; i < n; i++) {
-      const before = current[2 * i] === 1;
-      const inside = current[2 * i + 1] === 1;
-      if (!before && !inside) continue;
-      const token = tokens[i]!;
-      switch (token.kind) {
-        case 'char': if (before && ch === token.c) { next[2 * i + 2] = 1; alive = true; } break;
-        case 'one': if (before && ch !== '/') { next[2 * i + 2] = 1; alive = true; } break;
-        case 'star': if (before && ch !== '/') { next[2 * i] = 1; alive = true; } break;
-        case 'globstar': if (before && !lineTerminator(ch)) { next[2 * i] = 1; alive = true; } break;
-        case 'dirs':
-          if (lineTerminator(ch)) break;
-          next[2 * i + 1] = 1; alive = true;
-          if (ch === '/') next[2 * i + 2] = 1;
-          break;
-      }
-    }
-    if (!alive) return false;
-    close(next);
-    [current, next] = [next, current];
-  }
-  return current[2 * n] === 1;
+  return new RegExp(`${regex}$`).test(path);
 }
 export const sensitivePaths = [
   '.agent-pipeline/**', '.github/**', '.gitmodules', '.gitattributes', '**/AGENTS.md', '**/CLAUDE.md', '.codex/**', '.claude/**', '.agents/**', '**/SKILL.md', 'roles/**', 'skills/**',

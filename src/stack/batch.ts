@@ -4,10 +4,7 @@ import { join } from 'node:path';
 import { IDENTITY_HINT } from '../run/commit-state.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { errorMessage } from '../domain/errors.js';
-import { anomalies, parsePullRequest, pullRequestPath, VIEW_FIELDS, waitForChecks, type GhCall, type GhRunner, type MergedHead, type PullRequest } from './github.js';
-import { DEFAULT_KEEP_BRANCHES, branchArgs, parseRepositorySettings, pullsArgs, repositoryArgs } from './branches.js';
-import { globToRegExp } from '../db/glob.js';
-import { regenerateStaleMap, resolveGeneratedConflicts } from './regenerate.js';
+import { anomalies, parsePullRequest, VIEW_FIELDS, type GhCall, type GhRunner, type PullRequest } from './github.js';
 
 /**
  * Batch merge (docs/APV3-SPEC.md, section 18.5): several independent pull requests, each proven at the task level,
@@ -34,28 +31,12 @@ export function processGit(env: NodeJS.ProcessEnv): LotGit {
   };
 }
 
+/** The proof of a batch head: its full suite and `apv gates verify` at 0. */
 /**
- * The proof of a batch head: its full suite and `apv gates verify` at 0. `refused`: the suite was refused before it ran
- * (a ceiling of the repetition of the changed test files, `GATE_REPEAT`, or a wrong `--stacks`), which says nothing about
- * the pull requests being faulty: never bisected. `infrastructure`: every failure of the suite is one of its
- * infrastructure (a variable of the environment absent, a test stack unreachable, src/gates/infrastructure.ts): never
- * bisected either, nothing is concluded about the code.
+ * The proof of a batch head. `refused`: the suite was refused before it ran (a ceiling of the repetition of the changed
+ * test files, `GATE_REPEAT`), which says nothing about the pull requests being faulty: never bisected.
  */
-export interface Proof { ok: boolean; runId: string | null; summary: string; refused?: string; infrastructure?: string }
-
-/** The dynamic scan of a proven batch head (`--dast`, `apv dast run` on the worktree of the batch): its outcome. */
-export interface DastOutcome { ok: boolean; status: string; reportDir: string | null; summary: string }
-
-/** A pull request branch updated by the batch before its merge (generated files regenerated): from which head to which. */
-export interface Refresh { pr: number; branch: string; from: string; to: string; files: string[] }
-
-/** Why a proof says nothing about the code of the pull requests (refused before it ran, or an infrastructure failure), or null. */
-export function notAboutCode(proof: Proof | null): string | null {
-  if (!proof) return null;
-  if (proof.refused) return `suite refusée avant de tourner (${proof.refused})`;
-  if (proof.infrastructure) return `${proof.infrastructure}`;
-  return null;
-}
+export interface Proof { ok: boolean; runId: string | null; summary: string; refused?: string }
 
 export interface BatchOptions {
   /** Checkout of the repository (the batches are worktrees of it). */
@@ -77,10 +58,6 @@ export interface BatchOptions {
   log: (line: string) => void;
   pollMs: number;
   pollAttempts: number;
-  /** `--wait-ci <minutes>`: how long a read waits for the pending checks of a pull request to end (absent: no wait). */
-  ciWaitMs?: number;
-  /** Interval between two reads while waiting for the checks. */
-  ciPollMs?: number;
   /**
    * Proves a batch head in its worktree (setup, full suite, verify), with the configuration of the target at `base`:
    * a batch is never proven by the checks it brings.
@@ -97,18 +74,6 @@ export interface BatchOptions {
    * request by pull request, before anything is built. Absent: no such check.
    */
   repeatRefusal?: (base: string, head: string) => Promise<string | null>;
-  /**
-   * With `merge`: what the rules checked before any merge (`apv rules check`, docs/REGLES.md) refuse at the head of a
-   * pull request going to `target`, apart from the proof, which is the batch's own (empty when nothing refuses).
-   */
-  rules?: (head: string, target: string) => Promise<string[]>;
-  /**
-   * `--dast`: the dynamic scan of the proven batch head in its worktree, before any merge (the same scan as `apv dast
-   * run`, once per batch on the merged content instead of once per pull request). A failed scan stops the batch.
-   */
-  dast?: (worktree: string, head: string, base: string) => Promise<DastOutcome>;
-  /** Globs of the long-lived branches (`stack.keepBranches`) the batch never updates; `DEFAULT_KEEP_BRANCHES` when absent. */
-  keepPatterns?: readonly string[];
   /** Aborted by SIGINT, SIGTERM or SIGHUP: the batch stops at the next step, never between a check and a merge. */
   signal?: AbortSignal;
   /** Journals one merge or stop of the batch; returns an error message when it could not. */
@@ -117,17 +82,11 @@ export interface BatchOptions {
 }
 
 export interface PlannedMember { number: number; pr: PullRequest | null; anomalies: string[] }
-export interface LotMember {
-  number: number; headRefName: string; head: string; mergeCommit: string; tree: string;
-  /** Generated files regenerated by the batch in the merge of this pull request (src/stack/regenerate.ts); empty otherwise. */
-  regenerated: string[];
-}
+export interface LotMember { number: number; headRefName: string; head: string; mergeCommit: string; tree: string }
 export interface Lot {
   name: string; dir: string; base: string; baseTree: string; members: LotMember[];
   excluded: { pr: number; reason: string }[];
   head: string | null; tree: string | null; proof: Proof | null; removed: boolean;
-  /** The dynamic scan of the head (`--dast`), null when not asked or not reached. */
-  dast: DastOutcome | null;
 }
 export interface BatchReport {
   target: string | null; base: string | null;
@@ -140,10 +99,6 @@ export interface BatchReport {
   /** The batch whose proof allows the merge, or null. */
   proven: Lot | null;
   merged: number[];
-  /** Each pull request whose merge was seen, with the head it was merged at (the branch cleanup works from it). */
-  mergedHeads: MergedHead[];
-  /** Pull request branches the batch updated before their merge (generated files regenerated), in order. */
-  refreshed: Refresh[];
   stopped: { pr: number | null; reasons: string[] } | null;
   finalTree: { target: string; lot: string; identical: boolean } | null;
   /** True when a signal stopped the batch (exit 128 + signal). */
@@ -172,16 +127,12 @@ async function view(options: BatchOptions, n: number): Promise<{ pr: PullRequest
 }
 
 async function settled(options: BatchOptions, n: number): Promise<{ pr: PullRequest | null; error: string | null }> {
-  const mergeability = async (): Promise<{ pr: PullRequest | null; error: string | null }> => {
-    let result = await view(options, n);
-    for (let i = 0; i < options.pollAttempts && result.pr && (result.pr.mergeable === 'UNKNOWN' || result.pr.mergeStateStatus === 'UNKNOWN'); i += 1) {
-      await sleep(options.pollMs);
-      result = await view(options, n);
-    }
-    return result;
-  };
-  // --wait-ci: a pull request whose CI still runs is waited for, never taken as green; the end is judged by the caller.
-  return waitForChecks(n, await mergeability(), mergeability, { ciWaitMs: options.ciWaitMs, ciPollMs: options.ciPollMs, log: options.log });
+  let result = await view(options, n);
+  for (let i = 0; i < options.pollAttempts && result.pr && (result.pr.mergeable === 'UNKNOWN' || result.pr.mergeStateStatus === 'UNKNOWN'); i += 1) {
+    await sleep(options.pollMs);
+    result = await view(options, n);
+  }
+  return result;
 }
 
 const stamp = (d: Date): string => d.toISOString().replace(/[-:]/g, '').replace('T', '-').replace(/\..*$/, '');
@@ -202,151 +153,28 @@ async function targetHead(options: BatchOptions, target: string): Promise<{ sha:
   return { sha, tree: await must(options.git, options.repo, ['rev-parse', `${sha}^{tree}`]) };
 }
 
-const GIT_COMMIT = ['-c', 'user.useConfigOnly=true', 'commit'] as const;
-
-/**
- * Merges `head` into the checkout `dir` (`--no-ff`, never a rebase), with the generated files regenerated when they are
- * all that conflicts (the code map, the decision ledger and its Markdown: src/stack/regenerate.ts), and the code map
- * regenerated when the merge left it stale (folded into the merge commit). Returns the files regenerated, or why the
- * merge is impossible (a conflict of the code, or of a decision): the merge is then aborted, nothing is left behind.
- */
-type MergeOutcome = { ok: true; regenerated: string[] } | { ok: false; kind: 'conflict' | 'regeneration'; reason: string };
-
-async function mergeInto(git: LotGit, dir: string, head: string, messages: readonly string[], log: (line: string) => void, label: string): Promise<MergeOutcome> {
-  // The commit the checkout returns to on any failure: a merge commit never stays in the batch when its regeneration failed.
-  const before = await must(git, dir, ['rev-parse', 'HEAD']);
-  const restore = async (): Promise<void> => {
-    await git.run(dir, ['merge', '--abort']);
-    await git.run(dir, ['reset', '--hard', before]);
-    await git.run(dir, ['clean', '-fdq']);
-  };
-  try {
-    const merged = await git.run(dir, ['-c', 'user.useConfigOnly=true', 'merge', '--no-ff', '--no-edit', ...messages.flatMap(m => ['-m', m]), head]);
-    const regenerated: string[] = [];
-    if (!merged.ok) {
-      const conflicted = (await git.run(dir, ['diff', '--name-only', '--diff-filter=U', '-z'])).stdout.split('\0').filter(Boolean);
-      const fix = conflicted.length ? await resolveGeneratedConflicts(git, dir, conflicted) : { ok: false as const, reason: merged.stderr.trim().slice(-300) || 'fusion impossible' };
-      if (!fix.ok) {
-        await restore();
-        const lines = merged.stdout.trim().split('\n').filter(l => /CONFLICT|conflit/i.test(l)).slice(0, 5).join(' ; ');
-        return { ok: false, kind: 'conflict', reason: `${lines || merged.stderr.trim().slice(-300)}${conflicted.length ? ` ; ${fix.reason}` : ''}` };
-      }
-      await must(git, dir, ['add', '--', ...conflicted, ...fix.files]);
-      await must(git, dir, [...GIT_COMMIT, '--no-edit']);
-      regenerated.push(...new Set([...conflicted, ...fix.files]));
-      log(`${label} : conflit sur les seuls fichiers générés, régénérés dans la fusion (${regenerated.join(', ')}).`);
-    }
-    // A map merged without conflict but stale for the merged code: regenerated in the same merge commit.
-    const stale = await regenerateStaleMap(dir);
-    if (!stale.ok) { await restore(); return { ok: false, kind: 'regeneration', reason: stale.reason }; }
-    if (stale.files.length) {
-      await must(git, dir, ['add', '--', ...stale.files]);
-      await must(git, dir, [...GIT_COMMIT, '--amend', '--no-edit']);
-      regenerated.push(...stale.files.filter(f => !regenerated.includes(f)));
-      log(`${label} : carte du code périmée par la fusion, régénérée dans la fusion (${stale.files.join(', ')}).`);
-    }
-    // The checkout is exactly one merge commit ahead of `before`, nothing else: otherwise nothing of it is kept.
-    const parents = (await must(git, dir, ['rev-list', '--parents', '-n', '1', 'HEAD'])).split(/\s+/).slice(1);
-    if (parents.length !== 2 || parents[0] !== before) { await restore(); return { ok: false, kind: 'regeneration', reason: `commit de fusion inattendu (parents ${parents.map(short).join(', ')})` }; }
-    return { ok: true, regenerated };
-  } catch (error) {
-    await restore();
-    return { ok: false, kind: 'regeneration', reason: `fusion ou régénération en échec, lot ramené à ${short(before)} : ${errorMessage(error)}` };
-  }
-}
-
 /**
  * Builds a batch: a branch `name` from `base` in the worktree `dir`, each head merged in order (`--no-ff`, never a
- * rebase). A pull request in conflict with the previous ones is left out of the batch, with the reason; a conflict on
- * the generated files alone is resolved by regenerating them (mergeInto).
+ * rebase). A pull request in conflict with the previous ones is left out of the batch, with the reason.
  */
 async function buildLot(options: BatchOptions, name: string, dir: string, base: string, members: { number: number; headRefName: string; head: string }[]): Promise<Lot> {
   const { git } = options;
   await must(git, options.repo, ['worktree', 'add', '-b', name, dir, base]);
-  const lot: Lot = { name, dir, base, baseTree: await must(git, dir, ['rev-parse', `${base}^{tree}`]), members: [], excluded: [], head: null, tree: null, proof: null, removed: false, dast: null };
+  const lot: Lot = { name, dir, base, baseTree: await must(git, dir, ['rev-parse', `${base}^{tree}`]), members: [], excluded: [], head: null, tree: null, proof: null, removed: false };
   for (const m of members) {
-    const merged = await mergeInto(git, dir, m.head, [`lot : fusion de la PR #${m.number} (${m.headRefName})`, 'Generated-by: apv stack batch'], options.log, `Lot ${name}, PR #${m.number}`);
+    const merged = await git.run(dir, ['-c', 'user.useConfigOnly=true', 'merge', '--no-ff', '--no-edit', '-m', `lot : fusion de la PR #${m.number} (${m.headRefName})`, '-m', 'Generated-by: apv stack batch', m.head]);
     if (!merged.ok) {
-      const why = merged.kind === 'conflict' ? `conflit avec les PR précédentes du lot : ${merged.reason}` : `fichiers générés non régénérés après sa fusion (le lot reste à l'arbre d'avant) : ${merged.reason}`;
-      lot.excluded.push({ pr: m.number, reason: why });
-      options.log(`Lot ${name} : PR #${m.number} ${merged.kind === 'conflict' ? 'en conflit avec les précédentes' : 'sans fichiers générés régénérables après sa fusion'}, laissée hors du lot.`);
+      await git.run(dir, ['merge', '--abort']);
+      lot.excluded.push({ pr: m.number, reason: `conflit avec les PR précédentes du lot : ${merged.stdout.trim().split('\n').filter(l => /CONFLICT|conflit/i.test(l)).slice(0, 5).join(' ; ') || merged.stderr.trim().slice(-300)}` });
+      options.log(`Lot ${name} : PR #${m.number} en conflit avec les précédentes, laissée hors du lot.`);
       continue;
     }
     const mergeCommit = await must(git, dir, ['rev-parse', 'HEAD']);
-    lot.members.push({ ...m, mergeCommit, tree: await must(git, dir, ['rev-parse', 'HEAD^{tree}']), regenerated: merged.regenerated });
+    lot.members.push({ ...m, mergeCommit, tree: await must(git, dir, ['rev-parse', 'HEAD^{tree}']) });
   }
   lot.head = await must(git, dir, ['rev-parse', 'HEAD']);
   lot.tree = await must(git, dir, ['rev-parse', 'HEAD^{tree}']);
   return lot;
-}
-
-/**
- * Why the branch of a pull request may never be updated by the batch (a push on it), or null when it may: the target
- * of the batch, the default branch of the repository (`origin/HEAD` locally, `default_branch` on GitHub), a long-lived
- * branch (`stack.keepBranches`, DEFAULT_KEEP_BRANCHES), a branch protected on GitHub, the base of an open pull request (an
- * integration branch others build on), or one whose protection or pull requests cannot be read (refused, never assumed free). The push of a merge commit on a shared branch is an effect the batch never has,
- * whatever the content: the pull request is left to the operator (merge the target into it, `apv map`, push, run again).
- */
-async function refreshRefusal(options: BatchOptions, pr: PullRequest, target: string): Promise<string | null> {
-  const branch = pr.headRefName;
-  const left = (why: string): string => `PR #${pr.number} : fichiers générés régénérés dans le lot, mais sa branche ${branch} ${why} : le lot ne pousse jamais sur une telle branche ; ` +
-    `fusionner ${target} dans la branche, apv map, pousser, relancer le lot`;
-  if (branch === target) return left('est la cible du lot');
-  const head = await options.git.run(options.repo, ['symbolic-ref', '--quiet', `refs/remotes/${options.remote}/HEAD`]);
-  const local = head.ok ? head.stdout.trim().replace(`refs/remotes/${options.remote}/`, '') : null;
-  if (local && branch === local) return left(`est la branche par défaut du dépôt (${options.remote}/HEAD)`);
-  const pattern = (options.keepPatterns ?? DEFAULT_KEEP_BRANCHES).find(glob => globToRegExp(glob).test(branch));
-  if (pattern !== undefined) return left(`est une branche de longue durée (stack.keepBranches : ${pattern})`);
-  const where = pullRequestPath(pr);
-  if (!where) return left(`a un dépôt GitHub illisible (${pr.url || 'adresse absente'}), protection non vérifiable`);
-  const repository = await options.gh(repositoryArgs(where));
-  options.onCall(repository);
-  if (repository.status !== 0 || repository.error) return left(`a un dépôt dont la branche par défaut ne se lit pas (gh api ${where.repo})`);
-  let defaultBranch: string | null;
-  try { defaultBranch = parseRepositorySettings(repository.stdout).defaultBranch; } catch (error) { return left(`a un dépôt dont la réponse de gh api est illisible (${errorMessage(error)})`); }
-  if (!defaultBranch) return left('a un dépôt dont la branche par défaut est inconnue');
-  if (branch === defaultBranch) return left(`est la branche par défaut du dépôt sur GitHub (${defaultBranch})`);
-  const read = await options.gh(branchArgs(where, branch));
-  options.onCall(read);
-  if (read.status !== 0 || read.error) return left(`a une protection illisible (gh api ${where.repo}/branches/${branch})`);
-  let isProtected: unknown;
-  try { isProtected = (JSON.parse(read.stdout) as Record<string, unknown>)['protected']; } catch (error) { return left(`a une protection illisible (${errorMessage(error)})`); }
-  if (isProtected !== false) return left(isProtected === true ? 'est protégée sur GitHub' : 'a une protection inconnue');
-  // An integration branch (apv3, a release branch...) is the base of other open pull requests: never written by the batch.
-  const pulls = await options.gh(pullsArgs(where, 'open', 'base', branch));
-  options.onCall(pulls);
-  if (pulls.status !== 0 || pulls.error) return left(`a des PR ouvertes qui ne se lisent pas (gh api ${where.repo}/pulls)`);
-  let based: unknown;
-  try { based = JSON.parse(pulls.stdout); } catch (error) { return left(`a une liste de PR illisible (${errorMessage(error)})`); }
-  if (!Array.isArray(based) || !based.every(n => typeof n === 'number')) return left('a une liste de PR illisible');
-  if (based.length) return left(`est la base de la ou des PR ouverte(s) #${based.join(', #')} (branche d'intégration)`);
-  return null;
-}
-
-/**
- * Updates the branch of a pull request whose merge in the batch regenerated generated files, just before its merge:
- * GitHub would merge it textually (and see a conflict once the previous pull requests landed). In a detached worktree at
- * its head, the target as it is now (its tree is the batch before this pull request, checked by the caller) is merged
- * with the same regeneration; the result must have exactly the tree proven in the batch and the two expected parents,
- * else nothing is pushed. Pushed without force (a descendant of the head), the push is the only effect.
- */
-async function refreshBranch(options: BatchOptions, proven: Lot, member: LotMember, targetSha: string, target: string): Promise<{ ok: true; head: string } | { ok: false; reason: string }> {
-  const { git } = options;
-  const dir = `${proven.dir}-maj-${member.number}`;
-  const lot: Lot = { ...proven, dir, removed: false };
-  await must(git, options.repo, ['worktree', 'add', '--detach', dir, member.head]);
-  try {
-    const merged = await mergeInto(git, dir, targetSha, [`lot : mise à jour de ${member.headRefName} sur ${target} (fichiers générés régénérés)`, 'Generated-by: apv stack batch'], options.log, `Mise à jour de la PR #${member.number}`);
-    if (!merged.ok) return { ok: false, reason: `branche ${member.headRefName} non mise à jour (${merged.kind === 'conflict' ? 'conflit' : 'régénération en échec'}) : ${merged.reason}` };
-    const head = await must(git, dir, ['rev-parse', 'HEAD']);
-    const tree = await must(git, dir, ['rev-parse', 'HEAD^{tree}']);
-    if (tree !== member.tree) return { ok: false, reason: `la mise à jour de ${member.headRefName} sur ${target} (${short(head)}) n'a pas le contenu prouvé dans le lot (${short(member.mergeCommit)}) : rien n'est poussé ; comparer par git diff ${short(member.mergeCommit)} ${short(head)}` };
-    const parents = (await must(git, dir, ['rev-list', '--parents', '-n', '1', 'HEAD'])).split(/\s+/).slice(1);
-    if (parents.length !== 2 || parents[0] !== member.head || parents[1] !== targetSha) return { ok: false, reason: `commit de mise à jour inattendu (parents ${parents.map(short).join(', ')}) : rien n'est poussé` };
-    const pushed = await git.run(options.repo, ['push', options.remote, `${head}:refs/heads/${member.headRefName}`]);
-    if (!pushed.ok) return { ok: false, reason: `poussée de ${member.headRefName} refusée : ${pushed.stderr.trim().slice(-500)}` };
-    return { ok: true, head };
-  } finally { await removeLot(options, lot); }
 }
 
 async function removeLot(options: BatchOptions, lot: Lot): Promise<void> {
@@ -361,7 +189,7 @@ async function removeLot(options: BatchOptions, lot: Lot): Promise<void> {
  * proven and asked, merges its pull requests in order, each checked by content before and after its merge.
  */
 export async function batchMerge(options: BatchOptions): Promise<BatchReport> {
-  const report: BatchReport = { target: null, base: null, prs: [], lots: [], culprits: [], interaction: false, proven: null, merged: [], mergedHeads: [], refreshed: [], stopped: null, finalTree: null,
+  const report: BatchReport = { target: null, base: null, prs: [], lots: [], culprits: [], interaction: false, proven: null, merged: [], stopped: null, finalTree: null,
     interrupted: false, left: [] };
   try { return await batchSteps(options, report); }
   catch (error) {
@@ -426,16 +254,6 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     }
     if (refused.length) return stop(first, refused.map(r => `lot refusé avant toute construction (répétition des tests modifiés, repeatChanged) : ${r} ; ce n'est pas un échec de suite, la bissection ne s'applique pas`));
   }
-  // The batch proves the suite, never a review, captures, the base checks or a mockup: each pull request passes them itself.
-  if (options.merge && options.rules) {
-    const refused: string[] = [];
-    let first: number | null = null;
-    for (const m of members) {
-      const why = await options.rules(m.head, target);
-      if (why.length) { refused.push(`PR #${m.number} :`, ...why); first ??= m.number; }
-    }
-    if (refused.length) return stop(first, ['lot refusé avant toute construction : règles avant fusion (apv rules check --commit <tête> --target <cible>)', ...refused]);
-  }
   // A batch commits its merges: without an identity, a clear refusal before anything is built.
   const ident = await options.git.run(options.repo, ['-c', 'user.useConfigOnly=true', 'var', 'GIT_COMMITTER_IDENT']);
   const author = await options.git.run(options.repo, ['-c', 'user.useConfigOnly=true', 'var', 'GIT_AUTHOR_IDENT']);
@@ -458,7 +276,7 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     options.log(`Lot ${lotName} : ${lot.proof.ok ? 'prouvé' : 'NON prouvé'} (${lot.proof.summary}).`);
     return lot;
   };
-  /** A suite refused before it ran, or failed by its infrastructure, during the bisection: the bisection stops, nothing is concluded. */
+  /** A suite refused before it ran during the bisection: the bisection stops, nothing is concluded. */
   let refusedDuring: string | null = null;
   /** The pull requests of `list` (whose batch failed) that fail the suite, by halves. */
   const culprits = async (list: typeof members): Promise<number[]> => {
@@ -470,8 +288,7 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
       if (refusedDuring) return found;
       counter += 1;
       const lot = await prove(part, `b${counter}`);
-      const elsewhere = notAboutCode(lot.proof);
-      if (elsewhere) { refusedDuring ??= elsewhere; await removeLot(options, lot); return found; }
+      if (lot.proof?.refused) { refusedDuring ??= lot.proof.refused; await removeLot(options, lot); return found; }
       if (!lot.proof?.ok) { failedHalves += 1; found.push(...(lot.members.length ? await culprits(part.filter(m => lot.members.some(x => x.number === m.number))) : [])); }
       await removeLot(options, lot);
     }
@@ -485,11 +302,6 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     await removeLot(options, whole);
     return stop(null, [`suite du lot refusée avant de tourner (${whole.proof.refused}) : ce n'est pas un échec de suite, la bissection ne s'applique pas ; rien n'est fusionné`]);
   }
-  // A suite failed by its infrastructure only (a variable absent, a stack unreachable): no pull request is blamed.
-  if (whole.proof?.infrastructure) {
-    await removeLot(options, whole);
-    return stop(null, [`suite du lot en échec par son infrastructure, pas par le code (${whole.proof.infrastructure}) : ce n'est pas un échec de test, la bissection ne s'applique pas ; rien n'est fusionné`]);
-  }
   let proven: Lot | null = whole.proof?.ok ? whole : null;
   if (!proven && options.bisect && whole.members.length > 1) {
     await removeLot(options, whole);
@@ -497,7 +309,7 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     report.culprits = await culprits(inLot);
     if (refusedDuring) {
       report.culprits = []; report.interaction = false;
-      return stop(null, [`bissection arrêtée : la suite d'une moitié n'a rien dit du code (${refusedDuring}) ; ce n'est pas un échec de test, aucune PR n'est isolée ni fusionnée`]);
+      return stop(null, [`bissection arrêtée : la suite d'une moitié a été refusée avant de tourner (${refusedDuring}) ; ce n'est pas un échec de suite, aucune PR n'est isolée ni fusionnée`]);
     }
     if (aborted()) return interrupted(null, 'pendant la bissection, avant toute fusion');
     const rest = inLot.filter(m => !report.culprits.includes(m.number));
@@ -523,18 +335,6 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     return stop(null, [report.interaction ? 'la suite échoue sur le lot entier mais passe sur chaque moitié : échec d\'interaction, aucune PR isolée, rien n\'est fusionné'
       : `lot non prouvé${report.culprits.length ? ` ; PR fautive(s) : ${report.culprits.map(n => `#${n}`).join(', ')}` : ''}${options.bisect ? '' : ' (--bisect isole les PR fautives)'}`]);
   }
-  // --dast: the dynamic scan of the proven head, on the merged content, before any merge; a failed scan merges nothing.
-  if (options.dast) {
-    options.log(`Lot ${proven.name} : scan dynamique de la tête ${short(proven.head!)} (apv dast run sur le lot).`);
-    try { proven.dast = await options.dast(proven.dir, proven.head!, base.sha); }
-    catch (error) { proven.dast = { ok: false, status: 'error', reportDir: null, summary: `scan impossible : ${errorMessage(error)}` }; }
-    options.log(`Lot ${proven.name} : scan dynamique ${proven.dast.ok ? 'terminé à 0' : 'NON passé'} (${proven.dast.summary}).`);
-    if (aborted()) return interrupted(null, 'pendant le scan dynamique du lot, avant toute fusion');
-    if (!proven.dast.ok) {
-      await removeLot(options, proven);
-      return stop(null, [`scan dynamique du lot ${proven.dast.status === 'undeclared' ? 'non déclaré' : 'en échec'} (${proven.dast.summary}) : rien n'est fusionné${proven.dast.reportDir ? ` ; rapports : ${proven.dast.reportDir}` : ''}`]);
-    }
-  }
   if (!options.merge) { await removeLot(options, proven); return report; }
 
   // Merge, in the order of the proven batch, each one checked by content before and after.
@@ -552,38 +352,13 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
       if (!pr) return stop(member.number, [error!]);
       if (pr.isDraft) return stop(member.number, [`la PR #${member.number} est encore un brouillon après gh pr ready`]);
     }
+    const problems = anomalies(pr, target, false);
+    if (problems.length) return stop(member.number, problems);
     let now: { sha: string; tree: string };
     try { now = await targetHead(options, target); } catch (error) { return stop(member.number, [`cible ${target} illisible : ${errorMessage(error)}`]); }
     if (now.tree !== expectedBefore) {
       return stop(member.number, [`la cible ${target} (${short(now.sha)}) n'a plus le contenu du lot avant la PR #${member.number} : elle a changé hors du lot ; relancer le lot sur la nouvelle cible`]);
     }
-    // Generated files regenerated in the batch: the branch is updated first (same content as proven), then re-read.
-    if (member.regenerated.length) {
-      if (pr.crossRepository !== false) return stop(member.number, [`PR #${member.number} : fichiers générés régénérés dans le lot (${member.regenerated.join(', ')}), mais sa branche ${pr.crossRepository ? 'vient d\'un fork' : 'a une origine non lue'} : le lot ne peut pas la mettre à jour ; fusionner la cible dans la branche, apv map, pousser, relancer le lot`]);
-      // Never a push on the target, the default branch, a long-lived or a protected branch: the operator's own branches.
-      const refusal = await refreshRefusal(options, pr, target);
-      if (refusal) return stop(member.number, [refusal]);
-      if (aborted()) return interrupted(member.number, `avant la mise à jour de la branche de la PR #${member.number}`);
-      options.log(`PR #${member.number} : fichiers générés régénérés dans le lot (${member.regenerated.join(', ')}) : mise à jour de ${pr.headRefName} sur ${target} avant la fusion.`);
-      let refreshed: Awaited<ReturnType<typeof refreshBranch>>;
-      try { refreshed = await refreshBranch(options, proven, member, now.sha, target); }
-      catch (error) { refreshed = { ok: false, reason: `mise à jour de ${pr.headRefName} impossible : ${errorMessage(error)}` }; }
-      if (!refreshed.ok) return stop(member.number, [refreshed.reason]);
-      const failed = options.journal({ event: 'batch-refresh', lot: proven.name, pr: member.number, branch: pr.headRefName, from: member.head, to: refreshed.head, target, files: member.regenerated });
-      if (failed) return stop(member.number, [`branche ${pr.headRefName} mise à jour (${short(refreshed.head)}) mais non journalisée (${failed}) : arrêt`]);
-      report.refreshed.push({ pr: member.number, branch: pr.headRefName, from: member.head, to: refreshed.head, files: member.regenerated });
-      // GitHub must see the pushed head before the merge is asked with it.
-      ({ pr, error } = await settled(options, member.number));
-      for (let i = 0; i < options.pollAttempts && pr && pr.headRefOid !== refreshed.head; i += 1) {
-        await sleep(options.pollMs);
-        ({ pr, error } = await settled(options, member.number));
-      }
-      if (!pr) return stop(member.number, [error!]);
-      if (pr.headRefOid !== refreshed.head) return stop(member.number, [`la tête de la PR #${member.number} lue par GitHub (${short(pr.headRefOid)}) n'est pas celle poussée par le lot (${short(refreshed.head)}) : relancer le lot`]);
-      member.head = refreshed.head;
-    }
-    const problems = anomalies(pr, target, false);
-    if (problems.length) return stop(member.number, problems);
     // Last point before the external effect: a signal received meanwhile stops here, nothing half done.
     if (aborted()) return interrupted(member.number, `avant la fusion de la PR #${member.number}`);
     const merge = await options.gh(['pr', 'merge', String(member.number), '--merge', '--match-head-commit', member.head]);
@@ -596,7 +371,6 @@ async function batchSteps(options: BatchOptions, report: BatchReport): Promise<B
     if (!after.pr) return stop(member.number, [after.error!]);
     if (after.pr.state !== 'MERGED') return stop(member.number, [`fusion de la PR #${member.number} non constatée : état ${after.pr.state || 'inconnu'} (gh pr merge : ${merge.error ?? `code ${merge.status}`})`]);
     report.merged.push(member.number);
-    report.mergedHeads.push({ pr: member.number, branch: pr.headRefName, head: member.head, crossRepository: pr.crossRepository, url: pr.url });
     let landed: { sha: string; tree: string };
     try { landed = await targetHead(options, target); } catch (error) { return stop(member.number, [`cible ${target} illisible après la fusion : ${errorMessage(error)}`]); }
     const same = landed.tree === member.tree;

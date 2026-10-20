@@ -9,8 +9,8 @@ export const MERGE_REFUSED = "APV : fusion de PR bloquée hors de la commande d�
     "de l'opérateur, par /apv:stack (outil : APV_ALLOW_MERGE=1 apv stack merge <pr...>), qui re-cible, vérifie la base de chaque PR " +
     "juste avant de fusionner et s'arrête à la première anomalie. APV_ALLOW_MERGE=1 se pose devant cette seule commande.";
 const GH_TIMEOUT_MS = 120_000;
-/** Runs `gh` (or `APV_GH`) without a shell, with the caller's environment; stopped after `timeoutMs`. */
-export function processGh(bin, env, cwd, timeoutMs = GH_TIMEOUT_MS) {
+/** Runs `gh` (or `APV_GH`) without a shell, with the caller's environment. */
+export function processGh(bin, env, cwd) {
     return args => new Promise(done => {
         const out = [];
         const err = [];
@@ -22,7 +22,7 @@ export function processGh(bin, env, cwd, timeoutMs = GH_TIMEOUT_MS) {
             done({ args, status: null, stdout: '', stderr: '', error: errorMessage(error) });
             return;
         }
-        const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+        const timer = setTimeout(() => child.kill('SIGTERM'), GH_TIMEOUT_MS);
         child.stdout?.on('data', (c) => out.push(c));
         child.stderr?.on('data', (c) => err.push(c));
         child.once('error', error => { clearTimeout(timer); done({ args, status: null, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), error: error.message }); });
@@ -32,7 +32,7 @@ export function processGh(bin, env, cwd, timeoutMs = GH_TIMEOUT_MS) {
         });
     });
 }
-export const VIEW_FIELDS = 'number,state,isDraft,baseRefName,headRefName,headRefOid,isCrossRepository,mergeable,mergeStateStatus,statusCheckRollup,url';
+export const VIEW_FIELDS = 'number,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,url';
 const str = (v) => typeof v === 'string' ? v : '';
 /** Check runs and commit statuses of `statusCheckRollup`, reduced to success, pending or failure. */
 export function readChecks(rollup) {
@@ -60,7 +60,6 @@ export function parsePullRequest(text) {
         number: raw['number'], state: str(raw['state']), isDraft: raw['isDraft'] === true, baseRefName: str(raw['baseRefName']),
         headRefName: str(raw['headRefName']), headRefOid: str(raw['headRefOid']), mergeable: str(raw['mergeable']),
         mergeStateStatus: str(raw['mergeStateStatus']), checks: readChecks(raw['statusCheckRollup']), url: str(raw['url']),
-        crossRepository: typeof raw['isCrossRepository'] === 'boolean' ? raw['isCrossRepository'] : null,
     };
 }
 const NAME = /^[A-Za-z0-9._-]{1,100}$/;
@@ -76,8 +75,7 @@ export function pullRequestPath(pr) {
     const repo = `repos/${m[2]}/${m[3]}`;
     return { host: m[1].toLowerCase(), path: `${repo}/pulls/${pr.number}`, repo };
 }
-/** `--hostname <host>` for a repository outside github.com. */
-export const hostname = (where) => where.host === 'github.com' ? [] : ['--hostname', where.host];
+const hostname = (where) => where.host === 'github.com' ? [] : ['--hostname', where.host];
 /**
  * Arguments of the retarget: `gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -f base=<target>`. The REST API
  * and not `gh pr edit --base`, whose GraphQL query also reads the classic projects of the pull request and
@@ -94,7 +92,7 @@ export function retargetArgs(where, target) {
 export const FRESHNESS_JQ = '{ahead_by, merge_base: .merge_base_commit.sha, listed: ((.commits // []) | length), ' +
     'merges: ([(.commits // [])[] | select((.parents // []) | length > 1)] | length), files: (if .files == null then null else [.files[].filename] end)}';
 /** A ref in a REST path: every character escaped but the slashes of a branch name. */
-export const refSegment = (ref) => encodeURIComponent(ref).replaceAll('%2F', '/');
+const refSegment = (ref) => encodeURIComponent(ref).replaceAll('%2F', '/');
 /**
  * Arguments of the freshness read: `gh api repos/<owner>/<repo>/compare/<head sha>...<base>`. In this order,
  * GitHub's `ahead_by` counts the commits of the base the head of the pull request does not contain, and `files`
@@ -171,44 +169,6 @@ export function anomalies(pr, expectedBase, allowDraft) {
         out.push(`PR #${pr.number} : contrôle(s) en cours : ${pending.join(', ')}`);
     return out;
 }
-/** The interval between two reads of the checks while `--wait-ci` waits: 30 seconds. */
-export const CI_POLL_MS = 30_000;
-const pendingNames = (pr) => pr.checks.filter(c => c.state === 'pending').map(c => c.name);
-/**
- * `--wait-ci`: reads the pull request again while some of its checks are pending, at most `ciWaitMs` from now; returns
- * the last read (its checks finished, failed, or still pending when the time is up: the caller judges, never this wait).
- */
-export async function waitForChecks(n, first, read, wait) {
-    let result = first;
-    const budget = wait.ciWaitMs ?? 0;
-    if (budget <= 0 || !result.pr || !pendingNames(result.pr).length)
-        return result;
-    const deadline = Date.now() + budget;
-    const every = Math.max(1, wait.ciPollMs ?? CI_POLL_MS);
-    wait.log?.(`PR #${n} : contrôle(s) en cours (${pendingNames(result.pr).join(', ')}), attente de la CI (--wait-ci, au plus ${Math.ceil(budget / 60_000)} min).`);
-    while (result.pr && pendingNames(result.pr).length && Date.now() < deadline) {
-        await sleep(Math.min(every, Math.max(1, deadline - Date.now())));
-        result = await read();
-    }
-    if (result.pr) {
-        const left = pendingNames(result.pr);
-        wait.log?.(left.length ? `PR #${n} : délai de --wait-ci écoulé, contrôle(s) encore en cours : ${left.join(', ')}.`
-            : `PR #${n} : CI terminée (${result.pr.checks.filter(c => c.state === 'success').length}/${result.pr.checks.length} au vert).`);
-    }
-    return result;
-}
-/**
- * Refusal of a pull request that has no check once retargeted onto the target, while the first pull request of the
- * stack, which aimed at the target, had some: the CI of the target runs only for pull requests opened towards it
- * (event `pull_request` with `branches`), and a retarget does not start it. Absent checks are not green.
- */
-export function noChecksAfterRetargetReason(n, pr, target, firstPr, firstChecks) {
-    return `PR #${n} : aucun contrôle après son re-ciblage sur ${target}, alors que la PR #${firstPr}, qui visait ${target}, en avait ${firstChecks} : ` +
-        `la CI de ${target} ne se déclenche que sur les PR ouvertes vers elle et un re-ciblage ne la relance pas ; des contrôles absents ne valent pas le vert. ` +
-        `Marche à suivre : dans la branche ${pr.headRefName || '?'}, git fetch origin puis git merge origin/${target} (fusion de la base, aucun fichier changé ` +
-        `attendu ; jamais de rebase ni de force-push ; si Git répond « Already up to date », git commit --allow-empty -m "ci : relance sur ${target}") ; ` +
-        `git push (sans force) ; puis relancer APV_ALLOW_MERGE=1 apv stack merge sur les PR restantes avec --wait-ci <minutes>, qui attend la fin de la CI.`;
-}
 async function call(options, args) {
     const result = await options.gh(args);
     options.onCall(result);
@@ -235,16 +195,12 @@ async function freshness(options, pr, base, where) {
 }
 /** Re-reads a pull request while GitHub still computes its mergeability. */
 async function settled(options, n) {
-    const mergeability = async () => {
-        let result = await view(options, n);
-        for (let i = 0; i < options.pollAttempts && result.pr && (result.pr.mergeable === 'UNKNOWN' || result.pr.mergeStateStatus === 'UNKNOWN'); i += 1) {
-            await sleep(options.pollMs);
-            result = await view(options, n);
-        }
-        return result;
-    };
-    // --wait-ci: the pending checks may end; their end changes the merge state, read again with its own wait.
-    return waitForChecks(n, await mergeability(), mergeability, options);
+    let result = await view(options, n);
+    for (let i = 0; i < options.pollAttempts && result.pr && (result.pr.mergeable === 'UNKNOWN' || result.pr.mergeStateStatus === 'UNKNOWN'); i += 1) {
+        await sleep(options.pollMs);
+        result = await view(options, n);
+    }
+    return result;
 }
 /**
  * Whether a pull request may be merged onto `base` as far as freshness goes: null when its head contains the base
@@ -266,7 +222,7 @@ export async function planStack(numbers, options) {
     const prs = [];
     for (const n of numbers) {
         const { pr, error } = await settled(options, n);
-        prs.push({ number: n, pr, expectedBase: null, anomalies: error ? [error] : [], notes: [], freshness: null, rules: null });
+        prs.push({ number: n, pr, expectedBase: null, anomalies: error ? [error] : [], freshness: null });
     }
     const first = prs[0]?.pr;
     const target = options.target ?? first?.baseRefName ?? null;
@@ -281,13 +237,6 @@ export async function planStack(numbers, options) {
             item.anomalies.push(...anomalies(item.pr, item.expectedBase, options.ready));
         if (target && item.pr.headRefName === target)
             item.anomalies.push(`PR #${item.number} part de la branche cible ${target}`);
-        // Above the first pull request: no check while the first one, aimed at the target, has some. The CI of the target may
-        // run only for pull requests towards it: the merge will stop after the retarget and give the way (a merge of the base).
-        const firstChecks = first?.checks.length ?? 0;
-        if (i > 0 && target && item.pr.baseRefName !== target && item.pr.checks.length === 0 && firstChecks > 0) {
-            item.notes.push(`PR #${item.number} : aucun contrôle (sa base ${item.pr.baseRefName || '?'} n'est pas ${target}) ; si la CI de ${target} ne tourne que sur les PR vers elle, ` +
-                'elle ne tournera pas au re-ciblage : apv stack merge s\'arrêtera alors avant de la fusionner, avec la marche (une fusion de la base poussée, puis --wait-ci)');
-        }
         // The address gives the path of the compare call, and of the retarget for every PR after the first: an address
         // the tool cannot use stops the stack before any merge.
         const where = pullRequestPath(item.pr);
@@ -302,14 +251,6 @@ export async function planStack(numbers, options) {
         const problem = freshnessProblem(item.number, item.pr, item.freshness, options);
         if (problem)
             item.anomalies.push(problem);
-        // Each pull request is judged on its own change: the first against the target, the next ones against the head of the
-        // previous one, their base now (against the target, the diff would hold the changes of the PR below, and ask this one
-        // for their reviews and captures). Right before its merge, `mergeStack` reads them again against the target, which then
-        // holds the PR below: the same own change. A pull request already refused for another anomaly is not checked further.
-        if (options.rules && target && !item.anomalies.length) {
-            item.rules = await options.rules(item.pr, i === 0 ? target : item.expectedBase);
-            item.anomalies.push(...item.rules.problems);
-        }
     }
     return { target, prs, ok: prs.every(p => p.anomalies.length === 0) };
 }
@@ -321,21 +262,18 @@ export async function planStack(numbers, options) {
  */
 export async function mergeStack(numbers, method, options) {
     const plan = await planStack(numbers, options);
-    const report = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [], rules: [], traceErrors: [], mergedHeads: [] };
+    const report = { target: plan.target, method, merged: [], stopped: null, plan, freshness: [], derogations: [] };
     const stop = (pr, reasons) => { report.stopped = { pr, reasons }; return report; };
     if (!plan.ok) {
         const bad = plan.prs.find(p => p.anomalies.length);
         return stop(bad.number, ['pile incohérente avant toute fusion (apv stack plan)', ...plan.prs.flatMap(p => p.anomalies)]);
     }
     const target = plan.target;
-    const firstPr = plan.prs[0];
-    const firstChecks = firstPr.pr?.checks.length ?? 0;
     for (const [i, n] of numbers.entries()) {
         let { pr, error } = await view(options, n);
         if (!pr)
             return stop(n, [error]);
-        const retargeted = i > 0 && pr.baseRefName !== target;
-        if (retargeted) {
+        if (i > 0 && pr.baseRefName !== target) {
             const previousHead = plan.prs[i - 1].pr.headRefName;
             if (pr.baseRefName !== previousHead)
                 return stop(n, [`PR #${n} vise ${pr.baseRefName}, ni la cible ${target} ni la tête de la PR précédente ${previousHead}`]);
@@ -358,17 +296,6 @@ export async function mergeStack(numbers, method, options) {
         ({ pr, error } = await settled(options, n));
         if (!pr)
             return stop(n, [error]);
-        if (retargeted && pr.checks.length === 0 && firstChecks > 0) {
-            // A workflow that also listens to the edit of a pull request may start: a few reads (and --wait-ci) let it show.
-            for (let k = 0; k < options.pollAttempts && pr && pr.checks.length === 0; k += 1) {
-                await sleep(options.pollMs);
-                ({ pr, error } = await settled(options, n));
-            }
-            if (!pr)
-                return stop(n, [error]);
-            if (pr.checks.length === 0)
-                return stop(n, [noChecksAfterRetargetReason(n, pr, target, firstPr.number, firstChecks)]);
-        }
         let problems = anomalies(pr, target, options.ready);
         if (problems.length)
             return stop(n, problems);
@@ -400,13 +327,6 @@ export async function mergeStack(numbers, method, options) {
                 return stop(n, [`dérogation --allow-behind non journalisée (${failed}) : fusion de la PR #${n} refusée`, behindReason(n, pr, fresh)]);
             report.derogations.push(derogation);
         }
-        // The rules last, at the head GitHub will merge (--match-head-commit), against the target as it is now.
-        if (options.rules) {
-            const verdict = await options.rules(pr, target);
-            report.rules.push({ pr: n, ...verdict });
-            if (verdict.problems.length)
-                return stop(n, verdict.problems);
-        }
         const merge = await call(options, ['pr', 'merge', String(n), `--${method}`, '--match-head-commit', pr.headRefOid]);
         let after = await view(options, n);
         for (let k = 0; k < options.pollAttempts && after.pr && after.pr.state === 'OPEN' && merge.status === 0; k += 1) {
@@ -419,27 +339,6 @@ export async function mergeStack(numbers, method, options) {
             return stop(n, [`fusion de la PR #${n} non constatée : état ${after.pr.state || 'inconnu'}, base ${after.pr.baseRefName || '?'} (gh pr merge : ${merge.error ?? `code ${merge.status}`})`]);
         }
         report.merged.push(n);
-        report.mergedHeads.push({ pr: n, branch: pr.headRefName, head: pr.headRefOid, crossRepository: pr.crossRepository, url: pr.url });
-        if (options.onMerged) {
-            // A rebase lands one new commit per commit of the pull request, the last one being `mergeCommit`: their number is
-            // kept in the trace, so that the audit accounts for all of them, not only the last one.
-            const read = await call(options, ['pr', 'view', String(n), '--json', method === 'rebase' ? 'mergeCommit,commits' : 'mergeCommit']);
-            let mergeCommit = null;
-            let commits;
-            try {
-                const answer = JSON.parse(read.stdout);
-                const oid = answer.mergeCommit?.oid;
-                mergeCommit = typeof oid === 'string' && /^[0-9a-f]{40,64}$/.test(oid) ? oid : null;
-                if (method === 'rebase' && Array.isArray(answer.commits) && answer.commits.length > 0)
-                    commits = answer.commits.length;
-            }
-            catch {
-                mergeCommit = null;
-            }
-            const failed = options.onMerged({ pr: n, head: pr.headRefOid, target, method, mergeCommit, ...(commits ? { commits } : {}) });
-            if (failed)
-                report.traceErrors.push(`PR #${n} : trace de fusion non écrite (${failed}) : apv audit merges la signalera`);
-        }
     }
     return report;
 }

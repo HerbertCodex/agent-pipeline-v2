@@ -1,14 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { suiteSettings, type ApvConfig } from '../config/load.js';
 import { errorMessage } from '../domain/errors.js';
-import { listeningInodes, protectedPids } from '../execution/procs.js';
+import { listeningInodes } from '../execution/procs.js';
 import { runProcess } from '../execution/process.js';
 import { LockStore, defaultLockDir } from '../lock/store.js';
 import { gitRead } from '../run/git-probe.js';
-import { stackPlace } from '../gates/suite.js';
 import { DEFAULT_IDLE_AFTER_MS, stackPath, type StackConfig } from './config.js';
 
 /**
@@ -146,45 +145,6 @@ function lastLeaseEvent(dir: string, resource: string): number | null {
   return last;
 }
 
-/** The device of a `stat` (bigint) as `/proc/locks` prints it: major and minor numbers. */
-function lockDevice(dev: bigint): [number, number] {
-  const major = ((dev >> 8n) & 0xfffn) | ((dev >> 32n) & ~0xfffn);
-  const minor = (dev & 0xffn) | ((dev >> 12n) & ~0xffn);
-  return [Number(major), Number(minor)];
-}
-
-/** Whether process `pid` holds `file` open (an entry of `/proc/<pid>/fd` leads to it). */
-function holdsOpen(pid: number, file: string, procRoot: string): boolean {
-  let real: string; let fds: string[];
-  try { real = realpathSync(file); fds = readdirSync(join(procRoot, String(pid), 'fd')); } catch { return false; }
-  return fds.some(fd => { try { return readlinkSync(join(procRoot, String(pid), 'fd', fd)) === real; } catch { return false; } });
-}
-
-/**
- * Whether a kernel lock (`flock`) on `file` is held by this process or one of its ancestors (read in `/proc/locks`):
- * a suite launched under the lock of its stack (`flock <lockFile> apv gates run ...`) holds it already. The lock is the
- * same inode on the same device; some file systems print another device there than `stat` gives (btrfs subvolumes), and
- * the same inode then counts when that ancestor holds the file open. Init (pid 1) is never counted. False when
- * unreadable (another system, file absent): the lock then counts as another's.
- */
-export function flockHeldByAncestor(file: string, ancestors: ReadonlySet<number> = protectedPids(), locksPath = '/proc/locks', procRoot = '/proc'): boolean {
-  let locks: string; let inode: bigint; let device: [number, number];
-  try {
-    locks = readFileSync(locksPath, 'utf8');
-    const st = statSync(file, { bigint: true });
-    inode = st.ino; device = lockDevice(st.dev);
-  } catch { return false; }
-  for (const line of locks.split('\n')) {
-    const fields = line.trim().split(/\s+/);
-    if (fields[1] !== 'FLOCK' || fields[3] !== 'WRITE') continue;
-    const pid = Number(fields[4]);
-    const [major, minor, ino] = (fields[5] ?? '').split(':');
-    if (!(pid > 1 && ancestors.has(pid)) || ino === undefined || !/^\d+$/.test(ino) || BigInt(ino) !== inode) continue;
-    if ((parseInt(major!, 16) === device[0] && parseInt(minor!, 16) === device[1]) || holdsOpen(pid, file, procRoot)) return true;
-  }
-  return false;
-}
-
 /** Whether the flock of `file` is free now: taken and released at once (`flock -n`). Null when unknown. */
 export function flockFree(file: string): boolean | null {
   if (!existsSync(file)) return true;
@@ -220,7 +180,6 @@ export function probe(stack: ResolvedStack, context: ProbeContext): string[] {
   if (stack.resource && leaseHeld(new LockStore(defaultLockDir(context.env)), stack.resource)) busy.push(`bail ${stack.resource} tenu`);
   const queue = suiteQueue(context);
   if (queue && leaseHeld(queue.store, queue.resource)) busy.push('suite complète en cours (file suite.queue tenue)');
-  if (queue && leaseHeld(queue.store, stackPlace(queue.resource, stack.id))) busy.push(`suite complète en cours sur cette pile (place ${stackPlace(queue.resource, stack.id)} de la file tenue)`);
   const ports = stack.config.ports ?? [];
   if (ports.length) {
     try {
@@ -284,11 +243,6 @@ export async function underStackLock(stack: ResolvedStack, context: ProbeContext
       const q = await queue.store.tryAcquire(queue.resource, owner, 3600, `apv stacks ${label}`);
       if (!q.ok) return null;
       held.push(() => queue.store.release(queue.resource, { token: q.record.token }));
-      // A suite that uses this stack holds its place in the queue (suite.queue.slots), even when it is not the whole queue.
-      const place = stackPlace(queue.resource, stack.id);
-      const p = await queue.store.tryAcquire(place, owner, 3600, `apv stacks ${label}`);
-      if (!p.ok) return null;
-      held.push(() => queue.store.release(place, { token: p.record.token }));
     }
     if (stack.resource) {
       const store = new LockStore(defaultLockDir(context.env));
@@ -353,43 +307,4 @@ export function stoppedSince(common: string, id: string): string | null {
   const stopped = Date.parse(r.stoppedAt);
   const up = Math.max(r.startedAt ? Date.parse(r.startedAt) : 0, r.upAt ? Date.parse(r.upAt) : 0);
   return stopped > up ? r.stoppedAt : null;
-}
-
-/** What `stackHealth` found: every container running, some stopped or gone, none, or nothing readable. */
-export interface StackHealth { state: 'running' | 'degraded' | 'absent' | 'unknown'; detail: string; containers: StackContainer[]; missing: string[] }
-export interface StackContainer { name: string; state: string }
-
-/** The line format of `docker ps` read for a stack: name, state, then the two project labels. */
-export const DOCKER_PS_FORMAT = '{{.Names}}\t{{.State}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.supabase.cli.project"}}';
-
-/** The containers of `project` in a `docker ps -a --format DOCKER_PS_FORMAT` output: a project label equal to it, or a name ending in `_<project>`. */
-export function stackContainers(output: string, project: string): StackContainer[] {
-  return output.split('\n').map(line => line.split('\t')).filter(([name, , compose, supabase]) => name && (compose === project || supabase === project || name.endsWith(`_${project}`)))
-    .map(([name, state]) => ({ name: name!, state: (state ?? '').trim() || 'inconnu' }));
-}
-
-/** The containers of the stack now (`docker ps -a`, bounded, never changed), or why they cannot be read. */
-export async function readStackContainers(stack: ResolvedStack, repo: string, env: NodeJS.ProcessEnv, timeoutMs = 15_000): Promise<{ containers: StackContainer[] } | { error: string }> {
-  const project = stack.config.dockerProject;
-  if (!project) return { error: `pas de dockerProject déclaré pour la pile ${stack.id} : état non lu par l'outil` };
-  const r = await runProcess({ command: ['docker', 'ps', '-a', '--format', DOCKER_PS_FORMAT], cwd: repo, env, timeoutMs, maxOutputBytes: 256 * 1024 });
-  if (r.status !== 'passed') return { error: `docker ps illisible (${r.status}, code ${r.exitCode ?? '-'}) : ${r.stderr.trim().slice(0, 200) || 'sans sortie'}` };
-  return { containers: stackContainers(r.stdout, project) };
-}
-
-/**
- * The state of a stack after a check was interrupted under its lock (a cancelled suite, a timeout: a reset of its
- * database may have been cut halfway), from its containers now and, when read at the start of the suite, then: a
- * container gone since (a reset removes and recreates the database container) or not running is said.
- */
-export function judgeStack(now: { containers: StackContainer[] } | { error: string }, before: StackContainer[] | null): StackHealth {
-  if ('error' in now) return { state: 'unknown', detail: now.error, containers: [], missing: [] };
-  const { containers } = now;
-  const missing = (before ?? []).map(c => c.name).filter(name => !containers.some(c => c.name === name));
-  const stopped = containers.filter(c => c.state !== 'running');
-  if (!containers.length) return { state: 'absent', detail: `aucun conteneur${before?.length ? ` (${before.length} au départ de la suite)` : ''}`, containers, missing };
-  if (!stopped.length && !missing.length) return { state: 'running', detail: `${containers.length} conteneur(s), tous en marche${before ? ', les mêmes qu\'au départ de la suite' : ''}`, containers, missing };
-  const parts = [...(missing.length ? [`disparu(s) depuis le départ de la suite : ${missing.join(', ')}`] : []),
-    ...(stopped.length ? [`hors marche : ${stopped.map(c => `${c.name} (${c.state})`).join(', ')}`] : [])];
-  return { state: 'degraded', detail: parts.join(' ; '), containers, missing };
 }

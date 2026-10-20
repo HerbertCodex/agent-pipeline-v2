@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fixture, git } from './helpers.mjs';
 import { apv, write, decision } from './cli-helpers.mjs';
 import { planLedgerUpdate, applyLedgerUpdate } from '../dist/lifecycle/ledger-update.js';
-import { decisionLedgerIssues, loadDecisionLedger, resolveLedgerFile, validateDecisionLedger } from '../dist/lifecycle/decisions.js';
+import { decisionLedgerIssues, loadDecisionLedger, resolveLedgerFile } from '../dist/lifecycle/decisions.js';
 import { candidateSubject, Git } from '../dist/execution/git.js';
 
 /** Hides the global and system Git configuration for this test, so only the repository's own identity counts. */
@@ -160,20 +160,4 @@ test('the readable ledger ends with exactly one newline (git diff --check stays 
     sourceQuote: 'citation', rationale: 'Raison.', supersedes: [], clarificationQuestion: '', interpretations: [] };
   const md = decisionLedgerMarkdown({ schemaVersion: 1, decisions: [decision] });
   assert.ok(md.endsWith('Raison.\n'), JSON.stringify(md.slice(-20)));
-});
-
-test('apv ledger validate accepts 201 decisions and 2000, and refuses 2001 with "registre plein"', async t => {
-  const f = fixture(t);
-  const ledger = n => ({ schemaVersion: 1, decisions: Array.from({ length: n }, (_, i) => decision(`D-${i}`)) });
-  for (const n of [201, 2000]) {
-    write(f.repo, '.apv/DECISIONS.json', ledger(n));
-    const ok = await apv(f.repo, ['ledger', 'validate', '--json']);
-    assert.equal(ok.code, 0, ok.stdout); assert.equal(ok.json().valid, true); assert.equal(ok.json().decisions, n);
-  }
-  write(f.repo, '.apv/DECISIONS.json', ledger(2001));
-  const full = await apv(f.repo, ['ledger', 'validate']);
-  assert.equal(full.code, 1);
-  assert.match(full.stdout, /registre plein : 2001 décisions sur 2000/);
-  assert.doesNotMatch(full.stdout, /invalid array/);
-  assert.throws(() => validateDecisionLedger(ledger(2001)), /registre plein : 2001 décisions sur 2000/);
 });

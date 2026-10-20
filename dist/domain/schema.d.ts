@@ -12,8 +12,7 @@ export declare const s: {
     boolean(): Schema<boolean>;
     enum<const T extends readonly string[]>(values: T): Schema<T[number]>;
     literal<const T extends number | string>(value: T): Schema<T>;
-    /** `tooMany` words the refusal when the list is longer than `max` (default: the generic message). */
-    array<T>(item: Schema<T>, min?: number, max?: number, tooMany?: (count: number, max: number) => string): Schema<T[]>;
+    array<T>(item: Schema<T>, min?: number, max?: number): Schema<T[]>;
     default<T>(schema: Schema<T>, value: T): Schema<T>;
     /** An object property that may be absent (no default): absent stays absent, never `undefined` in the output. */
     optional<T>(schema: Schema<T>): Schema<T | undefined>;

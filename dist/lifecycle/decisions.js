@@ -37,17 +37,9 @@ export const decisionSchema = s.object({
     // Optional, never defaulted: a ledger without scopes parses and hashes exactly as before.
     scope: s.optional(decisionScopeSchema),
 });
-/**
- * Most decisions a ledger holds. Raised from 200 to 2000 on 14 October 2026 (a living project reached 200).
- * The ceiling is not a cost bound: the ledger is read as one JSON file and hashed whole; at realistic sizes
- * (about 1 KB per decision) 2000 entries stay around 2 MB. It only stops a runaway or corrupted file.
- */
-export const MAX_LEDGER_DECISIONS = 2000;
-/** Wording of the refusal when the ledger is over the ceiling (shown instead of "invalid array"). */
-export const ledgerFullMessage = (count, max = MAX_LEDGER_DECISIONS) => `registre plein : ${count} décisions sur ${max}`;
 export const decisionLedgerSchema = s.object({
     schemaVersion: s.literal(1),
-    decisions: s.array(decisionSchema, 0, MAX_LEDGER_DECISIONS, ledgerFullMessage),
+    decisions: s.array(decisionSchema, 0, 200),
 });
 export const decisionCoverageSchema = s.object({
     decisionId: s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/),
@@ -65,7 +57,7 @@ export const semanticReviewSchema = s.object({
         decisionId: s.string(1, 80, /^[A-Za-z0-9][A-Za-z0-9._-]*$/),
         status: s.enum(['pass', 'fail', 'unknown', 'ambiguous']),
         evidence: s.string(1, 4000),
-    }), 0, MAX_LEDGER_DECISIONS),
+    }), 0, 200),
     missingOperatorDecisions: s.array(s.object({
         sourceQuote: s.string(1, 4000),
         description: s.string(1, 4000),
@@ -140,9 +132,6 @@ export function decisionLedgerRuleIssues(parsed, operatorText) {
 }
 /** Every problem of an unparsed ledger document: schema first, then the ledger rules. */
 export function decisionLedgerIssues(value, operatorText) {
-    const listed = value?.decisions;
-    if (Array.isArray(listed) && listed.length > MAX_LEDGER_DECISIONS)
-        return [{ code: 'SCHEMA', message: `$.decisions: ${ledgerFullMessage(listed.length)}` }];
     const { value: parsed, issues } = schemaIssues(decisionLedgerSchema, value);
     return parsed ? decisionLedgerRuleIssues(parsed, operatorText) : issues;
 }

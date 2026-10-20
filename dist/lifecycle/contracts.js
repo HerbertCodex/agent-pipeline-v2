@@ -3,7 +3,7 @@ import { invariant } from '../domain/errors.js';
 import { lanes } from '../domain/contracts.js';
 import { matches } from '../policy/policy.js';
 import { hash } from '../domain/hash.js';
-import { MAX_LEDGER_DECISIONS, confirmedDecisions, ambiguousDecisions, decisionApplies, decisionLedgerIssues, decisionReason, validateDecisionLedger } from './decisions.js';
+import { confirmedDecisions, ambiguousDecisions, decisionApplies, decisionLedgerIssues, decisionReason, validateDecisionLedger } from './decisions.js';
 import { IssueList, schemaIssues } from '../domain/issues.js';
 import { owaspTopicIds, securityProfileSchema, neutralSecurityContext } from '../security/owasp.js';
 import { qualityCheckSchema, validateQualityChecks, findingRequiresFix } from '../quality/review.js';
@@ -55,7 +55,7 @@ export const specSchema = s.object({
     decisions: s.array(s.object({ question: s.string(1, 2000), answer: s.string(1, 4000) }), 0, 100),
     decisionCoverage: s.default(s.array(s.object({
         decisionId: id, acceptanceIds: s.array(id, 1, 100), rationale: s.string(1, 4000),
-    }), 0, MAX_LEDGER_DECISIONS), []),
+    }), 0, 200), []),
     decisionResolutions: s.default(s.array(s.object({
         decisionId: id, value: s.string(1, 4000), sourceQuote: s.string(1, 4000), rationale: s.string(1, 4000),
     }), 0, 100), []),
@@ -79,7 +79,7 @@ export const qaSchema = s.object({
         path: s.string(0, 500), description: s.string(1, 4000),
     }), 0, 100),
     observations: s.array(s.string(1, 3000), 0, 100),
-    decisionChecks: s.default(s.array(s.object({ decisionId: id, status: s.enum(['pass', 'fail', 'unknown']), evidence: s.string(1, 4000) }), 0, MAX_LEDGER_DECISIONS), []),
+    decisionChecks: s.default(s.array(s.object({ decisionId: id, status: s.enum(['pass', 'fail', 'unknown']), evidence: s.string(1, 4000) }), 0, 200), []),
     securityChecks: s.default(s.array(s.object({ requirementId: id, status: s.enum(['pass', 'fail', 'unknown']), evidence: s.string(1, 4000) }), 0, 200), []),
     qualityChecks: s.default(s.array(qualityCheckSchema, 0, 6), []),
     negativeTestChecks: s.default(s.array(s.object({

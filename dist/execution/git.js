@@ -116,9 +116,9 @@ export class Git {
         await this.exec(repo, ['worktree', 'remove', '--force', path]);
     }
     async changes(repo, base, candidate = 'HEAD') {
-        const files = (await this.exec(repo, ['diff', '--ignore-submodules=none', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', base, candidate, '--'])).split('\0').filter(Boolean).sort();
-        const added = (await this.exec(repo, ['diff', '--ignore-submodules=none', '--no-ext-diff', '--no-textconv', '--no-renames', '--diff-filter=A', '--name-only', '-z', base, candidate, '--'])).split('\0').filter(Boolean).sort();
-        const stats = (await this.exec(repo, ['diff', '--ignore-submodules=none', '--no-ext-diff', '--no-textconv', '--no-renames', '--numstat', '-z', base, candidate, '--'])).split('\0').filter(Boolean);
+        const files = (await this.exec(repo, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', base, candidate, '--'])).split('\0').filter(Boolean).sort();
+        const added = (await this.exec(repo, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--diff-filter=A', '--name-only', '-z', base, candidate, '--'])).split('\0').filter(Boolean).sort();
+        const stats = (await this.exec(repo, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--numstat', '-z', base, candidate, '--'])).split('\0').filter(Boolean);
         let lines = 0;
         let binary = false;
         for (const stat of stats) {

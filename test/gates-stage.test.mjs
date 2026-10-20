@@ -46,8 +46,7 @@ test('--stage task runs the task checks only and lists the full ones as reserved
   }
   const summary = JSON.parse(readFileSync(join(out.receiptsDirectory, 'summary.json'), 'utf8'));
   assert.equal(summary.stage, 'task'); assert.deepEqual(summary.reserved, ['e2e']); assert.deepEqual(summary.selected, ['lint', 'unit']);
-  // --replay all: the output of an execution (the same tree would otherwise be reused, A1).
-  const human = await apv(f.repo, ['gates', 'run', '--stage', 'task', '--replay', 'all']);
+  const human = await apv(f.repo, ['gates', 'run', '--stage', 'task']);
   assert.match(human.stdout, /^Contrôles de tâche \(--stage task\) à /);
   assert.match(human.stdout, /e2e\s+réservé à la suite complète\s+-\s+-/);
   assert.match(human.stdout, /Tous les contrôles de tâche passent\. 1 contrôle\(s\) réservé à la suite complète, non exécuté\(s\)/);
@@ -158,8 +157,7 @@ test('verify: missing, failed, another commit, dirty tree, then complete', async
 
   // A later failure overrides the earlier success.
   rmSync(green.marker);
-  // Same tree: the green receipt would be reused (A1); the failure of a cause outside the repository needs --replay.
-  await apv(f.repo, ['gates', 'run', '--only', 'e2e', '--replay', 'e2e']);
+  await apv(f.repo, ['gates', 'run', '--only', 'e2e']);
   assert.equal((await verify()).code, 1);
   writeFileSync(green.marker, '');
 

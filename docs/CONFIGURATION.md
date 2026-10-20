@@ -1,6 +1,6 @@
 # Configuration et politique
 
-> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts`, `resources`, `suite`, `stacks`, `batch`, `stack`, `web`, `reuse`, `map`, `freshness` et `models` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
+> **Écrit pour V2.** APV3 lit encore un `pipeline.v2.json` (ou `.apv/config.json`), mais seulement ses sections `name`, `gates`, `risk`, `validationRules`, `environment.passEnv`, `skills`, `preview`, `design`, `structure`, `run`, `spec`, `review`, `receipts`, `resources`, `suite`, `stacks`, `batch` et `web` ([outil apv](CLI.md) ; les sections `structure`, `run` et `spec` sont décrites [plus bas](#arborescence--structure)). Les réglages d'agents, de budgets, de délais, de modèles et de parcours décrits ici ne concernent que le contrôleur V2 ([archive](v2/)).
 
 La configuration est un JSON déclaratif lu avant l'agent et conservé avec la tentative. La tâche ne peut pas fournir une commande à la place d'un contrôle, changer un verdict ni s'accorder une exemption. Les champs inconnus sont refusés.
 
@@ -95,63 +95,9 @@ Par défaut, un contrôle a un accès exclusif au répertoire de validation, y c
 
 `apv lock run e2e` sérialise le navigateur de test entre agents (voir [LOCKS.md](LOCKS.md)) ; le verrou ne dure que le temps des tests ciblés. `--base <ref>` est obligatoire à l'étape de tâche (`apv gates run --stage task --base <base>`). Limite : `--only-changed` suit les imports des fichiers de tests, pas le navigateur ; une modification de l'application seule ne sélectionne pas les tests e2e qui la parcourent. L'implementer ajoute ou modifie donc le test du comportement qu'il change, et la suite complète reste le filet à la dernière intégration et à la livraison. Pour une interface, faites tourner les tests navigateur en mouvement réduit par défaut (Playwright : `use: { reducedMotion: 'reduce' }` dans la configuration, et des animations CSS qui respectent `prefers-reduced-motion`) : un clic pendant une animation est la première cause d'instabilité ; seuls les tests qui vérifient une animation remettent `reducedMotion: 'no-preference'`.
 
-`reuse` (facultatif, 3.0.0-alpha.26 ; [ACCELERATION-LOTS.md](ACCELERATION-LOTS.md), partie A) : sans ce champ, `apv gates run` et `apv stack batch` reprennent le reçu vert d'un commit au **même arbre** (même configuration des contrôles, même environnement, moins de 20 h, aucun échec plus récent) au lieu de relancer le contrôle, avec un reçu `cached` que `apv gates verify` recontrôle depuis Git et le magasin ([CLI.md](CLI.md#apv-gates-run)). Valeurs : `false` (jamais repris), ou un objet (3.0.0-alpha.27, PR A2) `{ "ignore": [...], "maxAgeMs": ... }` (la reprise par entrées que décrit `ignore` est désactivée, ci-dessous) ; `true` et `{}` sont refusés par le chargeur (laisser le champ absent). Le champ change l'empreinte de configuration comme tout champ d'un contrôle, et une PR qui l'ajoute ou l'élargit est prouvée seule, avec la configuration de sa base.
-
-```json
-{ "id": "integration", "stage": "full", "command": ["npm", "run", "test:integration"], "testPaths": ["tests/integration/**"],
-  "reuse": { "ignore": ["tests/e2e/browser/**", "tests/e2e/**/*-snapshots/**", "docs/**", ".apv/state/**", "**/*.md"],
-             "maxAgeMs": 172800000 } }
-```
-
-- **`ignore`** (1 à 100 motifs portables `*`, `**`, `?`, sans accolades ni `!`, 200 caractères et 16 jokers au plus chacun) : les fichiers que le contrôle **ne lit jamais**, par **exclusion** (tout autre fichier, un fichier nouveau compris, serait une entrée). **La reprise par entrées que ce champ décrit est désactivée** (décision du chef du 18 octobre, soir, bis ; relecture sécurité du delta de A2, M1) : `apv gates run` et `apv stack batch` n'écrivent jamais de reçu `basis: "inputs"`, et `apv gates verify` en refuse un quoi qu'il dise (« reprise par entrées désactivée tant que la déclaration reuse.ignore n'est pas prouvée »). Seule la reprise à arbre identique vaut ; un contrôle qui déclare `ignore` le rappelle à chaque exécution où il n'est pas repris (« non repris (… ; reprise par entrées désactivée …) »). **Raison** : rien ne prouve la déclaration. Fausse dès la base (une PR fusionnée fait lire `docs/data.json` au contrôle, `ignore: ["docs/**"]` inchangé), elle donnerait une fausse preuve à la PR suivante qui ne change que ce fichier : contrôle repris, `verify` à 0, alors qu'il échoue. Elle reviendra avec une preuve (PR A2b : le contrôle rejoué dans une copie sans ses fichiers ignorés, reçu exigé). Le champ reste lu et validé, pour ne rien changer aux configurations à ce moment-là : les motifs sont lus à la **base commune** du commit et de sa cible, et le chargeur refuse un motif qui couvre un fichier **jamais ignorable**, casse ignorée : la configuration des contrôles (`.apv/config.json`, `pipeline.v2.json`, le fichier `--config`), les manifestes et verrous de dépendances, la configuration de build, de test et d'exécution (`*.config.*`, `tsconfig*.json`, `Dockerfile`…), la CI, les migrations (`**/migrations/**`, `*.sql`), `scripts/**`, `*.sh`, `.env*`, et les propres `testPaths` et `repeatChanged.paths` du contrôle (liste `ALWAYS_REQUIRED` de `src/gates/proof-scope.ts` sans les dossiers de tests : un contrôle peut ignorer les tests d'un autre).
-- **`maxAgeMs`** (de 6 h à 7 jours ; 24 h par défaut) : âge maximal d'une origine reprise, lu à la base lui aussi : l'âge retenu est le plus petit de celui de la base et de celui du commit, et ne dépasse 24 h que si les deux le déclarent. `apv gates run` ne reprend qu'une origine plus jeune que cet âge moins 4 h (la reprise doit rester vérifiable jusqu'à la fusion).
-
-- **Ce qui entre dans l'identité de reprise** (tout doit être égal entre l'origine et la reprise) : l'arbre du commit (`git rev-parse <commit>^{tree}`) et l'empreinte de ses fichiers suivis, recalculés depuis Git ; l'empreinte de la configuration des contrôles ; l'environnement (variables transmises et leurs valeurs, exécutable et son sha256, Node, plateforme, noyau, version de l'outil) ; **la pile** avec `--stacks` (3.0.0-alpha.27) : sans `stacks[].fingerprint`, son identifiant, sa déclaration (sans son `envFile`) et les valeurs de ses variables, donc jamais d'une pile à l'autre ; avec une empreinte, seules les **adresses propres à la pile** parmi ses variables sont normalisées : un port qu'elle **déclare dans `ports`** (la valeur entière, le port d'une URL ou d'un `hôte:port`) et son fichier de verrou ; toute autre valeur reste dans l'identité (`STACK=2` contre `STACK=3`, un drapeau, un nom de projet, l'hôte ou la base d'une URL, `HOST_PORT=postgres:15` contre `postgres:16`, un port que la pile ne déclare pas, quel que soit le nom de la variable : relecture sécurité de A2 et de son delta, F3). Une pile qui ne déclare pas `ports` ne normalise donc aucun port, plus la sortie de la commande d'empreinte : reprise d'une pile à l'autre quand elle imprime la même chose et que les piles ne diffèrent que par leurs adresses ; **l'état local que Git ignore** dans la copie où le contrôle tourne (relecture sécurité de A1 et de son delta) : présence de `node_modules`, contenu de l'enregistrement de son installation (`node_modules/.package-lock.json` d'npm, `.modules.yaml` et `.pnpm/lock.yaml` de pnpm, `.yarn-state.yml` et `.yarn-integrity` de Yarn ; un `node_modules` sans aucun de ces enregistrements, installé par bun ou à la main, n'est **jamais comparable**), chaque fichier `.env*` **à toute profondeur** (hors `node_modules`, le `.git` de la copie et les **worktrees enregistrés** par Git, `git worktree list`, comme ceux de `.worktrees/`, qui ont les leurs), et **tous les autres fichiers ignorés** de la copie (dossiers générés comme `.svelte-kit/`, sorties de build, rapports de test), hors `node_modules`, le `.git` de la copie et `.apv/receipts/` ; un dossier qui contient seulement une entrée nommée `.git` (un fichier vide dans `.svelte-kit/`, un clone égaré) est mesuré comme les autres (relecture sécurité de A2, F1) ; un **worktree enregistré situé dans la copie** (`.worktrees/x`, ou un dossier généré dont on a fait un worktree par `git worktree add`) n'est jamais exclu sans mesure : son HEAD et son `git status --porcelain` entrent dans l'état, et ses fichiers sont parcourus comme ceux de tout dossier ignoré (relecture du delta de A2, F1-bis ; une copie principale qui contient les worktrees des agents reprend donc moins, chacun de leurs changements changeant son état) ; chaque **sous-module** entre par son HEAD et son `git status` (D2), et l'arbre est dit modifié dès qu'un sous-module diffère de ce que le commit enregistre, même avec `ignore = all` dans `.gitmodules` (`git status --ignore-submodules=none`). Ces états sont mesurés **une fois par copie avant son premier contrôle** (la copie neuve d'un lot, préparée par le même `batch.setup`, en repart à l'identique ; une copie de travail qui garde les sorties d'une exécution précédente reprend moins). Ces contenus sont hachés en une seule empreinte, jamais écrits en clair. Pour une commande qui lit `{{baseSha}}` : la même base, et une base commune (`merge-base`) de cette base avec le commit au même arbre des deux côtés. La copie neuve d'un lot (`apv stack batch`) est préparée par `batch.setup` avant toute décision de reprise : son état local est mesuré une fois préparé. Hors lot (`apv gates run --stacks` à plusieurs piles), un contrôle de pile que la répartition peut envoyer dans la copie d'une autre pile (aucun `dependsOn` ne le garde dans la copie de la suite) n'est **jamais repris** (« non repris : copie de pile hors lot ») : cette copie est faite après la décision, son état local ne peut pas être comparé à celui de l'origine. Avec une seule pile (`--stacks 2`), chaque contrôle tourne dans la copie de la suite, dont l'état local est mesuré : la reprise reste possible. Le lot garde la reprise : toutes ses copies sont préparées par le même `batch.setup` de la cible.
-- **Ce qui n'est jamais repris** : un arbre modifié ; une commande ciblée ou un contrôle tôt ; `"reuse": false` ; une commande qui lance `apv web audit` ou `apv dast`, ou un audit des dépendances qui lit le réseau (`npm audit`, `pnpm audit`, `yarn audit`, `yarn npm audit`, `bun audit`, `outdated`, `audit-ci`, `better-npm-audit`, `osv-scanner`, `snyk`, `npm-check-updates` et `ncu`, `npm-check`), directement, dans un script en ligne (`node -e`, `sh -c`) ou dans un script de `package.json` qu'elle lance (`npm run audit:ci`, `sh -c "npm run x"`, `node --run x`, `npm --prefix dir run x`, `pnpm -C dir x`, `pnpm --filter pkg x`, `npm -w pkg run x` : les valeurs de ces options sont sautées et le script est cherché dans chaque `package.json` du commit) ; `git` hors d'une **liste fermée** de sous-commandes qui ne lisent que l'arbre et la copie (relecture sécurité de A2 et de son delta, F2 et F2-bis), dans la commande, un script en ligne ou un script de `package.json` : sont repris seulement `diff` et `diff-files` sans révision (options seules avant `--` : `git diff --check`, `git diff --exit-code -- dist`), `grep` sans révision ni `-O`, `status` sans la branche (`-b`, `-sb`, `--branch`, `--ahead-behind`) ni `--show-stash`, `ls-files` sans `--with-tree`, `check-attr` sans `--source`, `check-ignore`, `check-ref-format`, `hash-object`, `stripspace`, `version` ; toute autre sous-commande (l'historique, les objets, les références, un **alias** global, local ou `-c alias.*`, puisque sa commande n'est pas celle écrite) n'est jamais reprise ; options globales de git admises : `--no-pager`, `-P`, `--no-optional-locks`, les options de chemins (`--literal-pathspecs`…), `-C` vers un dossier relatif de la copie (sans `..`), `-c` d'affichage seulement (`color.*`, `core.pager`, `core.quotepath`, `advice.*`, `core.fsmonitor=false`) ; toute autre (`--git-dir`, `--work-tree`, `--exec-path`, `--config-env`, `-c diff.external=…`…) empêche la reprise ; une commande qui lit `{{candidateSha}}` ; une origine réussie après relance, réutilisée, sur arbre modifié, ciblée, d'une autre configuration ou trop vieille ; un contrôle dont un reçu plus récent sur le même arbre a échoué, complet, ciblé ou tôt, dans ce worktree ou dans une autre copie du dépôt (chaque reçu est publié dans le magasin partagé dès son écriture).
-- **Consigne aux projets : déclarer `"reuse": false`** pour tout contrôle qui lit l'historique Git hors des gabarits (message de commit, signature, `git log`, `git describe`, une branche distante, un diff depuis une référence écrite en dur) ou un état extérieur au dépôt (réseau, base d'avis, heure, service lancé à part, fichier hors de la copie, variable non transmise par `passEnv`), ou **un fichier ignoré que la commande ne régénère pas** (un cache, des fichiers générés par une autre commande ou à la main), quand la détection ci-dessus ne le voit pas : un fichier de script (`node scripts/x.mjs`, `bash check.sh`) qui le fait n'est jamais lu. Dans le doute, `false` : le contrôle est seulement rejoué.
-
-`early` (facultatif, contrôle de stage `full` seulement ; [ACCELERATION-LOTS.md](ACCELERATION-LOTS.md), partie C) : les **contrôles tôt**, commandes rapides que le projet déclare pour qu'un échec qui n'apparaîtrait qu'en fin de suite complète (un budget de taille du JavaScript servi, les captures d'un écran qu'aucun test n'importe, un test instable) se voie au stage task en quelques minutes. Un contrôle tôt **ajoute** un contrôle, il n'en retire aucun : le contrôle `full` reste exigé en entier par la suite complète et par `apv gates verify` au commit exact. Tableau de 1 à 20 objets :
-- `id` (obligatoire) : identifiant propre, distinct de tout contrôle et de tout autre contrôle tôt ; c'est le nom de son reçu (`<id>.json`) ;
-- `command` (obligatoire) : tableau d'arguments, mêmes substitutions que `command` (`{{baseSha}}` exige `--base`) ;
-- `when` (facultatif) : motifs (`*`, `**`, `?`, sans accolades ni `!`), comparés sans retour arrière comme tous les motifs portables de l'outil (3.0.0-alpha.25 : le chemin est lu une fois, en temps borné par sa longueur fois celle du motif, quel que soit le nombre de `*` et `**` ; un motif choisi par une PR ne peut plus bloquer le stage task). **Au plus 200 caractères et 16 jokers (`*` ou `**` ; `***` en compte deux) par motif**, refusé au-delà par le chargeur : chaque comparaison avec un fichier changé reste de l'ordre de la milliseconde ; le contrôle tôt tourne si un fichier changé depuis la base (`--base`, ou le commit de `--since`) y répond : commits, modifications non commitées et fichiers non suivis hors ignorés, les deux côtés d'un renommage. Sans `when`, il tourne toujours ; sans `--base`, `when` ne peut pas s'évaluer et il tourne aussi. Hors `when` : reçu `not_required` du stage task (« non requis (hors when) »), jamais un reçu de la suite complète ;
-- `dependsOn` (facultatif) : contrôles de stage `task` dont il a besoin (par exemple `build`, dont il lit la sortie) ; un contrôle `full` ou inconnu est refusé ;
-- `timeoutMs` (120000 par défaut), `passEnv`, `lock`, `resources` : comme pour un contrôle ; **rien n'est hérité du contrôle `full`** (ni ses variables, ni son verrou), un contrôle tôt qui lance la pile de test les déclare lui-même.
-
-`apv gates run --stage task` (et `--since`) lance les contrôles tôt des contrôles `full` retenus, chacun juste après son contrôle dans l'ordre de la configuration, après ses dépendances (`--only <contrôle full>` les amène, avec leurs dépendances). La suite complète (`--stage full`) ne les lance jamais. Leur reçu est ciblé (`targeted: true`) et porte `early` (contrôle `full`, identifiant, requis ou non, raison, fichiers qui répondent à `when`, 50 au plus) : **jamais une preuve du contrôle `full`**, ni au niveau complet ni au niveau tâche de `apv gates verify`, qui ne les compte pour aucun contrôle. Un échec rend le stage task rouge : « Échec tôt de integration (budget-js) : la suite complète échouerait sur ce contrôle ». Un contrôle tôt qui prend plus de 5 minutes est signalé « trop lent pour le stage task ». La sortie les nomme `budget-js (tôt : integration)`, le JSON et `summary.json` les listent dans `early`.
-
-**Lu à la base.** Comme les autres contrôles de la base (section précédente et [CLI.md](CLI.md#apv-gates-run)), les contrôles tôt de la base restent lancés : un candidat qui en retire un, ou change sa commande, son délai, ses variables ou son verrou, le voit tourner avec sa définition de base ; son `when` est l'union de celui de la base et de celui du candidat (absent d'un côté : toujours). Une PR ne réduit donc jamais le `when` qui la juge ; elle peut ajouter des contrôles tôt ou élargir un `when`, sans que le contrôle `full` soit tenu pour « modifié ». Sans `early`, rien ne change (lecture et empreinte de configuration comprises) ; l'ajouter change l'empreinte, comme tout champ d'un contrôle.
-
-Exemple (projet pilote) : le budget JavaScript des pages, extrait du test complet en un script qui lit `.svelte-kit/output` après le `build` du stage task, et les captures de l'accueil répétées trois fois quand l'accueil change :
-
-```json
-{
-  "id": "integration",
-  "stage": "full",
-  "command": ["npm", "run", "test:integration"],
-  "affected": ["npm", "run", "test:e2e:changed", "--", "{{baseSha}}", "--project=integration"],
-  "early": [
-    { "id": "budget-js", "when": ["src/**", "static/**", "package.json", "package-lock.json", "vite.config.*", "svelte.config.*"],
-      "dependsOn": ["build"], "command": ["node", "scripts/e2e/bundle-budget.mjs"], "timeoutMs": 120000 }
-  ]
-},
-{
-  "id": "browser",
-  "stage": "full",
-  "command": ["npm", "run", "test:browser"],
-  "affected": ["npm", "run", "test:e2e:changed", "--", "{{baseSha}}", "--project=browser"],
-  "early": [
-    { "id": "captures-accueil", "when": ["src/routes/(public)/+page.svelte", "src/lib/home/**"],
-      "command": ["npx", "playwright", "test", "tests/e2e/browser/accueil-captures.e2e.ts", "--repeat-each=3", "--retries=0"],
-      "lock": { "resource": "e2e" }, "timeoutMs": 300000 }
-  ]
-}
-```
-
-`affected` et `early` se complètent : `affected` lance les tests que le graphe d'imports des tests relie au changement ; `early` couvre ce que ce graphe ne voit pas (un budget de taille, une capture d'un écran qu'aucun test n'importe). `--repeat-each` (sans relance, `--retries=0`) dans la commande tôt attrape une instabilité avant la suite complète.
-
 `lock` (facultatif, 3.0.0-alpha.4) : la ressource que le contrôle partage avec d'autres copies du dépôt (une pile de test), tenue autour de sa commande ; son délai (`timeoutMs`) ne commence qu'une fois le verrou obtenu, l'attente est notée dans le reçu (`lockWaitMs`). Deux formes :
 - `{ "resource": "e2e", "waitMs": 1800000 }` : bail de `apv lock` ([LOCKS.md](LOCKS.md)), dans le même dossier (`APV_LOCK_DIR` compris), visible par `apv lock status` ; la commande reçoit `APV_LOCK_HELD` (un `apv lock run e2e` à l'intérieur ne s'attend pas lui-même) ; déjà tenu par l'appelant, il n'est pas repris ;
-- `{ "file": "../../pilotage/.e2e.lock", "fileEnv": "E2E_LOCK_FILE", "waitMs": 1800000 }` : `flock` du noyau sur ce fichier (relatif au répertoire Git commun, ou absolu ; créé au besoin), pris par `flock(1)` (util-linux) dont la commande du contrôle est un descendant : un script de projet qui prouve le verrou par un ancêtre détenteur (`/proc/locks`) le voit tenu. Une suite lancée sous ce verrou (`flock <verrou> apv gates run`) n'est pas refusée : ses contrôles qui le demandent ne le reprennent pas et passent un à la fois par un verrou compagnon, dans leur `waitMs` : un fichier vide par fichier de verrou réel (deux chemins vers le même fichier partagent le sien), dans `<APV_LOCK_DIR, sinon ${XDG_STATE_HOME:-~/.local/state}/apv/locks>/under/`, laissé en place. Si ce dossier ne peut pas servir, le compagnon va dans `<dossier temporaire>/apv-under-<uid>/`, puis dans `<verrou>.under` à côté du verrou. Un dossier n'est retenu que s'il est un vrai dossier de ce compte, fermé aux autres. Le partage entre suites suppose le même APV_LOCK_DIR (ou XDG_STATE_HOME, HOME). Une suite lancée par un tel contrôle ne reprend pas le compagnon. `fileEnv` : variable qui, transmise au contrôle (`passEnv`) et non vide, remplace le chemin (relatif au dépôt).
+- `{ "file": "../../pilotage/.e2e.lock", "fileEnv": "E2E_LOCK_FILE", "waitMs": 1800000 }` : `flock` du noyau sur ce fichier (relatif au répertoire Git commun, ou absolu ; créé au besoin), pris par `flock(1)` (util-linux) dont la commande du contrôle est un descendant : un script de projet qui prouve le verrou par un ancêtre détenteur (`/proc/locks`) le voit tenu. `fileEnv` : variable qui, transmise au contrôle (`passEnv`) et non vide, remplace le chemin (relatif au dépôt).
 `waitMs` : attente maximale, 30 min par défaut ; au-delà, reçu `timed_out`, commande jamais lancée. Sans `lock`, rien ne change (empreinte de configuration comprise). À ne pas confondre avec `resources`, qui n'ordonne que les contrôles d'une même exécution.
 
 `retryFailed` (facultatif, 3.0.0-alpha.4) : `{ "command": [...], "testPattern": "<expression régulière>" }`. Si la commande du contrôle échoue d'elle-même (statut `failed`), `apv gates run` vérifie que HEAD et l'arbre n'ont pas changé, puis lance une seule fois `command` (mêmes substitutions, variables, délai et verrou), qui doit ne relancer que les tests en échec. Réussite : statut `passed_after_retry`, compté comme réussi mais signalé « instable » par `gates run` et `gates verify` ; échec : échec normal. `testPattern` relève les tests concernés dans la sortie de la première passe (groupe 1 s'il existe, sinon la correspondance entière ; codes de couleur retirés ; 100 au plus). Exemple pour Playwright (reporter `list` ou `line`, qui écrit `  1) [chromium] › tests/a.spec.ts:3:5 › titre`) :
@@ -166,14 +112,6 @@ Exemple (projet pilote) : le budget JavaScript des pages, extrait du test comple
 ```
 
 `--last-failed` relit `test-results/.last-run.json`, écrit par la première passe : la relance ne rejoue que ses tests en échec. Pourquoi la garde ne baisse pas : chaque test a réussi sur le code exact du commit, arbre inchangé ; un test qui échoue deux fois fait échouer le contrôle ; un délai dépassé n'est jamais relancé ; l'instabilité reste visible (statut propre, tests listés) et se traite comme un constat.
-
-`affectedList` (facultatif, 4.0.0-alpha.5, avec `retryFailed`, [UNE-SUITE-PAR-PR.md](UNE-SUITE-PAR-PR.md#3-un-test-instable-sans-rapport-ne-bloque-plus-la-production)) : commande (sans shell, mêmes substitutions, `{{baseSha}}` obligatoire en argument entier) qui **liste** les fichiers de test que `affected` lancerait pour les changements depuis `{{baseSha}}`, par le même calcul (graphe d'imports des tests) ; tout chemin du commit dans sa sortie compte. `apv release` la lit **à la production** (jamais dans le changement) et la lance dans la copie neuve avec `{{baseSha}}` = la production : un test relancé par `retryFailed` qu'elle ne liste pas, dont le fichier n'est ni ajouté ni modifié depuis la production, n'empêche plus la mise en ligne ; il est écrit comme constat. Sans elle, tout test instable bloque la mise en ligne, comme avant. Exemple pour Playwright :
-
-```json
-"affectedList": ["npx", "playwright", "test", "--list", "--project=browser", "--only-changed", "{{baseSha}}"]
-```
-
-`testPattern` de `retryFailed` doit alors nommer chaque test en échec avec son fichier (`tests/a.spec.ts:3:5 › titre`) : un test sans fichier dans son nom bloque.
 
 `repeatChanged` (facultatif, 3.0.0-alpha.6) : la répétition des fichiers de test que le changement ajoute ou modifie, pour qu'un test instable (attente à durée fixe, horloge réelle, données partagées entre tests) soit rouge sur la branche qui l'apporte plutôt que, des jours plus tard, dans la suite d'un autre. Avec `apv gates run --base <ref>`, une fois la commande du contrôle réussie, `command` est lancée sur ces seuls fichiers, ajoutés à la fin, sous le même verrou ; tout échec rend le contrôle rouge, jamais masqué par `retryFailed` ([CLI.md](CLI.md#apv-gates-run)). Champs :
 - `paths` (obligatoire) : motifs des fichiers de test concernés (`*`, `**`, `?`, sans accolades ni `!`) ;
@@ -389,7 +327,7 @@ Si l'Implementer configuré n'a pas de shell (adaptateur Claude natif), une spec
 
 ## Arborescence : `structure`
 
-Section APV3, facultative, lue par `apv structure check`, `apv structure map` et `apv map` ([CLI.md](CLI.md#apv-structure-check), [STRUCTURE.md](STRUCTURE.md)) et validée par le chargeur commun (`apv status` signale une valeur invalide, jamais la section comme ignorée). Absente, tout tourne avec les valeurs par défaut. Avec `--base`, c'est la section **de la base** qui juge le changement : la modifier passe par une PR de configuration à part, décidée par l'opérateur.
+Section APV3, facultative, lue par `apv structure check` ([CLI.md](CLI.md#apv-structure-check)) et validée par le chargeur commun (`apv status` signale une valeur invalide, jamais la section comme ignorée). Absente, l'analyse tourne avec ses valeurs par défaut et ne signale que des avertissements.
 
 ```json
 {
@@ -399,33 +337,30 @@ Section APV3, facultative, lue par `apv structure check`, `apv structure map` et
     "roles": { "-gateway": "client", "-store": "store", "session": null },
     "domains": ["offer-prefill"],
     "ignore": ["src/lib/generated/**"],
-    "severity": { "flat-folder": "error", "mixed-roles": "error" },
-    "architectureMap": "docs/carte-architecture.md",
-    "profile": "sveltekit"
+    "severity": { "flat-folder": "error", "mixed-roles": "error" }
   }
 }
 ```
 
 - `roots` : dossiers analysés, relatifs à la racine du dépôt (par défaut tout le dépôt, fichiers de code seulement).
-- `maxFlatFiles` : fichiers de code qu'un dossier peut contenir directement, tests et fichiers compagnons à part (12 par défaut, de 2 à 1000). Au-delà : `flat-folder` (découpage proposé) et, avec `--base`, tout ajout refusé (`flat-growth`).
+- `maxFlatFiles` : fichiers de code qu'un dossier peut contenir directement, tests et fichiers compagnons à part (12 par défaut, de 2 à 1000).
 - `roles` : rôles ajoutés à ceux par défaut. Une clé qui commence par `-` est un suffixe de nom (`-gateway` : `payment-gateway.ts` a le rôle `client`, domaine `payment`) ; une autre clé est un mot du nom, pour un utilitaire transverse sans domaine (`session` : rôle `auth`). `null` retire un rôle par défaut. Clés et rôles en kebab-case.
-- `domains` : noms de domaines connus, en kebab-case. Un domaine de plusieurs mots (`offer-prefill`) regroupe les fichiers qui commencent par lui ; un domaine déclaré suffit à regrouper deux fichiers et sert de nom au découpage par usage. Les noms des dossiers du projet sont déjà des domaines connus.
-- `ignore` : globs (`*`, `**`, `?`, `{a,b}`) des chemins laissés de côté, en plus des exclusions par défaut (`node_modules/` partout ; `dist/`, `build/`, `coverage/`, `vendor/` et dossiers qui commencent par un point à la racine du dépôt ou d'un paquet, pour l'existant seulement : ce qu'un changement crée est toujours analysé). Seule façon d'écarter un fichier, un lien symbolique ou un sous-module qu'un changement ajoute ; lue à la base.
-- `severity` : `warning` ou `error`, pour tous les constats ou par code. Par défaut `warning` pour l'analyse (`flat-folder`, `repeated-prefix`, `mixed-roles`, `stray-file` : sans `--base`, une gravité `error` fait sortir en `1` ; avec `--base`, seulement sur un fichier créé ou déplacé par le changement) et `error` pour la comparaison avec la base (`flat-growth`, `architecture-map` : seul ce que le changement ajoute bloque).
-- `architectureMap` : chemin de la carte de l'architecture (Markdown), `docs/carte-architecture.md` par défaut.
-- `profile` : profil de pile dont les conventions s'appliquent (`sveltekit`, `nextjs`, `nuxt`, `astro`, `angular`, `vue`, `react`, `python`, `go`, `generic`) ; détecté par les dépendances et les fichiers marqueurs quand il est absent.
+- `domains` : noms de domaines connus, en kebab-case. Un domaine de plusieurs mots (`offer-prefill`) regroupe les fichiers qui commencent par lui ; un domaine déclaré suffit à regrouper deux fichiers. Les noms des dossiers du projet sont déjà des domaines connus.
+- `ignore` : globs (`*`, `**`, `?`, `{a,b}`) des chemins laissés de côté, en plus de `node_modules/`, `dist/`, `build/`, `coverage/`, `vendor/` et des dossiers qui commencent par un point.
+- `severity` : `warning` (défaut) ou `error`, pour tous les constats ou par code (`flat-folder`, `repeated-prefix`, `mixed-roles`, `stray-file`). `apv structure check` sort en `1` dès qu'un constat a la gravité `error`.
 
-**Le contrôle.** `apv init` et `apv onboard` déclarent pour tout projet :
+**En faire un contrôle.** Une fois l'arborescence rangée avec l'opérateur (plan validé, `git mv`, imports mis à jour), passez en `error` les constats à ne plus laisser revenir et déclarez la commande comme contrôle de tâche, en lecture seule :
 
 ```json
 {
   "gates": [
-    { "id": "structure", "command": ["apv", "structure", "check", "--base", "{{baseSha}}"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true }
-  ]
+    { "id": "structure", "command": ["apv", "structure", "check"], "covers": ["architecture"], "stage": "task", "readOnly": true }
+  ],
+  "structure": { "severity": { "flat-folder": "error", "mixed-roles": "error", "stray-file": "error" } }
 }
 ```
 
-`{{baseSha}}` est la base du passage (`apv gates run --base <ref>`), qui fait partie de la clé de preuve de chaque reçu. Un projet pas encore rangé n'est jamais rouge pour son existant : ses dossiers à plat et ses dossiers non décrits sont signalés sans bloquer, seul ce que le changement ajoute bloque. Le rangement est une spec à part, décidée par l'opérateur (compétence `apv:structure`). `apv` doit être sur le `PATH` de la machine (plugin activé ou `npm link`), sinon utilisez `["node", "<chemin du plugin>/dist/cli.js", "structure", "check", "--base", "{{baseSha}}"]`.
+`apv` doit être sur le `PATH` de la machine (plugin activé ou `npm link`), sinon utilisez `["node", "<chemin du plugin>/dist/cli.js", "structure", "check"]`. Sans gravité `error`, le contrôle réussit toujours : il ne fait que rapporter. Un projet pas encore rangé garde `warning` (ou relève `maxFlatFiles`) plutôt qu'un contrôle rouge dès le départ ; le rangement est une spec à part, décidée par l'opérateur.
 
 ## Exécution : `run`
 
@@ -449,20 +384,17 @@ Repère (nuit du 24 au 25 septembre 2026, même projet pilote) : une session a l
 
 ## Taille des specs : `spec`
 
-Section APV3, facultative, lue par `apv spec validate` et validée par le chargeur commun (entier hors bornes ou propriété inconnue refusés). Elle fixe les seuils au-delà desquels la validation **avertit**, sans jamais rendre la spec invalide ni changer le code de sortie (seul `userScenarios: "error"`, plus bas, fait d'un constat une erreur).
+Section APV3, facultative, lue par `apv spec validate` et validée par le chargeur commun (entier hors bornes ou propriété inconnue refusés). Elle fixe les seuils au-delà desquels la validation **avertit**, sans jamais rendre la spec invalide ni changer le code de sortie.
 
 ```json
-{ "spec": { "maxTasks": 6, "maxAcceptance": 30, "maxDepth": 3, "minUserScenarios": 3, "userScenarios": "warning" } }
+{ "spec": { "maxTasks": 6, "maxAcceptance": 30, "maxDepth": 3 } }
 ```
 
 - `maxTasks` (défaut `6`, de 1 à 100) : nombre de tâches au-delà duquel la validation propose de découper la demande en specs indépendantes de 4 à 6 tâches, livrées en parallèle (sur des piles de test distinctes quand le projet en déclare plusieurs, par exemple des ressources de contrôle distinctes), chacune avec sa PR.
 - `maxAcceptance` (défaut `30`, de 1 à 1000) : même avertissement au-delà de ce nombre de critères d'acceptation.
 - `maxDepth` (défaut `3`, de 1 à 100) : nombre de couches du graphe des tâches (les vagues de `apv run start`) au-delà duquel la validation nomme le chemin le plus long. Chaque couche attend l'intégration de la précédente : le motif « contrats d'abord » (une première tâche pose les types, schémas, signatures de fonctions, interfaces de composants et migrations, avec des implémentations minimales testées) laisse les tâches suivantes se construire en parallèle contre ces contrats. Une dépendance ne se déclare que si la tâche a besoin du code de l'autre, pas seulement de son existence future.
-- `minUserScenarios` (défaut `3`, de 1 à 5) et `userScenarios` (`warning` par défaut, ou `error`) : **scénarios utilisateur** (`SPEC_USER_SCENARIOS`, hors `--draft`). Une spec qui touche une interface porte de `minUserScenarios` à 5 critères `AC-USER-<n>`, écrits « Étant donné … quand … alors … » (ou « Given … When … Then … »), du point de vue de la personne cible, chacun avec une vérification qui nomme un test navigateur (navigateur, browser, Playwright, Cypress, e2e…) ou le parcours joué par la personne cible avant la fusion. Une spec touche une interface quand l'outil le sait déjà : `experience.uiImpact` autre que `none` ; ou, pour une spec qui ne déclare pas `experience`, un chemin autorisé d'une tâche dans la classe `ui` des revues (`review.paths.ui`, ou ses défauts : les chemins qui gardent la revue de fidélité) ou une maquette validée citée (un texte de la spec qui nomme `design.dir`, `docs/design/` par défaut). Un `"uiImpact": "none"` déclaré, avec sa raison, fait foi : sur le projet pilote, deux specs de rangement (composants déplacés sans effet visible, maquettes citées pour les garder hors du diff) auraient sinon été signalées à tort ; la revue de fidélité suit toujours les chemins. Un scénario mal formé (sans « Étant donné, quand, alors » dans l'ordre, ou sans test navigateur ni parcours joué) est signalé aussi, et chaque message dit quoi ajouter. Une spec sans interface n'est pas concernée. `warning` laisse valider les specs existantes ; `error` refuse la spec, à `apv spec validate` comme à `apv run start`.
 
-Les avertissements sortent aussi en JSON (`warnings`, codes `SPEC_SIZE`, `SPEC_DEPTH` et `SPEC_USER_SCENARIOS`, `limits`, les seuils appliqués, et `userScenarios`, le seuil et le niveau des scénarios). Une spec déjà validée par l'opérateur s'exécute telle quelle.
-
-Repère (projet pilote, 4 octobre 2026) : les specs rédigées décrivaient surtout le code, sans scénario du point de vue de la personne qui utilise l'écran ; l'opérateur a demandé 3 à 5 scénarios par spec, joués par la personne cible avant la fusion, portés par le pipeline pour tous les projets.
+Les avertissements sortent aussi en JSON (`warnings`, codes `SPEC_SIZE` et `SPEC_DEPTH`, et `limits`, les seuils appliqués). Une spec déjà validée par l'opérateur s'exécute telle quelle.
 
 Repère (projet pilote, nuit du 24 au 25 septembre 2026) : une spec de 12 tâches et 65 critères, en chaîne de 5 couches (base, données, relances et documents, ajout et actions et fiche, liste et colonnes), a demandé environ 9 h d'exécution, chaque couche attendant l'intégration de la précédente.
 
@@ -497,8 +429,6 @@ Section APV3, facultative, validée par le chargeur commun (propriété inconnue
 - `resource` (défaut `"dast"`) : le verrou à bail pris pendant le scan, comme `apv lock run <ressource>` ; un scan qui se sert d'une pile partagée (base locale de test, ports fixes) y nomme la ressource de cette pile (par exemple `"e2e"`).
 - `timeoutMs` (défaut `3600000`, de 1000 à 14400000) : durée maximale ; au-delà, la commande est arrêtée (SIGTERM, puis SIGKILL) et le scan est `timed_out`.
 - `passEnv` (défaut `[]`) : variables transmises en plus de `environment.passEnv` par défaut (`PATH`, `LANG`, dossiers temporaires) ; un client Docker a souvent besoin de `HOME`.
-- `requiredEnv` (relecture de 1786b40, facultatif) : variables sans lesquelles le contrôle ne peut pas tourner (l'adresse et les clés d'une pile de test) ; une absente, apv ne lance pas le contrôle (reçu `spawn_error`) et inscrit le constat dans le reçu (`finding`) : seule une panne ainsi constatée par l'outil permet à `apv release auto` de relancer la suite au même commit.
-- `envFile` (facultatif, 3.0.0-alpha.15) : fichier `KEY=valeur` chargé dans l'environnement de la commande (`~/…` pour le dossier personnel, relatif à la copie sinon), par exemple `"~/.config/mon-projet/dast.env"` pour l'adresse de l'aperçu local et un compte de test. Refusé, rien n'est lancé, s'il pose une variable réservée (`APV_*`, `PATH`, `NODE_OPTIONS`, `NODE_PATH`, `HOME`, `LD_*`, `DYLD_*`) ou si une valeur ressemble à une adresse hors bouclage (liste d'autorisation : seuls `localhost`, `*.localhost`, `127.0.0.0/8` et `::1` sont admis ; détail dans [CLI.md](CLI.md#apv-dast-run)) : le scan ne vise jamais la production. Un compte de test s'écrit sur un domaine réservé aux exemples (`demo@example.org`). `summary.json` dit s'il a été chargé et combien de variables, jamais leurs valeurs. La copie reçoit aussi seule ses dépendances (`npm ci --ignore-scripts`) quand elle a un `package-lock.json` que l'outil n'a pas encore installé ([CLI.md](CLI.md#apv-dast-run)).
 - `description` (facultatif, 500 caractères au plus) : ce que fait le scan, recopié dans `summary.json`.
 
 Repère (projet pilote, septembre 2026) : la revue sécurité prévoyait un scan ZAP par Docker ; les permissions des agents de revue refusaient `docker run` et `docker pull`, et le scan n'a tourné sur aucune des livraisons suivies.
@@ -515,17 +445,15 @@ Repère (projet pilote, septembre 2026) : la revue sécurité prévoyait un scan
     "migrations": ["supabase/migrations/**"],
     "personal": ["src/lib/export/**", "src/routes/**/export/**"],
     "legal": ["src/routes/(legal)/**"],
-    "neutral": ["tests/**", "**/*.test.ts", "docs/**"],
-    "tooling": ["scripts/test-*.mjs"]
+    "neutral": ["tests/**", "**/*.test.ts", "docs/**"]
   },
   "terms": { "data": [".from('", ".rpc("], "personal": ["cookie", "localstorage", "email"] },
   "always": ["fidelite"]
 } }
 ```
 
-- `paths` : motifs par classe, syntaxe portable des chemins autorisés (`*`, `**`, `?` ; accolades et `!` refusés), 500 au plus par classe. `ui` (composants, styles, gabarits : garde `fidelite`), `data` (requêtes, dépôts, modèles : `donnees`), `migrations` (migrations et schémas : `donnees` et `rgpd`, renommage compris ; `db.migrations` s'y ajoute), `personal` (export, cookies, consentement, traceurs, registre `.apv/rgpd/` : `rgpd`), `legal` (mentions, confidentialité, CGU : `rgpd`), `neutral` (tests, documentation, outillage : aucun domaine, seulement pour un fichier qu'aucune autre classe ne décrit). Défauts : `src/review/config.ts` (`DEFAULT_REVIEW_PATHS`), par exemple `**/*.svelte`, `**/*.css`, `**/components/**` pour `ui`, `**/repositories/**`, `**/db/**`, `**/*schema*.*` pour `data`, `**/migrations/**`, `**/*.sql` pour `migrations`, `**/legal/**`, `**/*cgu*.*` pour `legal`, `**/*.test.*`, `docs/**`, `.apv/**` pour `neutral`. Une maquette validée touchée (dossier `design.dir`) garde `fidelite`. `tooling` (mocks, fixtures, utilitaires de test : `__mocks__/`, `fixtures/`, `test-utils/`... : aucun domaine en propre) et `server` (code serveur et configuration : `**/server/**`, `**/*.server.*`, `**/api/**`, `**/*.config.*`, `**/*.json`, `**/*.yml`... : aucun domaine en propre) complètent les classes (3.0.0-alpha.15). `personal` comprend aussi les modèles de messages (`**/email*/**`, `**/emails/**`, `**/mail/**`, `**/notifications/**`). **Priorités** : un fichier `neutral` ou `tooling` qui est aussi `server`, un chemin sensible de la voie high ou une configuration (liste fixe, non configurable : `.apv/config.json`, `pipeline.v2.json`, `*.config.*`, lint et format, `package.json` et verrous, `tsconfig*.json`, `.env*`, `.github/**`, `Dockerfile*`...) garde `fidelite`, `donnees` et `rgpd` ; seul un fichier nommé comme un test (`*.test.*`, `*.spec.*`, `*.e2e.*`) y échappe, jamais une configuration. Un fichier propre au projet que les défauts ne décrivent pas se classe ici : `"ui": ["src/lib/copy/**"]`, `"tooling": ["scripts/test-*.mjs"]` ; une clé donnée remplace sa liste par défaut, la reprendre en entier si on l'étend.
-- `terms` : mots (sous-chaînes, sans casse, de 2 à 200 caractères) qui, dans les lignes changées d'un fichier `ui` ou `data`, et aussi d'un test, d'un document ou d'un fichier d'outillage (3.0.0-alpha.15 : une fixture avec des données personnelles), gardent `donnees` (`data` : une requête écrite dans une page, du SQL dans une chaîne) ou `rgpd` (`personal` : un traceur, un cookie, un champ personnel, ce qu'un texte dit de la conservation, de l'hébergement, des prestataires, des transferts ou de la suppression). Une adresse e-mail réelle (domaine non réservé aux exemples) ajoutée garde aussi `rgpd`. Défauts : `DEFAULT_REVIEW_TERMS`, complétés en 3.0.0-alpha.15 (CLI.md). Une fausse alerte garde une revue, jamais l'inverse.
-- **Niveau de risque** (3.0.0-alpha.15, `src/review/risk.ts`) : `apv review plan` donne le niveau du diff et sa raison, décidé par le **chemin** seul (le contenu n'est jamais lu comme du « texte » : les relectures de la PR #110 ont contourné une telle lecture de neuf façons). **Faible** quand chaque fichier est un test (nommé `*.test.*`, `*.spec.*`, `*.e2e.*`, ou sous un dossier `test/` ou `tests/`), de la documentation (`*.md` classée neutre (`docs/`, `README`, `CHANGELOG`) hors dossiers servis et hors texte légal) ou une maquette validée, sans terme de `review.terms` ni adresse e-mail réelle dans ses lignes changées : le plan garde `securite`, plus `fidelite` pour une maquette. **Élevé** pour tout le reste, interface comprise (un `.svelte` dont seul le texte change) : le plan est celui de 3.0.0-alpha.14. `--force` et `always` restent au-dessus du niveau. `apv rules check` exige exactement les domaines du plan au commit (même calcul, configuration lue à la base commune), et `apv gates run --since` n'accepte qu'un diff de risque faible. Les instructions des agents (`agents/**`, `workflows/**`, `skills/**`, `SKILL.md`, `.apv/brief.md`, `CLAUDE.md`, `AGENTS.md`, `.claude/**`) sont des chemins sensibles, de risque élevé ; un `.md` non classé (`articles/`) aussi. L'outillage (`fixtures/`, `__mocks__/`) hors d'un dossier `test/` ou `tests/` garde tous les domaines (`src/lib/fixtures/demo.ts`), et un dossier `tests/` sous un dossier de routage (`routes/`, `pages/`, `app/`) n'est jamais un dossier de tests (`src/routes/tests/+page.svelte`).
+- `paths` : motifs par classe, syntaxe portable des chemins autorisés (`*`, `**`, `?` ; accolades et `!` refusés), 500 au plus par classe. `ui` (composants, styles, gabarits : garde `fidelite`), `data` (requêtes, dépôts, modèles : `donnees`), `migrations` (migrations et schémas : `donnees` et `rgpd`, renommage compris ; `db.migrations` s'y ajoute), `personal` (export, cookies, consentement, traceurs, registre `.apv/rgpd/` : `rgpd`), `legal` (mentions, confidentialité, CGU : `rgpd`), `neutral` (tests, documentation, outillage : aucun domaine, seulement pour un fichier qu'aucune autre classe ne décrit). Défauts : `src/review/config.ts` (`DEFAULT_REVIEW_PATHS`), par exemple `**/*.svelte`, `**/*.css`, `**/components/**` pour `ui`, `**/repositories/**`, `**/db/**`, `**/*schema*.*` pour `data`, `**/migrations/**`, `**/*.sql` pour `migrations`, `**/legal/**`, `**/*cgu*.*` pour `legal`, `**/*.test.*`, `docs/**`, `.apv/**` pour `neutral`. Une maquette validée touchée (dossier `design.dir`) garde `fidelite`.
+- `terms` : mots (sous-chaînes, sans casse, de 2 à 200 caractères) qui, dans les lignes changées d'un fichier `ui` ou `data`, gardent `donnees` (`data` : une requête écrite dans une page) ou `rgpd` (`personal` : un traceur, un cookie, un nouveau champ personnel). Défauts : `DEFAULT_REVIEW_TERMS`. Une fausse alerte garde une revue, jamais l'inverse.
 - `always` : domaines toujours gardés, quel que soit le diff (`fidelite`, `donnees`, `rgpd` ; `securite` l'est de toute façon). L'opérateur en force un autre au lancement par `apv review plan --force <domaine>`.
 - Aucune clé ne saute la revue sécurité : une clé inconnue (`skip`, `never`) est refusée par le schéma, et `apv run set <id> review:securite skipped` est refusé par l'état.
 
@@ -556,7 +484,7 @@ Section APV3, facultative, validée par le chargeur commun (3.0.0-alpha.4, spéc
 ```json
 {
   "suite": {
-    "queue": { "lockFile": "apv/locks/full-suite.lock", "waitMs": 7200000, "maxLoad": 6, "loadWaitMs": 1800000, "slots": "per-stack" },
+    "queue": { "lockFile": "apv/locks/full-suite.lock", "waitMs": 7200000, "maxLoad": 6, "loadWaitMs": 1800000 },
     "ports": [4173, 4174, 4273, 4274]
   }
 }
@@ -564,13 +492,10 @@ Section APV3, facultative, validée par le chargeur commun (3.0.0-alpha.4, spéc
 
 - `queue.enabled` (défaut `true`) : `false` retire la file (chaque suite démarre aussitôt, comme avant 3.0.0-alpha.4).
 - `queue.lockFile` (défaut `apv/locks/full-suite.lock`) : verrou à bail de la file, relatif au répertoire Git commun (`git rev-parse --git-common-dir`, commun à tous les worktrees du dépôt) ou absolu (partagé par plusieurs dépôts de la machine) ; nom de fichier en `.lock` ([A-Za-z0-9._-]). Format et garanties de `apv lock` ([LOCKS.md](LOCKS.md)) : FIFO, propriétaire vérifié, bail renouvelé, reprise d'un détenteur mort journalisée ; `apv lock status --dir <dossier du fichier>` le montre.
-- `queue.waitMs` (défaut 2 h, de 0 à 24 h) : attente maximale de la file (toutes ses places comprises) ; au-delà, refus `SUITE_QUEUE`, les places prises sont rendues, rien n'est exécuté.
-- Parts partagées (4.0.0-alpha.4) : les charges lourdes hors suite (`apv suite share`, `apv gates run --stage task` sur pile ou commande ciblée, `apv lock run` d'une pile) prennent une part partagée de cette file (bails `<nom>-share-<id>`) : elles attendent toute suite, et avec `slots: 1` une suite attend la fin des parts en cours.
-- `queue.shareMaxMs` (relecture de 1786b40, défaut 2 h, de 1 ms à 24 h) : durée maximale d'une part partagée ; au-delà, son bail n'est plus renouvelé et une suite complète ne l'attend plus (« au-delà de sa durée maximale »), la commande continue.
-- `queue.slots` (3.0.0-alpha.20, défaut `1`) : nombre de suites complètes en même temps sur la machine. Chaque suite tient, dans la file, la **place de chaque pile qu'elle utilise** (bail `<nom de la file>-stack-<pile>` à côté de `lockFile`) : deux suites ne partagent jamais une pile, quel que soit le réglage. Les piles utilisées sont celles de `--stacks`, sinon celles que désignent les verrous de ses contrôles. `1` : en plus, la file entière (une seule suite à la fois, comme avant). `"per-stack"` : les places de ses piles seulement, donc une suite par pile en même temps ; une suite qui n'utilise aucune pile déclarée prend la file entière. Un nombre N (2 à 64) : une des N places numérotées (`<nom>-slot-<k>`, la première libre), puis celles de ses piles. Un contrôle dont le verrou n'est celui d'aucune pile déclarée fait prendre la file entière et la place de toutes les piles (l'outil ne sait pas laquelle il utilise). Avant toute autre, une suite tient la place de sa copie (`<nom>-copy-<empreinte du chemin canonique>`) : jamais deux suites dans la même copie, quel que soit le réglage. Les places se prennent toujours dans le même ordre (copie, file entière, place numérotée, piles triées) : deux suites ne s'attendent jamais en cycle. `apv web audit` prend toutes les places (aucune suite ne tourne pendant une mesure), et une suite dont un contrôle lance `apv web audit` les prend toutes pour lui (dans la suite, l'audit n'en prend aucune) ; `apv stacks stop` et `idle-stop` prennent la place de la pile visée sans attendre.
+- `queue.waitMs` (défaut 2 h, de 0 à 24 h) : attente maximale de la file ; au-delà, refus `SUITE_QUEUE`, rien n'est exécuté.
 - `queue.maxLoad` (facultatif, nombre de 0,1 à 10000) : une fois le verrou obtenu, la suite attend que la charge moyenne sur 1 minute (`os.loadavg()`) passe sous ce seuil ; repère : le nombre de cœurs, ou un peu moins si des agents travaillent en même temps.
 - `queue.loadWaitMs` (défaut 30 min) : attente maximale de la charge ; au-delà, la suite démarre quand même et le note (sortie, `summary.json`).
-- `ports` (défaut aucun, 100 au plus, sans doublon) : ports libérés des orphelins de la copie où tourne la suite (processus lancés dans ce worktree lié), jamais d'une autre copie ni du checkout principal ; en pratique les ports de `resources`. Depuis 3.0.0-alpha.20, un port déclaré par une pile (`stacks[].ports`) que la suite n'utilise pas n'est ni vérifié ni libéré : il est à la suite ou à l'agent qui travaille sur cette pile.
+- `ports` (défaut aucun, 100 au plus, sans doublon) : ports libérés des orphelins de la copie où tourne la suite (processus lancés dans ce worktree lié), jamais d'une autre copie ni du checkout principal ; en pratique les ports de `resources`.
 
 La file ne coûte rien à une suite seule ; elle évite qu'une suite complète en rende d'autres instables par la charge (projet pilote, 28 septembre 2026 : quatre chantiers en parallèle, charge jusqu'à 16, six suites rouges sur des tests chaque fois différents).
 
@@ -599,8 +524,6 @@ Section APV3, facultative, validée par le chargeur commun (3.0.0-alpha.5, spéc
 - `env` et `envFile` (facultatifs) : variables qui désignent la pile, et fichier `CLÉ=valeur` à charger (relatif au répertoire Git commun ou absolu ; `export`, guillemets et commentaires admis, aucune expansion) ; un contrôle réparti sur la pile par `apv gates run --stacks` les reçoit, pour les noms de son `passEnv`.
 - `ports` (facultatif) : ports de ses serveurs de test ; ce sont aussi des ports de test déclarés pour `apv procs`, et une pile dont un port écoute est occupée pour `apv stacks idle-stop`.
 - `stop`, `start` (facultatifs, sans shell, lancés depuis la racine du dépôt, sous le verrou de la pile) : arrêt et redémarrage de la pile par `apv stacks idle-stop` et `apv stacks start` ; `commandTimeoutMs` (défaut 10 min) les borne.
-- `fingerprint` (facultatif, 3.0.0-alpha.27, sans shell, lancé depuis la racine de la copie avec `environment.passEnv` et les variables de la pile, borné à 2 min) : commande dont la sortie dit **contre quoi** les contrôles tournent sur cette pile (digests des images Docker, version de la CLI Supabase…). Lancée une fois par exécution pour chaque pile utilisée ; un contrôle est alors repris d'une autre pile dont l'empreinte a imprimé la même sortie (identité de reprise, `reuse` plus haut). Sans elle, jamais d'une pile à l'autre. Une empreinte en échec ou vide : aucun contrôle de cette pile n'est repris, ni ne le sera de cette exécution. Exemple : `["sh", "-c", "docker image inspect --format '{{.Id}}' public.ecr.aws/supabase/postgres:15.8.1.085 && npx -y supabase@2.117.0 --version"]` ; n'y imprimer que ce qui change le résultat des tests (pas les ports ni les noms de conteneurs).
-- `normalizeEnv` (facultatif, 4.0.0-alpha.5, avec `fingerprint` seulement, [UNE-SUITE-PAR-PR.md](UNE-SUITE-PAR-PR.md#12-pile-normalisée--stacksnormalizeenv)) : variables de la pile (de son `env`, de son `envFile`, ou `fileEnv` d'un verrou) qui ne disent **que où** elle est, par exemple `["E2E_STACK", "PUBLIC_SUPABASE_URL", "SUPABASE_URL"]` : leur valeur entière est normalisée dans l'identité de reprise, comme les ports déclarés. Une branche vérifiée sur la pile 2 est alors reprise par la mise en ligne sur la pile 1 quand les deux piles impriment la même empreinte. Refusés : sans `fingerprint`, un nom en double, une variable qui change la manière dont les contrôles tournent (`PATH`, `HOME`, `LANG`, `LC_ALL`, `TZ`, `TMPDIR`, `NODE_OPTIONS`, `NODE_ENV`, `NODE_PATH`, `CI`, `SHELL`, `LD_PRELOAD`, `LD_LIBRARY_PATH`). Ne normaliser qu'une adresse : une variable qui change le résultat des tests rendrait une reprise fausse.
 - `idleAfterMs` (facultatif, d'une minute à 7 jours, défaut 30 min) : inactivité prouvée avant l'arrêt.
 - `description` (facultatif).
 
@@ -608,31 +531,19 @@ Refusés : deux piles au même `id`, au même `lockFile`, à la même `resource`
 
 ## Lot et copies : `batch`
 
-Section APV3, facultative (3.0.0-alpha.5, spécification sections 18.5 et 18.6) : la préparation d'une copie neuve du dépôt avant qu'une suite complète y tourne, celle d'un lot de `apv stack batch` et celles des piles suivantes de `apv gates run --stacks`. Depuis 3.0.0-alpha.20, aussi la copie où tourne la suite complète elle-même, quand elle a un `package-lock.json` sans `node_modules` (un worktree neuf) : `setup` y est lancé sous la place de la copie dans la file, après tout refus (une suite refusée n'a rien lancé) ; un échec, ou des fichiers non ignorés écrits par la préparation, refusent la suite (`GATE_SETUP`, rien n'est exécuté) ; jamais dans le checkout principal (refus `GATE_SETUP`) ; la sortie recopiée est masquée (secrets de l'environnement) ; sans `setup`, la suite le signale (« copie de la suite non préparée ») et continue.
+Section APV3, facultative (3.0.0-alpha.5, spécification sections 18.5 et 18.6) : la préparation d'une copie neuve du dépôt avant qu'une suite complète y tourne, celle d'un lot de `apv stack batch` et celles des piles suivantes de `apv gates run --stacks`.
 
 ```json
 { "batch": { "setup": ["npm", "ci", "--no-audit", "--no-fund"], "setupTimeoutMs": 900000, "passEnv": ["npm_config_cache"] } }
 ```
 
-- `setup` (facultatif, sans shell, lancé à la racine de la copie) : typiquement l'installation des dépendances. Elle reçoit `environment.passEnv`, `HOME` et `passEnv`. Après elle, la copie doit être propre (fichiers créés ignorés par Git), sinon la copie est refusée. Depuis 3.0.0-alpha.26, une copie de pile n'est créée et préparée que si un contrôle y est réparti ; la copie d'un lot (`apv stack batch`) est préparée **avant** toute décision de reprise, même quand tous ses contrôles sont ensuite repris d'un arbre identique (relecture sécurité de A1, M2) : l'état local comparé à celui de l'origine (`node_modules`, `.env*`, champ `reuse` ci-dessus) est celui de la copie préparée, jamais celui d'une copie vide. Cette préparation précède la file des suites et les refus de la suite.
+- `setup` (facultatif, sans shell, lancé à la racine de la copie) : typiquement l'installation des dépendances. Elle reçoit `environment.passEnv`, `HOME` et `passEnv`. Après elle, la copie doit être propre (fichiers créés ignorés par Git), sinon la copie est refusée.
 - `setupTimeoutMs` (défaut 15 min, jusqu'à 1 h).
 - Absente : rien n'est préparé (projet sans dépendances à installer).
-- Le dépôt d'APV la déclare depuis 3.0.0-alpha.21 (`["npm", "ci", "--no-audit", "--no-fund"]`) : le 9 octobre 2026, ses lots tournaient sans `node_modules` et le contrôle `typecheck` y échouait. Un projet Node qui lance `apv stack batch` ou des suites dans des worktrees neufs la déclare de même.
-
-## Pile de PR : `stack`
-
-Section APV3, facultative : les branches que `apv stack merge` et `apv stack batch --merge` ne suppriment jamais après une fusion ([CLI.md](CLI.md#apv-stack)), en plus des règles de l'outil (branche cible ou par défaut, protégée, fork, base ou tête d'une PR ouverte, déjà base d'une PR, tête déplacée).
-
-```json
-{ "stack": { "keepBranches": ["develop", "release/*", "env/**"] } }
-```
-
-- `keepBranches` : motifs de noms de branches (`*` à l'intérieur d'un segment, `**` à travers les `/`, `?`, `{a,b}`), 100 au plus. Absente : `develop`, `development`, `release/*`, `releases/*`, `staging`, `hotfix/*`. `[]` : aucune branche gardée par son nom (les autres règles restent).
-- La configuration lue est celle du dépôt où la commande est lancée ; illisible, toutes les branches fusionnées sont gardées (avec la raison).
 
 ## Maquettes validées : `design`
 
-Section facultative : `{ "design": { "dir": "docs/design" } }`, le dossier des maquettes validées ([DESIGN.md](DESIGN.md), [CLI.md](CLI.md#apv-design)), relatif, dans le dépôt, sans espace ; absente : `docs/design`. Une maquette validée est figée par son empreinte sha256 : ses espaces de fin de ligne ne peuvent pas être nettoyés sans changer l'empreinte, et `git diff --check` (contrôle `diff-check`, CI des projets) échouerait sur elle. `apv design register`, et `apv init` ou `apv onboard` quand le dossier est déclaré ou existe, ajoutent donc à `.gitattributes` la ligne `<dir>/**/*.html -whitespace` (racine et sous-dossiers des groupes) si Git ne l'applique pas déjà ; l'ancienne ligne `<dir>/*.html -whitespace` reste acceptée sans groupes et, avec des groupes (`design.groups`, `design.defaultGroup`, rangement par sous-dossier, [DESIGN.md](DESIGN.md#6-configuration)), est remplacée à sa place ; `apv design check` signale son absence (sortie `1` si une maquette validée porte des espaces de fin de ligne). Un dossier changé après coup (nouveau `design.dir`) : relancer `apv design register` ou `apv init`, puis commiter `.gitattributes`.
+Section facultative : `{ "design": { "dir": "docs/design" } }`, le dossier des maquettes validées ([DESIGN.md](DESIGN.md), [CLI.md](CLI.md#apv-design)), relatif, dans le dépôt, sans espace ; absente : `docs/design`. Une maquette validée est figée par son empreinte sha256 : ses espaces de fin de ligne ne peuvent pas être nettoyés sans changer l'empreinte, et `git diff --check` (contrôle `diff-check`, CI des projets) échouerait sur elle. `apv design register`, et `apv init` ou `apv onboard` quand le dossier est déclaré ou existe, ajoutent donc à `.gitattributes` la ligne `<dir>/*.html -whitespace` si Git ne l'applique pas déjà ; `apv design check` signale son absence (sortie `1` si une maquette validée porte des espaces de fin de ligne). Un dossier changé après coup (nouveau `design.dir`) : relancer `apv design register` ou `apv init`, puis commiter `.gitattributes`.
 
 ## Qualité web : `web`
 
@@ -674,171 +585,3 @@ Section APV3, facultative, validée par le chargeur commun (3.0.0-alpha.7, spéc
 - `paths` (défaut aucun) : fichiers qui comptent **toujours** comme web, même dans `neutralPaths` (par exemple `docs/**` pour une documentation publiée) ; un ajout, jamais une restriction.
 
 Contrôle d'une PR, dans `gates` (« non requis » quand elle ne change que des fichiers de `neutralPaths`, recalculé par `apv gates verify`) : `{ "id": "web", "stage": "full", "command": ["apv", "web", "audit", "--preview", "--base", "origin/main"], "timeoutMs": 2400000, "passEnv": ["HOME", "CHROME_PATH"] }` (compter environ 15 s par passage : 7 pages, 2 appareils et 3 passages font 42 passages, une dizaine de minutes, plus la construction de l'aperçu). Il exige une section `preview` ([PREVIEW.md](PREVIEW.md)) dont le port est libre dans la copie de la suite. Après un déploiement : `apv web audit --production`. Sur la branche principale elle-même, `--preview --base origin/main` n'a rien à comparer (sortie `2`) : y utiliser `apv web audit --production` ou `--url <origine>`.
-
-## Réutilisation : `reuse` et carte du code : `map`
-
-Sections APV3, facultatives, lues par `apv reuse check` et `apv map` et validées par le chargeur commun (`apv status` signale une valeur invalide, jamais la section comme ignorée). Absentes, les valeurs par défaut s'appliquent : dossiers partagés `**/components/**`, `**/ui/**`, `**/shared/**`, `**/common/**` ; éléments réservés `select`, `dialog`, `datalist` ; feuille globale cherchée parmi les emplacements usuels ; blocs de 5 lignes et 50 jetons ; aucune langue, donc pas de règle typographique ; aucune référence, donc tout compte comme nouveau. Écrites par `apv init` et `apv onboard` pour un projet web.
-
-```json
-{
-  "gates": [
-    { "id": "reuse", "command": ["apv", "reuse", "check", "--base", "{{baseSha}}"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true },
-    { "id": "code-map", "command": ["apv", "map", "--check"], "covers": ["architecture"], "stage": "task", "readOnly": true, "mandatory": true }
-  ],
-  "reuse": {
-    "reference": "origin/main",
-    "shared": ["src/lib/components/**"],
-    "native": { "elements": { "select": "src/lib/components/ui/Select.svelte", "dialog": null, "datalist": null }, "allowedPaths": ["src/lib/components/ui/**"] },
-    "styles": { "sources": ["src/app.css"], "allowedPaths": ["src/lib/components/ui/**"], "nested": "layout" },
-    "duplicates": { "minLines": 5, "minTokens": 50, "styles": "warning" },
-    "typography": { "locale": "fr" },
-    "severity": { "native": "error", "styles": "error", "duplicates": "error", "names": "warning", "typography": "warning" }
-  },
-  "map": { "file": ".apv/code-map.md", "maxEntries": 400, "maxBytes": 32768 }
-}
-```
-
-- `reuse.reference` : branche où vont les PR, pour `apv reuse check` sans `--base` ; ce que le changement ajoute depuis sa base commune est nouveau (bloquant en `error`), le reste existant (signalé). Le contrôle déclaré passe `--base {{baseSha}}`, la base du passage, qui entre dans la clé de preuve.
-- `reuse.shared`, `reuse.ignore` : motifs des dossiers de composants partagés, et des chemins laissés de côté par toutes les règles (listés dans le rapport). Les exclusions par défaut (dépendances, dossiers d'outils connus, `docs/`, `dist/`, `build/`, `coverage/`, `vendor/` à la racine du dépôt et des paquets) ne valent que pour les fichiers déjà là à la base : un fichier que le changement crée ou déplace dans l'une d'elles bloque tant qu'il n'est pas déclaré dans `reuse.ignore` (échec fermé, [REUSE.md](REUSE.md), section 2.8).
-- `reuse.generated` : motifs des fichiers écrits par un outil, acceptés comme générés même quand le changement les crée ; sans cela, un fichier généré nouveau (par son nom ou sa mention en tête) est un constat bloquant.
-- `reuse.native` : `elements` (sélecteur `select` ou `input[type=date]`, vers le composant partagé qui le remplace, ou `null` : le composant générique de même rôle), `allowedPaths` (défaut : les composants génériques, `**/components/ui/**`, `**/ui/**`, `**/primitives/**`, `**/design-system/**`, `**/shared/**`, `**/common/**`).
-- `reuse.styles` : `sources` (feuilles globales dont les classes de base des règles de premier niveau sont les primitives), `selectors` et `except` (classes ou préfixes `.btn--*` ajoutés ou retirés), `allowedPaths` (défaut : comme `native.allowedPaths`), `nested` (`layout` par défaut : sous une classe du composant, seule la mise en page d'une primitive se retouche ; `refuse` ; `allow`).
-- `reuse.duplicates` : `minLines`, `minTokens`, `paths`, `ignore`, `styles` (gravité d'une copie de styles seuls, `warning` par défaut).
-- Fichiers générés (nom ou premières lignes) : toujours laissés de côté, listés dans le rapport.
-- `reuse.names.roles` : familles de rôles ajoutées ou retirées (`null`) ; `names.strong` (familles dont le composant partagé générique ne se refait jamais dans la même famille exacte, sans le composer : coquille, barres, toast, liste déroulante, dialogue, sélecteur de date, pagination, onglets, icône) et `names.strongSeverity` (`error` par défaut).
-- `reuse.typography.locale` : langue des textes (`fr` active la règle).
-- `reuse.severity` : `off`, `warning` ou `error`, pour toutes les règles ou par règle.
-- `map.file` (`.md`), `map.ignore`, `map.maxEntries` (de 20 à 5000, partagées entre les sections de la carte), `map.maxBytes` (de 4096 à 1 000 000, 32 768 par défaut).
-
-Chaque règle, son motif et ses limites : [REUSE.md](REUSE.md). Baisser une gravité, élargir `ignore` ou `allowedPaths`, ou retirer un de ces contrôles est une décision de l'opérateur, jamais un moyen de faire passer une tâche.
-
-## Tests modifiés : `testsCheck`
-
-Section facultative (3.0.0-alpha.15) de `apv tests check` ([CLI.md](CLI.md#apv-tests-check)), déclaré comme contrôle de tâche :
-
-```json
-"gates": [{ "id": "tests", "command": ["apv", "tests", "check", "--base", "{{baseSha}}"] }],
-"testsCheck": {
-  "e2e": ["e2e/**", "tests/browser/**"],
-  "unit": ["src/**/*.test.ts"],
-  "ignore": ["tests/vendor/**"],
-  "severity": { "waitForTimeout": "error", "fixedWait": "error", "realClock": "warning", "sharedData": "off" }
-}
-```
-
-- `enabled` : `false` désactive le contrôle (il passe et le dit) ; absent : actif.
-- `reference` : la branche visée (`origin/main`), quand `--base` n'est pas donné.
-- `e2e`, `unit`, `ignore` : motifs portables ; une clé donnée remplace sa liste par défaut.
-- `severity` : `off`, `warning` ou `error` par règle ; défauts : `waitForTimeout` en erreur, `fixedWait`, `realClock` et `sharedData` en avertissement. Seule une erreur fait échouer le contrôle.
-
-## Règles avant fusion : `rules`
-
-Section APV3, facultative (3.0.0-alpha.12), lue **à la base commune** de la PR et de sa cible par `apv rules check`, `apv stack merge` et `apv stack batch --merge` ([REGLES.md](REGLES.md)). Elle complète les règles, elle ne peut en retirer aucune : il n'existe pas de clé pour les désactiver (`docsOnly` ne fait que réduire ou couper la voie sans code).
-
-```json
-"rules": {
-  "mode": "leger",
-  "captures": { "viewports": ["desktop", "phone"], "themes": ["light", "dark"] },
-  "requiredGates": [{ "id": "a11y", "command": ["npm", "run", "check:a11y"] }],
-  "screens": ["src/views/**/*.vue"],
-  "docsOnly": { "enabled": true, "kinds": ["decisions", "mockups", "drafts", "specs", "journal", "docs"], "exclude": ["docs/legal/**"] }
-}
-```
-
-- `mode` (4.0.0-alpha.1, défaut `leger`) : `leger` n'exige que les relectures du niveau du diff (`apv review plan` : 0 et 1 aucune, 2 `securite`, 3 `securite` avec `donnees` ou `rgpd` ; `fidelite` seulement pour un écran couvert par une maquette validée), accepte une relecture non scellée, reporte une relecture de tout domaine sur un delta hors de son périmètre, n'exige `captures` qu'avec `fidelite` et `maquette` que dans un projet qui a des maquettes validées (une maquette versée suffit) ; `strict` garde le comportement d'APV3. `preuve`, `instable`, `controles` et les dérogations ne changent pas.
-- `captures.viewports` (`desktop`, `phone`, `tablet` ; défaut `desktop` et `phone`) et `captures.themes` (`light`, `dark` ; défaut les deux) : captures qu'exige la relecture de fidélité quand le plan des revues la retient, sauf dans un projet sans écran qui n'en ajoute pas (règle `captures`, REGLES.md). `["light"]` seulement pour un projet sans thème sombre.
-- `requiredGates` : contrôles qu'un projet exige en plus de `reuse`, `code-map` et `structure` (projet web) : un identifiant et le début de la commande, reconnue enveloppée ou non (`node <plugin>/dist/cli.js`, `npx apv`) ; ils valent aussi pour un projet sans interface web.
-- `screens` : motifs des fichiers d'écran que l'outil ne reconnaît pas seul (il connaît les pages, mises en page et pages d'erreur de SvelteKit, Next, Remix, Nuxt, Astro et `pages/`).
-- `docsOnly` : la **voie sans code** ([REGLES.md](REGLES.md), « Voie sans code »), active par défaut avec toutes ses sortes. Elle ne peut que se réduire : `enabled: false` la coupe (toute PR suit les règles normales), `kinds` garde seulement certaines sortes (`decisions`, `mockups`, `drafts`, `specs`, `journal`, `docs` ; `.apv/state/**` n'en est pas une depuis la relecture de sécurité de la PR #121), `exclude` (motifs relatifs, comparés sans tenir compte de la casse) en retire des chemins : un projet y met les documents que ses agents lisent comme consigne sans les importer par `@chemin` (un fichier cité en clair par `CLAUDE.md` ou une compétence n'est pas détecté par l'outil ; au projet pilote, `docs/architecture.md` ; le dépôt d'APV : `docs/**`, `README.md`, `examples/**`). Aucune clé n'ajoute un chemin à la voie. Lue à la base commune par `apv rules check` et les commandes `stack` ; `apv review plan` la lit dans le dépôt, comme le reste de sa configuration.
-- `operatorOrders` : la **fusion sur ordre signé de l'opérateur** ([REGLES.md](REGLES.md), section 3 ter), lue à la base par `apv stack merge --order`, affichée par `apv status`. `domain` : domaine des messages signés du projet (minuscules, chiffres, tirets) ; `publicKeys` : une ou deux clés publiques Ed25519 (PEM SPKI ou sa ligne base64), jamais une clé privée (refusée par le chargeur, jamais recopiée dans l'erreur) ; `attestation.url` : adresse de la production avec `{nonce}` et `{challenge}` une fois chacun, en HTTPS seulement, sans exception ni identifiant ; `publicationBranch` (facultatif) : branche dont doit venir la PR de publication, `{slug}` remplacé par le `slug` signé dans l'ordre (`publication/{slug}`) ; `attestation.maxAgeSeconds` (10 à 600, défaut 120) et `attestation.timeoutMs` (défaut 15 000) ; `paths.publication` et `paths.article` (obligatoires pour toute fusion sur ordre) : motifs des chemins que chaque PR d'un ordre peut changer (chemins littéraux, `*` et `?` dans un seul segment, `{slug}` remplacé par le slug signé ; `**` refusé), jamais un motif qui couvre la liste de refus fixe d'APV (REGLES.md, section 3 ter : configuration d'APV, des agents, de la CI, de Git, de l'éditeur, paquets et leur configuration, déploiement, environnement, configuration de la pile) ; `verify.publication` : commande du projet, sans shell, `{{trusted}}` (base de confiance : le projet y lit ses clés), `{{base}}` (base de la fusion vérifiée), `{{head}}`, `{{step}}` remplacés comme arguments entiers (`{{base}}` sans `{{trusted}}` refusé), lancée depuis une copie propre de la base de confiance du lancement (la cible avant toute fusion sur cet ordre, jamais un commit d'une PR), l'ordre vérifié sur son entrée ; `verify.timeoutMs` (défaut 900 000).
-
-```json
-"operatorOrders": {
-  "domain": "mon-projet",
-  "publicKeys": ["-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA...\n-----END PUBLIC KEY-----\n"],
-  "attestation": { "url": "https://exemple.fr/api/articles/attestation?nonce={nonce}&challenge={challenge}", "maxAgeSeconds": 120 },
-  "publicationBranch": "publication/{slug}",
-  "paths": { "publication": ["src/lib/server/guides/content/{slug}.ts", "src/lib/server/guides/catalog.ts"], "article": ["docs/articles/{slug}/proposition.json"] },
-  "verify": { "publication": ["npm", "run", "article:order", "--", "publication", "--base", "{{trusted}}", "--tete", "{{head}}", "--etape", "{{step}}"] }
-}
-```
-
-- `operatorOrders.reducedProof` (facultatif) : la **preuve réduite** ([PREUVE-REDUITE.md](PREUVE-REDUITE.md)), acceptée à la place de la suite complète par `apv stack merge --order` seulement, quand le diff de l'étape tient dans sa liste de contenu régénéré. `workflow` (sous `.github/workflows/`), `job` et `name` du check run, chacun différent de ceux de `rules.ciProof` ; `gates` : contrôles que le job lance en entier (le check run en tient lieu de reçu) ; `waives` : contrôles de la suite complète que la voie ne lance pas, jamais un contrôle exigé par APV (`reuse`, `code-map`, `structure`, ceux de `rules.requiredGates`), reconnu par son identifiant ou par sa commande ; `gates` et `waives` disjoints et déclarés dans `gates` de la configuration ; `covers` : phrase de ce que le job prouve en plus, recopiée dans la sortie ; `paths.publication` et `paths.article` (une étape au moins) : chemins littéraux recopiés de `rules.operatorOrders.paths` de la même étape, sans `*`, `?` ni `**`, `{slug}` seul remplacé ; `protectedPaths` : fichiers qui produisent la preuve réduite, ajoutés aux défauts de la preuve CI, jamais un chemin de contenu ; `artifact` : pour la mesure. **C'est la seule déclaration de `rules` qui retire des contrôles** : la PR qui l'ajoute ou l'élargit (workflow, job ou nom changé, contrôle de `gates` ou de `waives` ajouté, chemin ajouté, chemin protégé retiré) n'est acceptée par `apv rules check` qu'avec une décision de l'opérateur ancrée dont la citation porte l'empreinte de la déclaration ([REGLES.md](REGLES.md), section 5). La commande `verify.publication` du projet rend, en cas de succès, sur sa dernière ligne `{"ok": true, "regenerated": [{"path": "...", "blob": "..."}], "shape": "literal"}` : sans elle, la voie réduite n'est pas retenue à l'étape publication (la fusion sur ordre reste possible avec la suite complète).
-
-```json
-"reducedProof": {
-  "workflow": ".github/workflows/preuve-publication.yml", "job": "preuve-publication", "name": "Preuve de publication",
-  "gates": ["check", "lint", "test", "build"], "waives": ["integration", "browser"],
-  "covers": "typecheck, lint, tests unitaires, build, tests de bout en bout des guides contre un aperçu du commit, captures du guide",
-  "paths": { "publication": ["src/lib/server/guides/content/{slug}.ts", "src/lib/server/guides/catalog.ts"], "article": ["docs/articles/{slug}/proposition.json"] },
-  "protectedPaths": ["tests/e2e/browser/guides.e2e.ts"]
-}
-```
-
-## Mise en ligne : `release`
-
-Section APV4 facultative (4.0.0-alpha.2) : `{ "release": { "branch": "production", "from": "main" } }`, deux noms de branche différents. En mode léger, une PR vers `from` se fusionne sur la preuve de tâche (section lue à la base commune, comme `rules`), seulement si la base déclare au moins un contrôle de stage `task` (sinon la suite complète, dit en une ligne) ; `branch` n'avance que par `apv release`, en avance rapide, vers un commit de `from` dont la suite complète est prouvée ([CLI.md](CLI.md#apv-release)). Le garde-fou refuse tout `git push` qui l'écrit (configuration illisible : `production`). Absente : rien ne change, la suite complète reste exigée avant chaque fusion.
-
-`release.migrations` (4.0.0-alpha.3, facultatif) : motifs de chemins des fichiers de migration (`*` dans un segment, `**` à travers les `/`, `?`, `{a,b}` ; 100 au plus), lus sur `from`, réunis avec ceux de la production et du commit publié (un commit qui les vide n'en retire aucun) ; `./` en tête ignoré.
-- Chaque migration **ajoutée** depuis la production distante attend « migration <version> appliquée » tapé par l'opérateur dans une session Claude Code (journal de l'opérateur, comme les dérogations) : sans elle, rien n'est publié ([CLI.md](CLI.md#apv-release)).
-- Une migration **modifiée**, supprimée ou renommée depuis la production, ou en lien symbolique, est refusée : une migration publiée ne change pas.
-- Aucune valeur implicite. Suggestion pour Supabase : `{ "release": { "branch": "production", "from": "main", "migrations": ["supabase/migrations/*.sql"] } }`, les motifs de `db.migrations` (`apv db check`).
-- Absente ou `[]` : aucune vérification des migrations à la mise en ligne.
-- Le journal est celui du dépôt Git (dossier commun) : le cron `apv release auto` doit tourner dans le même dépôt que les sessions de l'opérateur.
-
-## Fraîcheur de l'état : `freshness`
-
-Section APV3, facultative, validée par le chargeur commun : les fichiers vivants d'état et de reprise que `apv status` (section « Fichiers d'état périmés », `freshness` en JSON) et le crochet de début de session surveillent. Un état de reprise se réécrit court à chaque étape et ce qui est terminé part en archive : un fichier qui n'a pas bougé depuis plus de `maxAgeDays` jours, ou un journal qui dépasse `maxLines` lignes, est signalé avec la proposition « couper : état court + archive ». Lecture seule : rien n'est déplacé ni supprimé.
-
-```json
-{
-  "freshness": {
-    "maxAgeDays": 2,
-    "maxLines": 300,
-    "paths": ["~/projets/mon-pilotage/lancement/REPRISE.md", "docs/etat/*.md"],
-    "ignore": [".apv/state/revues-*.md"],
-    "archive": "~/projets/mon-pilotage/archives"
-  }
-}
-```
-
-- Toujours surveillés, sans rien déclarer : `.apv/state/resume.md` et les `.apv/state/*.md` (premier niveau seulement : `.apv/state/archive/` et les autres sous-dossiers ne le sont pas), sauf `.apv/state/suivi-constats.md`, le suivi groupé des constats mineurs, traité par lot. Les journaux machine (`quota.log`, `journal.log`, états `run-*.json`) ne le sont pas. Les rapports de revue et de corrections (`revues-*.md`, `corrections-*.md`) le sont : une fois leur PR fusionnée, ils partent dans le dossier d'archive.
-- `maxAgeDays` (défaut 2, de 1 à 365) : au-delà, le fichier est « périmé » (date de dernière modification).
-- `maxLines` (défaut 300, de 10 à 1 000 000) : au-delà, le fichier est « trop long ». Le compte s'arrête à `maxLines` + 1 lignes, et un fichier de plus de `maxLines` × 4 Kio est « trop long » d'après sa taille, sans être lu : un journal énorme ne ralentit ni `apv status` ni le début de session.
-- `paths` (défaut aucun, 100 au plus) : **fichiers de pilotage** du projet (notes de reprise, plans, journaux de lancement), jamais un dossier de documents personnels ou de clients : leurs noms sont affichés (voir plus bas). Motifs portables (`*`, `**`, `?` ; ni accolades ni `!`, aucun segment `.` ou `..`), relatifs au dépôt, sous le dossier personnel avec `~/` (y compris hors du dépôt), ou absolus. Un fichier ou un dossier absent est ignoré. Un motif lit les entrées de dossier une à une, 5 000 au plus, et garde 200 fichiers ; `node_modules` et `.git` ne sont jamais parcourus, un lien vers un dossier jamais suivi.
-- `ignore` (défaut aucun) : motifs de la même forme, retirés de la surveillance.
-- `archive` (défaut `.apv/state/archive`) : dossier d'archive cité dans les messages (chemin sans joker, même forme) ; les fichiers qui s'y trouvent ne sont jamais signalés.
-- Liens : un lien n'est suivi que si sa cible réelle reste dans le dossier de son motif (la partie avant le premier joker, ou le dossier du fichier nommé), et dans le dépôt pour les motifs par défaut ; `.apv/state/notes.md` lié à `~/.ssh/id_rsa` est ignoré.
-- Secrets : seules la date, la taille et le nombre de lignes d'un fichier sont lus, jamais son contenu au-delà du comptage des fins de ligne. Un chemin qui ressemble à un secret, jugé sur son nom **et** sur sa cible réelle, n'est jamais ouvert : seule sa date est lue (`lines` à `null`, `secret` à `true`). Sont des secrets : les noms `.env*`, `id_*` (clés SSH), `*key*`, `*secret*`, `*token*`, `*credential*`, `*password*`, `*passwd*`, `.npmrc`, `.netrc`, `.pgpass`, `.git-credentials`, `hosts.yml`, `.pypirc`, `.htpasswd`, les extensions `.pem`, `.p12`, `.pfx`, `.kdbx`, `.keystore`, `.jks`, `.asc`, `.gpg`, et tout ce qui est sous un dossier `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker` ou `.password-store`.
-- Noms affichés : `apv status` affiche le chemin de chaque fichier signalé (dans le terminal de l'opérateur, et dans sa sortie JSON). Le crochet de début de session verse la ligne « Fichiers d'état à rafraîchir » au **contexte de chaque session** : il y nomme les fichiers du dépôt (8 au plus) et ne donne, pour les fichiers hors du dépôt, que leur nombre.
-- Configuration invalide : refusée par le chargeur ; `apv status` et le crochet surveillent alors les fichiers par défaut avec les seuils par défaut.
-
-## Modèles par rôle : `models`
-
-Section APV3, facultative (3.0.0-alpha.22), validée par le chargeur commun. Elle dit quel modèle et quel effort chaque rôle reçoit ; `apv status` l'affiche (ligne « Modèles par rôle », champ `models` en JSON). L'outil ne lance aucun agent : le chef de projet passe `model` à l'outil Agent d'après cette section quand il lance un rôle, c'est un jugement qu'il porte dans son rapport ([REGLES.md](REGLES.md), section 4).
-
-```json
-{
-  "models": {
-    "chef": "fable",
-    "conception": "opus",
-    "implementer": "sonnet",
-    "fondations": "opus",
-    "integrateur": "opus",
-    "relecture": "sonnet",
-    "relecture-securite-regles": "opus",
-    "recherche": "haiku",
-    "effort": "high"
-  }
-}
-```
-
-- Valeurs : `fable`, `opus`, `sonnet` ou `haiku` ; `effort` : `high` ou `xhigh` (élevé au minimum, règle de l'opérateur : `low` et `medium` sont refusés). Une autre valeur est refusée par le chargeur, avec la clé en cause.
-- Clés (liste fermée, une autre est refusée) : les rôles du plugin (`chef`, `product`, `architecte`, `architecte-donnees`, `designer`, `critique-design`, `dpo`, `implementer`, `fondations`, `integrateur`, `qa-securite`, `qa-fidelite`, `auditeur-web`, `relecture`, `recherche`) et les trois groupes des défauts : `conception` (`product`, `architecte`, `architecte-donnees`, `designer`, `critique-design`), `relecture` (`qa-fidelite`, `auditeur-web` et toute relecture sans clé propre) et `relecture-securite-regles` (`qa-securite`, `dpo`). La clé d'un rôle l'emporte sur celle de son groupe. `fondations` désigne la tâche de fondations d'une spec, confiée à un `implementer`.
-- **Nouveau projet** (décision de l'opérateur du 14 octobre 2026, économie de jetons) : `apv init` écrit la section suivante dans la configuration qu'il crée. Sonnet partout, Opus seulement pour `architecte-donnees` et la clé de groupe `relecture-securite-regles`, Haiku pour la recherche ; `dpo` et `qa-securite` sont mis à Sonnet par leur clé propre, qui l'emporte sur celle du groupe. Une configuration existante n'est jamais modifiée, et un projet sans section garde les défauts ci-dessous. Le chef de projet ne passe une tâche en Opus que si une première passe Sonnet a échoué sur la difficulté, et un designer en Opus que pour une nouvelle direction visuelle (compétence `chef-de-projet`, section 5 ter).
-
-  ```json
-  { "models": { "chef": "fable", "conception": "sonnet", "architecte-donnees": "opus", "implementer": "sonnet", "fondations": "sonnet", "integrateur": "sonnet", "relecture": "sonnet", "relecture-securite-regles": "opus", "dpo": "sonnet", "qa-securite": "sonnet", "recherche": "haiku", "effort": "high" } }
-  ```
-- **Effort par lancement** : le champ `effort` reste le défaut (`high`). Le chef de projet l'ajuste à chaque lancement d'un agent : `medium` pour le travail mécanique sans jugement (inventaires, recherches de fichiers, relevés, pages de suivi, rebase sans conflit), `xhigh` pour un modèle de données neuf ou une faille de sécurité difficile, jamais `low`. Ce choix ne passe pas par la configuration.
-- Défauts, section absente ou clé non donnée : les valeurs de l'exemple ci-dessus, effort `high`. `apv status` ajoute « (défauts) » quand la section est absente, et garde les défauts quand la configuration est invalide.

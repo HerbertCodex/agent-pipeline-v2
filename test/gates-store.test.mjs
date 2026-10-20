@@ -60,9 +60,7 @@ test('a run in a worktree since removed still proves its commit from the main ch
   assert.equal(v.json().store, f.store); assert.deepEqual(v.json().altered, []);
   const text = await apv(f.repo, ['gates', 'verify', '--commit', head.slice(0, 10)]);
   assert.equal(text.code, 0);
-  // The second run (--only lint) reused lint from the first, same tree (A1): proven from the store, worktree gone.
-  assert.match(text.stdout, /lint\s+réutilisé de [0-9a-f]{12} \(arbre identique\)\s+\S+\/lint\.json \(magasin partagé\)/);
-  assert.match(text.stdout, /unit\s+réussi\s+\S+\/unit\.json \(magasin partagé\)/);
+  assert.match(text.stdout, /lint\s+réussi\s+\S+\/lint\.json \(magasin partagé\)/);
   assert.match(text.stdout, /Magasin partagé des reçus : .*\.git\/apv\/receipts/);
   assert.match(text.stdout, /Preuve complète : 2 contrôle\(s\)/);
   // From another worktree of the repository, on another branch.

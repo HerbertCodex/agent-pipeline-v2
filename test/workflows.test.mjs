@@ -60,9 +60,7 @@ test('the plugin ships exactly the two documented workflows, with literal meta b
 test('vague: one isolated apv:implementer per task, with the start and scope instructions', async () => {
   const { run } = load('vague.js');
   const rt = runtime((prompt, opts) => ({ taskId: opts.label, status: 'done', confidence: 'prouve', evidence: 'apv gates run --stage task : 12 verts', branch: `apv/relances-${opts.label}`,
-    worktree: '/tmp/w', commit: 'b'.repeat(40), checks: [], scopeCheck: 'in', outOfScopeFiles: [],
-    reuse: [{ item: 'src/routes/relances/+page.svelte', decision: 'reused', mapEntry: 'src/lib/components/ui/Select.svelte' }],
-    placement: [{ file: 'src/lib/relances/delays.ts', folder: 'src/lib/relances', reason: 'fonctionnalité relances' }], summary: 'ok', openPoints: [] }));
+    worktree: '/tmp/w', commit: 'b'.repeat(40), checks: [], scopeCheck: 'in', outOfScopeFiles: [], summary: 'ok', openPoints: [] }));
   const result = await run(...rt.hooks, WAVE_ARGS);
   assert.equal(rt.calls.length, 2);
   for (const [i, call] of rt.calls.entries()) {
@@ -84,12 +82,6 @@ test('vague: one isolated apv:implementer per task, with the start and scope ins
     assert.match(call.prompt, /contrôle « ciblé »/);
     assert.match(call.prompt, /`<fichier>:<ligne>` ou `-g "<titre>"`\), `--repeat-each` 20 au plus/);
     assert.doesNotMatch(call.prompt, /Tous les contrôles de la consigne commune/);
-    assert.match(call.prompt, /carte du code `\.apv\/code-map\.md` : à lire AVANT de créer/);
-    assert.match(call.prompt, /ne commite jamais `\.apv\/code-map\.md`/);
-    assert.ok(call.opts.schema.required.includes('reuse'));
-    assert.ok(call.opts.schema.required.includes('placement'));
-    assert.match(call.prompt, /carte de l'architecture \(`docs\/carte-architecture\.md`[^\n]*à lire EN PREMIER/);
-    assert.match(call.prompt, /contrôle `structure` rouge se corrige en plaçant le fichier dans le sous-dossier/);
   }
   assert.ok(rt.calls[1].prompt.includes('termine depuis le wip abc1234'));
   assert.equal(result.reports.length, 2);
@@ -97,43 +89,6 @@ test('vague: one isolated apv:implementer per task, with the start and scope ins
   assert.deepEqual(result.refused, []);
   assert.deepEqual(result.escalation, { verify: [], operator: [] });
   assert.equal(result.baseCommit, WAVE_ARGS.baseCommit);
-});
-
-test('vague: a report without its reuse list, an addition without justification or a reuse without map entry is refused', async () => {
-  const { run } = load('vague.js');
-  const base = { status: 'done', confidence: 'prouve', evidence: 'sortie', commit: 'b'.repeat(40), placement: [] };
-  const reuse = { T2: undefined, T3: [{ item: 'src/lib/AdminToast.svelte', decision: 'added' }, { item: 'src/lib/x.ts', decision: 'reused' }, { item: 'y', decision: 'copied' }] };
-  const rt = runtime((prompt, opts) => ({ ...base, taskId: opts.label, ...(reuse[opts.label] ? { reuse: reuse[opts.label] } : {}) }));
-  const result = await run(...rt.hooks, WAVE_ARGS);
-  assert.deepEqual(result.reports, []);
-  assert.match(result.refused[0].problems.join(' | '), /réutilisation absente/);
-  const t3 = result.refused[1].problems.join(' | ');
-  assert.match(t3, /ajout sans justification \(justification\) pour src\/lib\/AdminToast\.svelte/);
-  assert.match(t3, /entrée de la carte du code absente \(mapEntry\) pour src\/lib\/x\.ts/);
-  assert.match(t3, /décision inconnue « copied »/);
-  // The entry of the map is a path, and a file never reuses itself.
-  const paths = runtime((prompt, opts) => ({ ...base, taskId: opts.label, reuse: [{ item: 'src/a/Page.svelte', decision: 'reused', mapEntry: 'le composant Select' },
-    { item: 'src/lib/ui/Select.svelte', decision: 'reused', mapEntry: 'src/lib/ui/Select.svelte' }, { item: 'src/b.svelte', decision: 'extended', mapEntry: 'src/lib/ui/Select.svelte' }] }));
-  const why = (await run(...paths.hooks, WAVE_ARGS)).refused[0].problems.join(' | ');
-  assert.match(why, /mapEntry « le composant Select » n'est pas un chemin de la carte du code/);
-  assert.match(why, /src\/lib\/ui\/Select\.svelte se réutilise lui-même/);
-  assert.doesNotMatch(why, /src\/b\.svelte/);
-  const ok = runtime((prompt, opts) => ({ ...base, taskId: opts.label, reuse: [] }));
-  assert.equal((await run(...ok.hooks, WAVE_ARGS)).refused.length, 0, 'an empty list: nothing created nor modified');
-});
-
-test('vague: a report without its placement list, or a file placed outside its folder or without reason, is refused', async () => {
-  const { run } = load('vague.js');
-  const base = { status: 'done', confidence: 'prouve', evidence: 'sortie', commit: 'b'.repeat(40), reuse: [] };
-  const placement = { T2: undefined, T3: [{ file: 'src/lib/orders/checkout/refund.ts', folder: 'src/lib/orders', reason: 'x' }, { file: 'src/lib/a.ts', folder: 'src/lib' }] };
-  const rt = runtime((prompt, opts) => ({ ...base, taskId: opts.label, ...(placement[opts.label] ? { placement: placement[opts.label] } : {}) }));
-  const result = await run(...rt.hooks, WAVE_ARGS);
-  assert.match(result.refused[0].problems.join(' | '), /placement absent/);
-  const t3 = result.refused[1].problems.join(' | ');
-  assert.match(t3, /src\/lib\/orders\/checkout\/refund\.ts n'est pas directement dans src\/lib\/orders/);
-  assert.match(t3, /raison absente \(reason\) pour src\/lib\/a\.ts/);
-  const ok = runtime((prompt, opts) => ({ ...base, taskId: opts.label, placement: [{ file: 'src/lib/orders/checkout/refund.ts', folder: 'src/lib/orders/checkout/', reason: 'sous-dossier proposé' }] }));
-  assert.equal((await run(...ok.hooks, WAVE_ARGS)).refused.length, 0);
 });
 
 test('vague: a stopped agent is reported, never hidden', async () => {
@@ -196,17 +151,6 @@ test('revues: read-only reviewers in parallel on their own copy, then one dedupl
   assert.deepEqual(result.incomplete, []);
 });
 
-test('revues: the fidelity review answers « which existing component should have served? » for every new component', async () => {
-  const { run } = load('revues.js');
-  const rt = runtime((prompt, opts) => ({ domain: opts.label, commit: REVIEW_ARGS.commit, findings: [], notVerified: [], cleanup: 'fait', summary: 'ok' }));
-  await run(...rt.hooks, REVIEW_ARGS);
-  const fidelity = rt.calls.find(c => c.opts.label === 'fidelite').prompt;
-  assert.match(fidelity, /quel composant existant aurait dû servir \?/);
-  assert.match(fidelity, /reuse check --repo \/tmp\/revues\/fidelite --base/);
-  assert.match(fidelity, /constat `eleve`, requis/);
-  assert.doesNotMatch(rt.calls.find(c => c.opts.label === 'securite').prompt, /aurait dû servir/);
-});
-
 test('revues: a single review needs no consolidation; a lost reviewer is listed', async () => {
   const { run } = load('revues.js');
   const rt = runtime((prompt, opts) => opts.label === 'fidelite' ? null
@@ -258,7 +202,7 @@ test('revues: the concurrence audit runs alone, never by default, and returns it
 // Calibrated confidence: a report says how sure it is, and why (docs/CONFIANCE.md).
 const LEVELS = ['prouve', 'probable', 'suppose'];
 const task = (id, extra = {}) => ({ taskId: id, status: 'done', confidence: 'prouve', evidence: 'test rouge puis vert : npm test -- relances (1 échec, puis 14 réussis)',
-  branch: `apv/relances-${id}`, worktree: '/tmp/w', commit: 'b'.repeat(40), checks: [], scopeCheck: 'in', outOfScopeFiles: [], reuse: [], placement: [], summary: 'ok', openPoints: [], ...extra });
+  branch: `apv/relances-${id}`, worktree: '/tmp/w', commit: 'b'.repeat(40), checks: [], scopeCheck: 'in', outOfScopeFiles: [], summary: 'ok', openPoints: [], ...extra });
 
 test('vague: the report schema requires a confidence level and its evidence, and the prompt defines the levels', async () => {
   const { run } = load('vague.js');
@@ -413,7 +357,7 @@ test('revues: copies are absolute paths; the security review reads the scan repo
   assert.match(noScan, /Scan dynamique : scan non déclaré par le projet \(review\.dast\)\. Ne lance pas Docker et ne cherche aucun détour : note le scan dynamique « non vérifié »/);
 });
 
-test('revues: the domains skipped on the plan of apv review plan come back with their reason, securite too (light mode)', async () => {
+test('revues: the domains skipped on the plan of apv review plan come back with their reason; securite is never skipped', async () => {
   const { run } = load('revues.js');
   const plain = runtime((prompt, opts) => ({ domain: opts.label, commit: 'x', findings: [], notVerified: [], cleanup: 'fait', summary: 'ok' }));
   const skipped = [{ domain: 'fidelite', reason: 'rien à relire : aucun fichier d\'interface' }, { domain: 'rgpd', reason: 'rien à relire : aucune migration' }];
@@ -424,23 +368,9 @@ test('revues: the domains skipped on the plan of apv review plan come back with 
   assert.deepEqual((await run(...runtime(() => null).hooks, REVIEW_ARGS)).skipped, [], 'no plan: nothing skipped');
   const hooks = () => runtime(() => null).hooks;
   const only = REVIEW_ARGS.reviews.slice(1);
-  assert.deepEqual((await run(...hooks(), { ...REVIEW_ARGS, reviews: only, skipped: [{ domain: 'securite', reason: 'niveau 1 : code applicatif' }] })).skipped.map(s => s.domain), ['securite']);
+  await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, reviews: only, skipped: [{ domain: 'securite', reason: 'rien' }] }), /jamais sautée/);
+  await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, reviews: REVIEW_ARGS.reviews.slice(1, 2), skipped: [{ domain: 'rgpd', reason: 'rien' }] }), /securite manque/);
   await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, skipped: [{ domain: 'rgpd', reason: 'rien' }] }), /à la fois revu et sauté/);
   await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, reviews: REVIEW_ARGS.reviews.slice(0, 1), skipped: [{ domain: 'rgpd' }] }), /raison/);
   await assert.rejects(run(...hooks(), { ...REVIEW_ARGS, reviews: REVIEW_ARGS.reviews.slice(0, 1), skipped: [{ domain: 'concurrence', reason: 'x' }] }), /inconnu/);
-});
-
-test('revues: every reviewer records its review at the commit itself; the fidelity review attaches its captures', async () => {
-  const { run } = load('revues.js');
-  const rt = runtime((prompt, opts) => ({ domain: opts.label, commit: REVIEW_ARGS.commit, findings: [], notVerified: [], cleanup: 'fait', summary: 'ok' }));
-  await run(...rt.hooks, REVIEW_ARGS);
-  const roles = { securite: 'qa-securite', fidelite: 'qa-fidelite', donnees: 'architecte-donnees', rgpd: 'dpo' };
-  for (const [domain, agent] of Object.entries(roles)) {
-    const prompt = rt.calls.find(c => c.opts.label === domain).prompt;
-    assert.match(prompt, new RegExp(`review record --commit ${REVIEW_ARGS.commit} --domain ${domain} --reviewer apv:${agent} --report <fichier>`), domain);
-    assert.match(prompt, /Tu es le seul à pouvoir l'enregistrer/);
-  }
-  const fidelity = rt.calls.find(c => c.opts.label === 'fidelite').prompt;
-  assert.match(fidelity, /--capture desktop:light:<fichier>`, `desktop:dark`, `phone:light`, `phone:dark`/);
-  assert.doesNotMatch(rt.calls.find(c => c.opts.label === 'securite').prompt, /--capture/);
 });
