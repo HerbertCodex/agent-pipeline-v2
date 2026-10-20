@@ -61,6 +61,7 @@ Les consignes de l'opérateur (mémoire, `CLAUDE.md`, `.apv/brief.md`, registre 
 
 ## 7. Ressources partagées
 - Base locale, ports, navigateur de test, aperçu : sous bail, `apv lock run <ressource> -- <commande>`. Jamais de verrou tenu en attendant autre chose.
+- Tests navigateur hors suite : par `apv suite share -- <commande>` ou `apv lock run`, qui attendent la suite complète.
 - Une seule suite complète à la fois sur la machine (l'outil tient la file).
 - Attendre : `apv wait --pid <pid>` ou `apv wait --file <chemin> --contains <texte>`, jamais `sleep`.
 - Arrêter des serveurs : `apv procs stop` seulement, jamais `kill` d'un parent, `pkill -f` ni `killall`.

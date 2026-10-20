@@ -1,7 +1,7 @@
 import { skillsSchema, knowledgeSchema } from './knowledge.js';
 import { s } from './schema.js';
 import { invariant } from './errors.js';
-export const VERSION = '4.0.0-alpha.3';
+export const VERSION = '4.0.0-alpha.4';
 export const lanes = ['fast', 'standard', 'high'];
 export const validationKinds = ['unit', 'integration', 'browser', 'build', 'lint', 'typecheck', 'security', 'architecture'];
 /**
@@ -96,6 +96,9 @@ export const gateSchema = s.object({
     testPaths: s.default(paths, []),
     timeoutMs: s.default(s.number(10, 3600000), 120000),
     passEnv: s.default(envNamesSchema, []),
+    // Variables without which the check cannot run (a test stack: its URL, its keys): absent, apv does not launch it and
+    // records the finding in the receipt (an infrastructure failure the tool observed, review of 1786b40, M3).
+    requiredEnv: s.optional(envNamesSchema),
     dependsOn: s.default(s.array(id), []),
     resources: s.default(s.array(id), []),
     // Operator assertion: neither this command nor its children writes to the shared workspace.
@@ -295,6 +298,10 @@ export const receiptSchema = s.object({
     exitCode: s.nullable(s.number(0, 255)),
     stdoutHash: s.string(0, 64, /^(?:[a-f0-9]{64})?$/), stderrHash: s.string(0, 64, /^(?:[a-f0-9]{64})?$/),
     diagnostic: s.string(0, 16000), reusedFrom: s.nullable(id),
+    // A failure of the infrastructure the tool itself observed before or instead of running the command (a variable of passEnv
+    // absent from a stack check, a stack copy not prepared, an executable missing): never read from the output of the command.
+    // Only such a finding lets `apv release auto` run a suite again at the same commit (review of 1786b40, M3). Absent otherwise.
+    finding: s.optional(s.object({ kind: s.enum(['environment', 'unreachable', 'setup']), detail: s.string(1, 500) })),
     // Written by `apv gates run`: the stage it was asked for, and whether the working tree had uncommitted
     // changes (the receipt then describes more than `candidateSha`). Absent on older receipts.
     stage: s.optional(s.enum(gateStages)),

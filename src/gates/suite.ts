@@ -1,9 +1,9 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { SuiteQueueSettings } from '../config/load.js';
+import { DEFAULT_SHARE_MAX_MS, type SuiteQueueSettings } from '../config/load.js';
 import type { Gate } from '../domain/contracts.js';
 import { canonicalPath } from '../domain/paths.js';
 import { PipelineError, errorMessage, invariant } from '../domain/errors.js';
@@ -97,8 +97,15 @@ export function queuePlaces(slots: SuiteQueueSettings['slots'], options: { used:
 }
 
 /** Keeps a lease held by apv until the returned release: renewed every third of its life, released once. */
-function keepLease(store: LockStore, resource: string, token: string, log: (line: string) => void): () => Promise<void> {
+function keepLease(store: LockStore, resource: string, token: string, log: (line: string) => void,
+  /** Past this instant (ms since the epoch), the lease is no longer renewed: it lapses within its TTL (a share past its longest). */
+  untilMs?: number, overdue?: string): () => Promise<void> {
   const heartbeat = setInterval(() => {
+    if (untilMs !== undefined && Date.now() >= untilMs) {
+      clearInterval(heartbeat);
+      log(overdue ?? `Verrou « ${resource} » au-delà de sa durée maximale : bail non renouvelé.`);
+      return;
+    }
     store.renew(resource, token, LEASE_TTL_SECONDS).then(ok => { if (!ok) log(`Attention : le verrou « ${resource} » n'est plus à nous (repris ou libéré de force).`); },
       (error: unknown) => log(`Renouvellement du verrou « ${resource} » en échec : ${errorMessage(error)}`));
   }, (LEASE_TTL_SECONDS * 1000) / 3);
@@ -170,6 +177,72 @@ async function holdAnyLease(store: LockStore, resources: readonly string[], opti
   }
 }
 
+/** Variable set around a command run by `withShare`: a suite or a share started inside it does not wait for the share it belongs to. */
+export const SHARE_MARKER = 'APV_SUITE_SHARE';
+
+const sharePrefix = (resource: string): string => `${resource}-share-`;
+/** Live (not stale) leases of the queue folder whose resource satisfies `match`. */
+function liveLeases(store: LockStore, match: (resource: string) => boolean): LockRecord[] {
+  return store.list().filter(r => r.snapshot.exists && !r.stale && r.snapshot.record && match(r.resource)).map(r => r.snapshot.record!);
+}
+/** Full suites (and measures) that hold or wait for the queue: the copy places (taken first by every suite) and the whole queue. */
+const suiteHolders = (store: LockStore, resource: string): LockRecord[] => liveLeases(store, r => r === resource || r.startsWith(`${resource}-copy-`));
+const shareHolders = (store: LockStore, resource: string): LockRecord[] => liveLeases(store, r => r.startsWith(sharePrefix(resource)));
+/** Whether a share has held the queue for `maxMs` or more (from its `acquiredAt`): a full suite no longer waits for it. */
+const shareOverdue = (record: LockRecord, maxMs: number, now = Date.now()): boolean => {
+  const at = Date.parse(record.acquiredAt);
+  return Number.isFinite(at) && now - at >= maxMs;
+};
+const hours = (ms: number): string => ms < 1000 ? `${ms} ms` : ms >= 3_600_000 && ms % 3_600_000 === 0 ? `${ms / 3_600_000} h` : seconds(ms);
+const queueStore = (lockFile: string, hooks?: SuiteHooks): { store: LockStore; resource: string } => ({
+  store: new LockStore(dirname(lockFile), hooks?.lockPollMs !== undefined ? { pollMs: hooks.lockPollMs } : {}),
+  resource: basename(lockFile).replace(/\.lock$/, ''),
+});
+
+/**
+ * Holds a SHARED part of the queue around `run`: any number of shares at once, none while a full suite holds or waits for
+ * the queue (it waits behind it, at most `waitMs`), and a suite with `slots: 1` waits for the shares to finish before
+ * its checks. The share is registered first and withdrawn when a suite shows up, so that the suite and a share never
+ * both start. Without effect inside a full suite (`APV_SUITE_RUN`) or inside another share (`APV_SUITE_SHARE`).
+ */
+export async function withShare<T>(options: { lockFile: string; waitMs: number; label: string; purpose?: string; env: NodeJS.ProcessEnv; source: NodeJS.ProcessEnv;
+  signal?: AbortSignal | undefined; log: (line: string) => void; hooks?: SuiteHooks | undefined;
+  /** Longest the part is held (`suite.queue.shareMaxMs`, default 2 h): past it, its lease is no longer renewed (review of 1786b40, M2). */
+  maxMs?: number | undefined },
+  run: (env: NodeJS.ProcessEnv) => Promise<T>, refused: (reason: string, waitedMs: number) => T): Promise<T> {
+  if (options.source[SUITE_MARKER] || options.source[SHARE_MARKER]) return run(options.env);
+  mkdirSync(dirname(options.lockFile), { recursive: true });
+  const { store, resource } = queueStore(options.lockFile, options.hooks);
+  const owner = { pid: process.pid, host: store.host, label: options.label };
+  const pollMs = options.hooks?.lockPollMs ?? 500;
+  const started = Date.now();
+  let said = 0;
+  for (;;) {
+    const name = `${sharePrefix(resource)}${process.pid}-${randomUUID().slice(0, 8)}`;
+    const taken = await store.tryAcquire(name, owner, LEASE_TTL_SECONDS, options.purpose ?? 'charge partagée');
+    if (!taken.ok) continue;
+    const maxMs = options.maxMs ?? DEFAULT_SHARE_MAX_MS;
+    const release = keepLease(store, name, taken.record.token, options.log, Date.now() + maxMs,
+      `Part partagée de la file au-delà de sa durée maximale (${hours(maxMs)}, suite.queue.shareMaxMs) : bail non renouvelé, les suites complètes ne l'attendent plus.`);
+    const suites = suiteHolders(store, resource);
+    if (!suites.length) {
+      const waited = Date.now() - started;
+      if (waited > 1000) options.log(`File des suites complètes : part partagée obtenue après ${seconds(waited)}.`);
+      try { return await run({ ...options.env, [SHARE_MARKER]: resource }); }
+      finally { await release(); }
+    }
+    await release();
+    const waited = Date.now() - started;
+    if (waited >= options.waitMs) return refused(`suite complète en cours (${suites.map(h => describeHolder(h)).join(' ; ')}) : aucune part partagée après ${seconds(waited)}`, waited);
+    if (said === 0 || Date.now() - said >= 30_000) {
+      options.log(`Suite complète en cours (exécution ${describeHolder(suites[0]!)}), attente...`);
+      said = Date.now();
+    }
+    try { await sleep(Math.min(pollMs, Math.max(1, options.waitMs - waited)), undefined, options.signal ? { signal: options.signal } : {}); }
+    catch { return refused('attente annulée', Date.now() - started); }
+  }
+}
+
 /**
  * Enters the queue of the full suites: its places (`queuePlaces`, leases of the `apv lock` store format beside
  * `settings.lockFile`: FIFO for the whole queue and each stack, the first free for a numbered place), within `waitMs` in
@@ -183,7 +256,9 @@ export async function enterQueue(options: { lockFile: string; settings: SuiteQue
   /** The places to take; absent: the whole queue alone. */
   places?: QueuePlaces;
   /** The copy the run works in (a full suite): its place (`copyPlace`) is taken first. */
-  copy?: string }): Promise<QueueHandle> {
+  copy?: string;
+  /** The environment of the run (default: that of apv): inside a share (`APV_SUITE_SHARE`) the shares are not waited for. */
+  env?: NodeJS.ProcessEnv }): Promise<QueueHandle> {
   const { settings, log } = options;
   const dir = dirname(options.lockFile);
   const resource = basename(options.lockFile).replace(/\.lock$/, '');
@@ -219,6 +294,35 @@ export async function enterQueue(options: { lockFile: string; settings: SuiteQue
     }
     heldBy ??= lease.heldBy;
     held.push(lease);
+  }
+  // `slots: 1` (the whole machine): the shared loads running finish first; the new ones wait behind the suite (withShare).
+  if (settings.slots === 1 && !(options.env ?? process.env)[SHARE_MARKER]) {
+    const pollMs = options.hooks?.lockPollMs ?? 500;
+    let said = 0;
+    const maxMs = settings.shareMaxMs ?? DEFAULT_SHARE_MAX_MS;
+    const ignored = new Set<string>();
+    for (;;) {
+      let shares: LockRecord[] = [];
+      try { shares = shareHolders(store, resource); } catch (error) { await releaseAll(); throw error; }
+      // A share held past its longest (stuck, or longer than declared) is no longer waited for: said once per share.
+      for (const share of shares.filter(h => shareOverdue(h, maxMs) && !ignored.has(h.token))) {
+        ignored.add(share.token);
+        log(`Charge partagée ${describeHolder(share)} au-delà de sa durée maximale (${hours(maxMs)}, suite.queue.shareMaxMs) : la suite complète ne l'attend plus.`);
+      }
+      shares = shares.filter(h => !shareOverdue(h, maxMs));
+      if (!shares.length) break;
+      const waited = Date.now() - started;
+      if (waited >= settings.waitMs) {
+        await releaseAll();
+        throw new PipelineError('SUITE_QUEUE', `File des suites complètes (${options.lockFile}) : ${shares.length} charge(s) partagée(s) encore en cours après ${seconds(waited)} : ${shares.map(h => describeHolder(h)).join(' ; ')}. Rien n'a été exécuté.`);
+      }
+      if (said === 0 || Date.now() - said >= 30_000) {
+        log(`Charges partagées en cours (${shares.map(h => describeHolder(h)).join(' ; ')}) : attente de leur fin avant de démarrer.`);
+        said = Date.now();
+      }
+      try { await sleep(Math.min(pollMs, Math.max(1, settings.waitMs - waited)), undefined, options.signal ? { signal: options.signal } : {}); }
+      catch { await releaseAll(); throw new PipelineError('CANCELLED', 'File des suites complètes : attente des charges partagées annulée'); }
+    }
   }
   const waitedMs = Date.now() - started;
   if (waitedMs > 1000) log(`File des suites complètes : ${held.length > 1 ? `places obtenues (${held.map(h => h.resource).join(', ')})` : 'verrou obtenu'} après ${seconds(waitedMs)}.`);

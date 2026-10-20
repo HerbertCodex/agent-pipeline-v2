@@ -1,4 +1,4 @@
-import type { SuiteQueueSettings } from '../config/load.js';
+import { type SuiteQueueSettings } from '../config/load.js';
 import type { Gate } from '../domain/contracts.js';
 import type { Git } from '../execution/git.js';
 import type { ResolvedStack, StackContainer } from '../stacks/idle.js';
@@ -84,6 +84,27 @@ export declare function queuePlaces(slots: SuiteQueueSettings['slots'], options:
     unmapped?: boolean;
     all?: boolean;
 }): QueuePlaces;
+/** Variable set around a command run by `withShare`: a suite or a share started inside it does not wait for the share it belongs to. */
+export declare const SHARE_MARKER = "APV_SUITE_SHARE";
+/**
+ * Holds a SHARED part of the queue around `run`: any number of shares at once, none while a full suite holds or waits for
+ * the queue (it waits behind it, at most `waitMs`), and a suite with `slots: 1` waits for the shares to finish before
+ * its checks. The share is registered first and withdrawn when a suite shows up, so that the suite and a share never
+ * both start. Without effect inside a full suite (`APV_SUITE_RUN`) or inside another share (`APV_SUITE_SHARE`).
+ */
+export declare function withShare<T>(options: {
+    lockFile: string;
+    waitMs: number;
+    label: string;
+    purpose?: string;
+    env: NodeJS.ProcessEnv;
+    source: NodeJS.ProcessEnv;
+    signal?: AbortSignal | undefined;
+    log: (line: string) => void;
+    hooks?: SuiteHooks | undefined;
+    /** Longest the part is held (`suite.queue.shareMaxMs`, default 2 h): past it, its lease is no longer renewed (review of 1786b40, M2). */
+    maxMs?: number | undefined;
+}, run: (env: NodeJS.ProcessEnv) => Promise<T>, refused: (reason: string, waitedMs: number) => T): Promise<T>;
 /**
  * Enters the queue of the full suites: its places (`queuePlaces`, leases of the `apv lock` store format beside
  * `settings.lockFile`: FIFO for the whole queue and each stack, the first free for a numbered place), within `waitMs` in
@@ -105,6 +126,8 @@ export declare function enterQueue(options: {
     places?: QueuePlaces;
     /** The copy the run works in (a full suite): its place (`copyPlace`) is taken first. */
     copy?: string;
+    /** The environment of the run (default: that of apv): inside a share (`APV_SUITE_SHARE`) the shares are not waited for. */
+    env?: NodeJS.ProcessEnv;
 }): Promise<QueueHandle>;
 /** Waits for the 1-minute load average to drop under `max`, at most `limitMs`; journaled at most every minute. */
 export declare function waitForLoad(max: number, limitMs: number, log: (line: string) => void, signal?: AbortSignal, hooks?: SuiteHooks, 

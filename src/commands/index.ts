@@ -24,6 +24,7 @@ export const commands: Record<string, Entry> = {
   scope: { summary: 'scope check --spec <fichier> --task <id> : fichiers modifiés contre les chemins autorisés', load: () => import('./scope.js') },
   gates: { summary: 'gates run [--stage task|full] | verify --commit <sha> | receipts list|export|prune : exécute les contrôles et écrit des reçus, vérifie une preuve', load: () => import('./gates.js') },
   lock: { summary: 'lock run|acquire|release|status <ressource> : verrous à bail (propriétaire vérifié, expiration, file d\'attente)', load: () => import('./lock.js') },
+  suite: { summary: 'suite share [--wait-ms <n>] -- <commande> : lance une charge lourde (tests navigateur hors suite) en part partagée de la file des suites complètes, qu\'elle attend', load: () => import('./suite.js') },
   wait: { summary: 'wait --pid <pid> | --file <chemin> [--contains <texte>] [--timeout <s>] : attente bornée (580 s au plus) d\'un processus ou d\'un fichier', load: () => import('./wait.js') },
   procs: { summary: 'procs list|stop [--repo <copie>] [--port <p>]... : processus du dépôt (worktrees, ports de test déclarés) ; stop arrête ceux des worktrees du dépôt (SIGTERM puis SIGKILL), jamais un autre', load: () => import('./procs.js') },
   stacks: { summary: 'stacks status|idle-stop|start : piles de test déclarées (verrou, occupation), arrêt de celles inactives depuis un délai prouvé par observation, redémarrage', load: () => import('./stacks.js') },

@@ -19,6 +19,7 @@ Branche et commit à revoir, spec (exigences de sécurité, menaces, tests néga
 ## Copie isolée
 - Travaille sur une copie du commit, jamais dans le worktree d'un autre agent : `git worktree add <dossier-temporaire> <commit>` (ou `git archive <commit> | tar -x -C <dossier-temporaire>`), dépendances installées, ports à toi.
 - Ressources partagées (base locale, remise à zéro, ports fixes, navigateur de test) sous bail : `apv lock run <ressource> -- <commande>`, ou le verrou du projet (par exemple `E2E_LOCK_FILE` exigé par le script de verrou) ; une commande par bail.
+- Lance Playwright par `apv suite share -- <commande>` : il attend la suite complète en cours.
 - Jamais contre l'aperçu vivant, un environnement partagé ou la production. N'arrête jamais Docker ni une pile partagée.
 - Tes scripts d'attaque vivent dans le dossier temporaire, hors du dépôt revu.
 - **Supprime les utilisateurs de test** et les données que tu as créés à la fin, et retire le worktree temporaire.

@@ -1213,7 +1213,7 @@ const TEXT_COMMANDS = new Set(['echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg',
  * command that is not a text command (`TEXT_COMMANDS`) is taken as run, so a guard never lets a wrapper hide it.
  */
 /** Commands of the tool (src/commands/index.ts): what follows `apv` behind an unknown prefix. */
-const APV_COMMANDS = new Set(['init', 'onboard', 'spec', 'run', 'stack', 'rules', 'release', 'audit', 'metrics', 'ledger', 'scope', 'gates', 'lock', 'wait', 'procs', 'stacks',
+const APV_COMMANDS = new Set(['init', 'onboard', 'spec', 'run', 'stack', 'rules', 'release', 'audit', 'metrics', 'ledger', 'scope', 'gates', 'lock', 'suite', 'wait', 'procs', 'stacks',
   'review', 'dast', 'db', 'design', 'structure', 'reuse', 'tests', 'map', 'quota', 'preview', 'web', 'status', 'help']);
 
 export function apvCall(words) {
@@ -1354,6 +1354,8 @@ export const REASONS = {
     'après les règles du chef de projet ; pousse ta branche de travail et ouvre une PR.',
   computedApv: 'APV : commande apv dont la commande ou la sous-commande est calculée (variable, substitution, eval) refusée : écris-la en clair, ' +
     'les garde-fous doivent pouvoir la lire.',
+  wrapperDepth: 'APV : enveloppes apv (apv lock run … --, apv suite share … --, sh -c) empilées trop profondément pour être lues : ' +
+    'refusé. Lance la commande sous une seule enveloppe.',
   commonDir: 'APV : git rev-parse --git-common-dir seulement seul, en lecture ; le répertoire commun porte les magasins de l\'outil (reçus, relectures, journal de l\'opérateur).',
   pluginCode: 'APV : commande refusée, elle exécute ou importe le code du plugin hors de la commande apv (un script qui charge dist/rules, dist/stack... ' +
     'signerait à la place des crochets). Lance l\'outil par apv (ou node <plugin>/dist/cli.js).',
@@ -1399,6 +1401,38 @@ export function nestedScript(words) {
   }
   if (tool === 'eval') return script(w.slice(1).join(' ')) || null;
   return null;
+}
+
+/**
+ * The command an apv wrapper runs as argv (`apv lock run <resource> [options] -- <command...>`, `apv suite share
+ * [options] -- <command...>`, behind any prefix or launcher, see `apvCall`): `{ words, resource }`, or null. Its
+ * command is examined by every rule of the guard, as if it stood alone on the line (review of 1786b40, C1 and H1).
+ */
+export function apvWrapped(words) {
+  const call = apvCall(words);
+  if (!call) return null;
+  const [command, sub, resource] = positional(call.args);
+  const isLockRun = command === 'lock' && sub === 'run';
+  if (!isLockRun && !(command === 'suite' && sub === 'share')) return null;
+  const dash = call.args.indexOf('--');
+  return { words: dash === -1 ? [] : call.args.slice(dash + 1), resource: isLockRun ? resource ?? null : null };
+}
+
+/**
+ * Shell text whose tokenization gives back `words` (argv of a wrapped command): each word between double quotes, `"`
+ * and `\` escaped, a `$` or a backquote the line took literally (a private character in the words) between apostrophes,
+ * any other `$` or backquote left as the line wrote it (a variable, a substitution the rules read again).
+ */
+export function shellLine(words) {
+  const quote = word => {
+    let out = '"';
+    for (const c of word) {
+      if (c === '' || c === '') out += `"'${c === '' ? '$' : '`'}'"`;
+      else out += c === '"' || c === '\\' ? `\\${c}` : c;
+    }
+    return `${out}"`;
+  };
+  return words.map(quote).join(' ');
 }
 
 /** Commands that only read the files they are given. */
@@ -1586,6 +1620,15 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
       const nested = evaluate(script, env, context, depth + 1, held, active, { dir, known: dirKnown, branch: branchSet });
       if (nested.decision === 'deny') return nested;
     }
+    // The command of an apv wrapper (`apv lock run … --`, `apv suite share … --`) runs as its own line under every rule,
+    // with the locks the wrapper holds. Wrappers stacked deeper than the guard reads are refused, never let through.
+    const via = apvWrapped(words);
+    if (via && via.words.length) {
+      if (depth >= MAX_NESTING) return { decision: 'deny', reason: REASONS.wrapperDepth };
+      const viaHeld = via.resource ? mergeHeld(held, { files: [], resources: [via.resource], stacks: [] }) : held;
+      const nested = evaluate(shellLine(via.words), env, context, depth + 1, viaHeld, active, { dir, known: dirKnown, branch: branchSet });
+      if (nested.decision === 'deny') return nested;
+    }
     // A branch changed by a command of such a script (`bash -c 'git switch main' && git push`): unknown for what follows.
     // Read in its commands, never in the text it carries (a commit message that cites `git checkout`).
     if (inner.some(s => tokenize(s).segments.some(w => branchChange(commandWords(w)?.words ?? w) !== null))) { dirKnown = false; branchSet = null; }
@@ -1628,20 +1671,24 @@ function evaluate(command, env, context, depth, inherited, activeAbove = false, 
       const production = pushToDefault(words, (context.releaseBranches ?? (() => ['production']))(...(moved ? [where] : [])), current);
       if (production) return { decision: 'deny', reason: explain(REASONS.pushToRelease(production)) };
     }
-    if (isRelease(words) && (context.agentId || !authorised(words, 'APV_ALLOW_MERGE'))) return { decision: 'deny', reason: REASONS.release };
+    // The release, the merge and the review record are read in the command a wrapper runs too (`apv lock run r -- env
+    // APV_ALLOW_MERGE=1 apv release auto`), its authorisation set for that command (review of 1786b40, H1).
+    const runs = [words, wrapped.words];
+    if (runs.some(w => isRelease(w) && (context.agentId || !authorised(w, 'APV_ALLOW_MERGE')))) return { decision: 'deny', reason: REASONS.release };
     const apvArgs = apvArguments(words);
     if (apvArgs && positional(apvArgs).slice(0, 2).some(w => /[$`]/.test(w))) return { decision: 'deny', reason: REASONS.computedApv };
-    const review = reviewRecordProblem(words, context.agentType ?? null);
+    const review = reviewRecordProblem(words, context.agentType ?? null) ?? reviewRecordProblem(wrapped.words, context.agentType ?? null);
     if (review) return { decision: 'deny', reason: review };
     const raw = githubWrite(words);
-    const write = raw ?? (isStackMerge(words) ? { merge: true } : null);
+    const stackMerge = runs.find(w => isStackMerge(w));
+    const write = raw ?? (stackMerge ? { merge: true } : null);
     if (write) {
       writesGithub = true;
       if (write.merge && context.agentId) return { decision: 'deny', reason: REASONS.mergeBySubagent };
       // A merge through gh skips the rules the tool checks before any merge: only apv stack merge merges (where the tool
       // is active; elsewhere, gh pr merge needs APV_ALLOW_MERGE=1, as before the rules).
       if (raw?.merge && active) return { decision: 'deny', reason: explain(REASONS.rawMerge) };
-      if (write.merge && !authorised(words, 'APV_ALLOW_MERGE')) return { decision: 'deny', reason: raw?.merge && !active ? REASONS.mergeOutside : REASONS.merge };
+      if (write.merge && !authorised(raw ? words : stackMerge ?? words, 'APV_ALLOW_MERGE')) return { decision: 'deny', reason: raw?.merge && !active ? REASONS.mergeOutside : REASONS.merge };
     }
     if (isProductionDeploy(words) && !authorised(words, 'APV_ALLOW_DEPLOY')) {
       return { decision: 'deny', reason: REASONS.deploy };

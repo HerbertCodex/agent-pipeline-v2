@@ -1,5 +1,6 @@
 import type { GateReceipt, GateStage } from '../domain/contracts.js';
 import type { ApvConfig } from '../config/load.js';
+import { type InfrastructureCause } from './infrastructure.js';
 import { type AlteredRun, type ReceiptSource } from './reuse-proof.js';
 export type { AlteredRun, ReceiptSource } from './reuse-proof.js';
 export interface VerifyOptions {
@@ -110,6 +111,16 @@ export interface GateEvidence {
     } | null;
     /** The receipt retained is `cached`: its origin and the outcome of its verification; null for any other receipt. */
     reuse: ReuseEvidence | null;
+    /**
+     * State `failed`: the infrastructure failure the tool itself observed and recorded in the receipt retained (`finding`:
+     * the only one that may decide anything), the one its output only suggests (`probable`, read from the diagnostic by
+     * src/gates/infrastructure.ts: shown, never acted upon), and when that receipt ended (`startedAt` plus its duration).
+     */
+    failure?: {
+        infrastructure: InfrastructureCause | null;
+        probable: InfrastructureCause | null;
+        endedAt: number;
+    };
 }
 export interface VerifyResult {
     repo: string;

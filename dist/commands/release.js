@@ -9,12 +9,13 @@ import { verifyGates } from '../gates/verify.js';
 import { LockStore } from '../lock/store.js';
 import { migrationLines, pendingReason, refusedReason, releaseMigrations } from '../release/migrations.js';
 import { gitRoot, resolveCommit } from '../run/git-probe.js';
-import { commonDir } from '../stacks/idle.js';
+import { infrastructureAdvice, infrastructureText } from '../gates/infrastructure.js';
+import { commonDir, flockFree, resolveStacks } from '../stacks/idle.js';
 import { journalEntry } from './stack.js';
 import { EXIT, UsageError, guard, json, parse, repoPath } from './common.js';
 export const usage = `Utilisation :
   apv release [<sha>] [--dry-run] [--json] [--repo <chemin>]
-  apv release auto [--dry-run] [--json] [--repo <chemin>]
+  apv release auto [--stacks <pile>[,<pile>]] [--force-retry] [--dry-run] [--json] [--repo <chemin>]
 
 Mise en ligne découplée de la fusion (section release de .apv/config.json, lue sur la branche from distante) :
 la branche de production (release.branch) n'avance qu'en avance rapide vers un commit de release.from dont la
@@ -28,6 +29,11 @@ Motifs : ceux de la production, de <sha> et de from réunis (un commit qui les v
 auto : pour un lancement périodique (cron) ; rien à publier : 0 ; reçus rouges ou instables à ce commit : 1 sans
 relancer ; migration en attente : 0, rien lancé ; sinon suite complète relancée en entier (aucun reçu repris) dans une copie détachée (batch.setup), sans
 attendre la file des suites (occupée : 0, plus tard), puis publie si elle est verte au premier passage.
+Section stacks déclarée : la suite reçoit une pile comme apv gates run --stacks (la première dont le verrou est libre, ou --stacks pour
+forcer) ; aucune libre : 0, piles occupées, plus tard. Panne d'infrastructure (variable absente, pile injoignable) : dite comme telle, 1.
+Même commit déjà tenté, lu dans ses reçus seuls (magasin vérifié comme apv gates verify) : contrôle instable ou échec de code : 1,
+jamais relancé, --force-retry compris (seul un nouveau commit débloque) ; échecs tous en panne d'infrastructure : nouvel essai
+30 min après leurs reçus au plus tôt, --force-retry relance tout de suite.
 Hors --dry-run : APV_ALLOW_MERGE=1 devant la commande (ordre de l'opérateur, ou son cron).
 Les contrôles de la branche de production sont toujours gardés (comme les contrôles de la base à la fusion).
 Historique : .apv/state/stack.log (event release). Sortie : 0 publié ou rien à faire, 1 refus, 2 appel incorrect.`;
@@ -131,8 +137,30 @@ function report(io, asJson, outcome, history, mode) {
     }
     return outcome.ok ? EXIT.ok : EXIT.failed;
 }
+const RETRY_INFRA_MS = 30 * 60_000;
+/**
+ * Whether `release auto` may run the full suite again at a commit, from its receipts alone (review of 1786b40, M1 and M3):
+ * no failed check (`run`); a failure of the code (`code`: never again at this commit, --force-retry included), which is any
+ * failure without an infrastructure finding the tool recorded itself (the output of a test never counts); every failure such
+ * a finding, its receipts younger than 30 minutes (`wait`, unless --force-retry), else `run`.
+ */
+export function retryDecision(proof, now, forceRetry) {
+    const failed = proof.gates.filter(g => g.state === 'failed');
+    if (!failed.length)
+        return { kind: 'run' };
+    const own = failed.filter(g => g.status !== null && ['failed', 'timed_out', 'spawn_error'].includes(g.status));
+    const causes = own.map(g => g.failure?.infrastructure ?? null);
+    const endedAt = Math.max(...failed.map(g => g.failure?.endedAt ?? 0));
+    const runs = [...new Set(failed.map(g => g.runId ?? '?'))].join(', ');
+    // Only what the tool itself observed (`finding` of the receipt) counts; a failure its output merely suggests is a failure of the code.
+    if (!own.length || causes.some(c => c === null))
+        return { kind: 'code', endedAt, runs, probable: failed.flatMap(g => g.failure?.probable && !g.failure.infrastructure ? [g.failure.probable] : []) };
+    const ageMs = now - endedAt;
+    return !forceRetry && ageMs < RETRY_INFRA_MS ? { kind: 'wait', endedAt, runs, ageMs, causes: causes } : { kind: 'run' };
+}
+const when = (at) => new Date(at).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
 /** `apv release auto`: one pass, never waiting; a lock of the repository keeps two passes apart. */
-async function auto(io, repo, dryRun, asJson) {
+async function auto(io, repo, dryRun, asJson, forced, forceRetry) {
     const common = commonDir(repo);
     const store = new LockStore(join(common, 'apv', 'locks'));
     const lock = await store.tryAcquire('release-auto', { pid: process.pid, host: store.host, label: `apv release auto (${repo})` }, 6 * 3600, 'apv release auto');
@@ -155,17 +183,32 @@ async function auto(io, repo, dryRun, asJson) {
             return report(io, asJson, { ...base, ok: false, migrations, lines: [`Mise en ligne refusée : ${stop.refusal}.`] }, !dryRun, 'auto');
         if (stop)
             return report(io, asJson, { ...base, migrations, lines: [`En attente : ${stop.wait} ; rien n'est publié ni lancé.`, ...migrationLines({ ...migrations, pending: [] })] }, false, 'auto');
-        // A red or unstable suite already recorded at this commit is never run again by the cron; a green one never suffices.
+        // Whether to run the suite again is read from the receipts at this commit only, as `verify` reads them (integrity of the
+        // shared store included), never from a file an agent can write (review of 1786b40, M1). An unstable check never
+        // publishes. A failure of the code is never run again at the same commit, --force-retry included: only a new commit
+        // unblocks it. Only a run whose every failure is an infrastructure failure (src/gates/infrastructure.ts) is run again,
+        // 30 minutes after its receipts at the earliest (--force-retry: at once). A green proof never suffices: the suite runs in full.
         const proof = await fullProof(repo, fromHead, from, production);
-        if (proof.gates.some(g => g.state === 'failed') || proof.flaky.length) {
-            const what = proof.flaky.length ? `instable(s) : ${proof.flaky.join(', ')}` : `en échec : ${proofLines(proof).join(', ')}`;
-            return report(io, asJson, { ...base, ok: false, lines: [`Suite complète déjà passée à ${short(fromHead)}, ${what} : rien n'est publié ni relancé (corriger sur ${from}).`] }, !dryRun, 'auto');
+        if (proof.flaky.length) {
+            return report(io, asJson, { ...base, ok: false, lines: [`Suite complète déjà passée à ${short(fromHead)}, instable(s) : ${proof.flaky.join(', ')} : rien n'est publié ni relancé (corriger sur ${from}).`] }, !dryRun, 'auto');
+        }
+        const decision = retryDecision(proof, Date.now(), forceRetry);
+        if (decision.kind === 'code') {
+            return report(io, asJson, { ...base, ok: false, lines: [`Suite rouge à ${short(fromHead)} le ${when(decision.endedAt)} (exécution ${decision.runs}), en échec : ${proofLines(proof).join(', ')}${decision.probable.length ? ` (panne probable lue dans la sortie, non constatée par apv : ${decision.probable.map(infrastructureText).join(' ; ')})` : ''} : jamais relancée au même commit (--force-retry compris) ; en attente d'un nouveau commit sur ${from} ; rien n'est publié ni lancé.`] }, !dryRun, 'auto');
+        }
+        if (decision.kind === 'wait') {
+            return report(io, asJson, { ...base, lines: [`Panne d'infrastructure à ${short(fromHead)} le ${when(decision.endedAt)}, il y a ${Math.round(decision.ageMs / 60000)} min (exécution ${decision.runs}) : ${decision.causes.map(infrastructureText).join(' ; ')} ; nouvel essai après ${RETRY_INFRA_MS / 60000} min ; rien n'est lancé (--force-retry pour relancer).`] }, false, 'auto');
         }
         if (dryRun)
             return report(io, asJson, { ...base, migrations, lines: [`Suite complète à relancer à ${short(fromHead)} dans une copie détachée, puis mise en ligne. --dry-run : rien n'est lancé.`, ...(migrations ? migrationLines(migrations) : [])] }, false, 'auto');
-        const suite = await runCopy(io, repo, common, fromHead, production);
+        const piles = pickStacks(proofConfig(repo, fromHead, production), common, forced);
+        if ('busy' in piles)
+            return report(io, asJson, { ...base, lines: [`Piles occupées (${piles.busy}) : plus tard ; rien n'est lancé.`] }, false, 'auto');
+        const suite = await runCopy(io, repo, common, fromHead, production, piles.ids);
         if (suite.busy)
             return report(io, asJson, { ...base, lines: [`Machine occupée (${suite.busy}) : plus tard.`] }, false, 'auto');
+        if (suite.infrastructure)
+            return report(io, asJson, { ...base, ok: false, lines: [`Suite complète à ${short(fromHead)} : panne d'infrastructure : ${suite.infrastructure} ; rien n'est publié.`] }, true, 'auto');
         if (!suite.ok)
             return report(io, asJson, { ...base, ok: false, lines: [`Suite complète rouge ou instable à ${short(fromHead)} : ${suite.summary} ; rien n'est publié.`] }, true, 'auto');
         return report(io, asJson, await release(repo, state, fromHead, false), true, 'auto');
@@ -174,8 +217,28 @@ async function auto(io, repo, dryRun, asJson) {
         await store.release('release-auto', { token: lock.record.token }).catch(() => undefined);
     }
 }
+/**
+ * The stacks the full suite is given, as `apv gates run --stacks`: those forced, else the first declared whose lock is free
+ * (a lock file held by someone else is busy); none declared: none given (`ids` undefined); all busy: `busy`.
+ */
+function pickStacks(config, common, forced) {
+    const declared = resolveStacks(config, common);
+    if (!declared.length) {
+        if (forced)
+            throw new UsageError('--stacks : aucune pile déclarée (section stacks de .apv/config.json)');
+        return { ids: undefined };
+    }
+    if (forced) {
+        const unknown = forced.filter(id => !declared.some(s => s.id === id));
+        if (unknown.length)
+            throw new UsageError(`--stacks : pile inconnue ${unknown.join(', ')} (déclarées : ${declared.map(s => s.id).join(', ')})`);
+        return { ids: forced };
+    }
+    const free = declared.find(s => !s.lockFile || flockFree(s.lockFile) !== false);
+    return free ? { ids: [free.id] } : { busy: declared.map(s => `${s.id} : verrou ${s.lockFile} tenu`).join(' ; ') };
+}
 /** The full suite of `sha` in a detached copy under the Git common directory, prepared by batch.setup, then removed. */
-async function runCopy(io, repo, common, sha, production) {
+async function runCopy(io, repo, common, sha, production, stacks) {
     const dir = join(common, 'apv', 'release', sha.slice(0, 12));
     mkdirSync(join(common, 'apv', 'release'), { recursive: true });
     if (existsSync(dir))
@@ -189,9 +252,14 @@ async function runCopy(io, repo, common, sha, production) {
         const noWait = { ...config, suite: { ports: suite.ports, queue: { ...suite.queue, waitMs: 0 } } };
         // Every check run again (no receipt reused): the cron publishes only what it has just seen pass.
         const result = await runGates({ repo: dir, config: noWait, stage: 'full', base: production, repeatReference: production, reference: production, repeatCeiling: false,
-            batchSetup: true, replay: 'all', env: io.env, log: line => io.stderr(`${line}\n`) });
+            batchSetup: true, replay: 'all', ...(stacks ? { stacks } : {}), env: io.env, log: line => io.stderr(`${line}\n`) });
         const failed = result.receipts.filter(r => !['passed', 'passed_after_retry', 'cached', 'not_required'].includes(r.status)).map(r => `${r.gateId} (${r.status})`);
-        return { ok: result.ok && !result.flaky.length, summary: `${failed.length ? `en échec : ${failed.join(', ')}` : ''}${result.flaky.length ? ` instable(s) : ${result.flaky.join(', ')}` : ''} ; exécution ${result.runId}` };
+        const infra = result.infrastructure;
+        // Said as observed only when the tool recorded the finding itself; read from the output only, it stays probable (M3).
+        const observed = result.receipts.filter(r => ['failed', 'timed_out', 'spawn_error'].includes(r.status)).every(r => r.finding);
+        if (!result.ok && infra.all)
+            return { ok: false, infrastructure: `${observed ? '' : 'probable, lue dans la sortie, non constatée par apv : '}${infra.causes.map(infrastructureText).join(' ; ')} ; ${infrastructureAdvice(infra.causes, stacks ? [] : (config.stacks ?? []).map(x => x.id))} (exécution ${result.runId})`, runId: result.runId, summary: '' };
+        return { ok: result.ok && !result.flaky.length, runId: result.runId, summary: `${failed.length ? `en échec : ${failed.join(', ')}` : ''}${result.flaky.length ? ` instable(s) : ${result.flaky.join(', ')}` : ''} ; exécution ${result.runId}` };
     }
     catch (error) {
         if (error instanceof PipelineError && ['SUITE_QUEUE', 'GATE_BUSY'].includes(error.code))
@@ -207,7 +275,7 @@ async function runCopy(io, repo, common, sha, production) {
 export async function run(args, io) {
     return guard(io, usage, async () => {
         const { values, positionals } = parse(args, {
-            'dry-run': { type: 'boolean' }, json: { type: 'boolean' }, repo: { type: 'string' }, help: { type: 'boolean', short: 'h' },
+            'dry-run': { type: 'boolean' }, stacks: { type: 'string' }, 'force-retry': { type: 'boolean' }, json: { type: 'boolean' }, repo: { type: 'string' }, help: { type: 'boolean', short: 'h' },
         });
         if (values.help) {
             io.stdout(`${usage}\n`);
@@ -221,8 +289,13 @@ export async function run(args, io) {
             io.stderr(`${RELEASE_REFUSED}\n`);
             return EXIT.usage;
         }
+        const forced = values.stacks === undefined ? undefined : values.stacks.split(',').map(x => x.trim()).filter(Boolean);
+        if (forced && (!forced.length || new Set(forced).size !== forced.length))
+            throw new UsageError('--stacks attend une ou plusieurs piles différentes, par exemple --stacks 2 ou --stacks 1,2');
+        if (forced && positionals[0] !== 'auto')
+            throw new UsageError('--stacks ne vaut que pour apv release auto');
         if (positionals[0] === 'auto')
-            return auto(io, repo, dryRun, values.json === true);
+            return auto(io, repo, dryRun, values.json === true, forced, values['force-retry'] === true);
         const state = remoteState(repo);
         const sha = positionals[0] === undefined ? state.fromHead : resolveCommit(repo, positionals[0]);
         if (!sha)
