@@ -107,6 +107,7 @@ export declare const gateSchema: import("./schema.js").Schema<{
     readonly testPaths: string[];
     readonly timeoutMs: number;
     readonly passEnv: string[];
+    readonly requiredEnv: string[] | undefined;
     readonly dependsOn: string[];
     readonly resources: string[];
     readonly readOnly: boolean;
@@ -342,6 +343,7 @@ export declare const configSchema: import("./schema.js").Schema<{
         readonly testPaths: string[];
         readonly timeoutMs: number;
         readonly passEnv: string[];
+        readonly requiredEnv: string[] | undefined;
         readonly dependsOn: string[];
         readonly resources: string[];
         readonly readOnly: boolean;
@@ -488,6 +490,10 @@ export declare const receiptSchema: import("./schema.js").Schema<{
     readonly stderrHash: string;
     readonly diagnostic: string;
     readonly reusedFrom: string | null;
+    readonly finding: {
+        readonly kind: "setup" | "environment" | "unreachable";
+        readonly detail: string;
+    } | undefined;
     readonly stage: "task" | "full" | undefined;
     readonly dirty: boolean | undefined;
     readonly targeted: boolean | undefined;

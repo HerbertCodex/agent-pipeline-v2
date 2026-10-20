@@ -112,11 +112,13 @@ export interface GateEvidence {
     /** The receipt retained is `cached`: its origin and the outcome of its verification; null for any other receipt. */
     reuse: ReuseEvidence | null;
     /**
-     * State `failed`: whether its output points at the infrastructure (src/gates/infrastructure.ts, read from the diagnostic of
-     * the receipt retained) and when that receipt ended (its `startedAt` plus its duration, in ms since the epoch). Absent otherwise.
+     * State `failed`: the infrastructure failure the tool itself observed and recorded in the receipt retained (`finding`:
+     * the only one that may decide anything), the one its output only suggests (`probable`, read from the diagnostic by
+     * src/gates/infrastructure.ts: shown, never acted upon), and when that receipt ended (`startedAt` plus its duration).
      */
     failure?: {
         infrastructure: InfrastructureCause | null;
+        probable: InfrastructureCause | null;
         endedAt: number;
     };
 }

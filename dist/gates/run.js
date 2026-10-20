@@ -874,15 +874,26 @@ export async function runGates(options) {
             const copyError = assigned ? spread.copies.find(c => c.dir === workspace)?.error ?? null : null;
             if (copyError)
                 return write({ ...base, status: 'spawn_error', durationMs: 0, exitCode: null, stdoutHash: '', stderrHash: '',
-                    diagnostic: `Copie de la pile ${assigned.stack.id} non préparée : ${copyError}. La commande n'a pas été lancée.` });
+                    diagnostic: `Copie de la pile ${assigned.stack.id} non préparée : ${copyError}. La commande n'a pas été lancée.`,
+                    finding: { kind: 'setup', detail: `copie de la pile ${assigned.stack.id} non préparée`.slice(0, 500) } });
             if (!executable)
                 return write({ ...base, status: 'spawn_error', durationMs: performance.now() - elapsedStart, exitCode: null,
-                    stdoutHash: '', stderrHash: '', diagnostic: `Executable unavailable: ${command[0]}` });
+                    stdoutHash: '', stderrHash: '', diagnostic: `Executable unavailable: ${command[0]}`, finding: { kind: 'setup', detail: `exécutable introuvable : ${command[0]}`.slice(0, 500) } });
             const secrets = { ...env, ...source };
             const excerpt = (r, limit = MAX_DIAGNOSTIC_CHARS) => redact(failureExcerpt(r.status, r.stderr, r.stdout, limit), secrets).slice(0, limit);
             const exitOf = (r) => r.exitCode !== null && r.exitCode >= 0 && r.exitCode <= 255 ? r.exitCode : null;
             const lock = assigned ? stackLock(assigned.stack, gate, defaultLockDir(source)) : gate.lock ? await resolveGateLock(git, repo, gate.lock, env, source) : null;
             const withLockWait = (ms) => lock ? { lockWaitMs: Math.round(ms) } : {};
+            // A check that does not get a variable it declares required (`requiredEnv`) is not run (the outage of 20 October 2026:
+            // STACK_URL absent, every stack check red): the tool says so itself in the receipt, a finding no output can fake.
+            const absent = (gate.requiredEnv ?? []).filter(name => !env[name]);
+            if (absent.length) {
+                const detail = `variable(s) ${absent.join(', ')} absente(s) de l'environnement du contrôle (requiredEnv)${assigned ? `, pile ${assigned.stack.id}` : ''}`;
+                log(`${gate.id} : ${detail} : contrôle non lancé (panne d'infrastructure constatée par apv).`);
+                return write({ ...base, status: 'spawn_error', durationMs: 0, exitCode: null, stdoutHash: '', stderrHash: '',
+                    diagnostic: `Variable ${absent[0]} absente de l'environnement du contrôle (requiredEnv : ${absent.join(', ')}), constaté par apv avant le lancement : la commande n'a pas été lancée.`,
+                    finding: { kind: 'environment', detail: detail.slice(0, 500) } });
+            }
             /** One pass of a command, under the flock of the check when it has one: the timeout starts once it is held. */
             const pass = async (argv, checkEnv, timeoutMs = gate.timeoutMs) => {
                 // The marker of a full suite, outside the environment identity: its processes are found at its end.

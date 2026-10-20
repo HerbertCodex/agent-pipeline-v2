@@ -484,14 +484,14 @@ test('apv release, migrations: a migration that is a symbolic link is refused (r
 });
 
 /** A stack declared with a lock file and an env file; the check of the stack fails unless STACK_URL reaches it. */
-function stackProject(t, { envLine = 'STACK_URL=http://127.0.0.1:55321\n', second = false } = {}) {
+function stackProject(t, { envLine = 'STACK_URL=http://127.0.0.1:55321\n', second = false, required = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'apv4-release-stacks-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const lock1 = join(dir, 'stack1.lock'); const lock2 = join(dir, 'stack2.lock');
   writeFileSync(join(dir, 'stack1.env'), envLine); writeFileSync(join(dir, 'stack2.env'), envLine.replace('55321', '55322'));
   const check = 'if (!process.env.STACK_URL) { console.error("Error: Variable STACK_URL absente"); process.exit(1); } require("fs").writeFileSync(process.env.SEEN, process.env.STACK_URL + " " + process.env.LOCK_FILE);';
   const stacks = [{ id: '1', lockFile: lock1, envFile: join(dir, 'stack1.env') }, ...(second ? [{ id: '2', lockFile: lock2, envFile: join(dir, 'stack2.env') }] : [])];
-  const p = project(t, { extra: { stacks }, gates: [{ id: 'integration', stage: 'full', command: node(check), passEnv: ['STACK_URL', 'SEEN'], lock: { file: lock1, fileEnv: 'LOCK_FILE' } }] });
+  const p = project(t, { extra: { stacks }, gates: [{ id: 'integration', stage: 'full', command: node(check), passEnv: ['STACK_URL', 'SEEN'], ...(required ? { requiredEnv: ['STACK_URL'] } : {}), lock: { file: lock1, fileEnv: 'LOCK_FILE' } }] });
   p.commit('a.txt', 'a\n'); git(p.repo, 'push', '-q', 'origin', 'main');
   return { ...p, dir, lock1, lock2, seen: join(dir, 'seen'), env: { ...ALLOW, SEEN: join(dir, 'seen') } };
 }
@@ -543,7 +543,8 @@ test('apv release auto: a failure of the infrastructure is said so, exit 1, noth
   const p = stackProject(t, { envLine: '# aucune variable\n' });
   const r = await apv(p.repo, ['release', 'auto'], p.env);
   assert.equal(r.code, 1, r.stdout + r.stderr);
-  assert.match(r.stdout, /panne d'infrastructure : integration : variable d'environnement absente.*rien n'est publié/);
+  // Read in the output only (STACK_URL not declared in requiredEnv): said, as probable.
+  assert.match(r.stdout, /panne d'infrastructure : probable, lue dans la sortie, non constatée par apv : integration : variable d'environnement absente.*rien n'est publié/);
   assert.notEqual(p.remote('production'), p.remote('main'));
 });
 
@@ -557,21 +558,27 @@ test('apv release auto, without stacks: a red check stays a red suite, not an in
 });
 
 test('apv release auto: a real infrastructure failure is run again 30 minutes after its receipts, or at once with --force-retry', { skip: !hasFlock && 'flock(1) missing' }, async t => {
-  const p = stackProject(t, { envLine: '# aucune variable\n' });
+  // STACK_URL declared required and absent from the stack: apv sees it before running the check (review 1786b40, M3).
+  const p = stackProject(t, { envLine: '# aucune variable\n', required: true });
   const first = await apv(p.repo, ['release', 'auto'], p.env);
   assert.equal(first.code, 1, first.stdout + first.stderr);
   assert.match(first.stdout, /panne d'infrastructure/);
   const soon = await apv(p.repo, ['release', 'auto'], p.env);
   assert.equal(soon.code, 0, soon.stdout + soon.stderr);
-  assert.match(soon.stdout, /Panne d'infrastructure à .* le \d{4}-\d\d-\d\d \d\d:\d\d UTC, il y a 0 min \(exécution .*\) : integration : variable d'environnement absente .*nouvel essai après 30 min/);
+  assert.match(soon.stdout, /Panne d'infrastructure à .* le \d{4}-\d\d-\d\d \d\d:\d\d UTC, il y a 0 min \(exécution .*\) : integration : variable d'environnement absente \(variable\(s\) STACK_URL absente\(s\) de l'environnement du contrôle \(requiredEnv\), pile 1\) ; nouvel essai après 30 min/);
+  // Observed by the tool before the launch (M3): the command of the check never ran.
+  assert.equal(existsSync(p.seen), false);
   assert.notEqual(p.remote('production'), p.remote('main'));
   // Past 30 minutes after its receipts (their date, never a file), the same proof lets the suite run again.
   const proof = { gates: [{ gateId: 'integration', state: 'failed', status: 'failed', runId: 'r1', failure: { infrastructure: { gateId: 'integration', kind: 'environment', detail: 'x' }, endedAt: 1_000_000 } }] };
   assert.equal(retryDecision(proof, 1_000_000 + 29 * 60_000, false).kind, 'wait');
   assert.equal(retryDecision(proof, 1_000_000 + 31 * 60_000, false).kind, 'run');
   assert.equal(retryDecision(proof, 1_000_000 + 60_000, true).kind, 'run');
-  const code = { gates: [...proof.gates, { gateId: 'unit', state: 'failed', status: 'failed', runId: 'r1', failure: { infrastructure: null, endedAt: 1_000_000 } }] };
+  const code = { gates: [...proof.gates, { gateId: 'unit', state: 'failed', status: 'failed', runId: 'r1', failure: { infrastructure: null, probable: null, endedAt: 1_000_000 } }] };
   assert.equal(retryDecision(code, 1_000_000 + 31 * 60_000, true).kind, 'code', 'one failure of the code: never, --force-retry included');
+  // An outage the output only suggests (« ECONNREFUSED » printed by a test) is a failure of the code (review 1786b40, M3).
+  const said = { gates: [{ gateId: 'unit', state: 'failed', status: 'failed', runId: 'r1', failure: { infrastructure: null, probable: { gateId: 'unit', kind: 'unreachable', detail: 'ECONNREFUSED' }, endedAt: 1_000_000 } }] };
+  assert.equal(retryDecision(said, 1_000_000 + 31 * 60_000, true).kind, 'code');
   // The stack repaired, --force-retry on the real receipts of the infrastructure failure: run again and published.
   writeFileSync(join(p.dir, 'stack1.env'), 'STACK_URL=http://127.0.0.1:55321\n');
   const forcedFirst = await apv(p.repo, ['release', 'auto', '--force-retry'], p.env);
@@ -588,11 +595,11 @@ test('apv release auto: a real infrastructure failure is run again 30 minutes af
 });
 
 /** A commit whose check fails in its code until `ok` exists; `runs` counts the passes of its command. */
-function codeFailure(t) {
+function codeFailure(t, output = 'expected 1 received 2') {
   const dir = mkdtempSync(join(tmpdir(), 'apv4-release-code-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const ok = join(dir, 'ok'); const runs = join(dir, 'runs');
-  const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node(`const fs = require("fs"); fs.appendFileSync(${JSON.stringify(runs)}, "x"); if (!fs.existsSync(${JSON.stringify(ok)})) { console.error("expected 1 received 2"); process.exit(1); }`) }] });
+  const p = project(t, { gates: [{ id: 'unit', stage: 'full', command: node(`const fs = require("fs"); fs.appendFileSync(${JSON.stringify(runs)}, "x"); if (!fs.existsSync(${JSON.stringify(ok)})) { console.error(${JSON.stringify(output)}); process.exit(1); }`) }] });
   const sha = p.commit('a.txt', 'a\n'); git(p.repo, 'push', '-q', 'origin', 'main');
   return { ...p, sha, ok, count: () => (existsSync(runs) ? readFileSync(runs, 'utf8').length : 0), record: join(commonDirOf(p.repo), 'apv', 'release', 'last-auto.json') };
 }
@@ -677,4 +684,19 @@ test('apv release auto: no record of the last pass is written any more, so none 
   mkdirSync(dirname(record), { recursive: true }); symlinkSync(victim, record);
   assert.equal((await apv(p.repo, ['release', 'auto'], ALLOW)).code, 1);
   assert.equal(readFileSync(victim, 'utf8'), 'ORIGINAL');
+});
+
+test('apv release auto: a failure of the code that prints ECONNREFUSED is never run again, --force-retry included (review 1786b40, M3)', async t => {
+  const p = codeFailure(t, 'AssertionError: expected 1 received 2 (log: connect ECONNREFUSED 127.0.0.1:9 from the mock)');
+  const first = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(first.code, 1, first.stdout + first.stderr);
+  assert.match(first.stdout, /panne d'infrastructure : probable, lue dans la sortie, non constatée par apv : unit : pile de test ou service injoignable/);
+  writeFileSync(p.ok, '');
+  for (const args of [['release', 'auto'], ['release', 'auto', '--force-retry']]) {
+    const r = await apv(p.repo, args, ALLOW);
+    assert.equal(r.code, 1, `${args.join(' ')}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /en échec : unit \(failed\) \(panne probable lue dans la sortie, non constatée par apv : unit : pile de test ou service injoignable .*\) : jamais relancée au même commit/);
+    assert.equal(p.count(), 1, 'nothing run again');
+    assert.notEqual(p.remote('production'), p.sha);
+  }
 });

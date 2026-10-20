@@ -184,7 +184,9 @@ export async function verifyGates(options) {
         const repeat = succeeded && gate.repeatChanged ? await repeatGap(gate.repeatChanged, proven.receipt, stage === 'full' && proof === 'full') : null;
         const audit = webAuditGate(proof === 'targeted' ? gate.affected ?? gate.command : gate.command);
         const web = succeeded ? webGap(proven.receipt, audit) : null;
-        const failure = succeeded ? {} : { failure: { infrastructure: infrastructureCause(last.receipt), endedAt: last.receipt.startedAt + Math.round(last.receipt.durationMs) } };
+        const found = last.receipt.finding;
+        const failure = succeeded ? {} : { failure: { infrastructure: found ? { gateId, kind: found.kind, detail: found.detail } : null,
+                probable: infrastructureCause(last.receipt), endedAt: last.receipt.startedAt + Math.round(last.receipt.durationMs) } };
         gates.push({ gateId, state: !succeeded ? 'failed' : repeat ? 'unrepeated' : web ? 'unaudited' : 'passed', ...common, repeat, scope: null, web, reuse, ...failure });
     }
     return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered,

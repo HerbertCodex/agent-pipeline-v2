@@ -219,6 +219,7 @@ export declare const apvConfigSchema: import("../domain/schema.js").Schema<{
         readonly testPaths: string[];
         readonly timeoutMs: number;
         readonly passEnv: string[];
+        readonly requiredEnv: string[] | undefined;
         readonly dependsOn: string[];
         readonly resources: string[];
         readonly readOnly: boolean;

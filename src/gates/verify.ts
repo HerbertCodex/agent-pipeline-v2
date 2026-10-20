@@ -111,10 +111,11 @@ export interface GateEvidence {
   /** The receipt retained is `cached`: its origin and the outcome of its verification; null for any other receipt. */
   reuse: ReuseEvidence | null;
   /**
-   * State `failed`: whether its output points at the infrastructure (src/gates/infrastructure.ts, read from the diagnostic of
-   * the receipt retained) and when that receipt ended (its `startedAt` plus its duration, in ms since the epoch). Absent otherwise.
+   * State `failed`: the infrastructure failure the tool itself observed and recorded in the receipt retained (`finding`:
+   * the only one that may decide anything), the one its output only suggests (`probable`, read from the diagnostic by
+   * src/gates/infrastructure.ts: shown, never acted upon), and when that receipt ended (`startedAt` plus its duration).
    */
-  failure?: { infrastructure: InfrastructureCause | null; endedAt: number };
+  failure?: { infrastructure: InfrastructureCause | null; probable: InfrastructureCause | null; endedAt: number };
 }
 export interface VerifyResult {
   repo: string;
@@ -307,7 +308,9 @@ export async function verifyGates(options: VerifyOptions): Promise<VerifyResult>
     const repeat = succeeded && gate.repeatChanged ? await repeatGap(gate.repeatChanged, proven.receipt, stage === 'full' && proof === 'full') : null;
     const audit = webAuditGate(proof === 'targeted' ? gate.affected ?? gate.command : gate.command);
     const web = succeeded ? webGap(proven.receipt, audit) : null;
-    const failure = succeeded ? {} : { failure: { infrastructure: infrastructureCause(last.receipt), endedAt: last.receipt.startedAt + Math.round(last.receipt.durationMs) } };
+    const found = last.receipt.finding;
+    const failure = succeeded ? {} : { failure: { infrastructure: found ? { gateId, kind: found.kind, detail: found.detail } : null,
+      probable: infrastructureCause(last.receipt), endedAt: last.receipt.startedAt + Math.round(last.receipt.durationMs) } };
     gates.push({ gateId, state: !succeeded ? 'failed' : repeat ? 'unrepeated' : web ? 'unaudited' : 'passed', ...common, repeat, scope: null, web, reuse, ...failure });
   }
   return { repo, commit, stage, base, configHash, required, targeted: [...viaTargeted], reserved: staged.reserved.map(g => g.id), gates, unreadable, store, altered: shared.altered,

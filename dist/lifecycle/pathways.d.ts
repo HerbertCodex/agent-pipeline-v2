@@ -264,6 +264,10 @@ export declare function targetedQaContext(context: {
         stdoutHash: string;
         stderrHash: string;
         reusedFrom: string | null;
+        finding: {
+            readonly kind: "setup" | "environment" | "unreachable";
+            readonly detail: string;
+        } | undefined;
         stage: "task" | "full" | undefined;
         dirty: boolean | undefined;
         targeted: boolean | undefined;

@@ -139,19 +139,21 @@ function report(io: CommandIO, asJson: boolean, outcome: Outcome, history: boole
 
 const RETRY_INFRA_MS = 30 * 60_000;
 /**
- * Whether `release auto` may run the full suite again at a commit, from its receipts alone (review of 1786b40, M1): no
- * failed check (`run`); a failure of the code (`code`: never again at this commit, --force-retry included); every failure
- * an infrastructure failure, its receipts younger than 30 minutes (`wait`, unless --force-retry), else `run`.
+ * Whether `release auto` may run the full suite again at a commit, from its receipts alone (review of 1786b40, M1 and M3):
+ * no failed check (`run`); a failure of the code (`code`: never again at this commit, --force-retry included), which is any
+ * failure without an infrastructure finding the tool recorded itself (the output of a test never counts); every failure such
+ * a finding, its receipts younger than 30 minutes (`wait`, unless --force-retry), else `run`.
  */
 export function retryDecision(proof: Pick<VerifyResult, 'gates'>, now: number, forceRetry: boolean):
-  { kind: 'run' } | { kind: 'code'; endedAt: number; runs: string } | { kind: 'wait'; endedAt: number; runs: string; ageMs: number; causes: InfrastructureCause[] } {
+  { kind: 'run' } | { kind: 'code'; endedAt: number; runs: string; probable: InfrastructureCause[] } | { kind: 'wait'; endedAt: number; runs: string; ageMs: number; causes: InfrastructureCause[] } {
   const failed = proof.gates.filter(g => g.state === 'failed');
   if (!failed.length) return { kind: 'run' };
   const own = failed.filter(g => g.status !== null && ['failed', 'timed_out', 'spawn_error'].includes(g.status));
   const causes = own.map(g => g.failure?.infrastructure ?? null);
   const endedAt = Math.max(...failed.map(g => g.failure?.endedAt ?? 0));
   const runs = [...new Set(failed.map(g => g.runId ?? '?'))].join(', ');
-  if (!own.length || causes.some(c => c === null)) return { kind: 'code', endedAt, runs };
+  // Only what the tool itself observed (`finding` of the receipt) counts; a failure its output merely suggests is a failure of the code.
+  if (!own.length || causes.some(c => c === null)) return { kind: 'code', endedAt, runs, probable: failed.flatMap(g => g.failure?.probable && !g.failure.infrastructure ? [g.failure.probable] : []) };
   const ageMs = now - endedAt;
   return !forceRetry && ageMs < RETRY_INFRA_MS ? { kind: 'wait', endedAt, runs, ageMs, causes: causes as InfrastructureCause[] } : { kind: 'run' };
 }
@@ -185,7 +187,7 @@ async function auto(io: CommandIO, repo: string, dryRun: boolean, asJson: boolea
     }
     const decision = retryDecision(proof, Date.now(), forceRetry);
     if (decision.kind === 'code') {
-      return report(io, asJson, { ...base, ok: false, lines: [`Suite rouge à ${short(fromHead)} le ${when(decision.endedAt)} (exécution ${decision.runs}), en échec : ${proofLines(proof).join(', ')} : jamais relancée au même commit (--force-retry compris) ; en attente d'un nouveau commit sur ${from} ; rien n'est publié ni lancé.`] }, !dryRun, 'auto');
+      return report(io, asJson, { ...base, ok: false, lines: [`Suite rouge à ${short(fromHead)} le ${when(decision.endedAt)} (exécution ${decision.runs}), en échec : ${proofLines(proof).join(', ')}${decision.probable.length ? ` (panne probable lue dans la sortie, non constatée par apv : ${decision.probable.map(infrastructureText).join(' ; ')})` : ''} : jamais relancée au même commit (--force-retry compris) ; en attente d'un nouveau commit sur ${from} ; rien n'est publié ni lancé.`] }, !dryRun, 'auto');
     }
     if (decision.kind === 'wait') {
       return report(io, asJson, { ...base, lines: [`Panne d'infrastructure à ${short(fromHead)} le ${when(decision.endedAt)}, il y a ${Math.round(decision.ageMs / 60000)} min (exécution ${decision.runs}) : ${decision.causes.map(infrastructureText).join(' ; ')} ; nouvel essai après ${RETRY_INFRA_MS / 60000} min ; rien n'est lancé (--force-retry pour relancer).`] }, false, 'auto');
@@ -238,7 +240,9 @@ async function runCopy(io: CommandIO, repo: string, common: string, sha: string,
       batchSetup: true, replay: 'all', ...(stacks ? { stacks } : {}), env: io.env, log: line => io.stderr(`${line}\n`) });
     const failed = result.receipts.filter(r => !['passed', 'passed_after_retry', 'cached', 'not_required'].includes(r.status)).map(r => `${r.gateId} (${r.status})`);
     const infra = result.infrastructure;
-    if (!result.ok && infra.all) return { ok: false, infrastructure: `${infra.causes.map(infrastructureText).join(' ; ')} ; ${infrastructureAdvice(infra.causes, stacks ? [] : (config.stacks ?? []).map(x => x.id))} (exécution ${result.runId})`, runId: result.runId, summary: '' };
+    // Said as observed only when the tool recorded the finding itself; read from the output only, it stays probable (M3).
+    const observed = result.receipts.filter(r => ['failed', 'timed_out', 'spawn_error'].includes(r.status)).every(r => r.finding);
+    if (!result.ok && infra.all) return { ok: false, infrastructure: `${observed ? '' : 'probable, lue dans la sortie, non constatée par apv : '}${infra.causes.map(infrastructureText).join(' ; ')} ; ${infrastructureAdvice(infra.causes, stacks ? [] : (config.stacks ?? []).map(x => x.id))} (exécution ${result.runId})`, runId: result.runId, summary: '' };
     return { ok: result.ok && !result.flaky.length, runId: result.runId, summary: `${failed.length ? `en échec : ${failed.join(', ')}` : ''}${result.flaky.length ? ` instable(s) : ${result.flaky.join(', ')}` : ''} ; exécution ${result.runId}` };
   } catch (error) {
     if (error instanceof PipelineError && ['SUITE_QUEUE', 'GATE_BUSY'].includes(error.code)) return { ok: false, busy: error.message.slice(0, 300), summary: '' };
