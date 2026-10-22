@@ -352,10 +352,6 @@ export const receiptSchema = s.object({
         failures: s.default(s.array(s.object({ test: s.string(1, 500), count: s.number(1, 1_000_000) }), 0, 100), []),
         output: s.optional(s.string(0, 16000)),
         fixedWaits: s.default(s.array(s.object({ file: s.string(1, 500), line: s.number(1, 10_000_000), text: s.string(0, 300) }), 0, 100), []),
-        // The proof of the release only (docs/UNE-SUITE-PAR-PR.md, 2.2): changed test files left out of the repetition because a
-        // full receipt of the same check already repeated them, green, at the same content (`blob`). Never trusted: `apv
-        // release` finds the credit again in the store (repeatCredits). Absent elsewhere.
-        credited: s.optional(s.array(s.object({ file: s.string(1, 500), blob: s.string(40, 64, /^[a-f0-9]{40,64}$/), runId: id, receipt: id, commit: sha }), 0, 2000)),
     })),
     // What `apv web audit` run by the check recorded (`APV_WEB_RECORD`): whether the audit was required, from which base,
     // the changed files with a web effect, and the audit made (null: « not required », nothing measured). `apv gates verify`

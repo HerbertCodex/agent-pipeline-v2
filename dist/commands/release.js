@@ -31,10 +31,10 @@ par l'opérateur dans une session Claude Code (journal de l'opérateur) ; une mi
 Motifs : ceux de la production, de <sha> et de from réunis (un commit qui les vide ou les change n'en retire aucun).
 auto : pour un lancement périodique (cron) ; rien à publier : 0 ; reçus rouges à ce commit : 1 sans relancer ; migration
 en attente : 0, rien lancé ; sinon suite complète dans la copie neuve de l'arbre (<répertoire git commun>/apv/fresh/<arbre>,
-préparée par batch.setup, la même que apv gates run --fresh-copy), sans attendre la file des suites (occupée : 0, plus tard) :
-un contrôle dont un reçu vert d'un arbre identique se vérifie (même configuration, même environnement normalisé, moins de
-20 h : la suite de la branche) est repris sans relancer, le journal dit lequel ; les tests modifiés déjà répétés au même
-contenu sur leur branche ne sont pas répétés de nouveau (crédit de répétition). Puis publie si elle est verte.
+préparée par batch.setup), sans attendre la file des suites (occupée : 0, plus tard) : un contrôle dont un reçu vert
+d'un arbre identique se vérifie (même configuration, même environnement, moins de 20 h : une mise en ligne relancée au même
+arbre) est repris sans relancer, le journal dit lequel. Chaque test modifié depuis la production est répété. Puis publie si
+la suite est verte : c'est la seule suite complète, une PR se fusionne sur ses contrôles de tâche, ses tests ciblés et ses relectures.
 Test instable (réussi seulement après relance) : bloquant s'il est ajouté ou modifié depuis la production, ou concerné par
 le changement (affectedList du contrôle, lu à la production) ; sinon publié quand même, et écrit comme constat (journal,
 .apv/state/suivi-constats.md) avec son nom et son taux d'échec. Bloquant, seul l'opérateur le lève pour le commit exact publié,
@@ -81,7 +81,7 @@ function remoteState(repo) {
 /** The checks of `sha` with those of the production kept (a change never weakens what production was proven with). */
 const proofConfig = (repo, sha, production) => enforceBaseGates(loadConfigAtCommit(repo, sha).config, loadConfigAtCommit(repo, production).config).config;
 async function fullProof(repo, sha, from, production) {
-    return verifyGates({ repo, config: proofConfig(repo, sha, production), commit: sha, stage: 'full', configFile: null, reuseReference: `refs/remotes/${REMOTE}/${from}`, repeatCredits: true });
+    return verifyGates({ repo, config: proofConfig(repo, sha, production), commit: sha, stage: 'full', configFile: null, reuseReference: `refs/remotes/${REMOTE}/${from}` });
 }
 const proofLines = (proof) => proof.gates.filter(g => g.state !== 'passed').map(g => `${g.gateId} (${g.state})`);
 /**
@@ -307,7 +307,7 @@ async function runSuite(io, dir, sha, config, production, stacks) {
         const suite = suiteSettings(config);
         const noWait = { ...config, suite: { ports: suite.ports, queue: { ...suite.queue, waitMs: 0 } } };
         const result = await runGates({ repo: dir, config: noWait, stage: 'full', base: production, repeatReference: production, reference: production, repeatCeiling: false,
-            batchSetup: true, repeatCredits: true, ...(stacks ? { stacks } : {}), env: io.env, log: line => io.stderr(`${line}\n`) });
+            batchSetup: true, ...(stacks ? { stacks } : {}), env: io.env, log: line => io.stderr(`${line}\n`) });
         if (result.candidateSha !== sha)
             throw new PipelineError('RELEASE', `copie à ${short(result.candidateSha)}, attendu ${short(sha)}`);
         const failed = result.receipts.filter(r => !['passed', 'passed_after_retry', 'cached', 'not_required'].includes(r.status)).map(r => `${r.gateId} (${r.status})`);

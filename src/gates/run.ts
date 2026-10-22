@@ -29,7 +29,6 @@ import { planSpread, prepareCopies, prepareMainCopy, removeCopies, stackLock, st
 import { checkReuse, findOrigin, readLocal, reuseContext, reuseReason, type IdentityParts, type ReuseChoice, type ReuseEnvironment } from './reuse-proof.js';
 import { fixedWaitRefusal, referenceMissing, mergeBase, optionLikeFile, planRepeat, repeatArgv, repeatDiagnostic, repeatFailures, repeatProofGap, resolveReference, tooManyFiles,
   type RepeatPlan } from './repeat.js';
-import { repeatCredits, type RepeatCredit } from './repeat-credit.js';
 import { planScope, scopeRecord, scopeReferenceMissing, type ScopeDecision } from './proof-scope.js';
 import { FLOCK_TIMEOUT_EXIT, SUITE_MARKER, cleanupSuite, commonPath, enterQueue, withShare, flockCommand, freePorts, queuePlaces, resolveGateLock, withGateLease,
   type CleanupRecord, type PortProcess, type PortsRecord, type QueueHandle, type QueueRecord, type SuiteHooks } from './suite.js';
@@ -88,9 +87,7 @@ export function reuseIdentityFor(env: NodeJS.ProcessEnv, extra: Record<string, u
 
 /**
  * The variables and the extra part an identity of reuse compares on a stack (reuseIdentityFor), or null when its fingerprint
- * failed. With a fingerprint, a variable of the stack named in `normalizeEnv` (docs/UNE-SUITE-PAR-PR.md, 1.2) is replaced
- * whole by `{{<nom> de la pile}}`: `E2E_STACK=2` and `E2E_STACK=1`, two URLs of two env files, compare equal when the two
- * stacks print the same fingerprint. Any other variable of the stack keeps its value but for its declared ports (stackAddress).
+ * failed. With a fingerprint, a variable of the stack keeps its value but for its declared ports (stackAddress).
  */
 function identityOf(env: NodeJS.ProcessEnv, extra: Record<string, unknown>, stack: IdentityStack): { env: NodeJS.ProcessEnv; extra: Record<string, unknown> } | null {
   const declaration = stack.resolved.config;
@@ -99,11 +96,9 @@ function identityOf(env: NodeJS.ProcessEnv, extra: Record<string, unknown>, stac
     return { env, extra: { ...extra, stack: { id: declaration.id, declaration: rest } } };
   }
   if (!stack.fingerprint) return null;
-  const normalized = declaration.normalizeEnv ?? [];
   const replaced = Object.fromEntries(Object.entries(env).map(([name, value]) =>
-    [name, !stack.variables.includes(name) || value === undefined ? value : normalized.includes(name) ? `{{${name} de la pile}}` : stackAddress(name, value, stack.resolved)]));
-  return { env: replaced, extra: { ...extra, stack: { fingerprint: declaration.fingerprint, output: stack.fingerprint, variables: [...stack.variables].sort(),
-    ...(normalized.length ? { normalized: [...normalized].sort() } : {}) } } };
+    [name, stack.variables.includes(name) && value !== undefined ? stackAddress(name, value, stack.resolved) : value]));
+  return { env: replaced, extra: { ...extra, stack: { fingerprint: declaration.fingerprint, output: stack.fingerprint, variables: [...stack.variables].sort() } } };
 }
 
 /**
@@ -196,12 +191,6 @@ export interface GateRunOptions {
    * only for a package-lock.json without node_modules), and never when every check is reused (A4).
    */
   batchSetup?: boolean;
-  /**
-   * `apv release auto` (docs/UNE-SUITE-PAR-PR.md, 2.2): the changed test files a complete green receipt of the same check already
-   * repeated at the same content (on their branch) are credited instead of repeated (src/gates/repeat-credit.ts). Absent: every
-   * changed test file is repeated.
-   */
-  repeatCredits?: boolean;
 }
 /** A check reused at an identical tree: the receipt `cached` written, its origin and why. */
 export interface ReusedCheck {
@@ -615,7 +604,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
   const repeats = new Map(gates.filter(g => g.repeatChanged).map(g => [g.id, expand(g, repeatArgv(g.repeatChanged!))]));
   // The changed test files each check repeats, decided before any wait: a ceiling exceeded or a refused fixed wait
   // stops the run here, explicitly, rather than after a full suite or by a silent skip. Null: no --base to compare to.
-  const repeatPlans = new Map<string, RepeatPlan & { credited?: RepeatCredit[] }>();
+  const repeatPlans = new Map<string, RepeatPlan>();
   const repeating = runnable.filter(g => g.repeatChanged);
   if (repeating.length) {
     // Without a base, or with one HEAD does not strictly descend from, nothing would be repeated: refused, never a silent pass.
@@ -633,16 +622,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       reference = resolved.sha;
       if (!reference) throw new PipelineError('GATE_BASE', referenceMissing(g.id, name, resolved.reason));
     }
-    let plan: RepeatPlan & { credited?: RepeatCredit[] } = await planRepeat(git, repo, { base: baseSha!, reference }, settings);
-    // The release (`apv release auto`, docs/UNE-SUITE-PAR-PR.md, 2.2): a changed test file already repeated, green, at the same
-    // content by a complete receipt of the check (its branch) is credited, not repeated again; the receipt says which.
-    if (options.repeatCredits && reference && plan.files.length) {
-      const credits = await repeatCredits({ git, repo, commit: candidateSha, gateId: g.id, settings, files: plan.files, store: await sharedStore(git, repo), local: readLocal(repo) });
-      if (credits.size) {
-        plan = { ...plan, files: plan.files.filter(f => !credits.has(f)), fixedWaits: plan.fixedWaits.filter(w => !credits.has(w.file)), credited: [...credits.values()].sort((a, b) => a.file < b.file ? -1 : 1) };
-        log(`${g.id} : ${credits.size} test(s) modifié(s) déjà répété(s), verts, au même contenu (crédit de répétition) : non répétés : ${plan.credited!.map(c => `${c.file} (exécution ${c.runId})`).join(', ')}.`);
-      }
-    }
+    const plan = await planRepeat(git, repo, { base: baseSha!, reference }, settings);
     const optionLike = plan.files.find(f => f.startsWith('-'));
     if (optionLike) throw optionLikeFile(g.id, optionLike);
     if (options.repeatCeiling !== false && plan.files.length > settings.maxFiles) throw tooManyFiles(g.id, plan, settings);
@@ -767,9 +747,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
       if (gate.repeatChanged) {
         let reference: { name: string; sha: string | null; reason: string } | null = null;
         if (stage === 'full') { const name = options.repeatReference ?? gate.repeatChanged.reference; reference = { name, ...await resolveReference(git, repo, name) }; }
-        const credit = options.repeatCredits && reference ? async (files: string[]): Promise<ReadonlySet<string>> =>
-          new Set((await repeatCredits({ git, repo, commit: candidateSha, gateId: gate.id, settings: gate.repeatChanged!, files, store: ctx.store, local: ctx.local })).keys()) : undefined;
-        const gap = await repeatProofGap(git, repo, candidateSha, gate.repeatChanged, found.origin.receipt.repeat, reference, credit);
+        const gap = await repeatProofGap(git, repo, candidateSha, gate.repeatChanged, found.origin.receipt.repeat, reference);
         if (gap) { log(`${gate.id} : non repris (répétition des tests modifiés non prouvée par l'origine : ${gap.reason}) : exécuté.`); continue; }
       }
       reuse.set(gate.id, { ...found, environment: environments.find(e => e.identity === found.identity)! });
@@ -949,7 +927,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
     };
     const override = options.override ? { run: options.override.run, reason: options.override.reason } : null;
     type Repeat = NonNullable<GateReceipt['repeat']>;
-    type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output' | 'credited'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output' | 'credited'>>;
+    type RepeatFields = Omit<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'> & Partial<Pick<Repeat, 'command' | 'durationMs' | 'exitCode' | 'output'>>;
     type Fields = Omit<GateReceipt, 'stage' | 'dirty' | 'targeted' | 'override' | 'lockWaitMs' | 'retry' | 'stack' | 'repeat' | 'web' | 'scope' | 'nearTimeout' | 'early' | 'reuse' | 'reuseIdentity' | 'identityParts' | 'finding'> & Partial<Pick<GateReceipt, 'lockWaitMs' | 'retry' | 'stack' | 'reuse' | 'reuseIdentity' | 'identityParts' | 'finding'>> & { repeat?: RepeatFields; web?: NonNullable<GateReceipt['web']> };
     const write = (receipt: Fields): GateReceipt => {
       const decision = scopeDecisions.get(receipt.gateId);
@@ -1119,8 +1097,7 @@ export async function runGates(options: GateRunOptions): Promise<GateRunResult> 
         const plan = repeatPlans.get(gate.id);
         if (!settings || !plan) return fields;
         const times = settings.times;
-        const record = { base: plan.base, reference: plan.reference, files: plan.files, importsOnly: plan.importsOnly, movedPathsOnly: plan.movedPathsOnly, times, fixedWaits: plan.fixedWaits,
-          ...(plan.credited?.length ? { credited: plan.credited } : {}) };
+        const record = { base: plan.base, reference: plan.reference, files: plan.files, importsOnly: plan.importsOnly, movedPathsOnly: plan.movedPathsOnly, times, fixedWaits: plan.fixedWaits };
         if (!plan.files.length) return { ...fields, repeat: { ...record, status: 'none', failures: [] } };
         const afterRetry = fields.status === 'passed_after_retry';
         if (fields.status !== 'passed' && !afterRetry) return { ...fields, repeat: { ...record, status: 'not_run', failures: [] } };
