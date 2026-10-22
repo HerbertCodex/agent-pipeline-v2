@@ -8,6 +8,7 @@ import { environment, expandCommand, redact, runProcess } from '../execution/pro
 import { RECEIPTS_DIR, sharedStore } from '../gates/store.js';
 import { sharedRunReceipts } from '../gates/reuse-proof.js';
 import type { VerifyResult } from '../gates/verify.js';
+import { anchorKey, ignoredWaiver, readOperatorMessages, templateWaiver, waiverFor } from '../rules/operator.js';
 
 /**
  * A test unstable at the release, unrelated to the change (docs/UNE-SUITE-PAR-PR.md, 3): a check of the full suite passed only
@@ -20,7 +21,8 @@ import type { VerifyResult } from '../gates/verify.js';
  * tests). Anything else blocks, as before: no test named (no `retryFailed.testPattern`, or no line matching it), a file the name
  * does not give, a check without `affectedList` at production, a list that fails, a test of a changed file or that the change
  * concerns. A failure that the relaunch did not cure, a repetition of a changed test that failed, a migration not confirmed:
- * still refused, elsewhere, as before.
+ * still refused, elsewhere, as before. What blocks here, the operator alone can waive for the exact released commit
+ * (`releaseWaiver`, « dérogation instable <commit> : <raison> »): published, each test written as a finding with his words.
  */
 export interface UnstableTest {
   gateId: string;
@@ -35,7 +37,34 @@ export interface UnstableTest {
   /** Why it blocks the release, or null: unrelated to the change, written as a finding. */
   blocking: string | null;
 }
-export interface UnstableVerdict { tests: UnstableTest[]; blocking: string[] }
+/** `busy`: no copy to judge them in (the tests are judged later): never waived, whatever the operator typed. */
+export interface UnstableVerdict { tests: UnstableTest[]; blocking: string[]; busy?: true }
+
+/**
+ * The waiver of the rule `instable` the operator typed for the released commit (docs/UNE-SUITE-PAR-PR.md, 3.1; decision of the
+ * operator of 22 October 2026): « dérogation instable <12 premiers caractères du commit au moins> : <raison> », the very line
+ * that waives the rule at the merge. Read in the operator journal (signed by the UserPromptSubmit hook, never by an agent) by
+ * the same code as the waivers of the merge (`waiverFor`): for this exact commit only, never for another, never without a
+ * reason nor with the template of the tool. It waives the blocking verdicts on checks that passed after the relaunch of their
+ * failed tests (`passed_after_retry`) only: a failure the relaunch did not cure, a repetition that failed, a migration not
+ * confirmed are refused before, the waiver never reaches them.
+ */
+export interface ReleaseWaiver { rule: 'instable'; commit: string; at: string; reason: string; line: string; blocking: string[] }
+
+/**
+ * The waiver of `instable` for `sha` in the journal of the Git common directory `common`; `template`: one typed with `<ta raison>`;
+ * `keyProblem`: the anchor key is missing or refused, nothing signed is read (the refusal says so instead of asking for the
+ * sentence again, which the operator may have typed already).
+ */
+export function releaseWaiver(common: string, sha: string, blocking: readonly string[]):
+  { waiver: ReleaseWaiver | null; template: boolean; keyProblem: string | null; ignored: string | null } {
+  const anchor = anchorKey(common);
+  if (!anchor.key) return { waiver: null, template: false, keyProblem: anchor.problem ?? 'clé d\'ancrage absente', ignored: null };
+  const messages = readOperatorMessages(common, anchor.key);
+  const found = waiverFor(messages, 'instable', sha);
+  if (found) return { waiver: { rule: 'instable', commit: sha, at: found.message.at, reason: found.reason, line: found.line, blocking: [...blocking] }, template: false, keyProblem: null, ignored: null };
+  return { waiver: null, template: templateWaiver(messages, 'instable', sha), keyProblem: null, ignored: ignoredWaiver(messages, 'instable', sha) };
+}
 
 const PATH_TOKEN = /(?:[A-Za-z0-9_@.+-]+\/)*[A-Za-z0-9_@.+-]+\.[A-Za-z0-9]+/g;
 
@@ -126,19 +155,35 @@ const HEADING = '## Tests instables à la mise en ligne';
 export const findingLine = (t: UnstableTest, commit: string, date: string): string =>
   `- ${date}, mise en ligne de ${commit.slice(0, 12)}, test instable sans rapport avec le changement : ${t.test} (${t.gateId}, ${t.files.join(', ')}) : échoue ${t.failed} fois sur ${t.passes} passages (exécution ${t.runId}) ; publié quand même, à corriger à part.`;
 
+/** What the operator's waiver is said with, in the output and the follow-up: its date and reason. */
+export const waiverWords = (w: ReleaseWaiver): string => `dérogation instable de l'opérateur (${w.at}) : ${w.reason}`;
+
+/** The line of the follow-up of a test (or of a check, `t` null) published only by the waiver of the operator. */
+export const waivedFindingLine = (w: ReleaseWaiver, date: string, t: UnstableTest | null, why: string): string =>
+  `- ${date}, mise en ligne de ${w.commit.slice(0, 12)}, ${t ? `test instable publié par ${waiverWords(w)} : ${t.test} (${t.gateId}${t.files.length ? `, ${t.files.join(', ')}` : ''}) : échoue ${t.failed} fois sur ${t.passes} passages (exécution ${t.runId}) ; bloquant sans elle : ${why}`
+    : `contrôle instable publié par ${waiverWords(w)} : ${why}`} ; à corriger à part.`;
+
+/** The waived findings: each blocking test, then each blocking reason no test carries (a check whose tests are not named). */
+export function waivedFindings(w: ReleaseWaiver, tests: readonly UnstableTest[], date: string): string[] {
+  const own = tests.filter(t => t.blocking !== null);
+  const said = new Set(own.map(t => `${t.gateId} : ${t.test} : ${t.blocking}`));
+  return [...own.map(t => waivedFindingLine(w, date, t, t.blocking!)), ...w.blocking.filter(b => !said.has(b)).map(b => waivedFindingLine(w, date, null, b))];
+}
+
 /**
- * Appends the unstable tests unrelated to the change to the follow-up of the findings (`.apv/state/suivi-constats.md` of the
+ * Appends the unstable tests unrelated to the change, and those the waiver of the operator published, to the follow-up of the findings (`.apv/state/suivi-constats.md` of the
  * checkout), once per test and commit. A failure is returned, never thrown: the release stands, its journal says it.
  */
-export function writeFindings(root: string, commit: string, tests: readonly UnstableTest[], now = new Date()): string | null {
+export function writeFindings(root: string, commit: string, tests: readonly UnstableTest[], now = new Date(), waiver: ReleaseWaiver | null = null): string | null {
   const unrelated = tests.filter(t => t.blocking === null);
-  if (!unrelated.length) return null;
+  if (!unrelated.length && !waiver) return null;
   try {
     const file = join(root, '.apv', 'state', 'suivi-constats.md');
     mkdirSync(join(root, '.apv', 'state'), { recursive: true });
     const before = existsSync(file) ? readFileSync(file, 'utf8') : '';
     const date = now.toISOString().slice(0, 10);
-    const fresh = unrelated.map(t => findingLine(t, commit, date)).filter(line => !before.includes(line.slice(line.indexOf(', mise en ligne'))));
+    const lines = [...unrelated.map(t => findingLine(t, commit, date)), ...(waiver ? waivedFindings(waiver, tests, date) : [])];
+    const fresh = lines.filter(line => !before.includes(line.slice(line.indexOf(', mise en ligne'))));
     if (!fresh.length) return null;
     // Under its own heading, written again when another section was added since.
     const last = before.split('\n').filter(l => l.startsWith('## ')).pop();
