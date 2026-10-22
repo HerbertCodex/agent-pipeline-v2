@@ -85,15 +85,14 @@ async function fullProof(repo, sha, from, production) {
 }
 const proofLines = (proof) => proof.gates.filter(g => g.state !== 'passed').map(g => `${g.gateId} (${g.state})`);
 /**
- * The verdict on the unstable checks of a proof (src/release/unstable.ts): in the copy of the suite when there is one, else in a
- * fresh copy of the commit prepared by batch.setup (the affectedList commands run the tools of the project); busy: blocking.
+ * The verdict on the unstable checks of a proof (src/release/unstable.ts), in a fresh copy of the commit prepared by batch.setup
+ * (the affectedList commands run the tools of the project), made only when a test is to be judged and removed after; never in
+ * the copy where the suite ran, where the tests of the change may have written what the command would load; busy: blocking.
  */
 async function judgeUnstable(ctx, repo, sha, production, proof) {
     const config = proofConfig(repo, sha, production);
     const log = (line) => ctx.io.stderr(`${line}\n`);
     const judge = (copy) => classifyUnstable({ repo, copy, commit: sha, production, config, proof, env: ctx.io.env, log });
-    if (ctx.copy)
-        return judge(ctx.copy);
     const done = await withFreshCopy(repo, commonDir(repo), sha, async (dir) => {
         await prepareMainCopy({ repo: dir, config, env: ctx.io.env, log, always: 'copie neuve de la mise en ligne' });
         return judge(dir);
@@ -267,19 +266,15 @@ async function auto(io, repo, dryRun, asJson, forced, forceRetry) {
         const piles = pickStacks(proofConfig(repo, fromHead, production), common, forced);
         if ('busy' in piles)
             return report(io, asJson, { ...base, lines: [`Piles occupées (${piles.busy}) : plus tard ; rien n'est lancé.`] }, false, 'auto');
-        const outcome = await withFreshCopy(repo, common, fromHead, async (dir) => {
-            const suite = await runSuite(io, dir, fromHead, proofConfig(repo, fromHead, production), production, piles.ids);
-            if (suite.busy)
-                return { ...base, lines: [`Machine occupée (${suite.busy}) : plus tard.`] };
-            if (suite.infrastructure)
-                return { ...base, ok: false, lines: [`Suite complète à ${short(fromHead)} : panne d'infrastructure : ${suite.infrastructure} ; rien n'est publié.`] };
-            if (!suite.ok)
-                return { ...base, ok: false, lines: [`Suite complète rouge à ${short(fromHead)} : ${suite.summary} ; rien n'est publié.`] };
-            // Green, unstable checks included: the release judges them in this very copy.
-            return release(repo, state, fromHead, false, { io, copy: dir, reused: suite.reused });
-        }, line => io.stderr(`${line}\n`));
-        if ('busy' in outcome)
-            return report(io, asJson, { ...base, lines: [`Copie neuve occupée (${outcome.busy}) : plus tard ; rien n'est lancé.`] }, false, 'auto');
+        const ran = await withFreshCopy(repo, common, fromHead, async (dir) => ({ suite: await runSuite(io, dir, fromHead, proofConfig(repo, fromHead, production), production, piles.ids) }), line => io.stderr(`${line}\n`));
+        if (!('suite' in ran))
+            return report(io, asJson, { ...base, lines: [`Copie neuve occupée (${ran.busy}) : plus tard ; rien n'est lancé.`] }, false, 'auto');
+        const { suite } = ran;
+        const outcome = suite.busy ? { ...base, lines: [`Machine occupée (${suite.busy}) : plus tard.`] }
+            : suite.infrastructure ? { ...base, ok: false, lines: [`Suite complète à ${short(fromHead)} : panne d'infrastructure : ${suite.infrastructure} ; rien n'est publié.`] }
+                : !suite.ok ? { ...base, ok: false, lines: [`Suite complète rouge à ${short(fromHead)} : ${suite.summary} ; rien n'est publié.`] }
+                    // Green, unstable checks included: the release judges them in another fresh copy, once the one of the suite is removed.
+                    : await release(repo, state, fromHead, false, { io, reused: suite.reused });
         // A machine busy is a pass that did nothing: not journaled, as before.
         return report(io, asJson, outcome, !outcome.lines[0]?.startsWith('Machine occupée'), 'auto');
     }

@@ -1,11 +1,11 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { builtinModules } from 'node:module';
-import { join, normalize } from 'node:path';
+import { join } from 'node:path';
 import { loadConfigAtCommit, type ApvConfig } from '../config/load.js';
-import { validateReceipt, type GateReceipt } from '../domain/contracts.js';
+import { DEFAULT_GENERATED_PATHS, validateReceipt, type GateReceipt } from '../domain/contracts.js';
 import { errorMessage } from '../domain/errors.js';
 import { Git } from '../execution/git.js';
 import { environment, expandCommand, redact, runProcess } from '../execution/process.js';
+import { matches } from '../policy/policy.js';
 import { RECEIPTS_DIR, sharedStore } from '../gates/store.js';
 import { sharedRunReceipts } from '../gates/reuse-proof.js';
 import type { VerifyResult } from '../gates/verify.js';
@@ -20,9 +20,9 @@ import { anchorKey, ignoredWaiver, readOperatorMessages, templateWaiver, waiverF
  * neither added nor modified since production; and it is not among the test files the `affectedList` command of its check,
  * **read at production**, prints for the changes since production (the same computation as `affected`: the import graph of the
  * tests). Anything else blocks, as before: no test named (no `retryFailed.testPattern`, or no line matching it), a file the name
- * does not give, a check without `affectedList` at production, a list that fails, a change that touches a file the command
- * executes (its paths, the script it runs, what they import locally: the list would come from the candidate itself, which would
- * decide for itself), a test of a changed file or that the change concerns. A failure that the relaunch did not cure, a repetition of a changed test that failed, a migration not confirmed:
+ * does not give, a check without `affectedList` at production, a list that fails, a change that touches the tooling of the
+ * command (`toolingTouched`: scripts, manifests, lock files, configuration, the paths the command names: the list would come
+ * from what the change rewrote), a test of a changed file or that the change concerns. A failure that the relaunch did not cure, a repetition of a changed test that failed, a migration not confirmed:
  * still refused, elsewhere, as before. What blocks here, the operator alone can waive for the exact released commit
  * (`releaseWaiver`, « dérogation instable <commit> : <raison> »): published, each test written as a finding with his words.
  */
@@ -86,89 +86,20 @@ export function pathsIn(text: string, tracked: readonly string[], all = false): 
   return [...out].sort();
 }
 
-const SCRIPT_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
-const CODE_FILE = /\.[cm]?[jt]sx?$/;
-/** Configuration files that change what a command runs (options of Node, of the runner, of the compiler), counted beside it. */
-const CONFIG_FILE = /^(?:package\.json|\.npmrc|\.yarnrc(?:\.yml)?|bunfig\.toml|tsconfig[^/]*\.json)$/;
-/** A module specifier of a script: `from 'x'`, `import 'x'`, `import('x')`, `require('x')`. */
-const SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"])([^'"\n]*)\1/g;
-/** An `import(` or `require(` whose argument is not a plain string literal: a template, a computed path. */
-const DYNAMIC = /\b(?:import|require)\s*\(\s*(?!(['"])[^'"\n]*\1\s*\))/;
-const BUILTINS = new Set(builtinModules.flatMap(m => [m, `node:${m}`]));
-const MAX_COMMAND_FILES = 300;
-const SCRIPT_CALLS_RUNNER = /\b(?:npm|pnpm|yarn|bun|npx)\b/;
-
 /**
- * The files of the commit that an `affectedList` command executes (review of 22 October 2026, F4 and its review), and what
- * the tool does not know how to follow (`unknown`): the command cannot then be trusted and the judgment « sans rapport » fails
- * closed. Counted: the paths its arguments name; the `package.json`, `.npmrc`, `.yarnrc*`, `bunfig.toml` and `tsconfig*.json`
- * of the root and of the folders of the files above; for `npm|pnpm|yarn|bun run <script>` the script of `package.json`
- * (with its `pre` and `post`) and the paths it names; the local modules (`./`, `../`) of every script, read in the commit.
- * Unknown: a runner called any other way (`npm test`, `npm run --silent`), a script that calls another runner or is missing,
- * a file that is neither a script nor JSON, a symbolic link, an `import()` or `require()` that is not a plain string, a package
- * (bare name, `#` import) that is not a Node module, a module not found, more than 300 files. A file that a script reads as
- * data is not followed (documented limit).
+ * Paths of the tooling an `affectedList` command may run through (review of PR #162): the scripts, the manifests and lock files
+ * of the dependencies (the shared list of the generated paths), the settings of the runners and of the compiler, the
+ * configuration files at any depth. A change to one of them, or to a file the command names, and the judgment « sans rapport »
+ * is refused: the list could come from what the change itself rewrote. No analysis of what a script loads (it cannot be done
+ * for all that a script loads: `child_process`, `createRequire`, workers, files the suite creates).
  */
-export async function commandFiles(argv: readonly string[], tracked: readonly string[], read: (path: string) => Promise<string | null>,
-  symlinks: ReadonlySet<string> = new Set()): Promise<{ files: string[]; unknown: string[] }> {
-  const known = new Set(tracked);
-  const seen = new Set<string>();
-  const unknown: string[] = [];
-  const queue = pathsIn(argv.join(' '), tracked, true);
-  const dirOf = (file: string): string => file.includes('/') ? file.slice(0, file.lastIndexOf('/')) : '';
-  if (SCRIPT_RUNNERS.has(argv[0] ?? '')) {
-    const name = argv[1] === 'run' || (argv[0] === 'npm' && argv[1] === 'run-script') ? argv[2] : undefined;
-    if (!name || name.startsWith('-')) unknown.push(`${argv[0]} ${argv.slice(1, 3).join(' ')} : seule la forme « ${argv[0]} run <script> » est suivie`);
-    else {
-      let scripts: Record<string, unknown> = {};
-      try { scripts = (JSON.parse(await read('package.json') ?? '') as { scripts?: Record<string, unknown> }).scripts ?? {}; } catch { unknown.push('package.json illisible'); }
-      if (typeof scripts[name] !== 'string') unknown.push(`script « ${name} » introuvable dans package.json`);
-      for (const n of [`pre${name}`, name, `post${name}`]) {
-        const body = scripts[n];
-        if (typeof body !== 'string') continue;
-        if (SCRIPT_CALLS_RUNNER.test(body)) unknown.push(`script « ${n} » : appelle un autre lanceur (${body.slice(0, 60)})`);
-        queue.push(...pathsIn(body, tracked, true));
-      }
-    }
-  }
-  // The configuration files beside the command: at the root and in the folders of the files it executes.
-  const addConfigs = (): void => {
-    const dirs = new Set(['']);
-    for (const f of [...seen, ...queue]) for (let d = dirOf(f); d; d = dirOf(d)) dirs.add(d);
-    for (const f of tracked) if (CONFIG_FILE.test(f.slice(f.lastIndexOf('/') + 1)) && dirs.has(dirOf(f))) queue.push(f);
-  };
-  addConfigs();
-  while (queue.length) {
-    const file = queue.pop()!;
-    if (seen.has(file)) continue;
-    if (seen.size >= MAX_COMMAND_FILES) { unknown.push(`plus de ${MAX_COMMAND_FILES} fichiers à suivre`); break; }
-    seen.add(file);
-    if (symlinks.has(file)) { unknown.push(`${file} : lien symbolique`); continue; }
-    if (file.endsWith('.json') || CONFIG_FILE.test(file.slice(file.lastIndexOf('/') + 1))) continue;
-    if (!CODE_FILE.test(file)) { unknown.push(`${file} : ni script JavaScript ni JSON, non suivi`); continue; }
-    const text = await read(file);
-    if (text === null) { unknown.push(`${file} : illisible`); continue; }
-    if (DYNAMIC.test(text)) unknown.push(`${file} : import() ou require() qui n'est pas une chaîne littérale`);
-    const dir = dirOf(file);
-    for (const match of text.matchAll(SPECIFIER)) {
-      const spec = match[2]!;
-      if (!spec.startsWith('./') && !spec.startsWith('../')) {
-        if (!BUILTINS.has(spec)) unknown.push(`${file} : « ${spec.slice(0, 60)} » n'est ni un module local ni un module de Node`);
-        continue;
-      }
-      const target = normalize(join(dir, spec)).split('\\').join('/');
-      const found: string[] = [];
-      for (const base of new Set([target, target.replace(/\.[cm]?js$/, '')])) {
-        for (const ext of ['', '.js', '.mjs', '.cjs', '.ts', '.mts', '.cts', '.jsx', '.tsx', '.json']) {
-          for (const candidate of [`${base}${ext}`, `${base}/index${ext}`]) if (known.has(candidate)) found.push(candidate);
-        }
-      }
-      if (!found.length) unknown.push(`${file} : « ${spec.slice(0, 60)} » introuvable dans le commit`);
-      queue.push(...found);
-    }
-    addConfigs();
-  }
-  return { files: [...seen].filter(f => known.has(f)).sort(), unknown: [...new Set(unknown)] };
+export const TOOLING_PATHS: readonly string[] = ['**/scripts/**', '**/package.json', ...DEFAULT_GENERATED_PATHS, '**/.npmrc', '**/.yarnrc*',
+  '**/pnpm-workspace.yaml', '**/bunfig.toml', '**/tsconfig*.json', '**/*.config.*'];
+
+/** The changed files that are tooling or that the `affectedList` command names as a path of the commit, sorted. */
+export function toolingTouched(changed: Iterable<string>, argv: readonly string[], tracked: readonly string[]): string[] {
+  const cited = new Set(pathsIn(argv.join(' '), tracked, true));
+  return [...changed].filter(f => cited.has(f) || TOOLING_PATHS.some(pattern => matches(f, pattern))).sort();
 }
 
 /** The receipt `verify` retained for a check (worktree, else the intact run of the shared store), or null. */
@@ -186,7 +117,8 @@ function retained(repo: string, store: string, g: VerifyResult['gates'][number])
 
 /**
  * The verdict on the unstable checks of `proof` at `commit`, released from `production`: each relaunched test, related or not.
- * `copy`: a prepared copy of the commit, where the `affectedList` commands run. `config`: the checks of the release (those of
+ * `copy`: a fresh copy of the commit, prepared by `batch.setup`, never the copy where the suite ran (what the tests of the
+ * change wrote there is not the commit): where the `affectedList` commands run. `config`: the checks of the release (those of
  * production kept); `affectedList` is read at production only.
  */
 export async function classifyUnstable(input: { repo: string; copy: string; commit: string; production: string; config: ApvConfig; proof: VerifyResult;
@@ -194,28 +126,10 @@ export async function classifyUnstable(input: { repo: string; copy: string; comm
   const { repo, commit, production } = input;
   const git = new Git();
   const store = await sharedStore(git, repo);
-  const entries = (await git.exec(repo, ['ls-tree', '-r', '-z', '--full-tree', commit])).split('\0').filter(Boolean).map(e => ({ mode: e.slice(0, e.indexOf(' ')), path: e.slice(e.indexOf('\t') + 1) }));
-  const tracked = entries.map(e => e.path);
-  const symlinks = new Set(entries.filter(e => e.mode === '120000').map(e => e.path));
+  const tracked = (await git.exec(repo, ['ls-tree', '-r', '--name-only', '-z', '--full-tree', commit])).split('\0').filter(Boolean);
   const changed = new Set((await git.exec(repo, ['diff', '--name-only', '--no-renames', '-z', production, commit, '--'])).split('\0').filter(Boolean));
   let atProduction: ApvConfig | null = null;
   try { atProduction = loadConfigAtCommit(repo, production).config; } catch { /* no affectedList read: every unstable test blocks */ }
-  // The command is read at production but its script is the candidate's: a change to a file it executes would decide for itself.
-  const read = (path: string): Promise<string | null> => git.exec(repo, ['show', `${commit}:${path}`]).catch(() => null);
-  /**
-   * Why the copy where the suite ran cannot run `affectedList`, or null: a tracked file modified (a test of the candidate may have
-   * rewritten the script), or a file of the command that differs from the commit.
-   */
-  const copyDrift = async (files: readonly string[]): Promise<string | null> => {
-    const dirty = (await git.exec(input.copy, ['status', '--porcelain', '--untracked-files=no'])).split('\n').filter(Boolean);
-    if (dirty.length) return `la copie de la suite a des fichiers suivis modifiés (${dirty.slice(0, 3).map(l => l.slice(3)).join(', ')})`;
-    for (const f of files) {
-      const here = (await git.exec(input.copy, ['hash-object', '--no-filters', '--', f]).catch(() => '')).trim();
-      const there = (await git.exec(repo, ['rev-parse', `${commit}:${f}`]).catch(() => null))?.trim();
-      if (!here || here !== there) return `${f} diffère de son contenu au commit dans la copie de la suite`;
-    }
-    return null;
-  };
   const tests: UnstableTest[] = [];
   const blocking: string[] = [];
   for (const g of input.proof.gates.filter(x => x.state === 'passed' && x.status === 'passed_after_retry')) {
@@ -228,13 +142,9 @@ export async function classifyUnstable(input: { repo: string; copy: string; comm
     const declared = atProduction?.gates.find(x => x.id === g.gateId)?.affectedList;
     let affected: Set<string> | null = null;
     let listError: string | null = null;
-    const followed = declared ? await commandFiles(declared, tracked, read, symlinks) : null;
-    const touched = followed?.files.filter(f => changed.has(f)) ?? [];
-    let drift: string | null = null;
+    const touched = declared ? toolingTouched(changed, declared, tracked) : [];
     if (!declared) listError = `${g.gateId} ne déclare pas affectedList à la production (${production.slice(0, 12)}) : le lien des tests avec le changement (graphe d'imports) ne se juge pas`;
-    else if (followed!.unknown.length) listError = `${g.gateId} : affectedList : l'outil ne sait pas suivre ce que la commande exécute (${followed!.unknown.slice(0, 3).join(' ; ')}) : aucun test n'est jugé sans rapport`;
-    else if (touched.length) listError = `${g.gateId} : le changement depuis la production touche un fichier que affectedList exécute (${touched.join(', ')}) : la liste viendrait d'un script que la PR décide elle-même, aucun test n'est jugé sans rapport`;
-    else if ((drift = await copyDrift(followed!.files))) listError = `${g.gateId} : affectedList non lancé : ${drift} : la liste ne serait pas celle du commit, aucun test n'est jugé sans rapport`;
+    else if (touched.length) listError = `${g.gateId} : le changement depuis la production touche l'outillage de affectedList (${touched.slice(0, 5).join(', ')}${touched.length > 5 ? ', …' : ''}) : la liste pourrait venir de ce que la PR a réécrit, aucun test n'est jugé sans rapport`;
     else {
       const gate = input.config.gates.find(x => x.id === g.gateId);
       const env = environment([...input.config.environment.passEnv, ...(gate?.passEnv ?? [])], input.env);

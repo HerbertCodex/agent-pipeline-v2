@@ -61,29 +61,28 @@ est jugé. Il est **sans rapport** quand :
 - son nom donne son fichier (un chemin du commit, ou le seul fichier dont il est la fin : `a.spec.ts:12:5 › …`) ;
 - ce fichier n'est ni ajouté ni modifié depuis la production ;
 - il n'est pas dans la liste des tests concernés par le changement : la commande `affectedList` du contrôle, **lue à la
-  production**, lancée dans la copie neuve avec `{{baseSha}}` = la production (même calcul que `affected`, voir la partie 4 pour
-  des tests e2e) ; tout chemin du commit dans sa sortie compte.
+  production**, lancée avec `{{baseSha}}` = la production dans **une copie neuve du commit** (celle de `batch.setup`, faite
+  seulement quand un test instable est à juger, retirée ensuite), jamais dans la copie où la suite vient de tourner : ce que les
+  tests du changement y ont écrit n'y est pas (même calcul que `affected`, voir la partie 4 pour des tests e2e) ; tout chemin du
+  commit dans sa sortie compte ;
+- le changement depuis la production ne touche pas l'outillage de la commande (alpha.8) : `scripts/**`, `package.json`, les
+  verrous de dépendances, `.npmrc`, `.yarnrc*`, `bunfig.toml`, `pnpm-workspace.yaml`, `tsconfig*.json`, `*.config.*` à toute
+  profondeur (`TOOLING_PATHS`, qui reprend la liste des chemins générés `DEFAULT_GENERATED_PATHS`), ni un chemin que la commande
+  cite en clair. Le script de la liste vient du commit candidat : une PR qui le réécrit déciderait pour elle-même. Aucune analyse de
+  ce qu'un script charge (`child_process`, `createRequire`, processus, fichiers lus) : la règle de chemins échoue fermé, plus sûre
+  qu'un suivi des imports.
 
 Alors la mise en ligne continue, et le test est écrit comme **constat** : sortie, journal (`stack.log`, champ `unstable` : contrôle,
 test, fichiers, « échoue 1 fois sur 2 passages », exécution) et suivi (`.apv/state/suivi-constats.md`, section « Tests instables à
 la mise en ligne »), pour une correction à part.
 
 Restent bloquants : un test ajouté ou modifié, ou concerné par le changement ; un nom sans fichier, un contrôle sans
-`affectedList` à la production (une PR ne s'en sert jamais pour elle-même), une liste en échec ; **une commande dont le script n'est pas
-sûr** (alpha.8) : la commande est lue à la production, mais son script vient de la copie du commit candidat, et une PR qui le
-modifie déciderait pour elle-même (un `process.exit(0)` en tête rend une liste vide). La mise en ligne est refusée, comme avant
-l'alpha.5 (dérogation de l'opérateur possible, 3.1), quand : (a) le changement depuis la production touche un fichier que la
-commande exécute : les chemins de ses arguments, le `package.json`, `.npmrc`, `.yarnrc*`, `bunfig.toml` et `tsconfig*.json` de la
-racine et de leurs dossiers, le script de `package.json` d'un `<npm|pnpm|yarn|bun> run <script>` (avec `pre` et `post`), les modules
-locaux (`./`, `../`) de chaque script ; (b) la copie où la suite a tourné a un fichier suivi modifié, ou un fichier de la commande
-qui diffère du commit (un test du candidat a pu le réécrire) ; (c) l'outil ne sait pas suivre la commande, ce qui échoue fermé :
-`npm test`, `npm run --silent`, `npx` et toute autre forme que `<lanceur> run <script>` ; un script qui en appelle un autre ou
-introuvable ; un fichier qui n'est ni JavaScript/TypeScript ni JSON (un `.sh`) ; un lien symbolique ; un `import()` ou `require()`
-non littéral (gabarit, chemin calculé) ; un paquet, un nom nu ou un import `#` (seuls les modules de Node et les modules locaux
-sont suivis) ; un module introuvable ; plus de 300 fichiers. Limite connue : un fichier de données que le script lit (`readFileSync`)
-n'est pas suivi ; le garder hors de ce que la PR modifie, ou ne pas déclarer `affectedList`. Tout échec que la relance n'a pas
-guéri ; toute répétition en échec ; toute migration non confirmée (`release.migrations`) ; une preuve instable et incomplète
-(jamais relancée au même commit).
+`affectedList` à la production (une PR ne s'en sert jamais pour elle-même), une liste en échec ; un changement de l'outillage
+(ci-dessus ; dérogation de l'opérateur possible, 3.1) ; tout échec que la relance n'a pas guéri ; toute répétition en échec ; toute
+migration non confirmée (`release.migrations`) ; une preuve instable et incomplète (jamais relancée au même commit).
+
+Hors de portée : rien de connu. Un changement d'application seul (composant, route, style) est jugé ; un script d'outillage qui lit
+un fichier de données (`readFileSync`) est couvert quand ce fichier s'appelle `*.config.*` ou est sous `scripts/`, sinon le placer là.
 
 Limite : `retryFailed.testPattern` doit nommer **chaque** test en échec de la première passe ; un test qu'il ne nomme pas n'est pas
 jugé. Relire le motif avec le format du rapporteur (Playwright `list` ou `line`).
@@ -182,8 +181,8 @@ une PR de dépendances, qui passe alors par le contrôle ci-dessus.
 `test/une-suite-par-pr.test.mjs` : deux PR fusionnées, une suite à la mise en ligne qui répète tous les tests modifiés (aucun
 crédit) ; une PR sans suite de branche publiée par `apv release auto` ; appels retirés (`--fresh-copy` refusé, `normalizeEnv` avec son
 message) ; jugement des tests instables (constat écrit ; refus : test concerné, `affectedList` absent à la production ou ajouté par le
-changement, nom sans fichier, test modifié, répétition 1 fois sur 5) ; migration en attente ; chargeur (`affectedList`) ; `pathsIn` ; `commandFiles` et
-refus quand le changement touche un fichier exécuté par `affectedList` (script, import local, script de `package.json`) ;
+changement, nom sans fichier, test modifié, répétition 1 fois sur 5) ; migration en attente ; chargeur (`affectedList`) ; `pathsIn` ; `toolingTouched` et
+refus quand le changement touche l'outillage de `affectedList`, copie neuve sans les fichiers écrits par la suite, cas du projet pilote ;
 contrôle d'audit conditionnel aux contrôles de tâche et à la mise en ligne. `test/release.test.mjs` : reprise au même environnement,
 relance dans un autre (variable nommée).
 
