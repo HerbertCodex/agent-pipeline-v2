@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { join, sep } from 'node:path';
 import { PipelineError, errorMessage } from '../domain/errors.js';
 import { LockStore } from '../lock/store.js';
 import { flockFree, resolveStacks } from '../stacks/idle.js';
@@ -10,11 +10,75 @@ function git(repo, args) {
 }
 /** The directory of the fresh copy of `tree` (40 or 64 hexadecimal characters): `<common>/apv/fresh/<16 first>`. */
 export const freshCopyDir = (common, tree, slot = '') => join(common, 'apv', 'fresh', `${tree.slice(0, 16)}${slot}`);
-/** Removes a copy, even a locked one (`git worktree lock` by a suite that wanted its copy to stay): unlock first, then remove. */
-function removeCopy(repo, dir) {
-    git(repo, ['worktree', 'unlock', dir]);
-    return git(repo, ['worktree', 'remove', '--force', '--force', dir]);
+/**
+ * What a path of `<common>/apv/fresh` is: nothing (`absent`), a worktree registered by Git (`worktree`), a plain directory or file
+ * (`plain`), or something never touched (`refuse` with why): a symbolic link (it may point to the work of someone else, a registered
+ * and locked worktree of an agent, the main checkout), or a path whose real location is not under `fresh/`.
+ */
+function copyKind(repo, root, dir) {
+    let stat;
+    try {
+        stat = lstatSync(dir);
+    }
+    catch {
+        return 'absent';
+    }
+    if (stat.isSymbolicLink())
+        return { refuse: 'lien symbolique' };
+    let real;
+    try {
+        real = realpathSync(dir);
+    }
+    catch {
+        return { refuse: 'chemin illisible' };
+    }
+    let realRoot;
+    try {
+        realRoot = realpathSync(root);
+    }
+    catch {
+        return { refuse: 'dossier fresh illisible' };
+    }
+    if (!real.startsWith(`${realRoot}${sep}`))
+        return { refuse: `chemin réel hors de ${root}` };
+    const listed = git(repo, ['worktree', 'list', '--porcelain']).stdout.split('\n').filter(l => l.startsWith('worktree ')).map(l => l.slice(9));
+    const registered = listed.some(w => { try {
+        return realpathSync(w) === real;
+    }
+    catch {
+        return false;
+    } });
+    return registered ? 'worktree' : 'plain';
 }
+/**
+ * Removes a copy of `fresh/`, even one locked (`git worktree lock` by a suite that wanted its copy to stay): unlock first, then
+ * remove. Only a real directory under `fresh/` is touched; anything else is left as it is and said. Returns whether it is gone.
+ */
+function dropCopy(repo, root, dir, log) {
+    const kind = copyKind(repo, root, dir);
+    if (kind === 'absent')
+        return { gone: true };
+    if (typeof kind === 'object') {
+        log(`Copie ${dir} non touchée : ${kind.refuse} (rien n'est supprimé ; à examiner à la main).`);
+        return { gone: false, error: kind.refuse };
+    }
+    let error;
+    if (kind === 'worktree') {
+        git(repo, ['worktree', 'unlock', dir]);
+        const r = git(repo, ['worktree', 'remove', '--force', '--force', dir]);
+        if (r.status !== 0)
+            error = r.stderr.trim().slice(0, 200);
+    }
+    rmSync(dir, { recursive: true, force: true });
+    return { gone: !existsSync(dir), ...(error ? { error } : {}) };
+}
+function lstatSyncOrNull(path) { try {
+    lstatSync(path);
+    return true;
+}
+catch {
+    return false;
+} }
 /**
  * Removes the copies left in `<common>/apv/fresh` by an earlier pass (a removal that failed, a pass killed), locked ones included,
  * at the start of `apv release auto`. A copy whose lease is held (another release at work) is left alone. Returns the removed ones.
@@ -32,11 +96,11 @@ export async function removeStaleCopies(repo, common, log = () => undefined) {
             continue;
         try {
             const dir = join(root, entry);
-            const r = removeCopy(repo, dir);
-            rmSync(dir, { recursive: true, force: true });
-            if (r.status !== 0)
-                log(`Copie ${dir} laissée par une passe précédente : retrait forcé après git : ${r.stderr.trim().slice(0, 200)}`);
-            removed.push(dir);
+            const r = dropCopy(repo, root, dir, log);
+            if (r.error && r.gone)
+                log(`Copie ${dir} laissée par une passe précédente : retrait forcé après git : ${r.error}`);
+            if (r.gone)
+                removed.push(dir);
         }
         finally {
             await store.release(name, { token: lock.record.token }).catch(() => undefined);
@@ -62,9 +126,10 @@ export async function withFreshCopy(repo, common, sha, fn, log = () => undefined
     const dir = freshCopyDir(common, tree, slot);
     try {
         mkdirSync(join(common, 'apv', 'fresh'), { recursive: true });
-        if (existsSync(dir)) {
-            removeCopy(repo, dir);
-            rmSync(dir, { recursive: true, force: true });
+        const root = join(common, 'apv', 'fresh');
+        if (existsSync(dir) || lstatSyncOrNull(dir)) {
+            if (!dropCopy(repo, root, dir, log).gone)
+                throw new PipelineError('GATE_COPY', `${dir} existe et n'est pas une copie que l'outil retire (lien, chemin hors de fresh/ ou retrait en échec) : l'examiner puis le retirer à la main`);
             git(repo, ['worktree', 'prune']);
         }
         const added = git(repo, ['worktree', 'add', '--detach', dir, sha]);
@@ -75,9 +140,9 @@ export async function withFreshCopy(repo, common, sha, fn, log = () => undefined
             return await fn(dir);
         }
         finally {
-            const removed = removeCopy(repo, dir);
-            if (removed.status !== 0)
-                log(`Copie ${dir} non retirée : ${removed.stderr.trim()} (git worktree remove --force ${dir}).`);
+            const removed = dropCopy(repo, root, dir, log);
+            if (!removed.gone)
+                log(`Copie ${dir} non retirée${removed.error ? ` : ${removed.error}` : ''} (git worktree remove --force --force ${dir}).`);
         }
     }
     finally {

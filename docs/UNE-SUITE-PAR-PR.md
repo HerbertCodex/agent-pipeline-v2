@@ -88,7 +88,7 @@ migration non confirmée (`release.migrations`) ; une preuve instable et incompl
 **Ce que le jugement ne fait pas.** Il protège contre les **accidents** (un test ancien qui échoue au hasard à côté d'un
 changement sans rapport), pas contre une PR écrite pour le tromper. Lister les tests exécute du code du candidat (le chargement des
 fichiers de test par le lanceur, les imports des scripts hors des chemins d'outillage ci-dessus) : une PR malveillante peut donc
-faire oublier un test à la liste. Les garde-fous qui restent : la relecture de sécurité à la fusion, la dérogation de l'opérateur
+faire oublier un test à la liste ; un processus laissé en marche par la suite peut aussi viser la copie du jugement. Les garde-fous qui restent : la relecture de sécurité à la fusion, la dérogation de l'opérateur
 (3.1) pour un cas bloqué, et le **constat écrit** pour chaque test instable publié (journal, suivi).
 
 Limite : `retryFailed.testPattern` doit nommer **chaque** test en échec de la première passe ; un test qu'il ne nomme pas n'est pas

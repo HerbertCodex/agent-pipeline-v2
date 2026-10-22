@@ -329,6 +329,42 @@ test('F1: a copy left locked by an earlier pass (git worktree lock) is unlocked 
   assert.doesNotMatch(git(p.repo, 'worktree', 'list', '--porcelain'), /abcdef0123456789/, 'and the entry of Git');
 });
 
+test('F1, link: a link in fresh/ to the worktree of an agent (registered, locked) is never followed; a real stale copy is still removed', async t => {
+  const p = project(t);
+  const common = join(p.repo, '.git');
+  const fresh = join(common, 'apv', 'fresh');
+  mkdirSync(fresh, { recursive: true });
+  const agent = join(p.root, 'agent-wt');
+  git(p.repo, 'worktree', 'add', '-q', '--detach', agent, 'HEAD');
+  writeFileSync(join(agent, 'wip.txt'), 'travail non commité\n');
+  git(p.repo, 'worktree', 'lock', agent);
+  const data = join(p.root, 'donnees'); mkdirSync(data); writeFileSync(join(data, 'x.txt'), 'x\n');
+  symlinkSync(agent, join(fresh, 'lien-agent')); symlinkSync(p.repo, join(fresh, 'lien-principal')); symlinkSync(data, join(fresh, 'lien-donnees'));
+  const stale = join(fresh, 'bbbbbbbbbbbbbbbb');
+  git(p.repo, 'worktree', 'add', '-q', '--detach', stale, 'HEAD'); git(p.repo, 'worktree', 'lock', stale);
+  const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.equal(readFileSync(join(agent, 'wip.txt'), 'utf8'), 'travail non commité\n', 'the work of the agent is intact');
+  assert.match(git(p.repo, 'worktree', 'list', '--porcelain'), /agent-wt/, 'and still registered');
+  assert.ok(existsSync(join(p.repo, 'README.md')) && existsSync(join(data, 'x.txt')), 'the main checkout and the data are intact');
+  assert.match(r.stderr, /lien-agent non touchée : lien symbolique/);
+  assert.equal(existsSync(stale), false, 'the real stale copy is removed');
+  git(p.repo, 'worktree', 'unlock', agent);
+});
+
+test('the paths named by batch.setup (read at production) are tooling too: a change to them is refused', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'apv4-une-suite-flaky-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const p = project(t, { gates: [scriptedGate(dir)], extra: { batch: { setup: [process.execPath, 'tools/prepare.mjs'] } },
+    files: { 'tests/old.spec.ts': 'old\n', 'src/x.js': 'x\n', 'tools/prepare.mjs': '\n', 'scripts/affected-list.mjs': `${say('other')}\n` } });
+  const before = p.remote('production');
+  put(p.repo, 'src/x.js', 'x2\n'); put(p.repo, 'tools/prepare.mjs', '// change\n');
+  git(p.repo, 'add', '-A'); git(p.repo, 'commit', '-qm', 'setup change'); git(p.repo, 'push', '-q', 'origin', 'main');
+  const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /touche l'outillage de affectedList \(tools\/prepare\.mjs\)/);
+  assert.equal(p.remote('production'), before);
+});
+
 test('AC-4: a test modified by the pull request that is unstable blocks: relaunched in the suite, or failing in the repetition (1 time out of 5)', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'apv4-une-suite-flaky-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const p = project(t, { gates: [flakyGate(dir, 'tests/old.spec.ts')], files: { 'tests/old.spec.ts': 'old\n' } });

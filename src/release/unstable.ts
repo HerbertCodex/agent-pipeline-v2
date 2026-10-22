@@ -145,7 +145,8 @@ export async function classifyUnstable(input: { repo: string; copy: string; comm
     const declared = atProduction?.gates.find(x => x.id === g.gateId)?.affectedList;
     let affected: Set<string> | null = null;
     let listError: string | null = null;
-    const touched = declared ? toolingTouched(changed, declared, tracked) : [];
+    // The command and the setup of the copy (read at production): the paths they name are tooling too.
+    const touched = declared ? toolingTouched(changed, [...declared, ...(atProduction?.batch?.setup ?? [])], tracked) : [];
     if (!declared) listError = `${g.gateId} ne déclare pas affectedList à la production (${production.slice(0, 12)}) : le lien des tests avec le changement (graphe d'imports) ne se juge pas`;
     else if (touched.length) listError = `${g.gateId} : le changement depuis la production touche l'outillage de affectedList (${touched.slice(0, 5).join(', ')}${touched.length > 5 ? ', …' : ''}) : la liste pourrait venir de ce que la PR a réécrit, aucun test n'est jugé sans rapport`;
     else {

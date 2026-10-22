@@ -106,7 +106,8 @@ export async function classifyUnstable(input) {
         const declared = atProduction?.gates.find(x => x.id === g.gateId)?.affectedList;
         let affected = null;
         let listError = null;
-        const touched = declared ? toolingTouched(changed, declared, tracked) : [];
+        // The command and the setup of the copy (read at production): the paths they name are tooling too.
+        const touched = declared ? toolingTouched(changed, [...declared, ...(atProduction?.batch?.setup ?? [])], tracked) : [];
         if (!declared)
             listError = `${g.gateId} ne déclare pas affectedList à la production (${production.slice(0, 12)}) : le lien des tests avec le changement (graphe d'imports) ne se juge pas`;
         else if (touched.length)
