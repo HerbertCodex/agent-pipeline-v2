@@ -88,10 +88,24 @@ export interface JournalEntry {
     preview: string[];
     /** Lines « dérogation <règle> <commit> : <raison> », secrets masked. */
     waivers: string[];
+    /**
+     * The lines with the words of a waiver that waive nothing, and why (only when there are some): the refusal says so instead
+     * of asking for the sentence again (security review of PR #160).
+     */
+    ignored?: IgnoredWaiver[];
     sig: string;
 }
+export interface IgnoredWaiver {
+    line: string;
+    why: string;
+}
 export type OperatorMessage = Omit<JournalEntry, 'sig' | 'v'>;
-/** The signed entry of a message the operator typed; null when it is empty. */
+/**
+ * The signed entry of a message the operator typed; null when it is empty. Its waiver lines count only when **every**
+ * non-empty line of the message is a waiver line whole or a confirmation of migration (security review of PR #160: a
+ * proposal pasted in a block of code, followed by « Je tape ça ? », by « C'est bien ça ? » or by « Non, finalement pas de
+ * dérogation » waived the rule); otherwise each is kept apart, as ignored, with why.
+ */
 export declare function journalEntry(text: string, meta: {
     at: string;
     session: string;
@@ -164,6 +178,11 @@ export declare function waiverFor(messages: readonly OperatorMessage[], rule: Wa
 } | null;
 /** Whether the operator typed a waiver of `rule` for `sha` whose reason is the template of the tool: ignored, said. */
 export declare function templateWaiver(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): boolean;
+/**
+ * Why the newest line with the words of a waiver of `rule` for `sha` waived nothing (`journalEntry`), in one line for the
+ * refusal; null when there is none. Never the line itself: the refusal pasted back must not hold a waiver line.
+ */
+export declare function ignoredWaiver(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): string | null;
 /** What a refusal says when the operator quoted the template of the tool instead of a reason. */
 export declare const TEMPLATE_WAIVER_NOTE = "Une d\u00E9rogation tap\u00E9e avec le gabarit de l'outil, ignor\u00E9e : raison \u00E0 \u00E9crire en clair (les mots de l'op\u00E9rateur, pas \u00AB <ta raison> \u00BB).";
 /** Whether the key file exists with no access for group and others. */

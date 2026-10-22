@@ -20,7 +20,7 @@ APV3 fait de la session Claude Code un chef de projet. Il fait écrire la spec, 
 | Validation des plans de rangement (déplacements de fichiers) | tu lis le plan « ancien chemin vers nouveau » et tu dis oui, non ou quoi changer |
 | Décisions produit, juridiques, prix, identité de l'éditeur | tu choisis parmi les propositions du chef de projet |
 | Fusion et déploiement | sur ton ordre, ou délégués par écrit (section 6) ; le déploiement en production reste à toi |
-| Dérogation à une règle (rare) | tu tapes toi-même dans la session : `dérogation <règle> <12 premiers caractères du commit> : <ta raison>` ; personne ne peut le faire à ta place |
+| Dérogation à une règle (rare) | tu tapes toi-même dans la session : `dérogation <règle> <12 premiers caractères du commit> : <ta raison>`, seule dans son message ; personne ne peut le faire à ta place |
 
 Le reste, tu ne le fais pas : le chef de projet s'en charge et te rend compte.
 

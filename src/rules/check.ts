@@ -20,7 +20,7 @@ import { DELTA_DIFF, DELTA_GIT, gitRead, gitRoot, resolveCommit } from '../run/g
 import { commonDir } from '../stacks/idle.js';
 import { MERGE_RULES, RULE_TITLES, rulesSettings, type MergeRule, type RulesMode } from './config.js';
 import type { ReviewLevel } from '../review/risk.js';
-import { TEMPLATE_WAIVER_NOTE, anchorKey, readOperatorMessages, templateWaiver, waiverFor, waiverSentence, type WaiverTarget } from './operator.js';
+import { TEMPLATE_WAIVER_NOTE, anchorKey, ignoredWaiver, readOperatorMessages, templateWaiver, waiverFor, waiverSentence, type WaiverTarget } from './operator.js';
 import { REQUIRED_WEB_GATES, missingRequiredGates } from './required.js';
 import { DOMAIN_REVIEWERS, latestReviews } from './reviews.js';
 import { NEVER_CARRIED, reviewChain, type Perimeter, type Picked } from './delta.js';
@@ -727,6 +727,8 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
     }
     reviewTodo.push(found && !found.problem && found.record ? `Corrige chaque constat critique ou haut de la relecture ${domain}, avec le test qui le prouve, puis fais relire le nouveau commit (${agent}).` : start ? `Ou ${ask[0]!.toLowerCase()}${ask.slice(1)}` : ask);
     if (templateWaiver(messages, `relecture:${domain}`, sha)) reviewTodo.push(`${domain} : ${TEMPLATE_WAIVER_NOTE}`);
+    const ignoredDomain = ignoredWaiver(messages, `relecture:${domain}`, sha);
+    if (ignoredDomain) reviewTodo.push(`${domain} : ${ignoredDomain}`);
     reviewTodo.push(`Ou, pour ce domaine seul, l'opérateur tape lui-même : « ${waiverSentence(`relecture:${domain}`, sha)} »${domain === ALWAYS_REVIEWED ? ' (dérogation sur la sécurité)' : ''}.`);
   }
   const forcedNote = lane.eligible ? ` (${LANE_NAME}, domaines forcés par review.always)` : '';
@@ -818,6 +820,8 @@ export async function checkMergeRules(input: RulesInput): Promise<RulesReport> {
       const kept = notCarried.get(r.rule);
       if (kept) r.todo.push(`${kept}.`);
       if (templateWaiver(messages, r.rule, sha)) r.todo.push(TEMPLATE_WAIVER_NOTE);
+      const ignored = ignoredWaiver(messages, r.rule, sha);
+      if (ignored) r.todo.push(ignored);
       r.todo.push(`Sans correction, seul l'opérateur peut lever ce refus, en tapant lui-même dans la session : « ${waiverSentence(r.rule, sha)} ».`);
     }
   }

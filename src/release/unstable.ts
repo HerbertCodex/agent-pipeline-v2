@@ -8,7 +8,7 @@ import { environment, expandCommand, redact, runProcess } from '../execution/pro
 import { RECEIPTS_DIR, sharedStore } from '../gates/store.js';
 import { sharedRunReceipts } from '../gates/reuse-proof.js';
 import type { VerifyResult } from '../gates/verify.js';
-import { anchorKey, readOperatorMessages, templateWaiver, waiverFor } from '../rules/operator.js';
+import { anchorKey, ignoredWaiver, readOperatorMessages, templateWaiver, waiverFor } from '../rules/operator.js';
 
 /**
  * A test unstable at the release, unrelated to the change (docs/UNE-SUITE-PAR-PR.md, 3): a check of the full suite passed only
@@ -56,13 +56,14 @@ export interface ReleaseWaiver { rule: 'instable'; commit: string; at: string; r
  * `keyProblem`: the anchor key is missing or refused, nothing signed is read (the refusal says so instead of asking for the
  * sentence again, which the operator may have typed already).
  */
-export function releaseWaiver(common: string, sha: string, blocking: readonly string[]): { waiver: ReleaseWaiver | null; template: boolean; keyProblem: string | null } {
+export function releaseWaiver(common: string, sha: string, blocking: readonly string[]):
+  { waiver: ReleaseWaiver | null; template: boolean; keyProblem: string | null; ignored: string | null } {
   const anchor = anchorKey(common);
-  if (!anchor.key) return { waiver: null, template: false, keyProblem: anchor.problem ?? 'clé d\'ancrage absente' };
+  if (!anchor.key) return { waiver: null, template: false, keyProblem: anchor.problem ?? 'clé d\'ancrage absente', ignored: null };
   const messages = readOperatorMessages(common, anchor.key);
   const found = waiverFor(messages, 'instable', sha);
-  if (found) return { waiver: { rule: 'instable', commit: sha, at: found.message.at, reason: found.reason, line: found.line, blocking: [...blocking] }, template: false, keyProblem: null };
-  return { waiver: null, template: templateWaiver(messages, 'instable', sha), keyProblem: null };
+  if (found) return { waiver: { rule: 'instable', commit: sha, at: found.message.at, reason: found.reason, line: found.line, blocking: [...blocking] }, template: false, keyProblem: null, ignored: null };
+  return { waiver: null, template: templateWaiver(messages, 'instable', sha), keyProblem: null, ignored: ignoredWaiver(messages, 'instable', sha) };
 }
 
 const PATH_TOKEN = /(?:[A-Za-z0-9_@.+-]+\/)*[A-Za-z0-9_@.+-]+\.[A-Za-z0-9]+/g;

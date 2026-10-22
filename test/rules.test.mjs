@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
-import { ALL_CAPTURES, TEST_KEY, commonDirOf, notWaivers, operatorSays, png, seedReview, waive } from './support/rules.mjs';
+import { ALL_CAPTURES, TEST_KEY, commonDirOf, notWaivers, operatorSays, plainWaivers, png, seedReview, waive } from './support/rules.mjs';
 import { waiverFor, anchoredQuote, journalEntry } from '../dist/rules/operator.js';
 import { isScreen } from '../dist/rules/screens.js';
 import { runsCommand } from '../dist/rules/required.js';
@@ -604,15 +604,19 @@ test('review of PR #160: a waiver is the whole line « dérogation <règle> <com
   const said = text => journalEntry(text, { at: 't', session: 's' }, TEST_KEY);
   for (const r of ['relecture', 'instable', 'relecture:securite']) {
     for (const text of notWaivers(r, sha.slice(0, 12))) assert.equal(waiverFor([said(text)], r, sha), null, text);
-    assert.ok(waiverFor([said(`  dérogation ${r} ${sha.slice(0, 12)} : test ancien sans rapport avec la PR`)], r, sha), 'the plain line, spaces aside, counts');
+    for (const text of plainWaivers(r, sha.slice(0, 12))) assert.ok(waiverFor([said(text)], r, sha), JSON.stringify(text));
+    // Two waivers on two lines, a confirmation of migration beside: each counts.
+    const two = said(`dérogation ${r} ${sha.slice(0, 12)} : test ancien sans rapport\nmigration 20261022120000 appliquée\ndérogation preuve ${sha.slice(0, 12)} : flux du test, sans objet`);
+    assert.ok(waiverFor([two], r, sha)); assert.ok(waiverFor([two], 'preuve', sha));
   }
-  // At the merge: none of them lifts the refusal; the plain line does.
+  // At the merge: none of them lifts the refusal, which says why; the plain line does.
   const p = project(t, { change: { 'notes.txt': 'x\n' } });
   await p.prove();
   for (const text of notWaivers('relecture', p.head.slice(0, 12))) operatorSays(p.repo, text);
   const refused = await p.check();
   assert.equal(refused.code, 1);
   assert.equal(rule(refused.report, 'relecture').status, 'refused');
+  assert.match(rule(refused.report, 'relecture').todo.join('\n'), /Dérogation relecture ignorée \(message du t?[^)]*\) : le message contenait aussi/);
   operatorSays(p.repo, `dérogation relecture ${p.head.slice(0, 12)} : correctif urgent validé au téléphone`);
   const waived = await p.check();
   assert.equal(waived.code, 0, JSON.stringify(waived.report.rules, null, 1));
@@ -665,7 +669,11 @@ test('waiver by domain: « dérogation relecture:<domaine> » lifts the rule for
 
 test('waiver by domain: the journal keeps the line with its domain, never an unknown domain', () => {
   const sha = 'abcdef0123456789'.repeat(3).slice(0, 40);
-  const entry = journalEntry(`Bonjour\ndérogation relecture:rgpd ${sha.slice(0, 12)} : aucune donnée personnelle\ndérogation relecture:perf ${sha.slice(0, 12)} : rien du tout ici`, { at: 't', session: 's' }, TEST_KEY);
+  // Review of PR #160: a waiver is a message of waiver lines only; an unknown domain beside it makes the message waive nothing.
+  const mixed = journalEntry(`dérogation relecture:rgpd ${sha.slice(0, 12)} : aucune donnée personnelle\ndérogation relecture:perf ${sha.slice(0, 12)} : rien du tout ici`, { at: 't', session: 's' }, TEST_KEY);
+  assert.deepEqual(mixed.waivers, []);
+  assert.equal(journalEntry(`dérogation relecture:perf ${sha.slice(0, 12)} : rien du tout ici`, { at: 't', session: 's' }, TEST_KEY).waivers.length, 0);
+  const entry = journalEntry(`dérogation relecture:rgpd ${sha.slice(0, 12)} : aucune donnée personnelle`, { at: 't', session: 's' }, TEST_KEY);
   assert.deepEqual(entry.waivers, [`dérogation relecture:rgpd ${sha.slice(0, 12)} : aucune donnée personnelle`]);
   assert.ok(waiverFor([entry], 'relecture:rgpd', sha));
   assert.equal(waiverFor([entry], 'relecture', sha), null, 'a domain waiver is not a waiver of the rule');
@@ -702,7 +710,8 @@ test('operator journal: quotes and waivers are compared without typography, neve
   assert.equal(anchoredQuote(messages, 'Je valide la maquette : on part ailleurs', TEST_KEY), null);
   const sha = 'abcdef0123456789'.repeat(3).slice(0, 40);
   assert.equal(waiverFor([said(`derogation maquette ${sha.slice(0, 11)} : trop court comme préfixe`)], 'maquette', sha), null);
-  assert.ok(waiverFor([said(`Bonjour\ndérogation maquette pour ${sha} : écran déjà validé à l'oral`)], 'maquette', sha));
+  assert.ok(waiverFor([said(`dérogation maquette pour ${sha} : écran déjà validé à l'oral\n`)], 'maquette', sha));
+  assert.equal(waiverFor([said(`Bonjour\ndérogation maquette pour ${sha} : écran déjà validé à l'oral`)], 'maquette', sha), null, 'review of PR #160: never beside another line');
 });
 
 test('screens: pages, layouts and error pages of the known routers; never server code', () => {

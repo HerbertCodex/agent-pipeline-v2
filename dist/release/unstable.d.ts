@@ -59,6 +59,7 @@ export declare function releaseWaiver(common: string, sha: string, blocking: rea
     waiver: ReleaseWaiver | null;
     template: boolean;
     keyProblem: string | null;
+    ignored: string | null;
 };
 /**
  * The files of `tracked` a text names: a path of the commit as written, or the only file of the commit it ends (a runner prints
