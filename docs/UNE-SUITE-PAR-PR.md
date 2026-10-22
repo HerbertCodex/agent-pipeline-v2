@@ -70,7 +70,7 @@ Ce qui bloque ci-dessus sur un contrôle **vert à la relance** (`passed_after_r
 la phrase de la fusion pour le **commit exact publié** : `dérogation instable <12 premiers caractères du commit au moins> : <raison>`
 (décision du 22 octobre 2026, PR #291 du projet pilote). Lue dans le journal signé de l'opérateur, comme à la fusion (`waiverFor`) ;
 la passe suivante du cron publie sans nouveau commit. Chaque test est écrit comme constat avec la date et la raison (sortie, journal
-`stack.log` champ `waived`, suivi). Pour un autre commit, sans raison ou au gabarit : rien. Jamais un échec non guéri, une répétition
+`stack.log` champ `waived`, suivi). La phrase est la ligne entière : un refus, une question ou une citation qui la contient ne vaut rien ; clé d'ancrage absente ou refusée : le refus le dit. Pour un autre commit, sans raison ou au gabarit : rien. Jamais un échec non guéri, une répétition
 en échec, une migration non confirmée, une preuve incomplète, ni une copie occupée.
 
 ## 4. Tests ciblés et e2e : ce que le graphe d'imports ne voit pas

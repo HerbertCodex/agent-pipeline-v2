@@ -50,10 +50,15 @@ export interface ReleaseWaiver {
     line: string;
     blocking: string[];
 }
-/** The waiver of `instable` for `sha` in the journal of the Git common directory `common`; `template`: one typed with `<ta raison>`. */
+/**
+ * The waiver of `instable` for `sha` in the journal of the Git common directory `common`; `template`: one typed with `<ta raison>`;
+ * `keyProblem`: the anchor key is missing or refused, nothing signed is read (the refusal says so instead of asking for the
+ * sentence again, which the operator may have typed already).
+ */
 export declare function releaseWaiver(common: string, sha: string, blocking: readonly string[]): {
     waiver: ReleaseWaiver | null;
     template: boolean;
+    keyProblem: string | null;
 };
 /**
  * The files of `tracked` a text names: a path of the commit as written, or the only file of the commit it ends (a runner prints

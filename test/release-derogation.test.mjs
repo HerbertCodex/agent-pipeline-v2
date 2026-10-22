@@ -5,8 +5,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
-import { journalEntry, operatorJournalPath } from '../dist/rules/operator.js';
-import { commonDirOf, operatorSays } from './support/rules.mjs';
+import { journalEntry, operatorJournalPath, setAnchorKeyFile } from '../dist/rules/operator.js';
+import { TEST_KEY_FILE, commonDirOf, notWaivers, operatorSays } from './support/rules.mjs';
 
 /**
  * docs/UNE-SUITE-PAR-PR.md, 3.1 (decision of the operator of 22 October 2026, PR #291 of the pilot project): the waiver
@@ -149,6 +149,42 @@ test('dérogation instable an agent writes into the journal (unsigned, another k
   assert.equal(r.code, 1, r.stdout + r.stderr);
   assert.match(r.stdout, BLOCKED);
   assert.equal(p.remote('production'), before);
+});
+
+test('review of PR #160: a refusal, a question or a quote that contains the sentence never publishes (A1 to A3); the plain line does', async t => {
+  const p = project(t, { gates: [flakyGate(tmp(t), 'tests/old.spec.ts')], files: { 'tests/old.spec.ts': 'old\n', 'src/x.js': 'x\n' } });
+  const before = p.remote('production');
+  const sha = p.change('src/x.js', 'x2\n');
+  for (const text of notWaivers('instable', sha.slice(0, 12))) operatorSays(p.repo, text);
+  const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, BLOCKED);
+  assert.equal(p.remote('production'), before);
+  const dry = await apv(p.repo, ['release', '--dry-run', '--json']);
+  assert.equal(dry.code, 1, dry.stdout + dry.stderr);
+  assert.equal(dry.json().waived, undefined);
+  operatorSays(p.repo, `dérogation instable ${sha.slice(0, 12)} : ${REASON}`);
+  const done = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(done.code, 0, done.stdout + done.stderr);
+  assert.equal(p.remote('production'), sha);
+});
+
+test('review of PR #160: anchor key missing, the refusal says so instead of asking for the sentence again', async t => {
+  const p = project(t, { gates: [flakyGate(tmp(t), 'tests/old.spec.ts')], files: { 'tests/old.spec.ts': 'old\n', 'src/x.js': 'x\n' } });
+  const before = p.remote('production');
+  const sha = p.change('src/x.js', 'x2\n');
+  operatorSays(p.repo, `dérogation instable ${sha.slice(0, 12)} : ${REASON}`);
+  setAnchorKeyFile(join(tmp(t), 'cle-absente'));
+  t.after(() => setAnchorKeyFile(TEST_KEY_FILE));
+  const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /dérogation instable illisible, rien de signé n'est lu : clé d'ancrage absente/);
+  assert.doesNotMatch(r.stdout, /<ta raison>/);
+  assert.equal(p.remote('production'), before);
+  setAnchorKeyFile(TEST_KEY_FILE);
+  const done = await apv(p.repo, ['release', 'auto'], ALLOW);
+  assert.equal(done.code, 0, done.stdout + done.stderr);
+  assert.equal(p.remote('production'), sha);
 });
 
 test('dérogation instable never lifts a failure the relaunch did not cure', async t => {

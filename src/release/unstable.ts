@@ -51,13 +51,18 @@ export interface UnstableVerdict { tests: UnstableTest[]; blocking: string[]; bu
  */
 export interface ReleaseWaiver { rule: 'instable'; commit: string; at: string; reason: string; line: string; blocking: string[] }
 
-/** The waiver of `instable` for `sha` in the journal of the Git common directory `common`; `template`: one typed with `<ta raison>`. */
-export function releaseWaiver(common: string, sha: string, blocking: readonly string[]): { waiver: ReleaseWaiver | null; template: boolean } {
+/**
+ * The waiver of `instable` for `sha` in the journal of the Git common directory `common`; `template`: one typed with `<ta raison>`;
+ * `keyProblem`: the anchor key is missing or refused, nothing signed is read (the refusal says so instead of asking for the
+ * sentence again, which the operator may have typed already).
+ */
+export function releaseWaiver(common: string, sha: string, blocking: readonly string[]): { waiver: ReleaseWaiver | null; template: boolean; keyProblem: string | null } {
   const anchor = anchorKey(common);
+  if (!anchor.key) return { waiver: null, template: false, keyProblem: anchor.problem ?? 'clé d\'ancrage absente' };
   const messages = readOperatorMessages(common, anchor.key);
   const found = waiverFor(messages, 'instable', sha);
-  if (found) return { waiver: { rule: 'instable', commit: sha, at: found.message.at, reason: found.reason, line: found.line, blocking: [...blocking] }, template: false };
-  return { waiver: null, template: templateWaiver(messages, 'instable', sha) };
+  if (found) return { waiver: { rule: 'instable', commit: sha, at: found.message.at, reason: found.reason, line: found.line, blocking: [...blocking] }, template: false, keyProblem: null };
+  return { waiver: null, template: templateWaiver(messages, 'instable', sha), keyProblem: null };
 }
 
 const PATH_TOKEN = /(?:[A-Za-z0-9_@.+-]+\/)*[A-Za-z0-9_@.+-]+\.[A-Za-z0-9]+/g;

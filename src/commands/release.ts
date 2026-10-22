@@ -156,7 +156,9 @@ async function release(repo: string, state: ReturnType<typeof remoteState>, sha:
     if (verdict.blocking.length) {
       const found = verdict.busy ? null : releaseWaiver(commonDir(repo), sha, verdict.blocking);
       if (!found?.waiver) {
-        const how = found ? ` ; ${found.template ? `${TEMPLATE_WAIVER_NOTE} ` : ''}sans correction, seul l'opérateur publie ces tests verts à la relance, en tapant lui-même dans une session Claude Code : « ${waiverSentence('instable', sha)} »` : '';
+        const how = !found ? ''
+          : found.keyProblem ? ` ; dérogation instable illisible, rien de signé n'est lu : ${found.keyProblem}`
+          : ` ; ${found.template ? `${TEMPLATE_WAIVER_NOTE} ` : ''}sans correction, seul l'opérateur publie ces tests verts à la relance, en tapant lui-même dans une session Claude Code : « ${waiverSentence('instable', sha)} »`;
         return { ...refuse(`réussi(s) seulement après relance à ${short(sha)} : ${proof.flaky.join(', ')} (règle instable) : ${verdict.blocking.join(' ; ')}${how}`), unstable };
       }
       waived = found.waiver;

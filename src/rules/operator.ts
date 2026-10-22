@@ -396,9 +396,11 @@ export const WAIVER_SHA = 12;
 export const MIN_WAIVER_REASON = 10;
 /**
  * A waiver line: a rule, or the rule `relecture` for one review domain (`relecture:rgpd`, issue #126), then the commit.
- * The domains are those of `apv review plan`, written out: any other word after `:` is no waiver.
+ * The domains are those of `apv review plan`, written out: any other word after `:` is no waiver. The line begins with
+ * « dérogation » (spaces aside): a refusal, a question or a quote that contains the words is no waiver (security review
+ * of PR #160 : « Non, pas de dérogation instable <commit> : … », « Dois-je taper dérogation … ? », « > dérogation … »).
  */
-const WAIVER_LINE = new RegExp(`d[ée]rogation\\s+[a-z]+(?::(?:${REVIEW_DOMAINS.join('|')}))?\\s+(?:pour\\s+)?[0-9a-f]{${WAIVER_SHA},64}`, 'i');
+const WAIVER_LINE = new RegExp(`^\\s*d[ée]rogation\\s+[a-z]+(?::(?:${REVIEW_DOMAINS.join('|')}))?\\s+(?:pour\\s+)?[0-9a-f]{${WAIVER_SHA},64}`, 'i');
 /** What a waiver names: a rule, or the rule `relecture` for one domain. */
 export type WaiverTarget = MergeRule | `relecture:${ReviewDomainName}`;
 
@@ -628,16 +630,21 @@ export function templateWaiver(messages: readonly OperatorMessage[], rule: Waive
   return waiverLines(messages, rule, sha).some(w => w.template);
 }
 
+/** A reason that asks or quotes (« ? », « », " ", “ ”): the line asserts nothing, it is no waiver (security review of PR #160). */
+const UNASSERTED_REASON = /[?«»“”"]/;
+
 /** The waiver lines of `rule` for `sha`, newest first, with their reason and whether it is the template of the tool. */
 function waiverLines(messages: readonly OperatorMessage[], rule: WaiverTarget, sha: string): { message: OperatorMessage; reason: string; template: boolean; line: string }[] {
-  const pattern = new RegExp(`d[ée]rogation\\s+${rule}\\s+(?:pour\\s+)?([0-9a-f]{${WAIVER_SHA},64})\\s*[:,-]?\\s*(.*)`, 'i');
+  // The whole line, and nothing else: « dérogation <règle> [pour] <commit> : <raison> ».
+  const pattern = new RegExp(`^d[ée]rogation\\s+${rule}\\s+(?:pour\\s+)?([0-9a-f]{${WAIVER_SHA},64})\\s*:\\s*(.+)$`, 'i');
   const out: { message: OperatorMessage; reason: string; template: boolean; line: string }[] = [];
   for (const message of [...messages].reverse()) {
     for (const line of message.waivers) {
       if (unasserted(line)) continue;
-      const m = pattern.exec(line.normalize('NFC'));
+      const m = pattern.exec(line.normalize('NFC').trim());
       if (!m || !sha.toLowerCase().startsWith(m[1]!.toLowerCase())) continue;
       const reason = m[2]!.trim();
+      if (UNASSERTED_REASON.test(reason)) continue;
       out.push({ message, reason, template: TEMPLATE_REASON.test(reason), line: line.normalize('NFC').trim() });
     }
   }

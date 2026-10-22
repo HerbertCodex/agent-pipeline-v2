@@ -39,6 +39,20 @@ export function waive(repo, sha, rules = RULES, reason = 'flux GitHub du test, s
   operatorSays(repo, rules.map(r => `dérogation ${r} ${sha.slice(0, 12)} : ${reason}`).join('\n'));
 }
 
+/**
+ * Messages that contain the words of a waiver of `rule` for `sha12` without being one (security review of PR #160: A1 a
+ * refusal, A2 a question, A3 a quote of an agent's proposal, then variants): none waives anything.
+ */
+export const notWaivers = (rule, sha12) => [
+  `Non, pas de dérogation ${rule} ${sha12} : corrige d'abord le test cassé.`,
+  `Dois-je taper dérogation ${rule} ${sha12} : test ancien ? Explique avant.`,
+  `> dérogation ${rule} ${sha12} : test ancien sans rapport\nC est bien ?`,
+  `Je ne tape pas dérogation ${rule} ${sha12} : il faut corriger le test`,
+  `dérogation ${rule} ${sha12} : test ancien sans rapport, c'est bien ça ?`,
+  `dérogation ${rule} ${sha12} : l'agent propose « test ancien sans rapport »`,
+  `dérogation ${rule} ${sha12} test ancien sans rapport, sans deux-points`,
+];
+
 const digest = data => createHash('sha256').update(data).digest('hex');
 
 /** A PNG of `size` bytes whose content depends on `seed` (a capture, for the tool: signature and size). */

@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
-import { ALL_CAPTURES, TEST_KEY, commonDirOf, operatorSays, png, seedReview, waive } from './support/rules.mjs';
+import { ALL_CAPTURES, TEST_KEY, commonDirOf, notWaivers, operatorSays, png, seedReview, waive } from './support/rules.mjs';
 import { waiverFor, anchoredQuote, journalEntry } from '../dist/rules/operator.js';
 import { isScreen } from '../dist/rules/screens.js';
 import { runsCommand } from '../dist/rules/required.js';
@@ -597,6 +597,26 @@ test('waiver: only the operator lifts a refusal, in his own words, for this comm
   const human = await apv(p.repo, ['rules', 'check', '--commit', p.head, '--target', 'origin/main']);
   assert.match(human.stdout, /relecture \(.*\) : DÉROGATION/);
   assert.match(human.stdout, /Règles respectées\./);
+});
+
+test('review of PR #160: a waiver is the whole line « dérogation <règle> <commit> : <raison> », never a refusal, a question nor a quote', async t => {
+  const sha = 'abcdef0123456789'.repeat(3).slice(0, 40);
+  const said = text => journalEntry(text, { at: 't', session: 's' }, TEST_KEY);
+  for (const r of ['relecture', 'instable', 'relecture:securite']) {
+    for (const text of notWaivers(r, sha.slice(0, 12))) assert.equal(waiverFor([said(text)], r, sha), null, text);
+    assert.ok(waiverFor([said(`  dérogation ${r} ${sha.slice(0, 12)} : test ancien sans rapport avec la PR`)], r, sha), 'the plain line, spaces aside, counts');
+  }
+  // At the merge: none of them lifts the refusal; the plain line does.
+  const p = project(t, { change: { 'notes.txt': 'x\n' } });
+  await p.prove();
+  for (const text of notWaivers('relecture', p.head.slice(0, 12))) operatorSays(p.repo, text);
+  const refused = await p.check();
+  assert.equal(refused.code, 1);
+  assert.equal(rule(refused.report, 'relecture').status, 'refused');
+  operatorSays(p.repo, `dérogation relecture ${p.head.slice(0, 12)} : correctif urgent validé au téléphone`);
+  const waived = await p.check();
+  assert.equal(waived.code, 0, JSON.stringify(waived.report.rules, null, 1));
+  assert.equal(rule(waived.report, 'relecture').status, 'waived');
 });
 
 test('waiver by domain: « dérogation relecture:<domaine> » lifts the rule for that domain only, the others recorded', async t => {
