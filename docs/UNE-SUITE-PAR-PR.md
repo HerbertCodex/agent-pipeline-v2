@@ -26,7 +26,7 @@ gain fragile, et une PR qui attendait sa propre suite avant de fusionner.
 - `apv gates run --stage full --fresh-copy` (appel incorrect désormais). La copie neuve de la mise en ligne reste, seule.
 - `stacks[].normalizeEnv` : le chargeur refuse la clé et dit « normalizeEnv retiré en alpha.6 : supprimer la clé ».
 - Le crédit de répétition (`repeat.credited`, `src/gates/repeat-credit.ts`) : sans suite de branche, aucun test n'a été répété avant.
-  Un reçu d'alpha.5 qui porte `repeat.credited` n'est plus lisible : il est ignoré et la suite se relance.
+  Un reçu d'alpha.5 qui porte `repeat.credited` est refusé : l'exécution entière « n'est pas un reçu valide » et la suite se relance.
 
 ## Ce qui reste
 
@@ -40,6 +40,18 @@ gain fragile, et une PR qui attendait sa propre suite avant de fusionner.
 - Jamais de publication sans suite verte au même arbre (exécutée ou reprise et vérifiée) ; reçus vérifiés depuis Git et le magasin
   partagé ; contrôles de la production gardés ; confirmation des migrations par l'opérateur ; fusion et mise en ligne sur ordre
   (`APV_ALLOW_MERGE=1`) ; une suite rouge n'est jamais relancée au même commit.
+
+## Deux limites à connaître (alpha.8)
+
+**PR empilées.** `apv release auto` lit la tête de `main` quand il commence et prouve **cet** arbre ; il ne change pas de cible
+en cours de suite, et ne tient pas de file d'attente. Si le cron passe entre les fusions de deux PR empilées, il prouve (et, vert,
+publie) l'arbre intermédiaire ; la passe suivante prend la nouvelle tête. Pour que l'intermédiaire ne soit jamais prouvé,
+fusionner les PR empilées dans **le même** `APV_ALLOW_MERGE=1 apv stack merge <pr1> <pr2>`.
+
+**Contrôle coupé en deux.** Les contrôles de la base (à la fusion) et ceux de la production (à la mise en ligne) sont toujours
+gardés : couper `browser` en `browser` et `browser-live` fait tourner aussi l'ancien `browser` entier, en plus des deux moitiés, tant
+que la base et la production portent l'ancienne définition. Mesure du projet pilote (20 octobre, 3 piles en parallèle) : 51 min,
+mémoire 21 Go sur 22, charge 44 ; surcoût payé une fois, par la PR de coupe, puis la nouvelle définition est celle de la base.
 
 ## 3. Un test instable sans rapport ne bloque plus la production
 
@@ -57,7 +69,13 @@ test, fichiers, « échoue 1 fois sur 2 passages », exécution) et suivi (`.apv
 la mise en ligne »), pour une correction à part.
 
 Restent bloquants : un test ajouté ou modifié, ou concerné par le changement ; un nom sans fichier, un contrôle sans
-`affectedList` à la production (une PR ne s'en sert jamais pour elle-même), une liste en échec ; tout échec que la relance n'a pas
+`affectedList` à la production (une PR ne s'en sert jamais pour elle-même), une liste en échec ; **un changement depuis la
+production qui touche un fichier que la commande exécute** (alpha.8) : la commande est lue à la production, mais son script vient de
+la copie du commit candidat, et une PR qui le modifie déciderait pour elle-même (un `process.exit(0)` en tête rend une liste vide).
+Sont comptés les chemins de fichiers de la commande, le `package.json` et les chemins du script quand elle lance `npm run <script>`
+(`pnpm`, `yarn`, `bun` de même), et ce que ces fichiers importent localement (`./`, `../`, extensions et `index` essayés) ; un paquet
+n'est pas suivi. Un fichier de la commande modifié : aucun test n'est jugé sans rapport, la mise en ligne est refusée comme avant
+l'alpha.5 (dérogation de l'opérateur possible, 3.1) ; tout échec que la relance n'a pas
 guéri ; toute répétition en échec ; toute migration non confirmée (`release.migrations`) ; une preuve instable et incomplète
 (jamais relancée au même commit).
 
@@ -158,7 +176,8 @@ une PR de dépendances, qui passe alors par le contrôle ci-dessus.
 `test/une-suite-par-pr.test.mjs` : deux PR fusionnées, une suite à la mise en ligne qui répète tous les tests modifiés (aucun
 crédit) ; une PR sans suite de branche publiée par `apv release auto` ; appels retirés (`--fresh-copy` refusé, `normalizeEnv` avec son
 message) ; jugement des tests instables (constat écrit ; refus : test concerné, `affectedList` absent à la production ou ajouté par le
-changement, nom sans fichier, test modifié, répétition 1 fois sur 5) ; migration en attente ; chargeur (`affectedList`) ; `pathsIn` ;
+changement, nom sans fichier, test modifié, répétition 1 fois sur 5) ; migration en attente ; chargeur (`affectedList`) ; `pathsIn` ; `commandFiles` et
+refus quand le changement touche un fichier exécuté par `affectedList` (script, import local, script de `package.json`) ;
 contrôle d'audit conditionnel aux contrôles de tâche et à la mise en ligne. `test/release.test.mjs` : reprise au même environnement,
 relance dans un autre (variable nommée).
 

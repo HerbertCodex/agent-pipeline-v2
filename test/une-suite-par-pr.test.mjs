@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { apv } from './cli-helpers.mjs';
 import { configIssues } from '../dist/config/load.js';
-import { pathsIn } from '../dist/release/unstable.js';
+import { commandFiles, pathsIn } from '../dist/release/unstable.js';
 
 /**
  * docs/UNE-SUITE-PAR-PR.md: a pull request merges on its task checks, targeted tests and reviews; the only full suite runs once,
@@ -167,6 +167,50 @@ test('AC-3, refusals: a test the change concerns (affectedList), a check without
   const r = await apv(p.repo, ['release', 'auto'], ALLOW);
   assert.equal(r.code, 1, r.stdout + r.stderr);
   assert.match(r.stdout, /ne déclare pas affectedList à la production/);
+});
+
+/** A browser check like `flakyGate`, whose `affectedList` runs the script `scripts/affected-list.mjs` of the project. */
+function scriptedGate(dir, list = ['node', 'scripts/affected-list.mjs', '{{baseSha}}']) {
+  const { affectedList: _unused, ...gate } = flakyGate(dir, 'tests/old.spec.ts');
+  return { ...gate, affectedList: list };
+}
+const LISTING = 'console.log("Listing tests:\\n  [chromium] › tests/other.spec.ts:1:1 › x\\nTotal: 1 test in 1 file");';
+
+test('F4: a change to a file the affectedList command executes (script, local import, package script) is never judged unrelated: refused', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'apv4-une-suite-flaky-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const files = { 'tests/old.spec.ts': 'old\n', 'src/x.js': 'x\n', 'scripts/affected-list.mjs': `import { list } from './lib/list.mjs';\nlist();\n`,
+    'scripts/lib/list.mjs': `export const list = () => { ${LISTING} };\n`, 'package.json': { scripts: { 'e2e:changed': 'node scripts/affected-list.mjs' } } };
+  // Nothing the command executes changes: judged as before, published.
+  const same = project(t, { gates: [scriptedGate(dir)], files });
+  const sha = same.commit('src/x.js', 'x2\n'); git(same.repo, 'push', '-q', 'origin', 'main');
+  const ok = await apv(same.repo, ['release', 'auto'], ALLOW);
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr);
+  assert.equal(same.remote('production'), sha);
+  // The change empties the list (a process.exit(0) at the head of the script, a local import, the script of package.json): refused.
+  const attacks = [
+    ['scripts/affected-list.mjs', `process.exit(0);\n${files['scripts/affected-list.mjs']}`, scriptedGate(dir), /touche un fichier que affectedList exécute \(scripts\/affected-list\.mjs\)/],
+    ['scripts/lib/list.mjs', 'export const list = () => {};\n', scriptedGate(dir), /touche un fichier que affectedList exécute \(scripts\/lib\/list\.mjs\)/],
+    ['package.json', { scripts: { 'e2e:changed': 'node -e 0' } }, scriptedGate(dir, ['npm', 'run', 'e2e:changed', '--', '{{baseSha}}']), /touche un fichier que affectedList exécute \(package\.json\)/]];
+  for (const [path, text, gate, why] of attacks) {
+    const p = project(t, { gates: [gate], files });
+    const before = p.remote('production');
+    p.commit(path, text); git(p.repo, 'push', '-q', 'origin', 'main');
+    const r = await apv(p.repo, ['release', 'auto'], ALLOW);
+    assert.equal(r.code, 1, `${path}\n${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, why, path);
+    assert.equal(p.remote('production'), before, path);
+    assert.equal(existsSync(join(p.repo, '.apv', 'state', 'suivi-constats.md')), false, 'no finding: it blocks');
+  }
+});
+
+test('commandFiles: the paths of the command, the script it runs and the local imports, followed through extensions and index files', async () => {
+  const tracked = ['package.json', 'scripts/a.mjs', 'scripts/lib/b.ts', 'scripts/lib/c/index.js', 'scripts/other.mjs', 'src/app.js'];
+  const sources = { 'package.json': JSON.stringify({ scripts: { changed: 'node scripts/a.mjs --list' } }),
+    'scripts/a.mjs': `import { b } from './lib/b.js';\nconst c = await import('./lib/c');\nimport fs from 'node:fs';\nimport x from 'vitest';\n`, 'scripts/lib/b.ts': `export { y } from '../other.mjs';\n` };
+  const read = async path => sources[path] ?? null;
+  assert.deepEqual(await commandFiles(['node', 'scripts/a.mjs', '{{baseSha}}'], tracked, read), ['scripts/a.mjs', 'scripts/lib/b.ts', 'scripts/lib/c/index.js', 'scripts/other.mjs']);
+  assert.deepEqual(await commandFiles(['npm', 'run', 'changed', '--', '{{baseSha}}'], tracked, read), ['package.json', 'scripts/a.mjs', 'scripts/lib/b.ts', 'scripts/lib/c/index.js', 'scripts/other.mjs']);
+  assert.deepEqual(await commandFiles(['echo', 'rien'], tracked, read), []);
 });
 
 test('AC-4: a test modified by the pull request that is unstable blocks: relaunched in the suite, or failing in the repetition (1 time out of 5)', async t => {

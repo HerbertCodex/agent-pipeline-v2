@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, normalize } from 'node:path';
 import { loadConfigAtCommit } from '../config/load.js';
 import { validateReceipt } from '../domain/contracts.js';
 import { errorMessage } from '../domain/errors.js';
@@ -43,6 +43,56 @@ export function pathsIn(text, tracked, all = false) {
     }
     return [...out].sort();
 }
+const SCRIPT_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+const SOURCE_EXTENSIONS = ['', '.js', '.mjs', '.cjs', '.ts', '.mts', '.cts', '.jsx', '.tsx', '.json'];
+const IMPORT_SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"])(\.{1,2}\/[^'"\n]*)\1/g;
+const MAX_COMMAND_FILES = 300;
+/**
+ * The files of the commit that an `affectedList` command executes (review of 22 October 2026, F4): the paths its arguments name,
+ * the `package.json` and the paths of the script when it runs one (`npm run <script>`), and what those files import locally
+ * (relative specifiers; every extension and index file that exists). Read in the commit: a file the change did not touch has
+ * the content it has at production, one it touched is in the changed files anyway. A package is not followed.
+ */
+export async function commandFiles(argv, tracked, read) {
+    const known = new Set(tracked);
+    const seen = new Set();
+    const queue = pathsIn(argv.join(' '), tracked, true);
+    if (SCRIPT_RUNNERS.has(argv[0] ?? '') && known.has('package.json')) {
+        queue.push('package.json');
+        const at = argv.indexOf('run');
+        const name = at >= 0 ? argv[at + 1] : undefined;
+        if (name) {
+            try {
+                const body = JSON.parse(await read('package.json') ?? '{}').scripts?.[name];
+                if (typeof body === 'string')
+                    queue.push(...pathsIn(body, tracked, true));
+            }
+            catch { /* package.json unreadable: it is counted itself */ }
+        }
+    }
+    while (queue.length && seen.size < MAX_COMMAND_FILES) {
+        const file = queue.pop();
+        if (seen.has(file))
+            continue;
+        seen.add(file);
+        if (!/\.[cm]?[jt]sx?$/.test(file))
+            continue;
+        const text = await read(file);
+        if (text === null)
+            continue;
+        const dir = file.includes('/') ? file.slice(0, file.lastIndexOf('/')) : '';
+        for (const match of text.matchAll(IMPORT_SPECIFIER)) {
+            const target = normalize(join(dir, match[2])).split('\\').join('/');
+            for (const base of new Set([target, target.replace(/\.[cm]?js$/, '')])) {
+                for (const ext of SOURCE_EXTENSIONS)
+                    for (const candidate of [`${base}${ext}`, `${base}/index${ext}`])
+                        if (known.has(candidate))
+                            queue.push(candidate);
+            }
+        }
+    }
+    return [...seen].filter(f => known.has(f)).sort();
+}
 /** The receipt `verify` retained for a check (worktree, else the intact run of the shared store), or null. */
 function retained(repo, store, g) {
     if (!g.runId || !g.receipt)
@@ -75,6 +125,9 @@ export async function classifyUnstable(input) {
         atProduction = loadConfigAtCommit(repo, production).config;
     }
     catch { /* no affectedList read: every unstable test blocks */ }
+    // The command is read at production but its script is the candidate's: a change to a file it executes would decide for itself.
+    const read = (path) => git.exec(repo, ['show', `${commit}:${path}`]).catch(() => null);
+    const touchedByCommand = async (argv) => (await commandFiles(argv, tracked, read)).filter(f => changed.has(f));
     const tests = [];
     const blocking = [];
     for (const g of input.proof.gates.filter(x => x.state === 'passed' && x.status === 'passed_after_retry')) {
@@ -87,8 +140,11 @@ export async function classifyUnstable(input) {
         const declared = atProduction?.gates.find(x => x.id === g.gateId)?.affectedList;
         let affected = null;
         let listError = null;
+        const touched = declared ? await touchedByCommand(declared) : [];
         if (!declared)
             listError = `${g.gateId} ne déclare pas affectedList à la production (${production.slice(0, 12)}) : le lien des tests avec le changement (graphe d'imports) ne se juge pas`;
+        else if (touched.length)
+            listError = `${g.gateId} : le changement depuis la production touche un fichier que affectedList exécute (${touched.join(', ')}) : la liste viendrait d'un script que la PR décide elle-même, aucun test n'est jugé sans rapport`;
         else {
             const gate = input.config.gates.find(x => x.id === g.gateId);
             const env = environment([...input.config.environment.passEnv, ...(gate?.passEnv ?? [])], input.env);

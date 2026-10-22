@@ -9,8 +9,9 @@ import type { VerifyResult } from '../gates/verify.js';
  * neither added nor modified since production; and it is not among the test files the `affectedList` command of its check,
  * **read at production**, prints for the changes since production (the same computation as `affected`: the import graph of the
  * tests). Anything else blocks, as before: no test named (no `retryFailed.testPattern`, or no line matching it), a file the name
- * does not give, a check without `affectedList` at production, a list that fails, a test of a changed file or that the change
- * concerns. A failure that the relaunch did not cure, a repetition of a changed test that failed, a migration not confirmed:
+ * does not give, a check without `affectedList` at production, a list that fails, a change that touches a file the command
+ * executes (its paths, the script it runs, what they import locally: the list would come from the candidate itself, which would
+ * decide for itself), a test of a changed file or that the change concerns. A failure that the relaunch did not cure, a repetition of a changed test that failed, a migration not confirmed:
  * still refused, elsewhere, as before. What blocks here, the operator alone can waive for the exact released commit
  * (`releaseWaiver`, « dérogation instable <commit> : <raison> »): published, each test written as a finding with his words.
  */
@@ -65,6 +66,13 @@ export declare function releaseWaiver(common: string, sha: string, blocking: rea
  * paths from its own root: `a.spec.ts` for `tests/e2e/a.spec.ts`). A suffix several files end: all of them when `all`, else none.
  */
 export declare function pathsIn(text: string, tracked: readonly string[], all?: boolean): string[];
+/**
+ * The files of the commit that an `affectedList` command executes (review of 22 October 2026, F4): the paths its arguments name,
+ * the `package.json` and the paths of the script when it runs one (`npm run <script>`), and what those files import locally
+ * (relative specifiers; every extension and index file that exists). Read in the commit: a file the change did not touch has
+ * the content it has at production, one it touched is in the changed files anyway. A package is not followed.
+ */
+export declare function commandFiles(argv: readonly string[], tracked: readonly string[], read: (path: string) => Promise<string | null>): Promise<string[]>;
 /**
  * The verdict on the unstable checks of `proof` at `commit`, released from `production`: each relaunched test, related or not.
  * `copy`: a prepared copy of the commit, where the `affectedList` commands run. `config`: the checks of the release (those of

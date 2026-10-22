@@ -248,7 +248,7 @@ async function auto(io, repo, dryRun, asJson, forced, forceRetry) {
         // A failure of the code is never run again at the same commit, --force-retry included: only a new commit unblocks it.
         // Only a run whose every failure is an infrastructure failure (src/gates/infrastructure.ts) is run again, 30 minutes
         // after its receipts at the earliest (--force-retry: at once). A green proof alone never suffices: the suite runs in the
-        // fresh copy, which reuses what checks out in its own environment (docs/UNE-SUITE-PAR-PR.md, 2).
+        // fresh copy, which reuses what checks out in its own environment (docs/UNE-SUITE-PAR-PR.md, « Ce qui reste »).
         const proof = await fullProof(repo, fromHead, from, production);
         if (proof.flaky.length) {
             if (proof.ok)
@@ -300,9 +300,9 @@ function pickStacks(config, common, forced) {
 }
 /**
  * The full suite of `sha` in its fresh copy `dir`, without waiting for the queue. A check whose green receipt of an identical
- * tree checks out in this environment is reused (the suite of the branch, docs/UNE-SUITE-PAR-PR.md, 2.1); the changed test
- * files already repeated at the same content are credited (2.2). `ok`: every check passed, some perhaps only after a relaunch
- * (judged by the release).
+ * tree checks out in this environment is reused (a release run again at the same tree, docs/UNE-SUITE-PAR-PR.md, « Ce qui
+ * reste »); every test changed since production is repeated, none is credited. `ok`: every check passed, some perhaps only
+ * after a relaunch (judged by the release).
  */
 async function runSuite(io, dir, sha, config, production, stacks) {
     try {
